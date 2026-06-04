@@ -1,0 +1,25 @@
+# Specs
+
+機能仕様(トピック別)。各ファイルは `status` と `related` の frontmatter を持つ。
+
+## Files
+
+| Slug | Status | 説明 |
+|------|--------|------|
+| [overview](overview.md) | accepted | kaoiro の目的・2ゴール・対象 |
+| [architecture](architecture.md) | accepted | 3層構成とデータフロー |
+| [plugin-model](plugin-model.md) | accepted | アダプタ/フィルタ2拡張点と共通境界 |
+| [protocol](protocol.md) | provisional | 共通イベント・エンベロープ/状態機械/ペルソナ |
+| [non-goals](non-goals.md) | accepted | 非スコープ |
+| [glossary](glossary.md) | accepted | 用語集 |
+
+## Status legend
+
+- **accepted** — 確定、実装はこれに従う
+- **provisional** — 暫定、`../open-questions/` に未決あり
+- **deferred** — 後フェーズへ先送り
+
+## Conventions
+
+- slug 名は小文字ハイフン、1トピック1ファイル、≤200 行
+- 図は Mermaid(ASCII アート不可)、相互参照は相対パス
