@@ -70,6 +70,18 @@ type PermissionResult =
 評価順: PreToolUse Hook → Deny → Allow → Ask → Permission Mode →
 canUseTool → PostToolUse。
 
+> **検証メモ(2026-06, SDK 0.3.162, ヘッドレス実走行)**: 上記の机上仕様に
+> 対し、プログラム駆動(ヘッドレス)で `query()` を回した実測では、試した全
+> 構成(`allowedTools` 既定=全許可 / read-only に限定 / `sandbox.enabled:false`
+> / `settingSources:[]`)で `canUseTool` が**一度も発火しなかった**。ツール許可
+> は `allowedTools`(許可)/ ヘッドレス自動拒否で解決され、`canUseTool` の
+> "ask" 経路は自動では起動しない。SDK 型定義のコメントも `headless-agent
+> auto-deny` と「ask 経路は `can_use_tool` control_request で表面化する」と記す。
+> **含意**: (1) 安全側の既定として、ツール限定は `canUseTool` ではなく
+> `allowedTools` で行う。(2) `waiting_permission` を実駆動する条件(ask 経路の
+> 起動方法)は未確定の follow-up。状態機械の `canUseTool` 配線自体は実装済み・
+> ユニット検証済みで、ask 経路が有効化されれば機能する。
+
 ### 制御(穴1 の確定)
 
 - 多ターン制御: `query()` の prompt に `AsyncIterable<SDKUserMessage>` を渡す
