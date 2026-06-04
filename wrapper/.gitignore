@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Live config holds agent_id / persona mappings; only the example is tracked.
+kaoiro.config.json
+kaoiro.config.*.json
+!kaoiro.config.example.json

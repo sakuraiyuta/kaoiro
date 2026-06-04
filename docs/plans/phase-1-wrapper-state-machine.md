@@ -28,15 +28,17 @@ TypeScript ラッパーで Claude Agent SDK をホストし、Claude Code 1 個�
 | # | Task | Status | Notes |
 |---|------|--------|-------|
 | 1-1 | Agent SDK の細部を公式 docs で確定 | ✅ | [agent-sdk-events](../specs/agent-sdk-events.md) に確定 |
-| 1-2 | アダプタ(SDK メッセージ → 共通エンベロープ) | ⏳ | |
-| 1-3 | 状態機械の実装 | ⏳ | |
-| 1-4 | ペルソナ・安定 ID の設定読み込み | ⏳ | |
+| 1-2 | アダプタ(SDK メッセージ → 共通エンベロープ) | 🟡 | `AdapterEvent` 正規化・状態導出・`makeStateChange` を実装。実 SDK 型からの橋渡し配線は次フェーズ |
+| 1-3 | 状態機械の実装 | ✅ | `wrapper/src/state.ts`(`deriveStates`/`reduceStates`)。ユニットテスト済 |
+| 1-4 | ペルソナ・安定 ID の設定読み込み | ✅ | `wrapper/src/persona.ts`(`loadConfig`/`parseConfig`)。ユニットテスト済 |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ## Followups (in-phase but unfinished)
 
-なし。
+- 実 SDK ホスト配線(`query()` / `canUseTool` / ストリーミング入力 /
+  `interrupt`)と、SDK 実型 → `AdapterEvent` の橋渡し。状態が実動作に追従する
+  ことの実行確認(Acceptance Criteria 末項)。
 
 ## Open Questions Blocking This Phase
 

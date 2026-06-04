@@ -1,0 +1,18 @@
+{
+  "name": "@kaoiro/wrapper",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "kaoiro ラッパー — Claude Agent SDK をホストし状態を導出する",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "packageManager": "pnpm@10.20.0"
+}

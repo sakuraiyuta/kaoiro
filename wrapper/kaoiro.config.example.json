@@ -1,0 +1,8 @@
+{
+  "agent_id": "lab-pc-1/claude-a",
+  "persona": {
+    "id": "mio",
+    "name": "澪",
+    "sprite_set": "mio"
+  }
+}
