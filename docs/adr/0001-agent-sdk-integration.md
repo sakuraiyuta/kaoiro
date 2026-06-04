@@ -5,7 +5,7 @@ date: 2026-06-04
 opened: 2026-06-04
 supersedes: []
 superseded_by: null
-related_specs: [architecture, plugin-model, protocol]
+related_specs: [architecture, plugin-model, protocol, agent-sdk-events]
 related_adrs: [2]
 ---
 
@@ -45,8 +45,8 @@ claude-agent-sdk`)をホストする。
 ### Negative
 
 - ラッパーは Python/TS に限定(Elixir 不可)。サーバ(Elixir)と2言語構成になる。
-- SDK の細部(逐次送信 API、`canUseTool` 戻り値の形)は実装時に要確定
-  ([protocol-precisification](../open-questions/protocol-precisification.md))。
+- SDK の細部(ストリーミング入力 / `Query.interrupt()` / `canUseTool` 戻り値)は
+  **確定済み**([agent-sdk-events](../specs/agent-sdk-events.md)、2026-06 検証)。
 
 ### Neutral
 

@@ -15,6 +15,11 @@ decided: null
 `type` と `payload` の型体系、方向別(ラッパー→サーバ / クライアント→サーバ)の
 メッセージ種別、バージョニング/後方互換の方針が残っている。
 
+なお **SDK 側のイベント仕様は確定済み**
+([agent-sdk-events](../specs/agent-sdk-events.md)、2026-06 検証)。残るのは
+kaoiro 自身の共通エンベロープ(type/payload)設計であり、SDK 仕様の不明点では
+ない。
+
 ## 選択肢
 
 | 案 | 内容 | メリット | デメリット |
@@ -29,8 +34,9 @@ decided: null
 
 ## 判断材料
 
-Agent SDK の実メッセージ列(型名・フィールド)。Phase 1 のタスク 1-1
-(SDK 細部の公式 docs 確定)と 1-2(アダプタ実装)で得られる。
+Agent SDK の実メッセージ列(型名・フィールド)は確定済み
+([agent-sdk-events](../specs/agent-sdk-events.md))。残るは Phase 1 のタスク 1-2
+(アダプタ実装)で実観測しながら、kaoiro エンベロープの type/payload を確定する。
 
 ## 暫定方針
 

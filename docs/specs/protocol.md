@@ -2,7 +2,7 @@
 title: 共通イベント・プロトコル
 description: ラッパー/サーバ/クライアント間の共通イベント・エンベロープ v0、状態機械、ペルソナ同一性。
 status: provisional
-related: [architecture, plugin-model, protocol-precisification]
+related: [architecture, plugin-model, agent-sdk-events, protocol-precisification]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -63,18 +63,24 @@ related: [architecture, plugin-model, protocol-precisification]
 
 ### 状態機械の状態セット v0(たたき台)
 
-実用ゴール (A) の中核。Agent SDK のメッセージから導出する。
+実用ゴール (A) の中核。Agent SDK のメッセージから導出する。SDK の**確定済み
+メッセージ/コールバック仕様と導出マッピング**は
+[agent-sdk-events](agent-sdk-events.md) を参照。
 
 | 状態 | 意味 | 導出元(SDK) | 表情の方向性(将来) |
 |---|---|---|---|
-| `idle` | 起動済み・未着手 | `SystemMessage(init)` | 通常 |
-| `thinking` | モデルが生成中 | `AssistantMessage`(Text/Thinking) | 考え中 |
-| `tool_running` | ツール実行中 | `AssistantMessage`(ToolUse) | 集中 |
-| `waiting_permission` | ツール許可待ち | `PreToolUse`/`canUseTool` で保留 | こちらを見て待つ |
-| `waiting_input` | ターン完了・次の指示待ち | ターン後にラッパーが導出 | こちらを見て待つ |
-| `done` | ターン完了(瞬間) | `ResultMessage`(success) | 喜ぶ(→ `waiting_input`) |
-| `error` | エラー/リトライ | `ResultMessage`(is_error) | 困り顔 |
+| `idle` | 起動済み・未着手 | `SDKSystemMessage`(init) | 通常 |
+| `thinking` | モデルが生成中 | `SDKAssistantMessage`(text/thinking) | 考え中 |
+| `tool_running` | ツール実行中 | `SDKAssistantMessage`(tool_use)〜 `SDKUserMessage`(tool_result) | 集中 |
+| `waiting_permission` | ツール許可待ち | `canUseTool` 呼び出し中(Promise 保留) | こちらを見て待つ |
+| `waiting_input` | ターン完了・次の指示待ち | `SDKResultMessage` 後、ストリーミング入力待ち | こちらを見て待つ |
+| `done` | ターン完了(瞬間) | `SDKResultMessage`(success) | 喜ぶ(→ `waiting_input`) |
+| `error` | エラー/リトライ | `SDKResultMessage`(error_*/is_error) | 困り顔 |
 | `disconnected` | ラッパー接続断 | サーバ側で導出 | 不明/不在 |
+
+制御(穴1)も確定: ストリーミング入力(`AsyncIterable<SDKUserMessage>`)+
+`Query.interrupt()` + `canUseTool` が同一 Query で完結する
+([agent-sdk-events](agent-sdk-events.md))。
 
 ```mermaid
 stateDiagram-v2

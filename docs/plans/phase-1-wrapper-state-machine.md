@@ -6,6 +6,7 @@ phase: 1
 depends_on: [phase-0-project-setup]
 last_updated: 2026-06-04
 ---
+<!-- last_updated reflects SDK 仕様確定の反映 -->
 
 # Phase 1 — ラッパー1個 + 状態機械
 
@@ -26,7 +27,7 @@ TypeScript ラッパーで Claude Agent SDK をホストし、Claude Code 1 個�
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 1-1 | Agent SDK の細部を公式 docs で確定 | ⏳ | 逐次送信 API / canUseTool 戻り値 |
+| 1-1 | Agent SDK の細部を公式 docs で確定 | ✅ | [agent-sdk-events](../specs/agent-sdk-events.md) に確定 |
 | 1-2 | アダプタ(SDK メッセージ → 共通エンベロープ) | ⏳ | |
 | 1-3 | 状態機械の実装 | ⏳ | |
 | 1-4 | ペルソナ・安定 ID の設定読み込み | ⏳ | |
@@ -44,6 +45,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 ## See Also
 
 - Specs: [protocol](../specs/protocol.md),
+  [agent-sdk-events](../specs/agent-sdk-events.md),
   [architecture](../specs/architecture.md),
   [plugin-model](../specs/plugin-model.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),

@@ -10,6 +10,7 @@
 | [architecture](architecture.md) | accepted | 3層構成とデータフロー |
 | [plugin-model](plugin-model.md) | accepted | アダプタ/フィルタ2拡張点と共通境界 |
 | [protocol](protocol.md) | provisional | 共通イベント・エンベロープ/状態機械/ペルソナ |
+| [agent-sdk-events](agent-sdk-events.md) | accepted | Agent SDK の確定イベント仕様と状態導出 |
 | [non-goals](non-goals.md) | accepted | 非スコープ |
 | [glossary](glossary.md) | accepted | 用語集 |
 
