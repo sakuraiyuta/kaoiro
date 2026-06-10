@@ -32,10 +32,17 @@ export type AssistantBlockKind = "text" | "thinking" | "tool_use";
 export type AdapterEvent =
   /** SDKSystemMessage (init) */
   | { kind: "session_init" }
-  /** SDKAssistantMessage. content kinds map to blocks, message.error to error */
-  | { kind: "assistant"; blocks: AssistantBlockKind[]; error?: boolean }
-  /** tool_result block of an SDKUserMessage (end of tool_running) */
-  | { kind: "tool_result" }
+  /** SDKAssistantMessage. content kinds map to blocks, message.error to error.
+   *  toolUseIds lists the ids of tool_use blocks (omitted when none). */
+  | {
+      kind: "assistant";
+      blocks: AssistantBlockKind[];
+      error?: boolean;
+      toolUseIds?: string[];
+    }
+  /** tool_result block(s) of an SDKUserMessage. toolUseIds lists the answered
+   *  tool_use ids (omitted when none could be extracted). */
+  | { kind: "tool_result"; toolUseIds?: string[] }
   /** SDKResultMessage */
   | { kind: "result"; subtype: ResultSubtype }
   /** canUseTool invoked (promise pending) */

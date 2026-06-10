@@ -11,9 +11,18 @@ import type {
   Query,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { Envelope, KaoiroState, WrapperConfig } from "./types.js";
-import { deriveStates, makeStateChange } from "./state.js";
+import type {
+  AdapterEvent,
+  Envelope,
+  KaoiroState,
+  WrapperConfig,
+} from "./types.js";
+import type { MachineState } from "./state.js";
+import { initialMachineState, makeStateChange, stepState } from "./state.js";
 import { sdkMessageToEvents } from "./adapter.js";
+
+/** Cap on queued user turns; send() throws beyond this (fail fast). */
+const MAX_QUEUED_TURNS = 1000;
 
 export interface PermissionDecision {
   allow: boolean;
@@ -56,7 +65,7 @@ export class AgentHost {
   #notify: (() => void) | null = null;
   #closed = false;
   #query: Query | null = null;
-  #current: KaoiroState = "idle";
+  #machine: MachineState = initialMachineState();
 
   constructor(config: WrapperConfig, options: AgentHostOptions) {
     this.#config = config;
@@ -65,12 +74,16 @@ export class AgentHost {
   }
 
   get state(): KaoiroState {
-    return this.#current;
+    return this.#machine.state;
   }
 
   /** Enqueue a user turn for the streaming input. */
   send(text: string): void {
     if (this.#closed) throw new Error("agent host is closed");
+    // Fail fast instead of growing without bound when nothing drains.
+    if (this.#queue.length >= MAX_QUEUED_TURNS) {
+      throw new Error("agent host input queue is full");
+    }
     this.#queue.push({
       type: "user",
       session_id: "",
@@ -132,10 +145,11 @@ export class AgentHost {
     }
   }
 
-  #apply(event: Parameters<typeof deriveStates>[1]): void {
-    for (const next of deriveStates(this.#current, event)) {
-      this.#current = next;
-      this.#options.onState(makeStateChange(this.#config, next, this.#now()));
+  #apply(event: AdapterEvent): void {
+    const { next, emitted } = stepState(this.#machine, event);
+    this.#machine = next;
+    for (const state of emitted) {
+      this.#options.onState(makeStateChange(this.#config, state, this.#now()));
     }
   }
 

@@ -45,6 +45,24 @@ describe("sdkMessageToEvents", () => {
     ).toEqual([{ kind: "assistant", blocks: ["tool_use"] }]);
   });
 
+  it("assistant tool_use ids -> toolUseIds(string 以外の id は無視)", () => {
+    expect(
+      sdkMessageToEvents(
+        assistant([
+          { type: "tool_use", id: "tu_1", name: "Read" },
+          { type: "tool_use", id: "tu_2", name: "Grep" },
+          { type: "tool_use", id: 42, name: "Bash" },
+        ]),
+      ),
+    ).toEqual([
+      {
+        kind: "assistant",
+        blocks: ["tool_use", "tool_use", "tool_use"],
+        toolUseIds: ["tu_1", "tu_2"],
+      },
+    ]);
+  });
+
   it("assistant error -> error event", () => {
     expect(sdkMessageToEvents(assistant([{ type: "text" }], "rate_limit"))).toEqual(
       [{ kind: "assistant", blocks: [], error: true }],
@@ -56,6 +74,17 @@ describe("sdkMessageToEvents", () => {
       sdkMessageToEvents(user([{ type: "tool_result", content: "ok" }])),
     ).toEqual([{ kind: "tool_result" }]);
     expect(sdkMessageToEvents(user("just text"))).toEqual([]);
+  });
+
+  it("user tool_result の tool_use_id -> toolUseIds(複数ブロック対応)", () => {
+    expect(
+      sdkMessageToEvents(
+        user([
+          { type: "tool_result", tool_use_id: "tu_1", content: "ok" },
+          { type: "tool_result", tool_use_id: "tu_2", content: "ok" },
+        ]),
+      ),
+    ).toEqual([{ kind: "tool_result", toolUseIds: ["tu_1", "tu_2"] }]);
   });
 
   it("result success/error map subtypes; unknown error coerced", () => {
@@ -91,6 +120,27 @@ describe("adapter + state machine", () => {
     expect(reduceStates(events)).toEqual([
       "idle",
       "thinking",
+      "tool_running",
+      "thinking",
+      "done",
+      "waiting_input",
+    ]);
+  });
+
+  it("並列ツールターン: 全 tool_result が揃うまで tool_running を維持する", () => {
+    const stream: SDKMessage[] = [
+      msg({ type: "system", subtype: "init" }),
+      assistant([
+        { type: "tool_use", id: "tu_1", name: "Read" },
+        { type: "tool_use", id: "tu_2", name: "Grep" },
+      ]),
+      user([{ type: "tool_result", tool_use_id: "tu_1", content: "..." }]),
+      user([{ type: "tool_result", tool_use_id: "tu_2", content: "..." }]),
+      msg({ type: "result", subtype: "success" }),
+    ];
+    const events = stream.flatMap(sdkMessageToEvents);
+    expect(reduceStates(events)).toEqual([
+      "idle",
       "tool_running",
       "thinking",
       "done",

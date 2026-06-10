@@ -12,33 +12,52 @@ const ERROR_SUBTYPES: ReadonlySet<string> = new Set([
   "error_max_structured_output_retries",
 ]);
 
-/** Extract the state-relevant block kinds from an assistant message's content. */
-function blockKinds(content: unknown): AssistantBlockKind[] {
-  if (!Array.isArray(content)) return [];
-  const kinds: AssistantBlockKind[] = [];
+/** Extract the state-relevant block kinds and tool_use ids from an assistant
+ *  message's content. Blocks without a string id are counted but not tracked. */
+function scanAssistantContent(content: unknown): {
+  blocks: AssistantBlockKind[];
+  toolUseIds: string[];
+} {
+  const blocks: AssistantBlockKind[] = [];
+  const toolUseIds: string[] = [];
+  if (!Array.isArray(content)) return { blocks, toolUseIds };
   for (const block of content) {
-    const type = (block as { type?: unknown }).type;
+    const { type, id } = block as { type?: unknown; id?: unknown };
     if (type === "text") {
-      kinds.push("text");
+      blocks.push("text");
     } else if (type === "thinking" || type === "redacted_thinking") {
-      kinds.push("thinking");
+      blocks.push("thinking");
     } else if (
       type === "tool_use" ||
       type === "server_tool_use" ||
       type === "mcp_tool_use"
     ) {
-      kinds.push("tool_use");
+      blocks.push("tool_use");
+      if (typeof id === "string") toolUseIds.push(id);
     }
   }
-  return kinds;
+  return { blocks, toolUseIds };
 }
 
-/** True if a user message carries a tool_result block (end of tool_running). */
-function hasToolResult(content: unknown): boolean {
-  return (
-    Array.isArray(content) &&
-    content.some((b) => (b as { type?: unknown }).type === "tool_result")
-  );
+/** Extract the tool_use ids answered by a user message's tool_result blocks. */
+function toolResultIds(content: unknown): {
+  hasToolResult: boolean;
+  toolUseIds: string[];
+} {
+  let hasToolResult = false;
+  const toolUseIds: string[] = [];
+  if (!Array.isArray(content)) return { hasToolResult, toolUseIds };
+  for (const block of content) {
+    const { type, tool_use_id } = block as {
+      type?: unknown;
+      tool_use_id?: unknown;
+    };
+    if (type === "tool_result") {
+      hasToolResult = true;
+      if (typeof tool_use_id === "string") toolUseIds.push(tool_use_id);
+    }
+  }
+  return { hasToolResult, toolUseIds };
 }
 
 function resultSubtype(message: SDKResultMessage): ResultSubtype {
@@ -57,13 +76,24 @@ export function sdkMessageToEvents(message: SDKMessage): AdapterEvent[] {
     case "system":
       // SDKSystemMessage(init) only; other system subtypes carry no state.
       return message.subtype === "init" ? [{ kind: "session_init" }] : [];
-    case "assistant":
+    case "assistant": {
       if (message.error) return [{ kind: "assistant", blocks: [], error: true }];
-      return [{ kind: "assistant", blocks: blockKinds(message.message.content) }];
-    case "user":
-      return hasToolResult(message.message.content)
-        ? [{ kind: "tool_result" }]
-        : [];
+      const { blocks, toolUseIds } = scanAssistantContent(
+        message.message.content,
+      );
+      return toolUseIds.length > 0
+        ? [{ kind: "assistant", blocks, toolUseIds }]
+        : [{ kind: "assistant", blocks }];
+    }
+    case "user": {
+      const { hasToolResult, toolUseIds } = toolResultIds(
+        message.message.content,
+      );
+      if (!hasToolResult) return [];
+      return toolUseIds.length > 0
+        ? [{ kind: "tool_result", toolUseIds }]
+        : [{ kind: "tool_result" }];
+    }
     case "result":
       return [{ kind: "result", subtype: resultSubtype(message) }];
     case "stream_event":
