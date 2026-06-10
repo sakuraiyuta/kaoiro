@@ -6,7 +6,7 @@ opened: 2026-06-04
 supersedes: []
 superseded_by: null
 related_specs: [protocol]
-related_adrs: [4]
+related_adrs: [4, 8]
 ---
 
 # ADR-0003 — ペルソナ同一性の永続化

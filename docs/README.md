@@ -25,6 +25,8 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0004](adr/0004-client-rendering-staged.md) | 描画は静的差分→将来アニメ/3D | accepted |
 | [0005](adr/0005-access-control-oauth-stub.md) | アクセス制御は OAuth+RBAC、当面 stub | accepted |
 | [0006](adr/0006-doc-language-i18n.md) | 日本語→ベータ前に全英訳 | accepted |
+| [0007](adr/0007-client-separation-reference-dashboard.md) | クライアント分離、リファレンスダッシュボード同梱 | accepted |
+| [0008](adr/0008-persona-asset-distribution.md) | ペルソナアセットはサーバ管理・マニフェスト配信 | accepted |
 
 ## 更新フロー
 

@@ -6,7 +6,7 @@ opened: 2026-06-04
 supersedes: []
 superseded_by: null
 related_specs: [architecture]
-related_adrs: [3]
+related_adrs: [3, 7]
 ---
 
 # ADR-0004 — 描画は静的差分から、将来アニメ/3D を選択制

@@ -6,7 +6,7 @@ opened: 2026-06-04
 supersedes: []
 superseded_by: null
 related_specs: [architecture]
-related_adrs: []
+related_adrs: [7, 8]
 ---
 
 # ADR-0005 — アクセス制御は OAuth + RBAC、プロトタイプは stub

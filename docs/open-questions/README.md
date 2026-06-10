@@ -8,6 +8,7 @@
 | Slug | Urgency | Blocks | Opened |
 |------|---------|--------|--------|
 | [protocol-precisification](protocol-precisification.md) | medium | protocol, phase-1 | 2026-06-04 |
+| [client-transport](client-transport.md) | medium | protocol | 2026-06-10 |
 
 ## Recently decided
 

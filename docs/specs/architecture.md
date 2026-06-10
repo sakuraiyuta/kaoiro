@@ -31,7 +31,7 @@ flowchart LR
     REG[Agent Registry<br/>1接続=1 GenServer<br/>状態保持]
     PS[(PubSub)]
   end
-  subgraph Clients[クライアント層 Web/TS]
+  subgraph Clients[クライアント層 外部プロジェクト + 同梱ダッシュボード]
     UI[キャラ可視化 UI / 承認 UI]
   end
   CC1 <-->|Agent SDK| W1
@@ -61,9 +61,13 @@ flowchart LR
   呼び出しへの変換、ペルソナ・安定 ID の保持。
 - **サーバ(Elixir/Phoenix)**: WebSocket 集約、1接続=1 GenServer で最新状態
   保持、PubSub 配信、指示・承認のルーティング。状態**導出**はラッパー、**保持**は
-  サーバ(agent 非依存)。
-- **クライアント(Web/TS)**: キャラ+表情の可視化、multiplexer UI、承認 UI。
-  描画はペルソナ別の静的差分(将来アニメ/3D、
+  サーバ(agent 非依存)。ペルソナアセットの保管・マニフェスト配信
+  ([ADR-0008](../adr/0008-persona-asset-distribution.md))。
+- **クライアント**: キャラ+表情の可視化、multiplexer UI、承認 UI。実装は別
+  プロジェクトに分離し、本体はリファレンス用の簡易ダッシュボード(Svelte)を
+  Phoenix 配信で同梱(設定で静的配信のみオフ可、公開 API を dogfooding、
+  [ADR-0007](../adr/0007-client-separation-reference-dashboard.md))。描画は
+  ペルソナ別の静的差分(将来アニメ/3D、
   [ADR-0004](../adr/0004-client-rendering-staged.md))。
 
 ### トランスポートとネットワーク
@@ -113,4 +117,6 @@ flowchart LR
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0004](../adr/0004-client-rendering-staged.md),
-  [0005](../adr/0005-access-control-oauth-stub.md)
+  [0005](../adr/0005-access-control-oauth-stub.md),
+  [0007](../adr/0007-client-separation-reference-dashboard.md),
+  [0008](../adr/0008-persona-asset-distribution.md)

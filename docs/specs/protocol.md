@@ -2,7 +2,7 @@
 title: 共通イベント・プロトコル
 description: ラッパー/サーバ/クライアント間の共通イベント・エンベロープ v0、状態機械、ペルソナ同一性。
 status: provisional
-related: [architecture, plugin-model, agent-sdk-events, protocol-precisification]
+related: [architecture, plugin-model, agent-sdk-events, protocol-precisification, client-transport]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -111,6 +111,8 @@ stateDiagram-v2
 
 - [protocol-precisification](../open-questions/protocol-precisification.md)
   — `type`/`payload` 型体系、方向別メッセージ種別、バージョニング方針。
+- [client-transport](../open-questions/client-transport.md)
+  — クライアント向け接続方式(Phoenix Channels / 素の WebSocket)。
 
 ## See Also
 
