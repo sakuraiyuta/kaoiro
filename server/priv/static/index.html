@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kaoiro — agents</title>
+  <style>
+    body {
+      font-family: ui-monospace, monospace;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      margin: 2rem;
+    }
+    h1 { font-size: 1.2rem; }
+    #status { color: #6c7086; margin-bottom: 1rem; }
+    ul { list-style: none; padding: 0; }
+    li { padding: 0.3rem 0; font-size: 1.1rem; }
+    .state { font-weight: bold; }
+    .idle { color: #6c7086; }
+    .thinking { color: #89dceb; }
+    .tool_running { color: #f9e2af; }
+    .waiting_permission { color: #cba6f7; }
+    .waiting_input { color: #a6e3a1; }
+    .done { color: #94e2d5; }
+    .error { color: #f38ba8; }
+    .disconnected { color: #585b70; }
+  </style>
+</head>
+<body>
+  <h1>kaoiro — agents</h1>
+  <p id="status">connecting...</p>
+  <ul id="agents"></ul>
+  <script src="/assets/dashboard.js"></script>
+</body>
+</html>
