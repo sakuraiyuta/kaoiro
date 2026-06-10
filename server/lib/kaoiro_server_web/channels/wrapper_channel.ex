@@ -3,8 +3,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
   Ingests envelopes from one wrapper (topic `wrapper:<agent_id>`), stores
   the latest state, and fans them out to clients (`agents:lobby`).
 
-  Validation covers only the envelope v0 frame keys; the type/payload
-  refinement belongs to protocol-precisification (Phase 1.5-4).
+  Validation covers only the envelope v0 frame keys; per ADR-0010 the
+  payload stays opaque to the server (agent-agnostic relay).
   """
 
   use Phoenix.Channel

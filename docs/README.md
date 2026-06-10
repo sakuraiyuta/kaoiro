@@ -28,6 +28,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0007](adr/0007-client-separation-reference-dashboard.md) | クライアント分離、リファレンスダッシュボード同梱 | accepted |
 | [0008](adr/0008-persona-asset-distribution.md) | ペルソナアセットはサーバ管理・マニフェスト配信 | accepted |
 | [0009](adr/0009-client-transport.md) | クライアント接続は Phoenix Channels に一本化 | accepted |
+| [0010](adr/0010-protocol-precisification.md) | エンベロープ type/payload は実証範囲のみ確定 | accepted |
 
 ## 更新フロー
 

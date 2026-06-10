@@ -1,8 +1,8 @@
 ---
 title: 共通イベント・プロトコル
 description: ラッパー/サーバ/クライアント間の共通イベント・エンベロープ v0、状態機械、ペルソナ同一性。
-status: provisional
-related: [architecture, plugin-model, agent-sdk-events, protocol-precisification]
+status: accepted
+related: [architecture, plugin-model, agent-sdk-events]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -28,7 +28,7 @@ related: [architecture, plugin-model, agent-sdk-events, protocol-precisification
 |---|---|
 | エンベロープ | 1 イベント全体を包む共通 JSON。下記の外枠キーを持つ |
 | 外枠(フレームキー) | エンベロープ直下の固定キー集合 `version`/`agent_id`/`persona`/`ts`/`type`/`state`/`payload`/`ext`。v0 で固定済み |
-| `payload` | `type` ごとのイベント本体(中身)。型体系は [protocol-precisification](../open-questions/protocol-precisification.md) で確定する |
+| `payload` | `type` ごとのイベント本体(中身)。型体系は下記「type と payload」([ADR-0010](../adr/0010-protocol-precisification.md)) |
 | `ext` | フィルタが付加する拡張領域。コアは中身に依存しない |
 
 **トランスポート層との区別(重要)**: エンベロープはアプリケーション層の
@@ -59,7 +59,7 @@ flowchart LR
 - 状態の**導出**はラッパー(アダプタ)が行い `state` を確定して送る。サーバは
   受け取った `state` を保持・配信するだけ(agent 非依存)。
 
-### エンベロープ v0(たたき台)
+### エンベロープ v0
 
 ```json
 {
@@ -80,10 +80,45 @@ flowchart LR
 | `agent_id` | エージェントの**安定識別子** | 設定で固定。再起動をまたいで同一 |
 | `persona` | 担当ペルソナ | id/表示名/立ち絵セット。ラッパー初期設定で指定 |
 | `ts` | イベント発生時刻 | ISO8601(UTC)。ホスト跨ぎの時刻ズレに注意 |
-| `type` | イベント種別 | `state_change`/`log`/`permission_request`/`result` 等(未確定) |
+| `type` | イベント種別 | 閉じた enum。下記「type と payload」 |
 | `state` | 状態機械の現在状態 | 下記参照 |
-| `payload` | 種別ごとの本体 | 型は `type` に依存(未確定) |
+| `payload` | 種別ごとの本体 | 型は `type` に依存。下記「type と payload」 |
 | `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。初期は空 |
+
+### type と payload(v0 確定)
+
+`type` は閉じた enum。実証済みの種別のみ payload を定義し、残りは予約名と
+する([ADR-0010](../adr/0010-protocol-precisification.md))。
+
+| type | 状態 | payload |
+|---|---|---|
+| `state_change` | **確定** | `{ label?: string, summary?: string }`。`label` は短い行先表示(例 `"Edit src/foo.ts"`)、`summary` は人間可読の説明。どちらも省略可 |
+| `log` | 予約 | 未定義。使用フェーズの実装時に追補 |
+| `permission_request` | 予約 | 未定義。Phase 3(承認 UI)で追補 |
+| `result` | 予約 | 未定義。使用フェーズの実装時に追補 |
+
+### 方向別メッセージ種別(v0 確定)
+
+Channels のチャネルイベント名と内容。トピックは
+ラッパー側 `wrapper:<agent_id>`、クライアント側 `agents:lobby`。
+
+| 方向 | イベント | 内容 |
+|---|---|---|
+| ラッパー → サーバ | `envelope` | エンベロープ全体 |
+| サーバ → クライアント | `snapshot` | `{ agents: { <agent_id>: envelope } }`。join 直後に push |
+| サーバ → クライアント | `envelope` | エンベロープ全体(状態変化の都度 broadcast) |
+
+双方向(指示・承認: クライアント → サーバ → ラッパー)のメッセージ種別は
+Phase 3 着手時に追補する。
+
+### バージョニング方針
+
+- 受信側は**未知キーを無視**する(前方互換)。
+- キーの追加・予約 type の追補は同一 `version` のまま行う。
+- 既存キーの意味変更・削除など破壊的変更のみ `version` を上げる。
+- `ext` はフィルタの名前空間であり、コアは解釈しない。
+- トランスポート層のバージョンは Channels の `vsn` 交渉
+  ([ADR-0009](../adr/0009-client-transport.md))が担い、本節とは独立。
 
 ### 同一性とペルソナ(マスト)
 
@@ -150,22 +185,22 @@ stateDiagram-v2
   [Writing a Channels Client](https://hexdocs.pm/phoenix/writing_a_channels_client.html)
   に従う。
 - kaoiro 固有に定義するのはトピック設計とイベント名・payload のみ
-  (種別は [protocol-precisification](../open-questions/protocol-precisification.md)
-  で確定する)。
+  (上記「type と payload」「方向別メッセージ種別」)。
 
 ## Constraints
 
 - MUST: `agent_id` は安定 ID。MUST: 状態導出はラッパー側。
 - MUST: クライアント接続は Phoenix Channels(`vsn=2.0.0`)のみ。
+- MUST: 受信側はエンベロープの未知キーを無視する(前方互換)。
 
 ## Open Questions
 
-- [protocol-precisification](../open-questions/protocol-precisification.md)
-  — `type`/`payload` 型体系、方向別メッセージ種別、バージョニング方針。
+なし。
 
 ## See Also
 
 - 関連 specs: [architecture](architecture.md), [plugin-model](plugin-model.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0003](../adr/0003-persona-identity-persistence.md),
-  [0009](../adr/0009-client-transport.md)
+  [0009](../adr/0009-client-transport.md),
+  [0010](../adr/0010-protocol-precisification.md)

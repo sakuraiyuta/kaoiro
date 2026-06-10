@@ -6,7 +6,7 @@
 |-------|------|--------|------|
 | 0 | [phase-0-project-setup](phase-0-project-setup.md) | 🟡 | 企画・リポジトリ立ち上げ |
 | 1 | [phase-1-wrapper-state-machine](phase-1-wrapper-state-machine.md) | ⏳ | ラッパー1個 + 状態機械 |
-| 1.5 | [phase-1.5-minimal-server-client](phase-1.5-minimal-server-client.md) | ⏳ | 最小サーバ + 最小クライアント(縦串) |
+| 1.5 | [phase-1.5-minimal-server-client](phase-1.5-minimal-server-client.md) | ✅ | 最小サーバ + 最小クライアント(縦串) |
 | 2 | [phase-2-client-character](phase-2-client-character.md) | ⏳ | クライアント + キャラ + 表情 |
 | 3 | [phase-3-server-multiagent](phase-3-server-multiagent.md) | ⏳ | サーバ集約 + 複数 + 双方向 |
 | 4 | [phase-4-emotion-filter](phase-4-emotion-filter.md) | ⏳ | 感情フィルタ(味付け) |

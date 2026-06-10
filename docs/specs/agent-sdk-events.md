@@ -123,8 +123,8 @@ canUseTool → PostToolUse。
 
 ## Open Questions
 
-- [protocol-precisification](../open-questions/protocol-precisification.md)
-  — 共通エンベロープ自体の type/payload 設計(SDK 側仕様は本書で確定済み)。
+なし。共通エンベロープの type/payload 設計は
+[ADR-0010](../adr/0010-protocol-precisification.md) で確定済み。
 
 ## See Also
 

@@ -5,9 +5,7 @@
 
 ## Open
 
-| Slug | Urgency | Blocks | Opened |
-|------|---------|--------|--------|
-| [protocol-precisification](protocol-precisification.md) | medium | protocol, phase-1.5 | 2026-06-04 |
+現在なし。
 
 ## Recently decided
 

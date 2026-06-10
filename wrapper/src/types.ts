@@ -70,9 +70,9 @@ export interface WrapperConfig {
 
 /**
  * Common event envelope v0 (protocol.md).
- * The `type`/`payload` type system is to be refined under
- * protocol-precisification, so for now only state_change exists and payload is
- * left loosely typed.
+ * Per ADR-0010 the type enum fixes state_change only; log /
+ * permission_request / result are reserved names, so payload stays loosely
+ * typed until those are specified.
  */
 export interface Envelope {
   version: "0";

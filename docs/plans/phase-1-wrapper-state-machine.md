@@ -46,7 +46,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## Open Questions Blocking This Phase
 
-- [protocol-precisification](../open-questions/protocol-precisification.md)
+なし([ADR-0010](../adr/0010-protocol-precisification.md) で解消)。
 
 ## See Also
 

@@ -6,7 +6,7 @@ opened: 2026-06-10
 supersedes: []
 superseded_by: null
 related_specs: [protocol, architecture]
-related_adrs: [7]
+related_adrs: [7, 10]
 ---
 
 # ADR-0009 — クライアント接続は Phoenix Channels に一本化
@@ -79,8 +79,7 @@ Phoenix Channels にするか素の WebSocket(+読み取り専用 SSE 併設)に
 
 - ワイヤプロトコルのバージョンは Phoenix 側の serializer バージョン交渉
   (`vsn`)に乗る。kaoiro エンベロープ自体のバージョニングは
-  [protocol-precisification](../open-questions/protocol-precisification.md)
-  で扱う。
+  [ADR-0010](0010-protocol-precisification.md) で確定。
 
 ## Alternatives Considered
 
