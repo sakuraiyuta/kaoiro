@@ -25,9 +25,9 @@ Web クライアント(TS)でエージェントをキャラ絵表示し、Phase 
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 2-1 | クライアント雛形(状態購読 → 表示) | ⏳ | |
-| 2-2 | 状態 → 表情マッピング | ⏳ | |
-| 2-3 | ComfyUI による表情差分の量産 | ⏳ | |
+| 2-1 | クライアント雛形(状態購読 → 表示) | ✅ | リファレンスダッシュボード(Svelte 5 + Vite、`server/assets/`、issue #12)。プロトコル層は Svelte 非依存の `protocol.ts` |
+| 2-2 | 状態 → 表情マッピング | 🟡 | プレースホルダ実装済(`expression.ts` + CSS 描画の顔、全 8 状態)。スプライト版は 2-3 の素材と [ADR-0008](../adr/0008-persona-asset-distribution.md) 配信の後 |
+| 2-3 | ComfyUI による表情差分の量産 | ⏳ | キャラデザイン方針の決定(ユーザ判断)が前提 |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 

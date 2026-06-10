@@ -1,0 +1,49 @@
+/* kaoiro dashboard — lab control-board tone. Chroma is reserved for the
+   state colors (the project is literally "face color"); everything else
+   stays near-monochrome. */
+
+:root {
+  --bg: #14141d;
+  --bg-card: #1b1b27;
+  --line: #2b2b3a;
+  --fg: #d7dae6;
+  --fg-dim: #6d7186;
+
+  /* state palette — keep in sync with protocol.md state set */
+  --c-idle: #8089a6;
+  --c-thinking: #7fd4e8;
+  --c-tool_running: #f2d27c;
+  --c-waiting_permission: #c9a2f5;
+  --c-waiting_input: #98df9a;
+  --c-done: #7fe3c5;
+  --c-error: #f08498;
+  --c-disconnected: #4d4f63;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "IBM Plex Mono", "JetBrains Mono", "Fira Code", ui-monospace,
+    "Cascadia Mono", monospace;
+  color: var(--fg);
+  background:
+    radial-gradient(120% 90% at 50% -20%, #1d1d2c 0%, transparent 60%),
+    var(--bg);
+}
+
+code {
+  color: var(--c-thinking);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

@@ -8,7 +8,10 @@
 import Config
 
 config :kaoiro_server,
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  # Static serving of the bundled dashboard (ADR-0007). Channels and the
+  # public API stay on regardless.
+  serve_dashboard: true
 
 # Configure the endpoint
 config :kaoiro_server, KaoiroServerWeb.Endpoint,
