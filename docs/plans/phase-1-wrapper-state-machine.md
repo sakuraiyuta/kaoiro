@@ -1,7 +1,7 @@
 ---
 title: Phase 1 — ラッパー1個 + 状態機械
 description: TS ラッパーで Agent SDK をホストし、1 エージェントの状態を導出・検証する。
-status: planned
+status: done
 phase: 1
 depends_on: [phase-0-project-setup]
 last_updated: 2026-06-04

@@ -9,8 +9,11 @@
 
 ## ステータス
 
-企画・設計フェーズ(Phase 0)。本リポジトリはまずドキュメントを先行させ、
-そこから実装へ繋ぐ。
+Phase 1.5(トレーサーバレット)まで完了。ラッパー(`wrapper/`)・最小
+Phoenix サーバ(`server/`)・最小 Web 表示の縦串が動作し、共通プロトコルは
+確定済み([docs/specs/protocol.md](docs/specs/protocol.md))。現在は
+Phase 2(キャラ表示)に着手中。最新の進捗は
+[docs/plans/](docs/plans/) を参照。
 
 ## 全体像
 
@@ -54,6 +57,7 @@ Claude Code を最初の対象とする。他エージェント(Codex 等)は将
 
 ## 現在のゴール
 
-Phase 1: **ラッパー1個 + 状態機械のみ**。Agent SDK のメッセージ列から状態を
-確実に導出できるかの検証を最優先とする
-([docs/plans/phase-1-wrapper-state-machine.md](docs/plans/phase-1-wrapper-state-machine.md))。
+Phase 2: **クライアント + キャラ + 状態ベース表情**。リファレンス
+ダッシュボード(Svelte)でエージェントをキャラ絵表示し、状態を表情へ
+マッピングする
+([docs/plans/phase-2-client-character.md](docs/plans/phase-2-client-character.md))。

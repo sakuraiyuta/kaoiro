@@ -20,7 +20,10 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 
 ## Commands
 
-- 実装未着手。build/test/lint コマンドは Phase 1 で確定する。
+- wrapper (TypeScript): `cd wrapper && pnpm test` / `pnpm typecheck` /
+  `pnpm build`
+- server (Elixir/Phoenix): `cd server && mix test` / `mix format` /
+  `mix phx.server`
 
 ## Workflow rules
 

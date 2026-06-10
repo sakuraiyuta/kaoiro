@@ -1,10 +1,10 @@
 ---
 title: Phase 2 — クライアント + キャラ + 状態ベース表情
 description: Web クライアントでエージェントをキャラ表示し、状態を表情へマッピングする。
-status: planned
+status: in_progress
 phase: 2
 depends_on: [phase-1.5-minimal-server-client]
-last_updated: 2026-06-04
+last_updated: 2026-06-11
 ---
 
 # Phase 2 — クライアント + キャラ + 状態ベース表情

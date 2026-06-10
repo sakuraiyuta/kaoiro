@@ -1,10 +1,10 @@
 ---
 title: Phase 0 — 企画・リポジトリ立ち上げ
 description: コンセプト/構成/プロトコル v0 のドキュメント化とリポジトリ作成。
-status: in_progress
+status: done
 phase: 0
 depends_on: []
-last_updated: 2026-06-04
+last_updated: 2026-06-11
 ---
 
 # Phase 0 — 企画・リポジトリ立ち上げ
@@ -17,22 +17,22 @@ last_updated: 2026-06-04
 ## Acceptance Criteria
 
 - [x] コンセプト/構成/プロトコル v0 を docs 化
-- [ ] docs/ を構造化(specs/plans/open-questions/adr)
-- [ ] リポジトリ作成・初回コミット・リモート接続
+- [x] docs/ を構造化(specs/plans/open-questions/adr)
+- [x] リポジトリ作成・初回コミット・リモート接続
 
 ## Tasks
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
 | 0-1 | コンセプト・構成・プロトコルの起草 | ✅ | |
-| 0-2 | docs 構造化(本タスク) | 🟡 | my-docs-restructure |
-| 0-3 | 初回コミット / gitea.example.invalid へ push | ⏳ | /my-commit |
+| 0-2 | docs 構造化(本タスク) | ✅ | my-docs-restructure |
+| 0-3 | 初回コミット / gitea.example.invalid へ push | ✅ | sakurai.yuta/kaoiro |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ## Followups (in-phase but unfinished)
 
-- リモートリポジトリ作成とオーナーパス確定。
+なし。
 
 ## Open Questions Blocking This Phase
 
