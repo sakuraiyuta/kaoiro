@@ -2,7 +2,7 @@
 title: 共通イベント・プロトコル
 description: ラッパー/サーバ/クライアント間の共通イベント・エンベロープ v0、状態機械、ペルソナ同一性。
 status: provisional
-related: [architecture, plugin-model, agent-sdk-events, protocol-precisification, client-transport]
+related: [architecture, plugin-model, agent-sdk-events, protocol-precisification]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -103,19 +103,34 @@ stateDiagram-v2
   disconnected --> idle
 ```
 
+### クライアント向けトランスポート
+
+クライアント ↔ サーバの接続は **Phoenix Channels に一本化**
+([ADR-0009](../adr/0009-client-transport.md))。素の WebSocket
+エンドポイントや SSE は併設しない。
+
+- ワイヤ形式は Channels V2 serializer 固定。接続時にクエリ
+  `vsn=2.0.0` を必須とする。フレーム形式
+  (`[join_ref, ref, topic, event, payload]`)は公式ガイド
+  [Writing a Channels Client](https://hexdocs.pm/phoenix/writing_a_channels_client.html)
+  に従う。
+- kaoiro 固有に定義するのはトピック設計とイベント名・payload のみ
+  (種別は [protocol-precisification](../open-questions/protocol-precisification.md)
+  で確定する)。
+
 ## Constraints
 
 - MUST: `agent_id` は安定 ID。MUST: 状態導出はラッパー側。
+- MUST: クライアント接続は Phoenix Channels(`vsn=2.0.0`)のみ。
 
 ## Open Questions
 
 - [protocol-precisification](../open-questions/protocol-precisification.md)
   — `type`/`payload` 型体系、方向別メッセージ種別、バージョニング方針。
-- [client-transport](../open-questions/client-transport.md)
-  — クライアント向け接続方式(Phoenix Channels / 素の WebSocket)。
 
 ## See Also
 
 - 関連 specs: [architecture](architecture.md), [plugin-model](plugin-model.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
-  [0003](../adr/0003-persona-identity-persistence.md)
+  [0003](../adr/0003-persona-identity-persistence.md),
+  [0009](../adr/0009-client-transport.md)

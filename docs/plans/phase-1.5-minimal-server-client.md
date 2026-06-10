@@ -4,7 +4,7 @@ description: 最小 Phoenix サーバと文字/色のみの最小 Web 表示で�
 status: planned
 phase: 1.5
 depends_on: [phase-1-wrapper-state-machine]
-last_updated: 2026-06-10
+last_updated: 2026-06-11
 ---
 
 # Phase 1.5 — 最小サーバ + 最小クライアント(トレーサーバレット)
@@ -23,15 +23,15 @@ TS↔Elixir 境界の統合リスクをキャラ絵(Phase 2)より先に潰す
 - [ ] 最小 Web 表示(文字/色のみ)がブラウザで状態変化に追従する
 - [ ] エンベロープの type/payload が実消費者で検証され、
       [protocol](../specs/protocol.md) を `accepted` へ更新できる
-- [ ] クライアント接続方式
-      ([client-transport](../open-questions/client-transport.md))が
-      実証データに基づいて決定される
+- [x] クライアント接続方式が決定される
+      ([ADR-0009](../adr/0009-client-transport.md): Channels 一本化、
+      2026-06 調査に基づき決定済み)
 
 ## Tasks
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 1.5-1 | クライアント接続方式の調査・決定 | ⏳ | issue #11。Channels vs 素 WS、非 JS クライアントの実装負担調査 |
+| 1.5-1 | クライアント接続方式の調査・決定 | ✅ | issue #11。Channels 一本化に決定([ADR-0009](../adr/0009-client-transport.md)) |
 | 1.5-2 | 最小 Phoenix サーバ(1 ラッパー受信 → 中継) | ⏳ | 認証・複数集約は Phase 3 へ |
 | 1.5-3 | 最小 Web 表示(文字/色のみ) | ⏳ | リファレンスダッシュボード(issue #12、[ADR-0007](../adr/0007-client-separation-reference-dashboard.md))の雛形として育てる |
 | 1.5-4 | エンベロープ type/payload の確定 | ⏳ | [protocol-precisification](../open-questions/protocol-precisification.md) を解決し ADR 化 |
@@ -48,14 +48,13 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 - [protocol-precisification](../open-questions/protocol-precisification.md)
   — 本フェーズの 1.5-4 で解決する
-- [client-transport](../open-questions/client-transport.md)
-  — 本フェーズの 1.5-1 で解決する
 
 ## See Also
 
 - Specs: [protocol](../specs/protocol.md),
   [architecture](../specs/architecture.md)
 - ADRs: [0002](../adr/0002-local-wrapper-websocket-topology.md),
-  [0007](../adr/0007-client-separation-reference-dashboard.md)
+  [0007](../adr/0007-client-separation-reference-dashboard.md),
+  [0009](../adr/0009-client-transport.md)
 - Previous: [phase-1-wrapper-state-machine](phase-1-wrapper-state-machine.md)
 - Next: [phase-2-client-character](phase-2-client-character.md)

@@ -6,7 +6,7 @@ opened: 2026-06-10
 supersedes: []
 superseded_by: null
 related_specs: [architecture, non-goals, protocol]
-related_adrs: [4, 5, 8]
+related_adrs: [4, 5, 8, 9]
 ---
 
 # ADR-0007 — クライアントは別プロジェクト分離、リファレンスダッシュボードを同梱
@@ -54,8 +54,8 @@ CUI・neovim プラグインなど多様なクライアントをユーザが選�
 
 ### Neutral
 
-- 接続方式(Phoenix Channels か素の WebSocket か)は
-  [client-transport](../open-questions/client-transport.md) で決定する。
+- 接続方式は Phoenix Channels に一本化で決定済み
+  ([ADR-0009](0009-client-transport.md))。
 - 描画種別の段階導入([ADR-0004](0004-client-rendering-staged.md))は各
   クライアントの関心事になる。
 
