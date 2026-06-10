@@ -16,6 +16,41 @@ related: [architecture, plugin-model, agent-sdk-events, protocol-precisification
 
 ## Definition
 
+### 用語と階層
+
+**エンベロープ(envelope)**とは、kaoiro の 1 イベントを包む共通の JSON
+オブジェクトのこと。封筒のメタファであり、「宛名書き」にあたる共通メタデータ
+(`agent_id`/`persona`/`ts`/`type`/`state` など)で「中身」(`payload`)を包む。
+ラッパー/サーバ/クライアントのどの区間でも同じ形で受け渡し、サーバは
+中身を解釈せずに保持・配信できる(agent 非依存)。
+
+| 用語 | 意味 |
+|---|---|
+| エンベロープ | 1 イベント全体を包む共通 JSON。下記の外枠キーを持つ |
+| 外枠(フレームキー) | エンベロープ直下の固定キー集合 `version`/`agent_id`/`persona`/`ts`/`type`/`state`/`payload`/`ext`。v0 で固定済み |
+| `payload` | `type` ごとのイベント本体(中身)。型体系は [protocol-precisification](../open-questions/protocol-precisification.md) で確定する |
+| `ext` | フィルタが付加する拡張領域。コアは中身に依存しない |
+
+**トランスポート層との区別(重要)**: エンベロープはアプリケーション層の
+形式であり、ワイヤ上では Phoenix Channels V2 フレーム
+`[join_ref, ref, topic, event, payload]` の **payload スロットの中に
+丸ごと格納**されて運ばれる。Channels フレームの「payload」と
+エンベロープの「payload」は**別物**(前者の payload = エンベロープ全体、
+後者 = エンベロープ内のイベント本体)。
+
+```mermaid
+flowchart LR
+  subgraph Frame["Channels V2 フレーム(トランスポート層)"]
+    direction LR
+    meta["join_ref / ref / topic / event"]
+    subgraph Env["payload スロット = エンベロープ(アプリ層)"]
+      direction LR
+      keys["version / agent_id / persona / ts / type / state / ext"]
+      body["payload(イベント本体)"]
+    end
+  end
+```
+
 ### 設計意図
 
 - このエンベロープはアダプタ/フィルタを差し込む境界そのもの。外枠を早めに固定
