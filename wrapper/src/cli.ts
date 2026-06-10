@@ -11,6 +11,7 @@
 
 import { AgentHost } from "./host.js";
 import { loadConfig } from "./persona.js";
+import { ServerLink } from "./transport.js";
 import type { Envelope, KaoiroState } from "./types.js";
 
 const COLOR: Record<KaoiroState, string> = {
@@ -46,10 +47,14 @@ async function main(): Promise<void> {
     process.argv[3] ??
     "src/state.ts を読んで、状態機械の状態名を日本語で列挙して。書き込みは不要。";
   const config = loadConfig(configPath);
+  const link = config.server_url
+    ? new ServerLink(config.server_url, config.agent_id)
+    : null;
 
   let host: AgentHost;
   const onState = (envelope: Envelope): void => {
     printState(envelope);
+    link?.send(envelope);
     // Once the turn completes, close the input stream to end the session.
     if (envelope.state === "waiting_input") host.close();
   };
@@ -79,7 +84,12 @@ async function main(): Promise<void> {
       .finally(() => host.close());
   });
 
-  await host.run(prompt);
+  try {
+    await host.run(prompt);
+  } finally {
+    // Release the socket so the process can exit.
+    link?.close();
+  }
 }
 
 main().catch((error: unknown) => {

@@ -18,8 +18,8 @@ TS↔Elixir 境界の統合リスクをキャラ絵(Phase 2)より先に潰す
 
 ## Acceptance Criteria
 
-- [ ] 最小 Phoenix サーバがラッパー 1 個の WebSocket 接続を受け、
-      状態イベントをクライアントへ中継できる
+- [x] 最小 Phoenix サーバがラッパー 1 個の WebSocket 接続を受け、
+      状態イベントをクライアントへ中継できる(E2E スモーク検証済)
 - [ ] 最小 Web 表示(文字/色のみ)がブラウザで状態変化に追従する
 - [ ] エンベロープの type/payload が実消費者で検証され、
       [protocol](../specs/protocol.md) を `accepted` へ更新できる
@@ -32,7 +32,7 @@ TS↔Elixir 境界の統合リスクをキャラ絵(Phase 2)より先に潰す
 | # | Task | Status | Notes |
 |---|------|--------|-------|
 | 1.5-1 | クライアント接続方式の調査・決定 | ✅ | issue #11。Channels 一本化に決定([ADR-0009](../adr/0009-client-transport.md)) |
-| 1.5-2 | 最小 Phoenix サーバ(1 ラッパー受信 → 中継) | ⏳ | 認証・複数集約は Phase 3 へ |
+| 1.5-2 | 最小 Phoenix サーバ(1 ラッパー受信 → 中継) | ✅ | `server/`(Channels 中継 + AgentStates)+ ラッパー側 `ServerLink`。認証・複数集約は Phase 3 へ |
 | 1.5-3 | 最小 Web 表示(文字/色のみ) | ⏳ | リファレンスダッシュボード(issue #12、[ADR-0007](../adr/0007-client-separation-reference-dashboard.md))の雛形として育てる |
 | 1.5-4 | エンベロープ type/payload の確定 | ⏳ | [protocol-precisification](../open-questions/protocol-precisification.md) を解決し ADR 化 |
 

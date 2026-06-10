@@ -12,11 +12,16 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/phoenix": "^1.6.7",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   },
   "packageManager": "pnpm@10.20.0",
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.162"
+    "@anthropic-ai/claude-agent-sdk": "^0.3.162",
+    "phoenix": "^1.8.7"
   }
 }

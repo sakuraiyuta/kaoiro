@@ -59,10 +59,13 @@ export interface Persona {
   sprite_set: string;
 }
 
-/** Wrapper init config. agent_id is a stable id, constant across restarts. */
+/** Wrapper init config. agent_id is a stable id, constant across restarts.
+ *  server_url, when set, points the wrapper at the kaoiro server's wrapper
+ *  socket (ws:// or wss://); omitted = local-only (no relay). */
 export interface WrapperConfig {
   agent_id: string;
   persona: Persona;
+  server_url?: string;
 }
 
 /**

@@ -43,4 +43,18 @@ describe("parseConfig", () => {
     expect(() => parseConfig(null)).toThrow(ConfigError);
     expect(() => parseConfig("nope")).toThrow(ConfigError);
   });
+
+  it("server_url を受け入れる(任意フィールド)", () => {
+    const withUrl = { ...valid, server_url: "ws://localhost:4000/wrapper" };
+    expect(parseConfig(withUrl)).toEqual(withUrl);
+  });
+
+  it("ws:// / wss:// 以外の server_url を弾く", () => {
+    expect(() =>
+      parseConfig({ ...valid, server_url: "http://localhost:4000" }),
+    ).toThrow(ConfigError);
+    expect(() => parseConfig({ ...valid, server_url: "" })).toThrow(
+      ConfigError,
+    );
+  });
 });

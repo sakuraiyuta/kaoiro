@@ -20,3 +20,4 @@ export { ConfigError, loadConfig, parseConfig } from "./persona.js";
 export { sdkMessageToEvents } from "./adapter.js";
 export { AgentHost } from "./host.js";
 export type { AgentHostOptions, PermissionDecision } from "./host.js";
+export { ServerLink } from "./transport.js";

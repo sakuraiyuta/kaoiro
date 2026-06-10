@@ -48,7 +48,14 @@ export function parseConfig(raw: unknown): WrapperConfig {
     sprite_set: nonEmptyString(raw.persona.sprite_set, "persona.sprite_set"),
   };
 
-  return { agent_id, persona };
+  if (raw.server_url === undefined) {
+    return { agent_id, persona };
+  }
+  const server_url = nonEmptyString(raw.server_url, "server_url");
+  if (!server_url.startsWith("ws://") && !server_url.startsWith("wss://")) {
+    throw new ConfigError("server_url must start with ws:// or wss://");
+  }
+  return { agent_id, persona, server_url };
 }
 
 /**
