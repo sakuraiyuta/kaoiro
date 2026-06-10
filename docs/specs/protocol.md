@@ -64,7 +64,7 @@ flowchart LR
 ```json
 {
   "version": "0",
-  "agent_id": "lab-pc-1/claude-a",
+  "agent_id": "lab-pc-1.claude-a",
   "persona": { "id": "mio", "name": "澪", "sprite_set": "mio" },
   "ts": "2026-06-04T11:55:00Z",
   "type": "state_change",
@@ -77,7 +77,7 @@ flowchart LR
 | フィールド | 意味 | 備考 |
 |---|---|---|
 | `version` | エンベロープのバージョン | 文字列。後方互換の判断に使う |
-| `agent_id` | エージェントの**安定識別子** | 設定で固定。再起動をまたいで同一 |
+| `agent_id` | エージェントの**安定識別子** | 設定で固定。再起動をまたいで同一。文字種は `[A-Za-z0-9._-]`(topic/URL 安全のため `/` 等は不可) |
 | `persona` | 担当ペルソナ | id/表示名/立ち絵セット。ラッパー初期設定で指定 |
 | `ts` | イベント発生時刻 | ISO8601(UTC)。ホスト跨ぎの時刻ズレに注意 |
 | `type` | イベント種別 | 閉じた enum。下記「type と payload」 |
@@ -110,6 +110,12 @@ Channels のチャネルイベント名と内容。トピックは
 
 双方向(指示・承認: クライアント → サーバ → ラッパー)のメッセージ種別は
 Phase 3 着手時に追補する。
+
+**再接続時の再同期**: クライアントは切断後、チャネルへ再 join するだけで
+`snapshot` により全エージェントの最新状態へ再同期する。差分追跡や再送
+要求は不要(agent_id ごと last-write-wins)。順序保証・重複排除(seq/
+イベント ID)は [protocol-reliability](../open-questions/protocol-reliability.md)
+で扱う。
 
 ### バージョニング方針
 
@@ -190,12 +196,15 @@ stateDiagram-v2
 ## Constraints
 
 - MUST: `agent_id` は安定 ID。MUST: 状態導出はラッパー側。
+- MUST: `agent_id` の文字種は `[A-Za-z0-9._-]`(1〜256 文字)。
 - MUST: クライアント接続は Phoenix Channels(`vsn=2.0.0`)のみ。
 - MUST: 受信側はエンベロープの未知キーを無視する(前方互換)。
 
 ## Open Questions
 
-なし。
+- [protocol-reliability](../open-questions/protocol-reliability.md)
+  — seq/イベント ID(順序・重複排除)、permission_request の相関 ID と
+  タイムアウト既定。
 
 ## See Also
 

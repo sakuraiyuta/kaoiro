@@ -26,7 +26,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   test "envelope を受けて agents:lobby へ中継し最新状態を保持する" do
-    agent_id = "test/relay-1"
+    agent_id = "test.relay-1"
     @endpoint.subscribe("agents:lobby")
     socket = join_wrapper(agent_id)
 
@@ -39,7 +39,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   test "フレームキー欠落の envelope を拒否し中継しない" do
-    agent_id = "test/invalid-1"
+    agent_id = "test.invalid-1"
     @endpoint.subscribe("agents:lobby")
     socket = join_wrapper(agent_id)
 
@@ -51,15 +51,15 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   test "topic と不一致の agent_id を拒否する" do
-    socket = join_wrapper("test/mismatch-1")
+    socket = join_wrapper("test.mismatch-1")
 
-    ref = push(socket, "envelope", envelope("test/other", "idle"))
+    ref = push(socket, "envelope", envelope("test.other", "idle"))
 
     assert_reply ref, :error, %{reason: "agent_id does not match topic"}
   end
 
   test "オブジェクトでない envelope を拒否する" do
-    socket = join_wrapper("test/nonmap-1")
+    socket = join_wrapper("test.nonmap-1")
 
     ref = push(socket, "envelope", "not a map")
 

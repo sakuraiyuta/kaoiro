@@ -5,7 +5,9 @@
 
 ## Open
 
-現在なし。
+| Slug | Urgency | Blocks | Opened |
+|------|---------|--------|--------|
+| [protocol-reliability](protocol-reliability.md) | medium | protocol, phase-3-server-multiagent | 2026-06-11 |
 
 ## Recently decided
 

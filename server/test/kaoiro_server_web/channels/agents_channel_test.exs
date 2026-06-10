@@ -4,7 +4,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.AgentStates
 
   test "join 後に現在のスナップショットが push される" do
-    agent_id = "test/snapshot-1"
+    agent_id = "test.snapshot-1"
 
     envelope = %{
       "version" => "0",

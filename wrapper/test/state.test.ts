@@ -266,7 +266,7 @@ describe("reduceStates", () => {
 describe("makeStateChange", () => {
   it("共通エンベロープ v0 に状態を載せる", () => {
     const config = {
-      agent_id: "lab-pc-1/claude-a",
+      agent_id: "lab-pc-1.claude-a",
       persona: { id: "mio", name: "澪", sprite_set: "mio" },
     };
     const envelope = makeStateChange(
@@ -277,7 +277,7 @@ describe("makeStateChange", () => {
     );
     expect(envelope).toEqual({
       version: "0",
-      agent_id: "lab-pc-1/claude-a",
+      agent_id: "lab-pc-1.claude-a",
       persona: { id: "mio", name: "澪", sprite_set: "mio" },
       ts: "2026-06-04T11:55:00Z",
       type: "state_change",

@@ -29,6 +29,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** Charset is restricted so agent_id stays safe in channel topics and URLs
+ *  (protocol.md Constraints). */
+const AGENT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
 /**
  * Validates parsed JSON as a wrapper config. Missing or ill-typed fields throw
  * immediately (fail fast). fs-independent so tests can call it directly.
@@ -38,6 +42,11 @@ export function parseConfig(raw: unknown): WrapperConfig {
     throw new ConfigError("config must be an object");
   }
   const agent_id = nonEmptyString(raw.agent_id, "agent_id");
+  if (!AGENT_ID_PATTERN.test(agent_id)) {
+    throw new ConfigError(
+      "agent_id must contain only letters, digits, '.', '_' or '-'",
+    );
+  }
 
   if (!isObject(raw.persona)) {
     throw new ConfigError("persona must be an object");

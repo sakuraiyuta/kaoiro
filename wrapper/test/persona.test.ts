@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ConfigError, parseConfig } from "../src/persona.js";
 
 const valid = {
-  agent_id: "lab-pc-1/claude-a",
+  agent_id: "lab-pc-1.claude-a",
   persona: { id: "mio", name: "澪", sprite_set: "mio" },
 };
 
@@ -27,6 +27,20 @@ describe("parseConfig", () => {
     expect(() =>
       parseConfig({ ...valid, agent_id: "a".repeat(257) }),
     ).toThrow(ConfigError);
+  });
+
+  it("文字種制約外の agent_id を弾く", () => {
+    for (const bad of ["lab/claude", "a b", "日本語", "a:b"]) {
+      expect(() => parseConfig({ ...valid, agent_id: bad })).toThrow(
+        ConfigError,
+      );
+    }
+  });
+
+  it("許容文字種と上限境界の agent_id を受け入れる", () => {
+    for (const good of ["lab_pc_1.claude-a", "A.b_c-9", "a".repeat(256)]) {
+      expect(() => parseConfig({ ...valid, agent_id: good })).not.toThrow();
+    }
   });
 
   it("persona 欠落を弾く", () => {
