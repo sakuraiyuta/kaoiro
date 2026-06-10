@@ -40,6 +40,8 @@ Channels ワイヤプロトコルの実装負担が生じ得る。Tracker: issue
 ## 暫定方針
 
 調査完了まで未決。リファレンスダッシュボードは Phoenix Channels で先行する。
+調査・決定は [Phase 1.5](../plans/phase-1.5-minimal-server-client.md) の
+タスク 1.5-1 として行う。
 
 ## 解決時のアクション
 

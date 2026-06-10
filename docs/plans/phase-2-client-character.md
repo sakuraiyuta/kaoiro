@@ -3,7 +3,7 @@ title: Phase 2 — クライアント + キャラ + 状態ベース表情
 description: Web クライアントでエージェントをキャラ表示し、状態を表情へマッピングする。
 status: planned
 phase: 2
-depends_on: [phase-1-wrapper-state-machine]
+depends_on: [phase-1.5-minimal-server-client]
 last_updated: 2026-06-04
 ---
 
@@ -43,4 +43,4 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 - Specs: [architecture](../specs/architecture.md)
 - ADRs: [0004](../adr/0004-client-rendering-staged.md)
-- Previous: [phase-1-wrapper-state-machine](phase-1-wrapper-state-machine.md)
+- Previous: [phase-1.5-minimal-server-client](phase-1.5-minimal-server-client.md)

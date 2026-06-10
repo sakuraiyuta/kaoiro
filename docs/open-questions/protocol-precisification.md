@@ -3,7 +3,7 @@ title: プロトコルの精緻化
 description: 共通イベントの type/payload 型体系、方向別メッセージ種別、バージョニング方針の確定。
 status: open
 urgency: medium
-blocks: [protocol, phase-1-wrapper-state-machine]
+blocks: [protocol, phase-1.5-minimal-server-client]
 opened: 2026-06-04
 decided: null
 ---
@@ -35,12 +35,15 @@ kaoiro 自身の共通エンベロープ(type/payload)設計であり、SDK 仕�
 ## 判断材料
 
 Agent SDK の実メッセージ列(型名・フィールド)は確定済み
-([agent-sdk-events](../specs/agent-sdk-events.md))。残るは Phase 1 のタスク 1-2
-(アダプタ実装)で実観測しながら、kaoiro エンベロープの type/payload を確定する。
+([agent-sdk-events](../specs/agent-sdk-events.md))。アダプタ実装(Phase 1
+タスク 1-2)での実観測も済み。残るエンベロープの type/payload は、サーバ・
+クライアントという実消費者なしには確定できない。
 
 ## 暫定方針
 
-案 A。Phase 1 で SDK 実メッセージを見ながら確定する。外枠 v0 は固定のまま。
+案 A。SDK 実メッセージの観測は Phase 1 で完了。type/payload の確定は
+[Phase 1.5](../plans/phase-1.5-minimal-server-client.md) のタスク 1.5-4 で、
+最小サーバ + 最小クライアントの実消費者検証により行う。外枠 v0 は固定のまま。
 
 ## 解決時のアクション
 
