@@ -27,6 +27,7 @@ export class ServerLink {
   readonly #socket: Socket;
   readonly #channel: Channel;
   #seq = 0;
+  #lastEnvelope: Envelope | null = null;
 
   /**
    * @param serverUrl Socket endpoint, e.g. "ws://localhost:4000/wrapper"
@@ -67,6 +68,16 @@ export class ServerLink {
       }
     });
 
+    // Re-announce the latest state after a reconnect: the server keeps
+    // agent state in memory only, so a restart (deploy) empties the
+    // snapshot, and an agent absent from it cannot receive instructions.
+    // On the first open #lastEnvelope is null (no-op); on reconnects the
+    // push is buffered by the client until the channel rejoins. send()
+    // stamps a fresh seq.
+    this.#socket.onOpen(() => {
+      if (this.#lastEnvelope) this.send(this.#lastEnvelope);
+    });
+
     // Surface join failures; the client retries the join on its own, but a
     // silent rejection would otherwise leave sends buffering unnoticed.
     this.#channel
@@ -83,6 +94,7 @@ export class ServerLink {
 
   /** Pushes one envelope with the next seq; buffered while disconnected. */
   send(envelope: Envelope): void {
+    this.#lastEnvelope = envelope;
     this.#seq += 1;
     this.#channel.push("envelope", { ...envelope, seq: this.#seq });
   }
