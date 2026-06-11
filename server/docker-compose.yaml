@@ -1,0 +1,30 @@
+# Local verification compose for the kaoiro server (prod release image).
+#
+# Usage:
+#   cp .env.example .env   # then set SECRET_KEY_BASE (mix phx.gen.secret)
+#   docker compose up -d --build
+#
+# Deployment (gateway / another host) reuses this file as-is: adjust
+# .env (PHX_HOST, auth tokens) and put the service behind the central
+# nginx reverse proxy — TLS terminates there, Phoenix stays plain HTTP
+# (2026-06-11 decision; WebSocket needs Upgrade/Connection forwarding
+# and proxy_read_timeout > 60s for the 30s channel heartbeat).
+services:
+  kaoiro:
+    build: .
+    image: kaoiro-server:latest
+    # Loopback-only by default: with auth tokens unset (dev mode) every
+    # client gets the operator role, and an operator can drive tool
+    # execution on agent hosts (specs/threat-model.md) — never publish
+    # beyond 127.0.0.1 without KAOIRO_*_TOKENS set. Behind the central
+    # nginx proxy, widen the bind (or drop ports for a shared network)
+    # only together with mandatory tokens.
+    ports:
+      - "127.0.0.1:4000:4000"
+    env_file:
+      - .env
+    # Sprite overlay (ADR-0008): mount a host dir and set
+    # KAOIRO_PERSONA_DIR=/personas in .env to override bundled sets.
+    # volumes:
+    #   - ./personas-overlay:/personas:ro
+    restart: unless-stopped
