@@ -60,9 +60,15 @@ Phase 2 タスク 2-3(表情差分の量産)と将来のペルソナ追加が参
   縮小する。
 - 構図: ちび(ao / momo)は全身、kuroe はバストアップ(胸上)。
   非デフォルメの全身は正方形小サイズで顔が潰れるため。
-- 配置: サーバのデータディレクトリへ `<sprite_set>/<state>.png` で
-  直接配置([ADR-0008](../adr/0008-persona-asset-distribution.md)
-  第 1 段階)。`sprite_set` は persona.id と同名とする。
+- 配置: `<sprite_set>/<state>.png` 構造で配置
+  ([ADR-0008](../adr/0008-persona-asset-distribution.md) 第 1 段階)。
+  `sprite_set` は persona.id と同名とする。
+- 配置方式(2026-06-11 決定): **同梱 + オーバーレイ**。リファレンス
+  パックとして `server/priv/personas/` に同梱(git 管理)し、env 変数
+  `KAOIRO_PERSONA_DIR` 指定時は外部ディレクトリを優先走査・同名なしは
+  同梱分へフォールバックしてマニフェストを生成する。第 1 段階の
+  マニフェストはファイル走査で生成し、SQLite はアップロード API
+  導入時に検討する。
 
 ### 生成ワークフロー(ComfyUI、ao 試作で実証済み)
 

@@ -4,7 +4,7 @@ description: Elixir/Phoenix サーバで複数ラッパーを集約し、指示�
 status: planned
 phase: 3
 depends_on: [phase-2-client-character]
-last_updated: 2026-06-04
+last_updated: 2026-06-11
 ---
 
 # Phase 3 — サーバ集約 + 複数エージェント + 双方向
@@ -30,7 +30,7 @@ last_updated: 2026-06-04
 |---|------|--------|-------|
 | 3-1 | Phoenix Channels で複数ラッパー集約 | ⏳ | 1接続=1 GenServer |
 | 3-2 | 指示・承認の双方向ルーティング | ⏳ | |
-| 3-3 | ラッパートークン認証 + TLS + ハートビート | ⏳ | |
+| 3-3 | ラッパートークン認証 + TLS + ハートビート | ⏳ | 稼働想定はセルフホスト基盤の既存リバースプロキシ配下(2026-06-11 決定)。TLS はプロキシ終端、Phoenix は平文 HTTP |
 | 3-4 | ユーザアクセス制御 stub(ホワイトリスト) | ⏳ | [ADR-0005] |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.

@@ -4,7 +4,7 @@ description: 正規化イベントに感情 property を付与するフィルタ
 status: planned
 phase: 4
 depends_on: [phase-3-server-multiagent]
-last_updated: 2026-06-04
+last_updated: 2026-06-11
 ---
 
 # Phase 4 — 感情フィルタ(味付け)
@@ -26,6 +26,7 @@ last_updated: 2026-06-04
 |---|------|--------|-------|
 | 4-1 | 感情推論フィルタ(ローカル、非同期) | ⏳ | ノンブロッキング |
 | 4-2 | クライアントの表情への味付け反映 | ⏳ | |
+| 4-3 | 「機嫌」(持続レイヤ)の spec 化 + 実装 | ⏳ | 採用は決定済み(2026-06-11、issue #5)。機嫌 = 感情イベント由来のゆっくり変化・永続する状態。変化速度・減衰・表情合成の詳細は着手時の方針相談で確定 |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
