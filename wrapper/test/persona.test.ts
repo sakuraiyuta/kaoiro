@@ -91,4 +91,37 @@ describe("parseConfig", () => {
       ).toThrow(ConfigError);
     }
   });
+
+  it("allowed_tools は非空文字列の配列のみ受け入れる", () => {
+    expect(
+      parseConfig({ ...valid, allowed_tools: ["Read", "Edit", "Bash"] }),
+    ).toMatchObject({ allowed_tools: ["Read", "Edit", "Bash"] });
+
+    for (const bad of ["Read", [""], [1], [null], {}]) {
+      expect(() => parseConfig({ ...valid, allowed_tools: bad })).toThrow(
+        ConfigError,
+      );
+    }
+  });
+
+  it("allowed_tools の要素長は 256 が境界", () => {
+    expect(
+      parseConfig({ ...valid, allowed_tools: ["a".repeat(256)] }),
+    ).toMatchObject({ allowed_tools: ["a".repeat(256)] });
+
+    expect(() =>
+      parseConfig({ ...valid, allowed_tools: ["a".repeat(257)] }),
+    ).toThrow(ConfigError);
+  });
+
+  it("allowed_tools の件数上限は 64", () => {
+    const max = Array.from({ length: 64 }, (_, i) => `Tool${i}`);
+    expect(parseConfig({ ...valid, allowed_tools: max })).toMatchObject({
+      allowed_tools: max,
+    });
+
+    expect(() =>
+      parseConfig({ ...valid, allowed_tools: [...max, "Extra"] }),
+    ).toThrow(ConfigError);
+  });
 });

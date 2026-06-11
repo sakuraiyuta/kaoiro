@@ -9,6 +9,10 @@ import type { WrapperConfig } from "./types.js";
  *  Envelope and broadcast, so a sane length cap keeps the wire payload bounded. */
 const MAX_FIELD_LENGTH = 256;
 
+/** Bounds the allowed_tools list so a malformed config cannot allocate
+ *  without limit; far above any real tool count. */
+const MAX_ALLOWED_TOOLS = 64;
+
 class ConfigError extends Error {
   override name = "ConfigError";
 }
@@ -77,6 +81,20 @@ export function parseConfig(raw: unknown): WrapperConfig {
       throw new ConfigError("permission_timeout_ms must be a positive integer");
     }
     config.permission_timeout_ms = timeout;
+  }
+
+  if (raw.allowed_tools !== undefined) {
+    if (!Array.isArray(raw.allowed_tools)) {
+      throw new ConfigError("allowed_tools must be an array of tool names");
+    }
+    if (raw.allowed_tools.length > MAX_ALLOWED_TOOLS) {
+      throw new ConfigError(
+        `allowed_tools must have at most ${MAX_ALLOWED_TOOLS} entries`,
+      );
+    }
+    config.allowed_tools = raw.allowed_tools.map((tool, index) =>
+      nonEmptyString(tool, `allowed_tools[${index}]`),
+    );
   }
 
   return config;

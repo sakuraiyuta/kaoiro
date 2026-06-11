@@ -104,9 +104,14 @@ export class AgentHost {
     await this.#query?.interrupt();
   }
 
-  /** Start the session with the first turn and consume messages until closed. */
-  async run(initialPrompt: string): Promise<void> {
-    this.send(initialPrompt);
+  /**
+   * Start the session and consume messages until closed. With
+   * `initialPrompt` the first turn starts immediately; without it the
+   * session idles on the streaming input until `send` delivers the
+   * first turn (e.g. an operator instruction relayed by the server).
+   */
+  async run(initialPrompt?: string): Promise<void> {
+    if (initialPrompt !== undefined) this.send(initialPrompt);
     const options: Options = {
       permissionMode: "default",
       systemPrompt: { type: "preset", preset: "claude_code" },

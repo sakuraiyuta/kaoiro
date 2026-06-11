@@ -71,6 +71,10 @@ export interface WrapperConfig {
   /** permission_request no-response window before the default deny
    *  (ADR-0011; defaults to 600s). */
   permission_timeout_ms?: number;
+  /** Tool-permission ceiling passed to the SDK as allowedTools. Local
+   *  config only — cannot be widened from the server side
+   *  (specs/threat-model.md). Omitted = the CLI's read-only default. */
+  allowed_tools?: string[];
 }
 
 /**
