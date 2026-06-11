@@ -1,12 +1,10 @@
 ---
 title: Phase 2 — クライアント + キャラ + 状態ベース表情
 description: Web クライアントでエージェントをキャラ表示し、状態を表情へマッピングする。
-status: in_progress
+status: completed
 phase: 2
 depends_on: [phase-1.5-minimal-server-client]
 last_updated: 2026-06-11
-# status stays in_progress until the kuroe mixed-touch evaluation
-# (user review) closes the phase.
 ---
 
 # Phase 2 — クライアント + キャラ + 状態ベース表情
@@ -35,9 +33,13 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## Followups (in-phase but unfinished)
 
-- kuroe 混在タッチ(非デフォルメ)の見え方評価 — 実画面が出たので
-  ユーザ確認待ち([specs/personas](../specs/personas.md) の実験枠)。
 - アニメ/3D 描画の調査(将来、[ADR-0004](../adr/0004-client-rendering-staged.md))。
+
+## Outcome notes
+
+- kuroe 混在タッチは実画面評価で採用確定(2026-06-11)。リファレンス
+  実装はカタログ的多様性に価値、統一はクライアント側の意思
+  ([specs/personas](../specs/personas.md) 基本方針に反映)。
 
 ## Open Questions Blocking This Phase
 
