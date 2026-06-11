@@ -7,7 +7,7 @@
 
 | Slug | Urgency | Blocks | Opened |
 |------|---------|--------|--------|
-| (なし) | | | |
+| [response-display](response-display.md) | high | protocol | 2026-06-11 |
 
 ## Recently decided
 
