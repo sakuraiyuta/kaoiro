@@ -70,17 +70,29 @@ type PermissionResult =
 評価順: PreToolUse Hook → Deny → Allow → Ask → Permission Mode →
 canUseTool → PostToolUse。
 
-> **検証メモ(2026-06, SDK 0.3.162, ヘッドレス実走行)**: 上記の机上仕様に
-> 対し、プログラム駆動(ヘッドレス)で `query()` を回した実測では、試した全
-> 構成(`allowedTools` 既定=全許可 / read-only に限定 / `sandbox.enabled:false`
-> / `settingSources:[]`)で `canUseTool` が**一度も発火しなかった**。ツール許可
-> は `allowedTools`(許可)/ ヘッドレス自動拒否で解決され、`canUseTool` の
-> "ask" 経路は自動では起動しない。SDK 型定義のコメントも `headless-agent
-> auto-deny` と「ask 経路は `can_use_tool` control_request で表面化する」と記す。
-> **含意**: (1) 安全側の既定として、ツール限定は `canUseTool` ではなく
-> `allowedTools` で行う。(2) `waiting_permission` を実駆動する条件(ask 経路の
-> 起動方法)は未確定の follow-up。状態機械の `canUseTool` 配線自体は実装済み・
-> ユニット検証済みで、ask 経路が有効化されれば機能する。
+> **検証メモ(2026-06, SDK 0.3.162, ヘッドレス実走行)**: 当初の実測では
+> 試した全構成で `canUseTool` が発火しなかったが、**追実験(2026-06-11、
+> issue #1)で ask 経路の発火を確認**した。確定した挙動:
+>
+> - SDK は `canUseTool` 指定時、CLI へ常に `--permission-prompt-tool
+>   stdio` を渡す(sdk.mjs 実測)。経路自体は壊れていない。
+> - ツール呼び出しは ask に到達する**前に**、手前のゲートで自動解決
+>   され得る: `allowedTools` 許可、安全コマンド classifier、sandbox 内
+>   操作の auto-allow(実測: `allowedTools: ["Read"]` でも Bash の
+>   `echo` は canUseTool を経ずに実行)、および各種 auto-deny(deny は
+>   `system`/`permission_denied` メッセージに `decision_reason_type`
+>   付きで表面化)。
+> - **ask へ昇格する操作で `canUseTool` が発火する**。実測の最小再現:
+>   `permissionMode: "default"` + `settingSources: []` で Bash に
+>   サンドボックス外への書き込み(`touch ~/...`)をさせると発火し、
+>   deny の message が tool_result に反映される。
+>
+> **含意**: (1) ツール限定の一次防衛は引き続き `allowedTools`(ローカル
+> 天井、[threat-model](threat-model.md))。(2) `waiting_permission` が
+> 実駆動されるのは「自動解決できない危険・サンドボックス外操作」のとき
+> であり、人間の承認が要る場面でだけ承認 UI(Phase 3)が動く — 設計
+> 意図と一致。旧実測の不発火は、試行した操作が全て手前のゲートで解決
+> されていたため。
 
 ### 制御(穴1 の確定)
 
