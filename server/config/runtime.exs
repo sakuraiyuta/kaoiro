@@ -27,6 +27,12 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
 # it takes precedence over the bundled pack in priv/personas.
 config :kaoiro_server, :persona_dir, System.get_env("KAOIRO_PERSONA_DIR")
 
+# Socket auth (ADR-0011). Unset lists disable enforcement (dev mode —
+# clients then act as operator); always set both in production.
+# Formats: wrapper "agent_id:token,...", client "token:role,...".
+config :kaoiro_server, :wrapper_tokens, System.get_env("KAOIRO_WRAPPER_TOKENS")
+config :kaoiro_server, :client_tokens, System.get_env("KAOIRO_CLIENT_TOKENS")
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

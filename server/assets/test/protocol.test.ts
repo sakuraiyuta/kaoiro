@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchPersonaManifest } from "../src/lib/protocol";
+import { fetchPersonaManifest, permissionRequestOf } from "../src/lib/protocol";
+import type { Envelope } from "../src/lib/protocol";
 
 describe("fetchPersonaManifest", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -28,5 +29,35 @@ describe("fetchPersonaManifest", () => {
       }),
     );
     expect(await fetchPersonaManifest()).toBeNull();
+  });
+});
+
+describe("permissionRequestOf", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "a",
+    ts: "2026-06-11T00:00:00Z",
+    type: "permission_request",
+    state: "waiting_permission",
+  };
+
+  it("permission_request の payload を絞り込む", () => {
+    const envelope = {
+      ...base,
+      payload: { request_id: "req-1", tool_name: "Bash", input: { c: "ls" } },
+    };
+    expect(permissionRequestOf(envelope)).toEqual({
+      request_id: "req-1",
+      tool_name: "Bash",
+      input: { c: "ls" },
+    });
+  });
+
+  it("他 type / 不正 payload は null", () => {
+    expect(permissionRequestOf({ ...base, type: "state_change" })).toBeNull();
+    expect(permissionRequestOf(base)).toBeNull();
+    expect(
+      permissionRequestOf({ ...base, payload: { tool_name: "Bash" } }),
+    ).toBeNull();
   });
 });

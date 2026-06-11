@@ -66,20 +66,28 @@ export interface WrapperConfig {
   agent_id: string;
   persona: Persona;
   server_url?: string;
+  /** Wrapper auth token, paired with agent_id on the server (ADR-0011). */
+  server_token?: string;
+  /** permission_request no-response window before the default deny
+   *  (ADR-0011; defaults to 600s). */
+  permission_timeout_ms?: number;
 }
 
 /**
  * Common event envelope v0 (protocol.md).
- * Per ADR-0010 the type enum fixes state_change only; log /
- * permission_request / result are reserved names, so payload stays loosely
- * typed until those are specified.
+ * Per ADR-0010/0011 the type enum fixes state_change and
+ * permission_request; log / result are reserved names, so payload stays
+ * loosely typed until those are specified.
  */
 export interface Envelope {
   version: "0";
   agent_id: string;
   persona: Persona;
   ts: string;
-  type: "state_change";
+  /** Wrapper-issued monotonic sequence (ADR-0011), stamped by ServerLink
+   *  at send time; absent on envelopes that never go to a server. */
+  seq?: number;
+  type: "state_change" | "permission_request";
   state: KaoiroState;
   payload: Record<string, unknown>;
   ext: Record<string, unknown>;

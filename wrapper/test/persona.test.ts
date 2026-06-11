@@ -71,4 +71,24 @@ describe("parseConfig", () => {
       ConfigError,
     );
   });
+
+  it("server_token を受け入れる(任意フィールド)", () => {
+    const withToken = { ...valid, server_token: "tok-1" };
+    expect(parseConfig(withToken)).toEqual(withToken);
+    expect(() => parseConfig({ ...valid, server_token: "" })).toThrow(
+      ConfigError,
+    );
+  });
+
+  it("permission_timeout_ms は正の整数のみ受け入れる", () => {
+    expect(
+      parseConfig({ ...valid, permission_timeout_ms: 1000 }),
+    ).toMatchObject({ permission_timeout_ms: 1000 });
+
+    for (const bad of [0, -1, 1.5, "1000", null]) {
+      expect(() =>
+        parseConfig({ ...valid, permission_timeout_ms: bad }),
+      ).toThrow(ConfigError);
+    }
+  });
 });

@@ -6,6 +6,7 @@
 // (re)join yields a fresh snapshot (protocol.md re-sync rule).
 
 import { Socket } from "phoenix";
+import type { Channel } from "phoenix";
 
 /** Envelope v0 frame (docs/specs/protocol.md). */
 export interface Persona {
@@ -19,10 +20,39 @@ export interface Envelope {
   agent_id: string;
   persona?: Persona;
   ts: string;
+  /** Wrapper-issued monotonic sequence (ADR-0011); absent on
+   * server-derived envelopes such as disconnected. */
+  seq?: number;
   type: string;
   state: string;
   payload?: Record<string, unknown>;
   ext?: Record<string, unknown>;
+}
+
+/** payload of a type="permission_request" envelope (protocol.md). */
+export interface PermissionRequestPayload {
+  request_id: string;
+  tool_name: string;
+  input?: Record<string, unknown>;
+  truncated?: boolean;
+}
+
+/**
+ * Narrows a permission_request envelope's payload, or null for any
+ * other envelope (or a malformed payload).
+ */
+export function permissionRequestOf(
+  envelope: Envelope,
+): PermissionRequestPayload | null {
+  if (envelope.type !== "permission_request") return null;
+  const payload = envelope.payload;
+  if (
+    typeof payload?.request_id !== "string" ||
+    typeof payload.tool_name !== "string"
+  ) {
+    return null;
+  }
+  return payload as unknown as PermissionRequestPayload;
 }
 
 /** Persona asset manifest served at GET /api/personas (ADR-0008). */
@@ -67,6 +97,20 @@ export interface KaoiroHandlers {
 
 export interface KaoiroConnection {
   disconnect: () => void;
+  /** Sends an operator instruction; rejects on server refusal
+   * (forbidden / unknown_agent) or timeout. */
+  sendInstruction: (agentId: string, text: string) => Promise<void>;
+  /** Answers a pending permission_request; rejects like sendInstruction. */
+  sendPermissionDecision: (
+    agentId: string,
+    requestId: string,
+    allow: boolean,
+  ) => Promise<void>;
+}
+
+export interface ConnectOptions {
+  /** User token (ADR-0011); resolved server-side to viewer/operator. */
+  token?: string;
 }
 
 function isEnvelope(value: unknown): value is Envelope {
@@ -78,6 +122,22 @@ function isEnvelope(value: unknown): value is Envelope {
   );
 }
 
+function pushAsync(
+  channel: Channel,
+  event: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    channel
+      .push(event, payload)
+      .receive("ok", () => resolve())
+      .receive("error", (reason: { reason?: string } | undefined) =>
+        reject(new Error(reason?.reason ?? "error")),
+      )
+      .receive("timeout", () => reject(new Error("timeout")));
+  });
+}
+
 /**
  * Connects to the kaoiro server's client socket and forwards protocol
  * events to the handlers. `url` is the socket endpoint, e.g.
@@ -86,8 +146,11 @@ function isEnvelope(value: unknown): value is Envelope {
 export function connectKaoiro(
   url: string,
   handlers: KaoiroHandlers,
+  options: ConnectOptions = {},
 ): KaoiroConnection {
-  const socket = new Socket(url);
+  const socket = new Socket(url, {
+    params: options.token === undefined ? {} : { token: options.token },
+  });
   handlers.onStatus("connecting");
   socket.onOpen(() => handlers.onStatus("connected"));
   socket.onClose(() => handlers.onStatus("disconnected"));
@@ -112,6 +175,14 @@ export function connectKaoiro(
       channel.leave();
       socket.disconnect();
     },
+    sendInstruction: (agentId, text) =>
+      pushAsync(channel, "instruction", { agent_id: agentId, text }),
+    sendPermissionDecision: (agentId, requestId, allow) =>
+      pushAsync(channel, "permission_decision", {
+        agent_id: agentId,
+        request_id: requestId,
+        allow,
+      }),
   };
 }
 

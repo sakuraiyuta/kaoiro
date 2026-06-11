@@ -9,9 +9,10 @@
 | [overview](overview.md) | accepted | kaoiro の目的・2ゴール・対象 |
 | [architecture](architecture.md) | accepted | 3層構成とデータフロー |
 | [plugin-model](plugin-model.md) | accepted | アダプタ/フィルタ2拡張点と共通境界 |
-| [protocol](protocol.md) | provisional | 共通イベント・エンベロープ/状態機械/ペルソナ |
+| [protocol](protocol.md) | accepted | 共通イベント・エンベロープ/状態機械/ペルソナ/双方向・認証 |
 | [agent-sdk-events](agent-sdk-events.md) | accepted | Agent SDK の確定イベント仕様と状態導出 |
 | [personas](personas.md) | accepted | ペルソナ立ち絵のデザイン方針・画像規格・生成ワークフロー |
+| [threat-model](threat-model.md) | accepted | 双方向ルーティングの脅威と緩和策 |
 | [non-goals](non-goals.md) | accepted | 非スコープ |
 | [glossary](glossary.md) | accepted | 用語集 |
 

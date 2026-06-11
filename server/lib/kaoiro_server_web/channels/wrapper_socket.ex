@@ -1,7 +1,9 @@
 defmodule KaoiroServerWeb.WrapperSocket do
   @moduledoc """
   Socket for wrapper connections (one per local wrapper, ADR-0002).
-  Wrapper token auth + TLS are Phase 3; the tracer accepts any wrapper.
+  The connect params carry the wrapper's token; it is checked against
+  the per-agent_id token list at channel join, where the agent_id is
+  known (ADR-0011). TLS terminates at the reverse proxy.
   """
 
   use Phoenix.Socket
@@ -9,7 +11,9 @@ defmodule KaoiroServerWeb.WrapperSocket do
   channel "wrapper:*", KaoiroServerWeb.WrapperChannel
 
   @impl true
-  def connect(_params, socket, _connect_info), do: {:ok, socket}
+  def connect(params, socket, _connect_info) do
+    {:ok, assign(socket, :wrapper_token, params["token"])}
+  end
 
   @impl true
   def id(_socket), do: nil

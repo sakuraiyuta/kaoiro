@@ -2,7 +2,7 @@
 title: 共通イベント・プロトコル
 description: ラッパー/サーバ/クライアント間の共通イベント・エンベロープ v0、状態機械、ペルソナ同一性。
 status: accepted
-related: [architecture, plugin-model, agent-sdk-events, personas]
+related: [architecture, plugin-model, agent-sdk-events, personas, threat-model]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -67,6 +67,7 @@ flowchart LR
   "agent_id": "lab-pc-1.claude-a",
   "persona": { "id": "mio", "name": "澪", "sprite_set": "mio" },
   "ts": "2026-06-04T11:55:00Z",
+  "seq": 42,
   "type": "state_change",
   "state": "tool_running",
   "payload": { "label": "Edit src/foo.ts", "summary": "ファイルを編集中" },
@@ -80,6 +81,7 @@ flowchart LR
 | `agent_id` | エージェントの**安定識別子** | 設定で固定。再起動をまたいで同一。文字種は `[A-Za-z0-9._-]`(topic/URL 安全のため `/` 等は不可) |
 | `persona` | 担当ペルソナ | id/表示名/立ち絵セット。ラッパー初期設定で指定 |
 | `ts` | イベント発生時刻 | ISO8601(UTC)。ホスト跨ぎの時刻ズレに注意 |
+| `seq` | ラッパー単調増分の連番 | プロセス起動ごと 1 起点の正整数([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。整列キーは `(agent_id, seq)` + `ts`。再起動で巻き戻るため、サーバの最新状態判定は**受信順**(last-write-wins)のまま |
 | `type` | イベント種別 | 閉じた enum。下記「type と payload」 |
 | `state` | 状態機械の現在状態 | 下記参照 |
 | `payload` | 種別ごとの本体 | 型は `type` に依存。下記「type と payload」 |
@@ -94,7 +96,7 @@ flowchart LR
 |---|---|---|
 | `state_change` | **確定** | `{ label?: string, summary?: string }`。`label` は短い行先表示(例 `"Edit src/foo.ts"`)、`summary` は人間可読の説明。どちらも省略可 |
 | `log` | 予約 | 未定義。使用フェーズの実装時に追補 |
-| `permission_request` | 予約 | 未定義。Phase 3(承認 UI)で追補 |
+| `permission_request` | **確定** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`。`request_id` はラッパー生成のセッション内一意 ID([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。`input` はツール入力(ラッパーが 16KB 程度に切り詰め、切り詰め時 `truncated: true`。シークレット混入リスクは [threat-model](threat-model.md))。state は `waiting_permission` |
 | `result` | 予約 | 未定義。使用フェーズの実装時に追補 |
 
 ### 方向別メッセージ種別(v0 確定)
@@ -107,15 +109,23 @@ Channels のチャネルイベント名と内容。トピックは
 | ラッパー → サーバ | `envelope` | エンベロープ全体 |
 | サーバ → クライアント | `snapshot` | `{ agents: { <agent_id>: envelope } }`。join 直後に push |
 | サーバ → クライアント | `envelope` | エンベロープ全体(状態変化の都度 broadcast) |
+| クライアント → サーバ | `instruction` | `{ agent_id, text }`。**operator のみ**。サーバは text を解釈せず該当ラッパーへ relay。未知 agent_id は `{:error, unknown_agent}` |
+| クライアント → サーバ | `permission_decision` | `{ agent_id, request_id, allow, message? }`。**operator のみ**。該当ラッパーへ relay |
+| サーバ → ラッパー | `instruction` | `{ text }`(relay。ラッパーは入力キューへ投入) |
+| サーバ → ラッパー | `permission_decision` | `{ request_id, allow, message? }`(relay。`request_id` で保留中の承認と突合) |
 
-双方向(指示・承認: クライアント → サーバ → ラッパー)のメッセージ種別は
-Phase 3 着手時に追補する。
+**承認フロー**: ラッパーは `canUseTool` 発火で `permission_request`
+エンベロープ(上記 type 表)を送って Promise を保留し、
+`permission_decision` の受信(または既定 600 秒のタイムアウト = deny、
+[ADR-0011](../adr/0011-phase3-reliability-and-auth.md))で解決する。
+deny でもセッションは継続する。サーバは指示・承認の**中身を解釈せず
+relay するだけ**で、agent 非依存を維持する。配達保証はしない(未接続
+ラッパーへの relay は消失し、要求側はタイムアウトで知る)。
 
 **再接続時の再同期**: クライアントは切断後、チャネルへ再 join するだけで
 `snapshot` により全エージェントの最新状態へ再同期する。差分追跡や再送
-要求は不要(agent_id ごと last-write-wins)。順序保証・重複排除(seq/
-イベント ID)は [protocol-reliability](../open-questions/protocol-reliability.md)
-で扱う。
+要求は不要(agent_id ごと last-write-wins)。順序保証・重複排除の整列
+キーは `seq`([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。
 
 ### バージョニング方針
 
@@ -231,18 +241,39 @@ stateDiagram-v2
 - kaoiro 固有に定義するのはトピック設計とイベント名・payload のみ
   (上記「type と payload」「方向別メッセージ種別」)。
 
+### 接続認証(v0 確定、[ADR-0011](../adr/0011-phase3-reliability-and-auth.md))
+
+TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP)。
+ハートビートは Channels 組み込み(クライアントライブラリ既定)を使う。
+
+| 接続 | 方式 | サーバ設定 |
+|---|---|---|
+| ラッパー(`/wrapper`) | **agent_id 別トークン**。接続パラメータ `token` で提示し、`wrapper:<agent_id>` join 時に agent_id との組を検証 | `KAOIRO_WRAPPER_TOKENS`(`id:token,id:token` 形式) |
+| クライアント(`/client`) | **ユーザトークン + role**。接続パラメータ `token`。role は `viewer`(閲覧)/ `operator`(指示・承認可) | `KAOIRO_CLIENT_TOKENS`(`token:role,...` 形式) |
+
+- トークン不一致・未知トークンは接続拒否。env 未設定時は開発用に
+  認証を要求しない(設定があるときのみ強制)。このとき全クライアント
+  接続は **operator** 扱い(双方向の開発確認のため)。運用環境では
+  必ず両 env を設定する([threat-model](threat-model.md))。
+- `instruction` / `permission_decision` は operator role のみ受理。
+- ラッパー接続断はサーバが検知し、当該エージェントの状態を
+  `disconnected` へ**サーバ導出**する(状態セット表の通り)。サーバ
+  導出エンベロープは `seq` を持たない(`seq` はラッパー付与の系列)。
+
 ## Constraints
 
 - MUST: `agent_id` は安定 ID。MUST: 状態導出はラッパー側。
 - MUST: `agent_id` の文字種は `[A-Za-z0-9._-]`(1〜256 文字)。
 - MUST: クライアント接続は Phoenix Channels(`vsn=2.0.0`)のみ。
 - MUST: 受信側はエンベロープの未知キーを無視する(前方互換)。
+- MUST: `instruction` / `permission_decision` は operator role のみ。
+- MUST: permission の無応答既定は deny(fail-closed)。既定 600 秒、
+  ラッパー設定で変更可。
 
 ## Open Questions
 
-- [protocol-reliability](../open-questions/protocol-reliability.md)
-  — seq/イベント ID(順序・重複排除)、permission_request の相関 ID と
-  タイムアウト既定。
+なし(protocol-reliability は
+[ADR-0011](../adr/0011-phase3-reliability-and-auth.md) で解決済み)。
 
 ## See Also
 
@@ -252,4 +283,5 @@ stateDiagram-v2
   [0003](../adr/0003-persona-identity-persistence.md),
   [0008](../adr/0008-persona-asset-distribution.md),
   [0009](../adr/0009-client-transport.md),
-  [0010](../adr/0010-protocol-precisification.md)
+  [0010](../adr/0010-protocol-precisification.md),
+  [0011](../adr/0011-phase3-reliability-and-auth.md)

@@ -4,6 +4,7 @@
   import type {
     ConnectionStatus,
     Envelope,
+    KaoiroConnection,
     PersonaManifest,
   } from "./lib/protocol";
   import {
@@ -15,6 +16,7 @@
   let agents = $state<Record<string, Envelope>>({});
   let status = $state<ConnectionStatus>("connecting");
   let manifest = $state<PersonaManifest | null>(null);
+  let connection = $state<KaoiroConnection | null>(null);
 
   const sorted = $derived(
     Object.values(agents).sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
@@ -25,13 +27,27 @@
     // fetch failure), then swap to persona sprites.
     fetchPersonaManifest().then((next) => (manifest = next));
 
-    const connection = connectKaoiro(defaultSocketUrl(location), {
-      onStatus: (next) => (status = next),
-      onSnapshot: (next) => (agents = next),
-      onEnvelope: (envelope) => {
-        agents = { ...agents, [envelope.agent_id]: envelope };
+    // User token (ADR-0011) via ?token=…; omitted = dev mode. The token
+    // is scrubbed from the address bar right away so it does not stick
+    // around in history/bookmarks/shared links.
+    const token = new URLSearchParams(location.search).get("token");
+    if (token !== null) {
+      const scrubbed = new URL(location.href);
+      scrubbed.searchParams.delete("token");
+      history.replaceState(null, "", scrubbed);
+    }
+
+    connection = connectKaoiro(
+      defaultSocketUrl(location),
+      {
+        onStatus: (next) => (status = next),
+        onSnapshot: (next) => (agents = next),
+        onEnvelope: (envelope) => {
+          agents = { ...agents, [envelope.agent_id]: envelope };
+        },
       },
-    });
+      token === null ? {} : { token },
+    );
     return connection.disconnect;
   });
 </script>
@@ -52,7 +68,7 @@
     <ul class="agents">
       {#each sorted as envelope, index (envelope.agent_id)}
         <li style:--stagger="{index * 60}ms">
-          <AgentCard {envelope} {manifest} />
+          <AgentCard {envelope} {manifest} {connection} />
         </li>
       {/each}
     </ul>

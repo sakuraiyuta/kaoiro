@@ -154,3 +154,22 @@ export function makeStateChange(
     ext: {},
   };
 }
+
+/** Wraps a pending tool-permission request into the common envelope v0
+ *  (protocol.md; payload carries request_id / tool_name / input). */
+export function makePermissionRequest(
+  config: WrapperConfig,
+  ts: string,
+  payload: Record<string, unknown>,
+): Envelope {
+  return {
+    version: "0",
+    agent_id: config.agent_id,
+    persona: config.persona,
+    ts,
+    type: "permission_request",
+    state: "waiting_permission",
+    payload,
+    ext: {},
+  };
+}

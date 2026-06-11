@@ -1,15 +1,20 @@
-// Minimal demo CLI — runs one agent turn and prints color-coded state
+// Minimal demo CLI — runs an agent session and prints color-coded state
 // transitions, so you can watch the kaoiro state follow real agent behavior.
 //
-// Safety: in headless SDK mode the canUseTool "ask" path is not auto-invoked
-// (tools resolve via allowedTools), so the demo enforces read-only by restricting
-// allowedTools — non-read tools are not pre-allowed and never execute. The
-// decidePermission wiring below drives waiting_permission only if/when the ask
-// path is enabled (see docs/specs/agent-sdk-events.md follow-up).
+// Modes: with server_url the wrapper stays resident after the first turn
+// (Phase 3: it accepts operator instructions and relays tool-permission
+// requests to the approval UI); without it, one local turn and exit.
+//
+// Safety: allowedTools pre-allows read-only tools only. Other tools go to
+// the canUseTool ask path — when that path fires (issue #1), the decision
+// comes from the server's approval flow (PermissionBroker), defaulting to
+// deny on timeout. The local allowedTools ceiling cannot be widened from
+// the server side (specs/threat-model.md).
 //
 // Usage: node dist/cli.js [configPath] [prompt]
 
 import { AgentHost } from "./host.js";
+import { PermissionBroker } from "./permission.js";
 import { loadConfig } from "./persona.js";
 import { ServerLink } from "./transport.js";
 import type { Envelope, KaoiroState } from "./types.js";
@@ -47,21 +52,42 @@ async function main(): Promise<void> {
     process.argv[3] ??
     "src/state.ts を読んで、状態機械の状態名を日本語で列挙して。書き込みは不要。";
   const config = loadConfig(configPath);
-  const link = config.server_url
-    ? new ServerLink(config.server_url, config.agent_id)
-    : null;
+
+  // Resident when server-connected: the session stays open for operator
+  // instructions instead of ending after the first turn.
+  const persistent = Boolean(config.server_url);
 
   let host: AgentHost;
+  let link: ServerLink | null = null;
+  let broker: PermissionBroker | null = null;
+
   const onState = (envelope: Envelope): void => {
     printState(envelope);
     link?.send(envelope);
-    // Once the turn completes, close the input stream to end the session.
-    if (envelope.state === "waiting_input") host.close();
+    if (!persistent && envelope.state === "waiting_input") host.close();
   };
+
+  if (config.server_url) {
+    broker = new PermissionBroker({
+      config,
+      send: (envelope) => link?.send(envelope),
+    });
+    link = new ServerLink(config.server_url, config.agent_id, {
+      ...(config.server_token === undefined
+        ? {}
+        : { token: config.server_token }),
+      onInstruction: (text) => {
+        process.stdout.write(`  instruction: ${text}\n`);
+        host.send(text);
+      },
+      onPermissionDecision: (decision) => broker?.resolve(decision),
+    });
+  }
 
   host = new AgentHost(config, {
     onState,
-    decidePermission: (toolName) => {
+    decidePermission: (toolName, input) => {
+      if (broker) return broker.decide(toolName, input);
       const allow = READ_ONLY_TOOLS.has(toolName);
       process.stdout.write(
         `  permission: ${toolName} -> ${allow ? "allow" : "deny"}\n`,
@@ -87,7 +113,9 @@ async function main(): Promise<void> {
   try {
     await host.run(prompt);
   } finally {
-    // Release the socket so the process can exit.
+    // Deny in-flight permission requests, then release the socket so the
+    // process can exit.
+    broker?.close();
     link?.close();
   }
 }

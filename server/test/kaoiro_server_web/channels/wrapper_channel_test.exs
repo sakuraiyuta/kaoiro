@@ -65,4 +65,56 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     assert_reply ref, :error, %{reason: "envelope must be an object"}
   end
+
+  defp join_with_token(agent_id, token) do
+    KaoiroServerWeb.WrapperSocket
+    |> socket(nil, %{wrapper_token: token})
+    |> subscribe_and_join(
+      KaoiroServerWeb.WrapperChannel,
+      "wrapper:" <> agent_id
+    )
+  end
+
+  describe "wrapper token 認証 (ADR-0011)" do
+    setup do
+      Application.put_env(:kaoiro_server, :wrapper_tokens, "test.auth-1:tok-1")
+      on_exit(fn -> Application.delete_env(:kaoiro_server, :wrapper_tokens) end)
+    end
+
+    test "正しいトークンで join できる" do
+      assert {:ok, _reply, _socket} = join_with_token("test.auth-1", "tok-1")
+    end
+
+    test "不一致・欠落トークンは join を拒否する" do
+      assert {:error, %{reason: "unauthorized"}} =
+               join_with_token("test.auth-1", "wrong")
+
+      assert {:error, %{reason: "unauthorized"}} =
+               join_with_token("test.auth-1", nil)
+
+      assert {:error, %{reason: "unauthorized"}} =
+               join_with_token("test.unlisted", "tok-1")
+    end
+  end
+
+  describe "切断時の disconnected 導出" do
+    test "channel 終了で disconnected を broadcast し snapshot を更新する" do
+      agent_id = "test.disc-1"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      ref = push(socket, "envelope", envelope(agent_id, "thinking"))
+      assert_reply ref, :ok
+
+      Process.unlink(socket.channel_pid)
+      :ok = close(socket)
+
+      assert_broadcast "envelope", %{
+        "agent_id" => ^agent_id,
+        "state" => "disconnected"
+      }
+
+      assert AgentStates.snapshot()[agent_id]["state"] == "disconnected"
+    end
+  end
 end

@@ -1,17 +1,67 @@
 <script lang="ts">
   import { expressionFor, spriteUrlFor } from "./expression";
-  import type { Envelope, PersonaManifest } from "./protocol";
+  import { permissionRequestOf } from "./protocol";
+  import type {
+    Envelope,
+    KaoiroConnection,
+    PersonaManifest,
+  } from "./protocol";
 
   let {
     envelope,
     manifest = null,
-  }: { envelope: Envelope; manifest?: PersonaManifest | null } = $props();
+    connection = null,
+  }: {
+    envelope: Envelope;
+    manifest?: PersonaManifest | null;
+    connection?: KaoiroConnection | null;
+  } = $props();
 
   const expression = $derived(expressionFor(envelope.state));
   const name = $derived(envelope.persona?.name ?? envelope.agent_id);
   const spriteUrl = $derived(
     spriteUrlFor(manifest, envelope.persona?.sprite_set, envelope.state),
   );
+  const permission = $derived(permissionRequestOf(envelope));
+
+  let instruction = $state("");
+  let actionError = $state("");
+
+  // The card clears its own error once the agent moves on.
+  $effect(() => {
+    void envelope.state;
+    actionError = "";
+  });
+
+  async function run(action: () => Promise<void>): Promise<void> {
+    actionError = "";
+    try {
+      await action();
+    } catch (error) {
+      actionError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function sendInstruction(event: SubmitEvent): void {
+    event.preventDefault();
+    const text = instruction.trim();
+    if (!connection || text === "") return;
+    void run(async () => {
+      await connection.sendInstruction(envelope.agent_id, text);
+      instruction = "";
+    });
+  }
+
+  function decide(allow: boolean): void {
+    if (!connection || !permission) return;
+    void run(() =>
+      connection.sendPermissionDecision(
+        envelope.agent_id,
+        permission.request_id,
+        allow,
+      ),
+    );
+  }
 </script>
 
 <article class="card" data-state={expression.variant}>
@@ -29,6 +79,42 @@
   <h2>{name}</h2>
   <p class="state">{expression.label}</p>
   <p class="id">{envelope.agent_id}</p>
+
+  {#if connection}
+    {#if permission}
+      <div class="permission">
+        <p class="permission-tool">
+          <code>{permission.tool_name}</code> の実行許可を求めています
+        </p>
+        {#if permission.input}
+          <details>
+            <summary>input</summary>
+            <pre>{JSON.stringify(permission.input, null, 2)}</pre>
+          </details>
+        {:else if permission.truncated}
+          <p class="permission-note">(input は大きすぎるため省略)</p>
+        {/if}
+        <div class="permission-actions">
+          <button class="allow" onclick={() => decide(true)}>許可</button>
+          <button class="deny" onclick={() => decide(false)}>拒否</button>
+        </div>
+      </div>
+    {/if}
+
+    <form class="instruct" onsubmit={sendInstruction}>
+      <input
+        type="text"
+        placeholder="指示を送る…"
+        bind:value={instruction}
+        aria-label="instruction for {name}"
+      />
+      <button type="submit" disabled={instruction.trim() === ""}>送信</button>
+    </form>
+
+    {#if actionError}
+      <p class="action-error">{actionError}</p>
+    {/if}
+  {/if}
 </article>
 
 <style>
@@ -242,6 +328,107 @@
     margin: 0.45rem 0 0;
     font-size: 0.65rem;
     color: var(--fg-dim);
+    overflow-wrap: anywhere;
+  }
+
+  /* --- bidirectional controls (Phase 3) ------------------------------- */
+
+  .permission {
+    margin-top: 0.9rem;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--c-waiting_permission);
+    border-radius: 0.4rem;
+    text-align: left;
+    font-size: 0.75rem;
+  }
+
+  .permission-tool {
+    margin: 0;
+    color: var(--fg);
+  }
+
+  .permission-note {
+    margin: 0.3rem 0 0;
+    color: var(--fg-dim);
+  }
+
+  .permission details {
+    margin-top: 0.35rem;
+    color: var(--fg-dim);
+  }
+
+  .permission pre {
+    margin: 0.3rem 0 0;
+    max-height: 8rem;
+    overflow: auto;
+    font-size: 0.65rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .permission-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.55rem;
+  }
+
+  .permission-actions button {
+    flex: 1;
+    padding: 0.3rem 0;
+    border: 1px solid var(--line);
+    border-radius: 0.35rem;
+    background: var(--bg-card);
+    color: var(--fg);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .permission-actions .allow {
+    border-color: var(--c-done);
+    color: var(--c-done);
+  }
+
+  .permission-actions .deny {
+    border-color: var(--c-error);
+    color: var(--c-error);
+  }
+
+  .instruct {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.8rem;
+  }
+
+  .instruct input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 0.35rem;
+    background: var(--bg-card);
+    color: var(--fg);
+    font-size: 0.75rem;
+  }
+
+  .instruct button {
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: 0.35rem;
+    background: var(--bg-card);
+    color: var(--fg);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .instruct button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .action-error {
+    margin: 0.5rem 0 0;
+    font-size: 0.7rem;
+    color: var(--c-error);
     overflow-wrap: anywhere;
   }
 </style>
