@@ -19,7 +19,7 @@ Web クライアント(TS)でエージェントをキャラ絵表示し、Phase 
 - [ ] 状態 → 表情のマッピングが動作する
 - [ ] ペルソナ(立ち絵セット)をクライアントに反映
 - [ ] 描画はペルソナごとの静的差分切り替え
-- [ ] 表情差分素材を ComfyUI で量産(状態別 + ペルソナ別)
+- [x] 表情差分素材を ComfyUI で量産(状態別 + ペルソナ別)
 
 ## Tasks
 
@@ -27,7 +27,7 @@ Web クライアント(TS)でエージェントをキャラ絵表示し、Phase 
 |---|------|--------|-------|
 | 2-1 | クライアント雛形(状態購読 → 表示) | ✅ | リファレンスダッシュボード(Svelte 5 + Vite、`server/assets/`、issue #12)。プロトコル層は Svelte 非依存の `protocol.ts` |
 | 2-2 | 状態 → 表情マッピング | 🟡 | プレースホルダ実装済(`expression.ts` + CSS 描画の顔、全 8 状態)。スプライト版は 2-3 の素材と [ADR-0008](../adr/0008-persona-asset-distribution.md) 配信の後 |
-| 2-3 | ComfyUI による表情差分の量産 | ⏳ | キャラデザイン方針の決定(ユーザ判断)が前提 |
+| 2-3 | ComfyUI による表情差分の量産 | ✅ | 3 ペルソナ x 7 状態 = 21 枚完成(`assets-work/dist/`)。方針・規格・provenance は [specs/personas](../specs/personas.md)。サーバ配置は ADR-0008 配信実装後 |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 

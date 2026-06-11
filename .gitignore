@@ -25,3 +25,6 @@ npm-debug.log
 .DS_Store
 *.swp
 *~
+
+# Generated persona sprites (reproducible via seeds in docs/specs/personas.md)
+/assets-work/
