@@ -7,6 +7,9 @@ defmodule KaoiroServer.Application do
 
   @impl true
   def start(_type, _args) do
+    # Warm the sprite manifest cache before the endpoint serves requests.
+    :ok = KaoiroServer.PersonaAssets.rebuild()
+
     children = [
       KaoiroServerWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:kaoiro_server, :dns_cluster_query) || :ignore},

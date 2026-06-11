@@ -2,7 +2,7 @@
 title: 共通イベント・プロトコル
 description: ラッパー/サーバ/クライアント間の共通イベント・エンベロープ v0、状態機械、ペルソナ同一性。
 status: accepted
-related: [architecture, plugin-model, agent-sdk-events]
+related: [architecture, plugin-model, agent-sdk-events, personas]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -179,6 +179,44 @@ stateDiagram-v2
   disconnected --> idle
 ```
 
+### ペルソナアセット配信(v0 確定)
+
+`persona.sprite_set` を実画像へ解決する HTTP API
+([ADR-0008](../adr/0008-persona-asset-distribution.md))。Channels とは
+独立で、`:serve_dashboard` トグルの対象外(公開 API)。アセットの配置・
+規格・オーバーレイ(`KAOIRO_PERSONA_DIR`)の正本は
+[personas](personas.md)。
+
+- `GET /api/personas` — マニフェスト JSON:
+
+```json
+{
+  "version": "<16hex>",
+  "personas": {
+    "<sprite_set>": {
+      "states": {
+        "<state>": {
+          "url": "/personas/<sprite_set>/<state>.png?v=<12hex>",
+          "hash": "sha256:<64hex>"
+        }
+      }
+    }
+  }
+}
+```
+
+- `version` はアセット内容から導出した全体バージョン。クライアントは
+  これが変わった時だけスプライト URL を引き直す(増分同期)。
+- `url` のハッシュ付き形は不変 — 応答は
+  `cache-control: public, max-age=31536000, immutable`。`?v=` なしは
+  `no-cache`。
+- 配信はマニフェスト掲載ファイルのみ(未知パスは 404)。
+- クライアントはスプライトのない状態を `idle` 画像へフォールバック
+  する。`disconnected` は画像を持たず(personas.md の MUST NOT)、
+  `idle` のグレースケール表示で表現する。マニフェスト未取得・未掲載
+  `sprite_set` はスプライトなし描画(リファレンス実装では CSS 顔)へ
+  フォールバックする。
+
 ### クライアント向けトランスポート
 
 クライアント ↔ サーバの接続は **Phoenix Channels に一本化**
@@ -208,8 +246,10 @@ stateDiagram-v2
 
 ## See Also
 
-- 関連 specs: [architecture](architecture.md), [plugin-model](plugin-model.md)
+- 関連 specs: [architecture](architecture.md),
+  [plugin-model](plugin-model.md), [personas](personas.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0003](../adr/0003-persona-identity-persistence.md),
+  [0008](../adr/0008-persona-asset-distribution.md),
   [0009](../adr/0009-client-transport.md),
   [0010](../adr/0010-protocol-precisification.md)

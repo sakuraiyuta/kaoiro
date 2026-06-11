@@ -1,20 +1,30 @@
 <script lang="ts">
-  import { expressionFor } from "./expression";
-  import type { Envelope } from "./protocol";
+  import { expressionFor, spriteUrlFor } from "./expression";
+  import type { Envelope, PersonaManifest } from "./protocol";
 
-  let { envelope }: { envelope: Envelope } = $props();
+  let {
+    envelope,
+    manifest = null,
+  }: { envelope: Envelope; manifest?: PersonaManifest | null } = $props();
 
   const expression = $derived(expressionFor(envelope.state));
   const name = $derived(envelope.persona?.name ?? envelope.agent_id);
+  const spriteUrl = $derived(
+    spriteUrlFor(manifest, envelope.persona?.sprite_set, envelope.state),
+  );
 </script>
 
 <article class="card" data-state={expression.variant}>
   {#key envelope.state}
-    <div class="face" role="img" aria-label={expression.label}>
-      <span class="eye left"></span>
-      <span class="eye right"></span>
-      <span class="mouth"></span>
-    </div>
+    {#if spriteUrl}
+      <img class="sprite" src={spriteUrl} alt={expression.label} />
+    {:else}
+      <div class="face" role="img" aria-label={expression.label}>
+        <span class="eye left"></span>
+        <span class="eye right"></span>
+        <span class="mouth"></span>
+      </div>
+    {/if}
   {/key}
   <h2>{name}</h2>
   <p class="state">{expression.label}</p>
@@ -47,8 +57,24 @@
   .card[data-state="error"] { --tone: var(--c-error); }
   .card[data-state="disconnected"] { --tone: var(--c-disconnected); }
 
-  /* The placeholder face: 顔色 = the state color itself. Swapped for
-     persona sprites once asset distribution (ADR-0008) lands. */
+  /* Persona sprite (ADR-0008): square transparent PNG, contain-fit.
+     disconnected has no sprite by spec — grey out idle instead. */
+  .sprite {
+    display: block;
+    width: 8rem;
+    height: 8rem;
+    margin: 0 auto 1rem;
+    object-fit: contain;
+    animation: pop 0.35s ease-out;
+  }
+
+  [data-state="disconnected"] .sprite {
+    filter: grayscale(1);
+    opacity: 0.45;
+  }
+
+  /* The placeholder face: 顔色 = the state color itself. Fallback when
+     the manifest has no sprite for the persona. */
   .face {
     position: relative;
     width: 5.4rem;

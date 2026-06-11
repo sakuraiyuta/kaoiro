@@ -1,17 +1,30 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
-  import type { ConnectionStatus, Envelope } from "./lib/protocol";
-  import { connectKaoiro, defaultSocketUrl } from "./lib/protocol";
+  import type {
+    ConnectionStatus,
+    Envelope,
+    PersonaManifest,
+  } from "./lib/protocol";
+  import {
+    connectKaoiro,
+    defaultSocketUrl,
+    fetchPersonaManifest,
+  } from "./lib/protocol";
 
   let agents = $state<Record<string, Envelope>>({});
   let status = $state<ConnectionStatus>("connecting");
+  let manifest = $state<PersonaManifest | null>(null);
 
   const sorted = $derived(
     Object.values(agents).sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
   );
 
   onMount(() => {
+    // Cards render the CSS face until the manifest arrives (or on
+    // fetch failure), then swap to persona sprites.
+    fetchPersonaManifest().then((next) => (manifest = next));
+
     const connection = connectKaoiro(defaultSocketUrl(location), {
       onStatus: (next) => (status = next),
       onSnapshot: (next) => (agents = next),
@@ -39,7 +52,7 @@
     <ul class="agents">
       {#each sorted as envelope, index (envelope.agent_id)}
         <li style:--stagger="{index * 60}ms">
-          <AgentCard {envelope} />
+          <AgentCard {envelope} {manifest} />
         </li>
       {/each}
     </ul>

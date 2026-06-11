@@ -25,6 +25,36 @@ export interface Envelope {
   ext?: Record<string, unknown>;
 }
 
+/** Persona asset manifest served at GET /api/personas (ADR-0008). */
+export interface SpriteEntry {
+  /** Hash-versioned URL; safe to cache immutably. */
+  url: string;
+  /** Content hash, e.g. "sha256:<hex>". */
+  hash: string;
+}
+
+export interface PersonaManifest {
+  /** Changes whenever any sprite content changes (incremental sync). */
+  version: string;
+  personas: Record<string, { states: Record<string, SpriteEntry> }>;
+}
+
+/**
+ * Fetches the persona manifest; null on any failure so callers can
+ * fall back to sprite-less rendering.
+ */
+export async function fetchPersonaManifest(
+  base = "",
+): Promise<PersonaManifest | null> {
+  try {
+    const res = await fetch(`${base}/api/personas`);
+    if (!res.ok) return null;
+    return (await res.json()) as PersonaManifest;
+  } catch {
+    return null;
+  }
+}
+
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 export interface KaoiroHandlers {

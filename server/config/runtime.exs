@@ -23,6 +23,10 @@ end
 config :kaoiro_server, KaoiroServerWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# Optional sprite overlay directory (ADR-0008 stage 1); per sprite set
+# it takes precedence over the bundled pack in priv/personas.
+config :kaoiro_server, :persona_dir, System.get_env("KAOIRO_PERSONA_DIR")
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

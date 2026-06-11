@@ -94,11 +94,13 @@ Phase 2 タスク 2-3(表情差分の量産)と将来のペルソナ追加が参
 | momo | `animality_ap3.safetensors` | `15180469782598` |
 | kuroe | `animality_ap3.safetensors` | `78243803967796` |
 
-全 3 ペルソナ x 7 状態 = 21 枚。成果物は
+全 3 ペルソナ x 7 状態 = 21 枚。作業成果物は
 `assets-work/dist/<sprite_set>/<state>.png`(512x512 透過 PNG、
-isnet-anime で背景除去)。サーバデータディレクトリへの正式配置は
+isnet-anime で背景除去、git 管理外)。正式配置済みの git 管理コピーは
+`server/priv/personas/`(2026-06-11、
 [ADR-0008](../adr/0008-persona-asset-distribution.md) 第 1 段階の
-配信実装後に行う。
+配信実装と同時)。配信 API の形式は [protocol](protocol.md) の
+「ペルソナアセット配信」を参照。
 
 ## Constraints
 
