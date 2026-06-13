@@ -18,8 +18,9 @@ Accepted
 ## Context
 
 Phase 3(双方向ルーティング・複数エージェント)の着手にあたり、
-[protocol-reliability](削除済み open-question、issue #4 由来)の 2 項目
-(seq/イベント ID、permission_request の相関 ID とタイムアウト既定)と、
+protocol-reliability open-question(issue #4 由来。2 項目を本 ADR へ昇格し
+元ファイルは削除)の 2 項目(seq/イベント ID、permission_request の相関 ID
+とタイムアウト既定)と、
 ラッパー認証([ADR-0002](0002-local-wrapper-websocket-topology.md))・
 ユーザアクセス制御 stub([ADR-0005](0005-access-control-oauth-stub.md))の
 具体方式を確定する必要があった(2026-06-11 ユーザ決定)。

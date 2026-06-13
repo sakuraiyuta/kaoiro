@@ -28,7 +28,7 @@ flowchart LR
     W2[Wrapper #2]
   end
   subgraph Server[サーバ層 Elixir/Phoenix]
-    REG[Agent Registry<br/>1接続=1 GenServer<br/>状態保持]
+    REG[AgentStates<br/>単一 GenServer<br/>agent_id→最新エンベロープ]
     PS[(PubSub)]
   end
   subgraph Clients[クライアント層 外部プロジェクト + 同梱ダッシュボード]
@@ -59,8 +59,9 @@ flowchart LR
 - **ラッパー(TS / ローカル)**: SDK 経由の起動・制御、SDK メッセージ → 共通
   エンベロープへの翻訳と状態**導出**(アダプタ)、フィルタ列、指示・承認の SDK
   呼び出しへの変換、ペルソナ・安定 ID の保持。
-- **サーバ(Elixir/Phoenix)**: WebSocket 集約、1接続=1 GenServer で最新状態
-  保持、PubSub 配信、指示・承認のルーティング。状態**導出**はラッパー、**保持**は
+- **サーバ(Elixir/Phoenix)**: WebSocket 集約(1接続=1 channel プロセス)、
+  単一の `AgentStates` GenServer が `agent_id → 最新エンベロープ` のマップを保持、
+  PubSub 配信、指示・承認のルーティング。状態**導出**はラッパー、**保持**は
   サーバ(agent 非依存)。ペルソナアセットの保管・マニフェスト配信
   ([ADR-0008](../adr/0008-persona-asset-distribution.md))。
 - **クライアント**: キャラ+表情の可視化、multiplexer UI、承認 UI。実装は別
@@ -86,7 +87,8 @@ flowchart LR
 
 | 概念 | OTP/Phoenix での実体 |
 |---|---|
-| 1 エージェント = 1 監視対象 | 接続ごとに 1 GenServer(最新状態を保持) |
+| 接続ごとの分離 | 接続ごとに 1 channel プロセス(Phoenix 管理) |
+| エージェント状態保持 | 単一 `AgentStates` GenServer(`agent_id → 最新エンベロープ` のマップ、owner pid で再接続レース防止) |
 | 障害隔離・再起動 | Supervisor 配下に配置 |
 | 状態の fan-out | Phoenix.PubSub |
 | クライアント realtime 配信 | Phoenix Channels(または LiveView) |
