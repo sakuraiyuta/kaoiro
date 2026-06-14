@@ -9,6 +9,7 @@
 | 1.5 | [phase-1.5-minimal-server-client](phase-1.5-minimal-server-client.md) | ✅ | 最小サーバ + 最小クライアント(縦串) |
 | 2 | [phase-2-client-character](phase-2-client-character.md) | ✅ | クライアント + キャラ + 表情 |
 | 3 | [phase-3-server-multiagent](phase-3-server-multiagent.md) | ✅ | サーバ集約 + 複数 + 双方向 |
+| 3.5 | [phase-3.5-response-display](phase-3.5-response-display.md) | ⏳ | 返答表示(同梱ダッシュボード実用化) |
 | 4 | [phase-4-emotion-filter](phase-4-emotion-filter.md) | ⏳ | 感情フィルタ(味付け) |
 | 5 | [phase-5-i18n](phase-5-i18n.md) | ⏳ | ベータ前 英訳工程 |
 

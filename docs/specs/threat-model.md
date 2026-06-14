@@ -44,11 +44,14 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | ラッパー側の `allowedTools` 上限 — 指示が来ても実行可能なツールは ラッパー設定が天井(サーバ・クライアントからは拡張不可) | ラッパー設計で担保(canUseTool はサーバ側から上書き不可) |
 | 指示の監査ログ(誰が・いつ・どの agent に何を送ったか) | 将来(SQLite 導入時) |
 | tool input のマスキング(シークレットパターンの伏字) | 将来 |
+| 返答ログ(`log`/`result`、tool 入出力含む)を operator 限定配信 | Phase 3.5([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
 | OAuth + RBAC 本実装 | 将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
 
 ## Constraints
 
 - MUST: 指示・承認の受理は operator role のみ([protocol](protocol.md))。
+- MUST: 返答ログ(`log`/`result`)の配信は operator role のみ
+  ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。
 - MUST: ラッパーはサーバから受けた指示で `allowedTools` /
   `canUseTool` の設定を変更しない(実行能力の天井はローカル設定)。
 - SHOULD: operator トークンは viewer と分け、配布範囲を最小にする。
@@ -62,4 +65,5 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 - 関連 specs: [protocol](protocol.md), [architecture](architecture.md)
 - ADRs: [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0005](../adr/0005-access-control-oauth-stub.md),
-  [0011](../adr/0011-phase3-reliability-and-auth.md)
+  [0011](../adr/0011-phase3-reliability-and-auth.md),
+  [0012](../adr/0012-response-display-and-dashboard-scope.md)

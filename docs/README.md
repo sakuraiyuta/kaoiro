@@ -29,6 +29,8 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0008](adr/0008-persona-asset-distribution.md) | ペルソナアセットはサーバ管理・マニフェスト配信 | accepted |
 | [0009](adr/0009-client-transport.md) | クライアント接続は Phoenix Channels に一本化 | accepted |
 | [0010](adr/0010-protocol-precisification.md) | エンベロープ type/payload は実証範囲のみ確定 | accepted |
+| [0011](adr/0011-phase3-reliability-and-auth.md) | Phase 3 の信頼性・認証規約(seq/permission/トークン) | accepted |
+| [0012](adr/0012-response-display-and-dashboard-scope.md) | 返答表示と同梱ダッシュボードのスコープ改訂 | accepted |
 
 ## 更新フロー
 

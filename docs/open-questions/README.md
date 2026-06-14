@@ -7,7 +7,6 @@
 
 | Slug | Urgency | Blocks | Opened |
 |------|---------|--------|--------|
-| [response-display](response-display.md) | high | protocol | 2026-06-11 |
 | [disconnected-agent-removal](disconnected-agent-removal.md) | low | — | 2026-06-11 |
 
 ## Recently decided

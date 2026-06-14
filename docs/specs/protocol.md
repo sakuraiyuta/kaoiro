@@ -89,15 +89,15 @@ flowchart LR
 
 ### type と payload(v0 確定)
 
-`type` は閉じた enum。実証済みの種別のみ payload を定義し、残りは予約名と
-する([ADR-0010](../adr/0010-protocol-precisification.md))。
+`type` は閉じた enum。v0 の各種別の payload を下記に定義する(段階的精緻化の
+方針は [ADR-0010](../adr/0010-protocol-precisification.md))。
 
 | type | 状態 | payload |
 |---|---|---|
 | `state_change` | **確定** | `{ label?: string, summary?: string }`。`label` は短い行先表示(例 `"Edit src/foo.ts"`)、`summary` は人間可読の説明。どちらも省略可 |
-| `log` | 予約 | 未定義。使用フェーズの実装時に追補 |
+| `log` | **確定** | `{ kind: "assistant" \| "tool_use" \| "tool_result", text?, tool_name?, input?, output?, truncated? }`。エージェント応答の逐次中継。`assistant`=モデル発話(`text`)、`tool_use`=ツール呼出(`tool_name`/`input`)、`tool_result`=実行結果(`tool_name`/`output`)。tool 入出力はクライアント UI で折りたたみ既定。長文は wrapper が切り詰め(`truncated: true`)。**operator role のみへ配信**(viewer 非配信。シークレット混入の主経路、[threat-model](threat-model.md)、[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
 | `permission_request` | **確定** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`。`request_id` はラッパー生成のセッション内一意 ID([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。`input` はツール入力(ラッパーが 16KB 程度に切り詰め、切り詰め時 `truncated: true`。シークレット混入リスクは [threat-model](threat-model.md))。state は `waiting_permission` |
-| `result` | 予約 | 未定義。使用フェーズの実装時に追補 |
+| `result` | **確定** | `{ text?: string, is_error?: boolean }`。ターン完了時の最終応答。`is_error` でエラー終了を区別。state は `done`/`error` の後 `waiting_input`。`log` と同様 **operator 限定配信**([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
 
 ### 方向別メッセージ種別(v0 確定)
 
@@ -126,6 +126,10 @@ relay するだけ**で、agent 非依存を維持する。配達保証はしな
 `snapshot` により全エージェントの最新状態へ再同期する。差分追跡や再送
 要求は不要(agent_id ごと last-write-wins)。順序保証・重複排除の整列
 キーは `seq`([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。
+join 時には最新状態に加え、直近の返答ログ履歴(サーバの**インメモリ・
+リングバッファ**、[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))も
+配信する(再読込・再接続で返答ログを復元)。履歴はインメモリのみで、サーバ
+再起動で消える(ディスク永続は将来 issue #24)。配信形の詳細は実装で確定。
 
 ### バージョニング方針
 
@@ -269,6 +273,8 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
 - MUST: `instruction` / `permission_decision` は operator role のみ。
 - MUST: permission の無応答既定は deny(fail-closed)。既定 600 秒、
   ラッパー設定で変更可。
+- MUST: `log` / `result` エンベロープは operator role のみへ配信する
+  ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。
 
 ## Open Questions
 
@@ -284,4 +290,5 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
   [0008](../adr/0008-persona-asset-distribution.md),
   [0009](../adr/0009-client-transport.md),
   [0010](../adr/0010-protocol-precisification.md),
-  [0011](../adr/0011-phase3-reliability-and-auth.md)
+  [0011](../adr/0011-phase3-reliability-and-auth.md),
+  [0012](../adr/0012-response-display-and-dashboard-scope.md)
