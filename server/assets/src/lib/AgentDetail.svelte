@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { expressionFor, spriteUrlFor } from "./expression";
+  import { renderMarkdown } from "./markdown";
   import { logOf, permissionRequestOf, resultOf } from "./protocol";
   import type {
     Envelope,
@@ -131,9 +132,11 @@
       {@const log = logOf(env)}
       {@const res = resultOf(env)}
       {#if log?.kind === "user"}
-        <p class="msg user">{log.text ?? ""}</p>
+        <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
+        <div class="msg user">{@html renderMarkdown(log.text ?? "")}</div>
       {:else if log?.kind === "assistant"}
-        <p class="msg assistant">{log.text ?? ""}</p>
+        <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
+        <div class="msg assistant">{@html renderMarkdown(log.text ?? "")}</div>
       {:else if log?.kind === "tool_use"}
         <details class="tool">
           <summary>ツール呼び出し: {log.tool_name}</summary>
@@ -321,9 +324,33 @@
     border-radius: 0.5rem;
     font-size: 0.85rem;
     line-height: 1.5;
-    white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
+
+  /* Rendered-markdown children (#30): tighten margins and style code so a
+     reply reads cleanly inside the bubble. :global because {@html} content
+     is not scoped by Svelte. */
+  .msg :global(:first-child) { margin-top: 0; }
+  .msg :global(:last-child) { margin-bottom: 0; }
+  .msg :global(p) { margin: 0.4rem 0; }
+  .msg :global(ul),
+  .msg :global(ol) { margin: 0.4rem 0; padding-left: 1.2rem; }
+  .msg :global(a) { color: var(--c-thinking); }
+
+  .msg :global(code) {
+    font-family: inherit;
+    color: var(--c-thinking);
+  }
+
+  .msg :global(pre) {
+    margin: 0.4rem 0;
+    padding: 0.5rem 0.6rem;
+    background: var(--bg);
+    border-radius: 0.3rem;
+    overflow-x: auto;
+  }
+
+  .msg :global(pre code) { color: var(--fg); }
 
   .msg.assistant {
     background: var(--bg-card);
