@@ -11,6 +11,8 @@ import type {
   AdapterEvent,
   Envelope,
   KaoiroState,
+  LogPayload,
+  ResultPayload,
   WrapperConfig,
 } from "./types.js";
 
@@ -151,6 +153,46 @@ export function makeStateChange(
     type: "state_change",
     state,
     payload,
+    ext: {},
+  };
+}
+
+/** Wraps a relayed log line into the common envelope v0 (protocol.md
+ *  type="log"). `state` is the agent's state at relay time; the line
+ *  itself does not drive state derivation. */
+export function makeLog(
+  config: WrapperConfig,
+  state: KaoiroState,
+  ts: string,
+  payload: LogPayload,
+): Envelope {
+  return {
+    version: "0",
+    agent_id: config.agent_id,
+    persona: config.persona,
+    ts,
+    type: "log",
+    state,
+    payload: payload as unknown as Record<string, unknown>,
+    ext: {},
+  };
+}
+
+/** Wraps a turn's final reply into the common envelope v0 (protocol.md
+ *  type="result"). state mirrors the terminal done/error. */
+export function makeResult(
+  config: WrapperConfig,
+  ts: string,
+  payload: ResultPayload,
+): Envelope {
+  return {
+    version: "0",
+    agent_id: config.agent_id,
+    persona: config.persona,
+    ts,
+    type: "result",
+    state: payload.is_error ? "error" : "done",
+    payload: payload as unknown as Record<string, unknown>,
     ext: {},
   };
 }

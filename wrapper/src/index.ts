@@ -5,20 +5,30 @@ export type {
   AssistantBlockKind,
   Envelope,
   KaoiroState,
+  LogEntry,
+  LogKind,
+  LogPayload,
   Persona,
+  ResultPayload,
   ResultSubtype,
   WrapperConfig,
 } from "./types.js";
 export {
   initialMachineState,
+  makeLog,
   makePermissionRequest,
+  makeResult,
   makeStateChange,
   reduceStates,
   stepState,
 } from "./state.js";
 export type { MachineState } from "./state.js";
 export { ConfigError, loadConfig, parseConfig } from "./persona.js";
-export { sdkMessageToEvents } from "./adapter.js";
+export {
+  sdkMessageToEvents,
+  sdkMessageToLogs,
+  sdkMessageToResult,
+} from "./adapter.js";
 export { AgentHost } from "./host.js";
 export type { AgentHostOptions, PermissionDecision } from "./host.js";
 export { ServerLink } from "./transport.js";

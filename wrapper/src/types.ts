@@ -23,6 +23,43 @@ export type ResultSubtype =
 /** SDKAssistantMessage content-block kinds that affect state derivation. */
 export type AssistantBlockKind = "text" | "thinking" | "tool_use";
 
+/** log payload kind (protocol.md). assistant=model speech, tool_use=tool
+ *  call, tool_result=tool output. thinking is intentionally not relayed. */
+export type LogKind = "assistant" | "tool_use" | "tool_result";
+
+/** payload of a type="log" envelope (protocol.md). The fields present
+ *  depend on `kind`; `truncated` flags wrapper-side size clipping. */
+export interface LogPayload {
+  kind: LogKind;
+  text?: string;
+  tool_name?: string;
+  input?: Record<string, unknown>;
+  output?: string;
+  truncated?: boolean;
+}
+
+/** payload of a type="result" envelope (protocol.md): the turn's final
+ *  reply, with is_error marking an error termination. */
+export interface ResultPayload {
+  text?: string;
+  is_error?: boolean;
+}
+
+/**
+ * The adapter's normalized view of a relayable log line, before the host
+ * turns it into a log/result envelope. tool_result carries the answered
+ * tool_use_id so the host can backfill tool_name from its tool_use map.
+ */
+export type LogEntry =
+  | { kind: "assistant"; text: string }
+  | {
+      kind: "tool_use";
+      tool_use_id?: string;
+      tool_name: string;
+      input: Record<string, unknown>;
+    }
+  | { kind: "tool_result"; tool_use_id?: string; output: string };
+
 /**
  * The state-machine input: the adapter's normalized view of the SDK message
  * stream plus canUseTool. Bridging the real SDK types
@@ -78,10 +115,10 @@ export interface WrapperConfig {
 }
 
 /**
- * Common event envelope v0 (protocol.md).
- * Per ADR-0010/0011 the type enum fixes state_change and
- * permission_request; log / result are reserved names, so payload stays
- * loosely typed until those are specified.
+ * Common event envelope v0 (protocol.md). The type enum fixes
+ * state_change / permission_request (ADR-0010/0011) and log / result
+ * (ADR-0012). payload stays loosely typed; the per-type shapes are
+ * LogPayload / ResultPayload above.
  */
 export interface Envelope {
   version: "0";
@@ -91,7 +128,7 @@ export interface Envelope {
   /** Wrapper-issued monotonic sequence (ADR-0011), stamped by ServerLink
    *  at send time; absent on envelopes that never go to a server. */
   seq?: number;
-  type: "state_change" | "permission_request";
+  type: "state_change" | "permission_request" | "log" | "result";
   state: KaoiroState;
   payload: Record<string, unknown>;
   ext: Record<string, unknown>;

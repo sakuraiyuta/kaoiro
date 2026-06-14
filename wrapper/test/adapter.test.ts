@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { sdkMessageToEvents } from "../src/adapter.js";
+import {
+  sdkMessageToEvents,
+  sdkMessageToLogs,
+  sdkMessageToResult,
+} from "../src/adapter.js";
 import { reduceStates } from "../src/state.js";
 
 // The bridge only reads a few fields; build minimal shapes and cast.
@@ -104,6 +108,96 @@ describe("sdkMessageToEvents", () => {
       { kind: "ignore" },
     ]);
     expect(sdkMessageToEvents(msg({ type: "status" }))).toEqual([]);
+  });
+});
+
+describe("sdkMessageToLogs", () => {
+  it("assistant の text は assistant ログ、thinking は出さない", () => {
+    expect(
+      sdkMessageToLogs(
+        assistant([
+          { type: "thinking", thinking: "secret" },
+          { type: "text", text: "やります" },
+        ]),
+      ),
+    ).toEqual([{ kind: "assistant", text: "やります" }]);
+  });
+
+  it("tool_use は tool_name/input/id を保持", () => {
+    expect(
+      sdkMessageToLogs(
+        assistant([
+          { type: "tool_use", id: "tu_1", name: "Edit", input: { path: "a" } },
+        ]),
+      ),
+    ).toEqual([
+      {
+        kind: "tool_use",
+        tool_use_id: "tu_1",
+        tool_name: "Edit",
+        input: { path: "a" },
+      },
+    ]);
+  });
+
+  it("errored assistant はログ無し", () => {
+    expect(sdkMessageToLogs(assistant([{ type: "text", text: "x" }], "rl"))).toEqual(
+      [],
+    );
+  });
+
+  it("tool_result は文字列/text ブロックを output に集約", () => {
+    expect(
+      sdkMessageToLogs(
+        user([{ type: "tool_result", tool_use_id: "tu_1", content: "ok" }]),
+      ),
+    ).toEqual([{ kind: "tool_result", tool_use_id: "tu_1", output: "ok" }]);
+    expect(
+      sdkMessageToLogs(
+        user([
+          {
+            type: "tool_result",
+            tool_use_id: "tu_2",
+            content: [
+              { type: "text", text: "line1" },
+              { type: "image" },
+              { type: "text", text: "line2" },
+            ],
+          },
+        ]),
+      ),
+    ).toEqual([
+      { kind: "tool_result", tool_use_id: "tu_2", output: "line1\nline2" },
+    ]);
+  });
+
+  it("非 tool メッセージはログ無し", () => {
+    expect(sdkMessageToLogs(msg({ type: "system", subtype: "init" }))).toEqual(
+      [],
+    );
+    expect(sdkMessageToLogs(msg({ type: "result", subtype: "success" }))).toEqual(
+      [],
+    );
+  });
+});
+
+describe("sdkMessageToResult", () => {
+  it("success は result text を返す", () => {
+    expect(
+      sdkMessageToResult(
+        msg({ type: "result", subtype: "success", result: "完了" }),
+      ),
+    ).toEqual({ text: "完了" });
+  });
+
+  it("error subtype は is_error のみ", () => {
+    expect(
+      sdkMessageToResult(msg({ type: "result", subtype: "error_max_turns" })),
+    ).toEqual({ is_error: true });
+  });
+
+  it("result 以外は null", () => {
+    expect(sdkMessageToResult(assistant([{ type: "text", text: "x" }]))).toBeNull();
   });
 });
 

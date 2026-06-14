@@ -2,10 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { AdapterEvent } from "../src/types.js";
 import {
   initialMachineState,
+  makeLog,
+  makeResult,
   makeStateChange,
   reduceStates,
   stepState,
 } from "../src/state.js";
+
+const CONFIG = {
+  agent_id: "lab-pc-1.claude-a",
+  persona: { id: "mio", name: "澪", sprite_set: "mio" },
+};
 
 describe("stepState", () => {
   it("init を idle に導出する", () => {
@@ -284,6 +291,49 @@ describe("makeStateChange", () => {
       state: "tool_running",
       payload: { label: "Edit src/foo.ts" },
       ext: {},
+    });
+  });
+});
+
+describe("makeLog", () => {
+  it("log エンベロープに現在状態と payload を載せる", () => {
+    const envelope = makeLog(CONFIG, "thinking", "2026-06-04T11:55:00Z", {
+      kind: "assistant",
+      text: "考え中です",
+    });
+    expect(envelope).toEqual({
+      version: "0",
+      agent_id: "lab-pc-1.claude-a",
+      persona: { id: "mio", name: "澪", sprite_set: "mio" },
+      ts: "2026-06-04T11:55:00Z",
+      type: "log",
+      state: "thinking",
+      payload: { kind: "assistant", text: "考え中です" },
+      ext: {},
+    });
+  });
+});
+
+describe("makeResult", () => {
+  it("成功時は state=done", () => {
+    const envelope = makeResult(CONFIG, "2026-06-04T11:55:00Z", {
+      text: "完了しました",
+    });
+    expect(envelope).toMatchObject({
+      type: "result",
+      state: "done",
+      payload: { text: "完了しました" },
+    });
+  });
+
+  it("is_error 時は state=error", () => {
+    const envelope = makeResult(CONFIG, "2026-06-04T11:55:00Z", {
+      is_error: true,
+    });
+    expect(envelope).toMatchObject({
+      type: "result",
+      state: "error",
+      payload: { is_error: true },
     });
   });
 });

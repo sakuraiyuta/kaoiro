@@ -94,7 +94,15 @@ export class ServerLink {
 
   /** Pushes one envelope with the next seq; buffered while disconnected. */
   send(envelope: Envelope): void {
-    this.#lastEnvelope = envelope;
+    // Only state_change / permission_request define the latest state worth
+    // re-announcing after a reconnect. log / result are transcript lines
+    // the server keeps as history; re-sending them would duplicate it.
+    if (
+      envelope.type === "state_change" ||
+      envelope.type === "permission_request"
+    ) {
+      this.#lastEnvelope = envelope;
+    }
     this.#seq += 1;
     this.#channel.push("envelope", { ...envelope, seq: this.#seq });
   }

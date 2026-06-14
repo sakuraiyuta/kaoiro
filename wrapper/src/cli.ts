@@ -50,6 +50,21 @@ function printState(envelope: Envelope): void {
   );
 }
 
+// Echo the reply stream so a local run shows what the agent answered, not
+// just its state. tool input/output stay off the terminal (the state line
+// already marks tool_running); they ride the envelope to the dashboard.
+function printLog(envelope: Envelope): void {
+  const time = envelope.ts.slice(11, 19);
+  const name = envelope.persona.name;
+  const payload = envelope.payload;
+  if (envelope.type === "result") {
+    const text = typeof payload.text === "string" ? payload.text : "(no text)";
+    process.stdout.write(`\x1b[37m[${time}] ${name} -> ${text}\x1b[0m\n`);
+  } else if (payload.kind === "assistant" && typeof payload.text === "string") {
+    process.stdout.write(`\x1b[37m[${time}] ${name}: ${payload.text}\x1b[0m\n`);
+  }
+}
+
 async function main(): Promise<void> {
   const configPath = process.argv[2] ?? "kaoiro.config.json";
   const config = loadConfig(configPath);
@@ -77,6 +92,11 @@ async function main(): Promise<void> {
     if (!persistent && envelope.state === "waiting_input") host.close();
   };
 
+  const onLog = (envelope: Envelope): void => {
+    printLog(envelope);
+    link?.send(envelope);
+  };
+
   if (config.server_url) {
     broker = new PermissionBroker({
       config,
@@ -96,6 +116,7 @@ async function main(): Promise<void> {
 
   host = new AgentHost(config, {
     onState,
+    onLog,
     decidePermission: (toolName, input) => {
       if (broker) return broker.decide(toolName, input);
       const allow = READ_ONLY_TOOLS.has(toolName);
