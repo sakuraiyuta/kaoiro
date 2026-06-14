@@ -96,6 +96,14 @@
     });
   }
 
+  // Multi-line input (#33): Enter inserts a newline; Ctrl/Cmd+Enter submits.
+  function onInstructionKeydown(event: KeyboardEvent): void {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      (event.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
+    }
+  }
+
   function decide(allow: boolean): void {
     if (!connection || !permission) return;
     void run(() =>
@@ -209,12 +217,13 @@
         {/if}
 
         <form class="instruct" onsubmit={sendInstruction}>
-          <input
-            type="text"
-            placeholder="指示を送る…"
+          <textarea
+            placeholder="指示を送る…(Ctrl+Enter で送信)"
             bind:value={instruction}
+            onkeydown={onInstructionKeydown}
+            rows="2"
             aria-label="instruction for {name}"
-          />
+          ></textarea>
           <button type="submit" disabled={instruction.trim() === ""}>送信</button>
         </form>
 
@@ -541,10 +550,11 @@
 
   .instruct {
     display: flex;
+    align-items: flex-end;
     gap: 0.5rem;
   }
 
-  .instruct input {
+  .instruct textarea {
     flex: 1;
     min-width: 0;
     padding: 0.5rem 0.7rem;
@@ -554,6 +564,8 @@
     color: var(--fg);
     font: inherit;
     font-size: 0.85rem;
+    line-height: 1.4;
+    resize: vertical;
   }
 
   .instruct button {

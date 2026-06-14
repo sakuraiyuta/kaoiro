@@ -50,6 +50,14 @@
         actionError = error instanceof Error ? error.message : String(error);
       });
   }
+
+  // Multi-line input (#33): Enter inserts a newline; Ctrl/Cmd+Enter submits.
+  function onInstructionKeydown(event: KeyboardEvent): void {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      (event.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
+    }
+  }
 </script>
 
 <article class="card" data-state={expression.variant}>
@@ -80,12 +88,13 @@
 
   {#if connection}
     <form class="instruct" onsubmit={sendInstruction}>
-      <input
-        type="text"
-        placeholder="指示を送る…"
+      <textarea
+        placeholder="指示を送る…(Ctrl+Enter で送信)"
         bind:value={instruction}
+        onkeydown={onInstructionKeydown}
+        rows="1"
         aria-label="instruction for {name}"
-      />
+      ></textarea>
       <button type="submit" disabled={instruction.trim() === ""}>送信</button>
     </form>
 
@@ -356,11 +365,12 @@
 
   .instruct {
     display: flex;
+    align-items: flex-end;
     gap: 0.4rem;
     margin-top: 0.8rem;
   }
 
-  .instruct input {
+  .instruct textarea {
     flex: 1;
     min-width: 0;
     padding: 0.35rem 0.5rem;
@@ -368,7 +378,10 @@
     border-radius: 0.35rem;
     background: var(--bg-card);
     color: var(--fg);
+    font: inherit;
     font-size: 0.75rem;
+    line-height: 1.4;
+    resize: vertical;
   }
 
   .instruct button {
