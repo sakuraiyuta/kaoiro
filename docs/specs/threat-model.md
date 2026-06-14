@@ -40,6 +40,7 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | 緩和策 | 状態 |
 |---|---|
 | 指示・承認を operator role に限定 | Phase 3 で実装 |
+| `KAOIRO_CLIENT_TOKENS` 未設定時はクライアント接続を fail-closed(全拒否)— 誤設定で operator が無防備に公開される事故を防ぐ(起動時に警告ログ) | Phase 3.5([issue #28](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/28)) |
 | `permission_request.input` のサイズ上限(16KB 切り詰め、`truncated` 明示) | Phase 3 で実装([protocol](protocol.md)) |
 | ラッパー側の `allowedTools` 上限 — 指示が来ても実行可能なツールは ラッパー設定が天井(サーバ・クライアントからは拡張不可) | ラッパー設計で担保(canUseTool はサーバ側から上書き不可) |
 | 指示の監査ログ(誰が・いつ・どの agent に何を送ったか) | 将来(SQLite 導入時) |

@@ -255,10 +255,15 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
 | ラッパー(`/wrapper`) | **agent_id 別トークン**。接続パラメータ `token` で提示し、`wrapper:<agent_id>` join 時に agent_id との組を検証 | `KAOIRO_WRAPPER_TOKENS`(`id:token,id:token` 形式) |
 | クライアント(`/client`) | **ユーザトークン + role**。接続パラメータ `token`。role は `viewer`(閲覧)/ `operator`(指示・承認可) | `KAOIRO_CLIENT_TOKENS`(`token:role,...` 形式) |
 
-- トークン不一致・未知トークンは接続拒否。env 未設定時は開発用に
-  認証を要求しない(設定があるときのみ強制)。このとき全クライアント
-  接続は **operator** 扱い(双方向の開発確認のため)。運用環境では
-  必ず両 env を設定する([threat-model](threat-model.md))。
+- トークン不一致・未知トークンは接続拒否。env 未設定時の挙動は socket で
+  異なる(issue #28、起動時に警告をログ出力):
+  - **`KAOIRO_CLIENT_TOKENS` 未設定はクライアント接続を全拒否(fail-closed)**。
+    誤設定で operator が無防備に公開される事故を防ぐため、無認証稼働せず
+    認証不可能な状態で起動する。ローカル開発・デモでもクライアントトークンの
+    設定が必要。
+  - **`KAOIRO_WRAPPER_TOKENS` 未設定はラッパー認証を無効化(dev mode、任意の
+    ラッパーが接続可)**。loopback 限定での開発利便のため。
+  - 運用環境では必ず両 env を設定する([threat-model](threat-model.md))。
 - `instruction` / `permission_decision` は operator role のみ受理。
 - ラッパー接続断はサーバが検知し、当該エージェントの状態を
   `disconnected` へ**サーバ導出**する(状態セット表の通り)。サーバ

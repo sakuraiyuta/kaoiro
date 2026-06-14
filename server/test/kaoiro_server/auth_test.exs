@@ -5,6 +5,12 @@ defmodule KaoiroServer.AuthTest do
   alias KaoiroServer.Auth
 
   setup do
+    # Clear before AND after each test: config/runtime.exs loads
+    # KAOIRO_*_TOKENS in :test too, so a host that exports them would leak
+    # into the first "未設定" test before any on_exit has run.
+    Application.delete_env(:kaoiro_server, :wrapper_tokens)
+    Application.delete_env(:kaoiro_server, :client_tokens)
+
     on_exit(fn ->
       Application.delete_env(:kaoiro_server, :wrapper_tokens)
       Application.delete_env(:kaoiro_server, :client_tokens)
@@ -40,9 +46,9 @@ defmodule KaoiroServer.AuthTest do
   end
 
   describe "client_role/1" do
-    test "未設定なら operator として通す (dev mode)" do
-      assert {:ok, :operator} = Auth.client_role(nil)
-      assert {:ok, :operator} = Auth.client_role("anything")
+    test "未設定なら全接続を拒否する (fail-closed, issue #28)" do
+      assert {:error, :unauthorized} = Auth.client_role(nil)
+      assert {:error, :unauthorized} = Auth.client_role("anything")
     end
 
     test "設定時はトークンを role に解決する" do
@@ -65,27 +71,28 @@ defmodule KaoiroServer.AuthTest do
     end
   end
 
-  describe "warn_if_unenforced/0 (issue #28)" do
+  describe "warn_token_config/0 (issue #28)" do
     import ExUnit.CaptureLog
 
-    test "トークン未設定なら dev mode 警告をログに出す" do
-      log = capture_log(fn -> assert :ok = Auth.warn_if_unenforced() end)
-      assert log =~ "KAOIRO_WRAPPER_TOKENS unset"
+    test "トークン未設定なら client=拒否 / wrapper=dev mode を警告する" do
+      log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
       assert log =~ "KAOIRO_CLIENT_TOKENS unset"
+      assert log =~ "client connections are rejected"
+      assert log =~ "KAOIRO_WRAPPER_TOKENS unset"
     end
 
     test "両トークン設定済みなら警告は出ない" do
       Application.put_env(:kaoiro_server, :wrapper_tokens, "lab.a:tok-a")
       Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
 
-      log = capture_log(fn -> assert :ok = Auth.warn_if_unenforced() end)
+      log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
       refute log =~ "unset"
     end
 
     test "片方だけ設定なら未設定側のみ警告する" do
       Application.put_env(:kaoiro_server, :wrapper_tokens, "lab.a:tok-a")
 
-      log = capture_log(fn -> assert :ok = Auth.warn_if_unenforced() end)
+      log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
       assert log =~ "KAOIRO_CLIENT_TOKENS unset"
       refute log =~ "KAOIRO_WRAPPER_TOKENS unset"
     end

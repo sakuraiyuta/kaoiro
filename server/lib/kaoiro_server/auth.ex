@@ -7,9 +7,16 @@ defmodule KaoiroServer.Auth do
   - `:wrapper_tokens` — `"agent_id:token,agent_id:token"`
   - `:client_tokens` — `"token:role,..."` (role: `viewer` | `operator`)
 
-  An unset/empty list disables enforcement for that socket — development
-  convenience; clients then act as operator so the bidirectional flow
-  can be exercised (specs/protocol.md, specs/threat-model.md).
+  The unset/empty behaviour differs by socket:
+
+  - `:wrapper_tokens` unset — wrapper auth disabled (dev convenience):
+    any wrapper may connect.
+  - `:client_tokens` unset — fail-closed: every client connection is
+    rejected (no token can authenticate), so a misconfigured deployment
+    never silently grants operator (issue #28).
+
+  Either unset state is logged at startup via `warn_token_config/0`
+  (specs/protocol.md, specs/threat-model.md).
   """
 
   require Logger
@@ -39,17 +46,21 @@ defmodule KaoiroServer.Auth do
   end
 
   @doc """
-  Resolves a client token to its role (`:viewer` | `:operator`).
-  `{:ok, :operator}` for any connection when no client tokens are
-  configured (dev mode).
+  Resolves a client token to its role (`:viewer` | `:operator`), or
+  `{:error, :unauthorized}` when it matches no configured token. With no
+  client tokens configured at all, every connection is rejected
+  (fail-closed, issue #28) — never granted operator.
   """
   def client_role(token) do
     tokens = parse_pairs(Application.get_env(:kaoiro_server, :client_tokens))
 
-    cond do
-      tokens == %{} -> {:ok, :operator}
-      role = role_for(tokens, token) -> {:ok, role}
-      true -> {:error, :unauthorized}
+    # Fail closed: an empty token map makes role_for/2 return nil for any
+    # token, so no client can authenticate. A misconfigured deployment is
+    # then locked, not silently wide-open as operator (issue #28). The
+    # startup warning explains the locked state.
+    case role_for(tokens, token) do
+      nil -> {:error, :unauthorized}
+      role -> {:ok, role}
     end
   end
 
@@ -64,21 +75,29 @@ defmodule KaoiroServer.Auth do
   defp role_for(_tokens, _token), do: nil
 
   @doc """
-  Logs a warning for each socket whose token list is unset, i.e. running
-  in dev mode (no auth: all connections unauthenticated, clients act as
-  operator). Called at startup so the insecure state is visible in logs
-  rather than silent (specs/threat-model.md, issue #28).
+  Logs a startup warning for each token list that is unset, so the
+  locked / dev-mode state is visible in logs rather than silent
+  (specs/threat-model.md, issue #28):
+
+  - `:client_tokens` unset — client connections are rejected
+    (fail-closed); the env must be set to grant access.
+  - `:wrapper_tokens` unset — wrapper auth disabled (dev mode); any
+    wrapper may connect.
   """
-  def warn_if_unenforced do
-    for {key, env} <- [
-          {:wrapper_tokens, "KAOIRO_WRAPPER_TOKENS"},
-          {:client_tokens, "KAOIRO_CLIENT_TOKENS"}
-        ],
-        parse_pairs(Application.get_env(:kaoiro_server, key)) == %{} do
+  def warn_token_config do
+    if parse_pairs(Application.get_env(:kaoiro_server, :client_tokens)) == %{} do
       Logger.warning(
-        "#{env} unset: #{key} auth disabled (dev mode). All connections " <>
-          "are unauthenticated and clients act as operator — set #{env} " <>
-          "before exposing beyond loopback (specs/threat-model.md)."
+        "KAOIRO_CLIENT_TOKENS unset: client connections are rejected " <>
+          "(no token can authenticate). Set it to grant viewer/operator " <>
+          "access (specs/threat-model.md)."
+      )
+    end
+
+    if parse_pairs(Application.get_env(:kaoiro_server, :wrapper_tokens)) == %{} do
+      Logger.warning(
+        "KAOIRO_WRAPPER_TOKENS unset: wrapper auth disabled (dev mode); " <>
+          "any wrapper may connect. Set it before exposing beyond loopback " <>
+          "(specs/threat-model.md)."
       )
     end
 
