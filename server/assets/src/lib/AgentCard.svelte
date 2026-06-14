@@ -1,6 +1,5 @@
 <script lang="ts">
   import { expressionFor, spriteUrlFor } from "./expression";
-  import { permissionRequestOf } from "./protocol";
   import type {
     Envelope,
     KaoiroConnection,
@@ -11,10 +10,12 @@
     envelope,
     manifest = null,
     connection = null,
+    onSelect,
   }: {
     envelope: Envelope;
     manifest?: PersonaManifest | null;
     connection?: KaoiroConnection | null;
+    onSelect?: () => void;
   } = $props();
 
   const expression = $derived(expressionFor(envelope.state));
@@ -22,7 +23,11 @@
   const spriteUrl = $derived(
     spriteUrlFor(manifest, envelope.persona?.sprite_set, envelope.state),
   );
-  const permission = $derived(permissionRequestOf(envelope));
+  // Needs-attention badge (ADR-0012 F6): approval/error draw the eye on the
+  // grid; the actual allow/deny happens in the detail view.
+  const attention = $derived(
+    envelope.state === "waiting_permission" || envelope.state === "error",
+  );
 
   let instruction = $state("");
   let actionError = $state("");
@@ -33,74 +38,47 @@
     actionError = "";
   });
 
-  async function run(action: () => Promise<void>): Promise<void> {
-    actionError = "";
-    try {
-      await action();
-    } catch (error) {
-      actionError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
   function sendInstruction(event: SubmitEvent): void {
     event.preventDefault();
     const text = instruction.trim();
     if (!connection || text === "") return;
-    void run(async () => {
-      await connection.sendInstruction(envelope.agent_id, text);
-      instruction = "";
-    });
-  }
-
-  function decide(allow: boolean): void {
-    if (!connection || !permission) return;
-    void run(() =>
-      connection.sendPermissionDecision(
-        envelope.agent_id,
-        permission.request_id,
-        allow,
-      ),
-    );
+    actionError = "";
+    void connection
+      .sendInstruction(envelope.agent_id, text)
+      .then(() => (instruction = ""))
+      .catch((error: unknown) => {
+        actionError = error instanceof Error ? error.message : String(error);
+      });
   }
 </script>
 
 <article class="card" data-state={expression.variant}>
-  {#key envelope.state}
-    {#if spriteUrl}
-      <img class="sprite" src={spriteUrl} alt={expression.label} />
-    {:else}
-      <div class="face" role="img" aria-label={expression.label}>
-        <span class="eye left"></span>
-        <span class="eye right"></span>
-        <span class="mouth"></span>
-      </div>
+  <button
+    type="button"
+    class="open"
+    onclick={() => onSelect?.()}
+    aria-label="{name} の詳細を開く"
+  >
+    {#if attention}
+      <span class="badge" data-state={expression.variant}>要対応</span>
     {/if}
-  {/key}
-  <h2>{name}</h2>
-  <p class="state">{expression.label}</p>
-  <p class="id">{envelope.agent_id}</p>
+    {#key envelope.state}
+      {#if spriteUrl}
+        <img class="sprite" src={spriteUrl} alt={expression.label} />
+      {:else}
+        <div class="face" role="img" aria-label={expression.label}>
+          <span class="eye left"></span>
+          <span class="eye right"></span>
+          <span class="mouth"></span>
+        </div>
+      {/if}
+    {/key}
+    <h2>{name}</h2>
+    <p class="state">{expression.label}</p>
+    <p class="id">{envelope.agent_id}</p>
+  </button>
 
   {#if connection}
-    {#if permission}
-      <div class="permission">
-        <p class="permission-tool">
-          <code>{permission.tool_name}</code> の実行許可を求めています
-        </p>
-        {#if permission.input}
-          <details>
-            <summary>input</summary>
-            <pre>{JSON.stringify(permission.input, null, 2)}</pre>
-          </details>
-        {:else if permission.truncated}
-          <p class="permission-note">(input は大きすぎるため省略)</p>
-        {/if}
-        <div class="permission-actions">
-          <button class="allow" onclick={() => decide(true)}>許可</button>
-          <button class="deny" onclick={() => decide(false)}>拒否</button>
-        </div>
-      </div>
-    {/if}
-
     <form class="instruct" onsubmit={sendInstruction}>
       <input
         type="text"
@@ -331,67 +309,50 @@
     overflow-wrap: anywhere;
   }
 
-  /* --- bidirectional controls (Phase 3) ------------------------------- */
+  /* --- clickable identity region (opens the detail view) -------------- */
 
-  .permission {
-    margin-top: 0.9rem;
-    padding: 0.6rem 0.7rem;
-    border: 1px solid var(--c-waiting_permission);
-    border-radius: 0.4rem;
-    text-align: left;
-    font-size: 0.75rem;
-  }
-
-  .permission-tool {
+  .open {
+    display: block;
+    position: relative;
+    width: 100%;
     margin: 0;
-    color: var(--fg);
-  }
-
-  .permission-note {
-    margin: 0.3rem 0 0;
-    color: var(--fg-dim);
-  }
-
-  .permission details {
-    margin-top: 0.35rem;
-    color: var(--fg-dim);
-  }
-
-  .permission pre {
-    margin: 0.3rem 0 0;
-    max-height: 8rem;
-    overflow: auto;
-    font-size: 0.65rem;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-
-  .permission-actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 0.55rem;
-  }
-
-  .permission-actions button {
-    flex: 1;
-    padding: 0.3rem 0;
-    border: 1px solid var(--line);
-    border-radius: 0.35rem;
-    background: var(--bg-card);
-    color: var(--fg);
-    font-size: 0.75rem;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: center;
     cursor: pointer;
   }
 
-  .permission-actions .allow {
-    border-color: var(--c-done);
-    color: var(--c-done);
+  .open:hover h2,
+  .open:focus-visible h2 {
+    color: var(--tone);
   }
 
-  .permission-actions .deny {
-    border-color: var(--c-error);
-    color: var(--c-error);
+  /* Needs-attention badge: blinking chip on the card corner (ADR-0012). */
+  .badge {
+    position: absolute;
+    top: 0;
+    right: 0;
+    padding: 0.12rem 0.4rem;
+    border-radius: 0.3rem;
+    font-size: 0.6rem;
+    font-weight: 600;
+    background: var(--c-waiting_permission);
+    color: var(--bg);
+    animation: blink 1.2s ease-in-out infinite;
   }
+
+  .badge[data-state="error"] {
+    background: var(--c-error);
+  }
+
+  @keyframes blink {
+    50% { opacity: 0.4; }
+  }
+
+  /* --- bidirectional controls (Phase 3) ------------------------------- */
 
   .instruct {
     display: flex;

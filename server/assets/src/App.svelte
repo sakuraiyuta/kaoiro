@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
+  import AgentDetail from "./lib/AgentDetail.svelte";
   import type {
     ConnectionStatus,
     Envelope,
@@ -11,15 +12,44 @@
     connectKaoiro,
     defaultSocketUrl,
     fetchPersonaManifest,
+    isReplyEnvelope,
   } from "./lib/protocol";
 
   let agents = $state<Record<string, Envelope>>({});
+  // Per-agent reply transcript (operator-only, ADR-0012): log/result
+  // envelopes accumulate here instead of overwriting the latest state.
+  let logs = $state<Record<string, Envelope[]>>({});
+  // agent_id of the agent shown full-screen, or null for the grid.
+  let selected = $state<string | null>(null);
   let status = $state<ConnectionStatus>("connecting");
   let manifest = $state<PersonaManifest | null>(null);
   let connection = $state<KaoiroConnection | null>(null);
 
+  // History is the authoritative recovered transcript, but log/result
+  // envelopes can arrive via onEnvelope between join and the history push.
+  // Append those live-buffered entries after the history (deduped by
+  // ts+seq+type) so a reload never drops them.
+  function mergeHistories(
+    histories: Record<string, Envelope[]>,
+    local: Record<string, Envelope[]>,
+  ): Record<string, Envelope[]> {
+    const key = (e: Envelope): string => `${e.ts}|${e.seq ?? ""}|${e.type}`;
+    const merged: Record<string, Envelope[]> = { ...histories };
+    for (const [id, entries] of Object.entries(local)) {
+      const base = merged[id] ?? [];
+      const seen = new Set(base.map(key));
+      const extra = entries.filter((e) => !seen.has(key(e)));
+      if (extra.length > 0) merged[id] = [...base, ...extra];
+    }
+    return merged;
+  }
+
   const sorted = $derived(
     Object.values(agents).sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
+  );
+  // Falls back to the grid if the selected agent vanishes from the map.
+  const selectedEnvelope = $derived(
+    selected !== null ? (agents[selected] ?? null) : null,
   );
 
   onMount(() => {
@@ -43,8 +73,16 @@
         onStatus: (next) => (status = next),
         onSnapshot: (next) => (agents = next),
         onEnvelope: (envelope) => {
-          agents = { ...agents, [envelope.agent_id]: envelope };
+          // Reply lines feed the transcript; state envelopes update the
+          // latest-state map that drives the grid faces.
+          if (isReplyEnvelope(envelope)) {
+            const prev = logs[envelope.agent_id] ?? [];
+            logs = { ...logs, [envelope.agent_id]: [...prev, envelope] };
+          } else {
+            agents = { ...agents, [envelope.agent_id]: envelope };
+          }
         },
+        onHistory: (histories) => (logs = mergeHistories(histories, logs)),
       },
       token === null ? {} : { token },
     );
@@ -60,7 +98,16 @@
 </header>
 
 <main>
-  {#if sorted.length === 0}
+  {#if selectedEnvelope}
+    <AgentDetail
+      envelope={selectedEnvelope}
+      logs={logs[selectedEnvelope.agent_id] ?? []}
+      {agents}
+      {connection}
+      {manifest}
+      onClose={() => (selected = null)}
+    />
+  {:else if sorted.length === 0}
     <p class="empty">
       no agents yet — start a wrapper with <code>server_url</code> set.
     </p>
@@ -68,7 +115,12 @@
     <ul class="agents">
       {#each sorted as envelope, index (envelope.agent_id)}
         <li style:--stagger="{index * 60}ms">
-          <AgentCard {envelope} {manifest} {connection} />
+          <AgentCard
+            {envelope}
+            {manifest}
+            {connection}
+            onSelect={() => (selected = envelope.agent_id)}
+          />
         </li>
       {/each}
     </ul>

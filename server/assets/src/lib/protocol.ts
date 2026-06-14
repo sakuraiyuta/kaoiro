@@ -55,6 +55,42 @@ export function permissionRequestOf(
   return payload as unknown as PermissionRequestPayload;
 }
 
+/** payload of a type="log" envelope (protocol.md / ADR-0012). */
+export interface LogPayload {
+  kind: "assistant" | "tool_use" | "tool_result";
+  text?: string;
+  tool_name?: string;
+  input?: Record<string, unknown>;
+  output?: string;
+  truncated?: boolean;
+}
+
+/** payload of a type="result" envelope (the turn's final reply). */
+export interface ResultPayload {
+  text?: string;
+  is_error?: boolean;
+}
+
+/** Narrows a log envelope's payload, or null for any other envelope. */
+export function logOf(envelope: Envelope): LogPayload | null {
+  if (envelope.type !== "log") return null;
+  const payload = envelope.payload;
+  if (typeof payload?.kind !== "string") return null;
+  return payload as unknown as LogPayload;
+}
+
+/** Narrows a result envelope's payload, or null for any other envelope. */
+export function resultOf(envelope: Envelope): ResultPayload | null {
+  if (envelope.type !== "result") return null;
+  return (envelope.payload ?? {}) as ResultPayload;
+}
+
+/** True for reply-stream envelopes (operator-only, ADR-0012): these go
+ *  to the per-agent transcript, not the latest-state map. */
+export function isReplyEnvelope(envelope: Envelope): boolean {
+  return envelope.type === "log" || envelope.type === "result";
+}
+
 /** Persona asset manifest served at GET /api/personas (ADR-0008). */
 export interface SpriteEntry {
   /** Hash-versioned URL; safe to cache immutably. */
@@ -91,8 +127,11 @@ export interface KaoiroHandlers {
   onStatus: (status: ConnectionStatus) => void;
   /** Full re-sync; replaces all known agents (last-write-wins). */
   onSnapshot: (agents: Record<string, Envelope>) => void;
-  /** Single-agent update. */
+  /** Single-agent update (any envelope type; caller routes by type). */
   onEnvelope: (envelope: Envelope) => void;
+  /** Reply-log history per agent (operator-only, ADR-0012); pushed once
+   *  on join, chronological. Absent for viewers. */
+  onHistory?: (histories: Record<string, Envelope[]>) => void;
 }
 
 export interface KaoiroConnection {
@@ -167,6 +206,15 @@ export function connectKaoiro(
   });
   channel.on("envelope", (payload: unknown) => {
     if (isEnvelope(payload)) handlers.onEnvelope(payload);
+  });
+  channel.on("history", (payload: { agents?: unknown }) => {
+    const histories: Record<string, Envelope[]> = {};
+    for (const [id, value] of Object.entries(payload.agents ?? {})) {
+      if (Array.isArray(value)) {
+        histories[id] = value.filter(isEnvelope);
+      }
+    }
+    handlers.onHistory?.(histories);
   });
   channel.join();
 

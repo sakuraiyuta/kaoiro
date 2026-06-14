@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchPersonaManifest, permissionRequestOf } from "../src/lib/protocol";
+import {
+  fetchPersonaManifest,
+  isReplyEnvelope,
+  logOf,
+  permissionRequestOf,
+  resultOf,
+} from "../src/lib/protocol";
 import type { Envelope } from "../src/lib/protocol";
 
 describe("fetchPersonaManifest", () => {
@@ -59,5 +65,42 @@ describe("permissionRequestOf", () => {
     expect(
       permissionRequestOf({ ...base, payload: { tool_name: "Bash" } }),
     ).toBeNull();
+  });
+});
+
+describe("logOf / resultOf / isReplyEnvelope", () => {
+  const log: Envelope = {
+    version: "0",
+    agent_id: "a",
+    ts: "2026-06-11T00:00:00Z",
+    type: "log",
+    state: "thinking",
+  };
+
+  it("log payload を絞り込み、kind 無し・他 type は null", () => {
+    expect(logOf({ ...log, payload: { kind: "assistant", text: "hi" } })).toEqual(
+      { kind: "assistant", text: "hi" },
+    );
+    expect(logOf({ ...log, payload: {} })).toBeNull();
+    expect(logOf({ ...log, type: "state_change" })).toBeNull();
+  });
+
+  it("result payload を絞り込み、他 type は null", () => {
+    expect(
+      resultOf({
+        ...log,
+        type: "result",
+        state: "done",
+        payload: { text: "done", is_error: false },
+      }),
+    ).toEqual({ text: "done", is_error: false });
+    expect(resultOf(log)).toBeNull();
+  });
+
+  it("isReplyEnvelope は log/result のみ true", () => {
+    expect(isReplyEnvelope(log)).toBe(true);
+    expect(isReplyEnvelope({ ...log, type: "result" })).toBe(true);
+    expect(isReplyEnvelope({ ...log, type: "state_change" })).toBe(false);
+    expect(isReplyEnvelope({ ...log, type: "permission_request" })).toBe(false);
   });
 });
