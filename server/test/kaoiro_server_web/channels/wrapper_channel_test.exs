@@ -131,6 +131,20 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert AgentStates.snapshot()[agent_id]["state"] == "tool_running"
       assert [%{"payload" => %{"text" => "やります"}}] = AgentStates.histories()[agent_id]
     end
+
+    test "状態未確立の log は ack のみで中継も履歴もしない" do
+      agent_id = "test.log-noop"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      # No prior state_change: append_log is :noop, so nothing is retained
+      # and the live broadcast is suppressed (still acked).
+      ref = push(socket, "envelope", log_env(agent_id))
+      assert_reply ref, :ok
+      refute_broadcast "envelope", %{}
+      refute Map.has_key?(AgentStates.snapshot(), agent_id)
+      refute Map.has_key?(AgentStates.histories(), agent_id)
+    end
   end
 
   describe "切断時の disconnected 導出" do

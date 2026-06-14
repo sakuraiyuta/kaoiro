@@ -45,6 +45,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
       {:reply, :ok, socket}
     else
+      # A reply before any state (append_log :noop) has no snapshot entry
+      # to anchor it; drop the live broadcast too so "latest state is
+      # authoritative" holds (history was already not retained). Ack the
+      # wrapper — it did nothing wrong.
+      :noop ->
+        {:reply, :ok, socket}
+
       {:error, reason} when is_atom(reason) ->
         {:reply, {:error, %{reason: to_string(reason)}}, socket}
 
@@ -54,13 +61,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   # log / result are reply transcript lines kept as history (ADR-0012);
-  # state_change / permission_request refresh the latest state. A reply
-  # arriving before any state (append_log :noop) is still broadcast live.
+  # state_change / permission_request refresh the latest state.
   defp store(%{"type" => type} = envelope) when type in ["log", "result"] do
-    case AgentStates.append_log(envelope) do
-      :noop -> :ok
-      other -> other
-    end
+    AgentStates.append_log(envelope)
   end
 
   defp store(envelope), do: AgentStates.put(envelope, owner: self())

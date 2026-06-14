@@ -241,6 +241,17 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       }
     end
 
+    defp result_envelope(agent_id, text) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-11T00:00:00Z",
+        "type" => "result",
+        "state" => "done",
+        "payload" => %{"text" => text}
+      }
+    end
+
     test "operator は join 時に履歴 push を受ける" do
       agent_id = "test.hist-1"
       put_agent(agent_id)
@@ -290,6 +301,36 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       )
 
       refute_push "envelope", %{"type" => "log"}
+    end
+
+    test "result の live broadcast は operator へ届く" do
+      agent_id = "test.hist-5"
+      put_agent(agent_id)
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        result_envelope(agent_id, "完了")
+      )
+
+      assert_push "envelope", %{"type" => "result", "payload" => %{"text" => "完了"}}
+    end
+
+    test "result の live broadcast は viewer には届かない" do
+      agent_id = "test.hist-6"
+      put_agent(agent_id)
+      _socket = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        result_envelope(agent_id, "完了")
+      )
+
+      refute_push "envelope", %{"type" => "result"}
     end
   end
 end
