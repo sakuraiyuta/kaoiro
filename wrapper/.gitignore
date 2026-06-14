@@ -2,6 +2,10 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Local pnpm build-script approval (e.g. esbuild). Not committed; for
+# reproducible CI put approvals in package.json "pnpm.onlyBuiltDependencies".
+pnpm-workspace.yaml
+
 # Live config holds agent_id / persona mappings; only the example is tracked.
 kaoiro.config.json
 kaoiro.config.*.json
