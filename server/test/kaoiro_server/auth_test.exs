@@ -64,4 +64,30 @@ defmodule KaoiroServer.AuthTest do
       assert {:error, :unauthorized} = Auth.client_role("tok-x")
     end
   end
+
+  describe "warn_if_unenforced/0 (issue #28)" do
+    import ExUnit.CaptureLog
+
+    test "トークン未設定なら dev mode 警告をログに出す" do
+      log = capture_log(fn -> assert :ok = Auth.warn_if_unenforced() end)
+      assert log =~ "KAOIRO_WRAPPER_TOKENS unset"
+      assert log =~ "KAOIRO_CLIENT_TOKENS unset"
+    end
+
+    test "両トークン設定済みなら警告は出ない" do
+      Application.put_env(:kaoiro_server, :wrapper_tokens, "lab.a:tok-a")
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      log = capture_log(fn -> assert :ok = Auth.warn_if_unenforced() end)
+      refute log =~ "unset"
+    end
+
+    test "片方だけ設定なら未設定側のみ警告する" do
+      Application.put_env(:kaoiro_server, :wrapper_tokens, "lab.a:tok-a")
+
+      log = capture_log(fn -> assert :ok = Auth.warn_if_unenforced() end)
+      assert log =~ "KAOIRO_CLIENT_TOKENS unset"
+      refute log =~ "KAOIRO_WRAPPER_TOKENS unset"
+    end
+  end
 end

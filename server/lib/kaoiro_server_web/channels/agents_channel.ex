@@ -26,6 +26,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # far below the wrapper-side envelope cap.
   @max_instruction_bytes 65_536
 
+  # Aggregate cap on the relayed payload (issue #26). Extra keys pass
+  # through opaquely for forward-compat, so a per-key check is not enough;
+  # this bounds the whole map. Sized above a max instruction (text alone
+  # may reach @max_instruction_bytes) plus the decision/extra-key overhead.
+  @max_relay_bytes 131_072
+
   intercept ["envelope"]
 
   @impl true
@@ -95,19 +101,29 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # well-typed so a malformed value is rejected at this boundary instead
   # of relying on the wrapper's guard.
   defp relay(socket, payload, event, key_checks) do
+    relayed = Map.delete(payload, "agent_id")
+
     with :ok <- require_operator(socket),
+         :ok <- check_relay_size(relayed),
          {:ok, agent_id} <- fetch_agent_id(payload),
          :ok <- check_keys(payload, key_checks) do
-      KaoiroServerWeb.Endpoint.broadcast(
-        "wrapper:#{agent_id}",
-        event,
-        Map.delete(payload, "agent_id")
-      )
-
+      KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", event, relayed)
       {:reply, :ok, socket}
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
+  # Bounds the whole relayed map, not just the whitelisted keys, so an
+  # oversized blob in an opaque extra key cannot reach the wrapper process
+  # (issue #26). The server→wrapper push is not covered by the wrapper's
+  # inbound @max_envelope_bytes guard.
+  defp check_relay_size(payload) do
+    if :erlang.external_size(payload) <= @max_relay_bytes do
+      :ok
+    else
+      {:error, :payload_too_large}
     end
   end
 

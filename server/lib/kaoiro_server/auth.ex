@@ -63,6 +63,28 @@ defmodule KaoiroServer.Auth do
 
   defp role_for(_tokens, _token), do: nil
 
+  @doc """
+  Logs a warning for each socket whose token list is unset, i.e. running
+  in dev mode (no auth: all connections unauthenticated, clients act as
+  operator). Called at startup so the insecure state is visible in logs
+  rather than silent (specs/threat-model.md, issue #28).
+  """
+  def warn_if_unenforced do
+    for {key, env} <- [
+          {:wrapper_tokens, "KAOIRO_WRAPPER_TOKENS"},
+          {:client_tokens, "KAOIRO_CLIENT_TOKENS"}
+        ],
+        parse_pairs(Application.get_env(:kaoiro_server, key)) == %{} do
+      Logger.warning(
+        "#{env} unset: #{key} auth disabled (dev mode). All connections " <>
+          "are unauthenticated and clients act as operator — set #{env} " <>
+          "before exposing beyond loopback (specs/threat-model.md)."
+      )
+    end
+
+    :ok
+  end
+
   defp parse_role("viewer"), do: :viewer
   defp parse_role("operator"), do: :operator
   defp parse_role(_), do: nil

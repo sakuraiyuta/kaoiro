@@ -108,6 +108,24 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :error, %{reason: "invalid value: text"}
     end
+
+    test "追加キーの巨大 blob は relay サイズ上限で拒否される (issue #26)" do
+      agent_id = "test.route-5"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      # text は正常値。opaque な追加キーに blob を載せて集約サイズ上限を超す。
+      ref =
+        push(socket, "instruction", %{
+          "agent_id" => agent_id,
+          "text" => "go",
+          "blob" => String.duplicate("a", 200_000)
+        })
+
+      assert_reply ref, :error, %{reason: "payload_too_large"}
+      refute_broadcast "instruction", %{}
+    end
   end
 
   describe "permission_decision relay (3-2)" do
@@ -174,6 +192,25 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
 
       assert_reply ref, :error, %{reason: "invalid value: allow"}
+    end
+
+    test "追加キーの巨大 blob は relay サイズ上限で拒否される (issue #26)" do
+      agent_id = "test.perm-5"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      # Whitelisted keys are valid; the abuse is an opaque extra key.
+      ref =
+        push(socket, "permission_decision", %{
+          "agent_id" => agent_id,
+          "request_id" => "req-5",
+          "allow" => true,
+          "blob" => String.duplicate("a", 200_000)
+        })
+
+      assert_reply ref, :error, %{reason: "payload_too_large"}
+      refute_broadcast "permission_decision", %{}
     end
   end
 

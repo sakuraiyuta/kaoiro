@@ -7,6 +7,10 @@ defmodule KaoiroServer.Application do
 
   @impl true
   def start(_type, _args) do
+    # Warn when running without token auth (dev mode) so the insecure
+    # state is visible in logs (specs/threat-model.md, issue #28).
+    :ok = KaoiroServer.Auth.warn_if_unenforced()
+
     # Warm the sprite manifest cache before the endpoint serves requests.
     :ok = KaoiroServer.PersonaAssets.rebuild()
 
