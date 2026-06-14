@@ -1,7 +1,7 @@
 ---
 title: Phase 3.5 — 返答表示(同梱ダッシュボードの実用化)
 description: エージェント応答テキストを中継・表示し、同梱ダッシュボードを単体で最低限実用にする。既定タイル一覧→詳細窓。
-status: planned
+status: in_progress
 phase: 3.5
 depends_on: [phase-3-server-multiagent]
 last_updated: 2026-06-14
@@ -17,12 +17,14 @@ last_updated: 2026-06-14
 
 ## Acceptance Criteria
 
-- [ ] 任意の1体へ指示 → その返答が同梱ダッシュボードで読める(end-to-end)
-- [ ] 返答はチャット風 `log` ストリーム(`assistant` 逐次 + tool 入出力は
+- [x] 返答はチャット風 `log` ストリーム(`assistant` 逐次 + tool 入出力は
       折りたたみ/展開)
-- [ ] 再読込・再接続で返答ログが復元される(サーバ インメモリ履歴 A)
-- [ ] 返答ログは operator のみ閲覧(viewer はグリッド止まり)
-- [ ] 全画面詳細中も他エージェントの要対応に気付ける(盲点インジケータ)
+- [x] 再読込・再接続で返答ログが復元される(サーバ インメモリ履歴 A)
+- [x] 返答ログは operator のみ閲覧(viewer はグリッド止まり)
+- [x] 全画面詳細中も他エージェントの要対応に気付ける(盲点インジケータ)
+- [ ] 任意の1体へ指示 → その返答が同梱ダッシュボードで読める(end-to-end)
+      — 実装完了(各層のテスト green)。実機ブラウザ + wrapper の e2e は
+      未実施(残る検証ステップ)。
 
 ## Tasks
 
@@ -30,10 +32,14 @@ last_updated: 2026-06-14
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| R-1 | protocol: `log`/`result` payload を予約→定義、operator 限定配信 | ⏳ | [protocol](../specs/protocol.md)。`log.kind` = assistant/tool_use/tool_result |
-| R-2 | wrapper: assistant テキスト・tool_use/tool_result・result を中継 | ⏳ | SDK メッセージ→`log` 種別マッピングは [agent-sdk-events](../specs/agent-sdk-events.md) |
-| R-3 | server: `AgentStates` にインメモリ・リングバッファ履歴、join で snapshot + 履歴、log/result の operator role フィルタ | ⏳ | 新規 DB 依存なし。永続は issue #24 |
-| R-4 | dashboard: grid→クリック→全画面詳細窓(チャット風ログ・tool 折りたたみ・指示・承認・盲点インジケータ) | ⏳ | カードは現状項目を保持(リッチカード)。承認の許可/拒否は詳細 |
+| R-1 | protocol: `log`/`result` payload を予約→定義、operator 限定配信 | ✅ | [protocol](../specs/protocol.md)。`log.kind` = assistant/tool_use/tool_result |
+| R-2 | wrapper: assistant テキスト・tool_use/tool_result・result を中継 | ✅ | SDK メッセージ→`log` 種別マッピングは [agent-sdk-events](../specs/agent-sdk-events.md)。`d5d120c` |
+| R-3 | server: `AgentStates` にインメモリ・リングバッファ履歴、join で snapshot + 履歴、log/result の operator role フィルタ | ✅ | 新規 DB 依存なし。永続は issue #24。`7410d68`/`f7af05f` |
+| R-4 | dashboard: grid→クリック→全画面詳細窓(チャット風ログ・tool 折りたたみ・指示・承認・盲点インジケータ) | ✅ | カードは現状項目を保持(リッチカード)。承認の許可/拒否は詳細。`8319576` |
+
+MVP 実装完了(wrapper 68 / server 70 / dashboard 13 tests green)。レビュー
+サイクル各段消化。surface した security 3 件は #26/#28 を実装(`0e81680`)、
+# 27 は据置候補。残るは実機 e2e 検証と Stage ポリッシュ(issue #21)。
 
 ### Stage ポリッシュ(issue #21 = ゲーム風 UI)
 
