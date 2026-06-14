@@ -61,6 +61,9 @@
 
   let instruction = $state("");
   let actionError = $state("");
+  // Optimistic "sent, awaiting the agent's next state" flag (#32). Purely
+  // client-side; cleared by the next state envelope, not by the protocol.
+  let sending = $state(false);
   let logEl = $state<HTMLDivElement | null>(null);
 
   // Keep the transcript pinned to the latest line as it streams.
@@ -77,6 +80,13 @@
     actionError = "";
   });
 
+  // Drop the optimistic "sending" flag once the agent's next state lands
+  // (#32): the new state envelope means the turn has started.
+  $effect(() => {
+    void envelope.ts;
+    sending = false;
+  });
+
   async function run(action: () => Promise<void>): Promise<void> {
     actionError = "";
     try {
@@ -90,9 +100,17 @@
     event.preventDefault();
     const text = instruction.trim();
     if (!connection || text === "") return;
+    sending = true;
     void run(async () => {
-      await connection.sendInstruction(envelope.agent_id, text);
-      instruction = "";
+      try {
+        await connection.sendInstruction(envelope.agent_id, text);
+        instruction = "";
+      } catch (error) {
+        // A refused send never triggers a state transition, so clear the
+        // flag here rather than waiting for one. Rethrow so run() surfaces it.
+        sending = false;
+        throw error;
+      }
     });
   }
 
@@ -218,6 +236,7 @@
 
         <form class="instruct" onsubmit={sendInstruction}>
           <textarea
+            class:sending
             placeholder="指示を送る…(Ctrl+Enter で送信)"
             bind:value={instruction}
             onkeydown={onInstructionKeydown}
@@ -226,6 +245,10 @@
           ></textarea>
           <button type="submit" disabled={instruction.trim() === ""}>送信</button>
         </form>
+
+        {#if sending}
+          <p class="sending-note">送信中… 応答待ち</p>
+        {/if}
 
         {#if actionError}
           <p class="action-error">{actionError}</p>
@@ -566,6 +589,19 @@
     font-size: 0.85rem;
     line-height: 1.4;
     resize: vertical;
+  }
+
+  /* Awaiting-response cue (#32): dark-yellow field while a send is in
+     flight, until the agent's next state envelope clears it. */
+  .instruct textarea.sending {
+    background: color-mix(in srgb, var(--c-tool_running) 22%, var(--bg-card));
+    border-color: var(--c-tool_running);
+  }
+
+  .sending-note {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--c-tool_running);
   }
 
   .instruct button {
