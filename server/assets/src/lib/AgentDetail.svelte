@@ -32,6 +32,18 @@
   );
   const permission = $derived(permissionRequestOf(envelope));
 
+  // Wall-clock time of a log line from its envelope ts (#38). Invalid or
+  // missing timestamps render as empty rather than "Invalid Date".
+  function formatTime(ts: string): string {
+    const at = new Date(ts);
+    if (Number.isNaN(at.getTime())) return "";
+    return at.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
   // Blind-spot: other agents needing attention while this detail hides the
   // grid (ADR-0012 F8). Colour follows the most urgent: error first.
   const attention = $derived(
@@ -135,22 +147,33 @@
         {#each logs as env, i (env.ts + ":" + (env.seq ?? i))}
           {@const log = logOf(env)}
           {@const res = resultOf(env)}
+          {@const time = formatTime(env.ts)}
           {#if log?.kind === "user"}
             <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
-            <div class="msg user">{@html renderMarkdown(log.text ?? "")}</div>
+            <div class="msg user">
+              {@html renderMarkdown(log.text ?? "")}
+              <time class="ts" datetime={env.ts}>{time}</time>
+            </div>
           {:else if log?.kind === "assistant"}
             <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
-            <div class="msg assistant">{@html renderMarkdown(log.text ?? "")}</div>
+            <div class="msg assistant">
+              {@html renderMarkdown(log.text ?? "")}
+              <time class="ts" datetime={env.ts}>{time}</time>
+            </div>
           {:else if log?.kind === "tool_use"}
             <details class="tool">
-              <summary>ツール呼び出し: {log.tool_name}</summary>
+              <summary
+                >ツール呼び出し: {log.tool_name}
+                <time class="ts" datetime={env.ts}>{time}</time></summary>
               <pre>{JSON.stringify(log.input ?? {}, null, 2)}{log.truncated
                   ? "\n…(入力が大きいため省略)"
                   : ""}</pre>
             </details>
           {:else if log?.kind === "tool_result"}
             <details class="tool">
-              <summary>結果: {log.tool_name ?? "tool"}</summary>
+              <summary
+                >結果: {log.tool_name ?? "tool"}
+                <time class="ts" datetime={env.ts}>{time}</time></summary>
               <pre>{log.output ?? ""}{log.truncated ? "\n…(省略)" : ""}</pre>
             </details>
           {:else if res}
@@ -158,6 +181,7 @@
                  result only marks the turn boundary, not a duplicate (#29). -->
             <p class="turn-end" class:error={res.is_error}>
               {res.is_error ? "エラーで終了" : "応答完了"}
+              <time class="ts" datetime={env.ts}>{time}</time>
             </p>
           {/if}
         {/each}
@@ -425,6 +449,24 @@
 
   .turn-end.error {
     color: var(--c-error);
+  }
+
+  /* Per-line wall-clock time (#38): small, dim, monospaced digits. */
+  .ts {
+    font-size: 0.62rem;
+    color: var(--fg-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .msg .ts {
+    display: block;
+    margin-top: 0.3rem;
+    text-align: right;
+    opacity: 0.8;
+  }
+
+  .turn-end .ts {
+    margin-left: 0.5em;
   }
 
   .tool {
