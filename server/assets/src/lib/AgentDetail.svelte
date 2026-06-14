@@ -145,8 +145,10 @@
           <pre>{log.output ?? ""}{log.truncated ? "\n…(省略)" : ""}</pre>
         </details>
       {:else if res}
-        <p class="msg result" class:error={res.is_error}>
-          {res.text ?? (res.is_error ? "(エラーで終了しました)" : "(返答なし)")}
+        <!-- The reply text already shows as the final assistant log; the
+             result only marks the turn boundary, not a duplicate (#29). -->
+        <p class="turn-end" class:error={res.is_error}>
+          {res.is_error ? "エラーで終了" : "応答完了"}
         </p>
       {/if}
     {/each}
@@ -327,15 +329,16 @@
     color: var(--fg);
   }
 
-  .msg.result {
-    background: color-mix(in srgb, var(--c-done) 12%, var(--bg-card));
-    border: 1px solid var(--c-done);
-    color: var(--fg);
+  .turn-end {
+    margin: 0.2rem 0;
+    text-align: center;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    color: var(--c-done);
   }
 
-  .msg.result.error {
-    background: color-mix(in srgb, var(--c-error) 12%, var(--bg-card));
-    border-color: var(--c-error);
+  .turn-end.error {
+    color: var(--c-error);
   }
 
   .tool {
