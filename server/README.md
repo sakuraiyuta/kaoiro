@@ -53,8 +53,16 @@ mix phx.server  # localhost:4000
 | `KAOIRO_CLIENT_TOKENS` | `token:role,...`(role = `viewer` / `operator`) | `dev-op:operator,view1:viewer` |
 | `KAOIRO_WRAPPER_TOKENS` | `agent_id:token,...` | `lab-pc-1.claude-a:wrap-tok` |
 
+**形式の注意**: `KAOIRO_CLIENT_TOKENS` は `<token>:<role>` の順。生成した
+シークレット(例 `openssl rand -hex 32`)は **`<token>` 側(コロンの前)** に
+置き、role(`operator` / `viewer`)を後ろに書く。例
+`KAOIRO_CLIENT_TOKENS=<hex>:operator`。`KAOIRO_WRAPPER_TOKENS` は逆順で
+`<agent_id>:<token>`。
+
 ダッシュボードはトークンを URL クエリで渡す(読み込み後アドレスバーから
-自動で消える): `http://localhost:4000/?token=dev-op`。
+自動で消える): `http://localhost:4000/?token=<hex>`(`<token>` 部分のみ、
+role は含めない)。**リロードすると token が外れる**ので、繋ぎ直すときは
+`?token=` 付き URL を都度入力する。
 
 ### Docker(推奨)
 
@@ -68,6 +76,9 @@ cp .env.example .env
 docker compose up -d --build
 # ダッシュボード: http://localhost:4000/?token=<KAOIRO_CLIENT_TOKENS の token>
 ```
+
+`.env` を変更したら `docker compose up -d`(`restart` では env_file が再読込
+されない)、サーバのコードを変えたら `--build` も付けてコンテナを作り直す。
 
 既定で `127.0.0.1:4000` のみに bind(loopback)。LAN 公開時は両トークン必須 +
 中央 nginx(WebSocket の Upgrade/Connection 転送・`proxy_read_timeout` > 60s)
