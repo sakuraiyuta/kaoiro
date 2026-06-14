@@ -1,8 +1,10 @@
 # Local verification compose for the kaoiro server (prod release image).
 #
 # Usage:
-#   cp .env.example .env   # then set SECRET_KEY_BASE (mix phx.gen.secret)
+#   cp .env.example .env   # set SECRET_KEY_BASE (mix phx.gen.secret) and
+#                          # KAOIRO_CLIENT_TOKENS (required, issue #28)
 #   docker compose up -d --build
+#   # dashboard: http://localhost:4000/?token=<KAOIRO_CLIENT_TOKENS token>
 #
 # Deployment (gateway / another host) reuses this file as-is: adjust
 # .env (PHX_HOST, auth tokens) and put the service behind the central
@@ -13,12 +15,14 @@ services:
   kaoiro:
     build: .
     image: kaoiro-server:latest
-    # Loopback-only by default: with auth tokens unset (dev mode) every
-    # client gets the operator role, and an operator can drive tool
-    # execution on agent hosts (specs/threat-model.md) — never publish
-    # beyond 127.0.0.1 without KAOIRO_*_TOKENS set. Behind the central
-    # nginx proxy, widen the bind (or drop ports for a shared network)
-    # only together with mandatory tokens.
+    # Loopback-only by default. Auth (issue #28): KAOIRO_CLIENT_TOKENS
+    # unset REJECTS all dashboard connections (fail-closed) — set it even
+    # for local use, then open the dashboard with ?token=<token>.
+    # KAOIRO_WRAPPER_TOKENS unset leaves wrapper auth open (dev mode), and
+    # an operator can drive tool execution on agent hosts
+    # (specs/threat-model.md) — never publish beyond 127.0.0.1 without it.
+    # Behind the central nginx proxy, widen the bind (or drop ports for a
+    # shared network) only together with mandatory tokens.
     ports:
       - "127.0.0.1:4000:4000"
     env_file:
