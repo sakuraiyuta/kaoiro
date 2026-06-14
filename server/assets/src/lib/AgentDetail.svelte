@@ -111,89 +111,95 @@
     {/if}
   </div>
 
-  <header class="head">
-    {#if spriteUrl}
-      <img class="sprite" src={spriteUrl} alt={expression.label} />
-    {:else}
-      <span class="face" aria-label={expression.label}></span>
-    {/if}
-    <div class="meta">
-      <h2>{name}</h2>
-      <p class="state">{expression.label}</p>
-      <p class="id">{envelope.agent_id}</p>
-    </div>
-  </header>
-
-  <div class="log" bind:this={logEl}>
-    {#if logs.length === 0}
-      <p class="empty">まだ返答はありません。</p>
-    {/if}
-    {#each logs as env, i (env.ts + ":" + (env.seq ?? i))}
-      {@const log = logOf(env)}
-      {@const res = resultOf(env)}
-      {#if log?.kind === "user"}
-        <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
-        <div class="msg user">{@html renderMarkdown(log.text ?? "")}</div>
-      {:else if log?.kind === "assistant"}
-        <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
-        <div class="msg assistant">{@html renderMarkdown(log.text ?? "")}</div>
-      {:else if log?.kind === "tool_use"}
-        <details class="tool">
-          <summary>ツール呼び出し: {log.tool_name}</summary>
-          <pre>{JSON.stringify(log.input ?? {}, null, 2)}{log.truncated
-              ? "\n…(入力が大きいため省略)"
-              : ""}</pre>
-        </details>
-      {:else if log?.kind === "tool_result"}
-        <details class="tool">
-          <summary>結果: {log.tool_name ?? "tool"}</summary>
-          <pre>{log.output ?? ""}{log.truncated ? "\n…(省略)" : ""}</pre>
-        </details>
-      {:else if res}
-        <!-- The reply text already shows as the final assistant log; the
-             result only marks the turn boundary, not a duplicate (#29). -->
-        <p class="turn-end" class:error={res.is_error}>
-          {res.is_error ? "エラーで終了" : "応答完了"}
-        </p>
-      {/if}
-    {/each}
-  </div>
-
-  {#if connection}
-    {#if permission}
-      <div class="permission">
-        <p class="permission-tool">
-          <code>{permission.tool_name}</code> の実行許可を求めています
-        </p>
-        {#if permission.input}
-          <details>
-            <summary>input</summary>
-            <pre>{JSON.stringify(permission.input, null, 2)}</pre>
-          </details>
-        {:else if permission.truncated}
-          <p class="permission-note">(input は大きすぎるため省略)</p>
+  <div class="body">
+    <aside class="status">
+      <header class="head">
+        {#if spriteUrl}
+          <img class="sprite" src={spriteUrl} alt={expression.label} />
+        {:else}
+          <span class="face" aria-label={expression.label}></span>
         {/if}
-        <div class="permission-actions">
-          <button class="allow" onclick={() => decide(true)}>許可</button>
-          <button class="deny" onclick={() => decide(false)}>拒否</button>
+        <div class="meta">
+          <h2>{name}</h2>
+          <p class="state">{expression.label}</p>
+          <p class="id">{envelope.agent_id}</p>
         </div>
+      </header>
+    </aside>
+
+    <div class="main">
+      <div class="log" bind:this={logEl}>
+        {#if logs.length === 0}
+          <p class="empty">まだ返答はありません。</p>
+        {/if}
+        {#each logs as env, i (env.ts + ":" + (env.seq ?? i))}
+          {@const log = logOf(env)}
+          {@const res = resultOf(env)}
+          {#if log?.kind === "user"}
+            <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
+            <div class="msg user">{@html renderMarkdown(log.text ?? "")}</div>
+          {:else if log?.kind === "assistant"}
+            <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
+            <div class="msg assistant">{@html renderMarkdown(log.text ?? "")}</div>
+          {:else if log?.kind === "tool_use"}
+            <details class="tool">
+              <summary>ツール呼び出し: {log.tool_name}</summary>
+              <pre>{JSON.stringify(log.input ?? {}, null, 2)}{log.truncated
+                  ? "\n…(入力が大きいため省略)"
+                  : ""}</pre>
+            </details>
+          {:else if log?.kind === "tool_result"}
+            <details class="tool">
+              <summary>結果: {log.tool_name ?? "tool"}</summary>
+              <pre>{log.output ?? ""}{log.truncated ? "\n…(省略)" : ""}</pre>
+            </details>
+          {:else if res}
+            <!-- The reply text already shows as the final assistant log; the
+                 result only marks the turn boundary, not a duplicate (#29). -->
+            <p class="turn-end" class:error={res.is_error}>
+              {res.is_error ? "エラーで終了" : "応答完了"}
+            </p>
+          {/if}
+        {/each}
       </div>
-    {/if}
 
-    <form class="instruct" onsubmit={sendInstruction}>
-      <input
-        type="text"
-        placeholder="指示を送る…"
-        bind:value={instruction}
-        aria-label="instruction for {name}"
-      />
-      <button type="submit" disabled={instruction.trim() === ""}>送信</button>
-    </form>
+      {#if connection}
+        {#if permission}
+          <div class="permission">
+            <p class="permission-tool">
+              <code>{permission.tool_name}</code> の実行許可を求めています
+            </p>
+            {#if permission.input}
+              <details>
+                <summary>input</summary>
+                <pre>{JSON.stringify(permission.input, null, 2)}</pre>
+              </details>
+            {:else if permission.truncated}
+              <p class="permission-note">(input は大きすぎるため省略)</p>
+            {/if}
+            <div class="permission-actions">
+              <button class="allow" onclick={() => decide(true)}>許可</button>
+              <button class="deny" onclick={() => decide(false)}>拒否</button>
+            </div>
+          </div>
+        {/if}
 
-    {#if actionError}
-      <p class="action-error">{actionError}</p>
-    {/if}
-  {/if}
+        <form class="instruct" onsubmit={sendInstruction}>
+          <input
+            type="text"
+            placeholder="指示を送る…"
+            bind:value={instruction}
+            aria-label="instruction for {name}"
+          />
+          <button type="submit" disabled={instruction.trim() === ""}>送信</button>
+        </form>
+
+        {#if actionError}
+          <p class="action-error">{actionError}</p>
+        {/if}
+      {/if}
+    </div>
+  </div>
 </section>
 
 <style>
@@ -202,9 +208,48 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    max-width: 56rem;
+    max-width: 72rem;
     margin: 0 auto;
-    min-height: calc(100vh - 4rem);
+    height: calc(100vh - 4rem);
+  }
+
+  /* Two-column body (#37): status pinned left, conversation log right.
+     min-height:0 lets the log scroll instead of stretching the page. */
+  .body {
+    display: flex;
+    gap: 1.5rem;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .status {
+    flex: 0 0 20%;
+    min-width: 9rem;
+  }
+
+  .main {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  @media (max-width: 640px) {
+    .detail {
+      height: auto;
+      min-height: calc(100vh - 4rem);
+    }
+    .body {
+      flex-direction: column;
+    }
+    .status {
+      flex: none;
+    }
+    .log {
+      max-height: 60vh;
+    }
   }
 
   .detail[data-state="thinking"] { --tone: var(--c-thinking); }
@@ -258,8 +303,10 @@
 
   .head {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 1.2rem;
+    gap: 0.6rem;
+    text-align: center;
     padding-bottom: 1rem;
     border-bottom: 1px solid var(--line);
   }
@@ -305,11 +352,11 @@
 
   .log {
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
     overflow-y: auto;
-    max-height: 60vh;
     padding-right: 0.4rem;
   }
 
