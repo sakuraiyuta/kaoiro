@@ -41,7 +41,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   @impl true
   def handle_in("envelope", envelope, socket) do
     with :ok <- validate(envelope, socket.assigns.agent_id),
-         :ok <- AgentStates.put(envelope, owner: self()) do
+         :ok <- store(envelope) do
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
       {:reply, :ok, socket}
     else
@@ -52,6 +52,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
         {:reply, {:error, %{reason: reason}}, socket}
     end
   end
+
+  # log / result are reply transcript lines kept as history (ADR-0012);
+  # state_change / permission_request refresh the latest state. A reply
+  # arriving before any state (append_log :noop) is still broadcast live.
+  defp store(%{"type" => type} = envelope) when type in ["log", "result"] do
+    case AgentStates.append_log(envelope) do
+      :noop -> :ok
+      other -> other
+    end
+  end
+
+  defp store(envelope), do: AgentStates.put(envelope, owner: self())
 
   @impl true
   def terminate(_reason, socket) do

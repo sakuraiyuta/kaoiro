@@ -97,6 +97,42 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  describe "log/result の履歴振り分け (ADR-0012)" do
+    defp log_env(agent_id) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-06-11T00:00:00Z",
+        "type" => "log",
+        "state" => "thinking",
+        "payload" => %{"kind" => "assistant", "text" => "やります"},
+        "ext" => %{}
+      }
+    end
+
+    test "log は中継しつつ最新状態を上書きせず履歴へ積む" do
+      agent_id = "test.log-1"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      # Establish a latest state, then send a reply log line.
+      ref = push(socket, "envelope", envelope(agent_id, "tool_running"))
+      assert_reply ref, :ok
+      assert_broadcast "envelope", %{"state" => "tool_running"}
+
+      log = log_env(agent_id)
+      ref = push(socket, "envelope", log)
+      assert_reply ref, :ok
+      assert_broadcast "envelope", ^log
+
+      # The log neither changes the latest state nor is dropped: snapshot
+      # stays tool_running and the line lands in history.
+      assert AgentStates.snapshot()[agent_id]["state"] == "tool_running"
+      assert [%{"payload" => %{"text" => "やります"}}] = AgentStates.histories()[agent_id]
+    end
+  end
+
   describe "切断時の disconnected 導出" do
     test "channel 終了で disconnected を broadcast し snapshot を更新する" do
       agent_id = "test.disc-1"

@@ -6,6 +6,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
   per role: viewers see a pending permission_request but not its tool
   input, which may carry secrets (specs/threat-model.md).
 
+  Operators additionally get a `history` push (the per-agent reply log)
+  on join and the live `log` / `result` reply envelopes; viewers receive
+  neither, since reply lines carry tool I/O that may hold secrets
+  (ADR-0012, specs/threat-model.md).
+
   Inbound (Phase 3, specs/protocol.md): `instruction` and
   `permission_decision` are accepted from operator clients only and
   relayed to the target wrapper topic without interpreting the content
@@ -36,16 +41,34 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   @impl true
   def handle_info(:after_join, socket) do
+    role = socket.assigns[:role]
+
     agents =
       Map.new(AgentStates.snapshot(), fn {id, envelope} ->
-        {id, sanitize_for(socket.assigns[:role], envelope)}
+        {id, sanitize_for(role, envelope)}
       end)
 
     push(socket, "snapshot", %{"agents" => agents})
+
+    # Reply-log history is operator-only; viewers stay at the grid.
+    if role == :operator do
+      push(socket, "history", %{"agents" => AgentStates.histories()})
+    end
+
     {:noreply, socket}
   end
 
   @impl true
+  def handle_out("envelope", %{"type" => type} = envelope, socket)
+      when type in ["log", "result"] do
+    # Reply lines are operator-only; viewers never receive them.
+    if socket.assigns[:role] == :operator do
+      push(socket, "envelope", envelope)
+    end
+
+    {:noreply, socket}
+  end
+
   def handle_out("envelope", envelope, socket) do
     push(socket, "envelope", sanitize_for(socket.assigns[:role], envelope))
     {:noreply, socket}

@@ -228,4 +228,68 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute Map.has_key?(agents[agent_id]["payload"], "input")
     end
   end
+
+  describe "返答ログの operator 限定配信 (ADR-0012)" do
+    defp log_envelope(agent_id, text) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-11T00:00:00Z",
+        "type" => "log",
+        "state" => "thinking",
+        "payload" => %{"kind" => "assistant", "text" => text}
+      }
+    end
+
+    test "operator は join 時に履歴 push を受ける" do
+      agent_id = "test.hist-1"
+      put_agent(agent_id)
+      :ok = AgentStates.append_log(log_envelope(agent_id, "やります"))
+      _socket = join_as(:operator)
+
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => agents}
+      assert [%{"payload" => %{"text" => "やります"}}] = agents[agent_id]
+    end
+
+    test "viewer には履歴 push が来ない" do
+      agent_id = "test.hist-2"
+      put_agent(agent_id)
+      :ok = AgentStates.append_log(log_envelope(agent_id, "secret"))
+      _socket = join_as(:viewer)
+
+      assert_push "snapshot", %{"agents" => _}
+      refute_push "history", %{}
+    end
+
+    test "log の live broadcast は operator へ届く" do
+      agent_id = "test.hist-3"
+      put_agent(agent_id)
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        log_envelope(agent_id, "live")
+      )
+
+      assert_push "envelope", %{"type" => "log", "payload" => %{"text" => "live"}}
+    end
+
+    test "log の live broadcast は viewer には届かない" do
+      agent_id = "test.hist-4"
+      put_agent(agent_id)
+      _socket = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        log_envelope(agent_id, "live")
+      )
+
+      refute_push "envelope", %{"type" => "log"}
+    end
+  end
 end
