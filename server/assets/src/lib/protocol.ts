@@ -55,9 +55,10 @@ export function permissionRequestOf(
   return payload as unknown as PermissionRequestPayload;
 }
 
-/** payload of a type="log" envelope (protocol.md / ADR-0012). */
+/** payload of a type="log" envelope (protocol.md / ADR-0012).
+ *  kind=user is the operator's instruction echoed into the transcript (#31). */
 export interface LogPayload {
-  kind: "assistant" | "tool_use" | "tool_result";
+  kind: "assistant" | "tool_use" | "tool_result" | "user";
   text?: string;
   tool_name?: string;
   input?: Record<string, unknown>;

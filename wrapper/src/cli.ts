@@ -19,7 +19,7 @@
 import { AgentHost } from "./host.js";
 import { PermissionBroker } from "./permission.js";
 import { loadConfig } from "./persona.js";
-import { makeStateChange } from "./state.js";
+import { makeLog, makeStateChange } from "./state.js";
 import { ServerLink } from "./transport.js";
 import type { Envelope, KaoiroState } from "./types.js";
 
@@ -108,6 +108,16 @@ async function main(): Promise<void> {
         : { token: config.server_token }),
       onInstruction: (text) => {
         process.stdout.write(`  instruction: ${text}\n`);
+        // Echo the operator's instruction into the reply transcript (#31)
+        // before queueing it: a user-kind log rides the same operator-only,
+        // history-backed path as the agent's replies. Emitted first so it
+        // precedes the response it triggers.
+        onLog(
+          makeLog(config, host.state, new Date().toISOString(), {
+            kind: "user",
+            text,
+          }),
+        );
         host.send(text);
       },
       onPermissionDecision: (decision) => broker?.resolve(decision),

@@ -81,6 +81,9 @@ describe("logOf / resultOf / isReplyEnvelope", () => {
     expect(logOf({ ...log, payload: { kind: "assistant", text: "hi" } })).toEqual(
       { kind: "assistant", text: "hi" },
     );
+    expect(logOf({ ...log, payload: { kind: "user", text: "go" } })).toEqual(
+      { kind: "user", text: "go" },
+    );
     expect(logOf({ ...log, payload: {} })).toBeNull();
     expect(logOf({ ...log, type: "state_change" })).toBeNull();
   });

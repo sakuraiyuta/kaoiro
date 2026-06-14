@@ -130,7 +130,9 @@
     {#each logs as env, i (env.ts + ":" + (env.seq ?? i))}
       {@const log = logOf(env)}
       {@const res = resultOf(env)}
-      {#if log?.kind === "assistant"}
+      {#if log?.kind === "user"}
+        <p class="msg user">{log.text ?? ""}</p>
+      {:else if log?.kind === "assistant"}
         <p class="msg assistant">{log.text ?? ""}</p>
       {:else if log?.kind === "tool_use"}
         <details class="tool">
@@ -326,6 +328,16 @@
   .msg.assistant {
     background: var(--bg-card);
     border: 1px solid var(--line);
+    color: var(--fg);
+  }
+
+  /* Operator's own instruction echoed into the transcript (#31): a
+     right-aligned bubble to read it as the "sent" side of the chat. */
+  .msg.user {
+    align-self: flex-end;
+    max-width: 85%;
+    background: color-mix(in srgb, var(--c-waiting_input) 14%, var(--bg-card));
+    border: 1px solid var(--c-waiting_input);
     color: var(--fg);
   }
 

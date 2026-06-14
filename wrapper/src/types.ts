@@ -24,8 +24,9 @@ export type ResultSubtype =
 export type AssistantBlockKind = "text" | "thinking" | "tool_use";
 
 /** log payload kind (protocol.md). assistant=model speech, tool_use=tool
- *  call, tool_result=tool output. thinking is intentionally not relayed. */
-export type LogKind = "assistant" | "tool_use" | "tool_result";
+ *  call, tool_result=tool output, user=operator instruction echoed into the
+ *  transcript (#31). thinking is intentionally not relayed. */
+export type LogKind = "assistant" | "tool_use" | "tool_result" | "user";
 
 /** payload of a type="log" envelope (protocol.md). The fields present
  *  depend on `kind`; `truncated` flags wrapper-side size clipping. */
