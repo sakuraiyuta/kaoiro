@@ -26,9 +26,12 @@ related: [architecture, protocol]
 - フィルタは共通イベントだけを相手にするので、どのエージェントでも同じフィルタ列を
   使い回せる。
 - この分離が「コア=エージェント非依存」を成立させる肝。
-- 付加プロパティの最初の実例は `ext.cost`(累計コスト USD、#8)。フィルタ列は
-  未実装のため現状は Claude Code アダプタが result エンベロープに直接付与する。
-  フィルタ機構の導入時に agent-agnostic なフィルタへ移す。
+- 付加プロパティの実例: `ext.cost`(累計コスト USD、#8、result に付与)と
+  `ext.model` / `ext.context` / `ext.rate_limits`(Claude Code 固有メトリクス、
+  #16、state_change に付与)。いずれもフィルタ列が未実装のため現状は Claude Code
+  アダプタが直接付与する(SDK が公開した時のみの best-effort)。`model`/`context`/
+  `rate_limits` は cc 固有のため、汎用フィルタではなくアダプタ側に置くのが妥当。
+  汎用化できる `cost` 等はフィルタ機構の導入時に agent-agnostic なフィルタへ移す。
 
 ### 共通イベント境界
 

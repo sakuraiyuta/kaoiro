@@ -9,6 +9,7 @@ import type {
   Options,
   PermissionResult,
   Query,
+  SDKRateLimitInfo,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -32,6 +33,7 @@ import {
   sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToLogs,
+  sdkMessageToRateLimit,
   sdkMessageToResult,
 } from "./adapter.js";
 
@@ -112,6 +114,18 @@ export class AgentHost {
    *  Cleared each turn (every tool is settled by the result). */
   readonly #toolNames = new Map<string, string>();
 
+  /** Latest Claude Code status meta (#16), stamped into state_change ext:
+   *  active model, context-window usage, and per-window rate limits. All
+   *  best-effort — absent until the SDK surfaces them. */
+  #model: string | null = null;
+  #context:
+    | { used_tokens: number; max_tokens: number; used_percentage: number }
+    | null = null;
+  readonly #rateLimits = new Map<
+    string,
+    { status?: string; utilization?: number; resets_at?: number }
+  >();
+
   constructor(config: WrapperConfig, options: AgentHostOptions) {
     this.#config = config;
     this.#options = options;
@@ -169,6 +183,14 @@ export class AgentHost {
     const session = this.#queryFn({ prompt: this.#input(), options });
     this.#query = session;
     for await (const message of session) {
+      // Capture Claude Code status meta (#16) before deriving state, so the
+      // next state_change envelope carries the latest. Rate-limit events
+      // arrive inline; context usage is pulled fire-and-forget so the control
+      // round-trip never blocks (or stalls) the message loop.
+      const rateLimit = sdkMessageToRateLimit(message);
+      if (rateLimit) this.#applyRateLimit(rateLimit);
+      if (message.type === "result") void this.#refreshContextUsage();
+
       // State first, so a log envelope carries the state this message
       // settled into; then relay the message's reply lines.
       for (const event of sdkMessageToEvents(message)) this.#apply(event);
@@ -208,7 +230,51 @@ export class AgentHost {
     const { next, emitted } = stepState(this.#machine, event);
     this.#machine = next;
     for (const state of emitted) {
-      this.#options.onState(makeStateChange(this.#config, state, this.#now()));
+      this.#options.onState(
+        makeStateChange(this.#config, state, this.#now(), {}, this.#statusExt()),
+      );
+    }
+  }
+
+  /** Current Claude Code status meta as an ext object (#16). Empty keys are
+   *  omitted so an envelope only carries what the SDK has surfaced so far. */
+  #statusExt(): Record<string, unknown> {
+    const ext: Record<string, unknown> = {};
+    if (this.#model !== null) ext.model = this.#model;
+    if (this.#context !== null) ext.context = this.#context;
+    if (this.#rateLimits.size > 0) {
+      ext.rate_limits = Object.fromEntries(this.#rateLimits);
+    }
+    return ext;
+  }
+
+  /** Records the latest rate-limit snapshot for its window (#16). */
+  #applyRateLimit(info: SDKRateLimitInfo): void {
+    const window = info.rateLimitType;
+    if (window === undefined) return;
+    const snapshot: { status?: string; utilization?: number; resets_at?: number } =
+      { status: info.status };
+    if (info.utilization !== undefined) snapshot.utilization = info.utilization;
+    if (info.resetsAt !== undefined) snapshot.resets_at = info.resetsAt;
+    this.#rateLimits.set(window, snapshot);
+  }
+
+  /** Pulls the current context-window usage (#16). Best-effort: the SDK
+   *  control request can be unavailable, so any failure is swallowed. */
+  async #refreshContextUsage(): Promise<void> {
+    try {
+      const usage = await this.#query?.getContextUsage();
+      if (!usage) return;
+      this.#context = {
+        used_tokens: usage.totalTokens,
+        max_tokens: usage.maxTokens,
+        used_percentage: usage.percentage,
+      };
+      if (typeof usage.model === "string" && usage.model !== "") {
+        this.#model = usage.model;
+      }
+    } catch {
+      // Context usage is optional telemetry; never disrupt the session.
     }
   }
 

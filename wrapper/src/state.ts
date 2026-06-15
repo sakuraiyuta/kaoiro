@@ -138,12 +138,14 @@ export function reduceStates(
   return trace;
 }
 
-/** Wraps a state change into the common envelope v0. */
+/** Wraps a state change into the common envelope v0. `ext` carries
+ *  filter/adapter-added fields such as Claude Code status meta (#16). */
 export function makeStateChange(
   config: WrapperConfig,
   state: KaoiroState,
   ts: string,
   payload: Record<string, unknown> = {},
+  ext: Record<string, unknown> = {},
 ): Envelope {
   return {
     version: "0",
@@ -153,7 +155,7 @@ export function makeStateChange(
     type: "state_change",
     state,
     payload,
-    ext: {},
+    ext,
   };
 }
 

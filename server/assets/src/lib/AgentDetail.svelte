@@ -69,6 +69,77 @@
     return typeof cost === "number" ? cost : null;
   }
 
+  // --- Claude Code status meta (#16): model / context / rate limits -------
+  // All carried in ext.* and rendered defensively, since the SDK's exact
+  // scales (0-1 vs 0-100) and timestamp units are not guaranteed.
+
+  /** Normalise a usage value (fraction or percent) to an integer 0..100. */
+  function pctNorm(value: unknown): number | null {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    const pct = value <= 1 ? value * 100 : value;
+    return Math.max(0, Math.min(100, Math.round(pct)));
+  }
+
+  /** Format an epoch reset time (seconds or milliseconds) as MM/DD HH:MM. */
+  function fmtReset(value: unknown): string | null {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    const at = new Date(value < 1e12 ? value * 1000 : value);
+    if (Number.isNaN(at.getTime())) return null;
+    return at.toLocaleString([], {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  const RATE_LABELS: Record<string, string> = {
+    five_hour: "5h",
+    seven_day: "7d",
+    seven_day_opus: "7d Opus",
+    seven_day_sonnet: "7d Sonnet",
+    overage: "追加",
+  };
+
+  interface RateRow {
+    key: string;
+    label: string;
+    pct: number | null;
+    reset: string | null;
+    status: string | undefined;
+  }
+
+  /** Build display rows from ext.rate_limits, in a stable window order. */
+  function buildRateRows(raw: unknown): RateRow[] {
+    if (typeof raw !== "object" || raw === null) return [];
+    const limits = raw as Record<string, Record<string, unknown> | undefined>;
+    const rows: RateRow[] = [];
+    for (const key of Object.keys(RATE_LABELS)) {
+      const window = limits[key];
+      if (typeof window !== "object" || window === null) continue;
+      rows.push({
+        key,
+        label: RATE_LABELS[key],
+        pct: pctNorm(window.utilization),
+        reset: fmtReset(window.resets_at),
+        status: typeof window.status === "string" ? window.status : undefined,
+      });
+    }
+    return rows;
+  }
+
+  const ccModel = $derived(
+    typeof envelope.ext?.model === "string" ? envelope.ext.model : null,
+  );
+  const ccContext = $derived(
+    envelope.ext?.context as Record<string, unknown> | undefined,
+  );
+  const ctxPct = $derived(pctNorm(ccContext?.used_percentage));
+  const ccRateRows = $derived(buildRateRows(envelope.ext?.rate_limits));
+  const hasCcStatus = $derived(
+    ccModel !== null || ctxPct !== null || ccRateRows.length > 0,
+  );
+
   // Wall-clock time of a log line from its envelope ts (#38). Invalid or
   // missing timestamps render as empty rather than "Invalid Date".
   function formatTime(ts: string): string {
@@ -231,6 +302,44 @@
           <p class="id">{envelope.agent_id}</p>
         </div>
       </header>
+
+      {#if hasCcStatus}
+        <!-- Claude Code status meta (#16): mirrors the local statusline's
+             model / ctx / 5h / 7d segments for this agent. -->
+        <dl class="cc">
+          {#if ccModel}
+            <div class="cc-row">
+              <dt>model</dt>
+              <dd class="cc-model">{ccModel}</dd>
+            </div>
+          {/if}
+          {#if ctxPct !== null}
+            <div class="cc-row">
+              <dt>ctx</dt>
+              <dd>
+                <div class="meter">
+                  <div class="meter-fill" style:width="{ctxPct}%"></div>
+                </div>
+                <span class="meter-val">{ctxPct}%</span>
+              </dd>
+            </div>
+          {/if}
+          {#each ccRateRows as r (r.key)}
+            <div class="cc-row">
+              <dt>{r.label}</dt>
+              <dd>
+                <div class="meter" data-status={r.status}>
+                  <div class="meter-fill" style:width="{r.pct ?? 0}%"></div>
+                </div>
+                <span class="meter-val"
+                  >{r.pct === null ? "?" : r.pct + "%"}{r.reset
+                    ? " ↺" + r.reset
+                    : ""}</span>
+              </dd>
+            </div>
+          {/each}
+        </dl>
+      {/if}
     </aside>
 
     <div class="main">
@@ -520,6 +629,67 @@
     margin: 0.3rem 0 0;
     font-size: 0.7rem;
     color: var(--fg-dim);
+    overflow-wrap: anywhere;
+  }
+
+  /* Claude Code status meta panel (#16): model / ctx / rate-limit meters. */
+  .cc {
+    margin: 0;
+    padding-top: 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    font-size: 0.7rem;
+  }
+
+  .cc-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .cc dt {
+    color: var(--fg-dim);
+    letter-spacing: 0.05em;
+  }
+
+  .cc dd {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .cc-model {
+    color: var(--fg);
+    overflow-wrap: anywhere;
+  }
+
+  .meter {
+    width: 100%;
+    height: 0.45rem;
+    border-radius: 0.25rem;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    overflow: hidden;
+  }
+
+  .meter-fill {
+    height: 100%;
+    background: var(--c-waiting_input);
+  }
+
+  .meter[data-status="allowed_warning"] .meter-fill {
+    background: var(--c-tool_running);
+  }
+
+  .meter[data-status="rejected"] .meter-fill {
+    background: var(--c-error);
+  }
+
+  .meter-val {
+    color: var(--fg-dim);
+    font-variant-numeric: tabular-nums;
     overflow-wrap: anywhere;
   }
 

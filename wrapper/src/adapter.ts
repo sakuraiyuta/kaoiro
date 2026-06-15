@@ -2,7 +2,11 @@
 // AdapterEvent stream consumed by the state machine (state.ts). Pure: it only
 // reads message shape, never calls the SDK. See docs/specs/agent-sdk-events.md.
 
-import type { SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  SDKMessage,
+  SDKRateLimitInfo,
+  SDKResultMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type {
   AdapterEvent,
   AssistantBlockKind,
@@ -221,4 +225,13 @@ export function sdkMessageToCost(message: SDKMessage): number | null {
   return typeof message.total_cost_usd === "number"
     ? message.total_cost_usd
     : null;
+}
+
+/** Rate-limit snapshot from a rate_limit_event message (#16), or null for
+ *  other messages. The SDK emits one per window (five_hour / seven_day / …)
+ *  when its info changes; the host keeps the latest per window. */
+export function sdkMessageToRateLimit(
+  message: SDKMessage,
+): SDKRateLimitInfo | null {
+  return message.type === "rate_limit_event" ? message.rate_limit_info : null;
 }

@@ -128,6 +128,34 @@ describe("AgentHost — query injection", () => {
     const res = logs.find((l) => l.type === "result");
     expect(res?.ext).toEqual({});
   });
+
+  it("rate_limit_event を ext.rate_limits として state_change に付与する (#16)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: scriptedQuery([
+        msg({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed",
+            rateLimitType: "five_hour",
+            utilization: 0.5,
+            resetsAt: 1781480000,
+          },
+        }),
+        assistant([{ type: "text", text: "hi" }]),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    // rate_limit_event yields no state; the next state_change carries the ext.
+    const thinking = envs.find((e) => e.state === "thinking");
+    expect(thinking?.ext).toMatchObject({
+      rate_limits: {
+        five_hour: { status: "allowed", utilization: 0.5, resets_at: 1781480000 },
+      },
+    });
+  });
 });
 
 describe("AgentHost — permission", () => {

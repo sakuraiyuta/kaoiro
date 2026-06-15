@@ -4,6 +4,7 @@ import {
   sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToLogs,
+  sdkMessageToRateLimit,
   sdkMessageToResult,
 } from "../src/adapter.js";
 import { reduceStates } from "../src/state.js";
@@ -219,6 +220,27 @@ describe("sdkMessageToCost", () => {
 
   it("result 以外は null", () => {
     expect(sdkMessageToCost(assistant([{ type: "text", text: "x" }]))).toBeNull();
+  });
+});
+
+describe("sdkMessageToRateLimit", () => {
+  it("rate_limit_event の rate_limit_info を返す", () => {
+    const info = {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      utilization: 0.42,
+      resetsAt: 1781480000,
+    };
+    expect(
+      sdkMessageToRateLimit(
+        msg({ type: "rate_limit_event", rate_limit_info: info }),
+      ),
+    ).toEqual(info);
+  });
+
+  it("rate_limit_event 以外は null", () => {
+    expect(sdkMessageToRateLimit(msg({ type: "result", subtype: "success" }))).toBeNull();
+    expect(sdkMessageToRateLimit(assistant([{ type: "text", text: "x" }]))).toBeNull();
   });
 });
 

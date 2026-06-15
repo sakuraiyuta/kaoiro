@@ -28,6 +28,7 @@ export {
   sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToLogs,
+  sdkMessageToRateLimit,
   sdkMessageToResult,
 } from "./adapter.js";
 export { AgentHost } from "./host.js";
