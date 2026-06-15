@@ -56,11 +56,21 @@ export async function renderMermaidIn(container: HTMLElement): Promise<void> {
       const { svg } = await mermaid.render(id, code.textContent ?? "");
       const figure = document.createElement("div");
       figure.className = "mermaid-rendered";
-      figure.innerHTML = svg;
+      // Defence-in-depth: mermaid sanitizes internally under securityLevel
+      // "strict", but the diagram is untrusted-derived, so route the SVG
+      // through the same DOMPurify chokepoint as renderMarkdown before it
+      // reaches the DOM. svg+html profiles keep mermaid's shapes and the
+      // <foreignObject> HTML labels while stripping scripts/handlers.
+      figure.innerHTML = DOMPurify.sanitize(svg, {
+        USE_PROFILES: { svg: true, svgFilters: true, html: true },
+      });
       pre.replaceWith(figure);
     } catch {
-      // Mermaid leaves an orphan measuring node behind on a parse error.
+      // Mermaid leaves an orphan node behind on a parse error; it is the
+      // render id prefixed with "d" (mermaid 11.x). Remove both forms
+      // defensively in case that private convention shifts.
       document.getElementById(`d${id}`)?.remove();
+      document.getElementById(id)?.remove();
     }
   }
 }

@@ -112,8 +112,13 @@
     void logs.length;
     void tick().then(async () => {
       if (!logEl) return;
-      await renderMermaidIn(logEl);
-      logEl.scrollTop = logEl.scrollHeight;
+      try {
+        await renderMermaidIn(logEl);
+      } catch (error) {
+        console.error("mermaid render failed", error);
+      }
+      // The component may have unmounted during the await; re-check logEl.
+      if (logEl) logEl.scrollTop = logEl.scrollHeight;
     });
   });
 

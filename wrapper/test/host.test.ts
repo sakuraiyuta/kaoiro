@@ -37,14 +37,20 @@ function asQuery(
   return Object.assign(gen, { interrupt }) as unknown as Query;
 }
 
+/** Wraps a per-test query implementation as a QueryFn — the one cast site
+ *  (the local QueryArgs shape does not exactly match the SDK signature). */
+function makeQueryFn(fn: (args: QueryArgs) => Query): QueryFn {
+  return fn as unknown as QueryFn;
+}
+
 /** queryFn that yields a fixed message list, ignoring the input prompt. */
 function scriptedQuery(messages: SDKMessage[]): QueryFn {
-  return (() => {
+  return makeQueryFn(() => {
     async function* gen(): AsyncGenerator<SDKMessage, void> {
       for (const m of messages) yield m;
     }
     return asQuery(gen());
-  }) as unknown as QueryFn;
+  });
 }
 
 describe("AgentHost — query injection", () => {
@@ -128,7 +134,7 @@ describe("AgentHost — permission", () => {
   it("decidePermission が waiting_permission→tool_running を駆動する(allow)", async () => {
     const states: string[] = [];
     let toolResultYielded = false;
-    const queryFn = ((args: QueryArgs) => {
+    const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield assistant([
           { type: "tool_use", id: "tu_1", name: "Read", input: {} },
@@ -141,7 +147,7 @@ describe("AgentHost — permission", () => {
         yield result("success", { result: "ok" });
       }
       return asQuery(gen());
-    }) as unknown as QueryFn;
+    });
 
     const host = new AgentHost(config, {
       onState: (e) => states.push(e.state),
@@ -159,7 +165,7 @@ describe("AgentHost — permission", () => {
 
   it("decider 未配線なら fail-closed で deny する", async () => {
     let behavior = "";
-    const queryFn = ((args: QueryArgs) => {
+    const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield assistant([
           { type: "tool_use", id: "tu_1", name: "Read", input: {} },
@@ -169,7 +175,7 @@ describe("AgentHost — permission", () => {
         yield result("success", { result: "x" });
       }
       return asQuery(gen());
-    }) as unknown as QueryFn;
+    });
 
     const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
     await host.run();
@@ -180,7 +186,7 @@ describe("AgentHost — permission", () => {
 describe("AgentHost — input queue/notify/close", () => {
   it("send でキューに積み close でセッションが終わる", async () => {
     const received: string[] = [];
-    const queryFn = ((args: QueryArgs) => {
+    const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         for await (const m of args.prompt) {
           const content = m.message.content;
@@ -188,7 +194,7 @@ describe("AgentHost — input queue/notify/close", () => {
         }
       }
       return asQuery(gen());
-    }) as unknown as QueryFn;
+    });
 
     const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
     const done = host.run();
@@ -211,13 +217,13 @@ describe("AgentHost — input queue/notify/close", () => {
 
   it("interrupt は query.interrupt へ委譲する", async () => {
     const interrupt = vi.fn(async () => {});
-    const queryFn = ((args: QueryArgs) => {
+    const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         // Stay open until the input stream closes.
         for await (const _ of args.prompt) void _;
       }
       return asQuery(gen(), interrupt);
-    }) as unknown as QueryFn;
+    });
 
     const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
     const done = host.run();

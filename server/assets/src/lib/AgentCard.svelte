@@ -48,11 +48,15 @@
 
   let instruction = $state("");
   let actionError = $state("");
+  // Optimistic "sent, awaiting the next state" cue (#32), mirroring
+  // AgentDetail; cleared by the next state envelope, not by the protocol.
+  let sending = $state(false);
 
-  // The card clears its own error once the agent moves on.
+  // The card clears its own error and sending cue once the agent moves on.
   $effect(() => {
     void envelope.state;
     actionError = "";
+    sending = false;
   });
 
   function sendInstruction(event: SubmitEvent): void {
@@ -60,10 +64,12 @@
     const text = instruction.trim();
     if (!connection || text === "") return;
     actionError = "";
+    sending = true;
     void connection
       .sendInstruction(envelope.agent_id, text)
       .then(() => (instruction = ""))
       .catch((error: unknown) => {
+        sending = false;
         actionError = error instanceof Error ? error.message : String(error);
       });
   }
@@ -108,6 +114,7 @@
   {#if connection}
     <form class="instruct" onsubmit={sendInstruction}>
       <textarea
+        class:sending
         placeholder="指示を送る…(Ctrl+Enter で送信)"
         bind:value={instruction}
         onkeydown={onInstructionKeydown}
@@ -116,6 +123,10 @@
       ></textarea>
       <button type="submit" disabled={instruction.trim() === ""}>送信</button>
     </form>
+
+    {#if sending}
+      <p class="sending-note">送信中…</p>
+    {/if}
 
     {#if actionError}
       <p class="action-error">{actionError}</p>
@@ -404,6 +415,19 @@
     font-size: 0.75rem;
     line-height: 1.4;
     resize: vertical;
+  }
+
+  /* Awaiting-response cue (#32): dark-yellow field while a send is in flight,
+     until the agent's next state envelope clears it. */
+  .instruct textarea.sending {
+    background: color-mix(in srgb, var(--c-tool_running) 22%, var(--bg-card));
+    border-color: var(--c-tool_running);
+  }
+
+  .sending-note {
+    margin: 0.5rem 0 0;
+    font-size: 0.7rem;
+    color: var(--c-tool_running);
   }
 
   .instruct button {
