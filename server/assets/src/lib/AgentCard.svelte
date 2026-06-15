@@ -17,8 +17,15 @@
     envelope: Envelope;
     manifest?: PersonaManifest | null;
     connection?: KaoiroConnection | null;
-    onSelect?: () => void;
+    /** Receives the tile's centre so the detail can expand from it (#36). */
+    onSelect?: (origin?: { x: number; y: number }) => void;
   } = $props();
+
+  // Hand the detail the tile's viewport centre so it grows from this tile.
+  function selectFrom(event: MouseEvent): void {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    onSelect?.({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+  }
 
   // Displayed state lags the live state for min readability + crossfade (#43);
   // the needs-attention badge below still tracks the live state for immediacy.
@@ -74,7 +81,7 @@
   <button
     type="button"
     class="open"
-    onclick={() => onSelect?.()}
+    onclick={selectFrom}
     aria-label="{name} の詳細を開く"
   >
     {#if attention}

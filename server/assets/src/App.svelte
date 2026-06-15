@@ -21,6 +21,9 @@
   let logs = $state<Record<string, Envelope[]>>({});
   // agent_id of the agent shown full-screen, or null for the grid.
   let selected = $state<string | null>(null);
+  // Viewport centre of the tile that opened the detail, for the expand
+  // animation (#36); null when no tile origin is known.
+  let origin = $state<{ x: number; y: number } | null>(null);
   let status = $state<ConnectionStatus>("connecting");
   let manifest = $state<PersonaManifest | null>(null);
   let connection = $state<KaoiroConnection | null>(null);
@@ -105,6 +108,7 @@
       {agents}
       {connection}
       {manifest}
+      {origin}
       onClose={() => (selected = null)}
     />
   {:else if sorted.length === 0}
@@ -119,7 +123,10 @@
             {envelope}
             {manifest}
             {connection}
-            onSelect={() => (selected = envelope.agent_id)}
+            onSelect={(o) => {
+              origin = o ?? null;
+              selected = envelope.agent_id;
+            }}
           />
         </li>
       {/each}

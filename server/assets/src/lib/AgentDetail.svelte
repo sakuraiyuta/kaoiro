@@ -16,6 +16,7 @@
     agents = {},
     connection = null,
     manifest = null,
+    origin = null,
     onClose,
   }: {
     envelope: Envelope;
@@ -23,8 +24,29 @@
     agents?: Record<string, Envelope>;
     connection?: KaoiroConnection | null;
     manifest?: PersonaManifest | null;
+    /** Viewport centre of the originating tile, for the expand anim (#36). */
+    origin?: { x: number; y: number } | null;
     onClose: () => void;
   } = $props();
+
+  // Expand the detail from the tile that opened it (#36): scale up from the
+  // tile's viewport centre. Honours prefers-reduced-motion by skipping motion.
+  function expandFrom(
+    node: HTMLElement,
+    params: { origin: { x: number; y: number } | null },
+  ) {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (params.origin) {
+      const rect = node.getBoundingClientRect();
+      node.style.transformOrigin = `${params.origin.x - rect.left}px ${
+        params.origin.y - rect.top
+      }px`;
+    }
+    return {
+      duration: reduce ? 0 : 240,
+      css: (t: number) => `opacity: ${t}; transform: scale(${0.6 + 0.4 * t});`,
+    };
+  }
 
   // Displayed state lags the live state for min readability + crossfade (#43).
   const display = new StatusQueue(untrack(() => envelope.state));
@@ -142,7 +164,7 @@
   }
 </script>
 
-<section class="detail" data-state={expression.variant}>
+<section class="detail" data-state={expression.variant} in:expandFrom={{ origin }}>
   <div class="bar">
     <button class="back" onclick={onClose}>グリッドへ戻る</button>
     {#if attention.length > 0}
