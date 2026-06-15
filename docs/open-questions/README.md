@@ -8,7 +8,7 @@
 | Slug | Urgency | Blocks | Opened |
 |------|---------|--------|--------|
 | [disconnected-agent-removal](disconnected-agent-removal.md) | low | — | 2026-06-11 |
-| [existing-agent-summon](existing-agent-summon.md) | medium | — | 2026-06-15 |
+| [resume-history-projection](resume-history-projection.md) | high | — | 2026-06-16 |
 | [live2d-oss-rendering](live2d-oss-rendering.md) | low | — | 2026-06-15 |
 
 ## Recently decided

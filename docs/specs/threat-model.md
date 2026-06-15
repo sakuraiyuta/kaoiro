@@ -34,6 +34,12 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 3. **tool input 経由の情報漏えい**: `permission_request` の `input` には
    コマンドライン・ファイルパス・環境値などシークレットが混入し得る。
    閲覧権限(viewer)にも配信されるため、トークン管理が緩いと漏れる。
+4. **セッション resume/召喚 = リモート起動 + 履歴露出**: クライアントから
+   サーバ経由で wrapper を resume 起動する経路は脅威1(リモートツール実行)の
+   延長([ADR-0014](../adr/0014-session-resume-and-restore.md)、issue #22)。
+   さらに候補提示で runner が返す JSONL のメタ(先頭プロンプト要約等)は会話
+   断片の露出面となり、任意 session_id / 任意 cwd の resume 要求は他者の会話を
+   読む/継続する経路にもなり得る。
 
 ### 緩和策
 
@@ -48,6 +54,8 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | 返答ログ(`log`/`result`、tool 入出力含む)を operator 限定配信 | Phase 3.5([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
 | ユーザトークンを httpOnly + 暗号化 session cookie に保持(XSS でも JS から読めず、cookie jar 上でも秘匿)。CSRF は SameSite=Lax + prod の `check_origin` で抑止 | Phase 3.5([ADR-0013](../adr/0013-user-token-cookie-persistence.md)) |
 | OAuth + RBAC 本実装 | 将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
+| セッション召喚時に runner が返す JSONL メタ(先頭プロンプト要約等)を operator role 限定・最小限に露出(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) | 将来(resume 機能と同時) |
+| resume 対象 session_id を当該 agent 束縛 cwd 配下に実在検証し、他 cwd/任意パスの resume を拒否(T3、runner が検証) | 将来(resume 機能と同時) |
 
 ## Constraints
 
@@ -56,6 +64,10 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
   ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。
 - MUST: ラッパーはサーバから受けた指示で `allowedTools` /
   `canUseTool` の設定を変更しない(実行能力の天井はローカル設定)。
+- MUST: resume 対象 session_id は当該 agent の束縛 cwd 配下に実在するものに
+  限定する(他 cwd/任意パスの resume を拒否、
+  [ADR-0014](../adr/0014-session-resume-and-restore.md))。
+- MUST: セッション召喚時の JSONL メタ配信は operator role のみ。
 - SHOULD: operator トークンは viewer と分け、配布範囲を最小にする。
 
 ## Open Questions
@@ -68,4 +80,5 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 - ADRs: [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0005](../adr/0005-access-control-oauth-stub.md),
   [0011](../adr/0011-phase3-reliability-and-auth.md),
-  [0012](../adr/0012-response-display-and-dashboard-scope.md)
+  [0012](../adr/0012-response-display-and-dashboard-scope.md),
+  [0014](../adr/0014-session-resume-and-restore.md)

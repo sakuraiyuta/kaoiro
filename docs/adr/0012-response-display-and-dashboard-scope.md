@@ -6,7 +6,7 @@ opened: 2026-06-11
 supersedes: []
 superseded_by: null
 related_specs: [non-goals, protocol, threat-model, overview]
-related_adrs: [7, 10, 11]
+related_adrs: [7, 10, 11, 14]
 ---
 
 # ADR-0012 — 返答表示と同梱ダッシュボードのスコープ改訂
@@ -54,6 +54,9 @@ Phase 3 で指示は送れるようになったが、エージェントの応答
 - **(F7) サーバはインメモリ・リングバッファ履歴**を持ち、join 時に snapshot
   (最新)+ 履歴を返す(再読込・再接続で復元)。**ディスク永続はしない**
   (再起動で消える)。永続(再デプロイ耐性)は仕様策定込みで issue #24 へ。
+  履歴の**正本は wrapper ホストの SDK JSONL** とし、本リングバッファはその
+  再構築可能な投影と位置づける(resume 経由の再構築は
+  [ADR-0014](0014-session-resume-and-restore.md))。
 - **(F9) 返答ログ(`log`/`result`、特に tool 入出力)は operator role のみへ
   配信**。viewer はグリッド(顔・状態)まで。viewer=俯瞰 / operator=操作+詳細
   と role が画面に一致する([threat-model](../specs/threat-model.md))。
@@ -106,4 +109,5 @@ Phase 3 で指示は送れるようになったが、エージェントの応答
   #16(token/context を `ext` で可視化)
 - 関連 ADR: [0007](0007-client-separation-reference-dashboard.md)、
   [0010](0010-protocol-precisification.md)、
-  [0011](0011-phase3-reliability-and-auth.md)
+  [0011](0011-phase3-reliability-and-auth.md)、
+  [0014](0014-session-resume-and-restore.md)

@@ -6,7 +6,7 @@ opened: 2026-06-04
 supersedes: []
 superseded_by: null
 related_specs: [architecture, plugin-model, protocol, agent-sdk-events]
-related_adrs: [2]
+related_adrs: [2, 14]
 ---
 
 # ADR-0001 — Claude Agent SDK を統合方式に採用

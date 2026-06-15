@@ -27,7 +27,7 @@ related: [architecture, plugin-model, agent-sdk-events, personas, threat-model]
 | 用語 | 意味 |
 |---|---|
 | エンベロープ | 1 イベント全体を包む共通 JSON。下記の外枠キーを持つ |
-| 外枠(フレームキー) | エンベロープ直下の固定キー集合 `version`/`agent_id`/`persona`/`ts`/`type`/`state`/`payload`/`ext`。v0 で固定済み |
+| 外枠(フレームキー) | エンベロープ直下の固定キー集合 `version`/`agent_id`/`session_id?`/`persona`/`ts`/`type`/`state`/`payload`/`ext`。v0 で固定済み(`session_id?` は optional、後述) |
 | `payload` | `type` ごとのイベント本体(中身)。型体系は下記「type と payload」([ADR-0010](../adr/0010-protocol-precisification.md)) |
 | `ext` | フィルタが付加する拡張領域。コアは中身に依存しない |
 
@@ -65,6 +65,7 @@ flowchart LR
 {
   "version": "0",
   "agent_id": "lab-pc-1.claude-a",
+  "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "persona": { "id": "mio", "name": "澪", "sprite_set": "mio" },
   "ts": "2026-06-04T11:55:00Z",
   "seq": 42,
@@ -79,6 +80,7 @@ flowchart LR
 |---|---|---|
 | `version` | エンベロープのバージョン | 文字列。後方互換の判断に使う |
 | `agent_id` | エージェントの**安定識別子** | 設定で固定。再起動をまたいで同一。文字種は `[A-Za-z0-9._-]`(topic/URL 安全のため `/` 等は不可) |
+| `session_id` | 実行中の SDK セッション ID(optional) | Claude Agent SDK の会話単位。wrapper が init/最初の result で得た実 ID を報告。agent_id とは別軸で 1 agent_id : N session_id。復帰・召喚時の resume 先([ADR-0014](../adr/0014-session-resume-and-restore.md))。未取得時は省略(未知キー追加なので同一 version) |
 | `persona` | 担当ペルソナ | id/表示名/立ち絵セット。ラッパー初期設定で指定 |
 | `ts` | イベント発生時刻 | ISO8601(UTC)。ホスト跨ぎの時刻ズレに注意 |
 | `seq` | ラッパー単調増分の連番 | プロセス起動ごと 1 起点の正整数([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。整列キーは `(agent_id, seq)` + `ts`。再起動で巻き戻るため、サーバの最新状態判定は**受信順**(last-write-wins)のまま |
@@ -130,6 +132,21 @@ join 時には最新状態に加え、直近の返答ログ履歴(サーバの**
 リングバッファ**、[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))も
 配信する(再読込・再接続で返答ログを復元)。履歴はインメモリのみで、サーバ
 再起動で消える(ディスク永続は将来 issue #24)。配信形の詳細は実装で確定。
+返答履歴の**正本は wrapper ホストの SDK JSONL**であり、リングバッファは
+そこから再構築可能な投影と位置づける(resume 時の再構築は
+[ADR-0014](../adr/0014-session-resume-and-restore.md))。
+
+### セッション resume と復帰(召喚)
+
+wrapper の復帰(プロセス落ち後の文脈継続)と既存セッションの召喚は、既存
+session_id を指定して **resume** する単一機構で行う
+([ADR-0014](../adr/0014-session-resume-and-restore.md))。制御は issue #22 の
+`client -> server -> runner(boot service)-> wrapper` 起動経路に「resume
+モード」を足したもので、復帰コマンド(spawn-with-resume)とセッション列挙
+クエリは issue #22 / runner 仕様(issue #23)と併せて定義する(具体メッセージ
+schema は本 spec では未確定)。先行する phase-0 の protocol 変更は**エンベロープ
+への top-level `session_id` 追加のみ**(wrapper が報告 → サーバが
+`(agent_id, host, cwd, session_id)` ポインタを保持)。
 
 ### バージョニング方針
 
@@ -143,6 +160,10 @@ join 時には最新状態に加え、直近の返答ログ履歴(サーバの**
 ### 同一性とペルソナ(マスト)
 
 - `agent_id` は設定で固定する安定 ID(実行時生成の揮発 ID は使わない)。
+- `session_id` は SDK の会話単位 ID で agent_id とは別軸(1 agent_id : N
+  session_id)。サーバは復帰の既定先として agent_id ごとに最後の session_id
+  のみ保持し、全候補はホストの runner が列挙する
+  ([ADR-0014](../adr/0014-session-resume-and-restore.md))。
 - `persona`(id/表示名/立ち絵)はラッパー初期設定で指定。どのホスト/プロセスが
   どのペルソナを担当するかはユーザ指定。
 - サーバ/クライアントは `agent_id`(+ `persona.id`)をキーに表示・機嫌を持続。
@@ -300,4 +321,5 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
   [0009](../adr/0009-client-transport.md),
   [0010](../adr/0010-protocol-precisification.md),
   [0011](../adr/0011-phase3-reliability-and-auth.md),
-  [0012](../adr/0012-response-display-and-dashboard-scope.md)
+  [0012](../adr/0012-response-display-and-dashboard-scope.md),
+  [0014](../adr/0014-session-resume-and-restore.md)

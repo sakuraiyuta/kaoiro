@@ -31,6 +31,8 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0010](adr/0010-protocol-precisification.md) | エンベロープ type/payload は実証範囲のみ確定 | accepted |
 | [0011](adr/0011-phase3-reliability-and-auth.md) | Phase 3 の信頼性・認証規約(seq/permission/トークン) | accepted |
 | [0012](adr/0012-response-display-and-dashboard-scope.md) | 返答表示と同梱ダッシュボードのスコープ改訂 | accepted |
+| [0013](adr/0013-user-token-cookie-persistence.md) | ユーザトークンを httpOnly cookie で永続化 | accepted |
+| [0014](adr/0014-session-resume-and-restore.md) | セッション resume で wrapper を復帰・召喚 | accepted |
 
 ## 更新フロー
 
