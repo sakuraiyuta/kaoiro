@@ -50,6 +50,14 @@ export function stepState(
 ): { next: MachineState; emitted: KaoiroState[] } {
   switch (event.kind) {
     case "session_init":
+      // The SDK can emit system/init at the start of a turn, right after an
+      // instruction is accepted. That must not revert the optimistic
+      // `sending` to idle and flash it (#32; spec: sending exits on the first
+      // SDKAssistantMessage). Hold `sending` and emit nothing until a real
+      // activity state lands.
+      if (machine.state === "sending") {
+        return { next: initialMachineState("sending"), emitted: [] };
+      }
       return { next: initialMachineState("idle"), emitted: ["idle"] };
     case "assistant": {
       if (event.error) {

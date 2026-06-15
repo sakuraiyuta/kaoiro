@@ -142,13 +142,16 @@
   const ccModel = $derived(
     typeof envelope.ext?.model === "string" ? envelope.ext.model : null,
   );
+  const ccCwd = $derived(
+    typeof envelope.ext?.cwd === "string" ? envelope.ext.cwd : null,
+  );
   const ccContext = $derived(
     envelope.ext?.context as Record<string, unknown> | undefined,
   );
   const ctxPct = $derived(pctClamp(ccContext?.used_percentage));
   const ccRateRows = $derived(buildRateRows(envelope.ext?.rate_limits));
   const hasCcStatus = $derived(
-    ccModel !== null || ctxPct !== null || ccRateRows.length > 0,
+    ccModel !== null || ccCwd !== null || ctxPct !== null || ccRateRows.length > 0,
   );
 
   // Wall-clock time of a log line from its envelope ts (#38). Invalid or
@@ -306,6 +309,12 @@
               <dd class="cc-model">{ccModel}</dd>
             </div>
           {/if}
+          {#if ccCwd}
+            <div class="cc-row">
+              <dt>cwd</dt>
+              <dd class="cc-cwd" title={ccCwd}>{ccCwd}</dd>
+            </div>
+          {/if}
           {#if ctxPct !== null}
             <div class="cc-row">
               <dt>ctx</dt>
@@ -321,13 +330,14 @@
             <div class="cc-row">
               <dt>{r.label}</dt>
               <dd>
-                <div class="meter" data-status={r.status}>
+                <div
+                  class="meter"
+                  data-status={r.status}
+                  title={r.reset ? "リセット " + r.reset : undefined}
+                >
                   <div class="meter-fill" style:width="{r.pct ?? 0}%"></div>
                 </div>
-                <span class="meter-val"
-                  >{r.pct === null ? "?" : r.pct + "%"}{r.reset
-                    ? " ↺" + r.reset
-                    : ""}</span>
+                <span class="meter-val">{r.pct === null ? "?" : r.pct + "%"}</span>
               </dd>
             </div>
           {/each}
@@ -659,6 +669,18 @@
   .cc-model {
     color: var(--fg);
     overflow-wrap: anywhere;
+  }
+
+  /* cwd can be a long absolute path; clip to one line keeping the tail (the
+     project dir) visible, full value on hover. rtl+left-align truncates the
+     start (`…/git/kaoiro`) rather than the more useful tail. */
+  .cc-cwd {
+    color: var(--fg);
+    direction: rtl;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .meter {

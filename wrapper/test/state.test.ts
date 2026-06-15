@@ -124,6 +124,23 @@ describe("stepState", () => {
     }
   });
 
+  it("sending 中の session_init は idle に戻さず sending を維持する (#32)", () => {
+    const machine = initialMachineState("sending");
+    const { next, emitted } = stepState(machine, { kind: "session_init" });
+    expect(emitted).toEqual([]);
+    expect(next.state).toBe("sending");
+  });
+
+  it("sending 以外の session_init は idle を発行する", () => {
+    for (const state of ["idle", "thinking", "waiting_input"] as const) {
+      const { next, emitted } = stepState(initialMachineState(state), {
+        kind: "session_init",
+      });
+      expect(emitted).toEqual(["idle"]);
+      expect(next.state).toBe("idle");
+    }
+  });
+
   it("ターン進行中の user_send は状態を変えない (#32)", () => {
     for (const state of [
       "thinking",
