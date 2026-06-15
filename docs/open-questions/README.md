@@ -8,6 +8,7 @@
 | Slug | Urgency | Blocks | Opened |
 |------|---------|--------|--------|
 | [disconnected-agent-removal](disconnected-agent-removal.md) | low | — | 2026-06-11 |
+| [existing-agent-summon](existing-agent-summon.md) | medium | — | 2026-06-15 |
 
 ## Recently decided
 

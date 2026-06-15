@@ -13,6 +13,7 @@
 | [agent-sdk-events](agent-sdk-events.md) | accepted | Agent SDK の確定イベント仕様と状態導出 |
 | [personas](personas.md) | accepted | ペルソナ立ち絵のデザイン方針・画像規格・生成ワークフロー |
 | [threat-model](threat-model.md) | accepted | 双方向ルーティングの脅威と緩和策 |
+| [setup-wizards](setup-wizards.md) | provisional | 設定 / env 生成ウィザード(wrapper config・server .env) |
 | [non-goals](non-goals.md) | accepted | 非スコープ |
 | [glossary](glossary.md) | accepted | 用語集 |
 
