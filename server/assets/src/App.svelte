@@ -60,9 +60,12 @@
     // fetch failure), then swap to persona sprites.
     fetchPersonaManifest().then((next) => (manifest = next));
 
-    // User token (ADR-0011) via ?token=…; omitted = dev mode. The token
-    // is scrubbed from the address bar right away so it does not stick
-    // around in history/bookmarks/shared links.
+    // User token (ADR-0011): in prod the server exchanges `?token=…` for an
+    // httpOnly cookie before the SPA loads (ADR-0013), so the token is
+    // usually absent here and the cookie carries auth. A `?token=…` still
+    // present is the dev Vite flow (no cookie): pass it as a connect param
+    // and scrub it from the address bar so it does not stick in
+    // history/bookmarks/shared links.
     const token = new URLSearchParams(location.search).get("token");
     if (token !== null) {
       const scrubbed = new URL(location.href);
@@ -89,7 +92,33 @@
       },
       token === null ? {} : { token },
     );
-    return connection.disconnect;
+
+    // Cookie auth (prod, no URL token): slide the httpOnly session cookie
+    // while this tab is open so it never lapses mid-session (ADR-0013). The
+    // dev `?token=` flow has no cookie, so skip the heartbeat there.
+    let refreshTimer: ReturnType<typeof setInterval> | undefined;
+    if (token === null) {
+      const refresh = (): void => {
+        // On 401 the server has cleared the session (token revoked/expired);
+        // drop the now-unauthenticated socket so an honest user sees they are
+        // logged out instead of riding a stale connection. This does not
+        // force-evict a malicious holder of an open socket (no socket id /
+        // Endpoint.disconnect) — see ADR-0013 Consequences.
+        void fetch("/session/refresh").then(
+          (r) => {
+            if (r.status === 401) connection?.disconnect();
+          },
+          () => {},
+        );
+      };
+      refresh();
+      refreshTimer = setInterval(refresh, 12 * 60 * 60 * 1000);
+    }
+
+    return () => {
+      if (refreshTimer !== undefined) clearInterval(refreshTimer);
+      connection?.disconnect();
+    };
   });
 </script>
 

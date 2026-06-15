@@ -21,7 +21,7 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 |---|---|---|
 | 経路 | リバースプロキシ終端の TLS | 2026-06-11 決定 |
 | ラッパー接続 | agent_id 別トークン | [ADR-0011](../adr/0011-phase3-reliability-and-auth.md) |
-| クライアント接続 | ユーザトークン + role(指示・承認は operator のみ) | 同上 |
+| クライアント接続 | ユーザトークン + role(指示・承認は operator のみ。token は httpOnly + 暗号化 cookie に保持) | 同上 / [ADR-0013](../adr/0013-user-token-cookie-persistence.md) |
 
 ### 脅威
 
@@ -46,6 +46,7 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | 指示の監査ログ(誰が・いつ・どの agent に何を送ったか) | 将来(SQLite 導入時) |
 | tool input のマスキング(シークレットパターンの伏字) | 将来 |
 | 返答ログ(`log`/`result`、tool 入出力含む)を operator 限定配信 | Phase 3.5([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
+| ユーザトークンを httpOnly + 暗号化 session cookie に保持(XSS でも JS から読めず、cookie jar 上でも秘匿)。CSRF は SameSite=Lax + prod の `check_origin` で抑止 | Phase 3.5([ADR-0013](../adr/0013-user-token-cookie-persistence.md)) |
 | OAuth + RBAC 本実装 | 将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
 
 ## Constraints

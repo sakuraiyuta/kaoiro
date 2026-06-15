@@ -59,10 +59,13 @@ mix phx.server  # localhost:4000
 `KAOIRO_CLIENT_TOKENS=<hex>:operator`。`KAOIRO_WRAPPER_TOKENS` は逆順で
 `<agent_id>:<token>`。
 
-ダッシュボードはトークンを URL クエリで渡す(読み込み後アドレスバーから
-自動で消える): `http://localhost:4000/?token=<hex>`(`<token>` 部分のみ、
-role は含めない)。**リロードすると token が外れる**ので、繋ぎ直すときは
-`?token=` 付き URL を都度入力する。
+ダッシュボードへは `http://localhost:4000/?token=<hex>` で入る(`<token>`
+部分のみ、role は含めない)。サーバは初回に `?token=` を検証して **httpOnly +
+暗号化 session cookie に交換**し、アドレスバーからは即座に消える(ADR-0013)。
+**以降はリロード・ブラウザ再起動でも cookie が認証を保持する**(開いている間は
+heartbeat で更新され、閉じてから `max_age`=3日 で失効)。
+注: dev で Vite(:5173)を単独起動した場合は cookie 交換を経由しないため、
+従来どおり `?token=` をメモリ保持し、リロードで外れる。
 
 ### Docker(推奨)
 

@@ -1,24 +1,31 @@
 defmodule KaoiroServerWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :kaoiro_server
 
-  # The session will be stored in the cookie and signed,
-  # this means its contents can be read but not tampered with.
-  # Set :encryption_salt if you would also like to encrypt it.
+  # The session cookie carries the dashboard's user token (ADR-0013).
+  # encryption_salt (not just signing) keeps that token confidential even
+  # to whoever can read the cookie jar; max_age is the sliding-window
+  # lifetime refreshed by /session/refresh while a tab is open; secure is
+  # on only in prod (TLS terminated at the reverse proxy, which must send
+  # X-Forwarded-Proto: https), off in dev over http://localhost.
   @session_options [
     store: :cookie,
     key: "_kaoiro_server_key",
     signing_salt: "zbODM6kB",
-    same_site: "Lax"
+    encryption_salt: "Hb3kPq9R",
+    same_site: "Lax",
+    max_age: 60 * 60 * 24 * 3,
+    secure: Application.compile_env(:kaoiro_server, :session_secure, false)
   ]
 
-  # socket "/live", Phoenix.LiveView.Socket,
-  #   websocket: [connect_info: [session: @session_options]],
-  #   longpoll: [connect_info: [session: @session_options]]
-
   # Wrapper ingest and client fan-out ride separate sockets so their
-  # auth paths can diverge in Phase 3 (wrapper token vs user stub).
+  # auth paths can diverge in Phase 3 (wrapper token vs user stub). The
+  # client socket reads the session cookie at the WS handshake so a
+  # reloaded tab re-authenticates from the cookie (ADR-0013).
   socket "/wrapper", KaoiroServerWeb.WrapperSocket, websocket: true, longpoll: false
-  socket "/client", KaoiroServerWeb.ClientSocket, websocket: true, longpoll: false
+
+  socket "/client", KaoiroServerWeb.ClientSocket,
+    websocket: [connect_info: [session: @session_options]],
+    longpoll: false
 
   # Serve at "/" the static files from "priv/static" directory.
   #

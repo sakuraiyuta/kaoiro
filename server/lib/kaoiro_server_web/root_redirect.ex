@@ -1,10 +1,13 @@
 defmodule KaoiroServerWeb.RootRedirect do
   @moduledoc """
-  Redirects `/` to the dashboard entry, or 404s when the dashboard's
-  static serving is turned off (`:serve_dashboard`, ADR-0007).
+  Handles `/`: exchanges a `?token=…` for the httpOnly session cookie
+  (ADR-0013) and redirects to the dashboard entry, or 404s when the
+  dashboard's static serving is turned off (`:serve_dashboard`, ADR-0007).
   """
 
   @behaviour Plug
+
+  alias KaoiroServer.Auth
 
   @impl true
   def init(opts), do: opts
@@ -13,7 +16,8 @@ defmodule KaoiroServerWeb.RootRedirect do
   def call(conn, _opts) do
     if Application.get_env(:kaoiro_server, :serve_dashboard, true) do
       conn
-      |> Phoenix.Controller.redirect(to: index_path(conn))
+      |> maybe_store_token()
+      |> Phoenix.Controller.redirect(to: "/index.html")
       |> Plug.Conn.halt()
     else
       conn
@@ -22,9 +26,25 @@ defmodule KaoiroServerWeb.RootRedirect do
     end
   end
 
-  # Preserve the query string across the redirect so `/?token=...` reaches
-  # the SPA entry — the dashboard reads `?token` from the URL on load, and
-  # dropping it here left every tokened client connection unauthenticated.
-  defp index_path(%{query_string: ""}), do: "/index.html"
-  defp index_path(%{query_string: qs}), do: "/index.html?" <> qs
+  # Exchange `?token=…` for the encrypted session cookie (ADR-0013):
+  # validate the token, stash it in the session, and redirect to a clean
+  # `/index.html` so the token never reaches the SPA or the address bar.
+  # An invalid token is ignored — the SPA then connects unauthenticated
+  # and is rejected fail-closed (issue #28). Dev serves the SPA off the
+  # Vite dev server, which never hits this plug, so the legacy `?token=`
+  # query path stays available there (D5).
+  defp maybe_store_token(conn) do
+    conn = Plug.Conn.fetch_query_params(conn)
+
+    case conn.query_params["token"] do
+      token when is_binary(token) and token != "" ->
+        case Auth.client_role(token) do
+          {:ok, _role} -> Plug.Conn.put_session(conn, "client_token", token)
+          {:error, _reason} -> conn
+        end
+
+      _ ->
+        conn
+    end
+  end
 end

@@ -5,6 +5,12 @@ defmodule KaoiroServerWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # The dashboard entry and the cookie-refresh endpoint read/write the
+  # session cookie (ADR-0013), so they need the session fetched first.
+  pipeline :browser do
+    plug :fetch_session
+  end
+
   scope "/api", KaoiroServerWeb do
     pipe_through :api
 
@@ -20,7 +26,11 @@ defmodule KaoiroServerWeb.Router do
 
   # The minimal dashboard is a static page (Phase 1.5-3); send the root
   # there until the Svelte reference dashboard (issue #12) takes over.
+  # /session/refresh slides the auth cookie while a tab is open (ADR-0013).
   scope "/" do
+    pipe_through :browser
+
     get "/", KaoiroServerWeb.RootRedirect, []
+    get "/session/refresh", KaoiroServerWeb.SessionController, :refresh
   end
 end

@@ -12,6 +12,11 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
     ]
   ]
 
+# Mark the session cookie Secure in production — TLS is terminated at the
+# reverse proxy (force_ssl above rewrites on x-forwarded-proto), so the
+# cookie must only ride https (ADR-0013). Dev keeps the default false.
+config :kaoiro_server, :session_secure, true
+
 # Do not print debug messages in production
 config :logger, level: :info
 
