@@ -73,11 +73,22 @@
   // All carried in ext.* and rendered defensively, since the SDK's exact
   // scales (0-1 vs 0-100) and timestamp units are not guaranteed.
 
-  /** Normalise a usage value (fraction or percent) to an integer 0..100. */
+  /** Normalise a rate-limit utilization (a 0-1 fraction) to an integer
+   *  0..100. Values >1 are assumed already-percent and passed through; the
+   *  only ambiguous input is exactly 1, read as 100% (a maxed limit — the
+   *  safe reading for a rate-limit meter). */
   function pctNorm(value: unknown): number | null {
     if (typeof value !== "number" || !Number.isFinite(value)) return null;
     const pct = value <= 1 ? value * 100 : value;
     return Math.max(0, Math.min(100, Math.round(pct)));
+  }
+
+  /** Clamp an already-percentage value (0-100) to an integer 0..100. Used for
+   *  context usage, whose SDK `percentage` is a 0-100 scale — a value of 1
+   *  means 1%, not 100%, so it must NOT go through pctNorm's fraction path. */
+  function pctClamp(value: unknown): number | null {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    return Math.max(0, Math.min(100, Math.round(value)));
   }
 
   /** Format an epoch reset time (seconds or milliseconds) as MM/DD HH:MM. */
@@ -134,7 +145,7 @@
   const ccContext = $derived(
     envelope.ext?.context as Record<string, unknown> | undefined,
   );
-  const ctxPct = $derived(pctNorm(ccContext?.used_percentage));
+  const ctxPct = $derived(pctClamp(ccContext?.used_percentage));
   const ccRateRows = $derived(buildRateRows(envelope.ext?.rate_limits));
   const hasCcStatus = $derived(
     ccModel !== null || ctxPct !== null || ccRateRows.length > 0,

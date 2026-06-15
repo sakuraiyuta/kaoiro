@@ -29,12 +29,16 @@ const result = (
 type QueryFn = NonNullable<AgentHostOptions["queryFn"]>;
 type QueryArgs = { prompt: AsyncIterable<SDKUserMessage>; options: Options };
 
-/** Wraps an async generator into a Query (only interrupt is exercised). */
+/** Wraps an async generator into a Query (interrupt / getContextUsage are the
+ *  only control methods the host exercises). */
 function asQuery(
   gen: AsyncGenerator<SDKMessage, void>,
   interrupt: () => Promise<void> = async () => {},
+  getContextUsage?: () => Promise<unknown>,
 ): Query {
-  return Object.assign(gen, { interrupt }) as unknown as Query;
+  const controls: Record<string, unknown> = { interrupt };
+  if (getContextUsage) controls.getContextUsage = getContextUsage;
+  return Object.assign(gen, controls) as unknown as Query;
 }
 
 /** Wraps a per-test query implementation as a QueryFn — the one cast site
@@ -155,6 +159,54 @@ describe("AgentHost — query injection", () => {
         five_hour: { status: "allowed", utilization: 0.5, resets_at: 1781480000 },
       },
     });
+  });
+
+  it("getContextUsage を ext.context / ext.model として付与する (#16)", async () => {
+    const envs: Envelope[] = [];
+    const usage = {
+      totalTokens: 50,
+      maxTokens: 100,
+      percentage: 50,
+      model: "claude-test",
+    };
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([{ type: "text", text: "hi" }]);
+        yield result("success", { result: "ok" });
+        // A state_change AFTER the result, by which point the fire-and-forget
+        // context refresh has resolved and is stamped into ext.
+        yield assistant([{ type: "text", text: "more" }]);
+      }
+      return asQuery(gen(), async () => {}, async () => usage);
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    const withCtx = envs.filter((e) => e.state === "thinking").at(-1);
+    expect(withCtx?.ext).toMatchObject({
+      model: "claude-test",
+      context: { used_tokens: 50, max_tokens: 100, used_percentage: 50 },
+    });
+  });
+
+  it("getContextUsage が reject してもセッションは正常終了する (#16)", async () => {
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen(), async () => {}, async () => {
+        throw new Error("context usage unavailable");
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await expect(host.run()).resolves.toBeUndefined();
   });
 });
 
