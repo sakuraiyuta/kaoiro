@@ -32,6 +32,7 @@ import {
 import {
   sdkMessageToCost,
   sdkMessageToEvents,
+  sdkMessageToInitMeta,
   sdkMessageToLogs,
   sdkMessageToRateLimit,
   sdkMessageToResult,
@@ -115,9 +116,10 @@ export class AgentHost {
   readonly #toolNames = new Map<string, string>();
 
   /** Latest Claude Code status meta (#16), stamped into state_change ext:
-   *  active model, context-window usage, and per-window rate limits. All
-   *  best-effort — absent until the SDK surfaces them. */
+   *  active model, working directory, context-window usage, and per-window
+   *  rate limits. All best-effort — absent until the SDK surfaces them. */
   #model: string | null = null;
+  #cwd: string | null = null;
   #context:
     | { used_tokens: number; max_tokens: number; used_percentage: number }
     | null = null;
@@ -191,6 +193,8 @@ export class AgentHost {
       // next state_change envelope carries the latest. Rate-limit events
       // arrive inline; context usage is pulled fire-and-forget so the control
       // round-trip never blocks (or stalls) the message loop.
+      const initMeta = sdkMessageToInitMeta(message);
+      if (initMeta) this.#applyInitMeta(initMeta);
       const rateLimit = sdkMessageToRateLimit(message);
       if (rateLimit) this.#applyRateLimit(rateLimit);
       if (message.type === "result") void this.#refreshContextUsage();
@@ -245,11 +249,18 @@ export class AgentHost {
   #statusExt(): Record<string, unknown> {
     const ext: Record<string, unknown> = {};
     if (this.#model !== null) ext.model = this.#model;
+    if (this.#cwd !== null) ext.cwd = this.#cwd;
     if (this.#context !== null) ext.context = this.#context;
     if (this.#rateLimits.size > 0) {
       ext.rate_limits = Object.fromEntries(this.#rateLimits);
     }
     return ext;
+  }
+
+  /** Records the active model and working directory from session init (#16). */
+  #applyInitMeta(meta: { model?: string; cwd?: string }): void {
+    if (meta.model !== undefined) this.#model = meta.model;
+    if (meta.cwd !== undefined) this.#cwd = meta.cwd;
   }
 
   /** Records the latest rate-limit snapshot for its window (#16). */

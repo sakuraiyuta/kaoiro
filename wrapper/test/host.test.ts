@@ -161,6 +161,21 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("init メッセージから ext.model / ext.cwd を付与する (#16)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", model: "claude-x", cwd: "/repo" }),
+        assistant([{ type: "text", text: "hi" }]),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const e = envs.find((env) => env.state === "thinking");
+    expect(e?.ext).toMatchObject({ model: "claude-x", cwd: "/repo" });
+  });
+
   it("getContextUsage を ext.context / ext.model として付与する (#16)", async () => {
     const envs: Envelope[] = [];
     const usage = {

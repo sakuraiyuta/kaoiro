@@ -235,3 +235,20 @@ export function sdkMessageToRateLimit(
 ): SDKRateLimitInfo | null {
   return message.type === "rate_limit_event" ? message.rate_limit_info : null;
 }
+
+/** Session init meta — active model and working directory — from a
+ *  system/init message (#16), or null for other messages. The SDK emits one
+ *  init per session; the host stamps these into state_change ext. */
+export function sdkMessageToInitMeta(
+  message: SDKMessage,
+): { model?: string; cwd?: string } | null {
+  if (message.type !== "system" || message.subtype !== "init") return null;
+  const meta: { model?: string; cwd?: string } = {};
+  if (typeof message.model === "string" && message.model !== "") {
+    meta.model = message.model;
+  }
+  if (typeof message.cwd === "string" && message.cwd !== "") {
+    meta.cwd = message.cwd;
+  }
+  return meta;
+}
