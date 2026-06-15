@@ -48,10 +48,17 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-( cd "$root/server" && exec mix phx.server ) &
+# Under `set -m` each background job is its own process group; a TTY read
+# (mix's Hex/rebar install prompt, or the BEAM's shell init) raises SIGTTIN
+# and stops the job. Redirect stdin from /dev/null so nothing reads the
+# terminal; phx.server keeps serving on EOF (it runs with --no-halt).
+( cd "$root/server" && mix deps.get && mix deps.compile &&
+  exec mix phx.server ) </dev/null &
 pids+=("$!")
 
-( cd "$root/server/assets" && exec pnpm dev ) &
+# pnpm install's lifecycle hooks must not read the TTY either (SIGTTIN);
+# pnpm dev (Vite) doesn't block on the TTY, so redirect only the install.
+( cd "$root/server/assets" && pnpm install </dev/null && exec pnpm dev ) &
 pids+=("$!")
 
 ( cd "$root/wrapper" && exec pnpm dev ) &
