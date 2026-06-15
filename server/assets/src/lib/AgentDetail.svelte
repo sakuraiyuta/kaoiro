@@ -493,7 +493,9 @@
     gap: 1rem;
     max-width: 72rem;
     margin: 0 auto;
-    height: calc(100vh - 4rem);
+    /* Fill the viewport-height main column (App shell) so the log scrolls and
+       the composer stays pinned at the bottom of the screen (#33). */
+    height: 100%;
   }
 
   /* Two-column body (#37): status pinned left, conversation log right.

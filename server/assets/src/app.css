@@ -24,15 +24,27 @@
   box-sizing: border-box;
 }
 
+/* Full-height shell so the app is a viewport-tall flex column: header fixed,
+   main scrolls internally, and the detail composer pins to the bottom (#33). */
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
   font-family: "IBM Plex Mono", "JetBrains Mono", "Fira Code", ui-monospace,
     "Cascadia Mono", monospace;
   color: var(--fg);
   background:
     radial-gradient(120% 90% at 50% -20%, #1d1d2c 0%, transparent 60%),
     var(--bg);
+}
+
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 code {

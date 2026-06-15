@@ -136,6 +136,7 @@
 
 <style>
   header {
+    flex: 0 0 auto;
     display: flex;
     align-items: baseline;
     justify-content: space-between;
@@ -183,7 +184,12 @@
     background: var(--c-error);
   }
 
+  /* Fills the viewport below the header; the active view (grid or detail)
+     scrolls inside here so the detail composer can pin to the bottom (#33). */
   main {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
     padding: 1.6rem 2rem 3rem;
   }
 
