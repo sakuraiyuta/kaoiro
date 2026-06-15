@@ -26,11 +26,15 @@ defmodule KaoiroServerWeb.Router do
 
   # The minimal dashboard is a static page (Phase 1.5-3); send the root
   # there until the Svelte reference dashboard (issue #12) takes over.
-  # /session/refresh slides the auth cookie while a tab is open (ADR-0013).
+  # Session cookie endpoints (ADR-0013): /session/new exchanges a token for
+  # the cookie, /session/ticket mints a short-lived WS ticket from it (the
+  # reload path), /session/refresh slides it while a tab is open.
   scope "/" do
     pipe_through :browser
 
     get "/", KaoiroServerWeb.RootRedirect, []
+    post "/session/new", KaoiroServerWeb.SessionController, :create
+    get "/session/ticket", KaoiroServerWeb.SessionController, :ticket
     get "/session/refresh", KaoiroServerWeb.SessionController, :refresh
   end
 end

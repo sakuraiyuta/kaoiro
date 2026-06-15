@@ -51,12 +51,22 @@ issue #45 にて my-spec-elicitation で方式を収束(2026-06-15 ユーザ決�
    `GET /session/refresh` を定期(12h)に叩いて cookie を再発行 → **開いている
    限り失効しない**。閉じた/切断後は最後の更新から 3 日で失効。絶対上限は
    設けない。
-4. **交換導線 = `GET /?token=…` を `RootRedirect`(Plug.Session 後段)で検証
-   → `put_session` → クリーンな `/index.html` へ 302**。トークンは SPA にも
-   アドレスバーにも残らない。共有リンク/ブックマークは `/` のみ。
-5. **段階移行 = `connect/3` は session(cookie)優先・`params["token"]`
-   フォールバックを恒久併存**。dev は Vite(:5173)が SPA を配信し本プラグを
-   経由しないため、dev の `?token=` クエリ経路がそのまま生きる。
+4. **トークン→cookie の交換は 2 経路**。(a) prod = `GET /?token=…` を
+   `RootRedirect`(Plug.Session 後段)で検証 → `put_session` → クリーンな
+   `/index.html` へ 302(トークンは SPA にもアドレスバーにも残らない)。
+   (b) dev = Vite(:5173)が SPA を配信し RootRedirect を経由しないため、SPA が
+   受け取った `?token=` を `POST /session/new`(Vite proxy 経由。cookie は HTTP
+   なら proxy を通る)へ投げて cookie をセットする(クライアント駆動)。
+5. **WS 認証は短命チケット経由**(`connect/3` は ticket → token param →
+   session の順で解決)。**Vite の proxy は WS upgrade に Cookie を転送せず、
+   :4000 直結(cross-port)でもブラウザは cookie を送らないため、cookie を WS に
+   乗せられない**(検証で確定)。そこでリロード時は SPA が `GET /session/ticket`
+   (cookie 付き HTTP=proxy を通る)で `Phoenix.Token` 署名の**短命チケット
+   (30 秒)**を取得し、WS を `?ticket=`(param は proxy を通る)で接続する。
+   `connect/3` がチケットを検証してトークンへ戻す。**トークン自体は JS に
+   出ない**。初回ロード(`?token=` あり)は token param で接続しつつ cookie を
+   セットする。prod は同一 origin 直結で cookie が WS に乗るため session
+   フォールバックも効く。
 6. **secure フラグ = prod のみ**。既存 `force_ssl`(`rewrite_on:
    [:x_forwarded_proto]`)前提で、`Application.compile_env(:kaoiro_server,
    :session_secure, false)` を `prod.exs` で `true` に。dev(http localhost)
@@ -68,7 +78,8 @@ issue #45 にて my-spec-elicitation で方式を収束(2026-06-15 ユーザ決�
 ### Positive
 
 - リロード・ブラウザ再起動でも再接続が維持され、運用・開発の摩擦が消える。
-- httpOnly + 暗号化で XSS によるトークン窃取・cookie jar からの平文露出を防ぐ。
+- httpOnly + 暗号化でトークンは JS にも cookie jar の平文にも出ない。XSS が
+  取れるのは短命チケット(数十秒)止まりで、再利用可能なトークンは窃取できない。
 - 失効は接続・`/session/refresh` ごとの再検証で反映される(refresh が 401 を
   返すと正規クライアントは自発的に切断する)。
 
@@ -76,8 +87,9 @@ issue #45 にて my-spec-elicitation で方式を収束(2026-06-15 ユーザ決�
 
 - 開いている間の失効防止に SPA からの定期 HTTP heartbeat が要る(WS 上では
   cookie 更新不可のため)。
-- dev(Vite)と prod(Phoenix)で資格情報の経路が分かれる(params / cookie)。
-  `connect/3` の両対応で吸収するが、認証経路が 2 本になる。
+- cookie を WS に乗せられない(Vite proxy 非転送 + cross-port 非送出)ため、
+  リロード認証に「HTTP でチケット取得 → param 接続」の一手間が要る。`connect/3`
+  は ticket / token param / session の 3 経路を持つ。
 - **稼働中ソケットをサーバから強制切断できない**。`ClientSocket` は connect
   時のみ token を検証し `id/1` は `nil`(`Endpoint.disconnect` 経路なし)なので、
   失効は次の接続で反映される。refresh の 401 で**正規**クライアントは自発切断

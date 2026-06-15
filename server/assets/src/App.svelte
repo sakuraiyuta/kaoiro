@@ -60,62 +60,96 @@
     // fetch failure), then swap to persona sprites.
     fetchPersonaManifest().then((next) => (manifest = next));
 
-    // User token (ADR-0011): in prod the server exchanges `?token=…` for an
-    // httpOnly cookie before the SPA loads (ADR-0013), so the token is
-    // usually absent here and the cookie carries auth. A `?token=…` still
-    // present is the dev Vite flow (no cookie): pass it as a connect param
-    // and scrub it from the address bar so it does not stick in
-    // history/bookmarks/shared links.
-    const token = new URLSearchParams(location.search).get("token");
-    if (token !== null) {
-      const scrubbed = new URL(location.href);
-      scrubbed.searchParams.delete("token");
-      history.replaceState(null, "", scrubbed);
-    }
-
-    connection = connectKaoiro(
-      defaultSocketUrl(location),
-      {
-        onStatus: (next) => (status = next),
-        onSnapshot: (next) => (agents = next),
-        onEnvelope: (envelope) => {
-          // Reply lines feed the transcript; state envelopes update the
-          // latest-state map that drives the grid faces.
-          if (isReplyEnvelope(envelope)) {
-            const prev = logs[envelope.agent_id] ?? [];
-            logs = { ...logs, [envelope.agent_id]: [...prev, envelope] };
-          } else {
-            agents = { ...agents, [envelope.agent_id]: envelope };
-          }
-        },
-        onHistory: (histories) => (logs = mergeHistories(histories, logs)),
-      },
-      token === null ? {} : { token },
-    );
-
-    // Cookie auth (prod, no URL token): slide the httpOnly session cookie
-    // while this tab is open so it never lapses mid-session (ADR-0013). The
-    // dev `?token=` flow has no cookie, so skip the heartbeat there.
+    let cancelled = false;
     let refreshTimer: ReturnType<typeof setInterval> | undefined;
-    if (token === null) {
+
+    void (async () => {
+      // Auth (ADR-0011/0013). A `?token=` in the URL is the first load (dev
+      // Vite, or a direct link): set the httpOnly cookie so reloads can mint
+      // a ticket, authenticate this load with the token, then scrub the URL.
+      // Without a URL token (reload) the token lives only in the httpOnly
+      // cookie — which cannot ride the WS upgrade (Vite proxy / cross-origin)
+      // — so mint a short-lived WS ticket from the cookie over HTTP and
+      // connect with that. The token itself never reaches JS.
+      const urlToken = new URLSearchParams(location.search).get("token");
+      let connectOpts: { token?: string; ticket?: string } = {};
+
+      if (urlToken !== null) {
+        // Token in the POST body, not the query string, so it does not land
+        // in proxy/server access logs (the request-line URL is logged even
+        // though Phoenix filters the token param).
+        void fetch("/session/new", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: urlToken }),
+        }).then(
+          (r) => {
+            if (!r.ok) {
+              console.warn("kaoiro: session cookie set failed", r.status);
+            }
+          },
+          () => console.warn("kaoiro: session cookie request failed"),
+        );
+        connectOpts = { token: urlToken };
+        const scrubbed = new URL(location.href);
+        scrubbed.searchParams.delete("token");
+        history.replaceState(null, "", scrubbed);
+      } else {
+        try {
+          const res = await fetch("/session/ticket");
+          if (res.ok) {
+            const body = (await res.json()) as { ticket?: string };
+            if (typeof body.ticket === "string") {
+              connectOpts = { ticket: body.ticket };
+            }
+          }
+        } catch {
+          // No cookie / network error: connect unauthenticated (fail-closed).
+        }
+      }
+
+      if (cancelled) return;
+
+      connection = connectKaoiro(
+        defaultSocketUrl(location),
+        {
+          onStatus: (next) => (status = next),
+          onSnapshot: (next) => (agents = next),
+          onEnvelope: (envelope) => {
+            // Reply lines feed the transcript; state envelopes update the
+            // latest-state map that drives the grid faces.
+            if (isReplyEnvelope(envelope)) {
+              const prev = logs[envelope.agent_id] ?? [];
+              logs = { ...logs, [envelope.agent_id]: [...prev, envelope] };
+            } else {
+              agents = { ...agents, [envelope.agent_id]: envelope };
+            }
+          },
+          onHistory: (histories) => (logs = mergeHistories(histories, logs)),
+        },
+        connectOpts,
+      );
+
+      // Slide the httpOnly cookie while this tab is open so future reloads
+      // can still mint a ticket (ADR-0013). On 401 the session is gone
+      // (revoked/expired) — drop the socket. The immediate slide runs only on
+      // the reload path (a cookie already exists there); a first `?token=`
+      // load just set the cookie, so its first slide is the interval.
       const refresh = (): void => {
-        // On 401 the server has cleared the session (token revoked/expired);
-        // drop the now-unauthenticated socket so an honest user sees they are
-        // logged out instead of riding a stale connection. This does not
-        // force-evict a malicious holder of an open socket (no socket id /
-        // Endpoint.disconnect) — see ADR-0013 Consequences.
         void fetch("/session/refresh").then(
           (r) => {
-            if (r.status === 401) connection?.disconnect();
+            // Guard against an in-flight refresh resolving after unmount.
+            if (r.status === 401 && !cancelled) connection?.disconnect();
           },
           () => {},
         );
       };
-      refresh();
+      if (urlToken === null) refresh();
       refreshTimer = setInterval(refresh, 12 * 60 * 60 * 1000);
-    }
+    })();
 
     return () => {
+      cancelled = true;
       if (refreshTimer !== undefined) clearInterval(refreshTimer);
       connection?.disconnect();
     };

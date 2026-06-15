@@ -11,14 +11,20 @@ export default defineConfig({
     emptyOutDir: false,
   },
   server: {
-    // `pnpm dev` against a locally running Phoenix (mix phx.server): forward
-    // the WS channel plus the public persona manifest/asset routes, so a
-    // standalone Vite dev server renders sprites instead of falling back to
-    // CSS faces (the persona API is unauthenticated, so no token is involved).
+    // `pnpm dev` against a locally running Phoenix (mix phx.server). Note:
+    // Vite cannot forward the Cookie header on the WS upgrade, so the auth
+    // cookie never reaches the /client socket here — the dashboard instead
+    // mints a short-lived WS ticket over the (cookie-carrying) /session HTTP
+    // routes and connects with that (ADR-0013).
     proxy: {
       "/client": { target: "ws://localhost:4000", ws: true },
+      // Public persona manifest/assets (unauthenticated) so a standalone
+      // Vite dev server renders sprites instead of CSS-face fallbacks.
       "/api": { target: "http://localhost:4000" },
       "/personas": { target: "http://localhost:4000" },
+      // Token->cookie exchange, WS ticket, and cookie refresh (ADR-0013).
+      // These HTTP routes DO carry cookies through the proxy.
+      "/session": { target: "http://localhost:4000" },
     },
   },
 });

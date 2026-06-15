@@ -153,6 +153,9 @@ export interface KaoiroConnection {
 export interface ConnectOptions {
   /** User token (ADR-0011); resolved server-side to viewer/operator. */
   token?: string;
+  /** Short-lived WS ticket fetched from the auth cookie (ADR-0013) — the
+   *  reload path, where the token is not in the URL. */
+  ticket?: string;
 }
 
 function isEnvelope(value: unknown): value is Envelope {
@@ -190,8 +193,11 @@ export function connectKaoiro(
   handlers: KaoiroHandlers,
   options: ConnectOptions = {},
 ): KaoiroConnection {
+  const params: Record<string, string> = {};
+  if (options.token !== undefined) params.token = options.token;
+  if (options.ticket !== undefined) params.ticket = options.ticket;
   const socket = new Socket(url, {
-    params: options.token === undefined ? {} : { token: options.token },
+    params,
   });
   handlers.onStatus("connecting");
   socket.onOpen(() => handlers.onStatus("connected"));

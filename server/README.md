@@ -64,8 +64,11 @@ mix phx.server  # localhost:4000
 暗号化 session cookie に交換**し、アドレスバーからは即座に消える(ADR-0013)。
 **以降はリロード・ブラウザ再起動でも cookie が認証を保持する**(開いている間は
 heartbeat で更新され、閉じてから `max_age`=3日 で失効)。
-注: dev で Vite(:5173)を単独起動した場合は cookie 交換を経由しないため、
-従来どおり `?token=` をメモリ保持し、リロードで外れる。
+dev で Vite(:5173)を単独起動した場合は RootRedirect を経由しないが、SPA が
+`?token=` を `POST /session/new`(Vite proxy 経由)で cookie に交換し、リロード
+時は `GET /session/ticket` で短命 WS チケットを得て接続するため(Vite proxy は
+cookie を WS に乗せられないため)、dev でもリロード後の再接続が維持される
+(ADR-0013)。
 
 ### Docker(推奨)
 
