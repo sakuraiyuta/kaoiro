@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { expressionFor, spriteUrlFor } from "./expression";
+  import { StatusQueue } from "./statusDisplay.svelte";
   import type {
     Envelope,
     KaoiroConnection,
@@ -18,10 +20,18 @@
     onSelect?: () => void;
   } = $props();
 
-  const expression = $derived(expressionFor(envelope.state));
+  // Displayed state lags the live state for min readability + crossfade (#43);
+  // the needs-attention badge below still tracks the live state for immediacy.
+  const display = new StatusQueue(untrack(() => envelope.state));
+  $effect(() => {
+    display.push(envelope.state);
+  });
+  $effect(() => () => display.dispose());
+
+  const expression = $derived(expressionFor(display.shown));
   const name = $derived(envelope.persona?.name ?? envelope.agent_id);
   const spriteUrl = $derived(
-    spriteUrlFor(manifest, envelope.persona?.sprite_set, envelope.state),
+    spriteUrlFor(manifest, envelope.persona?.sprite_set, display.shown),
   );
   // Needs-attention badge (ADR-0012 F6): approval/error draw the eye on the
   // grid; the actual allow/deny happens in the detail view.
@@ -70,7 +80,7 @@
     {#if attention}
       <span class="badge" data-state={expression.variant}>要対応</span>
     {/if}
-    {#key envelope.state}
+    {#key display.shown}
       {#if spriteUrl}
         <img class="sprite" src={spriteUrl} alt={expression.label} />
       {:else}
@@ -82,7 +92,9 @@
       {/if}
     {/key}
     <h2>{name}</h2>
-    <p class="state">{expression.label}</p>
+    {#key display.shown}
+      <p class="state">{expression.label}</p>
+    {/key}
     <p class="id">{envelope.agent_id}</p>
   </button>
 
@@ -138,7 +150,7 @@
     height: 8rem;
     margin: 0 auto 1rem;
     object-fit: contain;
-    animation: pop 0.35s ease-out;
+    animation: dissolve 0.35s ease-out;
   }
 
   [data-state="disconnected"] .sprite {
@@ -157,12 +169,14 @@
     background: color-mix(in srgb, var(--tone) 28%, var(--bg-card));
     border: 2px solid var(--tone);
     box-shadow: 0 0 18px color-mix(in srgb, var(--tone) 35%, transparent);
-    animation: pop 0.35s ease-out;
+    animation: dissolve 0.35s ease-out;
   }
 
-  @keyframes pop {
-    from { transform: scale(0.85); }
-    60% { transform: scale(1.05); }
+  /* Dissolve-in on state change (#43): the previous face/label is replaced
+     via {#key}, so the new one fades up from transparent. prefers-reduced-
+     motion shortens this to ~instant via the global rule in app.css. */
+  @keyframes dissolve {
+    from { opacity: 0; }
   }
 
   .eye {
@@ -210,7 +224,7 @@
   }
 
   [data-state="thinking"] .face {
-    animation: pop 0.35s ease-out, sway 2.4s ease-in-out infinite;
+    animation: dissolve 0.35s ease-out, sway 2.4s ease-in-out infinite;
   }
 
   @keyframes sway {
@@ -242,7 +256,7 @@
   }
 
   [data-state="waiting_permission"] .face {
-    animation: pop 0.35s ease-out, hop 1.1s ease-in-out infinite;
+    animation: dissolve 0.35s ease-out, hop 1.1s ease-in-out infinite;
   }
 
   @keyframes hop {
@@ -309,6 +323,7 @@
     font-size: 0.8rem;
     font-weight: 600;
     color: var(--tone);
+    animation: dissolve 0.35s ease-out;
   }
 
   .id {

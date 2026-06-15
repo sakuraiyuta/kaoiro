@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { expressionFor, spriteUrlFor } from "./expression";
+  import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown } from "./markdown";
   import { logOf, permissionRequestOf, resultOf } from "./protocol";
   import type {
@@ -25,10 +26,17 @@
     onClose: () => void;
   } = $props();
 
-  const expression = $derived(expressionFor(envelope.state));
+  // Displayed state lags the live state for min readability + crossfade (#43).
+  const display = new StatusQueue(untrack(() => envelope.state));
+  $effect(() => {
+    display.push(envelope.state);
+  });
+  $effect(() => () => display.dispose());
+
+  const expression = $derived(expressionFor(display.shown));
   const name = $derived(envelope.persona?.name ?? envelope.agent_id);
   const spriteUrl = $derived(
-    spriteUrlFor(manifest, envelope.persona?.sprite_set, envelope.state),
+    spriteUrlFor(manifest, envelope.persona?.sprite_set, display.shown),
   );
   const permission = $derived(permissionRequestOf(envelope));
 
@@ -152,14 +160,18 @@
   <div class="body">
     <aside class="status">
       <header class="head">
-        {#if spriteUrl}
-          <img class="sprite" src={spriteUrl} alt={expression.label} />
-        {:else}
-          <span class="face" aria-label={expression.label}></span>
-        {/if}
+        {#key display.shown}
+          {#if spriteUrl}
+            <img class="sprite" src={spriteUrl} alt={expression.label} />
+          {:else}
+            <span class="face" aria-label={expression.label}></span>
+          {/if}
+        {/key}
         <div class="meta">
           <h2>{name}</h2>
-          <p class="state">{expression.label}</p>
+          {#key display.shown}
+            <p class="state">{expression.label}</p>
+          {/key}
           <p class="id">{envelope.agent_id}</p>
         </div>
       </header>
@@ -371,6 +383,14 @@
     width: 5rem;
     height: 5rem;
     object-fit: contain;
+    animation: dissolve 0.35s ease-out;
+  }
+
+  /* Dissolve-in on state change (#43): the previous face/label is replaced
+     via {#key}, so the new one fades up from transparent. prefers-reduced-
+     motion shortens this to ~instant via the global rule in app.css. */
+  @keyframes dissolve {
+    from { opacity: 0; }
   }
 
   [data-state="disconnected"] .sprite {
@@ -384,6 +404,7 @@
     border-radius: 50%;
     background: color-mix(in srgb, var(--tone) 28%, var(--bg-card));
     border: 2px solid var(--tone);
+    animation: dissolve 0.35s ease-out;
   }
 
   .meta h2 {
@@ -397,6 +418,7 @@
     font-size: 0.85rem;
     font-weight: 600;
     color: var(--tone);
+    animation: dissolve 0.35s ease-out;
   }
 
   .id {
