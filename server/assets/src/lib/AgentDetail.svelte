@@ -309,7 +309,10 @@
             <p class="turn-end" class:error={res.is_error}>
               {res.is_error ? "エラーで終了" : "応答完了"}
               {#if cost !== null}
-                <span class="cost">${cost.toFixed(4)}</span>
+                <span
+                  class="cost"
+                  title="API 標準単価での推定値。Claude サブスク利用時は実課金額ではありません(従量 API キー利用時のみ実コストに近い)。セッション開始からの累計。"
+                  >累計 ~${cost.toFixed(4)}</span>
               {/if}
               <time class="ts" datetime={env.ts}>{time}</time>
             </p>
