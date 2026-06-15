@@ -33,6 +33,8 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0012](adr/0012-response-display-and-dashboard-scope.md) | 返答表示と同梱ダッシュボードのスコープ改訂 | accepted |
 | [0013](adr/0013-user-token-cookie-persistence.md) | ユーザトークンを httpOnly cookie で永続化 | accepted |
 | [0014](adr/0014-session-resume-and-restore.md) | セッション resume で wrapper を復帰・召喚 | accepted |
+| [0015](adr/0015-protocol-version-stamping.md) | 全通信へ version 付与・不一致は警告しつつ受理 | accepted |
+| [0016](adr/0016-error-body-relay.md) | ラッパーエラー本文を result.error_message でリレー | accepted |
 
 ## 更新フロー
 
