@@ -11,9 +11,14 @@ export default defineConfig({
     emptyOutDir: false,
   },
   server: {
-    // `pnpm dev` against a locally running Phoenix (mix phx.server).
+    // `pnpm dev` against a locally running Phoenix (mix phx.server): forward
+    // the WS channel plus the public persona manifest/asset routes, so a
+    // standalone Vite dev server renders sprites instead of falling back to
+    // CSS faces (the persona API is unauthenticated, so no token is involved).
     proxy: {
       "/client": { target: "ws://localhost:4000", ws: true },
+      "/api": { target: "http://localhost:4000" },
+      "/personas": { target: "http://localhost:4000" },
     },
   },
 });
