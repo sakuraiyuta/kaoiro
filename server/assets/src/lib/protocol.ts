@@ -61,6 +61,8 @@ export interface LogPayload {
   kind: "assistant" | "tool_use" | "tool_result" | "user";
   text?: string;
   tool_name?: string;
+  /** Pairs a tool_use with its tool_result (#40); present when known. */
+  tool_use_id?: string;
   input?: Record<string, unknown>;
   output?: string;
   truncated?: boolean;

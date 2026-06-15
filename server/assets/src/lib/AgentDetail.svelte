@@ -94,6 +94,9 @@
   // Optimistic "sent, awaiting the agent's next state" flag (#32). Purely
   // client-side; cleared by the next state envelope, not by the protocol.
   let sending = $state(false);
+  // tool_use_id under the pointer, so its tool_use and tool_result both
+  // highlight while hovered (#40).
+  let hoveredTool = $state<string | null>(null);
   let logEl = $state<HTMLDivElement | null>(null);
 
   // Render any new mermaid diagrams (#42), then keep the transcript pinned to
@@ -153,6 +156,22 @@
       event.preventDefault();
       (event.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
     }
+  }
+
+  // Scroll to and flash the partner of a tool block (#40): from a tool_use to
+  // its tool_result and vice versa, matched by tool_use_id.
+  function jumpToTool(event: MouseEvent, id: string, fromKind: string): void {
+    event.preventDefault();
+    event.stopPropagation(); // don't toggle the <details> we live inside
+    if (!logEl) return;
+    const toKind = fromKind === "tool_use" ? "tool_result" : "tool_use";
+    const target = logEl.querySelector<HTMLElement>(
+      `[data-tuid="${CSS.escape(id)}"][data-kind="${toKind}"]`,
+    );
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.add("flash");
+    setTimeout(() => target.classList.remove("flash"), 1000);
   }
 
   function decide(allow: boolean): void {
@@ -224,18 +243,50 @@
               <time class="ts" datetime={env.ts}>{time}</time>
             </div>
           {:else if log?.kind === "tool_use"}
-            <details class="tool">
+            {@const tuid = log.tool_use_id}
+            <details
+              class="tool"
+              class:linked={hoveredTool !== null && hoveredTool === tuid}
+              data-tuid={tuid ?? ""}
+              data-kind="tool_use"
+              onmouseenter={() => (hoveredTool = tuid ?? null)}
+              onmouseleave={() => (hoveredTool = null)}
+            >
               <summary
                 >ツール呼び出し: {log.tool_name}
+                {#if tuid}
+                  <button
+                    type="button"
+                    class="tlink"
+                    title="対応する結果へ"
+                    onclick={(e) => jumpToTool(e, tuid, "tool_use")}
+                    >🔗{tuid.slice(-4)}</button>
+                {/if}
                 <time class="ts" datetime={env.ts}>{time}</time></summary>
               <pre>{JSON.stringify(log.input ?? {}, null, 2)}{log.truncated
                   ? "\n…(入力が大きいため省略)"
                   : ""}</pre>
             </details>
           {:else if log?.kind === "tool_result"}
-            <details class="tool">
+            {@const tuid = log.tool_use_id}
+            <details
+              class="tool"
+              class:linked={hoveredTool !== null && hoveredTool === tuid}
+              data-tuid={tuid ?? ""}
+              data-kind="tool_result"
+              onmouseenter={() => (hoveredTool = tuid ?? null)}
+              onmouseleave={() => (hoveredTool = null)}
+            >
               <summary
                 >結果: {log.tool_name ?? "tool"}
+                {#if tuid}
+                  <button
+                    type="button"
+                    class="tlink"
+                    title="対応する呼び出しへ"
+                    onclick={(e) => jumpToTool(e, tuid, "tool_result")}
+                    >🔗{tuid.slice(-4)}</button>
+                {/if}
                 <time class="ts" datetime={env.ts}>{time}</time></summary>
               <pre>{log.output ?? ""}{log.truncated ? "\n…(省略)" : ""}</pre>
             </details>
@@ -570,6 +621,35 @@
   .tool summary {
     cursor: pointer;
     color: var(--c-tool_running);
+  }
+
+  /* tool_use <-> tool_result pairing (#40): hovering one highlights both, and
+     the link badge jumps to (and flashes) the partner. */
+  .tool.linked {
+    border-color: var(--c-tool_running);
+    background: color-mix(in srgb, var(--c-tool_running) 8%, transparent);
+  }
+
+  .tlink {
+    margin-left: 0.4rem;
+    padding: 0 0.3rem;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    background: var(--bg);
+    color: var(--c-tool_running);
+    font: inherit;
+    font-size: 0.62rem;
+    cursor: pointer;
+  }
+
+  /* .flash is toggled from JS (jumpToTool), so mark it global to keep
+     svelte-check from flagging it as an unused selector. */
+  .tool:global(.flash) {
+    animation: flash 1s ease-out;
+  }
+
+  @keyframes flash {
+    from { background: color-mix(in srgb, var(--c-tool_running) 35%, transparent); }
   }
 
   .tool pre {

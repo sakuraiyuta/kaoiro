@@ -34,6 +34,9 @@ export interface LogPayload {
   kind: LogKind;
   text?: string;
   tool_name?: string;
+  /** Links a tool_use to its tool_result so clients can pair them (#40).
+   *  Present on tool_use / tool_result lines when the SDK supplied an id. */
+  tool_use_id?: string;
   input?: Record<string, unknown>;
   output?: string;
   truncated?: boolean;

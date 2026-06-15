@@ -237,6 +237,7 @@ export class AgentHost {
           kind: "tool_use",
           tool_name: entry.tool_name,
         };
+        if (entry.tool_use_id) payload.tool_use_id = entry.tool_use_id;
         // Drop oversized input wholesale: a cut JSON is unparseable and
         // could split a secret (mirrors the permission payload).
         if (
@@ -252,6 +253,7 @@ export class AgentHost {
       case "tool_result": {
         const { text, truncated } = clipText(entry.output);
         const payload: LogPayload = { kind: "tool_result", output: text };
+        if (entry.tool_use_id) payload.tool_use_id = entry.tool_use_id;
         const name = entry.tool_use_id
           ? this.#toolNames.get(entry.tool_use_id)
           : undefined;
