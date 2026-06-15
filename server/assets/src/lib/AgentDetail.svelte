@@ -106,9 +106,9 @@
 
   const RATE_LABELS: Record<string, string> = {
     five_hour: "5h",
-    seven_day: "7d",
-    seven_day_opus: "7d Opus",
-    seven_day_sonnet: "7d Sonnet",
+    seven_day: "7day",
+    seven_day_opus: "7day Opus",
+    seven_day_sonnet: "7day Sonnet",
     overage: "追加",
   };
 
@@ -120,20 +120,36 @@
     status: string | undefined;
   }
 
-  /** Build display rows from ext.rate_limits, in a stable window order. */
+  /** Build display rows from ext.rate_limits, in a stable window order. The
+   *  weekly `seven_day` window is always emitted (with a null pct = "awaiting
+   *  data" placeholder) so its absence reads as pending, not a missing
+   *  feature; other windows appear only once the SDK surfaces them. */
   function buildRateRows(raw: unknown): RateRow[] {
-    if (typeof raw !== "object" || raw === null) return [];
-    const limits = raw as Record<string, Record<string, unknown> | undefined>;
+    const limits =
+      typeof raw === "object" && raw !== null
+        ? (raw as Record<string, Record<string, unknown> | undefined>)
+        : {};
     const rows: RateRow[] = [];
     for (const key of Object.keys(RATE_LABELS)) {
-      const window = limits[key];
-      if (typeof window !== "object" || window === null) continue;
+      const win = limits[key];
+      if (typeof win !== "object" || win === null) {
+        if (key === "seven_day") {
+          rows.push({
+            key,
+            label: RATE_LABELS[key],
+            pct: null,
+            reset: null,
+            status: undefined,
+          });
+        }
+        continue;
+      }
       rows.push({
         key,
         label: RATE_LABELS[key],
-        pct: pctNorm(window.utilization),
-        reset: fmtReset(window.resets_at),
-        status: typeof window.status === "string" ? window.status : undefined,
+        pct: pctNorm(win.utilization),
+        reset: fmtReset(win.resets_at),
+        status: typeof win.status === "string" ? win.status : undefined,
       });
     }
     return rows;
@@ -150,8 +166,14 @@
   );
   const ctxPct = $derived(pctClamp(ccContext?.used_percentage));
   const ccRateRows = $derived(buildRateRows(envelope.ext?.rate_limits));
+  // The always-present seven_day placeholder (pct null) must not, by itself,
+  // open the panel for a non-Claude-Code agent — require real meta or a
+  // rate window that actually has data.
   const hasCcStatus = $derived(
-    ccModel !== null || ccCwd !== null || ctxPct !== null || ccRateRows.length > 0,
+    ccModel !== null ||
+      ccCwd !== null ||
+      ctxPct !== null ||
+      ccRateRows.some((r) => r.pct !== null),
   );
 
   // Wall-clock time of a log line from its envelope ts (#38). Invalid or
@@ -283,13 +305,16 @@
   <div class="body">
     <aside class="status">
       <header class="head">
-        {#key display.shown}
-          {#if spriteUrl}
-            <img class="sprite" src={spriteUrl} alt={expression.label} />
-          {:else}
-            <span class="face" aria-label={expression.label}></span>
-          {/if}
-        {/key}
+        <div class="portrait">
+          {#key display.shown}
+            {#if spriteUrl}
+              <img class="sprite" src={spriteUrl} alt={expression.label} />
+            {:else}
+              <span class="face" aria-label={expression.label}></span>
+            {/if}
+          {/key}
+          <span class="lamp" title={expression.label}></span>
+        </div>
         <div class="meta">
           <h2>{name}</h2>
           {#key display.shown}
@@ -330,14 +355,19 @@
             <div class="cc-row">
               <dt>{r.label}</dt>
               <dd>
-                <div
-                  class="meter"
-                  data-status={r.status}
-                  title={r.reset ? "リセット " + r.reset : undefined}
-                >
-                  <div class="meter-fill" style:width="{r.pct ?? 0}%"></div>
-                </div>
-                <span class="meter-val">{r.pct === null ? "?" : r.pct + "%"}</span>
+                {#if r.key === "seven_day" && r.pct === null}
+                  <span class="cc-pending">まだ情報がありません</span>
+                {:else}
+                  <div
+                    class="meter"
+                    data-status={r.status}
+                    title={r.reset ? "リセット " + r.reset : undefined}
+                  >
+                    <div class="meter-fill" style:width="{r.pct ?? 0}%"></div>
+                  </div>
+                  <span class="meter-val"
+                    >{r.pct === null ? "?" : r.pct + "%"}</span>
+                {/if}
               </dd>
             </div>
           {/each}
@@ -589,9 +619,28 @@
     border-bottom: 1px solid var(--line);
   }
 
+  /* Persona portrait (#16): fills the pane width with a subtle top light,
+     like the grid cards; a state-coloured lamp sits in the corner. */
+  .portrait {
+    position: relative;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    padding: 0.8rem;
+    border-radius: 0.5rem;
+    background:
+      radial-gradient(
+        circle at 50% 0%,
+        color-mix(in srgb, var(--tone) 14%, transparent),
+        transparent 70%
+      ),
+      var(--bg-card);
+  }
+
   .sprite {
-    width: 5rem;
-    height: 5rem;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1 / 1;
     object-fit: contain;
     animation: dissolve 0.35s ease-out;
   }
@@ -609,12 +658,26 @@
   }
 
   .face {
-    width: 3.4rem;
-    height: 3.4rem;
+    width: 70%;
+    aspect-ratio: 1 / 1;
     border-radius: 50%;
     background: color-mix(in srgb, var(--tone) 28%, var(--bg-card));
     border: 2px solid var(--tone);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--tone) 35%, transparent);
     animation: dissolve 0.35s ease-out;
+  }
+
+  /* State lamp on the portrait (#16): same shape/size as the connection
+     dot, coloured by the agent's state via --tone. */
+  .lamp {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 50%;
+    background: var(--tone);
+    box-shadow: 0 0 6px var(--tone);
   }
 
   .meta h2 {
@@ -669,6 +732,12 @@
   .cc-model {
     color: var(--fg);
     overflow-wrap: anywhere;
+  }
+
+  /* Placeholder for a rate window the SDK has not surfaced yet (#16). */
+  .cc-pending {
+    font-size: 0.7rem;
+    color: var(--fg-dim);
   }
 
   /* cwd can be a long absolute path; clip to one line keeping the tail (the
