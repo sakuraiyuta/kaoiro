@@ -11,6 +11,7 @@
 
   /* state palette — keep in sync with protocol.md state set */
   --c-idle: #8089a6;
+  --c-sending: #d8b45c;
   --c-thinking: #7fd4e8;
   --c-tool_running: #f2d27c;
   --c-waiting_permission: #c9a2f5;

@@ -160,6 +160,7 @@ join 時には最新状態に加え、直近の返答ログ履歴(サーバの**
 | 状態 | 意味 | 導出元(SDK) | 表情の方向性(将来) |
 |---|---|---|---|
 | `idle` | 起動済み・未着手 | `SDKSystemMessage`(init) | 通常 |
+| `sending` | 指示送信済み・応答開始待ち | ラッパーが instruction 受理時に導出(SDK 外、#32) | 送った |
 | `thinking` | モデルが生成中 | `SDKAssistantMessage`(text/thinking) | 考え中 |
 | `tool_running` | ツール実行中 | `SDKAssistantMessage`(tool_use)〜 `SDKUserMessage`(tool_result) | 集中 |
 | `waiting_permission` | ツール許可待ち | `canUseTool` 呼び出し中(Promise 保留) | こちらを見て待つ |
@@ -175,7 +176,10 @@ join 時には最新状態に加え、直近の返答ログ履歴(サーバの**
 ```mermaid
 stateDiagram-v2
   [*] --> idle
-  idle --> thinking
+  idle --> sending
+  waiting_input --> sending
+  sending --> thinking
+  sending --> tool_running
   thinking --> tool_running
   tool_running --> waiting_permission
   waiting_permission --> tool_running
@@ -185,11 +189,11 @@ stateDiagram-v2
   tool_running --> error
   done --> waiting_input
   error --> waiting_input
-  waiting_input --> thinking
   idle --> disconnected
   thinking --> disconnected
   tool_running --> disconnected
   waiting_input --> disconnected
+  sending --> disconnected
   disconnected --> idle
 ```
 

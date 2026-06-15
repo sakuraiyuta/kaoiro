@@ -119,6 +119,7 @@ canUseTool → PostToolUse。
 | kaoiro 状態 | 導出トリガ(SDK) |
 |---|---|
 | `idle` | `SDKSystemMessage`(init)受信、次の入力待ち前 |
+| `sending` | SDK 外。ラッパーが operator 指示を入力キューへ受理した時点(rest 状態のみ)。最初の `SDKAssistantMessage` で thinking/tool_running へ抜ける(#32) |
 | `thinking` | `SDKAssistantMessage` の content が text/thinking のみ。細粒度は `stream_event`(`includePartialMessages`) |
 | `tool_running` | `SDKAssistantMessage` に tool_use 出現 〜 対応する `SDKUserMessage`(tool_result)まで |
 | `waiting_permission` | `canUseTool` 呼び出し中(Promise 保留) |

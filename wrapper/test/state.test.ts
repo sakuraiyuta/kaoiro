@@ -116,6 +116,28 @@ describe("stepState", () => {
     expect(next).toBe(machine);
   });
 
+  it("rest 状態の user_send を sending に導出する (#32)", () => {
+    for (const state of ["idle", "waiting_input", "done", "error"] as const) {
+      expect(
+        stepState(initialMachineState(state), { kind: "user_send" }).emitted,
+      ).toEqual(["sending"]);
+    }
+  });
+
+  it("ターン進行中の user_send は状態を変えない (#32)", () => {
+    for (const state of [
+      "thinking",
+      "tool_running",
+      "waiting_permission",
+      "sending",
+    ] as const) {
+      const machine = initialMachineState(state);
+      const { next, emitted } = stepState(machine, { kind: "user_send" });
+      expect(emitted).toEqual([]);
+      expect(next).toBe(machine);
+    }
+  });
+
   it("並列ツール: 全 tool_result が揃うまで tool_running を維持する", () => {
     const issued = stepState(initialMachineState("thinking"), {
       kind: "assistant",
@@ -267,6 +289,22 @@ describe("reduceStates", () => {
       { kind: "result", subtype: "success" },
     ];
     expect(reduceStates(events)).toEqual(["thinking", "done", "waiting_input"]);
+  });
+
+  it("待機からの送信が sending を挟んでターンに入る (#32)", () => {
+    const events: AdapterEvent[] = [
+      { kind: "session_init" },
+      { kind: "user_send" },
+      { kind: "assistant", blocks: ["text"] },
+      { kind: "result", subtype: "success" },
+    ];
+    expect(reduceStates(events)).toEqual([
+      "idle",
+      "sending",
+      "thinking",
+      "done",
+      "waiting_input",
+    ]);
   });
 });
 

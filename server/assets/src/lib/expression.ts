@@ -5,9 +5,11 @@
 
 import type { PersonaManifest } from "./protocol";
 
-/** State set v0 (protocol.md) plus the server-derived disconnected. */
+/** State set v0 (protocol.md) plus the wrapper-raised `sending` (#32) and
+ *  the server-derived `disconnected`. */
 export const KNOWN_STATES = [
   "idle",
+  "sending",
   "thinking",
   "tool_running",
   "waiting_permission",
@@ -28,6 +30,7 @@ export interface Expression {
 
 const EXPRESSIONS: Record<KnownState, Expression> = {
   idle: { variant: "idle", label: "idle" },
+  sending: { variant: "sending", label: "sending" },
   thinking: { variant: "thinking", label: "thinking" },
   tool_running: { variant: "tool_running", label: "tool running" },
   waiting_permission: {

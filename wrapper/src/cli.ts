@@ -25,6 +25,7 @@ import type { Envelope, KaoiroState } from "./types.js";
 
 const COLOR: Record<KaoiroState, string> = {
   idle: "90", // grey
+  sending: "93", // bright yellow
   thinking: "36", // cyan
   tool_running: "33", // yellow
   waiting_permission: "35", // magenta

@@ -112,6 +112,19 @@ export function stepState(
         next: { ...machine, state: "tool_running" },
         emitted: ["tool_running"],
       };
+    case "user_send": {
+      // An instruction was accepted while the agent was at rest: show the
+      // optimistic `sending` state until the model's first message lands
+      // (#32). A send mid-turn (thinking/tool_running/waiting_permission) is
+      // only queued, so it leaves the visible state untouched.
+      const atRest =
+        machine.state === "idle" ||
+        machine.state === "waiting_input" ||
+        machine.state === "done" ||
+        machine.state === "error";
+      if (!atRest) return { next: machine, emitted: [] };
+      return { next: { ...machine, state: "sending" }, emitted: ["sending"] };
+    }
     case "ignore":
       return { next: machine, emitted: [] };
   }

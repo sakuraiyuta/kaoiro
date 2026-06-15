@@ -180,9 +180,6 @@
 
   let instruction = $state("");
   let actionError = $state("");
-  // Optimistic "sent, awaiting the agent's next state" flag (#32). Purely
-  // client-side; cleared by the next state envelope, not by the protocol.
-  let sending = $state(false);
   // tool_use_id under the pointer, so its tool_use and tool_result both
   // highlight while hovered (#40).
   let hoveredTool = $state<string | null>(null);
@@ -210,13 +207,6 @@
     actionError = "";
   });
 
-  // Drop the optimistic "sending" flag once the agent's next state lands
-  // (#32): the new state envelope means the turn has started.
-  $effect(() => {
-    void envelope.ts;
-    sending = false;
-  });
-
   async function run(action: () => Promise<void>): Promise<void> {
     actionError = "";
     try {
@@ -230,17 +220,9 @@
     event.preventDefault();
     const text = instruction.trim();
     if (!connection || text === "") return;
-    sending = true;
     void run(async () => {
-      try {
-        await connection.sendInstruction(envelope.agent_id, text);
-        instruction = "";
-      } catch (error) {
-        // A refused send never triggers a state transition, so clear the
-        // flag here rather than waiting for one. Rethrow so run() surfaces it.
-        sending = false;
-        throw error;
-      }
+      await connection.sendInstruction(envelope.agent_id, text);
+      instruction = "";
     });
   }
 
@@ -463,7 +445,7 @@
 
         <form class="instruct" onsubmit={sendInstruction}>
           <textarea
-            class:sending
+            class:sending={display.shown === "sending"}
             placeholder="指示を送る…(Ctrl+Enter で送信)"
             bind:value={instruction}
             onkeydown={onInstructionKeydown}
@@ -473,7 +455,7 @@
           <button type="submit" disabled={instruction.trim() === ""}>送信</button>
         </form>
 
-        {#if sending}
+        {#if display.shown === "sending"}
           <p class="sending-note">送信中… 応答待ち</p>
         {/if}
 
@@ -537,6 +519,7 @@
     }
   }
 
+  .detail[data-state="sending"] { --tone: var(--c-sending); }
   .detail[data-state="thinking"] { --tone: var(--c-thinking); }
   .detail[data-state="tool_running"] { --tone: var(--c-tool_running); }
   .detail[data-state="waiting_permission"] {
@@ -939,8 +922,8 @@
     resize: vertical;
   }
 
-  /* Awaiting-response cue (#32): dark-yellow field while a send is in
-     flight, until the agent's next state envelope clears it. */
+  /* Awaiting-response cue (#32): dark-yellow field while the agent is in the
+     wrapper-issued `sending` state, until its first real turn state lands. */
   .instruct textarea.sending {
     background: color-mix(in srgb, var(--c-tool_running) 22%, var(--bg-card));
     border-color: var(--c-tool_running);

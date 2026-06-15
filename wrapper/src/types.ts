@@ -1,10 +1,12 @@
 // Common event/protocol v0 types and the state-machine input events.
 // Mirrors docs/specs/protocol.md and docs/specs/agent-sdk-events.md.
 
-/** State set v0 (protocol.md). `disconnected` is derived server-side and is
- *  therefore not handled by the wrapper. */
+/** State set v0 (protocol.md), plus `sending` which the wrapper raises
+ *  locally when it accepts an instruction (#32). `disconnected` is derived
+ *  server-side and is therefore not handled by the wrapper. */
 export type KaoiroState =
   | "idle"
+  | "sending"
   | "thinking"
   | "tool_running"
   | "waiting_permission"
@@ -90,6 +92,10 @@ export type AdapterEvent =
   | { kind: "permission_request" }
   /** canUseTool resolved (UI returned allow/deny) */
   | { kind: "permission_resolved" }
+  /** An operator instruction was accepted into the input queue. Not an SDK
+   *  message — the host raises it so a turn started from rest shows `sending`
+   *  until the model's first message arrives (#32). */
+  | { kind: "user_send" }
   /** SDKPartialAssistantMessage and other messages with no coarse-state effect */
   | { kind: "ignore" };
 

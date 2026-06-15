@@ -285,6 +285,26 @@ describe("AgentHost — input queue/notify/close", () => {
     expect(received).toEqual(["a", "b"]);
   });
 
+  it("send は rest 状態で sending を発行する (#32)", async () => {
+    const states: string[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => states.push(e.state),
+      queryFn,
+      now: () => "T",
+    });
+    const done = host.run();
+    host.send("hello");
+    host.close();
+    await done;
+    expect(states).toContain("sending");
+  });
+
   it("close 後の send は投げる", () => {
     const host = new AgentHost(config, {
       onState: () => {},

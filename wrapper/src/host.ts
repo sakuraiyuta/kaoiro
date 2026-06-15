@@ -150,6 +150,10 @@ export class AgentHost {
       parent_tool_use_id: null,
       message: { role: "user", content: text },
     });
+    // Optimistic `sending` state (#32): raised here, where the host knows the
+    // instruction was accepted, rather than waiting for an SDK message that
+    // may not land until the model's first token.
+    this.#apply({ kind: "user_send" });
     this.#wake();
   }
 
