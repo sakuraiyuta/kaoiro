@@ -29,6 +29,7 @@ import {
   stepState,
 } from "./state.js";
 import {
+  sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToLogs,
   sdkMessageToResult,
@@ -170,7 +171,7 @@ export class AgentHost {
       for (const entry of sdkMessageToLogs(message)) this.#emitLog(entry);
       const result = sdkMessageToResult(message);
       if (result) {
-        this.#emitResult(result);
+        this.#emitResult(result, sdkMessageToCost(message));
         this.#toolNames.clear();
       }
     }
@@ -264,8 +265,9 @@ export class AgentHost {
     }
   }
 
-  /** Relays the turn's final reply via onLog (result envelope). */
-  #emitResult(payload: ResultPayload): void {
+  /** Relays the turn's final reply via onLog (result envelope). The session's
+   *  cumulative cost, when known, rides along in ext.cost (#8). */
+  #emitResult(payload: ResultPayload, cost: number | null): void {
     const onLog = this.#options.onLog;
     if (!onLog) return;
     const out: ResultPayload = {};
@@ -273,7 +275,8 @@ export class AgentHost {
     // to stay under the server's envelope cap.
     if (typeof payload.text === "string") out.text = clipText(payload.text).text;
     if (payload.is_error) out.is_error = true;
-    onLog(makeResult(this.#config, this.#now(), out));
+    const ext = cost !== null ? { cost } : {};
+    onLog(makeResult(this.#config, this.#now(), out, ext));
   }
 
   async *#input(): AsyncGenerator<SDKUserMessage> {

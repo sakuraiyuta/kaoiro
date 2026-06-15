@@ -85,7 +85,7 @@ flowchart LR
 | `type` | イベント種別 | 閉じた enum。下記「type と payload」 |
 | `state` | 状態機械の現在状態 | 下記参照 |
 | `payload` | 種別ごとの本体 | 型は `type` に依存。下記「type と payload」 |
-| `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。初期は空 |
+| `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。`cost`(累計 USD)は実装済(#8、Claude Code アダプタが result に付与)。他は初期空 |
 
 ### type と payload(v0 確定)
 
@@ -97,7 +97,7 @@ flowchart LR
 | `state_change` | **確定** | `{ label?: string, summary?: string }`。`label` は短い行先表示(例 `"Edit src/foo.ts"`)、`summary` は人間可読の説明。どちらも省略可 |
 | `log` | **確定** | `{ kind: "assistant" \| "tool_use" \| "tool_result" \| "user", text?, tool_name?, tool_use_id?, input?, output?, truncated? }`。エージェント応答の逐次中継。`assistant`=モデル発話(`text`)、`tool_use`=ツール呼出(`tool_name`/`input`)、`tool_result`=実行結果(`tool_name`/`output`)、`user`=operator 指示を会話ログにエコー(`text`、#31。wrapper が instruction 受信時に発行し、履歴・operator 限定配信に乗る)。`tool_use_id` は `tool_use`/`tool_result` の対応付け用(#40。SDK が付与した時のみ)。tool 入出力はクライアント UI で折りたたみ既定。長文は wrapper が切り詰め(`truncated: true`)。**operator role のみへ配信**(viewer 非配信。シークレット混入の主経路、[threat-model](threat-model.md)、[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
 | `permission_request` | **確定** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`。`request_id` はラッパー生成のセッション内一意 ID([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。`input` はツール入力(ラッパーが 16KB 程度に切り詰め、切り詰め時 `truncated: true`。シークレット混入リスクは [threat-model](threat-model.md))。state は `waiting_permission` |
-| `result` | **確定** | `{ text?: string, is_error?: boolean }`。ターン完了時の最終応答。`is_error` でエラー終了を区別。state は `done`/`error` の後 `waiting_input`。`log` と同様 **operator 限定配信**([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
+| `result` | **確定** | `{ text?: string, is_error?: boolean }`。ターン完了時の最終応答。`is_error` でエラー終了を区別。state は `done`/`error` の後 `waiting_input`。累計コスト USD は `ext.cost` に付与(#8)。`log` と同様 **operator 限定配信**([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
 
 ### 方向別メッセージ種別(v0 確定)
 

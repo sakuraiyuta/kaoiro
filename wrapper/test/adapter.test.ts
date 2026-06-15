@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
+  sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToLogs,
   sdkMessageToResult,
@@ -198,6 +199,26 @@ describe("sdkMessageToResult", () => {
 
   it("result 以外は null", () => {
     expect(sdkMessageToResult(assistant([{ type: "text", text: "x" }]))).toBeNull();
+  });
+});
+
+describe("sdkMessageToCost", () => {
+  it("result の total_cost_usd を返す", () => {
+    expect(
+      sdkMessageToCost(
+        msg({ type: "result", subtype: "success", total_cost_usd: 0.0123 }),
+      ),
+    ).toBe(0.0123);
+  });
+
+  it("total_cost_usd が number でなければ null", () => {
+    expect(
+      sdkMessageToCost(msg({ type: "result", subtype: "success" })),
+    ).toBeNull();
+  });
+
+  it("result 以外は null", () => {
+    expect(sdkMessageToCost(assistant([{ type: "text", text: "x" }]))).toBeNull();
   });
 });
 

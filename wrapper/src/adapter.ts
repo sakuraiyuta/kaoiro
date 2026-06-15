@@ -212,3 +212,13 @@ export function sdkMessageToResult(message: SDKMessage): ResultPayload | null {
   }
   return payload;
 }
+
+/** Cumulative session cost (USD) from a result message for the ext.cost
+ *  filter (#8), or null for non-result messages. Carried in the envelope's
+ *  ext, not the result payload, per the plugin-model. */
+export function sdkMessageToCost(message: SDKMessage): number | null {
+  if (message.type !== "result") return null;
+  return typeof message.total_cost_usd === "number"
+    ? message.total_cost_usd
+    : null;
+}

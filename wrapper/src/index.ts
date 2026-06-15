@@ -25,6 +25,7 @@ export {
 export type { MachineState } from "./state.js";
 export { ConfigError, loadConfig, parseConfig } from "./persona.js";
 export {
+  sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToLogs,
   sdkMessageToResult,

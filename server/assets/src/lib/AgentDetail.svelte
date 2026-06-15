@@ -62,6 +62,13 @@
   );
   const permission = $derived(permissionRequestOf(envelope));
 
+  // Cumulative session cost (USD) carried in ext.cost (#8), or null when the
+  // wrapper did not attach it.
+  function costUsd(env: Envelope): number | null {
+    const cost = env.ext?.cost;
+    return typeof cost === "number" ? cost : null;
+  }
+
   // Wall-clock time of a log line from its envelope ts (#38). Invalid or
   // missing timestamps render as empty rather than "Invalid Date".
   function formatTime(ts: string): string {
@@ -291,10 +298,14 @@
               <pre>{log.output ?? ""}{log.truncated ? "\n…(省略)" : ""}</pre>
             </details>
           {:else if res}
+            {@const cost = costUsd(env)}
             <!-- The reply text already shows as the final assistant log; the
                  result only marks the turn boundary, not a duplicate (#29). -->
             <p class="turn-end" class:error={res.is_error}>
               {res.is_error ? "エラーで終了" : "応答完了"}
+              {#if cost !== null}
+                <span class="cost">${cost.toFixed(4)}</span>
+              {/if}
               <time class="ts" datetime={env.ts}>{time}</time>
             </p>
           {/if}
@@ -608,6 +619,14 @@
 
   .turn-end .ts {
     margin-left: 0.5em;
+  }
+
+  /* Session cost on the turn boundary (#8). */
+  .cost {
+    margin-left: 0.5em;
+    font-size: 0.68rem;
+    color: var(--fg-dim);
+    font-variant-numeric: tabular-nums;
   }
 
   .tool {

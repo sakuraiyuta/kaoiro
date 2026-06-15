@@ -179,11 +179,13 @@ export function makeLog(
 }
 
 /** Wraps a turn's final reply into the common envelope v0 (protocol.md
- *  type="result"). state mirrors the terminal done/error. */
+ *  type="result"). state mirrors the terminal done/error. `ext` carries
+ *  filter-added fields such as `cost` (#8). */
 export function makeResult(
   config: WrapperConfig,
   ts: string,
   payload: ResultPayload,
+  ext: Record<string, unknown> = {},
 ): Envelope {
   return {
     version: "0",
@@ -193,7 +195,7 @@ export function makeResult(
     type: "result",
     state: payload.is_error ? "error" : "done",
     payload: payload as unknown as Record<string, unknown>,
-    ext: {},
+    ext,
   };
 }
 
