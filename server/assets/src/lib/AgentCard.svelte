@@ -84,6 +84,7 @@
     onclick={selectFrom}
     aria-label="{name} の詳細を開く"
   >
+    <span class="lamp" title={expression.label}></span>
     {#if attention}
       <span class="badge" data-state={expression.variant}>要対応</span>
     {/if}
@@ -383,6 +384,19 @@
 
   .badge[data-state="error"] {
     background: var(--c-error);
+  }
+
+  /* State lamp (#16): same dot as the detail pane's, coloured by --tone.
+     Top-left here since the needs-attention badge owns the top-right. */
+  .lamp {
+    position: absolute;
+    top: 0.2rem;
+    left: 0.2rem;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 50%;
+    background: var(--tone);
+    box-shadow: 0 0 6px var(--tone);
   }
 
   @keyframes blink {
