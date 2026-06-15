@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "demo": "node dist/cli.js kaoiro.config.json"
+    "demo": "for f in agent.*.json; do node dist/cli.js \"$f\" & done; wait"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
