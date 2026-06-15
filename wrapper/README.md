@@ -33,6 +33,10 @@ pnpm test       # vitest
 pnpm typecheck  # tsc --noEmit
 ```
 
+`pnpm test` / `pnpm typecheck` は push / PR ごとに Gitea Actions
+([.gitea/workflows/ci.yml](../.gitea/workflows/ci.yml))でも実行する
+(ダッシュボード `server/assets` の `check` / `build` も同 CI で回す)。
+
 ## 設定(kaoiro.config.json)
 
 ラッパーは設定ファイル(既定 `kaoiro.config.json`)を読み込む。例は

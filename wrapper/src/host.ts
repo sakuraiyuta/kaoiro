@@ -85,6 +85,8 @@ export interface AgentHostOptions {
    * defaults; canUseTool is reserved by the host and cannot be overridden.
    */
   queryOptions?: Partial<Options>;
+  /** SDK query() factory; injectable for tests. Defaults to the real SDK. */
+  queryFn?: typeof query;
   /** ISO-8601 timestamp source; injectable for tests. */
   now?: () => string;
 }
@@ -98,6 +100,7 @@ export interface AgentHostOptions {
 export class AgentHost {
   readonly #config: WrapperConfig;
   readonly #options: AgentHostOptions;
+  readonly #queryFn: typeof query;
   readonly #now: () => string;
 
   readonly #queue: SDKUserMessage[] = [];
@@ -112,6 +115,7 @@ export class AgentHost {
   constructor(config: WrapperConfig, options: AgentHostOptions) {
     this.#config = config;
     this.#options = options;
+    this.#queryFn = options.queryFn ?? query;
     this.#now = options.now ?? (() => new Date().toISOString());
   }
 
@@ -162,7 +166,7 @@ export class AgentHost {
       // waiting_permission.
       canUseTool: (toolName, input) => this.#canUseTool(toolName, input),
     };
-    const session = query({ prompt: this.#input(), options });
+    const session = this.#queryFn({ prompt: this.#input(), options });
     this.#query = session;
     for await (const message of session) {
       // State first, so a log envelope carries the state this message
