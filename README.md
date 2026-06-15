@@ -42,6 +42,21 @@ Phase 2(キャラ表示)に着手中。最新の進捗は
 Claude Code を最初の対象とする。他エージェント(Codex 等)は将来、
 **アダプタ・プラグイン**として追加する(`docs/specs/plugin-model.md`)。
 
+## 開発(ローカル起動)
+
+全層(サーバ + ダッシュボード + ラッパー)をホットリロード/watch 付きで
+一括起動する:
+
+```sh
+./scripts/dev.sh
+```
+
+`server/.env` を読み込み(`KAOIRO_CLIENT_TOKENS` 必須)、Phoenix(:4000)・
+Vite ダッシュボード(:5173, HMR)・ラッパー各エージェント(`tsx watch` で
+`agent.*.json` ごとに自動再起動)を起動し、Ctrl-C で一括停止する。env・
+トークン設定や各コンポーネントの個別起動は
+[server/README.md](server/README.md) の「ローカル開発」を参照。
+
 ## ドキュメント
 
 構造化ドキュメントは [docs/](docs/) を参照。

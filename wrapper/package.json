@@ -8,11 +8,13 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "demo": "for f in agent.*.json; do node dist/cli.js \"$f\" & done; wait"
+    "demo": "for f in agent.*.json; do node dist/cli.js \"$f\" & done; wait",
+    "dev": "for f in agent.*.json; do [ -e \"$f\" ] || continue; tsx watch src/cli.ts \"$f\" & done; wait"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/phoenix": "^1.6.7",
+    "tsx": "^4.22.4",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   },

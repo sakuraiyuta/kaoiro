@@ -86,6 +86,10 @@ docker compose up -d --build
 
 ### ローカル開発(ホットリロード)
 
+> 一括起動なら repo ルートの `./scripts/dev.sh`(サーバ + Vite ダッシュボード +
+> ラッパーをホットリロード/watch 付きで起動し、Ctrl-C で一括停止)。`.env` の
+> source とラッパーの `tsx watch` 起動もまとめて行う。以下はその手動の内訳。
+
 開発時は docker を使わず、サーバとクライアントをホストで直接起動する。
 docker compose は prod release(コンパイル済みを焼き込む)の通し検証用で、
 ソースを変えても自動反映しない — ホットリロードには使わない。
