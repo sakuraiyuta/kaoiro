@@ -28,6 +28,12 @@ function loadMermaid(): Promise<typeof import("mermaid").default> {
         startOnLoad: false,
         securityLevel: "strict",
         theme: "dark",
+        // Render node/edge labels as SVG <text>, not HTML <foreignObject>
+        // (#42). The defence-in-depth DOMPurify pass below strips a
+        // foreignObject's inner HTML entirely (verified), which left every
+        // node blank; <text> labels survive sanitization and pick up their
+        // colour from mermaid's <style> block, which also survives.
+        htmlLabels: false,
       });
       return mermaid;
     });
@@ -59,8 +65,11 @@ export async function renderMermaidIn(container: HTMLElement): Promise<void> {
       // Defence-in-depth: mermaid sanitizes internally under securityLevel
       // "strict", but the diagram is untrusted-derived, so route the SVG
       // through the same DOMPurify chokepoint as renderMarkdown before it
-      // reaches the DOM. svg+html profiles keep mermaid's shapes and the
-      // <foreignObject> HTML labels while stripping scripts/handlers.
+      // reaches the DOM. The svg/svgFilters profiles keep mermaid's shapes
+      // and its <text> labels (htmlLabels:false above means no
+      // <foreignObject> HTML labels are emitted); the html profile is kept
+      // defensively for any stray inline HTML, while scripts/handlers are
+      // still stripped.
       figure.innerHTML = DOMPurify.sanitize(svg, {
         USE_PROFILES: { svg: true, svgFilters: true, html: true },
       });
