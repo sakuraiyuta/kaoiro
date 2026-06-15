@@ -53,6 +53,14 @@ related: [protocol, threat-model]
   は server なしでも完了できる)。
 - **server 接続の分岐**: 接続するか yes/no で分岐。no ならローカルのみモードで
   `server_url` / `server_token` を省略する。
+- **初回起動で自動起動**: 設定ファイルが無い初回起動時はウィザードを自動的に
+  起動する(配布バイナリ運用、[ADR-0018](../adr/0018-runner-distribution.md))。
+- **設定の配置(配布時)**: 配布インストールでは設定をインストール先でなく
+  **OS 別のユーザ設定ディレクトリ**(Linux `~/.config`、macOS
+  `~/Library/Application Support`、Windows `%APPDATA%`)に置く。開発時は従来の
+  `wrapper/kaoiro.config.json` も可。
+- **CLI のみ**: ウィザードは対話 CLI で完結し GUI を要さない(ヘッドレスホスト
+  対応、[ADR-0018](../adr/0018-runner-distribution.md))。
 
 ## server env ウィザード(.env)
 
@@ -93,4 +101,5 @@ related: [protocol, threat-model]
 ## See Also
 
 - 関連 specs: [protocol](protocol.md), [threat-model](threat-model.md)
-- ADRs: [0011](../adr/0011-phase3-reliability-and-auth.md) — トークン認証
+- ADRs: [0011](../adr/0011-phase3-reliability-and-auth.md) — トークン認証、
+  [0018](../adr/0018-runner-distribution.md) — 配布(初回ウィザード自動・配置)

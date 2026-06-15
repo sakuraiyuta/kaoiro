@@ -17,6 +17,11 @@
 ## 将来
 
 - アダプタ拡張(Codex 等)— コアの agent 非依存性を保ったまま追加。
+- wrapper のマルチエンティティ・パッケージ構造化(3層 pnpm workspace、
+  [ADR-0017](../adr/0017-wrapper-multientity-packages.md))— 主要機能が
+  出揃ってから着手。
+- wrapper/runner の配布(OS 別単一バイナリ・CLI のみ・Gitea release、
+  [ADR-0018](../adr/0018-runner-distribution.md))— 同上。
 
 ## Status legend
 

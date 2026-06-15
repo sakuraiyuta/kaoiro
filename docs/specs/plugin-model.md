@@ -43,6 +43,16 @@ related: [architecture, protocol]
   --(Filter chain)--> [Server(状態保持)] --> [Client]
 ```
 
+### パッケージ構造とエンティティ拡張(将来)
+
+アダプタ/コアの分離は、将来 **pnpm ワークスペースの3層パッケージ**へ落とす
+([ADR-0017](../adr/0017-wrapper-multientity-packages.md)、着手は主要機能が
+出揃ってから): エンティティ非依存コア(`wrapper/core`)/ AI エージェント共通層
+(状態機械・permission・instruction)/ 具体アダプタ(`wrapper/claude-code`・
+`wrapper/codex`・将来 DB・ホストモニタ等)。状態機械・permission・instruction は
+AI 固有でありコアに置かない。最終的には AI に限らず多様なエンティティの状態を
+キャラクターとして可視化することを狙う(広い狙いは別途 vision で扱う)。
+
 ## Constraints
 
 - MUST: フィルタは `payload` / `ext` だけを触り、外枠(`version`,`agent_id`,

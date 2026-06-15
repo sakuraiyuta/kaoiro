@@ -35,6 +35,8 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0014](adr/0014-session-resume-and-restore.md) | セッション resume で wrapper を復帰・召喚 | accepted |
 | [0015](adr/0015-protocol-version-stamping.md) | 全通信へ version 付与・不一致は警告しつつ受理 | accepted |
 | [0016](adr/0016-error-body-relay.md) | ラッパーエラー本文を result.error_message でリレー | accepted |
+| [0017](adr/0017-wrapper-multientity-packages.md) | wrapper を3層 pnpm ワークスペースへ(マルチエンティティ) | accepted |
+| [0018](adr/0018-runner-distribution.md) | wrapper/runner は OS 別単一バイナリ・CLI のみ・Gitea release | accepted |
 
 ## 更新フロー
 
