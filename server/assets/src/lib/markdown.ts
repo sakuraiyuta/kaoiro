@@ -14,3 +14,53 @@ export function renderMarkdown(text: string): string {
   const html = marked.parse(text, { async: false, breaks: true });
   return DOMPurify.sanitize(html);
 }
+
+// Mermaid (#42) is lazy-loaded so non-diagram replies never pull the large
+// library, and run with securityLevel:"strict" so the diagram source — which
+// originates from the untrusted agent reply — is sanitized by mermaid itself.
+let mermaidReady: Promise<typeof import("mermaid").default> | null = null;
+let mermaidSeq = 0;
+
+function loadMermaid(): Promise<typeof import("mermaid").default> {
+  if (mermaidReady === null) {
+    mermaidReady = import("mermaid").then(({ default: mermaid }) => {
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: "dark",
+      });
+      return mermaid;
+    });
+  }
+  return mermaidReady;
+}
+
+/**
+ * Renders any ```mermaid fences already present in `container` (the sanitized
+ * markdown emits them as <pre><code class="language-mermaid">) into SVG
+ * diagrams in place. Idempotent: already-rendered blocks carry no such code
+ * element, so re-running after each transcript update only renders new ones.
+ * A diagram that fails to parse is left as its source code block.
+ */
+export async function renderMermaidIn(container: HTMLElement): Promise<void> {
+  const blocks = container.querySelectorAll<HTMLElement>(
+    "code.language-mermaid",
+  );
+  if (blocks.length === 0) return;
+  const mermaid = await loadMermaid();
+  for (const code of blocks) {
+    const pre = code.closest("pre");
+    if (pre === null) continue;
+    const id = `kaoiro-mmd-${mermaidSeq++}`;
+    try {
+      const { svg } = await mermaid.render(id, code.textContent ?? "");
+      const figure = document.createElement("div");
+      figure.className = "mermaid-rendered";
+      figure.innerHTML = svg;
+      pre.replaceWith(figure);
+    } catch {
+      // Mermaid leaves an orphan measuring node behind on a parse error.
+      document.getElementById(`d${id}`)?.remove();
+    }
+  }
+}

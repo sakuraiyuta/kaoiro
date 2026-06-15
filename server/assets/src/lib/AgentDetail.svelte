@@ -2,7 +2,7 @@
   import { tick, untrack } from "svelte";
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
-  import { renderMarkdown } from "./markdown";
+  import { renderMarkdown, renderMermaidIn } from "./markdown";
   import { logOf, permissionRequestOf, resultOf } from "./protocol";
   import type {
     Envelope,
@@ -96,11 +96,14 @@
   let sending = $state(false);
   let logEl = $state<HTMLDivElement | null>(null);
 
-  // Keep the transcript pinned to the latest line as it streams.
+  // Render any new mermaid diagrams (#42), then keep the transcript pinned to
+  // the latest line (diagrams change the scroll height, so scroll after).
   $effect(() => {
     void logs.length;
-    void tick().then(() => {
-      if (logEl) logEl.scrollTop = logEl.scrollHeight;
+    void tick().then(async () => {
+      if (!logEl) return;
+      await renderMermaidIn(logEl);
+      logEl.scrollTop = logEl.scrollHeight;
     });
   });
 
@@ -498,6 +501,17 @@
   }
 
   .msg :global(pre code) { color: var(--fg); }
+
+  /* Rendered mermaid diagram (#42): centre it and keep the SVG responsive. */
+  .msg :global(.mermaid-rendered) {
+    margin: 0.5rem 0;
+    text-align: center;
+  }
+
+  .msg :global(.mermaid-rendered svg) {
+    max-width: 100%;
+    height: auto;
+  }
 
   .msg.assistant {
     background: var(--bg-card);
