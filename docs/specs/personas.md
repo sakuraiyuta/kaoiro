@@ -39,6 +39,32 @@ Phase 2 タスク 2-3(表情差分の量産)と将来のペルソナ追加が参
 ための設計資料(例: 同じ `done` でも ao は小さなドヤ顔、momo は満面の
 笑み、kuroe は控えめな微笑と会釈)。
 
+### デフォルトペルソナ(素の AI)
+
+性格付けのない「素の AI エージェント」用に、立ち絵を持たない既定ペルソナ
+を 1 体用意する。スプライトを同梱せず、リファレンスダッシュボードの
+CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `AgentCard`)で
+そのまま表示する。
+
+| persona.id | 名前 | sprite_set | 立ち絵 | 性格付け |
+|---|---|---|---|---|
+| `default` | デフォルト | `default` | なし(CSS 顔) | なし |
+
+- `sprite_set` の `default` は予約値で、`server/priv/personas/` に同名
+  パックを置かない。マニフェスト未掲載となり、クライアントはスプライト
+  なし描画(CSS 顔)へフォールバックする([protocol](protocol.md) の
+  「ペルソナアセット配信」)。
+- 7 状態の表情画像を揃える MUST(下記 Constraints)の対象外 — 意図的に
+  CSS 顔を用いる唯一のペルソナ。
+- 将来、kaoiro クライアントからエージェントを追加起動する際の既定の
+  選択肢として常に提示する(起動機能の実装に依存)。
+- ラッパー設定の `persona` ブロック例(全体構造は
+  [wrapper/kaoiro.config.example.json](../../wrapper/kaoiro.config.example.json)):
+
+```json
+"persona": { "id": "default", "name": "デフォルト", "sprite_set": "default" }
+```
+
 ### 表情セット(状態 → 演技)
 
 生成対象は 7 状態。`disconnected` は生成せず、クライアント側で idle の
@@ -106,7 +132,8 @@ isnet-anime で背景除去、git 管理外)。正式配置済みの git 管理�
 
 ## Constraints
 
-- 各ペルソナは 7 状態すべての表情画像を MUST で揃える。
+- 各ペルソナは 7 状態すべての表情画像を MUST で揃える(`default`
+  ペルソナは除く — 立ち絵を持たず CSS 顔で表示する)。
 - `disconnected` の画像は生成しない(MUST NOT)。クライアント側の
   グレースケール表現に統一する。
 - `persona.id` は安定 ID であり変更しない
