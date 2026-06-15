@@ -84,10 +84,41 @@ docker compose up -d --build
 中央 nginx(WebSocket の Upgrade/Connection 転送・`proxy_read_timeout` > 60s)
 配下に置く。
 
-### ローカル(mix)
+### ローカル開発(ホットリロード)
 
-`mix phx.server` 単体ではダッシュボードが接続拒否されるため、
-`KAOIRO_CLIENT_TOKENS` を環境変数で渡す:
+開発時は docker を使わず、サーバとクライアントをホストで直接起動する。
+docker compose は prod release(コンパイル済みを焼き込む)の通し検証用で、
+ソースを変えても自動反映しない — ホットリロードには使わない。
+
+env は **docker と同じ `.env` を共用する**(二重管理を避ける)。
+`mix phx.server` は `.env` を自動で読まないので、起動前に source する。
+dev で最低限必要なのは `KAOIRO_CLIENT_TOKENS` のみ(`SECRET_KEY_BASE` は
+`config/dev.exs` のハードコード値、`PHX_HOST` は `localhost` 既定が効くため
+dev では不要)。
+
+```sh
+cd server
+cp .env.example .env        # Docker 用に用意済みならそのまま使える
+# .env に最低限: KAOIRO_CLIENT_TOKENS=dev-op:operator
+
+# 1) サーバ(別ターミナル。lib/ の変更は code_reloader が保存時に自動反映)
+set -a && . ./.env && set +a && mix phx.server
+
+# 2) クライアント(別ターミナル。Vite dev server で HMR)
+cd assets && pnpm dev
+```
+
+- サーバ: `config/dev.exs` の `code_reloader: true` で `lib/` の変更を保存時に
+  自動再コンパイル・反映。`.env` を書き換えたときだけ source し直して再起動する。
+- クライアント: Vite が表示する URL(既定 `http://localhost:5173`)を開く。
+  `defaultSocketUrl` は origin 基準で `/client` に繋ぐため、その WebSocket は
+  `assets/vite.config.ts` の proxy で 4000 の Phoenix へ転送される
+  (dev は `check_origin: false`)。ダッシュボードは従来どおり `?token=<token>`
+  が必要: `http://localhost:5173/?token=dev-op`。
+- `.env` は単純な `KEY=VALUE` 形式にする(値にスペースやクォートを含めると
+  `set -a && . ./.env` での読み込みが壊れる)。
+
+最小確認だけなら source せず 1 変数を inline で渡してもよい(HMR なし):
 
 ```sh
 KAOIRO_CLIENT_TOKENS=dev-op:operator mix phx.server
