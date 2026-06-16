@@ -18,6 +18,9 @@ export interface Persona {
 export interface Envelope {
   version: string;
   agent_id: string;
+  /** SDK conversation session id (protocol.md / ADR-0014); absent until the
+   * wrapper reports one. Used to group/clear the transcript by session. */
+  session_id?: string;
   persona?: Persona;
   ts: string;
   /** Wrapper-issued monotonic sequence (ADR-0011); absent on
@@ -135,6 +138,9 @@ export interface KaoiroHandlers {
   /** Reply-log history per agent (operator-only, ADR-0012); pushed once
    *  on join, chronological. Absent for viewers. */
   onHistory?: (histories: Record<string, Envelope[]>) => void;
+  /** A past-session log purge (issue #48): the named agent's transcript
+   *  should drop every line outside `sessionId`. Operator-only. */
+  onHistoryCleared?: (agentId: string, sessionId: string) => void;
 }
 
 export interface KaoiroConnection {
@@ -148,6 +154,9 @@ export interface KaoiroConnection {
     requestId: string,
     allow: boolean,
   ) => Promise<void>;
+  /** Purges the agent's past-session reply log (issue #48); rejects like
+   * sendInstruction (forbidden / unknown_agent / no_current_session). */
+  clearHistory: (agentId: string) => Promise<void>;
 }
 
 export interface ConnectOptions {
@@ -225,6 +234,17 @@ export function connectKaoiro(
     }
     handlers.onHistory?.(histories);
   });
+  channel.on(
+    "history_cleared",
+    (payload: { agent_id?: unknown; session_id?: unknown }) => {
+      if (
+        typeof payload.agent_id === "string" &&
+        typeof payload.session_id === "string"
+      ) {
+        handlers.onHistoryCleared?.(payload.agent_id, payload.session_id);
+      }
+    },
+  );
   channel.join();
 
   return {
@@ -240,6 +260,8 @@ export function connectKaoiro(
         request_id: requestId,
         allow,
       }),
+    clearHistory: (agentId) =>
+      pushAsync(channel, "clear_history", { agent_id: agentId }),
   };
 }
 

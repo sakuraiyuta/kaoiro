@@ -285,6 +285,18 @@
       ),
     );
   }
+
+  // Purge past-session reply lines (#48): destructive and irreversible, so
+  // confirm first. No-op without a known current session_id (the button is
+  // disabled then); the server keeps only that session's lines.
+  function clearHistory(): void {
+    if (!connection || !envelope.session_id) return;
+    const ok = window.confirm(
+      "現在のセッション以外の返答ログを消去します。元に戻せません。よろしいですか?",
+    );
+    if (!ok) return;
+    void run(() => connection.clearHistory(envelope.agent_id));
+  }
 </script>
 
 <section class="detail" data-state={expression.variant} in:expandFrom={{ origin }}>
@@ -372,6 +384,23 @@
             </div>
           {/each}
         </dl>
+      {/if}
+
+      {#if connection}
+        <!-- Destructive (#48): purge the server-side reply log of past
+             sessions, keeping only the current one. Disabled until the
+             current session_id is known (nothing to scope the purge to). -->
+        <button
+          type="button"
+          class="clear-history"
+          disabled={!envelope.session_id}
+          title={envelope.session_id
+            ? "現在のセッション以外の返答ログを消去します"
+            : "現在のセッションが不明なため消去できません"}
+          onclick={clearHistory}
+        >
+          過去セッションのログを消去
+        </button>
       {/if}
     </aside>
 
@@ -532,6 +561,30 @@
   .status {
     flex: 0 0 20%;
     min-width: 9rem;
+  }
+
+  .clear-history {
+    margin-top: 0.75rem;
+    width: 100%;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--c-error);
+    border-radius: 0.35rem;
+    background: var(--bg-card);
+    color: var(--c-error);
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .clear-history:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--c-error) 12%, var(--bg-card));
+  }
+
+  .clear-history:disabled {
+    border-color: var(--line);
+    color: var(--fg-dim);
+    cursor: not-allowed;
+    opacity: 0.7;
   }
 
   .main {

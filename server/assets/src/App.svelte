@@ -140,6 +140,16 @@
             }
           },
           onHistory: (histories) => (logs = mergeHistories(histories, logs)),
+          onHistoryCleared: (agentId, sessionId) => {
+            // An operator purged past-session lines (#48); keep only the
+            // surviving session's transcript to match the server buffer.
+            const prev = logs[agentId];
+            if (!prev) return;
+            logs = {
+              ...logs,
+              [agentId]: prev.filter((e) => e.session_id === sessionId),
+            };
+          },
         },
         connectOpts,
       );
