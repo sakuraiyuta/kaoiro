@@ -151,6 +151,10 @@ runner 実装が前提。
   - wrapper が session_id を報告 → サーバが F1 ポインタを軽量永続。
   - Q-A4(過去履歴取得手段)と「resume + streaming 入力継続の可否」を実検証。
   - 検証ゴール: サーバが各 agent の現 session_id を再起動越しに記憶。
+  - **実装状況(#48, 2026-06-16)**: wrapper の session_id 捕捉・報告とエンベロープ
+    への top-level `session_id` 付与は実装済み(過去セッションのログ消去機能と
+    併せて)。サーバはエンベロープの session_id を保持・配信するが、**F1 のポインタ
+    軽量永続(再起動越しの記憶)と Q-A4 の実検証は未了**。
 - **phase-1(#22/#23 runner 前提)**: 復帰本体。
   - #22 spawn の resume モード拡張、runner の候補列挙(F2)、F4 の二重防止、
     T3 検証、クライアント復帰 UI(operator 限定、T2)。

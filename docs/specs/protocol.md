@@ -112,8 +112,10 @@ Channels のチャネルイベント名と内容。トピックは
 | ラッパー → サーバ | `envelope` | エンベロープ全体 |
 | サーバ → クライアント | `snapshot` | `{ agents: { <agent_id>: envelope } }`。join 直後に push |
 | サーバ → クライアント | `envelope` | エンベロープ全体(状態変化の都度 broadcast) |
+| サーバ → クライアント | `history_cleared` | `{ agent_id, session_id }`。`clear_history` 成功後に broadcast。クライアントは当該 agent の表示用ログを `session_id` 一致のものだけへ再フィルタ(#48) |
 | クライアント → サーバ | `instruction` | `{ agent_id, text }`。**operator のみ**。サーバは text を解釈せず該当ラッパーへ relay。未知 agent_id は `{:error, unknown_agent}` |
 | クライアント → サーバ | `permission_decision` | `{ agent_id, request_id, allow, message? }`。**operator のみ**。該当ラッパーへ relay |
+| クライアント → サーバ | `clear_history` | `{ agent_id }`。**operator のみ**。当該 agent の過去セッション(現在の `session_id` 以外/無し)の返答ログを**サーバのインメモリ・リングバッファ**から消去し `history_cleared` を broadcast。掃除するのは表示用履歴のみで wrapper の JSONL には触れない。未知 agent は `unknown_agent`、現在 `session_id` 不明は `no_current_session`(#48) |
 | サーバ → ラッパー | `instruction` | `{ text }`(relay。ラッパーは入力キューへ投入) |
 | サーバ → ラッパー | `permission_decision` | `{ request_id, allow, message? }`(relay。`request_id` で保留中の承認と突合) |
 
