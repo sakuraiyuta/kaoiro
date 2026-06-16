@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
-  import { expressionFor } from "./lib/expression";
+  import { expressionFor, spriteUrlFor } from "./lib/expression";
   import type {
     ConnectionStatus,
     Envelope,
@@ -163,6 +163,11 @@
     <nav class="agent-strip" aria-label="エージェント一覧">
       {#each sorted as envelope (envelope.agent_id)}
         {@const expr = expressionFor(envelope.state)}
+        {@const sprite = spriteUrlFor(
+          manifest,
+          envelope.persona?.sprite_set,
+          envelope.state,
+        )}
         <button
           type="button"
           class="chip"
@@ -175,6 +180,11 @@
             selected = envelope.agent_id;
           }}
         >
+          {#if sprite}
+            <img class="thumb" src={sprite} alt="" />
+          {:else}
+            <span class="face" aria-hidden="true"></span>
+          {/if}
           <span class="lamp"></span>
         </button>
       {/each}
@@ -281,13 +291,18 @@
     min-width: 0;
   }
 
+  /* Each agent now reads as a miniature grid tile: the persona sprite shrunk
+     into a small cell with its state lamp overlaid on the top-right corner. */
   .chip {
     --tone: var(--c-idle);
+    position: relative;
     display: inline-flex;
-    padding: 0.25rem;
+    width: 2.4rem;
+    height: 2.4rem;
+    padding: 0.15rem;
     border: 1px solid transparent;
     border-radius: 0.4rem;
-    background: none;
+    background: var(--bg-card);
     line-height: 0;
     cursor: pointer;
     transition: border-color 0.2s;
@@ -301,7 +316,33 @@
     border-color: var(--tone);
   }
 
+  /* Shrunk persona sprite filling the cell; disconnected greys out like the
+     grid cards (personas.md). */
+  .chip .thumb {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .chip[data-state="disconnected"] .thumb {
+    filter: grayscale(1);
+    opacity: 0.45;
+  }
+
+  /* Fallback when the manifest has no sprite: a state-coloured disc, matching
+     the detail portrait's simple face. */
+  .chip .face {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--tone) 28%, var(--bg-card));
+    border: 1px solid var(--tone);
+  }
+
   .chip .lamp {
+    position: absolute;
+    top: 0.1rem;
+    right: 0.1rem;
     width: 0.55rem;
     height: 0.55rem;
     border-radius: 50%;
