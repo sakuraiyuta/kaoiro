@@ -13,6 +13,8 @@ defmodule KaoiroServer.AgentStates do
   vanishes on restart (disk persistence is issue #24). `put/2` updates
   the latest state without touching history; `append_log/2` appends a
   reply line and never changes the latest state.
+  `clear_other_sessions/2` drops the history lines outside the agent's
+  current session (issue #48), leaving the latest state untouched.
 
   The one server-derived exception is `disconnected` (specs/protocol.md):
   `disconnect/3` overlays it when the wrapper channel that wrote the
@@ -67,6 +69,20 @@ defmodule KaoiroServer.AgentStates do
   def disconnect(agent_id, owner, ts, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.call(server, {:disconnect, agent_id, owner, ts})
+  end
+
+  @doc """
+  Drops the agent's history lines that do NOT belong to its current
+  session — the `session_id` of its latest state envelope. Lines tagged
+  with a different session_id (or with none) are removed; the current
+  ones stay (issue #48). Returns `{:ok, session_id}` with the surviving
+  session for the caller to broadcast, or `:noop` when the agent is
+  unknown or its current session_id is not known yet. Touches history
+  only; the latest state is left intact.
+  """
+  def clear_other_sessions(agent_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:clear_other_sessions, agent_id})
   end
 
   @doc "Returns the agent_id => latest envelope map."
@@ -132,6 +148,16 @@ defmodule KaoiroServer.AgentStates do
     end
   end
 
+  def handle_call({:clear_other_sessions, agent_id}, _from, state) do
+    with %{^agent_id => %{envelope: env, history: history} = entry} <- state,
+         sid when is_binary(sid) and sid != "" <- Map.get(env, "session_id") do
+      kept = Enum.filter(history, &(Map.get(&1, "session_id") == sid))
+      {:reply, {:ok, sid}, Map.put(state, agent_id, %{entry | history: kept})}
+    else
+      _ -> {:reply, :noop, state}
+    end
+  end
+
   def handle_call(:snapshot, _from, state) do
     {:reply, Map.new(state, fn {id, %{envelope: env}} -> {id, env} end), state}
   end
@@ -147,11 +173,12 @@ defmodule KaoiroServer.AgentStates do
     {:reply, Map.has_key?(state, agent_id), state}
   end
 
-  # Server-derived envelope: keep identity (persona), drop seq — seq is
-  # the wrapper's series (specs/protocol.md).
+  # Server-derived envelope: keep identity (persona) and session_id so a
+  # disconnected agent still reports its current session (issue #48); drop
+  # seq — seq is the wrapper's series (specs/protocol.md).
   defp disconnected_envelope(envelope, ts) do
     envelope
-    |> Map.take(["version", "agent_id", "persona"])
+    |> Map.take(["version", "agent_id", "persona", "session_id"])
     |> Map.merge(%{
       "ts" => ts,
       "type" => "state_change",

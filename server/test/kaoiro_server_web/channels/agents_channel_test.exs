@@ -370,4 +370,74 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_push "envelope", %{"type" => "result"}
     end
   end
+
+  describe "clear_history (issue #48)" do
+    defp state_with_session(agent_id, session_id) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-11T00:00:00Z",
+        "type" => "state_change",
+        "state" => "thinking",
+        "session_id" => session_id
+      }
+    end
+
+    defp log_with_session(agent_id, text, session_id) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-11T00:00:00Z",
+        "type" => "log",
+        "state" => "thinking",
+        "session_id" => session_id,
+        "payload" => %{"kind" => "assistant", "text" => text}
+      }
+    end
+
+    test "operator の clear_history は過去セッションを消し history_cleared を broadcast" do
+      agent_id = "test.clear-1"
+      :ok = AgentStates.put(state_with_session(agent_id, "s2"))
+      :ok = AgentStates.append_log(log_with_session(agent_id, "old", "s1"))
+      :ok = AgentStates.append_log(log_with_session(agent_id, "cur", "s2"))
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "clear_history", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok
+      assert_broadcast "history_cleared", %{"agent_id" => ^agent_id, "session_id" => "s2"}
+      # Only the current session's reply line survives server-side.
+      assert [%{"payload" => %{"text" => "cur"}}] = AgentStates.histories()[agent_id]
+    end
+
+    test "viewer の clear_history は forbidden" do
+      agent_id = "test.clear-2"
+      :ok = AgentStates.put(state_with_session(agent_id, "s2"))
+      socket = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "clear_history", %{"agent_id" => agent_id})
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "未知 agent_id は unknown_agent" do
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "clear_history", %{"agent_id" => "test.clear-none"})
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+
+    test "現在の session_id が無ければ no_current_session" do
+      agent_id = "test.clear-3"
+      # put_agent stores a state envelope WITHOUT session_id.
+      put_agent(agent_id)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "clear_history", %{"agent_id" => agent_id})
+      assert_reply ref, :error, %{reason: "no_current_session"}
+    end
+  end
 end

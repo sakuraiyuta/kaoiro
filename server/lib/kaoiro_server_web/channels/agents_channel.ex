@@ -16,6 +16,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   relayed to the target wrapper topic without interpreting the content
   (agent-agnostic). No delivery guarantee — a relay to a disconnected
   wrapper is lost and the requester learns via timeout (ADR-0011).
+  `clear_history` (operator-only, issue #48) drops the server-side reply
+  log of past sessions and broadcasts `history_cleared` so every client
+  re-filters its transcript; it touches only the in-memory ring buffer,
+  never the wrapper's session logs.
   """
 
   use Phoenix.Channel
@@ -92,6 +96,27 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {"request_id", &is_binary/1},
       {"allow", &is_boolean/1}
     ])
+  end
+
+  # Operator-only purge of an agent's past-session reply log (issue #48).
+  # On success, broadcast `history_cleared` with the surviving session_id
+  # so every client re-filters its local transcript; viewers hold no reply
+  # log and treat it as a no-op. `:noop` (unknown agent / current session
+  # not known yet) is surfaced as an error so the operator UI can tell.
+  def handle_in("clear_history", payload, socket) do
+    with :ok <- require_operator(socket),
+         {:ok, agent_id} <- fetch_agent_id(payload),
+         {:ok, session_id} <- AgentStates.clear_other_sessions(agent_id) do
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_cleared", %{
+        "agent_id" => agent_id,
+        "session_id" => session_id
+      })
+
+      {:reply, :ok, socket}
+    else
+      :noop -> {:reply, {:error, %{reason: "no_current_session"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
   end
 
   # Relays `payload` (minus agent_id, which only addresses the wrapper

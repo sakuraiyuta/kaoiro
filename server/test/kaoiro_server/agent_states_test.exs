@@ -160,4 +160,73 @@ defmodule KaoiroServer.AgentStatesTest do
       assert :noop = AgentStates.append_log(log_env("ghost", 1), server: store)
     end
   end
+
+  describe "clear_other_sessions/2 (issue #48)" do
+    setup do
+      store = start_supervised!({AgentStates, name: :agent_states_clear_test})
+      %{store: store}
+    end
+
+    defp log_sid(agent_id, i, sid),
+      do: Map.put(log_env(agent_id, i), "session_id", sid)
+
+    test "現在のセッション以外(別 session_id / 無し)を落とし現在のみ残す", %{store: store} do
+      # The latest state envelope's session_id defines "current" = s2.
+      :ok =
+        AgentStates.put(envelope("a", %{"state" => "thinking", "session_id" => "s2"}),
+          server: store
+        )
+
+      :ok = AgentStates.append_log(log_sid("a", 1, "s1"), server: store)
+      :ok = AgentStates.append_log(log_sid("a", 2, "s2"), server: store)
+      # No session_id at all -> treated as "other" and dropped.
+      :ok = AgentStates.append_log(log_env("a", 3), server: store)
+      :ok = AgentStates.append_log(log_sid("a", 4, "s2"), server: store)
+
+      assert {:ok, "s2"} = AgentStates.clear_other_sessions("a", server: store)
+
+      texts = Enum.map(AgentStates.histories(store)["a"], & &1["payload"]["text"])
+      assert texts == ["m2", "m4"]
+    end
+
+    test "現在の session_id が不明なら noop で履歴を残す", %{store: store} do
+      :ok = AgentStates.put(envelope("a", %{"state" => "thinking"}), server: store)
+      :ok = AgentStates.append_log(log_sid("a", 1, "s1"), server: store)
+
+      assert :noop = AgentStates.clear_other_sessions("a", server: store)
+      assert length(AgentStates.histories(store)["a"]) == 1
+    end
+
+    test "未知 agent_id は noop", %{store: store} do
+      assert :noop = AgentStates.clear_other_sessions("ghost", server: store)
+    end
+
+    test "disconnected overlay 後も session_id を保持して消去できる", %{store: store} do
+      owner = self()
+
+      :ok =
+        AgentStates.put(
+          envelope("a", %{
+            "version" => "0",
+            "persona" => %{"id" => "ao"},
+            "type" => "state_change",
+            "state" => "thinking",
+            "session_id" => "s2"
+          }),
+          server: store,
+          owner: owner
+        )
+
+      :ok = AgentStates.append_log(log_sid("a", 1, "s1"), server: store)
+      :ok = AgentStates.append_log(log_sid("a", 2, "s2"), server: store)
+
+      assert {:ok, _} =
+               AgentStates.disconnect("a", owner, "2026-06-16T00:00:00Z", server: store)
+
+      # The disconnected overlay keeps session_id, so clear still works.
+      assert AgentStates.snapshot(store)["a"]["session_id"] == "s2"
+      assert {:ok, "s2"} = AgentStates.clear_other_sessions("a", server: store)
+      assert [%{"payload" => %{"text" => "m2"}}] = AgentStates.histories(store)["a"]
+    end
+  end
 end
