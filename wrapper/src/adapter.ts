@@ -252,3 +252,11 @@ export function sdkMessageToInitMeta(
   }
   return meta;
 }
+
+/** The SDK conversation session id carried by a message (every SDKMessage
+ *  variant has one), or null when absent/empty. The host reports it so the
+ *  server can group history by session (protocol.md / ADR-0014 phase-0). */
+export function sdkMessageToSessionId(message: SDKMessage): string | null {
+  const id = (message as { session_id?: unknown }).session_id;
+  return typeof id === "string" && id !== "" ? id : null;
+}

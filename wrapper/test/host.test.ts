@@ -207,6 +207,25 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("SDK の session_id を onSessionId で報告し、変化時のみ再通知する (ADR-0014)", async () => {
+    const ids: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onSessionId: (id) => ids.push(id),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "sess-1" }),
+        // Same id: must not re-notify. A helper-built message carries none.
+        msg({ type: "assistant", session_id: "sess-1", message: { content: [] } }),
+        assistant([{ type: "text", text: "hi" }]),
+        // New id (e.g. compaction forks the session): notify again.
+        result("success", { result: "ok", session_id: "sess-2" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(ids).toEqual(["sess-1", "sess-2"]);
+  });
+
   it("getContextUsage が reject してもセッションは正常終了する (#16)", async () => {
     const queryFn = makeQueryFn(() => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {

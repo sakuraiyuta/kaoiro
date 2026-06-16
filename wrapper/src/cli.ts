@@ -128,6 +128,7 @@ async function main(): Promise<void> {
   host = new AgentHost(config, {
     onState,
     onLog,
+    onSessionId: (id) => link?.setSessionId(id),
     decidePermission: (toolName, input) => {
       if (broker) return broker.decide(toolName, input);
       const allow = READ_ONLY_TOOLS.has(toolName);

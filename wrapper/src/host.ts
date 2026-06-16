@@ -36,6 +36,7 @@ import {
   sdkMessageToLogs,
   sdkMessageToRateLimit,
   sdkMessageToResult,
+  sdkMessageToSessionId,
 } from "./adapter.js";
 
 /** Relayed log text/output above this UTF-8 size is clipped (protocol.md
@@ -75,6 +76,13 @@ export interface AgentHostOptions {
    * Omitted = replies are not relayed.
    */
   onLog?: (envelope: Envelope) => void;
+  /**
+   * Invoked when the SDK first reports a conversation session_id, and again
+   * whenever it changes (init / result, ADR-0014 phase-0). The wrapper
+   * forwards it to ServerLink, which stamps it onto outgoing envelopes so the
+   * server can group history by session. Omitted = the id is not reported.
+   */
+  onSessionId?: (sessionId: string) => void;
   /**
    * Decides a pending tool permission; its awaited duration is the
    * waiting_permission window. Defaults to deny (fail-closed) when omitted.
@@ -148,6 +156,10 @@ export class AgentHost {
     }
     this.#queue.push({
       type: "user",
+      // Empty by design (ADR-0014 phase-0): in streaming-input mode the SDK
+      // owns the conversation and issues the session id itself. We capture the
+      // real id from init/result (sdkMessageToSessionId) and report it on
+      // envelopes; resume targets a session via options.resume, not here.
       session_id: "",
       parent_tool_use_id: null,
       message: { role: "user", content: text },
@@ -188,7 +200,17 @@ export class AgentHost {
     };
     const session = this.#queryFn({ prompt: this.#input(), options });
     this.#query = session;
+    // The SDK stamps a session_id on every message; report it before deriving
+    // state so the envelopes this message produces already carry it. Forward
+    // only on change — the id is stable within a conversation (ADR-0014).
+    let sessionId: string | null = null;
     for await (const message of session) {
+      const id = sdkMessageToSessionId(message);
+      if (id !== null && id !== sessionId) {
+        sessionId = id;
+        this.#options.onSessionId?.(id);
+      }
+
       // Capture Claude Code status meta (#16) before deriving state, so the
       // next state_change envelope carries the latest. Rate-limit events
       // arrive inline; context usage is pulled fire-and-forget so the control

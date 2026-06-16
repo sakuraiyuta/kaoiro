@@ -133,6 +133,10 @@ export interface WrapperConfig {
 export interface Envelope {
   version: "0";
   agent_id: string;
+  /** SDK conversation session id (protocol.md / ADR-0014; one agent_id : N
+   *  session_id). Stamped by ServerLink at send time alongside seq; absent
+   *  until the SDK reports one, and on envelopes that never go to a server. */
+  session_id?: string;
   persona: Persona;
   ts: string;
   /** Wrapper-issued monotonic sequence (ADR-0011), stamped by ServerLink

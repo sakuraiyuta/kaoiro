@@ -6,6 +6,7 @@ import {
   sdkMessageToLogs,
   sdkMessageToRateLimit,
   sdkMessageToResult,
+  sdkMessageToSessionId,
 } from "../src/adapter.js";
 import { reduceStates } from "../src/state.js";
 
@@ -283,5 +284,20 @@ describe("adapter + state machine", () => {
       "done",
       "waiting_input",
     ]);
+  });
+});
+
+describe("sdkMessageToSessionId", () => {
+  it("session_id を取り出す", () => {
+    expect(
+      sdkMessageToSessionId(msg({ type: "system", session_id: "sess-1" })),
+    ).toBe("sess-1");
+  });
+
+  it("空文字・欠落は null", () => {
+    expect(
+      sdkMessageToSessionId(msg({ type: "system", session_id: "" })),
+    ).toBeNull();
+    expect(sdkMessageToSessionId(msg({ type: "system" }))).toBeNull();
   });
 });

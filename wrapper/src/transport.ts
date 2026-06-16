@@ -2,7 +2,8 @@
 // (ADR-0009: Channels only, wire vsn=2.0.0, which the official client speaks).
 // The phoenix client owns reconnect/heartbeat; pushes made while disconnected
 // are buffered and flushed on rejoin. Outbound envelopes get the wrapper's
-// monotonic seq here (ADR-0011: one assignment point for the whole series);
+// monotonic seq (ADR-0011: one assignment point for the whole series) and the
+// current SDK session_id (protocol.md / ADR-0014 phase-0) stamped here;
 // inbound pushes (instruction / permission_decision, protocol.md) are
 // validated structurally and forwarded to the handlers.
 
@@ -28,6 +29,9 @@ export class ServerLink {
   readonly #channel: Channel;
   #seq = 0;
   #lastEnvelope: Envelope | null = null;
+  /** Latest SDK session id reported by the host (ADR-0014 phase-0); stamped
+   *  onto every outgoing envelope until a newer one replaces it. */
+  #sessionId: string | null = null;
 
   /**
    * @param serverUrl Socket endpoint, e.g. "ws://localhost:4000/wrapper"
@@ -92,6 +96,13 @@ export class ServerLink {
       });
   }
 
+  /** Records the SDK session id the host just captured (ADR-0014 phase-0).
+   *  Subsequent sends carry it; re-announced envelopes pick up the current
+   *  one too, which is correct since it only ever moves forward. */
+  setSessionId(sessionId: string): void {
+    this.#sessionId = sessionId;
+  }
+
   /** Pushes one envelope with the next seq; buffered while disconnected. */
   send(envelope: Envelope): void {
     // Only state_change / permission_request define the latest state worth
@@ -104,7 +115,11 @@ export class ServerLink {
       this.#lastEnvelope = envelope;
     }
     this.#seq += 1;
-    this.#channel.push("envelope", { ...envelope, seq: this.#seq });
+    this.#channel.push("envelope", {
+      ...envelope,
+      ...(this.#sessionId !== null ? { session_id: this.#sessionId } : {}),
+      seq: this.#seq,
+    });
   }
 
   /** Leaves the channel and closes the socket. */
