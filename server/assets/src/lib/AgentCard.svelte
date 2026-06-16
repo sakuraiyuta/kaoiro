@@ -2,21 +2,15 @@
   import { untrack } from "svelte";
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
-  import type {
-    Envelope,
-    KaoiroConnection,
-    PersonaManifest,
-  } from "./protocol";
+  import type { Envelope, PersonaManifest } from "./protocol";
 
   let {
     envelope,
     manifest = null,
-    connection = null,
     onSelect,
   }: {
     envelope: Envelope;
     manifest?: PersonaManifest | null;
-    connection?: KaoiroConnection | null;
     /** Receives the tile's centre so the detail can expand from it (#36). */
     onSelect?: (origin?: { x: number; y: number }) => void;
   } = $props();
@@ -45,36 +39,6 @@
   const attention = $derived(
     envelope.state === "waiting_permission" || envelope.state === "error",
   );
-
-  let instruction = $state("");
-  let actionError = $state("");
-
-  // The card clears its own error once the agent moves on.
-  $effect(() => {
-    void envelope.state;
-    actionError = "";
-  });
-
-  function sendInstruction(event: SubmitEvent): void {
-    event.preventDefault();
-    const text = instruction.trim();
-    if (!connection || text === "") return;
-    actionError = "";
-    void connection
-      .sendInstruction(envelope.agent_id, text)
-      .then(() => (instruction = ""))
-      .catch((error: unknown) => {
-        actionError = error instanceof Error ? error.message : String(error);
-      });
-  }
-
-  // Multi-line input (#33): Enter inserts a newline; Ctrl/Cmd+Enter submits.
-  function onInstructionKeydown(event: KeyboardEvent): void {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault();
-      (event.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
-    }
-  }
 </script>
 
 <article class="card" data-state={expression.variant}>
@@ -105,28 +69,6 @@
     {/key}
     <p class="id">{envelope.agent_id}</p>
   </button>
-
-  {#if connection}
-    <form class="instruct" onsubmit={sendInstruction}>
-      <textarea
-        class:sending={display.shown === "sending"}
-        placeholder="指示を送る…(Ctrl+Enter で送信)"
-        bind:value={instruction}
-        onkeydown={onInstructionKeydown}
-        rows="1"
-        aria-label="instruction for {name}"
-      ></textarea>
-      <button type="submit" disabled={instruction.trim() === ""}>送信</button>
-    </form>
-
-    {#if display.shown === "sending"}
-      <p class="sending-note">送信中…</p>
-    {/if}
-
-    {#if actionError}
-      <p class="action-error">{actionError}</p>
-    {/if}
-  {/if}
 </article>
 
 <style>
@@ -401,63 +343,5 @@
 
   @keyframes blink {
     50% { opacity: 0.4; }
-  }
-
-  /* --- bidirectional controls (Phase 3) ------------------------------- */
-
-  .instruct {
-    display: flex;
-    align-items: flex-end;
-    gap: 0.4rem;
-    margin-top: 0.8rem;
-  }
-
-  .instruct textarea {
-    flex: 1;
-    min-width: 0;
-    padding: 0.35rem 0.5rem;
-    border: 1px solid var(--line);
-    border-radius: 0.35rem;
-    background: var(--bg-card);
-    color: var(--fg);
-    font: inherit;
-    font-size: 0.75rem;
-    line-height: 1.4;
-    resize: vertical;
-  }
-
-  /* Awaiting-response cue (#32): dark-yellow field while the agent is in the
-     wrapper-issued `sending` state, until its first real turn state lands. */
-  .instruct textarea.sending {
-    background: color-mix(in srgb, var(--c-tool_running) 22%, var(--bg-card));
-    border-color: var(--c-tool_running);
-  }
-
-  .sending-note {
-    margin: 0.5rem 0 0;
-    font-size: 0.7rem;
-    color: var(--c-tool_running);
-  }
-
-  .instruct button {
-    padding: 0.35rem 0.7rem;
-    border: 1px solid var(--line);
-    border-radius: 0.35rem;
-    background: var(--bg-card);
-    color: var(--fg);
-    font-size: 0.75rem;
-    cursor: pointer;
-  }
-
-  .instruct button:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  .action-error {
-    margin: 0.5rem 0 0;
-    font-size: 0.7rem;
-    color: var(--c-error);
-    overflow-wrap: anywhere;
   }
 </style>

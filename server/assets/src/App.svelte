@@ -185,7 +185,6 @@
           <AgentCard
             {envelope}
             {manifest}
-            {connection}
             onSelect={(o) => {
               origin = o ?? null;
               selected = envelope.agent_id;
