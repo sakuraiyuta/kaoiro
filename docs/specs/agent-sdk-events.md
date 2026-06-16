@@ -2,7 +2,7 @@
 title: Claude Code アダプタ — Agent SDK イベント仕様
 description: TypeScript 版 Claude Agent SDK の実メッセージ/コールバック仕様と、kaoiro 状態への導出マッピング(検証済み)。
 status: accepted
-related: [protocol, plugin-model, architecture]
+related: [protocol, plugin-model, architecture, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -48,6 +48,22 @@ type SDKMessage =
 
 ツール結果は独立メッセージではなく **`SDKUserMessage`(content の tool_result
 ブロック)** として返る。
+
+### タスク(subagent/workflow)メッセージ
+
+親セッションは Task ツールで起動した subagent / ローカル workflow のライフサイクルを
+`type:"system"` の追加 subtype で yield する。kaoiro はこれを subagent/workflow 通知へ
+導出する([subagent-tasks](subagent-tasks.md)、
+[ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md))。
+
+| subtype | 主なフィールド |
+|---|---|
+| task_started | task_id, description, subagent_type, task_type, workflow_name, tool_use_id, skip_transcript |
+| task_progress | subagent_type, usage{total_tokens,tool_uses,duration_ms}, last_tool_name, summary |
+| task_notification | status(completed/failed/stopped), summary, usage |
+
+これらは `KaoiroState` には**載らない**(親の状態を変えない)。専用 envelope へ別経路で
+導出する。現状 `wrapper/src/adapter.ts` は未処理(破棄)。
 
 ### 権限コールバック(canUseTool)
 
@@ -128,6 +144,9 @@ canUseTool → PostToolUse。
 | `error` | `SDKResultMessage` subtype `error_*` / is_error、または `SDKAssistantMessage.error` |
 | `disconnected` | SDK 外(ラッパー↔サーバ接続断、サーバ側導出) |
 
+`system/task_*`(subagent/workflow)は `KaoiroState` に**マップしない** — 親状態を
+変えず、専用 envelope へ別途導出する([subagent-tasks](subagent-tasks.md))。
+
 ## Constraints
 
 - SHOULD: 細粒度の `thinking` 検出が要るとき `includePartialMessages: true`。
@@ -142,6 +161,7 @@ canUseTool → PostToolUse。
 ## See Also
 
 - 関連 specs: [protocol](protocol.md), [plugin-model](plugin-model.md),
-  [architecture](architecture.md)
-- ADRs: [0001](../adr/0001-agent-sdk-integration.md)
+  [architecture](architecture.md), [subagent-tasks](subagent-tasks.md)
+- ADRs: [0001](../adr/0001-agent-sdk-integration.md),
+  [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
 - 出典: code.claude.com/docs/en/agent-sdk/typescript ほか(2026-06 検証)

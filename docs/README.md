@@ -37,6 +37,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0016](adr/0016-error-body-relay.md) | ラッパーエラー本文を result.error_message でリレー | accepted |
 | [0017](adr/0017-wrapper-multientity-packages.md) | wrapper を3層 pnpm ワークスペースへ(マルチエンティティ) | accepted |
 | [0018](adr/0018-runner-distribution.md) | wrapper/runner は OS 別単一バイナリ・CLI のみ・Gitea release | accepted |
+| [0019](adr/0019-subagent-workflow-entity-and-task-envelope.md) | subagent/workflow を親付き子エンティティとし専用 envelope で通知 | accepted |
 
 ## 更新フロー
 

@@ -2,7 +2,7 @@
 title: 共通イベント・プロトコル
 description: ラッパー/サーバ/クライアント間の共通イベント・エンベロープ v0、状態機械、ペルソナ同一性。
 status: accepted
-related: [architecture, plugin-model, agent-sdk-events, personas, threat-model]
+related: [architecture, plugin-model, agent-sdk-events, personas, threat-model, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -100,6 +100,7 @@ flowchart LR
 | `log` | **確定** | `{ kind: "assistant" \| "tool_use" \| "tool_result" \| "user", text?, tool_name?, tool_use_id?, input?, output?, truncated? }`。エージェント応答の逐次中継。`assistant`=モデル発話(`text`)、`tool_use`=ツール呼出(`tool_name`/`input`)、`tool_result`=実行結果(`tool_name`/`output`)、`user`=operator 指示を会話ログにエコー(`text`、#31。wrapper が instruction 受信時に発行し、履歴・operator 限定配信に乗る)。`tool_use_id` は `tool_use`/`tool_result` の対応付け用(#40。SDK が付与した時のみ)。tool 入出力はクライアント UI で折りたたみ既定。長文は wrapper が切り詰め(`truncated: true`)。**operator role のみへ配信**(viewer 非配信。シークレット混入の主経路、[threat-model](threat-model.md)、[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
 | `permission_request` | **確定** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`。`request_id` はラッパー生成のセッション内一意 ID([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。`input` はツール入力(ラッパーが 16KB 程度に切り詰め、切り詰め時 `truncated: true`。シークレット混入リスクは [threat-model](threat-model.md))。state は `waiting_permission` |
 | `result` | **確定** | `{ text?: string, is_error?: boolean, error_message?: string }`。ターン完了時の最終応答。`is_error` でエラー終了を区別し、`error_message` にエラー本文(生)を載せてクライアントへリレーする(整形なし。SDK/API エラー本文に加え、wrapper プロセス異常終了時は落ちる直前の最後のエラーを送る。[ADR-0016](../adr/0016-error-body-relay.md))。state は `done`/`error` の後 `waiting_input`。累計コスト USD は `ext.cost` に付与(#8)。`log` と同様 **operator 限定配信**([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
+| `task`(予約) | **予約** | subagent/workflow の起動/更新/完了を通知する専用 type(正式名称・スキーマは未確定)。親 `state_change` とは独立し、親 `agent_id` 参照で紐づく子エンティティを運ぶ([subagent-tasks](subagent-tasks.md)、[ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md))。予約追補のため `version` 据え置き |
 
 ### 方向別メッセージ種別(v0 確定)
 
@@ -321,7 +322,8 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
 ## See Also
 
 - 関連 specs: [architecture](architecture.md),
-  [plugin-model](plugin-model.md), [personas](personas.md)
+  [plugin-model](plugin-model.md), [personas](personas.md),
+  [subagent-tasks](subagent-tasks.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0003](../adr/0003-persona-identity-persistence.md),
   [0008](../adr/0008-persona-asset-distribution.md),
@@ -331,4 +333,5 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
   [0012](../adr/0012-response-display-and-dashboard-scope.md),
   [0014](../adr/0014-session-resume-and-restore.md),
   [0015](../adr/0015-protocol-version-stamping.md),
-  [0016](../adr/0016-error-body-relay.md)
+  [0016](../adr/0016-error-body-relay.md),
+  [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
