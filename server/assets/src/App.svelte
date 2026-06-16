@@ -15,6 +15,11 @@
     fetchPersonaManifest,
     isReplyEnvelope,
   } from "./lib/protocol";
+  import {
+    isWaitTransition,
+    notifyWait,
+    requestNotificationPermission,
+  } from "./lib/notify";
 
   let agents = $state<Record<string, Envelope>>({});
   // Per-agent reply transcript (operator-only, ADR-0012): log/result
@@ -60,6 +65,9 @@
     // Cards render the CSS face until the manifest arrives (or on
     // fetch failure), then swap to persona sprites.
     fetchPersonaManifest().then((next) => (manifest = next));
+
+    // Ask once so wait-state hand-offs can raise a desktop notification (#7).
+    requestNotificationPermission();
 
     let cancelled = false;
     let refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -123,7 +131,12 @@
               const prev = logs[envelope.agent_id] ?? [];
               logs = { ...logs, [envelope.agent_id]: [...prev, envelope] };
             } else {
+              const prevState = agents[envelope.agent_id]?.state;
               agents = { ...agents, [envelope.agent_id]: envelope };
+              // Alert the operator the moment an agent needs them (#7).
+              if (isWaitTransition(prevState, envelope.state)) {
+                notifyWait(envelope);
+              }
             }
           },
           onHistory: (histories) => (logs = mergeHistories(histories, logs)),
