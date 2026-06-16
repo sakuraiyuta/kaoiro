@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
+  import { expressionFor } from "./lib/expression";
   import type {
     ConnectionStatus,
     Envelope,
@@ -158,6 +159,27 @@
 
 <header>
   <h1>kaoiro</h1>
+  {#if selectedEnvelope && sorted.length > 1}
+    <nav class="agent-strip" aria-label="エージェント一覧">
+      {#each sorted as envelope (envelope.agent_id)}
+        {@const expr = expressionFor(envelope.state)}
+        <button
+          type="button"
+          class="chip"
+          class:current={envelope.agent_id === selected}
+          data-state={expr.variant}
+          aria-current={envelope.agent_id === selected ? "true" : undefined}
+          title="{envelope.persona?.name ?? envelope.agent_id} — {expr.label}"
+          onclick={() => {
+            origin = null;
+            selected = envelope.agent_id;
+          }}
+        >
+          <span class="lamp"></span>
+        </button>
+      {/each}
+    </nav>
+  {/if}
   <p class="conn" data-status={status}>
     <span class="conn-dot"></span>{status}
   </p>
@@ -245,6 +267,58 @@
   .conn[data-status="disconnected"] .conn-dot {
     background: var(--c-error);
   }
+
+  /* Detail view only: a compact strip of every agent's state lamp, sitting
+     between the title and the connection badge, for quick switching (#16).
+     space-between in the header drops it to centre when present. */
+  .agent-strip {
+    align-self: center;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+  }
+
+  .chip {
+    --tone: var(--c-idle);
+    display: inline-flex;
+    padding: 0.25rem;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    background: none;
+    line-height: 0;
+    cursor: pointer;
+    transition: border-color 0.2s;
+  }
+
+  .chip:hover {
+    border-color: var(--line);
+  }
+
+  .chip.current {
+    border-color: var(--tone);
+  }
+
+  .chip .lamp {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: var(--tone);
+    box-shadow: 0 0 6px var(--tone);
+  }
+
+  .chip[data-state="sending"] { --tone: var(--c-sending); }
+  .chip[data-state="thinking"] { --tone: var(--c-thinking); }
+  .chip[data-state="tool_running"] { --tone: var(--c-tool_running); }
+  .chip[data-state="waiting_permission"] {
+    --tone: var(--c-waiting_permission);
+  }
+  .chip[data-state="waiting_input"] { --tone: var(--c-waiting_input); }
+  .chip[data-state="done"] { --tone: var(--c-done); }
+  .chip[data-state="error"] { --tone: var(--c-error); }
+  .chip[data-state="disconnected"] { --tone: var(--c-disconnected); }
 
   /* Fills the viewport below the header; the active view (grid or detail)
      scrolls inside here so the detail composer can pin to the bottom (#33). */
