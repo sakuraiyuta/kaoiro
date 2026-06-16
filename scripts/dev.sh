@@ -61,7 +61,7 @@ pids+=("$!")
 ( cd "$root/server/assets" && pnpm install </dev/null && exec pnpm dev ) &
 pids+=("$!")
 
-( cd "$root/wrapper" && exec pnpm dev ) &
+( cd "$root/wrapper" && pnpm install </dev/null && exec pnpm dev ) &
 pids+=("$!")
 
 echo "dev: server :4000  |  dashboard :5173 (Vite HMR)  |  wrapper agents watching"
