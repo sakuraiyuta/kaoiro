@@ -32,9 +32,13 @@ kaoiro が初期に扱わない範囲を明示する。スコープは [overview
   operator コンソール**まで踏み込んでよい(状態一覧・表情・承認・指示入力に
   加え、返答表示を含む。
   [ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。線引きは
-  「機能数」ではなく「**新たな公開プロトコル面 / サーバ永続を要するか**」。
-  以下は引き続き非スコープ: 会話オーサリング環境化(フルチャット)、永続
-  会話履歴(将来 issue #24)、外部クライアント級の高機能化。
+  当初「機能数」ではなく「**新たな公開プロトコル面 / サーバ永続を要するか**」
+  だったが、[ADR-0020](../adr/0020-dashboard-battery-included-client.md) で
+  「**battery-included な最低限実用クライアント**」へ格上げし、最低限実用に
+  要する**新たな公開プロトコル面の追加を許容**する(中断・アップロード・
+  skill 補完・クライアント更新・モデル/effort 選択 等)。以下は引き続き非
+  スコープ: 会話オーサリング環境化(フルチャット)、**サーバでの会話/ファイル
+  永続**(将来 issue #24)、外部クライアント級の高機能化。
 
 ## See Also
 
@@ -42,4 +46,5 @@ kaoiro が初期に扱わない範囲を明示する。スコープは [overview
 - ADRs: [0004](../adr/0004-client-rendering-staged.md),
   [0005](../adr/0005-access-control-oauth-stub.md),
   [0007](../adr/0007-client-separation-reference-dashboard.md),
-  [0012](../adr/0012-response-display-and-dashboard-scope.md)
+  [0012](../adr/0012-response-display-and-dashboard-scope.md),
+  [0020](../adr/0020-dashboard-battery-included-client.md)
