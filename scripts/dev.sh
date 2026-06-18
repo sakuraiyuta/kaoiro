@@ -56,12 +56,14 @@ trap cleanup INT TERM EXIT
   exec mix phx.server ) </dev/null &
 pids+=("$!")
 
-# pnpm install's lifecycle hooks must not read the TTY either (SIGTTIN);
-# pnpm dev (Vite) doesn't block on the TTY, so redirect only the install.
-( cd "$root/server/assets" && pnpm install </dev/null && exec pnpm dev ) &
+# pnpm install AND pnpm dev get </dev/null: Vite was observed stuck in
+# State T (SIGSTOP) on WSL2 when its stdin was still bound to the TTY;
+# SIGCONT could not revive the process group, only a full stack restart
+# did. Cutting the TTY input path here removes the SIGTTIN trigger.
+( cd "$root/server/assets" && pnpm install </dev/null && exec pnpm dev ) </dev/null &
 pids+=("$!")
 
-( cd "$root/wrapper" && pnpm install </dev/null && exec pnpm dev ) &
+( cd "$root/wrapper" && pnpm install </dev/null && exec pnpm dev ) </dev/null &
 pids+=("$!")
 
 echo "dev: server :4000  |  dashboard :5173 (Vite HMR)  |  wrapper agents watching"
