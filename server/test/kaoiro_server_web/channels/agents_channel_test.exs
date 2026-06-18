@@ -214,6 +214,61 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "interrupt relay (#51)" do
+    test "operator の interrupt を wrapper topic へ relay する" do
+      agent_id = "test.interrupt-1"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "interrupt", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok
+      # agent_id addresses the topic only; the payload drops it.
+      assert_broadcast "interrupt", payload
+      refute Map.has_key?(payload, "agent_id")
+    end
+
+    test "viewer の interrupt は forbidden" do
+      agent_id = "test.interrupt-2"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      ref = push(socket, "interrupt", %{"agent_id" => agent_id})
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "未知 agent_id は unknown_agent" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "interrupt", %{"agent_id" => "test.interrupt-none"})
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+
+    test "agent_id 欠落は missing_agent_id" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "interrupt", %{})
+      assert_reply ref, :error, %{reason: "missing_agent_id"}
+    end
+
+    test "追加キーの巨大 blob は relay サイズ上限で拒否される (issue #26)" do
+      agent_id = "test.interrupt-4"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "interrupt", %{
+          "agent_id" => agent_id,
+          "blob" => String.duplicate("a", 200_000)
+        })
+
+      assert_reply ref, :error, %{reason: "payload_too_large"}
+      refute_broadcast "interrupt", %{}
+    end
+  end
+
   describe "permission_request の input 秘匿 (threat-model)" do
     defp permission_envelope(agent_id) do
       %{

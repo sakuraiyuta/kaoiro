@@ -11,15 +11,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
   neither, since reply lines carry tool I/O that may hold secrets
   (ADR-0012, specs/threat-model.md).
 
-  Inbound (Phase 3, specs/protocol.md): `instruction` and
-  `permission_decision` are accepted from operator clients only and
-  relayed to the target wrapper topic without interpreting the content
-  (agent-agnostic). No delivery guarantee — a relay to a disconnected
-  wrapper is lost and the requester learns via timeout (ADR-0011).
-  `clear_history` (operator-only, issue #48) drops the server-side reply
-  log of past sessions and broadcasts `history_cleared` so every client
-  re-filters its transcript; it touches only the in-memory ring buffer,
-  never the wrapper's session logs.
+  Inbound (Phase 3, specs/protocol.md): `instruction`,
+  `permission_decision`, and `interrupt` (issue #51) are accepted from
+  operator clients only and relayed to the target wrapper topic without
+  interpreting the content (agent-agnostic). No delivery guarantee — a
+  relay to a disconnected wrapper is lost and the requester learns via
+  timeout (ADR-0011). `clear_history` (operator-only, issue #48) drops
+  the server-side reply log of past sessions and broadcasts
+  `history_cleared` so every client re-filters its transcript; it touches
+  only the in-memory ring buffer, never the wrapper's session logs.
   """
 
   use Phoenix.Channel
@@ -96,6 +96,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {"request_id", &is_binary/1},
       {"allow", &is_boolean/1}
     ])
+  end
+
+  # Graceful stop of the current turn (issue #51, ADR-0020). Payload is
+  # `{}` after agent_id is stripped — no per-event keys to validate; the
+  # shared relay guards (operator, known agent, size cap) still apply.
+  # Wrapper-side no-op when no turn is in flight (protocol.md A6).
+  def handle_in("interrupt", payload, socket) do
+    relay(socket, payload, "interrupt", [])
   end
 
   # Operator-only purge of an agent's past-session reply log (issue #48).
