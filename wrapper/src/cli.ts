@@ -122,6 +122,13 @@ async function main(): Promise<void> {
         host.send(text);
       },
       onPermissionDecision: (decision) => broker?.resolve(decision),
+      onInterrupt: () => {
+        // protocol.md (#51): graceful stop of the current turn. SDK returns
+        // an `error_*` SDKResultMessage which the adapter folds into the
+        // existing error -> waiting_input path; no extra state to emit.
+        process.stdout.write("  interrupt\n");
+        void host.interrupt().catch(() => {});
+      },
     });
   }
 

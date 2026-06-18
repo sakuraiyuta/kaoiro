@@ -18,6 +18,9 @@ export interface ServerLinkOptions {
   onInstruction?: (text: string) => void;
   /** An operator's permission decision relayed by the server. */
   onPermissionDecision?: (decision: PermissionDecisionMessage) => void;
+  /** An operator's interrupt request relayed by the server (protocol.md, #51).
+   *  Payload is `{}` — the topic carries the agent_id. */
+  onInterrupt?: () => void;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -70,6 +73,12 @@ export class ServerLink {
         }
         options.onPermissionDecision?.(decision);
       }
+    });
+    // protocol.md (#51): server -> wrapper `interrupt` carries an empty
+    // payload; the topic already addresses the agent. Fire the handler
+    // unconditionally — extra keys are ignored for forward compat.
+    this.#channel.on("interrupt", (_payload: unknown) => {
+      options.onInterrupt?.();
     });
 
     // Re-announce the latest state after a reconnect: the server keeps

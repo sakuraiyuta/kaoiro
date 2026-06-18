@@ -366,4 +366,36 @@ describe("AgentHost — input queue/notify/close", () => {
     host.close();
     await done;
   });
+
+  it("interrupt は run 前は no-op (#51)", async () => {
+    // protocol.md A6: a stale/early interrupt is left to the wrapper to
+    // absorb. Before run(), #query is null and interrupt() must resolve
+    // without throwing — the optional-chain on #query?.interrupt() is the
+    // wrapper-side no-op contract the server relays into.
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: scriptedQuery([]),
+      now: () => "T",
+    });
+    await expect(host.interrupt()).resolves.toBeUndefined();
+  });
+
+  it("interrupt の連打はそのつど SDK へ伝播する (#51)", async () => {
+    // B3: idempotency is delegated to the SDK; the wrapper relays each call
+    // verbatim, so two operator clicks reach Query.interrupt() twice.
+    const interrupt = vi.fn(async () => {});
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), interrupt);
+    });
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const done = host.run();
+    await host.interrupt();
+    await host.interrupt();
+    expect(interrupt).toHaveBeenCalledTimes(2);
+    host.close();
+    await done;
+  });
 });
