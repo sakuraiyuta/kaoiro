@@ -115,9 +115,11 @@ Channels のチャネルイベント名と内容。トピックは
 | サーバ → クライアント | `history_cleared` | `{ agent_id, session_id }`。`clear_history` 成功後に broadcast。クライアントは当該 agent の表示用ログを `session_id` 一致のものだけへ再フィルタ(#48) |
 | クライアント → サーバ | `instruction` | `{ agent_id, text }`。**operator のみ**。サーバは text を解釈せず該当ラッパーへ relay。未知 agent_id は `{:error, unknown_agent}` |
 | クライアント → サーバ | `permission_decision` | `{ agent_id, request_id, allow, message? }`。**operator のみ**。該当ラッパーへ relay |
+| クライアント → サーバ | `interrupt` | `{ agent_id }`。**operator のみ**。実行中ターンの中断要求(ESC 相当、ADR-0020、#51)。該当ラッパーへ fire-and-forget で relay。未知 agent は `unknown_agent`。中断後 SDK は `error_*` 系の `SDKResultMessage` を返し、既存の `error → waiting_input` 遷移に乗る(専用状態は持たない) |
 | クライアント → サーバ | `clear_history` | `{ agent_id }`。**operator のみ**。当該 agent の過去セッション(現在の `session_id` 以外/無し)の返答ログを**サーバのインメモリ・リングバッファ**から消去し `history_cleared` を broadcast。掃除するのは表示用履歴のみで wrapper の JSONL には触れない。未知 agent は `unknown_agent`、現在 `session_id` 不明は `no_current_session`(#48) |
 | サーバ → ラッパー | `instruction` | `{ text }`(relay。ラッパーは入力キューへ投入) |
 | サーバ → ラッパー | `permission_decision` | `{ request_id, allow, message? }`(relay。`request_id` で保留中の承認と突合) |
+| サーバ → ラッパー | `interrupt` | `{}`(relay。ラッパーは SDK の `Query.interrupt()` を呼ぶ。turn 進行中以外は no-op。#51) |
 
 **承認フロー**: ラッパーは `canUseTool` 発火で `permission_request`
 エンベロープ(上記 type 表)を送って Promise を保留し、
@@ -310,7 +312,7 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
 - MUST: `agent_id` の文字種は `[A-Za-z0-9._-]`(1〜256 文字)。
 - MUST: クライアント接続は Phoenix Channels(`vsn=2.0.0`)のみ。
 - MUST: 受信側はエンベロープの未知キーを無視する(前方互換)。
-- MUST: `instruction` / `permission_decision` は operator role のみ。
+- MUST: `instruction` / `permission_decision` / `interrupt` は operator role のみ。
 - MUST: permission の無応答既定は deny(fail-closed)。既定 600 秒、
   ラッパー設定で変更可。
 - MUST: `log` / `result` エンベロープは operator role のみへ配信する
