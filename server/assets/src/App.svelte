@@ -244,6 +244,9 @@
               origin = o ?? null;
               selected = envelope.agent_id;
             }}
+            onInterrupt={connection
+              ? () => connection!.sendInterrupt(envelope.agent_id)
+              : undefined}
           />
         </li>
       {/each}

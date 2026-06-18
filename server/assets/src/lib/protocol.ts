@@ -97,6 +97,17 @@ export function isReplyEnvelope(envelope: Envelope): boolean {
   return envelope.type === "log" || envelope.type === "result";
 }
 
+/** States where the agent is executing and an interrupt (ESC equivalent,
+ *  #51) could land work. idle / waiting_input / done / error /
+ *  disconnected have nothing to interrupt. Single source of truth so the
+ *  lobby card and the detail view stay in sync when states change. */
+export const RUNNING_STATES: ReadonlySet<string> = new Set([
+  "sending",
+  "thinking",
+  "tool_running",
+  "waiting_permission",
+]);
+
 /** Persona asset manifest served at GET /api/personas (ADR-0008). */
 export interface SpriteEntry {
   /** Hash-versioned URL; safe to cache immutably. */
@@ -154,6 +165,10 @@ export interface KaoiroConnection {
     requestId: string,
     allow: boolean,
   ) => Promise<void>;
+  /** Interrupts the agent's current turn (#51, ESC equivalent); rejects
+   * like sendInstruction (forbidden / unknown_agent / timeout). The
+   * wrapper handles a stale interrupt as a no-op. */
+  sendInterrupt: (agentId: string) => Promise<void>;
   /** Purges the agent's past-session reply log (issue #48); rejects like
    * sendInstruction (forbidden / unknown_agent / no_current_session). */
   clearHistory: (agentId: string) => Promise<void>;
@@ -260,6 +275,8 @@ export function connectKaoiro(
         request_id: requestId,
         allow,
       }),
+    sendInterrupt: (agentId) =>
+      pushAsync(channel, "interrupt", { agent_id: agentId }),
     clearHistory: (agentId) =>
       pushAsync(channel, "clear_history", { agent_id: agentId }),
   };

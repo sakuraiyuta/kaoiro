@@ -3,7 +3,7 @@
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
-  import { logOf, permissionRequestOf, resultOf } from "./protocol";
+  import { logOf, permissionRequestOf, resultOf, RUNNING_STATES } from "./protocol";
   import type {
     Envelope,
     KaoiroConnection,
@@ -205,6 +205,14 @@
 
   let instruction = $state("");
   let actionError = $state("");
+  // Mid-flight ESC (#51): set on click, cleared when the server replies
+  // (ok/error/timeout). The agent's own state change is what stops the
+  // turn — this flag only locks the button against double-clicks.
+  let interrupting = $state(false);
+
+  // RUNNING_STATES is shared with AgentCard via protocol.ts so both
+  // surfaces gate the interrupt button on the same set.
+  const canInterrupt = $derived(RUNNING_STATES.has(envelope.state));
   // tool_use_id under the pointer, so its tool_use and tool_result both
   // highlight while hovered (#40).
   let hoveredTool = $state<string | null>(null);
@@ -284,6 +292,21 @@
         allow,
       ),
     );
+  }
+
+  // ESC-equivalent stop (#51): fire-and-forget to the wrapper. The button
+  // is hidden when the agent is not running, so a stale click cannot happen
+  // here; the wrapper still no-ops a stale interrupt on its end.
+  function interrupt(): void {
+    if (!connection || interrupting) return;
+    void run(async () => {
+      interrupting = true;
+      try {
+        await connection.sendInterrupt(envelope.agent_id);
+      } finally {
+        interrupting = false;
+      }
+    });
   }
 
   // Purge past-session reply lines (#48): destructive and irreversible, so
@@ -492,6 +515,21 @@
       </div>
 
       {#if connection}
+        {#if canInterrupt}
+          <!-- ESC equivalent (#51, ADR-0020). One-click, fire-and-forget;
+               the agent's own state change is the visible confirmation. -->
+          <button
+            type="button"
+            class="interrupt"
+            onclick={interrupt}
+            disabled={interrupting}
+            title="現在のターンを中断 (ESC 相当)"
+          >
+            <span class="interrupt-icon" aria-hidden="true">■</span>
+            {interrupting ? "中断中…" : "中断"}
+          </button>
+        {/if}
+
         {#if permission}
           <div class="permission">
             <p class="permission-tool">
@@ -1044,6 +1082,37 @@
   .permission-actions .deny {
     border-color: var(--c-error);
     color: var(--c-error);
+  }
+
+  /* ESC-equivalent (#51): sits above the composer when the agent is
+     executing, styled like a warning action — visible but not alarming. */
+  .interrupt {
+    align-self: flex-end;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    border: 1px solid var(--c-tool_running);
+    border-radius: 0.4rem;
+    background: var(--bg-card);
+    color: var(--c-tool_running);
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .interrupt:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--c-tool_running) 14%, var(--bg-card));
+  }
+
+  .interrupt:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .interrupt-icon {
+    font-size: 0.7em;
+    line-height: 1;
   }
 
   .instruct {

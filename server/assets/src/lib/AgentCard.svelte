@@ -2,17 +2,23 @@
   import { untrack } from "svelte";
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
+  import { RUNNING_STATES } from "./protocol";
   import type { Envelope, PersonaManifest } from "./protocol";
 
   let {
     envelope,
     manifest = null,
     onSelect,
+    onInterrupt,
   }: {
     envelope: Envelope;
     manifest?: PersonaManifest | null;
     /** Receives the tile's centre so the detail can expand from it (#36). */
     onSelect?: (origin?: { x: number; y: number }) => void;
+    // exactOptionalPropertyTypes: undefined must be in the type since
+    // App.svelte conditionally passes undefined when there is no connection.
+    /** ESC equivalent (#51); pass undefined to hide the button. */
+    onInterrupt?: (() => Promise<void>) | undefined;
   } = $props();
 
   // Hand the detail the tile's viewport centre so it grows from this tile.
@@ -39,6 +45,32 @@
   const attention = $derived(
     envelope.state === "waiting_permission" || envelope.state === "error",
   );
+
+  // Interrupt button visible only when the agent is executing (#51 C2). Live
+  // state, not the display-lagged one — immediacy matters for an ESC button.
+  // RUNNING_STATES is shared with AgentDetail via protocol.ts so the lobby
+  // tile and the detail view never drift on what counts as "executing".
+  const canInterrupt = $derived(
+    onInterrupt !== undefined && RUNNING_STATES.has(envelope.state),
+  );
+
+  let interrupting = $state(false);
+
+  async function handleInterrupt(event: MouseEvent): Promise<void> {
+    // Don't open the detail when the operator clicks ESC on the lobby tile.
+    event.stopPropagation();
+    if (interrupting || !onInterrupt) return;
+    interrupting = true;
+    try {
+      await onInterrupt();
+    } catch (err) {
+      // Surface only on the console: the detail view carries the real
+      // feedback channel; this button trades visibility for one-click reach.
+      console.warn("interrupt failed:", err);
+    } finally {
+      interrupting = false;
+    }
+  }
 </script>
 
 <article class="card" data-state={expression.variant}>
@@ -69,6 +101,19 @@
     {/key}
     <p class="id">{envelope.agent_id}</p>
   </button>
+  {#if canInterrupt}
+    <button
+      type="button"
+      class="stop"
+      onclick={handleInterrupt}
+      disabled={interrupting}
+      title="現在のターンを中断 (ESC 相当)"
+      aria-label="{name} のターンを中断"
+    >
+      <span class="stop-icon" aria-hidden="true">■</span>
+      <span class="stop-label">{interrupting ? "中断中…" : "中断"}</span>
+    </button>
+  {/if}
 </article>
 
 <style>
@@ -287,6 +332,47 @@
     font-size: 0.65rem;
     color: var(--fg-dim);
     overflow-wrap: anywhere;
+  }
+
+  /* Card has the interrupt button as a sibling of the open region, so make
+     the wrapper a positioning context for it. */
+  .card {
+    position: relative;
+  }
+
+  /* Interrupt button (#51) on the lobby tile: small chip in the corner so it
+     does not compete with the persona's identity, only shows up while the
+     agent is running. Click handler stopPropagation prevents opening the
+     detail view (the surrounding .open button). */
+  .stop {
+    position: absolute;
+    bottom: 0.35rem;
+    right: 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.18rem 0.45rem;
+    border: 1px solid var(--c-tool_running);
+    border-radius: 0.3rem;
+    background: var(--bg-card);
+    color: var(--c-tool_running);
+    font: inherit;
+    font-size: 0.65rem;
+    cursor: pointer;
+  }
+
+  .stop:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--c-tool_running) 14%, var(--bg-card));
+  }
+
+  .stop:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .stop-icon {
+    font-size: 0.7em;
+    line-height: 1;
   }
 
   /* --- clickable identity region (opens the detail view) -------------- */
