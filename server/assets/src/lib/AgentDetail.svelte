@@ -213,6 +213,22 @@
   // RUNNING_STATES is shared with AgentCard via protocol.ts so both
   // surfaces gate the interrupt button on the same set.
   const canInterrupt = $derived(RUNNING_STATES.has(envelope.state));
+
+  // Folded state of the permission dock (#…): when true it sits as a small
+  // button in the conversation's top-right corner instead of covering the
+  // transcript. permFullH carries the panel's natural height so the dock can
+  // animate height between the open panel and the folded pill.
+  let permMinimized = $state(false);
+  let permFullH = $state(0);
+  // Input-area height, so the open dock can float just above the composer
+  // without overlapping it (the composer grows with the sending/error notes).
+  let composerH = $state(0);
+  // A fresh request (new request_id) always opens expanded, so a pending
+  // decision is never hidden by a stale folded state from an earlier one.
+  $effect(() => {
+    void permission?.request_id;
+    permMinimized = false;
+  });
   // tool_use_id under the pointer, so its tool_use and tool_result both
   // highlight while hovered (#40).
   let hoveredTool = $state<string | null>(null);
@@ -427,7 +443,7 @@
       {/if}
     </aside>
 
-    <div class="main">
+    <div class="main" style:--composer-h={composerH ? composerH + "px" : null}>
       <div class="log" bind:this={logEl}>
         {#if logs.length === 0}
           <p class="empty">まだ返答はありません。</p>
@@ -531,44 +547,76 @@
         {/if}
 
         {#if permission}
-          <div class="permission">
-            <p class="permission-tool">
-              <code>{permission.tool_name}</code> の実行許可を求めています
-            </p>
-            {#if permission.input}
-              <details>
-                <summary>input</summary>
-                <pre>{JSON.stringify(permission.input, null, 2)}</pre>
-              </details>
-            {:else if permission.truncated}
-              <p class="permission-note">(input は大きすぎるため省略)</p>
-            {/if}
-            <div class="permission-actions">
-              <button class="allow" onclick={() => decide(true)}>許可</button>
-              <button class="deny" onclick={() => decide(false)}>拒否</button>
+          <!-- Permission dock (#46): the request can fold up into a button in
+               the conversation's top-right corner so it stops covering the
+               transcript, then unfold back. Fold/unfold is a 0.25s eased move. -->
+          <div
+            class="permission-dock"
+            class:min={permMinimized}
+            style:--full-h={permFullH ? permFullH + "px" : null}
+          >
+            <div
+              class="permission-full"
+              bind:offsetHeight={permFullH}
+              inert={permMinimized}
+            >
+              <button
+                class="permission-min"
+                type="button"
+                title="最小化"
+                aria-label="許可ダイアログを最小化"
+                onclick={() => (permMinimized = true)}></button>
+              <p class="permission-tool">
+                <code>{permission.tool_name}</code> の実行許可を求めています
+              </p>
+              {#if permission.input}
+                <details>
+                  <summary>input</summary>
+                  <pre>{JSON.stringify(permission.input, null, 2)}</pre>
+                </details>
+              {:else if permission.truncated}
+                <p class="permission-note">(input は大きすぎるため省略)</p>
+              {/if}
+              <div class="permission-actions">
+                <button class="allow" onclick={() => decide(true)}>許可</button>
+                <button class="deny" onclick={() => decide(false)}>拒否</button>
+              </div>
             </div>
+            <button
+              class="permission-pill"
+              type="button"
+              title="許可ダイアログを開く"
+              aria-label="許可ダイアログを開く"
+              inert={!permMinimized}
+              onclick={() => (permMinimized = false)}
+            >
+              <span class="permission-pill-lamp"></span>
+              許可待ち
+            </button>
           </div>
         {/if}
 
-        <form class="instruct" onsubmit={sendInstruction}>
-          <textarea
-            class:sending={display.shown === "sending"}
-            placeholder="指示を送る…(Ctrl+Enter で送信)"
-            bind:value={instruction}
-            onkeydown={onInstructionKeydown}
-            rows="2"
-            aria-label="instruction for {name}"
-          ></textarea>
-          <button type="submit" disabled={instruction.trim() === ""}>送信</button>
-        </form>
+        <div class="composer" bind:offsetHeight={composerH}>
+          <form class="instruct" onsubmit={sendInstruction}>
+            <textarea
+              class:sending={display.shown === "sending"}
+              placeholder="指示を送る…(Ctrl+Enter で送信)"
+              bind:value={instruction}
+              onkeydown={onInstructionKeydown}
+              rows="2"
+              aria-label="instruction for {name}"
+            ></textarea>
+            <button type="submit" disabled={instruction.trim() === ""}>送信</button>
+          </form>
 
-        {#if display.shown === "sending"}
-          <p class="sending-note">送信中… 応答待ち</p>
-        {/if}
+          {#if display.shown === "sending"}
+            <p class="sending-note">送信中… 応答待ち</p>
+          {/if}
 
-        {#if actionError}
-          <p class="action-error">{actionError}</p>
-        {/if}
+          {#if actionError}
+            <p class="action-error">{actionError}</p>
+          {/if}
+        </div>
       {/if}
     </div>
   </div>
@@ -626,9 +674,18 @@
   }
 
   .main {
+    position: relative;
     flex: 1;
     min-width: 0;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  /* Wrapper exists only to measure the input area's height (--composer-h), so
+     the floating permission dock can rest just above it (#46). */
+  .composer {
     display: flex;
     flex-direction: column;
     gap: 1rem;
@@ -1036,18 +1093,82 @@
     color: var(--fg-dim);
   }
 
-  .permission {
+  /* Permission dock (#46): a transparent clip/anchor box that floats over the
+     transcript. Open, it rests just above the composer at full width; folded
+     (.min) it shrinks to a pill in the top-right corner. The 0.25s eased move
+     is a transition on position + size; its two layers (.permission-full /
+     .permission-pill) crossfade. --full-h (the open height, measured) lets the
+     box animate its height between the panel and the pill. */
+  .permission-dock {
+    --pill-h: 2.4rem;
+    --pill-w: 10rem;
+    position: absolute;
+    right: 0;
+    bottom: calc(var(--composer-h, 0px) + 0.6rem);
+    z-index: 2;
+    width: 100%;
+    height: var(--full-h, auto);
+    overflow: hidden;
+    transition:
+      bottom 0.25s ease,
+      width 0.25s ease,
+      height 0.25s ease;
+  }
+
+  .permission-dock.min {
+    bottom: calc(100% - var(--pill-h));
+    width: var(--pill-w);
+    height: var(--pill-h);
+  }
+
+  .permission-full {
+    position: relative;
     padding: 0.7rem 0.8rem;
     border: 1px solid var(--c-waiting_permission);
     border-radius: 0.45rem;
+    background: var(--bg-card);
     font-size: 0.8rem;
+    transition: opacity 0.25s ease;
   }
 
-  .permission-tool { margin: 0; color: var(--fg); }
-  .permission-note { margin: 0.3rem 0 0; color: var(--fg-dim); }
-  .permission details { margin-top: 0.35rem; color: var(--fg-dim); }
+  .permission-dock.min .permission-full {
+    opacity: 0;
+    pointer-events: none;
+  }
 
-  .permission pre {
+  /* Minimize affordance, tucked into the panel's top-right corner. */
+  .permission-min {
+    position: absolute;
+    top: 0.4rem;
+    right: 0.4rem;
+    width: 1.4rem;
+    height: 1.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    background: var(--bg);
+    color: var(--fg-dim);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  /* Minimize glyph drawn as a bar (no ambiguous-width dash character). */
+  .permission-min::before {
+    content: "";
+    width: 0.7rem;
+    height: 2px;
+    background: currentColor;
+    border-radius: 1px;
+  }
+
+  .permission-tool { margin: 0; padding-right: 1.6rem; color: var(--fg); }
+  .permission-note { margin: 0.3rem 0 0; color: var(--fg-dim); }
+  .permission-full details { margin-top: 0.35rem; color: var(--fg-dim); }
+
+  .permission-full pre {
     margin: 0.3rem 0 0;
     max-height: 10rem;
     overflow: auto;
@@ -1113,6 +1234,52 @@
   .interrupt-icon {
     font-size: 0.7em;
     line-height: 1;
+  }
+
+  /* Folded-state button: fills the dock (pill-sized when .min), crossfades
+     with the panel, and carries a pulsing lamp so a pending decision stays
+     noticeable in the corner. */
+  .permission-pill {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    border: 1px solid var(--c-waiting_permission);
+    border-radius: 0.45rem;
+    background: var(--bg-card);
+    color: var(--c-waiting_permission);
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+
+  .permission-dock.min .permission-pill {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .permission-pill-lamp {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: var(--c-waiting_permission);
+    box-shadow: 0 0 6px var(--c-waiting_permission);
+    animation: blink 1.2s ease-in-out infinite;
+  }
+
+  /* The fold/unfold move is a CSS transition, which the global reduced-motion
+     rule in app.css (animations only) does not tame — shorten it here too. */
+  @media (prefers-reduced-motion: reduce) {
+    .permission-dock,
+    .permission-full,
+    .permission-pill {
+      transition-duration: 0.01ms;
+    }
   }
 
   .instruct {
