@@ -15,6 +15,7 @@ defmodule KaoiroServer.AgentStates do
   reply line and never changes the latest state.
   `clear_other_sessions/2` drops the history lines outside the agent's
   current session (issue #48), leaving the latest state untouched.
+  `delete/1` removes a disconnected agent's entry entirely (issue #14).
 
   The one server-derived exception is `disconnected` (specs/protocol.md):
   `disconnect/3` overlays it when the wrapper channel that wrote the
@@ -83,6 +84,17 @@ defmodule KaoiroServer.AgentStates do
   def clear_other_sessions(agent_id, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.call(server, {:clear_other_sessions, agent_id})
+  end
+
+  @doc """
+  Removes a `disconnected` agent's entry entirely (issue #14). Only
+  deletes when the latest state is `disconnected` so a live agent cannot
+  be dropped from under its wrapper; returns `{:error, :not_disconnected}`
+  otherwise and `{:error, :unknown_agent}` when absent.
+  """
+  def delete(agent_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:delete, agent_id})
   end
 
   @doc "Returns the agent_id => latest envelope map."
@@ -155,6 +167,19 @@ defmodule KaoiroServer.AgentStates do
       {:reply, {:ok, sid}, Map.put(state, agent_id, %{entry | history: kept})}
     else
       _ -> {:reply, :noop, state}
+    end
+  end
+
+  def handle_call({:delete, agent_id}, _from, state) do
+    case state do
+      %{^agent_id => %{envelope: %{"state" => "disconnected"}}} ->
+        {:reply, :ok, Map.delete(state, agent_id)}
+
+      %{^agent_id => _} ->
+        {:reply, {:error, :not_disconnected}, state}
+
+      _ ->
+        {:reply, {:error, :unknown_agent}, state}
     end
   end
 

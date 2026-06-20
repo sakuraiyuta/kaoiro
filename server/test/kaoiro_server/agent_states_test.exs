@@ -38,6 +38,30 @@ defmodule KaoiroServer.AgentStatesTest do
     refute AgentStates.known?("agent-k2", server: store)
   end
 
+  describe "delete/1 (issue #14)" do
+    setup do
+      %{store: start_supervised!({AgentStates, name: :agent_states_delete_test})}
+    end
+
+    test "disconnected の agent を削除する", %{store: store} do
+      :ok =
+        AgentStates.put(envelope("a.del", %{"state" => "disconnected"}), server: store)
+
+      assert :ok = AgentStates.delete("a.del", server: store)
+      refute AgentStates.known?("a.del", server: store)
+    end
+
+    test "稼働中の agent は not_disconnected で拒否", %{store: store} do
+      :ok = AgentStates.put(envelope("a.live", %{"state" => "thinking"}), server: store)
+      assert {:error, :not_disconnected} = AgentStates.delete("a.live", server: store)
+      assert AgentStates.known?("a.live", server: store)
+    end
+
+    test "未知 agent は unknown_agent", %{store: store} do
+      assert {:error, :unknown_agent} = AgentStates.delete("a.none", server: store)
+    end
+  end
+
   describe "disconnect/4" do
     setup do
       store = start_supervised!({AgentStates, name: :agent_states_disc_test})

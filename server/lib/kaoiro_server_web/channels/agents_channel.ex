@@ -23,6 +23,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
   the server-side reply log of past sessions and broadcasts
   `history_cleared` so every client re-filters its transcript; it touches
   only the in-memory ring buffer, never the wrapper's session logs.
+  `delete_agent` (operator-only, issue #14) removes a `disconnected`
+  agent's residual entry and broadcasts `agent_deleted` so every client
+  drops it from the grid; it is rejected while the agent is still live.
   """
 
   use Phoenix.Channel
@@ -126,6 +129,24 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {:reply, :ok, socket}
     else
       :noop -> {:reply, {:error, %{reason: "no_current_session"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
+  # Operator-only removal of a disconnected agent's residual entry (issue
+  # #14). AgentStates enforces the disconnected guard so a still-live
+  # agent cannot be dropped from under its wrapper; on success broadcast
+  # `agent_deleted` so every client removes it from the grid.
+  def handle_in("delete_agent", payload, socket) do
+    with :ok <- require_operator(socket),
+         {:ok, agent_id} <- fetch_agent_id(payload),
+         :ok <- AgentStates.delete(agent_id) do
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "agent_deleted", %{
+        "agent_id" => agent_id
+      })
+
+      {:reply, :ok, socket}
+    else
       {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
     end
   end

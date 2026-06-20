@@ -269,6 +269,62 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "delete_agent (issue #14)" do
+    defp put_disconnected(agent_id) do
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "disconnected"
+        })
+    end
+
+    test "operator は disconnected agent を削除し agent_deleted を broadcast" do
+      agent_id = "test.del-1"
+      put_disconnected(agent_id)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok
+      assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
+      refute AgentStates.known?(agent_id)
+    end
+
+    test "稼働中 agent の削除は not_disconnected で拒否" do
+      agent_id = "test.del-2"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
+
+      assert_reply ref, :error, %{reason: "not_disconnected"}
+      assert AgentStates.known?(agent_id)
+    end
+
+    test "viewer の削除は forbidden" do
+      agent_id = "test.del-3"
+      put_disconnected(agent_id)
+      socket = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "未知 agent は unknown_agent" do
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "delete_agent", %{"agent_id" => "test.del-none"})
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+  end
+
   describe "permission_request の input 秘匿 (threat-model)" do
     defp permission_envelope(agent_id) do
       %{
