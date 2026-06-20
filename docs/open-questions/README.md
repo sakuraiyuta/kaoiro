@@ -7,7 +7,6 @@
 
 | Slug | Urgency | Blocks | Opened |
 |------|---------|--------|--------|
-| [disconnected-agent-removal](disconnected-agent-removal.md) | low | — | 2026-06-11 |
 | [resume-history-projection](resume-history-projection.md) | high | — | 2026-06-16 |
 | [live2d-oss-rendering](live2d-oss-rendering.md) | low | — | 2026-06-15 |
 | [subagent-task-envelope-schema](subagent-task-envelope-schema.md) | high | subagent-tasks | 2026-06-16 |
