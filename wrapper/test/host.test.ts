@@ -176,6 +176,27 @@ describe("AgentHost — query injection", () => {
     expect(e?.ext).toMatchObject({ model: "claude-x", cwd: "/repo" });
   });
 
+  it("init の slash_commands を ext.slash_commands に付与する (#34)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: scriptedQuery([
+        msg({
+          type: "system",
+          subtype: "init",
+          model: "claude-x",
+          cwd: "/repo",
+          slash_commands: ["model", "review", "clear"],
+        }),
+        assistant([{ type: "text", text: "hi" }]),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const e = envs.find((env) => env.state === "thinking");
+    expect(e?.ext?.slash_commands).toEqual(["model", "review", "clear"]);
+  });
+
   it("getContextUsage を ext.context / ext.model として付与する (#16)", async () => {
     const envs: Envelope[] = [];
     const usage = {

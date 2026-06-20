@@ -236,19 +236,26 @@ export function sdkMessageToRateLimit(
   return message.type === "rate_limit_event" ? message.rate_limit_info : null;
 }
 
-/** Session init meta — active model and working directory — from a
- *  system/init message (#16), or null for other messages. The SDK emits one
- *  init per session; the host stamps these into state_change ext. */
+/** Session init meta — active model, working directory, and available
+ *  slash commands (#16, #34) — from a system/init message, or null for other
+ *  messages. The SDK emits one init per session; the host stamps these into
+ *  state_change ext. */
 export function sdkMessageToInitMeta(
   message: SDKMessage,
-): { model?: string; cwd?: string } | null {
+): { model?: string; cwd?: string; slash_commands?: string[] } | null {
   if (message.type !== "system" || message.subtype !== "init") return null;
-  const meta: { model?: string; cwd?: string } = {};
+  const meta: { model?: string; cwd?: string; slash_commands?: string[] } = {};
   if (typeof message.model === "string" && message.model !== "") {
     meta.model = message.model;
   }
   if (typeof message.cwd === "string" && message.cwd !== "") {
     meta.cwd = message.cwd;
+  }
+  if (Array.isArray(message.slash_commands)) {
+    const commands = message.slash_commands.filter(
+      (c): c is string => typeof c === "string",
+    );
+    if (commands.length > 0) meta.slash_commands = commands;
   }
   return meta;
 }

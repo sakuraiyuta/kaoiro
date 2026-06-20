@@ -128,6 +128,9 @@ export class AgentHost {
    *  rate limits. All best-effort — absent until the SDK surfaces them. */
   #model: string | null = null;
   #cwd: string | null = null;
+  /** Slash commands the SDK reported at session init (#34); surfaced so the
+   *  dashboard can offer `/` completion. */
+  #slashCommands: string[] | null = null;
   #context:
     | { used_tokens: number; max_tokens: number; used_percentage: number }
     | null = null;
@@ -272,6 +275,7 @@ export class AgentHost {
     const ext: Record<string, unknown> = {};
     if (this.#model !== null) ext.model = this.#model;
     if (this.#cwd !== null) ext.cwd = this.#cwd;
+    if (this.#slashCommands !== null) ext.slash_commands = this.#slashCommands;
     if (this.#context !== null) ext.context = this.#context;
     if (this.#rateLimits.size > 0) {
       ext.rate_limits = Object.fromEntries(this.#rateLimits);
@@ -279,10 +283,18 @@ export class AgentHost {
     return ext;
   }
 
-  /** Records the active model and working directory from session init (#16). */
-  #applyInitMeta(meta: { model?: string; cwd?: string }): void {
+  /** Records the active model, working directory, and slash commands from
+   *  session init (#16, #34). */
+  #applyInitMeta(meta: {
+    model?: string;
+    cwd?: string;
+    slash_commands?: string[];
+  }): void {
     if (meta.model !== undefined) this.#model = meta.model;
     if (meta.cwd !== undefined) this.#cwd = meta.cwd;
+    if (meta.slash_commands !== undefined) {
+      this.#slashCommands = meta.slash_commands;
+    }
   }
 
   /** Records the latest rate-limit snapshot for its window (#16). */
