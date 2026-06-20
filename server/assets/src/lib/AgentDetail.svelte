@@ -91,6 +91,20 @@
     return Math.max(0, Math.min(100, Math.round(value)));
   }
 
+  /** A finite, non-negative number, or null — for raw token counts (#55). */
+  function numOrNull(value: unknown): number | null {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? value
+      : null;
+  }
+
+  /** Compact token count: 1234 -> "1.2k", 1_200_000 -> "1.2M" (#55). */
+  function fmtTokens(n: number): string {
+    if (n < 1000) return String(n);
+    if (n < 1_000_000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+  }
+
   /** Format an epoch reset time (seconds or milliseconds) as MM/DD HH:MM. */
   function fmtReset(value: unknown): string | null {
     if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -165,6 +179,10 @@
     envelope.ext?.context as Record<string, unknown> | undefined,
   );
   const ctxPct = $derived(pctClamp(ccContext?.used_percentage));
+  // Real token counts behind the ctx meter (#55): the percentage alone hides
+  // how much room is left. Both come from the same SDK usage object.
+  const ctxUsed = $derived(numOrNull(ccContext?.used_tokens));
+  const ctxMax = $derived(numOrNull(ccContext?.max_tokens));
   const ccRateRows = $derived(buildRateRows(envelope.ext?.rate_limits));
   // The always-present seven_day placeholder (pct null) must not, by itself,
   // open the panel for a non-Claude-Code agent — require real meta or a
@@ -489,7 +507,13 @@
                 <div class="meter">
                   <div class="meter-fill" style:width="{ctxPct}%"></div>
                 </div>
-                <span class="meter-val">{ctxPct}%</span>
+                <span class="meter-val">
+                  {ctxPct}%
+                  {#if ctxUsed !== null && ctxMax !== null}
+                    <span class="meter-abs"
+                      >({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})</span>
+                  {/if}
+                </span>
               </dd>
             </div>
           {/if}
@@ -1094,6 +1118,14 @@
     color: var(--fg-dim);
     font-variant-numeric: tabular-nums;
     overflow-wrap: anywhere;
+  }
+
+  /* Raw token counts beside the ctx percentage (#55): dimmer and smaller so
+     the percentage stays the primary read. */
+  .meter-abs {
+    margin-left: 0.3em;
+    font-size: 0.85em;
+    opacity: 0.8;
   }
 
   .log {
