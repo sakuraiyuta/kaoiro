@@ -321,6 +321,61 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "state_change の ext 秘匿 (issue #46)" do
+    defp state_with_ext(agent_id) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-11T00:00:00Z",
+        "type" => "state_change",
+        "state" => "thinking",
+        "ext" => %{
+          "cwd" => "/home/user/secret-project",
+          "model" => "opus",
+          "context" => %{"used_percentage" => 42}
+        }
+      }
+    end
+
+    test "viewer への broadcast から ext が落ちる" do
+      agent_id = "test.ext-1"
+      _socket = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        state_with_ext(agent_id)
+      )
+
+      assert_push "envelope", pushed
+      assert pushed["type"] == "state_change"
+      refute Map.has_key?(pushed, "ext")
+    end
+
+    test "operator への broadcast は ext を保つ" do
+      agent_id = "test.ext-2"
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        state_with_ext(agent_id)
+      )
+
+      assert_push "envelope", pushed
+      assert pushed["ext"]["cwd"] == "/home/user/secret-project"
+    end
+
+    test "viewer への snapshot からも ext が落ちる" do
+      agent_id = "test.ext-3"
+      :ok = AgentStates.put(state_with_ext(agent_id))
+      _socket = join_as(:viewer)
+
+      assert_push "snapshot", %{"agents" => agents}
+      refute Map.has_key?(agents[agent_id], "ext")
+    end
+  end
+
   describe "返答ログの operator 限定配信 (ADR-0012)" do
     defp log_envelope(agent_id, text) do
       %{

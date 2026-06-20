@@ -4,7 +4,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   `snapshot` event with the current agent_id => latest envelope map;
   `envelope` broadcasts follow as agents change state. Both are sanitized
   per role: viewers see a pending permission_request but not its tool
-  input, which may carry secrets (specs/threat-model.md).
+  input, which may carry secrets (specs/threat-model.md). The `ext`
+  statusline meta on a state_change (cwd, model, context, rate_limits) is
+  operator-only too — cwd alone leaks the host's filesystem layout
+  (issue #46).
 
   Operators additionally get a `history` push (the per-agent reply log)
   on join and the live `log` / `result` reply envelopes; viewers receive
@@ -167,6 +170,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp sanitize_for(_role, %{"type" => "permission_request"} = envelope) do
     Map.update(envelope, "payload", %{}, &Map.drop(&1, ["input"]))
+  end
+
+  # The ext statusline meta (cwd / model / context / rate_limits) is
+  # operator-only: cwd leaks the host's filesystem layout, and the rest
+  # is operational detail viewers have no need for (issue #46). Drop the
+  # whole ext rather than per-field so a future ext key is private by
+  # default.
+  defp sanitize_for(_role, %{"type" => "state_change"} = envelope) do
+    Map.delete(envelope, "ext")
   end
 
   defp sanitize_for(_role, envelope), do: envelope

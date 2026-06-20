@@ -34,7 +34,11 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 3. **tool input 経由の情報漏えい**: `permission_request` の `input` には
    コマンドライン・ファイルパス・環境値などシークレットが混入し得る。
    閲覧権限(viewer)にも配信されるため、トークン管理が緩いと漏れる。
-4. **セッション resume/召喚 = リモート起動 + 履歴露出**: クライアントから
+4. **statusline メタ(`ext`)経由の情報漏えい**: state_change の `ext` に
+   付く cwd(作業ディレクトリの絶対パス = ファイルシステム構成・プロジェクト
+   名が露出)や model / context / rate_limits は、当初 catch-all で viewer にも
+   素通ししていた(#16 由来)。cwd は特に機微(#46)。
+5. **セッション resume/召喚 = リモート起動 + 履歴露出**: クライアントから
    サーバ経由で wrapper を resume 起動する経路は脅威1(リモートツール実行)の
    延長([ADR-0014](../adr/0014-session-resume-and-restore.md)、issue #22)。
    さらに候補提示で runner が返す JSONL のメタ(先頭プロンプト要約等)は会話
@@ -52,6 +56,7 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | 指示の監査ログ(誰が・いつ・どの agent に何を送ったか) | 将来(SQLite 導入時) |
 | tool input のマスキング(シークレットパターンの伏字) | 将来 |
 | 返答ログ(`log`/`result`、tool 入出力含む)を operator 限定配信 | Phase 3.5([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
+| state_change の `ext`(cwd / model / context / rate_limits)を operator 限定配信(viewer には `ext` を除去) | #46 で実装 |
 | ユーザトークンを httpOnly + 暗号化 session cookie に保持(XSS でも JS から読めず、cookie jar 上でも秘匿)。CSRF は SameSite=Lax + prod の `check_origin` で抑止 | Phase 3.5([ADR-0013](../adr/0013-user-token-cookie-persistence.md)) |
 | OAuth + RBAC 本実装 | 将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
 | セッション召喚時に runner が返す JSONL メタ(先頭プロンプト要約等)を operator role 限定・最小限に露出(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) | 将来(resume 機能と同時) |
@@ -62,6 +67,9 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 - MUST: 指示・承認の受理は operator role のみ([protocol](protocol.md))。
 - MUST: 返答ログ(`log`/`result`)の配信は operator role のみ
   ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。
+- MUST: state_change の `ext`(statusline メタ: cwd / model / context /
+  rate_limits)の配信は operator role のみ(#46)。viewer ロールの情報公開
+  範囲全体の定義は別途 spec-elicitation([issue #46](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/46))。
 - MUST: ラッパーはサーバから受けた指示で `allowedTools` /
   `canUseTool` の設定を変更しない(実行能力の天井はローカル設定)。
 - MUST: resume 対象 session_id は当該 agent の束縛 cwd 配下に実在するものに
