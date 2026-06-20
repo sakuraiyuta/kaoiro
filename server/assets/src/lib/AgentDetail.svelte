@@ -214,6 +214,12 @@
   // surfaces gate the interrupt button on the same set.
   const canInterrupt = $derived(RUNNING_STATES.has(envelope.state));
 
+  // Delete is offered only for a disconnected agent (#14); the interrupt
+  // button is hidden then (disconnected is not a running state), so the
+  // delete button takes its place in the same action slot below it.
+  const canDelete = $derived(envelope.state === "disconnected");
+  let deleting = $state(false);
+
   // Folded state of the permission dock (#…): when true it sits as a small
   // button in the conversation's top-right corner instead of covering the
   // transcript. permFullH carries the panel's natural height so the dock can
@@ -321,6 +327,25 @@
         await connection.sendInterrupt(envelope.agent_id);
       } finally {
         interrupting = false;
+      }
+    });
+  }
+
+  // Remove a disconnected agent (#14): destructive, so confirm first. On
+  // success the server broadcasts agent_deleted; App drops it and this
+  // detail falls back to the grid as its selected agent vanishes.
+  function deleteAgent(): void {
+    if (!connection || deleting) return;
+    const ok = window.confirm(
+      `切断済みエージェント「${name}」を一覧から削除します。よろしいですか?`,
+    );
+    if (!ok) return;
+    void run(async () => {
+      deleting = true;
+      try {
+        await connection.deleteAgent(envelope.agent_id);
+      } finally {
+        deleting = false;
       }
     });
   }
@@ -543,6 +568,19 @@
           >
             <span class="interrupt-icon" aria-hidden="true">■</span>
             {interrupting ? "中断中…" : "中断"}
+          </button>
+        {:else if canDelete}
+          <!-- Delete a disconnected agent (#14): sits in the interrupt
+               button's slot (the two never show at once). -->
+          <button
+            type="button"
+            class="remove"
+            onclick={deleteAgent}
+            disabled={deleting}
+            title="切断済みエージェントを一覧から削除"
+          >
+            <span class="remove-icon" aria-hidden="true">✕</span>
+            {deleting ? "削除中…" : "削除"}
           </button>
         {/if}
 
@@ -1232,6 +1270,37 @@
   }
 
   .interrupt-icon {
+    font-size: 0.7em;
+    line-height: 1;
+  }
+
+  /* Delete a disconnected agent (#14): occupies the interrupt button's slot
+     (mutually exclusive states), styled as a muted destructive action. */
+  .remove {
+    align-self: flex-end;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    border: 1px solid var(--c-error);
+    border-radius: 0.4rem;
+    background: var(--bg-card);
+    color: var(--c-error);
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .remove:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--c-error) 14%, var(--bg-card));
+  }
+
+  .remove:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .remove-icon {
     font-size: 0.7em;
     line-height: 1;
   }

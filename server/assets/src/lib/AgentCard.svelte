@@ -10,6 +10,7 @@
     manifest = null,
     onSelect,
     onInterrupt,
+    onDelete,
   }: {
     envelope: Envelope;
     manifest?: PersonaManifest | null;
@@ -19,6 +20,9 @@
     // App.svelte conditionally passes undefined when there is no connection.
     /** ESC equivalent (#51); pass undefined to hide the button. */
     onInterrupt?: (() => Promise<void>) | undefined;
+    /** Remove a disconnected agent (#14); pass undefined to hide the
+     *  button (e.g. no connection / viewer). */
+    onDelete?: (() => Promise<void>) | undefined;
   } = $props();
 
   // Hand the detail the tile's viewport centre so it grows from this tile.
@@ -71,6 +75,32 @@
       interrupting = false;
     }
   }
+
+  // Delete button only for a disconnected agent (#14); mutually exclusive
+  // with the interrupt button (running vs disconnected never overlap).
+  const canDelete = $derived(
+    onDelete !== undefined && envelope.state === "disconnected",
+  );
+
+  let deleting = $state(false);
+
+  async function handleDelete(event: MouseEvent): Promise<void> {
+    // Don't open the detail when the operator clicks delete on the tile.
+    event.stopPropagation();
+    if (deleting || !onDelete) return;
+    const ok = window.confirm(
+      `切断済みエージェント「${name}」を一覧から削除します。よろしいですか?`,
+    );
+    if (!ok) return;
+    deleting = true;
+    try {
+      await onDelete();
+    } catch (err) {
+      console.warn("delete failed:", err);
+    } finally {
+      deleting = false;
+    }
+  }
 </script>
 
 <article class="card" data-state={expression.variant}>
@@ -112,6 +142,18 @@
     >
       <span class="stop-icon" aria-hidden="true">■</span>
       <span class="stop-label">{interrupting ? "中断中…" : "中断"}</span>
+    </button>
+  {:else if canDelete}
+    <button
+      type="button"
+      class="remove"
+      onclick={handleDelete}
+      disabled={deleting}
+      title="切断済みエージェントを一覧から削除"
+      aria-label="{name} を削除"
+    >
+      <span class="remove-icon" aria-hidden="true">✕</span>
+      <span class="stop-label">{deleting ? "削除中…" : "削除"}</span>
     </button>
   {/if}
 </article>
@@ -371,6 +413,39 @@
   }
 
   .stop-icon {
+    font-size: 0.7em;
+    line-height: 1;
+  }
+
+  /* Delete button (#14): same corner chip as .stop but a muted danger tone,
+     shown only for a disconnected agent (never overlaps the interrupt). */
+  .remove {
+    position: absolute;
+    bottom: 0.35rem;
+    right: 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.18rem 0.45rem;
+    border: 1px solid var(--c-error);
+    border-radius: 0.3rem;
+    background: var(--bg-card);
+    color: var(--c-error);
+    font: inherit;
+    font-size: 0.65rem;
+    cursor: pointer;
+  }
+
+  .remove:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--c-error) 14%, var(--bg-card));
+  }
+
+  .remove:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .remove-icon {
     font-size: 0.7em;
     line-height: 1;
   }

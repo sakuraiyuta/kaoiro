@@ -150,6 +150,19 @@
               [agentId]: prev.filter((e) => e.session_id === sessionId),
             };
           },
+          onAgentDeleted: (agentId) => {
+            // A disconnected agent was removed (#14): drop it from the grid
+            // and its transcript. The detail view falls back to the grid on
+            // its own when the selected agent vanishes (selectedEnvelope).
+            agents = Object.fromEntries(
+              Object.entries(agents).filter(([id]) => id !== agentId),
+            );
+            if (logs[agentId]) {
+              logs = Object.fromEntries(
+                Object.entries(logs).filter(([id]) => id !== agentId),
+              );
+            }
+          },
         },
         connectOpts,
       );
@@ -246,6 +259,9 @@
             }}
             onInterrupt={connection
               ? () => connection!.sendInterrupt(envelope.agent_id)
+              : undefined}
+            onDelete={connection
+              ? () => connection!.deleteAgent(envelope.agent_id)
               : undefined}
           />
         </li>

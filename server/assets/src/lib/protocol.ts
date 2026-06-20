@@ -152,6 +152,9 @@ export interface KaoiroHandlers {
   /** A past-session log purge (issue #48): the named agent's transcript
    *  should drop every line outside `sessionId`. Operator-only. */
   onHistoryCleared?: (agentId: string, sessionId: string) => void;
+  /** A disconnected agent was removed (issue #14): drop it from the grid.
+   *  Operator-only. */
+  onAgentDeleted?: (agentId: string) => void;
 }
 
 export interface KaoiroConnection {
@@ -172,6 +175,9 @@ export interface KaoiroConnection {
   /** Purges the agent's past-session reply log (issue #48); rejects like
    * sendInstruction (forbidden / unknown_agent / no_current_session). */
   clearHistory: (agentId: string) => Promise<void>;
+  /** Removes a disconnected agent (issue #14); rejects like
+   * sendInstruction (forbidden / unknown_agent / not_disconnected). */
+  deleteAgent: (agentId: string) => Promise<void>;
 }
 
 export interface ConnectOptions {
@@ -260,6 +266,11 @@ export function connectKaoiro(
       }
     },
   );
+  channel.on("agent_deleted", (payload: { agent_id?: unknown }) => {
+    if (typeof payload.agent_id === "string") {
+      handlers.onAgentDeleted?.(payload.agent_id);
+    }
+  });
   channel.join();
 
   return {
@@ -279,6 +290,8 @@ export function connectKaoiro(
       pushAsync(channel, "interrupt", { agent_id: agentId }),
     clearHistory: (agentId) =>
       pushAsync(channel, "clear_history", { agent_id: agentId }),
+    deleteAgent: (agentId) =>
+      pushAsync(channel, "delete_agent", { agent_id: agentId }),
   };
 }
 
