@@ -147,6 +147,34 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  describe "session_id ポインタの永続 (ADR-0014 F1, #49)" do
+    test "session_id 付き envelope でポインタを記録する" do
+      agent_id = "test.ptr-1"
+      socket = join_wrapper(agent_id)
+
+      env =
+        envelope(agent_id, "thinking")
+        |> Map.put("session_id", "sess-xyz")
+        |> Map.put("ext", %{"cwd" => "/home/user/proj"})
+
+      ref = push(socket, "envelope", env)
+      assert_reply ref, :ok
+
+      assert KaoiroServer.SessionPointers.get(agent_id) ==
+               %{session_id: "sess-xyz", cwd: "/home/user/proj"}
+    end
+
+    test "session_id なし envelope はポインタを作らない" do
+      agent_id = "test.ptr-2"
+      socket = join_wrapper(agent_id)
+
+      ref = push(socket, "envelope", envelope(agent_id, "thinking"))
+      assert_reply ref, :ok
+
+      assert KaoiroServer.SessionPointers.get(agent_id) == nil
+    end
+  end
+
   describe "切断時の disconnected 導出" do
     test "channel 終了で disconnected を broadcast し snapshot を更新する" do
       agent_id = "test.disc-1"

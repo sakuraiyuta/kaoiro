@@ -1,7 +1,9 @@
 defmodule KaoiroServerWeb.WrapperChannel do
   @moduledoc """
   Ingests envelopes from one wrapper (topic `wrapper:<agent_id>`), stores
-  the latest state, and fans them out to clients (`agents:lobby`).
+  the latest state, and fans them out to clients (`agents:lobby`). An
+  envelope's `session_id` (once the wrapper reports one) also refreshes
+  the agent's restart-surviving pointer (ADR-0014 F1, issue #49).
 
   Validation covers only the envelope v0 frame keys; per ADR-0010 the
   payload stays opaque to the server (agent-agnostic relay). Joins are
@@ -15,6 +17,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
+  alias KaoiroServer.SessionPointers
 
   @frame_keys ~w(version agent_id ts type state)
 
@@ -42,6 +45,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   def handle_in("envelope", envelope, socket) do
     with :ok <- validate(envelope, socket.assigns.agent_id),
          :ok <- store(envelope) do
+      record_session_pointer(envelope)
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
       {:reply, :ok, socket}
     else
@@ -67,6 +71,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp store(envelope), do: AgentStates.put(envelope, owner: self())
+
+  # Persist the agent's latest SDK session_id as a restart-surviving
+  # pointer (ADR-0014 F1, issue #49). Only fires once the wrapper has
+  # reported a real session_id; cwd rides along from ext when present.
+  defp record_session_pointer(%{"agent_id" => agent_id, "session_id" => sid} = envelope)
+       when is_binary(sid) and sid != "" do
+    cwd =
+      case envelope do
+        %{"ext" => %{"cwd" => c}} when is_binary(c) -> c
+        _ -> nil
+      end
+
+    SessionPointers.record(agent_id, sid, cwd)
+  end
+
+  defp record_session_pointer(_envelope), do: :ok
 
   @impl true
   def terminate(_reason, socket) do

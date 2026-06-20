@@ -33,6 +33,15 @@ config :kaoiro_server, :persona_dir, System.get_env("KAOIRO_PERSONA_DIR")
 config :kaoiro_server, :wrapper_tokens, System.get_env("KAOIRO_WRAPPER_TOKENS")
 config :kaoiro_server, :client_tokens, System.get_env("KAOIRO_CLIENT_TOKENS")
 
+# DETS file for the restart-surviving session_id pointers (ADR-0014 F1,
+# issue #49). Point this at a persistent volume in production; the unset
+# default (a tmp path, resolved in KaoiroServer.SessionPointers) survives
+# a process restart but not a fresh container. A lost pointer only drops
+# the default resume target — the runner can re-enumerate (ADR-0014 F2).
+config :kaoiro_server,
+       :session_pointers_path,
+       System.get_env("KAOIRO_SESSION_POINTERS_PATH")
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

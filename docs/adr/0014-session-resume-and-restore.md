@@ -153,8 +153,13 @@ runner 実装が前提。
   - 検証ゴール: サーバが各 agent の現 session_id を再起動越しに記憶。
   - **実装状況(#48, 2026-06-16)**: wrapper の session_id 捕捉・報告とエンベロープ
     への top-level `session_id` 付与は実装済み(過去セッションのログ消去機能と
-    併せて)。サーバはエンベロープの session_id を保持・配信するが、**F1 のポインタ
-    軽量永続(再起動越しの記憶)と Q-A4 の実検証は未了**。
+    併せて)。サーバはエンベロープの session_id を保持・配信する。
+  - **実装状況(#49, 2026-06-20)**: F1 のポインタ軽量永続を実装済み
+    (`KaoiroServer.SessionPointers`、DETS バック)。envelope 取り込み時に
+    `agent_id => {session_id, cwd}` を更新し再起動越しに記憶する。`host` は
+    agent_id に内包される(F3)ためサーバでは非保持。ファイルパスは
+    `KAOIRO_SESSION_POINTERS_PATH` で上書き可。**Q-A4 の実検証は未了**(別途、
+    [#50](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/50))。
 - **phase-1(#22/#23 runner 前提)**: 復帰本体。
   - #22 spawn の resume モード拡張、runner の候補列挙(F2)、F4 の二重防止、
     T3 検証、クライアント復帰 UI(operator 限定、T2)。

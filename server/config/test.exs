@@ -7,6 +7,12 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
   secret_key_base: "QuGyT2gNZpDdXTzHcZKPuBUNVFi4omSMAOW2apvMFd3dOx453osH4dzIL8LjwC6e",
   server: false
 
+# Throwaway DETS file for the session_id pointer store (issue #49); the
+# app-started instance writes here, isolated from any real data.
+config :kaoiro_server,
+       :session_pointers_path,
+       Path.join(System.tmp_dir!(), "kaoiro_test_session_pointers.dets")
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 
