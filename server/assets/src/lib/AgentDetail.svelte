@@ -281,8 +281,74 @@
     });
   }
 
+  // --- Slash command completion (#34) ---------------------------------------
+  // Commands the SDK reported at session init, surfaced via ext. Viewers never
+  // see the menu: #46 strips ext for non-operators, so slashCommands is empty.
+  let slashTextarea = $state<HTMLTextAreaElement | null>(null);
+  let slashIndex = $state(0);
+  const slashCommands = $derived.by(() => {
+    const raw = envelope.ext?.slash_commands;
+    return Array.isArray(raw)
+      ? raw.filter((c): c is string => typeof c === "string")
+      : [];
+  });
+  // The command token being typed: "/" + non-space with no space yet. null
+  // once a space is typed or the input does not start with "/".
+  const slashQuery = $derived.by(() => {
+    const m = /^\/(\S*)$/.exec(instruction);
+    return m ? m[1] : null;
+  });
+  const slashMatches = $derived.by(() => {
+    if (slashQuery === null || slashCommands.length === 0) return [];
+    const q = slashQuery.toLowerCase();
+    return slashCommands.filter((c) => c.toLowerCase().startsWith(q)).slice(0, 8);
+  });
+  // Escape dismisses the menu for the current query; retyping reopens it.
+  let slashDismissed = $state<string | null>(null);
+  const showSlash = $derived(
+    slashMatches.length > 0 && slashDismissed !== slashQuery,
+  );
+  // Keep the highlight in range as the match set changes.
+  $effect(() => {
+    void slashMatches.length;
+    slashIndex = 0;
+  });
+
+  function applySlash(command: string): void {
+    instruction = `/${command} `;
+    slashDismissed = null;
+    slashTextarea?.focus();
+  }
+
   // Multi-line input (#33): Enter inserts a newline; Ctrl/Cmd+Enter submits.
+  // While the slash menu is open (#34), arrows/Tab/Enter/Escape drive it.
   function onInstructionKeydown(event: KeyboardEvent): void {
+    if (showSlash) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        slashIndex = (slashIndex + 1) % slashMatches.length;
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        slashIndex =
+          (slashIndex - 1 + slashMatches.length) % slashMatches.length;
+        return;
+      }
+      if (
+        event.key === "Tab" ||
+        (event.key === "Enter" && !event.ctrlKey && !event.metaKey)
+      ) {
+        event.preventDefault();
+        applySlash(slashMatches[slashIndex]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        slashDismissed = slashQuery;
+        return;
+      }
+    }
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       (event.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
@@ -635,11 +701,31 @@
         {/if}
 
         <div class="composer" bind:offsetHeight={composerH}>
+          {#if showSlash}
+            <!-- Slash command completion (#34): pick with click or
+                 arrows + Tab/Enter; Escape dismisses. -->
+            <ul class="slash-menu" role="listbox" aria-label="スラッシュコマンド候補">
+              {#each slashMatches as cmd, i (cmd)}
+                <li>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={i === slashIndex}
+                    class:active={i === slashIndex}
+                    onmousedown={(e) => {
+                      e.preventDefault();
+                      applySlash(cmd);
+                    }}>/{cmd}</button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
           <form class="instruct" onsubmit={sendInstruction}>
             <textarea
               class:sending={display.shown === "sending"}
-              placeholder="指示を送る…(Ctrl+Enter で送信)"
+              placeholder="指示を送る…(Ctrl+Enter で送信、/ でコマンド候補)"
               bind:value={instruction}
+              bind:this={slashTextarea}
               onkeydown={onInstructionKeydown}
               rows="2"
               aria-label="instruction for {name}"
@@ -722,11 +808,55 @@
   }
 
   /* Wrapper exists only to measure the input area's height (--composer-h), so
-     the floating permission dock can rest just above it (#46). */
+     the floating permission dock can rest just above it (#46). position:
+     relative anchors the slash-command menu (#34) above the textarea. */
   .composer {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 1rem;
+  }
+
+  /* Slash command menu (#34): floats just above the composer; the highlighted
+     row tracks keyboard navigation, hover mirrors it. */
+  .slash-menu {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    width: min(20rem, 100%);
+    max-height: 12rem;
+    margin: 0 0 0.4rem;
+    padding: 0.25rem;
+    list-style: none;
+    overflow-y: auto;
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    z-index: 5;
+  }
+
+  .slash-menu li {
+    margin: 0;
+  }
+
+  .slash-menu button {
+    display: block;
+    width: 100%;
+    padding: 0.3rem 0.5rem;
+    border: none;
+    border-radius: 0.25rem;
+    background: none;
+    color: var(--fg);
+    font: inherit;
+    font-size: 0.8rem;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .slash-menu button.active,
+  .slash-menu button:hover {
+    background: color-mix(in srgb, var(--tone) 20%, var(--bg-card));
   }
 
   @media (max-width: 640px) {

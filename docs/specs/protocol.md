@@ -87,7 +87,7 @@ flowchart LR
 | `type` | イベント種別 | 閉じた enum。下記「type と payload」 |
 | `state` | 状態機械の現在状態 | 下記参照 |
 | `payload` | 種別ごとの本体 | 型は `type` に依存。下記「type と payload」 |
-| `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。実装済: `cost`(累計 USD、#8、Claude Code アダプタが result に付与)/ `model`・`cwd`・`context`(`{used_tokens,max_tokens,used_percentage}`)・`rate_limits`(`{<window>:{status,utilization,resets_at}}`、window=`five_hour`/`seven_day`…)を state_change に付与(#16、Claude Code アダプタ。SDK が公開した時のみ・best-effort)。他は初期空。**state_change の `ext` は operator 限定配信**(viewer には除去。cwd 等の機微を含むため、#46、[threat-model](threat-model.md)) |
+| `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。実装済: `cost`(累計 USD、#8、Claude Code アダプタが result に付与)/ `model`・`cwd`・`context`(`{used_tokens,max_tokens,used_percentage}`)・`rate_limits`(`{<window>:{status,utilization,resets_at}}`、window=`five_hour`/`seven_day`…)・`slash_commands`(`string[]`、利用可能なスラッシュコマンド名、クライアントの `/` 補完用、#34)を state_change に付与(#16/#34、Claude Code アダプタ。SDK が公開した時のみ・best-effort)。他は初期空。**state_change の `ext` は operator 限定配信**(viewer には除去。cwd 等の機微を含むため、#46、[threat-model](threat-model.md)) |
 
 ### type と payload(v0 確定)
 
