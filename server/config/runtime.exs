@@ -36,8 +36,10 @@ config :kaoiro_server, :client_tokens, System.get_env("KAOIRO_CLIENT_TOKENS")
 # DETS file for the restart-surviving session_id pointers (ADR-0014 F1,
 # issue #49). Point this at a persistent volume in production; the unset
 # default (a tmp path, resolved in KaoiroServer.SessionPointers) survives
-# a process restart but not a fresh container. A lost pointer only drops
-# the default resume target — the runner can re-enumerate (ADR-0014 F2).
+# a process restart but not a fresh container. The file is created
+# owner-only (chmod 600) since records carry cwd (sensitive, #46). A lost
+# pointer only drops the default resume target — the runner re-enumerates
+# (ADR-0014 F2).
 config :kaoiro_server,
        :session_pointers_path,
        System.get_env("KAOIRO_SESSION_POINTERS_PATH")

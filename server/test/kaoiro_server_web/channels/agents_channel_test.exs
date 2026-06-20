@@ -430,6 +430,31 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "snapshot", %{"agents" => agents}
       refute Map.has_key?(agents[agent_id], "ext")
     end
+
+    test "viewer の permission_request からも ext が落ちる" do
+      agent_id = "test.ext-4"
+      _socket = join_as(:viewer)
+
+      envelope = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-11T00:00:00Z",
+        "type" => "permission_request",
+        "state" => "waiting_permission",
+        "ext" => %{"cwd" => "/home/user/secret-project"},
+        "payload" => %{
+          "request_id" => "req-e",
+          "tool_name" => "Bash",
+          "input" => %{"command" => "cat .env"}
+        }
+      }
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+
+      assert_push "envelope", pushed
+      refute Map.has_key?(pushed, "ext")
+      refute Map.has_key?(pushed["payload"], "input")
+    end
   end
 
   describe "返答ログの operator 限定配信 (ADR-0012)" do

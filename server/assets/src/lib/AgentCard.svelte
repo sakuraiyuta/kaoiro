@@ -153,7 +153,7 @@
       aria-label="{name} を削除"
     >
       <span class="remove-icon" aria-hidden="true">✕</span>
-      <span class="stop-label">{deleting ? "削除中…" : "削除"}</span>
+      <span class="remove-label">{deleting ? "削除中…" : "削除"}</span>
     </button>
   {/if}
 </article>

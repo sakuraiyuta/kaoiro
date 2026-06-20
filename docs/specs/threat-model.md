@@ -67,9 +67,10 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 - MUST: 指示・承認の受理は operator role のみ([protocol](protocol.md))。
 - MUST: 返答ログ(`log`/`result`)の配信は operator role のみ
   ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。
-- MUST: state_change の `ext`(statusline メタ: cwd / model / context /
-  rate_limits)の配信は operator role のみ(#46)。viewer ロールの情報公開
-  範囲全体の定義は別途 spec-elicitation([issue #46](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/46))。
+- MUST: envelope の `ext`(statusline メタ: cwd / model / context /
+  rate_limits / slash_commands)の配信は operator role のみ(#46。viewer には
+  全 type で除去)。viewer ロールの情報公開範囲全体の定義は別途
+  spec-elicitation([issue #46](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/46))。
 - MUST: ラッパーはサーバから受けた指示で `allowedTools` /
   `canUseTool` の設定を変更しない(実行能力の天井はローカル設定)。
 - MUST: resume 対象 session_id は当該 agent の束縛 cwd 配下に実在するものに

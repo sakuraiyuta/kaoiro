@@ -5,9 +5,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
   `envelope` broadcasts follow as agents change state. Both are sanitized
   per role: viewers see a pending permission_request but not its tool
   input, which may carry secrets (specs/threat-model.md). The `ext`
-  statusline meta on a state_change (cwd, model, context, rate_limits) is
-  operator-only too — cwd alone leaks the host's filesystem layout
-  (issue #46).
+  statusline meta (cwd, model, context, rate_limits) is operator-only on
+  every non-operator envelope — cwd alone leaks the host's filesystem
+  layout (issue #46).
 
   Operators additionally get a `history` push (the per-agent reply log)
   on join and the live `log` / `result` reply envelopes; viewers receive
@@ -189,20 +189,23 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # waiting_permission state still renders.
   defp sanitize_for(:operator, envelope), do: envelope
 
-  defp sanitize_for(_role, %{"type" => "permission_request"} = envelope) do
+  # ext (statusline meta: cwd / model / context / rate_limits /
+  # slash_commands) is operator-only by default (#46): cwd alone leaks the
+  # host's filesystem layout. Drop it for EVERY non-operator envelope type,
+  # not just state_change, so a future type carrying ext stays private
+  # without another patch. Then drop a permission_request's tool input,
+  # which may embed secrets (threat-model).
+  defp sanitize_for(_role, envelope) do
+    envelope
+    |> Map.delete("ext")
+    |> drop_tool_input()
+  end
+
+  defp drop_tool_input(%{"type" => "permission_request"} = envelope) do
     Map.update(envelope, "payload", %{}, &Map.drop(&1, ["input"]))
   end
 
-  # The ext statusline meta (cwd / model / context / rate_limits) is
-  # operator-only: cwd leaks the host's filesystem layout, and the rest
-  # is operational detail viewers have no need for (issue #46). Drop the
-  # whole ext rather than per-field so a future ext key is private by
-  # default.
-  defp sanitize_for(_role, %{"type" => "state_change"} = envelope) do
-    Map.delete(envelope, "ext")
-  end
-
-  defp sanitize_for(_role, envelope), do: envelope
+  defp drop_tool_input(envelope), do: envelope
 
   defp require_operator(socket) do
     if socket.assigns[:role] == :operator, do: :ok, else: {:error, :forbidden}

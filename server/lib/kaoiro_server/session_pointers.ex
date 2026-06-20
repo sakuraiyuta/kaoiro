@@ -20,6 +20,8 @@ defmodule KaoiroServer.SessionPointers do
 
   use GenServer
 
+  require Logger
+
   @doc """
   Starts the store. `:path` overrides the DETS file and `:name` the
   registered name + DETS table (tests run isolated instances).
@@ -51,18 +53,44 @@ defmodule KaoiroServer.SessionPointers do
   @impl true
   def init({name, path}) do
     path |> Path.dirname() |> File.mkdir_p!()
-    {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
+    table = open_table(name, path)
+    # Records carry cwd, which is sensitive (#46); keep the file owner-only
+    # so the default /tmp location is not world-readable on a shared host.
+    # Best-effort — chmod can fail on non-POSIX filesystems, not fatal.
+    _ = File.chmod(path, 0o600)
+    {:ok, %{table: table, pointers: load_pointers(table)}}
+  end
 
-    pointers =
-      :dets.foldl(
-        fn {agent_id, session_id, cwd}, acc ->
-          Map.put(acc, agent_id, %{session_id: session_id, cwd: cwd})
-        end,
-        %{},
+  # A corrupt/unreadable DETS file must not crash-loop the supervisor: the
+  # pointer store is recoverable (the runner re-enumerates, ADR-0014 F2). On
+  # a failed open, drop the file and recreate it empty.
+  defp open_table(name, path) do
+    case :dets.open_file(name, file: String.to_charlist(path)) do
+      {:ok, ^name} ->
         name
-      )
 
-    {:ok, %{table: name, pointers: pointers}}
+      {:error, reason} ->
+        Logger.warning("session pointer store unreadable (#{inspect(reason)}); recreating")
+
+        File.rm(path)
+        {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
+        name
+    end
+  end
+
+  # Fold the table into the in-memory map; an error tuple (corrupt mid-read)
+  # degrades to an empty map rather than crashing init.
+  defp load_pointers(table) do
+    case :dets.foldl(
+           fn {agent_id, session_id, cwd}, acc ->
+             Map.put(acc, agent_id, %{session_id: session_id, cwd: cwd})
+           end,
+           %{},
+           table
+         ) do
+      pointers when is_map(pointers) -> pointers
+      {:error, _reason} -> %{}
+    end
   end
 
   @impl true
