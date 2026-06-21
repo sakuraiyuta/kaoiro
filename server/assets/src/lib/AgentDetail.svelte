@@ -294,8 +294,21 @@
     const text = instruction.trim();
     if (!connection || text === "") return;
     void run(async () => {
+      const before = logs.length;
       await connection.sendInstruction(envelope.agent_id, text);
       instruction = "";
+      // Wait for the server to reflect the user log back into the transcript
+      // (one WS round-trip; ~50-200ms on a local link). Cap at 1.5s so a
+      // stalled server still settles. Then bring the just-sent line into
+      // view with scrollIntoView, which is robust to composer-reflow timing
+      // that can leave a plain scrollTop=scrollHeight short.
+      const deadline = Date.now() + 1500;
+      while (logs.length === before && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      await tick();
+      const last = logEl?.lastElementChild as HTMLElement | null;
+      last?.scrollIntoView({ block: "end", behavior: "smooth" });
     });
   }
 

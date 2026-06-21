@@ -57,4 +57,47 @@ describe("StatusQueue", () => {
     vi.advanceTimersByTime(5000);
     expect(q.shown).toBe("thinking"); // neither the queued nor the late state
   });
+
+  it("done は短 hold より長く保持され、自然継承の waiting_input は順次表示する", () => {
+    const q = new StatusQueue("thinking", 2000, 180_000);
+    q.push("done");
+    expect(q.shown).toBe("done");
+
+    q.push("waiting_input"); // natural follow-up: queued behind the long hold
+    vi.advanceTimersByTime(2000);
+    expect(q.shown).toBe("done"); // short hold has elapsed but long hold still holds
+
+    vi.advanceTimersByTime(180_000 - 2000);
+    expect(q.shown).toBe("waiting_input");
+
+    q.dispose();
+  });
+
+  it("done hold 中の能動的遷移はキューを破棄し即時表示する", () => {
+    const q = new StatusQueue("thinking", 2000, 180_000);
+    q.push("done");
+    q.push("waiting_input"); // queued
+    q.push("sending"); // active transition: interrupt the long hold
+    expect(q.shown).toBe("sending");
+
+    // Once shown, sending follows the short hold.
+    vi.advanceTimersByTime(2000);
+    expect(q.shown).toBe("sending"); // dropped waiting_input never resurfaces
+
+    q.dispose();
+  });
+
+  it("error も done と同じ長 hold と割込みに従う", () => {
+    const q = new StatusQueue("thinking", 2000, 180_000);
+    q.push("error");
+    expect(q.shown).toBe("error");
+
+    vi.advanceTimersByTime(2000);
+    expect(q.shown).toBe("error"); // long hold still holds
+
+    q.push("sending"); // active transition: interrupt
+    expect(q.shown).toBe("sending");
+
+    q.dispose();
+  });
 });
