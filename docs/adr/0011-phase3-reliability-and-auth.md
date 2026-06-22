@@ -36,8 +36,12 @@ protocol-reliability open-question(issue #4 由来。2 項目を本 ADR へ昇�
 2. **permission_request は相関 ID で突合する**: 要求 payload に
    `request_id`(ラッパー生成、セッション内一意)を持たせ、応答
    `permission_decision` が同じ `request_id` を返す。**無応答時の既定は
-   600 秒で deny**(fail-closed、ラッパー設定で変更可)。deny 時も
-   セッションは継続する。
+   SDK と同じく無制限待機**(応答受信まで Promise 保留、
+   [ADR-0022](0022-pending-permission-authoritative-source.md) で旧 600 秒
+   既定から移行)。有限タイムアウトはラッパー設定で opt-in 可、その場合は
+   fail-closed deny。deny 時もセッションは継続する。pending 中の状態の
+   真実は `state_change.ext.pending_permission` に持続付与される
+   ([ADR-0022](0022-pending-permission-authoritative-source.md))。
 3. **ラッパー認証は agent_id 別トークン**: サーバ設定に
    `agent_id:token` の組を列挙(env)。接続時にラッパーが提示し、
    不一致は接続拒否。SQLite は導入しない(2026-06-11 の後送方針)。
@@ -52,7 +56,9 @@ protocol-reliability open-question(issue #4 由来。2 項目を本 ADR へ昇�
 
 - 監査ログ・リプレイへの布石(seq)を持ちつつ、表示経路の単純さ
   (受信順 last-write-wins)は変わらない。
-- 承認フローが fail-closed で永久ブロックしない(600 秒 deny)。
+- 承認フローが request_id 突合で正しく相関する(無応答時の挙動は
+  [ADR-0022](0022-pending-permission-authoritative-source.md) で SDK
+  デフォルト = 無制限待機へ移行済み)。
 - 双方向(リモートのツール実行を意味する)の入口に実効的な歯止め
   (operator role)が入る。
 

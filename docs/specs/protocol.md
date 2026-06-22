@@ -87,7 +87,7 @@ flowchart LR
 | `type` | イベント種別 | 閉じた enum。下記「type と payload」 |
 | `state` | 状態機械の現在状態 | 下記参照 |
 | `payload` | 種別ごとの本体 | 型は `type` に依存。下記「type と payload」 |
-| `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。実装済: `cost`(累計 USD、#8、Claude Code アダプタが result に付与)/ `model`・`cwd`・`context`(`{used_tokens,max_tokens,used_percentage}`)・`rate_limits`(`{<window>:{status,utilization,resets_at}}`、window=`five_hour`/`seven_day`…)・`slash_commands`(`string[]`、利用可能なスラッシュコマンド名、クライアントの `/` 補完用、#34)を state_change に付与(#16/#34、Claude Code アダプタ。SDK が公開した時のみ・best-effort)。他は初期空。**`ext` は operator 限定配信**(viewer には全 type で除去。cwd 等の機微を含むため、#46、[threat-model](threat-model.md) / [ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
+| `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。実装済: `cost`(累計 USD、#8、Claude Code アダプタが result に付与)/ `model`・`cwd`・`context`(`{used_tokens,max_tokens,used_percentage}`)・`rate_limits`(`{<window>:{status,utilization,resets_at}}`、window=`five_hour`/`seven_day`…)・`slash_commands`(`string[]`、利用可能なスラッシュコマンド名、クライアントの `/` 補完用、#34)を state_change に付与(#16/#34、Claude Code アダプタ。SDK が公開した時のみ・best-effort)。`pending_permission`(`{request_id, tool_name, input?, truncated?, ts}`、#59 / [ADR-0022](../adr/0022-pending-permission-authoritative-source.md))も state_change に付与し、`waiting_permission` 中の許可要求の **authoritative source** となる。他は初期空。**`ext` は operator 限定配信**(viewer には全 type で除去。cwd / pending_permission.input 等の機微を含むため、#46、[threat-model](threat-model.md) / [ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 
 ### type と payload(v0 確定)
 
@@ -98,7 +98,7 @@ flowchart LR
 |---|---|---|
 | `state_change` | **確定** | `{ label?: string, summary?: string }`。`label` は短い行先表示(例 `"Edit src/foo.ts"`)、`summary` は人間可読の説明。どちらも省略可 |
 | `log` | **確定** | `{ kind: "assistant" \| "tool_use" \| "tool_result" \| "user", text?, tool_name?, tool_use_id?, input?, output?, truncated? }`。エージェント応答の逐次中継。`assistant`=モデル発話(`text`)、`tool_use`=ツール呼出(`tool_name`/`input`)、`tool_result`=実行結果(`tool_name`/`output`)、`user`=operator 指示を会話ログにエコー(`text`、#31。wrapper が instruction 受信時に発行し、履歴・operator 限定配信に乗る)。`tool_use_id` は `tool_use`/`tool_result` の対応付け用(#40。SDK が付与した時のみ)。tool 入出力はクライアント UI で折りたたみ既定。長文は wrapper が切り詰め(`truncated: true`)。**operator role のみへ配信**(viewer 非配信。シークレット混入の主経路、[threat-model](threat-model.md)、[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
-| `permission_request` | **確定** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`。`request_id` はラッパー生成のセッション内一意 ID([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。`input` はツール入力(ラッパーが 16KB 程度に切り詰め、切り詰め時 `truncated: true`。シークレット混入リスクは [threat-model](threat-model.md))。state は `waiting_permission`。**operator 限定配信**: viewer には完全除去し、grid 整合のため合成 `state_change(waiting_permission)`(`payload={}` / `ext` なし)に置換して配信([ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
+| `permission_request` | **確定** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`。`request_id` はラッパー生成のセッション内一意 ID([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。`input` はツール入力(ラッパーが 16KB 程度に切り詰め、切り詰め時 `truncated: true`。シークレット混入リスクは [threat-model](threat-model.md))。state は `waiting_permission`。**初出通知に降格**: pending 状態の真実は `state_change.ext.pending_permission` ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md))。本 envelope は protocol 互換維持と「新規 pending あり」イベント通知のために残るが、payload は ext と同期保証される(同一の `request_id` / `tool_name` / `input` / `truncated` / `ts`)。新クライアントは ext 経由を推奨。**operator 限定配信**: viewer には完全除去し、grid 整合のため合成 `state_change(waiting_permission)`(`payload={}` / `ext` なし)に置換して配信([ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 | `result` | **確定** | `{ text?: string, is_error?: boolean, error_message?: string }`。ターン完了時の最終応答。`is_error` でエラー終了を区別し、`error_message` にエラー本文(生)を載せてクライアントへリレーする(整形なし。SDK/API エラー本文に加え、wrapper プロセス異常終了時は落ちる直前の最後のエラーを送る。[ADR-0016](../adr/0016-error-body-relay.md))。state は `done`/`error` の後 `waiting_input`。累計コスト USD は `ext.cost` に付与(#8)。`log` と同様 **operator 限定配信**([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
 | `task`(予約) | **予約** | subagent/workflow の起動/更新/完了を通知する専用 type(正式名称・スキーマは未確定)。親 `state_change` とは独立し、親 `agent_id` 参照で紐づく子エンティティを運ぶ([subagent-tasks](subagent-tasks.md)、[ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md))。予約追補のため `version` 据え置き |
 
@@ -123,13 +123,18 @@ Channels のチャネルイベント名と内容。トピックは
 | サーバ → ラッパー | `permission_decision` | `{ request_id, allow, message? }`(relay。`request_id` で保留中の承認と突合) |
 | サーバ → ラッパー | `interrupt` | `{}`(relay。ラッパーは SDK の `Query.interrupt()` を呼ぶ。turn 進行中以外は no-op。#51) |
 
-**承認フロー**: ラッパーは `canUseTool` 発火で `permission_request`
-エンベロープ(上記 type 表)を送って Promise を保留し、
-`permission_decision` の受信(または既定 600 秒のタイムアウト = deny、
-[ADR-0011](../adr/0011-phase3-reliability-and-auth.md))で解決する。
-deny でもセッションは継続する。サーバは指示・承認の**中身を解釈せず
+**承認フロー**: ラッパーは `canUseTool` 発火で `state_change.ext.pending_permission`
+を立て同時に互換用の `permission_request` エンベロープ(上記 type 表)を
+送って Promise を保留し、`permission_decision` の受信で解決する。pending
+中の真実は ext 側で持続するため、別の `state_change`(thinking /
+tool_running / session_init 由来の idle 等)が間に挟まっても消失しない
+([ADR-0022](../adr/0022-pending-permission-authoritative-source.md))。
+無応答時の既定は SDK と同じく **無制限待機**(タイムアウトなし。
+有限タイムアウトはラッパー設定で opt-in 可、設定面の整備は別 issue
+# 60)。deny でもセッションは継続する。サーバは指示・承認の**中身を解釈せず
 relay するだけ**で、agent 非依存を維持する。配達保証はしない(未接続
-ラッパーへの relay は消失し、要求側はタイムアウトで知る)。
+ラッパーへの relay は消失し、要求側は次回 join 時の snapshot で
+ext.pending_permission を復元する)。
 
 **再接続時の再同期**: クライアントは切断後、チャネルへ再 join するだけで
 `snapshot` により全エージェントの最新状態へ再同期する。差分追跡や再送
@@ -315,8 +320,14 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
 - MUST: クライアント接続は Phoenix Channels(`vsn=2.0.0`)のみ。
 - MUST: 受信側はエンベロープの未知キーを無視する(前方互換)。
 - MUST: `instruction` / `permission_decision` / `interrupt` は operator role のみ。
-- MUST: permission の無応答既定は deny(fail-closed)。既定 600 秒、
-  ラッパー設定で変更可。
+- MUST: permission の無応答既定は SDK と同じく **無制限待機**
+  (応答受信まで Promise 保留)。有限タイムアウトはラッパー設定で
+  opt-in 可で、その場合は fail-closed deny([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)、
+  設定面の整備は別 issue #60)。
+- MUST: `waiting_permission` 中の pending 状態は `state_change.ext.pending_permission`
+  に持続付与され、これが authoritative source となる。`permission_request`
+  envelope は初出通知として並行発行されるが、状態の真実ではない
+  ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md))。
 - MUST: `log` / `result` エンベロープは operator role のみへ配信する
   ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。
 - MUST: `agents:lobby` の配信は **allow-list 方式**。`state_change`
@@ -347,4 +358,5 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
   [0015](../adr/0015-protocol-version-stamping.md),
   [0016](../adr/0016-error-body-relay.md),
   [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md),
-  [0021](../adr/0021-role-information-disclosure-policy.md)
+  [0021](../adr/0021-role-information-disclosure-policy.md),
+  [0022](../adr/0022-pending-permission-authoritative-source.md)
