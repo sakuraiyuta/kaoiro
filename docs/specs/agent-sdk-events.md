@@ -110,6 +110,26 @@ canUseTool → PostToolUse。
 > 意図と一致。旧実測の不発火は、試行した操作が全て手前のゲートで解決
 > されていたため。
 
+#### 手動 verify 用コマンド(canUseTool 発火境界)
+
+ダッシュボード経由で broker → 許可ダイアログ → クライアント承認の経路を
+実機検証する時、SDK 内蔵の safe Bash classifier に阻まれずに `canUseTool`
+へ届かせるコマンドが必要。実測した境界(2026-06-22, #59 verify 時):
+
+| 例 | 経路 |
+|---|---|
+| `hostname` / `echo X` / `[ -f X ] && echo Y` | classifier の safe 判定 → auto-approve |
+| `mkdir -p /tmp/...` | sandbox 内扱い → auto-approve |
+| `for f in ...; do ...; done` | 制御構文で静的解析できず → ask → `canUseTool` 発火 |
+| `curl --version` | network 系コマンド名 → ask → `canUseTool` 発火 |
+
+副作用ゼロで最も安定して発火させるなら **`curl --version`**(実通信なし、
+出力サイズ小、毎回成功)。なお `settingSources` 既定値では SDK は
+`~/.claude/settings.json` を読まないため、ユーザ側 settings の allow リスト
+や PreToolUse hook(`approve-compound-bash.sh` 等)は wrapper 経由 SDK
+セッションには適用されない — 上記の境界はあくまで SDK 内蔵 classifier
+によるもの。
+
 ### 制御(穴1 の確定)
 
 - 多ターン制御: `query()` の prompt に `AsyncIterable<SDKUserMessage>` を渡す
