@@ -56,7 +56,8 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | 指示の監査ログ(誰が・いつ・どの agent に何を送ったか) | 将来(SQLite 導入時) |
 | tool input のマスキング(シークレットパターンの伏字) | 将来 |
 | 返答ログ(`log`/`result`、tool 入出力含む)を operator 限定配信 | Phase 3.5([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
-| state_change の `ext`(cwd / model / context / rate_limits)を operator 限定配信(viewer には `ext` を除去) | #46 で実装 |
+| envelope の `ext`(cwd / model / context / rate_limits / slash_commands / 将来追加分)を全 type で viewer 除去 | #46 で実装(コミット 9b32c34 / ef7b606) |
+| viewer 配信を **allow-list 方式** へ転換(operator 限定がデフォルト、viewer 配信は明示宣言)。`permission_request` envelope を viewer 完全除去(合成 `state_change(waiting_permission)` に置換し grid 整合保持) | #46 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) |
 | ユーザトークンを httpOnly + 暗号化 session cookie に保持(XSS でも JS から読めず、cookie jar 上でも秘匿)。CSRF は SameSite=Lax + prod の `check_origin` で抑止 | Phase 3.5([ADR-0013](../adr/0013-user-token-cookie-persistence.md)) |
 | OAuth + RBAC 本実装 | 将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
 | セッション召喚時に runner が返す JSONL メタ(先頭プロンプト要約等)を operator role 限定・最小限に露出(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) | 将来(resume 機能と同時) |
@@ -68,9 +69,15 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 - MUST: 返答ログ(`log`/`result`)の配信は operator role のみ
   ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。
 - MUST: envelope の `ext`(statusline メタ: cwd / model / context /
-  rate_limits / slash_commands)の配信は operator role のみ(#46。viewer には
-  全 type で除去)。viewer ロールの情報公開範囲全体の定義は別途
-  spec-elicitation([issue #46](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/46))。
+  rate_limits / slash_commands / 将来追加分)の配信は operator role のみ
+  (#46。viewer には全 type で除去)。
+- MUST: viewer 配信は **allow-list 方式**。`agents:lobby` の event /
+  envelope.type のうち、明示的に viewer 配信を宣言したものだけが viewer へ
+  届く。未宣言の type は viewer 完全除去(fail-closed、
+  [ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
+- MUST: `permission_request` envelope は viewer 完全除去。grid 整合のため
+  合成 `state_change(waiting_permission)`(`payload={}` / `ext` なし)に
+  置換して viewer へ配信([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
 - MUST: ラッパーはサーバから受けた指示で `allowedTools` /
   `canUseTool` の設定を変更しない(実行能力の天井はローカル設定)。
 - MUST: resume 対象 session_id は当該 agent の束縛 cwd 配下に実在するものに
@@ -90,4 +97,5 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
   [0005](../adr/0005-access-control-oauth-stub.md),
   [0011](../adr/0011-phase3-reliability-and-auth.md),
   [0012](../adr/0012-response-display-and-dashboard-scope.md),
-  [0014](../adr/0014-session-resume-and-restore.md)
+  [0014](../adr/0014-session-resume-and-restore.md),
+  [0021](../adr/0021-role-information-disclosure-policy.md)
