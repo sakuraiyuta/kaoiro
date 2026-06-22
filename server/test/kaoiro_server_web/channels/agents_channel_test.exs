@@ -463,6 +463,69 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "pending_permission ext のリロード復元 (ADR-0022, #59)" do
+    defp state_with_pending(agent_id, request_id) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-11T00:00:00Z",
+        "type" => "state_change",
+        "state" => "waiting_permission",
+        "payload" => %{},
+        "ext" => %{
+          "pending_permission" => %{
+            "request_id" => request_id,
+            "tool_name" => "Bash",
+            "input" => %{"command" => "ls"},
+            "ts" => "2026-06-11T00:00:00Z"
+          }
+        }
+      }
+    end
+
+    test "operator の snapshot で ext.pending_permission がそのまま復元される" do
+      agent_id = "test.pending-1"
+      :ok = AgentStates.put(state_with_pending(agent_id, "req-A"))
+      _socket = join_as(:operator)
+
+      assert_push "snapshot", %{"agents" => agents}
+      entry = agents[agent_id]
+      assert entry["type"] == "state_change"
+      assert entry["state"] == "waiting_permission"
+      assert get_in(entry, ["ext", "pending_permission", "request_id"]) == "req-A"
+
+      assert get_in(entry, ["ext", "pending_permission", "input"]) == %{
+               "command" => "ls"
+             }
+    end
+
+    test "viewer の snapshot からは ext.pending_permission が除去される (ADR-0021 経由)" do
+      agent_id = "test.pending-2"
+      :ok = AgentStates.put(state_with_pending(agent_id, "req-B"))
+      _socket = join_as(:viewer)
+
+      assert_push "snapshot", %{"agents" => agents}
+      entry = agents[agent_id]
+      assert entry["type"] == "state_change"
+      assert entry["state"] == "waiting_permission"
+      refute Map.has_key?(entry, "ext")
+    end
+
+    test "operator の live broadcast でも ext.pending_permission がそのまま届く" do
+      agent_id = "test.pending-3"
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        state_with_pending(agent_id, "req-C")
+      )
+
+      assert_push "envelope", pushed
+      assert get_in(pushed, ["ext", "pending_permission", "request_id"]) == "req-C"
+    end
+  end
+
   describe "allow-list 方式の fail-closed 動作 (ADR-0021)" do
     test "viewer は未知の envelope type を受け取らない (fail-closed)" do
       agent_id = "test.future-1"
