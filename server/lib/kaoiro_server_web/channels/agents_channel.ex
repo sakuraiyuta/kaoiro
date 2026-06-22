@@ -3,11 +3,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
   Client-facing fan-out. After joining `agents:lobby` the channel pushes a
   `snapshot` event with the current agent_id => latest envelope map;
   `envelope` broadcasts follow as agents change state. Both are sanitized
-  per role: viewers see a pending permission_request but not its tool
-  input, which may carry secrets (specs/threat-model.md). The `ext`
-  statusline meta (cwd, model, context, rate_limits) is operator-only on
-  every non-operator envelope — cwd alone leaks the host's filesystem
-  layout (issue #46).
+  per role via an **allow-list** policy (ADR-0021): operators receive the
+  full stream, viewers receive only what is explicitly cleared for them.
+  Today that means `state_change` (with `ext` stripped) and `agent_deleted`;
+  `permission_request` is rewritten to a synthetic `state_change` so the
+  grid still tracks `waiting_permission` without leaking `tool_name` /
+  `input` / `request_id`. Every other event/type is dropped for viewers
+  (fail-closed for any future addition).
 
   Operators additionally get a `history` push (the per-agent reply log)
   on join and the live `log` / `result` reply envelopes; viewers receive
@@ -42,7 +44,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # may reach @max_instruction_bytes) plus the decision/extra-key overhead.
   @max_relay_bytes 131_072
 
-  intercept ["envelope"]
+  # All viewer-gated events go through handle_out. `agent_deleted` is the
+  # only fan-out event that always reaches both roles, so it stays out of
+  # the intercept list to skip the per-socket round trip.
+  intercept ["envelope", "history_cleared"]
 
   @impl true
   def join("agents:lobby", _params, socket) do
@@ -60,9 +65,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
     role = socket.assigns[:role]
 
     agents =
-      Map.new(AgentStates.snapshot(), fn {id, envelope} ->
-        {id, sanitize_for(role, envelope)}
+      AgentStates.snapshot()
+      |> Enum.flat_map(fn {id, envelope} ->
+        case sanitize_envelope_for(role, envelope) do
+          :drop -> []
+          {:ok, sanitized} -> [{id, sanitized}]
+        end
       end)
+      |> Map.new()
 
     push(socket, "snapshot", %{"agents" => agents})
 
@@ -75,18 +85,24 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   @impl true
-  def handle_out("envelope", %{"type" => type} = envelope, socket)
-      when type in ["log", "result"] do
-    # Reply lines are operator-only; viewers never receive them.
-    if socket.assigns[:role] == :operator do
-      push(socket, "envelope", envelope)
+  def handle_out("envelope", envelope, socket) do
+    case sanitize_envelope_for(socket.assigns[:role], envelope) do
+      :drop -> :ok
+      {:ok, sanitized} -> push(socket, "envelope", sanitized)
     end
 
     {:noreply, socket}
   end
 
-  def handle_out("envelope", envelope, socket) do
-    push(socket, "envelope", sanitize_for(socket.assigns[:role], envelope))
+  # Viewers hold no reply log, so a history_cleared broadcast has nothing
+  # to act on; gate it to operator under the same allow-list discipline
+  # (ADR-0021) instead of letting it leak the session_id pointer.
+  @impl true
+  def handle_out("history_cleared", payload, socket) do
+    if socket.assigns[:role] == :operator do
+      push(socket, "history_cleared", payload)
+    end
+
     {:noreply, socket}
   end
 
@@ -184,28 +200,34 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # Viewers must not see the tool input of a pending permission request
-  # (it may embed secrets); the request itself stays visible so the
-  # waiting_permission state still renders.
-  defp sanitize_for(:operator, envelope), do: envelope
+  # Allow-list per role (ADR-0021). Returning `:drop` means the envelope
+  # is omitted entirely (broadcast skipped, removed from snapshot); any
+  # new envelope type defaults to dropped for viewers until a `:viewer`
+  # clause explicitly opts it in (fail-closed).
+  defp sanitize_envelope_for(:operator, envelope), do: {:ok, envelope}
 
-  # ext (statusline meta: cwd / model / context / rate_limits /
-  # slash_commands) is operator-only by default (#46): cwd alone leaks the
-  # host's filesystem layout. Drop it for EVERY non-operator envelope type,
-  # not just state_change, so a future type carrying ext stays private
-  # without another patch. Then drop a permission_request's tool input,
-  # which may embed secrets (threat-model).
-  defp sanitize_for(_role, envelope) do
-    envelope
-    |> Map.delete("ext")
-    |> drop_tool_input()
+  # state_change is the viewer's only direct grid signal; `ext` carries
+  # cwd / model / context / rate_limits / slash_commands and any future
+  # additions, all operator-only.
+  defp sanitize_envelope_for(:viewer, %{"type" => "state_change"} = envelope) do
+    {:ok, Map.delete(envelope, "ext")}
   end
 
-  defp drop_tool_input(%{"type" => "permission_request"} = envelope) do
-    Map.update(envelope, "payload", %{}, &Map.drop(&1, ["input"]))
+  # `permission_request` carries request_id / tool_name / input — all
+  # operator-only — but the wrapper also overwrites the snapshot slot, so
+  # dropping it outright would erase the agent from the viewer's grid.
+  # Rewrite it as a minimal synthetic state_change so `waiting_permission`
+  # still renders without leaking any payload field.
+  defp sanitize_envelope_for(:viewer, %{"type" => "permission_request"} = envelope) do
+    {:ok,
+     envelope
+     |> Map.put("type", "state_change")
+     |> Map.put("state", "waiting_permission")
+     |> Map.put("payload", %{})
+     |> Map.delete("ext")}
   end
 
-  defp drop_tool_input(envelope), do: envelope
+  defp sanitize_envelope_for(:viewer, _envelope), do: :drop
 
   defp require_operator(socket) do
     if socket.assigns[:role] == :operator, do: :ok, else: {:error, :forbidden}

@@ -325,7 +325,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  describe "permission_request の input 秘匿 (threat-model)" do
+  describe "permission_request の viewer 完全除去 (ADR-0021, #46)" do
     defp permission_envelope(agent_id) do
       %{
         "version" => "0",
@@ -341,20 +341,18 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       }
     end
 
-    test "viewer への broadcast から input が落ちる" do
+    test "viewer への broadcast は合成 state_change に置換される (request_id/tool_name/input 全て除去)" do
       agent_id = "test.sanitize-1"
       envelope = permission_envelope(agent_id)
       _socket = join_as(:viewer)
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope", %{
-        "type" => "permission_request",
-        "payload" => payload
-      }
-
-      assert payload["request_id"] == "req-s1"
-      refute Map.has_key?(payload, "input")
+      assert_push "envelope", pushed
+      assert pushed["type"] == "state_change"
+      assert pushed["state"] == "waiting_permission"
+      assert pushed["payload"] == %{}
+      refute Map.has_key?(pushed, "ext")
     end
 
     test "operator への broadcast は input を保つ" do
@@ -364,16 +362,23 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope", %{"payload" => %{"input" => %{"command" => _}}}
+      assert_push "envelope", %{
+        "type" => "permission_request",
+        "payload" => %{"input" => %{"command" => _}}
+      }
     end
 
-    test "viewer への snapshot からも input が落ちる" do
+    test "viewer への snapshot も合成 state_change に置換される (grid 整合維持)" do
       agent_id = "test.sanitize-3"
       :ok = AgentStates.put(permission_envelope(agent_id))
       _socket = join_as(:viewer)
 
       assert_push "snapshot", %{"agents" => agents}
-      refute Map.has_key?(agents[agent_id]["payload"], "input")
+      entry = agents[agent_id]
+      assert entry["type"] == "state_change"
+      assert entry["state"] == "waiting_permission"
+      assert entry["payload"] == %{}
+      refute Map.has_key?(entry, "ext")
     end
   end
 
@@ -431,7 +436,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute Map.has_key?(agents[agent_id], "ext")
     end
 
-    test "viewer の permission_request からも ext が落ちる" do
+    test "viewer の permission_request からも ext が落ち state_change に置換される" do
       agent_id = "test.ext-4"
       _socket = join_as(:viewer)
 
@@ -452,8 +457,117 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
       assert_push "envelope", pushed
+      assert pushed["type"] == "state_change"
+      assert pushed["payload"] == %{}
       refute Map.has_key?(pushed, "ext")
-      refute Map.has_key?(pushed["payload"], "input")
+    end
+  end
+
+  describe "allow-list 方式の fail-closed 動作 (ADR-0021)" do
+    test "viewer は未知の envelope type を受け取らない (fail-closed)" do
+      agent_id = "test.future-1"
+      _socket = join_as(:viewer)
+
+      future_envelope = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-11T00:00:00Z",
+        # A hypothetical future type not yet listed in the viewer allow-list.
+        "type" => "task",
+        "state" => "thinking",
+        "payload" => %{"task_id" => "t1", "summary" => "secret-summary"}
+      }
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        future_envelope
+      )
+
+      refute_push "envelope", %{}
+    end
+
+    test "operator は未知 type の envelope を素通しで受け取る" do
+      agent_id = "test.future-2"
+      _socket = join_as(:operator)
+
+      future_envelope = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-11T00:00:00Z",
+        "type" => "task",
+        "state" => "thinking",
+        "payload" => %{"task_id" => "t1"}
+      }
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        future_envelope
+      )
+
+      assert_push "envelope", pushed
+      assert pushed["type"] == "task"
+    end
+
+    test "viewer snapshot は未知 type の agent をスキップする" do
+      agent_id = "test.future-3"
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "task",
+          "state" => "thinking",
+          "payload" => %{}
+        })
+
+      _socket = join_as(:viewer)
+
+      assert_push "snapshot", %{"agents" => agents}
+      refute Map.has_key?(agents, agent_id)
+    end
+
+    test "history_cleared は viewer に届かない / operator には届く" do
+      agent_id = "test.hc-1"
+      put_agent(agent_id)
+      _viewer = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_cleared", %{
+        "agent_id" => agent_id,
+        "session_id" => "s1"
+      })
+
+      refute_push "history_cleared", %{}
+    end
+
+    test "history_cleared は operator に届く" do
+      agent_id = "test.hc-2"
+      put_agent(agent_id)
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_cleared", %{
+        "agent_id" => agent_id,
+        "session_id" => "s1"
+      })
+
+      assert_push "history_cleared", %{"agent_id" => ^agent_id}
+    end
+
+    test "agent_deleted は viewer にも届く (grid 整合のため)" do
+      agent_id = "test.ad-1"
+      put_agent(agent_id)
+      _viewer = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "agent_deleted", %{
+        "agent_id" => agent_id
+      })
+
+      assert_push "agent_deleted", %{"agent_id" => ^agent_id}
     end
   end
 
