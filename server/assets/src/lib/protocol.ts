@@ -32,30 +32,41 @@ export interface Envelope {
   ext?: Record<string, unknown>;
 }
 
-/** payload of a type="permission_request" envelope (protocol.md). */
+/** Shape of a pending tool-permission request — carried on
+ *  state_change.ext.pending_permission (ADR-0022, #59) as the
+ *  authoritative source, and on the legacy permission_request envelope's
+ *  payload as initial notification. `ts` is present on ext, optional on
+ *  the legacy payload — the dashboard does not depend on it. */
 export interface PermissionRequestPayload {
   request_id: string;
   tool_name: string;
   input?: Record<string, unknown>;
   truncated?: boolean;
+  ts?: string;
 }
 
 /**
- * Narrows a permission_request envelope's payload, or null for any
- * other envelope (or a malformed payload).
+ * Reads ext.pending_permission off any envelope (ADR-0022 authoritative
+ * source). Returns null when no pending decision is in flight or the
+ * record is malformed. Carried on every state_change while
+ * waiting_permission so the dialog survives intermediate state_change
+ * envelopes that previously erased it (issue #59).
  */
-export function permissionRequestOf(
+export function pendingPermissionFrom(
   envelope: Envelope,
 ): PermissionRequestPayload | null {
-  if (envelope.type !== "permission_request") return null;
-  const payload = envelope.payload;
+  const ext = envelope.ext;
+  if (typeof ext !== "object" || ext === null) return null;
+  const pending = (ext as Record<string, unknown>).pending_permission;
+  if (typeof pending !== "object" || pending === null) return null;
+  const record = pending as Record<string, unknown>;
   if (
-    typeof payload?.request_id !== "string" ||
-    typeof payload.tool_name !== "string"
+    typeof record.request_id !== "string" ||
+    typeof record.tool_name !== "string"
   ) {
     return null;
   }
-  return payload as unknown as PermissionRequestPayload;
+  return record as unknown as PermissionRequestPayload;
 }
 
 /** payload of a type="log" envelope (protocol.md / ADR-0012).

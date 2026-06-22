@@ -3,7 +3,7 @@
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
-  import { logOf, permissionRequestOf, resultOf, RUNNING_STATES } from "./protocol";
+  import { logOf, pendingPermissionFrom, resultOf, RUNNING_STATES } from "./protocol";
   import type {
     Envelope,
     KaoiroConnection,
@@ -60,7 +60,11 @@
   const spriteUrl = $derived(
     spriteUrlFor(manifest, envelope.persona?.sprite_set, display.shown),
   );
-  const permission = $derived(permissionRequestOf(envelope));
+  // Read from state_change.ext.pending_permission, the ADR-0022
+  // authoritative source. Survives any other state_change arriving while
+  // waiting_permission (issue #59 root cause was deriving this from the
+  // permission_request envelope alone, which got overwritten).
+  const permission = $derived(pendingPermissionFrom(envelope));
 
   // Cumulative session cost (USD) carried in ext.cost (#8), or null when the
   // wrapper did not attach it.

@@ -3,7 +3,7 @@ import {
   fetchPersonaManifest,
   isReplyEnvelope,
   logOf,
-  permissionRequestOf,
+  pendingPermissionFrom,
   resultOf,
 } from "../src/lib/protocol";
 import type { Envelope } from "../src/lib/protocol";
@@ -38,32 +38,59 @@ describe("fetchPersonaManifest", () => {
   });
 });
 
-describe("permissionRequestOf", () => {
+describe("pendingPermissionFrom (ADR-0022)", () => {
   const base: Envelope = {
     version: "0",
     agent_id: "a",
     ts: "2026-06-11T00:00:00Z",
-    type: "permission_request",
+    type: "state_change",
     state: "waiting_permission",
   };
 
-  it("permission_request の payload を絞り込む", () => {
-    const envelope = {
+  it("state_change.ext.pending_permission を絞り込む", () => {
+    const envelope: Envelope = {
       ...base,
-      payload: { request_id: "req-1", tool_name: "Bash", input: { c: "ls" } },
+      ext: {
+        pending_permission: {
+          request_id: "req-1",
+          tool_name: "Bash",
+          input: { c: "ls" },
+          ts: "2026-06-11T00:00:00Z",
+        },
+      },
     };
-    expect(permissionRequestOf(envelope)).toEqual({
+    expect(pendingPermissionFrom(envelope)).toEqual({
       request_id: "req-1",
       tool_name: "Bash",
       input: { c: "ls" },
+      ts: "2026-06-11T00:00:00Z",
     });
   });
 
-  it("他 type / 不正 payload は null", () => {
-    expect(permissionRequestOf({ ...base, type: "state_change" })).toBeNull();
-    expect(permissionRequestOf(base)).toBeNull();
+  it("waiting_permission 以外の state_change(thinking 等)でも ext に乗っていれば拾う", () => {
+    // ADR-0022 F3 の主眼: pending は state_change 種別を問わず持続する。
+    const envelope: Envelope = {
+      ...base,
+      state: "thinking",
+      ext: {
+        pending_permission: {
+          request_id: "req-1",
+          tool_name: "Bash",
+          ts: "2026-06-11T00:00:00Z",
+        },
+      },
+    };
+    expect(pendingPermissionFrom(envelope)?.request_id).toBe("req-1");
+  });
+
+  it("ext 無し・pending_permission 無し・形不正は null", () => {
+    expect(pendingPermissionFrom(base)).toBeNull();
+    expect(pendingPermissionFrom({ ...base, ext: {} })).toBeNull();
     expect(
-      permissionRequestOf({ ...base, payload: { tool_name: "Bash" } }),
+      pendingPermissionFrom({
+        ...base,
+        ext: { pending_permission: { tool_name: "Bash" } },
+      }),
     ).toBeNull();
   });
 });
