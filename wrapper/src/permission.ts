@@ -1,16 +1,16 @@
 // Permission broker — bridges canUseTool to the client approval UI
-// (protocol.md "承認フロー", ADR-0011). decide() sends a
-// permission_request envelope and holds the promise until a relayed
-// permission_decision resolves it or the no-response window denies it
-// (fail-closed).
+// (protocol.md "承認フロー", ADR-0011 / ADR-0022). decide() sends a
+// permission_request envelope (initial notification) AND fires
+// onPendingChange so the host can stamp the authoritative pending state
+// onto state_change.ext.pending_permission. The promise is held until
+// a relayed permission_decision resolves it; if a finite timeoutMs is
+// configured it denies on no-response (fail-closed), otherwise it waits
+// indefinitely matching the SDK's canUseTool default (ADR-0022 F6).
 
 import { randomUUID } from "node:crypto";
 import type { PermissionDecision } from "./host.js";
 import { makePermissionRequest } from "./state.js";
-import type { Envelope, WrapperConfig } from "./types.js";
-
-/** Default no-response window before deny (ADR-0011: 600s). */
-export const DEFAULT_PERMISSION_TIMEOUT_MS = 600_000;
+import type { Envelope, PendingPermissionExt, WrapperConfig } from "./types.js";
 
 /** Tool input above this serialized size is dropped from the request
  *  payload (specs/protocol.md, specs/threat-model.md). */
@@ -25,14 +25,22 @@ export interface PermissionDecisionMessage {
 
 interface PendingRequest {
   resolve: (decision: PermissionDecision) => void;
-  timer: NodeJS.Timeout;
+  /** null when no finite timeout is configured (wait indefinitely). */
+  timer: NodeJS.Timeout | null;
 }
 
 export interface PermissionBrokerOptions {
   config: WrapperConfig;
   /** Envelope sink, normally ServerLink#send. */
   send: (envelope: Envelope) => void;
-  /** Overrides config.permission_timeout_ms (tests). */
+  /** Fires synchronously inside decide() before the Promise is returned,
+   *  so the host can stamp ext.pending_permission onto the next
+   *  state_change. Fires again with null on resolve / timeout / close.
+   *  Omitted = host stamping is opted out (ADR-0022 fallback). */
+  onPendingChange?: (pending: PendingPermissionExt | null) => void;
+  /** Overrides config.permission_timeout_ms (tests). Pass a finite number
+   *  for fail-closed deny after that many ms; undefined inherits config;
+   *  config undefined = no timeout (SDK default, ADR-0022 F6). */
   timeoutMs?: number;
   /** ISO-8601 timestamp source; injectable for tests. */
   now?: () => string;
@@ -42,17 +50,17 @@ export interface PermissionBrokerOptions {
 
 export class PermissionBroker {
   readonly #options: PermissionBrokerOptions;
-  readonly #timeoutMs: number;
+  /** null = no timeout (wait until decision arrives). */
+  readonly #timeoutMs: number | null;
   readonly #now: () => string;
   readonly #newId: () => string;
   readonly #pending = new Map<string, PendingRequest>();
 
   constructor(options: PermissionBrokerOptions) {
     this.#options = options;
-    this.#timeoutMs =
-      options.timeoutMs ??
-      options.config.permission_timeout_ms ??
-      DEFAULT_PERMISSION_TIMEOUT_MS;
+    const configured =
+      options.timeoutMs ?? options.config.permission_timeout_ms;
+    this.#timeoutMs = configured === undefined ? null : configured;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#newId = options.newId ?? randomUUID;
   }
@@ -63,9 +71,15 @@ export class PermissionBroker {
     input: Record<string, unknown>,
   ): Promise<PermissionDecision> {
     const requestId = this.#newId();
+    const ts = this.#now();
     const payload: Record<string, unknown> = {
       request_id: requestId,
       tool_name: toolName,
+    };
+    const pending: PendingPermissionExt = {
+      request_id: requestId,
+      tool_name: toolName,
+      ts,
     };
     // Oversized input is dropped rather than partially serialized: a
     // cut JSON string would be unparseable and may split a secret.
@@ -73,25 +87,42 @@ export class PermissionBroker {
     // under-count multibyte text.
     if (Buffer.byteLength(JSON.stringify(input), "utf8") <= MAX_INPUT_BYTES) {
       payload.input = input;
+      pending.input = input;
     } else {
       payload.truncated = true;
+      pending.truncated = true;
     }
 
+    // Notify host SYNCHRONOUSLY so the next state_change emit carries
+    // ext.pending_permission (ADR-0022 F3). Must precede the legacy
+    // envelope so a subscriber draining its inbox sees them in order.
+    this.#options.onPendingChange?.(pending);
+
     this.#options.send(
-      makePermissionRequest(this.#options.config, this.#now(), payload),
+      makePermissionRequest(this.#options.config, ts, payload),
     );
 
     return new Promise((resolve) => {
+      const settle = (decision: PermissionDecision): void => {
+        this.#options.onPendingChange?.(null);
+        resolve(decision);
+      };
+      if (this.#timeoutMs === null) {
+        // SDK default: wait indefinitely. The wrapper's close() still
+        // resolves with deny so a shutdown is not blocked.
+        this.#pending.set(requestId, { resolve: settle, timer: null });
+        return;
+      }
       const timer = setTimeout(() => {
         this.#pending.delete(requestId);
-        resolve({
+        settle({
           allow: false,
           message: "kaoiro: permission request timed out",
         });
       }, this.#timeoutMs);
       // Let the process exit even while a request is pending.
       timer.unref?.();
-      this.#pending.set(requestId, { resolve, timer });
+      this.#pending.set(requestId, { resolve: settle, timer });
     });
   }
 
@@ -101,7 +132,7 @@ export class PermissionBroker {
     const pending = this.#pending.get(decision.request_id);
     if (!pending) return;
     this.#pending.delete(decision.request_id);
-    clearTimeout(pending.timer);
+    if (pending.timer !== null) clearTimeout(pending.timer);
     const resolved: PermissionDecision = { allow: decision.allow === true };
     if (decision.message !== undefined) resolved.message = decision.message;
     pending.resolve(resolved);
@@ -111,7 +142,7 @@ export class PermissionBroker {
   close(): void {
     for (const [requestId, pending] of this.#pending) {
       this.#pending.delete(requestId);
-      clearTimeout(pending.timer);
+      if (pending.timer !== null) clearTimeout(pending.timer);
       pending.resolve({ allow: false, message: "kaoiro: wrapper closed" });
     }
   }

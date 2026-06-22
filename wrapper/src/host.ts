@@ -18,6 +18,7 @@ import type {
   KaoiroState,
   LogEntry,
   LogPayload,
+  PendingPermissionExt,
   ResultPayload,
   WrapperConfig,
 } from "./types.js";
@@ -138,6 +139,11 @@ export class AgentHost {
     string,
     { status?: string; utilization?: number; resets_at?: number }
   >();
+  /** Authoritative pending-permission record (ADR-0022, #59). Set by the
+   *  broker via setPendingPermission() so every state_change emitted while
+   *  waiting_permission carries it in ext, surviving any intermediate
+   *  envelope arrival. null when no decision is in flight. */
+  #pendingPermission: PendingPermissionExt | null = null;
 
   constructor(config: WrapperConfig, options: AgentHostOptions) {
     this.#config = config;
@@ -183,6 +189,16 @@ export class AgentHost {
   /** Interrupt the current turn (streaming-input control request). */
   async interrupt(): Promise<void> {
     await this.#query?.interrupt();
+  }
+
+  /** Receives the pending-permission record from the broker (ADR-0022).
+   *  Called synchronously inside the decider before #canUseTool transitions
+   *  the state machine, so the resulting state_change(waiting_permission)
+   *  carries ext.pending_permission directly; called again with null on
+   *  resolve / timeout / close so the next state_change(tool_running) has
+   *  a cleared ext. No envelope is emitted here — the next #apply does it. */
+  setPendingPermission(pending: PendingPermissionExt | null): void {
+    this.#pendingPermission = pending;
   }
 
   /**
@@ -240,13 +256,19 @@ export class AgentHost {
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<PermissionResult> {
+    const decide = this.#options.decidePermission;
+    // Kick off the decider FIRST so it (synchronously, in the broker
+    // case) calls setPendingPermission before we transition the state
+    // machine. The resulting state_change(waiting_permission) then carries
+    // ext.pending_permission in a single envelope (ADR-0022 F3) — no
+    // empty-then-stamped flicker. Fail closed: deny when no decider is
+    // wired.
+    const decisionPromise: Promise<PermissionDecision> = decide
+      ? Promise.resolve(decide(toolName, input))
+      : Promise.resolve({ allow: false });
     this.#apply({ kind: "permission_request" });
     try {
-      const decide = this.#options.decidePermission;
-      // Fail closed: deny when no decider is wired.
-      const decision = decide
-        ? await decide(toolName, input)
-        : { allow: false };
+      const decision = await decisionPromise;
       return decision.allow
         ? { behavior: "allow", updatedInput: input }
         : { behavior: "deny", message: decision.message ?? "denied" };
@@ -254,7 +276,11 @@ export class AgentHost {
       // A throwing decider denies safely rather than crashing the session.
       return { behavior: "deny", message: "permission decision failed" };
     } finally {
-      // Always leave waiting_permission, whatever the decider did.
+      // Broker has already cleared pending in its settle path; the
+      // permission_resolved state_change just needs to emit. A decider
+      // that did NOT touch pending leaves the prior value untouched, so
+      // belt-and-braces null it here too in case of a custom decider.
+      this.#pendingPermission = null;
       this.#apply({ kind: "permission_resolved" });
     }
   }
@@ -270,7 +296,9 @@ export class AgentHost {
   }
 
   /** Current Claude Code status meta as an ext object (#16). Empty keys are
-   *  omitted so an envelope only carries what the SDK has surfaced so far. */
+   *  omitted so an envelope only carries what the SDK has surfaced so far.
+   *  pending_permission is the authoritative pending-record (ADR-0022)
+   *  carried while waiting_permission is in flight. */
   #statusExt(): Record<string, unknown> {
     const ext: Record<string, unknown> = {};
     if (this.#model !== null) ext.model = this.#model;
@@ -279,6 +307,9 @@ export class AgentHost {
     if (this.#context !== null) ext.context = this.#context;
     if (this.#rateLimits.size > 0) {
       ext.rate_limits = Object.fromEntries(this.#rateLimits);
+    }
+    if (this.#pendingPermission !== null) {
+      ext.pending_permission = this.#pendingPermission;
     }
     return ext;
   }

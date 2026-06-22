@@ -116,12 +116,27 @@ export interface WrapperConfig {
   /** Wrapper auth token, paired with agent_id on the server (ADR-0011). */
   server_token?: string;
   /** permission_request no-response window before the default deny
-   *  (ADR-0011; defaults to 600s). */
+   *  (ADR-0011 / ADR-0022; defaults to no timeout = wait until the
+   *  operator decides, matching the SDK's canUseTool behaviour). A
+   *  finite value opts into fail-closed deny after that many ms. */
   permission_timeout_ms?: number;
   /** Tool-permission ceiling passed to the SDK as allowedTools. Local
    *  config only — cannot be widened from the server side
    *  (specs/threat-model.md). Omitted = the CLI's read-only default. */
   allowed_tools?: string[];
+}
+
+/** state_change.ext.pending_permission shape (ADR-0022, #59). The
+ *  authoritative pending-permission record carried on every state_change
+ *  while waiting_permission, so a permission dialog survives any other
+ *  envelope arriving in between. Mirrors the legacy permission_request
+ *  envelope's payload (kept as initial-notification per ADR-0022 F2). */
+export interface PendingPermissionExt {
+  request_id: string;
+  tool_name: string;
+  input?: Record<string, unknown>;
+  truncated?: boolean;
+  ts: string;
 }
 
 /**

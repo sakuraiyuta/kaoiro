@@ -8,6 +8,7 @@ export type {
   LogEntry,
   LogKind,
   LogPayload,
+  PendingPermissionExt,
   Persona,
   ResultPayload,
   ResultSubtype,
@@ -35,10 +36,7 @@ export { AgentHost } from "./host.js";
 export type { AgentHostOptions, PermissionDecision } from "./host.js";
 export { ServerLink } from "./transport.js";
 export type { ServerLinkOptions } from "./transport.js";
-export {
-  DEFAULT_PERMISSION_TIMEOUT_MS,
-  PermissionBroker,
-} from "./permission.js";
+export { PermissionBroker } from "./permission.js";
 export type {
   PermissionBrokerOptions,
   PermissionDecisionMessage,

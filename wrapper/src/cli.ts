@@ -102,6 +102,10 @@ async function main(): Promise<void> {
     broker = new PermissionBroker({
       config,
       send: (envelope) => link?.send(envelope),
+      // Stamp ext.pending_permission onto the host so the next
+      // state_change envelope carries it (ADR-0022). Captured-by-closure
+      // host is assigned just below, before any tool ever fires.
+      onPendingChange: (pending) => host?.setPendingPermission(pending),
     });
     link = new ServerLink(config.server_url, config.agent_id, {
       ...(config.server_token === undefined

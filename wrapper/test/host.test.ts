@@ -316,6 +316,56 @@ describe("AgentHost — permission", () => {
     await host.run();
     expect(behavior).toBe("deny");
   });
+
+  it("setPendingPermission で state_change(waiting_permission) の ext に pending_permission が乗る (ADR-0022)", async () => {
+    const states: { state: string; ext: Record<string, unknown> }[] = [];
+    const pendingRecord = {
+      request_id: "req-x",
+      tool_name: "Read",
+      input: { path: "a.ts" },
+      ts: "T",
+    };
+
+    let hostRef!: AgentHost;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([
+          { type: "tool_use", id: "tu_1", name: "Read", input: {} },
+        ]);
+        const decision = await args.options.canUseTool!("Read", {}, {} as never);
+        expect(decision.behavior).toBe("allow");
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+
+    hostRef = new AgentHost(config, {
+      onState: (e) => states.push({ state: e.state, ext: e.ext }),
+      // Mimic the broker's wiring: stamp pending sync inside decide, then
+      // resolve. The order is critical (ADR-0022 F3): the state_change
+      // emitted by host's #apply MUST already carry ext.pending_permission.
+      decidePermission: () => {
+        hostRef.setPendingPermission(pendingRecord);
+        // Broker would normally clear pending on resolve; replicate that
+        // through the host helper since the test's decider stands in.
+        queueMicrotask(() => hostRef.setPendingPermission(null));
+        return { allow: true };
+      },
+      queryFn,
+      now: () => "T",
+    });
+
+    await hostRef.run();
+
+    const wp = states.find((s) => s.state === "waiting_permission");
+    expect(wp).toBeDefined();
+    expect(wp!.ext).toMatchObject({ pending_permission: pendingRecord });
+
+    // The follow-up state_change must NOT carry pending_permission anymore.
+    const trIdx = states.findIndex((s) => s.state === "tool_running");
+    expect(trIdx).toBeGreaterThanOrEqual(0);
+    expect(states[trIdx]!.ext).not.toHaveProperty("pending_permission");
+  });
 });
 
 describe("AgentHost — input queue/notify/close", () => {

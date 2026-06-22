@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_PERMISSION_TIMEOUT_MS,
-  PermissionBroker,
-} from "../src/permission.js";
-import type { Envelope, WrapperConfig } from "../src/types.js";
+import { PermissionBroker } from "../src/permission.js";
+import type {
+  Envelope,
+  PendingPermissionExt,
+  WrapperConfig,
+} from "../src/types.js";
 
 const config: WrapperConfig = {
   agent_id: "test.perm",
   persona: { id: "ao", name: "あお", sprite_set: "ao" },
 };
 
-function makeBroker(overrides: { timeoutMs?: number } = {}) {
+function makeBroker(
+  overrides: {
+    timeoutMs?: number;
+    onPendingChange?: (pending: PendingPermissionExt | null) => void;
+  } = {},
+) {
   const sent: Envelope[] = [];
   let counter = 0;
   const broker = new PermissionBroker({
@@ -63,11 +69,28 @@ describe("PermissionBroker", () => {
     await expect(pending).resolves.toEqual({ allow: false, message: "却下" });
   });
 
-  it("無応答は既定 600 秒で deny (fail-closed、ADR-0011)", async () => {
+  it("既定では timeout なし (SDK と同じく無制限待機、ADR-0022)", async () => {
     const { broker } = makeBroker();
 
     const pending = broker.decide("Bash", {});
-    vi.advanceTimersByTime(DEFAULT_PERMISSION_TIMEOUT_MS);
+    // 24h を仮想時間で進めても deny で解決しない。
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000);
+    const racer = Promise.race([
+      pending,
+      new Promise((r) => setTimeout(() => r("still-pending"), 0)),
+    ]);
+    vi.advanceTimersByTime(1);
+    await expect(racer).resolves.toBe("still-pending");
+
+    broker.resolve({ request_id: "req-1", allow: true });
+    await expect(pending).resolves.toMatchObject({ allow: true });
+  });
+
+  it("opt-in の有限 timeoutMs では fail-closed deny する", async () => {
+    const { broker } = makeBroker({ timeoutMs: 5_000 });
+
+    const pending = broker.decide("Bash", {});
+    vi.advanceTimersByTime(5_000);
 
     await expect(pending).resolves.toEqual({
       allow: false,
@@ -83,6 +106,39 @@ describe("PermissionBroker", () => {
     broker.resolve({ request_id: "req-1", allow: true });
 
     await expect(pending).resolves.toMatchObject({ allow: false });
+  });
+
+  it("onPendingChange は decide で pending、resolve で null を順に呼ぶ", async () => {
+    const events: (PendingPermissionExt | null)[] = [];
+    const { broker } = makeBroker({
+      onPendingChange: (p) => events.push(p),
+    });
+
+    const pending = broker.decide("Bash", { command: "ls" });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      request_id: "req-1",
+      tool_name: "Bash",
+      input: { command: "ls" },
+      ts: "2026-06-11T00:00:00Z",
+    });
+
+    broker.resolve({ request_id: "req-1", allow: true });
+    await pending;
+    expect(events).toHaveLength(2);
+    expect(events[1]).toBeNull();
+  });
+
+  it("onPendingChange は close でも null を呼ぶ", async () => {
+    const events: (PendingPermissionExt | null)[] = [];
+    const { broker } = makeBroker({
+      onPendingChange: (p) => events.push(p),
+    });
+
+    const pending = broker.decide("Bash", {});
+    broker.close();
+    await pending;
+    expect(events[events.length - 1]).toBeNull();
   });
 
   it("未知の request_id は無視される", () => {
