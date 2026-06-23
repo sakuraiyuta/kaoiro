@@ -29,7 +29,7 @@ defmodule KaoiroServerWeb.ClientSocketTest do
   test "ticket が token param より優先される (解決順)" do
     Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator,tok-v:viewer")
     socket = %Phoenix.Socket{endpoint: KaoiroServerWeb.Endpoint}
-    ticket = Phoenix.Token.sign(KaoiroServerWeb.Endpoint, "client_ws", "tok-op")
+    ticket = Phoenix.Token.encrypt(KaoiroServerWeb.Endpoint, "client_ws", "tok-op")
 
     assert {:ok, authed} =
              ClientSocket.connect(
@@ -49,7 +49,7 @@ defmodule KaoiroServerWeb.ClientSocketTest do
   test "短命チケットの param で認証する (ADR-0013 reload 経路)" do
     Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
     socket = %Phoenix.Socket{endpoint: KaoiroServerWeb.Endpoint}
-    ticket = Phoenix.Token.sign(KaoiroServerWeb.Endpoint, "client_ws", "tok-op")
+    ticket = Phoenix.Token.encrypt(KaoiroServerWeb.Endpoint, "client_ws", "tok-op")
 
     assert {:ok, authed} = ClientSocket.connect(%{"ticket" => ticket}, socket, %{})
     assert authed.assigns.role == :operator

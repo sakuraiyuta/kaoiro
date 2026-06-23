@@ -42,7 +42,7 @@ defmodule KaoiroServerWeb.SessionControllerTest do
     assert is_binary(ticket) and ticket != ""
 
     assert {:ok, "tok-op"} =
-             Phoenix.Token.verify(KaoiroServerWeb.Endpoint, "client_ws", ticket, max_age: 30)
+             Phoenix.Token.decrypt(KaoiroServerWeb.Endpoint, "client_ws", ticket, max_age: 30)
   end
 
   test "ticket: session が無ければ 401", %{conn: conn} do

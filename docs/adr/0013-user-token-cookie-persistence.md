@@ -61,10 +61,12 @@ issue #45 にて my-spec-elicitation で方式を収束(2026-06-15 ユーザ決�
    session の順で解決)。**Vite の proxy は WS upgrade に Cookie を転送せず、
    :4000 直結(cross-port)でもブラウザは cookie を送らないため、cookie を WS に
    乗せられない**(検証で確定)。そこでリロード時は SPA が `GET /session/ticket`
-   (cookie 付き HTTP=proxy を通る)で `Phoenix.Token` 署名の**短命チケット
-   (30 秒)**を取得し、WS を `?ticket=`(param は proxy を通る)で接続する。
-   `connect/3` がチケットを検証してトークンへ戻す。**トークン自体は JS に
-   出ない**。初回ロード(`?token=` あり)は token param で接続しつつ cookie を
+   (cookie 付き HTTP=proxy を通る)で `Phoenix.Token` **暗号化**の**短命
+   チケット(30 秒)**を取得し、WS を `?ticket=`(param は proxy を通る)で
+   接続する。`connect/3` がチケットを復号してトークンへ戻す。署名のみだと
+   ticket を持つ者がトークンを Base64 復元できてしまうため暗号化必須(#47
+   レビュー)。**トークン自体は JS に出ない**(チケットからも復元不可)。
+   初回ロード(`?token=` あり)は token param で接続しつつ cookie を
    セットする。prod は同一 origin 直結で cookie が WS に乗るため session
    フォールバックも効く。
 6. **secure フラグ = prod のみ**。既存 `force_ssl`(`rewrite_on:

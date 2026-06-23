@@ -24,16 +24,19 @@ defmodule KaoiroServerWeb.SessionController do
   # Matches ClientSocket's ticket salt.
   @ws_ticket_salt "client_ws"
 
-  # GET /session/ticket: mints a short-lived signed WS ticket from a valid
-  # cookie session (ADR-0013). The SPA fetches it on a reload — Vite cannot
-  # carry the cookie on a WS upgrade, so the ticket (not the token) rides
-  # the connect params. The token itself never reaches JS.
+  # GET /session/ticket: mints a short-lived ENCRYPTED WS ticket from a
+  # valid cookie session (ADR-0013). The SPA fetches it on a reload — Vite
+  # cannot carry the cookie on a WS upgrade, so the ticket (not the token)
+  # rides the connect params. Encrypt (not sign): the embedded reusable
+  # token must stay confidential so an XSS that reads the JS-held ticket
+  # cannot Base64-decode the long-lived token out of it (ADR-0013 rejects
+  # sign-only storage). The token itself never reaches JS.
   def ticket(conn, _params) do
     token = get_session(conn, "client_token")
 
     case token && Auth.client_role(token) do
       {:ok, _role} ->
-        json(conn, %{ticket: Phoenix.Token.sign(conn, @ws_ticket_salt, token)})
+        json(conn, %{ticket: Phoenix.Token.encrypt(conn, @ws_ticket_salt, token)})
 
       _ ->
         conn

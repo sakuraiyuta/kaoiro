@@ -42,13 +42,15 @@ defmodule KaoiroServerWeb.ClientSocket do
     end
   end
 
-  # Verifies a short-lived WS ticket back to its token (ADR-0013), or nil
+  # Decrypts a short-lived WS ticket back to its token (ADR-0013), or nil
   # when absent/expired/forged — Vite cannot carry the cookie on a WS
   # upgrade, so the reload path authenticates with this ticket instead.
+  # Decrypt (not verify): the ticket is encrypted so its embedded token
+  # stays confidential against an XSS reading the JS-held ticket.
   defp ticket_token(_socket, nil), do: nil
 
   defp ticket_token(socket, ticket) do
-    case Phoenix.Token.verify(socket, @ws_ticket_salt, ticket, max_age: @ws_ticket_max_age) do
+    case Phoenix.Token.decrypt(socket, @ws_ticket_salt, ticket, max_age: @ws_ticket_max_age) do
       {:ok, token} -> token
       {:error, _reason} -> nil
     end
