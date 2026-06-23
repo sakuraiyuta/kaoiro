@@ -23,9 +23,12 @@ flowchart LR
     CC1[Claude Code #1]
     CX[Codex 将来]
   end
-  subgraph Wrappers[ラッパー層 TS + Agent SDK / ローカル]
-    W1[Wrapper #1<br/>Adapter+Filters]
-    W2[Wrapper #2]
+  subgraph Host["ホスト(runner 常駐)"]
+    RUN[runner<br/>spawn/監督/ホスト登録]
+    subgraph Wrappers[ラッパー層 TS + Agent SDK / ローカル]
+      W1[Wrapper #1<br/>Adapter+Filters]
+      W2[Wrapper #2]
+    end
   end
   subgraph Server[サーバ層 Elixir/Phoenix]
     REG[AgentStates<br/>単一 GenServer<br/>agent_id→最新エンベロープ]
@@ -36,8 +39,11 @@ flowchart LR
   end
   CC1 <-->|Agent SDK| W1
   CX  <-->|Adapter| W2
-  W1 -- WebSocket / 共通イベント --> REG
+  RUN -.->|spawn/stop/restart 監督| W1
+  RUN -.->|監督| W2
+  W1 -->|"WebSocket / 共通イベント(直結)"| REG
   W2 -- WebSocket --> REG
+  RUN -- WebSocket / ホスト登録・制御 --> REG
   REG --> PS --> UI
   UI -- 指示 / 承認 --> REG --> W1
 ```
@@ -56,6 +62,13 @@ flowchart LR
 
 ### 各層の責務
 
+- **runner(TS/Node / ホスト常駐)**: 各ホストに 1 つ常駐し、wrapper プロセスの
+  ライフサイクル(spawn / stop / restart / 監視)と session 列挙を担う**監督層**。
+  サーバへ自ホストを登録・生存通知し、operator 指示で wrapper を起動・停止する。
+  データ経路は**終端せず**、wrapper は引き続きサーバへ直結する(supervisor 専任、
+  [ADR-0023](../adr/0023-host-runner-architecture.md))。1 wrapper = 1 agent = 1
+  process を監督し、障害復旧・resume の生存単位となる
+  ([ADR-0014](../adr/0014-session-resume-and-restore.md))。
 - **ラッパー(TS / ローカル)**: SDK 経由の起動・制御、SDK メッセージ → 共通
   エンベロープへの翻訳と状態**導出**(アダプタ)、フィルタ列、指示・承認の SDK
   呼び出しへの変換、ペルソナ・安定 ID の保持。
@@ -76,7 +89,10 @@ flowchart LR
 ラッパーはローカル動作、複数ホストが中央サーバへ WebSocket(Phoenix Channels)で
 接続。ラッパートークン認証 + TLS + ハートビート必須、接続断は `disconnected`
 状態。決定詳細は
-[ADR-0002](../adr/0002-local-wrapper-websocket-topology.md)。
+[ADR-0002](../adr/0002-local-wrapper-websocket-topology.md)。各ホストの runner も
+同サーバへ常時接続し、ホスト登録・生存通知と spawn/stop/restart 制御を行う(データ
+経路とは別系統、[ADR-0023](../adr/0023-host-runner-architecture.md))。制御メッセージ
+の具体形は [protocol](protocol.md)。
 
 ### アクセス制御
 
@@ -121,4 +137,6 @@ flowchart LR
   [0004](../adr/0004-client-rendering-staged.md),
   [0005](../adr/0005-access-control-oauth-stub.md),
   [0007](../adr/0007-client-separation-reference-dashboard.md),
-  [0008](../adr/0008-persona-asset-distribution.md)
+  [0008](../adr/0008-persona-asset-distribution.md),
+  [0014](../adr/0014-session-resume-and-restore.md),
+  [0023](../adr/0023-host-runner-architecture.md)

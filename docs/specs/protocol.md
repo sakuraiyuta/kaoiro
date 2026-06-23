@@ -155,10 +155,24 @@ session_id を指定して **resume** する単一機構で行う
 ([ADR-0014](../adr/0014-session-resume-and-restore.md))。制御は issue #22 の
 `client -> server -> runner(boot service)-> wrapper` 起動経路に「resume
 モード」を足したもので、復帰コマンド(spawn-with-resume)とセッション列挙
-クエリは issue #22 / runner 仕様(issue #23)と併せて定義する(具体メッセージ
-schema は本 spec では未確定)。先行する phase-0 の protocol 変更は**エンベロープ
-への top-level `session_id` 追加のみ**(wrapper が報告 → サーバが
-`(agent_id, host, cwd, session_id)` ポインタを保持)。
+クエリは issue #22 / runner 仕様([ADR-0023](../adr/0023-host-runner-architecture.md))
+と併せて定義する(下記「runner 制御メッセージ」、具体メッセージ schema は草案)。
+先行する phase-0 の protocol 変更は**エンベロープへの top-level `session_id`
+追加のみ**(wrapper が報告 → サーバが `(agent_id, host, cwd, session_id)`
+ポインタを保持)。
+
+### runner 制御メッセージ(草案)
+
+各ホストに常駐する runner([ADR-0023](../adr/0023-host-runner-architecture.md))は、
+データ経路(`wrapper:<agent_id>` 直結)とは**別系統**でサーバへ接続し、ホスト登録・
+生存通知と wrapper のライフサイクル制御(spawn / stop / restart / セッション列挙)を
+行う(上記 resume もこの制御経路の一機能)。具体メッセージ(トピック設計・イベント
+名・payload・認証)は**未確定の草案**で、
+[runner-control-envelope-schema](../open-questions/runner-control-envelope-schema.md)
+で確定する。暫定方針は専用 `runner:<host_id>` トピック + Channels イベント方式
+(server→runner: `spawn` / `stop` / `restart` / `enumerate_sessions`、runner→server:
+`register` / `heartbeat` / `sessions` / `spawn_result`)。spawn は実質リモートコード
+実行のため **operator 限定**・cwd 実在検証([threat-model](threat-model.md))。
 
 ### バージョニング方針
 
@@ -359,4 +373,5 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
   [0016](../adr/0016-error-body-relay.md),
   [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md),
   [0021](../adr/0021-role-information-disclosure-policy.md),
-  [0022](../adr/0022-pending-permission-authoritative-source.md)
+  [0022](../adr/0022-pending-permission-authoritative-source.md),
+  [0023](../adr/0023-host-runner-architecture.md)

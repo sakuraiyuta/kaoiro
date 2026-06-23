@@ -10,6 +10,7 @@
 | [live2d-oss-rendering](live2d-oss-rendering.md) | low | — | 2026-06-15 |
 | [subagent-task-envelope-schema](subagent-task-envelope-schema.md) | high | subagent-tasks | 2026-06-16 |
 | [subagent-task-aggregation](subagent-task-aggregation.md) | medium | subagent-tasks | 2026-06-16 |
+| [runner-control-envelope-schema](runner-control-envelope-schema.md) | medium | phase-4-host-runner | 2026-06-24 |
 
 ## Recently decided
 

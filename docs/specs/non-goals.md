@@ -17,7 +17,7 @@ kaoiro が初期に扱わない範囲を明示する。スコープは [overview
 
 - **エージェント本体の機能改変・自作**。kaoiro はラッパー/可視化層に徹する。
 - **高度な感情分析**。まずは味付けとして最小限
-  ([plans/phase-4-emotion-filter](../plans/phase-4-emotion-filter.md))。
+  ([plans/phase-6-emotion-filter](../plans/phase-6-emotion-filter.md))。
 - **本格的な OAuth 認証・多人数アクセス・RBAC**。プロトタイプはアクセス制御を
   stub(メールのホワイトリスト: テキスト/SQLite)に留める
   ([ADR-0005](../adr/0005-access-control-oauth-stub.md))。

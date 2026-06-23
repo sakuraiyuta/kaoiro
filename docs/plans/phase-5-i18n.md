@@ -3,8 +3,8 @@ title: Phase 5 — 国際化(ベータ前 英訳工程)
 description: 外部公開へ向けてドキュメント・UI を全英訳する独立マイルストーン。
 status: planned
 phase: 5
-depends_on: [phase-4-emotion-filter]
-last_updated: 2026-06-04
+depends_on: [phase-4-host-runner]
+last_updated: 2026-06-24
 ---
 
 # Phase 5 — 国際化(ベータ前 英訳工程)
@@ -41,4 +41,4 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 ## See Also
 
 - ADRs: [0006](../adr/0006-doc-language-i18n.md)
-- Previous: [phase-4-emotion-filter](phase-4-emotion-filter.md)
+- Previous: [phase-4-host-runner](phase-4-host-runner.md)

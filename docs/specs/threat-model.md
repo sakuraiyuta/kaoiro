@@ -107,4 +107,5 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
   [0011](../adr/0011-phase3-reliability-and-auth.md),
   [0012](../adr/0012-response-display-and-dashboard-scope.md),
   [0014](../adr/0014-session-resume-and-restore.md),
-  [0021](../adr/0021-role-information-disclosure-policy.md)
+  [0021](../adr/0021-role-information-disclosure-policy.md),
+  [0023](../adr/0023-host-runner-architecture.md)

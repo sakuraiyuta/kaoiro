@@ -38,6 +38,10 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0017](adr/0017-wrapper-multientity-packages.md) | wrapper を3層 pnpm ワークスペースへ(マルチエンティティ) | accepted |
 | [0018](adr/0018-runner-distribution.md) | wrapper/runner は OS 別単一バイナリ・CLI のみ・Gitea release | accepted |
 | [0019](adr/0019-subagent-workflow-entity-and-task-envelope.md) | subagent/workflow を親付き子エンティティとし専用 envelope で通知 | accepted |
+| [0020](adr/0020-dashboard-battery-included-client.md) | 同梱ダッシュボードを battery-included な最低限実用クライアントへ格上げ | accepted |
+| [0021](adr/0021-role-information-disclosure-policy.md) | viewer/operator の情報公開ポリシ(allow-list 方式) | accepted |
+| [0022](adr/0022-pending-permission-authoritative-source.md) | pending_permission の authoritative source を state_change.ext へ | accepted |
+| [0023](adr/0023-host-runner-architecture.md) | ホスト常駐 runner(supervisor 専任・1 process=1 agent・TS/Node) | accepted |
 
 ## 更新フロー
 

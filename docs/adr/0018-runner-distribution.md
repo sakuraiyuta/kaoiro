@@ -6,7 +6,7 @@ opened: 2026-06-16
 supersedes: []
 superseded_by: null
 related_specs: [setup-wizards]
-related_adrs: [17]
+related_adrs: [17, 23]
 ---
 
 # ADR-0018 — wrapper/runner の配布
@@ -49,8 +49,10 @@ wrapper/runner を各ホスト(Linux/macOS/Windows、ヘッドレス含む)へ�
 ### Neutral
 
 - 配布単位は [ADR-0017](0017-wrapper-multientity-packages.md) のパッケージ分割に
-  依存。runner の常駐デーモン仕様は [ADR-0014](0014-session-resume-and-restore.md)
-  / issue #23 と直結。
+  依存。runner の常駐デーモン仕様は
+  [ADR-0023](0023-host-runner-architecture.md)(supervisor 専任・TS/Node・
+  `kaoiro-runner`)で確定し、[ADR-0014](0014-session-resume-and-restore.md) の
+  resume と直結。
 
 ## Alternatives Considered
 
