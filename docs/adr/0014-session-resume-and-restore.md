@@ -102,8 +102,10 @@ flowchart LR
 リングバッファ([ADR-0012](0012-response-display-and-dashboard-scope.md) F7)を
 そこから **再構築可能な投影** と位置づける。これにより本機能は #24(全履歴の
 ディスク永続化)に強く依存しない。resume 時にサーバ表示履歴を JSONL から
-再構築・上書きする手段は未確定
-([resume-history-projection](../open-questions/resume-history-projection.md))。
+再構築・上書きする手段は **案 B(runner/wrapper が JSONL を直読して投影)** に
+確定(Q-A4、2026-06-23 実検証)。SDK の resume は過去履歴を query() ストリームへ
+再 yield しないため、案 A(SDK 再 stream を拾う)は不成立。検証詳細は
+[#50](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/50)。
 
 ## Consequences
 
@@ -117,7 +119,8 @@ flowchart LR
 
 - runner(#23)の常駐実装が前提で、フル機能は #22/#23 待ち。
 - 二重 resume 防止に二段(サーバ + runner)の実装が要る。
-- resume 後の表示履歴再構築手段が未確定(Q-A4)。
+- 表示履歴の再構築は JSONL 直読(案 B)が必須で、runner/wrapper 側に JSONL
+  解析の実装負担が乗る(Q-A4 解決、2026-06-23)。
 
 ### Neutral
 
@@ -158,20 +161,29 @@ runner 実装が前提。
     (`KaoiroServer.SessionPointers`、DETS バック)。envelope 取り込み時に
     `agent_id => {session_id, cwd}` を更新し再起動越しに記憶する。`host` は
     agent_id に内包される(F3)ためサーバでは非保持。ファイルパスは
-    `KAOIRO_SESSION_POINTERS_PATH` で上書き可。**Q-A4 の実検証は未了**(別途、
-    [#50](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/50))。
+    `KAOIRO_SESSION_POINTERS_PATH` で上書き可。
+  - **実装状況(Q-A4 実検証, 2026-06-23)**: SDK resume 挙動を headless 実走行で
+    確定。(1) **streaming 入力 + resume は併存**し、resume 後も後続ターンを受理・
+    応答(phase-1 関門クリア = SDK 制約による phase-1 ブロックは無い)。(2)
+    **履歴供給形は案 B に確定** — resume は過去履歴を query() ストリームへ再 yield
+    しない(入力なしでは hook ライフサイクルのみで init すら出ない)。表示履歴の
+    再構築は runner/wrapper が JSONL を直読する経路でのみ成立。検証詳細は
+    [#50](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/50)。
 - **phase-1(#22/#23 runner 前提)**: 復帰本体。
   - #22 spawn の resume モード拡張、runner の候補列挙(F2)、F4 の二重防止、
     T3 検証、クライアント復帰 UI(operator 限定、T2)。
-- **phase-2(Q-A4 の結果次第)**: resume 時にサーバ表示履歴を JSONL から
-  再構築・上書き(A4)。
+- **phase-2(Q-A4 確定 = 案 B、2026-06-23)**: resume 起動時に runner/wrapper が
+  当該 session の JSONL(`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`)を
+  直読し、`user`/`assistant` 行(内部簿記行 `queue-operation` / `attachment` /
+  `last-prompt` / `mode` は除外)を時系列抽出 → ADR-0012 F7 リングバッファの
+  表示形へ写像 → 履歴再構築 envelope を一括送出しサーバ表示履歴を上書き(A4)。
+  重い再構築は runner/wrapper 側に置き、サーバは受け口に留める。
 
 ## Related
 
-- 解消: 旧 open-question `existing-agent-summon`(本 ADR へ昇格)。
-- 残課題:
-  [resume-history-projection](../open-questions/resume-history-projection.md)
-  (Q-A4)。
+- 解消: 旧 open-question `existing-agent-summon`(本 ADR へ昇格)、
+  `resume-history-projection`(Q-A4、2026-06-23 実検証で案 B 確定 → 本 ADR
+  phase-2 / 上記 phase-0 実装状況へ統合)。
 - 依存 issue:
   [#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22)
   (サーバ経由起動)、
