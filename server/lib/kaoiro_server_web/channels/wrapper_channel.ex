@@ -53,6 +53,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
     with :ok <- validate(envelope, socket.assigns.agent_id),
          :ok <- store(envelope) do
       record_session_pointer(envelope)
+      # The full envelope (incl. operator-only log/result tool I/O) goes onto
+      # agents:lobby unfiltered; role gating is per-subscriber in
+      # AgentsChannel.handle_out. Invariant: ONLY AgentsChannel may subscribe
+      # to this topic — any new subscriber MUST apply the same role gate
+      # (#27, specs/threat-model.md).
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
       {:reply, :ok, socket}
     else

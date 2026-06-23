@@ -58,6 +58,7 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | 返答ログ(`log`/`result`、tool 入出力含む)を operator 限定配信 | Phase 3.5([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
 | envelope の `ext`(cwd / model / context / rate_limits / slash_commands / 将来追加分)を全 type で viewer 除去 | #46 で実装(コミット 9b32c34 / ef7b606) |
 | viewer 配信を **allow-list 方式** へ転換(operator 限定がデフォルト、viewer 配信は明示宣言)。`permission_request` envelope を viewer 完全除去(合成 `state_change(waiting_permission)` に置換し grid 整合保持) | #46 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) |
+| log/result 等 operator 限定 envelope は `agents:lobby` に平文 broadcast され `AgentsChannel.handle_out` が per-subscriber で絞り込む(購読時点 gate ではない)。`agents:lobby` の購読者を `AgentsChannel` のみに保つ不変条件で担保し、operator 専用トピック分離は採用しない | #27(評価の上 **現状維持** を決定。新規購読者は下記 MUST 参照) |
 | ユーザトークンを httpOnly + 暗号化 session cookie に保持(XSS でも JS から読めず、cookie jar 上でも秘匿)。CSRF は SameSite=Lax + prod の `check_origin` で抑止 | Phase 3.5([ADR-0013](../adr/0013-user-token-cookie-persistence.md)) |
 | OAuth + RBAC 本実装 | 将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
 | セッション召喚時に runner が返す JSONL メタ(先頭プロンプト要約等)を operator role 限定・最小限に露出(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) | 将来(resume 機能と同時) |
@@ -78,6 +79,14 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 - MUST: `permission_request` envelope は viewer 完全除去。grid 整合のため
   合成 `state_change(waiting_permission)`(`payload={}` / `ext` なし)に
   置換して viewer へ配信([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
+- MUST: `agents:lobby` を直接購読してよいのは `AgentsChannel` のみ
+  (#27)。`WrapperChannel` は log/result の tool I/O を含む全 envelope を
+  同トピックへ平文 broadcast し、role 絞り込みは `AgentsChannel.handle_out`
+  (`sanitize_envelope_for/2`)が per-subscriber で行う。よって同トピックを
+  新たに購読するプロセス(監視フック・将来機能・テスト)を足す場合は、必ず
+  同等の role gate を購読側で適用すること。operator 専用 PubSub トピック分離
+  は #27 で評価したが、現状購読者が `AgentsChannel` のみで実害がないため
+  不採用とし、この不変条件で defense-in-depth を代替する。
 - MUST: ラッパーはサーバから受けた指示で `allowedTools` /
   `canUseTool` の設定を変更しない(実行能力の天井はローカル設定)。
 - MUST: resume 対象 session_id は当該 agent の束縛 cwd 配下に実在するものに
