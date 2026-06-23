@@ -210,6 +210,42 @@
     });
   }
 
+  // Local-day key for grouping consecutive log lines under a date divider
+  // (#38). Null for an invalid/missing ts so it never forces a spurious
+  // divider.
+  function dayKey(ts: string): string | null {
+    const at = new Date(ts);
+    if (Number.isNaN(at.getTime())) return null;
+    return `${at.getFullYear()}-${at.getMonth()}-${at.getDate()}`;
+  }
+
+  // Date label for a day divider, e.g. "2026/06/23(月)" in ja locale (#38).
+  function formatDate(ts: string): string {
+    const at = new Date(ts);
+    if (Number.isNaN(at.getTime())) return "";
+    return at.toLocaleDateString([], {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short",
+    });
+  }
+
+  // Date-divider label per log index, recomputed only when logs changes (#38):
+  // a line gets a label when its calendar day differs from the previous line
+  // (and for the first line). Precomputing here avoids reconstructing the
+  // previous entry's Date on every render.
+  const dayDividers = $derived.by(() => {
+    const labels = new Map<number, string>();
+    let prev: string | null = null;
+    logs.forEach((env, i) => {
+      const dk = dayKey(env.ts);
+      if (dk !== null && dk !== prev) labels.set(i, formatDate(env.ts));
+      prev = dk;
+    });
+    return labels;
+  });
+
   // Blind-spot: other agents needing attention while this detail hides the
   // grid (ADR-0012 F8). Colour follows the most urgent: error first.
   const attention = $derived(
@@ -584,6 +620,10 @@
           {@const log = logOf(env)}
           {@const res = resultOf(env)}
           {@const time = formatTime(env.ts)}
+          {@const dateLabel = dayDividers.get(i)}
+          {#if dateLabel}
+            <div class="day-divider"><span>{dateLabel}</span></div>
+          {/if}
           {#if log?.kind === "user"}
             <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
             <div class="msg user">
@@ -1249,6 +1289,27 @@
 
   .turn-end .ts {
     margin-left: 0.5em;
+  }
+
+  /* Date divider between log lines whose calendar day differs (#38): a
+     centred date label flanked by hairlines. */
+  .day-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.6rem 0 0.2rem;
+    color: var(--fg-dim);
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .day-divider::before,
+  .day-divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--line);
   }
 
   /* Session cost on the turn boundary (#8). */
