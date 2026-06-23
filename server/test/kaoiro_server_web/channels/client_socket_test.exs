@@ -61,4 +61,14 @@ defmodule KaoiroServerWeb.ClientSocketTest do
 
     assert :error = ClientSocket.connect(%{"ticket" => "garbage"}, socket, %{})
   end
+
+  test "認証成功で token 由来の socket id を割り当て id/1 で公開する (#47)" do
+    Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+    info = %{session: %{"client_token" => "tok-op"}}
+
+    assert {:ok, socket} = ClientSocket.connect(%{}, %Phoenix.Socket{}, info)
+    assert socket.assigns.socket_id == KaoiroServer.Auth.socket_id("tok-op")
+    # id/1 surfaces it so Endpoint.disconnect can target this socket.
+    assert ClientSocket.id(socket) == socket.assigns.socket_id
+  end
 end

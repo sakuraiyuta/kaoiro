@@ -90,11 +90,13 @@ issue #45 にて my-spec-elicitation で方式を収束(2026-06-15 ユーザ決�
 - cookie を WS に乗せられない(Vite proxy 非転送 + cross-port 非送出)ため、
   リロード認証に「HTTP でチケット取得 → param 接続」の一手間が要る。`connect/3`
   は ticket / token param / session の 3 経路を持つ。
-- **稼働中ソケットをサーバから強制切断できない**。`ClientSocket` は connect
-  時のみ token を検証し `id/1` は `nil`(`Endpoint.disconnect` 経路なし)なので、
-  失効は次の接続で反映される。refresh の 401 で**正規**クライアントは自発切断
-  するが、開いたソケットを握る悪意ある失効ユーザの即時排除には socket id +
-  強制切断の仕組みが要る(将来課題)。
+- **稼働中ソケットの即時強制切断**: 当初は不可だったが issue #47 で解決済み。
+  当初 `ClientSocket` は connect 時のみ token を検証し `id/1` が `nil`
+  (`Endpoint.disconnect` 経路なし)で、失効は次接続まで反映されなかった。
+  #47 で `id/1` を token 由来の socket id(`Auth.socket_id/1` = token の
+  SHA-256、生 token は非保持)にし、明示ログアウト(`DELETE /session`)と
+  refresh の 401(失効)で `Endpoint.broadcast(id, "disconnect", %{})` により
+  稼働中ソケットを即時切断する。
 
 ### Neutral
 

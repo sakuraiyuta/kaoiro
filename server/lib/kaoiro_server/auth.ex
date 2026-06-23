@@ -75,6 +75,22 @@ defmodule KaoiroServer.Auth do
   defp role_for(_tokens, _token), do: nil
 
   @doc """
+  Derives a stable, opaque socket id for a client token (issue #47) so a
+  logout or revocation can force-drop every live socket bound to it via
+  `Endpoint.broadcast(id, "disconnect", %{})`. A SHA-256 hash, not the raw
+  token, so the secret is never retained in socket state or logs. The same
+  underlying token (whether it reached the socket via cookie, ticket, or
+  `?token=`) maps to the same id, so the HTTP logout path and the WS
+  connection agree. Returns nil for a missing/blank/non-binary token —
+  there is then no socket to address.
+  """
+  def socket_id(token) when is_binary(token) and token != "" do
+    "client_socket:" <> Base.url_encode64(:crypto.hash(:sha256, token), padding: false)
+  end
+
+  def socket_id(_token), do: nil
+
+  @doc """
   Logs a startup warning for each token list that is unset, so the
   locked / dev-mode state is visible in logs rather than silent
   (specs/threat-model.md, issue #28):

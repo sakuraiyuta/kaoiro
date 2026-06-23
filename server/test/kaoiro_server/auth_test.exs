@@ -71,6 +71,24 @@ defmodule KaoiroServer.AuthTest do
     end
   end
 
+  describe "socket_id/1 (issue #47)" do
+    test "同じ token は同じ id、異なる token は別の id" do
+      assert Auth.socket_id("tok-a") == Auth.socket_id("tok-a")
+      refute Auth.socket_id("tok-a") == Auth.socket_id("tok-b")
+      assert String.starts_with?(Auth.socket_id("tok-a"), "client_socket:")
+    end
+
+    test "生 token を id に含めない (ハッシュ化)" do
+      refute Auth.socket_id("super-secret-token") =~ "super-secret-token"
+    end
+
+    test "nil / 空 / 非バイナリの token は id を持たない" do
+      assert Auth.socket_id(nil) == nil
+      assert Auth.socket_id("") == nil
+      assert Auth.socket_id(123) == nil
+    end
+  end
+
   describe "warn_token_config/0 (issue #28)" do
     import ExUnit.CaptureLog
 

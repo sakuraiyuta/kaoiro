@@ -75,8 +75,10 @@ defmodule KaoiroServerWeb.SessionControllerTest do
     assert conn.status == 401
   end
 
-  test "失効した token は 401 で session が破棄される", %{conn: conn} do
+  test "失効した token は 401 で session が破棄され socket も切断される (#47)", %{conn: conn} do
     Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+    socket_id = KaoiroServer.Auth.socket_id("revoked")
+    KaoiroServerWeb.Endpoint.subscribe(socket_id)
 
     conn =
       conn
@@ -85,5 +87,32 @@ defmodule KaoiroServerWeb.SessionControllerTest do
 
     assert conn.status == 401
     assert get_session(conn, "client_token") == nil
+    assert_receive %Phoenix.Socket.Broadcast{topic: ^socket_id, event: "disconnect"}
+  end
+
+  describe "delete: ログアウト (#47)" do
+    test "session を破棄し socket を強制切断する (204)", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+      socket_id = KaoiroServer.Auth.socket_id("tok-op")
+      KaoiroServerWeb.Endpoint.subscribe(socket_id)
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-op"})
+        |> delete("/session")
+
+      assert conn.status == 204
+      assert get_session(conn, "client_token") == nil
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^socket_id, event: "disconnect"}
+    end
+
+    test "session が無くても 204 (切断対象なし)", %{conn: conn} do
+      conn =
+        conn
+        |> init_test_session(%{})
+        |> delete("/session")
+
+      assert conn.status == 204
+    end
   end
 end

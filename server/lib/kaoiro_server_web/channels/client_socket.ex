@@ -28,8 +28,17 @@ defmodule KaoiroServerWeb.ClientSocket do
         session_token(connect_info)
 
     case Auth.client_role(token) do
-      {:ok, role} -> {:ok, assign(socket, :role, role)}
-      {:error, _reason} -> :error
+      {:ok, role} ->
+        # Stamp a token-derived id (issue #47) so a logout / revocation can
+        # target this socket via Endpoint.disconnect. Derived from the
+        # underlying token, never stored raw.
+        {:ok,
+         socket
+         |> assign(:role, role)
+         |> assign(:socket_id, Auth.socket_id(token))}
+
+      {:error, _reason} ->
+        :error
     end
   end
 
@@ -50,6 +59,9 @@ defmodule KaoiroServerWeb.ClientSocket do
   defp session_token(%{session: %{} = session}), do: session["client_token"]
   defp session_token(_), do: nil
 
+  # Token-derived id (issue #47): lets the server force-disconnect this
+  # socket on logout / revocation. connect/3 only succeeds with a valid
+  # token, so the assign is always a binary here.
   @impl true
-  def id(_socket), do: nil
+  def id(socket), do: socket.assigns[:socket_id]
 end

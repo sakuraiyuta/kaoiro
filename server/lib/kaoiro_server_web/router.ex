@@ -28,7 +28,8 @@ defmodule KaoiroServerWeb.Router do
   # there until the Svelte reference dashboard (issue #12) takes over.
   # Session cookie endpoints (ADR-0013): /session/new exchanges a token for
   # the cookie, /session/ticket mints a short-lived WS ticket from it (the
-  # reload path), /session/refresh slides it while a tab is open.
+  # reload path), /session/refresh slides it while a tab is open, and
+  # DELETE /session logs out + force-disconnects the socket (issue #47).
   scope "/" do
     pipe_through :browser
 
@@ -36,5 +37,6 @@ defmodule KaoiroServerWeb.Router do
     post "/session/new", KaoiroServerWeb.SessionController, :create
     get "/session/ticket", KaoiroServerWeb.SessionController, :ticket
     get "/session/refresh", KaoiroServerWeb.SessionController, :refresh
+    delete "/session", KaoiroServerWeb.SessionController, :delete
   end
 end

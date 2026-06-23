@@ -11,7 +11,10 @@ defmodule KaoiroServerWeb.SessionController do
     to re-emit the cookie with a fresh max_age, so a tab that stays open
     never lapses while a closed tab expires max_age after its last
     refresh. Both re-validate the token, so a revoked token stops
-    authenticating (and the stale session is dropped) immediately.
+    authenticating (and the stale session is dropped) immediately; on a
+    revoked token it also force-disconnects the live socket (issue #47).
+  - `delete` (`DELETE /session`): explicit logout — empties the cookie and
+    force-disconnects the user's live socket(s) (issue #47).
   """
 
   use KaoiroServerWeb, :controller
@@ -69,10 +72,35 @@ defmodule KaoiroServerWeb.SessionController do
 
       _ ->
         # Invalid/revoked: empty the session so the stale token stops
-        # authenticating (the cookie is re-emitted empty).
+        # authenticating (the cookie is re-emitted empty), and force-drop
+        # any live socket still bound to the revoked token so revocation
+        # takes effect immediately, not at the next reconnect (issue #47).
+        disconnect_socket(token)
+
         conn
         |> clear_session()
         |> send_resp(:unauthorized, "")
+    end
+  end
+
+  # DELETE /session: explicit logout. Empties the cookie and force-drops
+  # the user's live socket(s) so an operator session ends at once rather
+  # than lingering until the token expires or the tab reconnects (#47).
+  def delete(conn, _params) do
+    disconnect_socket(get_session(conn, "client_token"))
+
+    conn
+    |> clear_session()
+    |> send_resp(:no_content, "")
+  end
+
+  # Broadcasts the Phoenix "disconnect" control event to the token's socket
+  # id so ClientSocket drops every connection bound to it (issue #47). A
+  # nil token (no session) addresses nothing.
+  defp disconnect_socket(token) do
+    case Auth.socket_id(token) do
+      nil -> :ok
+      socket_id -> KaoiroServerWeb.Endpoint.broadcast(socket_id, "disconnect", %{})
     end
   end
 end
