@@ -325,6 +325,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "agent_id 文字種ガード (issue #61)" do
+    test "不正な文字種の agent_id は invalid_agent_id で拒否される (known? より前)" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "interrupt", %{"agent_id" => "bad*id"})
+      assert_reply ref, :error, %{reason: "invalid_agent_id"}
+    end
+  end
+
   describe "permission_request の viewer 完全除去 (ADR-0021, #46)" do
     defp permission_envelope(agent_id) do
       %{

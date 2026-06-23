@@ -18,6 +18,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.SessionPointers
+  alias KaoiroServerWeb.AgentId
 
   @frame_keys ~w(version agent_id ts type state)
 
@@ -27,18 +28,24 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   @impl true
   def join("wrapper:" <> agent_id, _params, socket) do
-    case Auth.authorize_wrapper(agent_id, socket.assigns[:wrapper_token]) do
-      :ok ->
-        # Drop the raw token once verified so it cannot leak via crash
-        # logs / socket inspection.
-        {:ok,
-         socket
-         |> assign(:agent_id, agent_id)
-         |> assign(:wrapper_token, nil)}
-
-      {:error, reason} ->
-        {:error, %{reason: to_string(reason)}}
+    with :ok <- validate_agent_id(agent_id),
+         :ok <- Auth.authorize_wrapper(agent_id, socket.assigns[:wrapper_token]) do
+      # Drop the raw token once verified so it cannot leak via crash
+      # logs / socket inspection.
+      {:ok,
+       socket
+       |> assign(:agent_id, agent_id)
+       |> assign(:wrapper_token, nil)}
+    else
+      {:error, reason} -> {:error, %{reason: to_string(reason)}}
     end
+  end
+
+  # Enforce the protocol.md agent_id charset at the join boundary (issue
+  # #61). Checked before auth: the charset is public, so an early reject
+  # leaks nothing a client cannot already derive.
+  defp validate_agent_id(agent_id) do
+    if AgentId.valid?(agent_id), do: :ok, else: {:error, :invalid_agent_id}
   end
 
   @impl true

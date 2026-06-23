@@ -97,6 +97,30 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  describe "agent_id 文字種ガード (issue #61)" do
+    test "不正な文字種の agent_id は join を拒否する" do
+      for bad <- ["bad*id", "with#hash", "a/b/c", "has space"] do
+        assert {:error, %{reason: "invalid_agent_id"}} =
+                 KaoiroServerWeb.WrapperSocket
+                 |> socket(nil, %{})
+                 |> subscribe_and_join(
+                   KaoiroServerWeb.WrapperChannel,
+                   "wrapper:" <> bad
+                 )
+      end
+    end
+
+    test "正規の文字種の agent_id は join できる" do
+      assert {:ok, _reply, _socket} =
+               KaoiroServerWeb.WrapperSocket
+               |> socket(nil, %{})
+               |> subscribe_and_join(
+                 KaoiroServerWeb.WrapperChannel,
+                 "wrapper:ok.id-1_2"
+               )
+    end
+  end
+
   describe "log/result の履歴振り分け (ADR-0012)" do
     defp log_env(agent_id) do
       %{

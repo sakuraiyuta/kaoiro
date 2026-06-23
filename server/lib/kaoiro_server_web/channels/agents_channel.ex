@@ -33,6 +33,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   use Phoenix.Channel
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServerWeb.AgentId
 
   # Resource bound for an operator instruction; generous for prose,
   # far below the wrapper-side envelope cap.
@@ -235,12 +236,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp fetch_agent_id(%{"agent_id" => agent_id} = _payload)
        when is_binary(agent_id) do
-    # Known agents only: rejects typos early and keeps the wrapper topic
-    # namespace from being probed blindly.
-    if AgentStates.known?(agent_id) do
-      {:ok, agent_id}
-    else
-      {:error, :unknown_agent}
+    # Enforce the protocol.md charset (issue #61) before the known? check;
+    # then known agents only, which rejects typos early and keeps the
+    # wrapper topic namespace from being probed blindly.
+    cond do
+      not AgentId.valid?(agent_id) -> {:error, :invalid_agent_id}
+      not AgentStates.known?(agent_id) -> {:error, :unknown_agent}
+      true -> {:ok, agent_id}
     end
   end
 
