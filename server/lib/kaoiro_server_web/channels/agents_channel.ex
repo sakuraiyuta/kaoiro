@@ -32,6 +32,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   use Phoenix.Channel
 
+  require Logger
+
   alias KaoiroServer.AgentStates
   alias KaoiroServerWeb.AgentId
 
@@ -49,6 +51,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # only fan-out event that always reaches both roles, so it stays out of
   # the intercept list to skip the per-socket round trip.
   intercept ["envelope", "history_cleared"]
+
+  # Error reasons cleared for verbatim return to the client (issue #62).
+  # Anything outside this set is a bug or a future internal value (a
+  # tuple, an internal path, a stack fragment) and must not leak through
+  # `to_string/1`; `safe_reason/1` logs it and returns "internal_error".
+  @safe_reasons ~w(forbidden unknown_agent not_disconnected noop
+                   payload_too_large missing_agent_id invalid_agent_id)a
 
   @impl true
   def join("agents:lobby", _params, socket) do
@@ -146,7 +155,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {:reply, :ok, socket}
     else
       :noop -> {:reply, {:error, %{reason: "no_current_session"}}, socket}
-      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
   end
 
@@ -164,7 +173,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
       {:reply, :ok, socket}
     else
-      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
   end
 
@@ -185,7 +194,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {:reply, :ok, socket}
     else
       {:error, reason} ->
-        {:reply, {:error, %{reason: to_string(reason)}}, socket}
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
   end
 
@@ -230,6 +239,25 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp sanitize_envelope_for(:viewer, _envelope), do: :drop
 
+  @doc """
+  Allow-lists the client-facing reason (issue #62). Known atoms round-trip
+  as their string and the channel-built key-validation tuples format to
+  their stable text; anything else (a future AgentStates tuple, internal
+  path, or stack fragment) is logged in full server-side and collapsed to
+  a generic token so internal detail never reaches a client. Public for
+  direct unit testing of the catch-all.
+  """
+  def safe_reason(reason) when reason in @safe_reasons, do: to_string(reason)
+  def safe_reason({:missing_key, key}) when is_binary(key), do: "missing key: #{key}"
+
+  def safe_reason({:invalid_value, key}) when is_binary(key),
+    do: "invalid value: #{key}"
+
+  def safe_reason(reason) do
+    Logger.warning("agents_channel: unmapped error reason #{inspect(reason)}")
+    "internal_error"
+  end
+
   defp require_operator(socket) do
     if socket.assigns[:role] == :operator, do: :ok, else: {:error, :forbidden}
   end
@@ -248,11 +276,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp fetch_agent_id(_payload), do: {:error, :missing_agent_id}
 
+  # Returns structured reasons (not pre-formatted strings) so the
+  # client-facing text is produced by safe_reason/1 alone (issue #62);
+  # `key` is one of the channel's compile-time whitelisted keys, never
+  # client input.
   defp check_keys(payload, key_checks) do
     Enum.find_value(key_checks, :ok, fn {key, valid?} ->
       cond do
-        not Map.has_key?(payload, key) -> {:error, "missing key: #{key}"}
-        not valid?.(payload[key]) -> {:error, "invalid value: #{key}"}
+        not Map.has_key?(payload, key) -> {:error, {:missing_key, key}}
+        not valid?.(payload[key]) -> {:error, {:invalid_value, key}}
         true -> nil
       end
     end)

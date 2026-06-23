@@ -1,7 +1,10 @@
 defmodule KaoiroServerWeb.AgentsChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias KaoiroServer.AgentStates
+  alias KaoiroServerWeb.AgentsChannel
 
   defp put_agent(agent_id) do
     :ok =
@@ -322,6 +325,44 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "delete_agent", %{"agent_id" => "test.del-none"})
       assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+  end
+
+  describe "safe_reason allow-list (issue #62)" do
+    test "既知の atom reason はそのまま文字列化される" do
+      for r <- [
+            :forbidden,
+            :unknown_agent,
+            :not_disconnected,
+            :noop,
+            :payload_too_large,
+            :missing_agent_id,
+            :invalid_agent_id
+          ] do
+        assert AgentsChannel.safe_reason(r) == to_string(r)
+      end
+    end
+
+    test "key 検証タプルは安定した client 文字列になる" do
+      assert AgentsChannel.safe_reason({:missing_key, "text"}) == "missing key: text"
+
+      assert AgentsChannel.safe_reason({:invalid_value, "allow"}) ==
+               "invalid value: allow"
+    end
+
+    test "未知の reason は internal_error に置換され元の reason はログに残る" do
+      log =
+        capture_log(fn ->
+          assert AgentsChannel.safe_reason({:internal, "/etc/secret-path"}) ==
+                   "internal_error"
+
+          assert AgentsChannel.safe_reason(:db_connection_refused) ==
+                   "internal_error"
+        end)
+
+      # The internal detail is kept server-side (log) but never returned.
+      assert log =~ "/etc/secret-path"
+      assert log =~ "db_connection_refused"
     end
   end
 
