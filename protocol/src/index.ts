@@ -108,3 +108,27 @@ export interface Envelope {
   payload: Record<string, unknown>;
   ext: Record<string, unknown>;
 }
+
+// Runner control messages (protocol.md "runner 制御メッセージ", #66 / ADR-0023).
+// A resident runner connects on topic `runner:<host_id>`, a separate system
+// from the wrapper data path. `version` is the flat outer key (ADR-0015), "0"
+// for now. The spawn/stop/restart/enumerate and sessions/spawn_result shapes
+// are added with the phases that consume them.
+
+/** runner -> server, once per (re)connection: declares the host's spawnable
+ *  personas and the operator-selectable cwd allow-list (#22). capabilities
+ *  lists the engine kinds the host can run (e.g. ["claude"]). */
+export interface RunnerRegister {
+  version: "0";
+  host_id: string;
+  personas: Persona[];
+  cwd_allowlist: string[];
+  capabilities?: string[];
+}
+
+/** runner -> server liveness ping; the topic carries the host_id, but it is
+ *  sent in the payload too per the protocol.md schema. */
+export interface RunnerHeartbeat {
+  version: "0";
+  host_id: string;
+}

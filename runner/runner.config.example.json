@@ -1,0 +1,11 @@
+{
+  "host_id": "lab-pc-1",
+  "server_url": "ws://localhost:4000/runner",
+  "personas": [
+    { "id": "mio", "name": "澪", "sprite_set": "mio" }
+  ],
+  "cwd_allowlist": [
+    "/home/user/git/kaoiro"
+  ],
+  "capabilities": ["claude"]
+}

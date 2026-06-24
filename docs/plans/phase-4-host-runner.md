@@ -43,8 +43,8 @@ spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
 | 4-1 | 制御 envelope(spawn/stop/restart/enumerate-sessions)の schema 確定 | ✅ | #66 で確定。[protocol](../specs/protocol.md)「runner 制御メッセージ」へ追補・[ADR-0023](../adr/0023-host-runner-architecture.md) に決定記録。#22 と共有 |
 | 4-2 | server: ホスト登録・生存通知の受け口 + spawn 中継経路 | ✅ | #67(03ebca4)。host_registry + runner_channel/socket + AgentsChannel relay |
 | 4-3 | server: runner ローカルロックと連携した二重起動防止 | ✅ | #67。server owner フェンシング + spawn デデュプ。runner 側ロックは 4-5 |
-| 4-4-0 | TS workspace 化 + 共有 `@kaoiro/protocol` 抽出 + wrapper 型移行(挙動不変) | ⏳ | #68 前段。[ADR-0023](../adr/0023-host-runner-architecture.md)「TS パッケージ・トポロジ」。wrapper の test/build green を確認し隔離コミット |
-| 4-4 | runner: プロセス監督ループ + config 解決 + spawn/stop/restart | ⏳ | #68。TS/Node。wrapper config(agent_id/persona/server_url/token/...)を解決して spawn |
+| 4-4-0 | TS workspace 化 + 共有 `@kaoiro/protocol` 抽出 + wrapper 型移行(挙動不変) | ✅ | #68 前段。[ADR-0023](../adr/0023-host-runner-architecture.md)「TS パッケージ・トポロジ」。wrapper test/build green で隔離コミット |
+| 4-4 | runner: プロセス監督ループ + config 解決 + spawn/stop/restart | ⚠ | #68。TS/Node。**4-4a 済**: `@kaoiro/runner` 骨格 + 接続 + register/heartbeat(ライブ verify=host_registry 登録)。残=spawn/stop/restart 監督ループ(4-4b) |
 | 4-5 | runner: session JSONL 列挙 + resume 起動 | ⏳ | #68。当該 cwd 配下を列挙、T3 実在検証([ADR-0014](../adr/0014-session-resume-and-restore.md) F2/F6)+ in-memory ローカルロック(F4) |
 | 4-6 | wrapper: resume flag(`--resume <session_id>` 等)追加 | ✅ | #69(d073b4e)。args.ts/cli.ts に実装 |
 | 4-7 | `kaoiro-runner` 単一バイナリ化 | ⏳ | [ADR-0018](../adr/0018-runner-distribution.md)。主要機能が出揃ってからでも可 |
@@ -55,7 +55,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## 実装方針 (#68 = タスク 4-4-0〜4-5)
 
-# 68 着手にあたり確定した実装方針(2026-06-24)。
+# 68 着手にあたり確定した実装方針(2026-06-24)
 
 - **パッケージ / 型共有**: [ADR-0023](../adr/0023-host-runner-architecture.md)
   「TS パッケージ・トポロジ」に従う(最小 pnpm workspace + 共有 `@kaoiro/protocol`、

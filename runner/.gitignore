@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Live config holds host_id / persona / cwd allow-list; only the example is
+# tracked. The auth token is never in the file — it comes from the env.
+runner.config.json
+runner.config.*.json
+!runner.config.example.json
