@@ -93,6 +93,27 @@ UI からのリモート spawn は実質リモートコード実行(issue #22)�
 実行点となるため、spawn / 指示は **operator 限定**、resume 対象 session_id は
 当該 agent 束縛 cwd 配下に**実在検証**(T1/T2/T3、ADR-0014 F6)。
 
+### 制御メッセージスキーマ(#66、2026-06-24 追補)
+
+[#66](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/66) で runner ↔ server
+制御メッセージを確定(schema 本体は [protocol](../specs/protocol.md)「runner 制御
+メッセージ」、本 ADR は決定の記録)。
+
+- **トピック**: 専用 `runner:<host_id>`(データ経路 `wrapper:<agent_id>` と別系統)。
+  既存 `wrapper:` 系への相乗りは role gate / `agents:lobby` 購読不変条件(#27)を
+  複雑化するため却下。
+- **形式**: 既存制御と同じ **Channels イベント方式**。envelope `type` 追加は観測
+  データ用の枠を制御へ流用することになり却下。
+- **認証**: ホスト別トークン(env `host_id:token`、
+  [ADR-0011](0011-phase3-reliability-and-auth.md) の per-entity トークン主義を拡張)。
+  host_id は設定固定。共有トークン 1 本は漏洩時に全ホスト交換が要るため却下
+  (ADR-0011 と同じ判断)。
+- **version**: 新メッセージ種別の追加は前方互換のため `"0"` 据え置き
+  ([ADR-0015](0015-protocol-version-stamping.md))。
+- **二重起動**: server owner フェンシング + runner ローカルロックの二段
+  ([ADR-0014](0014-session-resume-and-restore.md) F4)。spawn 競合は
+  `spawn_result.reason = already_running` で返す。
+
 ## Consequences
 
 ### Positive
@@ -107,7 +128,7 @@ UI からのリモート spawn は実質リモートコード実行(issue #22)�
 - 二重起動防止に server owner フェンシング + runner ローカルロックの**二段**が要る。
 - runner プロセスあたりメモリは 1:1 モデルのため大きめ。
 - 制御 envelope(spawn / stop / restart / enumerate-sessions)を新規定義する必要が
-  ある([runner-control-envelope-schema](../open-questions/runner-control-envelope-schema.md))。
+  ある(#66 で確定、[protocol](../specs/protocol.md)「runner 制御メッセージ」)。
 
 ### Neutral
 
@@ -136,8 +157,7 @@ UI からのリモート spawn は実質リモートコード実行(issue #22)�
 - 関連 specs: [architecture](../specs/architecture.md)、
   [protocol](../specs/protocol.md)(制御メッセージ)、
   [threat-model](../specs/threat-model.md)。
-- 未解決:
-  [runner-control-envelope-schema](../open-questions/runner-control-envelope-schema.md)
-  (制御 envelope の具体スキーマ)。
+- 制御スキーマ: #66 で確定(上記「制御メッセージスキーマ」、
+  [protocol](../specs/protocol.md)「runner 制御メッセージ」)。
 - 実装: Phase 4([phase-4-host-runner](../plans/phase-4-host-runner.md))。
 - 由来: issue [#23](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/23)。

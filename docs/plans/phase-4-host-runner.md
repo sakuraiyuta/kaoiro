@@ -40,7 +40,7 @@ spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 4-1 | 制御 envelope(spawn/stop/restart/enumerate-sessions)の schema 確定 | ⏳ | [runner-control-envelope-schema](../open-questions/runner-control-envelope-schema.md) を解決し [protocol](../specs/protocol.md) へ追補。#22 と共有 |
+| 4-1 | 制御 envelope(spawn/stop/restart/enumerate-sessions)の schema 確定 | ✅ | #66 で確定。[protocol](../specs/protocol.md)「runner 制御メッセージ」へ追補・[ADR-0023](../adr/0023-host-runner-architecture.md) に決定記録。#22 と共有 |
 | 4-2 | server: ホスト登録・生存通知の受け口 + spawn 中継経路 | ⏳ | 「ホスト」概念をサーバへ導入(現状 agent_id 単位のみ) |
 | 4-3 | server: runner ローカルロックと連携した二重起動防止 | ⏳ | owner フェンシング(既存)+ runner ロック([ADR-0014](../adr/0014-session-resume-and-restore.md) F4) |
 | 4-4 | runner: プロセス監督ループ + config 解決 + spawn/stop/restart | ⏳ | TS/Node。wrapper config(agent_id/persona/server_url/token/...)を解決して spawn |
@@ -60,7 +60,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 - 選択可能 cwd の許可リストは **runner config** が保持し、登録時に persona と
   並べて申告(host 側へ複雑性を寄せる、
   [ADR-0023](../adr/0023-host-runner-architecture.md))。schema は 4-1 /
-  [runner-control-envelope-schema](../open-questions/runner-control-envelope-schema.md)。
+  [protocol](../specs/protocol.md)「runner 制御メッセージ」(#66 確定)。
 - 新規 / resume は単一の起動導線で「新規 / 既存セッション再開」を切替(暫定)。
 - spawn 成否は `spawn_result` 受信で UI(グリッド/トースト)へ反映(暫定)。
 
@@ -70,8 +70,8 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## Open Questions Blocking This Phase
 
-- [runner-control-envelope-schema](../open-questions/runner-control-envelope-schema.md)
-  — 制御 envelope(spawn/stop/restart/enumerate-sessions)の具体スキーマ(4-1 の前提)。
+なし(制御 envelope schema は #66 で確定。[protocol](../specs/protocol.md)「runner
+制御メッセージ」)。
 
 ## See Also
 

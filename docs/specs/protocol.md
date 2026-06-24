@@ -156,23 +156,47 @@ session_id を指定して **resume** する単一機構で行う
 `client -> server -> runner(boot service)-> wrapper` 起動経路に「resume
 モード」を足したもので、復帰コマンド(spawn-with-resume)とセッション列挙
 クエリは issue #22 / runner 仕様([ADR-0023](../adr/0023-host-runner-architecture.md))
-と併せて定義する(下記「runner 制御メッセージ」、具体メッセージ schema は草案)。
+と併せて定義する(下記「runner 制御メッセージ」で v0 確定、[#66](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/66))。
 先行する phase-0 の protocol 変更は**エンベロープへの top-level `session_id`
 追加のみ**(wrapper が報告 → サーバが `(agent_id, host, cwd, session_id)`
 ポインタを保持)。
 
-### runner 制御メッセージ(草案)
+### runner 制御メッセージ(v0 確定、[#66](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/66))
 
 各ホストに常駐する runner([ADR-0023](../adr/0023-host-runner-architecture.md))は、
-データ経路(`wrapper:<agent_id>` 直結)とは**別系統**でサーバへ接続し、ホスト登録・
-生存通知と wrapper のライフサイクル制御(spawn / stop / restart / セッション列挙)を
-行う(上記 resume もこの制御経路の一機能)。具体メッセージ(トピック設計・イベント
-名・payload・認証)は**未確定の草案**で、
-[runner-control-envelope-schema](../open-questions/runner-control-envelope-schema.md)
-で確定する。暫定方針は専用 `runner:<host_id>` トピック + Channels イベント方式
-(server→runner: `spawn` / `stop` / `restart` / `enumerate_sessions`、runner→server:
-`register` / `heartbeat` / `sessions` / `spawn_result`)。spawn は実質リモートコード
-実行のため **operator 限定**・cwd 実在検証([threat-model](threat-model.md))。
+データ経路(`wrapper:<agent_id>` 直結)とは**別系統**の専用トピック
+`runner:<host_id>` でサーバへ接続し、ホスト登録・生存通知と wrapper のライフ
+サイクル制御(spawn / stop / restart / セッション列挙)を行う(上記 resume も
+この制御経路の一機能)。メッセージは既存制御と同じ **Channels イベント方式**
+(envelope `type` は増やさない)。
+
+| 方向 | イベント | payload |
+|---|---|---|
+| runner → サーバ | `register` | `{ host_id, personas, cwd_allowlist, capabilities? }`。接続時に 1 回。稼働可能 persona と選択可能 cwd 許可リスト(#22)を申告 |
+| runner → サーバ | `heartbeat` | `{ host_id }`。生存通知 |
+| runner → サーバ | `sessions` | `{ host_id, cwd, sessions: [{ session_id, summary?, mtime? }] }`。`enumerate_sessions` への応答。JSONL メタは最小・**operator 限定**(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) |
+| runner → サーバ | `spawn_result` | `{ host_id, agent_id, ok, reason? }`。失敗時 `reason` = `already_running` / `cwd_not_found` / `error` |
+| サーバ → runner | `spawn` | `{ agent_id, persona, cwd, server_url, token, resume_session_id? }`。**operator 限定**。`resume_session_id` 指定で resume 起動 |
+| サーバ → runner | `stop` | `{ agent_id }`。**operator 限定** |
+| サーバ → runner | `restart` | `{ agent_id }`。**operator 限定** |
+| サーバ → runner | `enumerate_sessions` | `{ agent_id, cwd }`。**operator 限定**。当該 cwd 配下の resume 候補列挙を要求 |
+
+**認証**: runner はホスト別トークン(サーバ設定 env の `host_id:token` 列挙、
+[ADR-0011](../adr/0011-phase3-reliability-and-auth.md) の per-entity トークン主義を
+拡張)で接続する。host_id は設定固定(サーバ採番しない)。wrapper の agent_id
+別トークンとは別系統。
+
+**version**: runner メッセージにも `version`(現状 `"0"`)をフラット外枠キーで
+付与する([ADR-0015](../adr/0015-protocol-version-stamping.md))。新メッセージ種別の
+追加は前方互換のため version は据え置き。
+
+**安全性**(spawn = 実質リモートコード実行): spawn / resume / stop / restart の
+受理は **operator 限定**。resume 対象 session_id は当該 agent 束縛 cwd 配下に
+**実在検証**(runner、T3)。cwd は runner の `cwd_allowlist` 内に限定(#22、T1)。
+
+**二重起動防止**: server owner フェンシング(既存)+ runner ローカルロックの
+二段([ADR-0014](../adr/0014-session-resume-and-restore.md) F4)。spawn 競合は
+runner が弾き `spawn_result.reason = already_running` を返す。
 
 ### バージョニング方針
 
