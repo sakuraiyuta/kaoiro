@@ -16,6 +16,10 @@ erl_crash.dump
 /assets/node_modules/
 npm-debug.log
 
+# Node / pnpm (workspace root). Per-package .gitignore covers dist/ etc.
+node_modules/
+*.tsbuildinfo
+
 # Env / secrets
 .env
 .env.*

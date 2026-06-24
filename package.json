@@ -1,0 +1,10 @@
+{
+  "name": "@kaoiro/root",
+  "version": "0.0.0",
+  "private": true,
+  "description": "kaoiro monorepo root (TS workspace: protocol / wrapper / runner)",
+  "packageManager": "pnpm@10.20.0",
+  "engines": {
+    "node": ">=22"
+  }
+}

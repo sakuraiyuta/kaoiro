@@ -12,6 +12,7 @@
     "dev": "for f in agent.*.json; do [ -e \"$f\" ] || continue; tsx watch src/cli.ts \"$f\" & done; wait"
   },
   "devDependencies": {
+    "@kaoiro/protocol": "workspace:*",
     "@types/node": "^22.10.0",
     "@types/phoenix": "^1.6.7",
     "tsx": "^4.22.4",

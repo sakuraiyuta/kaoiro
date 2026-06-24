@@ -1,0 +1,8 @@
+packages:
+  - protocol
+  - wrapper
+  # runner は 4-4a で追加。dashboard(server/assets)は別ビルド系のため非メンバ。
+
+# pnpm 10 build-script approval。vitest/tsx が引く esbuild の postinstall を許可。
+onlyBuiltDependencies:
+  - esbuild
