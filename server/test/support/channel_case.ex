@@ -16,11 +16,14 @@ defmodule KaoiroServerWeb.ChannelCase do
   end
 
   setup do
-    # Reset the globally named AgentStates between tests so stored
-    # envelopes cannot leak across cases (tests run async: false).
+    # Reset the globally named AgentStates / HostRegistry between tests so
+    # stored envelopes and host registrations cannot leak across cases
+    # (tests run async: false).
     on_exit(fn ->
       Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.AgentStates)
       Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.AgentStates)
+      Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.HostRegistry)
+      Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.HostRegistry)
     end)
 
     :ok

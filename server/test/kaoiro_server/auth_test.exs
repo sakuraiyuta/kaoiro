@@ -9,10 +9,12 @@ defmodule KaoiroServer.AuthTest do
     # KAOIRO_*_TOKENS in :test too, so a host that exports them would leak
     # into the first "未設定" test before any on_exit has run.
     Application.delete_env(:kaoiro_server, :wrapper_tokens)
+    Application.delete_env(:kaoiro_server, :runner_tokens)
     Application.delete_env(:kaoiro_server, :client_tokens)
 
     on_exit(fn ->
       Application.delete_env(:kaoiro_server, :wrapper_tokens)
+      Application.delete_env(:kaoiro_server, :runner_tokens)
       Application.delete_env(:kaoiro_server, :client_tokens)
     end)
   end
@@ -42,6 +44,27 @@ defmodule KaoiroServer.AuthTest do
 
       assert :ok = Auth.authorize_wrapper("lab.a", "tok-a")
       assert {:error, :unauthorized} = Auth.authorize_wrapper("broken", "x")
+    end
+  end
+
+  describe "authorize_runner/2 (ADR-0023)" do
+    test "未設定なら認証を要求しない" do
+      assert :ok = Auth.authorize_runner("any-host", nil)
+      assert :ok = Auth.authorize_runner("any-host", "whatever")
+    end
+
+    test "設定時は host_id とトークンの組で照合する" do
+      Application.put_env(
+        :kaoiro_server,
+        :runner_tokens,
+        "lab-pc-1:tok-1,lab-pc-2:tok-2"
+      )
+
+      assert :ok = Auth.authorize_runner("lab-pc-1", "tok-1")
+      assert :ok = Auth.authorize_runner("lab-pc-2", "tok-2")
+      assert {:error, :unauthorized} = Auth.authorize_runner("lab-pc-1", "tok-2")
+      assert {:error, :unauthorized} = Auth.authorize_runner("lab-pc-1", nil)
+      assert {:error, :unauthorized} = Auth.authorize_runner("unknown", "tok-1")
     end
   end
 
@@ -92,27 +115,31 @@ defmodule KaoiroServer.AuthTest do
   describe "warn_token_config/0 (issue #28)" do
     import ExUnit.CaptureLog
 
-    test "トークン未設定なら client=拒否 / wrapper=dev mode を警告する" do
+    test "トークン未設定なら client=拒否 / wrapper=dev mode / runner=dev mode を警告する" do
       log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
       assert log =~ "KAOIRO_CLIENT_TOKENS unset"
       assert log =~ "client connections are rejected"
       assert log =~ "KAOIRO_WRAPPER_TOKENS unset"
+      assert log =~ "KAOIRO_RUNNER_TOKENS unset"
     end
 
-    test "両トークン設定済みなら警告は出ない" do
+    test "全トークン設定済みなら警告は出ない" do
       Application.put_env(:kaoiro_server, :wrapper_tokens, "lab.a:tok-a")
+      Application.put_env(:kaoiro_server, :runner_tokens, "lab-pc-1:tok-1")
       Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
 
       log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
       refute log =~ "unset"
     end
 
-    test "片方だけ設定なら未設定側のみ警告する" do
+    test "一部だけ設定なら未設定側のみ警告する" do
       Application.put_env(:kaoiro_server, :wrapper_tokens, "lab.a:tok-a")
+      Application.put_env(:kaoiro_server, :runner_tokens, "lab-pc-1:tok-1")
 
       log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
       assert log =~ "KAOIRO_CLIENT_TOKENS unset"
       refute log =~ "KAOIRO_WRAPPER_TOKENS unset"
+      refute log =~ "KAOIRO_RUNNER_TOKENS unset"
     end
   end
 end

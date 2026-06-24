@@ -28,9 +28,11 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
 config :kaoiro_server, :persona_dir, System.get_env("KAOIRO_PERSONA_DIR")
 
 # Socket auth (ADR-0011). Unset lists disable enforcement (dev mode —
-# clients then act as operator); always set both in production.
-# Formats: wrapper "agent_id:token,...", client "token:role,...".
+# clients then act as operator); always set all in production. Formats:
+# wrapper "agent_id:token,...", runner "host_id:token,..." (ADR-0023),
+# client "token:role,...".
 config :kaoiro_server, :wrapper_tokens, System.get_env("KAOIRO_WRAPPER_TOKENS")
+config :kaoiro_server, :runner_tokens, System.get_env("KAOIRO_RUNNER_TOKENS")
 config :kaoiro_server, :client_tokens, System.get_env("KAOIRO_CLIENT_TOKENS")
 
 # DETS file for the restart-surviving session_id pointers (ADR-0014 F1,

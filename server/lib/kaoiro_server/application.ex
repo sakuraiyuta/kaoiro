@@ -19,6 +19,8 @@ defmodule KaoiroServer.Application do
       {DNSCluster, query: Application.get_env(:kaoiro_server, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: KaoiroServer.PubSub},
       KaoiroServer.AgentStates,
+      # Live host set + spawnable personas per host (ADR-0023, issue #67).
+      KaoiroServer.HostRegistry,
       # Restart-surviving session_id pointers (ADR-0014 F1, issue #49).
       KaoiroServer.SessionPointers,
       # Start to serve requests, typically the last entry

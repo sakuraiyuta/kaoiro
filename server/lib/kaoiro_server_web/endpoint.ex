@@ -23,6 +23,10 @@ defmodule KaoiroServerWeb.Endpoint do
   # reloaded tab re-authenticates from the cookie (ADR-0013).
   socket "/wrapper", KaoiroServerWeb.WrapperSocket, websocket: true, longpoll: false
 
+  # Resident-runner control channel (ADR-0023): separate system from the
+  # wrapper data path and the client fan-out, with its own host-token auth.
+  socket "/runner", KaoiroServerWeb.RunnerSocket, websocket: true, longpoll: false
+
   socket "/client", KaoiroServerWeb.ClientSocket,
     websocket: [connect_info: [session: @session_options]],
     longpoll: false

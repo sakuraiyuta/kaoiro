@@ -5,12 +5,16 @@ defmodule KaoiroServer.Auth do
   Token lists come from env via runtime config:
 
   - `:wrapper_tokens` — `"agent_id:token,agent_id:token"`
+  - `:runner_tokens` — `"host_id:token,host_id:token"` (ADR-0023)
   - `:client_tokens` — `"token:role,..."` (role: `viewer` | `operator`)
 
   The unset/empty behaviour differs by socket:
 
   - `:wrapper_tokens` unset — wrapper auth disabled (dev convenience):
     any wrapper may connect.
+  - `:runner_tokens` unset — runner auth disabled (dev convenience):
+    any runner may connect. Mirrors wrapper (ADR-0011 per-entity tokens,
+    extended to hosts by ADR-0023).
   - `:client_tokens` unset — fail-closed: every client connection is
     rejected (no token can authenticate), so a misconfigured deployment
     never silently grants operator (issue #28).
@@ -38,6 +42,32 @@ defmodule KaoiroServer.Auth do
       matched = Plug.Crypto.secure_compare(expected, presented)
 
       if Map.has_key?(tokens, agent_id) and matched do
+        :ok
+      else
+        {:error, :unauthorized}
+      end
+    end
+  end
+
+  @doc """
+  Authorizes a runner connection for `host_id` (ADR-0023). `:ok` when the
+  token matches, or when no runner tokens are configured. Mirrors
+  `authorize_wrapper/2` against a separate `:runner_tokens` list since the
+  host control channel is a distinct entity from the per-agent_id wrapper.
+  """
+  def authorize_runner(host_id, token) do
+    tokens = parse_pairs(Application.get_env(:kaoiro_server, :runner_tokens))
+
+    if tokens == %{} do
+      :ok
+    else
+      # Run the comparison even for an unknown host_id so timing does not
+      # reveal which host_ids have token entries.
+      expected = Map.get(tokens, host_id, "")
+      presented = if is_binary(token), do: token, else: ""
+      matched = Plug.Crypto.secure_compare(expected, presented)
+
+      if Map.has_key?(tokens, host_id) and matched do
         :ok
       else
         {:error, :unauthorized}
@@ -99,6 +129,8 @@ defmodule KaoiroServer.Auth do
     (fail-closed); the env must be set to grant access.
   - `:wrapper_tokens` unset — wrapper auth disabled (dev mode); any
     wrapper may connect.
+  - `:runner_tokens` unset — runner auth disabled (dev mode); any
+    runner may connect (ADR-0023).
   """
   def warn_token_config do
     if parse_pairs(Application.get_env(:kaoiro_server, :client_tokens)) == %{} do
@@ -113,6 +145,14 @@ defmodule KaoiroServer.Auth do
       Logger.warning(
         "KAOIRO_WRAPPER_TOKENS unset: wrapper auth disabled (dev mode); " <>
           "any wrapper may connect. Set it before exposing beyond loopback " <>
+          "(specs/threat-model.md)."
+      )
+    end
+
+    if parse_pairs(Application.get_env(:kaoiro_server, :runner_tokens)) == %{} do
+      Logger.warning(
+        "KAOIRO_RUNNER_TOKENS unset: runner auth disabled (dev mode); " <>
+          "any runner may connect. Set it before exposing beyond loopback " <>
           "(specs/threat-model.md)."
       )
     end

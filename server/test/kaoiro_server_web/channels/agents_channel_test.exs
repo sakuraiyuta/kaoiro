@@ -337,7 +337,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             :noop,
             :payload_too_large,
             :missing_agent_id,
-            :invalid_agent_id
+            :invalid_agent_id,
+            :already_running,
+            :missing_host_id,
+            :invalid_host_id
           ] do
         assert AgentsChannel.safe_reason(r) == to_string(r)
       end
@@ -856,6 +859,159 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "clear_history", %{"agent_id" => agent_id})
       assert_reply ref, :error, %{reason: "no_current_session"}
+    end
+  end
+
+  describe "host lifecycle relay (ADR-0023, issue #67)" do
+    test "operator の spawn を runner topic へ relay し host_id を落とす" do
+      host_id = "lab-pc-1"
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "agent_id" => "lab-pc-1.new",
+          "persona" => %{"id" => "mio"},
+          "cwd" => "/home/user/proj"
+        })
+
+      assert_reply ref, :ok
+      # host_id addresses the topic only; agent_id rides the payload.
+      assert_broadcast "spawn", %{"agent_id" => "lab-pc-1.new"} = payload
+      refute Map.has_key?(payload, "host_id")
+    end
+
+    test "operator の stop / restart / enumerate_sessions を runner topic へ relay する" do
+      host_id = "lab-pc-2"
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      for {event, extra} <- [
+            {"stop", %{"agent_id" => "lab-pc-2.a"}},
+            {"restart", %{"agent_id" => "lab-pc-2.a"}},
+            {"enumerate_sessions", %{"agent_id" => "lab-pc-2.a", "cwd" => "/home/user/p"}}
+          ] do
+        ref = push(socket, event, Map.put(extra, "host_id", host_id))
+        assert_reply ref, :ok
+        assert_broadcast ^event, payload
+        refute Map.has_key?(payload, "host_id")
+      end
+    end
+
+    test "viewer の spawn / stop / restart / enumerate_sessions は forbidden" do
+      host_id = "lab-pc-3"
+      socket = join_as(:viewer)
+
+      for event <- ["spawn", "stop", "restart", "enumerate_sessions"] do
+        ref = push(socket, event, %{"host_id" => host_id, "agent_id" => "x"})
+        assert_reply ref, :error, %{reason: "forbidden"}
+      end
+    end
+
+    test "host_id 欠落は missing_host_id" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "stop", %{"agent_id" => "x"})
+      assert_reply ref, :error, %{reason: "missing_host_id"}
+    end
+
+    test "不正な文字種の host_id は invalid_host_id" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "stop", %{"host_id" => "bad*host", "agent_id" => "x"})
+      assert_reply ref, :error, %{reason: "invalid_host_id"}
+    end
+
+    test "稼働中 agent_id の spawn は already_running で弾く (server-stage dedup, #68)" do
+      host_id = "lab-pc-4"
+      agent_id = "lab-pc-4.live"
+      put_agent(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "agent_id" => agent_id,
+          "persona" => %{"id" => "mio"},
+          "cwd" => "/home/user/p"
+        })
+
+      assert_reply ref, :error, %{reason: "already_running"}
+      refute_broadcast "spawn", %{}
+    end
+
+    test "disconnected agent_id の spawn は relay される (再起動を許す)" do
+      host_id = "lab-pc-5"
+      agent_id = "lab-pc-5.dead"
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "disconnected"
+        })
+
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "agent_id" => agent_id,
+          "persona" => %{"id" => "mio"},
+          "cwd" => "/home/user/p"
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "spawn", %{"agent_id" => ^agent_id}
+    end
+  end
+
+  describe "host/runner イベントの operator 限定配信 (ADR-0023, ADR-0021)" do
+    test "join 時 operator は hosts push を受け、viewer は受けない" do
+      host_id = "lab-pc-hosts"
+
+      :ok =
+        KaoiroServer.HostRegistry.register(
+          host_id,
+          %{personas: [%{"id" => "mio"}], cwd_allowlist: ["/home/user/p"]},
+          self()
+        )
+
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "hosts", %{"hosts" => hosts}
+      assert Map.has_key?(hosts, host_id)
+    end
+
+    test "viewer は join 時に hosts push を受けない" do
+      _viewer = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+      refute_push "hosts", %{}
+    end
+
+    test "runner_sessions / spawn_result / hosts の live broadcast は operator に届く" do
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      for event <- ["runner_sessions", "spawn_result", "hosts"] do
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
+        assert_push ^event, %{"host_id" => "h"}
+      end
+    end
+
+    test "runner_sessions / spawn_result / hosts は viewer には届かない (fail-closed)" do
+      _viewer = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      for event <- ["runner_sessions", "spawn_result", "hosts"] do
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
+        refute_push ^event, %{}
+      end
     end
   end
 end

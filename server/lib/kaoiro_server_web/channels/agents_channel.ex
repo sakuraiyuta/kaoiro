@@ -28,6 +28,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
   `delete_agent` (operator-only, issue #14) removes a `disconnected`
   agent's residual entry and broadcasts `agent_deleted` so every client
   drops it from the grid; it is rejected while the agent is still live.
+
+  Host lifecycle (ADR-0023, issue #67): `spawn` / `stop` / `restart` /
+  `enumerate_sessions` are operator-only and relay to the addressed
+  `runner:<host_id>` without interpreting the payload (host/agent-agnostic,
+  like the wrapper relay). `spawn` additionally rejects an `agent_id` that
+  is already running (server-stage dedup, the runner-local lock being the
+  second stage, issue #68). The runner's replies (`runner_sessions` /
+  `spawn_result`) and host registration updates (`hosts`) ride
+  `agents:lobby` but are operator-only in handle_out — host/session info
+  must never reach a viewer (#27/ADR-0021, fail-closed).
   """
 
   use Phoenix.Channel
@@ -35,6 +45,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   require Logger
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.HostRegistry
   alias KaoiroServerWeb.AgentId
 
   # Resource bound for an operator instruction; generous for prose,
@@ -49,15 +60,18 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   # All viewer-gated events go through handle_out. `agent_deleted` is the
   # only fan-out event that always reaches both roles, so it stays out of
-  # the intercept list to skip the per-socket round trip.
-  intercept ["envelope", "history_cleared"]
+  # the intercept list to skip the per-socket round trip. The runner →
+  # operator events (`runner_sessions` / `spawn_result` / `hosts`) carry
+  # host/session info and are operator-only (ADR-0023, ADR-0021).
+  intercept ["envelope", "history_cleared", "runner_sessions", "spawn_result", "hosts"]
 
   # Error reasons cleared for verbatim return to the client (issue #62).
   # Anything outside this set is a bug or a future internal value (a
   # tuple, an internal path, a stack fragment) and must not leak through
   # `to_string/1`; `safe_reason/1` logs it and returns "internal_error".
   @safe_reasons ~w(forbidden unknown_agent not_disconnected noop
-                   payload_too_large missing_agent_id invalid_agent_id)a
+                   payload_too_large missing_agent_id invalid_agent_id
+                   already_running missing_host_id invalid_host_id)a
 
   @impl true
   def join("agents:lobby", _params, socket) do
@@ -86,9 +100,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
     push(socket, "snapshot", %{"agents" => agents})
 
-    # Reply-log history is operator-only; viewers stay at the grid.
+    # Reply-log history and the host set are operator-only; viewers stay at
+    # the grid and never see host info (cwd allow-lists are sensitive, #46).
     if role == :operator do
       push(socket, "history", %{"agents" => AgentStates.histories()})
+      push(socket, "hosts", %{"hosts" => HostRegistry.snapshot()})
     end
 
     {:noreply, socket}
@@ -116,6 +132,20 @@ defmodule KaoiroServerWeb.AgentsChannel do
     {:noreply, socket}
   end
 
+  # Runner → operator events (ADR-0023). All three carry host-level info
+  # (host_id, cwd, session metadata, cwd allow-lists) that is operator-only
+  # under the allow-list discipline (ADR-0021): drop them for viewers
+  # (fail-closed). Same gate shape as history_cleared.
+  @impl true
+  def handle_out(event, payload, socket)
+      when event in ["runner_sessions", "spawn_result", "hosts"] do
+    if socket.assigns[:role] == :operator do
+      push(socket, event, payload)
+    end
+
+    {:noreply, socket}
+  end
+
   @impl true
   def handle_in("instruction", payload, socket) do
     relay(socket, payload, "instruction", [
@@ -136,6 +166,37 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Wrapper-side no-op when no turn is in flight (protocol.md A6).
   def handle_in("interrupt", payload, socket) do
     relay(socket, payload, "interrupt", [])
+  end
+
+  # Host lifecycle control (ADR-0023, issue #67). Each is operator-only and
+  # relays to the addressed `runner:<host_id>` without interpreting the
+  # payload (host/agent-agnostic, mirrors the wrapper relay). The runner
+  # acts and reports back via `spawn_result` / `runner_sessions`.
+  def handle_in("spawn", payload, socket) do
+    # Server-stage dedup (issue #68): refuse to spawn an agent_id that is
+    # already known and not disconnected, so a double-click cannot launch a
+    # second process. The runner-local lock is the second stage. agent_id
+    # rides the payload to the runner (it is not the relay address here, so
+    # it is NOT stripped).
+    with :ok <- require_operator(socket),
+         {:ok, host_id} <- fetch_host_id(payload),
+         :ok <- check_spawn_dedup(payload) do
+      relay_to_runner(socket, payload, host_id, "spawn")
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  def handle_in("stop", payload, socket) do
+    relay_to_runner_guarded(socket, payload, "stop")
+  end
+
+  def handle_in("restart", payload, socket) do
+    relay_to_runner_guarded(socket, payload, "restart")
+  end
+
+  def handle_in("enumerate_sessions", payload, socket) do
+    relay_to_runner_guarded(socket, payload, "enumerate_sessions")
   end
 
   # Operator-only purge of an agent's past-session reply log (issue #48).
@@ -197,6 +258,48 @@ defmodule KaoiroServerWeb.AgentsChannel do
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
   end
+
+  # The shared operator + host_id + size guards for stop / restart /
+  # enumerate_sessions (spawn adds its own dedup, so it does not use this).
+  defp relay_to_runner_guarded(socket, payload, event) do
+    with :ok <- require_operator(socket),
+         {:ok, host_id} <- fetch_host_id(payload) do
+      relay_to_runner(socket, payload, host_id, event)
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Relays `payload` (minus host_id, which only addresses the runner topic)
+  # to `runner:<host_id>` without interpreting the contents (ADR-0023,
+  # server stays host/agent-agnostic). The whole map is size-bounded so an
+  # oversized opaque blob cannot reach the runner process (issue #26).
+  defp relay_to_runner(socket, payload, host_id, event) do
+    relayed = Map.delete(payload, "host_id")
+
+    case check_relay_size(relayed) do
+      :ok ->
+        KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", event, relayed)
+        {:reply, :ok, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Server-stage dedup (issue #68, ADR-0023): reject a spawn for an
+  # agent_id that is already known and not `disconnected`, so the operator
+  # cannot launch a second process for the same agent. A missing/non-binary
+  # agent_id is left to the runner (the server stays agent-agnostic about
+  # the spawn payload beyond this liveness check).
+  defp check_spawn_dedup(%{"agent_id" => agent_id}) when is_binary(agent_id) do
+    case AgentStates.snapshot()[agent_id] do
+      %{"state" => state} when state != "disconnected" -> {:error, :already_running}
+      _ -> :ok
+    end
+  end
+
+  defp check_spawn_dedup(_payload), do: :ok
 
   # Bounds the whole relayed map, not just the whitelisted keys, so an
   # oversized blob in an opaque extra key cannot reach the wrapper process
@@ -275,6 +378,18 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   defp fetch_agent_id(_payload), do: {:error, :missing_agent_id}
+
+  # host_id addresses the runner topic; enforce the protocol.md charset
+  # (shared with agent_id, topic-safe) before broadcasting so a compromised
+  # operator cannot inject a topic-breaking id. Unlike agent_id there is no
+  # known? gate: a host_id may be addressed before its registry entry
+  # arrives, and an unknown host's broadcast simply has no subscriber (the
+  # operator learns via the absent spawn_result, ADR-0011 no-guarantee).
+  defp fetch_host_id(%{"host_id" => host_id}) when is_binary(host_id) do
+    if AgentId.valid?(host_id), do: {:ok, host_id}, else: {:error, :invalid_host_id}
+  end
+
+  defp fetch_host_id(_payload), do: {:error, :missing_host_id}
 
   # Returns structured reasons (not pre-formatted strings) so the
   # client-facing text is produced by safe_reason/1 alone (issue #62);
