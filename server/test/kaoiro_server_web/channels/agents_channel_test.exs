@@ -360,7 +360,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             :unknown_persona,
             :invalid_persona,
             :cwd_not_allowed,
-            :invalid_cwd
+            :invalid_cwd,
+            :invalid_name
           ] do
         assert AgentsChannel.safe_reason(r) == to_string(r)
       end
@@ -928,6 +929,66 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :ok
       assert_broadcast "spawn", %{"initial_prompt" => "最初の指示"}
+    end
+
+    test "operator の spawn: 任意 name が persona.name を上書きする (#22)" do
+      host_id = "lab-pc-1c"
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "mio",
+          "cwd" => "/home/user/proj",
+          "name" => "  レビュー担当  "
+        })
+
+      assert_reply ref, :ok
+      # name は trim され persona.name のみ上書き; id/sprite_set は不変。
+      assert_broadcast "spawn", %{"persona" => persona}
+      assert persona == %{"id" => "mio", "name" => "レビュー担当", "sprite_set" => "mio"}
+    end
+
+    test "operator の spawn: name 未指定/空白は persona 既定名のまま" do
+      host_id = "lab-pc-1d"
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "mio",
+          "cwd" => "/home/user/proj",
+          "name" => "   "
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "spawn", payload
+      assert payload["persona"] == @mio
+    end
+
+    test "operator の spawn: 長すぎ/制御文字の name は invalid_name" do
+      host_id = "lab-pc-1e"
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      for bad <- [String.duplicate("あ", 65), "改行\nあり"] do
+        ref =
+          push(socket, "spawn", %{
+            "host_id" => host_id,
+            "persona" => "mio",
+            "cwd" => "/home/user/proj",
+            "name" => bad
+          })
+
+        assert_reply ref, :error, %{reason: "invalid_name"}
+      end
+
+      refute_broadcast "spawn", %{}
     end
 
     test "operator の stop / restart / enumerate_sessions を runner topic へ relay する" do

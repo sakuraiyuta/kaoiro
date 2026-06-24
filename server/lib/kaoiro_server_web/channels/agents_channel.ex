@@ -74,7 +74,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    payload_too_large missing_agent_id invalid_agent_id
                    already_running missing_host_id invalid_host_id
                    unknown_host unknown_persona invalid_persona
-                   cwd_not_allowed invalid_cwd)a
+                   cwd_not_allowed invalid_cwd invalid_name)a
 
   @impl true
   def join("agents:lobby", _params, socket) do
@@ -187,6 +187,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, host_id} <- fetch_host_id(payload),
          {:ok, host} <- fetch_host(host_id),
          {:ok, persona} <- resolve_persona(host, payload),
+         {:ok, persona} <- apply_custom_name(persona, payload),
          {:ok, cwd} <- fetch_allowed_cwd(host, payload),
          {:ok, agent_id} <- allocate_agent_id(host_id),
          {:ok, spawn_payload} <- build_spawn_payload(agent_id, persona, cwd, payload) do
@@ -316,6 +317,25 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   defp resolve_persona(_host, _payload), do: {:error, :invalid_persona}
+
+  # Optional per-instance display name (#22): overrides persona.name for this
+  # agent only (agent_id and persona.id are untouched, so identity / sprites /
+  # mood are unaffected). Absent or blank = keep the persona name. Bounded
+  # length and no control chars so it cannot break the grid layout; the client
+  # escapes it on render. The override rides the persona into the wrapper
+  # config, so no runner/wrapper change is needed.
+  defp apply_custom_name(persona, %{"name" => name}) when is_binary(name) do
+    trimmed = String.trim(name)
+
+    cond do
+      trimmed == "" -> {:ok, persona}
+      String.length(trimmed) > 64 -> {:error, :invalid_name}
+      String.match?(trimmed, ~r/[\x00-\x1f\x7f]/) -> {:error, :invalid_name}
+      true -> {:ok, Map.put(persona, "name", trimmed)}
+    end
+  end
+
+  defp apply_custom_name(persona, _payload), do: {:ok, persona}
 
   # cwd must be one the host declared spawnable (T1, threat-model). The runner
   # re-checks against its own allow-list; this server-side check gives a clear

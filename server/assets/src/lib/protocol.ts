@@ -165,6 +165,9 @@ export interface SpawnRequest {
   /** persona id, resolved server-side to the host's declared persona. */
   persona: string;
   cwd: string;
+  /** Optional per-instance display name; overrides the persona's name for
+   *  this agent only (not the agent_id). Empty/absent = the persona name. */
+  name?: string;
   initial_prompt?: string;
   resume_session_id?: string;
 }

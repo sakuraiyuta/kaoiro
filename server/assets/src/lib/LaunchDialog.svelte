@@ -25,6 +25,7 @@
   let hostId = $state("");
   let personaId = $state("");
   let cwd = $state("");
+  let name = $state("");
   let sessionId = $state("");
   let prompt = $state("");
   let busy = $state(false);
@@ -86,10 +87,14 @@
     error = null;
     try {
       const trimmed = prompt.trim();
+      const customName = name.trim();
       await connection.spawn({
         host_id: hostId,
         persona: personaId,
         cwd,
+        // Per-instance display name (overrides the persona name); applies to
+        // both a fresh spawn and a resume.
+        ...(customName === "" ? {} : { name: customName }),
         ...(mode === "resume"
           ? { resume_session_id: sessionId }
           : trimmed === ""
@@ -168,6 +173,16 @@
             <option value={c}>{c}</option>
           {/each}
         </select>
+      </label>
+
+      <label>
+        エージェント名(任意)
+        <input
+          type="text"
+          bind:value={name}
+          maxlength="64"
+          placeholder="未入力ならペルソナ名"
+        />
       </label>
 
       {#if mode === "new"}
@@ -274,7 +289,8 @@
   }
 
   select,
-  textarea {
+  textarea,
+  input {
     padding: 0.5rem 0.6rem;
     font-size: 0.85rem;
     color: var(--fg);
