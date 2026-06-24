@@ -4,8 +4,13 @@
 #
 #   server    (Elixir) : code_reloader recompiles lib/ on save        :4000
 #   dashboard (Vite)   : HMR; proxies /client,/api,/personas to :4000  :5173
-#   wrapper   (tsx)    : tsx watch restarts each agent.*.json on change
+#   runner    (tsx)    : tsx watch on src/cli.ts (runner hot-reload);
+#                        spawns each wrapper via `tsx watch` too
+#                        (KAOIRO_WRAPPER_DEV=1) so wrapper source edits
+#                        hot-reload the running agent
 #
+# Agents are launched from the dashboard (operator「+ 起動」), NOT from
+# agent.*.json — the runner supervises them (ADR-0023/0024, issue #22).
 # Manual equivalent is documented in server/README.md
 # ("ローカル開発(ホットリロード)").
 set -euo pipefail
@@ -63,10 +68,38 @@ pids+=("$!")
 ( cd "$root/server/assets" && pnpm install </dev/null && exec pnpm dev ) </dev/null &
 pids+=("$!")
 
-( cd "$root/wrapper" && pnpm install </dev/null && exec pnpm dev ) </dev/null &
+# Runner config: generate a localhost default on first run (gitignored). Edit
+# cwd_allowlist / personas to taste; sprite_set must match a served persona
+# (ao / kuroe / momo) for the dashboard to show a portrait.
+runner_config="$root/runner/runner.config.json"
+if [[ ! -f "$runner_config" ]]; then
+  echo "dev: generating $runner_config (gitignored; edit to taste)"
+  cat >"$runner_config" <<JSON
+{
+  "host_id": "dev-host",
+  "server_url": "ws://localhost:4000/runner",
+  "personas": [
+    { "id": "ao", "name": "あお", "sprite_set": "ao" },
+    { "id": "kuroe", "name": "クロエ", "sprite_set": "kuroe" },
+    { "id": "momo", "name": "もも", "sprite_set": "momo" }
+  ],
+  "cwd_allowlist": ["$root"],
+  "capabilities": ["claude"]
+}
+JSON
+fi
+
+# runner via tsx watch (hot-reloads the runner); KAOIRO_WRAPPER_DEV makes it
+# spawn each wrapper under `tsx watch` too, so wrapper source edits restart the
+# running agent. `pnpm install` from this workspace member links protocol /
+# wrapper and installs the wrapper deps tsx runs the agent against.
+( cd "$root/runner" && pnpm install </dev/null &&
+  KAOIRO_WRAPPER_DEV=1 exec pnpm exec tsx watch src/cli.ts runner.config.json
+) </dev/null &
 pids+=("$!")
 
-echo "dev: server :4000  |  dashboard :5173 (Vite HMR)  |  wrapper agents watching"
-echo "dev: open http://localhost:5173/?token=<KAOIRO_CLIENT_TOKENS token>"
+echo "dev: server :4000  |  dashboard :5173 (Vite HMR)  |  runner watching (spawns hot-reloaded wrappers)"
+echo "dev: open http://localhost:5173/?token=<KAOIRO_CLIENT_TOKENS token> and launch agents via「+ 起動」"
+echo "dev: set KAOIRO_WRAPPER_TOKENS in server/.env to exercise the signed-token auth path"
 echo "dev: Ctrl-C stops the whole stack"
 wait

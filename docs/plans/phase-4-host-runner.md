@@ -98,10 +98,14 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 ## Followups (in-phase but unfinished)
 
 - runner: バックエンド(4-4-0〜4-5)・server 補完(4-10)・dashboard 起動 UI
-  (4-8/4-9)は完了(#22 実装済)。**残るは 4-7(単一バイナリ化、#70)**。
-- **D5(二重 live join のサーバ明示拒否)は未実装**。新規 agent_id は
-  `<host>.<rand>` 採番で衝突は実質ゼロのため優先度低。実装時は wrapper join 経路
-  (`wrapper_channel`)で live owner 済み agent_id を拒否する([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5)。
+  (4-8/4-9)・**D5(二重 live join 拒否)**は完了(#22 実装済)。**残るは 4-7
+  (単一バイナリ化、#70)**。
+- **D5**: wrapper join 経路(`wrapper_channel`)で live owner 済み agent_id を
+  **reject-newcomer** で拒否([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5、
+  `AgentStates.connected?/2`)。既存を蹴る案はトークン保持者による敵対的 eviction を
+  招くため不採用。異常切断後の正規再接続は socket timeout 窓(既定 ~60s)だけ遅延し、
+  その間 client がリトライして通る。join〜初回 envelope の極短窓は未カバー(Presence
+  導入が必要、優先度低)。
 - `SessionMeta.summary` は未充填(現状 `session_id` + `mtime` のみ)。JSONL
   先頭/要約行の読取は将来の任意拡張(T2 最小露出は維持)。
 - supervisor の crash 再起動 cap は時間窓リセット無し(`MAX_RESTARTS` を
