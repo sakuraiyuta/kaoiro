@@ -29,6 +29,7 @@ function main(): void {
     cwdAllowlist: config.cwd_allowlist,
     launch: makeLauncher(),
     sendResult: (result) => link.sendSpawnResult(result),
+    sendSessions: (sessions) => link.sendSessions(sessions),
   });
 
   link = new RunnerLink(config.server_url, config.host_id, {
@@ -38,6 +39,7 @@ function main(): void {
     onSpawn: (payload) => supervisor.handleSpawn(payload),
     onStop: (payload) => supervisor.handleStop(payload),
     onRestart: (payload) => supervisor.handleRestart(payload),
+    onEnumerateSessions: (payload) => supervisor.handleEnumerate(payload),
   });
 
   process.stderr.write(

@@ -45,7 +45,7 @@ spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
 | 4-3 | server: runner ローカルロックと連携した二重起動防止 | ✅ | #67。server owner フェンシング + spawn デデュプ。runner 側ロックは 4-5 |
 | 4-4-0 | TS workspace 化 + 共有 `@kaoiro/protocol` 抽出 + wrapper 型移行(挙動不変) | ✅ | #68 前段。[ADR-0023](../adr/0023-host-runner-architecture.md)「TS パッケージ・トポロジ」。wrapper test/build green で隔離コミット |
 | 4-4 | runner: プロセス監督ループ + config 解決 + spawn/stop/restart | ✅ | #68。TS/Node。4-4a(接続+register/heartbeat)+ 4-4b(spawn/stop/restart 監督・config 解決・crash 再起動・cwd allow-list T1)。ライブ verify=実 wrapper spawn→server 接続 |
-| 4-5 | runner: session JSONL 列挙 + resume 起動 | ⏳ | #68。当該 cwd 配下を列挙、T3 実在検証([ADR-0014](../adr/0014-session-resume-and-restore.md) F2/F6)+ in-memory ローカルロック(F4) |
+| 4-5 | runner: session JSONL 列挙 + resume 起動 | ✅ | #68。当該 cwd 配下を列挙、T3 実在検証([ADR-0014](../adr/0014-session-resume-and-restore.md) F2/F6)+ in-memory ローカルロック(F4) |
 | 4-6 | wrapper: resume flag(`--resume <session_id>` 等)追加 | ✅ | #69(d073b4e)。args.ts/cli.ts に実装 |
 | 4-7 | `kaoiro-runner` 単一バイナリ化 | ⏳ | [ADR-0018](../adr/0018-runner-distribution.md)。主要機能が出揃ってからでも可 |
 | 4-8 | dashboard: 起動指示 UI(host/persona/登録済み cwd/初期プロンプト)+ client→server spawn 要求 | ⏳ | #22 phase-0。範囲=中(任意 cwd/repo 除外)。cwd は runner config allow-list 由来。4-1/4-2/4-4 依存 |
@@ -88,7 +88,14 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## Followups (in-phase but unfinished)
 
-なし。
+- runner: バックエンド(4-4-0〜4-5)は完了。**残るは dashboard 系 4-8/4-9
+  (起動 UI + client→server spawn/resume 要求、#22)**と 4-7(単一バイナリ化、
+  #70)。
+- `SessionMeta.summary` は未充填(現状 `session_id` + `mtime` のみ)。JSONL
+  先頭/要約行の読取は将来の任意拡張(T2 最小露出は維持)。
+- supervisor の crash 再起動 cap は時間窓リセット無し(`MAX_RESTARTS` を
+  使い切ると以後 down のまま、明示 restart でのみリセット)。時間窓付き budget
+  は将来の任意改善。
 
 ## Open Questions Blocking This Phase
 

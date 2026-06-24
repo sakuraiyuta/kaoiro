@@ -7,7 +7,11 @@
 // HostRegistry keeps the host live.
 
 import { Channel, Socket } from "phoenix";
-import type { RunnerRegister, SpawnResult } from "@kaoiro/protocol";
+import type {
+  RunnerRegister,
+  RunnerSessions,
+  SpawnResult,
+} from "@kaoiro/protocol";
 import { buildHeartbeat } from "./config.js";
 
 export interface RunnerLinkOptions {
@@ -24,6 +28,7 @@ export interface RunnerLinkOptions {
   onSpawn?: (payload: unknown) => void;
   onStop?: (payload: unknown) => void;
   onRestart?: (payload: unknown) => void;
+  onEnumerateSessions?: (payload: unknown) => void;
 }
 
 export class RunnerLink {
@@ -71,6 +76,9 @@ export class RunnerLink {
     this.#channel.on("restart", (payload: unknown) =>
       options.onRestart?.(payload),
     );
+    this.#channel.on("enumerate_sessions", (payload: unknown) =>
+      options.onEnumerateSessions?.(payload),
+    );
 
     this.#channel
       .join()
@@ -95,6 +103,11 @@ export class RunnerLink {
   /** Reports a spawn outcome back to the operators (via the server). */
   sendSpawnResult(result: SpawnResult): void {
     this.#channel.push("spawn_result", result);
+  }
+
+  /** Replies to enumerate_sessions with the resume candidates. */
+  sendSessions(sessions: RunnerSessions): void {
+    this.#channel.push("sessions", sessions);
   }
 
   /** Stops heartbeating, leaves the channel and closes the socket. */

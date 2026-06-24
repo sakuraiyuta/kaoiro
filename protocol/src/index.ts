@@ -173,3 +173,28 @@ export interface SpawnResult {
   ok: boolean;
   reason?: SpawnFailReason;
 }
+
+/** server -> runner, operator-only: list the resume candidates under cwd for
+ *  agent_id (ADR-0014 F2). */
+export interface EnumerateSessions {
+  version: "0";
+  agent_id: string;
+  cwd: string;
+}
+
+/** Minimal per-session metadata (T2: minimal, operator-only). mtime is the
+ *  JSONL file's last-modified time; summary is optional and may be absent. */
+export interface SessionMeta {
+  session_id: string;
+  summary?: string;
+  mtime?: string;
+}
+
+/** runner -> server: the resume candidates under cwd (response to
+ *  enumerate_sessions, ADR-0014 F2). Forwarded operator-only by the server. */
+export interface RunnerSessions {
+  version: "0";
+  host_id: string;
+  cwd: string;
+  sessions: SessionMeta[];
+}

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { SpawnResult, WrapperConfig } from "@kaoiro/protocol";
+import type {
+  RunnerSessions,
+  SessionMeta,
+  SpawnResult,
+  WrapperConfig,
+} from "@kaoiro/protocol";
 import {
   MAX_RESTARTS,
   Supervisor,
@@ -36,22 +41,38 @@ class FakeChild implements ManagedChild {
   }
 }
 
-function harness(opts: { cwdAllowlist?: string[] } = {}) {
+function harness(
+  opts: { cwdAllowlist?: string[]; sessions?: SessionMeta[]; exists?: boolean } = {},
+) {
   const children: FakeChild[] = [];
   const results: SpawnResult[] = [];
   const configs: WrapperConfig[] = [];
+  const resumes: Array<string | undefined> = [];
+  const sessionsSent: RunnerSessions[] = [];
   const sup = new Supervisor({
     hostId: "lab-pc-1",
     cwdAllowlist: opts.cwdAllowlist ?? allowlist,
-    launch: (_agentId, config) => {
+    launch: (_agentId, config, _cwd, resumeSessionId) => {
       configs.push(config);
+      resumes.push(resumeSessionId);
       const child = new FakeChild();
       children.push(child);
       return child;
     },
     sendResult: (r) => results.push(r),
+    sendSessions: (s) => sessionsSent.push(s),
+    listSessions: () => opts.sessions ?? [],
+    sessionExists: () => opts.exists ?? false,
   });
-  return { sup, children, results, configs, last: () => children[children.length - 1]! };
+  return {
+    sup,
+    children,
+    results,
+    configs,
+    resumes,
+    sessionsSent,
+    last: () => children[children.length - 1]!,
+  };
 }
 
 describe("readAgentId", () => {
@@ -117,13 +138,6 @@ describe("Supervisor.handleSpawn", () => {
     expect(h.results[0]).toMatchObject({ ok: false, reason: "cwd_not_found" });
   });
 
-  it("resume 付き spawn は現状 error で拒否(4-5 まで)", () => {
-    const h = harness();
-    h.sup.handleSpawn({ ...spawnMsg, resume_session_id: "s-1" });
-    expect(h.children).toHaveLength(0);
-    expect(h.results[0]).toMatchObject({ ok: false, reason: "error" });
-  });
-
   it("二重 spawn は already_running で拒否", () => {
     const h = harness();
     h.sup.handleSpawn(spawnMsg);
@@ -143,6 +157,7 @@ describe("Supervisor.handleSpawn", () => {
         throw new Error("boom");
       },
       sendResult: (r) => results.push(r),
+      sendSessions: () => {},
     });
     sup.handleSpawn(spawnMsg);
     expect(results[0]).toMatchObject({ ok: false, reason: "error" });
@@ -150,6 +165,91 @@ describe("Supervisor.handleSpawn", () => {
     sup.handleSpawn(spawnMsg);
     expect(calls).toBe(2);
     expect(results[1]).toMatchObject({ ok: false, reason: "error" });
+  });
+});
+
+describe("Supervisor resume (T3 / F4)", () => {
+  const resumeMsg = { ...spawnMsg, resume_session_id: "11111111-2222-3333-4444-555555555555" };
+
+  it("存在する session は起動し --resume を渡す", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn(resumeMsg);
+    expect(h.children).toHaveLength(1);
+    expect(h.resumes[0]).toBe(resumeMsg.resume_session_id);
+    expect(h.results[0]).toMatchObject({ ok: true });
+  });
+
+  it("存在しない session(T3 失敗)は error で拒否", () => {
+    const h = harness({ exists: false });
+    h.sup.handleSpawn(resumeMsg);
+    expect(h.children).toHaveLength(0);
+    expect(h.results[0]).toMatchObject({ ok: false, reason: "error" });
+  });
+
+  it("同一 session の同時 resume は already_running(F4 ロック)", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({ ...resumeMsg, agent_id: "lab-pc-1.claude-a" });
+    h.sup.handleSpawn({ ...resumeMsg, agent_id: "lab-pc-1.claude-b" });
+    expect(h.children).toHaveLength(1);
+    expect(h.results[1]).toMatchObject({ ok: false, reason: "already_running" });
+  });
+
+  it("stop でロックが解放され同一 session を再 resume できる", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn(resumeMsg);
+    h.sup.handleStop(resumeMsg);
+    h.last().exit();
+    h.sup.handleSpawn(resumeMsg);
+    expect(h.children).toHaveLength(2);
+    expect(h.results[1]).toMatchObject({ ok: true });
+  });
+
+  it("relaunch の同期失敗でプロセスを落とさずロックを解放する", () => {
+    const results: SpawnResult[] = [];
+    const children: FakeChild[] = [];
+    let calls = 0;
+    const sup = new Supervisor({
+      hostId: "lab-pc-1",
+      cwdAllowlist: allowlist,
+      launch: () => {
+        calls += 1;
+        if (calls === 1) {
+          const child = new FakeChild();
+          children.push(child);
+          return child;
+        }
+        throw new Error("relaunch boom");
+      },
+      sendResult: (r) => results.push(r),
+      sendSessions: () => {},
+      sessionExists: () => true,
+    });
+    sup.handleSpawn(resumeMsg); // ok, lock held
+    children[0]!.exit(); // crash -> #relaunch throws (caught) -> lock released
+    // ロック解放済みなので再 resume は already_running にならず launch を試みる
+    sup.handleSpawn(resumeMsg);
+    expect(calls).toBe(3); // 初回 + relaunch 試行 + 再 spawn 試行
+    expect(results[results.length - 1]).toMatchObject({
+      ok: false,
+      reason: "error",
+    });
+  });
+});
+
+describe("Supervisor.handleEnumerate", () => {
+  it("許可 cwd の resume 候補を sessions で返す", () => {
+    const sessions: SessionMeta[] = [{ session_id: "s1", mtime: "2026-06-24T00:00:00Z" }];
+    const h = harness({ sessions });
+    h.sup.handleEnumerate({ version: "0", agent_id: "a", cwd: "/home/user/git/kaoiro" });
+    expect(h.sessionsSent).toEqual([
+      { version: "0", host_id: "lab-pc-1", cwd: "/home/user/git/kaoiro", sessions },
+    ]);
+  });
+
+  it("許可外 cwd は空 sessions(任意パスを探らせない)", () => {
+    const h = harness({ sessions: [{ session_id: "s1" }] });
+    h.sup.handleEnumerate({ version: "0", agent_id: "a", cwd: "/etc" });
+    expect(h.sessionsSent[0]).toMatchObject({ cwd: "/etc", sessions: [] });
   });
 });
 

@@ -26,4 +26,11 @@ export type {
   ParsedSpawn,
   SupervisorOptions,
 } from "./supervisor.js";
-export { makeLauncher } from "./spawn.js";
+export { makeLauncher, toManagedChild } from "./spawn.js";
+export {
+  encodeCwd,
+  isValidSessionId,
+  listSessions,
+  projectsDir,
+  sessionExists,
+} from "./sessions.js";

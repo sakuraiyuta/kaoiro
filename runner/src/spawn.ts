@@ -71,15 +71,19 @@ export function makeLauncher(): LaunchFn {
     }
   });
 
-  return (agentId: string, config: WrapperConfig, cwd: string): ManagedChild => {
+  return (
+    agentId: string,
+    config: WrapperConfig,
+    cwd: string,
+    resumeSessionId?: string,
+  ): ManagedChild => {
     const configPath = join(dir, `${agentId}-${counter}.json`);
     counter += 1;
     writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
 
-    const child = spawn(process.execPath, [wrapperCli, configPath], {
-      cwd,
-      stdio: "inherit",
-    });
+    const args = [wrapperCli, configPath];
+    if (resumeSessionId !== undefined) args.push("--resume", resumeSessionId);
+    const child = spawn(process.execPath, args, { cwd, stdio: "inherit" });
 
     const cleanup = (): void => {
       rmSync(configPath, { force: true });

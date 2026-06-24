@@ -1,20 +1,22 @@
-// Process supervisor (ADR-0023, phase 4-4b). Owns the host's wrapper child
-// processes: it spawns a wrapper per `spawn`, restarts a crashed one (isolated
-// from its siblings), and stops/restarts on operator command. The actual child
-// launch (temp config + child_process.spawn) is injected so the supervision
-// logic is testable without real processes; the default launcher lives in
-// spawn.ts.
-//
-// resume_session_id, session enumeration, and the local same-session lock are
-// out of scope here (phase 4-5): a spawn carrying resume_session_id is rejected
-// until the existence check (T3) and lock (F4) land.
+// Process supervisor (ADR-0023, phases 4-4b/4-5). Owns the host's wrapper child
+// processes: spawns a wrapper per `spawn`, restarts a crashed one (isolated
+// from siblings), stops/restarts on operator command, enumerates resume
+// candidates, and resumes a session — gated by the T3 existence check and the
+// F4 same-session local lock. The child launch is injected so the supervision
+// logic is testable without real processes (default launcher: spawn.ts).
 
 import type {
   Persona,
+  RunnerSessions,
+  SessionMeta,
   SpawnFailReason,
   SpawnResult,
   WrapperConfig,
 } from "@kaoiro/protocol";
+import {
+  listSessions as defaultListSessions,
+  sessionExists as defaultSessionExists,
+} from "./sessions.js";
 
 /** Cap on automatic restarts after crashes, per agent. A wrapper that keeps
  *  crashing is left down rather than hot-looped; an explicit `restart` resets
@@ -31,11 +33,13 @@ export interface ManagedChild {
   kill(): void;
 }
 
-/** Launches one wrapper child for the resolved config in the given cwd. */
+/** Launches one wrapper child. resumeSessionId, when set, continues an existing
+ *  SDK session (the launcher passes it to the wrapper as `--resume`). */
 export type LaunchFn = (
   agentId: string,
   config: WrapperConfig,
   cwd: string,
+  resumeSessionId?: string,
 ) => ManagedChild;
 
 /** The validated fields of a `spawn` message the supervisor acts on. */
@@ -52,6 +56,10 @@ export interface SupervisorOptions {
   cwdAllowlist: string[];
   launch: LaunchFn;
   sendResult: (result: SpawnResult) => void;
+  sendSessions: (sessions: RunnerSessions) => void;
+  /** Injectable for tests; defaults read the local Claude JSONLs (sessions.ts). */
+  listSessions?: (cwd: string) => SessionMeta[];
+  sessionExists?: (cwd: string, sessionId: string) => boolean;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -141,17 +149,27 @@ export class Supervisor {
   readonly #cwdAllowlist: string[];
   readonly #launch: LaunchFn;
   readonly #sendResult: (result: SpawnResult) => void;
+  readonly #sendSessions: (sessions: RunnerSessions) => void;
+  readonly #listSessions: (cwd: string) => SessionMeta[];
+  readonly #sessionExists: (cwd: string, sessionId: string) => boolean;
   readonly #children = new Map<string, ChildEntry>();
+  /** session_ids currently being resumed — the F4 local lock against a second
+   *  concurrent resume of the same session. */
+  readonly #activeSessions = new Set<string>();
 
   constructor(options: SupervisorOptions) {
     this.#hostId = options.hostId;
     this.#cwdAllowlist = options.cwdAllowlist;
     this.#launch = options.launch;
     this.#sendResult = options.sendResult;
+    this.#sendSessions = options.sendSessions;
+    this.#listSessions = options.listSessions ?? defaultListSessions;
+    this.#sessionExists = options.sessionExists ?? defaultSessionExists;
   }
 
-  /** Handles a server `spawn`: validates, enforces the cwd allow-list and the
-   *  agent_id-level dedup, launches the wrapper, and reports the outcome. */
+  /** Handles a server `spawn`: validates, enforces the cwd allow-list, the
+   *  agent_id dedup, and (for resume) the T3 existence check and F4 lock;
+   *  launches the wrapper and reports the outcome. */
   handleSpawn(payload: unknown): void {
     const agentId = readAgentId(payload);
     if (agentId === null) {
@@ -163,14 +181,6 @@ export class Supervisor {
       this.#fail(agentId, "error");
       return;
     }
-    if (parsed.resumeSessionId !== undefined) {
-      // resume needs the existence check (T3) and lock (F4), landing in 4-5.
-      process.stderr.write(
-        `runner: resume not yet supported (agent ${agentId})\n`,
-      );
-      this.#fail(agentId, "error");
-      return;
-    }
     if (!isCwdAllowed(parsed.cwd, this.#cwdAllowlist)) {
       this.#fail(agentId, "cwd_not_found");
       return;
@@ -179,15 +189,33 @@ export class Supervisor {
       this.#fail(agentId, "already_running");
       return;
     }
+    const resume = parsed.resumeSessionId;
+    if (resume !== undefined) {
+      // T3: the resume target must exist as a JSONL under the bound cwd.
+      if (!this.#sessionExists(parsed.cwd, resume)) {
+        process.stderr.write(
+          `runner: resume session not found under cwd (agent ${agentId})\n`,
+        );
+        this.#fail(agentId, "error");
+        return;
+      }
+      // F4: physically block a second concurrent resume of the same session.
+      if (this.#activeSessions.has(resume)) {
+        this.#fail(agentId, "already_running");
+        return;
+      }
+      this.#activeSessions.add(resume);
+    }
     try {
       this.#start(agentId, parsed);
     } catch (error) {
       // A synchronous launch failure (the config write or spawn raising) must
-      // still surface to the operator and leave no stranded slot.
+      // still surface to the operator and leave no stranded slot or lock.
       process.stderr.write(
         `runner: launch failed for ${agentId}: ${String(error)}\n`,
       );
       this.#children.delete(agentId);
+      if (resume !== undefined) this.#activeSessions.delete(resume);
       this.#fail(agentId, "error");
       return;
     }
@@ -221,6 +249,19 @@ export class Supervisor {
     entry.child.kill();
   }
 
+  /** Handles a server `enumerate_sessions`: lists resume candidates under cwd
+   *  and replies with `sessions`. Only allow-listed cwds are enumerated, so an
+   *  operator cannot probe arbitrary paths. */
+  handleEnumerate(payload: unknown): void {
+    if (!isObject(payload)) return;
+    const cwd = payload.cwd;
+    if (typeof cwd !== "string") return;
+    const sessions = isCwdAllowed(cwd, this.#cwdAllowlist)
+      ? this.#listSessions(cwd)
+      : [];
+    this.#sendSessions({ version: "0", host_id: this.#hostId, cwd, sessions });
+  }
+
   /** Stops every child (deliberate); used on runner shutdown. */
   stopAll(): void {
     for (const entry of this.#children.values()) {
@@ -244,6 +285,7 @@ export class Supervisor {
       agentId,
       resolveWrapperConfig(agentId, parsed),
       parsed.cwd,
+      parsed.resumeSessionId,
     );
     const entry: ChildEntry = {
       child,
@@ -261,7 +303,7 @@ export class Supervisor {
     if (entry === undefined) return;
 
     if (entry.stopping) {
-      this.#children.delete(agentId);
+      this.#remove(agentId, entry);
       return;
     }
     if (entry.restarting) {
@@ -274,19 +316,40 @@ export class Supervisor {
       process.stderr.write(
         `runner: agent ${agentId} exceeded restart cap; leaving down\n`,
       );
-      this.#children.delete(agentId);
+      this.#remove(agentId, entry);
       return;
     }
     entry.restarts += 1;
     this.#relaunch(agentId, entry);
   }
 
+  /** Drops an entry and releases its resume lock; the lock is held across
+   *  restarts and freed only when the agent is finally gone. */
+  #remove(agentId: string, entry: ChildEntry): void {
+    this.#children.delete(agentId);
+    const resume = entry.parsed.resumeSessionId;
+    if (resume !== undefined) this.#activeSessions.delete(resume);
+  }
+
   #relaunch(agentId: string, entry: ChildEntry): void {
-    const child = this.#launch(
-      agentId,
-      resolveWrapperConfig(agentId, entry.parsed),
-      entry.parsed.cwd,
-    );
+    let child: ManagedChild;
+    try {
+      child = this.#launch(
+        agentId,
+        resolveWrapperConfig(agentId, entry.parsed),
+        entry.parsed.cwd,
+        entry.parsed.resumeSessionId,
+      );
+    } catch (error) {
+      // Same guard as handleSpawn's #start: a synchronous relaunch failure
+      // runs inside the exit-event callback, so an unguarded throw would crash
+      // the runner. Free the slot and the resume lock instead of leaking them.
+      process.stderr.write(
+        `runner: relaunch failed for ${agentId}: ${String(error)}\n`,
+      );
+      this.#remove(agentId, entry);
+      return;
+    }
     entry.child = child;
     child.on("exit", () => this.#onExit(agentId));
   }
