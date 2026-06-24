@@ -48,9 +48,9 @@ spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
 | 4-5 | runner: session JSONL 列挙 + resume 起動 | ✅ | #68。当該 cwd 配下を列挙、T3 実在検証([ADR-0014](../adr/0014-session-resume-and-restore.md) F2/F6)+ in-memory ローカルロック(F4) |
 | 4-6 | wrapper: resume flag(`--resume <session_id>` 等)追加 | ✅ | #69(d073b4e)。args.ts/cli.ts に実装 |
 | 4-7 | `kaoiro-runner` 単一バイナリ化 | ⏳ | [ADR-0018](../adr/0018-runner-distribution.md)。主要機能が出揃ってからでも可 |
-| 4-8 | dashboard: 起動指示 UI(host/persona/登録済み cwd/初期プロンプト)+ client→server spawn 要求 | ⏳ | #22 phase-0。範囲=中(任意 cwd/repo 除外)。cwd は runner config allow-list 由来。案A=サーバ補完([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))。4-1/4-2/4-4/4-10 依存 |
-| 4-9 | dashboard: 起動 UI に resume(runner 列挙の session_id 候補選択)追加 | ⏳ | #22 phase-1。4-5/4-6 依存。JSONL メタ最小露出(operator)/cwd 実在検証。表示履歴復元は [#50](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/50) 連携 |
-| 4-10 | server: spawn 補完(`agent_id` 採番 + `server_url`/per-agent token 注入)+ 二重 live join 拒否 | ⏳ | #22 の前提。[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4/D5。token 発行方式・寿命は ADR 従属点(要決定)。現行 relay は素通しのみ(#67)→ 補完層を追加 |
+| 4-8 | dashboard: 起動指示 UI(host/persona/登録済み cwd/初期プロンプト)+ client→server spawn 要求 | ✅ | #22 phase-0(0db7234 系)。範囲=中。案A=サーバ補完([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))。`LaunchDialog.svelte` + protocol.ts(spawn/hosts/spawn_result)。operator 判定は `hosts` push で |
+| 4-9 | dashboard: 起動 UI に resume(runner 列挙の session_id 候補選択)追加 | ✅ | #22 phase-1。新規/再開タブ + enumerate_sessions → `runner_sessions` で候補表示。resume は fresh agent_id + `resume_session_id`(D1 と整合、runner が T3/F4)|
+| 4-10 | server: spawn 補完(`agent_id` 採番 + per-agent token 注入)+ 署名トークン認証 | ✅ | #22 の前提([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4)。`server_url` は runner 供給に変更。token = Phoenix.Token 署名・無期限(失効=鍵ローテーション、個別 denylist は [#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))。D5 二重 live join 拒否は未実装(下記)|
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
@@ -97,10 +97,11 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## Followups (in-phase but unfinished)
 
-- runner: バックエンド(4-4-0〜4-5)は完了。**残るは server 補完 4-10
-  ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))と dashboard
-  系 4-8/4-9(起動 UI + client→server spawn/resume 要求、#22)**、および 4-7
-  (単一バイナリ化、#70)。4-10 の per-agent token 発行方式・寿命は要決定。
+- runner: バックエンド(4-4-0〜4-5)・server 補完(4-10)・dashboard 起動 UI
+  (4-8/4-9)は完了(#22 実装済)。**残るは 4-7(単一バイナリ化、#70)**。
+- **D5(二重 live join のサーバ明示拒否)は未実装**。新規 agent_id は
+  `<host>.<rand>` 採番で衝突は実質ゼロのため優先度低。実装時は wrapper join 経路
+  (`wrapper_channel`)で live owner 済み agent_id を拒否する([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5)。
 - `SessionMeta.summary` は未充填(現状 `session_id` + `mtime` のみ)。JSONL
   先頭/要約行の読取は将来の任意拡張(T2 最小露出は維持)。
 - supervisor の crash 再起動 cap は時間窓リセット無し(`MAX_RESTARTS` を
@@ -109,10 +110,9 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## Open Questions Blocking This Phase
 
-- **4-10 の per-agent token 発行方式・寿命**(署名済み短命 vs server 保持
-  レジストリ。runner の supervised restart をまたいで有効である必要)。
-  [ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)「未確定の
-  従属点」。4-10 着手前に要決定。制御 envelope schema 自体は #66 で確定。
+なし。4-10 の per-agent token 方式は **Phoenix.Token 署名・無期限**(失効=鍵
+ローテーション)に決定(2026-06-24、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)
+従属点を解消)。個別 revoke の denylist は [#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72)。
 
 ## See Also
 
