@@ -442,6 +442,9 @@
             onInterrupt={connection
               ? () => connection!.sendInterrupt(envelope.agent_id)
               : undefined}
+            onStop={connection
+              ? () => connection!.stop(envelope.agent_id)
+              : undefined}
             onDelete={connection
               ? () => connection!.deleteAgent(envelope.agent_id)
               : undefined}

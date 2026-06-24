@@ -119,6 +119,26 @@ export const RUNNING_STATES: ReadonlySet<string> = new Set([
   "waiting_permission",
 ]);
 
+/** States where terminating the agent is safe to do without a warning (#22):
+ *  it is not mid-work, so nothing in flight is lost. Any other state prompts a
+ *  confirm. Shared by the lobby card and the detail view. */
+export const STOP_SAFE_STATES: ReadonlySet<string> = new Set([
+  "idle",
+  "waiting_input",
+  "done",
+]);
+
+/** Recovers the owning host_id from a server-allocated agent_id
+ *  (`<host_id>.<rand>`, ADR-0024 D3) so the operator can address `stop` to the
+ *  right runner without the dashboard tracking host membership. The random
+ *  suffix has no dots, so host_id is everything before the last dot. An
+ *  agent_id with no dot (e.g. a manual wrapper not following the convention)
+ *  yields itself; the stop is then a no-op as no runner owns it. */
+export function hostIdFromAgentId(agentId: string): string {
+  const lastDot = agentId.lastIndexOf(".");
+  return lastDot > 0 ? agentId.slice(0, lastDot) : agentId;
+}
+
 /** Persona asset manifest served at GET /api/personas (ADR-0008). */
 export interface SpriteEntry {
   /** Hash-versioned URL; safe to cache immutably. */
@@ -244,6 +264,11 @@ export interface KaoiroConnection {
   /** Removes a disconnected agent (issue #14); rejects like
    * sendInstruction (forbidden / unknown_agent / not_disconnected). */
   deleteAgent: (agentId: string) => Promise<void>;
+  /** Terminates the running wrapper (#22): the runner that owns the agent
+   * kills its process; the agent then goes `disconnected`. The host is
+   * derived from the agent_id (hostIdFromAgentId). A no-op for an agent no
+   * runner owns. Rejects like sendInstruction (forbidden / timeout). */
+  stop: (agentId: string) => Promise<void>;
   /** Requests a spawn (#22, 案A); resolves with the server-allocated
    * agent_id. Rejects like sendInstruction (forbidden / unknown_host /
    * unknown_persona / cwd_not_allowed). The eventual launch outcome
@@ -442,6 +467,11 @@ export function connectKaoiro(
       pushAsync(channel, "clear_history", { agent_id: agentId }),
     deleteAgent: (agentId) =>
       pushAsync(channel, "delete_agent", { agent_id: agentId }),
+    stop: (agentId) =>
+      pushAsync(channel, "stop", {
+        host_id: hostIdFromAgentId(agentId),
+        agent_id: agentId,
+      }),
     spawn: (request) =>
       new Promise((resolve, reject) => {
         channel

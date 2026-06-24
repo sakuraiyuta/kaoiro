@@ -3,7 +3,13 @@
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
-  import { logOf, pendingPermissionFrom, resultOf, RUNNING_STATES } from "./protocol";
+  import {
+    logOf,
+    pendingPermissionFrom,
+    resultOf,
+    RUNNING_STATES,
+    STOP_SAFE_STATES,
+  } from "./protocol";
   import type {
     Envelope,
     KaoiroConnection,
@@ -278,6 +284,12 @@
   const canDelete = $derived(envelope.state === "disconnected");
   let deleting = $state(false);
 
+  // Terminate ends the wrapper process (#22), distinct from interrupt (which
+  // only stops the current turn). Offered for any connected agent; hidden once
+  // disconnected (nothing left to terminate — delete handles those).
+  const canStop = $derived(envelope.state !== "disconnected");
+  let stopping = $state(false);
+
   // Folded state of the permission dock (#…): when true it sits as a small
   // button in the conversation's top-right corner instead of covering the
   // transcript. permFullH carries the panel's natural height so the dock can
@@ -487,6 +499,27 @@
     });
   }
 
+  // Terminate the wrapper (#22): the owning runner kills the process and the
+  // agent goes disconnected. Warn first when it is mid-work; idle / your turn
+  // / done are safe and skip the confirm.
+  function stopAgent(): void {
+    if (!connection || stopping) return;
+    if (!STOP_SAFE_STATES.has(envelope.state)) {
+      const ok = window.confirm(
+        `「${name}」は${expression.label}です。終了すると進行中の作業は失われる可能性があります。終了しますか?`,
+      );
+      if (!ok) return;
+    }
+    void run(async () => {
+      stopping = true;
+      try {
+        await connection.stop(envelope.agent_id);
+      } finally {
+        stopping = false;
+      }
+    });
+  }
+
   // Purge past-session reply lines (#48): destructive and irreversible, so
   // confirm first. No-op without a known current session_id (the button is
   // disabled then); the server keeps only that session's lines.
@@ -607,6 +640,20 @@
           onclick={clearHistory}
         >
           過去セッションのログを消去
+        </button>
+      {/if}
+
+      {#if connection && canStop}
+        <!-- Terminate the wrapper (#22): left-pane bottom. Warns first when
+             the agent is mid-work (stopAgent). -->
+        <button
+          type="button"
+          class="terminate"
+          disabled={stopping}
+          title="エージェント(wrapper)を終了する"
+          onclick={stopAgent}
+        >
+          {stopping ? "終了中…" : "エージェントを終了"}
         </button>
       {/if}
     </aside>
@@ -876,6 +923,31 @@
     color: var(--fg-dim);
     cursor: not-allowed;
     opacity: 0.7;
+  }
+
+  /* Terminate the wrapper (#22): full-width danger button at the pane bottom,
+     filled to read as the most destructive action in the pane. */
+  .terminate {
+    margin-top: 0.5rem;
+    width: 100%;
+    padding: 0.45rem 0.5rem;
+    border: 1px solid var(--c-error);
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, var(--c-error) 14%, var(--bg-card));
+    color: var(--c-error);
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .terminate:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--c-error) 24%, var(--bg-card));
+  }
+
+  .terminate:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
   .main {

@@ -2,7 +2,7 @@
   import { untrack } from "svelte";
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
-  import { RUNNING_STATES } from "./protocol";
+  import { RUNNING_STATES, STOP_SAFE_STATES } from "./protocol";
   import type { Envelope, PersonaManifest } from "./protocol";
 
   let {
@@ -10,6 +10,7 @@
     manifest = null,
     onSelect,
     onInterrupt,
+    onStop,
     onDelete,
   }: {
     envelope: Envelope;
@@ -20,6 +21,8 @@
     // App.svelte conditionally passes undefined when there is no connection.
     /** ESC equivalent (#51); pass undefined to hide the button. */
     onInterrupt?: (() => Promise<void>) | undefined;
+    /** Terminate the wrapper (#22); pass undefined to hide the button. */
+    onStop?: (() => Promise<void>) | undefined;
     /** Remove a disconnected agent (#14); pass undefined to hide the
      *  button (e.g. no connection / viewer). */
     onDelete?: (() => Promise<void>) | undefined;
@@ -73,6 +76,37 @@
       console.warn("interrupt failed:", err);
     } finally {
       interrupting = false;
+    }
+  }
+
+  // Terminate button for any connected agent (#22): ends the wrapper process
+  // (distinct from interrupt, which only stops the current turn). Hidden once
+  // disconnected — there is nothing left to terminate (delete handles those).
+  const canStop = $derived(
+    onStop !== undefined && envelope.state !== "disconnected",
+  );
+
+  let stopping = $state(false);
+
+  async function handleStop(event: MouseEvent): Promise<void> {
+    // Don't open the detail when the operator clicks terminate on the tile.
+    event.stopPropagation();
+    if (stopping || !onStop) return;
+    // Warn before terminating an agent that is mid-work (#22); idle / your
+    // turn / done are safe and skip the confirm.
+    if (!STOP_SAFE_STATES.has(envelope.state)) {
+      const ok = window.confirm(
+        `「${name}」は${expression.label}です。終了すると進行中の作業は失われる可能性があります。終了しますか?`,
+      );
+      if (!ok) return;
+    }
+    stopping = true;
+    try {
+      await onStop();
+    } catch (err) {
+      console.warn("stop failed:", err);
+    } finally {
+      stopping = false;
     }
   }
 
@@ -131,6 +165,18 @@
     {/key}
     <p class="id">{envelope.agent_id}</p>
   </button>
+  {#if canStop}
+    <button
+      type="button"
+      class="terminate"
+      onclick={handleStop}
+      disabled={stopping}
+      title="エージェント(wrapper)を終了する"
+      aria-label="{name} を終了"
+    >
+      <span class="terminate-label">{stopping ? "終了中…" : "終了"}</span>
+    </button>
+  {/if}
   {#if canInterrupt}
     <button
       type="button"
@@ -415,6 +461,32 @@
   .stop-icon {
     font-size: 0.7em;
     line-height: 1;
+  }
+
+  /* Terminate button (#22): bottom-LEFT chip so it never overlaps the
+     interrupt / delete chip (bottom-right). A muted danger tone marks it
+     destructive; shown for any connected agent. */
+  .terminate {
+    position: absolute;
+    bottom: 0.35rem;
+    left: 0.35rem;
+    padding: 0.18rem 0.45rem;
+    border: 1px solid var(--c-error);
+    border-radius: 0.3rem;
+    background: var(--bg-card);
+    color: var(--c-error);
+    font: inherit;
+    font-size: 0.65rem;
+    cursor: pointer;
+  }
+
+  .terminate:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--c-error) 14%, var(--bg-card));
+  }
+
+  .terminate:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   /* Delete button (#14): same corner chip as .stop but a muted danger tone,

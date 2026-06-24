@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchPersonaManifest,
+  hostIdFromAgentId,
   isReplyEnvelope,
   logOf,
   parseHosts,
@@ -195,5 +196,17 @@ describe("parseSessions (#22 phase-1)", () => {
   it("配列でない値は空配列", () => {
     expect(parseSessions(null)).toEqual([]);
     expect(parseSessions({})).toEqual([]);
+  });
+});
+
+describe("hostIdFromAgentId (#22 terminate routing)", () => {
+  it("末尾ドット前を host_id として復元する", () => {
+    expect(hostIdFromAgentId("lab-pc-1.AbC123")).toBe("lab-pc-1");
+  });
+  it("host_id 自体にドットがあっても最後のドットで分割する", () => {
+    expect(hostIdFromAgentId("lab.pc.1.AbC123")).toBe("lab.pc.1");
+  });
+  it("ドット無しはそのまま返す(runner 不在=no-op)", () => {
+    expect(hostIdFromAgentId("nodot")).toBe("nodot");
   });
 });
