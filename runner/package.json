@@ -21,6 +21,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@kaoiro/wrapper": "workspace:*",
     "phoenix": "^1.8.7"
   }
 }

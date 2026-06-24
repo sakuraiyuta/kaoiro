@@ -1,14 +1,16 @@
 // Runner entry point — loads the runner config, connects to the kaoiro server
-// on `runner:<host_id>`, registers the host, and heartbeats to stay live
-// (ADR-0023, phase 4-4a). Process supervision (spawn/stop/restart) and session
-// enumeration / resume arrive in later phases.
+// on `runner:<host_id>`, registers the host, heartbeats, and supervises the
+// host's wrapper processes on operator spawn/stop/restart (ADR-0023, phases
+// 4-4a/4-4b). Session enumeration / resume arrive in phase 4-5.
 //
 // Usage: node dist/cli.js [configPath]
 //   configPath defaults to runner.config.json. The auth token is read from
 //   KAOIRO_RUNNER_TOKEN (unset = the server's runner auth is disabled, dev).
 
 import { parseRunnerArgs } from "./args.js";
-import { loadRunnerConfig, buildRegister } from "./config.js";
+import { buildRegister, loadRunnerConfig } from "./config.js";
+import { makeLauncher } from "./spawn.js";
+import { Supervisor } from "./supervisor.js";
 import { RunnerLink } from "./transport.js";
 
 /** Liveness ping cadence; matches the phoenix transport heartbeat default. */
@@ -19,10 +21,23 @@ function main(): void {
   const config = loadRunnerConfig(configPath);
   const token = process.env.KAOIRO_RUNNER_TOKEN;
 
-  const link = new RunnerLink(config.server_url, config.host_id, {
+  // link is assigned just below; the supervisor only calls sendResult after a
+  // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
+  let link: RunnerLink;
+  const supervisor = new Supervisor({
+    hostId: config.host_id,
+    cwdAllowlist: config.cwd_allowlist,
+    launch: makeLauncher(),
+    sendResult: (result) => link.sendSpawnResult(result),
+  });
+
+  link = new RunnerLink(config.server_url, config.host_id, {
     ...(token === undefined || token === "" ? {} : { token }),
     register: buildRegister(config),
     heartbeatMs: HEARTBEAT_MS,
+    onSpawn: (payload) => supervisor.handleSpawn(payload),
+    onStop: (payload) => supervisor.handleStop(payload),
+    onRestart: (payload) => supervisor.handleRestart(payload),
   });
 
   process.stderr.write(
@@ -30,6 +45,7 @@ function main(): void {
   );
 
   const shutdown = (): void => {
+    supervisor.stopAll();
     link.close();
     process.exit(0);
   };

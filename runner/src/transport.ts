@@ -7,7 +7,7 @@
 // HostRegistry keeps the host live.
 
 import { Channel, Socket } from "phoenix";
-import type { RunnerRegister } from "@kaoiro/protocol";
+import type { RunnerRegister, SpawnResult } from "@kaoiro/protocol";
 import { buildHeartbeat } from "./config.js";
 
 export interface RunnerLinkOptions {
@@ -19,6 +19,11 @@ export interface RunnerLinkOptions {
   register: RunnerRegister;
   /** Liveness ping interval in ms. */
   heartbeatMs: number;
+  /** Operator lifecycle control relayed by the server (ADR-0023). Payloads are
+   *  opaque here — the supervisor validates them. */
+  onSpawn?: (payload: unknown) => void;
+  onStop?: (payload: unknown) => void;
+  onRestart?: (payload: unknown) => void;
 }
 
 export class RunnerLink {
@@ -58,6 +63,15 @@ export class RunnerLink {
         });
     });
 
+    // Operator lifecycle control, relayed by the server onto this topic
+    // (ADR-0023). Payloads are forwarded opaquely to the supervisor, which
+    // validates them.
+    this.#channel.on("spawn", (payload: unknown) => options.onSpawn?.(payload));
+    this.#channel.on("stop", (payload: unknown) => options.onStop?.(payload));
+    this.#channel.on("restart", (payload: unknown) =>
+      options.onRestart?.(payload),
+    );
+
     this.#channel
       .join()
       .receive("error", (reason: unknown) => {
@@ -76,6 +90,11 @@ export class RunnerLink {
         this.#channel.push("heartbeat", buildHeartbeat(this.#hostId));
       }
     }, options.heartbeatMs);
+  }
+
+  /** Reports a spawn outcome back to the operators (via the server). */
+  sendSpawnResult(result: SpawnResult): void {
+    this.#channel.push("spawn_result", result);
   }
 
   /** Stops heartbeating, leaves the channel and closes the socket. */

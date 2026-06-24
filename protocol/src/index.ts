@@ -132,3 +132,44 @@ export interface RunnerHeartbeat {
   version: "0";
   host_id: string;
 }
+
+/** server -> runner, operator-only: launch a wrapper for agent_id. The server
+ *  relays the operator's payload verbatim (minus host_id), so server_url/token
+ *  are operator-supplied. cwd must be in the host's allow-list (T1).
+ *  resume_session_id requests a resume (honored in a later phase, with the
+ *  existence check (T3) and the local lock (F4)). */
+export interface SpawnMessage {
+  version: "0";
+  agent_id: string;
+  persona: Persona;
+  cwd: string;
+  server_url: string;
+  token?: string;
+  resume_session_id?: string;
+}
+
+/** server -> runner, operator-only: stop the wrapper for agent_id. */
+export interface StopMessage {
+  version: "0";
+  agent_id: string;
+}
+
+/** server -> runner, operator-only: restart the wrapper for agent_id. */
+export interface RestartMessage {
+  version: "0";
+  agent_id: string;
+}
+
+/** Why a spawn failed (protocol.md). already_running = a live wrapper already
+ *  owns the agent_id; cwd_not_found = the cwd is not in the host's allow-list;
+ *  error = any other failure. */
+export type SpawnFailReason = "already_running" | "cwd_not_found" | "error";
+
+/** runner -> server: the outcome of a spawn; reason is set only on failure. */
+export interface SpawnResult {
+  version: "0";
+  host_id: string;
+  agent_id: string;
+  ok: boolean;
+  reason?: SpawnFailReason;
+}
