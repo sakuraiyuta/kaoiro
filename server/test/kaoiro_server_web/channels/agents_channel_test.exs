@@ -355,7 +355,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             :invalid_agent_id,
             :already_running,
             :missing_host_id,
-            :invalid_host_id
+            :invalid_host_id,
+            :unknown_host,
+            :unknown_persona,
+            :invalid_persona,
+            :cwd_not_allowed,
+            :invalid_cwd
           ] do
         assert AgentsChannel.safe_reason(r) == to_string(r)
       end

@@ -390,7 +390,7 @@
   <div class="session">
     {#if isOperator && connection}
       <button type="button" class="launch" onclick={() => (showLaunch = true)}>
-        ＋ 起動
+        + 起動
       </button>
     {/if}
     <p class="conn" data-status={status}>
