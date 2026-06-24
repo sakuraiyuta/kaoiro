@@ -4,6 +4,7 @@ import {
   isReplyEnvelope,
   logOf,
   parseHosts,
+  parseSessions,
   pendingPermissionFrom,
   resultOf,
 } from "../src/lib/protocol";
@@ -173,5 +174,26 @@ describe("parseHosts (#22)", () => {
   it("マップでない値は空配列", () => {
     expect(parseHosts(null)).toEqual([]);
     expect(parseHosts(undefined)).toEqual([]);
+  });
+});
+
+describe("parseSessions (#22 phase-1)", () => {
+  it("session 候補を絞り込み optional メタを保つ", () => {
+    expect(
+      parseSessions([
+        { session_id: "s1", summary: "作業A", mtime: "2026-06-24T00:00:00Z" },
+        { session_id: "s2" },
+        { summary: "no id" },
+        "bad",
+      ]),
+    ).toEqual([
+      { session_id: "s1", summary: "作業A", mtime: "2026-06-24T00:00:00Z" },
+      { session_id: "s2" },
+    ]);
+  });
+
+  it("配列でない値は空配列", () => {
+    expect(parseSessions(null)).toEqual([]);
+    expect(parseSessions({})).toEqual([]);
   });
 });

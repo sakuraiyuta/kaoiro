@@ -177,6 +177,21 @@ export interface SpawnResult {
   reason?: string;
 }
 
+/** A resume candidate under a cwd (ADR-0014 F2; minimal metadata, T2). */
+export interface RunnerSession {
+  session_id: string;
+  summary?: string;
+  mtime?: string;
+}
+
+/** Resume candidates for a (host, cwd), forwarded from the runner's
+ *  enumerate_sessions reply (operator-only, #22 phase-1). */
+export interface RunnerSessions {
+  host_id: string;
+  cwd: string;
+  sessions: RunnerSession[];
+}
+
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 export interface KaoiroHandlers {
@@ -200,6 +215,9 @@ export interface KaoiroHandlers {
   onHosts?: (hosts: HostInfo[]) => void;
   /** A spawn outcome forwarded from the runner (#22). Operator-only. */
   onSpawnResult?: (result: SpawnResult) => void;
+  /** Resume candidates for a (host, cwd), in reply to enumerateSessions
+   *  (#22 phase-1). Operator-only. */
+  onSessions?: (result: RunnerSessions) => void;
 }
 
 export interface KaoiroConnection {
@@ -228,6 +246,10 @@ export interface KaoiroConnection {
    * unknown_persona / cwd_not_allowed). The eventual launch outcome
    * arrives separately via onSpawnResult. */
   spawn: (request: SpawnRequest) => Promise<{ agentId: string }>;
+  /** Requests the resume candidates under (host, cwd) (#22 phase-1);
+   * resolves when the server accepts the relay. The candidate list arrives
+   * separately via onSessions. Rejects like sendInstruction. */
+  enumerateSessions: (hostId: string, cwd: string) => Promise<void>;
 }
 
 export interface ConnectOptions {
@@ -271,6 +293,27 @@ export function parseHosts(value: unknown): HostInfo[] {
     }
   }
   return hosts;
+}
+
+/** Parses a `sessions` array, keeping only well-typed candidates. */
+export function parseSessions(value: unknown): RunnerSession[] {
+  if (!Array.isArray(value)) return [];
+  const sessions: RunnerSession[] = [];
+  for (const entry of value) {
+    if (
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as RunnerSession).session_id === "string"
+    ) {
+      const s = entry as RunnerSession;
+      sessions.push({
+        session_id: s.session_id,
+        ...(typeof s.summary === "string" ? { summary: s.summary } : {}),
+        ...(typeof s.mtime === "string" ? { mtime: s.mtime } : {}),
+      });
+    }
+  }
+  return sessions;
 }
 
 function pushAsync(
@@ -365,6 +408,16 @@ export function connectKaoiro(
       });
     }
   });
+  channel.on("runner_sessions", (payload: unknown) => {
+    const p = payload as Partial<RunnerSessions>;
+    if (typeof p.host_id === "string" && typeof p.cwd === "string") {
+      handlers.onSessions?.({
+        host_id: p.host_id,
+        cwd: p.cwd,
+        sessions: parseSessions(p.sessions),
+      });
+    }
+  });
   channel.join();
 
   return {
@@ -400,6 +453,8 @@ export function connectKaoiro(
           )
           .receive("timeout", () => reject(new Error("timeout")));
       }),
+    enumerateSessions: (hostId, cwd) =>
+      pushAsync(channel, "enumerate_sessions", { host_id: hostId, cwd }),
   };
 }
 

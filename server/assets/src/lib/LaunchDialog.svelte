@@ -3,26 +3,56 @@
   // declared personas, a cwd from the host allow-list, and an optional first
   // prompt, then asks the server to spawn. The server allocates the agent_id
   // and mints the per-agent token; this form never handles secrets.
-  import type { HostInfo, KaoiroConnection } from "./protocol";
+  import type {
+    HostInfo,
+    KaoiroConnection,
+    RunnerSessions,
+  } from "./protocol";
 
   let {
     hosts,
     connection,
+    sessions,
     onClose,
   }: {
     hosts: HostInfo[];
     connection: KaoiroConnection;
+    sessions: RunnerSessions | null;
     onClose: () => void;
   } = $props();
 
+  let mode = $state<"new" | "resume">("new");
   let hostId = $state("");
   let personaId = $state("");
   let cwd = $state("");
+  let sessionId = $state("");
   let prompt = $state("");
   let busy = $state(false);
   let error = $state<string | null>(null);
 
   const host = $derived(hosts.find((h) => h.host_id === hostId) ?? null);
+
+  // Resume candidates only count when they match the current host+cwd; a
+  // stale enumerate for another selection must not be offered.
+  const candidates = $derived(
+    sessions && sessions.host_id === hostId && sessions.cwd === cwd
+      ? sessions.sessions
+      : [],
+  );
+
+  // In resume mode, (re)fetch the candidate list whenever host/cwd changes.
+  // The list arrives asynchronously via onSessions (the `sessions` prop).
+  $effect(() => {
+    if (mode !== "resume" || hostId === "" || cwd === "") return;
+    void connection.enumerateSessions(hostId, cwd).catch(() => {});
+  });
+
+  // Keep the selected session valid for the current candidate set.
+  $effect(() => {
+    if (!candidates.some((s) => s.session_id === sessionId)) {
+      sessionId = candidates[0]?.session_id ?? "";
+    }
+  });
 
   // Default the host to the first available, and keep persona/cwd valid for
   // the chosen host: fall back to the first option whenever the current
@@ -42,7 +72,11 @@
   });
 
   const canLaunch = $derived(
-    !busy && hostId !== "" && personaId !== "" && cwd !== "",
+    !busy &&
+      hostId !== "" &&
+      personaId !== "" &&
+      cwd !== "" &&
+      (mode === "new" || sessionId !== ""),
   );
 
   async function launch(event: SubmitEvent): Promise<void> {
@@ -56,7 +90,11 @@
         host_id: hostId,
         persona: personaId,
         cwd,
-        ...(trimmed === "" ? {} : { initial_prompt: trimmed }),
+        ...(mode === "resume"
+          ? { resume_session_id: sessionId }
+          : trimmed === ""
+            ? {}
+            : { initial_prompt: trimmed }),
       });
       // The launch outcome arrives separately via spawn_result; closing here
       // returns the operator to the grid where the new agent will appear.
@@ -80,6 +118,27 @@
 <div class="dialog" role="dialog" aria-modal="true" aria-label="エージェント起動">
   <form onsubmit={launch}>
     <h2>エージェントを起動</h2>
+
+    <div class="tabs" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        class:active={mode === "new"}
+        aria-selected={mode === "new"}
+        onclick={() => (mode = "new")}
+      >
+        新規
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class:active={mode === "resume"}
+        aria-selected={mode === "resume"}
+        onclick={() => (mode = "resume")}
+      >
+        再開
+      </button>
+    </div>
 
     {#if hosts.length === 0}
       <p class="note">起動可能なホストがありません(runner 未接続)。</p>
@@ -111,14 +170,31 @@
         </select>
       </label>
 
-      <label>
-        初期プロンプト(任意)
-        <textarea
-          bind:value={prompt}
-          rows="3"
-          placeholder="最初の指示(空ならアイドルで待機)"
-        ></textarea>
-      </label>
+      {#if mode === "new"}
+        <label>
+          初期プロンプト(任意)
+          <textarea
+            bind:value={prompt}
+            rows="3"
+            placeholder="最初の指示(空ならアイドルで待機)"
+          ></textarea>
+        </label>
+      {:else}
+        <label>
+          セッション
+          {#if candidates.length === 0}
+            <span class="note">この cwd に再開可能なセッションはありません。</span>
+          {:else}
+            <select bind:value={sessionId}>
+              {#each candidates as s (s.session_id)}
+                <option value={s.session_id}>
+                  {s.summary ?? s.session_id}{s.mtime ? ` — ${s.mtime}` : ""}
+                </option>
+              {/each}
+            </select>
+          {/if}
+        </label>
+      {/if}
     {/if}
 
     {#if error}
@@ -166,6 +242,27 @@
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .tabs button {
+    flex: 1;
+    padding: 0.35rem;
+    font-size: 0.8rem;
+    color: var(--fg-dim);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    cursor: pointer;
+  }
+
+  .tabs button.active {
+    color: var(--fg);
+    border-color: var(--fg-dim);
   }
 
   label {

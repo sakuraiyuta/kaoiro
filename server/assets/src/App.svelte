@@ -10,6 +10,7 @@
     HostInfo,
     KaoiroConnection,
     PersonaManifest,
+    RunnerSessions,
     SpawnResult,
   } from "./lib/protocol";
   import {
@@ -46,6 +47,9 @@
   let showLaunch = $state(false);
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+  // Latest resume candidates from enumerate_sessions (#22 phase-1); the
+  // dialog matches them to its current host/cwd selection.
+  let runnerSessions = $state<RunnerSessions | null>(null);
 
   function notifySpawn(result: SpawnResult): void {
     spawnNotice = result.ok
@@ -162,6 +166,7 @@
           isOperator = true;
         },
         onSpawnResult: (result) => notifySpawn(result),
+        onSessions: (result) => (runnerSessions = result),
       },
       connectOpts,
     );
@@ -199,6 +204,7 @@
     hosts = [];
     isOperator = false;
     showLaunch = false;
+    runnerSessions = null;
   }
 
   // Mints a short-lived WS ticket from the current httpOnly cookie and opens
@@ -402,6 +408,7 @@
   <LaunchDialog
     {hosts}
     {connection}
+    sessions={runnerSessions}
     onClose={() => (showLaunch = false)}
   />
 {/if}
