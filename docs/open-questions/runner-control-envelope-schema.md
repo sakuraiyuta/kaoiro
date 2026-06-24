@@ -29,7 +29,7 @@ clear_history / delete_agent)のみ定義し、runner 向け制御・ホスト�
 | host 識別子 | 設定固定の `host_id` / 登録時にサーバ採番 |
 | 認証 | agent_id 別トークン(ADR-0011)と別に **host 別トークン**を設けるか([ADR-0011](../adr/0011-phase3-reliability-and-auth.md) 拡張) |
 | server→runner payload | `spawn`(agent_id / persona / cwd / server_url / token / resume session_id?)/ `stop`・`restart`(agent_id)/ `enumerate_sessions`(cwd) |
-| runner→server payload | `register`(host_id / 稼働可能ペルソナ / capabilities)/ `heartbeat` / `sessions`(JSONL メタ list)/ `spawn_result`(成否) |
+| runner→server payload | `register`(host_id / 稼働可能ペルソナ / 選択可能 cwd 許可リスト / capabilities)/ `heartbeat` / `sessions`(JSONL メタ list)/ `spawn_result`(成否) |
 
 ## 影響
 
@@ -50,6 +50,8 @@ runner 実装(Phase 4)、#22 の spawn UI、[ADR-0014](../adr/0014-session-resum
   どの制御メッセージで観測・調停するかも要設計。
 - version 方針([ADR-0015](../adr/0015-protocol-version-stamping.md)): 新規メッセージ
   種別の追加は受信側の未知無視で前方互換だが、`version` 据え置きか上げるかは確定時判断。
+- 選択可能 cwd の許可リストは runner config が保持し `register` で申告(#22 F3。
+  host 側へ複雑性を寄せる、[ADR-0023](../adr/0023-host-runner-architecture.md))。
 
 ## 暫定方針
 

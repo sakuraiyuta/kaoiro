@@ -63,6 +63,7 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | OAuth + RBAC 本実装 | 将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
 | セッション召喚時に runner が返す JSONL メタ(先頭プロンプト要約等)を operator role 限定・最小限に露出(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) | 将来(resume 機能と同時) |
 | resume 対象 session_id を当該 agent 束縛 cwd 配下に実在検証し、他 cwd/任意パスの resume を拒否(T3、runner が検証) | 将来(resume 機能と同時) |
+| 起動指示 UI(#22)は任意 cwd / 任意 repo clone を提示せず、選択可能 cwd を runner-config の allow-list に限定して RCE 面を bound(範囲=中、T1/T5) | 将来([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22) / [ADR-0023](../adr/0023-host-runner-architecture.md)) |
 
 ## Constraints
 
