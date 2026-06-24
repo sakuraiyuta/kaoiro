@@ -29,7 +29,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
   @impl true
   def join("wrapper:" <> agent_id, _params, socket) do
     with :ok <- validate_agent_id(agent_id),
-         :ok <- Auth.authorize_wrapper(agent_id, socket.assigns[:wrapper_token]) do
+         :ok <- Auth.authorize_wrapper(agent_id, socket.assigns[:wrapper_token]),
+         :ok <- reject_if_connected(agent_id) do
       # Drop the raw token once verified so it cannot leak via crash
       # logs / socket inspection.
       {:ok,
@@ -39,6 +40,16 @@ defmodule KaoiroServerWeb.WrapperChannel do
     else
       {:error, reason} -> {:error, %{reason: to_string(reason)}}
     end
+  end
+
+  # Reject a second concurrent wrapper for an agent_id that already has a
+  # live connection (ADR-0024 D5, reject-newcomer). The incumbent keeps the
+  # slot, so a token-holding third party cannot adversarially evict a live
+  # agent. A genuine reconnect is allowed once the old connection's terminate
+  # has run (its owner pid is then dead); after an abrupt drop that is delayed
+  # by the socket timeout window, during which the reconnect retries.
+  defp reject_if_connected(agent_id) do
+    if AgentStates.connected?(agent_id), do: {:error, :already_connected}, else: :ok
   end
 
   # Enforce the protocol.md agent_id charset at the join boundary (issue

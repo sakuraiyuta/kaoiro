@@ -38,6 +38,21 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert AgentStates.snapshot()[agent_id] == envelope
   end
 
+  test "稼働中 agent_id への二重 join を already_connected で拒否する (ADR-0024 D5)" do
+    agent_id = "test.d5-dup"
+    socket = join_wrapper(agent_id)
+    # The first wrapper owns the entry once it reports state.
+    ref = push(socket, "envelope", envelope(agent_id, "idle"))
+    assert_reply ref, :ok
+
+    # A second concurrent connection for the same agent_id is rejected; the
+    # incumbent keeps the slot (reject-newcomer, anti adversarial-eviction).
+    assert {:error, %{reason: "already_connected"}} =
+             KaoiroServerWeb.WrapperSocket
+             |> socket(nil, %{})
+             |> subscribe_and_join(KaoiroServerWeb.WrapperChannel, "wrapper:" <> agent_id)
+  end
+
   test "フレームキー欠落の envelope を拒否し中継しない" do
     agent_id = "test.invalid-1"
     @endpoint.subscribe("agents:lobby")

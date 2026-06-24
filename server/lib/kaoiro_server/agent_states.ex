@@ -117,6 +117,19 @@ defmodule KaoiroServer.AgentStates do
     GenServer.call(server, {:known?, agent_id})
   end
 
+  @doc """
+  True when `agent_id` has an entry whose owning channel is still alive —
+  i.e. a wrapper is currently connected for it (ADR-0024 D5). Used at
+  wrapper join to reject a second, concurrent connection for the same
+  agent_id rather than silently last-write-wins clobbering the live one.
+  A disconnected agent's owner pid is dead (its terminate already ran), so
+  this returns false and a genuine reconnect is allowed.
+  """
+  def connected?(agent_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:connected?, agent_id})
+  end
+
   @impl true
   def init(state), do: {:ok, state}
 
@@ -196,6 +209,16 @@ defmodule KaoiroServer.AgentStates do
 
   def handle_call({:known?, agent_id}, _from, state) do
     {:reply, Map.has_key?(state, agent_id), state}
+  end
+
+  def handle_call({:connected?, agent_id}, _from, state) do
+    connected =
+      case state do
+        %{^agent_id => %{owner: owner}} -> is_pid(owner) and Process.alive?(owner)
+        _ -> false
+      end
+
+    {:reply, connected, state}
   end
 
   # Server-derived envelope: keep identity (persona) and session_id so a

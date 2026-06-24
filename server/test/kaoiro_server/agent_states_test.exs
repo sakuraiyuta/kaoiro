@@ -38,6 +38,34 @@ defmodule KaoiroServer.AgentStatesTest do
     refute AgentStates.known?("agent-k2", server: store)
   end
 
+  describe "connected?/2 (ADR-0024 D5)" do
+    setup do
+      %{store: start_supervised!({AgentStates, name: :agent_states_connected_test})}
+    end
+
+    test "生きた owner を持つ agent は connected?", %{store: store} do
+      :ok = AgentStates.put(envelope("c.live"), owner: self(), server: store)
+      assert AgentStates.connected?("c.live", server: store)
+    end
+
+    test "未知 agent は connected? false", %{store: store} do
+      refute AgentStates.connected?("c.unknown", server: store)
+    end
+
+    test "owner 無し(server 由来など)は connected? false", %{store: store} do
+      :ok = AgentStates.put(envelope("c.noowner"), server: store)
+      refute AgentStates.connected?("c.noowner", server: store)
+    end
+
+    test "死んだ owner は connected? false で再接続を許す", %{store: store} do
+      dead = spawn(fn -> :ok end)
+      ref = Process.monitor(dead)
+      assert_receive {:DOWN, ^ref, :process, ^dead, _}
+      :ok = AgentStates.put(envelope("c.dead"), owner: dead, server: store)
+      refute AgentStates.connected?("c.dead", server: store)
+    end
+  end
+
   describe "delete/1 (issue #14)" do
     setup do
       %{store: start_supervised!({AgentStates, name: :agent_states_delete_test})}
