@@ -505,8 +505,12 @@
   function stopAgent(): void {
     if (!connection || stopping) return;
     if (!STOP_SAFE_STATES.has(envelope.state)) {
+      // Use the LIVE state for the label so it matches the gate above; the
+      // detail's `expression` is display-lagged (StatusQueue) and could name a
+      // stale state in the warning.
+      const liveLabel = expressionFor(envelope.state).label;
       const ok = window.confirm(
-        `「${name}」は${expression.label}です。終了すると進行中の作業は失われる可能性があります。終了しますか?`,
+        `「${name}」は${liveLabel}です。終了すると進行中の作業は失われる可能性があります。終了しますか?`,
       );
       if (!ok) return;
     }
