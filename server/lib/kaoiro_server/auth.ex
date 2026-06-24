@@ -25,29 +25,61 @@ defmodule KaoiroServer.Auth do
 
   require Logger
 
+  # Salt for the server-minted per-agent wrapper token (ADR-0024). A
+  # constant, distinct from any other Phoenix.Token use.
+  @wrapper_token_salt "kaoiro wrapper auth"
+
   @doc """
-  Authorizes a wrapper connection for `agent_id`. `:ok` when the token
-  matches, or when no wrapper tokens are configured.
+  Authorizes a wrapper connection for `agent_id`. `:ok` when wrapper auth
+  is disabled (dev), the token matches a pre-registered `:wrapper_tokens`
+  entry, or it is a valid server-minted signed token for this agent_id
+  (the spawn path, ADR-0024). Otherwise `{:error, :unauthorized}`.
   """
   def authorize_wrapper(agent_id, token) do
     tokens = parse_pairs(Application.get_env(:kaoiro_server, :wrapper_tokens))
 
-    if tokens == %{} do
-      :ok
-    else
-      # Run the comparison even for an unknown agent_id so timing does
-      # not reveal which agent_ids have token entries.
-      expected = Map.get(tokens, agent_id, "")
-      presented = if is_binary(token), do: token, else: ""
-      matched = Plug.Crypto.secure_compare(expected, presented)
-
-      if Map.has_key?(tokens, agent_id) and matched do
-        :ok
-      else
-        {:error, :unauthorized}
-      end
+    cond do
+      # Dev convenience: no wrapper tokens configured → any wrapper connects.
+      tokens == %{} -> :ok
+      registered_wrapper_token?(tokens, agent_id, token) -> :ok
+      valid_signed_wrapper_token?(agent_id, token) -> :ok
+      true -> {:error, :unauthorized}
     end
   end
+
+  @doc """
+  Mints a per-agent wrapper token for a server-initiated spawn (ADR-0024).
+  Signed with the endpoint's `secret_key_base` and bound to `agent_id`, with
+  no expiry — revocation is via key rotation (a per-agent denylist is the
+  future refinement, issue #72). This lets a spawned wrapper authenticate
+  without a pre-registered `:wrapper_tokens` entry.
+  """
+  def mint_wrapper_token(agent_id) do
+    Phoenix.Token.sign(KaoiroServerWeb.Endpoint, @wrapper_token_salt, agent_id)
+  end
+
+  # Pre-registered agent_id:token pair (ADR-0011). The secure_compare runs
+  # even for an unknown agent_id so timing does not reveal which agent_ids
+  # have token entries.
+  defp registered_wrapper_token?(tokens, agent_id, token) do
+    expected = Map.get(tokens, agent_id, "")
+    presented = if is_binary(token), do: token, else: ""
+    matched = Plug.Crypto.secure_compare(expected, presented)
+    Map.has_key?(tokens, agent_id) and matched
+  end
+
+  # Server-minted signed token (ADR-0024). Verifies the Phoenix.Token
+  # signature and that the embedded agent_id matches the joining one.
+  defp valid_signed_wrapper_token?(agent_id, token) when is_binary(token) do
+    case Phoenix.Token.verify(KaoiroServerWeb.Endpoint, @wrapper_token_salt, token,
+           max_age: :infinity
+         ) do
+      {:ok, ^agent_id} -> true
+      _ -> false
+    end
+  end
+
+  defp valid_signed_wrapper_token?(_agent_id, _token), do: false
 
   @doc """
   Authorizes a runner connection for `host_id` (ADR-0023). `:ok` when the

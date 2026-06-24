@@ -4,6 +4,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   import ExUnit.CaptureLog
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.HostRegistry
   alias KaoiroServerWeb.AgentsChannel
 
   defp put_agent(agent_id) do
@@ -15,6 +16,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "type" => "state_change",
         "state" => "waiting_input"
       })
+  end
+
+  @mio %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"}
+
+  defp register_host(host_id, opts \\ []) do
+    :ok =
+      HostRegistry.register(
+        host_id,
+        %{
+          personas: Keyword.get(opts, :personas, [@mio]),
+          cwd_allowlist: Keyword.get(opts, :cwd_allowlist, ["/home/user/proj"])
+        },
+        self()
+      )
   end
 
   defp join_as(role) do
@@ -863,23 +878,51 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   end
 
   describe "host lifecycle relay (ADR-0023, issue #67)" do
-    test "operator の spawn を runner topic へ relay し host_id を落とす" do
+    test "operator の spawn: server が agent_id 採番・persona 解決・token 注入し runner topic へ送る" do
       host_id = "lab-pc-1"
+      register_host(host_id)
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
 
       ref =
         push(socket, "spawn", %{
           "host_id" => host_id,
-          "agent_id" => "lab-pc-1.new",
-          "persona" => %{"id" => "mio"},
+          "persona" => "mio",
           "cwd" => "/home/user/proj"
         })
 
-      assert_reply ref, :ok
-      # host_id addresses the topic only; agent_id rides the payload.
-      assert_broadcast "spawn", %{"agent_id" => "lab-pc-1.new"} = payload
+      # The allocated agent_id comes back in the reply for UI correlation.
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert String.starts_with?(agent_id, host_id <> ".")
+
+      # host_id addresses the topic only and is not in the payload; the server
+      # resolves the persona id to the full object and mints the token.
+      assert_broadcast "spawn", payload
       refute Map.has_key?(payload, "host_id")
+      assert payload["agent_id"] == agent_id
+      assert payload["persona"] == @mio
+      assert payload["cwd"] == "/home/user/proj"
+      assert is_binary(payload["token"])
+      # server_url is supplied by the runner, not the server (案A, ADR-0024).
+      refute Map.has_key?(payload, "server_url")
+    end
+
+    test "operator の spawn: initial_prompt を payload に載せる" do
+      host_id = "lab-pc-1b"
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "mio",
+          "cwd" => "/home/user/proj",
+          "initial_prompt" => "最初の指示"
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "spawn", %{"initial_prompt" => "最初の指示"}
     end
 
     test "operator の stop / restart / enumerate_sessions を runner topic へ relay する" do
@@ -923,51 +966,49 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "invalid_host_id"}
     end
 
-    test "稼働中 agent_id の spawn は already_running で弾く (server-stage dedup, #68)" do
-      host_id = "lab-pc-4"
-      agent_id = "lab-pc-4.live"
-      put_agent(agent_id)
-      @endpoint.subscribe("runner:" <> host_id)
+    test "未登録 host への spawn は unknown_host" do
       socket = join_as(:operator)
 
       ref =
         push(socket, "spawn", %{
-          "host_id" => host_id,
-          "agent_id" => agent_id,
-          "persona" => %{"id" => "mio"},
-          "cwd" => "/home/user/p"
+          "host_id" => "no-such-host",
+          "persona" => "mio",
+          "cwd" => "/home/user/proj"
         })
 
-      assert_reply ref, :error, %{reason: "already_running"}
-      refute_broadcast "spawn", %{}
+      assert_reply ref, :error, %{reason: "unknown_host"}
     end
 
-    test "disconnected agent_id の spawn は relay される (再起動を許す)" do
-      host_id = "lab-pc-5"
-      agent_id = "lab-pc-5.dead"
+    test "host が申告していない persona は unknown_persona" do
+      host_id = "lab-pc-4"
+      register_host(host_id)
+      socket = join_as(:operator)
 
-      :ok =
-        AgentStates.put(%{
-          "version" => "0",
-          "agent_id" => agent_id,
-          "ts" => "2026-06-11T00:00:00Z",
-          "type" => "state_change",
-          "state" => "disconnected"
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ghost",
+          "cwd" => "/home/user/proj"
         })
 
+      assert_reply ref, :error, %{reason: "unknown_persona"}
+    end
+
+    test "allow-list 外の cwd は cwd_not_allowed (T1)" do
+      host_id = "lab-pc-5"
+      register_host(host_id, cwd_allowlist: ["/home/user/proj"])
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
 
       ref =
         push(socket, "spawn", %{
           "host_id" => host_id,
-          "agent_id" => agent_id,
-          "persona" => %{"id" => "mio"},
-          "cwd" => "/home/user/p"
+          "persona" => "mio",
+          "cwd" => "/etc"
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "spawn", %{"agent_id" => ^agent_id}
+      assert_reply ref, :error, %{reason: "cwd_not_allowed"}
+      refute_broadcast "spawn", %{}
     end
   end
 

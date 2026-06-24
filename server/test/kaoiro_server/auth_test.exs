@@ -45,6 +45,28 @@ defmodule KaoiroServer.AuthTest do
       assert :ok = Auth.authorize_wrapper("lab.a", "tok-a")
       assert {:error, :unauthorized} = Auth.authorize_wrapper("broken", "x")
     end
+
+    test "server-minted 署名トークンを受理する (ADR-0024、事前登録不要)" do
+      # wrapper auth ON but the agent_id is NOT pre-registered: only the signed
+      # token can authorize it, proving the spawn path works without a config entry.
+      Application.put_env(:kaoiro_server, :wrapper_tokens, "other.a:tok-a")
+      token = Auth.mint_wrapper_token("lab.spawned")
+
+      assert :ok = Auth.authorize_wrapper("lab.spawned", token)
+    end
+
+    test "署名トークンは別 agent_id を認証しない (binding)" do
+      Application.put_env(:kaoiro_server, :wrapper_tokens, "other.a:tok-a")
+      token = Auth.mint_wrapper_token("lab.spawned")
+
+      assert {:error, :unauthorized} = Auth.authorize_wrapper("lab.other", token)
+    end
+
+    test "署名でないトークンは拒否する" do
+      Application.put_env(:kaoiro_server, :wrapper_tokens, "other.a:tok-a")
+
+      assert {:error, :unauthorized} = Auth.authorize_wrapper("lab.spawned", "garbage")
+    end
   end
 
   describe "authorize_runner/2 (ADR-0023)" do

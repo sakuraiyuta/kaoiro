@@ -45,6 +45,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   require Logger
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.Auth
   alias KaoiroServer.HostRegistry
   alias KaoiroServerWeb.AgentId
 
@@ -71,7 +72,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # `to_string/1`; `safe_reason/1` logs it and returns "internal_error".
   @safe_reasons ~w(forbidden unknown_agent not_disconnected noop
                    payload_too_large missing_agent_id invalid_agent_id
-                   already_running missing_host_id invalid_host_id)a
+                   already_running missing_host_id invalid_host_id
+                   unknown_host unknown_persona invalid_persona
+                   cwd_not_allowed invalid_cwd)a
 
   @impl true
   def join("agents:lobby", _params, socket) do
@@ -172,16 +175,23 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # relays to the addressed `runner:<host_id>` without interpreting the
   # payload (host/agent-agnostic, mirrors the wrapper relay). The runner
   # acts and reports back via `spawn_result` / `runner_sessions`.
+  # Operator launch request (案A, ADR-0024). The client sends only
+  # host_id + persona (id) + cwd + optional initial_prompt/resume_session_id;
+  # the server resolves the persona against the host's declared set, checks
+  # cwd against the host allow-list (T1), allocates a fresh instance agent_id
+  # under the host namespace, and mints the per-agent token. server_url is
+  # supplied by the runner. The allocated agent_id is returned so the UI can
+  # correlate the eventual spawn_result.
   def handle_in("spawn", payload, socket) do
-    # Server-stage dedup (issue #68): refuse to spawn an agent_id that is
-    # already known and not disconnected, so a double-click cannot launch a
-    # second process. The runner-local lock is the second stage. agent_id
-    # rides the payload to the runner (it is not the relay address here, so
-    # it is NOT stripped).
     with :ok <- require_operator(socket),
          {:ok, host_id} <- fetch_host_id(payload),
-         :ok <- check_spawn_dedup(payload) do
-      relay_to_runner(socket, payload, host_id, "spawn")
+         {:ok, host} <- fetch_host(host_id),
+         {:ok, persona} <- resolve_persona(host, payload),
+         {:ok, cwd} <- fetch_allowed_cwd(host, payload),
+         {:ok, agent_id} <- allocate_agent_id(host_id),
+         {:ok, spawn_payload} <- build_spawn_payload(agent_id, persona, cwd, payload) do
+      KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
+      {:reply, {:ok, %{"agent_id" => agent_id}}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
@@ -287,19 +297,84 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # Server-stage dedup (issue #68, ADR-0023): reject a spawn for an
-  # agent_id that is already known and not `disconnected`, so the operator
-  # cannot launch a second process for the same agent. A missing/non-binary
-  # agent_id is left to the runner (the server stays agent-agnostic about
-  # the spawn payload beyond this liveness check).
-  defp check_spawn_dedup(%{"agent_id" => agent_id}) when is_binary(agent_id) do
-    case AgentStates.snapshot()[agent_id] do
-      %{"state" => state} when state != "disconnected" -> {:error, :already_running}
-      _ -> :ok
+  defp fetch_host(host_id) do
+    case HostRegistry.get(host_id) do
+      nil -> {:error, :unknown_host}
+      host -> {:ok, host}
     end
   end
 
-  defp check_spawn_dedup(_payload), do: :ok
+  # Resolve the operator-chosen persona id to the host's declared persona
+  # object: the wrapper gets only what the host registered, never arbitrary
+  # client-supplied persona fields (server-authoritative, 案A).
+  defp resolve_persona(%{personas: personas}, %{"persona" => persona_id})
+       when is_binary(persona_id) do
+    case Enum.find(personas, fn persona -> persona["id"] == persona_id end) do
+      nil -> {:error, :unknown_persona}
+      persona -> {:ok, persona}
+    end
+  end
+
+  defp resolve_persona(_host, _payload), do: {:error, :invalid_persona}
+
+  # cwd must be one the host declared spawnable (T1, threat-model). The runner
+  # re-checks against its own allow-list; this server-side check gives a clear
+  # rejection and keeps a non-allowed cwd off the wire.
+  defp fetch_allowed_cwd(%{cwd_allowlist: allowlist}, %{"cwd" => cwd})
+       when is_binary(cwd) do
+    if cwd in allowlist, do: {:ok, cwd}, else: {:error, :cwd_not_allowed}
+  end
+
+  defp fetch_allowed_cwd(_host, _payload), do: {:error, :invalid_cwd}
+
+  # Allocate a unique instance agent_id under the host namespace (ADR-0024
+  # D3: `<host>.<rand>`). The random suffix makes collisions negligible; still
+  # reject rather than clobber a live agent on the off chance of a clash.
+  defp allocate_agent_id(host_id) do
+    suffix = Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
+    agent_id = host_id <> "." <> suffix
+
+    cond do
+      not AgentId.valid?(agent_id) -> {:error, :invalid_host_id}
+      live_agent?(agent_id) -> {:error, :already_running}
+      true -> {:ok, agent_id}
+    end
+  end
+
+  defp live_agent?(agent_id) do
+    case AgentStates.snapshot()[agent_id] do
+      %{"state" => state} when state != "disconnected" -> true
+      _ -> false
+    end
+  end
+
+  # Build the runner spawn payload (案A, ADR-0024): the server fills agent_id
+  # and mints the per-agent token; server_url is supplied by the runner.
+  # initial_prompt / resume_session_id pass through only when well-typed. The
+  # whole map is size-bounded so an oversized initial_prompt cannot reach the
+  # runner process.
+  defp build_spawn_payload(agent_id, persona, cwd, payload) do
+    spawn_payload =
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => persona,
+        "cwd" => cwd,
+        "token" => Auth.mint_wrapper_token(agent_id)
+      }
+      |> maybe_put_string("initial_prompt", payload["initial_prompt"])
+      |> maybe_put_string("resume_session_id", payload["resume_session_id"])
+
+    case check_relay_size(spawn_payload) do
+      :ok -> {:ok, spawn_payload}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_put_string(map, key, value) when is_binary(value) and value != "",
+    do: Map.put(map, key, value)
+
+  defp maybe_put_string(map, _key, _value), do: map
 
   # Bounds the whole relayed map, not just the whitelisted keys, so an
   # oversized blob in an opaque extra key cannot reach the wrapper process
