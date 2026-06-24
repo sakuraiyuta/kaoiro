@@ -362,7 +362,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             :invalid_persona,
             :cwd_not_allowed,
             :invalid_cwd,
-            :invalid_name
+            :invalid_name,
+            :no_session
           ] do
         assert AgentsChannel.safe_reason(r) == to_string(r)
       end
