@@ -221,6 +221,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_in("restore", payload, socket) do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_agent_id(payload),
+         :ok <- require_disconnected(agent_id),
          {:ok, persona} <- agent_persona(agent_id),
          {:ok, session_id, cwd} <- session_pointer(agent_id),
          {:ok, spawn_payload} <-
@@ -422,6 +423,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
     do: Map.put(map, key, value)
 
   defp maybe_put_string(map, _key, _value), do: map
+
+  # Restore is only for a disconnected agent (ADR-0014 F4: server-side owner
+  # fencing, the early-reject first stage before the runner-local lock). A live
+  # agent must not be re-spawned under its own agent_id (D5 二重接続).
+  defp require_disconnected(agent_id) do
+    if live_agent?(agent_id), do: {:error, :not_disconnected}, else: :ok
+  end
 
   # The agent's last-known persona (incl. any custom name) from its state
   # entry; restore re-spawns with it so the revived agent keeps its identity.

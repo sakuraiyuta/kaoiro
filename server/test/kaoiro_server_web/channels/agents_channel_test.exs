@@ -1134,6 +1134,21 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "unknown_agent"}
     end
 
+    test "稼働中 agent の restore は not_disconnected で拒否(D5、サーバ早期拒否)" do
+      agent_id = "lab-pc-1.live-rev"
+      # waiting_input = 稼働中(切断ではない)。
+      put_agent(agent_id)
+      :ok = SessionPointers.record(agent_id, "sess-live", "/home/user/proj")
+      SessionPointers.get(agent_id)
+      @endpoint.subscribe("runner:lab-pc-1")
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => agent_id})
+
+      assert_reply ref, :error, %{reason: "not_disconnected"}
+      refute_broadcast "spawn", %{}
+    end
+
     test "viewer の restore は forbidden" do
       socket = join_as(:viewer)
 
