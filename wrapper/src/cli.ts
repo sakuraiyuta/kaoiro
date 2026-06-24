@@ -14,8 +14,9 @@
 // deny on timeout. The ceiling cannot be widened from the server side
 // (specs/threat-model.md).
 //
-// Usage: node dist/cli.js [configPath] [prompt]
+// Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
+import { parseCliArgs } from "./args.js";
 import { AgentHost } from "./host.js";
 import { PermissionBroker } from "./permission.js";
 import { loadConfig } from "./persona.js";
@@ -67,7 +68,8 @@ function printLog(envelope: Envelope): void {
 }
 
 async function main(): Promise<void> {
-  const configPath = process.argv[2] ?? "kaoiro.config.json";
+  const { configPath, prompt: promptArg, resume: resumeSessionId } =
+    parseCliArgs(process.argv.slice(2));
   const config = loadConfig(configPath);
 
   // Resident when server-connected: the session stays open for operator
@@ -78,7 +80,7 @@ async function main(): Promise<void> {
   // for the first instruction; local-only runs keep the demo prompt
   // (no instruction channel exists to start a turn otherwise).
   const prompt =
-    process.argv[3] ??
+    promptArg ??
     (persistent
       ? undefined
       : "src/state.ts を読んで、状態機械の状態名を日本語で列挙して。書き込みは不要。");
@@ -154,6 +156,7 @@ async function main(): Promise<void> {
       tools: { type: "preset", preset: "claude_code" },
       allowedTools: config.allowed_tools ?? [...READ_ONLY_TOOLS],
       cwd: process.cwd(),
+      ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
   });
 
