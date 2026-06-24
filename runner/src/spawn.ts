@@ -3,10 +3,10 @@
 // supervision logic can be tested without spawning processes.
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { WrapperConfig } from "@kaoiro/protocol";
 import type { LaunchFn, ManagedChild } from "./supervisor.js";
 
@@ -42,11 +42,30 @@ export function toManagedChild(child: ExitErrorChild): ManagedChild {
   };
 }
 
-// Resolve the wrapper CLI entry from the runner's dependency on @kaoiro/wrapper.
-// wrapper declares no exports field, so the dist subpath resolves directly; in
-// the single-binary build the wrapper is bundled alongside (ADR-0018).
-function resolveWrapperCli(): string {
-  return createRequire(import.meta.url).resolve("@kaoiro/wrapper/dist/cli.js");
+// Leading argv for `process.execPath` (node) that runs the wrapper. Default
+// (prod) runs the built dist directly; wrapper declares no exports field so the
+// subpath resolves, and the single-binary build bundles it alongside
+// (ADR-0018). When KAOIRO_WRAPPER_DEV is set, run the wrapper from TS source
+// under `tsx watch` so source edits hot-reload the running agent: tsx restarts
+// the inner script on change while the supervised process (tsx) stays up. This
+// is a dev-only path (scripts/dev.sh); prod is unaffected.
+export function resolveWrapperLaunch(): string[] {
+  const require = createRequire(import.meta.url);
+  if (process.env.KAOIRO_WRAPPER_DEV) {
+    const tsxPkgPath = require.resolve("tsx/package.json");
+    const tsxPkg = JSON.parse(readFileSync(tsxPkgPath, "utf8")) as {
+      bin: string | Record<string, string>;
+    };
+    const tsxRel = typeof tsxPkg.bin === "string" ? tsxPkg.bin : tsxPkg.bin.tsx;
+    if (tsxRel === undefined) {
+      throw new Error("KAOIRO_WRAPPER_DEV: tsx package has no bin entry");
+    }
+    const tsxBin = join(dirname(tsxPkgPath), tsxRel);
+    const wrapperPkgPath = require.resolve("@kaoiro/wrapper/package.json");
+    const wrapperSrc = join(dirname(wrapperPkgPath), "src", "cli.ts");
+    return [tsxBin, "watch", wrapperSrc];
+  }
+  return [require.resolve("@kaoiro/wrapper/dist/cli.js")];
 }
 
 /**
@@ -55,7 +74,7 @@ function resolveWrapperCli(): string {
  * each is written 0600 and removed when its child exits.
  */
 export function makeLauncher(): LaunchFn {
-  const wrapperCli = resolveWrapperCli();
+  const launchPrefix = resolveWrapperLaunch();
   const dir = mkdtempSync(join(tmpdir(), "kaoiro-runner-"));
   let counter = 0;
 
@@ -84,7 +103,8 @@ export function makeLauncher(): LaunchFn {
 
     // wrapper CLI: [configPath] [prompt] [--resume <id>]. The prompt is the
     // positional after configPath, so it must precede the --resume flag.
-    const args = [wrapperCli, configPath];
+    // launchPrefix is the dist entry (prod) or `tsx watch src/cli.ts` (dev).
+    const args = [...launchPrefix, configPath];
     if (initialPrompt !== undefined) args.push(initialPrompt);
     if (resumeSessionId !== undefined) args.push("--resume", resumeSessionId);
     const child = spawn(process.execPath, args, { cwd, stdio: "inherit" });
