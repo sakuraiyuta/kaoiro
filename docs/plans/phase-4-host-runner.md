@@ -116,6 +116,8 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 - supervisor の crash 再起動 cap は時間窓リセット無し(`MAX_RESTARTS` を
   使い切ると以後 down のまま、明示 restart でのみリセット)。時間窓付き budget
   は将来の任意改善。
+- 上記の低優先ポリッシュ(D5 短窓 / `SessionMeta.summary` / 再起動 cap 時間窓)は
+  [#73](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/73) で集約トラッキング。
 
 ## Open Questions Blocking This Phase
 
