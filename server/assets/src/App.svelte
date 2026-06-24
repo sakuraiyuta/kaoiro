@@ -51,12 +51,27 @@
   // dialog matches them to its current host/cwd selection.
   let runnerSessions = $state<RunnerSessions | null>(null);
 
-  function notifySpawn(result: SpawnResult): void {
-    spawnNotice = result.ok
-      ? `起動しました: ${result.agent_id}`
-      : `起動に失敗: ${result.agent_id} (${result.reason ?? "error"})`;
+  // Transient action notice (spawn outcome, or a stop/restore failure that
+  // would otherwise fail silently, #22).
+  function showNotice(message: string): void {
+    spawnNotice = message;
     clearTimeout(spawnNoticeTimer);
     spawnNoticeTimer = setTimeout(() => (spawnNotice = null), 6000);
+  }
+
+  function notifySpawn(result: SpawnResult): void {
+    showNotice(
+      result.ok
+        ? `起動しました: ${result.agent_id}`
+        : `起動に失敗: ${result.agent_id} (${result.reason ?? "error"})`,
+    );
+  }
+
+  // Surface a control-command failure (stop / restore) that the grid buttons
+  // would otherwise only console.warn (#22). `label` names the action.
+  function notifyActionError(label: string, err: unknown): void {
+    const reason = err instanceof Error ? err.message : "error";
+    showNotice(`${label}できません (${reason})`);
   }
 
   // Login form (案A): shown when there is no live session — first load with
@@ -443,10 +458,16 @@
               ? () => connection!.sendInterrupt(envelope.agent_id)
               : undefined}
             onStop={connection
-              ? () => connection!.stop(envelope.agent_id)
+              ? () =>
+                  connection!
+                    .stop(envelope.agent_id)
+                    .catch((e) => notifyActionError("終了", e))
               : undefined}
             onRestore={connection
-              ? () => connection!.restore(envelope.agent_id)
+              ? () =>
+                  connection!
+                    .restore(envelope.agent_id)
+                    .catch((e) => notifyActionError("復帰", e))
               : undefined}
             onDelete={connection
               ? () => connection!.deleteAgent(envelope.agent_id)

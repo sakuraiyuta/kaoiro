@@ -38,6 +38,22 @@ defmodule KaoiroServer.SessionPointersTest do
     assert SessionPointers.get("a.3", server) == %{session_id: "sess-3", cwd: nil}
   end
 
+  test "nil cwd は既知の cwd を上書きしない (#22)", %{server: server} do
+    SessionPointers.record("a.cwd", "sess-1", "/home/x", server)
+    # A later session_id-bearing record without a cwd (e.g. result/log) must
+    # keep the cwd that restore needs.
+    SessionPointers.record("a.cwd", "sess-2", nil, server)
+    assert SessionPointers.get("a.cwd", server) == %{session_id: "sess-2", cwd: "/home/x"}
+  end
+
+  test "cwd seed(session_id nil)後に実 session_id が付き cwd は残る (#22)", %{server: server} do
+    # spawn-time seed: cwd known, session_id not yet.
+    SessionPointers.record("a.seed", nil, "/home/y", server)
+    # wrapper later reports its session_id without a statusline cwd.
+    SessionPointers.record("a.seed", "sess-real", nil, server)
+    assert SessionPointers.get("a.seed", server) == %{session_id: "sess-real", cwd: "/home/y"}
+  end
+
   test "同一 DETS ファイルからの再起動で値が残る", %{server: server, path: path} do
     SessionPointers.record("a.4", "sess-4", "/w", server)
     assert SessionPointers.get("a.4", server) == %{session_id: "sess-4", cwd: "/w"}

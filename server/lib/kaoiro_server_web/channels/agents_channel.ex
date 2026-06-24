@@ -193,6 +193,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, agent_id} <- allocate_agent_id(host_id),
          {:ok, spawn_payload} <- build_spawn_payload(agent_id, persona, cwd, payload) do
       KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
+      # Seed the cwd now so restore works even if the wrapper never reports a
+      # statusline cwd (#22, ADR-0014): the real session_id arrives later and
+      # is preserved alongside this cwd (SessionPointers keeps non-nil fields).
+      SessionPointers.record(agent_id, nil, cwd)
       {:reply, {:ok, %{"agent_id" => agent_id}}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}

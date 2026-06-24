@@ -95,9 +95,17 @@ defmodule KaoiroServer.SessionPointers do
 
   @impl true
   def handle_cast({:record, agent_id, session_id, cwd}, state) do
+    existing = Map.get(state.pointers, agent_id, %{})
+    # Keep a previously-recorded field when this record carries none (#22):
+    # a session_id-bearing envelope without a statusline cwd (e.g. result /
+    # log) must not clobber the cwd that restore needs, and a spawn-time cwd
+    # seed (session_id nil) must not erase a known session_id. A non-nil value
+    # always wins, so a real session_id / cwd still updates.
+    session_id = session_id || Map.get(existing, :session_id)
+    cwd = cwd || Map.get(existing, :cwd)
     pointer = %{session_id: session_id, cwd: cwd}
 
-    if Map.get(state.pointers, agent_id) == pointer do
+    if existing == pointer do
       {:noreply, state}
     else
       :ok = :dets.insert(state.table, {agent_id, session_id, cwd})

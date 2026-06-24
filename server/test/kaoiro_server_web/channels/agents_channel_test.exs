@@ -914,6 +914,24 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute Map.has_key?(payload, "server_url")
     end
 
+    test "operator の spawn: cwd を SessionPointers に seed する(復帰用、#22)" do
+      host_id = "lab-pc-1s"
+      register_host(host_id, cwd_allowlist: ["/home/user/seed"])
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "mio",
+          "cwd" => "/home/user/seed"
+        })
+
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      # The cast is enqueued before the reply, so the pointer is set by now.
+      assert SessionPointers.get(agent_id) == %{session_id: nil, cwd: "/home/user/seed"}
+    end
+
     test "operator の spawn: initial_prompt を payload に載せる" do
       host_id = "lab-pc-1b"
       register_host(host_id)
