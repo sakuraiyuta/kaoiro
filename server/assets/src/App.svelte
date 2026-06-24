@@ -2,12 +2,15 @@
   import { onMount } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
+  import LaunchDialog from "./lib/LaunchDialog.svelte";
   import { expressionFor, spriteUrlFor } from "./lib/expression";
   import type {
     ConnectionStatus,
     Envelope,
+    HostInfo,
     KaoiroConnection,
     PersonaManifest,
+    SpawnResult,
   } from "./lib/protocol";
   import {
     connectKaoiro,
@@ -33,6 +36,24 @@
   let status = $state<ConnectionStatus>("connecting");
   let manifest = $state<PersonaManifest | null>(null);
   let connection = $state<KaoiroConnection | null>(null);
+
+  // Launch UI (#22, operator-only). `hosts` and operator-ness both come from
+  // the `hosts` push, which only operators receive — so its arrival is what
+  // reveals the launch affordance. `spawnNotice` is a transient toast for the
+  // runner's spawn outcome.
+  let hosts = $state<HostInfo[]>([]);
+  let isOperator = $state(false);
+  let showLaunch = $state(false);
+  let spawnNotice = $state<string | null>(null);
+  let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function notifySpawn(result: SpawnResult): void {
+    spawnNotice = result.ok
+      ? `起動しました: ${result.agent_id}`
+      : `起動に失敗: ${result.agent_id} (${result.reason ?? "error"})`;
+    clearTimeout(spawnNoticeTimer);
+    spawnNoticeTimer = setTimeout(() => (spawnNotice = null), 6000);
+  }
 
   // Login form (案A): shown when there is no live session — first load with
   // no usable cookie, after logout, or on a revoked-session 401. Submitting
@@ -134,6 +155,13 @@
             );
           }
         },
+        onHosts: (next) => {
+          // Operators alone receive `hosts`, so this is also the operator
+          // signal that reveals the launch UI (#22).
+          hosts = next;
+          isOperator = true;
+        },
+        onSpawnResult: (result) => notifySpawn(result),
       },
       connectOpts,
     );
@@ -166,6 +194,11 @@
     }
     connection?.disconnect();
     connection = null;
+    // Hide the launch UI until the next connection re-announces hosts; a
+    // revoked/expired session must not keep the operator affordance.
+    hosts = [];
+    isOperator = false;
+    showLaunch = false;
   }
 
   // Mints a short-lived WS ticket from the current httpOnly cookie and opens
@@ -349,12 +382,29 @@
     </nav>
   {/if}
   <div class="session">
+    {#if isOperator && connection}
+      <button type="button" class="launch" onclick={() => (showLaunch = true)}>
+        ＋ 起動
+      </button>
+    {/if}
     <p class="conn" data-status={status}>
       <span class="conn-dot"></span>{status}
     </p>
     <button type="button" class="logout" onclick={logout}>ログアウト</button>
   </div>
 </header>
+
+{#if spawnNotice}
+  <p class="spawn-notice" role="status">{spawnNotice}</p>
+{/if}
+
+{#if showLaunch && connection}
+  <LaunchDialog
+    {hosts}
+    {connection}
+    onClose={() => (showLaunch = false)}
+  />
+{/if}
 
 <main>
   {#if selectedEnvelope}
@@ -594,6 +644,33 @@
   .logout:hover {
     color: var(--fg);
     border-color: var(--fg-dim);
+  }
+
+  .launch {
+    font-size: 0.75rem;
+    color: var(--fg);
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.25rem 0.7rem;
+    cursor: pointer;
+    transition:
+      color 0.2s,
+      border-color 0.2s;
+  }
+
+  .launch:hover {
+    border-color: var(--fg-dim);
+  }
+
+  .spawn-notice {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0.4rem 2rem;
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--line);
   }
 
   /* Token-entry login (案A): a centred card filling the main area when there

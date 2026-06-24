@@ -149,6 +149,34 @@ export async function fetchPersonaManifest(
   }
 }
 
+/** A live host the operator can launch agents on (ADR-0023 / #22). Derived
+ *  from the operator-only `hosts` push; viewers never receive it. */
+export interface HostInfo {
+  host_id: string;
+  personas: Persona[];
+  cwd_allowlist: string[];
+  capabilities?: string[];
+}
+
+/** Operator launch request (案A, ADR-0024). The client sends only these; the
+ *  server allocates agent_id and mints the per-agent token. */
+export interface SpawnRequest {
+  host_id: string;
+  /** persona id, resolved server-side to the host's declared persona. */
+  persona: string;
+  cwd: string;
+  initial_prompt?: string;
+  resume_session_id?: string;
+}
+
+/** Outcome of a spawn, forwarded from the runner (operator-only). */
+export interface SpawnResult {
+  host_id: string;
+  agent_id: string;
+  ok: boolean;
+  reason?: string;
+}
+
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 export interface KaoiroHandlers {
@@ -166,6 +194,12 @@ export interface KaoiroHandlers {
   /** A disconnected agent was removed (issue #14): drop it from the grid.
    *  Operator-only. */
   onAgentDeleted?: (agentId: string) => void;
+  /** Live launchable hosts (#22); pushed on join and on every host
+   *  register/drop. Operator-only — its arrival also marks this client an
+   *  operator (viewers never receive it). */
+  onHosts?: (hosts: HostInfo[]) => void;
+  /** A spawn outcome forwarded from the runner (#22). Operator-only. */
+  onSpawnResult?: (result: SpawnResult) => void;
 }
 
 export interface KaoiroConnection {
@@ -189,6 +223,11 @@ export interface KaoiroConnection {
   /** Removes a disconnected agent (issue #14); rejects like
    * sendInstruction (forbidden / unknown_agent / not_disconnected). */
   deleteAgent: (agentId: string) => Promise<void>;
+  /** Requests a spawn (#22, 案A); resolves with the server-allocated
+   * agent_id. Rejects like sendInstruction (forbidden / unknown_host /
+   * unknown_persona / cwd_not_allowed). The eventual launch outcome
+   * arrives separately via onSpawnResult. */
+  spawn: (request: SpawnRequest) => Promise<{ agentId: string }>;
 }
 
 export interface ConnectOptions {
@@ -206,6 +245,32 @@ function isEnvelope(value: unknown): value is Envelope {
     typeof (value as Envelope).agent_id === "string" &&
     typeof (value as Envelope).state === "string"
   );
+}
+
+/** Parses the `hosts` map (host_id => entry) into a HostInfo list, keeping
+ *  only the operator-facing fields and skipping malformed entries. */
+export function parseHosts(value: unknown): HostInfo[] {
+  if (typeof value !== "object" || value === null) return [];
+  const hosts: HostInfo[] = [];
+  for (const [hostId, entry] of Object.entries(value)) {
+    if (
+      typeof entry === "object" &&
+      entry !== null &&
+      Array.isArray((entry as HostInfo).personas) &&
+      Array.isArray((entry as HostInfo).cwd_allowlist)
+    ) {
+      const e = entry as HostInfo;
+      hosts.push({
+        host_id: hostId,
+        personas: e.personas,
+        cwd_allowlist: e.cwd_allowlist,
+        ...(Array.isArray(e.capabilities)
+          ? { capabilities: e.capabilities }
+          : {}),
+      });
+    }
+  }
+  return hosts;
 }
 
 function pushAsync(
@@ -282,6 +347,24 @@ export function connectKaoiro(
       handlers.onAgentDeleted?.(payload.agent_id);
     }
   });
+  channel.on("hosts", (payload: { hosts?: unknown }) => {
+    handlers.onHosts?.(parseHosts(payload.hosts));
+  });
+  channel.on("spawn_result", (payload: unknown) => {
+    const p = payload as Partial<SpawnResult>;
+    if (
+      typeof p.host_id === "string" &&
+      typeof p.agent_id === "string" &&
+      typeof p.ok === "boolean"
+    ) {
+      handlers.onSpawnResult?.({
+        host_id: p.host_id,
+        agent_id: p.agent_id,
+        ok: p.ok,
+        ...(typeof p.reason === "string" ? { reason: p.reason } : {}),
+      });
+    }
+  });
   channel.join();
 
   return {
@@ -303,6 +386,20 @@ export function connectKaoiro(
       pushAsync(channel, "clear_history", { agent_id: agentId }),
     deleteAgent: (agentId) =>
       pushAsync(channel, "delete_agent", { agent_id: agentId }),
+    spawn: (request) =>
+      new Promise((resolve, reject) => {
+        channel
+          .push("spawn", { ...request })
+          .receive("ok", (resp: { agent_id?: unknown }) =>
+            typeof resp?.agent_id === "string"
+              ? resolve({ agentId: resp.agent_id })
+              : reject(new Error("error")),
+          )
+          .receive("error", (reason: { reason?: string } | undefined) =>
+            reject(new Error(reason?.reason ?? "error")),
+          )
+          .receive("timeout", () => reject(new Error("timeout")));
+      }),
   };
 }
 

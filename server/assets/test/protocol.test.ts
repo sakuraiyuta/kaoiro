@@ -3,6 +3,7 @@ import {
   fetchPersonaManifest,
   isReplyEnvelope,
   logOf,
+  parseHosts,
   pendingPermissionFrom,
   resultOf,
 } from "../src/lib/protocol";
@@ -132,5 +133,45 @@ describe("logOf / resultOf / isReplyEnvelope", () => {
     expect(isReplyEnvelope({ ...log, type: "result" })).toBe(true);
     expect(isReplyEnvelope({ ...log, type: "state_change" })).toBe(false);
     expect(isReplyEnvelope({ ...log, type: "permission_request" })).toBe(false);
+  });
+});
+
+describe("parseHosts (#22)", () => {
+  const mio = { id: "mio", name: "澪", sprite_set: "mio" };
+
+  it("hosts マップを HostInfo 配列へ変換する", () => {
+    expect(
+      parseHosts({
+        "lab-pc-1": {
+          personas: [mio],
+          cwd_allowlist: ["/home/user/proj"],
+          capabilities: ["claude"],
+          runner_pid: "ignored",
+        },
+      }),
+    ).toEqual([
+      {
+        host_id: "lab-pc-1",
+        personas: [mio],
+        cwd_allowlist: ["/home/user/proj"],
+        capabilities: ["claude"],
+      },
+    ]);
+  });
+
+  it("personas / cwd_allowlist が欠けるエントリは捨てる", () => {
+    expect(
+      parseHosts({
+        bad: { personas: [mio] },
+        ok: { personas: [mio], cwd_allowlist: ["/p"] },
+      }),
+    ).toEqual([
+      { host_id: "ok", personas: [mio], cwd_allowlist: ["/p"] },
+    ]);
+  });
+
+  it("マップでない値は空配列", () => {
+    expect(parseHosts(null)).toEqual([]);
+    expect(parseHosts(undefined)).toEqual([]);
   });
 });
