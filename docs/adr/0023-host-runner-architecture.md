@@ -114,6 +114,27 @@ UI からのリモート spawn は実質リモートコード実行(issue #22)�
   ([ADR-0014](0014-session-resume-and-restore.md) F4)。spawn 競合は
   `spawn_result.reason = already_running` で返す。
 
+### TS パッケージ・トポロジ(#68 着手前、2026-06-24 追補)
+
+D3 の「wrapper と型を共有」を、**複数 wrapper を前提**に具体化する。wrapper は
+当面 Claude Code CLI 版のみだが、将来 codex 版・ホスト状態取得 / クライアント提供版
+を**別パッケージ**として追加予定。同一 protocol / envelope を話す TS consumer が
+3 つ以上に増えるため、各実装が protocol.md から型を**自前コピー**する現行流儀
+(wrapper / dashboard が各々保持)は drift が線形に増え、SSOT を型レベルで破る。
+
+決定:
+
+- リポジトリルートに最小 **pnpm workspace** を導入し、共有パッケージ
+  **`@kaoiro/protocol`** を切り出す。中身 = envelope / 制御メッセージ / agent 状態型
+  - **全 wrapper 共通の spawn / CLI 契約**。これを TS 側の SSOT とする。
+- 現 `@kaoiro/wrapper`(= Claude 版)は protocol 関連型を共有パッケージへ移して
+  参照に切替。**リネームは codex 版追加時まで先送り**(今は型抽出のみ、挙動不変)。
+- runner(`@kaoiro/runner`)および将来の wrapper 群はこの共有パッケージを consume。
+- **適用範囲は Node 側に限定**。dashboard(`server/assets`)は別ビルド系のため
+  本作業では据え置き(独自 `protocol.ts` 継続、整合は将来別件)。
+- 単一バイナリ([ADR-0018](0018-runner-distribution.md))への複数 wrapper バンドル
+  方式は隣接論点として配布フェーズ([#70](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/70))で詰める。本決定は型 / パッケージ構造のみ。
+
 ## Consequences
 
 ### Positive
