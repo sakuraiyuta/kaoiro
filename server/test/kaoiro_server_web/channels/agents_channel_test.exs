@@ -5,6 +5,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
   alias KaoiroServer.AgentStates
   alias KaoiroServer.HostRegistry
+  alias KaoiroServer.SessionPointers
   alias KaoiroServerWeb.AgentsChannel
 
   defp put_agent(agent_id) do
@@ -1075,6 +1076,70 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :error, %{reason: "cwd_not_allowed"}
       refute_broadcast "spawn", %{}
+    end
+  end
+
+  describe "restore (#22, ADR-0014 復帰)" do
+    defp disconnect_with_session(agent_id, session_id) do
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "persona" => @mio,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "disconnected",
+          "session_id" => session_id
+        })
+    end
+
+    test "operator の restore: 同一 agent_id を resume 付きで runner へ再 spawn" do
+      host_id = "lab-pc-1"
+      agent_id = "lab-pc-1.rev1"
+      disconnect_with_session(agent_id, "sess-rev-1")
+      :ok = SessionPointers.record(agent_id, "sess-rev-1", "/home/user/proj")
+      # Flush the async cast before the handler reads the pointer.
+      SessionPointers.get(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok
+      assert_broadcast "spawn", payload
+      # Same agent_id (revive in place), resume the recorded session under cwd,
+      # keep the last persona, fresh token.
+      assert payload["agent_id"] == agent_id
+      assert payload["resume_session_id"] == "sess-rev-1"
+      assert payload["cwd"] == "/home/user/proj"
+      assert payload["persona"] == @mio
+      assert is_binary(payload["token"])
+    end
+
+    test "session pointer が無ければ no_session" do
+      agent_id = "lab-pc-1.rev2"
+      disconnect_with_session(agent_id, "sess-rev-2")
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => agent_id})
+
+      assert_reply ref, :error, %{reason: "no_session"}
+    end
+
+    test "未知 agent の restore は unknown_agent" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => "lab-pc-1.ghost"})
+
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+
+    test "viewer の restore は forbidden" do
+      socket = join_as(:viewer)
+
+      ref = push(socket, "restore", %{"agent_id" => "lab-pc-1.rev3"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
     end
   end
 

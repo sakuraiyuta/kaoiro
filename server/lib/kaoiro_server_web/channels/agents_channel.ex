@@ -47,6 +47,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.HostRegistry
+  alias KaoiroServer.SessionPointers
   alias KaoiroServerWeb.AgentId
 
   # Resource bound for an operator instruction; generous for prose,
@@ -74,7 +75,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    payload_too_large missing_agent_id invalid_agent_id
                    already_running missing_host_id invalid_host_id
                    unknown_host unknown_persona invalid_persona
-                   cwd_not_allowed invalid_cwd invalid_name)a
+                   cwd_not_allowed invalid_cwd invalid_name no_session)a
 
   @impl true
   def join("agents:lobby", _params, socket) do
@@ -208,6 +209,32 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   def handle_in("enumerate_sessions", payload, socket) do
     relay_to_runner_guarded(socket, payload, "enumerate_sessions")
+  end
+
+  # Operator-only restore (#22, ADR-0014「復帰」): bring a disconnected agent
+  # back under its SAME agent_id by re-spawning with resume. The server holds
+  # everything needed: the SessionPointer (session_id + cwd, restart-surviving)
+  # and the last persona (incl. any custom name) from its state entry. The host
+  # is derived from the agent_id (`<host>.<rand>`, ADR-0024 D3). Reuses the
+  # spawn → runner path, so the runner is unchanged (it does the T3 existence
+  # check + F4 lock). Reviving the same agent_id keeps the face / mood / tile.
+  def handle_in("restore", payload, socket) do
+    with :ok <- require_operator(socket),
+         {:ok, agent_id} <- fetch_agent_id(payload),
+         {:ok, persona} <- agent_persona(agent_id),
+         {:ok, session_id, cwd} <- session_pointer(agent_id),
+         {:ok, spawn_payload} <-
+           build_restore_payload(agent_id, persona, cwd, session_id) do
+      KaoiroServerWeb.Endpoint.broadcast(
+        "runner:#{host_id_of(agent_id)}",
+        "spawn",
+        spawn_payload
+      )
+
+      {:reply, :ok, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
   end
 
   # Operator-only purge of an agent's past-session reply log (issue #48).
@@ -395,6 +422,54 @@ defmodule KaoiroServerWeb.AgentsChannel do
     do: Map.put(map, key, value)
 
   defp maybe_put_string(map, _key, _value), do: map
+
+  # The agent's last-known persona (incl. any custom name) from its state
+  # entry; restore re-spawns with it so the revived agent keeps its identity.
+  defp agent_persona(agent_id) do
+    case AgentStates.snapshot()[agent_id] do
+      %{"persona" => persona} when is_map(persona) -> {:ok, persona}
+      _ -> {:error, :unknown_agent}
+    end
+  end
+
+  # The restart-surviving resume pointer. Both session_id AND cwd must be known
+  # (the runner resumes under cwd and verifies the session exists there, T3); a
+  # pointer that never recorded a cwd cannot be restored.
+  defp session_pointer(agent_id) do
+    case SessionPointers.get(agent_id) do
+      %{session_id: sid, cwd: cwd} when is_binary(sid) and is_binary(cwd) ->
+        {:ok, sid, cwd}
+
+      _ ->
+        {:error, :no_session}
+    end
+  end
+
+  # host_id is the agent_id minus its last `.segment` — the server allocated it
+  # as `<host_id>.<rand>` with a dot-free suffix (ADR-0024 D3), so the host is
+  # everything before the last dot.
+  defp host_id_of(agent_id) do
+    case String.split(agent_id, ".") do
+      parts when length(parts) > 1 -> parts |> Enum.drop(-1) |> Enum.join(".")
+      _ -> agent_id
+    end
+  end
+
+  defp build_restore_payload(agent_id, persona, cwd, session_id) do
+    spawn_payload = %{
+      "version" => "0",
+      "agent_id" => agent_id,
+      "persona" => persona,
+      "cwd" => cwd,
+      "token" => Auth.mint_wrapper_token(agent_id),
+      "resume_session_id" => session_id
+    }
+
+    case check_relay_size(spawn_payload) do
+      :ok -> {:ok, spawn_payload}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   # Bounds the whole relayed map, not just the whitelisted keys, so an
   # oversized blob in an opaque extra key cannot reach the wrapper process
