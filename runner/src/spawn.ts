@@ -76,12 +76,16 @@ export function makeLauncher(): LaunchFn {
     config: WrapperConfig,
     cwd: string,
     resumeSessionId?: string,
+    initialPrompt?: string,
   ): ManagedChild => {
     const configPath = join(dir, `${agentId}-${counter}.json`);
     counter += 1;
     writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
 
+    // wrapper CLI: [configPath] [prompt] [--resume <id>]. The prompt is the
+    // positional after configPath, so it must precede the --resume flag.
     const args = [wrapperCli, configPath];
+    if (initialPrompt !== undefined) args.push(initialPrompt);
     if (resumeSessionId !== undefined) args.push("--resume", resumeSessionId);
     const child = spawn(process.execPath, args, { cwd, stdio: "inherit" });
 

@@ -42,19 +42,29 @@ class FakeChild implements ManagedChild {
 }
 
 function harness(
-  opts: { cwdAllowlist?: string[]; sessions?: SessionMeta[]; exists?: boolean } = {},
+  opts: {
+    cwdAllowlist?: string[];
+    sessions?: SessionMeta[];
+    exists?: boolean;
+    wrapperServerUrl?: string;
+  } = {},
 ) {
   const children: FakeChild[] = [];
   const results: SpawnResult[] = [];
   const configs: WrapperConfig[] = [];
   const resumes: Array<string | undefined> = [];
+  const prompts: Array<string | undefined> = [];
   const sessionsSent: RunnerSessions[] = [];
   const sup = new Supervisor({
     hostId: "lab-pc-1",
     cwdAllowlist: opts.cwdAllowlist ?? allowlist,
-    launch: (_agentId, config, _cwd, resumeSessionId) => {
+    ...(opts.wrapperServerUrl === undefined
+      ? {}
+      : { wrapperServerUrl: opts.wrapperServerUrl }),
+    launch: (_agentId, config, _cwd, resumeSessionId, initialPrompt) => {
       configs.push(config);
       resumes.push(resumeSessionId);
+      prompts.push(initialPrompt);
       const child = new FakeChild();
       children.push(child);
       return child;
@@ -70,6 +80,7 @@ function harness(
     results,
     configs,
     resumes,
+    prompts,
     sessionsSent,
     last: () => children[children.length - 1]!,
   };
@@ -112,6 +123,36 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     });
     expect("allowed_tools" in config).toBe(false);
   });
+  it("server_url 省略を許す(案A: runner が補完)", () => {
+    const { server_url: _omit, ...rest } = spawnMsg;
+    void _omit;
+    const parsed = parseSpawn(rest)!;
+    expect(parsed.serverUrl).toBeUndefined();
+  });
+  it("server_url 省略時は fallback を wrapper config に載せる", () => {
+    const { server_url: _omit, ...rest } = spawnMsg;
+    void _omit;
+    const parsed = parseSpawn(rest)!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.claude-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+    );
+    expect(config.server_url).toBe("ws://localhost:4000/wrapper");
+  });
+  it("spawn の server_url は fallback より優先する", () => {
+    const parsed = parseSpawn(spawnMsg)!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.claude-a",
+      parsed,
+      "ws://other/wrapper",
+    );
+    expect(config.server_url).toBe(spawnMsg.server_url);
+  });
+  it("initial_prompt を解釈する", () => {
+    const parsed = parseSpawn({ ...spawnMsg, initial_prompt: "やあ" })!;
+    expect(parsed.initialPrompt).toBe("やあ");
+  });
 });
 
 describe("isCwdAllowed", () => {
@@ -144,6 +185,20 @@ describe("Supervisor.handleSpawn", () => {
     h.sup.handleSpawn(spawnMsg);
     expect(h.children).toHaveLength(1);
     expect(h.results[1]).toMatchObject({ ok: false, reason: "already_running" });
+  });
+
+  it("initial_prompt を launch へ渡す", () => {
+    const h = harness();
+    h.sup.handleSpawn({ ...spawnMsg, initial_prompt: "最初の指示" });
+    expect(h.prompts[0]).toBe("最初の指示");
+  });
+
+  it("server_url 省略時は wrapperServerUrl fallback で起動する", () => {
+    const { server_url: _omit, ...rest } = spawnMsg;
+    void _omit;
+    const h = harness({ wrapperServerUrl: "ws://localhost:4000/wrapper" });
+    h.sup.handleSpawn(rest);
+    expect(h.configs[0]!.server_url).toBe("ws://localhost:4000/wrapper");
   });
 
   it("同期 launch 失敗を error で報告し slot を残さない", () => {

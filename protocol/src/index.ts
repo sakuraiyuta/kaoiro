@@ -133,18 +133,22 @@ export interface RunnerHeartbeat {
   host_id: string;
 }
 
-/** server -> runner, operator-only: launch a wrapper for agent_id. The server
- *  relays the operator's payload verbatim (minus host_id), so server_url/token
- *  are operator-supplied. cwd must be in the host's allow-list (T1).
- *  resume_session_id requests a resume (honored in a later phase, with the
- *  existence check (T3) and the local lock (F4)). */
+/** server -> runner, operator-only: launch a wrapper for agent_id. Under案A
+ *  (ADR-0024) the server fills the sensitive fields: it allocates agent_id and
+ *  mints the per-agent `token`; the operator only chose host/persona/cwd. cwd
+ *  must be in the host's allow-list (T1). `server_url` is optional — when the
+ *  server omits it, the runner supplies the wrapper socket URL from its own
+ *  config (it already knows how to reach the server). `initial_prompt`, when
+ *  set, is the wrapper's first turn. `resume_session_id` requests a resume
+ *  (with the existence check (T3) and the local lock (F4)). */
 export interface SpawnMessage {
   version: "0";
   agent_id: string;
   persona: Persona;
   cwd: string;
-  server_url: string;
+  server_url?: string;
   token?: string;
+  initial_prompt?: string;
   resume_session_id?: string;
 }
 

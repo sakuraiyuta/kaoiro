@@ -8,7 +8,7 @@
 //   KAOIRO_RUNNER_TOKEN (unset = the server's runner auth is disabled, dev).
 
 import { parseRunnerArgs } from "./args.js";
-import { buildRegister, loadRunnerConfig } from "./config.js";
+import { buildRegister, loadRunnerConfig, wrapperUrlFrom } from "./config.js";
 import { makeLauncher } from "./spawn.js";
 import { Supervisor } from "./supervisor.js";
 import { RunnerLink } from "./transport.js";
@@ -28,6 +28,7 @@ function main(): void {
     hostId: config.host_id,
     cwdAllowlist: config.cwd_allowlist,
     launch: makeLauncher(),
+    wrapperServerUrl: wrapperUrlFrom(config.server_url),
     sendResult: (result) => link.sendSpawnResult(result),
     sendSessions: (sessions) => link.sendSessions(sessions),
   });

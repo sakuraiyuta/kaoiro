@@ -34,20 +34,26 @@ export interface ManagedChild {
 }
 
 /** Launches one wrapper child. resumeSessionId, when set, continues an existing
- *  SDK session (the launcher passes it to the wrapper as `--resume`). */
+ *  SDK session (the launcher passes it to the wrapper as `--resume`).
+ *  initialPrompt, when set, is the wrapper's first turn (passed as the positional
+ *  prompt arg). */
 export type LaunchFn = (
   agentId: string,
   config: WrapperConfig,
   cwd: string,
   resumeSessionId?: string,
+  initialPrompt?: string,
 ) => ManagedChild;
 
-/** The validated fields of a `spawn` message the supervisor acts on. */
+/** The validated fields of a `spawn` message the supervisor acts on. serverUrl
+ *  is optional: under案A the server omits it and the runner falls back to its
+ *  own wrapper URL (ADR-0024). */
 export interface ParsedSpawn {
   persona: Persona;
   cwd: string;
-  serverUrl: string;
+  serverUrl?: string;
   token?: string;
+  initialPrompt?: string;
   resumeSessionId?: string;
 }
 
@@ -55,6 +61,9 @@ export interface SupervisorOptions {
   hostId: string;
   cwdAllowlist: string[];
   launch: LaunchFn;
+  /** Fallback wrapper socket URL used when a spawn omits server_url (案A,
+   *  ADR-0024). Derived from the runner's own server_url (config.wrapperUrlFrom). */
+  wrapperServerUrl?: string;
   sendResult: (result: SpawnResult) => void;
   sendSessions: (sessions: RunnerSessions) => void;
   /** Injectable for tests; defaults read the local Claude JSONLs (sessions.ts). */
@@ -99,16 +108,21 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   const persona = parsePersona(payload.persona);
   if (persona === null) return null;
   if (typeof payload.cwd !== "string" || payload.cwd === "") return null;
-  if (typeof payload.server_url !== "string" || payload.server_url === "") {
+  // server_url is optional (案A): reject only a present-but-ill-typed value;
+  // when absent the runner supplies its own wrapper URL at launch.
+  if (payload.server_url !== undefined && typeof payload.server_url !== "string") {
     return null;
   }
   const parsed: ParsedSpawn = {
     persona,
     cwd: payload.cwd,
-    serverUrl: payload.server_url,
   };
+  const serverUrl = optionalString(payload.server_url);
+  if (serverUrl !== undefined && serverUrl !== "") parsed.serverUrl = serverUrl;
   const token = optionalString(payload.token);
   if (token !== undefined) parsed.token = token;
+  const prompt = optionalString(payload.initial_prompt);
+  if (prompt !== undefined && prompt !== "") parsed.initialPrompt = prompt;
   const resume = optionalString(payload.resume_session_id);
   if (resume !== undefined) parsed.resumeSessionId = resume;
   return parsed;
@@ -126,12 +140,14 @@ export function isCwdAllowed(cwd: string, allowlist: string[]): boolean {
 export function resolveWrapperConfig(
   agentId: string,
   parsed: ParsedSpawn,
+  fallbackServerUrl?: string,
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
     persona: parsed.persona,
-    server_url: parsed.serverUrl,
   };
+  const serverUrl = parsed.serverUrl ?? fallbackServerUrl;
+  if (serverUrl !== undefined) config.server_url = serverUrl;
   if (parsed.token !== undefined) config.server_token = parsed.token;
   return config;
 }
@@ -152,6 +168,7 @@ export class Supervisor {
   readonly #sendSessions: (sessions: RunnerSessions) => void;
   readonly #listSessions: (cwd: string) => SessionMeta[];
   readonly #sessionExists: (cwd: string, sessionId: string) => boolean;
+  readonly #wrapperServerUrl: string | undefined;
   readonly #children = new Map<string, ChildEntry>();
   /** session_ids currently being resumed — the F4 local lock against a second
    *  concurrent resume of the same session. */
@@ -165,6 +182,7 @@ export class Supervisor {
     this.#sendSessions = options.sendSessions;
     this.#listSessions = options.listSessions ?? defaultListSessions;
     this.#sessionExists = options.sessionExists ?? defaultSessionExists;
+    this.#wrapperServerUrl = options.wrapperServerUrl;
   }
 
   /** Handles a server `spawn`: validates, enforces the cwd allow-list, the
@@ -283,9 +301,10 @@ export class Supervisor {
   #start(agentId: string, parsed: ParsedSpawn): void {
     const child = this.#launch(
       agentId,
-      resolveWrapperConfig(agentId, parsed),
+      resolveWrapperConfig(agentId, parsed, this.#wrapperServerUrl),
       parsed.cwd,
       parsed.resumeSessionId,
+      parsed.initialPrompt,
     );
     const entry: ChildEntry = {
       child,
@@ -334,9 +353,12 @@ export class Supervisor {
   #relaunch(agentId: string, entry: ChildEntry): void {
     let child: ManagedChild;
     try {
+      // initialPrompt is deliberately NOT re-sent on an auto-restart: re-running
+      // a possibly side-effectful first turn on every crash is unsafe. A restarted
+      // agent comes back idle and awaits the next instruction.
       child = this.#launch(
         agentId,
-        resolveWrapperConfig(agentId, entry.parsed),
+        resolveWrapperConfig(agentId, entry.parsed, this.#wrapperServerUrl),
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
       );

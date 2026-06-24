@@ -178,4 +178,17 @@ export function buildHeartbeat(hostId: string): RunnerHeartbeat {
   return { version: "0", host_id: hostId };
 }
 
+/**
+ * Derives the wrapper socket URL from the runner's own server_url. Under案A
+ * (ADR-0024) the server allocates agent_id and mints the per-agent token but
+ * does not send server_url; the runner supplies it, since it already knows how
+ * to reach the server. The wrapper socket shares the server origin on the
+ * `/wrapper` mount (the runner uses `/runner`), so we keep the origin and swap
+ * the path.
+ */
+export function wrapperUrlFrom(serverUrl: string): string {
+  const url = new URL(serverUrl);
+  return `${url.protocol}//${url.host}/wrapper`;
+}
+
 export { ConfigError };

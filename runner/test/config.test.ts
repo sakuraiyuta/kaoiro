@@ -4,6 +4,7 @@ import {
   buildHeartbeat,
   buildRegister,
   parseRunnerConfig,
+  wrapperUrlFrom,
 } from "../src/config.js";
 
 const valid = {
@@ -94,5 +95,18 @@ describe("buildHeartbeat", () => {
       version: "0",
       host_id: "lab-pc-1",
     });
+  });
+});
+
+describe("wrapperUrlFrom", () => {
+  it("runner URL の origin を保ち /wrapper へ差し替える", () => {
+    expect(wrapperUrlFrom("ws://localhost:4000/runner")).toBe(
+      "ws://localhost:4000/wrapper",
+    );
+  });
+  it("wss と非標準ポートを保つ", () => {
+    expect(wrapperUrlFrom("wss://kaoiro.example:8443/runner")).toBe(
+      "wss://kaoiro.example:8443/wrapper",
+    );
   });
 });
