@@ -445,6 +445,9 @@
             onStop={connection
               ? () => connection!.stop(envelope.agent_id)
               : undefined}
+            onRestore={connection
+              ? () => connection!.restore(envelope.agent_id)
+              : undefined}
             onDelete={connection
               ? () => connection!.deleteAgent(envelope.agent_id)
               : undefined}

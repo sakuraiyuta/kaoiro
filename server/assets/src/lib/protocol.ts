@@ -269,6 +269,12 @@ export interface KaoiroConnection {
    * derived from the agent_id (hostIdFromAgentId). A no-op for an agent no
    * runner owns. Rejects like sendInstruction (forbidden / timeout). */
   stop: (agentId: string) => Promise<void>;
+  /** Restores a disconnected agent (#22, ADR-0014「復帰」): the server
+   * re-spawns the SAME agent_id with resume from its recorded session
+   * pointer, so the agent comes back with its face / mood / conversation.
+   * Rejects with `no_session` when no resumable pointer (session_id + cwd)
+   * was recorded, `unknown_agent` when the agent is not known. */
+  restore: (agentId: string) => Promise<void>;
   /** Requests a spawn (#22, 案A); resolves with the server-allocated
    * agent_id. Rejects like sendInstruction (forbidden / unknown_host /
    * unknown_persona / cwd_not_allowed). The eventual launch outcome
@@ -472,6 +478,8 @@ export function connectKaoiro(
         host_id: hostIdFromAgentId(agentId),
         agent_id: agentId,
       }),
+    restore: (agentId) =>
+      pushAsync(channel, "restore", { agent_id: agentId }),
     spawn: (request) =>
       new Promise((resolve, reject) => {
         channel

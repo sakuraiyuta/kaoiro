@@ -290,6 +290,16 @@
   const canStop = $derived(envelope.state !== "disconnected");
   let stopping = $state(false);
 
+  // Restore is offered for a disconnected agent with a resumable session
+  // (#22, ADR-0014); it sits in the terminate button's slot (the two never
+  // show at once — terminate is hidden once disconnected).
+  const canRestore = $derived(
+    envelope.state === "disconnected" &&
+      typeof envelope.session_id === "string" &&
+      envelope.session_id !== "",
+  );
+  let restoring = $state(false);
+
   // Folded state of the permission dock (#…): when true it sits as a small
   // button in the conversation's top-right corner instead of covering the
   // transcript. permFullH carries the panel's natural height so the dock can
@@ -524,6 +534,21 @@
     });
   }
 
+  // Restore a disconnected agent (#22, ADR-0014「復帰」): re-spawn the same
+  // agent_id with resume from the server's session pointer. Non-destructive,
+  // so no confirm.
+  function restoreAgent(): void {
+    if (!connection || restoring) return;
+    void run(async () => {
+      restoring = true;
+      try {
+        await connection.restore(envelope.agent_id);
+      } finally {
+        restoring = false;
+      }
+    });
+  }
+
   // Purge past-session reply lines (#48): destructive and irreversible, so
   // confirm first. No-op without a known current session_id (the button is
   // disabled then); the server keeps only that session's lines.
@@ -658,6 +683,19 @@
           onclick={stopAgent}
         >
           {stopping ? "終了中…" : "エージェントを終了"}
+        </button>
+      {:else if connection && canRestore}
+        <!-- Restore a disconnected agent (#22, ADR-0014): same slot as the
+             terminate button (hidden once disconnected). Re-spawns the same
+             agent_id with resume; the server fills cwd from its pointer. -->
+        <button
+          type="button"
+          class="restore"
+          disabled={restoring}
+          title="セッションを再開してエージェントを復帰させる"
+          onclick={restoreAgent}
+        >
+          {restoring ? "復帰中…" : "エージェントを復帰"}
         </button>
       {/if}
     </aside>
@@ -950,6 +988,31 @@
   }
 
   .terminate:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  /* Restore button (#22): same pane-bottom slot as terminate, constructive
+     (waiting_input) tone rather than danger — it brings the agent back. */
+  .restore {
+    margin-top: 0.5rem;
+    width: 100%;
+    padding: 0.45rem 0.5rem;
+    border: 1px solid var(--c-waiting_input);
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, var(--c-waiting_input) 14%, var(--bg-card));
+    color: var(--c-waiting_input);
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .restore:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--c-waiting_input) 24%, var(--bg-card));
+  }
+
+  .restore:disabled {
     opacity: 0.6;
     cursor: not-allowed;
   }

@@ -11,6 +11,7 @@
     onSelect,
     onInterrupt,
     onStop,
+    onRestore,
     onDelete,
   }: {
     envelope: Envelope;
@@ -23,6 +24,9 @@
     onInterrupt?: (() => Promise<void>) | undefined;
     /** Terminate the wrapper (#22); pass undefined to hide the button. */
     onStop?: (() => Promise<void>) | undefined;
+    /** Restore a disconnected agent (#22, ADR-0014); pass undefined to hide
+     *  the button (e.g. no connection / viewer). */
+    onRestore?: (() => Promise<void>) | undefined;
     /** Remove a disconnected agent (#14); pass undefined to hide the
      *  button (e.g. no connection / viewer). */
     onDelete?: (() => Promise<void>) | undefined;
@@ -114,6 +118,31 @@
     }
   }
 
+  // Restore button for a disconnected agent that has a session to resume
+  // (#22, ADR-0014). Re-spawns the same agent_id; the server fills the cwd
+  // from its pointer. Bottom-left, where the (now-hidden) terminate chip sat.
+  const canRestore = $derived(
+    onRestore !== undefined &&
+      envelope.state === "disconnected" &&
+      typeof envelope.session_id === "string" &&
+      envelope.session_id !== "",
+  );
+
+  let restoring = $state(false);
+
+  async function handleRestore(event: MouseEvent): Promise<void> {
+    event.stopPropagation();
+    if (restoring || !onRestore) return;
+    restoring = true;
+    try {
+      await onRestore();
+    } catch (err) {
+      console.warn("restore failed:", err);
+    } finally {
+      restoring = false;
+    }
+  }
+
   // Delete button only for a disconnected agent (#14); mutually exclusive
   // with the interrupt button (running vs disconnected never overlap).
   const canDelete = $derived(
@@ -179,6 +208,17 @@
       aria-label="{name} を終了"
     >
       <span class="terminate-label">{stopping ? "終了中…" : "終了"}</span>
+    </button>
+  {:else if canRestore}
+    <button
+      type="button"
+      class="restore"
+      onclick={handleRestore}
+      disabled={restoring}
+      title="セッションを再開してエージェントを復帰させる"
+      aria-label="{name} を復帰"
+    >
+      <span class="restore-label">{restoring ? "復帰中…" : "復帰"}</span>
     </button>
   {/if}
   {#if canInterrupt}
@@ -489,6 +529,32 @@
   }
 
   .terminate:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* Restore button (#22): bottom-LEFT chip (same slot as terminate, which is
+     hidden once disconnected). A waiting_input tone marks it as the
+     constructive "bring it back" action, distinct from the danger delete. */
+  .restore {
+    position: absolute;
+    bottom: 0.35rem;
+    left: 0.35rem;
+    padding: 0.18rem 0.45rem;
+    border: 1px solid var(--c-waiting_input);
+    border-radius: 0.3rem;
+    background: var(--bg-card);
+    color: var(--c-waiting_input);
+    font: inherit;
+    font-size: 0.65rem;
+    cursor: pointer;
+  }
+
+  .restore:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--c-waiting_input) 14%, var(--bg-card));
+  }
+
+  .restore:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
