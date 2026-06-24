@@ -64,6 +64,7 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | セッション召喚時に runner が返す JSONL メタ(先頭プロンプト要約等)を operator role 限定・最小限に露出(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) | 将来(resume 機能と同時) |
 | resume 対象 session_id を当該 agent 束縛 cwd 配下に実在検証し、他 cwd/任意パスの resume を拒否(T3、runner が検証) | 将来(resume 機能と同時) |
 | 起動指示 UI(#22)は任意 cwd / 任意 repo clone を提示せず、選択可能 cwd を runner-config の allow-list に限定して RCE 面を bound(範囲=中、T1/T5) | 将来([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22) / [ADR-0023](../adr/0023-host-runner-architecture.md)) |
+| spawn 認証を runner 起動経由(常駐 or ワンショット)に一本化し、per-host runner トークン + サーバ発行の per-agent token で認証(秘匿値はサーバ内に留め operator/クライアントへ出さない)。漏洩被害がスコープ全体へ広がるワイルドカード共有トークンは**不採用**(検討は #71 へ棚上げ) | 将来([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4 / [#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22)) |
 
 ## Constraints
 

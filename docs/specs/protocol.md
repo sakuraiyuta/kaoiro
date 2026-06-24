@@ -176,7 +176,7 @@ session_id を指定して **resume** する単一機構で行う
 | runner → サーバ | `heartbeat` | `{ host_id }`。生存通知 |
 | runner → サーバ | `sessions` | `{ host_id, cwd, sessions: [{ session_id, summary?, mtime? }] }`。`enumerate_sessions` への応答。JSONL メタは最小・**operator 限定**(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) |
 | runner → サーバ | `spawn_result` | `{ host_id, agent_id, ok, reason? }`。失敗時 `reason` = `already_running` / `cwd_not_found` / `error` |
-| サーバ → runner | `spawn` | `{ agent_id, persona, cwd, server_url, token, resume_session_id? }`。**operator 限定**。`resume_session_id` 指定で resume 起動 |
+| サーバ → runner | `spawn` | `{ agent_id, persona, cwd, server_url, token, resume_session_id? }`。**operator 限定**。`resume_session_id` 指定で resume 起動。`agent_id` / `server_url` / `token` はクライアント入力ではなく**サーバが補完**(案A、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4) |
 | サーバ → runner | `stop` | `{ agent_id }`。**operator 限定** |
 | サーバ → runner | `restart` | `{ agent_id }`。**operator 限定** |
 | サーバ → runner | `enumerate_sessions` | `{ agent_id, cwd }`。**operator 限定**。当該 cwd 配下の resume 候補列挙を要求 |
@@ -196,7 +196,33 @@ session_id を指定して **resume** する単一機構で行う
 
 **二重起動防止**: server owner フェンシング(既存)+ runner ローカルロックの
 二段([ADR-0014](../adr/0014-session-resume-and-restore.md) F4)。spawn 競合は
-runner が弾き `spawn_result.reason = already_running` を返す。
+runner が弾き `spawn_result.reason = already_running` を返す。さらに、すでに
+live owner のいる `agent_id` の wrapper join はサーバが**明示拒否**する(従来の
+サイレント last-write-wins を改め偶発二重起動を可視化、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5)。
+
+### クライアント → サーバ 起動制御(#22、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))
+
+dashboard(operator)が起動 UI から出す要求。サーバは `runner:<host_id>` へ
+中継する(上記「runner 制御メッセージ」)。**persona = 型 / agent_id =
+インスタンス**であり、「同じ性質を複数 spawn」は同一 persona × 別 agent_id で
+表現する(D1)。
+
+| 方向 | イベント | payload |
+|---|---|---|
+| クライアント → サーバ | `spawn` | `{ host_id, persona, cwd, initial_prompt?, resume_session_id? }`。**operator 限定**。サーバが `agent_id` を採番し `server_url` + per-agent `token` を補完(案A、D3/D4)。`resume_session_id` 指定で resume 起動 |
+| クライアント → サーバ | `stop` / `restart` | `{ host_id, agent_id }`。**operator 限定** |
+| クライアント → サーバ | `enumerate_sessions` | `{ host_id, agent_id, cwd }`。**operator 限定**。resume 候補の列挙要求 |
+| サーバ → クライアント | `hosts` | `{ hosts: [{ host_id, personas, cwd_allowlist }] }`。host 登録の変化と join 直後に push。**operator 限定**(cwd 許可リスト等は機微、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
+| サーバ → クライアント | `runner_sessions` | `enumerate_sessions` 応答の転送。**operator 限定** |
+| サーバ → クライアント | `spawn_result` | `{ host_id, agent_id, ok, reason? }` の転送。**operator 限定** |
+
+**spawn 認証経路**: spawn は runner 起動経由に一本化する(常駐 or ワンショット
+`kaoiro-runner spawn …`)。信頼の起点は per-host runner トークン
+([ADR-0023](../adr/0023-host-runner-architecture.md))+ サーバが spawn 時に
+発行・注入する per-agent token であり、**per-agent トークンの事前登録は spawn
+経路では不要**([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)
+D2/D4)。token の発行方式・寿命は ADR-0024 の従属点(実装時確定)。素の `node
+wrapper` 直結(runner-less)の本格対応は [#71](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/71)。
 
 ### バージョニング方針
 
@@ -346,6 +372,10 @@ TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP
   - **`KAOIRO_WRAPPER_TOKENS` 未設定はラッパー認証を無効化(dev mode、任意の
     ラッパーが接続可)**。loopback 限定での開発利便のため。
   - 運用環境では必ず両 env を設定する([threat-model](threat-model.md))。
+- **spawn 経由で起動する wrapper** は上表の事前登録トークンに加え、サーバが
+  spawn 時に発行・注入する per-agent token でも認証できる(runner 一本化の
+  発行型経路、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)
+  D2/D4)。手動直結の事前登録トークン運用(上表)は据え置き。
 - `instruction` / `permission_decision` は operator role のみ受理。
 - ラッパー接続断はサーバが検知し、当該エージェントの状態を
   `disconnected` へ**サーバ導出**する(状態セット表の通り)。サーバ
