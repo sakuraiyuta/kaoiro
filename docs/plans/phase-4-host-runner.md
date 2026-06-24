@@ -94,6 +94,11 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   寿命は ADR-0024 の従属点(実装時確定)。
 - 新規 / resume は単一の起動導線で「新規 / 既存セッション再開」を切替(暫定)。
 - spawn 成否は `spawn_result` 受信で UI(グリッド/トースト)へ反映(暫定)。
+- #22 後の dashboard ライフサイクル制御(実装済): **任意エージェント名**
+  (spawn `name?` で persona.name 上書き)、**終了**(既存 `stop` 再利用、実行中は
+  警告)、**復帰**(`restore` 制御で同一 agent_id を resume 再 spawn)。復帰のため
+  spawn 時に cwd を SessionPointers へ seed する([protocol](../specs/protocol.md)
+  「クライアント → サーバ 起動制御」)。
 
 ## Followups (in-phase but unfinished)
 
