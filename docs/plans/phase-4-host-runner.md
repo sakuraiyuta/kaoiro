@@ -109,15 +109,18 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   **reject-newcomer** で拒否([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5、
   `AgentStates.connected?/2`)。既存を蹴る案はトークン保持者による敵対的 eviction を
   招くため不採用。異常切断後の正規再接続は socket timeout 窓(既定 ~60s)だけ遅延し、
-  その間 client がリトライして通る。join〜初回 envelope の極短窓は未カバー(Presence
-  導入が必要、優先度低)。
-- `SessionMeta.summary` は未充填(現状 `session_id` + `mtime` のみ)。JSONL
-  先頭/要約行の読取は将来の任意拡張(T2 最小露出は維持)。
-- supervisor の crash 再起動 cap は時間窓リセット無し(`MAX_RESTARTS` を
-  使い切ると以後 down のまま、明示 restart でのみリセット)。時間窓付き budget
-  は将来の任意改善。
-- 上記の低優先ポリッシュ(D5 短窓 / `SessionMeta.summary` / 再起動 cap 時間窓)は
-  [#73](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/73) で集約トラッキング。
+  その間 client がリトライして通る。join〜初回 envelope の極短窓は未カバー(完全に
+  閉じるには Phoenix.Presence 導入=アーキ決定が必要、優先度低)。
+  [#74](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/74) へ分離。
+- `SessionMeta.summary` を充填(#73、実装済)。runner が各 session JSONL の先頭を
+  バウンド読みして `ai-title` 優先・先頭 user 指示フォールバックで最小露出
+  (T2 維持)の summary を返し、再開ダイアログの候補表示に使う。
+- supervisor の crash 再起動 cap に時間窓を導入(#73、実装済)。`RESTART_WINDOW_MS`
+  より長い無事故期間で budget をリセットし、散発クラッシュでは cap を使い切らない
+  (tight な crash-loop のみ down のまま)。
+- 上記の低優先ポリッシュは集約していた
+  [#73](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/73) で追跡。
+  `SessionMeta.summary` / 再起動 cap 時間窓は実装済、D5 短窓は #74 へ分離。
 
 ## Open Questions Blocking This Phase
 

@@ -18,10 +18,16 @@ import {
   sessionExists as defaultSessionExists,
 } from "./sessions.js";
 
-/** Cap on automatic restarts after crashes, per agent. A wrapper that keeps
- *  crashing is left down rather than hot-looped; an explicit `restart` resets
- *  the count. (A time-windowed budget is a possible follow-up.) */
+/** Cap on automatic restarts after crashes within RESTART_WINDOW_MS, per agent.
+ *  A wrapper that keeps crashing in a tight loop is left down rather than
+ *  hot-looped; an explicit `restart`, or a quiet spell longer than the window,
+ *  resets the count so occasional crashes over a long uptime do not exhaust it. */
 export const MAX_RESTARTS = 5;
+
+/** Rolling window for the crash budget (ms): a crash arriving more than this
+ *  after the window started resets the count, so the cap catches a tight
+ *  crash-loop but not a few crashes spread across a long-running agent (#73). */
+export const RESTART_WINDOW_MS = 60_000;
 
 /** agent_id rides a temp config filename and the spawn_result, so its charset
  *  is restricted exactly like the server's AgentId guard (no path separators). */
@@ -69,6 +75,9 @@ export interface SupervisorOptions {
   /** Injectable for tests; defaults read the local Claude JSONLs (sessions.ts). */
   listSessions?: (cwd: string) => SessionMeta[];
   sessionExists?: (cwd: string, sessionId: string) => boolean;
+  /** Clock in ms for the restart window; injectable for tests. Defaults to
+   *  Date.now. */
+  now?: () => number;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -156,6 +165,9 @@ interface ChildEntry {
   child: ManagedChild;
   parsed: ParsedSpawn;
   restarts: number;
+  /** Start of the current crash-budget window (ms); reset when the window
+   *  elapses or on an explicit restart. */
+  windowStart: number;
   stopping: boolean;
   restarting: boolean;
 }
@@ -168,6 +180,7 @@ export class Supervisor {
   readonly #sendSessions: (sessions: RunnerSessions) => void;
   readonly #listSessions: (cwd: string) => SessionMeta[];
   readonly #sessionExists: (cwd: string, sessionId: string) => boolean;
+  readonly #now: () => number;
   readonly #wrapperServerUrl: string | undefined;
   readonly #children = new Map<string, ChildEntry>();
   /** session_ids currently being resumed — the F4 local lock against a second
@@ -182,6 +195,7 @@ export class Supervisor {
     this.#sendSessions = options.sendSessions;
     this.#listSessions = options.listSessions ?? defaultListSessions;
     this.#sessionExists = options.sessionExists ?? defaultSessionExists;
+    this.#now = options.now ?? (() => Date.now());
     this.#wrapperServerUrl = options.wrapperServerUrl;
   }
 
@@ -264,6 +278,7 @@ export class Supervisor {
     if (entry === undefined) return;
     entry.restarting = true;
     entry.restarts = 0;
+    entry.windowStart = this.#now();
     entry.child.kill();
   }
 
@@ -310,6 +325,7 @@ export class Supervisor {
       child,
       parsed,
       restarts: 0,
+      windowStart: this.#now(),
       stopping: false,
       restarting: false,
     };
@@ -331,6 +347,13 @@ export class Supervisor {
       return;
     }
     // Unexpected exit = crash: relaunch (isolated from siblings) until the cap.
+    // The budget is windowed (RESTART_WINDOW_MS): a quiet spell longer than the
+    // window resets it, so only a tight crash-loop exhausts the cap.
+    const now = this.#now();
+    if (now - entry.windowStart > RESTART_WINDOW_MS) {
+      entry.windowStart = now;
+      entry.restarts = 0;
+    }
     if (entry.restarts >= MAX_RESTARTS) {
       process.stderr.write(
         `runner: agent ${agentId} exceeded restart cap; leaving down\n`,

@@ -68,3 +68,78 @@ describe("listSessionsIn / sessionExistsIn", () => {
     expect(sessionExistsIn(dir, "../evil")).toBe(false);
   });
 });
+
+describe("listSessionsIn — summary (#73)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kaoiro-summary-test-"));
+  const ids = {
+    title: "aaaaaaaa-2222-3333-4444-555555555555",
+    user: "bbbbbbbb-2222-3333-4444-555555555555",
+    prefer: "cccccccc-2222-3333-4444-555555555555",
+    none: "dddddddd-2222-3333-4444-555555555555",
+    long: "eeeeeeee-2222-3333-4444-555555555555",
+  };
+  const jsonl = (lines: object[]): string =>
+    `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`;
+
+  writeFileSync(
+    join(dir, `${ids.title}.jsonl`),
+    jsonl([
+      { type: "user", message: { role: "user", content: "最初の質問" } },
+      { type: "ai-title", aiTitle: "セッションのタイトル" },
+    ]),
+  );
+  writeFileSync(
+    join(dir, `${ids.user}.jsonl`),
+    jsonl([
+      { type: "file-history-snapshot", snapshot: {} },
+      { type: "user", message: { role: "user", content: "ユーザの最初の指示" } },
+    ]),
+  );
+  writeFileSync(
+    join(dir, `${ids.prefer}.jsonl`),
+    jsonl([
+      { type: "user", message: { role: "user", content: "user が先" } },
+      { type: "ai-title", aiTitle: "タイトルを優先" },
+    ]),
+  );
+  writeFileSync(
+    join(dir, `${ids.none}.jsonl`),
+    jsonl([
+      { type: "system", subtype: "init" },
+      { type: "user", isMeta: true, message: { role: "user", content: "<reminder>" } },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "t", content: "x" }],
+        },
+      },
+    ]),
+  );
+  writeFileSync(
+    join(dir, `${ids.long}.jsonl`),
+    jsonl([{ type: "user", message: { role: "user", content: "あ".repeat(200) } }]),
+  );
+
+  const byId = (): Record<string, { summary?: string }> =>
+    Object.fromEntries(listSessionsIn(dir).map((s) => [s.session_id, s]));
+
+  it("ai-title を summary に使う", () => {
+    expect(byId()[ids.title]?.summary).toBe("セッションのタイトル");
+  });
+  it("ai-title が無ければ先頭 user 指示を使う", () => {
+    expect(byId()[ids.user]?.summary).toBe("ユーザの最初の指示");
+  });
+  it("ai-title を user 指示より優先する", () => {
+    expect(byId()[ids.prefer]?.summary).toBe("タイトルを優先");
+  });
+  it("title も user 指示も無ければ summary 無し", () => {
+    expect(byId()[ids.none]?.summary).toBeUndefined();
+  });
+  it("長い summary は 100 字に切り詰める", () => {
+    const s = byId()[ids.long]?.summary;
+    expect(s).toBeDefined();
+    expect(s?.length).toBe(100);
+    expect(s?.endsWith("...")).toBe(true);
+  });
+});

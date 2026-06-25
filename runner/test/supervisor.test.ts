@@ -7,6 +7,7 @@ import type {
 } from "@kaoiro/protocol";
 import {
   MAX_RESTARTS,
+  RESTART_WINDOW_MS,
   Supervisor,
   isCwdAllowed,
   parseSpawn,
@@ -47,6 +48,7 @@ function harness(
     sessions?: SessionMeta[];
     exists?: boolean;
     wrapperServerUrl?: string;
+    now?: () => number;
   } = {},
 ) {
   const children: FakeChild[] = [];
@@ -73,6 +75,7 @@ function harness(
     sendSessions: (s) => sessionsSent.push(s),
     listSessions: () => opts.sessions ?? [],
     sessionExists: () => opts.exists ?? false,
+    ...(opts.now === undefined ? {} : { now: opts.now }),
   });
   return {
     sup,
@@ -344,5 +347,55 @@ describe("Supervisor restart/stop", () => {
     // 諦め後はエントリが消え、再度 spawn できる(already_running にならない)
     h.sup.handleSpawn(spawnMsg);
     expect(h.children).toHaveLength(MAX_RESTARTS + 2);
+  });
+});
+
+describe("Supervisor 再起動 budget の時間窓 (#73)", () => {
+  it("時間窓を超えて散発するクラッシュは budget を使い切らない", () => {
+    let clock = 0;
+    const h = harness({ now: () => clock });
+    h.sup.handleSpawn(spawnMsg);
+    for (let i = 0; i < MAX_RESTARTS * 2; i += 1) {
+      clock += RESTART_WINDOW_MS + 1; // 各クラッシュは窓外 -> budget リセット
+      h.last().exit();
+    }
+    // 上限を大きく超える回数でも毎回リセットされ、まだ再起動し続ける。
+    expect(h.children).toHaveLength(MAX_RESTARTS * 2 + 1);
+  });
+
+  it("時間窓内の連続クラッシュは上限で諦める", () => {
+    let clock = 0;
+    const h = harness({ now: () => clock });
+    h.sup.handleSpawn(spawnMsg);
+    for (let i = 0; i <= MAX_RESTARTS; i += 1) {
+      clock += 1; // 窓内
+      h.last().exit();
+    }
+    expect(h.children).toHaveLength(MAX_RESTARTS + 1); // 上限で諦め
+    // エントリは消えるので再 spawn は通る。
+    h.sup.handleSpawn(spawnMsg);
+    expect(h.children).toHaveLength(MAX_RESTARTS + 2);
+  });
+
+  it("明示 restart は budget をリセットし新たに MAX_RESTARTS 回まで許す", () => {
+    let clock = 0;
+    const h = harness({ now: () => clock });
+    h.sup.handleSpawn(spawnMsg);
+    // 窓内クラッシュで budget をほぼ使い切る。
+    for (let i = 0; i < MAX_RESTARTS; i += 1) {
+      clock += 1;
+      h.last().exit();
+    }
+    // 明示 restart で restarts/windowStart をリセット。
+    h.sup.handleRestart(spawnMsg);
+    h.last().exit(); // restart サイクルの relaunch
+    const base = h.children.length;
+    // budget が新品なら、窓内クラッシュ MAX_RESTARTS 回は全て再起動される
+    // (リセットされていなければ最初の 1 回で cap に達して諦める)。
+    for (let i = 0; i < MAX_RESTARTS; i += 1) {
+      clock += 1;
+      h.last().exit();
+    }
+    expect(h.children.length).toBe(base + MAX_RESTARTS);
   });
 });

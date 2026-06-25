@@ -4,7 +4,7 @@
 // to offer resume candidates and verifies a resume target actually exists
 // under the bound cwd (threat-model T3).
 
-import { readdirSync, statSync } from "node:fs";
+import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SessionMeta } from "@kaoiro/protocol";
@@ -35,6 +35,97 @@ export function projectsDir(cwd: string): string {
   return join(homedir(), ".claude", "projects", encodeCwd(cwd));
 }
 
+// A resume listing labels each candidate with a short summary (T2: minimal,
+// operator-only). It is read from the JSONL head only — the ai-title / opening
+// prompt sit near the top, and a listing must not read multi-MB transcripts in
+// full (#73).
+const SUMMARY_PREFIX_BYTES = 64 * 1024;
+const SUMMARY_MAX_CHARS = 100;
+
+/** Collapses whitespace to a single-line label and caps its length. */
+function toSummaryLabel(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length > SUMMARY_MAX_CHARS
+    ? `${oneLine.slice(0, SUMMARY_MAX_CHARS - 3)}...`
+    : oneLine;
+}
+
+/** The instruction text of a user line: string content, or its text blocks
+ *  joined (tool_result-only / empty lines yield undefined). */
+function userLineText(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content.trim() === "" ? undefined : content;
+  }
+  if (!Array.isArray(content)) return undefined;
+  const parts: string[] = [];
+  for (const block of content) {
+    const { type, text } = block as { type?: unknown; text?: unknown };
+    if (type === "text" && typeof text === "string") parts.push(text);
+  }
+  const joined = parts.join(" ").trim();
+  return joined === "" ? undefined : joined;
+}
+
+/** A short, operator-facing label for a session: the SDK's generated title
+ *  (`ai-title`) when one sits near the head, else the opening user instruction.
+ *  Reads only the file's prefix; returns undefined when neither is found or the
+ *  file is unreadable. */
+function readSummary(path: string): string | undefined {
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch {
+    return undefined;
+  }
+  let prefix: string;
+  try {
+    const buf = Buffer.alloc(SUMMARY_PREFIX_BYTES);
+    const n = readSync(fd, buf, 0, SUMMARY_PREFIX_BYTES, 0);
+    prefix = buf.subarray(0, n).toString("utf8");
+    // Drop a trailing partial line only when the read filled the buffer. A
+    // single line longer than the prefix (no newline at all) is left intact —
+    // JSON.parse rejects the fragment and the scan falls through to undefined,
+    // rather than blanking the whole prefix.
+    if (n === SUMMARY_PREFIX_BYTES) {
+      const lastNewline = prefix.lastIndexOf("\n");
+      if (lastNewline !== -1) prefix = prefix.slice(0, lastNewline + 1);
+    }
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
+  }
+
+  let firstUser: string | undefined;
+  for (const raw of prefix.split("\n")) {
+    if (raw.trim() === "") continue;
+    let line: {
+      type?: unknown;
+      aiTitle?: unknown;
+      isMeta?: unknown;
+      message?: { content?: unknown };
+    };
+    try {
+      line = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    // Prefer the AI-generated title (concise); first occurrence wins.
+    if (
+      line.type === "ai-title" &&
+      typeof line.aiTitle === "string" &&
+      line.aiTitle.trim() !== ""
+    ) {
+      return toSummaryLabel(line.aiTitle);
+    }
+    if (firstUser === undefined && line.type === "user" && line.isMeta !== true) {
+      const text = userLineText(line.message?.content);
+      if (text !== undefined) firstUser = text;
+    }
+  }
+  return firstUser !== undefined ? toSummaryLabel(firstUser) : undefined;
+}
+
 /** Lists the session JSONLs in a projects dir with minimal meta (T2: minimal,
  *  operator-only). Returns [] when the dir is absent or unreadable. Split from
  *  listSessions so the readdir/filter/stat logic is testable against a fixture
@@ -57,6 +148,8 @@ export function listSessionsIn(dir: string): SessionMeta[] {
     } catch {
       // Vanished between readdir and stat; report it without an mtime.
     }
+    const summary = readSummary(join(dir, name));
+    if (summary !== undefined) meta.summary = summary;
     sessions.push(meta);
   }
   return sessions;
