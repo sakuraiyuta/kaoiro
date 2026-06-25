@@ -288,6 +288,71 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "set_model / set_effort relay (#54)" do
+    test "operator の set_model を wrapper topic へ relay する" do
+      agent_id = "test.setmodel-1"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "opus[1m]"})
+
+      assert_reply ref, :ok
+      assert_broadcast "set_model", payload
+      assert payload["model"] == "opus[1m]"
+      refute Map.has_key?(payload, "agent_id")
+    end
+
+    test "operator の set_effort を wrapper topic へ relay する" do
+      agent_id = "test.seteffort-1"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_effort", %{"agent_id" => agent_id, "effort" => "max"})
+
+      assert_reply ref, :ok
+      assert_broadcast "set_effort", payload
+      assert payload["effort"] == "max"
+      refute Map.has_key?(payload, "agent_id")
+    end
+
+    test "viewer の set_model / set_effort は forbidden" do
+      agent_id = "test.setmodel-2"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "opus"})
+      assert_reply ref, :error, %{reason: "forbidden"}
+
+      ref = push(socket, "set_effort", %{"agent_id" => agent_id, "effort" => "high"})
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "model 欠落は missing key、effort 非文字列は invalid value" do
+      agent_id = "test.setmodel-3"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_model", %{"agent_id" => agent_id})
+      assert_reply ref, :error, %{reason: "missing key: model"}
+
+      ref = push(socket, "set_effort", %{"agent_id" => agent_id, "effort" => 5})
+      assert_reply ref, :error, %{reason: "invalid value: effort"}
+
+      refute_broadcast "set_model", %{}
+      refute_broadcast "set_effort", %{}
+    end
+
+    test "未知 agent_id は unknown_agent" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_model", %{"agent_id" => "test.setmodel-none", "model" => "opus"})
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+  end
+
   describe "delete_agent (issue #14)" do
     defp put_disconnected(agent_id) do
       :ok =

@@ -17,9 +17,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   (ADR-0012, specs/threat-model.md).
 
   Inbound (Phase 3, specs/protocol.md): `instruction`,
-  `permission_decision`, and `interrupt` (issue #51) are accepted from
-  operator clients only and relayed to the target wrapper topic without
-  interpreting the content (agent-agnostic). No delivery guarantee — a
+  `permission_decision`, `interrupt` (issue #51), and `set_model` /
+  `set_effort` (issue #54) are accepted from operator clients only and
+  relayed to the target wrapper topic without interpreting the content
+  (agent-agnostic). No delivery guarantee — a
   relay to a disconnected wrapper is lost and the requester learns via
   timeout (ADR-0011). `clear_history` (operator-only, issue #48) drops
   the server-side reply log of past sessions and broadcasts
@@ -190,6 +191,18 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Wrapper-side no-op when no turn is in flight (protocol.md A6).
   def handle_in("interrupt", payload, socket) do
     relay(socket, payload, "interrupt", [])
+  end
+
+  # Model / effort switch for a running session (issue #54, ADR-0020).
+  # Operator-only; the validated choice relays opaquely to the wrapper, which
+  # applies it to subsequent turns via setModel / applyFlagSettings — the
+  # server stays agent-agnostic and never interprets the value (protocol.md).
+  def handle_in("set_model", payload, socket) do
+    relay(socket, payload, "set_model", [{"model", &is_binary/1}])
+  end
+
+  def handle_in("set_effort", payload, socket) do
+    relay(socket, payload, "set_effort", [{"effort", &is_binary/1}])
   end
 
   # Host lifecycle control (ADR-0023, issue #67). Each is operator-only and
