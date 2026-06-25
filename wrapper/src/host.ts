@@ -6,6 +6,8 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  EffortLevel,
+  ModelInfo,
   Options,
   PermissionResult,
   Query,
@@ -42,6 +44,17 @@ import { clipText, logEntryToPayload } from "./logpayload.js";
 
 /** Cap on queued user turns; send() throws beyond this (fail fast). */
 const MAX_QUEUED_TURNS = 1000;
+
+/** A selectable model surfaced in state_change.ext.models (#54, ADR-0020),
+ *  trimmed from the SDK's ModelInfo to the snake_case fields the dashboard
+ *  needs to render the `/model` / `/effort` dialogs. effort_levels is absent
+ *  for models without effort support (e.g. Haiku). */
+export interface SupportedModel {
+  value: string;
+  display_name: string;
+  description: string;
+  effort_levels?: EffortLevel[];
+}
 
 export interface PermissionDecision {
   allow: boolean;
@@ -114,6 +127,14 @@ export class AgentHost {
   /** Slash commands the SDK reported at session init (#34); surfaced so the
    *  dashboard can offer `/` completion. */
   #slashCommands: string[] | null = null;
+  /** Selectable models with their per-model effort levels (#54, ADR-0020);
+   *  surfaced so the dashboard can build the bare `/model` / `/effort` choice
+   *  dialogs without a round-trip. Fetched once via supportedModels() after
+   *  the session's first init; null until then. */
+  #models: SupportedModel[] | null = null;
+  /** Guards the one-shot supportedModels fetch so it is not re-issued per
+   *  message; reset on failure to allow a later retry. */
+  #modelsRequested = false;
   #context:
     | { used_tokens: number; max_tokens: number; used_percentage: number }
     | null = null;
@@ -173,6 +194,27 @@ export class AgentHost {
     await this.#query?.interrupt();
   }
 
+  /** Switch the model for subsequent turns (#54, ADR-0020). `value` is an
+   *  alias from supportedModels (e.g. "opus[1m]", "sonnet", "default"); the
+   *  SDK resolves it. Next-message granularity — the active turn is unaffected.
+   *  No-op before the session's first turn establishes the Query. */
+  async setModel(value: string): Promise<void> {
+    await this.#query?.setModel(value);
+  }
+
+  /** Switch the reasoning effort for subsequent turns (#54, ADR-0020) via the
+   *  apply_flag_settings control request. `level` arrives as a wire string
+   *  (an effort_levels entry); symmetric with setModel, the SDK is the
+   *  validator. The persisted Settings.effortLevel type stops at "xhigh", but
+   *  the runtime accepts the full domain including "max" (#54 実機検証;
+   *  agent-sdk-events.md model/effort 検証メモ), so the cast widens it
+   *  deliberately. Next-message granularity. */
+  async setEffort(level: string): Promise<void> {
+    await this.#query?.applyFlagSettings({
+      effortLevel: level as "low" | "medium" | "high" | "xhigh",
+    });
+  }
+
   /** Receives the pending-permission record from the broker (ADR-0022).
    *  Called synchronously inside the decider before #canUseTool transitions
    *  the state machine, so the resulting state_change(waiting_permission)
@@ -217,7 +259,12 @@ export class AgentHost {
       // arrive inline; context usage is pulled fire-and-forget so the control
       // round-trip never blocks (or stalls) the message loop.
       const initMeta = sdkMessageToInitMeta(message);
-      if (initMeta) this.#applyInitMeta(initMeta);
+      if (initMeta) {
+        this.#applyInitMeta(initMeta);
+        // The session is initialized once init meta lands, so the
+        // supportedModels control request can resolve; fetch it once (#54).
+        void this.#refreshSupportedModels();
+      }
       const rateLimit = sdkMessageToRateLimit(message);
       if (rateLimit) this.#applyRateLimit(rateLimit);
       if (message.type === "result") void this.#refreshContextUsage();
@@ -286,6 +333,7 @@ export class AgentHost {
     if (this.#model !== null) ext.model = this.#model;
     if (this.#cwd !== null) ext.cwd = this.#cwd;
     if (this.#slashCommands !== null) ext.slash_commands = this.#slashCommands;
+    if (this.#models !== null) ext.models = this.#models;
     if (this.#context !== null) ext.context = this.#context;
     if (this.#rateLimits.size > 0) {
       ext.rate_limits = Object.fromEntries(this.#rateLimits);
@@ -319,6 +367,30 @@ export class AgentHost {
     if (info.utilization !== undefined) snapshot.utilization = info.utilization;
     if (info.resetsAt !== undefined) snapshot.resets_at = info.resetsAt;
     this.#rateLimits.set(window, snapshot);
+  }
+
+  /** Fetches the selectable model list once (#54, ADR-0020). Best-effort and
+   *  fire-and-forget like context usage: the list is static per session, so a
+   *  single success caches it and rides the next state_change in ext.models.
+   *  On failure the request flag is cleared so a later turn can retry. */
+  async #refreshSupportedModels(): Promise<void> {
+    if (this.#modelsRequested) return;
+    this.#modelsRequested = true;
+    try {
+      const models = await this.#query?.supportedModels();
+      if (!models) return;
+      this.#models = models.map((m) => ({
+        value: m.value,
+        display_name: m.displayName,
+        description: m.description,
+        ...(m.supportedEffortLevels
+          ? { effort_levels: m.supportedEffortLevels }
+          : {}),
+      }));
+    } catch {
+      // Optional telemetry; allow a retry on a later turn.
+      this.#modelsRequested = false;
+    }
   }
 
   /** Pulls the current context-window usage (#16). Best-effort: the SDK

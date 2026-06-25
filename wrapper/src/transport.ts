@@ -21,6 +21,12 @@ export interface ServerLinkOptions {
   /** An operator's interrupt request relayed by the server (protocol.md, #51).
    *  Payload is `{}` — the topic carries the agent_id. */
   onInterrupt?: () => void;
+  /** An operator's model switch relayed by the server (protocol.md, #54).
+   *  Payload is `{ model: string }` — an alias from ext.models. */
+  onSetModel?: (value: string) => void;
+  /** An operator's effort switch relayed by the server (protocol.md, #54).
+   *  Payload is `{ effort: string }` — a level from a model's effort_levels. */
+  onSetEffort?: (level: string) => void;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -79,6 +85,19 @@ export class ServerLink {
     // unconditionally — extra keys are ignored for forward compat.
     this.#channel.on("interrupt", (_payload: unknown) => {
       options.onInterrupt?.();
+    });
+    // protocol.md (#54): server -> wrapper `set_model` / `set_effort` carry
+    // the operator's choice; the topic addresses the agent. Validate the one
+    // string field structurally and forward; malformed pushes are dropped.
+    this.#channel.on("set_model", (payload: unknown) => {
+      if (isObject(payload) && typeof payload.model === "string") {
+        options.onSetModel?.(payload.model);
+      }
+    });
+    this.#channel.on("set_effort", (payload: unknown) => {
+      if (isObject(payload) && typeof payload.effort === "string") {
+        options.onSetEffort?.(payload.effort);
+      }
     });
 
     // Re-announce the latest state after a reconnect: the server keeps

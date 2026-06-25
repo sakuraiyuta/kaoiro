@@ -136,6 +136,17 @@ async function main(): Promise<void> {
         process.stdout.write("  interrupt\n");
         void host.interrupt().catch(() => {});
       },
+      onSetModel: (value) => {
+        // protocol.md (#54): apply the operator's model choice to subsequent
+        // turns; a bad alias surfaces as a rejected control request, swallowed
+        // like the other best-effort controls.
+        process.stdout.write(`  set_model: ${value}\n`);
+        void host.setModel(value).catch(() => {});
+      },
+      onSetEffort: (level) => {
+        process.stdout.write(`  set_effort: ${level}\n`);
+        void host.setEffort(level).catch(() => {});
+      },
     });
   }
 

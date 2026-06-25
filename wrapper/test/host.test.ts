@@ -29,14 +29,16 @@ const result = (
 type QueryFn = NonNullable<AgentHostOptions["queryFn"]>;
 type QueryArgs = { prompt: AsyncIterable<SDKUserMessage>; options: Options };
 
-/** Wraps an async generator into a Query (interrupt / getContextUsage are the
- *  only control methods the host exercises). */
+/** Wraps an async generator into a Query. interrupt / getContextUsage are the
+ *  control methods most tests exercise; `extra` injects the rest (setModel,
+ *  applyFlagSettings, supportedModels — #54). */
 function asQuery(
   gen: AsyncGenerator<SDKMessage, void>,
   interrupt: () => Promise<void> = async () => {},
   getContextUsage?: () => Promise<unknown>,
+  extra?: Record<string, unknown>,
 ): Query {
-  const controls: Record<string, unknown> = { interrupt };
+  const controls: Record<string, unknown> = { interrupt, ...extra };
   if (getContextUsage) controls.getContextUsage = getContextUsage;
   return Object.assign(gen, controls) as unknown as Query;
 }
@@ -468,5 +470,112 @@ describe("AgentHost — input queue/notify/close", () => {
     expect(interrupt).toHaveBeenCalledTimes(2);
     host.close();
     await done;
+  });
+});
+
+describe("AgentHost — model/effort 切替 (#54)", () => {
+  const modelInfos = [
+    {
+      value: "default",
+      displayName: "Default (recommended)",
+      description: "d",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+    },
+    // Haiku has no effort support: effort_levels must be omitted.
+    { value: "haiku", displayName: "Haiku", description: "h" },
+  ];
+
+  it("supportedModels を ext.models に付与する", async () => {
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield assistant([{ type: "text", text: "hi" }]);
+        yield result("success", { result: "ok" });
+        // A later state_change, by which point the fire-and-forget
+        // supportedModels fetch (triggered on init) has resolved.
+        yield assistant([{ type: "text", text: "more" }]);
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => modelInfos,
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    const withModels = envs.filter((e) => e.state === "thinking").at(-1);
+    expect(withModels?.ext?.models).toEqual([
+      {
+        value: "default",
+        display_name: "Default (recommended)",
+        description: "d",
+        effort_levels: ["low", "medium", "high", "xhigh", "max"],
+      },
+      { value: "haiku", display_name: "Haiku", description: "h" },
+    ]);
+  });
+
+  it("setModel は query.setModel へエイリアスを委譲する", async () => {
+    const setModel = vi.fn(async () => {});
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), async () => {}, undefined, { setModel });
+    });
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const done = host.run();
+    await host.setModel("opus[1m]");
+    expect(setModel).toHaveBeenCalledWith("opus[1m]");
+    host.close();
+    await done;
+  });
+
+  it("setEffort は applyFlagSettings({ effortLevel }) へ委譲する (max 含む)", async () => {
+    const applyFlagSettings = vi.fn(async () => {});
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), async () => {}, undefined, { applyFlagSettings });
+    });
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const done = host.run();
+    await host.setEffort("max");
+    expect(applyFlagSettings).toHaveBeenCalledWith({ effortLevel: "max" });
+    host.close();
+    await done;
+  });
+
+  it("setModel / setEffort は run 前は no-op", async () => {
+    // Symmetric with interrupt: #query is null before run(), so the
+    // optional-chain makes the control a no-op the server can relay into.
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: scriptedQuery([]),
+      now: () => "T",
+    });
+    await expect(host.setModel("opus")).resolves.toBeUndefined();
+    await expect(host.setEffort("high")).resolves.toBeUndefined();
+  });
+
+  it("supportedModels が reject してもセッションは正常終了する", async () => {
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => {
+          throw new Error("supportedModels unavailable");
+        },
+      });
+    });
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    await expect(host.run()).resolves.toBeUndefined();
   });
 });

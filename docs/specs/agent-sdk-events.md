@@ -144,6 +144,32 @@ canUseTool → PostToolUse。
 `PermissionMode`: `default` | `acceptEdits` | `bypassPermissions` | `plan`
 (環境により `dontAsk` / `auto` も)。
 
+#### モデル / effort 切替メモ(#54 実機検証, 2026-06-25, SDK 0.3.187)
+
+ストリーミング入力モードの同一 `Query` から、稼働中セッションのモデル /
+effort を切り替えられる。ヘッドレス実走行で確定した境界:
+
+- **選択肢取得**: `supportedModels(): ModelInfo[]`。各 `ModelInfo` は
+  `value`(API 用エイリアス) / `displayName` / `description` /
+  `supportsEffort` / `supportedEffortLevels`。実機の戻り値は `default` /
+  `opus[1m]` / `sonnet` / `sonnet[1m]` / `haiku`(haiku のみ effort 非対応)。
+  スラッシュコマンド一覧は別途 `supportedCommands()` / init の
+  `slash_commands`(#34)。bare `/model`・`/effort` は SDK 制御として
+  surface されず単なる入力テキスト扱いなので、選択 UI はダッシュボードが
+  これら一覧から構成する。
+- **モデル切替**: `Query.setModel(value)`。`value` は上記エイリアス。無例外で
+  成立。
+- **effort 切替**: 専用 setter は無く `Query.applyFlagSettings({ effortLevel })`。
+  値域 `EffortLevel = low|medium|high|xhigh|max`(`maxThinkingTokens` は
+  deprecated)。`Settings.effortLevel` の型は `xhigh` 止まりだが、runtime は
+  `max` まで全値を無例外で受理(実走行で確認)。
+- **適用粒度**: いずれも**以降のターンに適用**(セッション再起動不要)=
+  次メッセージ単位。#54 の open question「セッション単位 / 次メッセージ単位」は
+  これで確定。
+- broker 経路: wrapper は選択肢を `state_change.ext.models` で前出しし、
+  サーバ → wrapper の `set_model` / `set_effort` 制御を受けて適用する
+  ([protocol.md](protocol.md))。
+
 ### 利用するフック(任意・補助)
 
 `PreToolUse` / `PostToolUse` / `Notification` / `UserPromptSubmit` / `Stop` /
