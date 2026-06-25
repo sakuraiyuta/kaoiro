@@ -65,7 +65,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # the intercept list to skip the per-socket round trip. The runner →
   # operator events (`runner_sessions` / `spawn_result` / `hosts`) carry
   # host/session info and are operator-only (ADR-0023, ADR-0021).
-  intercept ["envelope", "history_cleared", "runner_sessions", "spawn_result", "hosts"]
+  intercept [
+    "envelope",
+    "history_cleared",
+    "history_reset",
+    "runner_sessions",
+    "spawn_result",
+    "hosts"
+  ]
 
   # Error reasons cleared for verbatim return to the client (issue #62).
   # Anything outside this set is a bug or a future internal value (a
@@ -131,6 +138,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_out("history_cleared", payload, socket) do
     if socket.assigns[:role] == :operator do
       push(socket, "history_cleared", payload)
+    end
+
+    {:noreply, socket}
+  end
+
+  # Resume reconstruction reset (issue #50, ADR-0014 phase-2): viewers hold no
+  # reply log, so gate it operator-only like history_cleared (ADR-0021). The
+  # operator clears the agent's transcript before the replayed `log` lines
+  # (themselves operator-only) rebuild it.
+  @impl true
+  def handle_out("history_reset", payload, socket) do
+    if socket.assigns[:role] == :operator do
+      push(socket, "history_reset", payload)
     end
 
     {:noreply, socket}

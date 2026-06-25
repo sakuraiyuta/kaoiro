@@ -17,6 +17,7 @@
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
 import { parseCliArgs } from "./args.js";
+import { readSessionHistory } from "./history.js";
 import { AgentHost } from "./host.js";
 import { PermissionBroker } from "./permission.js";
 import { loadConfig } from "./persona.js";
@@ -175,6 +176,36 @@ async function main(): Promise<void> {
       const idle = makeStateChange(config, "idle", new Date().toISOString());
       printState(idle);
       link?.send(idle);
+    }
+    // Resume: rebuild the server's display history from the session JSONL
+    // (ADR-0014 phase-2, #50). The SDK does not replay past turns into the
+    // stream, so reconstruct them from disk and reset-then-replay — a server
+    // that kept the pre-crash lines for the same session must not double
+    // them. setSessionId stamps the resume id so both the replayed lines and
+    // the subsequent live ones group under this session.
+    if (resumeSessionId !== undefined && link) {
+      link.setSessionId(resumeSessionId);
+      // The reset/replay need a server entry to attach to (append_log /
+      // reset_history are :noop without one). The idle announce above seeds
+      // it, but only in the no-prompt idle-wait mode; a resume that also
+      // carries a prompt (spawn with initial_prompt + resume_session_id)
+      // skipped it, so seed the entry here before the reset.
+      if (prompt !== undefined) {
+        link.send(makeStateChange(config, "idle", new Date().toISOString()));
+      }
+      const history = readSessionHistory(process.cwd(), resumeSessionId, config);
+      // Reset first — unconditionally on resume — so a server still holding
+      // this session's pre-crash lines is overwritten even when
+      // reconstruction yields nothing (e.g. a transcript of only bookkeeping
+      // lines); then replay whatever was rebuilt.
+      link.sendHistoryReset();
+      for (const envelope of history) link.send(envelope);
+    } else if (resumeSessionId !== undefined) {
+      // Resume without a server link (local mode): the SDK still resumes the
+      // conversation, but there is no server display history to rebuild.
+      process.stderr.write(
+        "  resume: no server configured; display history not rebuilt\n",
+      );
     }
     await host.run(prompt);
   } finally {

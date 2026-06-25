@@ -186,6 +186,39 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  describe "history_reset (resume 再構築, issue #50)" do
+    test "履歴を全消去し history_reset を broadcast、最新状態は残す" do
+      agent_id = "test.reset-1"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      # Seed a latest state + a reply line, then reset.
+      ref = push(socket, "envelope", envelope(agent_id, "thinking"))
+      assert_reply ref, :ok
+      ref = push(socket, "envelope", log_env(agent_id))
+      assert_reply ref, :ok
+      assert [%{"payload" => %{"text" => "やります"}}] = AgentStates.histories()[agent_id]
+
+      ref = push(socket, "history_reset", %{})
+      assert_reply ref, :ok
+      assert_broadcast "history_reset", %{"agent_id" => ^agent_id}
+
+      # History gone; latest state untouched.
+      refute Map.has_key?(AgentStates.histories(), agent_id)
+      assert AgentStates.snapshot()[agent_id]["state"] == "thinking"
+    end
+
+    test "状態未確立(未知 agent)の history_reset は ack のみで broadcast しない" do
+      agent_id = "test.reset-noop"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      ref = push(socket, "history_reset", %{})
+      assert_reply ref, :ok
+      refute_broadcast "history_reset", %{}
+    end
+  end
+
   describe "session_id ポインタの永続 (ADR-0014 F1, #49)" do
     test "session_id 付き envelope でポインタを記録する" do
       agent_id = "test.ptr-1"

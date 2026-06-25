@@ -281,4 +281,27 @@ defmodule KaoiroServer.AgentStatesTest do
       assert [%{"payload" => %{"text" => "m2"}}] = AgentStates.histories(store)["a"]
     end
   end
+
+  describe "reset_history/1 (issue #50, ADR-0014 phase-2)" do
+    setup do
+      store = start_supervised!({AgentStates, name: :agent_states_reset_test})
+      %{store: store}
+    end
+
+    test "全履歴を消去し最新状態は残す", %{store: store} do
+      :ok = AgentStates.put(envelope("a", %{"state" => "thinking"}), server: store)
+      :ok = AgentStates.append_log(log_env("a", 1), server: store)
+      :ok = AgentStates.append_log(log_env("a", 2), server: store)
+
+      assert :ok = AgentStates.reset_history("a", server: store)
+
+      # All reply lines gone, latest state untouched.
+      refute Map.has_key?(AgentStates.histories(store), "a")
+      assert AgentStates.snapshot(store)["a"]["state"] == "thinking"
+    end
+
+    test "未知 agent_id は noop", %{store: store} do
+      assert :noop = AgentStates.reset_history("ghost", server: store)
+    end
+  end
 end

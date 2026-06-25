@@ -17,7 +17,6 @@ import type {
   Envelope,
   KaoiroState,
   LogEntry,
-  LogPayload,
   PendingPermissionExt,
   ResultPayload,
   WrapperConfig,
@@ -39,24 +38,7 @@ import {
   sdkMessageToResult,
   sdkMessageToSessionId,
 } from "./adapter.js";
-
-/** Relayed log text/output above this UTF-8 size is clipped (protocol.md
- *  truncated); oversized tool input is dropped wholesale like the
- *  permission payload. Keeps each envelope well under the server cap. */
-const MAX_LOG_BYTES = 16_384;
-
-/** Clips text to MAX_LOG_BYTES of UTF-8, flagging truncation. A cut may
- *  land mid-codepoint; toString renders the partial byte as U+FFFD,
- *  which is harmless for a transcript. */
-function clipText(text: string): { text: string; truncated: boolean } {
-  if (Buffer.byteLength(text, "utf8") <= MAX_LOG_BYTES) {
-    return { text, truncated: false };
-  }
-  const clipped = Buffer.from(text, "utf8")
-    .subarray(0, MAX_LOG_BYTES)
-    .toString("utf8");
-  return { text: clipped, truncated: true };
-}
+import { clipText, logEntryToPayload } from "./logpayload.js";
 
 /** Cap on queued user turns; send() throws beyond this (fail fast). */
 const MAX_QUEUED_TURNS = 1000;
@@ -367,52 +349,9 @@ export class AgentHost {
         this.#config,
         this.#machine.state,
         this.#now(),
-        this.#logPayload(entry),
+        logEntryToPayload(entry, this.#toolNames),
       ),
     );
-  }
-
-  #logPayload(entry: LogEntry): LogPayload {
-    switch (entry.kind) {
-      case "assistant": {
-        const { text, truncated } = clipText(entry.text);
-        return truncated
-          ? { kind: "assistant", text, truncated: true }
-          : { kind: "assistant", text };
-      }
-      case "tool_use": {
-        if (entry.tool_use_id) {
-          this.#toolNames.set(entry.tool_use_id, entry.tool_name);
-        }
-        const payload: LogPayload = {
-          kind: "tool_use",
-          tool_name: entry.tool_name,
-        };
-        if (entry.tool_use_id) payload.tool_use_id = entry.tool_use_id;
-        // Drop oversized input wholesale: a cut JSON is unparseable and
-        // could split a secret (mirrors the permission payload).
-        if (
-          Buffer.byteLength(JSON.stringify(entry.input), "utf8") <=
-          MAX_LOG_BYTES
-        ) {
-          payload.input = entry.input;
-        } else {
-          payload.truncated = true;
-        }
-        return payload;
-      }
-      case "tool_result": {
-        const { text, truncated } = clipText(entry.output);
-        const payload: LogPayload = { kind: "tool_result", output: text };
-        if (entry.tool_use_id) payload.tool_use_id = entry.tool_use_id;
-        const name = entry.tool_use_id
-          ? this.#toolNames.get(entry.tool_use_id)
-          : undefined;
-        if (name) payload.tool_name = name;
-        if (truncated) payload.truncated = true;
-        return payload;
-      }
-    }
   }
 
   /** Relays the turn's final reply via onLog (result envelope). The session's

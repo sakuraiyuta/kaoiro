@@ -87,6 +87,19 @@ defmodule KaoiroServer.AgentStates do
   end
 
   @doc """
+  Drops ALL of the agent's reply-log history (issue #50, ADR-0014
+  phase-2), leaving the latest state untouched. Used before a resume
+  reconstruction replays the JSONL-derived transcript, so any pre-crash
+  lines the server still holds for the same session are overwritten
+  rather than duplicated. `:ok` when the agent is known, `:noop`
+  otherwise.
+  """
+  def reset_history(agent_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:reset_history, agent_id})
+  end
+
+  @doc """
   Removes a `disconnected` agent's entry entirely (issue #14). Only
   deletes when the latest state is `disconnected` so a live agent cannot
   be dropped from under its wrapper; returns `{:error, :not_disconnected}`
@@ -180,6 +193,16 @@ defmodule KaoiroServer.AgentStates do
       {:reply, {:ok, sid}, Map.put(state, agent_id, %{entry | history: kept})}
     else
       _ -> {:reply, :noop, state}
+    end
+  end
+
+  def handle_call({:reset_history, agent_id}, _from, state) do
+    case state do
+      %{^agent_id => entry} ->
+        {:reply, :ok, Map.put(state, agent_id, %{entry | history: []})}
+
+      _ ->
+        {:reply, :noop, state}
     end
   end
 

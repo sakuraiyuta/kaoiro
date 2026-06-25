@@ -161,6 +161,14 @@
             [agentId]: prev.filter((e) => e.session_id === sessionId),
           };
         },
+        onHistoryReset: (agentId) => {
+          // A resume reconstruction is about to replay this agent's
+          // transcript (#50): drop the current lines so the replayed log
+          // envelopes rebuild it cleanly instead of doubling.
+          if (logs[agentId]) {
+            logs = { ...logs, [agentId]: [] };
+          }
+        },
         onAgentDeleted: (agentId) => {
           // A disconnected agent was removed (#14): drop it from the grid
           // and its transcript. The detail view falls back to the grid on

@@ -178,6 +178,16 @@ runner 実装が前提。
   `last-prompt` / `mode` は除外)を時系列抽出 → ADR-0012 F7 リングバッファの
   表示形へ写像 → 履歴再構築 envelope を一括送出しサーバ表示履歴を上書き(A4)。
   重い再構築は runner/wrapper 側に置き、サーバは受け口に留める。
+  - **実装状況(#50, 2026-06-25)**: wrapper 側で実装。resume 起動時
+    (`--resume <session_id>`)に自分の JSONL を直読し、`user`/`assistant` 行を
+    既存の adapter(`sdkMessageToLogs`)+ 共有 payload 生成で `log` エンベロープへ
+    写像(operator 指示の `user` echo も補完)。サーバへ `history_reset`(リング
+    バッファ全消去 → `history_reset` broadcast)を送ってから `log` を再生し、
+    crash 後もサーバ生存時の同一 session 旧行と二重化させずに上書きする。再構築は
+    wrapper に置き(adapter の写像を再利用、runner への mapping 重複を回避)、
+    サーバは `reset_history` + broadcast の受け口に留めた(architecture の agent
+    非依存方針)。`history_reset` の配信は operator 限定(ADR-0021)。最新 200 行に
+    上限(リングバッファ同値)。詳細は [protocol](../specs/protocol.md)。
 
 ## Related
 

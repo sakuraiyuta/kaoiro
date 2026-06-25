@@ -229,6 +229,10 @@ export interface KaoiroHandlers {
   /** A past-session log purge (issue #48): the named agent's transcript
    *  should drop every line outside `sessionId`. Operator-only. */
   onHistoryCleared?: (agentId: string, sessionId: string) => void;
+  /** A resume reconstruction reset (issue #50, ADR-0014 phase-2): the named
+   *  agent's transcript should be dropped entirely, just before the server
+   *  replays the JSONL-rebuilt `log` lines. Operator-only. */
+  onHistoryReset?: (agentId: string) => void;
   /** A disconnected agent was removed (issue #14): drop it from the grid.
    *  Operator-only. */
   onAgentDeleted?: (agentId: string) => void;
@@ -419,6 +423,11 @@ export function connectKaoiro(
       }
     },
   );
+  channel.on("history_reset", (payload: { agent_id?: unknown }) => {
+    if (typeof payload.agent_id === "string") {
+      handlers.onHistoryReset?.(payload.agent_id);
+    }
+  });
   channel.on("agent_deleted", (payload: { agent_id?: unknown }) => {
     if (typeof payload.agent_id === "string") {
       handlers.onAgentDeleted?.(payload.agent_id);

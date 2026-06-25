@@ -131,6 +131,15 @@ export class ServerLink {
     });
   }
 
+  /** Asks the server to drop this agent's reply-log ring buffer before a
+   *  resume history replay (ADR-0014 phase-2, issue #50), so the
+   *  reconstructed lines overwrite rather than duplicate any pre-crash lines
+   *  the server still holds for the same session. The topic carries the
+   *  agent_id; the payload is empty. */
+  sendHistoryReset(): void {
+    this.#channel.push("history_reset", {});
+  }
+
   /** Leaves the channel and closes the socket. */
   close(): void {
     this.#channel.leave();

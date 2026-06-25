@@ -87,6 +87,32 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
+  # Resume history reconstruction (ADR-0014 phase-2, issue #50): the wrapper
+  # is about to replay its JSONL-derived transcript as `log` envelopes, so it
+  # first asks the server to drop the agent's current ring buffer (overwrite,
+  # not append — a server that survived the crash still holds the same
+  # session's pre-crash lines). Broadcast `history_reset` so every connected
+  # operator clears its transcript before the replayed lines arrive
+  # (operator-only gate in AgentsChannel). Empty payload; the topic carries
+  # the agent_id. `:noop` (no state entry yet) is still acked — the wrapper
+  # did nothing wrong.
+  @impl true
+  def handle_in("history_reset", _payload, socket) do
+    agent_id = socket.assigns.agent_id
+
+    case AgentStates.reset_history(agent_id) do
+      :ok ->
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_reset", %{
+          "agent_id" => agent_id
+        })
+
+        {:reply, :ok, socket}
+
+      :noop ->
+        {:reply, :ok, socket}
+    end
+  end
+
   # log / result are reply transcript lines kept as history (ADR-0012);
   # state_change / permission_request refresh the latest state.
   defp store(%{"type" => type} = envelope) when type in ["log", "result"] do

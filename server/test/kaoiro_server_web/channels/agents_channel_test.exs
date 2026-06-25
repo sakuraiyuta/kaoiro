@@ -458,6 +458,29 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "history_reset の operator 限定配信 (issue #50, ADR-0021)" do
+    test "operator は history_reset を受け取る" do
+      agent_id = "test.reset-op"
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_reset", %{
+        "agent_id" => agent_id
+      })
+
+      assert_push "history_reset", %{"agent_id" => ^agent_id}
+    end
+
+    test "viewer には history_reset を配信しない (fail-closed)" do
+      _socket = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_reset", %{
+        "agent_id" => "test.reset-vw"
+      })
+
+      refute_push "history_reset", %{}
+    end
+  end
+
   describe "state_change の ext 秘匿 (issue #46)" do
     defp state_with_ext(agent_id) do
       %{
