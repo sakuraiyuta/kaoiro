@@ -5,6 +5,7 @@
   import { renderMarkdown, renderMermaidIn } from "./markdown";
   import {
     logOf,
+    modelsFrom,
     pendingPermissionFrom,
     resultOf,
     RUNNING_STATES,
@@ -194,14 +195,32 @@
   const ctxUsed = $derived(numOrNull(ccContext?.used_tokens));
   const ctxMax = $derived(numOrNull(ccContext?.max_tokens));
   const ccRateRows = $derived(buildRateRows(envelope.ext?.rate_limits));
+  // Selectable models + per-model effort levels for the switch dialogs (#54).
+  // Operator-only: ext is stripped for viewers (#46), so these stay empty and
+  // the switch controls never render for non-operators.
+  const models = $derived(modelsFrom(envelope));
+  // Effort choices = the union of every model's effort_levels, ordered
+  // low→max. The SDK silently downgrades a level the active model does not
+  // support, so offering the union is safe and avoids having to match the
+  // resolved model id (ext.model) back to a supportedModels alias.
+  const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"];
+  const effortLevels = $derived.by(() => {
+    const seen = new Set<string>();
+    for (const m of models) for (const l of m.effort_levels ?? []) seen.add(l);
+    return EFFORT_ORDER.filter((l) => seen.has(l));
+  });
+
   // The always-present seven_day placeholder (pct null) must not, by itself,
-  // open the panel for a non-Claude-Code agent — require real meta or a
-  // rate window that actually has data.
+  // open the panel for a non-Claude-Code agent — require real meta or a rate
+  // window that actually has data. Also open it when switch choices exist, so
+  // the model / effort switch rows render even if ext.models lands before
+  // ext.model (the list is a separate one-shot fetch, host #statusExt).
   const hasCcStatus = $derived(
     ccModel !== null ||
       ccCwd !== null ||
       ctxPct !== null ||
-      ccRateRows.some((r) => r.pct !== null),
+      ccRateRows.some((r) => r.pct !== null) ||
+      models.length > 0,
   );
 
   // Wall-clock time of a log line from its envelope ts (#38). Invalid or
@@ -315,6 +334,59 @@
     void permission?.request_id;
     permMinimized = false;
   });
+
+  // --- model / effort switch (#54) ------------------------------------------
+  // Popover state for the two switch buttons. selectedEffort is the operator's
+  // last pick this session: the SDK does not report the active effort, so it
+  // cannot be read off ext like the model (ext.model). It is client-side and
+  // shows "既定" until the operator first chooses one.
+  let modelMenuOpen = $state(false);
+  let effortMenuOpen = $state(false);
+  let selectedEffort = $state<string | null>(null);
+  // Reset the popovers + the optimistic effort when the detail switches to a
+  // different agent (the component is reused, not re-keyed, in App.svelte).
+  let switchAgentId = untrack(() => envelope.agent_id);
+  $effect(() => {
+    if (envelope.agent_id !== switchAgentId) {
+      switchAgentId = envelope.agent_id;
+      selectedEffort = null;
+      modelMenuOpen = false;
+      effortMenuOpen = false;
+    }
+  });
+  // Close both popovers on a click outside any switch box.
+  $effect(() => {
+    if (!modelMenuOpen && !effortMenuOpen) return;
+    function onDocClick(event: MouseEvent): void {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest(".cc-switchbox")) {
+        modelMenuOpen = false;
+        effortMenuOpen = false;
+      }
+    }
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  });
+
+  function toggleModelMenu(): void {
+    effortMenuOpen = false;
+    modelMenuOpen = !modelMenuOpen;
+  }
+  function toggleEffortMenu(): void {
+    modelMenuOpen = false;
+    effortMenuOpen = !effortMenuOpen;
+  }
+  function chooseModel(value: string): void {
+    modelMenuOpen = false;
+    if (!connection) return;
+    void run(() => connection.setModel(envelope.agent_id, value));
+  }
+  function chooseEffort(level: string): void {
+    effortMenuOpen = false;
+    if (!connection) return;
+    selectedEffort = level;
+    void run(() => connection.setEffort(envelope.agent_id, level));
+  }
   // tool_use_id under the pointer, so its tool_use and tool_result both
   // highlight while hovered (#40).
   let hoveredTool = $state<string | null>(null);
@@ -606,7 +678,78 @@
           {#if ccModel}
             <div class="cc-row">
               <dt>model</dt>
-              <dd class="cc-model">{ccModel}</dd>
+              <dd>
+                <div class="cc-switchbox">
+                  <span class="cc-model">{ccModel}</span>
+                  {#if connection && models.length > 0}
+                    <button
+                      type="button"
+                      class="cc-switch"
+                      aria-haspopup="listbox"
+                      aria-expanded={modelMenuOpen}
+                      title="モデルを切替"
+                      onclick={toggleModelMenu}
+                    >切替</button>
+                  {/if}
+                  {#if modelMenuOpen}
+                    <ul
+                      class="switch-menu"
+                      role="listbox"
+                      aria-label="モデル候補"
+                    >
+                      {#each models as m (m.value)}
+                        <li>
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={ccModel === m.value}
+                            title={m.description}
+                            onclick={() => chooseModel(m.value)}
+                          >{m.display_name}</button>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
+              </dd>
+            </div>
+          {/if}
+          {#if connection && effortLevels.length > 0}
+            <!-- effort has no SDK-reported current value; the dd shows the
+                 operator's last pick this session (selectedEffort) or 既定. -->
+            <div class="cc-row">
+              <dt>effort</dt>
+              <dd>
+                <div class="cc-switchbox">
+                  <span class="cc-model">{selectedEffort ?? "既定"}</span>
+                  <button
+                    type="button"
+                    class="cc-switch"
+                    aria-haspopup="listbox"
+                    aria-expanded={effortMenuOpen}
+                    title="effort を切替"
+                    onclick={toggleEffortMenu}
+                  >切替</button>
+                  {#if effortMenuOpen}
+                    <ul
+                      class="switch-menu"
+                      role="listbox"
+                      aria-label="effort 候補"
+                    >
+                      {#each effortLevels as level (level)}
+                        <li>
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={selectedEffort === level}
+                            onclick={() => chooseEffort(level)}
+                          >{level}</button>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
+              </dd>
             </div>
           {/if}
           {#if ccCwd}
@@ -1268,6 +1411,82 @@
   .cc-model {
     color: var(--fg);
     overflow-wrap: anywhere;
+  }
+
+  /* model / effort switch (#54): a small inline button after the value, with
+     a popover listing the choices. */
+  .cc-switchbox {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .cc-switchbox .cc-model {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .cc-switch {
+    flex: none;
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    background: var(--bg-card);
+    color: var(--fg-dim);
+    font: inherit;
+    font-size: 0.62rem;
+    cursor: pointer;
+  }
+
+  .cc-switch:hover {
+    color: var(--fg);
+    border-color: var(--tone);
+  }
+
+  .switch-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: max-content;
+    min-width: 8rem;
+    max-width: 16rem;
+    max-height: 12rem;
+    margin: 0.3rem 0 0;
+    padding: 0.25rem;
+    list-style: none;
+    overflow-y: auto;
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    z-index: 5;
+  }
+
+  .switch-menu li {
+    margin: 0;
+  }
+
+  .switch-menu button {
+    display: block;
+    width: 100%;
+    padding: 0.3rem 0.5rem;
+    border: none;
+    border-radius: 0.25rem;
+    background: none;
+    color: var(--fg);
+    font: inherit;
+    font-size: 0.78rem;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .switch-menu button[aria-selected="true"] {
+    color: var(--tone);
+  }
+
+  .switch-menu button:hover {
+    background: color-mix(in srgb, var(--tone) 20%, var(--bg-card));
   }
 
   /* Placeholder for a rate window the SDK has not surfaced yet (#16). */

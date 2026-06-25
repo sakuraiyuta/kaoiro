@@ -69,6 +69,51 @@ export function pendingPermissionFrom(
   return record as unknown as PermissionRequestPayload;
 }
 
+/** A selectable model surfaced on state_change.ext.models (#54, ADR-0020):
+ *  the choices and per-model effort levels behind the dashboard's model /
+ *  effort switch dialogs. Operator-only — ext is stripped for viewers (#46),
+ *  so non-operators always see an empty list. */
+export interface ModelOption {
+  value: string;
+  display_name: string;
+  description?: string;
+  effort_levels?: string[];
+}
+
+/** Reads ext.models off an envelope into well-typed ModelOption entries
+ *  (#54). Returns [] when the key is absent or malformed; viewers always get
+ *  [] since ext is stripped for non-operators (#46). */
+export function modelsFrom(envelope: Envelope): ModelOption[] {
+  const raw = envelope.ext?.models;
+  if (!Array.isArray(raw)) return [];
+  const out: ModelOption[] = [];
+  for (const entry of raw) {
+    if (
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as ModelOption).value === "string" &&
+      typeof (entry as ModelOption).display_name === "string"
+    ) {
+      const m = entry as ModelOption;
+      out.push({
+        value: m.value,
+        display_name: m.display_name,
+        ...(typeof m.description === "string"
+          ? { description: m.description }
+          : {}),
+        ...(Array.isArray(m.effort_levels)
+          ? {
+              effort_levels: m.effort_levels.filter(
+                (l): l is string => typeof l === "string",
+              ),
+            }
+          : {}),
+      });
+    }
+  }
+  return out;
+}
+
 /** payload of a type="log" envelope (protocol.md / ADR-0012).
  *  kind=user is the operator's instruction echoed into the transcript (#31). */
 export interface LogPayload {
@@ -262,6 +307,14 @@ export interface KaoiroConnection {
    * like sendInstruction (forbidden / unknown_agent / timeout). The
    * wrapper handles a stale interrupt as a no-op. */
   sendInterrupt: (agentId: string) => Promise<void>;
+  /** Switches the model for the agent's subsequent turns (#54); rejects like
+   * sendInstruction (forbidden / unknown_agent / timeout). `model` is a
+   * `value` from ext.models. */
+  setModel: (agentId: string, model: string) => Promise<void>;
+  /** Switches the reasoning effort for the agent's subsequent turns (#54);
+   * rejects like sendInstruction. `effort` is a level from a model's
+   * effort_levels (low..max). */
+  setEffort: (agentId: string, effort: string) => Promise<void>;
   /** Purges the agent's past-session reply log (issue #48); rejects like
    * sendInstruction (forbidden / unknown_agent / no_current_session). */
   clearHistory: (agentId: string) => Promise<void>;
@@ -478,6 +531,10 @@ export function connectKaoiro(
       }),
     sendInterrupt: (agentId) =>
       pushAsync(channel, "interrupt", { agent_id: agentId }),
+    setModel: (agentId, model) =>
+      pushAsync(channel, "set_model", { agent_id: agentId, model }),
+    setEffort: (agentId, effort) =>
+      pushAsync(channel, "set_effort", { agent_id: agentId, effort }),
     clearHistory: (agentId) =>
       pushAsync(channel, "clear_history", { agent_id: agentId }),
     deleteAgent: (agentId) =>

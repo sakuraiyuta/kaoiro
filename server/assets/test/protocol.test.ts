@@ -4,6 +4,7 @@ import {
   hostIdFromAgentId,
   isReplyEnvelope,
   logOf,
+  modelsFrom,
   parseHosts,
   parseSessions,
   pendingPermissionFrom,
@@ -95,6 +96,69 @@ describe("pendingPermissionFrom (ADR-0022)", () => {
         ext: { pending_permission: { tool_name: "Bash" } },
       }),
     ).toBeNull();
+  });
+});
+
+describe("modelsFrom (#54)", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "a",
+    ts: "2026-06-11T00:00:00Z",
+    type: "state_change",
+    state: "idle",
+  };
+
+  it("ext.models を ModelOption[] に整形する(effort_levels/description の有無)", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        models: [
+          {
+            value: "default",
+            display_name: "Default",
+            description: "d",
+            effort_levels: ["low", "high", "max"],
+          },
+          { value: "haiku", display_name: "Haiku" },
+        ],
+      },
+    };
+    expect(modelsFrom(envelope)).toEqual([
+      {
+        value: "default",
+        display_name: "Default",
+        description: "d",
+        effort_levels: ["low", "high", "max"],
+      },
+      { value: "haiku", display_name: "Haiku" },
+    ]);
+  });
+
+  it("ext 無し・models 非配列・必須欠落エントリは除外し空配列", () => {
+    expect(modelsFrom(base)).toEqual([]);
+    expect(modelsFrom({ ...base, ext: {} })).toEqual([]);
+    expect(modelsFrom({ ...base, ext: { models: "x" } })).toEqual([]);
+    expect(
+      modelsFrom({
+        ...base,
+        ext: { models: [{ value: "x" }, { display_name: "y" }] },
+      }),
+    ).toEqual([]);
+  });
+
+  it("effort_levels の非文字列要素は除去し、非配列は省略する", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        models: [
+          { value: "m", display_name: "M", effort_levels: ["low", 3, "high"] },
+          { value: "n", display_name: "N", effort_levels: "high" },
+        ],
+      },
+    };
+    const out = modelsFrom(envelope);
+    expect(out[0]?.effort_levels).toEqual(["low", "high"]);
+    expect(out[1]).not.toHaveProperty("effort_levels");
   });
 });
 
