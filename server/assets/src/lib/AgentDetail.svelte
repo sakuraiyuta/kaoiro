@@ -343,13 +343,27 @@
   let modelMenuOpen = $state(false);
   let effortMenuOpen = $state(false);
   let selectedEffort = $state<string | null>(null);
-  // Reset the popovers + the optimistic effort when the detail switches to a
+  // Optimistic model label shown the instant the operator switches: ext.model
+  // (the authoritative resolved id) only catches up a turn later, so without
+  // this the model row stays on the old value until the next reply (#54).
+  // Cleared once ext.model actually changes, or on agent switch.
+  let pendingModel = $state<string | null>(null);
+  let lastCcModel = untrack(() => ccModel);
+  $effect(() => {
+    if (ccModel !== lastCcModel) {
+      lastCcModel = ccModel;
+      pendingModel = null;
+    }
+  });
+  const modelLabel = $derived(pendingModel ?? ccModel);
+  // Reset the popovers + the optimistic picks when the detail switches to a
   // different agent (the component is reused, not re-keyed, in App.svelte).
   let switchAgentId = untrack(() => envelope.agent_id);
   $effect(() => {
     if (envelope.agent_id !== switchAgentId) {
       switchAgentId = envelope.agent_id;
       selectedEffort = null;
+      pendingModel = null;
       modelMenuOpen = false;
       effortMenuOpen = false;
     }
@@ -379,6 +393,10 @@
   function chooseModel(value: string): void {
     modelMenuOpen = false;
     if (!connection) return;
+    // Reflect the pick immediately (ext.model lags a turn); show the friendly
+    // name when known, else the raw alias.
+    const choice = models.find((m) => m.value === value);
+    pendingModel = choice?.display_name ?? value;
     void run(() => connection.setModel(envelope.agent_id, value));
   }
   function chooseEffort(level: string): void {
@@ -680,7 +698,7 @@
               <dt>model</dt>
               <dd>
                 <div class="cc-switchbox">
-                  <span class="cc-model">{ccModel}</span>
+                  <span class="cc-model">{modelLabel}</span>
                   {#if connection && models.length > 0}
                     <button
                       type="button"
