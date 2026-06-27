@@ -21,14 +21,24 @@ defmodule KaoiroServerWeb.Endpoint do
   # auth paths can diverge in Phase 3 (wrapper token vs user stub). The
   # client socket reads the session cookie at the WS handshake so a
   # reloaded tab re-authenticates from the cookie (ADR-0013).
-  socket "/wrapper", KaoiroServerWeb.WrapperSocket, websocket: true, longpoll: false
+  # max_frame_size caps the per-frame DoS surface for the file-upload wire
+  # (file-upload spec / ADR-0025): the default `:infinity` would let a 128
+  # MB chunk land in one receive buffer. 8 MB matches the protocol's
+  # transport safety valve so a misbehaving relay/operator cannot wedge a
+  # wrapper/runner receive process with one oversize binary frame.
+  socket "/wrapper", KaoiroServerWeb.WrapperSocket,
+    websocket: [max_frame_size: 8_000_000],
+    longpoll: false
 
   # Resident-runner control channel (ADR-0023): separate system from the
   # wrapper data path and the client fan-out, with its own host-token auth.
   socket "/runner", KaoiroServerWeb.RunnerSocket, websocket: true, longpoll: false
 
   socket "/client", KaoiroServerWeb.ClientSocket,
-    websocket: [connect_info: [session: @session_options]],
+    websocket: [
+      connect_info: [session: @session_options],
+      max_frame_size: 8_000_000
+    ],
     longpoll: false
 
   # Serve at "/" the static files from "priv/static" directory.

@@ -83,7 +83,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    payload_too_large missing_agent_id invalid_agent_id
                    already_running missing_host_id invalid_host_id
                    unknown_host unknown_persona invalid_persona
-                   cwd_not_allowed invalid_cwd invalid_name no_session)a
+                   cwd_not_allowed invalid_cwd invalid_name no_session
+                   unknown_upload)a
 
   @impl true
   def join("agents:lobby", _params, socket) do
@@ -203,6 +204,81 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   def handle_in("set_effort", payload, socket) do
     relay(socket, payload, "set_effort", [{"effort", &is_binary/1}])
+  end
+
+  # File-upload wire (file-upload spec / ADR-0025). All three handlers are
+  # operator-only and relay to `wrapper:<agent_id>` without inspecting the
+  # bytes (server stays agent-agnostic). attach_open registers a per-socket
+  # upload_id -> agent_id route so attach_chunk (whose binary header carries
+  # only upload_id, not agent_id) can be relayed back to the owning wrapper;
+  # attach_close clears the route. Routes live in socket.assigns and die with
+  # the operator session — the wrapper's TTL reclaims any orphan bytes.
+  def handle_in("attach_open", payload, socket) do
+    with :ok <- require_operator(socket),
+         :ok <- check_relay_size(payload),
+         {:ok, agent_id} <- fetch_agent_id(payload),
+         :ok <-
+           check_keys(payload, [
+             {"upload_id", &is_binary/1},
+             {"filename", &is_binary/1},
+             {"mime", &is_binary/1},
+             {"size", &is_integer/1},
+             {"chunks", &is_integer/1}
+           ]) do
+      relayed = Map.delete(payload, "agent_id")
+      KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "attach_open", relayed)
+      {:reply, :ok, register_upload_route(socket, payload["upload_id"], agent_id)}
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # V2 binary frame: the wire-spec payload arrives wrapped in `{:binary,
+  # data}` (Phoenix.Socket.V2.JSONSerializer.decode_binary/1). Drop silently
+  # on any failure — binary frames have no JSON reply path, and a chunk
+  # without a prior open is a client bug not worth surfacing.
+  def handle_in("attach_chunk", {:binary, data}, socket) when is_binary(data) do
+    with :ok <- require_operator(socket),
+         {:ok, upload_id} <- parse_chunk_upload_id(data),
+         {:ok, agent_id} <- lookup_upload_route(socket, upload_id) do
+      KaoiroServerWeb.Endpoint.broadcast(
+        "wrapper:#{agent_id}",
+        "attach_chunk",
+        {:binary, data}
+      )
+
+      {:noreply, socket}
+    else
+      {:error, _reason} -> {:noreply, socket}
+    end
+  end
+
+  def handle_in("attach_close", payload, socket) do
+    with :ok <- require_operator(socket),
+         :ok <- check_relay_size(payload),
+         {:ok, _payload_agent_id} <- fetch_agent_id(payload),
+         :ok <- check_keys(payload, [{"upload_id", &is_binary/1}]),
+         {:ok, routed_agent_id} <-
+           lookup_upload_route(socket, payload["upload_id"]) do
+      # Route via the table, not payload.agent_id: the route table is the
+      # source of truth for upload_id -> agent_id (registered at attach_open),
+      # symmetric with attach_chunk (whose binary header carries no agent_id).
+      # A mismatched payload agent_id is ignored at routing time; the
+      # fetch_agent_id check still gates structural validity / known-agent.
+      relayed = Map.delete(payload, "agent_id")
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "wrapper:#{routed_agent_id}",
+        "attach_close",
+        relayed
+      )
+
+      {:reply, :ok, clear_upload_route(socket, payload["upload_id"])}
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
   end
 
   # Host lifecycle control (ADR-0023, issue #67). Each is operator-only and
@@ -527,6 +603,40 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {:error, :payload_too_large}
     end
   end
+
+  # File-upload route table (file-upload spec / ADR-0025): per-operator-socket
+  # upload_id -> agent_id mapping so attach_chunk (whose binary header has
+  # only upload_id) can be relayed. The table lives in socket.assigns and
+  # dies with the operator session; orphan bytes in the wrapper's
+  # pending_uploads are reclaimed by its TTL (phase-1).
+  defp register_upload_route(socket, upload_id, agent_id) do
+    routes = Map.put(socket.assigns[:upload_routes] || %{}, upload_id, agent_id)
+    assign(socket, :upload_routes, routes)
+  end
+
+  defp lookup_upload_route(socket, upload_id) do
+    case Map.get(socket.assigns[:upload_routes] || %{}, upload_id) do
+      nil -> {:error, :unknown_upload}
+      agent_id -> {:ok, agent_id}
+    end
+  end
+
+  defp clear_upload_route(socket, upload_id) do
+    routes = Map.delete(socket.assigns[:upload_routes] || %{}, upload_id)
+    assign(socket, :upload_routes, routes)
+  end
+
+  # Parses the upload_id prefix from an attach_chunk binary payload (file-upload
+  # spec): `<u32 upload_id_len BE><upload_id utf8><u32 chunk_index><bytes>`.
+  # Only the upload_id is needed server-side for routing; the rest passes
+  # through opaquely.
+  defp parse_chunk_upload_id(<<id_len::big-32, rest::binary>>)
+       when byte_size(rest) >= id_len + 4 do
+    <<upload_id::binary-size(^id_len), _::binary>> = rest
+    {:ok, upload_id}
+  end
+
+  defp parse_chunk_upload_id(_), do: {:error, :invalid_chunk_header}
 
   # Allow-list per role (ADR-0021). Returning `:drop` means the envelope
   # is omitted entirely (broadcast skipped, removed from snapshot); any

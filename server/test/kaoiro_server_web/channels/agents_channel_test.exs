@@ -428,7 +428,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             :cwd_not_allowed,
             :invalid_cwd,
             :invalid_name,
-            :no_session
+            :no_session,
+            :unknown_upload
           ] do
         assert AgentsChannel.safe_reason(r) == to_string(r)
       end
@@ -1306,6 +1307,209 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
         refute_push ^event, %{}
       end
+    end
+  end
+
+  describe "ファイルアップロード wire (ADR-0025)" do
+    defp build_chunk_payload(upload_id, chunk_index, bytes) do
+      id_bytes = upload_id
+      id_len = byte_size(id_bytes)
+      <<id_len::big-32, id_bytes::binary, chunk_index::big-32, bytes::binary>>
+    end
+
+    test "operator の attach_open は wrapper topic へ relay + agent_id 剥がす" do
+      agent_id = "test.upload-1"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "attach_open", %{
+          "agent_id" => agent_id,
+          "upload_id" => "u1",
+          "filename" => "a.png",
+          "mime" => "image/png",
+          "size" => 100,
+          "chunks" => 1
+        })
+
+      assert_reply ref, :ok
+
+      assert_broadcast "attach_open", payload
+      refute Map.has_key?(payload, "agent_id")
+      assert payload["upload_id"] == "u1"
+      assert payload["mime"] == "image/png"
+    end
+
+    test "attach_open は viewer から forbidden" do
+      agent_id = "test.upload-2"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      ref =
+        push(socket, "attach_open", %{
+          "agent_id" => agent_id,
+          "upload_id" => "u1",
+          "filename" => "a.png",
+          "mime" => "image/png",
+          "size" => 1,
+          "chunks" => 1
+        })
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "attach_open の必須キー欠落は invalid_value" do
+      agent_id = "test.upload-3"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "attach_open", %{"agent_id" => agent_id, "upload_id" => "u1"})
+      assert_reply ref, :error, %{reason: reason}
+      assert reason =~ "missing key"
+    end
+
+    test "attach_close は upload_id を relay + route 引かれていない場合 unknown_upload" do
+      agent_id = "test.upload-4"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      # No prior attach_open -> route table empty -> unknown_upload
+      ref = push(socket, "attach_close", %{"agent_id" => agent_id, "upload_id" => "unknown"})
+      assert_reply ref, :error, %{reason: "unknown_upload"}
+    end
+
+    test "attach_open 登録後の attach_close は relay 成功" do
+      agent_id = "test.upload-5"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      open_ref =
+        push(socket, "attach_open", %{
+          "agent_id" => agent_id,
+          "upload_id" => "u5",
+          "filename" => "a.png",
+          "mime" => "image/png",
+          "size" => 3,
+          "chunks" => 1
+        })
+
+      assert_reply open_ref, :ok
+      assert_broadcast "attach_open", _
+
+      close_ref = push(socket, "attach_close", %{"agent_id" => agent_id, "upload_id" => "u5"})
+      assert_reply close_ref, :ok
+      assert_broadcast "attach_close", %{"upload_id" => "u5"} = close_payload
+      refute Map.has_key?(close_payload, "agent_id")
+    end
+
+    test "attach_close は payload.agent_id ではなくルートテーブルが指す wrapper へ配信" do
+      # 攻撃シナリオ: A に attach_open したあと、 close の payload.agent_id を B に
+      # 差し替えて送る。 ルートテーブル(A)を真とすべきで B に配信されてはならない。
+      agent_a = "test.upload-a"
+      agent_b = "test.upload-b"
+      put_agent(agent_a)
+      put_agent(agent_b)
+      @endpoint.subscribe("wrapper:" <> agent_a)
+      @endpoint.subscribe("wrapper:" <> agent_b)
+      socket = join_as(:operator)
+
+      open_ref =
+        push(socket, "attach_open", %{
+          "agent_id" => agent_a,
+          "upload_id" => "uX",
+          "filename" => "x.png",
+          "mime" => "image/png",
+          "size" => 1,
+          "chunks" => 1
+        })
+
+      assert_reply open_ref, :ok
+      assert_broadcast "attach_open", _
+
+      close_ref =
+        push(socket, "attach_close", %{"agent_id" => agent_b, "upload_id" => "uX"})
+
+      assert_reply close_ref, :ok
+      # ルートが A なので A 側に届くべき(B 側には出ない)。
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: topic,
+        event: "attach_close",
+        payload: %{"upload_id" => "uX"}
+      }
+      assert topic == "wrapper:" <> agent_a
+      refute_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^agent_b,
+        event: "attach_close"
+      }
+    end
+
+    test "binary attach_chunk は upload_id ルックアップで relay (operator 経由)" do
+      agent_id = "test.upload-6"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      open_ref =
+        push(socket, "attach_open", %{
+          "agent_id" => agent_id,
+          "upload_id" => "u6",
+          "filename" => "a.png",
+          "mime" => "image/png",
+          "size" => 4,
+          "chunks" => 1
+        })
+
+      assert_reply open_ref, :ok
+      assert_broadcast "attach_open", _
+
+      data = build_chunk_payload("u6", 0, <<1, 2, 3, 4>>)
+
+      # Phoenix.ChannelTest.push goes through dispatch; for binary the
+      # payload arrives at handle_in as `{:binary, data}` after V2
+      # serializer decoding. ChannelTest bypasses the serializer, so we
+      # construct the tuple shape directly.
+      push(socket, "attach_chunk", {:binary, data})
+
+      assert_broadcast "attach_chunk", {:binary, ^data}
+    end
+
+    test "binary attach_chunk の upload_id が未登録ならドロップ (broadcast 無し)" do
+      agent_id = "test.upload-7"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      data = build_chunk_payload("unregistered", 0, <<9>>)
+      push(socket, "attach_chunk", {:binary, data})
+
+      refute_broadcast "attach_chunk", _
+    end
+
+    test "viewer の binary attach_chunk はドロップ" do
+      agent_id = "test.upload-8"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:viewer)
+
+      data = build_chunk_payload("u8", 0, <<1>>)
+      push(socket, "attach_chunk", {:binary, data})
+
+      refute_broadcast "attach_chunk", _
+    end
+
+    test "malformed binary frame (header truncated) はドロップ" do
+      agent_id = "test.upload-9"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      # 100 byte upload_id を宣言しつつ 4 byte しか送らない
+      push(socket, "attach_chunk", {:binary, <<100::big-32>>})
+
+      refute_broadcast "attach_chunk", _
     end
   end
 end
