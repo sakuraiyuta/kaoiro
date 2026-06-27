@@ -9,6 +9,7 @@ import { AgentHost } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
 import type { Envelope, WrapperConfig } from "../src/types.js";
 import {
+  PENDING_UPLOAD_TTL_MS,
   SharpImageDownsizer,
   setDefaultImageDownsizer,
 } from "../src/upload.js";
@@ -852,6 +853,71 @@ describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
       upload_id: "u1",
       reason: "size_over",
     });
+  });
+
+  it("tickGC は addedAt + TTL を超えたエントリを timeout で drop (F13)", async () => {
+    let t = 1_000_000;
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn([]),
+      now: () => "T",
+      nowMs: () => t,
+    });
+    const done = host.run();
+    host.attachOpen({
+      upload_id: "old",
+      filename: "x.png",
+      mime: "image/png",
+      size: 1,
+      chunks: 1,
+    });
+    // Advance past TTL — use the exported constant so a TTL change in
+    // upload.ts cannot silently keep this test green at the old boundary.
+    t += PENDING_UPLOAD_TTL_MS + 1_000;
+    host.attachOpen({
+      upload_id: "fresh",
+      filename: "y.png",
+      mime: "image/png",
+      size: 1,
+      chunks: 1,
+    });
+    host.tickGC();
+    host.close();
+    await done;
+
+    // 'old' は TTL 超え、 'fresh' は同じ tick(中の addedAt) なので残る
+    expect(rejected.length).toBe(1);
+    expect(rejected[0]!.payload).toMatchObject({
+      upload_id: "old",
+      reason: "timeout",
+    });
+  });
+
+  it("tickGC は TTL 未満なら no-op", async () => {
+    let t = 1_000_000;
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn([]),
+      now: () => "T",
+      nowMs: () => t,
+    });
+    const done = host.run();
+    host.attachOpen({
+      upload_id: "u",
+      filename: "x.png",
+      mime: "image/png",
+      size: 1,
+      chunks: 1,
+    });
+    t += 60_000; // 1 min — well under 5 min TTL
+    host.tickGC();
+    host.close();
+    await done;
+    expect(rejected).toEqual([]);
   });
 
   it("interrupt は pending_uploads を全 drop し attach_rejected{interrupted} を per-id 発火 (F11)", async () => {

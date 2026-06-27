@@ -490,6 +490,7 @@ describe("validateClose / assembleBytes", () => {
     chunks: new Map(),
     sealed: false,
     accumulatedBytes: 0,
+    addedAt: 0,
   });
 
   it("全 chunk 揃って assembled = declared なら ok", () => {

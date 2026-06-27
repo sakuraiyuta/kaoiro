@@ -49,6 +49,8 @@ import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
   MAX_INFLIGHT_UPLOADS,
+  PENDING_UPLOAD_GC_INTERVAL_MS,
+  PENDING_UPLOAD_TTL_MS,
   PROTOCOL_FILE_SIZE_LIMIT_BYTES,
   TOTAL_REQUEST_BYTE_LIMIT,
   assembleBytes,
@@ -120,6 +122,9 @@ export interface AgentHostOptions {
   queryFn?: typeof query;
   /** ISO-8601 timestamp source; injectable for tests. */
   now?: () => string;
+  /** Wall-clock epoch-ms source for the pending_uploads TTL GC sweep,
+   *  injectable for tests. Defaults to `Date.now`. */
+  nowMs?: () => number;
 }
 
 /**
@@ -133,6 +138,10 @@ export class AgentHost {
   readonly #options: AgentHostOptions;
   readonly #queryFn: typeof query;
   readonly #now: () => string;
+  readonly #nowMs: () => number;
+  /** setInterval handle for the TTL GC sweep, cleared in close(). null
+   *  between construction and run() (sweep doesn't start until run). */
+  #gcTimer: ReturnType<typeof setInterval> | null = null;
 
   readonly #queue: SDKUserMessage[] = [];
   #notify: (() => void) | null = null;
@@ -182,6 +191,7 @@ export class AgentHost {
     this.#options = options;
     this.#queryFn = options.queryFn ?? query;
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#nowMs = options.nowMs ?? Date.now;
   }
 
   get state(): KaoiroState {
@@ -320,6 +330,7 @@ export class AgentHost {
       chunks: new Map(),
       sealed: false,
       accumulatedBytes: 0,
+      addedAt: this.#nowMs(),
     });
   }
 
@@ -432,10 +443,35 @@ export class AgentHost {
     );
   }
 
-  /** Close the input stream; the session ends once the current turn drains. */
+  /** Close the input stream; the session ends once the current turn drains.
+   *  Clears the TTL GC interval so the host does not keep the Node event
+   *  loop alive after the session has settled. */
   close(): void {
     this.#closed = true;
+    if (this.#gcTimer !== null) {
+      clearInterval(this.#gcTimer);
+      this.#gcTimer = null;
+    }
     this.#wake();
+  }
+
+  /** Drop pending_uploads whose age exceeds PENDING_UPLOAD_TTL_MS
+   *  (file-upload spec F13), emitting attach_rejected{reason="timeout"}
+   *  for each so the dashboard chip surfaces the drop. Called by the
+   *  setInterval started in run() and exposed for tests to trigger
+   *  deterministically without waiting on a real timer. */
+  tickGC(): void {
+    const cutoff = this.#nowMs() - PENDING_UPLOAD_TTL_MS;
+    for (const [uploadId, entry] of this.#pendingUploads) {
+      if (entry.addedAt < cutoff) {
+        this.#emitAttachRejected({
+          upload_id: uploadId,
+          reason: "timeout",
+          detail: `ttl exceeded (added_at=${entry.addedAt} cutoff=${cutoff})`,
+        });
+        this.#pendingUploads.delete(uploadId);
+      }
+    }
   }
 
   /** Interrupt the current turn (streaming-input control request) AND
@@ -496,6 +532,13 @@ export class AgentHost {
    */
   async run(initialPrompt?: string): Promise<void> {
     if (initialPrompt !== undefined) await this.send(initialPrompt);
+    // Start the TTL GC sweep. unref() so the timer never blocks process
+    // shutdown — close() also clears it explicitly, but a stray uncaught
+    // path otherwise would keep Node alive.
+    this.#gcTimer = setInterval(() => {
+      this.tickGC();
+    }, PENDING_UPLOAD_GC_INTERVAL_MS);
+    if (typeof this.#gcTimer.unref === "function") this.#gcTimer.unref();
     const options: Options = {
       permissionMode: "default",
       systemPrompt: { type: "preset", preset: "claude_code" },

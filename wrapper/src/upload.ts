@@ -118,6 +118,19 @@ export const MAX_ATTACHMENTS_PER_INSTRUCTION = 10;
  *  a fan-out of attach_opens without ever sending matching instructions. */
 export const MAX_INFLIGHT_UPLOADS = 20;
 
+/** TTL for a pending upload (file-upload spec F13): a wrapper-side
+ *  fail-safe that drops entries whose attach_open never settled into an
+ *  instruction (client crash, missing chunks, half-filled tray that the
+ *  operator walked away from). Stamped at attach_open time and not reset —
+ *  the operator has 5 min total from picker to send. The GC sweep fires
+ *  attach_rejected{reason="timeout"} so the dashboard chip surfaces the
+ *  drop rather than silently disappearing. */
+export const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;
+
+/** Sweep interval for the TTL GC. 60 s keeps the wake-up cost negligible
+ *  while bounding worst-case reaction time to TTL + 60 s. */
+export const PENDING_UPLOAD_GC_INTERVAL_MS = 60 * 1000;
+
 /** Metadata of an open upload (set by attach_open). */
 export interface UploadMeta {
   upload_id: string;
@@ -139,6 +152,9 @@ export interface PendingUpload {
   chunks: Map<number, Uint8Array>;
   sealed: boolean;
   accumulatedBytes: number;
+  /** Epoch ms the entry was registered by attach_open. The TTL GC sweep
+   *  compares this against the wall clock to drop stalled uploads. */
+  addedAt: number;
 }
 
 /** Parsed `attach_chunk` binary payload (V2 frame's payload internal
