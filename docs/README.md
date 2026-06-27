@@ -43,6 +43,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0022](adr/0022-pending-permission-authoritative-source.md) | pending_permission の authoritative source を state_change.ext へ | accepted |
 | [0023](adr/0023-host-runner-architecture.md) | ホスト常駐 runner(supervisor 専任・1 process=1 agent・TS/Node) | accepted |
 | [0024](adr/0024-agent-instance-identity-and-spawn-auth.md) | persona=型/agent_id=インスタンス、spawn 認証を runner 一本化の発行型へ | accepted |
+| [0025](adr/0025-file-upload-wire-and-wrapper-rendering.md) | ファイルアップロードの wire と wrapper-internal レンダリング | accepted |
 
 ## 更新フロー
 

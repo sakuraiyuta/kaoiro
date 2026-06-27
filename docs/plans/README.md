@@ -14,6 +14,7 @@
 | 4 | [phase-4-host-runner](phase-4-host-runner.md) | ⏳ | ホスト常駐 runner(spawn/監督/ホスト登録、[ADR-0023](../adr/0023-host-runner-architecture.md)) |
 | 5 | [phase-5-i18n](phase-5-i18n.md) | ⏳ | ベータ前 英訳工程 |
 | 6 | [phase-6-emotion-filter](phase-6-emotion-filter.md) | ⏳ | 感情フィルタ(味付け) |
+| 7 | [phase-7-file-upload](phase-7-file-upload.md) | ⏳ | ファイルアップロード(添付の取り込み、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)) |
 
 ## 将来
 

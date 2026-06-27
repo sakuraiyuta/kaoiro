@@ -12,6 +12,7 @@
 | [protocol](protocol.md) | accepted | 共通イベント・エンベロープ/状態機械/ペルソナ/双方向・認証 |
 | [agent-sdk-events](agent-sdk-events.md) | accepted | Agent SDK の確定イベント仕様と状態導出 |
 | [subagent-tasks](subagent-tasks.md) | provisional | subagent/workflow タスクの検知と専用 envelope 通知 |
+| [file-upload](file-upload.md) | provisional | ダッシュボードからの添付(画像/テキスト/PDF/Office)を wrapper で SDK へ render |
 | [personas](personas.md) | accepted | ペルソナ立ち絵のデザイン方針・画像規格・生成ワークフロー |
 | [threat-model](threat-model.md) | accepted | 双方向ルーティングの脅威と緩和策 |
 | [setup-wizards](setup-wizards.md) | provisional | 設定 / env 生成ウィザード(wrapper config・server .env) |

@@ -6,7 +6,7 @@ opened: 2026-06-22
 supersedes: []
 superseded_by: null
 related_specs: [protocol, threat-model]
-related_adrs: [11, 12, 13]
+related_adrs: [11, 12, 13, 25]
 ---
 
 # ADR-0021 — viewer / operator ロールの情報公開ポリシ

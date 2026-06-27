@@ -39,6 +39,9 @@ kaoiro が初期に扱わない範囲を明示する。スコープは [overview
   skill 補完・クライアント更新・モデル/effort 選択 等)。以下は引き続き非
   スコープ: 会話オーサリング環境化(フルチャット)、**サーバでの会話/ファイル
   永続**(将来 issue #24)、外部クライアント級の高機能化。
+- **アップロードファイルのアンチウイルス スキャン**。ホスト OS / 外部 AV
+  ソリューションに委ねる。wrapper / server / client いずれも AV を実行しない
+  ([ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md))。
 
 ## See Also
 

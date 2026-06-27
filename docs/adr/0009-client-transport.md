@@ -6,7 +6,7 @@ opened: 2026-06-10
 supersedes: []
 superseded_by: null
 related_specs: [protocol, architecture]
-related_adrs: [7, 10]
+related_adrs: [7, 10, 25]
 ---
 
 # ADR-0009 — クライアント接続は Phoenix Channels に一本化

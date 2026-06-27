@@ -6,7 +6,7 @@ opened: 2026-06-16
 supersedes: []
 superseded_by: null
 related_specs: [protocol]
-related_adrs: [10, 14, 19]
+related_adrs: [10, 14, 19, 25]
 ---
 
 # ADR-0015 — 全通信への version 付与と不一致時の警告
