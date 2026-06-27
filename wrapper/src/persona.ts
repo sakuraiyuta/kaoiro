@@ -75,12 +75,26 @@ export function parseConfig(raw: unknown): WrapperConfig {
     config.server_token = nonEmptyString(raw.server_token, "server_token");
   }
 
+  // permission_timeout_ms precedence (#60): explicit config wins (per-persona
+  // override) over the process-wide env var; both absent leaves it undefined,
+  // letting the broker fall back to the SDK default (no timeout, ADR-0022 F6).
   if (raw.permission_timeout_ms !== undefined) {
     const timeout = raw.permission_timeout_ms;
     if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout <= 0) {
       throw new ConfigError("permission_timeout_ms must be a positive integer");
     }
     config.permission_timeout_ms = timeout;
+  } else {
+    const envValue = process.env.KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS;
+    if (envValue !== undefined && envValue !== "") {
+      const parsed = Number(envValue);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new ConfigError(
+          "KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS must be a positive integer",
+        );
+      }
+      config.permission_timeout_ms = parsed;
+    }
   }
 
   if (raw.allowed_tools !== undefined) {

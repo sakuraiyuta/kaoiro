@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigError, parseConfig } from "../src/persona.js";
 
 const valid = {
@@ -7,6 +7,13 @@ const valid = {
 };
 
 describe("parseConfig", () => {
+  // Clear the env var across all tests so a developer who exports it in their
+  // shell to test #60's env path does not break unrelated assertions that
+  // expect parseConfig to leave permission_timeout_ms unset.
+  beforeEach(() => {
+    delete process.env.KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS;
+  });
+
   it("正しい設定をそのまま受け入れる", () => {
     expect(parseConfig(valid)).toEqual(valid);
   });
@@ -90,6 +97,45 @@ describe("parseConfig", () => {
         parseConfig({ ...valid, permission_timeout_ms: bad }),
       ).toThrow(ConfigError);
     }
+  });
+
+  describe("KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS env (#60)", () => {
+    const ENV_KEY = "KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS";
+
+    beforeEach(() => {
+      delete process.env[ENV_KEY];
+    });
+    afterEach(() => {
+      delete process.env[ENV_KEY];
+    });
+
+    it("config が無ければ env を取り込む", () => {
+      process.env[ENV_KEY] = "5000";
+      expect(parseConfig({ ...valid })).toMatchObject({
+        permission_timeout_ms: 5000,
+      });
+    });
+
+    it("config が明示されていれば env より優先する", () => {
+      process.env[ENV_KEY] = "5000";
+      expect(
+        parseConfig({ ...valid, permission_timeout_ms: 1234 }),
+      ).toMatchObject({ permission_timeout_ms: 1234 });
+    });
+
+    it("env が空文字なら未設定扱い (broker は SDK デフォルト)", () => {
+      process.env[ENV_KEY] = "";
+      expect(parseConfig({ ...valid })).not.toHaveProperty(
+        "permission_timeout_ms",
+      );
+    });
+
+    it("env が不正値なら ConfigError", () => {
+      for (const bad of ["0", "-1", "1.5", "abc"]) {
+        process.env[ENV_KEY] = bad;
+        expect(() => parseConfig({ ...valid })).toThrow(ConfigError);
+      }
+    });
   });
 
   it("allowed_tools は非空文字列の配列のみ受け入れる", () => {
