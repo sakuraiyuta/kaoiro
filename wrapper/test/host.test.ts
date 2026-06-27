@@ -973,6 +973,56 @@ describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
     ]);
   });
 
+  it("合計 base64 サイズが 32 MB 超なら total_request_over で reject(消費せず)", async () => {
+    // 合計 32 MB 超を 1 件の text 添付で再現する(text block は raw、
+    // image/document は base64 後だが、 wireSize 計算は同じ式)。 text
+    // bytes 33 MB → renderTextBlock が 1 MB に truncate → 約 1 MB の
+    // text block しか出来ない、 のでこのケースは合計超えない。 そこで
+    // 直接 image branch を使う: pass-through downsizer 越しに 33 MB の
+    // image bytes を仕立て、 base64 後 ~44 MB で 32 MB 超を踏ませる。
+    setDefaultImageDownsizer({
+      fit: async (bytes, mime) => ({ bytes, mime }),
+    });
+    const captured: SDKUserMessage[] = [];
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onInstructionRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    const bigChunk = new Uint8Array(33 * 1024 * 1024);
+    host.attachOpen({
+      upload_id: "u1",
+      filename: "big.png",
+      mime: "image/png",
+      size: bigChunk.byteLength,
+      chunks: 1,
+    });
+    host.attachChunk(buildChunkPayload("u1", 0, bigChunk));
+    host.attachClose("u1");
+    await host.send("見て", ["u1"]);
+    // 非消費の証拠: 直後に再 send しても resolveAttachments が同じ
+    // upload_id を見つけ、 同じ total_request_over で再 reject される。
+    // 消費されていたら 2 回目は timeout (unknown upload_id) で reject
+    // されるので、 reason の同一性 = 非消費 atomicity の証明。
+    await host.send("もう一度", ["u1"]);
+    host.close();
+    await done;
+
+    expect(captured.length).toBe(0); // not queued
+    expect(rejected.length).toBe(2);
+    expect(rejected[0]!.payload).toMatchObject({
+      attachment_ids: ["u1"],
+      reason: "total_request_over",
+    });
+    expect(rejected[1]!.payload).toMatchObject({
+      attachment_ids: ["u1"],
+      reason: "total_request_over",
+    });
+  });
+
   it("instruction の attachment_ids が 10 件超なら count_over で reject(消費せず)", async () => {
     const captured: SDKUserMessage[] = [];
     const rejected: Envelope[] = [];

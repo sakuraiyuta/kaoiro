@@ -50,7 +50,9 @@ import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
   MAX_INFLIGHT_UPLOADS,
   PROTOCOL_FILE_SIZE_LIMIT_BYTES,
+  TOTAL_REQUEST_BYTE_LIMIT,
   assembleBytes,
+  blockWireSize,
   parseChunkPayload,
   renderAttachmentBlock,
   validateClose,
@@ -249,6 +251,21 @@ export class AgentHost {
         blocks.push(result.block);
       }
       if (text.length > 0) blocks.push({ type: "text", text });
+      // Per-instruction total request size check (Stage A IN2: Anthropic's
+      // 32 MB ceiling counts base64-encoded media + raw text). Run AFTER
+      // each block has been fit-to-SDK so e.g. a downsized 30 MB JPEG
+      // counts against the budget at its reduced size, not the raw upload.
+      // No uploads consumed on overflow so the operator can re-pick a
+      // smaller subset without re-uploading anything.
+      const totalSize = blocks.reduce((acc, b) => acc + blockWireSize(b), 0);
+      if (totalSize > TOTAL_REQUEST_BYTE_LIMIT) {
+        this.#emitInstructionRejected({
+          attachment_ids: attachmentIds,
+          reason: "total_request_over",
+          detail: `total=${totalSize} cap=${TOTAL_REQUEST_BYTE_LIMIT}`,
+        });
+        return;
+      }
       content = blocks;
       // Consume — uploads are one-shot per instruction.
       for (const id of attachmentIds) this.#pendingUploads.delete(id);

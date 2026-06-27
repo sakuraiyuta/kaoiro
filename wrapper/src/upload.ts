@@ -60,6 +60,21 @@ export const IMAGE_SDK_LONG_EDGE_MAX = 8000;
 /** PDF MIME — rendered as an SDK document content block. */
 export const PDF_MIME = "application/pdf";
 
+/** Per-text-block byte budget (file-upload spec): truncate at the head's
+ *  1 MB and append a notice so the agent sees the content was clipped.
+ *  Anthropic's text content blocks themselves have no byte ceiling — only
+ *  the model's context window — but a single attachment >1 MB is almost
+ *  always operator error or a runaway file. */
+export const TEXT_SDK_BYTE_LIMIT = 1024 * 1024;
+
+/** Per-instruction total request budget (Stage A IN2): every attachment
+ *  combined (image base64 + document base64 + text) must fit Claude's 32 MB
+ *  hard ceiling on a single request. The wrapper checks this AFTER each
+ *  block renders (post-fit-to-SDK), so an instruction with one giant fit
+ *  PDF + several smaller files can still surface as total_request_over
+ *  even when each file individually passed its own per-file cap. */
+export const TOTAL_REQUEST_BYTE_LIMIT = 32 * 1024 * 1024;
+
 /** Allowed Office MIMEs (OOXML only — file-upload spec rejects legacy
  *  .doc / .xls / .ppt). Rendered as text content blocks after an
  *  officeparser extraction pass. */
@@ -402,14 +417,41 @@ export function fitImageToSdk(
  *  byte sequence in a `text/*` upload yields U+FFFD rather than a hard
  *  reject — the spec calls for UTF-8 but real-world picks (Shift_JIS PDF
  *  text mis-MIME'd as text/plain by the OS) are common enough that
- *  failing the whole turn over them costs more UX than it gains. The
- *  caller has validated the MIME is text-rendered via isTextMime. */
+ *  failing the whole turn over them costs more UX than it gains. Bytes
+ *  past TEXT_SDK_BYTE_LIMIT are tail-truncated with a notice (file-upload
+ *  spec text fit-to-SDK) so a runaway log file doesn't bloat the SDK
+ *  request. The caller has validated the MIME is text-rendered via
+ *  isTextMime. */
 export function renderTextBlock(
   meta: UploadMeta,
   bytes: Uint8Array,
 ): TextContentBlock {
-  const body = new TextDecoder("utf-8").decode(bytes);
-  return { type: "text", text: `[file: ${meta.filename}]\n${body}` };
+  let truncatedNote = "";
+  let slice = bytes;
+  if (bytes.byteLength > TEXT_SDK_BYTE_LIMIT) {
+    slice = bytes.subarray(0, TEXT_SDK_BYTE_LIMIT);
+    truncatedNote = `\n\n[...truncated, original ${bytes.byteLength} bytes]\n`;
+  }
+  const body = new TextDecoder("utf-8").decode(slice);
+  return {
+    type: "text",
+    text: `[file: ${meta.filename}]\n${body}${truncatedNote}`,
+  };
+}
+
+/** Estimated wire size of a content block, used for the per-instruction
+ *  total request budget check (file-upload spec / Stage A IN2 — Anthropic's
+ *  32 MB ceiling counts base64-encoded media plus raw UTF-8 text). image
+ *  and document blocks carry their base64 payload (ASCII only, so length
+ *  IS the byte count) as `source.data`. text blocks must be measured in
+ *  UTF-8 bytes — `String.length` counts UTF-16 code units, which
+ *  undercounts ~3x for non-ASCII content (e.g. CJK) and would silently
+ *  let an over-budget request slip past the cap. */
+export function blockWireSize(block: ContentBlock): number {
+  if (block.type === "image" || block.type === "document") {
+    return block.source.data.length;
+  }
+  return Buffer.byteLength(block.text, "utf8");
 }
 
 /** Renders one upload's assembled bytes (already fit) into a base64

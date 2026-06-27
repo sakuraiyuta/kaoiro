@@ -12,7 +12,9 @@ import {
   PROTOCOL_FILE_SIZE_LIMIT_BYTES,
   SharpImageDownsizer,
   TEXT_MIME_ALLOW,
+  TEXT_SDK_BYTE_LIMIT,
   assembleBytes,
+  blockWireSize,
   DefaultOfficeTextExtractor,
   fitImageToSdk,
   fitPdfToSdk,
@@ -229,6 +231,38 @@ describe("renderTextBlock / renderAttachmentBlock", () => {
       type: "text",
       text: "[file: hello.txt]\nhello\nworld",
     });
+  });
+
+  it("renderTextBlock は TEXT_SDK_BYTE_LIMIT 超を末尾切り + 注記", () => {
+    const big = "A".repeat(TEXT_SDK_BYTE_LIMIT + 100);
+    const bytes = new TextEncoder().encode(big);
+    const block = renderTextBlock(meta_({ filename: "big.txt" }), bytes);
+    expect(block.text.startsWith("[file: big.txt]\n")).toBe(true);
+    expect(block.text).toContain(
+      `[...truncated, original ${bytes.byteLength} bytes]`,
+    );
+    expect(block.text.length).toBeLessThan(bytes.byteLength + 100);
+  });
+
+  it("blockWireSize は image/document の base64 長と text の UTF-8 バイト長", () => {
+    expect(
+      blockWireSize({
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "abcdef" },
+      }),
+    ).toBe(6);
+    expect(
+      blockWireSize({
+        type: "document",
+        source: { type: "base64", media_type: PDF_MIME, data: "abcdefghij" },
+      }),
+    ).toBe(10);
+    expect(blockWireSize({ type: "text", text: "12345" })).toBe(5);
+    // 非 ASCII: 「あ」は UTF-8 で 3 bytes、 UTF-16 code units は 1。
+    // .length で測ると 1 になるが、 wire size は 3 でないと 32 MB cap が
+    // CJK 入力で undercount される。
+    expect(blockWireSize({ type: "text", text: "あ" })).toBe(3);
+    expect(blockWireSize({ type: "text", text: "あいう" })).toBe(9);
   });
 
   it("renderTextBlock は非 UTF-8 で U+FFFD 置換(throw しない)", () => {
