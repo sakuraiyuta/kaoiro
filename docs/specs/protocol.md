@@ -101,7 +101,7 @@ flowchart LR
 | `permission_request` | **確定** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`。`request_id` はラッパー生成のセッション内一意 ID([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。`input` はツール入力(ラッパーが 16KB 程度に切り詰め、切り詰め時 `truncated: true`。シークレット混入リスクは [threat-model](threat-model.md))。state は `waiting_permission`。**初出通知に降格**: pending 状態の真実は `state_change.ext.pending_permission` ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md))。本 envelope は protocol 互換維持と「新規 pending あり」イベント通知のために残るが、payload は ext と同期保証される(同一の `request_id` / `tool_name` / `input` / `truncated` / `ts`)。新クライアントは ext 経由を推奨。**operator 限定配信**: viewer には完全除去し、grid 整合のため合成 `state_change(waiting_permission)`(`payload={}` / `ext` なし)に置換して配信([ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 | `result` | **確定** | `{ text?: string, is_error?: boolean, error_message?: string }`。ターン完了時の最終応答。`is_error` でエラー終了を区別し、`error_message` にエラー本文(生)を載せてクライアントへリレーする(整形なし。SDK/API エラー本文に加え、wrapper プロセス異常終了時は落ちる直前の最後のエラーを送る。[ADR-0016](../adr/0016-error-body-relay.md))。state は `done`/`error` の後 `waiting_input`。累計コスト USD は `ext.cost` に付与(#8)。`log` と同様 **operator 限定配信**([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
 | `task`(予約) | **予約** | subagent/workflow の起動/更新/完了を通知する専用 type(正式名称・スキーマは未確定)。親 `state_change` とは独立し、親 `agent_id` 参照で紐づく子エンティティを運ぶ([subagent-tasks](subagent-tasks.md)、[ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md))。予約追補のため `version` 据え置き |
-| `attach_rejected` | **確定** | `{ upload_id, reason, detail? }`。個別 upload の拒否(wrapper が attach_close 時の検査 / SDK エラー / interrupt で発火)。reason enum は [file-upload](file-upload.md) を正本(`size_over` / `mime_denied` / `count_over` / `timeout` / `interrupted` / `unfittable_image` / `unfittable_pdf` / `text_too_large` / `sdk_error`)。**operator 限定配信**(allow-list、 [ADR-0021](../adr/0021-role-information-disclosure-policy.md))。仕様集約は [file-upload](file-upload.md)、決定根拠は [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)。追補のため `version` 据え置き |
+| `attach_rejected` | **確定** | `{ upload_id, reason, detail? }`。個別 upload の拒否(wrapper が attach_close 時の検査 / SDK エラー / interrupt で発火)。reason enum は [file-upload](file-upload.md) を正本(`size_over` / `mime_denied` / `count_over` / `timeout` / `interrupted` / `unfittable_image` / `unfittable_pdf` / `text_too_large` / `total_request_over` / `sdk_error`)。**operator 限定配信**(allow-list、 [ADR-0021](../adr/0021-role-information-disclosure-policy.md))。仕様集約は [file-upload](file-upload.md)、決定根拠は [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)。追補のため `version` 据え置き |
 | `instruction_rejected` | **確定** | `{ attachment_ids?, reason, detail? }`。instruction 全体の拒否(合計上限超 / SDK エラー / interrupt 等)。reason enum と配信ガードは `attach_rejected` と同じ。追補のため `version` 据え置き |
 
 ### 方向別メッセージ種別(v0 確定)
@@ -185,7 +185,14 @@ upload を立てない。 server は upload bytes を解釈・永続せず
 全 `attachment_ids` が attach_close 完走済であることを確認する(未完走時は
 `instruction_rejected{reason="timeout"}` 等で reject)。
 
-**`attach_chunk` binary frame 形式**(MVP):
+**`attach_chunk` payload 形式**(V2 binary frame の payload 内部レイアウト、 MVP):
+
+Phoenix V2 binary serializer は WebSocket binary opcode のフレームを受け、
+サーバ側 `handle_in("attach_chunk", {:binary, payload}, socket)` の
+`payload` に下記バイト列を `{:binary, binary()}` タプルでラップして渡す
+(V2 はタプル形式、 V1 と混同しない)。 phoenix.js は `ArrayBuffer` を
+`channel.push("attach_chunk", arrayBuffer)` に直接渡せば自動で binary
+frame 化される(Blob は事前 `arrayBuffer()` 変換が必要)。
 
 ```text
 <u32 upload_id_len><upload_id utf8><u32 chunk_index><chunk_bytes>
@@ -199,10 +206,28 @@ upload を立てない。 server は upload bytes を解釈・永続せず
 並列度・ チャンクサイズは client 任意(MVP 推奨: 1 chunk 64 KB、
 [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F14)。
 
+V2 frame ヘッダ(`<<kind::8, join_ref_size::8, ref_size::8, topic_size::8,
+event_size::8, ...>>`)は Phoenix が処理する範囲で、 各 size フィールドが
+8bit のため join_ref / ref / topic / event は各最大 255 バイト
+(kaoiro の `wrapper:<agent_id>` / `attach_chunk` 等は十分余裕)。
+
 **transport 安全弁**: server は 1 frame 上限 8 MB、 in-flight upload cap
-20 / wrapper を強制(DoS 防衛)。 個別ファイル上限(一律 128 MB)・ MIME
-許可・ 点数(10 / instruction)・ TTL(未参照 / chunk 不完全は 5 分で GC)
-等の規範は wrapper が最終判定する([file-upload](file-upload.md)、
+20 / wrapper を強制(DoS 防衛)。 Phoenix の `max_frame_size` 既定は
+`:infinity` のため、 endpoint config で明示する:
+
+```elixir
+# lib/kaoiro_web/endpoint.ex
+socket "/wrapper", KaoiroWeb.WrapperSocket,
+  websocket: [
+    timeout: 60_000,
+    max_frame_size: 8_000_000  # 8 MB
+  ]
+```
+
+`:infinity` のまま 128 MB を 1 frame で受けると受信プロセス 1 つに 128 MB
+確保され OOM リスクが出る。 個別ファイル上限(一律 128 MB)・ MIME 許可・
+点数(10 / instruction)・ TTL(未参照 / chunk 不完全は 5 分で GC)等の
+規範は wrapper が最終判定する([file-upload](file-upload.md)、
 ADR-0025 F4 / F6 / F7 / F13)。
 
 **配信ガード**: `attach_open` / `attach_chunk` / `attach_close` /

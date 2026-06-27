@@ -84,22 +84,37 @@ Claude Agent SDK の場合:
 | 画像 | `image` content block |
 | text / code | `text` content block(本文インライン) |
 | PDF | `document` content block |
-| Office | wrapper 内 markitdown 相当でテキスト化 → `text` block |
+| Office | wrapper 内 officeparser(pure JS、docx/xlsx/pptx)でテキスト化 → `text` block |
 
 将来 engine が増えた場合は per-engine wrapper が独自ポリシーを持つ。
 
 ### fit-to-SDK
 
-128 MB の protocol 上限と SDK の硬い上限(image_block / document_block の
-正確な値は実装着手前 spike で確証、 plan の Stage A 参照)のギャップを
-吸収するのは wrapper の責任。
+128 MB の protocol 上限(client → server → wrapper)と Claude API の SDK
+実効上限のギャップは wrapper が吸収する。 Phase 7 Stage A の spike(IN2)で
+判明した SDK 上限:
 
-| 種別 | fit | 失敗時 reject reason |
-|--|--|--|
-| 画像 | 解像度 / 品質 downsize | `unfittable_image` |
-| PDF | 先頭 N ページ抽出 | `unfittable_pdf` |
-| text / code | 先頭 N MB 切り詰め(`truncated` 印付き) | `text_too_large` |
-| Office | markitdown → text 経路で text 同様 | 同上 |
+- 画像 content block: **10 MB(base64 後、 生 ~7.5 MB)** / モデル別
+  visual token 上限(8000 px 長辺 / 1568-2576 px の長辺で自動 downscale)
+- document content block(PDF): **32 MB / 600 ページ**(200K context モデルは
+  100 ページ)
+- text content block: byte 上限なし(モデルの context window 依存)
+- **リクエスト合計: 32 MB がハード上限**(全 attachment の base64 後合計)
+- 現行 active Claude モデル(Fable 5 / Mythos 5 / Opus 4.x / Sonnet 4.6 /
+  Haiku 4.5)はすべて image / document 対応
+
+| 種別 | fit | 失敗時 reject reason | 採用ライブラリ |
+|--|--|--|--|
+| 画像 | 解像度 / 品質 downsize → 10 MB / モデル別 px 上限 以内 | `unfittable_image` | sharp(`ImageDownsizer` 抽象経由、 ADR-0018 対応時に sharp-wasm32 / jimp へ差替え可能) |
+| PDF | 先頭 N ページ抽出 → 32 MB / モデル別ページ上限 以内 | `unfittable_pdf` | pdf-lib(pure JS) |
+| text / code | 先頭 N MB 切り詰め(`truncated` 印付き)+ Anthropic SDK の `countTokens` で context window 検証 | `text_too_large` | 自前 + `@anthropic-ai/sdk` `countTokens` |
+| Office (docx/xlsx/pptx) | text に変換 → text 同様 | 同上 | officeparser(pure JS、 markitdown は OQ で fallback 余地) |
+
+wrapper は instruction 着信時に **全 attachment の base64 後合計サイズを
+事前検証**し、 32 MB を超える場合は
+`instruction_rejected{reason="total_request_over"}` で拒否する。
+個別 fit 後でも合計が超える場合に発火。 32 MB 超を扱う運用要求が出たら
+Files API 経路(`file_id` 参照)を OQ で起票する。
 
 ### reject 経路
 
@@ -112,7 +127,7 @@ wrapper の判定で受理不能な場合、 専用 envelope type で通知す�
 
 reason enum: `size_over` / `mime_denied` / `count_over` / `timeout` /
 `interrupted` / `unfittable_image` / `unfittable_pdf` / `text_too_large` /
-`sdk_error`。
+`total_request_over` / `sdk_error`。
 
 既存 `result.is_error` は「ターン完了時のエラー」の意味論を保つため
 流用しない。 両 envelope は operator 限定配信
@@ -175,6 +190,8 @@ instruction 不発時の fail-safe。
 | Q5 | [file-upload-spill-storage](../open-questions/file-upload-spill-storage.md) | low |
 | Q6 | [file-upload-exif-stripping](../open-questions/file-upload-exif-stripping.md) | low |
 | Q8 | [file-upload-name-collision](../open-questions/file-upload-name-collision.md) | low |
+| Q9 | [file-upload-files-api-route](../open-questions/file-upload-files-api-route.md) | low |
+| Q10 | [file-upload-markitdown-fallback](../open-questions/file-upload-markitdown-fallback.md) | low |
 
 ## See Also
 

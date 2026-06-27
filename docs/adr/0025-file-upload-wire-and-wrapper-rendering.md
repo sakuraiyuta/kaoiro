@@ -127,9 +127,27 @@ rejected:
 
 ### F10: wrapper の fit-to-SDK 責任
 
-128 MB の protocol 上限と SDK の硬い上限のギャップを吸収する best-effort:
-画像 downsize / PDF page-extract / text truncate / Office → text。 不能は
-F9 の専用 reason で reject。 表詳細は file-upload spec を参照。
+128 MB の protocol 上限と SDK の硬い上限(image 10 MB / PDF 32 MB /
+**リクエスト合計 32 MB がハード上限**、 Phase 7 Stage A spike 結果)の
+ギャップを吸収する best-effort:
+
+- 画像 downsize: **sharp**(`ImageDownsizer` 抽象経由、 ADR-0018 対応時に
+  sharp-wasm32 / jimp に差替え可能)
+- PDF page-extract: **pdf-lib**(pure JS)
+- text truncate: 自前 + `@anthropic-ai/sdk` の `countTokens` で context
+  window 検証
+- Office → text: **officeparser**(pure JS、 docx/xlsx/pptx 1 lib)、
+  markitdown CLI は Q10([file-upload-markitdown-fallback](../open-questions/file-upload-markitdown-fallback.md))で
+  fallback 余地
+
+合計 32 MB 超は `instruction_rejected{reason="total_request_over"}` で
+拒否。 個別不能は F9 の専用 reason(`unfittable_image` / `unfittable_pdf` /
+`text_too_large`)で reject。 表詳細は
+[file-upload](../specs/file-upload.md) を参照。
+
+>32 MB 単独ファイルの実用は Files API 経路(`file_id` 参照)で実現可能
+(1 file 500 MB まで)。 採用判断は Q9
+([file-upload-files-api-route](../open-questions/file-upload-files-api-route.md))。
 
 rejected: 「SDK が reject したらそのまま返す」のみ — 128 MB cap と SDK
 小上限のギャップで UX 破綻。
@@ -210,11 +228,15 @@ MVP: 1 chunk 64 KB、 並列度 client 任意。 「間口を広げる」路線�
 | Q5 | [file-upload-spill-storage](../open-questions/file-upload-spill-storage.md) |
 | Q6 | [file-upload-exif-stripping](../open-questions/file-upload-exif-stripping.md) |
 | Q8 | [file-upload-name-collision](../open-questions/file-upload-name-collision.md) |
+| Q9 | [file-upload-files-api-route](../open-questions/file-upload-files-api-route.md) |
+| Q10 | [file-upload-markitdown-fallback](../open-questions/file-upload-markitdown-fallback.md) |
 
-実装着手前 spike(plan の Stage A): Phoenix V2 binary frame 仕様 /
-phoenix.js ArrayBuffer push API / `max_frame_size` 既定値 / Claude API
-image_block と document_block の正確な上限 / fit-to-SDK ライブラリ選定
-(image: sharp 候補 / PDF: pdf-lib 候補 / Office: markitdown CLI)。
+Phase 7 Stage A spike 完了(plan の「Spike 結果」セクション参照): Phoenix
+V2 binary serializer 仕様 / phoenix.js ArrayBuffer push API 確証、 Claude
+API 上限値確定(image 10 MB / PDF 32 MB / リクエスト 32 MB)、 fit-to-SDK
+ライブラリ採用確定(sharp / pdf-lib / officeparser / Anthropic SDK
+`countTokens`)。 `max_frame_size` は既定 `:infinity` のため運用設定で
+8 MB 程度に明示する必要あり(spec 反映済)。
 
 ## Related
 

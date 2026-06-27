@@ -17,6 +17,8 @@
 | [file-upload-spill-storage](file-upload-spill-storage.md) | low | — | 2026-06-27 |
 | [file-upload-exif-stripping](file-upload-exif-stripping.md) | low | — | 2026-06-27 |
 | [file-upload-name-collision](file-upload-name-collision.md) | low | — | 2026-06-27 |
+| [file-upload-files-api-route](file-upload-files-api-route.md) | low | — | 2026-06-27 |
+| [file-upload-markitdown-fallback](file-upload-markitdown-fallback.md) | low | — | 2026-06-27 |
 
 ## Recently decided
 
