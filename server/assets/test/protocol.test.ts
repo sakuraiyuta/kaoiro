@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ATTACH_CHUNK_SIZE,
+  buildChunkPayload,
   fetchPersonaManifest,
   hostIdFromAgentId,
   isReplyEnvelope,
@@ -272,5 +274,38 @@ describe("hostIdFromAgentId (#22 terminate routing)", () => {
   });
   it("ドット無しはそのまま返す(runner 不在=no-op)", () => {
     expect(hostIdFromAgentId("nodot")).toBe("nodot");
+  });
+});
+
+describe("buildChunkPayload (ファイルアップロード wire, ADR-0025)", () => {
+  function parse(buf: ArrayBuffer): {
+    upload_id: string;
+    chunk_index: number;
+    bytes: Uint8Array;
+  } {
+    const u8 = new Uint8Array(buf);
+    const view = new DataView(buf);
+    const idLen = view.getUint32(0, false);
+    const upload_id = new TextDecoder().decode(u8.subarray(4, 4 + idLen));
+    const chunk_index = view.getUint32(4 + idLen, false);
+    const bytes = u8.subarray(4 + idLen + 4);
+    return { upload_id, chunk_index, bytes };
+  }
+
+  it("spec layout (u32 BE upload_id_len + utf8 id + u32 BE chunk_index + bytes) で組み立てる", () => {
+    const buf = buildChunkPayload("u-7a3f", 2, new Uint8Array([1, 2, 3, 4]));
+    const parsed = parse(buf);
+    expect(parsed.upload_id).toBe("u-7a3f");
+    expect(parsed.chunk_index).toBe(2);
+    expect(Array.from(parsed.bytes)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("UTF-8 マルチバイト upload_id を運べる", () => {
+    const buf = buildChunkPayload("う1", 0, new Uint8Array([9]));
+    expect(parse(buf).upload_id).toBe("う1");
+  });
+
+  it("ATTACH_CHUNK_SIZE は spec 推奨の 64 KB", () => {
+    expect(ATTACH_CHUNK_SIZE).toBe(64 * 1024);
   });
 });

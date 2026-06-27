@@ -190,6 +190,22 @@
         },
         onSpawnResult: (result) => notifySpawn(result),
         onSessions: (result) => (runnerSessions = result),
+        onAttachRejected: (payload) => {
+          // wrapper-side upload rejection (file-upload spec / ADR-0025);
+          // surface to operator via the shared transient notice channel.
+          showNotice(
+            `添付却下: ${payload.upload_id} (${payload.reason}${
+              payload.detail !== undefined ? ` — ${payload.detail}` : ""
+            })`,
+          );
+        },
+        onInstructionRejected: (payload) => {
+          showNotice(
+            `指示却下: ${payload.reason}${
+              payload.detail !== undefined ? ` — ${payload.detail}` : ""
+            }`,
+          );
+        },
       },
       connectOpts,
     );

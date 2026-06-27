@@ -288,6 +288,15 @@
 
   let instruction = $state("");
   let actionError = $state("");
+  // Staged file for the next send (file-upload spec / ADR-0025 F12: lazy
+  // upload — picker only holds the File reference; bytes traverse the wire
+  // when the operator hits 送信). Phase-0: single image, no chunked
+  // progress UI. ✕ on the chip clears it without touching the wire.
+  let stagedFile = $state<File | null>(null);
+  let stagedFileInput = $state<HTMLInputElement | null>(null);
+  // True while uploadFile is in flight (between attach_open ack and the
+  // instruction push); locks the send button against double-submits.
+  let uploading = $state(false);
   // Mid-flight ESC (#51): set on click, cleared when the server replies
   // (ok/error/timeout). The agent's own state change is what stops the
   // turn — this flag only locks the button against double-clicks.
@@ -444,11 +453,29 @@
   function sendInstruction(event: SubmitEvent): void {
     event.preventDefault();
     const text = instruction.trim();
-    if (!connection || text === "") return;
+    // Either text or a staged file is required; both empty is a no-op.
+    if (!connection || (text === "" && stagedFile === null)) return;
+    const file = stagedFile;
     void run(async () => {
       const before = logs.length;
-      await connection.sendInstruction(envelope.agent_id, text);
+      const attachmentIds: string[] = [];
+      if (file !== null) {
+        uploading = true;
+        try {
+          const uploadId = await connection.uploadFile(envelope.agent_id, file);
+          attachmentIds.push(uploadId);
+        } finally {
+          uploading = false;
+        }
+      }
+      await connection.sendInstruction(
+        envelope.agent_id,
+        text,
+        attachmentIds.length > 0 ? attachmentIds : undefined,
+      );
       instruction = "";
+      stagedFile = null;
+      if (stagedFileInput !== null) stagedFileInput.value = "";
       // Wait for the server to reflect the user log back into the transcript
       // (one WS round-trip; ~50-200ms on a local link). Cap at 1.5s so a
       // stalled server still settles. Then bring the just-sent line into
@@ -462,6 +489,17 @@
       const last = logEl?.lastElementChild as HTMLElement | null;
       last?.scrollIntoView({ block: "end", behavior: "smooth" });
     });
+  }
+
+  function onFilePicked(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    stagedFile = file;
+  }
+
+  function clearStagedFile(): void {
+    stagedFile = null;
+    if (stagedFileInput !== null) stagedFileInput.value = "";
   }
 
   // --- Slash command completion (#34) ---------------------------------------
@@ -1061,8 +1099,29 @@
               rows="2"
               aria-label="instruction for {name}"
             ></textarea>
-            <button type="submit" disabled={instruction.trim() === ""}>送信</button>
+            <label class="attach" title="ファイル添付(画像)">
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onchange={onFilePicked}
+                bind:this={stagedFileInput}
+              />
+              <span>📎</span>
+            </label>
+            <button
+              type="submit"
+              disabled={uploading ||
+                (instruction.trim() === "" && stagedFile === null)}
+              >{uploading ? "送信中…" : "送信"}</button
+            >
           </form>
+
+          {#if stagedFile}
+            <div class="staged">
+              <span>🖼 {stagedFile.name} ({(stagedFile.size / 1024).toFixed(1)} KB)</span>
+              <button type="button" onclick={clearStagedFile} aria-label="添付を解除">✕</button>
+            </div>
+          {/if}
 
           {#if display.shown === "sending"}
             <p class="sending-note">送信中… 応答待ち</p>
@@ -2021,5 +2080,41 @@
     font-size: 0.75rem;
     color: var(--c-error);
     overflow-wrap: anywhere;
+  }
+
+  /* File picker (ADR-0025): the input itself is hidden, the label acts as
+     the visible 📎 button so the composer row stays compact. */
+  .attach {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    background: var(--bg-card);
+    cursor: pointer;
+  }
+
+  .attach input[type="file"] {
+    display: none;
+  }
+
+  .staged {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.4rem;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    background: var(--bg-card);
+    font-size: 0.8rem;
+  }
+
+  .staged button {
+    border: none;
+    background: transparent;
+    color: var(--fg);
+    cursor: pointer;
+    font-size: 0.85rem;
   }
 </style>
