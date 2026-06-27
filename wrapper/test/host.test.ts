@@ -236,6 +236,86 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("config.permission_mode が SDK の permissionMode に渡る (#58)", async () => {
+    let captured!: Options;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      captured = args.options;
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(
+      { ...config, permission_mode: "plan" },
+      { onState: () => {}, queryFn, now: () => "T" },
+    );
+    await host.run();
+    expect(captured?.permissionMode).toBe("plan");
+    // allowDangerouslySkipPermissions is opt-in to bypassPermissions only.
+    expect(captured?.allowDangerouslySkipPermissions).toBeUndefined();
+  });
+
+  it("config.permission_mode が bypassPermissions なら allowDangerouslySkipPermissions が立つ (#58)", async () => {
+    let captured!: Options;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      captured = args.options;
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(
+      { ...config, permission_mode: "bypassPermissions" },
+      { onState: () => {}, queryFn, now: () => "T" },
+    );
+    await host.run();
+    expect(captured?.permissionMode).toBe("bypassPermissions");
+    expect(captured?.allowDangerouslySkipPermissions).toBe(true);
+  });
+
+  it("run() 前の setPermissionMode は SDK 開始時のモードを上書きする (#58)", async () => {
+    let captured!: Options;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      captured = args.options;
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(
+      { ...config, permission_mode: "default" },
+      { onState: () => {}, queryFn, now: () => "T" },
+    );
+    // Simulates the server after_join push arriving before the first turn.
+    await host.setPermissionMode("acceptEdits");
+    await host.run();
+    expect(captured?.permissionMode).toBe("acceptEdits");
+  });
+
+  it("mid-session setPermissionMode は SDK の query.setPermissionMode を呼ぶ (#58)", async () => {
+    const calls: string[] = [];
+    let hostRef!: AgentHost;
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        // Hand a chance to flip mode while the session is open.
+        await hostRef.setPermissionMode("acceptEdits");
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        setPermissionMode: async (mode: string) => {
+          calls.push(mode);
+        },
+      });
+    });
+    hostRef = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await hostRef.run();
+    expect(calls).toEqual(["acceptEdits"]);
+  });
+
   it("init / status / result から ext.permission_mode と ext.fast_mode を付与する (#57)", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {

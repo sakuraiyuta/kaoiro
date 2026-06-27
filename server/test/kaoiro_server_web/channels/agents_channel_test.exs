@@ -353,6 +353,60 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "set_permission_mode relay (#58)" do
+    # Poll for a fire-and-forget cast result rather than a fixed sleep, matching
+    # permission_modes_test.exs / wrapper_channel_test.exs (loaded CI hosts can
+    # take >20 ms to drain a GenServer cast, so a fixed sleep is flaky).
+    defp wait_until(predicate, attempts \\ 50) do
+      cond do
+        predicate.() -> :ok
+        attempts <= 0 -> :timeout
+        true -> Process.sleep(5) && wait_until(predicate, attempts - 1)
+      end
+    end
+
+    test "operator の set_permission_mode を wrapper topic へ relay し永続化する" do
+      agent_id = "test.setperm-1"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_permission_mode", %{"agent_id" => agent_id, "mode" => "plan"})
+
+      assert_reply ref, :ok
+      assert_broadcast "set_permission_mode", payload
+      assert payload["mode"] == "plan"
+      refute Map.has_key?(payload, "agent_id")
+
+      :ok = wait_until(fn -> KaoiroServer.PermissionModes.get(agent_id) == "plan" end)
+      assert KaoiroServer.PermissionModes.get(agent_id) == "plan"
+    end
+
+    test "viewer の set_permission_mode は forbidden" do
+      agent_id = "test.setperm-2"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      ref = push(socket, "set_permission_mode", %{"agent_id" => agent_id, "mode" => "auto"})
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "未知の mode は invalid value で broadcast されず永続化もされない" do
+      agent_id = "test.setperm-3"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_permission_mode", %{"agent_id" => agent_id, "mode" => "yolo"})
+      assert_reply ref, :error, %{reason: "invalid value: mode"}
+
+      refute_broadcast "set_permission_mode", %{}
+      # The validation rejects before the cast is enqueued, so polling here
+      # is overkill — but match the success-path style for symmetry.
+      assert KaoiroServer.PermissionModes.get(agent_id) == nil
+    end
+  end
+
   describe "delete_agent (issue #14)" do
     defp put_disconnected(agent_id) do
       :ok =

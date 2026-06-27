@@ -247,6 +247,35 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  describe "after_join permission_mode push (#58)" do
+    test "永続化された permission_mode を join 直後に push する" do
+      agent_id = "test.after-join-perm-1"
+      KaoiroServer.PermissionModes.record(agent_id, "plan")
+      # Wait for the cast to land before joining so the after_join push reads
+      # the value (record is fire-and-forget).
+      :ok = wait_until(fn -> KaoiroServer.PermissionModes.get(agent_id) == "plan" end)
+
+      _socket = join_wrapper(agent_id)
+      assert_push "set_permission_mode", %{mode: "plan"}
+    end
+
+    test "永続値が無ければ join 直後の set_permission_mode は飛ばない" do
+      agent_id = "test.after-join-perm-2"
+      assert KaoiroServer.PermissionModes.get(agent_id) == nil
+
+      _socket = join_wrapper(agent_id)
+      refute_push "set_permission_mode", _
+    end
+
+    defp wait_until(predicate, attempts \\ 50) do
+      cond do
+        predicate.() -> :ok
+        attempts <= 0 -> :timeout
+        true -> Process.sleep(5) && wait_until(predicate, attempts - 1)
+      end
+    end
+  end
+
   describe "切断時の disconnected 導出" do
     test "channel 終了で disconnected を broadcast し snapshot を更新する" do
       agent_id = "test.disc-1"

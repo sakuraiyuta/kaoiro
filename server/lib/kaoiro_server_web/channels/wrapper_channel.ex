@@ -33,6 +33,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- reject_if_connected(agent_id) do
       # Drop the raw token once verified so it cannot leak via crash
       # logs / socket inspection.
+      send(self(), :after_join)
+
       {:ok,
        socket
        |> assign(:agent_id, agent_id)
@@ -40,6 +42,23 @@ defmodule KaoiroServerWeb.WrapperChannel do
     else
       {:error, reason} -> {:error, %{reason: to_string(reason)}}
     end
+  end
+
+  # Push the persisted permission_mode pick once the join completes (#58).
+  # Phoenix Channels require push/3 to run after the join reply; send/2 +
+  # handle_info is the standard idiom. Nothing happens when no mode was
+  # persisted yet — the wrapper falls back to its config / `default`.
+  @impl true
+  def handle_info(:after_join, socket) do
+    case KaoiroServer.PermissionModes.get(socket.assigns.agent_id) do
+      mode when is_binary(mode) ->
+        push(socket, "set_permission_mode", %{mode: mode})
+
+      _ ->
+        :ok
+    end
+
+    {:noreply, socket}
   end
 
   # Reject a second concurrent wrapper for an agent_id that already has a

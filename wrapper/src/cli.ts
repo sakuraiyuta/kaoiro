@@ -20,10 +20,10 @@ import { parseCliArgs } from "./args.js";
 import { readSessionHistory } from "./history.js";
 import { AgentHost } from "./host.js";
 import { PermissionBroker } from "./permission.js";
-import { loadConfig } from "./persona.js";
+import { PERMISSION_MODES, loadConfig } from "./persona.js";
 import { makeLog, makeStateChange } from "./state.js";
 import { ServerLink } from "./transport.js";
-import type { Envelope, KaoiroState } from "./types.js";
+import type { Envelope, KaoiroState, PermissionMode } from "./types.js";
 
 const COLOR: Record<KaoiroState, string> = {
   idle: "90", // grey
@@ -161,6 +161,22 @@ async function main(): Promise<void> {
       onSetEffort: (level) => {
         process.stdout.write(`  set_effort: ${level}\n`);
         void host.setEffort(level).catch(() => {});
+      },
+      onSetPermissionMode: (mode) => {
+        // protocol.md (#58): operator pick OR server after-join push of the
+        // last persisted choice. Validate against the closed enum so a
+        // malformed server payload never reaches the SDK; setPermissionMode
+        // swallows SDK errors (e.g. bypass requested when the session was
+        // not opened with allowDangerouslySkipPermissions) like the other
+        // controls.
+        if (!(PERMISSION_MODES as readonly string[]).includes(mode)) {
+          process.stdout.write(
+            `  set_permission_mode: ignored unknown value '${mode}'\n`,
+          );
+          return;
+        }
+        process.stdout.write(`  set_permission_mode: ${mode}\n`);
+        void host.setPermissionMode(mode as PermissionMode).catch(() => {});
       },
       // File-upload wire (file-upload spec / ADR-0025). attach_* events
       // feed pending_uploads on the host; the host's validation emits

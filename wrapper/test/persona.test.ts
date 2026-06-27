@@ -138,6 +138,31 @@ describe("parseConfig", () => {
     });
   });
 
+  describe("permission_mode (#58)", () => {
+    it("有効な PermissionMode を受け入れる", () => {
+      for (const mode of [
+        "default",
+        "acceptEdits",
+        "bypassPermissions",
+        "plan",
+        "dontAsk",
+        "auto",
+      ]) {
+        expect(
+          parseConfig({ ...valid, permission_mode: mode }),
+        ).toMatchObject({ permission_mode: mode });
+      }
+    });
+
+    it("不正な permission_mode は ConfigError", () => {
+      for (const bad of ["", "yolo", "DEFAULT", 1, null]) {
+        expect(() =>
+          parseConfig({ ...valid, permission_mode: bad }),
+        ).toThrow(ConfigError);
+      }
+    });
+  });
+
   it("allowed_tools は非空文字列の配列のみ受け入れる", () => {
     expect(
       parseConfig({ ...valid, allowed_tools: ["Read", "Edit", "Bash"] }),

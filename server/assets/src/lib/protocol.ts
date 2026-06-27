@@ -378,6 +378,10 @@ export interface KaoiroConnection {
    * rejects like sendInstruction. `effort` is a level from a model's
    * effort_levels (low..max). */
   setEffort: (agentId: string, effort: string) => Promise<void>;
+  /** Switches the SDK permission mode for the agent's subsequent turns
+   * (#58); the server also persists the pick so the wrapper restores it
+   * on next start. `mode` must be a closed-enum PermissionMode value. */
+  setPermissionMode: (agentId: string, mode: string) => Promise<void>;
   /** Purges the agent's past-session reply log (issue #48); rejects like
    * sendInstruction (forbidden / unknown_agent / no_current_session). */
   clearHistory: (agentId: string) => Promise<void>;
@@ -657,6 +661,8 @@ export function connectKaoiro(
       pushAsync(channel, "set_model", { agent_id: agentId, model }),
     setEffort: (agentId, effort) =>
       pushAsync(channel, "set_effort", { agent_id: agentId, effort }),
+    setPermissionMode: (agentId, mode) =>
+      pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
     clearHistory: (agentId) =>
       pushAsync(channel, "clear_history", { agent_id: agentId }),
     deleteAgent: (agentId) =>

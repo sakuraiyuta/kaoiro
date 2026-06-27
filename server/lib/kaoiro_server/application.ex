@@ -23,6 +23,8 @@ defmodule KaoiroServer.Application do
       KaoiroServer.HostRegistry,
       # Restart-surviving session_id pointers (ADR-0014 F1, issue #49).
       KaoiroServer.SessionPointers,
+      # Restart-surviving per-agent permission_mode picks (#58).
+      KaoiroServer.PermissionModes,
       # Start to serve requests, typically the last entry
       KaoiroServerWeb.Endpoint
     ]

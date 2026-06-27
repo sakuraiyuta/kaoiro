@@ -23,6 +23,7 @@ import type {
   KaoiroState,
   LogEntry,
   PendingPermissionExt,
+  PermissionMode,
   ResultPayload,
   WrapperConfig,
 } from "./types.js";
@@ -526,6 +527,31 @@ export class AgentHost {
     });
   }
 
+  /** Switch the permission mode for subsequent turns (#58). Two paths:
+   *  - PRE-run() (`#query` null): seeds the initial mode used at SDK
+   *    open. Server's after-join push lands here, before the first turn.
+   *  - MID-session: forwards to `query.setPermissionMode`; the SDK echoes
+   *    the new mode via SDKStatusMessage so ext.permission_mode updates on
+   *    the next state_change (#57). Optimistically stamp the internal
+   *    field so the next envelope reflects the choice even if the status
+   *    message is delayed; a later status overwrites it.
+   *
+   *  Rolls back the optimistic write when the SDK rejects (e.g. mid-session
+   *  switch INTO bypassPermissions when the session was not opened with
+   *  allowDangerouslySkipPermissions). Otherwise the failed switch would
+   *  leave the next state_change stamping a mode the SDK never accepted —
+   *  and no status echo would arrive to correct it. */
+  async setPermissionMode(mode: PermissionMode): Promise<void> {
+    const prev = this.#permissionMode;
+    this.#permissionMode = mode;
+    try {
+      await this.#query?.setPermissionMode(mode);
+    } catch (err) {
+      this.#permissionMode = prev;
+      throw err;
+    }
+  }
+
   /** Receives the pending-permission record from the broker (ADR-0022).
    *  Called synchronously inside the decider before #canUseTool transitions
    *  the state machine, so the resulting state_change(waiting_permission)
@@ -566,8 +592,23 @@ export class AgentHost {
     // so #64's cwd refresh composes with the consumer's own hooks. CwdChanged
     // is the only mid-session cwd source (init carries it once, never updates).
     const userHooks = this.#options.queryOptions?.hooks ?? {};
+    // permissionMode source order (#58): server-pushed last-choice >
+    // config.permission_mode > `default`. setPermissionMode() before run()
+    // sets #permissionMode; that overrides config.permission_mode here so
+    // the SDK opens the session in the chosen mode without a mid-session flip.
+    // allowDangerouslySkipPermissions is opt-in by mode: enabled only when
+    // the session STARTS in bypassPermissions. A later switch into bypass
+    // via the dashboard fails at the SDK boundary unless the wrapper was
+    // started with that mode.
+    const initialMode: PermissionMode =
+      (this.#permissionMode as PermissionMode | null) ??
+      this.#config.permission_mode ??
+      "default";
     const options: Options = {
-      permissionMode: "default",
+      permissionMode: initialMode,
+      ...(initialMode === "bypassPermissions"
+        ? { allowDangerouslySkipPermissions: true }
+        : {}),
       systemPrompt: { type: "preset", preset: "claude_code" },
       ...this.#options.queryOptions,
       hooks: {

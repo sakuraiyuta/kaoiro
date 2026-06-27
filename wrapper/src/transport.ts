@@ -39,6 +39,11 @@ export interface ServerLinkOptions {
   /** An operator's effort switch relayed by the server (protocol.md, #54).
    *  Payload is `{ effort: string }` — a level from a model's effort_levels. */
   onSetEffort?: (level: string) => void;
+  /** An operator's permission-mode switch relayed by the server (#58). Also
+   *  the carrier of the server's after-join push of the persisted last
+   *  choice. Payload is `{ mode: string }` — one of the SDK PermissionMode
+   *  values; validation lives in the wrapper. */
+  onSetPermissionMode?: (mode: string) => void;
   /** attach_open relayed by the server (file-upload spec / ADR-0025).
    *  Announces an upcoming upload; the wrapper registers a pending entry. */
   onAttachOpen?: (msg: AttachOpenMessage) => void;
@@ -129,6 +134,14 @@ export class ServerLink {
     this.#channel.on("set_effort", (payload: unknown) => {
       if (isObject(payload) && typeof payload.effort === "string") {
         options.onSetEffort?.(payload.effort);
+      }
+    });
+    // protocol.md (#58): server -> wrapper `set_permission_mode` carries the
+    // operator's mode pick AND the server's after-join push of the persisted
+    // last choice. Mode-value validation lives in host.setPermissionMode.
+    this.#channel.on("set_permission_mode", (payload: unknown) => {
+      if (isObject(payload) && typeof payload.mode === "string") {
+        options.onSetPermissionMode?.(payload.mode);
       }
     });
     // File-upload wire (file-upload spec / ADR-0025). attach_open declares an

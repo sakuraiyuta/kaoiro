@@ -66,11 +66,32 @@ export interface WrapperConfig {
    *  operator decides, matching the SDK's canUseTool behaviour). A
    *  finite value opts into fail-closed deny after that many ms. */
   permission_timeout_ms?: number;
+  /** Initial SDK permission mode (#58). Omitted = `default`. The server may
+   *  override this on join by pushing the last operator-persisted choice for
+   *  this agent_id. `bypassPermissions` requires explicit config opt-in:
+   *  the wrapper sets `allowDangerouslySkipPermissions: true` only when this
+   *  field is `bypassPermissions` at startup; a mid-session switch INTO
+   *  bypass via the dashboard fails closed unless the wrapper was started
+   *  with it. */
+  permission_mode?: PermissionMode;
   /** Tool-permission ceiling passed to the SDK as allowedTools. Local
    *  config only — cannot be widened from the server side
    *  (specs/threat-model.md). Omitted = the CLI's read-only default. */
   allowed_tools?: string[];
 }
+
+/** Closed enum of SDK PermissionMode values (#58). Mirrors the SDK union
+ *  type so the wrapper, server, and dashboard share one definition. The
+ *  protocol package is types-only (no runtime exports); consumers that need
+ *  the value list duplicate it locally (wrapper/src/persona.ts,
+ *  agents_channel.ex). */
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "bypassPermissions"
+  | "plan"
+  | "dontAsk"
+  | "auto";
 
 /** state_change.ext.pending_permission shape (ADR-0022, #59). The
  *  authoritative pending-permission record carried on every state_change

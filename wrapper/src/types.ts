@@ -10,6 +10,7 @@ export type {
   LogKind,
   LogPayload,
   ResultPayload,
+  PermissionMode,
   Persona,
   WrapperConfig,
   PendingPermissionExt,

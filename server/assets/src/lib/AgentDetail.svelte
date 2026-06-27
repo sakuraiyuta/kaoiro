@@ -243,7 +243,11 @@
       ccFastMode !== null ||
       ctxPct !== null ||
       ccRateRows.some((r) => r.pct !== null) ||
-      models.length > 0,
+      models.length > 0 ||
+      // Operator can always pick a permission mode (#58), even before init
+      // lands ext.permission_mode — keep the panel open so the dropdown is
+      // reachable without waiting for the first turn.
+      connection !== null,
   );
 
   // Wall-clock time of a log line from its envelope ts (#38). Invalid or
@@ -386,7 +390,30 @@
   // shows "既定" until the operator first chooses one.
   let modelMenuOpen = $state(false);
   let effortMenuOpen = $state(false);
+  let permMenuOpen = $state(false);
   let selectedEffort = $state<string | null>(null);
+  // Closed enum of SDK permission modes (#58). Keep the order issue-spec
+  // friendly: default (safest) first, bypass last.
+  const PERMISSION_MODE_VALUES = [
+    "default",
+    "acceptEdits",
+    "plan",
+    "dontAsk",
+    "auto",
+    "bypassPermissions",
+  ] as const;
+  // Optimistic perm label shown the instant the operator picks: ext.permission_mode
+  // (the authoritative SDK echo) catches up after the SDKStatusMessage, so this
+  // bridges the gap. Cleared once ext changes, on agent switch, or on dispose.
+  let pendingPerm = $state<string | null>(null);
+  let lastCcPerm = untrack(() => ccPermissionMode);
+  $effect(() => {
+    if (ccPermissionMode !== lastCcPerm) {
+      lastCcPerm = ccPermissionMode;
+      pendingPerm = null;
+    }
+  });
+  const permLabel = $derived(pendingPerm ?? ccPermissionMode);
   // Optimistic model label shown the instant the operator switches: ext.model
   // (the authoritative resolved id) only catches up a turn later, so without
   // this the model row stays on the old value until the next reply (#54).
@@ -408,18 +435,21 @@
       switchAgentId = envelope.agent_id;
       selectedEffort = null;
       pendingModel = null;
+      pendingPerm = null;
       modelMenuOpen = false;
       effortMenuOpen = false;
+      permMenuOpen = false;
     }
   });
-  // Close both popovers on a click outside any switch box.
+  // Close all popovers on a click outside any switch box.
   $effect(() => {
-    if (!modelMenuOpen && !effortMenuOpen) return;
+    if (!modelMenuOpen && !effortMenuOpen && !permMenuOpen) return;
     function onDocClick(event: MouseEvent): void {
       const target = event.target as HTMLElement | null;
       if (!target?.closest(".cc-switchbox")) {
         modelMenuOpen = false;
         effortMenuOpen = false;
+        permMenuOpen = false;
       }
     }
     document.addEventListener("click", onDocClick);
@@ -428,11 +458,18 @@
 
   function toggleModelMenu(): void {
     effortMenuOpen = false;
+    permMenuOpen = false;
     modelMenuOpen = !modelMenuOpen;
   }
   function toggleEffortMenu(): void {
     modelMenuOpen = false;
+    permMenuOpen = false;
     effortMenuOpen = !effortMenuOpen;
+  }
+  function togglePermMenu(): void {
+    modelMenuOpen = false;
+    effortMenuOpen = false;
+    permMenuOpen = !permMenuOpen;
   }
   function chooseModel(value: string): void {
     modelMenuOpen = false;
@@ -448,6 +485,24 @@
     if (!connection) return;
     selectedEffort = level;
     void run(() => connection.setEffort(envelope.agent_id, level));
+  }
+  function choosePermissionMode(value: string): void {
+    permMenuOpen = false;
+    if (!connection) return;
+    // bypassPermissions is a 2-step pick (#58 issue body): confirm before
+    // sending so a misclick never silently turns off every tool guard. The
+    // SDK additionally requires the wrapper to have been started with
+    // allowDangerouslySkipPermissions:true; a wrapper started without it
+    // rejects mid-session bypass — that surfaces as the usual run() error
+    // path, no special handling here.
+    if (value === "bypassPermissions") {
+      const ok = window.confirm(
+        "bypassPermissions: 全ツール許可を即時バイパスします。続行しますか?",
+      );
+      if (!ok) return;
+    }
+    pendingPerm = value;
+    void run(() => connection.setPermissionMode(envelope.agent_id, value));
   }
   // tool_use_id under the pointer, so its tool_use and tool_result both
   // highlight while hovered (#40).
@@ -976,10 +1031,38 @@
               <dd class="cc-cwd" title={ccCwd}>{ccCwd}</dd>
             </div>
           {/if}
-          {#if ccPermissionMode}
+          {#if ccPermissionMode || connection}
             <div class="cc-row">
               <dt>perm</dt>
-              <dd>{ccPermissionMode}</dd>
+              <dd>
+                {#if connection}
+                  <div class="cc-switchbox">
+                    <button
+                      type="button"
+                      class="cc-switch"
+                      aria-haspopup="listbox"
+                      aria-expanded={permMenuOpen}
+                      onclick={togglePermMenu}
+                    >{permLabel ?? "default"}</button>
+                    {#if permMenuOpen}
+                      <ul class="cc-menu" role="listbox">
+                        {#each PERMISSION_MODE_VALUES as mode (mode)}
+                          <li>
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={permLabel === mode}
+                              onclick={() => choosePermissionMode(mode)}
+                            >{mode}</button>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+                {:else}
+                  {ccPermissionMode}
+                {/if}
+              </dd>
             </div>
           {/if}
           {#if ccFastMode}

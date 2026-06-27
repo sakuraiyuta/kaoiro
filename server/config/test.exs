@@ -13,6 +13,12 @@ config :kaoiro_server,
        :session_pointers_path,
        Path.join(System.tmp_dir!(), "kaoiro_test_session_pointers.dets")
 
+# Throwaway DETS file for the permission_mode pick store (#58); the app-
+# started instance writes here, isolated from any real data.
+config :kaoiro_server,
+       :permission_modes_path,
+       Path.join(System.tmp_dir!(), "kaoiro_test_permission_modes.dets")
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

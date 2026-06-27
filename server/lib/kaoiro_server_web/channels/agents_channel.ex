@@ -206,6 +206,27 @@ defmodule KaoiroServerWeb.AgentsChannel do
     relay(socket, payload, "set_effort", [{"effort", &is_binary/1}])
   end
 
+  # permission_mode switch for a running session (issue #58). Operator-only;
+  # the validated choice relays opaquely to the wrapper (which applies it via
+  # query.setPermissionMode) AND persists into PermissionModes so the next
+  # start restores the pick. Closed-enum gate keeps a malformed dashboard
+  # payload from hitting the SDK.
+  @permission_modes ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"]
+  def handle_in("set_permission_mode", payload, socket) do
+    is_known_mode = fn value -> is_binary(value) and value in @permission_modes end
+
+    case relay(socket, payload, "set_permission_mode", [{"mode", is_known_mode}]) do
+      {:reply, :ok, _} = ok ->
+        # Validation already passed; persist before returning so a quick
+        # reconnect sees the new pick on its after_join push.
+        KaoiroServer.PermissionModes.record(payload["agent_id"], payload["mode"])
+        ok
+
+      other ->
+        other
+    end
+  end
+
   # File-upload wire (file-upload spec / ADR-0025). All three handlers are
   # operator-only and relay to `wrapper:<agent_id>` without inspecting the
   # bytes (server stays agent-agnostic). attach_open registers a per-socket

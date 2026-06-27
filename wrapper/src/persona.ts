@@ -3,7 +3,19 @@
 // used.
 
 import { readFileSync } from "node:fs";
-import type { WrapperConfig } from "./types.js";
+import type { PermissionMode, WrapperConfig } from "./types.js";
+
+// The protocol package is types-only (no runtime exports), so the closed
+// enum's value list is duplicated here. Keep in sync with the PermissionMode
+// type in protocol/src/index.ts (#58).
+export const PERMISSION_MODES = [
+  "default",
+  "acceptEdits",
+  "bypassPermissions",
+  "plan",
+  "dontAsk",
+  "auto",
+] as const satisfies readonly PermissionMode[];
 
 /** Upper bound for identity string fields. They are embedded verbatim in every
  *  Envelope and broadcast, so a sane length cap keeps the wire payload bounded. */
@@ -95,6 +107,18 @@ export function parseConfig(raw: unknown): WrapperConfig {
       }
       config.permission_timeout_ms = parsed;
     }
+  }
+
+  if (raw.permission_mode !== undefined) {
+    if (
+      typeof raw.permission_mode !== "string" ||
+      !(PERMISSION_MODES as readonly string[]).includes(raw.permission_mode)
+    ) {
+      throw new ConfigError(
+        `permission_mode must be one of: ${PERMISSION_MODES.join(", ")}`,
+      );
+    }
+    config.permission_mode = raw.permission_mode as PermissionMode;
   }
 
   if (raw.allowed_tools !== undefined) {
