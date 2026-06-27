@@ -853,4 +853,63 @@ describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () =
     await done;
     expect(rejected.length).toBe(0);
   });
+
+  it("in-flight 上限(20)に達した attachOpen は count_over で reject", async () => {
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn([]),
+      now: () => "T",
+    });
+    const done = host.run();
+    // 20 件まで受理(chunks=1 のまま close せず in-flight に積む)
+    for (let i = 0; i < 20; i++) {
+      host.attachOpen({
+        upload_id: `u${i}`,
+        filename: `a${i}.png`,
+        mime: "image/png",
+        size: 1,
+        chunks: 1,
+      });
+    }
+    // 21 件目は cap で reject
+    host.attachOpen({
+      upload_id: "u20",
+      filename: "overflow.png",
+      mime: "image/png",
+      size: 1,
+      chunks: 1,
+    });
+    host.close();
+    await done;
+    expect(rejected.length).toBe(1);
+    expect(rejected[0]!.payload).toMatchObject({
+      upload_id: "u20",
+      reason: "count_over",
+    });
+  });
+
+  it("instruction の attachment_ids が 10 件超なら count_over で reject(消費せず)", async () => {
+    const captured: SDKUserMessage[] = [];
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onInstructionRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    // 11 件のダミー id を渡す(pending_uploads 不在でも cap が先に弾く)
+    const ids = Array.from({ length: 11 }, (_, i) => `u${i}`);
+    host.send("見て", ids);
+    host.close();
+    await done;
+    expect(captured.length).toBe(0);
+    expect(rejected.length).toBe(1);
+    expect(rejected[0]!.payload).toMatchObject({
+      attachment_ids: ids,
+      reason: "count_over",
+    });
+  });
 });

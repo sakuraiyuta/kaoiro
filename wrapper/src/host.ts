@@ -47,6 +47,8 @@ import {
 import { clipText, logEntryToPayload } from "./logpayload.js";
 import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
+  MAX_ATTACHMENTS_PER_INSTRUCTION,
+  MAX_INFLIGHT_UPLOADS,
   PHASE_0_SIZE_LIMIT_BYTES,
   assembleBytes,
   parseChunkPayload,
@@ -198,6 +200,17 @@ export class AgentHost {
 
     let content: string | ContentBlock[] = text;
     if (attachmentIds && attachmentIds.length > 0) {
+      if (attachmentIds.length > MAX_ATTACHMENTS_PER_INSTRUCTION) {
+        // F6 cap: bounce the turn before consuming any staged upload so the
+        // operator can re-pick within the limit (count_over is an atomic
+        // pre-flight failure, not a partial send).
+        this.#emitInstructionRejected({
+          attachment_ids: attachmentIds,
+          reason: "count_over",
+          detail: `count=${attachmentIds.length} cap=${MAX_ATTACHMENTS_PER_INSTRUCTION}`,
+        });
+        return;
+      }
       const resolved = this.#resolveAttachments(attachmentIds);
       if (!resolved) return; // emitInstructionRejected already fired.
       const blocks: ContentBlock[] = resolved.map((entry) =>
@@ -229,9 +242,21 @@ export class AgentHost {
   }
 
   /** Registers a new upload from `attach_open`; emits `attach_rejected`
-   *  immediately on MIME / size mismatch (no entry is created in that case
-   *  so a subsequent attach_chunk for the same id is dropped silently). */
+   *  immediately on the in-flight cap, MIME, or size mismatch (no entry is
+   *  created in that case so a subsequent attach_chunk for the same id is
+   *  dropped silently). */
   attachOpen(meta: UploadMeta): void {
+    if (this.#pendingUploads.size >= MAX_INFLIGHT_UPLOADS) {
+      // F6 in-flight cap: refuse the open before allocating a pending entry
+      // so a misbehaving client cannot exhaust pending_uploads memory by
+      // opening uploads it never closes / never references.
+      this.#emitAttachRejected({
+        upload_id: meta.upload_id,
+        reason: "count_over",
+        detail: `in-flight=${this.#pendingUploads.size} cap=${MAX_INFLIGHT_UPLOADS}`,
+      });
+      return;
+    }
     const result = validateOpen(meta);
     if (!result.ok) {
       this.#emitAttachRejected({

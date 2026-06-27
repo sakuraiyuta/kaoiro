@@ -288,15 +288,24 @@
 
   let instruction = $state("");
   let actionError = $state("");
-  // Staged file for the next send (file-upload spec / ADR-0025 F12: lazy
-  // upload — picker only holds the File reference; bytes traverse the wire
-  // when the operator hits 送信). Phase-0: single image, no chunked
-  // progress UI. ✕ on the chip clears it without touching the wire.
-  let stagedFile = $state<File | null>(null);
+  // Staged files for the next send (file-upload spec / ADR-0025 F12: lazy
+  // upload — picker only holds the File references; bytes traverse the wire
+  // when the operator hits 送信). Each picker open appends to the existing
+  // tray (not replace), so the operator can build up the batch across
+  // multiple opens. ✕ on a chip removes that one entry without touching
+  // the wire. F6 caps the count at MAX_ATTACHMENTS_PER_INSTRUCTION; the
+  // wrapper enforces the same cap server-side and rejects with count_over.
+  let stagedFiles = $state<File[]>([]);
   let stagedFileInput = $state<HTMLInputElement | null>(null);
-  // True while uploadFile is in flight (between attach_open ack and the
-  // instruction push); locks the send button against double-submits.
+  // True while one of the uploadFile() calls is in flight (between the
+  // first attach_open and the instruction push); locks the send button
+  // against double-submits.
   let uploading = $state(false);
+  // Per-instruction attachment cap (file-upload spec / ADR-0025 F6). Kept
+  // in sync with the wrapper's MAX_ATTACHMENTS_PER_INSTRUCTION; reading
+  // it from a shared constant would mean importing from @kaoiro/protocol
+  // which is wrapper-side, so the spec value is mirrored here.
+  const MAX_STAGED = 10;
   // Mid-flight ESC (#51): set on click, cleared when the server replies
   // (ok/error/timeout). The agent's own state change is what stops the
   // turn — this flag only locks the button against double-clicks.
@@ -453,17 +462,27 @@
   function sendInstruction(event: SubmitEvent): void {
     event.preventDefault();
     const text = instruction.trim();
-    // Either text or a staged file is required; both empty is a no-op.
-    if (!connection || (text === "" && stagedFile === null)) return;
-    const file = stagedFile;
+    // Either text or at least one staged file is required; both empty is
+    // a no-op.
+    if (!connection || (text === "" && stagedFiles.length === 0)) return;
+    const files = stagedFiles;
     void run(async () => {
       const before = logs.length;
       const attachmentIds: string[] = [];
-      if (file !== null) {
+      if (files.length > 0) {
+        // Uploads run sequentially: parallel push would interleave many
+        // attach_chunk frames in flight at once, which can exceed the
+        // server's transport in-flight cap (file-upload spec). The
+        // wall-clock cost is small for the 5 MB / 10-file phase ceiling.
         uploading = true;
         try {
-          const uploadId = await connection.uploadFile(envelope.agent_id, file);
-          attachmentIds.push(uploadId);
+          for (const file of files) {
+            const uploadId = await connection.uploadFile(
+              envelope.agent_id,
+              file,
+            );
+            attachmentIds.push(uploadId);
+          }
         } finally {
           uploading = false;
         }
@@ -474,7 +493,7 @@
         attachmentIds.length > 0 ? attachmentIds : undefined,
       );
       instruction = "";
-      stagedFile = null;
+      stagedFiles = [];
       if (stagedFileInput !== null) stagedFileInput.value = "";
       // Wait for the server to reflect the user log back into the transcript
       // (one WS round-trip; ~50-200ms on a local link). Cap at 1.5s so a
@@ -492,14 +511,38 @@
   }
 
   function onFilePicked(event: Event): void {
+    // A fresh picker open is a new interaction: clear any stale error
+    // from a prior overflow / failed submit so the operator does not see
+    // a misleading message that no longer applies (the if-branch below
+    // only sets the error on overflow and would otherwise leave it).
+    actionError = "";
     const input = event.target as HTMLInputElement;
-    const file = input.files?.[0] ?? null;
-    stagedFile = file;
+    const picked = Array.from(input.files ?? []);
+    // Append rather than replace, so the operator can build up the tray
+    // across multiple picker opens (e.g. browse twice for files in
+    // different folders). The cap is the spec value; any overflow is
+    // dropped with a hint so the operator knows not all were staged.
+    const next: File[] = [...stagedFiles];
+    let dropped = 0;
+    for (const f of picked) {
+      if (next.length >= MAX_STAGED) {
+        dropped++;
+        continue;
+      }
+      next.push(f);
+    }
+    stagedFiles = next;
+    if (dropped > 0) {
+      actionError = `添付は ${MAX_STAGED} 件まで(${dropped} 件は無視されました)`;
+    }
+    // The native input's FileList is consumed on read; clearing the
+    // value here lets the operator re-pick the same file later if they
+    // remove it with ✕ first.
+    if (stagedFileInput !== null) stagedFileInput.value = "";
   }
 
-  function clearStagedFile(): void {
-    stagedFile = null;
-    if (stagedFileInput !== null) stagedFileInput.value = "";
+  function removeStagedFile(index: number): void {
+    stagedFiles = stagedFiles.filter((_, i) => i !== index);
   }
 
   // --- Slash command completion (#34) ---------------------------------------
@@ -1099,10 +1142,11 @@
               rows="2"
               aria-label="instruction for {name}"
             ></textarea>
-            <label class="attach" title="ファイル添付(画像)">
+            <label class="attach" title="ファイル添付(画像、複数可)">
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp,image/gif"
+                multiple
                 onchange={onFilePicked}
                 bind:this={stagedFileInput}
               />
@@ -1111,17 +1155,20 @@
             <button
               type="submit"
               disabled={uploading ||
-                (instruction.trim() === "" && stagedFile === null)}
+                (instruction.trim() === "" && stagedFiles.length === 0)}
               >{uploading ? "送信中…" : "送信"}</button
             >
           </form>
 
-          {#if stagedFile}
+          {#each stagedFiles as file, i (`${file.name}:${file.size}:${i}`)}
             <div class="staged">
-              <span>🖼 {stagedFile.name} ({(stagedFile.size / 1024).toFixed(1)} KB)</span>
-              <button type="button" onclick={clearStagedFile} aria-label="添付を解除">✕</button>
+              <span>🖼 {file.name} ({(file.size / 1024).toFixed(1)} KB)</span>
+              <button
+                type="button"
+                onclick={() => removeStagedFile(i)}
+                aria-label="添付を解除">✕</button>
             </div>
-          {/if}
+          {/each}
 
           {#if display.shown === "sending"}
             <p class="sending-note">送信中… 応答待ち</p>

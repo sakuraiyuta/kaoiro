@@ -22,8 +22,19 @@ export const IMAGE_MIME_ALLOW: ReadonlySet<string> = new Set([
 
 /** Per-file upper limit for phase-0 (5 MB). Matches Claude API image_block
  *  practical limit (~7.5 MB raw / 10 MB base64; Stage A IN2 finding). The
- *  protocol's 128 MB cap (ADR-0025 F4) lands in phase-1 with fit-to-SDK. */
+ *  protocol's 128 MB cap (ADR-0025 F4) lands with the image fit-to-SDK pass. */
 export const PHASE_0_SIZE_LIMIT_BYTES = 5 * 1024 * 1024;
+
+/** Cap on attachment references in one instruction (file-upload spec /
+ *  ADR-0025 F6). The wrapper rejects the whole turn with reason="count_over"
+ *  past this without consuming any of the staged uploads. */
+export const MAX_ATTACHMENTS_PER_INSTRUCTION = 10;
+
+/** Cap on concurrently open uploads in a wrapper (file-upload spec / ADR-0025
+ *  F6). attachOpen rejects with reason="count_over" once #pendingUploads
+ *  reaches this, so a misbehaving client cannot exhaust pending_uploads via
+ *  a fan-out of attach_opens without ever sending matching instructions. */
+export const MAX_INFLIGHT_UPLOADS = 20;
 
 /** Metadata of an open upload (set by attach_open). */
 export interface UploadMeta {
