@@ -1042,7 +1042,11 @@
                       onclick={togglePermMenu}
                     >{permLabel ?? "default"}</button>
                     {#if permMenuOpen}
-                      <ul class="cc-menu" role="listbox">
+                      <ul
+                        class="switch-menu"
+                        role="listbox"
+                        aria-label="permission mode 候補"
+                      >
                         {#each PERMISSION_MODE_VALUES as mode (mode)}
                           <li>
                             <button
