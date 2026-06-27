@@ -685,31 +685,28 @@
 
   // Paste handler for the instruction textarea (#86): screenshot / file
   // clipboard contents stage as attachments instead of pasting their text.
-  // Discrimination rule (issue confirmed 2026-06-27): if clipboardData carries
-  // any File (either clipboardData.files or items where kind==='file'),
-  // intercept; otherwise let the browser's default paste happen so normal
-  // text / rich-text paste keeps working. Cross-browser coverage takes the
-  // UNION of both sources, dropping duplicates by identity.
+  // Discrimination rule (issue confirmed 2026-06-27): if clipboardData
+  // carries any File (either clipboardData.files or items where
+  // kind==='file'), intercept; otherwise let the browser's default paste
+  // happen so normal text / rich-text paste keeps working.
+  //
+  // files-first / items-fallback (NOT union): Chrome on Windows publishes
+  // the same image via BOTH files[] and items[] — often as multiple OS
+  // clipboard formats (CF_BITMAP / CF_DIB / image/png) surfaced as separate
+  // items entries. A union double-counts because getAsFile() returns a
+  // fresh File instance per call, so identity-based dedup cannot collapse
+  // them. Firefox image paste does the opposite (items only, files empty).
+  // Prefer files when present; fall back to items only when files is empty.
   function onInstructionPaste(event: ClipboardEvent): void {
     const data = event.clipboardData;
     if (!data) return;
-    const files: File[] = [];
-    const seen = new Set<File>();
-    for (const f of Array.from(data.files ?? [])) {
-      if (!seen.has(f)) {
-        seen.add(f);
-        files.push(f);
-      }
-    }
-    for (const item of Array.from(data.items ?? [])) {
-      if (item.kind === "file") {
-        const f = item.getAsFile();
-        if (f !== null && !seen.has(f)) {
-          seen.add(f);
-          files.push(f);
-        }
-      }
-    }
+    const fromFiles = Array.from(data.files ?? []);
+    const files: File[] = fromFiles.length > 0
+      ? fromFiles
+      : Array.from(data.items ?? [])
+          .filter((item) => item.kind === "file")
+          .map((item) => item.getAsFile())
+          .filter((f): f is File => f !== null);
     if (files.length === 0) return;
     event.preventDefault();
     addStagedFiles(files);
