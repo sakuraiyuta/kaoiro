@@ -64,6 +64,21 @@ export class StatusQueue {
       else this.#queue = [state];
       return;
     }
+    // Backlog interrupt for terminal arrivals (#79): when `done` / `error`
+    // arrives while a non-terminal state is on screen with a backlog behind
+    // it, the operator/agent has finished — drop the backlog and queue only
+    // the terminal state. The current display keeps its MIN_DISPLAY_MS hold
+    // (visibility invariant from #43); its #release then shows the terminal
+    // state. When the queue's tail is already this terminal state, this also
+    // shortcuts the dedup return below to still drop the intermediate states.
+    if (
+      TERMINAL_STATES.has(state) &&
+      this.#timer !== null &&
+      !TERMINAL_STATES.has(this.shown)
+    ) {
+      this.#queue = [state];
+      return;
+    }
     const last =
       this.#queue.length > 0 ? this.#queue[this.#queue.length - 1] : this.shown;
     if (state === last) return;

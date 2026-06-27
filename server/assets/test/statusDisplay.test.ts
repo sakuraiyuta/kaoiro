@@ -87,6 +87,49 @@ describe("StatusQueue", () => {
     q.dispose();
   });
 
+  it("done が来たら backlog を破棄、現在表示の hold は尊重して #release 後に表示される (#79)", () => {
+    const q = new StatusQueue("idle", 2000, 180_000);
+    q.push("thinking"); // shown immediately
+    expect(q.shown).toBe("thinking");
+    q.push("tool_running"); // queued
+    q.push("thinking"); // queued
+    q.push("tool_running"); // queued
+
+    q.push("done"); // terminal arrival drops backlog
+
+    // Display still holds "thinking" for the rest of its MIN_DISPLAY_MS.
+    expect(q.shown).toBe("thinking");
+    vi.advanceTimersByTime(1999);
+    expect(q.shown).toBe("thinking");
+    // #release fires -> done shown without waiting for the dropped backlog.
+    vi.advanceTimersByTime(1);
+    expect(q.shown).toBe("done");
+    q.dispose();
+  });
+
+  it("done の重複 push でも intermediate が確実に破棄される (#79)", () => {
+    const q = new StatusQueue("idle", 2000, 180_000);
+    q.push("thinking"); // shown
+    q.push("tool_running"); // queue=[tool_running]
+    q.push("done"); // backlog-drop branch fires -> queue=[done]
+    q.push("done"); // dedup tail (no change) -> queue still [done]
+
+    vi.advanceTimersByTime(2000); // thinking's hold elapses
+    expect(q.shown).toBe("done"); // not "tool_running"
+    q.dispose();
+  });
+
+  it("error も #79 backlog-drop ブランチに従う", () => {
+    const q = new StatusQueue("idle", 2000, 180_000);
+    q.push("thinking");
+    q.push("tool_running"); // queued
+    q.push("error"); // terminal arrival drops backlog
+    expect(q.shown).toBe("thinking");
+    vi.advanceTimersByTime(2000);
+    expect(q.shown).toBe("error");
+    q.dispose();
+  });
+
   it("hold 中の push は shown を変えず、unhold で最新 live が即時表示される (#82)", () => {
     const q = new StatusQueue("idle", 2000);
     q.push("waiting_permission");
