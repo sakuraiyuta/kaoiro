@@ -72,6 +72,13 @@
   // waiting_permission (issue #59 root cause was deriving this from the
   // permission_request envelope alone, which got overwritten).
   const permission = $derived(pendingPermissionFrom(envelope));
+  // While the permission dialog is open, pin the status display to
+  // `waiting_permission` so a follow-up `tool_running` etc. can't overwrite
+  // the lamp/label (#82).
+  $effect(() => {
+    if (permission) display.hold("waiting_permission");
+    else display.unhold();
+  });
 
   // Cumulative session cost (USD) carried in ext.cost (#8), or null when the
   // wrapper did not attach it.

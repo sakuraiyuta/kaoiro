@@ -2,7 +2,11 @@
   import { untrack } from "svelte";
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
-  import { RUNNING_STATES, STOP_SAFE_STATES } from "./protocol";
+  import {
+    pendingPermissionFrom,
+    RUNNING_STATES,
+    STOP_SAFE_STATES,
+  } from "./protocol";
   import type { Envelope, PersonaManifest } from "./protocol";
 
   let {
@@ -45,6 +49,13 @@
     display.push(envelope.state);
   });
   $effect(() => () => display.dispose());
+  // While the permission dialog is open (#82), pin the lamp/label to
+  // waiting_permission. The card mirrors AgentDetail so the grid and the
+  // detail never disagree on the sticky display.
+  $effect(() => {
+    if (pendingPermissionFrom(envelope)) display.hold("waiting_permission");
+    else display.unhold();
+  });
 
   const expression = $derived(expressionFor(display.shown));
   const name = $derived(envelope.persona?.name ?? envelope.agent_id);

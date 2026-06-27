@@ -25,6 +25,11 @@ export class StatusQueue {
   #queue: string[] = [];
   #timer: ReturnType<typeof setTimeout> | null = null;
   #disposed = false;
+  /** Sticky pin: while non-null, shown is locked to this value and push() only
+   *  remembers the latest live state (for the post-unhold catch-up). Used by
+   *  #82 to keep `waiting_permission` on screen while the dialog is open even
+   *  though the wrapper may emit follow-up states. */
+  #heldOn: string | null = null;
   readonly #minMs: number;
   readonly #terminalMs: number;
 
@@ -51,6 +56,14 @@ export class StatusQueue {
    */
   push(state: string): void {
     if (this.#disposed) return;
+    // Held: shown is pinned (see hold()); only remember the latest live state
+    // so unhold() can catch up. The queue is overwritten — older deferred
+    // states are stale once the pin releases.
+    if (this.#heldOn !== null) {
+      if (state === this.#heldOn) this.#queue = [];
+      else this.#queue = [state];
+      return;
+    }
     const last =
       this.#queue.length > 0 ? this.#queue[this.#queue.length - 1] : this.shown;
     if (state === last) return;
@@ -72,6 +85,34 @@ export class StatusQueue {
     }
   }
 
+  /** Pin `shown` to `state` until unhold() is called. Subsequent push() calls
+   *  do not change `shown` while held; the most recent live state is kept for
+   *  the catch-up on unhold(). A second hold() with a different state
+   *  replaces the pin. Used by #82 to keep `waiting_permission` displayed
+   *  while the permission dialog is open. */
+  hold(state: string): void {
+    if (this.#disposed) return;
+    if (this.#heldOn === state) return;
+    this.#heldOn = state;
+    if (this.#timer !== null) {
+      clearTimeout(this.#timer);
+      this.#timer = null;
+    }
+    this.#queue = [];
+    if (this.shown !== state) this.shown = state;
+  }
+
+  /** Release a hold(). If a different live state arrived during the hold, it
+   *  is shown immediately. No-op when not held. */
+  unhold(): void {
+    if (this.#disposed) return;
+    if (this.#heldOn === null) return;
+    this.#heldOn = null;
+    const next = this.#queue.shift();
+    this.#queue = [];
+    if (next !== undefined && next !== this.shown) this.#show(next);
+  }
+
   #show(state: string): void {
     this.shown = state;
     const ms = TERMINAL_STATES.has(state) ? this.#terminalMs : this.#minMs;
@@ -90,6 +131,7 @@ export class StatusQueue {
   dispose(): void {
     this.#disposed = true;
     this.#queue = [];
+    this.#heldOn = null;
     if (this.#timer !== null) {
       clearTimeout(this.#timer);
       this.#timer = null;

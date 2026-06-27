@@ -87,6 +87,38 @@ describe("StatusQueue", () => {
     q.dispose();
   });
 
+  it("hold 中の push は shown を変えず、unhold で最新 live が即時表示される (#82)", () => {
+    const q = new StatusQueue("idle", 2000);
+    q.push("waiting_permission");
+    expect(q.shown).toBe("waiting_permission");
+
+    q.hold("waiting_permission");
+    q.push("tool_running"); // dialog open: must not surface
+    q.push("thinking"); // dialog open: overwritten, only latest kept
+    expect(q.shown).toBe("waiting_permission");
+
+    // Even after the normal short-hold elapses, the pin holds.
+    vi.advanceTimersByTime(5000);
+    expect(q.shown).toBe("waiting_permission");
+
+    q.unhold();
+    expect(q.shown).toBe("thinking"); // latest live shown immediately
+
+    q.dispose();
+  });
+
+  it("hold は shown が一致しない場合でも pin 値へ即時切り替える (#82)", () => {
+    const q = new StatusQueue("thinking", 2000);
+    expect(q.shown).toBe("thinking");
+
+    q.hold("waiting_permission");
+    expect(q.shown).toBe("waiting_permission");
+
+    q.unhold();
+    expect(q.shown).toBe("waiting_permission"); // no live arrived: stays
+    q.dispose();
+  });
+
   it("error も done と同じ長 hold と割込みに従う", () => {
     const q = new StatusQueue("thinking", 2000, 180_000);
     q.push("error");
