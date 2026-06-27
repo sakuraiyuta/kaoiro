@@ -10,6 +10,8 @@
 // fit-to-SDK (sharp for images, pdf-lib for PDFs) reducing oversize
 // uploads to image_block / text_block / document_block.
 
+import { Unzip, UnzipInflate } from "fflate";
+import { OfficeParser } from "officeparser";
 import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
 import type { FileUploadRejectReason } from "@kaoiro/protocol";
@@ -57,6 +59,21 @@ export const IMAGE_SDK_LONG_EDGE_MAX = 8000;
 
 /** PDF MIME — rendered as an SDK document content block. */
 export const PDF_MIME = "application/pdf";
+
+/** Allowed Office MIMEs (OOXML only — file-upload spec rejects legacy
+ *  .doc / .xls / .ppt). Rendered as text content blocks after an
+ *  officeparser extraction pass. */
+export const OFFICE_MIME_ALLOW: ReadonlySet<string> = new Set([
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+]);
+
+/** True for any MIME the wrapper sends through the Office text-extraction
+ *  pipeline (docx / xlsx / pptx — file-upload spec). */
+export function isOfficeMime(mime: string): boolean {
+  return OFFICE_MIME_ALLOW.has(mime);
+}
 
 /** Raw-bytes cap for the SDK document content block. Stage A IN2 found the
  *  full request total is 32 MB after base64 (~37% overhead), so the per-file
@@ -154,13 +171,14 @@ export type ValidationResult =
   | { ok: true }
   | { ok: false; reason: FileUploadRejectReason; detail?: string };
 
-/** attach_open validation: MIME allow-list (image / text/code / PDF) +
- *  advertised size cap. Office lands here when its fit-to-SDK ships. */
+/** attach_open validation: MIME allow-list (image / text/code / PDF /
+ *  OOXML Office) + advertised size cap. */
 export function validateOpen(meta: UploadMeta): ValidationResult {
   if (
     !IMAGE_MIME_ALLOW.has(meta.mime) &&
     !isTextMime(meta.mime) &&
-    meta.mime !== PDF_MIME
+    meta.mime !== PDF_MIME &&
+    !isOfficeMime(meta.mime)
   ) {
     return { ok: false, reason: "mime_denied", detail: `mime=${meta.mime}` };
   }
@@ -461,6 +479,95 @@ export async function fitPdfToSdk(
   return best;
 }
 
+/** Cap on the total uncompressed bytes an OOXML upload may declare in its
+ *  ZIP central directory. Defends DefaultOfficeTextExtractor against a
+ *  decompression-bomb crafted .docx / .xlsx / .pptx (a small compressed
+ *  blob whose entries claim multi-GB expansion can OOM the long-lived
+ *  wrapper process before officeparser's try/catch fires). 64 MB covers
+ *  legitimate enterprise documents while well under V8's default heap. */
+export const OFFICE_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
+
+/** Cap on the extracted text length the wrapper hands to the SDK after a
+ *  successful Office parse. Even legit huge spreadsheets can serialise to
+ *  >10 MB of text; truncation here keeps memory and the eventual SDK
+ *  payload bounded. Truncated output is suffixed with a notice so the
+ *  agent (and the operator reading the log) sees the cap was hit. */
+export const OFFICE_MAX_OUTPUT_CHARS = 8 * 1024 * 1024;
+
+/** Pre-flight check: enumerate the OOXML's ZIP entries via fflate's Unzip
+ *  stream (metadata only — we do NOT call file.start(), so no decompression
+ *  happens here) and sum the declared uncompressed sizes. Returns false
+ *  when the total exceeds OFFICE_MAX_UNCOMPRESSED_BYTES so the caller can
+ *  reject before officeparser allocates the bomb. A malformed / non-ZIP
+ *  input passes this check (returns true) — officeparser will report its
+ *  own format error, and falsely-OOXML text files are not the threat. */
+export function officeWithinUncompressedBudget(bytes: Uint8Array): boolean {
+  let total = 0;
+  let bombed = false;
+  const unzipper = new Unzip();
+  unzipper.register(UnzipInflate);
+  unzipper.onfile = (file) => {
+    // file.originalSize is the DECLARED uncompressed size from the local
+    // header (the bomb signal); file.size is COMPRESSED size and would let
+    // a 100x-ratio bomb slip through. Both are optional on streaming
+    // archives that omit the local-header values; fall back to 0 in that
+    // case rather than rejecting outright (officeparser then surfaces its
+    // own parse error).
+    total += file.originalSize ?? 0;
+    if (!bombed && total > OFFICE_MAX_UNCOMPRESSED_BYTES) bombed = true;
+  };
+  try {
+    unzipper.push(bytes, true);
+  } catch {
+    return true;
+  }
+  return !bombed;
+}
+
+/** Pluggable Office text extractor (file-upload spec / ADR-0025 F10).
+ *  The interface lets tests swap officeparser for a deterministic stub and
+ *  leaves room to fall back to markitdown (Q10) without touching dispatch.
+ *  null = unparseable (corrupt / encrypted / format-mismatch / decompression
+ *  bomb); caller emits sdk_error. */
+export interface OfficeTextExtractor {
+  extract(bytes: Uint8Array, mime: string): Promise<string | null>;
+}
+
+/** officeparser-backed extractor (pure JS, MIT). Accepts docx / xlsx /
+ *  pptx via OOXML magic-byte detection and returns the AST's plain-text
+ *  output. Defends against decompression bombs via a fflate-driven
+ *  central-directory pre-flight (officeparser exposes no size guard of
+ *  its own, v7.2.2) and truncates the output to keep the eventual SDK
+ *  payload bounded. Any parse failure becomes null. */
+export class DefaultOfficeTextExtractor implements OfficeTextExtractor {
+  async extract(bytes: Uint8Array, _mime: string): Promise<string | null> {
+    if (!officeWithinUncompressedBudget(bytes)) return null;
+    try {
+      const buffer = Buffer.from(bytes);
+      const ast = await OfficeParser.parseOffice(buffer);
+      const text = ast.toText();
+      if (text.length > OFFICE_MAX_OUTPUT_CHARS) {
+        return (
+          text.slice(0, OFFICE_MAX_OUTPUT_CHARS) +
+          `\n\n[...truncated at ${OFFICE_MAX_OUTPUT_CHARS} chars]\n`
+        );
+      }
+      return text;
+    } catch {
+      return null;
+    }
+  }
+}
+
+let defaultOfficeTextExtractor: OfficeTextExtractor =
+  new DefaultOfficeTextExtractor();
+
+/** Test seam: swap the Office extractor (e.g. to a deterministic mock).
+ *  Production code calls renderAttachmentBlock with the default. */
+export function setDefaultOfficeTextExtractor(e: OfficeTextExtractor): void {
+  defaultOfficeTextExtractor = e;
+}
+
 /** Discriminated render outcome (file-upload spec / ADR-0025 F1). `ok=false`
  *  carries the reason the caller emits on the upload's `attach_rejected`
  *  and / or the instruction's `instruction_rejected`. */
@@ -488,6 +595,23 @@ export async function renderAttachmentBlock(
   }
   if (isTextMime(meta.mime)) {
     return { ok: true, block: renderTextBlock(meta, bytes) };
+  }
+  if (isOfficeMime(meta.mime)) {
+    let text: string | null;
+    try {
+      text = await defaultOfficeTextExtractor.extract(bytes, meta.mime);
+    } catch {
+      return { ok: false, reason: "sdk_error" };
+    }
+    if (text === null) return { ok: false, reason: "sdk_error" };
+    // Reuse the text-block render path so the filename prefix and UTF-8
+    // policy stay in one place (officeparser already returns a JS string,
+    // so re-encoding through TextDecoder would be a no-op — the meta path
+    // synthesises bytes via TextEncoder to share the helper).
+    return {
+      ok: true,
+      block: renderTextBlock(meta, new TextEncoder().encode(text)),
+    };
   }
   if (meta.mime === PDF_MIME) {
     let fitted: Uint8Array | null;

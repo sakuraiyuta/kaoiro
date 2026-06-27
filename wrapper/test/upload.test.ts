@@ -1,24 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
+import { zipSync } from "fflate";
 import {
   IMAGE_MIME_ALLOW,
   IMAGE_SDK_LONG_EDGE_MAX,
   IMAGE_SDK_RAW_LIMIT_BYTES,
+  OFFICE_MAX_UNCOMPRESSED_BYTES,
+  OFFICE_MIME_ALLOW,
   PDF_MIME,
   PDF_SDK_PAGE_LIMIT,
   PROTOCOL_FILE_SIZE_LIMIT_BYTES,
   SharpImageDownsizer,
   TEXT_MIME_ALLOW,
   assembleBytes,
+  DefaultOfficeTextExtractor,
   fitImageToSdk,
   fitPdfToSdk,
+  isOfficeMime,
   isTextMime,
+  officeWithinUncompressedBudget,
   parseChunkPayload,
   renderAttachmentBlock,
   renderDocumentBlock,
   renderImageBlock,
   renderTextBlock,
   setDefaultImageDownsizer,
+  setDefaultOfficeTextExtractor,
   validateClose,
   validateOpen,
 } from "../src/upload.js";
@@ -96,6 +103,12 @@ describe("validateOpen (image + text/code MIMEs)", () => {
     ).toEqual({ ok: true });
   });
 
+  it("OOXML docx/xlsx/pptx は ok (Office 経路)", () => {
+    for (const mime of OFFICE_MIME_ALLOW) {
+      expect(validateOpen(meta({ mime, filename: "a" }))).toEqual({ ok: true });
+    }
+  });
+
   it("非対応 MIME (application/zip) は mime_denied", () => {
     expect(validateOpen(meta({ mime: "application/zip" }))).toMatchObject({
       ok: false,
@@ -116,6 +129,48 @@ describe("validateOpen (image + text/code MIMEs)", () => {
       "image/png",
       "image/webp",
     ]);
+  });
+});
+
+describe("officeWithinUncompressedBudget (decompression-bomb defense)", () => {
+  it("空 / 非 ZIP は通す(officeparser に format 検証を委ねる)", () => {
+    expect(officeWithinUncompressedBudget(new Uint8Array([]))).toBe(true);
+    expect(
+      officeWithinUncompressedBudget(new Uint8Array([0x00, 0x01, 0x02])),
+    ).toBe(true);
+  });
+
+  it("小さい legit ZIP は通す", () => {
+    const data = new TextEncoder().encode("hello world");
+    const zipped = zipSync({ "a.txt": data });
+    expect(officeWithinUncompressedBudget(zipped)).toBe(true);
+  });
+
+  it("展開サイズ合計が cap 超なら false(zip-bomb 検出)", () => {
+    // OFFICE_MAX_UNCOMPRESSED_BYTES + 1 MB の compressible data (zeros)。
+    // 圧縮率が極端に高いので圧縮後は ~100 KB だが、 declared
+    // uncompressed が cap 超になる。
+    const bombSize = OFFICE_MAX_UNCOMPRESSED_BYTES + 1024 * 1024;
+    const bombData = new Uint8Array(bombSize); // all zeros
+    const zipped = zipSync({ "x": bombData });
+    expect(officeWithinUncompressedBudget(zipped)).toBe(false);
+  });
+});
+
+describe("isOfficeMime", () => {
+  it("OFFICE_MIME_ALLOW (docx/xlsx/pptx) を受理", () => {
+    for (const m of OFFICE_MIME_ALLOW) {
+      expect(isOfficeMime(m)).toBe(true);
+    }
+  });
+
+  it("レガシー Office (.doc/.xls/.ppt) や image は false", () => {
+    expect(isOfficeMime("application/msword")).toBe(false);
+    expect(isOfficeMime("application/vnd.ms-excel")).toBe(false);
+    expect(isOfficeMime("application/vnd.ms-powerpoint")).toBe(false);
+    expect(isOfficeMime("image/png")).toBe(false);
+    expect(isOfficeMime("text/plain")).toBe(false);
+    expect(isOfficeMime("")).toBe(false);
   });
 });
 
@@ -142,8 +197,10 @@ describe("isTextMime", () => {
 });
 
 describe("renderTextBlock / renderAttachmentBlock", () => {
-  // Pass-through image downsizer so dispatch tests can ride synthetic
-  // bytes; the real SharpImageDownsizer keeps its coverage below.
+  // Pass-through image downsizer + restored Office extractor so dispatch
+  // tests can ride synthetic bytes (the real implementations would reject
+  // synthetic image / docx data); the real SharpImageDownsizer and
+  // DefaultOfficeTextExtractor keep their own coverage elsewhere.
   beforeEach(() => {
     setDefaultImageDownsizer({
       fit: async (bytes, mime) => ({ bytes, mime }),
@@ -151,6 +208,7 @@ describe("renderTextBlock / renderAttachmentBlock", () => {
   });
   afterEach(() => {
     setDefaultImageDownsizer(new SharpImageDownsizer());
+    setDefaultOfficeTextExtractor(new DefaultOfficeTextExtractor());
   });
 
   function meta_(overrides: Partial<UploadMeta> = {}): UploadMeta {
@@ -207,6 +265,37 @@ describe("renderTextBlock / renderAttachmentBlock", () => {
     const r = await renderAttachmentBlock(
       meta_({ mime: "application/octet-stream", filename: "a.bin" }),
       new Uint8Array([]),
+    );
+    expect(r).toEqual({ ok: false, reason: "sdk_error" });
+  });
+
+  it("renderAttachmentBlock は Office MIME を text block へ(extractor 経由、 filename prefix)", async () => {
+    setDefaultOfficeTextExtractor({
+      extract: async () => "abstract\nbody...",
+    });
+    const docxMime =
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    const r = await renderAttachmentBlock(
+      meta_({ mime: docxMime, filename: "report.docx" }),
+      new Uint8Array([1, 2, 3]),
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.block.type).toBe("text");
+      expect((r.block as { text: string }).text).toBe(
+        "[file: report.docx]\nabstract\nbody...",
+      );
+    }
+  });
+
+  it("renderAttachmentBlock は Office extractor が null なら sdk_error", async () => {
+    setDefaultOfficeTextExtractor({ extract: async () => null });
+    const r = await renderAttachmentBlock(
+      meta_({
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename: "broken.docx",
+      }),
+      new Uint8Array([0, 0, 0]),
     );
     expect(r).toEqual({ ok: false, reason: "sdk_error" });
   });

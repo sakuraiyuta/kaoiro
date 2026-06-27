@@ -1142,10 +1142,10 @@
               rows="2"
               aria-label="instruction for {name}"
             ></textarea>
-            <label class="attach" title="ファイル添付(画像 / テキスト / コード / PDF、複数可)">
+            <label class="attach" title="ファイル添付(画像 / テキスト / コード / PDF / Office、複数可)">
               <input
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/xml,application/yaml,application/x-yaml,application/javascript,application/typescript,application/sql,application/pdf"
+                accept="image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/xml,application/yaml,application/x-yaml,application/javascript,application/typescript,application/sql,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation"
                 multiple
                 onchange={onFilePicked}
                 bind:this={stagedFileInput}
