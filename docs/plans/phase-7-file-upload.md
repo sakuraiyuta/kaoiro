@@ -1,7 +1,7 @@
 ---
 title: ファイルアップロード(添付の取り込み)
 description: ダッシュボードから画像/テキスト/PDF/Office を Claude Code に渡せるようにする — pre-spike + 単一画像 E2E + feature complete MVP の3段階。
-status: planned
+status: in_progress
 phase: 7
 depends_on: [phase-3.5-response-display, phase-4-host-runner]
 last_updated: 2026-06-27
@@ -69,7 +69,8 @@ SDK content blocks 変換 の骨格を実証する。
 
 Stage B の wire を据え置きで機能を全面展開。 Session 1 (backend a-f) は
 2026-06-27 完了 (commit `245b927` 〜 `dc632e1`、 wrapper 197 tests + dashboard
-49 + server 215 green)。 Session 2 で UI 3 機能 (g/h/i) を扱う。
+49 + server 215 green)。 Session 2 (UI g/h/i) も同日完了 (commit `ac6be01` 〜
+`3ea6224`、 dashboard 49 tests green、 svelte-check 0/0)。
 
 ### 進捗
 
@@ -83,9 +84,9 @@ Stage B の wire を据え置きで機能を全面展開。 Session 1 (backend a
 | (d-text) | text 末尾切り + 全リクエスト 32MB 事前検証 | done (b34d543) |
 | (e) | `interrupt` 拡張 (pending_uploads drop) | done (4dd835a) |
 | (f) | TTL 5 分 GC + timeout reject | done (dc632e1) |
-| (g) | per-upload progress UI | Session 2 |
-| (h) | 遅延 upload tray UX | Session 2 |
-| (i) | D&D drop zone | Session 2 |
+| (h) | 遅延 upload tray UX (chip コンテナ化 + 件数表示) | done (ac6be01) |
+| (g) | per-upload progress UI (chip 内 mini bar) | done (7cd8a26) |
+| (i) | D&D drop zone (composer 領域 + hover outline) | done (3ea6224) |
 
 ### IN(含む)
 
