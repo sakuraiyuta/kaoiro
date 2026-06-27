@@ -88,6 +88,7 @@ Stage B の wire を据え置きで機能を全面展開。
 - TTL 5 分 GC(未参照 + chunk 不完全 upload)
 - per-upload progress UI
 - 遅延 upload tray UX(✕ で除去可)
+- D&D drop zone(AgentDetail のチャットボックス領域に限定、 hover 強調)
 
 ### OUT(Followups 候補)
 

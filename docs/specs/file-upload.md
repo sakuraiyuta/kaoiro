@@ -147,13 +147,16 @@ reason enum: `size_over` / `mime_denied` / `count_over` / `timeout` /
 
 protocol 不変の client 規範:
 
-1. 添付ボタン → file picker → ファイルは client local の "to-send tray" に
-   **参照だけ**保持(bytes 転送なし)。
+1. **添付ボタン または D&D drop zone** → file picker / ドロップで取得した
+   ファイルは client local の "to-send tray" に **参照だけ**保持
+   (bytes 転送なし)。 drop zone は agent 単位(例: AgentDetail の
+   チャットボックス領域)に限定し、 複数 agent 間で曖昧にならないようにする。
 2. tray から ✕ で除去可(client local の話、 protocol 関与なし)。
 3. 送信ボタン押下 → `attach_open` × N → `attach_chunk*` → `attach_close`
    × N → `instruction(attachment_ids=[...])` の順で転送。
 
-picker 即時 upload は非採用(送信前取り消しでの帯域浪費・ TTL 依存を回避)。
+picker / D&D 取得時の即時 upload は非採用(送信前取り消しでの帯域浪費・
+TTL 依存を回避)。
 
 ### TTL と fail-safe
 
