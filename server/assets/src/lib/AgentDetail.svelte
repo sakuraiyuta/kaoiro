@@ -628,6 +628,38 @@
     addStagedFiles(picked);
   }
 
+  // Paste handler for the instruction textarea (#86): screenshot / file
+  // clipboard contents stage as attachments instead of pasting their text.
+  // Discrimination rule (issue confirmed 2026-06-27): if clipboardData carries
+  // any File (either clipboardData.files or items where kind==='file'),
+  // intercept; otherwise let the browser's default paste happen so normal
+  // text / rich-text paste keeps working. Cross-browser coverage takes the
+  // UNION of both sources, dropping duplicates by identity.
+  function onInstructionPaste(event: ClipboardEvent): void {
+    const data = event.clipboardData;
+    if (!data) return;
+    const files: File[] = [];
+    const seen = new Set<File>();
+    for (const f of Array.from(data.files ?? [])) {
+      if (!seen.has(f)) {
+        seen.add(f);
+        files.push(f);
+      }
+    }
+    for (const item of Array.from(data.items ?? [])) {
+      if (item.kind === "file") {
+        const f = item.getAsFile();
+        if (f !== null && !seen.has(f)) {
+          seen.add(f);
+          files.push(f);
+        }
+      }
+    }
+    if (files.length === 0) return;
+    event.preventDefault();
+    addStagedFiles(files);
+  }
+
   // --- Slash command completion (#34) ---------------------------------------
   // Commands the SDK reported at session init, surfaced via ext. Viewers never
   // see the menu: #46 strips ext for non-operators, so slashCommands is empty.
@@ -1247,6 +1279,7 @@
               bind:value={instruction}
               bind:this={slashTextarea}
               onkeydown={onInstructionKeydown}
+              onpaste={onInstructionPaste}
               rows="2"
               aria-label="instruction for {name}"
             ></textarea>
