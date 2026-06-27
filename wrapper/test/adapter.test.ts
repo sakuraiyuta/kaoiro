@@ -4,10 +4,13 @@ import {
   cwdChangedHookToCwd,
   sdkMessageToCost,
   sdkMessageToEvents,
+  sdkMessageToInitMeta,
   sdkMessageToLogs,
   sdkMessageToRateLimit,
   sdkMessageToResult,
+  sdkMessageToResultMeta,
   sdkMessageToSessionId,
+  sdkMessageToStatusMeta,
 } from "../src/adapter.js";
 import { reduceStates } from "../src/state.js";
 
@@ -318,6 +321,76 @@ describe("cwdChangedHookToCwd", () => {
       cwdChangedHookToCwd(
         hook({ hook_event_name: "CwdChanged", old_cwd: "/a", new_cwd: "" }),
       ),
+    ).toBeNull();
+  });
+});
+
+describe("permissionMode + fast_mode_state extraction (#57)", () => {
+  it("init から permission_mode と fast_mode を取り出す", () => {
+    const meta = sdkMessageToInitMeta(
+      msg({
+        type: "system",
+        subtype: "init",
+        permissionMode: "plan",
+        fast_mode_state: "cooldown",
+      }),
+    );
+    expect(meta).toMatchObject({
+      permission_mode: "plan",
+      fast_mode: "cooldown",
+    });
+  });
+
+  it("init で permissionMode 欠落なら permission_mode は付与しない", () => {
+    const meta = sdkMessageToInitMeta(msg({ type: "system", subtype: "init" }));
+    expect(meta).not.toHaveProperty("permission_mode");
+    expect(meta).not.toHaveProperty("fast_mode");
+  });
+
+  it("status/permissionMode から permission_mode を取り出す", () => {
+    expect(
+      sdkMessageToStatusMeta(
+        msg({
+          type: "system",
+          subtype: "status",
+          status: "requesting",
+          permissionMode: "auto",
+        }),
+      ),
+    ).toEqual({ permission_mode: "auto" });
+  });
+
+  it("status で permissionMode 欠落なら null", () => {
+    expect(
+      sdkMessageToStatusMeta(
+        msg({ type: "system", subtype: "status", status: null }),
+      ),
+    ).toBeNull();
+  });
+
+  it("status 以外のメッセージは null", () => {
+    expect(
+      sdkMessageToStatusMeta(msg({ type: "system", subtype: "init" })),
+    ).toBeNull();
+  });
+
+  it("result/fast_mode_state から fast_mode を取り出す", () => {
+    expect(
+      sdkMessageToResultMeta(
+        msg({ type: "result", subtype: "success", fast_mode_state: "on" }),
+      ),
+    ).toEqual({ fast_mode: "on" });
+  });
+
+  it("result で fast_mode_state 欠落なら null", () => {
+    expect(
+      sdkMessageToResultMeta(msg({ type: "result", subtype: "success" })),
+    ).toBeNull();
+  });
+
+  it("result 以外のメッセージは null", () => {
+    expect(
+      sdkMessageToResultMeta(msg({ type: "system", subtype: "init" })),
     ).toBeNull();
   });
 });

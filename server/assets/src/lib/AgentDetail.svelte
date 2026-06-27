@@ -193,6 +193,20 @@
   const ccCwd = $derived(
     typeof envelope.ext?.cwd === "string" ? envelope.ext.cwd : null,
   );
+  // Claude Code permission mode + fast mode (#57). Show the raw enum values
+  // (default / plan / bypassPermissions / etc.; off / cooldown / on) — the
+  // panel is operator-only (ext is stripped for viewers), so a terse label
+  // matches the cwd line above.
+  const ccPermissionMode = $derived(
+    typeof envelope.ext?.permission_mode === "string"
+      ? envelope.ext.permission_mode
+      : null,
+  );
+  const ccFastMode = $derived(
+    typeof envelope.ext?.fast_mode === "string"
+      ? envelope.ext.fast_mode
+      : null,
+  );
   const ccContext = $derived(
     envelope.ext?.context as Record<string, unknown> | undefined,
   );
@@ -225,6 +239,8 @@
   const hasCcStatus = $derived(
     ccModel !== null ||
       ccCwd !== null ||
+      ccPermissionMode !== null ||
+      ccFastMode !== null ||
       ctxPct !== null ||
       ccRateRows.some((r) => r.pct !== null) ||
       models.length > 0,
@@ -926,6 +942,18 @@
             <div class="cc-row">
               <dt>cwd</dt>
               <dd class="cc-cwd" title={ccCwd}>{ccCwd}</dd>
+            </div>
+          {/if}
+          {#if ccPermissionMode}
+            <div class="cc-row">
+              <dt>perm</dt>
+              <dd>{ccPermissionMode}</dd>
+            </div>
+          {/if}
+          {#if ccFastMode}
+            <div class="cc-row">
+              <dt>fast</dt>
+              <dd>{ccFastMode}</dd>
             </div>
           {/if}
           {#if ctxPct !== null}

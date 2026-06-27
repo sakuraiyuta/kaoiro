@@ -237,15 +237,27 @@ export function sdkMessageToRateLimit(
   return message.type === "rate_limit_event" ? message.rate_limit_info : null;
 }
 
-/** Session init meta — active model, working directory, and available
- *  slash commands (#16, #34) — from a system/init message, or null for other
- *  messages. The SDK emits one init per session; the host stamps these into
- *  state_change ext. */
+/** Session init meta — active model, working directory, slash commands, the
+ *  current permission mode and fast mode state (#16, #34, #57) — from a
+ *  system/init message, or null for other messages. The SDK emits one init
+ *  per session; the host stamps these into state_change ext. */
 export function sdkMessageToInitMeta(
   message: SDKMessage,
-): { model?: string; cwd?: string; slash_commands?: string[] } | null {
+): {
+  model?: string;
+  cwd?: string;
+  slash_commands?: string[];
+  permission_mode?: string;
+  fast_mode?: string;
+} | null {
   if (message.type !== "system" || message.subtype !== "init") return null;
-  const meta: { model?: string; cwd?: string; slash_commands?: string[] } = {};
+  const meta: {
+    model?: string;
+    cwd?: string;
+    slash_commands?: string[];
+    permission_mode?: string;
+    fast_mode?: string;
+  } = {};
   if (typeof message.model === "string" && message.model !== "") {
     meta.model = message.model;
   }
@@ -258,7 +270,42 @@ export function sdkMessageToInitMeta(
     );
     if (commands.length > 0) meta.slash_commands = commands;
   }
+  if (typeof message.permissionMode === "string") {
+    meta.permission_mode = message.permissionMode;
+  }
+  if (typeof message.fast_mode_state === "string") {
+    meta.fast_mode = message.fast_mode_state;
+  }
   return meta;
+}
+
+/** Permission mode update from a system/status message (#57), or null. The SDK
+ *  emits status messages mid-session when permissionMode changes (e.g. via
+ *  /mode); fast_mode_state is not carried here — it rides result messages
+ *  only. */
+export function sdkMessageToStatusMeta(
+  message: SDKMessage,
+): { permission_mode?: string } | null {
+  if (message.type !== "system" || message.subtype !== "status") return null;
+  const m = message as { permissionMode?: unknown };
+  if (typeof m.permissionMode !== "string" || m.permissionMode === "") {
+    return null;
+  }
+  return { permission_mode: m.permissionMode };
+}
+
+/** Fast mode update from a result message (#57), or null. The SDK ships
+ *  fast_mode_state on result success / error_* subtypes; it is the only
+ *  mid-session source of `cooldown` (not in status / init). */
+export function sdkMessageToResultMeta(
+  message: SDKMessage,
+): { fast_mode?: string } | null {
+  if (message.type !== "result") return null;
+  const m = message as { fast_mode_state?: unknown };
+  if (typeof m.fast_mode_state !== "string" || m.fast_mode_state === "") {
+    return null;
+  }
+  return { fast_mode: m.fast_mode_state };
 }
 
 /** new_cwd from a CwdChanged hook input (#64), or null for other hook events

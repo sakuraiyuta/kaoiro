@@ -236,6 +236,53 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("init / status / result から ext.permission_mode と ext.fast_mode を付与する (#57)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: scriptedQuery([
+        msg({
+          type: "system",
+          subtype: "init",
+          model: "claude-x",
+          cwd: "/repo",
+          permissionMode: "default",
+          fast_mode_state: "off",
+        }),
+        assistant([{ type: "text", text: "hi" }]),
+        // Mid-session mode flip via /mode — SDK status message.
+        msg({
+          type: "system",
+          subtype: "status",
+          status: "requesting",
+          permissionMode: "plan",
+        }),
+        assistant([{ type: "text", text: "after-mode" }]),
+        // result carries the new fast_mode_state (cooldown only surfaces here).
+        result("success", { result: "ok", fast_mode_state: "cooldown" }),
+        assistant([{ type: "text", text: "next" }]),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const thinkings = envs.filter((e) => e.state === "thinking");
+    // First thinking: init values.
+    expect(thinkings[0]?.ext).toMatchObject({
+      permission_mode: "default",
+      fast_mode: "off",
+    });
+    // Post-status thinking: permission_mode updated, fast_mode unchanged.
+    expect(thinkings[1]?.ext).toMatchObject({
+      permission_mode: "plan",
+      fast_mode: "off",
+    });
+    // Post-result thinking: fast_mode updated to cooldown.
+    expect(thinkings.at(-1)?.ext).toMatchObject({
+      permission_mode: "plan",
+      fast_mode: "cooldown",
+    });
+  });
+
   it("CwdChanged フックで mid-session に ext.cwd を更新する (#64)", async () => {
     const envs: Envelope[] = [];
     const queryFn = makeQueryFn((args: QueryArgs) => {

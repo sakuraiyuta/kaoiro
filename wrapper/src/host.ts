@@ -44,7 +44,9 @@ import {
   sdkMessageToLogs,
   sdkMessageToRateLimit,
   sdkMessageToResult,
+  sdkMessageToResultMeta,
   sdkMessageToSessionId,
+  sdkMessageToStatusMeta,
 } from "./adapter.js";
 import { clipText, logEntryToPayload } from "./logpayload.js";
 import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
@@ -162,6 +164,14 @@ export class AgentHost {
   /** Slash commands the SDK reported at session init (#34); surfaced so the
    *  dashboard can offer `/` completion. */
   #slashCommands: string[] | null = null;
+  /** Current Claude Code permission mode (#57). Init carries it as required;
+   *  SDKStatusMessage updates it on mid-session changes (e.g. `/mode`).
+   *  Stamped into ext.permission_mode. */
+  #permissionMode: string | null = null;
+  /** Fast mode state (#57) — `off` / `cooldown` / `on`. Updated from init and
+   *  every result message (cooldown only ever surfaces via result). Stamped
+   *  into ext.fast_mode. */
+  #fastMode: string | null = null;
   /** Selectable models with their per-model effort levels (#54, ADR-0020);
    *  surfaced so the dashboard can build the bare `/model` / `/effort` choice
    *  dialogs without a round-trip. Fetched once via supportedModels() after
@@ -604,6 +614,14 @@ export class AgentHost {
       }
       const rateLimit = sdkMessageToRateLimit(message);
       if (rateLimit) this.#applyRateLimit(rateLimit);
+      const statusMeta = sdkMessageToStatusMeta(message);
+      if (statusMeta?.permission_mode !== undefined) {
+        this.#permissionMode = statusMeta.permission_mode;
+      }
+      const resultMeta = sdkMessageToResultMeta(message);
+      if (resultMeta?.fast_mode !== undefined) {
+        this.#fastMode = resultMeta.fast_mode;
+      }
       if (message.type === "result") void this.#refreshContextUsage();
 
       // State first, so a log envelope carries the state this message
@@ -672,6 +690,8 @@ export class AgentHost {
     if (this.#slashCommands !== null) ext.slash_commands = this.#slashCommands;
     if (this.#models !== null) ext.models = this.#models;
     if (this.#context !== null) ext.context = this.#context;
+    if (this.#permissionMode !== null) ext.permission_mode = this.#permissionMode;
+    if (this.#fastMode !== null) ext.fast_mode = this.#fastMode;
     if (this.#rateLimits.size > 0) {
       ext.rate_limits = Object.fromEntries(this.#rateLimits);
     }
@@ -687,12 +707,18 @@ export class AgentHost {
     model?: string;
     cwd?: string;
     slash_commands?: string[];
+    permission_mode?: string;
+    fast_mode?: string;
   }): void {
     if (meta.model !== undefined) this.#model = meta.model;
     if (meta.cwd !== undefined) this.#cwd = meta.cwd;
     if (meta.slash_commands !== undefined) {
       this.#slashCommands = meta.slash_commands;
     }
+    if (meta.permission_mode !== undefined) {
+      this.#permissionMode = meta.permission_mode;
+    }
+    if (meta.fast_mode !== undefined) this.#fastMode = meta.fast_mode;
   }
 
   /** Records the latest rate-limit snapshot for its window (#16). */
