@@ -1160,18 +1160,26 @@
             >
           </form>
 
-          {#each stagedFiles as file, i (`${file.name}:${file.size}:${i}`)}
-            <div class="staged">
-              <span
-                >{file.type.startsWith("image/") ? "🖼" : "📄"} {file.name} ({(
-                  file.size / 1024
-                ).toFixed(1)} KB)</span>
-              <button
-                type="button"
-                onclick={() => removeStagedFile(i)}
-                aria-label="添付を解除">✕</button>
+          {#if stagedFiles.length > 0}
+            <div class="tray">
+              <span class="tray-count">添付 {stagedFiles.length}/{MAX_STAGED}</span>
+              <ul class="tray-list">
+                {#each stagedFiles as file, i (`${file.name}:${file.size}:${i}`)}
+                  <li class="staged">
+                    <span class="staged-name"
+                      title="{file.name} ({(file.size / 1024).toFixed(1)} KB)"
+                      >{file.type.startsWith("image/") ? "🖼" : "📄"} {file.name} ({(
+                        file.size / 1024
+                      ).toFixed(1)} KB)</span>
+                    <button
+                      type="button"
+                      onclick={() => removeStagedFile(i)}
+                      aria-label="添付を解除">✕</button>
+                  </li>
+                {/each}
+              </ul>
             </div>
-          {/each}
+          {/if}
 
           {#if display.shown === "sending"}
             <p class="sending-note">送信中… 応答待ち</p>
@@ -2148,16 +2156,48 @@
     display: none;
   }
 
+  /* Staged-attachment tray (file-upload spec / ADR-0025 F12 "to-send tray"):
+     chips wrap onto multiple rows so 10 staged files (the spec cap) stay
+     visible without pushing the composer off-screen. The count header
+     mirrors MAX_STAGED so the operator sees how close they are to the cap. */
+  .tray {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin-top: 0.4rem;
+  }
+
+  .tray-count {
+    font-size: 0.72rem;
+    color: var(--fg-dim);
+  }
+
+  .tray-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
   .staged {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    margin-top: 0.4rem;
     padding: 0.3rem 0.6rem;
     border: 1px solid var(--line);
     border-radius: 0.3rem;
     background: var(--bg-card);
     font-size: 0.8rem;
+    max-width: 100%;
+  }
+
+  .staged-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 18rem;
   }
 
   .staged button {
