@@ -67,22 +67,40 @@ SDK content blocks 変換 の骨格を実証する。
 
 ## Stage C — phase-1: feature complete MVP
 
-Stage B の wire を据え置きで機能を全面展開。
+Stage B の wire を据え置きで機能を全面展開。 Session 1 (backend a-f) は
+2026-06-27 完了 (commit `245b927` 〜 `dc632e1`、 wrapper 197 tests + dashboard
+49 + server 215 green)。 Session 2 で UI 3 機能 (g/h/i) を扱う。
+
+### 進捗
+
+| ID | 項目 | 状態 |
+|--|--|--|
+| (a) | 複数ファイル + multi-select picker | done (245b927) |
+| (b1) | text/code 種別追加 | done (5c405f3) |
+| (b2) | PDF 種別 + pdf-lib fit-to-SDK | done (e89ed5a) |
+| (d-image) | image fit-to-SDK + ImageDownsizer 抽象 + protocol cap 128MB | done (c2ddcd6) |
+| (b3) | Office 種別 + officeparser + fflate decompression-bomb 防御 | done (6231c26) |
+| (d-text) | text 末尾切り + 全リクエスト 32MB 事前検証 | done (b34d543) |
+| (e) | `interrupt` 拡張 (pending_uploads drop) | done (4dd835a) |
+| (f) | TTL 5 分 GC + timeout reject | done (dc632e1) |
+| (g) | per-upload progress UI | Session 2 |
+| (h) | 遅延 upload tray UX | Session 2 |
+| (i) | D&D drop zone | Session 2 |
 
 ### IN(含む)
 
 - 複数ファイル(10 / instruction、 in-flight 20)、 multi-select picker
 - 全種別: image + text / code + PDF + Office(docx / xlsx / pptx via
-  markitdown 連携)
+  officeparser; markitdown CLI fallback は Q10 OQ)
 - 128 MB 一律上限(個別)、 合計 cap なし
 - wrapper の fit-to-SDK:
   - 画像 = API 上限超は downsize、 不能は `unfittable_image` reject
   - PDF = 上限超は先頭 N ページ抽出 or `unfittable_pdf` reject
   - text/code = 1 MB 超は `truncated` 印付き切り詰め
-  - Office = markitdown → text 経路へ
+  - Office = officeparser AST → text 経路へ(fflate での decompression-bomb 防御を pre-flight、 出力 8 MB chars cap)
 - reject reason 全 enum(`size_over` / `mime_denied` / `count_over` /
   `timeout` / `interrupted` / `unfittable_image` / `unfittable_pdf` /
-  `text_too_large` / `sdk_error`)
+  `text_too_large` / `total_request_over` / `sdk_error`)
 - `interrupt` 拡張: pending_uploads drop + staged attachment drop +
   `attach_rejected{reason="interrupted"}` 発火
 - TTL 5 分 GC(未参照 + chunk 不完全 upload)
