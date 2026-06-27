@@ -7,6 +7,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   EffortLevel,
+  HookInput,
   ModelInfo,
   Options,
   PermissionResult,
@@ -36,6 +37,7 @@ import {
   stepState,
 } from "./state.js";
 import {
+  cwdChangedHookToCwd,
   sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToInitMeta,
@@ -524,6 +526,17 @@ export class AgentHost {
     this.#pendingPermission = pending;
   }
 
+  /** Updates #cwd from a CwdChanged hook (#64) so the next state_change
+   *  stamps the new path into ext.cwd. Mirrors the pending_permission
+   *  piggyback (ADR-0022): no envelope is emitted here — the next #apply
+   *  carries it. cwd changes always happen mid-turn (Bash `cd`) and are
+   *  followed by another state transition, so a same-turn re-emit would
+   *  only add a duplicate state_change without surfacing the change sooner. */
+  #applyCwdChanged(input: HookInput): void {
+    const cwd = cwdChangedHookToCwd(input);
+    if (cwd !== null) this.#cwd = cwd;
+  }
+
   /**
    * Start the session and consume messages until closed. With
    * `initialPrompt` the first turn starts immediately; without it the
@@ -539,10 +552,28 @@ export class AgentHost {
       this.tickGC();
     }, PENDING_UPLOAD_GC_INTERVAL_MS);
     if (typeof this.#gcTimer.unref === "function") this.#gcTimer.unref();
+    // Merge CwdChanged into any user-supplied hooks instead of overwriting,
+    // so #64's cwd refresh composes with the consumer's own hooks. CwdChanged
+    // is the only mid-session cwd source (init carries it once, never updates).
+    const userHooks = this.#options.queryOptions?.hooks ?? {};
     const options: Options = {
       permissionMode: "default",
       systemPrompt: { type: "preset", preset: "claude_code" },
       ...this.#options.queryOptions,
+      hooks: {
+        ...userHooks,
+        CwdChanged: [
+          ...(userHooks.CwdChanged ?? []),
+          {
+            hooks: [
+              async (input) => {
+                this.#applyCwdChanged(input);
+                return {};
+              },
+            ],
+          },
+        ],
+      },
       // Set last so queryOptions can never override the hook that drives
       // waiting_permission.
       canUseTool: (toolName, input) => this.#canUseTool(toolName, input),

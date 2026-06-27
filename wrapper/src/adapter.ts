@@ -3,6 +3,7 @@
 // reads message shape, never calls the SDK. See docs/specs/agent-sdk-events.md.
 
 import type {
+  HookInput,
   SDKMessage,
   SDKRateLimitInfo,
   SDKResultMessage,
@@ -258,6 +259,16 @@ export function sdkMessageToInitMeta(
     if (commands.length > 0) meta.slash_commands = commands;
   }
   return meta;
+}
+
+/** new_cwd from a CwdChanged hook input (#64), or null for other hook events
+ *  or empty values. init carries cwd at session start, but never updates
+ *  mid-session — the CwdChanged hook is the only path that does. */
+export function cwdChangedHookToCwd(input: HookInput): string | null {
+  if (input.hook_event_name !== "CwdChanged") return null;
+  return typeof input.new_cwd === "string" && input.new_cwd !== ""
+    ? input.new_cwd
+    : null;
 }
 
 /** The SDK conversation session id carried by a message (every SDKMessage

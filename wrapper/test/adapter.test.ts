@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { HookInput, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
+  cwdChangedHookToCwd,
   sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToLogs,
@@ -284,6 +285,40 @@ describe("adapter + state machine", () => {
       "done",
       "waiting_input",
     ]);
+  });
+});
+
+describe("cwdChangedHookToCwd", () => {
+  // BaseHookInput requires session_id / transcript_path / cwd; HookInput is the
+  // unioned shape. Tests only read hook_event_name / new_cwd, so cast suffices.
+  const hook = (shape: unknown): HookInput => shape as HookInput;
+
+  it("CwdChanged から new_cwd を返す", () => {
+    expect(
+      cwdChangedHookToCwd(
+        hook({
+          hook_event_name: "CwdChanged",
+          old_cwd: "/a",
+          new_cwd: "/b",
+        }),
+      ),
+    ).toBe("/b");
+  });
+
+  it("他イベントは null", () => {
+    expect(
+      cwdChangedHookToCwd(
+        hook({ hook_event_name: "PreToolUse", tool_name: "Read" }),
+      ),
+    ).toBeNull();
+  });
+
+  it("空 new_cwd は null", () => {
+    expect(
+      cwdChangedHookToCwd(
+        hook({ hook_event_name: "CwdChanged", old_cwd: "/a", new_cwd: "" }),
+      ),
+    ).toBeNull();
   });
 });
 

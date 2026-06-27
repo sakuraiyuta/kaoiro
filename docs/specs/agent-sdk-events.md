@@ -176,6 +176,11 @@ effort を切り替えられる。ヘッドレス実走行で確定した境界:
 `SubagentStop` / `SessionStart` / `SessionEnd` / `PreCompact`。状態導出は主に
 メッセージ列 + `canUseTool` で足り、フックは補助。
 
+`CwdChanged` フック(#64)は init 後の cwd 変化を `state_change.ext.cwd` に
+piggyback で反映する唯一の経路(`init` 以外のメッセージは cwd を運ばない)。
+フック内では envelope を emit せず、`#cwd` を同期代入して次の `state_change`
+で stamp する(`pending_permission` と同型)。
+
 ### 状態導出マッピング
 
 | kaoiro 状態 | 導出トリガ(SDK) |

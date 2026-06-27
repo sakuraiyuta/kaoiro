@@ -236,6 +236,100 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("CwdChanged フックで mid-session に ext.cwd を更新する (#64)", async () => {
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", cwd: "/repo" });
+        yield assistant([{ type: "text", text: "hi" }]);
+        // Fire the registered CwdChanged hook (the host always pushes one
+        // entry whose .hooks[0] is its handler).
+        const cwdHook =
+          args.options.hooks?.CwdChanged?.[
+            args.options.hooks.CwdChanged.length - 1
+          ]?.hooks[0];
+        await cwdHook?.(
+          {
+            session_id: "s",
+            transcript_path: "",
+            cwd: "/repo",
+            hook_event_name: "CwdChanged",
+            old_cwd: "/repo",
+            new_cwd: "/repo/sub",
+          } as never,
+          undefined,
+          { signal: new AbortController().signal },
+        );
+        // The next state_change after the hook should carry the new cwd.
+        yield assistant([{ type: "text", text: "after-cd" }]);
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    // First thinking still has /repo (init cwd), the post-hook thinking has /repo/sub.
+    const thinkings = envs.filter((e) => e.state === "thinking");
+    expect(thinkings[0]?.ext?.cwd).toBe("/repo");
+    expect(thinkings.at(-1)?.ext?.cwd).toBe("/repo/sub");
+  });
+
+  it("CwdChanged フックは queryOptions.hooks のユーザ登録を保持してマージする (#64)", async () => {
+    const userHookCalls: string[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        // Run BOTH the user's hook and the host's appended hook.
+        const matchers = args.options.hooks?.CwdChanged ?? [];
+        for (const m of matchers) {
+          for (const cb of m.hooks) {
+            await cb(
+              {
+                session_id: "s",
+                transcript_path: "",
+                cwd: "/repo",
+                hook_event_name: "CwdChanged",
+                old_cwd: "/repo",
+                new_cwd: "/repo/x",
+              } as never,
+              undefined,
+              { signal: new AbortController().signal },
+            );
+          }
+        }
+        yield assistant([{ type: "text", text: "hi" }]);
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      queryOptions: {
+        hooks: {
+          CwdChanged: [
+            {
+              hooks: [
+                async (input) => {
+                  userHookCalls.push(
+                    (input as { new_cwd: string }).new_cwd ?? "",
+                  );
+                  return {};
+                },
+              ],
+            },
+          ],
+        },
+      },
+      now: () => "T",
+    });
+    await host.run();
+    expect(userHookCalls).toEqual(["/repo/x"]);
+  });
+
   it("SDK の session_id を onSessionId で報告し、変化時のみ再通知する (ADR-0014)", async () => {
     const ids: string[] = [];
     const host = new AgentHost(config, {
