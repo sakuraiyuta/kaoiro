@@ -134,6 +134,25 @@ defmodule KaoiroServer.HostRegistryTest do
     end
   end
 
+  describe "get_public/2 (#35)" do
+    test "get_public は default を注入し runner_pid を落とした単一 host view を返す" do
+      store = start_supervised!({HostRegistry, name: :host_reg_get_public_test})
+      :ok = HostRegistry.register("a", attrs(), self(), store)
+
+      entry = HostRegistry.get_public("a", store)
+      default = %{"id" => "default", "name" => "デフォルト", "sprite_set" => "default"}
+      assert entry.personas == [default, %{"id" => "mio"}]
+      refute Map.has_key?(entry, :runner_pid)
+      # snapshot と整合する: 同じ host を単一スライスとして取り出した形
+      assert entry == HostRegistry.snapshot(store)["a"]
+    end
+
+    test "未知 host は nil を返す" do
+      store = start_supervised!({HostRegistry, name: :host_reg_get_public_unknown_test})
+      assert HostRegistry.get_public("none", store) == nil
+    end
+  end
+
   describe "personas/1" do
     test "全ホストの persona を集約し重複を排除する" do
       store = start_supervised!({HostRegistry, name: :host_reg_personas_test})

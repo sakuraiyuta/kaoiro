@@ -70,6 +70,19 @@ defmodule KaoiroServer.HostRegistry do
   end
 
   @doc """
+  Returns the host's operator-facing entry: personas normalised with the
+  reserved `default` (#35) and the internal `runner_pid` stripped, the same
+  view a single host would have under `snapshot/1`. The spawn / stop /
+  restart resolver must read THIS, not `get/2`, so the persona set it
+  resolves against matches what the operator UI saw via the `hosts` push --
+  otherwise an operator picking `default` would hit `unknown_persona`.
+  Returns nil when the host is unknown.
+  """
+  def get_public(host_id, server \\ __MODULE__) do
+    GenServer.call(server, {:get_public, host_id})
+  end
+
+  @doc """
   Returns the host_id => entry map for every registered host, with the
   internal `runner_pid` stripped so the result is JSON-serialisable for
   the operator "hosts" push (a PID has no Jason encoder).
@@ -133,6 +146,13 @@ defmodule KaoiroServer.HostRegistry do
     {:reply, Map.get(state, host_id), state}
   end
 
+  def handle_call({:get_public, host_id}, _from, state) do
+    case Map.get(state, host_id) do
+      nil -> {:reply, nil, state}
+      entry -> {:reply, public_entry(entry), state}
+    end
+  end
+
   def handle_call(:snapshot, _from, state) do
     # Strip the internal runner_pid: the snapshot is pushed to operators
     # over JSON channels and a PID has no Jason encoder (it would crash the
@@ -142,16 +162,7 @@ defmodule KaoiroServer.HostRegistry do
     # Inject the reserved `default` persona at the head of each host's
     # personas (#35); a runner-declared `default` is replaced by the
     # server-side standard so the entry's name/sprite_set stay canonical.
-    public =
-      Map.new(state, fn {host_id, entry} ->
-        public_entry =
-          entry
-          |> Map.delete(:runner_pid)
-          |> Map.put(:personas, inject_default(entry.personas))
-
-        {host_id, public_entry}
-      end)
-
+    public = Map.new(state, fn {host_id, entry} -> {host_id, public_entry(entry)} end)
     {:reply, public, state}
   end
 
@@ -172,6 +183,15 @@ defmodule KaoiroServer.HostRegistry do
       _ ->
         {:reply, :noop, state}
     end
+  end
+
+  # The operator-facing slice of an entry: personas normalised with the
+  # reserved `default` and the internal `runner_pid` stripped (it has no
+  # Jason encoder, and `drop/3` fences via the in-state map directly).
+  defp public_entry(entry) do
+    entry
+    |> Map.delete(:runner_pid)
+    |> Map.put(:personas, inject_default(entry.personas))
   end
 
   # Drop any runner-declared `default` so the server-side standard wins,

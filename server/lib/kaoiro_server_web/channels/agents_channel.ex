@@ -440,7 +440,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   defp fetch_host(host_id) do
-    case HostRegistry.get(host_id) do
+    # get_public so the resolver sees the same persona set the operator UI
+    # received via the `hosts` push (HostRegistry.snapshot/1), including the
+    # reserved `default` (#35). Reading raw `get/2` here would let an operator
+    # pick `default` in the LaunchDialog and hit `unknown_persona`.
+    case HostRegistry.get_public(host_id) do
       nil -> {:error, :unknown_host}
       host -> {:ok, host}
     end

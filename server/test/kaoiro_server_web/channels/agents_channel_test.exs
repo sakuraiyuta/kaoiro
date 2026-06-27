@@ -1169,6 +1169,30 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "unknown_persona"}
     end
 
+    test "予約 default ペルソナは host 未宣言でも spawn できる (#35)" do
+      host_id = "lab-pc-default"
+      # host は default を申告していない (register_host の既定は [@mio] のみ)
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "default",
+          "cwd" => "/home/user/proj"
+        })
+
+      assert_reply ref, :ok, %{"agent_id" => _}
+      assert_broadcast "spawn", payload
+
+      assert payload["persona"] == %{
+               "id" => "default",
+               "name" => "デフォルト",
+               "sprite_set" => "default"
+             }
+    end
+
     test "allow-list 外の cwd は cwd_not_allowed (T1)" do
       host_id = "lab-pc-5"
       register_host(host_id, cwd_allowlist: ["/home/user/proj"])
@@ -1439,7 +1463,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         event: "attach_close",
         payload: %{"upload_id" => "uX"}
       }
+
       assert topic == "wrapper:" <> agent_a
+
       refute_received %Phoenix.Socket.Broadcast{
         topic: "wrapper:" <> ^agent_b,
         event: "attach_close"
