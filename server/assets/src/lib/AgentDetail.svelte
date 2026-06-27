@@ -1359,7 +1359,7 @@
           <form class="instruct" onsubmit={sendInstruction}>
             <textarea
               class:sending={display.shown === "sending"}
-              placeholder="指示を送る…(Ctrl+Enter で送信、/ でコマンド候補)"
+              placeholder="指示を送る…(Ctrl+Enter で送信、/ でコマンド候補、ドラッグドロップ・ペーストで画像等ファイル送信)"
               bind:value={instruction}
               bind:this={slashTextarea}
               onkeydown={onInstructionKeydown}
