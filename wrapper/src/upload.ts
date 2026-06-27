@@ -9,6 +9,7 @@
 // timeout) lives here; phase-1 extends MIME, raises the cap to 128 MB, and
 // adds fit-to-SDK.
 
+import { PDFDocument } from "pdf-lib";
 import type { FileUploadRejectReason } from "@kaoiro/protocol";
 
 /** Allowed image MIMEs (file-upload spec). Render path: image content
@@ -41,6 +42,21 @@ export const TEXT_MIME_ALLOW: ReadonlySet<string> = new Set([
 export function isTextMime(mime: string): boolean {
   return mime.startsWith("text/") || TEXT_MIME_ALLOW.has(mime);
 }
+
+/** PDF MIME — rendered as an SDK document content block. */
+export const PDF_MIME = "application/pdf";
+
+/** Raw-bytes cap for the SDK document content block. Stage A IN2 found the
+ *  full request total is 32 MB after base64 (~37% overhead), so the per-file
+ *  raw budget is ~22 MB to leave room for the rest of the turn. fit-to-SDK
+ *  extracts the largest prefix of pages that fits. */
+export const PDF_SDK_RAW_LIMIT_BYTES = 22 * 1024 * 1024;
+
+/** Per-PDF page cap for the SDK document content block. Stage A IN2: 200K
+ *  context models (Haiku 4.5) ceiling at 100 pages; Sonnet / Opus accept
+ *  600. Targeting the lower bound keeps PDFs working across the active
+ *  model fleet without per-model branching. */
+export const PDF_SDK_PAGE_LIMIT = 100;
 
 /** Per-file upper limit for phase-0 (5 MB). Matches Claude API image_block
  *  practical limit (~7.5 MB raw / 10 MB base64; Stage A IN2 finding). The
@@ -126,10 +142,14 @@ export type ValidationResult =
   | { ok: true }
   | { ok: false; reason: FileUploadRejectReason; detail?: string };
 
-/** attach_open validation: MIME allow-list (image OR text/code) + advertised
- *  size cap. PDF / Office land here when their fit-to-SDK passes ship. */
+/** attach_open validation: MIME allow-list (image / text/code / PDF) +
+ *  advertised size cap. Office lands here when its fit-to-SDK ships. */
 export function validateOpen(meta: UploadMeta): ValidationResult {
-  if (!IMAGE_MIME_ALLOW.has(meta.mime) && !isTextMime(meta.mime)) {
+  if (
+    !IMAGE_MIME_ALLOW.has(meta.mime) &&
+    !isTextMime(meta.mime) &&
+    meta.mime !== PDF_MIME
+  ) {
     return { ok: false, reason: "mime_denied", detail: `mime=${meta.mime}` };
   }
   if (meta.size > PHASE_0_SIZE_LIMIT_BYTES) {
@@ -203,7 +223,15 @@ export interface TextContentBlock {
   text: string;
 }
 
-export type ContentBlock = ImageContentBlock | TextContentBlock;
+export interface DocumentContentBlock {
+  type: "document";
+  source: { type: "base64"; media_type: string; data: string };
+}
+
+export type ContentBlock =
+  | ImageContentBlock
+  | TextContentBlock
+  | DocumentContentBlock;
 
 /** Renders one upload's assembled bytes into a base64 image content block
  *  for the SDK user message. The caller has validated the MIME is in
@@ -238,17 +266,107 @@ export function renderTextBlock(
   return { type: "text", text: `[file: ${meta.filename}]\n${body}` };
 }
 
+/** Renders one upload's assembled bytes (already fit) into a base64
+ *  document content block. The caller has validated MIME is PDF (or other
+ *  document-class types when added) and run fit-to-SDK. */
+export function renderDocumentBlock(
+  mime: string,
+  bytes: Uint8Array,
+): DocumentContentBlock {
+  return {
+    type: "document",
+    source: {
+      type: "base64",
+      media_type: mime,
+      data: Buffer.from(bytes).toString("base64"),
+    },
+  };
+}
+
+/** Best-effort fit of a PDF to the SDK document content block (file-upload
+ *  spec / ADR-0025 F10). Strategy: pass-through when already within both
+ *  caps; otherwise load via pdf-lib and emit the largest prefix of pages
+ *  whose serialised output stays under the raw-bytes cap, bounded by the
+ *  page cap. Returns null when even one page does not fit — caller emits
+ *  unfittable_pdf. */
+export async function fitPdfToSdk(
+  bytes: Uint8Array,
+): Promise<Uint8Array | null> {
+  const src = await PDFDocument.load(bytes, { updateMetadata: false });
+  const totalPages = src.getPageCount();
+  if (
+    bytes.byteLength <= PDF_SDK_RAW_LIMIT_BYTES &&
+    totalPages <= PDF_SDK_PAGE_LIMIT
+  ) {
+    return bytes;
+  }
+  const targetPages = Math.min(totalPages, PDF_SDK_PAGE_LIMIT);
+
+  async function buildPrefix(n: number): Promise<Uint8Array> {
+    const out = await PDFDocument.create();
+    const indices = Array.from({ length: n }, (_, i) => i);
+    const copied = await out.copyPages(src, indices);
+    for (const p of copied) out.addPage(p);
+    return await out.save();
+  }
+
+  // Try the largest acceptable prefix first; if it already fits the byte
+  // cap, return immediately to avoid the binary-search round-trips.
+  const first = await buildPrefix(targetPages);
+  if (first.byteLength <= PDF_SDK_RAW_LIMIT_BYTES) return first;
+
+  // Binary search down for the largest fitting prefix. Each probe rebuilds
+  // a PDF (O(N) work); log2(N) probes is acceptable for the page-cap range.
+  let lo = 1;
+  let hi = targetPages - 1;
+  let best: Uint8Array | null = null;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const buf = await buildPrefix(mid);
+    if (buf.byteLength <= PDF_SDK_RAW_LIMIT_BYTES) {
+      best = buf;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
+
+/** Discriminated render outcome (file-upload spec / ADR-0025 F1). `ok=false`
+ *  carries the reason the caller emits on the upload's `attach_rejected`
+ *  and / or the instruction's `instruction_rejected`. */
+export type RenderResult =
+  | { ok: true; block: ContentBlock }
+  | { ok: false; reason: FileUploadRejectReason };
+
 /** Dispatches an assembled upload to its SDK content block by MIME
- *  (file-upload spec / ADR-0025 F1: rendering is wrapper-internal). Adds
- *  a graceful sdk_error path via the caller for an unrecognised MIME —
- *  validateOpen should have rejected it, so reaching this branch is a
- *  bug, not a user-facing error. Callers throw on null and the host
- *  surfaces it as instruction_rejected{sdk_error}. */
-export function renderAttachmentBlock(
+ *  (file-upload spec / ADR-0025 F1: rendering is wrapper-internal). Async
+ *  because the PDF path runs an pdf-lib fit-to-SDK pass; image / text are
+ *  synchronous internally and the wrapper still pays only one microtask. */
+export async function renderAttachmentBlock(
   meta: UploadMeta,
   bytes: Uint8Array,
-): ContentBlock | null {
-  if (IMAGE_MIME_ALLOW.has(meta.mime)) return renderImageBlock(meta, bytes);
-  if (isTextMime(meta.mime)) return renderTextBlock(meta, bytes);
-  return null;
+): Promise<RenderResult> {
+  if (IMAGE_MIME_ALLOW.has(meta.mime)) {
+    return { ok: true, block: renderImageBlock(meta, bytes) };
+  }
+  if (isTextMime(meta.mime)) {
+    return { ok: true, block: renderTextBlock(meta, bytes) };
+  }
+  if (meta.mime === PDF_MIME) {
+    let fitted: Uint8Array | null;
+    try {
+      fitted = await fitPdfToSdk(bytes);
+    } catch {
+      // pdf-lib throws on a malformed PDF (corrupt header / encrypted).
+      // Surface it as sdk_error rather than crashing the wrapper.
+      return { ok: false, reason: "sdk_error" };
+    }
+    if (fitted === null) return { ok: false, reason: "unfittable_pdf" };
+    return { ok: true, block: renderDocumentBlock(meta.mime, fitted) };
+  }
+  // validateOpen should have caught this; reaching here means a wrapper
+  // bug / type drift, not a user error.
+  return { ok: false, reason: "sdk_error" };
 }

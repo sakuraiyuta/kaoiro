@@ -1142,10 +1142,10 @@
               rows="2"
               aria-label="instruction for {name}"
             ></textarea>
-            <label class="attach" title="ファイル添付(画像 / テキスト / コード、複数可)">
+            <label class="attach" title="ファイル添付(画像 / テキスト / コード / PDF、複数可)">
               <input
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/xml,application/yaml,application/x-yaml,application/javascript,application/typescript,application/sql"
+                accept="image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/xml,application/yaml,application/x-yaml,application/javascript,application/typescript,application/sql,application/pdf"
                 multiple
                 onchange={onFilePicked}
                 bind:this={stagedFileInput}

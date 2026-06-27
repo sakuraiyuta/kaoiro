@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { PDFDocument } from "pdf-lib";
 import {
   IMAGE_MIME_ALLOW,
+  PDF_MIME,
+  PDF_SDK_PAGE_LIMIT,
   PHASE_0_SIZE_LIMIT_BYTES,
   TEXT_MIME_ALLOW,
   assembleBytes,
+  fitPdfToSdk,
   isTextMime,
   parseChunkPayload,
   renderAttachmentBlock,
+  renderDocumentBlock,
   renderImageBlock,
   renderTextBlock,
   validateClose,
@@ -77,6 +82,12 @@ describe("validateOpen (image + text/code MIMEs)", () => {
   it("application/json は ok (TEXT_MIME_ALLOW 経路)", () => {
     expect(
       validateOpen(meta({ mime: "application/json", filename: "a.json" })),
+    ).toEqual({ ok: true });
+  });
+
+  it("application/pdf は ok (PDF 経路)", () => {
+    expect(
+      validateOpen(meta({ mime: PDF_MIME, filename: "a.pdf" })),
     ).toEqual({ ok: true });
   });
 
@@ -155,30 +166,102 @@ describe("renderTextBlock / renderAttachmentBlock", () => {
     expect(block.text).toContain("hi");
   });
 
-  it("renderAttachmentBlock は image MIME を image block へ", () => {
-    const block = renderAttachmentBlock(
+  it("renderAttachmentBlock は image MIME を image block へ", async () => {
+    const r = await renderAttachmentBlock(
       meta_({ mime: "image/png", filename: "a.png" }),
       new Uint8Array([1, 2, 3]),
     );
-    expect(block?.type).toBe("image");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.block.type).toBe("image");
   });
 
-  it("renderAttachmentBlock は text MIME を text block へ", () => {
-    const block = renderAttachmentBlock(
+  it("renderAttachmentBlock は text MIME を text block へ", async () => {
+    const r = await renderAttachmentBlock(
       meta_({ mime: "text/markdown", filename: "a.md" }),
       new TextEncoder().encode("# hi"),
     );
-    expect(block?.type).toBe("text");
-    expect((block as { text?: string }).text).toContain("[file: a.md]");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.block.type).toBe("text");
+      expect((r.block as { text: string }).text).toContain("[file: a.md]");
+    }
   });
 
-  it("renderAttachmentBlock は未知 MIME に null (caller が sdk_error 化)", () => {
-    expect(
-      renderAttachmentBlock(
-        meta_({ mime: "application/pdf", filename: "a.pdf" }),
-        new Uint8Array([]),
-      ),
-    ).toBeNull();
+  it("renderAttachmentBlock は未知 MIME を sdk_error で返す(validateOpen 漏れ)", async () => {
+    const r = await renderAttachmentBlock(
+      meta_({ mime: "application/octet-stream", filename: "a.bin" }),
+      new Uint8Array([]),
+    );
+    expect(r).toEqual({ ok: false, reason: "sdk_error" });
+  });
+});
+
+describe("PDF fit-to-SDK + render", () => {
+  async function makePdf(pages: number): Promise<Uint8Array> {
+    const doc = await PDFDocument.create();
+    for (let i = 0; i < pages; i++) {
+      const page = doc.addPage([612, 792]);
+      page.drawText(`page ${i + 1}`);
+    }
+    return await doc.save();
+  }
+
+  it("ページ数 / バイトとも上限内なら pass-through(同一参照)", async () => {
+    const bytes = await makePdf(3);
+    const fitted = await fitPdfToSdk(bytes);
+    expect(fitted).toBe(bytes);
+  });
+
+  it("ページ数上限超は先頭 PDF_SDK_PAGE_LIMIT ページのみ", async () => {
+    const total = PDF_SDK_PAGE_LIMIT + 5;
+    const bytes = await makePdf(total);
+    const fitted = await fitPdfToSdk(bytes);
+    expect(fitted).not.toBeNull();
+    // assertion: 抽出後のページ数 <= PAGE_LIMIT
+    const reloaded = await PDFDocument.load(fitted as Uint8Array);
+    expect(reloaded.getPageCount()).toBe(PDF_SDK_PAGE_LIMIT);
+  });
+
+  it("renderDocumentBlock は base64 document content block を構築", () => {
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // %PDF
+    const block = renderDocumentBlock(PDF_MIME, bytes);
+    expect(block.type).toBe("document");
+    expect(block.source.media_type).toBe(PDF_MIME);
+    expect(block.source.data).toBe(Buffer.from(bytes).toString("base64"));
+  });
+
+  it("renderAttachmentBlock は PDF を fit → document block へ", async () => {
+    const bytes = await makePdf(2);
+    const r = await renderAttachmentBlock(
+      {
+        upload_id: "u1",
+        filename: "a.pdf",
+        mime: PDF_MIME,
+        size: bytes.byteLength,
+        chunks: 1,
+      },
+      bytes,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.block.type).toBe("document");
+      expect((r.block as { source: { media_type: string } }).source.media_type)
+        .toBe(PDF_MIME);
+    }
+  });
+
+  it("renderAttachmentBlock は壊れた PDF を sdk_error へ(pdf-lib throw)", async () => {
+    const r = await renderAttachmentBlock(
+      {
+        upload_id: "u1",
+        filename: "broken.pdf",
+        mime: PDF_MIME,
+        size: 5,
+        chunks: 1,
+      },
+      new Uint8Array([0x00, 0x01, 0x02, 0x03, 0x04]), // not a PDF
+    );
+    expect(r).toEqual({ ok: false, reason: "sdk_error" });
   });
 });
 

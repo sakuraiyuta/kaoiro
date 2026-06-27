@@ -413,14 +413,14 @@ describe("AgentHost — input queue/notify/close", () => {
     expect(states).toContain("sending");
   });
 
-  it("close 後の send は投げる", () => {
+  it("close 後の send は投げる", async () => {
     const host = new AgentHost(config, {
       onState: () => {},
       queryFn: scriptedQuery([]),
       now: () => "T",
     });
     host.close();
-    expect(() => host.send("x")).toThrow(/closed/);
+    await expect(host.send("x")).rejects.toThrow(/closed/);
   });
 
   it("interrupt は query.interrupt へ委譲する", async () => {
@@ -613,7 +613,7 @@ describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () =
     host.attachOpen(png(3));
     host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2, 3])));
     host.attachClose("u1");
-    host.send("見て", ["u1"]);
+    await host.send("見て", ["u1"]);
     host.close();
     await done;
 
@@ -642,7 +642,7 @@ describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () =
     host.attachOpen(png(1));
     host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([9])));
     host.attachClose("u1");
-    host.send("", ["u1"]);
+    await host.send("", ["u1"]);
     host.close();
     await done;
     expect(Array.isArray(captured[0]!.message.content)).toBe(true);
@@ -779,8 +779,8 @@ describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () =
     host.attachOpen(png(2));
     host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2])));
     host.attachClose("u1");
-    host.send("a", ["u1"]); // consumes
-    host.send("b", ["u1"]); // u1 no longer in pendingUploads -> rejected
+    await host.send("a", ["u1"]); // consumes
+    await host.send("b", ["u1"]); // u1 no longer in pendingUploads -> rejected
     host.close();
     await done;
     expect(captured.length).toBe(1);
@@ -802,7 +802,7 @@ describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () =
     host.attachClose("u1"); // seals
     // 攻撃者再送: 同一 chunk_index で異なる中身 — sealed で無視される
     host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([9, 9, 9])));
-    host.send("", ["u1"]);
+    await host.send("", ["u1"]);
     host.close();
     await done;
 
@@ -890,6 +890,43 @@ describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () =
     });
   });
 
+  it("application/pdf の添付は fit-to-SDK 後 document block として SDK へ渡る", async () => {
+    const { PDFDocument } = await import("pdf-lib");
+    const pdf = await PDFDocument.create();
+    pdf.addPage([612, 792]).drawText("hi");
+    const body = await pdf.save();
+
+    const captured: SDKUserMessage[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen({
+      upload_id: "u1",
+      filename: "report.pdf",
+      mime: "application/pdf",
+      size: body.byteLength,
+      chunks: 1,
+    });
+    host.attachChunk(buildChunkPayload("u1", 0, body));
+    host.attachClose("u1");
+    await host.send("レビューして", ["u1"]);
+    host.close();
+    await done;
+
+    expect(captured.length).toBe(1);
+    const content = captured[0]!.message.content as Array<{
+      type: string;
+      source?: { media_type?: string };
+      text?: string;
+    }>;
+    expect(content[0]?.type).toBe("document");
+    expect(content[0]?.source?.media_type).toBe("application/pdf");
+    expect(content[1]).toEqual({ type: "text", text: "レビューして" });
+  });
+
   it("text/plain の添付は text block(filename prefix 付き)として SDK へ渡る", async () => {
     const captured: SDKUserMessage[] = [];
     const host = new AgentHost(config, {
@@ -908,7 +945,7 @@ describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () =
     });
     host.attachChunk(buildChunkPayload("u1", 0, body));
     host.attachClose("u1");
-    host.send("これ要約して", ["u1"]);
+    await host.send("これ要約して", ["u1"]);
     host.close();
     await done;
 

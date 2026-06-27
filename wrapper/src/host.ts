@@ -188,10 +188,13 @@ export class AgentHost {
 
   /** Enqueue a user turn for the streaming input. When `attachmentIds` are
    *  provided, the host resolves each id against pending_uploads, assembles
-   *  bytes into SDK content blocks (file-upload spec / ADR-0025 F1, phase-0
-   *  image only), and atomically rejects the whole turn if any id is missing
-   *  or incomplete. Successful resolution consumes the uploads. */
-  send(text: string, attachmentIds?: string[]): void {
+   *  bytes, fits to SDK and renders content blocks (file-upload spec /
+   *  ADR-0025 F1 & F10), and atomically rejects the whole turn if any id is
+   *  missing, incomplete, or unfittable. Successful resolution consumes the
+   *  uploads. Async because the PDF fit-to-SDK pass is async; cli.ts
+   *  serialises onInstruction calls through a promise chain so async render
+   *  cost does not reorder concurrent instructions on the SDK queue. */
+  async send(text: string, attachmentIds?: string[]): Promise<void> {
     if (this.#closed) throw new Error("agent host is closed");
     // Fail fast instead of growing without bound when nothing drains.
     if (this.#queue.length >= MAX_QUEUED_TURNS) {
@@ -215,20 +218,35 @@ export class AgentHost {
       if (!resolved) return; // emitInstructionRejected already fired.
       const blocks: ContentBlock[] = [];
       for (const entry of resolved) {
-        const block = renderAttachmentBlock(entry.meta, assembleBytes(entry));
-        if (block === null) {
-          // The MIME passed validateOpen but the dispatcher does not know
-          // how to render it — a wrapper bug, not a user error. Abort the
-          // turn atomically (no upload consumption) so the operator sees a
-          // failure surface they can report instead of silent breakage.
+        const result = await renderAttachmentBlock(
+          entry.meta,
+          assembleBytes(entry),
+        );
+        if (!result.ok) {
+          // Stamp the per-upload reject for ALL render-failure reasons so
+          // the dashboard chip identifies which file broke, not just
+          // "the turn failed" (instruction_rejected only carries the id
+          // list). sdk_error covers corrupt PDFs et al., and like the
+          // unfittable_* family the same bytes will fail the same way on
+          // retry — so drop the entry from pending_uploads here too,
+          // matching attachChunk/size_over and attachClose/failure which
+          // delete on failure. Already-rendered siblings stay so the
+          // operator can retry the turn without the broken file.
+          this.#emitAttachRejected({
+            upload_id: entry.meta.upload_id,
+            reason: result.reason,
+            ...(result.reason === "sdk_error"
+              ? { detail: `render failed for mime=${entry.meta.mime}` }
+              : {}),
+          });
+          this.#pendingUploads.delete(entry.meta.upload_id);
           this.#emitInstructionRejected({
             attachment_ids: attachmentIds,
-            reason: "sdk_error",
-            detail: `no renderer for mime=${entry.meta.mime}`,
+            reason: result.reason,
           });
           return;
         }
-        blocks.push(block);
+        blocks.push(result.block);
       }
       if (text.length > 0) blocks.push({ type: "text", text });
       content = blocks;
@@ -446,7 +464,7 @@ export class AgentHost {
    * first turn (e.g. an operator instruction relayed by the server).
    */
   async run(initialPrompt?: string): Promise<void> {
-    if (initialPrompt !== undefined) this.send(initialPrompt);
+    if (initialPrompt !== undefined) await this.send(initialPrompt);
     const options: Options = {
       permissionMode: "default",
       systemPrompt: { type: "preset", preset: "claude_code" },

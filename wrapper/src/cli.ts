@@ -89,6 +89,11 @@ async function main(): Promise<void> {
   let host: AgentHost;
   let link: ServerLink | null = null;
   let broker: PermissionBroker | null = null;
+  // host.send is async now (the PDF fit-to-SDK path awaits pdf-lib). Chain
+  // operator instructions through one Promise so a slow render (e.g. a big
+  // PDF) does not let the next instruction's queue.push run first, which
+  // would reorder turns on the SDK input stream.
+  let instructionChain: Promise<void> = Promise.resolve();
 
   const onState = (envelope: Envelope): void => {
     printState(envelope);
@@ -129,7 +134,14 @@ async function main(): Promise<void> {
             text,
           }),
         );
-        host.send(text, attachmentIds);
+        // Serialise async sends so render cost (PDF fit, etc.) cannot
+        // reorder instructions on the SDK queue. swallow per-call failures
+        // so one bad turn does not break the chain.
+        instructionChain = instructionChain.then(() =>
+          host.send(text, attachmentIds).catch((err: unknown) => {
+            process.stderr.write(`send failed: ${String(err)}\n`);
+          }),
+        );
       },
       onPermissionDecision: (decision) => broker?.resolve(decision),
       onInterrupt: () => {
