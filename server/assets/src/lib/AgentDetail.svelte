@@ -816,11 +816,11 @@
             {#if spriteUrl}
               <img class="sprite" src={spriteUrl} alt={expression.label} />
             {:else}
-              <span class="face" role="img" aria-label={expression.label}>
+              <div class="face" role="img" aria-label={expression.label}>
                 <span class="eye left"></span>
                 <span class="eye right"></span>
                 <span class="mouth"></span>
-              </span>
+              </div>
             {/if}
           {/key}
           <span class="lamp" title={expression.label}></span>
