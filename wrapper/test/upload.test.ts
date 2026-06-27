@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   IMAGE_MIME_ALLOW,
   PHASE_0_SIZE_LIMIT_BYTES,
+  TEXT_MIME_ALLOW,
   assembleBytes,
+  isTextMime,
   parseChunkPayload,
+  renderAttachmentBlock,
   renderImageBlock,
+  renderTextBlock,
   validateClose,
   validateOpen,
 } from "../src/upload.js";
@@ -59,19 +63,31 @@ describe("parseChunkPayload", () => {
   });
 });
 
-describe("validateOpen — phase-0 (image only, 5 MB)", () => {
-  it("許可 MIME + 上限内のサイズで ok", () => {
+describe("validateOpen (image + text/code MIMEs)", () => {
+  it("許可画像 MIME + 上限内のサイズで ok", () => {
     expect(validateOpen(meta())).toEqual({ ok: true });
   });
 
-  it("非画像 MIME は mime_denied", () => {
+  it("text/plain は ok (text/* prefix 経路)", () => {
+    expect(
+      validateOpen(meta({ mime: "text/plain", filename: "a.txt" })),
+    ).toEqual({ ok: true });
+  });
+
+  it("application/json は ok (TEXT_MIME_ALLOW 経路)", () => {
+    expect(
+      validateOpen(meta({ mime: "application/json", filename: "a.json" })),
+    ).toEqual({ ok: true });
+  });
+
+  it("非対応 MIME (application/zip) は mime_denied", () => {
     expect(validateOpen(meta({ mime: "application/zip" }))).toMatchObject({
       ok: false,
       reason: "mime_denied",
     });
   });
 
-  it("上限超サイズは size_over", () => {
+  it("上限超サイズは size_over (text でも image でも同じ)", () => {
     expect(
       validateOpen(meta({ size: PHASE_0_SIZE_LIMIT_BYTES + 1 })),
     ).toMatchObject({ ok: false, reason: "size_over" });
@@ -84,6 +100,85 @@ describe("validateOpen — phase-0 (image only, 5 MB)", () => {
       "image/png",
       "image/webp",
     ]);
+  });
+});
+
+describe("isTextMime", () => {
+  it("text/* prefix を受理", () => {
+    expect(isTextMime("text/plain")).toBe(true);
+    expect(isTextMime("text/markdown")).toBe(true);
+    expect(isTextMime("text/x-python")).toBe(true);
+    expect(isTextMime("text/csv")).toBe(true);
+  });
+
+  it("TEXT_MIME_ALLOW を受理", () => {
+    for (const m of TEXT_MIME_ALLOW) {
+      expect(isTextMime(m)).toBe(true);
+    }
+  });
+
+  it("image / 未知 MIME は false", () => {
+    expect(isTextMime("image/png")).toBe(false);
+    expect(isTextMime("application/zip")).toBe(false);
+    expect(isTextMime("application/pdf")).toBe(false);
+    expect(isTextMime("")).toBe(false);
+  });
+});
+
+describe("renderTextBlock / renderAttachmentBlock", () => {
+  function meta_(overrides: Partial<UploadMeta> = {}): UploadMeta {
+    return {
+      upload_id: "u1",
+      filename: "x.txt",
+      mime: "text/plain",
+      size: 0,
+      chunks: 0,
+      ...overrides,
+    };
+  }
+
+  it("renderTextBlock は UTF-8 decode + filename prefix の text block", () => {
+    const bytes = new TextEncoder().encode("hello\nworld");
+    const block = renderTextBlock(meta_({ filename: "hello.txt" }), bytes);
+    expect(block).toEqual({
+      type: "text",
+      text: "[file: hello.txt]\nhello\nworld",
+    });
+  });
+
+  it("renderTextBlock は非 UTF-8 で U+FFFD 置換(throw しない)", () => {
+    // 0xFF は単独で出てきたら不正な UTF-8 先頭バイト
+    const bytes = new Uint8Array([0xff, 0x68, 0x69]);
+    const block = renderTextBlock(meta_({ filename: "weird.txt" }), bytes);
+    expect(block.type).toBe("text");
+    expect(block.text).toContain("�");
+    expect(block.text).toContain("hi");
+  });
+
+  it("renderAttachmentBlock は image MIME を image block へ", () => {
+    const block = renderAttachmentBlock(
+      meta_({ mime: "image/png", filename: "a.png" }),
+      new Uint8Array([1, 2, 3]),
+    );
+    expect(block?.type).toBe("image");
+  });
+
+  it("renderAttachmentBlock は text MIME を text block へ", () => {
+    const block = renderAttachmentBlock(
+      meta_({ mime: "text/markdown", filename: "a.md" }),
+      new TextEncoder().encode("# hi"),
+    );
+    expect(block?.type).toBe("text");
+    expect((block as { text?: string }).text).toContain("[file: a.md]");
+  });
+
+  it("renderAttachmentBlock は未知 MIME に null (caller が sdk_error 化)", () => {
+    expect(
+      renderAttachmentBlock(
+        meta_({ mime: "application/pdf", filename: "a.pdf" }),
+        new Uint8Array([]),
+      ),
+    ).toBeNull();
   });
 });
 

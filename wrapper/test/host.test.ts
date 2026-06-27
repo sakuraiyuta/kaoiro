@@ -890,6 +890,35 @@ describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () =
     });
   });
 
+  it("text/plain の添付は text block(filename prefix 付き)として SDK へ渡る", async () => {
+    const captured: SDKUserMessage[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    const body = new TextEncoder().encode("hello\nworld");
+    host.attachOpen({
+      upload_id: "u1",
+      filename: "greet.txt",
+      mime: "text/plain",
+      size: body.byteLength,
+      chunks: 1,
+    });
+    host.attachChunk(buildChunkPayload("u1", 0, body));
+    host.attachClose("u1");
+    host.send("これ要約して", ["u1"]);
+    host.close();
+    await done;
+
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.message.content).toEqual([
+      { type: "text", text: "[file: greet.txt]\nhello\nworld" },
+      { type: "text", text: "これ要約して" },
+    ]);
+  });
+
   it("instruction の attachment_ids が 10 件超なら count_over で reject(消費せず)", async () => {
     const captured: SDKUserMessage[] = [];
     const rejected: Envelope[] = [];

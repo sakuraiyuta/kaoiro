@@ -52,7 +52,7 @@ import {
   PHASE_0_SIZE_LIMIT_BYTES,
   assembleBytes,
   parseChunkPayload,
-  renderImageBlock,
+  renderAttachmentBlock,
   validateClose,
   validateOpen,
 } from "./upload.js";
@@ -213,9 +213,23 @@ export class AgentHost {
       }
       const resolved = this.#resolveAttachments(attachmentIds);
       if (!resolved) return; // emitInstructionRejected already fired.
-      const blocks: ContentBlock[] = resolved.map((entry) =>
-        renderImageBlock(entry.meta, assembleBytes(entry)),
-      );
+      const blocks: ContentBlock[] = [];
+      for (const entry of resolved) {
+        const block = renderAttachmentBlock(entry.meta, assembleBytes(entry));
+        if (block === null) {
+          // The MIME passed validateOpen but the dispatcher does not know
+          // how to render it — a wrapper bug, not a user error. Abort the
+          // turn atomically (no upload consumption) so the operator sees a
+          // failure surface they can report instead of silent breakage.
+          this.#emitInstructionRejected({
+            attachment_ids: attachmentIds,
+            reason: "sdk_error",
+            detail: `no renderer for mime=${entry.meta.mime}`,
+          });
+          return;
+        }
+        blocks.push(block);
+      }
       if (text.length > 0) blocks.push({ type: "text", text });
       content = blocks;
       // Consume — uploads are one-shot per instruction.

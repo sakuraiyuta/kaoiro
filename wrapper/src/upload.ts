@@ -11,14 +11,36 @@
 
 import type { FileUploadRejectReason } from "@kaoiro/protocol";
 
-/** Allowed MIME types for phase-0 (image only, file-upload spec). Phase-1
- *  extends to text/code, PDF, Office (OOXML). */
+/** Allowed image MIMEs (file-upload spec). Render path: image content
+ *  block (renderImageBlock). */
 export const IMAGE_MIME_ALLOW: ReadonlySet<string> = new Set([
   "image/png",
   "image/jpeg",
   "image/webp",
   "image/gif",
 ]);
+
+/** Allowed non-`text/*` MIMEs treated as UTF-8 text by the wrapper
+ *  (file-upload spec): JSON / XML / YAML / common source-code MIMEs that
+ *  browsers do NOT report under `text/*`. `text/*` itself is matched by
+ *  prefix in isTextMime so e.g. `text/x-python` is accepted without an
+ *  exhaustive enumeration. */
+export const TEXT_MIME_ALLOW: ReadonlySet<string> = new Set([
+  "application/json",
+  "application/xml",
+  "application/yaml",
+  "application/x-yaml",
+  "application/javascript",
+  "application/typescript",
+  "application/sql",
+]);
+
+/** True for any MIME the wrapper renders to a text content block
+ *  (file-upload spec). `text/*` is matched by prefix; the remaining
+ *  application/* entries are listed in TEXT_MIME_ALLOW. */
+export function isTextMime(mime: string): boolean {
+  return mime.startsWith("text/") || TEXT_MIME_ALLOW.has(mime);
+}
 
 /** Per-file upper limit for phase-0 (5 MB). Matches Claude API image_block
  *  practical limit (~7.5 MB raw / 10 MB base64; Stage A IN2 finding). The
@@ -104,9 +126,10 @@ export type ValidationResult =
   | { ok: true }
   | { ok: false; reason: FileUploadRejectReason; detail?: string };
 
-/** Phase-0 attach_open validation: MIME allow-list + advertised size cap. */
+/** attach_open validation: MIME allow-list (image OR text/code) + advertised
+ *  size cap. PDF / Office land here when their fit-to-SDK passes ship. */
 export function validateOpen(meta: UploadMeta): ValidationResult {
-  if (!IMAGE_MIME_ALLOW.has(meta.mime)) {
+  if (!IMAGE_MIME_ALLOW.has(meta.mime) && !isTextMime(meta.mime)) {
     return { ok: false, reason: "mime_denied", detail: `mime=${meta.mime}` };
   }
   if (meta.size > PHASE_0_SIZE_LIMIT_BYTES) {
@@ -183,7 +206,7 @@ export interface TextContentBlock {
 export type ContentBlock = ImageContentBlock | TextContentBlock;
 
 /** Renders one upload's assembled bytes into a base64 image content block
- *  for the SDK user message. Phase-0: caller has validated the MIME is in
+ *  for the SDK user message. The caller has validated the MIME is in
  *  IMAGE_MIME_ALLOW. */
 export function renderImageBlock(
   meta: UploadMeta,
@@ -197,4 +220,35 @@ export function renderImageBlock(
       data: Buffer.from(bytes).toString("base64"),
     },
   };
+}
+
+/** Renders one upload's assembled bytes into a SDK text content block,
+ *  prefixed with a filename label so the agent has source context. UTF-8
+ *  decoded with the default (replacement-character) policy: a non-UTF-8
+ *  byte sequence in a `text/*` upload yields U+FFFD rather than a hard
+ *  reject — the spec calls for UTF-8 but real-world picks (Shift_JIS PDF
+ *  text mis-MIME'd as text/plain by the OS) are common enough that
+ *  failing the whole turn over them costs more UX than it gains. The
+ *  caller has validated the MIME is text-rendered via isTextMime. */
+export function renderTextBlock(
+  meta: UploadMeta,
+  bytes: Uint8Array,
+): TextContentBlock {
+  const body = new TextDecoder("utf-8").decode(bytes);
+  return { type: "text", text: `[file: ${meta.filename}]\n${body}` };
+}
+
+/** Dispatches an assembled upload to its SDK content block by MIME
+ *  (file-upload spec / ADR-0025 F1: rendering is wrapper-internal). Adds
+ *  a graceful sdk_error path via the caller for an unrecognised MIME —
+ *  validateOpen should have rejected it, so reaching this branch is a
+ *  bug, not a user-facing error. Callers throw on null and the host
+ *  surfaces it as instruction_rejected{sdk_error}. */
+export function renderAttachmentBlock(
+  meta: UploadMeta,
+  bytes: Uint8Array,
+): ContentBlock | null {
+  if (IMAGE_MIME_ALLOW.has(meta.mime)) return renderImageBlock(meta, bytes);
+  if (isTextMime(meta.mime)) return renderTextBlock(meta, bytes);
+  return null;
 }

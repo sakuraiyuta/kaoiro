@@ -1142,10 +1142,10 @@
               rows="2"
               aria-label="instruction for {name}"
             ></textarea>
-            <label class="attach" title="ファイル添付(画像、複数可)">
+            <label class="attach" title="ファイル添付(画像 / テキスト / コード、複数可)">
               <input
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept="image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/xml,application/yaml,application/x-yaml,application/javascript,application/typescript,application/sql"
                 multiple
                 onchange={onFilePicked}
                 bind:this={stagedFileInput}
@@ -1162,7 +1162,10 @@
 
           {#each stagedFiles as file, i (`${file.name}:${file.size}:${i}`)}
             <div class="staged">
-              <span>🖼 {file.name} ({(file.size / 1024).toFixed(1)} KB)</span>
+              <span
+                >{file.type.startsWith("image/") ? "🖼" : "📄"} {file.name} ({(
+                  file.size / 1024
+                ).toFixed(1)} KB)</span>
               <button
                 type="button"
                 onclick={() => removeStagedFile(i)}
