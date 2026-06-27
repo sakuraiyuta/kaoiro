@@ -438,8 +438,22 @@ export class AgentHost {
     this.#wake();
   }
 
-  /** Interrupt the current turn (streaming-input control request). */
+  /** Interrupt the current turn (streaming-input control request) AND
+   *  drop any uploads still resident in pending_uploads, emitting
+   *  `attach_rejected{reason="interrupted"}` per dropped id (file-upload
+   *  spec F11). Operates even when no turn is in progress: an interrupt
+   *  with staged uploads but no live SDK call clears the wrapper-side
+   *  build-up so the operator can rebuild from scratch instead of
+   *  inheriting half-staged state. With no pending uploads the loop is a
+   *  no-op, preserving the legacy interrupt-only behaviour. */
   async interrupt(): Promise<void> {
+    for (const uploadId of this.#pendingUploads.keys()) {
+      this.#emitAttachRejected({
+        upload_id: uploadId,
+        reason: "interrupted",
+      });
+    }
+    this.#pendingUploads.clear();
     await this.#query?.interrupt();
   }
 

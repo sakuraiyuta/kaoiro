@@ -854,6 +854,109 @@ describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
     });
   });
 
+  it("interrupt は pending_uploads を全 drop し attach_rejected{interrupted} を per-id 発火 (F11)", async () => {
+    const rejected: Envelope[] = [];
+    const interruptSpy = vi.fn(async () => {});
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), interruptSpy);
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen({
+      upload_id: "ua",
+      filename: "a.png",
+      mime: "image/png",
+      size: 1,
+      chunks: 1,
+    });
+    host.attachOpen({
+      upload_id: "ub",
+      filename: "b.png",
+      mime: "image/png",
+      size: 1,
+      chunks: 1,
+    });
+    // Close 前なので sealed ではないが、 interrupt は sealed 問わず全 drop
+    await host.interrupt();
+    host.close();
+    await done;
+
+    expect(interruptSpy).toHaveBeenCalledOnce();
+    // 2 件分の interrupted reject(順序は Map イテレーション順)
+    expect(rejected.length).toBe(2);
+    expect(rejected.map((e) => (e.payload as { reason: string }).reason)).toEqual(
+      ["interrupted", "interrupted"],
+    );
+    expect(
+      new Set(rejected.map((e) => (e.payload as { upload_id: string }).upload_id)),
+    ).toEqual(new Set(["ua", "ub"]));
+  });
+
+  it("interrupt は sealed 済みエントリも drop する", async () => {
+    // Close 後の sealed エントリも pending_uploads に残っているので
+    // interrupt の対象になる。 unsealed の loop と同じ keys() 走査でも
+    // sealed 経路の coverage を直接 担保する。
+    const rejected: Envelope[] = [];
+    const interruptSpy = vi.fn(async () => {});
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), interruptSpy);
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen(png(2));
+    host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2])));
+    host.attachClose("u1"); // seals
+    await host.interrupt();
+    host.close();
+    await done;
+
+    expect(interruptSpy).toHaveBeenCalledOnce();
+    expect(rejected.length).toBe(1);
+    expect(rejected[0]!.payload).toMatchObject({
+      upload_id: "u1",
+      reason: "interrupted",
+    });
+  });
+
+  it("interrupt は pending_uploads 空なら attach_rejected を出さない(前方互換)", async () => {
+    const rejected: Envelope[] = [];
+    const interruptSpy = vi.fn(async () => {});
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), interruptSpy);
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    const done = host.run();
+    await host.interrupt();
+    host.close();
+    await done;
+    expect(interruptSpy).toHaveBeenCalledOnce();
+    expect(rejected).toEqual([]);
+  });
+
   it("chunk_index >= meta.chunks は無視(out-of-bounds)", async () => {
     const rejected: Envelope[] = [];
     const host = new AgentHost(config, {
