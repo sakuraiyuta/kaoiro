@@ -516,18 +516,15 @@
     });
   }
 
-  function onFilePicked(event: Event): void {
-    // A fresh picker open is a new interaction: clear any stale error
-    // from a prior overflow / failed submit so the operator does not see
-    // a misleading message that no longer applies (the if-branch below
-    // only sets the error on overflow and would otherwise leave it).
+  // Shared append path for the file picker AND the drop zone. A fresh
+  // interaction clears any stale overflow error from a prior round so the
+  // operator does not see a misleading message that no longer applies.
+  // Append rather than replace, so successive picker opens / drops build
+  // up one tray. The cap is the spec value; any overflow is dropped with
+  // a hint so the operator knows not all were staged. The wrapper enforces
+  // the same cap server-side and rejects with count_over.
+  function addStagedFiles(picked: File[]): void {
     actionError = "";
-    const input = event.target as HTMLInputElement;
-    const picked = Array.from(input.files ?? []);
-    // Append rather than replace, so the operator can build up the tray
-    // across multiple picker opens (e.g. browse twice for files in
-    // different folders). The cap is the spec value; any overflow is
-    // dropped with a hint so the operator knows not all were staged.
     const next: StagedEntry[] = [...stagedFiles];
     let dropped = 0;
     for (const f of picked) {
@@ -541,6 +538,11 @@
     if (dropped > 0) {
       actionError = `添付は ${MAX_STAGED} 件まで(${dropped} 件は無視されました)`;
     }
+  }
+
+  function onFilePicked(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    addStagedFiles(Array.from(input.files ?? []));
     // The native input's FileList is consumed on read; clearing the
     // value here lets the operator re-pick the same file later if they
     // remove it with ✕ first.
@@ -549,6 +551,58 @@
 
   function removeStagedFile(index: number): void {
     stagedFiles = stagedFiles.filter((_, i) => i !== index);
+  }
+
+  // --- D&D drop zone (file-upload spec / ADR-0025 Stage C "i") --------------
+  // Scoped to the composer area so a drop on one agent's transcript cannot
+  // bleed across to another agent (the spec calls out "複数 agent 間で
+  // 曖昧にならない"). The spec also says client は規範を持たない — so we do
+  // NOT MIME-filter here, leaving wrapper to reject with mime_denied.
+  let dropActive = $state(false);
+  // dragenter / dragleave fire for every child crossing too, so a single
+  // boolean would flicker. Counter pattern keeps the highlight stable
+  // until the cursor truly leaves the composer.
+  let dragDepth = 0;
+
+  // dataTransfer.types is the standardised way to peek at the drag payload
+  // BEFORE drop completes (browsers gate the files[] list until then for
+  // security). "Files" indicates a file drag from the OS / another tab;
+  // selecting text on the page also fires drag events, so we filter.
+  function isFileDrag(event: DragEvent): boolean {
+    const types = event.dataTransfer?.types;
+    if (!types) return false;
+    for (const t of types) if (t === "Files") return true;
+    return false;
+  }
+
+  function onDragEnter(event: DragEvent): void {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    dragDepth++;
+    dropActive = true;
+  }
+
+  function onDragLeave(event: DragEvent): void {
+    if (dragDepth === 0) return;
+    dragDepth--;
+    if (dragDepth === 0) dropActive = false;
+  }
+
+  function onDragOver(event: DragEvent): void {
+    if (!isFileDrag(event)) return;
+    // preventDefault on dragover is what tells the browser this element
+    // is a valid drop target — without it the drop never fires.
+    event.preventDefault();
+  }
+
+  function onDrop(event: DragEvent): void {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    dragDepth = 0;
+    dropActive = false;
+    const picked = Array.from(event.dataTransfer?.files ?? []);
+    if (picked.length === 0) return;
+    addStagedFiles(picked);
   }
 
   // --- Slash command completion (#34) ---------------------------------------
@@ -1118,7 +1172,16 @@
           </div>
         {/if}
 
-        <div class="composer" bind:offsetHeight={composerH}>
+        <div
+          class="composer"
+          role="region"
+          aria-label="指示入力 + 添付"
+          class:drop-active={dropActive}
+          ondragenter={onDragEnter}
+          ondragleave={onDragLeave}
+          ondragover={onDragOver}
+          ondrop={onDrop}
+          bind:offsetHeight={composerH}>
           {#if showSlash}
             <!-- Slash command completion (#34): pick with click or
                  arrows + Tab/Enter; Escape dismisses. -->
@@ -1332,6 +1395,18 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    border-radius: 0.5rem;
+    /* file-upload spec / ADR-0025 Stage C "i": the composer doubles as the
+       D&D drop zone for one agent; the highlight stays scoped to this
+       AgentDetail so a drop cannot bleed across agents. */
+    transition: outline-color 0.12s ease-out, background 0.12s ease-out;
+    outline: 2px dashed transparent;
+    outline-offset: 4px;
+  }
+
+  .composer.drop-active {
+    outline-color: var(--c-thinking);
+    background: color-mix(in srgb, var(--c-thinking) 8%, transparent);
   }
 
   /* Slash command menu (#34): floats just above the composer; the highlighted
