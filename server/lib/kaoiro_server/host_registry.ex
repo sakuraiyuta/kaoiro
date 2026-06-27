@@ -17,6 +17,10 @@ defmodule KaoiroServer.HostRegistry do
   ownership; `drop/3` removes it only while `runner_pid` still owns it.
   Host info is operator-only by policy (cwd allow-lists are sensitive,
   #46); the caller (channel) enforces the role gate.
+
+  `snapshot/1` injects the reserved `default` persona at the head of each
+  host's personas list (#35, personas.md). The store itself keeps the
+  runner's raw declaration; only the operator-facing view is normalised.
   """
 
   use GenServer
@@ -25,6 +29,16 @@ defmodule KaoiroServer.HostRegistry do
   # to keep fabricated host_ids from growing memory without bound. Mirrors
   # AgentStates' @max_agents discipline; hosts are far fewer than agents.
   @max_hosts 1000
+
+  # Reserved persona that the operator UI must always see as a spawn choice
+  # (personas.md「デフォルトペルソナ」, #35). sprite_set "default" is a
+  # reserved value with no bundled pack under server/priv/personas/, so the
+  # client falls back to the CSS face (expression.ts / AgentCard).
+  @default_persona %{
+    "id" => "default",
+    "name" => "デフォルト",
+    "sprite_set" => "default"
+  }
 
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -124,8 +138,19 @@ defmodule KaoiroServer.HostRegistry do
     # over JSON channels and a PID has no Jason encoder (it would crash the
     # serializer). Owner fencing in drop/3 reads the internal state, not
     # this view, so dropping the pid here is safe.
+    #
+    # Inject the reserved `default` persona at the head of each host's
+    # personas (#35); a runner-declared `default` is replaced by the
+    # server-side standard so the entry's name/sprite_set stay canonical.
     public =
-      Map.new(state, fn {host_id, entry} -> {host_id, Map.delete(entry, :runner_pid)} end)
+      Map.new(state, fn {host_id, entry} ->
+        public_entry =
+          entry
+          |> Map.delete(:runner_pid)
+          |> Map.put(:personas, inject_default(entry.personas))
+
+        {host_id, public_entry}
+      end)
 
     {:reply, public, state}
   end
@@ -148,4 +173,15 @@ defmodule KaoiroServer.HostRegistry do
         {:reply, :noop, state}
     end
   end
+
+  # Drop any runner-declared `default` so the server-side standard wins,
+  # then place it at the head so the operator UI sees a stable lead entry.
+  defp inject_default(personas) do
+    filtered = Enum.reject(personas, &(persona_id(&1) == "default"))
+    [@default_persona | filtered]
+  end
+
+  defp persona_id(%{"id" => id}), do: id
+  defp persona_id(%{id: id}), do: id
+  defp persona_id(_), do: nil
 end

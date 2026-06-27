@@ -94,6 +94,44 @@ defmodule KaoiroServer.HostRegistryTest do
       # The owner pid is still retained internally (get/2) for drop/3 fencing.
       assert HostRegistry.get("a", store).runner_pid == self()
     end
+
+    test "snapshot は default ペルソナを各 host の先頭に注入する (#35)" do
+      store = start_supervised!({HostRegistry, name: :host_reg_snap_default_test})
+      :ok = HostRegistry.register("a", attrs(), self(), store)
+      :ok = HostRegistry.register("b", attrs(%{personas: []}), self(), store)
+
+      snapshot = HostRegistry.snapshot(store)
+
+      default = %{"id" => "default", "name" => "デフォルト", "sprite_set" => "default"}
+      assert [^default | _] = snapshot["a"].personas
+      assert snapshot["a"].personas == [default, %{"id" => "mio"}]
+      # default は personas が空の host にも入る (常に選択肢に出す)
+      assert snapshot["b"].personas == [default]
+      # 注入は snapshot view のみ; store の raw データは触らない
+      assert HostRegistry.get("a", store).personas == [%{"id" => "mio"}]
+    end
+
+    test "host が宣言した id=default は server 側標準で置換される (#35)" do
+      store = start_supervised!({HostRegistry, name: :host_reg_snap_default_dedup_test})
+
+      :ok =
+        HostRegistry.register(
+          "a",
+          attrs(%{
+            personas: [
+              %{"id" => "default", "name" => "勝手な名前", "sprite_set" => "x"},
+              %{"id" => "mio"}
+            ]
+          }),
+          self(),
+          store
+        )
+
+      snapshot = HostRegistry.snapshot(store)
+      default = %{"id" => "default", "name" => "デフォルト", "sprite_set" => "default"}
+      # runner 宣言の default は除外され、標準 default が先頭に置かれる
+      assert snapshot["a"].personas == [default, %{"id" => "mio"}]
+    end
   end
 
   describe "personas/1" do
