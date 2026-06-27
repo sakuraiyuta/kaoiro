@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   Options,
   Query,
@@ -8,6 +8,10 @@ import type {
 import { AgentHost } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
 import type { Envelope, WrapperConfig } from "../src/types.js";
+import {
+  SharpImageDownsizer,
+  setDefaultImageDownsizer,
+} from "../src/upload.js";
 import { buildChunkPayload } from "./helpers.js";
 
 const config: WrapperConfig = {
@@ -581,7 +585,20 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
   });
 });
 
-describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () => {
+describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
+  // Stub the image downsizer with a pass-through so dispatch / E2E tests
+  // can ride synthetic byte arrays (sharp would reject "image/png" claims
+  // that are not real PNG headers). The real SharpImageDownsizer keeps its
+  // own coverage in upload.test.ts where the fixtures are sharp-generated.
+  beforeEach(() => {
+    setDefaultImageDownsizer({
+      fit: async (bytes, mime) => ({ bytes, mime }),
+    });
+  });
+  afterEach(() => {
+    setDefaultImageDownsizer(new SharpImageDownsizer());
+  });
+
   /** queryFn that drains args.prompt into `captured` and yields nothing —
    *  lets a test inspect the SDKUserMessage list the host queued. */
   function captureQueryFn(captured: SDKUserMessage[]): QueryFn {
@@ -707,7 +724,7 @@ describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () =
       upload_id: "big",
       filename: "big.png",
       mime: "image/png",
-      size: 1024 * 1024 * 1024, // 1 GB > 5 MB phase-0 cap
+      size: 1024 * 1024 * 1024, // 1 GB > 128 MB protocol cap
       chunks: 1,
     });
     host.close();

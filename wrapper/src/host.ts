@@ -49,7 +49,7 @@ import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
   MAX_INFLIGHT_UPLOADS,
-  PHASE_0_SIZE_LIMIT_BYTES,
+  PROTOCOL_FILE_SIZE_LIMIT_BYTES,
   assembleBytes,
   parseChunkPayload,
   renderAttachmentBlock,
@@ -309,7 +309,7 @@ export class AgentHost {
   /** Parses an `attach_chunk` binary payload and appends bytes to the
    *  matching pending upload, enforcing the per-upload cap incrementally
    *  (security: a misbehaving client cannot stream past meta.size or
-   *  PHASE_0_SIZE_LIMIT_BYTES). Unknown id, sealed entry, malformed header,
+   *  PROTOCOL_FILE_SIZE_LIMIT_BYTES). Unknown id, sealed entry, malformed header,
    *  or out-of-bounds chunk_index is dropped silently — a stray chunk
    *  after a successful attach_close or rejected open is not an error. */
   attachChunk(payload: ArrayBuffer | ArrayBufferView): void {
@@ -327,12 +327,12 @@ export class AgentHost {
       entry.accumulatedBytes -
       (existing?.byteLength ?? 0) +
       parsed.bytes.byteLength;
-    if (newTotal > entry.meta.size || newTotal > PHASE_0_SIZE_LIMIT_BYTES) {
+    if (newTotal > entry.meta.size || newTotal > PROTOCOL_FILE_SIZE_LIMIT_BYTES) {
       this.#pendingUploads.delete(parsed.upload_id);
       this.#emitAttachRejected({
         upload_id: parsed.upload_id,
         reason: "size_over",
-        detail: `accumulated=${newTotal} declared=${entry.meta.size} cap=${PHASE_0_SIZE_LIMIT_BYTES}`,
+        detail: `accumulated=${newTotal} declared=${entry.meta.size} cap=${PROTOCOL_FILE_SIZE_LIMIT_BYTES}`,
       });
       return;
     }

@@ -1,15 +1,17 @@
 // Wrapper file-upload module — pending_uploads bookkeeping, chunk header
-// parsing, MIME / size validation, and SDK content-block assembly. Pure
-// functions and a tiny state container — no I/O, no transport coupling, so
-// host.ts can drive it deterministically and tests can hit each piece.
+// parsing, MIME / size validation, and SDK content-block assembly +
+// fit-to-SDK. Pure functions and a tiny state container — no I/O, no
+// transport coupling, so host.ts can drive it deterministically and tests
+// can hit each piece.
 //
 // Spec: docs/specs/file-upload.md. Decision record:
-// docs/adr/0025-file-upload-wire-and-wrapper-rendering.md. Phase-0 scope
-// (image only, 5 MB cap, reasons size_over / mime_denied / sdk_error /
-// timeout) lives here; phase-1 extends MIME, raises the cap to 128 MB, and
-// adds fit-to-SDK.
+// docs/adr/0025-file-upload-wire-and-wrapper-rendering.md. Handles image
+// / text / code / PDF MIMEs at the 128 MB protocol cap, with SDK-side
+// fit-to-SDK (sharp for images, pdf-lib for PDFs) reducing oversize
+// uploads to image_block / text_block / document_block.
 
 import { PDFDocument } from "pdf-lib";
+import sharp from "sharp";
 import type { FileUploadRejectReason } from "@kaoiro/protocol";
 
 /** Allowed image MIMEs (file-upload spec). Render path: image content
@@ -43,6 +45,16 @@ export function isTextMime(mime: string): boolean {
   return mime.startsWith("text/") || TEXT_MIME_ALLOW.has(mime);
 }
 
+/** Raw-bytes cap for the SDK image content block (Stage A IN2): 10 MB
+ *  base64 → ~7.5 MB raw. fit-to-SDK downsizes oversize images below this. */
+export const IMAGE_SDK_RAW_LIMIT_BYTES = Math.floor(7.5 * 1024 * 1024);
+
+/** Long-edge pixel cap for SDK image content blocks (Stage A IN2). The
+ *  Anthropic API hard-rejects images above this; smaller values cut visual
+ *  detail unnecessarily, so the downsizer steps down (8000 → 2576 → 1568)
+ *  only when the byte cap forces it. */
+export const IMAGE_SDK_LONG_EDGE_MAX = 8000;
+
 /** PDF MIME — rendered as an SDK document content block. */
 export const PDF_MIME = "application/pdf";
 
@@ -58,10 +70,10 @@ export const PDF_SDK_RAW_LIMIT_BYTES = 22 * 1024 * 1024;
  *  model fleet without per-model branching. */
 export const PDF_SDK_PAGE_LIMIT = 100;
 
-/** Per-file upper limit for phase-0 (5 MB). Matches Claude API image_block
- *  practical limit (~7.5 MB raw / 10 MB base64; Stage A IN2 finding). The
- *  protocol's 128 MB cap (ADR-0025 F4) lands with the image fit-to-SDK pass. */
-export const PHASE_0_SIZE_LIMIT_BYTES = 5 * 1024 * 1024;
+/** Per-file protocol upper limit (file-upload spec / ADR-0025 F4): 128 MB.
+ *  Wrapper-side fit-to-SDK reduces oversize uploads to the SDK content
+ *  block caps (~7.5 MB raw image, 22 MB raw PDF). */
+export const PROTOCOL_FILE_SIZE_LIMIT_BYTES = 128 * 1024 * 1024;
 
 /** Cap on attachment references in one instruction (file-upload spec /
  *  ADR-0025 F6). The wrapper rejects the whole turn with reason="count_over"
@@ -152,11 +164,11 @@ export function validateOpen(meta: UploadMeta): ValidationResult {
   ) {
     return { ok: false, reason: "mime_denied", detail: `mime=${meta.mime}` };
   }
-  if (meta.size > PHASE_0_SIZE_LIMIT_BYTES) {
+  if (meta.size > PROTOCOL_FILE_SIZE_LIMIT_BYTES) {
     return {
       ok: false,
       reason: "size_over",
-      detail: `size=${meta.size} limit=${PHASE_0_SIZE_LIMIT_BYTES}`,
+      detail: `size=${meta.size} limit=${PROTOCOL_FILE_SIZE_LIMIT_BYTES}`,
     };
   }
   return { ok: true };
@@ -233,21 +245,137 @@ export type ContentBlock =
   | TextContentBlock
   | DocumentContentBlock;
 
-/** Renders one upload's assembled bytes into a base64 image content block
- *  for the SDK user message. The caller has validated the MIME is in
- *  IMAGE_MIME_ALLOW. */
+/** Renders fit-to-SDK image bytes into a base64 image content block for
+ *  the SDK user message. The caller has validated the MIME is in
+ *  IMAGE_MIME_ALLOW and run fit-to-SDK (which may have converted the
+ *  MIME, e.g. PNG → JPEG to hit the byte cap). */
 export function renderImageBlock(
-  meta: UploadMeta,
+  mime: string,
   bytes: Uint8Array,
 ): ImageContentBlock {
   return {
     type: "image",
     source: {
       type: "base64",
-      media_type: meta.mime,
+      media_type: mime,
       data: Buffer.from(bytes).toString("base64"),
     },
   };
+}
+
+/** Output of a downsizer pass — bytes plus the MIME they are in (the
+ *  downsizer may convert PNG → JPEG to hit the byte cap; alpha-PNG is
+ *  preserved as PNG instead). */
+export interface FitResult {
+  bytes: Uint8Array;
+  mime: string;
+}
+
+/** Pluggable image downsizer (ADR-0018 single-binary-image work expects to
+ *  swap sharp's native libvips for sharp-wasm32 or jimp; the interface
+ *  isolates that change to one constructor call here). null = unfittable
+ *  even after the cheapest output the implementation knows. */
+export interface ImageDownsizer {
+  fit(bytes: Uint8Array, mime: string): Promise<FitResult | null>;
+}
+
+/** sharp-backed downsizer (file-upload spec / ADR-0025 F10). Strategy:
+ *  resolution-first long-edge ladder (no change → 8000 → 2576 → 1568 →
+ *  1024 → 512) at the original format (PNG with alpha stays PNG; the rest
+ *  re-encode as JPEG so quality reduction is a fallback knob). Then JPEG
+ *  quality fallback (70 → 50 → 30) at 1568 px for non-alpha images.
+ *  Returns null when even the smallest pass overshoots the byte cap. */
+export class SharpImageDownsizer implements ImageDownsizer {
+  async fit(bytes: Uint8Array, mime: string): Promise<FitResult | null> {
+    let meta: { width?: number; height?: number; hasAlpha?: boolean };
+    try {
+      meta = await sharp(bytes).metadata();
+    } catch {
+      // sharp throws on a malformed image; surface via null and the
+      // caller's unfittable_image reason. (sdk_error vs unfittable_image
+      // is fuzzy here; treat as unfittable since the bytes are unusable
+      // for this upload no matter what the SDK does.)
+      return null;
+    }
+    const width = meta.width ?? 0;
+    const height = meta.height ?? 0;
+    const longEdge = Math.max(width, height);
+
+    // Pass-through if already inside both caps.
+    if (
+      bytes.byteLength <= IMAGE_SDK_RAW_LIMIT_BYTES &&
+      longEdge > 0 &&
+      longEdge <= IMAGE_SDK_LONG_EDGE_MAX
+    ) {
+      return { bytes, mime };
+    }
+
+    // Alpha-PNG stays PNG (JPEG conversion drops transparency); everything
+    // else re-encodes as JPEG so the quality fallback (step 2) has a knob.
+    // WebP/GIF inputs are normalised to JPEG too — keeping their formats
+    // would require separate quality APIs (webp options, gif → static) and
+    // the spec only requires "render to image_block", which JPEG satisfies.
+    const keepPng = mime === "image/png" && meta.hasAlpha === true;
+    const outFormat: "jpeg" | "png" = keepPng ? "png" : "jpeg";
+    const outMime = keepPng ? "image/png" : "image/jpeg";
+
+    async function tryResize(target: number): Promise<Uint8Array> {
+      let pipeline = sharp(bytes).resize({
+        width: target,
+        height: target,
+        fit: "inside",
+        withoutEnlargement: true,
+      });
+      pipeline = outFormat === "jpeg" ? pipeline.jpeg() : pipeline.png();
+      const buf = await pipeline.toBuffer();
+      return new Uint8Array(buf);
+    }
+
+    // Step 1: resolution ladder, default encoder quality.
+    const startEdge = Math.min(longEdge || IMAGE_SDK_LONG_EDGE_MAX, IMAGE_SDK_LONG_EDGE_MAX);
+    for (const target of [startEdge, 2576, 1568, 1024, 512]) {
+      if (target > startEdge) continue; // skip up-scales from a small input
+      const buf = await tryResize(target);
+      if (buf.byteLength <= IMAGE_SDK_RAW_LIMIT_BYTES) {
+        return { bytes: buf, mime: outMime };
+      }
+    }
+
+    // Step 2: JPEG quality fallback at 1568 px (alpha-PNG path stops at
+    // step 1 — no quality knob without dropping alpha).
+    if (outFormat === "jpeg") {
+      for (const quality of [70, 50, 30]) {
+        const buf = await sharp(bytes)
+          .resize({ width: 1568, height: 1568, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality })
+          .toBuffer();
+        if (buf.byteLength <= IMAGE_SDK_RAW_LIMIT_BYTES) {
+          return { bytes: new Uint8Array(buf), mime: outMime };
+        }
+      }
+    }
+
+    return null;
+  }
+}
+
+/** Default image downsizer instance — used by renderAttachmentBlock unless
+ *  the caller passes its own (tests). */
+let defaultImageDownsizer: ImageDownsizer = new SharpImageDownsizer();
+
+/** Test seam: swap the downsizer (e.g. to a deterministic mock or a wasm
+ *  variant). Production code calls renderAttachmentBlock with the default. */
+export function setDefaultImageDownsizer(d: ImageDownsizer): void {
+  defaultImageDownsizer = d;
+}
+
+/** Convenience function around the configured ImageDownsizer. Returns
+ *  null on unfittable so the caller can emit unfittable_image. */
+export function fitImageToSdk(
+  bytes: Uint8Array,
+  mime: string,
+): Promise<FitResult | null> {
+  return defaultImageDownsizer.fit(bytes, mime);
 }
 
 /** Renders one upload's assembled bytes into a SDK text content block,
@@ -349,7 +477,14 @@ export async function renderAttachmentBlock(
   bytes: Uint8Array,
 ): Promise<RenderResult> {
   if (IMAGE_MIME_ALLOW.has(meta.mime)) {
-    return { ok: true, block: renderImageBlock(meta, bytes) };
+    let fitted: FitResult | null;
+    try {
+      fitted = await fitImageToSdk(bytes, meta.mime);
+    } catch {
+      return { ok: false, reason: "sdk_error" };
+    }
+    if (fitted === null) return { ok: false, reason: "unfittable_image" };
+    return { ok: true, block: renderImageBlock(fitted.mime, fitted.bytes) };
   }
   if (isTextMime(meta.mime)) {
     return { ok: true, block: renderTextBlock(meta, bytes) };

@@ -1,12 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
 import {
   IMAGE_MIME_ALLOW,
+  IMAGE_SDK_LONG_EDGE_MAX,
+  IMAGE_SDK_RAW_LIMIT_BYTES,
   PDF_MIME,
   PDF_SDK_PAGE_LIMIT,
-  PHASE_0_SIZE_LIMIT_BYTES,
+  PROTOCOL_FILE_SIZE_LIMIT_BYTES,
+  SharpImageDownsizer,
   TEXT_MIME_ALLOW,
   assembleBytes,
+  fitImageToSdk,
   fitPdfToSdk,
   isTextMime,
   parseChunkPayload,
@@ -14,6 +18,7 @@ import {
   renderDocumentBlock,
   renderImageBlock,
   renderTextBlock,
+  setDefaultImageDownsizer,
   validateClose,
   validateOpen,
 } from "../src/upload.js";
@@ -100,7 +105,7 @@ describe("validateOpen (image + text/code MIMEs)", () => {
 
   it("上限超サイズは size_over (text でも image でも同じ)", () => {
     expect(
-      validateOpen(meta({ size: PHASE_0_SIZE_LIMIT_BYTES + 1 })),
+      validateOpen(meta({ size: PROTOCOL_FILE_SIZE_LIMIT_BYTES + 1 })),
     ).toMatchObject({ ok: false, reason: "size_over" });
   });
 
@@ -137,6 +142,17 @@ describe("isTextMime", () => {
 });
 
 describe("renderTextBlock / renderAttachmentBlock", () => {
+  // Pass-through image downsizer so dispatch tests can ride synthetic
+  // bytes; the real SharpImageDownsizer keeps its coverage below.
+  beforeEach(() => {
+    setDefaultImageDownsizer({
+      fit: async (bytes, mime) => ({ bytes, mime }),
+    });
+  });
+  afterEach(() => {
+    setDefaultImageDownsizer(new SharpImageDownsizer());
+  });
+
   function meta_(overrides: Partial<UploadMeta> = {}): UploadMeta {
     return {
       upload_id: "u1",
@@ -265,6 +281,86 @@ describe("PDF fit-to-SDK + render", () => {
   });
 });
 
+describe("SharpImageDownsizer (image fit-to-SDK)", () => {
+  // Lazy import so the test does not pay sharp's metadata cost up-front;
+  // sharp is fast but the test file collects many entries.
+  async function makeImage(opts: {
+    width: number;
+    height: number;
+    mime: "image/png" | "image/jpeg";
+    alpha?: boolean;
+  }): Promise<Uint8Array> {
+    const { default: sharp } = await import("sharp");
+    const channels = opts.alpha ? 4 : 3;
+    const raw = Buffer.alloc(opts.width * opts.height * channels);
+    // Tint to a fixed colour so deterministic compression ratios fall out.
+    for (let i = 0; i < raw.byteLength; i += channels) {
+      raw[i] = 200;
+      raw[i + 1] = 100;
+      raw[i + 2] = 50;
+      if (opts.alpha) raw[i + 3] = 255;
+    }
+    const pipe = sharp(raw, {
+      raw: { width: opts.width, height: opts.height, channels },
+    });
+    const buf =
+      opts.mime === "image/png" ? await pipe.png().toBuffer() : await pipe.jpeg().toBuffer();
+    return new Uint8Array(buf);
+  }
+
+  const downsizer = new SharpImageDownsizer();
+
+  it("両 cap 内なら pass-through で同一参照を返す", async () => {
+    const bytes = await makeImage({ width: 200, height: 200, mime: "image/jpeg" });
+    const r = await downsizer.fit(bytes, "image/jpeg");
+    expect(r).not.toBeNull();
+    expect(r!.bytes).toBe(bytes);
+    expect(r!.mime).toBe("image/jpeg");
+  });
+
+  it("超大画像は IMAGE_SDK_LONG_EDGE_MAX 以内に縮小", async () => {
+    // 9000 px wide でしょっぱい JPEG → 縮小後は 8000 以下
+    const bytes = await makeImage({
+      width: 9000,
+      height: 1000,
+      mime: "image/jpeg",
+    });
+    const r = await downsizer.fit(bytes, "image/jpeg");
+    expect(r).not.toBeNull();
+    const { default: sharp } = await import("sharp");
+    const meta = await sharp(r!.bytes).metadata();
+    expect((meta.width ?? 0)).toBeLessThanOrEqual(IMAGE_SDK_LONG_EDGE_MAX);
+    expect(r!.bytes.byteLength).toBeLessThanOrEqual(IMAGE_SDK_RAW_LIMIT_BYTES);
+  });
+
+  it("alpha-PNG は PNG のまま縮小(JPEG 化しない)", async () => {
+    const bytes = await makeImage({
+      width: 9000,
+      height: 1000,
+      mime: "image/png",
+      alpha: true,
+    });
+    const r = await downsizer.fit(bytes, "image/png");
+    expect(r).not.toBeNull();
+    expect(r!.mime).toBe("image/png");
+  });
+
+  it("壊れたバイトは null(unfittable_image)", async () => {
+    const r = await downsizer.fit(
+      new Uint8Array([1, 2, 3, 4, 5]),
+      "image/png",
+    );
+    expect(r).toBeNull();
+  });
+
+  it("fitImageToSdk は default downsizer 経由で同じ結果", async () => {
+    const bytes = await makeImage({ width: 200, height: 200, mime: "image/jpeg" });
+    const r = await fitImageToSdk(bytes, "image/jpeg");
+    expect(r).not.toBeNull();
+    expect(r!.bytes).toBe(bytes);
+  });
+});
+
 describe("validateClose / assembleBytes", () => {
   const upload = (overrides: Partial<UploadMeta> = {}): PendingUpload => ({
     meta: meta(overrides),
@@ -307,9 +403,9 @@ describe("validateClose / assembleBytes", () => {
 });
 
 describe("renderImageBlock", () => {
-  it("base64 image content block を構築する(media_type は upload の MIME)", () => {
+  it("base64 image content block を構築する(media_type は引数の MIME)", () => {
     const block = renderImageBlock(
-      meta({ mime: "image/jpeg" }),
+      "image/jpeg",
       new Uint8Array([0xff, 0xd8, 0xff]),
     );
     expect(block.type).toBe("image");
