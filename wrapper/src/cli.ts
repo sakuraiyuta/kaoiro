@@ -114,8 +114,11 @@ async function main(): Promise<void> {
       ...(config.server_token === undefined
         ? {}
         : { token: config.server_token }),
-      onInstruction: (text) => {
-        process.stdout.write(`  instruction: ${text}\n`);
+      onInstruction: (text, attachmentIds) => {
+        const tag = attachmentIds && attachmentIds.length > 0
+          ? `instruction(+${attachmentIds.length})`
+          : "instruction";
+        process.stdout.write(`  ${tag}: ${text}\n`);
         // Echo the operator's instruction into the reply transcript (#31)
         // before queueing it: a user-kind log rides the same operator-only,
         // history-backed path as the agent's replies. Emitted first so it
@@ -126,7 +129,7 @@ async function main(): Promise<void> {
             text,
           }),
         );
-        host.send(text);
+        host.send(text, attachmentIds);
       },
       onPermissionDecision: (decision) => broker?.resolve(decision),
       onInterrupt: () => {
@@ -147,12 +150,30 @@ async function main(): Promise<void> {
         process.stdout.write(`  set_effort: ${level}\n`);
         void host.setEffort(level).catch(() => {});
       },
+      // File-upload wire (file-upload spec / ADR-0025). attach_* events
+      // feed pending_uploads on the host; the host's validation emits
+      // attach_rejected / instruction_rejected straight back to the server.
+      onAttachOpen: (msg) => {
+        process.stdout.write(
+          `  attach_open: ${msg.upload_id} (${msg.mime}, ${msg.size}B, ${msg.chunks} chunks)\n`,
+        );
+        host.attachOpen(msg);
+      },
+      onAttachChunk: (payload) => host.attachChunk(payload),
+      onAttachClose: (uploadId) => {
+        process.stdout.write(`  attach_close: ${uploadId}\n`);
+        host.attachClose(uploadId);
+      },
     });
   }
 
   host = new AgentHost(config, {
     onState,
     onLog,
+    // attach_rejected / instruction_rejected ride the same envelope path
+    // as state/log — the link relays them to the server (file-upload spec).
+    onAttachRejected: (envelope) => link?.send(envelope),
+    onInstructionRejected: (envelope) => link?.send(envelope),
     onSessionId: (id) => link?.setSessionId(id),
     decidePermission: (toolName, input) => {
       if (broker) return broker.decide(toolName, input);

@@ -42,6 +42,112 @@ function emit(event: string, payload: unknown): void {
   handler(payload);
 }
 
+describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => {
+  beforeEach(() => mock.handlers.clear());
+
+  it("attach_open は payload を onAttachOpen に渡す", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onAttachOpen: (msg) => seen.push(msg),
+    });
+    emit("attach_open", {
+      upload_id: "u1",
+      filename: "a.png",
+      mime: "image/png",
+      size: 100,
+      chunks: 1,
+    });
+    expect(seen).toEqual([
+      {
+        upload_id: "u1",
+        filename: "a.png",
+        mime: "image/png",
+        size: 100,
+        chunks: 1,
+      },
+    ]);
+  });
+
+  it("attach_open の必須フィールド欠落は無視", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onAttachOpen: (msg) => seen.push(msg),
+    });
+    emit("attach_open", { upload_id: "u1" }); // missing fields
+    expect(seen).toEqual([]);
+  });
+
+  it("attach_chunk は ArrayBuffer をそのまま渡す", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onAttachChunk: (p) => seen.push(p),
+    });
+    const buf = new ArrayBuffer(4);
+    emit("attach_chunk", buf);
+    expect(seen).toEqual([buf]);
+  });
+
+  it("attach_chunk は ArrayBufferView も透過する(Node ws)", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onAttachChunk: (p) => seen.push(p),
+    });
+    const view = new Uint8Array([1, 2, 3]);
+    emit("attach_chunk", view);
+    expect(seen).toEqual([view]);
+  });
+
+  it("attach_chunk が JSON のときはドロップ", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onAttachChunk: (p) => seen.push(p),
+    });
+    emit("attach_chunk", { not: "binary" });
+    expect(seen).toEqual([]);
+  });
+
+  it("attach_close は upload_id を onAttachClose に渡す", () => {
+    const seen: string[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onAttachClose: (id) => seen.push(id),
+    });
+    emit("attach_close", { upload_id: "u1" });
+    expect(seen).toEqual(["u1"]);
+  });
+
+  it("instruction の attachment_ids を onInstruction に渡す", () => {
+    const seen: Array<{ text: string; ids?: string[] }> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onInstruction: (text, ids) =>
+        seen.push(ids === undefined ? { text } : { text, ids }),
+    });
+    emit("instruction", { text: "見て", attachment_ids: ["u1", "u2"] });
+    expect(seen).toEqual([{ text: "見て", ids: ["u1", "u2"] }]);
+  });
+
+  it("instruction の attachment_ids が空 / 非配列なら undefined", () => {
+    const seen: Array<{ text: string; ids?: string[] }> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onInstruction: (text, ids) =>
+        seen.push(ids === undefined ? { text } : { text, ids }),
+    });
+    emit("instruction", { text: "a", attachment_ids: [] });
+    emit("instruction", { text: "b", attachment_ids: "wrong" });
+    emit("instruction", { text: "c" });
+    expect(seen).toEqual([{ text: "a" }, { text: "b" }, { text: "c" }]);
+  });
+
+  it("instruction の attachment_ids 内の非文字列は除外する", () => {
+    const seen: Array<{ text: string; ids?: string[] }> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onInstruction: (text, ids) =>
+        seen.push(ids === undefined ? { text } : { text, ids }),
+    });
+    emit("instruction", { text: "mix", attachment_ids: ["u1", 42, "u2"] });
+    expect(seen).toEqual([{ text: "mix", ids: ["u1", "u2"] }]);
+  });
+});
+
 describe("ServerLink — set_model / set_effort 制御 (#54)", () => {
   beforeEach(() => mock.handlers.clear());
 

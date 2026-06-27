@@ -9,7 +9,9 @@
 
 import type {
   AdapterEvent,
+  AttachRejectedPayload,
   Envelope,
+  InstructionRejectedPayload,
   KaoiroState,
   LogPayload,
   ResultPayload,
@@ -237,6 +239,47 @@ export function makePermissionRequest(
     type: "permission_request",
     state: "waiting_permission",
     payload,
+    ext: {},
+  };
+}
+
+/** Wraps an individual upload rejection into the common envelope v0
+ *  (file-upload spec / ADR-0025 F9). `state` mirrors the agent's current
+ *  state — the reject is informational and does not transition the machine. */
+export function makeAttachRejected(
+  config: WrapperConfig,
+  state: KaoiroState,
+  ts: string,
+  payload: AttachRejectedPayload,
+): Envelope {
+  return {
+    version: "0",
+    agent_id: config.agent_id,
+    persona: config.persona,
+    ts,
+    type: "attach_rejected",
+    state,
+    payload: payload as unknown as Record<string, unknown>,
+    ext: {},
+  };
+}
+
+/** Wraps a whole-instruction rejection into the common envelope v0
+ *  (file-upload spec / ADR-0025 F9). */
+export function makeInstructionRejected(
+  config: WrapperConfig,
+  state: KaoiroState,
+  ts: string,
+  payload: InstructionRejectedPayload,
+): Envelope {
+  return {
+    version: "0",
+    agent_id: config.agent_id,
+    persona: config.persona,
+    ts,
+    type: "instruction_rejected",
+    state,
+    payload: payload as unknown as Record<string, unknown>,
     ext: {},
   };
 }

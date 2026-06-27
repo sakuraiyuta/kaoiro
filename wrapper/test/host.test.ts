@@ -8,6 +8,7 @@ import type {
 import { AgentHost } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
 import type { Envelope, WrapperConfig } from "../src/types.js";
+import { buildChunkPayload } from "./helpers.js";
 
 const config: WrapperConfig = {
   agent_id: "test.agent",
@@ -577,5 +578,279 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     });
     const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
     await expect(host.run()).resolves.toBeUndefined();
+  });
+});
+
+describe("AgentHost — ファイルアップロード (ADR-0025 phase-0)", () => {
+  /** queryFn that drains args.prompt into `captured` and yields nothing —
+   *  lets a test inspect the SDKUserMessage list the host queued. */
+  function captureQueryFn(captured: SDKUserMessage[]): QueryFn {
+    return makeQueryFn((args) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const m of args.prompt) captured.push(m);
+      }
+      return asQuery(gen());
+    });
+  }
+
+  const png = (size = 3) =>
+    ({
+      upload_id: "u1",
+      filename: "a.png",
+      mime: "image/png",
+      size,
+      chunks: 1,
+    });
+
+  it("画像 1 枚を attach -> instruction で SDK content blocks に組み込む", async () => {
+    const captured: SDKUserMessage[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen(png(3));
+    host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2, 3])));
+    host.attachClose("u1");
+    host.send("見て", ["u1"]);
+    host.close();
+    await done;
+
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.message.content).toEqual([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: Buffer.from([1, 2, 3]).toString("base64"),
+        },
+      },
+      { type: "text", text: "見て" },
+    ]);
+  });
+
+  it("text 空 + 添付ありなら image block のみ送る", async () => {
+    const captured: SDKUserMessage[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen(png(1));
+    host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([9])));
+    host.attachClose("u1");
+    host.send("", ["u1"]);
+    host.close();
+    await done;
+    expect(Array.isArray(captured[0]!.message.content)).toBe(true);
+    expect((captured[0]!.message.content as unknown[]).length).toBe(1);
+  });
+
+  it("添付なしの send は string content の従来挙動", async () => {
+    const captured: SDKUserMessage[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.send("hello");
+    host.close();
+    await done;
+    expect(captured[0]!.message.content).toBe("hello");
+  });
+
+  it("attachOpen の不正 MIME は attach_rejected を発火しエントリは作らない", async () => {
+    const rejected: Envelope[] = [];
+    const captured: SDKUserMessage[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen({
+      upload_id: "bad",
+      filename: "x.zip",
+      mime: "application/zip",
+      size: 10,
+      chunks: 1,
+    });
+    // No entry was created — subsequent chunks are dropped silently.
+    host.attachChunk(buildChunkPayload("bad", 0, new Uint8Array([1])));
+    host.attachClose("bad");
+    host.close();
+    await done;
+
+    expect(rejected.length).toBe(1);
+    expect(rejected[0]!.type).toBe("attach_rejected");
+    expect(rejected[0]!.payload).toMatchObject({
+      upload_id: "bad",
+      reason: "mime_denied",
+    });
+  });
+
+  it("attachOpen の上限超サイズは attach_rejected (size_over)", async () => {
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn([]),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen({
+      upload_id: "big",
+      filename: "big.png",
+      mime: "image/png",
+      size: 1024 * 1024 * 1024, // 1 GB > 5 MB phase-0 cap
+      chunks: 1,
+    });
+    host.close();
+    await done;
+    expect(rejected.length).toBe(1);
+    expect(rejected[0]!.payload).toMatchObject({
+      upload_id: "big",
+      reason: "size_over",
+    });
+  });
+
+  it("attachClose 時に欠損 chunk があれば attach_rejected (timeout) + エントリ破棄", async () => {
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn([]),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen({ ...png(5), chunks: 2 });
+    host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2, 3])));
+    // chunk 1 を送らずに close
+    host.attachClose("u1");
+    host.close();
+    await done;
+    expect(rejected[0]!.payload).toMatchObject({
+      upload_id: "u1",
+      reason: "timeout",
+    });
+  });
+
+  it("未知 attachment_id を送ろうとすると instruction_rejected", async () => {
+    const captured: SDKUserMessage[] = [];
+    const rejected: Envelope[] = [];
+    const states: string[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => states.push(e.state),
+      onInstructionRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.send("見て", ["nope"]);
+    host.close();
+    await done;
+
+    expect(captured.length).toBe(0); // not queued
+    expect(rejected.length).toBe(1);
+    expect(rejected[0]!.type).toBe("instruction_rejected");
+    expect(rejected[0]!.payload).toMatchObject({
+      attachment_ids: ["nope"],
+      reason: "timeout",
+    });
+    // No sending state — the turn was atomically aborted before #apply.
+    expect(states).not.toContain("sending");
+  });
+
+  it("addition test: 添付付き send が成功すれば uploads は消費されて再利用不可", async () => {
+    const captured: SDKUserMessage[] = [];
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onInstructionRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen(png(2));
+    host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2])));
+    host.attachClose("u1");
+    host.send("a", ["u1"]); // consumes
+    host.send("b", ["u1"]); // u1 no longer in pendingUploads -> rejected
+    host.close();
+    await done;
+    expect(captured.length).toBe(1);
+    expect(rejected.length).toBe(1);
+  });
+
+  it("attach_close 成功後の attach_chunk は sealed で破棄(再書き込み防止)", async () => {
+    const captured: SDKUserMessage[] = [];
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen(png(3));
+    host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2, 3])));
+    host.attachClose("u1"); // seals
+    // 攻撃者再送: 同一 chunk_index で異なる中身 — sealed で無視される
+    host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([9, 9, 9])));
+    host.send("", ["u1"]);
+    host.close();
+    await done;
+
+    expect(rejected.length).toBe(0); // chunk silently dropped
+    const block = (captured[0]!.message.content as unknown as Array<{
+      source?: { data: string };
+    }>)[0];
+    expect(block?.source?.data).toBe(Buffer.from([1, 2, 3]).toString("base64"));
+  });
+
+  it("declared サイズ超過の累積 chunk は attach_rejected(size_over)+ エントリ破棄", async () => {
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn([]),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen({ ...png(2), chunks: 2 }); // declared size 2
+    host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2])));
+    // chunk 1 で累積 4 byte に乗ろうとする — declared(2) 超過で reject
+    host.attachChunk(buildChunkPayload("u1", 1, new Uint8Array([3, 4])));
+    // エントリは破棄、後続 chunk も無視
+    host.attachChunk(buildChunkPayload("u1", 1, new Uint8Array([5, 6])));
+    host.close();
+    await done;
+    expect(rejected.length).toBe(1);
+    expect(rejected[0]!.payload).toMatchObject({
+      upload_id: "u1",
+      reason: "size_over",
+    });
+  });
+
+  it("chunk_index >= meta.chunks は無視(out-of-bounds)", async () => {
+    const rejected: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onAttachRejected: (e) => rejected.push(e),
+      queryFn: captureQueryFn([]),
+      now: () => "T",
+    });
+    const done = host.run();
+    host.attachOpen({ ...png(1), chunks: 1 });
+    // chunk_index=5 は宣言された 1 chunk を超えるので無視
+    host.attachChunk(buildChunkPayload("u1", 5, new Uint8Array([1, 2, 3])));
+    host.close();
+    await done;
+    expect(rejected.length).toBe(0);
   });
 });

@@ -87,9 +87,10 @@ export interface PendingPermissionExt {
 
 /**
  * Common event envelope v0 (protocol.md). The type enum fixes
- * state_change / permission_request (ADR-0010/0011) and log / result
- * (ADR-0012). payload stays loosely typed; the per-type shapes are
- * LogPayload / ResultPayload above.
+ * state_change / permission_request (ADR-0010/0011), log / result
+ * (ADR-0012), and attach_rejected / instruction_rejected (ADR-0025).
+ * payload stays loosely typed; the per-type shapes are
+ * LogPayload / ResultPayload / Attach*Payload above.
  */
 export interface Envelope {
   version: "0";
@@ -103,10 +104,46 @@ export interface Envelope {
   /** Wrapper-issued monotonic sequence (ADR-0011), stamped by ServerLink
    *  at send time; absent on envelopes that never go to a server. */
   seq?: number;
-  type: "state_change" | "permission_request" | "log" | "result";
+  type:
+    | "state_change"
+    | "permission_request"
+    | "log"
+    | "result"
+    | "attach_rejected"
+    | "instruction_rejected";
   state: KaoiroState;
   payload: Record<string, unknown>;
   ext: Record<string, unknown>;
+}
+
+/** reason enum for attach_rejected / instruction_rejected (file-upload spec,
+ *  ADR-0025 F9). Single source of truth for both envelopes. */
+export type FileUploadRejectReason =
+  | "size_over"
+  | "mime_denied"
+  | "count_over"
+  | "timeout"
+  | "interrupted"
+  | "unfittable_image"
+  | "unfittable_pdf"
+  | "text_too_large"
+  | "total_request_over"
+  | "sdk_error";
+
+/** payload of a type="attach_rejected" envelope (file-upload spec / ADR-0025
+ *  F9). Individual upload rejection. */
+export interface AttachRejectedPayload {
+  upload_id: string;
+  reason: FileUploadRejectReason;
+  detail?: string;
+}
+
+/** payload of a type="instruction_rejected" envelope (file-upload spec /
+ *  ADR-0025 F9). Whole-instruction rejection (e.g. SDK error, total over). */
+export interface InstructionRejectedPayload {
+  attachment_ids?: string[];
+  reason: FileUploadRejectReason;
+  detail?: string;
 }
 
 // Runner control messages (protocol.md "runner 制御メッセージ", #66 / ADR-0023).

@@ -14,6 +14,9 @@ export type {
   WrapperConfig,
   PendingPermissionExt,
   Envelope,
+  FileUploadRejectReason,
+  AttachRejectedPayload,
+  InstructionRejectedPayload,
 } from "@kaoiro/protocol";
 
 /** SDKResultMessage.subtype (agent-sdk-events.md). */

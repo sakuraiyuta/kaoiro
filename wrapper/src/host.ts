@@ -16,7 +16,9 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AdapterEvent,
+  AttachRejectedPayload,
   Envelope,
+  InstructionRejectedPayload,
   KaoiroState,
   LogEntry,
   PendingPermissionExt,
@@ -26,6 +28,8 @@ import type {
 import type { MachineState } from "./state.js";
 import {
   initialMachineState,
+  makeAttachRejected,
+  makeInstructionRejected,
   makeLog,
   makeResult,
   makeStateChange,
@@ -41,6 +45,15 @@ import {
   sdkMessageToSessionId,
 } from "./adapter.js";
 import { clipText, logEntryToPayload } from "./logpayload.js";
+import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
+import {
+  PHASE_0_SIZE_LIMIT_BYTES,
+  assembleBytes,
+  parseChunkPayload,
+  renderImageBlock,
+  validateClose,
+  validateOpen,
+} from "./upload.js";
 
 /** Cap on queued user turns; send() throws beyond this (fail fast). */
 const MAX_QUEUED_TURNS = 1000;
@@ -72,6 +85,13 @@ export interface AgentHostOptions {
    * Omitted = replies are not relayed.
    */
   onLog?: (envelope: Envelope) => void;
+  /** Invoked when wrapper rejects an individual upload (file-upload spec /
+   *  ADR-0025 F9). Omitted = rejections are not relayed (validation still
+   *  runs, the message just does not leave the host). */
+  onAttachRejected?: (envelope: Envelope) => void;
+  /** Invoked when wrapper rejects a whole instruction (file-upload spec /
+   *  ADR-0025 F9). Omitted = the message does not leave the host. */
+  onInstructionRejected?: (envelope: Envelope) => void;
   /**
    * Invoked when the SDK first reports a conversation session_id, and again
    * whenever it changes (init / result, ADR-0014 phase-0). The wrapper
@@ -147,6 +167,11 @@ export class AgentHost {
    *  waiting_permission carries it in ext, surviving any intermediate
    *  envelope arrival. null when no decision is in flight. */
   #pendingPermission: PendingPermissionExt | null = null;
+  /** In-memory chunk buffers for in-flight uploads (file-upload spec /
+   *  ADR-0025 F3 — pure-memory, disk-unreachable). One entry per accepted
+   *  attach_open; entries are consumed when their upload_id appears in an
+   *  instruction's attachment_ids. */
+  readonly #pendingUploads = new Map<string, PendingUpload>();
 
   constructor(config: WrapperConfig, options: AgentHostOptions) {
     this.#config = config;
@@ -159,13 +184,31 @@ export class AgentHost {
     return this.#machine.state;
   }
 
-  /** Enqueue a user turn for the streaming input. */
-  send(text: string): void {
+  /** Enqueue a user turn for the streaming input. When `attachmentIds` are
+   *  provided, the host resolves each id against pending_uploads, assembles
+   *  bytes into SDK content blocks (file-upload spec / ADR-0025 F1, phase-0
+   *  image only), and atomically rejects the whole turn if any id is missing
+   *  or incomplete. Successful resolution consumes the uploads. */
+  send(text: string, attachmentIds?: string[]): void {
     if (this.#closed) throw new Error("agent host is closed");
     // Fail fast instead of growing without bound when nothing drains.
     if (this.#queue.length >= MAX_QUEUED_TURNS) {
       throw new Error("agent host input queue is full");
     }
+
+    let content: string | ContentBlock[] = text;
+    if (attachmentIds && attachmentIds.length > 0) {
+      const resolved = this.#resolveAttachments(attachmentIds);
+      if (!resolved) return; // emitInstructionRejected already fired.
+      const blocks: ContentBlock[] = resolved.map((entry) =>
+        renderImageBlock(entry.meta, assembleBytes(entry)),
+      );
+      if (text.length > 0) blocks.push({ type: "text", text });
+      content = blocks;
+      // Consume — uploads are one-shot per instruction.
+      for (const id of attachmentIds) this.#pendingUploads.delete(id);
+    }
+
     this.#queue.push({
       type: "user",
       // Empty by design (ADR-0014 phase-0): in streaming-input mode the SDK
@@ -174,13 +217,145 @@ export class AgentHost {
       // envelopes; resume targets a session via options.resume, not here.
       session_id: "",
       parent_tool_use_id: null,
-      message: { role: "user", content: text },
+      // The SDK's MessageParam accepts string | content blocks; the cast
+      // narrows our local ContentBlock union to the SDK's wider shape.
+      message: { role: "user", content: content as never },
     });
     // Optimistic `sending` state (#32): raised here, where the host knows the
     // instruction was accepted, rather than waiting for an SDK message that
     // may not land until the model's first token.
     this.#apply({ kind: "user_send" });
     this.#wake();
+  }
+
+  /** Registers a new upload from `attach_open`; emits `attach_rejected`
+   *  immediately on MIME / size mismatch (no entry is created in that case
+   *  so a subsequent attach_chunk for the same id is dropped silently). */
+  attachOpen(meta: UploadMeta): void {
+    const result = validateOpen(meta);
+    if (!result.ok) {
+      this.#emitAttachRejected({
+        upload_id: meta.upload_id,
+        reason: result.reason,
+        ...(result.detail !== undefined ? { detail: result.detail } : {}),
+      });
+      return;
+    }
+    this.#pendingUploads.set(meta.upload_id, {
+      meta,
+      chunks: new Map(),
+      sealed: false,
+      accumulatedBytes: 0,
+    });
+  }
+
+  /** Parses an `attach_chunk` binary payload and appends bytes to the
+   *  matching pending upload, enforcing the per-upload cap incrementally
+   *  (security: a misbehaving client cannot stream past meta.size or
+   *  PHASE_0_SIZE_LIMIT_BYTES). Unknown id, sealed entry, malformed header,
+   *  or out-of-bounds chunk_index is dropped silently — a stray chunk
+   *  after a successful attach_close or rejected open is not an error. */
+  attachChunk(payload: ArrayBuffer | ArrayBufferView): void {
+    let parsed;
+    try {
+      parsed = parseChunkPayload(payload);
+    } catch {
+      return;
+    }
+    const entry = this.#pendingUploads.get(parsed.upload_id);
+    if (!entry || entry.sealed) return;
+    if (parsed.chunk_index >= entry.meta.chunks) return;
+    const existing = entry.chunks.get(parsed.chunk_index);
+    const newTotal =
+      entry.accumulatedBytes -
+      (existing?.byteLength ?? 0) +
+      parsed.bytes.byteLength;
+    if (newTotal > entry.meta.size || newTotal > PHASE_0_SIZE_LIMIT_BYTES) {
+      this.#pendingUploads.delete(parsed.upload_id);
+      this.#emitAttachRejected({
+        upload_id: parsed.upload_id,
+        reason: "size_over",
+        detail: `accumulated=${newTotal} declared=${entry.meta.size} cap=${PHASE_0_SIZE_LIMIT_BYTES}`,
+      });
+      return;
+    }
+    entry.chunks.set(parsed.chunk_index, parsed.bytes);
+    entry.accumulatedBytes = newTotal;
+  }
+
+  /** Verifies an upload is complete (all chunks landed, assembled size
+   *  matches declared); incomplete or oversize emits attach_rejected and
+   *  drops the entry. On success the entry is `sealed` so post-close chunks
+   *  cannot rewrite already-validated bytes. */
+  attachClose(uploadId: string): void {
+    const entry = this.#pendingUploads.get(uploadId);
+    if (!entry) return;
+    const result = validateClose(entry);
+    if (!result.ok) {
+      this.#pendingUploads.delete(uploadId);
+      this.#emitAttachRejected({
+        upload_id: uploadId,
+        reason: result.reason,
+        ...(result.detail !== undefined ? { detail: result.detail } : {}),
+      });
+      return;
+    }
+    entry.sealed = true;
+  }
+
+  /** Resolves `attachment_ids` to their pending uploads, validating each
+   *  that has not been sealed by attachClose. Returns the entries in caller
+   *  order, or null after emitting instruction_rejected (atomic — first
+   *  failure aborts the turn). */
+  #resolveAttachments(ids: string[]): PendingUpload[] | null {
+    const entries: PendingUpload[] = [];
+    for (const id of ids) {
+      const entry = this.#pendingUploads.get(id);
+      if (!entry) {
+        this.#emitInstructionRejected({
+          attachment_ids: ids,
+          reason: "timeout",
+          detail: `unknown upload_id ${id}`,
+        });
+        return null;
+      }
+      // Sealed entries already passed validateClose; re-running it is
+      // redundant and would scan the chunks map again for nothing.
+      if (!entry.sealed) {
+        const check = validateClose(entry);
+        if (!check.ok) {
+          this.#emitInstructionRejected({
+            attachment_ids: ids,
+            reason: check.reason,
+            ...(check.detail !== undefined ? { detail: check.detail } : {}),
+          });
+          return null;
+        }
+      }
+      entries.push(entry);
+    }
+    return entries;
+  }
+
+  #emitAttachRejected(payload: AttachRejectedPayload): void {
+    const onReject = this.#options.onAttachRejected;
+    if (!onReject) return;
+    onReject(
+      makeAttachRejected(this.#config, this.#machine.state, this.#now(), payload),
+    );
+  }
+
+  #emitInstructionRejected(payload: InstructionRejectedPayload): void {
+    const onReject = this.#options.onInstructionRejected;
+    if (!onReject) return;
+    onReject(
+      makeInstructionRejected(
+        this.#config,
+        this.#machine.state,
+        this.#now(),
+        payload,
+      ),
+    );
   }
 
   /** Close the input stream; the session ends once the current turn drains. */

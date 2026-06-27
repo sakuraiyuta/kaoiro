@@ -11,11 +11,23 @@ import { Channel, Socket } from "phoenix";
 import type { PermissionDecisionMessage } from "./permission.js";
 import type { Envelope } from "./types.js";
 
+/** attach_open payload (protocol.md / file-upload spec, server -> wrapper
+ *  relay). chunks is the advertised total chunk count for the upload. */
+export interface AttachOpenMessage {
+  upload_id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  chunks: number;
+}
+
 export interface ServerLinkOptions {
   /** Wrapper auth token (ADR-0011), sent as a connect param. */
   token?: string;
-  /** An operator's instruction relayed by the server. */
-  onInstruction?: (text: string) => void;
+  /** An operator's instruction relayed by the server. `attachmentIds`, when
+   *  present, lists prior uploads the wrapper should attach to this turn
+   *  (file-upload spec). */
+  onInstruction?: (text: string, attachmentIds?: string[]) => void;
   /** An operator's permission decision relayed by the server. */
   onPermissionDecision?: (decision: PermissionDecisionMessage) => void;
   /** An operator's interrupt request relayed by the server (protocol.md, #51).
@@ -27,6 +39,15 @@ export interface ServerLinkOptions {
   /** An operator's effort switch relayed by the server (protocol.md, #54).
    *  Payload is `{ effort: string }` — a level from a model's effort_levels. */
   onSetEffort?: (level: string) => void;
+  /** attach_open relayed by the server (file-upload spec / ADR-0025).
+   *  Announces an upcoming upload; the wrapper registers a pending entry. */
+  onAttachOpen?: (msg: AttachOpenMessage) => void;
+  /** attach_chunk relayed by the server — a V2 binary frame payload. The
+   *  wrapper parses the upload_id / chunk_index header and appends bytes. */
+  onAttachChunk?: (payload: ArrayBuffer | ArrayBufferView) => void;
+  /** attach_close relayed by the server. The wrapper verifies the upload
+   *  is complete; an incomplete or oversize upload emits attach_rejected. */
+  onAttachClose?: (uploadId: string) => void;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -61,7 +82,18 @@ export class ServerLink {
 
     this.#channel.on("instruction", (payload: unknown) => {
       if (isObject(payload) && typeof payload.text === "string") {
-        options.onInstruction?.(payload.text);
+        // attachment_ids is optional (file-upload spec); validate it as an
+        // array of strings or drop it silently so a malformed list does
+        // not poison the text-only path.
+        const ids = Array.isArray(payload.attachment_ids)
+          ? payload.attachment_ids.filter(
+              (id): id is string => typeof id === "string",
+            )
+          : undefined;
+        options.onInstruction?.(
+          payload.text,
+          ids && ids.length > 0 ? ids : undefined,
+        );
       }
     });
     this.#channel.on("permission_decision", (payload: unknown) => {
@@ -97,6 +129,40 @@ export class ServerLink {
     this.#channel.on("set_effort", (payload: unknown) => {
       if (isObject(payload) && typeof payload.effort === "string") {
         options.onSetEffort?.(payload.effort);
+      }
+    });
+    // File-upload wire (file-upload spec / ADR-0025). attach_open declares an
+    // upload, attach_chunk delivers a binary slice, attach_close finalises.
+    // Malformed payloads are dropped — the wire is operator-only and the
+    // server already vets shapes; a defensive drop is enough.
+    this.#channel.on("attach_open", (payload: unknown) => {
+      if (
+        isObject(payload) &&
+        typeof payload.upload_id === "string" &&
+        typeof payload.filename === "string" &&
+        typeof payload.mime === "string" &&
+        typeof payload.size === "number" &&
+        typeof payload.chunks === "number"
+      ) {
+        options.onAttachOpen?.({
+          upload_id: payload.upload_id,
+          filename: payload.filename,
+          mime: payload.mime,
+          size: payload.size,
+          chunks: payload.chunks,
+        });
+      }
+    });
+    this.#channel.on("attach_chunk", (payload: unknown) => {
+      // V2 binary frame: payload is an ArrayBuffer (browser) or a
+      // Buffer/Uint8Array (Node ws). Anything else is malformed.
+      if (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
+        options.onAttachChunk?.(payload as ArrayBuffer | ArrayBufferView);
+      }
+    });
+    this.#channel.on("attach_close", (payload: unknown) => {
+      if (isObject(payload) && typeof payload.upload_id === "string") {
+        options.onAttachClose?.(payload.upload_id);
       }
     });
 
