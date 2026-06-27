@@ -407,8 +407,18 @@ export interface KaoiroConnection {
   /** Uploads a File using attach_open / attach_chunk* / attach_close
    *  (file-upload spec / ADR-0025). Resolves with the upload_id once
    *  attach_close acks. Reject from the wrapper arrives asynchronously
-   *  via onAttachRejected with the same upload_id. */
-  uploadFile: (agentId: string, file: File) => Promise<string>;
+   *  via onAttachRejected with the same upload_id.
+   *
+   *  `onProgress`, when provided, fires after each attach_chunk push with
+   *  (uploaded_chunks, total_chunks). Chunk granularity (64 KB by spec /
+   *  ADR-0025 F14) is fine enough for per-upload UI without per-byte
+   *  bookkeeping. The bar may briefly flash 100% before attach_close
+   *  resolves — the caller decides how to render that boundary. */
+  uploadFile: (
+    agentId: string,
+    file: File,
+    onProgress?: (uploaded: number, total: number) => void,
+  ) => Promise<string>;
   /** Lower-level attach primitives — exposed mainly for tests and unusual
    *  upload patterns (the high-level uploadFile orchestrates them). */
   attachOpen: (agentId: string, meta: AttachOpenMeta) => Promise<void>;
@@ -687,7 +697,7 @@ export function connectKaoiro(
         agent_id: agentId,
         upload_id: uploadId,
       }),
-    uploadFile: async (agentId, file) => {
+    uploadFile: async (agentId, file, onProgress) => {
       const upload_id = crypto.randomUUID();
       const buffer = await file.arrayBuffer();
       const size = buffer.byteLength;
@@ -705,6 +715,7 @@ export function connectKaoiro(
         const end = Math.min(start + ATTACH_CHUNK_SIZE, size);
         const chunkBytes = new Uint8Array(buffer.slice(start, end));
         channel.push("attach_chunk", buildChunkPayload(upload_id, i, chunkBytes));
+        onProgress?.(i + 1, chunks);
       }
       await pushAsync(channel, "attach_close", {
         agent_id: agentId,

@@ -295,7 +295,10 @@
   // multiple opens. ✕ on a chip removes that one entry without touching
   // the wire. F6 caps the count at MAX_ATTACHMENTS_PER_INSTRUCTION; the
   // wrapper enforces the same cap server-side and rejects with count_over.
-  let stagedFiles = $state<File[]>([]);
+  // progress (0..1) is updated by uploadFile's onProgress so the chip can
+  // show a mini bar for the in-flight upload; 0 means not yet started.
+  type StagedEntry = { id: string; file: File; progress: number };
+  let stagedFiles = $state<StagedEntry[]>([]);
   let stagedFileInput = $state<HTMLInputElement | null>(null);
   // True while one of the uploadFile() calls is in flight (between the
   // first attach_open and the instruction push); locks the send button
@@ -465,21 +468,24 @@
     // Either text or at least one staged file is required; both empty is
     // a no-op.
     if (!connection || (text === "" && stagedFiles.length === 0)) return;
-    const files = stagedFiles;
+    const entries = stagedFiles;
     void run(async () => {
       const before = logs.length;
       const attachmentIds: string[] = [];
-      if (files.length > 0) {
+      if (entries.length > 0) {
         // Uploads run sequentially: parallel push would interleave many
         // attach_chunk frames in flight at once, which can exceed the
         // server's transport in-flight cap (file-upload spec). The
         // wall-clock cost is small for the 5 MB / 10-file phase ceiling.
         uploading = true;
         try {
-          for (const file of files) {
+          for (const entry of entries) {
             const uploadId = await connection.uploadFile(
               envelope.agent_id,
-              file,
+              entry.file,
+              (uploaded, total) => {
+                entry.progress = uploaded / total;
+              },
             );
             attachmentIds.push(uploadId);
           }
@@ -522,14 +528,14 @@
     // across multiple picker opens (e.g. browse twice for files in
     // different folders). The cap is the spec value; any overflow is
     // dropped with a hint so the operator knows not all were staged.
-    const next: File[] = [...stagedFiles];
+    const next: StagedEntry[] = [...stagedFiles];
     let dropped = 0;
     for (const f of picked) {
       if (next.length >= MAX_STAGED) {
         dropped++;
         continue;
       }
-      next.push(f);
+      next.push({ id: crypto.randomUUID(), file: f, progress: 0 });
     }
     stagedFiles = next;
     if (dropped > 0) {
@@ -1164,17 +1170,30 @@
             <div class="tray">
               <span class="tray-count">添付 {stagedFiles.length}/{MAX_STAGED}</span>
               <ul class="tray-list">
-                {#each stagedFiles as file, i (`${file.name}:${file.size}:${i}`)}
+                {#each stagedFiles as entry, i (entry.id)}
                   <li class="staged">
                     <span class="staged-name"
-                      title="{file.name} ({(file.size / 1024).toFixed(1)} KB)"
-                      >{file.type.startsWith("image/") ? "🖼" : "📄"} {file.name} ({(
-                        file.size / 1024
+                      title="{entry.file.name} ({(entry.file.size / 1024).toFixed(1)} KB)"
+                      >{entry.file.type.startsWith("image/") ? "🖼" : "📄"} {entry.file.name} ({(
+                        entry.file.size / 1024
                       ).toFixed(1)} KB)</span>
                     <button
                       type="button"
                       onclick={() => removeStagedFile(i)}
                       aria-label="添付を解除">✕</button>
+                    {#if entry.progress > 0}
+                      <div
+                        class="staged-bar"
+                        role="progressbar"
+                        aria-label="アップロード進捗"
+                        aria-valuenow={Math.round(entry.progress * 100)}
+                        aria-valuemin="0"
+                        aria-valuemax="100">
+                        <div
+                          class="staged-bar-fill"
+                          style:width="{entry.progress * 100}%"></div>
+                      </div>
+                    {/if}
                   </li>
                 {/each}
               </ul>
@@ -2182,6 +2201,7 @@
   }
 
   .staged {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
@@ -2191,6 +2211,7 @@
     background: var(--bg-card);
     font-size: 0.8rem;
     max-width: 100%;
+    overflow: hidden;
   }
 
   .staged-name {
@@ -2206,5 +2227,23 @@
     color: var(--fg);
     cursor: pointer;
     font-size: 0.85rem;
+  }
+
+  /* Per-upload progress bar (file-upload spec / ADR-0025 Stage C "g"): thin
+     strip at the bottom edge of the chip, fed by uploadFile's onProgress
+     callback. Only rendered while a transfer is in flight (progress > 0). */
+  .staged-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: color-mix(in srgb, var(--c-thinking) 18%, transparent);
+  }
+
+  .staged-bar-fill {
+    height: 100%;
+    background: var(--c-thinking);
+    transition: width 0.15s ease-out;
   }
 </style>
