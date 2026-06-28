@@ -509,10 +509,29 @@
   let hoveredTool = $state<string | null>(null);
   let logEl = $state<HTMLDivElement | null>(null);
 
+  // Pin-to-bottom intent: true while the operator is reading the tail of
+  // the log, false once they scroll up to inspect earlier output. The
+  // auto-scroll effect honours this so a reply landing mid-read no longer
+  // yanks the viewport away. Initial true so an empty log starts pinned.
+  let stickToBottom = $state(true);
+  const STICK_THRESHOLD_PX = 8;
+
+  function handleLogScroll(): void {
+    if (!logEl) return;
+    const distance = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
+    stickToBottom = distance <= STICK_THRESHOLD_PX;
+  }
+
   // Render any new mermaid diagrams (#42), then keep the transcript pinned to
-  // the latest line (diagrams change the scroll height, so scroll after).
+  // the latest line IF the operator was already at the bottom — see
+  // stickToBottom above. (Diagrams change the scroll height, so scroll after.)
   $effect(() => {
     void logs.length;
+    // Snapshot synchronously BEFORE the new logs commit: once Svelte renders
+    // the new envelopes, scrollHeight grows and a fresh "at the bottom"
+    // measurement no longer reflects the operator's prior intent. untrack
+    // also prevents this effect from re-firing on every user scroll.
+    const shouldStick = untrack(() => stickToBottom);
     void tick().then(async () => {
       if (!logEl) return;
       try {
@@ -521,6 +540,14 @@
         console.error("mermaid render failed", error);
       }
       // The component may have unmounted during the await; re-check logEl.
+      if (!logEl || !shouldStick) return;
+      // bind:offsetHeight={composerH} updates one frame after the composer
+      // reflows (e.g. stagedFiles clearing on send), and that reflow resizes
+      // .log via flex. Double rAF lets layout settle before the final scroll
+      // — otherwise scrollTop=scrollHeight lands a few pixels short of the
+      // true bottom (the failure that prompted scrollIntoView previously).
+      await new Promise((r) => requestAnimationFrame(r));
+      await new Promise((r) => requestAnimationFrame(r));
       if (logEl) logEl.scrollTop = logEl.scrollHeight;
     });
   });
@@ -548,7 +575,11 @@
     if (!connection || (text === "" && stagedFiles.length === 0)) return;
     const entries = stagedFiles;
     void run(async () => {
-      const before = logs.length;
+      // Force pin-to-bottom for the user's own send: even if they were
+      // scrolled up reading earlier output, hitting send signals intent
+      // to see their own line (and the agent's reply) land. The auto-
+      // scroll $effect picks this up when the WS echo arrives.
+      stickToBottom = true;
       const attachmentIds: string[] = [];
       if (entries.length > 0) {
         // Uploads run sequentially: parallel push would interleave many
@@ -579,18 +610,10 @@
       instruction = "";
       stagedFiles = [];
       if (stagedFileInput !== null) stagedFileInput.value = "";
-      // Wait for the server to reflect the user log back into the transcript
-      // (one WS round-trip; ~50-200ms on a local link). Cap at 1.5s so a
-      // stalled server still settles. Then bring the just-sent line into
-      // view with scrollIntoView, which is robust to composer-reflow timing
-      // that can leave a plain scrollTop=scrollHeight short.
-      const deadline = Date.now() + 1500;
-      while (logs.length === before && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 50));
-      }
-      await tick();
-      const last = logEl?.lastElementChild as HTMLElement | null;
-      last?.scrollIntoView({ block: "end", behavior: "smooth" });
+      // Scroll-to-bottom is handled by the logs-change $effect above:
+      // when the server echoes the user envelope back, the effect sees
+      // stickToBottom=true (forced at the start of this send) and runs
+      // a layout-settled scrollTop assignment.
     });
   }
 
@@ -1158,7 +1181,7 @@
     </aside>
 
     <div class="main" style:--composer-h={composerH ? composerH + "px" : null}>
-      <div class="log" bind:this={logEl}>
+      <div class="log" bind:this={logEl} onscroll={handleLogScroll}>
         {#if logs.length === 0}
           <p class="empty">まだ返答はありません。</p>
         {/if}
