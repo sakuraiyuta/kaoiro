@@ -131,7 +131,8 @@ export interface Envelope {
     | "log"
     | "result"
     | "attach_rejected"
-    | "instruction_rejected";
+    | "instruction_rejected"
+    | "inter_agent_message";
   state: KaoiroState;
   payload: Record<string, unknown>;
   ext: Record<string, unknown>;
@@ -165,6 +166,45 @@ export interface InstructionRejectedPayload {
   attachment_ids?: string[];
   reason: FileUploadRejectReason;
   detail?: string;
+}
+
+/** Closed enum of inter-agent message kinds (protocol-inter-agent spec). 9
+ *  kinds derived from FIPA-ACL performatives, compressed to cover request /
+ *  response / consultation (query+inform) / discussion
+ *  (propose/accept/reject) plus tie-breaker (escalate-to-user) and
+ *  termination (done). */
+export type InterAgentMessageKind =
+  | "request"
+  | "response"
+  | "query"
+  | "inform"
+  | "propose"
+  | "accept"
+  | "reject"
+  | "escalate-to-user"
+  | "done";
+
+/** payload of a type="inter_agent_message" envelope (protocol-inter-agent
+ *  spec). The sender lives in the surrounding envelope's `agent_id`; `to`
+ *  is the destination agent_id used by the server for routing. `meta.done`
+ *  must be true from both owner-side agents for the conversation to
+ *  complete; `meta.reject_reason` is required when `kind === "reject"`. */
+export interface InterAgentMessagePayload {
+  to: string;
+  conversation_id: string;
+  turn_number: number;
+  kind: InterAgentMessageKind;
+  body: string;
+  meta: {
+    done: boolean;
+    propose_next: string;
+    confidence?: number;
+    reject_reason?: string;
+  };
+  owner: {
+    kind: "user" | "agent";
+    id: string;
+  };
 }
 
 // Runner control messages (protocol.md "runner 制御メッセージ", #66 / ADR-0023).
