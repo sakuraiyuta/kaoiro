@@ -71,9 +71,10 @@ const INPUT_SCHEMA = {
     ),
   conversation_id: z
     .string()
+    .min(1)
     .optional()
     .describe(
-      "Conversation id from a prior message in this thread. Omit to start a new conversation; the wrapper allocates one and returns it.",
+      "Conversation id from a prior message in this thread. Omit to start a new conversation; the wrapper allocates one and returns it. Pass an empty string is a schema error — omit the field instead.",
     ),
   done: z
     .boolean()
@@ -102,7 +103,7 @@ const INPUT_SCHEMA = {
 };
 
 const TOOL_DESCRIPTION =
-  "Send a structured message to another kaoiro agent. The operator approves each send via a permission dialog. Use this to consult, delegate, propose, accept, reject, or end an inter-agent conversation. Pass conversation_id back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically.";
+  "Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass `conversation_id` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically.";
 
 interface ConversationTrack {
   /** Highest turn_number observed so far in this conversation. */
@@ -225,8 +226,13 @@ export class InterAgentTool {
 
 /** Formats an inbound inter_agent_message envelope into the user-message text
  *  injected into the receiving wrapper's SDK input (protocol-inter-agent spec
- *  「受信側 (wrapper-B) の挙動」). Resilient to a malformed envelope (e.g. the
- *  server-synthesized escalate skeleton) — missing fields collapse to empty. */
+ *  「受信側 (wrapper-B) の挙動」). Leads with a role directive so the model
+ *  treats this as an inter-agent reply context — without it, models tend to
+ *  pause and ask the human operator "should I respond with X?" before each
+ *  send, which doubles the operator's workload (the broker already gates
+ *  each send via its own permission dialog). Resilient to a malformed
+ *  envelope (e.g. the server-synthesized escalate skeleton) — missing
+ *  fields collapse to empty. */
 export function formatInboundMessage(envelope: Envelope): string {
   const payload = envelope.payload as Partial<InterAgentMessagePayload>;
   const from = envelope.agent_id;
@@ -237,6 +243,8 @@ export function formatInboundMessage(envelope: Envelope): string {
   const conversationId = payload.conversation_id ?? "";
   const turnNumber = payload.turn_number ?? 0;
   return [
+    `[Inter-agent message — to reply, call send_to_agent with conversation_id="${conversationId}".]`,
+    "",
     `[from ${from}] ${kind}: ${body}`,
     "",
     `(meta: done=${done}, propose_next=${proposeNext}, conversation_id=${conversationId}, turn_number=${turnNumber})`,

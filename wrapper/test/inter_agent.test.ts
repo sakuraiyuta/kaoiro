@@ -165,7 +165,7 @@ describe("InterAgentTool", () => {
 });
 
 describe("formatInboundMessage", () => {
-  it("基本フォーマットに from/kind/body/meta を含める", () => {
+  it("基本フォーマットに role directive + from/kind/body/meta を含める", () => {
     const env: Envelope = {
       version: "0",
       agent_id: "agent-a",
@@ -185,6 +185,12 @@ describe("formatInboundMessage", () => {
       ext: {},
     };
     const text = formatInboundMessage(env);
+    // Role directive must lead so the receiving model treats this as an
+    // inter-agent reply and goes straight to send_to_agent (Phase 1 spec)
+    // instead of asking the operator "should I respond with X?" first.
+    expect(text).toMatch(
+      /^\[Inter-agent message — to reply, call send_to_agent with conversation_id="cnv-9"\.\]/,
+    );
     expect(text).toContain("[from agent-a] propose: CSV にしよう");
     expect(text).toContain("conversation_id=cnv-9");
     expect(text).toContain("turn_number=3");
