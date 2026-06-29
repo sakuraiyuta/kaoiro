@@ -193,6 +193,9 @@ export class AgentHost {
    *  waiting_permission carries it in ext, surviving any intermediate
    *  envelope arrival. null when no decision is in flight. */
   #pendingPermission: PendingPermissionExt | null = null;
+  /** Latest SDK conversation session id (ADR-0014 phase-0). Mirrored locally
+   *  so the whoami snapshot can include it without coupling to ServerLink. */
+  #sessionId: string | null = null;
   /** In-memory chunk buffers for in-flight uploads (file-upload spec /
    *  ADR-0025 F3 — pure-memory, disk-unreachable). One entry per accepted
    *  attach_open; entries are consumed when their upload_id appears in an
@@ -209,6 +212,34 @@ export class AgentHost {
 
   get state(): KaoiroState {
     return this.#machine.state;
+  }
+
+  /** Snapshot of the calling agent's identity and current status (used by the
+   *  `mcp__kaoiro__whoami` tool, protocol-inter-agent companion). Reads only
+   *  local state — no server round-trip, since the wrapper holds the freshest
+   *  view of these fields. Omits keys whose SDK has not yet reported a value
+   *  so consumers can distinguish "unknown" from a stale stub. */
+  statusSnapshot(): {
+    agent_id: string;
+    persona: { id: string; name: string; sprite_set: string };
+    state: KaoiroState;
+    model?: string;
+    cwd?: string;
+    permission_mode?: string;
+    fast_mode?: string;
+    session_id?: string;
+  } {
+    const out: ReturnType<AgentHost["statusSnapshot"]> = {
+      agent_id: this.#config.agent_id,
+      persona: this.#config.persona,
+      state: this.#machine.state,
+    };
+    if (this.#model !== null) out.model = this.#model;
+    if (this.#cwd !== null) out.cwd = this.#cwd;
+    if (this.#permissionMode !== null) out.permission_mode = this.#permissionMode;
+    if (this.#fastMode !== null) out.fast_mode = this.#fastMode;
+    if (this.#sessionId !== null) out.session_id = this.#sessionId;
+    return out;
   }
 
   /** Enqueue a user turn for the streaming input. When `attachmentIds` are
@@ -634,11 +665,10 @@ export class AgentHost {
     // The SDK stamps a session_id on every message; report it before deriving
     // state so the envelopes this message produces already carry it. Forward
     // only on change — the id is stable within a conversation (ADR-0014).
-    let sessionId: string | null = null;
     for await (const message of session) {
       const id = sdkMessageToSessionId(message);
-      if (id !== null && id !== sessionId) {
-        sessionId = id;
+      if (id !== null && id !== this.#sessionId) {
+        this.#sessionId = id;
         this.#options.onSessionId?.(id);
       }
 

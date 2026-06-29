@@ -11,6 +11,16 @@ import { Channel, Socket } from "phoenix";
 import type { PermissionDecisionMessage } from "./permission.js";
 import type { Envelope } from "./types.js";
 
+/** Single entry returned from `directory_request` (protocol-inter-agent
+ *  companion tool). Server returns the minimal info needed to resolve a
+ *  peer by persona name and judge availability — cwd / model / context are
+ *  intentionally excluded as operator-grade info. */
+export interface DirectoryEntry {
+  agent_id: string;
+  persona: { id?: string; name?: string; sprite_set?: string };
+  state: string;
+}
+
 /** attach_open payload (protocol.md / file-upload spec, server -> wrapper
  *  relay). chunks is the advertised total chunk count for the upload. */
 export interface AttachOpenMessage {
@@ -62,6 +72,20 @@ export interface ServerLinkOptions {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/** Structural narrow for a single `directory_request` entry. Asserts every
+ *  field DirectoryEntry declares non-optional, so a server response that
+ *  drops `persona` or `state` cannot smuggle a malformed entry through the
+ *  type system. */
+function isDirectoryEntry(value: unknown): value is DirectoryEntry {
+  if (!isObject(value)) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.agent_id === "string" &&
+    isObject(v.persona) &&
+    typeof v.state === "string"
+  );
 }
 
 export class ServerLink {
@@ -252,6 +276,38 @@ export class ServerLink {
    *  agent_id; the payload is empty. */
   sendHistoryReset(): void {
     this.#channel.push("history_reset", {});
+  }
+
+  /** Fetches the peer directory (protocol-inter-agent companion tool). The
+   *  server replies with `{agents: [...]}` containing every currently-known
+   *  agent except this wrapper. Used by the `mcp__kaoiro__list_agents` tool
+   *  to resolve persona names → agent_ids before send_to_agent. Rejects on
+   *  transport error or timeout so the tool surfaces the failure to the
+   *  model rather than hanging. */
+  requestDirectory(): Promise<DirectoryEntry[]> {
+    return new Promise((resolve, reject) => {
+      this.#channel
+        .push("directory_request", {})
+        .receive("ok", (payload: unknown) => {
+          if (
+            isObject(payload) &&
+            Array.isArray((payload as { agents?: unknown }).agents)
+          ) {
+            const agents = (payload as { agents: unknown[] }).agents.filter(
+              isDirectoryEntry,
+            );
+            resolve(agents);
+          } else {
+            resolve([]);
+          }
+        })
+        .receive("error", (reason: unknown) => {
+          reject(new Error(`directory_request failed: ${JSON.stringify(reason)}`));
+        })
+        .receive("timeout", () => {
+          reject(new Error("directory_request timeout"));
+        });
+    });
   }
 
   /** Leaves the channel and closes the socket. */

@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   INTER_AGENT_TOOL_FQN,
   InterAgentTool,
+  LIST_AGENTS_TOOL_FQN,
+  WHOAMI_TOOL_FQN,
   formatInboundMessage,
+  type WhoamiSnapshot,
 } from "../src/inter_agent.js";
+import type { DirectoryEntry } from "../src/transport.js";
 import type {
   Envelope,
   InterAgentMessagePayload,
@@ -220,5 +224,99 @@ describe("formatInboundMessage", () => {
     const text = formatInboundMessage(env);
     expect(text).toContain("[from server] escalate-to-user");
     expect(text).toContain("done=true");
+  });
+});
+
+describe("list_agents / whoami companion tools", () => {
+  it("companion tool FQN を公開する", () => {
+    expect(LIST_AGENTS_TOOL_FQN).toBe("mcp__kaoiro__list_agents");
+    expect(WHOAMI_TOOL_FQN).toBe("mcp__kaoiro__whoami");
+  });
+
+  it("list_agents は requestDirectory の結果を JSON として返す", async () => {
+    const directory: DirectoryEntry[] = [
+      {
+        agent_id: "lab.peer-1",
+        persona: { id: "ao", name: "あお", sprite_set: "ao" },
+        state: "idle",
+      },
+      {
+        agent_id: "lab.peer-2",
+        persona: { id: "kuroe", name: "クロエ", sprite_set: "kuroe" },
+        state: "thinking",
+      },
+    ];
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {},
+      requestDirectory: async () => directory,
+    });
+
+    const result = await tool.listAgents();
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content[0]!.text) as { agents: DirectoryEntry[] };
+    expect(parsed.agents).toEqual(directory);
+  });
+
+  it("list_agents は requestDirectory 未配線でエラー結果を返す", async () => {
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {},
+    });
+    const result = await tool.listAgents();
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("list_agents unavailable");
+  });
+
+  it("list_agents は requestDirectory の reject をエラー結果に変換する", async () => {
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {},
+      requestDirectory: async () => {
+        throw new Error("boom");
+      },
+    });
+    const result = await tool.listAgents();
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("list_agents failed");
+    expect(result.content[0]!.text).toContain("boom");
+  });
+
+  it("whoami は getWhoami の snapshot を JSON として返す", () => {
+    const snapshot: WhoamiSnapshot = {
+      agent_id: "self.agent",
+      persona: { id: "mio", name: "澪", sprite_set: "mio" },
+      state: "thinking",
+      model: "claude-sonnet-4-6",
+      cwd: "/home/user",
+      permission_mode: "default",
+    };
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "thinking",
+      send: () => {},
+      getWhoami: () => snapshot,
+    });
+    const result = tool.whoami();
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content[0]!.text)).toEqual(snapshot);
+  });
+
+  it("whoami は getWhoami 未配線で wrapper config からのフォールバックを返す", () => {
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "idle",
+      send: () => {},
+    });
+    const result = tool.whoami();
+    const parsed = JSON.parse(result.content[0]!.text) as WhoamiSnapshot;
+    expect(parsed.agent_id).toBe("self.agent");
+    expect(parsed.persona).toEqual(PERSONA);
+    expect(parsed.state).toBe("idle");
+    // SDK 由来のフィールドは存在しないので omit される
+    expect(parsed.model).toBeUndefined();
   });
 });

@@ -21,6 +21,8 @@ import { readSessionHistory } from "./history.js";
 import { AgentHost } from "./host.js";
 import {
   InterAgentTool,
+  LIST_AGENTS_TOOL_FQN,
+  WHOAMI_TOOL_FQN,
   formatInboundMessage,
 } from "./inter_agent.js";
 import { PermissionBroker } from "./permission.js";
@@ -51,6 +53,14 @@ const READ_ONLY_TOOLS = new Set([
   "Glob",
   "LS",
   "NotebookRead",
+  // Companion tools for inter-agent messaging (protocol-inter-agent). Both
+  // are server-round-trip or local-state read with no side effects, so the
+  // operator's permission dialog adds no safety — only friction. Keep them
+  // auto-allowed so the model can resolve peer names and self-narrate
+  // without a broker round-trip per call. Use the exported FQN constants so
+  // a rename in inter_agent.ts cannot silently desync the auto-allow set.
+  LIST_AGENTS_TOOL_FQN,
+  WHOAMI_TOOL_FQN,
 ]);
 
 function printState(envelope: Envelope): void {
@@ -129,6 +139,11 @@ async function main(): Promise<void> {
       config,
       getState: () => host.state,
       send: (envelope) => link?.send(envelope),
+      // Wired below once host + link are constructed; until then the tools
+      // return error/fallback results, which is correct because the SDK
+      // session has not opened yet either.
+      requestDirectory: () => link?.requestDirectory() ?? Promise.resolve([]),
+      getWhoami: () => host.statusSnapshot(),
     });
     link = new ServerLink(config.server_url, config.agent_id, {
       ...(config.server_token === undefined

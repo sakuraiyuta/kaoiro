@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // ServerLink wraps phoenix Socket/Channel; mock the module so the channel
 // event handlers can be invoked directly. `handlers` captures every
 // channel.on(event, cb) registration so a test can fire a synthetic push.
+// `lastPush` exposes the most recent channel.push() so a test can drive
+// its receive("ok") / receive("error") / receive("timeout") branches.
+type PushReceivers = Map<string, (payload: unknown) => void>;
 const mock = vi.hoisted(() => ({
   handlers: new Map<string, (payload: unknown) => void>(),
+  lastPush: null as { event: string; payload: unknown; receivers: Map<string, (payload: unknown) => void> } | null,
 }));
 
 vi.mock("phoenix", () => {
@@ -16,7 +20,22 @@ vi.mock("phoenix", () => {
       const chain = { receive: () => chain };
       return chain;
     }
-    push(): void {}
+    push(event: string, payload: unknown): {
+      receive: (
+        status: string,
+        cb: (payload: unknown) => void,
+      ) => ReturnType<Channel["push"]>;
+    } {
+      const receivers: PushReceivers = new Map();
+      mock.lastPush = { event, payload, receivers };
+      const chain = {
+        receive(status: string, cb: (payload: unknown) => void) {
+          receivers.set(status, cb);
+          return chain;
+        },
+      };
+      return chain;
+    }
     leave(): void {}
   }
   class Socket {
@@ -209,5 +228,57 @@ describe("ServerLink — inter_agent_message inbound (protocol-inter-agent, phas
     emit("envelope", { type: "state_change", agent_id: "a.agent" });
     emit("envelope", "not a map");
     expect(seen).toEqual([]);
+  });
+});
+
+describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+  });
+
+  it("directory_request の reply から agents 配列を返す", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent");
+    const pending = link.requestDirectory();
+
+    expect(mock.lastPush?.event).toBe("directory_request");
+    expect(mock.lastPush?.payload).toEqual({});
+
+    mock.lastPush!.receivers.get("ok")!({
+      agents: [
+        {
+          agent_id: "peer.1",
+          persona: { id: "ao", name: "あお", sprite_set: "ao" },
+          state: "idle",
+        },
+        // 不正 entry (agent_id 欠落) は filter で落とす
+        { persona: {}, state: "thinking" },
+      ],
+    });
+
+    const directory = await pending;
+    expect(directory).toHaveLength(1);
+    expect(directory[0]?.agent_id).toBe("peer.1");
+  });
+
+  it("agents が無い reply でも空配列で resolve する", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent");
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("ok")!({});
+    expect(await pending).toEqual([]);
+  });
+
+  it("error reply は reject する", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent");
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("error")!({ reason: "forbidden" });
+    await expect(pending).rejects.toThrow(/directory_request failed/);
+  });
+
+  it("timeout は reject する", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent");
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("timeout")!(undefined);
+    await expect(pending).rejects.toThrow(/directory_request timeout/);
   });
 });

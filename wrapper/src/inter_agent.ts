@@ -20,6 +20,7 @@ import {
   type McpSdkServerConfigWithInstance,
 } from "@anthropic-ai/claude-agent-sdk";
 import { makeInterAgentMessage } from "./state.js";
+import type { DirectoryEntry } from "./transport.js";
 import type {
   Envelope,
   InterAgentMessageKind,
@@ -27,6 +28,19 @@ import type {
   KaoiroState,
   WrapperConfig,
 } from "./types.js";
+
+/** Self-identity snapshot returned by the `whoami` tool. Mirrors
+ *  `AgentHost#statusSnapshot()` — see host.ts for field semantics. */
+export interface WhoamiSnapshot {
+  agent_id: string;
+  persona: { id: string; name: string; sprite_set: string };
+  state: KaoiroState;
+  model?: string;
+  cwd?: string;
+  permission_mode?: string;
+  fast_mode?: string;
+  session_id?: string;
+}
 
 /** Minimal structural shape of the MCP CallToolResult we actually return; the
  *  agent-sdk's `tool()` helper expects the upstream CallToolResult type from
@@ -42,6 +56,12 @@ interface InterAgentToolResult {
 
 /** Full SDK-side tool name once mcpServers register the kaoiro server. */
 export const INTER_AGENT_TOOL_FQN = "mcp__kaoiro__send_to_agent";
+
+/** Companion tools that resolve peer names and self-identity. Both are
+ *  read-only / no-side-effect and meant for the wrapper's default
+ *  allowedTools (auto-allow, no broker dialog). */
+export const LIST_AGENTS_TOOL_FQN = "mcp__kaoiro__list_agents";
+export const WHOAMI_TOOL_FQN = "mcp__kaoiro__whoami";
 
 const KIND_VALUES = [
   "request",
@@ -103,7 +123,13 @@ const INPUT_SCHEMA = {
 };
 
 const TOOL_DESCRIPTION =
-  "Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass `conversation_id` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically.";
+  "Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass `conversation_id` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. The `to` field MUST be an exact agent_id — if you only know a peer by their display name, call `list_agents` first to resolve it; when several peers share a name, ask the operator which one to address.";
+
+const LIST_AGENTS_DESCRIPTION =
+  "List other kaoiro agents currently known to the server. Returns each peer's agent_id, persona (id/name/sprite_set), and current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected). Use this to resolve a peer's display name to an agent_id before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address.";
+
+const WHOAMI_DESCRIPTION =
+  "Return this agent's identity from the kaoiro server's perspective: agent_id, persona (id/name/sprite_set), current state, active model, permission_mode, fast_mode, session_id, and working directory. Fields that the SDK has not yet reported are omitted. Use this to confirm what the operator sees you as, or to self-narrate (e.g., when telling a peer who you are).";
 
 interface ConversationTrack {
   /** Highest turn_number observed so far in this conversation. */
@@ -116,6 +142,13 @@ export interface InterAgentToolOptions {
   getState: () => KaoiroState;
   /** Outbound envelope sink, normally ServerLink#send. */
   send: (envelope: Envelope) => void;
+  /** Peer directory provider, normally `ServerLink#requestDirectory` bound
+   *  to the wrapper's channel. Omitting it makes `list_agents` return an
+   *  error result (server not configured / local-only run). */
+  requestDirectory?: () => Promise<DirectoryEntry[]>;
+  /** Self-identity provider, normally `AgentHost#statusSnapshot`. Omitting
+   *  it makes `whoami` fall back to the wrapper config (no live SDK fields). */
+  getWhoami?: () => WhoamiSnapshot;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
   /** conversation_id source for new conversations; injectable for tests. */
@@ -149,7 +182,9 @@ export class InterAgentTool {
     this.#conversations.set(conversationId, track);
   }
 
-  /** Builds the SDK MCP server config to pass via Options.mcpServers. */
+  /** Builds the SDK MCP server config to pass via Options.mcpServers.
+   *  Registers three tools: `send_to_agent` (broker-gated), `list_agents`
+   *  (auto-allow, peer directory), `whoami` (auto-allow, self snapshot). */
   build(): McpSdkServerConfigWithInstance {
     return createSdkMcpServer({
       name: "kaoiro",
@@ -157,8 +192,50 @@ export class InterAgentTool {
         tool("send_to_agent", TOOL_DESCRIPTION, INPUT_SCHEMA, async (args) =>
           this.invoke(args),
         ),
+        tool("list_agents", LIST_AGENTS_DESCRIPTION, {}, async () =>
+          this.listAgents(),
+        ),
+        tool("whoami", WHOAMI_DESCRIPTION, {}, async () => this.whoami()),
       ],
     });
+  }
+
+  /** Fetches the peer directory via the configured provider. Returns the
+   *  JSON list as a tool-shaped text result so the model can read it. */
+  async listAgents(): Promise<InterAgentToolResult> {
+    const provider = this.#options.requestDirectory;
+    if (!provider) {
+      return errorResult(
+        "list_agents unavailable: wrapper is not connected to a server",
+      );
+    }
+    try {
+      const agents = await provider();
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ agents }, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      return errorResult(`list_agents failed: ${String(err)}`);
+    }
+  }
+
+  /** Returns this wrapper's identity snapshot. Falls back to the wrapper
+   *  config when no live host status provider is wired (e.g. early in
+   *  startup or in local-only mode). */
+  whoami(): InterAgentToolResult {
+    const snapshot = this.#options.getWhoami?.() ?? {
+      agent_id: this.#options.config.agent_id,
+      persona: this.#options.config.persona,
+      state: this.#options.getState(),
+    };
+    return {
+      content: [{ type: "text", text: JSON.stringify(snapshot, null, 2) }],
+    };
   }
 
   /** Direct entry point used by the SDK MCP handler and by tests. Validates
