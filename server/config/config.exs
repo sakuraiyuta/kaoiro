@@ -11,7 +11,17 @@ config :kaoiro_server,
   generators: [timestamp_type: :utc_datetime],
   # Static serving of the bundled dashboard (ADR-0007). Channels and the
   # public API stay on regardless.
-  serve_dashboard: true
+  serve_dashboard: true,
+  # Hard limits per inter-agent conversation (protocol-inter-agent spec,
+  # phase-8 Stage B). The server enforces these mechanically — quota
+  # overshoot automatically terminates the conversation with a synthetic
+  # escalate-to-user broadcast.
+  inter_agent: [
+    max_turns: 20,
+    max_tokens: 100_000,
+    max_wallclock_ms: 600_000,
+    max_concurrent_agents: 2
+  ]
 
 # Configure the endpoint
 config :kaoiro_server, KaoiroServerWeb.Endpoint,

@@ -25,6 +25,9 @@ defmodule KaoiroServer.Application do
       KaoiroServer.SessionPointers,
       # Restart-surviving per-agent permission_mode picks (#58).
       KaoiroServer.PermissionModes,
+      # Per-conversation hard limits for inter-agent messaging
+      # (protocol-inter-agent spec, phase-8 Stage B).
+      KaoiroServer.ConversationStates,
       # Start to serve requests, typically the last entry
       KaoiroServerWeb.Endpoint
     ]

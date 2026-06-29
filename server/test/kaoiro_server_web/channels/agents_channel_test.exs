@@ -578,6 +578,53 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "inter_agent_message の viewer 完全除去 (protocol-inter-agent, phase-8)" do
+    defp inter_agent_envelope(agent_id, to_id) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-29T00:00:00Z",
+        "type" => "inter_agent_message",
+        "state" => "tool_running",
+        "payload" => %{
+          "to" => to_id,
+          "conversation_id" => "cnv-acl-1",
+          "turn_number" => 1,
+          "kind" => "propose",
+          "body" => "ベンチ結果から CSV 出力で合意したい",
+          "meta" => %{"done" => false, "propose_next" => ""},
+          "owner" => %{"kind" => "user", "id" => "operator"}
+        },
+        "ext" => %{}
+      }
+    end
+
+    test "viewer には inter_agent_message を配信しない (fail-closed drop)" do
+      envelope = inter_agent_envelope("test.iam-vw-from", "test.iam-vw-to")
+      _socket = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+
+      refute_push "envelope", %{}
+    end
+
+    test "operator には inter_agent_message を payload ごと配信する" do
+      envelope = inter_agent_envelope("test.iam-op-from", "test.iam-op-to")
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+
+      assert_push "envelope",
+                  %{
+                    "type" => "inter_agent_message",
+                    "payload" => %{
+                      "kind" => "propose",
+                      "body" => "ベンチ結果から CSV 出力で合意したい"
+                    }
+                  }
+    end
+  end
+
   describe "history_reset の operator 限定配信 (issue #50, ADR-0021)" do
     test "operator は history_reset を受け取る" do
       agent_id = "test.reset-op"

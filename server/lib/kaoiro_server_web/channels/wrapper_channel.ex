@@ -17,10 +17,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
+  alias KaoiroServer.ConversationStates
   alias KaoiroServer.SessionPointers
   alias KaoiroServerWeb.AgentId
 
   @frame_keys ~w(version agent_id ts type state)
+  @inter_agent_kinds ~w(request response query inform propose accept reject escalate-to-user done)
 
   # Resource bound only; content/type refinement is Phase 1.5-4. Clients
   # must still treat all envelope strings as untrusted when rendering.
@@ -81,6 +83,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   @impl true
   def handle_in("envelope", envelope, socket) do
     with :ok <- validate(envelope, socket.assigns.agent_id),
+         :ok <- route_inter_agent(envelope, socket.assigns.agent_id),
          :ok <- store(envelope) do
       record_session_pointer(envelope)
       # The full envelope (incl. operator-only log/result tool I/O) goes onto
@@ -138,6 +141,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
     AgentStates.append_log(envelope)
   end
 
+  # inter_agent_message envelopes carry the sender's wrapper state on the
+  # outer frame (typically tool_running) but are NOT an authoritative state
+  # update — they only route + observe. Skip the store so the agent's actual
+  # latest state from state_change envelopes is not clobbered.
+  defp store(%{"type" => "inter_agent_message"}), do: :ok
+
   defp store(envelope), do: AgentStates.put(envelope, owner: self())
 
   # Persist the agent's latest SDK session_id as a restart-surviving
@@ -183,10 +192,153 @@ defmodule KaoiroServerWeb.WrapperChannel do
       :erlang.external_size(envelope) > @max_envelope_bytes ->
         {:error, "envelope too large"}
 
+      envelope["type"] == "inter_agent_message" ->
+        validate_inter_agent_payload(envelope["payload"])
+
       true ->
         :ok
     end
   end
 
   defp validate(_envelope, _agent_id), do: {:error, "envelope must be an object"}
+
+  # Routes an inter_agent_message envelope to the destination wrapper after
+  # checking per-conversation quotas (protocol-inter-agent spec). Other types
+  # pass through. On quota overshoot, synthesizes an escalate-to-user envelope
+  # for both participants and returns :ok so the original still broadcasts to
+  # the dashboard for full observability.
+  defp route_inter_agent(%{"type" => "inter_agent_message", "payload" => payload} = envelope, from) do
+    to = payload["to"]
+    cid = payload["conversation_id"]
+    body = payload["body"] || ""
+    done? = get_in(payload, ["meta", "done"]) == true
+
+    cond do
+      to == from ->
+        {:error, :self_routing}
+
+      not AgentStates.known?(to) ->
+        {:error, :unknown_agent}
+
+      true ->
+        case ConversationStates.record_message(cid, from, to, body, done?) do
+          # Within limits — relay to the destination wrapper. `:both_done`
+          # means every participating agent has now signalled done; the
+          # tracker has already dropped the entry atomically (spec MUST:
+          # 両 owner-side done で対話完了). No extra close needed.
+          ok when ok in [:ok, :both_done] ->
+            push_to_wrapper(to, envelope)
+            :ok
+
+          {:exceeded, reason} ->
+            push_to_wrapper(to, envelope)
+            broadcast_escalate(cid, from, to, reason)
+            :ok
+
+          # Cross-conversation pollution attempt or global cap reached:
+          # reject the envelope at the routing boundary so a third party
+          # cannot wipe the legitimate participants' counters by reusing
+          # their conversation_id, and so a malicious flood of fresh cids
+          # cannot grow the tracker without bound.
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp route_inter_agent(_envelope, _from), do: :ok
+
+  defp push_to_wrapper(to, envelope) do
+    KaoiroServerWeb.Endpoint.broadcast("wrapper:#{to}", "envelope", envelope)
+  end
+
+  # Synthesizes a server-derived escalate-to-user envelope (agent_id=server)
+  # so both wrappers and every operator dashboard see the auto-termination.
+  # The envelope is recipient-addressed: each side gets its own envelope with
+  # payload.to == that recipient so (a) any future receiver-side payload.to
+  # self-check works, and (b) the dashboard's transcript router (which keys
+  # on agent_id ∪ payload.to) populates both transcripts.
+  defp broadcast_escalate(cid, from, to, reason) do
+    ts = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    for recipient <- [from, to] do
+      envelope = synth_escalate_envelope(cid, recipient, reason, ts)
+      KaoiroServerWeb.Endpoint.broadcast("wrapper:#{recipient}", "envelope", envelope)
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+    end
+  end
+
+  defp synth_escalate_envelope(cid, recipient, reason, ts) do
+    %{
+      "version" => "0",
+      "agent_id" => "server",
+      # Synthesized server-side, no real persona — include a sentinel so the
+      # envelope frame stays consistent with the Envelope contract
+      # (protocol/src/index.ts; persona is a required frame field).
+      "persona" => %{"id" => "server", "name" => "server", "sprite_set" => "server"},
+      "ts" => ts,
+      "type" => "inter_agent_message",
+      "state" => "idle",
+      "payload" => %{
+        "to" => recipient,
+        "conversation_id" => cid,
+        "turn_number" => 0,
+        "kind" => "escalate-to-user",
+        "body" => "conversation auto-terminated: #{reason}",
+        "meta" => %{"done" => true, "propose_next" => ""},
+        "owner" => %{"kind" => "user", "id" => "system"}
+      },
+      "ext" => %{}
+    }
+  end
+
+  # Structural check on the inter-agent payload. The body text is left
+  # opaque per protocol-inter-agent spec; only the routing/quota fields
+  # need to be present and well-shaped.
+  defp validate_inter_agent_payload(%{} = payload) do
+    cond do
+      not is_binary(payload["to"]) or not AgentId.valid?(payload["to"]) ->
+        {:error, "invalid value: payload.to"}
+
+      not is_binary(payload["conversation_id"]) ->
+        {:error, "missing key: payload.conversation_id"}
+
+      not is_integer(payload["turn_number"]) ->
+        {:error, "missing key: payload.turn_number"}
+
+      payload["kind"] not in @inter_agent_kinds ->
+        {:error, "invalid value: payload.kind"}
+
+      not is_binary(payload["body"]) ->
+        {:error, "missing key: payload.body"}
+
+      not valid_inter_agent_meta?(payload["meta"], payload["kind"]) ->
+        {:error, "invalid value: payload.meta"}
+
+      not valid_inter_agent_owner?(payload["owner"]) ->
+        {:error, "invalid value: payload.owner"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_inter_agent_payload(_), do: {:error, "missing key: payload"}
+
+  defp valid_inter_agent_meta?(%{"done" => done, "propose_next" => pn} = meta, "reject")
+       when is_boolean(done) and is_binary(pn) do
+    is_binary(meta["reject_reason"]) and meta["reject_reason"] != ""
+  end
+
+  defp valid_inter_agent_meta?(%{"done" => done, "propose_next" => pn}, _kind)
+       when is_boolean(done) and is_binary(pn),
+       do: true
+
+  defp valid_inter_agent_meta?(_meta, _kind), do: false
+
+  defp valid_inter_agent_owner?(%{"kind" => kind, "id" => id})
+       when kind in ["user", "agent"] and is_binary(id),
+       do: true
+
+  defp valid_inter_agent_owner?(_), do: false
 end

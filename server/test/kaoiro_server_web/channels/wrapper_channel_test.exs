@@ -276,6 +276,238 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  describe "inter_agent_message ルーティング (protocol-inter-agent, phase-8)" do
+    defp inter_envelope(agent_id, to, opts \\ []) do
+      meta =
+        opts[:meta] ||
+          %{"done" => false, "propose_next" => ""}
+
+      payload = %{
+        "to" => to,
+        # Unique per call so the supervised ConversationStates (one instance
+        # for the whole describe block) cannot leak state between tests via a
+        # shared cid — that would surface as a false participants_mismatch.
+        "conversation_id" =>
+          opts[:cid] || "cnv-#{System.unique_integer([:positive])}",
+        "turn_number" => opts[:turn] || 1,
+        "kind" => opts[:kind] || "inform",
+        "body" => opts[:body] || "hi",
+        "meta" => meta,
+        "owner" => opts[:owner] || %{"kind" => "user", "id" => "operator"}
+      }
+
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-06-29T00:00:00Z",
+        "type" => "inter_agent_message",
+        "state" => "tool_running",
+        "payload" => payload,
+        "ext" => %{}
+      }
+    end
+
+    # 受信側エージェント(to)が known? に通るよう、まず state_change を投入して
+    # AgentStates に登録しておく。
+    defp seed_known(agent_id) do
+      socket = join_wrapper(agent_id)
+      ref = push(socket, "envelope", envelope(agent_id, "idle"))
+      assert_reply ref, :ok
+      socket
+    end
+
+    test "正常な inter_agent_message を wrapper:<to> へ broadcast し agents:lobby も流す" do
+      from_id = "test.iam-from"
+      to_id = "test.iam-to"
+      _to_socket = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      @endpoint.subscribe("wrapper:" <> to_id)
+      @endpoint.subscribe("agents:lobby")
+
+      env = inter_envelope(from_id, to_id)
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :ok
+
+      assert_broadcast "envelope", ^env
+      # ルーティング先(wrapper:<to>)にも同じ envelope が届く。
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^to_id,
+        event: "envelope",
+        payload: ^env
+      }
+      # inter_agent_message は state_change ではないので AgentStates の latest
+      # 状態(state)を上書きしない。
+      assert AgentStates.snapshot()[from_id]["state"] == "idle"
+    end
+
+    test "自己ルーティングは :self_routing で拒否する" do
+      from_id = "test.iam-self"
+      from_socket = seed_known(from_id)
+
+      env = inter_envelope(from_id, from_id)
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "self_routing"}
+    end
+
+    test "未知の to_agent は :unknown_agent で拒否する" do
+      from_id = "test.iam-unk-from"
+      from_socket = seed_known(from_id)
+
+      env = inter_envelope(from_id, "test.iam-unk-target")
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+
+    test "kind=reject で reject_reason 欠落の envelope を拒否する" do
+      from_id = "test.iam-reject"
+      to_id = "test.iam-reject-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env =
+        inter_envelope(from_id, to_id,
+          kind: "reject",
+          meta: %{"done" => false, "propose_next" => ""}
+        )
+
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "invalid value: payload.meta"}
+    end
+
+    test "kind=reject で reject_reason ありなら通す" do
+      from_id = "test.iam-reject-ok"
+      to_id = "test.iam-reject-ok-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env =
+        inter_envelope(from_id, to_id,
+          kind: "reject",
+          meta: %{
+            "done" => false,
+            "propose_next" => "",
+            "reject_reason" => "ベンチ未収束"
+          }
+        )
+
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :ok
+    end
+
+    test "未知の kind 値を拒否する" do
+      from_id = "test.iam-badkind"
+      to_id = "test.iam-badkind-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env = inter_envelope(from_id, to_id, kind: "shout")
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "invalid value: payload.kind"}
+    end
+
+    test "ConversationStates が :exceeded を返したら side ごとに正しい payload.to で escalate を流す" do
+      # default max_turns=20 を待たずに、テスト専用の conversation_id を直接
+      # ConversationStates へ過去ターン分仕込んでおき、20 ターン状態の続きから
+      # 21 通目を送ることで :exceeded を再現する。
+      from_id = "test.iam-quota-from"
+      to_id = "test.iam-quota-to"
+      cid = "cnv-quota-#{System.unique_integer([:positive])}"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      @endpoint.subscribe("wrapper:" <> from_id)
+      @endpoint.subscribe("wrapper:" <> to_id)
+
+      # 既定 max_turns=20 まで埋める (done=false で push)
+      for n <- 1..20 do
+        :ok =
+          KaoiroServer.ConversationStates.record_message(
+            cid,
+            from_id,
+            to_id,
+            "msg-#{n}",
+            false
+          )
+      end
+
+      # 21 通目で max_turns 超過 → 合成 escalate が両側に届く。
+      env = inter_envelope(from_id, to_id, cid: cid, turn: 21)
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :ok
+
+      # 合成 escalate は side ごとに payload.to がその recipient を指す。
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^from_id,
+        event: "envelope",
+        payload: %{
+          "agent_id" => "server",
+          "type" => "inter_agent_message",
+          "payload" => %{
+            "kind" => "escalate-to-user",
+            "to" => ^from_id,
+            "conversation_id" => ^cid
+          }
+        }
+      }
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^to_id,
+        event: "envelope",
+        payload: %{
+          "agent_id" => "server",
+          "payload" => %{
+            "kind" => "escalate-to-user",
+            "to" => ^to_id
+          }
+        }
+      }
+    end
+
+    test "片側のみ done=true ではエントリは閉じない (両 owner-side 同意要件)" do
+      from_id = "test.iam-onedone-a"
+      to_id = "test.iam-onedone-b"
+      cid = "cnv-onedone-#{System.unique_integer([:positive])}"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      meta_done = %{"done" => true, "propose_next" => ""}
+      env = inter_envelope(from_id, to_id, cid: cid, meta: meta_done)
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :ok
+
+      # done_by に from のみ。エントリは残存。
+      assert %{done_by: done_by} =
+               KaoiroServer.ConversationStates.get(cid)
+
+      assert MapSet.equal?(done_by, MapSet.new([from_id]))
+    end
+
+    test "第三者が既存 cid を流用すると participants_mismatch エラーで拒否" do
+      a_id = "test.iam-poll-a"
+      b_id = "test.iam-poll-b"
+      c_id = "test.iam-poll-c"
+      cid = "cnv-poll-#{System.unique_integer([:positive])}"
+      _ = seed_known(b_id)
+      a_socket = seed_known(a_id)
+      c_socket = seed_known(c_id)
+
+      # a→b で正規エントリを確立
+      env_ab = inter_envelope(a_id, b_id, cid: cid)
+      ref = push(a_socket, "envelope", env_ab)
+      assert_reply ref, :ok
+
+      # c が同じ cid を流用 → 拒否
+      env_cb = inter_envelope(c_id, b_id, cid: cid)
+      ref = push(c_socket, "envelope", env_cb)
+      assert_reply ref, :error, %{reason: "participants_mismatch"}
+
+      # 正規エントリは無傷
+      assert %{turns: 1} = KaoiroServer.ConversationStates.get(cid)
+    end
+  end
+
   describe "切断時の disconnected 導出" do
     test "channel 終了で disconnected を broadcast し snapshot を更新する" do
       agent_id = "test.disc-1"

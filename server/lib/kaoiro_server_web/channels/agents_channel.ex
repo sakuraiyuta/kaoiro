@@ -690,6 +690,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
      |> Map.delete("ext")}
   end
 
+  # inter_agent_message is operator-only by spec (protocol-inter-agent);
+  # listed explicitly for symmetry with the other typed clauses, even though
+  # the fail-closed catch-all below would already drop it.
+  defp sanitize_envelope_for(:viewer, %{"type" => "inter_agent_message"}), do: :drop
+
   defp sanitize_envelope_for(:viewer, _envelope), do: :drop
 
   @doc """
