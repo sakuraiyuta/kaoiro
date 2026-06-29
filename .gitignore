@@ -34,3 +34,6 @@ node_modules/
 /assets-work/
 
 agent.*.json
+
+# Local dev scratch (scripts/dev.sh writes server/dashboard/runner logs here)
+/tmp/

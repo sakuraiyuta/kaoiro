@@ -53,19 +53,39 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+# Persist each component's stdout/stderr to tmp/dev-logs/<name>.log while
+# still printing live to the terminal (tee). Logs are truncated on each run
+# so the file always holds the current session; the previous one is kept as
+# <name>.log.prev for one-step recovery after Ctrl-C. The whole directory is
+# gitignored under /tmp/.
+logdir="$root/tmp/dev-logs"
+mkdir -p "$logdir"
+rotate_log() {
+  local name="$1"
+  local f="$logdir/$name.log"
+  [[ -f "$f" ]] && mv -f "$f" "$f.prev"
+  : >"$f"
+  printf 'dev-log %s started at %s\n' "$name" "$(date '+%Y-%m-%d %H:%M:%S')" >>"$f"
+}
+for name in server dashboard runner; do rotate_log "$name"; done
+
 # Under `set -m` each background job is its own process group; a TTY read
 # (mix's Hex/rebar install prompt, or the BEAM's shell init) raises SIGTTIN
 # and stops the job. Redirect stdin from /dev/null so nothing reads the
 # terminal; phx.server keeps serving on EOF (it runs with --no-halt).
+# `| tee -a` duplicates the output to the per-component log file while
+# keeping the live terminal view; the pipeline is one job (one PG) so the
+# existing kill -TERM -<pgid> tears tee down too.
 ( cd "$root/server" && mix deps.get && mix deps.compile &&
-  exec mix phx.server ) </dev/null &
+  exec mix phx.server ) </dev/null 2>&1 | tee -a "$logdir/server.log" &
 pids+=("$!")
 
 # pnpm install AND pnpm dev get </dev/null: Vite was observed stuck in
 # State T (SIGSTOP) on WSL2 when its stdin was still bound to the TTY;
 # SIGCONT could not revive the process group, only a full stack restart
 # did. Cutting the TTY input path here removes the SIGTTIN trigger.
-( cd "$root/server/assets" && pnpm install </dev/null && exec pnpm dev ) </dev/null &
+( cd "$root/server/assets" && pnpm install </dev/null && exec pnpm dev ) \
+  </dev/null 2>&1 | tee -a "$logdir/dashboard.log" &
 pids+=("$!")
 
 # Runner config: generate a localhost default on first run (gitignored). Edit
@@ -95,11 +115,12 @@ fi
 # wrapper and installs the wrapper deps tsx runs the agent against.
 ( cd "$root/runner" && pnpm install </dev/null &&
   KAOIRO_WRAPPER_DEV=1 exec pnpm exec tsx watch src/cli.ts runner.config.json
-) </dev/null &
+) </dev/null 2>&1 | tee -a "$logdir/runner.log" &
 pids+=("$!")
 
 echo "dev: server :4000  |  dashboard :5173 (Vite HMR)  |  runner watching (spawns hot-reloaded wrappers)"
 echo "dev: open http://localhost:5173/?token=<KAOIRO_CLIENT_TOKENS token> and launch agents via「+ 起動」"
 echo "dev: set KAOIRO_WRAPPER_TOKENS in server/.env to exercise the signed-token auth path"
+echo "dev: logs -> $logdir/{server,dashboard,runner}.log (prev run kept as *.log.prev)"
 echo "dev: Ctrl-C stops the whole stack"
 wait
