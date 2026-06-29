@@ -3,6 +3,7 @@ title: kaoiro デザイン方針
 description: ダッシュボード/UI の視覚デザイン仕様。DESIGN.md フォーマット (YAML トークン + 散文) で記述し、既存実装 (server/assets/src/) を canonical source として追認する。
 status: accepted
 related: [overview, personas, protocol]
+format: stitch-design-md
 version: alpha
 name: kaoiro Dashboard
 colors:
