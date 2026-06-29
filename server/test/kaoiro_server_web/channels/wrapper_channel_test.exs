@@ -508,6 +508,91 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  describe "directory_request (protocol-inter-agent コンパニオンツール)" do
+    test "自分以外の agent を {agent_id, persona, state} で返す" do
+      self_id = "test.dir-self"
+      peer_id = "test.dir-peer"
+
+      # peer を先に登録 (seed_known と同じ要領で state_change を流す)
+      peer_socket = join_wrapper(peer_id)
+
+      peer_env =
+        envelope(peer_id, "thinking")
+        |> Map.put("persona", %{
+          "id" => "ao",
+          "name" => "あお",
+          "sprite_set" => "ao"
+        })
+
+      ref = push(peer_socket, "envelope", peer_env)
+      assert_reply ref, :ok
+
+      self_socket = join_wrapper(self_id)
+      ref = push(self_socket, "envelope", envelope(self_id, "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+
+      assert_reply ref, :ok, %{"agents" => agents}
+      assert is_list(agents)
+
+      # 自分を除外して peer のみが返る
+      assert Enum.any?(agents, fn a ->
+               a["agent_id"] == peer_id and
+                 a["persona"]["name"] == "あお" and
+                 a["state"] == "thinking"
+             end)
+
+      refute Enum.any?(agents, fn a -> a["agent_id"] == self_id end)
+    end
+
+    test "他 agent が居ない場合は空リストで応答" do
+      socket = join_wrapper("test.dir-lonely")
+      ref = push(socket, "envelope", envelope("test.dir-lonely", "idle"))
+      assert_reply ref, :ok
+
+      ref = push(socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      refute Enum.any?(agents, fn a -> a["agent_id"] == "test.dir-lonely" end)
+    end
+
+    test "persona フィールドは id/name/sprite_set のみで cwd 等を含まない" do
+      peer_id = "test.dir-strip-peer"
+      peer_socket = join_wrapper(peer_id)
+
+      env =
+        envelope(peer_id, "tool_running")
+        |> Map.put("persona", %{
+          "id" => "kuroe",
+          "name" => "クロエ",
+          "sprite_set" => "kuroe"
+        })
+        |> Map.put("ext", %{"cwd" => "/secret/path", "model" => "claude"})
+
+      ref = push(peer_socket, "envelope", env)
+      assert_reply ref, :ok
+
+      self_socket = join_wrapper("test.dir-strip-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-strip-self", "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, fn a -> a["agent_id"] == peer_id end)
+      assert entry["persona"] == %{
+               "id" => "kuroe",
+               "name" => "クロエ",
+               "sprite_set" => "kuroe"
+             }
+
+      # cwd や model のような operator-grade フィールドは含まれない
+      refute Map.has_key?(entry, "ext")
+      refute Map.has_key?(entry, "cwd")
+    end
+  end
+
   describe "切断時の disconnected 導出" do
     test "channel 終了で disconnected を broadcast し snapshot を更新する" do
       agent_id = "test.disc-1"

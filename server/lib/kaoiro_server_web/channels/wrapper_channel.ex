@@ -109,6 +109,25 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
+  # Peer directory request (protocol-inter-agent, phase-8 companion tool).
+  # The wrapper's `mcp__kaoiro__list_agents` tool calls this to resolve
+  # persona names → agent_ids before send_to_agent. Reply carries every
+  # currently-known agent EXCEPT the requester, with the minimum needed for
+  # routing decisions: agent_id / persona id+name+sprite_set / current state.
+  # Other ext fields (cwd / model / context) are operator-grade info and stay
+  # excluded — wrappers only need enough to resolve a name.
+  @impl true
+  def handle_in("directory_request", _payload, socket) do
+    self_id = socket.assigns.agent_id
+
+    agents =
+      AgentStates.snapshot()
+      |> Enum.reject(fn {id, _} -> id == self_id end)
+      |> Enum.map(fn {id, env} -> directory_entry(id, env) end)
+
+    {:reply, {:ok, %{"agents" => agents}}, socket}
+  end
+
   # Resume history reconstruction (ADR-0014 phase-2, issue #50): the wrapper
   # is about to replay its JSONL-derived transcript as `log` envelopes, so it
   # first asks the server to drop the agent's current ring buffer (overwrite,
@@ -148,6 +167,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp store(%{"type" => "inter_agent_message"}), do: :ok
 
   defp store(envelope), do: AgentStates.put(envelope, owner: self())
+
+  defp directory_entry(id, envelope) do
+    persona =
+      case envelope do
+        %{"persona" => %{} = p} -> Map.take(p, ["id", "name", "sprite_set"])
+        _ -> %{}
+      end
+
+    state =
+      case envelope do
+        %{"state" => s} when is_binary(s) -> s
+        _ -> "idle"
+      end
+
+    %{"agent_id" => id, "persona" => persona, "state" => state}
+  end
 
   # Persist the agent's latest SDK session_id as a restart-surviving
   # pointer (ADR-0014 F1, issue #49). Only fires once the wrapper has
@@ -300,17 +335,26 @@ defmodule KaoiroServerWeb.WrapperChannel do
       not is_binary(payload["to"]) or not AgentId.valid?(payload["to"]) ->
         {:error, "invalid value: payload.to"}
 
-      not is_binary(payload["conversation_id"]) ->
+      not Map.has_key?(payload, "conversation_id") ->
         {:error, "missing key: payload.conversation_id"}
 
-      not is_integer(payload["turn_number"]) ->
+      not is_binary(payload["conversation_id"]) ->
+        {:error, "invalid value: payload.conversation_id"}
+
+      not Map.has_key?(payload, "turn_number") ->
         {:error, "missing key: payload.turn_number"}
+
+      not is_integer(payload["turn_number"]) ->
+        {:error, "invalid value: payload.turn_number"}
 
       payload["kind"] not in @inter_agent_kinds ->
         {:error, "invalid value: payload.kind"}
 
-      not is_binary(payload["body"]) ->
+      not Map.has_key?(payload, "body") ->
         {:error, "missing key: payload.body"}
+
+      not is_binary(payload["body"]) ->
+        {:error, "invalid value: payload.body"}
 
       not valid_inter_agent_meta?(payload["meta"], payload["kind"]) ->
         {:error, "invalid value: payload.meta"}
