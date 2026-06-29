@@ -10,6 +10,7 @@
 | [architecture](architecture.md) | accepted | 3層構成とデータフロー |
 | [plugin-model](plugin-model.md) | accepted | アダプタ/フィルタ2拡張点と共通境界 |
 | [protocol](protocol.md) | accepted | 共通イベント・エンベロープ/状態機械/ペルソナ/双方向・認証 |
+| [protocol-inter-agent](protocol-inter-agent.md) | provisional | エージェント間メッセージング envelope schema・9 種 kind・ハード制限 |
 | [agent-sdk-events](agent-sdk-events.md) | accepted | Agent SDK の確定イベント仕様と状態導出 |
 | [subagent-tasks](subagent-tasks.md) | provisional | subagent/workflow タスクの検知と専用 envelope 通知 |
 | [file-upload](file-upload.md) | provisional | ダッシュボードからの添付(画像/テキスト/PDF/Office)を wrapper で SDK へ render |
