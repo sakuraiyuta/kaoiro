@@ -139,8 +139,25 @@
           // Reply lines feed the transcript; state envelopes update the
           // latest-state map that drives the grid faces.
           if (isReplyEnvelope(envelope)) {
-            const prev = logs[envelope.agent_id] ?? [];
-            logs = { ...logs, [envelope.agent_id]: [...prev, envelope] };
+            // inter_agent_message lands in BOTH the sender's and receiver's
+            // transcript (protocol-inter-agent spec) so each agent's detail
+            // view shows the full conversation. Operator-only — viewers
+            // never receive these envelopes (sanitize_envelope_for drops
+            // them at the channel boundary).
+            const targets = new Set<string>([envelope.agent_id]);
+            if (envelope.type === "inter_agent_message") {
+              const to = (envelope.payload as { to?: unknown } | undefined)?.to;
+              if (typeof to === "string" && to !== "") targets.add(to);
+              // Server-synthesized escalates carry agent_id="server" with no
+              // grid slot of their own; drop the synthetic sender so it does
+              // not accumulate a phantom logs["server"] transcript.
+              if (envelope.agent_id === "server") targets.delete("server");
+            }
+            const next = { ...logs };
+            for (const id of targets) {
+              next[id] = [...(next[id] ?? []), envelope];
+            }
+            logs = next;
           } else {
             const prevState = agents[envelope.agent_id]?.state;
             agents = { ...agents, [envelope.agent_id]: envelope };

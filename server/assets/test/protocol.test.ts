@@ -4,6 +4,7 @@ import {
   buildChunkPayload,
   fetchPersonaManifest,
   hostIdFromAgentId,
+  interAgentMessageOf,
   isReplyEnvelope,
   logOf,
   modelsFrom,
@@ -196,11 +197,49 @@ describe("logOf / resultOf / isReplyEnvelope", () => {
     expect(resultOf(log)).toBeNull();
   });
 
-  it("isReplyEnvelope は log/result のみ true", () => {
+  it("isReplyEnvelope は log/result/inter_agent_message が true", () => {
     expect(isReplyEnvelope(log)).toBe(true);
     expect(isReplyEnvelope({ ...log, type: "result" })).toBe(true);
+    expect(isReplyEnvelope({ ...log, type: "inter_agent_message" })).toBe(true);
     expect(isReplyEnvelope({ ...log, type: "state_change" })).toBe(false);
     expect(isReplyEnvelope({ ...log, type: "permission_request" })).toBe(false);
+  });
+});
+
+describe("interAgentMessageOf (protocol-inter-agent, phase-8)", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "agent-a",
+    ts: "2026-06-29T00:00:00Z",
+    type: "inter_agent_message",
+    state: "tool_running",
+  };
+
+  it("to/kind/body を備えた inter_agent_message を返す", () => {
+    const env: Envelope = {
+      ...base,
+      payload: {
+        to: "agent-b",
+        conversation_id: "cnv-1",
+        turn_number: 2,
+        kind: "propose",
+        body: "CSV にしよう",
+        meta: { done: false, propose_next: "B の意見" },
+        owner: { kind: "user", id: "operator" },
+      },
+    };
+    const out = interAgentMessageOf(env);
+    expect(out?.to).toBe("agent-b");
+    expect(out?.kind).toBe("propose");
+    expect(out?.body).toBe("CSV にしよう");
+  });
+
+  it("型違いの envelope や payload 欠落は null", () => {
+    expect(interAgentMessageOf({ ...base, type: "log" })).toBeNull();
+    expect(interAgentMessageOf({ ...base, payload: undefined })).toBeNull();
+    expect(
+      interAgentMessageOf({ ...base, payload: { to: "b", kind: "propose" } }),
+    ).toBeNull();
   });
 });
 

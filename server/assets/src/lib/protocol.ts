@@ -198,10 +198,68 @@ export function resultOf(envelope: Envelope): ResultPayload | null {
   return (envelope.payload ?? {}) as ResultPayload;
 }
 
+/** payload of a type="inter_agent_message" envelope (protocol-inter-agent
+ *  spec, phase-8). The sender is the surrounding envelope's agent_id; `to` is
+ *  the destination agent_id. Both sides' transcripts hold the same envelope —
+ *  the rendering decides direction by comparing agent_id against the viewer's
+ *  selected agent. */
+export interface InterAgentMessagePayload {
+  to: string;
+  conversation_id: string;
+  turn_number: number;
+  kind:
+    | "request"
+    | "response"
+    | "query"
+    | "inform"
+    | "propose"
+    | "accept"
+    | "reject"
+    | "escalate-to-user"
+    | "done";
+  body: string;
+  meta: {
+    done: boolean;
+    propose_next: string;
+    confidence?: number;
+    reject_reason?: string;
+  };
+  owner: { kind: "user" | "agent"; id: string };
+}
+
+/** Narrows an inter_agent_message envelope's payload, or null otherwise.
+ *  Tolerant of the server-synthesized escalate skeleton (e.g. turn_number=0).
+ *  The minimal structural check now covers `to`, `kind`, `body`, AND
+ *  `conversation_id` — the AgentDetail template dereferences
+ *  conversation_id.slice(...) without a guard, so a malformed payload must
+ *  return null here rather than reach the renderer. */
+export function interAgentMessageOf(
+  envelope: Envelope,
+): InterAgentMessagePayload | null {
+  if (envelope.type !== "inter_agent_message") return null;
+  const payload = envelope.payload as Partial<InterAgentMessagePayload> | undefined;
+  if (
+    !payload ||
+    typeof payload.to !== "string" ||
+    typeof payload.kind !== "string" ||
+    typeof payload.body !== "string" ||
+    typeof payload.conversation_id !== "string"
+  ) {
+    return null;
+  }
+  return payload as InterAgentMessagePayload;
+}
+
 /** True for reply-stream envelopes (operator-only, ADR-0012): these go
- *  to the per-agent transcript, not the latest-state map. */
+ *  to the per-agent transcript, not the latest-state map.
+ *  inter_agent_message also appears in the transcript on both the sender
+ *  and the receiver side (protocol-inter-agent spec). */
 export function isReplyEnvelope(envelope: Envelope): boolean {
-  return envelope.type === "log" || envelope.type === "result";
+  return (
+    envelope.type === "log" ||
+    envelope.type === "result" ||
+    envelope.type === "inter_agent_message"
+  );
 }
 
 /** States where the agent is executing and an interrupt (ESC equivalent,

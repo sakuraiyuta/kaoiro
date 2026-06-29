@@ -4,6 +4,7 @@
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
   import {
+    interAgentMessageOf,
     logOf,
     modelsFrom,
     pendingPermissionFrom,
@@ -1188,12 +1189,37 @@
         {#each logs as env, i (env.ts + ":" + (env.seq ?? i))}
           {@const log = logOf(env)}
           {@const res = resultOf(env)}
+          {@const iam = interAgentMessageOf(env)}
           {@const time = formatTime(env.ts)}
           {@const dateLabel = dayDividers.get(i)}
           {#if dateLabel}
             <div class="day-divider"><span>{dateLabel}</span></div>
           {/if}
-          {#if log?.kind === "user"}
+          {#if iam}
+            <!-- inter_agent_message (protocol-inter-agent, phase-8): the same
+                 envelope rides on both sender and receiver transcripts; the
+                 direction is decided here against the viewer's selected agent.
+                 Body is untrusted text — render through DOMPurify (#30) via
+                 renderMarkdown so a malicious agent cannot inject HTML. -->
+            {@const outgoing = env.agent_id === envelope.agent_id}
+            {@const peer = outgoing ? iam.to : env.agent_id}
+            <div class="msg inter-agent" data-kind={iam.kind} data-cid={iam.conversation_id}>
+              <p class="inter-agent-head">
+                {#if outgoing}
+                  <span class="arrow" aria-hidden="true">→</span>
+                  to <code>{peer}</code>
+                {:else}
+                  <span class="arrow" aria-hidden="true">←</span>
+                  from <code>{peer}</code>
+                {/if}
+                <span class="kind">{iam.kind}</span>
+                <span class="cid" title="conversation_id">cid:{iam.conversation_id.slice(0, 8)}</span>
+                <span class="turn">t{iam.turn_number}</span>
+              </p>
+              {@html renderMarkdown(iam.body)}
+              <time class="ts" datetime={env.ts}>{time}</time>
+            </div>
+          {:else if log?.kind === "user"}
             <!-- Untrusted: renderMarkdown sanitizes via DOMPurify (#30). -->
             <div class="msg user">
               {@html renderMarkdown(log.text ?? "")}
@@ -2160,6 +2186,45 @@
     background: color-mix(in srgb, var(--c-waiting_input) 14%, var(--bg-card));
     border: 1px solid var(--c-waiting_input);
     color: var(--fg);
+  }
+
+  /* Inter-agent message bubble (protocol-inter-agent, phase-8): a tinted
+     border + small header line carrying direction (→ to / ← from), kind,
+     short conversation_id, and turn number so the operator can follow a
+     multi-turn discussion across both transcripts. */
+  .msg.inter-agent {
+    background: color-mix(in srgb, var(--c-tool_running) 10%, var(--bg-card));
+    border: 1px solid var(--c-tool_running);
+    color: var(--fg);
+  }
+
+  .inter-agent-head {
+    margin: 0 0 0.3rem;
+    font-size: var(--fs-metadata);
+    color: var(--fg-dim);
+    letter-spacing: 0.02em;
+  }
+
+  .inter-agent-head .arrow {
+    font-weight: 700;
+    margin-right: 0.2em;
+    color: var(--c-tool_running);
+  }
+
+  .inter-agent-head .kind {
+    margin-left: 0.6em;
+    padding: 0 0.4em;
+    border: 1px solid var(--line);
+    border-radius: 0.3em;
+    text-transform: uppercase;
+    font-size: var(--fs-caption);
+  }
+
+  .inter-agent-head .cid,
+  .inter-agent-head .turn {
+    margin-left: 0.5em;
+    font-variant-numeric: tabular-nums;
+    font-size: var(--fs-caption);
   }
 
   .turn-end {
