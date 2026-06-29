@@ -4,6 +4,7 @@
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
   import {
+    formatAgentLabel,
     interAgentMessageOf,
     logOf,
     modelsFrom,
@@ -26,6 +27,7 @@
     manifest = null,
     origin = null,
     onClose,
+    onSelectAgent,
   }: {
     envelope: Envelope;
     logs?: Envelope[];
@@ -35,6 +37,10 @@
     /** Viewport centre of the originating tile, for the expand anim (#36). */
     origin?: { x: number; y: number } | null;
     onClose: () => void;
+    /** Switch the detail view to another agent (clicked peer link in an
+     *  inter-agent message bubble). Omitted = peer name renders as static
+     *  text, no navigation. */
+    onSelectAgent?: (agentId: string) => void;
   } = $props();
 
   // Expand the detail from the tile that opened it (#36): scale up from the
@@ -961,6 +967,9 @@
           {#key display.shown}
             <p class="state">{expression.label}</p>
           {/key}
+          <!-- name は h2 で既出なので、 id ペインは bare id のままにする
+               (name(id) の二重表示は冗長)。一方 inter-agent bubble の peer
+               は name(id) 表記でクリック可能、 spawn トーストも name(id)。 -->
           <p class="id">{envelope.agent_id}</p>
         </div>
       </header>
@@ -1215,10 +1224,20 @@
               <p class="inter-agent-head">
                 {#if outgoing}
                   <span class="arrow" aria-hidden="true">→</span>
-                  to <code>{peer}</code>
+                  to
                 {:else}
                   <span class="arrow" aria-hidden="true">←</span>
-                  from <code>{peer}</code>
+                  from
+                {/if}
+                {#if onSelectAgent && peer !== "server"}
+                  <button
+                    type="button"
+                    class="peer-link"
+                    title="{peer} の詳細を開く"
+                    onclick={() => onSelectAgent?.(peer)}
+                  >{formatAgentLabel(agents, peer)}</button>
+                {:else}
+                  <code>{formatAgentLabel(agents, peer)}</code>
                 {/if}
                 <span class="kind">{iam.kind}</span>
                 <span class="cid" title="conversation_id">cid:{iam.conversation_id.slice(0, 8)}</span>
@@ -2228,6 +2247,26 @@
     font-weight: 700;
     margin-right: 0.2em;
     color: var(--iam-tone);
+  }
+
+  /* Peer name in the inter-agent bubble header (name(id) + clickable).
+     Styled like an inline link so the operator can tell it's interactive
+     without a heavy button look. */
+  .inter-agent-head .peer-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--iam-tone);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    cursor: pointer;
+  }
+
+  .inter-agent-head .peer-link:hover,
+  .inter-agent-head .peer-link:focus-visible {
+    text-decoration-style: solid;
+    outline: none;
   }
 
   .inter-agent-head .kind {

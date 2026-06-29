@@ -17,6 +17,7 @@
     connectKaoiro,
     defaultSocketUrl,
     fetchPersonaManifest,
+    formatAgentLabel,
     isReplyEnvelope,
   } from "./lib/protocol";
   import {
@@ -47,6 +48,12 @@
   let showLaunch = $state(false);
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+  // spawn の immediate reply は新 agent が state_change を出す前に届くため、
+  // 文字列を showNotice で固定すると label が永久に bare id のまま (#).
+  // SpawnResult をそのまま保持して spawnResultText を $derived 化、 agents
+  // の更新で label が自然に追従するようにする。
+  let pendingSpawnResult = $state<SpawnResult | null>(null);
+  let pendingSpawnTimer: ReturnType<typeof setTimeout> | undefined;
   // Latest resume candidates from enumerate_sessions (#22 phase-1); the
   // dialog matches them to its current host/cwd selection.
   let runnerSessions = $state<RunnerSessions | null>(null);
@@ -60,12 +67,25 @@
   }
 
   function notifySpawn(result: SpawnResult): void {
-    showNotice(
-      result.ok
-        ? `起動しました: ${result.agent_id}`
-        : `起動に失敗: ${result.agent_id} (${result.reason ?? "error"})`,
-    );
+    // 文字列ではなく結果オブジェクトを $state に持たせて、 表示文字列は
+    // spawnNoticeText が $derived で agents 更新に追従する形にする (#)。
+    pendingSpawnResult = result;
+    clearTimeout(pendingSpawnTimer);
+    pendingSpawnTimer = setTimeout(() => (pendingSpawnResult = null), 6000);
   }
+
+  // 表示用の単一窓口 — spawn 結果と汎用 notice を統合し、 spawn 結果は
+  // agents の更新で label が自然に解決される。 spawn 結果が優先 (操作員の
+  // アクションへの直接応答なので)。
+  const spawnNoticeText = $derived.by<string | null>(() => {
+    if (pendingSpawnResult !== null) {
+      const label = formatAgentLabel(agents, pendingSpawnResult.agent_id);
+      return pendingSpawnResult.ok
+        ? `起動しました: ${label}`
+        : `起動に失敗: ${label} (${pendingSpawnResult.reason ?? "error"})`;
+    }
+    return spawnNotice;
+  });
 
   // Surface a control-command failure (stop / restore) that the grid buttons
   // would otherwise only console.warn (#22). `label` names the action.
@@ -460,8 +480,8 @@
   </div>
 </header>
 
-{#if spawnNotice}
-  <p class="spawn-notice" role="status">{spawnNotice}</p>
+{#if spawnNoticeText}
+  <p class="spawn-notice" role="status">{spawnNoticeText}</p>
 {/if}
 
 {#if showLaunch && connection}
@@ -483,6 +503,16 @@
       {manifest}
       {origin}
       onClose={() => (selected = null)}
+      onSelectAgent={(id) => {
+        // Inter-agent bubble の peer ボタンから呼ばれる。 origin はタイルの
+        // 中心ではなく detail 内クリック由来なので null に倒し、 既存の
+        // expand-from-origin アニメは省略 (相手が既知 agent ならグリッドで
+        // 再選択した時と同じ素直な切替えが得られる)。
+        if (agents[id]) {
+          origin = null;
+          selected = id;
+        }
+      }}
     />
   {:else if sorted.length === 0}
     <p class="empty">

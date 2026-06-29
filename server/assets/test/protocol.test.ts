@@ -3,6 +3,7 @@ import {
   ATTACH_CHUNK_SIZE,
   buildChunkPayload,
   fetchPersonaManifest,
+  formatAgentLabel,
   hostIdFromAgentId,
   interAgentMessageOf,
   isReplyEnvelope,
@@ -348,5 +349,51 @@ describe("buildChunkPayload (ファイルアップロード wire, ADR-0025)", ()
 
   it("ATTACH_CHUNK_SIZE は spec 推奨の 64 KB", () => {
     expect(ATTACH_CHUNK_SIZE).toBe(64 * 1024);
+  });
+});
+
+describe("formatAgentLabel (name(id) helper)", () => {
+  const persona = { id: "ao", name: "あお", sprite_set: "ao" };
+  function makeEnvelope(id: string, name?: string): Envelope {
+    return {
+      version: "0",
+      agent_id: id,
+      ts: "2026-06-29T00:00:00Z",
+      type: "state_change",
+      state: "idle",
+      ...(name !== undefined ? { persona: { ...persona, name } } : {}),
+    };
+  }
+
+  it("persona.name と id が揃っていれば name(id) 形式", () => {
+    const agents = { "lab.alpha": makeEnvelope("lab.alpha", "あお") };
+    expect(formatAgentLabel(agents, "lab.alpha")).toBe("あお(lab.alpha)");
+  });
+
+  it("persona 未登録の id は bare id を返す", () => {
+    expect(formatAgentLabel({}, "lab.unknown")).toBe("lab.unknown");
+  });
+
+  it("name が無い envelope は bare id を返す", () => {
+    const agents = {
+      "lab.beta": {
+        version: "0",
+        agent_id: "lab.beta",
+        ts: "x",
+        type: "state_change",
+        state: "idle",
+      } as Envelope,
+    };
+    expect(formatAgentLabel(agents, "lab.beta")).toBe("lab.beta");
+  });
+
+  it("synthetic server sender は server だけを返す", () => {
+    expect(formatAgentLabel({}, "server")).toBe("server");
+  });
+
+  it("name が id と同一の冗長ケースは name 単体に畳む", () => {
+    const id = "lab.same";
+    const agents = { [id]: makeEnvelope(id, id) };
+    expect(formatAgentLabel(agents, id)).toBe(id);
   });
 });

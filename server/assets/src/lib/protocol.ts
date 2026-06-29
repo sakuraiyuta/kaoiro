@@ -227,6 +227,21 @@ export interface InterAgentMessagePayload {
   owner: { kind: "user" | "agent"; id: string };
 }
 
+/** Formats an agent for human display as `<name>(<id>)`. When the agent is
+ *  not in the snapshot (e.g. just disconnected and pruned) or has no
+ *  persona name, falls back to the bare id. The synthetic `server` sender
+ *  used for auto-termination escalates collapses to just `server` since
+ *  there is no separate id/name to disambiguate. */
+export function formatAgentLabel(
+  agents: Record<string, Envelope>,
+  id: string,
+): string {
+  if (id === "server") return "server";
+  const name = agents[id]?.persona?.name;
+  if (!name || name === id) return id;
+  return `${name}(${id})`;
+}
+
 /** Narrows an inter_agent_message envelope's payload, or null otherwise.
  *  Tolerant of the server-synthesized escalate skeleton (e.g. turn_number=0).
  *  The minimal structural check now covers `to`, `kind`, `body`, AND
