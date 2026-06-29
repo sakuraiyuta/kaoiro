@@ -249,7 +249,7 @@
 
   h2 {
     margin: 0 0 1rem;
-    font-size: 0.95rem;
+    font-size: var(--fs-h2);
     color: var(--fg);
   }
 
@@ -267,7 +267,7 @@
   .tabs button {
     flex: 1;
     padding: 0.35rem;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     color: var(--fg-dim);
     background: var(--bg);
     border: 1px solid var(--line);
@@ -284,7 +284,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
-    font-size: 0.78rem;
+    font-size: var(--fs-body-sm);
     color: var(--fg-dim);
   }
 
@@ -292,7 +292,7 @@
   textarea,
   input {
     padding: 0.5rem 0.6rem;
-    font-size: 0.85rem;
+    font-size: var(--fs-input);
     color: var(--fg);
     background: var(--bg);
     border: 1px solid var(--line);
@@ -306,13 +306,13 @@
 
   .note {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     color: var(--fg-dim);
   }
 
   .error {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     color: var(--c-error);
   }
 
@@ -325,7 +325,7 @@
 
   button {
     padding: 0.45rem 0.9rem;
-    font-size: 0.82rem;
+    font-size: var(--fs-body);
     color: var(--fg);
     background: var(--bg-card);
     border: 1px solid var(--line);

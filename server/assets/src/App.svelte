@@ -524,7 +524,7 @@
 
   h1 {
     margin: 0;
-    font-size: 1.05rem;
+    font-size: var(--fs-h1);
     letter-spacing: 0.35em;
     text-transform: lowercase;
     color: var(--fg);
@@ -535,12 +535,12 @@
     margin-left: 0.6em;
     letter-spacing: 0;
     color: var(--fg-dim);
-    font-size: 0.8em;
+    font-size: 0.8em; /* em-relative to parent h1; do not tokenize */
   }
 
   .conn {
     margin: 0;
-    font-size: 0.75rem;
+    font-size: var(--fs-body-sm);
     color: var(--fg-dim);
   }
 
@@ -685,7 +685,7 @@
     margin-top: 3rem;
     text-align: center;
     color: var(--fg-dim);
-    font-size: 0.85rem;
+    font-size: var(--fs-body);
   }
 
   .agents {
@@ -718,7 +718,7 @@
   }
 
   .logout {
-    font-size: 0.75rem;
+    font-size: var(--fs-body-sm);
     color: var(--fg-dim);
     background: transparent;
     border: 1px solid var(--line);
@@ -736,7 +736,7 @@
   }
 
   .launch {
-    font-size: 0.75rem;
+    font-size: var(--fs-body-sm);
     color: var(--fg);
     background: var(--bg-card);
     border: 1px solid var(--line);
@@ -756,7 +756,7 @@
     flex: 0 0 auto;
     margin: 0;
     padding: 0.4rem 2rem;
-    font-size: 0.78rem;
+    font-size: var(--fs-body-sm);
     color: var(--fg-dim);
     background: var(--bg-card);
     border-bottom: 1px solid var(--line);
@@ -784,7 +784,7 @@
 
   .login-card h1 {
     margin: 0;
-    font-size: 1.05rem;
+    font-size: var(--fs-h1);
     letter-spacing: 0.35em;
     text-transform: lowercase;
     text-align: center;
@@ -793,14 +793,14 @@
 
   .login-note {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     text-align: center;
     color: var(--fg-dim);
   }
 
   .login-card input {
     padding: 0.6rem 0.7rem;
-    font-size: 0.9rem;
+    font-size: var(--fs-input);
     color: var(--fg);
     background: var(--bg);
     border: 1px solid var(--line);
@@ -809,13 +809,13 @@
 
   .login-error {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     color: var(--c-error);
   }
 
   .login-card button {
     padding: 0.55rem;
-    font-size: 0.85rem;
+    font-size: var(--fs-body);
     color: var(--fg);
     background: var(--bg-card);
     border: 1px solid var(--line);

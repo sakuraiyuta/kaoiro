@@ -457,14 +457,14 @@
 
   h2 {
     margin: 0;
-    font-size: 0.95rem;
+    font-size: var(--fs-h2);
     font-weight: 600;
     color: var(--fg);
   }
 
   .state {
     margin: 0.25rem 0 0;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     font-weight: 600;
     color: var(--tone);
     animation: dissolve 0.35s ease-out;
@@ -472,7 +472,7 @@
 
   .id {
     margin: 0.45rem 0 0;
-    font-size: 0.65rem;
+    font-size: var(--fs-caption);
     color: var(--fg-dim);
     overflow-wrap: anywhere;
   }
@@ -500,7 +500,7 @@
     background: var(--bg-card);
     color: var(--c-tool_running);
     font: inherit;
-    font-size: 0.65rem;
+    font-size: var(--fs-caption);
     cursor: pointer;
   }
 
@@ -514,7 +514,7 @@
   }
 
   .stop-icon {
-    font-size: 0.7em;
+    font-size: 0.7em; /* em-relative to parent button; do not tokenize */
     line-height: 1;
   }
 
@@ -531,7 +531,7 @@
     background: var(--bg-card);
     color: var(--c-error);
     font: inherit;
-    font-size: 0.65rem;
+    font-size: var(--fs-caption);
     cursor: pointer;
   }
 
@@ -557,7 +557,7 @@
     background: var(--bg-card);
     color: var(--c-waiting_input);
     font: inherit;
-    font-size: 0.65rem;
+    font-size: var(--fs-caption);
     cursor: pointer;
   }
 
@@ -585,7 +585,7 @@
     background: var(--bg-card);
     color: var(--c-error);
     font: inherit;
-    font-size: 0.65rem;
+    font-size: var(--fs-caption);
     cursor: pointer;
   }
 
@@ -599,7 +599,7 @@
   }
 
   .remove-icon {
-    font-size: 0.7em;
+    font-size: 0.7em; /* em-relative to parent button; do not tokenize */
     line-height: 1;
   }
 
@@ -631,7 +631,7 @@
     right: 0;
     padding: 0.12rem 0.4rem;
     border-radius: 0.3rem;
-    font-size: 0.6rem;
+    font-size: var(--fs-micro);
     font-weight: 600;
     background: var(--c-waiting_permission);
     color: var(--bg);

@@ -19,6 +19,16 @@
   --c-done: #7fe3c5;
   --c-error: #f08498;
   --c-disconnected: #4d4f63;
+
+  /* typography scale — semantic 8 段階 (docs/specs/design.md typography と 1:1) */
+  --fs-h1: 1.1rem;
+  --fs-h2: 0.95rem;
+  --fs-body: 0.85rem;
+  --fs-body-sm: 0.75rem;
+  --fs-metadata: 0.7rem;
+  --fs-caption: 0.65rem;
+  --fs-micro: 0.6rem;
+  --fs-input: 0.85rem;
 }
 
 * {

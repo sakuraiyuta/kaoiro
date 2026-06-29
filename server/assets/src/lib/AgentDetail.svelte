@@ -1491,7 +1491,7 @@
     background: var(--bg-card);
     color: var(--c-error);
     font: inherit;
-    font-size: 0.75rem;
+    font-size: var(--fs-body-sm);
     cursor: pointer;
   }
 
@@ -1517,7 +1517,7 @@
     background: color-mix(in srgb, var(--c-error) 14%, var(--bg-card));
     color: var(--c-error);
     font: inherit;
-    font-size: 0.78rem;
+    font-size: var(--fs-body-sm);
     font-weight: 600;
     cursor: pointer;
   }
@@ -1542,7 +1542,7 @@
     background: color-mix(in srgb, var(--c-waiting_input) 14%, var(--bg-card));
     color: var(--c-waiting_input);
     font: inherit;
-    font-size: 0.78rem;
+    font-size: var(--fs-body-sm);
     font-weight: 600;
     cursor: pointer;
   }
@@ -1620,7 +1620,7 @@
     background: none;
     color: var(--fg);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     text-align: left;
     cursor: pointer;
   }
@@ -1671,7 +1671,7 @@
     background: var(--bg-card);
     color: var(--fg);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     cursor: pointer;
   }
 
@@ -1682,7 +1682,7 @@
     background: var(--bg-card);
     color: var(--c-waiting_permission);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     cursor: pointer;
     animation: blink 1.2s ease-in-out infinite;
   }
@@ -1904,13 +1904,13 @@
 
   .meta h2 {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: var(--fs-h1);
     color: var(--fg);
   }
 
   .state {
     margin: 0.2rem 0 0;
-    font-size: 0.85rem;
+    font-size: var(--fs-body);
     font-weight: 600;
     color: var(--tone);
     animation: dissolve 0.35s ease-out;
@@ -1918,7 +1918,7 @@
 
   .id {
     margin: 0.3rem 0 0;
-    font-size: 0.7rem;
+    font-size: var(--fs-metadata);
     color: var(--fg-dim);
     overflow-wrap: anywhere;
   }
@@ -1930,7 +1930,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.55rem;
-    font-size: 0.7rem;
+    font-size: var(--fs-metadata);
   }
 
   .cc-row {
@@ -1978,7 +1978,7 @@
     background: var(--bg-card);
     color: var(--fg-dim);
     font: inherit;
-    font-size: 0.62rem;
+    font-size: var(--fs-caption);
     cursor: pointer;
   }
 
@@ -2019,7 +2019,7 @@
     background: none;
     color: var(--fg);
     font: inherit;
-    font-size: 0.78rem;
+    font-size: var(--fs-body-sm);
     text-align: left;
     cursor: pointer;
   }
@@ -2034,7 +2034,7 @@
 
   /* Placeholder for a rate window the SDK has not surfaced yet (#16). */
   .cc-pending {
-    font-size: 0.7rem;
+    font-size: var(--fs-metadata);
     color: var(--fg-dim);
   }
 
@@ -2082,7 +2082,7 @@
      the percentage stays the primary read. */
   .meter-abs {
     margin-left: 0.3em;
-    font-size: 0.85em;
+    font-size: 0.85em; /* em-relative to parent meter; do not tokenize */
     opacity: 0.8;
   }
 
@@ -2098,14 +2098,14 @@
 
   .empty {
     color: var(--fg-dim);
-    font-size: 0.85rem;
+    font-size: var(--fs-body);
   }
 
   .msg {
     margin: 0;
     padding: 0.6rem 0.8rem;
     border-radius: 0.5rem;
-    font-size: 0.85rem;
+    font-size: var(--fs-body);
     line-height: 1.5;
     overflow-wrap: anywhere;
   }
@@ -2165,7 +2165,7 @@
   .turn-end {
     margin: 0.2rem 0;
     text-align: center;
-    font-size: 0.68rem;
+    font-size: var(--fs-metadata);
     letter-spacing: 0.1em;
     color: var(--c-done);
   }
@@ -2176,7 +2176,7 @@
 
   /* Per-line wall-clock time (#38): small, dim, monospaced digits. */
   .ts {
-    font-size: 0.62rem;
+    font-size: var(--fs-caption);
     color: var(--fg-dim);
     font-variant-numeric: tabular-nums;
   }
@@ -2200,7 +2200,7 @@
     gap: 0.6rem;
     margin: 0.6rem 0 0.2rem;
     color: var(--fg-dim);
-    font-size: 0.62rem;
+    font-size: var(--fs-caption);
     letter-spacing: 0.1em;
     font-variant-numeric: tabular-nums;
   }
@@ -2216,13 +2216,13 @@
   /* Session cost on the turn boundary (#8). */
   .cost {
     margin-left: 0.5em;
-    font-size: 0.68rem;
+    font-size: var(--fs-metadata);
     color: var(--fg-dim);
     font-variant-numeric: tabular-nums;
   }
 
   .tool {
-    font-size: 0.75rem;
+    font-size: var(--fs-body-sm);
     color: var(--fg-dim);
     border: 1px dashed var(--line);
     border-radius: 0.45rem;
@@ -2249,7 +2249,7 @@
     background: var(--bg);
     color: var(--c-tool_running);
     font: inherit;
-    font-size: 0.62rem;
+    font-size: var(--fs-caption);
     cursor: pointer;
   }
 
@@ -2306,7 +2306,7 @@
     border: 1px solid var(--c-waiting_permission);
     border-radius: 0.45rem;
     background: var(--bg-card);
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     transition: opacity 0.25s ease;
   }
 
@@ -2351,7 +2351,7 @@
     margin: 0.3rem 0 0;
     max-height: 10rem;
     overflow: auto;
-    font-size: 0.7rem;
+    font-size: var(--fs-metadata);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
@@ -2370,7 +2370,7 @@
     background: var(--bg-card);
     color: var(--fg);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     cursor: pointer;
   }
 
@@ -2397,7 +2397,7 @@
     background: var(--bg-card);
     color: var(--c-tool_running);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     cursor: pointer;
   }
 
@@ -2411,7 +2411,7 @@
   }
 
   .interrupt-icon {
-    font-size: 0.7em;
+    font-size: 0.7em; /* em-relative to parent button; do not tokenize */
     line-height: 1;
   }
 
@@ -2428,7 +2428,7 @@
     background: var(--bg-card);
     color: var(--c-error);
     font: inherit;
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     cursor: pointer;
   }
 
@@ -2442,7 +2442,7 @@
   }
 
   .remove-icon {
-    font-size: 0.7em;
+    font-size: 0.7em; /* em-relative to parent button; do not tokenize */
     line-height: 1;
   }
 
@@ -2461,7 +2461,7 @@
     background: var(--bg-card);
     color: var(--c-waiting_permission);
     font: inherit;
-    font-size: 0.78rem;
+    font-size: var(--fs-body-sm);
     cursor: pointer;
     opacity: 0;
     pointer-events: none;
@@ -2507,7 +2507,7 @@
     background: var(--bg-card);
     color: var(--fg);
     font: inherit;
-    font-size: 0.85rem;
+    font-size: var(--fs-input);
     line-height: 1.4;
     resize: vertical;
   }
@@ -2521,7 +2521,7 @@
 
   .sending-note {
     margin: 0;
-    font-size: 0.75rem;
+    font-size: var(--fs-body-sm);
     color: var(--c-tool_running);
   }
 
@@ -2532,7 +2532,7 @@
     background: var(--bg-card);
     color: var(--fg);
     font: inherit;
-    font-size: 0.85rem;
+    font-size: var(--fs-body);
     cursor: pointer;
   }
 
@@ -2543,7 +2543,7 @@
 
   .action-error {
     margin: 0;
-    font-size: 0.75rem;
+    font-size: var(--fs-body-sm);
     color: var(--c-error);
     overflow-wrap: anywhere;
   }
@@ -2576,7 +2576,7 @@
   }
 
   .tray-count {
-    font-size: 0.72rem;
+    font-size: var(--fs-metadata);
     color: var(--fg-dim);
   }
 
@@ -2598,7 +2598,7 @@
     border: 1px solid var(--line);
     border-radius: 0.3rem;
     background: var(--bg-card);
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
     max-width: 100%;
     overflow: hidden;
   }
@@ -2615,7 +2615,7 @@
     background: transparent;
     color: var(--fg);
     cursor: pointer;
-    font-size: 0.85rem;
+    font-size: var(--fs-body);
   }
 
   /* Per-upload progress bar (file-upload spec / ADR-0025 Stage C "g"): thin
