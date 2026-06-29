@@ -1,7 +1,7 @@
 ---
 title: Phase 3 — サーバ集約 + 複数エージェント + 双方向
 description: Elixir/Phoenix サーバで複数ラッパーを集約し、指示・承認を双方向ルーティングする。
-status: completed
+status: done
 phase: 3
 depends_on: [phase-2-client-character]
 last_updated: 2026-06-11
