@@ -236,7 +236,9 @@ describe("interAgentMessageOf (protocol-inter-agent, phase-8)", () => {
 
   it("型違いの envelope や payload 欠落は null", () => {
     expect(interAgentMessageOf({ ...base, type: "log" })).toBeNull();
-    expect(interAgentMessageOf({ ...base, payload: undefined })).toBeNull();
+    // base にそもそも payload は無いのでスプレッドのみで「payload 欠落」を表現
+    // (exactOptionalPropertyTypes 下で `payload: undefined` を渡すと型エラー)。
+    expect(interAgentMessageOf({ ...base })).toBeNull();
     expect(
       interAgentMessageOf({ ...base, payload: { to: "b", kind: "propose" } }),
     ).toBeNull();

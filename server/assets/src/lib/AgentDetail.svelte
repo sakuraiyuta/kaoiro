@@ -1200,10 +1200,18 @@
                  envelope rides on both sender and receiver transcripts; the
                  direction is decided here against the viewer's selected agent.
                  Body is untrusted text — render through DOMPurify (#30) via
-                 renderMarkdown so a malicious agent cannot inject HTML. -->
+                 renderMarkdown so a malicious agent cannot inject HTML.
+                 outgoing=true → 自分が送った side (ピンク tone);
+                 outgoing=false → ピアから受け取った side (紫 tone). -->
             {@const outgoing = env.agent_id === envelope.agent_id}
             {@const peer = outgoing ? iam.to : env.agent_id}
-            <div class="msg inter-agent" data-kind={iam.kind} data-cid={iam.conversation_id}>
+            <div
+              class="msg inter-agent"
+              class:outgoing
+              class:incoming={!outgoing}
+              data-kind={iam.kind}
+              data-cid={iam.conversation_id}
+            >
               <p class="inter-agent-head">
                 {#if outgoing}
                   <span class="arrow" aria-hidden="true">→</span>
@@ -2191,11 +2199,22 @@
   /* Inter-agent message bubble (protocol-inter-agent, phase-8): a tinted
      border + small header line carrying direction (→ to / ← from), kind,
      short conversation_id, and turn number so the operator can follow a
-     multi-turn discussion across both transcripts. */
+     multi-turn discussion across both transcripts. `--iam-tone` swaps by
+     direction so 送信 (→ to, ピンク) and 受信 (← from, 紫) stay visually
+     distinct in the transcript. */
   .msg.inter-agent {
-    background: color-mix(in srgb, var(--c-tool_running) 10%, var(--bg-card));
-    border: 1px solid var(--c-tool_running);
+    --iam-tone: var(--c-tool_running);
+    background: color-mix(in srgb, var(--iam-tone) 12%, var(--bg-card));
+    border: 1px solid var(--iam-tone);
     color: var(--fg);
+  }
+
+  .msg.inter-agent.outgoing {
+    --iam-tone: var(--c-error); /* ピンク系 (#f08498) を流用 — to */
+  }
+
+  .msg.inter-agent.incoming {
+    --iam-tone: var(--c-waiting_permission); /* 紫系 (#c9a2f5) を流用 — from */
   }
 
   .inter-agent-head {
@@ -2208,7 +2227,7 @@
   .inter-agent-head .arrow {
     font-weight: 700;
     margin-right: 0.2em;
-    color: var(--c-tool_running);
+    color: var(--iam-tone);
   }
 
   .inter-agent-head .kind {
