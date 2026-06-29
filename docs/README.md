@@ -17,33 +17,37 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 
 ## ADR 索引
 
+<!-- adr-index:start -->
 | # | 決定 | Status |
-|---|------|--------|
+|---|-------|--------|
 | [0001](adr/0001-agent-sdk-integration.md) | Claude Agent SDK を統合方式に採用 | accepted |
-| [0002](adr/0002-local-wrapper-websocket-topology.md) | ラッパーはローカル、WebSocket で集約 | accepted |
+| [0002](adr/0002-local-wrapper-websocket-topology.md) | ラッパーはローカル動作、WebSocket で中央サーバへ集約 | accepted |
 | [0003](adr/0003-persona-identity-persistence.md) | ペルソナ同一性の永続化 | accepted |
-| [0004](adr/0004-client-rendering-staged.md) | 描画は静的差分→将来アニメ/3D | accepted |
-| [0005](adr/0005-access-control-oauth-stub.md) | アクセス制御は OAuth+RBAC、当面 stub | accepted |
-| [0006](adr/0006-doc-language-i18n.md) | 日本語→ベータ前に全英訳 | accepted |
-| [0007](adr/0007-client-separation-reference-dashboard.md) | クライアント分離、リファレンスダッシュボード同梱 | accepted |
-| [0008](adr/0008-persona-asset-distribution.md) | ペルソナアセットはサーバ管理・マニフェスト配信 | accepted |
+| [0004](adr/0004-client-rendering-staged.md) | 描画は静的差分から、将来アニメ/3D を選択制 | accepted |
+| [0005](adr/0005-access-control-oauth-stub.md) | アクセス制御は OAuth + RBAC、プロトタイプは stub | accepted |
+| [0006](adr/0006-doc-language-i18n.md) | ドキュメント・UI は日本語、ベータ前に全英訳 | accepted |
+| [0007](adr/0007-client-separation-reference-dashboard.md) | クライアントは別プロジェクト分離、リファレンスダッシュボードを同梱 | accepted |
+| [0008](adr/0008-persona-asset-distribution.md) | ペルソナアセットはサーバ管理、マニフェスト + content-addressed 配信 | accepted |
 | [0009](adr/0009-client-transport.md) | クライアント接続は Phoenix Channels に一本化 | accepted |
-| [0010](adr/0010-protocol-precisification.md) | エンベロープ type/payload は実証範囲のみ確定 | accepted |
-| [0011](adr/0011-phase3-reliability-and-auth.md) | Phase 3 の信頼性・認証規約(seq/permission/トークン) | accepted |
+| [0010](adr/0010-protocol-precisification.md) | エンベロープの type/payload は実証範囲のみ確定し、残りは予約名とする | accepted |
+| [0011](adr/0011-phase3-reliability-and-auth.md) | Phase 3 の信頼性・認証規約(seq / permission 相関 / トークン) | accepted |
 | [0012](adr/0012-response-display-and-dashboard-scope.md) | 返答表示と同梱ダッシュボードのスコープ改訂 | accepted |
-| [0013](adr/0013-user-token-cookie-persistence.md) | ユーザトークンを httpOnly cookie で永続化 | accepted |
-| [0014](adr/0014-session-resume-and-restore.md) | セッション resume で wrapper を復帰・召喚 | accepted |
-| [0015](adr/0015-protocol-version-stamping.md) | 全通信へ version 付与・不一致は警告しつつ受理 | accepted |
-| [0016](adr/0016-error-body-relay.md) | ラッパーエラー本文を result.error_message でリレー | accepted |
-| [0017](adr/0017-wrapper-multientity-packages.md) | wrapper を3層 pnpm ワークスペースへ(マルチエンティティ) | accepted |
-| [0018](adr/0018-runner-distribution.md) | wrapper/runner は OS 別単一バイナリ・CLI のみ・Gitea release | accepted |
-| [0019](adr/0019-subagent-workflow-entity-and-task-envelope.md) | subagent/workflow を親付き子エンティティとし専用 envelope で通知 | accepted |
-| [0020](adr/0020-dashboard-battery-included-client.md) | 同梱ダッシュボードを battery-included な最低限実用クライアントへ格上げ | accepted |
-| [0021](adr/0021-role-information-disclosure-policy.md) | viewer/operator の情報公開ポリシ(allow-list 方式) | accepted |
-| [0022](adr/0022-pending-permission-authoritative-source.md) | pending_permission の authoritative source を state_change.ext へ | accepted |
-| [0023](adr/0023-host-runner-architecture.md) | ホスト常駐 runner(supervisor 専任・1 process=1 agent・TS/Node) | accepted |
-| [0024](adr/0024-agent-instance-identity-and-spawn-auth.md) | persona=型/agent_id=インスタンス、spawn 認証を runner 一本化の発行型へ | accepted |
+| [0013](adr/0013-user-token-cookie-persistence.md) | ユーザトークンの httpOnly cookie 永続化(リロード耐性) | accepted |
+| [0014](adr/0014-session-resume-and-restore.md) | セッション resume による wrapper 復帰・既存セッション召喚 | accepted |
+| [0015](adr/0015-protocol-version-stamping.md) | 全通信への version 付与と不一致時の警告(ベストエフォート受理) | accepted |
+| [0016](adr/0016-error-body-relay.md) | ラッパーエラー本文のクライアントへのリレー(result.error_message) | accepted |
+| [0017](adr/0017-wrapper-multientity-packages.md) | wrapper のマルチエンティティ・パッケージ構造(3層 pnpm ワークスペース) | accepted |
+| [0018](adr/0018-runner-distribution.md) | wrapper/runner の配布(OS 別単一バイナリ・CLI のみ・Gitea release) | accepted |
+| [0019](adr/0019-subagent-workflow-entity-and-task-envelope.md) | subagent/workflow を親付き子エンティティとし専用 envelope type で通知 | accepted |
+| [0020](adr/0020-dashboard-battery-included-client.md) | 同梱ダッシュボードを battery-included な最低限実用クライアントへ格上げ(新プロトコル面の追加を許容) | accepted |
+| [0021](adr/0021-role-information-disclosure-policy.md) | viewer / operator ロールの情報公開ポリシ — allow-list 方式と envelope 別マトリクス | accepted |
+| [0022](adr/0022-pending-permission-authoritative-source.md) | pending_permission の authoritative source を state_change.ext へ — permission_request envelope は初出通知に降格 | accepted |
+| [0023](adr/0023-host-runner-architecture.md) | ホスト常駐 runner — supervisor 専任・1 process=1 agent・TS/Node 単一バイナリ | accepted |
+| [0024](adr/0024-agent-instance-identity-and-spawn-auth.md) | エージェントのインスタンス同一性と spawn 認証 — persona=型 / agent_id=インスタンス、runner 一本化の発行型認証 | accepted |
 | [0025](adr/0025-file-upload-wire-and-wrapper-rendering.md) | ファイルアップロードの wire と wrapper-internal レンダリング | accepted |
+<!-- adr-index:end -->
+
+再生成: `scripts/build-adr-index.sh --columns "# 決定 Status" docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。
 
 ## 更新フロー
 

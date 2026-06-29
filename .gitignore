@@ -34,6 +34,3 @@ node_modules/
 /assets-work/
 
 agent.*.json
-
-# Local forensic / troubleshooting reports — kept on the host, not committed.
-/docs/troubleshooting/
