@@ -53,6 +53,11 @@ export interface ServerLinkOptions {
   /** attach_close relayed by the server. The wrapper verifies the upload
    *  is complete; an incomplete or oversize upload emits attach_rejected. */
   onAttachClose?: (uploadId: string) => void;
+  /** Inbound inter_agent_message envelope (protocol-inter-agent spec). The
+   *  server pushes both routed messages (from peer wrapper) and synthesized
+   *  ones (e.g. escalate-to-user on quota overshoot) to the receiving
+   *  wrapper's topic — both flow through here. */
+  onInterAgentMessage?: (envelope: Envelope) => void;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -177,6 +182,17 @@ export class ServerLink {
       if (isObject(payload) && typeof payload.upload_id === "string") {
         options.onAttachClose?.(payload.upload_id);
       }
+    });
+    // Inter-agent routing (protocol-inter-agent spec): the server pushes the
+    // full envelope (type=inter_agent_message) onto wrapper:<self> for every
+    // message routed to this agent, including the server-synthesized
+    // escalate-to-user on quota overshoot. Trust the topic for addressing —
+    // payload.to is informational here, not a filter. Drop anything but
+    // inter_agent_message defensively (the server never pushes other types
+    // to wrapper:<self>, but a future broker should not see them).
+    this.#channel.on("envelope", (payload: unknown) => {
+      if (!isObject(payload) || payload.type !== "inter_agent_message") return;
+      options.onInterAgentMessage?.(payload as unknown as Envelope);
     });
 
     // Re-announce the latest state after a reconnect: the server keeps

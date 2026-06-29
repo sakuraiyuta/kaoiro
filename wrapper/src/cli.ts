@@ -19,11 +19,20 @@
 import { parseCliArgs } from "./args.js";
 import { readSessionHistory } from "./history.js";
 import { AgentHost } from "./host.js";
+import {
+  InterAgentTool,
+  formatInboundMessage,
+} from "./inter_agent.js";
 import { PermissionBroker } from "./permission.js";
 import { PERMISSION_MODES, loadConfig } from "./persona.js";
 import { makeLog, makeStateChange } from "./state.js";
 import { ServerLink } from "./transport.js";
-import type { Envelope, KaoiroState, PermissionMode } from "./types.js";
+import type {
+  Envelope,
+  InterAgentMessagePayload,
+  KaoiroState,
+  PermissionMode,
+} from "./types.js";
 
 const COLOR: Record<KaoiroState, string> = {
   idle: "90", // grey
@@ -89,6 +98,7 @@ async function main(): Promise<void> {
   let host: AgentHost;
   let link: ServerLink | null = null;
   let broker: PermissionBroker | null = null;
+  let interAgent: InterAgentTool | null = null;
   // host.send is async now (the PDF fit-to-SDK path awaits pdf-lib). Chain
   // operator instructions through one Promise so a slow render (e.g. a big
   // PDF) does not let the next instruction's queue.push run first, which
@@ -114,6 +124,11 @@ async function main(): Promise<void> {
       // state_change envelope carries it (ADR-0022). Captured-by-closure
       // host is assigned just below, before any tool ever fires.
       onPendingChange: (pending) => host?.setPendingPermission(pending),
+    });
+    interAgent = new InterAgentTool({
+      config,
+      getState: () => host.state,
+      send: (envelope) => link?.send(envelope),
     });
     link = new ServerLink(config.server_url, config.agent_id, {
       ...(config.server_token === undefined
@@ -192,6 +207,31 @@ async function main(): Promise<void> {
         process.stdout.write(`  attach_close: ${uploadId}\n`);
         host.attachClose(uploadId);
       },
+      onInterAgentMessage: (envelope) => {
+        // Server routed an inter_agent_message to this wrapper (peer reply or
+        // synthesized escalate-to-user). Track the inbound turn_number so our
+        // next outbound send_to_agent stays monotonic, then inject the
+        // formatted text as a new SDK turn (protocol-inter-agent spec
+        // 「受信側の挙動」). The host serialises through instructionChain so a
+        // mid-PDF render cannot reorder this against an operator instruction.
+        const payload = envelope.payload as Partial<InterAgentMessagePayload>;
+        if (
+          typeof payload.conversation_id === "string" &&
+          typeof payload.turn_number === "number"
+        ) {
+          interAgent?.observeInbound(
+            payload.conversation_id,
+            payload.turn_number,
+          );
+        }
+        const text = formatInboundMessage(envelope);
+        process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
+        instructionChain = instructionChain.then(() =>
+          host.send(text).catch((err: unknown) => {
+            process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
+          }),
+        );
+      },
     });
   }
 
@@ -217,6 +257,14 @@ async function main(): Promise<void> {
       tools: { type: "preset", preset: "claude_code" },
       allowedTools: config.allowed_tools ?? [...READ_ONLY_TOOLS],
       cwd: process.cwd(),
+      // Register the kaoiro in-process MCP server when the wrapper is
+      // server-connected (Phase 8). send_to_agent surfaces as
+      // mcp__kaoiro__send_to_agent and is NOT in the read-only default
+      // allowedTools, so canUseTool fires and the broker runs the
+      // per-call operator dialog (Phase 1 都度承認).
+      ...(interAgent !== null
+        ? { mcpServers: { kaoiro: interAgent.build() } }
+        : {}),
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
   });

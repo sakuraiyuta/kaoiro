@@ -18,6 +18,8 @@ export type {
   FileUploadRejectReason,
   AttachRejectedPayload,
   InstructionRejectedPayload,
+  InterAgentMessageKind,
+  InterAgentMessagePayload,
 } from "@kaoiro/protocol";
 
 /** SDKResultMessage.subtype (agent-sdk-events.md). */

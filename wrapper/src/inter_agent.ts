@@ -1,0 +1,251 @@
+// Inter-agent messaging — registers the `send_to_agent` SDK MCP tool that an
+// agent calls to message another agent, and formats inbound messages for
+// SDK-input injection (specs/protocol-inter-agent.md, plans/phase-8 Stage B).
+//
+// The full tool name surfaced to the model is `mcp__kaoiro__send_to_agent`,
+// which is not in the wrapper's read-only allowedTools default, so the SDK
+// invokes canUseTool — and the PermissionBroker runs the operator's per-call
+// approval dialog (Phase 1: 都度承認).
+//
+// conversation_id is the model's free-form thread key: omit it to start a new
+// conversation (UUIDv4 is allocated here); pass it back when replying to keep
+// turns inside one conversation. turn_number is monotonic per conversation
+// (server tracks them for the hard limits).
+
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import {
+  createSdkMcpServer,
+  tool,
+  type McpSdkServerConfigWithInstance,
+} from "@anthropic-ai/claude-agent-sdk";
+import { makeInterAgentMessage } from "./state.js";
+import type {
+  Envelope,
+  InterAgentMessageKind,
+  InterAgentMessagePayload,
+  KaoiroState,
+  WrapperConfig,
+} from "./types.js";
+
+/** Minimal structural shape of the MCP CallToolResult we actually return; the
+ *  agent-sdk's `tool()` helper expects the upstream CallToolResult type from
+ *  `@modelcontextprotocol/sdk`, which is a transitive (not declared) dep —
+ *  declaring a local subset avoids pulling the runtime just for this typing.
+ *  The index signature mirrors the upstream type so structural assignability
+ *  holds without an explicit cast. */
+interface InterAgentToolResult {
+  content: Array<{ type: "text"; text: string }>;
+  isError?: boolean;
+  [extra: string]: unknown;
+}
+
+/** Full SDK-side tool name once mcpServers register the kaoiro server. */
+export const INTER_AGENT_TOOL_FQN = "mcp__kaoiro__send_to_agent";
+
+const KIND_VALUES = [
+  "request",
+  "response",
+  "query",
+  "inform",
+  "propose",
+  "accept",
+  "reject",
+  "escalate-to-user",
+  "done",
+] as const satisfies readonly InterAgentMessageKind[];
+
+const INPUT_SCHEMA = {
+  to: z
+    .string()
+    .min(1)
+    .describe("Destination agent_id, e.g. 'lab-pc-1.claude-b'"),
+  body: z
+    .string()
+    .min(1)
+    .describe("Message body text. The other side reads it verbatim."),
+  kind: z
+    .enum(KIND_VALUES)
+    .describe(
+      "Message kind. request/response = task delegation; query/inform = consultation; propose/accept/reject = discussion; escalate-to-user = hand off to the human owner; done = end the conversation.",
+    ),
+  conversation_id: z
+    .string()
+    .optional()
+    .describe(
+      "Conversation id from a prior message in this thread. Omit to start a new conversation; the wrapper allocates one and returns it.",
+    ),
+  done: z
+    .boolean()
+    .optional()
+    .describe(
+      "True when YOU propose ending the conversation. Both sides must set done=true for the conversation to actually end.",
+    ),
+  propose_next: z
+    .string()
+    .optional()
+    .describe(
+      "What you expect to happen next, in one sentence. Empty allowed.",
+    ),
+  confidence: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe("Optional 0.0-1.0 confidence."),
+  reject_reason: z
+    .string()
+    .optional()
+    .describe(
+      "Required when kind=reject; concrete reason for refusing the proposal.",
+    ),
+};
+
+const TOOL_DESCRIPTION =
+  "Send a structured message to another kaoiro agent. The operator approves each send via a permission dialog. Use this to consult, delegate, propose, accept, reject, or end an inter-agent conversation. Pass conversation_id back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically.";
+
+interface ConversationTrack {
+  /** Highest turn_number observed so far in this conversation. */
+  turnNumber: number;
+}
+
+export interface InterAgentToolOptions {
+  config: WrapperConfig;
+  /** Current wrapper state — stamped onto the outer envelope frame. */
+  getState: () => KaoiroState;
+  /** Outbound envelope sink, normally ServerLink#send. */
+  send: (envelope: Envelope) => void;
+  /** ISO timestamp source; injectable for tests. */
+  now?: () => string;
+  /** conversation_id source for new conversations; injectable for tests. */
+  newId?: () => string;
+}
+
+/**
+ * Owns the send_to_agent tool registration and the per-conversation turn
+ * counter. One instance per wrapper; safe across concurrent send / receive
+ * (single-threaded JS event loop, no internal awaits between read+write).
+ */
+export class InterAgentTool {
+  readonly #options: InterAgentToolOptions;
+  readonly #now: () => string;
+  readonly #newId: () => string;
+  readonly #conversations = new Map<string, ConversationTrack>();
+
+  constructor(options: InterAgentToolOptions) {
+    this.#options = options;
+    this.#now = options.now ?? (() => new Date().toISOString());
+    this.#newId = options.newId ?? randomUUID;
+  }
+
+  /** Records the turn_number of an inbound message so subsequent outbound
+   *  turns stay monotonic per conversation regardless of which side authored
+   *  the latest message. Called by cli.ts when the host injects an incoming
+   *  inter_agent_message into the SDK input. */
+  observeInbound(conversationId: string, turnNumber: number): void {
+    const track = this.#conversations.get(conversationId) ?? { turnNumber: 0 };
+    if (turnNumber > track.turnNumber) track.turnNumber = turnNumber;
+    this.#conversations.set(conversationId, track);
+  }
+
+  /** Builds the SDK MCP server config to pass via Options.mcpServers. */
+  build(): McpSdkServerConfigWithInstance {
+    return createSdkMcpServer({
+      name: "kaoiro",
+      tools: [
+        tool("send_to_agent", TOOL_DESCRIPTION, INPUT_SCHEMA, async (args) =>
+          this.invoke(args),
+        ),
+      ],
+    });
+  }
+
+  /** Direct entry point used by the SDK MCP handler and by tests. Validates
+   *  the spec invariants (self-routing, reject_reason required), allocates a
+   *  conversation_id and turn_number, builds the envelope, and pushes it via
+   *  `send`. The CallToolResult-shaped return surfaces back to the calling
+   *  model as the tool result. */
+  async invoke(args: z.infer<z.ZodObject<typeof INPUT_SCHEMA>>): Promise<InterAgentToolResult> {
+    if (args.to === this.#options.config.agent_id) {
+      return errorResult(
+        "send_to_agent failed: cannot send to self (payload.to == agent_id)",
+      );
+    }
+    if (
+      args.kind === "reject" &&
+      (args.reject_reason === undefined || args.reject_reason === "")
+    ) {
+      return errorResult(
+        "send_to_agent failed: meta.reject_reason is required when kind=reject",
+      );
+    }
+
+    const conversationId = args.conversation_id ?? this.#newId();
+    const track = this.#conversations.get(conversationId) ?? { turnNumber: 0 };
+    track.turnNumber += 1;
+    this.#conversations.set(conversationId, track);
+
+    const meta: InterAgentMessagePayload["meta"] = {
+      done: args.done ?? false,
+      propose_next: args.propose_next ?? "",
+    };
+    if (args.confidence !== undefined) meta.confidence = args.confidence;
+    if (args.reject_reason !== undefined && args.reject_reason !== "") {
+      meta.reject_reason = args.reject_reason;
+    }
+
+    const payload: InterAgentMessagePayload = {
+      to: args.to,
+      conversation_id: conversationId,
+      turn_number: track.turnNumber,
+      kind: args.kind,
+      body: args.body,
+      meta,
+      owner: { kind: "user", id: "operator" },
+    };
+
+    const envelope = makeInterAgentMessage(
+      this.#options.config,
+      this.#options.getState(),
+      this.#now(),
+      payload,
+    );
+    this.#options.send(envelope);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `sent to ${args.to} (conversation_id=${conversationId}, turn_number=${track.turnNumber})`,
+        },
+      ],
+    };
+  }
+}
+
+/** Formats an inbound inter_agent_message envelope into the user-message text
+ *  injected into the receiving wrapper's SDK input (protocol-inter-agent spec
+ *  「受信側 (wrapper-B) の挙動」). Resilient to a malformed envelope (e.g. the
+ *  server-synthesized escalate skeleton) — missing fields collapse to empty. */
+export function formatInboundMessage(envelope: Envelope): string {
+  const payload = envelope.payload as Partial<InterAgentMessagePayload>;
+  const from = envelope.agent_id;
+  const kind = payload.kind ?? "inform";
+  const body = payload.body ?? "";
+  const done = payload.meta?.done === true;
+  const proposeNext = payload.meta?.propose_next ?? "";
+  const conversationId = payload.conversation_id ?? "";
+  const turnNumber = payload.turn_number ?? 0;
+  return [
+    `[from ${from}] ${kind}: ${body}`,
+    "",
+    `(meta: done=${done}, propose_next=${proposeNext}, conversation_id=${conversationId}, turn_number=${turnNumber})`,
+  ].join("\n");
+}
+
+function errorResult(text: string): InterAgentToolResult {
+  return {
+    content: [{ type: "text", text }],
+    isError: true,
+  };
+}

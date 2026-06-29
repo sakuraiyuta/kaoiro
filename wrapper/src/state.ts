@@ -12,6 +12,7 @@ import type {
   AttachRejectedPayload,
   Envelope,
   InstructionRejectedPayload,
+  InterAgentMessagePayload,
   KaoiroState,
   LogPayload,
   ResultPayload,
@@ -239,6 +240,29 @@ export function makePermissionRequest(
     type: "permission_request",
     state: "waiting_permission",
     payload,
+    ext: {},
+  };
+}
+
+/** Wraps an inter-agent message into the common envelope v0
+ *  (protocol-inter-agent spec). `state` is the sender's current wrapper state
+ *  (typically `tool_running` because the send happens inside the tool
+ *  handler). Not an authoritative state update — server-side handlers skip
+ *  the state store for this envelope type. */
+export function makeInterAgentMessage(
+  config: WrapperConfig,
+  state: KaoiroState,
+  ts: string,
+  payload: InterAgentMessagePayload,
+): Envelope {
+  return {
+    version: "0",
+    agent_id: config.agent_id,
+    persona: config.persona,
+    ts,
+    type: "inter_agent_message",
+    state,
+    payload: payload as unknown as Record<string, unknown>,
     ext: {},
   };
 }

@@ -183,3 +183,31 @@ describe("ServerLink — set_model / set_effort 制御 (#54)", () => {
     expect(effort).toEqual([]);
   });
 });
+
+describe("ServerLink — inter_agent_message inbound (protocol-inter-agent, phase-8)", () => {
+  beforeEach(() => mock.handlers.clear());
+
+  it("type=inter_agent_message の envelope を onInterAgentMessage に渡す", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onInterAgentMessage: (env) => seen.push(env),
+    });
+    const env = {
+      type: "inter_agent_message",
+      agent_id: "peer.agent",
+      payload: { to: "a.agent", body: "hi" },
+    };
+    emit("envelope", env);
+    expect(seen).toEqual([env]);
+  });
+
+  it("type 違いの envelope は無視する (state_change など)", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onInterAgentMessage: (env) => seen.push(env),
+    });
+    emit("envelope", { type: "state_change", agent_id: "a.agent" });
+    emit("envelope", "not a map");
+    expect(seen).toEqual([]);
+  });
+});
