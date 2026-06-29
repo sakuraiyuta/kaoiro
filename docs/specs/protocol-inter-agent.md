@@ -174,15 +174,17 @@ dashboard は受信時、`agent_id`(送信側)と `payload.to`(受信側)の
 
 ### Channels イベント増分
 
-新しい channels event は導入しない。既存の `envelope` イベント上で
-新 type が運ばれる。server 側の新しい振る舞いのみ:
+inter_agent_message 本体は既存 `envelope` イベント上で運ばれるが、
+コンパニオン機能のため **`directory_request`** を追補する。
 
-| 場面 | server の振る舞い |
-|---|---|
-| wrapper-A から `envelope`(type=inter_agent_message)受信 | (a) `payload.to` で指定された `wrapper:<to>` channel に push、(b) `agents:lobby` に broadcast(operator 限定)、(c) 該当 conversation の turn count / token count / wallclock を更新 |
-| ハード制限超過 | 合成 envelope を両 wrapper の `wrapper:<id>` channel + `agents:lobby` に push |
-| 未知 `to` agent_id | wrapper-A に `{:error, unknown_agent}` を返す(既存 `instruction` と同様) |
-| `payload.to == payload.from(=agent_id)` | server が拒否、wrapper に `{:error, self_routing}` |
+| event (方向) | 形 | server の振る舞い |
+|---|---|---|
+| `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | (a) `payload.to` で指定された `wrapper:<to>` channel に push、(b) `agents:lobby` に broadcast(operator 限定)、(c) 該当 conversation の turn count / token count / wallclock を更新 |
+| `envelope` 合成 (S→W) | ハード制限超過時 | 両 wrapper の `wrapper:<id>` + `agents:lobby` へ push |
+| `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の `{agent_id, persona:{id,name,sprite_set}, state}` リストを `{:ok, %{agents: [...]}}` 返却で受け取る。 list_agents 用 (後述) |
+
+未知 `to` / 自己 routing / participants 不一致時のエラー (`unknown_agent` /
+`self_routing` / `participants_mismatch`) は `envelope` の reply で返す。
 
 ### 承認フロー(permission_broker 統合)
 
@@ -214,6 +216,30 @@ agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの�
 返信しない場合は通常の応答(`result` envelope)を返し、conversation
 は自然消滅(server 側 wallclock タイムアウトで自動 done を付与)。
 
+### コンパニオンツール (wrapper の SDK MCP)
+
+wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allowedTools
+に含めて auto-allow** で提供する。 read-only / 副作用なしで、 model が宛先
+解決や自己同定に使うため都度承認の対象外:
+
+| Tool (full name) | 用途 | 経路 |
+|---|---|---|
+| `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧 (id / persona name / state) を取得 | wrapper → server の `directory_request` を呼び、 reply の `agents` をそのまま返す |
+| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / model / permission_mode / fast_mode / session_id / cwd を返す | wrapper のローカル状態 (host) を読むのみ。 server round-trip なし |
+
+#### 宛先解決の指針
+
+`send_to_agent.to` は **agent_id を必須** とする (charset `[A-Za-z0-9._-]`)。
+operator が `@あお` のような名前で指示しても、 model は send_to_agent に
+直接渡さず先に `list_agents` で resolve すること:
+
+1. `list_agents` で persona.name == "あお" の entry を集める
+2. 1 件 → その agent_id を `send_to_agent.to` に
+3. 複数 → operator に 「どちらの『あお』に送りますか? (候補: …)」と質問し、 候補から指示を得てから送信
+4. 0 件 → 「該当ペルソナが見当たりません」と operator に伝える
+
+候補対応 (3) は inject text / TOOL_DESCRIPTION で明示する。
+
 ### envelope.type の予約と version
 
 [protocol.md](protocol.md) の type 一覧に `inter_agent_message` を
@@ -242,6 +268,9 @@ agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの�
 - MUST: `payload.to == agent_id` の自己ルーティングは server が拒否
 - MUST: `kind: "reject"` の envelope は `meta.reject_reason` を空でない
   string で持つ
+- MUST: `send_to_agent.to` は agent_id のみ受理 (charset 制約あり)。
+  persona 名による解決は wrapper の `list_agents` ツールが担い、
+  ambiguous 時は operator 確認を経由する
 - SHOULD: `conversation_id` は UUIDv4 ベースで採番、衝突回避と
   グルーピング容易性を両立する
 - SHOULD: `body` は protocol 全体の他フィールド同様 wrapper 側で

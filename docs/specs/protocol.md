@@ -114,6 +114,7 @@ Channels のチャネルイベント名と内容。トピックは
 |---|---|---|
 | ラッパー → サーバ | `envelope` | エンベロープ全体 |
 | ラッパー → サーバ | `history_reset` | `{}`。resume 起動時、wrapper が JSONL から再構築した表示履歴を `log` で再生する直前に送る。サーバは当該 agent のリングバッファを**全消去**(append でなく上書き目的 — crash 後もサーバ生存時は同一 session の旧行が残るため)し `history_reset` を broadcast。状態未確立(エントリ無し)は no-op で ack のみ。掃除は表示用履歴のみで wrapper の JSONL には触れない([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2、#50) |
+| ラッパー → サーバ | `directory_request` | `{}`。inter-agent messaging で wrapper が persona 名 → agent_id 解決を行うための peer 一覧取得。 サーバは `AgentStates.snapshot()` から **送信元 wrapper を除外** し、 各 entry を `{agent_id, persona: {id, name, sprite_set}, state}` の最小形に丸めて `{:ok, %{agents: [...]}}` で reply。 wrapper 側は `mcp__kaoiro__list_agents` ツールでこれを呼ぶ([protocol-inter-agent](protocol-inter-agent.md) コンパニオンツール) |
 | サーバ → クライアント | `snapshot` | `{ agents: { <agent_id>: envelope } }`。join 直後に push |
 | サーバ → クライアント | `envelope` | エンベロープ全体(状態変化の都度 broadcast) |
 | サーバ → クライアント | `history_cleared` | `{ agent_id, session_id }`。`clear_history` 成功後に broadcast。クライアントは当該 agent の表示用ログを `session_id` 一致のものだけへ再フィルタ(#48)。**operator 限定配信**(viewer は log 自体を持たないため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
