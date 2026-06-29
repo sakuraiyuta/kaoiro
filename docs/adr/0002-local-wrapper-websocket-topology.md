@@ -6,7 +6,7 @@ opened: 2026-06-04
 supersedes: []
 superseded_by: null
 related_specs: [architecture]
-related_adrs: [1, 23]
+related_adrs: [1, 11, 23]
 ---
 
 # ADR-0002 — ラッパーはローカル動作、WebSocket で中央サーバへ集約

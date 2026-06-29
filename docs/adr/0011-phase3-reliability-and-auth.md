@@ -6,7 +6,7 @@ opened: 2026-06-11
 supersedes: []
 superseded_by: null
 related_specs: [protocol, architecture]
-related_adrs: [2, 5, 10, 12, 13, 14]
+related_adrs: [2, 5, 10, 12, 13, 14, 21, 22, 24]
 ---
 
 # ADR-0011 — Phase 3 の信頼性・認証規約(seq / permission 相関 / トークン)

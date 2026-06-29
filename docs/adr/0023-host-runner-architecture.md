@@ -6,7 +6,7 @@ opened: 2026-06-23
 supersedes: []
 superseded_by: null
 related_specs: [architecture, protocol, threat-model, setup-wizards]
-related_adrs: [2, 14, 18]
+related_adrs: [2, 14, 18, 24]
 ---
 
 # ADR-0023 — ホスト常駐 runner のアーキテクチャ

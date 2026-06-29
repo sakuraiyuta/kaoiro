@@ -6,7 +6,7 @@ opened: 2026-06-10
 supersedes: []
 superseded_by: null
 related_specs: [architecture, non-goals, protocol]
-related_adrs: [4, 5, 8, 9, 12]
+related_adrs: [4, 5, 8, 9, 12, 20]
 ---
 
 # ADR-0007 — クライアントは別プロジェクト分離、リファレンスダッシュボードを同梱

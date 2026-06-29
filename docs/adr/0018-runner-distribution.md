@@ -6,7 +6,7 @@ opened: 2026-06-16
 supersedes: []
 superseded_by: null
 related_specs: [setup-wizards]
-related_adrs: [17, 23]
+related_adrs: [17, 23, 24]
 ---
 
 # ADR-0018 — wrapper/runner の配布

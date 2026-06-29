@@ -6,7 +6,7 @@ opened: 2026-06-15
 supersedes: []
 superseded_by: null
 related_specs: [protocol, architecture, threat-model]
-related_adrs: [5, 11]
+related_adrs: [5, 11, 21]
 ---
 
 # ADR-0013 — ユーザトークンの httpOnly cookie 永続化(リロード耐性)
