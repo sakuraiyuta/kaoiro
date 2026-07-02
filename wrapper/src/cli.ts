@@ -26,7 +26,7 @@ import {
   formatInboundMessage,
 } from "./inter_agent.js";
 import { PermissionBroker } from "./permission.js";
-import { PERMISSION_MODES, loadConfig } from "./persona.js";
+import { PERMISSION_MODES, loadConfig, resolvePersonaAppend } from "./persona.js";
 import { makeLog, makeStateChange } from "./state.js";
 import { ServerLink } from "./transport.js";
 import type {
@@ -91,6 +91,10 @@ async function main(): Promise<void> {
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseCliArgs(process.argv.slice(2));
   const config = loadConfig(configPath);
+  // Persona personality is appended to the SDK's Claude Code preset via
+  // `systemPrompt.append` (ADR-0026). Resolved once at startup — mid-session
+  // flip is intentionally not supported.
+  const appendSystemPrompt = resolvePersonaAppend(config, configPath);
 
   // Resident when server-connected: the session stays open for operator
   // instructions instead of ending after the first turn.
@@ -253,6 +257,7 @@ async function main(): Promise<void> {
   host = new AgentHost(config, {
     onState,
     onLog,
+    appendSystemPrompt,
     // attach_rejected / instruction_rejected ride the same envelope path
     // as state/log — the link relays them to the server (file-upload spec).
     onAttachRejected: (envelope) => link?.send(envelope),

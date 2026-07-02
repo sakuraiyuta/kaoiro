@@ -123,6 +123,14 @@ export interface AgentHostOptions {
    * defaults; canUseTool is reserved by the host and cannot be overridden.
    */
   queryOptions?: Partial<Options>;
+  /**
+   * Persona personality prompt appended to the SDK systemPrompt via the
+   * preset's `append` field (persona-personality-injection spec / ADR-0026).
+   * Composed by cli.ts from the resolved persona.personality_prompt_file and
+   * the common footer; the host just threads it into the SDK options.
+   * Omitted = no `append` field is emitted, matching pre-#63 behaviour.
+   */
+  appendSystemPrompt?: string;
   /** SDK query() factory; injectable for tests. Defaults to the real SDK. */
   queryFn?: typeof query;
   /** ISO-8601 timestamp source; injectable for tests. */
@@ -231,7 +239,14 @@ export class AgentHost {
   } {
     const out: ReturnType<AgentHost["statusSnapshot"]> = {
       agent_id: this.#config.agent_id,
-      persona: this.#config.persona,
+      // Explicit pick: TS erases the narrower shape at runtime, so an
+      // unfiltered `this.#config.persona` would leak personality_prompt_file
+      // / language into wire callers (ADR-0026 "Envelope 非露出").
+      persona: {
+        id: this.#config.persona.id,
+        name: this.#config.persona.name,
+        sprite_set: this.#config.persona.sprite_set,
+      },
       state: this.#machine.state,
     };
     if (this.#model !== null) out.model = this.#model;
@@ -640,7 +655,13 @@ export class AgentHost {
       ...(initialMode === "bypassPermissions"
         ? { allowDangerouslySkipPermissions: true }
         : {}),
-      systemPrompt: { type: "preset", preset: "claude_code" },
+      systemPrompt: {
+        type: "preset",
+        preset: "claude_code",
+        ...(this.#options.appendSystemPrompt !== undefined
+          ? { append: this.#options.appendSystemPrompt }
+          : {}),
+      },
       ...this.#options.queryOptions,
       hooks: {
         ...userHooks,

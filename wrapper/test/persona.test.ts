@@ -60,6 +60,67 @@ describe("parseConfig", () => {
     ).toThrow(ConfigError);
   });
 
+  it("persona.id の path traversal / 不正文字を弾く (ADR-0026 F2)", () => {
+    // persona.id is used as a path segment in resolvePersonaAppend's default
+    // branch (`<root>/personas/<id>.md`). AGENT_ID_PATTERN blocks '/' and
+    // '\\' — the characters that would let a server-pushed persona.id
+    // escape the personas/ tree.
+    for (const bad of ["../etc", "a/b", "a\\b", "/abs", "日本語", "a:b"]) {
+      expect(() =>
+        parseConfig({
+          ...valid,
+          persona: { ...valid.persona, id: bad },
+        }),
+      ).toThrow(ConfigError);
+    }
+  });
+
+  describe("persona.personality_prompt_file (ADR-0026)", () => {
+    it("非空文字列を受け入れる", () => {
+      const cfg = {
+        ...valid,
+        persona: { ...valid.persona, personality_prompt_file: "./mio.md" },
+      };
+      expect(parseConfig(cfg)).toMatchObject({
+        persona: { personality_prompt_file: "./mio.md" },
+      });
+    });
+
+    it("空文字・非文字列は ConfigError", () => {
+      for (const bad of ["", "  ", 1, null, {}]) {
+        expect(() =>
+          parseConfig({
+            ...valid,
+            persona: { ...valid.persona, personality_prompt_file: bad },
+          }),
+        ).toThrow(ConfigError);
+      }
+    });
+  });
+
+  describe("persona.language (ADR-0026)", () => {
+    it("非空文字列を受け入れる", () => {
+      const cfg = {
+        ...valid,
+        persona: { ...valid.persona, language: "ja" },
+      };
+      expect(parseConfig(cfg)).toMatchObject({
+        persona: { language: "ja" },
+      });
+    });
+
+    it("空文字・非文字列は ConfigError", () => {
+      for (const bad of ["", "  ", 1, null, {}]) {
+        expect(() =>
+          parseConfig({
+            ...valid,
+            persona: { ...valid.persona, language: bad },
+          }),
+        ).toThrow(ConfigError);
+      }
+    });
+  });
+
   it("オブジェクト以外を弾く", () => {
     expect(() => parseConfig(null)).toThrow(ConfigError);
     expect(() => parseConfig("nope")).toThrow(ConfigError);

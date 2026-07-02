@@ -15,11 +15,25 @@ import type {
   InterAgentMessagePayload,
   KaoiroState,
   LogPayload,
+  Persona,
   ResultPayload,
+  WirePersona,
   WrapperConfig,
 } from "./types.js";
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
+
+/** Strip config-only persona fields (personality_prompt_file, language)
+ *  before an envelope leaves the wrapper. Type-splitting alone does not
+ *  drop keys at runtime, so every wire-construction site funnels through
+ *  this helper (persona-personality-injection MUST / ADR-0026). */
+function toWirePersona(persona: Persona): WirePersona {
+  return {
+    id: persona.id,
+    name: persona.name,
+    sprite_set: persona.sprite_set,
+  };
+}
 
 /** Machine state: the settled coarse state plus the unanswered tool_use ids. */
 export interface MachineState {
@@ -174,7 +188,7 @@ export function makeStateChange(
   return {
     version: "0",
     agent_id: config.agent_id,
-    persona: config.persona,
+    persona: toWirePersona(config.persona),
     ts,
     type: "state_change",
     state,
@@ -195,7 +209,7 @@ export function makeLog(
   return {
     version: "0",
     agent_id: config.agent_id,
-    persona: config.persona,
+    persona: toWirePersona(config.persona),
     ts,
     type: "log",
     state,
@@ -216,7 +230,7 @@ export function makeResult(
   return {
     version: "0",
     agent_id: config.agent_id,
-    persona: config.persona,
+    persona: toWirePersona(config.persona),
     ts,
     type: "result",
     state: payload.is_error ? "error" : "done",
@@ -235,7 +249,7 @@ export function makePermissionRequest(
   return {
     version: "0",
     agent_id: config.agent_id,
-    persona: config.persona,
+    persona: toWirePersona(config.persona),
     ts,
     type: "permission_request",
     state: "waiting_permission",
@@ -258,7 +272,7 @@ export function makeInterAgentMessage(
   return {
     version: "0",
     agent_id: config.agent_id,
-    persona: config.persona,
+    persona: toWirePersona(config.persona),
     ts,
     type: "inter_agent_message",
     state,
@@ -279,7 +293,7 @@ export function makeAttachRejected(
   return {
     version: "0",
     agent_id: config.agent_id,
-    persona: config.persona,
+    persona: toWirePersona(config.persona),
     ts,
     type: "attach_rejected",
     state,
@@ -299,7 +313,7 @@ export function makeInstructionRejected(
   return {
     version: "0",
     agent_id: config.agent_id,
-    persona: config.persona,
+    persona: toWirePersona(config.persona),
     ts,
     type: "instruction_rejected",
     state,

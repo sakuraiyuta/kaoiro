@@ -2,8 +2,25 @@
 // persona"). agent_id is a stable id; volatile runtime-generated ids are not
 // used.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { PermissionMode, WrapperConfig } from "./types.js";
+
+/** Common footer appended after every persona's personality prompt.
+ *  Provisional hard-code per persona-common-footer open-question
+ *  (暫定方針 B). Structured composition is deferred to phase-1. */
+const COMMON_FOOTER =
+  "このエージェントは kaoiro クライアント越しに操作されています。";
+
+/** Wrapper package root (directory containing `package.json`). Used as the
+ *  base for default personality file resolution (`<root>/personas/<id>.md`).
+ *  Compiled `dist/persona.js` and dev-mode `src/persona.ts` both sit one
+ *  level under the package root, so `..` finds it from either entry. */
+const WRAPPER_PACKAGE_ROOT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
 // The protocol package is types-only (no runtime exports), so the closed
 // enum's value list is duplicated here. Keep in sync with the PermissionMode
@@ -67,11 +84,31 @@ export function parseConfig(raw: unknown): WrapperConfig {
   if (!isObject(raw.persona)) {
     throw new ConfigError("persona must be an object");
   }
-  const persona = {
-    id: nonEmptyString(raw.persona.id, "persona.id"),
+  const personaId = nonEmptyString(raw.persona.id, "persona.id");
+  // persona.id is used as a filesystem path segment when resolving the
+  // default personality file (`<wrapper-root>/personas/<id>.md`), so the
+  // same charset restriction as agent_id keeps a malicious server-pushed
+  // spawn from steering resolvePersonaAppend outside the personas/ tree
+  // (persona-personality-injection MUST NOT / ADR-0026).
+  if (!AGENT_ID_PATTERN.test(personaId)) {
+    throw new ConfigError(
+      "persona.id must contain only letters, digits, '.', '_' or '-'",
+    );
+  }
+  const persona: WrapperConfig["persona"] = {
+    id: personaId,
     name: nonEmptyString(raw.persona.name, "persona.name"),
     sprite_set: nonEmptyString(raw.persona.sprite_set, "persona.sprite_set"),
   };
+  if (raw.persona.personality_prompt_file !== undefined) {
+    persona.personality_prompt_file = nonEmptyString(
+      raw.persona.personality_prompt_file,
+      "persona.personality_prompt_file",
+    );
+  }
+  if (raw.persona.language !== undefined) {
+    persona.language = nonEmptyString(raw.persona.language, "persona.language");
+  }
 
   const config: WrapperConfig = { agent_id, persona };
 
@@ -162,4 +199,57 @@ export function loadConfig(path: string): WrapperConfig {
   return parseConfig(raw);
 }
 
-export { ConfigError };
+/**
+ * Resolves the personality Markdown file for a config and composes the
+ * append string for the SDK systemPrompt (persona-personality-injection
+ * spec / ADR-0026). The return value is the ready-to-append text: a
+ * personality body (when a file was resolved) followed by
+ * {@link COMMON_FOOTER} — the footer is always present.
+ *
+ * Resolution rules:
+ * - explicit `persona.personality_prompt_file`: resolved from the config
+ *   file's directory (or as-is if absolute). Missing = ConfigError
+ *   (fail-fast, the user explicitly requested this file).
+ * - unset: `<wrapper package root>/personas/<persona.id>.md`. Missing =
+ *   OK (footer only). This lets the `default` persona and any not-yet-
+ *   packaged persona.id boot without a file.
+ *
+ * @param configPath  Path to the loaded config file. Used to resolve the
+ *   custom `personality_prompt_file` relatively. Pass an absolute path in
+ *   production; tests may pass any path since the resolution never falls
+ *   back to CWD.
+ */
+export function resolvePersonaAppend(
+  config: WrapperConfig,
+  configPath: string,
+  options: { packageRoot?: string } = {},
+): string {
+  const packageRoot = options.packageRoot ?? WRAPPER_PACKAGE_ROOT;
+  const custom = config.persona.personality_prompt_file;
+
+  let personality = "";
+  if (custom !== undefined) {
+    const resolved = isAbsolute(custom)
+      ? custom
+      : resolve(dirname(configPath), custom);
+    try {
+      personality = readFileSync(resolved, "utf8").trim();
+    } catch (cause) {
+      throw new ConfigError(
+        `cannot read persona.personality_prompt_file: ${resolved}`,
+        { cause },
+      );
+    }
+  } else {
+    const bundled = resolve(packageRoot, "personas", `${config.persona.id}.md`);
+    if (existsSync(bundled)) {
+      personality = readFileSync(bundled, "utf8").trim();
+    }
+  }
+
+  return personality.length > 0
+    ? `${personality}\n\n${COMMON_FOOTER}`
+    : COMMON_FOOTER;
+}
+
+export { COMMON_FOOTER, ConfigError };

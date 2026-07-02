@@ -228,9 +228,18 @@ export class InterAgentTool {
    *  config when no live host status provider is wired (e.g. early in
    *  startup or in local-only mode). */
   whoami(): InterAgentToolResult {
+    const cfgPersona = this.#options.config.persona;
     const snapshot = this.#options.getWhoami?.() ?? {
       agent_id: this.#options.config.agent_id,
-      persona: this.#options.config.persona,
+      // Same wire-safety pick as host.ts#statusSnapshot — this fallback path
+      // is only hit when getWhoami is unwired (early startup / local-only),
+      // but the shape must still exclude personality_prompt_file / language
+      // (ADR-0026 "Envelope 非露出").
+      persona: {
+        id: cfgPersona.id,
+        name: cfgPersona.name,
+        sprite_set: cfgPersona.sprite_set,
+      },
       state: this.#options.getState(),
     };
     return {

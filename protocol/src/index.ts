@@ -44,11 +44,33 @@ export interface ResultPayload {
   is_error?: boolean;
 }
 
-/** Assigned persona (protocol.md / ADR-0003). */
-export interface Persona {
+/** Wire-safe subset of Persona used in every network-facing type
+ *  (Envelope, RunnerRegister, SpawnMessage, and any future wire shape).
+ *  Config-only fields on {@link Persona} stay wrapper-local — a local
+ *  filesystem path must never leave the wrapper
+ *  (persona-personality-injection MUST / ADR-0026 "Envelope 非露出"). */
+export interface WirePersona {
   id: string;
   name: string;
   sprite_set: string;
+}
+
+/** Assigned persona (protocol.md / ADR-0003). The full config-level view
+ *  including optional personality/language fields that {@link WirePersona}
+ *  intentionally omits. */
+export interface Persona extends WirePersona {
+  /** Path to a Markdown file with the persona's personality prompt
+   *  (口調・一人称・語尾・返答スタイル). Relative paths resolve from the
+   *  config file's directory. When unset the wrapper falls back to
+   *  `<wrapper-root>/personas/<id>.md`; when that also does not exist,
+   *  no personality is appended (persona-personality-injection spec /
+   *  ADR-0026). */
+  personality_prompt_file?: string;
+  /** Language hint for the personality prompt (BCP-47 or short code).
+   *  Phase-0 only carries this value; multilingual dispatch is deferred
+   *  to persona-language-dispatch (ADR-0026 D4). Default when consumed:
+   *  "ja". */
+  language?: string;
 }
 
 /** Wrapper init config. agent_id is a stable id, constant across restarts.
@@ -120,7 +142,7 @@ export interface Envelope {
    *  session_id). Stamped by ServerLink at send time alongside seq; absent
    *  until the SDK reports one, and on envelopes that never go to a server. */
   session_id?: string;
-  persona: Persona;
+  persona: WirePersona;
   ts: string;
   /** Wrapper-issued monotonic sequence (ADR-0011), stamped by ServerLink
    *  at send time; absent on envelopes that never go to a server. */
@@ -219,7 +241,7 @@ export interface InterAgentMessagePayload {
 export interface RunnerRegister {
   version: "0";
   host_id: string;
-  personas: Persona[];
+  personas: WirePersona[];
   cwd_allowlist: string[];
   capabilities?: string[];
 }
@@ -242,7 +264,7 @@ export interface RunnerHeartbeat {
 export interface SpawnMessage {
   version: "0";
   agent_id: string;
-  persona: Persona;
+  persona: WirePersona;
   cwd: string;
   server_url?: string;
   token?: string;

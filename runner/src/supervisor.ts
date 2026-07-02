@@ -6,11 +6,11 @@
 // logic is testable without real processes (default launcher: spawn.ts).
 
 import type {
-  Persona,
   RunnerSessions,
   SessionMeta,
   SpawnFailReason,
   SpawnResult,
+  WirePersona,
   WrapperConfig,
 } from "@kaoiro/protocol";
 import {
@@ -55,7 +55,7 @@ export type LaunchFn = (
  *  is optional: under案A the server omits it and the runner falls back to its
  *  own wrapper URL (ADR-0024). */
 export interface ParsedSpawn {
-  persona: Persona;
+  persona: WirePersona;
   cwd: string;
   serverUrl?: string;
   token?: string;
@@ -97,7 +97,7 @@ export function readAgentId(payload: unknown): string | null {
   return id;
 }
 
-function parsePersona(value: unknown): Persona | null {
+function parsePersona(value: unknown): WirePersona | null {
   if (!isObject(value)) return null;
   const { id, name, sprite_set } = value;
   if (

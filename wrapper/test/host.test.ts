@@ -273,6 +273,50 @@ describe("AgentHost — query injection", () => {
     expect(captured?.allowDangerouslySkipPermissions).toBe(true);
   });
 
+  it("appendSystemPrompt が SDK systemPrompt.append に渡る (ADR-0026)", async () => {
+    let captured!: Options;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      captured = args.options;
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      appendSystemPrompt: "口調ガイド + フッター",
+      now: () => "T",
+    });
+    await host.run();
+    expect(captured?.systemPrompt).toEqual({
+      type: "preset",
+      preset: "claude_code",
+      append: "口調ガイド + フッター",
+    });
+  });
+
+  it("appendSystemPrompt を指定しなければ append フィールドは出さない", async () => {
+    let captured!: Options;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      captured = args.options;
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(captured?.systemPrompt).toEqual({
+      type: "preset",
+      preset: "claude_code",
+    });
+  });
+
   it("run() 前の setPermissionMode は SDK 開始時のモードを上書きする (#58)", async () => {
     let captured!: Options;
     const queryFn = makeQueryFn((args: QueryArgs) => {

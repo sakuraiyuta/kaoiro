@@ -12,6 +12,7 @@ export type {
   ResultPayload,
   PermissionMode,
   Persona,
+  WirePersona,
   WrapperConfig,
   PendingPermissionExt,
   Envelope,
