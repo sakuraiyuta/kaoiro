@@ -6,7 +6,7 @@ opened: 2026-06-04
 supersedes: []
 superseded_by: null
 related_specs: []
-related_adrs: []
+related_adrs: [26]
 ---
 
 # ADR-0006 — ドキュメント・UI は日本語、ベータ前に全英訳

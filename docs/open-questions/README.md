@@ -19,6 +19,11 @@
 | [file-upload-name-collision](file-upload-name-collision.md) | low | — | 2026-06-27 |
 | [file-upload-files-api-route](file-upload-files-api-route.md) | low | — | 2026-06-27 |
 | [file-upload-markitdown-fallback](file-upload-markitdown-fallback.md) | low | — | 2026-06-27 |
+| [persona-common-footer](persona-common-footer.md) | medium | persona-personality-injection | 2026-07-02 |
+| [persona-behavioral-prompt](persona-behavioral-prompt.md) | low | — | 2026-07-02 |
+| [persona-voice-distinctiveness](persona-voice-distinctiveness.md) | low | — | 2026-07-02 |
+| [persona-language-dispatch](persona-language-dispatch.md) | low | persona-personality-injection | 2026-07-02 |
+| [persona-personality-vs-dialogue](persona-personality-vs-dialogue.md) | low | — | 2026-07-02 |
 
 ## Recently decided
 

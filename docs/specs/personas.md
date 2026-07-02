@@ -11,8 +11,12 @@ related: [protocol]
 
 Phase 2 タスク 2-3(表情差分の量産)と将来のペルソナ追加が参照する、
 キャラクターデザインの決定事項を定める。対象は**絵と名前、および表情
-演技の方針**のみ。口調・一人称などの会話設定は対象外(現行仕様に消費
-する機能がないため。将来セリフ表示等を導入する際に別途決定する)。
+演技の方針**。口調・一人称などの実行時の応答口調は
+[persona-personality-injection](persona-personality-injection.md) に委譲
+する(2026-07-02 に「対象外」条項を撤回、[ADR-0026](../adr/0026-persona-personality-injection.md))。
+将来のセリフ吹き出し UI との関係は
+[persona-personality-vs-dialogue](../open-questions/persona-personality-vs-dialogue.md)
+を参照。
 
 ## Definition
 
@@ -35,9 +39,13 @@ Phase 2 タスク 2-3(表情差分の量産)と将来のペルソナ追加が参
 | `momo` | もも | ちび全身 | ピンク | ピンクのツインテール、リボン | 元気・オーバーリアクション。遠目で最も読みやすい |
 | `kuroe` | くろえ | 非デフォルメ・バストアップ | 青みがかった黒 | 25〜30 代女性、おかっぱに近いショートヘア、シックなスーツ、モノクル | 淡々として諫言を厭わない有能秘書。冷静で振れ幅小 |
 
-性格付けは会話用ではなく、生成プロンプトで表情の出し方を一貫させる
-ための設計資料(例: 同じ `done` でも ao は小さなドヤ顔、momo は満面の
-笑み、kuroe は控えめな微笑と会釈)。
+性格付けは**立ち絵生成プロンプトで表情の出し方を一貫させるための設計
+資料**であると同時に、[persona-personality-injection](persona-personality-injection.md)
+経由で**実行時の人格プロンプトにも消費される**(2026-07-02 に用途を
+拡張、[ADR-0026](../adr/0026-persona-personality-injection.md))。例:
+同じ `done` でも ao は小さなドヤ顔 + 控えめな一言、momo は満面の笑み +
+オーバーリアクションの一言、kuroe は控えめな微笑と会釈 + 淡々とした報告、
+と表情演技と応答口調が対応する。
 
 ### デフォルトペルソナ(素の AI)
 
@@ -150,8 +158,11 @@ isnet-anime で背景除去、git 管理外)。正式配置済みの git 管理�
 
 ## See Also
 
-- Related specs: [protocol](protocol.md)
+- Related specs: [protocol](protocol.md),
+  [persona-personality-injection](persona-personality-injection.md)
 - ADRs: [0003](../adr/0003-persona-identity-persistence.md),
   [0004](../adr/0004-client-rendering-staged.md),
-  [0008](../adr/0008-persona-asset-distribution.md)
-- Plan: [phase-2-client-character](../plans/phase-2-client-character.md)
+  [0008](../adr/0008-persona-asset-distribution.md),
+  [0026](../adr/0026-persona-personality-injection.md)
+- Plans: [phase-2-client-character](../plans/phase-2-client-character.md),
+  [persona-personality-injection](../plans/persona-personality-injection.md)

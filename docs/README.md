@@ -45,6 +45,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0023](adr/0023-host-runner-architecture.md) | ホスト常駐 runner — supervisor 専任・1 process=1 agent・TS/Node 単一バイナリ | accepted |
 | [0024](adr/0024-agent-instance-identity-and-spawn-auth.md) | エージェントのインスタンス同一性と spawn 認証 — persona=型 / agent_id=インスタンス、runner 一本化の発行型認証 | accepted |
 | [0025](adr/0025-file-upload-wire-and-wrapper-rendering.md) | ファイルアップロードの wire と wrapper-internal レンダリング | accepted |
+| [0026](adr/0026-persona-personality-injection.md) | 人格プロンプト注入 — SDK systemPrompt.append + wrapper 同梱 md | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh --columns "# 決定 Status" docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。

@@ -15,6 +15,7 @@
 | [subagent-tasks](subagent-tasks.md) | provisional | subagent/workflow タスクの検知と専用 envelope 通知 |
 | [file-upload](file-upload.md) | provisional | ダッシュボードからの添付(画像/テキスト/PDF/Office)を wrapper で SDK へ render |
 | [personas](personas.md) | accepted | ペルソナ立ち絵のデザイン方針・画像規格・生成ワークフロー |
+| [persona-personality-injection](persona-personality-injection.md) | provisional | 口調・一人称等の人格プロンプトを Claude Agent SDK に注入する仕組み |
 | [threat-model](threat-model.md) | accepted | 双方向ルーティングの脅威と緩和策 |
 | [auth-and-authz](auth-and-authz.md) | accepted | 各ノードの認証・認可境界の現状マップ。OSS 公開前監査 (#91) の起点 |
 | [setup-wizards](setup-wizards.md) | provisional | 設定 / env 生成ウィザード(wrapper config・server .env) |

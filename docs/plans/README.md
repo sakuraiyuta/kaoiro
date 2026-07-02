@@ -17,6 +17,15 @@
 | 7 | [phase-7-file-upload](phase-7-file-upload.md) | ⏳ | ファイルアップロード(添付の取り込み、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)) |
 | 8 | [phase-8-inter-agent-messaging](phase-8-inter-agent-messaging.md) | ⏳ | エージェント間メッセージング(複数 AI エージェントの協調対話、[issue #17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17)) |
 
+## Feature-local plans
+
+ロードマップ番号を持たない feature-local plan。対象 feature の phase-0 /
+phase-1 を plan 内の節として持つ(project の phase-N とは無関係)。
+
+| Slug | Status | 説明 |
+|------|--------|------|
+| [persona-personality-injection](persona-personality-injection.md) | ⏳ | 口調・一人称等の人格プロンプトを Claude Agent SDK に注入([ADR-0026](../adr/0026-persona-personality-injection.md)) |
+
 ## 将来
 
 - アダプタ拡張(Codex 等)— コアの agent 非依存性を保ったまま追加。
