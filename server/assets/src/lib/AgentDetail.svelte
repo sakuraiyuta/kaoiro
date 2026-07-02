@@ -2188,6 +2188,27 @@
 
   .msg :global(pre code) { color: var(--fg); }
 
+  /* Markdown table (#81): draw cell borders so columns read cleanly, and
+     lift the header row with a darker fill + centred text. --bg is the
+     same tone `pre` uses inside .msg, so tables sit at the same visual
+     depth as code blocks against the bubble's --bg-card ground. */
+  .msg :global(table) {
+    margin: 0.4rem 0;
+    border-collapse: collapse;
+  }
+
+  .msg :global(th),
+  .msg :global(td) {
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--line);
+  }
+
+  .msg :global(th) {
+    text-align: center;
+    background: var(--bg);
+    font-weight: 600;
+  }
+
   /* Rendered mermaid diagram (#42): centre it and keep the SVG responsive. */
   .msg :global(.mermaid-rendered) {
     margin: 0.5rem 0;
