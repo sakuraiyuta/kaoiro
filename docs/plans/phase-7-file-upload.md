@@ -1,10 +1,10 @@
 ---
 title: ファイルアップロード(添付の取り込み)
 description: ダッシュボードから画像/テキスト/PDF/Office を Claude Code に渡せるようにする — pre-spike + 単一画像 E2E + feature complete MVP の3段階。
-status: in_progress
+status: done
 phase: 7
 depends_on: [phase-3.5-response-display, phase-4-host-runner]
-last_updated: 2026-06-27
+last_updated: 2026-07-03
 ---
 
 # Phase 7 — ファイルアップロード(添付の取り込み)
@@ -202,8 +202,10 @@ Stage B と同じ A→B→C→D の順、 機能を漸進的に追加。 1 機�
 - [x] IN1 / IN2 / IN3 spike 完了
 - [x] spec / ADR-0025 / protocol.md に数値・ wire 細部・ ライブラリ採用を反映
 - [x] Q9 / Q10 を open-questions に追加
-- [ ] (Stage B 着手の go サイン)
+- [x] (Stage B 着手の go サイン)
 
 ## Followups
 
 各 OQ の起票判断: Stage C 完了時にユーザと確認、 必要分のみ個別 issue 化。
+Stage A〜C の実装は 2026-06-27 完了済で、この起票判断が本フェーズ唯一の
+残作業(実装外の curation)。

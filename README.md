@@ -9,11 +9,12 @@
 
 ## ステータス
 
-Phase 3(複数エージェント集約)まで完了。Phase 4(ホスト常駐 runner)も
-単一バイナリ配布(4-7)を残して実装済みで、共通プロトコルは確定済み
+Phase 3(複数エージェント集約)まで完了。Phase 4(ホスト常駐 runner)は
+単一バイナリ配布(4-7)を残して実装済み、Phase 7(ファイルアップロード)は
+完了。共通プロトコルは確定済み
 ([docs/specs/protocol.md](docs/specs/protocol.md))。現在は
-Phase 3.5(返答表示)と Phase 7(ファイルアップロード)が進行中。
-最新の進捗は [docs/plans/](docs/plans/) を参照。
+Phase 3.5(返答表示)の仕上げが進行中。最新の進捗は
+[docs/plans/](docs/plans/) を参照。
 
 ## 全体像
 
@@ -81,12 +82,9 @@ runner 経由で spawn する。env・トークン設定や各コンポーネン
 
 ## 現在のゴール
 
-Phase 3.5: **返答表示(同梱ダッシュボードの実用化)**。エージェントの
-応答テキストを中継・表示し、同梱ダッシュボードを単体で最低限実用にする
+Phase 3.5: **返答表示(同梱ダッシュボードの実用化)**。中継・表示の
+必須タスクは完了済みで、残るはタイル遷移アニメ・枠線 UI 等の仕上げ
 ([docs/plans/phase-3.5-response-display.md](docs/plans/phase-3.5-response-display.md))。
-並行して Phase 7: **ファイルアップロード**(画像/テキスト/PDF/Office の
-添付取り込み、[docs/plans/phase-7-file-upload.md](docs/plans/phase-7-file-upload.md))
-が進行中。
 
 ## 思想
 
