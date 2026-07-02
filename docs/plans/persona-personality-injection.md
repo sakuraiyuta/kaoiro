@@ -1,10 +1,10 @@
 ---
 title: Persona Personality Injection — feature-local plan
 description: 人格プロンプト注入の実装スライス(project-wide ロードマップ外の feature-local plan)。
-status: planned
+status: done
 phase: 0
 depends_on: []
-last_updated: 2026-07-02
+last_updated: 2026-07-03
 ---
 
 # Persona Personality Injection — feature-local plan
@@ -27,24 +27,24 @@ kaoiro の `plans/` は phase-0 〜 phase-8 の**プロジェクト全体ロー�
 
 ### Acceptance Criteria
 
-- [ ] `Persona` 型に `personality_prompt_file?: string` と
+- [x] `Persona` 型に `personality_prompt_file?: string` と
   `language?: string` を追加(`protocol/src/index.ts` +
   `wrapper/src/persona.ts` の `parseConfig`)
-- [ ] `wrapper/personas/{ao,momo,kuroe}.md` を新規同梱
+- [x] `wrapper/personas/{ao,momo,kuroe}.md` を新規同梱
   ([specs/personas.md](../specs/personas.md) の性格付けを実際の
   口調プロンプトに具体化)
-- [ ] wrapper 起動時に `personality_prompt_file` 未指定なら
+- [x] wrapper 起動時に `personality_prompt_file` 未指定なら
   `wrapper/personas/<persona.id>.md` をデフォルト解決する
-- [ ] `wrapper/src/host.ts` の `systemPrompt` を
+- [x] `wrapper/src/host.ts` の `systemPrompt` を
   `{ type: 'preset', preset: 'claude_code', append: <personality> +
   <共通フッター暫定1文> }` に組み替え
-- [ ] `default` ペルソナは personality を append せず、共通フッター
+- [x] `default` ペルソナは personality を append せず、共通フッター
   のみ append される
-- [ ] 参照ファイル不在時は `ConfigError` で fail-fast する
-- [ ] `agent.{ao,kuroe,momo}.json` を新スキーマに合わせて更新
+- [x] 参照ファイル不在時は `ConfigError` で fail-fast する
+- [x] `agent.{ao,kuroe,momo}.json` を新スキーマに合わせて更新
   (personality_prompt_file / language を追加、または未指定で
   デフォルト解決に任せる)
-- [ ] `wrapper/kaoiro.config.example.json` に新フィールドの記述を追加
+- [x] `wrapper/kaoiro.config.example.json` に新フィールドの記述を追加
 - [ ] 目視で ao / momo / kuroe の応答口調が明らかに違うことを確認
   (SHOULD 目標、厳密テストは要らない)
 
@@ -52,15 +52,15 @@ kaoiro の `plans/` は phase-0 〜 phase-8 の**プロジェクト全体ロー�
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 0-1 | protocol/src/index.ts の `Persona` 拡張 | ⏳ | 2 フィールド追加、既存互換 |
-| 0-2 | wrapper/src/persona.ts の `parseConfig` 拡張 | ⏳ | 新フィールド受理 + 長さ・パス検証 |
-| 0-3 | wrapper/personas/ ディレクトリ + 4 体分のスケルトン | ⏳ | ao/momo/kuroe.md を執筆、default は不要 |
-| 0-4 | 起動時解決ロジック(config 指定 → 同梱デフォルト → なし) | ⏳ | wrapper/src/host.ts か新規モジュール |
-| 0-5 | host.ts の `systemPrompt` を append 形に組み替え | ⏳ | 共通フッター暫定 1 文をハードコード |
-| 0-6 | agent.{ao,kuroe,momo}.json を新スキーマに移行 | ⏳ | 既定値のみで動く形が望ましい |
-| 0-7 | kaoiro.config.example.json に新フィールドの例を追加 | ⏳ | 使い方の例示 |
-| 0-8 | wrapper test 追加(parseConfig / 解決ロジック) | ⏳ | 参照ファイル不在時の ConfigError も含む |
-| 0-9 | 手動 dogfooding 確認(3 体で応答口調の差を目視) | ⏳ | 目視 SHOULD、機械テストは要らない |
+| 0-1 | protocol/src/index.ts の `Persona` 拡張 | ✅ | 2 フィールド追加、既存互換(f6ad322) |
+| 0-2 | wrapper/src/persona.ts の `parseConfig` 拡張 | ✅ | 新フィールド受理 + 長さ・パス検証 |
+| 0-3 | wrapper/personas/ ディレクトリ + 3 体分のスケルトン | ✅ | ao/momo/kuroe.md を執筆、default は不要。kuroe は 4734d97 で秘書ペルソナ準拠に改訂 |
+| 0-4 | 起動時解決ロジック(config 指定 → 同梱デフォルト → なし) | ✅ | `resolvePersonaAppend`(wrapper/src/persona.ts) |
+| 0-5 | host.ts の `systemPrompt` を append 形に組み替え | ✅ | `appendSystemPrompt` オプション + preset append |
+| 0-6 | agent.{ao,kuroe,momo}.json を新スキーマに移行 | ✅ | 既定値のみで動く形(デフォルト解決に委任) |
+| 0-7 | kaoiro.config.example.json に新フィールドの例を追加 | ✅ | `language` の例示 |
+| 0-8 | wrapper test 追加(parseConfig / 解決ロジック) | ✅ | persona / persona_resolve / host test 追加、ConfigError 含む |
+| 0-9 | 手動 dogfooding 確認(3 体で応答口調の差を目視) | 🟡 | kuroe は実運用で確認済み。ao / momo との 3 体比較は未実施 |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
@@ -80,7 +80,9 @@ phase-0 の実装を回した後、以下の open-question が decide された�
 
 ## Followups (in-phase but unfinished)
 
-なし(feature phase-0 未着手)。
+feature phase-0 は実装完了(f6ad322。kuroe 口調改訂は 4734d97)。残は
+0-9 の 3 体口調比較のみ(kuroe は実運用確認済み、ao / momo との目視比較が
+未実施 — SHOULD 目標)。feature phase-1 は上記 open-questions の決着待ち。
 
 ## Open Questions Blocking This Phase
 

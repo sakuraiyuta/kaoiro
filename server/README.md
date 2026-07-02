@@ -12,8 +12,9 @@ WebSocket(Phoenix Channels, vsn=2.0.0)で受け、最新状態を保持して
 
 ラッパーからのエンベロープを受けて最新状態を保持・配信し、双方向ルーティング
 (指示・承認)、トークン認証(ADR-0011、issue #28 で client は fail-closed)、
-返答ログのインメモリ履歴・operator 限定配信(ADR-0012)まで実装済み。TLS は
-リバースプロキシ終端。詳細は [docs/plans/](../docs/plans/)。
+返答ログのインメモリ履歴・operator 限定配信(ADR-0012)、runner のホスト
+登録・spawn/resume 中継(ADR-0023/0024)まで実装済み。TLS はリバース
+プロキシ終端。詳細は [docs/plans/](../docs/plans/)。
 
 | モジュール | 役割 |
 |---|---|
@@ -21,6 +22,7 @@ WebSocket(Phoenix Channels, vsn=2.0.0)で受け、最新状態を保持して
 | `KaoiroServer.Auth` | wrapper/client トークン認証(client は token 未設定で fail-closed) |
 | `KaoiroServerWeb.WrapperSocket` / `WrapperChannel` | ラッパー受信(`wrapper:<agent_id>`)、検証、中継、disconnected 導出 |
 | `KaoiroServerWeb.ClientSocket` / `AgentsChannel` | クライアント配信(`agents:lobby`)、snapshot/history、指示・承認 relay、role 配信制御 |
+| `KaoiroServerWeb.RunnerSocket` / `RunnerChannel` | ランナー受信(`runner:<host_id>`)、ホスト登録・生存通知、spawn/stop/restart 中継(ADR-0023) |
 
 ## 開発
 
@@ -31,7 +33,7 @@ mix phx.server  # localhost:4000
 ```
 
 ソケットエンドポイント: `/wrapper/websocket`(ラッパー)、
-`/client/websocket`(クライアント)。
+`/client/websocket`(クライアント)、`/runner/websocket`(ランナー)。
 
 ## セットアップ / 運用
 
@@ -45,6 +47,8 @@ mix phx.server  # localhost:4000
   (未設定だとダッシュボードが繋がらず空表示になる)。
 - **`KAOIRO_WRAPPER_TOKENS` 未設定 → ラッパー認証を無効化(dev mode)**。
   任意のラッパーが接続可。loopback 限定の開発向け。
+- **`KAOIRO_RUNNER_TOKENS` 未設定 → ランナー認証を無効化(dev mode)**。
+  任意のランナーが接続可(ラッパーと同型、ADR-0023)。
 
 いずれも未設定なら起動時に警告をログ出力する([threat-model](../docs/specs/threat-model.md))。
 
@@ -52,6 +56,7 @@ mix phx.server  # localhost:4000
 |---|---|---|
 | `KAOIRO_CLIENT_TOKENS` | `token:role,...`(role = `viewer` / `operator`) | `dev-op:operator,view1:viewer` |
 | `KAOIRO_WRAPPER_TOKENS` | `agent_id:token,...` | `lab-pc-1.claude-a:wrap-tok` |
+| `KAOIRO_RUNNER_TOKENS` | `host_id:token,...` | `lab-pc-1:runner-tok` |
 
 **形式の注意**: `KAOIRO_CLIENT_TOKENS` は `<token>:<role>` の順。生成した
 シークレット(例 `openssl rand -hex 32`)は **`<token>` 側(コロンの前)** に
@@ -79,6 +84,7 @@ cp .env.example .env
 #   SECRET_KEY_BASE       … `mix phx.gen.secret` で生成
 #   KAOIRO_CLIENT_TOKENS  … 必須(未設定だとダッシュボードが接続拒否される)
 #   KAOIRO_WRAPPER_TOKENS … LAN 公開時は必須
+#   KAOIRO_RUNNER_TOKENS  … LAN 公開時は必須(ランナー認証)
 docker compose up -d --build
 # ダッシュボード: http://localhost:4000/?token=<KAOIRO_CLIENT_TOKENS の token>
 ```
@@ -93,8 +99,10 @@ docker compose up -d --build
 ### ローカル開発(ホットリロード)
 
 > 一括起動なら repo ルートの `./scripts/dev.sh`(サーバ + Vite ダッシュボード +
-> ラッパーをホットリロード/watch 付きで起動し、Ctrl-C で一括停止)。`.env` の
-> source とラッパーの `tsx watch` 起動もまとめて行う。以下はその手動の内訳。
+> runner をホットリロード/watch 付きで起動し、Ctrl-C で一括停止)。`.env` の
+> source と runner の `tsx watch` 起動(`KAOIRO_WRAPPER_DEV=1` で wrapper も
+> hot-reload spawn)をまとめて行い、エージェントはダッシュボードの「+ 起動」
+> から runner 経由で spawn する(ADR-0023)。以下はその手動の内訳。
 
 開発時は docker を使わず、サーバとクライアントをホストで直接起動する。
 docker compose は prod release(コンパイル済みを焼き込む)の通し検証用で、
@@ -116,6 +124,11 @@ set -a && . ./.env && set +a && mix phx.server
 
 # 2) クライアント(別ターミナル。Vite dev server で HMR)
 cd assets && pnpm dev
+
+# 3) runner(別ターミナル、repo ルートから。エージェントの起動・再開は
+#    ダッシュボードの「+ 起動」から行う)
+cd runner &&
+  KAOIRO_WRAPPER_DEV=1 pnpm exec tsx watch src/cli.ts runner.config.json
 ```
 
 - サーバ: `config/dev.exs` の `code_reloader: true` で `lib/` の変更を保存時に
@@ -125,6 +138,10 @@ cd assets && pnpm dev
   `assets/vite.config.ts` の proxy で 4000 の Phoenix へ転送される
   (dev は `check_origin: false`)。ダッシュボードは従来どおり `?token=<token>`
   が必要: `http://localhost:5173/?token=dev-op`。
+- runner: 設定は `runner/runner.config.json`(gitignored。初回は
+  `./scripts/dev.sh` が localhost 既定で自動生成)。wrapper は runner が
+  ダッシュボードの「+ 起動」指示で spawn し、`KAOIRO_WRAPPER_DEV=1` なら
+  wrapper ソースの編集も実行中エージェントへ hot-reload される。
 - `.env` は単純な `KEY=VALUE` 形式にする(値にスペースやクォートを含めると
   `set -a && . ./.env` での読み込みが壊れる)。
 
