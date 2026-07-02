@@ -9,15 +9,15 @@
 
 ## ステータス
 
-Phase 1.5(トレーサーバレット)まで完了。ラッパー(`wrapper/`)・最小
-Phoenix サーバ(`server/`)・最小 Web 表示の縦串が動作し、共通プロトコルは
-確定済み([docs/specs/protocol.md](docs/specs/protocol.md))。現在は
-Phase 2(キャラ表示)に着手中。最新の進捗は
-[docs/plans/](docs/plans/) を参照。
+Phase 3(複数エージェント集約)まで完了。Phase 4(ホスト常駐 runner)も
+単一バイナリ配布(4-7)を残して実装済みで、共通プロトコルは確定済み
+([docs/specs/protocol.md](docs/specs/protocol.md))。現在は
+Phase 3.5(返答表示)と Phase 7(ファイルアップロード)が進行中。
+最新の進捗は [docs/plans/](docs/plans/) を参照。
 
 ## 全体像
 
-3層構成:
+3層構成 + ホスト常駐の監督層(runner):
 
 - **ラッパー(Wrapper)** — エージェントを起動し、入出力を仲介。Claude Code は
   公式の **Claude Agent SDK** をホストして観測・制御・権限ルーティングを行い、
@@ -26,6 +26,10 @@ Phase 2(キャラ表示)に着手中。最新の進捗は
   realtime 配信。指示を該当エージェントへルーティングする。
 - **クライアント(Client)** — 各エージェントの状態をキャラ絵・表情で可視化する
   Web フロント。
+- **ランナー(Runner)** — 各ホストに 1 つ常駐し、wrapper プロセスの
+  spawn / stop / restart・ホスト登録・session 列挙を担う監督層。データ経路は
+  終端せず、wrapper はサーバへ直結のまま
+  ([docs/adr/0023-host-runner-architecture.md](docs/adr/0023-host-runner-architecture.md))。
 
 ## 技術スタック
 
@@ -36,6 +40,10 @@ Phase 2(キャラ表示)に着手中。最新の進捗は
   - 1 接続(エージェント)= 1 GenServer で最新状態を保持、Supervisor 配下で監視
   - PubSub で fan-out、クライアントへ realtime 配信
 - **クライアント: Web フロント(TypeScript)**(描画は静的差分 — `docs/adr/0004-client-rendering-staged.md`)
+- **ランナー: TypeScript / Node**(`@kaoiro/runner`、単一バイナリ配布予定 —
+  `docs/adr/0018-runner-distribution.md`)
+- TS 側は pnpm workspace 構成。共有パッケージ `@kaoiro/protocol` に
+  envelope・制御メッセージ・状態型を集約
 
 ## 当面の対象
 
@@ -44,7 +52,7 @@ Claude Code を最初の対象とする。他エージェント(Codex 等)は将
 
 ## 開発(ローカル起動)
 
-全層(サーバ + ダッシュボード + ラッパー)をホットリロード/watch 付きで
+全層(サーバ + ダッシュボード + runner)をホットリロード/watch 付きで
 一括起動する:
 
 ```sh
@@ -52,9 +60,9 @@ Claude Code を最初の対象とする。他エージェント(Codex 等)は将
 ```
 
 `server/.env` を読み込み(`KAOIRO_CLIENT_TOKENS` 必須)、Phoenix(:4000)・
-Vite ダッシュボード(:5173, HMR)・ラッパー各エージェント(`tsx watch` で
-`agent.*.json` ごとに自動再起動)を起動し、Ctrl-C で一括停止する。env・
-トークン設定や各コンポーネントの個別起動は
+Vite ダッシュボード(:5173, HMR)・runner(`tsx watch`)を起動し、Ctrl-C で
+一括停止する。エージェント(wrapper)はダッシュボードの「+ 起動」から
+runner 経由で spawn する。env・トークン設定や各コンポーネントの個別起動は
 [server/README.md](server/README.md) の「ローカル開発」を参照。
 
 ## ドキュメント
@@ -73,10 +81,12 @@ Vite ダッシュボード(:5173, HMR)・ラッパー各エージェント(`tsx 
 
 ## 現在のゴール
 
-Phase 2: **クライアント + キャラ + 状態ベース表情**。リファレンス
-ダッシュボード(Svelte)でエージェントをキャラ絵表示し、状態を表情へ
-マッピングする
-([docs/plans/phase-2-client-character.md](docs/plans/phase-2-client-character.md))。
+Phase 3.5: **返答表示(同梱ダッシュボードの実用化)**。エージェントの
+応答テキストを中継・表示し、同梱ダッシュボードを単体で最低限実用にする
+([docs/plans/phase-3.5-response-display.md](docs/plans/phase-3.5-response-display.md))。
+並行して Phase 7: **ファイルアップロード**(画像/テキスト/PDF/Office の
+添付取り込み、[docs/plans/phase-7-file-upload.md](docs/plans/phase-7-file-upload.md))
+が進行中。
 
 ## 思想
 

@@ -1,10 +1,10 @@
 ---
 title: Phase 4 — ホスト常駐 runner
 description: 各ホストに常駐 runner を置き、wrapper の spawn/監督/再起動とホスト登録・生存通知・session 列挙を担わせる。
-status: planned
+status: in_progress
 phase: 4
 depends_on: [phase-3-server-multiagent]
-last_updated: 2026-06-24
+last_updated: 2026-07-03
 ---
 
 # Phase 4 — ホスト常駐 runner
@@ -24,14 +24,14 @@ spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
 
 ## Acceptance Criteria
 
-- [ ] runner がサーバへ常時接続し、自ホストを登録・生存通知する。
-- [ ] operator 指示で runner がホスト内 wrapper を spawn / stop / restart する。
-- [ ] 1 wrapper = 1 agent = 1 process を runner が監督し、クラッシュを隔離する。
-- [ ] wrapper は従来どおりサーバへ直結し、データ経路は runner を通らない。
-- [ ] 二重起動が server owner フェンシング + runner ローカルロックの二段で防がれる。
+- [x] runner がサーバへ常時接続し、自ホストを登録・生存通知する。
+- [x] operator 指示で runner がホスト内 wrapper を spawn / stop / restart する。
+- [x] 1 wrapper = 1 agent = 1 process を runner が監督し、クラッシュを隔離する。
+- [x] wrapper は従来どおりサーバへ直結し、データ経路は runner を通らない。
+- [x] 二重起動が server owner フェンシング + runner ローカルロックの二段で防がれる。
 - [ ] runner / wrapper が `kaoiro-runner` 単一バイナリとして配布できる
       ([ADR-0018](../adr/0018-runner-distribution.md))。
-- [ ] operator が起動 UI から (host / persona / 登録済み cwd / 初期プロンプト) を
+- [x] operator が起動 UI から (host / persona / 登録済み cwd / 初期プロンプト) を
       指定して新規 spawn でき、同 UI から既存セッションの resume もできる(範囲=中。
       任意 cwd / 任意 repo clone は初版外、
       [#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))。
