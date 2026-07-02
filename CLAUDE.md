@@ -9,6 +9,8 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 - ラッパー: TypeScript + Claude Agent SDK(`@anthropic-ai/claude-agent-sdk`)
 - サーバ: Elixir / OTP + Phoenix
 - クライアント: Web(TypeScript)
+- ランナー: TypeScript / Node(`@kaoiro/runner`、ホスト常駐の監督層 —
+  ADR-0023)。TS 側は pnpm workspace(共有型は `@kaoiro/protocol`)
 
 ## Documentation
 
@@ -29,3 +31,6 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 ## Workflow rules
 
 - コミットメッセージは日本語。git 操作はユーザ承認のもとで行う。
+- docs/plans/ のタスク表・進捗を更新するときは、frontmatter の
+  `status` / `last_updated` も同時に更新する(status drift の予防。
+  2026-07-03 に不整合 3 例を検出した再発防止)。
