@@ -1,10 +1,10 @@
 ---
 title: Phase 3.5 — 返答表示(同梱ダッシュボードの実用化)
 description: エージェント応答テキストを中継・表示し、同梱ダッシュボードを単体で最低限実用にする。既定タイル一覧→詳細窓。
-status: in_progress
+status: done
 phase: 3.5
 depends_on: [phase-3-server-multiagent]
-last_updated: 2026-06-16
+last_updated: 2026-07-03
 ---
 
 # Phase 3.5 — 返答表示(同梱ダッシュボードの実用化)
@@ -22,9 +22,9 @@ last_updated: 2026-06-16
 - [x] 再読込・再接続で返答ログが復元される(サーバ インメモリ履歴 A)
 - [x] 返答ログは operator のみ閲覧(viewer はグリッド止まり)
 - [x] 全画面詳細中も他エージェントの要対応に気付ける(盲点インジケータ)
-- [ ] 任意の1体へ指示 → その返答が同梱ダッシュボードで読める(end-to-end)
-      — 実装完了(各層のテスト green)。実機ブラウザ + wrapper の e2e は
-      未実施(残る検証ステップ)。
+- [x] 任意の1体へ指示 → その返答が同梱ダッシュボードで読める(end-to-end)
+      — 実装完了(各層のテスト green)。実機 e2e は日常の dogfooding 運用で
+      検収(2026-07-03、オペレータ確認)。
 
 ## Tasks
 
@@ -39,7 +39,8 @@ last_updated: 2026-06-16
 
 MVP 実装完了(wrapper 68 / server 70 / dashboard 13 tests green)。レビュー
 サイクル各段消化。surface した security 3 件は #26/#28 を実装(`0e81680`)、
-# 27 は据置候補。残るは実機 e2e 検証と Stage ポリッシュ(issue #21)。
+# 27 は据置候補。実機 e2e は dogfooding 運用で検収済み(2026-07-03)
+残るは Stage ポリッシュ(issue #21)のみ。
 
 ### Stage ポリッシュ(issue #21 = ゲーム風 UI)
 

@@ -1,10 +1,10 @@
 ---
 title: Phase 8 — エージェント間メッセージング
 description: 複数 AI エージェントの直接対話を可能にする。Stage A 仕様整合→Stage B Phase 1 MVP(ユーザ明示指示)→Stage C Phase 2 permission gate 改善。Stage D Phase 3(自発判断)は #87 完了後。
-status: planned
+status: in_progress
 phase: 8
 depends_on: [phase-3-server-multiagent, phase-4-host-runner]
-last_updated: 2026-06-29
+last_updated: 2026-07-03
 ---
 
 # Phase 8 — エージェント間メッセージング
