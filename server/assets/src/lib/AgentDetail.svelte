@@ -9,6 +9,7 @@
     logOf,
     modelsFrom,
     pendingPermissionFrom,
+    pendingQuestionFrom,
     resultOf,
     RUNNING_STATES,
     STOP_SAFE_STATES,
@@ -79,13 +80,80 @@
   // waiting_permission (issue #59 root cause was deriving this from the
   // permission_request envelope alone, which got overwritten).
   const permission = $derived(pendingPermissionFrom(envelope));
-  // While the permission dialog is open, pin the status display to
-  // `waiting_permission` so a follow-up `tool_running` etc. can't overwrite
-  // the lamp/label (#82).
+  // AskUserQuestion (ADR-0027): structured dialog from ext.pending_question,
+  // the authoritative source (same pattern as pending_permission).
+  const question = $derived(pendingQuestionFrom(envelope));
+  // While a permission or question dialog is open, pin the status display so a
+  // follow-up `tool_running` etc. can't overwrite the lamp/label (#82).
   $effect(() => {
     if (permission) display.hold("waiting_permission");
+    else if (question) display.hold("waiting_question");
     else display.unhold();
   });
+
+  // Per-question working state, reset when a new question (request_id) arrives.
+  let qId = $state<string | null>(null);
+  let qPicks = $state<string[][]>([]); // chosen option labels, per question
+  let qOther = $state<string[]>([]); // free-text "Other", per question
+  $effect(() => {
+    const q = question;
+    if (!q) return;
+    if (untrack(() => qId) !== q.request_id) {
+      qId = q.request_id;
+      qPicks = q.questions.map(() => []);
+      qOther = q.questions.map(() => "");
+    }
+  });
+
+  // The answer for one question, keyed by question text at submit time. Free
+  // text ("Other") overrides the radio choice for single-select; multiSelect
+  // joins the chosen labels (plus any free text) with ", " (ADR-0027).
+  function questionAnswer(i: number): string {
+    const other = qOther[i]?.trim() ?? "";
+    const picks = qPicks[i] ?? [];
+    if (question?.questions[i]?.multiSelect) {
+      return [...picks, ...(other ? [other] : [])].join(", ");
+    }
+    return other || picks[0] || "";
+  }
+
+  const questionReady = $derived(
+    !!question && question.questions.every((_q, i) => questionAnswer(i) !== ""),
+  );
+
+  function pickSingle(i: number, label: string): void {
+    qPicks[i] = [label];
+    qOther[i] = ""; // radio and free text are mutually exclusive
+  }
+  function toggleMulti(i: number, label: string, checked: boolean): void {
+    const set = new Set(qPicks[i] ?? []);
+    if (checked) set.add(label);
+    else set.delete(label);
+    qPicks[i] = [...set];
+  }
+
+  function answerQuestion(): void {
+    if (!connection || !question || !questionReady) return;
+    const rid = question.request_id;
+    const answers: Record<string, string> = {};
+    question.questions.forEach((q, i) => {
+      answers[q.question] = questionAnswer(i);
+    });
+    void run(() =>
+      connection.sendQuestionResponse(envelope.agent_id, rid, answers),
+    );
+  }
+  function cancelQuestion(): void {
+    if (!connection || !question) return;
+    void run(() =>
+      connection.sendQuestionResponse(
+        envelope.agent_id,
+        question.request_id,
+        {},
+        true,
+      ),
+    );
+  }
 
   // Cumulative session cost (USD) carried in ext.cost (#8), or null when the
   // wrapper did not attach it.
@@ -1403,6 +1471,60 @@
           </div>
         {/if}
 
+        {#if question}
+          <!-- Question dock (#78, ADR-0027): AskUserQuestion's structured
+               choices — radios for single-select, checkboxes for multiSelect,
+               plus a free-text "Other" per question. -->
+          <div class="question-dock">
+            <p class="question-title">回答を選んでください</p>
+            {#each question.questions as q, i (i)}
+              <fieldset class="question-item">
+                <legend>{q.header}</legend>
+                <p class="question-q">{q.question}</p>
+                {#each q.options as opt (opt.label)}
+                  <label class="question-option">
+                    {#if q.multiSelect}
+                      <input
+                        type="checkbox"
+                        checked={qPicks[i]?.includes(opt.label) ?? false}
+                        onchange={(e) =>
+                          toggleMulti(i, opt.label, e.currentTarget.checked)}
+                      />
+                    {:else}
+                      <input
+                        type="radio"
+                        name={`q-${i}`}
+                        checked={qPicks[i]?.[0] === opt.label}
+                        onchange={() => pickSingle(i, opt.label)}
+                      />
+                    {/if}
+                    <span class="question-label">{opt.label}</span>
+                    <span class="question-desc">{opt.description}</span>
+                    {#if opt.preview}
+                      <pre class="question-preview">{opt.preview}</pre>
+                    {/if}
+                  </label>
+                {/each}
+                <label class="question-other">
+                  <span>Other</span>
+                  <input
+                    type="text"
+                    placeholder="自由記述"
+                    value={qOther[i] ?? ""}
+                    oninput={(e) => (qOther[i] = e.currentTarget.value)}
+                  />
+                </label>
+              </fieldset>
+            {/each}
+            <div class="question-actions">
+              <button class="answer" disabled={!questionReady} onclick={answerQuestion}>
+                回答
+              </button>
+              <button class="cancel" onclick={cancelQuestion}>キャンセル</button>
+            </div>
+          </div>
+        {/if}
+
         <div
           class="composer"
           role="region"
@@ -2524,6 +2646,140 @@
   }
 
   .permission-actions .deny {
+    border-color: var(--c-error);
+    color: var(--c-error);
+  }
+
+  /* Question dock (#78, ADR-0027): a non-folding panel above the composer that
+     scrolls when the choices are tall. Bordered in the waiting_question hue. */
+  .question-dock {
+    position: absolute;
+    right: 0;
+    bottom: calc(var(--composer-h, 0px) + 0.6rem);
+    z-index: 2;
+    width: 100%;
+    max-height: 60%;
+    overflow: auto;
+    padding: 0.7rem 0.8rem;
+    border: 1px solid var(--c-waiting_question);
+    border-radius: 0.45rem;
+    background: var(--bg-card);
+    font-size: var(--fs-body-sm);
+  }
+
+  .question-title {
+    margin: 0 0 0.5rem;
+    color: var(--c-waiting_question);
+  }
+
+  .question-item {
+    margin: 0 0 0.6rem;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 0.35rem;
+  }
+
+  .question-item legend {
+    padding: 0 0.3rem;
+    color: var(--fg-dim);
+    font-size: var(--fs-metadata);
+  }
+
+  .question-q {
+    margin: 0 0 0.4rem;
+    color: var(--fg);
+  }
+
+  .question-option {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 0.5rem;
+    margin: 0.35rem 0;
+    cursor: pointer;
+  }
+
+  .question-option > input {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: start;
+    margin-top: 0.15rem;
+  }
+
+  .question-label {
+    grid-column: 2;
+    grid-row: 1;
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .question-desc {
+    grid-column: 2;
+    grid-row: 2;
+    color: var(--fg-dim);
+    font-size: var(--fs-metadata);
+  }
+
+  .question-preview {
+    grid-column: 2;
+    grid-row: 3;
+    margin: 0.2rem 0 0;
+    max-height: 8rem;
+    overflow: auto;
+    font-size: var(--fs-micro);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--fg-dim);
+  }
+
+  .question-other {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+    color: var(--fg-dim);
+    font-size: var(--fs-metadata);
+  }
+
+  .question-other input {
+    flex: 1;
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--fs-body-sm);
+  }
+
+  .question-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+  }
+
+  .question-actions button {
+    flex: 1;
+    padding: 0.35rem 0;
+    border: 1px solid var(--line);
+    border-radius: 0.35rem;
+    background: var(--bg-card);
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--fs-body-sm);
+    cursor: pointer;
+  }
+
+  .question-actions .answer {
+    border-color: var(--c-done);
+    color: var(--c-done);
+  }
+
+  .question-actions .answer:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .question-actions .cancel {
     border-color: var(--c-error);
     color: var(--c-error);
   }

@@ -4,6 +4,7 @@
   import { StatusQueue } from "./statusDisplay.svelte";
   import {
     pendingPermissionFrom,
+    pendingQuestionFrom,
     RUNNING_STATES,
     STOP_SAFE_STATES,
   } from "./protocol";
@@ -54,6 +55,7 @@
   // detail never disagree on the sticky display.
   $effect(() => {
     if (pendingPermissionFrom(envelope)) display.hold("waiting_permission");
+    else if (pendingQuestionFrom(envelope)) display.hold("waiting_question");
     else display.unhold();
   });
 
@@ -65,7 +67,9 @@
   // Needs-attention badge (ADR-0012 F6): approval/error draw the eye on the
   // grid; the actual allow/deny happens in the detail view.
   const attention = $derived(
-    envelope.state === "waiting_permission" || envelope.state === "error",
+    envelope.state === "waiting_permission" ||
+      envelope.state === "waiting_question" ||
+      envelope.state === "error",
   );
 
   // Interrupt button visible only when the agent is executing (#51 C2). Live
@@ -280,6 +284,9 @@
   .card[data-state="tool_running"] { --tone: var(--c-tool_running); }
   .card[data-state="waiting_permission"] {
     --tone: var(--c-waiting_permission);
+  }
+  .card[data-state="waiting_question"] {
+    --tone: var(--c-waiting_question);
   }
   .card[data-state="waiting_input"] { --tone: var(--c-waiting_input); }
   .card[data-state="done"] { --tone: var(--c-done); }

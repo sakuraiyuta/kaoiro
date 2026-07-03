@@ -11,7 +11,11 @@ import inputSound from "./sounds/input.wav";
 import permissionSound from "./sounds/permission.wav";
 
 /** States that hand control back to the operator. */
-const WAIT_STATES = new Set(["waiting_input", "waiting_permission"]);
+const WAIT_STATES = new Set([
+  "waiting_input",
+  "waiting_permission",
+  "waiting_question",
+]);
 
 /**
  * True only when an agent crosses from a non-wait state into a wait state, so
@@ -57,6 +61,8 @@ export function requestNotificationPermission(): void {
 export function soundUrlFor(state: string): string | undefined {
   if (state === "waiting_input") return inputSound;
   if (state === "waiting_permission") return permissionSound;
+  // Reuse the permission cue for the question hand-off (no separate asset).
+  if (state === "waiting_question") return permissionSound;
   return undefined;
 }
 

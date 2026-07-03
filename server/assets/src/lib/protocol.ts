@@ -69,6 +69,52 @@ export function pendingPermissionFrom(
   return record as unknown as PermissionRequestPayload;
 }
 
+/** One option of an AskUserQuestion question (ADR-0027). */
+export interface QuestionOption {
+  label: string;
+  description: string;
+  preview?: string;
+}
+
+/** One AskUserQuestion question (SDK AskUserQuestionInput, ADR-0027). */
+export interface Question {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: QuestionOption[];
+}
+
+/** ext.pending_question shape (ADR-0027): the authoritative pending-question
+ *  record carried on every state_change while waiting_question, twin of
+ *  {@link PermissionRequestPayload}. */
+export interface PendingQuestionPayload {
+  request_id: string;
+  questions: Question[];
+  ts?: string;
+}
+
+/**
+ * Reads ext.pending_question off any envelope (ADR-0027 authoritative
+ * source). Returns null when no pending question is in flight or the record
+ * is malformed. Twin of {@link pendingPermissionFrom}.
+ */
+export function pendingQuestionFrom(
+  envelope: Envelope,
+): PendingQuestionPayload | null {
+  const ext = envelope.ext;
+  if (typeof ext !== "object" || ext === null) return null;
+  const pending = (ext as Record<string, unknown>).pending_question;
+  if (typeof pending !== "object" || pending === null) return null;
+  const record = pending as Record<string, unknown>;
+  if (
+    typeof record.request_id !== "string" ||
+    !Array.isArray(record.questions)
+  ) {
+    return null;
+  }
+  return record as unknown as PendingQuestionPayload;
+}
+
 /** A selectable model surfaced on state_change.ext.models (#54, ADR-0020):
  *  the choices and per-model effort levels behind the dashboard's model /
  *  effort switch dialogs. Operator-only — ext is stripped for viewers (#46),
@@ -439,6 +485,15 @@ export interface KaoiroConnection {
     requestId: string,
     allow: boolean,
   ) => Promise<void>;
+  /** Answers a pending question_request (AskUserQuestion, ADR-0027); rejects
+   *  like sendInstruction. `answers` is keyed by question text; `cancelled`
+   *  dismisses the question (deny). */
+  sendQuestionResponse: (
+    agentId: string,
+    requestId: string,
+    answers: Record<string, string>,
+    cancelled?: boolean,
+  ) => Promise<void>;
   /** Interrupts the agent's current turn (#51, ESC equivalent); rejects
    * like sendInstruction (forbidden / unknown_agent / timeout). The
    * wrapper handles a stale interrupt as a no-op. */
@@ -727,6 +782,13 @@ export function connectKaoiro(
         agent_id: agentId,
         request_id: requestId,
         allow,
+      }),
+    sendQuestionResponse: (agentId, requestId, answers, cancelled) =>
+      pushAsync(channel, "question_response", {
+        agent_id: agentId,
+        request_id: requestId,
+        answers,
+        ...(cancelled ? { cancelled: true } : {}),
       }),
     sendInterrupt: (agentId) =>
       pushAsync(channel, "interrupt", { agent_id: agentId }),

@@ -12,6 +12,7 @@ import {
   parseHosts,
   parseSessions,
   pendingPermissionFrom,
+  pendingQuestionFrom,
   resultOf,
 } from "../src/lib/protocol";
 import type { Envelope } from "../src/lib/protocol";
@@ -98,6 +99,62 @@ describe("pendingPermissionFrom (ADR-0022)", () => {
       pendingPermissionFrom({
         ...base,
         ext: { pending_permission: { tool_name: "Bash" } },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("pendingQuestionFrom (ADR-0027)", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "a",
+    ts: "2026-07-03T00:00:00Z",
+    type: "state_change",
+    state: "waiting_question",
+  };
+  const questions = [
+    {
+      question: "どれ?",
+      header: "選択",
+      multiSelect: false,
+      options: [
+        { label: "A", description: "a" },
+        { label: "B", description: "b" },
+      ],
+    },
+  ];
+
+  it("state_change.ext.pending_question を絞り込む", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        pending_question: {
+          request_id: "q-1",
+          questions,
+          ts: "2026-07-03T00:00:00Z",
+        },
+      },
+    };
+    expect(pendingQuestionFrom(envelope)?.request_id).toBe("q-1");
+    expect(pendingQuestionFrom(envelope)?.questions).toEqual(questions);
+  });
+
+  it("waiting_question 以外の state_change でも ext に乗っていれば拾う", () => {
+    const envelope: Envelope = {
+      ...base,
+      state: "tool_running",
+      ext: { pending_question: { request_id: "q-1", questions } },
+    };
+    expect(pendingQuestionFrom(envelope)?.request_id).toBe("q-1");
+  });
+
+  it("ext 無し・pending_question 無し・questions 非配列は null", () => {
+    expect(pendingQuestionFrom(base)).toBeNull();
+    expect(pendingQuestionFrom({ ...base, ext: {} })).toBeNull();
+    expect(
+      pendingQuestionFrom({
+        ...base,
+        ext: { pending_question: { request_id: "q-1", questions: "no" } },
       }),
     ).toBeNull();
   });
