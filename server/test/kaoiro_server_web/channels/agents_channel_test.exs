@@ -233,6 +233,73 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "question_response relay (ADR-0027)" do
+    test "operator の回答を wrapper topic へ relay する" do
+      agent_id = "test.q-1"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "question_response", %{
+          "agent_id" => agent_id,
+          "request_id" => "q-1",
+          "answers" => %{"どれ?" => "A"}
+        })
+
+      assert_reply ref, :ok
+
+      assert_broadcast "question_response", %{
+        "request_id" => "q-1",
+        "answers" => %{"どれ?" => "A"}
+      }
+    end
+
+    test "viewer の回答は forbidden" do
+      agent_id = "test.q-2"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      ref =
+        push(socket, "question_response", %{
+          "agent_id" => agent_id,
+          "request_id" => "q-2",
+          "answers" => %{}
+        })
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "request_id 欠落は missing key" do
+      agent_id = "test.q-3"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "question_response", %{
+          "agent_id" => agent_id,
+          "answers" => %{}
+        })
+
+      assert_reply ref, :error, %{reason: "missing key: request_id"}
+    end
+
+    test "answers が map でないものは境界で拒否される" do
+      agent_id = "test.q-4"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "question_response", %{
+          "agent_id" => agent_id,
+          "request_id" => "q-4",
+          "answers" => "wrong"
+        })
+
+      assert_reply ref, :error, %{reason: "invalid value: answers"}
+    end
+  end
+
   describe "interrupt relay (#51)" do
     test "operator の interrupt を wrapper topic へ relay する" do
       agent_id = "test.interrupt-1"
@@ -573,6 +640,72 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       entry = agents[agent_id]
       assert entry["type"] == "state_change"
       assert entry["state"] == "waiting_permission"
+      assert entry["payload"] == %{}
+      refute Map.has_key?(entry, "ext")
+    end
+  end
+
+  describe "question_request の viewer 完全除去 (ADR-0027)" do
+    defp question_envelope(agent_id) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-07-03T00:00:00Z",
+        "type" => "question_request",
+        "state" => "waiting_question",
+        "payload" => %{
+          "request_id" => "q-s1",
+          "questions" => [
+            %{
+              "question" => "どれ?",
+              "header" => "選択",
+              "multiSelect" => false,
+              "options" => [
+                %{"label" => "A", "description" => "a"},
+                %{"label" => "B", "description" => "b"}
+              ]
+            }
+          ]
+        }
+      }
+    end
+
+    test "viewer への broadcast は合成 state_change に置換される (questions 除去)" do
+      agent_id = "test.q-sanitize-1"
+      envelope = question_envelope(agent_id)
+      _socket = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+
+      assert_push "envelope", pushed
+      assert pushed["type"] == "state_change"
+      assert pushed["state"] == "waiting_question"
+      assert pushed["payload"] == %{}
+      refute Map.has_key?(pushed, "ext")
+    end
+
+    test "operator への broadcast は questions を保つ" do
+      agent_id = "test.q-sanitize-2"
+      envelope = question_envelope(agent_id)
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+
+      assert_push "envelope", %{
+        "type" => "question_request",
+        "payload" => %{"questions" => [_ | _]}
+      }
+    end
+
+    test "viewer への snapshot も合成 state_change に置換される" do
+      agent_id = "test.q-sanitize-3"
+      :ok = AgentStates.put(question_envelope(agent_id))
+      _socket = join_as(:viewer)
+
+      assert_push "snapshot", %{"agents" => agents}
+      entry = agents[agent_id]
+      assert entry["type"] == "state_change"
+      assert entry["state"] == "waiting_question"
       assert entry["payload"] == %{}
       refute Map.has_key?(entry, "ext")
     end

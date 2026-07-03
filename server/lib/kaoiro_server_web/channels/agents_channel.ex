@@ -186,6 +186,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
     ])
   end
 
+  # AskUserQuestion answer (issue #78, ADR-0027). Operator-only; the validated
+  # answers relay opaquely to the wrapper, which returns them to the SDK as the
+  # tool's structured answer. `cancelled` (deny) passes through opaquely.
+  def handle_in("question_response", payload, socket) do
+    relay(socket, payload, "question_response", [
+      {"request_id", &is_binary/1},
+      {"answers", &is_map/1}
+    ])
+  end
+
   # Graceful stop of the current turn (issue #51, ADR-0020). Payload is
   # `{}` after agent_id is stripped — no per-event keys to validate; the
   # shared relay guards (operator, known agent, size cap) still apply.
@@ -686,6 +696,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
      envelope
      |> Map.put("type", "state_change")
      |> Map.put("state", "waiting_permission")
+     |> Map.put("payload", %{})
+     |> Map.delete("ext")}
+  end
+
+  # `question_request` carries the AskUserQuestion questions (operator-only,
+  # ADR-0027) and likewise overwrites the snapshot slot, so it is rewritten to
+  # a synthetic state_change — the viewer grid still shows `waiting_question`
+  # without leaking the question text or options.
+  defp sanitize_envelope_for(:viewer, %{"type" => "question_request"} = envelope) do
+    {:ok,
+     envelope
+     |> Map.put("type", "state_change")
+     |> Map.put("state", "waiting_question")
      |> Map.put("payload", %{})
      |> Map.delete("ext")}
   end
