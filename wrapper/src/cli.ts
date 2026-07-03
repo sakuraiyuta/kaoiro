@@ -27,6 +27,7 @@ import {
 } from "./inter_agent.js";
 import { PermissionBroker } from "./permission.js";
 import { PERMISSION_MODES, loadConfig, resolvePersonaAppend } from "./persona.js";
+import { QuestionBroker } from "./question.js";
 import { makeLog, makeStateChange } from "./state.js";
 import { ServerLink } from "./transport.js";
 import type {
@@ -42,6 +43,7 @@ const COLOR: Record<KaoiroState, string> = {
   thinking: "36", // cyan
   tool_running: "33", // yellow
   waiting_permission: "35", // magenta
+  waiting_question: "95", // bright magenta
   waiting_input: "32", // green
   done: "92", // bright green
   error: "31", // red
@@ -112,6 +114,7 @@ async function main(): Promise<void> {
   let host: AgentHost;
   let link: ServerLink | null = null;
   let broker: PermissionBroker | null = null;
+  let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
   // host.send is async now (the PDF fit-to-SDK path awaits pdf-lib). Chain
   // operator instructions through one Promise so a slow render (e.g. a big
@@ -138,6 +141,13 @@ async function main(): Promise<void> {
       // state_change envelope carries it (ADR-0022). Captured-by-closure
       // host is assigned just below, before any tool ever fires.
       onPendingChange: (pending) => host?.setPendingPermission(pending),
+    });
+    questionBroker = new QuestionBroker({
+      config,
+      send: (envelope) => link?.send(envelope),
+      // Question twin of the broker above: stamp ext.pending_question so the
+      // waiting_question state_change carries it (ADR-0027).
+      onPendingChange: (pending) => host?.setPendingQuestion(pending),
     });
     interAgent = new InterAgentTool({
       config,
@@ -178,6 +188,7 @@ async function main(): Promise<void> {
         );
       },
       onPermissionDecision: (decision) => broker?.resolve(decision),
+      onQuestionResponse: (response) => questionBroker?.resolve(response),
       onInterrupt: () => {
         // protocol.md (#51): graceful stop of the current turn. SDK returns
         // an `error_*` SDKResultMessage which the adapter folds into the
@@ -273,6 +284,11 @@ async function main(): Promise<void> {
         ? { allow: true }
         : { allow: false, message: "demo: only read-only tools are allowed" };
     },
+    // AskUserQuestion path (ADR-0027): route to the question broker when
+    // server-connected; without one (local/demo), cancel so the SDK denies
+    // rather than hang on an answer nothing can supply.
+    decideQuestion: (questions) =>
+      questionBroker ? questionBroker.decide(questions) : { cancelled: true },
     queryOptions: {
       tools: { type: "preset", preset: "claude_code" },
       allowedTools: config.allowed_tools ?? [...READ_ONLY_TOOLS],
@@ -340,6 +356,7 @@ async function main(): Promise<void> {
     // Deny in-flight permission requests, then release the socket so the
     // process can exit.
     broker?.close();
+    questionBroker?.close();
     link?.close();
   }
 }

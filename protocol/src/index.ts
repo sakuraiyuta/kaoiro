@@ -14,6 +14,7 @@ export type KaoiroState =
   | "thinking"
   | "tool_running"
   | "waiting_permission"
+  | "waiting_question"
   | "waiting_input"
   | "done"
   | "error";
@@ -128,6 +129,34 @@ export interface PendingPermissionExt {
   ts: string;
 }
 
+/** One option of an AskUserQuestion question (SDK AskUserQuestionInput,
+ *  ADR-0027). `preview` is optional rich content for the option. */
+export interface QuestionOption {
+  label: string;
+  description: string;
+  preview?: string;
+}
+
+/** One AskUserQuestion question (SDK AskUserQuestionInput). 1..4 per
+ *  request, each with 2..4 options; `multiSelect` allows several picks. */
+export interface Question {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: QuestionOption[];
+}
+
+/** state_change.ext.pending_question shape (ADR-0027). Question-side twin of
+ *  {@link PendingPermissionExt}: the authoritative record carried on every
+ *  state_change while waiting_question, so a question dialog survives any
+ *  other envelope arriving in between. Mirrors the question_request envelope's
+ *  payload (kept as initial-notification per ADR-0027 F3). */
+export interface PendingQuestionExt {
+  request_id: string;
+  questions: Question[];
+  ts: string;
+}
+
 /**
  * Common event envelope v0 (protocol.md). The type enum fixes
  * state_change / permission_request (ADR-0010/0011), log / result
@@ -150,6 +179,7 @@ export interface Envelope {
   type:
     | "state_change"
     | "permission_request"
+    | "question_request"
     | "log"
     | "result"
     | "attach_rejected"

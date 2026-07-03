@@ -9,6 +9,7 @@
 
 import { Channel, Socket } from "phoenix";
 import type { PermissionDecisionMessage } from "./permission.js";
+import type { QuestionResponseMessage } from "./question.js";
 import type { Envelope } from "./types.js";
 
 /** Single entry returned from `directory_request` (protocol-inter-agent
@@ -40,6 +41,8 @@ export interface ServerLinkOptions {
   onInstruction?: (text: string, attachmentIds?: string[]) => void;
   /** An operator's permission decision relayed by the server. */
   onPermissionDecision?: (decision: PermissionDecisionMessage) => void;
+  /** An operator's AskUserQuestion answer relayed by the server (ADR-0027). */
+  onQuestionResponse?: (response: QuestionResponseMessage) => void;
   /** An operator's interrupt request relayed by the server (protocol.md, #51).
    *  Payload is `{}` — the topic carries the agent_id. */
   onInterrupt?: () => void;
@@ -144,6 +147,21 @@ export class ServerLink {
           decision.message = payload.message;
         }
         options.onPermissionDecision?.(decision);
+      }
+    });
+    // ADR-0027: server -> wrapper `question_response` carries the operator's
+    // AskUserQuestion answers (or a cancel). `answers` is a string map keyed
+    // by question text; malformed pushes are dropped.
+    this.#channel.on("question_response", (payload: unknown) => {
+      if (isObject(payload) && typeof payload.request_id === "string") {
+        const response: QuestionResponseMessage = {
+          request_id: payload.request_id,
+          answers: isObject(payload.answers)
+            ? (payload.answers as Record<string, string>)
+            : {},
+        };
+        if (payload.cancelled === true) response.cancelled = true;
+        options.onQuestionResponse?.(response);
       }
     });
     // protocol.md (#51): server -> wrapper `interrupt` carries an empty

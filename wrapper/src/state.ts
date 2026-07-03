@@ -137,6 +137,20 @@ export function stepState(
         next: { ...machine, state: "tool_running" },
         emitted: ["tool_running"],
       };
+    case "question_request":
+      // AskUserQuestion arrives via canUseTool too (ADR-0027), but is its own
+      // wait state so the dashboard renders a structured dialog, not allow/deny.
+      return {
+        next: { ...machine, state: "waiting_question" },
+        emitted: ["waiting_question"],
+      };
+    case "question_resolved":
+      // Same return path as permission_resolved: canUseTool fires after a
+      // tool_use, so resume tool_running with the pending ids untouched.
+      return {
+        next: { ...machine, state: "tool_running" },
+        emitted: ["tool_running"],
+      };
     case "user_send": {
       // An instruction was accepted while the agent was at rest: show the
       // optimistic `sending` state until the model's first message lands
@@ -253,6 +267,27 @@ export function makePermissionRequest(
     ts,
     type: "permission_request",
     state: "waiting_permission",
+    payload,
+    ext: {},
+  };
+}
+
+/** Wraps a pending AskUserQuestion request into the common envelope v0
+ *  (protocol.md / ADR-0027; payload carries request_id / questions). Question
+ *  twin of {@link makePermissionRequest}: an initial-notification envelope
+ *  whose truth is mirrored in state_change.ext.pending_question. */
+export function makeQuestionRequest(
+  config: WrapperConfig,
+  ts: string,
+  payload: Record<string, unknown>,
+): Envelope {
+  return {
+    version: "0",
+    agent_id: config.agent_id,
+    persona: toWirePersona(config.persona),
+    ts,
+    type: "question_request",
+    state: "waiting_question",
     payload,
     ext: {},
   };

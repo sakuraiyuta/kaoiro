@@ -23,7 +23,9 @@ import type {
   KaoiroState,
   LogEntry,
   PendingPermissionExt,
+  PendingQuestionExt,
   PermissionMode,
+  Question,
   ResultPayload,
   WrapperConfig,
 } from "./types.js";
@@ -86,6 +88,14 @@ export interface PermissionDecision {
   message?: string;
 }
 
+/** An operator's answer to an AskUserQuestion (ADR-0027). `cancelled` denies
+ *  the tool; otherwise `answers` (keyed by question text) is returned to the
+ *  SDK as the tool's structured answer. */
+export interface QuestionDecision {
+  cancelled: boolean;
+  answers?: Record<string, string>;
+}
+
 export interface AgentHostOptions {
   /** Invoked on every state transition with the common envelope. */
   onState: (envelope: Envelope) => void;
@@ -118,6 +128,14 @@ export interface AgentHostOptions {
     toolName: string,
     input: Record<string, unknown>,
   ) => Promise<PermissionDecision> | PermissionDecision;
+  /**
+   * Decides a pending AskUserQuestion (ADR-0027); its awaited duration is the
+   * waiting_question window. When omitted, AskUserQuestion falls through to
+   * decidePermission (allow/deny) — the pre-#78 behaviour.
+   */
+  decideQuestion?: (
+    questions: Question[],
+  ) => Promise<QuestionDecision> | QuestionDecision;
   /**
    * Extra query options (tools, allowedTools, cwd, model, …). Merged over the
    * defaults; canUseTool is reserved by the host and cannot be overridden.
@@ -201,6 +219,11 @@ export class AgentHost {
    *  waiting_permission carries it in ext, surviving any intermediate
    *  envelope arrival. null when no decision is in flight. */
   #pendingPermission: PendingPermissionExt | null = null;
+  /** Authoritative pending-question record (ADR-0027). Question twin of
+   *  #pendingPermission: set by the question broker via setPendingQuestion()
+   *  so every state_change emitted while waiting_question carries it in ext.
+   *  null when no question is in flight. */
+  #pendingQuestion: PendingQuestionExt | null = null;
   /** Latest SDK conversation session id (ADR-0014 phase-0). Mirrored locally
    *  so the whoami snapshot can include it without coupling to ServerLink. */
   #sessionId: string | null = null;
@@ -608,6 +631,13 @@ export class AgentHost {
     this.#pendingPermission = pending;
   }
 
+  /** Question twin of setPendingPermission (ADR-0027): the question broker
+   *  stamps the pending-question record so the state_change(waiting_question)
+   *  carries ext.pending_question, and clears it on resolve / cancel / close. */
+  setPendingQuestion(pending: PendingQuestionExt | null): void {
+    this.#pendingQuestion = pending;
+  }
+
   /** Updates #cwd from a CwdChanged hook (#64) so the next state_change
    *  stamps the new path into ext.cwd. Mirrors the pending_permission
    *  piggyback (ADR-0022): no envelope is emitted here — the next #apply
@@ -732,6 +762,13 @@ export class AgentHost {
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<PermissionResult> {
+    // AskUserQuestion arrives via canUseTool too, but needs a structured
+    // dialog and a structured answer, not allow/deny (ADR-0027). Branch to the
+    // question path when a decider is wired; else fall through to allow/deny.
+    const decideQuestion = this.#options.decideQuestion;
+    if (toolName === "AskUserQuestion" && decideQuestion) {
+      return this.#askUserQuestion(decideQuestion, input);
+    }
     const decide = this.#options.decidePermission;
     // Kick off the decider FIRST so it (synchronously, in the broker
     // case) calls setPendingPermission before we transition the state
@@ -758,6 +795,39 @@ export class AgentHost {
       // belt-and-braces null it here too in case of a custom decider.
       this.#pendingPermission = null;
       this.#apply({ kind: "permission_resolved" });
+    }
+  }
+
+  /** AskUserQuestion branch of #canUseTool (ADR-0027). Mirrors the permission
+   *  path: kick off the decider first (it stamps ext.pending_question via
+   *  setPendingQuestion), transition to waiting_question, then return the
+   *  operator's answers to the SDK as updatedInput.answers — or deny on
+   *  cancellation / error. */
+  async #askUserQuestion(
+    decide: (
+      questions: Question[],
+    ) => Promise<QuestionDecision> | QuestionDecision,
+    input: Record<string, unknown>,
+  ): Promise<PermissionResult> {
+    const questions = Array.isArray(input.questions)
+      ? (input.questions as Question[])
+      : [];
+    const decisionPromise = Promise.resolve(decide(questions));
+    this.#apply({ kind: "question_request" });
+    try {
+      const decision = await decisionPromise;
+      if (decision.cancelled) {
+        return { behavior: "deny", message: "kaoiro: question cancelled" };
+      }
+      return {
+        behavior: "allow",
+        updatedInput: { ...input, answers: decision.answers ?? {} },
+      };
+    } catch {
+      return { behavior: "deny", message: "question decision failed" };
+    } finally {
+      this.#pendingQuestion = null;
+      this.#apply({ kind: "question_resolved" });
     }
   }
 
@@ -789,6 +859,9 @@ export class AgentHost {
     }
     if (this.#pendingPermission !== null) {
       ext.pending_permission = this.#pendingPermission;
+    }
+    if (this.#pendingQuestion !== null) {
+      ext.pending_question = this.#pendingQuestion;
     }
     return ext;
   }

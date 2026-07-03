@@ -641,6 +641,156 @@ describe("AgentHost — permission", () => {
   });
 });
 
+describe("AgentHost — question (AskUserQuestion, ADR-0027)", () => {
+  const questions = [
+    {
+      question: "どれ?",
+      header: "選択",
+      multiSelect: false,
+      options: [
+        { label: "A", description: "a" },
+        { label: "B", description: "b" },
+      ],
+    },
+  ];
+
+  it("decideQuestion が waiting_question→tool_running を駆動し answers を返す", async () => {
+    const states: string[] = [];
+    let updatedInput: Record<string, unknown> | undefined;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([
+          { type: "tool_use", id: "tu_1", name: "AskUserQuestion", input: { questions } },
+        ]);
+        const decision = await args.options.canUseTool!(
+          "AskUserQuestion",
+          { questions },
+          {} as never,
+        );
+        if (decision.behavior === "allow") updatedInput = decision.updatedInput;
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+
+    const host = new AgentHost(config, {
+      onState: (e) => states.push(e.state),
+      decideQuestion: () => ({ cancelled: false, answers: { "どれ?": "A" } }),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+
+    const wqIdx = states.indexOf("waiting_question");
+    expect(wqIdx).toBeGreaterThanOrEqual(0);
+    expect(states[wqIdx + 1]).toBe("tool_running");
+    expect(updatedInput).toMatchObject({
+      questions,
+      answers: { "どれ?": "A" },
+    });
+  });
+
+  it("cancelled は deny を返す", async () => {
+    let behavior = "";
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([
+          { type: "tool_use", id: "tu_1", name: "AskUserQuestion", input: { questions } },
+        ]);
+        const decision = await args.options.canUseTool!(
+          "AskUserQuestion",
+          { questions },
+          {} as never,
+        );
+        behavior = decision.behavior;
+        yield result("success", { result: "x" });
+      }
+      return asQuery(gen());
+    });
+
+    const host = new AgentHost(config, {
+      onState: () => {},
+      decideQuestion: () => ({ cancelled: true }),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(behavior).toBe("deny");
+  });
+
+  it("decideQuestion 未配線なら permission 経路に落ちて deny する", async () => {
+    let behavior = "";
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([
+          { type: "tool_use", id: "tu_1", name: "AskUserQuestion", input: { questions } },
+        ]);
+        const decision = await args.options.canUseTool!(
+          "AskUserQuestion",
+          { questions },
+          {} as never,
+        );
+        behavior = decision.behavior;
+        yield result("success", { result: "x" });
+      }
+      return asQuery(gen());
+    });
+
+    // No decideQuestion and no decidePermission: AskUserQuestion falls through
+    // to the permission path, which fail-closed denies.
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    await host.run();
+    expect(behavior).toBe("deny");
+  });
+
+  it("setPendingQuestion で waiting_question の ext に pending_question が乗る", async () => {
+    const states: { state: string; ext: Record<string, unknown> }[] = [];
+    const pendingRecord = { request_id: "q-x", questions, ts: "T" };
+
+    let hostRef!: AgentHost;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([
+          { type: "tool_use", id: "tu_1", name: "AskUserQuestion", input: { questions } },
+        ]);
+        const decision = await args.options.canUseTool!(
+          "AskUserQuestion",
+          { questions },
+          {} as never,
+        );
+        expect(decision.behavior).toBe("allow");
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+
+    hostRef = new AgentHost(config, {
+      onState: (e) => states.push({ state: e.state, ext: e.ext }),
+      decideQuestion: () => {
+        hostRef.setPendingQuestion(pendingRecord);
+        queueMicrotask(() => hostRef.setPendingQuestion(null));
+        return { cancelled: false, answers: { "どれ?": "A" } };
+      },
+      queryFn,
+      now: () => "T",
+    });
+
+    await hostRef.run();
+
+    const wq = states.find((s) => s.state === "waiting_question");
+    expect(wq).toBeDefined();
+    expect(wq!.ext).toMatchObject({ pending_question: pendingRecord });
+
+    // The tool_running that follows the question must not carry it anymore.
+    const wqIdx = states.findIndex((s) => s.state === "waiting_question");
+    const trAfter = states
+      .slice(wqIdx + 1)
+      .find((s) => s.state === "tool_running");
+    expect(trAfter).toBeDefined();
+    expect(trAfter!.ext).not.toHaveProperty("pending_question");
+  });
+});
+
 describe("AgentHost — input queue/notify/close", () => {
   it("send でキューに積み close でセッションが終わる", async () => {
     const received: string[] = [];

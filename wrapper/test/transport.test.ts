@@ -282,3 +282,40 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     await expect(pending).rejects.toThrow(/directory_request timeout/);
   });
 });
+
+describe("ServerLink — question_response (ADR-0027)", () => {
+  beforeEach(() => mock.handlers.clear());
+
+  it("answers を onQuestionResponse へ渡す", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onQuestionResponse: (r) => seen.push(r),
+    });
+    emit("question_response", {
+      request_id: "q-1",
+      answers: { "どれ?": "A" },
+    });
+    expect(seen).toEqual([{ request_id: "q-1", answers: { "どれ?": "A" } }]);
+  });
+
+  it("cancelled を伝える", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onQuestionResponse: (r) => seen.push(r),
+    });
+    emit("question_response", { request_id: "q-2", answers: {}, cancelled: true });
+    expect(seen).toEqual([
+      { request_id: "q-2", answers: {}, cancelled: true },
+    ]);
+  });
+
+  it("request_id 欠落 / answers 非オブジェクトは頑健に扱う", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      onQuestionResponse: (r) => seen.push(r),
+    });
+    emit("question_response", { answers: {} }); // no request_id -> dropped
+    emit("question_response", { request_id: "q-3", answers: "wrong" });
+    expect(seen).toEqual([{ request_id: "q-3", answers: {} }]);
+  });
+});

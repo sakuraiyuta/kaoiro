@@ -109,6 +109,22 @@ describe("stepState", () => {
     ).toEqual(["tool_running"]);
   });
 
+  it("question_request を waiting_question に導出する (ADR-0027)", () => {
+    expect(
+      stepState(initialMachineState("tool_running"), {
+        kind: "question_request",
+      }).emitted,
+    ).toEqual(["waiting_question"]);
+  });
+
+  it("question_resolved で tool_running に復帰する (ADR-0027)", () => {
+    expect(
+      stepState(initialMachineState("waiting_question"), {
+        kind: "question_resolved",
+      }).emitted,
+    ).toEqual(["tool_running"]);
+  });
+
   it("ignore は状態を変えない(空 emitted)", () => {
     const machine = initialMachineState("thinking");
     const { next, emitted } = stepState(machine, { kind: "ignore" });

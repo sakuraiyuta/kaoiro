@@ -15,6 +15,9 @@ export type {
   WirePersona,
   WrapperConfig,
   PendingPermissionExt,
+  PendingQuestionExt,
+  Question,
+  QuestionOption,
   Envelope,
   FileUploadRejectReason,
   AttachRejectedPayload,
@@ -75,6 +78,10 @@ export type AdapterEvent =
   | { kind: "permission_request" }
   /** canUseTool resolved (UI returned allow/deny) */
   | { kind: "permission_resolved" }
+  /** canUseTool invoked for AskUserQuestion (promise pending), ADR-0027 */
+  | { kind: "question_request" }
+  /** AskUserQuestion resolved (UI returned answers / cancel), ADR-0027 */
+  | { kind: "question_resolved" }
   /** An operator instruction was accepted into the input queue. Not an SDK
    *  message — the host raises it so a turn started from rest shows `sending`
    *  until the model's first message arrives (#32). */

@@ -9,6 +9,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { PermissionDecision } from "./host.js";
+import { PendingRegistry } from "./pending.js";
 import { makePermissionRequest } from "./state.js";
 import type { Envelope, PendingPermissionExt, WrapperConfig } from "./types.js";
 
@@ -21,12 +22,6 @@ export interface PermissionDecisionMessage {
   request_id: string;
   allow: boolean;
   message?: string;
-}
-
-interface PendingRequest {
-  resolve: (decision: PermissionDecision) => void;
-  /** null when no finite timeout is configured (wait indefinitely). */
-  timer: NodeJS.Timeout | null;
 }
 
 export interface PermissionBrokerOptions {
@@ -54,7 +49,7 @@ export class PermissionBroker {
   readonly #timeoutMs: number | null;
   readonly #now: () => string;
   readonly #newId: () => string;
-  readonly #pending = new Map<string, PendingRequest>();
+  readonly #registry: PendingRegistry<PermissionDecision>;
 
   constructor(options: PermissionBrokerOptions) {
     this.#options = options;
@@ -63,6 +58,7 @@ export class PermissionBroker {
     this.#timeoutMs = configured === undefined ? null : configured;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#newId = options.newId ?? randomUUID;
+    this.#registry = new PendingRegistry<PermissionDecision>(this.#timeoutMs);
   }
 
   /** Compatible with AgentHostOptions#decidePermission. */
@@ -103,47 +99,29 @@ export class PermissionBroker {
     );
 
     return new Promise((resolve) => {
+      // settle clears the ext pending-record before resolving; the registry
+      // owns the pending map, timeout, and shutdown drain (ADR-0027 F5).
       const settle = (decision: PermissionDecision): void => {
         this.#options.onPendingChange?.(null);
         resolve(decision);
       };
-      if (this.#timeoutMs === null) {
-        // SDK default: wait indefinitely. The wrapper's close() still
-        // resolves with deny so a shutdown is not blocked.
-        this.#pending.set(requestId, { resolve: settle, timer: null });
-        return;
-      }
-      const timer = setTimeout(() => {
-        this.#pending.delete(requestId);
-        settle({
-          allow: false,
-          message: "kaoiro: permission request timed out",
-        });
-      }, this.#timeoutMs);
-      // Let the process exit even while a request is pending.
-      timer.unref?.();
-      this.#pending.set(requestId, { resolve: settle, timer });
+      this.#registry.add(requestId, settle, () => ({
+        allow: false,
+        message: "kaoiro: permission request timed out",
+      }));
     });
   }
 
   /** Resolves a pending request; late/unknown request_ids are ignored
    *  (already timed out or never ours). */
   resolve(decision: PermissionDecisionMessage): void {
-    const pending = this.#pending.get(decision.request_id);
-    if (!pending) return;
-    this.#pending.delete(decision.request_id);
-    if (pending.timer !== null) clearTimeout(pending.timer);
     const resolved: PermissionDecision = { allow: decision.allow === true };
     if (decision.message !== undefined) resolved.message = decision.message;
-    pending.resolve(resolved);
+    this.#registry.resolve(decision.request_id, resolved);
   }
 
   /** Denies all in-flight requests (wrapper shutdown). */
   close(): void {
-    for (const [requestId, pending] of this.#pending) {
-      this.#pending.delete(requestId);
-      if (pending.timer !== null) clearTimeout(pending.timer);
-      pending.resolve({ allow: false, message: "kaoiro: wrapper closed" });
-    }
+    this.#registry.closeAll({ allow: false, message: "kaoiro: wrapper closed" });
   }
 }
