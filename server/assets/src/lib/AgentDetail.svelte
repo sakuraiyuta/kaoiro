@@ -446,20 +446,21 @@
   );
   let restoring = $state(false);
 
-  // Folded state of the permission dock (#…): when true it sits as a small
-  // button in the conversation's top-right corner instead of covering the
-  // transcript. permFullH carries the panel's natural height so the dock can
-  // animate height between the open panel and the folded pill.
+  // Collapsed state of the permission / question docks (#46, #78). Both sit
+  // in-flow and push the log up rather than overlaying it; collapsing swaps the
+  // full panel for a one-line bar so the operator can reclaim log height when a
+  // small screen or large text zoom makes the pushed-up log too short to read.
+  // A fresh request (new request_id) always re-expands, so a pending decision
+  // is never hidden by a stale collapsed state from an earlier one.
   let permMinimized = $state(false);
-  let permFullH = $state(0);
-  // Input-area height, so the open dock can float just above the composer
-  // without overlapping it (the composer grows with the sending/error notes).
-  let composerH = $state(0);
-  // A fresh request (new request_id) always opens expanded, so a pending
-  // decision is never hidden by a stale folded state from an earlier one.
+  let questionMinimized = $state(false);
   $effect(() => {
     void permission?.request_id;
     permMinimized = false;
+  });
+  $effect(() => {
+    void question?.request_id;
+    questionMinimized = false;
   });
 
   // --- model / effort switch (#54) ------------------------------------------
@@ -620,11 +621,12 @@
       }
       // The component may have unmounted during the await; re-check logEl.
       if (!logEl || !shouldStick) return;
-      // bind:offsetHeight={composerH} updates one frame after the composer
-      // reflows (e.g. stagedFiles clearing on send), and that reflow resizes
-      // .log via flex. Double rAF lets layout settle before the final scroll
-      // — otherwise scrollTop=scrollHeight lands a few pixels short of the
-      // true bottom (the failure that prompted scrollIntoView previously).
+      // The composer reflows one frame late (e.g. stagedFiles clearing on
+      // send), and an in-flow permission/question dock appearing or clearing
+      // also resizes .log via flex. Double rAF lets layout settle before the
+      // final scroll — otherwise scrollTop=scrollHeight lands a few pixels
+      // short of the true bottom (the failure that prompted scrollIntoView
+      // previously).
       await new Promise((r) => requestAnimationFrame(r));
       await new Promise((r) => requestAnimationFrame(r));
       if (logEl) logEl.scrollTop = logEl.scrollHeight;
@@ -1262,7 +1264,7 @@
       {/if}
     </aside>
 
-    <div class="main" style:--composer-h={composerH ? composerH + "px" : null}>
+    <div class="main">
       <div class="log" bind:this={logEl} onscroll={handleLogScroll}>
         {#if logs.length === 0}
           <p class="empty">まだ返答はありません。</p>
@@ -1426,21 +1428,24 @@
         {/if}
 
         {#if permission}
-          <!-- Permission dock (#46): the request can fold up into a button in
-               the conversation's top-right corner so it stops covering the
-               transcript, then unfold back. Fold/unfold is a 0.25s eased move. -->
-          <div
-            class="permission-dock"
-            class:min={permMinimized}
-            style:--full-h={permFullH ? permFullH + "px" : null}
-          >
-            <div
-              class="permission-full"
-              bind:offsetHeight={permFullH}
-              inert={permMinimized}
+          <!-- Permission dock (#46): sits in-flow between the transcript and
+               the composer, pushing the log up rather than overlaying it, so
+               the context stays visible while the operator decides. Collapses
+               to a one-line bar to reclaim log height when needed. -->
+          {#if permMinimized}
+            <button
+              type="button"
+              class="dock-bar dock-bar-perm"
+              title="許可ダイアログを展開"
+              onclick={() => (permMinimized = false)}
             >
+              <span class="dock-bar-lamp"></span>
+              許可待ち(クリックで展開)
+            </button>
+          {:else}
+            <div class="permission-dock">
               <button
-                class="permission-min"
+                class="dock-min"
                 type="button"
                 title="最小化"
                 aria-label="許可ダイアログを最小化"
@@ -1461,72 +1466,87 @@
                 <button class="deny" onclick={() => decide(false)}>拒否</button>
               </div>
             </div>
-            <button
-              class="permission-pill"
-              type="button"
-              title="許可ダイアログを開く"
-              aria-label="許可ダイアログを開く"
-              inert={!permMinimized}
-              onclick={() => (permMinimized = false)}
-            >
-              <span class="permission-pill-lamp"></span>
-              許可待ち
-            </button>
-          </div>
+          {/if}
         {/if}
 
         {#if question}
           <!-- Question dock (#78, ADR-0027): AskUserQuestion's structured
                choices — radios for single-select, checkboxes for multiSelect,
-               plus a free-text "Other" per question. -->
-          <div class="question-dock">
-            <p class="question-title">回答を選んでください</p>
-            {#each question.questions as q, i (i)}
-              <fieldset class="question-item">
-                <legend>{q.header}</legend>
-                <p class="question-q">{q.question}</p>
-                {#each q.options as opt (opt.label)}
-                  <label class="question-option">
-                    {#if q.multiSelect}
+               plus a free-text "Other" per question. In-flow like the
+               permission dock, so it pushes the log up instead of overlaying
+               it; scrolls internally when the choices are tall, and collapses
+               to a one-line bar to reclaim log height when needed. -->
+          {#if questionMinimized}
+            <button
+              type="button"
+              class="dock-bar dock-bar-question"
+              title="質問ダイアログを展開"
+              onclick={() => (questionMinimized = false)}
+            >
+              <span class="dock-bar-lamp"></span>
+              回答待ち(クリックで展開)
+            </button>
+          {:else}
+            <div class="question-dock">
+              <!-- .dock-min lives OUTSIDE .question-scroll so the scrollable
+                   choices do not carry the minimize button out of view when a
+                   tall AskUserQuestion overflows the cap. -->
+              <button
+                class="dock-min"
+                type="button"
+                title="最小化"
+                aria-label="質問ダイアログを最小化"
+                onclick={() => (questionMinimized = true)}></button>
+              <div class="question-scroll">
+                <p class="question-title">回答を選んでください</p>
+                {#each question.questions as q, i (i)}
+                  <fieldset class="question-item">
+                    <legend>{q.header}</legend>
+                    <p class="question-q">{q.question}</p>
+                    {#each q.options as opt (opt.label)}
+                      <label class="question-option">
+                        {#if q.multiSelect}
+                          <input
+                            type="checkbox"
+                            checked={qPicks[i]?.includes(opt.label) ?? false}
+                            onchange={(e) =>
+                              toggleMulti(i, opt.label, e.currentTarget.checked)}
+                          />
+                        {:else}
+                          <input
+                            type="radio"
+                            name={`q-${i}`}
+                            checked={qPicks[i]?.[0] === opt.label}
+                            onchange={() => pickSingle(i, opt.label)}
+                          />
+                        {/if}
+                        <span class="question-label">{opt.label}</span>
+                        <span class="question-desc">{opt.description}</span>
+                        {#if opt.preview}
+                          <pre class="question-preview">{opt.preview}</pre>
+                        {/if}
+                      </label>
+                    {/each}
+                    <label class="question-other">
+                      <span>Other</span>
                       <input
-                        type="checkbox"
-                        checked={qPicks[i]?.includes(opt.label) ?? false}
-                        onchange={(e) =>
-                          toggleMulti(i, opt.label, e.currentTarget.checked)}
+                        type="text"
+                        placeholder="自由記述"
+                        value={qOther[i] ?? ""}
+                        oninput={(e) => (qOther[i] = e.currentTarget.value)}
                       />
-                    {:else}
-                      <input
-                        type="radio"
-                        name={`q-${i}`}
-                        checked={qPicks[i]?.[0] === opt.label}
-                        onchange={() => pickSingle(i, opt.label)}
-                      />
-                    {/if}
-                    <span class="question-label">{opt.label}</span>
-                    <span class="question-desc">{opt.description}</span>
-                    {#if opt.preview}
-                      <pre class="question-preview">{opt.preview}</pre>
-                    {/if}
-                  </label>
+                    </label>
+                  </fieldset>
                 {/each}
-                <label class="question-other">
-                  <span>Other</span>
-                  <input
-                    type="text"
-                    placeholder="自由記述"
-                    value={qOther[i] ?? ""}
-                    oninput={(e) => (qOther[i] = e.currentTarget.value)}
-                  />
-                </label>
-              </fieldset>
-            {/each}
-            <div class="question-actions">
-              <button class="answer" disabled={!questionReady} onclick={answerQuestion}>
-                回答
-              </button>
-              <button class="cancel" onclick={cancelQuestion}>キャンセル</button>
+                <div class="question-actions">
+                  <button class="answer" disabled={!questionReady} onclick={answerQuestion}>
+                    回答
+                  </button>
+                  <button class="cancel" onclick={cancelQuestion}>キャンセル</button>
+                </div>
+              </div>
             </div>
-          </div>
+          {/if}
         {/if}
 
         <div
@@ -1537,8 +1557,7 @@
           ondragenter={onDragEnter}
           ondragleave={onDragLeave}
           ondragover={onDragOver}
-          ondrop={onDrop}
-          bind:offsetHeight={composerH}>
+          ondrop={onDrop}>
           {#if showSlash}
             <!-- Slash command completion (#34): pick with click or
                  arrows + Tab/Enter; Escape dismisses. -->
@@ -1745,9 +1764,8 @@
     gap: 1rem;
   }
 
-  /* Wrapper exists only to measure the input area's height (--composer-h), so
-     the floating permission dock can rest just above it (#46). position:
-     relative anchors the slash-command menu (#34) above the textarea. */
+  /* position: relative anchors the slash-command menu (#34) above the
+     textarea. */
   .composer {
     position: relative;
     display: flex;
@@ -2547,51 +2565,38 @@
     color: var(--fg-dim);
   }
 
-  /* Permission dock (#46): a transparent clip/anchor box that floats over the
-     transcript. Open, it rests just above the composer at full width; folded
-     (.min) it shrinks to a pill in the top-right corner. The 0.25s eased move
-     is a transition on position + size; its two layers (.permission-full /
-     .permission-pill) crossfade. --full-h (the open height, measured) lets the
-     box animate its height between the panel and the pill. */
+  /* Permission dock (#46): an in-flow panel between the transcript and the
+     composer. It pushes the log up (which stays scrollable, just shorter)
+     rather than overlaying it, so the operator keeps the context in view
+     while deciding — the reason the earlier floating dock needed a minimize
+     button at all. Bordered in the waiting_permission hue. */
   .permission-dock {
-    --pill-h: 2.4rem;
-    --pill-w: 10rem;
-    position: absolute;
-    right: 0;
-    bottom: calc(var(--composer-h, 0px) + 0.6rem);
-    z-index: 2;
-    width: 100%;
-    height: var(--full-h, auto);
-    overflow: hidden;
-    transition:
-      bottom 0.25s ease,
-      width 0.25s ease,
-      height 0.25s ease;
-  }
-
-  .permission-dock.min {
-    bottom: calc(100% - var(--pill-h));
-    width: var(--pill-w);
-    height: var(--pill-h);
-  }
-
-  .permission-full {
     position: relative;
     padding: 0.7rem 0.8rem;
     border: 1px solid var(--c-waiting_permission);
     border-radius: 0.45rem;
     background: var(--bg-card);
     font-size: var(--fs-body-sm);
-    transition: opacity 0.25s ease;
   }
 
-  .permission-dock.min .permission-full {
-    opacity: 0;
-    pointer-events: none;
+  /* padding-right leaves room for the absolute .dock-min button. */
+  .permission-tool { margin: 0; padding-right: 1.6rem; color: var(--fg); }
+  .permission-note { margin: 0.3rem 0 0; color: var(--fg-dim); }
+  .permission-dock details { margin-top: 0.35rem; color: var(--fg-dim); }
+
+  .permission-dock pre {
+    margin: 0.3rem 0 0;
+    max-height: 10rem;
+    overflow: auto;
+    font-size: var(--fs-metadata);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
-  /* Minimize affordance, tucked into the panel's top-right corner. */
-  .permission-min {
+  /* Collapse affordance shared by both docks (#46, #78). .dock-min sits in the
+     expanded panel's top-right corner; clicking it swaps the panel for the
+     in-flow .dock-bar, which reclaims log height and expands again on click. */
+  .dock-min {
     position: absolute;
     top: 0.4rem;
     right: 0.4rem;
@@ -2610,7 +2615,7 @@
   }
 
   /* Minimize glyph drawn as a bar (no ambiguous-width dash character). */
-  .permission-min::before {
+  .dock-min::before {
     content: "";
     width: 0.7rem;
     height: 2px;
@@ -2618,17 +2623,32 @@
     border-radius: 1px;
   }
 
-  .permission-tool { margin: 0; padding-right: 1.6rem; color: var(--fg); }
-  .permission-note { margin: 0.3rem 0 0; color: var(--fg-dim); }
-  .permission-full details { margin-top: 0.35rem; color: var(--fg-dim); }
+  .dock-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--dock-accent);
+    border-radius: 0.45rem;
+    background: var(--bg-card);
+    color: var(--dock-accent);
+    font: inherit;
+    font-size: var(--fs-body-sm);
+    text-align: left;
+    cursor: pointer;
+  }
 
-  .permission-full pre {
-    margin: 0.3rem 0 0;
-    max-height: 10rem;
-    overflow: auto;
-    font-size: var(--fs-metadata);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+  .dock-bar-perm { --dock-accent: var(--c-waiting_permission); }
+  .dock-bar-question { --dock-accent: var(--c-waiting_question); }
+
+  .dock-bar-lamp {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: var(--dock-accent);
+    box-shadow: 0 0 6px var(--dock-accent);
+    animation: blink 1.2s ease-in-out infinite;
   }
 
   .permission-actions {
@@ -2659,25 +2679,35 @@
     color: var(--c-error);
   }
 
-  /* Question dock (#78, ADR-0027): a non-folding panel above the composer that
-     scrolls when the choices are tall. Bordered in the waiting_question hue. */
+  /* Question dock (#78, ADR-0027): in-flow like the permission dock, pushing
+     the log up rather than overlaying it. Caps at 60% of the conversation
+     column and scrolls internally so a tall AskUserQuestion never crowds the
+     log out entirely. Bordered in the waiting_question hue. */
+  /* The dock is a non-scrolling flex shell capped at 60% of the conversation
+     column; .question-scroll is the flex child that actually scrolls. Keeping
+     the cap + scroll off the dock itself lets the absolute .dock-min stay
+     pinned to the dock (not the scrolled content) so it never scrolls away. */
   .question-dock {
-    position: absolute;
-    right: 0;
-    bottom: calc(var(--composer-h, 0px) + 0.6rem);
-    z-index: 2;
-    width: 100%;
+    position: relative;
+    display: flex;
+    flex-direction: column;
     max-height: 60%;
-    overflow: auto;
-    padding: 0.7rem 0.8rem;
     border: 1px solid var(--c-waiting_question);
     border-radius: 0.45rem;
     background: var(--bg-card);
     font-size: var(--fs-body-sm);
   }
 
+  .question-scroll {
+    min-height: 0;
+    overflow: auto;
+    padding: 0.7rem 0.8rem;
+  }
+
+  /* padding-right leaves room for the absolute .dock-min button. */
   .question-title {
     margin: 0 0 0.5rem;
+    padding-right: 1.6rem;
     color: var(--c-waiting_question);
   }
 
@@ -2853,52 +2883,6 @@
   .remove-icon {
     font-size: 0.7em; /* em-relative to parent button; do not tokenize */
     line-height: 1;
-  }
-
-  /* Folded-state button: fills the dock (pill-sized when .min), crossfades
-     with the panel, and carries a pulsing lamp so a pending decision stays
-     noticeable in the corner. */
-  .permission-pill {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    border: 1px solid var(--c-waiting_permission);
-    border-radius: 0.45rem;
-    background: var(--bg-card);
-    color: var(--c-waiting_permission);
-    font: inherit;
-    font-size: var(--fs-body-sm);
-    cursor: pointer;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.25s ease;
-  }
-
-  .permission-dock.min .permission-pill {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .permission-pill-lamp {
-    width: 0.55rem;
-    height: 0.55rem;
-    border-radius: 50%;
-    background: var(--c-waiting_permission);
-    box-shadow: 0 0 6px var(--c-waiting_permission);
-    animation: blink 1.2s ease-in-out infinite;
-  }
-
-  /* The fold/unfold move is a CSS transition, which the global reduced-motion
-     rule in app.css (animations only) does not tame — shorten it here too. */
-  @media (prefers-reduced-motion: reduce) {
-    .permission-dock,
-    .permission-full,
-    .permission-pill {
-      transition-duration: 0.01ms;
-    }
   }
 
   .instruct {
