@@ -379,13 +379,17 @@
     Object.values(agents).filter(
       (e) =>
         e.agent_id !== envelope.agent_id &&
-        (e.state === "error" || e.state === "waiting_permission"),
+        (e.state === "error" ||
+          e.state === "waiting_permission" ||
+          e.state === "waiting_question"),
     ),
   );
   const attentionTone = $derived(
     attention.some((e) => e.state === "error")
       ? "error"
-      : "waiting_permission",
+      : attention.some((e) => e.state === "waiting_permission")
+        ? "waiting_permission"
+        : "waiting_question",
   );
 
   let instruction = $state("");
@@ -1865,6 +1869,11 @@
   .blindspot[data-tone="error"] {
     border-color: var(--c-error);
     color: var(--c-error);
+  }
+
+  .blindspot[data-tone="waiting_question"] {
+    border-color: var(--c-waiting_question);
+    color: var(--c-waiting_question);
   }
 
   @keyframes blink {

@@ -332,6 +332,7 @@ export const RUNNING_STATES: ReadonlySet<string> = new Set([
   "thinking",
   "tool_running",
   "waiting_permission",
+  "waiting_question",
 ]);
 
 /** States where terminating the agent is safe to do without a warning (#22):
