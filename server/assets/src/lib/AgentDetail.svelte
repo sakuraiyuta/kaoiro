@@ -1048,6 +1048,12 @@
         </div>
       </header>
 
+      <!-- Everything below the identity header scrolls inside .status-scroll so
+           a too-tall left column scrolls in place instead of growing .detail
+           and pushing the whole page (and the log/composer) up. The header
+           above stays pinned. (Inner content is intentionally left at its
+           original indentation to keep this a 2-line structural wrap.) -->
+      <div class="status-scroll">
       {#if hasCcStatus}
         <!-- Claude Code status meta (#16): mirrors the local statusline's
              model / ctx / 5h / 7d segments for this agent. -->
@@ -1262,6 +1268,7 @@
           {restoring ? "復帰中…" : "エージェントを復帰"}
         </button>
       {/if}
+      </div>
     </aside>
 
     <div class="main">
@@ -1678,6 +1685,22 @@
   .status {
     flex: 0 0 20%;
     min-width: 9rem;
+    /* Column layout with min-height:0 lets .status-scroll shrink and scroll
+       instead of the aside growing .detail past the viewport (#37 follow-up).
+       Without min-height:0 the default min-height:auto keeps the aside at its
+       content height, which is what pushed the whole page. */
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  /* Identity header stays pinned; only .status-scroll below it scrolls. */
+  .status-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    /* Stop the inner scroll from chaining to the page once it bottoms out. */
+    overscroll-behavior: contain;
   }
 
   .clear-history {
@@ -1899,6 +1922,8 @@
   }
 
   .head {
+    /* Pinned: does not shrink, so only .status-scroll below it scrolls. */
+    flex: 0 0 auto;
     display: flex;
     flex-direction: column;
     align-items: center;
