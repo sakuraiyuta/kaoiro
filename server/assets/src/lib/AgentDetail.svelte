@@ -65,8 +65,21 @@
 
   // Displayed state lags the live state for min readability + crossfade (#43).
   const display = new StatusQueue(untrack(() => envelope.state));
+  // The detail is reused (not re-keyed) when the operator switches agents, so
+  // the display queue would otherwise crossfade the previous agent's state onto
+  // the next one. On an agent switch, snap straight to the new agent's state
+  // (reset) instead of pushing it through the lag queue; only feed same-agent
+  // updates through push().
+  let displayAgent = untrack(() => envelope.agent_id);
   $effect(() => {
-    display.push(envelope.state);
+    const state = envelope.state;
+    const agentId = envelope.agent_id;
+    if (displayAgent !== agentId) {
+      displayAgent = agentId;
+      display.reset(state);
+    } else {
+      display.push(state);
+    }
   });
   $effect(() => () => display.dispose());
 
@@ -596,22 +609,49 @@
   let stickToBottom = $state(true);
   const STICK_THRESHOLD_PX = 8;
 
+  // Per-agent scroll memory: the detail is reused across agents, so without
+  // this the log's scroll position (and pin intent) would carry over to the
+  // next agent. Keyed by agent_id, updated on every scroll and restored on
+  // switch. Plain Map (not $state) — it is read/written imperatively, never
+  // rendered. `scrollAgent` tracks which agent the log currently reflects so
+  // the auto-scroll effect can tell a switch from a same-agent log update.
+  const scrollMemory = new Map<string, { top: number; stick: boolean }>();
+  let scrollAgent = untrack(() => envelope.agent_id);
+
   function handleLogScroll(): void {
     if (!logEl) return;
     const distance = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
     stickToBottom = distance <= STICK_THRESHOLD_PX;
+    scrollMemory.set(envelope.agent_id, {
+      top: logEl.scrollTop,
+      stick: stickToBottom,
+    });
   }
 
-  // Render any new mermaid diagrams (#42), then keep the transcript pinned to
-  // the latest line IF the operator was already at the bottom — see
-  // stickToBottom above. (Diagrams change the scroll height, so scroll after.)
+  // Render any new mermaid diagrams (#42), then position the transcript. On a
+  // same-agent log update, keep it pinned to the latest line IF the operator
+  // was already at the bottom (stickToBottom). On an agent switch, restore that
+  // agent's remembered scroll position instead (#…), defaulting an unseen agent
+  // to the bottom. (Diagrams change the scroll height, so scroll after.)
   $effect(() => {
     void logs.length;
+    const agentId = envelope.agent_id;
+    const switching = scrollAgent !== agentId;
     // Snapshot synchronously BEFORE the new logs commit: once Svelte renders
     // the new envelopes, scrollHeight grows and a fresh "at the bottom"
     // measurement no longer reflects the operator's prior intent. untrack
     // also prevents this effect from re-firing on every user scroll.
-    const shouldStick = untrack(() => stickToBottom);
+    let shouldStick = untrack(() => stickToBottom);
+    let restoreTop: number | null = null;
+    if (switching) {
+      scrollAgent = agentId;
+      const mem = scrollMemory.get(agentId);
+      // Adopt the incoming agent's pin intent (unseen agent => bottom), and
+      // restore its exact offset when it was parked away from the bottom.
+      shouldStick = mem ? mem.stick : true;
+      stickToBottom = shouldStick;
+      restoreTop = mem && !mem.stick ? mem.top : null;
+    }
     void tick().then(async () => {
       if (!logEl) return;
       try {
@@ -620,7 +660,8 @@
         console.error("mermaid render failed", error);
       }
       // The component may have unmounted during the await; re-check logEl.
-      if (!logEl || !shouldStick) return;
+      if (!logEl) return;
+      if (restoreTop === null && !shouldStick) return;
       // The composer reflows one frame late (e.g. stagedFiles clearing on
       // send), and an in-flow permission/question dock appearing or clearing
       // also resizes .log via flex. Double rAF lets layout settle before the
@@ -629,7 +670,8 @@
       // previously).
       await new Promise((r) => requestAnimationFrame(r));
       await new Promise((r) => requestAnimationFrame(r));
-      if (logEl) logEl.scrollTop = logEl.scrollHeight;
+      if (!logEl) return;
+      logEl.scrollTop = restoreTop !== null ? restoreTop : logEl.scrollHeight;
     });
   });
 

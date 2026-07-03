@@ -175,4 +175,40 @@ describe("StatusQueue", () => {
 
     q.dispose();
   });
+
+  it("reset は queue とタイマーを捨てて即時スナップする (subject 切替)", () => {
+    const q = new StatusQueue("idle", 2000);
+    q.push("thinking"); // shown, opens the hold window
+    q.push("tool_running"); // queued behind the hold
+
+    q.reset("waiting_input"); // switch subject: snap, no crossfade
+    expect(q.shown).toBe("waiting_input");
+
+    // The dropped timer/queue must not resurface the old subject's states.
+    vi.advanceTimersByTime(5000);
+    expect(q.shown).toBe("waiting_input");
+    q.dispose();
+  });
+
+  it("reset は hold も解除する", () => {
+    const q = new StatusQueue("idle", 2000);
+    q.push("waiting_permission");
+    q.hold("waiting_permission"); // pinned
+
+    q.reset("thinking"); // switch subject clears the pin
+    expect(q.shown).toBe("thinking");
+
+    // Not held anymore: a later push surfaces immediately.
+    q.push("tool_running");
+    expect(q.shown).toBe("tool_running");
+    q.dispose();
+  });
+
+  it("dispose 後の reset は何も起こさない", () => {
+    const q = new StatusQueue("idle", 2000);
+    q.push("thinking");
+    q.dispose();
+    q.reset("waiting_input"); // no-op after teardown
+    expect(q.shown).toBe("thinking");
+  });
 });

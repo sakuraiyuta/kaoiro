@@ -128,6 +128,22 @@ export class StatusQueue {
     if (next !== undefined && next !== this.shown) this.#show(next);
   }
 
+  /** Snap `shown` to `state` immediately, dropping any queued states, the
+   *  pending timer, and any hold. Unlike push(), it does not go through the
+   *  lag/crossfade queue — for switching the displayed subject (e.g. selecting
+   *  a different agent) so the new subject's state shows at once instead of
+   *  animating from the previous subject's. No-op after dispose(). */
+  reset(state: string): void {
+    if (this.#disposed) return;
+    this.#queue = [];
+    this.#heldOn = null;
+    if (this.#timer !== null) {
+      clearTimeout(this.#timer);
+      this.#timer = null;
+    }
+    this.shown = state;
+  }
+
   #show(state: string): void {
     this.shown = state;
     const ms = TERMINAL_STATES.has(state) ? this.#terminalMs : this.#minMs;
