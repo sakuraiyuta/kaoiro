@@ -129,8 +129,9 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 
 - 行き詰まり時の最終判断は owner に集約する
 - `owner.kind: "user"` の場合 → server は `escalate-to-user` を受け
-  たら dashboard に介入ダイアログを出す(既存 AskUserQuestion 系 UI
-  流用)
+  たら dashboard に介入ダイアログを出す(AskUserQuestion 系の構造化
+  ダイアログを流用。実体は [ADR-0027](../adr/0027-askuserquestion-envelope.md)
+  の `question_request` / `waiting_question`)
 - `owner.kind: "agent"` の場合 → owner エージェントへ
   `escalate-to-user` の代わりに `escalate-to-owner` ルーティング
   (Phase 3 で確定、本 spec は Phase 1〜2 のみ機械強制)

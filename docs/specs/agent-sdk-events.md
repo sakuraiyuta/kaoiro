@@ -83,6 +83,14 @@ type PermissionResult =
 `canUseTool` が呼ばれる。kaoiro はここで Promise を保留し、クライアント UI の
 許可/拒否を待って `behavior` を返す = `waiting_permission` の駆動点。
 
+`toolName === "AskUserQuestion"` のときは分岐する。構造化質問
+(`AskUserQuestionInput`: `questions[].{question, header, multiSelect,
+options[].{label, description, preview?}}`)を dashboard の専用ダイアログへ
+運んで operator の選択を待つ = `waiting_question` の駆動点。回答は
+`{ behavior: "allow", updatedInput: { ...input, answers: { [質問文]: 選択 label } } }`
+として SDK へ返し(cancel / timeout / close は deny)、`AskUserQuestionOutput`
+としてモデルに渡る。詳細は [ADR-0027](../adr/0027-askuserquestion-envelope.md)。
+
 評価順: PreToolUse Hook → Deny → Allow → Ask → Permission Mode →
 canUseTool → PostToolUse。
 
@@ -190,6 +198,7 @@ piggyback で反映する唯一の経路(`init` 以外のメッセージは cwd 
 | `thinking` | `SDKAssistantMessage` の content が text/thinking のみ。細粒度は `stream_event`(`includePartialMessages`) |
 | `tool_running` | `SDKAssistantMessage` に tool_use 出現 〜 対応する `SDKUserMessage`(tool_result)まで |
 | `waiting_permission` | `canUseTool` 呼び出し中(Promise 保留) |
+| `waiting_question` | `canUseTool`(`toolName === "AskUserQuestion"`)呼び出し中(Promise 保留)、[ADR-0027](../adr/0027-askuserquestion-envelope.md) |
 | `waiting_input` | `SDKResultMessage` 後、ストリーミング入力で次メッセージ待ち |
 | `done` | `SDKResultMessage` subtype `success`(瞬間 → `waiting_input`) |
 | `error` | `SDKResultMessage` subtype `error_*` / is_error、または `SDKAssistantMessage.error` |
