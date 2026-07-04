@@ -293,6 +293,14 @@ async function main(): Promise<void> {
       tools: { type: "preset", preset: "claude_code" },
       allowedTools: config.allowed_tools ?? [...READ_ONLY_TOOLS],
       cwd: process.cwd(),
+      // Startup model override for local dev. The SDK otherwise picks its own
+      // default (currently Opus 4.8); KAOIRO_WRAPPER_DEFAULT_MODEL pins the
+      // initial model instead. scripts/dev.sh sets it for runner-spawned
+      // wrappers, so it only affects local dev — unset in prod leaves the SDK
+      // default untouched. setModel from the dashboard still overrides at runtime.
+      ...(process.env.KAOIRO_WRAPPER_DEFAULT_MODEL
+        ? { model: process.env.KAOIRO_WRAPPER_DEFAULT_MODEL }
+        : {}),
       // Register the kaoiro in-process MCP server when the wrapper is
       // server-connected (Phase 8). send_to_agent surfaces as
       // mcp__kaoiro__send_to_agent and is NOT in the read-only default
