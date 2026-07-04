@@ -6,7 +6,7 @@ opened: 2026-06-11
 supersedes: []
 superseded_by: null
 related_specs: [non-goals, protocol, threat-model, overview]
-related_adrs: [7, 10, 11, 14, 16, 20, 21, 22]
+related_adrs: [7, 10, 11, 14, 16, 20, 21, 22, 27]
 ---
 
 # ADR-0012 — 返答表示と同梱ダッシュボードのスコープ改訂

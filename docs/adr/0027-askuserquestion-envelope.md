@@ -34,7 +34,7 @@ multiSelect)が dashboard に届かず、選択回答も返せない(issue #78)�
   却下/キャンセルは `{ behavior: "deny", message }`。
 
 wire プロトコル(wrapper ↔ server ↔ dashboard)をどう設計するかで 3 案を検討した
-([open-question askuserquestion-envelope-shape](../open-questions/askuserquestion-envelope-shape.md))。
+(下記 Context の 3 案・Alternatives Considered)。
 
 | 案 | 概要 | 採否 |
 |---|---|---|
