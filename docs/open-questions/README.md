@@ -24,6 +24,11 @@
 | [persona-voice-distinctiveness](persona-voice-distinctiveness.md) | low | — | 2026-07-02 |
 | [persona-language-dispatch](persona-language-dispatch.md) | low | persona-personality-injection | 2026-07-02 |
 | [persona-personality-vs-dialogue](persona-personality-vs-dialogue.md) | low | — | 2026-07-02 |
+| [external-human-inbound-llm-tier](external-human-inbound-llm-tier.md) | medium | protocol-external-human, phase-9-external-human-messaging | 2026-07-04 |
+| [external-human-inbound-loss](external-human-inbound-loss.md) | low | — | 2026-07-04 |
+| [external-human-agent-consumes-input](external-human-agent-consumes-input.md) | low | — | 2026-07-04 |
+| [external-human-recv-permission-model](external-human-recv-permission-model.md) | low | — | 2026-07-04 |
+| [external-human-contact-management-ux](external-human-contact-management-ux.md) | low | — | 2026-07-04 |
 
 ## Recently decided
 

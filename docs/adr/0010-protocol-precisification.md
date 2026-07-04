@@ -6,7 +6,7 @@ opened: 2026-06-04
 supersedes: []
 superseded_by: null
 related_specs: [protocol, agent-sdk-events]
-related_adrs: [9, 11, 12, 15, 16, 19, 22]
+related_adrs: [9, 11, 12, 15, 16, 19, 22, 28]
 ---
 
 # ADR-0010 — エンベロープの type/payload は実証範囲のみ確定し、残りは予約名とする

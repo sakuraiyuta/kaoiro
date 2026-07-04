@@ -6,7 +6,7 @@ opened: 2026-06-16
 supersedes: []
 superseded_by: null
 related_specs: [plugin-model, architecture]
-related_adrs: [1, 18]
+related_adrs: [1, 18, 28]
 ---
 
 # ADR-0017 — wrapper のマルチエンティティ・パッケージ構造

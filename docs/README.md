@@ -46,6 +46,8 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0024](adr/0024-agent-instance-identity-and-spawn-auth.md) | エージェントのインスタンス同一性と spawn 認証 — persona=型 / agent_id=インスタンス、runner 一本化の発行型認証 | accepted |
 | [0025](adr/0025-file-upload-wire-and-wrapper-rendering.md) | ファイルアップロードの wire と wrapper-internal レンダリング | accepted |
 | [0026](adr/0026-persona-personality-injection.md) | 人格プロンプト注入 — SDK systemPrompt.append + wrapper 同梱 md | accepted |
+| [0027](adr/0027-askuserquestion-envelope.md) | AskUserQuestion 用に専用 envelope(question_request / question_response)と状態 waiting_question を新設 | accepted |
+| [0028](adr/0028-external-human-messaging.md) | 外部人間メッセージング — 人間を外部チャネルの participant 化・一方向 authority・discord-wrapper トポロジ | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh --columns "# 決定 Status" docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。
