@@ -1,19 +1,25 @@
 ---
 title: ペルソナアセットはサーバ管理、マニフェスト + content-addressed 配信
-status: accepted
+status: superseded
 date: 2026-06-10
 opened: 2026-06-10
 supersedes: []
-superseded_by: null
+superseded_by: 29
 related_specs: [protocol, architecture]
-related_adrs: [3, 5, 7]
+related_adrs: [3, 5, 7, 29]
 ---
 
 # ADR-0008 — ペルソナアセットはサーバ管理、マニフェスト + content-addressed 配信
 
 ## Status
 
-Accepted
+Superseded by [ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
+(2026-07-05)。サーバがアセットを持つ方針は継承しつつ、配布単位を
+「立ち絵のみのマニフェスト」から「zip pack(人格プロンプト + 立ち絵)」
+に拡張し、auto-watch による自動反映と「野良 persona 禁止」の enforce を
+統合した。
+
+以下は歴史的経緯として残す。
 
 ## Context
 

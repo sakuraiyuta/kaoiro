@@ -17,6 +17,7 @@
 | 7 | [phase-7-file-upload](phase-7-file-upload.md) | ⏳ | ファイルアップロード(添付の取り込み、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)) |
 | 8 | [phase-8-inter-agent-messaging](phase-8-inter-agent-messaging.md) | ⏳ | エージェント間メッセージング(複数 AI エージェントの協調対話、[issue #17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17)) |
 | 9 | [phase-9-external-human-messaging](phase-9-external-human-messaging.md) | ⏳ | 外部人間メッセージング(Discord、双方向 transport / 一方向 authority、[ADR-0028](../adr/0028-external-human-messaging.md)) |
+| 10 | [phase-10-persona-server-sot](phase-10-persona-server-sot.md) | ⏳ | ペルソナ server 集約 SoT + zip pack 配布、[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) |
 
 ## Feature-local plans
 

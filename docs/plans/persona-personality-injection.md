@@ -69,14 +69,20 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 phase-0 の実装を回した後、以下の open-question が decide されたら段階的に
 拡張する。順不同、独立に着手可。
 
-- [persona-common-footer](../open-questions/persona-common-footer.md) 決着
-  → 共通フッターの構造化・合成順の明示・暫定ハードコードの差し替え
 - [persona-language-dispatch](../open-questions/persona-language-dispatch.md)
   決着 → `persona.language` に応じた personality / 共通フッターの分岐
+  (ただし ADR-0029 で `personality_prompt_file` / `language` フィールド
+  は wrapper config から撤去されたため、pack の `manifest.json` に
+  language 相当をどう持つかを含めて再検討要)
 - [persona-behavioral-prompt](../open-questions/persona-behavioral-prompt.md)
   / [persona-voice-distinctiveness](../open-questions/persona-voice-distinctiveness.md)
   / [persona-personality-vs-dialogue](../open-questions/persona-personality-vs-dialogue.md)
   は個別に issue 化されるまで no-op
+
+なお本 plan は元 ADR-0026 の実装計画(wrapper 同梱 md モデル)。
+[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) で
+server 集約 SoT モデルに置換されたため、以降の phase 展開は
+[phase-10-persona-server-sot](phase-10-persona-server-sot.md) に引き継ぐ。
 
 ## Followups (in-phase but unfinished)
 
@@ -86,9 +92,10 @@ feature phase-0 は実装完了(f6ad322。kuroe 口調改訂は 4734d97)。残�
 
 ## Open Questions Blocking This Phase
 
-- [persona-common-footer](../open-questions/persona-common-footer.md) —
-  暫定ハードコード方針で phase-0 は進められるが、共通フッターの中身が
-  未決のまま実装が固定化するリスクがある。中優先で追う。
+- なし。共通フッターの中身と合成順は
+  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+  D5 で確定した(旧 open-question `persona-common-footer` は 2026-07-05
+  に ADR に merge、`git rm` 済)。
 
 ## See Also
 

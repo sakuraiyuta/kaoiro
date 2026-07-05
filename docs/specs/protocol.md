@@ -410,13 +410,16 @@ stateDiagram-v2
   disconnected --> idle
 ```
 
-### ペルソナアセット配信(v0 確定)
+### ペルソナアセット配信
 
-`persona.sprite_set` を実画像へ解決する HTTP API
-([ADR-0008](../adr/0008-persona-asset-distribution.md))。Channels とは
-独立で、`:serve_dashboard` トグルの対象外(公開 API)。アセットの配置・
-規格・オーバーレイ(`KAOIRO_PERSONA_DIR`)の正本は
-[personas](personas.md)。
+`persona.sprite_set` を実画像へ解決する HTTP API。当初
+[ADR-0008](../adr/0008-persona-asset-distribution.md) で立ち絵のみを
+対象にしたが、[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+で「persona pack zip 単位で配布・server 集約 SoT・auto-watch」に拡張
+された(2026-07-05)。Channels とは独立で、`:serve_dashboard` トグルの
+対象外(公開 API)。アセットの配置・規格の正本は
+[personas](personas.md)、pack 内部スキーマは
+[persona-pack-schema](persona-pack-schema.md)。
 
 - `GET /api/personas` — マニフェスト JSON:
 
@@ -425,6 +428,9 @@ stateDiagram-v2
   "version": "<16hex>",
   "personas": {
     "<sprite_set>": {
+      "name": "<display name>",
+      "pack_version": "<semver>",
+      "description": "<optional 1-line>",
       "states": {
         "<state>": {
           "url": "/personas/<sprite_set>/<state>.png?v=<12hex>",
@@ -438,6 +444,10 @@ stateDiagram-v2
 
 - `version` はアセット内容から導出した全体バージョン。クライアントは
   これが変わった時だけスプライト URL を引き直す(増分同期)。
+- `name` / `pack_version` / `description` は persona pack `manifest.
+  json` から転記([persona-pack-schema](persona-pack-schema.md))。
+  personality.md 本文は API で露出しない(wrapper への配送は WS
+  ハンドシェイクの push のみ、下記「人格プロンプト配送」)。
 - `url` のハッシュ付き形は不変 — 応答は
   `cache-control: public, max-age=31536000, immutable`。`?v=` なしは
   `no-cache`。
@@ -447,6 +457,34 @@ stateDiagram-v2
   `idle` のグレースケール表示で表現する。マニフェスト未取得・未掲載
   `sprite_set` はスプライトなし描画(リファレンス実装では CSS 顔)へ
   フォールバックする。
+- **auto-watch**: server は取り込みディレクトリを Elixir `FileSystem`
+  library で watch し、zip の追加・更新・削除を検知して manifest を
+  再構築する([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+  F6)。手動 restart 不要。
+
+### 人格プロンプト配送(ADR-0029)
+
+[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) に
+基づき、人格プロンプトは server 集約 SoT(persona pack の
+`personality.md`)から wrapper へ WS ハンドシェイクの push で配送する。
+
+- **wrapper join 時の未知 persona.id は reject**: server は
+  `wrapper:<agent_id>` join を受け付ける時点で agent_id 別トークンの
+  マッピングから引いた `persona.id` を manifest と照合する。manifest
+  にない id は接続を拒否する(「野良 persona 禁止」の enforce、
+  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+  F3)。
+- **after_join push**: server → wrapper に次のメッセージを push:
+
+  | 方向 | type | payload | 備考 |
+  |---|---|---|---|
+  | サーバ → ラッパー | `persona_prompt` | `{ prompt }` | wrapper join 直後の after_join 経路で 1 度だけ配信。`prompt` は persona pack の `personality.md` 本文 + 共通フッター(server 側で結合、[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5)。wrapper は受信文字列をそのまま SDK の `systemPrompt.append` に注入する([persona-personality-injection](persona-personality-injection.md))。以降のセッション中に上書き push はしない(F9、hot-swap なし)|
+
+- **server 到達不能時の wrapper spawn は fail-closed**: wrapper は
+  `persona_prompt` を受信できるまで spawn を完了できない。dev/local も
+  同様(minimal server を並行起動する運用、
+  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+  F10)。
 
 ### クライアント向けトランスポート
 

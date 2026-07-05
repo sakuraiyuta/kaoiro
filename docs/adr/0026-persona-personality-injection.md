@@ -1,19 +1,25 @@
 ---
 title: 人格プロンプト注入 — SDK systemPrompt.append + wrapper 同梱 md
-status: accepted
+status: superseded
 date: 2026-07-02
 opened: 2026-07-02
 supersedes: []
-superseded_by: null
+superseded_by: 29
 related_specs: [persona-personality-injection, personas, threat-model]
-related_adrs: [3, 6]
+related_adrs: [3, 6, 29]
 ---
 
 # ADR-0026 — 人格プロンプト注入 — SDK systemPrompt.append + wrapper 同梱 md
 
 ## Status
 
-Accepted
+Superseded by [ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
+(2026-07-05)。SDK `systemPrompt.append` 経由での注入方式は継承しつつ、
+人格プロンプトの一次ソースを wrapper 同梱 md から server 集約 SoT に
+移し、配送を WS ハンドシェイクの push で行う形に転換した。共通フッター
+の結合は wrapper 側から server 側に移動した。
+
+以下は歴史的経緯として残す。
 
 ## Context
 
@@ -40,10 +46,12 @@ Accepted
   として**同梱**する。`config.persona.personality_prompt_file?` があれば
   それで override、無ければ同梱デフォルトを解決する(γ2 方式)。サーバ経由
   の配信は行わない。
-- **D3 共通フッター**: 中身と合成順は [persona-common-footer](../open-questions/persona-common-footer.md)
-  に委ねる open-question とする。初期実装の暫定方針は「環境認識 1 文
+- **D3 共通フッター**: 中身と合成順は当初 open-question として `persona-
+  common-footer` に委ねる方針だった(初期実装の暫定方針は「環境認識 1 文
   (このエージェントは kaoiro クライアント越しに操作されています相当)を
-  ハードコード」。
+  ハードコード」)。この open-question は 2026-07-05 に
+  [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) D5 に
+  merge され、暫定方針そのまま確定として close された。
 - **D4 言語**: Persona に `language?: string` フィールドを追加(未指定は
   `"ja"` 既定)。phase-0 では読み込みのみで dispatch ロジックは持たず、
   多言語 dispatch は [persona-language-dispatch](../open-questions/persona-language-dispatch.md)

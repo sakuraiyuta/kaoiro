@@ -103,17 +103,18 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 
 - 形式: **透過 PNG**、正方形。1024x1024 で生成し、配信用に 512x512 へ
   縮小する。
-- 構図: ちび(ao / momo)は全身、kuroe はバストアップ(胸上)。
+- 構図: ちび(ao / momo)は全身、kuroe / fuji はバストアップ(胸上)。
   非デフォルメの全身は正方形小サイズで顔が潰れるため。
-- 配置: `<sprite_set>/<state>.png` 構造で配置
-  ([ADR-0008](../adr/0008-persona-asset-distribution.md) 第 1 段階)。
-  `sprite_set` は persona.id と同名とする。
-- 配置方式(2026-06-11 決定): **同梱 + オーバーレイ**。リファレンス
-  パックとして `server/priv/personas/` に同梱(git 管理)し、env 変数
-  `KAOIRO_PERSONA_DIR` 指定時は外部ディレクトリを優先走査・同名なしは
-  同梱分へフォールバックしてマニフェストを生成する。第 1 段階の
-  マニフェストはファイル走査で生成し、SQLite はアップロード API
-  導入時に検討する。
+- 配置: persona pack zip 内の `sprites/<state>.png` 構造で配布
+  ([persona-pack-schema](persona-pack-schema.md))。`sprite_set` は
+  慣習として `persona.id` と同名。
+- 配置方式(2026-07-05 更新、
+  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)):
+  作成者は persona pack zip として配布し、server 管理者は zip を
+  **取り込みディレクトリ**(env で指定)に drop する。server は auto-
+  watch で自動展開し `/api/personas` manifest を再構築する。旧来の
+  bundled `server/priv/personas/` + overlay 併存モデル(ADR-0008)は
+  取り込みディレクトリへ統合された。
 
 ### 生成ワークフロー(ComfyUI、ao 試作で実証済み)
 
@@ -140,12 +141,34 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 | kuroe | `animality_ap3.safetensors` | `78243803967796` | 2026-06-11 |
 | fuji | `animality_ap3.safetensors` | `218473265094718` | 2026-07-05 |
 
-作業成果物は `assets-work/dist/<sprite_set>/<state>.png`(512x512
-透過 PNG、isnet-anime で背景除去、git 管理外)。正式配置済みの git
-管理コピーは `server/priv/personas/`(初期 3 体は 2026-06-11、
-[ADR-0008](../adr/0008-persona-asset-distribution.md) 第 1 段階の
-配信実装と同時)。配信 API の形式は [protocol](protocol.md) の
-「ペルソナアセット配信」を参照。
+作業成果物は `assets-work/dist/<sprite_set>/<state>.png`(1024x1024
+透過 PNG、rembg `birefnet-portrait` で背景除去、git 管理外)。配布用
+の正本は persona pack zip
+([persona-pack-schema](persona-pack-schema.md))として `persona-packs/
+<id>/` に管理し、build スクリプトで zip 化して server の取り込み
+ディレクトリに置く。旧来の `server/priv/personas/` 直配置は
+[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+の実装(phase-10)完了時に撤去される。配信 API の形式は
+[protocol](protocol.md) の「ペルソナアセット配信」を参照。
+
+### 配布と取り込み(pack ワークフロー)
+
+作成 → 配布 → 運用の全フローは
+[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) に
+基づき、以下のように統一される:
+
+1. **作成者**: `persona-packs/<id>/{manifest.json, personality.md,
+   sprites/}` を編集
+2. **build**: `scripts/build-persona-pack.sh` で zip 化(
+   `<id>-<version>.zip`)
+3. **管理者**: zip を server の取り込みディレクトリ(env で指定)に drop
+4. **server**: auto-watch が検知して自動展開、manifest を再構築
+5. **wrapper**: 起動時 WS ハンドシェイクで人格プロンプトを server から
+   受信して SDK に注入
+   ([persona-personality-injection](persona-personality-injection.md))
+
+zip 内部スキーマの詳細は
+[persona-pack-schema](persona-pack-schema.md) を参照。
 
 ## Constraints
 
@@ -168,10 +191,13 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 ## See Also
 
 - Related specs: [protocol](protocol.md),
+  [persona-pack-schema](persona-pack-schema.md),
   [persona-personality-injection](persona-personality-injection.md)
 - ADRs: [0003](../adr/0003-persona-identity-persistence.md),
   [0004](../adr/0004-client-rendering-staged.md),
-  [0008](../adr/0008-persona-asset-distribution.md),
-  [0026](../adr/0026-persona-personality-injection.md)
+  [0008](../adr/0008-persona-asset-distribution.md)(superseded),
+  [0026](../adr/0026-persona-personality-injection.md)(superseded),
+  [0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
 - Plans: [phase-2-client-character](../plans/phase-2-client-character.md),
+  [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md),
   [persona-personality-injection](../plans/persona-personality-injection.md)

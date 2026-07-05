@@ -48,11 +48,23 @@ related: [protocol, threat-model]
 | 許可ツール | `allowed_tools` | 任意 | 既定 `[Read, Grep, Glob, LS, NotebookRead]` / 最大 64 |
 
 - **persona の候補補完**: `id` / `name` / `sprite_set` は server の
-  `GET /api/personas` から候補を取得し「候補選択 + 自由記入」とする。**server に
-  到達できない場合は警告を表示し、自由記入のみへフォールバック**する(ウィザード
-  は server なしでも完了できる)。
-- **server 接続の分岐**: 接続するか yes/no で分岐。no ならローカルのみモードで
-  `server_url` / `server_token` を省略する。
+  `GET /api/personas` から候補を取得し「候補選択のみ」とする(
+  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+  で「野良 persona 禁止」を server 側で enforce するため、manifest に
+  ない id を書き込むと wrapper 起動時に reject される)。**server に
+  到達できない場合はウィザードを中断し、server を立てるよう案内**する
+  (fail-closed、[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+  F3)。
+- **server 接続は必須**: `server_url` / `server_token` は wrapper 起動
+  の必要条件。旧仕様の「ローカルのみモード(server なしでも動く)」は
+  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+  で撤廃された。ローカル利用時も dev 向け minimal server を並行起動
+  する運用を案内する(F10)。
+- **人格プロンプトはサーバ配送**: 旧仕様の `persona.personality_prompt_file`
+  / `persona.language` フィールドは wrapper config には持たない。人格
+  プロンプトの一次ソースは server 側 persona pack
+  ([persona-pack-schema](persona-pack-schema.md))、配送は WS ハンド
+  シェイクの push([persona-personality-injection](persona-personality-injection.md))。
 - **初回起動で自動起動**: 設定ファイルが無い初回起動時はウィザードを自動的に
   起動する(配布バイナリ運用、[ADR-0018](../adr/0018-runner-distribution.md))。
 - **設定の配置(配布時)**: 配布インストールでは設定をインストール先でなく

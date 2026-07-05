@@ -27,7 +27,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0005](adr/0005-access-control-oauth-stub.md) | アクセス制御は OAuth + RBAC、プロトタイプは stub | accepted |
 | [0006](adr/0006-doc-language-i18n.md) | ドキュメント・UI は日本語、ベータ前に全英訳 | accepted |
 | [0007](adr/0007-client-separation-reference-dashboard.md) | クライアントは別プロジェクト分離、リファレンスダッシュボードを同梱 | accepted |
-| [0008](adr/0008-persona-asset-distribution.md) | ペルソナアセットはサーバ管理、マニフェスト + content-addressed 配信 | accepted |
+| [0008](adr/0008-persona-asset-distribution.md) | ペルソナアセットはサーバ管理、マニフェスト + content-addressed 配信 | superseded |
 | [0009](adr/0009-client-transport.md) | クライアント接続は Phoenix Channels に一本化 | accepted |
 | [0010](adr/0010-protocol-precisification.md) | エンベロープの type/payload は実証範囲のみ確定し、残りは予約名とする | accepted |
 | [0011](adr/0011-phase3-reliability-and-auth.md) | Phase 3 の信頼性・認証規約(seq / permission 相関 / トークン) | accepted |
@@ -45,9 +45,10 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0023](adr/0023-host-runner-architecture.md) | ホスト常駐 runner — supervisor 専任・1 process=1 agent・TS/Node 単一バイナリ | accepted |
 | [0024](adr/0024-agent-instance-identity-and-spawn-auth.md) | エージェントのインスタンス同一性と spawn 認証 — persona=型 / agent_id=インスタンス、runner 一本化の発行型認証 | accepted |
 | [0025](adr/0025-file-upload-wire-and-wrapper-rendering.md) | ファイルアップロードの wire と wrapper-internal レンダリング | accepted |
-| [0026](adr/0026-persona-personality-injection.md) | 人格プロンプト注入 — SDK systemPrompt.append + wrapper 同梱 md | accepted |
+| [0026](adr/0026-persona-personality-injection.md) | 人格プロンプト注入 — SDK systemPrompt.append + wrapper 同梱 md | superseded |
 | [0027](adr/0027-askuserquestion-envelope.md) | AskUserQuestion 用に専用 envelope(question_request / question_response)と状態 waiting_question を新設 | accepted |
 | [0028](adr/0028-external-human-messaging.md) | 外部人間メッセージング — 人間を外部チャネルの participant 化・一方向 authority・discord-wrapper トポロジ | accepted |
+| [0029](adr/0029-persona-server-sot-and-pack-distribution.md) | ペルソナは server 集約 SoT、zip pack で配布し auto-watch で反映 | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh --columns "# 決定 Status" docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。
