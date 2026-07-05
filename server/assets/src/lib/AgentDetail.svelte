@@ -5,6 +5,7 @@
   import { renderMarkdown, renderMermaidIn } from "./markdown";
   import {
     formatAgentLabel,
+    hostIdFromAgentId,
     interAgentMessageOf,
     logOf,
     modelsFrom,
@@ -18,6 +19,7 @@
     Envelope,
     KaoiroConnection,
     PersonaManifest,
+    RunnerSessions,
   } from "./protocol";
 
   let {
@@ -26,6 +28,7 @@
     agents = {},
     connection = null,
     manifest = null,
+    sessions = null,
     origin = null,
     onClose,
     onSelectAgent,
@@ -35,6 +38,11 @@
     agents?: Record<string, Envelope>;
     connection?: KaoiroConnection | null;
     manifest?: PersonaManifest | null;
+    /** Latest resume-candidate enumeration reply (App.svelte holds the
+     *  singleton). The picker filters to entries whose host_id + cwd match
+     *  this agent, so a stale enumerate for another selection cannot leak in
+     *  (same guard shape as LaunchDialog). */
+    sessions?: RunnerSessions | null;
     /** Viewport centre of the originating tile, for the expand anim (#36). */
     origin?: { x: number; y: number } | null;
     onClose: () => void;
@@ -458,6 +466,71 @@
       envelope.session_id !== "",
   );
   let restoring = $state(false);
+
+  // Resume-swap picker (ADR-0014): offered for both live and disconnected
+  // agents. cwd is resolved server-side from the SessionPointer (seeded at
+  // spawn), so the button no longer waits on envelope.ext.cwd — a live agent
+  // whose wrapper has not yet emitted ext still enumerates. The existing
+  // "復帰" button (one-shot, latest session) is kept for disconnected agents
+  // as the quick path; this picker is the "pick a specific session" path.
+  const canResumeSession = $derived(connection !== null);
+  let resumePickerOpen = $state(false);
+  let resuming = $state(false);
+  // Error message from the last enumerate attempt (e.g. no_session for an
+  // agent whose SessionPointer never recorded a cwd — a wrapper that joined
+  // without being spawned through this server). Cleared on a new attempt.
+  let resumeError = $state<string | null>(null);
+  // The agent_id whose candidates the current `sessions` singleton refers
+  // to. host_id alone is not enough: two agents on the same host share it,
+  // so a stale reply from a previous picker open on agent A could otherwise
+  // appear in agent B's list — the operator would then click a session that
+  // belongs to A's cwd, not B's. This tightens the filter so a reply is
+  // shown ONLY if it was requested for the currently-viewed agent.
+  let resumeReplyAgentId = $state<string | null>(null);
+  const resumeCandidates = $derived.by(() => {
+    if (!sessions) return [];
+    if (resumeReplyAgentId !== envelope.agent_id) return [];
+    if (sessions.host_id !== hostIdFromAgentId(envelope.agent_id)) return [];
+    return sessions.sessions;
+  });
+  // Re-fetch candidates whenever the picker opens; the reply lands on
+  // App.svelte via onSessions and flows back through the `sessions` prop.
+  // Track which agent the reply belongs to and surface rejection reasons
+  // (no_session for an agent with no SessionPointer cwd, etc.).
+  $effect(() => {
+    if (!resumePickerOpen || !connection) return;
+    const requestedAgentId = envelope.agent_id;
+    // The previous reply is not for this request until the fresh one lands;
+    // resumeReplyAgentId is bumped only on success below.
+    resumeReplyAgentId = null;
+    resumeError = null;
+    void connection.enumerateAgentSessions(requestedAgentId).then(
+      () => {
+        // Only claim the singleton reply if we're still viewing the same
+        // agent (the operator may have switched away mid-flight).
+        if (envelope.agent_id === requestedAgentId) {
+          resumeReplyAgentId = requestedAgentId;
+        }
+      },
+      (err) => {
+        if (envelope.agent_id === requestedAgentId) {
+          resumeError =
+            err instanceof Error ? err.message : "候補を取得できませんでした。";
+        }
+      },
+    );
+  });
+  // Close the picker + drop stale reply attribution on agent switch (the
+  // component is reused, not re-keyed).
+  let resumePickerAgentId = untrack(() => envelope.agent_id);
+  $effect(() => {
+    if (envelope.agent_id !== resumePickerAgentId) {
+      resumePickerAgentId = envelope.agent_id;
+      resumePickerOpen = false;
+      resumeReplyAgentId = null;
+      resumeError = null;
+    }
+  });
 
   // Collapsed state of the permission / question docks (#46, #78). Both sit
   // in-flow and push the log up rather than overlaying it; collapsing swaps the
@@ -1033,6 +1106,33 @@
     });
   }
 
+  // Swap the agent to a different session (ADR-0014, resume-swap). For a
+  // live agent this cycles the wrapper — mid-work state is lost — so warn
+  // first unless it's already idle/done/waiting_input (mirrors stopAgent's
+  // gate). Disconnected has no work to lose; skip the confirm.
+  function chooseResumeSession(sessionId: string): void {
+    if (!connection || resuming || sessionId === "") return;
+    if (
+      envelope.state !== "disconnected" &&
+      !STOP_SAFE_STATES.has(envelope.state)
+    ) {
+      const liveLabel = expressionFor(envelope.state).label;
+      const ok = window.confirm(
+        `「${name}」は${liveLabel}です。セッションを切り替えると進行中の作業は失われる可能性があります。続行しますか?`,
+      );
+      if (!ok) return;
+    }
+    resumePickerOpen = false;
+    void run(async () => {
+      resuming = true;
+      try {
+        await connection.resumeSession(envelope.agent_id, sessionId);
+      } finally {
+        resuming = false;
+      }
+    });
+  }
+
   // Purge past-session reply lines (#48): destructive and irreversible, so
   // confirm first. No-op without a known current session_id (the button is
   // disabled then); the server keeps only that session's lines.
@@ -1282,6 +1382,54 @@
         >
           過去セッションのログを消去
         </button>
+      {/if}
+
+      {#if connection && canResumeSession}
+        <!-- Swap to another session under the same cwd (ADR-0014,
+             resume-swap): a live agent's cwd rides ext.cwd, so the picker
+             only opens here. Inline candidate list (no modal) — same shape
+             as the switch popovers above; disabled while a swap is in
+             flight so a double-click cannot double-cycle the wrapper. -->
+        <div class="resume-switch">
+          <button
+            type="button"
+            class="resume-swap"
+            disabled={resuming}
+            aria-haspopup="listbox"
+            aria-expanded={resumePickerOpen}
+            title="このエージェントを別のセッションから再開する"
+            onclick={() => (resumePickerOpen = !resumePickerOpen)}
+          >
+            {resuming ? "切替中…" : "別のセッションから再開…"}
+          </button>
+          {#if resumePickerOpen}
+            <ul class="resume-menu" role="listbox" aria-label="セッション候補">
+              {#if resumeError}
+                <li class="empty" role="alert">
+                  候補を取得できませんでした ({resumeError})
+                </li>
+              {:else if resumeCandidates.length === 0}
+                <li class="empty">この cwd に再開可能なセッションはありません。</li>
+              {:else}
+                {#each resumeCandidates as s (s.session_id)}
+                  <li>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={envelope.session_id === s.session_id}
+                      title={s.mtime ?? undefined}
+                      onclick={() => chooseResumeSession(s.session_id)}
+                    >
+                      {s.summary ?? s.session_id}{s.mtime
+                        ? ` — ${s.mtime}`
+                        : ""}
+                    </button>
+                  </li>
+                {/each}
+              {/if}
+            </ul>
+          {/if}
+        </div>
       {/if}
 
       {#if connection && canStop}
@@ -1817,6 +1965,74 @@
   .restore:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+  }
+
+  /* Resume-swap picker (ADR-0014): a full-width trigger + an inline
+     candidate list below it, matching the pane-bottom action buttons above.
+     position: relative anchors the popover to the button so the pane
+     scroll doesn't detach them. */
+  .resume-switch {
+    position: relative;
+    margin-top: 0.5rem;
+  }
+
+  .resume-swap {
+    width: 100%;
+    padding: 0.45rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 0.35rem;
+    background: var(--bg-card);
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--fs-body-sm);
+    cursor: pointer;
+  }
+
+  .resume-swap:hover:not(:disabled) {
+    border-color: var(--fg-dim);
+  }
+
+  .resume-swap:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .resume-menu {
+    list-style: none;
+    margin: 0.3rem 0 0;
+    padding: 0.2rem;
+    max-height: 12rem;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: 0.35rem;
+    background: var(--bg-card);
+  }
+
+  .resume-menu li.empty {
+    padding: 0.4rem 0.5rem;
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+  }
+
+  .resume-menu button {
+    width: 100%;
+    padding: 0.35rem 0.5rem;
+    border: none;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--fs-body-sm);
+    text-align: left;
+    cursor: pointer;
+    border-radius: 0.25rem;
+  }
+
+  .resume-menu button:hover {
+    background: color-mix(in srgb, var(--fg-dim) 12%, transparent);
+  }
+
+  .resume-menu button[aria-selected="true"] {
+    color: var(--c-waiting_input);
   }
 
   .main {

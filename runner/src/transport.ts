@@ -29,6 +29,7 @@ export interface RunnerLinkOptions {
   onStop?: (payload: unknown) => void;
   onRestart?: (payload: unknown) => void;
   onEnumerateSessions?: (payload: unknown) => void;
+  onSwitchSession?: (payload: unknown) => void;
 }
 
 export class RunnerLink {
@@ -78,6 +79,9 @@ export class RunnerLink {
     );
     this.#channel.on("enumerate_sessions", (payload: unknown) =>
       options.onEnumerateSessions?.(payload),
+    );
+    this.#channel.on("switch_session", (payload: unknown) =>
+      options.onSwitchSession?.(payload),
     );
 
     this.#channel

@@ -282,6 +282,63 @@ export class Supervisor {
     entry.child.kill();
   }
 
+  /** Handles a server `switch_session`: retargets a live agent's resume pointer
+   *  to a different session_id under its bound cwd, then cycles the wrapper so
+   *  the new session takes effect (ADR-0014, resume-swap). agent_id and cwd are
+   *  preserved; T3 (existence) and F4 (same-session lock) are re-enforced on
+   *  the incoming session_id, and the lock is transferred atomically from the
+   *  old id to the new so a subsequent resume of the released id is not
+   *  spuriously blocked. Silent on a missing agent (mirrors `restart` / `stop`
+   *  — the entry may have exited between the operator click and the arrival). */
+  handleSwitchSession(payload: unknown): void {
+    const agentId = readAgentId(payload);
+    if (agentId === null) {
+      process.stderr.write(
+        "runner: switch_session with missing/invalid agent_id\n",
+      );
+      return;
+    }
+    const entry = this.#children.get(agentId);
+    if (entry === undefined) return;
+    if (!isObject(payload)) return;
+    const resume = optionalString(payload.resume_session_id);
+    if (resume === undefined || resume === "") {
+      this.#fail(agentId, "error");
+      return;
+    }
+    // T3 under the agent's currently bound cwd — the operator picked the id
+    // from the same cwd's enumerate; re-verify at the boundary so a spoofed
+    // or stale id cannot slip past.
+    if (!this.#sessionExists(entry.parsed.cwd, resume)) {
+      process.stderr.write(
+        `runner: switch_session target not found under cwd (agent ${agentId})\n`,
+      );
+      this.#fail(agentId, "error");
+      return;
+    }
+    const old = entry.parsed.resumeSessionId;
+    // F4: another agent already resuming the target session blocks the swap.
+    // Self (same session already bound) is a no-op we could early-return, but
+    // proceeding to cycle the wrapper matches the intent of an explicit swap
+    // click (drop stale in-memory state), so we only guard against a foreign
+    // holder.
+    if (resume !== old && this.#activeSessions.has(resume)) {
+      this.#fail(agentId, "already_running");
+      return;
+    }
+    if (old !== undefined && old !== resume) this.#activeSessions.delete(old);
+    this.#activeSessions.add(resume);
+    entry.parsed = { ...entry.parsed, resumeSessionId: resume };
+    // Take the same restart path a `restart` uses: reset the crash budget
+    // (this is a deliberate cycle, not a crash) and kill; #onExit sees
+    // restarting=true and routes into #relaunch, which re-reads entry.parsed
+    // so the new resume_session_id rides the fresh wrapper.
+    entry.restarting = true;
+    entry.restarts = 0;
+    entry.windowStart = this.#now();
+    entry.child.kill();
+  }
+
   /** Handles a server `enumerate_sessions`: lists resume candidates under cwd
    *  and replies with `sessions`. Only allow-listed cwds are enumerated, so an
    *  operator cannot probe arbitrary paths. */

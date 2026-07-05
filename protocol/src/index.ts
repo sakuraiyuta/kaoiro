@@ -314,6 +314,19 @@ export interface RestartMessage {
   agent_id: string;
 }
 
+/** server -> runner, operator-only: switch a running agent to a different
+ *  session_id under its bound cwd (ADR-0014, resume-swap). The runner keeps
+ *  the SAME agent_id and cwd, retargets the resume pointer, and cycles the
+ *  wrapper (kill -> relaunch) so the new session takes effect; the F4 local
+ *  lock is transferred atomically from the old session_id to the new one.
+ *  The wrapper channel's D5 reject-newcomer stays intact because the same
+ *  agent_id relaunches only after the incumbent process has exited. */
+export interface SwitchSessionMessage {
+  version: "0";
+  agent_id: string;
+  resume_session_id: string;
+}
+
 /** Why a spawn failed (protocol.md). already_running = a live wrapper already
  *  owns the agent_id; cwd_not_found = the cwd is not in the host's allow-list;
  *  error = any other failure. */

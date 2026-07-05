@@ -41,6 +41,7 @@ function main(): void {
     onStop: (payload) => supervisor.handleStop(payload),
     onRestart: (payload) => supervisor.handleRestart(payload),
     onEnumerateSessions: (payload) => supervisor.handleEnumerate(payload),
+    onSwitchSession: (payload) => supervisor.handleSwitchSession(payload),
   });
 
   process.stderr.write(

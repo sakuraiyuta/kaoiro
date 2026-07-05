@@ -35,10 +35,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
   `runner:<host_id>` without interpreting the payload (host/agent-agnostic,
   like the wrapper relay). `spawn` additionally rejects an `agent_id` that
   is already running (server-stage dedup, the runner-local lock being the
-  second stage, issue #68). The runner's replies (`runner_sessions` /
-  `spawn_result`) and host registration updates (`hosts`) ride
-  `agents:lobby` but are operator-only in handle_out — host/session info
-  must never reach a viewer (#27/ADR-0021, fail-closed).
+  second stage, issue #68). `enumerate_sessions` also resolves `cwd` from
+  the agent's SessionPointer when the client omits it (detail-view path —
+  the wrapper may not yet have reported ext.cwd), so the runner still
+  receives the `{cwd}` shape it expects. `resume_session` swaps a live
+  agent's active session to an operator-picked session_id (kill + relaunch
+  inside the runner supervisor entry), or reuses the restore path for a
+  disconnected one; the wire is server-authoritative — the client supplies
+  only agent_id + session_id, cwd is preserved. The runner's replies
+  (`runner_sessions` / `spawn_result`) and host registration updates
+  (`hosts`) ride `agents:lobby` but are operator-only in handle_out —
+  host/session info must never reach a viewer (#27/ADR-0021, fail-closed).
   """
 
   use Phoenix.Channel
@@ -84,7 +91,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    already_running missing_host_id invalid_host_id
                    unknown_host unknown_persona invalid_persona
                    cwd_not_allowed invalid_cwd invalid_name no_session
+                   missing_session_id invalid_session_id
                    unknown_upload)a
+
+  # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
+  # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
+  # a path-separator or dot injection cannot ride into the wrapper's
+  # `--resume` arg or the F4 same-session lock via server → runner.
+  @session_id_pattern ~r/^[A-Za-z0-9-]{1,128}$/
 
   @impl true
   def join("agents:lobby", _params, socket) do
@@ -352,7 +366,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   def handle_in("enumerate_sessions", payload, socket) do
-    relay_to_runner_guarded(socket, payload, "enumerate_sessions")
+    # `cwd` may be omitted when the client only knows an `agent_id` (detail
+    # view: the wrapper may not yet have reported ext.cwd, but the server
+    # holds a SessionPointer seeded at spawn time). Resolve it here so the
+    # runner still receives the `{host_id, cwd}` shape it expects.
+    with :ok <- require_operator(socket),
+         {:ok, host_id} <- fetch_host_id(payload),
+         {:ok, enriched} <- resolve_enumerate_cwd(payload) do
+      relay_to_runner(socket, enriched, host_id, "enumerate_sessions")
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
   end
 
   # Operator-only restore (#22, ADR-0014「復帰」): bring a disconnected agent
@@ -377,6 +401,36 @@ defmodule KaoiroServerWeb.AgentsChannel do
       )
 
       {:reply, :ok, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Operator-only resume-swap (ADR-0014): retarget an agent's active session
+  # to an operator-picked session_id under its bound cwd, without changing
+  # agent_id or cwd. Live agent goes through the runner's `switch_session`
+  # (kill + relaunch inside the supervisor entry, F4 lock transferred). A
+  # disconnected agent reuses the restore path — same wire, same D5 checks —
+  # with the payload session_id in place of the SessionPointer's latest.
+  def handle_in("resume_session", payload, socket) do
+    with :ok <- require_operator(socket),
+         {:ok, agent_id} <- fetch_agent_id(payload),
+         {:ok, session_id} <- fetch_resume_session_id(payload) do
+      if live_agent?(agent_id) do
+        KaoiroServerWeb.Endpoint.broadcast(
+          "runner:#{host_id_of(agent_id)}",
+          "switch_session",
+          %{
+            "version" => "0",
+            "agent_id" => agent_id,
+            "resume_session_id" => session_id
+          }
+        )
+
+        {:reply, :ok, socket}
+      else
+        resume_disconnected(agent_id, session_id, socket)
+      end
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
@@ -610,6 +664,59 @@ defmodule KaoiroServerWeb.AgentsChannel do
       _ -> agent_id
     end
   end
+
+  # Disconnected branch of resume_session: same wire as restore (spawn +
+  # resume_session_id to `runner:<host_id>`) but with the operator-picked
+  # session_id, not the SessionPointer's latest. The pointer is still
+  # consulted for cwd — a pointer that never recorded one blocks with
+  # :no_session, matching restore's semantics.
+  defp resume_disconnected(agent_id, session_id, socket) do
+    with {:ok, persona} <- agent_persona(agent_id),
+         {:ok, _sid, cwd} <- session_pointer(agent_id),
+         {:ok, spawn_payload} <-
+           build_restore_payload(agent_id, persona, cwd, session_id) do
+      KaoiroServerWeb.Endpoint.broadcast(
+        "runner:#{host_id_of(agent_id)}",
+        "spawn",
+        spawn_payload
+      )
+
+      {:reply, :ok, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Resolves the cwd for `enumerate_sessions`. Explicit cwd wins (LaunchDialog
+  # supplies it); otherwise fall back to the agent_id's SessionPointer, seeded
+  # at spawn time — a live agent whose wrapper has not yet reported ext.cwd
+  # still enumerates. Missing both is `invalid_cwd`; unknown pointer is
+  # `no_session` (same reason atom the restore path uses).
+  defp resolve_enumerate_cwd(%{"cwd" => cwd} = payload)
+       when is_binary(cwd) and cwd != "" do
+    {:ok, payload}
+  end
+
+  defp resolve_enumerate_cwd(%{"agent_id" => agent_id} = payload)
+       when is_binary(agent_id) do
+    case SessionPointers.get(agent_id) do
+      %{cwd: cwd} when is_binary(cwd) and cwd != "" ->
+        {:ok, Map.put(payload, "cwd", cwd)}
+
+      _ ->
+        {:error, :no_session}
+    end
+  end
+
+  defp resolve_enumerate_cwd(_payload), do: {:error, :invalid_cwd}
+
+  defp fetch_resume_session_id(%{"session_id" => sid}) when is_binary(sid) do
+    if Regex.match?(@session_id_pattern, sid),
+      do: {:ok, sid},
+      else: {:error, :invalid_session_id}
+  end
+
+  defp fetch_resume_session_id(_payload), do: {:error, :missing_session_id}
 
   defp build_restore_payload(agent_id, persona, cwd, session_id) do
     spawn_payload = %{

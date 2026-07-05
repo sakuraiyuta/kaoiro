@@ -501,6 +501,7 @@
       {agents}
       {connection}
       {manifest}
+      sessions={runnerSessions}
       {origin}
       onClose={() => (selected = null)}
       onSelectAgent={(id) => {

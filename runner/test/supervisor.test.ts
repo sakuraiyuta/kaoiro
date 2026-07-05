@@ -399,3 +399,104 @@ describe("Supervisor 再起動 budget の時間窓 (#73)", () => {
     expect(h.children.length).toBe(base + MAX_RESTARTS);
   });
 });
+
+describe("Supervisor.handleSwitchSession", () => {
+  const resumeMsg = {
+    ...spawnMsg,
+    resume_session_id: "11111111-2222-3333-4444-555555555555",
+  };
+  const otherSession = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+  it("agent 未起動なら何もせず fail も返さない", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSwitchSession({
+      agent_id: "lab-pc-1.claude-a",
+      resume_session_id: otherSession,
+    });
+    expect(h.children).toHaveLength(0);
+    expect(h.results).toHaveLength(0);
+  });
+
+  it("稼働中の resume 先を差替え、kill → relaunch で新 session_id を渡す", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn(resumeMsg);
+    const first = h.last();
+    h.sup.handleSwitchSession({
+      agent_id: resumeMsg.agent_id,
+      resume_session_id: otherSession,
+    });
+    expect(first.kills).toBe(1);
+    first.exit();
+    expect(h.children).toHaveLength(2);
+    expect(h.resumes[1]).toBe(otherSession);
+  });
+
+  it("resume_session_id を欠くと error で拒否", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn(resumeMsg);
+    h.sup.handleSwitchSession({ agent_id: resumeMsg.agent_id });
+    expect(h.results[1]).toMatchObject({ ok: false, reason: "error" });
+    expect(h.last().kills).toBe(0);
+  });
+
+  it("差替先の session が存在しなければ error(T3)", () => {
+    let exists = true;
+    const results: SpawnResult[] = [];
+    const children: FakeChild[] = [];
+    const sup = new Supervisor({
+      hostId: "lab-pc-1",
+      cwdAllowlist: allowlist,
+      launch: () => {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      sendResult: (r) => results.push(r),
+      sendSessions: () => {},
+      sessionExists: () => exists,
+    });
+    sup.handleSpawn(resumeMsg);
+    exists = false;
+    sup.handleSwitchSession({
+      agent_id: resumeMsg.agent_id,
+      resume_session_id: otherSession,
+    });
+    expect(results[1]).toMatchObject({ ok: false, reason: "error" });
+    expect(children[0]!.kills).toBe(0);
+  });
+
+  it("別 agent が既に resume 中の session への切替は already_running", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({ ...resumeMsg, agent_id: "lab-pc-1.claude-a" });
+    h.sup.handleSpawn({
+      ...resumeMsg,
+      agent_id: "lab-pc-1.claude-b",
+      resume_session_id: otherSession,
+    });
+    h.sup.handleSwitchSession({
+      agent_id: "lab-pc-1.claude-a",
+      resume_session_id: otherSession,
+    });
+    expect(h.results[2]).toMatchObject({
+      ok: false,
+      reason: "already_running",
+    });
+    expect(h.children[0]!.kills).toBe(0);
+  });
+
+  it("切替後は古い session_id の F4 ロックが解放される", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({ ...resumeMsg, agent_id: "lab-pc-1.claude-a" });
+    h.sup.handleSwitchSession({
+      agent_id: "lab-pc-1.claude-a",
+      resume_session_id: otherSession,
+    });
+    h.children[0]!.exit();
+    // 旧 session_id は解放されているので別 agent から resume できる
+    h.sup.handleSpawn({
+      ...resumeMsg,
+      agent_id: "lab-pc-1.claude-c",
+    });
+    expect(h.results[h.results.length - 1]).toMatchObject({ ok: true });
+  });
+});

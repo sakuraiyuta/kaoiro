@@ -281,6 +281,7 @@ session_id を指定して **resume** する単一機構で行う
 | サーバ → runner | `stop` | `{ agent_id }`。**operator 限定** |
 | サーバ → runner | `restart` | `{ agent_id }`。**operator 限定** |
 | サーバ → runner | `enumerate_sessions` | `{ agent_id, cwd }`。**operator 限定**。当該 cwd 配下の resume 候補列挙を要求 |
+| サーバ → runner | `switch_session` | `{ agent_id, resume_session_id }`。**operator 限定**。稼働中 agent の resume 先を差し替える(agent_id / cwd は不変)。runner は entry の resume ポインタを付替え、F4 ロックを旧→新へ移送してから wrapper を再起動(kill → relaunch)。T3(cwd 配下実在)と F4(同一 session を別 agent が resume 中でない)は runner が再検査。失敗は `spawn_result` で報告([ADR-0014](../adr/0014-session-resume-and-restore.md) resume-swap) |
 
 **認証**: runner はホスト別トークン(サーバ設定 env の `host_id:token` 列挙、
 [ADR-0011](../adr/0011-phase3-reliability-and-auth.md) の per-entity トークン主義を
@@ -291,9 +292,11 @@ session_id を指定して **resume** する単一機構で行う
 付与する([ADR-0015](../adr/0015-protocol-version-stamping.md))。新メッセージ種別の
 追加は前方互換のため version は据え置き。
 
-**安全性**(spawn = 実質リモートコード実行): spawn / resume / stop / restart の
-受理は **operator 限定**。resume 対象 session_id は当該 agent 束縛 cwd 配下に
-**実在検証**(runner、T3)。cwd は runner の `cwd_allowlist` 内に限定(#22、T1)。
+**安全性**(spawn = 実質リモートコード実行): spawn / resume / resume_session /
+stop / restart の受理は **operator 限定**。resume 対象 session_id は当該 agent
+束縛 cwd 配下に**実在検証**(runner、T3)。`switch_session` の resume 先も
+同じ cwd で再検証(cwd は不変、runner)。cwd は runner の `cwd_allowlist` 内に
+限定(#22、T1)。
 
 **二重起動防止**: server owner フェンシング(既存)+ runner ローカルロックの
 二段([ADR-0014](../adr/0014-session-resume-and-restore.md) F4)。spawn 競合は
@@ -313,7 +316,8 @@ dashboard(operator)が起動 UI から出す要求。サーバは `runner:<host_
 | クライアント → サーバ | `spawn` | `{ host_id, persona, cwd, name?, initial_prompt?, resume_session_id? }`。**operator 限定**。サーバが `agent_id` を採番し `server_url` + per-agent `token` を補完(案A、D3/D4)。`name?` は per-instance 表示名で persona.name を上書き(agent_id/persona.id は不変、64 文字上限・制御文字不可)。`resume_session_id` 指定で resume 起動。サーバは復帰用に cwd を SessionPointers へ seed する |
 | クライアント → サーバ | `stop` / `restart` | `{ host_id, agent_id }`。**operator 限定**。`stop` は dashboard の「終了」ボタン由来(host_id は agent_id から導出) |
 | クライアント → サーバ | `restore` | `{ agent_id }`。**operator 限定**。切断済みエージェントを**同一 agent_id で resume 再 spawn**して復帰させる(ADR-0014 復帰)。サーバが SessionPointers の `{session_id, cwd}` と最後の persona を引いて runner へ `spawn` を中継。稼働中は `not_disconnected`、session pointer 無し(cwd 含む)は `no_session` |
-| クライアント → サーバ | `enumerate_sessions` | `{ host_id, agent_id, cwd }`。**operator 限定**。resume 候補の列挙要求 |
+| クライアント → サーバ | `resume_session` | `{ agent_id, session_id }`。**operator 限定**。**同一 agent_id / cwd** のまま、resume 先を operator が選んだ `session_id` に切り替える(ADR-0014 resume-swap)。稼働中は `runner:<host_id>` へ `switch_session` を中継(kill→relaunch)、切断済みは `restore` と同経路で `spawn`(cwd は SessionPointers、`session_id` は payload)。`session_id` charset は `[A-Za-z0-9-]{1,128}`(欠落 `missing_session_id` / 不正 `invalid_session_id`)。切断済みで cwd 未記録なら `no_session` |
+| クライアント → サーバ | `enumerate_sessions` | `{ host_id, cwd }` または `{ host_id, agent_id }`。**operator 限定**。resume 候補の列挙要求。`cwd` 省略時は `agent_id` を SessionPointers に引き当てて server が cwd を補完(詳細画面から wrapper の ext.cwd を待たずに列挙できるようにするため)。`cwd` も `agent_id` も無ければ `invalid_cwd`、`agent_id` はあるが SessionPointers に cwd 記録が無ければ `no_session` |
 | サーバ → クライアント | `hosts` | `{ hosts: [{ host_id, personas, cwd_allowlist }] }`。host 登録の変化と join 直後に push。**operator 限定**(cwd 許可リスト等は機微、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 | サーバ → クライアント | `runner_sessions` | `enumerate_sessions` 応答の転送。**operator 限定** |
 | サーバ → クライアント | `spawn_result` | `{ host_id, agent_id, ok, reason? }` の転送。**operator 限定** |

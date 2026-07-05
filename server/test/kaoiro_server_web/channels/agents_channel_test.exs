@@ -1524,6 +1524,202 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "resume_session (ADR-0014 resume-swap)" do
+    test "稼働中 agent の resume_session は runner へ switch_session を中継" do
+      host_id = "lab-pc-1"
+      agent_id = "lab-pc-1.live-swap"
+      put_agent(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "resume_session", %{
+          "agent_id" => agent_id,
+          "session_id" => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "switch_session", payload
+      assert payload["agent_id"] == agent_id
+      assert payload["resume_session_id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+      refute_broadcast "spawn", %{}
+    end
+
+    test "切断済み agent の resume_session は restore と同経路で spawn を中継" do
+      host_id = "lab-pc-1"
+      agent_id = "lab-pc-1.dc-swap"
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "persona" => @mio,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "disconnected",
+          "session_id" => "old-sess"
+        })
+
+      :ok = SessionPointers.record(agent_id, "old-sess", "/home/user/proj")
+      SessionPointers.get(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "resume_session", %{
+          "agent_id" => agent_id,
+          "session_id" => "new-sess-1"
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "spawn", payload
+      # payload の session_id を使う(SessionPointers の値ではなく)
+      assert payload["resume_session_id"] == "new-sess-1"
+      # cwd は SessionPointers を引き継ぐ
+      assert payload["cwd"] == "/home/user/proj"
+      assert payload["agent_id"] == agent_id
+      refute_broadcast "switch_session", %{}
+    end
+
+    test "切断済みで session pointer に cwd が無ければ no_session" do
+      agent_id = "lab-pc-1.dc-no-cwd"
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "persona" => @mio,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "disconnected"
+        })
+
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "resume_session", %{
+          "agent_id" => agent_id,
+          "session_id" => "new-sess-1"
+        })
+
+      assert_reply ref, :error, %{reason: "no_session"}
+    end
+
+    test "session_id 欠落は missing_session_id" do
+      agent_id = "lab-pc-1.swap-missing"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "resume_session", %{"agent_id" => agent_id})
+
+      assert_reply ref, :error, %{reason: "missing_session_id"}
+    end
+
+    test "session_id charset 違反は invalid_session_id" do
+      agent_id = "lab-pc-1.swap-bad"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "resume_session", %{
+          "agent_id" => agent_id,
+          "session_id" => "../evil"
+        })
+
+      assert_reply ref, :error, %{reason: "invalid_session_id"}
+    end
+
+    test "未知 agent の resume_session は unknown_agent" do
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "resume_session", %{
+          "agent_id" => "lab-pc-1.ghost",
+          "session_id" => "some-sess"
+        })
+
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+
+    test "viewer の resume_session は forbidden" do
+      agent_id = "lab-pc-1.viewer-swap"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      ref =
+        push(socket, "resume_session", %{
+          "agent_id" => agent_id,
+          "session_id" => "some-sess"
+        })
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+  end
+
+  describe "enumerate_sessions cwd 補完 (詳細画面)" do
+    test "cwd 省略 + agent_id 指定は SessionPointers から cwd を補完して runner へ中継" do
+      host_id = "lab-pc-enum"
+      agent_id = "lab-pc-enum.a"
+      put_agent(agent_id)
+      :ok = SessionPointers.record(agent_id, nil, "/home/user/proj")
+      SessionPointers.get(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "enumerate_sessions", %{
+          "host_id" => host_id,
+          "agent_id" => agent_id
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "enumerate_sessions", payload
+      assert payload["cwd"] == "/home/user/proj"
+      assert payload["agent_id"] == agent_id
+      refute Map.has_key?(payload, "host_id")
+    end
+
+    test "cwd 明示指定は補完せずそのまま中継 (LaunchDialog 経路)" do
+      host_id = "lab-pc-enum2"
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "enumerate_sessions", %{
+          "host_id" => host_id,
+          "cwd" => "/home/user/proj"
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "enumerate_sessions", payload
+      assert payload["cwd"] == "/home/user/proj"
+    end
+
+    test "SessionPointers に cwd 記録が無ければ no_session" do
+      host_id = "lab-pc-enum3"
+      agent_id = "lab-pc-enum3.a"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "enumerate_sessions", %{
+          "host_id" => host_id,
+          "agent_id" => agent_id
+        })
+
+      assert_reply ref, :error, %{reason: "no_session"}
+    end
+
+    test "cwd も agent_id も無ければ invalid_cwd" do
+      host_id = "lab-pc-enum4"
+      socket = join_as(:operator)
+
+      ref = push(socket, "enumerate_sessions", %{"host_id" => host_id})
+
+      assert_reply ref, :error, %{reason: "invalid_cwd"}
+    end
+  end
+
   describe "host/runner イベントの operator 限定配信 (ADR-0023, ADR-0021)" do
     test "join 時 operator は hosts push を受け、viewer は受けない" do
       host_id = "lab-pc-hosts"

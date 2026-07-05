@@ -528,6 +528,14 @@ export interface KaoiroConnection {
    * Rejects with `no_session` when no resumable pointer (session_id + cwd)
    * was recorded, `unknown_agent` when the agent is not known. */
   restore: (agentId: string) => Promise<void>;
+  /** Swaps a running agent to a different resume session_id under its
+   * current cwd (ADR-0014, resume-swap). The wrapper is cycled (kill +
+   * relaunch) so the new session takes effect; a disconnected agent takes
+   * the same path as restore but with the operator-picked session_id.
+   * The client picks `sessionId` from `enumerateSessions` under the agent's
+   * cwd. Rejects like sendInstruction plus `invalid_session_id` /
+   * `missing_session_id`. */
+  resumeSession: (agentId: string, sessionId: string) => Promise<void>;
   /** Requests a spawn (#22, 案A); resolves with the server-allocated
    * agent_id. Rejects like sendInstruction (forbidden / unknown_host /
    * unknown_persona / cwd_not_allowed). The eventual launch outcome
@@ -537,6 +545,11 @@ export interface KaoiroConnection {
    * resolves when the server accepts the relay. The candidate list arrives
    * separately via onSessions. Rejects like sendInstruction. */
   enumerateSessions: (hostId: string, cwd: string) => Promise<void>;
+  /** Same as `enumerateSessions` but resolves cwd server-side from the
+   *  agent's SessionPointer (seeded at spawn). Use from the detail view
+   *  where cwd may not yet ride on `envelope.ext.cwd`. Reject reasons
+   *  include `no_session` (pointer unknown for this agent). */
+  enumerateAgentSessions: (agentId: string) => Promise<void>;
   /** Uploads a File using attach_open / attach_chunk* / attach_close
    *  (file-upload spec / ADR-0025). Resolves with the upload_id once
    *  attach_close acks. Reject from the wrapper arrives asynchronously
@@ -810,6 +823,11 @@ export function connectKaoiro(
       }),
     restore: (agentId) =>
       pushAsync(channel, "restore", { agent_id: agentId }),
+    resumeSession: (agentId, sessionId) =>
+      pushAsync(channel, "resume_session", {
+        agent_id: agentId,
+        session_id: sessionId,
+      }),
     spawn: (request) =>
       new Promise((resolve, reject) => {
         channel
@@ -826,6 +844,11 @@ export function connectKaoiro(
       }),
     enumerateSessions: (hostId, cwd) =>
       pushAsync(channel, "enumerate_sessions", { host_id: hostId, cwd }),
+    enumerateAgentSessions: (agentId) =>
+      pushAsync(channel, "enumerate_sessions", {
+        host_id: hostIdFromAgentId(agentId),
+        agent_id: agentId,
+      }),
     attachOpen: (agentId, meta) =>
       pushAsync(channel, "attach_open", { agent_id: agentId, ...meta }),
     attachChunk: (data) => {
