@@ -110,6 +110,15 @@ async function main(): Promise<void> {
   let broker: PermissionBroker | null = null;
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
+  // The server's after_join pushes persona_prompt then set_permission_mode
+  // (WrapperChannel.handle_info(:after_join)); both frames can be dispatched
+  // by the Phoenix socket in the same event-loop tick before the
+  // await-personaPromptPromise below has a chance to resume and construct
+  // `host`. Buffer the persisted mode instead of touching `host` here; the
+  // buffered value is applied after AgentHost is constructed, before
+  // host.run(), so host.ts's "setPermissionMode before run() sets initial
+  // mode" contract still holds (host.ts #58 source order).
+  let pendingPermissionMode: PermissionMode | undefined;
   // host.send is async now (the PDF fit-to-SDK path awaits pdf-lib). Chain
   // operator instructions through one Promise so a slow render (e.g. a big
   // PDF) does not let the next instruction's queue.push run first, which
@@ -217,7 +226,9 @@ async function main(): Promise<void> {
       // malformed server payload never reaches the SDK; setPermissionMode
       // swallows SDK errors (e.g. bypass requested when the session was
       // not opened with allowDangerouslySkipPermissions) like the other
-      // controls.
+      // controls. The after_join push can arrive before `host` is
+      // constructed (see pendingPermissionMode comment above); buffer in
+      // that window so the persisted mode still lands as the initial mode.
       if (!(PERMISSION_MODES as readonly string[]).includes(mode)) {
         process.stdout.write(
           `  set_permission_mode: ignored unknown value '${mode}'\n`,
@@ -225,6 +236,10 @@ async function main(): Promise<void> {
         return;
       }
       process.stdout.write(`  set_permission_mode: ${mode}\n`);
+      if (host === undefined) {
+        pendingPermissionMode = mode as PermissionMode;
+        return;
+      }
       void host.setPermissionMode(mode as PermissionMode).catch(() => {});
     },
     // File-upload wire (file-upload spec / ADR-0025). attach_* events
@@ -334,6 +349,14 @@ async function main(): Promise<void> {
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
   });
+
+  // Apply the after_join set_permission_mode that arrived before host was
+  // constructed. host.ts (#58) uses `#permissionMode` set before run() as
+  // the initial mode, so this call — synchronous pre-run (no SDK query
+  // yet) — restores the persisted mode as if it had been applied inline.
+  if (pendingPermissionMode !== undefined) {
+    void host.setPermissionMode(pendingPermissionMode).catch(() => {});
+  }
 
   process.on("SIGINT", () => {
     void host
