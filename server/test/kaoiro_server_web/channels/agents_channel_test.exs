@@ -3,6 +3,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
   import ExUnit.CaptureLog
 
+  alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.SessionPointers
@@ -1457,6 +1458,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "state" => "disconnected",
           "session_id" => session_id
         })
+
+      # In real production the spawn path always records the identity
+      # (ADR-0030 D2). Mirror that here so restore's agent_persona/1 can
+      # find the persona via AgentDirectory even when AgentStates would.
+      :ok = AgentDirectory.record(agent_id, @mio)
+      # Flush the async cast before the handler reads the ledger.
+      _ = AgentDirectory.get(agent_id)
     end
 
     test "operator の restore: 同一 agent_id を resume 付きで runner へ再 spawn" do
@@ -1522,6 +1530,34 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :error, %{reason: "forbidden"}
     end
+
+    test "AgentStates 空でも AgentDirectory と SessionPointers から restore が成立 (ADR-0030、#41 goal)" do
+      # サーバ再起動シミュレーション: AgentStates は空、ただし AgentDirectory
+      # の persona と SessionPointers の pointer は DETS で残っている状態。
+      host_id = "lab-pc-1"
+      agent_id = "lab-pc-1.after-restart"
+
+      :ok = AgentDirectory.record(agent_id, @mio)
+      # Flush the async cast so the fetch guard reads the recorded entry.
+      _ = AgentDirectory.get(agent_id)
+      :ok = SessionPointers.record(agent_id, "sess-after-restart", "/home/user/proj")
+      _ = SessionPointers.get(agent_id)
+
+      # AgentStates は敢えて put しない — 再起動直後の空状態を再現。
+      refute AgentStates.snapshot()[agent_id]
+
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok
+      assert_broadcast "spawn", payload
+      assert payload["agent_id"] == agent_id
+      assert payload["persona"] == @mio
+      assert payload["resume_session_id"] == "sess-after-restart"
+      assert payload["cwd"] == "/home/user/proj"
+    end
   end
 
   describe "resume_session (ADR-0014 resume-swap)" do
@@ -1562,6 +1598,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       :ok = SessionPointers.record(agent_id, "old-sess", "/home/user/proj")
       SessionPointers.get(agent_id)
+      :ok = AgentDirectory.record(agent_id, @mio)
+      _ = AgentDirectory.get(agent_id)
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
 
@@ -1593,6 +1631,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "type" => "state_change",
           "state" => "disconnected"
         })
+
+      # In real flow, spawn also seeds AgentDirectory (ADR-0030 D2).
+      :ok = AgentDirectory.record(agent_id, @mio)
+      _ = AgentDirectory.get(agent_id)
 
       socket = join_as(:operator)
 

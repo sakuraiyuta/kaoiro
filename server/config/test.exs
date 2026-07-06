@@ -19,6 +19,12 @@ config :kaoiro_server,
        :permission_modes_path,
        Path.join(System.tmp_dir!(), "kaoiro_test_permission_modes.dets")
 
+# Throwaway DETS file for the agent identity ledger (ADR-0030); the
+# app-started instance writes here, isolated from any real data.
+config :kaoiro_server,
+       :agent_directory_path,
+       Path.join(System.tmp_dir!(), "kaoiro_test_agent_directory.dets")
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

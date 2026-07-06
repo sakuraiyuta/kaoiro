@@ -15,6 +15,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   use Phoenix.Channel
 
+  alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.ConversationStates
@@ -130,6 +131,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- route_inter_agent(envelope, socket.assigns.agent_id),
          :ok <- store(envelope) do
       record_session_pointer(envelope)
+      # Refresh the memory-only last_seen hint used by the client's
+      # live/offline merge (ADR-0030). Cheap fire-and-forget; no disk I/O.
+      AgentDirectory.touch(socket.assigns.agent_id)
       # The full envelope (incl. operator-only log/result tool I/O) goes onto
       # agents:lobby unfiltered; role gating is per-subscriber in
       # AgentsChannel.handle_out. Invariant: ONLY AgentsChannel may subscribe

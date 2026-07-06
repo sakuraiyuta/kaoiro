@@ -26,6 +26,10 @@ defmodule KaoiroServer.Application do
       KaoiroServer.SessionPointers,
       # Restart-surviving per-agent permission_mode picks (#58).
       KaoiroServer.PermissionModes,
+      # Restart-surviving identity ledger — agent_id → persona (ADR-0030).
+      # Lets operator-driven restore work after a server restart when
+      # AgentStates is empty.
+      KaoiroServer.AgentDirectory,
       # Per-conversation hard limits for inter-agent messaging
       # (protocol-inter-agent spec, phase-8 Stage B).
       KaoiroServer.ConversationStates,

@@ -49,6 +49,16 @@ config :kaoiro_server,
        :session_pointers_path,
        System.get_env("KAOIRO_SESSION_POINTERS_PATH")
 
+# DETS file for the restart-surviving agent identity ledger (ADR-0030).
+# Point this at a persistent volume in production; the unset default
+# (a tmp path, resolved in KaoiroServer.AgentDirectory) survives a
+# process restart but not a fresh container. The file is created
+# owner-only (chmod 600); a lost entry only drops the ability to restore
+# that agent until it is spawned fresh.
+config :kaoiro_server,
+       :agent_directory_path,
+       System.get_env("KAOIRO_AGENT_DIRECTORY_PATH")
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

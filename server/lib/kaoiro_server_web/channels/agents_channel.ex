@@ -52,6 +52,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   require Logger
 
+  alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.HostRegistry
@@ -351,6 +352,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # statusline cwd (#22, ADR-0014): the real session_id arrives later and
       # is preserved alongside this cwd (SessionPointers keeps non-nil fields).
       SessionPointers.record(agent_id, nil, cwd)
+      # Persist the identity so operator-driven restore keeps working after
+      # a server restart when AgentStates is empty (ADR-0030 D2 / D3).
+      AgentDirectory.record(agent_id, persona)
       {:reply, {:ok, %{"agent_id" => agent_id}}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -388,7 +392,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # check + F4 lock). Reviving the same agent_id keeps the face / mood / tile.
   def handle_in("restore", payload, socket) do
     with :ok <- require_operator(socket),
-         {:ok, agent_id} <- fetch_agent_id(payload),
+         {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          :ok <- require_disconnected(agent_id),
          {:ok, persona} <- agent_persona(agent_id),
          {:ok, session_id, cwd} <- session_pointer(agent_id),
@@ -414,7 +418,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # with the payload session_id in place of the SessionPointer's latest.
   def handle_in("resume_session", payload, socket) do
     with :ok <- require_operator(socket),
-         {:ok, agent_id} <- fetch_agent_id(payload),
+         {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          {:ok, session_id} <- fetch_resume_session_id(payload) do
       if live_agent?(agent_id) do
         KaoiroServerWeb.Endpoint.broadcast(
@@ -633,11 +637,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
     if live_agent?(agent_id), do: {:error, :not_disconnected}, else: :ok
   end
 
-  # The agent's last-known persona (incl. any custom name) from its state
-  # entry; restore re-spawns with it so the revived agent keeps its identity.
+  # The agent's persona (incl. any custom name) from the restart-surviving
+  # identity ledger (ADR-0030 D3); restore re-spawns with it so the revived
+  # agent keeps its identity even after a server restart cleared AgentStates.
   defp agent_persona(agent_id) do
-    case AgentStates.snapshot()[agent_id] do
-      %{"persona" => persona} when is_map(persona) -> {:ok, persona}
+    case AgentDirectory.get(agent_id) do
+      %{persona: persona} when is_map(persona) -> {:ok, persona}
       _ -> {:error, :unknown_agent}
     end
   end
@@ -863,6 +868,26 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   defp fetch_agent_id(_payload), do: {:error, :missing_agent_id}
+
+  # Same shape as fetch_agent_id/1 but also accepts agents present in the
+  # restart-surviving AgentDirectory (ADR-0030) — restore / resume_session
+  # must work even when AgentStates is empty after a server restart. The
+  # anti-probe purpose of the known? gate is still served: only spawned
+  # agents (ever recorded in AgentDirectory) are accepted.
+  defp fetch_restorable_agent_id(%{"agent_id" => agent_id})
+       when is_binary(agent_id) do
+    cond do
+      not AgentId.valid?(agent_id) -> {:error, :invalid_agent_id}
+      not restorable_agent?(agent_id) -> {:error, :unknown_agent}
+      true -> {:ok, agent_id}
+    end
+  end
+
+  defp fetch_restorable_agent_id(_payload), do: {:error, :missing_agent_id}
+
+  defp restorable_agent?(agent_id) do
+    AgentStates.known?(agent_id) or AgentDirectory.get(agent_id) != nil
+  end
 
   # host_id addresses the runner topic; enforce the protocol.md charset
   # (shared with agent_id, topic-safe) before broadcasting so a compromised
