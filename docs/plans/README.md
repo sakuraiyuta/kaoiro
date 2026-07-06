@@ -9,15 +9,15 @@
 | 1.5 | [phase-1.5-minimal-server-client](phase-1.5-minimal-server-client.md) | ✅ | 最小サーバ + 最小クライアント(縦串) |
 | 2 | [phase-2-client-character](phase-2-client-character.md) | ✅ | クライアント + キャラ + 表情 |
 | 3 | [phase-3-server-multiagent](phase-3-server-multiagent.md) | ✅ | サーバ集約 + 複数 + 双方向 |
-| 3.5 | [phase-3.5-response-display](phase-3.5-response-display.md) | ⏳ | 返答表示(同梱ダッシュボード実用化) |
+| 3.5 | [phase-3.5-response-display](phase-3.5-response-display.md) | 🟡 | 返答表示(同梱ダッシュボード実用化)。Stage ポリッシュ([issue #21](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/21))残 |
 | 3.6 | [phase-3.6-dashboard-separation](phase-3.6-dashboard-separation.md) | ⏳ | ダッシュボード別ディレクトリ化 + 同梱整理(優先度低) |
-| 4 | [phase-4-host-runner](phase-4-host-runner.md) | ⏳ | ホスト常駐 runner(spawn/監督/ホスト登録、[ADR-0023](../adr/0023-host-runner-architecture.md)) |
+| 4 | [phase-4-host-runner](phase-4-host-runner.md) | 🟡 | ホスト常駐 runner(spawn/監督/ホスト登録、[ADR-0023](../adr/0023-host-runner-architecture.md))。単一バイナリ配布(4-7)のみ残 |
 | 5 | [phase-5-i18n](phase-5-i18n.md) | ⏳ | ベータ前 英訳工程 |
 | 6 | [phase-6-emotion-filter](phase-6-emotion-filter.md) | ⏳ | 感情フィルタ(味付け) |
-| 7 | [phase-7-file-upload](phase-7-file-upload.md) | ⏳ | ファイルアップロード(添付の取り込み、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)) |
-| 8 | [phase-8-inter-agent-messaging](phase-8-inter-agent-messaging.md) | ⏳ | エージェント間メッセージング(複数 AI エージェントの協調対話、[issue #17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17)) |
+| 7 | [phase-7-file-upload](phase-7-file-upload.md) | ✅ | ファイルアップロード(添付の取り込み、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)) |
+| 8 | [phase-8-inter-agent-messaging](phase-8-inter-agent-messaging.md) | 🟡 | エージェント間メッセージング(複数 AI エージェントの協調対話、[issue #17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17))。Stage B(MVP)まで実装、Stage C/D 未着手 |
 | 9 | [phase-9-external-human-messaging](phase-9-external-human-messaging.md) | ⏳ | 外部人間メッセージング(Discord、双方向 transport / 一方向 authority、[ADR-0028](../adr/0028-external-human-messaging.md)) |
-| 10 | [phase-10-persona-server-sot](phase-10-persona-server-sot.md) | ⏳ | ペルソナ server 集約 SoT + zip pack 配布、[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) |
+| 10 | [phase-10-persona-server-sot](phase-10-persona-server-sot.md) | ✅ | ペルソナ server 集約 SoT + zip pack 配布、[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) |
 
 ## Feature-local plans
 

@@ -55,8 +55,8 @@ pnpm typecheck  # tsc --noEmit
 
 ```sh
 pnpm build                 # dist/ を生成
-pnpm demo                  # = node dist/cli.js(既定 kaoiro.config.json)
-# または明示的に:
+pnpm demo                  # カレントの agent.*.json を全て並列 spawn
+# または明示的に(単一 wrapper 起動):
 node dist/cli.js [configPath] [prompt]
 ```
 

@@ -25,6 +25,8 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 
 - wrapper (TypeScript): `cd wrapper && pnpm test` / `pnpm typecheck` /
   `pnpm build`
+- runner (TypeScript): `cd runner && pnpm test` / `pnpm typecheck` /
+  `pnpm build`
 - server (Elixir/Phoenix): `cd server && mix test` / `mix format` /
   `mix phx.server`
 

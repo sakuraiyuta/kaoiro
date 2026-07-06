@@ -9,12 +9,14 @@
 
 ## ステータス
 
-Phase 3.5(返答表示)までのダッシュボード実用化と Phase 7(ファイル
-アップロード)は完了。Phase 4(ホスト常駐 runner)は単一バイナリ配布
-(4-7)を残して実装済み。共通プロトコルは確定済み
-([docs/specs/protocol.md](docs/specs/protocol.md))。現在は
-Phase 8(エージェント間メッセージング)が進行中。最新の進捗は
-[docs/plans/](docs/plans/) を参照。
+Phase 3.5(返答表示)までのダッシュボード実用化、Phase 7(ファイル
+アップロード)、Phase 10(ペルソナ server 集約 SoT + zip pack 配布、
+[ADR-0029](docs/adr/0029-persona-server-sot-and-pack-distribution.md))
+は完了。Phase 4(ホスト常駐 runner)は単一バイナリ配布(4-7)を残して
+実装済み。Phase 8(エージェント間メッセージング)は Stage B(MVP)まで
+実装済み(Stage C/D 未着手)。共通プロトコルは確定済み
+([docs/specs/protocol.md](docs/specs/protocol.md))。最新の進捗と
+未完 phase は [docs/plans/](docs/plans/) を参照。
 
 ## 全体像
 
@@ -82,9 +84,11 @@ runner 経由で spawn する。env・トークン設定や各コンポーネン
 
 ## 現在のゴール
 
-Phase 8: **エージェント間メッセージング**。複数 AI エージェントが kaoiro
-サーバを介して直接メッセージをやり取りできるようにする
-([docs/plans/phase-8-inter-agent-messaging.md](docs/plans/phase-8-inter-agent-messaging.md))。
+Phase 10(ペルソナ server 集約 SoT)を 2026-07-06 に完了したところ。
+次期の候補は未完の Phase 3.5(返答表示 Stage ポリッシュ)/ Phase 3.6
+(ダッシュボード分離)/ Phase 4(ホスト常駐 runner の単一バイナリ配布)/
+Phase 8(エージェント間メッセージング Stage C/D)から選択予定。詳細は
+[docs/plans/](docs/plans/) を参照。
 
 ## 思想
 

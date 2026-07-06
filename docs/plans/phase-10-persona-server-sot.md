@@ -1,7 +1,7 @@
 ---
 title: Phase 10 — ペルソナ server 集約 SoT + zip pack 配布
 description: ペルソナデータを server 集約 SoT にし、zip pack で配布、auto-watch で自動反映、野良 persona を封じる (ADR-0029)。既存 4 体 (ao/kuroe/momo/fuji) の pack 化移行も同 phase に含む。
-status: completed
+status: done
 phase: 10
 depends_on: [phase-4-host-runner]
 last_updated: 2026-07-06

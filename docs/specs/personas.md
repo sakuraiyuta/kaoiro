@@ -67,10 +67,12 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 |---|---|---|---|---|
 | `default` | デフォルト | `default` | なし(CSS 顔) | なし |
 
-- `sprite_set` の `default` は予約値で、`server/priv/personas/` に同名
-  パックを置かない。マニフェスト未掲載となり、クライアントはスプライト
-  なし描画(CSS 顔)へフォールバックする([protocol](protocol.md) の
-  「ペルソナアセット配信」)。
+- `sprite_set` の `default` は予約値で、取り込みディレクトリ(既定
+  `server/priv/persona-packs/`、`KAOIRO_PERSONA_DIR` で変更可)に
+  `id: "default"` の pack を置かない(server が
+  `PersonaAssets.validate_manifest/2` で reject する)。マニフェスト
+  未掲載となり、クライアントはスプライトなし描画(CSS 顔)へフォール
+  バックする([protocol](protocol.md) の「ペルソナアセット配信」)。
 - 7 状態の表情画像を揃える MUST(下記 Constraints)の対象外 — 意図的に
   CSS 顔を用いる唯一のペルソナ。
 - 将来、kaoiro クライアントからエージェントを追加起動する際の既定の
@@ -145,10 +147,9 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 透過 PNG、rembg `birefnet-portrait` で背景除去、git 管理外)。配布用
 の正本は persona pack zip
 ([persona-pack-schema](persona-pack-schema.md))として `persona-packs/
-<id>/` に管理し、build スクリプトで zip 化して server の取り込み
-ディレクトリに置く。旧来の `server/priv/personas/` 直配置は
-[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-の実装(phase-10)完了時に撤去される。配信 API の形式は
+<id>/` に管理し、`scripts/build-persona-pack.sh` で zip 化して server
+の取り込みディレクトリに置く。旧来の bundled `server/priv/personas/`
+直配置は phase-10(ADR-0029)で撤去済み。配信 API の形式は
 [protocol](protocol.md) の「ペルソナアセット配信」を参照。
 
 ### 配布と取り込み(pack ワークフロー)
@@ -199,5 +200,4 @@ zip 内部スキーマの詳細は
   [0026](../adr/0026-persona-personality-injection.md)(superseded),
   [0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
 - Plans: [phase-2-client-character](../plans/phase-2-client-character.md),
-  [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md),
-  [persona-personality-injection](../plans/persona-personality-injection.md)
+  [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)

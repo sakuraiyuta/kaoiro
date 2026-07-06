@@ -75,8 +75,11 @@ flowchart LR
 - **サーバ(Elixir/Phoenix)**: WebSocket 集約(1接続=1 channel プロセス)、
   単一の `AgentStates` GenServer が `agent_id → 最新エンベロープ` のマップを保持、
   PubSub 配信、指示・承認のルーティング。状態**導出**はラッパー、**保持**は
-  サーバ(agent 非依存)。ペルソナアセットの保管・マニフェスト配信
-  ([ADR-0008](../adr/0008-persona-asset-distribution.md))。
+  サーバ(agent 非依存)。ペルソナ pack の ingest と `/api/personas`
+  マニフェスト配信・`persona_prompt` push が集約する SoT
+  ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)、
+  [persona-pack-schema](persona-pack-schema.md)。旧 bundled 配布
+  [ADR-0008](../adr/0008-persona-asset-distribution.md) は supersede 済)。
 - **クライアント**: キャラ+表情の可視化、multiplexer UI、承認 UI。実装は別
   プロジェクトに分離し、本体はリファレンス用の簡易ダッシュボード(Svelte)を
   Phoenix 配信で同梱(設定で静的配信のみオフ可、公開 API を dogfooding、
@@ -131,12 +134,14 @@ flowchart LR
 
 ## See Also
 
-- 関連 specs: [plugin-model](plugin-model.md), [protocol](protocol.md)
+- 関連 specs: [plugin-model](plugin-model.md), [protocol](protocol.md),
+  [persona-pack-schema](persona-pack-schema.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0004](../adr/0004-client-rendering-staged.md),
   [0005](../adr/0005-access-control-oauth-stub.md),
   [0007](../adr/0007-client-separation-reference-dashboard.md),
-  [0008](../adr/0008-persona-asset-distribution.md),
+  [0008](../adr/0008-persona-asset-distribution.md)(superseded),
   [0014](../adr/0014-session-resume-and-restore.md),
-  [0023](../adr/0023-host-runner-architecture.md)
+  [0023](../adr/0023-host-runner-architecture.md),
+  [0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
