@@ -13,6 +13,8 @@
   let {
     envelope,
     manifest = null,
+    directoryOnly = false,
+    spawnError = null,
     onSelect,
     onInterrupt,
     onStop,
@@ -21,6 +23,17 @@
   }: {
     envelope: Envelope;
     manifest?: PersonaManifest | null;
+    /** True when this tile is rendered from an AgentDirectory entry that has
+     *  no live AgentStates counterpart (server restarted after this agent was
+     *  last seen — ADR-0030). Enables the restore button unconditionally
+     *  (server-side SessionPointer check decides success) and shows an
+     *  "offline" label overlay so the operator can tell it apart from a
+     *  merely disconnected live entry. */
+    directoryOnly?: boolean;
+    /** Latest restore/spawn failure reason for this agent — sticky icon in
+     *  the tile corner until the agent comes online again or is restored
+     *  successfully (ADR-0030 D8). Null clears it. */
+    spawnError?: string | null;
     /** Receives the tile's centre so the detail can expand from it (#36). */
     onSelect?: (origin?: { x: number; y: number }) => void;
     // exactOptionalPropertyTypes: undefined must be in the type since
@@ -136,11 +149,14 @@
   // Restore button for a disconnected agent that has a session to resume
   // (#22, ADR-0014). Re-spawns the same agent_id; the server fills the cwd
   // from its pointer. Bottom-left, where the (now-hidden) terminate chip sat.
+  // For a directory-only tile (ADR-0030) the client has no session_id —
+  // the server-side SessionPointer check decides success, so we always show
+  // the button and surface any failure via spawnError.
   const canRestore = $derived(
     onRestore !== undefined &&
       envelope.state === "disconnected" &&
-      typeof envelope.session_id === "string" &&
-      envelope.session_id !== "",
+      (directoryOnly ||
+        (typeof envelope.session_id === "string" && envelope.session_id !== "")),
   );
 
   let restoring = $state(false);
@@ -185,14 +201,23 @@
   }
 </script>
 
-<article class="card" data-state={expression.variant}>
+<article class="card" data-state={expression.variant} class:directory-only={directoryOnly}>
   <button
     type="button"
     class="open"
-    onclick={selectFrom}
-    aria-label="{name} の詳細を開く"
+    onclick={directoryOnly ? undefined : selectFrom}
+    aria-label={directoryOnly
+      ? `${name} (オフライン)`
+      : `${name} の詳細を開く`}
+    disabled={directoryOnly}
   >
     <span class="lamp" title={expression.label}></span>
+    {#if directoryOnly}
+      <span class="offline-label" aria-label="オフライン">offline</span>
+    {/if}
+    {#if spawnError}
+      <span class="error-icon" title="復元失敗: {spawnError}" aria-label="復元失敗">⚠</span>
+    {/if}
     {#if attention}
       <span class="badge" data-state={expression.variant}>要対応</span>
     {/if}
@@ -292,6 +317,41 @@
   .card[data-state="done"] { --tone: var(--c-done); }
   .card[data-state="error"] { --tone: var(--c-error); }
   .card[data-state="disconnected"] { --tone: var(--c-disconnected); }
+
+  /* Directory-only tile (ADR-0030): the operator has an identity ledger
+     entry for this agent but AgentStates has none. Fade the whole card so
+     it reads as "known but not live" alongside neighbouring live tiles. */
+  .card.directory-only {
+    opacity: 0.7;
+  }
+
+  /* "offline" label overlay for directory-only tiles (ADR-0030 D5), sitting
+     top-left opposite the lamp so both stay legible over the sprite. */
+  .offline-label {
+    position: absolute;
+    top: 0.6rem;
+    left: 0.7rem;
+    padding: 0.05rem 0.35rem;
+    font-size: 0.65rem;
+    letter-spacing: 0.08em;
+    text-transform: lowercase;
+    color: var(--fg-dim);
+    background: color-mix(in srgb, var(--bg) 60%, transparent);
+    border: 1px solid var(--line);
+    border-radius: 0.2rem;
+  }
+
+  /* Restore failure hint (ADR-0030 D8) — sticky next to the lamp until the
+     agent comes online again or a subsequent restore succeeds. */
+  .error-icon {
+    position: absolute;
+    top: 0.6rem;
+    right: 1.6rem;
+    color: var(--c-error);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: help;
+  }
 
   /* Persona sprite (ADR-0008): square transparent PNG, contain-fit.
      disconnected has no sprite by spec — grey out idle instead. */
@@ -629,6 +689,18 @@
   .open:hover h2,
   .open:focus-visible h2 {
     color: var(--tone);
+  }
+
+  /* Directory-only tile has no detail view to open (ADR-0030): the button
+     is left as-is for layout, but pointer/keyboard affordance is dropped so
+     the tile does not advertise an interaction it cannot fulfil. */
+  .open:disabled {
+    cursor: default;
+  }
+
+  .open:disabled:hover h2,
+  .open:disabled:focus-visible h2 {
+    color: inherit;
   }
 
   /* Needs-attention badge: blinking chip on the card corner (ADR-0012). */

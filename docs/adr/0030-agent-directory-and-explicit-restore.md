@@ -1,6 +1,6 @@
 ---
 title: サーバ再起動越しの agent identity 永続と client 明示復元(一括/個別)
-status: proposed
+status: accepted
 date: 2026-07-06
 opened: 2026-07-06
 supersedes: []
@@ -13,7 +13,7 @@ related_adrs: [12, 14, 21, 23, 24]
 
 ## Status
 
-Proposed
+Accepted(実装完了 2026-07-06 — phase-11 phase-0..2、手動 dogfooding 検収のみ残)
 
 ## Context
 

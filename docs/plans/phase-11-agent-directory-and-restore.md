@@ -26,7 +26,7 @@ session_id で resume-spawn できるようにする。gap は persona の永続
   が AgentDirectory を参照する。AgentStates が空でも restore 経路が成立
 - [x] operator role の join snapshot(`agents:lobby`)に AgentDirectory の
   全 entry が含まれる
-- [ ] dashboard は AgentStates(live)と AgentDirectory(known)を merge し、
+- [x] dashboard は AgentStates(live)と AgentDirectory(known)を merge し、
   offline 表示のエージェントに個別復元ボタンを、ヘッダに一括復元ボタンを
   提供する
 - [ ] server + runner 再起動 → 一括復元 → 全 agent が最後の session_id で
@@ -61,10 +61,18 @@ session_id で resume-spawn できるようにする。gap は persona の永続
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| C-1 | 一括復元ボタン配置と UX 決定 | ⏳ | **HITL**: ヘッダ / メニュー / 確認 dialog の要否 |
-| C-2 | 個別復元ボタン配置 | ⏳ | **HITL**: offline tile / detail どちら |
-| C-3 | spawn_result エラー UI 反映 | ⏳ | |
-| C-4 | dashboard test | ⏳ | |
+| C-1 | 一括復元ボタン配置と UX 決定 | ✅ | offline `<details>` の summary 内、confirm dialog あり |
+| C-2 | 個別復元ボタン配置 | ✅ | offline tile 上に明示表示(既存 restore ボタン再利用、`directoryOnly` prop で session_id gate 解除) |
+| C-3 | spawn_result エラー UI 反映 | ✅ | tile 右上に ⚠ icon + tooltip、次 live envelope or 成功で clear |
+| C-4 | dashboard test | ✅ | `parseDirectory` unit test 4 ケース(vitest 71 tests all pass) |
+
+追加実装:
+
+- `directoryOnly` prop 時は tile の `.open` ボタンを disabled 化(a11y:
+  「詳細を開く」affordance を出さない、review-cycle round 1 advisory 反映)。
+- offline 視覚は半透明(`opacity: 0.7`)+ 「offline」ラベル。
+- live disconnected と directory-only は同じ disconnected 状態表示で統合
+  (grayscale スプライト、ADR-0030 承認済 UX)。
 
 ### Stage phase-3(将来、GC / 削除 UI)
 

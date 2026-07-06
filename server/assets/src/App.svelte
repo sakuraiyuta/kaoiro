@@ -6,6 +6,7 @@
   import { expressionFor, spriteUrlFor } from "./lib/expression";
   import type {
     ConnectionStatus,
+    DirectoryEntry,
     Envelope,
     HostInfo,
     KaoiroConnection,
@@ -27,6 +28,14 @@
   } from "./lib/notify";
 
   let agents = $state<Record<string, Envelope>>({});
+  // Restart-surviving identity ledger (ADR-0030) — every agent_id we have
+  // ever spawned, with its persona. Merged with `agents` (live) below to
+  // surface offline entries in their own section with a restore button.
+  let directory = $state<Record<string, DirectoryEntry>>({});
+  // Sticky per-agent restore/spawn failure hints (ADR-0030 D8). Cleared
+  // when the agent next reports a live envelope or a subsequent
+  // spawn_result for the same agent_id succeeds.
+  let spawnErrors = $state<Record<string, string>>({});
   // Per-agent reply transcript (operator-only, ADR-0012): log/result
   // envelopes accumulate here instead of overwriting the latest state.
   let logs = $state<Record<string, Envelope[]>>({});
@@ -136,6 +145,31 @@
   const sorted = $derived(
     Object.values(agents).sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
   );
+  // Directory entries whose agent_id has NO live AgentStates envelope: those
+  // are the operator-driven restore candidates after a server restart. Live
+  // entries always win over directory (AgentStates is the authoritative
+  // source-of-truth while a wrapper is connected, ADR-0030 D4).
+  const offlineEntries = $derived(
+    Object.entries(directory)
+      .filter(([id]) => !(id in agents))
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+
+  // Synthesizes a minimal Envelope from a directory-only entry so AgentCard
+  // can render it with the existing disconnected styling. `state=disconnected`
+  // is what unlocks the restore button; the pass-through `directoryOnly`
+  // prop drops the session_id gate (the server-side pointer check owns the
+  // real decision, ADR-0030 D8).
+  function directoryEnvelope(id: string, entry: DirectoryEntry): Envelope {
+    return {
+      version: "0",
+      agent_id: id,
+      persona: entry.persona,
+      ts: "",
+      type: "state_change",
+      state: "disconnected",
+    };
+  }
   // Falls back to the grid if the selected agent vanishes from the map.
   const selectedEnvelope = $derived(
     selected !== null ? (agents[selected] ?? null) : null,
@@ -181,6 +215,15 @@
           } else {
             const prevState = agents[envelope.agent_id]?.state;
             agents = { ...agents, [envelope.agent_id]: envelope };
+            // A live envelope from a previously-failed restore clears its
+            // sticky error hint (ADR-0030 D8): the agent is speaking again.
+            if (
+              envelope.state !== "disconnected" &&
+              spawnErrors[envelope.agent_id] !== undefined
+            ) {
+              const { [envelope.agent_id]: _drop, ...rest } = spawnErrors;
+              spawnErrors = rest;
+            }
             // Alert the operator the moment an agent needs them (#7).
             if (isWaitTransition(prevState, envelope.state)) {
               notifyWait(envelope);
@@ -225,7 +268,22 @@
           hosts = next;
           isOperator = true;
         },
-        onSpawnResult: (result) => notifySpawn(result),
+        onDirectory: (next) => (directory = next),
+        onSpawnResult: (result) => {
+          notifySpawn(result);
+          // Track failed restore/spawn per agent so the tile can show a
+          // sticky error icon (ADR-0030 D8). A subsequent success or a live
+          // envelope clears it above.
+          if (!result.ok) {
+            spawnErrors = {
+              ...spawnErrors,
+              [result.agent_id]: result.reason ?? "error",
+            };
+          } else if (spawnErrors[result.agent_id] !== undefined) {
+            const { [result.agent_id]: _drop, ...rest } = spawnErrors;
+            spawnErrors = rest;
+          }
+        },
         onSessions: (result) => (runnerSessions = result),
         onAttachRejected: (payload) => {
           // wrapper-side upload rejection (file-upload spec / ADR-0025);
@@ -281,6 +339,35 @@
     isOperator = false;
     showLaunch = false;
     runnerSessions = null;
+    // Clear the identity ledger overlay so a re-connect / login starts
+    // clean; the next `directory` push repopulates for operators.
+    directory = {};
+    spawnErrors = {};
+  }
+
+  // Bulk restore of every offline entry (ADR-0030 D5). Confirms once, then
+  // fires the same per-agent restore call the tile button uses — one at a
+  // time in a for-loop, since spawn broadcasts are fire-and-forget and each
+  // is guarded by the runner's in-flight lock (ADR-0030 D11).
+  async function restoreAllOffline(): Promise<void> {
+    if (!connection || offlineEntries.length === 0) return;
+    const count = offlineEntries.length;
+    if (!confirm(`${count} 体のオフラインエージェントを一括復元します。よろしいですか?`)) {
+      return;
+    }
+    for (const [id] of offlineEntries) {
+      try {
+        await connection.restore(id);
+      } catch (err) {
+        // Record locally too — spawn_result will land later for successful
+        // restores, but a per-restore RPC-level error (rare) still needs
+        // surfacing so the tile picks up the icon.
+        spawnErrors = {
+          ...spawnErrors,
+          [id]: err instanceof Error ? err.message : "error",
+        };
+      }
+    }
   }
 
   // Mints a short-lived WS ticket from the current httpOnly cookie and opens
@@ -526,6 +613,7 @@
           <AgentCard
             {envelope}
             {manifest}
+            spawnError={spawnErrors[envelope.agent_id] ?? null}
             onSelect={(o) => {
               origin = o ?? null;
               selected = envelope.agent_id;
@@ -552,6 +640,49 @@
         </li>
       {/each}
     </ul>
+  {/if}
+  {#if isOperator && offlineEntries.length > 0}
+    <!-- Directory-only entries (ADR-0030): agents the server knows about but
+         which are not currently connected. Collapsed by default so the live
+         section stays uncluttered; expand + "前回の状態を復元" surfaces the
+         restore affordance without cluttering the header. -->
+    <details class="offline">
+      <summary>
+        オフライン({offlineEntries.length})
+        {#if connection}
+          <button
+            type="button"
+            class="restore-all"
+            onclick={(e) => {
+              e.preventDefault();
+              void restoreAllOffline();
+            }}
+            title="オフライン全体を一括復元"
+          >
+            前回の状態を復元
+          </button>
+        {/if}
+      </summary>
+      <ul class="agents">
+        {#each offlineEntries as [id, entry], index (id)}
+          {@const env = directoryEnvelope(id, entry)}
+          <li style:--stagger="{index * 60}ms">
+            <AgentCard
+              envelope={env}
+              {manifest}
+              directoryOnly={true}
+              spawnError={spawnErrors[id] ?? null}
+              onRestore={connection
+                ? () =>
+                    connection!
+                      .restore(id)
+                      .catch((e) => notifyActionError("復帰", e))
+                : undefined}
+            />
+          </li>
+        {/each}
+      </ul>
+    </details>
   {/if}
 </main>
 {:else}
@@ -748,6 +879,50 @@
   .agents > li {
     animation: rise 0.45s ease-out backwards;
     animation-delay: var(--stagger, 0ms);
+  }
+
+  /* Offline section (ADR-0030): collapsed by default; the restore button
+     sits in the summary so it never crowds the header. */
+  .offline {
+    margin-top: 2rem;
+    border-top: 1px solid var(--line);
+    padding-top: 1rem;
+  }
+
+  .offline > summary {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+    cursor: pointer;
+    padding: 0.2rem 0;
+    user-select: none;
+  }
+
+  .offline > summary::-webkit-details-marker {
+    color: var(--fg-dim);
+  }
+
+  .offline .agents {
+    margin-top: 1rem;
+  }
+
+  .restore-all {
+    font-size: var(--fs-body-sm);
+    color: var(--fg);
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.2rem 0.6rem;
+    cursor: pointer;
+    transition:
+      color 0.2s,
+      border-color 0.2s;
+  }
+
+  .restore-all:hover {
+    border-color: var(--fg-dim);
   }
 
   @keyframes rise {

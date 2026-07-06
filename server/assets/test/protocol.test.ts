@@ -9,6 +9,7 @@ import {
   isReplyEnvelope,
   logOf,
   modelsFrom,
+  parseDirectory,
   parseHosts,
   parseSessions,
   pendingPermissionFrom,
@@ -340,6 +341,50 @@ describe("parseHosts (#22)", () => {
   it("マップでない値は空配列", () => {
     expect(parseHosts(null)).toEqual([]);
     expect(parseHosts(undefined)).toEqual([]);
+  });
+});
+
+describe("parseDirectory (ADR-0030)", () => {
+  const mio = { id: "mio", name: "澪", sprite_set: "mio" };
+
+  it("directory マップを DirectoryEntry の Record へ変換する", () => {
+    expect(
+      parseDirectory({
+        "lab-pc-1.rev1": { persona: mio, last_seen: 1_720_000_000 },
+        "lab-pc-1.rev2": { persona: mio, last_seen: null },
+      }),
+    ).toEqual({
+      "lab-pc-1.rev1": { persona: mio, last_seen: 1_720_000_000 },
+      "lab-pc-1.rev2": { persona: mio, last_seen: null },
+    });
+  });
+
+  it("persona 欠落 / 不正な entry は捨てる", () => {
+    expect(
+      parseDirectory({
+        bad_no_persona: { last_seen: 1 },
+        bad_persona_null: { persona: null, last_seen: 1 },
+        bad_persona_no_id: { persona: { name: "x" }, last_seen: 1 },
+        ok: { persona: mio, last_seen: 1 },
+      }),
+    ).toEqual({
+      ok: { persona: mio, last_seen: 1 },
+    });
+  });
+
+  it("last_seen が number でなければ null 化する", () => {
+    expect(
+      parseDirectory({
+        agent: { persona: mio, last_seen: "not-a-number" },
+      }),
+    ).toEqual({
+      agent: { persona: mio, last_seen: null },
+    });
+  });
+
+  it("マップでない値は空 record", () => {
+    expect(parseDirectory(null)).toEqual({});
+    expect(parseDirectory(undefined)).toEqual({});
   });
 });
 
