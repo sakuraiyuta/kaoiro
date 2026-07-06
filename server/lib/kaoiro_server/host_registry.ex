@@ -1,15 +1,22 @@
 defmodule KaoiroServer.HostRegistry do
   @moduledoc """
-  Holds the live set of hosts and the personas/cwds each can run
-  (ADR-0023, issue #67).
+  Holds the live set of hosts and each host's persona trust policy + cwd
+  allow-list (ADR-0023, ADR-0031, issue #67).
 
   Each host runs one resident runner that connects on `runner:<host_id>`,
-  registers its host (spawnable personas + selectable cwd allow-list,
-  issue #22), and heartbeats to stay alive. The server aggregates these
-  so an operator UI can see what every host can launch and which runner
-  to address for a spawn/stop/restart. Like AgentStates, derivation lives
-  outside the server: this store only records what the runner declares
-  and stays host/agent-agnostic.
+  registers its host, and heartbeats to stay alive. The runner declares
+  how much it trusts the server's persona catalog as a policy (ADR-0031):
+
+    * `:accept_all` — every server-known persona is spawnable
+    * `{:allowlist, MapSet.t()}` — only the listed ids
+    * `{:blocklist, MapSet.t()}` — every server-known id EXCEPT the listed
+
+  Store keeps the raw policy; the resolved spawnable list is computed at
+  read time by intersecting the policy with a caller-supplied
+  `personas_pool` (the server-authoritative set from
+  `KaoiroServer.PersonaAssets.all_personas/0`). Callers pass the pool
+  explicitly so tests can inject fixtures without touching the global
+  PersonaAssets cache.
 
   Each entry remembers its owning runner pid so a stale terminate after a
   reconnect cannot drop the new connection's entry (same owner-fencing as
@@ -17,10 +24,6 @@ defmodule KaoiroServer.HostRegistry do
   ownership; `drop/3` removes it only while `runner_pid` still owns it.
   Host info is operator-only by policy (cwd allow-lists are sensitive,
   #46); the caller (channel) enforces the role gate.
-
-  `snapshot/1` injects the reserved `default` persona at the head of each
-  host's personas list (#35, personas.md). The store itself keeps the
-  runner's raw declaration; only the operator-facing view is normalised.
   """
 
   use GenServer
@@ -30,16 +33,6 @@ defmodule KaoiroServer.HostRegistry do
   # AgentStates' @max_agents discipline; hosts are far fewer than agents.
   @max_hosts 1000
 
-  # Reserved persona that the operator UI must always see as a spawn choice
-  # (personas.md「デフォルトペルソナ」, #35). sprite_set "default" is a
-  # reserved value with no bundled pack under server/priv/personas/, so the
-  # client falls back to the CSS face (expression.ts / AgentCard).
-  @default_persona %{
-    "id" => "default",
-    "name" => "デフォルト",
-    "sprite_set" => "default"
-  }
-
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, %{}, name: name)
@@ -47,7 +40,7 @@ defmodule KaoiroServer.HostRegistry do
 
   @doc """
   Records the host's registration, overwriting any prior entry and taking
-  `runner_pid` as the owner. `attrs` carries `:personas`, `:cwd_allowlist`
+  `runner_pid` as the owner. `attrs` carries `:policy`, `:cwd_allowlist`
   and optional `:capabilities`. Returns `:ok`, or
   `{:error, :too_many_hosts}` when a new host_id would exceed the cap
   (re-registration of a known host always succeeds).
@@ -64,39 +57,41 @@ defmodule KaoiroServer.HostRegistry do
     GenServer.call(server, {:heartbeat, host_id})
   end
 
-  @doc "Returns the host's entry map, or nil when unknown."
+  @doc "Returns the host's raw entry map (with `:policy`), or nil when unknown."
   def get(host_id, server \\ __MODULE__) do
     GenServer.call(server, {:get, host_id})
   end
 
   @doc """
-  Returns the host's operator-facing entry: personas normalised with the
-  reserved `default` (#35) and the internal `runner_pid` stripped, the same
-  view a single host would have under `snapshot/1`. The spawn / stop /
-  restart resolver must read THIS, not `get/2`, so the persona set it
-  resolves against matches what the operator UI saw via the `hosts` push --
-  otherwise an operator picking `default` would hit `unknown_persona`.
-  Returns nil when the host is unknown.
+  Returns the host's operator-facing entry: personas computed by applying
+  the host's policy to `personas_pool`, and the internal `runner_pid`
+  stripped. The spawn / stop / restart resolver must read THIS, not
+  `get/2`, so the persona set it resolves against matches what the
+  operator UI saw via the `hosts` push. Returns nil when the host is
+  unknown.
   """
-  def get_public(host_id, server \\ __MODULE__) do
-    GenServer.call(server, {:get_public, host_id})
+  def get_public(host_id, personas_pool, server \\ __MODULE__) do
+    GenServer.call(server, {:get_public, host_id, personas_pool})
   end
 
   @doc """
-  Returns the host_id => entry map for every registered host, with the
-  internal `runner_pid` stripped so the result is JSON-serialisable for
-  the operator "hosts" push (a PID has no Jason encoder).
+  Returns the host_id => operator-facing entry map for every registered
+  host, with each host's `personas` computed from its policy and
+  `personas_pool`. The internal `runner_pid` is stripped so the result is
+  JSON-serialisable for the operator "hosts" push (a PID has no Jason
+  encoder).
   """
-  def snapshot(server \\ __MODULE__) do
-    GenServer.call(server, :snapshot)
+  def snapshot(personas_pool, server \\ __MODULE__) do
+    GenServer.call(server, {:snapshot, personas_pool})
   end
 
   @doc """
-  Aggregated, de-duplicated list of personas across all hosts (the set an
-  operator can currently spawn). Order is not significant.
+  Aggregated, de-duplicated list of personas across all hosts after each
+  policy is applied to `personas_pool` (the set an operator can currently
+  spawn somewhere). Order is not significant.
   """
-  def personas(server \\ __MODULE__) do
-    GenServer.call(server, :personas)
+  def personas(personas_pool, server \\ __MODULE__) do
+    GenServer.call(server, {:personas, personas_pool})
   end
 
   @doc """
@@ -119,7 +114,7 @@ defmodule KaoiroServer.HostRegistry do
       now = DateTime.utc_now() |> DateTime.to_iso8601()
 
       entry = %{
-        personas: Map.get(attrs, :personas, []),
+        policy: Map.get(attrs, :policy, :accept_all),
         cwd_allowlist: Map.get(attrs, :cwd_allowlist, []),
         capabilities: Map.get(attrs, :capabilities, []),
         runner_pid: runner_pid,
@@ -146,30 +141,28 @@ defmodule KaoiroServer.HostRegistry do
     {:reply, Map.get(state, host_id), state}
   end
 
-  def handle_call({:get_public, host_id}, _from, state) do
+  def handle_call({:get_public, host_id, pool}, _from, state) do
     case Map.get(state, host_id) do
       nil -> {:reply, nil, state}
-      entry -> {:reply, public_entry(entry), state}
+      entry -> {:reply, public_entry(entry, pool), state}
     end
   end
 
-  def handle_call(:snapshot, _from, state) do
+  def handle_call({:snapshot, pool}, _from, state) do
     # Strip the internal runner_pid: the snapshot is pushed to operators
     # over JSON channels and a PID has no Jason encoder (it would crash the
     # serializer). Owner fencing in drop/3 reads the internal state, not
     # this view, so dropping the pid here is safe.
-    #
-    # Inject the reserved `default` persona at the head of each host's
-    # personas (#35); a runner-declared `default` is replaced by the
-    # server-side standard so the entry's name/sprite_set stay canonical.
-    public = Map.new(state, fn {host_id, entry} -> {host_id, public_entry(entry)} end)
+    public =
+      Map.new(state, fn {host_id, entry} -> {host_id, public_entry(entry, pool)} end)
+
     {:reply, public, state}
   end
 
-  def handle_call(:personas, _from, state) do
+  def handle_call({:personas, pool}, _from, state) do
     personas =
       state
-      |> Enum.flat_map(fn {_id, %{personas: personas}} -> personas end)
+      |> Enum.flat_map(fn {_id, entry} -> apply_policy(entry.policy, pool) end)
       |> Enum.uniq()
 
     {:reply, personas, state}
@@ -185,20 +178,28 @@ defmodule KaoiroServer.HostRegistry do
     end
   end
 
-  # The operator-facing slice of an entry: personas normalised with the
-  # reserved `default` and the internal `runner_pid` stripped (it has no
-  # Jason encoder, and `drop/3` fences via the in-state map directly).
-  defp public_entry(entry) do
+  # The operator-facing slice of an entry: personas computed from the
+  # policy applied to `pool`. The internal `runner_pid` and the raw
+  # `:policy` (an `{atom, MapSet}` tuple) are stripped — the resolved
+  # `:personas` list is what operators see, and Jason cannot encode a
+  # tuple, so leaking `:policy` here crashes the `hosts` channel push.
+  defp public_entry(entry, pool) do
     entry
-    |> Map.delete(:runner_pid)
-    |> Map.put(:personas, inject_default(entry.personas))
+    |> Map.drop([:runner_pid, :policy])
+    |> Map.put(:personas, apply_policy(entry.policy, pool))
   end
 
-  # Drop any runner-declared `default` so the server-side standard wins,
-  # then place it at the head so the operator UI sees a stable lead entry.
-  defp inject_default(personas) do
-    filtered = Enum.reject(personas, &(persona_id(&1) == "default"))
-    [@default_persona | filtered]
+  # Reduce the server-authoritative persona pool to the set the host's
+  # policy admits. Order of `pool` is preserved so the operator UI sees a
+  # stable listing (PersonaAssets sorts it: default first, then id-sorted).
+  defp apply_policy(:accept_all, pool), do: pool
+
+  defp apply_policy({:allowlist, ids}, pool) do
+    Enum.filter(pool, fn persona -> MapSet.member?(ids, persona_id(persona)) end)
+  end
+
+  defp apply_policy({:blocklist, ids}, pool) do
+    Enum.reject(pool, fn persona -> MapSet.member?(ids, persona_id(persona)) end)
   end
 
   defp persona_id(%{"id" => id}), do: id

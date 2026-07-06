@@ -45,6 +45,15 @@ defmodule KaoiroServer.PersonaAssets do
   # to let a wrapper spawn without any personality (footer-only prompt).
   @default_persona_id "default"
 
+  # Server-authoritative object for the reserved persona. Used by
+  # `all_personas/0` so callers see the same shape as pack-derived entries
+  # (ADR-0031: default is treated as a first-class id in policy checks).
+  @default_persona %{
+    "id" => @default_persona_id,
+    "name" => "デフォルト",
+    "sprite_set" => "default"
+  }
+
   @doc "Manifest map as served by `GET /api/personas` (string keys)."
   def manifest, do: cache().manifest
 
@@ -82,6 +91,22 @@ defmodule KaoiroServer.PersonaAssets do
   end
 
   def known_persona?(_), do: false
+
+  @doc """
+  All spawnable personas as `[%{"id" => ..., "name" => ..., "sprite_set"
+  => ...}, ...]`, including the reserved `default` at the head. The
+  server-authoritative pool that `HostRegistry` filters via each host's
+  policy (ADR-0031). Order: `default` first, then pack entries sorted
+  by id for stability.
+  """
+  def all_personas do
+    packs =
+      cache().personas_by_id
+      |> Map.values()
+      |> Enum.sort_by(& &1["id"])
+
+    [@default_persona | packs]
+  end
 
   @doc """
   Final prompt string for `persona_id` — the ready-to-inject `append`
@@ -154,11 +179,22 @@ defmodule KaoiroServer.PersonaAssets do
     personalities = Map.new(packs, fn p -> {p.manifest["id"], p.personality} end)
     known_ids = MapSet.new(packs, fn p -> p.manifest["id"] end)
 
+    personas_by_id =
+      Map.new(packs, fn p ->
+        {p.manifest["id"],
+         %{
+           "id" => p.manifest["id"],
+           "name" => p.manifest["name"],
+           "sprite_set" => p.manifest["sprite_set"]
+         }}
+      end)
+
     %{
       manifest: build_manifest(packs, files),
       files: files,
       personalities: personalities,
-      known_ids: known_ids
+      known_ids: known_ids,
+      personas_by_id: personas_by_id
     }
   end
 

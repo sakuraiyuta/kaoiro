@@ -3,8 +3,16 @@ defmodule KaoiroServer.HostRegistryTest do
 
   alias KaoiroServer.HostRegistry
 
+  # Fixture pool used by tests. Order mimics PersonaAssets.all_personas/0:
+  # reserved default first, then id-sorted packs.
+  @default_persona %{"id" => "default", "name" => "デフォルト", "sprite_set" => "default"}
+  @ao %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"}
+  @mio %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"}
+  @yui %{"id" => "yui", "name" => "ゆい", "sprite_set" => "yui"}
+  @pool [@default_persona, @ao, @mio, @yui]
+
   defp attrs(extra \\ %{}) do
-    Map.merge(%{personas: [%{"id" => "mio"}], cwd_allowlist: ["/home/user/proj"]}, extra)
+    Map.merge(%{policy: :accept_all, cwd_allowlist: ["/home/user/proj"]}, extra)
   end
 
   describe "register/4" do
@@ -20,7 +28,7 @@ defmodule KaoiroServer.HostRegistryTest do
                )
 
       entry = HostRegistry.get("lab-pc-1", store)
-      assert entry.personas == [%{"id" => "mio"}]
+      assert entry.policy == :accept_all
       assert entry.cwd_allowlist == ["/home/user/proj"]
       assert entry.capabilities == ["resume"]
       assert entry.runner_pid == self()
@@ -33,10 +41,17 @@ defmodule KaoiroServer.HostRegistryTest do
 
       :ok = HostRegistry.register("h", attrs(), self(), store)
       new_owner = spawn(fn -> :ok end)
-      :ok = HostRegistry.register("h", attrs(%{personas: [%{"id" => "ao"}]}), new_owner, store)
+
+      :ok =
+        HostRegistry.register(
+          "h",
+          attrs(%{policy: {:allowlist, MapSet.new(["ao"])}}),
+          new_owner,
+          store
+        )
 
       entry = HostRegistry.get("h", store)
-      assert entry.personas == [%{"id" => "ao"}]
+      assert entry.policy == {:allowlist, MapSet.new(["ao"])}
       assert entry.runner_pid == new_owner
     end
 
@@ -52,7 +67,7 @@ defmodule KaoiroServer.HostRegistryTest do
 
       # Re-registration of a known host still succeeds at the cap.
       assert :ok = HostRegistry.register("host-1", attrs(), self(), store)
-      assert map_size(HostRegistry.snapshot(store)) == 1000
+      assert map_size(HostRegistry.snapshot(@pool, store)) == 1000
     end
   end
 
@@ -75,92 +90,130 @@ defmodule KaoiroServer.HostRegistryTest do
     end
   end
 
-  describe "get/2 と snapshot/1" do
+  describe "get/2 と snapshot/2 (ADR-0031 policy 適用)" do
     test "get は未知ホストで nil" do
       store = start_supervised!({HostRegistry, name: :host_reg_get_test})
       assert HostRegistry.get("none", store) == nil
     end
 
-    test "snapshot は全ホストの host_id => entry を返す" do
+    test "snapshot は全ホストの host_id => entry を返し runner_pid を落とす" do
       store = start_supervised!({HostRegistry, name: :host_reg_snap_test})
       :ok = HostRegistry.register("a", attrs(), self(), store)
       :ok = HostRegistry.register("b", attrs(), self(), store)
 
-      snapshot = HostRegistry.snapshot(store)
+      snapshot = HostRegistry.snapshot(@pool, store)
       assert Map.keys(snapshot) |> Enum.sort() == ["a", "b"]
-      # snapshot is the operator-facing view: the internal runner_pid is
-      # stripped so it stays JSON-serialisable for the "hosts" push.
       refute Map.has_key?(snapshot["a"], :runner_pid)
       # The owner pid is still retained internally (get/2) for drop/3 fencing.
       assert HostRegistry.get("a", store).runner_pid == self()
     end
 
-    test "snapshot は default ペルソナを各 host の先頭に注入する (#35)" do
-      store = start_supervised!({HostRegistry, name: :host_reg_snap_default_test})
-      :ok = HostRegistry.register("a", attrs(), self(), store)
-      :ok = HostRegistry.register("b", attrs(%{personas: []}), self(), store)
-
-      snapshot = HostRegistry.snapshot(store)
-
-      default = %{"id" => "default", "name" => "デフォルト", "sprite_set" => "default"}
-      assert [^default | _] = snapshot["a"].personas
-      assert snapshot["a"].personas == [default, %{"id" => "mio"}]
-      # default は personas が空の host にも入る (常に選択肢に出す)
-      assert snapshot["b"].personas == [default]
-      # 注入は snapshot view のみ; store の raw データは触らない
-      assert HostRegistry.get("a", store).personas == [%{"id" => "mio"}]
-    end
-
-    test "host が宣言した id=default は server 側標準で置換される (#35)" do
-      store = start_supervised!({HostRegistry, name: :host_reg_snap_default_dedup_test})
+    test "snapshot は :policy を含めず Jason で serialise 可能である" do
+      store = start_supervised!({HostRegistry, name: :host_reg_snap_json})
 
       :ok =
         HostRegistry.register(
           "a",
-          attrs(%{
-            personas: [
-              %{"id" => "default", "name" => "勝手な名前", "sprite_set" => "x"},
-              %{"id" => "mio"}
-            ]
-          }),
+          attrs(%{policy: {:allowlist, MapSet.new(["ao"])}}),
           self(),
           store
         )
 
-      snapshot = HostRegistry.snapshot(store)
-      default = %{"id" => "default", "name" => "デフォルト", "sprite_set" => "default"}
-      # runner 宣言の default は除外され、標準 default が先頭に置かれる
-      assert snapshot["a"].personas == [default, %{"id" => "mio"}]
+      snapshot = HostRegistry.snapshot(@pool, store)
+      refute Map.has_key?(snapshot["a"], :policy)
+      # `hosts` channel push encodes with Jason; a leaked tuple would raise
+      # Protocol.UndefinedError here (kills the operator socket at after_join).
+      assert {:ok, _} = Jason.encode(%{"hosts" => snapshot})
+    end
+
+    test "accept-all は pool 全体を返す (default 含む)" do
+      store = start_supervised!({HostRegistry, name: :host_reg_snap_accept_all})
+      :ok = HostRegistry.register("a", attrs(), self(), store)
+
+      snapshot = HostRegistry.snapshot(@pool, store)
+      assert snapshot["a"].personas == @pool
+    end
+
+    test "allowlist は列挙 id のみに絞り込む (default も対象)" do
+      store = start_supervised!({HostRegistry, name: :host_reg_snap_allow})
+
+      :ok =
+        HostRegistry.register(
+          "a",
+          attrs(%{policy: {:allowlist, MapSet.new(["ao", "default"])}}),
+          self(),
+          store
+        )
+
+      snapshot = HostRegistry.snapshot(@pool, store)
+      # 順序は pool 順を保つ (default → ao)
+      assert snapshot["a"].personas == [@default_persona, @ao]
+    end
+
+    test "blocklist は列挙 id を除いた pool を返す (default も除外可)" do
+      store = start_supervised!({HostRegistry, name: :host_reg_snap_block})
+
+      :ok =
+        HostRegistry.register(
+          "a",
+          attrs(%{policy: {:blocklist, MapSet.new(["default", "yui"])}}),
+          self(),
+          store
+        )
+
+      snapshot = HostRegistry.snapshot(@pool, store)
+      assert snapshot["a"].personas == [@ao, @mio]
+    end
+
+    test "allowlist で全て除外される場合は spawnable 空 (canary 合法状態)" do
+      store = start_supervised!({HostRegistry, name: :host_reg_snap_empty})
+
+      :ok =
+        HostRegistry.register(
+          "a",
+          attrs(%{policy: {:allowlist, MapSet.new(["nonexistent"])}}),
+          self(),
+          store
+        )
+
+      snapshot = HostRegistry.snapshot(@pool, store)
+      assert snapshot["a"].personas == []
     end
   end
 
-  describe "get_public/2 (#35)" do
-    test "get_public は default を注入し runner_pid を落とした単一 host view を返す" do
+  describe "get_public/3" do
+    test "get_public は policy を適用した personas を返し runner_pid を落とす" do
       store = start_supervised!({HostRegistry, name: :host_reg_get_public_test})
-      :ok = HostRegistry.register("a", attrs(), self(), store)
 
-      entry = HostRegistry.get_public("a", store)
-      default = %{"id" => "default", "name" => "デフォルト", "sprite_set" => "default"}
-      assert entry.personas == [default, %{"id" => "mio"}]
+      :ok =
+        HostRegistry.register(
+          "a",
+          attrs(%{policy: {:blocklist, MapSet.new(["default"])}}),
+          self(),
+          store
+        )
+
+      entry = HostRegistry.get_public("a", @pool, store)
+      assert entry.personas == [@ao, @mio, @yui]
       refute Map.has_key?(entry, :runner_pid)
       # snapshot と整合する: 同じ host を単一スライスとして取り出した形
-      assert entry == HostRegistry.snapshot(store)["a"]
+      assert entry == HostRegistry.snapshot(@pool, store)["a"]
     end
 
     test "未知 host は nil を返す" do
       store = start_supervised!({HostRegistry, name: :host_reg_get_public_unknown_test})
-      assert HostRegistry.get_public("none", store) == nil
+      assert HostRegistry.get_public("none", @pool, store) == nil
     end
   end
 
-  describe "personas/1" do
-    test "全ホストの persona を集約し重複を排除する" do
+  describe "personas/2 (集約)" do
+    test "全ホストの spawnable を集約し重複を排除する" do
       store = start_supervised!({HostRegistry, name: :host_reg_personas_test})
 
       :ok =
         HostRegistry.register(
           "a",
-          attrs(%{personas: [%{"id" => "mio"}, %{"id" => "ao"}]}),
+          attrs(%{policy: {:allowlist, MapSet.new(["mio", "ao"])}}),
           self(),
           store
         )
@@ -168,22 +221,22 @@ defmodule KaoiroServer.HostRegistryTest do
       :ok =
         HostRegistry.register(
           "b",
-          # mio appears on both hosts; dedup keeps a single entry.
-          attrs(%{personas: [%{"id" => "mio"}, %{"id" => "yui"}]}),
+          # mio appears via both hosts; dedup keeps a single entry.
+          attrs(%{policy: {:allowlist, MapSet.new(["mio", "yui"])}}),
           self(),
           store
         )
 
-      personas = HostRegistry.personas(store)
+      personas = HostRegistry.personas(@pool, store)
       assert length(personas) == 3
-      assert %{"id" => "mio"} in personas
-      assert %{"id" => "ao"} in personas
-      assert %{"id" => "yui"} in personas
+      assert @mio in personas
+      assert @ao in personas
+      assert @yui in personas
     end
 
     test "ホストが無ければ空リスト" do
       store = start_supervised!({HostRegistry, name: :host_reg_personas_empty_test})
-      assert HostRegistry.personas(store) == []
+      assert HostRegistry.personas(@pool, store) == []
     end
   end
 

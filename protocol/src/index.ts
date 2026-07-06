@@ -252,13 +252,27 @@ export interface InterAgentMessagePayload {
 // for now. The spawn/stop/restart/enumerate and sessions/spawn_result shapes
 // are added with the phases that consume them.
 
-/** runner -> server, once per (re)connection: declares the host's spawnable
- *  personas and the operator-selectable cwd allow-list (#22). capabilities
- *  lists the engine kinds the host can run (e.g. ["claude"]). */
+/** runner -> server, once per (re)connection: declares how much the host
+ *  trusts the server's persona catalog (ADR-0031) and the operator-selectable
+ *  cwd allow-list (#22). capabilities lists the engine kinds the host can
+ *  run (e.g. ["claude"]).
+ *
+ *  Persona trust policy is expressed by exactly one of the following, or none
+ *  (accept-all). More than one being set is a fail-loud invalid register:
+ *
+ *  - `allowed_personas`: allowlist by id — only these ids are spawnable
+ *  - `blocked_personas`: blocklist by id — every server-known id EXCEPT these
+ *    is spawnable
+ *  - `personas` (legacy, deprecated): interpreted as an allowlist by the
+ *    `id` field only; `name` / `sprite_set` are ignored since the server SoT
+ *    (ADR-0029) owns display metadata. Emits a deprecation warning at the
+ *    server; scheduled for removal in the next major release. */
 export interface RunnerRegister {
   version: "0";
   host_id: string;
-  personas: WirePersona[];
+  personas?: WirePersona[];
+  allowed_personas?: string[];
+  blocked_personas?: string[];
   cwd_allowlist: string[];
   capabilities?: string[];
 }

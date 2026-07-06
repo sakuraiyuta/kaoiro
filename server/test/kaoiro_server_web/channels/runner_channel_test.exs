@@ -12,16 +12,13 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
     socket
   end
 
-  defp register_payload do
-    %{
-      "personas" => [%{"id" => "mio", "name" => "澪", "sprite_set" => "mio"}],
-      "cwd_allowlist" => ["/home/user/proj"]
-    }
+  defp register_payload(extra \\ %{}) do
+    Map.merge(%{"cwd_allowlist" => ["/home/user/proj"]}, extra)
   end
 
-  describe "register" do
-    test "register で HostRegistry に登録され hosts が operator へ broadcast される" do
-      host_id = "lab-pc-1"
+  describe "register (ADR-0031 persona trust policy)" do
+    test "accept-all: persona 関連フィールド無しなら :accept_all として保持" do
+      host_id = "lab-pc-accept-all"
       @endpoint.subscribe("agents:lobby")
       socket = join_runner(host_id)
 
@@ -31,17 +28,117 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert_broadcast "hosts", %{"hosts" => _}
 
       entry = HostRegistry.get(host_id)
-      assert entry.personas == [%{"id" => "mio", "name" => "澪", "sprite_set" => "mio"}]
+      assert entry.policy == :accept_all
       assert entry.cwd_allowlist == ["/home/user/proj"]
     end
 
-    test "personas/cwd_allowlist の型不正は invalid_register で拒否される" do
-      socket = join_runner("lab-pc-bad")
+    test "allowlist: allowed_personas が MapSet として保持される" do
+      host_id = "lab-pc-allow"
+      socket = join_runner(host_id)
 
-      ref = push(socket, "register", %{"personas" => "x", "cwd_allowlist" => []})
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{"allowed_personas" => ["ao", "kuroe"]})
+        )
+
+      assert_reply ref, :ok
+      entry = HostRegistry.get(host_id)
+      assert entry.policy == {:allowlist, MapSet.new(["ao", "kuroe"])}
+    end
+
+    test "blocklist: blocked_personas が MapSet として保持される" do
+      host_id = "lab-pc-block"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{"blocked_personas" => ["fuji"]})
+        )
+
+      assert_reply ref, :ok
+      entry = HostRegistry.get(host_id)
+      assert entry.policy == {:blocklist, MapSet.new(["fuji"])}
+    end
+
+    test "allowed_personas と blocked_personas 同時指定は invalid_register" do
+      socket = join_runner("lab-pc-both")
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "allowed_personas" => ["ao"],
+            "blocked_personas" => ["fuji"]
+          })
+        )
+
+      assert_reply ref, :error, %{reason: "both_persona_policies"}
+      refute HostRegistry.get("lab-pc-both")
+    end
+
+    test "legacy personas + 新フィールド同時は invalid_register" do
+      socket = join_runner("lab-pc-mix")
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "personas" => [%{"id" => "ao"}],
+            "allowed_personas" => ["ao"]
+          })
+        )
+
+      assert_reply ref, :error, %{reason: "legacy_and_new_persona_policy"}
+      refute HostRegistry.get("lab-pc-mix")
+    end
+
+    test "legacy personas は allowlist として受理される (deprecation)" do
+      host_id = "lab-pc-legacy"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "personas" => [
+              %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"}
+            ]
+          })
+        )
+
+      assert_reply ref, :ok
+      entry = HostRegistry.get(host_id)
+      # id のみを取り、name/sprite_set は server SoT に委ねる
+      assert entry.policy == {:allowlist, MapSet.new(["mio"])}
+    end
+
+    test "型不正 (allowed_personas が文字列でない) は invalid_persona_id" do
+      socket = join_runner("lab-pc-badtype")
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{"allowed_personas" => [123]})
+        )
+
+      assert_reply ref, :error, %{reason: "invalid_persona_id"}
+    end
+
+    test "cwd_allowlist の型不正は invalid_register" do
+      socket = join_runner("lab-pc-badcwd")
+
+      ref = push(socket, "register", %{"cwd_allowlist" => "x"})
       assert_reply ref, :error, %{reason: "invalid_register"}
 
-      refute HostRegistry.get("lab-pc-bad")
+      refute HostRegistry.get("lab-pc-badcwd")
     end
   end
 

@@ -75,8 +75,12 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
   バックする([protocol](protocol.md) の「ペルソナアセット配信」)。
 - 7 状態の表情画像を揃える MUST(下記 Constraints)の対象外 — 意図的に
   CSS 顔を用いる唯一のペルソナ。
-- 将来、kaoiro クライアントからエージェントを追加起動する際の既定の
-  選択肢として常に提示する(起動機能の実装に依存)。
+- kaoiro クライアントの起動ダイアログには、そのホストの trust policy
+  (下記「ホスト側の受け入れポリシー」)が許容する場合の既定候補として
+  現れる。ADR-0031 まで `default` は host 側の宣言と無関係に常時注入
+  されていたが、id 空間の一貫性と `HostRegistry.inject_default/1` の
+  単純化のため、blocklist / allowlist の対象として通常の id と同格に
+  扱うようになった(下記参照)。
 - ラッパー設定の `persona` ブロック例(全体構造は
   [wrapper/kaoiro.config.example.json](../../wrapper/kaoiro.config.example.json)):
 
@@ -170,6 +174,31 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 
 zip 内部スキーマの詳細は
 [persona-pack-schema](persona-pack-schema.md) を参照。
+
+### ホスト側の受け入れポリシー(runner trust policy)
+
+server が ingest したペルソナのうち「実際にどれをこのホストで起動可能に
+するか」は、runner が config で宣言する 3 つのポリシーから 1 つを選ぶ
+([ADR-0031](../adr/0031-runner-persona-trust-mode.md)):
+
+- **accept-all**(既定): server-known な全ペルソナを起動可能。
+  `runner.config.json` にペルソナ関連フィールドを書かない状態。
+  新 pack を server に置けば、稼働中の runner 再起動なしに反映される
+  (判定は server 側 `AgentsChannel` 完結)。
+- **allowlist**: `allowed_personas: [id, ...]` で列挙した id のみ起動可能。
+- **blocklist**: `blocked_personas: [id, ...]` で列挙した id を除いた
+  server-known 全ペルソナが起動可能。
+
+3 つはいずれも「宣言 1 つだけ」で、`allowed_personas` と
+`blocked_personas` を同時指定した config は fail-loud で reject する
+(runner 起動時と server register 時の両方)。旧 `personas: [...]`
+フィールドは 1 リリース互換窓で allowlist 相当として受け入れ、
+deprecation 警告を出す。
+
+`default` id もこのポリシーの対象となる — `blocked_personas` に列挙
+すれば起動候補から外れ、その結果として spawnable が空になった host
+(canary / 準備中 host)は合法状態として扱う(dashboard は空 picker を
+明示表示)。
 
 ## Constraints
 

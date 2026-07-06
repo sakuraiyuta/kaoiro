@@ -56,6 +56,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.HostRegistry
+  alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
   alias KaoiroServerWeb.AgentId
 
@@ -135,7 +136,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # can render offline agents' tiles for the restore UI (ADR-0030 D5).
     if role == :operator do
       push(socket, "history", %{"agents" => AgentStates.histories()})
-      push(socket, "hosts", %{"hosts" => HostRegistry.snapshot()})
+      push(socket, "hosts", %{"hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())})
       push(socket, "directory", %{"entries" => AgentDirectory.all()})
     end
 
@@ -534,10 +535,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp fetch_host(host_id) do
     # get_public so the resolver sees the same persona set the operator UI
-    # received via the `hosts` push (HostRegistry.snapshot/1), including the
-    # reserved `default` (#35). Reading raw `get/2` here would let an operator
-    # pick `default` in the LaunchDialog and hit `unknown_persona`.
-    case HostRegistry.get_public(host_id) do
+    # received via the `hosts` push (HostRegistry.snapshot/2), computed from
+    # the host's policy against the server-authoritative persona pool
+    # (ADR-0031). Reading raw `get/2` here would surface only the policy,
+    # not the resolved id list the operator's LaunchDialog picked from.
+    case HostRegistry.get_public(host_id, PersonaAssets.all_personas()) do
       nil -> {:error, :unknown_host}
       host -> {:ok, host}
     end

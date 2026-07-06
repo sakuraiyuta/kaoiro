@@ -1,7 +1,8 @@
-// Loading and validation of the runner config (ADR-0023). The runner reads
-// this once on start to know its host_id, where to connect, and what it may
-// launch (spawnable personas + selectable cwd allow-list, #22). The auth token
-// is NOT in this file (security): it comes from the env (KAOIRO_RUNNER_TOKEN).
+// Loading and validation of the runner config (ADR-0023, ADR-0031). The
+// runner reads this once on start to know its host_id, where to connect,
+// its persona trust policy against the server catalog, and its cwd allow-
+// list (#22). The auth token is NOT in this file (security): it comes from
+// the env (KAOIRO_RUNNER_TOKEN).
 
 import { readFileSync } from "node:fs";
 import type {
@@ -27,12 +28,17 @@ class ConfigError extends Error {
   override name = "ConfigError";
 }
 
-/** Runner config (file shape). personas/cwd_allowlist are declared to the
- *  server via `register`; capabilities lists engine kinds (e.g. ["claude"]). */
+/** Runner config (file shape). Persona trust is expressed by exactly one of
+ *  `allowed_personas` (allowlist by id) or `blocked_personas` (blocklist
+ *  by id), or none for accept-all — see [[ADR-0031]]. Legacy `personas`
+ *  (full objects) is accepted for one release cycle as an allowlist by id
+ *  with a deprecation warning; mixing legacy and new fields is rejected. */
 export interface RunnerConfig {
   host_id: string;
   server_url: string;
-  personas: Persona[];
+  personas?: Persona[];
+  allowed_personas?: string[];
+  blocked_personas?: string[];
   cwd_allowlist: string[];
   capabilities?: string[];
 }
@@ -99,21 +105,6 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
     throw new ConfigError("server_url must start with ws:// or wss://");
   }
 
-  if (!Array.isArray(raw.personas)) {
-    throw new ConfigError("personas must be an array");
-  }
-  if (raw.personas.length > MAX_PERSONAS) {
-    throw new ConfigError(`personas must have at most ${MAX_PERSONAS} entries`);
-  }
-  // A runner exists to spawn agents, so it must declare at least one
-  // spawnable persona and one cwd; an empty list is a misconfiguration the
-  // server would accept silently, so fail fast here. capabilities stays
-  // optional (it only annotates engine kinds).
-  if (raw.personas.length === 0) {
-    throw new ConfigError("personas must have at least one entry");
-  }
-  const personas = raw.personas.map(parsePersona);
-
   const cwd_allowlist = parseStringList(
     raw.cwd_allowlist,
     "cwd_allowlist",
@@ -123,7 +114,46 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
     throw new ConfigError("cwd_allowlist must have at least one entry");
   }
 
-  const config: RunnerConfig = { host_id, server_url, personas, cwd_allowlist };
+  const config: RunnerConfig = { host_id, server_url, cwd_allowlist };
+
+  const hasLegacy = raw.personas !== undefined;
+  const hasAllow = raw.allowed_personas !== undefined;
+  const hasBlock = raw.blocked_personas !== undefined;
+
+  if (hasAllow && hasBlock) {
+    throw new ConfigError(
+      "allowed_personas and blocked_personas are mutually exclusive",
+    );
+  }
+  if ((hasAllow || hasBlock) && hasLegacy) {
+    throw new ConfigError(
+      "legacy `personas` cannot be combined with allowed_personas / blocked_personas",
+    );
+  }
+
+  if (hasLegacy) {
+    // Legacy allowlist by full persona object; used only for its ids since
+    // the server SoT (ADR-0029) owns display metadata. Warn once so
+    // operators can migrate to `allowed_personas`.
+    process.stderr.write(
+      "runner: warn — `personas` in runner.config.json is deprecated (ADR-0031); " +
+        "use `allowed_personas` (allowlist by id) or `blocked_personas` " +
+        "(blocklist by id). Legacy `personas` will be removed in the next major.\n",
+    );
+    config.personas = parsePersonaList(raw.personas);
+  } else if (hasAllow) {
+    config.allowed_personas = parseStringList(
+      raw.allowed_personas,
+      "allowed_personas",
+      MAX_PERSONAS,
+    );
+  } else if (hasBlock) {
+    config.blocked_personas = parseStringList(
+      raw.blocked_personas,
+      "blocked_personas",
+      MAX_PERSONAS,
+    );
+  }
 
   if (raw.capabilities !== undefined) {
     config.capabilities = parseStringList(
@@ -134,6 +164,19 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
   }
 
   return config;
+}
+
+function parsePersonaList(value: unknown): Persona[] {
+  if (!Array.isArray(value)) {
+    throw new ConfigError("personas must be an array");
+  }
+  if (value.length > MAX_PERSONAS) {
+    throw new ConfigError(`personas must have at most ${MAX_PERSONAS} entries`);
+  }
+  if (value.length === 0) {
+    throw new ConfigError("personas must have at least one entry");
+  }
+  return value.map(parsePersona);
 }
 
 /**
@@ -160,13 +203,22 @@ export function loadRunnerConfig(path: string): RunnerConfig {
   return parseRunnerConfig(raw);
 }
 
-/** Builds the `register` message (sent once per connection) from the config. */
+/** Builds the `register` message (sent once per connection) from the config.
+ *  Persona trust is expressed by the same field shape the file used
+ *  (ADR-0031: allowlist / blocklist / accept-all), so the server can gate
+ *  spawn without a separate mode enum on the wire. */
 export function buildRegister(config: RunnerConfig): RunnerRegister {
   return {
     version: "0",
     host_id: config.host_id,
-    personas: config.personas,
     cwd_allowlist: config.cwd_allowlist,
+    ...(config.personas === undefined ? {} : { personas: config.personas }),
+    ...(config.allowed_personas === undefined
+      ? {}
+      : { allowed_personas: config.allowed_personas }),
+    ...(config.blocked_personas === undefined
+      ? {}
+      : { blocked_personas: config.blocked_personas }),
     ...(config.capabilities === undefined
       ? {}
       : { capabilities: config.capabilities }),

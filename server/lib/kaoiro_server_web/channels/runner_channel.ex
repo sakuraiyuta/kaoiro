@@ -22,8 +22,11 @@ defmodule KaoiroServerWeb.RunnerChannel do
 
   use Phoenix.Channel
 
+  require Logger
+
   alias KaoiroServer.Auth
   alias KaoiroServer.HostRegistry
+  alias KaoiroServer.PersonaAssets
   alias KaoiroServerWeb.AgentId
 
   # Resource bound on a runner control message; generous for a register's
@@ -94,22 +97,100 @@ defmodule KaoiroServerWeb.RunnerChannel do
     end
   end
 
-  # register carries the spawnable personas and selectable cwd allow-list
-  # (#22); capabilities is optional. personas/cwd_allowlist must be lists
-  # so a malformed declaration is rejected at this boundary instead of
-  # corrupting the registry.
-  defp parse_register(%{"personas" => personas, "cwd_allowlist" => cwd_allowlist} = payload)
-       when is_list(personas) and is_list(cwd_allowlist) do
-    attrs = %{personas: personas, cwd_allowlist: cwd_allowlist}
+  # register carries the persona trust policy and the selectable cwd
+  # allow-list (#22, ADR-0031). capabilities is optional. Any type breach
+  # is rejected at this boundary so a malformed declaration cannot corrupt
+  # the registry.
+  defp parse_register(%{"cwd_allowlist" => cwd_allowlist} = payload)
+       when is_list(cwd_allowlist) do
+    with {:ok, policy} <- parse_policy(payload),
+         {:ok, capabilities} <- parse_capabilities(payload) do
+      attrs =
+        %{policy: policy, cwd_allowlist: cwd_allowlist}
+        |> Map.merge(capabilities)
 
-    case Map.get(payload, "capabilities") do
-      nil -> {:ok, attrs}
-      caps when is_list(caps) -> {:ok, Map.put(attrs, :capabilities, caps)}
-      _ -> {:error, :invalid_capabilities}
+      {:ok, attrs}
     end
   end
 
   defp parse_register(_payload), do: {:error, :invalid_register}
+
+  # ADR-0031: exactly one of `allowed_personas` (allowlist by id) or
+  # `blocked_personas` (blocklist by id) may be set; absent = accept-all.
+  # Legacy `personas: [%{"id" => ...}]` is accepted for one release cycle
+  # as an allowlist by id with a deprecation warning; combining legacy and
+  # new fields is a hard error to force the operator to pick one shape.
+  defp parse_policy(payload) do
+    has_legacy = Map.has_key?(payload, "personas")
+    has_allow = Map.has_key?(payload, "allowed_personas")
+    has_block = Map.has_key?(payload, "blocked_personas")
+
+    cond do
+      has_allow and has_block ->
+        {:error, :both_persona_policies}
+
+      (has_allow or has_block) and has_legacy ->
+        {:error, :legacy_and_new_persona_policy}
+
+      has_legacy ->
+        Logger.warning(
+          "RunnerRegister field `personas` is deprecated (ADR-0031); use " <>
+            "`allowed_personas` (allowlist by id) or `blocked_personas` " <>
+            "(blocklist by id) instead. Legacy `personas` will be removed " <>
+            "in the next major release."
+        )
+
+        with {:ok, ids} <- parse_legacy_personas(payload["personas"]) do
+          {:ok, {:allowlist, MapSet.new(ids)}}
+        end
+
+      has_allow ->
+        with {:ok, ids} <- parse_id_list(payload["allowed_personas"], :allowed_personas) do
+          {:ok, {:allowlist, MapSet.new(ids)}}
+        end
+
+      has_block ->
+        with {:ok, ids} <- parse_id_list(payload["blocked_personas"], :blocked_personas) do
+          {:ok, {:blocklist, MapSet.new(ids)}}
+        end
+
+      true ->
+        {:ok, :accept_all}
+    end
+  end
+
+  defp parse_legacy_personas(personas) when is_list(personas) do
+    Enum.reduce_while(personas, {:ok, []}, fn persona, {:ok, acc} ->
+      case persona do
+        %{"id" => id} when is_binary(id) -> {:cont, {:ok, [id | acc]}}
+        _ -> {:halt, {:error, :invalid_persona_entry}}
+      end
+    end)
+    |> case do
+      {:ok, ids} -> {:ok, Enum.reverse(ids)}
+      err -> err
+    end
+  end
+
+  defp parse_legacy_personas(_), do: {:error, :invalid_persona_entry}
+
+  defp parse_id_list(list, _field) when is_list(list) do
+    if Enum.all?(list, &is_binary/1) do
+      {:ok, list}
+    else
+      {:error, :invalid_persona_id}
+    end
+  end
+
+  defp parse_id_list(_, _field), do: {:error, :invalid_persona_id}
+
+  defp parse_capabilities(payload) do
+    case Map.get(payload, "capabilities") do
+      nil -> {:ok, %{}}
+      caps when is_list(caps) -> {:ok, %{capabilities: caps}}
+      _ -> {:error, :invalid_capabilities}
+    end
+  end
 
   defp forward_to_operators(event, payload, socket) do
     with :ok <- check_size(payload),
@@ -128,7 +209,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
   # gates "hosts" operator-only (cwd allow-lists are sensitive, #46).
   defp broadcast_hosts do
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "hosts", %{
-      "hosts" => HostRegistry.snapshot()
+      "hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())
     })
   end
 

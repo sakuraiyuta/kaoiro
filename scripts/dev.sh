@@ -88,11 +88,12 @@ pids+=("$!")
   </dev/null 2>&1 | tee -a "$logdir/dashboard.log" &
 pids+=("$!")
 
-# Runner config: generate a localhost default on first run (gitignored). Edit
-# cwd_allowlist / personas to taste; each persona.id must match one ingested
-# by the server (persona-packs/<id>/ built into server/priv/persona-packs/
-# via scripts/build-persona-pack.sh), or the wrapper join is rejected
-# (ADR-0029 F3).
+# Runner config: generate a localhost default on first run (gitignored).
+# The default is accept-all — every server-ingested pack is spawnable on
+# this host (ADR-0031). To lock down: replace `blocked_personas` with
+# `allowed_personas` for an allowlist, or list ids in blocked_personas to
+# opt out of specific packs. Wrapper join is still gated server-side on
+# PersonaAssets known_persona?/1 (ADR-0029 F3).
 runner_config="$root/runner/runner.config.json"
 if [[ ! -f "$runner_config" ]]; then
   echo "dev: generating $runner_config (gitignored; edit to taste)"
@@ -100,12 +101,7 @@ if [[ ! -f "$runner_config" ]]; then
 {
   "host_id": "dev-host",
   "server_url": "ws://localhost:4000/runner",
-  "personas": [
-    { "id": "ao", "name": "あお", "sprite_set": "ao" },
-    { "id": "kuroe", "name": "クロエ", "sprite_set": "kuroe" },
-    { "id": "momo", "name": "もも", "sprite_set": "momo" },
-    { "id": "fuji", "name": "ふじ", "sprite_set": "fuji" }
-  ],
+  "blocked_personas": [],
   "cwd_allowlist": ["$root"],
   "capabilities": ["claude"]
 }

@@ -20,14 +20,18 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       })
   end
 
-  @mio %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"}
+  # Matches the bundled ao pack (persona-packs/ao/manifest.json); tests
+  # rely on PersonaAssets ingesting the reference packs from
+  # server/priv/persona-packs/ (ADR-0029). Custom-name test overrides
+  # this via `apply_custom_name` on the spawn path.
+  @ao %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"}
 
   defp register_host(host_id, opts \\ []) do
     :ok =
       HostRegistry.register(
         host_id,
         %{
-          personas: Keyword.get(opts, :personas, [@mio]),
+          policy: Keyword.get(opts, :policy, :accept_all),
           cwd_allowlist: Keyword.get(opts, :cwd_allowlist, ["/home/user/proj"])
         },
         self()
@@ -1219,7 +1223,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "spawn", %{
           "host_id" => host_id,
-          "persona" => "mio",
+          "persona" => "ao",
           "cwd" => "/home/user/proj"
         })
 
@@ -1232,7 +1236,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_broadcast "spawn", payload
       refute Map.has_key?(payload, "host_id")
       assert payload["agent_id"] == agent_id
-      assert payload["persona"] == @mio
+      assert payload["persona"] == @ao
       assert payload["cwd"] == "/home/user/proj"
       assert is_binary(payload["token"])
       # server_url is supplied by the runner, not the server (案A, ADR-0024).
@@ -1248,7 +1252,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "spawn", %{
           "host_id" => host_id,
-          "persona" => "mio",
+          "persona" => "ao",
           "cwd" => "/home/user/seed"
         })
 
@@ -1266,7 +1270,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "spawn", %{
           "host_id" => host_id,
-          "persona" => "mio",
+          "persona" => "ao",
           "cwd" => "/home/user/proj",
           "initial_prompt" => "最初の指示"
         })
@@ -1284,7 +1288,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "spawn", %{
           "host_id" => host_id,
-          "persona" => "mio",
+          "persona" => "ao",
           "cwd" => "/home/user/proj",
           "name" => "  レビュー担当  "
         })
@@ -1292,7 +1296,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :ok
       # name は trim され persona.name のみ上書き; id/sprite_set は不変。
       assert_broadcast "spawn", %{"persona" => persona}
-      assert persona == %{"id" => "mio", "name" => "レビュー担当", "sprite_set" => "mio"}
+      assert persona == %{"id" => "ao", "name" => "レビュー担当", "sprite_set" => "ao"}
     end
 
     test "operator の spawn: name 未指定/空白は persona 既定名のまま" do
@@ -1304,14 +1308,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "spawn", %{
           "host_id" => host_id,
-          "persona" => "mio",
+          "persona" => "ao",
           "cwd" => "/home/user/proj",
           "name" => "   "
         })
 
       assert_reply ref, :ok
       assert_broadcast "spawn", payload
-      assert payload["persona"] == @mio
+      assert payload["persona"] == @ao
     end
 
     test "operator の spawn: 長すぎ/制御文字の name は invalid_name" do
@@ -1324,7 +1328,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         ref =
           push(socket, "spawn", %{
             "host_id" => host_id,
-            "persona" => "mio",
+            "persona" => "ao",
             "cwd" => "/home/user/proj",
             "name" => bad
           })
@@ -1382,7 +1386,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "spawn", %{
           "host_id" => "no-such-host",
-          "persona" => "mio",
+          "persona" => "ao",
           "cwd" => "/home/user/proj"
         })
 
@@ -1404,9 +1408,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "unknown_persona"}
     end
 
-    test "予約 default ペルソナは host 未宣言でも spawn できる (#35)" do
+    test "予約 default ペルソナは accept-all host で spawn できる (#35, ADR-0031)" do
       host_id = "lab-pc-default"
-      # host は default を申告していない (register_host の既定は [@mio] のみ)
+      # register_host の既定 policy は :accept_all、default は PersonaAssets
+      # の pool に必ず含まれる (ADR-0031 F2)。
       register_host(host_id)
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
@@ -1437,7 +1442,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "spawn", %{
           "host_id" => host_id,
-          "persona" => "mio",
+          "persona" => "ao",
           "cwd" => "/etc"
         })
 
@@ -1452,7 +1457,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         AgentStates.put(%{
           "version" => "0",
           "agent_id" => agent_id,
-          "persona" => @mio,
+          "persona" => @ao,
           "ts" => "2026-06-11T00:00:00Z",
           "type" => "state_change",
           "state" => "disconnected",
@@ -1462,7 +1467,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # In real production the spawn path always records the identity
       # (ADR-0030 D2). Mirror that here so restore's agent_persona/1 can
       # find the persona via AgentDirectory even when AgentStates would.
-      :ok = AgentDirectory.record(agent_id, @mio)
+      :ok = AgentDirectory.record(agent_id, @ao)
       # Flush the async cast before the handler reads the ledger.
       _ = AgentDirectory.get(agent_id)
     end
@@ -1486,7 +1491,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert payload["agent_id"] == agent_id
       assert payload["resume_session_id"] == "sess-rev-1"
       assert payload["cwd"] == "/home/user/proj"
-      assert payload["persona"] == @mio
+      assert payload["persona"] == @ao
       assert is_binary(payload["token"])
     end
 
@@ -1537,7 +1542,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       host_id = "lab-pc-1"
       agent_id = "lab-pc-1.after-restart"
 
-      :ok = AgentDirectory.record(agent_id, @mio)
+      :ok = AgentDirectory.record(agent_id, @ao)
       # Flush the async cast so the fetch guard reads the recorded entry.
       _ = AgentDirectory.get(agent_id)
       :ok = SessionPointers.record(agent_id, "sess-after-restart", "/home/user/proj")
@@ -1554,7 +1559,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :ok
       assert_broadcast "spawn", payload
       assert payload["agent_id"] == agent_id
-      assert payload["persona"] == @mio
+      assert payload["persona"] == @ao
       assert payload["resume_session_id"] == "sess-after-restart"
       assert payload["cwd"] == "/home/user/proj"
     end
@@ -1589,7 +1594,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         AgentStates.put(%{
           "version" => "0",
           "agent_id" => agent_id,
-          "persona" => @mio,
+          "persona" => @ao,
           "ts" => "2026-06-11T00:00:00Z",
           "type" => "state_change",
           "state" => "disconnected",
@@ -1598,7 +1603,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       :ok = SessionPointers.record(agent_id, "old-sess", "/home/user/proj")
       SessionPointers.get(agent_id)
-      :ok = AgentDirectory.record(agent_id, @mio)
+      :ok = AgentDirectory.record(agent_id, @ao)
       _ = AgentDirectory.get(agent_id)
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
@@ -1626,14 +1631,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         AgentStates.put(%{
           "version" => "0",
           "agent_id" => agent_id,
-          "persona" => @mio,
+          "persona" => @ao,
           "ts" => "2026-06-11T00:00:00Z",
           "type" => "state_change",
           "state" => "disconnected"
         })
 
       # In real flow, spawn also seeds AgentDirectory (ADR-0030 D2).
-      :ok = AgentDirectory.record(agent_id, @mio)
+      :ok = AgentDirectory.record(agent_id, @ao)
       _ = AgentDirectory.get(agent_id)
 
       socket = join_as(:operator)
@@ -1769,7 +1774,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok =
         KaoiroServer.HostRegistry.register(
           host_id,
-          %{personas: [%{"id" => "mio"}], cwd_allowlist: ["/home/user/p"]},
+          %{policy: :accept_all, cwd_allowlist: ["/home/user/p"]},
           self()
         )
 
@@ -1787,13 +1792,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "join 時 operator は directory push を受ける (ADR-0030 D4)" do
       agent_id = "lab-pc-1.dir-push"
-      :ok = AgentDirectory.record(agent_id, @mio)
+      :ok = AgentDirectory.record(agent_id, @ao)
       _ = AgentDirectory.get(agent_id)
 
       _operator = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
       assert_push "directory", %{"entries" => entries}
-      assert %{persona: @mio} = entries[agent_id]
+      assert %{persona: @ao} = entries[agent_id]
     end
 
     test "viewer は join 時に directory push を受けない (operator 限定、ADR-0030 D10)" do
