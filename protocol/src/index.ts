@@ -46,42 +46,29 @@ export interface ResultPayload {
 }
 
 /** Wire-safe subset of Persona used in every network-facing type
- *  (Envelope, RunnerRegister, SpawnMessage, and any future wire shape).
- *  Config-only fields on {@link Persona} stay wrapper-local — a local
- *  filesystem path must never leave the wrapper
- *  (persona-personality-injection MUST / ADR-0026 "Envelope 非露出"). */
+ *  (Envelope, RunnerRegister, SpawnMessage, and any future wire shape). */
 export interface WirePersona {
   id: string;
   name: string;
   sprite_set: string;
 }
 
-/** Assigned persona (protocol.md / ADR-0003). The full config-level view
- *  including optional personality/language fields that {@link WirePersona}
- *  intentionally omits. */
-export interface Persona extends WirePersona {
-  /** Path to a Markdown file with the persona's personality prompt
-   *  (口調・一人称・語尾・返答スタイル). Relative paths resolve from the
-   *  config file's directory. When unset the wrapper falls back to
-   *  `<wrapper-root>/personas/<id>.md`; when that also does not exist,
-   *  no personality is appended (persona-personality-injection spec /
-   *  ADR-0026). */
-  personality_prompt_file?: string;
-  /** Language hint for the personality prompt (BCP-47 or short code).
-   *  Phase-0 only carries this value; multilingual dispatch is deferred
-   *  to persona-language-dispatch (ADR-0026 D4). Default when consumed:
-   *  "ja". */
-  language?: string;
-}
+/** Assigned persona (protocol.md / ADR-0003). Under the server-集約 SoT
+ *  model (ADR-0029) the wrapper carries only the wire-safe identifiers;
+ *  the personality prompt is fetched from the server via WS handshake,
+ *  not the config file. */
+export type Persona = WirePersona;
 
 /** Wrapper init config. agent_id is a stable id, constant across restarts.
- *  server_url, when set, points the wrapper at the kaoiro server's wrapper
- *  socket (ws:// or wss://); omitted = local-only (no relay). Shared with the
- *  runner, which resolves it to spawn a wrapper (ADR-0023). */
+ *  server_url points the wrapper at the kaoiro server's wrapper socket
+ *  (ws:// or wss://) and is required — the wrapper cannot open its SDK
+ *  session without the server-pushed personality prompt (ADR-0029 F3
+ *  fail-closed). Shared with the runner, which resolves it to spawn a
+ *  wrapper (ADR-0023). */
 export interface WrapperConfig {
   agent_id: string;
   persona: Persona;
-  server_url?: string;
+  server_url: string;
   /** Wrapper auth token, paired with agent_id on the server (ADR-0011). */
   server_token?: string;
   /** permission_request no-response window before the default deny

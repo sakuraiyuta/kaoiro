@@ -18,6 +18,7 @@ import { buildChunkPayload } from "./helpers.js";
 const config: WrapperConfig = {
   agent_id: "test.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
+  server_url: "ws://localhost:4000/wrapper",
 };
 
 // The host reads only a few SDK fields; build minimal shapes and cast.

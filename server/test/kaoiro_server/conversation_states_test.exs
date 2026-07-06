@@ -16,6 +16,7 @@ defmodule KaoiroServer.ConversationStatesTest do
 
   test "通常の record_message は :ok を返しエントリを保持する" do
     name = start_tracker(:cs_basic)
+
     assert :ok =
              ConversationStates.record_message("c1", "a", "b", "hello", false, name)
 
@@ -69,6 +70,7 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert :ok = ConversationStates.record_message("c", "a", "b", "y", true, name)
     assert %{done_by: done_by} = ConversationStates.get("c", name)
     assert MapSet.equal?(done_by, MapSet.new(["a"]))
+
     # 3 メッセージ目: b→a done=true (b も done。両側揃って :both_done でエントリ削除)
     assert :both_done =
              ConversationStates.record_message("c", "b", "a", "z", true, name)
@@ -118,6 +120,7 @@ defmodule KaoiroServer.ConversationStatesTest do
       )
 
     assert :ok = ConversationStates.record_message("c", "a", "b", "x", false, name)
+
     assert {:exceeded, :max_turns} =
              ConversationStates.record_message("c", "a", "b", "y", false, name)
   end

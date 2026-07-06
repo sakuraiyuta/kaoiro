@@ -18,6 +18,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.ConversationStates
+  alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
   alias KaoiroServerWeb.AgentId
 
@@ -29,9 +30,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
   @max_envelope_bytes 65_536
 
   @impl true
-  def join("wrapper:" <> agent_id, _params, socket) do
+  def join("wrapper:" <> agent_id, params, socket) do
     with :ok <- validate_agent_id(agent_id),
          :ok <- Auth.authorize_wrapper(agent_id, socket.assigns[:wrapper_token]),
+         {:ok, persona_id} <- fetch_persona_id(params),
+         :ok <- authorize_persona(persona_id),
          :ok <- reject_if_connected(agent_id) do
       # Drop the raw token once verified so it cannot leak via crash
       # logs / socket inspection.
@@ -40,18 +43,36 @@ defmodule KaoiroServerWeb.WrapperChannel do
       {:ok,
        socket
        |> assign(:agent_id, agent_id)
+       |> assign(:persona_id, persona_id)
        |> assign(:wrapper_token, nil)}
     else
       {:error, reason} -> {:error, %{reason: to_string(reason)}}
     end
   end
 
-  # Push the persisted permission_mode pick once the join completes (#58).
+  # Push the initial handshake state once the join completes:
+  # - `persona_prompt`: the ready-to-inject personality + common footer
+  #   (ADR-0029 F5, protocol.md「人格プロンプト配送」). The wrapper
+  #   awaits this before opening its SDK session (fail-closed, F3).
+  # - `set_permission_mode`: the persisted per-agent operator pick, when
+  #   any (#58). Nothing pushed when no mode was persisted.
+  #
   # Phoenix Channels require push/3 to run after the join reply; send/2 +
-  # handle_info is the standard idiom. Nothing happens when no mode was
-  # persisted yet — the wrapper falls back to its config / `default`.
+  # handle_info is the standard idiom.
   @impl true
   def handle_info(:after_join, socket) do
+    case PersonaAssets.prompt(socket.assigns.persona_id) do
+      prompt when is_binary(prompt) ->
+        push(socket, "persona_prompt", %{prompt: prompt})
+
+      nil ->
+        # The join gate accepted this persona_id, but the pack has since
+        # gone from the manifest (rebuild between join and after_join).
+        # Fail closed by refusing the prompt — the wrapper's spawn
+        # timeout will surface it.
+        :ok
+    end
+
     case KaoiroServer.PermissionModes.get(socket.assigns.agent_id) do
       mode when is_binary(mode) ->
         push(socket, "set_permission_mode", %{mode: mode})
@@ -61,6 +82,29 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
 
     {:noreply, socket}
+  end
+
+  # persona_id rides join params (channel-level) rather than the socket
+  # connect params (which only carry the auth token). Blank / missing is
+  # an explicit reject — the wrapper MUST declare which persona it is
+  # (ADR-0029 F3, protocol.md「人格プロンプト配送」).
+  defp fetch_persona_id(params) do
+    case params do
+      %{"persona_id" => pid} when is_binary(pid) and pid != "" -> {:ok, pid}
+      _ -> {:error, :missing_persona_id}
+    end
+  end
+
+  # Enforce the「野良 persona 禁止」rule (ADR-0029 F3): the wrapper's
+  # declared persona.id must be one server-side manifest knows (or the
+  # reserved `default`). Also constrain the charset — the id rides the
+  # sprite URL path.
+  defp authorize_persona(persona_id) do
+    cond do
+      not AgentId.valid?(persona_id) -> {:error, :invalid_persona_id}
+      PersonaAssets.known_persona?(persona_id) -> :ok
+      true -> {:error, :unknown_persona}
+    end
   end
 
   # Reject a second concurrent wrapper for an agent_id that already has a
@@ -242,7 +286,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # pass through. On quota overshoot, synthesizes an escalate-to-user envelope
   # for both participants and returns :ok so the original still broadcasts to
   # the dashboard for full observability.
-  defp route_inter_agent(%{"type" => "inter_agent_message", "payload" => payload} = envelope, from) do
+  defp route_inter_agent(
+         %{"type" => "inter_agent_message", "payload" => payload} = envelope,
+         from
+       ) do
     to = payload["to"]
     cid = payload["conversation_id"]
     body = payload["body"] || ""

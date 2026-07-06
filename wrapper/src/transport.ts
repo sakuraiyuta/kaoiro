@@ -33,8 +33,18 @@ export interface AttachOpenMessage {
 }
 
 export interface ServerLinkOptions {
+  /** persona.id declared to the server at join time (ADR-0029 F3).
+   *  The server rejects the join when this id is not in its pack manifest
+   *  (or the reserved `default`); the wrapper then never opens its SDK
+   *  session. Required — there is no fallback under fail-closed. */
+  personaId: string;
   /** Wrapper auth token (ADR-0011), sent as a connect param. */
   token?: string;
+  /** The server-composed personality + common footer (ADR-0029 F5)
+   *  pushed once after join over the WS handshake. cli.ts awaits this
+   *  before opening the SDK session — the SDK's systemPrompt.append is
+   *  set once and never rewritten (F9 no hot-swap). */
+  onPersonaPrompt?: (prompt: string) => void;
   /** An operator's instruction relayed by the server. `attachmentIds`, when
    *  present, lists prior uploads the wrapper should attach to this turn
    *  (file-upload spec). */
@@ -108,14 +118,28 @@ export class ServerLink {
   constructor(
     serverUrl: string,
     agentId: string,
-    options: ServerLinkOptions = {},
+    options: ServerLinkOptions,
   ) {
     this.#socket = new Socket(serverUrl, {
       transport: WebSocket,
       params: options.token === undefined ? {} : { token: options.token },
     });
     this.#socket.connect();
-    this.#channel = this.#socket.channel(`wrapper:${agentId}`);
+    // persona_id rides join params (channel-level) so the server can
+    // reject an unknown-persona join before it consumes any state
+    // (ADR-0029 F3, protocol.md「人格プロンプト配送」).
+    this.#channel = this.#socket.channel(`wrapper:${agentId}`, {
+      persona_id: options.personaId,
+    });
+
+    // ADR-0029 F5: the server pushes the ready-to-inject prompt (persona
+    // personality + common footer) once after join. cli.ts's promise
+    // resolves on this and starts the SDK session.
+    this.#channel.on("persona_prompt", (payload: unknown) => {
+      if (isObject(payload) && typeof payload.prompt === "string") {
+        options.onPersonaPrompt?.(payload.prompt);
+      }
+    });
 
     this.#channel.on("instruction", (payload: unknown) => {
       if (isObject(payload) && typeof payload.text === "string") {

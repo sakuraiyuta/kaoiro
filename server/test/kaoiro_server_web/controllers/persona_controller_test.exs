@@ -12,10 +12,15 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
                json_response(conn, 200)
 
       assert version =~ ~r/^[0-9a-f]{16}$/
-      assert Map.keys(personas) |> Enum.sort() == ~w(ao kuroe momo)
+      assert Map.keys(personas) |> Enum.sort() == ~w(ao fuji kuroe momo)
 
       assert %{"url" => "/personas/ao/idle.png?v=" <> _, "hash" => _} =
                personas["ao"]["states"]["idle"]
+
+      # Pack schema additions (persona-pack-schema.md): name /
+      # pack_version / description transcribed from manifest.json.
+      assert personas["ao"]["name"] == "あお"
+      assert personas["ao"]["pack_version"] == "1.0.0"
     end
   end
 
@@ -26,9 +31,13 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert response(conn, 200)
       assert response_content_type(conn, :png) =~ "image/png"
       assert get_resp_header(conn, "cache-control") == ["no-cache"]
+      # Compare against the served bytes via PersonaAssets so the check
+      # follows the pack extraction cache rather than a filesystem path
+      # that the ingest model no longer exposes directly.
+      {:ok, %{path: path}} =
+        KaoiroServer.PersonaAssets.fetch_file("ao", "idle.png")
 
-      bundled = Application.app_dir(:kaoiro_server, "priv/personas")
-      assert conn.resp_body == File.read!(Path.join(bundled, "ao/idle.png"))
+      assert conn.resp_body == File.read!(path)
     end
 
     test "マニフェスト発行の v は不変キャッシュを許可する", %{conn: conn} do

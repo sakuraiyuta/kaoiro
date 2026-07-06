@@ -16,11 +16,15 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     }
   end
 
-  defp join_wrapper(agent_id) do
+  defp join_wrapper(agent_id, persona_id \\ "default") do
     {:ok, _reply, socket} =
       KaoiroServerWeb.WrapperSocket
       |> socket(nil, %{})
-      |> subscribe_and_join(KaoiroServerWeb.WrapperChannel, "wrapper:" <> agent_id)
+      |> subscribe_and_join(
+        KaoiroServerWeb.WrapperChannel,
+        "wrapper:" <> agent_id,
+        %{"persona_id" => persona_id}
+      )
 
     socket
   end
@@ -50,7 +54,11 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert {:error, %{reason: "already_connected"}} =
              KaoiroServerWeb.WrapperSocket
              |> socket(nil, %{})
-             |> subscribe_and_join(KaoiroServerWeb.WrapperChannel, "wrapper:" <> agent_id)
+             |> subscribe_and_join(
+               KaoiroServerWeb.WrapperChannel,
+               "wrapper:" <> agent_id,
+               %{"persona_id" => "default"}
+             )
   end
 
   test "フレームキー欠落の envelope を拒否し中継しない" do
@@ -86,7 +94,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     |> socket(nil, %{wrapper_token: token})
     |> subscribe_and_join(
       KaoiroServerWeb.WrapperChannel,
-      "wrapper:" <> agent_id
+      "wrapper:" <> agent_id,
+      %{"persona_id" => "default"}
     )
   end
 
@@ -112,6 +121,36 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  describe "persona_prompt push と unknown persona reject (ADR-0029)" do
+    test "join params の persona_id が欠落なら missing_persona_id で拒否" do
+      assert {:error, %{reason: "missing_persona_id"}} =
+               KaoiroServerWeb.WrapperSocket
+               |> socket(nil, %{})
+               |> subscribe_and_join(
+                 KaoiroServerWeb.WrapperChannel,
+                 "wrapper:test.persona-miss",
+                 %{}
+               )
+    end
+
+    test "manifest にない persona_id は unknown_persona で拒否" do
+      assert {:error, %{reason: "unknown_persona"}} =
+               KaoiroServerWeb.WrapperSocket
+               |> socket(nil, %{})
+               |> subscribe_and_join(
+                 KaoiroServerWeb.WrapperChannel,
+                 "wrapper:test.persona-unk",
+                 %{"persona_id" => "does-not-exist"}
+               )
+    end
+
+    test "reserved default は pack なしでも known 扱い + footer のみが push される" do
+      _socket = join_wrapper("test.persona-default", "default")
+      assert_push "persona_prompt", %{prompt: prompt}
+      assert prompt == KaoiroServer.PersonaAssets.common_footer()
+    end
+  end
+
   describe "agent_id 文字種ガード (issue #61)" do
     test "不正な文字種の agent_id は join を拒否する" do
       for bad <- ["bad*id", "with#hash", "a/b/c", "has space"] do
@@ -120,7 +159,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                  |> socket(nil, %{})
                  |> subscribe_and_join(
                    KaoiroServerWeb.WrapperChannel,
-                   "wrapper:" <> bad
+                   "wrapper:" <> bad,
+                   %{"persona_id" => "default"}
                  )
       end
     end
@@ -131,7 +171,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                |> socket(nil, %{})
                |> subscribe_and_join(
                  KaoiroServerWeb.WrapperChannel,
-                 "wrapper:ok.id-1_2"
+                 "wrapper:ok.id-1_2",
+                 %{"persona_id" => "default"}
                )
     end
   end
@@ -287,8 +328,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         # Unique per call so the supervised ConversationStates (one instance
         # for the whole describe block) cannot leak state between tests via a
         # shared cid — that would surface as a false participants_mismatch.
-        "conversation_id" =>
-          opts[:cid] || "cnv-#{System.unique_integer([:positive])}",
+        "conversation_id" => opts[:cid] || "cnv-#{System.unique_integer([:positive])}",
         "turn_number" => opts[:turn] || 1,
         "kind" => opts[:kind] || "inform",
         "body" => opts[:body] || "hi",
@@ -337,6 +377,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         event: "envelope",
         payload: ^env
       }
+
       # inter_agent_message は state_change ではないので AgentStates の latest
       # 状態(state)を上書きしない。
       assert AgentStates.snapshot()[from_id]["state"] == "idle"
@@ -581,6 +622,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok, %{"agents" => agents}
 
       entry = Enum.find(agents, fn a -> a["agent_id"] == peer_id end)
+
       assert entry["persona"] == %{
                "id" => "kuroe",
                "name" => "クロエ",

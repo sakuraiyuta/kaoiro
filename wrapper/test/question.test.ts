@@ -10,6 +10,7 @@ import type {
 const config: WrapperConfig = {
   agent_id: "test.q",
   persona: { id: "ao", name: "あお", sprite_set: "ao" },
+  server_url: "ws://localhost:4000/wrapper",
 };
 
 const questions: Question[] = [

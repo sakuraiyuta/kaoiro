@@ -1,7 +1,7 @@
 ---
 title: persona pack (zip) スキーマ
 description: サーバ集約型ペルソナ配布 (ADR-0029) の配布単位 zip 「persona pack」の内部構造と manifest.json スキーマ。
-status: provisional
+status: accepted
 related: [personas, persona-personality-injection, protocol]
 ---
 

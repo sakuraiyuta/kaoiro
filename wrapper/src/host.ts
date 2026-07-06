@@ -143,10 +143,11 @@ export interface AgentHostOptions {
   queryOptions?: Partial<Options>;
   /**
    * Persona personality prompt appended to the SDK systemPrompt via the
-   * preset's `append` field (persona-personality-injection spec / ADR-0026).
-   * Composed by cli.ts from the resolved persona.personality_prompt_file and
-   * the common footer; the host just threads it into the SDK options.
-   * Omitted = no `append` field is emitted, matching pre-#63 behaviour.
+   * preset's `append` field (persona-personality-injection spec /
+   * ADR-0029). Composed server-side (personality + common footer) and
+   * delivered over the WS handshake; cli.ts awaits it and threads it in
+   * here. Omitted = no `append` field is emitted (defensive default;
+   * production always supplies it).
    */
   appendSystemPrompt?: string;
   /** SDK query() factory; injectable for tests. Defaults to the real SDK. */
@@ -262,14 +263,7 @@ export class AgentHost {
   } {
     const out: ReturnType<AgentHost["statusSnapshot"]> = {
       agent_id: this.#config.agent_id,
-      // Explicit pick: TS erases the narrower shape at runtime, so an
-      // unfiltered `this.#config.persona` would leak personality_prompt_file
-      // / language into wire callers (ADR-0026 "Envelope 非露出").
-      persona: {
-        id: this.#config.persona.id,
-        name: this.#config.persona.name,
-        sprite_set: this.#config.persona.sprite_set,
-      },
+      persona: this.#config.persona,
       state: this.#machine.state,
     };
     if (this.#model !== null) out.model = this.#model;

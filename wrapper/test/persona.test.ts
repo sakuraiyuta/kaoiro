@@ -4,6 +4,7 @@ import { ConfigError, parseConfig } from "../src/persona.js";
 const valid = {
   agent_id: "lab-pc-1.claude-a",
   persona: { id: "mio", name: "澪", sprite_set: "mio" },
+  server_url: "ws://localhost:4000/wrapper",
 };
 
 describe("parseConfig", () => {
@@ -51,7 +52,9 @@ describe("parseConfig", () => {
   });
 
   it("persona 欠落を弾く", () => {
-    expect(() => parseConfig({ agent_id: "x" })).toThrow(ConfigError);
+    expect(() => parseConfig({ agent_id: "x", server_url: valid.server_url })).toThrow(
+      ConfigError,
+    );
   });
 
   it("persona の必須フィールド欠落を弾く", () => {
@@ -60,11 +63,9 @@ describe("parseConfig", () => {
     ).toThrow(ConfigError);
   });
 
-  it("persona.id の path traversal / 不正文字を弾く (ADR-0026 F2)", () => {
-    // persona.id is used as a path segment in resolvePersonaAppend's default
-    // branch (`<root>/personas/<id>.md`). AGENT_ID_PATTERN blocks '/' and
-    // '\\' — the characters that would let a server-pushed persona.id
-    // escape the personas/ tree.
+  it("persona.id の path traversal / 不正文字を弾く (ADR-0029)", () => {
+    // persona.id rides join params and the sprite URL path; the charset
+    // guard blocks '/' and '\\' so a malformed value cannot escape either.
     for (const bad of ["../etc", "a/b", "a\\b", "/abs", "日本語", "a:b"]) {
       expect(() =>
         parseConfig({
@@ -75,60 +76,15 @@ describe("parseConfig", () => {
     }
   });
 
-  describe("persona.personality_prompt_file (ADR-0026)", () => {
-    it("非空文字列を受け入れる", () => {
-      const cfg = {
-        ...valid,
-        persona: { ...valid.persona, personality_prompt_file: "./mio.md" },
-      };
-      expect(parseConfig(cfg)).toMatchObject({
-        persona: { personality_prompt_file: "./mio.md" },
-      });
-    });
-
-    it("空文字・非文字列は ConfigError", () => {
-      for (const bad of ["", "  ", 1, null, {}]) {
-        expect(() =>
-          parseConfig({
-            ...valid,
-            persona: { ...valid.persona, personality_prompt_file: bad },
-          }),
-        ).toThrow(ConfigError);
-      }
-    });
-  });
-
-  describe("persona.language (ADR-0026)", () => {
-    it("非空文字列を受け入れる", () => {
-      const cfg = {
-        ...valid,
-        persona: { ...valid.persona, language: "ja" },
-      };
-      expect(parseConfig(cfg)).toMatchObject({
-        persona: { language: "ja" },
-      });
-    });
-
-    it("空文字・非文字列は ConfigError", () => {
-      for (const bad of ["", "  ", 1, null, {}]) {
-        expect(() =>
-          parseConfig({
-            ...valid,
-            persona: { ...valid.persona, language: bad },
-          }),
-        ).toThrow(ConfigError);
-      }
-    });
-  });
-
   it("オブジェクト以外を弾く", () => {
     expect(() => parseConfig(null)).toThrow(ConfigError);
     expect(() => parseConfig("nope")).toThrow(ConfigError);
   });
 
-  it("server_url を受け入れる(任意フィールド)", () => {
-    const withUrl = { ...valid, server_url: "ws://localhost:4000/wrapper" };
-    expect(parseConfig(withUrl)).toEqual(withUrl);
+  it("server_url 欠落は弾く (ADR-0029 F3 fail-closed)", () => {
+    const { server_url: _omit, ...rest } = valid;
+    void _omit;
+    expect(() => parseConfig(rest)).toThrow(ConfigError);
   });
 
   it("ws:// / wss:// 以外の server_url を弾く", () => {

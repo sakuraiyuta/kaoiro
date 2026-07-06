@@ -66,7 +66,7 @@ describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => 
 
   it("attach_open は payload を onAttachOpen に渡す", () => {
     const seen: unknown[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onAttachOpen: (msg) => seen.push(msg),
     });
     emit("attach_open", {
@@ -89,7 +89,7 @@ describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => 
 
   it("attach_open の必須フィールド欠落は無視", () => {
     const seen: unknown[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onAttachOpen: (msg) => seen.push(msg),
     });
     emit("attach_open", { upload_id: "u1" }); // missing fields
@@ -98,7 +98,7 @@ describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => 
 
   it("attach_chunk は ArrayBuffer をそのまま渡す", () => {
     const seen: unknown[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onAttachChunk: (p) => seen.push(p),
     });
     const buf = new ArrayBuffer(4);
@@ -108,7 +108,7 @@ describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => 
 
   it("attach_chunk は ArrayBufferView も透過する(Node ws)", () => {
     const seen: unknown[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onAttachChunk: (p) => seen.push(p),
     });
     const view = new Uint8Array([1, 2, 3]);
@@ -118,7 +118,7 @@ describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => 
 
   it("attach_chunk が JSON のときはドロップ", () => {
     const seen: unknown[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onAttachChunk: (p) => seen.push(p),
     });
     emit("attach_chunk", { not: "binary" });
@@ -127,7 +127,7 @@ describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => 
 
   it("attach_close は upload_id を onAttachClose に渡す", () => {
     const seen: string[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onAttachClose: (id) => seen.push(id),
     });
     emit("attach_close", { upload_id: "u1" });
@@ -136,7 +136,7 @@ describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => 
 
   it("instruction の attachment_ids を onInstruction に渡す", () => {
     const seen: Array<{ text: string; ids?: string[] }> = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onInstruction: (text, ids) =>
         seen.push(ids === undefined ? { text } : { text, ids }),
     });
@@ -146,7 +146,7 @@ describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => 
 
   it("instruction の attachment_ids が空 / 非配列なら undefined", () => {
     const seen: Array<{ text: string; ids?: string[] }> = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onInstruction: (text, ids) =>
         seen.push(ids === undefined ? { text } : { text, ids }),
     });
@@ -158,7 +158,7 @@ describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => 
 
   it("instruction の attachment_ids 内の非文字列は除外する", () => {
     const seen: Array<{ text: string; ids?: string[] }> = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onInstruction: (text, ids) =>
         seen.push(ids === undefined ? { text } : { text, ids }),
     });
@@ -172,7 +172,7 @@ describe("ServerLink — set_model / set_effort 制御 (#54)", () => {
 
   it("set_model は payload.model を onSetModel へ渡す", () => {
     const seen: string[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onSetModel: (value) => seen.push(value),
     });
     emit("set_model", { model: "opus[1m]" });
@@ -181,7 +181,7 @@ describe("ServerLink — set_model / set_effort 制御 (#54)", () => {
 
   it("set_effort は payload.effort を onSetEffort へ渡す", () => {
     const seen: string[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onSetEffort: (level) => seen.push(level),
     });
     emit("set_effort", { effort: "max" });
@@ -191,7 +191,7 @@ describe("ServerLink — set_model / set_effort 制御 (#54)", () => {
   it("誤フィールド / 非文字列の payload は無視する", () => {
     const model: string[] = [];
     const effort: string[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onSetModel: (value) => model.push(value),
       onSetEffort: (level) => effort.push(level),
     });
@@ -208,7 +208,7 @@ describe("ServerLink — inter_agent_message inbound (protocol-inter-agent, phas
 
   it("type=inter_agent_message の envelope を onInterAgentMessage に渡す", () => {
     const seen: unknown[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onInterAgentMessage: (env) => seen.push(env),
     });
     const env = {
@@ -222,7 +222,7 @@ describe("ServerLink — inter_agent_message inbound (protocol-inter-agent, phas
 
   it("type 違いの envelope は無視する (state_change など)", () => {
     const seen: unknown[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onInterAgentMessage: (env) => seen.push(env),
     });
     emit("envelope", { type: "state_change", agent_id: "a.agent" });
@@ -238,7 +238,7 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
   });
 
   it("directory_request の reply から agents 配列を返す", async () => {
-    const link = new ServerLink("ws://x/wrapper", "a.agent");
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     const pending = link.requestDirectory();
 
     expect(mock.lastPush?.event).toBe("directory_request");
@@ -262,21 +262,21 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
   });
 
   it("agents が無い reply でも空配列で resolve する", async () => {
-    const link = new ServerLink("ws://x/wrapper", "a.agent");
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     const pending = link.requestDirectory();
     mock.lastPush!.receivers.get("ok")!({});
     expect(await pending).toEqual([]);
   });
 
   it("error reply は reject する", async () => {
-    const link = new ServerLink("ws://x/wrapper", "a.agent");
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     const pending = link.requestDirectory();
     mock.lastPush!.receivers.get("error")!({ reason: "forbidden" });
     await expect(pending).rejects.toThrow(/directory_request failed/);
   });
 
   it("timeout は reject する", async () => {
-    const link = new ServerLink("ws://x/wrapper", "a.agent");
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     const pending = link.requestDirectory();
     mock.lastPush!.receivers.get("timeout")!(undefined);
     await expect(pending).rejects.toThrow(/directory_request timeout/);
@@ -288,7 +288,7 @@ describe("ServerLink — question_response (ADR-0027)", () => {
 
   it("answers を onQuestionResponse へ渡す", () => {
     const seen: unknown[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onQuestionResponse: (r) => seen.push(r),
     });
     emit("question_response", {
@@ -300,7 +300,7 @@ describe("ServerLink — question_response (ADR-0027)", () => {
 
   it("cancelled を伝える", () => {
     const seen: unknown[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onQuestionResponse: (r) => seen.push(r),
     });
     emit("question_response", { request_id: "q-2", answers: {}, cancelled: true });
@@ -311,7 +311,7 @@ describe("ServerLink — question_response (ADR-0027)", () => {
 
   it("request_id 欠落 / answers 非オブジェクトは頑健に扱う", () => {
     const seen: unknown[] = [];
-    new ServerLink("ws://x/wrapper", "a.agent", {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       onQuestionResponse: (r) => seen.push(r),
     });
     emit("question_response", { answers: {} }); // no request_id -> dropped

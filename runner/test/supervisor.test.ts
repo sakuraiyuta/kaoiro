@@ -60,9 +60,7 @@ function harness(
   const sup = new Supervisor({
     hostId: "lab-pc-1",
     cwdAllowlist: opts.cwdAllowlist ?? allowlist,
-    ...(opts.wrapperServerUrl === undefined
-      ? {}
-      : { wrapperServerUrl: opts.wrapperServerUrl }),
+    wrapperServerUrl: opts.wrapperServerUrl ?? "ws://localhost:4000/wrapper",
     launch: (_agentId, config, _cwd, resumeSessionId, initialPrompt) => {
       configs.push(config);
       resumes.push(resumeSessionId);
@@ -117,7 +115,11 @@ describe("parseSpawn / resolveWrapperConfig", () => {
   });
   it("wrapper config に server_token を載せ allowed_tools は載せない", () => {
     const parsed = parseSpawn(spawnMsg)!;
-    const config = resolveWrapperConfig("lab-pc-1.claude-a", parsed);
+    const config = resolveWrapperConfig(
+      "lab-pc-1.claude-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+    );
     expect(config).toEqual({
       agent_id: "lab-pc-1.claude-a",
       persona: spawnMsg.persona,
@@ -210,6 +212,7 @@ describe("Supervisor.handleSpawn", () => {
     const sup = new Supervisor({
       hostId: "lab-pc-1",
       cwdAllowlist: allowlist,
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
       launch: () => {
         calls += 1;
         throw new Error("boom");
@@ -269,6 +272,7 @@ describe("Supervisor resume (T3 / F4)", () => {
     const sup = new Supervisor({
       hostId: "lab-pc-1",
       cwdAllowlist: allowlist,
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
       launch: () => {
         calls += 1;
         if (calls === 1) {
@@ -446,6 +450,7 @@ describe("Supervisor.handleSwitchSession", () => {
     const sup = new Supervisor({
       hostId: "lab-pc-1",
       cwdAllowlist: allowlist,
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
       launch: () => {
         const child = new FakeChild();
         children.push(child);

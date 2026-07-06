@@ -1,0 +1,12 @@
+{
+  "id": "momo",
+  "name": "もも",
+  "sprite_set": "momo",
+  "version": "1.0.0",
+  "license": "CC-BY-4.0",
+  "min_kaoiro_version": "0.1.0",
+  "states": ["idle", "thinking", "tool_running", "waiting_input",
+             "waiting_permission", "done", "error"],
+  "description": "明るく元気なムードメーカー型ペルソナ",
+  "author": "sakurai.yuta@gmail.com"
+}

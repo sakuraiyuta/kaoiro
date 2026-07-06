@@ -1,26 +1,11 @@
-// Loading and validation of the wrapper init config (protocol.md "identity and
-// persona"). agent_id is a stable id; volatile runtime-generated ids are not
-// used.
+// Loading and validation of the wrapper init config (protocol.md "identity
+// and persona"). Under the server-集約 SoT model (ADR-0029), the wrapper
+// no longer loads any personality Markdown; the ready-to-inject prompt is
+// delivered by the server over the WS handshake and consumed as-is
+// (persona-personality-injection spec, protocol.md「人格プロンプト配送」).
 
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import type { PermissionMode, WrapperConfig } from "./types.js";
-
-/** Common footer appended after every persona's personality prompt.
- *  Provisional hard-code per persona-common-footer open-question
- *  (暫定方針 B). Structured composition is deferred to phase-1. */
-const COMMON_FOOTER =
-  "このエージェントは kaoiro クライアント越しに操作されています。";
-
-/** Wrapper package root (directory containing `package.json`). Used as the
- *  base for default personality file resolution (`<root>/personas/<id>.md`).
- *  Compiled `dist/persona.js` and dev-mode `src/persona.ts` both sit one
- *  level under the package root, so `..` finds it from either entry. */
-const WRAPPER_PACKAGE_ROOT = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-);
 
 // The protocol package is types-only (no runtime exports), so the closed
 // enum's value list is duplicated here. Keep in sync with the PermissionMode
@@ -85,11 +70,9 @@ export function parseConfig(raw: unknown): WrapperConfig {
     throw new ConfigError("persona must be an object");
   }
   const personaId = nonEmptyString(raw.persona.id, "persona.id");
-  // persona.id is used as a filesystem path segment when resolving the
-  // default personality file (`<wrapper-root>/personas/<id>.md`), so the
-  // same charset restriction as agent_id keeps a malicious server-pushed
-  // spawn from steering resolvePersonaAppend outside the personas/ tree
-  // (persona-personality-injection MUST NOT / ADR-0026).
+  // persona.id rides the join params and the sprite URL path; the same
+  // charset restriction as agent_id keeps a malformed value out of both
+  // (ADR-0029 F3, protocol.md「人格プロンプト配送」).
   if (!AGENT_ID_PATTERN.test(personaId)) {
     throw new ConfigError(
       "persona.id must contain only letters, digits, '.', '_' or '-'",
@@ -100,25 +83,17 @@ export function parseConfig(raw: unknown): WrapperConfig {
     name: nonEmptyString(raw.persona.name, "persona.name"),
     sprite_set: nonEmptyString(raw.persona.sprite_set, "persona.sprite_set"),
   };
-  if (raw.persona.personality_prompt_file !== undefined) {
-    persona.personality_prompt_file = nonEmptyString(
-      raw.persona.personality_prompt_file,
-      "persona.personality_prompt_file",
-    );
-  }
-  if (raw.persona.language !== undefined) {
-    persona.language = nonEmptyString(raw.persona.language, "persona.language");
+
+  // server_url is required under the fail-closed server-集約 SoT model
+  // (ADR-0029 F3 / F10): the wrapper cannot open its SDK session without
+  // the server-pushed personality prompt, so a config without server_url
+  // could never spawn.
+  const server_url = nonEmptyString(raw.server_url, "server_url");
+  if (!server_url.startsWith("ws://") && !server_url.startsWith("wss://")) {
+    throw new ConfigError("server_url must start with ws:// or wss://");
   }
 
-  const config: WrapperConfig = { agent_id, persona };
-
-  if (raw.server_url !== undefined) {
-    const server_url = nonEmptyString(raw.server_url, "server_url");
-    if (!server_url.startsWith("ws://") && !server_url.startsWith("wss://")) {
-      throw new ConfigError("server_url must start with ws:// or wss://");
-    }
-    config.server_url = server_url;
-  }
+  const config: WrapperConfig = { agent_id, persona, server_url };
 
   if (raw.server_token !== undefined) {
     config.server_token = nonEmptyString(raw.server_token, "server_token");
@@ -199,57 +174,4 @@ export function loadConfig(path: string): WrapperConfig {
   return parseConfig(raw);
 }
 
-/**
- * Resolves the personality Markdown file for a config and composes the
- * append string for the SDK systemPrompt (persona-personality-injection
- * spec / ADR-0026). The return value is the ready-to-append text: a
- * personality body (when a file was resolved) followed by
- * {@link COMMON_FOOTER} — the footer is always present.
- *
- * Resolution rules:
- * - explicit `persona.personality_prompt_file`: resolved from the config
- *   file's directory (or as-is if absolute). Missing = ConfigError
- *   (fail-fast, the user explicitly requested this file).
- * - unset: `<wrapper package root>/personas/<persona.id>.md`. Missing =
- *   OK (footer only). This lets the `default` persona and any not-yet-
- *   packaged persona.id boot without a file.
- *
- * @param configPath  Path to the loaded config file. Used to resolve the
- *   custom `personality_prompt_file` relatively. Pass an absolute path in
- *   production; tests may pass any path since the resolution never falls
- *   back to CWD.
- */
-export function resolvePersonaAppend(
-  config: WrapperConfig,
-  configPath: string,
-  options: { packageRoot?: string } = {},
-): string {
-  const packageRoot = options.packageRoot ?? WRAPPER_PACKAGE_ROOT;
-  const custom = config.persona.personality_prompt_file;
-
-  let personality = "";
-  if (custom !== undefined) {
-    const resolved = isAbsolute(custom)
-      ? custom
-      : resolve(dirname(configPath), custom);
-    try {
-      personality = readFileSync(resolved, "utf8").trim();
-    } catch (cause) {
-      throw new ConfigError(
-        `cannot read persona.personality_prompt_file: ${resolved}`,
-        { cause },
-      );
-    }
-  } else {
-    const bundled = resolve(packageRoot, "personas", `${config.persona.id}.md`);
-    if (existsSync(bundled)) {
-      personality = readFileSync(bundled, "utf8").trim();
-    }
-  }
-
-  return personality.length > 0
-    ? `${personality}\n\n${COMMON_FOOTER}`
-    : COMMON_FOOTER;
-}
-
-export { COMMON_FOOTER, ConfigError };
+export { ConfigError };

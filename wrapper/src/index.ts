@@ -24,13 +24,7 @@ export {
   stepState,
 } from "./state.js";
 export type { MachineState } from "./state.js";
-export {
-  COMMON_FOOTER,
-  ConfigError,
-  loadConfig,
-  parseConfig,
-  resolvePersonaAppend,
-} from "./persona.js";
+export { ConfigError, loadConfig, parseConfig } from "./persona.js";
 export {
   sdkMessageToCost,
   sdkMessageToEvents,

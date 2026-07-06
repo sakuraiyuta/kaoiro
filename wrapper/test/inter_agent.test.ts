@@ -20,6 +20,7 @@ function configFor(agentId: string): WrapperConfig {
   return {
     agent_id: agentId,
     persona: PERSONA,
+    server_url: "ws://localhost:4000/wrapper",
   };
 }
 

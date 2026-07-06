@@ -89,8 +89,10 @@ pids+=("$!")
 pids+=("$!")
 
 # Runner config: generate a localhost default on first run (gitignored). Edit
-# cwd_allowlist / personas to taste; sprite_set must match a served persona
-# (ao / kuroe / momo) for the dashboard to show a portrait.
+# cwd_allowlist / personas to taste; each persona.id must match one ingested
+# by the server (persona-packs/<id>/ built into server/priv/persona-packs/
+# via scripts/build-persona-pack.sh), or the wrapper join is rejected
+# (ADR-0029 F3).
 runner_config="$root/runner/runner.config.json"
 if [[ ! -f "$runner_config" ]]; then
   echo "dev: generating $runner_config (gitignored; edit to taste)"
@@ -101,7 +103,8 @@ if [[ ! -f "$runner_config" ]]; then
   "personas": [
     { "id": "ao", "name": "あお", "sprite_set": "ao" },
     { "id": "kuroe", "name": "クロエ", "sprite_set": "kuroe" },
-    { "id": "momo", "name": "もも", "sprite_set": "momo" }
+    { "id": "momo", "name": "もも", "sprite_set": "momo" },
+    { "id": "fuji", "name": "ふじ", "sprite_set": "fuji" }
   ],
   "cwd_allowlist": ["$root"],
   "capabilities": ["claude"]

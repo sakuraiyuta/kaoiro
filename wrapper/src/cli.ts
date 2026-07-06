@@ -1,11 +1,11 @@
 // Minimal demo CLI — runs an agent session and prints color-coded state
 // transitions, so you can watch the kaoiro state follow real agent behavior.
 //
-// Modes: with server_url the wrapper stays resident after the first turn
-// (Phase 3: it accepts operator instructions and relays tool-permission
-// requests to the approval UI); without it, one local turn and exit.
-// When the prompt argument is omitted and a server is configured, the
-// session starts idle and waits for the first operator instruction.
+// Under the server-集約 SoT model (ADR-0029), the wrapper is always
+// server-connected: server_url is required at config load, the SDK session
+// only opens after the server pushes the personality + common footer over
+// the handshake (fail-closed, F3), and the process stays resident to accept
+// operator instructions.
 //
 // Safety: allowedTools defaults to read-only tools; config.allowed_tools
 // raises that ceiling per wrapper (local config only). Other tools go to
@@ -26,7 +26,7 @@ import {
   formatInboundMessage,
 } from "./inter_agent.js";
 import { PermissionBroker } from "./permission.js";
-import { PERMISSION_MODES, loadConfig, resolvePersonaAppend } from "./persona.js";
+import { PERMISSION_MODES, loadConfig } from "./persona.js";
 import { QuestionBroker } from "./question.js";
 import { makeLog, makeStateChange } from "./state.js";
 import { ServerLink } from "./transport.js";
@@ -65,6 +65,11 @@ const READ_ONLY_TOOLS = new Set([
   WHOAMI_TOOL_FQN,
 ]);
 
+/** Upper bound on the wait for the server's `persona_prompt` push after
+ *  join (ADR-0029 F3, fail-closed). Long enough for a slow initial
+ *  handshake; short enough that a misconfigured server is loud. */
+const PERSONA_PROMPT_TIMEOUT_MS = 10_000;
+
 function printState(envelope: Envelope): void {
   const color = COLOR[envelope.state];
   const time = envelope.ts.slice(11, 19);
@@ -93,23 +98,12 @@ async function main(): Promise<void> {
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseCliArgs(process.argv.slice(2));
   const config = loadConfig(configPath);
-  // Persona personality is appended to the SDK's Claude Code preset via
-  // `systemPrompt.append` (ADR-0026). Resolved once at startup — mid-session
-  // flip is intentionally not supported.
-  const appendSystemPrompt = resolvePersonaAppend(config, configPath);
 
-  // Resident when server-connected: the session stays open for operator
-  // instructions instead of ending after the first turn.
-  const persistent = Boolean(config.server_url);
-
-  // No prompt argument: server-connected wrappers start idle and wait
-  // for the first instruction; local-only runs keep the demo prompt
-  // (no instruction channel exists to start a turn otherwise).
-  const prompt =
-    promptArg ??
-    (persistent
-      ? undefined
-      : "src/state.ts を読んで、状態機械の状態名を日本語で列挙して。書き込みは不要。");
+  // No prompt argument: server-connected wrappers start idle and wait for
+  // the first operator instruction. A prompt argument still works for
+  // one-off dogfooding but the process remains resident (server-connected
+  // wrappers never fall back to local 1-shot mode under ADR-0029 F10).
+  const prompt = promptArg;
 
   let host: AgentHost;
   let link: ServerLink | null = null;
@@ -125,7 +119,6 @@ async function main(): Promise<void> {
   const onState = (envelope: Envelope): void => {
     printState(envelope);
     link?.send(envelope);
-    if (!persistent && envelope.state === "waiting_input") host.close();
   };
 
   const onLog = (envelope: Envelope): void => {
@@ -133,136 +126,178 @@ async function main(): Promise<void> {
     link?.send(envelope);
   };
 
-  if (config.server_url) {
-    broker = new PermissionBroker({
-      config,
-      send: (envelope) => link?.send(envelope),
-      // Stamp ext.pending_permission onto the host so the next
-      // state_change envelope carries it (ADR-0022). Captured-by-closure
-      // host is assigned just below, before any tool ever fires.
-      onPendingChange: (pending) => host?.setPendingPermission(pending),
-    });
-    questionBroker = new QuestionBroker({
-      config,
-      send: (envelope) => link?.send(envelope),
-      // Question twin of the broker above: stamp ext.pending_question so the
-      // waiting_question state_change carries it (ADR-0027).
-      onPendingChange: (pending) => host?.setPendingQuestion(pending),
-    });
-    interAgent = new InterAgentTool({
-      config,
-      getState: () => host.state,
-      send: (envelope) => link?.send(envelope),
-      // Wired below once host + link are constructed; until then the tools
-      // return error/fallback results, which is correct because the SDK
-      // session has not opened yet either.
-      requestDirectory: () => link?.requestDirectory() ?? Promise.resolve([]),
-      getWhoami: () => host.statusSnapshot(),
-    });
-    link = new ServerLink(config.server_url, config.agent_id, {
-      ...(config.server_token === undefined
-        ? {}
-        : { token: config.server_token }),
-      onInstruction: (text, attachmentIds) => {
-        const tag = attachmentIds && attachmentIds.length > 0
-          ? `instruction(+${attachmentIds.length})`
-          : "instruction";
-        process.stdout.write(`  ${tag}: ${text}\n`);
-        // Echo the operator's instruction into the reply transcript (#31)
-        // before queueing it: a user-kind log rides the same operator-only,
-        // history-backed path as the agent's replies. Emitted first so it
-        // precedes the response it triggers.
-        onLog(
-          makeLog(config, host.state, new Date().toISOString(), {
-            kind: "user",
-            text,
-          }),
-        );
-        // Serialise async sends so render cost (PDF fit, etc.) cannot
-        // reorder instructions on the SDK queue. swallow per-call failures
-        // so one bad turn does not break the chain.
-        instructionChain = instructionChain.then(() =>
-          host.send(text, attachmentIds).catch((err: unknown) => {
-            process.stderr.write(`send failed: ${String(err)}\n`);
-          }),
-        );
-      },
-      onPermissionDecision: (decision) => broker?.resolve(decision),
-      onQuestionResponse: (response) => questionBroker?.resolve(response),
-      onInterrupt: () => {
-        // protocol.md (#51): graceful stop of the current turn. SDK returns
-        // an `error_*` SDKResultMessage which the adapter folds into the
-        // existing error -> waiting_input path; no extra state to emit.
-        process.stdout.write("  interrupt\n");
-        void host.interrupt().catch(() => {});
-      },
-      onSetModel: (value) => {
-        // protocol.md (#54): apply the operator's model choice to subsequent
-        // turns; a bad alias surfaces as a rejected control request, swallowed
-        // like the other best-effort controls.
-        process.stdout.write(`  set_model: ${value}\n`);
-        void host.setModel(value).catch(() => {});
-      },
-      onSetEffort: (level) => {
-        process.stdout.write(`  set_effort: ${level}\n`);
-        void host.setEffort(level).catch(() => {});
-      },
-      onSetPermissionMode: (mode) => {
-        // protocol.md (#58): operator pick OR server after-join push of the
-        // last persisted choice. Validate against the closed enum so a
-        // malformed server payload never reaches the SDK; setPermissionMode
-        // swallows SDK errors (e.g. bypass requested when the session was
-        // not opened with allowDangerouslySkipPermissions) like the other
-        // controls.
-        if (!(PERMISSION_MODES as readonly string[]).includes(mode)) {
-          process.stdout.write(
-            `  set_permission_mode: ignored unknown value '${mode}'\n`,
-          );
-          return;
-        }
-        process.stdout.write(`  set_permission_mode: ${mode}\n`);
-        void host.setPermissionMode(mode as PermissionMode).catch(() => {});
-      },
-      // File-upload wire (file-upload spec / ADR-0025). attach_* events
-      // feed pending_uploads on the host; the host's validation emits
-      // attach_rejected / instruction_rejected straight back to the server.
-      onAttachOpen: (msg) => {
+  // Await the server-pushed personality + common footer (ADR-0029 F5)
+  // before opening the SDK session. Fail-closed on no push within the
+  // timeout window (F3, F10).
+  let resolvePersonaPrompt!: (prompt: string) => void;
+  let rejectPersonaPrompt!: (reason: Error) => void;
+  const personaPromptPromise = new Promise<string>((resolve, reject) => {
+    resolvePersonaPrompt = resolve;
+    rejectPersonaPrompt = reject;
+  });
+
+  broker = new PermissionBroker({
+    config,
+    send: (envelope) => link?.send(envelope),
+    // Stamp ext.pending_permission onto the host so the next
+    // state_change envelope carries it (ADR-0022). Captured-by-closure
+    // host is assigned just below, before any tool ever fires.
+    onPendingChange: (pending) => host?.setPendingPermission(pending),
+  });
+  questionBroker = new QuestionBroker({
+    config,
+    send: (envelope) => link?.send(envelope),
+    // Question twin of the broker above: stamp ext.pending_question so the
+    // waiting_question state_change carries it (ADR-0027).
+    onPendingChange: (pending) => host?.setPendingQuestion(pending),
+  });
+  interAgent = new InterAgentTool({
+    config,
+    getState: () => host.state,
+    send: (envelope) => link?.send(envelope),
+    // Wired below once host + link are constructed; until then the tools
+    // return error/fallback results, which is correct because the SDK
+    // session has not opened yet either.
+    requestDirectory: () => link?.requestDirectory() ?? Promise.resolve([]),
+    getWhoami: () => host.statusSnapshot(),
+  });
+  link = new ServerLink(config.server_url, config.agent_id, {
+    personaId: config.persona.id,
+    ...(config.server_token === undefined
+      ? {}
+      : { token: config.server_token }),
+    onPersonaPrompt: (received) => resolvePersonaPrompt(received),
+    onInstruction: (text, attachmentIds) => {
+      const tag = attachmentIds && attachmentIds.length > 0
+        ? `instruction(+${attachmentIds.length})`
+        : "instruction";
+      process.stdout.write(`  ${tag}: ${text}\n`);
+      // Echo the operator's instruction into the reply transcript (#31)
+      // before queueing it: a user-kind log rides the same operator-only,
+      // history-backed path as the agent's replies. Emitted first so it
+      // precedes the response it triggers.
+      onLog(
+        makeLog(config, host.state, new Date().toISOString(), {
+          kind: "user",
+          text,
+        }),
+      );
+      // Serialise async sends so render cost (PDF fit, etc.) cannot
+      // reorder instructions on the SDK queue. swallow per-call failures
+      // so one bad turn does not break the chain.
+      instructionChain = instructionChain.then(() =>
+        host.send(text, attachmentIds).catch((err: unknown) => {
+          process.stderr.write(`send failed: ${String(err)}\n`);
+        }),
+      );
+    },
+    onPermissionDecision: (decision) => broker?.resolve(decision),
+    onQuestionResponse: (response) => questionBroker?.resolve(response),
+    onInterrupt: () => {
+      // protocol.md (#51): graceful stop of the current turn. SDK returns
+      // an `error_*` SDKResultMessage which the adapter folds into the
+      // existing error -> waiting_input path; no extra state to emit.
+      process.stdout.write("  interrupt\n");
+      void host.interrupt().catch(() => {});
+    },
+    onSetModel: (value) => {
+      // protocol.md (#54): apply the operator's model choice to subsequent
+      // turns; a bad alias surfaces as a rejected control request, swallowed
+      // like the other best-effort controls.
+      process.stdout.write(`  set_model: ${value}\n`);
+      void host.setModel(value).catch(() => {});
+    },
+    onSetEffort: (level) => {
+      process.stdout.write(`  set_effort: ${level}\n`);
+      void host.setEffort(level).catch(() => {});
+    },
+    onSetPermissionMode: (mode) => {
+      // protocol.md (#58): operator pick OR server after-join push of the
+      // last persisted choice. Validate against the closed enum so a
+      // malformed server payload never reaches the SDK; setPermissionMode
+      // swallows SDK errors (e.g. bypass requested when the session was
+      // not opened with allowDangerouslySkipPermissions) like the other
+      // controls.
+      if (!(PERMISSION_MODES as readonly string[]).includes(mode)) {
         process.stdout.write(
-          `  attach_open: ${msg.upload_id} (${msg.mime}, ${msg.size}B, ${msg.chunks} chunks)\n`,
+          `  set_permission_mode: ignored unknown value '${mode}'\n`,
         );
-        host.attachOpen(msg);
-      },
-      onAttachChunk: (payload) => host.attachChunk(payload),
-      onAttachClose: (uploadId) => {
-        process.stdout.write(`  attach_close: ${uploadId}\n`);
-        host.attachClose(uploadId);
-      },
-      onInterAgentMessage: (envelope) => {
-        // Server routed an inter_agent_message to this wrapper (peer reply or
-        // synthesized escalate-to-user). Track the inbound turn_number so our
-        // next outbound send_to_agent stays monotonic, then inject the
-        // formatted text as a new SDK turn (protocol-inter-agent spec
-        // 「受信側の挙動」). The host serialises through instructionChain so a
-        // mid-PDF render cannot reorder this against an operator instruction.
-        const payload = envelope.payload as Partial<InterAgentMessagePayload>;
-        if (
-          typeof payload.conversation_id === "string" &&
-          typeof payload.turn_number === "number"
-        ) {
-          interAgent?.observeInbound(
-            payload.conversation_id,
-            payload.turn_number,
-          );
-        }
-        const text = formatInboundMessage(envelope);
-        process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
-        instructionChain = instructionChain.then(() =>
-          host.send(text).catch((err: unknown) => {
-            process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
-          }),
+        return;
+      }
+      process.stdout.write(`  set_permission_mode: ${mode}\n`);
+      void host.setPermissionMode(mode as PermissionMode).catch(() => {});
+    },
+    // File-upload wire (file-upload spec / ADR-0025). attach_* events
+    // feed pending_uploads on the host; the host's validation emits
+    // attach_rejected / instruction_rejected straight back to the server.
+    onAttachOpen: (msg) => {
+      process.stdout.write(
+        `  attach_open: ${msg.upload_id} (${msg.mime}, ${msg.size}B, ${msg.chunks} chunks)\n`,
+      );
+      host.attachOpen(msg);
+    },
+    onAttachChunk: (payload) => host.attachChunk(payload),
+    onAttachClose: (uploadId) => {
+      process.stdout.write(`  attach_close: ${uploadId}\n`);
+      host.attachClose(uploadId);
+    },
+    onInterAgentMessage: (envelope) => {
+      // Server routed an inter_agent_message to this wrapper (peer reply or
+      // synthesized escalate-to-user). Track the inbound turn_number so our
+      // next outbound send_to_agent stays monotonic, then inject the
+      // formatted text as a new SDK turn (protocol-inter-agent spec
+      // 「受信側の挙動」). The host serialises through instructionChain so a
+      // mid-PDF render cannot reorder this against an operator instruction.
+      const payload = envelope.payload as Partial<InterAgentMessagePayload>;
+      if (
+        typeof payload.conversation_id === "string" &&
+        typeof payload.turn_number === "number"
+      ) {
+        interAgent?.observeInbound(
+          payload.conversation_id,
+          payload.turn_number,
         );
-      },
-    });
+      }
+      const text = formatInboundMessage(envelope);
+      process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
+      instructionChain = instructionChain.then(() =>
+        host.send(text).catch((err: unknown) => {
+          process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
+        }),
+      );
+    },
+  });
+
+  // fail-closed: the wrapper cannot open its SDK session without the
+  // server-pushed personality prompt. A timeout here is loud on purpose so
+  // a missing / misconfigured server does not silently boot with the SDK's
+  // default persona (ADR-0029 F3).
+  const timeoutHandle = setTimeout(() => {
+    rejectPersonaPrompt(
+      new Error(
+        `timed out waiting for persona_prompt from ${config.server_url} ` +
+          `after ${PERSONA_PROMPT_TIMEOUT_MS}ms (ADR-0029 fail-closed)`,
+      ),
+    );
+  }, PERSONA_PROMPT_TIMEOUT_MS);
+
+  let appendSystemPrompt: string;
+  try {
+    appendSystemPrompt = await personaPromptPromise;
+  } catch (err) {
+    // Cleanup path (ADR-0029 F3 fail-loud): the SDK session never opened,
+    // so the outer try/finally around `host.run` (which normally owns
+    // link/broker teardown) is unreachable. The ServerLink's Phoenix
+    // Socket is already connected here (heartbeat/reconnect timers
+    // active, not `.unref()`'d), so without an explicit close the
+    // process would hang instead of exiting loudly. Close everything
+    // we constructed, then rethrow so main().catch surfaces the error.
+    link?.close();
+    broker?.close();
+    questionBroker?.close();
+    throw err;
+  } finally {
+    clearTimeout(timeoutHandle);
   }
 
   host = new AgentHost(config, {
@@ -274,21 +309,10 @@ async function main(): Promise<void> {
     onAttachRejected: (envelope) => link?.send(envelope),
     onInstructionRejected: (envelope) => link?.send(envelope),
     onSessionId: (id) => link?.setSessionId(id),
-    decidePermission: (toolName, input) => {
-      if (broker) return broker.decide(toolName, input);
-      const allow = READ_ONLY_TOOLS.has(toolName);
-      process.stdout.write(
-        `  permission: ${toolName} -> ${allow ? "allow" : "deny"}\n`,
-      );
-      return allow
-        ? { allow: true }
-        : { allow: false, message: "demo: only read-only tools are allowed" };
-    },
-    // AskUserQuestion path (ADR-0027): route to the question broker when
-    // server-connected; without one (local/demo), cancel so the SDK denies
-    // rather than hang on an answer nothing can supply.
-    decideQuestion: (questions) =>
-      questionBroker ? questionBroker.decide(questions) : { cancelled: true },
+    decidePermission: (toolName, input) => broker!.decide(toolName, input),
+    // AskUserQuestion path (ADR-0027): server-connected wrappers always
+    // have a question broker, so route through it directly.
+    decideQuestion: (questions) => questionBroker!.decide(questions),
     queryOptions: {
       tools: { type: "preset", preset: "claude_code" },
       allowedTools: config.allowed_tools ?? [...READ_ONLY_TOOLS],
@@ -301,14 +325,12 @@ async function main(): Promise<void> {
       ...(process.env.KAOIRO_WRAPPER_DEFAULT_MODEL
         ? { model: process.env.KAOIRO_WRAPPER_DEFAULT_MODEL }
         : {}),
-      // Register the kaoiro in-process MCP server when the wrapper is
-      // server-connected (Phase 8). send_to_agent surfaces as
+      // The kaoiro in-process MCP server is always registered under the
+      // server-connected model (phase-8). send_to_agent surfaces as
       // mcp__kaoiro__send_to_agent and is NOT in the read-only default
       // allowedTools, so canUseTool fires and the broker runs the
       // per-call operator dialog (Phase 1 都度承認).
-      ...(interAgent !== null
-        ? { mcpServers: { kaoiro: interAgent.build() } }
-        : {}),
+      mcpServers: { kaoiro: interAgent!.build() },
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
   });
@@ -335,7 +357,7 @@ async function main(): Promise<void> {
     // that kept the pre-crash lines for the same session must not double
     // them. setSessionId stamps the resume id so both the replayed lines and
     // the subsequent live ones group under this session.
-    if (resumeSessionId !== undefined && link) {
+    if (resumeSessionId !== undefined) {
       link.setSessionId(resumeSessionId);
       // The reset/replay need a server entry to attach to (append_log /
       // reset_history are :noop without one). The idle announce above seeds
@@ -352,12 +374,6 @@ async function main(): Promise<void> {
       // lines); then replay whatever was rebuilt.
       link.sendHistoryReset();
       for (const envelope of history) link.send(envelope);
-    } else if (resumeSessionId !== undefined) {
-      // Resume without a server link (local mode): the SDK still resumes the
-      // conversation, but there is no server display history to rebuild.
-      process.stderr.write(
-        "  resume: no server configured; display history not rebuilt\n",
-      );
     }
     await host.run(prompt);
   } finally {

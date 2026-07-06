@@ -12,6 +12,7 @@ import {
 const CONFIG = {
   agent_id: "lab-pc-1.claude-a",
   persona: { id: "mio", name: "澪", sprite_set: "mio" },
+  server_url: "ws://localhost:4000/wrapper",
 };
 
 describe("stepState", () => {
@@ -346,6 +347,7 @@ describe("makeStateChange", () => {
     const config = {
       agent_id: "lab-pc-1.claude-a",
       persona: { id: "mio", name: "澪", sprite_set: "mio" },
+      server_url: "ws://localhost:4000/wrapper",
     };
     const envelope = makeStateChange(
       config,

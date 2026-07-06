@@ -11,7 +11,8 @@ defmodule KaoiroServer.Application do
     # so the state is visible in logs (specs/threat-model.md, issue #28).
     :ok = KaoiroServer.Auth.warn_token_config()
 
-    # Warm the sprite manifest cache before the endpoint serves requests.
+    # Warm the persona pack manifest cache before the endpoint serves
+    # requests (ADR-0029). The watcher below reacts to live changes.
     :ok = KaoiroServer.PersonaAssets.rebuild()
 
     children = [
@@ -28,6 +29,9 @@ defmodule KaoiroServer.Application do
       # Per-conversation hard limits for inter-agent messaging
       # (protocol-inter-agent spec, phase-8 Stage B).
       KaoiroServer.ConversationStates,
+      # Watch persona ingest dir for zip changes and rebuild the manifest
+      # cache without restart (ADR-0029 F6).
+      KaoiroServer.PersonaWatcher,
       # Start to serve requests, typically the last entry
       KaoiroServerWeb.Endpoint
     ]

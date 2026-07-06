@@ -143,11 +143,13 @@ export interface InterAgentToolOptions {
   /** Outbound envelope sink, normally ServerLink#send. */
   send: (envelope: Envelope) => void;
   /** Peer directory provider, normally `ServerLink#requestDirectory` bound
-   *  to the wrapper's channel. Omitting it makes `list_agents` return an
-   *  error result (server not configured / local-only run). */
+   *  to the wrapper's channel. Omitting it (unit tests only — production
+   *  always supplies it under ADR-0029 F10) makes `list_agents` return
+   *  an error result. */
   requestDirectory?: () => Promise<DirectoryEntry[]>;
   /** Self-identity provider, normally `AgentHost#statusSnapshot`. Omitting
-   *  it makes `whoami` fall back to the wrapper config (no live SDK fields). */
+   *  it (unit tests only) makes `whoami` fall back to the wrapper config
+   *  (no live SDK fields). */
   getWhoami?: () => WhoamiSnapshot;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
@@ -226,20 +228,11 @@ export class InterAgentTool {
 
   /** Returns this wrapper's identity snapshot. Falls back to the wrapper
    *  config when no live host status provider is wired (e.g. early in
-   *  startup or in local-only mode). */
+   *  startup, before the SDK session opens). */
   whoami(): InterAgentToolResult {
-    const cfgPersona = this.#options.config.persona;
     const snapshot = this.#options.getWhoami?.() ?? {
       agent_id: this.#options.config.agent_id,
-      // Same wire-safety pick as host.ts#statusSnapshot — this fallback path
-      // is only hit when getWhoami is unwired (early startup / local-only),
-      // but the shape must still exclude personality_prompt_file / language
-      // (ADR-0026 "Envelope 非露出").
-      persona: {
-        id: cfgPersona.id,
-        name: cfgPersona.name,
-        sprite_set: cfgPersona.sprite_set,
-      },
+      persona: this.#options.config.persona,
       state: this.#options.getState(),
     };
     return {

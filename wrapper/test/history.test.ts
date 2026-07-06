@@ -5,6 +5,7 @@ import type { Envelope, WrapperConfig } from "../src/types.js";
 const config: WrapperConfig = {
   agent_id: "test.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
+  server_url: "ws://localhost:4000/wrapper",
 };
 
 const now = (): string => "2026-06-25T00:00:00.000Z";

@@ -23,8 +23,11 @@ end
 config :kaoiro_server, KaoiroServerWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
-# Optional sprite overlay directory (ADR-0008 stage 1); per sprite set
-# it takes precedence over the bundled pack in priv/personas.
+# Persona pack ingest directory (ADR-0029, phase-10). Server scans it
+# for `*.zip` packs, extracts into a `.cache/` subdir, and rebuilds the
+# manifest on every filesystem change. Unset falls back to
+# `priv/persona-packs/` bundled with the app dir so a fresh `mix
+# phx.server` still ships the reference 4 packs.
 config :kaoiro_server, :persona_dir, System.get_env("KAOIRO_PERSONA_DIR")
 
 # Socket auth (ADR-0011). Unset lists disable enforcement (dev mode —

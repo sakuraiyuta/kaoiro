@@ -68,8 +68,10 @@ export interface SupervisorOptions {
   cwdAllowlist: string[];
   launch: LaunchFn;
   /** Fallback wrapper socket URL used when a spawn omits server_url (案A,
-   *  ADR-0024). Derived from the runner's own server_url (config.wrapperUrlFrom). */
-  wrapperServerUrl?: string;
+   *  ADR-0024). Derived from the runner's own server_url (config.wrapperUrlFrom).
+   *  Required under ADR-0029: the wrapper's server_url is mandatory, so a
+   *  spawn without an explicit value must still get one. */
+  wrapperServerUrl: string;
   sendResult: (result: SpawnResult) => void;
   sendSessions: (sessions: RunnerSessions) => void;
   /** Injectable for tests; defaults read the local Claude JSONLs (sessions.ts). */
@@ -145,18 +147,20 @@ export function isCwdAllowed(cwd: string, allowlist: string[]): boolean {
 /** Builds the wrapper init config from a spawn. allowed_tools is intentionally
  *  NOT taken from the spawn: the tool ceiling is wrapper-local and cannot be
  *  widened from the server side (threat-model.md), so the wrapper keeps its
- *  read-only default. */
+ *  read-only default. Under ADR-0029 the wrapper's `server_url` is required,
+ *  so a spawn without it falls back to the runner's own — its absence would
+ *  otherwise leave the wrapper with no server to hand back to for the
+ *  personality push. */
 export function resolveWrapperConfig(
   agentId: string,
   parsed: ParsedSpawn,
-  fallbackServerUrl?: string,
+  fallbackServerUrl: string,
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
     persona: parsed.persona,
+    server_url: parsed.serverUrl ?? fallbackServerUrl,
   };
-  const serverUrl = parsed.serverUrl ?? fallbackServerUrl;
-  if (serverUrl !== undefined) config.server_url = serverUrl;
   if (parsed.token !== undefined) config.server_token = parsed.token;
   return config;
 }
@@ -181,7 +185,7 @@ export class Supervisor {
   readonly #listSessions: (cwd: string) => SessionMeta[];
   readonly #sessionExists: (cwd: string, sessionId: string) => boolean;
   readonly #now: () => number;
-  readonly #wrapperServerUrl: string | undefined;
+  readonly #wrapperServerUrl: string;
   readonly #children = new Map<string, ChildEntry>();
   /** session_ids currently being resumed — the F4 local lock against a second
    *  concurrent resume of the same session. */
