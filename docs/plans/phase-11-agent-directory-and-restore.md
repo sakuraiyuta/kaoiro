@@ -1,7 +1,7 @@
 ---
 title: Phase 11 — サーバ再起動越しの agent identity 永続と明示復元(一括/個別)
 description: ADR-0030 実装 phase。AgentDirectory DETS store 追加 + spawn hook + agent_persona/1 差替 + client 一覧配信 + dashboard 一括/個別復元 UI。
-status: in_progress
+status: done
 phase: 11
 depends_on: [phase-3-server-multiagent, phase-4-host-runner]
 last_updated: 2026-07-06
@@ -29,8 +29,8 @@ session_id で resume-spawn できるようにする。gap は persona の永続
 - [x] dashboard は AgentStates(live)と AgentDirectory(known)を merge し、
   offline 表示のエージェントに個別復元ボタンを、ヘッダに一括復元ボタンを
   提供する
-- [ ] server + runner 再起動 → 一括復元 → 全 agent が最後の session_id で
-  復帰する end-to-end フローが手動 dogfooding で成立
+- [x] server + runner 再起動 → 一括復元 → 全 agent が最後の session_id で
+  復帰する end-to-end フローが手動 dogfooding で成立(2026-07-06 検収)
 
 ## Tasks
 

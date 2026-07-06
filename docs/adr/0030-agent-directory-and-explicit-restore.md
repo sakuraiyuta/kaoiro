@@ -13,7 +13,7 @@ related_adrs: [12, 14, 21, 23, 24]
 
 ## Status
 
-Accepted(実装完了 2026-07-06 — phase-11 phase-0..2、手動 dogfooding 検収のみ残)
+Accepted(実装完了 2026-07-06 — phase-11 phase-0..2、手動 dogfooding 検収済)
 
 ## Context
 
