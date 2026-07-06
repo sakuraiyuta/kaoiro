@@ -24,9 +24,10 @@
 ロードマップ番号を持たない feature-local plan。対象 feature の phase-0 /
 phase-1 を plan 内の節として持つ(project の phase-N とは無関係)。
 
-| Slug | Status | 説明 |
-|------|--------|------|
-| [persona-personality-injection](persona-personality-injection.md) | ⏳ | 口調・一人称等の人格プロンプトを Claude Agent SDK に注入([ADR-0026](../adr/0026-persona-personality-injection.md)) |
+現在は登録なし(旧 `persona-personality-injection` は
+[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) で
+supersede され、以降は [phase-10-persona-server-sot](phase-10-persona-server-sot.md)
+に引き継がれた)。
 
 ## 将来
 

@@ -46,7 +46,7 @@ pnpm typecheck  # tsc --noEmit
 |---|---|---|
 | `agent_id` | ✓ | 安定 ID(再起動をまたいで同一)。文字種は `[A-Za-z0-9._-]`、1〜256 文字 |
 | `persona` | ✓ | `{ id, name, sprite_set }`。表示名・立ち絵セット |
-| `server_url` | | サーバの wrapper ソケット(例 `ws://localhost:4000/wrapper`)。省略=ローカルのみ(中継なし) |
+| `server_url` | ✓ | サーバの wrapper ソケット(例 `ws://localhost:4000/wrapper`)。ADR-0029 F3 で必須(server 集約 SoT + fail-closed) |
 | `server_token` | | wrapper 認証トークン。サーバで `KAOIRO_WRAPPER_TOKENS` を設定した時に必要(下記) |
 | `permission_timeout_ms` | | ツール許可の無応答 deny までの時間(既定 600000 = 600 秒) |
 | `allowed_tools` | | 実行可能ツールの上限(ローカル天井、サーバから拡張不可)。省略=読み取り専用 |
@@ -60,11 +60,12 @@ pnpm demo                  # = node dist/cli.js(既定 kaoiro.config.json)
 node dist/cli.js [configPath] [prompt]
 ```
 
-- **サーバ接続モード**(`server_url` 設定時): 常駐し、ダッシュボードからの
-  指示を受けてターンを回す。`prompt` 省略時は idle で起動し最初の指示を待つ。
-  ツール許可要求はダッシュボードの承認 UI に中継(無応答は既定 600 秒で deny)。
-- **ローカルモード**(`server_url` なし): 1 ターン実行して終了(`prompt`
-  省略時はデモ指示)。
+wrapper は常駐モードで動作する。起動後、server の join に成功すると
+`persona_prompt` push を待って SDK セッションを開き、以降はダッシュボード
+からの指示・承認要求を仲介する。10 秒以内に `persona_prompt` を受信できない
+場合は fail-closed でプロセスを異常終了させる(ADR-0029 F3)。`prompt` 引数
+省略時は idle で起動し最初の指示を待つ。手動起動よりも実運用では
+[runner](../runner/README.md) から spawn する経路(ADR-0023)を推奨する。
 
 ### 認証(運用時)
 
