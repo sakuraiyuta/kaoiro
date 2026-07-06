@@ -1785,6 +1785,23 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_push "hosts", %{}
     end
 
+    test "join 時 operator は directory push を受ける (ADR-0030 D4)" do
+      agent_id = "lab-pc-1.dir-push"
+      :ok = AgentDirectory.record(agent_id, @mio)
+      _ = AgentDirectory.get(agent_id)
+
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "directory", %{"entries" => entries}
+      assert %{persona: @mio} = entries[agent_id]
+    end
+
+    test "viewer は join 時に directory push を受けない (operator 限定、ADR-0030 D10)" do
+      _viewer = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+      refute_push "directory", %{}
+    end
+
     test "runner_sessions / spawn_result / hosts の live broadcast は operator に届く" do
       _operator = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}

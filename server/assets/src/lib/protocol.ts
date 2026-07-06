@@ -416,6 +416,16 @@ export interface SpawnResult {
   reason?: string;
 }
 
+/** One entry in the restart-surviving identity ledger (ADR-0030). The
+ *  server pushes this on operator join alongside the AgentStates
+ *  snapshot; the client merges it with live envelopes to render offline
+ *  agents' tiles for the restore UI. `last_seen` is memory-only on the
+ *  server and resets to null on server restart. */
+export interface DirectoryEntry {
+  persona: Persona;
+  last_seen: number | null;
+}
+
 /** A resume candidate under a cwd (ADR-0014 F2; minimal metadata, T2). */
 export interface RunnerSession {
   session_id: string;
@@ -456,6 +466,11 @@ export interface KaoiroHandlers {
    *  register/drop. Operator-only — its arrival also marks this client an
    *  operator (viewers never receive it). */
   onHosts?: (hosts: HostInfo[]) => void;
+  /** Restart-surviving identity ledger (ADR-0030); pushed once on
+   *  operator join. Every known agent_id maps to its persona and a
+   *  last_seen hint. Merged with the AgentStates snapshot on the client
+   *  to surface offline agents for the restore UI. Operator-only. */
+  onDirectory?: (entries: Record<string, DirectoryEntry>) => void;
   /** A spawn outcome forwarded from the runner (#22). Operator-only. */
   onSpawnResult?: (result: SpawnResult) => void;
   /** Resume candidates for a (host, cwd), in reply to enumerateSessions
@@ -615,6 +630,33 @@ export function parseHosts(value: unknown): HostInfo[] {
   return hosts;
 }
 
+/** Parses the `directory` map (agent_id => entry) into a
+ *  Record<string, DirectoryEntry>, skipping malformed entries. `last_seen`
+ *  is either an integer (unix seconds) or null (fresh after server restart,
+ *  ADR-0030 A5). */
+export function parseDirectory(
+  value: unknown,
+): Record<string, DirectoryEntry> {
+  const entries: Record<string, DirectoryEntry> = {};
+  if (typeof value !== "object" || value === null) return entries;
+  for (const [agentId, entry] of Object.entries(value)) {
+    if (
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as DirectoryEntry).persona === "object" &&
+      (entry as DirectoryEntry).persona !== null &&
+      typeof (entry as DirectoryEntry).persona.id === "string"
+    ) {
+      const e = entry as DirectoryEntry;
+      entries[agentId] = {
+        persona: e.persona,
+        last_seen: typeof e.last_seen === "number" ? e.last_seen : null,
+      };
+    }
+  }
+  return entries;
+}
+
 /** Parses a `sessions` array, keeping only well-typed candidates. */
 export function parseSessions(value: unknown): RunnerSession[] {
   if (!Array.isArray(value)) return [];
@@ -750,6 +792,9 @@ export function connectKaoiro(
   });
   channel.on("hosts", (payload: { hosts?: unknown }) => {
     handlers.onHosts?.(parseHosts(payload.hosts));
+  });
+  channel.on("directory", (payload: { entries?: unknown }) => {
+    handlers.onDirectory?.(parseDirectory(payload.entries));
   });
   channel.on("spawn_result", (payload: unknown) => {
     const p = payload as Partial<SpawnResult>;

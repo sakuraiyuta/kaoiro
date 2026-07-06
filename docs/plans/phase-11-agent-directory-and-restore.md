@@ -24,7 +24,7 @@ session_id で resume-spawn できるようにする。gap は persona の永続
 - [x] `agent_persona/1`
   ([agents_channel.ex](../../server/lib/kaoiro_server_web/channels/agents_channel.ex))
   が AgentDirectory を参照する。AgentStates が空でも restore 経路が成立
-- [ ] operator role の join snapshot(`agents:lobby`)に AgentDirectory の
+- [x] operator role の join snapshot(`agents:lobby`)に AgentDirectory の
   全 entry が含まれる
 - [ ] dashboard は AgentStates(live)と AgentDirectory(known)を merge し、
   offline 表示のエージェントに個別復元ボタンを、ヘッダに一括復元ボタンを
@@ -52,10 +52,10 @@ session_id で resume-spawn できるようにする。gap は persona の永続
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| B-1 | operator join snapshot に `directory` を push する | ⏳ | `agents_channel.ex` after_join |
-| B-2 | protocol types 更新(dashboard 側)| ⏳ | `server/assets/src/lib/protocol.ts` |
-| B-3 | dashboard に live/offline merge ロジック追加 | ⏳ | offline 表示は persona で描画 |
-| B-4 | server test + dashboard test | ⏳ | |
+| B-1 | operator join snapshot に `directory` を push する | ✅ | `agents_channel.ex` after_join、既存 `hosts` push の隣 |
+| B-2 | protocol types 更新(dashboard 側)| ✅ | `DirectoryEntry`、`onDirectory`、`parseDirectory` |
+| B-3 | dashboard に live/offline merge ロジック追加 | ⏳ | UI 実装(phase-2)と一体化のため次 phase へ移動 |
+| B-4 | server test | ✅ | operator 受信 / viewer 非受信 の 2 ケース |
 
 ### Stage phase-2(dashboard 復元 UI、HITL)
 

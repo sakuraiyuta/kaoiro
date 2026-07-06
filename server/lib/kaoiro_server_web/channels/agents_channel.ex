@@ -128,11 +128,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
     push(socket, "snapshot", %{"agents" => agents})
 
-    # Reply-log history and the host set are operator-only; viewers stay at
-    # the grid and never see host info (cwd allow-lists are sensitive, #46).
+    # Reply-log history, host set, and the identity ledger are operator-only;
+    # viewers stay at the grid and never see host info (cwd allow-lists are
+    # sensitive, #46) or the offline-agent directory (ADR-0030 D10). The
+    # directory carries persona (+ operator-picked custom name) so the client
+    # can render offline agents' tiles for the restore UI (ADR-0030 D5).
     if role == :operator do
       push(socket, "history", %{"agents" => AgentStates.histories()})
       push(socket, "hosts", %{"hosts" => HostRegistry.snapshot()})
+      push(socket, "directory", %{"entries" => AgentDirectory.all()})
     end
 
     {:noreply, socket}
