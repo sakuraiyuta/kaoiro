@@ -6,7 +6,7 @@ opened: 2026-06-24
 supersedes: []
 superseded_by: null
 related_specs: [protocol, threat-model, architecture]
-related_adrs: [3, 11, 14, 18, 23, 29]
+related_adrs: [3, 11, 14, 18, 23, 29, 30]
 ---
 
 # ADR-0024 — エージェントのインスタンス同一性と spawn 認証

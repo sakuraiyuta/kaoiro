@@ -6,7 +6,7 @@ opened: 2026-06-15
 supersedes: []
 superseded_by: null
 related_specs: [protocol, threat-model, architecture]
-related_adrs: [1, 11, 12, 15, 23, 24]
+related_adrs: [1, 11, 12, 15, 23, 24, 30]
 ---
 
 # ADR-0014 — セッション resume による wrapper 復帰・既存セッション召喚
