@@ -58,7 +58,11 @@ goal: **server と runner が同時ダウン・再起動した後、client 側�
 - **D4(client への一覧提供)**: server は operator role の join snapshot 経路
   を拡張し、AgentDirectory の全 entry を配信する(新規 topic は増やさない)。
   client 側は AgentStates.snapshot() と merge して live/offline を判定する。
-  viewer には配信しない(D10)。
+  viewer には配信しない(D10)。**client 側の「offline 表示」は directory-only
+  (AgentStates に entry が無い、= サーバ再起動起因)と live disconnected
+  (entry はあるが state=disconnected、= wrapper 単独切断・ホットリロード起因)
+  の両者を統合し、1 か所のオフラインセクションで復元 UI を提供する — 障害の
+  出方で UX を分岐させない(2026-07-07 追記)。**
 - **D5(復元 UX)**: dashboard に 2 系統のボタンを配置する:
   - **一括**: ヘッダ or 設定メニューに「前回の状態を復元」— offline entry
     全件に対して個別 resume-spawn を順次発火。
@@ -79,7 +83,10 @@ goal: **server と runner が同時ダウン・再起動した後、client 側�
   persona pack missing / session JSONL missing = ADR-0014 T3 検証失敗)は
   既存 `spawn_result` エンベロープで個別に client へ返る。一括復元はベスト
   エフォート(部分成功可)、client は各 tile に error 表示。特別な集計 API は
-  作らない。
+  作らない。**復元ボタンの表示は client 側で `envelope.state === "disconnected"`
+  のみで判定し、session_id の有無で gate しない — 実復元可否(SessionPointer
+  の存在)はサーバ側判定に一任し、失敗は spawn_result → sticky icon で
+  surface する(2026-07-07 追記)。**
 - **D9(二重接続防止)**: 既存 `require_disconnected/1`(ADR-0014 F4)を再利用。
   live agent は復元対象から除外される。
 - **D10(権限)**: 一覧・復元操作とも operator 限定

@@ -34,10 +34,12 @@
      *  the tile corner until the agent comes online again or is restored
      *  successfully (ADR-0030 D8). Null clears it. */
     spawnError?: string | null;
-    /** Receives the tile's centre so the detail can expand from it (#36). */
-    onSelect?: (origin?: { x: number; y: number }) => void;
     // exactOptionalPropertyTypes: undefined must be in the type since
-    // App.svelte conditionally passes undefined when there is no connection.
+    // App.svelte conditionally passes undefined when there is no connection
+    // (or when a directory-only tile has no detail view to open).
+    /** Receives the tile's centre so the detail can expand from it (#36);
+     *  pass undefined to disable the click-to-detail affordance. */
+    onSelect?: ((origin?: { x: number; y: number }) => void) | undefined;
     /** ESC equivalent (#51); pass undefined to hide the button. */
     onInterrupt?: (() => Promise<void>) | undefined;
     /** Terminate the wrapper (#22); pass undefined to hide the button. */
@@ -146,17 +148,14 @@
     }
   }
 
-  // Restore button for a disconnected agent that has a session to resume
-  // (#22, ADR-0014). Re-spawns the same agent_id; the server fills the cwd
-  // from its pointer. Bottom-left, where the (now-hidden) terminate chip sat.
-  // For a directory-only tile (ADR-0030) the client has no session_id —
-  // the server-side SessionPointer check decides success, so we always show
-  // the button and surface any failure via spawnError.
+  // Restore button for a disconnected agent (#22, ADR-0014). Re-spawns the
+  // same agent_id; the server fills cwd + session_id from its SessionPointer,
+  // so this never gates on client-side session_id — a wrapper that dropped
+  // before emitting session_change (hot reload, early crash) still gets the
+  // button, and any missing-pointer failure surfaces via spawnError
+  // (ADR-0030 D8). Bottom-left, where the (now-hidden) terminate chip sat.
   const canRestore = $derived(
-    onRestore !== undefined &&
-      envelope.state === "disconnected" &&
-      (directoryOnly ||
-        (typeof envelope.session_id === "string" && envelope.session_id !== "")),
+    onRestore !== undefined && envelope.state === "disconnected",
   );
 
   let restoring = $state(false);

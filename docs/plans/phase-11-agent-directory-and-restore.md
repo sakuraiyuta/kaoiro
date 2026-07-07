@@ -4,7 +4,7 @@ description: ADR-0030 実装 phase。AgentDirectory DETS store 追加 + spawn ho
 status: done
 phase: 11
 depends_on: [phase-3-server-multiagent, phase-4-host-runner]
-last_updated: 2026-07-06
+last_updated: 2026-07-07
 ---
 
 # Phase 11 — サーバ再起動越しの agent identity 永続と明示復元
@@ -73,6 +73,14 @@ session_id で resume-spawn できるようにする。gap は persona の永続
 - offline 視覚は半透明(`opacity: 0.7`)+ 「offline」ラベル。
 - live disconnected と directory-only は同じ disconnected 状態表示で統合
   (grayscale スプライト、ADR-0030 承認済 UX)。
+- **2026-07-07 追加**: offline セクションを directory-only(サーバ再起動起因)
+  だけでなく live disconnected(wrapper 単独切断・ホットリロード起因)も
+  集約するよう拡張([App.svelte](../../server/assets/src/App.svelte) の
+  `sorted` は state=disconnected を除外、`offlineEntries` は両者を merge)。
+  併せて [AgentCard.svelte](../../server/assets/src/lib/AgentCard.svelte) と
+  [AgentDetail.svelte](../../server/assets/src/lib/AgentDetail.svelte) の
+  `canRestore` から session_id gate を撤去し、復元可否はサーバの
+  SessionPointer 判定に一任(ADR-0030 D4 / D8 の追記に対応)。
 
 ### Stage phase-3(将来、GC / 削除 UI)
 

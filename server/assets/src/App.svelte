@@ -142,24 +142,48 @@
     return merged;
   }
 
+  // Live grid: agents whose wrapper is currently connected (state !== disconnected).
+  // Disconnected agents move to the offline section below so restore UX is
+  // consistent whether the server restarted (directory-only) or only the
+  // wrapper died (live disconnected — hot reload / crash / network hiccup).
   const sorted = $derived(
-    Object.values(agents).sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
+    Object.values(agents)
+      .filter((envelope) => envelope.state !== "disconnected")
+      .sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
   );
-  // Directory entries whose agent_id has NO live AgentStates envelope: those
-  // are the operator-driven restore candidates after a server restart. Live
-  // entries always win over directory (AgentStates is the authoritative
-  // source-of-truth while a wrapper is connected, ADR-0030 D4).
-  const offlineEntries = $derived(
-    Object.entries(directory)
-      .filter(([id]) => !(id in agents))
-      .sort(([a], [b]) => a.localeCompare(b)),
+  // Everything not in the live grid: directory entries with NO AgentStates
+  // envelope (server restarted, ADR-0030) AND live entries whose state is
+  // `disconnected` (wrapper died, server survived). Both are restore
+  // candidates; unifying them here keeps the operator's UX identical across
+  // failure modes.
+  type OfflineTile = {
+    id: string;
+    envelope: Envelope;
+    directoryOnly: boolean;
+  };
+  const offlineEntries = $derived<OfflineTile[]>(
+    [
+      ...Object.entries(directory)
+        .filter(([id]) => !(id in agents))
+        .map(([id, entry]): OfflineTile => ({
+          id,
+          envelope: directoryEnvelope(id, entry),
+          directoryOnly: true,
+        })),
+      ...Object.values(agents)
+        .filter((env) => env.state === "disconnected")
+        .map((env): OfflineTile => ({
+          id: env.agent_id,
+          envelope: env,
+          directoryOnly: false,
+        })),
+    ].sort((a, b) => a.id.localeCompare(b.id)),
   );
 
   // Synthesizes a minimal Envelope from a directory-only entry so AgentCard
   // can render it with the existing disconnected styling. `state=disconnected`
-  // is what unlocks the restore button; the pass-through `directoryOnly`
-  // prop drops the session_id gate (the server-side pointer check owns the
-  // real decision, ADR-0030 D8).
+  // is what unlocks the restore button; live-disconnected tiles pass their
+  // real envelope through instead (they carry the last session_id / ext).
   function directoryEnvelope(id: string, entry: DirectoryEntry): Envelope {
     return {
       version: "0",
@@ -355,16 +379,16 @@
     if (!confirm(`${count} 体のオフラインエージェントを一括復元します。よろしいですか?`)) {
       return;
     }
-    for (const [id] of offlineEntries) {
+    for (const tile of offlineEntries) {
       try {
-        await connection.restore(id);
+        await connection.restore(tile.id);
       } catch (err) {
         // Record locally too — spawn_result will land later for successful
         // restores, but a per-restore RPC-level error (rare) still needs
         // surfacing so the tile picks up the icon.
         spawnErrors = {
           ...spawnErrors,
-          [id]: err instanceof Error ? err.message : "error",
+          [tile.id]: err instanceof Error ? err.message : "error",
         };
       }
     }
@@ -602,7 +626,7 @@
         }
       }}
     />
-  {:else if sorted.length === 0}
+  {:else if sorted.length === 0 && offlineEntries.length === 0}
     <p class="empty">
       no agents yet — start a wrapper with <code>server_url</code> set.
     </p>
@@ -642,10 +666,13 @@
     </ul>
   {/if}
   {#if isOperator && offlineEntries.length > 0}
-    <!-- Directory-only entries (ADR-0030): agents the server knows about but
-         which are not currently connected. Collapsed by default so the live
-         section stays uncluttered; expand + "前回の状態を復元" surfaces the
-         restore affordance without cluttering the header. -->
+    <!-- Offline agents (ADR-0030): directory-only (server restarted) OR live
+         disconnected (wrapper died but server survived — hot reload etc.).
+         Collapsed by default so the live section stays uncluttered; expand +
+         "前回の状態を復元" surfaces the restore affordance. Live-disconnected
+         tiles keep click-to-detail so the operator can still browse the
+         transcript history; directory-only tiles have no live envelope to
+         detail against, so they stay non-interactive (offline label + no click). -->
     <details class="offline">
       <summary>
         オフライン({offlineEntries.length})
@@ -664,20 +691,28 @@
         {/if}
       </summary>
       <ul class="agents">
-        {#each offlineEntries as [id, entry], index (id)}
-          {@const env = directoryEnvelope(id, entry)}
+        {#each offlineEntries as tile, index (tile.id)}
           <li style:--stagger="{index * 60}ms">
             <AgentCard
-              envelope={env}
+              envelope={tile.envelope}
               {manifest}
-              directoryOnly={true}
-              spawnError={spawnErrors[id] ?? null}
+              directoryOnly={tile.directoryOnly}
+              spawnError={spawnErrors[tile.id] ?? null}
+              onSelect={tile.directoryOnly
+                ? undefined
+                : (o) => {
+                    origin = o ?? null;
+                    selected = tile.id;
+                  }}
               onRestore={connection
                 ? () =>
                     connection!
-                      .restore(id)
+                      .restore(tile.id)
                       .catch((e) => notifyActionError("復帰", e))
                 : undefined}
+              onDelete={tile.directoryOnly || !connection
+                ? undefined
+                : () => connection!.deleteAgent(tile.id)}
             />
           </li>
         {/each}

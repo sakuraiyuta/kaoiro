@@ -457,14 +457,12 @@
   const canStop = $derived(envelope.state !== "disconnected");
   let stopping = $state(false);
 
-  // Restore is offered for a disconnected agent with a resumable session
-  // (#22, ADR-0014); it sits in the terminate button's slot (the two never
-  // show at once — terminate is hidden once disconnected).
-  const canRestore = $derived(
-    envelope.state === "disconnected" &&
-      typeof envelope.session_id === "string" &&
-      envelope.session_id !== "",
-  );
+  // Restore is offered for any disconnected agent (#22, ADR-0014); it sits
+  // in the terminate button's slot (the two never show at once — terminate
+  // is hidden once disconnected). The server fills the resume session_id
+  // from its SessionPointer, so we no longer gate on client-side session_id;
+  // a missing pointer is surfaced via spawnError (ADR-0030 D8).
+  const canRestore = $derived(envelope.state === "disconnected");
   let restoring = $state(false);
 
   // Resume-swap picker (ADR-0014): offered for both live and disconnected
