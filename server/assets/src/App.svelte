@@ -274,16 +274,30 @@
           }
         },
         onAgentDeleted: (agentId) => {
-          // A disconnected agent was removed (#14): drop it from the grid
-          // and its transcript. The detail view falls back to the grid on
-          // its own when the selected agent vanishes (selectedEnvelope).
+          // A disconnected agent was removed (#14, ADR-0030 D6): drop it
+          // from the grid, its transcript, the directory ledger, AND any
+          // sticky spawn error. Missing the directory drop leaves a
+          // directory-only tile (the operator's typical delete target for
+          // a restore-broken agent) visible in the offline section until a
+          // page reload re-fetches the shrunk directory. The detail view
+          // falls back to the grid on its own when the selected agent
+          // vanishes (selectedEnvelope).
           agents = Object.fromEntries(
             Object.entries(agents).filter(([id]) => id !== agentId),
           );
+          if (agentId in directory) {
+            directory = Object.fromEntries(
+              Object.entries(directory).filter(([id]) => id !== agentId),
+            );
+          }
           if (logs[agentId]) {
             logs = Object.fromEntries(
               Object.entries(logs).filter(([id]) => id !== agentId),
             );
+          }
+          if (agentId in spawnErrors) {
+            const { [agentId]: _drop, ...rest } = spawnErrors;
+            spawnErrors = rest;
           }
         },
         onHosts: (next) => {
