@@ -710,9 +710,9 @@
                       .restore(tile.id)
                       .catch((e) => notifyActionError("復帰", e))
                 : undefined}
-              onDelete={tile.directoryOnly || !connection
-                ? undefined
-                : () => connection!.deleteAgent(tile.id)}
+              onDelete={connection
+                ? () => connection!.deleteAgent(tile.id)
+                : undefined}
             />
           </li>
         {/each}

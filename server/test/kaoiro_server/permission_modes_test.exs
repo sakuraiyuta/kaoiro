@@ -62,4 +62,22 @@ defmodule KaoiroServer.PermissionModesTest do
     assert all["a.4"] == "plan"
     assert all["a.5"] == "auto"
   end
+
+  test "delete でモードが消え、再起動後も残らない", %{server: server, path: path} do
+    PermissionModes.record("a.6", "plan", server)
+    :ok = wait_until(fn -> PermissionModes.get("a.6", server) == "plan" end)
+
+    assert PermissionModes.delete("a.6", server) == :ok
+    assert PermissionModes.get("a.6", server) == nil
+
+    :ok = GenServer.stop(server)
+    name2 = :"pm_delete_#{System.unique_integer([:positive])}"
+    {:ok, _pid} = PermissionModes.start_link(name: name2, path: path)
+    assert PermissionModes.get("a.6", name2) == nil
+    GenServer.stop(name2)
+  end
+
+  test "delete は未知 agent でも :ok (冪等)", %{server: server} do
+    assert PermissionModes.delete("a.none", server) == :ok
+  end
 end

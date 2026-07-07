@@ -75,7 +75,13 @@ goal: **server と runner が同時ダウン・再起動した後、client 側�
   - 更新: envelope 到着時に last_seen のみ。
   - 削除: operator 明示削除のみ(dashboard に「エージェントを台帳から削除」
     操作)。自動 GC は初回スコープ外(将来: last_seen が N 日超過で候補入り、
-    明示承認で削除)。
+    明示承認で削除)。**2026-07-07 実装**: `delete_agent` handler が
+    directory-only entry (`AgentStates` 不在で `AgentDirectory` のみ)も
+    受け付けるよう拡張し、`AgentStates` (memory) + `AgentDirectory` +
+    `SessionPointers` + `PermissionModes` の 4 store を一括 purge する。
+    live agent への削除は既存 `AgentStates.delete/1` の disconnected guard
+    がそのまま効く(不変)。復元不可なゾンビ agent(`no_session` 等で
+    復元 spawn が繰り返し失敗するケース)を operator が明示掃除できる。
 - **D7(host_id 非永続)**: agent_id の命名規約(ADR-0024 D3 `<host_id>.<rand>`)
   から `host_id_of/1` で常時算出可能なため、host_id 単独の永続は不要。
   AgentDirectory には格納しない。

@@ -72,4 +72,22 @@ defmodule KaoiroServer.SessionPointersTest do
     assert all["a.5"] == %{session_id: "s5", cwd: nil}
     assert all["a.6"] == %{session_id: "s6", cwd: "/c"}
   end
+
+  test "delete で pointer が消え、再起動後も残らない", %{server: server, path: path} do
+    SessionPointers.record("a.7", "s7", "/z", server)
+    assert %{session_id: "s7"} = SessionPointers.get("a.7", server)
+
+    assert SessionPointers.delete("a.7", server) == :ok
+    assert SessionPointers.get("a.7", server) == nil
+
+    :ok = GenServer.stop(server)
+    name2 = :"sp_delete_#{System.unique_integer([:positive])}"
+    {:ok, _pid} = SessionPointers.start_link(name: name2, path: path)
+    assert SessionPointers.get("a.7", name2) == nil
+    GenServer.stop(name2)
+  end
+
+  test "delete は未知 agent でも :ok (冪等)", %{server: server} do
+    assert SessionPointers.delete("a.none", server) == :ok
+  end
 end

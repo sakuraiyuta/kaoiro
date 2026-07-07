@@ -61,6 +61,15 @@ defmodule KaoiroServer.AgentDirectory do
     GenServer.call(server, :all)
   end
 
+  @doc """
+  Removes the agent's entry from memory + DETS. Idempotent — an unknown
+  agent returns `:ok`. Synchronous so the caller can broadcast
+  `agent_deleted` once every store is purged (ADR-0030 D6).
+  """
+  def delete(agent_id, server \\ __MODULE__) do
+    GenServer.call(server, {:delete, agent_id})
+  end
+
   @impl true
   def init({name, path}) do
     path |> Path.dirname() |> File.mkdir_p!()
@@ -141,6 +150,11 @@ defmodule KaoiroServer.AgentDirectory do
 
   def handle_call(:all, _from, state) do
     {:reply, state.entries, state}
+  end
+
+  def handle_call({:delete, agent_id}, _from, state) do
+    :ok = :dets.delete(state.table, agent_id)
+    {:reply, :ok, %{state | entries: Map.delete(state.entries, agent_id)}}
   end
 
   @impl true

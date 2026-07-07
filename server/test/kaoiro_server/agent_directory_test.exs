@@ -79,4 +79,22 @@ defmodule KaoiroServer.AgentDirectoryTest do
     assert all["a.5"] == %{persona: persona("ao"), last_seen: nil}
     assert all["a.6"] == %{persona: persona("momo"), last_seen: nil}
   end
+
+  test "delete で entry が消え、再起動後も残らない", %{server: server, path: path} do
+    AgentDirectory.record("a.7", persona("ao"), server)
+    assert %{persona: _} = AgentDirectory.get("a.7", server)
+
+    assert AgentDirectory.delete("a.7", server) == :ok
+    assert AgentDirectory.get("a.7", server) == nil
+
+    :ok = GenServer.stop(server)
+    name2 = :"ad_delete_#{System.unique_integer([:positive])}"
+    {:ok, _pid} = AgentDirectory.start_link(name: name2, path: path)
+    assert AgentDirectory.get("a.7", name2) == nil
+    GenServer.stop(name2)
+  end
+
+  test "delete は未知 agent でも :ok (冪等)", %{server: server} do
+    assert AgentDirectory.delete("a.none", server) == :ok
+  end
 end

@@ -491,9 +491,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
     end
 
-    test "operator は disconnected agent を削除し agent_deleted を broadcast" do
+    test "operator は disconnected agent を削除し 4 store が purge される" do
       agent_id = "test.del-1"
       put_disconnected(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+      SessionPointers.record(agent_id, "sess-del-1", "/home/user/proj")
+      KaoiroServer.PermissionModes.record(agent_id, "plan")
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -502,6 +505,28 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :ok
       assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
       refute AgentStates.known?(agent_id)
+      assert AgentDirectory.get(agent_id) == nil
+      assert SessionPointers.get(agent_id) == nil
+      # PermissionModes.record は cast なので poll
+      _ = KaoiroServer.PermissionModes.all()
+      assert KaoiroServer.PermissionModes.get(agent_id) == nil
+    end
+
+    test "AgentStates 不在の directory-only entry も削除できる (ADR-0030 D6)" do
+      # server 再起動起因のケース: 台帳と pointer だけ残っており live entry は無い。
+      # 「復元できない agent」を operator が明示削除する経路。
+      agent_id = "test.del-directory-only"
+      AgentDirectory.record(agent_id, @ao)
+      SessionPointers.record(agent_id, "sess-del-do", "/home/user/proj")
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok
+      assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
+      assert AgentDirectory.get(agent_id) == nil
+      assert SessionPointers.get(agent_id) == nil
     end
 
     test "稼働中 agent の削除は not_disconnected で拒否" do

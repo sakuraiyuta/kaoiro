@@ -1051,7 +1051,9 @@
   function deleteAgent(): void {
     if (!connection || deleting) return;
     const ok = window.confirm(
-      `切断済みエージェント「${name}」を一覧から削除します。よろしいですか?`,
+      `オフラインのエージェント「${name}」を完全に削除します。` +
+        `保存された persona / session ポインタ / permission_mode も破棄され、` +
+        `以後この agent_id は復元できなくなります。よろしいですか?`,
     );
     if (!ok) return;
     void run(async () => {
@@ -1615,7 +1617,7 @@
             class="remove"
             onclick={deleteAgent}
             disabled={deleting}
-            title="切断済みエージェントを一覧から削除"
+            title="オフラインエージェントを台帳ごと削除"
           >
             <span class="remove-icon" aria-hidden="true">✕</span>
             {deleting ? "削除中…" : "削除"}

@@ -82,9 +82,17 @@ session_id で resume-spawn できるようにする。gap は persona の永続
   `canRestore` から session_id gate を撤去し、復元可否はサーバの
   SessionPointer 判定に一任(ADR-0030 D4 / D8 の追記に対応)。
 
-### Stage phase-3(将来、GC / 削除 UI)
+### Stage phase-3(GC / 削除 UI)
 
-- entry 削除 UI(operator 明示)
+- [x] entry 削除 UI(operator 明示、2026-07-07 実装)—
+  `delete_agent` handler を directory-only entry も受け付けるよう拡張、
+  `AgentStates` (memory) + `AgentDirectory` + `SessionPointers` +
+  `PermissionModes` の 4 store を一括 purge。client 側は offline
+  セクションの directory-only タイルにも削除ボタンを表示、confirm
+  ダイアログは「保存された persona / session ポインタ / permission_mode
+  も破棄され、以後この agent_id は復元できなくなります」と明示。
+  復元不可なゾンビ(`no_session` 等の spawn_result エラーで復元 spawn が
+  繰り返し失敗するケース)を operator が掃除できる(ADR-0030 D6)。
 - last_seen 経過による GC の是非(現状スコープ外、issue で追跡)
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.

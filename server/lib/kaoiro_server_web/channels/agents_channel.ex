@@ -26,9 +26,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
   the server-side reply log of past sessions and broadcasts
   `history_cleared` so every client re-filters its transcript; it touches
   only the in-memory ring buffer, never the wrapper's session logs.
-  `delete_agent` (operator-only, issue #14) removes a `disconnected`
-  agent's residual entry and broadcasts `agent_deleted` so every client
-  drops it from the grid; it is rejected while the agent is still live.
+  `delete_agent` (operator-only, issue #14; extended by ADR-0030 D6)
+  purges an offline agent from every server-side store — `AgentStates`
+  (memory) + `AgentDirectory` / `SessionPointers` / `PermissionModes`
+  (persistent) — and broadcasts `agent_deleted` so every client drops it
+  from the grid. Accepts both AgentStates-known disconnected agents and
+  directory-only entries whose AgentStates counterpart is absent (server
+  restarted with only the DETS-persisted identity, or a restore that never
+  succeeded); a still-live agent is rejected via the AgentStates
+  disconnected guard so it cannot be dropped from under its wrapper.
 
   Host lifecycle (ADR-0023, issue #67): `spawn` / `stop` / `restart` /
   `enumerate_sessions` are operator-only and relay to the addressed
@@ -466,14 +472,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # Operator-only removal of a disconnected agent's residual entry (issue
-  # #14). AgentStates enforces the disconnected guard so a still-live
-  # agent cannot be dropped from under its wrapper; on success broadcast
-  # `agent_deleted` so every client removes it from the grid.
+  # Operator-only removal of an agent from every server-side store (issue
+  # #14, extended by ADR-0030 D6 for directory-only entries). Accepts both
+  # AgentStates-known agents (disconnected only — enforced by AgentStates.delete
+  # so a still-live agent cannot be dropped from under its wrapper) AND
+  # directory-only entries whose AgentStates counterpart is absent (server
+  # restarted with only the DETS-persisted identity, or a restore that never
+  # succeeded). On success, broadcast `agent_deleted` so every client removes
+  # it from the grid; the persistent stores are also purged so a subsequent
+  # server restart does not resurrect the entry.
   def handle_in("delete_agent", payload, socket) do
     with :ok <- require_operator(socket),
-         {:ok, agent_id} <- fetch_agent_id(payload),
-         :ok <- AgentStates.delete(agent_id) do
+         {:ok, agent_id} <- fetch_restorable_agent_id(payload),
+         :ok <- purge_agent_records(agent_id) do
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "agent_deleted", %{
         "agent_id" => agent_id
       })
@@ -481,6 +492,29 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {:reply, :ok, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Removes the agent from every server-side store. AgentStates.delete keeps
+  # the disconnected guard (a live agent cannot be dropped); a directory-only
+  # entry skips that step (never in AgentStates) and still purges the DETS
+  # ledgers. AgentDirectory / SessionPointers / PermissionModes deletes are
+  # idempotent, so a stale pointer for an already-vanished AgentStates entry
+  # still yields :ok — a single delete request cleans up everything.
+  defp purge_agent_records(agent_id) do
+    with :ok <- delete_live_if_present(agent_id) do
+      AgentDirectory.delete(agent_id)
+      SessionPointers.delete(agent_id)
+      KaoiroServer.PermissionModes.delete(agent_id)
+      :ok
+    end
+  end
+
+  defp delete_live_if_present(agent_id) do
+    if AgentStates.known?(agent_id) do
+      AgentStates.delete(agent_id)
+    else
+      :ok
     end
   end
 
