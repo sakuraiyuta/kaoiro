@@ -34,14 +34,19 @@ defmodule KaoiroServer.PersonaWatcher do
       File.mkdir_p!(dir)
     end
 
+    # `FileSystem.start_link/1` returns a `GenServer.on_start`. Besides
+    # `{:ok, pid}`, a boot failure surfaces as `{:error, reason}` or as
+    # `:ignore` (the latter when the backend cannot start, e.g.
+    # inotify-tools missing on Linux). Fail soft on any non-ok result:
+    # live updates disabled, rebuild on restart only.
     case FileSystem.start_link(dirs: [dir]) do
       {:ok, pid} ->
         FileSystem.subscribe(pid)
         {:ok, %{watcher: pid, dir: Path.expand(dir), pending: nil}}
 
-      {:error, reason} ->
+      other ->
         Logger.warning(
-          "PersonaWatcher: file_system failed to start (#{inspect(reason)}); " <>
+          "PersonaWatcher: file_system did not start (#{inspect(other)}); " <>
             "live updates disabled, rebuild only on restart"
         )
 
