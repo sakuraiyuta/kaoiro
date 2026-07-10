@@ -5,7 +5,10 @@
 // the env (KAOIRO_RUNNER_TOKEN).
 
 import { readFileSync } from "node:fs";
+import { CODEX_MODELS } from "@kaoiro/codex";
 import type {
+  EngineCatalogEntry,
+  EngineKind,
   Persona,
   RunnerHeartbeat,
   RunnerRegister,
@@ -203,11 +206,42 @@ export function loadRunnerConfig(path: string): RunnerConfig {
   return parseRunnerConfig(raw);
 }
 
+/** Engines this runner build bundles (ADR-0032 F4a); the default
+ *  capabilities when the config file does not restrict them. */
+const BUNDLED_ENGINES: EngineKind[] = ["claude-code", "codex"];
+
+/** Effective capabilities: the configured list (legacy "claude" normalized
+ *  to "claude-code" with a warning — the server keeps the same one-release
+ *  window, ADR-0032 F4a) or the bundled default. */
+export function effectiveCapabilities(config: RunnerConfig): string[] {
+  if (config.capabilities === undefined) return [...BUNDLED_ENGINES];
+  return config.capabilities.map((value) => {
+    if (value === "claude") {
+      process.stderr.write(
+        'runner: capabilities value "claude" is deprecated; use "claude-code"\n',
+      );
+      return "claude-code";
+    }
+    return value;
+  });
+}
+
 /** Builds the `register` message (sent once per connection) from the config.
  *  Persona trust is expressed by the same field shape the file used
  *  (ADR-0031: allowlist / blocklist / accept-all), so the server can gate
- *  spawn without a separate mode enum on the wire. */
+ *  spawn without a separate mode enum on the wire. `engines` carries the
+ *  launch catalog per capability (ADR-0032 F4bc): codex's curated static
+ *  model list; claude-code advertises none (its models surface post-spawn
+ *  via ext.models, #54). */
 export function buildRegister(config: RunnerConfig): RunnerRegister {
+  const capabilities = effectiveCapabilities(config);
+  const engines: EngineCatalogEntry[] = [];
+  if (capabilities.includes("claude-code")) {
+    engines.push({ id: "claude-code", models: [] });
+  }
+  if (capabilities.includes("codex")) {
+    engines.push({ id: "codex", models: CODEX_MODELS });
+  }
   return {
     version: "0",
     host_id: config.host_id,
@@ -219,9 +253,8 @@ export function buildRegister(config: RunnerConfig): RunnerRegister {
     ...(config.blocked_personas === undefined
       ? {}
       : { blocked_personas: config.blocked_personas }),
-    ...(config.capabilities === undefined
-      ? {}
-      : { capabilities: config.capabilities }),
+    capabilities,
+    engines,
   };
 }
 

@@ -24,7 +24,8 @@ import {
   LIST_AGENTS_TOOL_FQN,
   WHOAMI_TOOL_FQN,
   formatInboundMessage,
-} from "./inter_agent.js";
+} from "@kaoiro/agent-common";
+import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { PermissionBroker } from "@kaoiro/agent-common";
 import { PERMISSION_MODES, loadConfig } from "@kaoiro/wrapper-core";
 import { QuestionBroker } from "@kaoiro/agent-common";
@@ -332,20 +333,23 @@ async function main(): Promise<void> {
       tools: { type: "preset", preset: "claude_code" },
       allowedTools: config.allowed_tools ?? [...READ_ONLY_TOOLS],
       cwd: process.cwd(),
-      // Startup model override for local dev. The SDK otherwise picks its own
-      // default (currently Opus 4.8); KAOIRO_WRAPPER_DEFAULT_MODEL pins the
-      // initial model instead. scripts/dev.sh sets it for runner-spawned
-      // wrappers, so it only affects local dev — unset in prod leaves the SDK
-      // default untouched. setModel from the dashboard still overrides at runtime.
-      ...(process.env.KAOIRO_WRAPPER_DEFAULT_MODEL
-        ? { model: process.env.KAOIRO_WRAPPER_DEFAULT_MODEL }
-        : {}),
+      // Startup model precedence: the operator's launch pick (config.model,
+      // SpawnMessage relay per ADR-0032 F4bc) > the local-dev pin
+      // KAOIRO_WRAPPER_DEFAULT_MODEL (scripts/dev.sh) > the SDK default.
+      // setModel from the dashboard still overrides at runtime. config.effort
+      // is codex-only for now (Claude effort switches post-launch via
+      // set_effort, #54).
+      ...(config.model !== undefined
+        ? { model: config.model }
+        : process.env.KAOIRO_WRAPPER_DEFAULT_MODEL
+          ? { model: process.env.KAOIRO_WRAPPER_DEFAULT_MODEL }
+          : {}),
       // The kaoiro in-process MCP server is always registered under the
       // server-connected model (phase-8). send_to_agent surfaces as
       // mcp__kaoiro__send_to_agent and is NOT in the read-only default
       // allowedTools, so canUseTool fires and the broker runs the
       // per-call operator dialog (Phase 1 都度承認).
-      mcpServers: { kaoiro: interAgent!.build() },
+      mcpServers: { kaoiro: buildKaoiroMcpServer(interAgent!) },
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
   });

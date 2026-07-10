@@ -153,12 +153,25 @@ describe("parseRunnerConfig", () => {
 });
 
 describe("buildRegister", () => {
-  it("accept-all の config はどのポリシー欄も含めない", () => {
-    expect(buildRegister(parseRunnerConfig(valid))).toEqual({
+  it("accept-all の config はどのポリシー欄も含めず、既定 capabilities/engines を持つ", () => {
+    const register = buildRegister(parseRunnerConfig(valid));
+    expect(register).toMatchObject({
       version: "0",
       host_id: "lab-pc-1",
       cwd_allowlist: valid.cwd_allowlist,
+      capabilities: ["claude-code", "codex"],
     });
+    expect(register.personas).toBeUndefined();
+    expect(register.allowed_personas).toBeUndefined();
+    expect(register.blocked_personas).toBeUndefined();
+    // engines カタログ: claude-code は空 (post-spawn の ext.models 頼み)、
+    // codex は curated 静的リスト (ADR-0032 F4bc)
+    expect(register.engines?.map((e) => e.id)).toEqual([
+      "claude-code",
+      "codex",
+    ]);
+    expect(register.engines?.[0]?.models).toEqual([]);
+    expect(register.engines?.[1]?.models.length).toBeGreaterThan(0);
   });
 
   it("allowed_personas を register に含める", () => {
@@ -177,9 +190,12 @@ describe("buildRegister", () => {
     expect(buildRegister(config).blocked_personas).toEqual(["fuji"]);
   });
 
-  it("capabilities があれば含める", () => {
+  it("capabilities があれば含める (旧値 claude は claude-code に正規化)", () => {
     const config = parseRunnerConfig({ ...valid, capabilities: ["claude"] });
-    expect(buildRegister(config).capabilities).toEqual(["claude"]);
+    const register = buildRegister(config);
+    expect(register.capabilities).toEqual(["claude-code"]);
+    // codex を宣言しない host の engines に codex は載らない
+    expect(register.engines?.map((e) => e.id)).toEqual(["claude-code"]);
   });
 });
 

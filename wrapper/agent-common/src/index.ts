@@ -3,7 +3,20 @@
 // envelope builders, the EngineAdapter interface, the permission / question
 // brokers, and the common tool description layer.
 
+export { askUserQuestionDescriptor } from "./ask_user_question.js";
 export type { EngineAdapter } from "./engine.js";
+export {
+  INTER_AGENT_TOOL_FQN,
+  InterAgentTool,
+  LIST_AGENTS_TOOL_FQN,
+  SEND_TO_AGENT_INPUT_SHAPE,
+  WHOAMI_TOOL_FQN,
+  formatInboundMessage,
+} from "./inter_agent.js";
+export type {
+  InterAgentToolOptions,
+  WhoamiSnapshot,
+} from "./inter_agent.js";
 export {
   MAX_LOG_BYTES,
   clipText,

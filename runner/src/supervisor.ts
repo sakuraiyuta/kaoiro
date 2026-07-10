@@ -6,6 +6,7 @@
 // logic is testable without real processes (default launcher: spawn.ts).
 
 import type {
+  EngineKind,
   RunnerSessions,
   SessionMeta,
   SpawnFailReason,
@@ -49,18 +50,25 @@ export type LaunchFn = (
   cwd: string,
   resumeSessionId?: string,
   initialPrompt?: string,
+  engine?: EngineKind,
 ) => ManagedChild;
 
 /** The validated fields of a `spawn` message the supervisor acts on. serverUrl
  *  is optional: under案A the server omits it and the runner falls back to its
- *  own wrapper URL (ADR-0024). */
+ *  own wrapper URL (ADR-0024). engine defaults to "claude-code" so old
+ *  servers keep working (ADR-0032 F4a). */
 export interface ParsedSpawn {
   persona: WirePersona;
   cwd: string;
+  engine: EngineKind;
   serverUrl?: string;
   token?: string;
   initialPrompt?: string;
   resumeSessionId?: string;
+  model?: string;
+  effort?: string;
+  sandbox?: WrapperConfig["sandbox"];
+  networkAccess?: boolean;
 }
 
 export interface SupervisorOptions {
@@ -74,9 +82,10 @@ export interface SupervisorOptions {
   wrapperServerUrl: string;
   sendResult: (result: SpawnResult) => void;
   sendSessions: (sessions: RunnerSessions) => void;
-  /** Injectable for tests; defaults read the local Claude JSONLs (sessions.ts). */
-  listSessions?: (cwd: string) => SessionMeta[];
-  sessionExists?: (cwd: string, sessionId: string) => boolean;
+  /** Injectable for tests; defaults read the local session stores
+   *  (sessions.ts — Claude JSONLs / codex rollouts, per engine). */
+  listSessions?: (cwd: string, engine: EngineKind) => SessionMeta[];
+  sessionExists?: (cwd: string, sessionId: string, engine: EngineKind) => boolean;
   /** Clock in ms for the restart window; injectable for tests. Defaults to
    *  Date.now. */
   now?: () => number;
@@ -124,9 +133,19 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   if (payload.server_url !== undefined && typeof payload.server_url !== "string") {
     return null;
   }
+  // engine (ADR-0032 F4a): absent = claude-code; an unknown value is a
+  // fail-loud reject, not a silent fallback to the wrong engine.
+  let engine: EngineKind = "claude-code";
+  if (payload.engine !== undefined) {
+    if (payload.engine !== "claude-code" && payload.engine !== "codex") {
+      return null;
+    }
+    engine = payload.engine;
+  }
   const parsed: ParsedSpawn = {
     persona,
     cwd: payload.cwd,
+    engine,
   };
   const serverUrl = optionalString(payload.server_url);
   if (serverUrl !== undefined && serverUrl !== "") parsed.serverUrl = serverUrl;
@@ -136,6 +155,26 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   if (prompt !== undefined && prompt !== "") parsed.initialPrompt = prompt;
   const resume = optionalString(payload.resume_session_id);
   if (resume !== undefined) parsed.resumeSessionId = resume;
+  // Launch-time picks (ADR-0032 F4bc / ADR-0033 F3), relayed into the
+  // wrapper config verbatim; value sets belong to the engine.
+  const model = optionalString(payload.model);
+  if (model !== undefined && model !== "") parsed.model = model;
+  const effort = optionalString(payload.effort);
+  if (effort !== undefined && effort !== "") parsed.effort = effort;
+  if (payload.sandbox !== undefined) {
+    if (
+      payload.sandbox !== "read-only" &&
+      payload.sandbox !== "workspace-write" &&
+      payload.sandbox !== "danger-full-access"
+    ) {
+      return null;
+    }
+    parsed.sandbox = payload.sandbox;
+  }
+  if (payload.network_access !== undefined) {
+    if (typeof payload.network_access !== "boolean") return null;
+    parsed.networkAccess = payload.network_access;
+  }
   return parsed;
 }
 
@@ -162,6 +201,14 @@ export function resolveWrapperConfig(
     server_url: parsed.serverUrl ?? fallbackServerUrl,
   };
   if (parsed.token !== undefined) config.server_token = parsed.token;
+  // Launch-time picks (ADR-0032 F4bc / ADR-0033 F3). Engines ignore the
+  // fields that are not theirs (sandbox on Claude, permission_mode on codex).
+  if (parsed.model !== undefined) config.model = parsed.model;
+  if (parsed.effort !== undefined) config.effort = parsed.effort;
+  if (parsed.sandbox !== undefined) config.sandbox = parsed.sandbox;
+  if (parsed.networkAccess !== undefined) {
+    config.network_access = parsed.networkAccess;
+  }
   return config;
 }
 
@@ -182,8 +229,12 @@ export class Supervisor {
   readonly #launch: LaunchFn;
   readonly #sendResult: (result: SpawnResult) => void;
   readonly #sendSessions: (sessions: RunnerSessions) => void;
-  readonly #listSessions: (cwd: string) => SessionMeta[];
-  readonly #sessionExists: (cwd: string, sessionId: string) => boolean;
+  readonly #listSessions: (cwd: string, engine: EngineKind) => SessionMeta[];
+  readonly #sessionExists: (
+    cwd: string,
+    sessionId: string,
+    engine: EngineKind,
+  ) => boolean;
   readonly #now: () => number;
   readonly #wrapperServerUrl: string;
   readonly #children = new Map<string, ChildEntry>();
@@ -227,8 +278,9 @@ export class Supervisor {
     }
     const resume = parsed.resumeSessionId;
     if (resume !== undefined) {
-      // T3: the resume target must exist as a JSONL under the bound cwd.
-      if (!this.#sessionExists(parsed.cwd, resume)) {
+      // T3: the resume target must exist in the engine's session store
+      // under the bound cwd.
+      if (!this.#sessionExists(parsed.cwd, resume, parsed.engine)) {
         process.stderr.write(
           `runner: resume session not found under cwd (agent ${agentId})\n`,
         );
@@ -313,7 +365,7 @@ export class Supervisor {
     // T3 under the agent's currently bound cwd — the operator picked the id
     // from the same cwd's enumerate; re-verify at the boundary so a spoofed
     // or stale id cannot slip past.
-    if (!this.#sessionExists(entry.parsed.cwd, resume)) {
+    if (!this.#sessionExists(entry.parsed.cwd, resume, entry.parsed.engine)) {
       process.stderr.write(
         `runner: switch_session target not found under cwd (agent ${agentId})\n`,
       );
@@ -350,10 +402,31 @@ export class Supervisor {
     if (!isObject(payload)) return;
     const cwd = payload.cwd;
     if (typeof cwd !== "string") return;
+    // engine scopes the listing to one session store (ADR-0032 F8);
+    // absent = claude-code, unknown values fall back to an empty list.
+    let engine: EngineKind = "claude-code";
+    if (payload.engine !== undefined) {
+      if (payload.engine !== "claude-code" && payload.engine !== "codex") {
+        this.#sendSessions({
+          version: "0",
+          host_id: this.#hostId,
+          cwd,
+          sessions: [],
+        });
+        return;
+      }
+      engine = payload.engine;
+    }
     const sessions = isCwdAllowed(cwd, this.#cwdAllowlist)
-      ? this.#listSessions(cwd)
+      ? this.#listSessions(cwd, engine)
       : [];
-    this.#sendSessions({ version: "0", host_id: this.#hostId, cwd, sessions });
+    this.#sendSessions({
+      version: "0",
+      host_id: this.#hostId,
+      cwd,
+      sessions,
+      engine,
+    });
   }
 
   /** Stops every child (deliberate); used on runner shutdown. */
@@ -381,6 +454,7 @@ export class Supervisor {
       parsed.cwd,
       parsed.resumeSessionId,
       parsed.initialPrompt,
+      parsed.engine,
     );
     const entry: ChildEntry = {
       child,
@@ -445,6 +519,8 @@ export class Supervisor {
         resolveWrapperConfig(agentId, entry.parsed, this.#wrapperServerUrl),
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
+        undefined,
+        entry.parsed.engine,
       );
     } catch (error) {
       // Same guard as handleSpawn's #start: a synchronous relaunch failure

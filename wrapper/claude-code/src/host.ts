@@ -57,6 +57,7 @@ import {
   sdkMessageToStatusMeta,
 } from "./adapter.js";
 import { clipText, logEntryToPayload } from "@kaoiro/agent-common";
+import { PERMISSION_MODE_AXES } from "./permission_axes.js";
 import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
@@ -837,12 +838,17 @@ export class AgentHost implements EngineAdapter {
    *  carried while waiting_permission is in flight. */
   #statusExt(): Record<string, unknown> {
     const ext: Record<string, unknown> = {};
+    ext.engine = "claude-code";
     if (this.#model !== null) ext.model = this.#model;
     if (this.#cwd !== null) ext.cwd = this.#cwd;
     if (this.#slashCommands !== null) ext.slash_commands = this.#slashCommands;
     if (this.#models !== null) ext.models = this.#models;
     if (this.#context !== null) ext.context = this.#context;
     if (this.#permissionMode !== null) ext.permission_mode = this.#permissionMode;
+    // Two-axis successor of permission_mode (ADR-0033 F1/F2); both ride
+    // for one release window, then permission_mode drops.
+    const axes = PERMISSION_MODE_AXES[this.#permissionMode as PermissionMode];
+    if (axes !== undefined) ext.permission = axes;
     if (this.#fastMode !== null) ext.fast_mode = this.#fastMode;
     if (this.#rateLimits.size > 0) {
       ext.rate_limits = Object.fromEntries(this.#rateLimits);

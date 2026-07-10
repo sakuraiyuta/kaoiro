@@ -1,11 +1,17 @@
-// Inter-agent messaging — registers the `send_to_agent` SDK MCP tool that an
-// agent calls to message another agent, and formats inbound messages for
-// SDK-input injection (specs/protocol-inter-agent.md, plans/phase-8 Stage B).
+// Inter-agent messaging — the engine-agnostic definitions + handlers of the
+// kaoiro inter-agent tools (`send_to_agent` / `list_agents` / `whoami`),
+// living on the common tool description layer (ADR-0032 F5): the Claude
+// adapter translates them to an in-process SDK MCP server, the codex
+// adapter serves them through its bundled stdio MCP bridge. Also formats
+// inbound messages for engine-input injection
+// (specs/protocol-inter-agent.md, plans/phase-8 Stage B).
 //
-// The full tool name surfaced to the model is `mcp__kaoiro__send_to_agent`,
-// which is not in the wrapper's read-only allowedTools default, so the SDK
-// invokes canUseTool — and the PermissionBroker runs the operator's per-call
-// approval dialog (Phase 1: 都度承認).
+// On Claude the full tool name surfaced to the model is
+// `mcp__kaoiro__send_to_agent`, which is not in the wrapper's read-only
+// allowedTools default, so the SDK invokes canUseTool — and the
+// PermissionBroker runs the operator's per-call approval dialog (Phase 1:
+// 都度承認). On codex there is no approval path (ADR-0033 F3); the call
+// runs like any other MCP tool.
 //
 // conversation_id is the model's free-form thread key: omit it to start a new
 // conversation (UUIDv4 is allocated here); pass it back when replying to keep
@@ -14,20 +20,16 @@
 
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import {
-  createSdkMcpServer,
-  tool,
-  type McpSdkServerConfigWithInstance,
-} from "@anthropic-ai/claude-agent-sdk";
-import { makeInterAgentMessage } from "@kaoiro/agent-common";
 import type { DirectoryEntry } from "@kaoiro/wrapper-core";
+import { makeInterAgentMessage } from "./state.js";
+import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import type {
   Envelope,
   InterAgentMessageKind,
   InterAgentMessagePayload,
   KaoiroState,
   WrapperConfig,
-} from "@kaoiro/agent-common";
+} from "./types.js";
 
 /** Self-identity snapshot returned by the `whoami` tool. Mirrors
  *  `AgentHost#statusSnapshot()` — see host.ts for field semantics. */
@@ -42,17 +44,9 @@ export interface WhoamiSnapshot {
   session_id?: string;
 }
 
-/** Minimal structural shape of the MCP CallToolResult we actually return; the
- *  agent-sdk's `tool()` helper expects the upstream CallToolResult type from
- *  `@modelcontextprotocol/sdk`, which is a transitive (not declared) dep —
- *  declaring a local subset avoids pulling the runtime just for this typing.
- *  The index signature mirrors the upstream type so structural assignability
- *  holds without an explicit cast. */
-interface InterAgentToolResult {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-  [extra: string]: unknown;
-}
+/** The common ToolResult shape (tooling.ts); alias kept so the existing
+ *  method signatures and tests read unchanged. */
+type InterAgentToolResult = ToolResult;
 
 /** Full SDK-side tool name once mcpServers register the kaoiro server. */
 export const INTER_AGENT_TOOL_FQN = "mcp__kaoiro__send_to_agent";
@@ -75,7 +69,10 @@ const KIND_VALUES = [
   "done",
 ] as const satisfies readonly InterAgentMessageKind[];
 
-const INPUT_SCHEMA = {
+/** Zod raw shape of send_to_agent's input — the SSOT the Claude adapter
+ *  hands to the SDK's `tool()` helper and from which the JSON Schema for
+ *  the codex bridge is derived (z.toJSONSchema). */
+export const SEND_TO_AGENT_INPUT_SHAPE = {
   to: z
     .string()
     .min(1)
@@ -120,6 +117,16 @@ const INPUT_SCHEMA = {
     .describe(
       "Required when kind=reject; concrete reason for refusing the proposal.",
     ),
+};
+
+/** Compiled Zod object for validation + JSON Schema derivation. */
+const SEND_TO_AGENT_SCHEMA = z.object(SEND_TO_AGENT_INPUT_SHAPE);
+
+/** JSON Schema for the zero-argument tools. */
+const EMPTY_OBJECT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
 };
 
 const TOOL_DESCRIPTION =
@@ -184,22 +191,42 @@ export class InterAgentTool {
     this.#conversations.set(conversationId, track);
   }
 
-  /** Builds the SDK MCP server config to pass via Options.mcpServers.
-   *  Registers three tools: `send_to_agent` (broker-gated), `list_agents`
-   *  (auto-allow, peer directory), `whoami` (auto-allow, self snapshot). */
-  build(): McpSdkServerConfigWithInstance {
-    return createSdkMcpServer({
-      name: "kaoiro",
-      tools: [
-        tool("send_to_agent", TOOL_DESCRIPTION, INPUT_SCHEMA, async (args) =>
-          this.invoke(args),
-        ),
-        tool("list_agents", LIST_AGENTS_DESCRIPTION, {}, async () =>
-          this.listAgents(),
-        ),
-        tool("whoami", WHOAMI_DESCRIPTION, {}, async () => this.whoami()),
-      ],
-    });
+  /** The engine-agnostic descriptors of the three tools (ADR-0032 F5):
+   *  `send_to_agent` (Claude: broker-gated via canUseTool), `list_agents`
+   *  and `whoami` (read-only, auto-allow). The Claude adapter translates
+   *  them via the SDK's `tool()` helper (inter_agent_sdk.ts); the codex
+   *  adapter serves them through the stdio MCP bridge. Handler inputs are
+   *  re-validated here with the same Zod schema, since bridge-side clients
+   *  do not enforce inputSchema. */
+  descriptors(): ToolDescriptor[] {
+    return [
+      {
+        name: "send_to_agent",
+        description: TOOL_DESCRIPTION,
+        inputSchema: z.toJSONSchema(SEND_TO_AGENT_SCHEMA, { io: "input" }),
+        handler: async (input) => {
+          const parsed = SEND_TO_AGENT_SCHEMA.safeParse(input);
+          if (!parsed.success) {
+            return errorResult(
+              `send_to_agent failed: invalid input: ${parsed.error.message}`,
+            );
+          }
+          return this.invoke(parsed.data);
+        },
+      },
+      {
+        name: "list_agents",
+        description: LIST_AGENTS_DESCRIPTION,
+        inputSchema: EMPTY_OBJECT_SCHEMA,
+        handler: async () => this.listAgents(),
+      },
+      {
+        name: "whoami",
+        description: WHOAMI_DESCRIPTION,
+        inputSchema: EMPTY_OBJECT_SCHEMA,
+        handler: async () => this.whoami(),
+      },
+    ];
   }
 
   /** Fetches the peer directory via the configured provider. Returns the
@@ -245,7 +272,7 @@ export class InterAgentTool {
    *  conversation_id and turn_number, builds the envelope, and pushes it via
    *  `send`. The CallToolResult-shaped return surfaces back to the calling
    *  model as the tool result. */
-  async invoke(args: z.infer<z.ZodObject<typeof INPUT_SCHEMA>>): Promise<InterAgentToolResult> {
+  async invoke(args: z.infer<typeof SEND_TO_AGENT_SCHEMA>): Promise<InterAgentToolResult> {
     if (args.to === this.#options.config.agent_id) {
       return errorResult(
         "send_to_agent failed: cannot send to self (payload.to == agent_id)",

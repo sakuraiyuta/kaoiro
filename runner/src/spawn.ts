@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { WrapperConfig } from "@kaoiro/protocol";
+import type { EngineKind, WrapperConfig } from "@kaoiro/protocol";
 import type { LaunchFn, ManagedChild } from "./supervisor.js";
 
 /** The child-process surface toManagedChild needs; ChildProcess satisfies it. */
@@ -42,15 +42,25 @@ export function toManagedChild(child: ExitErrorChild): ManagedChild {
   };
 }
 
-// Leading argv for `process.execPath` (node) that runs the wrapper. Default
-// (prod) runs the built dist directly; wrapper declares no exports field so the
-// subpath resolves, and the single-binary build bundles it alongside
-// (ADR-0018). When KAOIRO_WRAPPER_DEV is set, run the wrapper from TS source
-// under `tsx watch` so source edits hot-reload the running agent: tsx restarts
-// the inner script on change while the supervised process (tsx) stays up. This
-// is a dev-only path (scripts/dev.sh); prod is unaffected.
-export function resolveWrapperLaunch(): string[] {
+/** Engine kind -> wrapper package (ADR-0032 F4a). */
+const ENGINE_PACKAGES: Record<EngineKind, string> = {
+  "claude-code": "@kaoiro/claude-code",
+  codex: "@kaoiro/codex",
+};
+
+// Leading argv for `process.execPath` (node) that runs the wrapper of the
+// requested engine. Default (prod) runs the built dist directly; the wrapper
+// packages declare no exports field so the subpath resolves, and the
+// single-binary build bundles them alongside (ADR-0018). When
+// KAOIRO_WRAPPER_DEV is set, run the wrapper from TS source under `tsx watch`
+// so source edits hot-reload the running agent: tsx restarts the inner script
+// on change while the supervised process (tsx) stays up. This is a dev-only
+// path (scripts/dev.sh); prod is unaffected.
+export function resolveWrapperLaunch(
+  engine: EngineKind = "claude-code",
+): string[] {
   const require = createRequire(import.meta.url);
+  const pkg = ENGINE_PACKAGES[engine];
   if (process.env.KAOIRO_WRAPPER_DEV) {
     const tsxPkgPath = require.resolve("tsx/package.json");
     const tsxPkg = JSON.parse(readFileSync(tsxPkgPath, "utf8")) as {
@@ -61,11 +71,11 @@ export function resolveWrapperLaunch(): string[] {
       throw new Error("KAOIRO_WRAPPER_DEV: tsx package has no bin entry");
     }
     const tsxBin = join(dirname(tsxPkgPath), tsxRel);
-    const wrapperPkgPath = require.resolve("@kaoiro/claude-code/package.json");
+    const wrapperPkgPath = require.resolve(`${pkg}/package.json`);
     const wrapperSrc = join(dirname(wrapperPkgPath), "src", "cli.ts");
     return [tsxBin, "watch", wrapperSrc];
   }
-  return [require.resolve("@kaoiro/claude-code/dist/cli.js")];
+  return [require.resolve(`${pkg}/dist/cli.js`)];
 }
 
 /**
@@ -74,7 +84,17 @@ export function resolveWrapperLaunch(): string[] {
  * each is written 0600 and removed when its child exits.
  */
 export function makeLauncher(): LaunchFn {
-  const launchPrefix = resolveWrapperLaunch();
+  // Per-engine launch prefixes, resolved lazily: a host that never spawns
+  // codex never require.resolves that package.
+  const prefixes = new Map<EngineKind, string[]>();
+  const launchPrefixFor = (engine: EngineKind): string[] => {
+    let prefix = prefixes.get(engine);
+    if (prefix === undefined) {
+      prefix = resolveWrapperLaunch(engine);
+      prefixes.set(engine, prefix);
+    }
+    return prefix;
+  };
   const dir = mkdtempSync(join(tmpdir(), "kaoiro-runner-"));
   let counter = 0;
 
@@ -96,6 +116,7 @@ export function makeLauncher(): LaunchFn {
     cwd: string,
     resumeSessionId?: string,
     initialPrompt?: string,
+    engine: EngineKind = "claude-code",
   ): ManagedChild => {
     const configPath = join(dir, `${agentId}-${counter}.json`);
     counter += 1;
@@ -103,8 +124,9 @@ export function makeLauncher(): LaunchFn {
 
     // wrapper CLI: [configPath] [prompt] [--resume <id>]. The prompt is the
     // positional after configPath, so it must precede the --resume flag.
-    // launchPrefix is the dist entry (prod) or `tsx watch src/cli.ts` (dev).
-    const args = [...launchPrefix, configPath];
+    // The prefix is the engine's dist entry (prod) or `tsx watch src/cli.ts`
+    // (dev).
+    const args = [...launchPrefixFor(engine), configPath];
     if (initialPrompt !== undefined) args.push(initialPrompt);
     if (resumeSessionId !== undefined) args.push("--resume", resumeSessionId);
     const child = spawn(process.execPath, args, { cwd, stdio: "inherit" });

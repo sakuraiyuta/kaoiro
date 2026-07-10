@@ -88,12 +88,22 @@ export interface WrapperConfig {
    *  config only — cannot be widened from the server side
    *  (specs/threat-model.md). Omitted = the CLI's read-only default. */
   allowed_tools?: string[];
+  /** Launch-time model pick relayed from SpawnMessage (ADR-0032 F4bc).
+   *  Omitted = engine default. */
+  model?: string;
+  /** Launch-time effort pick relayed from SpawnMessage. */
+  effort?: string;
+  /** Codex-only OS sandbox axis (ADR-0033 F3); Claude ignores it.
+   *  Omitted = "workspace-write". */
+  sandbox?: PermissionAxesExt["sandbox"];
+  /** Codex-only network toggle for workspace-write sandboxes. */
+  network_access?: boolean;
 }
 
 /** Closed enum of SDK PermissionMode values (#58). Mirrors the SDK union
  *  type so the wrapper, server, and dashboard share one definition. The
  *  protocol package is types-only (no runtime exports); consumers that need
- *  the value list duplicate it locally (wrapper/src/persona.ts,
+ *  the value list duplicate it locally (wrapper/core/src/persona.ts,
  *  agents_channel.ex). */
 export type PermissionMode =
   | "default"
@@ -102,6 +112,42 @@ export type PermissionMode =
   | "plan"
   | "dontAsk"
   | "auto";
+
+/** Engine kinds a host can run (ADR-0032 F4a). The value set of the runner
+ *  register `capabilities`, `SpawnMessage.engine`, and `ext.engine`. */
+export type EngineKind = "claude-code" | "codex";
+
+/** ext.permission — the agent's current permission posture as the
+ *  engine-neutral two-axis form (ADR-0033 F1). Claude adapters derive it
+ *  from permissionMode via a display-approximation table (ADR-0033 F2);
+ *  the codex adapter projects its launch-fixed sandbox with approval
+ *  pinned to "never" (ADR-0033 F3). Successor of `ext.permission_mode`
+ *  (kept in parallel for one release window, then removed). */
+export interface PermissionAxesExt {
+  sandbox: "read-only" | "workspace-write" | "danger-full-access";
+  /** `on-failure` is a deprecated upstream alias of `on-request`; kaoiro
+   *  wrappers never emit it but the enum keeps wire compatibility with
+   *  the Codex SDK vocabulary. */
+  approval: "untrusted" | "on-request" | "on-failure" | "never";
+}
+
+/** One launch-selectable model of an engine (ADR-0032 F4bc). Same shape as
+ *  the `ext.models[]` entries the Claude adapter already publishes (#54),
+ *  reused for the LaunchDialog's engine -> model -> effort cascade. */
+export interface EngineModelInfo {
+  value: string;
+  display_name: string;
+  description?: string;
+  effort_levels?: string[];
+}
+
+/** Launch catalog for one engine, sent by the runner in its register
+ *  payload so the dashboard can build the three-stage launch select before
+ *  any wrapper process exists (ADR-0032 F4bc). */
+export interface EngineCatalogEntry {
+  id: EngineKind;
+  models: EngineModelInfo[];
+}
 
 /** state_change.ext.pending_permission shape (ADR-0022, #59). The
  *  authoritative pending-permission record carried on every state_change
@@ -274,7 +320,16 @@ export interface RunnerRegister {
   allowed_personas?: string[];
   blocked_personas?: string[];
   cwd_allowlist: string[];
+  /** Engine kinds this host can run (ADR-0032 F4a): "claude-code" /
+   *  "codex". The legacy value "claude" is normalized to "claude-code"
+   *  by the server for one release window (deprecation warn), then
+   *  rejected. */
   capabilities?: string[];
+  /** Launch catalog per engine (ADR-0032 F4bc): the models (and their
+   *  effort levels) the dashboard offers in the engine -> model -> effort
+   *  cascade of LaunchDialog. Sourced from each engine package's
+   *  EngineCapability by the runner at register time. */
+  engines?: EngineCatalogEntry[];
 }
 
 /** runner -> server liveness ping; the topic carries the host_id, but it is
@@ -301,6 +356,23 @@ export interface SpawnMessage {
   token?: string;
   initial_prompt?: string;
   resume_session_id?: string;
+  /** Engine to launch (ADR-0032 F4a). Omitted = "claude-code" (the
+   *  pre-engine-select default), so old servers keep working. */
+  engine?: EngineKind;
+  /** Launch-time model pick from the LaunchDialog cascade (ADR-0032
+   *  F4bc), an EngineModelInfo.value. Omitted = engine default. */
+  model?: string;
+  /** Launch-time effort pick; one of the model's effort_levels.
+   *  Omitted = model default. */
+  effort?: string;
+  /** Codex-only launch permission: the OS sandbox axis (ADR-0033 F3;
+   *  the approval axis is pinned to "never" and not selectable). The
+   *  Claude engine ignores it (its permission posture is the mode,
+   *  pushed after join per #58). Omitted = "workspace-write". */
+  sandbox?: PermissionAxesExt["sandbox"];
+  /** Codex-only: allow network inside a workspace-write sandbox.
+   *  Omitted = false (Codex CLI default). */
+  network_access?: boolean;
 }
 
 /** server -> runner, operator-only: stop the wrapper for agent_id. */
@@ -343,11 +415,13 @@ export interface SpawnResult {
 }
 
 /** server -> runner, operator-only: list the resume candidates under cwd for
- *  agent_id (ADR-0014 F2). */
+ *  agent_id (ADR-0014 F2). `engine` scopes the listing to one engine's
+ *  session store (ADR-0032 F8); omitted = "claude-code". */
 export interface EnumerateSessions {
   version: "0";
   agent_id: string;
   cwd: string;
+  engine?: EngineKind;
 }
 
 /** Minimal per-session metadata (T2: minimal, operator-only). mtime is the
@@ -359,10 +433,13 @@ export interface SessionMeta {
 }
 
 /** runner -> server: the resume candidates under cwd (response to
- *  enumerate_sessions, ADR-0014 F2). Forwarded operator-only by the server. */
+ *  enumerate_sessions, ADR-0014 F2). Forwarded operator-only by the server.
+ *  `engine` echoes the request's engine so a dashboard awaiting one
+ *  engine's list ignores a stale reply for another. */
 export interface RunnerSessions {
   version: "0";
   host_id: string;
   cwd: string;
   sessions: SessionMeta[];
+  engine?: EngineKind;
 }

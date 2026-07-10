@@ -13,6 +13,13 @@ describe("resolveWrapperLaunch", () => {
     expect(prefix[0]).toMatch(/claude-code\/dist\/cli\.js$/);
   });
 
+  it("engine=codex は @kaoiro/codex の dist を返す", () => {
+    delete process.env.KAOIRO_WRAPPER_DEV;
+    const prefix = resolveWrapperLaunch("codex");
+    expect(prefix).toHaveLength(1);
+    expect(prefix[0]).toMatch(/codex\/dist\/cli\.js$/);
+  });
+
   it("KAOIRO_WRAPPER_DEV で tsx watch + src を返す(ホットリロード)", () => {
     process.env.KAOIRO_WRAPPER_DEV = "1";
     const prefix = resolveWrapperLaunch();

@@ -408,6 +408,40 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("ext.permission (二軸写像) と ext.engine を付与する (ADR-0033 F1/F2)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: scriptedQuery([
+        msg({
+          type: "system",
+          subtype: "init",
+          permissionMode: "default",
+        }),
+        assistant([{ type: "text", text: "hi" }]),
+        // Mid-session mode flip: the two-axis projection follows the mode.
+        msg({
+          type: "system",
+          subtype: "status",
+          status: "requesting",
+          permissionMode: "plan",
+        }),
+        assistant([{ type: "text", text: "after-mode" }]),
+        result("success", { result: "ok" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const thinkings = envs.filter((e) => e.state === "thinking");
+    expect(thinkings[0]?.ext).toMatchObject({
+      engine: "claude-code",
+      permission: { sandbox: "workspace-write", approval: "untrusted" },
+    });
+    expect(thinkings.at(-1)?.ext).toMatchObject({
+      permission: { sandbox: "read-only", approval: "on-request" },
+    });
+  });
+
   it("CwdChanged フックで mid-session に ext.cwd を更新する (#64)", async () => {
     const envs: Envelope[] = [];
     const queryFn = makeQueryFn((args: QueryArgs) => {

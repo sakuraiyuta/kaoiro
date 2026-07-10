@@ -104,6 +104,7 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     expect(parseSpawn(spawnMsg)).toEqual({
       persona: spawnMsg.persona,
       cwd: spawnMsg.cwd,
+      engine: "claude-code",
       serverUrl: spawnMsg.server_url,
       token: "tok",
     });
@@ -304,7 +305,13 @@ describe("Supervisor.handleEnumerate", () => {
     const h = harness({ sessions });
     h.sup.handleEnumerate({ version: "0", agent_id: "a", cwd: "/home/user/git/kaoiro" });
     expect(h.sessionsSent).toEqual([
-      { version: "0", host_id: "lab-pc-1", cwd: "/home/user/git/kaoiro", sessions },
+      {
+        version: "0",
+        host_id: "lab-pc-1",
+        cwd: "/home/user/git/kaoiro",
+        sessions,
+        engine: "claude-code",
+      },
     ]);
   });
 

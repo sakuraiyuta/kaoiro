@@ -1,10 +1,12 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   encodeCwd,
   isValidSessionId,
+  codexSessionExistsIn,
+  listCodexSessionsIn,
   listSessionsIn,
   projectsDir,
   sessionExistsIn,
@@ -141,5 +143,45 @@ describe("listSessionsIn — summary (#73)", () => {
     expect(s).toBeDefined();
     expect(s?.length).toBe(100);
     expect(s?.endsWith("...")).toBe(true);
+  });
+});
+
+describe("codex rollouts (ADR-0032 F8)", () => {
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-sessions-test-"));
+  const day = join(root, "2026", "07", "10");
+  mkdirSync(day, { recursive: true });
+  const uuid = "019f4bdb-d821-7631-aee1-ec7982060311";
+  const meta = (cwd: string): string =>
+    `${JSON.stringify({
+      timestamp: "2026-07-10T11:48:46.817Z",
+      type: "session_meta",
+      payload: { id: uuid, cwd },
+    })}\n`;
+  writeFileSync(
+    join(day, `rollout-2026-07-10T20-48-46-${uuid}.jsonl`),
+    meta("/repo/a"),
+  );
+  const other = "019f4bdb-d821-7631-aee1-ec7982060399";
+  writeFileSync(
+    join(day, `rollout-2026-07-10T21-00-00-${other}.jsonl`),
+    meta("/repo/b"),
+  );
+  writeFileSync(join(day, "not-a-rollout.txt"), "x");
+
+  it("listCodexSessionsIn は session_meta.cwd の一致分のみ返す", () => {
+    const sessions = listCodexSessionsIn(root, "/repo/a");
+    expect(sessions.map((s) => s.session_id)).toEqual([uuid]);
+    expect(sessions[0]?.mtime).toBeDefined();
+  });
+
+  it("codexSessionExistsIn は cwd 一致の T3 チェックを行う", () => {
+    expect(codexSessionExistsIn(root, "/repo/a", uuid)).toBe(true);
+    expect(codexSessionExistsIn(root, "/repo/b", uuid)).toBe(false);
+    expect(codexSessionExistsIn(root, "/repo/a", "../etc")).toBe(false);
+    expect(codexSessionExistsIn(root, "/repo/a", other)).toBe(false);
+  });
+
+  it("root 不在は空を返す", () => {
+    expect(listCodexSessionsIn(join(root, "nope"), "/repo/a")).toEqual([]);
   });
 });

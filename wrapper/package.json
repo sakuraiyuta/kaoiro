@@ -6,7 +6,7 @@
   "scripts": {
     "build": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex run build",
     "typecheck": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex run typecheck",
-    "test": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code run test",
+    "test": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex run test",
     "demo": "for f in agent.*.json; do node claude-code/dist/cli.js \"$f\" & done; wait",
     "dev": "for f in agent.*.json; do [ -e \"$f\" ] || continue; ./claude-code/node_modules/.bin/tsx watch claude-code/src/cli.ts \"$f\" & done; wait"
   },

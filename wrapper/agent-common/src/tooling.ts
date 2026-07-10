@@ -14,16 +14,19 @@ export interface ToolResultContent {
   text: string;
 }
 
-/** The engine-agnostic result of a tool handler. */
+/** The engine-agnostic result of a tool handler. The index signature
+ *  mirrors the upstream MCP CallToolResult so the Claude SDK's `tool()`
+ *  helper accepts it structurally without a cast. */
 export interface ToolResult {
   content: ToolResultContent[];
   isError?: boolean;
+  [extra: string]: unknown;
 }
 
 /** One tool: JSON Schema definition + handler pair (ADR-0032 F5). */
 export interface ToolDescriptor {
-  /** Fully-qualified tool name as the model sees it
-   *  (e.g. `mcp__kaoiro__send_to_agent`, `ask_user_question`). */
+  /** Bare tool name under the "kaoiro" MCP server (e.g. `send_to_agent`,
+   *  `ask_user_question`). Claude surfaces it as `mcp__kaoiro__<name>`. */
   name: string;
   description: string;
   /** JSON Schema for the tool input (draft 2020-12 subset both engines

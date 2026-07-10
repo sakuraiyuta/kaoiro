@@ -147,6 +147,37 @@ export function parseConfig(raw: unknown): WrapperConfig {
     );
   }
 
+  // Launch-time picks relayed from SpawnMessage (ADR-0032 F4bc). Free-form
+  // strings: the value set belongs to the engine catalog, not the config
+  // layer, so only shape is validated here.
+  if (raw.model !== undefined) {
+    config.model = nonEmptyString(raw.model, "model");
+  }
+  if (raw.effort !== undefined) {
+    config.effort = nonEmptyString(raw.effort, "effort");
+  }
+
+  // Codex-only launch permission (ADR-0033 F3); the Claude engine ignores
+  // both. The sandbox axis is a closed enum.
+  if (raw.sandbox !== undefined) {
+    if (
+      raw.sandbox !== "read-only" &&
+      raw.sandbox !== "workspace-write" &&
+      raw.sandbox !== "danger-full-access"
+    ) {
+      throw new ConfigError(
+        "sandbox must be one of: read-only, workspace-write, danger-full-access",
+      );
+    }
+    config.sandbox = raw.sandbox;
+  }
+  if (raw.network_access !== undefined) {
+    if (typeof raw.network_access !== "boolean") {
+      throw new ConfigError("network_access must be a boolean");
+    }
+    config.network_access = raw.network_access;
+  }
+
   return config;
 }
 

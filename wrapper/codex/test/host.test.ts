@@ -1,0 +1,244 @@
+import { describe, expect, it } from "vitest";
+import type { ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
+import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import { CodexHost } from "../src/host.js";
+import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
+
+const CONFIG: WrapperConfig = {
+  agent_id: "host-1.codex-a",
+  persona: { id: "kuroe", name: "クロエ", sprite_set: "kuroe" },
+  server_url: "ws://localhost:4000/wrapper",
+};
+
+function usageEvent(): ThreadEvent {
+  return {
+    type: "turn.completed",
+    usage: {
+      input_tokens: 1,
+      cached_input_tokens: 0,
+      output_tokens: 1,
+      reasoning_output_tokens: 0,
+    },
+  };
+}
+
+/** Scripted client: each runStreamed call yields the next event batch and
+ *  records the thread options / resume ids it was constructed with. */
+function makeClient(turns: ThreadEvent[][]): {
+  client: CodexClientLike;
+  calls: { resume: (string | null)[]; options: (ThreadOptions | undefined)[] };
+} {
+  let turn = 0;
+  const calls: {
+    resume: (string | null)[];
+    options: (ThreadOptions | undefined)[];
+  } = { resume: [], options: [] };
+  const thread: CodexThreadLike = {
+    async runStreamed() {
+      const events = turns[turn] ?? [];
+      turn += 1;
+      async function* gen(): AsyncGenerator<ThreadEvent> {
+        for (const event of events) yield event;
+      }
+      return { events: gen() };
+    },
+  };
+  const client: CodexClientLike = {
+    startThread(options) {
+      calls.resume.push(null);
+      calls.options.push(options);
+      return thread;
+    },
+    resumeThread(id, options) {
+      calls.resume.push(id);
+      calls.options.push(options);
+      return thread;
+    },
+  };
+  return { client, calls };
+}
+
+/** Runs the host for one prompt turn, closing it after the turn settles. */
+async function runOneTurn(
+  host: CodexHost,
+  prompt: string,
+): Promise<void> {
+  const done = host.run(prompt);
+  // The run loop waits for the queue after the turn; close() wakes it.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  host.close();
+  await done;
+}
+
+describe("CodexHost", () => {
+  it("1 turn: 状態遷移・session_id 通知・result と ext を出す", async () => {
+    const states: Envelope[] = [];
+    const logs: Envelope[] = [];
+    const sessionIds: string[] = [];
+    const { client, calls } = makeClient([
+      [
+        { type: "thread.started", thread_id: "uuid-1" },
+        { type: "turn.started" },
+        {
+          type: "item.completed",
+          item: { id: "m1", type: "agent_message", text: "了解しました" },
+        },
+        usageEvent(),
+      ],
+    ]);
+    const host = new CodexHost(
+      { ...CONFIG, sandbox: "read-only", model: "gpt-5.6-sol" },
+      {
+        onState: (e) => states.push(e),
+        onLog: (e) => logs.push(e),
+        appendSystemPrompt: "persona",
+        onSessionId: (id) => sessionIds.push(id),
+        codexFactory: () => client,
+        now: () => "T",
+      },
+    );
+    await runOneTurn(host, "hello");
+
+    expect(sessionIds).toEqual(["uuid-1"]);
+    expect(calls.resume).toEqual([null]);
+    expect(calls.options[0]).toMatchObject({
+      sandboxMode: "read-only",
+      model: "gpt-5.6-sol",
+      skipGitRepoCheck: true,
+    });
+    const stateTrace = states.map((e) => e.state);
+    expect(stateTrace).toEqual([
+      "sending",
+      "thinking",
+      "done",
+      "waiting_input",
+    ]);
+    // ext: engine / permission 二軸 / models カタログ
+    expect(states.at(-1)?.ext).toMatchObject({
+      engine: "codex",
+      permission: { sandbox: "read-only", approval: "never" },
+      model: "gpt-5.6-sol",
+    });
+    expect(Array.isArray(states.at(-1)?.ext.models)).toBe(true);
+    // result envelope: 最後の agent_message が最終応答
+    const result = logs.find((e) => e.type === "result");
+    expect(result?.payload).toMatchObject({ text: "了解しました" });
+    // assistant log も中継
+    expect(
+      logs.some(
+        (e) => e.type === "log" && e.payload.kind === "assistant",
+      ),
+    ).toBe(true);
+  });
+
+  it("2 turn 目は resumeThread(session_id) で再開し setModel が次 turn に効く", async () => {
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: "uuid-2" }, usageEvent()],
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      now: () => "T",
+    });
+    const done = host.run("first");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await host.setModel("gpt-5.4-mini");
+    await host.send("second");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    host.close();
+    await done;
+
+    expect(calls.resume).toEqual([null, "uuid-2"]);
+    expect(calls.options[1]).toMatchObject({ model: "gpt-5.4-mini" });
+  });
+
+  it("resumeSessionId 指定時は初回から resumeThread する", async () => {
+    const { client, calls } = makeClient([[usageEvent()]]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+      resumeSessionId: "uuid-resume",
+      codexFactory: () => client,
+      now: () => "T",
+    });
+    await runOneTurn(host, "again");
+    expect(calls.resume).toEqual(["uuid-resume"]);
+  });
+
+  it("terminal event 無しの stream 終了は error → waiting_input に畳む", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([
+      [{ type: "thread.started", thread_id: "u" }, { type: "turn.started" }],
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: (e) => states.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      now: () => "T",
+    });
+    await runOneTurn(host, "x");
+    expect(states.map((e) => e.state)).toEqual([
+      "sending",
+      "thinking",
+      "error",
+      "waiting_input",
+    ]);
+  });
+
+  it("添付付き指示は instruction_rejected で弾く", async () => {
+    const rejected: Envelope[] = [];
+    const { client } = makeClient([]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+      onInstructionRejected: (e) => rejected.push(e),
+      codexFactory: () => client,
+      now: () => "T",
+    });
+    await host.send("with files", ["up-1"]);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.type).toBe("instruction_rejected");
+    expect(rejected[0]?.payload).toMatchObject({
+      attachment_ids: ["up-1"],
+      reason: "sdk_error",
+    });
+  });
+
+  it("setPendingQuestion が waiting_question / 復帰を駆動する", () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([]);
+    const host = new CodexHost(CONFIG, {
+      onState: (e) => states.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      now: () => "T",
+    });
+    host.setPendingQuestion({
+      request_id: "q1",
+      questions: [],
+      ts: "T",
+    });
+    expect(states.at(-1)?.state).toBe("waiting_question");
+    expect(states.at(-1)?.ext.pending_question).toMatchObject({
+      request_id: "q1",
+    });
+    host.setPendingQuestion(null);
+    expect(states.at(-1)?.state).toBe("tool_running");
+    expect(states.at(-1)?.ext.pending_question).toBeUndefined();
+  });
+
+  it("setPermissionMode は launch-fixed として reject する", async () => {
+    const { client } = makeClient([]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      now: () => "T",
+    });
+    await expect(host.setPermissionMode("default")).rejects.toThrow(
+      /launch-fixed/,
+    );
+  });
+});

@@ -12,7 +12,7 @@ import type {
   Envelope,
   InterAgentMessagePayload,
   WrapperConfig,
-} from "@kaoiro/agent-common";
+} from "../src/types.js";
 
 const PERSONA = { id: "mio", name: "澪", sprite_set: "mio" };
 
@@ -319,5 +319,40 @@ describe("list_agents / whoami companion tools", () => {
     expect(parsed.state).toBe("idle");
     // SDK 由来のフィールドは存在しないので omit される
     expect(parsed.model).toBeUndefined();
+  });
+});
+
+describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
+  it("send_to_agent handler は不正入力を isError で弾き invoke へ到達させない", async () => {
+    const { tool, capture } = makeTool("self.agent");
+    const send = tool.descriptors().find((d) => d.name === "send_to_agent")!;
+    const bad = await send.handler({ to: "peer", body: "" });
+    expect(bad.isError).toBe(true);
+    expect(capture.envelopes).toHaveLength(0);
+  });
+
+  it("send_to_agent handler は有効入力で envelope を送出する", async () => {
+    const { tool, capture } = makeTool("self.agent");
+    const send = tool.descriptors().find((d) => d.name === "send_to_agent")!;
+    const ok = await send.handler({
+      to: "peer.agent",
+      body: "hello",
+      kind: "inform",
+    });
+    expect(ok.isError).toBeFalsy();
+    expect(capture.envelopes).toHaveLength(1);
+  });
+
+  it("3 tool の inputSchema が JSON Schema object で揃う", () => {
+    const { tool } = makeTool("self.agent");
+    const descriptors = tool.descriptors();
+    expect(descriptors.map((d) => d.name).sort()).toEqual([
+      "list_agents",
+      "send_to_agent",
+      "whoami",
+    ]);
+    for (const d of descriptors) {
+      expect((d.inputSchema as { type?: string }).type).toBe("object");
+    }
   });
 });
