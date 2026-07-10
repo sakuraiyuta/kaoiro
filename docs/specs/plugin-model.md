@@ -22,7 +22,10 @@ related: [architecture, protocol]
 | **アダプタ(エージェント別)** | 起動・制御、ネイティブ出力 → 共通イベント翻訳・状態導出、指示の逆変換 | プロセスのライフサイクルとプロトコル変換を持つ専用 IF。Claude Code 版は Agent SDK 実装([ADR-0001](../adr/0001-agent-sdk-integration.md)) |
 | **フィルタ(付加処理)** | 正規化済み共通イベントに property を足す(感情・コスト・危険検知) | agent-agnostic、順序付きパイプライン |
 
-- 「将来 Codex 等に対応」は**アダプタ**として差し込む。
+- 「将来 Codex 等に対応」は**アダプタ**として差し込む
+  → **2026-07-10 更新**: Codex アダプタは
+  [ADR-0032](../adr/0032-codex-adapter.md) で実装対象化、
+  [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md) で実装。
 - フィルタは共通イベントだけを相手にするので、どのエージェントでも同じフィルタ列を
   使い回せる。
 - この分離が「コア=エージェント非依存」を成立させる肝。
@@ -43,15 +46,34 @@ related: [architecture, protocol]
   --(Filter chain)--> [Server(状態保持)] --> [Client]
 ```
 
-### パッケージ構造とエンティティ拡張(将来)
+### パッケージ構造とエンティティ拡張
 
-アダプタ/コアの分離は、将来 **pnpm ワークスペースの3層パッケージ**へ落とす
-([ADR-0017](../adr/0017-wrapper-multientity-packages.md)、着手は主要機能が
-出揃ってから): エンティティ非依存コア(`wrapper/core`)/ AI エージェント共通層
-(状態機械・permission・instruction)/ 具体アダプタ(`wrapper/claude-code`・
-`wrapper/codex`・将来 DB・ホストモニタ等)。状態機械・permission・instruction は
+アダプタ/コアの分離は、**pnpm ワークスペースの3層パッケージ**として物理境界化する
+([ADR-0017](../adr/0017-wrapper-multientity-packages.md)、materialise は
+[phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)、
+[ADR-0032](../adr/0032-codex-adapter.md) F1 で決定): エンティティ非依存コア
+(`wrapper/core`)/ AI エージェント共通層 `wrapper/agent-common`
+(状態機械・permission・instruction・`EngineAdapter` interface・
+共通 Tool 記述層)/ 具体アダプタ(`wrapper/claude-code`・`wrapper/codex`・
+将来 DB・ホストモニタ等)。状態機械・permission・instruction は
 AI 固有でありコアに置かない。最終的には AI に限らず多様なエンティティの状態を
 キャラクターとして可視化することを狙う(広い狙いは別途 vision で扱う)。
+
+### EngineAdapter interface
+
+AI エージェント共通層 `wrapper/agent-common` に置く `EngineAdapter` interface
+([ADR-0032](../adr/0032-codex-adapter.md) F1, F4bc, F9)は、具体アダプタが
+実装すべき契約を宣言する:
+
+- 状態導出: engine 固有 event stream (Claude の `SDKMessage` /
+  Codex の `ThreadEvent`) → 共通 `AdapterEvent` への変換
+- 制御: `interrupt` / `setModel` / `applyFlagSettings` /
+  `setPermissionMode` (Claude 側は SDK に委譲、Codex 側は relaunch 相当)
+- 権限: `canUseTool` 相当のコールバックを permission broker へ橋渡し
+- cwd 通知: `onCwdChanged(newCwd)` hook 契約 (実装は engine 都合)
+- 能力申告: `supportedModels()` / `effortOptions?()` (`EngineCapability`)
+- 共通 Tool 記述層 (JSON Schema + handler pair) の engine 別 API への変換
+  (Claude: Zod + `createSdkMcpServer` in-process / Codex: `dynamicTools`)
 
 ## Constraints
 

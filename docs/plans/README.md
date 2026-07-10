@@ -20,6 +20,8 @@
 | 10 | [phase-10-persona-server-sot](phase-10-persona-server-sot.md) | ✅ | ペルソナ server 集約 SoT + zip pack 配布、[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) |
 | 11 | [phase-11-agent-directory-and-restore](phase-11-agent-directory-and-restore.md) | ✅ | サーバ再起動越しの agent identity 永続と client 明示復元(一括/個別)、[ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md)、[issue #41](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/41) |
 | 12 | [phase-12-runner-persona-trust-mode](phase-12-runner-persona-trust-mode.md) | ✅ | runner の persona 受け入れは allowlist/blocklist/accept-all の 3 モード選択、[ADR-0031](../adr/0031-runner-persona-trust-mode.md) |
+| 13 | [phase-13-wrapper-multipackage-restructure](phase-13-wrapper-multipackage-restructure.md) | ⏳ | wrapper のマルチパッケージ構造 materialise (`core` + `agent-common` + `claude-code` + `codex` の 4 パッケージ)、[ADR-0017](../adr/0017-wrapper-multientity-packages.md) / [ADR-0032](../adr/0032-codex-adapter.md) F1 |
+| 14 | [phase-14-codex-adapter](phase-14-codex-adapter.md) | ⏳ | Codex アダプタ実装 (F2-F9、権限二軸 UI、engine セレクト、共通 Tool 記述層への inter-agent tool 移送)、[ADR-0032](../adr/0032-codex-adapter.md) / [ADR-0033](../adr/0033-permission-model-dual-axis.md) |
 
 ## Feature-local plans
 
@@ -33,12 +35,12 @@ supersede され、以降は [phase-10-persona-server-sot](phase-10-persona-serv
 
 ## 将来
 
-- アダプタ拡張(Codex 等)— コアの agent 非依存性を保ったまま追加。
-- wrapper のマルチエンティティ・パッケージ構造化(3層 pnpm workspace、
-  [ADR-0017](../adr/0017-wrapper-multientity-packages.md))— 主要機能が
-  出揃ってから着手。
 - wrapper/runner の配布(OS 別単一バイナリ・CLI のみ・Gitea release、
-  [ADR-0018](../adr/0018-runner-distribution.md))— 同上。
+  [ADR-0018](../adr/0018-runner-distribution.md))— 主要機能出揃い後。
+
+(旧: 「アダプタ拡張(Codex 等)」および「wrapper のマルチエンティティ・
+パッケージ構造化」は 2026-07-10 に phase-13 / phase-14 として着手決定。
+[ADR-0032](../adr/0032-codex-adapter.md) 参照)
 
 ## Status legend
 

@@ -56,6 +56,18 @@ Phase 2 タスク 2-3(表情差分の量産)と将来のペルソナ追加が参
 オーバーリアクションの一言、kuroe は控えめな微笑と会釈 + 淡々とした報告、
 と表情演技と応答口調が対応する。
 
+### engine 非依存で共有 (2026-07-10、[ADR-0032](../adr/0032-codex-adapter.md) F3)
+
+`personality.md` と 立ち絵 (7 状態表情) は engine 非依存で両 engine
+(`claude-code` / `codex`) が共有する。Claude では従来通り SDK
+`systemPrompt.append` に注入 ([ADR-0026](../adr/0026-persona-personality-injection.md)
+→ [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md))、
+Codex では対応する system prompt 相当 API に注入する。engine 別 persona pack
+(`kuroe-claude` / `kuroe-codex`) や `personality.md` 内の engine 別セクション
+は持たない。Codex 側 injection の実効性 (口調・態度の再現度) は
+[codex-personality-injection-efficacy](../open-questions/codex-personality-injection-efficacy.md)
+で検証中。
+
 ### デフォルトペルソナ(素の AI)
 
 性格付けのない「素の AI エージェント」用に、立ち絵を持たない既定ペルソナ

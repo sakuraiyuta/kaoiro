@@ -6,7 +6,7 @@ opened: 2026-06-23
 supersedes: []
 superseded_by: null
 related_specs: [architecture, protocol, threat-model, setup-wizards]
-related_adrs: [2, 14, 18, 24, 30]
+related_adrs: [2, 14, 18, 24, 30, 31, 32]
 ---
 
 # ADR-0023 — ホスト常駐 runner のアーキテクチャ
@@ -129,6 +129,7 @@ D3 の「wrapper と型を共有」を、**複数 wrapper を前提**に具体�
   - **全 wrapper 共通の spawn / CLI 契約**。これを TS 側の SSOT とする。
 - 現 `@kaoiro/wrapper`(= Claude 版)は protocol 関連型を共有パッケージへ移して
   参照に切替。**リネームは codex 版追加時まで先送り**(今は型抽出のみ、挙動不変)。
+  → **2026-07-10 追記**: Codex adapter 追加が [ADR-0032](0032-codex-adapter.md) F1 で決まり、リネーム (`@kaoiro/wrapper` → `@kaoiro/claude-code`) は [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md) で実行される。
 - runner(`@kaoiro/runner`)および将来の wrapper 群はこの共有パッケージを consume。
 - **適用範囲は Node 側に限定**。dashboard(`server/assets`)は別ビルド系のため
   本作業では据え置き(独自 `protocol.ts` 継続、整合は将来別件)。

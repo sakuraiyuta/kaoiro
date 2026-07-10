@@ -15,6 +15,27 @@ related: [plugin-model, protocol]
 
 ## Definition
 
+### wrapper パッケージ構造 (2026-07-10 追記、[ADR-0032](../adr/0032-codex-adapter.md) F1)
+
+wrapper は 4 パッケージの pnpm ワークスペースで構成される
+([ADR-0017](../adr/0017-wrapper-multientity-packages.md) materialise、
+実施は [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)):
+
+- **`wrapper/core` (`@kaoiro/wrapper-core`)** — エンティティ非依存の
+  transport / envelope 外枠 / persona / config / CLI 枠
+- **`wrapper/agent-common` (`@kaoiro/agent-common`)** — AI エージェント
+  共通層。状態機械、`EngineAdapter` interface、共通 Tool 記述層、
+  permission broker、instruction 変換
+- **`wrapper/claude-code` (`@kaoiro/claude-code`)** — Claude Code CLI
+  具体アダプタ
+- **`wrapper/codex` (`@kaoiro/codex`)** — Codex CLI 具体アダプタ
+  ([phase-14-codex-adapter](../plans/phase-14-codex-adapter.md) で実装)
+
+engine の切替は `SpawnMessage.engine` (値: `claude-code` / `codex`) で
+runner が解決 ([protocol](protocol.md) の runner 制御メッセージ)、
+LaunchDialog は host の `capabilities` が 2 種以上のときのみ engine
+セレクトを表示する。
+
 ### 3層構成
 
 ```mermaid

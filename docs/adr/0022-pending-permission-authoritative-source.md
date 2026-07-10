@@ -6,7 +6,7 @@ opened: 2026-06-22
 supersedes: []
 superseded_by: null
 related_specs: [protocol, threat-model]
-related_adrs: [10, 11, 12, 21, 27]
+related_adrs: [10, 11, 12, 21, 27, 32, 33]
 ---
 
 # ADR-0022 — pending_permission の authoritative source を `state_change.ext` へ
@@ -158,6 +158,10 @@ helper は `pendingPermissionFrom` へ役割を移し、AgentDetail.svelte 等�
 | C: wrapper で waiting_permission 中の state_change を queue/フラッシュ | state 機械の根本変更でリスク大。進行情報のクライアント観測が遅れる。本 ADR の F3 (ext に持続付与) より変更面が広い |
 | 2 段階移行 (ext fallback あり) | クライアントは全て in-tree で外部互換性なし。fallback コードは保守負債となる。一発切替で十分(#59 user 決定) |
 | broker timeout を据置(600 秒)| 根本原因が pending 消失だった以上、10 分の自動 deny は正規ユーザの離席で誤発火する UX 弊害が主になる |
+
+## Updates
+
+- 2026-07-10: [ADR-0033](0033-permission-model-dual-axis.md) が本 ADR の F1 (`state_change.ext.pending_permission` の authoritative source 原則) を維持しつつ、payload に `sandbox` / `approval` の二軸フィールドを追加する追補を確定。Codex CLI アダプタ ([ADR-0032](0032-codex-adapter.md)) 追加に伴う権限モデル抽象の拡張。本 ADR は supersede されず、payload 形状のみ ADR-0033 で拡張される。
 
 ## Related
 

@@ -89,6 +89,27 @@ flowchart LR
 | `payload` | 種別ごとの本体 | 型は `type` に依存。下記「type と payload」 |
 | `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。実装済: `cost`(累計 USD、#8、Claude Code アダプタが result に付与)/ `model`・`cwd`・`context`(`{used_tokens,max_tokens,used_percentage}`)・`rate_limits`(`{<window>:{status,utilization,resets_at}}`、window=`five_hour`/`seven_day`…)・`slash_commands`(`string[]`、利用可能なスラッシュコマンド名、クライアントの `/` 補完用、#34)・`models`(`[{value, display_name, description, effort_levels?}]`、選択可能なモデルと各モデルの effort 値域。bare `/model`・`/effort` 選択ダイアログをラウンドトリップ無しで構成するための前出し。`value` は `setModel` 用エイリアス、`effort_levels` は effort 非対応モデルで省略、#54 / [ADR-0020](../adr/0020-dashboard-battery-included-client.md))・`permission_mode`(`'default'|'acceptEdits'|'bypassPermissions'|'plan'|'dontAsk'|'auto'`、現在の Claude Code 許可モード、#57。init で確定、SDKStatusMessage 受信で上書き)・`fast_mode`(`'off'|'cooldown'|'on'`、Fast mode 状態、#57。init および各 result メッセージで上書き。`cooldown`は result でのみ観測される)を state_change に付与(#16/#34/#54/#57、Claude Code アダプタ。SDK が公開した時のみ・best-effort)。`pending_permission`(`{request_id, tool_name, input?, truncated?, ts}`、#59 / [ADR-0022](../adr/0022-pending-permission-authoritative-source.md))も state_change に付与し、`waiting_permission`中の許可要求の **authoritative source** となる。同様に`pending_question`(`{request_id, questions, ts}`、[ADR-0027](../adr/0027-askuserquestion-envelope.md))も state_change に付与し、`waiting_question`中の AskUserQuestion 質問の **authoritative source** となる。他は初期空。**`ext` は operator 限定配信**(viewer には全 type で除去。cwd / pending_permission.input 等の機微を含むため、#46、[threat-model](threat-model.md) / [ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 
+#### `ext.pending_permission` 二軸拡張 (2026-07-10、[ADR-0033](../adr/0033-permission-model-dual-axis.md))
+
+Codex アダプタ ([ADR-0032](../adr/0032-codex-adapter.md)) 追加に伴い、権限モデル
+の共通抽象を sandbox × approval の二軸に拡張する。`state_change.ext.pending_permission`
+は既存フィールドを維持しつつ次を追加する:
+
+- `sandbox`: `"read-only" | "workspace-write" | "danger-full-access"`
+- `approval`: `"untrusted" | "on-request" | "granular" | "never"`
+
+Claude adapter は 4 mode → 二軸への写像 table (詳細は
+[permission-dual-axis-envelope-schema](../open-questions/permission-dual-axis-envelope-schema.md))
+を持ち、Codex adapter は SDK の sandbox_mode / approval_policy をそのまま投影する。
+既存 `ext.permission_mode` フィールドの deprecation プランは Q2 で確定。
+
+#### `ext.engine` (2026-07-10、[ADR-0032](../adr/0032-codex-adapter.md) F4a)
+
+state_change に付与される engine 識別子:
+
+- 値: `"claude-code" | "codex"` (host 側の `capabilities` と同じ値集合)
+- 誰が付与するか: engine adapter が起動時に付与し、以降 state_change すべてに含む
+
 ### type と payload(v0 確定)
 
 `type` は閉じた enum。v0 の各種別の payload を下記に定義する(段階的精緻化の
@@ -273,11 +294,11 @@ session_id を指定して **resume** する単一機構で行う
 
 | 方向 | イベント | payload |
 |---|---|---|
-| runner → サーバ | `register` | `{ host_id, personas, cwd_allowlist, capabilities? }`。接続時に 1 回。稼働可能 persona と選択可能 cwd 許可リスト(#22)を申告 |
+| runner → サーバ | `register` | `{ host_id, personas, cwd_allowlist, capabilities? }`。接続時に 1 回。稼働可能 persona と選択可能 cwd 許可リスト(#22)を申告。`capabilities` の値集合は `"claude-code" \| "codex"` ([ADR-0032](../adr/0032-codex-adapter.md) F4a)。旧値 `"claude"` は 1 リリース互換窓で `"claude-code"` にサイレント正規化して deprecation warn ([capabilities-legacy-value-window](../open-questions/capabilities-legacy-value-window.md))。dashboard 側は 2 種以上のとき LaunchDialog に engine セレクトを出す |
 | runner → サーバ | `heartbeat` | `{ host_id }`。生存通知 |
 | runner → サーバ | `sessions` | `{ host_id, cwd, sessions: [{ session_id, summary?, mtime? }] }`。`enumerate_sessions` への応答。JSONL メタは最小・**operator 限定**(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) |
 | runner → サーバ | `spawn_result` | `{ host_id, agent_id, ok, reason? }`。失敗時 `reason` = `already_running` / `cwd_not_found` / `error` |
-| サーバ → runner | `spawn` | `{ agent_id, persona, cwd, server_url, token, resume_session_id? }`。**operator 限定**。`resume_session_id` 指定で resume 起動。`agent_id` / `server_url` / `token` はクライアント入力ではなく**サーバが補完**(案A、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4) |
+| サーバ → runner | `spawn` | `{ agent_id, persona, cwd, server_url, token, resume_session_id?, engine? }`。**operator 限定**。`resume_session_id` 指定で resume 起動。`agent_id` / `server_url` / `token` はクライアント入力ではなく**サーバが補完**(案A、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4)。`engine?: "claude-code" \| "codex"` は起動する wrapper パッケージを選択、省略時は runner が config の default engine を使う ([ADR-0032](../adr/0032-codex-adapter.md) F1)。server は register で申告された `capabilities` と照合して検証する |
 | サーバ → runner | `stop` | `{ agent_id }`。**operator 限定** |
 | サーバ → runner | `restart` | `{ agent_id }`。**operator 限定** |
 | サーバ → runner | `enumerate_sessions` | `{ agent_id, cwd }`。**operator 限定**。当該 cwd 配下の resume 候補列挙を要求 |
@@ -313,7 +334,7 @@ dashboard(operator)が起動 UI から出す要求。サーバは `runner:<host_
 
 | 方向 | イベント | payload |
 |---|---|---|
-| クライアント → サーバ | `spawn` | `{ host_id, persona, cwd, name?, initial_prompt?, resume_session_id? }`。**operator 限定**。サーバが `agent_id` を採番し `server_url` + per-agent `token` を補完(案A、D3/D4)。`name?` は per-instance 表示名で persona.name を上書き(agent_id/persona.id は不変、64 文字上限・制御文字不可)。`resume_session_id` 指定で resume 起動。サーバは復帰用に cwd を SessionPointers へ seed する |
+| クライアント → サーバ | `spawn` | `{ host_id, persona, cwd, name?, initial_prompt?, resume_session_id?, engine? }`。**operator 限定**。サーバが `agent_id` を採番し `server_url` + per-agent `token` を補完(案A、D3/D4)。`name?` は per-instance 表示名で persona.name を上書き(agent_id/persona.id は不変、64 文字上限・制御文字不可)。`resume_session_id` 指定で resume 起動。サーバは復帰用に cwd を SessionPointers へ seed する。`engine?` は LaunchDialog の engine セレクト値(host の `capabilities` に含まれる値)で、server は照合して runner へ転送する ([ADR-0032](../adr/0032-codex-adapter.md) F1、[phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)) |
 | クライアント → サーバ | `stop` / `restart` | `{ host_id, agent_id }`。**operator 限定**。`stop` は dashboard の「終了」ボタン由来(host_id は agent_id から導出) |
 | クライアント → サーバ | `restore` | `{ agent_id }`。**operator 限定**。切断済みエージェントを**同一 agent_id で resume 再 spawn**して復帰させる(ADR-0014 復帰)。サーバが SessionPointers の `{session_id, cwd}` と最後の persona を引いて runner へ `spawn` を中継。稼働中は `not_disconnected`、session pointer 無し(cwd 含む)は `no_session` |
 | クライアント → サーバ | `resume_session` | `{ agent_id, session_id }`。**operator 限定**。**同一 agent_id / cwd** のまま、resume 先を operator が選んだ `session_id` に切り替える(ADR-0014 resume-swap)。稼働中は `runner:<host_id>` へ `switch_session` を中継(kill→relaunch)、切断済みは `restore` と同経路で `spawn`(cwd は SessionPointers、`session_id` は payload)。`session_id` charset は `[A-Za-z0-9-]{1,128}`(欠落 `missing_session_id` / 不正 `invalid_session_id`)。切断済みで cwd 未記録なら `no_session` |

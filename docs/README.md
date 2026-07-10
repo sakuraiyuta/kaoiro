@@ -51,6 +51,8 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0029](adr/0029-persona-server-sot-and-pack-distribution.md) | ペルソナは server 集約 SoT、zip pack で配布し auto-watch で反映 | accepted |
 | [0030](adr/0030-agent-directory-and-explicit-restore.md) | サーバ再起動越しの agent identity 永続と client 明示復元(一括/個別) | accepted |
 | [0031](adr/0031-runner-persona-trust-mode.md) | runner の persona 受け入れは allowlist/blacklist の 2 モードから選択 | accepted |
+| [0032](adr/0032-codex-adapter.md) | Codex アダプタ追加と wrapper マルチパッケージ構造の materialise | accepted |
+| [0033](adr/0033-permission-model-dual-axis.md) | 権限モデル共通抽象を sandbox × approval の二軸へ拡張 | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh --columns "# 決定 Status" docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。

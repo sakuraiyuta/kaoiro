@@ -10,7 +10,6 @@
 | [live2d-oss-rendering](live2d-oss-rendering.md) | low | — | 2026-06-15 |
 | [subagent-task-envelope-schema](subagent-task-envelope-schema.md) | high | subagent-tasks | 2026-06-16 |
 | [subagent-task-aggregation](subagent-task-aggregation.md) | medium | subagent-tasks | 2026-06-16 |
-| [spawn-engine-selection](spawn-engine-selection.md) | low | — | 2026-06-26 |
 | [file-upload-fs-read-fallback](file-upload-fs-read-fallback.md) | low | — | 2026-06-27 |
 | [file-upload-capability-publish](file-upload-capability-publish.md) | low | — | 2026-06-27 |
 | [file-upload-json-fallback](file-upload-json-fallback.md) | low | — | 2026-06-27 |
@@ -28,6 +27,12 @@
 | [external-human-agent-consumes-input](external-human-agent-consumes-input.md) | low | — | 2026-07-04 |
 | [external-human-recv-permission-model](external-human-recv-permission-model.md) | low | — | 2026-07-04 |
 | [external-human-contact-management-ux](external-human-contact-management-ux.md) | low | — | 2026-07-04 |
+| [permission-dual-axis-envelope-schema](permission-dual-axis-envelope-schema.md) | high | phase-14-codex-adapter | 2026-07-10 |
+| [codex-personality-injection-efficacy](codex-personality-injection-efficacy.md) | medium | phase-14-codex-adapter | 2026-07-10 |
+| [permission-dual-axis-ui-vocabulary](permission-dual-axis-ui-vocabulary.md) | medium | phase-14-codex-adapter | 2026-07-10 |
+| [codex-model-effort-catalog](codex-model-effort-catalog.md) | medium | phase-14-codex-adapter | 2026-07-10 |
+| [codex-cwd-extraction](codex-cwd-extraction.md) | low | — | 2026-07-10 |
+| [capabilities-legacy-value-window](capabilities-legacy-value-window.md) | low | — | 2026-07-10 |
 
 ## Recently decided
 
