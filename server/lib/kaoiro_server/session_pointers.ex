@@ -36,8 +36,8 @@ defmodule KaoiroServer.SessionPointers do
   Records `session_id` (and optional `cwd`) as the agent's latest pointer.
   Fire-and-forget so persistence never slows envelope ingest.
   """
-  def record(agent_id, session_id, cwd \\ nil, server \\ __MODULE__) do
-    GenServer.cast(server, {:record, agent_id, session_id, cwd})
+  def record(agent_id, session_id, cwd \\ nil, engine \\ nil, server \\ __MODULE__) do
+    GenServer.cast(server, {:record, agent_id, session_id, cwd, engine})
   end
 
   @doc "Latest pointer `%{session_id, cwd}` for the agent, or nil."
@@ -92,8 +92,22 @@ defmodule KaoiroServer.SessionPointers do
   # degrades to an empty map rather than crashing init.
   defp load_pointers(table) do
     case :dets.foldl(
-           fn {agent_id, session_id, cwd}, acc ->
-             Map.put(acc, agent_id, %{session_id: session_id, cwd: cwd})
+           fn
+             # 4-tuple with engine (ADR-0032 F8: restore must relaunch the
+             # same engine); 3-tuple = pre-engine record, engine nil.
+             {agent_id, session_id, cwd, engine}, acc ->
+               Map.put(acc, agent_id, %{
+                 session_id: session_id,
+                 cwd: cwd,
+                 engine: engine
+               })
+
+             {agent_id, session_id, cwd}, acc ->
+               Map.put(acc, agent_id, %{
+                 session_id: session_id,
+                 cwd: cwd,
+                 engine: nil
+               })
            end,
            %{},
            table
@@ -104,21 +118,22 @@ defmodule KaoiroServer.SessionPointers do
   end
 
   @impl true
-  def handle_cast({:record, agent_id, session_id, cwd}, state) do
+  def handle_cast({:record, agent_id, session_id, cwd, engine}, state) do
     existing = Map.get(state.pointers, agent_id, %{})
     # Keep a previously-recorded field when this record carries none (#22):
     # a session_id-bearing envelope without a statusline cwd (e.g. result /
     # log) must not clobber the cwd that restore needs, and a spawn-time cwd
     # seed (session_id nil) must not erase a known session_id. A non-nil value
-    # always wins, so a real session_id / cwd still updates.
+    # always wins, so a real session_id / cwd / engine still updates.
     session_id = session_id || Map.get(existing, :session_id)
     cwd = cwd || Map.get(existing, :cwd)
-    pointer = %{session_id: session_id, cwd: cwd}
+    engine = engine || Map.get(existing, :engine)
+    pointer = %{session_id: session_id, cwd: cwd, engine: engine}
 
     if existing == pointer do
       {:noreply, state}
     else
-      :ok = :dets.insert(state.table, {agent_id, session_id, cwd})
+      :ok = :dets.insert(state.table, {agent_id, session_id, cwd, engine})
       {:noreply, %{state | pointers: Map.put(state.pointers, agent_id, pointer)}}
     end
   end

@@ -32,7 +32,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         host_id,
         %{
           policy: Keyword.get(opts, :policy, :accept_all),
-          cwd_allowlist: Keyword.get(opts, :cwd_allowlist, ["/home/user/proj"])
+          cwd_allowlist: Keyword.get(opts, :cwd_allowlist, ["/home/user/proj"]),
+          capabilities: Keyword.get(opts, :capabilities, ["claude-code", "codex"])
         },
         self()
       )
@@ -1283,7 +1284,69 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :ok, %{"agent_id" => agent_id}
       # The cast is enqueued before the reply, so the pointer is set by now.
-      assert SessionPointers.get(agent_id) == %{session_id: nil, cwd: "/home/user/seed"}
+      assert SessionPointers.get(agent_id) ==
+               %{session_id: nil, cwd: "/home/user/seed", engine: "claude-code"}
+    end
+
+    test "operator の spawn: engine/model/sandbox を検証して payload に中継する (ADR-0032)" do
+      host_id = "lab-pc-1e"
+      register_host(host_id, cwd_allowlist: ["/home/user/proj"])
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "engine" => "codex",
+          "model" => "gpt-5.6-sol",
+          "effort" => "low",
+          "sandbox" => "read-only",
+          "network_access" => true
+        })
+
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_broadcast "spawn", payload
+      assert payload["engine"] == "codex"
+      assert payload["model"] == "gpt-5.6-sol"
+      assert payload["effort"] == "low"
+      assert payload["sandbox"] == "read-only"
+      assert payload["network_access"] == true
+      # engine が SessionPointers に残る (restore が同 engine で再起動するため)
+      assert SessionPointers.get(agent_id).engine == "codex"
+    end
+
+    test "operator の spawn: host が宣言しない engine は engine_not_supported" do
+      host_id = "lab-pc-1f"
+      register_host(host_id, capabilities: ["claude-code"])
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "engine" => "codex"
+        })
+
+      assert_reply ref, :error, %{reason: "engine_not_supported"}
+    end
+
+    test "operator の spawn: 未知 engine 値は invalid_engine" do
+      host_id = "lab-pc-1g"
+      register_host(host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "engine" => "gemini"
+        })
+
+      assert_reply ref, :error, %{reason: "invalid_engine"}
     end
 
     test "operator の spawn: initial_prompt を payload に載せる" do

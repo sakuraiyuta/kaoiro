@@ -185,10 +185,66 @@ defmodule KaoiroServerWeb.RunnerChannel do
   defp parse_id_list(_, _field), do: {:error, :invalid_persona_id}
 
   defp parse_capabilities(payload) do
+    with {:ok, caps_attrs} <- parse_capability_values(payload),
+         {:ok, engines_attrs} <- parse_engines(payload) do
+      {:ok, Map.merge(caps_attrs, engines_attrs)}
+    end
+  end
+
+  # Legacy value "claude" is silently normalized to "claude-code" with a
+  # deprecation warning for one release window (ADR-0032 F4a, decided
+  # 2026-07-10); the next release rejects it outright.
+  defp parse_capability_values(payload) do
     case Map.get(payload, "capabilities") do
-      nil -> {:ok, %{}}
-      caps when is_list(caps) -> {:ok, %{capabilities: caps}}
-      _ -> {:error, :invalid_capabilities}
+      nil ->
+        {:ok, %{}}
+
+      caps when is_list(caps) ->
+        normalized =
+          Enum.map(caps, fn
+            "claude" ->
+              Logger.warning(
+                "RunnerRegister capability \"claude\" is deprecated " <>
+                  "(ADR-0032 F4a); use \"claude-code\". The alias will be " <>
+                  "rejected in the next release."
+              )
+
+              "claude-code"
+
+            other ->
+              other
+          end)
+
+        {:ok, %{capabilities: normalized}}
+
+      _ ->
+        {:error, :invalid_capabilities}
+    end
+  end
+
+  # Launch catalog per engine (ADR-0032 F4bc): loosely shape-checked and
+  # stored as-is for the operator `hosts` push; the dashboard renders each
+  # engine's model list in the LaunchDialog cascade.
+  defp parse_engines(payload) do
+    case Map.get(payload, "engines") do
+      nil ->
+        {:ok, %{}}
+
+      engines when is_list(engines) ->
+        valid? =
+          Enum.all?(engines, fn
+            %{"id" => id, "models" => models} when is_binary(id) and is_list(models) -> true
+            _ -> false
+          end)
+
+        if valid? do
+          {:ok, %{engines: engines}}
+        else
+          {:error, :invalid_engines}
+        end
+
+      _ ->
+        {:error, :invalid_engines}
     end
   end
 

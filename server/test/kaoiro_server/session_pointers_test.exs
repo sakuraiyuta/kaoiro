@@ -19,8 +19,13 @@ defmodule KaoiroServer.SessionPointersTest do
   end
 
   test "record してから get するとポインタが返る", %{server: server} do
-    SessionPointers.record("a.1", "sess-1", "/home/x", server)
-    assert SessionPointers.get("a.1", server) == %{session_id: "sess-1", cwd: "/home/x"}
+    SessionPointers.record("a.1", "sess-1", "/home/x", nil, server)
+
+    assert SessionPointers.get("a.1", server) == %{
+             session_id: "sess-1",
+             cwd: "/home/x",
+             engine: nil
+           }
   end
 
   test "未知 agent は nil", %{server: server} do
@@ -28,53 +33,68 @@ defmodule KaoiroServer.SessionPointersTest do
   end
 
   test "再 record で最新 session_id が勝つ", %{server: server} do
-    SessionPointers.record("a.2", "sess-1", "/home/x", server)
-    SessionPointers.record("a.2", "sess-2", "/home/x", server)
-    assert SessionPointers.get("a.2", server) == %{session_id: "sess-2", cwd: "/home/x"}
+    SessionPointers.record("a.2", "sess-1", "/home/x", nil, server)
+    SessionPointers.record("a.2", "sess-2", "/home/x", nil, server)
+
+    assert SessionPointers.get("a.2", server) == %{
+             session_id: "sess-2",
+             cwd: "/home/x",
+             engine: nil
+           }
   end
 
   test "cwd 省略時は nil", %{server: server} do
-    SessionPointers.record("a.3", "sess-3", nil, server)
-    assert SessionPointers.get("a.3", server) == %{session_id: "sess-3", cwd: nil}
+    SessionPointers.record("a.3", "sess-3", nil, nil, server)
+    assert SessionPointers.get("a.3", server) == %{session_id: "sess-3", cwd: nil, engine: nil}
   end
 
   test "nil cwd は既知の cwd を上書きしない (#22)", %{server: server} do
-    SessionPointers.record("a.cwd", "sess-1", "/home/x", server)
+    SessionPointers.record("a.cwd", "sess-1", "/home/x", nil, server)
     # A later session_id-bearing record without a cwd (e.g. result/log) must
     # keep the cwd that restore needs.
-    SessionPointers.record("a.cwd", "sess-2", nil, server)
-    assert SessionPointers.get("a.cwd", server) == %{session_id: "sess-2", cwd: "/home/x"}
+    SessionPointers.record("a.cwd", "sess-2", nil, nil, server)
+
+    assert SessionPointers.get("a.cwd", server) == %{
+             session_id: "sess-2",
+             cwd: "/home/x",
+             engine: nil
+           }
   end
 
   test "cwd seed(session_id nil)後に実 session_id が付き cwd は残る (#22)", %{server: server} do
     # spawn-time seed: cwd known, session_id not yet.
-    SessionPointers.record("a.seed", nil, "/home/y", server)
+    SessionPointers.record("a.seed", nil, "/home/y", nil, server)
     # wrapper later reports its session_id without a statusline cwd.
-    SessionPointers.record("a.seed", "sess-real", nil, server)
-    assert SessionPointers.get("a.seed", server) == %{session_id: "sess-real", cwd: "/home/y"}
+    SessionPointers.record("a.seed", "sess-real", nil, nil, server)
+
+    assert SessionPointers.get("a.seed", server) == %{
+             session_id: "sess-real",
+             cwd: "/home/y",
+             engine: nil
+           }
   end
 
   test "同一 DETS ファイルからの再起動で値が残る", %{server: server, path: path} do
-    SessionPointers.record("a.4", "sess-4", "/w", server)
-    assert SessionPointers.get("a.4", server) == %{session_id: "sess-4", cwd: "/w"}
+    SessionPointers.record("a.4", "sess-4", "/w", nil, server)
+    assert SessionPointers.get("a.4", server) == %{session_id: "sess-4", cwd: "/w", engine: nil}
     :ok = GenServer.stop(server)
 
     name2 = :"sp_restart_#{System.unique_integer([:positive])}"
     {:ok, _pid} = SessionPointers.start_link(name: name2, path: path)
-    assert SessionPointers.get("a.4", name2) == %{session_id: "sess-4", cwd: "/w"}
+    assert SessionPointers.get("a.4", name2) == %{session_id: "sess-4", cwd: "/w", engine: nil}
     GenServer.stop(name2)
   end
 
   test "all は全ポインタを返す", %{server: server} do
-    SessionPointers.record("a.5", "s5", nil, server)
-    SessionPointers.record("a.6", "s6", "/c", server)
+    SessionPointers.record("a.5", "s5", nil, nil, server)
+    SessionPointers.record("a.6", "s6", "/c", nil, server)
     all = SessionPointers.all(server)
-    assert all["a.5"] == %{session_id: "s5", cwd: nil}
-    assert all["a.6"] == %{session_id: "s6", cwd: "/c"}
+    assert all["a.5"] == %{session_id: "s5", cwd: nil, engine: nil}
+    assert all["a.6"] == %{session_id: "s6", cwd: "/c", engine: nil}
   end
 
   test "delete で pointer が消え、再起動後も残らない", %{server: server, path: path} do
-    SessionPointers.record("a.7", "s7", "/z", server)
+    SessionPointers.record("a.7", "s7", "/z", nil, server)
     assert %{session_id: "s7"} = SessionPointers.get("a.7", server)
 
     assert SessionPointers.delete("a.7", server) == :ok

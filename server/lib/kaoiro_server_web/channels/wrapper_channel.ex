@@ -234,7 +234,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   # Persist the agent's latest SDK session_id as a restart-surviving
   # pointer (ADR-0014 F1, issue #49). Only fires once the wrapper has
-  # reported a real session_id; cwd rides along from ext when present.
+  # reported a real session_id; cwd / engine ride along from ext when
+  # present (engine keeps restore relaunching the same engine, ADR-0032).
   defp record_session_pointer(%{"agent_id" => agent_id, "session_id" => sid} = envelope)
        when is_binary(sid) and sid != "" do
     cwd =
@@ -243,7 +244,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
         _ -> nil
       end
 
-    SessionPointers.record(agent_id, sid, cwd)
+    engine =
+      case envelope do
+        %{"ext" => %{"engine" => e}} when e in ["claude-code", "codex"] -> e
+        _ -> nil
+      end
+
+    SessionPointers.record(agent_id, sid, cwd, engine)
   end
 
   defp record_session_pointer(_envelope), do: :ok

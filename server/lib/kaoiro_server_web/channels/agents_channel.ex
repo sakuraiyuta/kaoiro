@@ -100,7 +100,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    unknown_host unknown_persona invalid_persona
                    cwd_not_allowed invalid_cwd invalid_name no_session
                    missing_session_id invalid_session_id
-                   unknown_upload)a
+                   unknown_upload invalid_engine engine_not_supported)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -356,13 +356,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, persona} <- resolve_persona(host, payload),
          {:ok, persona} <- apply_custom_name(persona, payload),
          {:ok, cwd} <- fetch_allowed_cwd(host, payload),
+         {:ok, engine} <- fetch_allowed_engine(host, payload),
          {:ok, agent_id} <- allocate_agent_id(host_id),
-         {:ok, spawn_payload} <- build_spawn_payload(agent_id, persona, cwd, payload) do
+         {:ok, spawn_payload} <-
+           build_spawn_payload(agent_id, persona, cwd, engine, payload) do
       KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
       # Seed the cwd now so restore works even if the wrapper never reports a
       # statusline cwd (#22, ADR-0014): the real session_id arrives later and
       # is preserved alongside this cwd (SessionPointers keeps non-nil fields).
-      SessionPointers.record(agent_id, nil, cwd)
+      SessionPointers.record(agent_id, nil, cwd, engine || "claude-code")
       # Persist the identity so operator-driven restore keeps working after
       # a server restart when AgentStates is empty (ADR-0030 D2 / D3).
       AgentDirectory.record(agent_id, persona)
@@ -406,9 +408,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          :ok <- require_disconnected(agent_id),
          {:ok, persona} <- agent_persona(agent_id),
-         {:ok, session_id, cwd} <- session_pointer(agent_id),
+         {:ok, session_id, cwd, engine} <- session_pointer(agent_id),
          {:ok, spawn_payload} <-
-           build_restore_payload(agent_id, persona, cwd, session_id) do
+           build_restore_payload(agent_id, persona, cwd, session_id, engine) do
       KaoiroServerWeb.Endpoint.broadcast(
         "runner:#{host_id_of(agent_id)}",
         "spawn",
@@ -647,7 +649,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # initial_prompt / resume_session_id pass through only when well-typed. The
   # whole map is size-bounded so an oversized initial_prompt cannot reach the
   # runner process.
-  defp build_spawn_payload(agent_id, persona, cwd, payload) do
+  defp build_spawn_payload(agent_id, persona, cwd, engine, payload) do
     spawn_payload =
       %{
         "version" => "0",
@@ -658,10 +660,54 @@ defmodule KaoiroServerWeb.AgentsChannel do
       }
       |> maybe_put_string("initial_prompt", payload["initial_prompt"])
       |> maybe_put_string("resume_session_id", payload["resume_session_id"])
+      |> maybe_put_engine(engine)
+      # Launch-time picks (ADR-0032 F4bc / ADR-0033 F3): free-form model /
+      # effort strings (value sets belong to the engine catalog) plus the
+      # codex sandbox axis and its network toggle; the runner re-validates.
+      |> maybe_put_string("model", payload["model"])
+      |> maybe_put_string("effort", payload["effort"])
+      |> maybe_put_sandbox(payload["sandbox"])
+      |> maybe_put_boolean("network_access", payload["network_access"])
 
     case check_relay_size(spawn_payload) do
       :ok -> {:ok, spawn_payload}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_put_engine(map, nil), do: map
+  defp maybe_put_engine(map, engine), do: Map.put(map, "engine", engine)
+
+  @sandbox_values ["read-only", "workspace-write", "danger-full-access"]
+  defp maybe_put_sandbox(map, value) when value in @sandbox_values,
+    do: Map.put(map, "sandbox", value)
+
+  defp maybe_put_sandbox(map, _value), do: map
+
+  defp maybe_put_boolean(map, key, value) when is_boolean(value),
+    do: Map.put(map, key, value)
+
+  defp maybe_put_boolean(map, _key, _value), do: map
+
+  # engine must be one the host declared in its capabilities (ADR-0032
+  # F4a). Absent = nil (the runner defaults to claude-code), so an old
+  # dashboard keeps working; an unknown or undeclared value is rejected
+  # rather than silently launching the wrong engine.
+  @engine_values ["claude-code", "codex"]
+  defp fetch_allowed_engine(host, payload) do
+    case payload["engine"] do
+      nil ->
+        {:ok, nil}
+
+      engine when engine in @engine_values ->
+        if engine in Map.get(host, :capabilities, []) do
+          {:ok, engine}
+        else
+          {:error, :engine_not_supported}
+        end
+
+      _ ->
+        {:error, :invalid_engine}
     end
   end
 
@@ -692,8 +738,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # pointer that never recorded a cwd cannot be restored.
   defp session_pointer(agent_id) do
     case SessionPointers.get(agent_id) do
-      %{session_id: sid, cwd: cwd} when is_binary(sid) and is_binary(cwd) ->
-        {:ok, sid, cwd}
+      %{session_id: sid, cwd: cwd} = pointer when is_binary(sid) and is_binary(cwd) ->
+        # engine may be nil on pre-engine pointers; the runner then defaults
+        # to claude-code, matching what those agents were (ADR-0032 F4a).
+        {:ok, sid, cwd, Map.get(pointer, :engine)}
 
       _ ->
         {:error, :no_session}
@@ -717,9 +765,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # :no_session, matching restore's semantics.
   defp resume_disconnected(agent_id, session_id, socket) do
     with {:ok, persona} <- agent_persona(agent_id),
-         {:ok, _sid, cwd} <- session_pointer(agent_id),
+         {:ok, _sid, cwd, engine} <- session_pointer(agent_id),
          {:ok, spawn_payload} <-
-           build_restore_payload(agent_id, persona, cwd, session_id) do
+           build_restore_payload(agent_id, persona, cwd, session_id, engine) do
       KaoiroServerWeb.Endpoint.broadcast(
         "runner:#{host_id_of(agent_id)}",
         "spawn",
@@ -763,15 +811,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp fetch_resume_session_id(_payload), do: {:error, :missing_session_id}
 
-  defp build_restore_payload(agent_id, persona, cwd, session_id) do
-    spawn_payload = %{
-      "version" => "0",
-      "agent_id" => agent_id,
-      "persona" => persona,
-      "cwd" => cwd,
-      "token" => Auth.mint_wrapper_token(agent_id),
-      "resume_session_id" => session_id
-    }
+  defp build_restore_payload(agent_id, persona, cwd, session_id, engine) do
+    spawn_payload =
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => persona,
+        "cwd" => cwd,
+        "token" => Auth.mint_wrapper_token(agent_id),
+        "resume_session_id" => session_id
+      }
+      |> maybe_put_engine(engine)
 
     case check_relay_size(spawn_payload) do
       :ok -> {:ok, spawn_payload}

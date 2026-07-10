@@ -32,6 +32,45 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert entry.cwd_allowlist == ["/home/user/proj"]
     end
 
+    test "capabilities 旧値 claude は claude-code に正規化、engines は保持 (ADR-0032 F4a/F4bc)" do
+      host_id = "lab-pc-engines"
+      socket = join_runner(host_id)
+
+      engines = [
+        %{"id" => "claude-code", "models" => []},
+        %{
+          "id" => "codex",
+          "models" => [%{"value" => "gpt-5.6-sol", "display_name" => "GPT-5.6 Sol"}]
+        }
+      ]
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{"capabilities" => ["claude", "codex"], "engines" => engines})
+        )
+
+      assert_reply ref, :ok
+      entry = HostRegistry.get(host_id)
+      assert entry.capabilities == ["claude-code", "codex"]
+      assert entry.engines == engines
+    end
+
+    test "engines の型崩れは invalid_register" do
+      host_id = "lab-pc-bad-engines"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{"engines" => [%{"id" => 1}]})
+        )
+
+      assert_reply ref, :error, %{reason: "invalid_engines"}
+    end
+
     test "allowlist: allowed_personas が MapSet として保持される" do
       host_id = "lab-pc-allow"
       socket = join_runner(host_id)
