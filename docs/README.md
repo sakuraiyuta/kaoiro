@@ -50,6 +50,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0028](adr/0028-external-human-messaging.md) | 外部人間メッセージング — 人間を外部チャネルの participant 化・一方向 authority・discord-wrapper トポロジ | accepted |
 | [0029](adr/0029-persona-server-sot-and-pack-distribution.md) | ペルソナは server 集約 SoT、zip pack で配布し auto-watch で反映 | accepted |
 | [0030](adr/0030-agent-directory-and-explicit-restore.md) | サーバ再起動越しの agent identity 永続と client 明示復元(一括/個別) | accepted |
+| [0031](adr/0031-runner-persona-trust-mode.md) | runner の persona 受け入れは allowlist/blacklist の 2 モードから選択 | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh --columns "# 決定 Status" docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。

@@ -6,7 +6,7 @@ opened: 2026-07-05
 supersedes: [8, 26]
 superseded_by: null
 related_specs: [personas, persona-pack-schema, persona-personality-injection, setup-wizards, protocol, threat-model]
-related_adrs: [2, 3, 8, 24, 26]
+related_adrs: [2, 3, 8, 24, 26, 31]
 ---
 
 # ADR-0029 — ペルソナは server 集約 SoT、zip pack で配布し auto-watch で反映
