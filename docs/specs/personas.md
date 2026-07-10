@@ -62,7 +62,9 @@ Phase 2 タスク 2-3(表情差分の量産)と将来のペルソナ追加が参
 (`claude-code` / `codex`) が共有する。Claude では従来通り SDK
 `systemPrompt.append` に注入 ([ADR-0026](../adr/0026-persona-personality-injection.md)
 → [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md))、
-Codex では対応する system prompt 相当 API に注入する。engine 別 persona pack
+Codex では config key `developer_instructions` に注入する (developer role
+メッセージとして base instructions に append される。2026-07-10 実証、
+[ADR-0032](../adr/0032-codex-adapter.md) F3)。engine 別 persona pack
 (`kuroe-claude` / `kuroe-codex`) や `personality.md` 内の engine 別セクション
 は持たない。Codex 側 injection の実効性 (口調・態度の再現度) は
 [codex-personality-injection-efficacy](../open-questions/codex-personality-injection-efficacy.md)

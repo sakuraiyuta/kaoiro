@@ -1,7 +1,7 @@
 ---
 title: Phase 14 — Codex アダプタ実装
 description: wrapper/codex に @openai/codex-sdk 対応の EngineAdapter を実装。権限二軸 envelope 拡張、engine セレクト UI、runner launcher の engine 解決、共通 Tool 記述層への inter-agent tool 移送を含む。
-status: planned
+status: in-progress
 phase: 14
 depends_on: [phase-13-wrapper-multipackage-restructure]
 last_updated: 2026-07-10
@@ -34,25 +34,25 @@ last_updated: 2026-07-10
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 14-1 | `wrapper/codex` に `@openai/codex-sdk` 依存追加、`EngineAdapter` interface を実装するアダプタ本体を実装 | ⏳ | runStreamed のイベント → 共通 AdapterEvent へ変換。毎ターン exec spawn の process モデル ([codex-sdk-events](../specs/codex-sdk-events.md)) |
-| 14-2 | ThreadEvent → 共通 AdapterEvent の写像を実ターンで検証し `codex-sdk-events.md` を accepted へ昇格 | ⏳ | spec は 2026-07-10 に実型ベースへ更新済み。認証後の実ターン確認が残 |
-| 14-3 | ADR-0033 F1 の `ext.permission = {sandbox, approval}` を `@kaoiro/protocol` に追加 | ⏳ | `permission_mode` は 1 リリース窓並置 (D-A) |
-| 14-4 | Claude 6 mode → 二軸 mapping table を `wrapper/claude-code` に実装 (ADR-0033 F2 の表) | ⏳ | phase-13 で作った mapping table プレースホルダに実装を入れる |
-| 14-5 | Codex adapter の spawn 時 sandbox + `approval: "never"` 固定を `ext.permission` に投影 | ⏳ | ADR-0033 F3。waiting_permission は Codex で発生しない |
-| 14-6 | 共通 Tool 記述層 (JSON Schema + handler pair) を完成、inter-agent tools を移送 | ⏳ | 現 `wrapper/src/inter_agent.ts` を `wrapper/agent-common` へ移し、Claude / Codex 両方が同じ handler を使う |
-| 14-6b | `@kaoiro/codex` 同梱の stdio MCP bridge 実装 (unix socket で wrapper に接続、`mcp_servers.kaoiro` config override で登録) | ⏳ | ADR-0032 F5 改訂版。ターンごとに codex が bridge を spawn する前提 |
-| 14-7 | Codex 側の `ask_user_question` を MCP bridge 経由で提供、question_request envelope への正規化 | ⏳ | Claude native 側の挙動に影響なし。waiting_question 成立を確認 |
-| 14-8 | `SpawnRequest` / `SpawnMessage` に `engine` フィールド追加、`@kaoiro/protocol` の型更新 | ⏳ | server 側 `capabilities` 照合で検証 |
-| 14-9 | runner launcher (`runner/src/spawn.ts`) を `engine → wrapper パッケージ` 解決に変更 | ⏳ | `KAOIRO_WRAPPER_DEV=1` パスも engine 分岐 |
-| 14-10 | dashboard の LaunchDialog に engine セレクト追加 (capabilities が 2 種以上のときのみ) | ⏳ | 引き続き 1 種のときは現行 UX 維持 |
-| 14-11 | dashboard の LaunchDialog を engine → model → optional effort の三段選択に再構成 | ⏳ | model / effort リストは engine adapter が返す。Codex は curated 静的カタログ (ADR-0032 F4bc) |
-| 14-12 | dashboard の権限 UI を更新: 表示は `ext.permission` 二軸バッジ、操作は engine-native セレクト + 二軸換算ラベル併記 (ADR-0033 F4) | ⏳ | preset 層は採らない (2026-07-10 決定) |
-| 14-13 | capabilities フィールド値のリネーム (`claude` → `claude-code`)、旧値 1 リリース窓正規化 + warn 実装 | ⏳ | ADR-0032 F4a。次リリースで厳格 reject へ |
-| 14-14 | Codex 側の session 列挙・resume 実装 (`~/.codex/sessions/**/rollout-*.jsonl` の `session_meta.cwd` 照合) | ⏳ | ADR-0032 F8 で方式確定済み |
+| 14-1 | `wrapper/codex` に `@openai/codex-sdk` 依存追加、`EngineAdapter` interface を実装するアダプタ本体を実装 | ✅ | runStreamed のイベント → 共通 AdapterEvent へ変換。毎ターン exec spawn の process モデル ([codex-sdk-events](../specs/codex-sdk-events.md)) |
+| 14-2 | ThreadEvent → 共通 AdapterEvent の写像を実ターンで検証し `codex-sdk-events.md` を accepted へ昇格 | ⚠ | spec は 2026-07-10 に実型ベースへ更新済み。認証後の実ターン確認が残 |
+| 14-3 | ADR-0033 F1 の `ext.permission = {sandbox, approval}` を `@kaoiro/protocol` に追加 | ✅ | `permission_mode` は 1 リリース窓並置 (D-A) |
+| 14-4 | Claude 6 mode → 二軸 mapping table を `wrapper/claude-code` に実装 (ADR-0033 F2 の表) | ✅ | phase-13 で作った mapping table プレースホルダに実装を入れる |
+| 14-5 | Codex adapter の spawn 時 sandbox + `approval: "never"` 固定を `ext.permission` に投影 | ✅ | ADR-0033 F3。waiting_permission は Codex で発生しない |
+| 14-6 | 共通 Tool 記述層 (JSON Schema + handler pair) を完成、inter-agent tools を移送 | ✅ | 現 `wrapper/src/inter_agent.ts` を `wrapper/agent-common` へ移し、Claude / Codex 両方が同じ handler を使う |
+| 14-6b | `@kaoiro/codex` 同梱の stdio MCP bridge 実装 (unix socket で wrapper に接続、`mcp_servers.kaoiro` config override で登録) | ✅ | ADR-0032 F5 改訂版。ターンごとに codex が bridge を spawn する前提 |
+| 14-7 | Codex 側の `ask_user_question` を MCP bridge 経由で提供、question_request envelope への正規化 | ✅ | Claude native 側の挙動に影響なし。waiting_question 成立を確認 |
+| 14-8 | `SpawnRequest` / `SpawnMessage` に `engine` フィールド追加、`@kaoiro/protocol` の型更新 | ✅ | server 側 `capabilities` 照合で検証 |
+| 14-9 | runner launcher (`runner/src/spawn.ts`) を `engine → wrapper パッケージ` 解決に変更 | ✅ | `KAOIRO_WRAPPER_DEV=1` パスも engine 分岐 |
+| 14-10 | dashboard の LaunchDialog に engine セレクト追加 (capabilities が 2 種以上のときのみ) | ✅ | 引き続き 1 種のときは現行 UX 維持 |
+| 14-11 | dashboard の LaunchDialog を engine → model → optional effort の三段選択に再構成 | ✅ | model / effort リストは engine adapter が返す。Codex は curated 静的カタログ (ADR-0032 F4bc) |
+| 14-12 | dashboard の権限 UI を更新: 表示は `ext.permission` 二軸バッジ、操作は engine-native セレクト + 二軸換算ラベル併記 (ADR-0033 F4) | ✅ | preset 層は採らない (2026-07-10 決定) |
+| 14-13 | capabilities フィールド値のリネーム (`claude` → `claude-code`)、旧値 1 リリース窓正規化 + warn 実装 | ✅ | ADR-0032 F4a。次リリースで厳格 reject へ |
+| 14-14 | Codex 側の session 列挙・resume 実装 (`~/.codex/sessions/**/rollout-*.jsonl` の `session_meta.cwd` 照合) | ✅ | ADR-0032 F8 で方式確定済み |
 | 14-15 | Q1 検証: 4 persona × Codex adapter での口調・態度再現テスト | ⏳ | fuji / kuroe / ao / momo。`developer_instructions` 注入、built-in `personality` config 干渉も確認。要 ChatGPT login (HITL) |
-| 14-16 | Codex 側 cwd 起動時反映 (追跡は best-effort、Q4 は継続) | ⏳ | 起動 cwd を `ext.cwd` に載せる最小実装 (thread.started に cwd が無いため wrapper が自前 stamp) |
-| 14-17 | plugin-model.md / architecture.md / personas.md への追補 (F3 明記など、docs/plans に紐付く仕様変更を反映) | ⏳ | protocol.md / codex-sdk-events.md は 2026-07-10 反映済み。残りは phase 完了直前にまとめて |
-| 14-18 | wrapper / server / dashboard / runner の全テスト通過確認 | ⏳ | regression が phase-13 と本 phase の 2 段階で健全性維持 |
+| 14-16 | Codex 側 cwd 起動時反映 (追跡は best-effort、Q4 は継続) | ✅ | 起動 cwd を `ext.cwd` に載せる最小実装 (thread.started に cwd が無いため wrapper が自前 stamp) |
+| 14-17 | plugin-model.md / architecture.md / personas.md への追補 (F3 明記など、docs/plans に紐付く仕様変更を反映) | ✅ | protocol.md / codex-sdk-events.md は 2026-07-10 反映済み。残りは phase 完了直前にまとめて |
+| 14-18 | wrapper / server / dashboard / runner の全テスト通過確認 | 🟡 | regression が phase-13 と本 phase の 2 段階で健全性維持 |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
