@@ -28,7 +28,8 @@ phase-14 完了判定 (代表 persona 動作確認) をブロックする。Code
 
 ## 判断材料
 
-- Codex SDK の system prompt 相当 API の有無 (`thread.run` の options に instructions / system_prompt が渡せるか、CLI 側 `~/.codex/prompts/` との関係)
+- 注入経路は確定済み (2026-07-10): config `developer_instructions` が developer role メッセージとして base instructions に append される ([ADR-0032](../adr/0032-codex-adapter.md) F3、rollout ファイルで実証)。残る論点は「効くか」の実挙動評価のみ。
+- Codex built-in の `personality` config (none/friendly/pragmatic、exec 既定 **pragmatic**) が persona 口調と干渉する可能性 — 検証時に `none` 指定の要否を確認する。
 - fuji / kuroe / ao / momo の 4 persona で同一プロンプトを Codex に投げた実挙動 (7 状態別の応答口調・態度)
 - Claude 側との比較のための評価軸 (一人称・語尾・態度・応答の詳細度)
 

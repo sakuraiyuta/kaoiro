@@ -12,51 +12,55 @@ related: [protocol, plugin-model, architecture, agent-sdk-events, codex-personal
 
 Codex アダプタ ([plugin-model](plugin-model.md)) が依拠する TypeScript 版 Codex SDK (`@openai/codex-sdk` 0.144.1) の**実イベント/コールバック仕様**を確定し、kaoiro の状態 ([protocol](protocol.md)) への導出を定義する。[agent-sdk-events](agent-sdk-events.md) の Claude 版と対をなす spec で、共通 `AdapterEvent` に変換される。
 
-**Status: provisional** — 実装フェーズ ([phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)) で具体挙動を確認しながら本 spec を accepted に昇格する。特に thread event の実データ構造、model / effort の SDK 側取得可否、system prompt 相当 API は phase-14 実装時に検証。
+**Status: provisional** — 型定義・SDK 実装・同梱バイナリ・upstream `rust-v0.144.1` ソースの検証 (2026-07-10) で下記は確定済み。認証を伴う実ターンの挙動確認 ([phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)) を経て accepted に昇格する。
 
 ## Definition
 
-### メイン API
+### メイン API と process モデル
 
 ```typescript
 import { Codex } from "@openai/codex-sdk";
 
-const codex = new Codex();
-const thread = codex.startThread();          // or codex.resumeThread(id)
+const codex = new Codex({ config: { developer_instructions: "..." } });
+const thread = codex.startThread({ sandboxMode: "workspace-write" });
 const { events } = await thread.runStreamed(prompt);
 for await (const ev of events) {
-  // ev.type: thread.started | turn.started | item.started
-  //        | item.completed | turn.completed | turn.failed
+  // ev.type: thread.started | turn.started | item.started | item.updated
+  //        | item.completed | turn.completed | turn.failed | error
 }
 ```
 
-- **`Codex().startThread()`** — 新規会話を開始。`thread.id` (例 `thr_xxx`) が返る。
-- **`codex.resumeThread(id)`** — 既存 thread の再開。`session_id` opaque 値 ([ADR-0014](../adr/0014-session-resume-and-restore.md)) として wrapper が保管したものを渡す。
-- **`thread.run(prompt)`** — 単発実行、`turn.finalResponse` / `turn.items` を返す。
-- **`thread.runStreamed(prompt)`** — `AsyncIterable<ThreadEvent>` を返す streaming API。kaoiro は原則こちらを使う。
+- **process モデル (重要)**: SDK は常駐 session を持たない。`thread.run()` / `thread.runStreamed()` の**呼び出しごとに `codex exec --experimental-json` サブプロセスを新規 spawn** し、2 ターン目以降は `codex exec resume <thread_id>` で再開する。stdin は prompt 書き込み直後に close される — **実行中に caller から入力を返す経路は存在しない** (承認・追加入力とも不可)。ターン中断は `TurnOptions.signal` (AbortSignal) で process kill。
+- **`Codex(options)`** — `codexPathOverride` / `baseUrl` / `apiKey` (env `CODEX_API_KEY` として注入) / `config` (任意の `--config key=value` override、毎 run 付与) / `env`。
+- **`codex.startThread(threadOptions)`** — `model` / `sandboxMode` / `workingDirectory` / `skipGitRepoCheck` / `modelReasoningEffort` / `networkAccessEnabled` / `webSearchMode` / `approvalPolicy` (exec では無効、後述) / `additionalDirectories`。
+- **`codex.resumeThread(id, threadOptions)`** — 既存 thread の再開。`session_id` opaque 値 ([ADR-0014](../adr/0014-session-resume-and-restore.md)) として wrapper が保管した UUID を渡す。
+- **`thread.id`** — 初回 `thread.started` 後に populate される UUIDv7 文字列 (例 `019f4bdb-d821-7631-aee1-ec7982060311`)。
 
-### ThreadEvent の変種
-
-Codex SDK は次の `ThreadEvent` を stream で yield する:
+### ThreadEvent の変種 (0.144.1 実型)
 
 | type | 意味 | 主なフィールド |
 |---|---|---|
-| `thread.started` | thread 起動通知 | thread_id, model, sandbox, approval, cwd |
-| `turn.started` | ユーザ prompt から新しい turn 開始 | prompt |
-| `item.started` | 1 item の開始 (assistant message / tool call / file change 等) | item_id, item_type |
-| `item.completed` | 1 item の完了 | item_id, item_type, item (派生型別本体) |
-| `turn.completed` | turn 完了 | usage (tokens 情報) |
-| `turn.failed` | turn 失敗 | error_reason |
+| `thread.started` | thread 起動通知 | `thread_id` のみ (model / sandbox / cwd は**載らない**) |
+| `turn.started` | turn 開始 | (なし) |
+| `item.started` | 1 item の開始 | `item` (ThreadItem、初期状態 in_progress) |
+| `item.updated` | item の更新 | `item` |
+| `item.completed` | item の完了 | `item` |
+| `turn.completed` | turn 完了 | `usage` (input/cached_input/output/reasoning_output tokens。**USD コストは無い**) |
+| `turn.failed` | turn 失敗 | `error.message` |
+| `error` | stream 上の致命エラー | `message` |
 
-item の派生型:
+ThreadItem の派生型 (`item.type`):
 
-- `assistant_message` — text
-- `command_execution` — shell コマンド実行
-- `file_change` — file 編集 (path, old, new)
-- `mcp_tool_call` — 外部 MCP tool 呼び出し
-- `dynamic_tool_call` — wrapper が提供した `dynamicTools` の呼び出し ([ADR-0032](../adr/0032-codex-adapter.md) F5 の共通 Tool 記述層経由)
+- `agent_message` — text (model の発話)
+- `reasoning` — text (要約された思考)
+- `command_execution` — command / aggregated_output / exit_code / status
+- `file_change` — changes[] (path, kind=add|delete|update) / status
+- `mcp_tool_call` — server / tool / arguments / result? / error? / status
+- `web_search` — query
+- `todo_list` — items[] (text, completed)
+- `error` — message (非致命 item)
 
-**注記**: 上記フィールド名は Codex SDK ドキュメントに基づく初期スケッチであり、実データ構造は phase-14 実装時に確認する。差異が判明したら本 spec を更新する。
+**注記**: 起草時に想定した `dynamic_tool_call` item は存在しない。kaoiro の tool 呼び出しはすべて `mcp_tool_call` (server="kaoiro") として観測される ([ADR-0032](../adr/0032-codex-adapter.md) F5 の MCP bridge 経由)。
 
 ### 状態導出
 
@@ -64,81 +68,81 @@ Codex ThreadEvent → kaoiro 状態 ([protocol](protocol.md)) への導出は共
 
 | ThreadEvent | kaoiro 状態 | 補足 |
 |---|---|---|
-| `thread.started` | `session_init` — envelope の `session_id` 更新、`ext.cwd` 起動値、`ext.model` 初期化 | Claude の SDKSystemMessage(init) 相当 |
+| `thread.started` | `session_init` — envelope の `session_id` を `thread_id` で更新 | model / cwd は event に載らないため spawn 時の値を wrapper が自前で `ext` に stamp する |
 | `turn.started` | `thinking` | Claude の user message 送信直後相当 |
-| `item.started` (item_type=assistant_message) | `thinking` | 出力開始 |
-| `item.completed` (item_type=assistant_message) | `log` (kind=assistant, text) を送出 | protocol の log envelope |
-| `item.started` (item_type=command_execution) | `tool_running` | permission 二軸 ([ADR-0033](../adr/0033-permission-model-dual-axis.md)) で承認された shell |
-| `item.completed` (item_type=command_execution) | `log` (kind=tool_result, tool_name=shell, output) | |
-| `item.started` (item_type=file_change) | `tool_running` | edit tool |
-| `item.completed` (item_type=file_change) | `log` (kind=tool_result, tool_name=edit) | |
-| `item.started` (item_type=dynamic_tool_call) の `ask_user_question` | `waiting_question` — `question_request` envelope ([ADR-0027](../adr/0027-askuserquestion-envelope.md)) を発行 | Codex は native AskUserQuestion を持たないため wrapper 提供 tool 経由 ([ADR-0032](../adr/0032-codex-adapter.md) F6) |
-| `item.started` (item_type=dynamic_tool_call) の `mcp__kaoiro__*` | `tool_running` | inter-agent tool、共通 Tool 記述層 ([ADR-0032](../adr/0032-codex-adapter.md) F5) 経由 |
-| `turn.completed` | `idle` — envelope の `type=result` を発行 (usage を `ext.cost` に反映) | Claude の SDKResultMessage(subtype=success) 相当 |
-| `turn.failed` | `error` — `state_change(error)` を発行 | Claude の SDKResultMessage(subtype=error_*) 相当 |
+| `item.started` (agent_message / reasoning) | `thinking` | 出力開始 |
+| `item.completed` (agent_message) | `log` (kind=assistant, text) を送出 | protocol の log envelope |
+| `item.started` (command_execution) | `tool_running` | sandbox 内実行 (承認は発生しない、[ADR-0033](../adr/0033-permission-model-dual-axis.md) F3) |
+| `item.completed` (command_execution) | `log` (kind=tool_result, tool_name=shell, output=aggregated_output) | |
+| `item.started` (file_change) | `tool_running` | patch 適用 |
+| `item.completed` (file_change) | `log` (kind=tool_result, tool_name=edit) | |
+| `item.started` (mcp_tool_call, server=kaoiro, tool=ask_user_question) | `waiting_question` — `question_request` envelope ([ADR-0027](../adr/0027-askuserquestion-envelope.md)) は bridge → wrapper handler 側で発行 | MCP 応答までターンがブロックするため成立 |
+| `item.started` (mcp_tool_call, server=kaoiro, tool=send_to_agent 等) | `tool_running` | inter-agent tool、共通 Tool 記述層経由 |
+| `item.started` (mcp_tool_call, 他 server) / (web_search) | `tool_running` | |
+| `item.completed` (todo_list / reasoning) | 状態影響なし | log 化は任意 (MVP では見送り) |
+| `item.completed` (error item) | 状態影響なし・`log` 相当で記録 | 非致命 |
+| `turn.completed` | `idle` — envelope の `type=result` を発行。usage (tokens) を `ext` に反映 — USD が無いため `ext.cost` は Codex では**載せない** | Claude の SDKResultMessage(success) 相当 |
+| `turn.failed` / `error` | `error` — `state_change(error)` を発行 | Claude の SDKResultMessage(error_*) 相当 |
 
-### 権限 (approval callback)
+### 権限 (承認フローは存在しない)
 
-Codex SDK の approval flow は sandbox × approval 二軸 ([ADR-0033](../adr/0033-permission-model-dual-axis.md)) で表現される。permission 待ちの UI 表現と envelope 出力:
+`codex exec` は harness override で `approval_policy=never` を強制し (`-c approval_policy=...` も無効)、JSON event stream に承認要求 event は存在しない。したがって:
 
-- `approval_policy = on-request` のとき、SDK は operator への approval コールバックを発行する。
-- wrapper (Codex adapter) はこれを受け、`state_change(waiting_permission)` + `state_change.ext.pending_permission` (sandbox / approval / tool_name / input / request_id / ts) を server へ送る。
-- operator の承認 / 拒否は `permission_decision` envelope として wrapper へ届き、Codex SDK の approval Promise を resolve / reject する。
+- Codex agent の権限は **spawn 時の二軸で固定** ([ADR-0033](../adr/0033-permission-model-dual-axis.md) F3): `ext.permission = { sandbox: <spawn 時選択>, approval: "never" }` を wrapper が stamp する。
+- `waiting_permission` 状態・`pending_permission` ext・`permission_decision` envelope は Codex では発生しない。
+- sandbox 外への escalation が必要なコマンドは自動拒否され、失敗として model に返る (model は sandbox 内で代替手段を試みる)。
+- upstream の exec 承認対応 (feature flag `exec_permission_approvals`、開発中) は [open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) で追跡。
 
-**注記**: Codex SDK の approval コールバック名・型は phase-14 実装時に確認 (SDK ドキュメントの記述は概略のみ)。
+### session / thread の resume と列挙
 
-### session / thread の resume
+- 保管: 初回 `thread.started` で得た `thread_id` (UUIDv7) を kaoiro の `session_id` として保持し、`AgentStates` / `SessionPointers` ([ADR-0014](../adr/0014-session-resume-and-restore.md)) に書き込む。
+- 復帰: 復元指示時に `codex.resumeThread(thread_id)` で再開。
+- 列挙: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を走査し、先頭行 `session_meta` の `cwd` フィールドで照合する (実ファイルで確認済み)。`~/.codex/state_5.sqlite` の index は internal のため依存しない。
 
-- 保管: 初回 `thread.started` で得た `thread_id` (`thr_xxx`) を kaoiro の `session_id` として保持し、`AgentStates` / `SessionPointers` ([ADR-0014](../adr/0014-session-resume-and-restore.md)) に書き込む。
-- 復帰: 復元指示時 (client の restore、runner の enumerate-sessions) に `codex.resumeThread(thread_id)` で再開。
-- 列挙: runner の cwd 配下 session 列挙は `~/.codex/threads/` 相当のローカルストア または Codex App Server の `thread/turns/list` 相当で行う (実装方式は phase-14 で確定)。
+### tool 定義 (MCP bridge)
 
-### tool 定義 (dynamicTools)
-
-`wrapper/agent-common` の共通 Tool 記述層 (JSON Schema + handler) を Codex 側では `dynamicTools` として `thread.run()` / `runStreamed()` に渡す ([ADR-0032](../adr/0032-codex-adapter.md) F5):
+`wrapper/agent-common` の共通 Tool 記述層 (JSON Schema + handler) を Codex 側では `@kaoiro/codex` 同梱の stdio MCP bridge で提供する ([ADR-0032](../adr/0032-codex-adapter.md) F5):
 
 ```typescript
-await thread.runStreamed(prompt, {
-  dynamicTools: [
-    {
-      name: "mcp__kaoiro__send_to_agent",
-      description: "...",
-      inputSchema: { type: "object", properties: { ... } },
-      handler: async (input) => { ... },
+const codex = new Codex({
+  config: {
+    developer_instructions: personalityPrompt,
+    mcp_servers: {
+      kaoiro: {
+        command: process.execPath,
+        args: [bridgeScriptPath],
+        env: { KAOIRO_BRIDGE_SOCKET: socketPath },
+      },
     },
-    {
-      name: "ask_user_question",
-      description: "...",
-      inputSchema: { type: "object", properties: { ... } },
-      handler: async (input) => { ... },
-    },
-    ...
-  ],
+  },
 });
 ```
 
-Claude adapter は同じ (name, description, inputSchema, handler) を Zod schema + `createSdkMcpServer` に写像する。SSOT は wrapper/agent-common の共通 Tool 記述層。
+- bridge は codex がターンごとに spawn する stdio MCP server。env の unix socket 経由で親 wrapper に接続し、tool 呼び出し (`ask_user_question` / `mcp__kaoiro__send_to_agent` / `list_agents` / `whoami`) を wrapper 側の共通 handler へ転送する。
+- Claude adapter は同じ (name, description, inputSchema, handler) を Zod schema + `createSdkMcpServer` に写像する。SSOT は wrapper/agent-common の共通 Tool 記述層。
 
 ### system prompt 相当 (persona personality 注入)
 
-Codex SDK が Claude Agent SDK の `systemPrompt.append` に相当する API を持つかは phase-14 実装時に確認する ([codex-personality-injection-efficacy](../open-questions/codex-personality-injection-efficacy.md))。候補:
+config key `developer_instructions` を使う ([ADR-0032](../adr/0032-codex-adapter.md) F3、2026-07-10 実証):
 
-- `thread.run(prompt, { instructions: "..." })` オプション
-- Codex CLI の `~/.codex/prompts/` に置く
-- prompt に prefix として毎回結合
+- developer role メッセージとして base instructions に **append** される (rollout ファイルで確認)。
+- `instructions` / `model_instructions_file` は base instructions を**置換**するため使わない (upstream も strongly discouraged)。
+- AGENTS.md (cwd / `$CODEX_HOME`) も append 系だが、ユーザの作業リポジトリを汚すため kaoiro では使わない。
+- built-in `personality` config (none/friendly/pragmatic、exec 既定 pragmatic) との干渉は [codex-personality-injection-efficacy](../open-questions/codex-personality-injection-efficacy.md) の検証項目。
 
 [personas](personas.md) の `personality.md` はそのまま両 engine で共有 ([ADR-0032](../adr/0032-codex-adapter.md) F3)。
 
 ## Constraints
 
-- **MUST**: `session_id` は Codex thread ID (`thr_xxx`) をそのまま使い、独自 prefix を付けない ([ADR-0032](../adr/0032-codex-adapter.md) F8)。
-- **MUST**: `state_change.ext.pending_permission` に `sandbox` / `approval` を載せる ([ADR-0033](../adr/0033-permission-model-dual-axis.md))。
-- **MUST NOT**: OPENAI_API_KEY / ChatGPT login 情報を config JSON / envelope / log に書き出さない ([ADR-0032](../adr/0032-codex-adapter.md) F7)。
+- **MUST**: `session_id` は Codex thread ID (UUIDv7) をそのまま使い、独自 prefix を付けない ([ADR-0032](../adr/0032-codex-adapter.md) F8)。
+- **MUST**: `ext.permission = {sandbox, approval}` を spawn 時に stamp し、approval は `never` 固定 ([ADR-0033](../adr/0033-permission-model-dual-axis.md))。
+- **MUST NOT**: `CODEX_API_KEY` / ChatGPT login 情報を config JSON / envelope / log に書き出さない ([ADR-0032](../adr/0032-codex-adapter.md) F7)。
+- **MUST NOT**: base instructions を置換する `instructions` / `model_instructions_file` を使わない。
 - **SHOULD**: cwd 追跡は best-effort ([codex-cwd-extraction](../open-questions/codex-cwd-extraction.md))、MVP は起動 cwd 固定表示で可。
 
 ## See Also
 
 - Related specs: [protocol](protocol.md)、[plugin-model](plugin-model.md)、[architecture](architecture.md)、[agent-sdk-events](agent-sdk-events.md) (Claude 版と対)
 - ADR: [ADR-0032](../adr/0032-codex-adapter.md) (Codex アダプタ導入)、[ADR-0033](../adr/0033-permission-model-dual-axis.md) (権限二軸)
-- Open questions: [codex-personality-injection-efficacy](../open-questions/codex-personality-injection-efficacy.md)、[codex-cwd-extraction](../open-questions/codex-cwd-extraction.md)、[codex-model-effort-catalog](../open-questions/codex-model-effort-catalog.md)
+- Open questions: [codex-personality-injection-efficacy](../open-questions/codex-personality-injection-efficacy.md)、[codex-cwd-extraction](../open-questions/codex-cwd-extraction.md)、[codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)
 - Plan: [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)

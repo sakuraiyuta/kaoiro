@@ -89,19 +89,24 @@ flowchart LR
 | `payload` | 種別ごとの本体 | 型は `type` に依存。下記「type と payload」 |
 | `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。実装済: `cost`(累計 USD、#8、Claude Code アダプタが result に付与)/ `model`・`cwd`・`context`(`{used_tokens,max_tokens,used_percentage}`)・`rate_limits`(`{<window>:{status,utilization,resets_at}}`、window=`five_hour`/`seven_day`…)・`slash_commands`(`string[]`、利用可能なスラッシュコマンド名、クライアントの `/` 補完用、#34)・`models`(`[{value, display_name, description, effort_levels?}]`、選択可能なモデルと各モデルの effort 値域。bare `/model`・`/effort` 選択ダイアログをラウンドトリップ無しで構成するための前出し。`value` は `setModel` 用エイリアス、`effort_levels` は effort 非対応モデルで省略、#54 / [ADR-0020](../adr/0020-dashboard-battery-included-client.md))・`permission_mode`(`'default'|'acceptEdits'|'bypassPermissions'|'plan'|'dontAsk'|'auto'`、現在の Claude Code 許可モード、#57。init で確定、SDKStatusMessage 受信で上書き)・`fast_mode`(`'off'|'cooldown'|'on'`、Fast mode 状態、#57。init および各 result メッセージで上書き。`cooldown`は result でのみ観測される)を state_change に付与(#16/#34/#54/#57、Claude Code アダプタ。SDK が公開した時のみ・best-effort)。`pending_permission`(`{request_id, tool_name, input?, truncated?, ts}`、#59 / [ADR-0022](../adr/0022-pending-permission-authoritative-source.md))も state_change に付与し、`waiting_permission`中の許可要求の **authoritative source** となる。同様に`pending_question`(`{request_id, questions, ts}`、[ADR-0027](../adr/0027-askuserquestion-envelope.md))も state_change に付与し、`waiting_question`中の AskUserQuestion 質問の **authoritative source** となる。他は初期空。**`ext` は operator 限定配信**(viewer には全 type で除去。cwd / pending_permission.input 等の機微を含むため、#46、[threat-model](threat-model.md) / [ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 
-#### `ext.pending_permission` 二軸拡張 (2026-07-10、[ADR-0033](../adr/0033-permission-model-dual-axis.md))
+#### `ext.permission` 二軸表現 (2026-07-10、[ADR-0033](../adr/0033-permission-model-dual-axis.md))
 
 Codex アダプタ ([ADR-0032](../adr/0032-codex-adapter.md)) 追加に伴い、権限モデル
-の共通抽象を sandbox × approval の二軸に拡張する。`state_change.ext.pending_permission`
-は既存フィールドを維持しつつ次を追加する:
+の共通抽象を agent-level の `ext.permission` として二軸で表現する
+(`pending_permission` 内への軸複製はしない — ADR-0033 F1):
 
-- `sandbox`: `"read-only" | "workspace-write" | "danger-full-access"`
-- `approval`: `"untrusted" | "on-request" | "granular" | "never"`
+- `ext.permission`: `{ sandbox, approval }` — state_change に付与
+  - `sandbox`: `"read-only" | "workspace-write" | "danger-full-access"`
+  - `approval`: `"untrusted" | "on-request" | "on-failure" | "never"`
+    (`on-failure` は upstream deprecated alias、kaoiro wrapper は emit しない)
 
-Claude adapter は 4 mode → 二軸への写像 table (詳細は
-[permission-dual-axis-envelope-schema](../open-questions/permission-dual-axis-envelope-schema.md))
-を持ち、Codex adapter は SDK の sandbox_mode / approval_policy をそのまま投影する。
-既存 `ext.permission_mode` フィールドの deprecation プランは Q2 で確定。
+Claude adapter は 6 mode → 二軸への写像 table (ADR-0033 F2、表示用近似) を持ち、
+Codex adapter は spawn 時の sandbox_mode と `approval: "never"` 固定を投影する
+(exec 経由では承認フローが存在しないため。ADR-0033 F3)。
+
+**`ext.permission_mode` の deprecation**: `ext.permission` が後継。1 リリース窓の
+間は両フィールドを並置して送出し、次リリースで `permission_mode` を削除する
+(ADR-0033 F1、D-A)。新クライアントは `ext.permission` のみを読む。
 
 #### `ext.engine` (2026-07-10、[ADR-0032](../adr/0032-codex-adapter.md) F4a)
 
@@ -294,7 +299,7 @@ session_id を指定して **resume** する単一機構で行う
 
 | 方向 | イベント | payload |
 |---|---|---|
-| runner → サーバ | `register` | `{ host_id, personas, cwd_allowlist, capabilities? }`。接続時に 1 回。稼働可能 persona と選択可能 cwd 許可リスト(#22)を申告。`capabilities` の値集合は `"claude-code" \| "codex"` ([ADR-0032](../adr/0032-codex-adapter.md) F4a)。旧値 `"claude"` は 1 リリース互換窓で `"claude-code"` にサイレント正規化して deprecation warn ([capabilities-legacy-value-window](../open-questions/capabilities-legacy-value-window.md))。dashboard 側は 2 種以上のとき LaunchDialog に engine セレクトを出す |
+| runner → サーバ | `register` | `{ host_id, personas, cwd_allowlist, capabilities? }`。接続時に 1 回。稼働可能 persona と選択可能 cwd 許可リスト(#22)を申告。`capabilities` の値集合は `"claude-code" \| "codex"` ([ADR-0032](../adr/0032-codex-adapter.md) F4a)。旧値 `"claude"` は 1 リリース互換窓で `"claude-code"` にサイレント正規化して deprecation warn、次リリースで厳格 reject ([ADR-0032](../adr/0032-codex-adapter.md) F4a、2026-07-10 確定)。dashboard 側は 2 種以上のとき LaunchDialog に engine セレクトを出す |
 | runner → サーバ | `heartbeat` | `{ host_id }`。生存通知 |
 | runner → サーバ | `sessions` | `{ host_id, cwd, sessions: [{ session_id, summary?, mtime? }] }`。`enumerate_sessions` への応答。JSONL メタは最小・**operator 限定**(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) |
 | runner → サーバ | `spawn_result` | `{ host_id, agent_id, ok, reason? }`。失敗時 `reason` = `already_running` / `cwd_not_found` / `error` |
