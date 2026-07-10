@@ -12,7 +12,7 @@ import {
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
 } from "../src/adapter.js";
-import { reduceStates } from "../src/state.js";
+import { reduceStates } from "@kaoiro/agent-common";
 
 // The bridge only reads a few fields; build minimal shapes and cast.
 function msg(shape: unknown): SDKMessage {

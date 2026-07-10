@@ -7,7 +7,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { AgentHost } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
-import type { Envelope, WrapperConfig } from "../src/types.js";
+import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import {
   PENDING_UPLOAD_TTL_MS,
   SharpImageDownsizer,

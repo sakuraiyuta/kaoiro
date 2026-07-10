@@ -1,0 +1,35 @@
+{
+  "name": "@kaoiro/claude-code",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "kaoiro Claude Code アダプタ — Claude Agent SDK をホストし状態を導出する (旧 @kaoiro/wrapper、ADR-0023 D3 / ADR-0032 F1)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.162",
+    "@kaoiro/agent-common": "workspace:*",
+    "@kaoiro/wrapper-core": "workspace:*",
+    "fflate": "^0.8.3",
+    "officeparser": "^7.2.2",
+    "pdf-lib": "^1.17.1",
+    "sharp": "^0.35.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@kaoiro/protocol": "workspace:*",
+    "@types/node": "^22.10.0",
+    "@types/phoenix": "^1.6.7",
+    "tsx": "^4.22.4",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -8,9 +8,27 @@
 // validated structurally and forwarded to the handlers.
 
 import { Channel, Socket } from "phoenix";
-import type { PermissionDecisionMessage } from "./permission.js";
-import type { QuestionResponseMessage } from "./question.js";
-import type { Envelope } from "./types.js";
+import type { Envelope } from "@kaoiro/protocol";
+
+/** A client's permission decision relayed by the server (protocol.md).
+ *  Defined here (the wire layer that parses it); the PermissionBroker in
+ *  @kaoiro/agent-common consumes it. */
+export interface PermissionDecisionMessage {
+  request_id: string;
+  allow: boolean;
+  message?: string;
+}
+
+/** A client's answer relayed by the server (protocol.md question_response).
+ *  Wire twin of {@link PermissionDecisionMessage} for the AskUserQuestion
+ *  path (ADR-0027); consumed by the QuestionBroker in @kaoiro/agent-common. */
+export interface QuestionResponseMessage {
+  request_id: string;
+  /** Selected answers keyed by question text; ignored when cancelled. */
+  answers: Record<string, string>;
+  /** true = the operator dismissed the dialog (deny). */
+  cancelled?: boolean;
+}
 
 /** Single entry returned from `directory_request` (protocol-inter-agent
  *  companion tool). Server returns the minimal info needed to resolve a

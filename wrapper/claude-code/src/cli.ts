@@ -16,7 +16,7 @@
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
-import { parseCliArgs } from "./args.js";
+import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory } from "./history.js";
 import { AgentHost } from "./host.js";
 import {
@@ -25,17 +25,17 @@ import {
   WHOAMI_TOOL_FQN,
   formatInboundMessage,
 } from "./inter_agent.js";
-import { PermissionBroker } from "./permission.js";
-import { PERMISSION_MODES, loadConfig } from "./persona.js";
-import { QuestionBroker } from "./question.js";
-import { makeLog, makeStateChange } from "./state.js";
-import { ServerLink } from "./transport.js";
+import { PermissionBroker } from "@kaoiro/agent-common";
+import { PERMISSION_MODES, loadConfig } from "@kaoiro/wrapper-core";
+import { QuestionBroker } from "@kaoiro/agent-common";
+import { makeLog, makeStateChange } from "@kaoiro/agent-common";
+import { ServerLink } from "@kaoiro/wrapper-core";
 import type {
   Envelope,
   InterAgentMessagePayload,
   KaoiroState,
   PermissionMode,
-} from "./types.js";
+} from "@kaoiro/agent-common";
 
 const COLOR: Record<KaoiroState, string> = {
   idle: "90", // grey

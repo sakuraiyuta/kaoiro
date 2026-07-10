@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { reconstructHistory, readSessionHistory } from "../src/history.js";
-import type { Envelope, WrapperConfig } from "../src/types.js";
+import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 
 const config: WrapperConfig = {
   agent_id: "test.agent",

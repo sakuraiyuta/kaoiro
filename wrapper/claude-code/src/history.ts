@@ -12,10 +12,10 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { sdkMessageToLogs } from "./adapter.js";
-import { clipText, logEntryToPayload } from "./logpayload.js";
-import { makeLog } from "./state.js";
-import type { KaoiroState, LogPayload } from "./types.js";
-import type { Envelope, WrapperConfig } from "./types.js";
+import { clipText, logEntryToPayload } from "@kaoiro/agent-common";
+import { makeLog } from "@kaoiro/agent-common";
+import type { KaoiroState, LogPayload } from "@kaoiro/agent-common";
+import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 
 // Historical log lines carry no live machine state; the display renders only
 // the payload (ADR-0012 F5), so a neutral placeholder state is used.

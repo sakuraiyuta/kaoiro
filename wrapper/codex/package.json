@@ -1,0 +1,24 @@
+{
+  "name": "@kaoiro/codex",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "kaoiro Codex アダプタ — @openai/codex-sdk をホストする (phase-14 実装予定の scaffold、ADR-0032)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kaoiro/agent-common": "workspace:*"
+  },
+  "devDependencies": {
+    "@kaoiro/protocol": "workspace:*",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -13,7 +13,16 @@ related_adrs: [1, 18, 28, 32]
 
 ## Status
 
-Accepted (materialise: [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md), 2026-07-10 着手決定)。着手条件「主要機能が出揃ってから」は phase-12 完了時点で満たされ、[ADR-0032](0032-codex-adapter.md) F1 で Codex adapter 追加と合わせて materialise することが決まった。
+Accepted (materialised: [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)、2026-07-10 実施完了)。着手条件「主要機能が出揃ってから」は phase-12 完了時点で満たされ、[ADR-0032](0032-codex-adapter.md) F1 で Codex adapter 追加と合わせて materialise した。
+
+実装済みパッケージ境界 (2026-07-10):
+
+- `@kaoiro/wrapper-core` (`wrapper/core`) — transport (`ServerLink` + 承認/質問 wire 型) / config 読込・検証 (`persona.ts`) / CLI 引数解析。
+- `@kaoiro/agent-common` (`wrapper/agent-common`) — 状態機械 + エンベロープ生成 (`state.ts`)、`EngineAdapter` interface、`PermissionBroker` / `QuestionBroker` (+ `PermissionDecision` / `QuestionDecision`)、共通 Tool 記述層骨格 (`ToolDescriptor`)、共通イベント型 (`AdapterEvent` ほか)。
+- `@kaoiro/claude-code` (`wrapper/claude-code`) — 旧 `@kaoiro/wrapper` をリネーム ([ADR-0023](0023-host-runner-architecture.md) D3 実行)。`AgentHost` / SDK adapter / file upload / inter-agent tools / CLI 本体 / 権限二軸写像 table ([ADR-0033](0033-permission-model-dual-axis.md) F2 のプレースホルダ)。
+- `@kaoiro/codex` (`wrapper/codex`) — 未実装 stub のみの scaffold (phase-14 で実装)。
+
+注: 本 ADR 起草時の「wrapper/pnpm-workspace.yaml 新設」は採らず、repo root の既存 workspace に 4 パッケージを追加した (pnpm workspace はネスト不可のため。`wrapper/package.json` は workspace 非メンバの fan-out shim として残置)。
 
 ## Context
 

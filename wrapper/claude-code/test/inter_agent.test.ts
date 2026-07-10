@@ -7,12 +7,12 @@ import {
   formatInboundMessage,
   type WhoamiSnapshot,
 } from "../src/inter_agent.js";
-import type { DirectoryEntry } from "../src/transport.js";
+import type { DirectoryEntry } from "@kaoiro/wrapper-core";
 import type {
   Envelope,
   InterAgentMessagePayload,
   WrapperConfig,
-} from "../src/types.js";
+} from "@kaoiro/agent-common";
 
 const PERSONA = { id: "mio", name: "澪", sprite_set: "mio" };
 

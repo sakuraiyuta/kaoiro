@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: wrapper/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test

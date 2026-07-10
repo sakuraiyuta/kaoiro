@@ -1,37 +1,57 @@
-# @kaoiro/wrapper
+# wrapper — kaoiro ラッパー層 (pnpm 4 パッケージ)
 
-kaoiro のラッパー層(TypeScript)。Claude Agent SDK をホストし、SDK メッセージ
-列から kaoiro の状態を導出して共通エンベロープへ翻訳する。
+kaoiro のラッパー層(TypeScript)。AI エージェント CLI をホストし、SDK
+イベント列から kaoiro の状態を導出して共通エンベロープへ翻訳する。
+[ADR-0017](../docs/adr/0017-wrapper-multientity-packages.md) /
+[ADR-0032](../docs/adr/0032-codex-adapter.md) F1 に基づき、phase-13 で
+次の 4 パッケージに分割された (workspace メンバは repo root の
+`pnpm-workspace.yaml` で宣言)。
 
-仕様: [docs/specs/protocol.md](../docs/specs/protocol.md),
-[docs/specs/agent-sdk-events.md](../docs/specs/agent-sdk-events.md)。
-計画: [docs/plans/phase-1-wrapper-state-machine.md](../docs/plans/phase-1-wrapper-state-machine.md)。
+## パッケージ構成
 
-## 現状(Phase 3.5)
+| パッケージ | ディレクトリ | 役割 |
+|---|---|---|
+| `@kaoiro/wrapper-core` | `core/` | エンティティ非依存の基盤: サーバ transport (`ServerLink`)、config 読込/検証、CLI 引数解析 |
+| `@kaoiro/agent-common` | `agent-common/` | AI エージェント共通層: 状態機械 (`stepState`)・エンベロープ生成、`EngineAdapter` interface、permission / question broker、共通 Tool 記述層 (`ToolDescriptor`) |
+| `@kaoiro/claude-code` | `claude-code/` | Claude Code アダプタ (旧 `@kaoiro/wrapper`): `AgentHost` の `query()` 配線、SDK メッセージ → `AdapterEvent` 変換、file upload、inter-agent tools、CLI 本体 |
+| `@kaoiro/codex` | `codex/` | Codex アダプタ (phase-14 実装予定の scaffold。`EngineAdapter` を satisfies する未実装 stub のみ) |
 
-状態導出ロジックを SDK 依存から切り離した純粋関数として実装し、実 SDK
-ホスト(`query()` / `canUseTool` / ストリーミング入力)の配線まで完了。
-並列ツール実行は未完了 tool_use 集合の追跡で追従する(issue #3)。応答
-テキスト(`log`/`result`、operator の指示エコー含む)の中継、サーバ接続
-(`ServerLink`)・承認仲介(`PermissionBroker`)も実装済み(ADR-0011/0012)。
+依存グラフ (上が下に依存):
 
-| モジュール | 役割 |
-|---|---|
-| `src/types.ts` | 状態セット・共通エンベロープ v0・アダプタ入力イベントの型 |
-| `src/state.ts` | 状態導出(`stepState` / `reduceStates`)とエンベロープ生成 |
-| `src/adapter.ts` | 実 SDK メッセージ → `AdapterEvent` の橋渡し |
-| `src/host.ts` | `AgentHost` — `query()`/`canUseTool`/ストリーミング入力の配線 |
-| `src/persona.ts` | ペルソナ・安定 ID 設定の読み込みと検証 |
+```mermaid
+graph TD
+  CC["@kaoiro/claude-code"] --> AC["@kaoiro/agent-common"]
+  CX["@kaoiro/codex"] --> AC
+  AC --> CORE["@kaoiro/wrapper-core"]
+  CC --> CORE
+  AC -. types .-> P["@kaoiro/protocol"]
+  CORE -. types .-> P
+```
 
-`AdapterEvent` は SDK メッセージ列 + `canUseTool` を正規化した状態機械の入力。
+仕様: [docs/specs/protocol.md](../docs/specs/protocol.md)、
+[docs/specs/agent-sdk-events.md](../docs/specs/agent-sdk-events.md) (Claude)、
+[docs/specs/codex-sdk-events.md](../docs/specs/codex-sdk-events.md) (Codex)。
 
 ## 開発
 
 ```sh
-pnpm install
-pnpm test       # vitest
-pnpm typecheck  # tsc --noEmit
+pnpm install    # repo root で (workspace 一括)
+cd wrapper
+pnpm test       # 4 パッケージへ fan-out (vitest)
+pnpm typecheck  # 同上 (tsc --noEmit)
+pnpm build      # 依存順に各パッケージの dist/ を生成
 ```
+
+`wrapper/package.json` は workspace 非メンバの fan-out shim。個別に回す
+場合は各パッケージディレクトリで `pnpm test` 等を実行する。
+
+- **typecheck / test は build 不要**: 各パッケージの `tsconfig.json` の
+  `paths` と `vitest.config.ts` の alias が隣接パッケージの `src/` を直接
+  参照する。
+- **runtime は dist**: 各 `package.json` の `main` は `dist/index.js`。
+  runner が spawn する実体は `@kaoiro/claude-code/dist/cli.js`
+  (`pnpm build` が依存順に生成)。`KAOIRO_WRAPPER_DEV=1` の dev spawn は
+  `claude-code/src/cli.ts` を tsx watch で実行する。
 
 `pnpm test` / `pnpm typecheck` は push / PR ごとに Gitea Actions
 ([.gitea/workflows/ci.yml](../.gitea/workflows/ci.yml))でも実行する
@@ -40,7 +60,9 @@ pnpm typecheck  # tsc --noEmit
 ## 設定(kaoiro.config.json)
 
 ラッパーは設定ファイル(既定 `kaoiro.config.json`)を読み込む。例は
-[kaoiro.config.example.json](kaoiro.config.example.json)。
+[kaoiro.config.example.json](kaoiro.config.example.json)。`agent.*.json` /
+example は従来どおり本ディレクトリ直下に置く(live config は gitignore
+済み)。スキーマと読み込みは `core/src/persona.ts`。
 
 | キー | 必須 | 意味 |
 |---|---|---|
@@ -54,10 +76,10 @@ pnpm typecheck  # tsc --noEmit
 ## 手動起動
 
 ```sh
-pnpm build                 # dist/ を生成
-pnpm demo                  # カレントの agent.*.json を全て並列 spawn
+pnpm build                          # 各パッケージの dist/ を生成
+pnpm demo                           # カレントの agent.*.json を全て並列 spawn
 # または明示的に(単一 wrapper 起動):
-node dist/cli.js [configPath] [prompt]
+node claude-code/dist/cli.js [configPath] [prompt]
 ```
 
 wrapper は常駐モードで動作する。起動後、server の join に成功すると

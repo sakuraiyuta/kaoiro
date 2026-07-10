@@ -19,15 +19,15 @@ import {
   tool,
   type McpSdkServerConfigWithInstance,
 } from "@anthropic-ai/claude-agent-sdk";
-import { makeInterAgentMessage } from "./state.js";
-import type { DirectoryEntry } from "./transport.js";
+import { makeInterAgentMessage } from "@kaoiro/agent-common";
+import type { DirectoryEntry } from "@kaoiro/wrapper-core";
 import type {
   Envelope,
   InterAgentMessageKind,
   InterAgentMessagePayload,
   KaoiroState,
   WrapperConfig,
-} from "./types.js";
+} from "@kaoiro/agent-common";
 
 /** Self-identity snapshot returned by the `whoami` tool. Mirrors
  *  `AgentHost#statusSnapshot()` — see host.ts for field semantics. */

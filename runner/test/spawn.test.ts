@@ -10,7 +10,7 @@ describe("resolveWrapperLaunch", () => {
     delete process.env.KAOIRO_WRAPPER_DEV;
     const prefix = resolveWrapperLaunch();
     expect(prefix).toHaveLength(1);
-    expect(prefix[0]).toMatch(/wrapper\/dist\/cli\.js$/);
+    expect(prefix[0]).toMatch(/claude-code\/dist\/cli\.js$/);
   });
 
   it("KAOIRO_WRAPPER_DEV で tsx watch + src を返す(ホットリロード)", () => {
@@ -19,7 +19,7 @@ describe("resolveWrapperLaunch", () => {
     expect(prefix).toHaveLength(3);
     expect(prefix[0]).toMatch(/tsx/);
     expect(prefix[1]).toBe("watch");
-    expect(prefix[2]).toMatch(/wrapper\/src\/cli\.ts$/);
+    expect(prefix[2]).toMatch(/claude-code\/src\/cli\.ts$/);
   });
 });
 

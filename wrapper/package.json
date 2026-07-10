@@ -1,35 +1,17 @@
 {
-  "name": "@kaoiro/wrapper",
+  "name": "@kaoiro/wrapper-meta",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
-  "description": "kaoiro ラッパー — Claude Agent SDK をホストし状態を導出する",
+  "description": "wrapper 4 パッケージ (core / agent-common / claude-code / codex) への fan-out scripts。workspace 非メンバの shim (ADR-0017 / ADR-0032 F1)",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "demo": "for f in agent.*.json; do node dist/cli.js \"$f\" & done; wait",
-    "dev": "for f in agent.*.json; do [ -e \"$f\" ] || continue; tsx watch src/cli.ts \"$f\" & done; wait"
-  },
-  "devDependencies": {
-    "@kaoiro/protocol": "workspace:*",
-    "@types/node": "^22.10.0",
-    "@types/phoenix": "^1.6.7",
-    "tsx": "^4.22.4",
-    "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "build": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex run build",
+    "typecheck": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex run typecheck",
+    "test": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code run test",
+    "demo": "for f in agent.*.json; do node claude-code/dist/cli.js \"$f\" & done; wait",
+    "dev": "for f in agent.*.json; do [ -e \"$f\" ] || continue; ./claude-code/node_modules/.bin/tsx watch claude-code/src/cli.ts \"$f\" & done; wait"
   },
   "packageManager": "pnpm@10.20.0",
   "engines": {
     "node": ">=22"
-  },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.162",
-    "fflate": "^0.8.3",
-    "officeparser": "^7.2.2",
-    "pdf-lib": "^1.17.1",
-    "phoenix": "^1.8.7",
-    "sharp": "^0.35.2",
-    "zod": "^4.4.3"
   }
 }

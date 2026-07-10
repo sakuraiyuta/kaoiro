@@ -61,11 +61,11 @@ export function resolveWrapperLaunch(): string[] {
       throw new Error("KAOIRO_WRAPPER_DEV: tsx package has no bin entry");
     }
     const tsxBin = join(dirname(tsxPkgPath), tsxRel);
-    const wrapperPkgPath = require.resolve("@kaoiro/wrapper/package.json");
+    const wrapperPkgPath = require.resolve("@kaoiro/claude-code/package.json");
     const wrapperSrc = join(dirname(wrapperPkgPath), "src", "cli.ts");
     return [tsxBin, "watch", wrapperSrc];
   }
-  return [require.resolve("@kaoiro/wrapper/dist/cli.js")];
+  return [require.resolve("@kaoiro/claude-code/dist/cli.js")];
 }
 
 /**

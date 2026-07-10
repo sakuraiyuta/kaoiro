@@ -13,7 +13,7 @@ export type {
   ResultPayload,
   ResultSubtype,
   WrapperConfig,
-} from "./types.js";
+} from "@kaoiro/agent-common";
 export {
   initialMachineState,
   makeLog,
@@ -22,9 +22,9 @@ export {
   makeStateChange,
   reduceStates,
   stepState,
-} from "./state.js";
-export type { MachineState } from "./state.js";
-export { ConfigError, loadConfig, parseConfig } from "./persona.js";
+} from "@kaoiro/agent-common";
+export type { MachineState } from "@kaoiro/agent-common";
+export { ConfigError, loadConfig, parseConfig } from "@kaoiro/wrapper-core";
 export {
   sdkMessageToCost,
   sdkMessageToEvents,
@@ -34,10 +34,10 @@ export {
 } from "./adapter.js";
 export { AgentHost } from "./host.js";
 export type { AgentHostOptions, PermissionDecision } from "./host.js";
-export { ServerLink } from "./transport.js";
-export type { ServerLinkOptions } from "./transport.js";
-export { PermissionBroker } from "./permission.js";
+export { ServerLink } from "@kaoiro/wrapper-core";
+export type { ServerLinkOptions } from "@kaoiro/wrapper-core";
+export { PermissionBroker } from "@kaoiro/agent-common";
 export type {
   PermissionBrokerOptions,
   PermissionDecisionMessage,
-} from "./permission.js";
+} from "@kaoiro/agent-common";

@@ -7,7 +7,7 @@
 // times out / closes it (deny by cancellation, matching the permission path).
 
 import { randomUUID } from "node:crypto";
-import type { QuestionDecision } from "./host.js";
+import type { QuestionResponseMessage } from "@kaoiro/wrapper-core";
 import { PendingRegistry } from "./pending.js";
 import { makeQuestionRequest } from "./state.js";
 import type {
@@ -17,14 +17,15 @@ import type {
   WrapperConfig,
 } from "./types.js";
 
-/** A client's answer relayed by the server (protocol.md question_response). */
-export interface QuestionResponseMessage {
-  request_id: string;
-  /** Selected answers keyed by question text; ignored when cancelled. */
-  answers: Record<string, string>;
-  /** true = the operator dismissed the dialog (deny). */
-  cancelled?: boolean;
+/** An operator's answer to an AskUserQuestion (ADR-0027). `cancelled` denies
+ *  the tool; otherwise `answers` (keyed by question text) is returned to the
+ *  engine as the tool's structured answer. */
+export interface QuestionDecision {
+  cancelled: boolean;
+  answers?: Record<string, string>;
 }
+
+export type { QuestionResponseMessage } from "@kaoiro/wrapper-core";
 
 export interface QuestionBrokerOptions {
   config: WrapperConfig;

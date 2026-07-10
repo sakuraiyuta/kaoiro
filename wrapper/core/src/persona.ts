@@ -5,7 +5,7 @@
 // (persona-personality-injection spec, protocol.md「人格プロンプト配送」).
 
 import { readFileSync } from "node:fs";
-import type { PermissionMode, WrapperConfig } from "./types.js";
+import type { PermissionMode, WrapperConfig } from "@kaoiro/protocol";
 
 // The protocol package is types-only (no runtime exports), so the closed
 // enum's value list is duplicated here. Keep in sync with the PermissionMode

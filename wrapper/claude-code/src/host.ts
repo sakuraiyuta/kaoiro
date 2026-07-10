@@ -28,8 +28,13 @@ import type {
   Question,
   ResultPayload,
   WrapperConfig,
-} from "./types.js";
-import type { MachineState } from "./state.js";
+} from "@kaoiro/agent-common";
+import type {
+  EngineAdapter,
+  MachineState,
+  PermissionDecision,
+  QuestionDecision,
+} from "@kaoiro/agent-common";
 import {
   initialMachineState,
   makeAttachRejected,
@@ -38,7 +43,7 @@ import {
   makeResult,
   makeStateChange,
   stepState,
-} from "./state.js";
+} from "@kaoiro/agent-common";
 import {
   cwdChangedHookToCwd,
   sdkMessageToCost,
@@ -51,7 +56,7 @@ import {
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
 } from "./adapter.js";
-import { clipText, logEntryToPayload } from "./logpayload.js";
+import { clipText, logEntryToPayload } from "@kaoiro/agent-common";
 import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
@@ -82,19 +87,10 @@ export interface SupportedModel {
   effort_levels?: EffortLevel[];
 }
 
-export interface PermissionDecision {
-  allow: boolean;
-  /** Reason returned to the agent when denied. */
-  message?: string;
-}
-
-/** An operator's answer to an AskUserQuestion (ADR-0027). `cancelled` denies
- *  the tool; otherwise `answers` (keyed by question text) is returned to the
- *  SDK as the tool's structured answer. */
-export interface QuestionDecision {
-  cancelled: boolean;
-  answers?: Record<string, string>;
-}
+// PermissionDecision / QuestionDecision moved to @kaoiro/agent-common with
+// the brokers (phase-13); re-exported here so the host's public surface is
+// unchanged.
+export type { PermissionDecision, QuestionDecision } from "@kaoiro/agent-common";
 
 export interface AgentHostOptions {
   /** Invoked on every state transition with the common envelope. */
@@ -165,7 +161,7 @@ export interface AgentHostOptions {
  * one. State derivation is funneled through one synchronous apply step, so the
  * message loop and the permission callback never interleave mid-update.
  */
-export class AgentHost {
+export class AgentHost implements EngineAdapter {
   readonly #config: WrapperConfig;
   readonly #options: AgentHostOptions;
   readonly #queryFn: typeof query;

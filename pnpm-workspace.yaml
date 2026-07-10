@@ -1,8 +1,12 @@
 packages:
   - protocol
-  - wrapper
+  - wrapper/core
+  - wrapper/agent-common
+  - wrapper/claude-code
+  - wrapper/codex
   - runner
   # dashboard(server/assets)は別ビルド系のため非メンバ。
+  # wrapper/ 直下はメタ shim (workspace 非メンバ、scripts のみ)。
 
 # pnpm 10 build-script approval。vitest/tsx が引く esbuild の postinstall を許可。
 onlyBuiltDependencies:

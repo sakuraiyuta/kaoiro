@@ -8,7 +8,7 @@
 // indefinitely matching the SDK's canUseTool default (ADR-0022 F6).
 
 import { randomUUID } from "node:crypto";
-import type { PermissionDecision } from "./host.js";
+import type { PermissionDecisionMessage } from "@kaoiro/wrapper-core";
 import { PendingRegistry } from "./pending.js";
 import { makePermissionRequest } from "./state.js";
 import type { Envelope, PendingPermissionExt, WrapperConfig } from "./types.js";
@@ -17,12 +17,15 @@ import type { Envelope, PendingPermissionExt, WrapperConfig } from "./types.js";
  *  payload (specs/protocol.md, specs/threat-model.md). */
 const MAX_INPUT_BYTES = 16_384;
 
-/** A client's decision relayed by the server (protocol.md). */
-export interface PermissionDecisionMessage {
-  request_id: string;
+/** The broker's answer handed back to the engine host (engine-agnostic;
+ *  the Claude adapter forwards it to canUseTool). */
+export interface PermissionDecision {
   allow: boolean;
+  /** Reason returned to the agent when denied. */
   message?: string;
 }
+
+export type { PermissionDecisionMessage } from "@kaoiro/wrapper-core";
 
 export interface PermissionBrokerOptions {
   config: WrapperConfig;
