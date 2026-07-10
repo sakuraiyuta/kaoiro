@@ -115,6 +115,41 @@ export function pendingQuestionFrom(
   return record as unknown as PendingQuestionPayload;
 }
 
+/** The engine-neutral two-axis permission posture (ADR-0033 F1), from
+ *  agent-level ext.permission. Successor of ext.permission_mode. */
+export interface PermissionAxes {
+  sandbox: string;
+  approval: string;
+}
+
+/** Reads ext.permission off an envelope, or null when absent/malformed. */
+export function permissionFrom(envelope: Envelope): PermissionAxes | null {
+  const raw = envelope.ext?.permission;
+  if (typeof raw !== "object" || raw === null) return null;
+  const p = raw as PermissionAxes;
+  return typeof p.sandbox === "string" && typeof p.approval === "string"
+    ? { sandbox: p.sandbox, approval: p.approval }
+    : null;
+}
+
+/** Reads ext.engine (ADR-0032 F4a), or null when absent. */
+export function engineFrom(envelope: Envelope): string | null {
+  const raw = envelope.ext?.engine;
+  return typeof raw === "string" && raw !== "" ? raw : null;
+}
+
+/** Claude mode -> two-axis display annotation (ADR-0033 F2/F4: the picker
+ *  stays engine-native, each option annotated with its two-axis reading).
+ *  Mirrors the wrapper's PERMISSION_MODE_AXES table. */
+export const PERMISSION_MODE_AXES: Record<string, PermissionAxes> = {
+  default: { sandbox: "workspace-write", approval: "untrusted" },
+  acceptEdits: { sandbox: "workspace-write", approval: "on-request" },
+  plan: { sandbox: "read-only", approval: "on-request" },
+  bypassPermissions: { sandbox: "danger-full-access", approval: "never" },
+  dontAsk: { sandbox: "workspace-write", approval: "never" },
+  auto: { sandbox: "workspace-write", approval: "on-request" },
+};
+
 /** A selectable model surfaced on state_change.ext.models (#54, ADR-0020):
  *  the choices and per-model effort levels behind the dashboard's model /
  *  effort switch dialogs. Operator-only — ext is stripped for viewers (#46),
@@ -385,13 +420,24 @@ export async function fetchPersonaManifest(
   }
 }
 
+/** Launch catalog of one engine (ADR-0032 F4bc), from the host's register
+ *  payload. models reuses the ext.models entry shape (#54) so the launch
+ *  cascade and the running-agent switcher share one renderer. */
+export interface EngineCatalog {
+  id: string;
+  models: ModelOption[];
+}
+
 /** A live host the operator can launch agents on (ADR-0023 / #22). Derived
  *  from the operator-only `hosts` push; viewers never receive it. */
 export interface HostInfo {
   host_id: string;
   personas: Persona[];
   cwd_allowlist: string[];
+  /** Engine kinds the host can run (ADR-0032 F4a): "claude-code" / "codex". */
   capabilities?: string[];
+  /** Launch catalog per capability (ADR-0032 F4bc). */
+  engines?: EngineCatalog[];
 }
 
 /** Operator launch request (案A, ADR-0024). The client sends only these; the
@@ -406,6 +452,15 @@ export interface SpawnRequest {
   name?: string;
   initial_prompt?: string;
   resume_session_id?: string;
+  /** Engine to launch (ADR-0032 F4a); absent = claude-code. */
+  engine?: string;
+  /** Launch-time model / effort picks from the engine catalog cascade. */
+  model?: string;
+  effort?: string;
+  /** Codex-only launch permission (ADR-0033 F3): the OS sandbox axis and
+   *  its network toggle; approval is pinned to "never" and not sent. */
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  network_access?: boolean;
 }
 
 /** Outcome of a spawn, forwarded from the runner (operator-only). */
@@ -434,11 +489,14 @@ export interface RunnerSession {
 }
 
 /** Resume candidates for a (host, cwd), forwarded from the runner's
- *  enumerate_sessions reply (operator-only, #22 phase-1). */
+ *  enumerate_sessions reply (operator-only, #22 phase-1). `engine` echoes
+ *  the requested engine (ADR-0032 F8) so a stale reply for another engine
+ *  is not offered. */
 export interface RunnerSessions {
   host_id: string;
   cwd: string;
   sessions: RunnerSession[];
+  engine?: string;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
@@ -559,7 +617,11 @@ export interface KaoiroConnection {
   /** Requests the resume candidates under (host, cwd) (#22 phase-1);
    * resolves when the server accepts the relay. The candidate list arrives
    * separately via onSessions. Rejects like sendInstruction. */
-  enumerateSessions: (hostId: string, cwd: string) => Promise<void>;
+  enumerateSessions: (
+    hostId: string,
+    cwd: string,
+    engine?: string,
+  ) => Promise<void>;
   /** Same as `enumerateSessions` but resolves cwd server-side from the
    *  agent's SessionPointer (seeded at spawn). Use from the detail view
    *  where cwd may not yet ride on `envelope.ext.cwd`. Reject reasons
@@ -624,6 +686,7 @@ export function parseHosts(value: unknown): HostInfo[] {
         ...(Array.isArray(e.capabilities)
           ? { capabilities: e.capabilities }
           : {}),
+        ...(Array.isArray(e.engines) ? { engines: e.engines } : {}),
       });
     }
   }
@@ -887,8 +950,12 @@ export function connectKaoiro(
           )
           .receive("timeout", () => reject(new Error("timeout")));
       }),
-    enumerateSessions: (hostId, cwd) =>
-      pushAsync(channel, "enumerate_sessions", { host_id: hostId, cwd }),
+    enumerateSessions: (hostId, cwd, engine) =>
+      pushAsync(channel, "enumerate_sessions", {
+        host_id: hostId,
+        cwd,
+        ...(engine === undefined ? {} : { engine }),
+      }),
     enumerateAgentSessions: (agentId) =>
       pushAsync(channel, "enumerate_sessions", {
         host_id: hostIdFromAgentId(agentId),

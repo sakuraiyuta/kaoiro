@@ -28,24 +28,65 @@
   let name = $state("");
   let sessionId = $state("");
   let prompt = $state("");
+  let engine = $state("claude-code");
+  let model = $state("");
+  let effort = $state("");
+  let sandbox = $state<"read-only" | "workspace-write" | "danger-full-access">(
+    "workspace-write",
+  );
+  let networkAccess = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
 
   const host = $derived(hosts.find((h) => h.host_id === hostId) ?? null);
 
-  // Resume candidates only count when they match the current host+cwd; a
-  // stale enumerate for another selection must not be offered.
+  // Engine cascade (ADR-0032 F4bc): engine -> model -> optional effort.
+  // The select is shown only when the host declares 2+ capabilities; a
+  // single-engine host keeps the pre-engine UX (ADR-0032 F4a).
+  const engines = $derived(host?.capabilities ?? []);
+  const showEngineSelect = $derived(engines.length >= 2);
+  const engineModels = $derived(
+    host?.engines?.find((e) => e.id === engine)?.models ?? [],
+  );
+  const effortLevels = $derived(
+    engineModels.find((m) => m.value === model)?.effort_levels ?? [],
+  );
+  // Codex permission is launch-fixed (ADR-0033 F3): the sandbox axis is the
+  // only selectable knob; approval is pinned to "never" upstream.
+  const isCodex = $derived(engine === "codex");
+
+  // Resume candidates only count when they match the current host+cwd (and
+  // engine, when the reply carries one); a stale enumerate for another
+  // selection must not be offered.
   const candidates = $derived(
-    sessions && sessions.host_id === hostId && sessions.cwd === cwd
+    sessions &&
+      sessions.host_id === hostId &&
+      sessions.cwd === cwd &&
+      (sessions.engine === undefined || sessions.engine === engine)
       ? sessions.sessions
       : [],
   );
 
-  // In resume mode, (re)fetch the candidate list whenever host/cwd changes.
-  // The list arrives asynchronously via onSessions (the `sessions` prop).
+  // In resume mode, (re)fetch the candidate list whenever host/cwd/engine
+  // changes. The list arrives asynchronously via onSessions (the `sessions`
+  // prop).
   $effect(() => {
     if (mode !== "resume" || hostId === "" || cwd === "") return;
-    void connection.enumerateSessions(hostId, cwd).catch(() => {});
+    void connection.enumerateSessions(hostId, cwd, engine).catch(() => {});
+  });
+
+  // Keep engine valid for the host, and model/effort valid for the engine
+  // catalog ("" = engine/model default, always allowed).
+  $effect(() => {
+    if (engines.length > 0 && !engines.includes(engine)) {
+      engine = engines.includes("claude-code") ? "claude-code" : engines[0]!;
+    }
+    if (model !== "" && !engineModels.some((m) => m.value === model)) {
+      model = "";
+    }
+    if (effort !== "" && !effortLevels.includes(effort)) {
+      effort = "";
+    }
   });
 
   // Keep the selected session valid for the current candidate set.
@@ -95,6 +136,16 @@
         // Per-instance display name (overrides the persona name); applies to
         // both a fresh spawn and a resume.
         ...(customName === "" ? {} : { name: customName }),
+        // Engine + launch-time picks (ADR-0032 F4bc). engine rides even for
+        // the claude-code default so the server records it for restore.
+        engine,
+        ...(model === "" ? {} : { model }),
+        ...(effort === "" ? {} : { effort }),
+        // Codex-only launch permission (ADR-0033 F3).
+        ...(isCodex ? { sandbox } : {}),
+        ...(isCodex && sandbox === "workspace-write"
+          ? { network_access: networkAccess }
+          : {}),
         ...(mode === "resume"
           ? { resume_session_id: sessionId }
           : trimmed === ""
@@ -174,6 +225,67 @@
           {/each}
         </select>
       </label>
+
+      {#if showEngineSelect}
+        <label>
+          エンジン
+          <select bind:value={engine}>
+            {#each engines as e (e)}
+              <option value={e}>{e}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
+      {#if engineModels.length > 0}
+        <label>
+          モデル
+          <select bind:value={model}>
+            <option value="">既定</option>
+            {#each engineModels as m (m.value)}
+              <option value={m.value}>{m.display_name}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
+      {#if effortLevels.length > 0}
+        <label>
+          effort
+          <select bind:value={effort}>
+            <option value="">既定</option>
+            {#each effortLevels as l (l)}
+              <option value={l}>{l}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
+      {#if isCodex}
+        <!-- Codex の権限は起動時固定 (ADR-0033 F3): sandbox 軸のみ選択、
+             承認 (approval) は upstream 制約で never 固定。 -->
+        <label>
+          sandbox(書き込み範囲)
+          <select bind:value={sandbox}>
+            <option value="read-only">read-only — 読み取りのみ</option>
+            <option value="workspace-write">
+              workspace-write — 作業ディレクトリ内のみ書込可
+            </option>
+            <option value="danger-full-access">
+              danger-full-access — 無制限(危険)
+            </option>
+          </select>
+        </label>
+        {#if sandbox === "workspace-write"}
+          <label class="row">
+            <input type="checkbox" bind:checked={networkAccess} />
+            sandbox 内のネットワークアクセスを許可
+          </label>
+        {/if}
+        <p class="note">
+          承認 (approval) は never 固定 — Codex は実行中の承認要求に対応しません。
+        </p>
+      {/if}
 
       <label>
         エージェント名(任意)
@@ -308,6 +420,17 @@
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
+  }
+
+  label.row {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  label.row input[type="checkbox"] {
+    width: auto;
+    padding: 0;
   }
 
   .error {

@@ -4,6 +4,7 @@
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
   import {
+    engineFrom,
     formatAgentLabel,
     hostIdFromAgentId,
     interAgentMessageOf,
@@ -11,6 +12,8 @@
     modelsFrom,
     pendingPermissionFrom,
     pendingQuestionFrom,
+    permissionFrom,
+    PERMISSION_MODE_AXES,
     resultOf,
     RUNNING_STATES,
     STOP_SAFE_STATES,
@@ -303,6 +306,12 @@
       ? envelope.ext.fast_mode
       : null,
   );
+  // Engine + two-axis permission posture (ADR-0032 F4a / ADR-0033 F1). The
+  // badge renders engine-neutrally from ext.permission; the mode SWITCHER
+  // stays Claude-only — codex permission is launch-fixed (ADR-0033 F3).
+  const agentEngine = $derived(engineFrom(envelope));
+  const permAxes = $derived(permissionFrom(envelope));
+  const isCodexAgent = $derived(agentEngine === "codex");
   const ccContext = $derived(
     envelope.ext?.context as Record<string, unknown> | undefined,
   );
@@ -320,7 +329,7 @@
   // low→max. The SDK silently downgrades a level the active model does not
   // support, so offering the union is safe and avoids having to match the
   // resolved model id (ext.model) back to a supportedModels alias.
-  const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"];
+  const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
   const effortLevels = $derived.by(() => {
     const seen = new Set<string>();
     for (const m of models) for (const l of m.effort_levels ?? []) seen.add(l);
@@ -1283,9 +1292,29 @@
               <dd class="cc-cwd" title={ccCwd}>{ccCwd}</dd>
             </div>
           {/if}
-          {#if ccPermissionMode || connection}
+          {#if agentEngine}
+            <div class="cc-row">
+              <dt>engine</dt>
+              <dd>{agentEngine}</dd>
+            </div>
+          {/if}
+          {#if permAxes}
+            <!-- Engine-neutral two-axis badge (ADR-0033 F1/F4): the display
+                 is unified even where the switcher below is engine-native. -->
             <div class="cc-row">
               <dt>perm</dt>
+              <dd>
+                <span class="axes-badge">
+                  書込: {permAxes.sandbox} / 承認: {permAxes.approval}
+                </span>
+              </dd>
+            </div>
+          {/if}
+          {#if isCodexAgent}
+            <!-- Codex permission is launch-fixed (ADR-0033 F3): no switcher. -->
+          {:else if ccPermissionMode || connection}
+            <div class="cc-row">
+              <dt>mode</dt>
               <dd>
                 {#if connection}
                   <div class="cc-switchbox">
@@ -1309,7 +1338,15 @@
                               role="option"
                               aria-selected={permLabel === mode}
                               onclick={() => choosePermissionMode(mode)}
-                            >{mode}</button>
+                            >
+                              {mode}
+                              {#if PERMISSION_MODE_AXES[mode]}
+                                <span class="axes-hint">
+                                  書込: {PERMISSION_MODE_AXES[mode].sandbox} /
+                                  承認: {PERMISSION_MODE_AXES[mode].approval}
+                                </span>
+                              {/if}
+                            </button>
                           </li>
                         {/each}
                       </ul>
@@ -2507,6 +2544,17 @@
     font-size: var(--fs-body-sm);
     text-align: left;
     cursor: pointer;
+  }
+
+  .axes-badge {
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+  }
+
+  .axes-hint {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--fg-dim);
   }
 
   .switch-menu button[aria-selected="true"] {
