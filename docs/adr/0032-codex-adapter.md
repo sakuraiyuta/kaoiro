@@ -104,7 +104,11 @@ Codex 側の初期実装 (2026-07-11 実機検証で改訂、旧 Q5 close):
   空カタログにすると LaunchDialog は model セレクトを出さず、wrapper は
   `model` を送らず、アカウント既定 model が使われる (両認証で確実に動作)。
   明示 model 選択は、認証別に信頼できる catalog 供給元が現れた時点で再導入
-  する (旧 Q5 codex-model-effort-catalog は close 済み、将来対応は別 open-question)。
+  する (旧 Q5 codex-model-effort-catalog は close 済み、将来対応は
+  [codex-model-catalog-restoration](../open-questions/codex-model-catalog-restoration.md)
+  で追跡)。判断根拠となる Codex エコシステム側の現状 (プラン別 model 可用性、
+  認証 2 モードの非対称、`codex doctor` の情報粒度) は
+  [codex-model-catalog](../specs/codex-model-catalog.md) に記録。
 - **effort は空カタログにより現状 UI では非表示**。将来 model カタログが
   復活した際は Claude 側と同じ `ext.models` の `effort_levels` に統合する
   方針 (E-B) を維持する。

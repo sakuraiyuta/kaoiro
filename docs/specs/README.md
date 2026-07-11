@@ -13,6 +13,7 @@
 | [protocol-inter-agent](protocol-inter-agent.md) | provisional | エージェント間メッセージング envelope schema・9 種 kind・ハード制限 |
 | [protocol-external-human](protocol-external-human.md) | provisional | 外部人間メッセージング(Discord)・一方向 authority・discord-wrapper・Tier A/B |
 | [agent-sdk-events](agent-sdk-events.md) | accepted | Agent SDK の確定イベント仕様と状態導出 |
+| [codex-model-catalog](codex-model-catalog.md) | accepted | Codex プラン別 model 表・変更 3 経路 (Web UI / CLI / config.toml)・認証 2 モード非対称。ADR-0032 F4bc 根拠 |
 | [subagent-tasks](subagent-tasks.md) | provisional | subagent/workflow タスクの検知と専用 envelope 通知 |
 | [file-upload](file-upload.md) | provisional | ダッシュボードからの添付(画像/テキスト/PDF/Office)を wrapper で SDK へ render |
 | [personas](personas.md) | accepted | ペルソナ立ち絵のデザイン方針・画像規格・生成ワークフロー |
