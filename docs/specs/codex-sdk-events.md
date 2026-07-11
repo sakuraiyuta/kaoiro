@@ -1,8 +1,8 @@
 ---
 title: Codex アダプタ — Codex SDK イベント仕様
 description: TypeScript 版 @openai/codex-sdk の実イベント/コールバック仕様と、kaoiro 状態への導出マッピング。agent-sdk-events (Claude 版) と対をなす。
-status: provisional
-related: [protocol, plugin-model, architecture, agent-sdk-events, codex-personality-injection-efficacy]
+status: accepted
+related: [protocol, plugin-model, architecture, agent-sdk-events]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -12,7 +12,7 @@ related: [protocol, plugin-model, architecture, agent-sdk-events, codex-personal
 
 Codex アダプタ ([plugin-model](plugin-model.md)) が依拠する TypeScript 版 Codex SDK (`@openai/codex-sdk` 0.144.1) の**実イベント/コールバック仕様**を確定し、kaoiro の状態 ([protocol](protocol.md)) への導出を定義する。[agent-sdk-events](agent-sdk-events.md) の Claude 版と対をなす spec で、共通 `AdapterEvent` に変換される。
 
-**Status: provisional** — 型定義・SDK 実装・同梱バイナリ・upstream `rust-v0.144.1` ソースの検証 (2026-07-10) で下記は確定済み。認証を伴う実ターンの挙動確認 ([phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)) を経て accepted に昇格する。
+**Status: accepted** — 型定義・SDK 実装・同梱バイナリ・upstream `rust-v0.144.1` ソースの検証 (2026-07-10) に加え、2026-07-11 に ChatGPT-plan 認証で dashboard から実ターンを通し確認して accepted に昇格。実機検証で確定した 3 点を下記「実機検証メモ」に記録する。
 
 ## Definition
 
@@ -99,6 +99,29 @@ Codex ThreadEvent → kaoiro 状態 ([protocol](protocol.md)) への導出は共
 - 復帰: 復元指示時に `codex.resumeThread(thread_id)` で再開。
 - 列挙: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を走査し、先頭行 `session_meta` の `cwd` フィールドで照合する (実ファイルで確認済み)。`~/.codex/state_5.sqlite` の index は internal のため依存しない。
 
+### 実機検証メモ (2026-07-11、ChatGPT-plan 認証)
+
+dashboard から Codex agent (kuroe / ao) を実起動して判明し、実装に反映した 3 点:
+
+- **model カタログはアカウント既定のみ**: ChatGPT-plan 認証では明示 `model`
+  指定が全て 400/404 で拒否され (bundled catalog は API キー向け)、許容 model
+  はアカウント依存で SDK からは列挙不能。kaoiro は Codex の model カタログを
+  空にし、`model` を送らずアカウント既定を使う ([ADR-0032](../adr/0032-codex-adapter.md) F4bc)。
+- **MCP tool は自動承認が必要**: `codex exec` の approval_policy=never 下で MCP
+  tool 呼び出しは既定で「user cancelled MCP tool call」になる。
+  `mcp_servers.kaoiro.default_tools_approval_mode: "approve"` で kaoiro ツール
+  のみ自動承認する ([ADR-0032](../adr/0032-codex-adapter.md) F5)。
+- **waiting_question の envelope 順序**: Codex adapter は `setPendingQuestion`
+  で同期的に `state_change(waiting_question)` を emit するため、`QuestionBroker`
+  は `question_request` 通知を `onPendingChange` より**先**に送る。そうしないと
+  ext 無しの `question_request` が dashboard の描画状態を上書きし、質問ダイアログ
+  が出ず engine バッジも消える (Claude は `setPendingQuestion` がスタンプのみで
+  state_change は別途出すため無影響)。
+- **persona 注入の実効性**: kuroe (「マスター」呼び・秘書口調) と ao
+  (一人称「わたし」・常体・簡潔) が明確に差別化され、`developer_instructions`
+  注入がペルソナ別に忠実に効くことを確認 (旧 Q1 close)。built-in `personality`
+  config との干渉は観測されず `none` 指定は不要だった。
+
 ### tool 定義 (MCP bridge)
 
 `wrapper/agent-common` の共通 Tool 記述層 (JSON Schema + handler) を Codex 側では `@kaoiro/codex` 同梱の stdio MCP bridge で提供する ([ADR-0032](../adr/0032-codex-adapter.md) F5):
@@ -128,7 +151,7 @@ config key `developer_instructions` を使う ([ADR-0032](../adr/0032-codex-adap
 - developer role メッセージとして base instructions に **append** される (rollout ファイルで確認)。
 - `instructions` / `model_instructions_file` は base instructions を**置換**するため使わない (upstream も strongly discouraged)。
 - AGENTS.md (cwd / `$CODEX_HOME`) も append 系だが、ユーザの作業リポジトリを汚すため kaoiro では使わない。
-- built-in `personality` config (none/friendly/pragmatic、exec 既定 pragmatic) との干渉は [codex-personality-injection-efficacy](../open-questions/codex-personality-injection-efficacy.md) の検証項目。
+- built-in `personality` config (none/friendly/pragmatic、exec 既定 pragmatic) との干渉は 2026-07-11 実機検証で観測されず (上記「実機検証メモ」)。
 
 [personas](personas.md) の `personality.md` はそのまま両 engine で共有 ([ADR-0032](../adr/0032-codex-adapter.md) F3)。
 
@@ -144,5 +167,5 @@ config key `developer_instructions` を使う ([ADR-0032](../adr/0032-codex-adap
 
 - Related specs: [protocol](protocol.md)、[plugin-model](plugin-model.md)、[architecture](architecture.md)、[agent-sdk-events](agent-sdk-events.md) (Claude 版と対)
 - ADR: [ADR-0032](../adr/0032-codex-adapter.md) (Codex アダプタ導入)、[ADR-0033](../adr/0033-permission-model-dual-axis.md) (権限二軸)
-- Open questions: [codex-personality-injection-efficacy](../open-questions/codex-personality-injection-efficacy.md)、[codex-cwd-extraction](../open-questions/codex-cwd-extraction.md)、[codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)
+- Open questions: [codex-cwd-extraction](../open-questions/codex-cwd-extraction.md)、[codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)
 - Plan: [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)

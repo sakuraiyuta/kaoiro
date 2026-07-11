@@ -67,8 +67,9 @@ Codex では config key `developer_instructions` に注入する (developer role
 [ADR-0032](../adr/0032-codex-adapter.md) F3)。engine 別 persona pack
 (`kuroe-claude` / `kuroe-codex`) や `personality.md` 内の engine 別セクション
 は持たない。Codex 側 injection の実効性 (口調・態度の再現度) は
-[codex-personality-injection-efficacy](../open-questions/codex-personality-injection-efficacy.md)
-で検証中。
+2026-07-11 の実機検証で確認済み: kuroe / ao で口調が明確に差別化され、
+`developer_instructions` 注入がペルソナ別に忠実に効いた
+([codex-sdk-events](codex-sdk-events.md)「実機検証メモ」)。
 
 ### デフォルトペルソナ(素の AI)
 

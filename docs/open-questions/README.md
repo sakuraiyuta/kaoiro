@@ -27,7 +27,6 @@
 | [external-human-agent-consumes-input](external-human-agent-consumes-input.md) | low | — | 2026-07-04 |
 | [external-human-recv-permission-model](external-human-recv-permission-model.md) | low | — | 2026-07-04 |
 | [external-human-contact-management-ux](external-human-contact-management-ux.md) | low | — | 2026-07-04 |
-| [codex-personality-injection-efficacy](codex-personality-injection-efficacy.md) | medium | phase-14-codex-adapter | 2026-07-10 |
 | [codex-cwd-extraction](codex-cwd-extraction.md) | low | — | 2026-07-10 |
 | [codex-exec-approval-upstream](codex-exec-approval-upstream.md) | low | — | 2026-07-10 |
 
