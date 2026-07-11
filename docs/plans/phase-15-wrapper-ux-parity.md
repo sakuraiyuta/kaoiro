@@ -4,7 +4,7 @@ description: phase-14 完了後の実運用検証で顕在化した Claude / Cod
 status: in-progress
 phase: 15
 depends_on: [phase-14-codex-adapter]
-last_updated: 2026-07-11
+last_updated: 2026-07-12
 ---
 
 # Phase 15 — wrapper UX parity (Claude Code と Codex の使い勝手対称化)
@@ -55,8 +55,8 @@ phase-14 の acceptance は engine としての稼働が主眼だった。本 ph
 
 | # | Task | Priority | Status | Notes |
 |---|------|----------|--------|-------|
-| 15-1 | `@kaoiro/protocol` の envelope 型に `ext.model_source` / `ext.effort_source` / `ext.session_capabilities` / `ext.resume_snapshot` / `ext.effective` / `ext.resume_drift` を追加 | initial | ⏳ | 型追加のみ、stamp 実装は各 adapter task |
-| 15-1b | 追補 specs の反映 (phase-14 の 14-17 相当): `docs/specs/protocol.md` に上記 ext 新 field 群と source 意味論 (明示指定は維持 / 未指定は default 初出現)、`docs/specs/plugin-model.md` に `EngineAdapter` から見た capability advertise の path、`docs/specs/codex-sdk-events.md` に `thread.started` を待たず spawn 直後 stamp の注記、`docs/specs/agent-sdk-events.md` に楽観 stamp の Claude 側実装位置と `SDKSystemMessage(init)` との関係を反映 | initial | ⏳ | phase-14 で保持していた spec 追補 task の復活 (status drift 再発防止、project CLAUDE.md workflow rule)。ADR-0032/0033/0034 の追補内容と cross-link |
+| 15-1 | `@kaoiro/protocol` の envelope 型に `ext.model_source` / `ext.effort_source` / `ext.session_capabilities` / `ext.resume_snapshot` / `ext.effective` / `ext.resume_drift` を追加 | initial | ✅ | 型追加のみ、stamp 実装は各 adapter task。実施 `f299f4b` (2026-07-11、あお)。全 5 パッケージ typecheck 通過確認済 |
+| 15-1b | 追補 specs の反映 (phase-14 の 14-17 相当): `docs/specs/protocol.md` に上記 ext 新 field 群と source 意味論 (明示指定は維持 / 未指定は default 初出現)、`docs/specs/plugin-model.md` に `EngineAdapter` から見た capability advertise の path、`docs/specs/codex-sdk-events.md` に `thread.started` を待たず spawn 直後 stamp の注記、`docs/specs/agent-sdk-events.md` に楽観 stamp の Claude 側実装位置と `SDKSystemMessage(init)` との関係を反映 | initial | ✅ | phase-14 で保持していた spec 追補 task の復活 (status drift 再発防止、project CLAUDE.md workflow rule)。ADR-0032/0033/0034 の追補内容と cross-link、ADR-0035 F4 (将来 field) への forward pointer も含む。実施 `a77e190` (2026-07-11、あお) |
 | 15-2 | Claude CLI (`wrapper/claude-code/src/cli.ts`) の env 解決を engine 別 env `KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` に切替、旧 `KAOIRO_WRAPPER_DEFAULT_MODEL` は deprecation warn 経路で読む (D1) | initial | ✅ | ADR-0032 F4bc 追補、旧 env は 1 リリース窓、次リリースで撤去。あお着手分をクロエが引き継ぎ完成 (2026-07-11、`envDefaultModel` 宣言 + warn + TODO(#103)) |
 | 15-3 | Codex CLI (`wrapper/codex/src/cli.ts`) の env 解決に `KAOIRO_CODEX_DEFAULT_MODEL` を新設配線。旧 `KAOIRO_WRAPPER_DEFAULT_MODEL` は完全無視 (D1) | initial | ⏳ | ChatGPT-auth 経路の 400/404 事故を構造的に防ぐ |
 | 15-4 | 両 CLI で `ext.model_source` を stamp。AgentDetail の「アカウント既定」ラベル判定を engine 名分岐 (e89fa98) から `model_source === "default"` 判定へ置換 (D1) | initial | ⏳ | Codex 特例撤去 |
