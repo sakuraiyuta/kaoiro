@@ -6,7 +6,7 @@ opened: 2026-07-11
 supersedes: []
 superseded_by: null
 related_specs: [protocol, plugin-model]
-related_adrs: [22, 32, 33, 35]
+related_adrs: [22, 32, 33, 35, 36]
 ---
 
 # ADR-0034 — セッション機能 (session capabilities) の envelope advertisement
@@ -63,7 +63,7 @@ session_init 相当のイベント (Claude の `SDKSystemMessage(init)`、Codex 
 | `supports_user_input_dialog` | `boolean` | `ask_user_question` (MCP tool / SDK 特別分岐 いずれでも) が使えるか。false のとき AgentDetail の質問 UI 系は「未対応」表示 |
 | `user_input_modes` | `string[]` (optional) | dialog が使える権限 mode / sandbox の条件集合 (例: `["plan"]` = plan mode でのみ dialog が発火する)。空/未指定 = 無条件 |
 
-将来増える見込みの field (例: `supports_model_switch`, `supports_effort_switch`, `supports_cwd_tracking`) は本 ADR の枠内で追加可能。`supports_model_switch` / `supports_effort_switch` は [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F4 とphase-16で実装する。その他の追加時は envelope schema 追補 + agent-common の型追加のみで済む。
+将来増える見込みの field (例: `supports_model_switch`, `supports_effort_switch`, `supports_session_reset`, `supports_cwd_tracking`) は本 ADR の枠内で追加可能。`supports_model_switch` / `supports_effort_switch` は [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F4 とphase-16で実装する。`supports_session_reset` / `session_reset_modes` は [ADR-0036](0036-session-lifecycle-commands.md) F5とphase-17で実装する。その他の追加時は envelope schema 追補 + agent-common の型追加のみで済む。
 
 ### F3 — UI 判定原則
 

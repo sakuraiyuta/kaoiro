@@ -6,7 +6,7 @@ opened: 2026-06-15
 supersedes: []
 superseded_by: null
 related_specs: [protocol, threat-model, architecture]
-related_adrs: [1, 11, 12, 15, 23, 24, 30]
+related_adrs: [1, 11, 12, 15, 23, 24, 30, 36]
 ---
 
 # ADR-0014 — セッション resume による wrapper 復帰・既存セッション召喚
@@ -95,6 +95,15 @@ flowchart LR
   (spawn-with-resume + セッション列挙)は #22 制御経路の拡張として #23 と
   併せて定義。プロトコル変更はバージョニング(#1 相当)・エラー本文リレー
   (#2 相当)と同一改訂でまとめる。詳細は [protocol](../specs/protocol.md)。
+
+#### F3 追補 — session reset時の明示detach (ADR-0036)
+
+[ADR-0036](0036-session-lifecycle-commands.md)の`/new`・`/clear`でもF3の
+「serverは最新pointer 1件だけを保持し、全候補はrunnerが列挙する」契約を維持する。
+reset時は旧session IDへ暗黙resumeしないよう、session IDだけをnilへ明示detachし、
+cwd/engineを保持する専用operationを`SessionPointers`へ追加する。旧sessionのstackは
+serverに持たず、既存pickerとhost session列挙でresumeする。fresh session IDが報告
+された時点で通常のrecord経路により最新pointerを更新する。
 
 ### 履歴の正本(A4)
 
