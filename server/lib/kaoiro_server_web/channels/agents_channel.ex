@@ -434,14 +434,23 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          {:ok, session_id} <- fetch_resume_session_id(payload) do
       if live_agent?(agent_id) do
-        KaoiroServerWeb.Endpoint.broadcast(
-          "runner:#{host_id_of(agent_id)}",
-          "switch_session",
+        # Live-agent switch_session (ADR-0014 F1 追補, phase-15 D8): pipe the
+        # agent's stored snapshot through so the swapped-in wrapper stamps
+        # ext.resume_snapshot / ext.resume_drift on its first state_change.
+        # Without this the relaunched wrapper would retain the original
+        # spawn-time snapshot (post-review Finding 2).
+        switch_payload =
           %{
             "version" => "0",
             "agent_id" => agent_id,
             "resume_session_id" => session_id
           }
+          |> maybe_put_resume_snapshot(agent_id)
+
+        KaoiroServerWeb.Endpoint.broadcast(
+          "runner:#{host_id_of(agent_id)}",
+          "switch_session",
+          switch_payload
         )
 
         {:reply, :ok, socket}

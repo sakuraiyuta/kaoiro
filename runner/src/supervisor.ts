@@ -400,7 +400,21 @@ export class Supervisor {
     }
     if (old !== undefined && old !== resume) this.#activeSessions.delete(old);
     this.#activeSessions.add(resume);
-    entry.parsed = { ...entry.parsed, resumeSessionId: resume };
+    // Resume snapshot (ADR-0014 F1 追補, phase-15 D8): the server may attach
+    // the swapped-in session's stored snapshot on switch_session; carry it
+    // through so the relaunched wrapper stamps ext.resume_snapshot /
+    // ext.resume_drift instead of retaining the original spawn-time value
+    // (post-review Finding 2). Absent = keep the previous parsed value —
+    // the wrapper still had a snapshot for the original session.
+    const nextSnapshot: ResolvedSnapshotExt | undefined = isObject(payload) &&
+      isObject(payload.resume_snapshot)
+      ? (payload.resume_snapshot as ResolvedSnapshotExt)
+      : entry.parsed.resumeSnapshot;
+    entry.parsed = {
+      ...entry.parsed,
+      resumeSessionId: resume,
+      ...(nextSnapshot !== undefined ? { resumeSnapshot: nextSnapshot } : {}),
+    };
     // Take the same restart path a `restart` uses: reset the crash budget
     // (this is a deliberate cycle, not a crash) and kill; #onExit sees
     // restarting=true and routes into #relaunch, which re-reads entry.parsed
