@@ -29,7 +29,6 @@
 | [external-human-contact-management-ux](external-human-contact-management-ux.md) | low | — | 2026-07-04 |
 | [codex-cwd-extraction](codex-cwd-extraction.md) | low | — | 2026-07-10 |
 | [codex-exec-approval-upstream](codex-exec-approval-upstream.md) | low | — | 2026-07-10 |
-| [codex-model-catalog-restoration](codex-model-catalog-restoration.md) | low | — | 2026-07-11 |
 
 ## Recently decided
 

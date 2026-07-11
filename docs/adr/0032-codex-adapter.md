@@ -6,7 +6,7 @@ opened: 2026-06-26
 supersedes: []
 superseded_by: null
 related_specs: [plugin-model, protocol, architecture, personas, codex-sdk-events, agent-sdk-events]
-related_adrs: [17, 22, 23, 33, 34]
+related_adrs: [17, 22, 23, 33, 34, 35]
 ---
 
 # ADR-0032 — Codex アダプタ追加と wrapper マルチパッケージ構造の materialise
@@ -105,13 +105,18 @@ Codex 側の初期実装 (2026-07-11 実機検証で改訂、旧 Q5 close):
   `model` を送らず、アカウント既定 model が使われる (両認証で確実に動作)。
   明示 model 選択は、認証別に信頼できる catalog 供給元が現れた時点で再導入
   する (旧 Q5 codex-model-effort-catalog は close 済み、将来対応は
-  [codex-model-catalog-restoration](../open-questions/codex-model-catalog-restoration.md)
-  で追跡)。判断根拠となる Codex エコシステム側の現状 (プラン別 model 可用性、
+  [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) で復活方式と
+  mid-session switch契約を決定)。判断根拠となるCodexエコシステム側の現状 (プラン別model可用性、
   認証 2 モードの非対称、`codex doctor` の情報粒度) は
   [codex-model-catalog](../specs/codex-model-catalog.md) に記録。
 - **effort は空カタログにより現状 UI では非表示**。将来 model カタログが
   復活した際は Claude 側と同じ `ext.models` の `effort_levels` に統合する
   方針 (E-B) を維持する。
+
+[ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) は、Plus加入後の
+host実機検証でcurated trioのexplicit指定成功が確認されたため、本F4bcの
+空catalogをphase-16でplan申告型catalogへ改訂する。phase-16完了までは本節の
+空catalog挙動を維持する。
 
 #### F4bc 追補 (2026-07-11、phase-15 に向けた model 解決経路の明文化)
 

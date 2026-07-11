@@ -89,7 +89,8 @@ Priority legend: **initial** = 今すぐ (D1/D2/D3/D7/D8)、**next** = 次スコ
 - **旧 env `KAOIRO_WRAPPER_DEFAULT_MODEL` 撤去 sunset**: 本 phase で 1 リリース窓 deprecation warn を実装、**次リリース窓で撤去**。追跡 issue [#103](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/103) (chore / priority-low / deferred、着手条件は D1 リリースの次リリース)。コード内では 15-2 (Claude CLI 側の deprecation 読み経路) に短い TODO コメントを補助で残し、#103 と cross-link する。
 - **engine 名判定の機械検出 (lint)**: [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F3 の「UI は engine 名で機能可用性を判定しない」原則は本 phase のレビュー禁則 + 既存 `/my-code-review-cycle` で当面担保する。**phase-15 スコープ外を維持**、機械検出 (custom lint rule / ripgrep hook 等) は違反が review をすり抜けた事例が出た時点で chore issue として再検討する。
 - **[codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)**: Codex の対話的承認は upstream の `exec_permission_approvals` stable 化待ち。本 phase は起動時固定二軸 (ADR-0033 F3) を保持。
-- **[codex-cwd-extraction](../open-questions/codex-cwd-extraction.md)** / **[codex-model-catalog-restoration](../open-questions/codex-model-catalog-restoration.md)**: 本 phase のスコープ外、既存判定を維持。
+- **[codex-cwd-extraction](../open-questions/codex-cwd-extraction.md)**: 本 phase のスコープ外、既存判定を維持。
+- **Codex model catalog復活**: [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) / [phase-16](phase-16-codex-model-switch.md) へ昇格。phase-15 initial完了後に着手し、15-4のmodel_source化・Codex label特例撤去と15-8のsnapshot基盤を再実装しない。
 - **[issue #102](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/102)** — list_agents の peer 情報充実 (engine / model / effort): phase-8 の「directory は名前解決の最小限」判断の見直し、着手は本 phase の envelope schema 確定後。[ADR-0034](../adr/0034-session-capabilities-advertisement.md) の session capability advertise パターンと親和的なので、`state stamp = SoT` 原則を継承する見込み (director 判断で確定)。
 
 ## Open Questions Blocking This Phase

@@ -15,7 +15,7 @@ related: [codex-sdk-events, protocol, plugin-model]
 判断を採ったが、その **根拠となる Codex エコシステム側の現状** (プラン別
 model 可用性 / 認証モードの非対称 / 変更経路 / SDK からの列挙可否) は ADR
 本体には収まらないため本 spec に外出しする。将来 curated カタログを復活
-させる際の判断材料 ([codex-model-catalog-restoration](../open-questions/codex-model-catalog-restoration.md))
+させる際の判断材料 ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md))
 としても参照される。
 
 **Status: accepted** — 一次情報 (OpenAI 公式ドキュメント / help center /
@@ -153,8 +153,8 @@ kaoiro 側は `codex doctor --json` を parse すれば auth mode 判別まで�
   なる (CLI 優先度 4)。kaoiro 側変更なしで即効。
 - **agent ごとの動的切替**: 現状 UI からは不可能。default 書換えで擬似的
   に切替する運用のみ。将来の catalog 復活候補は
-  [codex-model-catalog-restoration](../open-questions/codex-model-catalog-restoration.md)
-  で追跡。
+  [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) で方式を決定し、
+  [phase-16](../plans/phase-16-codex-model-switch.md) で実装する。
 
 ## 一次情報の参照先
 
