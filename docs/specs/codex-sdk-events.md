@@ -122,6 +122,29 @@ dashboard から Codex agent (kuroe / ao) を実起動して判明し、実装�
   注入がペルソナ別に忠実に効くことを確認 (旧 Q1 close)。built-in `personality`
   config との干渉は観測されず `none` 指定は不要だった。
 
+### session_capabilities の advertise タイミング (2026-07-11、[ADR-0034](../adr/0034-session-capabilities-advertisement.md) F1、phase-15)
+
+`ext.session_capabilities` は **`thread.started` を待たず、spawn 直後の初回
+state_change から stamp する** (ADR-0034 F1)。理由は本仕様の process モデル
+に起因する:
+
+- `codex exec` は毎ターン新規 spawn する process モデルのため、`thread.started`
+  は **初ターン発生まで到達しない**。CodexHost の run loop は queue が空の間
+  `#wake` を待って idle 状態でスリープしており、この間 `thread.started` は絶対
+  に発火しない。
+- 未 stamp 時 UI は fail-closed で「機能なし」解釈 (attach ボタン disabled、
+  質問 dialog 系「未対応」表示)。session_init 相当を待つと起動直後の Codex
+  agent が「未対応」誤表示になる。
+- 対策: adapter 構築時に capability (Codex は `supports_attachments: false` /
+  `supports_user_input_dialog: true`) を組み立て、初回 state_change (idle
+  announce、cli.ts で発行) の `ext` に stamp する。以降の state_change でも
+  同 ext を維持し、変化しうる値は変化時に更新する (Claude 側と対称)。
+
+phase-15 の 15-4b/4c の楽観 stamp 原則と同一 path。将来 field
+`supports_model_switch` / `supports_effort_switch` は
+[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4、
+phase-16 で追加する (`session_capabilities` の枠内で advertise を都度更新)。
+
 ### tool 定義 (MCP bridge)
 
 `wrapper/agent-common` の共通 Tool 記述層 (JSON Schema + handler) を Codex 側では `@kaoiro/codex` 同梱の stdio MCP bridge で提供する ([ADR-0032](../adr/0032-codex-adapter.md) F5):

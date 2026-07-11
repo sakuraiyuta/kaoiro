@@ -115,6 +115,44 @@ state_change に付与される engine 識別子:
 - 値: `"claude-code" | "codex"` (host 側の `capabilities` と同じ値集合)
 - 誰が付与するか: engine adapter が起動時に付与し、以降 state_change すべてに含む
 
+**注意**: `ext.engine` は表示 (engine バッジ) と log/telemetry の識別用途に限定する。**機能可用性の判定に engine 名を使ってはならない** ([ADR-0034](../adr/0034-session-capabilities-advertisement.md) F3)。add / remove の判定は `ext.session_capabilities` で行う。
+
+#### `ext.model_source` / `ext.effort_source` (2026-07-11、[ADR-0032](../adr/0032-codex-adapter.md) F4bc 追補、phase-15)
+
+model / effort の値がどの経路で決まったかを示す source 語彙。値の由来を伝える field なので、SDK 確認後も**明示指定側の source は維持**する。
+
+- 値: `"launch" | "env" | "config" | "default"` (`ModelSource` 型)
+  - `launch` — SpawnMessage.model / SpawnMessage.effort による指定
+  - `env` — engine 別 env (`KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` / `KAOIRO_CODEX_DEFAULT_MODEL`) による指定
+  - `config` — kaoiro.config.json の `model` / `effort` による指定
+  - `default` — 未指定、engine account / SDK 既定に委任
+- 解決優先度: `launch > env > config > default`
+- 起動時 stamp: **明示指定時**は起動直後から `model` + `model_source=launch|env|config` を stamp (楽観 stamp、phase-15 の [15-4b/4c])。SDK 確認後は値のみ更新される可能性 (Claude の alias 展開等) があるが `model_source` は変えない — `default` に上書きすると「アカウント既定を使った」と嘘をつくため
+- **未指定時**: 起動直後は `model` / `model_source` とも stamp なし。SDK 報告受信で `model` + `model_source="default"` が初出現
+- effort も同 semantics (`ext.effort_source`)。効果的な違い: 起動時明示指定が無ければ wrapper は SDK 既定値を知らないため stamp しない (明示指定時のみ即表示、未指定は SDK 報告待ち)
+
+#### `ext.session_capabilities` (2026-07-11、[ADR-0034](../adr/0034-session-capabilities-advertisement.md) F1/F2)
+
+session 単位の機能可用性を第一級表現する envelope field。engine 名では表現できない差 (auth mode / plan tier / wrapper 実装差) を吸収する。
+
+- shape (`SessionCapabilitiesExt` 型):
+  - `supports_attachments: boolean` — 添付ファイル受け入れ可否 (false 時 Composer attach ボタン disabled + tooltip「このセッションでは未対応」)
+  - `supports_user_input_dialog: boolean` — `ask_user_question` 可用性
+  - `user_input_modes?: string[]` — dialog 発火が特定 mode / sandbox に限定される場合の条件集合 (空/未指定 = 無条件)
+- **stamp タイミング**: **spawn 直後の初回 state_change から** (session_init 相当のイベントを待たない。Codex `thread.started` は毎ターン発生モデルで初ターン発生まで到達しないため、待つと fail-closed default で誤表示になる)
+- 未 stamp = 保守的に「機能なし」解釈 (fail-closed)。UI は必ずこの field のみで判定
+- 将来追加予定: `supports_model_switch` / `supports_effort_switch` ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4、phase-16 で実装)
+
+#### `ext.resume_snapshot` / `ext.effective` / `ext.resume_drift` (2026-07-11、[ADR-0032](../adr/0032-codex-adapter.md) F4bc + [ADR-0033](../adr/0033-permission-model-dual-axis.md) F4 追補、phase-15)
+
+resume 経路で「意図しない model / 権限の差替え」を検知する D8 (resume drift detection) 用の envelope 拡張。
+
+- `ext.resume_snapshot` (`ResolvedSnapshotExt` 型): 復帰元 session の**最後に実効だった値**。fields: `model` / `model_source` / `effort` / `effort_source` / `permission_mode` / `sandbox` / `network_access` (未設定は absent)
+  - **semantics 重要**: 「spawn 時の値」ではなく「session 中に最後に実効だった値」を取る (mid-session で operator が `set_model` / `set_effort` / `set_permission_mode` で切り替えた場合、切替後の最新実効値を snapshot に反映)。意図した切替が resume 時 drift 誤爆を起こさないため
+- `ext.effective` (`ResolvedSnapshotExt` 型): 今回 host が強制した値。同 shape
+- `ext.resume_drift` (`ResumeDriftExt` 型): `resume_snapshot` と `effective` の field ごと差分。`Array<{field, prev, now}>` 形式。空 array = 差分なし、absent = fresh spawn (resume ではない)
+- 差分検知時: wrapper が stderr warn、UI (AgentDetail) が drift バッジ表示
+
 ### type と payload(v0 確定)
 
 `type` は閉じた enum。v0 の各種別の payload を下記に定義する(段階的精緻化の

@@ -75,6 +75,34 @@ AI エージェント共通層 `wrapper/agent-common` に置く `EngineAdapter` 
 - 共通 Tool 記述層 (JSON Schema + handler pair) の engine 別 API への変換
   (Claude: Zod + `createSdkMcpServer` in-process / Codex: `dynamicTools`)
 
+### Session capability advertise (2026-07-11、[ADR-0034](../adr/0034-session-capabilities-advertisement.md))
+
+engine 名では表現しきれない**session 単位の機能可用性** (auth mode / plan tier
+/ wrapper 実装差) を UI に伝える経路。`EngineAdapter` interface には capability
+取得 hook を**追加しない** — 各 adapter が state stamp 経路 (`#statusExt` 相当)
+で直接 `ext.session_capabilities` を組み立て、envelope で advertise する
+(ADR-0034 F4)。
+
+- **理由**: capability は session-lifetime にわたる「静的な事実」ではなく、
+  adapter 実装 + spawn 時選択 + auth mode の合成結果。adapter 内部で state と
+  同期して組み立てる方が実態に近く、envelope が SoT ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md) 原則)
+  として一貫する。
+- **stamp タイミング**: spawn 直後の**初回 state_change から** (session_init
+  相当のイベントを待たない)。Codex は毎ターン `codex exec` を新規 spawn する
+  process モデルで `thread.started` が初ターン発生まで遅延するため、session_init
+  を待つと起動直後の Codex agent が fail-closed default で「機能なし」誤表示
+  になる ([codex-sdk-events](codex-sdk-events.md))。Claude 側も対称に初回
+  state_change から stamp。
+- **UI 判定原則**: UI は engine 名 (`ext.engine`) では機能可用性を判定しない
+  (レビュー禁則、[ADR-0034](../adr/0034-session-capabilities-advertisement.md)
+  F3)。`ext.session_capabilities` の boolean / 条件配列のみを見る。
+- **初期実装値**:
+  - `wrapper/claude-code`: `supports_attachments: true` / `supports_user_input_dialog: true` (無条件)
+  - `wrapper/codex`: `supports_attachments: false` / `supports_user_input_dialog: true`
+- **将来 field**: `supports_model_switch` / `supports_effort_switch` は
+  [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4、
+  phase-16 で追加。engine 側は capability の advertise を都度更新する。
+
 ## Constraints
 
 - MUST: フィルタは `payload` / `ext` だけを触り、外枠(`version`,`agent_id`,

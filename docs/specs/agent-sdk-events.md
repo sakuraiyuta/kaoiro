@@ -207,6 +207,40 @@ piggyback で反映する唯一の経路(`init` 以外のメッセージは cwd 
 `system/task_*`(subagent/workflow)は `KaoiroState` に**マップしない** — 親状態を
 変えず、専用 envelope へ別途導出する([subagent-tasks](subagent-tasks.md))。
 
+### session_capabilities と楽観 stamp (2026-07-11、[ADR-0034](../adr/0034-session-capabilities-advertisement.md) F1 / phase-15 15-4b)
+
+Claude 側の起動直後 stamp 契約を明文化する。すべて `SDKSystemMessage(init)` を
+**待たず**、spawn 直後の初回 state_change (cli.ts 発行の idle announce) から
+stamp する:
+
+- **`ext.session_capabilities`**: adapter 構築時に組み立て、初回 state_change
+  から stamp (Codex 側との対称。session_init を待つと Codex agent が
+  fail-closed で誤表示になるため両 engine で同一契約に統一)。Claude 側の初期
+  値は `supports_attachments: true` / `supports_user_input_dialog: true`
+  (無条件)。SDK 側で条件が付いた時点で追加分岐。
+- **`ext.model` / `ext.model_source`**: 起動時に config / launch (SpawnMessage.model)
+  / env (`KAOIRO_CLAUDE_CODE_DEFAULT_MODEL`) 由来の resolved 値を**楽観 stamp**。
+  `SDKSystemMessage(init)` および `SDKStatusMessage` 受信時は**値のみ**上書き
+  (Claude が alias を正規名に展開する等)、`model_source` は launch/env/config を
+  維持 (default に書き換えない — 値の由来を伝える field なので嘘をつく)。未指定
+  時は起動直後 stamp なし、`SDKSystemMessage(init)` 受信で `model` +
+  `model_source="default"` が初出現。
+- **`ext.permission_mode`**: 起動時 config.permission_mode を楽観 stamp、
+  `SDKStatusMessage` 受信で値のみ上書き。二軸換算 (`ext.permission`) も同時
+  stamp (ADR-0033 F2 の写像 table)。
+- **`ext.fast_mode`**: 起動時 launch 由来値を楽観 stamp、`SDKSystemMessage(init)`
+  と各 `SDKResultMessage` で上書き (`cooldown` は result でのみ観測)。
+- **`ext.effort` / `ext.effort_source`**: **例外扱い** — 起動時に明示指定
+  (`config.effort` / `SpawnMessage.effort`) がある時のみ stamp。未指定時は wrapper
+  が SDK 既定値を知らないため stamp しない (Claude Agent SDK は effort の default
+  値を event に載せない)。明示指定時のみ即表示、未指定は SDK 報告待ち。
+- **`ext.cwd`**: 既存の CwdChanged フック同型パターン (init 後の cwd 変化を
+  同期代入で次 state_change に piggyback、行 187-190)。
+
+phase-15 の 15-4b で `wrapper/claude-code/src/host.ts` の `#statusExt`
+(host.ts:842-852) の null ガードを明示指定時のみ外す形で実装。`SDKSystemMessage`
+(init) が到着する前でも起動直後の state_change に必要な ext が乗る。
+
 ## Constraints
 
 - SHOULD: 細粒度の `thinking` 検出が要るとき `includePartialMessages: true`。
