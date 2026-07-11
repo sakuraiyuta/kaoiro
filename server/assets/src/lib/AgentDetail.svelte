@@ -1209,12 +1209,14 @@
         <!-- Claude Code status meta (#16): mirrors the local statusline's
              model / ctx / 5h / 7d segments for this agent. -->
         <dl class="cc">
-          {#if ccModel}
+          {#if modelLabel || isCodexAgent}
             <div class="cc-row">
               <dt>model</dt>
               <dd>
                 <div class="cc-switchbox">
-                  <span class="cc-model">{modelLabel}</span>
+                  <span class="cc-model">
+                    {#if modelLabel}{modelLabel}{:else}アカウント既定 (選択不可){/if}
+                  </span>
                   {#if connection && models.length > 0}
                     <button
                       type="button"

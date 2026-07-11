@@ -230,9 +230,11 @@ export function effectiveCapabilities(config: RunnerConfig): string[] {
  *  Persona trust is expressed by the same field shape the file used
  *  (ADR-0031: allowlist / blocklist / accept-all), so the server can gate
  *  spawn without a separate mode enum on the wire. `engines` carries the
- *  launch catalog per capability (ADR-0032 F4bc): codex's curated static
- *  model list; claude-code advertises none (its models surface post-spawn
- *  via ext.models, #54). */
+ *  launch catalog per capability (ADR-0032 F4bc): both engines advertise
+ *  empty models today. codex is empty by design — ChatGPT-plan auth rejects
+ *  explicit model IDs (400/404) and the allowed set is not enumerable from
+ *  the SDK (2026-07-11 実機検証、旧 Q5 close); claude-code's list surfaces
+ *  post-spawn via ext.models (#54). */
 export function buildRegister(config: RunnerConfig): RunnerRegister {
   const capabilities = effectiveCapabilities(config);
   const engines: EngineCatalogEntry[] = [];
