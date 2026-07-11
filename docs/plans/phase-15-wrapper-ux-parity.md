@@ -71,7 +71,7 @@ phase-14 の acceptance は engine としての稼働が主眼だった。本 ph
 | 15-11 | AgentDetail の Codex agent 権限枠に「承認: never (host-fixed, upstream 制約)」バッジを常設 (D2) | initial | ⏳ | link は codex-exec-approval-upstream |
 | 15-12 | LaunchDialog に engine=claude-code 選択時の permission_mode セレクト新設 (二軸 tooltip 併記)、SpawnMessage.permission_mode の relay (D2) | initial | ⏳ | `SpawnRequest` / `SpawnMessage` に `permission_mode` を追加 (`@kaoiro/protocol` 型追加) |
 | 15-13 | AgentDetail 権限枠を「作業意図 (mode)」と「実効書込範囲 (sandbox)」の 2 枠並列表示に再構成 (D2) | initial | ⏳ | ADR-0033 F4 追補 |
-| 15-14 | 両 adapter の `#statusExt` に `ext.session_capabilities` を stamp (ADR-0034 F1/F4) | initial | ⏳ | Claude: attachments true / dialog true。Codex: attachments false / dialog true |
+| 15-14 | 両 adapter の `#statusExt` に `ext.session_capabilities` を stamp (ADR-0034 F1/F4) | initial | ✅ | Claude: attachments true / dialog true。Codex: attachments false / dialog true。実施 `cc8aa7c` (2026-07-12、あお)。static literal で始め、SDK 側で条件が付いたら field 化で分岐する形。unit test 2 件追加、Claude 152 / Codex 25 全 pass。review-cycle trivial tier で advisory 2 (comment 精度) 反映、advisory 1 (result envelope へ session_capabilities 伝播) は既存 Codex pattern 由来で報告のみ |
 | 15-15 | Composer の添付ボタン enable/disable を `ext.session_capabilities.supports_attachments` で判定 (engine 名判定を削除) | next | ⏳ | D4 の中核 |
 | 15-16 | AgentDetail 質問 UI 系を `supports_user_input_dialog` / `user_input_modes` で判定 (engine 名判定を削除) | next | ⏳ | D5 準備、現状は無条件 true なので UI 挙動は変わらない |
 | 15-17 | `wrapper/kaoiro.config.example.json` を `kaoiro.config.claude-code.example.json` と `kaoiro.config.codex.example.json` に分割 (D6) | next | ⏳ | 各 engine で効く field のみ含む |
