@@ -7,5 +7,5 @@
   "cwd_allowlist": [
     "/home/user/git/kaoiro"
   ],
-  "capabilities": ["claude"]
+  "capabilities": ["claude-code", "codex"]
 }
