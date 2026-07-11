@@ -119,7 +119,18 @@ export KAOIRO_WRAPPER_DEFAULT_MODEL
 # spawn each wrapper under `tsx watch` too, so wrapper source edits restart the
 # running agent. `pnpm install` from this workspace member links protocol /
 # wrapper and installs the wrapper deps tsx runs the agent against.
+#
+# Prebuild the 4 wrapper packages before tsx starts: their package.json all
+# point `main` at `./dist/index.js` (phase-13 "typecheck/test は src、runtime
+# は dist" 分離; ADR-0017/0032 F1). Runner imports `@kaoiro/codex` etc. at
+# top-level (runner/src/config.ts) so a missing dist ENOENTs before the watch
+# loop even starts. `wrapper/` 直下は非メンバの meta shim なので root から
+# `-r --filter` で 4 パッケージだけ topo build させる。
 ( cd "$root/runner" && pnpm install </dev/null &&
+  cd "$root" && pnpm -r --filter '@kaoiro/wrapper-core' \
+    --filter '@kaoiro/agent-common' --filter '@kaoiro/claude-code' \
+    --filter '@kaoiro/codex' run build &&
+  cd "$root/runner" &&
   KAOIRO_WRAPPER_DEV=1 exec pnpm exec tsx watch src/cli.ts runner.config.json
 ) </dev/null 2>&1 | tee -a "$logdir/runner.log" &
 pids+=("$!")
