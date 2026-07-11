@@ -190,6 +190,61 @@ export interface PendingQuestionExt {
   ts: string;
 }
 
+/** Source of a launch-selectable value (model / effort) at wrapper start
+ *  time (ADR-0032 F4bc addendum, phase-15). Explicit picks (launch / env /
+ *  config) stay stamped after the SDK confirms the value — the field
+ *  reports the value's origin, not the SDK's confirmation. Only "default"
+ *  means the wrapper never received an explicit pick and is reporting the
+ *  engine's own default. */
+export type ModelSource = "launch" | "env" | "config" | "default";
+
+/** state_change.ext.session_capabilities shape (ADR-0034 F1/F2). Advertised
+ *  by the adapter from the first state_change onward (spawn-direct — the
+ *  session_init events like Claude's SDKSystemMessage(init) or Codex's
+ *  thread.started are NOT awaited, otherwise Codex's per-turn
+ *  thread.started would delay capability visibility to the first turn).
+ *  UI reads this alone for feature-availability decisions; the engine name
+ *  (ext.engine) is display-only. Missing fields default to fail-closed
+ *  ("not supported"). */
+export interface SessionCapabilitiesExt {
+  supports_attachments: boolean;
+  supports_user_input_dialog: boolean;
+  /** Optional constraint: dialog fires only in these permission modes /
+   *  sandbox contexts. Absent / empty array = unconditional. */
+  user_input_modes?: string[];
+}
+
+/** Resolved launch/session-state snapshot used by D8 resume drift detection
+ *  (ADR-0032 F4bc + ADR-0033 F4 addenda, phase-15). Same shape for both
+ *  ext.resume_snapshot (the "last effective values" of the prior session,
+ *  NOT the spawn-time values — mid-session operator switches via
+ *  set_model / set_effort / set_permission_mode land here so an intended
+ *  change is not warned as drift) and ext.effective (the values the host
+ *  is enforcing this run). Any field may be absent when it was never set. */
+export interface ResolvedSnapshotExt {
+  model?: string;
+  model_source?: ModelSource;
+  effort?: string;
+  effort_source?: ModelSource;
+  permission_mode?: PermissionMode;
+  sandbox?: PermissionAxesExt["sandbox"];
+  network_access?: boolean;
+}
+
+/** One drifted field in a resume, comparing prev (resume_snapshot value)
+ *  vs now (effective value). `unknown` on prev/now because different fields
+ *  carry different value types (string / boolean / enum). */
+export interface ResumeDriftEntry {
+  field: keyof ResolvedSnapshotExt;
+  prev: unknown;
+  now: unknown;
+}
+
+/** state_change.ext.resume_drift shape: one entry per differing field
+ *  between resume_snapshot and effective. Empty array = no drift observed,
+ *  absent = not a resume launch (fresh spawn). */
+export type ResumeDriftExt = ResumeDriftEntry[];
+
 /**
  * Common event envelope v0 (protocol.md). The type enum fixes
  * state_change / permission_request (ADR-0010/0011), log / result
