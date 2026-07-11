@@ -118,23 +118,36 @@ fi
 : "${KAOIRO_CLAUDE_CODE_DEFAULT_MODEL:=claude-opus-4-7}"
 export KAOIRO_CLAUDE_CODE_DEFAULT_MODEL
 
-# runner via tsx watch (hot-reloads the runner); KAOIRO_WRAPPER_DEV makes it
-# spawn each wrapper under `tsx watch` too, so wrapper source edits restart the
-# running agent. `pnpm install` from this workspace member links protocol /
-# wrapper and installs the wrapper deps tsx runs the agent against.
+# runner via tsx watch (hot-reloads the runner itself). Wrapper hot reload
+# (tsx watch on wrapper src) is OFF by default. During phase-15 implementation
+# an in-place edit to wrapper/claude-code/src/cli.ts under KAOIRO_WRAPPER_DEV=1
+# tsx watch caused the running Claude wrapper — which was the AI assistant
+# editing that very file — to self-restart on every save and take down the
+# whole stack. Under this default the runner spawns each wrapper as a dist
+# binary, so wrapper src edits do NOT affect a running agent. To apply new
+# wrapper code, run
+#   pnpm -r --filter '@kaoiro/wrapper-core' \
+#     --filter '@kaoiro/agent-common' --filter '@kaoiro/claude-code' \
+#     --filter '@kaoiro/codex' run build
+# and restart the target agent from the dashboard (「復元」). To opt back
+# into wrapper hot reload (only when you know no running agent is the
+# editing Claude wrapper), export KAOIRO_WRAPPER_DEV=1 before invoking
+# scripts/dev.sh.
 #
 # Prebuild the 4 wrapper packages before tsx starts: their package.json all
 # point `main` at `./dist/index.js` (phase-13 "typecheck/test は src、runtime
-# は dist" 分離; ADR-0017/0032 F1). Runner imports `@kaoiro/codex` etc. at
-# top-level (runner/src/config.ts) so a missing dist ENOENTs before the watch
-# loop even starts. `wrapper/` 直下は非メンバの meta shim なので root から
-# `-r --filter` で 4 パッケージだけ topo build させる。
+# は dist" 分離; ADR-0017/0032 F1). Under the default (dist) launch the
+# runner needs those dist files to exist; under KAOIRO_WRAPPER_DEV=1 the tsx
+# entry still resolves `@kaoiro/codex` etc. at top-level (runner/src/config.ts)
+# so a missing dist ENOENTs before the watch loop even starts. `wrapper/` 直下
+# は非メンバの meta shim なので root から `-r --filter` で 4 パッケージだけ topo
+# build させる。
 ( cd "$root/runner" && pnpm install </dev/null &&
   cd "$root" && pnpm -r --filter '@kaoiro/wrapper-core' \
     --filter '@kaoiro/agent-common' --filter '@kaoiro/claude-code' \
     --filter '@kaoiro/codex' run build &&
   cd "$root/runner" &&
-  KAOIRO_WRAPPER_DEV=1 exec pnpm exec tsx watch src/cli.ts runner.config.json
+  exec pnpm exec tsx watch src/cli.ts runner.config.json
 ) </dev/null 2>&1 | tee -a "$logdir/runner.log" &
 pids+=("$!")
 
