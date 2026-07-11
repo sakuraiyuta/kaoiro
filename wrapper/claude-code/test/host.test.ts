@@ -245,6 +245,27 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("session_capabilities を engine と一緒に stamp する (ADR-0034 F1, phase-15 15-14)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", model: "claude-x", cwd: "/repo" }),
+        assistant([{ type: "text", text: "hi" }]),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    // session_capabilities は #statusExt から unconditional に stamp されるため
+    // 全 state_change に乗る (ADR-0034 F1、spawn-direct advertise の実装契約)。
+    // envs[0] を採るのは「init 到達を待たない」ことの demonstrate 用。
+    const first = envs[0]!;
+    expect(first.ext?.session_capabilities).toEqual({
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+    });
+  });
+
   it("init の slash_commands を ext.slash_commands に付与する (#34)", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {

@@ -364,6 +364,17 @@ export class CodexHost implements EngineAdapter {
   #statusExt(): Record<string, unknown> {
     const ext: Record<string, unknown> = {};
     ext.engine = "codex";
+    // Session capabilities (ADR-0034 F1/F4, phase-15 15-14): advertised
+    // from the first state_change onward (adapter-static values, no
+    // thread.started await — that event fires only once a turn runs,
+    // so an idle-wait agent would stay "not yet reported"). Codex
+    // wholesale-rejects attach_open today (see cli.ts onAttachOpen);
+    // the MCP bridge exposes ask_user_question. supports_model_switch /
+    // supports_effort_switch are reserved for phase-16 (ADR-0035 F4).
+    ext.session_capabilities = {
+      supports_attachments: false,
+      supports_user_input_dialog: true,
+    };
     if (this.#model !== null) ext.model = this.#model;
     if (this.#modelSource !== null) ext.model_source = this.#modelSource;
     if (this.#effort !== null) ext.effort = this.#effort;

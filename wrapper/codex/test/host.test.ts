@@ -323,4 +323,25 @@ describe("CodexHost", () => {
     expect(first.ext).not.toHaveProperty("model");
     expect(first.ext).not.toHaveProperty("effort");
   });
+
+  it("session_capabilities を engine と一緒に stamp する (ADR-0034 F1, phase-15 15-14)", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([[usageEvent()]]);
+    const host = new CodexHost(CONFIG, {
+      onState: (e) => states.push(e),
+      appendSystemPrompt: "persona",
+      codexFactory: () => client,
+      now: () => "T",
+    });
+    await runOneTurn(host, "hi");
+    // session_capabilities は #statusExt から unconditional に stamp されるため
+    // 全 state_change に乗る (ADR-0034 F1)。Codex は毎ターン exec spawn モデル
+    // のため adapter 構築時に決めた capability が turn の外 (idle) でも state_change
+    // で advertise される。states[0] は turn 開始の sending 状態。
+    const first = states[0]!;
+    expect(first.ext?.session_capabilities).toEqual({
+      supports_attachments: false,
+      supports_user_input_dialog: true,
+    });
+  });
 });

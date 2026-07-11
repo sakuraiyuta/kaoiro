@@ -864,6 +864,16 @@ export class AgentHost implements EngineAdapter {
   #statusExt(): Record<string, unknown> {
     const ext: Record<string, unknown> = {};
     ext.engine = "claude-code";
+    // Session capabilities (ADR-0034 F1/F4, phase-15 15-14): advertised
+    // from the first state_change onward (adapter-static values, no SDK
+    // init await). Claude Code accepts uploads and provides the SDK's
+    // native AskUserQuestion — both true unconditionally today. If the
+    // SDK later attaches conditions, split the constants into fields
+    // and update them from init / status meta.
+    ext.session_capabilities = {
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+    };
     if (this.#model !== null) ext.model = this.#model;
     if (this.#modelSource !== null) ext.model_source = this.#modelSource;
     if (this.#cwd !== null) ext.cwd = this.#cwd;
