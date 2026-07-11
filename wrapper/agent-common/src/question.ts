@@ -75,12 +75,20 @@ export class QuestionBroker {
       ts,
     };
 
-    // Notify host SYNCHRONOUSLY so the next state_change carries
-    // ext.pending_question (ADR-0027 F3), before the legacy envelope.
-    this.#options.onPendingChange?.(pending);
+    // Send the legacy question_request notification FIRST, then notify the
+    // host so its authoritative state_change(waiting_question) — carrying
+    // ext.pending_question (ADR-0027 F3) — is the LAST non-reply envelope the
+    // dashboard renders. Order matters for engines whose host emits that
+    // state_change synchronously inside onPendingChange (the codex adapter):
+    // if question_request went out after it, the ext-less notification would
+    // clobber the dashboard's rendered state and the dialog would not show.
+    // The Claude adapter only stamps here and emits its state_change later
+    // (host.#askUserQuestion's #apply after decide() runs), so this order is
+    // equivalent for it.
     this.#options.send(
       makeQuestionRequest(this.#options.config, ts, payload),
     );
+    this.#options.onPendingChange?.(pending);
 
     return new Promise((resolve) => {
       const settle = (decision: QuestionDecision): void => {

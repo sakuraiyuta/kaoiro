@@ -221,6 +221,15 @@ export class CodexHost implements EngineAdapter {
           command: process.execPath,
           args: [BRIDGE_SCRIPT],
           env: { KAOIRO_BRIDGE_SOCKET: toolHost.socketPath },
+          // `codex exec` forces approval_policy=never, which otherwise
+          // auto-cancels every MCP tool call ("user cancelled MCP tool
+          // call"). "approve" auto-approves the kaoiro tools so they run
+          // (verified 2026-07-11; the other accepted values auto/prompt/
+          // writes all leave the call cancelled). These tools are
+          // wrapper-provided and gated by the operator elsewhere
+          // (send_to_agent per-call on Claude; ask_user_question IS the
+          // operator prompt), so auto-approving them is safe.
+          default_tools_approval_mode: "approve",
         },
       };
     }
@@ -344,7 +353,9 @@ export class CodexHost implements EngineAdapter {
     ext.engine = "codex";
     if (this.#model !== null) ext.model = this.#model;
     ext.cwd = this.#cwd;
-    ext.models = CODEX_MODELS;
+    // Only publish a model catalog when one exists (currently empty for
+    // codex — the account default is used, see catalog.ts).
+    if (CODEX_MODELS.length > 0) ext.models = CODEX_MODELS;
     // Launch-fixed two-axis posture (ADR-0033 F1/F3). No permission_mode
     // twin: that field is the Claude-mode legacy and never applied here.
     ext.permission = { sandbox: this.#sandbox, approval: "never" };

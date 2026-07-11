@@ -164,14 +164,16 @@ describe("buildRegister", () => {
     expect(register.personas).toBeUndefined();
     expect(register.allowed_personas).toBeUndefined();
     expect(register.blocked_personas).toBeUndefined();
-    // engines カタログ: claude-code は空 (post-spawn の ext.models 頼み)、
-    // codex は curated 静的リスト (ADR-0032 F4bc)
+    // engines カタログ: 両 engine とも models は空。claude-code は
+    // post-spawn の ext.models 頼み、codex は ChatGPT-plan 認証で許容
+    // model がアカウント依存・列挙不能のためアカウント既定を使う
+    // (ADR-0032 F4bc、2026-07-11 実挙動で確定)
     expect(register.engines?.map((e) => e.id)).toEqual([
       "claude-code",
       "codex",
     ]);
     expect(register.engines?.[0]?.models).toEqual([]);
-    expect(register.engines?.[1]?.models.length).toBeGreaterThan(0);
+    expect(register.engines?.[1]?.models).toEqual([]);
   });
 
   it("allowed_personas を register に含める", () => {

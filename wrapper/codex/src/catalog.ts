@@ -1,48 +1,21 @@
-// Codex engine launch catalog (ADR-0032 F4bc, decided 2026-07-10): a curated
-// static list — the Codex CLI derives its own picker from a server-refreshed
-// catalog with no public enumeration API, so the wrapper pins the bundled-
-// catalog entries of codex-cli 0.144 and follows upstream by updates here.
-// The shape matches ext.models[] (#54) so the dashboard reuses one renderer
-// for the launch cascade and the running-agent switcher.
+// Codex engine launch catalog (ADR-0032 F4bc, revised 2026-07-11 after live
+// verification). The bundled codex-cli catalog (gpt-5.6-sol/terra/luna, …)
+// is the API-key model set; under ChatGPT-plan auth (the project's primary
+// path, ADR-0032 F7) the server accepts ONLY the account's default model and
+// rejects every explicit `--model` with 400/404 — and which model is the
+// default is account/plan-specific and not enumerable via the SDK. Shipping
+// a fixed list therefore mislabels a broken launch as available.
+//
+// So kaoiro ships NO codex model catalog: the LaunchDialog shows no model
+// select for codex, the wrapper sends no `model`, and the account default
+// applies (always works, both auth modes). Explicit model / effort selection
+// for codex is deferred until there is a reliable per-auth catalog source
+// (tracked in the model-effort open question).
 
 import type { EngineModelInfo } from "@kaoiro/protocol";
 
-/** Effort vocabulary of codex-cli 0.144 (model_reasoning_effort). The
- *  5.6 family additionally accepts max (all) and ultra (sol/terra). */
-const EFFORT_BASE = ["low", "medium", "high", "xhigh"];
-
-export const CODEX_MODELS: EngineModelInfo[] = [
-  {
-    value: "gpt-5.6-sol",
-    display_name: "GPT-5.6 Sol",
-    description: "Codex CLI 既定。最新の汎用フラッグシップ",
-    effort_levels: [...EFFORT_BASE, "max", "ultra"],
-  },
-  {
-    value: "gpt-5.6-terra",
-    display_name: "GPT-5.6 Terra",
-    description: "5.6 系の高推論バリアント",
-    effort_levels: [...EFFORT_BASE, "max", "ultra"],
-  },
-  {
-    value: "gpt-5.6-luna",
-    display_name: "GPT-5.6 Luna",
-    description: "5.6 系の軽量バリアント",
-    effort_levels: [...EFFORT_BASE, "max"],
-  },
-  {
-    value: "gpt-5.5",
-    display_name: "GPT-5.5",
-    description: "前世代フラッグシップ",
-    effort_levels: EFFORT_BASE,
-  },
-  {
-    value: "gpt-5.4-mini",
-    display_name: "GPT-5.4 mini",
-    description: "低コスト・低レイテンシ",
-    effort_levels: EFFORT_BASE,
-  },
-];
+/** Empty: the account default is used (see file header). */
+export const CODEX_MODELS: EngineModelInfo[] = [];
 
 /** EngineCapability の codex 実装 (ADR-0032 F4bc)。 */
 export const CODEX_ENGINE = {

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
-import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import type {
+  CodexOptions,
+  ThreadEvent,
+  ThreadOptions,
+} from "@openai/codex-sdk";
+import type {
+  Envelope,
+  ToolDescriptor,
+  WrapperConfig,
+} from "@kaoiro/agent-common";
 import { CodexHost } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
 
@@ -113,13 +121,14 @@ describe("CodexHost", () => {
       "done",
       "waiting_input",
     ]);
-    // ext: engine / permission 二軸 / models カタログ
+    // ext: engine / permission 二軸。model は config で明示指定した値を透過
+    // (host は catalog 照合しない)。ext.models は catalog が空のため省かれる。
     expect(states.at(-1)?.ext).toMatchObject({
       engine: "codex",
       permission: { sandbox: "read-only", approval: "never" },
       model: "gpt-5.6-sol",
     });
-    expect(Array.isArray(states.at(-1)?.ext.models)).toBe(true);
+    expect(states.at(-1)?.ext.models).toBeUndefined();
     // result envelope: 最後の agent_message が最終応答
     const result = logs.find((e) => e.type === "result");
     expect(result?.payload).toMatchObject({ text: "了解しました" });
@@ -240,5 +249,35 @@ describe("CodexHost", () => {
     await expect(host.setPermissionMode("default")).rejects.toThrow(
       /launch-fixed/,
     );
+  });
+
+  it("toolDescriptors 指定時、mcp_servers.kaoiro に default_tools_approval_mode: approve を載せる", async () => {
+    // codex exec は approval_policy=never を強制するため、この設定が無いと
+    // MCP tool 呼び出しが "user cancelled MCP tool call" で自動拒否される
+    // (2026-07-11 実機検証)。SDK に渡す config を捕捉して回帰を防ぐ。
+    const { client } = makeClient([[usageEvent()]]);
+    let captured: CodexOptions | null = null;
+    const descriptor: ToolDescriptor = {
+      name: "whoami",
+      description: "self",
+      inputSchema: { type: "object", properties: {} },
+      handler: async () => ({ content: [{ type: "text", text: "{}" }] }),
+    };
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      appendSystemPrompt: "persona",
+      toolDescriptors: [descriptor],
+      codexFactory: (options) => {
+        captured = options;
+        return client;
+      },
+      now: () => "T",
+    });
+    await runOneTurn(host, "hi");
+
+    const config = captured!.config as Record<string, unknown>;
+    const mcp = config.mcp_servers as Record<string, Record<string, unknown>>;
+    expect(mcp.kaoiro.default_tools_approval_mode).toBe("approve");
+    expect(config.developer_instructions).toBe("persona");
   });
 });
