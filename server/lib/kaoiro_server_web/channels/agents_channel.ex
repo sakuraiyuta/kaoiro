@@ -668,8 +668,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
       |> maybe_put_string("effort", payload["effort"])
       |> maybe_put_sandbox(payload["sandbox"])
       |> maybe_put_boolean("network_access", payload["network_access"])
-      |> maybe_put_resume_snapshot(agent_id)
 
+    # Note: resume_snapshot is NOT piped here even for the resume-with-fresh-
+    # agent_id path (spawn with resume_session_id). By construction the
+    # freshly allocated agent_id has no SessionPointer yet (record fires on
+    # the state_change ingest AFTER this broadcast), so a lookup would always
+    # return nil. Snapshots ride on the restore / resume_disconnected paths
+    # (build_restore_payload) and on switch_session, where the agent_id is
+    # pre-existing (see maybe_put_resume_snapshot/2 below).
     case check_relay_size(spawn_payload) do
       :ok -> {:ok, spawn_payload}
       {:error, reason} -> {:error, reason}
@@ -679,25 +685,20 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp maybe_put_engine(map, nil), do: map
   defp maybe_put_engine(map, engine), do: Map.put(map, "engine", engine)
 
-  # Resume snapshot (ADR-0014 F1 追補, phase-15 D8): only relayed on a
-  # resume launch. When resume_session_id is set on the spawn payload, look
-  # up the agent's stored snapshot and pass it through so the wrapper can
-  # stamp ext.resume_snapshot / ext.resume_drift on its first state_change.
-  # Fresh spawns never carry a snapshot — drift is undefined without a
-  # prior session to compare against.
+  # Resume snapshot (ADR-0014 F1 追補, phase-15 D8): relayed only on paths
+  # that carry a PRE-EXISTING agent_id whose SessionPointer already stores
+  # the last effective settings. Callers: build_restore_payload (restore /
+  # resume_disconnected) and the switch_session broadcast (live-agent
+  # resume). Fresh spawn (build_spawn_payload) is deliberately excluded
+  # because a fresh agent has no pointer yet — its snapshot would always
+  # look up as nil.
   defp maybe_put_resume_snapshot(map, agent_id) do
-    case Map.get(map, "resume_session_id") do
-      nil ->
-        map
+    case SessionPointers.get(agent_id) do
+      %{snapshot: snapshot} when is_map(snapshot) ->
+        Map.put(map, "resume_snapshot", snapshot)
 
       _ ->
-        case SessionPointers.get(agent_id) do
-          %{snapshot: snapshot} when is_map(snapshot) ->
-            Map.put(map, "resume_snapshot", snapshot)
-
-          _ ->
-            map
-        end
+        map
     end
   end
 
@@ -845,6 +846,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
         "resume_session_id" => session_id
       }
       |> maybe_put_engine(engine)
+      |> maybe_put_resume_snapshot(agent_id)
 
     case check_relay_size(spawn_payload) do
       :ok -> {:ok, spawn_payload}
