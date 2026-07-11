@@ -67,6 +67,20 @@ async function main(): Promise<void> {
   );
   const config = loadConfig(configPath);
 
+  // Codex CLI env source (ADR-0032 F4bc addendum, phase-15 15-3):
+  // KAOIRO_CODEX_DEFAULT_MODEL is the env-tier default, applied when
+  // config.model is unset. Legacy KAOIRO_WRAPPER_DEFAULT_MODEL is
+  // deliberately NOT read here — it may hold a claude-* value that would
+  // fail with 400/404 under Codex ChatGPT auth (codex-model-catalog.md).
+  // Resolution: launch (config.model, SpawnMessage relay) > env > engine
+  // account default. Model source stamping to ext.model_source lands in
+  // 15-4c.
+  const envDefaultModel = process.env.KAOIRO_CODEX_DEFAULT_MODEL;
+  const effectiveConfig: typeof config =
+    config.model === undefined && envDefaultModel !== undefined
+      ? { ...config, model: envDefaultModel }
+      : config;
+
   let host: CodexHost;
   let link: ServerLink | null = null;
   let questionBroker: QuestionBroker | null = null;
@@ -200,7 +214,7 @@ async function main(): Promise<void> {
     clearTimeout(timeoutHandle);
   }
 
-  host = new CodexHost(config, {
+  host = new CodexHost(effectiveConfig, {
     onState,
     onLog,
     appendSystemPrompt,
