@@ -130,6 +130,54 @@ async function main(): Promise<void> {
         ? "env"
         : undefined;
 
+  // Engine-mismatch config warns (phase-15 15-7). Codex-only fields
+  // (sandbox, network_access) surface loudly instead of being silently
+  // ignored when written into a Claude config, so operator settings never
+  // disappear into a black hole (D3 rationale).
+  if (config.sandbox !== undefined) {
+    process.stderr.write(
+      "config warn: sandbox is codex-only, ignored on claude-code\n",
+    );
+  }
+  if (config.network_access !== undefined) {
+    process.stderr.write(
+      "config warn: network_access is codex-only, ignored on claude-code\n",
+    );
+  }
+
+  // Startup resolved-config summary (phase-15 15-5): one stderr line with
+  // the engine-relevant fields and their source tags. The runner tee path
+  // surfaces this in operator logs. Format follows the plan's Acceptance
+  // Criteria; effort is Claude-side unused so omitted here (Claude has no
+  // launch-time effort field). ignored-flags mark codex-only fields when
+  // they were nonetheless supplied.
+  {
+    const resolvedModel = config.model ?? envDefaultModel ?? "<default>";
+    const resolvedModelTag =
+      resolvedModelSource !== undefined
+        ? `(source=${resolvedModelSource})`
+        : "(source=default)";
+    const permissionModeSource: string =
+      config.permission_mode !== undefined ? "config" : "default";
+    const allowedToolsCount = config.allowed_tools?.length ?? 0;
+    const sandboxPart =
+      config.sandbox !== undefined
+        ? ` sandbox=${config.sandbox}(ignored)`
+        : "";
+    const networkAccessPart =
+      config.network_access !== undefined
+        ? ` network_access=${config.network_access}(ignored)`
+        : "";
+    process.stderr.write(
+      `[wrapper resolved] engine=claude-code ` +
+        `model=${resolvedModel}${resolvedModelTag} ` +
+        `permission_mode=${config.permission_mode ?? "default"}(source=${permissionModeSource}) ` +
+        `allowed_tools=${allowedToolsCount}` +
+        `${sandboxPart}${networkAccessPart} ` +
+        `persona=${config.persona.id}\n`,
+    );
+  }
+
   // No prompt argument: server-connected wrappers start idle and wait for
   // the first operator instruction. A prompt argument still works for
   // one-off dogfooding but the process remains resident (server-connected

@@ -96,6 +96,58 @@ async function main(): Promise<void> {
   const resolvedEffortSource: ModelSource | undefined =
     config.effort !== undefined ? "config" : undefined;
 
+  // Engine-mismatch config warns (phase-15 15-6). Claude-only fields
+  // (permission_mode, allowed_tools) surface loudly instead of being
+  // silently ignored when written into a Codex config (D3 rationale).
+  if (config.permission_mode !== undefined) {
+    process.stderr.write(
+      "config warn: permission_mode is claude-code-only, ignored on codex\n",
+    );
+  }
+  if (config.allowed_tools !== undefined) {
+    process.stderr.write(
+      "config warn: allowed_tools is claude-code-only, ignored on codex\n",
+    );
+  }
+
+  // Startup resolved-config summary (phase-15 15-5): one stderr line with
+  // the engine-relevant fields and their source tags. approval is
+  // host-fixed to "never" on Codex (ADR-0033 F3); effort is included only
+  // when explicitly resolved. ignored-flags mark claude-only fields when
+  // they were nonetheless supplied.
+  {
+    const resolvedModel = effectiveConfig.model ?? "<account default>";
+    const resolvedModelTag =
+      resolvedModelSource !== undefined
+        ? `(source=${resolvedModelSource})`
+        : "(source=account)";
+    const effortPart =
+      effectiveConfig.effort !== undefined
+        ? ` effort=${effectiveConfig.effort}(source=${resolvedEffortSource ?? "default"})`
+        : "";
+    const sandbox = effectiveConfig.sandbox ?? "workspace-write";
+    const sandboxSource: string =
+      config.sandbox !== undefined ? "config" : "default";
+    const networkAccess = effectiveConfig.network_access ?? false;
+    const permissionModePart =
+      config.permission_mode !== undefined
+        ? ` permission_mode=${config.permission_mode}(ignored)`
+        : "";
+    const allowedToolsPart =
+      config.allowed_tools !== undefined
+        ? ` allowed_tools=${config.allowed_tools.length}(ignored)`
+        : "";
+    process.stderr.write(
+      `[wrapper resolved] engine=codex ` +
+        `model=${resolvedModel}${resolvedModelTag}${effortPart} ` +
+        `sandbox=${sandbox}(source=${sandboxSource}) ` +
+        `network_access=${networkAccess} ` +
+        `approval=never(host-fixed)` +
+        `${permissionModePart}${allowedToolsPart} ` +
+        `persona=${config.persona.id}\n`,
+    );
+  }
+
   let host: CodexHost;
   let link: ServerLink | null = null;
   let questionBroker: QuestionBroker | null = null;

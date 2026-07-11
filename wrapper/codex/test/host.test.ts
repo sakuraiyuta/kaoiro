@@ -288,6 +288,7 @@ describe("CodexHost", () => {
       { ...CONFIG, model: "gpt-5.6-sol", effort: "high" },
       {
         onState: (e) => states.push(e),
+        appendSystemPrompt: "persona",
         modelSource: "config",
         effortSource: "config",
         codexFactory: () => client,
@@ -311,6 +312,7 @@ describe("CodexHost", () => {
     const { client } = makeClient([[usageEvent()]]);
     const host = new CodexHost(CONFIG, {
       onState: (e) => states.push(e),
+      appendSystemPrompt: "persona",
       codexFactory: () => client,
       now: () => "T",
     });
