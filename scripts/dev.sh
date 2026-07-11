@@ -108,12 +108,15 @@ if [[ ! -f "$runner_config" ]]; then
 JSON
 fi
 
-# Pin the wrapper's startup model for local dev; the SDK otherwise falls back
-# to its own default (currently Opus 4.8). Runner inherits env and passes it to
-# each spawned wrapper. Pre-set the var to override; setModel from the
-# dashboard still overrides at runtime. See wrapper/src/cli.ts.
-: "${KAOIRO_WRAPPER_DEFAULT_MODEL:=claude-opus-4-7}"
-export KAOIRO_WRAPPER_DEFAULT_MODEL
+# Pin the Claude wrapper's startup model for local dev; the SDK otherwise
+# falls back to its own default (currently Opus 4.8). Runner inherits env and
+# passes it to each spawned wrapper. Pre-set the var to override; setModel
+# from the dashboard still overrides at runtime. Engine-split env (phase-15
+# D1): replaces the legacy shared KAOIRO_WRAPPER_DEFAULT_MODEL, which leaked
+# into Codex spawns; Codex has no dev pin (account default). See
+# wrapper/claude-code/src/cli.ts.
+: "${KAOIRO_CLAUDE_CODE_DEFAULT_MODEL:=claude-opus-4-7}"
+export KAOIRO_CLAUDE_CODE_DEFAULT_MODEL
 
 # runner via tsx watch (hot-reloads the runner); KAOIRO_WRAPPER_DEV makes it
 # spawn each wrapper under `tsx watch` too, so wrapper source edits restart the

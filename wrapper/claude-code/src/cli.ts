@@ -100,6 +100,22 @@ async function main(): Promise<void> {
     parseCliArgs(process.argv.slice(2));
   const config = loadConfig(configPath);
 
+  // Engine-split default-model env (ADR-0032 F4bc addendum, phase-15 D1).
+  // TODO(#103): drop the legacy KAOIRO_WRAPPER_DEFAULT_MODEL read and its
+  // deprecation warn one release after the engine-split env ships.
+  const envDefaultModel =
+    process.env.KAOIRO_CLAUDE_CODE_DEFAULT_MODEL ??
+    process.env.KAOIRO_WRAPPER_DEFAULT_MODEL;
+  if (
+    process.env.KAOIRO_CLAUDE_CODE_DEFAULT_MODEL === undefined &&
+    process.env.KAOIRO_WRAPPER_DEFAULT_MODEL !== undefined
+  ) {
+    process.stderr.write(
+      "deprecation warn: KAOIRO_WRAPPER_DEFAULT_MODEL is deprecated; " +
+        "use KAOIRO_CLAUDE_CODE_DEFAULT_MODEL instead (removal: #103)\n",
+    );
+  }
+
   // No prompt argument: server-connected wrappers start idle and wait for
   // the first operator instruction. A prompt argument still works for
   // one-off dogfooding but the process remains resident (server-connected
@@ -333,16 +349,18 @@ async function main(): Promise<void> {
       tools: { type: "preset", preset: "claude_code" },
       allowedTools: config.allowed_tools ?? [...READ_ONLY_TOOLS],
       cwd: process.cwd(),
-      // Startup model precedence: the operator's launch pick (config.model,
-      // SpawnMessage relay per ADR-0032 F4bc) > the local-dev pin
-      // KAOIRO_WRAPPER_DEFAULT_MODEL (scripts/dev.sh) > the SDK default.
-      // setModel from the dashboard still overrides at runtime. config.effort
-      // is codex-only for now (Claude effort switches post-launch via
-      // set_effort, #54).
+      // Startup model precedence (ADR-0032 F4bc addendum, phase-15 15-2):
+      // launch (config.model, SpawnMessage relay) > env > config > SDK
+      // default. The engine-split env KAOIRO_CLAUDE_CODE_DEFAULT_MODEL is
+      // primary; legacy KAOIRO_WRAPPER_DEFAULT_MODEL still resolves for
+      // one release window with a deprecation warn (tracked in issue
+      // #103, removed next release). setModel from the dashboard still
+      // overrides at runtime. config.effort is codex-only for now (Claude
+      // effort switches post-launch via set_effort, #54).
       ...(config.model !== undefined
         ? { model: config.model }
-        : process.env.KAOIRO_WRAPPER_DEFAULT_MODEL
-          ? { model: process.env.KAOIRO_WRAPPER_DEFAULT_MODEL }
+        : envDefaultModel !== undefined
+          ? { model: envDefaultModel }
           : {}),
       // The kaoiro in-process MCP server is always registered under the
       // server-connected model (phase-8). send_to_agent surfaces as
