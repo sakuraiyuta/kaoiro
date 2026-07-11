@@ -7,6 +7,7 @@
 
 import type {
   EngineKind,
+  ResolvedSnapshotExt,
   RunnerSessions,
   SessionMeta,
   SpawnFailReason,
@@ -69,6 +70,11 @@ export interface ParsedSpawn {
   effort?: string;
   sandbox?: WrapperConfig["sandbox"];
   networkAccess?: boolean;
+  /** Resume snapshot: relayed by the server on a resume spawn only
+   *  (ADR-0014 F1 追補, phase-15 D8). Passed through to the wrapper via
+   *  config.resume_snapshot so the wrapper can stamp ext.resume_snapshot
+   *  / ext.resume_drift on its first state_change. */
+  resumeSnapshot?: ResolvedSnapshotExt;
 }
 
 export interface SupervisorOptions {
@@ -175,6 +181,13 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
     if (typeof payload.network_access !== "boolean") return null;
     parsed.networkAccess = payload.network_access;
   }
+  // Resume snapshot (ADR-0014 F1 追補, phase-15 D8): loose shape check —
+  // an object at the top level is enough. Fields are optional and their
+  // value types (strings/booleans) get validated where they are read.
+  if (payload.resume_snapshot !== undefined) {
+    if (!isObject(payload.resume_snapshot)) return null;
+    parsed.resumeSnapshot = payload.resume_snapshot as ResolvedSnapshotExt;
+  }
   return parsed;
 }
 
@@ -208,6 +221,9 @@ export function resolveWrapperConfig(
   if (parsed.sandbox !== undefined) config.sandbox = parsed.sandbox;
   if (parsed.networkAccess !== undefined) {
     config.network_access = parsed.networkAccess;
+  }
+  if (parsed.resumeSnapshot !== undefined) {
+    config.resume_snapshot = parsed.resumeSnapshot;
   }
   return config;
 }

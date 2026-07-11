@@ -27,6 +27,7 @@ import type {
   PendingQuestionExt,
   PermissionMode,
   Question,
+  ResolvedSnapshotExt,
   ResultPayload,
   WrapperConfig,
 } from "@kaoiro/agent-common";
@@ -57,7 +58,7 @@ import {
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
 } from "./adapter.js";
-import { clipText, logEntryToPayload } from "@kaoiro/agent-common";
+import { clipText, computeResumeDrift, logEntryToPayload } from "@kaoiro/agent-common";
 import { PERMISSION_MODE_AXES } from "./permission_axes.js";
 import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
@@ -148,6 +149,14 @@ export interface AgentHostOptions {
    */
   modelSource?: ModelSource;
   /**
+   * Resume snapshot from the server (ADR-0014 F1 追補, phase-15 D8): the
+   * "last effective" resolved values captured before this relaunch. Only
+   * set on a resume launch; absent on a fresh spawn. When set, the host
+   * stamps ext.resume_snapshot and ext.resume_drift on every state_change
+   * alongside ext.effective.
+   */
+  resumeSnapshot?: ResolvedSnapshotExt;
+  /**
    * Persona personality prompt appended to the SDK systemPrompt via the
    * preset's `append` field (persona-personality-injection spec /
    * ADR-0029). Composed server-side (personality + common footer) and
@@ -198,6 +207,11 @@ export class AgentHost implements EngineAdapter {
    *  constructor from options.modelSource; auto-becomes "default" when
    *  #applyInitMeta stamps a model without a prior explicit source. */
   #modelSource: ModelSource | null = null;
+  /** Resume snapshot (ADR-0014 F1 追補, phase-15 D8), set by the
+   *  constructor from options.resumeSnapshot; null on a fresh spawn.
+   *  When non-null, #statusExt emits ext.resume_snapshot + ext.resume_drift
+   *  alongside ext.effective on every state_change. */
+  readonly #resumeSnapshot: ResolvedSnapshotExt | null = null;
   #cwd: string | null = null;
   /** Slash commands the SDK reported at session init (#34); surfaced so the
    *  dashboard can offer `/` completion. */
@@ -256,6 +270,7 @@ export class AgentHost implements EngineAdapter {
     // (fast_mode has no launch-time source; slash_commands / context /
     // rate_limits are SDK-reported only) stay null.
     this.#modelSource = options.modelSource ?? null;
+    this.#resumeSnapshot = options.resumeSnapshot ?? null;
     if (options.queryOptions?.model !== undefined) {
       this.#model = options.queryOptions.model;
     }
@@ -894,6 +909,27 @@ export class AgentHost implements EngineAdapter {
     }
     if (this.#pendingQuestion !== null) {
       ext.pending_question = this.#pendingQuestion;
+    }
+    // Effective resolved settings this run (ADR-0014 F1 追補, phase-15 D8).
+    // Rides every state_change so the D8 drift audit sees "what am I
+    // enforcing right now". Claude has no launch-time effort / sandbox /
+    // network_access fields; sandbox is derived from the mode's two-axis
+    // mapping (ADR-0033 F2) so ext.effective still reports a comparable
+    // value alongside the Codex side.
+    const axesFromMode =
+      PERMISSION_MODE_AXES[this.#permissionMode as PermissionMode];
+    const effective: ResolvedSnapshotExt = {
+      ...(this.#model !== null ? { model: this.#model } : {}),
+      ...(this.#modelSource !== null ? { model_source: this.#modelSource } : {}),
+      ...(this.#permissionMode !== null
+        ? { permission_mode: this.#permissionMode as PermissionMode }
+        : {}),
+      ...(axesFromMode !== undefined ? { sandbox: axesFromMode.sandbox } : {}),
+    };
+    ext.effective = effective;
+    if (this.#resumeSnapshot !== null) {
+      ext.resume_snapshot = this.#resumeSnapshot;
+      ext.resume_drift = computeResumeDrift(this.#resumeSnapshot, effective);
     }
     return ext;
   }

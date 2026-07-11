@@ -668,6 +668,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       |> maybe_put_string("effort", payload["effort"])
       |> maybe_put_sandbox(payload["sandbox"])
       |> maybe_put_boolean("network_access", payload["network_access"])
+      |> maybe_put_resume_snapshot(agent_id)
 
     case check_relay_size(spawn_payload) do
       :ok -> {:ok, spawn_payload}
@@ -677,6 +678,28 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp maybe_put_engine(map, nil), do: map
   defp maybe_put_engine(map, engine), do: Map.put(map, "engine", engine)
+
+  # Resume snapshot (ADR-0014 F1 追補, phase-15 D8): only relayed on a
+  # resume launch. When resume_session_id is set on the spawn payload, look
+  # up the agent's stored snapshot and pass it through so the wrapper can
+  # stamp ext.resume_snapshot / ext.resume_drift on its first state_change.
+  # Fresh spawns never carry a snapshot — drift is undefined without a
+  # prior session to compare against.
+  defp maybe_put_resume_snapshot(map, agent_id) do
+    case Map.get(map, "resume_session_id") do
+      nil ->
+        map
+
+      _ ->
+        case SessionPointers.get(agent_id) do
+          %{snapshot: snapshot} when is_map(snapshot) ->
+            Map.put(map, "resume_snapshot", snapshot)
+
+          _ ->
+            map
+        end
+    end
+  end
 
   @sandbox_values ["read-only", "workspace-write", "danger-full-access"]
   defp maybe_put_sandbox(map, value) when value in @sandbox_values,

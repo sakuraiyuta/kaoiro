@@ -98,6 +98,11 @@ export interface WrapperConfig {
   sandbox?: PermissionAxesExt["sandbox"];
   /** Codex-only network toggle for workspace-write sandboxes. */
   network_access?: boolean;
+  /** Resume snapshot relayed by the runner on a resume launch only
+   *  (ADR-0014 F1 追補, phase-15 D8). Absent on fresh spawn. When present,
+   *  the wrapper stamps it as ext.resume_snapshot and computes ext.resume_drift
+   *  against the values it is enforcing this run. */
+  resume_snapshot?: ResolvedSnapshotExt;
 }
 
 /** Closed enum of SDK PermissionMode values (#58). Mirrors the SDK union
@@ -428,6 +433,12 @@ export interface SpawnMessage {
   /** Codex-only: allow network inside a workspace-write sandbox.
    *  Omitted = false (Codex CLI default). */
   network_access?: boolean;
+  /** Resume snapshot: the "last effective" resolved settings the server
+   *  had cached for this agent (ADR-0014 F1 追補, phase-15 D8). Only
+   *  present when resume_session_id is also set; the runner relays this
+   *  into the wrapper config so ext.resume_snapshot / ext.resume_drift can
+   *  ride the wrapper's first state_change. */
+  resume_snapshot?: ResolvedSnapshotExt;
 }
 
 /** server -> runner, operator-only: stop the wrapper for agent_id. */

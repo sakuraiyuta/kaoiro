@@ -178,6 +178,19 @@ export function parseConfig(raw: unknown): WrapperConfig {
     config.network_access = raw.network_access;
   }
 
+  // Resume snapshot (ADR-0014 F1 追補, phase-15 D8): passed through by the
+  // runner on resume launches only. Loose shape check — the fields are all
+  // optional and free-form strings/booleans; deeper validation is not worth
+  // the maintenance since ext consumers already tolerate absent fields.
+  if (raw.resume_snapshot !== undefined) {
+    if (!isObject(raw.resume_snapshot)) {
+      throw new ConfigError("resume_snapshot must be an object");
+    }
+    config.resume_snapshot = raw.resume_snapshot as NonNullable<
+      WrapperConfig["resume_snapshot"]
+    >;
+  }
+
   return config;
 }
 

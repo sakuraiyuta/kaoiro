@@ -251,9 +251,34 @@ defmodule KaoiroServerWeb.WrapperChannel do
       end
 
     SessionPointers.record(agent_id, sid, cwd, engine)
+    record_snapshot_from_ext(agent_id, envelope)
   end
 
-  defp record_session_pointer(_envelope), do: :ok
+  defp record_session_pointer(envelope) do
+    # session_id が乗らない envelope でも ext.effective (ADR-0014 F1 追補,
+    # phase-15 D8) が来ていれば snapshot だけ更新する。record_snapshot は
+    # 未知 agent で no-op なので、pointer が seed される前 (spawn 直後)
+    # に届いた効果的な envelope は自然に無視される。
+    case envelope do
+      %{"agent_id" => agent_id} when is_binary(agent_id) ->
+        record_snapshot_from_ext(agent_id, envelope)
+
+      _ ->
+        :ok
+    end
+  end
+
+  # Snapshot ingest (ADR-0014 F1 追補, phase-15 D8): the wrapper stamps
+  # ext.effective on every state_change; the server captures it into the
+  # agent-scoped snapshot so a later resume can hand it back on the spawn
+  # message. Loose shape check — the wrapper is the SoT for what a valid
+  # snapshot looks like; server side just persists the map verbatim.
+  defp record_snapshot_from_ext(agent_id, %{"ext" => %{"effective" => effective}})
+       when is_map(effective) do
+    SessionPointers.record_snapshot(agent_id, effective)
+  end
+
+  defp record_snapshot_from_ext(_agent_id, _envelope), do: :ok
 
   @impl true
   def terminate(_reason, socket) do

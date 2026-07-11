@@ -30,10 +30,11 @@ import type {
   PendingPermissionExt,
   PendingQuestionExt,
   PermissionMode,
+  ResolvedSnapshotExt,
   ToolDescriptor,
   WrapperConfig,
 } from "@kaoiro/agent-common";
-import { clipText, logEntryToPayload } from "@kaoiro/agent-common";
+import { clipText, computeResumeDrift, logEntryToPayload } from "@kaoiro/agent-common";
 import {
   threadEventToEvents,
   threadEventToFinalText,
@@ -83,6 +84,12 @@ export interface CodexHostOptions {
   effortSource?: ModelSource;
   /** Resume pointer: an existing codex thread id (UUIDv7). */
   resumeSessionId?: string;
+  /** Resume snapshot from the server (ADR-0014 F1 追補, phase-15 D8):
+   *  the "last effective" resolved values captured before this relaunch.
+   *  Only set on a resume launch; absent on a fresh spawn. When set, the
+   *  host stamps ext.resume_snapshot and ext.resume_drift on every
+   *  state_change alongside ext.effective. */
+  resumeSnapshot?: ResolvedSnapshotExt;
   /** SDK client factory; injectable for tests. */
   codexFactory?: (options: CodexOptions) => CodexClientLike;
   /** ISO timestamp source; injectable for tests. */
@@ -104,6 +111,7 @@ export class CodexHost implements EngineAdapter {
   #modelSource: ModelSource | null;
   #effort: string | null;
   #effortSource: ModelSource | null;
+  readonly #resumeSnapshot: ResolvedSnapshotExt | null;
   readonly #sandbox: NonNullable<WrapperConfig["sandbox"]>;
   readonly #networkAccess: boolean;
   readonly #cwd: string = process.cwd();
@@ -125,6 +133,7 @@ export class CodexHost implements EngineAdapter {
     this.#modelSource = options.modelSource ?? null;
     this.#effort = config.effort ?? null;
     this.#effortSource = options.effortSource ?? null;
+    this.#resumeSnapshot = options.resumeSnapshot ?? null;
     this.#sandbox = config.sandbox ?? "workspace-write";
     this.#networkAccess = config.network_access ?? false;
     this.#sessionId = options.resumeSessionId ?? null;
@@ -364,6 +373,23 @@ export class CodexHost implements EngineAdapter {
   #statusExt(): Record<string, unknown> {
     const ext: Record<string, unknown> = {};
     ext.engine = "codex";
+    // Effective resolved settings this run (ADR-0014 F1 追補, phase-15 D8).
+    // Rides every state_change so the D8 drift audit and any downstream
+    // consumer sees "what am I enforcing right now". resume_snapshot /
+    // resume_drift only appear when a resume relayed a snapshot.
+    const effective: ResolvedSnapshotExt = {
+      ...(this.#model !== null ? { model: this.#model } : {}),
+      ...(this.#modelSource !== null ? { model_source: this.#modelSource } : {}),
+      ...(this.#effort !== null ? { effort: this.#effort } : {}),
+      ...(this.#effortSource !== null ? { effort_source: this.#effortSource } : {}),
+      sandbox: this.#sandbox,
+      network_access: this.#networkAccess,
+    };
+    ext.effective = effective;
+    if (this.#resumeSnapshot !== null) {
+      ext.resume_snapshot = this.#resumeSnapshot;
+      ext.resume_drift = computeResumeDrift(this.#resumeSnapshot, effective);
+    }
     // Session capabilities (ADR-0034 F1/F4, phase-15 15-14): advertised
     // from the first state_change onward (adapter-static values, no
     // thread.started await — that event fires only once a turn runs,

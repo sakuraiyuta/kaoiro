@@ -413,6 +413,11 @@ async function main(): Promise<void> {
     ...(resolvedModelSource !== undefined
       ? { modelSource: resolvedModelSource }
       : {}),
+    // Resume snapshot relayed by the runner on a resume launch (ADR-0014
+    // F1 追補, phase-15 D8). Undefined on a fresh spawn.
+    ...(config.resume_snapshot !== undefined
+      ? { resumeSnapshot: config.resume_snapshot }
+      : {}),
     queryOptions: {
       tools: { type: "preset", preset: "claude_code" },
       allowedTools: config.allowed_tools ?? [...READ_ONLY_TOOLS],

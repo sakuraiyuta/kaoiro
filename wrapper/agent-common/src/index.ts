@@ -23,6 +23,7 @@ export {
   logEntryToPayload,
 } from "./logpayload.js";
 export { PendingRegistry } from "./pending.js";
+export { computeResumeDrift } from "./snapshot.js";
 export { PermissionBroker } from "./permission.js";
 export type {
   PermissionBrokerOptions,

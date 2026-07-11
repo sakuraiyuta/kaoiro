@@ -297,6 +297,11 @@ async function main(): Promise<void> {
     ...(resolvedEffortSource !== undefined
       ? { effortSource: resolvedEffortSource }
       : {}),
+    // Resume snapshot relayed by the runner on a resume launch (ADR-0014
+    // F1 追補, phase-15 D8). Undefined on a fresh spawn.
+    ...(effectiveConfig.resume_snapshot !== undefined
+      ? { resumeSnapshot: effectiveConfig.resume_snapshot }
+      : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   });
 
