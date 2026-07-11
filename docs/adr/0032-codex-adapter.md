@@ -6,7 +6,7 @@ opened: 2026-06-26
 supersedes: []
 superseded_by: null
 related_specs: [plugin-model, protocol, architecture, personas, codex-sdk-events, agent-sdk-events]
-related_adrs: [17, 22, 23, 33]
+related_adrs: [17, 22, 23, 33, 34]
 ---
 
 # ADR-0032 — Codex アダプタ追加と wrapper マルチパッケージ構造の materialise
@@ -112,6 +112,20 @@ Codex 側の初期実装 (2026-07-11 実機検証で改訂、旧 Q5 close):
 - **effort は空カタログにより現状 UI では非表示**。将来 model カタログが
   復活した際は Claude 側と同じ `ext.models` の `effort_levels` に統合する
   方針 (E-B) を維持する。
+
+#### F4bc 追補 (2026-07-11、phase-15 に向けた model 解決経路の明文化)
+
+phase-14 完了後の実運用検証で、resolved model / source が UI / ログに見えず operator が現在状態を誤認するケース、および共有 env が engine 間で漏れて事故になるケースが顕在化した。model 解決の優先度・source 表示・env 分離を本 F4bc の追補として明文化する。実装は [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) D1/D7 で行う。
+
+- **解決優先度** (両 engine 共通): `launch (SpawnMessage.model / CLI 位置引数)` > `env` > `config.model (kaoiro.config.json)` > engine account / SDK default。上位が指定されていれば下位は無視。
+- **source 語彙**: envelope の `ext.model_source: "launch" | "env" | "config" | "default"` を stamp する。UI (AgentDetail) の「アカウント既定」ラベル判定は engine 名分岐 ([e89fa98](https://gitea.example.invalid/sakurai.yuta/kaoiro/commit/e89fa98) の Codex 特例) から `ext.model_source === "default"` 判定へ置換し、engine 分岐を撤去する。
+- **起動時 stderr 1 行**: `[wrapper resolved] engine=... model=<name>(source=...) ...` を CLI 起動時に出力する。runner の tee 経路で operator log にも露出する。
+- **env 分離**: 単一共有 env `KAOIRO_WRAPPER_DEFAULT_MODEL` は engine 別に分離する:
+  - `KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` — Claude CLI のみ読む
+  - `KAOIRO_CODEX_DEFAULT_MODEL` — Codex CLI のみ読む
+  - 旧 `KAOIRO_WRAPPER_DEFAULT_MODEL` は 1 リリース窓の deprecation (Claude CLI が値を読み deprecation warn を stderr へ、Codex CLI は完全無視) → 次リリースで撤去 ([ADR-0031](0031-runner-persona-trust-mode.md) の personas legacy / [ADR-0032](0032-codex-adapter.md) F4a の `claude` legacy と同パターン)。dev.sh も engine 別 env に書き換える
+  - 根拠: 単一共有 env は `scripts/dev.sh` の `KAOIRO_WRAPPER_DEFAULT_MODEL=claude-opus-4-7` が Codex spawn に流れ、ChatGPT-plan 認証経路で 400/404 を踏む事故源 ([codex-model-catalog](../specs/codex-model-catalog.md) の認証非対称)。engine 別 env は構造的に防ぐ
+- **解決不能 model の扱い** (両 engine): 明示指定された model が engine 側で拒否された場合 (Codex ChatGPT-auth の 400/404、Claude の invalid alias)、silent fallback せず起動時 loud fail する。「未指定 → default 委任」と「明示指定 → 拒否」を混同しない。
 
 ### F5 — 共通 Tool 記述層は MCP bridge で Codex へ届ける (2026-07-10 改訂)
 
@@ -268,7 +282,7 @@ runner の cwd 配下 session 列挙 ([ADR-0014](0014-session-resume-and-restore
 ## Related
 
 - 由来: open-questions/spawn-engine-selection (2026-06-26 opened、本 ADR に完全マージし削除、「解決時のアクション」チェックリストは [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md) の acceptance criteria に転記)。
-- 実装: [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)、[phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)。
-- 関連 ADR: [0017](0017-wrapper-multientity-packages.md) (本 ADR で materialise)、[0022](0022-pending-permission-authoritative-source.md) / [0033](0033-permission-model-dual-axis.md) (権限二軸)、[0023](0023-host-runner-architecture.md) D3 (リネーム実行)、[0001](0001-agent-sdk-integration.md) (Claude SDK 採用)、[0027](0027-askuserquestion-envelope.md) (question envelope)、[0014](0014-session-resume-and-restore.md) (resume)。
+- 実装: [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)、[phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)、[phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) (F4bc 追補の実装)。
+- 関連 ADR: [0017](0017-wrapper-multientity-packages.md) (本 ADR で materialise)、[0022](0022-pending-permission-authoritative-source.md) / [0033](0033-permission-model-dual-axis.md) (権限二軸)、[0023](0023-host-runner-architecture.md) D3 (リネーム実行)、[0001](0001-agent-sdk-integration.md) (Claude SDK 採用)、[0027](0027-askuserquestion-envelope.md) (question envelope)、[0014](0014-session-resume-and-restore.md) (resume)、[0034](0034-session-capabilities-advertisement.md) (session capabilities による engine 中立化パターンの拡張)。
 - 関連 specs: [plugin-model](../specs/plugin-model.md)、[protocol](../specs/protocol.md)、[architecture](../specs/architecture.md)、[personas](../specs/personas.md)、[agent-sdk-events](../specs/agent-sdk-events.md) (Claude 版)、[codex-sdk-events](../specs/codex-sdk-events.md) (Codex 版、新設)。
 - Open questions (phase-14 期): [Q4 codex-cwd-extraction](../open-questions/codex-cwd-extraction.md)、[codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (2026-07-10 新設)。旧 Q1 (personality 注入実効性) は 2026-07-11 実機検証で close、旧 Q2 (envelope schema) / Q3 (UI 語彙) / Q5 (model カタログ) / Q6 (互換窓) は 2026-07-10 の実 SDK 検証 + spec-elicitation で解決し close (決定内容は本 ADR と [ADR-0033](0033-permission-model-dual-axis.md) に追補済み)。

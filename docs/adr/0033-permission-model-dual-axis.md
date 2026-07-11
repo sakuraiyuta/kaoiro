@@ -6,7 +6,7 @@ opened: 2026-07-10
 supersedes: []
 superseded_by: null
 related_specs: [protocol, plugin-model]
-related_adrs: [22, 32]
+related_adrs: [22, 32, 34]
 ---
 
 # ADR-0033 — 権限モデル共通抽象を sandbox × approval の二軸へ拡張
@@ -83,6 +83,19 @@ Claude Agent SDK の `permissionMode` 全 6 値 → 二軸への写像は `wrapp
 - **操作** (LaunchDialog / AgentDetail): engine-native なセレクトを出す。Claude = mode セレクト (6 値)、Codex = sandbox セレクト (3 値) + workspace-write 時の network access toggle。各選択肢のラベルには二軸換算を併記する (例:「acceptEdits — 書込: workspace / 承認: on-request 相当」)。
 - 当初検討した cross-engine preset ショートカット (default / edit-friendly / yolo 等) は**採らない**: 選べる組合せが engine ごとに 3-6 個しかなく、preset 層は写像保守だけ増やす (2026-07-10 spec-elicitation で決定、旧 Q3 close)。
 
+#### F4 追補 (2026-07-11、phase-15 に向けた対称化)
+
+phase-14 完了後の実運用検証で、権限 UX が engine 間で非対称なまま残っていることが判明した。もも (Codex agent) の実感として「Claude の単軸 mode に対して Codex 二軸の実効値と host-fixed 制約が UI で読めない」「Plan mode と sandbox が混ざって表示され作業意図と実効書込範囲が区別できない」の 2 点が特に大きい。F4 の UI 契約を次の項目で強化する。実装は [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) D2 で行う。
+
+- **AgentDetail の Claude switcher に実効値併記**: F4 の Claude mode セレクトは既に `PERMISSION_MODE_AXES` で二軸換算を候補側に表示済み (`AgentDetail.svelte` の `.axes-hint`)。追補として、**選択後の現行 mode label** にも実効値バッジ (`書込: sandbox / 承認: approval`) を常設する。operator が現在の実効権限を「候補メニューを開かずに」把握できるようにする。
+- **Codex 側「承認: never (ホスト制約で変更不可)」常設バッジ**: Codex agent の AgentDetail は現状 mode switcher を出さないのみ (ADR-0033 F3、set_permission_mode 拒否) で、operator から見て「変更不可なのか実装漏れなのか」が判別できない。追補として、Codex agent の permission 表示に「承認: never (host-fixed, upstream 制約)」を明示的なラベルとして常設する。link は [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)。
+- **LaunchDialog に Claude 用 permission_mode セレクトを新設**: 現行 LaunchDialog は Codex 時のみ sandbox セレクトを出し、Claude 時は起動後の AgentDetail 側でしか mode を選べない。追補として、engine=claude-code 選択時に mode セレクト (default / plan / acceptEdits / dontAsk / auto / bypassPermissions) を追加し、選択候補には二軸換算 tooltip を併記する。起動時に希望 mode を渡せるようにし、engine 間で「起動時に権限を決められる」対称性を成立させる。
+- **Plan mode と sandbox の 2 枠並列**: 現行 Claude の Plan mode は「作業意図 (計画のみ、tool 実行しない)」を表現するが、二軸写像上は `sandbox: read-only / approval: on-request` に潰れる。追補として、AgentDetail の権限枠を **「作業意図 (mode)」と「実効書込範囲 (sandbox)」の 2 枠並列**で表示する。operator が「Plan mode を選ぶと実効 sandbox は read-only になる」という展開結果を明示的に理解できる形にする。
+
+#### F4 追補: resume 時の設定差分検出への言及
+
+phase-15 D8 として、resume 時に前回 session の resolved snapshot (model / sandbox / approval / network_access / effort) と今回 host が強制した値を envelope に載せ、差があれば stderr warn + AgentDetail バッジで露出する枠組みを導入する。envelope schema 拡張は本 ADR と [ADR-0032](0032-codex-adapter.md) F4bc の両方に跨るため、詳細な設計は phase-15 plan で扱う。本 F4 追補は「差分表示は権限二軸 UI と同じ枠内で行い、engine 中立バッジで統一する」原則のみ確定する。
+
 ### F5 — ADR-0022 との関係
 
 [ADR-0022](0022-pending-permission-authoritative-source.md) の「`state_change.ext.pending_permission` が authoritative source」原則は本 ADR で維持する。本 ADR はその payload 形状に `sandbox` / `approval` を追加する追補で、ADR-0022 を supersede しない。
@@ -121,6 +134,7 @@ Claude Agent SDK の `permissionMode` 全 6 値 → 二軸への写像は `wrapp
 
 - 追補元: [ADR-0022](0022-pending-permission-authoritative-source.md) (authoritative source 原則を維持しつつ ext 拡張)。
 - 由来: [ADR-0032](0032-codex-adapter.md) F2 (Codex adapter 追加に伴う権限抽象の拡張)。
-- 実装: [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)。
+- 実装: [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)、[phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) (F4 追補と D8 resume 差分検出)。
 - Open questions: [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (upstream 承認対応の追跡)。旧 Q2 (envelope schema) / Q3 (UI 語彙) は 2026-07-10 に解決済み・close。
+- 関連 ADR: [ADR-0034](0034-session-capabilities-advertisement.md) (session capabilities による engine 中立化パターンの拡張。attach / question dialog の可用性は engine 名でなく session capability で判定する)。
 - 関連 specs: [protocol](../specs/protocol.md) (`ext.permission` 追補)、[plugin-model](../specs/plugin-model.md)。
