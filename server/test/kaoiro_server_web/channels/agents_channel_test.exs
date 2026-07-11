@@ -1285,7 +1285,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :ok, %{"agent_id" => agent_id}
       # The cast is enqueued before the reply, so the pointer is set by now.
       assert SessionPointers.get(agent_id) ==
-               %{session_id: nil, cwd: "/home/user/seed", engine: "claude-code"}
+               %{session_id: nil, cwd: "/home/user/seed", engine: "claude-code", snapshot: nil}
     end
 
     test "operator の spawn: engine/model/sandbox を検証して payload に中継する (ADR-0032)" do

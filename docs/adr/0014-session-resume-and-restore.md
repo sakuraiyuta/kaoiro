@@ -105,6 +105,41 @@ cwd/engineを保持する専用operationを`SessionPointers`へ追加する。�
 serverに持たず、既存pickerとhost session列挙でresumeする。fresh session IDが報告
 された時点で通常のrecord経路により最新pointerを更新する。
 
+#### F1 追補 — resolved snapshot の agent-scoped 永続 ([phase-15 D8](../plans/phase-15-wrapper-ux-parity.md))
+
+phase-15 の resume drift detection (D8) のため、F1 の pointer に **agent-scoped
+の resolved snapshot** を追加する。「保持のみ」原則を「保持 + agent-scoped
+resolved snapshot」に拡張する:
+
+- **snapshot 内容**: `ext.resume_snapshot` / `ext.effective` に載る
+  `ResolvedSnapshotExt` (`{model, model_source, effort, effort_source,
+  permission_mode, sandbox, network_access}`、`@kaoiro/protocol`)。
+- **semantics**: 「spawn 時の値」ではなく **「session 中に最後に実効だった値」**。
+  mid-session で operator が `set_model` / `set_effort` / `set_permission_mode` で
+  切り替えた場合、切替後の最新値が snapshot に反映される (意図した切替を drift
+  誤爆させない、director 明確化 2026-07-11)。
+- **stamp 経路**: wrapper が `state_change.ext.effective` として送出、server が
+  pointer の record 経路で `resolved_snapshot` field を更新する (envelope
+  ingest の既存経路と同じ)。
+- **agent-scoped 生存**: snapshot は agent_id に紐づき、**session 境界
+  (/new・/clear、[ADR-0036](0036-session-lifecycle-commands.md)) を跨いで生存**する。
+  detach 時 (F3 追補) は session_id のみ nil に、**snapshot / cwd / engine は
+  保持**する ([ADR-0036](0036-session-lifecycle-commands.md) F2 の fresh
+  relaunch が「最後の実効 snapshot から再適用」する契約と整合)。detach で
+  snapshot を消すと fresh relaunch の供給源が消え、consume 順序に依存する
+  fragile な reset 設計になるため保持が正 (director 判断確定 2026-07-12)。
+- **破棄**: agent 削除 ([ADR-0030](0030-agent-directory-and-explicit-restore.md)
+  D6 の 4-store purge) 時**のみ**。fresh session の初回 state_change の
+  `ext.effective` が届けば snapshot は自然に上書きされる (通常の record 経路)。
+- **persistence**: F1 の DETS backing に snapshot も乗せる (5-tuple
+  `{agent_id, session_id, cwd, engine, snapshot}`)。旧 3/4-tuple は load 時に
+  snapshot=nil として扱われ、次 record insert で 5-tuple に置換される。
+- **resume 復元**: spawn (with resume_session_id) 時に server が pointer の
+  snapshot を wrapper に返し、wrapper が **`ext.resume_snapshot`** として初回
+  state_change に stamp、今回強制値 (`ext.effective`) との差分を
+  **`ext.resume_drift`** で並置 (`ResumeDriftExt`)。stderr warn + AgentDetail
+  drift バッジで operator に露出。
+
 ### 履歴の正本(A4)
 
 会話履歴の **正本は wrapper ホストの SDK JSONL** とし、サーバの表示用
