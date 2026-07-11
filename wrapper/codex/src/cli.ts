@@ -21,6 +21,7 @@ import type {
   Envelope,
   InterAgentMessagePayload,
   KaoiroState,
+  ModelSource,
 } from "@kaoiro/agent-common";
 import { ServerLink, loadConfig, parseCliArgs } from "@kaoiro/wrapper-core";
 import { CodexHost } from "./host.js";
@@ -80,6 +81,20 @@ async function main(): Promise<void> {
     config.model === undefined && envDefaultModel !== undefined
       ? { ...config, model: envDefaultModel }
       : config;
+
+  // Source vocabulary for ext.model_source / ext.effort_source (ADR-0032
+  // F4bc addendum, phase-15 15-4c). "config" wins over "env" when both are
+  // set (config.model reaches CodexHost via effectiveConfig even under an
+  // env-tier default). Codex has no launch-time effort env, so effort source
+  // is either "config" (config.effort set) or undefined.
+  const resolvedModelSource: ModelSource | undefined =
+    config.model !== undefined
+      ? "config"
+      : envDefaultModel !== undefined
+        ? "env"
+        : undefined;
+  const resolvedEffortSource: ModelSource | undefined =
+    config.effort !== undefined ? "config" : undefined;
 
   let host: CodexHost;
   let link: ServerLink | null = null;
@@ -224,6 +239,12 @@ async function main(): Promise<void> {
       ...interAgent.descriptors(),
       askUserQuestionDescriptor((questions) => questionBroker!.decide(questions)),
     ],
+    ...(resolvedModelSource !== undefined
+      ? { modelSource: resolvedModelSource }
+      : {}),
+    ...(resolvedEffortSource !== undefined
+      ? { effortSource: resolvedEffortSource }
+      : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   });
 

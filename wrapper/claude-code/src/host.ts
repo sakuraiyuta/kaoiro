@@ -22,6 +22,7 @@ import type {
   InstructionRejectedPayload,
   KaoiroState,
   LogEntry,
+  ModelSource,
   PendingPermissionExt,
   PendingQuestionExt,
   PermissionMode,
@@ -139,6 +140,14 @@ export interface AgentHostOptions {
    */
   queryOptions?: Partial<Options>;
   /**
+   * Origin of the model resolved by the CLI at startup (ADR-0032 F4bc
+   * addendum, phase-15). "launch" / "env" / "config" means the wrapper
+   * received an explicit pick and keeps that source stamped even after the
+   * SDK confirms the value; leave undefined when no explicit pick was made
+   * so #applyInitMeta stamps "default" on the first init report.
+   */
+  modelSource?: ModelSource;
+  /**
    * Persona personality prompt appended to the SDK systemPrompt via the
    * preset's `append` field (persona-personality-injection spec /
    * ADR-0029). Composed server-side (personality + common footer) and
@@ -185,6 +194,10 @@ export class AgentHost implements EngineAdapter {
    *  active model, working directory, context-window usage, and per-window
    *  rate limits. All best-effort — absent until the SDK surfaces them. */
   #model: string | null = null;
+  /** Source of #model (ADR-0032 F4bc addendum, phase-15). Set by the
+   *  constructor from options.modelSource; auto-becomes "default" when
+   *  #applyInitMeta stamps a model without a prior explicit source. */
+  #modelSource: ModelSource | null = null;
   #cwd: string | null = null;
   /** Slash commands the SDK reported at session init (#34); surfaced so the
    *  dashboard can offer `/` completion. */
@@ -237,6 +250,18 @@ export class AgentHost implements EngineAdapter {
     this.#queryFn = options.queryFn ?? query;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
+    // Optimistic stamp (phase-15 15-4b): surface the wrapper-known model /
+    // permission_mode from the first state_change onward, before the SDK
+    // init reports them. Fields the wrapper cannot know at startup
+    // (fast_mode has no launch-time source; slash_commands / context /
+    // rate_limits are SDK-reported only) stay null.
+    this.#modelSource = options.modelSource ?? null;
+    if (options.queryOptions?.model !== undefined) {
+      this.#model = options.queryOptions.model;
+    }
+    if (config.permission_mode !== undefined) {
+      this.#permissionMode = config.permission_mode;
+    }
   }
 
   get state(): KaoiroState {
@@ -840,6 +865,7 @@ export class AgentHost implements EngineAdapter {
     const ext: Record<string, unknown> = {};
     ext.engine = "claude-code";
     if (this.#model !== null) ext.model = this.#model;
+    if (this.#modelSource !== null) ext.model_source = this.#modelSource;
     if (this.#cwd !== null) ext.cwd = this.#cwd;
     if (this.#slashCommands !== null) ext.slash_commands = this.#slashCommands;
     if (this.#models !== null) ext.models = this.#models;
@@ -871,7 +897,17 @@ export class AgentHost implements EngineAdapter {
     permission_mode?: string;
     fast_mode?: string;
   }): void {
-    if (meta.model !== undefined) this.#model = meta.model;
+    if (meta.model !== undefined) {
+      this.#model = meta.model;
+      // When the wrapper had no explicit source at startup, this init is the
+      // SDK's own default (or a mid-session setModel confirmation); stamp
+      // "default" so UI stops treating the value as "not yet reported".
+      // Explicit source (launch / env / config) is maintained — the field
+      // reports the value's origin, not the SDK's confirmation of it.
+      if (this.#modelSource === null) {
+        this.#modelSource = "default";
+      }
+    }
     if (meta.cwd !== undefined) this.#cwd = meta.cwd;
     if (meta.slash_commands !== undefined) {
       this.#slashCommands = meta.slash_commands;
@@ -930,6 +966,13 @@ export class AgentHost implements EngineAdapter {
       };
       if (typeof usage.model === "string" && usage.model !== "") {
         this.#model = usage.model;
+        // Same source semantics as #applyInitMeta: if the wrapper had no
+        // explicit source at startup, the model that surfaces here (a result
+        // message may fire this before init) is the SDK's own default —
+        // stamp "default" so ext.model never ships without ext.model_source.
+        if (this.#modelSource === null) {
+          this.#modelSource = "default";
+        }
       }
     } catch {
       // Context usage is optional telemetry; never disrupt the session.

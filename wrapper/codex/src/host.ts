@@ -26,6 +26,7 @@ import type {
   KaoiroState,
   LogEntry,
   MachineState,
+  ModelSource,
   PendingPermissionExt,
   PendingQuestionExt,
   PermissionMode,
@@ -72,6 +73,14 @@ export interface CodexHostOptions {
   /** Common tools served to codex through the MCP bridge (ADR-0032 F5):
    *  inter-agent tools + ask_user_question. Empty/omitted = no bridge. */
   toolDescriptors?: ToolDescriptor[];
+  /** Origin of the model resolved by the CLI at startup (ADR-0032 F4bc
+   *  addendum, phase-15). "launch" / "env" / "config" means the wrapper
+   *  received an explicit pick and stays with that source; leave undefined
+   *  when config.model is unset so account default applies. */
+  modelSource?: ModelSource;
+  /** Origin of the effort resolved by the CLI at startup. Same semantics
+   *  as modelSource; undefined when config.effort is unset. */
+  effortSource?: ModelSource;
   /** Resume pointer: an existing codex thread id (UUIDv7). */
   resumeSessionId?: string;
   /** SDK client factory; injectable for tests. */
@@ -92,7 +101,9 @@ export class CodexHost implements EngineAdapter {
   #machine: MachineState = initialMachineState();
   #sessionId: string | null = null;
   #model: string | null;
+  #modelSource: ModelSource | null;
   #effort: string | null;
+  #effortSource: ModelSource | null;
   readonly #sandbox: NonNullable<WrapperConfig["sandbox"]>;
   readonly #networkAccess: boolean;
   readonly #cwd: string = process.cwd();
@@ -111,7 +122,9 @@ export class CodexHost implements EngineAdapter {
     this.#options = options;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#model = config.model ?? null;
+    this.#modelSource = options.modelSource ?? null;
     this.#effort = config.effort ?? null;
+    this.#effortSource = options.effortSource ?? null;
     this.#sandbox = config.sandbox ?? "workspace-write";
     this.#networkAccess = config.network_access ?? false;
     this.#sessionId = options.resumeSessionId ?? null;
@@ -352,6 +365,9 @@ export class CodexHost implements EngineAdapter {
     const ext: Record<string, unknown> = {};
     ext.engine = "codex";
     if (this.#model !== null) ext.model = this.#model;
+    if (this.#modelSource !== null) ext.model_source = this.#modelSource;
+    if (this.#effort !== null) ext.effort = this.#effort;
+    if (this.#effortSource !== null) ext.effort_source = this.#effortSource;
     ext.cwd = this.#cwd;
     // Only publish a model catalog when one exists (currently empty for
     // codex — the account default is used, see catalog.ts).

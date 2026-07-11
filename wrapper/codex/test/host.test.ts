@@ -280,4 +280,45 @@ describe("CodexHost", () => {
     expect(mcp.kaoiro!.default_tools_approval_mode).toBe("approve");
     expect(config.developer_instructions).toBe("persona");
   });
+
+  it("楽観 stamp: modelSource='config' + effortSource='config' で ext に stamp する (phase-15 15-4c)", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([[usageEvent()]]);
+    const host = new CodexHost(
+      { ...CONFIG, model: "gpt-5.6-sol", effort: "high" },
+      {
+        onState: (e) => states.push(e),
+        modelSource: "config",
+        effortSource: "config",
+        codexFactory: () => client,
+        now: () => "T",
+      },
+    );
+    await runOneTurn(host, "hi");
+    // 起動直後の最初の state_change に楽観 stamp されているはず (Codex は SDK が
+    // model を再報告しないため、source は起動時決定でそのまま維持される)。
+    const first = states[0]!;
+    expect(first.ext).toMatchObject({
+      model: "gpt-5.6-sol",
+      model_source: "config",
+      effort: "high",
+      effort_source: "config",
+    });
+  });
+
+  it("楽観 stamp: modelSource / effortSource が undefined なら stamp なし (アカウント既定委任、phase-15 15-4c)", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([[usageEvent()]]);
+    const host = new CodexHost(CONFIG, {
+      onState: (e) => states.push(e),
+      codexFactory: () => client,
+      now: () => "T",
+    });
+    await runOneTurn(host, "hi");
+    const first = states[0]!;
+    expect(first.ext).not.toHaveProperty("model_source");
+    expect(first.ext).not.toHaveProperty("effort_source");
+    expect(first.ext).not.toHaveProperty("model");
+    expect(first.ext).not.toHaveProperty("effort");
+  });
 });

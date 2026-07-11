@@ -35,6 +35,7 @@ import type {
   Envelope,
   InterAgentMessagePayload,
   KaoiroState,
+  ModelSource,
   PermissionMode,
 } from "@kaoiro/agent-common";
 
@@ -115,6 +116,19 @@ async function main(): Promise<void> {
         "use KAOIRO_CLAUDE_CODE_DEFAULT_MODEL instead (removal: #103)\n",
     );
   }
+
+  // Source vocabulary for ext.model_source (ADR-0032 F4bc addendum, phase-15
+  // 15-4): config > env when both are set (config wins per resolution
+  // priority); both unset leaves the source undefined so the host stamps
+  // "default" when the SDK's init reports the engine's own default model.
+  // "launch" is currently subsumed by "config" until runner relays a
+  // dedicated field on SpawnMessage; the wire stays forward-compatible.
+  const resolvedModelSource: ModelSource | undefined =
+    config.model !== undefined
+      ? "config"
+      : envDefaultModel !== undefined
+        ? "env"
+        : undefined;
 
   // No prompt argument: server-connected wrappers start idle and wait for
   // the first operator instruction. A prompt argument still works for
@@ -345,6 +359,12 @@ async function main(): Promise<void> {
     // AskUserQuestion path (ADR-0027): server-connected wrappers always
     // have a question broker, so route through it directly.
     decideQuestion: (questions) => questionBroker!.decide(questions),
+    // Origin of the resolved startup model (phase-15 15-4). Undefined when
+    // no explicit pick was made; the host stamps "default" on the first
+    // init report in that case.
+    ...(resolvedModelSource !== undefined
+      ? { modelSource: resolvedModelSource }
+      : {}),
     queryOptions: {
       tools: { type: "preset", preset: "claude_code" },
       allowedTools: config.allowed_tools ?? [...READ_ONLY_TOOLS],

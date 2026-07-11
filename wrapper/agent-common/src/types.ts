@@ -24,6 +24,11 @@ export type {
   InstructionRejectedPayload,
   InterAgentMessageKind,
   InterAgentMessagePayload,
+  ModelSource,
+  SessionCapabilitiesExt,
+  ResolvedSnapshotExt,
+  ResumeDriftEntry,
+  ResumeDriftExt,
 } from "@kaoiro/protocol";
 
 /** SDKResultMessage.subtype (agent-sdk-events.md). */

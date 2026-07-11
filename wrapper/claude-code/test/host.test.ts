@@ -185,6 +185,66 @@ describe("AgentHost — query injection", () => {
     expect(e?.ext).toMatchObject({ model: "claude-x", cwd: "/repo" });
   });
 
+  it("楽観 stamp: options.modelSource='config' で SDK init 前から ext.model_source が付き、init 後も source を維持する (phase-15 15-4b)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      modelSource: "config",
+      queryOptions: { model: "claude-opus-4-7" },
+      queryFn: scriptedQuery([
+        // SDK init が別値 (正規化名等) を返しても source は "config" のまま維持されること
+        // — 値の由来を伝える field なので default に書き換えない。
+        msg({ type: "system", subtype: "init", model: "claude-opus-4-7-normalized", cwd: "/repo" }),
+        assistant([{ type: "text", text: "hi" }]),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const afterInit = envs.find((e) => e.state === "thinking");
+    expect(afterInit?.ext).toMatchObject({
+      model: "claude-opus-4-7-normalized",
+      model_source: "config",
+    });
+  });
+
+  it("楽観 stamp: options.modelSource='env' でも SDK init 後 source を維持する (phase-15 15-4b)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      modelSource: "env",
+      queryOptions: { model: "claude-from-env" },
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", model: "claude-from-env", cwd: "/repo" }),
+        assistant([{ type: "text", text: "hi" }]),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const afterInit = envs.find((e) => e.state === "thinking");
+    expect(afterInit?.ext).toMatchObject({
+      model: "claude-from-env",
+      model_source: "env",
+    });
+  });
+
+  it("楽観 stamp: modelSource 未指定なら SDK init で model_source='default' が初出現する (phase-15 15-4b)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", model: "claude-sonnet-x", cwd: "/repo" }),
+        assistant([{ type: "text", text: "hi" }]),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const afterInit = envs.find((e) => e.state === "thinking");
+    expect(afterInit?.ext).toMatchObject({
+      model: "claude-sonnet-x",
+      model_source: "default",
+    });
+  });
+
   it("init の slash_commands を ext.slash_commands に付与する (#34)", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {
