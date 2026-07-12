@@ -47,7 +47,13 @@ defmodule KaoiroServer.SessionPointersTest do
 
   test "cwd 省略時は nil", %{server: server} do
     SessionPointers.record("a.3", "sess-3", nil, nil, server)
-    assert SessionPointers.get("a.3", server) == %{session_id: "sess-3", cwd: nil, engine: nil, snapshot: nil}
+
+    assert SessionPointers.get("a.3", server) == %{
+             session_id: "sess-3",
+             cwd: nil,
+             engine: nil,
+             snapshot: nil
+           }
   end
 
   test "nil cwd は既知の cwd を上書きしない (#22)", %{server: server} do
@@ -80,12 +86,26 @@ defmodule KaoiroServer.SessionPointersTest do
 
   test "同一 DETS ファイルからの再起動で値が残る", %{server: server, path: path} do
     SessionPointers.record("a.4", "sess-4", "/w", nil, server)
-    assert SessionPointers.get("a.4", server) == %{session_id: "sess-4", cwd: "/w", engine: nil, snapshot: nil}
+
+    assert SessionPointers.get("a.4", server) == %{
+             session_id: "sess-4",
+             cwd: "/w",
+             engine: nil,
+             snapshot: nil
+           }
+
     :ok = GenServer.stop(server)
 
     name2 = :"sp_restart_#{System.unique_integer([:positive])}"
     {:ok, _pid} = SessionPointers.start_link(name: name2, path: path)
-    assert SessionPointers.get("a.4", name2) == %{session_id: "sess-4", cwd: "/w", engine: nil, snapshot: nil}
+
+    assert SessionPointers.get("a.4", name2) == %{
+             session_id: "sess-4",
+             cwd: "/w",
+             engine: nil,
+             snapshot: nil
+           }
+
     GenServer.stop(name2)
   end
 
