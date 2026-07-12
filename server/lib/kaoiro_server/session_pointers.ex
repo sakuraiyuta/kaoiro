@@ -73,6 +73,24 @@ defmodule KaoiroServer.SessionPointers do
     GenServer.call(server, {:delete, agent_id})
   end
 
+  @doc """
+  Explicitly nils out the agent's session_id while keeping cwd / engine /
+  snapshot intact (ADR-0036 F4, phase-17 17-3). Distinct from `record/5`
+  whose merge semantics interpret a nil session_id as "keep the existing
+  session_id" so a session_id-bearing envelope without cwd cannot erase
+  the cwd restore needs — that helper is the wrong tool for a fresh
+  relaunch's explicit detach.
+
+  Synchronous so the reset lifecycle (`KaoiroServer.SessionResets`) can
+  await the detach before broadcasting `session_reset_completed`. Unknown
+  agent = `:ok` no-op — a fresh spawn without a pointer never reaches
+  this path in practice, but idempotence matches `delete/2`. Already-nil
+  session_id is a no-op that does not rewrite DETS.
+  """
+  def detach_session(agent_id, server \\ __MODULE__) do
+    GenServer.call(server, {:detach_session, agent_id})
+  end
+
   @impl true
   def init({name, path}) do
     path |> Path.dirname() |> File.mkdir_p!()
@@ -203,6 +221,27 @@ defmodule KaoiroServer.SessionPointers do
   def handle_call({:delete, agent_id}, _from, state) do
     :ok = :dets.delete(state.table, agent_id)
     {:reply, :ok, %{state | pointers: Map.delete(state.pointers, agent_id)}}
+  end
+
+  def handle_call({:detach_session, agent_id}, _from, state) do
+    case Map.get(state.pointers, agent_id) do
+      nil ->
+        {:reply, :ok, state}
+
+      %{session_id: nil} ->
+        {:reply, :ok, state}
+
+      existing ->
+        new_pointer = %{existing | session_id: nil}
+
+        :ok =
+          :dets.insert(
+            state.table,
+            {agent_id, nil, existing.cwd, existing.engine, existing.snapshot}
+          )
+
+        {:reply, :ok, %{state | pointers: Map.put(state.pointers, agent_id, new_pointer)}}
+    end
   end
 
   @impl true

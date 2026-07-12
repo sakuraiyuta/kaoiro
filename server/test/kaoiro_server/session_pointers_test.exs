@@ -200,4 +200,82 @@ defmodule KaoiroServer.SessionPointersTest do
     assert :ok = SessionPointers.delete("a.snap.del", server)
     assert SessionPointers.get("a.snap.del", server) == nil
   end
+
+  # ADR-0036 F4 (phase-17 17-3): detach_session — session_id を明示 nil、
+  # cwd/engine/snapshot は保持。record の merge semantics (nil = keep) では
+  # 実現できない専用 sync operation。
+
+  test "detach_session: 既存 pointer の session_id を nil に、他 field を保持", %{server: server} do
+    SessionPointers.record("a.det", "s-old", "/w", :codex, server)
+    SessionPointers.record_snapshot("a.det", %{model: "x"}, server)
+
+    assert SessionPointers.detach_session("a.det", server) == :ok
+
+    assert SessionPointers.get("a.det", server) == %{
+             session_id: nil,
+             cwd: "/w",
+             engine: :codex,
+             snapshot: %{model: "x"}
+           }
+  end
+
+  test "detach_session: 未知 agent は :ok の no-op (冪等)", %{server: server} do
+    assert SessionPointers.detach_session("a.det.unknown", server) == :ok
+    assert SessionPointers.get("a.det.unknown", server) == nil
+  end
+
+  test "detach_session: 既に session_id=nil の pointer は :ok の no-op", %{server: server} do
+    SessionPointers.record("a.det.nil", nil, "/w", :claude_code, server)
+
+    assert SessionPointers.get("a.det.nil", server) == %{
+             session_id: nil,
+             cwd: "/w",
+             engine: :claude_code,
+             snapshot: nil
+           }
+
+    assert SessionPointers.detach_session("a.det.nil", server) == :ok
+
+    assert SessionPointers.get("a.det.nil", server) == %{
+             session_id: nil,
+             cwd: "/w",
+             engine: :claude_code,
+             snapshot: nil
+           }
+  end
+
+  test "detach_session 後の record で新 session_id が最新 pointer になる", %{server: server} do
+    SessionPointers.record("a.det.reattach", "s-old", "/w", :codex, server)
+    assert SessionPointers.detach_session("a.det.reattach", server) == :ok
+
+    # Fresh relaunch reports its new session_id via the normal record path.
+    SessionPointers.record("a.det.reattach", "s-new", nil, nil, server)
+
+    assert SessionPointers.get("a.det.reattach", server) == %{
+             session_id: "s-new",
+             cwd: "/w",
+             engine: :codex,
+             snapshot: nil
+           }
+  end
+
+  test "detach_session は DETS 越しに永続する", %{server: server, path: path} do
+    SessionPointers.record("a.det.persist", "s", "/w", :claude_code, server)
+    SessionPointers.record_snapshot("a.det.persist", %{permission_mode: "plan"}, server)
+    assert SessionPointers.detach_session("a.det.persist", server) == :ok
+
+    :ok = GenServer.stop(server)
+
+    name2 = :"sp_detach_restart_#{System.unique_integer([:positive])}"
+    {:ok, _pid} = SessionPointers.start_link(name: name2, path: path)
+
+    assert SessionPointers.get("a.det.persist", name2) == %{
+             session_id: nil,
+             cwd: "/w",
+             engine: :claude_code,
+             snapshot: %{permission_mode: "plan"}
+           }
+
+    GenServer.stop(name2)
+  end
 end
