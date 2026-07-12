@@ -1,7 +1,7 @@
 ---
 title: Phase 16 — Codex model catalog と session継続switch
 description: ChatGPT plan申告に基づくCodex model catalogを復活し、同一session/historyを維持するmodel・effort切替、loud fail、rollback、capability広告を実装する。
-status: in_progress
+status: completed
 phase: 16
 depends_on: [phase-15-wrapper-ux-parity]
 last_updated: 2026-07-13
@@ -59,8 +59,8 @@ session途中の失敗でもhistoryと最後の実効modelを失わない。
 | 16-8 | LaunchDialogのCodex model / effort selectを復帰 | ✅ | 72feee0 |
 | 16-9 | AgentDetailのmid-session switch、pending/failure/rollback表示を実装 | ✅ | 72feee0 |
 | 16-10 | catalog matrix、switch、400/404、rollbackのunit/integration testを追加 | ✅ | abcbcd7 (adapter 9 case + dashboard 10 case、64+131 pass) |
-| 16-11 | Terra -> Sol -> Terraと不正slug rollbackのhost実機試験 | ⏳ | 同一sessionId/history/rolloutを証跡化 |
-| 16-12 | specsと運用docsを更新し全regression testを実行 | ⏳ | protocol/plugin-model/codex-model-catalog/codex-sdk-events |
+| 16-11 | Terra -> Sol -> Terraと不正slug rollbackのhost実機試験 | ✅ | 2026-07-13 host verify、A-2 疎通 + Terra→Sol→Terra 同一sessionId+history維持 + resume drift なし。#7/#8 (不正slug loud fail/rollback) は UI 経路がないため skip、16-10 adapter integration test (abcbcd7) の 400/404 rollback + switch_error 1回性で covered |
+| 16-12 | specsと運用docsを更新し全regression testを実行 | ✅ | 2026-07-13: protocol / plugin-model / codex-model-catalog / codex-sdk-events を phase-16 実装内容に同期。全 regression 978 pass (runner 116 + wrapper core 51/agent-common 79/codex 64/claude-code 152 + server 385 + dashboard 131) |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blocked.
 

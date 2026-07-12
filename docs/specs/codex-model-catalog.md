@@ -14,9 +14,17 @@ related: [codex-sdk-events, protocol, plugin-model]
 `supportedModels()` を空カタログとし model 選択をアカウント既定に委任する
 判断を採ったが、その **根拠となる Codex エコシステム側の現状** (プラン別
 model 可用性 / 認証モードの非対称 / 変更経路 / SDK からの列挙可否) は ADR
-本体には収まらないため本 spec に外出しする。将来 curated カタログを復活
-させる際の判断材料 ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md))
-としても参照される。
+本体には収まらないため本 spec に外出しする。
+
+**phase-16 update (2026-07-13)**: [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) の判断で catalog は復活
+した。ChatGPT-account 認証下でも **operator が `runner.config.json` に
+`codex.chatgpt_plan` を申告する**ことで entitled model 集合を静的に解決
+できるようになり、Plus 以上では Sol / Terra / Luna の catalog を LaunchDialog
+に出し、session 途中の switch も受け付ける (詳細は
+[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) と
+[phase-16](../plans/phase-16-codex-model-switch.md))。本 spec は現時点でも
+「なぜ列挙 API を待たず operator 申告に依存するか」の 1 次情報として
+参照される。
 
 **Status: accepted** — 一次情報 (OpenAI 公式ドキュメント / help center /
 `codex doctor` 実行) の verbatim 引用ベース。ただし OpenAI 側運用で
@@ -133,6 +141,15 @@ model = "gpt-5.6-sol"
 | `config.load.details["model provider"]` | 同上 | 通常 `openai` |
 | `config.load.details["enabled feature flags"]` | 同上 | 有効な feature flag 一覧 |
 
+**JSON 実形状の注意** (phase-16 の A-2 blocker で判明): 0.144.1 の doctor
+`--json` は `checks` を「フラットな要素キー辞書」として返し、要素キー自体が
+`"auth.credentials"` のようなリテラルなドット付き文字列になっている。
+つまり `report.checks["auth.credentials"].details["stored auth mode"]` で
+アクセスするのが正しく、`report.checks.auth.credentials.details[...]` の
+ネスト path として辿ると常に undefined になる。テスト fixture もこの実
+shape に合わせる必要がある (Potemkin fixture では実データ breakage を
+検出できない、[runner/src/codex-auth.ts](../../runner/src/codex-auth.ts) 実装参照)。
+
 **返さないもの** (F4bc の判断が変わらない主要因):
 
 - Master (このアカウント) の **プラン tier** (Plus / Pro / Business / etc.)
@@ -144,17 +161,29 @@ kaoiro 側は `codex doctor --json` を parse すれば auth mode 判別まで�
 
 ## kaoiro 側への含意
 
-- **現行 (ADR-0032 F4bc)**: LaunchDialog に model select を出さず、wrapper
-  は `model` を送らず、`codex exec` は `~/.codex/config.toml` → プラン
-  既定の順で解決する。AgentDetail は「アカウント既定 (選択不可)」を表示
-  (2026-07-11 [e89fa98](https://gitea.example.invalid/sakurai.yuta/kaoiro/commit/e89fa98))。
-- **default を明示固定したい operator の運用**: `~/.codex/config.toml` に
-  `model = "gpt-5.6-terra"` 等を書けば kaoiro 経由でも全 spawn がその値に
-  なる (CLI 優先度 4)。kaoiro 側変更なしで即効。
-- **agent ごとの動的切替**: 現状 UI からは不可能。default 書換えで擬似的
-  に切替する運用のみ。将来の catalog 復活候補は
-  [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) で方式を決定し、
-  [phase-16](../plans/phase-16-codex-model-switch.md) で実装する。
+- **旧実装 (ADR-0032 F4bc、2026-07-11 [e89fa98](https://gitea.example.invalid/sakurai.yuta/kaoiro/commit/e89fa98)、phase-16 で ADR-0035 に上書き)**:
+  LaunchDialog に model select を出さず、wrapper は `model` を送らず、
+  `codex exec` は `~/.codex/config.toml` → プラン既定の順で解決していた。
+  AgentDetail は「アカウント既定 (選択不可)」を表示。
+- **現行 (ADR-0035、phase-16、2026-07-13 host verify 済)**: operator が
+  `runner.config.json` の `codex.chatgpt_plan` を申告することで catalog
+  resolver (`@kaoiro/codex/catalog.ts`) が auth mode + plan から
+  `EngineModelInfo[]` を返し、runner→wrapper→server→dashboard を経由して
+  `ext.models[]` を advertise する。LaunchDialog に model / effort select
+  が復活し、AgentDetail からの mid-session switch も
+  `set_model` / `set_effort` で受け付ける。詳細は
+  [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) と
+  [phase-16](../plans/phase-16-codex-model-switch.md)。
+- **entitle 判定の非対称性は解消していない**: catalog は operator 申告に
+  依拠しており、SDK からの列挙 API 出現時は再検討する余地あり。
+- **切替の実行モデル**: switch は現 turn を保持したまま次 turn から適用する
+  ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1)。不正 slug は turn 開始時に 400/404 で loud fail し、
+  silent fallback せず旧 pinned model へ rollback する
+  ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F3、adapter 実装は [wrapper/codex/src/host.ts](../../wrapper/codex/src/host.ts))。
+- **`~/.codex/config.toml` 直書きの位置付け**: kaoiro を介さない CLI/Desktop
+  経由の運用や、kaoiro 未対応 slug (`gpt-5.3-codex-spark` 等 Pro 限定
+  model) を使う場合の運用手段として引き続き有効。CLI 優先度 4 のため
+  kaoiro 経由 spawn より低く、operator 明示指定と競合しない。
 
 ## 一次情報の参照先
 

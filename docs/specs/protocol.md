@@ -87,7 +87,7 @@ flowchart LR
 | `type` | イベント種別 | 閉じた enum。下記「type と payload」 |
 | `state` | 状態機械の現在状態 | 下記参照 |
 | `payload` | 種別ごとの本体 | 型は `type` に依存。下記「type と payload」 |
-| `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。実装済: `cost`(累計 USD、#8、Claude Code アダプタが result に付与)/ `model`・`cwd`・`context`(`{used_tokens,max_tokens,used_percentage}`)・`rate_limits`(`{<window>:{status,utilization,resets_at}}`、window=`five_hour`/`seven_day`…)・`slash_commands`(`string[]`、利用可能なスラッシュコマンド名、クライアントの `/` 補完用、#34)・`models`(`[{value, display_name, description, effort_levels?}]`、選択可能なモデルと各モデルの effort 値域。bare `/model`・`/effort` 選択ダイアログをラウンドトリップ無しで構成するための前出し。`value` は `setModel` 用エイリアス、`effort_levels` は effort 非対応モデルで省略、#54 / [ADR-0020](../adr/0020-dashboard-battery-included-client.md))・`permission_mode`(`'default'|'acceptEdits'|'bypassPermissions'|'plan'|'dontAsk'|'auto'`、現在の Claude Code 許可モード、#57。init で確定、SDKStatusMessage 受信で上書き)・`fast_mode`(`'off'|'cooldown'|'on'`、Fast mode 状態、#57。init および各 result メッセージで上書き。`cooldown`は result でのみ観測される)を state_change に付与(#16/#34/#54/#57、Claude Code アダプタ。SDK が公開した時のみ・best-effort)。`pending_permission`(`{request_id, tool_name, input?, truncated?, ts}`、#59 / [ADR-0022](../adr/0022-pending-permission-authoritative-source.md))も state_change に付与し、`waiting_permission`中の許可要求の **authoritative source** となる。同様に`pending_question`(`{request_id, questions, ts}`、[ADR-0027](../adr/0027-askuserquestion-envelope.md))も state_change に付与し、`waiting_question`中の AskUserQuestion 質問の **authoritative source** となる。他は初期空。**`ext` は operator 限定配信**(viewer には全 type で除去。cwd / pending_permission.input 等の機微を含むため、#46、[threat-model](threat-model.md) / [ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
+| `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。実装済: `cost`(累計 USD、#8、Claude Code アダプタが result に付与)/ `model`・`cwd`・`context`(`{used_tokens,max_tokens,used_percentage}`)・`rate_limits`(`{<window>:{status,utilization,resets_at}}`、window=`five_hour`/`seven_day`…)・`slash_commands`(`string[]`、利用可能なスラッシュコマンド名、クライアントの `/` 補完用、#34)・`models`(`[{value, display_name, description, effort_levels?, default_effort?}]`、選択可能なモデルと各モデルの effort 値域。bare `/model`・`/effort` 選択ダイアログをラウンドトリップ無しで構成するための前出し。`value` は `setModel` 用エイリアス、`effort_levels` は effort 非対応モデルで省略、`default_effort` は LaunchDialog / model 切替時に自動選択する候補で `effort_levels` の一値 (phase-16、[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md))、#54 / [ADR-0020](../adr/0020-dashboard-battery-included-client.md))・`permission_mode`(`'default'|'acceptEdits'|'bypassPermissions'|'plan'|'dontAsk'|'auto'`、現在の Claude Code 許可モード、#57。init で確定、SDKStatusMessage 受信で上書き)・`fast_mode`(`'off'|'cooldown'|'on'`、Fast mode 状態、#57。init および各 result メッセージで上書き。`cooldown`は result でのみ観測される)を state_change に付与(#16/#34/#54/#57、Claude Code アダプタ。SDK が公開した時のみ・best-effort)。`pending_permission`(`{request_id, tool_name, input?, truncated?, ts}`、#59 / [ADR-0022](../adr/0022-pending-permission-authoritative-source.md))も state_change に付与し、`waiting_permission`中の許可要求の **authoritative source** となる。同様に`pending_question`(`{request_id, questions, ts}`、[ADR-0027](../adr/0027-askuserquestion-envelope.md))も state_change に付与し、`waiting_question`中の AskUserQuestion 質問の **authoritative source** となる。他は初期空。**`ext` は operator 限定配信**(viewer には全 type で除去。cwd / pending_permission.input 等の機微を含むため、#46、[threat-model](threat-model.md) / [ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 
 #### `ext.permission` 二軸表現 (2026-07-10、[ADR-0033](../adr/0033-permission-model-dual-axis.md))
 
@@ -141,7 +141,8 @@ session 単位の機能可用性を第一級表現する envelope field。engine
   - `user_input_modes?: string[]` — dialog 発火が特定 mode / sandbox に限定される場合の条件集合 (空/未指定 = 無条件)
 - **stamp タイミング**: **spawn 直後の初回 state_change から** (session_init 相当のイベントを待たない。Codex `thread.started` は毎ターン発生モデルで初ターン発生まで到達しないため、待つと fail-closed default で誤表示になる)
 - 未 stamp = 保守的に「機能なし」解釈 (fail-closed)。UI は必ずこの field のみで判定
-- 将来追加予定: `supports_model_switch` / `supports_effort_switch` ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4、phase-16 で実装)
+- `supports_model_switch: boolean` — mid-session の `set_model` 受入可否 (phase-16、[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4)
+- `supports_effort_switch: boolean` — mid-session の `set_effort` 受入可否 (同上)。UI は個別 boolean だけを見て model select / effort select ボタンを show/hide し、engine 名では判定しない (ADR-0034 F3 原則)
 
 #### `ext.resume_snapshot` / `ext.effective` / `ext.resume_drift` (2026-07-11、[ADR-0032](../adr/0032-codex-adapter.md) F4bc + [ADR-0033](../adr/0033-permission-model-dual-axis.md) F4 追補、phase-15)
 
@@ -152,6 +153,36 @@ resume 経路で「意図しない model / 権限の差替え」を検知する 
 - `ext.effective` (`ResolvedSnapshotExt` 型): 今回 host が強制した値。同 shape
 - `ext.resume_drift` (`ResumeDriftExt` 型): `resume_snapshot` と `effective` の field ごと差分。`Array<{field, prev, now}>` 形式。空 array = 差分なし、absent = fresh spawn (resume ではない)
 - 差分検知時: wrapper が stderr warn、UI (AgentDetail) が drift バッジ表示
+
+#### `ext.pending_model` / `ext.pending_effort` / `ext.switch_error` / `ext.effort_reset` (2026-07-13、[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1〜F3、phase-16)
+
+mid-session model / effort 切替の pending / effective / rollback 3 段を envelope
+経路で表現する。**現 turn は不変、次 turn から適用** ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1)。
+
+- `ext.pending_model?: string` — operator が `set_model` を投げた後、まだ次
+  turn の `turn_context.model` として反映されていない値。次 turn 開始で
+  `ext.effective.model` に昇格し `pending_model` は消える。UI (AgentDetail) は
+  `pending: <display_name>` を表示
+- `ext.pending_effort?: string` — 同 semantics で effort 版
+- `ext.effective` の semantics 拡張 (phase-16): resume snapshot 用途と共に、
+  session 中の**現時点の実効 model / effort** を運ぶ。次 turn boundary で
+  pending → effective に昇格させ、以降の state_change でも維持する
+- `ext.effort_reset?: boolean` — model 切替時に旧 effort が新 model の
+  `effort_levels` に含まれない場合、silent downgrade せず `default_effort` へ
+  reset した事実を UI に伝えるフラグ ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) 完了条件)。UI は「新モデルで元の
+  effort が使えないため既定へ戻しました」を明示
+- `ext.switch_error?: {kind: "model" | "effort", requested: string, reason: string, rolled_back_to?: string}` — 切替後の turn で 400/404 等の loud fail が
+  発生した場合の 1 回性報告。次 turn boundary で clear する (**stamp 1 回性**、
+  [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F3)。`rolled_back_to` は前 pinned model (last-known-good、通常は前 turn の
+  effective) を示し、UI は「モデル切替に失敗 / <requested> は実効に反映されて
+  いません / 旧値 <rolled_back_to> に戻しました」を表示。silent fallback は
+  禁止 — effective / resume snapshot にも失敗値は入れない (phase-16 16-7)
+
+**resume_drift の operator drift filter** (phase-16 追補、[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F2):
+mid-session で operator が意図的に切り替えた model / effort は
+`ext.resume_drift` に載せない (operator 意図の切替 = drift ではない)。判定は
+adapter 側の `modelRollbackPinned` フラグと切替 history を参照して行い、
+resume 直後の意図しない差替えのみ drift として emit する。
 
 ### type と payload(v0 確定)
 

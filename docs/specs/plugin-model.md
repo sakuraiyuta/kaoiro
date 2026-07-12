@@ -99,9 +99,13 @@ engine 名では表現しきれない**session 単位の機能可用性** (auth 
 - **初期実装値**:
   - `wrapper/claude-code`: `supports_attachments: true` / `supports_user_input_dialog: true` (無条件)
   - `wrapper/codex`: `supports_attachments: false` / `supports_user_input_dialog: true`
-- **将来 field**: `supports_model_switch` / `supports_effort_switch` は
-  [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4、
-  phase-16 で追加。engine 側は capability の advertise を都度更新する。
+- **`supports_model_switch` / `supports_effort_switch`** (phase-16、2026-07-13 実装済、
+  [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4):
+  session 途中で `set_model` / `set_effort` を受け付けるかを advertise。
+  Claude は SDK 対応済で常に `true`、Codex は catalog resolver が
+  `EngineModelInfo[]` を返し得るとき (auth mode 判別可 + plan 判定可) に `true`、
+  未判別 / 空 catalog 時は `false`。engine 側は catalog / auth mode 変化時に
+  capability の advertise を都度更新する。
 
 ## Constraints
 

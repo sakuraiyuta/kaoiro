@@ -103,10 +103,18 @@ Codex ThreadEvent → kaoiro 状態 ([protocol](protocol.md)) への導出は共
 
 dashboard から Codex agent (kuroe / ao) を実起動して判明し、実装に反映した 3 点:
 
-- **model カタログはアカウント既定のみ**: ChatGPT-plan 認証では明示 `model`
-  指定が全て 400/404 で拒否され (bundled catalog は API キー向け)、許容 model
-  はアカウント依存で SDK からは列挙不能。kaoiro は Codex の model カタログを
-  空にし、`model` を送らずアカウント既定を使う ([ADR-0032](../adr/0032-codex-adapter.md) F4bc)。
+- **model カタログはアカウント既定のみ (旧、phase-16 で更新)**:
+  ChatGPT-plan 認証では明示 `model` 指定が全て 400/404 で拒否され
+  (bundled catalog は API キー向け)、許容 model はアカウント依存で SDK
+  からは列挙不能。kaoiro は Codex の model カタログを空にし、`model` を
+  送らずアカウント既定を使う ([ADR-0032](../adr/0032-codex-adapter.md) F4bc)。 →
+  **phase-16 update (2026-07-13、[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md))**:
+  operator が `runner.config.json` に `codex.chatgpt_plan` を申告する経路で
+  catalog を復活し、Plus 以上では Sol / Terra / Luna を LaunchDialog に
+  出し、session 途中の switch も受け付ける (mid-session switch の envelope
+  契約は [protocol](protocol.md) の `ext.pending_model` / `ext.effective` /
+  `ext.switch_error` 参照、Codex 側の catalog 詳細は
+  [codex-model-catalog](codex-model-catalog.md))。
 - **MCP tool は自動承認が必要**: `codex exec` の approval_policy=never 下で MCP
   tool 呼び出しは既定で「user cancelled MCP tool call」になる。
   `mcp_servers.kaoiro.default_tools_approval_mode: "approve"` で kaoiro ツール
@@ -140,10 +148,12 @@ state_change から stamp する** (ADR-0034 F1)。理由は本仕様の process
   announce、cli.ts で発行) の `ext` に stamp する。以降の state_change でも
   同 ext を維持し、変化しうる値は変化時に更新する (Claude 側と対称)。
 
-phase-15 の 15-4b/4c の楽観 stamp 原則と同一 path。将来 field
-`supports_model_switch` / `supports_effort_switch` は
-[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4、
-phase-16 で追加する (`session_capabilities` の枠内で advertise を都度更新)。
+phase-15 の 15-4b/4c の楽観 stamp 原則と同一 path。
+`supports_model_switch` / `supports_effort_switch` は phase-16 で実装済
+(2026-07-13 host verify)。`session_capabilities` の枠内で
+adapter が catalog resolver 出力に応じて advertise を都度更新する
+([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4、
+[plugin-model](plugin-model.md))。
 
 ### tool 定義 (MCP bridge)
 
