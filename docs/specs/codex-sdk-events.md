@@ -68,7 +68,7 @@ Codex ThreadEvent → kaoiro 状態 ([protocol](protocol.md)) への導出は共
 
 | ThreadEvent | kaoiro 状態 | 補足 |
 |---|---|---|
-| `thread.started` | `session_init` — envelope の `session_id` を `thread_id` で更新 | model / cwd は event に載らないため spawn 時の値を wrapper が自前で `ext` に stamp する |
+| `thread.started` | `session_init` — envelope の `session_id` を `thread_id` で更新 | model / cwd は event に載らない。明示 model は spawn 時の値、アカウント既定は各 turn の rollout `turn_context.payload.model` から解決して wrapper が `ext` に stamp する（既定値を次 turn の明示指定には昇格させない） |
 | `turn.started` | `thinking` | Claude の user message 送信直後相当 |
 | `item.started` (agent_message / reasoning) | `thinking` | 出力開始 |
 | `item.completed` (agent_message) | `log` (kind=assistant, text) を送出 | protocol の log envelope |

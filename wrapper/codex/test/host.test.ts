@@ -163,6 +163,68 @@ describe("CodexHost", () => {
     expect(calls.options[1]).toMatchObject({ model: "gpt-5.4-mini" });
   });
 
+  it("account default の実効 model を rollout から解決して ext に載せる", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([[
+      { type: "thread.started", thread_id: "uuid-model" },
+      { type: "turn.started" },
+      usageEvent(),
+    ]]);
+    const host = new CodexHost(CONFIG, {
+      onState: (e) => states.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      modelResolver: async (id) =>
+        id === "uuid-model" ? "gpt-5.6-sol" : null,
+      now: () => "T",
+    });
+
+    await runOneTurn(host, "hello");
+
+    expect(states[0]?.ext).not.toHaveProperty("model");
+    expect(states.at(-1)?.ext).toMatchObject({
+      model: "gpt-5.6-sol",
+      model_source: "default",
+      effective: {
+        model: "gpt-5.6-sol",
+        model_source: "default",
+      },
+    });
+  });
+
+  it("account default は pin せず turn ごとの実効 model を更新する", async () => {
+    const states: Envelope[] = [];
+    const { client, calls } = makeClient([
+      [
+        { type: "thread.started", thread_id: "uuid-routing" },
+        { type: "turn.started" },
+        usageEvent(),
+      ],
+      [{ type: "turn.started" }, usageEvent()],
+    ]);
+    const models = ["gpt-first", "gpt-second"];
+    const host = new CodexHost(CONFIG, {
+      onState: (e) => states.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      modelResolver: async () => models.shift() ?? null,
+      now: () => "T",
+    });
+
+    const done = host.run("first");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await host.send("second");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    host.close();
+    await done;
+
+    expect(calls.options[1]).not.toHaveProperty("model");
+    expect(states.at(-1)?.ext).toMatchObject({
+      model: "gpt-second",
+      model_source: "default",
+    });
+  });
+
   it("resumeSessionId 指定時は初回から resumeThread する", async () => {
     const { client, calls } = makeClient([[usageEvent()]]);
     const host = new CodexHost(CONFIG, {

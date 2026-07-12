@@ -42,6 +42,7 @@ import {
   threadEventToSessionId,
 } from "./adapter.js";
 import { CODEX_MODELS } from "./catalog.js";
+import { resolveCodexModel } from "./rollout.js";
 import { ToolHost } from "./toolhost.js";
 
 /** Structural view of the SDK surface the host drives; injectable so tests
@@ -92,6 +93,8 @@ export interface CodexHostOptions {
   resumeSnapshot?: ResolvedSnapshotExt;
   /** SDK client factory; injectable for tests. */
   codexFactory?: (options: CodexOptions) => CodexClientLike;
+  /** Resolves the server-selected model from the Codex rollout. */
+  modelResolver?: (sessionId: string) => Promise<string | null>;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
 }
@@ -287,7 +290,12 @@ export class CodexHost implements EngineAdapter {
       workingDirectory: this.#cwd,
       skipGitRepoCheck: true,
     };
-    if (this.#model !== null) options.model = this.#model;
+    // A model observed from turn_context is display metadata, not an explicit
+    // operator choice. Passing it back would silently pin later turns and
+    // change the semantics of the account default.
+    if (this.#model !== null && this.#modelSource !== "default") {
+      options.model = this.#model;
+    }
     if (this.#effort !== null) {
       options.modelReasoningEffort = this.#effort as NonNullable<
         ThreadOptions["modelReasoningEffort"]
@@ -316,6 +324,19 @@ export class CodexHost implements EngineAdapter {
         if (sessionId !== null && sessionId !== this.#sessionId) {
           this.#sessionId = sessionId;
           this.#options.onSessionId?.(sessionId);
+        }
+        if (
+          event.type === "turn.started" &&
+          (this.#model === null || this.#modelSource === "default") &&
+          this.#sessionId !== null
+        ) {
+          const model = await (this.#options.modelResolver ?? resolveCodexModel)(
+            this.#sessionId,
+          );
+          if (model !== null) {
+            this.#model = model;
+            this.#modelSource = "default";
+          }
         }
         for (const entry of threadEventToLogs(event)) {
           this.#emitLog(entry);
