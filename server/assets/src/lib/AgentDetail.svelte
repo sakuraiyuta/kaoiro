@@ -19,6 +19,7 @@
     resumeDriftFrom,
     RUNNING_STATES,
     sessionCapabilitiesFrom,
+    shouldInterceptAsSessionReset,
     STOP_SAFE_STATES,
     userInputDialogAvailability,
   } from "./protocol";
@@ -27,6 +28,7 @@
     KaoiroConnection,
     PersonaManifest,
     RunnerSessions,
+    SessionResetMode,
   } from "./protocol";
 
   let {
@@ -36,6 +38,7 @@
     connection = null,
     manifest = null,
     sessions = null,
+    resetMode = null,
     origin = null,
     onClose,
     onSelectAgent,
@@ -50,6 +53,10 @@
      *  this agent, so a stale enumerate for another selection cannot leak in
      *  (same guard shape as LaunchDialog). */
     sessions?: RunnerSessions | null;
+    /** phase-17 17-9: the mode being reset when a session_reset is in
+     *  flight for this agent ("new" | "clear"), else null. Sourced from
+     *  App.svelte's sessionResets state, cleared on completed / failed. */
+    resetMode?: SessionResetMode | null;
     /** Viewport centre of the originating tile, for the expand anim (#36). */
     origin?: { x: number; y: number } | null;
     onClose: () => void;
@@ -821,6 +828,23 @@
     // Either text or at least one staged file is required; both empty is
     // a no-op.
     if (!connection || (text === "" && stagedFiles.length === 0)) return;
+    // phase-17 17-8 (ADR-0036 F1): exact `/new`・`/clear` + no attachments
+    // + capability=on for the requested mode → route to session_reset
+    // control event, not send_instruction. Anything else (引数付き /
+    // attachment 付き / capability 未 stamp) falls through as normal.
+    // Attachment presence is decided here (stagedFiles is the caller's
+    // truth) and the helper is only asked about text + capability.
+    const resetTarget =
+      stagedFiles.length === 0
+        ? shouldInterceptAsSessionReset(text, undefined, sessionCaps)
+        : null;
+    if (resetTarget !== null) {
+      void run(async () => {
+        await connection!.sendSessionReset(envelope.agent_id, resetTarget);
+        instruction = "";
+      });
+      return;
+    }
     const entries = stagedFiles;
     void run(async () => {
       // Force pin-to-bottom for the user's own send: even if they were
@@ -1001,9 +1025,27 @@
   let slashIndex = $state(0);
   const slashCommands = $derived.by(() => {
     const raw = envelope.ext?.slash_commands;
-    return Array.isArray(raw)
+    const engineCommands = Array.isArray(raw)
       ? raw.filter((c): c is string => typeof c === "string")
       : [];
+    // phase-17 17-8 (ADR-0036 F5): merge kaoiro-local `/new`・`/clear`
+    // into the completion pool only when the session advertises support
+    // for that mode. Fail-closed on absent / false / conditional-off
+    // sessions — the same rule as the send-time intercept, so what
+    // appears in the menu matches what the intercept will actually take.
+    const localCommands: string[] = [];
+    for (const mode of ["new", "clear"] as const) {
+      if (shouldInterceptAsSessionReset(`/${mode}`, undefined, sessionCaps) === mode) {
+        localCommands.push(mode);
+      }
+    }
+    // De-dupe against engine-reported commands (Claude reports "clear"
+    // in its own slash pool; we let the kaoiro-local intercept take
+    // precedence per ADR-0036 F5 by keeping our copy first).
+    for (const cmd of engineCommands) {
+      if (!localCommands.includes(cmd)) localCommands.push(cmd);
+    }
+    return localCommands;
   });
   // The command token being typed: "/" + non-space with no space yet. null
   // once a space is typed or the input does not start with "/".
@@ -1609,7 +1651,37 @@
           {#if dateLabel}
             <div class="day-divider"><span>{dateLabel}</span></div>
           {/if}
-          {#if iam}
+          {#if env.type === "session_boundary"}
+            <!-- phase-17 17-7 (ADR-0036 F3): session boundary marker. The
+                 operator payload carries mode / request_id /
+                 previous_session_id / to_session_id; the viewer sees only
+                 mode (server sanitize in AgentsChannel.handle_out). Render
+                 as a lightweight divider that makes the between-sessions
+                 gap visible in the transcript. -->
+            {@const bpayload = (env.payload ?? {}) as {
+              mode?: string;
+              previous_session_id?: string;
+              to_session_id?: string | null;
+              request_id?: string;
+            }}
+            <div class="session-boundary">
+              <span class="label"
+                >── {bpayload.mode === "clear"
+                  ? "セッションを消去して新規開始"
+                  : "新セッション開始"} ──</span>
+              {#if bpayload.request_id}
+                <span
+                  class="marker-ids"
+                  title={`request_id: ${bpayload.request_id}\nfrom: ${
+                    bpayload.previous_session_id ?? "(none)"
+                  }\nto: ${bpayload.to_session_id ?? "(pending)"}`}
+                >
+                  {bpayload.request_id.slice(0, 8)}
+                </span>
+              {/if}
+              <time class="ts" datetime={env.ts}>{time}</time>
+            </div>
+          {:else if iam}
             <!-- inter_agent_message (protocol-inter-agent, phase-8): the same
                  envelope rides on both sender and receiver transcripts; the
                  direction is decided here against the viewer's selected agent.
@@ -1924,16 +1996,24 @@
               {/each}
             </ul>
           {/if}
+          {#if resetMode}
+            <p class="reset-progress" role="status" aria-live="polite">
+              新しいsessionを開始中…(mode: {resetMode})
+            </p>
+          {/if}
           <form class="instruct" onsubmit={sendInstruction}>
             <textarea
               class:sending={display.shown === "sending"}
-              placeholder="指示を送る…(Ctrl+Enter で送信、/ でコマンド候補、ドラッグドロップ・ペーストで画像等ファイル送信)"
+              placeholder={resetMode
+                ? "session reset 中は入力できません"
+                : "指示を送る…(Ctrl+Enter で送信、/ でコマンド候補、ドラッグドロップ・ペーストで画像等ファイル送信)"}
               bind:value={instruction}
               bind:this={slashTextarea}
               onkeydown={onInstructionKeydown}
               onpaste={onInstructionPaste}
               rows="2"
               aria-label="instruction for {name}"
+              disabled={resetMode !== null}
             ></textarea>
             <!-- ADR-0034 F1/F3 (phase-15 15-15): attach button gated on the
                  wrapper's advertised supports_attachments. Fail-closed: a
@@ -1959,6 +2039,7 @@
             <button
               type="submit"
               disabled={uploading ||
+                resetMode !== null ||
                 (instruction.trim() === "" && stagedFiles.length === 0)}
               >{uploading ? "送信中…" : "送信"}</button
             >
@@ -2981,6 +3062,41 @@
     flex: 1;
     height: 1px;
     background: var(--line);
+  }
+
+  /* phase-17 17-9: session boundary marker in the transcript. Same
+     visual language as day-divider but with a distinct label + optional
+     request_id hint (operator tooltip only; viewer sees mode alone). */
+  .session-boundary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    margin: 0.8rem 0;
+    padding: 0.25rem 0;
+    color: var(--fg-dim);
+    font-size: var(--fs-caption);
+    letter-spacing: 0.05em;
+    font-variant-numeric: tabular-nums;
+  }
+  .session-boundary .marker-ids {
+    color: var(--fg-dim);
+    font-family: monospace;
+    font-size: var(--fs-metadata);
+    opacity: 0.7;
+  }
+
+  /* phase-17 17-9: reset-in-flight banner above the composer. Non-modal,
+     unobtrusive; the textarea disable + placeholder swap carries the
+     interaction gate, this just tells the operator why. */
+  .reset-progress {
+    margin: 0.4rem 0 0;
+    padding: 0.35rem 0.6rem;
+    background: var(--surface-dim, rgba(0, 0, 0, 0.05));
+    color: var(--fg-dim);
+    font-size: var(--fs-caption);
+    border-radius: 4px;
+    text-align: center;
   }
 
   /* Session cost on the turn boundary (#8). */

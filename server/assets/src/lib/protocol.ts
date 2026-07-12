@@ -242,6 +242,32 @@ export function sessionCapabilitiesFrom(
   return out;
 }
 
+/** Composer-side intercept rule for `/new`・`/clear` (ADR-0036 F1,
+ *  phase-17 17-8). Returns the reset mode when the input should NOT be
+ *  sent as a normal instruction but as a `session_reset` control event.
+ *  Rules:
+ *   - `trim(text)` must exactly equal `/new` or `/clear` (引数付き
+ *     `/new hello` は通常 instruction)
+ *   - attachments must be empty (attachment 付き `/new` は通常 instruction)
+ *   - the resulting mode must be `"on"` per
+ *     {@link sessionResetAvailability} (capability unstamped / false /
+ *     conditional-off = fall through as ordinary instruction)
+ *  Returns `null` when the input is a normal instruction. Extracted so
+ *  the Composer's send path stays a single-line branch and the rule is
+ *  unit-testable without a Svelte harness. */
+export function shouldInterceptAsSessionReset(
+  text: string,
+  attachmentIds: string[] | undefined,
+  caps: SessionCapabilities | null,
+): SessionResetMode | null {
+  if (attachmentIds !== undefined && attachmentIds.length > 0) return null;
+  const trimmed = text.trim();
+  const mode: SessionResetMode | null =
+    trimmed === "/new" ? "new" : trimmed === "/clear" ? "clear" : null;
+  if (mode === null) return null;
+  return sessionResetAvailability(caps, mode) === "on" ? mode : null;
+}
+
 /** Session-reset availability given the capability envelope and the
  *  requested mode (ADR-0036 F5, phase-17). Mirrors the 3-value shape of
  *  {@link userInputDialogAvailability} so the composer can share render
@@ -529,15 +555,23 @@ export function interAgentMessageOf(
   return payload as InterAgentMessagePayload;
 }
 
-/** True for reply-stream envelopes (operator-only, ADR-0012): these go
- *  to the per-agent transcript, not the latest-state map.
- *  inter_agent_message also appears in the transcript on both the sender
- *  and the receiver side (protocol-inter-agent spec). */
+/** True for transcript-only envelopes: they go to the per-agent
+ *  transcript, NOT the latest-state map (routing them to `agents`
+ *  would corrupt the grid face — the boundary marker is a stateless
+ *  cue, not a state_change). `log` / `result` are operator-only
+ *  (ADR-0012); `inter_agent_message` is operator-only too
+ *  (protocol-inter-agent spec) and lands on both the sender and the
+ *  receiver's transcript. `session_boundary` (ADR-0036 F3, phase-17
+ *  17-7) IS viewer-visible after server-side sanitize (mode-only
+ *  payload); the transcript-vs-state routing decision is orthogonal
+ *  to the viewer/operator gate, and viewers still need the marker to
+ *  render the between-sessions divider. */
 export function isReplyEnvelope(envelope: Envelope): boolean {
   return (
     envelope.type === "log" ||
     envelope.type === "result" ||
-    envelope.type === "inter_agent_message"
+    envelope.type === "inter_agent_message" ||
+    envelope.type === "session_boundary"
   );
 }
 
@@ -737,6 +771,39 @@ export interface KaoiroHandlers {
   /** Wrapper rejected a whole instruction (file-upload spec / ADR-0025).
    *  Operator-only. Forwarded from the envelope stream as a convenience. */
   onInstructionRejected?: (payload: InstructionRejectedPayload) => void;
+  /** Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17 17-9).
+   *  All three are operator-only (payloads carry session identifiers,
+   *  gated in AgentsChannel.handle_out). `started` fires on lock
+   *  acquire, `completed` on the fresh wrapper's channel join,
+   *  `failed` on any rejection (invalid mode / busy / rollback etc.). */
+  onSessionResetStarted?: (payload: SessionResetStartedPayload) => void;
+  onSessionResetCompleted?: (payload: SessionResetCompletedPayload) => void;
+  onSessionResetFailed?: (payload: SessionResetFailedPayload) => void;
+}
+
+/** ADR-0036 F7 broadcast payloads (client view). `previous_session_id` /
+ *  `to_session_id` are optional; the server omits them per protocol type
+ *  when absent (fresh spawn edge / lazy采番 / failure branches). */
+export interface SessionResetStartedPayload {
+  request_id: string;
+  agent_id: string;
+  mode: SessionResetMode;
+  previous_session_id?: string;
+}
+
+export interface SessionResetCompletedPayload {
+  request_id: string;
+  agent_id: string;
+  mode: SessionResetMode;
+  previous_session_id?: string;
+  to_session_id: string | null;
+}
+
+export interface SessionResetFailedPayload {
+  request_id: string;
+  agent_id: string;
+  mode: SessionResetMode;
+  reason: SessionResetErrorReason;
 }
 
 export interface KaoiroConnection {
@@ -806,6 +873,15 @@ export interface KaoiroConnection {
    * cwd. Rejects like sendInstruction plus `invalid_session_id` /
    * `missing_session_id`. */
   resumeSession: (agentId: string, sessionId: string) => Promise<void>;
+  /** Session-reset control (ADR-0036 F1, phase-17 17-8). Operator-only.
+   *  Resolves on server accept; the completion / failure arrives via
+   *  the onSessionResetCompleted / _Failed handlers. Rejects like
+   *  sendInstruction plus the closed reset vocabulary (agent_busy /
+   *  unsupported_session_reset / session_reset_pending / invalid_mode). */
+  sendSessionReset: (
+    agentId: string,
+    mode: SessionResetMode,
+  ) => Promise<void>;
   /** Requests a spawn (#22, 案A); resolves with the server-allocated
    * agent_id. Rejects like sendInstruction (forbidden / unknown_host /
    * unknown_persona / cwd_not_allowed). The eventual launch outcome
@@ -936,6 +1012,75 @@ export function parseSessions(value: unknown): RunnerSession[] {
     }
   }
   return sessions;
+}
+
+// phase-17 17-9: defensive parsers for the session-reset lifecycle
+// broadcasts (ADR-0036 F7). Malformed payload → null so the channel
+// dispatch silently drops rather than fire a handler on an ill-typed
+// event. mode / reason are validated against their closed vocabulary.
+
+function parseResetMode(value: unknown): SessionResetMode | null {
+  return value === "new" || value === "clear" ? value : null;
+}
+
+function parseResetReason(value: unknown): SessionResetErrorReason | null {
+  return typeof value === "string" &&
+      (SESSION_RESET_ERROR_REASONS as readonly string[]).includes(value)
+    ? (value as SessionResetErrorReason)
+    : null;
+}
+
+export function parseSessionResetStarted(
+  value: unknown,
+): SessionResetStartedPayload | null {
+  if (typeof value !== "object" || value === null) return null;
+  const p = value as Record<string, unknown>;
+  if (typeof p.request_id !== "string" || typeof p.agent_id !== "string") return null;
+  const mode = parseResetMode(p.mode);
+  if (mode === null) return null;
+  return {
+    request_id: p.request_id,
+    agent_id: p.agent_id,
+    mode,
+    ...(typeof p.previous_session_id === "string"
+      ? { previous_session_id: p.previous_session_id }
+      : {}),
+  };
+}
+
+export function parseSessionResetCompleted(
+  value: unknown,
+): SessionResetCompletedPayload | null {
+  if (typeof value !== "object" || value === null) return null;
+  const p = value as Record<string, unknown>;
+  if (typeof p.request_id !== "string" || typeof p.agent_id !== "string") return null;
+  const mode = parseResetMode(p.mode);
+  if (mode === null) return null;
+  // to_session_id: string | null (protocol type). Missing / non-string /
+  // explicit null all collapse to null.
+  const to_session_id =
+    typeof p.to_session_id === "string" ? p.to_session_id : null;
+  return {
+    request_id: p.request_id,
+    agent_id: p.agent_id,
+    mode,
+    to_session_id,
+    ...(typeof p.previous_session_id === "string"
+      ? { previous_session_id: p.previous_session_id }
+      : {}),
+  };
+}
+
+export function parseSessionResetFailed(
+  value: unknown,
+): SessionResetFailedPayload | null {
+  if (typeof value !== "object" || value === null) return null;
+  const p = value as Record<string, unknown>;
+  if (typeof p.request_id !== "string" || typeof p.agent_id !== "string") return null;
+  const mode = parseResetMode(p.mode);
+  const reason = parseResetReason(p.reason);
+  if (mode === null || reason === null) return null;
+  return { request_id: p.request_id, agent_id: p.agent_id, mode, reason };
 }
 
 function pushAsync(
@@ -1081,6 +1226,21 @@ export function connectKaoiro(
       });
     }
   });
+  // Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17 17-9).
+  // Payload is validated defensively; malformed drops so the UI never
+  // fires on an ill-formed event.
+  channel.on("session_reset_started", (payload: unknown) => {
+    const parsed = parseSessionResetStarted(payload);
+    if (parsed !== null) handlers.onSessionResetStarted?.(parsed);
+  });
+  channel.on("session_reset_completed", (payload: unknown) => {
+    const parsed = parseSessionResetCompleted(payload);
+    if (parsed !== null) handlers.onSessionResetCompleted?.(parsed);
+  });
+  channel.on("session_reset_failed", (payload: unknown) => {
+    const parsed = parseSessionResetFailed(payload);
+    if (parsed !== null) handlers.onSessionResetFailed?.(parsed);
+  });
   channel.join();
 
   return {
@@ -1132,6 +1292,11 @@ export function connectKaoiro(
       pushAsync(channel, "resume_session", {
         agent_id: agentId,
         session_id: sessionId,
+      }),
+    sendSessionReset: (agentId, mode) =>
+      pushAsync(channel, "session_reset", {
+        agent_id: agentId,
+        mode,
       }),
     spawn: (request) =>
       new Promise((resolve, reject) => {

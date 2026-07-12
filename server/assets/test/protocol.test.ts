@@ -16,8 +16,12 @@ import {
   pendingQuestionFrom,
   resultOf,
   resumeDriftFrom,
+  parseSessionResetCompleted,
+  parseSessionResetFailed,
+  parseSessionResetStarted,
   sessionCapabilitiesFrom,
   sessionResetAvailability,
+  shouldInterceptAsSessionReset,
   userInputDialogAvailability,
 } from "../src/lib/protocol";
 import type { Envelope, SessionCapabilities } from "../src/lib/protocol";
@@ -260,10 +264,13 @@ describe("logOf / resultOf / isReplyEnvelope", () => {
     expect(resultOf(log)).toBeNull();
   });
 
-  it("isReplyEnvelope は log/result/inter_agent_message が true", () => {
+  it("isReplyEnvelope は log/result/inter_agent_message/session_boundary が true", () => {
     expect(isReplyEnvelope(log)).toBe(true);
     expect(isReplyEnvelope({ ...log, type: "result" })).toBe(true);
     expect(isReplyEnvelope({ ...log, type: "inter_agent_message" })).toBe(true);
+    // phase-17 17-7: session_boundary は transcript 用 marker で
+    // latest-state map を上書きしない。review round 1 finding 対応。
+    expect(isReplyEnvelope({ ...log, type: "session_boundary" })).toBe(true);
     expect(isReplyEnvelope({ ...log, type: "state_change" })).toBe(false);
     expect(isReplyEnvelope({ ...log, type: "permission_request" })).toBe(false);
   });
@@ -893,5 +900,197 @@ describe("userInputDialogAvailability (ADR-0034 F3, phase-15 D5)", () => {
         null,
       ),
     ).toBe("conditional-off");
+  });
+});
+
+describe("shouldInterceptAsSessionReset (ADR-0036 F1, phase-17 17-8)", () => {
+  const supportedCaps: SessionCapabilities = {
+    supports_attachments: true,
+    supports_user_input_dialog: true,
+    supports_session_reset: true,
+    session_reset_modes: ["new", "clear"],
+  };
+
+  it("exact /new + no attachments + capability on → 'new'", () => {
+    expect(shouldInterceptAsSessionReset("/new", undefined, supportedCaps)).toBe("new");
+    expect(shouldInterceptAsSessionReset("/new", [], supportedCaps)).toBe("new");
+  });
+
+  it("exact /clear + no attachments + capability on → 'clear'", () => {
+    expect(shouldInterceptAsSessionReset("/clear", undefined, supportedCaps)).toBe(
+      "clear",
+    );
+  });
+
+  it("trim 前後空白 (/new に空白) も intercept", () => {
+    expect(shouldInterceptAsSessionReset("  /new\n", undefined, supportedCaps)).toBe(
+      "new",
+    );
+  });
+
+  it("引数付き /new hello は通常 instruction (fall through)", () => {
+    expect(shouldInterceptAsSessionReset("/new hello", undefined, supportedCaps)).toBeNull();
+  });
+
+  it("attachment 付き /new は通常 instruction (fall through)", () => {
+    expect(shouldInterceptAsSessionReset("/new", ["u1"], supportedCaps)).toBeNull();
+  });
+
+  it("caps null (旧 wrapper) は fall through", () => {
+    expect(shouldInterceptAsSessionReset("/new", undefined, null)).toBeNull();
+  });
+
+  it("supports=false は fall through", () => {
+    expect(
+      shouldInterceptAsSessionReset("/new", undefined, {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_session_reset: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("mode 非対応 (modes に new 無し) の /new は fall through", () => {
+    expect(
+      shouldInterceptAsSessionReset("/new", undefined, {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_session_reset: true,
+        session_reset_modes: ["clear"],
+      }),
+    ).toBeNull();
+  });
+
+  it("空文字 / 通常 text は fall through", () => {
+    expect(shouldInterceptAsSessionReset("", undefined, supportedCaps)).toBeNull();
+    expect(
+      shouldInterceptAsSessionReset("ふつうの指示です", undefined, supportedCaps),
+    ).toBeNull();
+  });
+});
+
+describe("parseSessionResetStarted (ADR-0036 F7, phase-17 17-9)", () => {
+  it("valid payload を型付きで返す", () => {
+    expect(
+      parseSessionResetStarted({
+        request_id: "rs_1",
+        agent_id: "a.1",
+        mode: "new",
+        previous_session_id: "sess-old",
+      }),
+    ).toEqual({
+      request_id: "rs_1",
+      agent_id: "a.1",
+      mode: "new",
+      previous_session_id: "sess-old",
+    });
+  });
+
+  it("previous_session_id 省略も許容", () => {
+    expect(
+      parseSessionResetStarted({
+        request_id: "rs_1",
+        agent_id: "a.1",
+        mode: "clear",
+      }),
+    ).toEqual({ request_id: "rs_1", agent_id: "a.1", mode: "clear" });
+  });
+
+  it("mode 不正は null (fail-closed)", () => {
+    expect(
+      parseSessionResetStarted({
+        request_id: "rs_1",
+        agent_id: "a.1",
+        mode: "restart",
+      }),
+    ).toBeNull();
+  });
+
+  it("非 object / 必須 field 欠落は null", () => {
+    expect(parseSessionResetStarted(null)).toBeNull();
+    expect(parseSessionResetStarted("x")).toBeNull();
+    expect(parseSessionResetStarted({ request_id: "x", mode: "new" })).toBeNull();
+  });
+});
+
+describe("parseSessionResetCompleted (ADR-0036 F7, phase-17 17-9)", () => {
+  it("valid + to_session_id string", () => {
+    expect(
+      parseSessionResetCompleted({
+        request_id: "rs_1",
+        agent_id: "a.1",
+        mode: "new",
+        previous_session_id: "sess-old",
+        to_session_id: "sess-new",
+      }),
+    ).toEqual({
+      request_id: "rs_1",
+      agent_id: "a.1",
+      mode: "new",
+      previous_session_id: "sess-old",
+      to_session_id: "sess-new",
+    });
+  });
+
+  it("to_session_id=null (Codex lazy) も許容", () => {
+    expect(
+      parseSessionResetCompleted({
+        request_id: "rs_2",
+        agent_id: "a.2",
+        mode: "new",
+        to_session_id: null,
+      }),
+    ).toEqual({
+      request_id: "rs_2",
+      agent_id: "a.2",
+      mode: "new",
+      to_session_id: null,
+    });
+  });
+
+  it("mode 不正は null", () => {
+    expect(
+      parseSessionResetCompleted({
+        request_id: "rs_1",
+        agent_id: "a.1",
+        mode: "reset",
+        to_session_id: null,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("parseSessionResetFailed (ADR-0036 F7, phase-17 17-9)", () => {
+  it("valid + closed vocab reason", () => {
+    expect(
+      parseSessionResetFailed({
+        request_id: "rs_1",
+        agent_id: "a.1",
+        mode: "new",
+        reason: "spawn_failed",
+      }),
+    ).toEqual({
+      request_id: "rs_1",
+      agent_id: "a.1",
+      mode: "new",
+      reason: "spawn_failed",
+    });
+  });
+
+  it("closed vocab 外の reason は null (fail-closed)", () => {
+    expect(
+      parseSessionResetFailed({
+        request_id: "rs_1",
+        agent_id: "a.1",
+        mode: "new",
+        reason: "not-in-vocab",
+      }),
+    ).toBeNull();
+  });
+
+  it("必須 field 欠落は null", () => {
+    expect(
+      parseSessionResetFailed({ request_id: "rs_1", agent_id: "a.1", mode: "new" }),
+    ).toBeNull();
   });
 });

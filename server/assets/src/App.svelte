@@ -36,6 +36,11 @@
   // when the agent next reports a live envelope or a subsequent
   // spawn_result for the same agent_id succeeds.
   let spawnErrors = $state<Record<string, string>>({});
+  // Per-agent session-reset progress (ADR-0036 F7, phase-17 17-9). The
+  // value is the mode being reset ("new" | "clear"); presence in the
+  // map means the reset is between started and completed/failed, which
+  // the Composer uses to disable input and show a progress line.
+  let sessionResets = $state<Record<string, "new" | "clear">>({});
   // Per-agent reply transcript (operator-only, ADR-0012): log/result
   // envelopes accumulate here instead of overwriting the latest state.
   let logs = $state<Record<string, Envelope[]>>({});
@@ -339,6 +344,29 @@
             }`,
           );
         },
+        // phase-17 17-9: session-reset lifecycle events. `started` /
+        // `completed` update a per-agent progress flag consumed by
+        // AgentDetail's Composer disable / progress indicator. `failed`
+        // additionally surfaces a loud notice with the closed-vocab
+        // reason so the operator sees why (agent_busy /
+        // unsupported_session_reset / session_reset_pending /
+        // runner_unavailable / spawn_failed / rollback_failed / timeout).
+        onSessionResetStarted: (payload) => {
+          sessionResets = { ...sessionResets, [payload.agent_id]: payload.mode };
+        },
+        onSessionResetCompleted: (payload) => {
+          const { [payload.agent_id]: _drop, ...rest } = sessionResets;
+          void _drop;
+          sessionResets = rest;
+        },
+        onSessionResetFailed: (payload) => {
+          const { [payload.agent_id]: _drop, ...rest } = sessionResets;
+          void _drop;
+          sessionResets = rest;
+          showNotice(
+            `session_reset 失敗 (${payload.mode}): ${payload.reason}`,
+          );
+        },
       },
       connectOpts,
     );
@@ -627,6 +655,7 @@
       {connection}
       {manifest}
       sessions={runnerSessions}
+      resetMode={sessionResets[selectedEnvelope.agent_id] ?? null}
       {origin}
       onClose={() => (selected = null)}
       onSelectAgent={(id) => {
