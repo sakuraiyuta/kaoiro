@@ -5,6 +5,7 @@ status: in-progress
 phase: 17
 depends_on: [phase-15-wrapper-ux-parity]
 last_updated: 2026-07-12
+
 ---
 
 # Phase 17 — /new・/clear session lifecycle commands
@@ -61,8 +62,8 @@ phase-15完了時の状況を見てマスターが決める。相互depends_on�
 |---|------|--------|-------|
 | 17-1 | protocolへsession reset control/result/broadcast型とclosed error vocabularyを追加 | ✅ | operator-only、request ID相関 |
 | 17-2 | session capabilityへ`supports_session_reset` / `session_reset_modes`を追加 | ✅ | ADR-0034拡張、spawn直後stamp、fail-closed。chunk α では両 adapter とも false stamp、fresh relaunch 実装完了時 (17-6) に true + [\"new\",\"clear\"] へ flip 予定 |
-| 17-3 | `SessionPointers.detach_session/1`相当を同期実装 | ⏳ | session_id=nil、cwd/engine保持。recordのmerge semanticsは維持 |
-| 17-4 | serverにvalidation、pending lock、reserved instruction reject、result処理を追加 | ⏳ | lifecycle orchestrationのSSOT |
+| 17-3 | `SessionPointers.detach_session/1`相当を同期実装 | ✅ | session_id=nil、cwd/engine保持。recordのmerge semanticsは維持。cwd/engine に加えて snapshot も保持 (fresh relaunch の drift 誤検出防止) |
+| 17-4 | serverにvalidation、pending lock、reserved instruction reject、result処理を追加 | ✅ | lifecycle orchestrationのSSOT。SessionResets 新規 GenServer で TOCTOU 芯 (単一 handle_call) と async state-report lag 保護 (2s cooldown + viewer 除外)、intercept + handle_out で session_reset_* を operator-only gate、runner の agent_id host binding は exact match (nested-prefix spoof 防止) |
 | 17-5 | runner supervisorにsame-agent fresh relaunchと旧session rollbackを追加 | ⏳ | resume IDなしで試行、失敗時だけ旧IDを明示resume。phase-15 D8の最後のeffective snapshotを再適用 |
 | 17-6 | Claude/Codexでfresh session開始をintegration test | ⏳ | Claude query resumeなし / Codex startThread。ID確定時点・同process連続生成・event隔離を実測 |
 | 17-7 | AgentStatesに`new` boundary appendと`clear` full reset + boundaryを追加 | ⏳ | client local-only clear禁止 |
