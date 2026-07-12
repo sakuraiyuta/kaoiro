@@ -1,7 +1,7 @@
 ---
 title: Phase 17 — /new・/clear session lifecycle commands
 description: /new・/clearをengine promptではなく第一級controlとして扱い、同一agentのfresh session生成、表示projection差、resume可能性、capability、busy拒否を実装する。
-status: in-progress
+status: completed
 phase: 17
 depends_on: [phase-15-wrapper-ux-parity]
 last_updated: 2026-07-12
@@ -69,9 +69,9 @@ phase-15完了時の状況を見てマスターが決める。相互depends_on�
 | 17-7 | AgentStatesに`new` boundary appendと`clear` full reset + boundaryを追加 | ✅ | client local-only clear禁止。`append_boundary` / `clear_history_with_boundary` / `patch_boundary_to_session_id` を単一 handle_call で実装、Codex lazy 采番用の `pending_boundary_patch` stash は AgentStates 内で完結 (SessionResets 経由せず、wrapper_channel の envelope 到達で patch fire → stash clear)。marker envelope は SessionResets.confirm_connection から通常 envelope 経路で broadcast (must-3 = viewer sanitize が handle_out で自動適用)。viewer 情報境界 (ADR-0036 F3) は `sanitize_envelope_for(:viewer, session_boundary)` で payload を mode のみに絞る + ext 削除。**patch は server 側 SoT に反映、接続中 client への即時 push はせず再取得時反映 (裁定 2 意図的決定)。dogfooding で不便なら `boundary_patched` broadcast を followup**。client-side routing は `isReplyEnvelope` に session_boundary を追加 (review round 1 finding 対応、logs へ振り分けて agents state map を汚さない) |
 | 17-8 | Composer exact command interceptとlocal slash completion mergeを実装 | ✅ | capability/modes判定、attachment時はresetしない。`shouldInterceptAsSessionReset` helper を protocol.ts に抽出 (exact `/new`・`/clear` + attachment 空 + capability=on 判定、fail-closed)、AgentDetail の send 経路で intercept。slash completion pool に capability=on 時のみ kaoiro-local `/new`・`/clear` を merge (エンジン報告 slash と de-dupe、engine が同名 command を報告しても kaoiro-local が先で intercept 優先) |
 | 17-9 | started/completed/failed/boundary UIとbusy errorを実装 | ✅ | reset中composer操作をdisable。「新しいsessionを開始中」を表示。App.svelte に 3 handler bind + `sessionResets` state (agent_id → mode)、AgentDetail に resetMode prop 伝搬。resetMode !== null で textarea + submit disable + placeholder swap + reset-progress banner、failed は showNotice で loud (closed vocab reason 明示)。transcript 内で env.type === "session_boundary" 分岐、operator は request_id 短縮 + tooltip で ID 群、viewer は mode のみで divider 表示 |
-| 17-10 | old session picker/resumeのregression testを追加 | ⏳ | pointer stackなし、host files SSOT |
-| 17-11 | race/failure testを追加 | ⏳ | instruction競合、double reset、旧event、spawn failure、rollback成功/失敗、timeout |
-| 17-12 | specs/運用docsを更新し全regression testを実行 | ⏳ | protocol/architecture/threat-model、両engine実機 |
+| 17-10 | old session picker/resumeのregression testを追加 | ✅ | pointer stackなし、host files SSOT。detach_session が session_id=nil + cwd/engine/snapshot 保持 (γ 17-3)、fresh session の初回 envelope で record 経由で新 pointer に上書き、既存 resume_session (ADR-0014 F2/F3/A4 継続) で旧 session に戻れる。session_pointers_test に detach + reattach の DETS 越し永続確認、agents_channel_test に resume_session の SessionPointer 一致確認 |
+| 17-11 | race/failure testを追加 | ✅ | instruction競合、double reset、旧event、spawn failure、rollback成功/失敗、timeout。**15-8 Finding 1/2 同型穴の phase-17 版**を追加: wrapper_channel_test に「pending stash 有り envelope で patch fire、無し envelope は noop」の 2 case (order independence)、agents_channel_test に「reset pending 中の resume_session は session_reset_pending で reject」(ADR-0036 F2 の列挙漏れを追補で塞ぐ)。既存 test で double reset / instruction / model / effort / permission_mode / timeout / spawn_failed → rollback / rollback_failed は既に cover 済み |
+| 17-12 | specs/運用docsを更新し全regression testを実行 | ✅ | protocol/architecture/threat-model 更新。protocol.md の type table に `session_boundary` 追加、方向別 table に `session_reset` / `session_reset_started/completed/failed` / `reset_session` / `session_reset_result` を追加。architecture.md に `SessionResets` GenServer + `confirm_connection` two-phase + `AgentStates.pending_boundary_patch` を明記。threat-model.md に **session_reset 防御 6 レイヤ** (operator-only / capability advertise / host binding exact match / reserved_session_command reject / SessionResets pending lock / viewer 情報境界) を新設。ADR-0036 F2 に resume_session 追補。両engine実機の検収はマスター + director で phase-17 完走後に実施予定 |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blocked.
 
@@ -87,6 +87,24 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blo
 
 なし。architecture判断はADR-0036で確定する。phase-16との着手順はresource schedulingで
 あり、設計blockerではない。
+
+## Followups (phase-17 完走後、2026-07-12)
+
+- **実測項目 3 点** (Codex thread ID 確定タイミング / 同 process 連続生成 /
+  旧 event 隔離): γ 17-6 実装時点は「実装 assumption」として coded、
+  実測は ε 完走後の実地検収で確認、findings が出れば
+  [ADR-0036](../adr/0036-session-lifecycle-commands.md) Implementation
+  セクションに追記する運用 (γ で追補済み)
+- **boundary_patched の即時 broadcast**: 裁定 2 意図的決定で不採用
+  (Codex lazy 采番後の to_session_id patch は server 側 SoT に反映、
+  接続中 client への即時 push はせず再取得時反映)。dogfooding で不便
+  なら followup として `boundary_patched` broadcast を検討
+- **error state からの reset 受理**: ADR-0036 F6 MVP は idle /
+  waiting_input のみ受理、error からの reset は他の非 idle と同様
+  reject。errorからの reset 受理は旧 process / rollback semantics を
+  実測した後の将来拡張候補
+- **rollback 経路の人為的 spawn 失敗試験**: ε 完走後の検収では含めず、
+  将来 followup で
 
 ## See Also
 
