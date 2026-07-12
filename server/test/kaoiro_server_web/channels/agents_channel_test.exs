@@ -2631,6 +2631,28 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
 
+    test "pending 中の resume_session (switch_session 経路) は session_reset_pending で reject (17-11: 15-8 Finding 2 同型穴の phase-17 版)" do
+      # ADR-0036 F2 (2026-07-12 ε 追補): reset の pending lock 中に
+      # resume_session が素通りすると kill 中の agent に別 session_id
+      # への retarget が発火して race で fresh 経路と衝突する。session
+      # lifecycle は SessionResets の pending lock で単一制御。
+      agent_id = "gp.resume"
+      acquire_reset_lock(agent_id)
+      @endpoint.subscribe("runner:gp")
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "resume_session", %{
+          "agent_id" => agent_id,
+          "session_id" => "11111111-2222-3333-4444-555555555555"
+        })
+
+      assert_reply ref, :error, %{reason: "session_reset_pending"}
+      refute_broadcast "switch_session", _
+
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
     test "pending 中の set_effort は session_reset_pending で reject" do
       agent_id = "gp.effort"
       acquire_reset_lock(agent_id)

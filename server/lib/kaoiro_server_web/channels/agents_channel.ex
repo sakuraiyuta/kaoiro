@@ -526,6 +526,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # with the payload session_id in place of the SessionPointer's latest.
   def handle_in("resume_session", payload, socket) do
     with :ok <- require_operator(socket),
+         :ok <- guard_against_reset_pending(socket, payload),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          {:ok, session_id} <- fetch_resume_session_id(payload) do
       if live_agent?(agent_id) do

@@ -288,6 +288,68 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  # phase-17 17-11 (ε): boundary marker の to_session_id 後追い patch
+  # 経路 (Codex lazy 采番用) の race テスト。maybe_patch_boundary_to_session_id
+  # は record_session_pointer の直後に発火し、AgentStates.pending_boundary_patch
+  # に stash が無ければ noop (通常 envelope の hot path に影響最小)。
+  describe "session_boundary の to_session_id 後追い patch (17-11)" do
+    test "pending stash 有りの envelope 到達で marker の to_session_id が確定する" do
+      agent_id = "test.patch-1"
+      socket = join_wrapper(agent_id)
+
+      # AgentStates entry を先に作る (join 経路で通常できる、明示的に put)。
+      idle_env = envelope(agent_id, "idle")
+      ref0 = push(socket, "envelope", idle_env)
+      assert_reply ref0, :ok
+
+      # marker を stash 付き (to_session_id nil) で追加。SessionResets
+      # 経由でなく直接 AgentStates を叩いてラボ環境を再現。
+      marker =
+        Map.merge(idle_env, %{
+          "type" => "session_boundary",
+          "state" => "idle",
+          "payload" => %{
+            "mode" => "new",
+            "request_id" => "rs_patch_1",
+            "to_session_id" => nil
+          }
+        })
+
+      assert :ok = KaoiroServer.AgentStates.append_boundary(agent_id, marker)
+
+      # 続く session_id 付き envelope の到達で patch fire。
+      env_with_sid =
+        envelope(agent_id, "thinking") |> Map.put("session_id", "sess-fresh-1")
+
+      ref = push(socket, "envelope", env_with_sid)
+      assert_reply ref, :ok
+
+      history = KaoiroServer.AgentStates.histories()[agent_id]
+      [patched_marker] = Enum.filter(history, &(&1["type"] == "session_boundary"))
+      assert patched_marker["payload"]["to_session_id"] == "sess-fresh-1"
+    end
+
+    test "pending stash 無しの通常 envelope は patch fire しても noop (hot path 無害)" do
+      # 15-8 Finding 2 同型穴の phase-17 版: reset が発火する前
+      # (SessionResets.append_boundary 未実行) に旧 wrapper の envelope が
+      # 到達しても、pending_boundary_patch が nil なので patch は noop
+      # で marker を汚さない (order independence)。
+      agent_id = "test.patch-noop"
+      socket = join_wrapper(agent_id)
+
+      env_with_sid =
+        envelope(agent_id, "thinking") |> Map.put("session_id", "sess-normal")
+
+      ref = push(socket, "envelope", env_with_sid)
+      assert_reply ref, :ok
+
+      # marker が存在しない → history に session_boundary なし、
+      # SessionPointers は通常経路で record 済み。
+      history = KaoiroServer.AgentStates.histories()[agent_id]
+      assert history == nil or Enum.all?(history, &(&1["type"] != "session_boundary"))
+    end
+  end
+
   describe "after_join permission_mode push (#58)" do
     test "永続化された permission_mode を join 直後に push する" do
       agent_id = "test.after-join-perm-1"
