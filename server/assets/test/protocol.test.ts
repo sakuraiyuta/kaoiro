@@ -9,6 +9,8 @@ import {
   isReplyEnvelope,
   logOf,
   modelsFrom,
+  modelSwitchStateFrom,
+  switchErrorFrom,
   parseDirectory,
   parseHosts,
   parseSessions,
@@ -188,6 +190,7 @@ describe("modelsFrom (#54)", () => {
             display_name: "Default",
             description: "d",
             effort_levels: ["low", "high", "max"],
+            default_effort: "high",
           },
           { value: "haiku", display_name: "Haiku" },
         ],
@@ -199,6 +202,7 @@ describe("modelsFrom (#54)", () => {
         display_name: "Default",
         description: "d",
         effort_levels: ["low", "high", "max"],
+        default_effort: "high",
       },
       { value: "haiku", display_name: "Haiku" },
     ]);
@@ -573,6 +577,82 @@ describe("resumeDriftFrom (ADR-0014 F1 addendum, phase-15 D8)", () => {
   });
 });
 
+describe("modelSwitchStateFrom (ADR-0035 F3)", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "a",
+    ts: "2026-07-13T00:00:00Z",
+    type: "state_change",
+    state: "idle",
+  };
+
+  it("pending / effort reset / rollback error を防御的に読む", () => {
+    expect(
+      modelSwitchStateFrom({
+        ...base,
+        ext: {
+          pending_model: "gpt-sol",
+          pending_effort: "high",
+          effort_reset: true,
+          switch_error: {
+            kind: "model",
+            requested: "bad-slug",
+            reason: "turn_failed",
+            rolled_back_to: "gpt-terra",
+          },
+        },
+      }),
+    ).toEqual({
+      pending_model: "gpt-sol",
+      pending_effort: "high",
+      effort_reset: true,
+      switch_error: {
+        kind: "model",
+        requested: "bad-slug",
+        reason: "turn_failed",
+        rolled_back_to: "gpt-terra",
+      },
+    });
+  });
+
+  it("未指定・malformed は fail-closed default", () => {
+    expect(
+      modelSwitchStateFrom({
+        ...base,
+        ext: {
+          pending_model: 1,
+          effort_reset: "true",
+          switch_error: { kind: "model", reason: "unknown" },
+        },
+      }),
+    ).toEqual({
+      pending_model: null,
+      pending_effort: null,
+      effort_reset: false,
+      switch_error: null,
+    });
+  });
+
+  it("switchErrorFrom はreasonを開いたstringとして保持する", () => {
+    expect(
+      switchErrorFrom({
+        ...base,
+        ext: {
+          switch_error: {
+            kind: "effort",
+            requested: "ultra",
+            reason: "future_reason",
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "effort",
+      requested: "ultra",
+      reason: "future_reason",
+    });
+  });
+});
+
 describe("sessionCapabilitiesFrom (ADR-0034 F1/F2)", () => {
   const base: Envelope = {
     version: "0",
@@ -601,6 +681,41 @@ describe("sessionCapabilitiesFrom (ADR-0034 F1/F2)", () => {
       supports_attachments: true,
       supports_user_input_dialog: true,
     });
+  });
+
+  it("model / effort switch capability は boolean のみ保持し未指定は fail-closed", () => {
+    const advertised: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: false,
+          supports_user_input_dialog: true,
+          supports_model_switch: true,
+          supports_effort_switch: false,
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(advertised)).toEqual({
+      supports_attachments: false,
+      supports_user_input_dialog: true,
+      supports_model_switch: true,
+      supports_effort_switch: false,
+    });
+
+    const malformed: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: false,
+          supports_user_input_dialog: true,
+          supports_model_switch: "true",
+          supports_effort_switch: 1,
+        },
+      },
+    };
+    const parsed = sessionCapabilitiesFrom(malformed);
+    expect(parsed?.supports_model_switch === true).toBe(false);
+    expect(parsed?.supports_effort_switch === true).toBe(false);
   });
 
   it("Codex 相当: attachments=false / dialog=true", () => {

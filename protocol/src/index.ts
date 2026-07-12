@@ -144,6 +144,9 @@ export interface EngineModelInfo {
   display_name: string;
   description?: string;
   effort_levels?: string[];
+  /** Preferred launch effort when this model is explicitly selected. Must be
+   *  one of effort_levels when present (ADR-0035 F2, phase-16). */
+  default_effort?: string;
 }
 
 /** Launch catalog for one engine, sent by the runner in its register
@@ -217,6 +220,12 @@ export interface SessionCapabilitiesExt {
   /** Optional constraint: dialog fires only in these permission modes /
    *  sandbox contexts. Absent / empty array = unconditional. */
   user_input_modes?: string[];
+  /** Whether the active session supports changing model at a turn boundary.
+   *  Absent / false = fail-closed unsupported (ADR-0035 F4, phase-16). */
+  supports_model_switch?: boolean;
+  /** Whether the active model supports changing reasoning effort at a turn
+   *  boundary. Absent / false = fail-closed unsupported. */
+  supports_effort_switch?: boolean;
   /** Whether the session accepts /new・/clear as first-class session-reset
    *  control (ADR-0036 F5, phase-17 17-2). Advertised true only when the
    *  wrapper/runner/server together provide the fresh-relaunch + completion
@@ -283,6 +292,28 @@ export interface ResumeDriftEntry {
  *  absent = not a resume launch (fresh spawn). */
 export type ResumeDriftExt = ResumeDriftEntry[];
 
+/** A failed model/effort switch. The requested value never becomes effective;
+ *  rolled_back_to is the last-known-good value retained for the next turn
+ *  (ADR-0035 F3, phase-16). */
+export interface SwitchErrorExt {
+  kind: "model" | "effort";
+  requested: string;
+  /** Machine-readable failure reason. Currently "turn_failed"; intentionally
+   *  open for future adapter-specific loud-failure categories. */
+  reason: string;
+  rolled_back_to?: string;
+}
+
+/** Typed state_change extension fields. The index signature preserves v0's
+ *  forward-compatible extension space while making established wire fields
+ *  first-class to producers and consumers. */
+export interface EnvelopeExt extends Record<string, unknown> {
+  pending_model?: string;
+  pending_effort?: string;
+  effort_reset?: boolean;
+  switch_error?: SwitchErrorExt;
+}
+
 /**
  * Common event envelope v0 (protocol.md). The type enum fixes
  * state_change / permission_request (ADR-0010/0011), log / result
@@ -313,7 +344,7 @@ export interface Envelope {
     | "inter_agent_message";
   state: KaoiroState;
   payload: Record<string, unknown>;
-  ext: Record<string, unknown>;
+  ext: EnvelopeExt;
 }
 
 /** reason enum for attach_rejected / instruction_rejected (file-upload spec,

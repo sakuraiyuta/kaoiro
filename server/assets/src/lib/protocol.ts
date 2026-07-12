@@ -182,6 +182,11 @@ export interface SessionCapabilities {
    *  When present the UI shows "conditional-off" when the current mode is
    *  not listed (ADR-0034 F3). */
   user_input_modes?: string[];
+  /** Mid-session model / effort switching (ADR-0035 F4, phase-16).
+   *  Missing or malformed values are normalized to false by the defensive
+   *  parser so consumers remain fail-closed. */
+  supports_model_switch?: boolean;
+  supports_effort_switch?: boolean;
   /** Whether the session accepts /new・/clear as first-class reset control
    *  (ADR-0036 F5, phase-17). Absent = fail-closed unsupported. */
   supports_session_reset?: boolean;
@@ -214,6 +219,12 @@ export function sessionCapabilitiesFrom(
     supports_attachments: r.supports_attachments,
     supports_user_input_dialog: r.supports_user_input_dialog,
   };
+  if (typeof r.supports_model_switch === "boolean") {
+    out.supports_model_switch = r.supports_model_switch;
+  }
+  if (typeof r.supports_effort_switch === "boolean") {
+    out.supports_effort_switch = r.supports_effort_switch;
+  }
   if (Array.isArray(r.user_input_modes)) {
     const modes: string[] = [];
     for (const m of r.user_input_modes) if (typeof m === "string") modes.push(m);
@@ -240,6 +251,56 @@ export function sessionCapabilitiesFrom(
     }
   }
   return out;
+}
+
+export interface ModelSwitchState {
+  pending_model: string | null;
+  pending_effort: string | null;
+  effort_reset: boolean;
+  switch_error: {
+    kind: "model" | "effort";
+    requested: string;
+    reason: string;
+    rolled_back_to?: string;
+  } | null;
+}
+
+export type SwitchError = NonNullable<ModelSwitchState["switch_error"]>;
+
+/** Reads ext.switch_error, rejecting partial/malformed records. */
+export function switchErrorFrom(envelope: Envelope): SwitchError | null {
+  const raw = envelope.ext?.switch_error;
+  if (typeof raw !== "object" || raw === null) return null;
+  const e = raw as Record<string, unknown>;
+  if (
+    (e.kind !== "model" && e.kind !== "effort") ||
+    typeof e.requested !== "string" ||
+    typeof e.reason !== "string" ||
+    e.reason === ""
+  ) {
+    return null;
+  }
+  return {
+    kind: e.kind,
+    requested: e.requested,
+    reason: e.reason,
+    ...(typeof e.rolled_back_to === "string"
+      ? { rolled_back_to: e.rolled_back_to }
+      : {}),
+  };
+}
+
+/** Defensive reader for ADR-0035's pending/effective/rollback UI metadata. */
+export function modelSwitchStateFrom(envelope: Envelope): ModelSwitchState {
+  const ext = envelope.ext ?? {};
+  return {
+    pending_model:
+      typeof ext.pending_model === "string" ? ext.pending_model : null,
+    pending_effort:
+      typeof ext.pending_effort === "string" ? ext.pending_effort : null,
+    effort_reset: ext.effort_reset === true,
+    switch_error: switchErrorFrom(envelope),
+  };
 }
 
 /** Composer-side intercept rule for `/new`・`/clear` (ADR-0036 F1,
@@ -368,6 +429,7 @@ export interface ModelOption {
   display_name: string;
   description?: string;
   effort_levels?: string[];
+  default_effort?: string;
 }
 
 /** Reads ext.models off an envelope into well-typed ModelOption entries
@@ -397,6 +459,9 @@ export function modelsFrom(envelope: Envelope): ModelOption[] {
                 (l): l is string => typeof l === "string",
               ),
             }
+          : {}),
+        ...(typeof m.default_effort === "string"
+          ? { default_effort: m.default_effort }
           : {}),
       });
     }
