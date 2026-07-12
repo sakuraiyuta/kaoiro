@@ -1,7 +1,7 @@
 ---
 title: Phase 17 — /new・/clear session lifecycle commands
 description: /new・/clearをengine promptではなく第一級controlとして扱い、同一agentのfresh session生成、表示projection差、resume可能性、capability、busy拒否を実装する。
-status: planning
+status: in-progress
 phase: 17
 depends_on: [phase-15-wrapper-ux-parity]
 last_updated: 2026-07-12
@@ -59,8 +59,8 @@ phase-15完了時の状況を見てマスターが決める。相互depends_on�
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 17-1 | protocolへsession reset control/result/broadcast型とclosed error vocabularyを追加 | ⏳ | operator-only、request ID相関 |
-| 17-2 | session capabilityへ`supports_session_reset` / `session_reset_modes`を追加 | ⏳ | ADR-0034拡張、spawn直後stamp、fail-closed |
+| 17-1 | protocolへsession reset control/result/broadcast型とclosed error vocabularyを追加 | ✅ | operator-only、request ID相関 |
+| 17-2 | session capabilityへ`supports_session_reset` / `session_reset_modes`を追加 | ✅ | ADR-0034拡張、spawn直後stamp、fail-closed。chunk α では両 adapter とも false stamp、fresh relaunch 実装完了時 (17-6) に true + [\"new\",\"clear\"] へ flip 予定 |
 | 17-3 | `SessionPointers.detach_session/1`相当を同期実装 | ⏳ | session_id=nil、cwd/engine保持。recordのmerge semanticsは維持 |
 | 17-4 | serverにvalidation、pending lock、reserved instruction reject、result処理を追加 | ⏳ | lifecycle orchestrationのSSOT |
 | 17-5 | runner supervisorにsame-agent fresh relaunchと旧session rollbackを追加 | ⏳ | resume IDなしで試行、失敗時だけ旧IDを明示resume。phase-15 D8の最後のeffective snapshotを再適用 |
