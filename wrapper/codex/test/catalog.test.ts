@@ -11,6 +11,33 @@ const values = (authMode: "chatgpt" | "apikey" | "unknown", plan?:
   resolveCodexCatalog(authMode, plan).map((model) => model.value);
 
 describe("resolveCodexCatalog", () => {
+  it.each([
+    [
+      "gpt-5.6-sol",
+      ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "low",
+    ],
+    [
+      "gpt-5.6-terra",
+      ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "medium",
+    ],
+    [
+      "gpt-5.6-luna",
+      ["low", "medium", "high", "xhigh", "max"],
+      "medium",
+    ],
+  ] as const)(
+    "%s の curated effort metadata が一次情報と一致する",
+    (value, effortLevels, defaultEffort) => {
+      const model = resolveCodexCatalog("chatgpt", "plus").find(
+        (entry) => entry.value === value,
+      );
+      expect(model?.effort_levels).toEqual(effortLevels);
+      expect(model?.default_effort).toBe(defaultEffort);
+    },
+  );
+
   it.each(["free", "go"] as const)("ChatGPT %s は Terra のみ", (plan) => {
     expect(values("chatgpt", plan)).toEqual(["gpt-5.6-terra"]);
   });
@@ -35,6 +62,22 @@ describe("resolveCodexCatalog", () => {
       "gpt-5.4-mini",
     ]);
   });
+
+  it.each(["gpt-5.5", "gpt-5.4-mini"])(
+    "API-key model %s に取得済みeffort metadataを載せる",
+    (value) => {
+      const model = resolveCodexCatalog("apikey").find(
+        (entry) => entry.value === value,
+      );
+      expect(model?.effort_levels).toEqual([
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+      ]);
+      expect(model?.default_effort).toBe("medium");
+    },
+  );
 
   it.each([
     ["chatgpt", undefined],
@@ -67,7 +110,7 @@ describe("resolveCodexCatalog", () => {
     const first = resolveCodexCatalog("chatgpt", "plus");
     first[0]!.display_name = "mutated";
     expect(resolveCodexCatalog("chatgpt", "plus")[0]?.display_name).toBe(
-      "GPT-5.6 Sol",
+      "GPT-5.6-Sol",
     );
   });
 });

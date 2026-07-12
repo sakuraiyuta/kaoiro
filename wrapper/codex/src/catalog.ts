@@ -10,22 +10,32 @@ export type ChatGptPlan =
   | "business"
   | "enterprise";
 
+// Snapshot from openai/codex main (2026-07-13). openai_models.rs defines
+// the ReasoningEffort wire vocabulary and ModelInfo fields; per-model values
+// live in codex-rs/models-manager/models.json and are copied here so catalog
+// advertisement never depends on a runtime model/list probe (ADR-0035 H3).
 const SOL: EngineModelInfo = {
   value: "gpt-5.6-sol",
-  display_name: "GPT-5.6 Sol",
-  description: "最新の汎用フラッグシップ",
+  display_name: "GPT-5.6-Sol",
+  description: "Latest frontier agentic coding model.",
+  effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+  default_effort: "low",
 };
 
 const TERRA: EngineModelInfo = {
   value: "gpt-5.6-terra",
-  display_name: "GPT-5.6 Terra",
-  description: "5.6 系の高推論バリアント",
+  display_name: "GPT-5.6-Terra",
+  description: "Balanced agentic coding model for everyday work.",
+  effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+  default_effort: "medium",
 };
 
 const LUNA: EngineModelInfo = {
   value: "gpt-5.6-luna",
-  display_name: "GPT-5.6 Luna",
-  description: "5.6 系の軽量バリアント",
+  display_name: "GPT-5.6-Luna",
+  description: "Fast and affordable agentic coding model.",
+  effort_levels: ["low", "medium", "high", "xhigh", "max"],
+  default_effort: "medium",
 };
 
 const CHATGPT_TRIO = [SOL, TERRA, LUNA];
@@ -36,12 +46,16 @@ const APIKEY_MODELS: EngineModelInfo[] = [
   {
     value: "gpt-5.5",
     display_name: "GPT-5.5",
-    description: "前世代フラッグシップ",
+    description: "Frontier model for complex coding and research.",
+    effort_levels: ["low", "medium", "high", "xhigh"],
+    default_effort: "medium",
   },
   {
     value: "gpt-5.4-mini",
-    display_name: "GPT-5.4 mini",
-    description: "低コスト・低レイテンシ",
+    display_name: "GPT-5.4-Mini",
+    description: "Small, fast, and cost-efficient coding model.",
+    effort_levels: ["low", "medium", "high", "xhigh"],
+    default_effort: "medium",
   },
 ];
 
