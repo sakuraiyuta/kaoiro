@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   CodexOptions,
   ThreadEvent,
@@ -173,6 +173,212 @@ describe("CodexHost", () => {
 
     expect(calls.resume).toEqual([null, "uuid-2"]);
     expect(calls.options[1]).toMatchObject({ model: "gpt-5.4-mini" });
+  });
+
+  it("実行中のsetModelは現turnを変えず次turnへpendingする", async () => {
+    const states: Envelope[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: (ThreadOptions | undefined)[] = [];
+    let turn = 0;
+    const client: CodexClientLike = {
+      startThread(options) {
+        calls.push(options);
+        return {
+          async runStreamed() {
+            async function* events(): AsyncGenerator<ThreadEvent> {
+              yield { type: "thread.started", thread_id: "boundary" };
+              yield { type: "turn.started" };
+              await gate;
+              yield usageEvent();
+            }
+            return { events: events() };
+          },
+        };
+      },
+      resumeThread(_id, options) {
+        calls.push(options);
+        return makeClient([[usageEvent()]]).client.startThread(options);
+      },
+    };
+    const host = new CodexHost(
+      { ...CONFIG, model: "gpt-5.6-terra" },
+      {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        modelSource: "config",
+        codexFactory: () => client,
+        now: () => "T",
+      },
+    );
+    const done = host.run("first");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await host.setModel("gpt-5.6-sol");
+    expect(calls[0]?.model).toBe("gpt-5.6-terra");
+    expect(states.at(-1)?.ext.pending_model).toBe("gpt-5.6-sol");
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(states.at(-1)?.ext.pending_model).toBe("gpt-5.6-sol");
+    await host.send("second");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    host.close();
+    await done;
+    expect(calls[1]?.model).toBe("gpt-5.6-sol");
+  });
+
+  it("switch成功でpendingをeffectiveへ確定しdriftから除外する", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([
+      [{ type: "thread.started", thread_id: "switch-ok" }, usageEvent()],
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(
+      { ...CONFIG, model: "gpt-5.6-terra", effort: "medium" },
+      {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        modelSource: "config",
+        effortSource: "config",
+        resumeSnapshot: {
+          model: "gpt-5.6-terra",
+          model_source: "config",
+          effort: "medium",
+          effort_source: "config",
+          sandbox: "workspace-write",
+          network_access: false,
+        },
+        codexFactory: () => client,
+        now: () => "T",
+      },
+    );
+    const done = host.run("first");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await host.setModel("gpt-5.6-sol");
+    expect(states.at(-1)?.ext).toMatchObject({
+      pending_model: "gpt-5.6-sol",
+      effective: { model: "gpt-5.6-terra" },
+    });
+    await host.send("second");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    host.close();
+    await done;
+    expect(states.at(-1)?.ext.pending_model).toBeUndefined();
+    expect(states.at(-1)?.ext.effective).toMatchObject({
+      model: "gpt-5.6-sol",
+    });
+    expect(
+      (states.at(-1)?.ext.resume_drift as { field: string }[]).some(
+        (entry) => entry.field === "model" || entry.field === "model_source",
+      ),
+    ).toBe(false);
+  });
+
+  it("switch失敗で1回error stampしlast-goodへrollbackする", async () => {
+    const states: Envelope[] = [];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: "switch-fail" }, usageEvent()],
+      [{ type: "turn.failed", error: { message: "400" } }],
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(
+      { ...CONFIG, model: "gpt-5.6-terra" },
+      {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        modelSource: "config",
+        codexFactory: () => client,
+        now: () => "T",
+      },
+    );
+    const done = host.run("first");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await host.setModel("not-entitled");
+    await host.send("second");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const errors = states.filter(
+      (state) => state.ext.switch_error !== undefined,
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.ext.switch_error).toEqual({
+      kind: "model",
+      requested: "not-entitled",
+      reason: "turn_failed",
+      rolled_back_to: "gpt-5.6-terra",
+    });
+    expect(errors[0]?.ext.pending_model).toBeUndefined();
+    expect(errors[0]?.ext.effective).toMatchObject({
+      model: "gpt-5.6-terra",
+    });
+    await host.send("third");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    host.close();
+    await done;
+    expect(calls.options[1]?.model).toBe("not-entitled");
+    expect(calls.options[2]?.model).toBe("gpt-5.6-terra");
+    expect(states.at(-1)?.ext.switch_error).toBeUndefined();
+  });
+
+  it("setEffortはpendingから成功turn後にeffectiveへ確定する", async () => {
+    const states: Envelope[] = [];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: "effort" }, usageEvent()],
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(
+      { ...CONFIG, model: "gpt-5.6-sol", effort: "low" },
+      {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        modelSource: "config",
+        effortSource: "config",
+        codexFactory: () => client,
+        now: () => "T",
+      },
+    );
+    const done = host.run("first");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await host.setEffort("high");
+    expect(states.at(-1)?.ext.pending_effort).toBe("high");
+    await host.send("second");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    host.close();
+    await done;
+    expect(calls.options[1]?.modelReasoningEffort).toBe("high");
+    expect(states.at(-1)?.ext.pending_effort).toBeUndefined();
+    expect(states.at(-1)?.ext.effective).toMatchObject({ effort: "high" });
+  });
+
+  it("新modelで無効なeffortを明示resetし既定値へ確定する", async () => {
+    const states: Envelope[] = [];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: "reset" }, usageEvent()],
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(
+      { ...CONFIG, model: "gpt-5.6-sol", effort: "ultra" },
+      {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        modelSource: "config",
+        effortSource: "config",
+        codexFactory: () => client,
+        now: () => "T",
+      },
+    );
+    const done = host.run("first");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await host.setModel("gpt-5.6-luna");
+    expect(states.at(-1)?.ext.effort_reset).toBe(true);
+    expect(states.at(-1)?.ext.pending_effort).toBeUndefined();
+    await host.send("second");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    host.close();
+    await done;
+    expect(calls.options[1]).not.toHaveProperty("modelReasoningEffort");
+    expect(states.at(-1)?.ext.effort_reset).toBeUndefined();
+    expect(states.at(-1)?.ext.effective).toMatchObject({ effort: "medium" });
   });
 
   it("account default の実効 model を rollout から解決して ext に載せる", async () => {
@@ -420,8 +626,61 @@ describe("CodexHost", () => {
     expect(first.ext?.session_capabilities).toEqual({
       supports_attachments: false,
       supports_user_input_dialog: true,
+      supports_model_switch: true,
+      supports_effort_switch: false,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
     });
+  });
+
+  it("active modelとcatalogからswitch capabilityをstampする", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([[usageEvent()]]);
+    const host = new CodexHost(
+      { ...CONFIG, model: "gpt-5.6-sol" },
+      {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        modelSource: "config",
+        codexFactory: () => client,
+        now: () => "T",
+      },
+    );
+    await runOneTurn(host, "hi");
+    expect(states[0]?.ext.session_capabilities).toMatchObject({
+      supports_model_switch: true,
+      supports_effort_switch: true,
+    });
+  });
+
+  it("空catalogではswitch capabilityをfail-closedする", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([[usageEvent()]]);
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          model: "gpt-5.6-sol",
+          codex_auth_mode: "unknown",
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          modelSource: "config",
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      await runOneTurn(host, "hi");
+      expect(states[0]?.ext.session_capabilities).toMatchObject({
+        supports_model_switch: false,
+        supports_effort_switch: false,
+      });
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });

@@ -29,6 +29,7 @@ export type {
   ResolvedSnapshotExt,
   ResumeDriftEntry,
   ResumeDriftExt,
+  SwitchErrorExt,
 } from "@kaoiro/protocol";
 
 /** SDKResultMessage.subtype (agent-sdk-events.md). */

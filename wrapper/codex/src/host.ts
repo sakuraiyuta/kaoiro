@@ -31,6 +31,7 @@ import type {
   PendingQuestionExt,
   PermissionMode,
   ResolvedSnapshotExt,
+  SwitchErrorExt,
   ToolDescriptor,
   WrapperConfig,
 } from "@kaoiro/agent-common";
@@ -111,8 +112,19 @@ export class CodexHost implements EngineAdapter {
   #machine: MachineState = initialMachineState();
   #sessionId: string | null = null;
   #model: string | null;
+  #modelPending: string | null = null;
+  #modelLastGood: string | null = null;
+  #modelLastGoodSource: ModelSource | null = null;
+  #modelRollbackPinned = false;
   #modelSource: ModelSource | null;
   #effort: string | null;
+  #effortPending: string | null = null;
+  #effortLastGood: string | null = null;
+  #effortLastGoodSource: ModelSource | null = null;
+  #effortResetPending = false;
+  #effortResetOnce = false;
+  #switchErrorOnce: SwitchErrorExt | null = null;
+  readonly #operatorSwitchedFields = new Set<keyof ResolvedSnapshotExt>();
   #effortSource: ModelSource | null;
   readonly #resumeSnapshot: ResolvedSnapshotExt | null;
   readonly #sandbox: NonNullable<WrapperConfig["sandbox"]>;
@@ -203,12 +215,25 @@ export class CodexHost implements EngineAdapter {
   async setModel(value: string): Promise<void> {
     // Applies from the next turn: each turn resumes the thread with fresh
     // ThreadOptions, so no live session state needs touching.
-    this.#model = value;
+    this.#modelPending = value;
+    this.#effortResetPending = false;
+    const model = this.#catalog.find((entry) => entry.value === value);
+    const effort = this.#effortPending ?? this.#effort;
+    if (
+      effort !== null &&
+      model?.effort_levels !== undefined &&
+      !model.effort_levels.includes(effort)
+    ) {
+      this.#effortPending = null;
+      this.#effortResetPending = true;
+      this.#effortResetOnce = true;
+    }
     this.#emitState(this.#machine.state);
   }
 
   async setEffort(level: string): Promise<void> {
-    this.#effort = level;
+    this.#effortPending = level;
+    this.#effortResetPending = false;
     this.#emitState(this.#machine.state);
   }
 
@@ -289,7 +314,11 @@ export class CodexHost implements EngineAdapter {
     }
   }
 
-  #threadOptions(): ThreadOptions {
+  #threadOptions(
+    modelPending: string | null,
+    effortPending: string | null,
+    effortReset: boolean,
+  ): ThreadOptions {
     const options: ThreadOptions = {
       sandboxMode: this.#sandbox,
       workingDirectory: this.#cwd,
@@ -298,11 +327,18 @@ export class CodexHost implements EngineAdapter {
     // A model observed from turn_context is display metadata, not an explicit
     // operator choice. Passing it back would silently pin later turns and
     // change the semantics of the account default.
-    if (this.#model !== null && this.#modelSource !== "default") {
-      options.model = this.#model;
+    const model = modelPending ?? this.#model;
+    if (
+      model !== null &&
+      (modelPending !== null ||
+        this.#modelSource !== "default" ||
+        this.#modelRollbackPinned)
+    ) {
+      options.model = model;
     }
-    if (this.#effort !== null) {
-      options.modelReasoningEffort = this.#effort as NonNullable<
+    const effort = effortPending ?? this.#effort;
+    if (!effortReset && effort !== null) {
+      options.modelReasoningEffort = effort as NonNullable<
         ThreadOptions["modelReasoningEffort"]
       >;
     }
@@ -313,10 +349,29 @@ export class CodexHost implements EngineAdapter {
   }
 
   async #runTurn(codex: CodexClientLike, text: string): Promise<void> {
+    const attempted = {
+      model: this.#modelPending,
+      effort: this.#effortPending,
+      effortReset: this.#effortResetPending,
+      reportedModel: null as string | null,
+    };
     const thread =
       this.#sessionId !== null
-        ? codex.resumeThread(this.#sessionId, this.#threadOptions())
-        : codex.startThread(this.#threadOptions());
+        ? codex.resumeThread(
+            this.#sessionId,
+            this.#threadOptions(
+              attempted.model,
+              attempted.effort,
+              attempted.effortReset,
+            ),
+          )
+        : codex.startThread(
+            this.#threadOptions(
+              attempted.model,
+              attempted.effort,
+              attempted.effortReset,
+            ),
+          );
     this.#abort = new AbortController();
     let finalText: string | null = null;
     let sawResult = false;
@@ -332,6 +387,7 @@ export class CodexHost implements EngineAdapter {
         }
         if (
           event.type === "turn.started" &&
+          attempted.model === null &&
           (this.#model === null || this.#modelSource === "default") &&
           this.#sessionId !== null
         ) {
@@ -339,8 +395,7 @@ export class CodexHost implements EngineAdapter {
             this.#sessionId,
           );
           if (model !== null) {
-            this.#model = model;
-            this.#modelSource = "default";
+            attempted.reportedModel = model;
           }
         }
         for (const entry of threadEventToLogs(event)) {
@@ -350,11 +405,13 @@ export class CodexHost implements EngineAdapter {
         if (last !== null) finalText = last;
         if (event.type === "turn.completed") {
           sawResult = true;
+          this.#finishTurn(true, attempted);
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
           });
         } else if (event.type === "turn.failed") {
           sawResult = true;
+          this.#finishTurn(false, attempted);
           this.#emitResult({ is_error: true });
         }
         for (const adapterEvent of threadEventToEvents(event)) {
@@ -365,12 +422,14 @@ export class CodexHost implements EngineAdapter {
         // Stream ended without a terminal turn event (abort, stream error
         // event, or process death): fold into the error path so the agent
         // never wedges in thinking/tool_running.
+        this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
       }
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
       if (!sawResult) {
+        this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
       }
@@ -379,6 +438,81 @@ export class CodexHost implements EngineAdapter {
       }
     } finally {
       this.#abort = null;
+    }
+  }
+
+  #finishTurn(
+    success: boolean,
+    attempted: {
+      model: string | null;
+      effort: string | null;
+      effortReset: boolean;
+      reportedModel: string | null;
+    },
+  ): void {
+    if (success) {
+      if (attempted.model !== null) {
+        this.#model = attempted.model;
+        this.#modelSource = "config";
+        this.#operatorSwitchedFields.add("model");
+        this.#operatorSwitchedFields.add("model_source");
+      } else if (attempted.reportedModel !== null) {
+        this.#model = attempted.reportedModel;
+        this.#modelSource = "default";
+      }
+      if (attempted.effort !== null) {
+        this.#effort = attempted.effort;
+        this.#effortSource = "config";
+        this.#operatorSwitchedFields.add("effort");
+        this.#operatorSwitchedFields.add("effort_source");
+      } else if (attempted.effortReset) {
+        const model = attempted.model ?? this.#model;
+        this.#effort =
+          this.#catalog.find((entry) => entry.value === model)
+            ?.default_effort ?? null;
+        this.#effortSource = "default";
+        this.#operatorSwitchedFields.add("effort");
+        this.#operatorSwitchedFields.add("effort_source");
+      }
+      this.#modelLastGood = this.#model;
+      this.#modelLastGoodSource = this.#modelSource;
+      this.#effortLastGood = this.#effort;
+      this.#effortLastGoodSource = this.#effortSource;
+      if (attempted.model !== null) this.#modelRollbackPinned = false;
+      if (this.#modelPending === attempted.model) this.#modelPending = null;
+      if (this.#effortPending === attempted.effort) this.#effortPending = null;
+      if (this.#effortResetPending === attempted.effortReset) {
+        this.#effortResetPending = false;
+      }
+      this.#switchErrorOnce = null;
+      return;
+    }
+
+    const kind = attempted.model !== null ? "model" : "effort";
+    const requested = attempted.model ?? attempted.effort;
+    if (requested !== null) {
+      const rolledBackTo =
+        kind === "model" ? this.#modelLastGood : this.#effortLastGood;
+      this.#switchErrorOnce = {
+        kind,
+        requested,
+        reason: "turn_failed",
+        ...(rolledBackTo === null ? {} : { rolled_back_to: rolledBackTo }),
+      };
+    }
+    if (requested !== null) {
+      this.#model = this.#modelLastGood;
+      this.#modelSource = this.#modelLastGoodSource;
+      this.#effort = this.#effortLastGood;
+      this.#effortSource = this.#effortLastGoodSource;
+      if (attempted.model !== null && this.#modelLastGood !== null) {
+        this.#modelRollbackPinned = true;
+      }
+    }
+    if (this.#modelPending === attempted.model) this.#modelPending = null;
+    if (this.#effortPending === attempted.effort) this.#effortPending = null;
+    if (this.#effortResetPending === attempted.effortReset) {
+      this.#effortResetPending = false;
     }
   }
 
@@ -392,11 +526,17 @@ export class CodexHost implements EngineAdapter {
 
   #emitState(state: KaoiroState): void {
     this.#options.onState(
-      makeStateChange(this.#config, state, this.#now(), {}, this.#statusExt()),
+      makeStateChange(
+        this.#config,
+        state,
+        this.#now(),
+        {},
+        this.#statusExt(true),
+      ),
     );
   }
 
-  #statusExt(): Record<string, unknown> {
+  #statusExt(consumeOneShot = false): Record<string, unknown> {
     const ext: Record<string, unknown> = {};
     ext.engine = "codex";
     // Effective resolved settings this run (ADR-0014 F1 追補, phase-15 D8).
@@ -414,7 +554,10 @@ export class CodexHost implements EngineAdapter {
     ext.effective = effective;
     if (this.#resumeSnapshot !== null) {
       ext.resume_snapshot = this.#resumeSnapshot;
-      ext.resume_drift = computeResumeDrift(this.#resumeSnapshot, effective);
+      ext.resume_drift = computeResumeDrift(
+        this.#resumeSnapshot,
+        effective,
+      ).filter((entry) => !this.#operatorSwitchedFields.has(entry.field));
     }
     // Session capabilities (ADR-0034 F1/F4, phase-15 15-14): advertised
     // from the first state_change onward (adapter-static values, no
@@ -437,9 +580,27 @@ export class CodexHost implements EngineAdapter {
     ext.session_capabilities = {
       supports_attachments: false,
       supports_user_input_dialog: true,
+      supports_model_switch: this.#catalog.length > 0,
+      supports_effort_switch:
+        (this.#catalog.find((entry) => entry.value === this.#model)
+          ?.effort_levels?.length ?? 0) > 0,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
     };
+    if (this.#modelPending !== null) {
+      ext.pending_model = this.#modelPending;
+    }
+    if (this.#effortPending !== null) {
+      ext.pending_effort = this.#effortPending;
+    }
+    if (this.#effortResetOnce) {
+      ext.effort_reset = true;
+      if (consumeOneShot) this.#effortResetOnce = false;
+    }
+    if (this.#switchErrorOnce !== null) {
+      ext.switch_error = this.#switchErrorOnce;
+      if (consumeOneShot) this.#switchErrorOnce = null;
+    }
     if (this.#model !== null) ext.model = this.#model;
     if (this.#modelSource !== null) ext.model_source = this.#modelSource;
     if (this.#effort !== null) ext.effort = this.#effort;

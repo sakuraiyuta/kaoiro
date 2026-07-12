@@ -77,6 +77,7 @@ export type {
   ResumeDriftEntry,
   ResumeDriftExt,
   SessionCapabilitiesExt,
+  SwitchErrorExt,
   WirePersona,
   WrapperConfig,
 } from "./types.js";
