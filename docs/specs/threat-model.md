@@ -97,6 +97,51 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 - MUST: セッション召喚時の JSONL メタ配信は operator role のみ。
 - SHOULD: operator トークンは viewer と分け、配布範囲を最小にする。
 
+### Session-reset control (`/new`・`/clear`、phase-17)
+
+`session_reset` は operator が agent の実行環境を強制再起動できる
+高権限操作(fresh wrapper spawn + 旧 session 放棄、model / effort /
+permission_mode / sandbox / network_access は phase-15 D8 の最終
+effective 値で再適用)。乱発は work-in-progress の喪失や DoS 相当に
+なり得るため、**6 段防御**で権限境界を守る
+([ADR-0036](../adr/0036-session-lifecycle-commands.md))。
+
+- **operator-only 検証**: `AgentsChannel.handle_in("session_reset", ...)`
+  の先頭で `require_operator/1`。viewer は forbidden。
+- **capability advertise**: `ext.session_capabilities.supports_session_reset`
+  - `session_reset_modes` を wrapper adapter が spawn 直後に stamp。
+  未 stamp / false / true+空 modes は fail-closed で dashboard の
+  Composer intercept が発火せず、server の relay も
+  `unsupported_session_reset` reject。engine 名判定を禁止して adapter
+  側の advertise を SSOT とする([ADR-0034](../adr/0034-session-capabilities-advertisement.md) F2 継承)。
+- **host binding (exact match)**: `RunnerChannel.session_reset_result` で
+  `AgentId.host_id_from(agent_id) == host_id` の完全一致を要求。
+  ADR-0024 D3 の `<host_id>.<rand>` allocation-inverse を厳格に
+  逆演算するため、host_id が dot を含む場合の **nested-prefix
+  spoof**(naive な `starts_with?` で通ってしまう別 host の
+  agent_id の詐称)を防ぐ。
+- **reserved_session_command reject**: 旧 / 外部 client が literal
+  `/new`・`/clear` を `send_instruction` に送ってきた場合、server 側
+  の handler の先頭で `reserved_session_command` として loud reject し、
+  engine に一度も渡さない(client-side intercept だけに頼らない多層
+  防御)。
+- **SessionResets pending lock**: `check_and_acquire/5` が単一
+  `handle_call` 内で lock 有無 + KaoiroState (`idle`/`waiting_input`)
+  - dispatch-cooldown を atomic に検証(ADR-0036 F6 の TOCTOU 芯)。
+  reset pending 中は instruction / set_model / set_effort /
+  set_permission_mode / **resume_session** をすべて
+  `session_reset_pending` で reject(2026-07-12 ε 実装時の race
+  分析で ADR-0036 F2 の列挙漏れとして resume_session を追加)。
+  2 秒の dispatch-cooldown は async state-report lag 保護 (instruction
+  dispatch と wrapper state_change 到達の race を塞ぐ)。
+- **viewer 情報境界**: `session_reset_started` / `session_reset_completed`
+  / `session_reset_failed` broadcast は `intercept` + `handle_out` で
+  operator-only。`session_boundary` envelope は viewer 側で payload を
+  `{"mode"}` のみに sanitize(request_id / previous_session_id /
+  to_session_id は viewer に不可視化、
+  [ADR-0021](../adr/0021-role-information-disclosure-policy.md) 継承 +
+  ADR-0036 F3)。
+
 ## Open Questions
 
 なし(監査ログ・マスキングは上表の通り将来項目)。

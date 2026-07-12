@@ -92,7 +92,11 @@ streaming queryとCodexのper-turn execで別実装になり、queue/pending too
 証明しにくい。runner supervisorをprocess lifecycleのSSOTとして再利用する。
 
 serverはreset開始時にagent単位の`session_reset_pending` lockを取り、後続の
-instruction、model/effort switch、重複resetを`session_reset_pending`で拒否する。
+instruction、model/effort switch、permission_mode switch、resume_session
+(switch_session)、重複resetを`session_reset_pending`で拒否する
+(**2026-07-12 ε 実装時の race 分析で resume_session の列挙漏れを検出し追補**、
+race 塞ぎとして `AgentsChannel.handle_in("resume_session")` にも
+`guard_against_reset_pending` を挿入)。
 runnerがfresh wrapperの接続を確認した時だけ`session_reset_completed`をbroadcastし、
 lockを解放する。Codexのthread/rollout IDが最初のturnまで採番されない場合、fresh
 wrapper接続を「context reset成立」としてcompletionし、`to_session_id`はnullableで

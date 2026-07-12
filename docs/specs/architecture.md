@@ -128,7 +128,8 @@ flowchart LR
 | 概念 | OTP/Phoenix での実体 |
 |---|---|
 | 接続ごとの分離 | 接続ごとに 1 channel プロセス(Phoenix 管理) |
-| エージェント状態保持 | 単一 `AgentStates` GenServer(`agent_id → 最新エンベロープ` のマップ、owner pid で再接続レース防止) |
+| エージェント状態保持 | 単一 `AgentStates` GenServer(`agent_id → 最新エンベロープ` のマップ、owner pid で再接続レース防止)。phase-17 17-7 で `session_boundary` marker envelope の history append と、Codex lazy 采番用の `pending_boundary_patch` stash を追加 |
+| session-reset ライフサイクル | 単一 `SessionResets` GenServer(in-memory)。`check_and_acquire/5` が lock + KaoiroState + dispatch-cooldown を単一 handle_call で atomic 検証 (ADR-0036 F6 TOCTOU 芯)、`resolve/6` が runner の spawn 結果を `:spawning → :awaiting_connect` に遷移、`confirm_connection/2` が fresh wrapper の `WrapperChannel.after_join` からの発火で `session_reset_completed` broadcast と `SessionPointers.detach_session/1` を実行 (F2 「接続確認した時だけ」の two-phase completion) |
 | 障害隔離・再起動 | Supervisor 配下に配置 |
 | 状態の fan-out | Phoenix.PubSub |
 | クライアント realtime 配信 | Phoenix Channels(または LiveView) |
