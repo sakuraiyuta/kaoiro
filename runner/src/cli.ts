@@ -25,7 +25,9 @@ async function main(): Promise<void> {
   // Detection fails closed internally and never relays doctor output, which
   // may contain credential-presence details alongside the auth mode.
   const codexEnabled = config.capabilities?.includes("codex") ?? true;
-  if (codexEnabled) await detectCodexAuthMode();
+  const codexAuthMode = codexEnabled
+    ? await detectCodexAuthMode()
+    : "unknown";
 
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
@@ -35,6 +37,10 @@ async function main(): Promise<void> {
     cwdAllowlist: config.cwd_allowlist,
     launch: makeLauncher(),
     wrapperServerUrl: wrapperUrlFrom(config.server_url),
+    codexAuthMode,
+    ...(config.codex?.chatgpt_plan === undefined
+      ? {}
+      : { codexChatgptPlan: config.codex.chatgpt_plan }),
     sendResult: (result) => link.sendSpawnResult(result),
     sendSessions: (sessions) => link.sendSessions(sessions),
     sendResetResult: (result) => link.sendResetResult(result),
@@ -42,7 +48,7 @@ async function main(): Promise<void> {
 
   link = new RunnerLink(config.server_url, config.host_id, {
     ...(token === undefined || token === "" ? {} : { token }),
-    register: buildRegister(config),
+    register: buildRegister(config, codexAuthMode),
     heartbeatMs: HEARTBEAT_MS,
     onSpawn: (payload) => supervisor.handleSpawn(payload),
     onStop: (payload) => supervisor.handleStop(payload),

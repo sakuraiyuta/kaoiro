@@ -10,7 +10,8 @@ export {
   threadEventToSessionId,
   threadEventToUsage,
 } from "./adapter.js";
-export { CODEX_ENGINE, CODEX_MODELS } from "./catalog.js";
+export { CODEX_ENGINE, resolveCodexCatalog } from "./catalog.js";
+export type { ChatGptPlan, CodexAuthMode } from "./catalog.js";
 export { CodexHost } from "./host.js";
 export type {
   CodexClientLike,

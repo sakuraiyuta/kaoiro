@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
+import type { CodexAuthMode as CatalogAuthMode } from "@kaoiro/codex";
 
-export type CodexAuthMode = "chatgpt" | "apikey" | "unknown";
+export type CodexAuthMode = CatalogAuthMode;
 
 interface DoctorResult {
   stdout: string;

@@ -222,6 +222,21 @@ describe("buildRegister", () => {
     expect(buildRegister(config).allowed_personas).toEqual(["ao", "kuroe"]);
   });
 
+  it("検出auth modeと申告planからCodex catalogを解決する", () => {
+    const config = parseRunnerConfig({
+      ...valid,
+      codex: { chatgpt_plan: "plus" },
+    });
+    const codex = buildRegister(config, "chatgpt").engines?.find(
+      (engine) => engine.id === "codex",
+    );
+    expect(codex?.models.map((model) => model.value)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ]);
+  });
+
   it("blocked_personas を register に含める", () => {
     const config = parseRunnerConfig({
       ...valid,

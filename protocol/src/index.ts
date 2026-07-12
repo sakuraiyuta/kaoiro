@@ -93,6 +93,16 @@ export interface WrapperConfig {
   model?: string;
   /** Launch-time effort pick relayed from SpawnMessage. */
   effort?: string;
+  /** Runner-detected Codex auth context used to resolve the adapter catalog. */
+  codex_auth_mode?: "chatgpt" | "apikey" | "unknown";
+  /** Operator-declared ChatGPT plan. Ignored under API-key auth. */
+  codex_chatgpt_plan?:
+    | "free"
+    | "go"
+    | "plus"
+    | "pro"
+    | "business"
+    | "enterprise";
   /** Codex-only OS sandbox axis (ADR-0033 F3); Claude ignores it.
    *  Omitted = "workspace-write". */
   sandbox?: PermissionAxesExt["sandbox"];

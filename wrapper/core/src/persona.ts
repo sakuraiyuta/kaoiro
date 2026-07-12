@@ -156,6 +156,32 @@ export function parseConfig(raw: unknown): WrapperConfig {
   if (raw.effort !== undefined) {
     config.effort = nonEmptyString(raw.effort, "effort");
   }
+  if (
+    raw.codex_auth_mode === "chatgpt" ||
+    raw.codex_auth_mode === "apikey" ||
+    raw.codex_auth_mode === "unknown"
+  ) {
+    config.codex_auth_mode = raw.codex_auth_mode;
+  } else if (raw.codex_auth_mode !== undefined) {
+    throw new ConfigError(
+      "codex_auth_mode must be one of: chatgpt, apikey, unknown",
+    );
+  }
+  if (
+    raw.codex_chatgpt_plan === "free" ||
+    raw.codex_chatgpt_plan === "go" ||
+    raw.codex_chatgpt_plan === "plus" ||
+    raw.codex_chatgpt_plan === "pro" ||
+    raw.codex_chatgpt_plan === "business" ||
+    raw.codex_chatgpt_plan === "enterprise"
+  ) {
+    config.codex_chatgpt_plan = raw.codex_chatgpt_plan;
+  } else if (raw.codex_chatgpt_plan !== undefined) {
+    throw new ConfigError(
+      "codex_chatgpt_plan must be one of: free, go, plus, pro, " +
+        "business, enterprise",
+    );
+  }
 
   // Codex-only launch permission (ADR-0033 F3); the Claude engine ignores
   // both. The sandbox axis is a closed enum.

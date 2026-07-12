@@ -19,6 +19,8 @@ import type {
   WirePersona,
   WrapperConfig,
 } from "@kaoiro/protocol";
+import type { CodexAuthMode } from "./codex-auth.js";
+import type { ChatGptPlan } from "./config.js";
 import {
   listSessions as defaultListSessions,
   sessionExists as defaultSessionExists,
@@ -94,6 +96,8 @@ export interface SupervisorOptions {
    *  Required under ADR-0029: the wrapper's server_url is mandatory, so a
    *  spawn without an explicit value must still get one. */
   wrapperServerUrl: string;
+  codexAuthMode?: CodexAuthMode;
+  codexChatgptPlan?: ChatGptPlan;
   sendResult: (result: SpawnResult) => void;
   sendSessions: (sessions: RunnerSessions) => void;
   /** phase-17 17-5: report a session-reset outcome (ADR-0036 F7). Required
@@ -243,6 +247,8 @@ export function resolveWrapperConfig(
   agentId: string,
   parsed: ParsedSpawn,
   fallbackServerUrl: string,
+  codexAuthMode?: CodexAuthMode,
+  codexChatgptPlan?: ChatGptPlan,
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
@@ -254,6 +260,12 @@ export function resolveWrapperConfig(
   // fields that are not theirs (sandbox on Claude, permission_mode on codex).
   if (parsed.model !== undefined) config.model = parsed.model;
   if (parsed.effort !== undefined) config.effort = parsed.effort;
+  if (parsed.engine === "codex") {
+    if (codexAuthMode !== undefined) config.codex_auth_mode = codexAuthMode;
+    if (codexChatgptPlan !== undefined) {
+      config.codex_chatgpt_plan = codexChatgptPlan;
+    }
+  }
   if (parsed.permissionMode !== undefined) {
     config.permission_mode = parsed.permissionMode;
   }
@@ -325,6 +337,8 @@ export class Supervisor {
   ) => boolean;
   readonly #now: () => number;
   readonly #wrapperServerUrl: string;
+  readonly #codexAuthMode: CodexAuthMode | undefined;
+  readonly #codexChatgptPlan: ChatGptPlan | undefined;
   readonly #children = new Map<string, ChildEntry>();
   /** session_ids currently being resumed — the F4 local lock against a second
    *  concurrent resume of the same session. */
@@ -341,6 +355,8 @@ export class Supervisor {
     this.#sessionExists = options.sessionExists ?? defaultSessionExists;
     this.#now = options.now ?? (() => Date.now());
     this.#wrapperServerUrl = options.wrapperServerUrl;
+    this.#codexAuthMode = options.codexAuthMode;
+    this.#codexChatgptPlan = options.codexChatgptPlan;
   }
 
   /** Handles a server `spawn`: validates, enforces the cwd allow-list, the
@@ -620,7 +636,13 @@ export class Supervisor {
   #start(agentId: string, parsed: ParsedSpawn): void {
     const child = this.#launch(
       agentId,
-      resolveWrapperConfig(agentId, parsed, this.#wrapperServerUrl),
+      resolveWrapperConfig(
+        agentId,
+        parsed,
+        this.#wrapperServerUrl,
+        this.#codexAuthMode,
+        this.#codexChatgptPlan,
+      ),
       parsed.cwd,
       parsed.resumeSessionId,
       parsed.initialPrompt,
@@ -697,7 +719,13 @@ export class Supervisor {
       // agent comes back idle and awaits the next instruction.
       child = this.#launch(
         agentId,
-        resolveWrapperConfig(agentId, entry.parsed, this.#wrapperServerUrl),
+        resolveWrapperConfig(
+          agentId,
+          entry.parsed,
+          this.#wrapperServerUrl,
+          this.#codexAuthMode,
+          this.#codexChatgptPlan,
+        ),
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
         undefined,
@@ -735,7 +763,13 @@ export class Supervisor {
     try {
       child = this.#launch(
         agentId,
-        resolveWrapperConfig(agentId, entry.parsed, this.#wrapperServerUrl),
+        resolveWrapperConfig(
+          agentId,
+          entry.parsed,
+          this.#wrapperServerUrl,
+          this.#codexAuthMode,
+          this.#codexChatgptPlan,
+        ),
         entry.parsed.cwd,
         undefined, // fresh: no --resume
         undefined, // no initial prompt
@@ -823,7 +857,13 @@ export class Supervisor {
     try {
       child = this.#launch(
         agentId,
-        resolveWrapperConfig(agentId, entry.parsed, this.#wrapperServerUrl),
+        resolveWrapperConfig(
+          agentId,
+          entry.parsed,
+          this.#wrapperServerUrl,
+          this.#codexAuthMode,
+          this.#codexChatgptPlan,
+        ),
         entry.parsed.cwd,
         rollbackSid,
         undefined,

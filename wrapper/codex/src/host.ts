@@ -41,7 +41,7 @@ import {
   threadEventToLogs,
   threadEventToSessionId,
 } from "./adapter.js";
-import { CODEX_MODELS } from "./catalog.js";
+import { resolveCodexCatalog } from "./catalog.js";
 import { resolveCodexModel } from "./rollout.js";
 import { ToolHost } from "./toolhost.js";
 
@@ -118,6 +118,7 @@ export class CodexHost implements EngineAdapter {
   readonly #sandbox: NonNullable<WrapperConfig["sandbox"]>;
   readonly #networkAccess: boolean;
   readonly #cwd: string = process.cwd();
+  readonly #catalog: ReturnType<typeof resolveCodexCatalog>;
   #pendingPermission: PendingPermissionExt | null = null;
   #pendingQuestion: PendingQuestionExt | null = null;
   /** Queued operator instructions; #wake resolves the run loop's wait. */
@@ -139,6 +140,10 @@ export class CodexHost implements EngineAdapter {
     this.#resumeSnapshot = options.resumeSnapshot ?? null;
     this.#sandbox = config.sandbox ?? "workspace-write";
     this.#networkAccess = config.network_access ?? false;
+    this.#catalog = resolveCodexCatalog(
+      config.codex_auth_mode ?? "unknown",
+      config.codex_chatgpt_plan,
+    );
     this.#sessionId = options.resumeSessionId ?? null;
   }
 
@@ -442,7 +447,7 @@ export class CodexHost implements EngineAdapter {
     ext.cwd = this.#cwd;
     // Only publish a model catalog when one exists (currently empty for
     // codex — the account default is used, see catalog.ts).
-    if (CODEX_MODELS.length > 0) ext.models = CODEX_MODELS;
+    if (this.#catalog.length > 0) ext.models = this.#catalog;
     // Launch-fixed two-axis posture (ADR-0033 F1/F3). No permission_mode
     // twin: that field is the Claude-mode legacy and never applied here.
     ext.permission = { sandbox: this.#sandbox, approval: "never" };

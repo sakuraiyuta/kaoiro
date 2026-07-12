@@ -104,6 +104,28 @@ describe("parseConfig", () => {
     );
   });
 
+  it("Codex catalog contextを受け入れる", () => {
+    expect(
+      parseConfig({
+        ...valid,
+        codex_auth_mode: "chatgpt",
+        codex_chatgpt_plan: "plus",
+      }),
+    ).toMatchObject({
+      codex_auth_mode: "chatgpt",
+      codex_chatgpt_plan: "plus",
+    });
+  });
+
+  it("未知のCodex catalog contextを弾く", () => {
+    expect(() =>
+      parseConfig({ ...valid, codex_auth_mode: "oauth" }),
+    ).toThrow(ConfigError);
+    expect(() =>
+      parseConfig({ ...valid, codex_chatgpt_plan: "team" }),
+    ).toThrow(ConfigError);
+  });
+
   it("permission_timeout_ms は正の整数のみ受け入れる", () => {
     expect(
       parseConfig({ ...valid, permission_timeout_ms: 1000 }),

@@ -139,6 +139,20 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     });
     expect("allowed_tools" in config).toBe(false);
   });
+  it("Codex auth contextをwrapper configへ載せる", () => {
+    const parsed = parseSpawn({ ...spawnMsg, engine: "codex" })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.codex-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+      "chatgpt",
+      "plus",
+    );
+    expect(config).toMatchObject({
+      codex_auth_mode: "chatgpt",
+      codex_chatgpt_plan: "plus",
+    });
+  });
   it("server_url 省略を許す(案A: runner が補完)", () => {
     const { server_url: _omit, ...rest } = spawnMsg;
     void _omit;

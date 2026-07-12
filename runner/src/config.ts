@@ -5,7 +5,8 @@
 // the env (KAOIRO_RUNNER_TOKEN).
 
 import { readFileSync } from "node:fs";
-import { CODEX_MODELS } from "@kaoiro/codex";
+import { resolveCodexCatalog } from "@kaoiro/codex";
+import type { CodexAuthMode } from "./codex-auth.js";
 import type {
   EngineCatalogEntry,
   EngineKind,
@@ -272,19 +273,26 @@ export function effectiveCapabilities(config: RunnerConfig): string[] {
  *  Persona trust is expressed by the same field shape the file used
  *  (ADR-0031: allowlist / blocklist / accept-all), so the server can gate
  *  spawn without a separate mode enum on the wire. `engines` carries the
- *  launch catalog per capability (ADR-0032 F4bc): both engines advertise
- *  empty models today. codex is empty by design — ChatGPT-plan auth rejects
- *  explicit model IDs (400/404) and the allowed set is not enumerable from
- *  the SDK (2026-07-11 実機検証、旧 Q5 close); claude-code's list surfaces
- *  post-spawn via ext.models (#54). */
-export function buildRegister(config: RunnerConfig): RunnerRegister {
+ *  launch catalog per capability (ADR-0032 F4bc). Claude's list surfaces
+ *  post-spawn via ext.models (#54); Codex resolves its curated list from
+ *  the detected auth mode and operator-declared ChatGPT plan (ADR-0035). */
+export function buildRegister(
+  config: RunnerConfig,
+  codexAuthMode: CodexAuthMode = "unknown",
+): RunnerRegister {
   const capabilities = effectiveCapabilities(config);
   const engines: EngineCatalogEntry[] = [];
   if (capabilities.includes("claude-code")) {
     engines.push({ id: "claude-code", models: [] });
   }
   if (capabilities.includes("codex")) {
-    engines.push({ id: "codex", models: CODEX_MODELS });
+    engines.push({
+      id: "codex",
+      models: resolveCodexCatalog(
+        codexAuthMode,
+        config.codex?.chatgpt_plan,
+      ),
+    });
   }
   return {
     version: "0",

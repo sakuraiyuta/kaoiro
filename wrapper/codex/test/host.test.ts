@@ -16,6 +16,8 @@ const CONFIG: WrapperConfig = {
   agent_id: "host-1.codex-a",
   persona: { id: "kuroe", name: "クロエ", sprite_set: "kuroe" },
   server_url: "ws://localhost:4000/wrapper",
+  codex_auth_mode: "chatgpt",
+  codex_chatgpt_plan: "plus",
 };
 
 function usageEvent(): ThreadEvent {
@@ -95,7 +97,13 @@ describe("CodexHost", () => {
       ],
     ]);
     const host = new CodexHost(
-      { ...CONFIG, sandbox: "read-only", model: "gpt-5.6-sol" },
+      {
+        ...CONFIG,
+        sandbox: "read-only",
+        model: "gpt-5.6-sol",
+        codex_auth_mode: "chatgpt",
+        codex_chatgpt_plan: "plus",
+      },
       {
         onState: (e) => states.push(e),
         onLog: (e) => logs.push(e),
@@ -121,14 +129,18 @@ describe("CodexHost", () => {
       "done",
       "waiting_input",
     ]);
-    // ext: engine / permission 二軸。model は config で明示指定した値を透過
-    // (host は catalog 照合しない)。ext.models は catalog が空のため省かれる。
+    // ext: engine / permission 二軸。model は config で明示指定した値を透過。
+    // models は runner register と同じ resolver の出力を使う。
     expect(states.at(-1)?.ext).toMatchObject({
       engine: "codex",
       permission: { sandbox: "read-only", approval: "never" },
       model: "gpt-5.6-sol",
     });
-    expect(states.at(-1)?.ext.models).toBeUndefined();
+    expect(
+      (states.at(-1)?.ext.models as { value: string }[]).map(
+        (model) => model.value,
+      ),
+    ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
     // result envelope: 最後の agent_message が最終応答
     const result = logs.find((e) => e.type === "result");
     expect(result?.payload).toMatchObject({ text: "了解しました" });
