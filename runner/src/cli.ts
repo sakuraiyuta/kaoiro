@@ -8,6 +8,7 @@
 //   KAOIRO_RUNNER_TOKEN (unset = the server's runner auth is disabled, dev).
 
 import { parseRunnerArgs } from "./args.js";
+import { detectCodexAuthMode } from "./codex-auth.js";
 import { buildRegister, loadRunnerConfig, wrapperUrlFrom } from "./config.js";
 import { makeLauncher } from "./spawn.js";
 import { Supervisor } from "./supervisor.js";
@@ -16,10 +17,15 @@ import { RunnerLink } from "./transport.js";
 /** Liveness ping cadence; matches the phoenix transport heartbeat default. */
 const HEARTBEAT_MS = 30_000;
 
-function main(): void {
+async function main(): Promise<void> {
   const { configPath } = parseRunnerArgs(process.argv.slice(2));
   const config = loadRunnerConfig(configPath);
   const token = process.env.KAOIRO_RUNNER_TOKEN;
+
+  // Detection fails closed internally and never relays doctor output, which
+  // may contain credential-presence details alongside the auth mode.
+  const codexEnabled = config.capabilities?.includes("codex") ?? true;
+  if (codexEnabled) await detectCodexAuthMode();
 
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
@@ -64,4 +70,4 @@ function main(): void {
   process.on("SIGTERM", shutdown);
 }
 
-main();
+void main();

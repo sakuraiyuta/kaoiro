@@ -1,6 +1,8 @@
 // Public surface of @kaoiro/runner.
 
 export type { ChatGptPlan, CodexConfig, RunnerConfig } from "./config.js";
+export type { CodexAuthMode } from "./codex-auth.js";
+export { detectCodexAuthMode, parseCodexAuthMode } from "./codex-auth.js";
 export {
   ConfigError,
   buildHeartbeat,
