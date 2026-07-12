@@ -138,6 +138,16 @@ export function engineFrom(envelope: Envelope): string | null {
   return typeof raw === "string" && raw !== "" ? raw : null;
 }
 
+/** Reads ext.model_source (ADR-0032 F4bc addendum, phase-15 D1), or null
+ *  when absent. Values are the resolution origin the wrapper stamped:
+ *  "launch" | "env" | "config" | "default". UI reads this — NOT ext.engine —
+ *  to tell whether the wrapper is on the engine's own default model
+ *  (source="default") vs an explicit operator pick. */
+export function modelSourceFrom(envelope: Envelope): string | null {
+  const raw = envelope.ext?.model_source;
+  return typeof raw === "string" && raw !== "" ? raw : null;
+}
+
 /** Claude mode -> two-axis display annotation (ADR-0033 F2/F4: the picker
  *  stays engine-native, each option annotated with its two-axis reading).
  *  Mirrors the wrapper's PERMISSION_MODE_AXES table. */

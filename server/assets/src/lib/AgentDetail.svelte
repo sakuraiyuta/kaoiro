@@ -10,6 +10,7 @@
     interAgentMessageOf,
     logOf,
     modelsFrom,
+    modelSourceFrom,
     pendingPermissionFrom,
     pendingQuestionFrom,
     permissionFrom,
@@ -312,6 +313,13 @@
   const agentEngine = $derived(engineFrom(envelope));
   const permAxes = $derived(permissionFrom(envelope));
   const isCodexAgent = $derived(agentEngine === "codex");
+  // ADR-0032 F4bc addendum (phase-15 D1): "account default" labelling is
+  // driven by ext.model_source === "default", NOT by engine name. Any engine
+  // whose wrapper reports the SDK's own default hits this branch — including
+  // Claude when no explicit pick was made — so the label survives future
+  // engines the dashboard hasn't been taught about.
+  const modelSource = $derived(modelSourceFrom(envelope));
+  const isAccountDefault = $derived(modelSource === "default");
   const ccContext = $derived(
     envelope.ext?.context as Record<string, unknown> | undefined,
   );
@@ -1209,7 +1217,7 @@
         <!-- Claude Code status meta (#16): mirrors the local statusline's
              model / ctx / 5h / 7d segments for this agent. -->
         <dl class="cc">
-          {#if modelLabel || isCodexAgent}
+          {#if modelLabel || isAccountDefault}
             <div class="cc-row">
               <dt>model</dt>
               <dd>
