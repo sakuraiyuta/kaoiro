@@ -106,6 +106,20 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blo
 - **rollback 経路の人為的 spawn 失敗試験**: ε 完走後の検収では含めず、
   将来 followup で
 
+## 実地検収記録 (2026-07-12、マスター + director で実施 → phase close)
+
+- **/new・/clear のハッピー経路: 確認 OK** (マスター実操作、Codex agent もも
+  ほかで両 mode の boundary marker / fresh session 開始を確認)。
+- **検収中の finding**: live-agent の左ペイン「別のセッションから再開…」が
+  runner の T3 再検証 (`supervisor.ts:457` `#sessionExists`) で失敗
+  (Codex で再現、起動 UI の restore 経路は正常) →
+  [#104](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/104)
+  (bug / priority-medium) として起票、本 phase の外で対応。
+- **拒否経路 / viewer 境界の実操作検収**: 実稼働で問題が出た時に対応と
+  マスター判断 (unit test では全経路カバー済み)。
+- **マスター決定: phase-17 はこれで close。以後の修正は別 issue / plan を
+  起こして対応する。**
+
 ## See Also
 
 - Decision: [ADR-0036](../adr/0036-session-lifecycle-commands.md)
