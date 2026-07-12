@@ -297,13 +297,15 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp maybe_patch_boundary_to_session_id(_envelope, _agent_id), do: :ok
 
-  # Snapshot ingest (ADR-0014 F1 追補, phase-15 D8): the wrapper stamps
-  # ext.effective on every state_change; the server captures it into the
-  # agent-scoped snapshot so a later resume can hand it back on the spawn
-  # message. Loose shape check — the wrapper is the SoT for what a valid
-  # snapshot looks like; server side just persists the map verbatim.
-  defp record_snapshot_from_ext(agent_id, %{"ext" => %{"effective" => effective}})
-       when is_map(effective) do
+  # Pending and failed switches carry the prior effective value for display,
+  # but are not a commit point. Skipping them keeps the persisted snapshot at
+  # the last turn that completed without an outstanding switch (ADR-0035 F3).
+  defp record_snapshot_from_ext(agent_id, %{
+         "ext" => %{"effective" => effective} = ext
+       })
+       when is_map(effective) and not is_map_key(ext, "switch_error") and
+              not is_map_key(ext, "pending_model") and
+              not is_map_key(ext, "pending_effort") do
     SessionPointers.record_snapshot(agent_id, effective)
   end
 

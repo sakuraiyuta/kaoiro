@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.SessionPointers
 
   defp envelope(agent_id, state) do
     %{
@@ -27,6 +28,13 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       )
 
     socket
+  end
+
+  defp seed_snapshot(agent_id, model) do
+    SessionPointers.record(agent_id, "seed-session", "/workspace", :codex)
+    SessionPointers.record_snapshot(agent_id, %{"model" => model})
+    _ = :sys.get_state(SessionPointers)
+    :ok
   end
 
   test "envelope を受けて agents:lobby へ中継し最新状態を保持する" do
@@ -285,6 +293,68 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok
 
       assert KaoiroServer.SessionPointers.get(agent_id) == nil
+    end
+  end
+
+  describe "成功 effective snapshot の永続 (ADR-0035 F3)" do
+    test "pending/errorなしのeffectiveをsnapshotへ記録する" do
+      agent_id = "test.snapshot-success"
+      socket = join_wrapper(agent_id)
+
+      env =
+        envelope(agent_id, "waiting_input")
+        |> Map.put("session_id", "sess-success")
+        |> Map.put("ext", %{
+          "effective" => %{"model" => "gpt-5.6-sol", "effort" => "low"}
+        })
+
+      ref = push(socket, "envelope", env)
+      assert_reply ref, :ok
+
+      assert %{snapshot: snapshot} = KaoiroServer.SessionPointers.get(agent_id)
+      assert snapshot == %{"model" => "gpt-5.6-sol", "effort" => "low"}
+    end
+
+    test "switch_error付きstate_changeは既存snapshotを更新しない" do
+      agent_id = "test.snapshot-failure"
+      socket = join_wrapper(agent_id)
+      seed_snapshot(agent_id, "gpt-5.6-terra")
+
+      env =
+        envelope(agent_id, "error")
+        |> Map.put("ext", %{
+          "effective" => %{"model" => "not-entitled"},
+          "switch_error" => %{
+            "kind" => "model",
+            "requested" => "not-entitled",
+            "reason" => "turn_failed",
+            "rolled_back_to" => "gpt-5.6-terra"
+          }
+        })
+
+      ref = push(socket, "envelope", env)
+      assert_reply ref, :ok
+
+      assert %{snapshot: %{"model" => "gpt-5.6-terra"}} =
+               KaoiroServer.SessionPointers.get(agent_id)
+    end
+
+    test "pending model/effort付きstate_changeは既存snapshotを更新しない" do
+      agent_id = "test.snapshot-pending"
+      socket = join_wrapper(agent_id)
+      seed_snapshot(agent_id, "gpt-5.6-terra")
+
+      for pending <- [
+            %{"pending_model" => "gpt-5.6-sol"},
+            %{"pending_effort" => "high"}
+          ] do
+        ext = Map.put(pending, "effective", %{"model" => "pending-value"})
+        ref = push(socket, "envelope", Map.put(envelope(agent_id, "idle"), "ext", ext))
+        assert_reply ref, :ok
+      end
+
+      assert %{snapshot: %{"model" => "gpt-5.6-terra"}} =
+               KaoiroServer.SessionPointers.get(agent_id)
     end
   end
 
