@@ -2215,7 +2215,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     defp maybe_put_session_id(envelope, nil), do: envelope
     defp maybe_put_session_id(envelope, sid), do: Map.put(envelope, "session_id", sid)
 
-    test "operator + capability=true + idle は started broadcast + runner へ reset_session push" do
+    test "operator + capability=true + idle は started broadcast + runner へ reset_session push (previous_session_id 込み)" do
       agent_id = "sess-reset.happy"
       put_agent_with_caps(agent_id)
       @endpoint.subscribe("runner:sess-reset")
@@ -2235,13 +2235,30 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert String.starts_with?(request_id, "rs_")
 
+      # phase-17 17-5 must-1: reset_session payload には detach 前の
+      # session_id (AgentStates snapshot 由来) を previous_session_id で
+      # 載せる。runner の rollback branch がこの値を使う。
       assert_broadcast "reset_session",
                        %{
                          "agent_id" => ^agent_id,
                          "mode" => "new",
                          "request_id" => ^request_id,
-                         "version" => "0"
+                         "version" => "0",
+                         "previous_session_id" => "sess-prev"
                        }
+    end
+
+    test "envelope に session_id が無ければ reset_session payload に previous_session_id を載せない" do
+      agent_id = "sess-reset.no-prev"
+      put_agent_with_caps(agent_id, session_id: nil)
+      @endpoint.subscribe("runner:sess-reset")
+      socket = join_as(:operator)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref, :ok
+
+      assert_broadcast "reset_session", %{"agent_id" => ^agent_id} = payload
+      refute Map.has_key?(payload, "previous_session_id")
     end
 
     test "viewer は forbidden" do

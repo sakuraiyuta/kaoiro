@@ -31,6 +31,7 @@ function main(): void {
     wrapperServerUrl: wrapperUrlFrom(config.server_url),
     sendResult: (result) => link.sendSpawnResult(result),
     sendSessions: (sessions) => link.sendSessions(sessions),
+    sendResetResult: (result) => link.sendResetResult(result),
   });
 
   link = new RunnerLink(config.server_url, config.host_id, {
@@ -42,6 +43,7 @@ function main(): void {
     onRestart: (payload) => supervisor.handleRestart(payload),
     onEnumerateSessions: (payload) => supervisor.handleEnumerate(payload),
     onSwitchSession: (payload) => supervisor.handleSwitchSession(payload),
+    onResetSession: (payload) => supervisor.handleResetSession(payload),
   });
 
   process.stderr.write(

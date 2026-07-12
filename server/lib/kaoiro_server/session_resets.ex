@@ -1,13 +1,36 @@
 defmodule KaoiroServer.SessionResets do
   @moduledoc """
-  Session-reset pending-lock SSOT (ADR-0036 F6/F7, phase-17 17-4). Owns
-  the per-agent lock that blocks a second `/new`・`/clear` from racing
-  a first, blocks new instructions / model / effort / permission_mode
-  switches while a reset is in flight, and gates a reset against a
-  just-dispatched instruction whose `thinking` state_change has not yet
-  reached AgentStates.
+  Session-reset pending-lock SSOT (ADR-0036 F6/F7, phase-17 17-4/17-5).
+  Owns the per-agent lock that blocks a second `/new`・`/clear` from
+  racing a first, blocks new instructions / model / effort /
+  permission_mode switches while a reset is in flight, and gates a reset
+  against a just-dispatched instruction whose `thinking` state_change
+  has not yet reached AgentStates.
 
-  Two concurrency windows are closed here in a single GenServer:
+  ## Two-phase completion (ADR-0036 F2 "接続確認")
+
+  The lock has a `phase` — `:spawning` initially, `:awaiting_connect`
+  after the runner reports `ok=true`, cleared on connect / failure /
+  timeout. This exists because `runner.ok=true` only means "the fresh
+  child process spawned"; if the wrapper dies before its socket join
+  we would broadcast `session_reset_completed` for an agent that no
+  longer exists. The completion is gated on the fresh wrapper's actual
+  channel join (`WrapperChannel.after_join`), not on the runner report.
+
+  * `check_and_acquire/5` → `:spawning`. Server broadcasts
+    `session_reset_started`, runner is told to fresh-relaunch.
+  * `mark_spawn_ok/3` → `:awaiting_connect`. Runner has confirmed the
+    fresh child spawned; we still wait for the wrapper to join.
+  * `confirm_connection/2` → completed. Fresh wrapper joined; detach the
+    pointer and broadcast `session_reset_completed`.
+  * `resolve_failure/3` (formerly `resolve/6` on the failure branch) or
+    the 60 s timeout → `session_reset_failed`, no detach.
+
+  Runners still call `resolve/6` — the existing wire — and this module
+  routes `ok=true` into `mark_spawn_ok` internally so the runner protocol
+  does not need a second RPC.
+
+  ## Two concurrency windows
 
   * **TOCTOU between check and acquire.** `check_and_acquire/5` runs the
     lock-availability check, the KaoiroState precondition
@@ -34,6 +57,9 @@ defmodule KaoiroServer.SessionResets do
   success. A 60-second timeout self-broadcasts `session_reset_failed`
   and clears the lock; no `SessionPointers.detach_session/1` fires on
   timeout — the old session may still be live and the operator can retry.
+  The timeout covers the SPAWN and AWAITING_CONNECT phases together, so
+  a runner that spawns quickly but whose wrapper never joins still
+  eventually fails loud.
 
   Broadcasts leave via `KaoiroServerWeb.Endpoint.broadcast/3` on the
   `agents:lobby` topic. That is a new role among the DETS-backed stores
@@ -113,15 +139,21 @@ defmodule KaoiroServer.SessionResets do
   end
 
   @doc """
-  Records the runner's `session_reset_result` and fires the matching
-  `session_reset_completed` / `session_reset_failed` broadcast.
+  Records the runner's `session_reset_result`.
 
-  On success (`ok=true`) also calls `SessionPointers.detach_session/1`
-  so the pointer's session_id is explicitly nil before the fresh
-  wrapper's first envelope reattaches a new one via the ordinary
-  `SessionPointers.record` path. On failure, the pointer is left
-  untouched — the old session may still be live for rollback (ADR-0036
-  F2 rollback branch).
+  On success (`ok=true`) transitions the lock to `:awaiting_connect`
+  and stashes the runner-reported `to_session_id` (which is `nil` for
+  Codex's lazy thread-ID采番 and typically set for Claude). The
+  `session_reset_completed` broadcast is NOT fired here — see
+  `confirm_connection/2`. This split enforces ADR-0036 F2: completion
+  is gated on the fresh wrapper's actual channel join, not on the
+  runner's spawn-succeeded report, because a wrapper that dies between
+  spawn and join would otherwise leave the operator staring at a
+  "completed" session that no longer exists.
+
+  On failure (`ok=false`) fires `session_reset_failed` immediately and
+  releases the lock; the pointer is left untouched (the runner's
+  rollback branch may have recovered the old session).
 
   Stale results (unknown agent, mismatched request_id after a prior
   timeout) are silently discarded per ADR-0036 F7's stale-completion
@@ -135,6 +167,25 @@ defmodule KaoiroServer.SessionResets do
       server,
       {:resolve, agent_id, request_id, ok, reason, to_session_id}
     )
+  end
+
+  @doc """
+  Fires the pending `session_reset_completed` broadcast for the fresh
+  wrapper that just joined its `wrapper:<agent_id>` channel, detaches
+  the pointer, releases the lock.
+
+  Called from `WrapperChannel.after_join` (or the first envelope's
+  handler when join alone is not enough) with the joining agent_id and
+  the session_id the wrapper reported so far (`nil` when unknown). No-op
+  when no lock is held, when the lock is not yet in `:awaiting_connect`
+  (the runner has not reported `ok=true` — this is a normal restart, not
+  a reset), or when the mismatched request_id indicates a stale join.
+
+  Sync so tests can assert the sequence of side effects deterministically;
+  the caller (wrapper_channel) already runs in its own process.
+  """
+  def confirm_connection(agent_id, joined_session_id \\ nil, server \\ __MODULE__) do
+    GenServer.call(server, {:confirm_connection, agent_id, joined_session_id})
   end
 
   @doc "True when a reset lock is currently held for the agent."
@@ -195,7 +246,15 @@ defmodule KaoiroServer.SessionResets do
           request_id: request_id,
           previous_session_id: prev_sid,
           acquired_at: now,
-          timer_ref: timer_ref
+          timer_ref: timer_ref,
+          # Two-phase completion (ADR-0036 F2): :spawning while waiting on
+          # the runner, :awaiting_connect after runner ok=true. Completion
+          # is gated on the fresh wrapper's channel join at
+          # :awaiting_connect — see confirm_connection/2.
+          phase: :spawning,
+          # to_session_id runner reported (nil for Codex lazy采番); rolls
+          # into the completed broadcast when confirm_connection fires.
+          to_session_id: nil
         }
 
         {:reply, {:ok, request_id, prev_sid}, %{s | pending: Map.put(s.pending, agent_id, lock)}}
@@ -228,22 +287,60 @@ defmodule KaoiroServer.SessionResets do
      }}
   end
 
+  def handle_call({:confirm_connection, agent_id, joined_session_id}, _from, s) do
+    case Map.get(s.pending, agent_id) do
+      %{phase: :awaiting_connect} = lock ->
+        _ = Process.cancel_timer(lock.timer_ref)
+
+        # The lock's to_session_id came from the runner (Codex will be nil;
+        # Claude may already have it). If the joining wrapper reported a
+        # non-nil session_id itself (only Claude does this via init), prefer
+        # that; it is the fresher source and matches what the wrapper will
+        # broadcast in its first envelope.
+        effective_to_sid =
+          case joined_session_id do
+            binary when is_binary(binary) -> binary
+            _ -> lock.to_session_id
+          end
+
+        detach_session_safely(agent_id)
+
+        broadcast_completed(agent_id, lock, effective_to_sid)
+
+        {:reply, :ok, %{s | pending: Map.delete(s.pending, agent_id)}}
+
+      _ ->
+        # No pending, or still in :spawning (the runner hasn't reported
+        # spawn success yet — so this join is either a normal restart or
+        # the fresh wrapper joining before we heard from the runner; the
+        # latter is impossible under Phoenix's ordering guarantees because
+        # the runner spawn precedes the wrapper's socket open, but staying
+        # a no-op here is the fail-safe).
+        {:reply, :ok, s}
+    end
+  end
+
   @impl true
   def handle_cast({:resolve, agent_id, request_id, ok, reason, to_session_id}, s) do
     case Map.get(s.pending, agent_id) do
       %{request_id: ^request_id} = lock ->
-        _ = Process.cancel_timer(lock.timer_ref)
+        if ok do
+          # Two-phase F2: runner spawn succeeded, but wait for the fresh
+          # wrapper's actual channel join before firing completed. Keep
+          # the timer running — it now covers the awaiting_connect window
+          # as well as the spawn window.
+          updated =
+            lock
+            |> Map.put(:phase, :awaiting_connect)
+            |> Map.put(:to_session_id, to_session_id)
 
-        # Guard the detach so a DETS write failure cannot leave the lock
-        # dangling — the lock's removal (and its broadcast) must happen
-        # regardless of the pointer write's fate. The DETS store's own
-        # corrupt-file guard already recovers on next open (SessionPointers
-        # docs); logging preserves diagnosability.
-        if ok, do: detach_session_safely(agent_id)
-
-        broadcast_result(ok, agent_id, lock, to_session_id, reason)
-
-        {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
+          {:noreply, %{s | pending: Map.put(s.pending, agent_id, updated)}}
+        else
+          # Failure path: fire the loud broadcast immediately, no detach.
+          _ = Process.cancel_timer(lock.timer_ref)
+          broadcast_failed(agent_id, lock, reason)
+          {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
+        end
 
       _ ->
         # Stale result — a prior timeout already broadcast a failure, or
@@ -257,8 +354,10 @@ defmodule KaoiroServer.SessionResets do
     case Map.get(s.pending, agent_id) do
       %{request_id: ^request_id} = lock ->
         # No detach on timeout: the old session may still be live and a
-        # rollback path can recover it. UI shows the loud failure.
-        broadcast_result(false, agent_id, lock, nil, "timeout")
+        # rollback path can recover it. UI shows the loud failure. Covers
+        # both phases — a slow spawn AND a spawn that succeeds but whose
+        # wrapper never joins.
+        broadcast_failed(agent_id, lock, "timeout")
 
         {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
 
@@ -267,14 +366,20 @@ defmodule KaoiroServer.SessionResets do
     end
   end
 
-  defp broadcast_result(true, agent_id, lock, to_session_id, _reason) do
-    payload = %{
-      "request_id" => lock.request_id,
-      "agent_id" => agent_id,
-      "mode" => lock.mode,
-      "previous_session_id" => lock.previous_session_id,
-      "to_session_id" => to_session_id
-    }
+  defp broadcast_completed(agent_id, lock, to_session_id) do
+    # `previous_session_id` is optional per the protocol type
+    # `SessionResetCompleted { previous_session_id?: string }` (only
+    # `to_session_id: string | null` is nullable to cover Codex lazy
+    # thread采番). Omit the key entirely when nil so the wire matches
+    # the type shape (review advisory).
+    payload =
+      %{
+        "request_id" => lock.request_id,
+        "agent_id" => agent_id,
+        "mode" => lock.mode,
+        "to_session_id" => to_session_id
+      }
+      |> maybe_put_previous_session_id(lock.previous_session_id)
 
     KaoiroServerWeb.Endpoint.broadcast(
       "agents:lobby",
@@ -283,7 +388,12 @@ defmodule KaoiroServer.SessionResets do
     )
   end
 
-  defp broadcast_result(false, agent_id, lock, _to_session_id, reason) do
+  defp maybe_put_previous_session_id(payload, sid) when is_binary(sid),
+    do: Map.put(payload, "previous_session_id", sid)
+
+  defp maybe_put_previous_session_id(payload, _sid), do: payload
+
+  defp broadcast_failed(agent_id, lock, reason) do
     payload = %{
       "request_id" => lock.request_id,
       "agent_id" => agent_id,

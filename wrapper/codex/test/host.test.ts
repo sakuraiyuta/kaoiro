@@ -338,13 +338,16 @@ describe("CodexHost", () => {
     // 全 state_change に乗る (ADR-0034 F1)。Codex は毎ターン exec spawn モデル
     // のため adapter 構築時に決めた capability が turn の外 (idle) でも state_change
     // で advertise される。states[0] は turn 開始の sending 状態。
-    // supports_session_reset は phase-17 17-2 で追加された field。chunk α では
-    // false stamp を保証し、chunk γ (17-6) 完了時に true + modes へ flip する。
+    // supports_session_reset は phase-17 17-6 で adapter 側の flip が完了。
+    // Codex は startThread() を fresh 経路とする F2 handshake を提供する
+    // ため true stamp + 対応 modes 列挙。thread ID の lazy 採番は server
+    // 側で to_session_id=null の completed broadcast を許容する経路で吸収。
     const first = states[0]!;
     expect(first.ext?.session_capabilities).toEqual({
       supports_attachments: false,
       supports_user_input_dialog: true,
-      supports_session_reset: false,
+      supports_session_reset: true,
+      session_reset_modes: ["new", "clear"],
     });
   });
 });

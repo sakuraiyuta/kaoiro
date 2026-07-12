@@ -10,6 +10,7 @@ import { Channel, Socket } from "phoenix";
 import type {
   RunnerRegister,
   RunnerSessions,
+  SessionResetResult,
   SpawnResult,
 } from "@kaoiro/protocol";
 import { buildHeartbeat } from "./config.js";
@@ -30,6 +31,10 @@ export interface RunnerLinkOptions {
   onRestart?: (payload: unknown) => void;
   onEnumerateSessions?: (payload: unknown) => void;
   onSwitchSession?: (payload: unknown) => void;
+  /** phase-17 17-5: server → runner session_reset command. Payload is
+   *  opaque here (the supervisor validates); it carries agent_id / mode /
+   *  request_id / previous_session_id. */
+  onResetSession?: (payload: unknown) => void;
 }
 
 export class RunnerLink {
@@ -83,6 +88,9 @@ export class RunnerLink {
     this.#channel.on("switch_session", (payload: unknown) =>
       options.onSwitchSession?.(payload),
     );
+    this.#channel.on("reset_session", (payload: unknown) =>
+      options.onResetSession?.(payload),
+    );
 
     this.#channel
       .join()
@@ -112,6 +120,14 @@ export class RunnerLink {
   /** Replies to enumerate_sessions with the resume candidates. */
   sendSessions(sessions: RunnerSessions): void {
     this.#channel.push("sessions", sessions);
+  }
+
+  /** Reports a session-reset outcome (phase-17 17-5). ADR-0036 F7: ok=true
+   *  is the runner's "fresh spawn succeeded" report — the server keeps the
+   *  reset in `:awaiting_connect` until the fresh wrapper's channel join
+   *  confirms completion. ok=false is loud + closed-vocab. */
+  sendResetResult(result: SessionResetResult): void {
+    this.#channel.push("session_reset_result", result);
   }
 
   /** Stops heartbeating, leaves the channel and closes the socket. */

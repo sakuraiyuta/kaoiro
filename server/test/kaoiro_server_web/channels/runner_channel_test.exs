@@ -270,7 +270,9 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       request_id
     end
 
-    test "ok=true + to_session_id は completed broadcast + pointer detach 済み" do
+    test "ok=true は :awaiting_connect に移行 (completed broadcast はまだ、confirm_connection で発火)" do
+      # ADR-0036 F2 two-phase: runner ok=true は spawn 成功の中間報告。
+      # completed は fresh wrapper の channel join (confirm_connection) で発火。
       host_id = "lab-pc-reset-ok"
       agent_id = "lab-pc-reset-ok.a"
       request_id = acquire_reset_lock(agent_id, "sess-old")
@@ -289,19 +291,32 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
 
       assert_reply ref, :ok
 
+      # completed broadcast は未発火 (lock は :awaiting_connect のまま)。
+      refute_broadcast "session_reset_completed", _
+
+      assert KaoiroServer.SessionResets.pending?(agent_id)
+
+      # confirm_connection (wrapper join 相当) で completed 発火。
+      # Claude 側で init が到達した後の session_id を明示的に渡す想定。
+      :ok = KaoiroServer.SessionResets.confirm_connection(agent_id, "sess-new-init")
+
       assert_broadcast "session_reset_completed", %{
         "agent_id" => ^agent_id,
         "mode" => "new",
         "request_id" => ^request_id,
         "previous_session_id" => "sess-old",
-        "to_session_id" => "sess-new"
+        "to_session_id" => "sess-new-init"
       }
 
       refute KaoiroServer.SessionResets.pending?(agent_id)
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
 
-    test "ok=true + to_session_id=nil (Codex lazy 採番) も completed で通す" do
+    test "ok=true + to_session_id=nil (Codex lazy 採番) は confirm 時 nil のまま completed" do
+      # runner が nil で報告 → 次の confirm_connection で joining session_id
+      # が渡らなければ lock 側 (nil) がそのまま completed に載る。Codex の
+      # lazy 採番はこの経路: init state_change には thread ID なし、後の
+      # envelope で session_id が確定して SessionPointers.record 経由で patch。
       host_id = "lab-pc-reset-lazy"
       agent_id = "lab-pc-reset-lazy.a"
       request_id = acquire_reset_lock(agent_id, "sess-old-codex")
@@ -319,6 +334,9 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
         })
 
       assert_reply ref, :ok
+      refute_broadcast "session_reset_completed", _
+
+      :ok = KaoiroServer.SessionResets.confirm_connection(agent_id, nil)
 
       assert_broadcast "session_reset_completed",
                        %{"agent_id" => ^agent_id, "to_session_id" => nil}

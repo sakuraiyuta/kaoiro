@@ -108,25 +108,59 @@ defmodule KaoiroServer.SessionResetsTest do
   end
 
   describe "resolve/6" do
-    test "ok=true で SessionPointers.detach_session を発火 + completed broadcast",
+    test "ok=true は :awaiting_connect に移行 (broadcast はまだ、lock は保持)",
          %{resets: sr, pointers: sp} do
-      # Endpoint broadcast の subscribe は integration test で見る (ChannelCase 使用)。
-      # ここでは detach_session の副作用のみを直接確認する。
+      # ADR-0036 F2 の two-phase completion: runner の ok=true は spawn 成功
+      # の中間報告で、fresh wrapper の channel join まで completed broadcast を
+      # 抑える (join 前に wrapper が死ぬと詐称になる)。
       SessionPointers.record("a.res.ok", "sess-old", "/w", :codex, sp)
 
-      # 直接 SessionPointers を差し替える手段が無いため、resolve 経路の副作用は
-      # broadcast だけ (SessionPointers.detach_session は :__MODULE__ を叩く)。
-      # このテストでは pending → resolve 経路の lock 消去のみを確認し、
-      # detach_session の実 file 書き換えは production supervision tree 経由
-      # (integration test 側) で assert する。
       assert {:ok, request_id, _} =
                SessionResets.check_and_acquire("a.res.ok", "new", "idle", "sess-old", sr)
 
       :ok = SessionResets.resolve("a.res.ok", request_id, true, nil, "sess-new", sr)
 
-      # cast の反映を待つ小さな同期。
       _ = :sys.get_state(sr)
-      refute SessionResets.pending?("a.res.ok", sr)
+      # lock は保持されたまま (:awaiting_connect フェーズ)
+      assert SessionResets.pending?("a.res.ok", sr)
+    end
+
+    test "confirm_connection で :awaiting_connect の lock を release + broadcast",
+         %{resets: sr, pointers: sp} do
+      SessionPointers.record("a.res.confirm", "sess-old", "/w", :codex, sp)
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(
+                 "a.res.confirm",
+                 "new",
+                 "idle",
+                 "sess-old",
+                 sr
+               )
+
+      :ok = SessionResets.resolve("a.res.confirm", request_id, true, nil, "sess-new", sr)
+      _ = :sys.get_state(sr)
+      assert SessionResets.pending?("a.res.confirm", sr)
+
+      :ok = SessionResets.confirm_connection("a.res.confirm", nil, sr)
+      refute SessionResets.pending?("a.res.confirm", sr)
+    end
+
+    test "confirm_connection は :spawning フェーズでは no-op (runner ok 未受信)",
+         %{resets: sr} do
+      assert {:ok, _rid, _} =
+               SessionResets.check_and_acquire("a.res.early", "new", "idle", "sess", sr)
+
+      # runner の ok=true が来る前の join (通常は起こらないが fail-safe)。
+      # lock は :spawning のまま維持、broadcast も発火しない。
+      :ok = SessionResets.confirm_connection("a.res.early", nil, sr)
+      assert SessionResets.pending?("a.res.early", sr)
+    end
+
+    test "confirm_connection は pending 無し (通常 restart) では no-op",
+         %{resets: sr} do
+      assert :ok = SessionResets.confirm_connection("a.restart.norm", nil, sr)
+      refute SessionResets.pending?("a.restart.norm", sr)
     end
 
     test "ok=false で lock を release、SessionPointers は変更しない", %{resets: sr} do

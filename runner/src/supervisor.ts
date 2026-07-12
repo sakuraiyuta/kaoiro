@@ -11,6 +11,9 @@ import type {
   ResolvedSnapshotExt,
   RunnerSessions,
   SessionMeta,
+  SessionResetErrorReason,
+  SessionResetMode,
+  SessionResetResult,
   SpawnFailReason,
   SpawnResult,
   WirePersona,
@@ -93,6 +96,10 @@ export interface SupervisorOptions {
   wrapperServerUrl: string;
   sendResult: (result: SpawnResult) => void;
   sendSessions: (sessions: RunnerSessions) => void;
+  /** phase-17 17-5: report a session-reset outcome (ADR-0036 F7). Required
+   *  now the supervisor can handle a `reset_session` command; the CLI
+   *  wires this to `RunnerLink.sendResetResult`. */
+  sendResetResult: (result: SessionResetResult) => void;
   /** Injectable for tests; defaults read the local session stores
    *  (sessions.ts — Claude JSONLs / codex rollouts, per engine). */
   listSessions?: (cwd: string, engine: EngineKind) => SessionMeta[];
@@ -260,6 +267,35 @@ export function resolveWrapperConfig(
   return config;
 }
 
+/** phase-17 17-5: session-reset in flight. The supervisor stashes it on
+ *  the ChildEntry so `#onExit` knows to fresh-relaunch instead of taking
+ *  the ordinary restart path, and so `#relaunchForReset` can fall back
+ *  into `#rollback` on a fresh-spawn failure. Cleared as soon as the
+ *  reset transitions to the wrapper (successful fresh spawn) OR the
+ *  rollback fully resolves — after that, any crash is a normal crash. */
+interface PendingReset {
+  requestId: string;
+  mode: SessionResetMode;
+  /** The session_id the SERVER read from the SessionPointer at
+   *  lock-acquire time. Used for the rollback branch's explicit resume;
+   *  `entry.parsed.resumeSessionId` (spawn/switch-time) may have since
+   *  diverged and cannot be trusted for rollback. `undefined` means the
+   *  wrapper had not reported a session yet (fresh spawn edge) — a
+   *  rollback there is not meaningful, so a failure fresh spawn goes
+   *  straight to `rollback_failed` / disconnected. */
+  previousSessionId?: string;
+  /** The `entry.parsed.resumeSessionId` value that was in effect at
+   *  reset-acquire time, captured BEFORE `handleResetSession` strips
+   *  it. Owns the F4 lock on that id: on fresh-relaunch success the
+   *  reset abandons that id so we release it from `#activeSessions`,
+   *  and `#rollback` re-locks `rollbackSid` (mirroring
+   *  `handleSwitchSession`'s add/delete transfer). Without this,
+   *  a successful reset would leave the old id stuck in
+   *  `#activeSessions` forever, blocking any future spawn / switch onto
+   *  it (F4 same-session lock never released — review finding). */
+  oldResumeSessionId?: string;
+}
+
 interface ChildEntry {
   child: ManagedChild;
   parsed: ParsedSpawn;
@@ -269,6 +305,9 @@ interface ChildEntry {
   windowStart: number;
   stopping: boolean;
   restarting: boolean;
+  /** Session-reset in flight (phase-17 17-5). When set, `#onExit` routes
+   *  into `#relaunchForReset` instead of the ordinary restart path. */
+  pendingReset?: PendingReset;
 }
 
 export class Supervisor {
@@ -277,6 +316,7 @@ export class Supervisor {
   readonly #launch: LaunchFn;
   readonly #sendResult: (result: SpawnResult) => void;
   readonly #sendSessions: (sessions: RunnerSessions) => void;
+  readonly #sendResetResult: (result: SessionResetResult) => void;
   readonly #listSessions: (cwd: string, engine: EngineKind) => SessionMeta[];
   readonly #sessionExists: (
     cwd: string,
@@ -296,6 +336,7 @@ export class Supervisor {
     this.#launch = options.launch;
     this.#sendResult = options.sendResult;
     this.#sendSessions = options.sendSessions;
+    this.#sendResetResult = options.sendResetResult;
     this.#listSessions = options.listSessions ?? defaultListSessions;
     this.#sessionExists = options.sessionExists ?? defaultSessionExists;
     this.#now = options.now ?? (() => Date.now());
@@ -457,6 +498,73 @@ export class Supervisor {
     entry.child.kill();
   }
 
+  /** Handles a server `reset_session` (ADR-0036 F2/F7, phase-17 17-5):
+   *  same-agent fresh relaunch of the wrapper. `resumeSessionId` is
+   *  cleared so the fresh child launches WITHOUT `--resume`; the
+   *  `resumeSnapshot` (phase-15 D8's last-effective settings) is kept so
+   *  the fresh session re-applies model / effort / permission / sandbox
+   *  from where the old one left off, not from spawn-time defaults.
+   *
+   *  Failure recovery: `#relaunchForReset` calls `#rollback` on a fresh
+   *  spawn exception, which resumes the OLD session (from the payload's
+   *  `previous_session_id` — a value the SERVER read from the
+   *  SessionPointer at lock-acquire time so a mid-run switch_session
+   *  cannot leave us rolling back to a stale id).
+   *
+   *  This is intentionally NOT unified with `handleSwitchSession` even
+   *  though both cycle the wrapper: switch_session commits to the new
+   *  session_id and drops the old; reset must preserve the old for
+   *  rollback, and its completion is a two-phase server-side handshake
+   *  (spawn ok + wrapper join), not a one-shot restart. Missing agent /
+   *  malformed payload is a silent drop like the other handlers. */
+  handleResetSession(payload: unknown): void {
+    const agentId = readAgentId(payload);
+    if (agentId === null) {
+      process.stderr.write(
+        "runner: reset_session with missing/invalid agent_id\n",
+      );
+      return;
+    }
+    const entry = this.#children.get(agentId);
+    if (entry === undefined) return;
+    if (!isObject(payload)) return;
+    const requestId = optionalString(payload.request_id);
+    const mode = payload.mode;
+    if (requestId === undefined || requestId === "") return;
+    if (mode !== "new" && mode !== "clear") return;
+    const previousSessionId = optionalString(payload.previous_session_id);
+    // Capture the spawn-time F4-lock holder BEFORE stripping it below;
+    // #relaunchForReset releases it on success and #rollback transfers
+    // it to rollbackSid if the two differ (mirrors handleSwitchSession
+    // add/delete lock transfer, which the reset diff must not break).
+    const oldResumeSessionId = entry.parsed.resumeSessionId;
+    // Stash the pending reset BEFORE mutating entry.parsed, so a
+    // rollback triggered by an early kill/exit still has the id.
+    entry.pendingReset = {
+      requestId,
+      mode: mode as SessionResetMode,
+      ...(previousSessionId !== undefined
+        ? { previousSessionId }
+        : {}),
+      ...(oldResumeSessionId !== undefined
+        ? { oldResumeSessionId }
+        : {}),
+    };
+    // Fresh: strip resumeSessionId so #relaunchForReset launches without
+    // --resume. resumeSnapshot stays (phase-15 D8 last-effective values).
+    // Destructure-and-drop instead of assigning `undefined` because the
+    // ParsedSpawn type uses exactOptionalPropertyTypes.
+    const { resumeSessionId: _drop, ...withoutResume } = entry.parsed;
+    void _drop;
+    entry.parsed = withoutResume;
+    // Intentional cycle (same as handleRestart / handleSwitchSession):
+    // reset the crash budget so the deliberate kill does not count.
+    entry.restarting = true;
+    entry.restarts = 0;
+    entry.windowStart = this.#now();
+    entry.child.kill();
+  }
+
   /** Handles a server `enumerate_sessions`: lists resume candidates under cwd
    *  and replies with `sessions`. Only allow-listed cwds are enumerated, so an
    *  operator cannot probe arbitrary paths. */
@@ -538,6 +646,17 @@ export class Supervisor {
       this.#remove(agentId, entry);
       return;
     }
+    // phase-17 17-5: reset exit runs BEFORE the ordinary restart branch
+    // — a reset also sets restarting=true, but the reset branch owns the
+    // fresh-vs-rollback decision and reports back via #sendResetResult.
+    // Clearing entry.pendingReset happens inside those helpers so a
+    // fresh-spawn success cleanly hands the entry back to the ordinary
+    // crash path for the rest of its lifetime.
+    if (entry.pendingReset !== undefined) {
+      entry.restarting = false;
+      this.#relaunchForReset(agentId, entry);
+      return;
+    }
     if (entry.restarting) {
       entry.restarting = false;
       this.#relaunch(agentId, entry);
@@ -596,5 +715,162 @@ export class Supervisor {
     }
     entry.child = child;
     child.on("exit", () => this.#onExit(agentId));
+  }
+
+  /** phase-17 17-5: fresh-relaunch branch of a session reset (ADR-0036 F2).
+   *  The wrapper is launched WITHOUT a resume session_id (Claude starts a
+   *  new `query()` without `resume`; Codex calls `startThread()` instead
+   *  of `resumeThread()`). On success the runner reports ok=true; the
+   *  server-side lock transitions to `:awaiting_connect` and completion
+   *  waits on the fresh wrapper's channel join (must-2, F2 文言準拠). On
+   *  a synchronous launch failure the branch degrades to `#rollback`,
+   *  restoring the previous session_id if we have one. Post-success, any
+   *  further crash falls into the ordinary #onExit crash path — the
+   *  pendingReset is cleared here so a fresh-wrapper crash 30 s later
+   *  does not re-enter this branch. */
+  #relaunchForReset(agentId: string, entry: ChildEntry): void {
+    const pending = entry.pendingReset;
+    if (pending === undefined) return;
+    let child: ManagedChild;
+    try {
+      child = this.#launch(
+        agentId,
+        resolveWrapperConfig(agentId, entry.parsed, this.#wrapperServerUrl),
+        entry.parsed.cwd,
+        undefined, // fresh: no --resume
+        undefined, // no initial prompt
+        entry.parsed.engine,
+      );
+    } catch (error) {
+      process.stderr.write(
+        `runner: fresh relaunch failed for ${agentId}: ${String(error)}\n`,
+      );
+      this.#rollback(agentId, entry, "spawn_failed");
+      return;
+    }
+    entry.child = child;
+    entry.restarts = 0;
+    entry.windowStart = this.#now();
+    child.on("exit", () => this.#onExit(agentId));
+    // Release the F4 resume lock for the abandoned session_id (review
+    // finding: without this, the id stays in #activeSessions forever
+    // because #remove later reads entry.parsed.resumeSessionId which
+    // was stripped in handleResetSession). handleSwitchSession uses
+    // the same add/delete pattern.
+    if (pending.oldResumeSessionId !== undefined) {
+      this.#activeSessions.delete(pending.oldResumeSessionId);
+    }
+    // Report to server: spawn succeeded. Server transitions the lock to
+    // `:awaiting_connect` and waits for the fresh wrapper's channel join.
+    // to_session_id is `null` here: the runner does not know it yet.
+    // Claude's init state_change will carry one (server sees it in
+    // WrapperChannel.after_join); Codex has none until the first turn
+    // and its completed broadcast rides `to_session_id=null`.
+    this.#sendResetResult({
+      version: "0",
+      host_id: this.#hostId,
+      agent_id: agentId,
+      mode: pending.mode,
+      request_id: pending.requestId,
+      ok: true,
+      to_session_id: null,
+    });
+    // Clear so a post-success crash lands in the ordinary #onExit path,
+    // not back into #relaunchForReset. Director-approved: pid-success
+    // followed by an immediate wrapper death gets loud via the server's
+    // 60 s awaiting_connect timeout (session_reset_failed { timeout }).
+    delete entry.pendingReset;
+  }
+
+  /** phase-17 17-5: rollback branch of a session reset (ADR-0036 F2). The
+   *  fresh spawn failed synchronously; re-launch with the previous
+   *  session_id (from the server-supplied `previous_session_id`, NOT the
+   *  entry's spawn-time value which may have diverged). Success = the
+   *  old session is back and the operator sees `session_reset_failed
+   *  { reason: "spawn_failed" }`; failure of the rollback itself =
+   *  `rollback_failed` + drop the entry so the operator sees the agent
+   *  disconnected. */
+  #rollback(
+    agentId: string,
+    entry: ChildEntry,
+    freshFailureReason: SessionResetErrorReason,
+  ): void {
+    const pending = entry.pendingReset;
+    if (pending === undefined) return;
+    const rollbackSid = pending.previousSessionId;
+    if (rollbackSid === undefined || rollbackSid === "") {
+      // No session to resume — no meaningful rollback target. Report
+      // rollback_failed and drop the entry so the agent goes disconnected.
+      process.stderr.write(
+        `runner: no previous_session_id for rollback of ${agentId}; disconnected\n`,
+      );
+      this.#sendResetResult({
+        version: "0",
+        host_id: this.#hostId,
+        agent_id: agentId,
+        mode: pending.mode,
+        request_id: pending.requestId,
+        ok: false,
+        reason: "rollback_failed",
+      });
+      delete entry.pendingReset;
+      this.#remove(agentId, entry);
+      return;
+    }
+    // Restore entry.parsed to the pre-reset state.
+    entry.parsed = { ...entry.parsed, resumeSessionId: rollbackSid };
+    let child: ManagedChild;
+    try {
+      child = this.#launch(
+        agentId,
+        resolveWrapperConfig(agentId, entry.parsed, this.#wrapperServerUrl),
+        entry.parsed.cwd,
+        rollbackSid,
+        undefined,
+        entry.parsed.engine,
+      );
+    } catch (error) {
+      process.stderr.write(
+        `runner: rollback resume failed for ${agentId}: ${String(error)}\n`,
+      );
+      this.#sendResetResult({
+        version: "0",
+        host_id: this.#hostId,
+        agent_id: agentId,
+        mode: pending.mode,
+        request_id: pending.requestId,
+        ok: false,
+        reason: "rollback_failed",
+      });
+      delete entry.pendingReset;
+      this.#remove(agentId, entry);
+      return;
+    }
+    entry.child = child;
+    entry.restarts = 0;
+    entry.windowStart = this.#now();
+    child.on("exit", () => this.#onExit(agentId));
+    // Transfer the F4 lock from oldResumeSessionId to rollbackSid when
+    // they differ — mirrors handleSwitchSession's atomic delete + add.
+    // If they match, the lock is already held from the original spawn
+    // and no change is needed.
+    if (pending.oldResumeSessionId !== rollbackSid) {
+      if (pending.oldResumeSessionId !== undefined) {
+        this.#activeSessions.delete(pending.oldResumeSessionId);
+      }
+      this.#activeSessions.add(rollbackSid);
+    }
+    // Rollback succeeded: report the ORIGINAL fresh-spawn failure so the
+    // operator sees why the reset failed, not that rollback happened.
+    this.#sendResetResult({
+      version: "0",
+      host_id: this.#hostId,
+      agent_id: agentId,
+      mode: pending.mode,
+      request_id: pending.requestId,
+      ok: false,
+      reason: freshFailureReason,
+    });
+    delete entry.pendingReset;
   }
 }

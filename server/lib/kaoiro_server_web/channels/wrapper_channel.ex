@@ -82,6 +82,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
         :ok
     end
 
+    # phase-17 17-5 (must-2, ADR-0036 F2): a fresh wrapper joining while
+    # a reset is in `:awaiting_connect` is the actual completion signal.
+    # SessionResets no-ops when no lock is held or the lock is still in
+    # `:spawning`, so a normal restart join (or a Codex per-turn re-join
+    # pattern) does not accidentally fire a completed broadcast. The
+    # joining wrapper does not yet have a session_id in most cases —
+    # Claude reports it in the init state_change that follows, Codex only
+    # after the first turn — so pass `nil` here; the ordinary envelope
+    # ingest path (SessionPointers.record) still updates the pointer
+    # once the wrapper reports one.
+    KaoiroServer.SessionResets.confirm_connection(socket.assigns.agent_id)
+
     {:noreply, socket}
   end
 

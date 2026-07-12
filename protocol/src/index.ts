@@ -571,22 +571,32 @@ export interface SessionResetRequest {
   mode: SessionResetMode;
 }
 
-/** server -> runner, operator-only (ADR-0036 F2/F7, phase-17 17-1).
+/** server -> runner, operator-only (ADR-0036 F2/F7, phase-17 17-1/17-5).
  *  Instructs the runner supervisor to kill the current wrapper for
  *  agent_id and fresh-relaunch (no resume_session_id) while re-applying
- *  the last-effective snapshot from phase-15 D8. */
+ *  the last-effective snapshot from phase-15 D8. `previous_session_id`
+ *  is the SessionPointer's current session_id at lock-acquire time —
+ *  supplied by the server so the runner's rollback branch can resume
+ *  the RIGHT session (not a possibly-stale spawn-time value that has
+ *  since been switched via `switch_session`). Absent when the pointer
+ *  has no session_id yet (fresh spawn edge case). */
 export interface ResetSessionCommand {
   version: "0";
   agent_id: string;
   mode: SessionResetMode;
   request_id: string;
+  previous_session_id?: string;
 }
 
-/** runner -> server (ADR-0036 F7, phase-17 17-1). Report of a reset
- *  attempt's outcome. `ok=true` marks fresh-relaunch success (Codex's
- *  lazy thread ID is allowed — the server may broadcast Completed with
- *  `to_session_id=null`). `ok=false` requires a `reason` from the closed
- *  vocabulary. */
+/** runner -> server (ADR-0036 F7, phase-17 17-1/17-5). Report of a reset
+ *  attempt's outcome. `ok=true` marks fresh-relaunch success (the
+ *  server keeps the reset in `:awaiting_connect` until the fresh
+ *  wrapper's channel join). `ok=false` requires a `reason` from the
+ *  closed vocabulary. `to_session_id` is the session_id the runner
+ *  already knows (rarely populated — Claude reports its ID via init
+ *  in the wrapper's own state_change, Codex's thread ID is lazy), so
+ *  the field is optional / nullable and the server prefers the value
+ *  the wrapper itself reports at join time. */
 export interface SessionResetResult {
   version: "0";
   host_id: string;
@@ -595,6 +605,7 @@ export interface SessionResetResult {
   request_id: string;
   ok: boolean;
   reason?: SessionResetErrorReason;
+  to_session_id?: string | null;
 }
 
 /** server -> clients (ADR-0036 F7, phase-17 17-1). Fired once the server

@@ -885,17 +885,23 @@ export class AgentHost implements EngineAdapter {
     // native AskUserQuestion — both true unconditionally today. If the
     // SDK later attaches conditions, split the constants into fields
     // and update them from init / status meta.
-    // supports_session_reset (ADR-0036 F5, phase-17 17-2): stamped false
-    // until the runner supervisor + server orchestration land in
-    // chunk β/γ (17-4/5/6). Advertising false today keeps the
-    // fail-closed contract — the dashboard never intercepts /new・/clear
-    // and the server never relays reset requests — while pinning the
-    // field's presence so a stale/absent stamp is distinguishable from
-    // an intentional "not yet" during the phase-17 rollout.
+    // supports_session_reset (ADR-0036 F5, phase-17 17-6 flip): with the
+    // runner supervisor's fresh relaunch + rollback + snapshot re-apply
+    // (17-5) and the server's SessionResets orchestration + two-phase
+    // completion (17-4/5) landed, the session now provides the F2
+    // fresh-relaunch + completion handshake required to advertise this
+    // as `true`. Both modes are supported: `new` keeps the log ring +
+    // adds a boundary marker, `clear` resets the display projection
+    // before appending its boundary. The dashboard's Composer intercept
+    // (chunk δ 17-8) is the last piece; until that lands the ordinary
+    // send_instruction path handles `/new`・`/clear` as reserved-command
+    // rejects, so the capability=true stamp is safely observable but
+    // does not yet reach a user-triggerable code path.
     ext.session_capabilities = {
       supports_attachments: true,
       supports_user_input_dialog: true,
-      supports_session_reset: false,
+      supports_session_reset: true,
+      session_reset_modes: ["new", "clear"],
     };
     if (this.#model !== null) ext.model = this.#model;
     if (this.#modelSource !== null) ext.model_source = this.#modelSource;

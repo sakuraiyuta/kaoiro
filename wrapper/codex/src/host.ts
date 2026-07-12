@@ -397,14 +397,22 @@ export class CodexHost implements EngineAdapter {
     // wholesale-rejects attach_open today (see cli.ts onAttachOpen);
     // the MCP bridge exposes ask_user_question. supports_model_switch /
     // supports_effort_switch are reserved for phase-16 (ADR-0035 F4).
-    // supports_session_reset (ADR-0036 F5, phase-17 17-2): stamped false
-    // until the runner supervisor + server orchestration land in
-    // chunk β/γ (17-4/5/6). See claude-code/src/host.ts for the same
-    // rationale — advertising false today keeps the fail-closed contract.
+    // supports_session_reset (ADR-0036 F5, phase-17 17-6 flip): the
+    // Codex adapter now supports the F2 fresh-relaunch handshake, which
+    // uses `startThread()` (not `resumeThread()`) after the runner's
+    // kill + fresh spawn. Both modes ride the same runner path — the
+    // display projection differences (`new` keeps log / `clear` resets)
+    // are the server's AgentStates concern (chunk δ 17-7), not the
+    // adapter's. Codex's thread ID is lazy: the fresh session's ID is
+    // not established at `startThread()` time, so the runner reports
+    // `to_session_id=null` and the server's `session_reset_completed`
+    // broadcast rides that null; the ordinary envelope ingest path
+    // stamps the pointer once the first turn produces one.
     ext.session_capabilities = {
       supports_attachments: false,
       supports_user_input_dialog: true,
-      supports_session_reset: false,
+      supports_session_reset: true,
+      session_reset_modes: ["new", "clear"],
     };
     if (this.#model !== null) ext.model = this.#model;
     if (this.#modelSource !== null) ext.model_source = this.#modelSource;

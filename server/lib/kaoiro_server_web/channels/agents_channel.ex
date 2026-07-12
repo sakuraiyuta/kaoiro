@@ -348,6 +348,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
           "mode" => mode,
           "request_id" => request_id
         }
+        |> maybe_put_previous_session_id(prev_sid)
       )
 
       {:reply, :ok, socket}
@@ -1262,12 +1263,30 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # phase-17 17-5 (must-1): the runner's rollback branch needs the
+  # session_id that was current AT LOCK ACQUIRE TIME, not the one baked
+  # into ParsedSpawn at spawn/switch. A long-lived agent whose session
+  # was switched mid-run would otherwise roll back to a stale id.
+  # `prev_sid` here is the AgentStates snapshot's session_id — read in
+  # the same envelope that already fed require_reset_capability /
+  # kaoiro_state, so it is the freshest value we can supply. When the
+  # wrapper has not reported one yet (fresh spawn edge), the payload
+  # simply omits the field and the runner has no rollback target.
+  defp maybe_put_previous_session_id(payload, sid) when is_binary(sid),
+    do: Map.put(payload, "previous_session_id", sid)
+
+  defp maybe_put_previous_session_id(payload, _sid), do: payload
+
   defp started_payload(agent_id, mode, request_id, previous_session_id) do
+    # `previous_session_id` is optional in the protocol type — omit the
+    # key entirely when nil so the wire payload matches
+    # `SessionResetStarted { previous_session_id?: string }` instead of
+    # sending `previous_session_id: null` (review advisory).
     %{
       "request_id" => request_id,
       "agent_id" => agent_id,
-      "mode" => mode,
-      "previous_session_id" => previous_session_id
+      "mode" => mode
     }
+    |> maybe_put_previous_session_id(previous_session_id)
   end
 end

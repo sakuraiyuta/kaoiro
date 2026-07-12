@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   RunnerSessions,
   SessionMeta,
+  SessionResetResult,
   SpawnResult,
   WrapperConfig,
 } from "@kaoiro/protocol";
@@ -49,19 +50,26 @@ function harness(
     exists?: boolean;
     wrapperServerUrl?: string;
     now?: () => number;
+    launchThrowsOnCall?: number;
   } = {},
 ) {
   const children: FakeChild[] = [];
   const results: SpawnResult[] = [];
+  const resetResults: SessionResetResult[] = [];
   const configs: WrapperConfig[] = [];
   const resumes: Array<string | undefined> = [];
   const prompts: Array<string | undefined> = [];
   const sessionsSent: RunnerSessions[] = [];
+  let launchCall = 0;
   const sup = new Supervisor({
     hostId: "lab-pc-1",
     cwdAllowlist: opts.cwdAllowlist ?? allowlist,
     wrapperServerUrl: opts.wrapperServerUrl ?? "ws://localhost:4000/wrapper",
     launch: (_agentId, config, _cwd, resumeSessionId, initialPrompt) => {
+      launchCall += 1;
+      if (opts.launchThrowsOnCall === launchCall) {
+        throw new Error(`launch failed on call ${launchCall}`);
+      }
       configs.push(config);
       resumes.push(resumeSessionId);
       prompts.push(initialPrompt);
@@ -71,6 +79,7 @@ function harness(
     },
     sendResult: (r) => results.push(r),
     sendSessions: (s) => sessionsSent.push(s),
+    sendResetResult: (r) => resetResults.push(r),
     listSessions: () => opts.sessions ?? [],
     sessionExists: () => opts.exists ?? false,
     ...(opts.now === undefined ? {} : { now: opts.now }),
@@ -79,6 +88,7 @@ function harness(
     sup,
     children,
     results,
+    resetResults,
     configs,
     resumes,
     prompts,
@@ -245,6 +255,7 @@ describe("Supervisor.handleSpawn", () => {
       },
       sendResult: (r) => results.push(r),
       sendSessions: () => {},
+      sendResetResult: () => {},
     });
     sup.handleSpawn(spawnMsg);
     expect(results[0]).toMatchObject({ ok: false, reason: "error" });
@@ -310,6 +321,7 @@ describe("Supervisor resume (T3 / F4)", () => {
       },
       sendResult: (r) => results.push(r),
       sendSessions: () => {},
+      sendResetResult: () => {},
       sessionExists: () => true,
     });
     sup.handleSpawn(resumeMsg); // ok, lock held
@@ -490,6 +502,7 @@ describe("Supervisor.handleSwitchSession", () => {
       },
       sendResult: (r) => results.push(r),
       sendSessions: () => {},
+      sendResetResult: () => {},
       sessionExists: () => exists,
     });
     sup.handleSpawn(resumeMsg);
@@ -535,5 +548,223 @@ describe("Supervisor.handleSwitchSession", () => {
       agent_id: "lab-pc-1.claude-c",
     });
     expect(h.results[h.results.length - 1]).toMatchObject({ ok: true });
+  });
+});
+
+describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
+  const resetMsg = {
+    agent_id: "lab-pc-1.claude-a",
+    mode: "new",
+    request_id: "rs_test123",
+    previous_session_id: "sess-old-xyz",
+  };
+
+  it("正常 fresh relaunch: kill + fresh child spawn (resume なし) + ok=true / to_session_id=null 報告", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    // reset を受けて既存 child を kill、exit イベントで fresh 起動
+    h.sup.handleResetSession(resetMsg);
+    expect(h.children[0]!.kills).toBe(1);
+    h.children[0]!.exit();
+
+    // fresh child が起動された (2 個目、resumeSessionId は undefined)
+    expect(h.children).toHaveLength(2);
+    expect(h.resumes[1]).toBeUndefined();
+    expect(h.prompts[1]).toBeUndefined();
+
+    // sendResetResult は ok=true / to_session_id=null で送出済み
+    expect(h.resetResults).toHaveLength(1);
+    expect(h.resetResults[0]).toEqual({
+      version: "0",
+      host_id: "lab-pc-1",
+      agent_id: "lab-pc-1.claude-a",
+      mode: "new",
+      request_id: "rs_test123",
+      ok: true,
+      to_session_id: null,
+    });
+  });
+
+  it("fresh 経路は resumeSnapshot を保持して wrapper config へ passthrough する", () => {
+    const h = harness();
+    // spawn 時に resume_snapshot を載せる
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      resume_snapshot: {
+        model: "claude-sonnet-x",
+        permission_mode: "acceptEdits",
+      },
+    });
+    h.sup.handleResetSession(resetMsg);
+    h.children[0]!.exit();
+
+    // fresh の wrapper config には resume_snapshot が残り、
+    // resumeSessionId は undefined (fresh)
+    const freshConfig = h.configs[1]!;
+    expect(freshConfig.resume_snapshot).toEqual({
+      model: "claude-sonnet-x",
+      permission_mode: "acceptEdits",
+    });
+    expect(h.resumes[1]).toBeUndefined();
+  });
+
+  it("fresh spawn 失敗 → previous_session_id で rollback resume 成功: ok=false / reason=spawn_failed", () => {
+    // 1 回目 launch = 初期 spawn 成功、2 回目 = fresh relaunch で throw、
+    // 3 回目 = rollback resume 成功 (sessionExists=true で resume 通過)
+    const h = harness({ launchThrowsOnCall: 2, exists: true });
+    h.sup.handleSpawn(spawnMsg);
+    h.sup.handleResetSession(resetMsg);
+    h.children[0]!.exit();
+
+    // rollback の launch (3 回目) が resumeSessionId=previous_session_id で発火
+    expect(h.children).toHaveLength(2);
+    expect(h.resumes[1]).toBe("sess-old-xyz");
+
+    // sendResetResult は ok=false / spawn_failed
+    expect(h.resetResults).toHaveLength(1);
+    expect(h.resetResults[0]).toMatchObject({
+      ok: false,
+      reason: "spawn_failed",
+      mode: "new",
+      request_id: "rs_test123",
+    });
+  });
+
+  it("previous_session_id なし + fresh spawn 失敗: 即 rollback_failed + entry drop", () => {
+    const h = harness({ launchThrowsOnCall: 2 });
+    h.sup.handleSpawn(spawnMsg);
+    const { previous_session_id: _omit, ...noPrev } = resetMsg;
+    void _omit;
+    h.sup.handleResetSession(noPrev);
+    h.children[0]!.exit();
+
+    // fresh spawn throw → rollback_failed 経路 (previous_session_id 無し)
+    expect(h.resetResults).toHaveLength(1);
+    expect(h.resetResults[0]).toMatchObject({
+      ok: false,
+      reason: "rollback_failed",
+    });
+    // entry drop 済み → 再 spawn 可能
+    h.sup.handleSpawn(spawnMsg);
+    expect(h.results[h.results.length - 1]).toMatchObject({ ok: true });
+  });
+
+  it("未知 agent は silent drop", () => {
+    const h = harness();
+    h.sup.handleResetSession({
+      agent_id: "lab-pc-1.unknown",
+      mode: "new",
+      request_id: "rs_x",
+    });
+    expect(h.resetResults).toHaveLength(0);
+    expect(h.children).toHaveLength(0);
+  });
+
+  it("invalid mode は silent drop", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    h.sup.handleResetSession({ ...resetMsg, mode: "restart" });
+    expect(h.children[0]!.kills).toBe(0);
+    expect(h.resetResults).toHaveLength(0);
+  });
+
+  it("missing request_id は silent drop", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    const { request_id: _omit, ...noReq } = resetMsg;
+    void _omit;
+    h.sup.handleResetSession(noReq);
+    expect(h.children[0]!.kills).toBe(0);
+    expect(h.resetResults).toHaveLength(0);
+  });
+
+  it("clear mode でも fresh relaunch 経路は同じ (display projection は server 側)", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    h.sup.handleResetSession({ ...resetMsg, mode: "clear" });
+    h.children[0]!.exit();
+
+    expect(h.resetResults[0]!.mode).toBe("clear");
+    expect(h.resumes[1]).toBeUndefined();
+  });
+
+  it("fresh 成功時に旧 resume session_id の F4 ロックが activeSessions から解放される", () => {
+    // Review finding regression: fresh relaunch abandons the old
+    // resume id. Without a delete from #activeSessions, the id stays
+    // stuck forever and any future spawn / switch onto the same id
+    // hits already_running (line 370 / 460 same-session lock).
+    const otherAgentSession = "sess-old-xyz";
+    const h = harness({ exists: true });
+    // 1) resume-spawn locks the id.
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      resume_session_id: otherAgentSession,
+    });
+    // 2) reset from that resumed session (previous_session_id points
+    //    to the same id — the SessionPointer would have recorded it).
+    h.sup.handleResetSession({
+      agent_id: spawnMsg.agent_id,
+      mode: "new",
+      request_id: "rs_lock_release",
+      previous_session_id: otherAgentSession,
+    });
+    h.children[0]!.exit();
+    expect(h.resetResults[0]).toMatchObject({ ok: true });
+    // A different agent can now resume the same session_id — if the
+    // F4 lock had leaked, this would fail with already_running.
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      agent_id: "lab-pc-1.claude-b",
+      resume_session_id: otherAgentSession,
+    });
+    expect(h.results[h.results.length - 1]).toMatchObject({ ok: true });
+  });
+
+  it("rollback 成功時は rollbackSid の F4 ロックが activeSessions に取り直される", () => {
+    // spawn 時 resume なし → oldResumeSessionId は undefined。fresh spawn
+    // 失敗 → rollback で previous_session_id を resume。以後の別 agent が
+    // 同 session_id へ resume しようとすると already_running で reject
+    // されるべき (rollback 側で lock を取り直しているから)。
+    const rollbackTarget = "sess-rollback-abc";
+    const h = harness({ launchThrowsOnCall: 2, exists: true });
+    h.sup.handleSpawn(spawnMsg); // no resume, no lock initially
+    h.sup.handleResetSession({
+      agent_id: spawnMsg.agent_id,
+      mode: "new",
+      request_id: "rs_rb",
+      previous_session_id: rollbackTarget,
+    });
+    h.children[0]!.exit();
+    expect(h.resetResults[0]).toMatchObject({
+      ok: false,
+      reason: "spawn_failed",
+    });
+    // A different agent trying to resume the rollback target now
+    // should be blocked (rollback holds the F4 lock on it).
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      agent_id: "lab-pc-1.claude-c",
+      resume_session_id: rollbackTarget,
+    });
+    expect(h.results[h.results.length - 1]).toMatchObject({
+      ok: false,
+      reason: "already_running",
+    });
+  });
+
+  it("fresh 成功後の crash は通常 crash restart 経路 (pendingReset 未再入)", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    h.sup.handleResetSession(resetMsg);
+    h.children[0]!.exit();
+    // fresh 起動済み、resetResults に ok=true が 1 件
+    expect(h.resetResults).toHaveLength(1);
+
+    // fresh child が unexpected crash → 通常 crash 経路で auto-restart
+    // (pendingReset が clear されているので #relaunchForReset には入らない)
+    h.children[1]!.exit();
+    expect(h.children).toHaveLength(3);
+    // sendResetResult に追加なし (crash 経路は reset と無関係)
+    expect(h.resetResults).toHaveLength(1);
   });
 });
