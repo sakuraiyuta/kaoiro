@@ -71,6 +71,7 @@
   // Latest resume candidates from enumerate_sessions (#22 phase-1); the
   // dialog matches them to its current host/cwd selection.
   let runnerSessions = $state<RunnerSessions | null>(null);
+  let deletingAllOffline = $state(false);
 
   // Transient action notice (spawn outcome, or a stop/restore failure that
   // would otherwise fail silently, #22).
@@ -436,6 +437,40 @@
     }
   }
 
+  // Bulk purge uses the same guarded server operation as each tile's delete
+  // button. Snapshot the ids before starting because every successful delete
+  // broadcasts `agent_deleted`, which shrinks `offlineEntries` as we iterate.
+  async function deleteAllOffline(): Promise<void> {
+    if (!connection || offlineEntries.length === 0 || deletingAllOffline) return;
+    const ids = offlineEntries.map((tile) => tile.id);
+    if (
+      !confirm(
+        `${ids.length} 体のオフラインエージェントを完全に削除します。` +
+          "\n会話の復元情報も削除されます。この操作は取り消せません。よろしいですか?",
+      )
+    ) {
+      return;
+    }
+
+    deletingAllOffline = true;
+    let failed = 0;
+    try {
+      for (const id of ids) {
+        try {
+          await connection.deleteAgent(id);
+        } catch {
+          failed += 1;
+        }
+      }
+    } finally {
+      deletingAllOffline = false;
+    }
+
+    if (failed > 0) {
+      showNotice(`${failed} 体を削除できませんでした`);
+    }
+  }
+
   // Mints a short-lived WS ticket from the current httpOnly cookie and opens
   // the socket; no usable cookie/ticket falls back to the login form. Shared
   // by the reload path and post-login: both already hold a valid cookie and
@@ -708,7 +743,7 @@
       {/each}
     </ul>
   {/if}
-  {#if isOperator && offlineEntries.length > 0}
+  {#if selectedEnvelope === null && isOperator && offlineEntries.length > 0}
     <!-- Offline agents (ADR-0030): directory-only (server restarted) OR live
          disconnected (wrapper died but server survived — hot reload etc.).
          Collapsed by default so the live section stays uncluttered; expand +
@@ -730,6 +765,18 @@
             title="オフライン全体を一括復元"
           >
             前回の状態を復元
+          </button>
+          <button
+            type="button"
+            class="delete-all"
+            disabled={deletingAllOffline}
+            onclick={(e) => {
+              e.preventDefault();
+              void deleteAllOffline();
+            }}
+            title="オフライン全体を台帳ごと削除"
+          >
+            {deletingAllOffline ? "削除中…" : "すべて削除"}
           </button>
         {/if}
       </summary>
@@ -1001,6 +1048,28 @@
 
   .restore-all:hover {
     border-color: var(--fg-dim);
+  }
+
+  .delete-all {
+    font-size: var(--fs-body-sm);
+    color: var(--c-error);
+    background: var(--bg-card);
+    border: 1px solid color-mix(in srgb, var(--c-error) 55%, var(--line));
+    border-radius: 0.4rem;
+    padding: 0.2rem 0.6rem;
+    cursor: pointer;
+    transition:
+      color 0.2s,
+      border-color 0.2s;
+  }
+
+  .delete-all:hover:not(:disabled) {
+    border-color: var(--c-error);
+  }
+
+  .delete-all:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
 
   @keyframes rise {
