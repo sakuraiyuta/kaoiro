@@ -254,3 +254,50 @@ resumeを禁止する。stderrにも
 
 [phase-17-session-lifecycle-commands](../plans/phase-17-session-lifecycle-commands.md)
 で実装する。
+
+### 実測項目の扱い (phase-17 chunk γ 時点、2026-07-12)
+
+F2 の「fresh wrapper接続を確認した時だけcompletion」と Codex の thread
+ID lazy 採番を巡る挙動は、γ (17-5/6) 実装時点では**実装 assumption**
+として下記の形で coded に組み込んだ。実機での実測は Composer intercept
+と boundary UI が入る δ (17-7/8/9) 完了後、operator による `/new`・`/clear`
+の実操作で行い、必要ならこの ADR に findings を追補する。
+
+- **Codex thread ID 確定タイミング**: runner の `session_reset_result`
+  は `to_session_id` を optional / nullable にし、Codex 側は fresh
+  spawn 時点で `null` を送出する。server (`SessionResets`) の
+  `broadcast_completed` payload は `SessionResetCompleted.to_session_id`
+  を `null` で載せる。fresh session の初回 envelope が session_id を
+  報告した時点で既存の `SessionPointers.record` 経路が最新 pointer を
+  更新するため、pointer 側の確定は既存経路で自然に達成される。marker
+  側の後追い patch (δ 17-7 の `AgentStates` boundary marker への
+  `to_session_id` 反映) は UI 実装時に fresh 側の初回 envelope を hook
+  する形で追加する。
+- **同 process 連続生成**: runner supervisor は reset のたびに child を
+  kill + fresh spawn する (別 process)。同 process 内で `startThread()`
+  → `resumeThread()` を切り替える経路は本 ADR では採らない (F2 「fresh
+  relaunch」で SDK adapter 差を統合する方針)。実測で「同 process 内
+  切替でも十分に隔離できる」と判ればコスト削減候補になるが、γ 時点では
+  未検証・不採用。
+- **旧 event 隔離**: 三段防御で担保する。(a) runner supervisor の
+  child kill で旧 wrapper process を停止 (旧 rollout / tool 応答 /
+  permission 要求は fresh 側 process に届かない)、(b) wrapper が
+  envelope に session_id を stamp するので server 側 `AgentStates` が
+  latest session_id で dedupe、(c) server `SessionResets` は
+  request_id / phase mismatch の resolve / confirm を silent drop
+  (F7)。三段のどれかが壊れても他 2 段で防ぐ。runner 側の generation
+  counter は導入せず、child プロセス層の kill を主防御とする。
+
+### F2 「接続確認」の実装分担 (chunk γ two-phase completion)
+
+`SessionResets` に lock の `phase: :spawning | :awaiting_connect` を導入
+し、runner の `session_reset_result { ok=true }` は `:awaiting_connect`
+移行のみ (broadcast は発火せず)、`session_reset_completed` は fresh
+wrapper の `WrapperChannel.after_join` から `SessionResets.confirm_connection/2`
+経由で発火する。60 秒 timeout は spawn 段階 (runner ok 未受信) と接続
+段階 (wrapper join 未確認) の両方を通算するので、いずれの段階で止まっ
+ても `session_reset_failed { reason: "timeout" }` に落ちる。この two-
+phase は本 ADR F2 の「fresh wrapper 接続を確認した時だけ completion」
+文言を文字通りに実装したもので、`runner.ok=true` を completion と誤解
+する近似実装 (fresh spawn 直後に wrapper が死んだ場合の completed 偽装
+リスク) を明示的に避ける。
