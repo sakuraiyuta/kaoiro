@@ -166,8 +166,9 @@ sprite_set は server 側 manifest を優先する(host ローカルの表示名
   accept-all)へ更新
 - `docs/specs/personas.md` — runner 側の persona 受け入れ仕様を
   2 モード対応で書き換え
-- `wrapper/kaoiro.config.example.json` — 影響なし(persona は
-  server から降ってくる、ADR-0029 F3)
+- `wrapper/kaoiro.config.{claude-code,codex}.example.json` — 影響なし
+  (persona は server から降ってくる、ADR-0029 F3。ファイル名は phase-15
+  15-17 で engine 別に分割)
 
 ## Non-Goals
 

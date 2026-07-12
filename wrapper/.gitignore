@@ -6,7 +6,8 @@ dist/
 # reproducible CI put approvals in package.json "pnpm.onlyBuiltDependencies".
 pnpm-workspace.yaml
 
-# Live config holds agent_id / persona mappings; only the example is tracked.
+# Live config holds agent_id / persona mappings; only the examples are
+# tracked. Post-phase-15 (15-17) the example is split per engine.
 kaoiro.config.json
 kaoiro.config.*.json
-!kaoiro.config.example.json
+!kaoiro.config.*.example.json

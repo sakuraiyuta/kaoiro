@@ -97,7 +97,9 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
   単純化のため、blocklist / allowlist の対象として通常の id と同格に
   扱うようになった(下記参照)。
 - ラッパー設定の `persona` ブロック例(全体構造は
-  [wrapper/kaoiro.config.example.json](../../wrapper/kaoiro.config.example.json)):
+  [wrapper/kaoiro.config.claude-code.example.json](../../wrapper/kaoiro.config.claude-code.example.json)
+  または
+  [wrapper/kaoiro.config.codex.example.json](../../wrapper/kaoiro.config.codex.example.json)):
 
 ```json
 "persona": { "id": "default", "name": "デフォルト", "sprite_set": "default" }

@@ -59,10 +59,14 @@ pnpm build      # 依存順に各パッケージの dist/ を生成
 
 ## 設定(kaoiro.config.json)
 
-ラッパーは設定ファイル(既定 `kaoiro.config.json`)を読み込む。例は
-[kaoiro.config.example.json](kaoiro.config.example.json)。`agent.*.json` /
-example は従来どおり本ディレクトリ直下に置く(live config は gitignore
-済み)。スキーマと読み込みは `core/src/persona.ts`。
+ラッパーは設定ファイル(既定 `kaoiro.config.json`)を読み込む。engine
+別の例は
+[kaoiro.config.claude-code.example.json](kaoiro.config.claude-code.example.json)
+と [kaoiro.config.codex.example.json](kaoiro.config.codex.example.json)。
+`agent.*.json` / example は従来どおり本ディレクトリ直下に置く(live
+config は gitignore 済み)。スキーマと読み込みは `core/src/persona.ts`。
+
+### 共通フィールド
 
 | キー | 必須 | 意味 |
 |---|---|---|
@@ -71,7 +75,35 @@ example は従来どおり本ディレクトリ直下に置く(live config は g
 | `server_url` | ✓ | サーバの wrapper ソケット(例 `ws://localhost:4000/wrapper`)。ADR-0029 F3 で必須(server 集約 SoT + fail-closed) |
 | `server_token` | | wrapper 認証トークン。サーバで `KAOIRO_WRAPPER_TOKENS` を設定した時に必要(下記) |
 | `permission_timeout_ms` | | ツール許可の無応答 deny までの時間(既定 600000 = 600 秒) |
-| `allowed_tools` | | 実行可能ツールの上限(ローカル天井、サーバから拡張不可)。省略=読み取り専用 |
+
+### engine × config field 対応
+
+engine が違えば効く config field も違う。「無視」欄は
+[phase-15 D3](../docs/plans/phase-15-wrapper-ux-parity.md) の loud warn
+対象で、起動時 stderr に `config warn: <field> is <engine>-only, ignored
+on <other>` を 1 行出す。
+
+| キー | claude-code | codex | 意味 |
+|---|---|---|---|
+| `model` | ✓(catalog 値) | 起動時未指定推奨 | 起動時 model pick。Codex は ChatGPT-plan で account default 委任のため空推奨([codex/src/catalog.ts](codex/src/catalog.ts)) |
+| `effort` | 現状 UI 未露出 | ✓(catalog 値) | 起動時 effort pick。閉じ列挙は engine catalog 側 |
+| `permission_mode` | ✓(6 値、[ADR-0033 F4 追補](../docs/adr/0033-permission-model-dual-axis.md)) | 無視(stderr warn) | 起動時 mode。Codex は launch-fixed(ADR-0033 F3) |
+| `allowed_tools` | ✓ | 無視(stderr warn) | ツール ceiling(ローカル天井、サーバから拡張不可)。省略=読み取り専用 |
+| `sandbox` | 無視(stderr warn) | ✓(3 値) | OS sandbox 軸(ADR-0033 F3)。閉じ列挙:`read-only` / `workspace-write` / `danger-full-access` |
+| `network_access` | 無視(stderr warn) | ✓(bool) | `workspace-write` 内でネットワーク許可するか。既定 `false` |
+
+### env による default
+
+engine 別 env の解決順は `launch > env > config > default`
+([ADR-0032 F4bc 追補](../docs/adr/0032-codex-adapter.md))。値そのものが
+env 経由で流れるのは model のみ。
+
+| 環境変数 | claude-code | codex | 意味 |
+|---|---|---|---|
+| `KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` | ✓ | 無視 | Claude CLI の起動時既定 model |
+| `KAOIRO_CODEX_DEFAULT_MODEL` | 無視 | ✓ | Codex CLI の起動時既定 model |
+| `KAOIRO_WRAPPER_DEFAULT_MODEL` | ✓(deprecation warn) | 完全無視 | 旧 env。次リリース窓で撤去([issue #103](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/103)) |
+| `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | ✓ | ✓ | 共通:ツール許可 timeout の override |
 
 ## 手動起動
 

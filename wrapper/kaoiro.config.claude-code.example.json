@@ -5,5 +5,7 @@
     "name": "あお",
     "sprite_set": "ao"
   },
-  "server_url": "ws://localhost:4000/wrapper"
+  "server_url": "ws://localhost:4000/wrapper",
+  "model": "claude-opus-4-7",
+  "permission_mode": "default"
 }

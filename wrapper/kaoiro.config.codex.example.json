@@ -1,0 +1,11 @@
+{
+  "agent_id": "lab-pc-1.codex-a",
+  "persona": {
+    "id": "momo",
+    "name": "もも",
+    "sprite_set": "momo"
+  },
+  "server_url": "ws://localhost:4000/wrapper",
+  "sandbox": "workspace-write",
+  "network_access": false
+}
