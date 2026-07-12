@@ -16,6 +16,7 @@
     permissionFrom,
     PERMISSION_MODE_AXES,
     resultOf,
+    resumeDriftFrom,
     RUNNING_STATES,
     STOP_SAFE_STATES,
   } from "./protocol";
@@ -216,6 +217,17 @@
       : null;
   }
 
+  /** Render a resume-drift field value for display (phase-15 D8). Fields
+   *  carry strings / booleans / enums, and `undefined` means the field
+   *  was not set on that side of the compare — render it as a distinct
+   *  marker so "empty → workspace-write" reads differently from
+   *  "read-only → workspace-write". */
+  function fmtDriftValue(v: unknown): string {
+    if (v === undefined || v === null) return "(未設定)";
+    if (typeof v === "boolean") return v ? "true" : "false";
+    return String(v);
+  }
+
   /** Compact token count: 1234 -> "1.2k", 1_200_000 -> "1.2M" (#55). */
   function fmtTokens(n: number): string {
     if (n < 1000) return String(n);
@@ -313,6 +325,11 @@
   const agentEngine = $derived(engineFrom(envelope));
   const permAxes = $derived(permissionFrom(envelope));
   const isCodexAgent = $derived(agentEngine === "codex");
+  // ADR-0014 F1 addendum (phase-15 D8): the resume-launch drift entries the
+  // wrapper stamped when this launch's effective values differ from the
+  // resumed session's snapshot. null on a fresh spawn (nothing to compare),
+  // empty array on a clean resume, non-empty when at least one field drifted.
+  const resumeDrift = $derived(resumeDriftFrom(envelope));
   // ADR-0032 F4bc addendum (phase-15 D1): "account default" labelling is
   // driven by ext.model_source === "default", NOT by engine name. Any engine
   // whose wrapper reports the SDK's own default hits this branch — including
@@ -595,6 +612,12 @@
     }
   });
   const permLabel = $derived(pendingPerm ?? ccPermissionMode);
+  // The label the switcher button actually shows: "default" is the SDK's own
+  // fallback when no mode has been reported yet (ext.permission_mode absent).
+  // Task 15-10 pins the two-axis annotation onto the SELECTED label, so the
+  // guard must key off the label that renders — not raw permLabel, which
+  // would suppress the badge for that first-frame default case.
+  const displayPermLabel = $derived(permLabel ?? "default");
   // Optimistic model label shown the instant the operator switches: ext.model
   // (the authoritative resolved id) only catches up a turn later, so without
   // this the model row stays on the old value until the next reply (#54).
@@ -1308,23 +1331,33 @@
               <dd>{agentEngine}</dd>
             </div>
           {/if}
-          {#if permAxes}
-            <!-- Engine-neutral two-axis badge (ADR-0033 F1/F4): the display
-                 is unified even where the switcher below is engine-native. -->
+          {#if resumeDrift && resumeDrift.length > 0}
+            <!-- ADR-0014 F1 addendum (phase-15 D8): resume drift warning.
+                 Fires only on the resume path (fresh spawn omits the field
+                 entirely; empty array means clean resume). One entry per
+                 differing field, showing (prev → now). -->
             <div class="cc-row">
-              <dt>perm</dt>
+              <dt>resume</dt>
               <dd>
-                <span class="axes-badge">
-                  書込: {permAxes.sandbox} / 承認: {permAxes.approval}
+                <span
+                  class="drift-badge"
+                  title="resume 前後で resolved 設定が変わりました"
+                >
+                  {#each resumeDrift as d (d.field)}
+                    <span class="drift-entry">
+                      {d.field}: {fmtDriftValue(d.prev)} → {fmtDriftValue(d.now)}
+                    </span>
+                  {/each}
                 </span>
               </dd>
             </div>
           {/if}
-          {#if isCodexAgent}
-            <!-- Codex permission is launch-fixed (ADR-0033 F3): no switcher. -->
-          {:else if ccPermissionMode || connection}
+          {#if !isCodexAgent && (ccPermissionMode || connection)}
+            <!-- 作業意図 (mode, ADR-0033 F4 追補): the operator's intent
+                 expressed as the Claude permission_mode enum. Codex is
+                 launch-fixed (ADR-0033 F3) so no picker here. -->
             <div class="cc-row">
-              <dt>mode</dt>
+              <dt>作業意図</dt>
               <dd>
                 {#if connection}
                   <div class="cc-switchbox">
@@ -1334,7 +1367,18 @@
                       aria-haspopup="listbox"
                       aria-expanded={permMenuOpen}
                       onclick={togglePermMenu}
-                    >{permLabel ?? "default"}</button>
+                    >
+                      {displayPermLabel}
+                      {#if PERMISSION_MODE_AXES[displayPermLabel]}
+                        <!-- Pin the two-axis reading on the selected label
+                             too, not only on the dropdown candidates
+                             (phase-15 D2 / task 15-10). -->
+                        <span class="axes-hint">
+                          書込: {PERMISSION_MODE_AXES[displayPermLabel].sandbox} /
+                          承認: {PERMISSION_MODE_AXES[displayPermLabel].approval}
+                        </span>
+                      {/if}
+                    </button>
                     {#if permMenuOpen}
                       <ul
                         class="switch-menu"
@@ -1365,6 +1409,24 @@
                 {:else}
                   {ccPermissionMode}
                 {/if}
+              </dd>
+            </div>
+          {/if}
+          {#if permAxes}
+            <!-- 実効書込範囲 (sandbox × approval, ADR-0033 F1/F4): engine-
+                 neutral two-axis posture. Codex approval is host-fixed to
+                 "never" (ADR-0033 F3, tracked in codex-exec-approval-upstream)
+                 so we badge it as such for phase-15 D2 / task 15-11. -->
+            <div class="cc-row">
+              <dt>実効書込範囲</dt>
+              <dd>
+                <span class="axes-badge">
+                  書込: {permAxes.sandbox} /
+                  承認: {permAxes.approval}{#if isCodexAgent}<span
+                    class="axes-hostfixed"
+                    title="upstream 制約 (codex-exec-approval-upstream)"
+                  > (host-fixed)</span>{/if}
+                </span>
               </dd>
             </div>
           {/if}
@@ -2565,6 +2627,28 @@
     display: block;
     font-size: 0.72rem;
     color: var(--fg-dim);
+  }
+
+  /* Codex "承認: never" annotation (phase-15 D2 / task 15-11): dimmer than
+     the axis value itself so the badge reads primarily as "never" with
+     the reason surfaced inline. */
+  .axes-hostfixed {
+    color: var(--fg-dim);
+    font-size: 0.85em;
+  }
+
+  /* Resume drift badge (ADR-0014 F1 addendum, phase-15 D8 / task 15-9):
+     amber tone (shared with tool_running) so the operator notices resolved
+     settings changed on resume without treating it as an error. */
+  .drift-badge {
+    display: block;
+    font-size: var(--fs-body-sm);
+    color: var(--c-tool_running);
+  }
+
+  .drift-entry {
+    display: block;
+    font-variant-numeric: tabular-nums;
   }
 
   .switch-menu button[aria-selected="true"] {

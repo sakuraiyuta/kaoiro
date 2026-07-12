@@ -15,6 +15,7 @@ import {
   pendingPermissionFrom,
   pendingQuestionFrom,
   resultOf,
+  resumeDriftFrom,
 } from "../src/lib/protocol";
 import type { Envelope } from "../src/lib/protocol";
 
@@ -497,5 +498,67 @@ describe("formatAgentLabel (name(id) helper)", () => {
     const id = "lab.same";
     const agents = { [id]: makeEnvelope(id, id) };
     expect(formatAgentLabel(agents, id)).toBe(id);
+  });
+});
+
+describe("resumeDriftFrom (ADR-0014 F1 addendum, phase-15 D8)", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "a",
+    ts: "2026-07-12T00:00:00Z",
+    type: "state_change",
+    state: "idle",
+  };
+
+  it("ext.resume_drift 未 stamp (fresh spawn) は null", () => {
+    expect(resumeDriftFrom(base)).toBeNull();
+    expect(resumeDriftFrom({ ...base, ext: {} })).toBeNull();
+  });
+
+  it("clean resume は空配列を返す", () => {
+    const envelope: Envelope = { ...base, ext: { resume_drift: [] } };
+    expect(resumeDriftFrom(envelope)).toEqual([]);
+  });
+
+  it("drift エントリを field/prev/now でパースする", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        resume_drift: [
+          { field: "model", prev: "claude-opus-4-7", now: "claude-sonnet-4-6" },
+          { field: "network_access", prev: false, now: true },
+        ],
+      },
+    };
+    expect(resumeDriftFrom(envelope)).toEqual([
+      { field: "model", prev: "claude-opus-4-7", now: "claude-sonnet-4-6" },
+      { field: "network_access", prev: false, now: true },
+    ]);
+  });
+
+  it("field が欠けた malformed entry は落として残りを返す", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        resume_drift: [
+          { field: "model", prev: "a", now: "b" },
+          { prev: "x", now: "y" },
+          "not-an-object",
+          { field: "sandbox", prev: undefined, now: "workspace-write" },
+        ],
+      },
+    };
+    expect(resumeDriftFrom(envelope)).toEqual([
+      { field: "model", prev: "a", now: "b" },
+      { field: "sandbox", prev: undefined, now: "workspace-write" },
+    ]);
+  });
+
+  it("ext.resume_drift が配列でなければ null (fresh spawn 扱い)", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: { resume_drift: "unexpected" },
+    };
+    expect(resumeDriftFrom(envelope)).toBeNull();
   });
 });

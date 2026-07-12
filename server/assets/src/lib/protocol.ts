@@ -148,6 +148,37 @@ export function modelSourceFrom(envelope: Envelope): string | null {
   return typeof raw === "string" && raw !== "" ? raw : null;
 }
 
+/** One drifted field in a resume launch, comparing prev (the snapshot's
+ *  last-effective value) vs now (this launch's effective value). `unknown`
+ *  types because different fields carry different value shapes (string,
+ *  boolean, enum). ADR-0014 F1 addendum + phase-15 D8. */
+export interface ResumeDriftEntry {
+  field: string;
+  prev: unknown;
+  now: unknown;
+}
+
+/** Reads ext.resume_drift off an envelope (ADR-0014 F1 addendum, phase-15
+ *  D8). Returns null on a fresh spawn (field absent), empty array on a
+ *  resume with no drift, and one entry per differing field otherwise.
+ *  Malformed entries are dropped rather than surfacing bad UI. */
+export function resumeDriftFrom(envelope: Envelope): ResumeDriftEntry[] | null {
+  const raw = envelope.ext?.resume_drift;
+  if (!Array.isArray(raw)) return null;
+  const out: ResumeDriftEntry[] = [];
+  for (const entry of raw) {
+    if (
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as { field?: unknown }).field === "string"
+    ) {
+      const e = entry as { field: string; prev: unknown; now: unknown };
+      out.push({ field: e.field, prev: e.prev, now: e.now });
+    }
+  }
+  return out;
+}
+
 /** Claude mode -> two-axis display annotation (ADR-0033 F2/F4: the picker
  *  stays engine-native, each option annotated with its two-axis reading).
  *  Mirrors the wrapper's PERMISSION_MODE_AXES table. */
