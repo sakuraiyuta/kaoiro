@@ -59,6 +59,15 @@ config :kaoiro_server,
        :agent_directory_path,
        System.get_env("KAOIRO_AGENT_DIRECTORY_PATH")
 
+# DETS file for the per-agent permission-mode ledger. Same rationale as
+# the two paths above: unset falls back to a tmp path
+# (KaoiroServer.PermissionModes) which is destroyed together with the
+# container on `docker compose down`. Point at a persistent volume so the
+# per-agent mode survives a dogfood restart.
+config :kaoiro_server,
+       :permission_modes_path,
+       System.get_env("KAOIRO_PERMISSION_MODES_PATH")
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

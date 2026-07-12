@@ -97,6 +97,14 @@ ENV LC_ALL=en_US.UTF-8
 WORKDIR "/app"
 RUN chown nobody /app
 
+# Persistence dir for restart-surviving DETS ledgers (session_pointers /
+# agent_directory / permission_modes). A docker named volume mounted
+# here inherits `nobody` ownership from this pre-created directory;
+# without it the volume would land as root:root and the runtime user
+# would fail to open the DETS file. See server/docker-compose.yaml
+# `volumes:` and KAOIRO_*_PATH in config/runtime.exs.
+RUN mkdir /var/lib/kaoiro && chown nobody /var/lib/kaoiro
+
 # set runner ENV
 ENV MIX_ENV="prod"
 

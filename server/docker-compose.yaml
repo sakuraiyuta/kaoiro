@@ -27,8 +27,23 @@ services:
       - "127.0.0.1:4000:4000"
     env_file:
       - .env
-    # Sprite overlay (ADR-0008): mount a host dir and set
-    # KAOIRO_PERSONA_DIR=/personas in .env to override bundled sets.
-    # volumes:
-    #   - ./personas-overlay:/personas:ro
+    # Restart-surviving state (session pointers / agent identity ledger /
+    # permission modes, ADR-0014/0030). Without this the DETS files
+    # default to /tmp inside the container and vanish on `docker compose
+    # down`, taking the offline-agent list with them so a `dogfood.sh`
+    # restart cannot restore prior agents. `/var/lib/kaoiro` is
+    # pre-created as nobody-owned in the Dockerfile so the named volume
+    # is writable by the runtime user.
+    environment:
+      KAOIRO_SESSION_POINTERS_PATH: /var/lib/kaoiro/session_pointers.dets
+      KAOIRO_AGENT_DIRECTORY_PATH: /var/lib/kaoiro/agent_directory.dets
+      KAOIRO_PERMISSION_MODES_PATH: /var/lib/kaoiro/permission_modes.dets
+    volumes:
+      - kaoiro-state:/var/lib/kaoiro
+      # Sprite overlay (ADR-0008): uncomment and set KAOIRO_PERSONA_DIR
+      # =/personas in .env to override bundled sets.
+      # - ./personas-overlay:/personas:ro
     restart: unless-stopped
+
+volumes:
+  kaoiro-state:
