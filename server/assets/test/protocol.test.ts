@@ -16,6 +16,8 @@ import {
   pendingQuestionFrom,
   resultOf,
   resumeDriftFrom,
+  sessionCapabilitiesFrom,
+  userInputDialogAvailability,
 } from "../src/lib/protocol";
 import type { Envelope } from "../src/lib/protocol";
 
@@ -560,5 +562,164 @@ describe("resumeDriftFrom (ADR-0014 F1 addendum, phase-15 D8)", () => {
       ext: { resume_drift: "unexpected" },
     };
     expect(resumeDriftFrom(envelope)).toBeNull();
+  });
+});
+
+describe("sessionCapabilitiesFrom (ADR-0034 F1/F2)", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "a",
+    ts: "2026-07-12T00:00:00Z",
+    type: "state_change",
+    state: "idle",
+  };
+
+  it("ext.session_capabilities 未 stamp は null (fail-closed)", () => {
+    expect(sessionCapabilitiesFrom(base)).toBeNull();
+    expect(sessionCapabilitiesFrom({ ...base, ext: {} })).toBeNull();
+  });
+
+  it("両 boolean field が揃えばパース (Claude 相当)", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(envelope)).toEqual({
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+    });
+  });
+
+  it("Codex 相当: attachments=false / dialog=true", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: false,
+          supports_user_input_dialog: true,
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(envelope)).toEqual({
+      supports_attachments: false,
+      supports_user_input_dialog: true,
+    });
+  });
+
+  it("boolean が欠けたら null (partial 判定は許可しない)", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: { session_capabilities: { supports_attachments: true } },
+    };
+    expect(sessionCapabilitiesFrom(envelope)).toBeNull();
+  });
+
+  it("user_input_modes は string 配列だけ pass、malformed は drop", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          user_input_modes: ["default", 42, "plan", null],
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(envelope)).toEqual({
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+      user_input_modes: ["default", "plan"],
+    });
+  });
+
+  it("user_input_modes が空配列なら field 省略 (unconditional 扱い)", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          user_input_modes: [],
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(envelope)).toEqual({
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+    });
+  });
+});
+
+describe("userInputDialogAvailability (ADR-0034 F3, phase-15 D5)", () => {
+  it("caps が null なら unsupported (fail-closed)", () => {
+    expect(userInputDialogAvailability(null, "default")).toBe("unsupported");
+    expect(userInputDialogAvailability(null, null)).toBe("unsupported");
+  });
+
+  it("supports_user_input_dialog=false なら unsupported", () => {
+    expect(
+      userInputDialogAvailability(
+        { supports_attachments: true, supports_user_input_dialog: false },
+        "default",
+      ),
+    ).toBe("unsupported");
+  });
+
+  it("user_input_modes 未指定なら unconditional on", () => {
+    expect(
+      userInputDialogAvailability(
+        { supports_attachments: true, supports_user_input_dialog: true },
+        "default",
+      ),
+    ).toBe("on");
+    // currentMode が null でも user_input_modes 未指定なら on
+    expect(
+      userInputDialogAvailability(
+        { supports_attachments: true, supports_user_input_dialog: true },
+        null,
+      ),
+    ).toBe("on");
+  });
+
+  it("user_input_modes に currentMode が含まれれば on", () => {
+    expect(
+      userInputDialogAvailability(
+        {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          user_input_modes: ["default", "plan"],
+        },
+        "plan",
+      ),
+    ).toBe("on");
+  });
+
+  it("user_input_modes 指定 + currentMode 非該当なら conditional-off", () => {
+    expect(
+      userInputDialogAvailability(
+        {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          user_input_modes: ["default"],
+        },
+        "bypassPermissions",
+      ),
+    ).toBe("conditional-off");
+    // currentMode が null なら照合が成立しないので conditional-off
+    expect(
+      userInputDialogAvailability(
+        {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          user_input_modes: ["default"],
+        },
+        null,
+      ),
+    ).toBe("conditional-off");
   });
 });

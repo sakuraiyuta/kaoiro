@@ -148,6 +148,72 @@ export function modelSourceFrom(envelope: Envelope): string | null {
   return typeof raw === "string" && raw !== "" ? raw : null;
 }
 
+/** Advertised session-level capabilities the wrapper stamps on every
+ *  state_change (ADR-0034 F1/F2). Missing = fail-closed / "not supported"
+ *  — the UI must not enable feature paths on absent capabilities. */
+export interface SessionCapabilities {
+  supports_attachments: boolean;
+  supports_user_input_dialog: boolean;
+  /** Optional constraint: dialog only fires in these permission_mode /
+   *  sandbox contexts. Absent / empty = unconditional (matches on=true).
+   *  When present the UI shows "conditional-off" when the current mode is
+   *  not listed (ADR-0034 F3). */
+  user_input_modes?: string[];
+}
+
+/** Reads ext.session_capabilities off an envelope (ADR-0034 F1). Returns
+ *  null when absent or malformed — fail-closed by contract, so a null
+ *  return MUST be treated as "no capability" by every caller (never as
+ *  "unknown, permit". Both required booleans must be present; malformed
+ *  strings in user_input_modes are dropped. */
+export function sessionCapabilitiesFrom(
+  envelope: Envelope,
+): SessionCapabilities | null {
+  const raw = envelope.ext?.session_capabilities;
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.supports_attachments !== "boolean" ||
+    typeof r.supports_user_input_dialog !== "boolean"
+  ) {
+    return null;
+  }
+  const out: SessionCapabilities = {
+    supports_attachments: r.supports_attachments,
+    supports_user_input_dialog: r.supports_user_input_dialog,
+  };
+  if (Array.isArray(r.user_input_modes)) {
+    const modes: string[] = [];
+    for (const m of r.user_input_modes) if (typeof m === "string") modes.push(m);
+    if (modes.length > 0) out.user_input_modes = modes;
+  }
+  return out;
+}
+
+/** AskUserQuestion dialog availability given the capability envelope and
+ *  the operator's current permission_mode (ADR-0034 F3, phase-15 D5). Both
+ *  adapters currently advertise unconditional `true` so this returns "on"
+ *  for existing engines; the judge exists so a future adapter can
+ *  advertise conditional availability without another UI rewrite. Values:
+ *   - "unsupported"     : caps absent OR supports_user_input_dialog=false
+ *   - "conditional-off" : dialog=true, user_input_modes specified but
+ *                         `currentMode` is not in the list
+ *   - "on"              : dialog=true AND (user_input_modes absent OR
+ *                         includes `currentMode`)
+ *  `currentMode` may be null when init has not landed; that reads the
+ *  same as "no mode set" — the guard returns "conditional-off" only when
+ *  the modes list is present and no match exists. */
+export function userInputDialogAvailability(
+  caps: SessionCapabilities | null,
+  currentMode: string | null,
+): "unsupported" | "conditional-off" | "on" {
+  if (!caps || !caps.supports_user_input_dialog) return "unsupported";
+  const modes = caps.user_input_modes;
+  if (!modes || modes.length === 0) return "on";
+  if (currentMode !== null && modes.includes(currentMode)) return "on";
+  return "conditional-off";
+}
+
 /** One drifted field in a resume launch, comparing prev (the snapshot's
  *  last-effective value) vs now (this launch's effective value). `unknown`
  *  types because different fields carry different value shapes (string,

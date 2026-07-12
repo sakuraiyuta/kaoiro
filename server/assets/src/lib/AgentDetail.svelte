@@ -18,7 +18,9 @@
     resultOf,
     resumeDriftFrom,
     RUNNING_STATES,
+    sessionCapabilitiesFrom,
     STOP_SAFE_STATES,
+    userInputDialogAvailability,
   } from "./protocol";
   import type {
     Envelope,
@@ -618,6 +620,18 @@
   // guard must key off the label that renders — not raw permLabel, which
   // would suppress the badge for that first-frame default case.
   const displayPermLabel = $derived(permLabel ?? "default");
+  // ADR-0034 F1/F3: session-level capability advertise. Consumers here are
+  // fail-closed — a null / absent capability envelope disables the feature
+  // rather than defaulting to "permitted". Both adapters currently advertise
+  // unconditional true; the judge for user_input_dialog is future-proofing
+  // for D5 (Free plan / user_input_modes) without another UI rewrite.
+  const sessionCaps = $derived(sessionCapabilitiesFrom(envelope));
+  const attachmentsSupported = $derived(
+    sessionCaps?.supports_attachments === true,
+  );
+  const dialogAvailability = $derived(
+    userInputDialogAvailability(sessionCaps, displayPermLabel),
+  );
   // Optimistic model label shown the instant the operator switches: ext.model
   // (the authoritative resolved id) only catches up a turn later, so without
   // this the model row stays on the old value until the next reply (#54).
@@ -860,6 +874,17 @@
   // the same cap server-side and rejects with count_over.
   function addStagedFiles(picked: File[]): void {
     actionError = "";
+    // Fail-closed on unsupported sessions (ADR-0034 F1/F3, task 15-15):
+    // paste / drop can reach this without going through the disabled attach
+    // button, so guard here at the single choke point instead of at each
+    // entry. Silent drop when picked is empty (a no-op D&D) — only surface
+    // the message when the operator actually tried to stage something.
+    if (!attachmentsSupported) {
+      if (picked.length > 0) {
+        actionError = "このセッションでは添付は未対応です";
+      }
+      return;
+    }
     const next: StagedEntry[] = [...stagedFiles];
     let dropped = 0;
     for (const f of picked) {
@@ -1775,13 +1800,18 @@
           {/if}
         {/if}
 
-        {#if question}
+        {#if question && dialogAvailability !== "unsupported"}
           <!-- Question dock (#78, ADR-0027): AskUserQuestion's structured
                choices — radios for single-select, checkboxes for multiSelect,
                plus a free-text "Other" per question. In-flow like the
                permission dock, so it pushes the log up instead of overlaying
                it; scrolls internally when the choices are tall, and collapses
-               to a one-line bar to reclaim log height when needed. -->
+               to a one-line bar to reclaim log height when needed.
+               Guarded by session_capabilities.supports_user_input_dialog
+               (ADR-0034 F1/F3, phase-15 15-16): defensive — the adapter
+               should not have stamped a pending_question if dialog is
+               unsupported, but we drop the dock rather than render an
+               unusable UI if it did. -->
           {#if questionMinimized}
             <button
               type="button"
@@ -1855,6 +1885,17 @@
           {/if}
         {/if}
 
+        {#if dialogAvailability === "conditional-off"}
+          <!-- ADR-0034 F3 (phase-15 15-16): proactive hint when the adapter
+               advertises supports_user_input_dialog with a user_input_modes
+               list that excludes the current mode. Both adapters currently
+               advertise unconditional true so this stays inert; wired for
+               D5 (Free/Go plan) future without another UI rewrite. -->
+          <p class="caps-hint">
+            現在の作業意図では質問に応答できません
+            (session_capabilities.user_input_modes)
+          </p>
+        {/if}
         <div
           class="composer"
           role="region"
@@ -1894,13 +1935,24 @@
               rows="2"
               aria-label="instruction for {name}"
             ></textarea>
-            <label class="attach" title="ファイル添付(画像 / テキスト / コード / PDF / Office、複数可)">
+            <!-- ADR-0034 F1/F3 (phase-15 15-15): attach button gated on the
+                 wrapper's advertised supports_attachments. Fail-closed: a
+                 session that has not stamped session_capabilities is treated
+                 the same as one that stamped false. -->
+            <label
+              class="attach"
+              class:attach-disabled={!attachmentsSupported}
+              title={attachmentsSupported
+                ? "ファイル添付(画像 / テキスト / コード / PDF / Office、複数可)"
+                : "このセッションでは未対応"}
+            >
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/xml,application/yaml,application/x-yaml,application/javascript,application/typescript,application/sql,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation"
                 multiple
                 onchange={onFilePicked}
                 bind:this={stagedFileInput}
+                disabled={!attachmentsSupported}
               />
               <span>📎</span>
             </label>
@@ -3380,6 +3432,25 @@
 
   .attach input[type="file"] {
     display: none;
+  }
+
+  /* Disabled attach button (phase-15 15-15): the session_capabilities
+     advertise supports_attachments=false (or is absent, fail-closed).
+     Muted look and default cursor so it reads as unavailable; the tooltip
+     ("このセッションでは未対応") carries the reason. */
+  .attach-disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  /* Composer capability hint (phase-15 15-16): fires only when the
+     wrapper advertises supports_user_input_dialog=true with a
+     user_input_modes list that excludes the current mode. Dim by default
+     — informational, not an error. */
+  .caps-hint {
+    margin: 0 0 0.4rem;
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
   }
 
   /* Staged-attachment tray (file-upload spec / ADR-0025 F12 "to-send tray"):
