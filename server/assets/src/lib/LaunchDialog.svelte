@@ -68,6 +68,11 @@
   const effortLevels = $derived(
     engineModels.find((m) => m.value === model)?.effort_levels ?? [],
   );
+  function chooseModel(event: Event): void {
+    model = (event.currentTarget as HTMLSelectElement).value;
+    const choice = engineModels.find((m) => m.value === model);
+    effort = choice?.default_effort ?? "";
+  }
   // Codex permission is launch-fixed (ADR-0033 F3): the sandbox axis is the
   // only selectable knob; approval is pinned to "never" upstream.
   const isCodex = $derived(engine === "codex");
@@ -267,7 +272,7 @@
       {#if engineModels.length > 0}
         <label>
           モデル
-          <select bind:value={model}>
+          <select value={model} onchange={chooseModel}>
             <option value="">既定</option>
             {#each engineModels as m (m.value)}
               <option value={m.value}>{m.display_name}</option>

@@ -11,6 +11,7 @@
     logOf,
     modelsFrom,
     modelSourceFrom,
+    modelSwitchStateFrom,
     pendingPermissionFrom,
     pendingQuestionFrom,
     permissionFrom,
@@ -359,14 +360,13 @@
   // Operator-only: ext is stripped for viewers (#46), so these stay empty and
   // the switch controls never render for non-operators.
   const models = $derived(modelsFrom(envelope));
-  // Effort choices = the union of every model's effort_levels, ordered
-  // low→max. The SDK silently downgrades a level the active model does not
-  // support, so offering the union is safe and avoids having to match the
-  // resolved model id (ext.model) back to a supportedModels alias.
+  // Effort choices belong to the active (or pending) model. Offering a union
+  // would permit an invalid model/effort pair and invite the silent downgrade
+  // ADR-0035 explicitly forbids.
   const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
   const effortLevels = $derived.by(() => {
-    const seen = new Set<string>();
-    for (const m of models) for (const l of m.effort_levels ?? []) seen.add(l);
+    const active = models.find((m) => m.value === (pendingModel?.value ?? ccModel));
+    const seen = new Set(active?.effort_levels ?? []);
     return EFFORT_ORDER.filter((l) => seen.has(l));
   });
 
@@ -633,6 +633,13 @@
   // unconditional true; the judge for user_input_dialog is future-proofing
   // for D5 (Free plan / user_input_modes) without another UI rewrite.
   const sessionCaps = $derived(sessionCapabilitiesFrom(envelope));
+  const switchState = $derived(modelSwitchStateFrom(envelope));
+  const modelSwitchSupported = $derived(
+    sessionCaps?.supports_model_switch === true,
+  );
+  const effortSwitchSupported = $derived(
+    sessionCaps?.supports_effort_switch === true,
+  );
   const attachmentsSupported = $derived(
     sessionCaps?.supports_attachments === true,
   );
@@ -643,7 +650,7 @@
   // (the authoritative resolved id) only catches up a turn later, so without
   // this the model row stays on the old value until the next reply (#54).
   // Cleared once ext.model actually changes, or on agent switch.
-  let pendingModel = $state<string | null>(null);
+  let pendingModel = $state<{ value: string; label: string } | null>(null);
   let lastCcModel = untrack(() => ccModel);
   $effect(() => {
     if (ccModel !== lastCcModel) {
@@ -651,7 +658,36 @@
       pendingModel = null;
     }
   });
-  const modelLabel = $derived(pendingModel ?? ccModel);
+  const modelLabel = $derived(pendingModel?.label ?? ccModel);
+  const effectiveEffort = $derived.by(() => {
+    const raw = envelope.ext?.effective;
+    if (typeof raw !== "object" || raw === null) return null;
+    const value = (raw as Record<string, unknown>).effort;
+    return typeof value === "string" ? value : null;
+  });
+  let pendingEffort = $state<string | null>(null);
+  let switchNotice = $state<{ tone: "info" | "error"; text: string } | null>(null);
+  let lastEffectiveEffort = untrack(() => effectiveEffort);
+  $effect(() => {
+    if (effectiveEffort !== lastEffectiveEffort) {
+      lastEffectiveEffort = effectiveEffort;
+      pendingEffort = null;
+      selectedEffort = effectiveEffort;
+    }
+  });
+  let sawEffortReset = false;
+  $effect(() => {
+    const reset = switchState.effort_reset;
+    if (reset && !sawEffortReset) {
+      selectedEffort = null;
+      pendingEffort = null;
+      switchNotice = {
+        tone: "info",
+        text: "新モデルで元の effort が使えないため既定へ戻しました",
+      };
+    }
+    sawEffortReset = reset;
+  });
   // Reset the popovers + the optimistic picks when the detail switches to a
   // different agent (the component is reused, not re-keyed, in App.svelte).
   let switchAgentId = untrack(() => envelope.agent_id);
@@ -659,6 +695,8 @@
     if (envelope.agent_id !== switchAgentId) {
       switchAgentId = envelope.agent_id;
       selectedEffort = null;
+      pendingEffort = null;
+      switchNotice = null;
       pendingModel = null;
       pendingPerm = null;
       modelMenuOpen = false;
@@ -699,18 +737,62 @@
   function chooseModel(value: string): void {
     modelMenuOpen = false;
     if (!connection) return;
+    if (value === ccModel) return;
     // Reflect the pick immediately (ext.model lags a turn); show the friendly
     // name when known, else the raw alias.
     const choice = models.find((m) => m.value === value);
-    pendingModel = choice?.display_name ?? value;
-    void run(() => connection.setModel(envelope.agent_id, value));
+    pendingModel = { value, label: choice?.display_name ?? value };
+    switchNotice = null;
+    void run(async () => {
+      try {
+        await connection.setModel(envelope.agent_id, value);
+      } catch (error) {
+        pendingModel = null;
+        throw error;
+      }
+    });
   }
   function chooseEffort(level: string): void {
     effortMenuOpen = false;
     if (!connection) return;
-    selectedEffort = level;
-    void run(() => connection.setEffort(envelope.agent_id, level));
+    if (level === effectiveEffort) return;
+    pendingEffort = level;
+    switchNotice = null;
+    void run(async () => {
+      try {
+        await connection.setEffort(envelope.agent_id, level);
+      } catch (error) {
+        pendingEffort = null;
+        throw error;
+      }
+    });
   }
+  // Host-advertised pending/error metadata is authoritative. Local optimistic
+  // state only bridges the channel round trip after the operator clicks.
+  $effect(() => {
+    if (switchState.pending_model !== null) {
+      const choice = models.find((m) => m.value === switchState.pending_model);
+      pendingModel = {
+        value: switchState.pending_model,
+        label: choice?.display_name ?? switchState.pending_model,
+      };
+    }
+    if (switchState.pending_effort !== null) {
+      pendingEffort = switchState.pending_effort;
+    }
+    const failure = switchState.switch_error;
+    if (failure !== null) {
+      pendingModel = null;
+      pendingEffort = null;
+      const rollbackTarget =
+        failure.rolled_back_to ??
+        (failure.kind === "model" ? ccModel : effectiveEffort);
+      switchNotice = {
+        tone: "error",
+        text: `${failure.kind === "model" ? "モデル" : "effort"}切替に失敗: ${failure.requested} は実効に反映されていません (reason: ${failure.reason})。${rollbackTarget ? `旧値 ${rollbackTarget} に` : "最後に成功した値に"}戻しました`,
+      };
+    }
+  });
   function choosePermissionMode(value: string): void {
     permMenuOpen = false;
     if (!connection) return;
@@ -1313,9 +1395,9 @@
               <dd>
                 <div class="cc-switchbox">
                   <span class="cc-model">
-                    {#if modelLabel}{modelLabel}{:else}アカウント既定 (選択不可){/if}
+                    {#if pendingModel}pending: {modelLabel}{:else if modelLabel}{modelLabel}{:else}アカウント既定 (選択不可){/if}
                   </span>
-                  {#if connection && models.length > 0}
+                  {#if connection && modelSwitchSupported && models.length > 0}
                     <button
                       type="button"
                       class="cc-switch"
@@ -1348,14 +1430,16 @@
               </dd>
             </div>
           {/if}
-          {#if connection && effortLevels.length > 0}
+          {#if connection && effortSwitchSupported && effortLevels.length > 0}
             <!-- effort has no SDK-reported current value; the dd shows the
                  operator's last pick this session (selectedEffort) or 既定. -->
             <div class="cc-row">
               <dt>effort</dt>
               <dd>
                 <div class="cc-switchbox">
-                  <span class="cc-model">{selectedEffort ?? "既定"}</span>
+                  <span class="cc-model">
+                    {pendingEffort ? `pending: ${pendingEffort}` : selectedEffort ?? effectiveEffort ?? "既定"}
+                  </span>
                   <button
                     type="button"
                     class="cc-switch"
@@ -1384,6 +1468,12 @@
                   {/if}
                 </div>
               </dd>
+            </div>
+          {/if}
+          {#if switchNotice}
+            <div class="cc-row switch-notice" class:error={switchNotice.tone === "error"}>
+              <dt>switch</dt>
+              <dd>{switchNotice.text}</dd>
             </div>
           {/if}
           {#if ccCwd}
@@ -2681,6 +2771,15 @@
   .cc-model {
     color: var(--fg);
     overflow-wrap: anywhere;
+  }
+
+  .switch-notice dd {
+    color: var(--c-info, var(--fg-dim));
+    line-height: 1.45;
+  }
+
+  .switch-notice.error dd {
+    color: var(--c-error);
   }
 
   /* model / effort switch (#54): a small inline button after the value, with
