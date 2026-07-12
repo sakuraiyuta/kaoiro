@@ -6,6 +6,12 @@ import { defineConfig } from "vite";
 // robots.txt survive.
 export default defineConfig({
   plugins: [svelte()],
+  // Component integration tests mount Svelte into jsdom. Without the browser
+  // condition Vitest resolves `svelte` to index-server.js, where mount() is
+  // intentionally unavailable.
+  resolve: {
+    conditions: ["browser"],
+  },
   build: {
     outDir: "../priv/static",
     emptyOutDir: false,

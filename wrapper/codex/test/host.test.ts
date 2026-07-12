@@ -81,6 +81,83 @@ async function runOneTurn(
 }
 
 describe("CodexHost", () => {
+  it.each([
+    ["chatgpt", "free", ["gpt-5.6-terra"]],
+    ["chatgpt", "go", ["gpt-5.6-terra"]],
+    [
+      "chatgpt",
+      "plus",
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    ],
+    [
+      "chatgpt",
+      "pro",
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    ],
+    [
+      "chatgpt",
+      "business",
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    ],
+    [
+      "chatgpt",
+      "enterprise",
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    ],
+    [
+      "apikey",
+      undefined,
+      [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.4-mini",
+      ],
+    ],
+    ["chatgpt", undefined, undefined],
+    ["unknown", undefined, undefined],
+  ] as const)(
+    "catalog resolver の %s/%s を state_change まで同じ値で中継する",
+    async (authMode, plan, expected) => {
+      const states: Envelope[] = [];
+      const stderr = vi
+        .spyOn(process.stderr, "write")
+        .mockImplementation(() => true);
+      const { client } = makeClient([[
+        { type: "thread.started", thread_id: `catalog-${authMode}-${plan}` },
+        usageEvent(),
+      ]]);
+      const { codex_chatgpt_plan: _configuredPlan, ...baseConfig } = CONFIG;
+      const host = new CodexHost(
+        {
+          ...baseConfig,
+          codex_auth_mode: authMode,
+          ...(plan === undefined ? {} : { codex_chatgpt_plan: plan }),
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+
+      try {
+        await runOneTurn(host, "catalog");
+        const models = states.at(-1)?.ext.models as
+          | { value: string }[]
+          | undefined;
+        expect(models?.map((model) => model.value)).toEqual(expected);
+        expect(
+          states.at(-1)?.ext.session_capabilities,
+        ).toMatchObject({ supports_model_switch: expected !== undefined });
+      } finally {
+        stderr.mockRestore();
+      }
+    },
+  );
+
   it("1 turn: 状態遷移・session_id 通知・result と ext を出す", async () => {
     const states: Envelope[] = [];
     const logs: Envelope[] = [];
@@ -275,50 +352,57 @@ describe("CodexHost", () => {
     ).toBe(false);
   });
 
-  it("switch失敗で1回error stampしlast-goodへrollbackする", async () => {
-    const states: Envelope[] = [];
-    const { client, calls } = makeClient([
-      [{ type: "thread.started", thread_id: "switch-fail" }, usageEvent()],
-      [{ type: "turn.failed", error: { message: "400" } }],
-      [usageEvent()],
-    ]);
-    const host = new CodexHost(
-      { ...CONFIG, model: "gpt-5.6-terra" },
-      {
-        onState: (event) => states.push(event),
-        appendSystemPrompt: "p",
-        modelSource: "config",
-        codexFactory: () => client,
-        now: () => "T",
-      },
-    );
-    const done = host.run("first");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await host.setModel("not-entitled");
-    await host.send("second");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const errors = states.filter(
-      (state) => state.ext.switch_error !== undefined,
-    );
-    expect(errors).toHaveLength(1);
-    expect(errors[0]?.ext.switch_error).toEqual({
-      kind: "model",
-      requested: "not-entitled",
-      reason: "turn_failed",
-      rolled_back_to: "gpt-5.6-terra",
-    });
-    expect(errors[0]?.ext.pending_model).toBeUndefined();
-    expect(errors[0]?.ext.effective).toMatchObject({
-      model: "gpt-5.6-terra",
-    });
-    await host.send("third");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    host.close();
-    await done;
-    expect(calls.options[1]?.model).toBe("not-entitled");
-    expect(calls.options[2]?.model).toBe("gpt-5.6-terra");
-    expect(states.at(-1)?.ext.switch_error).toBeUndefined();
-  });
+  it.each(["400", "404"])(
+    "%s switch失敗はloud failし1回stamp後last-goodへrollbackする",
+    async (status) => {
+      const states: Envelope[] = [];
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "switch-fail" }, usageEvent()],
+        [{ type: "turn.failed", error: { message: status } }],
+        [usageEvent()],
+      ]);
+      const host = new CodexHost(
+        { ...CONFIG, model: "gpt-5.6-terra" },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          modelSource: "config",
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      const done = host.run("first");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await host.setModel("not-entitled");
+      await host.send("second");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const errors = states.filter(
+        (state) => state.ext.switch_error !== undefined,
+      );
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.ext.switch_error).toEqual({
+        kind: "model",
+        requested: "not-entitled",
+        reason: "turn_failed",
+        rolled_back_to: "gpt-5.6-terra",
+      });
+      expect(errors[0]?.ext.pending_model).toBeUndefined();
+      expect(errors[0]?.ext.effective).toMatchObject({
+        model: "gpt-5.6-terra",
+      });
+      await host.send("third");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      host.close();
+      await done;
+      expect(calls.options[1]?.model).toBe("not-entitled");
+      expect(calls.options[2]?.model).toBe("gpt-5.6-terra");
+      expect(states.at(-1)?.ext.switch_error).toBeUndefined();
+      expect(states.at(-1)?.ext.pending_model).toBeUndefined();
+      expect(states.at(-1)?.ext.effective).toMatchObject({
+        model: "gpt-5.6-terra",
+      });
+    },
+  );
 
   it("setEffortはpendingから成功turn後にeffectiveへ確定する", async () => {
     const states: Envelope[] = [];
