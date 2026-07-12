@@ -64,6 +64,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.SessionResets
   alias KaoiroServerWeb.AgentId
 
   # Resource bound for an operator instruction; generous for prose,
@@ -87,7 +88,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
     "history_reset",
     "runner_sessions",
     "spawn_result",
-    "hosts"
+    "hosts",
+    # Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17 17-4).
+    # previous_session_id / to_session_id are session identifiers that
+    # ADR-0021 keeps operator-only; the intercept lets handle_out gate
+    # them the same way runner_sessions / spawn_result / hosts are gated.
+    "session_reset_started",
+    "session_reset_completed",
+    "session_reset_failed"
   ]
 
   # Error reasons cleared for verbatim return to the client (issue #62).
@@ -100,7 +108,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    unknown_host unknown_persona invalid_persona
                    cwd_not_allowed invalid_cwd invalid_name no_session
                    missing_session_id invalid_session_id
-                   unknown_upload invalid_engine engine_not_supported)a
+                   unknown_upload invalid_engine engine_not_supported
+                   agent_busy unsupported_session_reset
+                   session_reset_pending reserved_session_command
+                   invalid_mode)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -190,7 +201,18 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # (fail-closed). Same gate shape as history_cleared.
   @impl true
   def handle_out(event, payload, socket)
-      when event in ["runner_sessions", "spawn_result", "hosts"] do
+      when event in [
+             "runner_sessions",
+             "spawn_result",
+             "hosts",
+             # Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17
+             # 17-4). Carry previous_session_id / to_session_id, which
+             # ADR-0021 keeps operator-only — same allow-list shape as
+             # runner_sessions et al.
+             "session_reset_started",
+             "session_reset_completed",
+             "session_reset_failed"
+           ] do
     if socket.assigns[:role] == :operator do
       push(socket, event, payload)
     end
@@ -200,9 +222,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   @impl true
   def handle_in("instruction", payload, socket) do
-    relay(socket, payload, "instruction", [
-      {"text", &valid_instruction_text?/1}
-    ])
+    with :ok <- reject_reserved_session_command(payload),
+         :ok <- guard_against_reset_pending(socket, payload) do
+      relay(socket, payload, "instruction", [
+        {"text", &valid_instruction_text?/1}
+      ])
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
   end
 
   def handle_in("permission_decision", payload, socket) do
@@ -235,11 +263,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # applies it to subsequent turns via setModel / applyFlagSettings — the
   # server stays agent-agnostic and never interprets the value (protocol.md).
   def handle_in("set_model", payload, socket) do
-    relay(socket, payload, "set_model", [{"model", &is_binary/1}])
+    with :ok <- guard_against_reset_pending(socket, payload) do
+      relay(socket, payload, "set_model", [{"model", &is_binary/1}])
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
   end
 
   def handle_in("set_effort", payload, socket) do
-    relay(socket, payload, "set_effort", [{"effort", &is_binary/1}])
+    with :ok <- guard_against_reset_pending(socket, payload) do
+      relay(socket, payload, "set_effort", [{"effort", &is_binary/1}])
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
   end
 
   # permission_mode switch for a running session (issue #58). Operator-only;
@@ -251,15 +289,71 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_in("set_permission_mode", payload, socket) do
     is_known_mode = fn value -> is_binary(value) and value in @permission_modes end
 
-    case relay(socket, payload, "set_permission_mode", [{"mode", is_known_mode}]) do
-      {:reply, :ok, _} = ok ->
-        # Validation already passed; persist before returning so a quick
-        # reconnect sees the new pick on its after_join push.
-        KaoiroServer.PermissionModes.record(payload["agent_id"], payload["mode"])
-        ok
+    with :ok <- guard_against_reset_pending(socket, payload) do
+      case relay(socket, payload, "set_permission_mode", [{"mode", is_known_mode}]) do
+        {:reply, :ok, _} = ok ->
+          # Validation already passed; persist before returning so a quick
+          # reconnect sees the new pick on its after_join push.
+          KaoiroServer.PermissionModes.record(payload["agent_id"], payload["mode"])
+          ok
 
-      other ->
-        other
+        other ->
+          other
+      end
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Session-reset control (ADR-0036 F1/F7, phase-17 17-4). Operator-only
+  # first-class control that swaps the current wrapper for a fresh one
+  # under the same agent_id / persona / cwd / engine, re-applying the
+  # phase-15 D8 last-effective snapshot. Server-side validation walks the
+  # ADR-0036 F6 checks (operator role → known agent → mode vocabulary →
+  # capability advertise → KaoiroState → dispatch-cooldown → duplicate
+  # lock); `SessionResets.check_and_acquire/5` bundles the last four in
+  # a single GenServer call so no TOCTOU window opens between them.
+  # Success emits `session_reset_started` on `agents:lobby` and pushes
+  # `reset_session` to `runner:<host_id>`; the runner's `session_reset_result`
+  # closes the loop by re-entering `SessionResets.resolve/6`.
+  @session_reset_modes ["new", "clear"]
+  def handle_in("session_reset", payload, socket) do
+    with :ok <- require_operator(socket),
+         :ok <- check_relay_size(payload),
+         {:ok, agent_id} <- fetch_agent_id(payload),
+         {:ok, mode} <- fetch_reset_mode(payload),
+         {:ok, envelope} <- fetch_agent_envelope(agent_id),
+         :ok <- require_reset_capability(envelope, mode),
+         {:ok, state} <- fetch_kaoiro_state(envelope),
+         {:ok, request_id, prev_sid} <-
+           SessionResets.check_and_acquire(
+             agent_id,
+             mode,
+             state,
+             Map.get(envelope, "session_id")
+           ) do
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "session_reset_started",
+        started_payload(agent_id, mode, request_id, prev_sid)
+      )
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "runner:#{host_id_of(agent_id)}",
+        "reset_session",
+        %{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "mode" => mode,
+          "request_id" => request_id
+        }
+      )
+
+      {:reply, :ok, socket}
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
   end
 
@@ -517,6 +611,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
       AgentDirectory.delete(agent_id)
       SessionPointers.delete(agent_id)
       KaoiroServer.PermissionModes.delete(agent_id)
+      # phase-17 17-4: clear any dangling reset lock + dispatch cooldown
+      # so a respawn under the same agent_id does not inherit stale state.
+      SessionResets.delete(agent_id)
       :ok
     end
   end
@@ -812,15 +909,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # host_id is the agent_id minus its last `.segment` — the server allocated it
-  # as `<host_id>.<rand>` with a dot-free suffix (ADR-0024 D3), so the host is
-  # everything before the last dot.
-  defp host_id_of(agent_id) do
-    case String.split(agent_id, ".") do
-      parts when length(parts) > 1 -> parts |> Enum.drop(-1) |> Enum.join(".")
-      _ -> agent_id
-    end
-  end
+  # SSOT for the `<host_id>.<rand>` (ADR-0024 D3) inverse is
+  # `AgentId.host_id_from/1`; local delegate keeps the call sites here
+  # concise. Never re-implement this via a prefix match — see the
+  # runner_channel guard note (nested-prefix spoof).
+  defp host_id_of(agent_id), do: AgentId.host_id_from(agent_id)
 
   # Disconnected branch of resume_session: same wire as restore (spawn +
   # resume_session_id to `runner:<host_id>`) but with the operator-picked
@@ -1072,5 +1165,109 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp valid_instruction_text?(text) do
     is_binary(text) and byte_size(text) <= @max_instruction_bytes
+  end
+
+  # Reserved-command defensive reject (ADR-0036 F1, phase-17 17-4).
+  # Old / external clients that never learned the `session_reset` control
+  # can still send an exact `/new` or `/clear` as normal text; loud-reject
+  # here so it never reaches the wrapper as an instruction. The strict
+  # exact-match (trim + no attachments) mirrors the dashboard's intercept
+  # rule so a legitimate `/new hello` prompt or `/new` with an attached
+  # file falls through as an ordinary instruction.
+  @reserved_session_commands ["/new", "/clear"]
+  defp reject_reserved_session_command(payload) do
+    text = payload["text"]
+    attachments = payload["attachment_ids"] || []
+
+    cond do
+      not is_binary(text) ->
+        :ok
+
+      attachments != [] ->
+        :ok
+
+      String.trim(text) in @reserved_session_commands ->
+        {:error, :reserved_session_command}
+
+      true ->
+        :ok
+    end
+  end
+
+  # ADR-0036 F6, phase-17 17-4: instruction / model / effort / permission
+  # switches are refused while a reset is pending so a completing reset
+  # cannot land on top of a mid-turn edit. The stamp of `last_dispatch`
+  # inside `SessionResets.guard_instruction/1` also gates the reverse
+  # race (a reset arriving right after we hand this instruction off).
+  #
+  # Viewer-side calls are no-ops: they would be rejected downstream by
+  # `require_operator/1` inside relay/4, but that reject happens AFTER
+  # the guard. Stamping `last_dispatch` here would let a viewer poison
+  # the operator's dispatch-cooldown window and delay a legitimate
+  # reset. Bounce viewers before the stamp so the cooldown only reflects
+  # accepted operator dispatches.
+  #
+  # A missing agent_id passes through; the normal `fetch_agent_id/1`
+  # inside relay/4 surfaces the correct error.
+  defp guard_against_reset_pending(socket, %{"agent_id" => agent_id})
+       when is_binary(agent_id) do
+    if socket.assigns[:role] == :operator do
+      SessionResets.guard_instruction(agent_id)
+    else
+      :ok
+    end
+  end
+
+  defp guard_against_reset_pending(_socket, _payload), do: :ok
+
+  defp fetch_reset_mode(%{"mode" => mode}) when mode in @session_reset_modes,
+    do: {:ok, mode}
+
+  defp fetch_reset_mode(_payload), do: {:error, :invalid_mode}
+
+  # Latest envelope for the agent; the caller has already run
+  # `fetch_agent_id/1` (known? check), so a missing entry is a race with
+  # AgentStates and is surfaced as `unknown_agent` too.
+  defp fetch_agent_envelope(agent_id) do
+    case AgentStates.snapshot()[agent_id] do
+      envelope when is_map(envelope) -> {:ok, envelope}
+      _ -> {:error, :unknown_agent}
+    end
+  end
+
+  defp fetch_kaoiro_state(%{"state" => state}) when is_binary(state),
+    do: {:ok, state}
+
+  # A wrapper envelope without a `state` field would be a malformed
+  # server snapshot (state_change is protocol-required to have one).
+  # Fail-closed to `agent_busy` so a reset never proceeds under an
+  # unreadable posture.
+  defp fetch_kaoiro_state(_envelope), do: {:error, :agent_busy}
+
+  # ADR-0036 F5: capability=false OR advertisement invalid (supports=true
+  # + missing/empty modes) OR the requested mode is not enumerated =
+  # unsupported. The dashboard-side judge fails the same way, so the two
+  # gates agree on when the command is disabled.
+  defp require_reset_capability(envelope, mode) do
+    caps = envelope |> Map.get("ext", %{}) |> Map.get("session_capabilities")
+
+    with true <- is_map(caps),
+         true <- Map.get(caps, "supports_session_reset") == true,
+         modes when is_list(modes) and modes != [] <-
+           Map.get(caps, "session_reset_modes"),
+         true <- mode in modes do
+      :ok
+    else
+      _ -> {:error, :unsupported_session_reset}
+    end
+  end
+
+  defp started_payload(agent_id, mode, request_id, previous_session_id) do
+    %{
+      "request_id" => request_id,
+      "agent_id" => agent_id,
+      "mode" => mode,
+      "previous_session_id" => previous_session_id
+    }
   end
 end

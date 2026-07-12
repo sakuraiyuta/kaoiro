@@ -242,6 +242,208 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
     end
   end
 
+  # phase-17 chunk β (17-4): session_reset_result relay through
+  # SessionResets.resolve/6 → agents:lobby broadcasts.
+  describe "session_reset_result (ADR-0036 F7, phase-17 17-4)" do
+    defp acquire_reset_lock(agent_id, prev_sid) do
+      # Seed AgentStates so the channel-side path is consistent even
+      # though we bypass agents_channel here; the SessionResets store
+      # decides on its own.
+      :ok =
+        KaoiroServer.AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-07-12T00:00:00Z",
+          "type" => "state_change",
+          "state" => "idle",
+          "session_id" => prev_sid
+        })
+
+      {:ok, request_id, _} =
+        KaoiroServer.SessionResets.check_and_acquire(
+          agent_id,
+          "new",
+          "idle",
+          prev_sid
+        )
+
+      request_id
+    end
+
+    test "ok=true + to_session_id は completed broadcast + pointer detach 済み" do
+      host_id = "lab-pc-reset-ok"
+      agent_id = "lab-pc-reset-ok.a"
+      request_id = acquire_reset_lock(agent_id, "sess-old")
+
+      @endpoint.subscribe("agents:lobby")
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => agent_id,
+          "request_id" => request_id,
+          "mode" => "new",
+          "ok" => true,
+          "to_session_id" => "sess-new"
+        })
+
+      assert_reply ref, :ok
+
+      assert_broadcast "session_reset_completed", %{
+        "agent_id" => ^agent_id,
+        "mode" => "new",
+        "request_id" => ^request_id,
+        "previous_session_id" => "sess-old",
+        "to_session_id" => "sess-new"
+      }
+
+      refute KaoiroServer.SessionResets.pending?(agent_id)
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "ok=true + to_session_id=nil (Codex lazy 採番) も completed で通す" do
+      host_id = "lab-pc-reset-lazy"
+      agent_id = "lab-pc-reset-lazy.a"
+      request_id = acquire_reset_lock(agent_id, "sess-old-codex")
+
+      @endpoint.subscribe("agents:lobby")
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => agent_id,
+          "request_id" => request_id,
+          "mode" => "new",
+          "ok" => true,
+          "to_session_id" => nil
+        })
+
+      assert_reply ref, :ok
+
+      assert_broadcast "session_reset_completed",
+                       %{"agent_id" => ^agent_id, "to_session_id" => nil}
+
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "ok=false + closed vocab reason は failed broadcast" do
+      host_id = "lab-pc-reset-fail"
+      agent_id = "lab-pc-reset-fail.a"
+      request_id = acquire_reset_lock(agent_id, "sess-old-fail")
+
+      @endpoint.subscribe("agents:lobby")
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => agent_id,
+          "request_id" => request_id,
+          "mode" => "new",
+          "ok" => false,
+          "reason" => "spawn_failed"
+        })
+
+      assert_reply ref, :ok
+
+      assert_broadcast "session_reset_failed", %{
+        "agent_id" => ^agent_id,
+        "mode" => "new",
+        "request_id" => ^request_id,
+        "reason" => "spawn_failed"
+      }
+
+      refute KaoiroServer.SessionResets.pending?(agent_id)
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "unknown vocab reason は invalid_reason" do
+      host_id = "lab-pc-reset-badreason"
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => "a.x",
+          "request_id" => "rs_x",
+          "ok" => false,
+          "reason" => "not-in-vocab"
+        })
+
+      assert_reply ref, :error, %{reason: "invalid_reason"}
+    end
+
+    test "malformed payload は invalid_payload" do
+      host_id = "lab-pc-reset-malformed"
+      socket = join_runner(host_id)
+
+      ref = push(socket, "session_reset_result", %{"agent_id" => "a.x"})
+      assert_reply ref, :error, %{reason: "invalid_payload"}
+    end
+
+    test "他 host の agent_id を name-spoof した result は agent_not_owned で reject" do
+      # ADR-0024 D3 の host binding: agent_id は "<host_id>.<rand>" 形式で
+      # allocation されるので、他 host が echo した agent_id は SessionResets
+      # の副作用 (lock release + detach) に到達させない。
+      host_id = "lab-pc-reset-crosshost"
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => "lab-pc-other-host.a",
+          "request_id" => "rs_x",
+          "mode" => "new",
+          "ok" => true,
+          "to_session_id" => "sess"
+        })
+
+      assert_reply ref, :error, %{reason: "agent_not_owned"}
+    end
+
+    test "nested-prefix spoof (host_id が . 含み) も agent_not_owned で reject" do
+      # host_id / agent_id は同 charset ([A-Za-z0-9._-]) で dot を含める。
+      # 正当な allocation は agent_id="alpha.beta.<rand>" → true owner
+      # "alpha.beta"。runner が host_id="alpha" で認証を通していても
+      # このペアを spoof すべきでない (単純な starts_with? だと通ってしまう)。
+      # AgentId.host_id_from/1 の逆演算で防ぐ regression。
+      socket = join_runner("alpha")
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => "alpha.beta.xyz",
+          "request_id" => "rs_nest",
+          "mode" => "new",
+          "ok" => true,
+          "to_session_id" => "sess"
+        })
+
+      assert_reply ref, :error, %{reason: "agent_not_owned"}
+    end
+
+    test "stale request_id は silent drop (broadcast なし)" do
+      host_id = "lab-pc-reset-stale"
+      agent_id = "lab-pc-reset-stale.a"
+      _real_rid = acquire_reset_lock(agent_id, "sess")
+
+      @endpoint.subscribe("agents:lobby")
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => agent_id,
+          "request_id" => "rs_ghost",
+          "mode" => "new",
+          "ok" => true,
+          "to_session_id" => "sess-new"
+        })
+
+      assert_reply ref, :ok
+
+      refute_broadcast "session_reset_completed", _
+      refute_broadcast "session_reset_failed", _
+
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+  end
+
   describe "切断時のホスト削除" do
     test "channel 終了でホストエントリを drop する" do
       host_id = "lab-pc-disc"

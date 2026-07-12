@@ -581,7 +581,16 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             :invalid_cwd,
             :invalid_name,
             :no_session,
-            :unknown_upload
+            :unknown_upload,
+            # phase-17 chunk β (17-4) additions — session-reset control
+            # vocabulary. Direct allow-list test guards against a silent
+            # removal from @safe_reasons, complementing the integration
+            # tests below that assert the client-facing string form.
+            :agent_busy,
+            :unsupported_session_reset,
+            :session_reset_pending,
+            :reserved_session_command,
+            :invalid_mode
           ] do
         assert AgentsChannel.safe_reason(r) == to_string(r)
       end
@@ -2163,6 +2172,416 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       push(socket, "attach_chunk", {:binary, <<100::big-32>>})
 
       refute_broadcast "attach_chunk", _
+    end
+  end
+
+  # phase-17 chunk β (17-4): session_reset control (ADR-0036 F1/F6/F7).
+  describe "session_reset control (ADR-0036 F1/F6/F7, phase-17 17-4)" do
+    defp put_agent_with_caps(agent_id, opts \\ []) do
+      state = Keyword.get(opts, :state, "idle")
+      supports_reset = Keyword.get(opts, :supports_session_reset, true)
+      modes = Keyword.get(opts, :session_reset_modes, ["new", "clear"])
+      sid = Keyword.get(opts, :session_id, "sess-prev")
+
+      caps =
+        %{
+          "supports_attachments" => true,
+          "supports_user_input_dialog" => true
+        }
+        |> maybe_put_caps_field("supports_session_reset", supports_reset)
+        |> maybe_put_caps_field("session_reset_modes", modes)
+
+      envelope =
+        %{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-07-12T00:00:00Z",
+          "type" => "state_change",
+          "state" => state,
+          "ext" => %{"session_capabilities" => caps}
+        }
+        |> maybe_put_session_id(sid)
+
+      :ok = AgentStates.put(envelope)
+
+      # SessionResets 上に残った lock を per-agent で clean up (別 test の残留対策)。
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+      :ok
+    end
+
+    defp maybe_put_caps_field(caps, _key, :absent), do: caps
+    defp maybe_put_caps_field(caps, key, value), do: Map.put(caps, key, value)
+
+    defp maybe_put_session_id(envelope, nil), do: envelope
+    defp maybe_put_session_id(envelope, sid), do: Map.put(envelope, "session_id", sid)
+
+    test "operator + capability=true + idle は started broadcast + runner へ reset_session push" do
+      agent_id = "sess-reset.happy"
+      put_agent_with_caps(agent_id)
+      @endpoint.subscribe("runner:sess-reset")
+      socket = join_as(:operator)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+
+      assert_reply ref, :ok
+
+      assert_broadcast "session_reset_started",
+                       %{
+                         "agent_id" => ^agent_id,
+                         "mode" => "new",
+                         "previous_session_id" => "sess-prev",
+                         "request_id" => request_id
+                       }
+
+      assert String.starts_with?(request_id, "rs_")
+
+      assert_broadcast "reset_session",
+                       %{
+                         "agent_id" => ^agent_id,
+                         "mode" => "new",
+                         "request_id" => ^request_id,
+                         "version" => "0"
+                       }
+    end
+
+    test "viewer は forbidden" do
+      agent_id = "sess-reset.viewer"
+      put_agent_with_caps(agent_id)
+      socket = join_as(:viewer)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "未知 agent は unknown_agent" do
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "session_reset", %{"agent_id" => "sess-reset.none", "mode" => "new"})
+
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+
+    test "invalid mode は invalid_mode" do
+      agent_id = "sess-reset.bad-mode"
+      put_agent_with_caps(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "restart"})
+
+      assert_reply ref, :error, %{reason: "invalid_mode"}
+    end
+
+    test "capability 未 stamp (旧 wrapper) は unsupported_session_reset" do
+      agent_id = "sess-reset.no-cap"
+      put_agent_with_caps(agent_id, supports_session_reset: :absent, session_reset_modes: :absent)
+      socket = join_as(:operator)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+    end
+
+    test "supports_session_reset=false は unsupported_session_reset" do
+      agent_id = "sess-reset.false"
+      put_agent_with_caps(agent_id, supports_session_reset: false, session_reset_modes: :absent)
+      socket = join_as(:operator)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+    end
+
+    test "supports=true + modes に mode 非対応は unsupported_session_reset" do
+      agent_id = "sess-reset.mode-off"
+      put_agent_with_caps(agent_id, session_reset_modes: ["new"])
+      socket = join_as(:operator)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "clear"})
+      assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+    end
+
+    test "supports=true + 空 modes は unsupported_session_reset (fail-closed)" do
+      agent_id = "sess-reset.empty-modes"
+      put_agent_with_caps(agent_id, session_reset_modes: [])
+      socket = join_as(:operator)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+    end
+
+    test "busy 状態 (thinking) は agent_busy" do
+      agent_id = "sess-reset.busy"
+      put_agent_with_caps(agent_id, state: "thinking")
+      socket = join_as(:operator)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref, :error, %{reason: "agent_busy"}
+    end
+
+    test "既存 pending 中の重複 reset は session_reset_pending" do
+      agent_id = "sess-reset.dup"
+      put_agent_with_caps(agent_id)
+      socket = join_as(:operator)
+
+      ref1 = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref1, :ok
+
+      ref2 = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "clear"})
+      assert_reply ref2, :error, %{reason: "session_reset_pending"}
+    end
+
+    test "viewer には session_reset_started が push されない (ADR-0021 fail-closed)" do
+      # ADR-0036 F7 broadcast は previous_session_id / to_session_id を
+      # 含むため ADR-0021 の allow-list で operator-only。viewer socket
+      # は handle_out の role gate で drop され push されない。
+      _viewer = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "session_reset_started",
+        %{
+          "request_id" => "rs_gate_st",
+          "agent_id" => "gate.st.a",
+          "mode" => "new",
+          "previous_session_id" => "sess-leak"
+        }
+      )
+
+      refute_push "session_reset_started", _payload
+    end
+
+    test "viewer には session_reset_completed が push されない" do
+      _viewer = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "session_reset_completed",
+        %{
+          "request_id" => "rs_gate_ok",
+          "agent_id" => "gate.ok.a",
+          "mode" => "new",
+          "previous_session_id" => "sess-old",
+          "to_session_id" => "sess-new"
+        }
+      )
+
+      refute_push "session_reset_completed", _payload
+    end
+
+    test "viewer には session_reset_failed も push されない" do
+      _viewer = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "session_reset_failed",
+        %{
+          "request_id" => "rs_gate_ng",
+          "agent_id" => "gate.ng.a",
+          "mode" => "new",
+          "reason" => "spawn_failed"
+        }
+      )
+
+      refute_push "session_reset_failed", _payload
+    end
+
+    test "operator には session_reset_started / _completed / _failed が push される" do
+      _operator = join_as(:operator)
+
+      # 3 種を順に発火して operator socket が全て受信することを確認
+      # (handle_out の allow-list 内で operator が対象になる pattern)。
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "session_reset_started",
+        %{"request_id" => "op_st", "agent_id" => "op.st.a", "mode" => "new"}
+      )
+
+      assert_push "session_reset_started", %{"request_id" => "op_st"}
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "session_reset_completed",
+        %{
+          "request_id" => "op_ok",
+          "agent_id" => "op.ok.a",
+          "mode" => "new",
+          "to_session_id" => "sess-new"
+        }
+      )
+
+      assert_push "session_reset_completed", %{"request_id" => "op_ok"}
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "session_reset_failed",
+        %{
+          "request_id" => "op_ng",
+          "agent_id" => "op.ng.a",
+          "mode" => "new",
+          "reason" => "timeout"
+        }
+      )
+
+      assert_push "session_reset_failed", %{"request_id" => "op_ng"}
+    end
+  end
+
+  describe "reserved_session_command reject (ADR-0036 F1, phase-17 17-4)" do
+    test "exact /new は reserved_session_command で reject" do
+      agent_id = "resv.new"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "/new"})
+
+      assert_reply ref, :error, %{reason: "reserved_session_command"}
+      refute_broadcast "instruction", _
+    end
+
+    test "exact /clear は reserved_session_command で reject" do
+      agent_id = "resv.clear"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "/clear"})
+
+      assert_reply ref, :error, %{reason: "reserved_session_command"}
+      refute_broadcast "instruction", _
+    end
+
+    test "前後の空白付き /new (trim 一致) も reject" do
+      agent_id = "resv.trim"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "  /new\n"})
+
+      assert_reply ref, :error, %{reason: "reserved_session_command"}
+      refute_broadcast "instruction", _
+    end
+
+    test "引数付き /new hello は通常 instruction として relay (通過)" do
+      agent_id = "resv.args"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "/new hello"})
+
+      assert_reply ref, :ok
+      assert_broadcast "instruction", %{"text" => "/new hello"}
+    end
+
+    test "/new + attachment 付きは通常 instruction として relay (通過)" do
+      agent_id = "resv.attach"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "instruction", %{
+          "agent_id" => agent_id,
+          "text" => "/new",
+          "attachment_ids" => ["u1"]
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "instruction", %{"text" => "/new"}
+    end
+  end
+
+  describe "reset-pending 中の instruction / model / effort / permission ガード (ADR-0036 F6, phase-17 17-4)" do
+    defp acquire_reset_lock(agent_id) do
+      # capability + idle + session_id を持つ envelope で put して直接 lock を握らせる。
+      # AgentStates 上の state と session_id を SessionResets へ渡す形。
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-07-12T00:00:00Z",
+          "type" => "state_change",
+          "state" => "idle",
+          "session_id" => "sess-prev",
+          "ext" => %{
+            "session_capabilities" => %{
+              "supports_attachments" => true,
+              "supports_user_input_dialog" => true,
+              "supports_session_reset" => true,
+              "session_reset_modes" => ["new", "clear"]
+            }
+          }
+        })
+
+      {:ok, _rid, _prev} =
+        KaoiroServer.SessionResets.check_and_acquire(
+          agent_id,
+          "new",
+          "idle",
+          "sess-prev"
+        )
+
+      :ok
+    end
+
+    test "pending 中の instruction は session_reset_pending で reject" do
+      agent_id = "gp.instr"
+      acquire_reset_lock(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "hi"})
+
+      assert_reply ref, :error, %{reason: "session_reset_pending"}
+      refute_broadcast "instruction", _
+
+      # cleanup for next test
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "pending 中の set_model は session_reset_pending で reject" do
+      agent_id = "gp.model"
+      acquire_reset_lock(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "m"})
+
+      assert_reply ref, :error, %{reason: "session_reset_pending"}
+      refute_broadcast "set_model", _
+
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "pending 中の set_effort は session_reset_pending で reject" do
+      agent_id = "gp.effort"
+      acquire_reset_lock(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_effort", %{"agent_id" => agent_id, "effort" => "max"})
+
+      assert_reply ref, :error, %{reason: "session_reset_pending"}
+      refute_broadcast "set_effort", _
+
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "pending 中の set_permission_mode は session_reset_pending で reject" do
+      agent_id = "gp.perm"
+      acquire_reset_lock(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission_mode", %{"agent_id" => agent_id, "mode" => "plan"})
+
+      assert_reply ref, :error, %{reason: "session_reset_pending"}
+      refute_broadcast "set_permission_mode", _
+
+      _ = KaoiroServer.SessionResets.delete(agent_id)
     end
   end
 end

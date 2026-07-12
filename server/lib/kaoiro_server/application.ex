@@ -26,6 +26,9 @@ defmodule KaoiroServer.Application do
       KaoiroServer.SessionPointers,
       # Restart-surviving per-agent permission_mode picks (#58).
       KaoiroServer.PermissionModes,
+      # Session-reset pending lock (ADR-0036 F6/F7, phase-17 17-4).
+      # In-memory only; a reset in flight when the server dies is a wash.
+      KaoiroServer.SessionResets,
       # Restart-surviving identity ledger — agent_id → persona (ADR-0030).
       # Lets operator-driven restore work after a server restart when
       # AgentStates is empty.

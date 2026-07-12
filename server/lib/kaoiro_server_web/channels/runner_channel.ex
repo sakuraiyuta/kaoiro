@@ -87,6 +87,58 @@ defmodule KaoiroServerWeb.RunnerChannel do
     forward_to_operators("spawn_result", payload, socket)
   end
 
+  # Runner's session-reset outcome (ADR-0036 F7, phase-17 17-4). Unlike
+  # spawn_result this is not forwarded to operators verbatim — the
+  # `session_reset_completed` / `session_reset_failed` broadcast is
+  # authored by SessionResets after it correlates the request_id with a
+  # live lock and (on success) detaches the pointer. Stale results
+  # (unknown lock, mismatched request_id after a timeout) are silently
+  # discarded there per ADR-0036 F7 stale-completion rule. We still ack
+  # ok so the runner does not retry; the payload cap is honoured to
+  # keep an oversized opaque blob from riding through.
+  def handle_in("session_reset_result", payload, socket) do
+    host_id = socket.assigns.host_id
+
+    with :ok <- check_size(payload),
+         {:ok, agent_id, request_id, ok?, reason, to_session_id} <-
+           parse_session_reset_result(payload),
+         :ok <- require_host_owns_agent(host_id, agent_id) do
+      KaoiroServer.SessionResets.resolve(
+        agent_id,
+        request_id,
+        ok?,
+        reason,
+        to_session_id
+      )
+
+      {:reply, :ok, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
+  # ADR-0024 D3 allocates every agent_id under the host as
+  # `<host_id>.<rand>`. Enforce that binding here so a runner cannot
+  # release another host's reset lock (or cause its detach) by echoing
+  # an agent_id it does not own. spawn_result / sessions do not need this
+  # check because they only stamp host_id onto a forwarded broadcast and
+  # have no cross-agent side effect; session_reset_result mutates the
+  # SessionResets store, so the binding must be verified here.
+  #
+  # We must inverse the allocation exactly (`AgentId.host_id_from/1` —
+  # everything before the LAST dot). A naive `starts_with?(agent_id,
+  # host_id <> ".")` would admit a nested-prefix spoof: a runner
+  # authenticated for host_id="alpha" could send agent_id="alpha.beta.rand"
+  # whose true owner is "alpha.beta", because host_id / agent_id share
+  # a dot-permissive charset and prefix match cannot tell the two apart.
+  defp require_host_owns_agent(host_id, agent_id) do
+    if AgentId.host_id_from(agent_id) == host_id do
+      :ok
+    else
+      {:error, :agent_not_owned}
+    end
+  end
+
   @impl true
   def terminate(_reason, socket) do
     # Drop only while this channel still owns the host entry, so a stale
@@ -276,4 +328,53 @@ defmodule KaoiroServerWeb.RunnerChannel do
       {:error, :payload_too_large}
     end
   end
+
+  # Closed-vocabulary parse for `session_reset_result` (ADR-0036 F7,
+  # phase-17 17-4). Structural gates only; SessionResets owns the lock /
+  # request_id correlation and the closed-vocab reason atom. A malformed
+  # runner reply is refused here rather than passed through — the
+  # runner has to fix its own bug.
+  @session_reset_modes ["new", "clear"]
+  defp parse_session_reset_result(
+         %{
+           "agent_id" => agent_id,
+           "request_id" => request_id,
+           "ok" => ok?
+         } = payload
+       )
+       when is_binary(agent_id) and is_binary(request_id) and is_boolean(ok?) do
+    with true <- Map.get(payload, "mode", "new") in @session_reset_modes,
+         {:ok, reason} <- parse_reset_reason(payload["reason"], ok?),
+         {:ok, to_sid} <- parse_optional_session_id(payload["to_session_id"]) do
+      {:ok, agent_id, request_id, ok?, reason, to_sid}
+    else
+      false -> {:error, :invalid_mode}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp parse_session_reset_result(_payload), do: {:error, :invalid_payload}
+
+  # ADR-0036 F7 closed error vocabulary. Success carries no reason; a
+  # failure requires one from the whitelist.
+  @reset_failure_reasons [
+    "agent_busy",
+    "unsupported_session_reset",
+    "session_reset_pending",
+    "runner_unavailable",
+    "spawn_failed",
+    "rollback_failed",
+    "timeout"
+  ]
+  defp parse_reset_reason(nil, true), do: {:ok, nil}
+
+  defp parse_reset_reason(reason, false)
+       when reason in @reset_failure_reasons,
+       do: {:ok, reason}
+
+  defp parse_reset_reason(_reason, _ok), do: {:error, :invalid_reason}
+
+  defp parse_optional_session_id(nil), do: {:ok, nil}
+  defp parse_optional_session_id(sid) when is_binary(sid), do: {:ok, sid}
+  defp parse_optional_session_id(_sid), do: {:error, :invalid_session_id}
 end
