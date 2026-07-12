@@ -148,9 +148,32 @@ export function modelSourceFrom(envelope: Envelope): string | null {
   return typeof raw === "string" && raw !== "" ? raw : null;
 }
 
+/** Reset modes for /new・/clear (ADR-0036 F1/F3, phase-17). Mirrors
+ *  protocol.ts `SessionResetMode`; kept local so the client bundle stays
+ *  self-contained per this file's plain-TS contract. */
+export type SessionResetMode = "new" | "clear";
+
+/** Closed vocabulary of session-reset failure reasons broadcast on the
+ *  `session_reset_failed` event (ADR-0036 F7, phase-17). Mirrors
+ *  protocol.ts `SessionResetErrorReason`; the value list is exported so
+ *  UI code can exhaustive-match on the reason without redeclaring the
+ *  literals (SSOT — kept in sync with the wrapper protocol). */
+export const SESSION_RESET_ERROR_REASONS = [
+  "agent_busy",
+  "unsupported_session_reset",
+  "session_reset_pending",
+  "runner_unavailable",
+  "spawn_failed",
+  "rollback_failed",
+  "timeout",
+] as const;
+export type SessionResetErrorReason =
+  (typeof SESSION_RESET_ERROR_REASONS)[number];
+
 /** Advertised session-level capabilities the wrapper stamps on every
- *  state_change (ADR-0034 F1/F2). Missing = fail-closed / "not supported"
- *  — the UI must not enable feature paths on absent capabilities. */
+ *  state_change (ADR-0034 F1/F2, ADR-0036 F5). Missing = fail-closed /
+ *  "not supported" — the UI must not enable feature paths on absent
+ *  capabilities. */
 export interface SessionCapabilities {
   supports_attachments: boolean;
   supports_user_input_dialog: boolean;
@@ -159,6 +182,15 @@ export interface SessionCapabilities {
    *  When present the UI shows "conditional-off" when the current mode is
    *  not listed (ADR-0034 F3). */
   user_input_modes?: string[];
+  /** Whether the session accepts /new・/clear as first-class reset control
+   *  (ADR-0036 F5, phase-17). Absent = fail-closed unsupported. */
+  supports_session_reset?: boolean;
+  /** Which reset modes the session accepts when supports_session_reset is
+   *  true (ADR-0036 F5, phase-17). Non-empty when supports=true; a
+   *  true+missing/empty combination is fail-closed as invalid
+   *  advertisement (the loose parser drops the modes so the availability
+   *  judge falls into "unsupported"). */
+  session_reset_modes?: SessionResetMode[];
 }
 
 /** Reads ext.session_capabilities off an envelope (ADR-0034 F1). Returns
@@ -187,7 +219,51 @@ export function sessionCapabilitiesFrom(
     for (const m of r.user_input_modes) if (typeof m === "string") modes.push(m);
     if (modes.length > 0) out.user_input_modes = modes;
   }
+  // session_reset (ADR-0036 F5, phase-17). Parse defensively: only accept
+  // supports=true when session_reset_modes is a non-empty array of the
+  // closed vocabulary "new"|"clear". A true+missing/empty/malformed modes
+  // stamp is fail-closed here by dropping BOTH fields — the availability
+  // judge then treats it as "unsupported", matching the ADR's rule that
+  // an invalid advertisement disables the command.
+  if (typeof r.supports_session_reset === "boolean") {
+    if (r.supports_session_reset === false) {
+      out.supports_session_reset = false;
+    } else if (Array.isArray(r.session_reset_modes)) {
+      const modes: SessionResetMode[] = [];
+      for (const m of r.session_reset_modes) {
+        if (m === "new" || m === "clear") modes.push(m);
+      }
+      if (modes.length > 0) {
+        out.supports_session_reset = true;
+        out.session_reset_modes = modes;
+      }
+    }
+  }
   return out;
+}
+
+/** Session-reset availability given the capability envelope and the
+ *  requested mode (ADR-0036 F5, phase-17). Mirrors the 3-value shape of
+ *  {@link userInputDialogAvailability} so the composer can share render
+ *  logic. Values:
+ *   - "unsupported"     : caps absent, supports_session_reset absent/false,
+ *                         or supports=true+empty/malformed modes (the
+ *                         parser already collapses invalid advertisements
+ *                         into this bucket)
+ *   - "conditional-off" : supports=true but the requested `mode` is not
+ *                         in session_reset_modes
+ *   - "on"              : supports=true AND `mode` is in session_reset_modes
+ *  Fail-closed by contract — a null return from sessionCapabilitiesFrom
+ *  or a missing field must map to "unsupported" (the composer must not
+ *  intercept, the server must not relay). */
+export function sessionResetAvailability(
+  caps: SessionCapabilities | null,
+  mode: SessionResetMode,
+): "unsupported" | "conditional-off" | "on" {
+  if (!caps || !caps.supports_session_reset) return "unsupported";
+  const modes = caps.session_reset_modes;
+  if (!modes || modes.length === 0) return "unsupported";
+  return modes.includes(mode) ? "on" : "conditional-off";
 }
 
 /** AskUserQuestion dialog availability given the capability envelope and

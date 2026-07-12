@@ -885,9 +885,17 @@ export class AgentHost implements EngineAdapter {
     // native AskUserQuestion — both true unconditionally today. If the
     // SDK later attaches conditions, split the constants into fields
     // and update them from init / status meta.
+    // supports_session_reset (ADR-0036 F5, phase-17 17-2): stamped false
+    // until the runner supervisor + server orchestration land in
+    // chunk β/γ (17-4/5/6). Advertising false today keeps the
+    // fail-closed contract — the dashboard never intercepts /new・/clear
+    // and the server never relays reset requests — while pinning the
+    // field's presence so a stale/absent stamp is distinguishable from
+    // an intentional "not yet" during the phase-17 rollout.
     ext.session_capabilities = {
       supports_attachments: true,
       supports_user_input_dialog: true,
+      supports_session_reset: false,
     };
     if (this.#model !== null) ext.model = this.#model;
     if (this.#modelSource !== null) ext.model_source = this.#modelSource;

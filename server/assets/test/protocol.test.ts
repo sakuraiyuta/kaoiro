@@ -17,9 +17,10 @@ import {
   resultOf,
   resumeDriftFrom,
   sessionCapabilitiesFrom,
+  sessionResetAvailability,
   userInputDialogAvailability,
 } from "../src/lib/protocol";
-import type { Envelope } from "../src/lib/protocol";
+import type { Envelope, SessionCapabilities } from "../src/lib/protocol";
 
 describe("fetchPersonaManifest", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -652,6 +653,177 @@ describe("sessionCapabilitiesFrom (ADR-0034 F1/F2)", () => {
       supports_attachments: true,
       supports_user_input_dialog: true,
     });
+  });
+
+  it("supports_session_reset=false は field を保持 (明示 unsupported)", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_session_reset: false,
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(envelope)).toEqual({
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+      supports_session_reset: false,
+    });
+  });
+
+  it("supports_session_reset=true + valid modes 配列を保持", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_session_reset: true,
+          session_reset_modes: ["new", "clear"],
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(envelope)).toEqual({
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+      supports_session_reset: true,
+      session_reset_modes: ["new", "clear"],
+    });
+  });
+
+  it("supports_session_reset=true + modes 未指定は fail-closed (両 field drop)", () => {
+    // ADR-0036 F5: true + missing/empty modes は invalid advertisement。
+    // parser は両 field を drop し、availability judge が "unsupported" に
+    // 落ちる (SessionCapabilities 自体は valid のまま他 capability を保持)。
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_session_reset: true,
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(envelope)).toEqual({
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+    });
+  });
+
+  it("supports_session_reset=true + 空 modes は fail-closed (両 field drop)", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_session_reset: true,
+          session_reset_modes: [],
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(envelope)).toEqual({
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+    });
+  });
+
+  it("session_reset_modes の malformed 要素は drop、残り non-empty で保持", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_session_reset: true,
+          session_reset_modes: ["new", "invalid", null, "clear"],
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(envelope)).toEqual({
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+      supports_session_reset: true,
+      session_reset_modes: ["new", "clear"],
+    });
+  });
+});
+
+describe("sessionResetAvailability (ADR-0036 F5, phase-17)", () => {
+  it("caps=null なら unsupported (fail-closed)", () => {
+    expect(sessionResetAvailability(null, "new")).toBe("unsupported");
+    expect(sessionResetAvailability(null, "clear")).toBe("unsupported");
+  });
+
+  it("supports_session_reset 未指定なら unsupported", () => {
+    expect(
+      sessionResetAvailability(
+        { supports_attachments: true, supports_user_input_dialog: true },
+        "new",
+      ),
+    ).toBe("unsupported");
+  });
+
+  it("supports_session_reset=false なら unsupported", () => {
+    expect(
+      sessionResetAvailability(
+        {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_session_reset: false,
+        },
+        "new",
+      ),
+    ).toBe("unsupported");
+  });
+
+  it("supports=true + modes=[] (parser drop 後の invalid) は unsupported", () => {
+    expect(
+      sessionResetAvailability(
+        {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_session_reset: true,
+          session_reset_modes: [],
+        },
+        "new",
+      ),
+    ).toBe("unsupported");
+  });
+
+  it("supports=true + 要求 mode が modes に含まれれば on", () => {
+    const caps: SessionCapabilities = {
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+      supports_session_reset: true,
+      session_reset_modes: ["new", "clear"],
+    };
+    expect(sessionResetAvailability(caps, "new")).toBe("on");
+    expect(sessionResetAvailability(caps, "clear")).toBe("on");
+  });
+
+  it("supports=true でも要求 mode が modes に無ければ conditional-off", () => {
+    const capsOnlyNew: SessionCapabilities = {
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+      supports_session_reset: true,
+      session_reset_modes: ["new"],
+    };
+    expect(sessionResetAvailability(capsOnlyNew, "clear")).toBe(
+      "conditional-off",
+    );
+    const capsOnlyClear: SessionCapabilities = {
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+      supports_session_reset: true,
+      session_reset_modes: ["clear"],
+    };
+    expect(sessionResetAvailability(capsOnlyClear, "new")).toBe(
+      "conditional-off",
+    );
   });
 });
 

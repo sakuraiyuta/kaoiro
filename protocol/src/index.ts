@@ -217,7 +217,40 @@ export interface SessionCapabilitiesExt {
   /** Optional constraint: dialog fires only in these permission modes /
    *  sandbox contexts. Absent / empty array = unconditional. */
   user_input_modes?: string[];
+  /** Whether the session accepts /new・/clear as first-class session-reset
+   *  control (ADR-0036 F5, phase-17 17-2). Advertised true only when the
+   *  wrapper/runner/server together provide the fresh-relaunch + completion
+   *  handshake described in F2. Absent / false = fail-closed unsupported —
+   *  the dashboard MUST NOT intercept typed exact commands, and the server
+   *  MUST NOT relay the reset request. */
+  supports_session_reset?: boolean;
+  /** Which reset modes the session accepts when supports_session_reset is
+   *  true (ADR-0036 F5, phase-17 17-2). Required and non-empty when
+   *  supports_session_reset=true; a true+missing/empty combination is
+   *  fail-closed as invalid advertisement. Omitted when supports=false. */
+  session_reset_modes?: SessionResetMode[];
 }
+
+/** Reset modes for /new・/clear (ADR-0036 F1/F3, phase-17 17-1). `new` keeps
+ *  the display log and appends a session_boundary marker; `clear` resets
+ *  the server-side AgentStates ring and broadcasts history_reset, then
+ *  writes a boundary marker at the head. Neither deletes the underlying
+ *  session file. */
+export type SessionResetMode = "new" | "clear";
+
+/** Closed vocabulary of session-reset failure reasons (ADR-0036 F7,
+ *  phase-17 17-1). Loud values only — no silent fallback to prompt or
+ *  old-session resume. `session_reset_pending` covers duplicate reset
+ *  requests as well as instruction/model switches attempted while a
+ *  reset is in flight. */
+export type SessionResetErrorReason =
+  | "agent_busy"
+  | "unsupported_session_reset"
+  | "session_reset_pending"
+  | "runner_unavailable"
+  | "spawn_failed"
+  | "rollback_failed"
+  | "timeout";
 
 /** Resolved launch/session-state snapshot used by D8 resume drift detection
  *  (ADR-0032 F4bc + ADR-0033 F4 addenda, phase-15). Same shape for both
@@ -519,4 +552,94 @@ export interface RunnerSessions {
   cwd: string;
   sessions: SessionMeta[];
   engine?: EngineKind;
+}
+
+// Session-reset control flow (ADR-0036 F7, phase-17 17-1). The four-hop
+// SSOT: client -> server (SessionResetRequest), server -> runner
+// (ResetSessionCommand), runner -> server (SessionResetResult), then
+// server -> clients (SessionResetStarted / Completed / Failed). Every hop
+// carries the same `request_id` so late `session_reset_result` messages
+// and stale broadcasts can be discarded by generation on the receiver.
+
+/** client -> server, operator-only (ADR-0036 F1, phase-17 17-1). Sent
+ *  only when the dashboard trims the composer input to an exact
+ *  `/new` or `/clear` with no attachments. The server validates
+ *  operator role / live agent / capability / state / pending lock
+ *  before relaying to the runner. */
+export interface SessionResetRequest {
+  agent_id: string;
+  mode: SessionResetMode;
+}
+
+/** server -> runner, operator-only (ADR-0036 F2/F7, phase-17 17-1).
+ *  Instructs the runner supervisor to kill the current wrapper for
+ *  agent_id and fresh-relaunch (no resume_session_id) while re-applying
+ *  the last-effective snapshot from phase-15 D8. */
+export interface ResetSessionCommand {
+  version: "0";
+  agent_id: string;
+  mode: SessionResetMode;
+  request_id: string;
+}
+
+/** runner -> server (ADR-0036 F7, phase-17 17-1). Report of a reset
+ *  attempt's outcome. `ok=true` marks fresh-relaunch success (Codex's
+ *  lazy thread ID is allowed — the server may broadcast Completed with
+ *  `to_session_id=null`). `ok=false` requires a `reason` from the closed
+ *  vocabulary. */
+export interface SessionResetResult {
+  version: "0";
+  host_id: string;
+  agent_id: string;
+  mode: SessionResetMode;
+  request_id: string;
+  ok: boolean;
+  reason?: SessionResetErrorReason;
+}
+
+/** server -> clients (ADR-0036 F7, phase-17 17-1). Fired once the server
+ *  accepts a reset request, before the runner replies. The UI shows
+ *  "starting a new session" and disables the composer until Completed
+ *  or Failed lands. */
+export interface SessionResetStarted {
+  request_id: string;
+  agent_id: string;
+  mode: SessionResetMode;
+  previous_session_id?: string;
+}
+
+/** server -> clients (ADR-0036 F7, phase-17 17-1). Fired once the runner
+ *  reports a successful fresh relaunch. `to_session_id` is null when the
+ *  new session ID has not been reported yet (Codex lazy採番); the
+ *  matching boundary marker's `to_session_id` is patched later by the
+ *  same request_id. */
+export interface SessionResetCompleted {
+  request_id: string;
+  agent_id: string;
+  mode: SessionResetMode;
+  previous_session_id?: string;
+  to_session_id: string | null;
+}
+
+/** server -> clients (ADR-0036 F7, phase-17 17-1). Fired on any reset
+ *  failure. The reason names whether the rollback recovered the old
+ *  session (`spawn_failed` / `timeout`) or not (`rollback_failed`). */
+export interface SessionResetFailed {
+  request_id: string;
+  agent_id: string;
+  mode: SessionResetMode;
+  reason: SessionResetErrorReason;
+}
+
+/** session_boundary log-marker payload (ADR-0036 F3, phase-17 17-1).
+ *  Appended to AgentStates on `new` (end of ring) and after a
+ *  history_reset on `clear` (head of ring). `to_session_id` may be null
+ *  when the fresh session's ID has not been reported yet; the same
+ *  request_id lets the server patch it on the first ID report. */
+export interface SessionBoundaryMarker {
+  mode: SessionResetMode;
+  request_id: string;
+  ts: string;
+  previous_session_id?: string;
+  to_session_id?: string | null;
 }

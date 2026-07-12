@@ -259,10 +259,13 @@ describe("AgentHost — query injection", () => {
     // session_capabilities は #statusExt から unconditional に stamp されるため
     // 全 state_change に乗る (ADR-0034 F1、spawn-direct advertise の実装契約)。
     // envs[0] を採るのは「init 到達を待たない」ことの demonstrate 用。
+    // supports_session_reset は phase-17 17-2 で追加された field。chunk α では
+    // false stamp を保証し、chunk γ (17-6) 完了時に true + modes へ flip する。
     const first = envs[0]!;
     expect(first.ext?.session_capabilities).toEqual({
       supports_attachments: true,
       supports_user_input_dialog: true,
+      supports_session_reset: false,
     });
   });
 
