@@ -1,7 +1,7 @@
 ---
 title: Phase 15 — wrapper UX parity (Claude Code と Codex の使い勝手対称化)
 description: phase-14 完了後の実運用検証で顕在化した Claude / Codex 間の UX 非対称の解消。model 解決経路の対称化と source 明示、権限二軸 UI 拡張、engine 別 config field の loud warn 化、session capabilities による engine 中立化、resume 時の設定差分検出、docs 整備を含む。
-status: in-progress
+status: completed
 phase: 15
 depends_on: [phase-14-codex-adapter]
 last_updated: 2026-07-12
@@ -77,7 +77,7 @@ phase-14 の acceptance は engine としての稼働が主眼だった。本 ph
 | 15-17 | `wrapper/kaoiro.config.example.json` を `kaoiro.config.claude-code.example.json` と `kaoiro.config.codex.example.json` に分割 (D6) | next | ✅ | 各 engine で効く field のみ含む。実施 (2026-07-12、あお)。Claude 例は `model` + `permission_mode`、Codex 例は `sandbox` + `network_access` (Codex は catalog なしで account default 委任のため `model` は含めない)。docs/adr/0031、docs/specs/personas.md の cross-ref も新ファイル名へ更新 |
 | 15-18 | `wrapper/README.md` に engine × config field / env 対応表を追加 (D6) | next | ✅ | Markdown table、engine 別 field を明示。実施 (2026-07-12、あお)。共通フィールド / engine × field / env × engine の 3 表構成、「無視」欄は D3 の loud warn 対象を示す。旧 env 撤去 (#103) と ADR-0032 F4bc 解決順への forward pointer 含む |
 | 15-19 | `scripts/dev.sh` の env export を engine 別 (`KAOIRO_CLAUDE_CODE_DEFAULT_MODEL`) に書き換え、コメントで新旧対応を明記 (D6) | initial | ✅ | **initial 前倒し (director 判断、2026-07-11)** — 15-2 実装直後の dev 環境で旧 env の deprecation warn が毎起動で鳴り続ける事故を避けるため。15-2 引き継ぎとセットでクロエ実施 (2026-07-11) |
-| 15-20 | wrapper 全パッケージ / dashboard / server / runner の regression テスト全通過確認 | initial | ⏳ | endpoint-to-endpoint (envelope 追加 field が両 engine → dashboard を通る) |
+| 15-20 | wrapper 全パッケージ / dashboard / server / runner の regression テスト全通過確認 | initial | ✅ | endpoint-to-endpoint (envelope 追加 field が両 engine → dashboard を通る)。実施 (2026-07-12、あお)。全パッケージ regression: protocol / runner typecheck、runner vitest / wrapper 4 pkg (core/agent-common/claude-code/codex) test 全 pass、server/assets svelte-check 331 files 0 err + vitest 87 pass、mix format clean + mix test 315 pass。audit 3 観点判定: **(a1)** Codex `#emitResult` の session_capabilities 伝播は redesign 不要 (Claude host も同じ pattern、ext は full status snapshot として envelope 種別横断で一貫、downstream consumer は envelope 種別非依存で無害); **(a2)** chunk 2 (`482d254`) end-to-end 経路は server (build_spawn_payload/build_restore_payload の `maybe_put_resume_snapshot` / wrapper_channel の `record_snapshot`) → runner (ParsedSpawn/parseSpawn/resolveWrapperConfig の resumeSnapshot 経路) → wrapper (両 host の `#resumeSnapshot` + `computeResumeDrift`) → dashboard (`resumeDriftFrom` + AgentDetail バッジ、15-9 で完了) まで全通過確認、post-review fix `7840cc4`+`40e185e` も反映済; **(b)** 15-14 negative test は両 adapter (`wrapper/claude-code/test/host.test.ts:248` + `wrapper/codex/test/host.test.ts:327`) で「session_capabilities が envs[0] で unconditional に stamp される (init 到達待たず)」を `toEqual({...})` で断言、field 欠落 (undefined) や partial は toEqual mismatch で検出; **(c)** protocol 新 field 群 (`ext.model_source` / `effort_source` / `session_capabilities` / `resume_snapshot` / `effective` / `resume_drift`) の E2E 検証は「shared `@kaoiro/protocol` 型 + 各 layer 独立テスト」の既存モデルで達成 — wrapper 側 stamp テスト・dashboard 側 defensive-parse テスト (`modelSourceFrom` / `resumeDriftFrom` / `sessionCapabilitiesFrom` / `userInputDialogAvailability`)・server 側 relay テスト (spawn permission_mode 2 case) が層ごとに揃い、shared 型がレイヤ間契約を保証 |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blocked.
 
