@@ -44,7 +44,29 @@ export interface RunnerConfig {
   blocked_personas?: string[];
   cwd_allowlist: string[];
   capabilities?: string[];
+  codex?: CodexConfig;
 }
+
+export type ChatGptPlan =
+  | "free"
+  | "go"
+  | "plus"
+  | "pro"
+  | "business"
+  | "enterprise";
+
+export interface CodexConfig {
+  chatgpt_plan?: ChatGptPlan;
+}
+
+const CHATGPT_PLANS = new Set<ChatGptPlan>([
+  "free",
+  "go",
+  "plus",
+  "pro",
+  "business",
+  "enterprise",
+]);
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -164,6 +186,26 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
       "capabilities",
       MAX_CAPABILITIES,
     );
+  }
+
+  if (raw.codex !== undefined) {
+    if (!isObject(raw.codex)) {
+      throw new ConfigError("codex must be an object");
+    }
+    const codex: CodexConfig = {};
+    if (raw.codex.chatgpt_plan !== undefined) {
+      if (
+        typeof raw.codex.chatgpt_plan !== "string" ||
+        !CHATGPT_PLANS.has(raw.codex.chatgpt_plan as ChatGptPlan)
+      ) {
+        throw new ConfigError(
+          "codex.chatgpt_plan must be one of: free, go, plus, pro, " +
+            "business, enterprise",
+        );
+      }
+      codex.chatgpt_plan = raw.codex.chatgpt_plan as ChatGptPlan;
+    }
+    config.codex = codex;
   }
 
   return config;

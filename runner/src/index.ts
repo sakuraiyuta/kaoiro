@@ -1,6 +1,6 @@
 // Public surface of @kaoiro/runner.
 
-export type { RunnerConfig } from "./config.js";
+export type { ChatGptPlan, CodexConfig, RunnerConfig } from "./config.js";
 export {
   ConfigError,
   buildHeartbeat,

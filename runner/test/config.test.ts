@@ -25,6 +25,44 @@ describe("parseRunnerConfig", () => {
     expect(parseRunnerConfig(withCaps).capabilities).toEqual(["claude"]);
   });
 
+  it.each([
+    "free",
+    "go",
+    "plus",
+    "pro",
+    "business",
+    "enterprise",
+  ])("codex.chatgpt_plan の closed enum %s を受け入れる", (plan) => {
+    const config = parseRunnerConfig({
+      ...valid,
+      codex: { chatgpt_plan: plan },
+    });
+    expect(config.codex?.chatgpt_plan).toBe(plan);
+  });
+
+  it("codex 節と chatgpt_plan の省略を受け入れる", () => {
+    expect(parseRunnerConfig(valid).codex).toBeUndefined();
+    expect(parseRunnerConfig({ ...valid, codex: {} }).codex).toEqual({});
+  });
+
+  it("未知の codex.chatgpt_plan を loud config error にする", () => {
+    expect(() =>
+      parseRunnerConfig({
+        ...valid,
+        codex: { chatgpt_plan: "team" },
+      }),
+    ).toThrowError(
+      "codex.chatgpt_plan must be one of: free, go, plus, pro, business, " +
+        "enterprise",
+    );
+  });
+
+  it("codex 節が object でなければ弾く", () => {
+    expect(() => parseRunnerConfig({ ...valid, codex: "plus" })).toThrow(
+      ConfigError,
+    );
+  });
+
   it("host_id 欠落を弾く", () => {
     const { host_id: _omit, ...rest } = valid;
     void _omit;
