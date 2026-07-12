@@ -7,13 +7,11 @@ import {
 function doctorReport(mode: unknown): unknown {
   return {
     checks: {
-      auth: {
-        credentials: {
-          details: {
-            "stored auth mode": mode,
-            "stored API key": "secret-api-key-marker",
-            "stored ChatGPT tokens": "secret-token-marker",
-          },
+      "auth.credentials": {
+        details: {
+          "stored auth mode": mode,
+          "stored API key": "secret-api-key-marker",
+          "stored ChatGPT tokens": "secret-token-marker",
         },
       },
     },
@@ -44,7 +42,9 @@ describe("detectCodexAuthMode", () => {
     ["JSON parse失敗", async () => ({ stdout: "secret malformed output" })],
     [
       "field欠落",
-      async () => ({ stdout: JSON.stringify({ checks: { auth: {} } }) }),
+      async () => ({
+        stdout: JSON.stringify({ checks: { "auth.credentials": {} } }),
+      }),
     ],
   ])("%s は unknown + token非露出warnにする", async (_name, runDoctor) => {
     const stderr = vi

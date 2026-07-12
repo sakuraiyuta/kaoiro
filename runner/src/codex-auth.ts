@@ -34,9 +34,10 @@ export function parseCodexAuthMode(value: unknown): CodexAuthMode {
   if (typeof value !== "object" || value === null) return "unknown";
   const checks = (value as Record<string, unknown>).checks;
   if (typeof checks !== "object" || checks === null) return "unknown";
-  const auth = (checks as Record<string, unknown>).auth;
-  if (typeof auth !== "object" || auth === null) return "unknown";
-  const credentials = (auth as Record<string, unknown>).credentials;
+  // codex 0.144.1 の doctor JSON では checks の要素キーは "auth.credentials"
+  // のようなリテラルなドット付き文字列で、ネストしたパスではない。
+  const credentials =
+    (checks as Record<string, unknown>)["auth.credentials"];
   if (typeof credentials !== "object" || credentials === null) {
     return "unknown";
   }
