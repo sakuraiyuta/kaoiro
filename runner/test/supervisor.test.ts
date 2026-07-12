@@ -159,6 +159,31 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     const parsed = parseSpawn({ ...spawnMsg, initial_prompt: "やあ" })!;
     expect(parsed.initialPrompt).toBe("やあ");
   });
+  it("permission_mode の有効値は ParsedSpawn に載せる (phase-15 15-12)", () => {
+    const parsed = parseSpawn({ ...spawnMsg, permission_mode: "plan" })!;
+    expect(parsed.permissionMode).toBe("plan");
+  });
+  it("未知 permission_mode は parseSpawn が null (fail-loud)", () => {
+    expect(parseSpawn({ ...spawnMsg, permission_mode: "yolo" })).toBeNull();
+  });
+  it("permission_mode は wrapper config へ passthrough (phase-15 15-12)", () => {
+    const parsed = parseSpawn({ ...spawnMsg, permission_mode: "acceptEdits" })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.claude-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+    );
+    expect(config.permission_mode).toBe("acceptEdits");
+  });
+  it("permission_mode 未指定なら wrapper config に field なし", () => {
+    const parsed = parseSpawn(spawnMsg)!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.claude-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+    );
+    expect("permission_mode" in config).toBe(false);
+  });
 });
 
 describe("isCwdAllowed", () => {

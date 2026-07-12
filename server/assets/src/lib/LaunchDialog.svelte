@@ -8,6 +8,7 @@
     KaoiroConnection,
     RunnerSessions,
   } from "./protocol";
+  import { PERMISSION_MODE_AXES } from "./protocol";
 
   let {
     hosts,
@@ -35,6 +36,22 @@
     "workspace-write",
   );
   let networkAccess = $state(false);
+  // Claude-only launch permission mode (phase-15 15-12, ADR-0033 F4 追補).
+  // Priority "explicit spawn > persisted store" is enforced server-side:
+  // when the operator picks something other than "" the server relays it
+  // AND records it into PermissionModes so the next after_join push
+  // reinforces (not overwrites) the SpawnMessage value. "" here means "leave
+  // to the server's stored value" (natural continuation for restore paths).
+  const PERMISSION_MODE_VALUES = [
+    "default",
+    "acceptEdits",
+    "plan",
+    "dontAsk",
+    "auto",
+    "bypassPermissions",
+  ] as const;
+  type PermissionModeChoice = "" | (typeof PERMISSION_MODE_VALUES)[number];
+  let permissionMode = $state<PermissionModeChoice>("");
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -54,6 +71,10 @@
   // Codex permission is launch-fixed (ADR-0033 F3): the sandbox axis is the
   // only selectable knob; approval is pinned to "never" upstream.
   const isCodex = $derived(engine === "codex");
+  // Claude-only: the permission_mode picker only makes sense for engine=
+  // claude-code (Codex ignores the field). Kept as a derived so the select
+  // vanishes automatically when the operator swaps engines mid-dialog.
+  const showPermissionMode = $derived(engine === "claude-code");
 
   // Resume candidates only count when they match the current host+cwd (and
   // engine, when the reply carries one); a stale enumerate for another
@@ -145,6 +166,12 @@
         ...(isCodex ? { sandbox } : {}),
         ...(isCodex && sandbox === "workspace-write"
           ? { network_access: networkAccess }
+          : {}),
+        // Claude-only launch permission mode (phase-15 15-12). Empty ""
+        // means "no explicit pick" — fall through to the server's stored
+        // value (natural continuation).
+        ...(showPermissionMode && permissionMode !== ""
+          ? { permission_mode: permissionMode }
           : {}),
         ...(mode === "resume"
           ? { resume_session_id: sessionId }
@@ -256,6 +283,32 @@
             <option value="">既定</option>
             {#each effortLevels as l (l)}
               <option value={l}>{l}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
+      {#if showPermissionMode}
+        <!-- Claude permission mode の起動時選択 (phase-15 15-12,
+             ADR-0033 F4 追補)。空 ("") は「明示しない = 前回保存値を継続」で、
+             選ぶと server が SpawnMessage.permission_mode を relay + 保存する。
+             tooltip に PERMISSION_MODE_AXES の二軸 (書込 / 承認) を併記して
+             AgentDetail の現行 mode ラベルと同じ読み方に揃える。 -->
+        <label>
+          permission mode(作業意図)
+          <select bind:value={permissionMode}>
+            <option value="">前回値を継続 (server 保存値)</option>
+            {#each PERMISSION_MODE_VALUES as m (m)}
+              <option
+                value={m}
+                title={"書込: " +
+                  PERMISSION_MODE_AXES[m].sandbox +
+                  " / 承認: " +
+                  PERMISSION_MODE_AXES[m].approval}
+              >
+                {m} (書込 {PERMISSION_MODE_AXES[m].sandbox} / 承認
+                {PERMISSION_MODE_AXES[m].approval})
+              </option>
             {/each}
           </select>
         </label>

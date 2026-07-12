@@ -425,6 +425,17 @@ export interface SpawnMessage {
   /** Launch-time effort pick; one of the model's effort_levels.
    *  Omitted = model default. */
   effort?: string;
+  /** Claude-only launch permission mode (ADR-0033 F4 追補, phase-15 D2).
+   *  When present the runner relays this into the wrapper config so the
+   *  session starts in this mode without waiting for the server's
+   *  set_permission_mode push. Priority is "explicit spawn wins over the
+   *  server-side store": the server records this into
+   *  `KaoiroServer.PermissionModes` at spawn time so the persisted store
+   *  matches the operator's latest intent. Restore paths (which do not
+   *  pass through the LaunchDialog) omit this field and fall through to
+   *  the persisted store value naturally. The Codex engine ignores it
+   *  (its permission posture is launch-fixed via sandbox, ADR-0033 F3). */
+  permission_mode?: PermissionMode;
   /** Codex-only launch permission: the OS sandbox axis (ADR-0033 F3;
    *  the approval axis is pinned to "never" and not selectable). The
    *  Claude engine ignores it (its permission posture is the mode,

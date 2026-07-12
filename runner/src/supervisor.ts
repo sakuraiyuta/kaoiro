@@ -7,6 +7,7 @@
 
 import type {
   EngineKind,
+  PermissionMode,
   ResolvedSnapshotExt,
   RunnerSessions,
   SessionMeta,
@@ -68,6 +69,10 @@ export interface ParsedSpawn {
   resumeSessionId?: string;
   model?: string;
   effort?: string;
+  /** Claude-only launch permission mode (ADR-0033 F4 追補, phase-15 D2 /
+   *  task 15-12). Relayed from SpawnMessage.permission_mode; Codex ignores
+   *  it. Closed-enum validation runs at parseSpawn's whitelist. */
+  permissionMode?: PermissionMode;
   sandbox?: WrapperConfig["sandbox"];
   networkAccess?: boolean;
   /** Resume snapshot: relayed by the server on a resume spawn only
@@ -127,6 +132,20 @@ function parsePersona(value: unknown): WirePersona | null {
   return { id, name, sprite_set };
 }
 
+/** Closed enum of Claude SDK permission_mode values (phase-15 15-12).
+ *  Kept as a runtime array for parseSpawn's whitelist check; the type-side
+ *  is `PermissionMode` in `@kaoiro/protocol`. Order matches the LaunchDialog
+ *  option list, not the SDK's own ordering, so a grep between the two
+ *  reads consistently. */
+const PERMISSION_MODE_VALUES: readonly string[] = [
+  "default",
+  "acceptEdits",
+  "plan",
+  "dontAsk",
+  "auto",
+  "bypassPermissions",
+];
+
 /** Validates the rest of a `spawn` message (agent_id already read). Returns
  *  null when a required field is missing or ill-typed. */
 export function parseSpawn(payload: unknown): ParsedSpawn | null {
@@ -167,6 +186,16 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   if (model !== undefined && model !== "") parsed.model = model;
   const effort = optionalString(payload.effort);
   if (effort !== undefined && effort !== "") parsed.effort = effort;
+  // Claude-only permission_mode passthrough (phase-15 15-12). Closed-enum
+  // whitelist, same as the SDK's PermissionMode union; an unknown value is
+  // a fail-loud reject so the operator cannot silently launch with the
+  // engine default when they picked something.
+  if (payload.permission_mode !== undefined) {
+    if (!PERMISSION_MODE_VALUES.includes(payload.permission_mode as string)) {
+      return null;
+    }
+    parsed.permissionMode = payload.permission_mode as PermissionMode;
+  }
   if (payload.sandbox !== undefined) {
     if (
       payload.sandbox !== "read-only" &&
@@ -218,6 +247,9 @@ export function resolveWrapperConfig(
   // fields that are not theirs (sandbox on Claude, permission_mode on codex).
   if (parsed.model !== undefined) config.model = parsed.model;
   if (parsed.effort !== undefined) config.effort = parsed.effort;
+  if (parsed.permissionMode !== undefined) {
+    config.permission_mode = parsed.permissionMode;
+  }
   if (parsed.sandbox !== undefined) config.sandbox = parsed.sandbox;
   if (parsed.networkAccess !== undefined) {
     config.network_access = parsed.networkAccess;

@@ -677,6 +677,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
       |> maybe_put_string("effort", payload["effort"])
       |> maybe_put_sandbox(payload["sandbox"])
       |> maybe_put_boolean("network_access", payload["network_access"])
+      # Claude-only launch permission mode (ADR-0033 F4 追補, phase-15 D2 /
+      # task 15-12). Priority "explicit spawn wins over the persisted
+      # store": when present we ALSO record it into PermissionModes here so
+      # the store agrees with the operator's latest intent and a later
+      # after_join push reinforces (not overwrites) the SpawnMessage value.
+      # Restore paths (build_restore_payload) omit this field and fall
+      # through to the store's persisted value naturally.
+      |> maybe_put_permission_mode(payload["permission_mode"])
+      |> record_permission_mode_if_present(agent_id, payload["permission_mode"])
 
     # Note: resume_snapshot is NOT piped here even for the resume-with-fresh-
     # agent_id path (spawn with resume_session_id). By construction the
@@ -716,6 +725,28 @@ defmodule KaoiroServerWeb.AgentsChannel do
     do: Map.put(map, "sandbox", value)
 
   defp maybe_put_sandbox(map, _value), do: map
+
+  # ADR-0033 F4 追補 (phase-15 D2 / task 15-12). Same closed-enum gate as
+  # @permission_modes above so a malformed spawn payload never reaches the
+  # runner. Absent / malformed = silent drop (the store push covers the
+  # continuation case).
+  defp maybe_put_permission_mode(map, value) when value in @permission_modes,
+    do: Map.put(map, "permission_mode", value)
+
+  defp maybe_put_permission_mode(map, _value), do: map
+
+  # Fire-and-forget: persist the explicit spawn-time pick into the same
+  # store the after_join push reads from. Same closed-enum gate as
+  # maybe_put_permission_mode so an invalid value neither reaches the
+  # store nor the runner. Pass-through returns the map unchanged so the
+  # pipeline stays composable.
+  defp record_permission_mode_if_present(map, agent_id, value)
+       when value in @permission_modes do
+    KaoiroServer.PermissionModes.record(agent_id, value)
+    map
+  end
+
+  defp record_permission_mode_if_present(map, _agent_id, _value), do: map
 
   defp maybe_put_boolean(map, key, value) when is_boolean(value),
     do: Map.put(map, key, value)

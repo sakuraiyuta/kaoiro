@@ -1317,6 +1317,51 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert SessionPointers.get(agent_id).engine == "codex"
     end
 
+    test "operator の spawn: permission_mode を relay + PermissionModes に永続 (phase-15 15-12)" do
+      host_id = "lab-pc-1e-pm"
+      register_host(host_id, cwd_allowlist: ["/home/user/proj"])
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "engine" => "claude-code",
+          "permission_mode" => "plan"
+        })
+
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_broadcast "spawn", payload
+      assert payload["permission_mode"] == "plan"
+      # Priority "explicit spawn wins over store": the spawn-time pick is
+      # recorded so the after_join push reinforces (not overwrites) it.
+      :ok = wait_until(fn -> KaoiroServer.PermissionModes.get(agent_id) == "plan" end)
+      assert KaoiroServer.PermissionModes.get(agent_id) == "plan"
+    end
+
+    test "operator の spawn: 未知 permission_mode は payload に載せず 永続もしない" do
+      host_id = "lab-pc-1e-pm-invalid"
+      register_host(host_id, cwd_allowlist: ["/home/user/proj"])
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "permission_mode" => "yolo"
+        })
+
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_broadcast "spawn", payload
+      refute Map.has_key?(payload, "permission_mode")
+      _ = KaoiroServer.PermissionModes.all()
+      assert KaoiroServer.PermissionModes.get(agent_id) == nil
+    end
+
     test "operator の spawn: host が宣言しない engine は engine_not_supported" do
       host_id = "lab-pc-1f"
       register_host(host_id, capabilities: ["claude-code"])

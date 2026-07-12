@@ -564,6 +564,20 @@ export interface SpawnRequest {
   /** Launch-time model / effort picks from the engine catalog cascade. */
   model?: string;
   effort?: string;
+  /** Claude-only launch permission mode (ADR-0033 F4 追補, phase-15 D2).
+   *  Rides SpawnRequest → server → SpawnMessage → runner → wrapper.
+   *  Omitted = the server's PermissionModes store value is used on
+   *  wrapper join (natural continuation for restore paths). Priority is
+   *  "explicit spawn wins": when present, the server records it into the
+   *  same store so the persisted value matches the operator's latest
+   *  intent. Codex ignores this field (launch-fixed via sandbox). */
+  permission_mode?:
+    | "default"
+    | "acceptEdits"
+    | "plan"
+    | "bypassPermissions"
+    | "dontAsk"
+    | "auto";
   /** Codex-only launch permission (ADR-0033 F3): the OS sandbox axis and
    *  its network toggle; approval is pinned to "never" and not sent. */
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
