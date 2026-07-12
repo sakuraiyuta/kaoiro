@@ -1,10 +1,10 @@
 ---
 title: Phase 16 — Codex model catalog と session継続switch
 description: ChatGPT plan申告に基づくCodex model catalogを復活し、同一session/historyを維持するmodel・effort切替、loud fail、rollback、capability広告を実装する。
-status: planning
+status: in_progress
 phase: 16
 depends_on: [phase-15-wrapper-ux-parity]
-last_updated: 2026-07-11
+last_updated: 2026-07-13
 ---
 
 # Phase 16 — Codex model catalog と session継続switch
@@ -49,16 +49,16 @@ session途中の失敗でもhistoryと最後の実効modelを失わない。
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 16-1 | `RunnerConfig`へ`codex.chatgpt_plan`とclosed-enum validationを追加 | ⏳ | absentは許可。unknown valueはloud config error。apikey時のvalidな残置申告はwarn + ignore |
-| 16-2 | `codex doctor --json` auth-mode検出とfail-closed処理をrunnerへ追加 | ⏳ | token内容をlog/envelopeへ出さない |
-| 16-3 | auth mode + planから`EngineModelInfo[]`を返すCodex catalog resolverを実装 | ⏳ | global `CODEX_MODELS=[]`を置換。runner/registerとwrapperでSSOT共有 |
-| 16-4 | Sol/Terra/Lunaのeffort値を0.144.1で検証し`effort_levels`へ統合 | ⏳ | 未検証値は候補に出さない |
-| 16-5 | protocolへ`supports_model_switch` / `supports_effort_switch`を追加 | ⏳ | ADR-0034 F2予約fieldの実装 |
-| 16-6 | Codex adapterのpending/effective model・effortとlast-known-goodを実装 | ⏳ | 成功turnでcommit、失敗turnでrollback |
-| 16-7 | server snapshot更新を成功したeffective値のみに限定 | ⏳ | phase-15 15-8と統合、operator switchをdrift扱いしない |
-| 16-8 | LaunchDialogのCodex model / effort selectを復帰 | ⏳ | phase-15が撤去するCodex label特例には触らない |
-| 16-9 | AgentDetailのmid-session switch、pending/failure/rollback表示を実装 | ⏳ | capability判定、engine名判定禁止 |
-| 16-10 | catalog matrix、switch、400/404、rollbackのunit/integration testを追加 | ⏳ | Free/Go/Plus+/apikey/未申告をcover |
+| 16-1 | `RunnerConfig`へ`codex.chatgpt_plan`とclosed-enum validationを追加 | ✅ | 97a080c |
+| 16-2 | `codex doctor --json` auth-mode検出とfail-closed処理をrunnerへ追加 | ✅ | 2cb6d6e |
+| 16-3 | auth mode + planから`EngineModelInfo[]`を返すCodex catalog resolverを実装 | ✅ | 0e1e5b4 (SSOT resolver + runner/wrapper 輸送) |
+| 16-4 | Sol/Terra/Lunaのeffort値を0.144.1で検証し`effort_levels`へ統合 | ✅ | 0b5c368 (openai/codex main の models.json 由来 curated snapshot、2026-07-13) |
+| 16-5 | protocolへ`supports_model_switch` / `supports_effort_switch`を追加 | ✅ | 2cce473 |
+| 16-6 | Codex adapterのpending/effective model・effortとlast-known-goodを実装 | ✅ | fb3bef2 (pending/effective/last-good 3 段 + turn boundary + failure rollback + switch_error 1 回性 stamp + operator drift filter) |
+| 16-7 | server snapshot更新を成功したeffective値のみに限定 | ✅ | 5273f85 |
+| 16-8 | LaunchDialogのCodex model / effort selectを復帰 | ✅ | 72feee0 |
+| 16-9 | AgentDetailのmid-session switch、pending/failure/rollback表示を実装 | ✅ | 72feee0 |
+| 16-10 | catalog matrix、switch、400/404、rollbackのunit/integration testを追加 | ✅ | abcbcd7 (adapter 9 case + dashboard 10 case、64+131 pass) |
 | 16-11 | Terra -> Sol -> Terraと不正slug rollbackのhost実機試験 | ⏳ | 同一sessionId/history/rolloutを証跡化 |
 | 16-12 | specsと運用docsを更新し全regression testを実行 | ⏳ | protocol/plugin-model/codex-model-catalog/codex-sdk-events |
 
