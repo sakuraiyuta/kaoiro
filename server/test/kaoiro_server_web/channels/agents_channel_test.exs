@@ -751,6 +751,65 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  # phase-17 17-7 (ADR-0036 F3): session_boundary marker envelope の
+  # viewer sanitize。operator は full payload (mode / request_id /
+  # previous_session_id / to_session_id / persona)、viewer は mode /
+  # state / ts / persona のみ (session ID 群は viewer に露出しない)。
+  describe "session_boundary の viewer 情報境界 (ADR-0036 F3, 17-7)" do
+    defp boundary_envelope(agent_id, mode) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => @ao,
+        "ts" => "2026-07-12T18:00:00Z",
+        "type" => "session_boundary",
+        "state" => "idle",
+        "payload" => %{
+          "mode" => mode,
+          "request_id" => "rs_boundary_1",
+          "previous_session_id" => "sess-old-xyz",
+          "to_session_id" => "sess-new-abc"
+        },
+        "ext" => %{}
+      }
+    end
+
+    test "operator は marker envelope を full payload で受信する (must-3)" do
+      envelope = boundary_envelope("test.bd-op", "new")
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+
+      assert_push "envelope",
+                  %{
+                    "type" => "session_boundary",
+                    "payload" => %{
+                      "mode" => "new",
+                      "request_id" => "rs_boundary_1",
+                      "previous_session_id" => "sess-old-xyz",
+                      "to_session_id" => "sess-new-abc"
+                    }
+                  }
+    end
+
+    test "viewer は marker envelope を safe payload のみ受信する (session ID 群 drop)" do
+      envelope = boundary_envelope("test.bd-vw", "clear")
+      _socket = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+
+      assert_push "envelope", pushed
+      # 境界の存在 (mode) は viewer にも表示、ID 群は drop、ext も削除。
+      assert pushed["type"] == "session_boundary"
+      assert pushed["state"] == "idle"
+      assert pushed["payload"] == %{"mode" => "clear"}
+      refute Map.has_key?(pushed, "ext")
+      refute Map.has_key?(pushed["payload"], "request_id")
+      refute Map.has_key?(pushed["payload"], "previous_session_id")
+      refute Map.has_key?(pushed["payload"], "to_session_id")
+    end
+  end
+
   describe "inter_agent_message の viewer 完全除去 (protocol-inter-agent, phase-8)" do
     defp inter_agent_envelope(agent_id, to_id) do
       %{

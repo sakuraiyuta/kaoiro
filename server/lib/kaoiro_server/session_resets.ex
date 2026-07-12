@@ -303,6 +303,31 @@ defmodule KaoiroServer.SessionResets do
             _ -> lock.to_session_id
           end
 
+        # phase-17 17-7 (must-3): write the boundary marker into
+        # AgentStates AND broadcast it via the ordinary envelope path so
+        # every currently-connected client (operator: full payload,
+        # viewer: mode/state only via handle_out sanitize) sees it. The
+        # `clear` mode also fires `history_reset` FIRST so client
+        # transcripts drop before the marker arrives — reversing the
+        # order would erase the marker along with the log.
+        marker = build_boundary_envelope(agent_id, lock, effective_to_sid)
+
+        case lock.mode do
+          "clear" ->
+            KaoiroServerWeb.Endpoint.broadcast(
+              "agents:lobby",
+              "history_reset",
+              %{"agent_id" => agent_id}
+            )
+
+            _ = KaoiroServer.AgentStates.clear_history_with_boundary(agent_id, marker)
+
+          _ ->
+            _ = KaoiroServer.AgentStates.append_boundary(agent_id, marker)
+        end
+
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", marker)
+
         detach_session_safely(agent_id)
 
         broadcast_completed(agent_id, lock, effective_to_sid)
@@ -392,6 +417,40 @@ defmodule KaoiroServer.SessionResets do
     do: Map.put(payload, "previous_session_id", sid)
 
   defp maybe_put_previous_session_id(payload, _sid), do: payload
+
+  # phase-17 17-7: build the session_boundary marker envelope. `state` is
+  # fixed to "idle" — reset acquire only permits idle / waiting_input, and
+  # a marker denotes the transition between sessions rather than any live
+  # engine state. persona comes from the current AgentStates entry so
+  # the marker attributes to the same persona the transcript is showing.
+  # session_id is deliberately absent (envelope.session_id is optional);
+  # the marker straddles two sessions and belongs to neither.
+  defp build_boundary_envelope(agent_id, lock, effective_to_sid) do
+    persona =
+      case Map.get(KaoiroServer.AgentStates.snapshot(), agent_id) do
+        %{"persona" => p} when is_map(p) -> p
+        _ -> %{}
+      end
+
+    payload =
+      %{
+        "mode" => lock.mode,
+        "request_id" => lock.request_id,
+        "to_session_id" => effective_to_sid
+      }
+      |> maybe_put_previous_session_id(lock.previous_session_id)
+
+    %{
+      "version" => "0",
+      "agent_id" => agent_id,
+      "persona" => persona,
+      "ts" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "type" => "session_boundary",
+      "state" => "idle",
+      "payload" => payload,
+      "ext" => %{}
+    }
+  end
 
   defp broadcast_failed(agent_id, lock, reason) do
     payload = %{

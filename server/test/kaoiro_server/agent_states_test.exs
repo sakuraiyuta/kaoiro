@@ -304,4 +304,137 @@ defmodule KaoiroServer.AgentStatesTest do
       assert :noop = AgentStates.reset_history("ghost", server: store)
     end
   end
+
+  # phase-17 17-7 (ADR-0036 F3): session_boundary marker + pending-patch
+  # 経路。SessionResets が confirm_connection で書き込む marker envelope
+  # を history に載せる path と、Codex lazy采番用の to_session_id 後追い
+  # patch。
+  describe "session_boundary marker (17-7)" do
+    setup do
+      store =
+        start_supervised!({AgentStates, name: :"boundary_#{System.unique_integer([:positive])}"})
+
+      :ok = AgentStates.put(envelope("a", %{"state" => "idle"}), server: store)
+      %{store: store}
+    end
+
+    defp boundary_marker(mode, request_id, to_session_id, previous_session_id \\ nil) do
+      payload =
+        %{
+          "mode" => mode,
+          "request_id" => request_id,
+          "to_session_id" => to_session_id
+        }
+        |> then(fn p ->
+          if is_binary(previous_session_id),
+            do: Map.put(p, "previous_session_id", previous_session_id),
+            else: p
+        end)
+
+      %{
+        "agent_id" => "a",
+        "type" => "session_boundary",
+        "state" => "idle",
+        "payload" => payload
+      }
+    end
+
+    test "append_boundary: 既存 history 末尾に marker を追加、状態はそのまま", %{store: store} do
+      :ok = AgentStates.append_log(log_env("a", 1), server: store)
+      marker = boundary_marker("new", "rs_1", "sess-new", "sess-old")
+
+      assert :ok = AgentStates.append_boundary("a", marker, server: store)
+
+      history = AgentStates.histories(store)["a"]
+      # Chronological (oldest first): log first, marker last.
+      assert length(history) == 2
+      assert Enum.at(history, 0)["type"] == "log"
+      assert Enum.at(history, 1)["type"] == "session_boundary"
+      # Latest state is untouched.
+      assert AgentStates.snapshot(store)["a"]["state"] == "idle"
+    end
+
+    test "append_boundary: to_session_id=nil で pending patch stash", %{store: store} do
+      marker = boundary_marker("new", "rs_lazy", nil, "sess-old")
+      assert :ok = AgentStates.append_boundary("a", marker, server: store)
+
+      # 続く envelope で patch が発火するかを確認: session_id 付き envelope
+      # 相当の patch call で marker の to_session_id が確定する。
+      assert :ok = AgentStates.patch_boundary_to_session_id("a", "sess-new", server: store)
+
+      history = AgentStates.histories(store)["a"]
+      [marker_env] = Enum.filter(history, &(&1["type"] == "session_boundary"))
+      assert marker_env["payload"]["to_session_id"] == "sess-new"
+    end
+
+    test "append_boundary: to_session_id=binary は pending 無し、後続 patch は noop", %{
+      store: store
+    } do
+      marker = boundary_marker("new", "rs_eager", "sess-x", "sess-old")
+      assert :ok = AgentStates.append_boundary("a", marker, server: store)
+
+      # 後続 patch call は stash が無いので :noop、marker は変わらない。
+      assert :noop = AgentStates.patch_boundary_to_session_id("a", "sess-other", server: store)
+
+      history = AgentStates.histories(store)["a"]
+      [marker_env] = Enum.filter(history, &(&1["type"] == "session_boundary"))
+      assert marker_env["payload"]["to_session_id"] == "sess-x"
+    end
+
+    test "clear_history_with_boundary: 全 history を消去し marker を唯一の line として残す", %{
+      store: store
+    } do
+      :ok = AgentStates.append_log(log_env("a", 1), server: store)
+      :ok = AgentStates.append_log(log_env("a", 2), server: store)
+      marker = boundary_marker("clear", "rs_c", "sess-new", "sess-old")
+
+      assert :ok = AgentStates.clear_history_with_boundary("a", marker, server: store)
+
+      history = AgentStates.histories(store)["a"]
+      assert length(history) == 1
+      assert hd(history)["type"] == "session_boundary"
+      assert hd(history)["payload"]["mode"] == "clear"
+      # Latest state is untouched.
+      assert AgentStates.snapshot(store)["a"]["state"] == "idle"
+    end
+
+    test "clear_history_with_boundary: to_session_id=nil で pending stash + 後続 patch で確定", %{
+      store: store
+    } do
+      marker = boundary_marker("clear", "rs_cl", nil)
+      assert :ok = AgentStates.clear_history_with_boundary("a", marker, server: store)
+
+      assert :ok = AgentStates.patch_boundary_to_session_id("a", "sess-new", server: store)
+
+      history = AgentStates.histories(store)["a"]
+      [marker_env] = Enum.filter(history, &(&1["type"] == "session_boundary"))
+      assert marker_env["payload"]["to_session_id"] == "sess-new"
+    end
+
+    test "patch: pending stash 無し (通常 restart 経路) では noop", %{store: store} do
+      # No boundary marker written; simulate a normal envelope with session_id.
+      assert :noop = AgentStates.patch_boundary_to_session_id("a", "sess-any", server: store)
+    end
+
+    test "put が pending stash を保持する (reset 中の他 state_change で消えない)", %{store: store} do
+      marker = boundary_marker("new", "rs_p", nil)
+      assert :ok = AgentStates.append_boundary("a", marker, server: store)
+
+      # 途中で state_change (session_id 未確定) が届いても stash は残る
+      :ok = AgentStates.put(envelope("a", %{"state" => "thinking"}), server: store)
+
+      # 後続の session_id 付き envelope の patch でようやく確定する
+      assert :ok = AgentStates.patch_boundary_to_session_id("a", "sess-final", server: store)
+
+      history = AgentStates.histories(store)["a"]
+      [marker_env] = Enum.filter(history, &(&1["type"] == "session_boundary"))
+      assert marker_env["payload"]["to_session_id"] == "sess-final"
+    end
+
+    test "未知 agent の append_boundary / clear_history_with_boundary は noop", %{store: store} do
+      marker = boundary_marker("new", "rs_x", "s")
+      assert :noop = AgentStates.append_boundary("ghost", marker, server: store)
+      assert :noop = AgentStates.clear_history_with_boundary("ghost", marker, server: store)
+    end
+  end
 end

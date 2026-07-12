@@ -143,6 +143,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- route_inter_agent(envelope, socket.assigns.agent_id),
          :ok <- store(envelope) do
       record_session_pointer(envelope)
+      # phase-17 17-7: fill the pending boundary marker's to_session_id
+      # when a fresh Codex session finally reports its thread ID
+      # (SessionResets.confirm_connection could not confirm it earlier
+      # because Codex's采番 is lazy). No-op unless a stash exists.
+      maybe_patch_boundary_to_session_id(envelope, socket.assigns.agent_id)
       # Refresh the memory-only last_seen hint used by the client's
       # live/offline merge (ADR-0030). Cheap fire-and-forget; no disk I/O.
       AgentDirectory.touch(socket.assigns.agent_id)
@@ -279,6 +284,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
         :ok
     end
   end
+
+  # phase-17 17-7: patch the pending boundary marker's to_session_id
+  # once a fresh session finally reports one. Only fires when a stash
+  # exists (SessionResets marker path set it), so a normal envelope
+  # from a non-reset agent pays only one call + one map lookup.
+  defp maybe_patch_boundary_to_session_id(%{"session_id" => sid}, agent_id)
+       when is_binary(sid) do
+    _ = AgentStates.patch_boundary_to_session_id(agent_id, sid)
+    :ok
+  end
+
+  defp maybe_patch_boundary_to_session_id(_envelope, _agent_id), do: :ok
 
   # Snapshot ingest (ADR-0014 F1 追補, phase-15 D8): the wrapper stamps
   # ext.effective on every state_change; the server captures it into the

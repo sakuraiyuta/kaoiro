@@ -1074,6 +1074,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
      |> Map.delete("ext")}
   end
 
+  # `session_boundary` marker (ADR-0036 F3, phase-17 17-7). Keep the
+  # visual "boundary exists" cue (mode / state / ts / persona), but drop
+  # the operator-only correlation IDs (`request_id`, `previous_session_id`,
+  # `to_session_id`) — viewers must not learn session identifiers even
+  # cosmetically.
+  defp sanitize_envelope_for(:viewer, %{"type" => "session_boundary"} = envelope) do
+    payload = Map.get(envelope, "payload") || %{}
+    safe_payload = Map.take(payload, ["mode"])
+
+    {:ok,
+     envelope
+     |> Map.put("payload", safe_payload)
+     |> Map.delete("ext")}
+  end
+
   # inter_agent_message is operator-only by spec (protocol-inter-agent);
   # listed explicitly for symmetry with the other typed clauses, even though
   # the fail-closed catch-all below would already drop it.

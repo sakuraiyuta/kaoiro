@@ -17,6 +17,17 @@ defmodule KaoiroServer.AgentStates do
   current session (issue #48), leaving the latest state untouched.
   `delete/1` removes a disconnected agent's entry entirely (issue #14).
 
+  phase-17 chunk δ (17-7) adds `session_boundary` marker envelopes to
+  the history (ADR-0036 F3). `append_boundary/2` (used for `new` mode)
+  pushes a marker onto the history and, when the marker's to_session_id
+  is nil (Codex lazy采番), stashes the request_id in
+  `pending_boundary_patch` so `patch_boundary_to_session_id/2` can
+  fill it in later when the fresh session's first envelope arrives at
+  `WrapperChannel`. `clear_history_with_boundary/2` (used for `clear`
+  mode) atomically drops all history and places the marker as the sole
+  line. The pending-patch stash is per-agent; the SessionResets lock
+  already prevents overlapping resets from racing here.
+
   The one server-derived exception is `disconnected` (specs/protocol.md):
   `disconnect/3` overlays it when the wrapper channel that wrote the
   latest envelope terminates. Each entry remembers its owner (channel
@@ -100,6 +111,46 @@ defmodule KaoiroServer.AgentStates do
   end
 
   @doc """
+  Appends a `session_boundary` marker envelope onto the agent's history
+  (ADR-0036 F3, phase-17 17-7). Used for the `new` reset mode: the
+  existing display log survives, the marker is added at the end. When
+  the marker's `payload.to_session_id` is nil (Codex lazy采番) the
+  request_id is stashed in `pending_boundary_patch` so
+  `patch_boundary_to_session_id/2` can fill it in on the fresh session's
+  first envelope. `:ok` when the agent is known, `:noop` otherwise.
+  """
+  def append_boundary(agent_id, marker_envelope, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:append_boundary, agent_id, marker_envelope})
+  end
+
+  @doc """
+  Drops ALL history and places a single `session_boundary` marker
+  envelope as the sole line, atomically (ADR-0036 F3, phase-17 17-7).
+  Used for the `clear` reset mode. Same nil-to_session_id → pending
+  stash behaviour as `append_boundary/2`.
+  """
+  def clear_history_with_boundary(agent_id, marker_envelope, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:clear_history_with_boundary, agent_id, marker_envelope})
+  end
+
+  @doc """
+  Fills the boundary marker's `to_session_id` for a Codex lazy采番 reset
+  (ADR-0036 F3, phase-17 17-7). Called from `WrapperChannel` on every
+  envelope carrying a `session_id`; no-op unless a pending patch is
+  stashed (normal restart / no reset in flight) so the extra call is
+  cheap on the hot path. Finds the boundary marker whose payload
+  request_id matches the stash, overwrites its `to_session_id`, clears
+  the stash. `:ok` on patch, `:noop` when no pending stash / no
+  matching marker.
+  """
+  def patch_boundary_to_session_id(agent_id, session_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:patch_boundary_to_session_id, agent_id, session_id})
+  end
+
+  @doc """
   Removes a `disconnected` agent's entry entirely (issue #14). Only
   deletes when the latest state is `disconnected` so a live agent cannot
   be dropped from under its wrapper; returns `{:error, :not_disconnected}`
@@ -158,7 +209,22 @@ defmodule KaoiroServer.AgentStates do
           _ -> []
         end
 
-      entry = %{envelope: envelope, owner: owner, history: history}
+      # pending_boundary_patch preserved across puts so a state_change
+      # arriving between reset acquire and its confirming envelope does
+      # not clear the stash (put/2 is called on every state_change).
+      pending =
+        case state do
+          %{^agent_id => %{pending_boundary_patch: p}} -> p
+          _ -> nil
+        end
+
+      entry = %{
+        envelope: envelope,
+        owner: owner,
+        history: history,
+        pending_boundary_patch: pending
+      }
+
       {:reply, :ok, Map.put(state, agent_id, entry)}
     end
   end
@@ -206,6 +272,51 @@ defmodule KaoiroServer.AgentStates do
     end
   end
 
+  def handle_call({:append_boundary, agent_id, marker}, _from, state) do
+    case state do
+      %{^agent_id => entry} ->
+        history = Enum.take([marker | entry.history], @max_history)
+        pending = pending_patch_from(marker, entry.pending_boundary_patch)
+
+        new_entry = %{entry | history: history, pending_boundary_patch: pending}
+        {:reply, :ok, Map.put(state, agent_id, new_entry)}
+
+      _ ->
+        {:reply, :noop, state}
+    end
+  end
+
+  def handle_call({:clear_history_with_boundary, agent_id, marker}, _from, state) do
+    case state do
+      %{^agent_id => entry} ->
+        pending = pending_patch_from(marker, entry.pending_boundary_patch)
+
+        new_entry = %{entry | history: [marker], pending_boundary_patch: pending}
+        {:reply, :ok, Map.put(state, agent_id, new_entry)}
+
+      _ ->
+        {:reply, :noop, state}
+    end
+  end
+
+  def handle_call({:patch_boundary_to_session_id, agent_id, session_id}, _from, state) do
+    with %{^agent_id => %{pending_boundary_patch: request_id} = entry} <- state,
+         true <- is_binary(request_id),
+         true <- is_binary(session_id) do
+      patched_history = Enum.map(entry.history, &patch_marker(&1, request_id, session_id))
+
+      new_entry = %{
+        entry
+        | history: patched_history,
+          pending_boundary_patch: nil
+      }
+
+      {:reply, :ok, Map.put(state, agent_id, new_entry)}
+    else
+      _ -> {:reply, :noop, state}
+    end
+  end
+
   def handle_call({:delete, agent_id}, _from, state) do
     case state do
       %{^agent_id => %{envelope: %{"state" => "disconnected"}}} ->
@@ -243,6 +354,42 @@ defmodule KaoiroServer.AgentStates do
 
     {:reply, connected, state}
   end
+
+  # phase-17 17-7: a boundary marker with to_session_id=nil (Codex lazy
+  # 采番) stashes its request_id so the fresh session's first envelope
+  # can patch it. A marker with a bound to_session_id needs no patch;
+  # in that case keep whatever stash was already there (defensive:
+  # append_boundary is only called from SessionResets after a lock
+  # release, so a residual stash would be a bug — but not overwriting
+  # it here is safer than silently clearing it).
+  defp pending_patch_from(marker, current_pending) do
+    payload = Map.get(marker, "payload") || %{}
+    to_sid = Map.get(payload, "to_session_id")
+    request_id = Map.get(payload, "request_id")
+
+    cond do
+      is_binary(to_sid) -> current_pending
+      is_binary(request_id) -> request_id
+      true -> current_pending
+    end
+  end
+
+  defp patch_marker(
+         %{"type" => "session_boundary", "payload" => payload} = env,
+         request_id,
+         session_id
+       )
+       when is_binary(request_id) do
+    case payload do
+      %{"request_id" => ^request_id} ->
+        %{env | "payload" => Map.put(payload, "to_session_id", session_id)}
+
+      _ ->
+        env
+    end
+  end
+
+  defp patch_marker(env, _request_id, _session_id), do: env
 
   # Server-derived envelope: keep identity (persona) and session_id so a
   # disconnected agent still reports its current session (issue #48); drop
