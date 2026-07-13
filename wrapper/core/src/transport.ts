@@ -31,13 +31,16 @@ export interface QuestionResponseMessage {
 }
 
 /** Single entry returned from `directory_request` (protocol-inter-agent
- *  companion tool). Server returns the minimal info needed to resolve a
- *  peer by persona name and judge availability — cwd / model / context are
- *  intentionally excluded as operator-grade info. */
+ * companion tool). Runtime traits are optional because an old/not-yet-init
+ * wrapper may not have stamped them. Operator-grade cwd / permission /
+ * session / context / capabilities / source fields remain excluded. */
 export interface DirectoryEntry {
   agent_id: string;
   persona: { id?: string; name?: string; sprite_set?: string };
   state: string;
+  engine?: string;
+  model?: string;
+  effort?: string;
 }
 
 /** attach_open payload (protocol.md / file-upload spec, server -> wrapper
@@ -109,14 +112,26 @@ function isObject(value: unknown): value is Record<string, unknown> {
  *  field DirectoryEntry declares non-optional, so a server response that
  *  drops `persona` or `state` cannot smuggle a malformed entry through the
  *  type system. */
-function isDirectoryEntry(value: unknown): value is DirectoryEntry {
-  if (!isObject(value)) return false;
+function directoryEntryFrom(value: unknown): DirectoryEntry | null {
+  if (!isObject(value)) return null;
   const v = value as Record<string, unknown>;
-  return (
-    typeof v.agent_id === "string" &&
-    isObject(v.persona) &&
-    typeof v.state === "string"
-  );
+  if (
+    typeof v.agent_id !== "string" ||
+    !isObject(v.persona) ||
+    typeof v.state !== "string"
+  ) {
+    return null;
+  }
+  const entry: DirectoryEntry = {
+    agent_id: v.agent_id,
+    persona: v.persona as DirectoryEntry["persona"],
+    state: v.state,
+  };
+  for (const key of ["engine", "model", "effort"] as const) {
+    const field = v[key];
+    if (typeof field === "string" && field !== "") entry[key] = field;
+  }
+  return entry;
 }
 
 export class ServerLink {
@@ -353,9 +368,9 @@ export class ServerLink {
             isObject(payload) &&
             Array.isArray((payload as { agents?: unknown }).agents)
           ) {
-            const agents = (payload as { agents: unknown[] }).agents.filter(
-              isDirectoryEntry,
-            );
+            const agents = (payload as { agents: unknown[] }).agents
+              .map(directoryEntryFrom)
+              .filter((entry): entry is DirectoryEntry => entry !== null);
             resolve(agents);
           } else {
             resolve([]);

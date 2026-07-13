@@ -178,11 +178,31 @@ dashboard は受信時、`agent_id`(送信側)と `payload.to`(受信側)の
 inter_agent_message 本体は既存 `envelope` イベント上で運ばれるが、
 コンパニオン機能のため **`directory_request`** を追補する。
 
+#### peer directory の情報境界 (#102)
+
+phase-8 では宛先名の解決だけを目的に directory entry を
+`agent_id / persona / state` へ絞っていた。phase-15 で engine 間の state
+envelope schema が確定したため、#102 ではこの最小性判断を
+**「名前解決に加え、peer の実行特性を見て委譲先を選べる read-only
+directory」**へ引き直す。wrapper が state envelope の `ext` に報告済みの
+`engine / model / effort` だけを optional field として公開する。
+
+各 optional field は non-empty string の場合だけ entry に含める。旧 wrapper、
+SDK 初期化前、engine が値を持たない場合、未 stamp、malformed 値ではその field
+だけを省略し、peer entry 自体は返す。`engine` は将来 engine を阻害しない open
+string とする。
+
+この変更は ext 全体の peer 公開ではない。`cwd`、permission / sandbox、
+`session_id`、context / token / rate limit、model catalog、pending state、
+resume snapshot / drift、`model_source / effort_source`、
+`session_capabilities` は引き続き directory から除外する。source field と
+capability の公開が必要になった場合は、別の設計変更として情報境界を再評価する。
+
 | event (方向) | 形 | server の振る舞い |
 |---|---|---|
 | `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | (a) `payload.to` で指定された `wrapper:<to>` channel に push、(b) `agents:lobby` に broadcast(operator 限定)、(c) 該当 conversation の turn count / token count / wallclock を更新 |
 | `envelope` 合成 (S→W) | ハード制限超過時 | 両 wrapper の `wrapper:<id>` + `agents:lobby` へ push |
-| `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の `{agent_id, persona:{id,name,sprite_set}, state}` リストを `{:ok, %{agents: [...]}}` 返却で受け取る。 list_agents 用 (後述) |
+| `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の `{agent_id, persona:{id,name,sprite_set}, state, engine?, model?, effort?}` リストを `{:ok, %{agents: [...]}}` 返却で受け取る。optional 3 field は上記の省略規則に従う。list_agents 用 (後述) |
 
 未知 `to` / 自己 routing / participants 不一致時のエラー (`unknown_agent` /
 `self_routing` / `participants_mismatch`) は `envelope` の reply で返す。
@@ -225,7 +245,7 @@ wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allow
 
 | Tool (full name) | 用途 | 経路 |
 |---|---|---|
-| `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧 (id / persona name / state) を取得 | wrapper → server の `directory_request` を呼び、 reply の `agents` をそのまま返す |
+| `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧 (id / persona name / state / 報告済み engine・model・effort) を取得 | wrapper → server の `directory_request` を呼び、reply の `agents` をそのまま返す |
 | `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / model / permission_mode / fast_mode / session_id / cwd を返す | wrapper のローカル状態 (host) を読むのみ。 server round-trip なし |
 
 #### 宛先解決の指針

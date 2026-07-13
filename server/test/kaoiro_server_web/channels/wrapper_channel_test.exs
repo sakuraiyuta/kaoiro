@@ -684,7 +684,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   describe "directory_request (protocol-inter-agent コンパニオンツール)" do
-    test "自分以外の agent を {agent_id, persona, state} で返す" do
+    test "自分以外の agent を返し未stamp optional fieldは省略する" do
       self_id = "test.dir-self"
       peer_id = "test.dir-peer"
 
@@ -715,7 +715,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert Enum.any?(agents, fn a ->
                a["agent_id"] == peer_id and
                  a["persona"]["name"] == "あお" and
-                 a["state"] == "thinking"
+                 a["state"] == "thinking" and
+                 not Map.has_key?(a, "engine") and
+                 not Map.has_key?(a, "model") and
+                 not Map.has_key?(a, "effort")
              end)
 
       refute Enum.any?(agents, fn a -> a["agent_id"] == self_id end)
@@ -732,7 +735,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Enum.any?(agents, fn a -> a["agent_id"] == "test.dir-lonely" end)
     end
 
-    test "persona フィールドは id/name/sprite_set のみで cwd 等を含まない" do
+    test "engine/model/effortだけをextから公開しoperator-grade fieldは除外する" do
       peer_id = "test.dir-strip-peer"
       peer_socket = join_wrapper(peer_id)
 
@@ -743,7 +746,14 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "name" => "クロエ",
           "sprite_set" => "kuroe"
         })
-        |> Map.put("ext", %{"cwd" => "/secret/path", "model" => "claude"})
+        |> Map.put("ext", %{
+          "engine" => "claude-code",
+          "model" => "claude-opus",
+          "effort" => "high",
+          "model_source" => "config",
+          "session_capabilities" => %{"supports_attachments" => true},
+          "cwd" => "/secret/path"
+        })
 
       ref = push(peer_socket, "envelope", env)
       assert_reply ref, :ok
@@ -763,9 +773,42 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                "sprite_set" => "kuroe"
              }
 
-      # cwd や model のような operator-grade フィールドは含まれない
+      assert Map.take(entry, ["engine", "model", "effort"]) == %{
+               "engine" => "claude-code",
+               "model" => "claude-opus",
+               "effort" => "high"
+             }
+
+      # #102の3 field以外のoperator-grade情報は引き続き含まれない。
       refute Map.has_key?(entry, "ext")
       refute Map.has_key?(entry, "cwd")
+      refute Map.has_key?(entry, "model_source")
+      refute Map.has_key?(entry, "session_capabilities")
+    end
+
+    test "malformed optional fieldはentryを落とさずfieldだけ省略する" do
+      peer_id = "test.dir-malformed-peer"
+      peer_socket = join_wrapper(peer_id)
+
+      env =
+        envelope(peer_id, "idle")
+        |> Map.put("ext", %{"engine" => 1, "model" => "", "effort" => ["high"]})
+
+      ref = push(peer_socket, "envelope", env)
+      assert_reply ref, :ok
+
+      self_socket = join_wrapper("test.dir-malformed-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-malformed-self", "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, fn a -> a["agent_id"] == peer_id end)
+      assert entry["state"] == "idle"
+      refute Map.has_key?(entry, "engine")
+      refute Map.has_key?(entry, "model")
+      refute Map.has_key?(entry, "effort")
     end
   end
 

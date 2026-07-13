@@ -240,6 +240,9 @@ describe("list_agents / whoami companion tools", () => {
         agent_id: "lab.peer-1",
         persona: { id: "ao", name: "あお", sprite_set: "ao" },
         state: "idle",
+        engine: "codex",
+        model: "gpt-5.6-sol",
+        effort: "high",
       },
       {
         agent_id: "lab.peer-2",
@@ -354,5 +357,8 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     for (const d of descriptors) {
       expect((d.inputSchema as { type?: string }).type).toBe("object");
     }
+    expect(
+      descriptors.find((d) => d.name === "list_agents")?.description,
+    ).toContain("engine/model/effort when reported");
   });
 });

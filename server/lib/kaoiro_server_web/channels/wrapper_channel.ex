@@ -177,10 +177,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Peer directory request (protocol-inter-agent, phase-8 companion tool).
   # The wrapper's `mcp__kaoiro__list_agents` tool calls this to resolve
   # persona names → agent_ids before send_to_agent. Reply carries every
-  # currently-known agent EXCEPT the requester, with the minimum needed for
-  # routing decisions: agent_id / persona id+name+sprite_set / current state.
-  # Other ext fields (cwd / model / context) are operator-grade info and stay
-  # excluded — wrappers only need enough to resolve a name.
+  # currently-known agent EXCEPT the requester. Phase-8's name-resolution
+  # minimum was deliberately widened by #102: engine / model / effort are
+  # peer-visible execution traits for delegation. Other operator-grade ext
+  # (cwd / permission / session / context / capabilities / source) stays out.
   @impl true
   def handle_in("directory_request", _payload, socket) do
     self_id = socket.assigns.agent_id
@@ -247,8 +247,23 @@ defmodule KaoiroServerWeb.WrapperChannel do
         _ -> "idle"
       end
 
+    ext =
+      case envelope do
+        %{"ext" => %{} = value} -> value
+        _ -> %{}
+      end
+
     %{"agent_id" => id, "persona" => persona, "state" => state}
+    |> maybe_put_directory_field("engine", ext["engine"])
+    |> maybe_put_directory_field("model", ext["model"])
+    |> maybe_put_directory_field("effort", ext["effort"])
   end
+
+  defp maybe_put_directory_field(entry, key, value)
+       when is_binary(value) and value != "",
+       do: Map.put(entry, key, value)
+
+  defp maybe_put_directory_field(entry, _key, _value), do: entry
 
   # Persist the agent's latest SDK session_id as a restart-surviving
   # pointer (ADR-0014 F1, issue #49). Only fires once the wrapper has

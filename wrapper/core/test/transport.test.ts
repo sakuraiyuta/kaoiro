@@ -250,6 +250,18 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
           agent_id: "peer.1",
           persona: { id: "ao", name: "あお", sprite_set: "ao" },
           state: "idle",
+          engine: "codex",
+          model: "gpt-5.6-sol",
+          effort: "high",
+        },
+        // optional field の型違いはentryごと落とさずfieldだけ省く
+        {
+          agent_id: "peer.2",
+          persona: { id: "fuji", name: "藤", sprite_set: "fuji" },
+          state: "thinking",
+          engine: 1,
+          model: "",
+          effort: ["high"],
         },
         // 不正 entry (agent_id 欠落) は filter で落とす
         { persona: {}, state: "thinking" },
@@ -257,8 +269,21 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     });
 
     const directory = await pending;
-    expect(directory).toHaveLength(1);
-    expect(directory[0]?.agent_id).toBe("peer.1");
+    expect(directory).toEqual([
+      {
+        agent_id: "peer.1",
+        persona: { id: "ao", name: "あお", sprite_set: "ao" },
+        state: "idle",
+        engine: "codex",
+        model: "gpt-5.6-sol",
+        effort: "high",
+      },
+      {
+        agent_id: "peer.2",
+        persona: { id: "fuji", name: "藤", sprite_set: "fuji" },
+        state: "thinking",
+      },
+    ]);
   });
 
   it("agents が無い reply でも空配列で resolve する", async () => {
