@@ -365,7 +365,12 @@
   // ADR-0035 explicitly forbids.
   const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
   const effortLevels = $derived.by(() => {
-    const active = models.find((m) => m.value === (pendingModel?.value ?? ccModel));
+    // Before SDK init the account-default model id is unknown, but the
+    // bootstrap catalog's `default` entry describes the first-turn effort
+    // domain. Use it until an explicit/pending model takes over.
+    const active = models.find(
+      (m) => m.value === (pendingModel?.value ?? ccModel ?? "default"),
+    );
     const seen = new Set(active?.effort_levels ?? []);
     return EFFORT_ORDER.filter((l) => seen.has(l));
   });
@@ -1389,13 +1394,13 @@
         <!-- Claude Code status meta (#16): mirrors the local statusline's
              model / ctx / 5h / 7d segments for this agent. -->
         <dl class="cc">
-          {#if modelLabel || isAccountDefault}
+          {#if connection || modelLabel || isAccountDefault}
             <div class="cc-row">
               <dt>model</dt>
               <dd>
                 <div class="cc-switchbox">
                   <span class="cc-model">
-                    {#if pendingModel}pending: {modelLabel}{:else if modelLabel}{modelLabel}{:else}アカウント既定 (選択不可){/if}
+                    {#if pendingModel}pending: {modelLabel}{:else if modelLabel}{modelLabel}{:else if isAccountDefault}アカウント既定{:else}<span class="cc-pending">確認待ち</span>{/if}
                   </span>
                   {#if connection && modelSwitchSupported && models.length > 0}
                     <button
@@ -1430,7 +1435,7 @@
               </dd>
             </div>
           {/if}
-          {#if connection && effortSwitchSupported && effortLevels.length > 0}
+          {#if connection && effortSwitchSupported}
             <!-- effort has no SDK-reported current value; the dd shows the
                  operator's last pick this session (selectedEffort) or 既定. -->
             <div class="cc-row">
@@ -1440,14 +1445,16 @@
                   <span class="cc-model">
                     {pendingEffort ? `pending: ${pendingEffort}` : selectedEffort ?? effectiveEffort ?? "既定"}
                   </span>
-                  <button
-                    type="button"
-                    class="cc-switch"
-                    aria-haspopup="listbox"
-                    aria-expanded={effortMenuOpen}
-                    title="effort を切替"
-                    onclick={toggleEffortMenu}
-                  >切替</button>
+                  {#if effortLevels.length > 0}
+                    <button
+                      type="button"
+                      class="cc-switch"
+                      aria-haspopup="listbox"
+                      aria-expanded={effortMenuOpen}
+                      title="effort を切替"
+                      onclick={toggleEffortMenu}
+                    >切替</button>
+                  {/if}
                   {#if effortMenuOpen}
                     <ul
                       class="switch-menu"
@@ -1517,10 +1524,10 @@
               <dt>作業意図</dt>
               <dd>
                 {#if connection}
-                  <div class="cc-switchbox">
+                  <div class="cc-switchbox cc-perm-switchbox">
                     <button
                       type="button"
-                      class="cc-switch"
+                      class="cc-switch cc-perm-switch"
                       aria-haspopup="listbox"
                       aria-expanded={permMenuOpen}
                       onclick={togglePermMenu}
@@ -1593,20 +1600,24 @@
               <dd>{ccFastMode}</dd>
             </div>
           {/if}
-          {#if ctxPct !== null}
+          {#if connection || ctxPct !== null}
             <div class="cc-row">
               <dt>ctx</dt>
               <dd>
-                <div class="meter">
-                  <div class="meter-fill" style:width="{ctxPct}%"></div>
-                </div>
-                <span class="meter-val">
-                  {ctxPct}%
-                  {#if ctxUsed !== null && ctxMax !== null}
-                    <span class="meter-abs"
-                      >({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})</span>
-                  {/if}
-                </span>
+                {#if ctxPct === null}
+                  <span class="cc-pending">初回応答後に取得</span>
+                {:else}
+                  <div class="meter">
+                    <div class="meter-fill" style:width="{ctxPct}%"></div>
+                  </div>
+                  <span class="meter-val">
+                    {ctxPct}%
+                    {#if ctxUsed !== null && ctxMax !== null}
+                      <span class="meter-abs"
+                        >({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})</span>
+                    {/if}
+                  </span>
+                {/if}
               </dd>
             </div>
           {/if}
@@ -2796,6 +2807,19 @@
     min-width: 0;
   }
 
+  .cc-perm-switchbox {
+    min-width: 0;
+  }
+
+  .cc-switch.cc-perm-switch {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+
   .cc-switch {
     flex: none;
     padding: 0.1rem 0.4rem;
@@ -2859,6 +2883,7 @@
     display: block;
     font-size: 0.72rem;
     color: var(--fg-dim);
+    overflow-wrap: anywhere;
   }
 
   /* Codex "承認: never" annotation (phase-15 D2 / task 15-11): dimmer than

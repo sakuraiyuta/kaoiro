@@ -165,6 +165,18 @@ effort を切り替えられる。ヘッドレス実走行で確定した境界:
   `slash_commands`(#34)。bare `/model`・`/effort` は SDK 制御として
   surface されず単なる入力テキスト扱いなので、選択 UI はダッシュボードが
   これら一覧から構成する。
+- **初回 turn 前の選択 (#110)**: `supportedModels()` は Query initialization を
+  待つため、idle-wait の spawn 前 catalog には使えない。runner register と
+  wrapper の初回 idle `ext.models` は SDK 0.3.187 の実測 snapshot を optimistic
+  bootstrap として広告し、LaunchDialog / AgentDetail から first turn の model /
+  effort を選べるようにする。SDK init 後は account-aware な
+  `supportedModels()` の戻り値で置換し、bootstrap 固有候補を残さない。
+  2026-07-13 実測の fable wire value は `claude-fable-5[1m]`、effort は
+  `low|medium|high|xhigh|max`。bootstrap は entitlement の保証ではなく、SDK
+  control reject は `switch_error` として loud に表示する。idle-wait wrapper は
+  Query生成自体を初回inputまで遅延し、その間の `set_model` / `set_effort` を
+  startup Optionsへbufferする。これにより選択がSDK initializationと競合せず、
+  first turnそのものへ適用される。
 - **モデル切替**: `Query.setModel(value)`。`value` は上記エイリアス。無例外で
   成立。
 - **effort 切替**: 専用 setter は無く `Query.applyFlagSettings({ effortLevel })`。

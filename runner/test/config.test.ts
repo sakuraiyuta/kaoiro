@@ -202,15 +202,21 @@ describe("buildRegister", () => {
     expect(register.personas).toBeUndefined();
     expect(register.allowed_personas).toBeUndefined();
     expect(register.blocked_personas).toBeUndefined();
-    // engines カタログ: 両 engine とも models は空。claude-code は
-    // post-spawn の ext.models 頼み、codex は ChatGPT-plan 認証で許容
-    // model がアカウント依存・列挙不能のためアカウント既定を使う
-    // (ADR-0032 F4bc、2026-07-11 実挙動で確定)
+    // Claude is an optimistic bootstrap snapshot so LaunchDialog can choose
+    // the first turn before SDK init; Codex remains empty without auth/plan.
     expect(register.engines?.map((e) => e.id)).toEqual([
       "claude-code",
       "codex",
     ]);
-    expect(register.engines?.[0]?.models).toEqual([]);
+    expect(register.engines?.[0]?.models.map((m) => m.value)).toEqual([
+      "default",
+      "opus[1m]",
+      "claude-fable-5[1m]",
+      "sonnet",
+      "sonnet[1m]",
+      "haiku",
+      "claude-opus-4-7",
+    ]);
     expect(register.engines?.[1]?.models).toEqual([]);
   });
 

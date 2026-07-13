@@ -6,6 +6,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolveCodexCatalog } from "@kaoiro/codex";
+import { claudeBootstrapCatalog } from "@kaoiro/claude-code/catalog";
 import type { CodexAuthMode } from "./codex-auth.js";
 import type {
   EngineCatalogEntry,
@@ -273,9 +274,10 @@ export function effectiveCapabilities(config: RunnerConfig): string[] {
  *  Persona trust is expressed by the same field shape the file used
  *  (ADR-0031: allowlist / blocklist / accept-all), so the server can gate
  *  spawn without a separate mode enum on the wire. `engines` carries the
- *  launch catalog per capability (ADR-0032 F4bc). Claude's list surfaces
- *  post-spawn via ext.models (#54); Codex resolves its curated list from
- *  the detected auth mode and operator-declared ChatGPT plan (ADR-0035). */
+ *  launch catalog per capability (ADR-0032 F4bc). Claude advertises a
+ *  versioned optimistic bootstrap snapshot which the SDK's account-aware
+ *  ext.models replaces after init (#110); Codex resolves its curated list
+ *  from the detected auth mode and operator-declared ChatGPT plan (ADR-0035). */
 export function buildRegister(
   config: RunnerConfig,
   codexAuthMode: CodexAuthMode = "unknown",
@@ -283,7 +285,7 @@ export function buildRegister(
   const capabilities = effectiveCapabilities(config);
   const engines: EngineCatalogEntry[] = [];
   if (capabilities.includes("claude-code")) {
-    engines.push({ id: "claude-code", models: [] });
+    engines.push({ id: "claude-code", models: claudeBootstrapCatalog() });
   }
   if (capabilities.includes("codex")) {
     engines.push({

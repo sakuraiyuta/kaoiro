@@ -6,6 +6,18 @@
   "description": "kaoiro Claude Code アダプタ — Claude Agent SDK をホストし状態を導出する (旧 @kaoiro/wrapper、ADR-0023 D3 / ADR-0032 F1)",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./catalog": {
+      "types": "./dist/catalog.d.ts",
+      "import": "./dist/catalog.js"
+    },
+    "./dist/cli.js": "./dist/cli.js",
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
