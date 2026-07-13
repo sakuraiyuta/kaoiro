@@ -225,13 +225,16 @@ runner 実装が前提。
   - **実装状況(#50, 2026-06-25)**: wrapper 側で実装。resume 起動時
     (`--resume <session_id>`)に自分の JSONL を直読し、`user`/`assistant` 行を
     既存の adapter(`sdkMessageToLogs`)+ 共有 payload 生成で `log` エンベロープへ
-    写像(operator 指示の `user` echo も補完)。サーバへ `history_reset`(リング
-    バッファ全消去 → `history_reset` broadcast)を送ってから `log` を再生し、
+    写像(operator 指示の `user` echo も補完)。サーバへ `history_reset`(JSONLで
+    再構築可能な行を消去し、構造化 inter-agent 行は保持 → `history_reset`
+    broadcast)を送ってから `log` を再生し、
     crash 後もサーバ生存時の同一 session 旧行と二重化させずに上書きする。再構築は
     wrapper に置き(adapter の写像を再利用、runner への mapping 重複を回避)、
     サーバは `reset_history` + broadcast の受け口に留めた(architecture の agent
-    非依存方針)。`history_reset` の配信は operator 限定(ADR-0021)。最新 200 行に
-    上限(リングバッファ同値)。詳細は [protocol](../specs/protocol.md)。
+    非依存方針)。`history_reset` の配信は operator 限定(ADR-0021)。履歴は最新
+    200 envelopeを基底capとし、それより古い`inter_agent_message`はSDK
+    transcriptから再構築不能なため#105でcap免除とした。詳細は
+    [protocol](../specs/protocol.md)。
 
 ## Related
 

@@ -8,9 +8,12 @@ defmodule KaoiroServer.AgentStates do
   waiting for the next state change.
 
   Each entry also keeps an in-memory ring buffer of the agent's transcript
-  (`log` / `result` / `inter_agent_message` envelopes, ADR-0012, #105) so an operator that joins
-  or reloads recovers the recent transcript. History is memory-only and
-  vanishes on restart (disk persistence is issue #24). `put/2` updates
+  (`log` / `result` / `inter_agent_message` envelopes, ADR-0012, #105) so an
+  operator that joins or reloads recovers the recent transcript. History keeps
+  the newest 200 envelopes plus every older structured inter-agent message;
+  those messages are cap-exempt because the SDK transcript cannot reconstruct
+  them. History is memory-only and vanishes on restart (disk persistence is
+  issue #24). `put/2` updates
   the latest state without touching history; `append_log/2` appends a
   reply line and never changes the latest state.
   `clear_other_sessions/2` drops the history lines outside the agent's
@@ -41,8 +44,9 @@ defmodule KaoiroServer.AgentStates do
   # to keep fabricated agent_ids from growing memory without bound.
   @max_agents 1000
 
-  # Reply-log lines kept per agent (ADR-0012 history A). Newest-first in
-  # storage; reversed to chronological order when served.
+  # Base envelope cap per agent (ADR-0012 history A). Older
+  # inter_agent_message entries are exempt (#105). Newest-first in storage;
+  # reversed to chronological order when served.
   @max_history 200
 
   def start_link(opts) do
@@ -65,8 +69,9 @@ defmodule KaoiroServer.AgentStates do
 
   @doc """
   Appends `envelope` (a `log` / `result` / `inter_agent_message` transcript
-  line) to the agent's history ring buffer without touching its latest state. `:ok` when the
-  agent is known, `:noop` otherwise (a reply before any state arrived).
+  line) to the agent's history ring buffer without touching its latest state.
+  `:ok` when the agent is known, `:noop` otherwise (a reply before any state
+  arrived).
   """
   def append_log(%{"agent_id" => agent_id} = envelope, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
@@ -231,12 +236,22 @@ defmodule KaoiroServer.AgentStates do
   def handle_call({:append_log, agent_id, envelope}, _from, state) do
     case state do
       %{^agent_id => entry} ->
-        # Newest-first; cap drops the oldest line past @max_history.
-        history = Enum.take([envelope | entry.history], @max_history)
+        # Newest-first; ordinary lines cap at @max_history while structured
+        # inter-agent messages survive because no SDK replay can rebuild them.
+        history = cap_history_preserving_ia([envelope | entry.history], @max_history)
         {:reply, :ok, Map.put(state, agent_id, %{entry | history: history})}
 
       _ ->
         {:reply, :noop, state}
+    end
+  end
+
+  defp cap_history_preserving_ia(entries, max) do
+    if length(entries) <= max do
+      entries
+    else
+      {newer, older} = Enum.split(entries, max)
+      newer ++ Enum.filter(older, &(Map.get(&1, "type") == "inter_agent_message"))
     end
   end
 

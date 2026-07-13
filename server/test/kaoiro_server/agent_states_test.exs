@@ -14,10 +14,10 @@ defmodule KaoiroServer.AgentStatesTest do
     })
   end
 
-  defp inter_agent_env(agent_id, to) do
+  defp inter_agent_env(agent_id, to, body \\ "hello") do
     envelope(agent_id, %{
       "type" => "inter_agent_message",
-      "payload" => %{"to" => to, "conversation_id" => "cnv-105", "body" => "hello"}
+      "payload" => %{"to" => to, "conversation_id" => "cnv-105", "body" => body}
     })
   end
 
@@ -194,6 +194,50 @@ defmodule KaoiroServer.AgentStatesTest do
       assert length(history) == 200
       assert List.first(history)["payload"]["text"] == "m6"
       assert List.last(history)["payload"]["text"] == "m205"
+    end
+
+    test "cap到達後も古いinter_agent_messageを保持する (#105)", %{store: store} do
+      :ok = AgentStates.put(envelope("a"), server: store)
+      :ok = AgentStates.append_log(inter_agent_env("a", "b", "ia-old"), server: store)
+      for i <- 1..205, do: :ok = AgentStates.append_log(log_env("a", i), server: store)
+
+      history = AgentStates.histories(store)["a"]
+      assert length(history) == 201
+      assert List.first(history)["payload"]["body"] == "ia-old"
+      assert Enum.at(history, 1)["payload"]["text"] == "m6"
+      assert List.last(history)["payload"]["text"] == "m205"
+
+      # Internal storage remains newest-first, including the cap-exempt tail.
+      raw = :sys.get_state(store)["a"].history
+      assert hd(raw)["payload"]["text"] == "m205"
+      assert List.last(raw)["payload"]["body"] == "ia-old"
+    end
+
+    test "logとIAが混在しても全IAとnewest-first順序を保つ (#105)", %{store: store} do
+      :ok = AgentStates.put(envelope("a"), server: store)
+      :ok = AgentStates.append_log(inter_agent_env("a", "b", "ia-1"), server: store)
+      for i <- 1..100, do: :ok = AgentStates.append_log(log_env("a", i), server: store)
+      :ok = AgentStates.append_log(inter_agent_env("a", "b", "ia-2"), server: store)
+      for i <- 101..205, do: :ok = AgentStates.append_log(log_env("a", i), server: store)
+
+      history = AgentStates.histories(store)["a"]
+      assert length(history) == 201
+
+      labels =
+        Enum.map(history, fn env ->
+          env["payload"]["body"] || env["payload"]["text"]
+        end)
+
+      assert labels ==
+               ["ia-1"] ++
+                 Enum.map(7..100, &"m#{&1}") ++
+                 ["ia-2"] ++ Enum.map(101..205, &"m#{&1}")
+
+      raw_labels =
+        :sys.get_state(store)["a"].history
+        |> Enum.map(fn env -> env["payload"]["body"] || env["payload"]["text"] end)
+
+      assert raw_labels == Enum.reverse(labels)
     end
 
     test "put は履歴を保持し最新状態のみ更新", %{store: store} do
