@@ -3,6 +3,7 @@
   import AgentCard from "./lib/AgentCard.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
   import LaunchDialog from "./lib/LaunchDialog.svelte";
+  import { adjacentAgentId } from "./lib/agentNavigation";
   import { expressionFor, spriteUrlFor } from "./lib/expression";
   import type {
     ConnectionStatus,
@@ -206,6 +207,34 @@
   const selectedEnvelope = $derived(
     selected !== null ? (agents[selected] ?? null) : null,
   );
+  // Detail navigation follows the live grid's displayed order. Disconnected
+  // cards live in a separate collapsed section and are intentionally absent
+  // from the ring, matching the existing detail header's live-agent strip.
+  const navigableAgentIds = $derived(
+    sorted.map((envelope) => envelope.agent_id),
+  );
+  const previousAgentId = $derived(
+    selected === null
+      ? null
+      : adjacentAgentId(navigableAgentIds, selected, -1),
+  );
+  const nextAgentId = $derived(
+    selected === null
+      ? null
+      : adjacentAgentId(navigableAgentIds, selected, 1),
+  );
+
+  function selectAdjacentAgent(agentId: string | null): void {
+    if (agentId === null || agents[agentId] === undefined) return;
+    // Side navigation originates from the detail itself, not a grid tile.
+    // Avoid replaying the expand-from-card animation with a stale origin.
+    origin = null;
+    selected = agentId;
+  }
+
+  function agentDisplayName(agentId: string): string {
+    return agents[agentId]?.persona?.name ?? agentId;
+  }
 
   // Opens the client socket with the given auth and starts the cookie-slide
   // timer (ADR-0013). `slideNow` does an immediate refresh because a cookie
@@ -689,27 +718,52 @@
 
 <main>
   {#if selectedEnvelope}
-    <AgentDetail
-      envelope={selectedEnvelope}
-      logs={logs[selectedEnvelope.agent_id] ?? []}
-      {agents}
-      {connection}
-      {manifest}
-      sessions={runnerSessions}
-      resetMode={sessionResets[selectedEnvelope.agent_id] ?? null}
-      {origin}
-      onClose={() => (selected = null)}
-      onSelectAgent={(id) => {
-        // Inter-agent bubble の peer ボタンから呼ばれる。 origin はタイルの
-        // 中心ではなく detail 内クリック由来なので null に倒し、 既存の
-        // expand-from-origin アニメは省略 (相手が既知 agent ならグリッドで
-        // 再選択した時と同じ素直な切替えが得られる)。
-        if (agents[id]) {
-          origin = null;
-          selected = id;
-        }
-      }}
-    />
+    <div
+      class="detail-navigation"
+      class:with-switchers={previousAgentId !== null && nextAgentId !== null}
+    >
+      {#if previousAgentId}
+        <button
+          type="button"
+          class="agent-switch previous"
+          aria-label="前のエージェント {agentDisplayName(previousAgentId)} へ"
+          title="前: {agentDisplayName(previousAgentId)}"
+          onclick={() => selectAdjacentAgent(previousAgentId)}
+        >◀</button>
+      {/if}
+      <div class="detail-stage">
+        <AgentDetail
+          envelope={selectedEnvelope}
+          logs={logs[selectedEnvelope.agent_id] ?? []}
+          {agents}
+          {connection}
+          {manifest}
+          sessions={runnerSessions}
+          resetMode={sessionResets[selectedEnvelope.agent_id] ?? null}
+          {origin}
+          onClose={() => (selected = null)}
+          onSelectAgent={(id) => {
+            // Inter-agent bubble の peer ボタンから呼ばれる。 origin はタイルの
+            // 中心ではなく detail 内クリック由来なので null に倒し、 既存の
+            // expand-from-origin アニメは省略 (相手が既知 agent ならグリッドで
+            // 再選択した時と同じ素直な切替えが得られる)。
+            if (agents[id]) {
+              origin = null;
+              selected = id;
+            }
+          }}
+        />
+      </div>
+      {#if nextAgentId}
+        <button
+          type="button"
+          class="agent-switch next"
+          aria-label="次のエージェント {agentDisplayName(nextAgentId)} へ"
+          title="次: {agentDisplayName(nextAgentId)}"
+          onclick={() => selectAdjacentAgent(nextAgentId)}
+        >▶</button>
+      {/if}
+    </div>
   {:else if sorted.length === 0 && offlineEntries.length === 0}
     <p class="empty">
       no agents yet — start a wrapper with <code>server_url</code> set.
@@ -989,6 +1043,66 @@
     min-height: 0;
     overflow-y: auto;
     padding: 1.6rem 2rem 3rem;
+  }
+
+  /* Full-height previous / next controls for detail browsing (#80). The
+     middle stage preserves AgentDetail's own max-width and scroll layout;
+     the side columns consume only a slim strip at the main viewport edges. */
+  .detail-navigation {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .detail-navigation.with-switchers {
+    display: grid;
+    grid-template-columns:
+      clamp(2.25rem, 4vw, 3.5rem)
+      minmax(0, 1fr)
+      clamp(2.25rem, 4vw, 3.5rem);
+    gap: clamp(0.4rem, 1vw, 1rem);
+  }
+
+  .detail-stage {
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .agent-switch {
+    align-self: stretch;
+    min-height: 6rem;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+    color: var(--fg-dim);
+    background: color-mix(in srgb, var(--bg-card) 72%, transparent);
+    font: inherit;
+    font-size: 1rem;
+    cursor: pointer;
+    transition:
+      color 0.15s,
+      border-color 0.15s,
+      background 0.15s;
+  }
+
+  .agent-switch:hover,
+  .agent-switch:focus-visible {
+    color: var(--fg);
+    border-color: var(--c-thinking);
+    background: color-mix(in srgb, var(--c-thinking) 10%, var(--bg-card));
+    outline: none;
+  }
+
+  @media (max-width: 640px) {
+    .detail-navigation.with-switchers {
+      grid-template-columns: 1.75rem minmax(0, 1fr) 1.75rem;
+      gap: 0.25rem;
+    }
+
+    .agent-switch {
+      border-radius: 0.35rem;
+      font-size: var(--fs-body-sm);
+    }
   }
 
   .empty {
