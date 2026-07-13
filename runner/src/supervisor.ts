@@ -60,6 +60,8 @@ export type LaunchFn = (
   engine?: EngineKind,
 ) => ManagedChild;
 
+type MaybePromise<T> = T | Promise<T>;
+
 /** The validated fields of a `spawn` message the supervisor acts on. serverUrl
  *  is optional: under案A the server omits it and the runner falls back to its
  *  own wrapper URL (ADR-0024). engine defaults to "claude-code" so old
@@ -106,8 +108,15 @@ export interface SupervisorOptions {
   sendResetResult: (result: SessionResetResult) => void;
   /** Injectable for tests; defaults read the local session stores
    *  (sessions.ts — Claude JSONLs / codex rollouts, per engine). */
-  listSessions?: (cwd: string, engine: EngineKind) => SessionMeta[];
-  sessionExists?: (cwd: string, sessionId: string, engine: EngineKind) => boolean;
+  listSessions?: (
+    cwd: string,
+    engine: EngineKind,
+  ) => MaybePromise<SessionMeta[]>;
+  sessionExists?: (
+    cwd: string,
+    sessionId: string,
+    engine: EngineKind,
+  ) => MaybePromise<boolean>;
   /** Clock in ms for the restart window; injectable for tests. Defaults to
    *  Date.now. */
   now?: () => number;
@@ -119,6 +128,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function isPromise<T>(value: MaybePromise<T>): value is Promise<T> {
+  return value instanceof Promise;
 }
 
 /** Extracts a charset-valid agent_id, or null when absent/ill-typed/unsafe.
@@ -166,7 +179,10 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   if (typeof payload.cwd !== "string" || payload.cwd === "") return null;
   // server_url is optional (案A): reject only a present-but-ill-typed value;
   // when absent the runner supplies its own wrapper URL at launch.
-  if (payload.server_url !== undefined && typeof payload.server_url !== "string") {
+  if (
+    payload.server_url !== undefined &&
+    typeof payload.server_url !== "string"
+  ) {
     return null;
   }
   // engine (ADR-0032 F4a): absent = claude-code; an unknown value is a
@@ -343,12 +359,15 @@ export class Supervisor {
   readonly #sendResult: (result: SpawnResult) => void;
   readonly #sendSessions: (sessions: RunnerSessions) => void;
   readonly #sendResetResult: (result: SessionResetResult) => void;
-  readonly #listSessions: (cwd: string, engine: EngineKind) => SessionMeta[];
+  readonly #listSessions: (
+    cwd: string,
+    engine: EngineKind,
+  ) => MaybePromise<SessionMeta[]>;
   readonly #sessionExists: (
     cwd: string,
     sessionId: string,
     engine: EngineKind,
-  ) => boolean;
+  ) => MaybePromise<boolean>;
   readonly #now: () => number;
   #wrapperServerUrl: string;
   #codexAuthMode: CodexAuthMode | undefined;
@@ -357,6 +376,17 @@ export class Supervisor {
   /** session_ids currently being resumed — the F4 local lock against a second
    *  concurrent resume of the same session. */
   readonly #activeSessions = new Set<string>();
+  /** Resume validation for Codex uses async filesystem I/O (#100). Reserve
+   *  the agent_id while it is pending so duplicate spawn events cannot pass
+   *  the ordinary #children guard before the first launch has started. */
+  readonly #pendingSpawns = new Map<string, symbol>();
+  /** At most one async switch validation per live agent. The wrapper stays
+   *  running until validation succeeds, so a stop/crash can cancel safely. */
+  readonly #pendingSwitches = new Map<string, symbol>();
+  /** `runner_sessions` is a singleton broadcast without request_id. Async
+   *  scans can finish out of order, so only the latest valid enumerate
+   *  request may publish a result. */
+  #enumerationGeneration = 0;
 
   constructor(options: SupervisorOptions) {
     this.#hostId = options.hostId;
@@ -405,55 +435,60 @@ export class Supervisor {
       this.#fail(agentId, "cwd_not_found");
       return;
     }
-    if (this.#children.has(agentId)) {
+    if (this.#children.has(agentId) || this.#pendingSpawns.has(agentId)) {
       this.#fail(agentId, "already_running");
       return;
     }
     const resume = parsed.resumeSessionId;
-    if (resume !== undefined) {
-      // T3: the resume target must exist in the engine's session store
-      // under the bound cwd.
-      if (!this.#sessionExists(parsed.cwd, resume, parsed.engine)) {
-        process.stderr.write(
-          `runner: resume session not found under cwd (agent ${agentId})\n`,
-        );
-        this.#fail(agentId, "session_not_found");
-        return;
-      }
-      // F4: physically block a second concurrent resume of the same session.
-      if (this.#activeSessions.has(resume)) {
-        this.#fail(agentId, "already_running");
-        return;
-      }
-      this.#activeSessions.add(resume);
-    }
-    try {
-      this.#start(agentId, parsed);
-    } catch (error) {
-      // A synchronous launch failure (the config write or spawn raising) must
-      // still surface to the operator and leave no stranded slot or lock.
-      process.stderr.write(
-        `runner: launch failed for ${agentId}: ${String(error)}\n`,
-      );
-      this.#children.delete(agentId);
-      if (resume !== undefined) this.#activeSessions.delete(resume);
-      this.#fail(agentId, "error");
+    if (resume === undefined) {
+      this.#launchSpawn(agentId, parsed);
       return;
     }
-    this.#sendResult({
-      version: "0",
-      host_id: this.#hostId,
-      agent_id: agentId,
-      ok: true,
-    });
+
+    // T3: Codex scans its date tree asynchronously (#100); Claude and test
+    // injections may still answer synchronously. Preserve that fast path so
+    // fresh/Claude spawn remains immediate while Codex I/O yields the event
+    // loop instead of pausing status relay for every agent.
+    const exists = this.#sessionExists(parsed.cwd, resume, parsed.engine);
+    if (!isPromise(exists)) {
+      this.#completeResumeSpawn(agentId, parsed, exists);
+      return;
+    }
+
+    const token = Symbol(agentId);
+    this.#pendingSpawns.set(agentId, token);
+    void exists
+      .then((found) => {
+        if (this.#pendingSpawns.get(agentId) !== token) return;
+        this.#pendingSpawns.delete(agentId);
+        this.#completeResumeSpawn(agentId, parsed, found);
+      })
+      .catch((error: unknown) => {
+        if (this.#pendingSpawns.get(agentId) !== token) return;
+        this.#pendingSpawns.delete(agentId);
+        process.stderr.write(
+          `runner: resume session scan failed for ${agentId}: ${String(error)}\n`,
+        );
+        this.#fail(agentId, "error");
+      });
   }
 
   /** Handles a server `stop`: a deliberate exit, no auto-restart. */
   handleStop(payload: unknown): void {
     const agentId = readAgentId(payload);
     if (agentId === null) return;
+    // A stop racing an async Codex T3 scan cancels the not-yet-launched spawn.
+    // Deleting its token makes the promise continuation a no-op.
+    if (this.#pendingSpawns.delete(agentId)) {
+      // Close the original spawn outcome instead of leaving the dashboard's
+      // pending notice unresolved. The closed vocabulary has no cancellation
+      // reason, so use the existing generic failure.
+      this.#fail(agentId, "error");
+      return;
+    }
     const entry = this.#children.get(agentId);
     if (entry === undefined) return;
+    this.#pendingSwitches.delete(agentId);
     entry.stopping = true;
     entry.child.kill();
   }
@@ -465,6 +500,7 @@ export class Supervisor {
     if (agentId === null) return;
     const entry = this.#children.get(agentId);
     if (entry === undefined) return;
+    this.#pendingSwitches.delete(agentId);
     entry.restarting = true;
     entry.restarts = 0;
     entry.windowStart = this.#now();
@@ -495,10 +531,53 @@ export class Supervisor {
       this.#fail(agentId, "error");
       return;
     }
+    // A newer switch supersedes an older async validation for the same agent.
+    // The older continuation observes its missing token and becomes a no-op.
+    this.#pendingSwitches.delete(agentId);
     // T3 under the agent's currently bound cwd — the operator picked the id
     // from the same cwd's enumerate; re-verify at the boundary so a spoofed
     // or stale id cannot slip past.
-    if (!this.#sessionExists(entry.parsed.cwd, resume, entry.parsed.engine)) {
+    const exists = this.#sessionExists(
+      entry.parsed.cwd,
+      resume,
+      entry.parsed.engine,
+    );
+    if (!isPromise(exists)) {
+      this.#completeSwitchSession(agentId, entry, payload, resume, exists);
+      return;
+    }
+
+    const token = Symbol(agentId);
+    this.#pendingSwitches.set(agentId, token);
+    void exists
+      .then((found) => {
+        if (this.#pendingSwitches.get(agentId) !== token) return;
+        this.#pendingSwitches.delete(agentId);
+        this.#completeSwitchSession(agentId, entry, payload, resume, found);
+      })
+      .catch((error: unknown) => {
+        if (this.#pendingSwitches.get(agentId) !== token) return;
+        this.#pendingSwitches.delete(agentId);
+        process.stderr.write(
+          `runner: switch_session scan failed for ${agentId}: ${String(error)}\n`,
+        );
+        if (this.#children.get(agentId) === entry && !entry.stopping) {
+          this.#fail(agentId, "error");
+        }
+      });
+  }
+
+  #completeSwitchSession(
+    agentId: string,
+    entry: ChildEntry,
+    payload: Record<string, unknown>,
+    resume: string,
+    exists: boolean,
+  ): void {
+    // The child can stop/crash while Codex I/O is pending. Never resurrect or
+    // mutate a stale entry after the scan completes.
+    if (this.#children.get(agentId) !== entry || entry.stopping) return;
+    if (!exists) {
       process.stderr.write(
         `runner: switch_session target not found under cwd (agent ${agentId})\n`,
       );
@@ -523,10 +602,10 @@ export class Supervisor {
     // ext.resume_drift instead of retaining the original spawn-time value
     // (post-review Finding 2). Absent = keep the previous parsed value —
     // the wrapper still had a snapshot for the original session.
-    const nextSnapshot: ResolvedSnapshotExt | undefined = isObject(payload) &&
-      isObject(payload.resume_snapshot)
-      ? (payload.resume_snapshot as ResolvedSnapshotExt)
-      : entry.parsed.resumeSnapshot;
+    const nextSnapshot: ResolvedSnapshotExt | undefined =
+      isObject(payload) && isObject(payload.resume_snapshot)
+        ? (payload.resume_snapshot as ResolvedSnapshotExt)
+        : entry.parsed.resumeSnapshot;
     entry.parsed = {
       ...entry.parsed,
       resumeSessionId: resume,
@@ -576,6 +655,7 @@ export class Supervisor {
     const mode = payload.mode;
     if (requestId === undefined || requestId === "") return;
     if (mode !== "new" && mode !== "clear") return;
+    this.#pendingSwitches.delete(agentId);
     const previousSessionId = optionalString(payload.previous_session_id);
     // Capture the spawn-time F4-lock holder BEFORE stripping it below;
     // #relaunchForReset releases it on success and #rollback transfers
@@ -587,12 +667,8 @@ export class Supervisor {
     entry.pendingReset = {
       requestId,
       mode: mode as SessionResetMode,
-      ...(previousSessionId !== undefined
-        ? { previousSessionId }
-        : {}),
-      ...(oldResumeSessionId !== undefined
-        ? { oldResumeSessionId }
-        : {}),
+      ...(previousSessionId !== undefined ? { previousSessionId } : {}),
+      ...(oldResumeSessionId !== undefined ? { oldResumeSessionId } : {}),
     };
     // Fresh: strip resumeSessionId so #relaunchForReset launches without
     // --resume. resumeSnapshot stays (phase-15 D8 last-effective values).
@@ -616,6 +692,7 @@ export class Supervisor {
     if (!isObject(payload)) return;
     const cwd = payload.cwd;
     if (typeof cwd !== "string") return;
+    const generation = ++this.#enumerationGeneration;
     // engine scopes the listing to one session store (ADR-0032 F8);
     // absent = claude-code, unknown values fall back to an empty list.
     let engine: EngineKind = "claude-code";
@@ -631,9 +708,47 @@ export class Supervisor {
       }
       engine = payload.engine;
     }
-    const sessions = isCwdAllowed(cwd, this.#cwdAllowlist)
-      ? this.#listSessions(cwd, engine)
-      : [];
+    if (!isCwdAllowed(cwd, this.#cwdAllowlist)) {
+      this.#sendSessionList(cwd, engine, []);
+      return;
+    }
+    const sessions = this.#listSessions(cwd, engine);
+    if (!isPromise(sessions)) {
+      this.#sendSessionList(cwd, engine, sessions);
+      return;
+    }
+    void sessions
+      .then((found) => {
+        if (generation === this.#enumerationGeneration) {
+          this.#sendSessionList(cwd, engine, found);
+        }
+      })
+      .catch((error: unknown) => {
+        if (generation !== this.#enumerationGeneration) return;
+        process.stderr.write(
+          `runner: session enumeration failed for ${cwd}: ${String(error)}\n`,
+        );
+        this.#sendSessionList(cwd, engine, []);
+      });
+  }
+
+  /** Stops every child (deliberate); used on runner shutdown. */
+  stopAll(): void {
+    // Cancel resume spawns that have not launched yet. Their async continuations
+    // compare tokens before acting, so clearing the map is sufficient.
+    this.#pendingSpawns.clear();
+    this.#pendingSwitches.clear();
+    for (const entry of this.#children.values()) {
+      entry.stopping = true;
+      entry.child.kill();
+    }
+  }
+
+  #sendSessionList(
+    cwd: string,
+    engine: EngineKind,
+    sessions: SessionMeta[],
+  ): void {
     this.#sendSessions({
       version: "0",
       host_id: this.#hostId,
@@ -643,12 +758,52 @@ export class Supervisor {
     });
   }
 
-  /** Stops every child (deliberate); used on runner shutdown. */
-  stopAll(): void {
-    for (const entry of this.#children.values()) {
-      entry.stopping = true;
-      entry.child.kill();
+  #completeResumeSpawn(
+    agentId: string,
+    parsed: ParsedSpawn,
+    exists: boolean,
+  ): void {
+    const resume = parsed.resumeSessionId;
+    if (resume === undefined) return;
+    if (!exists) {
+      process.stderr.write(
+        `runner: resume session not found under cwd (agent ${agentId})\n`,
+      );
+      this.#fail(agentId, "session_not_found");
+      return;
     }
+    // F4: after an async T3 check resumes, this check+add remains one
+    // synchronous JS turn. Two concurrent scans therefore cannot both claim
+    // the same session.
+    if (this.#activeSessions.has(resume)) {
+      this.#fail(agentId, "already_running");
+      return;
+    }
+    this.#activeSessions.add(resume);
+    this.#launchSpawn(agentId, parsed);
+  }
+
+  #launchSpawn(agentId: string, parsed: ParsedSpawn): void {
+    const resume = parsed.resumeSessionId;
+    try {
+      this.#start(agentId, parsed);
+    } catch (error) {
+      // A synchronous launch failure (the config write or spawn raising) must
+      // still surface to the operator and leave no stranded slot or lock.
+      process.stderr.write(
+        `runner: launch failed for ${agentId}: ${String(error)}\n`,
+      );
+      this.#children.delete(agentId);
+      if (resume !== undefined) this.#activeSessions.delete(resume);
+      this.#fail(agentId, "error");
+      return;
+    }
+    this.#sendResult({
+      version: "0",
+      host_id: this.#hostId,
+      agent_id: agentId,
+      ok: true,
+    });
   }
 
   #fail(agentId: string, reason: SpawnFailReason): void {
@@ -734,6 +889,7 @@ export class Supervisor {
   /** Drops an entry and releases its resume lock; the lock is held across
    *  restarts and freed only when the agent is finally gone. */
   #remove(agentId: string, entry: ChildEntry): void {
+    this.#pendingSwitches.delete(agentId);
     this.#children.delete(agentId);
     const resume = entry.parsed.resumeSessionId;
     if (resume !== undefined) this.#activeSessions.delete(resume);

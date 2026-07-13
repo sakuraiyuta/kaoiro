@@ -97,7 +97,7 @@ Codex ThreadEvent → kaoiro 状態 ([protocol](protocol.md)) への導出は共
 
 - 保管: 初回 `thread.started` で得た `thread_id` (UUIDv7) を kaoiro の `session_id` として保持し、`AgentStates` / `SessionPointers` ([ADR-0014](../adr/0014-session-resume-and-restore.md)) に書き込む。
 - 復帰: 復元指示時に `codex.resumeThread(thread_id)` で再開。
-- 列挙: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を走査し、先頭行 `session_meta` の `cwd` フィールドで照合する (実ファイルで確認済み)。`~/.codex/state_5.sqlite` の index は internal のため依存しない。
+- 列挙: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を固定深度の日付 tree として新しい順に async 走査し、先頭行 `session_meta` の `cwd` フィールドで照合する (実ファイルで確認済み)。存在確認は一致時点で早期 return し、spawn / resume / `switch_session` の hot path で runner event loop を block しない (#100)。`~/.codex/state_5.sqlite` の index は internal のため依存しない。
 
 ### 実機検証メモ (2026-07-11、ChatGPT-plan 認証)
 

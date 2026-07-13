@@ -12,6 +12,11 @@
 // target actually exists under the bound cwd (threat-model T3).
 
 import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
+import {
+  open as openFile,
+  readdir as readDirectory,
+  stat as statFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { EngineKind, SessionMeta } from "@kaoiro/protocol";
@@ -125,7 +130,11 @@ function readSummary(path: string): string | undefined {
     ) {
       return toSummaryLabel(line.aiTitle);
     }
-    if (firstUser === undefined && line.type === "user" && line.isMeta !== true) {
+    if (
+      firstUser === undefined &&
+      line.type === "user" &&
+      line.isMeta !== true
+    ) {
       const text = userLineText(line.message?.content);
       if (text !== undefined) firstUser = text;
     }
@@ -194,22 +203,22 @@ function codexSessionIdOf(name: string): string | null {
  *  the base instructions), so a generous prefix is read. */
 const CODEX_META_PREFIX_BYTES = 256 * 1024;
 
-function codexRolloutCwd(path: string): string | null {
-  let fd: number;
+async function codexRolloutCwd(path: string): Promise<string | null> {
+  let file: Awaited<ReturnType<typeof openFile>>;
   try {
-    fd = openSync(path, "r");
+    file = await openFile(path, "r");
   } catch {
     return null;
   }
   let prefix: string;
   try {
     const buf = Buffer.alloc(CODEX_META_PREFIX_BYTES);
-    const n = readSync(fd, buf, 0, CODEX_META_PREFIX_BYTES, 0);
-    prefix = buf.subarray(0, n).toString("utf8");
+    const { bytesRead } = await file.read(buf, 0, CODEX_META_PREFIX_BYTES, 0);
+    prefix = buf.subarray(0, bytesRead).toString("utf8");
   } catch {
     return null;
   } finally {
-    closeSync(fd);
+    await file.close();
   }
   const newline = prefix.indexOf("\n");
   const first = newline === -1 ? prefix : prefix.slice(0, newline);
@@ -225,26 +234,81 @@ function codexRolloutCwd(path: string): string | null {
   }
 }
 
-/** Lists codex rollouts under root whose session_meta.cwd matches. Split
- *  from listCodexSessions so it is testable against a fixture dir. */
-export function listCodexSessionsIn(root: string, cwd: string): SessionMeta[] {
-  let names: string[];
+const CODEX_DATE_COMPONENT = /^\d{2}$/;
+const CODEX_YEAR_COMPONENT = /^\d{4}$/;
+
+interface CodexRolloutFile {
+  name: string;
+  path: string;
+}
+
+/** Reads one date-tree level without throwing. `withFileTypes` lets the walk
+ *  ignore files/symlinks where a YYYY/MM/DD directory is expected, avoiding
+ *  the unbounded recursive flattening that previously ran on the event loop. */
+async function dateDirectories(
+  path: string,
+  pattern: RegExp,
+): Promise<string[]> {
   try {
-    // The date-tree (YYYY/MM/DD/…) is flattened by the recursive listing.
-    names = readdirSync(root, { recursive: true }) as string[];
+    const entries = await readDirectory(path, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory() && pattern.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => b.localeCompare(a));
   } catch {
     return [];
   }
+}
+
+/** Yields rollout files newest date/name first using async filesystem calls.
+ *  The Codex store has a fixed YYYY/MM/DD depth, so an explicit bounded walk
+ *  is both cheaper and safer than `readdirSync({recursive:true})`. Consumers
+ *  that only need one session can return early without scanning older days. */
+async function* codexRolloutFiles(
+  root: string,
+): AsyncGenerator<CodexRolloutFile> {
+  for (const year of await dateDirectories(root, CODEX_YEAR_COMPONENT)) {
+    const yearPath = join(root, year);
+    for (const month of await dateDirectories(yearPath, CODEX_DATE_COMPONENT)) {
+      const monthPath = join(yearPath, month);
+      for (const day of await dateDirectories(
+        monthPath,
+        CODEX_DATE_COMPONENT,
+      )) {
+        const dayPath = join(monthPath, day);
+        let names: string[];
+        try {
+          const entries = await readDirectory(dayPath, { withFileTypes: true });
+          names = entries
+            .filter(
+              (entry) =>
+                entry.isFile() && codexSessionIdOf(entry.name) !== null,
+            )
+            .map((entry) => entry.name)
+            .sort((a, b) => b.localeCompare(a));
+        } catch {
+          continue;
+        }
+        for (const name of names) yield { name, path: join(dayPath, name) };
+      }
+    }
+  }
+}
+
+/** Lists codex rollouts under root whose session_meta.cwd matches. Split
+ *  from listCodexSessions so it is testable against a fixture dir. */
+export async function listCodexSessionsIn(
+  root: string,
+  cwd: string,
+): Promise<SessionMeta[]> {
   const sessions: SessionMeta[] = [];
-  for (const rel of names) {
-    const base = rel.split("/").at(-1) ?? rel;
-    const sessionId = codexSessionIdOf(base);
+  for await (const rollout of codexRolloutFiles(root)) {
+    const sessionId = codexSessionIdOf(rollout.name);
     if (sessionId === null) continue;
-    const path = join(root, rel);
-    if (codexRolloutCwd(path) !== cwd) continue;
+    if ((await codexRolloutCwd(rollout.path)) !== cwd) continue;
     const meta: SessionMeta = { session_id: sessionId };
     try {
-      meta.mtime = statSync(path).mtime.toISOString();
+      meta.mtime = (await statFile(rollout.path)).mtime.toISOString();
     } catch {
       // Vanished between readdir and stat; report it without an mtime.
     }
@@ -257,22 +321,15 @@ export function listCodexSessionsIn(root: string, cwd: string): SessionMeta[] {
  *  A resume of the same session can create a new rollout under a different
  *  day-dir with the same UUID; walk to a cwd match instead of returning at
  *  the first UUID hit, so this stays symmetric with listCodexSessionsIn. */
-export function codexSessionExistsIn(
+export async function codexSessionExistsIn(
   root: string,
   cwd: string,
   sessionId: string,
-): boolean {
+): Promise<boolean> {
   if (!isValidSessionId(sessionId)) return false;
-  let names: string[];
-  try {
-    names = readdirSync(root, { recursive: true }) as string[];
-  } catch {
-    return false;
-  }
-  for (const rel of names) {
-    const base = rel.split("/").at(-1) ?? rel;
-    if (codexSessionIdOf(base) !== sessionId) continue;
-    if (codexRolloutCwd(join(root, rel)) === cwd) return true;
+  for await (const rollout of codexRolloutFiles(root)) {
+    if (codexSessionIdOf(rollout.name) !== sessionId) continue;
+    if ((await codexRolloutCwd(rollout.path)) === cwd) return true;
   }
   return false;
 }
@@ -283,7 +340,7 @@ export function codexSessionExistsIn(
 export function listSessions(
   cwd: string,
   engine: EngineKind = "claude-code",
-): SessionMeta[] {
+): SessionMeta[] | Promise<SessionMeta[]> {
   return engine === "codex"
     ? listCodexSessionsIn(codexSessionsRoot(), cwd)
     : listSessionsIn(projectsDir(cwd));
@@ -295,7 +352,7 @@ export function sessionExists(
   cwd: string,
   sessionId: string,
   engine: EngineKind = "claude-code",
-): boolean {
+): boolean | Promise<boolean> {
   return engine === "codex"
     ? codexSessionExistsIn(codexSessionsRoot(), cwd, sessionId)
     : sessionExistsIn(projectsDir(cwd), sessionId);

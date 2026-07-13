@@ -168,7 +168,7 @@ session_id は engine-opaque な文字列として server 側の `SessionPointer
 runner の cwd 配下 session 列挙 ([ADR-0014](0014-session-resume-and-restore.md) F6) も engine 別実装:
 
 - Claude adapter — 既存 `~/.claude/projects/` JSONL 列挙
-- Codex adapter — `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を走査し、先頭行 `session_meta` の `cwd` で照合する (2026-07-10 確定: レイアウトと `session_meta.cwd` の存在を実ファイルで確認。`state_5.sqlite` の index は internal 扱いのため依存しない)。
+- Codex adapter — `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を走査し、先頭行 `session_meta` の `cwd` で照合する (2026-07-10 確定: レイアウトと `session_meta.cwd` の存在を実ファイルで確認。`state_5.sqlite` の index は internal 扱いのため依存しない)。走査は固定深度の日付 tree を新しい順に async filesystem API で辿り、存在確認は一致時点で早期 return、列挙も event loop を block しない (#100)。
 
 ### F9 — cwd 通知契約
 

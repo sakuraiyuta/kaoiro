@@ -28,6 +28,20 @@ const spawnMsg = {
 
 const allowlist = ["/home/user/git/kaoiro"];
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 /** A fake child whose exit can be driven and whose kills are counted. */
 class FakeChild implements ManagedChild {
   readonly #listeners: Array<() => void> = [];
@@ -46,8 +60,8 @@ class FakeChild implements ManagedChild {
 function harness(
   opts: {
     cwdAllowlist?: string[];
-    sessions?: SessionMeta[];
-    exists?: boolean;
+    sessions?: SessionMeta[] | Promise<SessionMeta[]>;
+    exists?: boolean | Promise<boolean>;
     wrapperServerUrl?: string;
     now?: () => number;
     launchThrowsOnCall?: number;
@@ -223,7 +237,12 @@ describe("Supervisor.handleSpawn", () => {
     h.sup.handleSpawn(spawnMsg);
     expect(h.children).toHaveLength(1);
     expect(h.results).toEqual([
-      { version: "0", host_id: "lab-pc-1", agent_id: spawnMsg.agent_id, ok: true },
+      {
+        version: "0",
+        host_id: "lab-pc-1",
+        agent_id: spawnMsg.agent_id,
+        ok: true,
+      },
     ]);
   });
 
@@ -239,7 +258,10 @@ describe("Supervisor.handleSpawn", () => {
     h.sup.handleSpawn(spawnMsg);
     h.sup.handleSpawn(spawnMsg);
     expect(h.children).toHaveLength(1);
-    expect(h.results[1]).toMatchObject({ ok: false, reason: "already_running" });
+    expect(h.results[1]).toMatchObject({
+      ok: false,
+      reason: "already_running",
+    });
   });
 
   it("initial_prompt を launch へ渡す", () => {
@@ -281,7 +303,10 @@ describe("Supervisor.handleSpawn", () => {
 });
 
 describe("Supervisor resume (T3 / F4)", () => {
-  const resumeMsg = { ...spawnMsg, resume_session_id: "11111111-2222-3333-4444-555555555555" };
+  const resumeMsg = {
+    ...spawnMsg,
+    resume_session_id: "11111111-2222-3333-4444-555555555555",
+  };
 
   it("存在する session は起動し --resume を渡す", () => {
     const h = harness({ exists: true });
@@ -301,12 +326,84 @@ describe("Supervisor resume (T3 / F4)", () => {
     });
   });
 
+  it("Codex の async T3 中は event handler を返し、完了後に起動する (#100)", async () => {
+    const check = deferred<boolean>();
+    const h = harness({ exists: check.promise });
+
+    h.sup.handleSpawn({ ...resumeMsg, engine: "codex" });
+    expect(h.children).toHaveLength(0);
+    expect(h.results).toHaveLength(0);
+
+    check.resolve(true);
+    await check.promise;
+    await Promise.resolve();
+
+    expect(h.children).toHaveLength(1);
+    expect(h.results[0]).toMatchObject({ ok: true });
+  });
+
+  it("async T3 中の同一 agent 二重 spawn は pending slot で拒否", async () => {
+    const check = deferred<boolean>();
+    const h = harness({ exists: check.promise });
+    const codexResume = { ...resumeMsg, engine: "codex" };
+
+    h.sup.handleSpawn(codexResume);
+    h.sup.handleSpawn(codexResume);
+    expect(h.results[0]).toMatchObject({
+      ok: false,
+      reason: "already_running",
+    });
+
+    check.resolve(true);
+    await check.promise;
+    await Promise.resolve();
+    expect(h.children).toHaveLength(1);
+    expect(h.results[1]).toMatchObject({ ok: true });
+  });
+
+  it("並行 async T3 後も同一 session の F4 lock は一方だけが獲得する", async () => {
+    const check = deferred<boolean>();
+    const h = harness({ exists: check.promise });
+    const codexResume = { ...resumeMsg, engine: "codex" };
+
+    h.sup.handleSpawn({ ...codexResume, agent_id: "lab-pc-1.codex-a" });
+    h.sup.handleSpawn({ ...codexResume, agent_id: "lab-pc-1.codex-b" });
+    check.resolve(true);
+    await check.promise;
+    await Promise.resolve();
+
+    expect(h.children).toHaveLength(1);
+    expect(h.results).toHaveLength(2);
+    expect(h.results.filter((result) => result.ok)).toHaveLength(1);
+    expect(h.results.find((result) => !result.ok)).toMatchObject({
+      reason: "already_running",
+    });
+  });
+
+  it("async T3 中の stop は pending spawn を取り消す", async () => {
+    const check = deferred<boolean>();
+    const h = harness({ exists: check.promise });
+    const codexResume = { ...resumeMsg, engine: "codex" };
+
+    h.sup.handleSpawn(codexResume);
+    h.sup.handleStop(codexResume);
+    check.resolve(true);
+    await check.promise;
+    await Promise.resolve();
+
+    expect(h.children).toHaveLength(0);
+    expect(h.results[0]).toMatchObject({ ok: false, reason: "error" });
+  });
+
   it("同一 session の同時 resume は already_running(F4 ロック)", () => {
     const h = harness({ exists: true });
     h.sup.handleSpawn({ ...resumeMsg, agent_id: "lab-pc-1.claude-a" });
     h.sup.handleSpawn({ ...resumeMsg, agent_id: "lab-pc-1.claude-b" });
     expect(h.children).toHaveLength(1);
-    expect(h.results[1]).toMatchObject({ ok: false, reason: "already_running" });
+    expect(h.results[1]).toMatchObject({
+      ok: false,
+      reason: "already_running",
+    });
   });
 
   it("stop でロックが解放され同一 session を再 resume できる", () => {
@@ -355,9 +452,15 @@ describe("Supervisor resume (T3 / F4)", () => {
 
 describe("Supervisor.handleEnumerate", () => {
   it("許可 cwd の resume 候補を sessions で返す", () => {
-    const sessions: SessionMeta[] = [{ session_id: "s1", mtime: "2026-06-24T00:00:00Z" }];
+    const sessions: SessionMeta[] = [
+      { session_id: "s1", mtime: "2026-06-24T00:00:00Z" },
+    ];
     const h = harness({ sessions });
-    h.sup.handleEnumerate({ version: "0", agent_id: "a", cwd: "/home/user/git/kaoiro" });
+    h.sup.handleEnumerate({
+      version: "0",
+      agent_id: "a",
+      cwd: "/home/user/git/kaoiro",
+    });
     expect(h.sessionsSent).toEqual([
       {
         version: "0",
@@ -373,6 +476,54 @@ describe("Supervisor.handleEnumerate", () => {
     const h = harness({ sessions: [{ session_id: "s1" }] });
     h.sup.handleEnumerate({ version: "0", agent_id: "a", cwd: "/etc" });
     expect(h.sessionsSent[0]).toMatchObject({ cwd: "/etc", sessions: [] });
+  });
+
+  it("Codex の async 列挙は完了後に sessions を送る (#100)", async () => {
+    const listing = deferred<SessionMeta[]>();
+    const h = harness({ sessions: listing.promise });
+
+    h.sup.handleEnumerate({
+      version: "0",
+      cwd: "/home/user/git/kaoiro",
+      engine: "codex",
+    });
+    expect(h.sessionsSent).toHaveLength(0);
+
+    const sessions = [{ session_id: "codex-session" }];
+    listing.resolve(sessions);
+    await listing.promise;
+    await Promise.resolve();
+
+    expect(h.sessionsSent[0]).toMatchObject({
+      engine: "codex",
+      sessions,
+    });
+  });
+
+  it("後発 enumerate の結果を、遅れて完了した旧 scan で上書きしない", async () => {
+    const first = deferred<SessionMeta[]>();
+    let listing: SessionMeta[] | Promise<SessionMeta[]> = first.promise;
+    const sent: RunnerSessions[] = [];
+    const sup = new Supervisor({
+      hostId: "lab-pc-1",
+      cwdAllowlist: allowlist,
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      launch: () => new FakeChild(),
+      sendResult: () => {},
+      sendSessions: (sessions) => sent.push(sessions),
+      sendResetResult: () => {},
+      listSessions: () => listing,
+    });
+    sup.handleEnumerate({ cwd: "/home/user/git/kaoiro", engine: "codex" });
+    listing = [{ session_id: "newer" }];
+    sup.handleEnumerate({ cwd: "/home/user/git/kaoiro", engine: "codex" });
+
+    first.resolve([{ session_id: "stale" }]);
+    await first.promise;
+    await Promise.resolve();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.sessions).toEqual([{ session_id: "newer" }]);
   });
 });
 
@@ -494,6 +645,39 @@ describe("Supervisor.handleSwitchSession", () => {
     first.exit();
     expect(h.children).toHaveLength(2);
     expect(h.resumes[1]).toBe(otherSession);
+  });
+
+  it("Codex の async T3 完了までは live child を止めず、成功後に切替える (#100)", async () => {
+    let exists: boolean | Promise<boolean> = true;
+    const children: FakeChild[] = [];
+    const sup = new Supervisor({
+      hostId: "lab-pc-1",
+      cwdAllowlist: allowlist,
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      launch: () => {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      sendResult: () => {},
+      sendSessions: () => {},
+      sendResetResult: () => {},
+      sessionExists: () => exists,
+    });
+    sup.handleSpawn({ ...resumeMsg, engine: "codex" });
+    const check = deferred<boolean>();
+    exists = check.promise;
+
+    sup.handleSwitchSession({
+      agent_id: resumeMsg.agent_id,
+      resume_session_id: otherSession,
+    });
+    expect(children[0]!.kills).toBe(0);
+
+    check.resolve(true);
+    await check.promise;
+    await Promise.resolve();
+    expect(children[0]!.kills).toBe(1);
   });
 
   it("resume_session_id を欠くと error で拒否", () => {

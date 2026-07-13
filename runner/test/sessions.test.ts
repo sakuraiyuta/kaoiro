@@ -94,7 +94,10 @@ describe("listSessionsIn — summary (#73)", () => {
     join(dir, `${ids.user}.jsonl`),
     jsonl([
       { type: "file-history-snapshot", snapshot: {} },
-      { type: "user", message: { role: "user", content: "ユーザの最初の指示" } },
+      {
+        type: "user",
+        message: { role: "user", content: "ユーザの最初の指示" },
+      },
     ]),
   );
   writeFileSync(
@@ -108,7 +111,11 @@ describe("listSessionsIn — summary (#73)", () => {
     join(dir, `${ids.none}.jsonl`),
     jsonl([
       { type: "system", subtype: "init" },
-      { type: "user", isMeta: true, message: { role: "user", content: "<reminder>" } },
+      {
+        type: "user",
+        isMeta: true,
+        message: { role: "user", content: "<reminder>" },
+      },
       {
         type: "user",
         message: {
@@ -120,7 +127,9 @@ describe("listSessionsIn — summary (#73)", () => {
   );
   writeFileSync(
     join(dir, `${ids.long}.jsonl`),
-    jsonl([{ type: "user", message: { role: "user", content: "あ".repeat(200) } }]),
+    jsonl([
+      { type: "user", message: { role: "user", content: "あ".repeat(200) } },
+    ]),
   );
 
   const byId = (): Record<string, { summary?: string }> =>
@@ -168,21 +177,31 @@ describe("codex rollouts (ADR-0032 F8)", () => {
   );
   writeFileSync(join(day, "not-a-rollout.txt"), "x");
 
-  it("listCodexSessionsIn は session_meta.cwd の一致分のみ返す", () => {
-    const sessions = listCodexSessionsIn(root, "/repo/a");
+  it("listCodexSessionsIn は session_meta.cwd の一致分のみ返す", async () => {
+    const sessions = await listCodexSessionsIn(root, "/repo/a");
     expect(sessions.map((s) => s.session_id)).toEqual([uuid]);
     expect(sessions[0]?.mtime).toBeDefined();
   });
 
-  it("codexSessionExistsIn は cwd 一致の T3 チェックを行う", () => {
-    expect(codexSessionExistsIn(root, "/repo/a", uuid)).toBe(true);
-    expect(codexSessionExistsIn(root, "/repo/b", uuid)).toBe(false);
-    expect(codexSessionExistsIn(root, "/repo/a", "../etc")).toBe(false);
-    expect(codexSessionExistsIn(root, "/repo/a", other)).toBe(false);
+  it("codexSessionExistsIn は cwd 一致の T3 チェックを行う", async () => {
+    await expect(codexSessionExistsIn(root, "/repo/a", uuid)).resolves.toBe(
+      true,
+    );
+    await expect(codexSessionExistsIn(root, "/repo/b", uuid)).resolves.toBe(
+      false,
+    );
+    await expect(codexSessionExistsIn(root, "/repo/a", "../etc")).resolves.toBe(
+      false,
+    );
+    await expect(codexSessionExistsIn(root, "/repo/a", other)).resolves.toBe(
+      false,
+    );
   });
 
-  it("root 不在は空を返す", () => {
-    expect(listCodexSessionsIn(join(root, "nope"), "/repo/a")).toEqual([]);
+  it("root 不在は空を返す", async () => {
+    await expect(
+      listCodexSessionsIn(join(root, "nope"), "/repo/a"),
+    ).resolves.toEqual([]);
   });
 });
 
@@ -196,27 +215,42 @@ describe("codex rollouts — 同一 session_id が複数 rollout に分散 (#104
   mkdirSync(dayOld, { recursive: true });
   mkdirSync(dayNew, { recursive: true });
   const uuid = "019f4bdb-d821-7631-aee1-ec7982060311";
-  const meta = (cwd: string): string =>
+  const meta = (cwd: string, id = uuid): string =>
     `${JSON.stringify({
       timestamp: "2026-07-12T00:00:00.000Z",
       type: "session_meta",
-      payload: { id: uuid, cwd },
+      payload: { id, cwd },
     })}\n`;
   writeFileSync(
     join(dayOld, `rollout-2026-07-10T20-48-46-${uuid}.jsonl`),
-    meta("/repo/other"),
+    meta("/repo/a"),
   );
   writeFileSync(
     join(dayNew, `rollout-2026-07-12T09-00-00-${uuid}.jsonl`),
-    meta("/repo/a"),
+    meta("/repo/other"),
+  );
+  const newestUuid = "019f4bdb-d821-7631-aee1-ec7982060444";
+  writeFileSync(
+    join(dayNew, `rollout-2026-07-12T10-00-00-${newestUuid}.jsonl`),
+    meta("/repo/a", newestUuid),
   );
 
-  it("codexSessionExistsIn は先頭 rollout の cwd 不一致で打切らず一致を見つける", () => {
-    expect(codexSessionExistsIn(root, "/repo/a", uuid)).toBe(true);
+  it("codexSessionExistsIn は先頭 rollout の cwd 不一致で打切らず一致を見つける", async () => {
+    await expect(codexSessionExistsIn(root, "/repo/a", uuid)).resolves.toBe(
+      true,
+    );
   });
 
-  it("listCodexSessionsIn と対称: 同 UUID の cwd 一致 rollout を反映する", () => {
-    const sessions = listCodexSessionsIn(root, "/repo/a");
+  it("listCodexSessionsIn と対称: 同 UUID の cwd 一致 rollout を反映する", async () => {
+    const sessions = await listCodexSessionsIn(root, "/repo/a");
     expect(sessions.some((s) => s.session_id === uuid)).toBe(true);
+  });
+
+  it("date tree を新しい rollout から列挙する", async () => {
+    const sessions = await listCodexSessionsIn(root, "/repo/a");
+    expect(sessions.map((session) => session.session_id)).toEqual([
+      newestUuid,
+      uuid,
+    ]);
   });
 });
