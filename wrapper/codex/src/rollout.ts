@@ -10,7 +10,9 @@ export function codexRolloutsRoot(): string {
   return join(homedir(), ".codex", "sessions");
 }
 
-function rolloutPathIn(root: string, sessionId: string): string | null {
+/** Finds one rollout by its validated opaque thread id. Shared by the tail
+ * model resolver and full resume-history projection (#106). */
+export function rolloutPathIn(root: string, sessionId: string): string | null {
   if (!SESSION_ID_PATTERN.test(sessionId)) return null;
   let names: string[];
   try {

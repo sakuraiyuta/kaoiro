@@ -3,8 +3,7 @@
 // personality (ADR-0029 F3), then drives a CodexHost. Mirrors the Claude
 // composition (@kaoiro/claude-code/src/cli.ts) minus the Claude-only parts:
 // no permission broker wiring (approval is launch-fixed, ADR-0033 F3), no
-// upload rendering (attachments are rejected), no session-history replay
-// (codex resume rebuilds nothing yet — the server keeps its own lines).
+// upload rendering (attachments are rejected), rollout history replay.
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
@@ -25,6 +24,7 @@ import type {
 } from "@kaoiro/agent-common";
 import { ServerLink, loadConfig, parseCliArgs } from "@kaoiro/wrapper-core";
 import { CodexHost } from "./host.js";
+import { replayCodexHistory } from "./history.js";
 
 const COLOR: Record<KaoiroState, string> = {
   idle: "90",
@@ -321,10 +321,18 @@ async function main(): Promise<void> {
       link?.send(idle);
     }
     if (resumeSessionId !== undefined) {
-      // Group subsequent envelopes under the resumed thread. History replay
-      // (Claude's reconstructed transcript) is not implemented for codex —
-      // the server-side lines for this session id survive as-is.
-      link.setSessionId(resumeSessionId);
+      // resumeThread continues only future turns; rebuild the display
+      // transcript from the rollout before the host starts (#106). A prompt
+      // resume needs an idle seed because AgentStates reset/append are no-ops
+      // until the wrapper has established its latest-state entry.
+      replayCodexHistory(
+        link,
+        config,
+        resumeSessionId,
+        prompt === undefined
+          ? undefined
+          : makeStateChange(config, "idle", new Date().toISOString()),
+      );
     }
     await host.run(prompt);
   } finally {
