@@ -3,6 +3,7 @@ import {
   ATTACH_CHUNK_SIZE,
   buildChunkPayload,
   fetchPersonaManifest,
+  fanOutInterAgentHistory,
   formatAgentLabel,
   hostIdFromAgentId,
   interAgentMessageOf,
@@ -17,6 +18,7 @@ import {
   pendingPermissionFrom,
   pendingQuestionFrom,
   resultOf,
+  retainInterAgentHistory,
   resumeDriftFrom,
   parseSessionResetCompleted,
   parseSessionResetFailed,
@@ -316,6 +318,38 @@ describe("interAgentMessageOf (protocol-inter-agent, phase-8)", () => {
     expect(
       interAgentMessageOf({ ...base, payload: { to: "b", kind: "propose" } }),
     ).toBeNull();
+  });
+});
+
+describe("inter-agent history replay (#105)", () => {
+  const message: Envelope = {
+    version: "0",
+    agent_id: "agent-a",
+    ts: "2026-07-13T05:00:00Z",
+    type: "inter_agent_message",
+    state: "idle",
+    payload: {
+      to: "agent-b",
+      conversation_id: "cnv-105",
+      turn_number: 1,
+      kind: "inform",
+      body: "復元対象",
+    },
+  };
+  const log: Envelope = {
+    ...message,
+    ts: "2026-07-13T04:59:00Z",
+    type: "log",
+  };
+
+  it("sender-keyed history を sender と receiver の両 transcript へ展開する", () => {
+    const expanded = fanOutInterAgentHistory({ "agent-a": [message, log] });
+    expect(expanded["agent-a"]).toEqual([log, message]);
+    expect(expanded["agent-b"]).toEqual([message]);
+  });
+
+  it("history_reset では inter-agent envelope だけを保持する", () => {
+    expect(retainInterAgentHistory([log, message])).toEqual([message]);
   });
 });
 

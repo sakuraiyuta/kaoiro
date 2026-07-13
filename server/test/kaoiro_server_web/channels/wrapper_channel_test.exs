@@ -513,6 +513,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       # inter_agent_message は state_change ではないので AgentStates の latest
       # 状態(state)を上書きしない。
       assert AgentStates.snapshot()[from_id]["state"] == "idle"
+      assert [stored] = AgentStates.histories()[from_id]
+      assert stored == env
     end
 
     test "自己ルーティングは :self_routing で拒否する" do

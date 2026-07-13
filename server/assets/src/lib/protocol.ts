@@ -640,6 +640,38 @@ export function isReplyEnvelope(envelope: Envelope): boolean {
   );
 }
 
+/** Expands server history into the same per-agent transcript routing used by
+ * live envelopes. AgentStates retains the sender copy; replay must also copy
+ * it to payload.to so reload and live delivery are symmetric (#105). */
+export function fanOutInterAgentHistory(
+  histories: Record<string, Envelope[]>,
+): Record<string, Envelope[]> {
+  const expanded: Record<string, Envelope[]> = {};
+  for (const [id, entries] of Object.entries(histories)) {
+    expanded[id] = [...(expanded[id] ?? []), ...entries];
+    for (const envelope of entries) {
+      if (envelope.type !== "inter_agent_message") continue;
+      const to = (envelope.payload as { to?: unknown } | undefined)?.to;
+      if (typeof to === "string" && to !== "" && to !== id) {
+        expanded[to] = [...(expanded[to] ?? []), envelope];
+      }
+    }
+  }
+  for (const entries of Object.values(expanded)) {
+    entries.sort((a, b) => {
+      const byTime = a.ts.localeCompare(b.ts);
+      if (byTime !== 0) return byTime;
+      return (a.seq ?? 0) - (b.seq ?? 0);
+    });
+  }
+  return expanded;
+}
+
+/** Resume JSONL replay cannot reconstruct structured inter-agent payloads. */
+export function retainInterAgentHistory(entries: Envelope[]): Envelope[] {
+  return entries.filter((envelope) => envelope.type === "inter_agent_message");
+}
+
 /** States where the agent is executing and an interrupt (ESC equivalent,
  *  #51) could land work. idle / waiting_input / done / error /
  *  disconnected have nothing to interrupt. Single source of truth so the

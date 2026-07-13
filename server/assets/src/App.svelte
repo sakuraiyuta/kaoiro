@@ -17,9 +17,11 @@
   import {
     connectKaoiro,
     defaultSocketUrl,
+    fanOutInterAgentHistory,
     fetchPersonaManifest,
     formatAgentLabel,
     isReplyEnvelope,
+    retainInterAgentHistory,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -260,7 +262,8 @@
             }
           }
         },
-        onHistory: (histories) => (logs = mergeHistories(histories, logs)),
+        onHistory: (histories) =>
+          (logs = mergeHistories(fanOutInterAgentHistory(histories), logs)),
         onHistoryCleared: (agentId, sessionId) => {
           // An operator purged past-session lines (#48); keep only the
           // surviving session's transcript to match the server buffer.
@@ -272,11 +275,13 @@
           };
         },
         onHistoryReset: (agentId) => {
-          // A resume reconstruction is about to replay this agent's
-          // transcript (#50): drop the current lines so the replayed log
-          // envelopes rebuild it cleanly instead of doubling.
+          // SDK JSONL replay rebuilds log/result, but not structured
+          // inter-agent envelopes. Keep those across the reset (#105).
           if (logs[agentId]) {
-            logs = { ...logs, [agentId]: [] };
+            logs = {
+              ...logs,
+              [agentId]: retainInterAgentHistory(logs[agentId]),
+            };
           }
         },
         onAgentDeleted: (agentId) => {

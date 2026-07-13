@@ -14,6 +14,13 @@ defmodule KaoiroServer.AgentStatesTest do
     })
   end
 
+  defp inter_agent_env(agent_id, to) do
+    envelope(agent_id, %{
+      "type" => "inter_agent_message",
+      "payload" => %{"to" => to, "conversation_id" => "cnv-105", "body" => "hello"}
+    })
+  end
+
   test "新規 agent_id が上限を超えると拒否し、既知 agent_id の更新は通す" do
     store = start_supervised!({AgentStates, name: :agent_states_cap_test})
 
@@ -288,7 +295,7 @@ defmodule KaoiroServer.AgentStatesTest do
       %{store: store}
     end
 
-    test "全履歴を消去し最新状態は残す", %{store: store} do
+    test "JSONLで再構築する履歴を消去し最新状態は残す", %{store: store} do
       :ok = AgentStates.put(envelope("a", %{"state" => "thinking"}), server: store)
       :ok = AgentStates.append_log(log_env("a", 1), server: store)
       :ok = AgentStates.append_log(log_env("a", 2), server: store)
@@ -298,6 +305,15 @@ defmodule KaoiroServer.AgentStatesTest do
       # All reply lines gone, latest state untouched.
       refute Map.has_key?(AgentStates.histories(store), "a")
       assert AgentStates.snapshot(store)["a"]["state"] == "thinking"
+    end
+
+    test "JSONLで再構築不能な inter_agent_message は保持する (#105)", %{store: store} do
+      :ok = AgentStates.put(envelope("a"), server: store)
+      :ok = AgentStates.append_log(log_env("a", 1), server: store)
+      :ok = AgentStates.append_log(inter_agent_env("a", "b"), server: store)
+
+      assert :ok = AgentStates.reset_history("a", server: store)
+      assert [%{"type" => "inter_agent_message"}] = AgentStates.histories(store)["a"]
     end
 
     test "未知 agent_id は noop", %{store: store} do

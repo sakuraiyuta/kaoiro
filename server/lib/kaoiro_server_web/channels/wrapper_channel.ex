@@ -225,11 +225,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
     AgentStates.append_log(envelope)
   end
 
-  # inter_agent_message envelopes carry the sender's wrapper state on the
-  # outer frame (typically tool_running) but are NOT an authoritative state
-  # update — they only route + observe. Skip the store so the agent's actual
-  # latest state from state_change envelopes is not clobbered.
-  defp store(%{"type" => "inter_agent_message"}), do: :ok
+  # inter_agent_message is transcript-only like log/result: retain it for
+  # dashboard reconnect/resume without clobbering the sender's authoritative
+  # latest state. The client fans the retained sender copy out to both peers.
+  defp store(%{"type" => "inter_agent_message"} = envelope) do
+    AgentStates.append_log(envelope)
+  end
 
   defp store(envelope), do: AgentStates.put(envelope, owner: self())
 

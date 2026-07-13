@@ -7,8 +7,8 @@ defmodule KaoiroServer.AgentStates do
   lets a late-joining client start from the current picture instead of
   waiting for the next state change.
 
-  Each entry also keeps an in-memory ring buffer of the agent's reply
-  log (`log` / `result` envelopes, ADR-0012) so an operator that joins
+  Each entry also keeps an in-memory ring buffer of the agent's transcript
+  (`log` / `result` / `inter_agent_message` envelopes, ADR-0012, #105) so an operator that joins
   or reloads recovers the recent transcript. History is memory-only and
   vanishes on restart (disk persistence is issue #24). `put/2` updates
   the latest state without touching history; `append_log/2` appends a
@@ -64,8 +64,8 @@ defmodule KaoiroServer.AgentStates do
   end
 
   @doc """
-  Appends `envelope` (a `log` / `result` reply line) to the agent's
-  history ring buffer without touching its latest state. `:ok` when the
+  Appends `envelope` (a `log` / `result` / `inter_agent_message` transcript
+  line) to the agent's history ring buffer without touching its latest state. `:ok` when the
   agent is known, `:noop` otherwise (a reply before any state arrived).
   """
   def append_log(%{"agent_id" => agent_id} = envelope, opts \\ []) do
@@ -98,12 +98,11 @@ defmodule KaoiroServer.AgentStates do
   end
 
   @doc """
-  Drops ALL of the agent's reply-log history (issue #50, ADR-0014
-  phase-2), leaving the latest state untouched. Used before a resume
-  reconstruction replays the JSONL-derived transcript, so any pre-crash
-  lines the server still holds for the same session are overwritten
-  rather than duplicated. `:ok` when the agent is known, `:noop`
-  otherwise.
+  Drops the JSONL-replayable reply-log history (issue #50, ADR-0014 phase-2),
+  leaving the latest state and `inter_agent_message` lines untouched. The
+  latter cannot be reconstructed from the SDK transcript, so deleting them
+  here would make a server-surviving resume lose peer conversation (#105).
+  `:ok` when the agent is known, `:noop` otherwise.
   """
   def reset_history(agent_id, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
@@ -265,7 +264,8 @@ defmodule KaoiroServer.AgentStates do
   def handle_call({:reset_history, agent_id}, _from, state) do
     case state do
       %{^agent_id => entry} ->
-        {:reply, :ok, Map.put(state, agent_id, %{entry | history: []})}
+        retained = Enum.filter(entry.history, &(Map.get(&1, "type") == "inter_agent_message"))
+        {:reply, :ok, Map.put(state, agent_id, %{entry | history: retained})}
 
       _ ->
         {:reply, :noop, state}
