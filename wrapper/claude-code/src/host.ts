@@ -29,6 +29,7 @@ import type {
   Question,
   ResolvedSnapshotExt,
   ResultPayload,
+  SwitchErrorExt,
   WrapperConfig,
 } from "@kaoiro/agent-common";
 import type {
@@ -79,15 +80,22 @@ import {
 /** Cap on queued user turns; send() throws beyond this (fail fast). */
 const MAX_QUEUED_TURNS = 1000;
 
-/** Adapter-static status fields available before the Claude SDK starts.
+export const CLAUDE_EFFORT_LEVELS = [
+  "low", "medium", "high", "xhigh", "max",
+] as const satisfies readonly EffortLevel[];
+
+/** Status fields available before the Claude SDK starts.
  *  The CLI uses this for the initial idle state_change so ADR-0034's
- *  first-envelope capability contract does not depend on SDK init. */
+ *  first-envelope capability contract does not depend on SDK init. Effort
+ *  starts true because the adapter accepts set_effort; once the catalog is
+ *  available #statusExt narrows it for models without effort support. */
 export function initialStatusExt(): Record<string, unknown> {
   return {
     engine: "claude-code",
     session_capabilities: {
       supports_attachments: true,
       supports_user_input_dialog: true,
+      supports_effort_switch: true,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
     },
@@ -163,6 +171,8 @@ export interface AgentHostOptions {
    * so #applyInitMeta stamps "default" on the first init report.
    */
   modelSource?: ModelSource;
+  /** Origin of an explicit startup effort. Undefined means SDK default. */
+  effortSource?: ModelSource;
   /**
    * Resume snapshot from the server (ADR-0014 F1 追補, phase-15 D8): the
    * "last effective" resolved values captured before this relaunch. Only
@@ -222,6 +232,15 @@ export class AgentHost implements EngineAdapter {
    *  constructor from options.modelSource; auto-becomes "default" when
    *  #applyInitMeta stamps a model without a prior explicit source. */
   #modelSource: ModelSource | null = null;
+  #effort: string | null = null;
+  #effortPending: string | null = null;
+  #effortLastGood: string | null = null;
+  #effortLastGoodSource: ModelSource | null = null;
+  #effortSource: ModelSource | null = null;
+  #effortResetPending = false;
+  #effortResetOnce = false;
+  #switchErrorOnce: SwitchErrorExt | null = null;
+  readonly #operatorSwitchedFields = new Set<keyof ResolvedSnapshotExt>();
   /** Resume snapshot (ADR-0014 F1 追補, phase-15 D8), set by the
    *  constructor from options.resumeSnapshot; null on a fresh spawn.
    *  When non-null, #statusExt emits ext.resume_snapshot + ext.resume_drift
@@ -285,6 +304,10 @@ export class AgentHost implements EngineAdapter {
     // (fast_mode has no launch-time source; slash_commands / context /
     // rate_limits are SDK-reported only) stay null.
     this.#modelSource = options.modelSource ?? null;
+    this.#effort = options.queryOptions?.effort ?? null;
+    this.#effortSource = options.effortSource ?? null;
+    this.#effortLastGood = this.#effort;
+    this.#effortLastGoodSource = this.#effortSource;
     this.#resumeSnapshot = options.resumeSnapshot ?? null;
     if (options.queryOptions?.model !== undefined) {
       this.#model = options.queryOptions.model;
@@ -626,7 +649,57 @@ export class AgentHost implements EngineAdapter {
    *  SDK resolves it. Next-message granularity — the active turn is unaffected.
    *  No-op before the session's first turn establishes the Query. */
   async setModel(value: string): Promise<void> {
-    await this.#query?.setModel(value);
+    const current = this.#query;
+    if (current === null) return;
+    const nextModel = this.#models?.find((model) => model.value === value);
+    const invalidEffort =
+      this.#effort !== null &&
+      nextModel !== undefined &&
+      !(nextModel.effort_levels?.includes(this.#effort as EffortLevel) ?? false);
+    if (invalidEffort) {
+      this.#effortPending = null;
+      this.#effortResetPending = true;
+      this.#effortResetOnce = true;
+      this.#emitState(this.#machine.state);
+    }
+    let modelApplied = false;
+    try {
+      await current.setModel(value);
+      modelApplied = true;
+      this.#model = value;
+      this.#modelSource = "config";
+      this.#operatorSwitchedFields.add("model");
+      this.#operatorSwitchedFields.add("model_source");
+      if (invalidEffort) {
+        // SDK 0.3.187: null clears the flag layer; undefined is dropped by
+        // JSON serialisation and would silently leave the old effort active.
+        await current.applyFlagSettings({ effortLevel: null });
+        this.#effort = null;
+        this.#effortSource = null;
+        this.#effortLastGood = null;
+        this.#effortLastGoodSource = null;
+        this.#effortResetPending = false;
+        this.#operatorSwitchedFields.add("effort");
+        this.#operatorSwitchedFields.add("effort_source");
+      }
+      this.#switchErrorOnce = null;
+      this.#emitState(this.#machine.state);
+    } catch (error) {
+      this.#effortResetPending = false;
+      this.#switchErrorOnce = {
+        kind: modelApplied && invalidEffort ? "effort" : "model",
+        requested: modelApplied && invalidEffort ? "default" : value,
+        reason:
+          modelApplied && invalidEffort
+            ? "effort_reset_failed"
+            : "control_rejected",
+        ...(modelApplied && invalidEffort && this.#effort !== null
+          ? { rolled_back_to: this.#effort }
+          : {}),
+      };
+      this.#emitState(this.#machine.state);
+      throw error;
+    }
   }
 
   /** Switch the reasoning effort for subsequent turns (#54, ADR-0020) via the
@@ -637,9 +710,39 @@ export class AgentHost implements EngineAdapter {
    *  agent-sdk-events.md model/effort 検証メモ), so the cast widens it
    *  deliberately. Next-message granularity. */
   async setEffort(level: string): Promise<void> {
-    await this.#query?.applyFlagSettings({
-      effortLevel: level as "low" | "medium" | "high" | "xhigh",
-    });
+    const current = this.#query;
+    if (current === null) return;
+    this.#effortPending = level;
+    this.#effortResetPending = false;
+    this.#emitState(this.#machine.state);
+    try {
+      await current.applyFlagSettings({
+        effortLevel: level as "low" | "medium" | "high" | "xhigh",
+      });
+      this.#effort = level;
+      this.#effortSource = "config";
+      this.#effortLastGood = level;
+      this.#effortLastGoodSource = "config";
+      this.#effortPending = null;
+      this.#operatorSwitchedFields.add("effort");
+      this.#operatorSwitchedFields.add("effort_source");
+      this.#switchErrorOnce = null;
+      this.#emitState(this.#machine.state);
+    } catch (error) {
+      this.#effort = this.#effortLastGood;
+      this.#effortSource = this.#effortLastGoodSource;
+      this.#effortPending = null;
+      this.#switchErrorOnce = {
+        kind: "effort",
+        requested: level,
+        reason: "control_rejected",
+        ...(this.#effortLastGood === null
+          ? {}
+          : { rolled_back_to: this.#effortLastGood }),
+      };
+      this.#emitState(this.#machine.state);
+      throw error;
+    }
   }
 
   /** Switch the permission mode for subsequent turns (#58). Two paths:
@@ -881,21 +984,25 @@ export class AgentHost implements EngineAdapter {
     const { next, emitted } = stepState(this.#machine, event);
     this.#machine = next;
     for (const state of emitted) {
-      this.#options.onState(
-        makeStateChange(this.#config, state, this.#now(), {}, this.#statusExt()),
-      );
+      this.#emitState(state);
     }
+  }
+
+  #emitState(state: KaoiroState): void {
+    this.#options.onState(
+      makeStateChange(this.#config, state, this.#now(), {}, this.#statusExt(true)),
+    );
   }
 
   /** Current Claude Code status meta as an ext object (#16). Empty keys are
    *  omitted so an envelope only carries what the SDK has surfaced so far.
    *  pending_permission is the authoritative pending-record (ADR-0022)
    *  carried while waiting_permission is in flight. */
-  #statusExt(): Record<string, unknown> {
+  #statusExt(consumeOneShot = false): Record<string, unknown> {
     const ext: Record<string, unknown> = { ...initialStatusExt() };
     // Session capabilities (ADR-0034 F1/F4, phase-15 15-14): advertised
-    // from the first state_change onward (adapter-static values, no SDK
-    // init await). Claude Code accepts uploads and provides the SDK's
+    // from the first state_change onward (no SDK init await). Claude Code
+    // accepts uploads and provides the SDK's
     // native AskUserQuestion — both true unconditionally today. If the
     // SDK later attaches conditions, split the constants into fields
     // and update them from init / status meta.
@@ -913,6 +1020,27 @@ export class AgentHost implements EngineAdapter {
     // does not yet reach a user-triggerable code path.
     if (this.#model !== null) ext.model = this.#model;
     if (this.#modelSource !== null) ext.model_source = this.#modelSource;
+    if (this.#effort !== null) ext.effort = this.#effort;
+    if (this.#effortSource !== null) ext.effort_source = this.#effortSource;
+    if (this.#effortPending !== null) ext.pending_effort = this.#effortPending;
+    if (this.#effortResetOnce) {
+      ext.effort_reset = true;
+      if (consumeOneShot) this.#effortResetOnce = false;
+    }
+    if (this.#switchErrorOnce !== null) {
+      ext.switch_error = this.#switchErrorOnce;
+      if (consumeOneShot) this.#switchErrorOnce = null;
+    }
+    if (this.#models !== null && this.#model !== null) {
+      const active = this.#models.find((model) => model.value === this.#model);
+      if (active !== undefined) {
+        const caps = ext.session_capabilities as Record<string, unknown>;
+        ext.session_capabilities = {
+          ...caps,
+          supports_effort_switch: (active.effort_levels?.length ?? 0) > 0,
+        };
+      }
+    }
     if (this.#cwd !== null) ext.cwd = this.#cwd;
     if (this.#slashCommands !== null) ext.slash_commands = this.#slashCommands;
     if (this.#models !== null) ext.models = this.#models;
@@ -934,7 +1062,7 @@ export class AgentHost implements EngineAdapter {
     }
     // Effective resolved settings this run (ADR-0014 F1 追補, phase-15 D8).
     // Rides every state_change so the D8 drift audit sees "what am I
-    // enforcing right now". Claude has no launch-time effort / sandbox /
+    // enforcing right now". Claude has no launch-time sandbox /
     // network_access fields; sandbox is derived from the mode's two-axis
     // mapping (ADR-0033 F2) so ext.effective still reports a comparable
     // value alongside the Codex side.
@@ -943,6 +1071,8 @@ export class AgentHost implements EngineAdapter {
     const effective: ResolvedSnapshotExt = {
       ...(this.#model !== null ? { model: this.#model } : {}),
       ...(this.#modelSource !== null ? { model_source: this.#modelSource } : {}),
+      ...(this.#effort !== null ? { effort: this.#effort } : {}),
+      ...(this.#effortSource !== null ? { effort_source: this.#effortSource } : {}),
       ...(this.#permissionMode !== null
         ? { permission_mode: this.#permissionMode as PermissionMode }
         : {}),
@@ -951,7 +1081,10 @@ export class AgentHost implements EngineAdapter {
     ext.effective = effective;
     if (this.#resumeSnapshot !== null) {
       ext.resume_snapshot = this.#resumeSnapshot;
-      ext.resume_drift = computeResumeDrift(this.#resumeSnapshot, effective);
+      ext.resume_drift = computeResumeDrift(
+        this.#resumeSnapshot,
+        effective,
+      ).filter((entry) => !this.#operatorSwitchedFields.has(entry.field));
     }
     return ext;
   }

@@ -30,6 +30,7 @@ describe("initialStatusExt", () => {
       session_capabilities: {
         supports_attachments: true,
         supports_user_input_dialog: true,
+        supports_effort_switch: true,
         supports_session_reset: true,
         session_reset_modes: ["new", "clear"],
       },
@@ -283,6 +284,7 @@ describe("AgentHost — query injection", () => {
     expect(first.ext?.session_capabilities).toEqual({
       supports_attachments: true,
       supports_user_input_dialog: true,
+      supports_effort_switch: true,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
     });
@@ -1078,6 +1080,31 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     ]);
   });
 
+  it("明示 startup effort/source を ext と SDK Options に反映する (#108)", async () => {
+    const envs: Envelope[] = [];
+    let seenOptions: Options | undefined;
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      effortSource: "config",
+      queryOptions: { effort: "high" },
+      queryFn: (args) => {
+        seenOptions = args.options;
+        async function* gen(): AsyncGenerator<SDKMessage, void> {
+          yield assistant([{ type: "text", text: "hi" }]);
+        }
+        return asQuery(gen());
+      },
+      now: () => "T",
+    });
+    await host.run();
+    expect(seenOptions?.effort).toBe("high");
+    expect(envs[0]?.ext).toMatchObject({
+      effort: "high",
+      effort_source: "config",
+      effective: { effort: "high", effort_source: "config" },
+    });
+  });
+
   it("setModel は query.setModel へエイリアスを委譲する", async () => {
     const setModel = vi.fn(async () => {});
     const queryFn = makeQueryFn((args: QueryArgs) => {
@@ -1094,7 +1121,8 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     await done;
   });
 
-  it("setEffort は applyFlagSettings({ effortLevel }) へ委譲する (max 含む)", async () => {
+  it("setEffort は pending を出して control ack で即時 commit する (max 含む)", async () => {
+    const envs: Envelope[] = [];
     const applyFlagSettings = vi.fn(async () => {});
     const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
@@ -1102,10 +1130,110 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       }
       return asQuery(gen(), async () => {}, undefined, { applyFlagSettings });
     });
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e), queryFn, now: () => "T",
+    });
     const done = host.run();
     await host.setEffort("max");
     expect(applyFlagSettings).toHaveBeenCalledWith({ effortLevel: "max" });
+    expect(envs.at(-2)?.ext.pending_effort).toBe("max");
+    expect(envs.at(-1)?.ext).toMatchObject({
+      effort: "max", effort_source: "config",
+      effective: { effort: "max", effort_source: "config" },
+    });
+    expect(envs.at(-1)?.ext.pending_effort).toBeUndefined();
+    host.close();
+    await done;
+  });
+
+  it("setEffort reject は last-good へ rollback して loud failure を出す", async () => {
+    const envs: Envelope[] = [];
+    const applyFlagSettings = vi.fn(async () => {
+      throw new Error("rejected");
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), async () => {}, undefined, { applyFlagSettings });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e), queryFn, now: () => "T",
+      effortSource: "config", queryOptions: { effort: "low" },
+    });
+    const done = host.run();
+    await expect(host.setEffort("high")).rejects.toThrow("rejected");
+    expect(envs.at(-1)?.ext).toMatchObject({
+      effort: "low", effort_source: "config",
+      switch_error: {
+        kind: "effort", requested: "high", reason: "control_rejected",
+        rolled_back_to: "low",
+      },
+    });
+    host.close();
+    await done;
+  });
+
+  it("新modelで無効なeffortをnull clearし effort_reset を明示する", async () => {
+    const envs: Envelope[] = [];
+    const setModel = vi.fn(async () => {});
+    const applyFlagSettings = vi.fn(async () => {});
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "default" });
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        setModel, applyFlagSettings, supportedModels: async () => modelInfos,
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e), queryFn, now: () => "T",
+      effortSource: "config", queryOptions: { effort: "high" },
+    });
+    const done = host.run();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await host.setModel("haiku");
+    expect(setModel).toHaveBeenCalledWith("haiku");
+    expect(applyFlagSettings).toHaveBeenCalledWith({ effortLevel: null });
+    expect(envs.some((e) => e.ext.effort_reset === true)).toBe(true);
+    expect(envs.at(-1)?.ext.effort).toBeUndefined();
+    expect(envs.at(-1)?.ext.session_capabilities).toMatchObject({
+      supports_effort_switch: false,
+    });
+    host.close();
+    await done;
+  });
+
+  it("effort reset reject は half-state を残して loud failure を出す", async () => {
+    const envs: Envelope[] = [];
+    const applyFlagSettings = vi.fn(async () => {
+      throw new Error("clear rejected");
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "default" });
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        setModel: async () => {}, applyFlagSettings,
+        supportedModels: async () => modelInfos,
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e), queryFn, now: () => "T",
+      effortSource: "config", queryOptions: { effort: "high" },
+    });
+    const done = host.run();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect(host.setModel("haiku")).rejects.toThrow("clear rejected");
+    expect(envs.at(-1)?.ext).toMatchObject({
+      model: "haiku", effort: "high",
+      switch_error: {
+        kind: "effort", requested: "default",
+        reason: "effort_reset_failed", rolled_back_to: "high",
+      },
+    });
     host.close();
     await done;
   });

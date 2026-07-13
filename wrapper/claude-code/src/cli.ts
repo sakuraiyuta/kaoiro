@@ -18,7 +18,11 @@
 
 import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory } from "./history.js";
-import { AgentHost, initialStatusExt } from "./host.js";
+import {
+  AgentHost,
+  CLAUDE_EFFORT_LEVELS,
+  initialStatusExt,
+} from "./host.js";
 import {
   InterAgentTool,
   LIST_AGENTS_TOOL_FQN,
@@ -129,6 +133,18 @@ async function main(): Promise<void> {
       : envDefaultModel !== undefined
         ? "env"
         : undefined;
+  const resolvedEffort =
+    config.effort !== undefined &&
+    (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(config.effort)
+      ? config.effort as (typeof CLAUDE_EFFORT_LEVELS)[number]
+      : undefined;
+  const resolvedEffortSource: ModelSource | undefined =
+    resolvedEffort !== undefined ? "config" : undefined;
+  if (config.effort !== undefined && resolvedEffort === undefined) {
+    process.stderr.write(
+      `config warn: unsupported claude-code effort '${config.effort}', ignored\n`,
+    );
+  }
 
   // Engine-mismatch config warns (phase-15 15-7). Codex-only fields
   // (sandbox, network_access) surface loudly instead of being silently
@@ -148,9 +164,7 @@ async function main(): Promise<void> {
   // Startup resolved-config summary (phase-15 15-5): one stderr line with
   // the engine-relevant fields and their source tags. The runner tee path
   // surfaces this in operator logs. Format follows the plan's Acceptance
-  // Criteria; effort is Claude-side unused so omitted here (Claude has no
-  // launch-time effort field). ignored-flags mark codex-only fields when
-  // they were nonetheless supplied.
+  // Criteria. ignored-flags mark codex-only fields when they were supplied.
   {
     const resolvedModel = config.model ?? envDefaultModel ?? "<default>";
     const resolvedModelTag =
@@ -160,6 +174,10 @@ async function main(): Promise<void> {
     const permissionModeSource: string =
       config.permission_mode !== undefined ? "config" : "default";
     const allowedToolsCount = config.allowed_tools?.length ?? 0;
+    const effortPart =
+      resolvedEffort === undefined
+        ? ""
+        : `effort=${resolvedEffort}(source=${resolvedEffortSource}) `;
     const sandboxPart =
       config.sandbox !== undefined
         ? ` sandbox=${config.sandbox}(ignored)`
@@ -171,6 +189,7 @@ async function main(): Promise<void> {
     process.stderr.write(
       `[wrapper resolved] engine=claude-code ` +
         `model=${resolvedModel}${resolvedModelTag} ` +
+        `${effortPart}` +
         `permission_mode=${config.permission_mode ?? "default"}(source=${permissionModeSource}) ` +
         `allowed_tools=${allowedToolsCount}` +
         `${sandboxPart}${networkAccessPart} ` +
@@ -413,6 +432,9 @@ async function main(): Promise<void> {
     ...(resolvedModelSource !== undefined
       ? { modelSource: resolvedModelSource }
       : {}),
+    ...(resolvedEffortSource !== undefined
+      ? { effortSource: resolvedEffortSource }
+      : {}),
     // Resume snapshot relayed by the runner on a resume launch (ADR-0014
     // F1 追補, phase-15 D8). Undefined on a fresh spawn.
     ...(config.resume_snapshot !== undefined
@@ -427,14 +449,14 @@ async function main(): Promise<void> {
       // default. The engine-split env KAOIRO_CLAUDE_CODE_DEFAULT_MODEL is
       // primary; legacy KAOIRO_WRAPPER_DEFAULT_MODEL still resolves for
       // one release window with a deprecation warn (tracked in issue
-      // #103, removed next release). setModel from the dashboard still
-      // overrides at runtime. config.effort is codex-only for now (Claude
-      // effort switches post-launch via set_effort, #54).
+      // #103, removed next release). Dashboard controls can still override
+      // model / effort at runtime.
       ...(config.model !== undefined
         ? { model: config.model }
         : envDefaultModel !== undefined
           ? { model: envDefaultModel }
           : {}),
+      ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
       // The kaoiro in-process MCP server is always registered under the
       // server-connected model (phase-8). send_to_agent surfaces as
       // mcp__kaoiro__send_to_agent and is NOT in the read-only default
