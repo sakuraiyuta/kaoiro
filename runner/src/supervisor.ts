@@ -322,9 +322,23 @@ interface ChildEntry {
   pendingReset?: PendingReset;
 }
 
+/** Fields the runner's config watcher can hot-swap while the supervisor
+ *  keeps running (see cli.ts config-reload dispatch). Applied all-or-none
+ *  each reload — the caller passes the FULL current value for every field
+ *  (undefined for codex fields means "clear it"), so a config that drops
+ *  the `codex` block leaves no stale plan behind. Running children keep
+ *  their own launch-time values; only wrappers spawned AFTER the update
+ *  see the new ones. */
+export interface SupervisorRuntimeUpdate {
+  cwdAllowlist: string[];
+  wrapperServerUrl: string;
+  codexAuthMode: CodexAuthMode | undefined;
+  codexChatgptPlan: ChatGptPlan | undefined;
+}
+
 export class Supervisor {
   readonly #hostId: string;
-  readonly #cwdAllowlist: string[];
+  #cwdAllowlist: string[];
   readonly #launch: LaunchFn;
   readonly #sendResult: (result: SpawnResult) => void;
   readonly #sendSessions: (sessions: RunnerSessions) => void;
@@ -336,9 +350,9 @@ export class Supervisor {
     engine: EngineKind,
   ) => boolean;
   readonly #now: () => number;
-  readonly #wrapperServerUrl: string;
-  readonly #codexAuthMode: CodexAuthMode | undefined;
-  readonly #codexChatgptPlan: ChatGptPlan | undefined;
+  #wrapperServerUrl: string;
+  #codexAuthMode: CodexAuthMode | undefined;
+  #codexChatgptPlan: ChatGptPlan | undefined;
   readonly #children = new Map<string, ChildEntry>();
   /** session_ids currently being resumed — the F4 local lock against a second
    *  concurrent resume of the same session. */
@@ -357,6 +371,20 @@ export class Supervisor {
     this.#wrapperServerUrl = options.wrapperServerUrl;
     this.#codexAuthMode = options.codexAuthMode;
     this.#codexChatgptPlan = options.codexChatgptPlan;
+  }
+
+  /** Hot-swap runtime config on a config-file reload. Full replacement per
+   *  field — the caller provides the current value for every field, so the
+   *  supervisor never carries stale values from a prior config revision.
+   *  Existing children are untouched: only wrappers spawned AFTER this call
+   *  see the new values (relaunches use `entry.parsed`, not the config, so
+   *  a crashed agent relaunches with the SAME config as before but reads
+   *  the wrapperServerUrl from the current value). */
+  updateRuntimeConfig(update: SupervisorRuntimeUpdate): void {
+    this.#cwdAllowlist = update.cwdAllowlist;
+    this.#wrapperServerUrl = update.wrapperServerUrl;
+    this.#codexAuthMode = update.codexAuthMode;
+    this.#codexChatgptPlan = update.codexChatgptPlan;
   }
 
   /** Handles a server `spawn`: validates, enforces the cwd allow-list, the

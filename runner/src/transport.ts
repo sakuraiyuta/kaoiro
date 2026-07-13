@@ -37,10 +37,26 @@ export interface RunnerLinkOptions {
   onResetSession?: (payload: unknown) => void;
 }
 
+// exactOptionalPropertyTypes: true 下では、`Pick<RunnerLinkOptions, ...>` の
+// optional な key に `undefined` を代入できない。ここは "常に該当 key を持ち、
+// 値は関数 or undefined" が意図なので、明示的に `| undefined` を含める。
+type ChannelCallback = (payload: unknown) => void;
+interface ChannelCallbacks {
+  onSpawn: ChannelCallback | undefined;
+  onStop: ChannelCallback | undefined;
+  onRestart: ChannelCallback | undefined;
+  onEnumerateSessions: ChannelCallback | undefined;
+  onSwitchSession: ChannelCallback | undefined;
+  onResetSession: ChannelCallback | undefined;
+}
+
 export class RunnerLink {
-  readonly #socket: Socket;
-  readonly #channel: Channel;
-  readonly #hostId: string;
+  #socket: Socket;
+  #channel: Channel;
+  #hostId: string;
+  #register: RunnerRegister;
+  readonly #token: string | undefined;
+  readonly #callbacks: ChannelCallbacks;
   readonly #heartbeat: ReturnType<typeof setInterval>;
 
   /**
@@ -50,20 +66,51 @@ export class RunnerLink {
    */
   constructor(serverUrl: string, hostId: string, options: RunnerLinkOptions) {
     this.#hostId = hostId;
-    this.#socket = new Socket(serverUrl, {
+    this.#register = options.register;
+    this.#token = options.token;
+    this.#callbacks = {
+      onSpawn: options.onSpawn,
+      onStop: options.onStop,
+      onRestart: options.onRestart,
+      onEnumerateSessions: options.onEnumerateSessions,
+      onSwitchSession: options.onSwitchSession,
+      onResetSession: options.onResetSession,
+    };
+    const wired = this.#wire(serverUrl, hostId);
+    this.#socket = wired.socket;
+    this.#channel = wired.channel;
+
+    // Liveness only while connected: pushing on a dead socket would just
+    // pile up in the buffer to flush as a burst on reconnect. Reads
+    // #socket / #channel / #hostId on every tick so a mid-flight reconnect
+    // starts pinging the new channel without touching the interval.
+    this.#heartbeat = setInterval(() => {
+      if (this.#socket.isConnected()) {
+        this.#channel.push("heartbeat", buildHeartbeat(this.#hostId));
+      }
+    }, options.heartbeatMs);
+  }
+
+  /** Builds a socket + channel + join for the given (serverUrl, hostId).
+   *  Callbacks come from `this.#callbacks` and the register payload from
+   *  `this.#register`, so a reconnect uses the values current AT the moment
+   *  the reconnect fires — not the ones captured in the constructor. */
+  #wire(serverUrl: string, hostId: string): { socket: Socket; channel: Channel } {
+    const socket = new Socket(serverUrl, {
       transport: WebSocket,
-      params: options.token === undefined ? {} : { token: options.token },
+      params: this.#token === undefined ? {} : { token: this.#token },
     });
-    this.#socket.connect();
-    this.#channel = this.#socket.channel(`runner:${hostId}`);
+    socket.connect();
+    const channel = socket.channel(`runner:${hostId}`);
 
     // Re-register on every socket (re)open: the server holds host state in
     // memory, so a reconnect after a deploy must re-announce. The push is
     // buffered by the client until the channel rejoins (mirrors the wrapper's
-    // ServerLink re-announce).
-    this.#socket.onOpen(() => {
-      this.#channel
-        .push("register", options.register)
+    // ServerLink re-announce). Reads `this.#register` on every open so a
+    // mid-connection updateRegister rides the next re-announce too.
+    socket.onOpen(() => {
+      channel
+        .push("register", this.#register)
         .receive("ok", () => {
           process.stderr.write(`runner: registered host=${this.#hostId}\n`);
         })
@@ -77,22 +124,22 @@ export class RunnerLink {
     // Operator lifecycle control, relayed by the server onto this topic
     // (ADR-0023). Payloads are forwarded opaquely to the supervisor, which
     // validates them.
-    this.#channel.on("spawn", (payload: unknown) => options.onSpawn?.(payload));
-    this.#channel.on("stop", (payload: unknown) => options.onStop?.(payload));
-    this.#channel.on("restart", (payload: unknown) =>
-      options.onRestart?.(payload),
+    channel.on("spawn", (payload: unknown) => this.#callbacks.onSpawn?.(payload));
+    channel.on("stop", (payload: unknown) => this.#callbacks.onStop?.(payload));
+    channel.on("restart", (payload: unknown) =>
+      this.#callbacks.onRestart?.(payload),
     );
-    this.#channel.on("enumerate_sessions", (payload: unknown) =>
-      options.onEnumerateSessions?.(payload),
+    channel.on("enumerate_sessions", (payload: unknown) =>
+      this.#callbacks.onEnumerateSessions?.(payload),
     );
-    this.#channel.on("switch_session", (payload: unknown) =>
-      options.onSwitchSession?.(payload),
+    channel.on("switch_session", (payload: unknown) =>
+      this.#callbacks.onSwitchSession?.(payload),
     );
-    this.#channel.on("reset_session", (payload: unknown) =>
-      options.onResetSession?.(payload),
+    channel.on("reset_session", (payload: unknown) =>
+      this.#callbacks.onResetSession?.(payload),
     );
 
-    this.#channel
+    channel
       .join()
       .receive("error", (reason: unknown) => {
         process.stderr.write(
@@ -103,13 +150,7 @@ export class RunnerLink {
         process.stderr.write("RunnerLink join timeout\n");
       });
 
-    // Liveness only while connected: pushing on a dead socket would just
-    // pile up in the buffer to flush as a burst on reconnect.
-    this.#heartbeat = setInterval(() => {
-      if (this.#socket.isConnected()) {
-        this.#channel.push("heartbeat", buildHeartbeat(this.#hostId));
-      }
-    }, options.heartbeatMs);
+    return { socket, channel };
   }
 
   /** Reports a spawn outcome back to the operators (via the server). */
@@ -128,6 +169,48 @@ export class RunnerLink {
    *  confirms completion. ok=false is loud + closed-vocab. */
   sendResetResult(result: SessionResetResult): void {
     this.#channel.push("session_reset_result", result);
+  }
+
+  /** Push a new register payload on the current channel. Used on config
+   *  reload when host_id / server_url are UNCHANGED but persona trust /
+   *  capabilities / engines changed. The server's `handle_in("register")`
+   *  upserts the HostRegistry entry (`Map.put`), so a re-push is a valid
+   *  in-place update — no reconnect needed. A disconnected socket is a
+   *  silent no-op: the next auto-reconnect's `onOpen` will read the
+   *  updated `#register` and announce it. */
+  updateRegister(register: RunnerRegister): void {
+    this.#register = register;
+    if (this.#socket.isConnected()) {
+      this.#channel
+        .push("register", register)
+        .receive("ok", () => {
+          process.stderr.write(
+            `runner: re-registered host=${this.#hostId}\n`,
+          );
+        })
+        .receive("error", (reason: unknown) => {
+          process.stderr.write(
+            `runner: re-register rejected: ${JSON.stringify(reason)}\n`,
+          );
+        });
+    }
+  }
+
+  /** Close the current socket/channel and open a fresh one under a new
+   *  (serverUrl, hostId, register). Used on config reload when host_id or
+   *  server_url changed. Existing wrappers spawned by the supervisor keep
+   *  their own connections to the OLD wrapper URL — that propagation is a
+   *  deferred item, not attempted here. The server-side old-host entry is
+   *  released by RunnerChannel.terminate when the disconnect propagates
+   *  (`HostRegistry.drop` under owner fencing). */
+  reconnect(serverUrl: string, hostId: string, register: RunnerRegister): void {
+    this.#channel.leave();
+    this.#socket.disconnect();
+    this.#hostId = hostId;
+    this.#register = register;
+    const wired = this.#wire(serverUrl, hostId);
+    this.#socket = wired.socket;
+    this.#channel = wired.channel;
   }
 
   /** Stops heartbeating, leaves the channel and closes the socket. */

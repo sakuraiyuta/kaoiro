@@ -782,3 +782,91 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     expect(h.resetResults).toHaveLength(1);
   });
 });
+
+describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
+  it("新 cwdAllowlist を適用し、旧 cwd の spawn は cwd_not_found で拒否する", () => {
+    const h = harness({ cwdAllowlist: ["/old/path"] });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/new/path"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: undefined,
+      codexChatgptPlan: undefined,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/old/path" });
+    expect(h.results.at(-1)).toEqual({
+      version: "0",
+      host_id: "lab-pc-1",
+      agent_id: spawnMsg.agent_id,
+      ok: false,
+      reason: "cwd_not_found",
+    });
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      agent_id: "lab-pc-1.claude-b",
+      cwd: "/new/path",
+    });
+    expect(h.results.at(-1)?.ok).toBe(true);
+  });
+
+  it("新 wrapperServerUrl を fallback として次の spawn の WrapperConfig に流し込む", () => {
+    const h = harness({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://old:4000/wrapper",
+    });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://new:5000/wrapper",
+      codexAuthMode: undefined,
+      codexChatgptPlan: undefined,
+    });
+    // server_url を spawn 側で欠落させると fallback が使われる
+    const { server_url: _drop, ...withoutUrl } = spawnMsg;
+    void _drop;
+    h.sup.handleSpawn({ ...withoutUrl, cwd: "/cwd" });
+    expect(h.configs.at(-1)?.server_url).toBe("ws://new:5000/wrapper");
+  });
+
+  it("codexChatgptPlan を差替え、以降の codex spawn の WrapperConfig に載る", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: "chatgpt",
+      codexChatgptPlan: "pro",
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
+    expect(h.configs.at(-1)?.codex_chatgpt_plan).toBe("pro");
+    expect(h.configs.at(-1)?.codex_auth_mode).toBe("chatgpt");
+  });
+
+  it("codexChatgptPlan を undefined に戻すと以降の codex spawn からも消える", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: "chatgpt",
+      codexChatgptPlan: "pro",
+    });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: "chatgpt",
+      codexChatgptPlan: undefined,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
+    expect(h.configs.at(-1)?.codex_chatgpt_plan).toBeUndefined();
+  });
+
+  it("既存稼働中の child は kill されない (適用は将来の spawn だけ)", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd" });
+    const running = h.last();
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/other"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: undefined,
+      codexChatgptPlan: undefined,
+    });
+    expect(running.kills).toBe(0);
+  });
+});
