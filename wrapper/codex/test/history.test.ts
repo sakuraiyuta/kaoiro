@@ -132,6 +132,171 @@ describe("Codex rollout history reconstruction (#106)", () => {
     ]);
   });
 
+  it("0.144.1 code-mode rollout の実 tool 名と block output を復元する", () => {
+    const runnerHeader = "Script completed\nWall time 0.2 seconds\nOutput:\n";
+    const jsonl = [
+      line({
+        type: "custom_tool_call",
+        call_id: "code-shell",
+        name: "exec",
+        input: [
+          "const r = await tools.exec_command({",
+          '  cmd: "printf KAOIRO_106_SHELL"',
+          "});",
+          "text(r.output);",
+        ].join("\n"),
+      }),
+      line({
+        type: "custom_tool_call_output",
+        call_id: "code-shell",
+        output: [
+          { type: "input_text", text: runnerHeader },
+          { type: "input_text", text: "KAOIRO_106_SHELL" },
+        ],
+      }),
+      line({
+        type: "custom_tool_call",
+        call_id: "code-mcp",
+        name: "exec",
+        input:
+          "const result = await tools.mcp__kaoiro__list_agents({});\ntext(result);",
+      }),
+      line({
+        type: "custom_tool_call_output",
+        call_id: "code-mcp",
+        output: [
+          { type: "input_text", text: runnerHeader },
+          { type: "input_text", text: '{"agents":[]}' },
+        ],
+      }),
+    ].join("\n");
+
+    expect(
+      payloads(
+        reconstructCodexHistory(jsonl, CONFIG, "uuid-code-mode", () => "T"),
+      ),
+    ).toEqual([
+      {
+        kind: "tool_use",
+        tool_name: "shell",
+        tool_use_id: "code-shell",
+        input: {
+          command: [
+            "const r = await tools.exec_command({",
+            '  cmd: "printf KAOIRO_106_SHELL"',
+            "});",
+            "text(r.output);",
+          ].join("\n"),
+        },
+      },
+      {
+        kind: "tool_result",
+        tool_name: "shell",
+        tool_use_id: "code-shell",
+        output: "KAOIRO_106_SHELL",
+      },
+      {
+        kind: "tool_use",
+        tool_name: "mcp__kaoiro__list_agents",
+        tool_use_id: "code-mcp",
+        input: {
+          arguments:
+            "const result = await tools.mcp__kaoiro__list_agents({});\ntext(result);",
+        },
+      },
+      {
+        kind: "tool_result",
+        tool_name: "mcp__kaoiro__list_agents",
+        tool_use_id: "code-mcp",
+        output: '{"agents":[]}',
+      },
+    ]);
+  });
+
+  it("code-mode の曖昧な tool 名と output variant は安全側へ fallback する", () => {
+    const runnerHeader = "Script completed\nWall time 0.2 seconds\nOutput:\n";
+    const jsonl = [
+      line({
+        type: "custom_tool_call",
+        call_id: "ambiguous",
+        name: "exec",
+        input: "await tools.first({}); await tools.second({});",
+      }),
+      line({
+        type: "custom_tool_call_output",
+        call_id: "ambiguous",
+        output: "legacy string",
+      }),
+      line({
+        type: "custom_tool_call",
+        call_id: "dynamic",
+        name: "exec",
+        input: "await tools[name]({});",
+      }),
+      line({
+        type: "custom_tool_call_output",
+        call_id: "dynamic",
+        output: [
+          { type: "future_block", text: "ignored" },
+          { type: "input_text", text: "first" },
+          { type: "input_text", text: "second" },
+        ],
+      }),
+      line({
+        type: "custom_tool_call",
+        call_id: "header-only",
+        name: "exec",
+        input: "await tools.mcp__kaoiro__whoami({});",
+      }),
+      line({
+        type: "custom_tool_call_output",
+        call_id: "header-only",
+        output: [{ type: "input_text", text: runnerHeader }],
+      }),
+    ].join("\n");
+
+    expect(
+      payloads(reconstructCodexHistory(jsonl, CONFIG, "uuid-edge", () => "T")),
+    ).toEqual([
+      {
+        kind: "tool_use",
+        tool_name: "shell",
+        tool_use_id: "ambiguous",
+        input: { command: "await tools.first({}); await tools.second({});" },
+      },
+      {
+        kind: "tool_result",
+        tool_name: "shell",
+        tool_use_id: "ambiguous",
+        output: "legacy string",
+      },
+      {
+        kind: "tool_use",
+        tool_name: "shell",
+        tool_use_id: "dynamic",
+        input: { command: "await tools[name]({});" },
+      },
+      {
+        kind: "tool_result",
+        tool_name: "shell",
+        tool_use_id: "dynamic",
+        output: "first\nsecond",
+      },
+      {
+        kind: "tool_use",
+        tool_name: "mcp__kaoiro__whoami",
+        tool_use_id: "header-only",
+        input: { arguments: "await tools.mcp__kaoiro__whoami({});" },
+      },
+      {
+        kind: "tool_result",
+        tool_name: "mcp__kaoiro__whoami",
+        tool_use_id: "header-only",
+        output: "",
+      },
+    ]);
+  });
+
   it("reasoning/developer/event_msg/破損行をskipしtimestamp fallbackを使う", () => {
     const jsonl = [
       line({ type: "reasoning", summary: [], encrypted_content: "opaque" }),

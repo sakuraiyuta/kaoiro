@@ -54,15 +54,54 @@ function parseArguments(raw: unknown): Record<string, unknown> {
   return { arguments: raw };
 }
 
+/** Codex code mode persists every nested tool call as custom `exec` and puts
+ *  the real tool name only in the JavaScript source (`tools.<name>(...)`).
+ *  Recover the name when there is exactly one call; ambiguous/malformed code
+ *  stays `shell` rather than inventing a misleading tool identity. */
+function codeModeToolName(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const names = new Set<string>();
+  for (const match of input.matchAll(/\btools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
+    const name = match[1];
+    if (name !== undefined) names.add(name);
+  }
+  if (names.size !== 1) return null;
+  const [name] = names;
+  return name === "exec_command" ? "shell" : (name ?? null);
+}
+
 function toolName(payload: Record<string, unknown>): string | null {
   if (typeof payload.name !== "string" || payload.name === "") return null;
   if (payload.type === "custom_tool_call" && payload.name === "exec") {
-    return "shell";
+    return codeModeToolName(payload.input) ?? "shell";
   }
   if (typeof payload.namespace === "string" && payload.namespace !== "") {
     return `mcp__${payload.namespace}__${payload.name}`;
   }
   return payload.name;
+}
+
+const CODE_MODE_OUTPUT_HEADER =
+  /^Script (?:completed|running)\b[\s\S]*?\nOutput:\n?$/;
+
+/** Output is a string in old/direct fixtures, but Codex 0.144.1 code mode
+ *  persists an array of input_text blocks: a runner status header followed
+ *  by the actual nested tool result. Preserve every real text block and omit
+ *  only that synthetic header so replay matches the live tool_result. */
+function toolOutputText(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (!Array.isArray(raw)) return "";
+  const parts = raw.flatMap((block) => {
+    if (typeof block !== "object" || block === null) return [];
+    const record = block as Record<string, unknown>;
+    return record.type === "input_text" && typeof record.text === "string"
+      ? [record.text]
+      : [];
+  });
+  if (CODE_MODE_OUTPUT_HEADER.test(parts[0] ?? "")) {
+    parts.shift();
+  }
+  return parts.join("\n");
 }
 
 function userPayload(text: string): LogPayload {
@@ -121,7 +160,7 @@ function lineToPayloads(
   ) {
     const callId =
       typeof payload.call_id === "string" ? payload.call_id : undefined;
-    const output = typeof payload.output === "string" ? payload.output : "";
+    const output = toolOutputText(payload.output);
     const entry: LogEntry = {
       kind: "tool_result",
       ...(callId === undefined ? {} : { tool_use_id: callId }),

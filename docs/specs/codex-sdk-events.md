@@ -108,6 +108,15 @@ dashboard の「確認待ち」と `whoami` の field omit を同じ unknown 状
 - 保管: 初回 `thread.started` で得た `thread_id` (UUIDv7) を kaoiro の `session_id` として保持し、`AgentStates` / `SessionPointers` ([ADR-0014](../adr/0014-session-resume-and-restore.md)) に書き込む。
 - 復帰: 復元指示時に `codex.resumeThread(thread_id)` で再開。
 - 列挙: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を固定深度の日付 tree として新しい順に async 走査し、先頭行 `session_meta` の `cwd` フィールドで照合する (実ファイルで確認済み)。存在確認は一致時点で早期 return し、spawn / resume / `switch_session` の hot path で runner event loop を block しない (#100)。`~/.codex/state_5.sqlite` の index は internal のため依存しない。
+- 履歴 replay (#106): SDK の `resumeThread()` は過去 event を再 emit しないため、
+  wrapper が rollout の `response_item` を user / assistant / tool_use /
+  tool_result log へ投影する。Codex 0.144.1 の code-mode tool は実 tool 種別に
+  かかわらず `custom_tool_call{name:"exec"}` として永続され、実名は
+  `input` 内の `tools.<name>(...)` にだけ残る。単一呼び出しならそこから実名を
+  復元し、`exec_command` は live 表示と同じ `shell` に正規化する。複数・不明時は
+  推測せず `shell` fallback とする。対応する `custom_tool_call_output.output` は
+  string の旧形に加えて `input_text[]` 形を受理し、code-mode runner header を
+  除いた実出力を tool_result として再構築する。
 
 ### 実機検証メモ (2026-07-11、ChatGPT-plan 認証)
 
