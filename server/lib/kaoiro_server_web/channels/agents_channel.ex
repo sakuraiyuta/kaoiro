@@ -486,6 +486,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # runner still receives the `{host_id, cwd}` shape it expects.
     with :ok <- require_operator(socket),
          {:ok, host_id} <- fetch_host_id(payload),
+         {:ok, host} <- fetch_host(host_id),
+         {:ok, _engine} <- fetch_allowed_engine(host, payload),
          {:ok, enriched} <- resolve_enumerate_cwd(payload) do
       relay_to_runner(socket, enriched, host_id, "enumerate_sessions")
     else
@@ -506,6 +508,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
          :ok <- require_disconnected(agent_id),
          {:ok, persona} <- agent_persona(agent_id),
          {:ok, session_id, cwd, engine} <- session_pointer(agent_id),
+         {:ok, host} <- fetch_host(host_id_of(agent_id)),
+         {:ok, engine} <- fetch_allowed_engine(host, %{"engine" => engine}),
          {:ok, spawn_payload} <-
            build_restore_payload(agent_id, persona, cwd, session_id, engine) do
       KaoiroServerWeb.Endpoint.broadcast(
@@ -955,6 +959,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp resume_disconnected(agent_id, session_id, socket) do
     with {:ok, persona} <- agent_persona(agent_id),
          {:ok, _sid, cwd, engine} <- session_pointer(agent_id),
+         {:ok, host} <- fetch_host(host_id_of(agent_id)),
+         {:ok, engine} <- fetch_allowed_engine(host, %{"engine" => engine}),
          {:ok, spawn_payload} <-
            build_restore_payload(agent_id, persona, cwd, session_id, engine) do
       KaoiroServerWeb.Endpoint.broadcast(

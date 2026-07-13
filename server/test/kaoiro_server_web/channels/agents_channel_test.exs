@@ -1595,6 +1595,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "operator の stop / restart / enumerate_sessions を runner topic へ relay する" do
       host_id = "lab-pc-2"
+      register_host(host_id)
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
 
@@ -1729,6 +1730,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "operator の restore: 同一 agent_id を resume 付きで runner へ再 spawn" do
       host_id = "lab-pc-1"
       agent_id = "lab-pc-1.rev1"
+      register_host(host_id)
       disconnect_with_session(agent_id, "sess-rev-1")
       :ok = SessionPointers.record(agent_id, "sess-rev-1", "/home/user/proj")
       # Flush the async cast before the handler reads the pointer.
@@ -1747,6 +1749,22 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert payload["cwd"] == "/home/user/proj"
       assert payload["persona"] == @ao
       assert is_binary(payload["token"])
+    end
+
+    test "operator の restore: host が pointer の engine を宣言しなければ engine_not_supported" do
+      host_id = "lab-pc-restore-capability"
+      agent_id = host_id <> ".rev"
+      register_host(host_id, capabilities: ["claude-code"])
+      disconnect_with_session(agent_id, "sess-codex")
+      :ok = SessionPointers.record(agent_id, "sess-codex", "/home/user/proj", "codex")
+      _ = SessionPointers.get(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => agent_id})
+
+      assert_reply ref, :error, %{reason: "engine_not_supported"}
+      refute_broadcast "spawn", %{}
     end
 
     test "session pointer が無ければ no_session" do
@@ -1795,6 +1813,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # の persona と SessionPointers の pointer は DETS で残っている状態。
       host_id = "lab-pc-1"
       agent_id = "lab-pc-1.after-restart"
+      register_host(host_id)
 
       :ok = AgentDirectory.record(agent_id, @ao)
       # Flush the async cast so the fetch guard reads the recorded entry.
@@ -1843,6 +1862,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "切断済み agent の resume_session は restore と同経路で spawn を中継" do
       host_id = "lab-pc-1"
       agent_id = "lab-pc-1.dc-swap"
+      register_host(host_id)
 
       :ok =
         AgentStates.put(%{
@@ -1876,6 +1896,39 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert payload["cwd"] == "/home/user/proj"
       assert payload["agent_id"] == agent_id
       refute_broadcast "switch_session", %{}
+    end
+
+    test "切断済み agent の resume_session: host が pointer の engine を宣言しなければ engine_not_supported" do
+      host_id = "lab-pc-resume-capability"
+      agent_id = host_id <> ".dc"
+      register_host(host_id, capabilities: ["claude-code"])
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "persona" => @ao,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "disconnected",
+          "session_id" => "old-sess"
+        })
+
+      :ok = SessionPointers.record(agent_id, "old-sess", "/home/user/proj", "codex")
+      _ = SessionPointers.get(agent_id)
+      :ok = AgentDirectory.record(agent_id, @ao)
+      _ = AgentDirectory.get(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "resume_session", %{
+          "agent_id" => agent_id,
+          "session_id" => "new-sess"
+        })
+
+      assert_reply ref, :error, %{reason: "engine_not_supported"}
+      refute_broadcast "spawn", %{}
     end
 
     test "切断済みで session pointer に cwd が無ければ no_session" do
@@ -1961,6 +2014,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "cwd 省略 + agent_id 指定は SessionPointers から cwd を補完して runner へ中継" do
       host_id = "lab-pc-enum"
       agent_id = "lab-pc-enum.a"
+      register_host(host_id)
       put_agent(agent_id)
       :ok = SessionPointers.record(agent_id, nil, "/home/user/proj")
       SessionPointers.get(agent_id)
@@ -1982,6 +2036,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "cwd 明示指定は補完せずそのまま中継 (LaunchDialog 経路)" do
       host_id = "lab-pc-enum2"
+      register_host(host_id)
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
 
@@ -1996,9 +2051,27 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert payload["cwd"] == "/home/user/proj"
     end
 
+    test "client 指定 engine を host が宣言しなければ engine_not_supported" do
+      host_id = "lab-pc-enum-capability"
+      register_host(host_id, capabilities: ["claude-code"])
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "enumerate_sessions", %{
+          "host_id" => host_id,
+          "cwd" => "/home/user/proj",
+          "engine" => "codex"
+        })
+
+      assert_reply ref, :error, %{reason: "engine_not_supported"}
+      refute_broadcast "enumerate_sessions", %{}
+    end
+
     test "SessionPointers に cwd 記録が無ければ no_session" do
       host_id = "lab-pc-enum3"
       agent_id = "lab-pc-enum3.a"
+      register_host(host_id)
       put_agent(agent_id)
       socket = join_as(:operator)
 
@@ -2013,6 +2086,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "cwd も agent_id も無ければ invalid_cwd" do
       host_id = "lab-pc-enum4"
+      register_host(host_id)
       socket = join_as(:operator)
 
       ref = push(socket, "enumerate_sessions", %{"host_id" => host_id})
