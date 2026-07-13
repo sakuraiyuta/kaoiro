@@ -24,7 +24,13 @@ const CONFIG: WrapperConfig = {
 describe("initialStatusExt", () => {
   it("initial idle に config-static capabilities を stamp する (#107)", () => {
     const config = { ...CONFIG, model: "gpt-5.6-sol" };
-    const initial = makeStateChange(config, "idle", "T", {}, initialStatusExt(config));
+    const initial = makeStateChange(
+      config,
+      "idle",
+      "T",
+      {},
+      initialStatusExt(config),
+    );
     expect(initial.ext).toMatchObject({
       engine: "codex",
       session_capabilities: {
@@ -36,16 +42,20 @@ describe("initialStatusExt", () => {
         session_reset_modes: ["new", "clear"],
       },
     });
-    expect((initial.ext.models as { value: string }[]).map((m) => m.value))
-      .toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+    expect(
+      (initial.ext.models as { value: string }[]).map((m) => m.value),
+    ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
   });
 
   it("未申告 catalog は switch capability を fail-closed にする (#107)", () => {
-    expect(initialStatusExt({ ...CONFIG, codex_auth_mode: "unknown" }))
-      .toMatchObject({ session_capabilities: {
+    expect(
+      initialStatusExt({ ...CONFIG, codex_auth_mode: "unknown" }),
+    ).toMatchObject({
+      session_capabilities: {
         supports_model_switch: false,
         supports_effort_switch: false,
-      } });
+      },
+    });
   });
 });
 
@@ -98,10 +108,7 @@ function makeClient(turns: ThreadEvent[][]): {
 }
 
 /** Runs the host for one prompt turn, closing it after the turn settles. */
-async function runOneTurn(
-  host: CodexHost,
-  prompt: string,
-): Promise<void> {
+async function runOneTurn(host: CodexHost, prompt: string): Promise<void> {
   const done = host.run(prompt);
   // The run loop waits for the queue after the turn; close() wakes it.
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -110,29 +117,43 @@ async function runOneTurn(
 }
 
 describe("CodexHost", () => {
+  it("whoami は effective snapshot の model/effort/source/permission を返す", () => {
+    const { client } = makeClient([]);
+    const host = new CodexHost(
+      {
+        ...CONFIG,
+        model: "gpt-5.6-sol",
+        effort: "xhigh",
+        sandbox: "workspace-write",
+        network_access: true,
+      },
+      {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        modelSource: "config",
+        effortSource: "config",
+        codexFactory: () => client,
+      },
+    );
+
+    expect(host.statusSnapshot()).toMatchObject({
+      engine: "codex",
+      model: "gpt-5.6-sol",
+      model_source: "config",
+      effort: "xhigh",
+      effort_source: "config",
+      permission: { sandbox: "workspace-write", approval: "never" },
+      network_access: true,
+    });
+  });
+
   it.each([
     ["chatgpt", "free", ["gpt-5.6-terra"]],
     ["chatgpt", "go", ["gpt-5.6-terra"]],
-    [
-      "chatgpt",
-      "plus",
-      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-    ],
-    [
-      "chatgpt",
-      "pro",
-      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-    ],
-    [
-      "chatgpt",
-      "business",
-      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-    ],
-    [
-      "chatgpt",
-      "enterprise",
-      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-    ],
+    ["chatgpt", "plus", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]],
+    ["chatgpt", "pro", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]],
+    ["chatgpt", "business", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]],
+    ["chatgpt", "enterprise", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]],
     [
       "apikey",
       undefined,
@@ -153,10 +174,12 @@ describe("CodexHost", () => {
       const stderr = vi
         .spyOn(process.stderr, "write")
         .mockImplementation(() => true);
-      const { client } = makeClient([[
-        { type: "thread.started", thread_id: `catalog-${authMode}-${plan}` },
-        usageEvent(),
-      ]]);
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: `catalog-${authMode}-${plan}` },
+          usageEvent(),
+        ],
+      ]);
       const { codex_chatgpt_plan: _configuredPlan, ...baseConfig } = CONFIG;
       const host = new CodexHost(
         {
@@ -178,9 +201,9 @@ describe("CodexHost", () => {
           | { value: string }[]
           | undefined;
         expect(models?.map((model) => model.value)).toEqual(expected);
-        expect(
-          states.at(-1)?.ext.session_capabilities,
-        ).toMatchObject({ supports_model_switch: expected !== undefined });
+        expect(states.at(-1)?.ext.session_capabilities).toMatchObject({
+          supports_model_switch: expected !== undefined,
+        });
       } finally {
         stderr.mockRestore();
       }
@@ -252,9 +275,7 @@ describe("CodexHost", () => {
     expect(result?.payload).toMatchObject({ text: "了解しました" });
     // assistant log も中継
     expect(
-      logs.some(
-        (e) => e.type === "log" && e.payload.kind === "assistant",
-      ),
+      logs.some((e) => e.type === "log" && e.payload.kind === "assistant"),
     ).toBe(true);
   });
 
@@ -496,17 +517,18 @@ describe("CodexHost", () => {
 
   it("account default の実効 model を rollout から解決して ext に載せる", async () => {
     const states: Envelope[] = [];
-    const { client } = makeClient([[
-      { type: "thread.started", thread_id: "uuid-model" },
-      { type: "turn.started" },
-      usageEvent(),
-    ]]);
+    const { client } = makeClient([
+      [
+        { type: "thread.started", thread_id: "uuid-model" },
+        { type: "turn.started" },
+        usageEvent(),
+      ],
+    ]);
     const host = new CodexHost(CONFIG, {
       onState: (e) => states.push(e),
       appendSystemPrompt: "p",
       codexFactory: () => client,
-      modelResolver: async (id) =>
-        id === "uuid-model" ? "gpt-5.6-sol" : null,
+      modelResolver: async (id) => (id === "uuid-model" ? "gpt-5.6-sol" : null),
       now: () => "T",
     });
 
@@ -521,6 +543,121 @@ describe("CodexHost", () => {
         model_source: "default",
       },
     });
+  });
+
+  it("turn.completed 後の background retry で account default を解決する", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([
+      [
+        { type: "thread.started", thread_id: "uuid-delayed-model" },
+        { type: "turn.started" },
+        usageEvent(),
+      ],
+    ]);
+    const resolved = [null, "gpt-delayed"];
+    const resolver = vi.fn(async () => resolved.shift() ?? null);
+    const host = new CodexHost(CONFIG, {
+      onState: (e) => states.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      modelResolver: resolver,
+      now: () => "T",
+    });
+
+    await runOneTurn(host, "hello");
+
+    expect(resolver).toHaveBeenCalledTimes(2);
+    expect(
+      states.some(
+        (state) =>
+          state.state === "waiting_input" &&
+          !("model" in state.ext),
+      ),
+    ).toBe(true);
+    expect(states.at(-1)?.ext).toMatchObject({
+      model: "gpt-delayed",
+      model_source: "default",
+    });
+    expect(host.statusSnapshot()).toMatchObject({
+      model: "gpt-delayed",
+      model_source: "default",
+    });
+  });
+
+  it("account default の再解決失敗時は前 turn の model を stale 保持しない", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([
+      [
+        { type: "thread.started", thread_id: "uuid-unknown-model" },
+        { type: "turn.started" },
+        usageEvent(),
+      ],
+      [{ type: "turn.started" }, usageEvent()],
+    ]);
+    const resolved = ["gpt-first", null, null];
+    const host = new CodexHost(CONFIG, {
+      onState: (e) => states.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      modelResolver: async () => resolved.shift() ?? null,
+      now: () => "T",
+    });
+
+    const done = host.run("first");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await host.send("second");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    host.close();
+    await done;
+
+    expect(states.some((e) => e.ext.model === "gpt-first")).toBe(true);
+    expect(states.at(-1)?.ext).not.toHaveProperty("model");
+    expect(states.at(-1)?.ext).not.toHaveProperty("model_source");
+    expect(host.statusSnapshot()).not.toHaveProperty("model");
+  });
+
+  it("遅い旧 turn の model refresh は新 turn の解決値を上書きしない", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([
+      [
+        { type: "thread.started", thread_id: "uuid-generation" },
+        { type: "turn.started" },
+        usageEvent(),
+      ],
+      [{ type: "turn.started" }, usageEvent()],
+    ]);
+    let releaseOld!: (model: string) => void;
+    const oldRefresh = new Promise<string>((resolve) => {
+      releaseOld = resolve;
+    });
+    let calls = 0;
+    const host = new CodexHost(CONFIG, {
+      onState: (e) => states.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      modelResolver: async () => {
+        calls += 1;
+        if (calls === 1) return null;
+        if (calls === 2) return oldRefresh;
+        return "gpt-new-turn";
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("first");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await host.send("second");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseOld("gpt-old-refresh");
+    await Promise.resolve();
+    host.close();
+    await done;
+
+    expect(host.statusSnapshot()).toMatchObject({
+      model: "gpt-new-turn",
+      model_source: "default",
+    });
+    expect(states.at(-1)?.ext.model).toBe("gpt-new-turn");
   });
 
   it("account default は pin せず turn ごとの実効 model を更新する", async () => {

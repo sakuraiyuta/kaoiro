@@ -14,17 +14,18 @@ export {
   formatInboundMessage,
   isFormattedInterAgentMessage,
 } from "./inter_agent.js";
-export type {
-  InterAgentToolOptions,
-  WhoamiSnapshot,
-} from "./inter_agent.js";
-export {
-  MAX_LOG_BYTES,
-  clipText,
-  logEntryToPayload,
-} from "./logpayload.js";
+export type { InterAgentToolOptions, WhoamiSnapshot } from "./inter_agent.js";
+export { MAX_LOG_BYTES, clipText, logEntryToPayload } from "./logpayload.js";
 export { PendingRegistry } from "./pending.js";
-export { computeResumeDrift } from "./snapshot.js";
+export {
+  computeResumeDrift,
+  effectiveStatusEnvelopeFields,
+  effectiveStatusWhoamiFields,
+} from "./snapshot.js";
+export type {
+  EffectiveStatusSnapshot,
+  EffectiveWhoamiFields,
+} from "./snapshot.js";
 export { PermissionBroker } from "./permission.js";
 export type {
   PermissionBrokerOptions,
@@ -51,12 +52,17 @@ export {
   stepState,
 } from "./state.js";
 export type { MachineState } from "./state.js";
-export type { ToolDescriptor, ToolResult, ToolResultContent } from "./tooling.js";
+export type {
+  ToolDescriptor,
+  ToolResult,
+  ToolResultContent,
+} from "./tooling.js";
 export type {
   AdapterEvent,
   AssistantBlockKind,
   AttachRejectedPayload,
   Envelope,
+  EngineKind,
   FileUploadRejectReason,
   InstructionRejectedPayload,
   InterAgentMessageKind,
@@ -68,6 +74,7 @@ export type {
   ModelSource,
   PendingPermissionExt,
   PendingQuestionExt,
+  PermissionAxesExt,
   PermissionMode,
   Persona,
   Question,

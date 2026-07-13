@@ -24,7 +24,13 @@ const config: WrapperConfig = {
 
 describe("initialStatusExt", () => {
   it("initial idle に engine と capabilities を stamp する (#107)", () => {
-    const initial = makeStateChange(config, "idle", "T", {}, initialStatusExt());
+    const initial = makeStateChange(
+      config,
+      "idle",
+      "T",
+      {},
+      initialStatusExt(),
+    );
     expect(initial.ext).toMatchObject({
       engine: "claude-code",
       session_capabilities: {
@@ -36,16 +42,42 @@ describe("initialStatusExt", () => {
         session_reset_modes: ["new", "clear"],
       },
     });
-    expect((initial.ext.models as { value: string }[]).map((m) => m.value))
-      .toEqual([
-        "default",
-        "opus[1m]",
-        "claude-fable-5[1m]",
-        "sonnet",
-        "sonnet[1m]",
-        "haiku",
-        "claude-opus-4-7",
-      ]);
+    expect(
+      (initial.ext.models as { value: string }[]).map((m) => m.value),
+    ).toEqual([
+      "default",
+      "opus[1m]",
+      "claude-fable-5[1m]",
+      "sonnet",
+      "sonnet[1m]",
+      "haiku",
+      "claude-opus-4-7",
+    ]);
+  });
+});
+
+describe("AgentHost whoami effective projection (#113)", () => {
+  it("model/effort/source と engine-neutral permission を同じ snapshot から返す", () => {
+    const host = new AgentHost(
+      { ...config, permission_mode: "plan" },
+      {
+        onState: () => {},
+        queryOptions: { model: "claude-opus-4-7", effort: "high" },
+        modelSource: "config",
+        effortSource: "config",
+      },
+    );
+
+    expect(host.statusSnapshot()).toMatchObject({
+      engine: "claude-code",
+      model: "claude-opus-4-7",
+      model_source: "config",
+      effort: "high",
+      effort_source: "config",
+      permission_mode: "plan",
+      permission: { sandbox: "read-only", approval: "on-request" },
+    });
+    expect(host.statusSnapshot()).not.toHaveProperty("network_access");
   });
 });
 
@@ -193,7 +225,11 @@ describe("AgentHost — query injection", () => {
     const thinking = envs.find((e) => e.state === "thinking");
     expect(thinking?.ext).toMatchObject({
       rate_limits: {
-        five_hour: { status: "allowed", utilization: 0.5, resets_at: 1781480000 },
+        five_hour: {
+          status: "allowed",
+          utilization: 0.5,
+          resets_at: 1781480000,
+        },
       },
     });
   });
@@ -203,7 +239,12 @@ describe("AgentHost — query injection", () => {
     const host = new AgentHost(config, {
       onState: (e) => envs.push(e),
       queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", model: "claude-x", cwd: "/repo" }),
+        msg({
+          type: "system",
+          subtype: "init",
+          model: "claude-x",
+          cwd: "/repo",
+        }),
         assistant([{ type: "text", text: "hi" }]),
       ]),
       now: () => "T",
@@ -222,7 +263,12 @@ describe("AgentHost — query injection", () => {
       queryFn: scriptedQuery([
         // SDK init が別値 (正規化名等) を返しても source は "config" のまま維持されること
         // — 値の由来を伝える field なので default に書き換えない。
-        msg({ type: "system", subtype: "init", model: "claude-opus-4-7-normalized", cwd: "/repo" }),
+        msg({
+          type: "system",
+          subtype: "init",
+          model: "claude-opus-4-7-normalized",
+          cwd: "/repo",
+        }),
         assistant([{ type: "text", text: "hi" }]),
       ]),
       now: () => "T",
@@ -242,7 +288,12 @@ describe("AgentHost — query injection", () => {
       modelSource: "env",
       queryOptions: { model: "claude-from-env" },
       queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", model: "claude-from-env", cwd: "/repo" }),
+        msg({
+          type: "system",
+          subtype: "init",
+          model: "claude-from-env",
+          cwd: "/repo",
+        }),
         assistant([{ type: "text", text: "hi" }]),
       ]),
       now: () => "T",
@@ -260,7 +311,12 @@ describe("AgentHost — query injection", () => {
     const host = new AgentHost(config, {
       onState: (e) => envs.push(e),
       queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", model: "claude-sonnet-x", cwd: "/repo" }),
+        msg({
+          type: "system",
+          subtype: "init",
+          model: "claude-sonnet-x",
+          cwd: "/repo",
+        }),
         assistant([{ type: "text", text: "hi" }]),
       ]),
       now: () => "T",
@@ -278,7 +334,12 @@ describe("AgentHost — query injection", () => {
     const host = new AgentHost(config, {
       onState: (e) => envs.push(e),
       queryFn: scriptedQuery([
-        msg({ type: "system", subtype: "init", model: "claude-x", cwd: "/repo" }),
+        msg({
+          type: "system",
+          subtype: "init",
+          model: "claude-x",
+          cwd: "/repo",
+        }),
         assistant([{ type: "text", text: "hi" }]),
       ]),
       now: () => "T",
@@ -339,7 +400,11 @@ describe("AgentHost — query injection", () => {
         // context refresh has resolved and is stamped into ext.
         yield assistant([{ type: "text", text: "more" }]);
       }
-      return asQuery(gen(), async () => {}, async () => usage);
+      return asQuery(
+        gen(),
+        async () => {},
+        async () => usage,
+      );
     });
     const host = new AgentHost(config, {
       onState: (e) => envs.push(e),
@@ -661,7 +726,11 @@ describe("AgentHost — query injection", () => {
       queryFn: scriptedQuery([
         msg({ type: "system", subtype: "init", session_id: "sess-1" }),
         // Same id: must not re-notify. A helper-built message carries none.
-        msg({ type: "assistant", session_id: "sess-1", message: { content: [] } }),
+        msg({
+          type: "assistant",
+          session_id: "sess-1",
+          message: { content: [] },
+        }),
         assistant([{ type: "text", text: "hi" }]),
         // New id (e.g. compaction forks the session): notify again.
         result("success", { result: "ok", session_id: "sess-2" }),
@@ -677,9 +746,13 @@ describe("AgentHost — query injection", () => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield result("success", { result: "ok" });
       }
-      return asQuery(gen(), async () => {}, async () => {
-        throw new Error("context usage unavailable");
-      });
+      return asQuery(
+        gen(),
+        async () => {},
+        async () => {
+          throw new Error("context usage unavailable");
+        },
+      );
     });
     const host = new AgentHost(config, {
       onState: () => {},
@@ -699,10 +772,16 @@ describe("AgentHost — permission", () => {
         yield assistant([
           { type: "tool_use", id: "tu_1", name: "Read", input: {} },
         ]);
-        const decision = await args.options.canUseTool!("Read", {}, {} as never);
+        const decision = await args.options.canUseTool!(
+          "Read",
+          {},
+          {} as never,
+        );
         if (decision.behavior === "allow") {
           toolResultYielded = true;
-          yield user([{ type: "tool_result", tool_use_id: "tu_1", content: "ok" }]);
+          yield user([
+            { type: "tool_result", tool_use_id: "tu_1", content: "ok" },
+          ]);
         }
         yield result("success", { result: "ok" });
       }
@@ -730,14 +809,22 @@ describe("AgentHost — permission", () => {
         yield assistant([
           { type: "tool_use", id: "tu_1", name: "Read", input: {} },
         ]);
-        const decision = await args.options.canUseTool!("Read", {}, {} as never);
+        const decision = await args.options.canUseTool!(
+          "Read",
+          {},
+          {} as never,
+        );
         behavior = decision.behavior;
         yield result("success", { result: "x" });
       }
       return asQuery(gen());
     });
 
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
     await host.run();
     expect(behavior).toBe("deny");
   });
@@ -757,7 +844,11 @@ describe("AgentHost — permission", () => {
         yield assistant([
           { type: "tool_use", id: "tu_1", name: "Read", input: {} },
         ]);
-        const decision = await args.options.canUseTool!("Read", {}, {} as never);
+        const decision = await args.options.canUseTool!(
+          "Read",
+          {},
+          {} as never,
+        );
         expect(decision.behavior).toBe("allow");
         yield result("success", { result: "ok" });
       }
@@ -812,7 +903,12 @@ describe("AgentHost — question (AskUserQuestion, ADR-0027)", () => {
     const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield assistant([
-          { type: "tool_use", id: "tu_1", name: "AskUserQuestion", input: { questions } },
+          {
+            type: "tool_use",
+            id: "tu_1",
+            name: "AskUserQuestion",
+            input: { questions },
+          },
         ]);
         const decision = await args.options.canUseTool!(
           "AskUserQuestion",
@@ -847,7 +943,12 @@ describe("AgentHost — question (AskUserQuestion, ADR-0027)", () => {
     const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield assistant([
-          { type: "tool_use", id: "tu_1", name: "AskUserQuestion", input: { questions } },
+          {
+            type: "tool_use",
+            id: "tu_1",
+            name: "AskUserQuestion",
+            input: { questions },
+          },
         ]);
         const decision = await args.options.canUseTool!(
           "AskUserQuestion",
@@ -875,7 +976,12 @@ describe("AgentHost — question (AskUserQuestion, ADR-0027)", () => {
     const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield assistant([
-          { type: "tool_use", id: "tu_1", name: "AskUserQuestion", input: { questions } },
+          {
+            type: "tool_use",
+            id: "tu_1",
+            name: "AskUserQuestion",
+            input: { questions },
+          },
         ]);
         const decision = await args.options.canUseTool!(
           "AskUserQuestion",
@@ -890,7 +996,11 @@ describe("AgentHost — question (AskUserQuestion, ADR-0027)", () => {
 
     // No decideQuestion and no decidePermission: AskUserQuestion falls through
     // to the permission path, which fail-closed denies.
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
     await host.run();
     expect(behavior).toBe("deny");
   });
@@ -903,7 +1013,12 @@ describe("AgentHost — question (AskUserQuestion, ADR-0027)", () => {
     const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield assistant([
-          { type: "tool_use", id: "tu_1", name: "AskUserQuestion", input: { questions } },
+          {
+            type: "tool_use",
+            id: "tu_1",
+            name: "AskUserQuestion",
+            input: { questions },
+          },
         ]);
         const decision = await args.options.canUseTool!(
           "AskUserQuestion",
@@ -956,7 +1071,11 @@ describe("AgentHost — input queue/notify/close", () => {
       return asQuery(gen());
     });
 
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
     const done = host.run();
     host.send("a");
     host.send("b");
@@ -1005,7 +1124,11 @@ describe("AgentHost — input queue/notify/close", () => {
       return asQuery(gen(), interrupt);
     });
 
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
     const done = host.run();
     await host.interrupt();
     expect(interrupt).toHaveBeenCalledOnce();
@@ -1036,7 +1159,11 @@ describe("AgentHost — input queue/notify/close", () => {
       }
       return asQuery(gen(), interrupt);
     });
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
     const done = host.run();
     await host.interrupt();
     await host.interrupt();
@@ -1224,7 +1351,11 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       }
       return asQuery(gen(), async () => {}, undefined, { setModel });
     });
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
     const done = host.run();
     await host.setModel("opus[1m]");
     expect(setModel).toHaveBeenCalledWith("opus[1m]");
@@ -1242,14 +1373,17 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       return asQuery(gen(), async () => {}, undefined, { applyFlagSettings });
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e), queryFn, now: () => "T",
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
     });
     const done = host.run();
     await host.setEffort("max");
     expect(applyFlagSettings).toHaveBeenCalledWith({ effortLevel: "max" });
     expect(envs.at(-2)?.ext.pending_effort).toBe("max");
     expect(envs.at(-1)?.ext).toMatchObject({
-      effort: "max", effort_source: "config",
+      effort: "max",
+      effort_source: "config",
       effective: { effort: "max", effort_source: "config" },
     });
     expect(envs.at(-1)?.ext.pending_effort).toBeUndefined();
@@ -1269,15 +1403,21 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       return asQuery(gen(), async () => {}, undefined, { applyFlagSettings });
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e), queryFn, now: () => "T",
-      effortSource: "config", queryOptions: { effort: "low" },
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+      effortSource: "config",
+      queryOptions: { effort: "low" },
     });
     const done = host.run();
     await expect(host.setEffort("high")).rejects.toThrow("rejected");
     expect(envs.at(-1)?.ext).toMatchObject({
-      effort: "low", effort_source: "config",
+      effort: "low",
+      effort_source: "config",
       switch_error: {
-        kind: "effort", requested: "high", reason: "control_rejected",
+        kind: "effort",
+        requested: "high",
+        reason: "control_rejected",
         rolled_back_to: "low",
       },
     });
@@ -1295,12 +1435,17 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
         for await (const _ of args.prompt) void _;
       }
       return asQuery(gen(), async () => {}, undefined, {
-        setModel, applyFlagSettings, supportedModels: async () => modelInfos,
+        setModel,
+        applyFlagSettings,
+        supportedModels: async () => modelInfos,
       });
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e), queryFn, now: () => "T",
-      effortSource: "config", queryOptions: { effort: "high" },
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+      effortSource: "config",
+      queryOptions: { effort: "high" },
     });
     const done = host.run();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1327,22 +1472,29 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
         for await (const _ of args.prompt) void _;
       }
       return asQuery(gen(), async () => {}, undefined, {
-        setModel: async () => {}, applyFlagSettings,
+        setModel: async () => {},
+        applyFlagSettings,
         supportedModels: async () => modelInfos,
       });
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e), queryFn, now: () => "T",
-      effortSource: "config", queryOptions: { effort: "high" },
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+      effortSource: "config",
+      queryOptions: { effort: "high" },
     });
     const done = host.run();
     await new Promise((resolve) => setTimeout(resolve, 0));
     await expect(host.setModel("haiku")).rejects.toThrow("clear rejected");
     expect(envs.at(-1)?.ext).toMatchObject({
-      model: "haiku", effort: "high",
+      model: "haiku",
+      effort: "high",
       switch_error: {
-        kind: "effort", requested: "default",
-        reason: "effort_reset_failed", rolled_back_to: "high",
+        kind: "effort",
+        requested: "default",
+        reason: "effort_reset_failed",
+        rolled_back_to: "high",
       },
     });
     host.close();
@@ -1375,7 +1527,11 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
         },
       });
     });
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
     await expect(host.run()).resolves.toBeUndefined();
   });
 });
@@ -1405,14 +1561,13 @@ describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
     });
   }
 
-  const png = (size = 3) =>
-    ({
-      upload_id: "u1",
-      filename: "a.png",
-      mime: "image/png",
-      size,
-      chunks: 1,
-    });
+  const png = (size = 3) => ({
+    upload_id: "u1",
+    filename: "a.png",
+    mime: "image/png",
+    size,
+    chunks: 1,
+  });
 
   it("画像 1 枚を attach -> instruction で SDK content blocks に組み込む", async () => {
     const captured: SDKUserMessage[] = [];
@@ -1619,9 +1774,11 @@ describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
     await done;
 
     expect(rejected.length).toBe(0); // chunk silently dropped
-    const block = (captured[0]!.message.content as unknown as Array<{
-      source?: { data: string };
-    }>)[0];
+    const block = (
+      captured[0]!.message.content as unknown as Array<{
+        source?: { data: string };
+      }>
+    )[0];
     expect(block?.source?.data).toBe(Buffer.from([1, 2, 3]).toString("base64"));
   });
 
@@ -1752,11 +1909,13 @@ describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
     expect(interruptSpy).toHaveBeenCalledOnce();
     // 2 件分の interrupted reject(順序は Map イテレーション順)
     expect(rejected.length).toBe(2);
-    expect(rejected.map((e) => (e.payload as { reason: string }).reason)).toEqual(
-      ["interrupted", "interrupted"],
-    );
     expect(
-      new Set(rejected.map((e) => (e.payload as { upload_id: string }).upload_id)),
+      rejected.map((e) => (e.payload as { reason: string }).reason),
+    ).toEqual(["interrupted", "interrupted"]);
+    expect(
+      new Set(
+        rejected.map((e) => (e.payload as { upload_id: string }).upload_id),
+      ),
     ).toEqual(new Set(["ua", "ub"]));
   });
 

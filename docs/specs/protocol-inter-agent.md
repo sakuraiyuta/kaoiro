@@ -246,7 +246,14 @@ wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allow
 | Tool (full name) | 用途 | 経路 |
 |---|---|---|
 | `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧 (id / persona name / state / 報告済み engine・model・effort) を取得 | wrapper → server の `directory_request` を呼び、reply の `agents` をそのまま返す |
-| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / model / permission_mode / fast_mode / session_id / cwd を返す | wrapper のローカル状態 (host) を読むのみ。 server round-trip なし |
+| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd を返す | wrapper のローカル `EffectiveStatusSnapshot` を読むのみ。server round-trip なし |
+
+`whoami` の実効設定は state envelope と別に組み立てず、各 host が持つ共通
+`EffectiveStatusSnapshot` から投影する。`model` / `effort` / source と
+`network_access` は既知の場合だけ返す。`permission` は engine-neutral な
+`{sandbox, approval}`、`permission_mode` / `fast_mode` は Claude 互換 field
+として取得済みの場合だけ併記する。SDK / rollout がまだ値を報告していない field
+は stale 値や推測値で埋めず、key 自体を省略する。
 
 #### 宛先解決の指針
 

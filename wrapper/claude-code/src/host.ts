@@ -18,6 +18,7 @@ import type {
 import type {
   AdapterEvent,
   AttachRejectedPayload,
+  EffectiveStatusSnapshot,
   Envelope,
   InstructionRejectedPayload,
   KaoiroState,
@@ -31,6 +32,7 @@ import type {
   ResultPayload,
   SwitchErrorExt,
   WrapperConfig,
+  WhoamiSnapshot,
 } from "@kaoiro/agent-common";
 import type {
   EngineAdapter,
@@ -40,6 +42,8 @@ import type {
 } from "@kaoiro/agent-common";
 import {
   initialMachineState,
+  effectiveStatusEnvelopeFields,
+  effectiveStatusWhoamiFields,
   makeAttachRejected,
   makeInstructionRejected,
   makeLog,
@@ -59,12 +63,13 @@ import {
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
 } from "./adapter.js";
-import { clipText, computeResumeDrift, logEntryToPayload } from "@kaoiro/agent-common";
-import { PERMISSION_MODE_AXES } from "./permission_axes.js";
 import {
-  claudeBootstrapCatalog,
-  type SupportedModel,
-} from "./catalog.js";
+  clipText,
+  computeResumeDrift,
+  logEntryToPayload,
+} from "@kaoiro/agent-common";
+import { PERMISSION_MODE_AXES } from "./permission_axes.js";
+import { claudeBootstrapCatalog, type SupportedModel } from "./catalog.js";
 import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
@@ -85,7 +90,11 @@ import {
 const MAX_QUEUED_TURNS = 1000;
 
 export const CLAUDE_EFFORT_LEVELS = [
-  "low", "medium", "high", "xhigh", "max",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
 ] as const satisfies readonly EffortLevel[];
 
 /** Status fields available before the Claude SDK starts.
@@ -111,7 +120,10 @@ export function initialStatusExt(): Record<string, unknown> {
 // PermissionDecision / QuestionDecision moved to @kaoiro/agent-common with
 // the brokers (phase-13); re-exported here so the host's public surface is
 // unchanged.
-export type { PermissionDecision, QuestionDecision } from "@kaoiro/agent-common";
+export type {
+  PermissionDecision,
+  QuestionDecision,
+} from "@kaoiro/agent-common";
 
 export interface AgentHostOptions {
   /** Invoked on every state transition with the common envelope. */
@@ -268,9 +280,11 @@ export class AgentHost implements EngineAdapter {
   /** Guards the one-shot supportedModels fetch so it is not re-issued per
    *  message; reset on failure to allow a later retry. */
   #modelsRequested = false;
-  #context:
-    | { used_tokens: number; max_tokens: number; used_percentage: number }
-    | null = null;
+  #context: {
+    used_tokens: number;
+    max_tokens: number;
+    used_percentage: number;
+  } | null = null;
   readonly #rateLimits = new Map<
     string,
     { status?: string; utilization?: number; resets_at?: number }
@@ -328,27 +342,40 @@ export class AgentHost implements EngineAdapter {
    *  local state — no server round-trip, since the wrapper holds the freshest
    *  view of these fields. Omits keys whose SDK has not yet reported a value
    *  so consumers can distinguish "unknown" from a stale stub. */
-  statusSnapshot(): {
-    agent_id: string;
-    persona: { id: string; name: string; sprite_set: string };
-    state: KaoiroState;
-    model?: string;
-    cwd?: string;
-    permission_mode?: string;
-    fast_mode?: string;
-    session_id?: string;
-  } {
-    const out: ReturnType<AgentHost["statusSnapshot"]> = {
+  statusSnapshot(): WhoamiSnapshot {
+    const out: WhoamiSnapshot = {
       agent_id: this.#config.agent_id,
       persona: this.#config.persona,
       state: this.#machine.state,
+      ...effectiveStatusWhoamiFields(this.#effectiveStatusSnapshot()),
     };
-    if (this.#model !== null) out.model = this.#model;
     if (this.#cwd !== null) out.cwd = this.#cwd;
-    if (this.#permissionMode !== null) out.permission_mode = this.#permissionMode;
-    if (this.#fastMode !== null) out.fast_mode = this.#fastMode;
     if (this.#sessionId !== null) out.session_id = this.#sessionId;
     return out;
+  }
+
+  /** Single engine-neutral SoT for both state_change.ext and whoami (#113). */
+  #effectiveStatusSnapshot(): EffectiveStatusSnapshot {
+    const axes = PERMISSION_MODE_AXES[this.#permissionMode as PermissionMode];
+    return {
+      engine: "claude-code",
+      resolved: {
+        ...(this.#model !== null ? { model: this.#model } : {}),
+        ...(this.#modelSource !== null
+          ? { model_source: this.#modelSource }
+          : {}),
+        ...(this.#effort !== null ? { effort: this.#effort } : {}),
+        ...(this.#effortSource !== null
+          ? { effort_source: this.#effortSource }
+          : {}),
+        ...(this.#permissionMode !== null
+          ? { permission_mode: this.#permissionMode as PermissionMode }
+          : {}),
+        ...(axes === undefined ? {} : { sandbox: axes.sandbox }),
+      },
+      ...(axes === undefined ? {} : { permission: axes }),
+      ...(this.#fastMode === null ? {} : { fast_mode: this.#fastMode }),
+    };
   }
 
   /** Enqueue a user turn for the streaming input. When `attachmentIds` are
@@ -508,7 +535,10 @@ export class AgentHost implements EngineAdapter {
       entry.accumulatedBytes -
       (existing?.byteLength ?? 0) +
       parsed.bytes.byteLength;
-    if (newTotal > entry.meta.size || newTotal > PROTOCOL_FILE_SIZE_LIMIT_BYTES) {
+    if (
+      newTotal > entry.meta.size ||
+      newTotal > PROTOCOL_FILE_SIZE_LIMIT_BYTES
+    ) {
       this.#pendingUploads.delete(parsed.upload_id);
       this.#emitAttachRejected({
         upload_id: parsed.upload_id,
@@ -579,7 +609,12 @@ export class AgentHost implements EngineAdapter {
     const onReject = this.#options.onAttachRejected;
     if (!onReject) return;
     onReject(
-      makeAttachRejected(this.#config, this.#machine.state, this.#now(), payload),
+      makeAttachRejected(
+        this.#config,
+        this.#machine.state,
+        this.#now(),
+        payload,
+      ),
     );
   }
 
@@ -656,7 +691,9 @@ export class AgentHost implements EngineAdapter {
     const invalidEffort =
       this.#effort !== null &&
       nextModel !== undefined &&
-      !(nextModel.effort_levels?.includes(this.#effort as EffortLevel) ?? false);
+      !(
+        nextModel.effort_levels?.includes(this.#effort as EffortLevel) ?? false
+      );
     // Before run(), commit into the fields used to construct query Options.
     // This closes the fresh-idle race where the dashboard can send set_model
     // after the CLI's idle announce but before #query exists.
@@ -907,9 +944,7 @@ export class AgentHost implements EngineAdapter {
       // queryOptions alone would retain the spawn-time values and silently
       // lose a fresh-idle dashboard choice.
       ...(this.#model !== null ? { model: this.#model } : {}),
-      ...(this.#effort !== null
-        ? { effort: this.#effort as EffortLevel }
-        : {}),
+      ...(this.#effort !== null ? { effort: this.#effort as EffortLevel } : {}),
       hooks: {
         ...userHooks,
         CwdChanged: [
@@ -1058,7 +1093,13 @@ export class AgentHost implements EngineAdapter {
 
   #emitState(state: KaoiroState): void {
     this.#options.onState(
-      makeStateChange(this.#config, state, this.#now(), {}, this.#statusExt(true)),
+      makeStateChange(
+        this.#config,
+        state,
+        this.#now(),
+        {},
+        this.#statusExt(true),
+      ),
     );
   }
 
@@ -1074,7 +1115,11 @@ export class AgentHost implements EngineAdapter {
    *  pending_permission is the authoritative pending-record (ADR-0022)
    *  carried while waiting_permission is in flight. */
   #statusExt(consumeOneShot = false): Record<string, unknown> {
-    const ext: Record<string, unknown> = { ...initialStatusExt() };
+    const effectiveStatus = this.#effectiveStatusSnapshot();
+    const ext: Record<string, unknown> = {
+      ...initialStatusExt(),
+      ...effectiveStatusEnvelopeFields(effectiveStatus),
+    };
     // Session capabilities (ADR-0034 F1/F4, phase-15 15-14): advertised
     // from the first state_change onward (no SDK init await). Claude Code
     // accepts uploads and provides the SDK's
@@ -1093,10 +1138,6 @@ export class AgentHost implements EngineAdapter {
     // send_instruction path handles `/new`・`/clear` as reserved-command
     // rejects, so the capability=true stamp is safely observable but
     // does not yet reach a user-triggerable code path.
-    if (this.#model !== null) ext.model = this.#model;
-    if (this.#modelSource !== null) ext.model_source = this.#modelSource;
-    if (this.#effort !== null) ext.effort = this.#effort;
-    if (this.#effortSource !== null) ext.effort_source = this.#effortSource;
     if (this.#effortPending !== null) ext.pending_effort = this.#effortPending;
     if (this.#effortResetOnce) {
       ext.effort_reset = true;
@@ -1120,12 +1161,6 @@ export class AgentHost implements EngineAdapter {
     if (this.#slashCommands !== null) ext.slash_commands = this.#slashCommands;
     if (this.#models !== null) ext.models = this.#models;
     if (this.#context !== null) ext.context = this.#context;
-    if (this.#permissionMode !== null) ext.permission_mode = this.#permissionMode;
-    // Two-axis successor of permission_mode (ADR-0033 F1/F2); both ride
-    // for one release window, then permission_mode drops.
-    const axes = PERMISSION_MODE_AXES[this.#permissionMode as PermissionMode];
-    if (axes !== undefined) ext.permission = axes;
-    if (this.#fastMode !== null) ext.fast_mode = this.#fastMode;
     if (this.#rateLimits.size > 0) {
       ext.rate_limits = Object.fromEntries(this.#rateLimits);
     }
@@ -1135,30 +1170,11 @@ export class AgentHost implements EngineAdapter {
     if (this.#pendingQuestion !== null) {
       ext.pending_question = this.#pendingQuestion;
     }
-    // Effective resolved settings this run (ADR-0014 F1 追補, phase-15 D8).
-    // Rides every state_change so the D8 drift audit sees "what am I
-    // enforcing right now". Claude has no launch-time sandbox /
-    // network_access fields; sandbox is derived from the mode's two-axis
-    // mapping (ADR-0033 F2) so ext.effective still reports a comparable
-    // value alongside the Codex side.
-    const axesFromMode =
-      PERMISSION_MODE_AXES[this.#permissionMode as PermissionMode];
-    const effective: ResolvedSnapshotExt = {
-      ...(this.#model !== null ? { model: this.#model } : {}),
-      ...(this.#modelSource !== null ? { model_source: this.#modelSource } : {}),
-      ...(this.#effort !== null ? { effort: this.#effort } : {}),
-      ...(this.#effortSource !== null ? { effort_source: this.#effortSource } : {}),
-      ...(this.#permissionMode !== null
-        ? { permission_mode: this.#permissionMode as PermissionMode }
-        : {}),
-      ...(axesFromMode !== undefined ? { sandbox: axesFromMode.sandbox } : {}),
-    };
-    ext.effective = effective;
     if (this.#resumeSnapshot !== null) {
       ext.resume_snapshot = this.#resumeSnapshot;
       ext.resume_drift = computeResumeDrift(
         this.#resumeSnapshot,
-        effective,
+        effectiveStatus.resolved,
       ).filter((entry) => !this.#operatorSwitchedFields.has(entry.field));
     }
     return ext;
@@ -1198,8 +1214,11 @@ export class AgentHost implements EngineAdapter {
   #applyRateLimit(info: SDKRateLimitInfo): void {
     const window = info.rateLimitType;
     if (window === undefined) return;
-    const snapshot: { status?: string; utilization?: number; resets_at?: number } =
-      { status: info.status };
+    const snapshot: {
+      status?: string;
+      utilization?: number;
+      resets_at?: number;
+    } = { status: info.status };
     if (info.utilization !== undefined) snapshot.utilization = info.utilization;
     if (info.resetsAt !== undefined) snapshot.resets_at = info.resetsAt;
     this.#rateLimits.set(window, snapshot);
@@ -1277,7 +1296,8 @@ export class AgentHost implements EngineAdapter {
     const out: ResultPayload = {};
     // result payload has no truncated flag (protocol.md); clip silently
     // to stay under the server's envelope cap.
-    if (typeof payload.text === "string") out.text = clipText(payload.text).text;
+    if (typeof payload.text === "string")
+      out.text = clipText(payload.text).text;
     if (payload.is_error) out.is_error = true;
     const ext = cost !== null ? { cost } : {};
     onLog(makeResult(this.#config, this.#now(), out, ext));

@@ -84,6 +84,16 @@ Codex ThreadEvent → kaoiro 状態 ([protocol](protocol.md)) への導出は共
 | `turn.completed` | `idle` — envelope の `type=result` を発行。usage (tokens) を `ext` に反映 — USD が無いため `ext.cost` は Codex では**載せない** | Claude の SDKResultMessage(success) 相当 |
 | `turn.failed` / `error` | `error` — `state_change(error)` を発行 | Claude の SDKResultMessage(error_*) 相当 |
 
+アカウント既定 model の rollout 解決は、前 turn の `turn_context` を今回値と
+誤認しうる `turn.started` では確定せず、`turn.completed` 後に background
+refresh する。
+terminal state と次 turn 受付は filesystem retry でブロックしない。未解決の turn
+では前 turn の account-default model を保持せず `model` / `model_source` を省略し、
+dashboard の「確認待ち」と `whoami` の field omit を同じ unknown 状態として扱う。
+後段 retry が解決した場合は generation guard で新しい turn を上書きしないことを
+確認してから、現在 state を再 stamp する。解決値は表示 metadata であり、次 turn
+の `ThreadOptions.model` へ pin しない。
+
 ### 権限 (承認フローは存在しない)
 
 `codex exec` は harness override で `approval_policy=never` を強制し (`-c approval_policy=...` も無効)、JSON event stream に承認要求 event は存在しない。したがって:

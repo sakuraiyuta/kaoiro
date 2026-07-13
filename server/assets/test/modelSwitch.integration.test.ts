@@ -295,4 +295,44 @@ describe("phase-16 dashboard model switch integration", () => {
     expect(choices).toEqual(["high", "xhigh"]);
     expect(choices).not.toContain("medium");
   });
+
+  it("supports_effort_switch=false でも effective.effort があれば read-only 表示する (#113)", async () => {
+    const { target } = await renderDetail({
+      engine: "codex",
+      model: "gpt-terra",
+      models: [terra],
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_model_switch: false,
+        supports_effort_switch: false,
+      },
+      permission: { sandbox: "workspace-write", approval: "never" },
+      effective: { effort: "medium" },
+    });
+    const dts = [...target.querySelectorAll("dt")].map((el) => el.textContent);
+    expect(dts).toContain("effort");
+    expect(target.textContent).toContain("medium");
+    expect(target.textContent).toContain("書込: workspace-write");
+    expect(target.textContent).toContain("承認: never");
+    expect(target.textContent).toContain("host-fixed");
+    expect(target.querySelector('[title="effort を切替"]')).toBeNull();
+  });
+
+  it("viewer + supports_effort_switch=false + effective 無しでは effort 行を隠す (#113)", async () => {
+    const { target } = await renderDetail(
+      {
+        engine: "codex",
+        session_capabilities: {
+          supports_attachments: false,
+          supports_user_input_dialog: false,
+          supports_model_switch: false,
+          supports_effort_switch: false,
+        },
+      },
+      null as unknown as KaoiroConnection,
+    );
+    const dts = [...target.querySelectorAll("dt")].map((el) => el.textContent);
+    expect(dts).not.toContain("effort");
+  });
 });

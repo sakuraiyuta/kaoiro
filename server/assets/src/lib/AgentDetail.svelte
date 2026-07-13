@@ -1435,9 +1435,12 @@
               </dd>
             </div>
           {/if}
-          {#if connection && effortSwitchSupported}
-            <!-- effort has no SDK-reported current value; the dd shows the
-                 operator's last pick this session (selectedEffort) or 既定. -->
+          {#if connection || effectiveEffort !== null || selectedEffort !== null || pendingEffort !== null}
+            <!-- #113: display and switch capability are separated so a
+                 non-switchable engine still shows its effective effort
+                 read-only. Row renders when there is either an operator
+                 (connection) or a value to show; the switch button is
+                 gated by capability only. -->
             <div class="cc-row">
               <dt>effort</dt>
               <dd>
@@ -1445,7 +1448,7 @@
                   <span class="cc-model">
                     {pendingEffort ? `pending: ${pendingEffort}` : selectedEffort ?? effectiveEffort ?? "既定"}
                   </span>
-                  {#if effortLevels.length > 0}
+                  {#if connection && effortSwitchSupported && effortLevels.length > 0}
                     <button
                       type="button"
                       class="cc-switch"

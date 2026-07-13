@@ -25,9 +25,12 @@ import { makeInterAgentMessage } from "./state.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import type {
   Envelope,
+  EngineKind,
   InterAgentMessageKind,
   InterAgentMessagePayload,
   KaoiroState,
+  ModelSource,
+  PermissionAxesExt,
   WrapperConfig,
 } from "./types.js";
 
@@ -37,7 +40,13 @@ export interface WhoamiSnapshot {
   agent_id: string;
   persona: { id: string; name: string; sprite_set: string };
   state: KaoiroState;
+  engine?: EngineKind;
   model?: string;
+  effort?: string;
+  model_source?: ModelSource;
+  effort_source?: ModelSource;
+  permission?: PermissionAxesExt;
+  network_access?: boolean;
   cwd?: string;
   permission_mode?: string;
   fast_mode?: string;
@@ -136,7 +145,7 @@ const LIST_AGENTS_DESCRIPTION =
   "List other kaoiro agents currently known to the server. Returns each peer's agent_id, persona (id/name/sprite_set), current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected), and engine/model/effort when reported. Use this to resolve a peer's display name and execution traits before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address.";
 
 const WHOAMI_DESCRIPTION =
-  "Return this agent's identity from the kaoiro server's perspective: agent_id, persona (id/name/sprite_set), current state, active model, permission_mode, fast_mode, session_id, and working directory. Fields that the SDK has not yet reported are omitted. Use this to confirm what the operator sees you as, or to self-narrate (e.g., when telling a peer who you are).";
+  "Return this agent's identity from the kaoiro server's perspective: agent_id, persona (id/name/sprite_set), current state, engine, effective model/effort and their sources, engine-neutral permission (sandbox/approval), network_access, legacy permission_mode/fast_mode when applicable, session_id, and working directory. Fields that the SDK has not yet reported are omitted. Use this to confirm what the operator sees you as, or to self-narrate (e.g., when telling a peer who you are).";
 
 interface ConversationTrack {
   /** Highest turn_number observed so far in this conversation. */
@@ -272,7 +281,9 @@ export class InterAgentTool {
    *  conversation_id and turn_number, builds the envelope, and pushes it via
    *  `send`. The CallToolResult-shaped return surfaces back to the calling
    *  model as the tool result. */
-  async invoke(args: z.infer<typeof SEND_TO_AGENT_SCHEMA>): Promise<InterAgentToolResult> {
+  async invoke(
+    args: z.infer<typeof SEND_TO_AGENT_SCHEMA>,
+  ): Promise<InterAgentToolResult> {
     if (args.to === this.#options.config.agent_id) {
       return errorResult(
         "send_to_agent failed: cannot send to self (payload.to == agent_id)",
@@ -331,7 +342,7 @@ export class InterAgentTool {
 }
 
 const INTER_AGENT_MESSAGE_PREFIX =
-  "[Inter-agent message — to reply, call send_to_agent with conversation_id=\"";
+  '[Inter-agent message — to reply, call send_to_agent with conversation_id="';
 
 /** True only for the reserved first-line framing injected into an SDK turn.
  *  Do not trim: an operator quoting the marker later in ordinary text must

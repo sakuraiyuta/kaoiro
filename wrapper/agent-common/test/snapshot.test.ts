@@ -5,7 +5,11 @@
 // - order follows SNAPSHOT_FIELDS (deterministic)
 
 import { describe, expect, it } from "vitest";
-import { computeResumeDrift } from "../src/snapshot.js";
+import {
+  computeResumeDrift,
+  effectiveStatusEnvelopeFields,
+  effectiveStatusWhoamiFields,
+} from "../src/snapshot.js";
 import type { ResolvedSnapshotExt } from "../src/types.js";
 
 describe("computeResumeDrift", () => {
@@ -62,5 +66,53 @@ describe("computeResumeDrift", () => {
       { field: "permission_mode", prev: "default", now: "plan" },
       { field: "sandbox", prev: "workspace-write", now: "read-only" },
     ]);
+  });
+});
+
+describe("EffectiveStatusSnapshot projection (#113)", () => {
+  const snapshot = {
+    engine: "codex" as const,
+    resolved: {
+      model: "gpt-5.6-sol",
+      model_source: "default" as const,
+      effort: "xhigh",
+      effort_source: "config" as const,
+      sandbox: "workspace-write" as const,
+      network_access: true,
+    },
+    permission: {
+      sandbox: "workspace-write" as const,
+      approval: "never" as const,
+    },
+  };
+
+  it("state_change.ext と whoami を同じ resolved snapshot から投影する", () => {
+    expect(effectiveStatusEnvelopeFields(snapshot)).toEqual({
+      engine: "codex",
+      model: "gpt-5.6-sol",
+      model_source: "default",
+      effort: "xhigh",
+      effort_source: "config",
+      permission: { sandbox: "workspace-write", approval: "never" },
+      effective: snapshot.resolved,
+    });
+    expect(effectiveStatusWhoamiFields(snapshot)).toEqual({
+      engine: "codex",
+      model: "gpt-5.6-sol",
+      model_source: "default",
+      effort: "xhigh",
+      effort_source: "config",
+      permission: { sandbox: "workspace-write", approval: "never" },
+      network_access: true,
+    });
+  });
+
+  it("未知 field は推測せず omit する", () => {
+    expect(
+      effectiveStatusWhoamiFields({
+        engine: "claude-code",
+        resolved: {},
+      }),
+    ).toEqual({ engine: "claude-code" });
   });
 });

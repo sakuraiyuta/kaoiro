@@ -10,7 +10,11 @@
 // approval requests to the caller, so waiting_permission never occurs here.
 
 import { Codex } from "@openai/codex-sdk";
-import type { CodexOptions, ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
+import type {
+  CodexOptions,
+  ThreadEvent,
+  ThreadOptions,
+} from "@openai/codex-sdk";
 import {
   initialMachineState,
   makeInstructionRejected,
@@ -21,6 +25,7 @@ import {
 } from "@kaoiro/agent-common";
 import type {
   AdapterEvent,
+  EffectiveStatusSnapshot,
   EngineAdapter,
   Envelope,
   KaoiroState,
@@ -33,9 +38,16 @@ import type {
   ResolvedSnapshotExt,
   SwitchErrorExt,
   ToolDescriptor,
+  WhoamiSnapshot,
   WrapperConfig,
 } from "@kaoiro/agent-common";
-import { clipText, computeResumeDrift, logEntryToPayload } from "@kaoiro/agent-common";
+import {
+  clipText,
+  computeResumeDrift,
+  effectiveStatusEnvelopeFields,
+  effectiveStatusWhoamiFields,
+  logEntryToPayload,
+} from "@kaoiro/agent-common";
 import {
   threadEventToEvents,
   threadEventToFinalText,
@@ -72,7 +84,8 @@ function initialStatusExtFromCatalog(
       supports_user_input_dialog: true,
       supports_model_switch: catalog.length > 0,
       supports_effort_switch:
-        (catalog.find((entry) => entry.value === model)?.effort_levels?.length ?? 0) > 0,
+        (catalog.find((entry) => entry.value === model)?.effort_levels
+          ?.length ?? 0) > 0,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
     },
@@ -82,7 +95,9 @@ function initialStatusExtFromCatalog(
 
 /** Config-static status fields available before the Codex SDK starts.
  *  Catalog resolution is synchronous and matches the host projection. */
-export function initialStatusExt(config: WrapperConfig): Record<string, unknown> {
+export function initialStatusExt(
+  config: WrapperConfig,
+): Record<string, unknown> {
   const catalog = resolveCodexCatalog(
     config.codex_auth_mode ?? "unknown",
     config.codex_chatgpt_plan,
@@ -169,6 +184,8 @@ export class CodexHost implements EngineAdapter {
   #wake: (() => void) | null = null;
   #abort: AbortController | null = null;
   #closed = false;
+  /** Invalidates an older turn's asynchronous account-default refresh. */
+  #modelResolutionGeneration = 0;
   /** tool_use_id -> tool_name for tool_result backfill (protocol.md #40). */
   readonly #toolNames = new Map<string, string>();
 
@@ -195,23 +212,37 @@ export class CodexHost implements EngineAdapter {
   }
 
   /** whoami snapshot (protocol-inter-agent), mirroring AgentHost's shape. */
-  statusSnapshot(): {
-    agent_id: string;
-    persona: WrapperConfig["persona"];
-    state: KaoiroState;
-    model?: string;
-    cwd?: string;
-    session_id?: string;
-  } {
-    const out: ReturnType<CodexHost["statusSnapshot"]> = {
+  statusSnapshot(): WhoamiSnapshot {
+    const out: WhoamiSnapshot = {
       agent_id: this.#config.agent_id,
       persona: this.#config.persona,
       state: this.#machine.state,
+      ...effectiveStatusWhoamiFields(this.#effectiveStatusSnapshot()),
     };
-    if (this.#model !== null) out.model = this.#model;
     out.cwd = this.#cwd;
     if (this.#sessionId !== null) out.session_id = this.#sessionId;
     return out;
+  }
+
+  /** Single engine-neutral SoT for both state_change.ext and whoami (#113). */
+  #effectiveStatusSnapshot(): EffectiveStatusSnapshot {
+    const permission = { sandbox: this.#sandbox, approval: "never" } as const;
+    return {
+      engine: "codex",
+      resolved: {
+        ...(this.#model !== null ? { model: this.#model } : {}),
+        ...(this.#modelSource !== null
+          ? { model_source: this.#modelSource }
+          : {}),
+        ...(this.#effort !== null ? { effort: this.#effort } : {}),
+        ...(this.#effortSource !== null
+          ? { effort_source: this.#effortSource }
+          : {}),
+        sandbox: this.#sandbox,
+        network_access: this.#networkAccess,
+      },
+      permission,
+    };
   }
 
   async send(text: string, attachmentIds?: string[]): Promise<void> {
@@ -220,11 +251,16 @@ export class CodexHost implements EngineAdapter {
       // Claude-side); reject the whole instruction loudly rather than
       // silently dropping the files.
       this.#options.onInstructionRejected?.(
-        makeInstructionRejected(this.#config, this.#machine.state, this.#now(), {
-          attachment_ids: attachmentIds,
-          reason: "sdk_error",
-          detail: "codex adapter does not support attachments yet",
-        }),
+        makeInstructionRejected(
+          this.#config,
+          this.#machine.state,
+          this.#now(),
+          {
+            attachment_ids: attachmentIds,
+            reason: "sdk_error",
+            detail: "codex adapter does not support attachments yet",
+          },
+        ),
       );
       return;
     }
@@ -380,11 +416,15 @@ export class CodexHost implements EngineAdapter {
   }
 
   async #runTurn(codex: CodexClientLike, text: string): Promise<void> {
+    const resolutionGeneration = ++this.#modelResolutionGeneration;
     const attempted = {
       model: this.#modelPending,
       effort: this.#effortPending,
       effortReset: this.#effortResetPending,
-      reportedModel: null as string | null,
+      accountDefault:
+        this.#modelPending === null &&
+        (this.#model === null || this.#modelSource === "default"),
+      resolutionGeneration,
     };
     const thread =
       this.#sessionId !== null
@@ -416,19 +456,6 @@ export class CodexHost implements EngineAdapter {
           this.#sessionId = sessionId;
           this.#options.onSessionId?.(sessionId);
         }
-        if (
-          event.type === "turn.started" &&
-          attempted.model === null &&
-          (this.#model === null || this.#modelSource === "default") &&
-          this.#sessionId !== null
-        ) {
-          const model = await (this.#options.modelResolver ?? resolveCodexModel)(
-            this.#sessionId,
-          );
-          if (model !== null) {
-            attempted.reportedModel = model;
-          }
-        }
         for (const entry of threadEventToLogs(event)) {
           this.#emitLog(entry);
         }
@@ -440,6 +467,16 @@ export class CodexHost implements EngineAdapter {
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
           });
+          // Resolve only after the terminal event: at turn.started an existing
+          // rollout can still expose the previous turn_context and look
+          // spuriously "resolved". Keep this background so filesystem timing
+          // never holds terminal delivery or the next instruction.
+          if (attempted.accountDefault && this.#sessionId !== null) {
+            void this.#refreshAccountDefaultModel(
+              this.#sessionId,
+              attempted.resolutionGeneration,
+            );
+          }
         } else if (event.type === "turn.failed") {
           sawResult = true;
           this.#finishTurn(false, attempted);
@@ -478,7 +515,8 @@ export class CodexHost implements EngineAdapter {
       model: string | null;
       effort: string | null;
       effortReset: boolean;
-      reportedModel: string | null;
+      accountDefault: boolean;
+      resolutionGeneration: number;
     },
   ): void {
     if (success) {
@@ -487,9 +525,12 @@ export class CodexHost implements EngineAdapter {
         this.#modelSource = "config";
         this.#operatorSwitchedFields.add("model");
         this.#operatorSwitchedFields.add("model_source");
-      } else if (attempted.reportedModel !== null) {
-        this.#model = attempted.reportedModel;
-        this.#modelSource = "default";
+      } else if (attempted.accountDefault) {
+        // Never retain the previous turn's account-default model when this
+        // turn could not be resolved. Absence is the explicit "unknown"
+        // state consumed by whoami and AgentDetail's 確認待ち transition.
+        this.#model = null;
+        this.#modelSource = null;
       }
       if (attempted.effort !== null) {
         this.#effort = attempted.effort;
@@ -547,6 +588,38 @@ export class CodexHost implements EngineAdapter {
     }
   }
 
+  async #refreshAccountDefaultModel(
+    sessionId: string,
+    generation: number,
+  ): Promise<void> {
+    const resolver = this.#options.modelResolver ?? resolveCodexModel;
+    let model: string | null = null;
+    for (let attempt = 0; attempt < 2 && model === null; attempt += 1) {
+      try {
+        model = await resolver(sessionId);
+      } catch {
+        // Unknown was already stamped at terminal delivery. A resolver
+        // failure must not become an unhandled rejection or disturb the next
+        // turn. Retry once; the default resolver also handles its inner
+        // filesystem write race.
+        model = null;
+      }
+      if (model === null && attempt === 0) await Promise.resolve();
+    }
+    if (
+      model === null ||
+      this.#closed ||
+      generation !== this.#modelResolutionGeneration
+    ) {
+      return;
+    }
+    this.#model = model;
+    this.#modelSource = "default";
+    this.#modelLastGood = model;
+    this.#modelLastGoodSource = "default";
+    this.#emitState(this.#machine.state);
+  }
+
   #apply(event: AdapterEvent): void {
     const { next, emitted } = stepState(this.#machine, event);
     this.#machine = next;
@@ -573,27 +646,20 @@ export class CodexHost implements EngineAdapter {
   }
 
   #statusExt(consumeOneShot = false): Record<string, unknown> {
+    const effectiveStatus = this.#effectiveStatusSnapshot();
     const ext: Record<string, unknown> = {
       ...initialStatusExtFromCatalog(this.#catalog, this.#model),
+      ...effectiveStatusEnvelopeFields(effectiveStatus),
     };
     // Effective resolved settings this run (ADR-0014 F1 追補, phase-15 D8).
     // Rides every state_change so the D8 drift audit and any downstream
     // consumer sees "what am I enforcing right now". resume_snapshot /
     // resume_drift only appear when a resume relayed a snapshot.
-    const effective: ResolvedSnapshotExt = {
-      ...(this.#model !== null ? { model: this.#model } : {}),
-      ...(this.#modelSource !== null ? { model_source: this.#modelSource } : {}),
-      ...(this.#effort !== null ? { effort: this.#effort } : {}),
-      ...(this.#effortSource !== null ? { effort_source: this.#effortSource } : {}),
-      sandbox: this.#sandbox,
-      network_access: this.#networkAccess,
-    };
-    ext.effective = effective;
     if (this.#resumeSnapshot !== null) {
       ext.resume_snapshot = this.#resumeSnapshot;
       ext.resume_drift = computeResumeDrift(
         this.#resumeSnapshot,
-        effective,
+        effectiveStatus.resolved,
       ).filter((entry) => !this.#operatorSwitchedFields.has(entry.field));
     }
     // Session capabilities (ADR-0034 F1/F4, phase-15 15-14): advertised
@@ -628,17 +694,10 @@ export class CodexHost implements EngineAdapter {
       ext.switch_error = this.#switchErrorOnce;
       if (consumeOneShot) this.#switchErrorOnce = null;
     }
-    if (this.#model !== null) ext.model = this.#model;
-    if (this.#modelSource !== null) ext.model_source = this.#modelSource;
-    if (this.#effort !== null) ext.effort = this.#effort;
-    if (this.#effortSource !== null) ext.effort_source = this.#effortSource;
     ext.cwd = this.#cwd;
     // Only publish a model catalog when one exists (currently empty for
     // codex — the account default is used, see catalog.ts).
     if (this.#catalog.length > 0) ext.models = this.#catalog;
-    // Launch-fixed two-axis posture (ADR-0033 F1/F3). No permission_mode
-    // twin: that field is the Claude-mode legacy and never applied here.
-    ext.permission = { sandbox: this.#sandbox, approval: "never" };
     if (this.#pendingPermission !== null) {
       ext.pending_permission = this.#pendingPermission;
     }

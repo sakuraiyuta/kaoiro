@@ -105,10 +105,12 @@ describe("InterAgentTool", () => {
       conversation_id: "cnv-shared",
     });
     expect(
-      (capture.envelopes[0]!.payload as unknown as InterAgentMessagePayload).turn_number,
+      (capture.envelopes[0]!.payload as unknown as InterAgentMessagePayload)
+        .turn_number,
     ).toBe(1);
     expect(
-      (capture.envelopes[1]!.payload as unknown as InterAgentMessagePayload).turn_number,
+      (capture.envelopes[1]!.payload as unknown as InterAgentMessagePayload)
+        .turn_number,
     ).toBe(2);
   });
 
@@ -122,7 +124,8 @@ describe("InterAgentTool", () => {
       conversation_id: "cnv-x",
     });
     expect(
-      (capture.envelopes[0]!.payload as unknown as InterAgentMessagePayload).turn_number,
+      (capture.envelopes[0]!.payload as unknown as InterAgentMessagePayload)
+        .turn_number,
     ).toBe(8);
   });
 
@@ -161,8 +164,9 @@ describe("InterAgentTool", () => {
       propose_next: "別案を検討",
       done: true,
     });
-    const meta = (capture.envelopes[0]!.payload as unknown as InterAgentMessagePayload)
-      .meta;
+    const meta = (
+      capture.envelopes[0]!.payload as unknown as InterAgentMessagePayload
+    ).meta;
     expect(meta.confidence).toBe(0.4);
     expect(meta.reject_reason).toBe("ベンチ未収束");
     expect(meta.propose_next).toBe("別案を検討");
@@ -206,7 +210,9 @@ describe("formatInboundMessage", () => {
   });
 
   it("SDK inject framing だけを識別し、通常文と文中引用は識別しない", () => {
-    expect(isFormattedInterAgentMessage("通常の operator instruction")).toBe(false);
+    expect(isFormattedInterAgentMessage("通常の operator instruction")).toBe(
+      false,
+    );
     expect(
       isFormattedInterAgentMessage(
         '引用: [Inter-agent message — to reply, call send_to_agent with conversation_id="cnv-9".]',
@@ -270,7 +276,9 @@ describe("list_agents / whoami companion tools", () => {
 
     const result = await tool.listAgents();
     expect(result.isError).toBeFalsy();
-    const parsed = JSON.parse(result.content[0]!.text) as { agents: DirectoryEntry[] };
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      agents: DirectoryEntry[];
+    };
     expect(parsed.agents).toEqual(directory);
   });
 
@@ -305,7 +313,13 @@ describe("list_agents / whoami companion tools", () => {
       agent_id: "self.agent",
       persona: { id: "mio", name: "澪", sprite_set: "mio" },
       state: "thinking",
+      engine: "codex",
       model: "claude-sonnet-4-6",
+      effort: "high",
+      model_source: "config",
+      effort_source: "config",
+      permission: { sandbox: "workspace-write", approval: "never" },
+      network_access: true,
       cwd: "/home/user",
       permission_mode: "default",
     };
@@ -371,5 +385,8 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     expect(
       descriptors.find((d) => d.name === "list_agents")?.description,
     ).toContain("engine/model/effort when reported");
+    expect(descriptors.find((d) => d.name === "whoami")?.description).toContain(
+      "engine-neutral permission",
+    );
   });
 });

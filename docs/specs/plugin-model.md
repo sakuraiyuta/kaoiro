@@ -59,6 +59,13 @@ related: [architecture, protocol]
 AI 固有でありコアに置かない。最終的には AI に限らず多様なエンティティの状態を
 キャラクターとして可視化することを狙う(広い狙いは別途 vision で扱う)。
 
+両 AI adapter の実効設定 projection は `agent-common` の
+`EffectiveStatusSnapshot` を SoT とする。各 host は engine 固有 state から
+`resolved: ResolvedSnapshotExt` と engine-neutral `permission` を一度だけ組み立て、
+共通 helper が `state_change.ext` と read-only `whoami` の各 wire shape へ投影する。
+adapter ごとに status field を二重実装して片方だけ欠落させないための境界であり、
+未知 field は両経路とも omit する。
+
 ### EngineAdapter interface
 
 AI エージェント共通層 `wrapper/agent-common` に置く `EngineAdapter` interface
