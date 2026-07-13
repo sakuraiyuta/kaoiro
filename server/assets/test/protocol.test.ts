@@ -9,6 +9,7 @@ import {
   interAgentMessageOf,
   isReplyEnvelope,
   logOf,
+  mergeTranscriptEntries,
   modelsFrom,
   modelSwitchStateFrom,
   switchErrorFrom,
@@ -350,6 +351,47 @@ describe("inter-agent history replay (#105)", () => {
 
   it("history_reset では inter-agent envelope だけを保持する", () => {
     expect(retainInterAgentHistory([log, message])).toEqual([message]);
+  });
+
+  it("durable IA と SPA 残留 log を timestamp 順に merge する", () => {
+    const ia2 = { ...message, ts: "2026-07-13T05:00:02Z", seq: 2 };
+    const ia4 = { ...message, ts: "2026-07-13T05:00:04Z", seq: 4 };
+    const log1 = { ...log, ts: "2026-07-13T05:00:01Z", seq: 1 };
+    const log3 = { ...log, ts: "2026-07-13T05:00:03Z", seq: 3 };
+    const log5 = { ...log, ts: "2026-07-13T05:00:05Z", seq: 5 };
+
+    expect(
+      mergeTranscriptEntries([ia2, ia4], [log1, log3, log5]).map((e) => e.seq),
+    ).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("history_reset 後の逐次 replay log を保持 IA の間へ挿入する", () => {
+    const ia2 = { ...message, ts: "2026-07-13T05:00:02Z", seq: 2 };
+    const ia4 = { ...message, ts: "2026-07-13T05:00:04Z", seq: 4 };
+    const replay = [
+      { ...log, ts: "2026-07-13T05:00:01Z", seq: 1 },
+      { ...log, ts: "2026-07-13T05:00:03Z", seq: 3 },
+      { ...log, ts: "2026-07-13T05:00:05Z", seq: 5 },
+    ];
+    let transcript = retainInterAgentHistory([ia2, ia4]);
+    for (const envelope of replay) {
+      transcript = mergeTranscriptEntries(transcript, [envelope]);
+    }
+
+    expect(transcript.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("history と buffered の重複 envelope は一度だけ保持する", () => {
+    expect(mergeTranscriptEntries([log, message], [log, message])).toEqual([
+      log,
+      message,
+    ]);
+  });
+
+  it("別 sender の同 ts/seq/type envelope は fan-out transcript で潰さない", () => {
+    const fromB = { ...message, agent_id: "agent-b", seq: 7 };
+    const fromC = { ...message, agent_id: "agent-c", seq: 7 };
+    expect(mergeTranscriptEntries([fromB], [fromC])).toEqual([fromB, fromC]);
   });
 });
 

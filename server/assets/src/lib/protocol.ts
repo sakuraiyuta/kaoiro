@@ -640,6 +640,42 @@ export function isReplyEnvelope(envelope: Envelope): boolean {
   );
 }
 
+/** Chronological transcript order shared by history fan-out, reconnect merge,
+ *  and live/replay insertion. `seq` only breaks equal producer timestamps,
+ *  matching the server's merged-history ordering (#105). */
+export function compareTranscriptEnvelopes(
+  a: Envelope,
+  b: Envelope,
+): number {
+  const byTime = a.ts.localeCompare(b.ts);
+  if (byTime !== 0) return byTime;
+  return (a.seq ?? 0) - (b.seq ?? 0);
+}
+
+/** Merge an authoritative history with buffered/live entries, dedupe the
+ *  overlap, and restore chronological order. This also handles resume replay:
+ *  retained structured IA lines may be newer than JSONL logs arriving later,
+ *  so append order is not display order (#105). */
+export function mergeTranscriptEntries(
+  history: Envelope[],
+  buffered: Envelope[],
+): Envelope[] {
+  // A receiver transcript can contain fan-out IA envelopes authored by
+  // several agents. Include producer/session so equal timestamps and seq
+  // values from independent producer streams are not collapsed together.
+  const key = (e: Envelope): string =>
+    `${e.agent_id}|${e.session_id ?? ""}|${e.ts}|${e.seq ?? ""}|${e.type}`;
+  const seen = new Set<string>();
+  const merged: Envelope[] = [];
+  for (const envelope of [...history, ...buffered]) {
+    const identity = key(envelope);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    merged.push(envelope);
+  }
+  return merged.sort(compareTranscriptEnvelopes);
+}
+
 /** Expands server history into the same per-agent transcript routing used by
  * live envelopes. AgentStates retains the sender copy; replay must also copy
  * it to payload.to so reload and live delivery are symmetric (#105). */
@@ -658,11 +694,7 @@ export function fanOutInterAgentHistory(
     }
   }
   for (const entries of Object.values(expanded)) {
-    entries.sort((a, b) => {
-      const byTime = a.ts.localeCompare(b.ts);
-      if (byTime !== 0) return byTime;
-      return (a.seq ?? 0) - (b.seq ?? 0);
-    });
+    entries.sort(compareTranscriptEnvelopes);
   }
   return expanded;
 }

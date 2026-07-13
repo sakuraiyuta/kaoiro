@@ -21,6 +21,7 @@
     fetchPersonaManifest,
     formatAgentLabel,
     isReplyEnvelope,
+    mergeTranscriptEntries,
     retainInterAgentHistory,
   } from "./lib/protocol";
   import {
@@ -133,19 +134,18 @@
 
   // History is the authoritative recovered transcript, but log/result
   // envelopes can arrive via onEnvelope between join and the history push.
-  // Append those live-buffered entries after the history (deduped by
-  // ts+seq+type) so a reload never drops them.
+  // Merge those live-buffered entries with the history (deduped by producer,
+  // session, ts, seq, and type) so a reload never drops them. Always restore
+  // chronological order: after a server restart `local` can contain older SPA state,
+  // and after history_reset retained IA can precede older JSONL replay logs.
   function mergeHistories(
     histories: Record<string, Envelope[]>,
     local: Record<string, Envelope[]>,
   ): Record<string, Envelope[]> {
-    const key = (e: Envelope): string => `${e.ts}|${e.seq ?? ""}|${e.type}`;
-    const merged: Record<string, Envelope[]> = { ...histories };
-    for (const [id, entries] of Object.entries(local)) {
-      const base = merged[id] ?? [];
-      const seen = new Set(base.map(key));
-      const extra = entries.filter((e) => !seen.has(key(e)));
-      if (extra.length > 0) merged[id] = [...base, ...extra];
+    const merged: Record<string, Envelope[]> = {};
+    const ids = new Set([...Object.keys(histories), ...Object.keys(local)]);
+    for (const id of ids) {
+      merged[id] = mergeTranscriptEntries(histories[id] ?? [], local[id] ?? []);
     }
     return merged;
   }
@@ -241,7 +241,7 @@
             }
             const next = { ...logs };
             for (const id of targets) {
-              next[id] = [...(next[id] ?? []), envelope];
+              next[id] = mergeTranscriptEntries(next[id] ?? [], [envelope]);
             }
             logs = next;
           } else {
