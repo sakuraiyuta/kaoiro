@@ -18,7 +18,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 ## ADR 索引
 
 <!-- adr-index:start -->
-| # | 決定 | Status |
+| # | Title | Status |
 |---|-------|--------|
 | [0001](adr/0001-agent-sdk-integration.md) | Claude Agent SDK を統合方式に採用 | accepted |
 | [0002](adr/0002-local-wrapper-websocket-topology.md) | ラッパーはローカル動作、WebSocket で中央サーバへ集約 | accepted |
@@ -52,10 +52,13 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0030](adr/0030-agent-directory-and-explicit-restore.md) | サーバ再起動越しの agent identity 永続と client 明示復元(一括/個別) | accepted |
 | [0031](adr/0031-runner-persona-trust-mode.md) | runner の persona 受け入れは allowlist/blacklist の 2 モードから選択 | accepted |
 | [0032](adr/0032-codex-adapter.md) | Codex アダプタ追加と wrapper マルチパッケージ構造の materialise | accepted |
-| [0033](adr/0033-permission-model-dual-axis.md) | 権限モデル共通抽象を sandbox × approval の二軸へ拡張 | accepted |
+| [0033](adr/0033-permission-model-dual-axis.md) | 権限モデルの共通抽象を sandbox × approval の二軸へ拡張 | accepted |
+| [0034](adr/0034-session-capabilities-advertisement.md) | セッション機能 (session capabilities) の envelope advertisement | accepted |
+| [0035](adr/0035-codex-model-catalog-and-mid-session-switch.md) | Codex model catalog 復活と mid-session switch 契約 | accepted |
+| [0036](adr/0036-session-lifecycle-commands.md) | /new・/clear を第一級 session lifecycle command として扱う | accepted |
 <!-- adr-index:end -->
 
-再生成: `scripts/build-adr-index.sh --columns "# 決定 Status" docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。
+再生成: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。
 
 ## 更新フロー
 
