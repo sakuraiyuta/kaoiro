@@ -5,6 +5,7 @@ import {
   LIST_AGENTS_TOOL_FQN,
   WHOAMI_TOOL_FQN,
   formatInboundMessage,
+  isFormattedInterAgentMessage,
   type WhoamiSnapshot,
 } from "../src/inter_agent.js";
 import type { DirectoryEntry } from "@kaoiro/wrapper-core";
@@ -201,6 +202,16 @@ describe("formatInboundMessage", () => {
     expect(text).toContain("turn_number=3");
     expect(text).toContain("done=false");
     expect(text).toContain("propose_next=B の同意");
+    expect(isFormattedInterAgentMessage(text)).toBe(true);
+  });
+
+  it("SDK inject framing だけを識別し、通常文と文中引用は識別しない", () => {
+    expect(isFormattedInterAgentMessage("通常の operator instruction")).toBe(false);
+    expect(
+      isFormattedInterAgentMessage(
+        '引用: [Inter-agent message — to reply, call send_to_agent with conversation_id="cnv-9".]',
+      ),
+    ).toBe(false);
   });
 
   it("payload 欠損(server 合成 escalate skeleton)でも空値で頑健に整形する", () => {

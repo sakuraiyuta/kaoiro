@@ -330,6 +330,16 @@ export class InterAgentTool {
   }
 }
 
+const INTER_AGENT_MESSAGE_PREFIX =
+  "[Inter-agent message — to reply, call send_to_agent with conversation_id=\"";
+
+/** True only for the reserved first-line framing injected into an SDK turn.
+ *  Do not trim: an operator quoting the marker later in ordinary text must
+ *  remain an ordinary user log during resume reconstruction (#105). */
+export function isFormattedInterAgentMessage(text: string): boolean {
+  return text.startsWith(INTER_AGENT_MESSAGE_PREFIX);
+}
+
 /** Formats an inbound inter_agent_message envelope into the user-message text
  *  injected into the receiving wrapper's SDK input (protocol-inter-agent spec
  *  「受信側 (wrapper-B) の挙動」). Leads with a role directive so the model
@@ -349,7 +359,7 @@ export function formatInboundMessage(envelope: Envelope): string {
   const conversationId = payload.conversation_id ?? "";
   const turnNumber = payload.turn_number ?? 0;
   return [
-    `[Inter-agent message — to reply, call send_to_agent with conversation_id="${conversationId}".]`,
+    `${INTER_AGENT_MESSAGE_PREFIX}${conversationId}".]`,
     "",
     `[from ${from}] ${kind}: ${body}`,
     "",

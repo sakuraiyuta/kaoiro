@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import {
   clipText,
+  isFormattedInterAgentMessage,
   logEntryToPayload,
   makeLog,
 } from "@kaoiro/agent-common";
@@ -81,7 +82,12 @@ function lineToPayloads(
   if (payload.type === "message") {
     if (payload.role === "user") {
       const text = textBlocks(payload.content, "input_text");
-      return text === null ? [] : [userPayload(text)];
+      // Structured inter_agent_message is the display SoT. Rollout JSONL also
+      // records the injected framing as a user turn; do not replay that copy
+      // as an operator log beside the restored IA bubble (#105).
+      return text === null || isFormattedInterAgentMessage(text)
+        ? []
+        : [userPayload(text)];
     }
     if (payload.role === "assistant") {
       const text = textBlocks(payload.content, "output_text");

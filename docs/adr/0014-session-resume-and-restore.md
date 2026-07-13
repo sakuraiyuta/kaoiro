@@ -243,6 +243,11 @@ runner 実装が前提。
     200 envelopeを基底capとし、それより古い`inter_agent_message`はSDK
     transcriptから再構築不能なため#105でcap免除とした。詳細は
     [protocol](../specs/protocol.md)。
+  - **IA 復元の正本(#105)**: 構造化 `inter_agent_message` envelope を表示の
+    authoritative source とする。SDK JSONL にも受信時に inject した IA framing
+    text が `user` turn として残るが、resume reconstruction ではこれを
+    `kind=user` log へ再投影しない。そうしないと durable IA envelope の bubble
+    と同じ内容が operator instruction として二重表示される。
 
 ## Related
 

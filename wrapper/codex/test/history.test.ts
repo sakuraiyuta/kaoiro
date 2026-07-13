@@ -159,6 +159,29 @@ describe("Codex rollout history reconstruction (#106)", () => {
     expect(only?.ts).toBe("FALLBACK");
   });
 
+  it("IA framing user turn だけを除外し ordinary user turn は保持する", () => {
+    const jsonl = [
+      line({
+        type: "message",
+        role: "user",
+        content: [{
+          type: "input_text",
+          text:
+            '[Inter-agent message — to reply, call send_to_agent with conversation_id="cnv-1".]\n\n[from peer] inform: ping',
+        }],
+      }),
+      line({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "ordinary instruction" }],
+      }),
+    ].join("\n");
+
+    expect(payloads(
+      reconstructCodexHistory(jsonl, CONFIG, "uuid", () => "T"),
+    )).toEqual([{ kind: "user", text: "ordinary instruction" }]);
+  });
+
   it("server ringと同じ最新200 envelopeにcapする", () => {
     const jsonl = Array.from({ length: 205 }, (_, i) =>
       line({

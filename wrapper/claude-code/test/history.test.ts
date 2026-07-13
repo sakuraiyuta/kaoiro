@@ -115,6 +115,38 @@ describe("reconstructHistory — JSONL transcript -> log envelopes", () => {
     ]);
   });
 
+  it("skips an injected IA user echo but preserves a mixed tool_result", () => {
+    const envelopes = reconstruct([
+      line({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text:
+                '[Inter-agent message — to reply, call send_to_agent with conversation_id="cnv-1".]\n\n[from peer] inform: ping',
+            },
+            {
+              type: "tool_result",
+              tool_use_id: "tuIA",
+              content: [{ type: "text", text: "kept" }],
+            },
+          ],
+        },
+      }),
+      line({
+        type: "user",
+        message: { role: "user", content: "ordinary instruction" },
+      }),
+    ]);
+
+    expect(envelopes.map((e) => e.payload)).toEqual([
+      { kind: "tool_result", output: "kept", tool_use_id: "tuIA" },
+      { kind: "user", text: "ordinary instruction" },
+    ]);
+  });
+
   it("drops empty/whitespace user instructions", () => {
     const envelopes = reconstruct([
       line({ type: "user", message: { role: "user", content: "   " } }),

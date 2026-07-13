@@ -12,6 +12,7 @@ export {
   SEND_TO_AGENT_INPUT_SHAPE,
   WHOAMI_TOOL_FQN,
   formatInboundMessage,
+  isFormattedInterAgentMessage,
 } from "./inter_agent.js";
 export type {
   InterAgentToolOptions,
