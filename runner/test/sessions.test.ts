@@ -185,3 +185,38 @@ describe("codex rollouts (ADR-0032 F8)", () => {
     expect(listCodexSessionsIn(join(root, "nope"), "/repo/a")).toEqual([]);
   });
 });
+
+describe("codex rollouts — 同一 session_id が複数 rollout に分散 (#104)", () => {
+  // resume で新規 rollout が作られると同一 UUID が別日 dir に並ぶ。走査順で
+  // 先頭が cwd 不一致だと codexSessionExistsIn が list 側と非対称に false
+  // 決着していた回帰を固定する。
+  const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-104-test-"));
+  const dayOld = join(root, "2026", "07", "10");
+  const dayNew = join(root, "2026", "07", "12");
+  mkdirSync(dayOld, { recursive: true });
+  mkdirSync(dayNew, { recursive: true });
+  const uuid = "019f4bdb-d821-7631-aee1-ec7982060311";
+  const meta = (cwd: string): string =>
+    `${JSON.stringify({
+      timestamp: "2026-07-12T00:00:00.000Z",
+      type: "session_meta",
+      payload: { id: uuid, cwd },
+    })}\n`;
+  writeFileSync(
+    join(dayOld, `rollout-2026-07-10T20-48-46-${uuid}.jsonl`),
+    meta("/repo/other"),
+  );
+  writeFileSync(
+    join(dayNew, `rollout-2026-07-12T09-00-00-${uuid}.jsonl`),
+    meta("/repo/a"),
+  );
+
+  it("codexSessionExistsIn は先頭 rollout の cwd 不一致で打切らず一致を見つける", () => {
+    expect(codexSessionExistsIn(root, "/repo/a", uuid)).toBe(true);
+  });
+
+  it("listCodexSessionsIn と対称: 同 UUID の cwd 一致 rollout を反映する", () => {
+    const sessions = listCodexSessionsIn(root, "/repo/a");
+    expect(sessions.some((s) => s.session_id === uuid)).toBe(true);
+  });
+});

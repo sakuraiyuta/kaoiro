@@ -562,8 +562,13 @@ export interface SwitchSessionMessage {
 
 /** Why a spawn failed (protocol.md). already_running = a live wrapper already
  *  owns the agent_id; cwd_not_found = the cwd is not in the host's allow-list;
- *  error = any other failure. */
-export type SpawnFailReason = "already_running" | "cwd_not_found" | "error";
+ *  session_not_found = a resume/switch_session target failed the T3 existence
+ *  check under the bound cwd; error = any other failure. */
+export type SpawnFailReason =
+  | "already_running"
+  | "cwd_not_found"
+  | "session_not_found"
+  | "error";
 
 /** runner -> server: the outcome of a spawn; reason is set only on failure. */
 export interface SpawnResult {

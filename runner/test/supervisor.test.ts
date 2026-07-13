@@ -291,11 +291,14 @@ describe("Supervisor resume (T3 / F4)", () => {
     expect(h.results[0]).toMatchObject({ ok: true });
   });
 
-  it("存在しない session(T3 失敗)は error で拒否", () => {
+  it("存在しない session(T3 失敗)は session_not_found で拒否", () => {
     const h = harness({ exists: false });
     h.sup.handleSpawn(resumeMsg);
     expect(h.children).toHaveLength(0);
-    expect(h.results[0]).toMatchObject({ ok: false, reason: "error" });
+    expect(h.results[0]).toMatchObject({
+      ok: false,
+      reason: "session_not_found",
+    });
   });
 
   it("同一 session の同時 resume は already_running(F4 ロック)", () => {
@@ -501,7 +504,7 @@ describe("Supervisor.handleSwitchSession", () => {
     expect(h.last().kills).toBe(0);
   });
 
-  it("差替先の session が存在しなければ error(T3)", () => {
+  it("差替先の session が存在しなければ session_not_found (T3)", () => {
     let exists = true;
     const results: SpawnResult[] = [];
     const children: FakeChild[] = [];
@@ -525,7 +528,10 @@ describe("Supervisor.handleSwitchSession", () => {
       agent_id: resumeMsg.agent_id,
       resume_session_id: otherSession,
     });
-    expect(results[1]).toMatchObject({ ok: false, reason: "error" });
+    expect(results[1]).toMatchObject({
+      ok: false,
+      reason: "session_not_found",
+    });
     expect(children[0]!.kills).toBe(0);
   });
 

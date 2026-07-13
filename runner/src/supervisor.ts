@@ -417,7 +417,7 @@ export class Supervisor {
         process.stderr.write(
           `runner: resume session not found under cwd (agent ${agentId})\n`,
         );
-        this.#fail(agentId, "error");
+        this.#fail(agentId, "session_not_found");
         return;
       }
       // F4: physically block a second concurrent resume of the same session.
@@ -502,7 +502,7 @@ export class Supervisor {
       process.stderr.write(
         `runner: switch_session target not found under cwd (agent ${agentId})\n`,
       );
-      this.#fail(agentId, "error");
+      this.#fail(agentId, "session_not_found");
       return;
     }
     const old = entry.parsed.resumeSessionId;

@@ -378,7 +378,7 @@ session_id を指定して **resume** する単一機構で行う
 | runner → サーバ | `register` | `{ host_id, personas, cwd_allowlist, capabilities? }`。接続時に 1 回。稼働可能 persona と選択可能 cwd 許可リスト(#22)を申告。`capabilities` の値集合は `"claude-code" \| "codex"` ([ADR-0032](../adr/0032-codex-adapter.md) F4a)。旧値 `"claude"` は 1 リリース互換窓で `"claude-code"` にサイレント正規化して deprecation warn、次リリースで厳格 reject ([ADR-0032](../adr/0032-codex-adapter.md) F4a、2026-07-10 確定)。dashboard 側は 2 種以上のとき LaunchDialog に engine セレクトを出す |
 | runner → サーバ | `heartbeat` | `{ host_id }`。生存通知 |
 | runner → サーバ | `sessions` | `{ host_id, cwd, sessions: [{ session_id, summary?, mtime? }] }`。`enumerate_sessions` への応答。JSONL メタは最小・**operator 限定**(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) |
-| runner → サーバ | `spawn_result` | `{ host_id, agent_id, ok, reason? }`。失敗時 `reason` = `already_running` / `cwd_not_found` / `error` |
+| runner → サーバ | `spawn_result` | `{ host_id, agent_id, ok, reason? }`。失敗時 `reason` = `already_running` / `cwd_not_found` / `session_not_found`(resume / `switch_session` の T3 実在検証が cwd 配下で失敗、[#104](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/104))/ `error` |
 | サーバ → runner | `spawn` | `{ agent_id, persona, cwd, server_url, token, resume_session_id?, engine? }`。**operator 限定**。`resume_session_id` 指定で resume 起動。`agent_id` / `server_url` / `token` はクライアント入力ではなく**サーバが補完**(案A、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4)。`engine?: "claude-code" \| "codex"` は起動する wrapper パッケージを選択、省略時は runner が config の default engine を使う ([ADR-0032](../adr/0032-codex-adapter.md) F1)。server は register で申告された `capabilities` と照合して検証する |
 | サーバ → runner | `stop` | `{ agent_id }`。**operator 限定** |
 | サーバ → runner | `restart` | `{ agent_id }`。**operator 限定** |

@@ -253,7 +253,10 @@ export function listCodexSessionsIn(root: string, cwd: string): SessionMeta[] {
   return sessions;
 }
 
-/** True when session_id names a rollout under root whose cwd matches (T3). */
+/** True when session_id names a rollout under root whose cwd matches (T3).
+ *  A resume of the same session can create a new rollout under a different
+ *  day-dir with the same UUID; walk to a cwd match instead of returning at
+ *  the first UUID hit, so this stays symmetric with listCodexSessionsIn. */
 export function codexSessionExistsIn(
   root: string,
   cwd: string,
@@ -269,7 +272,7 @@ export function codexSessionExistsIn(
   for (const rel of names) {
     const base = rel.split("/").at(-1) ?? rel;
     if (codexSessionIdOf(base) !== sessionId) continue;
-    return codexRolloutCwd(join(root, rel)) === cwd;
+    if (codexRolloutCwd(join(root, rel)) === cwd) return true;
   }
   return false;
 }
