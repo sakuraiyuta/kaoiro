@@ -9,7 +9,8 @@ import type {
   ToolDescriptor,
   WrapperConfig,
 } from "@kaoiro/agent-common";
-import { CodexHost } from "../src/host.js";
+import { makeStateChange } from "@kaoiro/agent-common";
+import { CodexHost, initialStatusExt } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
 
 const CONFIG: WrapperConfig = {
@@ -19,6 +20,32 @@ const CONFIG: WrapperConfig = {
   codex_auth_mode: "chatgpt",
   codex_chatgpt_plan: "plus",
 };
+
+describe("initialStatusExt", () => {
+  it("initial idle に config-static capabilities を stamp する (#107)", () => {
+    const config = { ...CONFIG, model: "gpt-5.6-sol" };
+    const initial = makeStateChange(config, "idle", "T", {}, initialStatusExt(config));
+    expect(initial.ext).toEqual({
+      engine: "codex",
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+        supports_session_reset: true,
+        session_reset_modes: ["new", "clear"],
+      },
+    });
+  });
+
+  it("未申告 catalog は switch capability を fail-closed にする (#107)", () => {
+    expect(initialStatusExt({ ...CONFIG, codex_auth_mode: "unknown" }))
+      .toMatchObject({ session_capabilities: {
+        supports_model_switch: false,
+        supports_effort_switch: false,
+      } });
+  });
+});
 
 function usageEvent(): ThreadEvent {
   return {

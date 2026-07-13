@@ -5,8 +5,9 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { AgentHost } from "../src/host.js";
+import { AgentHost, initialStatusExt } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
+import { makeStateChange } from "@kaoiro/agent-common";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import {
   PENDING_UPLOAD_TTL_MS,
@@ -20,6 +21,21 @@ const config: WrapperConfig = {
   persona: { id: "p", name: "P", sprite_set: "p" },
   server_url: "ws://localhost:4000/wrapper",
 };
+
+describe("initialStatusExt", () => {
+  it("initial idle に engine と capabilities を stamp する (#107)", () => {
+    const initial = makeStateChange(config, "idle", "T", {}, initialStatusExt());
+    expect(initial.ext).toEqual({
+      engine: "claude-code",
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_session_reset: true,
+        session_reset_modes: ["new", "clear"],
+      },
+    });
+  });
+});
 
 // The host reads only a few SDK fields; build minimal shapes and cast.
 const msg = (shape: unknown): SDKMessage => shape as SDKMessage;

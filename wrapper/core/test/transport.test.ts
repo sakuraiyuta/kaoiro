@@ -54,12 +54,36 @@ vi.mock("phoenix", () => {
 vi.stubGlobal("WebSocket", class {});
 
 import { ServerLink } from "../src/transport.js";
+import type { Envelope } from "@kaoiro/protocol";
 
 function emit(event: string, payload: unknown): void {
   const handler = mock.handlers.get(event);
   if (!handler) throw new Error(`no handler registered for ${event}`);
   handler(payload);
 }
+
+describe("ServerLink — initial envelope sequence (#107)", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+  });
+
+  it("first send は seq=1 を付与し ext を透過する", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    link.send({
+      version: "0", agent_id: "a.agent",
+      persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      ts: "T", type: "state_change", state: "idle", payload: {},
+      ext: { engine: "claude-code",
+        session_capabilities: { supports_attachments: true } },
+    } as Envelope);
+
+    expect(mock.lastPush).toMatchObject({ event: "envelope", payload: {
+      seq: 1, ext: { engine: "claude-code",
+        session_capabilities: { supports_attachments: true } },
+    } });
+  });
+});
 
 describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => {
   beforeEach(() => mock.handlers.clear());

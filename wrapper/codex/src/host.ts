@@ -59,6 +59,36 @@ export interface CodexClientLike {
   resumeThread(id: string, options?: ThreadOptions): CodexThreadLike;
 }
 
+type CodexCatalog = ReturnType<typeof resolveCodexCatalog>;
+
+function initialStatusExtFromCatalog(
+  catalog: CodexCatalog,
+  model: string | null,
+): Record<string, unknown> {
+  return {
+    engine: "codex",
+    session_capabilities: {
+      supports_attachments: false,
+      supports_user_input_dialog: true,
+      supports_model_switch: catalog.length > 0,
+      supports_effort_switch:
+        (catalog.find((entry) => entry.value === model)?.effort_levels?.length ?? 0) > 0,
+      supports_session_reset: true,
+      session_reset_modes: ["new", "clear"],
+    },
+  };
+}
+
+/** Config-static status fields available before the Codex SDK starts.
+ *  Catalog resolution is synchronous and matches the host projection. */
+export function initialStatusExt(config: WrapperConfig): Record<string, unknown> {
+  const catalog = resolveCodexCatalog(
+    config.codex_auth_mode ?? "unknown",
+    config.codex_chatgpt_plan,
+  );
+  return initialStatusExtFromCatalog(catalog, config.model ?? null);
+}
+
 export interface CodexHostOptions {
   /** Invoked on every state transition with the common envelope. */
   onState: (envelope: Envelope) => void;
@@ -130,7 +160,7 @@ export class CodexHost implements EngineAdapter {
   readonly #sandbox: NonNullable<WrapperConfig["sandbox"]>;
   readonly #networkAccess: boolean;
   readonly #cwd: string = process.cwd();
-  readonly #catalog: ReturnType<typeof resolveCodexCatalog>;
+  readonly #catalog: CodexCatalog;
   #pendingPermission: PendingPermissionExt | null = null;
   #pendingQuestion: PendingQuestionExt | null = null;
   /** Queued operator instructions; #wake resolves the run loop's wait. */
@@ -537,8 +567,9 @@ export class CodexHost implements EngineAdapter {
   }
 
   #statusExt(consumeOneShot = false): Record<string, unknown> {
-    const ext: Record<string, unknown> = {};
-    ext.engine = "codex";
+    const ext: Record<string, unknown> = {
+      ...initialStatusExtFromCatalog(this.#catalog, this.#model),
+    };
     // Effective resolved settings this run (ADR-0014 F1 追補, phase-15 D8).
     // Rides every state_change so the D8 drift audit and any downstream
     // consumer sees "what am I enforcing right now". resume_snapshot /
@@ -577,16 +608,6 @@ export class CodexHost implements EngineAdapter {
     // `to_session_id=null` and the server's `session_reset_completed`
     // broadcast rides that null; the ordinary envelope ingest path
     // stamps the pointer once the first turn produces one.
-    ext.session_capabilities = {
-      supports_attachments: false,
-      supports_user_input_dialog: true,
-      supports_model_switch: this.#catalog.length > 0,
-      supports_effort_switch:
-        (this.#catalog.find((entry) => entry.value === this.#model)
-          ?.effort_levels?.length ?? 0) > 0,
-      supports_session_reset: true,
-      session_reset_modes: ["new", "clear"],
-    };
     if (this.#modelPending !== null) {
       ext.pending_model = this.#modelPending;
     }

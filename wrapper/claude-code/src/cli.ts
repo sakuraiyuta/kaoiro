@@ -18,7 +18,7 @@
 
 import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory } from "./history.js";
-import { AgentHost } from "./host.js";
+import { AgentHost, initialStatusExt } from "./host.js";
 import {
   InterAgentTool,
   LIST_AGENTS_TOOL_FQN,
@@ -465,7 +465,9 @@ async function main(): Promise<void> {
     // announce idle ourselves — an agent absent from the dashboard
     // cannot receive the instruction that would start that turn.
     if (prompt === undefined) {
-      const idle = makeStateChange(config, "idle", new Date().toISOString());
+      const idle = makeStateChange(
+        config, "idle", new Date().toISOString(), {}, initialStatusExt(),
+      );
       printState(idle);
       link?.send(idle);
     }
@@ -483,7 +485,9 @@ async function main(): Promise<void> {
       // carries a prompt (spawn with initial_prompt + resume_session_id)
       // skipped it, so seed the entry here before the reset.
       if (prompt !== undefined) {
-        link.send(makeStateChange(config, "idle", new Date().toISOString()));
+        link.send(makeStateChange(
+          config, "idle", new Date().toISOString(), {}, initialStatusExt(),
+        ));
       }
       const history = readSessionHistory(process.cwd(), resumeSessionId, config);
       // Reset first — unconditionally on resume — so a server still holding

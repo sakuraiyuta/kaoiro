@@ -23,7 +23,7 @@ import type {
   ModelSource,
 } from "@kaoiro/agent-common";
 import { ServerLink, loadConfig, parseCliArgs } from "@kaoiro/wrapper-core";
-import { CodexHost } from "./host.js";
+import { CodexHost, initialStatusExt } from "./host.js";
 import { replayCodexHistory } from "./history.js";
 
 const COLOR: Record<KaoiroState, string> = {
@@ -316,7 +316,10 @@ async function main(): Promise<void> {
     // Idle-wait start, matching the Claude CLI: announce idle so the agent
     // appears on the dashboard before its first turn.
     if (prompt === undefined) {
-      const idle = makeStateChange(config, "idle", new Date().toISOString());
+      const idle = makeStateChange(
+        effectiveConfig, "idle", new Date().toISOString(), {},
+        initialStatusExt(effectiveConfig),
+      );
       printState(idle);
       link?.send(idle);
     }
@@ -331,7 +334,10 @@ async function main(): Promise<void> {
         resumeSessionId,
         prompt === undefined
           ? undefined
-          : makeStateChange(config, "idle", new Date().toISOString()),
+          : makeStateChange(
+              effectiveConfig, "idle", new Date().toISOString(), {},
+              initialStatusExt(effectiveConfig),
+            ),
       );
     }
     await host.run(prompt);

@@ -79,6 +79,21 @@ import {
 /** Cap on queued user turns; send() throws beyond this (fail fast). */
 const MAX_QUEUED_TURNS = 1000;
 
+/** Adapter-static status fields available before the Claude SDK starts.
+ *  The CLI uses this for the initial idle state_change so ADR-0034's
+ *  first-envelope capability contract does not depend on SDK init. */
+export function initialStatusExt(): Record<string, unknown> {
+  return {
+    engine: "claude-code",
+    session_capabilities: {
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+      supports_session_reset: true,
+      session_reset_modes: ["new", "clear"],
+    },
+  };
+}
+
 /** A selectable model surfaced in state_change.ext.models (#54, ADR-0020),
  *  trimmed from the SDK's ModelInfo to the snake_case fields the dashboard
  *  needs to render the `/model` / `/effort` dialogs. effort_levels is absent
@@ -877,8 +892,7 @@ export class AgentHost implements EngineAdapter {
    *  pending_permission is the authoritative pending-record (ADR-0022)
    *  carried while waiting_permission is in flight. */
   #statusExt(): Record<string, unknown> {
-    const ext: Record<string, unknown> = {};
-    ext.engine = "claude-code";
+    const ext: Record<string, unknown> = { ...initialStatusExt() };
     // Session capabilities (ADR-0034 F1/F4, phase-15 15-14): advertised
     // from the first state_change onward (adapter-static values, no SDK
     // init await). Claude Code accepts uploads and provides the SDK's
@@ -897,12 +911,6 @@ export class AgentHost implements EngineAdapter {
     // send_instruction path handles `/new`・`/clear` as reserved-command
     // rejects, so the capability=true stamp is safely observable but
     // does not yet reach a user-triggerable code path.
-    ext.session_capabilities = {
-      supports_attachments: true,
-      supports_user_input_dialog: true,
-      supports_session_reset: true,
-      session_reset_modes: ["new", "clear"],
-    };
     if (this.#model !== null) ext.model = this.#model;
     if (this.#modelSource !== null) ext.model_source = this.#modelSource;
     if (this.#cwd !== null) ext.cwd = this.#cwd;
