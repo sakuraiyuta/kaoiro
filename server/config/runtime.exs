@@ -68,6 +68,13 @@ config :kaoiro_server,
        :permission_modes_path,
        System.get_env("KAOIRO_PERMISSION_MODES_PATH")
 
+# DETS source of truth for structured inter-agent envelopes (#105). SDK
+# JSONL can reconstruct ordinary logs but not these messages, so production
+# must point this at the same restart-surviving volume as the other ledgers.
+config :kaoiro_server,
+       :inter_agent_history_path,
+       System.get_env("KAOIRO_INTER_AGENT_HISTORY_PATH")
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

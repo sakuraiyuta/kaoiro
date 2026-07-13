@@ -151,6 +151,14 @@ resolved snapshot」に拡張する:
 再 yield しないため、案 A(SDK 再 stream を拾う)は不成立。検証詳細は
 [#50](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/50)。
 
+例外として、`inter_agent_message` はSDKへ注入された整形済みuser textから
+元のrouting metadata (`to` / `kind` / `conversation_id` / `turn_number`)を
+逆算できず、JSONLからstructured envelopeを再構築できない。この型だけは
+serverのDETS-backed `InterAgentHistory`を正本とし、senderごと最新500件を
+dogfood/container再起動を跨いで保持する (#105)。operatorへのhistory push時は
+volatile `AgentStates` のIAを除いてdurable IAをmergeし、既存dashboard fan-outで
+receiver側にも投影する。agent削除時はsender/receiver関連recordを同期purgeする。
+
 ## Consequences
 
 ### Positive

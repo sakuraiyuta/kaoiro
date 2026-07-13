@@ -28,7 +28,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
   only the in-memory ring buffer, never the wrapper's session logs.
   `delete_agent` (operator-only, issue #14; extended by ADR-0030 D6)
   purges an offline agent from every server-side store — `AgentStates`
-  (memory) + `AgentDirectory` / `SessionPointers` / `PermissionModes`
+  (memory) + `AgentDirectory` / `SessionPointers` / `PermissionModes` /
+  `InterAgentHistory`
   (persistent) — and broadcasts `agent_deleted` so every client drops it
   from the grid. Accepts both AgentStates-known disconnected agents and
   directory-only entries whose AgentStates counterpart is absent (server
@@ -62,6 +63,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.HostRegistry
+  alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
@@ -152,7 +154,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # directory carries persona (+ operator-picked custom name) so the client
     # can render offline agents' tiles for the restore UI (ADR-0030 D5).
     if role == :operator do
-      push(socket, "history", %{"agents" => AgentStates.histories()})
+      push(socket, "history", %{"agents" => merged_histories()})
       push(socket, "hosts", %{"hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())})
       push(socket, "directory", %{"entries" => AgentDirectory.all()})
     end
@@ -605,7 +607,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Removes the agent from every server-side store. AgentStates.delete keeps
   # the disconnected guard (a live agent cannot be dropped); a directory-only
   # entry skips that step (never in AgentStates) and still purges the DETS
-  # ledgers. AgentDirectory / SessionPointers / PermissionModes deletes are
+  # ledgers. AgentDirectory / SessionPointers / PermissionModes /
+  # InterAgentHistory deletes are
   # idempotent, so a stale pointer for an already-vanished AgentStates entry
   # still yields :ok — a single delete request cleans up everything.
   defp purge_agent_records(agent_id) do
@@ -613,11 +616,38 @@ defmodule KaoiroServerWeb.AgentsChannel do
       AgentDirectory.delete(agent_id)
       SessionPointers.delete(agent_id)
       KaoiroServer.PermissionModes.delete(agent_id)
+      InterAgentHistory.delete_agent(agent_id)
       # phase-17 17-4: clear any dangling reset lock + dispatch cooldown
       # so a respawn under the same agent_id does not inherit stale state.
       SessionResets.delete(agent_id)
       :ok
     end
+  end
+
+  # Ordinary log/result/boundary history remains memory-only and is rebuilt
+  # from SDK JSONL. Structured IA cannot be rebuilt, so DETS is authoritative
+  # for that type. Drop volatile IA before merging to avoid live-run doubles.
+  defp merged_histories do
+    volatile_without_ia =
+      AgentStates.histories()
+      |> Enum.flat_map(fn {agent_id, entries} ->
+        kept = Enum.reject(entries, &(Map.get(&1, "type") == "inter_agent_message"))
+        if kept == [], do: [], else: [{agent_id, kept}]
+      end)
+      |> Map.new()
+
+    volatile_without_ia
+    |> Map.merge(InterAgentHistory.all(), fn _agent_id, volatile, durable ->
+      volatile ++ durable
+    end)
+    |> Map.new(fn {agent_id, entries} ->
+      sorted =
+        Enum.sort_by(entries, fn envelope ->
+          {Map.get(envelope, "ts", ""), Map.get(envelope, "seq", 0)}
+        end)
+
+      {agent_id, sorted}
+    end)
   end
 
   defp delete_live_if_present(agent_id) do

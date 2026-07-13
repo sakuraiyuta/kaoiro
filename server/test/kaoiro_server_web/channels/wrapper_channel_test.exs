@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.SessionPointers
 
   defp envelope(agent_id, state) do
@@ -515,6 +516,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert AgentStates.snapshot()[from_id]["state"] == "idle"
       assert [stored] = AgentStates.histories()[from_id]
       assert stored == env
+      assert InterAgentHistory.list_for(from_id) == [env]
     end
 
     test "自己ルーティングは :self_routing で拒否する" do

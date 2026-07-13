@@ -6,6 +6,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.HostRegistry
+  alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.SessionPointers
   alias KaoiroServerWeb.AgentsChannel
 
@@ -492,12 +493,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
     end
 
-    test "operator は disconnected agent を削除し 4 store が purge される" do
+    test "operator は disconnected agent を削除し durable IA を含む全 store を purge する" do
       agent_id = "test.del-1"
       put_disconnected(agent_id)
       AgentDirectory.record(agent_id, @ao)
       SessionPointers.record(agent_id, "sess-del-1", "/home/user/proj")
       KaoiroServer.PermissionModes.record(agent_id, "plan")
+      :ok = InterAgentHistory.append(durable_inter_agent_envelope(agent_id, "test.del-peer", 1))
+      :ok = InterAgentHistory.append(durable_inter_agent_envelope("test.del-peer", agent_id, 2))
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -511,6 +514,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # PermissionModes.record は cast なので poll
       _ = KaoiroServer.PermissionModes.all()
       assert KaoiroServer.PermissionModes.get(agent_id) == nil
+      assert InterAgentHistory.list_for(agent_id) == []
+      assert InterAgentHistory.list_for("test.del-peer") == []
     end
 
     test "AgentStates 不在の directory-only entry も削除できる (ADR-0030 D6)" do
@@ -1133,6 +1138,26 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   end
 
   describe "返答ログの operator 限定配信 (ADR-0012)" do
+    defp durable_inter_agent_envelope(agent_id, to, turn) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => @ao,
+        "ts" => "2026-07-13T00:00:00Z",
+        "seq" => turn,
+        "type" => "inter_agent_message",
+        "state" => "tool_running",
+        "payload" => %{
+          "to" => to,
+          "conversation_id" => "cid-durable-#{agent_id}",
+          "turn_number" => turn,
+          "kind" => "inform",
+          "body" => "durable"
+        },
+        "ext" => %{}
+      }
+    end
+
     defp log_envelope(agent_id, text) do
       %{
         "version" => "0",
@@ -1164,6 +1189,34 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "snapshot", %{"agents" => _}
       assert_push "history", %{"agents" => agents}
       assert [%{"payload" => %{"text" => "やります"}}] = agents[agent_id]
+    end
+
+    test "AgentStates が空でも durable IA を join history に復元する (#105)" do
+      agent_id = "test.hist-durable"
+      env = durable_inter_agent_envelope(agent_id, "test.hist-peer", 1)
+      :ok = InterAgentHistory.append(env)
+      on_exit(fn -> InterAgentHistory.delete_agent(agent_id) end)
+
+      refute Map.has_key?(AgentStates.histories(), agent_id)
+      _socket = join_as(:operator)
+
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => agents}
+      assert agents[agent_id] == [env]
+    end
+
+    test "volatile IA と durable IA は join history で重複しない (#105)" do
+      agent_id = "test.hist-dedupe"
+      env = durable_inter_agent_envelope(agent_id, "test.hist-peer", 1)
+      put_agent(agent_id)
+      :ok = AgentStates.append_log(env)
+      :ok = InterAgentHistory.append(env)
+      on_exit(fn -> InterAgentHistory.delete_agent(agent_id) end)
+
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => agents}
+      assert agents[agent_id] == [env]
     end
 
     test "viewer には履歴 push が来ない" do

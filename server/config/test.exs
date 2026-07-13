@@ -25,6 +25,14 @@ config :kaoiro_server,
        :agent_directory_path,
        Path.join(System.tmp_dir!(), "kaoiro_test_agent_directory.dets")
 
+# Per-run throwaway DETS file for durable inter-agent history (#105).
+config :kaoiro_server,
+       :inter_agent_history_path,
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_inter_agent_history_#{System.unique_integer([:positive])}.dets"
+       )
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

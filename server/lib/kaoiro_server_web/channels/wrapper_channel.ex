@@ -19,6 +19,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.ConversationStates
+  alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
   alias KaoiroServerWeb.AgentId
@@ -229,7 +230,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # dashboard reconnect/resume without clobbering the sender's authoritative
   # latest state. The client fans the retained sender copy out to both peers.
   defp store(%{"type" => "inter_agent_message"} = envelope) do
-    AgentStates.append_log(envelope)
+    case AgentStates.append_log(envelope) do
+      :ok -> InterAgentHistory.append(envelope)
+      :noop -> :noop
+    end
   end
 
   defp store(envelope), do: AgentStates.put(envelope, owner: self())
