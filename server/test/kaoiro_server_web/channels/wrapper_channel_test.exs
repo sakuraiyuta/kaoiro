@@ -251,7 +251,11 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       ref = push(socket, "history_reset", %{})
       assert_reply ref, :ok
-      assert_broadcast "history_reset", %{"agent_id" => ^agent_id}
+
+      assert_broadcast "history_reset", %{
+        "agent_id" => ^agent_id,
+        "preserve_inter_agent" => true
+      }
 
       # History gone; latest state untouched.
       refute Map.has_key?(AgentStates.histories(), agent_id)

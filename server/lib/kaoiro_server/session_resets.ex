@@ -314,10 +314,12 @@ defmodule KaoiroServer.SessionResets do
 
         case lock.mode do
           "clear" ->
+            :ok = KaoiroServer.InterAgentHistory.delete_agent(agent_id)
+
             KaoiroServerWeb.Endpoint.broadcast(
               "agents:lobby",
               "history_reset",
-              %{"agent_id" => agent_id}
+              %{"agent_id" => agent_id, "preserve_inter_agent" => false}
             )
 
             _ = KaoiroServer.AgentStates.clear_history_with_boundary(agent_id, marker)

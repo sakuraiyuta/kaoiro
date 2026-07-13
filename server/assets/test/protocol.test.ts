@@ -18,8 +18,9 @@ import {
   parseSessions,
   pendingPermissionFrom,
   pendingQuestionFrom,
+  parseHistoryReset,
   resultOf,
-  retainInterAgentHistory,
+  resetTranscriptHistory,
   resumeDriftFrom,
   parseSessionResetCompleted,
   parseSessionResetFailed,
@@ -349,8 +350,25 @@ describe("inter-agent history replay (#105)", () => {
     expect(expanded["agent-b"]).toEqual([message]);
   });
 
-  it("history_reset では inter-agent envelope だけを保持する", () => {
-    expect(retainInterAgentHistory([log, message])).toEqual([message]);
+  it("resume history_reset では inter-agent envelope だけを保持する", () => {
+    expect(resetTranscriptHistory([log, message], true)).toEqual([message]);
+  });
+
+  it("clear history_reset では inter-agent envelope も消去する", () => {
+    expect(resetTranscriptHistory([log, message], false)).toEqual([]);
+  });
+
+  it("history_reset flag の省略は preserve=true として後方互換にする", () => {
+    expect(parseHistoryReset({ agent_id: "agent-a" })).toEqual({
+      agent_id: "agent-a",
+      preserve_inter_agent: true,
+    });
+    expect(
+      parseHistoryReset({
+        agent_id: "agent-a",
+        preserve_inter_agent: false,
+      }),
+    ).toEqual({ agent_id: "agent-a", preserve_inter_agent: false });
   });
 
   it("durable IA と SPA 残留 log を timestamp 順に merge する", () => {
@@ -373,7 +391,7 @@ describe("inter-agent history replay (#105)", () => {
       { ...log, ts: "2026-07-13T05:00:03Z", seq: 3 },
       { ...log, ts: "2026-07-13T05:00:05Z", seq: 5 },
     ];
-    let transcript = retainInterAgentHistory([ia2, ia4]);
+    let transcript = resetTranscriptHistory([ia2, ia4], true);
     for (const envelope of replay) {
       transcript = mergeTranscriptEntries(transcript, [envelope]);
     }

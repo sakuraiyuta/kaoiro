@@ -4,7 +4,7 @@ description: /new・/clearをengine promptではなく第一級controlとして�
 status: completed
 phase: 17
 depends_on: [phase-15-wrapper-ux-parity]
-last_updated: 2026-07-12
+last_updated: 2026-07-13
 
 ---
 
@@ -72,6 +72,7 @@ phase-15完了時の状況を見てマスターが決める。相互depends_on�
 | 17-10 | old session picker/resumeのregression testを追加 | ✅ | pointer stackなし、host files SSOT。detach_session が session_id=nil + cwd/engine/snapshot 保持 (γ 17-3)、fresh session の初回 envelope で record 経由で新 pointer に上書き、既存 resume_session (ADR-0014 F2/F3/A4 継続) で旧 session に戻れる。session_pointers_test に detach + reattach の DETS 越し永続確認、agents_channel_test に resume_session の SessionPointer 一致確認 |
 | 17-11 | race/failure testを追加 | ✅ | instruction競合、double reset、旧event、spawn failure、rollback成功/失敗、timeout。**15-8 Finding 1/2 同型穴の phase-17 版**を追加: wrapper_channel_test に「pending stash 有り envelope で patch fire、無し envelope は noop」の 2 case (order independence)、agents_channel_test に「reset pending 中の resume_session は session_reset_pending で reject」(ADR-0036 F2 の列挙漏れを追補で塞ぐ)。既存 test で double reset / instruction / model / effort / permission_mode / timeout / spawn_failed → rollback / rollback_failed は既に cover 済み |
 | 17-12 | specs/運用docsを更新し全regression testを実行 | ✅ | protocol/architecture/threat-model 更新。protocol.md の type table に `session_boundary` 追加、方向別 table に `session_reset` / `session_reset_started/completed/failed` / `reset_session` / `session_reset_result` を追加。architecture.md に `SessionResets` GenServer + `confirm_connection` two-phase + `AgentStates.pending_boundary_patch` を明記。threat-model.md に **session_reset 防御 6 レイヤ** (operator-only / capability advertise / host binding exact match / reserved_session_command reject / SessionResets pending lock / viewer 情報境界) を新設。ADR-0036 F2 に resume_session 追補。両engine実機の検収はマスター + director で phase-17 完走後に実施予定 |
+| 17-13 | `/clear` 後に structured IA bubble が残る回帰を修正 | ✅ | resume と clear が共有していた `history_reset` に `preserve_inter_agent` flag を追加。resume は true（省略時も後方互換で true）、clear は false とし、clear completion で `InterAgentHistory.delete_agent/1` も実行して再起動後の復活を防止 |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blocked.
 

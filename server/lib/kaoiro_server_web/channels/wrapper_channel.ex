@@ -210,7 +210,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
     case AgentStates.reset_history(agent_id) do
       :ok ->
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_reset", %{
-          "agent_id" => agent_id
+          "agent_id" => agent_id,
+          "preserve_inter_agent" => true
         })
 
         {:reply, :ok, socket}

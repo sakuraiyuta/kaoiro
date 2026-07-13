@@ -153,6 +153,13 @@ export function modelSourceFrom(envelope: Envelope): string | null {
  *  self-contained per this file's plain-TS contract. */
 export type SessionResetMode = "new" | "clear";
 
+/** `history_reset` broadcast payload. The optional form records the v0
+ * compatibility rule: omission means preserve structured IA history. */
+export interface HistoryResetPayload {
+  agent_id: string;
+  preserve_inter_agent?: boolean;
+}
+
 /** Closed vocabulary of session-reset failure reasons broadcast on the
  *  `session_reset_failed` event (ADR-0036 F7, phase-17). Mirrors
  *  protocol.ts `SessionResetErrorReason`; the value list is exported so
@@ -704,6 +711,14 @@ export function retainInterAgentHistory(entries: Envelope[]): Envelope[] {
   return entries.filter((envelope) => envelope.type === "inter_agent_message");
 }
 
+/** Applies the normalized `history_reset` policy to one transcript. */
+export function resetTranscriptHistory(
+  entries: Envelope[],
+  preserveInterAgent: boolean,
+): Envelope[] {
+  return preserveInterAgent ? retainInterAgentHistory(entries) : [];
+}
+
 /** States where the agent is executing and an interrupt (ESC equivalent,
  *  #51) could land work. idle / waiting_input / done / error /
  *  disconnected have nothing to interrupt. Single source of truth so the
@@ -873,10 +888,9 @@ export interface KaoiroHandlers {
   /** A past-session log purge (issue #48): the named agent's transcript
    *  should drop every line outside `sessionId`. Operator-only. */
   onHistoryCleared?: (agentId: string, sessionId: string) => void;
-  /** A resume reconstruction reset (issue #50, ADR-0014 phase-2): the named
-   *  agent's transcript should be dropped entirely, just before the server
-   *  replays the JSONL-rebuilt `log` lines. Operator-only. */
-  onHistoryReset?: (agentId: string) => void;
+  /** A transcript projection reset. Resume reconstruction preserves
+   *  structured IA history; `/clear` removes it too. Operator-only. */
+  onHistoryReset?: (agentId: string, preserveInterAgent: boolean) => void;
   /** A disconnected agent was removed (issue #14): drop it from the grid.
    *  Operator-only. */
   onAgentDeleted?: (agentId: string) => void;
@@ -1212,6 +1226,22 @@ export function parseSessionResetFailed(
   return { request_id: p.request_id, agent_id: p.agent_id, mode, reason };
 }
 
+/** Normalizes the backwards-compatible `history_reset` payload. */
+export function parseHistoryReset(
+  value: unknown,
+): { agent_id: string; preserve_inter_agent: boolean } | null {
+  if (typeof value !== "object" || value === null) return null;
+  const p = value as Partial<HistoryResetPayload>;
+  if (typeof p.agent_id !== "string") return null;
+  return {
+    agent_id: p.agent_id,
+    preserve_inter_agent:
+      typeof p.preserve_inter_agent === "boolean"
+        ? p.preserve_inter_agent
+        : true,
+  };
+}
+
 function pushAsync(
   channel: Channel,
   event: string,
@@ -1314,9 +1344,10 @@ export function connectKaoiro(
       }
     },
   );
-  channel.on("history_reset", (payload: { agent_id?: unknown }) => {
-    if (typeof payload.agent_id === "string") {
-      handlers.onHistoryReset?.(payload.agent_id);
+  channel.on("history_reset", (payload: unknown) => {
+    const reset = parseHistoryReset(payload);
+    if (reset !== null) {
+      handlers.onHistoryReset?.(reset.agent_id, reset.preserve_inter_agent);
     }
   });
   channel.on("agent_deleted", (payload: { agent_id?: unknown }) => {

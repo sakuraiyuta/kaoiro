@@ -1,6 +1,7 @@
 defmodule KaoiroServer.SessionResetsTest do
   use ExUnit.Case, async: false
 
+  alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
 
@@ -144,6 +145,41 @@ defmodule KaoiroServer.SessionResetsTest do
 
       :ok = SessionResets.confirm_connection("a.res.confirm", nil, sr)
       refute SessionResets.pending?("a.res.confirm", sr)
+    end
+
+    test "clear completion は IA を含む完全 reset を broadcast し durable IA も purge",
+         %{resets: sr} do
+      agent_id = "a.res.clear-#{System.unique_integer([:positive])}"
+
+      ia = %{
+        "agent_id" => agent_id,
+        "type" => "inter_agent_message",
+        "payload" => %{
+          "to" => "peer.clear",
+          "conversation_id" => "clear-regression",
+          "turn_number" => 1
+        }
+      }
+
+      :ok = InterAgentHistory.append(ia)
+      on_exit(fn -> InterAgentHistory.delete_agent(agent_id) end)
+      KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "clear", "idle", "sess-old", sr)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
+      :ok = SessionResets.confirm_connection(agent_id, nil, sr)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "history_reset",
+        payload: %{
+          "agent_id" => ^agent_id,
+          "preserve_inter_agent" => false
+        }
+      }
+
+      assert InterAgentHistory.list_for(agent_id) == []
     end
 
     test "confirm_connection は :spawning フェーズでは no-op (runner ok 未受信)",

@@ -211,12 +211,12 @@ Channels のチャネルイベント名と内容。トピックは
 | 方向 | イベント | 内容 |
 |---|---|---|
 | ラッパー → サーバ | `envelope` | エンベロープ全体 |
-| ラッパー → サーバ | `history_reset` | `{}`。resume 起動時、wrapper が JSONL から再構築した表示履歴を `log` で再生する直前に送る。サーバは当該 agent のリングバッファを**全消去**(append でなく上書き目的 — crash 後もサーバ生存時は同一 session の旧行が残るため)し `history_reset` を broadcast。状態未確立(エントリ無し)は no-op で ack のみ。掃除は表示用履歴のみで wrapper の JSONL には触れない([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2、#50) |
+| ラッパー → サーバ | `history_reset` | `{}`。resume 起動時、wrapper が JSONL から再構築した表示履歴を `log` で再生する直前に送る。サーバは当該 agent の JSONL で再構築可能なリングバッファ行を消去し、`history_reset { agent_id, preserve_inter_agent: true }` を broadcast。structured IA は SDK JSONL から復元できないため保持する。状態未確立(エントリ無し)は no-op で ack のみ。掃除は表示用履歴のみで wrapper の JSONL には触れない([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2、#50、#105) |
 | ラッパー → サーバ | `directory_request` | `{}`。inter-agent messaging で wrapper が persona 名 → agent_id 解決を行うための peer 一覧取得。 サーバは `AgentStates.snapshot()` から **送信元 wrapper を除外** し、 各 entry を `{agent_id, persona: {id, name, sprite_set}, state}` の最小形に丸めて `{:ok, %{agents: [...]}}` で reply。 wrapper 側は `mcp__kaoiro__list_agents` ツールでこれを呼ぶ([protocol-inter-agent](protocol-inter-agent.md) コンパニオンツール) |
 | サーバ → クライアント | `snapshot` | `{ agents: { <agent_id>: envelope } }`。join 直後に push |
 | サーバ → クライアント | `envelope` | エンベロープ全体(状態変化の都度 broadcast) |
 | サーバ → クライアント | `history_cleared` | `{ agent_id, session_id }`。`clear_history` 成功後に broadcast。クライアントは当該 agent の表示用ログを `session_id` 一致のものだけへ再フィルタ(#48)。**operator 限定配信**(viewer は log 自体を持たないため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
-| サーバ → クライアント | `history_reset` | `{ agent_id }`。`history_reset` 受理後に broadcast。クライアントは当該 agent の表示用ログを**全消去**し、続いて再生される `log` 行で再構築する。**operator 限定配信**(viewer は log を持たないため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)、#50) |
+| サーバ → クライアント | `history_reset` | `{ agent_id, preserve_inter_agent: boolean }`。resume 再構築は `true` として JSONL で復元不能な structured IA を保持し、`/clear` は `false` として IA を含む表示projectionを完全消去する。flag 省略は旧serverとの後方互換のため `true` と解釈する。**operator 限定配信**(viewer は log を持たないため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)、#50、#105、[ADR-0036](../adr/0036-session-lifecycle-commands.md) F3) |
 | サーバ → クライアント | `agent_deleted` | `{ agent_id }`。`delete_agent` 成功後に broadcast。クライアントは当該 agent をグリッドと表示用ログから除去(#14)。viewer にも配信(grid 整合のため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 | クライアント → サーバ | `attach_open` | `{ agent_id, upload_id, filename, mime, size, chunks }`。**operator のみ**。ファイル添付の予告。upload_id は client 採番(セッション内一意)。該当ラッパーへ relay、未知 agent_id は `{:error, unknown_agent}`。詳細は下記「ファイルアップロード wire」 |
 | クライアント → サーバ | `attach_chunk` | **binary frame**(`<u32 upload_id_len><upload_id utf8><u32 chunk_index><chunk_bytes>`)。**operator のみ**。該当ラッパーへ透過 relay。詳細は下記「ファイルアップロード wire」 |

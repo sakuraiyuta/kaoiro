@@ -124,6 +124,13 @@ projectionだけ:
 - **`clear`**: AgentStatesの当該agent表示ringを全消去し、全clientへ既存
   `history_reset`をbroadcastした後、先頭に`session_boundary` markerを追加する。
 
+`clear` は structured inter-agent message を含む表示projectionの完全resetである。
+resume再構築時の IA 保持と区別するため、`history_reset` は
+`preserve_inter_agent=false` を明示し、durable store も
+`InterAgentHistory.delete_agent/1` で消去する。resume経路は
+`preserve_inter_agent=true`（旧payloadでflag省略時もtrue）として #105 の保持契約を
+維持する。
+
 markerは`{mode, previous_session_id?, to_session_id?, request_id, ts}`をoperator向け
 payloadに持つ。`to_session_id`はID確定後に追記し、lazy採番時は一時nullを許す。
 viewerへはsession IDを除いた安全な表示通知だけを配信する。会話履歴の正本である

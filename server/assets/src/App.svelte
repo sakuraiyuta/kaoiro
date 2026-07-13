@@ -22,7 +22,7 @@
     formatAgentLabel,
     isReplyEnvelope,
     mergeTranscriptEntries,
-    retainInterAgentHistory,
+    resetTranscriptHistory,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -274,15 +274,16 @@
             [agentId]: prev.filter((e) => e.session_id === sessionId),
           };
         },
-        onHistoryReset: (agentId) => {
-          // SDK JSONL replay rebuilds log/result, but not structured
-          // inter-agent envelopes. Keep those across the reset (#105).
-          if (logs[agentId]) {
-            logs = {
-              ...logs,
-              [agentId]: retainInterAgentHistory(logs[agentId]),
-            };
-          }
+        onHistoryReset: (agentId, preserveInterAgent) => {
+          // Resume replay cannot rebuild structured IA (#105), while
+          // `/clear` explicitly resets the complete display projection.
+          logs = {
+            ...logs,
+            [agentId]: resetTranscriptHistory(
+              logs[agentId] ?? [],
+              preserveInterAgent,
+            ),
+          };
         },
         onAgentDeleted: (agentId) => {
           // A disconnected agent was removed (#14, ADR-0030 D6): drop it

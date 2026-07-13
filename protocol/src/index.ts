@@ -257,6 +257,15 @@ export interface SessionCapabilitiesExt {
  *  session file. */
 export type SessionResetMode = "new" | "clear";
 
+/** server -> dashboard transcript reset. Resume reconstruction preserves
+ * structured inter-agent envelopes because SDK JSONL cannot replay them;
+ * `/clear` sets this false for a complete display-projection reset. Legacy
+ * servers may omit the flag, which clients interpret as true. */
+export interface HistoryResetPayload {
+  agent_id: string;
+  preserve_inter_agent?: boolean;
+}
+
 /** Closed vocabulary of session-reset failure reasons (ADR-0036 F7,
  *  phase-17 17-1). Loud values only — no silent fallback to prompt or
  *  old-session resume. `session_reset_pending` covers duplicate reset
