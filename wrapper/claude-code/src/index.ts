@@ -34,6 +34,8 @@ export {
 } from "./adapter.js";
 export { AgentHost } from "./host.js";
 export type { AgentHostOptions, PermissionDecision } from "./host.js";
+export { claudeBootstrapCatalog } from "./catalog.js";
+export type { SupportedModel } from "./catalog.js";
 export { ServerLink } from "@kaoiro/wrapper-core";
 export type { ServerLinkOptions } from "@kaoiro/wrapper-core";
 export { PermissionBroker } from "@kaoiro/agent-common";

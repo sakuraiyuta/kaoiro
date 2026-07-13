@@ -25,16 +25,27 @@ const config: WrapperConfig = {
 describe("initialStatusExt", () => {
   it("initial idle に engine と capabilities を stamp する (#107)", () => {
     const initial = makeStateChange(config, "idle", "T", {}, initialStatusExt());
-    expect(initial.ext).toEqual({
+    expect(initial.ext).toMatchObject({
       engine: "claude-code",
       session_capabilities: {
         supports_attachments: true,
         supports_user_input_dialog: true,
+        supports_model_switch: true,
         supports_effort_switch: true,
         supports_session_reset: true,
         session_reset_modes: ["new", "clear"],
       },
     });
+    expect((initial.ext.models as { value: string }[]).map((m) => m.value))
+      .toEqual([
+        "default",
+        "opus[1m]",
+        "claude-fable-5[1m]",
+        "sonnet",
+        "sonnet[1m]",
+        "haiku",
+        "claude-opus-4-7",
+      ]);
   });
 });
 
@@ -284,6 +295,7 @@ describe("AgentHost — query injection", () => {
     expect(first.ext?.session_capabilities).toEqual({
       supports_attachments: true,
       supports_user_input_dialog: true,
+      supports_model_switch: true,
       supports_effort_switch: true,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
@@ -1047,6 +1059,105 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     { value: "haiku", displayName: "Haiku", description: "h" },
   ];
 
+  it("run 前の model/effort choice を first Query Options へ保持する (#110)", async () => {
+    const envs: Envelope[] = [];
+    let seenOptions: Options | undefined;
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: makeQueryFn((args) => {
+        seenOptions = args.options;
+        async function* gen(): AsyncGenerator<SDKMessage, void> {}
+        return asQuery(gen());
+      }),
+      now: () => "T",
+    });
+
+    await host.setModel("claude-fable-5[1m]");
+    await host.setEffort("max");
+    await host.run();
+
+    expect(seenOptions).toMatchObject({
+      model: "claude-fable-5[1m]",
+      effort: "max",
+    });
+    expect(host.statusExtSnapshot()).toMatchObject({
+      model: "claude-fable-5[1m]",
+      model_source: "config",
+      effort: "max",
+      effort_source: "config",
+      effective: {
+        model: "claude-fable-5[1m]",
+        effort: "max",
+      },
+    });
+    expect(envs.at(-1)?.ext).toMatchObject({
+      model: "claude-fable-5[1m]",
+      effort: "max",
+    });
+  });
+
+  it("idle run 後の first-turn 前 choice も Query生成まで buffer する (#110)", async () => {
+    let seenOptions: Options | undefined;
+    let queryCreated = false;
+    const host = new AgentHost(config, {
+      onState: () => {},
+      deferQueryUntilFirstInput: true,
+      queryFn: makeQueryFn((args) => {
+        queryCreated = true;
+        seenOptions = args.options;
+        async function* gen(): AsyncGenerator<SDKMessage, void> {}
+        return asQuery(gen());
+      }),
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await Promise.resolve();
+    expect(queryCreated).toBe(false);
+    await host.setModel("claude-fable-5[1m]");
+    await host.setEffort("max");
+    await host.send("first turn");
+    await done;
+
+    expect(queryCreated).toBe(true);
+    expect(seenOptions).toMatchObject({
+      model: "claude-fable-5[1m]",
+      effort: "max",
+    });
+  });
+
+  it("idle Query待機は first turn 前の close で終了する (#110)", async () => {
+    const queryFn = vi.fn(scriptedQuery([]));
+    const host = new AgentHost(config, {
+      onState: () => {},
+      deferQueryUntilFirstInput: true,
+      queryFn,
+      now: () => "T",
+    });
+    const done = host.run();
+    await Promise.resolve();
+    host.close();
+    await done;
+    expect(queryFn).not.toHaveBeenCalled();
+  });
+
+  it("run 前は account default の effort を model choice より先に選べる (#110)", async () => {
+    let seenOptions: Options | undefined;
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: makeQueryFn((args) => {
+        seenOptions = args.options;
+        async function* gen(): AsyncGenerator<SDKMessage, void> {}
+        return asQuery(gen());
+      }),
+      now: () => "T",
+    });
+    await host.setEffort("high");
+    await host.run();
+    expect(seenOptions?.model).toBeUndefined();
+    expect(seenOptions?.effort).toBe("high");
+  });
+
   it("supportedModels を ext.models に付与する", async () => {
     const envs: Envelope[] = [];
     const queryFn = makeQueryFn(() => {
@@ -1238,16 +1349,18 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     await done;
   });
 
-  it("setModel / setEffort は run 前は no-op", async () => {
-    // Symmetric with interrupt: #query is null before run(), so the
-    // optional-chain makes the control a no-op the server can relay into.
+  it("setModel / setEffort は run 前の startup state に buffer する (#110)", async () => {
     const host = new AgentHost(config, {
       onState: () => {},
       queryFn: scriptedQuery([]),
       now: () => "T",
     });
-    await expect(host.setModel("opus")).resolves.toBeUndefined();
+    await expect(host.setModel("opus[1m]")).resolves.toBeUndefined();
     await expect(host.setEffort("high")).resolves.toBeUndefined();
+    expect(host.statusExtSnapshot()).toMatchObject({
+      model: "opus[1m]",
+      effort: "high",
+    });
   });
 
   it("supportedModels が reject してもセッションは正常終了する", async () => {

@@ -61,6 +61,10 @@ import {
 } from "./adapter.js";
 import { clipText, computeResumeDrift, logEntryToPayload } from "@kaoiro/agent-common";
 import { PERMISSION_MODE_AXES } from "./permission_axes.js";
+import {
+  claudeBootstrapCatalog,
+  type SupportedModel,
+} from "./catalog.js";
 import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
@@ -95,22 +99,13 @@ export function initialStatusExt(): Record<string, unknown> {
     session_capabilities: {
       supports_attachments: true,
       supports_user_input_dialog: true,
+      supports_model_switch: true,
       supports_effort_switch: true,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
     },
+    models: claudeBootstrapCatalog(),
   };
-}
-
-/** A selectable model surfaced in state_change.ext.models (#54, ADR-0020),
- *  trimmed from the SDK's ModelInfo to the snake_case fields the dashboard
- *  needs to render the `/model` / `/effort` dialogs. effort_levels is absent
- *  for models without effort support (e.g. Haiku). */
-export interface SupportedModel {
-  value: string;
-  display_name: string;
-  description: string;
-  effort_levels?: EffortLevel[];
 }
 
 // PermissionDecision / QuestionDecision moved to @kaoiro/agent-common with
@@ -190,6 +185,13 @@ export interface AgentHostOptions {
    * production always supplies it).
    */
   appendSystemPrompt?: string;
+  /**
+   * Delay Query construction until the first queued user turn. Production
+   * idle-wait wrappers enable this so model / effort controls selected from
+   * a fresh AgentDetail become first-Query Options instead of racing an SDK
+   * control request whose initialization also waits for that first turn.
+   */
+  deferQueryUntilFirstInput?: boolean;
   /** SDK query() factory; injectable for tests. Defaults to the real SDK. */
   queryFn?: typeof query;
   /** ISO-8601 timestamp source; injectable for tests. */
@@ -260,9 +262,9 @@ export class AgentHost implements EngineAdapter {
   #fastMode: string | null = null;
   /** Selectable models with their per-model effort levels (#54, ADR-0020);
    *  surfaced so the dashboard can build the bare `/model` / `/effort` choice
-   *  dialogs without a round-trip. Fetched once via supportedModels() after
-   *  the session's first init; null until then. */
-  #models: SupportedModel[] | null = null;
+   *  dialogs without a round-trip. Starts with the optimistic bootstrap
+   *  snapshot and is replaced once supportedModels() resolves after init. */
+  #models: SupportedModel[] = claudeBootstrapCatalog();
   /** Guards the one-shot supportedModels fetch so it is not re-issued per
    *  message; reset on failure to allow a later retry. */
   #modelsRequested = false;
@@ -647,15 +649,44 @@ export class AgentHost implements EngineAdapter {
   /** Switch the model for subsequent turns (#54, ADR-0020). `value` is an
    *  alias from supportedModels (e.g. "opus[1m]", "sonnet", "default"); the
    *  SDK resolves it. Next-message granularity — the active turn is unaffected.
-   *  No-op before the session's first turn establishes the Query. */
+   *  Before run(), buffers the choice into the first Query's Options. */
   async setModel(value: string): Promise<void> {
     const current = this.#query;
-    if (current === null) return;
     const nextModel = this.#models?.find((model) => model.value === value);
     const invalidEffort =
       this.#effort !== null &&
       nextModel !== undefined &&
       !(nextModel.effort_levels?.includes(this.#effort as EffortLevel) ?? false);
+    // Before run(), commit into the fields used to construct query Options.
+    // This closes the fresh-idle race where the dashboard can send set_model
+    // after the CLI's idle announce but before #query exists.
+    if (current === null) {
+      if (nextModel === undefined) {
+        this.#switchErrorOnce = {
+          kind: "model",
+          requested: value,
+          reason: "model_catalog_unavailable",
+        };
+        this.#emitState(this.#machine.state);
+        throw new Error(`unknown bootstrap model: ${value}`);
+      }
+      this.#model = value;
+      this.#modelSource = "config";
+      this.#operatorSwitchedFields.add("model");
+      this.#operatorSwitchedFields.add("model_source");
+      if (invalidEffort) {
+        this.#effort = null;
+        this.#effortSource = null;
+        this.#effortLastGood = null;
+        this.#effortLastGoodSource = null;
+        this.#operatorSwitchedFields.add("effort");
+        this.#operatorSwitchedFields.add("effort_source");
+        this.#effortResetOnce = true;
+      }
+      this.#switchErrorOnce = null;
+      this.#emitState(this.#machine.state);
+      return;
+    }
     if (invalidEffort) {
       this.#effortPending = null;
       this.#effortResetPending = true;
@@ -711,7 +742,29 @@ export class AgentHost implements EngineAdapter {
    *  deliberately. Next-message granularity. */
   async setEffort(level: string): Promise<void> {
     const current = this.#query;
-    if (current === null) return;
+    if (current === null) {
+      const active = this.#models.find(
+        (model) => model.value === (this.#model ?? "default"),
+      );
+      if (!(active?.effort_levels?.includes(level as EffortLevel) ?? false)) {
+        this.#switchErrorOnce = {
+          kind: "effort",
+          requested: level,
+          reason: "control_rejected",
+        };
+        this.#emitState(this.#machine.state);
+        throw new Error(`unsupported bootstrap effort: ${level}`);
+      }
+      this.#effort = level;
+      this.#effortSource = "config";
+      this.#effortLastGood = level;
+      this.#effortLastGoodSource = "config";
+      this.#operatorSwitchedFields.add("effort");
+      this.#operatorSwitchedFields.add("effort_source");
+      this.#switchErrorOnce = null;
+      this.#emitState(this.#machine.state);
+      return;
+    }
     this.#effortPending = level;
     this.#effortResetPending = false;
     this.#emitState(this.#machine.state);
@@ -801,8 +854,9 @@ export class AgentHost implements EngineAdapter {
   /**
    * Start the session and consume messages until closed. With
    * `initialPrompt` the first turn starts immediately; without it the
-   * session idles on the streaming input until `send` delivers the
-   * first turn (e.g. an operator instruction relayed by the server).
+   * session waits until `send` delivers the first turn. Production enables
+   * deferQueryUntilFirstInput so fresh-idle model / effort picks can still
+   * become startup Options before the SDK Query is constructed.
    */
   async run(initialPrompt?: string): Promise<void> {
     if (initialPrompt !== undefined) await this.send(initialPrompt);
@@ -813,6 +867,13 @@ export class AgentHost implements EngineAdapter {
       this.tickGC();
     }, PENDING_UPLOAD_GC_INTERVAL_MS);
     if (typeof this.#gcTimer.unref === "function") this.#gcTimer.unref();
+    if (
+      initialPrompt === undefined &&
+      this.#options.deferQueryUntilFirstInput === true
+    ) {
+      await this.#waitForFirstInput();
+      if (this.#closed) return;
+    }
     // Merge CwdChanged into any user-supplied hooks instead of overwriting,
     // so #64's cwd refresh composes with the consumer's own hooks. CwdChanged
     // is the only mid-session cwd source (init carries it once, never updates).
@@ -842,6 +903,13 @@ export class AgentHost implements EngineAdapter {
           : {}),
       },
       ...this.#options.queryOptions,
+      // PRE-run model / effort switches override the constructor snapshot;
+      // queryOptions alone would retain the spawn-time values and silently
+      // lose a fresh-idle dashboard choice.
+      ...(this.#model !== null ? { model: this.#model } : {}),
+      ...(this.#effort !== null
+        ? { effort: this.#effort as EffortLevel }
+        : {}),
       hooks: {
         ...userHooks,
         CwdChanged: [
@@ -992,6 +1060,13 @@ export class AgentHost implements EngineAdapter {
     this.#options.onState(
       makeStateChange(this.#config, state, this.#now(), {}, this.#statusExt(true)),
     );
+  }
+
+  /** Non-consuming ext snapshot for the CLI's synthetic initial idle
+   * envelope. Unlike initialStatusExt(), this includes resolved startup and
+   * resume fields already known by the constructed host. */
+  statusExtSnapshot(): Record<string, unknown> {
+    return this.#statusExt(false);
   }
 
   /** Current Claude Code status meta as an ext object (#16). Empty keys are
@@ -1214,6 +1289,16 @@ export class AgentHost implements EngineAdapter {
         yield this.#queue.shift() as SDKUserMessage;
       }
       if (this.#closed) return;
+      await new Promise<void>((resolve) => {
+        this.#notify = resolve;
+      });
+    }
+  }
+
+  /** Wait without consuming the first queued turn. #input() will drain it
+   * after Query construction; close() shares #wake and ends the idle wait. */
+  async #waitForFirstInput(): Promise<void> {
+    while (this.#queue.length === 0 && !this.#closed) {
       await new Promise<void>((resolve) => {
         this.#notify = resolve;
       });

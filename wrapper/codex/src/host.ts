@@ -76,6 +76,7 @@ function initialStatusExtFromCatalog(
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
     },
+    ...(catalog.length > 0 ? { models: catalog } : {}),
   };
 }
 
@@ -564,6 +565,11 @@ export class CodexHost implements EngineAdapter {
         this.#statusExt(true),
       ),
     );
+  }
+
+  /** Non-consuming ext snapshot for the CLI's synthetic initial idle. */
+  statusExtSnapshot(): Record<string, unknown> {
+    return this.#statusExt(false);
   }
 
   #statusExt(consumeOneShot = false): Record<string, unknown> {

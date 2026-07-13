@@ -39,22 +39,26 @@ function connection(overrides: Partial<KaoiroConnection> = {}): KaoiroConnection
   } as unknown as KaoiroConnection;
 }
 
-function host(models: ModelOption[]): HostInfo {
+function host(models: ModelOption[], engine: "claude-code" | "codex" = "codex"): HostInfo {
   return {
     host_id: "host-a",
     personas: [{ id: "fuji", name: "藤", sprite_set: "fuji" }],
     cwd_allowlist: ["/workspace"],
-    capabilities: ["codex"],
-    engines: [{ id: "codex", models }],
+    capabilities: [engine],
+    engines: [{ id: engine, models }],
   };
 }
 
-async function renderLaunch(models: ModelOption[], conn = connection()) {
+async function renderLaunch(
+  models: ModelOption[],
+  conn = connection(),
+  engine: "claude-code" | "codex" = "codex",
+) {
   const target = document.createElement("div");
   document.body.append(target);
   const component = mount(LaunchDialog, {
     target,
-    props: { hosts: [host(models)], connection: conn, sessions: null, onClose: vi.fn() },
+    props: { hosts: [host(models, engine)], connection: conn, sessions: null, onClose: vi.fn() },
   });
   mounted.push(component);
   await tick();
@@ -110,6 +114,19 @@ const sol: ModelOption = {
   effort_levels: ["high", "xhigh"],
   default_effort: "high",
 };
+const claudeBootstrap: ModelOption[] = [
+  {
+    value: "default",
+    display_name: "Default (recommended)",
+    effort_levels: ["low", "medium", "high", "xhigh", "max"],
+  },
+  {
+    value: "claude-fable-5[1m]",
+    display_name: "Fable",
+    effort_levels: ["low", "medium", "high", "xhigh", "max"],
+  },
+  { value: "haiku", display_name: "Haiku" },
+];
 
 describe("phase-16 dashboard model switch integration", () => {
   it.each([
@@ -145,6 +162,61 @@ describe("phase-16 dashboard model switch integration", () => {
       model: "gpt-sol",
       effort: "high",
     }));
+  });
+
+  it("LaunchDialog offers the Claude bootstrap catalog before spawn (#110)", async () => {
+    const conn = connection();
+    const { target } = await renderLaunch(claudeBootstrap, conn, "claude-code");
+    const model = selectFor(target, "モデル");
+    expect([...model.options].slice(1).map((option) => option.value)).toEqual([
+      "default",
+      "claude-fable-5[1m]",
+      "haiku",
+    ]);
+    model.value = "claude-fable-5[1m]";
+    model.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+    const effort = selectFor(target, "effort");
+    effort.value = "max";
+    effort.dispatchEvent(new Event("change", { bubbles: true }));
+    target.querySelector("form")!.dispatchEvent(
+      new SubmitEvent("submit", { bubbles: true, cancelable: true }),
+    );
+    await tick();
+    expect(conn.spawn).toHaveBeenCalledWith(expect.objectContaining({
+      engine: "claude-code",
+      model: "claude-fable-5[1m]",
+      effort: "max",
+    }));
+  });
+
+  it("fresh idle keeps model/effort/ctx rows stable and switchable (#110)", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      models: claudeBootstrap,
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    expect(target.textContent).toContain("model");
+    expect(target.textContent).toContain("確認待ち");
+    expect(target.textContent).toContain("effort");
+    expect(target.textContent).toContain("既定");
+    expect(target.textContent).toContain("ctx");
+    expect(target.textContent).toContain("初回応答後に取得");
+    expect(target.querySelector('[title="モデルを切替"]')).not.toBeNull();
+    expect(target.querySelector('[title="effort を切替"]')).not.toBeNull();
+  });
+
+  it("permission switch uses the shrink-safe specialized class (#110)", async () => {
+    const { target } = await renderDetail({ engine: "claude-code" });
+    const button = target.querySelector(".cc-perm-switch");
+    expect(button).not.toBeNull();
+    expect(button?.textContent).toContain("書込:");
+    expect(button?.textContent).toContain("承認:");
   });
 
   it("hides both switch controls unless their capabilities are explicitly stamped", async () => {

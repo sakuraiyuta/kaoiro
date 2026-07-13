@@ -23,7 +23,7 @@ import type {
   ModelSource,
 } from "@kaoiro/agent-common";
 import { ServerLink, loadConfig, parseCliArgs } from "@kaoiro/wrapper-core";
-import { CodexHost, initialStatusExt } from "./host.js";
+import { CodexHost } from "./host.js";
 import { replayCodexHistory } from "./history.js";
 
 const COLOR: Record<KaoiroState, string> = {
@@ -318,7 +318,7 @@ async function main(): Promise<void> {
     if (prompt === undefined) {
       const idle = makeStateChange(
         effectiveConfig, "idle", new Date().toISOString(), {},
-        initialStatusExt(effectiveConfig),
+        host.statusExtSnapshot(),
       );
       printState(idle);
       link?.send(idle);
@@ -336,7 +336,7 @@ async function main(): Promise<void> {
           ? undefined
           : makeStateChange(
               effectiveConfig, "idle", new Date().toISOString(), {},
-              initialStatusExt(effectiveConfig),
+              host.statusExtSnapshot(),
             ),
       );
     }

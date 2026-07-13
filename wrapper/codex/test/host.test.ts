@@ -25,7 +25,7 @@ describe("initialStatusExt", () => {
   it("initial idle に config-static capabilities を stamp する (#107)", () => {
     const config = { ...CONFIG, model: "gpt-5.6-sol" };
     const initial = makeStateChange(config, "idle", "T", {}, initialStatusExt(config));
-    expect(initial.ext).toEqual({
+    expect(initial.ext).toMatchObject({
       engine: "codex",
       session_capabilities: {
         supports_attachments: false,
@@ -36,6 +36,8 @@ describe("initialStatusExt", () => {
         session_reset_modes: ["new", "clear"],
       },
     });
+    expect((initial.ext.models as { value: string }[]).map((m) => m.value))
+      .toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
   });
 
   it("未申告 catalog は switch capability を fail-closed にする (#107)", () => {

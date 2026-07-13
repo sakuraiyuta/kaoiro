@@ -18,11 +18,7 @@
 
 import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory } from "./history.js";
-import {
-  AgentHost,
-  CLAUDE_EFFORT_LEVELS,
-  initialStatusExt,
-} from "./host.js";
+import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
 import {
   InterAgentTool,
   LIST_AGENTS_TOOL_FQN,
@@ -417,6 +413,10 @@ async function main(): Promise<void> {
     onState,
     onLog,
     appendSystemPrompt,
+    // Keep Query unconstructed during fresh idle so AgentDetail model /
+    // effort picks become the first turn's Options, not initialization-bound
+    // SDK control requests (#110).
+    deferQueryUntilFirstInput: prompt === undefined,
     // attach_rejected / instruction_rejected ride the same envelope path
     // as state/log — the link relays them to the server (file-upload spec).
     onAttachRejected: (envelope) => link?.send(envelope),
@@ -488,7 +488,7 @@ async function main(): Promise<void> {
     // cannot receive the instruction that would start that turn.
     if (prompt === undefined) {
       const idle = makeStateChange(
-        config, "idle", new Date().toISOString(), {}, initialStatusExt(),
+        config, "idle", new Date().toISOString(), {}, host.statusExtSnapshot(),
       );
       printState(idle);
       link?.send(idle);
@@ -508,7 +508,7 @@ async function main(): Promise<void> {
       // skipped it, so seed the entry here before the reset.
       if (prompt !== undefined) {
         link.send(makeStateChange(
-          config, "idle", new Date().toISOString(), {}, initialStatusExt(),
+          config, "idle", new Date().toISOString(), {}, host.statusExtSnapshot(),
         ));
       }
       const history = readSessionHistory(process.cwd(), resumeSessionId, config);
