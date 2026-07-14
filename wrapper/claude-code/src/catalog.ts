@@ -17,60 +17,20 @@ const FULL_EFFORT = [
   "max",
 ] as const satisfies readonly EffortLevel[];
 
-const SONNET_EFFORT = [
-  "low",
-  "medium",
-  "high",
-  "max",
-] as const satisfies readonly EffortLevel[];
-
 /**
- * Optimistic startup snapshot from SDK 0.3.187 supportedModels(), verified
- * on 2026-07-13. The SDK's account-aware catalog replaces this after init;
- * this snapshot exists so LaunchDialog and a fresh idle AgentDetail can pick
- * the first turn's model / effort before that initialization is possible.
+ * Minimum-floor bootstrap (ADR-0037 F1). Only the `default` alias — which
+ * SDK resolves to the account's recommended model at init time — is exposed
+ * before init, so LaunchDialog and a fresh idle AgentDetail always have a
+ * safe choice. The SDK's account-aware catalog replaces this after init via
+ * AgentHost.#refreshSupportedModels(). Naming a specific model / generation
+ * here would rot with each Anthropic release, which is why F1 dropped the
+ * pre-init full listing.
  */
 const BOOTSTRAP: readonly SupportedModel[] = [
   {
     value: "default",
     display_name: "Default (recommended)",
-    description: "Opus 4.8 with 1M context · Best for everyday, complex tasks",
-    effort_levels: [...FULL_EFFORT],
-  },
-  {
-    value: "opus[1m]",
-    display_name: "Opus",
-    description: "Opus 4.8 with 1M context · Best for everyday, complex tasks",
-    effort_levels: [...FULL_EFFORT],
-  },
-  {
-    value: "claude-fable-5[1m]",
-    display_name: "Fable",
-    description:
-      "Fable 5 · Most capable for your hardest and longest-running tasks · Uses your limits ~2× faster than Opus",
-    effort_levels: [...FULL_EFFORT],
-  },
-  {
-    value: "sonnet",
-    display_name: "Sonnet",
-    description: "Sonnet 4.6 · Efficient for routine tasks",
-    effort_levels: [...SONNET_EFFORT],
-  },
-  {
-    value: "sonnet[1m]",
-    display_name: "Sonnet (1M context)",
-    description: "Sonnet 4.6 with 1M context · Draws from usage credits",
-    effort_levels: [...SONNET_EFFORT],
-  },
-  {
-    value: "haiku",
-    display_name: "Haiku",
-    description: "Haiku 4.5 · Fastest for quick answers",
-  },
-  {
-    value: "claude-opus-4-7",
-    display_name: "Opus 4.7",
-    description: "Newer version available · select Opus for Opus 4.8",
+    description: "Account-recommended model · resolved after session start",
     effort_levels: [...FULL_EFFORT],
   },
 ];

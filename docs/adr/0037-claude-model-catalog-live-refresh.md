@@ -34,6 +34,13 @@ Accepted (2026-07-14、マスター決裁)。実装は
 いない。モデル追加のたびに BOOTSTRAP snapshot を手動更新する運用は現実的で
 なくなった。
 
+Phase 18-2 の実測 (SDK 0.3.208 での `query.supportedModels()` dump、2026-07-14)
+で本 ADR の前提を追認した: (a) `value: "default"` の row は SDK 側で
+`resolvedModel: "claude-opus-4-8[1m]"` (現時点の account 推奨モデル) に解決され、
+「`default` alias は永久に腐らない」前提が成立、(b) 実測配列に `sonnet[1m]` と
+`claude-opus-4-7` が既に存在せず、`sonnet` は `claude-sonnet-5` に解決 —
+BOOTSTRAP snapshot の drift が実データで確認された。
+
 一方で「BOOTSTRAP 完全廃止」には構造的な障害がある: BOOTSTRAP は次の 2 経路で
 効いており、両者を一律に扱えない。
 
@@ -183,6 +190,5 @@ UI に通知 event を発行する。通知の粒度 (toast 1 度 / session log 
 
 [phase-18-claude-model-catalog-live](../plans/phase-18-claude-model-catalog-live.md)
 で 3 phase (SDK upgrade + 実測検証 / wrapper 改修 / client UI 対応) に分けて
-実装する。Phase 0 の実測結果次第では本 ADR の前提が崩れるため、
-[claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md)
-の解決を Phase 1 着手前に確定する。
+実装する。Phase 18-2 の実測 (2026-07-14) で `default` alias が
+`claude-opus-4-8[1m]` に解決されることを確認済み (詳細は本 ADR の Context 節)。

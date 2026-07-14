@@ -127,9 +127,9 @@ Claude 側 catalog は「(i) register 経路」と「(ii) `ext.models` 経路」
 (i) の bootstrap は `default` 1 エントリのみの最小 floor に縮小する
 (`display_name: "Default (recommended)"`、neutral description、
 `effort_levels` は FULL_EFFORT を仮出し)。`default` alias は SDK 側で
-"account 推奨モデル" を指す名前解決であり永久に腐らない、という前提に基づく
-(実測検証は
-[claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md))。
+"account 推奨モデル" を指す名前解決であり永久に腐らない、という前提は
+Phase 18-2 の実測で追認済み (詳細は
+[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) Context 節)。
 
 (ii) は SDK 実測を単一の source of truth とする。`#refreshSupportedModels()`
 には自動 bounded retry (上限 3 回) と手動 retry hook を実装し、失敗時は 1 度

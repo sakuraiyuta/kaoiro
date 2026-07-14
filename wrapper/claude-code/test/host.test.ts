@@ -44,15 +44,7 @@ describe("initialStatusExt", () => {
     });
     expect(
       (initial.ext.models as { value: string }[]).map((m) => m.value),
-    ).toEqual([
-      "default",
-      "opus[1m]",
-      "claude-fable-5[1m]",
-      "sonnet",
-      "sonnet[1m]",
-      "haiku",
-      "claude-opus-4-7",
-    ]);
+    ).toEqual(["default"]);
   });
 });
 
@@ -1199,26 +1191,26 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       now: () => "T",
     });
 
-    await host.setModel("claude-fable-5[1m]");
+    await host.setModel("default");
     await host.setEffort("max");
     await host.run();
 
     expect(seenOptions).toMatchObject({
-      model: "claude-fable-5[1m]",
+      model: "default",
       effort: "max",
     });
     expect(host.statusExtSnapshot()).toMatchObject({
-      model: "claude-fable-5[1m]",
+      model: "default",
       model_source: "config",
       effort: "max",
       effort_source: "config",
       effective: {
-        model: "claude-fable-5[1m]",
+        model: "default",
         effort: "max",
       },
     });
     expect(envs.at(-1)?.ext).toMatchObject({
-      model: "claude-fable-5[1m]",
+      model: "default",
       effort: "max",
     });
   });
@@ -1241,14 +1233,14 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     const done = host.run();
     await Promise.resolve();
     expect(queryCreated).toBe(false);
-    await host.setModel("claude-fable-5[1m]");
+    await host.setModel("default");
     await host.setEffort("max");
     await host.send("first turn");
     await done;
 
     expect(queryCreated).toBe(true);
     expect(seenOptions).toMatchObject({
-      model: "claude-fable-5[1m]",
+      model: "default",
       effort: "max",
     });
   });
@@ -1507,10 +1499,10 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       queryFn: scriptedQuery([]),
       now: () => "T",
     });
-    await expect(host.setModel("opus[1m]")).resolves.toBeUndefined();
+    await expect(host.setModel("default")).resolves.toBeUndefined();
     await expect(host.setEffort("high")).resolves.toBeUndefined();
     expect(host.statusExtSnapshot()).toMatchObject({
-      model: "opus[1m]",
+      model: "default",
       effort: "high",
     });
   });

@@ -17,10 +17,9 @@ Claude 側 catalog を再構成する。BOOTSTRAP は `default` 1 エントリ�
 に縮小し、`ext.models` 経路は SDK 実測を単一の source of truth とする。
 
 実装は 3 段階に分け、SDK upgrade → wrapper 改修 → client UI 対応の順で PR を
-分割する。Phase 18-1 の実測結果次第で ADR-0037 の前提が崩れる可能性があるため、
-Phase 18-2 着手前に
-[claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md)
-を確定させる。
+分割する。Phase 18-2 の実測で ADR-0037 の前提 (default alias が account 推奨
+モデルに解決される) は追認済み (2026-07-14、詳細は
+[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) の Context 節)。
 
 ## Acceptance Criteria
 
@@ -28,11 +27,11 @@ Phase 18-2 着手前に
       にアップグレードされ、既存 test suite が pass する
 - [x] `supportedModels()` の実測結果 (SDK upgrade 後) を記録し、
       `model: "default"` を渡した際の `model_source` と実効モデル解決先が
-      [claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md)
-      に追記される
+      [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) の
+      Context 節に反映される
 - [x] Q1 の実測結果が「`default` は account 推奨モデルに解決される」を確認できる
       (or ADR-0037 の再検討が必要な場合はマスターへ報告)
-- [ ] `wrapper/claude-code/src/catalog.ts` の `BOOTSTRAP` が `default` 1 エントリの
+- [x] `wrapper/claude-code/src/catalog.ts` の `BOOTSTRAP` が `default` 1 エントリの
       みに縮小され、`display_name: "Default (recommended)"` + neutral description で
       具体モデル名を引かない記述となる (`effort_levels` は FULL_EFFORT を維持)
 - [ ] `#refreshSupportedModels()` に自動 bounded retry (上限 3 回) が実装される
@@ -55,8 +54,8 @@ Phase 18-2 着手前に
 | # | Task | Status | Notes |
 |---|------|--------|-------|
 | 18-1 | `wrapper/package.json` の `@anthropic-ai/claude-agent-sdk` を最新 (`^0.3.208` 相当) にアップグレード | ✅ | 2026-07-14 完了 (commit 93f0e68)。resolved 0.3.187 → 0.3.208、blast radius は SDK + 8 platform binary のみ。breaking は `CanUseTool` return が `Promise<PermissionResult \| null>` へ変更、test 7 呼出しを `(await ...)!` で非 null narrow (14 line)、src (catalog.ts / host.ts) は F7 準拠で無改変 |
-| 18-2 | `model: "default"` の SDK 解決 semantic を実測検証し Q1 に追記 | ✅ | 2026-07-14 完了 (commit 93f0e68 に併走)。案 A 確定 (`default` → `resolvedModel: "claude-opus-4-8[1m]"`)。bonus: BOOTSTRAP drift 実証 (`sonnet[1m]` / `claude-opus-4-7` は SDK 側消滅、Sonnet 5 追従済み)、`ModelInfo` 拡張 5 field (`resolvedModel` / `supportsEffort` / `supportsAdaptiveThinking` / `supportsFastMode` / `supportsAutoMode`) 検出。詳細は [claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md) の実測結果節 |
-| 18-3 | `wrapper/claude-code/src/catalog.ts` の BOOTSTRAP を default 1 エントリに縮小 | ⏳ | `opus[1m]` / `claude-fable-5[1m]` / `sonnet` / `sonnet[1m]` / `haiku` / `claude-opus-4-7` を削除、`default` は `display_name: "Default (recommended)"`、neutral description に更新、`effort_levels` は FULL_EFFORT 維持 |
+| 18-2 | `model: "default"` の SDK 解決 semantic を実測検証し Q1 に追記 | ✅ | 2026-07-14 完了 (commit 93f0e68 に併走)。案 A 確定 (`default` → `resolvedModel: "claude-opus-4-8[1m]"`)。bonus: BOOTSTRAP drift 実証 (`sonnet[1m]` / `claude-opus-4-7` は SDK 側消滅、Sonnet 5 追従済み)、`ModelInfo` 拡張 5 field (`resolvedModel` / `supportsEffort` / `supportsAdaptiveThinking` / `supportsFastMode` / `supportsAutoMode`) 検出。18-3 commit で open-question を削除し実測根拠を [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) Context 節へ移設 |
+| 18-3 | `wrapper/claude-code/src/catalog.ts` の BOOTSTRAP を default 1 エントリに縮小 | ✅ | 2026-07-14 完了。neutral description は `"Account-recommended model · resolved after session start"`、`effort_levels` は FULL_EFFORT 維持。`SONNET_EFFORT` は orphan として削除。連動更新: `wrapper/claude-code/test/host.test.ts` (`initialStatusExt` → `["default"]`) / `runner/test/config.test.ts` (register models → `["default"]`) / open-question 削除 + [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) Context 節に実測根拠追記 / `docs/specs/plugin-model.md` の該当節も追随 |
 | 18-4 | `#refreshSupportedModels()` に自動 bounded retry (上限 3 回) を実装 | ⏳ | 現行の `#modelsRequested` フラグを retry counter に置換、上限到達判定を追加 |
 | 18-5 | 手動 retry を trigger する control message hook を追加 | ⏳ | protocol の control envelope で `refresh_models` (または相当) を追加、`host.ts` 側で receive → `#refreshSupportedModels()` を再起動 (retry counter reset) |
 | 18-6 | retry 上限到達時の 1 度限り toast 通知 mechanism を実装 | ⏳ | server → client への 1 shot notification 経路。既存 `state_change.ext` の empty models + `models_error: true` flag 相当で表現可能かを検討 |
@@ -72,27 +71,27 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## Followups (in-phase but unfinished)
 
-- Phase 18-3 commit と**同時に**次の 2 アクションをセット実施:
-  - `docs/open-questions/claude-default-alias-sdk-semantic.md` を削除
-    (案 A 確定済み、`decided: 2026-07-14`)
-  - [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) の
-    Context 節に Q1 実測根拠 (default → `claude-opus-4-8[1m]`) を追記
-- Phase 18-3 の BOOTSTRAP 縮小に併せて、`wrapper/claude-code/test/host.test.ts`
-  の `initialStatusExt` テスト (現行 BOOTSTRAP の全エントリを expect) を
-  縮小後の shape に合わせて更新する必要あり (18-8 の test 更新の一部)
 - `runner/test/config-watcher.test.ts` の debounce 系 2 テストは 18-1 baseline
   で既存 flake / macOS 決定論的赤として確認済み。Phase 18 とは無関係な既存
-  問題として **followup issue に外部化** (2026-07-14 予定、my-issue-curator
-  経由)。修正案: 固定 `settle` 待ちをやめ、`onReload` を promise 化して
-  条件成立を上限付き polling wait に置き換える
+  問題として Gitea
+  [issue #116](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/116)
+  に外部化済み (2026-07-14)。修正案: 固定 `settle` 待ちをやめ、`onReload`
+  を promise 化して条件成立を上限付き polling wait に置き換える
+- Phase 18-2 の Q1 実測で SDK 側 `ModelInfo` に拡張 5 field (`resolvedModel`
+  / `supportsEffort` / `supportsAdaptiveThinking` / `supportsFastMode` /
+  `supportsAutoMode`) が新規追加されているのを検出済み。現行
+  `#refreshSupportedModels()` (`wrapper/claude-code/src/host.ts:1237-1244`)
+  は既存 4 field (`value` / `displayName` / `description` /
+  `supportedEffortLevels`) のみを転写しており拡張 field は projection
+  対象外。UI (switcher / toast / display) での projection 是非は Phase 18-9
+  (switcher UI) / Phase 18-10 (通知実装) で判断する
 
 ## Open Questions Blocking This Phase
 
-- ~~[claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md)~~
-  — 2026-07-14 に 18-2 実測で **案 A 確定** (`default` → `claude-opus-4-8[1m]`)。
-  Phase 18-3 の gate は unblock 済み。open-question ファイル本体の削除と
-  ADR-0037 Context 節への実測根拠追記は Phase 18-3 commit と同時に実施する
-  (checklist として本 plan の Followups 節を参照)
+なし (Q1 (`claude-default-alias-sdk-semantic`) は 2026-07-14 に 18-2 実測で
+**案 A 確定** し、18-3 commit で open-question を削除して実測根拠を
+[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) Context 節に
+反映済み)。
 
 ## See Also
 

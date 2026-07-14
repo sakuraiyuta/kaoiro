@@ -202,20 +202,15 @@ describe("buildRegister", () => {
     expect(register.personas).toBeUndefined();
     expect(register.allowed_personas).toBeUndefined();
     expect(register.blocked_personas).toBeUndefined();
-    // Claude is an optimistic bootstrap snapshot so LaunchDialog can choose
-    // the first turn before SDK init; Codex remains empty without auth/plan.
+    // Claude exposes a default-floor bootstrap so LaunchDialog always has a
+    // safe choice before SDK init resolves the account catalog (ADR-0037 F1);
+    // Codex remains empty without auth/plan.
     expect(register.engines?.map((e) => e.id)).toEqual([
       "claude-code",
       "codex",
     ]);
     expect(register.engines?.[0]?.models.map((m) => m.value)).toEqual([
       "default",
-      "opus[1m]",
-      "claude-fable-5[1m]",
-      "sonnet",
-      "sonnet[1m]",
-      "haiku",
-      "claude-opus-4-7",
     ]);
     expect(register.engines?.[1]?.models).toEqual([]);
   });
