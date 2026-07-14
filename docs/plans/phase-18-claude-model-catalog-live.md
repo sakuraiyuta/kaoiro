@@ -36,7 +36,7 @@ Claude 側 catalog を再構成する。BOOTSTRAP は `default` 1 エントリ�
       具体モデル名を引かない記述となる (`effort_levels` は FULL_EFFORT を維持)
 - [x] `#refreshSupportedModels()` に自動 bounded retry (上限 3 回) が実装される
 - [ ] retry 上限到達時に 1 度限り toast 通知を発火する mechanism が実装される
-- [ ] operator が明示的に trigger できる手動 retry control message が実装される
+- [x] operator が明示的に trigger できる手動 retry control message が実装される
 - [ ] persist alias validation が起動時に実行され、SDK 実測に含まれない alias は
       `default` に fallback + 通知 event 発行される
 - [ ] `AgentDetail.svelte` のモデル switcher 内に「モデル一覧を再取得」ボタンが
@@ -57,7 +57,7 @@ Claude 側 catalog を再構成する。BOOTSTRAP は `default` 1 エントリ�
 | 18-2 | `model: "default"` の SDK 解決 semantic を実測検証し Q1 に追記 | ✅ | 2026-07-14 完了 (commit 93f0e68 に併走)。案 A 確定 (`default` → `resolvedModel: "claude-opus-4-8[1m]"`)。bonus: BOOTSTRAP drift 実証 (`sonnet[1m]` / `claude-opus-4-7` は SDK 側消滅、Sonnet 5 追従済み)、`ModelInfo` 拡張 5 field (`resolvedModel` / `supportsEffort` / `supportsAdaptiveThinking` / `supportsFastMode` / `supportsAutoMode`) 検出。18-3 commit で open-question を削除し実測根拠を [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) Context 節へ移設 |
 | 18-3 | `wrapper/claude-code/src/catalog.ts` の BOOTSTRAP を default 1 エントリに縮小 | ✅ | 2026-07-14 完了。neutral description は `"Account-recommended model · resolved after session start"`、`effort_levels` は FULL_EFFORT 維持。`SONNET_EFFORT` は orphan として削除。連動更新: `wrapper/claude-code/test/host.test.ts` (`initialStatusExt` → `["default"]`) / `runner/test/config.test.ts` (register models → `["default"]`) / open-question 削除 + [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) Context 節に実測根拠追記 / `docs/specs/plugin-model.md` の該当節も追随 |
 | 18-4 | `#refreshSupportedModels()` に自動 bounded retry (上限 3 回) を実装 | ✅ | 2026-07-14 完了 (commit 626e2ec)。state 3 field 分離 (`#modelsInflight` / `#modelsRetryCount` / `#modelsSucceeded`)、module const `MAX_MODEL_REFRESH_RETRIES = 3`、init 含む trial cap = 3 semantics を docstring と test (`callCount === 3` pin) で固定。`host.ts:999` (`result` message) に retry trigger を追加、`#refreshContextUsage()` と対称に turn 受信 driven。cap 到達時 `process.stderr.write` 1 行の診断 breadcrumb (per-retry noise なし)。18-5 の force refresh は state 命名だけ整合させ、reset method は書かず送り。ふじ 監督 主眼 (busy-loop 回避 / 18-5 counter reset 整合) をレビュー確認済み |
-| 18-5 | 手動 retry を trigger する control message hook を追加 | ⏳ | protocol の control envelope で `refresh_models` (または相当) を追加、`host.ts` 側で receive → `#refreshSupportedModels()` を再起動 (retry counter reset) |
+| 18-5 | 手動 retry を trigger する control message hook を追加 | ✅ | 2026-07-14 完了 (commit 8f60b23)。cross-layer 5 layer 8 file、完全 additive (164 insertions / 0 deletion)。protocol control envelope に `refresh_models` を追加、`{ agent_id }` (client→server) と `{}` (server→wrapper) を [protocol.md](../specs/protocol.md) に記述。server の `handle_in("refresh_models", ...)` は set_model を寸分違わず mirror (guard_against_reset_pending + relay 空 key_checks)、operator-only は relay の require_operator が担保。`host.retrySupportedModels()` を 3 line (`count=0; succeeded=false; void #refreshSupportedModels()`) で追加、18-4 で整合済みの命名がそのまま使えた。test: server 4 (operator relay / viewer forbidden / unknown_agent / reset-pending reject) + transport 2 (empty payload / forward-compat) + host 1 (`callCount === 4` で cap 済み silent → retry → 再 fetch を pin)。review cycle は medium tier で 0 finding CLEAN |
 | 18-6 | retry 上限到達時の 1 度限り toast 通知 mechanism を実装 | ⏳ | server → client への 1 shot notification 経路。既存 `state_change.ext` の empty models + `models_error: true` flag 相当で表現可能かを検討。**exhausted signal は `#modelsRetryCount >= MAX_MODEL_REFRESH_RETRIES && !#modelsSucceeded` で derive すること** — catch(throw) mirror で発火させると `supportedModels()` が null/empty を返し続ける経路 (trial は消費されるが catch は通らない) が無通知になる (18-4 監督申し送り、ふじ) |
 | 18-7 | persist alias validation + `default` fallback + 通知 event を実装 | ⏳ | 起動時 (session resume 経路 or spawn 時) に保存 `model` を SDK 実測と照合、不一致なら `default` に置換 + 通知。**併せて `wrapper/claude-code/src/host.ts:701-708` の pre-init validation を軟着陸させる**: 18-3 縮小後は floor 外モデルへの `setModel` が `unknown bootstrap model` throw を起こすため、F8 (persist alias fallback) 実装時に「floor 外 alias は `default` へ fallback + 通知」経路へ置換する (18-3 監督申し送り) |
 | 18-8 | wrapper 単体テストの追加 / 更新 | ⏳ | BOOTSTRAP snapshot テスト更新、retry counter / 上限 / reset のテスト、persist alias fallback のテスト |
@@ -85,6 +85,18 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   `supportedEffortLevels`) のみを転写しており拡張 field は projection
   対象外。UI (switcher / toast / display) での projection 是非は Phase 18-9
   (switcher UI) / Phase 18-10 (通知実装) で判断する
+- Phase 18-5 の Elixir baseline 検証で `server/test/kaoiro_server_web/channels/wrapper_channel_test.exs`
+  の `inter_agent_message ルーティング (protocol-inter-agent, phase-8)
+  正常な inter_agent_message を wrapper:<to> へ broadcast し agents:lobby も
+  流す` (`:497`、assert 破綻は `:523` の `InterAgentHistory.list_for(...)
+  == [env]`) が **決定論的赤** として検出。**SDK / phase-18 と完全直交**、
+  config-watcher #116 とは **別種** (あちらは macOS FSEvents timing flake、
+  こちらは 82c09bb の inter_agent_message durable persist 化に test cleanup
+  が追随せず `InterAgentHistory` store が run のたびに累積する test-isolation
+  欠陥)。修正方向: test setup/on_exit で durable `InterAgentHistory` を対象
+  agent_id 分 clear + 既溜まり artifact の掃除。priority low-medium。Phase 18
+  とは無関係な既存問題として **followup issue に外部化予定** (2026-07-14、
+  #116 とは lump しない)
 
 ## Open Questions Blocking This Phase
 
