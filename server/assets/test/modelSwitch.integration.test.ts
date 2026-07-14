@@ -35,6 +35,7 @@ function connection(overrides: Partial<KaoiroConnection> = {}): KaoiroConnection
     enumerateSessions: vi.fn(async () => undefined),
     setModel: vi.fn(async () => undefined),
     setEffort: vi.fn(async () => undefined),
+    refreshModels: vi.fn(async () => undefined),
     ...overrides,
   } as unknown as KaoiroConnection;
 }
@@ -334,5 +335,80 @@ describe("phase-16 dashboard model switch integration", () => {
     );
     const dts = [...target.querySelectorAll("dt")].map((el) => el.textContent);
     expect(dts).not.toContain("effort");
+  });
+
+  it("refresh button sends refresh_models and briefly disables the button (ADR-0037 F6, phase-18-9)", async () => {
+    // The mock resolves synchronously, so the button re-enables on the next
+    // microtask. What we pin here is (1) the wire — connection.refreshModels
+    // received the agent_id, and (2) the button existed with its a11y label.
+    const conn = connection();
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "default",
+      models: claudeBootstrap,
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    }, conn);
+    const button = target.querySelector(
+      '[aria-label="モデル一覧を再取得"]',
+    ) as HTMLButtonElement | null;
+    expect(button).not.toBeNull();
+    button!.click();
+    await tick();
+    expect(conn.refreshModels).toHaveBeenCalledWith("host-a.fuji");
+  });
+
+  it("refresh button is hidden on codex engine (ADR-0035 no-op cross-engine)", async () => {
+    // codex has no refresh_models handler (catalog is static per ADR-0035),
+    // so the dashboard must not render a button that would be dead on click.
+    const { target } = await renderDetail({
+      engine: "codex",
+      model: "gpt-terra",
+      models: [terra],
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    expect(
+      target.querySelector('[aria-label="モデル一覧を再取得"]'),
+    ).toBeNull();
+  });
+
+  it("refresh reject surfaces via switchNotice in error tone (phase-18-9)", async () => {
+    // Refresh has no ext.switch_error path, so the reject must be brought
+    // into the same switchNotice line the operator already watches for
+    // switch failures.
+    const conn = connection({
+      refreshModels: vi.fn(async () => {
+        throw new Error("session_reset_pending");
+      }),
+    });
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "default",
+      models: claudeBootstrap,
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    }, conn);
+    (target.querySelector(
+      '[aria-label="モデル一覧を再取得"]',
+    ) as HTMLButtonElement).click();
+    // The catch runs on the microtask after the awaited rejection settles;
+    // one tick is enough to flush it.
+    await tick();
+    await tick();
+    expect(target.textContent).toContain("モデル一覧の再取得に失敗");
+    expect(target.textContent).toContain("session_reset_pending");
   });
 });

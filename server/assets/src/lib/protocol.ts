@@ -987,6 +987,15 @@ export interface KaoiroConnection {
    * rejects like sendInstruction. `effort` is a level from a model's
    * effort_levels (low..max). */
   setEffort: (agentId: string, effort: string) => Promise<void>;
+  /** Manually re-triggers the wrapper's supportedModels() catalog fetch
+   * (ADR-0037 F6, phase-18-5). Resets the wrapper's retry counter and
+   * succeeded cache so the fetch runs even after the auto-retry cap.
+   * Rejects like sendInstruction (forbidden / unknown_agent /
+   * session_reset_pending / timeout). Claude-only — the codex adapter has
+   * no handler for this control (catalog is static per ADR-0035); the
+   * dashboard must gate the trigger by engine. The refreshed catalog
+   * surfaces via the next state_change's ext.models. */
+  refreshModels: (agentId: string) => Promise<void>;
   /** Switches the SDK permission mode for the agent's subsequent turns
    * (#58); the server also persists the pick so the wrapper restores it
    * on next start. `mode` must be a closed-enum PermissionMode value. */
@@ -1435,6 +1444,8 @@ export function connectKaoiro(
       pushAsync(channel, "set_model", { agent_id: agentId, model }),
     setEffort: (agentId, effort) =>
       pushAsync(channel, "set_effort", { agent_id: agentId, effort }),
+    refreshModels: (agentId) =>
+      pushAsync(channel, "refresh_models", { agent_id: agentId }),
     setPermissionMode: (agentId, mode) =>
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
     clearHistory: (agentId) =>

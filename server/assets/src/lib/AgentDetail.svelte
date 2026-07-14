@@ -739,6 +739,33 @@
     effortMenuOpen = false;
     permMenuOpen = !permMenuOpen;
   }
+  let refreshingModels = $state(false);
+  function refreshModels(): void {
+    if (!connection) return;
+    if (refreshingModels) return;
+    // Server ack (usually fast) is what we await; the ack means the server
+    // relayed the control message, NOT that the catalog is refreshed. The
+    // refreshed catalog surfaces on a later state_change via ext.models.
+    // Disabling the button until the ack collapses a burst of clicks into
+    // one server request; a 5s timeout means the server is unreachable.
+    refreshingModels = true;
+    switchNotice = null;
+    void run(async () => {
+      try {
+        await connection.refreshModels(envelope.agent_id);
+      } catch (error) {
+        // Refresh has no `switch_error` return path (it does not change
+        // model / effort), so bring rejects into switchNotice explicitly
+        // so the operator sees them where switch failures already surface.
+        switchNotice = {
+          tone: "error",
+          text: `モデル一覧の再取得に失敗: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      } finally {
+        refreshingModels = false;
+      }
+    });
+  }
   function chooseModel(value: string): void {
     modelMenuOpen = false;
     if (!connection) return;
@@ -1411,6 +1438,16 @@
                       title="モデルを切替"
                       onclick={toggleModelMenu}
                     >切替</button>
+                  {/if}
+                  {#if connection && agentEngine === "claude-code"}
+                    <button
+                      type="button"
+                      class="cc-refresh"
+                      aria-label="モデル一覧を再取得"
+                      title="モデル一覧を再取得"
+                      disabled={refreshingModels}
+                      onclick={refreshModels}
+                    >↻</button>
                   {/if}
                   {#if modelMenuOpen}
                     <ul
@@ -2838,6 +2875,30 @@
   .cc-switch:hover {
     color: var(--fg);
     border-color: var(--tone);
+  }
+
+  /* Sibling of .cc-switch (phase-18-9): match the visual weight so the row
+   * reads as one control group. Icon-only 常時提供 button (ADR-0037 F6). */
+  .cc-refresh {
+    flex: none;
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    background: var(--bg-card);
+    color: var(--fg-dim);
+    font: inherit;
+    font-size: var(--fs-caption);
+    cursor: pointer;
+  }
+
+  .cc-refresh:hover:not(:disabled) {
+    color: var(--fg);
+    border-color: var(--tone);
+  }
+
+  .cc-refresh:disabled {
+    cursor: progress;
+    opacity: 0.5;
   }
 
   .switch-menu {
