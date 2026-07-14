@@ -85,18 +85,14 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   `supportedEffortLevels`) のみを転写しており拡張 field は projection
   対象外。UI (switcher / toast / display) での projection 是非は Phase 18-9
   (switcher UI) / Phase 18-10 (通知実装) で判断する
-- Phase 18-5 の Elixir baseline 検証で `server/test/kaoiro_server_web/channels/wrapper_channel_test.exs`
-  の `inter_agent_message ルーティング (protocol-inter-agent, phase-8)
-  正常な inter_agent_message を wrapper:<to> へ broadcast し agents:lobby も
-  流す` (`:497`、assert 破綻は `:523` の `InterAgentHistory.list_for(...)
-  == [env]`) が **決定論的赤** として検出。**SDK / phase-18 と完全直交**、
-  config-watcher #116 とは **別種** (あちらは macOS FSEvents timing flake、
-  こちらは 82c09bb の inter_agent_message durable persist 化に test cleanup
-  が追随せず `InterAgentHistory` store が run のたびに累積する test-isolation
-  欠陥)。修正方向: test setup/on_exit で durable `InterAgentHistory` を対象
-  agent_id 分 clear + 既溜まり artifact の掃除。priority low-medium。Phase 18
-  とは無関係な既存問題として **followup issue に外部化予定** (2026-07-14、
-  #116 とは lump しない)
+- Phase 18-5 の Elixir baseline 検証で `wrapper_channel_test.exs`
+  の inter_agent_message ルーティング test の決定論的赤を確認済み。
+  **SDK / phase-18 と完全直交**、config-watcher #116 とは別種の
+  test-isolation 欠陥。既に Gitea
+  [issue #115](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/115)
+  として起票済み (2026-07-14 02:30 起票、私の 18-5 セッション開始前に
+  #15 persona relay 回帰確認中に検出済みだった)。Phase 18-5 の baseline
+  検証はこれを再検出しただけで、Phase 18 の regression ではない
 
 ## Open Questions Blocking This Phase
 
