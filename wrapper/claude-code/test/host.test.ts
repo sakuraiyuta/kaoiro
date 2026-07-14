@@ -1526,6 +1526,102 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     });
     await expect(host.run()).resolves.toBeUndefined();
   });
+
+  it("supportedModels() の連続失敗は上限 3 回で throttle される (ADR-0037 F6)", async () => {
+    // Pins the retry semantics: init counts as trial 1, each result-driven
+    // retry as one further trial. Total attempts must be exactly 3 (init +
+    // 2 result retries), regardless of how many result messages follow.
+    let callCount = 0;
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        // Five result yields give five retry opportunities; only the first
+        // two should actually reach supportedModels() (init already used trial
+        // 1, so trials 2 and 3 land on the first two results, and trials 4-5
+        // must be throttled).
+        for (let i = 0; i < 5; i += 1) {
+          yield result("success", { result: `t${i}` });
+        }
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => {
+          callCount += 1;
+          throw new Error("supportedModels down");
+        },
+      });
+    });
+    // The give-up moment writes a diagnostic to stderr (host.ts); silence it
+    // during the test so the run output stays readable. The pin below is on
+    // callCount, not on stderr, because vitest's stream spies do not always
+    // intercept process.stderr.write reliably.
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    try {
+      await host.run();
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    expect(callCount).toBe(3);
+  });
+
+  it("supportedModels() 成功後は後続 turn で再 fetch されない", async () => {
+    // Once the catalog is cached the SDK contract treats it as static per
+    // session (ADR-0020); subsequent result-driven retries must short-circuit.
+    let callCount = 0;
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield result("success", { result: "t0" });
+        yield result("success", { result: "t1" });
+        yield result("success", { result: "t2" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => {
+          callCount += 1;
+          return modelInfos;
+        },
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(callCount).toBe(1);
+  });
+
+  it("inflight guard: 同 turn 内の concurrent trigger は 1 回にまとまる", async () => {
+    // If init's supportedModels() await is still pending when a result
+    // arrives, the second trigger must observe #modelsInflight and skip.
+    // The slow mock forces the ordering deterministically.
+    let callCount = 0;
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => {
+          callCount += 1;
+          await new Promise((r) => setTimeout(r, 20));
+          return modelInfos;
+        },
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(callCount).toBe(1);
+  });
 });
 
 describe("AgentHost — ファイルアップロード (ADR-0025)", () => {

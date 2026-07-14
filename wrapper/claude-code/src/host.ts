@@ -89,6 +89,12 @@ import {
 /** Cap on queued user turns; send() throws beyond this (fail fast). */
 const MAX_QUEUED_TURNS = 1000;
 
+/** Total supportedModels() attempts before the host stays silent per session
+ *  (ADR-0037 F6). Counts the init-time fetch as trial 1 and each subsequent
+ *  end-of-turn retry as one further trial, so the semantics are "trial cap =
+ *  3", not "init + 3 retries". Manual retry (Phase 18-5) resets this. */
+const MAX_MODEL_REFRESH_RETRIES = 3;
+
 export const CLAUDE_EFFORT_LEVELS = [
   "low",
   "medium",
@@ -277,9 +283,20 @@ export class AgentHost implements EngineAdapter {
    *  dialogs without a round-trip. Starts with the optimistic bootstrap
    *  snapshot and is replaced once supportedModels() resolves after init. */
   #models: SupportedModel[] = claudeBootstrapCatalog();
-  /** Guards the one-shot supportedModels fetch so it is not re-issued per
-   *  message; reset on failure to allow a later retry. */
-  #modelsRequested = false;
+  /** True while a supportedModels() call is in flight; guards concurrent
+   *  fetches triggered by overlapping init / result messages within the same
+   *  turn. Cleared in finally. */
+  #modelsInflight = false;
+  /** Number of supportedModels() attempts made in this session (successful or
+   *  failed). Compared against MAX_MODEL_REFRESH_RETRIES to enforce the F6
+   *  bounded retry; incremented at each attempt (see #refreshSupportedModels
+   *  for the exact contract). */
+  #modelsRetryCount = 0;
+  /** Once supportedModels() has resolved successfully, further fetches are
+   *  suppressed for the session — the SDK's catalog is static per session
+   *  (ADR-0020). Phase 18-5's manual retry resets this together with the
+   *  counter to force a re-fetch. */
+  #modelsSucceeded = false;
   #context: {
     used_tokens: number;
     max_tokens: number;
@@ -996,7 +1013,13 @@ export class AgentHost implements EngineAdapter {
       if (resultMeta?.fast_mode !== undefined) {
         this.#fastMode = resultMeta.fast_mode;
       }
-      if (message.type === "result") void this.#refreshContextUsage();
+      if (message.type === "result") {
+        void this.#refreshContextUsage();
+        // Turn-boundary retry for supportedModels() when init-time fetch or
+        // an earlier retry failed. Guarded internally against overrun of
+        // MAX_MODEL_REFRESH_RETRIES and post-success no-ops.
+        void this.#refreshSupportedModels();
+      }
 
       // State first, so a log envelope carries the state this message
       // settled into; then relay the message's reply lines.
@@ -1224,15 +1247,23 @@ export class AgentHost implements EngineAdapter {
     this.#rateLimits.set(window, snapshot);
   }
 
-  /** Fetches the selectable model list once (#54, ADR-0020). Best-effort and
-   *  fire-and-forget like context usage: the list is static per session, so a
-   *  single success caches it and rides the next state_change in ext.models.
-   *  On failure the request flag is cleared so a later turn can retry. */
+  /** Fetches the selectable model list (#54, ADR-0020, ADR-0037 F6). Called
+   *  fire-and-forget from init (first-chance) and from every result message
+   *  (turn-driven retry). A single success caches the catalog for the rest of
+   *  the session; failures count toward MAX_MODEL_REFRESH_RETRIES trials, and
+   *  once the cap is reached the host stays silent until Phase 18-5's manual
+   *  retry resets it. #query being unavailable is not counted as a trial —
+   *  the SDK Query is racy at startup and a missing query is not a failure. */
   async #refreshSupportedModels(): Promise<void> {
-    if (this.#modelsRequested) return;
-    this.#modelsRequested = true;
+    if (this.#modelsSucceeded) return;
+    if (this.#modelsInflight) return;
+    if (this.#modelsRetryCount >= MAX_MODEL_REFRESH_RETRIES) return;
+    const current = this.#query;
+    if (!current) return;
+    this.#modelsInflight = true;
+    this.#modelsRetryCount += 1;
     try {
-      const models = await this.#query?.supportedModels();
+      const models = await current.supportedModels();
       if (!models) return;
       this.#models = models.map((m) => ({
         value: m.value,
@@ -1242,9 +1273,19 @@ export class AgentHost implements EngineAdapter {
           ? { effort_levels: m.supportedEffortLevels }
           : {}),
       }));
+      this.#modelsSucceeded = true;
     } catch {
-      // Optional telemetry; allow a retry on a later turn.
-      this.#modelsRequested = false;
+      if (this.#modelsRetryCount >= MAX_MODEL_REFRESH_RETRIES) {
+        // Diagnostic breadcrumb for dogfood: after the cap the host stays
+        // silent, so surface the give-up moment once. Per-retry noise is
+        // intentionally omitted.
+        process.stderr.write(
+          "claude-code: supportedModels() failed " +
+            `${MAX_MODEL_REFRESH_RETRIES}× in a row; giving up until manual retry\n`,
+        );
+      }
+    } finally {
+      this.#modelsInflight = false;
     }
   }
 
