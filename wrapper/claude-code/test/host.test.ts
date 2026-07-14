@@ -1844,6 +1844,109 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       expect(env.ext?.switch_error).toBeUndefined();
     }
   });
+
+  it("retry cycle integration: 3 失敗で cap → 手動 retry → 4 回目 success で ext.models 置換 + models_error 解消 (ADR-0037 F6, phase-18-12)", async () => {
+    // The wrapper-side end-to-end of the cap → manual-retry → success path
+    // that phase-18-4/5/6 built. Individual pins live in the earlier tests
+    // in this describe block; this one observes the transitions together:
+    // (a) callCount === 4 (init + 2 result-driven retries + 1 manual retry),
+    // (b) ext.models_error present while cap held, absent after success,
+    // (c) ext.models replaces the floor catalog with modelInfos on success.
+    let callCount = 0;
+    let hostRef: AgentHost | undefined;
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield result("success", { result: "t0" });
+        yield result("success", { result: "t1" });
+        // Cap reached after t1's retry (init=1 + t0=2 + t1=3). Fire the
+        // manual retry, then a fresh turn's result triggers the 4th call.
+        await Promise.resolve();
+        hostRef?.retrySupportedModels();
+        yield result("success", { result: "t2" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => {
+          callCount += 1;
+          if (callCount <= 3) throw new Error("supportedModels down");
+          return modelInfos;
+        },
+      });
+    });
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    hostRef = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    try {
+      await hostRef.run();
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    expect(callCount).toBe(4);
+    // models_error must appear while cap held (after the 3rd throw). Find
+    // the envelope that carries it — there must be at least one — and the
+    // FINAL envelope must NOT carry it (success cleared #modelsSucceeded).
+    const cappedEnv = envs.find((e) => e.ext?.models_error === true);
+    expect(cappedEnv).toBeDefined();
+    expect(envs.at(-1)?.ext?.models_error).toBeUndefined();
+    // ext.models must eventually reflect the SDK's real catalog, not the
+    // floor default. The final envelope must carry the modelInfos shape.
+    const finalModels = envs.at(-1)?.ext?.models as
+      | { value: string }[]
+      | undefined;
+    expect(finalModels?.map((m) => m.value)).toEqual(
+      modelInfos.map((m) => m.value),
+    );
+  });
+
+  it("init → success で ext.models は BOOTSTRAP floor から SDK 実測へ置換される (phase-18-12)", async () => {
+    // Complements the retry-cycle test: pins the healthy-path substitution
+    // sequence — first observable state carries the floor catalog, and by
+    // the time supportedModels() has succeeded and a further state_change
+    // fires, ext.models is the SDK's actual catalog. No models_error ever
+    // fires on this path.
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield assistant([{ type: "text", text: "warm-up" }]);
+        yield result("success", { result: "ok" });
+        // Trailing chunk gives one more state_change after the fire-and-
+        // forget supportedModels() has settled, so the last envelope
+        // definitely carries the SDK-replaced catalog.
+        yield assistant([{ type: "text", text: "post-refresh" }]);
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => modelInfos,
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    // First observable envelope carries the BOOTSTRAP floor (default only).
+    const firstModels = envs[0]?.ext?.models as
+      | { value: string }[]
+      | undefined;
+    expect(firstModels?.map((m) => m.value)).toEqual(["default"]);
+    // Final envelope carries the SDK-measured catalog after refresh success.
+    const finalModels = envs.at(-1)?.ext?.models as
+      | { value: string }[]
+      | undefined;
+    expect(finalModels?.map((m) => m.value)).toEqual(
+      modelInfos.map((m) => m.value),
+    );
+    // Healthy path never trips models_error.
+    for (const env of envs) {
+      expect(env.ext?.models_error).toBeUndefined();
+    }
+  });
 });
 
 describe("AgentHost — ファイルアップロード (ADR-0025)", () => {

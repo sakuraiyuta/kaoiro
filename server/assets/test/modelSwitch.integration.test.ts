@@ -3,6 +3,7 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentDetail from "../src/lib/AgentDetail.svelte";
 import LaunchDialog from "../src/lib/LaunchDialog.svelte";
+import { makeReactiveAgentDetailProps } from "./reactiveProps.svelte";
 import type {
   Envelope,
   HostInfo,
@@ -551,6 +552,100 @@ describe("phase-16 dashboard model switch integration", () => {
     // so the wrapper falls through to its own engine default.
     expect(spawnArg).not.toHaveProperty("model");
     expect(spawnArg).not.toHaveProperty("effort");
+  });
+
+  it("models_error の toggle (false→true→false→true) で switchNotice が 2 回 fire (rising-edge, phase-18-12 A1)", async () => {
+    // Phase 18-10 could pin the initial rising-edge fire but NOT the
+    // second fire after a manual retry succeeded and the wrapper's next
+    // catalog fetch failed again — mount() with a static props object
+    // never re-runs the AgentDetail effect on prop changes. This test
+    // closes that gap by driving a $state proxy through a .svelte.ts
+    // harness (see reactiveProps.svelte.ts) so the effect DOES observe
+    // the transitions within a single component instance. ふじ 18-10
+    // 監督で最重要と指定された穴を e2e で塞ぐ (18-12 A1)。
+    const buildEnv = (modelsError: boolean): Envelope => ({
+      ...switchEnvelope({
+        engine: "claude-code",
+        model: "default",
+        models: claudeBootstrap,
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_model_switch: true,
+          supports_effort_switch: true,
+        },
+        models_error: modelsError,
+      }),
+      // ts varies between the two states so an observer that keys on ts
+      // (e.g. a would-be state_change log) sees distinct events. It is
+      // NOT what drives $effect re-runs — Svelte's rune reactivity keys
+      // on the boolean models_error value itself, which changes here.
+      ts: `2026-07-13T00:00:0${modelsError ? "1" : "0"}Z`,
+    });
+    const target = document.createElement("div");
+    document.body.append(target);
+    const props = makeReactiveAgentDetailProps({
+      envelope: buildEnv(false),
+      connection: connection(),
+      onClose: vi.fn(),
+    });
+    const component = mount(AgentDetail, { target, props });
+    mounted.push(component);
+    await tick();
+    // Initial: models_error=false → notice absent.
+    expect(target.textContent).not.toContain("モデル一覧の取得に繰り返し失敗");
+
+    // First rising edge: false → true fires the notice.
+    props.envelope = buildEnv(true);
+    await tick();
+    expect(target.textContent).toContain("モデル一覧の取得に繰り返し失敗");
+
+    // Persistent-surface pin: the .cc-refresh-error class must be present
+    // while models_error is true, regardless of whether switchNotice is
+    // still on screen (this is the fix ふじ demanded in 18-10).
+    const button = target.querySelector(
+      '[aria-label="モデル一覧を再取得"]',
+    ) as HTMLButtonElement;
+    expect(button.classList.contains("cc-refresh-error")).toBe(true);
+
+    // Click the ↻ button — refreshModels() sets switchNotice = null.
+    // Without this explicit clear, the assertion after the second rising
+    // edge below could not distinguish "notice re-appeared" from "the
+    // first fire's text lingered in the DOM". This click is what makes
+    // the sawModelsError re-fire genuinely observable — pinning what
+    // 18-10 could not (ふじ 18-10 監督で最重要と指定された gap を塞ぐ)。
+    button.click();
+    await tick();
+    expect(target.textContent).not.toContain(
+      "モデル一覧の取得に繰り返し失敗",
+    );
+
+    // Falling edge (true → false): tracker auto-resets via saw = err at
+    // the end of the effect. No new fire on this transition.
+    props.envelope = buildEnv(false);
+    await tick();
+    expect(target.textContent).not.toContain(
+      "モデル一覧の取得に繰り返し失敗",
+    );
+
+    // Second rising edge: false → true again — the tracker resets on the
+    // falling edge, so this transition MUST re-fire the notice. This is
+    // the mandate ふじ set in 18-10: retry succeeded then cap again →
+    // the operator must see the alert a second time.
+    props.envelope = buildEnv(true);
+    await tick();
+    expect(target.textContent).toContain("モデル一覧の取得に繰り返し失敗");
+
+    // Prove reactivity of the harness itself: model change through props
+    // MUST propagate to the mounted component, otherwise this test would
+    // pass trivially even if $effect never re-ran. The class binding
+    // reads `modelsError` derived from `envelope.ext.models_error` — if
+    // the harness is broken, the class would be stuck at its initial
+    // state (false → no cc-refresh-error class), which the assertions
+    // above would fail.
+    props.envelope = buildEnv(false);
+    await tick();
+    expect(button.classList.contains("cc-refresh-error")).toBe(false);
   });
 
   it("refresh reject surfaces via switchNotice in error tone (phase-18-9)", async () => {
