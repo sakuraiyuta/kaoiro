@@ -477,6 +477,82 @@ describe("phase-16 dashboard model switch integration", () => {
     expect(target.querySelector(".cc-refresh-error")).toBeNull();
   });
 
+  it("LaunchDialog は縮小 BOOTSTRAP (default 1 エントリ) でも spawn まで到達する (ADR-0037 F1, phase-18-11)", async () => {
+    // Phase 18-3 shrank the wrapper BOOTSTRAP to just `default`. This test
+    // pins that the dashboard's launch flow keeps working with that shape:
+    // the model select renders with the single option, effort_levels are
+    // taken from the entry, and spawn receives model="default".
+    const shrunk: ModelOption[] = [
+      {
+        value: "default",
+        display_name: "Default (recommended)",
+        effort_levels: ["low", "medium", "high", "xhigh", "max"],
+      },
+    ];
+    const conn = connection();
+    const { target } = await renderLaunch(shrunk, conn, "claude-code");
+    const model = selectFor(target, "モデル");
+    expect([...model.options].slice(1).map((o) => o.value)).toEqual(["default"]);
+    model.value = "default";
+    model.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+    // effort select is present with the FULL_EFFORT levels the entry carries.
+    const effort = selectFor(target, "effort");
+    expect([...effort.options].slice(1).map((o) => o.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    effort.value = "high";
+    effort.dispatchEvent(new Event("change", { bubbles: true }));
+    target
+      .querySelector("form")!
+      .dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    expect(conn.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        engine: "claude-code",
+        model: "default",
+        effort: "high",
+      }),
+    );
+  });
+
+  it("LaunchDialog は codex の空 catalog でも spawn まで到達する (?? [] fallback, ADR-0035 F1, phase-18-11)", async () => {
+    // codex returns [] for unknown-auth / no-plan hosts (ADR-0035 F1). The
+    // dashboard's ?? [] fallback (engineModels / effortLevels) must let the
+    // launch complete with no model / effort selection. The spawn payload
+    // OMITS model and effort (conditional-spread in LaunchDialog:168-169),
+    // NOT sends empty string — so both fields must be absent, not "".
+    const conn = connection();
+    const { target } = await renderLaunch([], conn, "codex");
+    // Model / effort selects are hidden when the catalog is empty
+    // (LaunchDialog:272 / 284 gate on length > 0).
+    expect(
+      [...target.querySelectorAll("label")].find((n) =>
+        n.textContent?.includes("モデル"),
+      ),
+    ).toBeUndefined();
+    expect(
+      [...target.querySelectorAll("label")].find(
+        (n) => n.textContent?.trim() === "effort",
+      ),
+    ).toBeUndefined();
+    target
+      .querySelector("form")!
+      .dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    expect(conn.spawn).toHaveBeenCalledTimes(1);
+    const spawnArg = (conn.spawn as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(spawnArg).toMatchObject({ engine: "codex" });
+    // Field-omission pin: neither model nor effort must reach the wire,
+    // so the wrapper falls through to its own engine default.
+    expect(spawnArg).not.toHaveProperty("model");
+    expect(spawnArg).not.toHaveProperty("effort");
+  });
+
   it("refresh reject surfaces via switchNotice in error tone (phase-18-9)", async () => {
     // Refresh has no ext.switch_error path, so the reject must be brought
     // into the same switchNotice line the operator already watches for
