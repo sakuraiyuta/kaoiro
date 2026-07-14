@@ -278,6 +278,18 @@ export class AgentHost implements EngineAdapter {
    *  every result message (cooldown only ever surfaces via result). Stamped
    *  into ext.fast_mode. */
   #fastMode: string | null = null;
+  /** Snapshot of the persisted model alias supplied at construction (spawn
+   *  config / env / resume snapshot). #model tracks the *effective* value
+   *  which init overwrites with what the SDK is actually running (host.ts:
+   *  around L1231), so we keep the original request separately to validate it
+   *  against the SDK's measured catalog once available (ADR-0037 F8). Null
+   *  when no persist alias was supplied. Consumed once by the first
+   *  refresh-success run of #validatePersistModelAgainstCatalog — manual
+   *  retry (retrySupportedModels) does NOT re-seed this snapshot, which is
+   *  intentional: re-validating on manual retry would suppress the
+   *  legitimate first-success path when the catalog only becomes reachable
+   *  after a retry. */
+  #persistedModel: string | null = null;
   /** Selectable models with their per-model effort levels (#54, ADR-0020);
    *  surfaced so the dashboard can build the bare `/model` / `/effort` choice
    *  dialogs without a round-trip. Starts with the optimistic bootstrap
@@ -344,6 +356,7 @@ export class AgentHost implements EngineAdapter {
     this.#resumeSnapshot = options.resumeSnapshot ?? null;
     if (options.queryOptions?.model !== undefined) {
       this.#model = options.queryOptions.model;
+      this.#persistedModel = options.queryOptions.model;
     }
     if (config.permission_mode !== undefined) {
       this.#permissionMode = config.permission_mode;
@@ -1289,6 +1302,7 @@ export class AgentHost implements EngineAdapter {
           : {}),
       }));
       this.#modelsSucceeded = true;
+      this.#validatePersistModelAgainstCatalog();
     } catch {
       if (this.#modelsRetryCount >= MAX_MODEL_REFRESH_RETRIES) {
         // Diagnostic breadcrumb for dogfood: after the cap the host stays
@@ -1302,6 +1316,44 @@ export class AgentHost implements EngineAdapter {
     } finally {
       this.#modelsInflight = false;
     }
+  }
+
+  /** Validates a persisted `#model` (spawn config / env / resume snapshot)
+   *  against the SDK's measured catalog once #refreshSupportedModels() has
+   *  populated it (ADR-0037 F8, phase-18-7). A persist alias that the account
+   *  no longer entitles — Anthropic drops a model, the operator's plan
+   *  changes, a resume snapshot outlives its catalog — is dropped to
+   *  `"default"` (BOOTSTRAP floor, always in the SDK catalog) and reported
+   *  once via `#switchErrorOnce` for UI feedback. Runs only in the
+   *  refresh-success branch, so the FIRST turn before that success can still
+   *  hit the SDK with a stale alias and be rejected there — accepted trade-off
+   *  under the pre-init chicken-and-egg (there is no earlier point to see the
+   *  measured catalog). Operator-explicit setModel with a floor-out value at
+   *  pre-init stays a loud throw (`setModel` L717-725) — that is a dashboard
+   *  bug path, not a persist path, and warrants fail-fast. */
+  #validatePersistModelAgainstCatalog(): void {
+    if (this.#persistedModel === null) return;
+    const requested = this.#persistedModel;
+    // Consume once — the snapshot represents a spawn-time input, not a
+    // running state, so we should not re-fire on a later manual-retry
+    // refresh cycle. Manual retry that legitimately wants to re-validate
+    // could re-seed #persistedModel; the current UX has no such path.
+    this.#persistedModel = null;
+    if (this.#models.some((m) => m.value === requested)) return;
+    this.#model = "default";
+    // Paired reset: the explicit source (config / env / launch) that
+    // supplied the alias no longer owns the effective value, mirroring the
+    // #model / #modelSource pair that #applyInitMeta and setModel's
+    // invalidEffort branch both maintain. Without this, ext.model_source
+    // would keep reporting the original source even though its choice was
+    // silently discarded, misleading whoami / dashboard consumers.
+    this.#modelSource = "default";
+    this.#switchErrorOnce = {
+      kind: "model",
+      requested,
+      reason: "persist_alias_unknown",
+      rolled_back_to: "default",
+    };
   }
 
   /** Manual retry of supportedModels() (ADR-0037 F6, phase-18-5). Resets the

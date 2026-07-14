@@ -1752,6 +1752,98 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       expect(env.ext?.models_error).toBeUndefined();
     }
   });
+
+  it("persist alias が SDK 実測に含まれない場合は default に fallback + switch_error (ADR-0037 F8, phase-18-7)", async () => {
+    // Startup persist path: queryOptions.model mirrors spawn config / env
+    // KAOIRO_CLAUDE_CODE_DEFAULT_MODEL / resume snapshot. The mock catalog
+    // lacks "opus[1m]", so the wrapper must swap the effective model to
+    // "default" and stamp switch_error with reason=persist_alias_unknown.
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => modelInfos,
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryOptions: { model: "opus[1m]" },
+      modelSource: "config",
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(host.statusExtSnapshot()).toMatchObject({
+      model: "default",
+      // Paired reset — the config source that supplied the discarded alias
+      // must no longer own model_source, else consumers read the fallback
+      // default as an explicit config-driven pick.
+      model_source: "default",
+    });
+    const errEnv = envs.find((e) => e.ext?.switch_error !== undefined);
+    expect(errEnv?.ext?.switch_error).toMatchObject({
+      kind: "model",
+      requested: "opus[1m]",
+      reason: "persist_alias_unknown",
+      rolled_back_to: "default",
+    });
+  });
+
+  it("persist alias が SDK 実測に含まれる場合は fallback を発火しない (F8 negative)", async () => {
+    // "haiku" is present in modelInfos, so the F8 fallback must NOT fire.
+    // Do not assert on #model itself: init.model in this mock overwrites
+    // #model, which is normal (host.ts:1231). The pin here is the absence
+    // of a persist-alias switch_error.
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => modelInfos,
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryOptions: { model: "haiku" },
+      modelSource: "config",
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    for (const env of envs) {
+      expect(env.ext?.switch_error).toBeUndefined();
+    }
+  });
+
+  it("persist model が未指定なら validation は no-op (F8 negative, null-guard)", async () => {
+    // Without queryOptions.model, #model stays null; the validation must
+    // return early and never trip switch_error even if the catalog is
+    // populated later.
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => modelInfos,
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    for (const env of envs) {
+      expect(env.ext?.switch_error).toBeUndefined();
+    }
+  });
 });
 
 describe("AgentHost — ファイルアップロード (ADR-0025)", () => {

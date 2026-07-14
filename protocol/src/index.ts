@@ -317,8 +317,15 @@ export type ResumeDriftExt = ResumeDriftEntry[];
 export interface SwitchErrorExt {
   kind: "model" | "effort";
   requested: string;
-  /** Machine-readable failure reason. Currently "turn_failed"; intentionally
-   *  open for future adapter-specific loud-failure categories. */
+  /** Machine-readable failure reason. Intentionally open for future
+   *  adapter-specific loud-failure categories. Currently used:
+   *  - `"turn_failed"` — mid-session model/effort switch rejected by SDK
+   *    (ADR-0035 F3, phase-16).
+   *  - `"persist_alias_unknown"` — persisted model alias (from spawn config,
+   *    env, or resume snapshot) not present in the SDK's measured catalog at
+   *    startup; the wrapper falls back to `default` (ADR-0037 F8, phase-18-7).
+   *    `rolled_back_to === "default"` in this case; `requested` carries the
+   *    dropped alias for operator visibility. */
   reason: string;
   rolled_back_to?: string;
 }
