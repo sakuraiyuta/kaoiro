@@ -43,7 +43,7 @@ Claude 側 catalog を再構成する。BOOTSTRAP は `default` 1 エントリ�
       `default` に fallback + 通知 event 発行される
 - [x] `AgentDetail.svelte` のモデル switcher 内に「モデル一覧を再取得」ボタンが
       設置される
-- [ ] toast 表示と persist alias fallback 通知の UI 実装が完了する
+- [x] toast 表示と persist alias fallback 通知の UI 実装が完了する
 - [ ] `LaunchDialog.svelte` で縮小 catalog (default のみ) の launch が正常動作する
       (既存の `?? []` fallback で覆えているはず)
 - [ ] wrapper 単体テスト / integration test / e2e で retry シナリオ、persist alias
@@ -64,7 +64,7 @@ Claude 側 catalog を再構成する。BOOTSTRAP は `default` 1 エントリ�
 | 18-7 | persist alias validation + `default` fallback + 通知 event を実装 | ✅ | 2026-07-14 完了 (commit 3884bb9)。ふじ監督のもと scope を Part 1 (persist path) のみに絞り、Part 2 (`host.ts:701-708` の setModel throw 軟着陸) は **F8 対象外・将来別 task 送り**へ訂正 (18-3 で入れた軟着陸申し送りの撤回)。理由: 呼出し元精査で persist 経路 (constructor L345、queryOptions.model 由来 = spawn config / env / resume snapshot) と operator explicit setModel throw (L717-725) が **別経路** と判明、A=graceful fallback / B=loud throw の非対称は正しい設計 (persist は SDK 更新で正当に腐る、operator explicit floor-out は dashboard bug 経路で fail-fast)。実装: 新 field `#persistedModel` snapshot (init が `#model` を上書きするため分離)、`#refreshSupportedModels()` success 直後で consume-once の validation、SDK 実測に含まれない場合 `#model = "default"` + **paired `#modelSource = "default"` reset** (review cycle が捕捉した paired-provenance 不変条件) + `#switchErrorOnce` に `reason: "persist_alias_unknown"` 発火。F4 minimalism 遵守: `ModelSource` enum は無改変 (既存 `"default"` 再利用)、`SwitchErrorExt.reason` は open string で **docstring 追記のみ**、型変更ゼロ。test 3 pin (fallback / negative / null-guard)、173/173 全緑 |
 | 18-8 | wrapper 単体テストの追加 / 更新 | ⏳ | BOOTSTRAP snapshot テスト更新、retry counter / 上限 / reset のテスト、persist alias fallback のテスト |
 | 18-9 | `AgentDetail.svelte` のモデル switcher 内に「モデル一覧を再取得」ボタンを設置 | ✅ | 2026-07-14 完了 (commit e035e79)。配置は切替 button の adjacent (常時提供、ADR-0037 F6)、menu 開閉に依存しない。icon-only `↻` + `aria-label="モデル一覧を再取得"` + `title` (a11y)。**engine gate: `agentEngine === "claude-code"`** (ADR-0035 で codex は catalog 静的・handler なし、dead button 防止のためふじ検分で発見・対応)。`refreshingModels $state` で disable-until-ack (WS ack までの二度押し防止、catalog は後続 state_change の ext.models で届く)。reject は refresh 固有の `switch_error` path を持たないため `switchNotice { tone: "error", text: "モデル一覧の再取得に失敗: {reason}" }` に明示的に載せる (ふじ検分で拾った境界穴)。`.cc-refresh` CSS は `.cc-switch` mirror + `:hover:not(:disabled)` + `:disabled { cursor: progress; opacity: 0.5 }`。protocol.ts の `KaoiroConnection.refreshModels` は setModel mirror + JSDoc で「Claude-only、engine gate 必須」を明記。test 3 pin (claude-code click 送信 / codex 非表示 / reject switchNotice)、153/153 全緑 |
-| 18-10 | toast 表示実装 (retry 失敗 / persist alias fallback) | ⏳ | 通知の粒度 (toast 1 度 / session log / 明示ダイアログ) は本 task の PR で確定 (ADR-0037 の Q4 相当)。**client は `ext.models_error` を signal に**、`models.length === 1` でエラー判定してはならない (1 モデルだけの account との区別不能、18-6 監督申し送り、ふじ)。client 側 one-shot dedup は `models_error` の rising edge で toast 1 回発火、追加 result 受信で false→true→false→true とバウンスした場合も 1 度限りを保証 (rising edge tracking を state に持つ)。**engine gate 検討必要**: persist alias fallback (18-7) は Claude 専用機能 (codex は catalog 静的で該当なし)。18-9 の refresh button と同様 `agentEngine === "claude-code"` gate を toast 発火経路に適用するかは実装時に判断 (18-9 監督申し送り、ふじ)。**Svelte reactive の勘所 (18-9 監督予告)**: rising edge tracking は `$state` + `$effect` で実装、`sawEffortReset` (L683) の pattern を mirror できる |
+| 18-10 | toast 表示実装 (retry 失敗 / persist alias fallback) | ✅ | 2026-07-14 完了 (commit 16174c5)。粒度 β 採用: 既存 switchNotice を再利用、独立 toast component は作らず。**2 面設計** (ふじ 18-10 監督で捕捉した switchNotice 寿命の穴を塞ぐ): 持続 state (`ext.models_error`) は `class:cc-refresh-error={modelsError}` で ↻ button に持続表示、transient event は `sawModelsError` rising-edge tracker (L683 `sawEffortReset` の literal mirror、falling edge で自動 reset して 2 度目 cap を再 fire で保護)。persist_alias_unknown は `switch_error` effect の reason 分岐で `tone: "info"` + 「保存されていた {req} は現在の catalog にないので default で開始しました」の自動 fallback 文面へ (旧 "モデル切替に失敗" phrasing 除外)。**defensive engine gate**: `modelsError = $derived(env.ext?.models_error === true && agentEngine === "claude-code")` — codex host は models_error を emit しないが adapter bug protection として class binding と effect の両方を防御 (test (d) が gate の必要性を driving した test-first の証)。`.cc-refresh-error` CSS rule (`var(--danger, #c62828)` fallback 付き) を UI paired-declaration heuristic (18-9 制度化) 実践で同 diff に定義。test 4 pin (models_error / negative / persist_alias info / codex defensive)、157/157 全緑。review medium tier で 0 finding CLEAN |
 | 18-11 | `LaunchDialog.svelte` で縮小 catalog の動作確認 | ⏳ | 既存の `?? []` fallback で問題なく動作するはず。実測で確認 |
 | 18-12 | integration test / e2e の追加 | ⏳ | retry シナリオ / persist alias fallback / init 後 Sonnet 5 選択 (SDK 側追従前提) |
 | 18-13 | `docs/specs/plugin-model.md` の該当節を実装確定後の内容へ維持更新 | ⏳ | ADR-0037 の implementation 完了後、spec の記述を実態に合わせて refresh |
@@ -73,6 +73,13 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## Followups (in-phase but unfinished)
 
+- `models_error` の rising-edge tracker は 18-10 で `sawEffortReset` の literal
+  mirror として実装、falling edge の自動 reset で「2 度目 cap の再 fire」を
+  継承。ただし **toggle (false→true→false→true) を単一 component instance で
+  span する test は現行 test infra (`mount()` に plain object props、reactive
+  prop update 非対応) では未 pin**。18-12 (integration / e2e) で $state ベースの
+  reactive-prop test helper を導入するタイミングで補うか、e2e で toggle 経路を
+  直接検証する (18-10 監督申し送り、ふじ)
 - `runner/test/config-watcher.test.ts` の debounce 系 2 テストは 18-1 baseline
   で既存 flake / macOS 決定論的赤として確認済み。Phase 18 とは無関係な既存
   問題として Gitea
