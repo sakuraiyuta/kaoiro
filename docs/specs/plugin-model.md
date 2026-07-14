@@ -114,6 +114,39 @@ engine 名では表現しきれない**session 単位の機能可用性** (auth 
   未判別 / 空 catalog 時は `false`。engine 側は catalog / auth mode 変化時に
   capability の advertise を都度更新する。
 
+### Claude モデル catalog live-refresh と bootstrap default floor (2026-07-14、[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md))
+
+Claude 側 catalog は「(i) register 経路」と「(ii) `ext.models` 経路」の 2 経路
+で advertise される。両者は SDK 実測の可否が構造的に異なるため、扱いを分ける。
+
+| 経路 | call site | SDK 実測可能か | source of truth |
+|---|---|---|---|
+| (i) register | `runner/src/config.ts` → `LaunchDialog.svelte` | 不可 (SDK Query 未生成、鶏と卵) | `wrapper/claude-code/src/catalog.ts` の bootstrap 定数 |
+| (ii) `ext.models` | `wrapper/claude-code/src/host.ts` → `AgentDetail.svelte` | 可 (init 後 `#refreshSupportedModels()` が実測) | SDK `supportedModels()` の実測結果 |
+
+(i) の bootstrap は `default` 1 エントリのみの最小 floor に縮小する
+(`display_name: "Default (recommended)"`、neutral description、
+`effort_levels` は FULL_EFFORT を仮出し)。`default` alias は SDK 側で
+"account 推奨モデル" を指す名前解決であり永久に腐らない、という前提に基づく
+(実測検証は
+[claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md))。
+
+(ii) は SDK 実測を単一の source of truth とする。`#refreshSupportedModels()`
+には自動 bounded retry (上限 3 回) と手動 retry hook を実装し、失敗時は 1 度
+限り toast 通知 + 以降 silent + モデル switcher に「再取得」ボタン常時提供の
+UX とする。session state 等に persist された alias が SDK 実測に含まれない
+場合は起動時検証で `default` に fallback + 通知する。
+
+init 前後で `effort_levels` の選択肢集合が変わる UX ズレ (init 前 5 段階 →
+init 後は実測 default モデル次第で減る可能性) は受容する trade-off
+(観察は
+[claude-effort-levels-init-transition](../open-questions/claude-effort-levels-init-transition.md))。
+
+codex 側 catalog は
+[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1 の
+確定判断 (runtime probe 非依存の静的 catalog) を保持し据え置き。protocol schema
+(`EngineCatalogEntry`) は変更しない。
+
 ## Constraints
 
 - MUST: フィルタは `payload` / `ext` だけを触り、外枠(`version`,`agent_id`,
@@ -122,4 +155,4 @@ engine 名では表現しきれない**session 単位の機能可用性** (auth 
 ## See Also
 
 - 関連 specs: [architecture](architecture.md), [protocol](protocol.md)
-- ADRs: [0001](../adr/0001-agent-sdk-integration.md)
+- ADRs: [0001](../adr/0001-agent-sdk-integration.md), [0037](../adr/0037-claude-model-catalog-live-refresh.md)

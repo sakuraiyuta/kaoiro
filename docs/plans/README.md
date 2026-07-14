@@ -22,6 +22,7 @@
 | 12 | [phase-12-runner-persona-trust-mode](phase-12-runner-persona-trust-mode.md) | ✅ | runner の persona 受け入れは allowlist/blocklist/accept-all の 3 モード選択、[ADR-0031](../adr/0031-runner-persona-trust-mode.md) |
 | 13 | [phase-13-wrapper-multipackage-restructure](phase-13-wrapper-multipackage-restructure.md) | ✅ | wrapper のマルチパッケージ構造 materialise (`core` + `agent-common` + `claude-code` + `codex` の 4 パッケージ)、[ADR-0017](../adr/0017-wrapper-multientity-packages.md) / [ADR-0032](../adr/0032-codex-adapter.md) F1 |
 | 14 | [phase-14-codex-adapter](phase-14-codex-adapter.md) | ✅ | Codex アダプタ実装 (F2-F9、権限二軸 UI、engine セレクト、共通 Tool 記述層への inter-agent tool 移送)、[ADR-0032](../adr/0032-codex-adapter.md) / [ADR-0033](../adr/0033-permission-model-dual-axis.md) |
+| 18 | [phase-18-claude-model-catalog-live](phase-18-claude-model-catalog-live.md) | ⏳ | Claude モデル catalog live 実測一元化と bootstrap default floor 縮小、[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) |
 
 ## Feature-local plans
 

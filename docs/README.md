@@ -56,6 +56,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0034](adr/0034-session-capabilities-advertisement.md) | セッション機能 (session capabilities) の envelope advertisement | accepted |
 | [0035](adr/0035-codex-model-catalog-and-mid-session-switch.md) | Codex model catalog 復活と mid-session switch 契約 | accepted |
 | [0036](adr/0036-session-lifecycle-commands.md) | /new・/clear を第一級 session lifecycle command として扱う | accepted |
+| [0037](adr/0037-claude-model-catalog-live-refresh.md) | Claude モデル catalog live 経路の SDK 実測一元化と launch bootstrap の default floor 縮小 | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。

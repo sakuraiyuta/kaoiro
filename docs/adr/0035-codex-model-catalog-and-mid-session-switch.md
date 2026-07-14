@@ -6,7 +6,7 @@ opened: 2026-07-11
 supersedes: []
 superseded_by: null
 related_specs: [protocol, plugin-model, codex-model-catalog, codex-sdk-events]
-related_adrs: [32, 34]
+related_adrs: [32, 34, 37]
 ---
 
 # ADR-0035 — Codex model catalog 復活と mid-session switch 契約

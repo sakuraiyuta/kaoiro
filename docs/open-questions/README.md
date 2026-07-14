@@ -29,6 +29,8 @@
 | [external-human-contact-management-ux](external-human-contact-management-ux.md) | low | — | 2026-07-04 |
 | [codex-cwd-extraction](codex-cwd-extraction.md) | low | — | 2026-07-10 |
 | [codex-exec-approval-upstream](codex-exec-approval-upstream.md) | low | — | 2026-07-10 |
+| [claude-default-alias-sdk-semantic](claude-default-alias-sdk-semantic.md) | high | phase-18-claude-model-catalog-live | 2026-07-14 |
+| [claude-effort-levels-init-transition](claude-effort-levels-init-transition.md) | medium | — | 2026-07-14 |
 
 ## Recently decided
 
