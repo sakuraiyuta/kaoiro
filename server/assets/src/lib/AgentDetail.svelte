@@ -693,6 +693,31 @@
     }
     sawEffortReset = reset;
   });
+  // Catalog fetch cap indicator (ADR-0037 F6, phase-18-6/18-10). Persistent
+  // state — the wrapper stays on the floor default until refresh_models
+  // succeeds — so read it once and route it to two surfaces with different
+  // lifetimes: (a) a persistent class on the ↻ button so the operator sees
+  // "still broken" even after switchNotice is cleared by an unrelated click,
+  // and (b) a rising-edge transient toast via switchNotice for the "just
+  // now hit the cap" alert. Losing (a) is what an rising-edge-only design
+  // would do: click ↻ → notice cleared → retry fails → tracker=true still,
+  // no re-fire → operator sees nothing on the moment they most need it.
+  // Defensive engine gate: host derive is Claude-only, but a bug (or a
+  // future adapter) accidentally stamping models_error on a codex envelope
+  // must NOT surface a Claude-specific message on the codex UI.
+  const modelsError = $derived(
+    envelope.ext?.models_error === true && agentEngine === "claude-code",
+  );
+  let sawModelsError = false;
+  $effect(() => {
+    if (modelsError && !sawModelsError) {
+      switchNotice = {
+        tone: "error",
+        text: "モデル一覧の取得に繰り返し失敗しています。切替 button 隣の ↻ から再取得を試みてください",
+      };
+    }
+    sawModelsError = modelsError;
+  });
   // Reset the popovers + the optimistic picks when the detail switches to a
   // different agent (the component is reused, not re-keyed, in App.svelte).
   let switchAgentId = untrack(() => envelope.agent_id);
@@ -816,13 +841,26 @@
     if (failure !== null) {
       pendingModel = null;
       pendingEffort = null;
-      const rollbackTarget =
-        failure.rolled_back_to ??
-        (failure.kind === "model" ? ccModel : effectiveEffort);
-      switchNotice = {
-        tone: "error",
-        text: `${failure.kind === "model" ? "モデル" : "effort"}切替に失敗: ${failure.requested} は実効に反映されていません (reason: ${failure.reason})。${rollbackTarget ? `旧値 ${rollbackTarget} に` : "最後に成功した値に"}戻しました`,
-      };
+      // ADR-0037 F8 (phase-18-7 / 18-10): the persist-alias fallback is not
+      // an operator-initiated switch failure — the wrapper silently swapped
+      // a stale persisted alias for the SDK default at startup. Frame it as
+      // an info-level notice so operators do not read "action required"
+      // into an automatic safe recovery. tone:"error" stays for genuine
+      // switch failures (turn_failed etc.).
+      if (failure.reason === "persist_alias_unknown") {
+        switchNotice = {
+          tone: "info",
+          text: `保存されていた ${failure.requested} は現在の catalog にないので default で開始しました`,
+        };
+      } else {
+        const rollbackTarget =
+          failure.rolled_back_to ??
+          (failure.kind === "model" ? ccModel : effectiveEffort);
+        switchNotice = {
+          tone: "error",
+          text: `${failure.kind === "model" ? "モデル" : "effort"}切替に失敗: ${failure.requested} は実効に反映されていません (reason: ${failure.reason})。${rollbackTarget ? `旧値 ${rollbackTarget} に` : "最後に成功した値に"}戻しました`,
+        };
+      }
     }
   });
   function choosePermissionMode(value: string): void {
@@ -1443,8 +1481,11 @@
                     <button
                       type="button"
                       class="cc-refresh"
+                      class:cc-refresh-error={modelsError}
                       aria-label="モデル一覧を再取得"
-                      title="モデル一覧を再取得"
+                      title={modelsError
+                        ? "モデル一覧の取得に失敗中。クリックで再取得"
+                        : "モデル一覧を再取得"}
                       disabled={refreshingModels}
                       onclick={refreshModels}
                     >↻</button>
@@ -2899,6 +2940,22 @@
   .cc-refresh:disabled {
     cursor: progress;
     opacity: 0.5;
+  }
+
+  /* Persistent indicator for the catalog-fetch cap (ADR-0037 F6, phase-18-10).
+   * switchNotice only shows once on the rising edge and gets cleared by
+   * unrelated clicks; this class stays as long as ext.models_error is true,
+   * so the operator can still see "catalog is broken" after retrying and
+   * failing. The tone matches the file's other error surfaces (switchNotice
+   * error tone / permission_denied badges). */
+  .cc-refresh-error {
+    color: var(--danger, #c62828);
+    border-color: var(--danger, #c62828);
+  }
+
+  .cc-refresh-error:hover:not(:disabled) {
+    color: var(--danger, #c62828);
+    border-color: var(--danger, #c62828);
   }
 
   .switch-menu {

@@ -381,6 +381,102 @@ describe("phase-16 dashboard model switch integration", () => {
     ).toBeNull();
   });
 
+  it("ext.models_error は switchNotice と ↻ button の error class を同時に立てる (ADR-0037 F6, phase-18-10)", async () => {
+    // The transient switchNotice fires once via a rising-edge tracker; the
+    // persistent .cc-refresh-error class stays for the whole duration
+    // ext.models_error is true, so the operator can still see the degraded
+    // state after any unrelated click clears switchNotice. ふじ の 18-10 監督
+    // で最も重要な穴 (清算後 silent 化) はこの class binding で塞がれる。
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "default",
+      models: claudeBootstrap,
+      models_error: true,
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    expect(target.textContent).toContain("モデル一覧の取得に繰り返し失敗");
+    const button = target.querySelector(
+      '[aria-label="モデル一覧を再取得"]',
+    ) as HTMLButtonElement;
+    expect(button.classList.contains("cc-refresh-error")).toBe(true);
+  });
+
+  it("ext.models_error 無しの状態では error class も switchNotice も立たない (phase-18-10 negative)", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "default",
+      models: claudeBootstrap,
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    expect(target.textContent).not.toContain("モデル一覧の取得に繰り返し失敗");
+    const button = target.querySelector(
+      '[aria-label="モデル一覧を再取得"]',
+    ) as HTMLButtonElement;
+    expect(button.classList.contains("cc-refresh-error")).toBe(false);
+  });
+
+  it("persist_alias_unknown は info tone で自動 fallback 用の文面へ (ADR-0037 F8, phase-18-10)", async () => {
+    // The persist-alias validation (18-7) surfaces via switch_error with
+    // reason=persist_alias_unknown. It is a startup silent-fallback, not an
+    // operator-initiated switch failure — the message must reflect that.
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "default",
+      models: claudeBootstrap,
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+      switch_error: {
+        kind: "model",
+        requested: "opus[1m]",
+        reason: "persist_alias_unknown",
+        rolled_back_to: "default",
+      },
+    });
+    expect(target.textContent).toContain("保存されていた opus[1m] は現在の catalog にないので default で開始しました");
+    // Info tone: no "モデル切替に失敗" (that phrasing stays for genuine
+    // operator-initiated failures like turn_failed).
+    expect(target.textContent).not.toContain("モデル切替に失敗");
+    // The switch-notice row must render in the .switch-notice container
+    // WITHOUT the .error modifier so the tone reads as info visually.
+    const notice = target.querySelector(".switch-notice");
+    expect(notice?.classList.contains("error")).toBe(false);
+  });
+
+  it("codex engine には models_error 通知も class も届かない (cross-engine, phase-18-10)", async () => {
+    // Same negative surface as 18-9's button-hidden test, but for the toast
+    // path — the effect gates naturally because host derive is Claude-only.
+    const { target } = await renderDetail({
+      engine: "codex",
+      model: "gpt-terra",
+      models: [terra],
+      models_error: true,
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    expect(target.textContent).not.toContain("モデル一覧の取得に繰り返し失敗");
+    // Refresh button itself is hidden (18-9 gate); the class question is
+    // moot but we still assert absence to catch any accidental leak.
+    expect(target.querySelector(".cc-refresh-error")).toBeNull();
+  });
+
   it("refresh reject surfaces via switchNotice in error tone (phase-18-9)", async () => {
     // Refresh has no ext.switch_error path, so the reject must be brought
     // into the same switchNotice line the operator already watches for
