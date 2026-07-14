@@ -1,7 +1,7 @@
 ---
 title: Phase 18 — Claude モデル catalog live 実測一元化と bootstrap default floor
 description: BOOTSTRAP を default 1 エントリに縮小、Claude live 経路を SDK 実測に一元化、retry 契約を実装する。
-status: in-progress
+status: completed
 phase: 18
 depends_on: []
 last_updated: 2026-07-14
@@ -50,7 +50,7 @@ Claude 側 catalog を再構成する。BOOTSTRAP は `default` 1 エントリ�
       fallback シナリオ、init 後 Sonnet 5 選択 (SDK が返している前提) が pass する
       (integration まで 18-4/5/6/7/10/12 の各 pin で carry、e2e は Tier C として
       外部化 = Followups の Playwright infra issue 参照)
-- [ ] `docs/specs/plugin-model.md` の該当節 (ADR-0037 参照節) が実装確定後の内容に
+- [x] `docs/specs/plugin-model.md` の該当節 (ADR-0037 参照節) が実装確定後の内容に
       維持更新される
 
 ## Tasks
@@ -69,7 +69,7 @@ Claude 側 catalog を再構成する。BOOTSTRAP は `default` 1 エントリ�
 | 18-10 | toast 表示実装 (retry 失敗 / persist alias fallback) | ✅ | 2026-07-14 完了 (commit 16174c5)。粒度 β 採用: 既存 switchNotice を再利用、独立 toast component は作らず。**2 面設計** (ふじ 18-10 監督で捕捉した switchNotice 寿命の穴を塞ぐ): 持続 state (`ext.models_error`) は `class:cc-refresh-error={modelsError}` で ↻ button に持続表示、transient event は `sawModelsError` rising-edge tracker (L683 `sawEffortReset` の literal mirror、falling edge で自動 reset して 2 度目 cap を再 fire で保護)。persist_alias_unknown は `switch_error` effect の reason 分岐で `tone: "info"` + 「保存されていた {req} は現在の catalog にないので default で開始しました」の自動 fallback 文面へ (旧 "モデル切替に失敗" phrasing 除外)。**defensive engine gate**: `modelsError = $derived(env.ext?.models_error === true && agentEngine === "claude-code")` — codex host は models_error を emit しないが adapter bug protection として class binding と effect の両方を防御 (test (d) が gate の必要性を driving した test-first の証)。`.cc-refresh-error` CSS rule (`var(--danger, #c62828)` fallback 付き) を UI paired-declaration heuristic (18-9 制度化) 実践で同 diff に定義。test 4 pin (models_error / negative / persist_alias info / codex defensive)、157/157 全緑。review medium tier で 0 finding CLEAN |
 | 18-11 | `LaunchDialog.svelte` で縮小 catalog の動作確認 | ✅ | 2026-07-14 完了 (commit 944779b)。実測 verification only、LaunchDialog.svelte 本体は無改変。test 2 件追加: (1) shrunk 1-entry catalog で spawn `{engine, model: "default", effort: "high"}` を pin、(2) codex empty catalog (ADR-0035 F1 で production reachable) で `?? []` fallback path 経由の `not.toHaveProperty("model"/"effort")` field 非存在 pin (LaunchDialog:168-169 の conditional-spread semantic を厳密検査)。ふじ reachability × utility 原理で Claude 空 (production 到達不能) を落として同一 code path を codex 空で覆う設計。既存 `claudeBootstrap` fixture (L118-129) は multi-entry regression pin として保持 (「artifact 有用性」原理)。review trivial-tier で 0 finding CLEAN |
 | 18-12 | integration test / e2e の追加 | ✅ | 2026-07-14 完了 (commit 91e1933)。**Tier A のみ実装、e2e は Tier C として外部化**。Tier A: A1 = models_error toggle re-fire pin (18-10 Followup 解消、新 `test/reactiveProps.svelte.ts` の `$state` reactive helper で `.svelte.ts` 拡張の runes を活用、`mount(AgentDetail)` に流して false→true→click→false→true の 4 段階遷移を pin、click 挿入で 2 度目 fire を genuine に観察できる形へ)。A2 = wrapper full retry cycle end-to-end (3 failures → cap → `retrySupportedModels()` → 4 回目 success で `callCount === 4` + `models_error` present→absent + `ext.models` 置換を同時観察)。A3 = healthy path で init → success の catalog 置換 sequence pin (floor → 実測、`models_error` は不発)。Tier B (protocol chain mock-stitch) は marginal value で skip (ふじ判定「mock 縫い合わせは真の cross-layer を検証しない偽の安心」)。**Tier C (Playwright infra、真の cross-layer round-trip) は phase-18 単独 scope 外として外部化**、下記 Followups で issue 起票候補明記。review trivial-tier で **BUG high must-fix (test comment と実装乖離)** を捕捉→click 挿入で修正、CLEAN |
-| 18-13 | `docs/specs/plugin-model.md` の該当節を実装確定後の内容へ維持更新 | ⏳ | ADR-0037 の implementation 完了後、spec の記述を実態に合わせて refresh |
+| 18-13 | `docs/specs/plugin-model.md` の該当節を実装確定後の内容へ維持更新 | ✅ | 2026-07-14 完了 (commit 3f79d9c)。ADR-0037 節 (L117-148) を Phase 18-3〜18-12 の実装完了を反映して refresh。未来形 (「実装する」「通知する」) → 実装確定後の現在形 (「実装済み」「通知する」)、実装で確定した具体値追記 (`"Account-recommended model · resolved after session start"` / `resolvedModel: "claude-opus-4-8[1m]"` / `MAX_MODEL_REFRESH_RETRIES = 3` / persist_alias_unknown の client 文面)、18-9/10 の client 消費 2 面設計 (`.cc-refresh-error` 持続 class + `sawModelsError` rising-edge tracker)、18-9 の retry button の defensive engine gate 追記。trade-off / codex 据え置きは continuing state ゆえ現在形のまま (ふじ endorse)。SSoT: detail=ADR-0037 / summary=spec の分担を保持、二重化最小 |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
