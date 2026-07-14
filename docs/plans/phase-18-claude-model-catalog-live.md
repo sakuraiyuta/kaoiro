@@ -75,17 +75,17 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## Followups (in-phase but unfinished)
 
-- Phase 19+ **cross-layer e2e infra (Playwright) 導入と model-catalog round-trip
-  の自動検証**: phase-18 で catalog 経路を実装したが、layer 横断の実 round-trip
-  は per-layer unit (18-5/6/9/10) + dogfood でのみ担保、automated e2e は未整備。
-  対象 round-trip: (1) LaunchDialog 起動 → spawn → wrapper init →
-  `supportedModels()` → `ext.models` が floor を置換 → dashboard 反映、(2) ↻
-  click → server relay → wrapper `retrySupportedModels()` → refetch →
-  `ext.models` 更新、(3) `models_error` cap → toast + persistent class →
-  manual retry → 回復。infra 上の注意: Playwright / Cypress 未導入、決定論化には
-  wrapper 境界で fake SDK を差す設計必須 (実 Anthropic API は flaky ゆえ避ける)。
-  priority: infra 投資ゆえ phase-18 外、Phase 19+ 相当で **issue 起票候補**
-  (2026-07-14 現在、マスターに decision point として提示予定)
+- **Cross-layer e2e infra (Playwright) の扱い**: マスター判断 (2026-07-14) で
+  **選択肢 B (現状の per-layer unit + dogfood で継続) を採用**、Playwright infra
+  導入・issue 起票なし。理由: phase-18 の各 layer は unit / integration で個別
+  検証済み (18-4/5/6/9/10/12)、実 wiring の検証は dogfood で担保する運用判断。
+  将来 e2e infra が必要になった際は別 driving で判断する。**参考記録** (未着手
+  で外部化もされないが、必要時のために保存): 対象 round-trip の候補は (1)
+  LaunchDialog → spawn → wrapper init → `supportedModels()` → `ext.models` 置換
+  → dashboard 反映、(2) ↻ click → server relay → wrapper `retrySupportedModels()`
+  → refetch → `ext.models` 更新、(3) `models_error` cap → toast + persistent
+  class → manual retry → 回復。決定論化には wrapper 境界で fake SDK を差す設計
+  が必須 (実 Anthropic API は flaky)
 - ~~`models_error` の toggle (false→true→false→true) を単一 component instance で
   span する test~~ **18-12 A1 で解消済み** (新 `server/assets/test/reactiveProps.svelte.ts`
   の `.svelte.ts` `$state` reactive helper 経由で `mount(AgentDetail)` に流し、
