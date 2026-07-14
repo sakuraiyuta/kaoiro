@@ -5,7 +5,7 @@ status: open
 urgency: high
 blocks: [phase-18-claude-model-catalog-live]
 opened: 2026-07-14
-decided: null
+decided: 2026-07-14
 ---
 
 ## 背景
@@ -55,12 +55,55 @@ supersede する必要がある。
 (実測タスク) で確定 or 却下する。案 B が確定した時点で、Phase 18-3 着手前に
 マスターへ報告し ADR revise / supersede の判断を仰ぐ。
 
+## 実測結果 (2026-07-14、Phase 18-2)
+
+SDK `@anthropic-ai/claude-agent-sdk 0.3.208` を kaoiro dev 環境で起動し、
+`query({ prompt, options: { model: "default", canUseTool: deny-all } })` の
+init 直後に `query.supportedModels()` を呼び出して返り値を dump した (一時
+probe script、実行後破棄)。
+
+### 判定: **案 A 確定**
+
+`value: "default"` の row が実測配列に存在し、`resolvedModel` field で
+`"claude-opus-4-8[1m]"` (現時点の account 推奨モデル) に解決されることを
+確認。ADR-0037 F1 (BOOTSTRAP を `default` 1 エントリのみに縮小) の前提が
+成立、Phase 18-3 の gate は unblock。
+
+### 実測 dump 抜粋
+
+```json
+{
+  "value": "default",
+  "resolvedModel": "claude-opus-4-8[1m]",
+  "displayName": "Default (recommended)",
+  "description": "Opus 4.8 with 1M context · Best for everyday, complex tasks",
+  "supportsEffort": true,
+  "supportedEffortLevels": ["low", "medium", "high", "xhigh", "max"],
+  "supportsAdaptiveThinking": true,
+  "supportsFastMode": true,
+  "supportsAutoMode": true
+}
+```
+
+### 併せて観測された事実 (Phase 18-3 以降で扱う)
+
+1. **BOOTSTRAP snapshot の drift 実証**: 実測配列は `default` / `opus[1m]`
+   / `claude-fable-5[1m]` / `sonnet` (resolvedModel: `claude-sonnet-5`) /
+   `haiku` の 5 エントリのみ。BOOTSTRAP に含まれていた `sonnet[1m]` と
+   `claude-opus-4-7` は SDK 側で既に消滅。Sonnet 5 は SDK 側追従済み。
+2. **`ModelInfo` 拡張フィールドの追加**: `resolvedModel`, `supportsEffort`,
+   `supportsAdaptiveThinking`, `supportsFastMode`, `supportsAutoMode` が
+   SDK 側で新規追加。現行 `#refreshSupportedModels()` の mapping
+   (`host.ts:1237-1244`) は既存 4 field のみを転写しており、拡張 field は
+   projection されない。UI 表示への反映は Phase 18-9 / 18-10 で判断。
+3. **default の `effort_levels`**: 実測でも 5 段階 (`low` / `medium` /
+   `high` / `xhigh` / `max`) を返しており、ADR-0037 F5 (FULL_EFFORT を
+   仮出し) と整合。
+
 ## 解決時のアクション
 
-- [ ] Phase 18-2 の実測結果を本ファイルの「実測結果」節として追記 (追加節を
-      新設してよい)
-- [ ] 案 A 確定時: [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md)
-      の Context 節に実測根拠を追記、本 open-question は削除
-- [ ] 案 B 確定時: マスターへ報告、ADR-0037 の revise or supersede を検討、
-      本 open-question は Phase 18-3 blocked のまま残置
-- [ ] 本 open-question を close (削除 or `../adr/` 相当へ昇格の判断)
+- [x] Phase 18-2 の実測結果を本ファイルの「実測結果」節として追記
+- [ ] 案 A 確定 (本節): [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md)
+      の Context 節に実測根拠を追記、本 open-question は Phase 18-3 commit
+      と同時に削除
+- [ ] 本 open-question を close (削除)

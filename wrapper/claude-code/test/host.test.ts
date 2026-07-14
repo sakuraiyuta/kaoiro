@@ -772,11 +772,11 @@ describe("AgentHost — permission", () => {
         yield assistant([
           { type: "tool_use", id: "tu_1", name: "Read", input: {} },
         ]);
-        const decision = await args.options.canUseTool!(
+        const decision = (await args.options.canUseTool!(
           "Read",
           {},
           {} as never,
-        );
+        ))!;
         if (decision.behavior === "allow") {
           toolResultYielded = true;
           yield user([
@@ -809,11 +809,11 @@ describe("AgentHost — permission", () => {
         yield assistant([
           { type: "tool_use", id: "tu_1", name: "Read", input: {} },
         ]);
-        const decision = await args.options.canUseTool!(
+        const decision = (await args.options.canUseTool!(
           "Read",
           {},
           {} as never,
-        );
+        ))!;
         behavior = decision.behavior;
         yield result("success", { result: "x" });
       }
@@ -844,11 +844,11 @@ describe("AgentHost — permission", () => {
         yield assistant([
           { type: "tool_use", id: "tu_1", name: "Read", input: {} },
         ]);
-        const decision = await args.options.canUseTool!(
+        const decision = (await args.options.canUseTool!(
           "Read",
           {},
           {} as never,
-        );
+        ))!;
         expect(decision.behavior).toBe("allow");
         yield result("success", { result: "ok" });
       }
@@ -910,11 +910,11 @@ describe("AgentHost — question (AskUserQuestion, ADR-0027)", () => {
             input: { questions },
           },
         ]);
-        const decision = await args.options.canUseTool!(
+        const decision = (await args.options.canUseTool!(
           "AskUserQuestion",
           { questions },
           {} as never,
-        );
+        ))!;
         if (decision.behavior === "allow") updatedInput = decision.updatedInput;
         yield result("success", { result: "ok" });
       }
@@ -950,11 +950,11 @@ describe("AgentHost — question (AskUserQuestion, ADR-0027)", () => {
             input: { questions },
           },
         ]);
-        const decision = await args.options.canUseTool!(
+        const decision = (await args.options.canUseTool!(
           "AskUserQuestion",
           { questions },
           {} as never,
-        );
+        ))!;
         behavior = decision.behavior;
         yield result("success", { result: "x" });
       }
@@ -983,11 +983,11 @@ describe("AgentHost — question (AskUserQuestion, ADR-0027)", () => {
             input: { questions },
           },
         ]);
-        const decision = await args.options.canUseTool!(
+        const decision = (await args.options.canUseTool!(
           "AskUserQuestion",
           { questions },
           {} as never,
-        );
+        ))!;
         behavior = decision.behavior;
         yield result("success", { result: "x" });
       }
@@ -1020,11 +1020,11 @@ describe("AgentHost — question (AskUserQuestion, ADR-0027)", () => {
             input: { questions },
           },
         ]);
-        const decision = await args.options.canUseTool!(
+        const decision = (await args.options.canUseTool!(
           "AskUserQuestion",
           { questions },
           {} as never,
-        );
+        ))!;
         expect(decision.behavior).toBe("allow");
         yield result("success", { result: "ok" });
       }
