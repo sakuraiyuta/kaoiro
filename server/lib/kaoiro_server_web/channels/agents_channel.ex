@@ -282,6 +282,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # Manual retry of the wrapper's supportedModels() catalog fetch (ADR-0037 F6,
+  # phase-18-5). Operator-only; the request has no payload fields, so the topic
+  # (agent_id) is the only addressing. The wrapper resets its retry counter and
+  # kicks a fresh #refreshSupportedModels() attempt regardless of the earlier
+  # cap state. Mirrors set_model / set_effort exactly (relay via require_operator,
+  # reset-pending gate, unknown_agent from the relay helper).
+  def handle_in("refresh_models", payload, socket) do
+    with :ok <- guard_against_reset_pending(socket, payload) do
+      relay(socket, payload, "refresh_models", [])
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
   # permission_mode switch for a running session (issue #58). Operator-only;
   # the validated choice relays opaquely to the wrapper (which applies it via
   # query.setPermissionMode) AND persists into PermissionModes so the next

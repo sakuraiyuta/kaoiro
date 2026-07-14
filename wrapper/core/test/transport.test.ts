@@ -227,6 +227,33 @@ describe("ServerLink — set_model / set_effort 制御 (#54)", () => {
   });
 });
 
+describe("ServerLink — refresh_models 制御 (ADR-0037 F6, phase-18-5)", () => {
+  beforeEach(() => mock.handlers.clear());
+
+  it("refresh_models は onRefreshModels を発火する (payload なし)", () => {
+    let calls = 0;
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
+      onRefreshModels: () => {
+        calls += 1;
+      },
+    });
+    emit("refresh_models", {});
+    expect(calls).toBe(1);
+  });
+
+  it("refresh_models は payload の余分な key を無視して onRefreshModels を発火する", () => {
+    let calls = 0;
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
+      onRefreshModels: () => {
+        calls += 1;
+      },
+    });
+    // Forward-compat: additional fields must not suppress the trigger.
+    emit("refresh_models", { extra: "ignored", nested: { a: 1 } });
+    expect(calls).toBe(1);
+  });
+});
+
 describe("ServerLink — inter_agent_message inbound (protocol-inter-agent, phase-8)", () => {
   beforeEach(() => mock.handlers.clear());
 

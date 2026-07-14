@@ -83,6 +83,11 @@ export interface ServerLinkOptions {
   /** An operator's effort switch relayed by the server (protocol.md, #54).
    *  Payload is `{ effort: string }` — a level from a model's effort_levels. */
   onSetEffort?: (level: string) => void;
+  /** An operator's manual retry of supportedModels() relayed by the server
+   *  (protocol.md, ADR-0037 F6, phase-18-5). Payload is `{}` — the topic
+   *  addresses the agent. The wrapper resets its retry counter + succeeded
+   *  flag and kicks a fresh #refreshSupportedModels() attempt. */
+  onRefreshModels?: () => void;
   /** An operator's permission-mode switch relayed by the server (#58). Also
    *  the carrier of the server's after-join push of the persisted last
    *  choice. Payload is `{ mode: string }` — one of the SDK PermissionMode
@@ -239,6 +244,12 @@ export class ServerLink {
       if (isObject(payload) && typeof payload.effort === "string") {
         options.onSetEffort?.(payload.effort);
       }
+    });
+    // protocol.md (ADR-0037 F6, phase-18-5): server -> wrapper `refresh_models`
+    // has no payload fields; the topic already addresses the agent. Fire the
+    // handler unconditionally — extra keys are ignored for forward compat.
+    this.#channel.on("refresh_models", (_payload: unknown) => {
+      options.onRefreshModels?.();
     });
     // protocol.md (#58): server -> wrapper `set_permission_mode` carries the
     // operator's mode pick AND the server's after-join push of the persisted

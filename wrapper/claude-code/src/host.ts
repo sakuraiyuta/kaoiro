@@ -1289,6 +1289,17 @@ export class AgentHost implements EngineAdapter {
     }
   }
 
+  /** Manual retry of supportedModels() (ADR-0037 F6, phase-18-5). Resets the
+   *  bounded-retry counter and the succeeded-cache so #refreshSupportedModels
+   *  will attempt a fresh fetch on the next tick, even after the auto-retry
+   *  cap was reached. Invoked from cli.ts on the server's `refresh_models`
+   *  control message. Kicks the async fetch fire-and-forget — nothing to await. */
+  retrySupportedModels(): void {
+    this.#modelsRetryCount = 0;
+    this.#modelsSucceeded = false;
+    void this.#refreshSupportedModels();
+  }
+
   /** Pulls the current context-window usage (#16). Best-effort: the SDK
    *  control request can be unavailable, so any failure is swallowed. */
   async #refreshContextUsage(): Promise<void> {

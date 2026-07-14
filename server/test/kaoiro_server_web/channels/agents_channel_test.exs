@@ -427,6 +427,37 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "refresh_models relay (ADR-0037 F6, phase-18-5)" do
+    test "operator の refresh_models を wrapper topic へ relay する" do
+      agent_id = "test.refreshmodels-1"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "refresh_models", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok
+      assert_broadcast "refresh_models", payload
+      refute Map.has_key?(payload, "agent_id")
+    end
+
+    test "viewer の refresh_models は forbidden" do
+      agent_id = "test.refreshmodels-2"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      ref = push(socket, "refresh_models", %{"agent_id" => agent_id})
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "未知 agent_id は unknown_agent" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "refresh_models", %{"agent_id" => "test.refreshmodels-none"})
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+  end
+
   describe "set_permission_mode relay (#58)" do
     # Poll for a fire-and-forget cast result rather than a fixed sleep, matching
     # permission_modes_test.exs / wrapper_channel_test.exs (loaded CI hosts can
@@ -2754,6 +2785,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :error, %{reason: "session_reset_pending"}
       refute_broadcast "set_model", _
+
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "pending 中の refresh_models は session_reset_pending で reject" do
+      agent_id = "gp.refresh"
+      acquire_reset_lock(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "refresh_models", %{"agent_id" => agent_id})
+
+      assert_reply ref, :error, %{reason: "session_reset_pending"}
+      refute_broadcast "refresh_models", _
 
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end

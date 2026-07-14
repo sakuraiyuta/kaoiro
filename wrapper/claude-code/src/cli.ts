@@ -314,6 +314,13 @@ async function main(): Promise<void> {
       process.stdout.write(`  set_effort: ${level}\n`);
       void host.setEffort(level).catch(() => {});
     },
+    onRefreshModels: () => {
+      // protocol.md (ADR-0037 F6, phase-18-5): manual retry of supportedModels()
+      // catalog. host.retrySupportedModels() is sync and only kicks the async
+      // fetch fire-and-forget; nothing to await here.
+      process.stdout.write("  refresh_models\n");
+      host.retrySupportedModels();
+    },
     onSetPermissionMode: (mode) => {
       // protocol.md (#58): operator pick OR server after-join push of the
       // last persisted choice. Validate against the closed enum so a

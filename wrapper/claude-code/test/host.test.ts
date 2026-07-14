@@ -1596,6 +1596,52 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     expect(callCount).toBe(1);
   });
 
+  it("retrySupportedModels() は cap 済み silent 状態から再 fetch を kick する (ADR-0037 F6, phase-18-5)", async () => {
+    // The point of the manual retry is that it MUST overcome the auto-retry
+    // cap. After 3 continuous failures the host is silent; the operator's
+    // refresh_models control resets count + succeeded and kicks a fresh
+    // attempt. That attempt succeeds here, so callCount must be 4 (3 pre-cap
+    // trials + 1 post-reset), NOT stay at 3 (which would mean the reset did
+    // not actually re-open the retry path).
+    let callCount = 0;
+    let hostRef: AgentHost | undefined;
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        // 3 result turns trigger auto retries 2/3; cap is reached after the
+        // third failure. The 4th result carries the manual retry effect.
+        yield result("success", { result: "t0" });
+        yield result("success", { result: "t1" });
+        // At this point auto retry is exhausted. Fire the manual retry from
+        // outside — before the loop pulls the next result.
+        await Promise.resolve();
+        hostRef?.retrySupportedModels();
+        yield result("success", { result: "t2" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => {
+          callCount += 1;
+          // Fail the first three (init + result 0 + result 1) then succeed.
+          if (callCount <= 3) throw new Error("supportedModels down");
+          return modelInfos;
+        },
+      });
+    });
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    hostRef = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    try {
+      await hostRef.run();
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    expect(callCount).toBe(4);
+  });
+
   it("inflight guard: 同 turn 内の concurrent trigger は 1 回にまとまる", async () => {
     // If init's supportedModels() await is still pending when a result
     // arrives, the second trigger must observe #modelsInflight and skip.
