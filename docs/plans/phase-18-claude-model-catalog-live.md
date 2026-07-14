@@ -59,7 +59,7 @@ Claude 側 catalog を再構成する。BOOTSTRAP は `default` 1 エントリ�
 | 18-4 | `#refreshSupportedModels()` に自動 bounded retry (上限 3 回) を実装 | ⏳ | 現行の `#modelsRequested` フラグを retry counter に置換、上限到達判定を追加 |
 | 18-5 | 手動 retry を trigger する control message hook を追加 | ⏳ | protocol の control envelope で `refresh_models` (または相当) を追加、`host.ts` 側で receive → `#refreshSupportedModels()` を再起動 (retry counter reset) |
 | 18-6 | retry 上限到達時の 1 度限り toast 通知 mechanism を実装 | ⏳ | server → client への 1 shot notification 経路。既存 `state_change.ext` の empty models + `models_error: true` flag 相当で表現可能かを検討 |
-| 18-7 | persist alias validation + `default` fallback + 通知 event を実装 | ⏳ | 起動時 (session resume 経路 or spawn 時) に保存 `model` を SDK 実測と照合、不一致なら `default` に置換 + 通知 |
+| 18-7 | persist alias validation + `default` fallback + 通知 event を実装 | ⏳ | 起動時 (session resume 経路 or spawn 時) に保存 `model` を SDK 実測と照合、不一致なら `default` に置換 + 通知。**併せて `wrapper/claude-code/src/host.ts:701-708` の pre-init validation を軟着陸させる**: 18-3 縮小後は floor 外モデルへの `setModel` が `unknown bootstrap model` throw を起こすため、F8 (persist alias fallback) 実装時に「floor 外 alias は `default` へ fallback + 通知」経路へ置換する (18-3 監督申し送り) |
 | 18-8 | wrapper 単体テストの追加 / 更新 | ⏳ | BOOTSTRAP snapshot テスト更新、retry counter / 上限 / reset のテスト、persist alias fallback のテスト |
 | 18-9 | `AgentDetail.svelte` のモデル switcher 内に「モデル一覧を再取得」ボタンを設置 | ⏳ | 具体的な UI 配置 (dropdown 内 inline / status バナー / 両方) は本 task の PR で確定 (ADR-0037 の Q3 相当) |
 | 18-10 | toast 表示実装 (retry 失敗 / persist alias fallback) | ⏳ | 通知の粒度 (toast 1 度 / session log / 明示ダイアログ) は本 task の PR で確定 (ADR-0037 の Q4 相当) |
