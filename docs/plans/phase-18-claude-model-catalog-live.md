@@ -1,7 +1,7 @@
 ---
 title: Phase 18 — Claude モデル catalog live 実測一元化と bootstrap default floor
 description: BOOTSTRAP を default 1 エントリに縮小、Claude live 経路を SDK 実測に一元化、retry 契約を実装する。
-status: planned
+status: in-progress
 phase: 18
 depends_on: []
 last_updated: 2026-07-14
@@ -24,13 +24,13 @@ Phase 18-2 着手前に
 
 ## Acceptance Criteria
 
-- [ ] `wrapper` package の `@anthropic-ai/claude-agent-sdk` が最新 (0.3.208 相当以上)
+- [x] `wrapper` package の `@anthropic-ai/claude-agent-sdk` が最新 (0.3.208 相当以上)
       にアップグレードされ、既存 test suite が pass する
-- [ ] `supportedModels()` の実測結果 (SDK upgrade 後) を記録し、
+- [x] `supportedModels()` の実測結果 (SDK upgrade 後) を記録し、
       `model: "default"` を渡した際の `model_source` と実効モデル解決先が
       [claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md)
       に追記される
-- [ ] Q1 の実測結果が「`default` は account 推奨モデルに解決される」を確認できる
+- [x] Q1 の実測結果が「`default` は account 推奨モデルに解決される」を確認できる
       (or ADR-0037 の再検討が必要な場合はマスターへ報告)
 - [ ] `wrapper/claude-code/src/catalog.ts` の `BOOTSTRAP` が `default` 1 エントリの
       みに縮小され、`display_name: "Default (recommended)"` + neutral description で
@@ -54,8 +54,8 @@ Phase 18-2 着手前に
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 18-1 | `wrapper/package.json` の `@anthropic-ai/claude-agent-sdk` を最新 (`^0.3.208` 相当) にアップグレード | ⏳ | 別 PR。既存 test の regression 確認、`supportedModels()` の実測をログ出力し記録 |
-| 18-2 | `model: "default"` の SDK 解決 semantic を実測検証し Q1 に追記 | ⏳ | 18-1 の SDK upgrade PR に併せて手動実測、または integration test で自動化。結果を [claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md) に append |
+| 18-1 | `wrapper/package.json` の `@anthropic-ai/claude-agent-sdk` を最新 (`^0.3.208` 相当) にアップグレード | ✅ | 2026-07-14 完了 (commit 93f0e68)。resolved 0.3.187 → 0.3.208、blast radius は SDK + 8 platform binary のみ。breaking は `CanUseTool` return が `Promise<PermissionResult \| null>` へ変更、test 7 呼出しを `(await ...)!` で非 null narrow (14 line)、src (catalog.ts / host.ts) は F7 準拠で無改変 |
+| 18-2 | `model: "default"` の SDK 解決 semantic を実測検証し Q1 に追記 | ✅ | 2026-07-14 完了 (commit 93f0e68 に併走)。案 A 確定 (`default` → `resolvedModel: "claude-opus-4-8[1m]"`)。bonus: BOOTSTRAP drift 実証 (`sonnet[1m]` / `claude-opus-4-7` は SDK 側消滅、Sonnet 5 追従済み)、`ModelInfo` 拡張 5 field (`resolvedModel` / `supportsEffort` / `supportsAdaptiveThinking` / `supportsFastMode` / `supportsAutoMode`) 検出。詳細は [claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md) の実測結果節 |
 | 18-3 | `wrapper/claude-code/src/catalog.ts` の BOOTSTRAP を default 1 エントリに縮小 | ⏳ | `opus[1m]` / `claude-fable-5[1m]` / `sonnet` / `sonnet[1m]` / `haiku` / `claude-opus-4-7` を削除、`default` は `display_name: "Default (recommended)"`、neutral description に更新、`effort_levels` は FULL_EFFORT 維持 |
 | 18-4 | `#refreshSupportedModels()` に自動 bounded retry (上限 3 回) を実装 | ⏳ | 現行の `#modelsRequested` フラグを retry counter に置換、上限到達判定を追加 |
 | 18-5 | 手動 retry を trigger する control message hook を追加 | ⏳ | protocol の control envelope で `refresh_models` (または相当) を追加、`host.ts` 側で receive → `#refreshSupportedModels()` を再起動 (retry counter reset) |
@@ -72,12 +72,27 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 ## Followups (in-phase but unfinished)
 
-なし (未着手のためタスク表がそのまま followup を含む)。
+- Phase 18-3 commit と**同時に**次の 2 アクションをセット実施:
+  - `docs/open-questions/claude-default-alias-sdk-semantic.md` を削除
+    (案 A 確定済み、`decided: 2026-07-14`)
+  - [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) の
+    Context 節に Q1 実測根拠 (default → `claude-opus-4-8[1m]`) を追記
+- Phase 18-3 の BOOTSTRAP 縮小に併せて、`wrapper/claude-code/test/host.test.ts`
+  の `initialStatusExt` テスト (現行 BOOTSTRAP の全エントリを expect) を
+  縮小後の shape に合わせて更新する必要あり (18-8 の test 更新の一部)
+- `runner/test/config-watcher.test.ts` の debounce 系 2 テストは 18-1 baseline
+  で既存 flake / macOS 決定論的赤として確認済み。Phase 18 とは無関係な既存
+  問題として **followup issue に外部化** (2026-07-14 予定、my-issue-curator
+  経由)。修正案: 固定 `settle` 待ちをやめ、`onReload` を promise 化して
+  条件成立を上限付き polling wait に置き換える
 
 ## Open Questions Blocking This Phase
 
-- [claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md)
-  — 18-2 で確定させ、Phase 18-3 (BOOTSTRAP 縮小) 着手前提とする
+- ~~[claude-default-alias-sdk-semantic](../open-questions/claude-default-alias-sdk-semantic.md)~~
+  — 2026-07-14 に 18-2 実測で **案 A 確定** (`default` → `claude-opus-4-8[1m]`)。
+  Phase 18-3 の gate は unblock 済み。open-question ファイル本体の削除と
+  ADR-0037 Context 節への実測根拠追記は Phase 18-3 commit と同時に実施する
+  (checklist として本 plan の Followups 節を参照)
 
 ## See Also
 
