@@ -1183,6 +1183,21 @@ export class AgentHost implements EngineAdapter {
     if (this.#cwd !== null) ext.cwd = this.#cwd;
     if (this.#slashCommands !== null) ext.slash_commands = this.#slashCommands;
     if (this.#models !== null) ext.models = this.#models;
+    // Deliberately NOT one-shot (contrast with effort_reset / switch_error
+    // above, which consume via consumeOneShot). Rationale: those are discrete
+    // events — a late-connecting operator does not need to see them replayed.
+    // models_error is a PERSISTENT state — the wrapper is stuck on the floor
+    // catalog until refresh_models (phase-18-5) resets the retry state — so a
+    // reconnecting client MUST see it too, otherwise they will read the floor
+    // default as the account's real catalog (ADR-0037 F1 keeps ext.models
+    // valid throughout; this flag is the ONLY signal that fetch has given up).
+    // If future work makes this one-shot, the reconnect path breaks silently.
+    if (
+      this.#modelsRetryCount >= MAX_MODEL_REFRESH_RETRIES &&
+      !this.#modelsSucceeded
+    ) {
+      ext.models_error = true;
+    }
     if (this.#context !== null) ext.context = this.#context;
     if (this.#rateLimits.size > 0) {
       ext.rate_limits = Object.fromEntries(this.#rateLimits);

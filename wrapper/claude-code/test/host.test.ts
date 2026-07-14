@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ModelInfo,
   Options,
   Query,
   SDKMessage,
@@ -1667,6 +1668,89 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     });
     await host.run();
     expect(callCount).toBe(1);
+  });
+
+  it("ext.models_error は throw で cap 到達時に立つ (ADR-0037 F6, phase-18-6)", async () => {
+    // Continuous throw path: 3 failures reach the auto-retry cap; the
+    // last state_change ext must carry models_error=true so a late-
+    // connecting client can see the degraded state.
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield result("success", { result: "t0" });
+        yield result("success", { result: "t1" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => {
+          throw new Error("supportedModels down");
+        },
+      });
+    });
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    try {
+      await host.run();
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    expect(envs.at(-1)?.ext?.models_error).toBe(true);
+  });
+
+  it("ext.models_error は null-return で cap 到達時にも立つ (ADR-0037 F6, phase-18-6)", async () => {
+    // The derive-always design closes the gap in phase-18-4's catch-only
+    // stderr breadcrumb: when supportedModels() returns null / undefined /
+    // empty instead of throwing, the trial is still consumed and the cap is
+    // still reached, so the ext flag must fire on this path too.
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield result("success", { result: "t0" });
+        yield result("success", { result: "t1" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => null as unknown as ModelInfo[],
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(envs.at(-1)?.ext?.models_error).toBe(true);
+  });
+
+  it("ext.models_error は success 後は absent (false-derive 保護)", async () => {
+    // Negative case: !succeeded is the gate. If any code path accidentally
+    // set the flag after a success, this test catches it.
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        yield result("success", { result: "t0" });
+        yield result("success", { result: "t1" });
+        yield result("success", { result: "t2" });
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels: async () => modelInfos,
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    for (const env of envs) {
+      expect(env.ext?.models_error).toBeUndefined();
+    }
   });
 });
 

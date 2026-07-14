@@ -331,6 +331,15 @@ export interface EnvelopeExt extends Record<string, unknown> {
   pending_effort?: string;
   effort_reset?: boolean;
   switch_error?: SwitchErrorExt;
+  /** Set when the wrapper has exhausted its bounded retry for
+   *  `supportedModels()` and no cached catalog is available yet
+   *  (ADR-0037 F6, phase-18-6). `ext.models` still carries a valid floor
+   *  default (BOOTSTRAP, ADR-0037 F1) — this flag signals "catalog fetch
+   *  gave up", NOT "ext.models is broken". Client one-shot dedup on the
+   *  flag's rising edge; the wrapper keeps derive-always semantics so a
+   *  late-connecting operator also sees the degraded state. Cleared by
+   *  `refresh_models` (phase-18-5), which resets the retry counter. */
+  models_error?: boolean;
 }
 
 /**
