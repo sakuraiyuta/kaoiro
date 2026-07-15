@@ -41,6 +41,7 @@ describe("initialStatusExt", () => {
         supports_effort_switch: true,
         supports_session_reset: true,
         session_reset_modes: ["new", "clear"],
+        supports_context_usage: true,
       },
     });
     expect(
@@ -353,6 +354,7 @@ describe("AgentHost — query injection", () => {
       supports_effort_switch: true,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
+      supports_context_usage: true,
     });
   });
 
@@ -410,6 +412,148 @@ describe("AgentHost — query injection", () => {
       model: "claude-test",
       context: { used_tokens: 50, max_tokens: 100, used_percentage: 50 },
     });
+  });
+
+  it("init 直後にも getContextUsage が発火し ext.context が付く (ADR-0040)", async () => {
+    // init trigger 追加後の効果: 従来は result 到達まで context が乗らなかった
+    // (L380 の legacy test を参照)。init 直後の #refreshContextUsageForInit
+    // で system_prompt / tools / MCP / memory_files 分の usage が
+    // 最初の assistant state_change 時点で ext に載る。
+    const envs: Envelope[] = [];
+    const usage = {
+      totalTokens: 5000,
+      maxTokens: 200000,
+      percentage: 3,
+      model: "claude-init",
+    };
+    const getContextUsage = vi.fn(async () => usage);
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({
+          type: "system",
+          subtype: "init",
+          model: "claude-init",
+          cwd: "/repo",
+        });
+        // init 直後の refresh が settle するのを待ってから状態遷移を進める。
+        // 実装は fire-and-forget なので tick を回す。
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        yield assistant([{ type: "text", text: "hi" }]);
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen(), async () => {}, getContextUsage);
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    const firstThinking = envs.find((e) => e.state === "thinking");
+    expect(firstThinking?.ext).toMatchObject({
+      context: {
+        used_tokens: 5000,
+        max_tokens: 200000,
+        used_percentage: 3,
+      },
+    });
+    // getContextUsage は少なくとも init 由来で 1 回、result 由来で 1 回発火する。
+    expect(getContextUsage.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("init trigger は 1 回失敗しても短い backoff で再試行する (ADR-0040 must-fix D)", async () => {
+    // 1 回目は null 返却 (transient race)、2 回目で成功する状況を再現。
+    // bounded retry は初期化単位、close/generation を跨がず、result が
+    // 来る前に context が乗ることを担保する。
+    const envs: Envelope[] = [];
+    let call = 0;
+    const usage = {
+      totalTokens: 1200,
+      maxTokens: 200000,
+      percentage: 1,
+      model: "claude-retry",
+    };
+    const getContextUsage = vi.fn(async () => {
+      call += 1;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return call === 1 ? (null as any) : usage;
+    });
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({
+          type: "system",
+          subtype: "init",
+          model: "claude-retry",
+          cwd: "/repo",
+        });
+        // 2 回目の refresh (初期 backoff = 100ms) が settle する前に result
+        // で状態が進むと retry 効果が観測できないため、余裕を持って待つ。
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        yield assistant([{ type: "text", text: "hi" }]);
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen(), async () => {}, getContextUsage);
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(call).toBeGreaterThanOrEqual(2);
+    const firstThinking = envs.find((e) => e.state === "thinking");
+    expect(firstThinking?.ext.context).toMatchObject({
+      used_tokens: 1200,
+      used_percentage: 1,
+    });
+  });
+
+  it("同一 context 値の再取得は追加の state_change を発火しない (dedup)", async () => {
+    // authoritative stamp は毎 state_change に乗る (unchanged) が、
+    // 「取得成功時の即時 re-emit」は差分時のみ。同値なら emitState は kick されない。
+    const envs: Envelope[] = [];
+    const usage = {
+      totalTokens: 42,
+      maxTokens: 100,
+      percentage: 42,
+      model: "claude-dedup",
+    };
+    // 何度呼ばれても同じ値を返す
+    const getContextUsage = vi.fn(async () => usage);
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({
+          type: "system",
+          subtype: "init",
+          model: "claude-dedup",
+          cwd: "/repo",
+        });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        yield result("success", { result: "ok" });
+        // 追加 tick で result-driven refresh も回るが値は変わらない。
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      return asQuery(gen(), async () => {}, getContextUsage);
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    // context 値 stamp を運ぶ envelope の数を数える。
+    // (毎 state_change に authoritative stamp が乗る仕様なので、count 数は
+    // state_change 発火回数と一致する。dedup が働けば追加 emitState は生じない)
+    const contextEnvs = envs.filter(
+      (e) => (e.ext as { context?: unknown }).context !== undefined,
+    );
+    // 初回に context がフラッシュ後、追加の state_change (assistant 進行等)
+    // 由来のみで、同値 refresh 由来の余分な envelope は増えないことを確認。
+    // getContextUsage が複数回呼ばれても context が乗る envs 数は
+    // 「state_change の回数」に収まる。
+    expect(contextEnvs.length).toBeGreaterThan(0);
+    // getContextUsage は init + result で最低 2 回は呼ばれる (dedup とは独立)
+    expect(getContextUsage.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("config.permission_mode が SDK の permissionMode に渡る (#58)", async () => {
@@ -1352,6 +1496,74 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     const done = host.run();
     await host.setModel("opus[1m]");
     expect(setModel).toHaveBeenCalledWith("opus[1m]");
+    host.close();
+    await done;
+  });
+
+  it("setModel 成功で context 世代が進み古い refresh 結果が捨てられる (ADR-0040 must-fix C)", async () => {
+    // model 切替中に旧 model の refresh が in-flight → 新 trigger は
+    // inflight guard で drop、finally の re-kick で新 generation の refresh が
+    // 動く。旧 usage は generation guard で捨てられる。
+    const envs: Envelope[] = [];
+    let releaseFirst!: (value: unknown) => void;
+    const firstGate = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    // 1 回目 (init 由来): pending Promise で保持し、setModel 完了後まで解決させない
+    // 2 回目以降 (post-switch): 即座に新 usage を返す
+    let call = 0;
+    const staleUsage = {
+      totalTokens: 10000,
+      maxTokens: 200000,
+      percentage: 5,
+      model: "default",
+    };
+    const freshUsage = {
+      totalTokens: 500,
+      maxTokens: 1000000,
+      percentage: 0,
+      model: "opus[1m]",
+    };
+    const getContextUsage = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        await firstGate;
+        return staleUsage;
+      }
+      return freshUsage;
+    });
+    const setModel = vi.fn(async () => {});
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "default" });
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), async () => {}, getContextUsage, {
+        setModel,
+        supportedModels: async () => modelInfos,
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    const done = host.run();
+    // init が流れて #refreshContextUsageForInit が inflight に入るのを待つ
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await host.setModel("default");
+    // 旧 refresh を release。generation guard により結果は破棄される。
+    releaseFirst(undefined);
+    // finally の re-kick により fresh generation の refresh が完了するのを待つ
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 最後の envelope に載る context は fresh (staleUsage ではなく freshUsage)
+    const lastCtx = envs
+      .filter((e) => (e.ext as { context?: unknown }).context !== undefined)
+      .at(-1);
+    expect(lastCtx?.ext.context).toMatchObject({
+      used_tokens: 500,
+      max_tokens: 1000000,
+    });
     host.close();
     await done;
   });

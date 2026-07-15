@@ -120,10 +120,17 @@ export function initialStatusExt(): Record<string, unknown> {
       supports_effort_switch: true,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
+      supports_context_usage: true,
     },
     models: claudeBootstrapCatalog(),
   };
 }
+
+/** Init-time bounded retry delay for `#refreshContextUsageForInit` (ADR-0040,
+ *  phase-21). Small backoff so a transient SDK control-request race at
+ *  session init settles quickly, keeping the retry window well under a first
+ *  user turn. Exported so tests can inspect without duplicating the constant. */
+export const CONTEXT_INIT_RETRY_DELAY_MS = 100;
 
 // PermissionDecision / QuestionDecision moved to @kaoiro/agent-common with
 // the brokers (phase-13); re-exported here so the host's public surface is
@@ -323,6 +330,23 @@ export class AgentHost implements EngineAdapter {
     max_tokens: number;
     used_percentage: number;
   } | null = null;
+  /** In-flight guard for `#refreshContextUsage()` (ADR-0040 phase-21,
+   *  藤 review turn-3 must-fix C). Concurrent triggers (init / result /
+   *  model switch) coalesce; a caller that hits the guard sets
+   *  `#contextRefreshPending` so a follow-up runs after the current
+   *  completion, avoiding a stall until the next natural trigger. */
+  #contextInflight = false;
+  /** Set when a refresh call landed while another was in flight
+   *  (ADR-0040 phase-21 must-fix C). The `finally` block re-kicks
+   *  `#refreshContextUsage()` once so the queued caller gets serviced. */
+  #contextRefreshPending = false;
+  /** Monotonic generation for context refreshes (ADR-0040 phase-21,
+   *  Codex pattern parallel: `#modelResolutionGeneration`). Incremented on
+   *  model switch (context window semantics differ per model). A refresh's
+   *  captured generation is compared against the current value on completion;
+   *  a mismatch discards the result so stale data cannot overwrite a fresh
+   *  post-switch snapshot. */
+  #contextGeneration = 0;
   readonly #rateLimits = new Map<
     string,
     { status?: string; utilization?: number; resets_at?: number }
@@ -800,7 +824,18 @@ export class AgentHost implements EngineAdapter {
         this.#operatorSwitchedFields.add("effort_source");
       }
       this.#switchErrorOnce = null;
+      // Invalidate the cached context snapshot: different Claude models can
+      // have different context windows (e.g. opus[1m] vs sonnet), so the old
+      // percentage is stale until we re-fetch. Bump the generation FIRST so
+      // any in-flight refresh's captured generation mismatches on completion
+      // and its (pre-switch) result is discarded. Clear #context so #statusExt
+      // stops advertising the stale snapshot on the transition envelope; the
+      // async refresh will re-emit once the new value arrives (ADR-0040
+      // phase-21, 藤 review turn-3 must-fix C).
+      this.#contextGeneration += 1;
+      this.#context = null;
       this.#emitState(this.#machine.state);
+      void this.#refreshContextUsage();
     } catch (error) {
       this.#effortResetPending = false;
       this.#switchErrorOnce = {
@@ -1034,6 +1069,11 @@ export class AgentHost implements EngineAdapter {
         // The session is initialized once init meta lands, so the
         // supportedModels control request can resolve; fetch it once (#54).
         void this.#refreshSupportedModels();
+        // Context usage is also reachable once init lands (ADR-0040 phase-21).
+        // Use the init-time bounded-retry helper so a transient control-request
+        // race gets one more shot before we fall back to result-time refresh
+        // — otherwise the "ctx" meter would spin until the first turn ends.
+        void this.#refreshContextUsageForInit();
       }
       const rateLimit = sdkMessageToRateLimit(message);
       if (rateLimit) this.#applyRateLimit(rateLimit);
@@ -1493,13 +1533,36 @@ export class AgentHost implements EngineAdapter {
     };
   }
 
-  /** Pulls the current context-window usage (#16). Best-effort: the SDK
-   *  control request can be unavailable, so any failure is swallowed. */
+  /** Pulls the current context-window usage (#16, ADR-0040 phase-21).
+   *  Best-effort: the SDK control request can be unavailable, so any failure
+   *  is swallowed.
+   *
+   *  Concurrency contract (藤 review turn-3 must-fix C):
+   *  - inflight guard: only one live call at a time; overlapping triggers
+   *    (init / result / model switch) set `#contextRefreshPending` and the
+   *    `finally` re-kicks so no caller stalls until the next natural trigger.
+   *  - generation guard: on completion, compare captured generation vs
+   *    `#contextGeneration`; a mismatch (model switch happened while we
+   *    awaited) drops the result. The re-kick in `finally` then fetches
+   *    the fresh generation.
+   *  - dedup: `#emitState` fires ONLY when the snapshot actually changed,
+   *    so a same-value refresh does not spam state_change envelopes.
+   *  - close guard: never re-kick after `close()`. */
   async #refreshContextUsage(): Promise<void> {
+    if (this.#contextInflight) {
+      this.#contextRefreshPending = true;
+      return;
+    }
+    this.#contextInflight = true;
+    const generation = this.#contextGeneration;
     try {
       const usage = await this.#query?.getContextUsage();
+      // Stale result: model switched (or session closed) while we awaited.
+      // Discard so a fresh-generation refresh (queued by the finally block)
+      // is the one that lands in `#context`.
+      if (this.#closed || generation !== this.#contextGeneration) return;
       if (!usage) return;
-      this.#context = {
+      const next = {
         used_tokens: usage.totalTokens,
         max_tokens: usage.maxTokens,
         used_percentage: usage.percentage,
@@ -1514,9 +1577,56 @@ export class AgentHost implements EngineAdapter {
           this.#modelSource = "default";
         }
       }
+      const prev = this.#context;
+      const changed =
+        prev === null ||
+        prev.used_tokens !== next.used_tokens ||
+        prev.max_tokens !== next.max_tokens ||
+        prev.used_percentage !== next.used_percentage;
+      if (!changed) return;
+      this.#context = next;
+      // Authoritative stamp rides #statusExt on every state_change (L1233);
+      // this explicit re-emit satisfies the "取得成功時の即時反映" contract
+      // (藤 review turn-3 S7) without waiting for the next natural transition.
+      this.#emitState(this.#machine.state);
     } catch {
       // Context usage is optional telemetry; never disrupt the session.
+    } finally {
+      this.#contextInflight = false;
+      // Re-run if a caller hit the guard while we were awaiting, OR the
+      // generation moved (our result was stale-dropped above; a fresh fetch
+      // is needed for the current generation).
+      const shouldReRun =
+        this.#contextRefreshPending ||
+        generation !== this.#contextGeneration;
+      this.#contextRefreshPending = false;
+      if (shouldReRun && !this.#closed) {
+        void this.#refreshContextUsage();
+      }
     }
+  }
+
+  /** Init-time refresh with a small bounded retry (ADR-0040 phase-21,
+   *  藤 review turn-3 must-fix D). One initial attempt + one retry after
+   *  CONTEXT_INIT_RETRY_DELAY_MS if the first came back empty. Bounded so
+   *  a persistent SDK failure falls back cleanly to the result-time refresh
+   *  (host.ts run() loop L1049); scoped to the captured generation so a
+   *  model switch or close() aborts the retry cleanly. */
+  async #refreshContextUsageForInit(): Promise<void> {
+    const generation = this.#contextGeneration;
+    await this.#refreshContextUsage();
+    if (
+      this.#closed ||
+      generation !== this.#contextGeneration ||
+      this.#context !== null
+    ) {
+      return;
+    }
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, CONTEXT_INIT_RETRY_DELAY_MS),
+    );
+    if (this.#closed || generation !== this.#contextGeneration) return;
+    await this.#refreshContextUsage();
   }
 
   /** Builds the log payload (size-clipped) and relays it via onLog. */
