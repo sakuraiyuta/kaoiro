@@ -126,6 +126,18 @@ describe("parseConfig", () => {
     ).toThrow(ConfigError);
   });
 
+  it("codex_internal_subagents の boolean を受け入れ、非 boolean を弾く", () => {
+    expect(
+      parseConfig({ ...valid, codex_internal_subagents: false }),
+    ).toMatchObject({ codex_internal_subagents: false });
+    expect(
+      parseConfig({ ...valid, codex_internal_subagents: true }),
+    ).toMatchObject({ codex_internal_subagents: true });
+    expect(() =>
+      parseConfig({ ...valid, codex_internal_subagents: "yes" }),
+    ).toThrow(ConfigError);
+  });
+
   it("permission_timeout_ms は正の整数のみ受け入れる", () => {
     expect(
       parseConfig({ ...valid, permission_timeout_ms: 1000 }),

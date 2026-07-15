@@ -100,6 +100,7 @@ export interface SupervisorOptions {
   wrapperServerUrl: string;
   codexAuthMode?: CodexAuthMode;
   codexChatgptPlan?: ChatGptPlan;
+  codexInternalSubagents?: boolean;
   sendResult: (result: SpawnResult) => void;
   sendSessions: (sessions: RunnerSessions) => void;
   /** phase-17 17-5: report a session-reset outcome (ADR-0036 F7). Required
@@ -265,6 +266,7 @@ export function resolveWrapperConfig(
   fallbackServerUrl: string,
   codexAuthMode?: CodexAuthMode,
   codexChatgptPlan?: ChatGptPlan,
+  codexInternalSubagents?: boolean,
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
@@ -281,6 +283,10 @@ export function resolveWrapperConfig(
     if (codexChatgptPlan !== undefined) {
       config.codex_chatgpt_plan = codexChatgptPlan;
     }
+    // Effective = configured ?? true (ADR-0038 F2): the runner option is
+    // authoritative over user-global Codex config, so relay a concrete
+    // boolean for every codex spawn (default true when unset).
+    config.codex_internal_subagents = codexInternalSubagents ?? true;
   }
   if (parsed.permissionMode !== undefined) {
     config.permission_mode = parsed.permissionMode;
@@ -350,6 +356,7 @@ export interface SupervisorRuntimeUpdate {
   wrapperServerUrl: string;
   codexAuthMode: CodexAuthMode | undefined;
   codexChatgptPlan: ChatGptPlan | undefined;
+  codexInternalSubagents: boolean | undefined;
 }
 
 export class Supervisor {
@@ -372,6 +379,7 @@ export class Supervisor {
   #wrapperServerUrl: string;
   #codexAuthMode: CodexAuthMode | undefined;
   #codexChatgptPlan: ChatGptPlan | undefined;
+  #codexInternalSubagents: boolean | undefined;
   readonly #children = new Map<string, ChildEntry>();
   /** session_ids currently being resumed — the F4 local lock against a second
    *  concurrent resume of the same session. */
@@ -401,6 +409,7 @@ export class Supervisor {
     this.#wrapperServerUrl = options.wrapperServerUrl;
     this.#codexAuthMode = options.codexAuthMode;
     this.#codexChatgptPlan = options.codexChatgptPlan;
+    this.#codexInternalSubagents = options.codexInternalSubagents;
   }
 
   /** Hot-swap runtime config on a config-file reload. Full replacement per
@@ -415,6 +424,7 @@ export class Supervisor {
     this.#wrapperServerUrl = update.wrapperServerUrl;
     this.#codexAuthMode = update.codexAuthMode;
     this.#codexChatgptPlan = update.codexChatgptPlan;
+    this.#codexInternalSubagents = update.codexInternalSubagents;
   }
 
   /** Handles a server `spawn`: validates, enforces the cwd allow-list, the
@@ -825,6 +835,7 @@ export class Supervisor {
         this.#wrapperServerUrl,
         this.#codexAuthMode,
         this.#codexChatgptPlan,
+        this.#codexInternalSubagents,
       ),
       parsed.cwd,
       parsed.resumeSessionId,
@@ -909,6 +920,7 @@ export class Supervisor {
           this.#wrapperServerUrl,
           this.#codexAuthMode,
           this.#codexChatgptPlan,
+          this.#codexInternalSubagents,
         ),
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
@@ -953,6 +965,7 @@ export class Supervisor {
           this.#wrapperServerUrl,
           this.#codexAuthMode,
           this.#codexChatgptPlan,
+          this.#codexInternalSubagents,
         ),
         entry.parsed.cwd,
         undefined, // fresh: no --resume
@@ -1047,6 +1060,7 @@ export class Supervisor {
           this.#wrapperServerUrl,
           this.#codexAuthMode,
           this.#codexChatgptPlan,
+          this.#codexInternalSubagents,
         ),
         entry.parsed.cwd,
         rollbackSid,

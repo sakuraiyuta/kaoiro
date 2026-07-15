@@ -24,6 +24,26 @@ node dist/cli.js [configPath]   # configPath 既定 = runner.config.json
 (未設定 = サーバ側 runner 認証が無効な dev 時)。設定例は
 [runner.config.example.json](runner.config.example.json) を参照。
 
+## Codex 設定
+
+`runner.config.json` の `codex` ブロックで Codex engine 固有の設定を渡す。
+
+- `chatgpt_plan` — operator 申告の ChatGPT plan(catalog 解決に使用、
+  API-key auth では無視)。
+- `internal_subagents`(boolean、既定 `true`)— Codex の内部サブエージェント
+  spawn の可否。正の boolean で、`true` は force-enable、`false` は無効化、
+  省略は effective default の `true`。wrapper が per-run config に effective 値を
+  常に `features.multi_agent` として注入する
+  ([ADR-0038](../docs/adr/0038-codex-internal-subagents-toggle.md))。
+
+**precedence**: runner option を SoT とし、user-global な Codex config
+(`~/.codex/config.toml` 等)より **上位**。effective(= configured ?? true)を
+常に per-run config へ書き込むため、global 設定に依らず runner の意図が優先
+される(`false` のみ実際に無効化、`true` / 省略も明示注入)。
+
+**live reload**: config を書き換えると次回以降の spawn にのみ反映される。稼働中の
+wrapper プロセスは launch 時の値を保持し、即時には変わらない。
+
 ## 開発
 
 ```sh

@@ -63,6 +63,32 @@ describe("parseRunnerConfig", () => {
     );
   });
 
+  it("codex.internal_subagents の boolean を受け入れる", () => {
+    expect(
+      parseRunnerConfig({ ...valid, codex: { internal_subagents: true } })
+        .codex?.internal_subagents,
+    ).toBe(true);
+    expect(
+      parseRunnerConfig({ ...valid, codex: { internal_subagents: false } })
+        .codex?.internal_subagents,
+    ).toBe(false);
+  });
+
+  it("codex.internal_subagents 省略は undefined (既定=有効)", () => {
+    expect(
+      parseRunnerConfig({ ...valid, codex: {} }).codex?.internal_subagents,
+    ).toBeUndefined();
+  });
+
+  it("codex.internal_subagents が boolean でなければ loud config error にする", () => {
+    expect(() =>
+      parseRunnerConfig({
+        ...valid,
+        codex: { internal_subagents: "yes" },
+      }),
+    ).toThrowError("codex.internal_subagents must be a boolean");
+  });
+
   it("host_id 欠落を弾く", () => {
     const { host_id: _omit, ...rest } = valid;
     void _omit;

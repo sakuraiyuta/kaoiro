@@ -75,6 +75,9 @@ async function main(): Promise<void> {
     ...(config.codex?.chatgpt_plan === undefined
       ? {}
       : { codexChatgptPlan: config.codex.chatgpt_plan }),
+    ...(config.codex?.internal_subagents === undefined
+      ? {}
+      : { codexInternalSubagents: config.codex.internal_subagents }),
     sendResult: (result) => link.sendSpawnResult(result),
     sendSessions: (sessions) => link.sendSessions(sessions),
     sendResetResult: (result) => link.sendResetResult(result),
@@ -127,6 +130,7 @@ async function main(): Promise<void> {
       wrapperServerUrl: wrapperUrlFrom(next.server_url),
       codexAuthMode,
       codexChatgptPlan: next.codex?.chatgpt_plan,
+      codexInternalSubagents: next.codex?.internal_subagents,
     });
     const nextRegister = buildRegister(next, codexAuthMode);
     if (

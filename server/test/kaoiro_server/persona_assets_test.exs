@@ -97,6 +97,14 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert PersonaAssets.prompt("unknown") == nil
   end
 
+  test "common footer は peer-routing contract (ADR-0038) を含む" do
+    footer = PersonaAssets.common_footer()
+    assert footer =~ "list_agents"
+    assert footer =~ "kaoiro peer"
+    assert footer =~ "代替生成しない"
+    assert footer =~ "役割名"
+  end
+
   @tag :tmp_dir
   test "manifest.id 'default' の pack は取り込み拒否", %{tmp_dir: tmp} do
     :ok = write_pack(tmp, "default-1.0.0", base_manifest("default"), "body")

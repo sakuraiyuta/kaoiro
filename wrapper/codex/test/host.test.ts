@@ -147,6 +147,57 @@ describe("CodexHost", () => {
     });
   });
 
+  it("codex_internal_subagents を features.multi_agent へ常に注入する (true/false)", async () => {
+    for (const [flag, expected] of [
+      [false, false],
+      [true, true],
+    ] as const) {
+      const { client } = makeClient([
+        [{ type: "thread.started", thread_id: "t1" }, usageEvent()],
+      ]);
+      let captured: CodexOptions | undefined;
+      const host = new CodexHost(
+        { ...CONFIG, codex_internal_subagents: flag },
+        {
+          onState: () => {},
+          appendSystemPrompt: "p",
+          codexFactory: (options) => {
+            captured = options;
+            return client;
+          },
+          now: () => "T",
+        },
+      );
+      await runOneTurn(host, "hi");
+      expect(
+        (captured?.config as Record<string, unknown> | undefined)?.features,
+      ).toEqual({ multi_agent: expected });
+    }
+  });
+
+  it("codex_internal_subagents 未指定は default=true を明示注入する", async () => {
+    const { client } = makeClient([
+      [{ type: "thread.started", thread_id: "t1" }, usageEvent()],
+    ]);
+    let captured: CodexOptions | undefined;
+    const host = new CodexHost(
+      { ...CONFIG },
+      {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: (options) => {
+          captured = options;
+          return client;
+        },
+        now: () => "T",
+      },
+    );
+    await runOneTurn(host, "hi");
+    expect(
+      (captured?.config as Record<string, unknown> | undefined)?.features,
+    ).toEqual({ multi_agent: true });
+  });
+
   it.each([
     ["chatgpt", "free", ["gpt-5.6-terra"]],
     ["chatgpt", "go", ["gpt-5.6-terra"]],

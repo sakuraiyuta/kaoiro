@@ -981,6 +981,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/old/path" });
     expect(h.results.at(-1)).toEqual({
@@ -1008,6 +1009,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       wrapperServerUrl: "ws://new:5000/wrapper",
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined,
     });
     // server_url を spawn 側で欠落させると fallback が使われる
     const { server_url: _drop, ...withoutUrl } = spawnMsg;
@@ -1023,6 +1025,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: "chatgpt",
       codexChatgptPlan: "pro",
+      codexInternalSubagents: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
     expect(h.configs.at(-1)?.codex_chatgpt_plan).toBe("pro");
@@ -1036,12 +1039,14 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: "chatgpt",
       codexChatgptPlan: "pro",
+      codexInternalSubagents: undefined,
     });
     h.sup.updateRuntimeConfig({
       cwdAllowlist: ["/cwd"],
       wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: "chatgpt",
       codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
     expect(h.configs.at(-1)?.codex_chatgpt_plan).toBeUndefined();
@@ -1056,7 +1061,40 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       wrapperServerUrl: "ws://localhost:4000/wrapper",
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined,
     });
     expect(running.kills).toBe(0);
+  });
+
+  it("codexInternalSubagents 未指定は effective default=true を codex spawn config に載せる", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
+    expect(h.configs.at(-1)?.codex_internal_subagents).toBe(true);
+  });
+
+  it("codexInternalSubagents=false は以降の codex spawn の WrapperConfig に載る", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: "chatgpt",
+      codexChatgptPlan: undefined,
+      codexInternalSubagents: false,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
+    expect(h.configs.at(-1)?.codex_internal_subagents).toBe(false);
+  });
+
+  it("codexInternalSubagents=true は以降の codex spawn の WrapperConfig に true として載る", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: "chatgpt",
+      codexChatgptPlan: undefined,
+      codexInternalSubagents: true,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
+    expect(h.configs.at(-1)?.codex_internal_subagents).toBe(true);
   });
 });

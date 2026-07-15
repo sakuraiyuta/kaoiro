@@ -337,6 +337,13 @@ export class CodexHost implements EngineAdapter {
     const codexConfig: Record<string, unknown> = {
       developer_instructions: this.#options.appendSystemPrompt,
     };
+    // Runner config is authoritative over any user-global Codex config
+    // (ADR-0038 F2): always inject the effective toggle so a positive
+    // `internal_subagents: true` force-enables and `false` disables. Absent
+    // resolves to the effective default (true), injected explicitly.
+    codexConfig.features = {
+      multi_agent: this.#config.codex_internal_subagents ?? true,
+    };
     if (toolHost !== null) {
       codexConfig.mcp_servers = {
         kaoiro: {

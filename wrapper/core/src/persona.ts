@@ -182,6 +182,12 @@ export function parseConfig(raw: unknown): WrapperConfig {
         "business, enterprise",
     );
   }
+  if (raw.codex_internal_subagents !== undefined) {
+    if (typeof raw.codex_internal_subagents !== "boolean") {
+      throw new ConfigError("codex_internal_subagents must be a boolean");
+    }
+    config.codex_internal_subagents = raw.codex_internal_subagents;
+  }
 
   // Codex-only launch permission (ADR-0033 F3); the Claude engine ignores
   // both. The sandbox axis is a closed enum.

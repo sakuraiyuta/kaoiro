@@ -388,5 +388,11 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     expect(descriptors.find((d) => d.name === "whoami")?.description).toContain(
       "engine-neutral permission",
     );
+    expect(
+      descriptors.find((d) => d.name === "list_agents")?.description,
+    ).toContain("never spawn a same-named internal sub-agent");
+    expect(
+      descriptors.find((d) => d.name === "send_to_agent")?.description,
+    ).toContain("do not spawn a same-named agent");
   });
 });

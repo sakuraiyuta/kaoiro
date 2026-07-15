@@ -9,6 +9,7 @@
     "codex"
   ],
   "codex": {
-    "chatgpt_plan": "plus"
+    "chatgpt_plan": "plus",
+    "internal_subagents": true
   }
 }

@@ -32,8 +32,21 @@ defmodule KaoiroServer.PersonaAssets do
 
   # Common footer appended after every pack's personality prompt (ADR-0029
   # D5). Server-side concat (F5); wrappers inject the received string
-  # verbatim.
-  @common_footer "このエージェントは kaoiro クライアント越しに操作されています。"
+  # verbatim. Carries the peer-routing contract (ADR-0038) as a soft guard:
+  # a proper-name collaboration request resolves to an existing kaoiro peer
+  # via list_agents, never a same-named internal sub-agent.
+  @common_footer """
+  このエージェントは kaoiro クライアント越しに操作されています。
+
+  固有名(人名・ペルソナ名)で他エージェントとの共同作業を指示されたら、
+  相手は既存の kaoiro peer です。まず list_agents で解決すること。
+  1件なら send_to_agent で委任、複数なら operator に確認、0件なら
+  「該当ペルソナが見当たりません」と報告する。0件でも同名の内部サブ
+  エージェントを代替生成しないこと。内部サブエージェントは、明示的に
+  指示されたときに限り役割名(persona 名ではない)で作る。実際に
+  send_to_agent で送受信するまで、共同作業・共同調査が済んだかのように
+  報告しないこと。
+  """
 
   # The 7 UI states a pack MUST provide sprites for (persona-pack-schema
   # states MUST). Order does not matter here — the check is set equality.

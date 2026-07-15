@@ -59,6 +59,11 @@ export type ChatGptPlan =
 
 export interface CodexConfig {
   chatgpt_plan?: ChatGptPlan;
+  /** Toggle for Codex's internal sub-agent spawning (ADR-0038 F2). Effective
+   *  = configured ?? true; the host ALWAYS injects features.multi_agent = the
+   *  effective value, so this runner option outranks any user-global Codex
+   *  config. true force-enables, false disables, absent = default true. */
+  internal_subagents?: boolean;
 }
 
 const CHATGPT_PLANS = new Set<ChatGptPlan>([
@@ -206,6 +211,12 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
         );
       }
       codex.chatgpt_plan = raw.codex.chatgpt_plan as ChatGptPlan;
+    }
+    if (raw.codex.internal_subagents !== undefined) {
+      if (typeof raw.codex.internal_subagents !== "boolean") {
+        throw new ConfigError("codex.internal_subagents must be a boolean");
+      }
+      codex.internal_subagents = raw.codex.internal_subagents;
     }
     config.codex = codex;
   }

@@ -266,6 +266,13 @@ operator が `@あお` のような名前で指示しても、 model は send_to
 3. 複数 → operator に 「どちらの『あお』に送りますか? (候補: …)」と質問し、 候補から指示を得てから送信
 4. 0 件 → 「該当ペルソナが見当たりません」と operator に伝える
 
+固有名で共同作業を指示された相手は既存 kaoiro peer である。上の解決を
+省いて内部サブエージェント(engine 固有の spawn 機構)を同名で代替
+生成してはならない([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md))。
+内部サブエージェントは明示指示時に限り **役割名**(persona 名ではない)で
+作る。また `send_to_agent` で実際に送信し応答を受けるまで、共同作業・
+共同調査が済んだかのように報告しない。
+
 候補対応 (3) は inject text / TOOL_DESCRIPTION で明示する。
 
 ### envelope.type の予約と version

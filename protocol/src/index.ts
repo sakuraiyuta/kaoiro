@@ -103,6 +103,12 @@ export interface WrapperConfig {
     | "pro"
     | "business"
     | "enterprise";
+  /** Codex internal sub-agent toggle relayed from the runner config
+   *  (codex.internal_subagents), resolved to effective (= configured ?? true)
+   *  by the runner relay. The host ALWAYS injects features.multi_agent = this
+   *  value, so the runner option outranks any user-global Codex config: true
+   *  force-enables, false disables (ADR-0038 F2). */
+  codex_internal_subagents?: boolean;
   /** Codex-only OS sandbox axis (ADR-0033 F3); Claude ignores it.
    *  Omitted = "workspace-write". */
   sandbox?: PermissionAxesExt["sandbox"];
