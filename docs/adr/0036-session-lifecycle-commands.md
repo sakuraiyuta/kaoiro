@@ -114,6 +114,8 @@ wrapperはpersona/developer instructions、最後に実効だったmodel/effort/
 sandbox/network、MCP configを通常のspawn経路から再適用する。値のSSOTはphase-15 D8
 の最新effective snapshotとし、phase-16のmid-session model/effort switch成功値も含む。
 
+「通常のspawn経路から再適用」の具体化は [ADR-0014 F1 追補「resume 時の privilege 三軸再適用」](0014-session-resume-and-restore.md) に集約する: `ResetSessionCommand.resume_snapshot?` を server が同梱し、runner の `applyResumeSnapshot` pure helper が P0 の privilege 三軸 (Codex `sandbox` / `network_access`、Claude `permission_mode`) を fresh 相当の `ParsedSpawn` に反映する。`model` / `effort` は sanitized snapshot に保持され drift 計算にも入るが実 apply は P1。
+
 ### F3 — /newは表示維持、/clearは表示projectionをreset
 
 両modeとも新しいSDK sessionを作り、旧session fileは削除しない。差はserver表示

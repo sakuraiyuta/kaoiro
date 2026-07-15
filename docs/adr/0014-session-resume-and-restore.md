@@ -140,6 +140,59 @@ resolved snapshot」に拡張する:
   **`ext.resume_drift`** で並置 (`ResumeDriftExt`)。stderr warn + AgentDetail
   drift バッジで operator に露出。
 
+#### F1 追補 — resume 時の privilege 三軸再適用 (phase-22 藤 D1/D2, 2026-07-16)
+
+D8 の snapshot は当初「drift 検出のための表示情報」だったが、resume 時に
+前回の privilege 設定 (danger-full-access / network / bypassPermissions 等)
+が engine default へ降格し operator の明示同意が失われる事故が確認された。
+本追補で **snapshot を実効設定復元の SSOT** に格上げする。ADR-0033 F3 の
+「Codex 二軸は spawn 時固定」/ ADR-0036 F2 の「/new・/clear で最後に実効
+だった設定で開始」の 2 契約と整合する。
+
+- **apply 対象 (P0)**: Codex は `sandbox` / `network_access`、Claude は
+  `permission_mode`。`model` / `effort` / `*_source` は sanitize 後の
+  snapshot に保持され drift 計算・wrapper `config.resume_snapshot` にも
+  乗るが、engine への apply は P1 (別 phase で取り扱う。cli.ts の
+  `modelSource` / `effortSource` 派生と絡むため P0 から分離)。
+- **apply 経路 (runner-central)**: 全 resume 操作で **runner の
+  `applyResumeSnapshot(parsed, snapshot, engine)` pure helper** が
+  `ParsedSpawn` の engine 関連フィールドを snapshot 由来値で上書きする。
+  server は `SwitchSessionMessage` / `ResetSessionCommand` / spawn 経路
+  で snapshot を relay するだけで top-level project は**しない**
+  (wire の二重表現を避ける、SSOT 一本化)。ADR-0036 F2 の「通常の spawn
+  経路から再適用」文言は本追補で「reset broadcast に相乗り + runner の
+  applyResumeSnapshot」として具体化される。
+- **apply する経路**: disconnected restore (`spawn` with
+  `resume_session_id`)、live switch (`switch_session`)、reset
+  (`reset_session`)。**apply しない経路**: fresh spawn (snapshot は
+  `config.resume_snapshot` へ passthrough されるが drift 表示のみ)、
+  crash-restart (server 経由しないので `entry.parsed` の適用済み値継承)、
+  rollback (reset 時に適用済みの `entry.parsed` を保持)。crash-restart
+  race で最新 snapshot と `entry.parsed` が乖離する場合、drift として
+  operator に露出するが、resume_snapshot が stale なら drift 空になる
+  可能性もあり **crash-restart の drift 可視化は保証しない** (藤 D3)。
+- **absent field semantics** (藤 D2): snapshot object 自体が absent → apply
+  は no-op。snapshot object present + 当該 engine 関連 field absent / invalid
+  → **engine default へ安全側降格** (Codex: `workspace-write` / `false`、
+  Claude: `default`)。**旧 danger 値保持は禁止** (`entry.parsed` に残って
+  いた privileged 値を snapshot 由来 default が上書きする)。**explicit
+  `false` は保持** (truthy-drop 禁止、`is_boolean` / `!== undefined` 判定を
+  全経路で厳守)。
+- **validation の二重防御**: server 側 `SessionPointers.record_snapshot`
+  の write-side sanitize + runner 側 `validateResolvedSnapshot` の
+  read-side sanitize。closed-enum / boolean / non-empty-string guard を
+  known 7 field に対して行い、unknown key / malformed 値は drop + stderr
+  warn。過去 DETS record が partial malformed だった場合も read-side が
+  救う。fresh spawn の `resume_snapshot` に unknown key が混じっても
+  wrapper `config.resume_snapshot` には known 7 field のみ届く (sanitized
+  passthrough)。
+- **security trust boundary**: closed-enum validation は malformed 攻撃を
+  塞ぐが、compromised authenticated wrapper が valid な
+  `danger-full-access` を偽 stamp する経路は本設計の外 (kaoiro が既存で
+  持つ「wrapper effective snapshot を server が信頼する」設計選択を継承
+  するだけで、本 phase で新規に導入する脆弱性ではない)。上位対策は
+  wrapper 実行ホストの完全性 (specs/threat-model.md T1 と同じ責務境界)。
+
 ### 履歴の正本(A4)
 
 会話履歴の **正本は wrapper ホストの SDK JSONL** とし、サーバの表示用

@@ -77,6 +77,8 @@ Claude Agent SDK の `permissionMode` 全 6 値 → 二軸への写像は `wrapp
 
 `wrapper/codex` アダプタは spawn 時に選択された `sandbox_mode` をそのまま `ext.permission.sandbox` に投影する。`approval` は **`never` 固定** — `codex exec` は harness override で approval_policy を `never` に強制し (`-c approval_policy=...` も無効)、SDK 経由で承認を返す経路が存在しないため、事実をそのまま envelope に載せる。mid-session の権限変更 (`set_permission_mode` 相当) も Codex では非対応。
 
+resume 時の `sandbox` / `network_access` 復元経路は [ADR-0014 F1 追補「resume 時の privilege 三軸再適用」](0014-session-resume-and-restore.md) に集約する。本 F3 の「spawn 時固定」原則は維持され、fresh spawn 時に決めた値は snapshot 経由で restore / switch / reset の各 resume 操作にも波及するだけで、mid-session に切り替わる訳ではない (Codex adapter は `setPermissionMode` を throw する)。
+
 ### F4 — dashboard UI は engine-native 操作 + 二軸バッジ表示
 
 - **表示** (AgentCard / AgentDetail): `ext.permission` 由来の二軸バッジで engine 非依存に統一。
