@@ -1004,4 +1004,122 @@ describe("CodexHost", () => {
       stderr.mockRestore();
     }
   });
+
+  // Resume privilege restoration regression pin (ADR-0014 F1 追補,
+  // resume-privilege-restoration 藤 P0). The wrapper reads
+  // `config.sandbox` / `config.network_access` verbatim: the actual
+  // apply happens on the runner side (`applyResumeSnapshot`), and
+  // this fixture confirms the wrapper doesn't silently downgrade the
+  // restored value.
+  describe("resume privilege restoration (P0 pin)", () => {
+    it("config.sandbox = danger-full-access + network_access=true が ThreadOptions に載る", async () => {
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "restore-danger" }, usageEvent()],
+      ]);
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+        {
+          onState: () => {},
+          appendSystemPrompt: "p",
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      await runOneTurn(host, "hi");
+      // ThreadOptions は startThread の呼出時に登録される。
+      expect(calls.options[0]?.sandboxMode).toBe("danger-full-access");
+      // Codex SDK は workspace-write の時だけ networkAccessEnabled を許す。
+      // danger-full-access では network は sandbox に内包されるので options
+      // には出ないのが正 (host.ts の #threadOptions gate)。
+      expect(calls.options[0]?.networkAccessEnabled).toBeUndefined();
+      // whoami は復元された sandbox を effective として返す。
+      expect(host.statusSnapshot()).toMatchObject({
+        permission: { sandbox: "danger-full-access", approval: "never" },
+        network_access: true,
+      });
+    });
+
+    it("config.sandbox=workspace-write + network_access=true は options に networkAccessEnabled=true", async () => {
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "restore-ws-net" }, usageEvent()],
+      ]);
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          sandbox: "workspace-write",
+          network_access: true,
+        },
+        {
+          onState: () => {},
+          appendSystemPrompt: "p",
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      await runOneTurn(host, "hi");
+      expect(calls.options[0]?.sandboxMode).toBe("workspace-write");
+      expect(calls.options[0]?.networkAccessEnabled).toBe(true);
+    });
+
+    it("config.network_access=false (explicit) は truthy 判定で落ちない", async () => {
+      const { client, calls } = makeClient([
+        [
+          { type: "thread.started", thread_id: "restore-ws-nonet" },
+          usageEvent(),
+        ],
+      ]);
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          sandbox: "workspace-write",
+          network_access: false,
+        },
+        {
+          onState: () => {},
+          appendSystemPrompt: "p",
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      await runOneTurn(host, "hi");
+      expect(calls.options[0]?.networkAccessEnabled).toBe(false);
+      expect(host.statusSnapshot().network_access).toBe(false);
+    });
+
+    it("resumeSnapshot と effective が一致すれば resume_drift は空", async () => {
+      const states: Envelope[] = [];
+      const { client } = makeClient([
+        [{ type: "thread.started", thread_id: "restore-clean" }, usageEvent()],
+      ]);
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          // Runner が同じ値を config へも snapshot へも渡す想定。
+          resumeSnapshot: {
+            sandbox: "danger-full-access",
+            network_access: true,
+          },
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      await runOneTurn(host, "hi");
+      const last = states.at(-1);
+      expect(last?.ext.resume_drift).toEqual([]);
+      expect(last?.ext.resume_snapshot).toEqual({
+        sandbox: "danger-full-access",
+        network_access: true,
+      });
+    });
+  });
 });

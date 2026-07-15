@@ -2897,3 +2897,61 @@ describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
     });
   });
 });
+
+// Resume privilege restoration regression pin (ADR-0014 F1 追補,
+// resume-privilege-restoration 藤 P0). The wrapper reads
+// `config.permission_mode` at init time and hands it to the SDK; the
+// actual apply happens on the runner side (`applyResumeSnapshot`).
+// This fixture confirms the wrapper doesn't silently downgrade the
+// restored value.
+describe("resume privilege restoration (P0 pin)", () => {
+  it("config.permission_mode=bypassPermissions を SDK options に受け渡し allowDangerouslySkip も立てる", async () => {
+    let captured!: Options;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      captured = args.options;
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(
+      { ...config, permission_mode: "bypassPermissions" },
+      { onState: () => {}, queryFn, now: () => "T" },
+    );
+    await host.run();
+    expect(captured.permissionMode).toBe("bypassPermissions");
+    expect(captured.allowDangerouslySkipPermissions).toBe(true);
+  });
+
+  it("resumeSnapshot と effective が一致すれば resume_drift は空 (permission_mode)", async () => {
+    const states: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(
+      { ...config, permission_mode: "bypassPermissions" },
+      {
+        onState: (event) => states.push(event),
+        queryFn,
+        // Runner が同じ値を config へも snapshot へも渡す想定。
+        resumeSnapshot: { permission_mode: "bypassPermissions" },
+        now: () => "T",
+      },
+    );
+    await host.run();
+    const last = states.at(-1);
+    // permission_mode field は drift entry に載らない (同値)。
+    const drift = last?.ext.resume_drift as
+      | { field: string }[]
+      | undefined;
+    expect(
+      drift?.some((entry) => entry.field === "permission_mode"),
+    ).toBeFalsy();
+    expect(last?.ext.resume_snapshot).toEqual({
+      permission_mode: "bypassPermissions",
+    });
+  });
+});
