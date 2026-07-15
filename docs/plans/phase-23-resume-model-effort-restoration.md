@@ -187,7 +187,16 @@ operator の明示的な model / effort 選択の喪失を解消しつつ、
 | 23-R4 | Claude hint fallback で `#persistedModel` は null 維持 | ✅ | 藤 3 次 review must-fix (semantic)。SDK default の historical hint は `persist_alias_unknown` validation 対象外 |
 | 23-R5 | ADR/plan の bootstrap default entry 記述訂正 | ✅ | 藤 3 次 review must-fix (factual docs)。`claudeBootstrapCatalog()` の default entry は `FULL_EFFORT` を持つ。button 非表示の実成立条件は runner live catalog に default alias 無しで model=null の場合 |
 | 23-R6 | 現実的 catalog fixture で Claude button 回帰を直接証明 | ✅ | 藤 3 次 review must-fix (coverage)。`config.claude_engine_catalog` に default 無し + hint model entry effort_levels 有りで hint 復元 → `session_capabilities.supports_effort_switch=true` + active entry effort_levels 非空を assert、R4 の persist_alias_unknown 非発火も統合 pin |
-| 23-9 | dogfood 手動検証 | ⏳ | マスター実機確認 pending (D1-D7 + R4-R6 修正後の再検証) |
+| 23-E1 | Codex catalog に `effortLevelsForModel(catalog, model)` pure helper (最終: exact hit → real default → null で intersection / concrete miss は fail-closed) | ✅ | 藤 dogfood 再回帰 修正版方針 3 / F1 の three-tier + G1 の concrete miss fail-closed で確定。synthetic default entry 追加せず |
+| 23-E2 | Codex host `supports_effort_switch` を helper.length 経由に | ✅ | model=null でも intersection 非空なら true、unknown auth 空 catalog は false 維持 |
+| 23-E3 | Codex catalog test: plan 別 intersection 網羅 | ✅ | plus/apikey/free/go/unknown + 欠落 fail-closed + 順序保持 |
+| 23-E4 | Codex host test: model null capability true + unknown false pin | ✅ | account default 経路と fail-closed の 2 pin |
+| 23-E5 | Dashboard effortLevels 派生を最終 3-tier + concrete miss fail-closed に (F1/G1 で確定) | ✅ | (1) concrete exact hit → (2) real default entry → (3) key 未報告 + real default 無しで intersection / (4) concrete miss + real default 無しは [] fail-closed。engine 名分岐禁止 |
+| 23-E6 | UI test: exact 優先 / real default fallback / null intersection / concrete miss fail-closed / 欠落 fail-closed | ✅ | claudeBootstrap fixture の Haiku entry は effort_levels 欠落を維持 (契約 `host.test.ts:1349` 通り)、dashboard の 3-tier lookup が real default で救う挙動を pin |
+| 23-E7 | docs: ADR-0014 F1 追補 に three-tier lookup (F1 で確定、G1 で concrete miss fail-closed 追加) + union 拒否理由 + synthetic default 非採用 | ✅ | phase-23 plan status を dogfood 再検証待ちへ同期 |
+| 23-F1 | 3-tier lookup 修正 + fixture revert (藤 4 次 review must-fix) | ✅ | claudeBootstrap fixture の Haiku levels 追加を revert (`host.test.ts:1349` 契約復元)、Codex helper と dashboard を exact → real default → intersection の three-tier に、real vs synthetic default 違いを ADR に明文化、real default fallback / concrete miss / exact 欠落 / Codex null 各経路の pin、関連 suite pass |
+| 23-G1 | concrete miss は intersection に fallback しない (藤 5 次 review must-fix) | ✅ | Codex helper と dashboard に「concrete key exact miss + real default 無し → [] fail-closed」を追加。future/stale concrete model が catalog 候補のいずれかである保証がないため。intersection は model=null (account default) 経路のみに限定。docs (ADR/plan) 最終表現に同期、関連 suite pass |
+| 23-9 | dogfood 手動検証 | ⏳ | マスター実機確認 pending (D+E+F+G+R4-R6 修正後の再々々々検証) |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
 
@@ -247,3 +256,39 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
   hint が現 catalog に無いだけで `persist_alias_unknown` switch_error を
   出す穴を塞ぐ (藤 3 次 review R4)。詳細は ADR-0014 F1 追補「launch pin
   vs display hint の責務分離」節。
+- **effort_levels の完全一致検索と model 表現ミスマッチ (E1-E7 + F1 で解消)**:
+  D1-D7 の hint 復元でも救えない **前回セッションが turn 未完了で snapshot
+  未 stamp** シナリオと **Claude で runner probe が返す specific id と
+  bootstrap "default" alias の完全一致不成立** シナリオを、再 dogfood
+  (2026-07-16) で観測 (症状: Codex effort 未指定時 button 非表示 / Claude
+  全域 button 非表示)。root cause は wrapper host / dashboard の
+  `effort_levels` 取得ロジックが「completely exact match でしか lookup
+  しない」設計で、model 未報告 or alias mismatch のとき silent に空を
+  返して button gate を落とすこと。**Codex catalog に synthetic
+  `"default"` entry を足す案は却下** (model 切替 menu に "default" が出て
+  `setModel("default")` を明示送信し得る責務汚染)。**catalog union の
+  effort_levels を提示する案も却下** (ADR-0035 silent downgrade 禁止に
+  反する — 現在の model にとって invalid な effort を UI に載せることに
+  なる)。最終規則 (F1 で 3-tier に確定、G1 で concrete miss fail-closed
+  を追加): **wrapper 側 helper + dashboard 派生の両方で 3-tier lookup
+  - concrete miss fail-closed** を採用:
+  (1) **concrete key exact hit** → その model の effort_levels (欠落なら
+  []、fallback しない);
+  (2) **exact miss / key 未報告** で real `value="default"` alias entry
+  (engine 宣言の正式 alias、synthetic 合成禁止) → その levels;
+  (3) **key 未報告 (null/undefined) かつ real default 無し** → 全 entry
+  intersection fail-closed (1件でも欠落あれば []);
+  (4) (藤 G1) **concrete key + exact miss + real default 無し** →
+  `[]` fail-closed。unknown/future/stale concrete model が catalog 候補
+  のいずれかである保証がないため intersection を「必ず valid」と主張
+  できない、安全側で button 非表示。
+  Claude bootstrap は real default entry を持つので tier 2 で解決
+  (Haiku の levels 欠落 entry が同居していても影響しない)、Codex catalog
+  は現状 real default entry を持たず synthetic 追加禁止のため
+  account default (model=null) は tier 3 で解決 (chatgpt+plus なら
+  SOL/TERRA/LUNA 共通の low..max、LUNA の ultra 除外)。auth
+  mode="unknown" の空 catalog は tier 3 intersection も `[]` fail-closed
+  継承。engine 名分岐禁止。**real vs synthetic default の違い**: real は
+  engine の supportedModels() 応答に含まれる正式 alias で model 切替 menu
+  に出しても意味がある、synthetic はローカル合成で禁止 (責務汚染)。
+  詳細は ADR-0014 F1 追補「effortLevels の three-tier lookup」節。

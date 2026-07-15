@@ -308,6 +308,74 @@ semantic を破らない) ことを両立する。
   ため hint fallback より優先、explicit choice も従来通り SDK Options に
   載る。
 
+- **effortLevels の three-tier lookup (phase-23 dogfood 再回帰対策,
+  2026-07-16, 藤 修正版方針 5)**: hint fallback が発火するのは前回
+  セッションで snapshot に (value, source="default") pair が書かれていた
+  場合のみ。**前回セッションが turn 未完了 (initial idle のまま dogfood
+  restart)** で snapshot 未 stamp、あるいは Claude で **runner probe が
+  返す specific id ("claude-opus-4-7") と bootstrap "default" alias が
+  完全一致しない** 場合、dashboard の effortLevels 派生が完全一致 miss で
+  空 → effort switch button 非表示になる回帰が再 dogfood で観測された
+  (2026-07-16、症状: Codex account default / Claude 全域)。
+
+  修正: **effort_levels の three-tier lookup を wrapper 側 catalog helper
+  と dashboard 派生の両方で採用**する (藤 G1 で concrete miss fail-closed
+  も追加):
+  1. **concrete key exact hit** — `model` が set され catalog に該当 entry
+     があれば、その effort_levels を返す (欠落なら `[]`、tier 2/3 に
+     fallback しない、fail-fast)。通常経路。
+  2. **real `value="default"` entry** — exact miss または model=null の
+     場合、engine が宣言した実在の default alias entry があればその
+     effort_levels を返す (欠落なら `[]`)。Claude bootstrap の default
+     entry は engine が宣言した「account-default effort domain」なので、
+     Haiku 等の effort 非対応 entry が同居していても正式 fallback として
+     使える。**synthetic default entry (ローカル合成) とは異なる** — real
+     default は SDK / wrapper が正式に返す alias で、model 切替 menu にも
+     意味を持つ。
+  3. **model 未報告 (`model === null`)** かつ real default 無しの場合
+     **のみ** → catalog 全 entry の effort_levels の intersection を
+     first entry の順で返す (1 件でも欠落あれば `[]` fail-closed)。
+     Codex account default 経路 (this.#model=null) が対象。
+  4. **concrete key があるが exact miss + real default 無し** (藤 G1)
+     → `[]` fail-closed。unknown / future / stale concrete model が
+     catalog 候補のいずれかである保証がなく、intersection を「現在 model
+     に必ず valid」と主張できない。安全側で button を非表示にする
+     (intersection にはフォールバックしない)。
+
+  Codex は `wrapper/codex/src/catalog.ts` に pure helper
+  `effortLevelsForModel(catalog, model)` を追加、`initialStatusExtFromCatalog`
+  の `supports_effort_switch` 判定にこの helper を経由させる。Claude 側は
+  wrapper catalog を弄らず、dashboard 側の effortLevels 派生でのみ
+  3-tier lookup が発火 (Claude bootstrap の real default entry で tier 2
+  解決、runner live specific catalog で exact match tier 1 解決)。
+  engine 名分岐禁止 — models 配列だけで判定するので Codex / Claude 双方
+  に同一ロジックが適用される。
+
+  **real default entry と synthetic default の違い (重要)**: **real**
+  default entry は engine の `supportedModels()` 応答や wrapper bootstrap
+  catalog に含まれる **正式 alias**。SDK 側で "default" を選択すれば
+  account-recommended model が resolve され、model 切替 menu に出しても
+  意味のある選択肢になる。**synthetic** default entry はローカル catalog
+  helper がフォールバック目的で合成する「架空 entry」で、engine 側の
+  supportedModels() には存在しない。前者は tier 2 の正式 fallback として
+  使えるが、後者は禁止 — model 切替 menu にも出て operator が
+  `setModel("default")` を明示送信し得るため、engine 側の意図しない
+  routing 経路を作り込む責務汚染になる。Codex catalog は現在 real default
+  entry を持たず、synthetic 追加も禁止なので、Codex は必ず tier 3 で解決。
+
+  **union は不採用**: 「どれかの model が accept する effort」を UI に
+  提示すると、現在の model にとって invalid な pair を選択させることに
+  なり ADR-0035 の silent downgrade 禁止に反する。intersection で「どの
+  model でも accept される安全域」だけを提示する。ultra 等の上位 effort
+  は該当 model が exact match されているときだけ表示可能。
+
+  **fail-closed 継承**: auth mode="unknown" の空 catalog は intersection
+  も `[]` を維持 (既存の fail-closed 姿勢)。effort_levels 欠落 entry が
+  1 件でもあれば全体 `[]` — 部分的情報で invalid pair を提示するリスクを
+  排除する。tier 1 exact match の levels 欠落も tier 2/3 に fallback せず
+  `[]` (仕様の一貫性、operator が明示選択した model が実際 effort 未対応
+  なら button を出さない)。
+
 ### 履歴の正本(A4)
 
 会話履歴の **正本は wrapper ホストの SDK JSONL** とし、サーバの表示用
