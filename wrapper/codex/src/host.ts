@@ -88,6 +88,13 @@ function initialStatusExtFromCatalog(
           ?.length ?? 0) > 0,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
+      // ADR-0040 phase-21: Codex は explicit false を stamp。
+      // turn.completed.usage.input_tokens は per-turn 入力のみで compaction
+      // で縮み reasoning/output も含まないため context 使用率とは semantics
+      // が異なる。max window 取得経路もない (catalog に context_window field
+      // なし)。UI は「未対応」表示。upstream で compaction telemetry が
+      // 確定するまで estimated 投影も行わない (docs/specs/codex-sdk-events.md)。
+      supports_context_usage: false,
     },
     ...(catalog.length > 0 ? { models: catalog } : {}),
   };

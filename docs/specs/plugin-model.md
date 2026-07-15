@@ -35,6 +35,7 @@ related: [architecture, protocol]
   アダプタが直接付与する(SDK が公開した時のみの best-effort)。`model`/`context`/
   `rate_limits` は cc 固有のため、汎用フィルタではなくアダプタ側に置くのが妥当。
   汎用化できる `cost` 等はフィルタ機構の導入時に agent-agnostic なフィルタへ移す。
+  - **`ext.context` の Codex 扱い** ([ADR-0040](../adr/0040-context-usage-capability.md)、phase-21): Codex adapter は `ext.context` を **stamp しない** (`turn.completed.usage.input_tokens` が per-turn 入力のみで context 使用率にならないため、estimated 投影も行わない)。代わりに `ext.session_capabilities.supports_context_usage=false` を明示 stamp し、UI は capability だけで「未対応」を判定する (engine 名分岐禁止、[ADR-0034](../adr/0034-session-capabilities-advertisement.md) F3)。Claude は同 field を `true` で stamp。
 
 ### 共通イベント境界
 

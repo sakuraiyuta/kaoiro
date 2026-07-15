@@ -45,7 +45,7 @@ for await (const ev of events) {
 | `item.started` | 1 item の開始 | `item` (ThreadItem、初期状態 in_progress) |
 | `item.updated` | item の更新 | `item` |
 | `item.completed` | item の完了 | `item` |
-| `turn.completed` | turn 完了 | `usage` (input/cached_input/output/reasoning_output tokens。**USD コストは無い**) |
+| `turn.completed` | turn 完了 | `usage` (input/cached_input/output/reasoning_output tokens。**USD コストは無い**。**注**: `input_tokens` は per-turn 入力のみで compaction で縮み reasoning/output も含まないため **context 使用率とは semantics が異なる**。context 用途への流用はしない ([ADR-0040](../adr/0040-context-usage-capability.md)、phase-21) |
 | `turn.failed` | turn 失敗 | `error.message` |
 | `error` | stream 上の致命エラー | `message` |
 
@@ -81,7 +81,7 @@ Codex ThreadEvent → kaoiro 状態 ([protocol](protocol.md)) への導出は共
 | `item.started` (mcp_tool_call, 他 server) / (web_search) | `tool_running` | |
 | `item.completed` (todo_list / reasoning) | 状態影響なし | log 化は任意 (MVP では見送り) |
 | `item.completed` (error item) | 状態影響なし・`log` 相当で記録 | 非致命 |
-| `turn.completed` | `idle` — envelope の `type=result` を発行。usage (tokens) を `ext` に反映 — USD が無いため `ext.cost` は Codex では**載せない** | Claude の SDKResultMessage(success) 相当 |
+| `turn.completed` | `idle` — envelope の `type=result` を発行。USD が無いため `ext.cost` は Codex では**載せない**。`ext.context` も**載せない** ([ADR-0040](../adr/0040-context-usage-capability.md) phase-21): `usage.input_tokens` は per-turn 入力のみで context 使用率にならないため。`ext.session_capabilities.supports_context_usage=false` で UI に「未対応」を advertise する | Claude の SDKResultMessage(success) 相当 |
 | `turn.failed` / `error` | `error` — `state_change(error)` を発行 | Claude の SDKResultMessage(error_*) 相当 |
 
 アカウント既定 model の rollout 解決は、前 turn の `turn_context` を今回値と

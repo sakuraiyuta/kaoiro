@@ -40,6 +40,7 @@ describe("initialStatusExt", () => {
         supports_effort_switch: true,
         supports_session_reset: true,
         session_reset_modes: ["new", "clear"],
+        supports_context_usage: false,
       },
     });
     expect(
@@ -931,7 +932,26 @@ describe("CodexHost", () => {
       supports_effort_switch: false,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
+      supports_context_usage: false,
     });
+  });
+
+  it("Codex は ext.context を絶対に stamp しない (ADR-0040)", async () => {
+    // capability=false と一貫: turn.completed.usage.input_tokens は
+    // per-turn 入力のみで context 使用率にならないため、estimated 投影も
+    // 行わない。全 envelope で ext.context が存在しないことを検査。
+    const states: Envelope[] = [];
+    const { client } = makeClient([[usageEvent()]]);
+    const host = new CodexHost(CONFIG, {
+      onState: (e) => states.push(e),
+      appendSystemPrompt: "persona",
+      codexFactory: () => client,
+      now: () => "T",
+    });
+    await runOneTurn(host, "hi");
+    for (const env of states) {
+      expect(env.ext).not.toHaveProperty("context");
+    }
   });
 
   it("active modelとcatalogからswitch capabilityをstampする", async () => {

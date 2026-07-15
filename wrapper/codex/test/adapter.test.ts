@@ -6,7 +6,6 @@ import {
   threadEventToFinalText,
   threadEventToLogs,
   threadEventToSessionId,
-  threadEventToUsage,
 } from "../src/adapter.js";
 
 const THREAD_STARTED: ThreadEvent = {
@@ -219,21 +218,4 @@ describe("helpers", () => {
     expect(threadEventToFinalText(COMMAND_COMPLETED)).toBeNull();
   });
 
-  it("threadEventToUsage は turn.completed の tokens を返す (USD なし)", () => {
-    const usage = threadEventToUsage({
-      type: "turn.completed",
-      usage: {
-        input_tokens: 10,
-        cached_input_tokens: 3,
-        output_tokens: 5,
-        reasoning_output_tokens: 2,
-      },
-    });
-    expect(usage).toEqual({
-      input_tokens: 10,
-      cached_input_tokens: 3,
-      output_tokens: 5,
-      reasoning_output_tokens: 2,
-    });
-  });
 });

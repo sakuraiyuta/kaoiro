@@ -201,20 +201,6 @@ export function threadEventToFinalText(event: ThreadEvent): string | null {
   return null;
 }
 
-/** Token usage from turn.completed for ext (tokens only — the Codex SDK
- *  reports no USD cost, so ext.cost is never stamped on codex agents). */
-export function threadEventToUsage(
-  event: ThreadEvent,
-): Record<string, number> | null {
-  if (event.type !== "turn.completed") return null;
-  return {
-    input_tokens: event.usage.input_tokens,
-    cached_input_tokens: event.usage.cached_input_tokens,
-    output_tokens: event.usage.output_tokens,
-    reasoning_output_tokens: event.usage.reasoning_output_tokens,
-  };
-}
-
 /** thread id from thread.started, or null. */
 export function threadEventToSessionId(event: ThreadEvent): string | null {
   return event.type === "thread.started" ? event.thread_id : null;
