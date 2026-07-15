@@ -193,6 +193,79 @@ D8 の snapshot は当初「drift 検出のための表示情報」だったが�
   するだけで、本 phase で新規に導入する脆弱性ではない)。上位対策は
   wrapper 実行ホストの完全性 (specs/threat-model.md T1 と同じ責務境界)。
 
+#### F1 追補 — P1 pair-aware apply for model / effort (phase-23, 2026-07-16)
+
+phase-22 F1 追補で P1 として punt した `model` / `effort` / `*_source`
+の resume 再適用を、両 engine に対して確定する。engine default 降格で
+operator の明示的な model / effort 選択が失われる問題を解消しつつ、
+`ext.model_source` / `ext.effort_source` に嘘を stamp しない (pair の
+semantic を破らない) ことを両立する。
+
+- **apply 対象 (P1)**: 両 engine (`claude-code` / `codex`) で `model` /
+  `model_source` / `effort` / `effort_source`。runner の
+  `applyResumeSnapshot` が phase-22 P0 と同じ経路 (initial restore /
+  switch / reset) で `ParsedSpawn.model` / `.modelSource` / `.effort` /
+  `.effortSource` を上書きし、`resolveWrapperConfig` が `config.model` /
+  `.model_source` / `.effort` / `.effort_source` として wrapper へ relay
+  する。protocol の `WrapperConfig` に `model_source?` / `effort_source?`
+  が追加されたのはこの relay 経路のため。
+
+- **5-case pair rule** (`computePair` in `runner/src/resume_snapshot.ts`):
+  1. **Both absent** → pair 全体 unset。fresh session は engine default を
+     継承。
+  2. **value + source=default** → pair 全体 unset。前回 session は SDK 側
+     default に委ねていたため、次回も explicit pin せず SDK 委任する。値
+     単体を retain すると source を嘘 stamp することになり不整合。
+  3. **value + explicit source (launch / config / env)** → verbatim
+     preserve。resume 前の明示的な選択を尊重する。
+  4. **value only (source absent, legacy snapshot)** → value +
+     `source="config"` を transport provenance として stamp。source
+     tracking が landing する前の DETS レコードを honour するための救済。
+  5. **source only (value absent)** → pair 全体 unset + stderr warn。
+     write-side gate と read-side sanitize の両方が防ぐ semantics 違反
+     なので、到達時は wrapper の mis-stamping バグを疑う。
+
+- **cli source priority (wrapper 側)**: 両 wrapper の cli.ts で
+  `config.model_source` が set のときはそれを最優先で `resolvedModelSource`
+  に採用する (resume 由来 Case 3 の source が「config」に潰れないよう)。
+  次点は `config.model` set → `"config"` (Case 4 の legacy fallback と
+  fresh spawn の transport provenance を兼ねる)、`env` tier default set
+  → `"env"`、いずれも absent → `undefined` (host が SDK 確認後に
+  `"default"` を stamp)。effort も同じ pattern。
+
+- **Codex catalog compatibility (constructor reset、resume 経路限定)**:
+  Codex host の constructor で **`this.#resumeSnapshot !== null` (resume
+  launch であること)** かつ `this.#model` と `this.#effort` が両方 set、
+  かつ `catalog` に該当 model の `effort_levels` が存在し
+  `this.#effort` を含まない場合、既存の setModel コードパスと同じ挙動
+  を再利用する (`#effortPending = null` / `#effortResetPending = true` /
+  `#effortResetOnce = true`)。`#finishTurn` が turn 成功時に
+  `default_effort` へ落とし `ext.effort_reset=true` を one-shot stamp
+  する既存 mechanism にそのまま繋がる。model 不在 / `effort_levels`
+  不明の場合は SDK 委任 (reset を engage しない) — genuine な mismatch
+  は SDK 側 error が `#finishTurn` の switch_error rollback で捕捉する。
+  **fresh spawn 経路 (`#resumeSnapshot === null`) は本 reset の対象外**:
+  launch-time の operator 選択を dashboard 経由でない黙示 reset で上書
+  きしないよう、従来通り SDK 側 error / 既存 switch_error rollback に
+  委ねる (fresh spawn incompatible effort でも constructor 時点では
+  effort_reset を engage しない、regression pin は
+  `wrapper/codex/test/host.test.ts` 側)。
+
+- **Claude invalid effort pair drop (cli filter)**: Claude cli.ts で
+  `config.effort` が `CLAUDE_EFFORT_LEVELS` 外の場合、pair rule の意図を
+  wrapper 境界でも守るため **value / source を同時 drop** する (source
+  だけ残ると Claude host に「effort_source は set だが effort は null」
+  という Case 5 相当の状態が生まれてしまう)。stderr warn を書いて次回
+  resume で正しい effort を pin し直せるよう operator に露出する。
+  runner は engine の effort 語彙を知らないので、この filter は wrapper
+  側で行う (cross-package 依存の増加を避ける設計選択)。
+
+- **既存 P0 との統合**: pair-aware apply は phase-22 P0 の Codex sandbox /
+  network_access / Claude permission_mode 再適用ロジックと同一の apply
+  経路上で動作する。「absent → engine default」の safe fallback semantics
+  も P0 と同じ。P0 と P1 は個別に評価され、片方 apply 済みでも他方に
+  drift 表示は影響しない (`ext.resume_drift` は field 単位で独立)。
+
 ### 履歴の正本(A4)
 
 会話履歴の **正本は wrapper ホストの SDK JSONL** とし、サーバの表示用
