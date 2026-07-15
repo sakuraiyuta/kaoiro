@@ -1640,6 +1640,16 @@ describe("Supervisor P1 pair-aware apply integration (phase-23)", () => {
     expect(cfg.model_source).toBeUndefined();
     expect(cfg.effort).toBeUndefined();
     expect(cfg.effort_source).toBeUndefined();
+    // Phase-23 dogfood 回帰対策 (ADR-0014 F1 追補 P1「launch pin vs display
+    // hint」): Case 2 で config には載らないが、config.resume_snapshot には
+    // sanitize 通過後の (value, source="default") ペアが保持されており、
+    // wrapper 側は これを display / catalog resolve hint として consume する。
+    expect(cfg.resume_snapshot).toEqual({
+      model: "gpt-5.6-terra",
+      model_source: "default",
+      effort: "medium",
+      effort_source: "default",
+    });
   });
 
   it("initial restore (Codex): Case 4 legacy (value only) は config.*_source='config' で届く", () => {
