@@ -235,20 +235,155 @@ describe("applyResumeSnapshot (藤 D1/D2 engine-aware apply)", () => {
     });
   });
 
-  test("model / effort / *_source は apply しない (P1 scope)", () => {
-    const parsed = makeParsed("codex");
-    const next = applyResumeSnapshot(
-      parsed,
-      {
-        model: "gpt-5",
-        model_source: "config",
-        effort: "high",
-        effort_source: "launch",
-      },
-      "codex",
-    );
-    // ParsedSpawn の model / effort は undefined のまま (apply 対象外)。
-    expect(next.model).toBeUndefined();
-    expect(next.effort).toBeUndefined();
+  describe("P1 pair-aware apply (phase-23、両 engine 対象)", () => {
+    describe("Case 3: value + explicit source は preserve", () => {
+      test("codex", () => {
+        const next = applyResumeSnapshot(
+          makeParsed("codex"),
+          {
+            model: "gpt-5.6-sol",
+            model_source: "launch",
+            effort: "high",
+            effort_source: "config",
+          },
+          "codex",
+        );
+        expect(next.model).toBe("gpt-5.6-sol");
+        expect(next.modelSource).toBe("launch");
+        expect(next.effort).toBe("high");
+        expect(next.effortSource).toBe("config");
+      });
+
+      test("claude-code", () => {
+        const next = applyResumeSnapshot(
+          makeParsed("claude-code"),
+          {
+            model: "opus[1m]",
+            model_source: "launch",
+            effort: "medium",
+            effort_source: "env",
+          },
+          "claude-code",
+        );
+        expect(next.model).toBe("opus[1m]");
+        expect(next.modelSource).toBe("launch");
+        expect(next.effort).toBe("medium");
+        expect(next.effortSource).toBe("env");
+      });
+    });
+
+    test("Case 1: both absent → 両 field とも unset", () => {
+      const parsed: ParsedSpawn = {
+        ...makeParsed("codex"),
+        model: "stale",
+        modelSource: "launch",
+        effort: "stale",
+        effortSource: "launch",
+      };
+      const next = applyResumeSnapshot(parsed, {}, "codex");
+      expect(next.model).toBeUndefined();
+      expect(next.modelSource).toBeUndefined();
+      expect(next.effort).toBeUndefined();
+      expect(next.effortSource).toBeUndefined();
+    });
+
+    test("Case 2: value + source=default → SDK 委任で unset", () => {
+      const parsed: ParsedSpawn = {
+        ...makeParsed("codex"),
+        model: "old",
+        modelSource: "launch",
+      };
+      const next = applyResumeSnapshot(
+        parsed,
+        {
+          model: "gpt-5.6-terra",
+          model_source: "default",
+          effort: "medium",
+          effort_source: "default",
+        },
+        "codex",
+      );
+      // default source は explicit pin にならない — SDK 側 default に委任。
+      expect(next.model).toBeUndefined();
+      expect(next.modelSource).toBeUndefined();
+      expect(next.effort).toBeUndefined();
+      expect(next.effortSource).toBeUndefined();
+    });
+
+    test("Case 4: legacy (value only, source absent) → source=config", () => {
+      const next = applyResumeSnapshot(
+        makeParsed("codex"),
+        { model: "gpt-5.5", effort: "low" },
+        "codex",
+      );
+      expect(next.model).toBe("gpt-5.5");
+      expect(next.modelSource).toBe("config");
+      expect(next.effort).toBe("low");
+      expect(next.effortSource).toBe("config");
+    });
+
+    test("Case 5: source only, value absent → 両 unset + stderr warn", () => {
+      const warn = vi
+        .spyOn(process.stderr, "write")
+        .mockImplementation(() => true);
+      const parsed: ParsedSpawn = {
+        ...makeParsed("codex"),
+        model: "stale",
+        modelSource: "launch",
+      };
+      const next = applyResumeSnapshot(
+        parsed,
+        { model_source: "config", effort_source: "env" },
+        "codex",
+      );
+      expect(next.model).toBeUndefined();
+      expect(next.modelSource).toBeUndefined();
+      expect(next.effort).toBeUndefined();
+      expect(next.effortSource).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("dropped source-only pair"),
+      );
+      warn.mockRestore();
+    });
+
+    test("model / effort ペアは独立に評価される (mix)", () => {
+      // model は Case 3、effort は Case 2 (default → 委任) を同時 apply。
+      const next = applyResumeSnapshot(
+        makeParsed("codex"),
+        {
+          model: "gpt-5.6-sol",
+          model_source: "launch",
+          effort: "medium",
+          effort_source: "default",
+        },
+        "codex",
+      );
+      expect(next.model).toBe("gpt-5.6-sol");
+      expect(next.modelSource).toBe("launch");
+      expect(next.effort).toBeUndefined();
+      expect(next.effortSource).toBeUndefined();
+    });
+
+    test("P0 (sandbox / permission_mode) と P1 pair は同時に反映される", () => {
+      const parsed: ParsedSpawn = {
+        ...makeParsed("codex"),
+        sandbox: "read-only",
+        networkAccess: false,
+      };
+      const next = applyResumeSnapshot(
+        parsed,
+        {
+          sandbox: "danger-full-access",
+          network_access: true,
+          model: "gpt-5.6-terra",
+          model_source: "config",
+        },
+        "codex",
+      );
+      expect(next.sandbox).toBe("danger-full-access");
+      expect(next.networkAccess).toBe(true);
+      expect(next.model).toBe("gpt-5.6-terra");
+      expect(next.modelSource).toBe("config");
+    });
   });
 });

@@ -1578,3 +1578,181 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
     expect(h.configs.at(-1)?.claude_engine_catalog).toBeUndefined();
   });
 });
+
+// Phase-23 (ADR-0014 F1 追補「P1 pair-aware apply」, 藤 R2 must-fix
+// integration coverage). resume_snapshot.test.ts の pure helper unit test
+// では applyResumeSnapshot が ParsedSpawn を正しく mutate することしか pin
+// できず、各 handler が **applyResumeSnapshot 呼び出し → ParsedSpawn 更新
+// → resolveWrapperConfig で config.model_source / effort_source へ
+// passthrough** の全経路を carry する保証がない。以下では代表経路
+// (initial restore / live switch / reset) と Codex/Claude engine 対称性
+// を config レベルで確認する。crash/rollback の経路継承は phase-22 P0
+// 系 test で既に entry.parsed を carry すること (ChildEntry.parsed のみ
+// 参照する #relaunch / #rollback の code path 単純性) が pin されており、
+// P1 field も同じ carry を辿るため P1 独立 test は追加しない。
+describe("Supervisor P1 pair-aware apply integration (phase-23)", () => {
+  const codexResumeMsg = {
+    ...spawnMsg,
+    engine: "codex",
+    resume_session_id: "22222222-3333-4444-5555-666666666666",
+  };
+  const claudeResumeMsg = {
+    ...spawnMsg,
+    engine: "claude-code",
+    resume_session_id: "33333333-4444-5555-6666-777777777777",
+  };
+
+  it("initial restore (Codex): Case 3 explicit source を config.model_source / effort_source へ passthrough", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({
+      ...codexResumeMsg,
+      resume_snapshot: {
+        model: "gpt-5.6-sol",
+        model_source: "launch",
+        effort: "high",
+        effort_source: "config",
+        sandbox: "workspace-write",
+      },
+    });
+    const cfg = h.configs[0]!;
+    expect(cfg.model).toBe("gpt-5.6-sol");
+    expect(cfg.model_source).toBe("launch");
+    expect(cfg.effort).toBe("high");
+    expect(cfg.effort_source).toBe("config");
+  });
+
+  it("initial restore (Codex): Case 2 (source=default) は config へ載らない (SDK 委任)", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({
+      ...codexResumeMsg,
+      resume_snapshot: {
+        model: "gpt-5.6-terra",
+        model_source: "default",
+        effort: "medium",
+        effort_source: "default",
+      },
+    });
+    const cfg = h.configs[0]!;
+    // Case 2: value + source=default → pair 全体 unset。config.model /
+    // config.model_source どちらも undefined (前回 SDK 側 default を委任
+    // していたため、次回も explicit pin せず SDK に再選択させる)。
+    expect(cfg.model).toBeUndefined();
+    expect(cfg.model_source).toBeUndefined();
+    expect(cfg.effort).toBeUndefined();
+    expect(cfg.effort_source).toBeUndefined();
+  });
+
+  it("initial restore (Codex): Case 4 legacy (value only) は config.*_source='config' で届く", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({
+      ...codexResumeMsg,
+      // source tracking 導入前の DETS record を模す
+      resume_snapshot: { model: "gpt-5.5", effort: "low" },
+    });
+    const cfg = h.configs[0]!;
+    expect(cfg.model).toBe("gpt-5.5");
+    expect(cfg.model_source).toBe("config");
+    expect(cfg.effort).toBe("low");
+    expect(cfg.effort_source).toBe("config");
+  });
+
+  it("initial restore (Claude): Case 3 対称性 pin", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({
+      ...claudeResumeMsg,
+      resume_snapshot: {
+        model: "opus[1m]",
+        model_source: "env",
+        effort: "high",
+        effort_source: "config",
+        permission_mode: "bypassPermissions",
+      },
+    });
+    const cfg = h.configs[0]!;
+    expect(cfg.model).toBe("opus[1m]");
+    expect(cfg.model_source).toBe("env");
+    expect(cfg.effort).toBe("high");
+    expect(cfg.effort_source).toBe("config");
+    expect(cfg.permission_mode).toBe("bypassPermissions");
+  });
+
+  it("live switch (Codex): payload.resume_snapshot の P1 pair が relaunched child の config に届く", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({
+      ...codexResumeMsg,
+      resume_snapshot: {
+        model: "gpt-5.6-sol",
+        model_source: "launch",
+        effort: "high",
+        effort_source: "launch",
+      },
+    });
+    h.sup.handleSwitchSession({
+      version: "0",
+      agent_id: codexResumeMsg.agent_id,
+      resume_session_id: "44444444-5555-6666-7777-888888888888",
+      resume_snapshot: {
+        model: "gpt-5.6-terra",
+        model_source: "config",
+        effort: "medium",
+        effort_source: "config",
+      },
+    });
+    h.children[0]!.exit();
+    // relaunched child = configs[1]
+    const cfg = h.configs[1]!;
+    expect(cfg.model).toBe("gpt-5.6-terra");
+    expect(cfg.model_source).toBe("config");
+    expect(cfg.effort).toBe("medium");
+    expect(cfg.effort_source).toBe("config");
+  });
+
+  it("reset_session (Claude): payload.resume_snapshot の P1 pair が fresh relaunch config に届く", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn(claudeResumeMsg);
+    h.sup.handleResetSession({
+      agent_id: claudeResumeMsg.agent_id,
+      mode: "new",
+      request_id: "rs_p1",
+      previous_session_id: claudeResumeMsg.resume_session_id,
+      resume_snapshot: {
+        model: "opus[1m]",
+        model_source: "launch",
+        effort: "max",
+        effort_source: "launch",
+      },
+    });
+    h.children[0]!.exit();
+    const cfg = h.configs[1]!;
+    expect(cfg.model).toBe("opus[1m]");
+    expect(cfg.model_source).toBe("launch");
+    expect(cfg.effort).toBe("max");
+    expect(cfg.effort_source).toBe("launch");
+    // fresh: resume_session_id は stripped
+    expect(h.resumes[1]).toBeUndefined();
+  });
+
+  it("fresh spawn (no resume) では payload.resume_snapshot に P1 pair が載っていても config へは apply されない (P0/P1 共通の apply しない semantics)", () => {
+    const h = harness();
+    // fresh spawn (resume_session_id 未指定) に snapshot を混ぜる (ill-typed
+    // 使用だが sanitize を通れば passthrough される)。
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      engine: "codex",
+      resume_snapshot: {
+        model: "gpt-5.6-sol",
+        model_source: "launch",
+      },
+    });
+    const cfg = h.configs[0]!;
+    // config.resume_snapshot には drift 表示用に届くが (Phase 22 semantics)、
+    // config.model / config.model_source は fresh spawn の空の parsed のまま
+    // (applyResumeSnapshot が呼ばれない経路)。
+    expect(cfg.model).toBeUndefined();
+    expect(cfg.model_source).toBeUndefined();
+    expect(cfg.resume_snapshot).toEqual({
+      model: "gpt-5.6-sol",
+      model_source: "launch",
+    });
+  });
+});

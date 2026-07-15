@@ -7,6 +7,7 @@
 
 import type {
   EngineKind,
+  ModelSource,
   PermissionMode,
   ResolvedSnapshotExt,
   RunnerSessions,
@@ -80,6 +81,14 @@ export interface ParsedSpawn {
   resumeSessionId?: string;
   model?: string;
   effort?: string;
+  /** Source stamped alongside `model` when it originated from a resume
+   *  snapshot (ADR-0014 F1 追補 P1 pair-aware apply, phase-23). Populated
+   *  only by `applyResumeSnapshot` under the 5-case pair rule; fresh spawn
+   *  leaves this undefined and the wrapper CLI derives the source from
+   *  config.model / env as before. */
+  modelSource?: ModelSource;
+  /** Source stamped alongside `effort`; same semantics as `modelSource`. */
+  effortSource?: ModelSource;
   /** Claude-only launch permission mode (ADR-0033 F4 追補, phase-15 D2 /
    *  task 15-12). Relayed from SpawnMessage.permission_mode; Codex ignores
    *  it. Closed-enum validation runs at parseSpawn's whitelist. */
@@ -297,6 +306,16 @@ export function resolveWrapperConfig(
   // fields that are not theirs (sandbox on Claude, permission_mode on codex).
   if (parsed.model !== undefined) config.model = parsed.model;
   if (parsed.effort !== undefined) config.effort = parsed.effort;
+  // Resume-snapshot-sourced provenance (ADR-0014 F1 追補 P1, phase-23).
+  // parseSpawn does NOT populate these; only applyResumeSnapshot does. The
+  // wrapper CLI prefers this over its own env / config source guess so a
+  // Case 3 (explicit source) resume preserves "launch" / "env" instead of
+  // being relabelled "config". Fresh spawn → both fields absent, CLI
+  // fallback unchanged.
+  if (parsed.modelSource !== undefined) config.model_source = parsed.modelSource;
+  if (parsed.effortSource !== undefined) {
+    config.effort_source = parsed.effortSource;
+  }
   if (parsed.engine === "codex") {
     if (codexAuthMode !== undefined) config.codex_auth_mode = codexAuthMode;
     if (codexChatgptPlan !== undefined) {
