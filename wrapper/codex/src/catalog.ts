@@ -108,3 +108,63 @@ export const CODEX_ENGINE = {
     return resolveCodexCatalog(authMode, plan);
   },
 };
+
+/** Effort levels available for a given model against the resolved catalog.
+ *  Three-tier lookup (Phase-23 dogfood 再回帰対策 / 藤 修正版方針 5 + G1):
+ *
+ *  1. **concrete key exact hit** (`model !== null` かつ catalog に該当 entry) →
+ *     その effort_levels を返す (欠落 = 空、tier 2/3 に fallback しない)。
+ *     model の explicit context (operator 選択 / hint 復元) が catalog に
+ *     存在するときの通常経路。
+ *  2. **exact miss または `model === null`** で real `value="default"`
+ *     entry があれば → その effort_levels を返す (欠落 = 空)。SDK が返す
+ *     「account default effort domain」の正式 fallback。
+ *  3. **model 未報告 (`model === null`)** かつ real default 無しの場合
+ *     のみ → catalog 全 entry の effort_levels の **intersection** を
+ *     first entry の順で返す (1 件でも effort_levels 欠落なら `[]`
+ *     fail-closed)。「どの model でも accept される effort」だけを提示
+ *     するので ADR-0035 の silent downgrade 禁止に反しない。
+ *  4. **concrete key があるが exact miss かつ real default 無し** →
+ *     `[]` fail-closed (藤 G1)。unknown / future / stale concrete model
+ *     が catalog 候補のいずれかであることは保証されないため、intersection
+ *     に fallback すると「現在 model に必ず valid」を主張できない可能性が
+ *     ある。安全側で button を非表示にする。
+ *
+ *  Union は採用しない (「どれかの model が accept する effort」を出すと
+ *  現在の model にとって invalid な pair を提示することになる = ADR-0035
+ *  違反)。synthetic "default" catalog entry も追加しない (model 切替 menu
+ *  に "default" が出て `setModel("default")` を明示送信し得る責務汚染)。
+ *  real default entry と synthetic default の違い: real は engine の
+ *  supportedModels() 応答に含まれる正式 alias、synthetic はローカル catalog
+ *  helper が合成した「架空 entry」で model 切替に露出する。前者は fallback
+ *  として使えるが後者は禁止。
+ *  Empty catalog (auth mode="unknown" の fail-closed 領域) は `[]` を維持。 */
+export function effortLevelsForModel(
+  catalog: readonly EngineModelInfo[],
+  model: string | null,
+): readonly string[] {
+  // Tier 1: exact match (no fallback on missing effort_levels)
+  if (model !== null) {
+    const active = catalog.find((entry) => entry.value === model);
+    if (active !== undefined) return active.effort_levels ?? [];
+  }
+  // Tier 2: real `value="default"` entry, if present (exact miss / null 両方)
+  const realDefault = catalog.find((entry) => entry.value === "default");
+  if (realDefault !== undefined) return realDefault.effort_levels ?? [];
+  // Tier 4 (藤 G1): concrete key で exact miss かつ real default 無し →
+  // [] fail-closed。future/stale concrete model が catalog に対して安全な
+  // effort を保証できないため intersection に fallback しない。
+  if (model !== null) return [];
+  // Tier 3: model=null のみ intersection fail-closed
+  if (catalog.length === 0) return [];
+  const first = catalog[0]!;
+  if (first.effort_levels === undefined) return [];
+  const rest = catalog.slice(1);
+  return first.effort_levels.filter((level) =>
+    rest.every(
+      (entry) =>
+        entry.effort_levels !== undefined &&
+        entry.effort_levels.includes(level),
+    ),
+  );
+}

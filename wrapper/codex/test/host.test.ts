@@ -924,12 +924,20 @@ describe("CodexHost", () => {
     // Codex は startThread() を fresh 経路とする F2 handshake を提供する
     // ため true stamp + 対応 modes 列挙。thread ID の lazy 採番は server
     // 側で to_session_id=null の completed broadcast を許容する経路で吸収。
+    //
+    // Phase-23 dogfood 再回帰対策 (藤 修正版方針 3): supports_effort_switch
+    // は `effortLevelsForModel(catalog, model).length > 0` で判定。ここでは
+    // model 未指定 (config.model 無し) + chatgpt+plus catalog (SOL/TERRA/LUNA)
+    // の intersection = ["low","medium","high","xhigh","max"] が非空なので
+    // true。model=null (account default 経路) でも catalog に共通 effort が
+    // 揃うなら button を有効化するのが本 fix の意図 (旧: catalog.find(null)
+    // → undefined → false で account default 経路が非表示だった)。
     const first = states[0]!;
     expect(first.ext?.session_capabilities).toEqual({
       supports_attachments: false,
       supports_user_input_dialog: true,
       supports_model_switch: true,
-      supports_effort_switch: false,
+      supports_effort_switch: true,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
       supports_context_usage: false,
@@ -967,6 +975,29 @@ describe("CodexHost", () => {
         now: () => "T",
       },
     );
+    await runOneTurn(host, "hi");
+    expect(states[0]?.ext.session_capabilities).toMatchObject({
+      supports_model_switch: true,
+      supports_effort_switch: true,
+    });
+  });
+
+  it("model 未報告 (account default 経路) でも intersection 非空なら supports_effort_switch=true (P23 dogfood 再回帰対策)", async () => {
+    // Phase-23 dogfood 再回帰対策 (藤 修正版方針 3): account default で
+    // this.#model=null かつ resume_snapshot に hint も無い場合 (前回セッションが
+    // turn 未完了で snapshot 未 stamp) でも、catalog に共通 effort levels があれば
+    // effort switch button を有効化する。旧挙動 (`catalog.find(null)=undefined`
+    // で必ず false) が藤 dogfood 回帰の直接原因だった経路の pin。
+    const states: Envelope[] = [];
+    const { client } = makeClient([[usageEvent()]]);
+    // CONFIG は chatgpt/plus (SOL+TERRA+LUNA)。config.model は undefined
+    // (account default 委任) 、resumeSnapshot も undefined (fresh spawn 相当) 。
+    const host = new CodexHost(CONFIG, {
+      onState: (event) => states.push(event),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      now: () => "T",
+    });
     await runOneTurn(host, "hi");
     expect(states[0]?.ext.session_capabilities).toMatchObject({
       supports_model_switch: true,

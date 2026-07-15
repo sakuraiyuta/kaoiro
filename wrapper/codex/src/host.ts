@@ -54,7 +54,7 @@ import {
   threadEventToLogs,
   threadEventToSessionId,
 } from "./adapter.js";
-import { resolveCodexCatalog } from "./catalog.js";
+import { effortLevelsForModel, resolveCodexCatalog } from "./catalog.js";
 import { resolveCodexModel } from "./rollout.js";
 import { ToolHost } from "./toolhost.js";
 
@@ -83,9 +83,14 @@ function initialStatusExtFromCatalog(
       supports_attachments: false,
       supports_user_input_dialog: true,
       supports_model_switch: catalog.length > 0,
+      // Phase-23 dogfood 再回帰対策 (藤 修正版方針 3): exact match の
+      // effort_levels 、無ければ catalog intersection (fail-closed) の
+      // length で判定。model=null (account default 経路 / 前回セッション
+      // が turn 未完了で snapshot 未 stamp) でも catalog に共通 effort
+      // levels があれば true を stamp、UI 側 effort switch button が
+      // 有効化される (dashboard も同じ helper 相当の 2 段階 fallback)。
       supports_effort_switch:
-        (catalog.find((entry) => entry.value === model)?.effort_levels
-          ?.length ?? 0) > 0,
+        effortLevelsForModel(catalog, model).length > 0,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
       // ADR-0040 phase-21: Codex は explicit false を stamp。
