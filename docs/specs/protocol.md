@@ -143,6 +143,11 @@ session 単位の機能可用性を第一級表現する envelope field。engine
 - 未 stamp = 保守的に「機能なし」解釈 (fail-closed)。UI は必ずこの field のみで判定
 - `supports_model_switch: boolean` — mid-session の `set_model` 受入可否 (phase-16、[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4)
 - `supports_effort_switch: boolean` — mid-session の `set_effort` 受入可否 (同上)。UI は個別 boolean だけを見て model select / effort select ボタンを show/hide し、engine 名では判定しない (ADR-0034 F3 原則)
+- `supports_context_usage: boolean` — 当該 session が `ext.context` に authoritative な context-window 使用率 snapshot を提供するか (phase-21、[ADR-0040](../adr/0040-context-usage-capability.md))。UI 分岐は 3 状態:
+  - **absent** — capability 未 stamp = capability を知らない旧 wrapper (rolling upgrade 中)。UI は ctx 行そのものを非表示。absent を「未対応」扱いにすると旧 wrapper で誤表示になるため区別する
+  - **explicit `false`** — adapter が exact snapshot を提供できない (現状 Codex)。UI は「未対応」表示
+  - **explicit `true`** — adapter が `ext.context` を stamp する意思を宣言。UI は `ext.context` 到着で meter、未到着なら「取得中」placeholder
+- Claude は `true` (SDK の `getContextUsage()` control_request が exact `totalTokens`/`maxTokens`/`percentage` を返せる。init 直後の呼び出しでも system_prompt/tools/MCP/memory_files 分で非ゼロ snapshot が期待できるが best-effort。失敗は握り潰し UI は「取得中」のまま)、Codex は `false` (`turn.completed.usage.input_tokens` が per-turn 入力のみで compaction で縮み reasoning/output も含まず context 使用率にならない、詳細は [codex-sdk-events](codex-sdk-events.md))
 
 #### `ext.resume_snapshot` / `ext.effective` / `ext.resume_drift` (2026-07-11、[ADR-0032](../adr/0032-codex-adapter.md) F4bc + [ADR-0033](../adr/0033-permission-model-dual-axis.md) F4 追補、phase-15)
 

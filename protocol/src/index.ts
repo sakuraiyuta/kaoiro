@@ -264,6 +264,34 @@ export interface SessionCapabilitiesExt {
    *  supports_session_reset=true; a true+missing/empty combination is
    *  fail-closed as invalid advertisement. Omitted when supports=false. */
   session_reset_modes?: SessionResetMode[];
+  /** Whether the active session exposes an authoritative context-window usage
+   *  snapshot in `ext.context` (ADR-0040, phase-21). The three-state UI
+   *  contract:
+   *
+   *  - **absent** — the wrapper predates this capability (rolling upgrade).
+   *    UI hides the ctx row entirely; treating absent as "unsupported" would
+   *    misinform operators on any older wrapper still on the fleet.
+   *  - **explicit `false`** — the current adapter cannot produce a reliable
+   *    exact snapshot. UI renders "未対応" so the operator stops waiting.
+   *  - **explicit `true`** — the adapter will stamp `ext.context` when
+   *    available. UI renders the meter when `ext.context` lands, and a
+   *    "取得中" placeholder while it is still null.
+   *
+   *  Claude expects `true`: the SDK's `getContextUsage()` control_request
+   *  is designed to return `totalTokens` / `maxTokens` / `percentage` at
+   *  any point after the SDK's initialize control_response arrives.
+   *  System-prompt + tools + MCP + memory-files should already consume
+   *  context before turn 1, so an init-time call is expected to yield a
+   *  non-zero snapshot — but this remains best-effort until confirmed by
+   *  dogfood; failures are swallowed and the UI stays in "取得中".
+   *
+   *  Codex sets `false`: `turn.completed.usage.input_tokens` reports the
+   *  per-turn prompt tokens only — it shrinks after compaction, excludes
+   *  reasoning / output, and has no `max_tokens` companion, so it does not
+   *  represent context accumulation. A reliable exact source in Codex
+   *  requires upstream compaction telemetry that does not exist yet
+   *  (ADR-0040). */
+  supports_context_usage?: boolean;
 }
 
 /** Reset modes for /new・/clear (ADR-0036 F1/F3, phase-17 17-1). `new` keeps
