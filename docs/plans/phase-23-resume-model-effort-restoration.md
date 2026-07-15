@@ -177,7 +177,17 @@ operator の明示的な model / effort 選択の喪失を解消しつつ、
 | 23-R1 | Codex host constructor catalog reset を resume 経路に限定 + fresh 非回帰 pin | ✅ | 藤 1 次 review must-fix。`this.#resumeSnapshot !== null` guard、fresh spawn incompatible effort で reset 非発火 regression 追加 |
 | 23-R2 | runner supervisor.test.ts に P1 integration test 追加 | ✅ | 藤 1 次 review must-fix。initial restore / switch / reset を Codex/Claude 対称、Case 2/3/4 + fresh 不 apply |
 | 23-R3 | CLI source resolution を pure helper 抽出 + unit test | ✅ | 藤 1 次 review must-fix。両 wrapper に `source_resolution.ts` (helper) + `source_resolution.test.ts` (関連 suite pass) |
-| 23-9 | dogfood 手動検証 | ⏳ | マスター実機確認 pending |
+| 23-D1 | Codex host constructor に resume_snapshot default pair の display hint fallback | ✅ | 藤 dogfood 回帰対策。config/option absent 時のみ (value, source="default") pair を復元、pair 整合 pin (source-only は対象外) |
+| 23-D2 | Codex `#threadOptions` の effort gate 対称化 | ✅ | model gate と対称、`effortSource !== "default"` で non-pin |
+| 23-D3 | Claude AgentHost constructor に resume_snapshot default pair の hint fallback + effort catalog re-validation | ✅ | 藤 dogfood 回帰対策。CLAUDE_EFFORT_LEVELS 外なら pair drop + stderr warn |
+| 23-D4 | Claude run() Options gate: source="default" で model/effort 非 pass | ✅ | 藤 dogfood 回帰対策。operator setModel/setEffort (source="config") は pass 継続 |
+| 23-D5 | runner integration assertion: Case 2 で `config.resume_snapshot` pair 保持 | ✅ | Case 2 logic は無変更、既存 supervisor.test.ts に resume_snapshot 保持 assertion 追加 |
+| 23-D6 | 両 host regression pin | ✅ | initial idle 時点で hint 復元 / supports_effort_switch=true / SDK Options 非 pin / Case 3 は SDK に pin / Claude invalid effort pair drop、関連 suite pass |
+| 23-D7 | docs: ADR-0014 F1 追補 に「launch pin vs display hint 責務分離」小節 + phase-23 plan status 戻し | ✅ | dogfood 回帰事例と修正方針を明文化 |
+| 23-R4 | Claude hint fallback で `#persistedModel` は null 維持 | ✅ | 藤 3 次 review must-fix (semantic)。SDK default の historical hint は `persist_alias_unknown` validation 対象外 |
+| 23-R5 | ADR/plan の bootstrap default entry 記述訂正 | ✅ | 藤 3 次 review must-fix (factual docs)。`claudeBootstrapCatalog()` の default entry は `FULL_EFFORT` を持つ。button 非表示の実成立条件は runner live catalog に default alias 無しで model=null の場合 |
+| 23-R6 | 現実的 catalog fixture で Claude button 回帰を直接証明 | ✅ | 藤 3 次 review must-fix (coverage)。`config.claude_engine_catalog` に default 無し + hint model entry effort_levels 有りで hint 復元 → `session_capabilities.supports_effort_switch=true` + active entry effort_levels 非空を assert、R4 の persist_alias_unknown 非発火も統合 pin |
+| 23-9 | dogfood 手動検証 | ⏳ | マスター実機確認 pending (D1-D7 + R4-R6 修正後の再検証) |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
 
@@ -212,3 +222,28 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
   dogfood.sh restart 後に resume 復元と ext.model_source /
   ext.effort_source の値を目視確認する。Phase 22 の privilege 三軸と
   同じ手順を model / effort に拡張。
+- **launch pin と display hint の責務分離不足 (D1-D7 で解消)**: 初回
+  push した Phase 23 実装 (23-1〜23-R3) では Case 2 (source=default) の
+  runner apply が config.model / config.effort を unset した副作用として、
+  wrapper host の initial `#model` / `#effort` に前回セッション値が届かず、
+  Codex `initialStatusExtFromCatalog(catalog, model=null)` で
+  `supports_effort_switch=false` が stamp、dashboard 側 effort switch
+  ボタンが gate される回帰が dogfood で発覚 (3 症状同時: Codex model
+  「確認待ち」/ Codex effort 復元されない / 両 engine effort ボタン非表示、
+  2026-07-16)。Claude 側 button 非表示の実成立条件は、runner-transported
+  live catalog (`config.claude_engine_catalog`, ADR-0039 F9 追補) が
+  default alias を含まない現実的な shape のとき、model=null で
+  `models.find(m.value === $currentModel)` も `... === "default"` fallback
+  も解けず `effortLevels=[]` になるケース (bootstrap 単体には default entry
+  - full effort_levels があるためこの経路では再現しない — dogfood で
+  観測された production 契約は runner live catalog 経路)。
+  **runner apply の Case 2 unset は launch pin の意味では正しい**ため
+  無変更維持、**wrapper host constructor 側で `options.resumeSnapshot`
+  の (value, source="default") pair を display hint として consume** する
+  形で解消 (D1/D3)。SDK 委任 semantics を壊さないため両 wrapper の SDK
+  Options 経路に `source !== "default"` の gate も対称に追加 (D2/D4)。
+  Claude 側 `#persistedModel` は明示 spawn/env/Case3 alias の SDK-measured
+  catalog 検証用のため hint 復元時は null 維持し、SDK default の historical
+  hint が現 catalog に無いだけで `persist_alias_unknown` switch_error を
+  出す穴を塞ぐ (藤 3 次 review R4)。詳細は ADR-0014 F1 追補「launch pin
+  vs display hint の責務分離」節。

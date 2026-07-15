@@ -266,6 +266,48 @@ semantic を破らない) ことを両立する。
   も P0 と同じ。P0 と P1 は個別に評価され、片方 apply 済みでも他方に
   drift 表示は影響しない (`ext.resume_drift` は field 単位で独立)。
 
+- **launch pin vs display hint の責務分離 (phase-23 dogfood 回帰対策,
+  2026-07-16)**: 上記 Case 2 (value + source=default) の unset は runner
+  apply として **launch pin の意味では正しい** (config.model /
+  config.effort を wrapper に載せず、SDK が委任継続で自ら default を再
+  選択する)。しかし wrapper の **display / catalog resolve は前回セッション
+  の value を必要とする** — Codex host の `initialStatusExtFromCatalog(catalog,
+  model)` は `this.#model=null` だと catalog.find() で undefined になり
+  `supports_effort_switch=false` を stamp、dashboard 側 effort switch
+  ボタンが gate される。Claude host は `#model=null` の状態で dashboard の
+  `effortLevels` 派生が `active = models.find(m.value === $currentModel)`
+  を解けない。runner-transported live catalog
+  (`config.claude_engine_catalog`, ADR-0039 F9 追補) が default alias を
+  含まない現実的な shape の場合、`models.find(m.value === "default")`
+  fallback も見つからず `effortLevels=[]` になり button が非表示になる
+  (`claudeBootstrapCatalog()` の default entry には
+  `effort_levels: [...FULL_EFFORT]` があるため、bootstrap のみへの
+  fallback ではこの回帰は再現しない — runner catalog が渡っている
+  production 相当の shape で成立する)。dogfood で "Codex resume 直後
+  model が『確認待ち』" "Codex effort が復元されない" "両 engine で
+  resume 直後 effort 切替ボタンが表示されない" として 3 症状同時観測
+  された (2026-07-16)。
+
+  **修正方針**: launch pin (SDK に explicit pass するか) と display hint
+  (UI が「前回はこの値だった」を見せるための情報) の 2 責務を明確に分離
+  する。**runner apply の Case 2 unset は無変更** (launch pin 責務のみ
+  引き続き担う); **wrapper host constructor で `options.resumeSnapshot`
+  の (value, source="default") pair を display hint として consume** し、
+  `this.#model` / `this.#effort` に反映する。SDK 委任 semantics を壊さない
+  ため、Codex `#threadOptions` の effort gate と Claude Query Options の
+  model / effort gate に対称の `source !== "default"` 条件を追加し、
+  hint 復元でも source="default" 時は SDK に pin しない。protocol 変更なし
+  (config.resume_snapshot は既に sanitize 通過して wrapper に届いている)。
+
+  **pair 整合 invariant**: hint fallback は **value と source="default" が
+  両方揃った pair のみ**を対象にする (source-only / explicit source pair
+  は runner apply の管轄外)。Claude effort hint は SDK 側 catalog drift
+  対策として `CLAUDE_EFFORT_LEVELS` で再 validation し、外れなら value /
+  source ともに drop + stderr warn (wrapper 境界でも pair drop invariant
+  を維持)。既存 setModel / setEffort は source を "config" に上書きする
+  ため hint fallback より優先、explicit choice も従来通り SDK Options に
+  載る。
+
 ### 履歴の正本(A4)
 
 会話履歴の **正本は wrapper ホストの SDK JSONL** とし、サーバの表示用
