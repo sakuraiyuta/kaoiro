@@ -93,6 +93,18 @@ export interface WrapperConfig {
   model?: string;
   /** Launch-time effort pick relayed from SpawnMessage. */
   effort?: string;
+  /** Provenance of `model` when the runner sourced it from a resume snapshot
+   *  (ADR-0014 F1 追補 P1 pair-aware apply, phase-23). Populated by the
+   *  supervisor after `applyResumeSnapshot` promotes a pair through the
+   *  5-case rule; the wrapper CLI must prefer this over its own env / config
+   *  provenance guesses so that a resume launch reports the SAME source the
+   *  prior session stamped (Case 3 preserve) instead of overwriting it with
+   *  "config". Absent on a fresh spawn — the CLI still derives the source
+   *  from config.model / env as before. Distinct from the resume_snapshot
+   *  field (drift display only): source rides here as an effective value. */
+  model_source?: ModelSource;
+  /** Provenance of `effort`, same semantics as `model_source`. */
+  effort_source?: ModelSource;
   /** Runner-detected Codex auth context used to resolve the adapter catalog. */
   codex_auth_mode?: "chatgpt" | "apikey" | "unknown";
   /** Operator-declared ChatGPT plan. Ignored under API-key auth. */
