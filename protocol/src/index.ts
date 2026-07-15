@@ -780,13 +780,22 @@ export interface SessionResetRequest {
  *  supplied by the server so the runner's rollback branch can resume
  *  the RIGHT session (not a possibly-stale spawn-time value that has
  *  since been switched via `switch_session`). Absent when the pointer
- *  has no session_id yet (fresh spawn edge case). */
+ *  has no session_id yet (fresh spawn edge case).
+ *
+ *  `resume_snapshot` (ADR-0014 F1 追補「resume 時の privilege 三軸再適用」,
+ *  phase-22): the server attaches the CURRENT `SessionPointers.snapshot`
+ *  at lock-acquire time so the runner re-applies the last-effective
+ *  privilege axes (sandbox / network_access / permission_mode) to the
+ *  fresh wrapper. Absent when the pointer has no snapshot yet (pre-D8
+ *  legacy or fresh agent), in which case the runner's apply helper is
+ *  a no-op and the fresh wrapper falls to engine defaults. */
 export interface ResetSessionCommand {
   version: "0";
   agent_id: string;
   mode: SessionResetMode;
   request_id: string;
   previous_session_id?: string;
+  resume_snapshot?: ResolvedSnapshotExt;
 }
 
 /** runner -> server (ADR-0036 F7, phase-17 17-1/17-5). Report of a reset

@@ -48,6 +48,15 @@ defmodule KaoiroServer.SessionPointers do
   need to know about snapshots and vice versa; the two paths merge in
   DETS via the shared 5-tuple record. No-ops when the agent is not yet
   known (an envelope carrying the initial pointer must arrive first).
+
+  The snapshot is sanitized before persistence (write-side validation,
+  藤 D2, resume-privilege-restoration): only the known 7 `ResolvedSnapshotExt`
+  fields survive, with closed-enum guards on `sandbox` / `permission_mode` /
+  `*_source` and a boolean guard on `network_access`. Unknown or
+  malformed fields are dropped with a `Logger.warning` — a compromised
+  wrapper cannot land an invalid enum through this door (though it can
+  still stamp valid `danger-full-access` on its own, the trust boundary
+  documented in ADR-0014 F1 追補「resume 時の privilege 三軸再適用」).
   """
   def record_snapshot(agent_id, snapshot, server \\ __MODULE__) do
     GenServer.cast(server, {:record_snapshot, agent_id, snapshot})
@@ -186,25 +195,34 @@ defmodule KaoiroServer.SessionPointers do
   end
 
   def handle_cast({:record_snapshot, agent_id, snapshot}, state) do
-    # Snapshot-only update: no-op unless the agent already has a pointer
-    # (the initial pointer is seeded by an envelope-driven `record` call).
-    case Map.get(state.pointers, agent_id) do
+    case sanitize_snapshot(snapshot) do
       nil ->
+        # Non-map snapshot: defensive drop (fail-closed). The wrapper_channel
+        # ingest already gates non-maps, but repeating the invariant here
+        # keeps future callers from bypassing it.
         {:noreply, state}
 
-      existing ->
-        new_pointer = Map.put(existing, :snapshot, snapshot)
+      sanitized ->
+        # Snapshot-only update: no-op unless the agent already has a pointer
+        # (the initial pointer is seeded by an envelope-driven `record` call).
+        case Map.get(state.pointers, agent_id) do
+          nil ->
+            {:noreply, state}
 
-        if existing == new_pointer do
-          {:noreply, state}
-        else
-          :ok =
-            :dets.insert(
-              state.table,
-              {agent_id, existing.session_id, existing.cwd, existing.engine, snapshot}
-            )
+          existing ->
+            new_pointer = Map.put(existing, :snapshot, sanitized)
 
-          {:noreply, %{state | pointers: Map.put(state.pointers, agent_id, new_pointer)}}
+            if existing == new_pointer do
+              {:noreply, state}
+            else
+              :ok =
+                :dets.insert(
+                  state.table,
+                  {agent_id, existing.session_id, existing.cwd, existing.engine, sanitized}
+                )
+
+              {:noreply, %{state | pointers: Map.put(state.pointers, agent_id, new_pointer)}}
+            end
         end
     end
   end
@@ -253,4 +271,121 @@ defmodule KaoiroServer.SessionPointers do
     Application.get_env(:kaoiro_server, :session_pointers_path) ||
       Path.join(System.tmp_dir!(), "kaoiro_session_pointers.dets")
   end
+
+  # Snapshot sanitizer (ADR-0014 F1 追補, resume-privilege-restoration 藤 D2).
+  # Keeps only the known 7 ResolvedSnapshotExt fields whose values pass their
+  # closed-enum / boolean / non-empty-string guard. Unknown or malformed
+  # entries are dropped with a warn so `record_snapshot`'s downstream
+  # relay (`build_restore_payload` / `switch_payload` / reset broadcast)
+  # cannot leak an invalid enum onto the wire. Non-map input returns nil,
+  # letting the caller no-op instead of persisting garbage.
+  #
+  # Key normalization (phase-22 藤 R1): output uses the CANONICAL string
+  # key (wire form). Input may arrive atom-keyed (unit tests) or string-
+  # keyed (JSON envelope ingest); the sanitizer walks the known fields
+  # in a fixed order and, for each field, prefers the string-keyed value
+  # (canonical) over the atom-keyed value (test convenience). If BOTH
+  # keys exist and their values differ, the string key wins and a warn
+  # names the conflict. This closes the "Phoenix JSON relay collapses
+  # atom+string into one key with an indeterminate winner" hole 藤 flagged.
+  # (Priority is string-first regardless of validity: an invalid string
+  # value drops the field even when an atom-keyed value would have passed
+  # — test-pinned to keep behavior deterministic.)
+  @snapshot_known_fields ~w(model model_source effort effort_source
+                            permission_mode sandbox network_access)a
+  @snapshot_sandbox_values ~w(read-only workspace-write danger-full-access)
+  @snapshot_permission_mode_values ~w(default acceptEdits bypassPermissions
+                                       plan dontAsk auto)
+  @snapshot_model_source_values ~w(launch env config default)
+
+  defp sanitize_snapshot(snapshot) when is_map(snapshot) do
+    {out, seen_keys} =
+      Enum.reduce(
+        @snapshot_known_fields,
+        {%{}, MapSet.new()},
+        &normalize_snapshot_field(&1, snapshot, &2)
+      )
+
+    # Warn once per remaining unknown / unrecognized key. Iterating the
+    # input map here (not inside the field loop) so a duplicate atom /
+    # string pair for a known field counts as ONE known field, not two
+    # unknowns.
+    for {k, _v} <- snapshot, not MapSet.member?(seen_keys, k) do
+      Logger.warning("SessionPointers: dropped unknown snapshot field #{inspect(k)}")
+    end
+
+    out
+  end
+
+  defp sanitize_snapshot(_), do: nil
+
+  defp normalize_snapshot_field(field, snapshot, {acc, seen}) do
+    string_key = Atom.to_string(field)
+    string_present = Map.has_key?(snapshot, string_key)
+    atom_present = Map.has_key?(snapshot, field)
+
+    cond do
+      string_present and atom_present ->
+        string_value = Map.get(snapshot, string_key)
+        atom_value = Map.get(snapshot, field)
+
+        if string_value != atom_value do
+          Logger.warning(
+            "SessionPointers: duplicate snapshot field " <>
+              "#{inspect(string_key)} with divergent values: " <>
+              "string=#{inspect(string_value)} vs atom=#{inspect(atom_value)}; " <>
+              "keeping string (wire canonical)"
+          )
+        end
+
+        acc = put_valid_snapshot_field(acc, field, string_key, string_value)
+        {acc, seen |> MapSet.put(string_key) |> MapSet.put(field)}
+
+      string_present ->
+        value = Map.get(snapshot, string_key)
+        acc = put_valid_snapshot_field(acc, field, string_key, value)
+        {acc, MapSet.put(seen, string_key)}
+
+      atom_present ->
+        value = Map.get(snapshot, field)
+        acc = put_valid_snapshot_field(acc, field, string_key, value)
+        {acc, MapSet.put(seen, field)}
+
+      true ->
+        {acc, seen}
+    end
+  end
+
+  defp put_valid_snapshot_field(acc, field, string_key, value) do
+    if snapshot_field_valid?(field, value) do
+      Map.put(acc, string_key, value)
+    else
+      Logger.warning(
+        "SessionPointers: dropped invalid snapshot field " <>
+          "#{inspect(string_key)}=#{inspect(value)}"
+      )
+
+      acc
+    end
+  end
+
+  defp snapshot_field_valid?(:sandbox, value),
+    do: is_binary(value) and value in @snapshot_sandbox_values
+
+  defp snapshot_field_valid?(:permission_mode, value),
+    do: is_binary(value) and value in @snapshot_permission_mode_values
+
+  defp snapshot_field_valid?(:model_source, value),
+    do: is_binary(value) and value in @snapshot_model_source_values
+
+  defp snapshot_field_valid?(:effort_source, value),
+    do: is_binary(value) and value in @snapshot_model_source_values
+
+  defp snapshot_field_valid?(:network_access, value), do: is_boolean(value)
+
+  defp snapshot_field_valid?(:model, value),
+    do: is_binary(value) and value != ""
+
+  defp snapshot_field_valid?(:effort, value),
+    do: is_binary(value) and value != ""
 end

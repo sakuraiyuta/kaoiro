@@ -142,7 +142,8 @@ defmodule KaoiroServer.SessionPointersTest do
     assert SessionPointers.get("a.snap.unknown", server) == nil
   end
 
-  test "record_snapshot: 既知 pointer の snapshot を set / 更新する", %{server: server} do
+  test "record_snapshot: 既知 pointer の snapshot を set / 更新する (canonical string key へ normalize、藤 R1)",
+       %{server: server} do
     SessionPointers.record("a.snap", "s", "/w", :codex, server)
     SessionPointers.record_snapshot("a.snap", %{model: "gpt-5.6-sol"}, server)
 
@@ -150,11 +151,13 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "s",
              cwd: "/w",
              engine: :codex,
-             snapshot: %{model: "gpt-5.6-sol"}
+             snapshot: %{"model" => "gpt-5.6-sol"}
            }
 
     SessionPointers.record_snapshot("a.snap", %{model: "gpt-5.6-terra"}, server)
-    assert %{snapshot: %{model: "gpt-5.6-terra"}} = SessionPointers.get("a.snap", server)
+
+    assert %{snapshot: %{"model" => "gpt-5.6-terra"}} =
+             SessionPointers.get("a.snap", server)
   end
 
   test "snapshot は DETS 越しに永続する", %{server: server, path: path} do
@@ -169,7 +172,7 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "s",
              cwd: "/w",
              engine: :claude_code,
-             snapshot: %{permission_mode: "plan"}
+             snapshot: %{"permission_mode" => "plan"}
            }
 
     GenServer.stop(name2)
@@ -190,7 +193,7 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "s-new",
              cwd: "/w",
              engine: :codex,
-             snapshot: %{sandbox: "workspace-write"}
+             snapshot: %{"sandbox" => "workspace-write"}
            }
   end
 
@@ -215,7 +218,7 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: nil,
              cwd: "/w",
              engine: :codex,
-             snapshot: %{model: "x"}
+             snapshot: %{"model" => "x"}
            }
   end
 
@@ -273,9 +276,219 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: nil,
              cwd: "/w",
              engine: :claude_code,
-             snapshot: %{permission_mode: "plan"}
+             snapshot: %{"permission_mode" => "plan"}
            }
 
     GenServer.stop(name2)
+  end
+
+  # ADR-0014 F1 追補 (resume-privilege-restoration, 藤 D2):
+  # write-side snapshot validation. Sanitize is expected to drop
+  # unknown / malformed fields with a warn and keep the rest, so a
+  # compromised wrapper cannot land invalid enum values via record_snapshot.
+  describe "record_snapshot: field-level sanitize (藤 D2)" do
+    test "全 7 known field が enum / boolean guard を通過して保持される", %{server: server} do
+      SessionPointers.record("a.sanitize.full", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.sanitize.full",
+        %{
+          "model" => "gpt-5",
+          "model_source" => "config",
+          "effort" => "high",
+          "effort_source" => "launch",
+          "permission_mode" => "bypassPermissions",
+          "sandbox" => "danger-full-access",
+          "network_access" => true
+        },
+        server
+      )
+
+      assert %{
+               snapshot: %{
+                 "model" => "gpt-5",
+                 "model_source" => "config",
+                 "effort" => "high",
+                 "effort_source" => "launch",
+                 "permission_mode" => "bypassPermissions",
+                 "sandbox" => "danger-full-access",
+                 "network_access" => true
+               }
+             } = SessionPointers.get("a.sanitize.full", server)
+    end
+
+    test "malformed sandbox enum は drop、他 field は保持", %{server: server} do
+      SessionPointers.record("a.sanitize.bad_sandbox", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.sanitize.bad_sandbox",
+        %{"sandbox" => "hacked", "permission_mode" => "plan"},
+        server
+      )
+
+      assert %{snapshot: snap} =
+               SessionPointers.get("a.sanitize.bad_sandbox", server)
+
+      refute Map.has_key?(snap, "sandbox")
+      assert snap["permission_mode"] == "plan"
+    end
+
+    test "malformed permission_mode enum は drop", %{server: server} do
+      SessionPointers.record("a.sanitize.bad_pmode", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.sanitize.bad_pmode",
+        %{"permission_mode" => "GodMode"},
+        server
+      )
+
+      assert %{snapshot: snap} =
+               SessionPointers.get("a.sanitize.bad_pmode", server)
+
+      refute Map.has_key?(snap, "permission_mode")
+    end
+
+    test "network_access 非 boolean は drop", %{server: server} do
+      SessionPointers.record("a.sanitize.bad_net", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.sanitize.bad_net",
+        %{"network_access" => 1},
+        server
+      )
+
+      assert %{snapshot: snap} =
+               SessionPointers.get("a.sanitize.bad_net", server)
+
+      refute Map.has_key?(snap, "network_access")
+    end
+
+    test "network_access=false explicit は保持される (truthy 判定禁止 pin)",
+         %{server: server} do
+      SessionPointers.record("a.sanitize.false_net", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.sanitize.false_net",
+        %{"network_access" => false, "sandbox" => "workspace-write"},
+        server
+      )
+
+      assert %{snapshot: %{"network_access" => false}} =
+               SessionPointers.get("a.sanitize.false_net", server)
+    end
+
+    test "unknown field は drop、known は保持", %{server: server} do
+      SessionPointers.record("a.sanitize.unknown", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.sanitize.unknown",
+        %{"model" => "gpt-5", "foo" => "bar", "danger" => true},
+        server
+      )
+
+      assert %{snapshot: snap} =
+               SessionPointers.get("a.sanitize.unknown", server)
+
+      assert snap == %{"model" => "gpt-5"}
+    end
+
+    test "非 map snapshot は no-op (defensive drop)", %{server: server} do
+      SessionPointers.record("a.sanitize.nonmap", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot("a.sanitize.nonmap", "not-a-map", server)
+
+      # Existing snapshot (nil) preserved; no crash, no cast rejected loudly.
+      assert %{snapshot: nil} =
+               SessionPointers.get("a.sanitize.nonmap", server)
+    end
+
+    test "atom-keyed snapshot も同じ sanitize を通り canonical string key に normalize される (藤 R1)",
+         %{server: server} do
+      SessionPointers.record("a.sanitize.atom", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.sanitize.atom",
+        %{sandbox: "danger-full-access", network_access: true},
+        server
+      )
+
+      # Canonical string key で保存される (JSON relay の勝者不定回避、藤 R1)。
+      assert %{
+               snapshot: %{
+                 "sandbox" => "danger-full-access",
+                 "network_access" => true
+               }
+             } = SessionPointers.get("a.sanitize.atom", server)
+    end
+
+    # 藤 R1 pin: atom / string key の同一 field 重複時の priority、
+    # validity 交差ケース。Phoenix JSON relay が atom+string を潰す前に、
+    # sanitize 側で deterministic に正規化する。
+    test "同一 field を atom と string 両方で持つ (同値) → string canonical で 1 件",
+         %{server: server} do
+      SessionPointers.record("a.sanitize.dup_same", "s", "/w", nil, server)
+
+      # Mixed atom/string map リテラルは string => value をキーワード
+      # (atom-kv) より前に置く必要がある (Elixir 構文)。
+      SessionPointers.record_snapshot(
+        "a.sanitize.dup_same",
+        %{"sandbox" => "workspace-write", sandbox: "workspace-write"},
+        server
+      )
+
+      assert %{snapshot: snap} =
+               SessionPointers.get("a.sanitize.dup_same", server)
+
+      assert snap == %{"sandbox" => "workspace-write"}
+    end
+
+    test "同一 field を atom と string で異なる値 → string 優先 (canonical wire) で warn",
+         %{server: server} do
+      SessionPointers.record("a.sanitize.dup_diff", "s", "/w", nil, server)
+
+      # 藤 R1: 判り易く「string=danger-full-access, atom=workspace-write」で
+      # string が勝つことを pin する (string が canonical、逆で採ると
+      # JSON relay と食い違う)。
+      SessionPointers.record_snapshot(
+        "a.sanitize.dup_diff",
+        %{"sandbox" => "danger-full-access", sandbox: "workspace-write"},
+        server
+      )
+
+      assert %{snapshot: %{"sandbox" => "danger-full-access"}} =
+               SessionPointers.get("a.sanitize.dup_diff", server)
+    end
+
+    test "invalid string + valid atom → string 優先 (invalid) で field drop (deterministic pin, 藤 R1)",
+         %{server: server} do
+      SessionPointers.record("a.sanitize.dup_bad_str", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.sanitize.dup_bad_str",
+        %{"sandbox" => "hacked", sandbox: "workspace-write"},
+        server
+      )
+
+      # string が勝つが値が invalid → field 全体 drop (atom fallback しない、
+      # priority は unconditional に string、藤 R1 pin)。
+      assert %{snapshot: snap} =
+               SessionPointers.get("a.sanitize.dup_bad_str", server)
+
+      refute Map.has_key?(snap, "sandbox")
+    end
+
+    test "valid string + invalid atom → string 側 valid を採用",
+         %{server: server} do
+      SessionPointers.record("a.sanitize.dup_bad_atom", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.sanitize.dup_bad_atom",
+        %{"sandbox" => "danger-full-access", sandbox: "hacked"},
+        server
+      )
+
+      assert %{snapshot: %{"sandbox" => "danger-full-access"}} =
+               SessionPointers.get("a.sanitize.dup_bad_atom", server)
+    end
   end
 end

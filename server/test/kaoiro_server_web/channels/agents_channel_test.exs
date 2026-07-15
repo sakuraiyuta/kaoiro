@@ -2600,6 +2600,60 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute Map.has_key?(payload, "previous_session_id")
     end
 
+    # ADR-0014 F1 追補 (resume-privilege-restoration, 藤 D2 / phase-21+):
+    # the reset broadcast must relay the current SessionPointers.snapshot
+    # so the runner's applyResumeSnapshot can reapply the last-effective
+    # privilege axes to the fresh wrapper (Codex sandbox / network_access、
+    # Claude permission_mode). Absent snapshot = no key on the wire.
+    test "reset_session payload に SessionPointers.snapshot を resume_snapshot として同梱" do
+      agent_id = "sess-reset.snap"
+      put_agent_with_caps(agent_id)
+      # SessionPointers を seed し snapshot も設定。record が pointer を
+      # 作らないと record_snapshot は no-op になる (agent 未登録)。
+      :ok = SessionPointers.record(agent_id, "sess-prev", "/w", :claude_code)
+
+      :ok =
+        SessionPointers.record_snapshot(agent_id, %{
+          "sandbox" => "danger-full-access",
+          "network_access" => true,
+          "permission_mode" => "bypassPermissions"
+        })
+
+      @endpoint.subscribe("runner:sess-reset")
+      socket = join_as(:operator)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref, :ok
+
+      assert_broadcast "reset_session",
+                       %{
+                         "agent_id" => ^agent_id,
+                         "resume_snapshot" => %{
+                           "sandbox" => "danger-full-access",
+                           "network_access" => true,
+                           "permission_mode" => "bypassPermissions"
+                         }
+                       }
+    end
+
+    test "SessionPointers に snapshot が無い agent の reset_session に resume_snapshot は載らない" do
+      # AgentId host_id_from/1 は最後の `.<rand>` を落とすので、host_id を
+      # `sess-reset` に揃えるため rand は 1 セグメントで書く。
+      agent_id = "sess-reset.snapabsent"
+      put_agent_with_caps(agent_id)
+      # pointer は seed するが snapshot は set しない。
+      :ok = SessionPointers.record(agent_id, "sess-prev", "/w", :claude_code)
+
+      @endpoint.subscribe("runner:sess-reset")
+      socket = join_as(:operator)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref, :ok
+
+      assert_broadcast "reset_session", %{"agent_id" => ^agent_id} = payload
+      refute Map.has_key?(payload, "resume_snapshot")
+    end
+
     test "viewer は forbidden" do
       agent_id = "sess-reset.viewer"
       put_agent_with_caps(agent_id)

@@ -385,6 +385,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
           "request_id" => request_id
         }
         |> maybe_put_previous_session_id(prev_sid)
+        # ADR-0014 F1 追補 (resume-privilege-restoration, 藤 D2): the
+        # runner uses this snapshot to reapply the last-effective
+        # privilege axes to the fresh wrapper. Absent = no-op on the
+        # runner side (engine defaults).
+        |> maybe_put_resume_snapshot(agent_id)
       )
 
       {:reply, :ok, socket}
