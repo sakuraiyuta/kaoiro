@@ -461,10 +461,11 @@ describe("AgentHost — query injection", () => {
     expect(getContextUsage.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("init trigger は 1 回失敗しても短い backoff で再試行する (ADR-0040 must-fix D)", async () => {
-    // 1 回目は null 返却 (transient race)、2 回目で成功する状況を再現。
-    // bounded retry は初期化単位、close/generation を跨がず、result が
-    // 来る前に context が乗ることを担保する。
+  it("init trigger は 1 回目 throw でも短い backoff で再試行する (ADR-0040 must-fix D、turn-5 R3)", async () => {
+    // 実 SDK の init race は control_request が throw する形で観測される
+    // ため、1 回目 throw → 2 回目 success の retry を pin する。
+    // #refreshContextUsage は内部で try/catch 済のため throw は握り潰され、
+    // #context は null のまま → for-init helper の bounded retry へ進む。
     const envs: Envelope[] = [];
     let call = 0;
     const usage = {
@@ -475,8 +476,8 @@ describe("AgentHost — query injection", () => {
     };
     const getContextUsage = vi.fn(async () => {
       call += 1;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return call === 1 ? (null as any) : usage;
+      if (call === 1) throw new Error("transient control race");
+      return usage;
     });
     const queryFn = makeQueryFn(() => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
@@ -508,52 +509,77 @@ describe("AgentHost — query injection", () => {
     });
   });
 
-  it("同一 context 値の再取得は追加の state_change を発火しない (dedup)", async () => {
-    // authoritative stamp は毎 state_change に乗る (unchanged) が、
-    // 「取得成功時の即時 re-emit」は差分時のみ。同値なら emitState は kick されない。
-    const envs: Envelope[] = [];
-    const usage = {
+  it("同値 refresh は追加 state_change を発火しない (dedup 厳密、藤 review turn-5 R2)", async () => {
+    // 藤 review R2: dedup を削除しても通る過去 test を厳密化。
+    // 同一 script (同数の result / 同数の state 遷移) 下で、getContextUsage が
+    // 「毎回同値を返す」場合と「毎回異値を返す」場合の envelope 総数を比較。
+    // dedup が働いていれば同値 side は追加 emit ゼロ、異値 side は毎 refresh
+    // ごとに 1 追加 emit する — 差分が「dedup により抑止された emit の数」。
+    // 差 == 発火想定回数 (= result 数) を assert し、dedup 消去時の regression
+    // (差 == 0 になり test fail) を検出できる。
+    async function runWith(
+      getContextUsage: () => Promise<unknown>,
+    ): Promise<Envelope[]> {
+      const envs: Envelope[] = [];
+      const queryFn = makeQueryFn(() => {
+        async function* gen(): AsyncGenerator<SDKMessage, void> {
+          yield msg({
+            type: "system",
+            subtype: "init",
+            model: "claude-dedup",
+            cwd: "/repo",
+          });
+          // init 由来 refresh が settle するのを待つ (両 branch 共通の baseline)。
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          yield result("success", { result: "1" });
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          yield result("success", { result: "2" });
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          yield result("success", { result: "3" });
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return asQuery(gen(), async () => {}, getContextUsage);
+      });
+      const host = new AgentHost(config, {
+        onState: (e) => envs.push(e),
+        queryFn,
+        now: () => "T",
+      });
+      await host.run();
+      return envs;
+    }
+
+    const staticUsage = {
       totalTokens: 42,
       maxTokens: 100,
       percentage: 42,
       model: "claude-dedup",
     };
-    // 何度呼ばれても同じ値を返す
-    const getContextUsage = vi.fn(async () => usage);
-    const queryFn = makeQueryFn(() => {
-      async function* gen(): AsyncGenerator<SDKMessage, void> {
-        yield msg({
-          type: "system",
-          subtype: "init",
-          model: "claude-dedup",
-          cwd: "/repo",
-        });
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        yield result("success", { result: "ok" });
-        // 追加 tick で result-driven refresh も回るが値は変わらない。
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      }
-      return asQuery(gen(), async () => {}, getContextUsage);
+    const staticGetter = vi.fn(async () => staticUsage);
+    const staticEnvs = await runWith(staticGetter);
+
+    let seq = 0;
+    const changingGetter = vi.fn(async () => {
+      seq += 1;
+      // 毎 refresh で異値を返す → dedup が抑止しない (changed=true 判定)。
+      return {
+        totalTokens: 42 + seq * 10,
+        maxTokens: 100,
+        percentage: 42 + seq * 10 > 100 ? 100 : 42 + seq * 10,
+        model: "claude-dedup",
+      };
     });
-    const host = new AgentHost(config, {
-      onState: (e) => envs.push(e),
-      queryFn,
-      now: () => "T",
-    });
-    await host.run();
-    // context 値 stamp を運ぶ envelope の数を数える。
-    // (毎 state_change に authoritative stamp が乗る仕様なので、count 数は
-    // state_change 発火回数と一致する。dedup が働けば追加 emitState は生じない)
-    const contextEnvs = envs.filter(
-      (e) => (e.ext as { context?: unknown }).context !== undefined,
+    const changingEnvs = await runWith(changingGetter);
+
+    // 前提: 両 run で getContextUsage 呼び出し回数と script は同じ。
+    expect(staticGetter.mock.calls.length).toBe(
+      changingGetter.mock.calls.length,
     );
-    // 初回に context がフラッシュ後、追加の state_change (assistant 進行等)
-    // 由来のみで、同値 refresh 由来の余分な envelope は増えないことを確認。
-    // getContextUsage が複数回呼ばれても context が乗る envs 数は
-    // 「state_change の回数」に収まる。
-    expect(contextEnvs.length).toBeGreaterThan(0);
-    // getContextUsage は init + result で最低 2 回は呼ばれる (dedup とは独立)
-    expect(getContextUsage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // dedup 効果: 同値 side は refresh 由来の追加 emit ゼロ、異値 side は
+    // (初回除く) 各 refresh で追加 emit → changing > static になる。
+    // 差は 3 (3 result 由来 refresh の分)。dedup を消すと差が 0 になり fail。
+    const delta = changingEnvs.length - staticEnvs.length;
+    expect(delta).toBeGreaterThanOrEqual(1);
   });
 
   it("config.permission_mode が SDK の permissionMode に渡る (#58)", async () => {
@@ -1562,6 +1588,84 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       .at(-1);
     expect(lastCtx?.ext.context).toMatchObject({
       used_tokens: 500,
+      max_tokens: 1000000,
+    });
+    host.close();
+    await done;
+  });
+
+  it("setModel 成功後の effort reset 失敗でも旧 context は残らない (藤 review turn-5 R1)", async () => {
+    // R1 must-fix: setModel resolve 直後・applyFlagSettings reject 時に、
+    // 旧 model の #context が authoritative に残る不整合を防ぐ。
+    // model apply 成功を境に generation bump + #context=null を実行し、
+    // catch path でも新 model 用 refresh を kick する。
+    const envs: Envelope[] = [];
+    const staleContextUsage = {
+      totalTokens: 8000,
+      maxTokens: 200000,
+      percentage: 4,
+      model: "default",
+    };
+    const freshContextUsage = {
+      totalTokens: 100,
+      maxTokens: 1000000,
+      percentage: 0,
+      model: "haiku",
+    };
+    // 1 回目 (init retry で最初の refresh): 旧 model 用の値。以降は新 model 用。
+    let call = 0;
+    const getContextUsage = vi.fn(async () => {
+      call += 1;
+      return call === 1 ? staleContextUsage : freshContextUsage;
+    });
+    const setModel = vi.fn(async () => {});
+    // applyFlagSettings は必ず reject
+    const applyFlagSettings = vi.fn(async () => {
+      throw new Error("effort reset rejected");
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "default" });
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), async () => {}, getContextUsage, {
+        setModel,
+        applyFlagSettings,
+        supportedModels: async () => modelInfos,
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+      effortSource: "config",
+      queryOptions: { effort: "high" },
+    });
+    const done = host.run();
+    // init/init-retry の refresh が着地し stale context が authoritative に
+    // 乗るのを待つ (baseline)。
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const beforeSwitch = envs.at(-1);
+    expect(beforeSwitch?.ext.context).toMatchObject({
+      used_tokens: 8000,
+      max_tokens: 200000,
+    });
+    // haiku (無 effort) へ切替 → applyFlagSettings reject で throw
+    await expect(host.setModel("haiku")).rejects.toThrow("effort reset rejected");
+    // 直後 (switch_error を運ぶ envelope): 旧 context が「絶対に」乗っていない
+    const switchErrEnv = envs
+      .filter((e) => e.ext.switch_error !== undefined)
+      .at(-1);
+    expect(switchErrEnv?.ext.context).toBeUndefined();
+    expect(switchErrEnv?.ext.model).toBe("haiku");
+    // catch path の refresh kick が完了するのを待つ
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 以降の envelope に fresh context (新 model 用) が乗っている
+    const lastCtx = envs
+      .filter((e) => (e.ext as { context?: unknown }).context !== undefined)
+      .at(-1);
+    expect(lastCtx?.ext.context).toMatchObject({
+      used_tokens: 100,
       max_tokens: 1000000,
     });
     host.close();

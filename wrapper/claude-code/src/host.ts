@@ -811,6 +811,18 @@ export class AgentHost implements EngineAdapter {
       this.#modelSource = "config";
       this.#operatorSwitchedFields.add("model");
       this.#operatorSwitchedFields.add("model_source");
+      // Invalidate the cached context snapshot AS SOON AS the model has been
+      // applied on the SDK side (ADR-0040 phase-21, 藤 review turn-5 must-fix
+      // R1). Different Claude models can have different context windows
+      // (opus[1m] vs sonnet), so the previous percentage is stale the moment
+      // setModel resolves. If we deferred this bump past the effort_reset
+      // step, an applyFlagSettings reject would throw before it landed —
+      // leaving #context pointing at the old model's window while the SDK
+      // is already on the new one. Bump the generation FIRST so any
+      // in-flight refresh's captured generation mismatches on completion
+      // and its pre-switch result is discarded.
+      this.#contextGeneration += 1;
+      this.#context = null;
       if (invalidEffort) {
         // SDK 0.3.187: null clears the flag layer; undefined is dropped by
         // JSON serialisation and would silently leave the old effort active.
@@ -824,16 +836,6 @@ export class AgentHost implements EngineAdapter {
         this.#operatorSwitchedFields.add("effort_source");
       }
       this.#switchErrorOnce = null;
-      // Invalidate the cached context snapshot: different Claude models can
-      // have different context windows (e.g. opus[1m] vs sonnet), so the old
-      // percentage is stale until we re-fetch. Bump the generation FIRST so
-      // any in-flight refresh's captured generation mismatches on completion
-      // and its (pre-switch) result is discarded. Clear #context so #statusExt
-      // stops advertising the stale snapshot on the transition envelope; the
-      // async refresh will re-emit once the new value arrives (ADR-0040
-      // phase-21, 藤 review turn-3 must-fix C).
-      this.#contextGeneration += 1;
-      this.#context = null;
       this.#emitState(this.#machine.state);
       void this.#refreshContextUsage();
     } catch (error) {
@@ -850,6 +852,15 @@ export class AgentHost implements EngineAdapter {
           : {}),
       };
       this.#emitState(this.#machine.state);
+      // R1: model apply が成功していれば context refresh を kick する。
+      // 失敗 path (effort_reset_failed) の envelope は switch_error 経由で
+      // 旧 context を絶対に含まない (#context は既に null 済) — ここでの
+      // refresh kick が新 model の値を後続 state_change に届ける。
+      // setModel 自体 reject (modelApplied=false) の場合は SDK model 変化
+      // していないため refresh 不要 (二重 refresh 防止)。
+      if (modelApplied) {
+        void this.#refreshContextUsage();
+      }
       throw error;
     }
   }

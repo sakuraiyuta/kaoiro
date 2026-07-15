@@ -82,10 +82,11 @@ stamp + dead code 撤去。旧固定文言「初回応答後に取得」を撤�
 | Task | 状態 | 内容 |
 |---|---|---|
 | 21-1 | ✅ | protocol.ts に capability field 追加 + docs/specs/protocol.md 同期 (commit e2f63a7) |
-| 21-2 | ✅ | Claude wrapper: capability stamp + 4 trigger + 5 guards + 4 test (commit 9bf4581) |
+| 21-2 | ✅ | Claude wrapper: capability stamp + 3 trigger (init [initial+retry] / result / model-switch) + 5 guards (inflight / pending re-run / generation / dedup / close) + 4 test (commit 9bf4581) |
 | 21-3 | ✅ | Codex wrapper: capability=false stamp + dead helper 撤去 + spec docs 同期 (commit 2e66794) |
 | 21-4 | ✅ | UI: engine-neutral 3-state gating + 6 test (commit 0604ff5) |
-| 21-5 | ✅ | ADR-0040 + phase-21 plan (本 commit) |
+| 21-5 | ✅ | ADR-0040 + phase-21 plan (commit fd6dd60) |
+| 21-6 | ✅ | 藤 turn-5 review 反映: R1 (partial model switch failure 時の stale context 除去) + R2 (dedup 厳密化 test) + R3 (init retry throw ベース test) + plan doc 表現修正 |
 
 ## Post-implementation
 
