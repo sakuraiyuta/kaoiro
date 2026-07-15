@@ -35,6 +35,7 @@ import {
   makeStateChange,
 } from "@kaoiro/agent-common";
 import { ServerLink } from "@kaoiro/wrapper-core";
+import { resolveClaudeSources } from "./source_resolution.js";
 import type {
   Envelope,
   InterAgentMessagePayload,
@@ -121,30 +122,21 @@ async function main(): Promise<void> {
     );
   }
 
-  // Source vocabulary for ext.model_source (ADR-0032 F4bc addendum, phase-15
-  // 15-4): config > env when both are set (config wins per resolution
-  // priority); both unset leaves the source undefined so the host stamps
-  // "default" when the SDK's init reports the engine's own default model.
-  // "launch" is currently subsumed by "config" until runner relays a
-  // dedicated field on SpawnMessage; the wire stays forward-compatible.
-  const resolvedModelSource: ModelSource | undefined =
-    config.model !== undefined
-      ? "config"
-      : envDefaultModel !== undefined
-        ? "env"
-        : undefined;
-  const resolvedEffort =
-    config.effort !== undefined &&
-    (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(config.effort)
-      ? config.effort as (typeof CLAUDE_EFFORT_LEVELS)[number]
-      : undefined;
-  const resolvedEffortSource: ModelSource | undefined =
-    resolvedEffort !== undefined ? "config" : undefined;
-  if (config.effort !== undefined && resolvedEffort === undefined) {
-    process.stderr.write(
-      `config warn: unsupported claude-code effort '${config.effort}', ignored\n`,
-    );
-  }
+  // Source vocabulary for ext.model_source (ADR-0032 F4bc addendum,
+  // phase-15 15-4 + phase-23 P1 pair-aware apply). Priority, effort catalog
+  // filter, and pair drop semantics are pinned in `resolveClaudeSources`
+  // unit tests (source_resolution.test.ts); CLI just consumes + emits.
+  const sources = resolveClaudeSources(
+    config,
+    envDefaultModel,
+    CLAUDE_EFFORT_LEVELS,
+  );
+  const resolvedModelSource = sources.modelSource;
+  const resolvedEffort = sources.effort as
+    | (typeof CLAUDE_EFFORT_LEVELS)[number]
+    | undefined;
+  const resolvedEffortSource = sources.effortSource;
+  for (const w of sources.warnings) process.stderr.write(w);
 
   // Engine-mismatch config warns (phase-15 15-7). Codex-only fields
   // (sandbox, network_access) surface loudly instead of being silently

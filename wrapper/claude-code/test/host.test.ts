@@ -2955,3 +2955,63 @@ describe("resume privilege restoration (P0 pin)", () => {
     });
   });
 });
+
+// Phase-23 (ADR-0014 F1 追補「P1 pair-aware apply」). The runner now
+// restores model / effort / *_source alongside the P0 privilege axes on
+// resume. This regression pin confirms the AgentHost surfaces those
+// restored pairs verbatim on the whoami / effective projection and does
+// not emit them as drift when the snapshot matches the effective values.
+describe("resume model/effort restoration (P1 pair-aware pin)", () => {
+  it("Case 3 explicit source (launch) が effective に stamp され drift が空", async () => {
+    const states: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(
+      { ...config },
+      {
+        onState: (event) => states.push(event),
+        queryFn,
+        // Runner が pair rule Case 3 で source=launch を preserve して届けた想定。
+        queryOptions: { model: "opus[1m]", effort: "high" },
+        modelSource: "launch",
+        effortSource: "launch",
+        resumeSnapshot: {
+          model: "opus[1m]",
+          model_source: "launch",
+          effort: "high",
+          effort_source: "launch",
+        },
+        now: () => "T",
+      },
+    );
+    // whoami は resume 由来 source を effective として返す。
+    expect(host.statusSnapshot()).toMatchObject({
+      model: "opus[1m]",
+      model_source: "launch",
+      effort: "high",
+      effort_source: "launch",
+    });
+    await host.run();
+    const last = states.at(-1);
+    const drift = last?.ext.resume_drift as { field: string }[] | undefined;
+    expect(
+      drift?.some(
+        (entry) =>
+          entry.field === "model" ||
+          entry.field === "model_source" ||
+          entry.field === "effort" ||
+          entry.field === "effort_source",
+      ),
+    ).toBeFalsy();
+    expect(last?.ext.resume_snapshot).toEqual({
+      model: "opus[1m]",
+      model_source: "launch",
+      effort: "high",
+      effort_source: "launch",
+    });
+  });
+});

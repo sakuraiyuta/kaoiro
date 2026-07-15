@@ -1122,4 +1122,146 @@ describe("CodexHost", () => {
       });
     });
   });
+
+  // Phase-23 (ADR-0014 F1 追補「P1 pair-aware apply」). The runner now
+  // restores model / effort / *_source alongside the P0 privilege axes on
+  // resume. The wrapper's catalog check in the constructor is the last
+  // line of defence: if the restored effort no longer matches the model's
+  // effort_levels (catalog updated between sessions), the pending reset
+  // must engage the existing effort_reset one-shot instead of silently
+  // sending an unsupported effort to the SDK.
+  describe("resume model/effort restoration (P1 catalog reset)", () => {
+    it("model + effort が catalog と整合していれば reset は engage しない", async () => {
+      const states: Envelope[] = [];
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "p1-ok" }, usageEvent()],
+      ]);
+      // gpt-5.6-terra は chatgpt plus catalog で effort_levels に "high" を含む。
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          codex_auth_mode: "chatgpt",
+          codex_chatgpt_plan: "plus",
+          model: "gpt-5.6-terra",
+          effort: "high",
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          modelSource: "launch",
+          effortSource: "config",
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      await runOneTurn(host, "hi");
+      // reset は起きないので effort_reset は stamp されない。
+      expect(states.some((e) => e.ext.effort_reset === true)).toBe(false);
+      // ThreadOptions に effort が渡っている。
+      expect(calls.options[0]?.modelReasoningEffort).toBe("high");
+    });
+
+    it("resume 経路で effort が catalog の effort_levels に無い場合、constructor で effort_reset に接続する", async () => {
+      const states: Envelope[] = [];
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "p1-reset" }, usageEvent()],
+      ]);
+      // gpt-5.6-luna の effort_levels は ["low","medium","high","xhigh","max"] で "ultra" を含まない。
+      // catalog 更新で "ultra" が実際は sol/terra 系のみになった、というシナリオ。
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          codex_auth_mode: "chatgpt",
+          codex_chatgpt_plan: "plus",
+          model: "gpt-5.6-luna",
+          effort: "ultra",
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          modelSource: "launch",
+          effortSource: "launch",
+          // resume 経路のみ constructor reset を engage する (藤 R1 guard)。
+          resumeSnapshot: {
+            model: "gpt-5.6-luna",
+            model_source: "launch",
+            effort: "ultra",
+            effort_source: "launch",
+          },
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      // constructor 直後の statusExt は effort_reset=true を含む (one-shot)。
+      const initial = host.statusExtSnapshot();
+      expect(initial.effort_reset).toBe(true);
+      await runOneTurn(host, "hi");
+      // 少なくとも 1 つの state_change が effort_reset=true を stamp した。
+      expect(states.some((e) => e.ext.effort_reset === true)).toBe(true);
+      // ThreadOptions は effortResetPending 経由で effort を skip する
+      // (#threadOptions gate 対応)。
+      expect(calls.options[0]?.modelReasoningEffort).toBeUndefined();
+    });
+
+    it("fresh spawn (resumeSnapshot 無し) の incompatible effort では reset を engage しない (藤 R1 regression)", async () => {
+      const states: Envelope[] = [];
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "p1-fresh" }, usageEvent()],
+      ]);
+      // 同じ mismatch シナリオ (luna + ultra) だが resumeSnapshot なし →
+      // constructor reset は engage せず、SDK 側 error path に委ねる従来挙動。
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          codex_auth_mode: "chatgpt",
+          codex_chatgpt_plan: "plus",
+          model: "gpt-5.6-luna",
+          effort: "ultra",
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          modelSource: "launch",
+          effortSource: "launch",
+          // resumeSnapshot 未設定: fresh spawn。
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      // fresh spawn では reset guard に阻まれ effort_reset one-shot が立たない。
+      expect(host.statusExtSnapshot().effort_reset).toBeUndefined();
+      await runOneTurn(host, "hi");
+      expect(states.some((e) => e.ext.effort_reset === true)).toBe(false);
+      // effort は SDK に渡り、SDK 側 error / 既存 switch_error rollback に委任される。
+      expect(calls.options[0]?.modelReasoningEffort).toBe("ultra");
+    });
+
+    it("model が catalog に不在なら reset は engage しない (SDK 委任)", async () => {
+      const states: Envelope[] = [];
+      const { client } = makeClient([
+        [{ type: "thread.started", thread_id: "p1-unknown" }, usageEvent()],
+      ]);
+      // apikey mode + chatgpt-only な model 名 ("gpt-5.6-luna" が chatgpt-only ではないが、
+      // ここでは "unknown-model" で catalog 不在を模す)。
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          codex_auth_mode: "apikey",
+          model: "unknown-model",
+          effort: "medium",
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          modelSource: "launch",
+          effortSource: "config",
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      expect(host.statusExtSnapshot().effort_reset).toBeUndefined();
+      await runOneTurn(host, "hi");
+      expect(states.some((e) => e.ext.effort_reset === true)).toBe(false);
+    });
+  });
 });

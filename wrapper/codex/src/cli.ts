@@ -25,6 +25,7 @@ import type {
 import { ServerLink, loadConfig, parseCliArgs } from "@kaoiro/wrapper-core";
 import { CodexHost } from "./host.js";
 import { replayCodexHistory } from "./history.js";
+import { resolveCodexSources } from "./source_resolution.js";
 
 const COLOR: Record<KaoiroState, string> = {
   idle: "90",
@@ -83,18 +84,11 @@ async function main(): Promise<void> {
       : config;
 
   // Source vocabulary for ext.model_source / ext.effort_source (ADR-0032
-  // F4bc addendum, phase-15 15-4c). "config" wins over "env" when both are
-  // set (config.model reaches CodexHost via effectiveConfig even under an
-  // env-tier default). Codex has no launch-time effort env, so effort source
-  // is either "config" (config.effort set) or undefined.
-  const resolvedModelSource: ModelSource | undefined =
-    config.model !== undefined
-      ? "config"
-      : envDefaultModel !== undefined
-        ? "env"
-        : undefined;
-  const resolvedEffortSource: ModelSource | undefined =
-    config.effort !== undefined ? "config" : undefined;
+  // F4bc addendum, phase-15 15-4c + phase-23 P1 pair-aware apply).
+  // Priority + semantics are pinned in `resolveCodexSources` unit tests
+  // (source_resolution.test.ts); CLI just consumes the resolved pair.
+  const { modelSource: resolvedModelSource, effortSource: resolvedEffortSource } =
+    resolveCodexSources(config, envDefaultModel);
 
   // Engine-mismatch config warns (phase-15 15-6). Claude-only fields
   // (permission_mode, allowed_tools) surface loudly instead of being

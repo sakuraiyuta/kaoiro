@@ -212,6 +212,41 @@ export class CodexHost implements EngineAdapter {
       config.codex_chatgpt_plan,
     );
     this.#sessionId = options.resumeSessionId ?? null;
+    // Phase-23 (ADR-0014 F1 追補 P1): a resume snapshot can restore both
+    // model and effort into config even when the model has since been
+    // catalogue-updated so effort_levels no longer include the persisted
+    // effort. Mirror the setModel() code path: clear #effortPending and
+    // route through the existing #effortResetPending / #effortResetOnce
+    // one-shot so #finishTurn resets effort to the model's default_effort
+    // on turn success and stamps ext.effort_reset once for UI feedback.
+    //
+    // Scope: RESUME PATH ONLY (`#resumeSnapshot !== null`). Fresh spawn
+    // must retain the pre-Phase-23 behaviour — an operator-picked
+    // incompatible effort passes through to the SDK unchanged, and the
+    // SDK's own error / the existing switch_error rollback in
+    // `#finishTurn` handles the mismatch. Widening the reset to fresh
+    // spawn would silently override a launch-time choice that the
+    // dashboard never explicitly asked to reset (藤 R1 must-fix).
+    // Model absence / catalog entry without effort_levels → SDK 委任
+    // (unchanged): the SDK's own error path handles a genuine mismatch,
+    // covered by the existing switch_error rollback in #finishTurn.
+    if (
+      this.#resumeSnapshot !== null &&
+      this.#model !== null &&
+      this.#effort !== null
+    ) {
+      const modelInfo = this.#catalog.find(
+        (entry) => entry.value === this.#model,
+      );
+      if (
+        modelInfo?.effort_levels !== undefined &&
+        !modelInfo.effort_levels.includes(this.#effort)
+      ) {
+        this.#effortPending = null;
+        this.#effortResetPending = true;
+        this.#effortResetOnce = true;
+      }
+    }
   }
 
   get state(): KaoiroState {
