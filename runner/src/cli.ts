@@ -7,7 +7,10 @@
 //   configPath defaults to runner.config.json. The auth token is read from
 //   KAOIRO_RUNNER_TOKEN (unset = the server's runner auth is disabled, dev).
 
+import type { EngineCatalogResult } from "@kaoiro/protocol";
 import { parseRunnerArgs } from "./args.js";
+import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
+import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
 import { type CodexAuthMode, detectCodexAuthMode } from "./codex-auth.js";
 import {
   buildRegister,
@@ -83,6 +86,23 @@ async function main(): Promise<void> {
     sendResetResult: (result) => link.sendResetResult(result),
   });
 
+  // Option E, ADR-0039: memory-only last-known-good cache for the Claude
+  // engine's launch catalog. `updateRegister` re-broadcasts the register
+  // whenever a probe succeeds, so LaunchDialog picks up the fresh catalog
+  // via the ordinary `hosts` broadcast — no server-side store needed.
+  const claudeCatalog = new ClaudeCatalogCache();
+  const handleRefreshEngineCatalog = makeRefreshEngineCatalogHandler({
+    // Live getter (藤 must-fix 2): a hot-reload that changes host_id
+    // reaches subsequent catalog_result replies without re-wiring the
+    // handler.
+    getHostId: () => config.host_id,
+    cache: claudeCatalog,
+    getCurrentConfig: () => config,
+    getCodexAuthMode: () => codexAuthMode,
+    updateRegister: (register) => link.updateRegister(register),
+    sendCatalogResult: (result) => link.sendCatalogResult(result),
+  });
+
   link = new RunnerLink(config.server_url, config.host_id, {
     ...(token === undefined || token === "" ? {} : { token }),
     register: buildRegister(config, codexAuthMode),
@@ -93,6 +113,7 @@ async function main(): Promise<void> {
     onEnumerateSessions: (payload) => supervisor.handleEnumerate(payload),
     onSwitchSession: (payload) => supervisor.handleSwitchSession(payload),
     onResetSession: (payload) => supervisor.handleResetSession(payload),
+    onRefreshEngineCatalog: handleRefreshEngineCatalog,
   });
 
   process.stderr.write(
@@ -132,7 +153,10 @@ async function main(): Promise<void> {
       codexChatgptPlan: next.codex?.chatgpt_plan,
       codexInternalSubagents: next.codex?.internal_subagents,
     });
-    const nextRegister = buildRegister(next, codexAuthMode);
+    // Preserve any live-probed Claude catalog on reload so operators do not
+    // silently regress to the bootstrap default entry (ADR-0039).
+    const claudeOverride = claudeCatalog.getStale() ?? undefined;
+    const nextRegister = buildRegister(next, codexAuthMode, claudeOverride);
     if (
       next.host_id !== config.host_id ||
       next.server_url !== config.server_url

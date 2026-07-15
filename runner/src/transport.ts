@@ -8,6 +8,7 @@
 
 import { Channel, Socket } from "phoenix";
 import type {
+  EngineCatalogResult,
   RunnerRegister,
   RunnerSessions,
   SessionResetResult,
@@ -35,6 +36,10 @@ export interface RunnerLinkOptions {
    *  opaque here (the supervisor validates); it carries agent_id / mode /
    *  request_id / previous_session_id. */
   onResetSession?: (payload: unknown) => void;
+  /** phase-20 (ADR-0039): server → runner request for a live engine-catalog
+   *  probe (LaunchDialog manual button + cache-miss auto-refresh). Payload
+   *  is opaque here; the orchestrator validates and dedups. */
+  onRefreshEngineCatalog?: (payload: unknown) => void;
 }
 
 // exactOptionalPropertyTypes: true 下では、`Pick<RunnerLinkOptions, ...>` の
@@ -48,6 +53,7 @@ interface ChannelCallbacks {
   onEnumerateSessions: ChannelCallback | undefined;
   onSwitchSession: ChannelCallback | undefined;
   onResetSession: ChannelCallback | undefined;
+  onRefreshEngineCatalog: ChannelCallback | undefined;
 }
 
 export class RunnerLink {
@@ -75,6 +81,7 @@ export class RunnerLink {
       onEnumerateSessions: options.onEnumerateSessions,
       onSwitchSession: options.onSwitchSession,
       onResetSession: options.onResetSession,
+      onRefreshEngineCatalog: options.onRefreshEngineCatalog,
     };
     const wired = this.#wire(serverUrl, hostId);
     this.#socket = wired.socket;
@@ -138,6 +145,9 @@ export class RunnerLink {
     channel.on("reset_session", (payload: unknown) =>
       this.#callbacks.onResetSession?.(payload),
     );
+    channel.on("refresh_engine_catalog", (payload: unknown) =>
+      this.#callbacks.onRefreshEngineCatalog?.(payload),
+    );
 
     channel
       .join()
@@ -169,6 +179,14 @@ export class RunnerLink {
    *  confirms completion. ok=false is loud + closed-vocab. */
   sendResetResult(result: SessionResetResult): void {
     this.#channel.push("session_reset_result", result);
+  }
+
+  /** Reports an engine-catalog probe outcome (phase-20, ADR-0039). Server
+   *  forwards this to operators on agents:lobby so LaunchDialog can toast
+   *  success/failure. The refreshed catalog itself reaches the client via
+   *  the `hosts` broadcast triggered by the paired updateRegister call. */
+  sendCatalogResult(result: EngineCatalogResult): void {
+    this.#channel.push("catalog_result", result);
   }
 
   /** Push a new register payload on the current channel. Used on config

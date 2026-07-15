@@ -292,11 +292,18 @@ export function effectiveCapabilities(config: RunnerConfig): string[] {
 export function buildRegister(
   config: RunnerConfig,
   codexAuthMode: CodexAuthMode = "unknown",
+  claudeCatalogOverride?: EngineCatalogEntry["models"],
 ): RunnerRegister {
   const capabilities = effectiveCapabilities(config);
   const engines: EngineCatalogEntry[] = [];
   if (capabilities.includes("claude-code")) {
-    engines.push({ id: "claude-code", models: claudeBootstrapCatalog() });
+    // Option E, ADR-0039: when the runner has a fresh live-probe catalog in
+    // its memory cache it overrides the pre-init bootstrap floor. Absent =
+    // the ADR-0037 F1 minimum default entry.
+    engines.push({
+      id: "claude-code",
+      models: claudeCatalogOverride ?? claudeBootstrapCatalog(),
+    });
   }
   if (capabilities.includes("codex")) {
     engines.push({

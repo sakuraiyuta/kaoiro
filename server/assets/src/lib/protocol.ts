@@ -922,6 +922,23 @@ export interface KaoiroHandlers {
   onSessionResetStarted?: (payload: SessionResetStartedPayload) => void;
   onSessionResetCompleted?: (payload: SessionResetCompletedPayload) => void;
   onSessionResetFailed?: (payload: SessionResetFailedPayload) => void;
+  /** Engine-catalog probe outcome (Option E, ADR-0039). Correlates with
+   *  a prior refreshEngineCatalog() by `request_id`. Operator-only. The
+   *  refreshed catalog itself arrives via the paired `hosts` broadcast on
+   *  success — this event only carries the completion signal + toast
+   *  material (models_count on ok=true, closed-vocab reason on ok=false). */
+  onCatalogResult?: (result: EngineCatalogResult) => void;
+}
+
+/** Client mirror of protocol/src/index.ts EngineCatalogResult. Kept as a
+ *  plain interface so protocol.ts stays runtime-free. */
+export interface EngineCatalogResult {
+  host_id: string;
+  engine: string;
+  request_id: string;
+  ok: boolean;
+  reason?: string;
+  models_count?: number;
 }
 
 /** ADR-0036 F7 broadcast payloads (client view). `previous_session_id` /
@@ -996,6 +1013,22 @@ export interface KaoiroConnection {
    * dashboard must gate the trigger by engine. The refreshed catalog
    * surfaces via the next state_change's ext.models. */
   refreshModels: (agentId: string) => Promise<void>;
+  /** Requests the runner to freshen its (host, engine) launch-catalog
+   * cache and re-register (Option E, ADR-0039). `force=true` bypasses the
+   * runner's TTL check (LaunchDialog manual button); `force=false`/omitted
+   * lets the runner skip the probe when its cache is still fresh. The
+   * returned promise resolves with the full EngineCatalogResult once the
+   * runner's paired `catalog_result` arrives (correlated by request_id),
+   * or rejects if the server ack fails, the transport disconnects before
+   * the result arrives, or the client-side wait times out. The refreshed
+   * catalog itself arrives separately via a `hosts` broadcast on success.
+   * Claude-only in practice — Codex catalogs are static (ADR-0035 F1),
+   * so the runner replies `unsupported_engine` for other engines. */
+  refreshEngineCatalog: (
+    hostId: string,
+    engine: string,
+    force?: boolean,
+  ) => Promise<EngineCatalogResult>;
   /** Switches the SDK permission mode for the agent's subsequent turns
    * (#58); the server also persists the pick so the wrapper restores it
    * on next start. `mode` must be a closed-enum PermissionMode value. */
@@ -1251,6 +1284,94 @@ export function parseHistoryReset(
   };
 }
 
+/** Client-side wait timeout for a refreshEngineCatalog request. Sits well
+ *  above the runner's own hard cap (35s) so a slow probe still settles
+ *  through the pending map rather than timing out here first. */
+const CATALOG_WAIT_TIMEOUT_MS = 45_000;
+
+interface CatalogWaiter {
+  resolve: (result: EngineCatalogResult) => void;
+  reject: (reason: unknown) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** Catalog-pending state lives INSIDE connectKaoiro so two concurrent
+ *  connections do not share a Map (藤 review A). Exported for the unit
+ *  test to exercise the register/resolve/drain lifecycle without
+ *  standing up a real Phoenix channel; production code always
+ *  constructs one per connectKaoiro call. */
+export interface CatalogPendingStore {
+  register: (request_id: string) => Promise<EngineCatalogResult>;
+  cancel: (request_id: string, reason: string) => void;
+  onResult: (result: EngineCatalogResult) => void;
+  drain: (reason: string) => void;
+  size: () => number;
+}
+
+export function makeCatalogPendingStore(
+  timeoutMs: number = CATALOG_WAIT_TIMEOUT_MS,
+): CatalogPendingStore {
+  const pending = new Map<string, CatalogWaiter>();
+  const cancel = (request_id: string, reason: string): void => {
+    const w = pending.get(request_id);
+    if (w === undefined) return;
+    clearTimeout(w.timer);
+    pending.delete(request_id);
+    w.reject(new Error(reason));
+  };
+  return {
+    register: (request_id) =>
+      new Promise<EngineCatalogResult>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(request_id);
+          reject(new Error("catalog_result timeout"));
+        }, timeoutMs);
+        pending.set(request_id, { resolve, reject, timer });
+      }),
+    cancel,
+    onResult: (result) => {
+      const w = pending.get(result.request_id);
+      if (w === undefined) return;
+      clearTimeout(w.timer);
+      pending.delete(result.request_id);
+      w.resolve(result);
+    },
+    drain: (reason) => {
+      for (const [id, w] of pending) {
+        clearTimeout(w.timer);
+        pending.delete(id);
+        w.reject(new Error(reason));
+      }
+    },
+    size: () => pending.size,
+  };
+}
+
+/** Defensive parse: any missing/malformed field drops the message so the
+ *  UI never fires on an ill-formed catalog_result. */
+function parseCatalogResult(payload: unknown): EngineCatalogResult | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const p = payload as Partial<EngineCatalogResult>;
+  if (
+    typeof p.host_id !== "string" ||
+    typeof p.engine !== "string" ||
+    typeof p.request_id !== "string" ||
+    typeof p.ok !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    host_id: p.host_id,
+    engine: p.engine,
+    request_id: p.request_id,
+    ok: p.ok,
+    ...(typeof p.reason === "string" ? { reason: p.reason } : {}),
+    ...(typeof p.models_count === "number"
+      ? { models_count: p.models_count }
+      : {}),
+  };
+}
+
 function pushAsync(
   channel: Channel,
   event: string,
@@ -1290,6 +1411,10 @@ export function connectKaoiro(
   socket.connect();
 
   const channel = socket.channel("agents:lobby");
+  // Instance-scoped pending map for refreshEngineCatalog waiters (Option E,
+  // ADR-0039). Kept LOCAL so a second connectKaoiro's disconnect cannot
+  // drain this one's pending — 藤 review must-fix A.
+  const catalogPending = makeCatalogPendingStore();
   channel.on("snapshot", (payload: { agents?: unknown }) => {
     const agents: Record<string, Envelope> = {};
     for (const value of Object.values(payload.agents ?? {})) {
@@ -1410,6 +1535,23 @@ export function connectKaoiro(
     const parsed = parseSessionResetFailed(payload);
     if (parsed !== null) handlers.onSessionResetFailed?.(parsed);
   });
+  channel.on("catalog_result", (payload: unknown) => {
+    const parsed = parseCatalogResult(payload);
+    if (parsed === null) return;
+    // Route to any pending refreshEngineCatalog() caller first so its
+    // promise settles deterministically, then fan out to the passive
+    // handler (dashboard-wide toast subscribers).
+    catalogPending.onResult(parsed);
+    handlers.onCatalogResult?.(parsed);
+  });
+  // Reject every outstanding wait on disconnect so callers do not hang
+  // forever behind a dropped socket. `onClose` fires on both operator
+  // disconnect and server shutdown; `onError` catches transport
+  // failures. Both flow into the same drain path. Instance-scoped so a
+  // second connection's disconnect cannot drain this one's pending
+  // (藤 review A).
+  socket.onClose(() => catalogPending.drain("socket closed"));
+  socket.onError(() => catalogPending.drain("socket error"));
   channel.join();
 
   return {
@@ -1446,6 +1588,32 @@ export function connectKaoiro(
       pushAsync(channel, "set_effort", { agent_id: agentId, effort }),
     refreshModels: (agentId) =>
       pushAsync(channel, "refresh_models", { agent_id: agentId }),
+    refreshEngineCatalog: async (hostId, engine, force) => {
+      const request_id = crypto.randomUUID();
+      // Register BEFORE sending so a fast catalog_result cannot arrive
+      // before we can correlate it. The returned promise resolves on
+      // catalog_result / rejects on disconnect / timeout / ack failure.
+      const promise = catalogPending.register(request_id);
+      try {
+        await pushAsync(channel, "refresh_engine_catalog", {
+          host_id: hostId,
+          engine,
+          request_id,
+          ...(force === true ? { force: true } : {}),
+        });
+      } catch (err) {
+        // 藤 review B: fold ack-failure into the SAME rejection path as
+        // catalog_result / disconnect / timeout so `promise` is the single
+        // observable rejection source (previously we `throw err` here AND
+        // rejected `promise`, producing an unhandled rejection on any
+        // caller that read only `promise`).
+        catalogPending.cancel(
+          request_id,
+          `server ack failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return promise;
+    },
     setPermissionMode: (agentId, mode) =>
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
     clearHistory: (agentId) =>

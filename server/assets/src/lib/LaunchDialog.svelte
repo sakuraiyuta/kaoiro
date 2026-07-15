@@ -22,6 +22,28 @@
     onClose: () => void;
   } = $props();
 
+  // Option E, ADR-0039: LaunchDialog fires a live catalog probe when the
+  // Claude engine is selected. `refreshEngineCatalog()` resolves with the
+  // full EngineCatalogResult (request_id-correlated) once the runner's
+  // paired `catalog_result` arrives, or rejects on server ack failure /
+  // transport disconnect / timeout — so we can hold the loading spinner
+  // until the actual outcome and report a specific failure reason. TTL is
+  // owned by the runner; auto-probes always fire with force=false, the
+  // manual button with force=true.
+  let refreshingCatalog = $state(false);
+  let catalogError = $state<string | null>(null);
+  const CLAUDE_ENGINE = "claude-code";
+  // Guard against a late catalog_result / cancel after this dialog closes
+  // (藤 turn-11 追補): $effect returns a cleanup that flips `alive=false`
+  // and future refresh completions bail out before touching state.
+  let alive = { current: true };
+  // Monotonic generation for stale-result rejection (藤 review C): every
+  // refresh trigger takes the next generation; only the latest may write
+  // refreshingCatalog / catalogError. host/engine changes bump the
+  // generation without triggering a probe so any outstanding waiter is
+  // dropped even before its promise settles.
+  let refreshGeneration = { current: 0 };
+
   let mode = $state<"new" | "resume">("new");
   let hostId = $state("");
   let personaId = $state("");
@@ -62,6 +84,12 @@
   // single-engine host keeps the pre-engine UX (ADR-0032 F4a).
   const engines = $derived(host?.capabilities ?? []);
   const showEngineSelect = $derived(engines.length >= 2);
+  // Primitive derived so the auto-refresh $effect below tracks the boolean
+  // (identity-stable across hosts broadcasts) rather than the `engines`
+  // array reference — a hosts push that only updates models[].models
+  // rotates the array identity, and tracking that would re-fire the
+  // refresh $effect and bump the generation for no reason (藤 review 3-1).
+  const hostSupportsClaude = $derived(engines.includes(CLAUDE_ENGINE));
   const engineModels = $derived(
     host?.engines?.find((e) => e.id === engine)?.models ?? [],
   );
@@ -99,6 +127,68 @@
   $effect(() => {
     if (mode !== "resume" || hostId === "" || cwd === "") return;
     void connection.enumerateSessions(hostId, cwd, engine).catch(() => {});
+  });
+
+  // Option E, ADR-0039: trigger a live catalog refresh whenever a host is
+  // selected and the Claude engine is in play. Auto-fires with force=false;
+  // the runner honours its TTL cache and skips the probe when fresh, so a
+  // dialog-open storm cannot spawn multiple probes. Runs on host or engine
+  // change. The dedup guard on the runner side merges concurrent requests.
+  // Loading is held until the runner's catalog_result arrives (transport
+  // disconnect / timeout / server ack failure all reject). Stale results
+  // from a prior host/engine are dropped via generation compare (藤 review C).
+  async function triggerCatalogRefresh(force: boolean): Promise<void> {
+    if (hostId === "" || engine !== CLAUDE_ENGINE) return;
+    const gen = ++refreshGeneration.current;
+    const isCurrent = (): boolean =>
+      alive.current && gen === refreshGeneration.current;
+    refreshingCatalog = true;
+    catalogError = null;
+    try {
+      const result = await connection.refreshEngineCatalog(
+        hostId,
+        engine,
+        force,
+      );
+      if (!isCurrent()) return;
+      if (!result.ok) {
+        catalogError = result.reason ?? "probe failed";
+      }
+    } catch (err) {
+      if (!isCurrent()) return;
+      catalogError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (isCurrent()) refreshingCatalog = false;
+    }
+  }
+  $effect(() => {
+    // Cleanup flips `alive.current` so a late resolve/reject after the
+    // dialog unmounts cannot touch removed state.
+    return () => {
+      alive.current = false;
+    };
+  });
+  $effect(() => {
+    // Read the reactive deps eagerly so Svelte tracks them. Tracking the
+    // primitive `hostSupportsClaude` boolean (not the `engines` array)
+    // means an in-place hosts broadcast that only rotates the models
+    // array identity does not re-fire this effect (藤 review 3-1).
+    const h = hostId;
+    const e = engine;
+    const supported = hostSupportsClaude;
+    // Any host/engine change invalidates pending waiters (藤 review C).
+    // Bump BEFORE deciding whether to probe so a switch to Codex mid-flight
+    // still marks the outstanding Claude refresh stale.
+    refreshGeneration.current++;
+    if (h === "" || e !== CLAUDE_ENGINE || !supported) {
+      // Non-Claude / no-host: reset the UI so a lingering spinner or error
+      // from the previous Claude session does not follow the operator into
+      // Codex or a different host.
+      refreshingCatalog = false;
+      catalogError = null;
+      return;
+    }
+    void triggerCatalogRefresh(false);
   });
 
   // Keep engine valid for the host, and model/effort valid for the engine
@@ -279,6 +369,26 @@
             {/each}
           </select>
         </label>
+      {/if}
+
+      {#if engine === CLAUDE_ENGINE}
+        <!-- Option E, ADR-0039: manual force-refresh of the (host, engine)
+             catalog. Claude only — Codex catalogs are static (ADR-0035 F1),
+             so no button is offered for other engines. -->
+        <div class="catalog-refresh">
+          <button
+            type="button"
+            onclick={() => void triggerCatalogRefresh(true)}
+            disabled={refreshingCatalog || hostId === ""}
+            aria-label="モデル一覧を再取得"
+            title="モデル一覧を再取得 (runner のキャッシュを無視して live probe)"
+          >
+            {refreshingCatalog ? "更新中…" : "モデル一覧を再取得"}
+          </button>
+          {#if catalogError}
+            <span class="catalog-error" role="alert">{catalogError}</span>
+          {/if}
+        </div>
       {/if}
 
       {#if effortLevels.length > 0}

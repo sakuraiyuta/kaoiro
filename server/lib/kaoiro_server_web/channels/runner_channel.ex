@@ -87,6 +87,15 @@ defmodule KaoiroServerWeb.RunnerChannel do
     forward_to_operators("spawn_result", payload, socket)
   end
 
+  # Runner's engine-catalog probe outcome (Option E, ADR-0039). Stamps the
+  # host_id (from the topic) and forwards on agents:lobby, where the same
+  # operator-only intercept as spawn_result / hosts gates it. The client
+  # correlates by `request_id` and pairs it with a `hosts` broadcast on
+  # success (the runner re-registers with the fresh catalog).
+  def handle_in("catalog_result", payload, socket) do
+    forward_to_operators("catalog_result", payload, socket)
+  end
+
   # Runner's session-reset outcome (ADR-0036 F7, phase-17 17-4). Unlike
   # spawn_result this is not forwarded to operators verbatim — the
   # `session_reset_completed` / `session_reset_failed` broadcast is

@@ -24,6 +24,7 @@
 | 14 | [phase-14-codex-adapter](phase-14-codex-adapter.md) | ✅ | Codex アダプタ実装 (F2-F9、権限二軸 UI、engine セレクト、共通 Tool 記述層への inter-agent tool 移送)、[ADR-0032](../adr/0032-codex-adapter.md) / [ADR-0033](../adr/0033-permission-model-dual-axis.md) |
 | 18 | [phase-18-claude-model-catalog-live](phase-18-claude-model-catalog-live.md) | ⏳ | Claude モデル catalog live 実測一元化と bootstrap default floor 縮小、[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) |
 | 19 | [phase-19-codex-internal-subagents-toggle](phase-19-codex-internal-subagents-toggle.md) | 🟡 | Codex 内部サブエージェント toggle と固有名 peer-routing contract、[ADR-0038](../adr/0038-codex-internal-subagents-toggle.md) |
+| 20 | [phase-20-engine-catalog-live-probe](phase-20-engine-catalog-live-probe.md) | 🟡 | LaunchDialog モデル catalog を短命 SDK probe + runner memory cache で live 化 (Option E)、[ADR-0039](../adr/0039-engine-catalog-live-probe.md) |
 
 ## Feature-local plans
 

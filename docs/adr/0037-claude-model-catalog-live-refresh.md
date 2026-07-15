@@ -175,7 +175,7 @@ UI に通知 event を発行する。通知の粒度 (toast 1 度 / session log 
 
 | Option | Decision |
 |--------|----------|
-| BOOTSTRAP 完全廃止 + loading UI 全面導入 | Reject。(i) register 経路は SDK Query 未生成のため実測不能 (鶏と卵)、loading soft-lock リスク、`default` の effort_levels 供給源喪失、protocol / server / client / tests / docs の 7 レイヤ改修に発展 |
+| BOOTSTRAP 完全廃止 + loading UI 全面導入 | Reject。(i) register 経路は SDK Query 未生成のため実測不能 (鶏と卵)、loading soft-lock リスク、`default` の effort_levels 供給源喪失、protocol / server / client / tests / docs の 7 レイヤ改修に発展。**追補 (2026-07-15、ADR-0039)**: この「実測不能」は正確には「register-only 前提 (query を一切生成しない前提)」での不可能。runner 上で短命 SDK probe (query を streaming input mode で生成し、init 完了後 supportedModels() → close) を走らせれば register 経路の catalog リッチ化は可能。ADR-0039 でこの路線 (Option E) を採用し BOOTSTRAP 最小 floor は据え置く |
 | 現状維持 (BOOTSTRAP snapshot を手動更新) | Reject。モデル追加のたびの手動更新が現実的でない (Sonnet 5 直後の破綻が実例) |
 | `EngineCatalogEntry.models?` を optional 化 or readiness フラグ追加 | Reject。codex の「意味ある空」と Claude の「未ロード」を混同させ、fail-closed default を破壊する。`LaunchDialog.svelte:127` が既に空を許容しているため実質不要 |
 | codex 側も含めて実測一元化 | Reject。ADR-0035 F1 の確定判断を退行させる。`codex doctor --json` は entitled model を返さず技術的にも不可能 |

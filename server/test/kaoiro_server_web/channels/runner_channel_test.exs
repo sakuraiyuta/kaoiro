@@ -240,6 +240,30 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
         "reason" => "already_running"
       }
     end
+
+    test "catalog_result は host_id を付与して agents:lobby へ転送する (Option E, ADR-0039)" do
+      host_id = "lab-pc-catalog"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "catalog_result", %{
+          "engine" => "claude-code",
+          "request_id" => "req-cat-1",
+          "ok" => true,
+          "models_count" => 6
+        })
+
+      assert_reply ref, :ok
+
+      assert_broadcast "catalog_result", %{
+        "host_id" => ^host_id,
+        "engine" => "claude-code",
+        "request_id" => "req-cat-1",
+        "ok" => true,
+        "models_count" => 6
+      }
+    end
   end
 
   # phase-17 chunk β (17-4): session_reset_result relay through

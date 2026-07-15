@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { EngineCatalogResult } from "../src/lib/protocol";
 import {
   ATTACH_CHUNK_SIZE,
   buildChunkPayload,
@@ -1301,5 +1302,29 @@ describe("parseSessionResetFailed (ADR-0036 F7, phase-17 17-9)", () => {
     expect(
       parseSessionResetFailed({ request_id: "rs_1", agent_id: "a.1", mode: "new" }),
     ).toBeNull();
+  });
+});
+
+describe("EngineCatalogResult (Option E, ADR-0039)", () => {
+  // parseCatalogResult は module-private だが channel.on 経由でしか触れない。
+  // 型の shape 契約を pin する: 必須 field / optional field の presence を
+  // client 側でも保証。
+  it("EngineCatalogResult 型に必須 field / optional field が揃っている", () => {
+    const ok: EngineCatalogResult = {
+      host_id: "lab-1",
+      engine: "claude-code",
+      request_id: "req-1",
+      ok: true,
+      models_count: 6,
+    };
+    const fail: EngineCatalogResult = {
+      host_id: "lab-1",
+      engine: "claude-code",
+      request_id: "req-2",
+      ok: false,
+      reason: "auth_failed",
+    };
+    expect(ok.ok).toBe(true);
+    expect(fail.reason).toBe("auth_failed");
   });
 });

@@ -25,6 +25,34 @@ describe("parseRunnerConfig", () => {
     expect(parseRunnerConfig(withCaps).capabilities).toEqual(["claude"]);
   });
 
+  it("buildRegister は claudeCatalogOverride を claude-code entry に反映する (ADR-0039)", () => {
+    const cfg = parseRunnerConfig({
+      ...valid,
+      capabilities: ["claude-code"],
+    });
+    const override = [
+      {
+        value: "sonnet",
+        display_name: "Sonnet",
+        description: "",
+      },
+    ];
+    const reg = buildRegister(cfg, "unknown", override);
+    const claude = reg.engines?.find((e) => e.id === "claude-code");
+    expect(claude?.models).toEqual(override);
+  });
+
+  it("buildRegister は claudeCatalogOverride 未指定なら bootstrap を使う", () => {
+    const cfg = parseRunnerConfig({
+      ...valid,
+      capabilities: ["claude-code"],
+    });
+    const reg = buildRegister(cfg, "unknown");
+    const claude = reg.engines?.find((e) => e.id === "claude-code");
+    // ADR-0037 F1 で BOOTSTRAP は default 1 エントリのみ
+    expect(claude?.models.map((m) => m.value)).toEqual(["default"]);
+  });
+
   it.each([
     "free",
     "go",

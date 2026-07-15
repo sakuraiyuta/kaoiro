@@ -16,7 +16,11 @@
       "import": "./dist/catalog.js"
     },
     "./dist/cli.js": "./dist/cli.js",
+    "./dist/probe.js": "./dist/probe.js",
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "kaoiro-claude-probe": "./dist/probe.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

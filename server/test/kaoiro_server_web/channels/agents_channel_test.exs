@@ -427,6 +427,55 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "refresh_engine_catalog relay (Option E, ADR-0039)" do
+    test "operator の refresh_engine_catalog を runner topic へ relay + host_id 剥がす" do
+      host_id = "lab-pc-refreshcatalog"
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "refresh_engine_catalog", %{
+          "host_id" => host_id,
+          "engine" => "claude-code",
+          "request_id" => "req-cat-1",
+          "force" => true
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "refresh_engine_catalog", payload
+      refute Map.has_key?(payload, "host_id")
+      assert payload["engine"] == "claude-code"
+      assert payload["request_id"] == "req-cat-1"
+      assert payload["force"] == true
+    end
+
+    test "viewer の refresh_engine_catalog は forbidden" do
+      socket = join_as(:viewer)
+
+      ref =
+        push(socket, "refresh_engine_catalog", %{
+          "host_id" => "lab-pc-refreshcatalog-2",
+          "engine" => "claude-code",
+          "request_id" => "req-cat-2"
+        })
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "host_id 欠落は missing_host_id で拒否" do
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "refresh_engine_catalog", %{
+          "engine" => "claude-code",
+          "request_id" => "req-cat-3"
+        })
+
+      assert_reply ref, :error, %{reason: reason}
+      assert reason in ["missing_host_id", "invalid_host_id"]
+    end
+  end
+
   describe "refresh_models relay (ADR-0037 F6, phase-18-5)" do
     test "operator の refresh_models を wrapper topic へ relay する" do
       agent_id = "test.refreshmodels-1"
@@ -2170,7 +2219,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       _operator = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
-      for event <- ["runner_sessions", "spawn_result", "hosts"] do
+      for event <- ["runner_sessions", "spawn_result", "hosts", "catalog_result"] do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
         assert_push ^event, %{"host_id" => "h"}
       end
@@ -2180,7 +2229,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       _viewer = join_as(:viewer)
       assert_push "snapshot", %{"agents" => _}
 
-      for event <- ["runner_sessions", "spawn_result", "hosts"] do
+      for event <- ["runner_sessions", "spawn_result", "hosts", "catalog_result"] do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
         refute_push ^event, %{}
       end

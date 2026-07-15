@@ -91,6 +91,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
     "runner_sessions",
     "spawn_result",
     "hosts",
+    # Engine-catalog probe outcome (Option E, ADR-0039). Operator-only
+    # like the other runner→operator broadcasts on this topic; carries a
+    # runner-scoped host_id + engine + request_id so the client can toast
+    # the paired LaunchDialog refresh.
+    "catalog_result",
     # Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17 17-4).
     # previous_session_id / to_session_id are session identifiers that
     # ADR-0021 keeps operator-only; the intercept lets handle_out gate
@@ -207,6 +212,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
              "runner_sessions",
              "spawn_result",
              "hosts",
+             # Engine-catalog probe outcome (Option E, ADR-0039).
+             # Operator-only like the other runner→operator broadcasts.
+             "catalog_result",
              # Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17
              # 17-4). Carry previous_session_id / to_session_id, which
              # ADR-0021 keeps operator-only — same allow-list shape as
@@ -295,6 +303,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
+  end
+
+  # LaunchDialog engine-catalog refresh (Option E, ADR-0039). Operator-only;
+  # payload = %{"host_id" => ..., "engine" => ..., "request_id" => ...,
+  # "force" => bool?}. Kept engine-neutral at this layer — the runner
+  # decides which engines are live-probable and returns an
+  # `unsupported_engine` EngineCatalogResult for the rest. That keeps the
+  # server free of engine-specific logic (mirrors ADR-0023's host-agnostic
+  # relay stance for spawn/stop/restart).
+  def handle_in("refresh_engine_catalog", payload, socket) do
+    relay_to_runner_guarded(socket, payload, "refresh_engine_catalog")
   end
 
   # permission_mode switch for a running session (issue #58). Operator-only;

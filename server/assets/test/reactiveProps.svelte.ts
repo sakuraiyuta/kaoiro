@@ -11,7 +11,12 @@
 // toggle-re-fire gap that plain mount() with a static props object cannot
 // exercise.
 
-import type { Envelope, KaoiroConnection } from "../src/lib/protocol";
+import type {
+  Envelope,
+  HostInfo,
+  KaoiroConnection,
+  RunnerSessions,
+} from "../src/lib/protocol";
 
 export interface ReactiveAgentDetailProps {
   envelope: Envelope;
@@ -22,6 +27,24 @@ export interface ReactiveAgentDetailProps {
 export function makeReactiveAgentDetailProps(
   initial: ReactiveAgentDetailProps,
 ): ReactiveAgentDetailProps {
+  const state = $state(initial);
+  return state;
+}
+
+// Phase 20 (ADR-0039): reactive wrapper for LaunchDialog props so an
+// integration test can rotate `hosts[i].engines[].models` in-place and pin
+// that the auto-refresh $effect does NOT re-fire on catalog-only rotations
+// (see engineCatalogRefresh.integration.test.ts 藤 review 3-1).
+export interface ReactiveLaunchDialogProps {
+  hosts: HostInfo[];
+  connection: KaoiroConnection;
+  sessions: RunnerSessions | null;
+  onClose: () => void;
+}
+
+export function makeReactiveLaunchDialogProps(
+  initial: ReactiveLaunchDialogProps,
+): ReactiveLaunchDialogProps {
   const state = $state(initial);
   return state;
 }

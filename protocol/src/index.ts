@@ -601,6 +601,53 @@ export interface SpawnResult {
   reason?: SpawnFailReason;
 }
 
+/** operator -> server -> runner (Option E, ADR-0039): request a fresh probe
+ *  of the engine's launch catalog (LaunchDialog "モデル一覧を再取得" button
+ *  and cache-miss auto-refresh). host_id is derived from the topic; agent_id
+ *  is intentionally absent — the catalog is per (host, engine), not per agent.
+ *  The runner decides whether an actual probe runs by consulting its
+ *  memory-only last-known-good cache: `force=true` bypasses the TTL check
+ *  (button), `force=false`/omitted skips the probe if the cache entry is
+ *  still fresh. On completion the runner emits an `EngineCatalogResult`
+ *  addressed by `request_id`, and (on ok=true) re-registers the host so the
+ *  usual `hosts` broadcast repaints LaunchDialog. */
+export interface RefreshEngineCatalog {
+  version: "0";
+  /** Target engine. Currently only "claude-code" needs live probing —
+   *  Codex advertises statically (ADR-0035 F1). */
+  engine: EngineKind;
+  /** Correlation id for the paired EngineCatalogResult. Client-allocated
+   *  UUIDv4; the runner echoes it verbatim. */
+  request_id: string;
+  /** True to bypass the runner's TTL check (manual refresh button); false
+   *  or omitted honours the cache. */
+  force?: boolean;
+}
+
+/** Closed vocabulary of catalog-probe failure reasons (ADR-0039). */
+export type EngineCatalogFailReason =
+  | "auth_failed"
+  | "spawn_failed"
+  | "cli_error"
+  | "invalid_output"
+  | "timeout"
+  | "unsupported_engine";
+
+/** runner -> server -> operator (agents:lobby, operator-only): completion
+ *  report for a RefreshEngineCatalog request (ADR-0039). Failure carries a
+ *  closed-vocab `reason`. `models_count` on success is a size-only signal
+ *  for the operator UI toast; the actual catalog reaches the client via the
+ *  refreshed `hosts` broadcast triggered by the runner's re-register. */
+export interface EngineCatalogResult {
+  version: "0";
+  host_id: string;
+  engine: EngineKind;
+  request_id: string;
+  ok: boolean;
+  reason?: EngineCatalogFailReason;
+  models_count?: number;
+}
+
 /** server -> runner, operator-only: list the resume candidates under cwd for
  *  agent_id (ADR-0014 F2). `engine` scopes the listing to one engine's
  *  session store (ADR-0032 F8); omitted = "claude-code". */
