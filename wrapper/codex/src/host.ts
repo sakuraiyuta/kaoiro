@@ -205,6 +205,34 @@ export class CodexHost implements EngineAdapter {
     this.#effort = config.effort ?? null;
     this.#effortSource = options.effortSource ?? null;
     this.#resumeSnapshot = options.resumeSnapshot ?? null;
+    // Phase-23 dogfood 回帰対策 (ADR-0014 F1 追補 P1「launch pin vs display
+    // hint」): runner の 5-case pair rule Case 2 (source=default) は
+    // config.model / config.effort を unset するので、SDK には「委任」の
+    // semantics で pin されない。しかし wrapper の display / catalog resolve
+    // には前回セッションの value が必要 — resume_snapshot の (value,
+    // source="default") ペアを display hint として復元し、`this.#model` /
+    // `this.#effort` に反映する。config/option の explicit 値が既に set の
+    // 場合はそちらが優先 (fallback は absent 時のみ)。pair 整合 pin: value
+    // と source が両方揃った "default" ペアのみを対象にし、source-only や
+    // explicit source pair は runner apply の管轄外なのでここでは扱わない。
+    if (this.#resumeSnapshot !== null) {
+      if (
+        this.#model === null &&
+        this.#resumeSnapshot.model !== undefined &&
+        this.#resumeSnapshot.model_source === "default"
+      ) {
+        this.#model = this.#resumeSnapshot.model;
+        this.#modelSource = "default";
+      }
+      if (
+        this.#effort === null &&
+        this.#resumeSnapshot.effort !== undefined &&
+        this.#resumeSnapshot.effort_source === "default"
+      ) {
+        this.#effort = this.#resumeSnapshot.effort;
+        this.#effortSource = "default";
+      }
+    }
     this.#sandbox = config.sandbox ?? "workspace-write";
     this.#networkAccess = config.network_access ?? false;
     this.#catalog = resolveCodexCatalog(
@@ -452,8 +480,16 @@ export class CodexHost implements EngineAdapter {
     ) {
       options.model = model;
     }
+    // Phase-23 dogfood 回帰対策: model 側の既存 gate (L446-454) と対称に、
+    // effortSource="default" は SDK 委任継続で non-pin。display hint 復元で
+    // this.#effort が set されていても、次 turn の SDK には渡さない。
+    // operator setEffort は #effortSource="config" に上書きするため gate 通過。
     const effort = effortPending ?? this.#effort;
-    if (!effortReset && effort !== null) {
+    if (
+      !effortReset &&
+      effort !== null &&
+      (effortPending !== null || this.#effortSource !== "default")
+    ) {
       options.modelReasoningEffort = effort as NonNullable<
         ThreadOptions["modelReasoningEffort"]
       >;

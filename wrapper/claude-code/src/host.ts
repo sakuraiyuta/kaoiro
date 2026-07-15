@@ -401,6 +401,49 @@ export class AgentHost implements EngineAdapter {
       this.#model = options.queryOptions.model;
       this.#persistedModel = options.queryOptions.model;
     }
+    // Phase-23 dogfood 回帰対策 (ADR-0014 F1 追補 P1「launch pin vs display
+    // hint」): runner の 5-case pair rule Case 2 (source=default) は
+    // config.model / config.effort を unset するので queryOptions にも
+    // 届かない。しかし wrapper の display / catalog resolve には前回セッションの
+    // value が必要 — resume_snapshot の (value, source="default") ペアを
+    // display hint として復元し、`this.#model` / `this.#effort` に反映する。
+    // explicit queryOptions/options が既に set の場合はそちらが優先。
+    // Claude effort は SDK の effort enum との drift 対策として
+    // CLAUDE_EFFORT_LEVELS で再 validation し、外れなら value / source
+    // ともに drop + stderr warn (pair drop invariant を wrapper 境界でも維持)。
+    if (this.#resumeSnapshot !== null) {
+      if (
+        this.#model === null &&
+        this.#resumeSnapshot.model !== undefined &&
+        this.#resumeSnapshot.model_source === "default"
+      ) {
+        this.#model = this.#resumeSnapshot.model;
+        // #persistedModel は明示 spawn/env/Case3 alias の SDK-measured catalog
+        // 検証用 (`#validatePersistModelAgainstCatalog` が persist_alias_unknown
+        // rollback を出す)。SDK default の historical hint はその validation
+        // 対象外なので null 維持 — hint が現 catalog に無いだけで
+        // switch_error を出す穴を塞ぐ (藤 3 次 review R4)。
+        this.#modelSource = "default";
+      }
+      if (
+        this.#effort === null &&
+        this.#resumeSnapshot.effort !== undefined &&
+        this.#resumeSnapshot.effort_source === "default"
+      ) {
+        const hintEffort = this.#resumeSnapshot.effort;
+        if ((CLAUDE_EFFORT_LEVELS as readonly string[]).includes(hintEffort)) {
+          this.#effort = hintEffort;
+          this.#effortLastGood = hintEffort;
+          this.#effortLastGoodSource = "default";
+          this.#effortSource = "default";
+        } else {
+          process.stderr.write(
+            `resume: unsupported claude-code effort hint ` +
+              `'${hintEffort}', dropped (value and source both)\n`,
+          );
+        }
+      }
+    }
     if (config.permission_mode !== undefined) {
       this.#permissionMode = config.permission_mode;
     }
@@ -1038,8 +1081,20 @@ export class AgentHost implements EngineAdapter {
       // PRE-run model / effort switches override the constructor snapshot;
       // queryOptions alone would retain the spawn-time values and silently
       // lose a fresh-idle dashboard choice.
-      ...(this.#model !== null ? { model: this.#model } : {}),
-      ...(this.#effort !== null ? { effort: this.#effort as EffortLevel } : {}),
+      //
+      // Phase-23 dogfood 回帰対策 (ADR-0014 F1 追補 P1「launch pin vs display
+      // hint」): source="default" は SDK 委任継続で non-pin。resume_snapshot
+      // 経由の hint 復元でこのフィールドが set されていても、初回 Query に
+      // は渡さず SDK が自ら default を選ぶ (これが Case 2 の semantics)。
+      // operator setModel / setEffort は #modelSource / #effortSource を
+      // "config" に上書きするため gate 通過し、explicit choice は従来通り
+      // Options に載る。
+      ...(this.#model !== null && this.#modelSource !== "default"
+        ? { model: this.#model }
+        : {}),
+      ...(this.#effort !== null && this.#effortSource !== "default"
+        ? { effort: this.#effort as EffortLevel }
+        : {}),
       hooks: {
         ...userHooks,
         CwdChanged: [

@@ -1264,4 +1264,153 @@ describe("CodexHost", () => {
       expect(states.some((e) => e.ext.effort_reset === true)).toBe(false);
     });
   });
+
+  // Phase-23 dogfood 回帰対策 (ADR-0014 F1 追補 P1「launch pin vs display
+  // hint」). Case 2 (source=default) は runner apply が config.model /
+  // config.effort を unset するが、config.resume_snapshot には sanitize 通過
+  // した (value, source="default") ペアが保持されている。wrapper host は
+  // これを display / catalog resolve の hint として consume することで、
+  // resume 直後の「model 確認待ち」「effort 復元されない」「effort switch
+  // ボタン非表示」を解消する。SDK には委任継続のため threadOptions には
+  // pin しない (source="default" gate)。
+  describe("resume Case 2 display hint fallback (P1 dogfood 回帰対策)", () => {
+    it("config.model absent + resume_snapshot default pair → this.#model 復元、supports_effort_switch=true", async () => {
+      const states: Envelope[] = [];
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "hint-restore" }, usageEvent()],
+      ]);
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          codex_auth_mode: "chatgpt",
+          codex_chatgpt_plan: "plus",
+          // config.model / config.effort は Case 2 で unset された想定
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          // options.modelSource / effortSource も undefined (resolveCodexSources
+          // が config.model absent で undefined を返す)
+          resumeSnapshot: {
+            model: "gpt-5.6-terra",
+            model_source: "default",
+            effort: "high",
+            effort_source: "default",
+          },
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      // whoami / effective は hint 由来で model/effort/source を stamp
+      expect(host.statusSnapshot()).toMatchObject({
+        model: "gpt-5.6-terra",
+        model_source: "default",
+        effort: "high",
+        effort_source: "default",
+      });
+      // catalog resolve が model="gpt-5.6-terra" で動き effort_levels から
+      // supports_effort_switch=true を stamp できる
+      const initial = host.statusExtSnapshot();
+      const caps = initial.session_capabilities as Record<string, unknown>;
+      expect(caps.supports_effort_switch).toBe(true);
+      // initial idle 時点: hint 復元と effective が一致するため drift 空
+      // (turn 実行後は既存 accountDefault semantics で #model が SDK 側
+      // 実 default に再解決され drift 出る可能性がある — その 2 段階挙動は
+      // Codex 既存契約であり、本 hint 復元は「initial idle 表示」を担う)
+      const initialDrift = initial.resume_drift as { field: string }[] | undefined;
+      expect(
+        initialDrift?.some(
+          (e) =>
+            e.field === "model" ||
+            e.field === "model_source" ||
+            e.field === "effort" ||
+            e.field === "effort_source",
+        ),
+      ).toBeFalsy();
+
+      await runOneTurn(host, "hi");
+      // SDK 委任継続: source="default" は threadOptions.model /
+      // modelReasoningEffort に pin されない
+      expect(calls.options[0]?.model).toBeUndefined();
+      expect(calls.options[0]?.modelReasoningEffort).toBeUndefined();
+    });
+
+    it("Case 3 explicit source (config.model set) は hint fallback より優先、SDK に pin される", async () => {
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "explicit-wins" }, usageEvent()],
+      ]);
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          codex_auth_mode: "chatgpt",
+          codex_chatgpt_plan: "plus",
+          model: "gpt-5.6-sol", // Case 3 で config へ載っている
+          effort: "medium",
+        },
+        {
+          onState: () => {},
+          appendSystemPrompt: "p",
+          modelSource: "launch",
+          effortSource: "launch",
+          // resume_snapshot は別の hint を持っていても config が優先
+          resumeSnapshot: {
+            model: "gpt-5.6-terra",
+            model_source: "default",
+            effort: "high",
+            effort_source: "default",
+          },
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      expect(host.statusSnapshot()).toMatchObject({
+        model: "gpt-5.6-sol",
+        model_source: "launch",
+        effort: "medium",
+        effort_source: "launch",
+      });
+      await runOneTurn(host, "hi");
+      // explicit source は SDK に pin
+      expect(calls.options[0]?.model).toBe("gpt-5.6-sol");
+      expect(calls.options[0]?.modelReasoningEffort).toBe("medium");
+    });
+
+    it("hint 復元後 catalog effort_levels 不整合なら既存 catalog reset が engage", async () => {
+      const states: Envelope[] = [];
+      const { client, calls } = makeClient([
+        [
+          { type: "thread.started", thread_id: "hint-catalog-reset" },
+          usageEvent(),
+        ],
+      ]);
+      // luna は "ultra" を effort_levels に含まないので、hint 復元後の
+      // catalog 互換 reset が engage する想定 (R1 fix の resume 経路限定
+      // guard も pass する — hint 復元自体が resume 経路)。
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          codex_auth_mode: "chatgpt",
+          codex_chatgpt_plan: "plus",
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          resumeSnapshot: {
+            model: "gpt-5.6-luna",
+            model_source: "default",
+            effort: "ultra",
+            effort_source: "default",
+          },
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      // constructor 直後 effort_reset one-shot が立つ
+      expect(host.statusExtSnapshot().effort_reset).toBe(true);
+      await runOneTurn(host, "hi");
+      expect(states.some((e) => e.ext.effort_reset === true)).toBe(true);
+      // effort は non-pin (source="default" gate)
+      expect(calls.options[0]?.modelReasoningEffort).toBeUndefined();
+    });
+  });
 });

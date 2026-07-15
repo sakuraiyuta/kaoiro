@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  EffortLevel,
   ModelInfo,
   Options,
   Query,
@@ -3013,5 +3014,221 @@ describe("resume model/effort restoration (P1 pair-aware pin)", () => {
       effort: "high",
       effort_source: "launch",
     });
+  });
+});
+
+// Phase-23 dogfood 回帰対策 (ADR-0014 F1 追補 P1「launch pin vs display hint」).
+// runner の 5-case pair rule Case 2 (source=default) は config.model /
+// config.effort を unset するが、config.resume_snapshot には sanitize 通過
+// した (value, source="default") ペアが保持されている。AgentHost は
+// constructor でこの pair を display hint として consume し、SDK Query の
+// options には source="default" gate で pin しない (SDK 委任継続)。
+describe("resume Case 2 display hint fallback (P1 dogfood 回帰対策)", () => {
+  it("queryOptions absent + resume_snapshot default pair → this.#model 復元、Options に非 pin", async () => {
+    let captured!: Options;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      captured = args.options;
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(
+      { ...config },
+      {
+        onState: () => {},
+        queryFn,
+        // queryOptions.model / .effort は Case 2 で unset された想定
+        // modelSource / effortSource も CLI resolver から undefined を受ける
+        resumeSnapshot: {
+          model: "opus[1m]",
+          model_source: "default",
+          effort: "high",
+          effort_source: "default",
+        },
+        now: () => "T",
+      },
+    );
+    // whoami は hint 復元で model / effort / source を stamp
+    expect(host.statusSnapshot()).toMatchObject({
+      model: "opus[1m]",
+      model_source: "default",
+      effort: "high",
+      effort_source: "default",
+    });
+    await host.run();
+    // source="default" は SDK Options に pin されない (SDK 委任継続)
+    expect(captured.model).toBeUndefined();
+    expect(captured.effort).toBeUndefined();
+  });
+
+  it("Case 3 explicit source (queryOptions.model set) は hint fallback より優先、SDK Options に pin される", async () => {
+    let captured!: Options;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      captured = args.options;
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(
+      { ...config },
+      {
+        onState: () => {},
+        queryFn,
+        queryOptions: { model: "sonnet", effort: "medium" },
+        modelSource: "launch",
+        effortSource: "launch",
+        // resume_snapshot は別の hint を持っていても explicit が優先
+        resumeSnapshot: {
+          model: "opus[1m]",
+          model_source: "default",
+          effort: "high",
+          effort_source: "default",
+        },
+        now: () => "T",
+      },
+    );
+    expect(host.statusSnapshot()).toMatchObject({
+      model: "sonnet",
+      model_source: "launch",
+      effort: "medium",
+      effort_source: "launch",
+    });
+    await host.run();
+    expect(captured.model).toBe("sonnet");
+    expect(captured.effort).toBe("medium");
+  });
+
+  it("resume_snapshot.effort が CLAUDE_EFFORT_LEVELS 外なら pair drop + warn", async () => {
+    const stderrWrites: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const host = new AgentHost(
+        { ...config },
+        {
+          onState: () => {},
+          resumeSnapshot: {
+            model: "opus[1m]",
+            model_source: "default",
+            effort: "godmode", // catalog 外
+            effort_source: "default",
+          },
+        },
+      );
+      // model hint は復元、effort はペア drop
+      expect(host.statusSnapshot()).toMatchObject({
+        model: "opus[1m]",
+        model_source: "default",
+      });
+      expect(host.statusSnapshot()).not.toHaveProperty("effort");
+      expect(host.statusSnapshot()).not.toHaveProperty("effort_source");
+      expect(
+        stderrWrites.some((s) =>
+          s.includes("unsupported claude-code effort hint"),
+        ),
+      ).toBe(true);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  // 藤 3 次 review R6 + R4 統合: bootstrap default fallback ではなく、
+  // 現実的な runner-transported catalog (default alias 無し、hint model
+  // だけ含む) を渡した状態で hint 復元後の button 契約と persist_alias
+  // 非発火を同時 pin する。dogfood 実機で観測された「両 engine effort
+  // 切替ボタン非表示」の直接原因は、live catalog に default alias が
+  // 含まれず active model = null かつ fallback default も見つからず
+  // effortLevels=[] になるケース。bootstrap 依存 test では再現できない。
+  it("現実的 catalog (default 無し) + default hint 復元 → supports_effort_switch=true (R6) & persist_alias_unknown 非発火 (R4)", async () => {
+    const envs: Envelope[] = [];
+    const supportedModels = vi.fn(async () => [
+      // SDK 側 measured catalog も default alias 無し。opus[1m] のみ。
+      {
+        value: "opus[1m]",
+        display_name: "Opus 1M",
+        effort_levels: ["low", "medium", "high", "xhigh", "max"] as EffortLevel[],
+      },
+    ]);
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "opus[1m]" });
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        supportedModels,
+      });
+    });
+    const host = new AgentHost(
+      {
+        ...config,
+        // runner-transported live catalog: default alias 無し、hint model
+        // だけ含む realistic な shape (typical: ADR-0039 F9 追補が cache
+        // する Claude 実 model list)。
+        claude_engine_catalog: [
+          {
+            value: "opus[1m]",
+            display_name: "Opus 1M",
+            effort_levels: ["low", "medium", "high", "xhigh", "max"],
+          },
+        ],
+      },
+      {
+        onState: (e) => envs.push(e),
+        queryFn,
+        // queryOptions.model / effort は Case 2 で unset された想定 —
+        // 実 dogfood のシナリオ: config.model / config.effort どちらも
+        // 未設定、resolve*Sources は modelSource/effortSource=undefined を返す。
+        resumeSnapshot: {
+          model: "opus[1m]",
+          model_source: "default",
+          effort: "high",
+          effort_source: "default",
+        },
+        now: () => "T",
+      },
+    );
+    // hint 復元 (constructor 直後)
+    expect(host.statusSnapshot()).toMatchObject({
+      model: "opus[1m]",
+      model_source: "default",
+      effort: "high",
+      effort_source: "default",
+    });
+    // R6: statusExt.models に active model が存在、active entry の
+    // effort_levels 非空、UI 側 gate が通る supports_effort_switch=true。
+    const initial = host.statusExtSnapshot();
+    const models = initial.models as Array<{
+      value: string;
+      effort_levels?: string[];
+    }>;
+    const active = models.find((m) => m.value === "opus[1m]");
+    expect(active).toBeDefined();
+    expect(active?.effort_levels?.length ?? 0).toBeGreaterThan(0);
+    const caps = initial.session_capabilities as Record<string, unknown>;
+    expect(caps.supports_effort_switch).toBe(true);
+    // R4: SDK init を trigger → #refreshSupportedModels → 内部で
+    // #validatePersistModelAgainstCatalog が回る。default hint は
+    // #persistedModel に載っていないため validation は早期 return し、
+    // switch_error(persist_alias_unknown) は発火しない。
+    const done = host.run();
+    // init の yield と supportedModels の resolve を待つ。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const persistUnknownErrors = envs
+      .map((e) => e.ext.switch_error)
+      .filter(
+        (se) =>
+          se !== undefined &&
+          (se as { reason?: string }).reason === "persist_alias_unknown",
+      );
+    expect(persistUnknownErrors).toEqual([]);
+    // supportedModels が呼ばれたことも確認 (refresh 経路が実行された)。
+    expect(supportedModels).toHaveBeenCalled();
+    host.close();
+    await done;
   });
 });
