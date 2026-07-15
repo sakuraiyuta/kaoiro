@@ -1,7 +1,7 @@
 ---
 title: Phase 22 — resume 時の privilege 三軸再適用 (P0)
 description: SessionPointers.snapshot を SSOT に格上げし、Codex sandbox/network_access と Claude permission_mode を restore/switch/reset 経路で復元する。runner-central pure helper が engine 関連 field を authoritative に上書きし、fresh spawn/crash-restart/rollback は no-apply を維持。
-status: implemented-pending-dogfood
+status: implemented
 phase: 22
 depends_on: [15, 17, 21]
 last_updated: 2026-07-16
@@ -154,11 +154,10 @@ runner-central pure helper が `ParsedSpawn` を snapshot 由来値に上書き�
 - [x] typecheck (protocol / runner / wrapper 4 pkg workspace) clean、
       `mix format --check-formatted` 対象 file clean、
       svelte-check 0 errors 0 warnings、`git diff --check` clean。
-- [ ] end-to-end 手動検証 (dogfood): restart → Codex agent が
+- [x] end-to-end 手動検証 (dogfood): restart → Codex agent が
       danger-full-access + network=true で復元、Claude agent が
       bypassPermissions で復元、`ext.effective` と `ext.resume_snapshot`
-      が一致し `ext.resume_drift` が空。**藤 review 合格後、マスターの
-      別指示で実施**。
+      が一致し `ext.resume_drift` が空。マスターによる実機確認で合格。
 
 ## Tasks
 
@@ -178,7 +177,7 @@ runner-central pure helper が `ParsedSpawn` を snapshot 由来値に上書き�
 | 22-12 | docs: ADR-0014 F1 追補 + ADR-0033/0036 参照 + protocol.md | ✅ | ADR 集約 |
 | 22-R1 | server: SessionPointers sanitizer を canonical string key へ normalize | ✅ | 藤 1 次 review must-fix。fixed 順走査 + string 優先 + atom fallback、priority test 4 件追加、既存 atom-key 期待を canonical string に更新 |
 | 22-R2 | runner: switch/reset の whole-malformed snapshot 対応 | ✅ | 藤 1 次 review must-fix。switch は `#fail(error)` + F4 lock 手前 validate、reset は safe-default relaunch + stderr warn、旧 privileged 値継承なし。integration test 4 件追加 |
-| 22-13 | dogfood 手動検証 | ⏳ | 藤 review 合格後、マスター指示で |
+| 22-13 | dogfood 手動検証 | ✅ | マスターによる実機確認で合格 |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
 
