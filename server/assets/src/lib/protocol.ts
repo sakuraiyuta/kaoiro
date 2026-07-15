@@ -203,6 +203,17 @@ export interface SessionCapabilities {
    *  advertisement (the loose parser drops the modes so the availability
    *  judge falls into "unsupported"). */
   session_reset_modes?: SessionResetMode[];
+  /** Whether the active session provides an authoritative context-window
+   *  usage snapshot in `ext.context` (ADR-0040, phase-21). Tri-state UI
+   *  contract (do NOT collapse absent into false):
+   *   - **absent (undefined)** — rolling upgrade; the wrapper predates this
+   *     capability. Callers hide the ctx row entirely.
+   *   - **explicit `false`** — the adapter cannot produce a reliable
+   *     snapshot (currently Codex). UI shows "未対応".
+   *   - **explicit `true`** — the adapter stamps `ext.context` when
+   *     available. UI shows the meter when `ext.context` lands, else a
+   *     "取得中" placeholder. */
+  supports_context_usage?: boolean;
 }
 
 /** Reads ext.session_capabilities off an envelope (ADR-0034 F1). Returns
@@ -231,6 +242,9 @@ export function sessionCapabilitiesFrom(
   }
   if (typeof r.supports_effort_switch === "boolean") {
     out.supports_effort_switch = r.supports_effort_switch;
+  }
+  if (typeof r.supports_context_usage === "boolean") {
+    out.supports_context_usage = r.supports_context_usage;
   }
   if (Array.isArray(r.user_input_modes)) {
     const modes: string[] = [];

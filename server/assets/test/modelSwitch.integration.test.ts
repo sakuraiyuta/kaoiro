@@ -211,6 +211,9 @@ describe("phase-16 dashboard model switch integration", () => {
   });
 
   it("fresh idle keeps model/effort/ctx rows stable and switchable (#110)", async () => {
+    // ADR-0040 phase-21: supports_context_usage を stamp した Claude 相当
+    // envelope で ctx 行が capability-driven に「取得中」placeholder を出す
+    // ことを確認。旧固定文言「初回応答後に取得」はここで撤回される。
     const { target } = await renderDetail({
       engine: "claude-code",
       models: claudeBootstrap,
@@ -219,6 +222,7 @@ describe("phase-16 dashboard model switch integration", () => {
         supports_user_input_dialog: true,
         supports_model_switch: true,
         supports_effort_switch: true,
+        supports_context_usage: true,
       },
     });
     expect(target.textContent).toContain("model");
@@ -226,7 +230,8 @@ describe("phase-16 dashboard model switch integration", () => {
     expect(target.textContent).toContain("effort");
     expect(target.textContent).toContain("既定");
     expect(target.textContent).toContain("ctx");
-    expect(target.textContent).toContain("初回応答後に取得");
+    expect(target.textContent).toContain("取得中");
+    expect(target.textContent).not.toContain("初回応答後に取得");
     expect(target.querySelector('[title="モデルを切替"]')).not.toBeNull();
     expect(target.querySelector('[title="effort を切替"]')).not.toBeNull();
   });

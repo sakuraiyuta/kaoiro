@@ -778,6 +778,62 @@ describe("sessionCapabilitiesFrom (ADR-0034 F1/F2)", () => {
     });
   });
 
+  it("supports_context_usage は tri-state を保存し malformed は drop (ADR-0040)", () => {
+    // absent は field を出力しない — svelte 側で `=== undefined` が hide 判定。
+    // explicit true / false は保存されて 3-state 分岐に流れる。
+    const absent: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(absent)?.supports_context_usage).toBeUndefined();
+
+    const supported: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_context_usage: true,
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(supported)?.supports_context_usage).toBe(true);
+
+    const unsupported: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: false,
+          supports_user_input_dialog: true,
+          supports_context_usage: false,
+        },
+      },
+    };
+    expect(sessionCapabilitiesFrom(unsupported)?.supports_context_usage).toBe(
+      false,
+    );
+
+    // malformed (non-boolean) は field を drop、fail-closed で absent 相当。
+    const malformed: Envelope = {
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_context_usage: "true",
+        },
+      },
+    };
+    expect(
+      sessionCapabilitiesFrom(malformed)?.supports_context_usage,
+    ).toBeUndefined();
+  });
+
   it("model / effort switch capability は boolean のみ保持し未指定は fail-closed", () => {
     const advertised: Envelope = {
       ...base,

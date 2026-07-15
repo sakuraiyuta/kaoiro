@@ -355,6 +355,16 @@
   // how much room is left. Both come from the same SDK usage object.
   const ctxUsed = $derived(numOrNull(ccContext?.used_tokens));
   const ctxMax = $derived(numOrNull(ccContext?.max_tokens));
+  // Capability gating for the ctx row (ADR-0040 phase-21). Tri-state, in
+  // strict fail-closed order — a null/malformed caps envelope, or a wrapper
+  // that predates supports_context_usage, MUST NOT render "未対応" (that
+  // would misinform operators during rolling upgrade). engine 名分岐禁止 —
+  // capability だけを見る (ADR-0034 F3):
+  //   undefined  → capability を知らない旧 wrapper: ctx 行を非表示
+  //   false      → adapter が非対応を宣言: 「未対応」表示
+  //   true       → adapter は stamp する意思がある: value 到着で meter、
+  //                未到着なら「取得中」placeholder
+
   const ccRateRows = $derived(buildRateRows(envelope.ext?.rate_limits));
   // Selectable models + per-model effort levels for the switch dialogs (#54).
   // Operator-only: ext is stripped for viewers (#46), so these stay empty and
@@ -1692,12 +1702,14 @@
               <dd>{ccFastMode}</dd>
             </div>
           {/if}
-          {#if connection || ctxPct !== null}
+          {#if sessionCaps?.supports_context_usage === true}
+            <!-- capability=true: adapter が stamp する意思あり。値到着で
+                 meter、未到着で「取得中」placeholder (ADR-0040 phase-21) -->
             <div class="cc-row">
               <dt>ctx</dt>
               <dd>
                 {#if ctxPct === null}
-                  <span class="cc-pending">初回応答後に取得</span>
+                  <span class="cc-pending">取得中</span>
                 {:else}
                   <div class="meter">
                     <div class="meter-fill" style:width="{ctxPct}%"></div>
@@ -1712,7 +1724,21 @@
                 {/if}
               </dd>
             </div>
+          {:else if sessionCaps?.supports_context_usage === false}
+            <!-- capability=false: adapter が非対応を宣言 (現状 Codex)。
+                 UI は engine 名を見ずこの capability だけで判定
+                 (ADR-0034 F3、ADR-0040) -->
+            <div class="cc-row">
+              <dt>ctx</dt>
+              <dd>
+                <span class="cc-pending">未対応</span>
+              </dd>
+            </div>
           {/if}
+          <!-- undefined (absent field/caps): 旧 wrapper の rolling upgrade。
+               ctx 行そのものを非表示にする — absent を「未対応」扱いにすると
+               capability を知らない旧 wrapper で誤誘導になる (M-B) -->
+
           {#each ccRateRows as r (r.key)}
             <div class="cc-row">
               <dt>{r.label}</dt>
