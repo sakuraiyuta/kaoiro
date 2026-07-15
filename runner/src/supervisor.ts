@@ -22,6 +22,10 @@ import type {
 import type { CodexAuthMode } from "./codex-auth.js";
 import type { ChatGptPlan } from "./config.js";
 import {
+  applyResumeSnapshot,
+  validateResolvedSnapshot,
+} from "./resume_snapshot.js";
+import {
   listSessions as defaultListSessions,
   sessionExists as defaultSessionExists,
 } from "./sessions.js";
@@ -248,12 +252,16 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
     if (typeof payload.network_access !== "boolean") return null;
     parsed.networkAccess = payload.network_access;
   }
-  // Resume snapshot (ADR-0014 F1 追補, phase-15 D8): loose shape check —
-  // an object at the top level is enough. Fields are optional and their
-  // value types (strings/booleans) get validated where they are read.
+  // Resume snapshot (ADR-0014 F1 追補, resume-privilege-restoration 藤 D2):
+  // read-side sanitize — closed-enum / boolean / non-empty-string guards
+  // on each of the known 7 fields, unknown / malformed dropped with a
+  // stderr warn. A present-but-non-object shape is fail-loud (parseSpawn
+  // returns null) so a compromised sender cannot slip a garbage payload
+  // that later apply-time code would have to guard against.
   if (payload.resume_snapshot !== undefined) {
-    if (!isObject(payload.resume_snapshot)) return null;
-    parsed.resumeSnapshot = payload.resume_snapshot as ResolvedSnapshotExt;
+    const sanitized = validateResolvedSnapshot(payload.resume_snapshot);
+    if (sanitized === null) return null;
+    parsed.resumeSnapshot = sanitized;
   }
   return parsed;
 }
@@ -319,6 +327,11 @@ export function resolveWrapperConfig(
     config.network_access = parsed.networkAccess;
   }
   if (parsed.resumeSnapshot !== undefined) {
+    // Invariant: `parsed.resumeSnapshot` is already sanitized by the caller
+    // (parseSpawn / handleSwitchSession / handleResetSession all run
+    // `validateResolvedSnapshot` before writing this field). Passing it
+    // through verbatim keeps the wrapper's `config.resume_snapshot` in
+    // sync with what the drift computation and P0 apply used.
     config.resume_snapshot = parsed.resumeSnapshot;
   }
   return config;
@@ -485,9 +498,23 @@ export class Supervisor {
     }
     const resume = parsed.resumeSessionId;
     if (resume === undefined) {
+      // Fresh spawn: never re-apply the snapshot (藤 D1). A resume_snapshot
+      // that happens to ride a fresh payload is still relayed to the
+      // wrapper as `config.resume_snapshot` for drift display only, but
+      // the engine-relevant privilege axes stay whatever the spawn payload
+      // explicitly set (top-level sandbox / network_access / permission_mode).
       this.#launchSpawn(agentId, parsed);
       return;
     }
+
+    // Resume operation: the snapshot is the SSOT for privilege axes, so
+    // overwrite parsed's engine-relevant fields from it before launch
+    // (ADR-0014 F1 追補, 藤 D1/D2). Absent / invalid → safe engine default.
+    const resumedParsed = applyResumeSnapshot(
+      parsed,
+      parsed.resumeSnapshot,
+      parsed.engine,
+    );
 
     // T3: Codex scans its date tree asynchronously (#100); Claude and test
     // injections may still answer synchronously. Preserve that fast path so
@@ -495,7 +522,7 @@ export class Supervisor {
     // loop instead of pausing status relay for every agent.
     const exists = this.#sessionExists(parsed.cwd, resume, parsed.engine);
     if (!isPromise(exists)) {
-      this.#completeResumeSpawn(agentId, parsed, exists);
+      this.#completeResumeSpawn(agentId, resumedParsed, exists);
       return;
     }
 
@@ -505,7 +532,7 @@ export class Supervisor {
       .then((found) => {
         if (this.#pendingSpawns.get(agentId) !== token) return;
         this.#pendingSpawns.delete(agentId);
-        this.#completeResumeSpawn(agentId, parsed, found);
+        this.#completeResumeSpawn(agentId, resumedParsed, found);
       })
       .catch((error: unknown) => {
         if (this.#pendingSpawns.get(agentId) !== token) return;
@@ -628,6 +655,31 @@ export class Supervisor {
       this.#fail(agentId, "session_not_found");
       return;
     }
+    // Resume snapshot (ADR-0014 F1 追補「resume 時の privilege 三軸再適用」,
+    // phase-15 D8 + phase-22 藤 D1/D2/R2):
+    // the server attaches the swapped-in session's stored snapshot on
+    // switch_session; validate + carry it so the relaunched wrapper stamps
+    // ext.resume_snapshot / ext.resume_drift. Absent on the payload =
+    // keep the previous parsed value (post-review Finding 2). A present-
+    // but-malformed shape (validate returns null) is fail-loud (藤 R2
+    // must-fix): retaining `entry.parsed.resumeSnapshot` here would let
+    // an attacker-crafted or buggy payload carry the OLD privileged
+    // sandbox / permission_mode into the relaunched wrapper. Validate
+    // BEFORE the F4 lock mutation below so a reject leaves activeSessions
+    // untouched.
+    let nextSnapshot: ResolvedSnapshotExt | undefined =
+      entry.parsed.resumeSnapshot;
+    if (isObject(payload) && payload.resume_snapshot !== undefined) {
+      const sanitized = validateResolvedSnapshot(payload.resume_snapshot);
+      if (sanitized === null) {
+        process.stderr.write(
+          `runner: switch_session with malformed resume_snapshot for ${agentId}\n`,
+        );
+        this.#fail(agentId, "error");
+        return;
+      }
+      nextSnapshot = sanitized;
+    }
     const old = entry.parsed.resumeSessionId;
     // F4: another agent already resuming the target session blocks the swap.
     // Self (same session already bound) is a no-op we could early-return, but
@@ -640,18 +692,19 @@ export class Supervisor {
     }
     if (old !== undefined && old !== resume) this.#activeSessions.delete(old);
     this.#activeSessions.add(resume);
-    // Resume snapshot (ADR-0014 F1 追補, phase-15 D8): the server may attach
-    // the swapped-in session's stored snapshot on switch_session; carry it
-    // through so the relaunched wrapper stamps ext.resume_snapshot /
-    // ext.resume_drift instead of retaining the original spawn-time value
-    // (post-review Finding 2). Absent = keep the previous parsed value —
-    // the wrapper still had a snapshot for the original session.
-    const nextSnapshot: ResolvedSnapshotExt | undefined =
-      isObject(payload) && isObject(payload.resume_snapshot)
-        ? (payload.resume_snapshot as ResolvedSnapshotExt)
-        : entry.parsed.resumeSnapshot;
+    // Apply the snapshot's engine-relevant privilege axes to entry.parsed
+    // BEFORE the relaunch (D1/D2): snapshot is SSOT on a resume operation,
+    // so the fresh wrapper enforces the last-effective sandbox / network /
+    // permission_mode. Absent snapshot on this payload AND on entry
+    // (never seen a snapshot at all) = no-op, and the previous entry
+    // values persist.
+    const applied = applyResumeSnapshot(
+      entry.parsed,
+      nextSnapshot,
+      entry.parsed.engine,
+    );
     entry.parsed = {
-      ...entry.parsed,
+      ...applied,
       resumeSessionId: resume,
       ...(nextSnapshot !== undefined ? { resumeSnapshot: nextSnapshot } : {}),
     };
@@ -714,11 +767,54 @@ export class Supervisor {
       ...(previousSessionId !== undefined ? { previousSessionId } : {}),
       ...(oldResumeSessionId !== undefined ? { oldResumeSessionId } : {}),
     };
+    // ADR-0014 F1 追補 (phase-22 藤 D1/D2/R2): reset_session carries the
+    // current SessionPointers snapshot from the server. Validate + apply
+    // it to entry.parsed BEFORE the fresh relaunch so ADR-0036 F2's
+    // "最後に実効だった設定で開始" contract holds for the privilege axes
+    // (Codex sandbox / network_access, Claude permission_mode).
+    //
+    // Absent on the payload = keep entry.parsed as-is (previous snapshot-
+    // applied values from initial restore / switch survive).
+    //
+    // Present-but-malformed shape (validate returns null): **safe-default
+    // relaunch**. The existing SessionResetErrorReason vocabulary has no
+    // fitting reason for a schema-level malformed payload, so a hard-fail
+    // via sendResetResult would misuse `spawn_failed` (spawn was never
+    // attempted); a silent drop would let the server timeout without
+    // detaching. Instead we treat the malformed payload as if snapshot
+    // were `{}` — the empty snapshot drives applyResumeSnapshot into
+    // engine defaults (Codex: workspace-write / false, Claude: default),
+    // never carrying the OLD privileged value from `entry.parsed`
+    // through the relaunch (藤 R2 must-fix: 旧 danger 保持禁止). stderr
+    // warn so operator sees the incident even when the runtime path
+    // continues.
+    let nextSnapshot: ResolvedSnapshotExt | undefined =
+      entry.parsed.resumeSnapshot;
+    if (payload.resume_snapshot !== undefined) {
+      const sanitized = validateResolvedSnapshot(payload.resume_snapshot);
+      if (sanitized === null) {
+        process.stderr.write(
+          `runner: reset_session with malformed resume_snapshot for ` +
+            `${agentId}; safe-default relaunch (empty snapshot → engine defaults)\n`,
+        );
+        nextSnapshot = {};
+      } else {
+        nextSnapshot = sanitized;
+      }
+    }
+    const applied = applyResumeSnapshot(
+      entry.parsed,
+      nextSnapshot,
+      entry.parsed.engine,
+    );
     // Fresh: strip resumeSessionId so #relaunchForReset launches without
     // --resume. resumeSnapshot stays (phase-15 D8 last-effective values).
     // Destructure-and-drop instead of assigning `undefined` because the
     // ParsedSpawn type uses exactOptionalPropertyTypes.
-    const { resumeSessionId: _drop, ...withoutResume } = entry.parsed;
+    const { resumeSessionId: _drop, ...withoutResume } = {
+      ...applied,
+      ...(nextSnapshot !== undefined ? { resumeSnapshot: nextSnapshot } : {}),
+    };
     void _drop;
     entry.parsed = withoutResume;
     // Intentional cycle (same as handleRestart / handleSwitchSession):

@@ -229,6 +229,34 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     );
     expect("permission_mode" in config).toBe(false);
   });
+
+  // ADR-0014 F1 追補 (resume-privilege-restoration 藤 D2 read-side):
+  // parseSpawn の sanitize が unknown / malformed field を drop する。
+  it("resume_snapshot は sanitize され unknown / malformed field は drop される", () => {
+    const parsed = parseSpawn({
+      ...spawnMsg,
+      resume_snapshot: {
+        sandbox: "danger-full-access",
+        network_access: true,
+        permission_mode: "bypassPermissions",
+        // 以下は drop されるべき
+        foo: "bar",
+        model: "",
+      },
+    })!;
+    expect(parsed.resumeSnapshot).toEqual({
+      sandbox: "danger-full-access",
+      network_access: true,
+      permission_mode: "bypassPermissions",
+    });
+  });
+
+  it("resume_snapshot が非 object shape なら parseSpawn 全体を fail-loud reject", () => {
+    expect(
+      parseSpawn({ ...spawnMsg, resume_snapshot: "not-a-map" }),
+    ).toBeNull();
+    expect(parseSpawn({ ...spawnMsg, resume_snapshot: [1, 2] })).toBeNull();
+  });
 });
 
 describe("isCwdAllowed", () => {
@@ -977,6 +1005,402 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     expect(h.children).toHaveLength(3);
     // sendResetResult に追加なし (crash 経路は reset と無関係)
     expect(h.resetResults).toHaveLength(1);
+  });
+});
+
+// ADR-0014 F1 追補 (resume-privilege-restoration, 藤 D1/D2). Covers the
+// P0 apply paths: initial restore (handleSpawn with resume_session_id),
+// live switch_session, reset_session, and the fresh-spawn / crash-restart
+// / rollback no-apply invariants.
+describe("resume-privilege-restoration apply (藤 D1/D2, P0)", () => {
+  const codexSpawn = { ...spawnMsg, engine: "codex" as const };
+  const claudeSpawn = spawnMsg;
+
+  describe("initial restore (handleSpawn with resume_session_id)", () => {
+    it("Codex: snapshot.sandbox / network_access を wrapper config へ apply", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_session_id: "11111111-2222-3333-4444-555555555555",
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      expect(h.configs[0]!.sandbox).toBe("danger-full-access");
+      expect(h.configs[0]!.network_access).toBe(true);
+    });
+
+    it("Claude: snapshot.permission_mode を wrapper config へ apply", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...claudeSpawn,
+        resume_session_id: "22222222-3333-4444-5555-666666666666",
+        resume_snapshot: { permission_mode: "bypassPermissions" },
+      });
+      expect(h.configs[0]!.permission_mode).toBe("bypassPermissions");
+    });
+
+    it("Codex: snapshot.sandbox absent → safe default workspace-write (旧 danger 保持禁止)", () => {
+      const h = harness({ exists: true });
+      // top-level explicit sandbox = danger だが restore 経路では
+      // build_restore_payload が top-level を落とすので普通は届かない。
+      // ただし届いたケースでも snapshot が SSOT なので上書きされる契約。
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        sandbox: "danger-full-access",
+        network_access: true,
+        resume_session_id: "33333333-4444-5555-6666-777777777777",
+        resume_snapshot: {},
+      });
+      expect(h.configs[0]!.sandbox).toBe("workspace-write");
+      expect(h.configs[0]!.network_access).toBe(false);
+    });
+
+    it("Codex: snapshot.network_access=false explicit は保持 (truthy 判定禁止 pin)", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_session_id: "44444444-5555-6666-7777-888888888888",
+        resume_snapshot: {
+          sandbox: "workspace-write",
+          network_access: false,
+        },
+      });
+      expect(h.configs[0]!.network_access).toBe(false);
+    });
+
+    it("resume_session_id はあるが resume_snapshot 不在 → apply 発火せず top-level 値が残る", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        sandbox: "read-only",
+        network_access: false,
+        resume_session_id: "55555555-6666-7777-8888-999999999999",
+      });
+      // apply は snapshot null で no-op なので top-level 値がそのまま。
+      expect(h.configs[0]!.sandbox).toBe("read-only");
+    });
+  });
+
+  describe("fresh spawn (resume_session_id 不在) は no-apply", () => {
+    it("fresh spawn は resume_snapshot が居ても apply せず top-level 値が残る", () => {
+      const h = harness();
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        sandbox: "read-only",
+        network_access: false,
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      expect(h.configs[0]!.sandbox).toBe("read-only");
+      expect(h.configs[0]!.network_access).toBe(false);
+      // ただし snapshot 自体は drift 用に wrapper config へ passthrough される。
+      expect(h.configs[0]!.resume_snapshot).toEqual({
+        sandbox: "danger-full-access",
+        network_access: true,
+      });
+    });
+  });
+
+  describe("handleSwitchSession", () => {
+    it("Codex live switch: payload.resume_snapshot の sandbox / network を relaunch config に apply", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_session_id: "aaaaaaaa-1111-1111-1111-111111111111",
+        resume_snapshot: {
+          sandbox: "workspace-write",
+          network_access: false,
+        },
+      });
+      // Live switch は新 snapshot を authoritative に。
+      h.sup.handleSwitchSession({
+        agent_id: codexSpawn.agent_id,
+        resume_session_id: "bbbbbbbb-2222-2222-2222-222222222222",
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      h.children[0]!.exit();
+      // Relaunch config = 2 件目。
+      expect(h.configs[1]!.sandbox).toBe("danger-full-access");
+      expect(h.configs[1]!.network_access).toBe(true);
+    });
+
+    it("Claude live switch: payload.resume_snapshot の permission_mode を apply", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...claudeSpawn,
+        resume_session_id: "cccccccc-3333-3333-3333-333333333333",
+        resume_snapshot: { permission_mode: "plan" },
+      });
+      h.sup.handleSwitchSession({
+        agent_id: claudeSpawn.agent_id,
+        resume_session_id: "dddddddd-4444-4444-4444-444444444444",
+        resume_snapshot: { permission_mode: "bypassPermissions" },
+      });
+      h.children[0]!.exit();
+      expect(h.configs[1]!.permission_mode).toBe("bypassPermissions");
+    });
+
+    it("switch payload.resume_snapshot 不在 → 旧 entry.parsed の snapshot を維持", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_session_id: "eeeeeeee-5555-5555-5555-555555555555",
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      // switch_session に snapshot を付けない → 旧 snapshot 由来値が残る。
+      h.sup.handleSwitchSession({
+        agent_id: codexSpawn.agent_id,
+        resume_session_id: "ffffffff-6666-6666-6666-666666666666",
+      });
+      h.children[0]!.exit();
+      expect(h.configs[1]!.sandbox).toBe("danger-full-access");
+      expect(h.configs[1]!.network_access).toBe(true);
+    });
+  });
+
+  describe("handleResetSession", () => {
+    const resetMsg = {
+      agent_id: codexSpawn.agent_id,
+      mode: "new" as const,
+      request_id: "rs_apply_test",
+      previous_session_id: "sess-old",
+    };
+
+    it("Codex reset: payload.resume_snapshot の sandbox / network を fresh relaunch config に apply", () => {
+      const h = harness();
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        sandbox: "read-only",
+        network_access: false,
+      });
+      h.sup.handleResetSession({
+        ...resetMsg,
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      h.children[0]!.exit();
+      // fresh relaunch = 2 件目、snapshot の privilege 三軸が反映される。
+      expect(h.configs[1]!.sandbox).toBe("danger-full-access");
+      expect(h.configs[1]!.network_access).toBe(true);
+      // 元の spawn 由来の read-only は破棄される (SSOT contract)。
+      expect(h.resumes[1]).toBeUndefined(); // fresh: no --resume
+    });
+
+    it("Claude reset: payload.resume_snapshot の permission_mode を apply", () => {
+      const h = harness();
+      h.sup.handleSpawn(claudeSpawn);
+      h.sup.handleResetSession({
+        ...resetMsg,
+        agent_id: claudeSpawn.agent_id,
+        resume_snapshot: { permission_mode: "bypassPermissions" },
+      });
+      h.children[0]!.exit();
+      expect(h.configs[1]!.permission_mode).toBe("bypassPermissions");
+    });
+
+    it("reset payload.resume_snapshot 不在 → 旧 entry.parsed の snapshot を維持", () => {
+      const h = harness();
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      h.sup.handleResetSession(resetMsg);
+      h.children[0]!.exit();
+      // reset に snapshot 無し → 旧 entry.parsed.resumeSnapshot 由来値が残る。
+      expect(h.configs[1]!.sandbox).toBe("danger-full-access");
+    });
+
+    it("reset payload.resume_snapshot に empty {} → safe default に降格", () => {
+      const h = harness();
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      // 明示的に empty snapshot を送ると snapshot SSOT で default 降格。
+      h.sup.handleResetSession({ ...resetMsg, resume_snapshot: {} });
+      h.children[0]!.exit();
+      expect(h.configs[1]!.sandbox).toBe("workspace-write");
+      expect(h.configs[1]!.network_access).toBe(false);
+    });
+  });
+
+  describe("crash-restart / rollback は apply しない (entry.parsed 継承)", () => {
+    it("crash-restart は entry.parsed の snapshot 適用済み値を維持", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_session_id: "12121212-3434-5656-7878-909090909090",
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      // Initial restore で snapshot が entry.parsed に反映済み。
+      expect(h.configs[0]!.sandbox).toBe("danger-full-access");
+
+      // Crash → auto-restart。entry.parsed の値がそのまま carry over。
+      h.children[0]!.exit();
+      expect(h.configs[1]!.sandbox).toBe("danger-full-access");
+      expect(h.configs[1]!.network_access).toBe(true);
+    });
+
+    it("rollback 経路は reset 前に apply 済みの entry.parsed を維持", () => {
+      // fresh spawn 失敗 → rollback で旧 session_id で再起動、entry.parsed の
+      // snapshot 適用値 (danger-full-access) はそのまま残る。
+      const h = harness({ launchThrowsOnCall: 2, exists: true });
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_session_id: "34343434-5656-7878-9090-121212121212",
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      h.sup.handleResetSession({
+        agent_id: codexSpawn.agent_id,
+        mode: "new",
+        request_id: "rs_rollback_pin",
+        previous_session_id: "sess-old-rollback",
+        resume_snapshot: {},
+      });
+      h.children[0]!.exit();
+      // rollback launch = 3 件目 (2 件目は throw)。
+      expect(h.configs.length).toBe(2);
+      // reset で {} snapshot により default 降格した値が保持される。
+      expect(h.configs[1]!.sandbox).toBe("workspace-write");
+      expect(h.configs[1]!.network_access).toBe(false);
+    });
+  });
+
+  // 藤 R2 追補: switch/reset で payload.resume_snapshot が present だが
+  // 非 object (validate=null) の場合、entry.parsed の旧 privileged 値を
+  // 決して継承しない (旧 danger 保持禁止)。
+  describe("whole-malformed resume_snapshot: switch は fail-loud、reset は safe-default 降格 (藤 R2)", () => {
+    it("handleSwitchSession: payload.resume_snapshot が string (non-object) → #fail(error) + kill/relaunch なし + F4 lock 変化なし", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_session_id: "aaaa1111-1111-1111-1111-111111111111",
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      const kills0 = h.children[0]!.kills;
+
+      h.sup.handleSwitchSession({
+        agent_id: codexSpawn.agent_id,
+        resume_session_id: "bbbb2222-2222-2222-2222-222222222222",
+        resume_snapshot: "not-a-map",
+      });
+
+      // #fail(error) が sendResult に届く。子 process は kill されない
+      // (旧 danger を継承した fresh を絶対に起動しない)。
+      expect(h.results.at(-1)).toMatchObject({
+        ok: false,
+        reason: "error",
+        agent_id: codexSpawn.agent_id,
+      });
+      expect(h.children[0]!.kills).toBe(kills0);
+      expect(h.children.length).toBe(1);
+    });
+
+    it("handleSwitchSession: payload.resume_snapshot が array (non-object) → 同様に fail-loud", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_session_id: "aaaa3333-3333-3333-3333-333333333333",
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+
+      h.sup.handleSwitchSession({
+        agent_id: codexSpawn.agent_id,
+        resume_session_id: "bbbb4444-4444-4444-4444-444444444444",
+        resume_snapshot: [1, 2],
+      });
+
+      expect(h.results.at(-1)).toMatchObject({
+        ok: false,
+        reason: "error",
+      });
+      expect(h.children.length).toBe(1);
+    });
+
+    it("handleResetSession: payload.resume_snapshot が非 object → safe-default relaunch (旧 danger を継承しない)", () => {
+      const h = harness();
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+
+      h.sup.handleResetSession({
+        agent_id: codexSpawn.agent_id,
+        mode: "new",
+        request_id: "rs_malformed_reset",
+        previous_session_id: "sess-prev",
+        resume_snapshot: "not-a-map",
+      });
+      h.children[0]!.exit();
+
+      // fresh relaunch 発火 (=2 件目)、safe engine default (旧 danger 破棄)。
+      expect(h.configs.length).toBe(2);
+      expect(h.configs[1]!.sandbox).toBe("workspace-write");
+      expect(h.configs[1]!.network_access).toBe(false);
+    });
+
+    it("handleResetSession: individual field malformed の integration も safe-default 降格を pin (藤 R3)", () => {
+      // Whole-malformed でなく個別 field malformed (sanitize が {} を返す)
+      // 場合も同じ経路。resume_snapshot.ts の pure helper 側でも pin 済みだが、
+      // handler 経由の integration でも pin する。
+      const h = harness();
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+
+      h.sup.handleResetSession({
+        agent_id: codexSpawn.agent_id,
+        mode: "new",
+        request_id: "rs_indiv_malformed",
+        previous_session_id: "sess-prev",
+        resume_snapshot: {
+          sandbox: "hacked", // enum 不一致 → drop
+          network_access: "yes", // boolean 不一致 → drop
+        },
+      });
+      h.children[0]!.exit();
+
+      expect(h.configs.length).toBe(2);
+      expect(h.configs[1]!.sandbox).toBe("workspace-write");
+      expect(h.configs[1]!.network_access).toBe(false);
+    });
   });
 });
 
