@@ -145,6 +145,12 @@ const claudeBootstrap: ModelOption[] = [
     display_name: "Fable",
     effort_levels: ["low", "medium", "high", "xhigh", "max"],
   },
+  // Haiku has no effort support: effort_levels intentionally omitted
+  // (SDK 0.3.208 で該当 model は supportedEffortLevels を返さない)。
+  // dashboard の 3-tier lookup が real `value="default"` entry で解決する
+  // ので、この levels 欠落 entry が併存しても button は正しく表示される。
+  // 契約: `wrapper/claude-code/test/host.test.ts:1349` に「Haiku has no
+  // effort support: effort_levels must be omitted」の同義 pin あり。
   { value: "haiku", display_name: "Haiku" },
 ];
 
@@ -922,5 +928,187 @@ describe("phase-16 dashboard model switch integration", () => {
     await tick();
     expect(target.textContent).toContain("モデル一覧の再取得に失敗");
     expect(target.textContent).toContain("session_reset_pending");
+  });
+});
+
+// Phase-23 dogfood 再回帰対策 (藤 修正版方針 5): effortLevels 派生の
+// three-tier lookup。
+//   1) exact match → その model の effort_levels (欠落なら []、tier 2/3 に
+//      fallback しない)
+//   2) real `value="default"` entry (engine 宣言) → その levels
+//   3) default 無ければ全 entry intersection fail-closed
+// synthetic default entry は追加しない、union は ADR-0035 silent downgrade
+// 禁止に反するため不採用、engine 名分岐禁止 — models 配列だけで判定する。
+describe("effortLevels 派生 (3-tier: exact → real default → intersection fail-closed)", () => {
+  it("exact match: active model の effort_levels をそのまま返す (通常経路)", async () => {
+    const { target } = await renderDetail({
+      engine: "codex",
+      model: "gpt-terra",
+      models: [terra, sol],
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    const effortBtn = target.querySelector(
+      '[title="effort を切替"]',
+    ) as HTMLButtonElement | null;
+    expect(effortBtn).not.toBeNull();
+    effortBtn!.click();
+    await tick();
+    // terra は low/medium/high。sol の xhigh は現在の model の catalog に無いので提示しない。
+    const options = [...target.querySelectorAll('[role="option"]')].map(
+      (n) => n.textContent?.trim(),
+    );
+    expect(options).toEqual(["low", "medium", "high"]);
+  });
+
+  // 藤指示 (a): Claude bootstrap は real "default" alias entry を持つので
+  // Haiku (effort 非対応) が同居していても tier 2 で解決し button 表示、
+  // levels は default entry のもの。
+  it("(a) exact miss + real default entry + effort 非対応 Haiku 併存でも default levels を返し button 表示 (Claude bootstrap 経路)", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "claude-opus-4-7", // SDK init 由来の specific id (bootstrap には無い)
+      models: claudeBootstrap, // default + fable + haiku (levels 無し) の 3 entry
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    const effortBtn = target.querySelector(
+      '[title="effort を切替"]',
+    ) as HTMLButtonElement | null;
+    expect(effortBtn).not.toBeNull();
+    effortBtn!.click();
+    await tick();
+    const options = [...target.querySelectorAll('[role="option"]')].map(
+      (n) => n.textContent?.trim(),
+    );
+    // real default entry の effort_levels を返す (Haiku の levels 欠落は
+    // tier 2 では影響しない、tier 3 の intersection にも進まない)
+    expect(options).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  // 藤指示 (b): default 無し + levels 欠落 entry ありなら tier 3 intersection
+  // が fail-closed で button 非表示。
+  it("(b) default 無し + levels 欠落 entry は intersection fail-closed (button 非表示)", async () => {
+    const { target } = await renderDetail({
+      engine: "codex",
+      models: [
+        {
+          value: "m1",
+          display_name: "M1",
+          effort_levels: ["low", "medium", "high"],
+        },
+        { value: "m2", display_name: "M2" }, // effort_levels 欠落、default 名なし
+      ],
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    // exact miss + default 名無し → tier 3 → 欠落あり → [] fail-closed → 非表示
+    expect(target.querySelector('[title="effort を切替"]')).toBeNull();
+  });
+
+  // 藤指示 (c): exact match で該当 model の levels が欠落していても
+  // tier 2/3 に fallback しない (仕様の一貫性、fail-fast)。
+  it("(c) exact match で該当 model の effort_levels 欠落は [] を返し fallback しない", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "haiku", // exact hit だが Haiku は levels 欠落
+      models: claudeBootstrap,
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    // Haiku exact match → [] → button 非表示 (default entry には fallback
+    // しない、藤修正版方針 tier 1 の欠落=空契約)
+    expect(target.querySelector('[title="effort を切替"]')).toBeNull();
+  });
+
+  // 藤指示 (d): Codex 既存 intersection matrix を dashboard 側でも維持
+  // (Codex catalog は default entry を持たないので tier 3 に進む)。
+  it("(d) Codex model 未報告 (default entry 無 catalog) → tier 3 intersection", async () => {
+    const { target } = await renderDetail({
+      engine: "codex",
+      // model 未指定、catalog に "default" alias entry 無し
+      models: [terra, sol], // terra: low/medium/high, sol: high/xhigh
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    const effortBtn = target.querySelector(
+      '[title="effort を切替"]',
+    ) as HTMLButtonElement | null;
+    expect(effortBtn).not.toBeNull();
+    effortBtn!.click();
+    await tick();
+    const options = [...target.querySelectorAll('[role="option"]')].map(
+      (n) => n.textContent?.trim(),
+    );
+    // intersection = ["high"]。terra 固有の low/medium と sol 固有の xhigh
+    // は intersection から除外 (union 提示禁止)。
+    expect(options).toEqual(["high"]);
+  });
+
+  // 藤 G1 追加: concrete key があるが exact miss + real default 無し
+  // → button 非表示 (intersection にフォールバックしない)。models 全 entry
+  // に levels 有でも future/stale concrete model が catalog 候補のいずれか
+  // である保証がなく、intersection を「必ず valid」と主張できない。
+  it("(藤 G1) concrete key + exact miss + real default 無し + 全 entry levels 有でも button 非表示", async () => {
+    const { target } = await renderDetail({
+      engine: "codex",
+      model: "gpt-future-2027", // catalog に無い concrete id
+      // real default 無し、全 entry に levels 有 (intersection は非空だが
+      // concrete miss 経路では fallback しないので button 非表示)
+      models: [terra, sol],
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    // Tier 4 fail-closed → effortLevels=[] → button 非表示
+    expect(target.querySelector('[title="effort を切替"]')).toBeNull();
+  });
+
+  it("exact match の model は default/intersection より優先 (union 固有 xhigh 単独 model でも維持)", async () => {
+    const { target } = await renderDetail({
+      engine: "codex",
+      model: "gpt-sol",
+      models: [terra, sol],
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    const effortBtn = target.querySelector(
+      '[title="effort を切替"]',
+    ) as HTMLButtonElement | null;
+    effortBtn!.click();
+    await tick();
+    const options = [...target.querySelectorAll('[role="option"]')].map(
+      (n) => n.textContent?.trim(),
+    );
+    // sol の effort_levels = ["high", "xhigh"] を tier 1 でそのまま提示
+    // (intersection ["high"] にも default fallback にも落ちない)。
+    expect(options).toEqual(["high", "xhigh"]);
   });
 });

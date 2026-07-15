@@ -375,14 +375,62 @@
   // ADR-0035 explicitly forbids.
   const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
   const effortLevels = $derived.by(() => {
-    // Before SDK init the account-default model id is unknown, but the
-    // bootstrap catalog's `default` entry describes the first-turn effort
-    // domain. Use it until an explicit/pending model takes over.
-    const active = models.find(
-      (m) => m.value === (pendingModel?.value ?? ccModel ?? "default"),
+    // Phase-23 dogfood 再回帰対策 (藤 修正版方針 5 + G1): three-tier lookup。
+    //
+    // 1) **concrete key exact hit** — pending / ccModel が set され models
+    //    の entry と一致するならその effort_levels (欠落なら []、fallback
+    //    しない)。通常経路。
+    // 2) **exact miss / key 未報告** で real `value="default"` entry あり
+    //    → その effort_levels (欠落なら [])。Claude bootstrap の default
+    //    entry は engine が宣言した account-default effort domain。
+    //    synthetic (ローカル合成) との違いは engine 側 supportedModels()
+    //    に含まれる正式 alias で model 切替 menu に出しても意味を持つ点。
+    // 3) **key 未報告 (null/undefined)** かつ real default 無しの場合のみ
+    //    → models 全 entry の effort_levels の intersection を first entry
+    //    の順で返す (1 件でも欠落あれば [])。
+    // 4) **concrete key があるが exact miss + real default 無し**
+    //    (藤 G1) → [] fail-closed。unknown/future/stale concrete model が
+    //    catalog 候補のいずれかである保証がなく、intersection に fallback
+    //    すると「現在 model に必ず valid」を主張できないため、安全側で
+    //    button を非表示にする。
+    //
+    // union は不採用 (invalid pair 提示に相当し ADR-0035 silent downgrade
+    // 禁止に反する)。synthetic default entry も不採用 (setModel("default")
+    // 明示送信の責務汚染)。engine 名分岐禁止 — models 配列と key の
+    // 有無だけで判定する。
+    const key = pendingModel?.value ?? ccModel;
+    const hasConcreteKey = key !== null && key !== undefined;
+    // Tier 1: concrete key exact match
+    if (hasConcreteKey) {
+      const active = models.find((m) => m.value === key);
+      if (active !== undefined) {
+        const seen = new Set(active.effort_levels ?? []);
+        return EFFORT_ORDER.filter((l) => seen.has(l));
+      }
+    }
+    // Tier 2: real default alias entry
+    const realDefault = models.find((m) => m.value === "default");
+    if (realDefault !== undefined) {
+      const seen = new Set(realDefault.effort_levels ?? []);
+      return EFFORT_ORDER.filter((l) => seen.has(l));
+    }
+    // Tier 4 (藤 G1): concrete key で exact miss かつ real default 無し
+    // → [] fail-closed (intersection にフォールバックしない)
+    if (hasConcreteKey) return [];
+    // Tier 3: key 未報告のみ intersection fail-closed
+    if (models.length === 0) return [];
+    const first = models[0];
+    if (first === undefined || first.effort_levels === undefined) return [];
+    const rest = models.slice(1);
+    const common = new Set(
+      first.effort_levels.filter((lvl) =>
+        rest.every(
+          (m) =>
+            m.effort_levels !== undefined && m.effort_levels.includes(lvl),
+        ),
+      ),
     );
-    const seen = new Set(active?.effort_levels ?? []);
-    return EFFORT_ORDER.filter((l) => seen.has(l));
+    return EFFORT_ORDER.filter((l) => common.has(l));
   });
 
   // The always-present seven_day placeholder (pct null) must not, by itself,
