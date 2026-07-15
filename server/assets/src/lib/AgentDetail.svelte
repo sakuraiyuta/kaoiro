@@ -768,20 +768,31 @@
   function refreshModels(): void {
     if (!connection) return;
     if (refreshingModels) return;
-    // Server ack (usually fast) is what we await; the ack means the server
-    // relayed the control message, NOT that the catalog is refreshed. The
-    // refreshed catalog surfaces on a later state_change via ext.models.
-    // Disabling the button until the ack collapses a burst of clicks into
-    // one server request; a 5s timeout means the server is unreachable.
+    // ADR-0039 F9 v2 = 藤 review D2a: the returned promise now resolves
+    // ONLY when the wrapper's paired refresh_models_result envelope
+    // arrives, not on the mere server ack. That means:
+    //  - the button loading stays up until the actual refresh completes,
+    //    matching what the user just observed happen (or fail);
+    //  - a failure surfaces `result.reason` verbatim rather than an ack
+    //    error, letting the operator see WHY the wrapper's probe failed.
+    // The wrapper also emits a state_change with fresh ext.models BEFORE
+    // this promise settles, so the same AgentDetail's model/effort switch
+    // repopulates without waiting for a natural state transition — which
+    // is exactly what fresh-idle wrappers otherwise never trigger.
     refreshingModels = true;
     switchNotice = null;
     void run(async () => {
       try {
-        await connection.refreshModels(envelope.agent_id);
+        const result = await connection.refreshModels(envelope.agent_id);
+        if (!result.ok) {
+          switchNotice = {
+            tone: "error",
+            text: `モデル一覧の再取得に失敗: ${result.reason ?? "unknown"}`,
+          };
+        }
       } catch (error) {
-        // Refresh has no `switch_error` return path (it does not change
-        // model / effort), so bring rejects into switchNotice explicitly
-        // so the operator sees them where switch failures already surface.
+        // Reject path covers server ack failure / transport disconnect /
+        // client-side timeout — surfaced the same as an ok=false result.
         switchNotice = {
           tone: "error",
           text: `モデル一覧の再取得に失敗: ${error instanceof Error ? error.message : String(error)}`,

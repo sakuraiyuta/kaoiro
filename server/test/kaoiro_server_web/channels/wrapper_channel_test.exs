@@ -200,6 +200,50 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
     end
 
+    test "refresh_models_result は中継しつつ最新状態を上書きしない (ADR-0039 F9 v2 must-fix 1)" do
+      # transient completion envelope: broadcast (client pending map で
+      # settle される) が、AgentStates.put されない = 直前 state_change の
+      # rich models が snapshot に残る。
+      agent_id = "test.refresh-transient"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      # Establish latest state with a state_change carrying rich models.
+      rich_state =
+        %{envelope(agent_id, "tool_running") | "ext" => %{"models" => [%{"value" => "sonnet"}]}}
+
+      ref = push(socket, "envelope", rich_state)
+      assert_reply ref, :ok
+      assert_broadcast "envelope", %{"state" => "tool_running"}
+
+      # Wrapper emits refresh_models_result immediately after.
+      result_env = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-06-11T00:00:01Z",
+        "type" => "refresh_models_result",
+        "state" => "tool_running",
+        "payload" => %{
+          "request_id" => "req-1",
+          "ok" => true,
+          "models_count" => 3
+        },
+        "ext" => %{}
+      }
+
+      ref = push(socket, "envelope", result_env)
+      assert_reply ref, :ok
+      # Broadcast still fires (client pending map needs it).
+      assert_broadcast "envelope", %{"type" => "refresh_models_result"}
+
+      # But snapshot latest is untouched — the rich_state remains.
+      assert AgentStates.snapshot()[agent_id]["type"] == "state_change"
+      assert AgentStates.snapshot()[agent_id]["ext"]["models"] == [
+               %{"value" => "sonnet"}
+             ]
+    end
+
     test "log は中継しつつ最新状態を上書きせず履歴へ積む" do
       agent_id = "test.log-1"
       @endpoint.subscribe("agents:lobby")

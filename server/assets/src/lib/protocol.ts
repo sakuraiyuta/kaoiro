@@ -941,6 +941,16 @@ export interface EngineCatalogResult {
   models_count?: number;
 }
 
+/** Client mirror of protocol/src/index.ts RefreshModelsResult (ADR-0039
+ *  F9 v2). Payload of a `type: "refresh_models_result"` envelope. */
+export interface RefreshModelsResult {
+  agent_id: string;
+  request_id: string;
+  ok: boolean;
+  reason?: string;
+  models_count?: number;
+}
+
 /** ADR-0036 F7 broadcast payloads (client view). `previous_session_id` /
  *  `to_session_id` are optional; the server omits them per protocol type
  *  when absent (fresh spawn edge / lazy采番 / failure branches). */
@@ -1005,14 +1015,16 @@ export interface KaoiroConnection {
    * effort_levels (low..max). */
   setEffort: (agentId: string, effort: string) => Promise<void>;
   /** Manually re-triggers the wrapper's supportedModels() catalog fetch
-   * (ADR-0037 F6, phase-18-5). Resets the wrapper's retry counter and
-   * succeeded cache so the fetch runs even after the auto-retry cap.
-   * Rejects like sendInstruction (forbidden / unknown_agent /
-   * session_reset_pending / timeout). Claude-only — the codex adapter has
-   * no handler for this control (catalog is static per ADR-0035); the
-   * dashboard must gate the trigger by engine. The refreshed catalog
-   * surfaces via the next state_change's ext.models. */
-  refreshModels: (agentId: string) => Promise<void>;
+   * (ADR-0037 F6, phase-18-5 + ADR-0039 F9 v2 = 藤 review D2a). Resets
+   * the wrapper's retry counter and succeeded cache so the fetch runs
+   * even after the auto-retry cap. The returned promise resolves with the
+   * wrapper's paired `refresh_models_result` envelope (correlated by
+   * request_id), or rejects on server ack failure / transport disconnect
+   * / client-side timeout. Claude-only — the codex adapter has no
+   * handler for this control (catalog is static per ADR-0035). The
+   * refreshed catalog surfaces via the wrapper's paired state_change
+   * (ext.models) BEFORE this promise settles. */
+  refreshModels: (agentId: string) => Promise<RefreshModelsResult>;
   /** Requests the runner to freshen its (host, engine) launch-catalog
    * cache and re-register (Option E, ADR-0039). `force=true` bypasses the
    * runner's TTL check (LaunchDialog manual button); `force=false`/omitted
@@ -1284,6 +1296,62 @@ export function parseHistoryReset(
   };
 }
 
+/** Instance-scoped pending map for `refreshModels()` waiters (ADR-0039 F9
+ *  v2). Same shape as `CatalogPendingStore` but scoped to
+ *  `RefreshModelsResult` — kept separate so a mis-routed request_id
+ *  cannot cross paths with LaunchDialog refresh waits. */
+export interface RefreshPendingStore {
+  register: (request_id: string) => Promise<RefreshModelsResult>;
+  cancel: (request_id: string, reason: string) => void;
+  onResult: (result: RefreshModelsResult) => void;
+  drain: (reason: string) => void;
+  size: () => number;
+}
+
+export function makeRefreshPendingStore(
+  timeoutMs: number = 45_000,
+): RefreshPendingStore {
+  interface Waiter {
+    resolve: (r: RefreshModelsResult) => void;
+    reject: (e: unknown) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+  const pending = new Map<string, Waiter>();
+  const cancel = (id: string, reason: string): void => {
+    const w = pending.get(id);
+    if (w === undefined) return;
+    clearTimeout(w.timer);
+    pending.delete(id);
+    w.reject(new Error(reason));
+  };
+  return {
+    register: (id) =>
+      new Promise<RefreshModelsResult>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error("refresh_models_result timeout"));
+        }, timeoutMs);
+        pending.set(id, { resolve, reject, timer });
+      }),
+    cancel,
+    onResult: (r) => {
+      const w = pending.get(r.request_id);
+      if (w === undefined) return;
+      clearTimeout(w.timer);
+      pending.delete(r.request_id);
+      w.resolve(r);
+    },
+    drain: (reason) => {
+      for (const [id, w] of pending) {
+        clearTimeout(w.timer);
+        pending.delete(id);
+        w.reject(new Error(reason));
+      }
+    },
+    size: () => pending.size,
+  };
+}
+
 /** Client-side wait timeout for a refreshEngineCatalog request. Sits well
  *  above the runner's own hard cap (35s) so a slow probe still settles
  *  through the pending map rather than timing out here first. */
@@ -1415,6 +1483,11 @@ export function connectKaoiro(
   // ADR-0039). Kept LOCAL so a second connectKaoiro's disconnect cannot
   // drain this one's pending — 藤 review must-fix A.
   const catalogPending = makeCatalogPendingStore();
+  // ADR-0039 F9 v2 = 藤 review D2a: instance-scoped pending map for the
+  // per-agent refresh_models_result envelope. Same isolation invariant as
+  // catalogPending (a second connectKaoiro's disconnect cannot drain this
+  // one's waits).
+  const refreshPending = makeRefreshPendingStore();
   channel.on("snapshot", (payload: { agents?: unknown }) => {
     const agents: Record<string, Envelope> = {};
     for (const value of Object.values(payload.agents ?? {})) {
@@ -1424,6 +1497,30 @@ export function connectKaoiro(
   });
   channel.on("envelope", (payload: unknown) => {
     if (!isEnvelope(payload)) return;
+    // ADR-0039 F9 v2 = 藤 review turn-10 must-fix 1: refresh_models_result
+    // is a transient completion envelope, NOT a state. Special-dispatch it
+    // BEFORE `handlers.onEnvelope` and return, so the client's latest-state
+    // tracker never sees this envelope and cannot overwrite the rich
+    // ext.models the immediately-preceding state_change just delivered.
+    if (payload.type === "refresh_models_result") {
+      const p = payload.payload as Partial<RefreshModelsResult> | undefined;
+      if (
+        p !== undefined &&
+        typeof p.request_id === "string" &&
+        typeof p.ok === "boolean"
+      ) {
+        refreshPending.onResult({
+          agent_id: payload.agent_id,
+          request_id: p.request_id,
+          ok: p.ok,
+          ...(typeof p.reason === "string" ? { reason: p.reason } : {}),
+          ...(typeof p.models_count === "number"
+            ? { models_count: p.models_count }
+            : {}),
+        });
+      }
+      return;
+    }
     handlers.onEnvelope(payload);
     // Convenience dispatch for upload rejections (file-upload spec /
     // ADR-0025). The full envelope still goes through onEnvelope so
@@ -1550,8 +1647,14 @@ export function connectKaoiro(
   // failures. Both flow into the same drain path. Instance-scoped so a
   // second connection's disconnect cannot drain this one's pending
   // (藤 review A).
-  socket.onClose(() => catalogPending.drain("socket closed"));
-  socket.onError(() => catalogPending.drain("socket error"));
+  socket.onClose(() => {
+    catalogPending.drain("socket closed");
+    refreshPending.drain("socket closed");
+  });
+  socket.onError(() => {
+    catalogPending.drain("socket error");
+    refreshPending.drain("socket error");
+  });
   channel.join();
 
   return {
@@ -1586,8 +1689,26 @@ export function connectKaoiro(
       pushAsync(channel, "set_model", { agent_id: agentId, model }),
     setEffort: (agentId, effort) =>
       pushAsync(channel, "set_effort", { agent_id: agentId, effort }),
-    refreshModels: (agentId) =>
-      pushAsync(channel, "refresh_models", { agent_id: agentId }),
+    refreshModels: async (agentId) => {
+      // ADR-0039 F9 v2 = 藤 review D2a: request_id + pending map so the
+      // returned promise settles on the wrapper's refresh_models_result
+      // envelope, not just the server ack. Register BEFORE the push so a
+      // fast wrapper reply cannot arrive before we can correlate.
+      const request_id = crypto.randomUUID();
+      const promise = refreshPending.register(request_id);
+      try {
+        await pushAsync(channel, "refresh_models", {
+          agent_id: agentId,
+          request_id,
+        });
+      } catch (err) {
+        refreshPending.cancel(
+          request_id,
+          `server ack failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return promise;
+    },
     refreshEngineCatalog: async (hostId, engine, force) => {
       const request_id = crypto.randomUUID();
       // Register BEFORE sending so a fast catalog_result cannot arrive

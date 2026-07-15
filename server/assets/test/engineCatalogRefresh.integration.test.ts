@@ -14,9 +14,11 @@ import LaunchDialog from "../src/lib/LaunchDialog.svelte";
 import { makeReactiveLaunchDialogProps } from "./reactiveProps.svelte";
 import {
   makeCatalogPendingStore,
+  makeRefreshPendingStore,
   type EngineCatalogResult,
   type HostInfo,
   type KaoiroConnection,
+  type RefreshModelsResult,
 } from "../src/lib/protocol";
 
 const mounted: object[] = [];
@@ -463,6 +465,80 @@ describe("makeCatalogPendingStore (Option E, ADR-0039)", () => {
     vi.useFakeTimers();
     try {
       const s = makeCatalogPendingStore(100);
+      const p = s.register("t");
+      const settled = p.catch((e) => `rejected:${(e as Error).message}`);
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(settled).resolves.toContain("timeout");
+      expect(s.size()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ADR-0039 F9 v2 = 藤 review turn-10 must-fix 3/4: pending store の
+// isolation / cancel / drain / timeout / unrelated id を pin。同じ shape
+// (CatalogPendingStore と同型) なので同じ観点をなぞる。
+describe("makeRefreshPendingStore (Option E F9 v2)", () => {
+  const sampleResult = (rid: string, ok = true): RefreshModelsResult => ({
+    agent_id: "a.1",
+    request_id: rid,
+    ok,
+    ...(ok ? { models_count: 3 } : { reason: "auth_failed" }),
+  });
+
+  it("register → onResult で resolve、pending から削除", async () => {
+    const s = makeRefreshPendingStore();
+    const p = s.register("r1");
+    s.onResult(sampleResult("r1"));
+    const r = await p;
+    expect(r.ok).toBe(true);
+    expect(s.size()).toBe(0);
+  });
+
+  it("unrelated request_id は無視 (pending 残る)", async () => {
+    const s = makeRefreshPendingStore();
+    const p = s.register("r1");
+    s.onResult(sampleResult("unrelated"));
+    expect(s.size()).toBe(1);
+    s.onResult(sampleResult("r1"));
+    await p;
+  });
+
+  it("cancel は pending を削除 + reject", async () => {
+    const s = makeRefreshPendingStore();
+    const p = s.register("r1");
+    s.cancel("r1", "ack failed");
+    await expect(p).rejects.toThrow(/ack failed/);
+    expect(s.size()).toBe(0);
+  });
+
+  it("drain は全 pending を reject し map を空にする (disconnect 経路)", async () => {
+    const s = makeRefreshPendingStore();
+    const p1 = s.register("a");
+    const p2 = s.register("b");
+    s.drain("socket closed");
+    await expect(p1).rejects.toThrow(/socket closed/);
+    await expect(p2).rejects.toThrow(/socket closed/);
+    expect(s.size()).toBe(0);
+  });
+
+  it("2 store は相互 isolated (別 connection の drain が波及しない)", async () => {
+    const s1 = makeRefreshPendingStore();
+    const s2 = makeRefreshPendingStore();
+    const p1 = s1.register("x");
+    const p2 = s2.register("y");
+    s1.drain("s1 closed");
+    await expect(p1).rejects.toThrow(/s1 closed/);
+    expect(s2.size()).toBe(1);
+    s2.onResult(sampleResult("y"));
+    await expect(p2).resolves.toMatchObject({ ok: true });
+  });
+
+  it("timeout で pending は自動 reject + 削除", async () => {
+    vi.useFakeTimers();
+    try {
+      const s = makeRefreshPendingStore(100);
       const p = s.register("t");
       const settled = p.catch((e) => `rejected:${(e as Error).message}`);
       await vi.advanceTimersByTimeAsync(100);

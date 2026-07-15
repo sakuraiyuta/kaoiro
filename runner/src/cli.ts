@@ -81,6 +81,10 @@ async function main(): Promise<void> {
     ...(config.codex?.internal_subagents === undefined
       ? {}
       : { codexInternalSubagents: config.codex.internal_subagents }),
+    // ADR-0039 F9 追補: a live getter (not a snapshot) so a probe that
+    // finishes between spawns reaches the next child. Empty / null falls
+    // back to the bootstrap floor server-side (resolveWrapperConfig).
+    getClaudeEngineCatalog: () => claudeCatalog.getStale(),
     sendResult: (result) => link.sendSpawnResult(result),
     sendSessions: (sessions) => link.sendSessions(sessions),
     sendResetResult: (result) => link.sendResetResult(result),
@@ -152,6 +156,8 @@ async function main(): Promise<void> {
       codexAuthMode,
       codexChatgptPlan: next.codex?.chatgpt_plan,
       codexInternalSubagents: next.codex?.internal_subagents,
+      // Preserve the live probe getter across reloads (ADR-0039 F9 追補).
+      getClaudeEngineCatalog: () => claudeCatalog.getStale(),
     });
     // Preserve any live-probed Claude catalog on reload so operators do not
     // silently regress to the bootstrap default entry (ADR-0039).

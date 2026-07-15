@@ -6,7 +6,7 @@ import type {
 } from "@kaoiro/protocol";
 import { ClaudeCatalogCache } from "../src/claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler } from "../src/engine_catalog_refresh.js";
-import type { ProbeOutcome } from "../src/claude_probe.js";
+import type { ProbeOutcome } from "@kaoiro/claude-code/probe-client";
 import type { RunnerConfig } from "../src/config.js";
 import type { CodexAuthMode } from "../src/codex-auth.js";
 

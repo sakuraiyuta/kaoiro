@@ -237,6 +237,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
+  # refresh_models_result is a transient completion signal for a paired
+  # refreshModels() waiter (ADR-0039 F9 v2 = 藤 review turn-10 must-fix 1).
+  # It carries only { request_id, ok, reason?, models_count? } — never a
+  # state — so overwriting the latest AgentStates entry with it would erase
+  # the rich models the immediately-preceding state_change just delivered.
+  # Broadcast only; do NOT store.
+  defp store(%{"type" => "refresh_models_result"}), do: :ok
+
   defp store(envelope), do: AgentStates.put(envelope, owner: self())
 
   defp directory_entry(id, envelope) do

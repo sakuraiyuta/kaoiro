@@ -65,6 +65,10 @@ function harness(
     wrapperServerUrl?: string;
     now?: () => number;
     launchThrowsOnCall?: number;
+    getClaudeEngineCatalog?: () =>
+      | WrapperConfig["claude_engine_catalog"]
+      | null
+      | undefined;
   } = {},
 ) {
   const children: FakeChild[] = [];
@@ -96,6 +100,9 @@ function harness(
     sendResetResult: (r) => resetResults.push(r),
     listSessions: () => opts.sessions ?? [],
     sessionExists: () => opts.exists ?? false,
+    ...(opts.getClaudeEngineCatalog === undefined
+      ? {}
+      : { getClaudeEngineCatalog: opts.getClaudeEngineCatalog }),
     ...(opts.now === undefined ? {} : { now: opts.now }),
   });
   return {
@@ -982,6 +989,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/old/path" });
     expect(h.results.at(-1)).toEqual({
@@ -1010,6 +1018,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      getClaudeEngineCatalog: undefined,
     });
     // server_url を spawn 側で欠落させると fallback が使われる
     const { server_url: _drop, ...withoutUrl } = spawnMsg;
@@ -1026,6 +1035,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
+      getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
     expect(h.configs.at(-1)?.codex_chatgpt_plan).toBe("pro");
@@ -1040,6 +1050,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
+      getClaudeEngineCatalog: undefined,
     });
     h.sup.updateRuntimeConfig({
       cwdAllowlist: ["/cwd"],
@@ -1047,6 +1058,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
     expect(h.configs.at(-1)?.codex_chatgpt_plan).toBeUndefined();
@@ -1062,6 +1074,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      getClaudeEngineCatalog: undefined,
     });
     expect(running.kills).toBe(0);
   });
@@ -1080,6 +1093,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: undefined,
       codexInternalSubagents: false,
+      getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
     expect(h.configs.at(-1)?.codex_internal_subagents).toBe(false);
@@ -1093,8 +1107,50 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: undefined,
       codexInternalSubagents: true,
+      getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
     expect(h.configs.at(-1)?.codex_internal_subagents).toBe(true);
+  });
+
+  it("getClaudeEngineCatalog が返す catalog を claude spawn の WrapperConfig に載せる (ADR-0039 F9)", () => {
+    const catalog = [
+      { value: "sonnet", display_name: "Sonnet", description: "" },
+      { value: "haiku", display_name: "Haiku", description: "" },
+    ];
+    const h = harness({
+      cwdAllowlist: ["/cwd"],
+      getClaudeEngineCatalog: () => catalog,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "claude-code" });
+    expect(h.configs.at(-1)?.claude_engine_catalog).toEqual(catalog);
+  });
+
+  it("getClaudeEngineCatalog が null / 空を返したら WrapperConfig に載せない (bootstrap 経路)", () => {
+    const empties: Array<WrapperConfig["claude_engine_catalog"] | null> = [
+      null,
+      undefined,
+      [],
+    ];
+    for (const empty of empties) {
+      const h = harness({
+        cwdAllowlist: ["/cwd"],
+        getClaudeEngineCatalog: () => empty,
+      });
+      h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "claude-code" });
+      expect(h.configs.at(-1)?.claude_engine_catalog).toBeUndefined();
+    }
+  });
+
+  it("codex spawn では claude_engine_catalog を無視する (engine 分離)", () => {
+    const catalog = [
+      { value: "sonnet", display_name: "Sonnet", description: "" },
+    ];
+    const h = harness({
+      cwdAllowlist: ["/cwd"],
+      getClaudeEngineCatalog: () => catalog,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
+    expect(h.configs.at(-1)?.claude_engine_catalog).toBeUndefined();
   });
 });

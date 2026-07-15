@@ -188,6 +188,70 @@ export function parseConfig(raw: unknown): WrapperConfig {
     }
     config.codex_internal_subagents = raw.codex_internal_subagents;
   }
+  if (raw.claude_engine_catalog !== undefined) {
+    // Defensive shape + per-row validation (ADR-0039 F9 v2 = 藤 review
+    // turn-7 A condition). Reject arrays or rows that would surface as
+    // undefined-populated dropdowns; make a defensive copy so a later
+    // mutation upstream cannot bleed into the wrapper's #models.
+    if (!Array.isArray(raw.claude_engine_catalog)) {
+      throw new ConfigError("claude_engine_catalog must be an array");
+    }
+    const rows: NonNullable<WrapperConfig["claude_engine_catalog"]> = [];
+    for (let i = 0; i < raw.claude_engine_catalog.length; i++) {
+      const r = raw.claude_engine_catalog[i];
+      if (typeof r !== "object" || r === null) {
+        throw new ConfigError(
+          `claude_engine_catalog[${i}] must be an object`,
+        );
+      }
+      const row = r as Record<string, unknown>;
+      if (typeof row.value !== "string" || row.value === "") {
+        throw new ConfigError(
+          `claude_engine_catalog[${i}].value must be a non-empty string`,
+        );
+      }
+      if (typeof row.display_name !== "string" || row.display_name === "") {
+        throw new ConfigError(
+          `claude_engine_catalog[${i}].display_name must be a non-empty string`,
+        );
+      }
+      const copy: NonNullable<WrapperConfig["claude_engine_catalog"]>[number] =
+        {
+          value: row.value,
+          display_name: row.display_name,
+          description: typeof row.description === "string" ? row.description : "",
+        };
+      // Optional fields: absent → skip; present but malformed → loud
+      // ConfigError so a bad supplier upstream cannot silently downgrade a
+      // rich catalog to a strings-missing one (藤 review turn-10 補足).
+      if (row.effort_levels !== undefined) {
+        if (
+          !Array.isArray(row.effort_levels) ||
+          !row.effort_levels.every(
+            (l): l is string => typeof l === "string" && l !== "",
+          )
+        ) {
+          throw new ConfigError(
+            `claude_engine_catalog[${i}].effort_levels must be an array of non-empty strings`,
+          );
+        }
+        copy.effort_levels = [...row.effort_levels];
+      }
+      if (row.default_effort !== undefined) {
+        if (
+          typeof row.default_effort !== "string" ||
+          row.default_effort === ""
+        ) {
+          throw new ConfigError(
+            `claude_engine_catalog[${i}].default_effort must be a non-empty string`,
+          );
+        }
+        copy.default_effort = row.default_effort;
+      }
+      rows.push(copy);
+    }
+    config.claude_engine_catalog = rows;
+  }
 
   // Codex-only launch permission (ADR-0033 F3); the Claude engine ignores
   // both. The sandbox axis is a closed enum.

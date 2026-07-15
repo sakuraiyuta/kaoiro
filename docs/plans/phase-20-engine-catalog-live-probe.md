@@ -90,6 +90,8 @@ fallback 描画。
 | 20-7 | unit + integration tests | ✅ |
 | 20-8 | docs (ADR-0039 / phase-20 plan / ADR-0037 訂正) | ✅ |
 | 20-9 | 両 repo verify + 藤レビュー | ✅ |
+| 20-10 | ADR-0039 F9 v1: WrapperConfig 経由 initial catalog 輸送 (A のみ) | ✅ |
+| 20-11 | ADR-0039 F9 v2: B 相当の wrapper 内短命 probe + refresh_models_result 相関 + probe launcher 集約 + row shape defensive (藤 review turn-5→7) | ✅ |
 
 ## Notes
 

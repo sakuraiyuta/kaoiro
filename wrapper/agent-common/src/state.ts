@@ -197,6 +197,34 @@ export function makeStateChange(
   };
 }
 
+/** Wraps a refresh_models completion into the common envelope
+ *  (type="refresh_models_result", ADR-0039 F9 v2 = 藤 review turn-7 D2a).
+ *  Carries the correlator `request_id` so the client-side pending map
+ *  can settle the awaiting refreshModels() call. state stays the current
+ *  agent state (a refresh completion does not drive state derivation). */
+export function makeRefreshModelsResult(
+  config: WrapperConfig,
+  state: KaoiroState,
+  ts: string,
+  payload: {
+    request_id: string;
+    ok: boolean;
+    reason?: string;
+    models_count?: number;
+  },
+): Envelope {
+  return {
+    version: "0",
+    agent_id: config.agent_id,
+    persona: config.persona,
+    ts,
+    type: "refresh_models_result",
+    state,
+    payload: payload as unknown as Record<string, unknown>,
+    ext: {},
+  };
+}
+
 /** Wraps a relayed log line into the common envelope v0 (protocol.md
  *  type="log"). `state` is the agent's state at relay time; the line
  *  itself does not drive state derivation. */

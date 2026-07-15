@@ -6,7 +6,7 @@
 // in-flight subprocess whose ProbeOutcome fans out to every awaiter.
 
 import type { EngineModelInfo } from "@kaoiro/protocol";
-import type { ProbeOutcome } from "./claude_probe.js";
+import type { ProbeOutcome } from "@kaoiro/claude-code/probe-client";
 
 /** Freshness window before an auto-refresh triggers a live probe. 1 hour
  *  matches Claude's model-catalog release cadence (Anthropic ships new

@@ -16,7 +16,8 @@ import type {
 } from "@kaoiro/protocol";
 import { buildRegister, type RunnerConfig } from "./config.js";
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
-import { runClaudeProbe, type ProbeOutcome } from "./claude_probe.js";
+import { runClaudeProbe } from "@kaoiro/claude-code/probe-client";
+import type { ProbeOutcome } from "@kaoiro/claude-code/probe-client";
 
 /** Engines whose launch catalog can be freshened via a live probe. Codex
  *  is static-catalog by ADR-0035 F1, so refresh requests targeting it are

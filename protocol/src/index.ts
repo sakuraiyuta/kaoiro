@@ -109,6 +109,16 @@ export interface WrapperConfig {
    *  value, so the runner option outranks any user-global Codex config: true
    *  force-enables, false disables (ADR-0038 F2). */
   codex_internal_subagents?: boolean;
+  /** Claude-only: live-probed engine catalog snapshot from the runner's
+   *  memory cache (ADR-0039 F9 追補). When set, the Claude adapter seeds
+   *  its #models with this rich list instead of the ADR-0037 F1 single
+   *  `default` bootstrap floor, so AgentDetail's model/effort switch is
+   *  populated on the FIRST state_change — before the SDK's own
+   *  supportedModels() runs (fresh-idle wrappers deferring Query
+   *  construction never even reach that call). Absent = the wrapper falls
+   *  back to `claudeBootstrapCatalog()`; the SDK's own catalog still
+   *  overrides both once `#refreshSupportedModels()` succeeds. */
+  claude_engine_catalog?: EngineModelInfo[];
   /** Codex-only OS sandbox axis (ADR-0033 F3); Claude ignores it.
    *  Omitted = "workspace-write". */
   sandbox?: PermissionAxesExt["sandbox"];
@@ -382,7 +392,12 @@ export interface Envelope {
     | "result"
     | "attach_rejected"
     | "instruction_rejected"
-    | "inter_agent_message";
+    | "inter_agent_message"
+    /** Manual refresh_models completion (ADR-0039 F9 v2, 藤 review D2a).
+     *  payload = { request_id, ok, reason?, models_count? }. Wrapper emits
+     *  after refreshCatalogFor() settles so AgentDetail can pair server
+     *  ack + actual result and settle its loading spinner. */
+    | "refresh_models_result";
   state: KaoiroState;
   payload: Record<string, unknown>;
   ext: EnvelopeExt;
@@ -632,6 +647,40 @@ export type EngineCatalogFailReason =
   | "invalid_output"
   | "timeout"
   | "unsupported_engine";
+
+/** Closed vocabulary for a per-agent refresh_models completion (ADR-0039 F9
+ *  v2, 藤 review turn-7 D2a). Superset-compatible with the shared probe
+ *  failure vocabulary; `unsupported_engine` reuses the same string for
+ *  non-Claude adapters that no-op the control. */
+export type RefreshModelsFailReason = EngineCatalogFailReason;
+
+/** Payload of a `type: "refresh_models_result"` envelope (ADR-0039 F9 v2 =
+ *  藤 review D2a). `agent_id` lives on the enclosing envelope frame — this
+ *  payload MUST NOT duplicate it (see wrapper/agent-common/src/state.ts
+ *  makeRefreshModelsResult, which builds the envelope). Only correlation
+ *  fields go here so state_change latest-tracking is not affected — the
+ *  envelope is transient (server.wrapper_channel skips AgentStates.put for
+ *  it, client protocol.ts special-dispatches it before onEnvelope). The
+ *  refreshed catalog itself arrives on the paired `state_change.ext.models`
+ *  emitted immediately BEFORE the result envelope. */
+export interface RefreshModelsResultPayload {
+  request_id: string;
+  ok: boolean;
+  reason?: RefreshModelsFailReason;
+  /** Present on success; size-only signal for the toast. */
+  models_count?: number;
+}
+
+/** Legacy alias retained so consumers referencing `RefreshModelsResult` in
+ *  a "flat" client-shaped view (agent_id merged in) keep compiling; the
+ *  wire payload uses `RefreshModelsResultPayload` only. */
+export interface RefreshModelsResult {
+  agent_id: string;
+  request_id: string;
+  ok: boolean;
+  reason?: RefreshModelsFailReason;
+  models_count?: number;
+}
 
 /** runner -> server -> operator (agents:lobby, operator-only): completion
  *  report for a RefreshEngineCatalog request (ADR-0039). Failure carries a

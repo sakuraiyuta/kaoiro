@@ -249,17 +249,31 @@ function classifyError(message: string): ProbeFailReason {
   return "cli_error";
 }
 
-main().then(
-  (code) => process.exit(code),
-  (err) => {
-    // Unreachable if main() catches everything, but keep a hard backstop so
-    // an unexpected throw never leaves the child stuck.
-    emit({
-      ok: false,
-      reason: "cli_error",
-      detail: `unhandled: ${err instanceof Error ? err.message : String(err)}`.slice(0, 512),
-      elapsed_ms: 0,
-    });
-    process.exit(2);
-  },
-);
+// Import-safe entrypoint gate (ADR-0039 F9 v2 = 藤 review B): only run
+// main() when this file is invoked as a CLI, not when a library module
+// imports it. Without this guard, `probe-client.ts`'s `require.resolve()`
+// of this file would trigger the SDK query on every import.
+import { fileURLToPath } from "node:url";
+if (
+  process.argv[1] !== undefined &&
+  fileURLToPath(import.meta.url) === process.argv[1]
+) {
+  main().then(
+    (code) => process.exit(code),
+    (err) => {
+      // Unreachable if main() catches everything, but keep a hard backstop
+      // so an unexpected throw never leaves the child stuck.
+      emit({
+        ok: false,
+        reason: "cli_error",
+        detail:
+          `unhandled: ${err instanceof Error ? err.message : String(err)}`.slice(
+            0,
+            512,
+          ),
+        elapsed_ms: 0,
+      });
+      process.exit(2);
+    },
+  );
+}

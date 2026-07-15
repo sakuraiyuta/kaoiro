@@ -138,6 +138,74 @@ describe("parseConfig", () => {
     ).toThrow(ConfigError);
   });
 
+  it("claude_engine_catalog を array として受け入れ、非 array を弾く (ADR-0039 F9)", () => {
+    const catalog = [
+      { value: "sonnet", display_name: "Sonnet", description: "" },
+    ];
+    expect(
+      parseConfig({ ...valid, claude_engine_catalog: catalog }),
+    ).toMatchObject({ claude_engine_catalog: catalog });
+    // 空 array も pass (runner 側で empty は輸送しない契約だが shape のみ検証)
+    expect(
+      parseConfig({ ...valid, claude_engine_catalog: [] }).claude_engine_catalog,
+    ).toEqual([]);
+    expect(() =>
+      parseConfig({ ...valid, claude_engine_catalog: "not-array" }),
+    ).toThrow(ConfigError);
+  });
+
+  it("claude_engine_catalog: effort_levels の非文字列 / 空文字要素を弾く", () => {
+    // Error message 「non-empty strings」と判定を一致させるための実装ガード
+    // (以前は typeof string のみで "" を許してしまっていた)。
+    for (const bad of [[""], ["low", ""], ["low", 1], ["low", null]]) {
+      expect(() =>
+        parseConfig({
+          ...valid,
+          claude_engine_catalog: [
+            {
+              value: "sonnet",
+              display_name: "Sonnet",
+              description: "",
+              effort_levels: bad,
+            },
+          ],
+        }),
+      ).toThrow(/effort_levels must be an array of non-empty strings/);
+    }
+  });
+
+  it("claude_engine_catalog: default_effort の空文字 / 非文字列を弾く", () => {
+    for (const bad of ["", 1, null, {}]) {
+      expect(() =>
+        parseConfig({
+          ...valid,
+          claude_engine_catalog: [
+            {
+              value: "sonnet",
+              display_name: "Sonnet",
+              description: "",
+              default_effort: bad,
+            },
+          ],
+        }),
+      ).toThrow(/default_effort must be a non-empty string/);
+    }
+  });
+
+  it("claude_engine_catalog: 有効な effort_levels + default_effort をそのまま受け入れる", () => {
+    const catalog = [
+      {
+        value: "sonnet",
+        display_name: "Sonnet",
+        description: "",
+        effort_levels: ["low", "medium", "high"],
+        default_effort: "medium",
+      },
+    ];
+    const parsed = parseConfig({ ...valid, claude_engine_catalog: catalog });
+    expect(parsed.claude_engine_catalog).toEqual(catalog);
+  });
+
   it("permission_timeout_ms は正の整数のみ受け入れる", () => {
     expect(
       parseConfig({ ...valid, permission_timeout_ms: 1000 }),

@@ -15,6 +15,10 @@
       "types": "./dist/catalog.d.ts",
       "import": "./dist/catalog.js"
     },
+    "./probe-client": {
+      "types": "./dist/probe-client.d.ts",
+      "import": "./dist/probe-client.js"
+    },
     "./dist/cli.js": "./dist/cli.js",
     "./dist/probe.js": "./dist/probe.js",
     "./package.json": "./package.json"

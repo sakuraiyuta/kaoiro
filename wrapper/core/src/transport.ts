@@ -87,7 +87,7 @@ export interface ServerLinkOptions {
    *  (protocol.md, ADR-0037 F6, phase-18-5). Payload is `{}` — the topic
    *  addresses the agent. The wrapper resets its retry counter + succeeded
    *  flag and kicks a fresh #refreshSupportedModels() attempt. */
-  onRefreshModels?: () => void;
+  onRefreshModels?: (payload: { request_id?: string }) => void;
   /** An operator's permission-mode switch relayed by the server (#58). Also
    *  the carrier of the server's after-join push of the persisted last
    *  choice. Payload is `{ mode: string }` — one of the SDK PermissionMode
@@ -248,8 +248,19 @@ export class ServerLink {
     // protocol.md (ADR-0037 F6, phase-18-5): server -> wrapper `refresh_models`
     // has no payload fields; the topic already addresses the agent. Fire the
     // handler unconditionally — extra keys are ignored for forward compat.
-    this.#channel.on("refresh_models", (_payload: unknown) => {
-      options.onRefreshModels?.();
+    this.#channel.on("refresh_models", (payload: unknown) => {
+      // ADR-0039 F9 v2 = 藤 review D2a: payload now carries request_id so
+      // the wrapper's refresh_models_result envelope can correlate. Older
+      // servers may still push a bare {} — pass through as undefined.
+      const rid =
+        typeof payload === "object" &&
+        payload !== null &&
+        typeof (payload as { request_id?: unknown }).request_id === "string"
+          ? (payload as { request_id: string }).request_id
+          : undefined;
+      options.onRefreshModels?.({
+        ...(rid === undefined ? {} : { request_id: rid }),
+      });
     });
     // protocol.md (#58): server -> wrapper `set_permission_mode` carries the
     // operator's mode pick AND the server's after-join push of the persisted

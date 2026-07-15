@@ -1,9 +1,13 @@
-// Runner-side client for the wrapper/claude-code short-lived probe CLI
-// (Option E, ADR-0039). Spawns the probe as a child process, parses its
-// single-line JSON output, and returns a normalized ProbeOutcome. The SDK is
-// never imported here — this file's only dependency on the Claude engine is
-// the resolved on-disk path of `@kaoiro/claude-code/dist/probe.js`. That keeps
-// the runner package free of `@anthropic-ai/claude-agent-sdk`.
+// Reusable launcher for the short-lived Claude Agent SDK catalog probe
+// (ADR-0039 F9 v2, 藤 review). Side-effect-free library: importing this
+// module does NOT spawn the probe CLI — call `runClaudeProbe()` explicitly.
+// Both the runner (LaunchDialog cache) and the wrapper host itself
+// (fresh-idle AgentDetail refresh) share this launcher so the spawn /
+// stdout parse / timeout / SIGTERM→SIGKILL cleanup lives in ONE place
+// (single source of truth per藤 turn-7 D1b condition).
+//
+// The probe CLI (src/probe.ts) is the child process that opens the SDK
+// Query; this file only owns the launcher.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
@@ -11,7 +15,7 @@ import type { EngineCatalogFailReason, EngineModelInfo } from "@kaoiro/protocol"
 
 /** Wall-clock cap on the child process itself. Slightly above the probe's own
  *  internal --timeout-ms so a stuck child (e.g. SDK deadlock past its own
- *  timeout) is still reaped by the runner. */
+ *  timeout) is still reaped by the caller. */
 const CHILD_HARD_TIMEOUT_MS = 35_000;
 
 /** Value passed to the probe CLI via --timeout-ms. Matches ADR-0037's SDK
@@ -25,20 +29,19 @@ export interface ProbeOutcome {
   detail?: string;
   elapsed_ms: number;
   /** "init" / "supported_models" mark real probe replies; "cache" marks a
-   *  cache-hit or dedup fan-out reply that must NOT drive updateRegister
-   *  (see ClaudeCatalogCache and engine_catalog_refresh). */
+   *  cache-hit or dedup fan-out reply from the runner catalog cache that
+   *  must NOT drive updateRegister (see ClaudeCatalogCache). Absent on
+   *  wrapper-host probes. */
   source?: "init" | "supported_models" | "cache";
 }
 
 const require_ = createRequire(import.meta.url);
 
-/** Resolve the probe entrypoint against @kaoiro/claude-code's exports.
- *  Falls back to a sibling package path when the workspace layout differs
- *  (e.g. published dist), which mirrors how `runner/src/spawn.ts` locates
- *  wrapper entrypoints. */
+/** Resolve the probe entrypoint against this package's exports. Same
+ *  package = the sibling `probe.js` inside `dist/`. */
 function resolveProbePath(): string {
   try {
-    return require_.resolve("@kaoiro/claude-code/dist/probe.js");
+    return require_.resolve("./probe.js");
   } catch (err) {
     throw new Error(
       `cannot resolve @kaoiro/claude-code/dist/probe.js (build the wrapper first?): ${String(err)}`,
@@ -57,8 +60,7 @@ export interface ProbeSpawnDeps {
 }
 
 /** Run one short-lived probe. Never throws — a spawn failure or timeout is
- *  returned as an ok=false outcome so the orchestrator can emit a single
- *  EngineCatalogResult with the appropriate reason. */
+ *  returned as an ok=false outcome so callers can package it uniformly. */
 export async function runClaudeProbe(
   deps: ProbeSpawnDeps = {},
 ): Promise<ProbeOutcome> {
@@ -113,21 +115,24 @@ export async function runClaudeProbe(
 
     const hardTimer = setTimeout(() => {
       // Send SIGTERM and start the SIGKILL escalation clock. child.killed
-      // is a "kill(sig) was called" flag — NOT proof the child has exited
-      // (藤 must-fix 3). We track actual exit via the `close` event
-      // (closed=true), which is what Node emits when stdio streams flush
-      // AND the process is reaped.
-      try { child.kill("SIGTERM"); } catch {}
+      // is a "kill(sig) was called" flag — NOT proof the child has exited.
+      // We track actual exit via the `close` event (closed=true), which is
+      // what Node emits when stdio streams flush AND the process is reaped.
+      try {
+        child.kill("SIGTERM");
+      } catch {}
       const escalate = setTimeout(() => {
         if (!closed) {
-          try { child.kill("SIGKILL"); } catch {}
+          try {
+            child.kill("SIGKILL");
+          } catch {}
         }
       }, killEscalateMs);
       escalate.unref?.();
       finish({
         ok: false,
         reason: "timeout",
-        detail: "runner-side hard timeout",
+        detail: "hard timeout",
         elapsed_ms: Date.now() - start,
       });
     }, hardTimeoutMs);
@@ -184,25 +189,22 @@ export function parseProbeStdout(stdout: string): ProbeOutcome | null {
     const models = Array.isArray(r.models)
       ? r.models.filter(isEngineModelInfo)
       : [];
-    // 藤 review must-fix E: defence-in-depth against an empty catalog
-    // reaching cache/register even if the wrapper CLI (which now fails
-    // loud on 0 models) is bypassed or regresses. `{ok:true, models:[]}`
-    // OR every row failing the shape check both drop to invalid_output.
+    // Defence-in-depth against an empty catalog reaching cache / #models
+    // even if the wrapper CLI (which fails loud on 0 models) is bypassed
+    // or regresses. `{ok:true, models:[]}` OR every row failing the shape
+    // check both drop to invalid_output.
     if (models.length === 0) {
       return {
         ok: false,
         reason: "invalid_output",
-        detail:
-          Array.isArray(r.models)
-            ? `probe reported ok=true but 0 valid model rows (raw=${r.models.length})`
-            : "probe reported ok=true without a models array",
+        detail: Array.isArray(r.models)
+          ? `probe reported ok=true but 0 valid model rows (raw=${r.models.length})`
+          : "probe reported ok=true without a models array",
         elapsed_ms: 0,
       };
     }
     const source =
-      r.source === "init" || r.source === "supported_models"
-        ? r.source
-        : undefined;
+      r.source === "init" || r.source === "supported_models" ? r.source : undefined;
     return {
       ok: true,
       models,

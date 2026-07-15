@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ClaudeCatalogCache } from "../src/claude_catalog_cache.js";
-import type { ProbeOutcome } from "../src/claude_probe.js";
+import type { ProbeOutcome } from "@kaoiro/claude-code/probe-client";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 
 const MODELS: EngineModelInfo[] = [

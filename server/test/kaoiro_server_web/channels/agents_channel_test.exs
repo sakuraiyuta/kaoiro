@@ -505,6 +505,24 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref = push(socket, "refresh_models", %{"agent_id" => "test.refreshmodels-none"})
       assert_reply ref, :error, %{reason: "unknown_agent"}
     end
+
+    test "refresh_models payload の request_id は wrapper topic へそのまま relay される (ADR-0039 F9 v2)" do
+      agent_id = "test.refreshmodels-rid"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "refresh_models", %{
+          "agent_id" => agent_id,
+          "request_id" => "req-refresh-abc"
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "refresh_models", payload
+      assert payload["request_id"] == "req-refresh-abc"
+      refute Map.has_key?(payload, "agent_id")
+    end
   end
 
   describe "set_permission_mode relay (#58)" do
@@ -962,6 +980,61 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       })
 
       refute_push "history_reset", %{}
+    end
+  end
+
+  # ADR-0039 F9 v2 = 藤 review turn-13 追加指示 (must-fix 3): allow-list の
+  # fail-closed 経路で暗黙 covered な前提を、refresh_models_result について
+  # 明示 pin する。operator へは payload ごと配送、viewer へは drop される。
+  describe "refresh_models_result の operator 限定配信 (ADR-0039 F9 v2)" do
+    defp refresh_result_envelope(agent_id) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-07-15T00:00:00Z",
+        "type" => "refresh_models_result",
+        "state" => "waiting_input",
+        "payload" => %{
+          "request_id" => "req-refresh-vw-1",
+          "ok" => true,
+          "models_count" => 3
+        },
+        "ext" => %{}
+      }
+    end
+
+    test "operator は refresh_models_result を payload ごと受信する" do
+      agent_id = "test.refresh-result-op"
+      envelope = refresh_result_envelope(agent_id)
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+
+      assert_push "envelope",
+                  %{
+                    "type" => "refresh_models_result",
+                    "payload" => %{
+                      "request_id" => "req-refresh-vw-1",
+                      "ok" => true,
+                      "models_count" => 3
+                    }
+                  }
+    end
+
+    test "viewer には refresh_models_result を配信しない (fail-closed drop)" do
+      # sanitize_envelope_for(:viewer, _envelope) → :drop に落ちる allow-list
+      # の fail-closed 経路を明示 pin。type を追加した将来の作者が :viewer
+      # 節を書き忘れても、そのままでは pending マップの request_id が漏れる
+      # ことは無い、という契約を回帰チェックとして残す。
+      agent_id = "test.refresh-result-vw"
+      envelope = refresh_result_envelope(agent_id)
+      _socket = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+
+      refute_push "envelope", %{"type" => "refresh_models_result"}
+      # snapshot も汚さないことは wrapper_channel_test の store no-op test
+      # で pin 済み (ADR-0039 F9 v2 must-fix 1)。ここでは配信面のみ扱う。
     end
   end
 

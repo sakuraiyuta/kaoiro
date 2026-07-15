@@ -47,6 +47,7 @@ export {
   makePermissionRequest,
   makeQuestionRequest,
   makeResult,
+  makeRefreshModelsResult,
   makeStateChange,
   reduceStates,
   stepState,

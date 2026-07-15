@@ -68,8 +68,10 @@ import {
   computeResumeDrift,
   logEntryToPayload,
 } from "@kaoiro/agent-common";
+import type { RefreshModelsFailReason } from "@kaoiro/protocol";
 import { PERMISSION_MODE_AXES } from "./permission_axes.js";
 import { claudeBootstrapCatalog, type SupportedModel } from "./catalog.js";
+import { runClaudeProbe, type ProbeOutcome } from "./probe-client.js";
 import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
@@ -212,6 +214,10 @@ export interface AgentHostOptions {
   deferQueryUntilFirstInput?: boolean;
   /** SDK query() factory; injectable for tests. Defaults to the real SDK. */
   queryFn?: typeof query;
+  /** Injectable short-lived catalog probe (ADR-0039 F9 v2 = 藤 review D1b).
+   *  Called by `refreshCatalogFor()` when `#query` is null (fresh idle).
+   *  Defaults to the real child-subprocess probe shared with runner. */
+  probeFn?: () => Promise<ProbeOutcome>;
   /** ISO-8601 timestamp source; injectable for tests. */
   now?: () => string;
   /** Wall-clock epoch-ms source for the pending_uploads TTL GC sweep,
@@ -229,6 +235,7 @@ export class AgentHost implements EngineAdapter {
   readonly #config: WrapperConfig;
   readonly #options: AgentHostOptions;
   readonly #queryFn: typeof query;
+  readonly #probeFn: () => Promise<ProbeOutcome>;
   readonly #now: () => string;
   readonly #nowMs: () => number;
   /** setInterval handle for the TTL GC sweep, cleared in close(). null
@@ -292,9 +299,11 @@ export class AgentHost implements EngineAdapter {
   #persistedModel: string | null = null;
   /** Selectable models with their per-model effort levels (#54, ADR-0020);
    *  surfaced so the dashboard can build the bare `/model` / `/effort` choice
-   *  dialogs without a round-trip. Starts with the optimistic bootstrap
-   *  snapshot and is replaced once supportedModels() resolves after init. */
-  #models: SupportedModel[] = claudeBootstrapCatalog();
+   *  dialogs without a round-trip. Seed order: runner-supplied catalog
+   *  (ADR-0039 F9 追補) if the spawn carried one, else the bootstrap floor
+   *  (ADR-0037 F1). The SDK's own supportedModels() still overrides both
+   *  once `#refreshSupportedModels()` succeeds. */
+  #models: SupportedModel[];
   /** True while a supportedModels() call is in flight; guards concurrent
    *  fetches triggered by overlapping init / result messages within the same
    *  turn. Cleared in finally. */
@@ -341,8 +350,18 @@ export class AgentHost implements EngineAdapter {
     this.#config = config;
     this.#options = options;
     this.#queryFn = options.queryFn ?? query;
+    this.#probeFn = options.probeFn ?? runClaudeProbe;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
+    // ADR-0039 F9 追補: prefer the runner-transported catalog so fresh
+    // idle wrappers (deferQueryUntilFirstInput=true, #query still null,
+    // supportedModels() unreachable) already surface a rich model +
+    // effort_levels list to AgentDetail. Falls back to the bootstrap floor
+    // when the spawn carried nothing (runner cache miss / cold start).
+    this.#models =
+      config.claude_engine_catalog !== undefined
+        ? (config.claude_engine_catalog as SupportedModel[])
+        : claudeBootstrapCatalog();
     // Optimistic stamp (phase-15 15-4b): surface the wrapper-known model /
     // permission_mode from the first state_change onward, before the SDK
     // init reports them. Fields the wrapper cannot know at startup
@@ -1365,6 +1384,113 @@ export class AgentHost implements EngineAdapter {
     this.#modelsRetryCount = 0;
     this.#modelsSucceeded = false;
     void this.#refreshSupportedModels();
+  }
+
+  /** In-flight dedup for `refreshCatalogFor` (ADR-0039 F9 v2). Concurrent
+   *  manual refresh callers coalesce onto ONE execution but each caller
+   *  gets its own `refresh_models_result` envelope emitted by cli.ts. */
+  #refreshInFlight: Promise<{
+    ok: boolean;
+    reason?: RefreshModelsFailReason;
+    models_count?: number;
+  }> | null = null;
+
+  /** Manual `refresh_models` completion path (ADR-0039 F9 v2 = 藤 review
+   *  turn-7 D2a). Concurrency-safe: dedups to a single execution; each
+   *  caller receives the shared outcome, cli.ts emits a per-request
+   *  refresh_models_result envelope. On success: replaces `#models`,
+   *  clears the retry cap, and emits a fresh state_change so the paired
+   *  AgentDetail's model/effort switches repopulate WITHOUT waiting for
+   *  the next natural state transition (fresh-idle wrappers otherwise
+   *  never move). On failure: keeps the previous `#models` (last-known
+   *  good) so the operator does not regress to the bootstrap floor. */
+  async refreshCatalogFor(): Promise<{
+    ok: boolean;
+    reason?: RefreshModelsFailReason;
+    models_count?: number;
+  }> {
+    if (this.#refreshInFlight !== null) return this.#refreshInFlight;
+    this.#refreshInFlight = this.#executeManualRefresh().finally(() => {
+      this.#refreshInFlight = null;
+    });
+    return this.#refreshInFlight;
+  }
+
+  async #executeManualRefresh(): Promise<{
+    ok: boolean;
+    reason?: RefreshModelsFailReason;
+    models_count?: number;
+  }> {
+    // Reset the retry cap so a fresh attempt runs even after the auto-retry
+    // path gave up (same intent as retrySupportedModels()).
+    this.#modelsRetryCount = 0;
+    this.#modelsSucceeded = false;
+
+    if (this.#query !== null) {
+      // Live Query available → SDK.supportedModels() is authoritative.
+      // #refreshSupportedModels swallows errors internally and sets
+      // #modelsSucceeded on success. We inspect that flag rather than
+      // duplicating the SDK call here.
+      try {
+        await this.#refreshSupportedModels();
+      } catch {
+        // Belt-and-braces: #refreshSupportedModels already catches internally,
+        // but never-reject contract (藤 review turn-10 must-fix 2) means
+        // we must not surface a stray throw either.
+      }
+      if (this.#modelsSucceeded) {
+        this.#emitState(this.#machine.state);
+        return { ok: true, models_count: this.#models.length };
+      }
+      return { ok: false, reason: "cli_error" };
+    }
+
+    // Fresh-idle wrapper (#query still null under deferQueryUntilFirstInput):
+    // fall back to the shared short-lived probe subprocess so the SAME
+    // AgentDetail can be updated without waiting for the operator's first
+    // instruction. Reuses wrapper/claude-code/src/probe-client to keep the
+    // launcher single-sourced across runner and wrapper (藤 D1b).
+    //
+    // Wrap in try/catch so an injected probeFn (test) or a real subprocess
+    // throw is converted to a structured failure — never-reject contract
+    // per 藤 review turn-10 must-fix 2. Without this, refreshCatalogFor()'s
+    // shared promise would reject, `#refreshInFlight`'s `.finally` still
+    // clears state so the NEXT call retries, but the current caller's
+    // paired refresh_models_result envelope would never emit and the client
+    // spinner would spin until the 45s client-side timeout.
+    let outcome: ProbeOutcome;
+    try {
+      outcome = await this.#probeFn();
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "cli_error",
+        models_count: this.#models.length,
+        // Reason vocab is the closed set; the raw message goes nowhere.
+        // Last-known catalog is preserved because `#models` was never
+        // reassigned in this branch.
+        ...(err instanceof Error ? {} : {}),
+      };
+    }
+    if (outcome.ok && outcome.models !== undefined && outcome.models.length > 0) {
+      // Defensive copy per row so a downstream mutation cannot bleed back
+      // through the shared array reference.
+      this.#models = outcome.models.map((m) => ({
+        value: m.value,
+        display_name: m.display_name,
+        description: m.description,
+        ...(m.effort_levels ? { effort_levels: [...m.effort_levels] } : {}),
+        ...(m.default_effort ? { default_effort: m.default_effort } : {}),
+      })) as SupportedModel[];
+      this.#modelsSucceeded = true;
+      this.#validatePersistModelAgainstCatalog();
+      this.#emitState(this.#machine.state);
+      return { ok: true, models_count: this.#models.length };
+    }
+    return {
+      ok: false,
+      reason: (outcome.reason as RefreshModelsFailReason) ?? "cli_error",
+    };
   }
 
   /** Pulls the current context-window usage (#16). Best-effort: the SDK

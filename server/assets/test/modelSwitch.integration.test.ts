@@ -36,7 +36,25 @@ function connection(overrides: Partial<KaoiroConnection> = {}): KaoiroConnection
     enumerateSessions: vi.fn(async () => undefined),
     setModel: vi.fn(async () => undefined),
     setEffort: vi.fn(async () => undefined),
-    refreshModels: vi.fn(async () => undefined),
+    // ADR-0039 F9 v2 = 藤 review turn-10 must-fix 3: refreshModels now
+    // returns a Promise<RefreshModelsResult>; stubbing undefined would let
+    // `result.ok` access throw and be silently caught as "success". Return
+    // a well-shaped result so the tested behaviour is real.
+    refreshModels: vi.fn(async () => ({
+      agent_id: "host-a.fuji",
+      request_id: "test-req",
+      ok: true,
+      models_count: 0,
+    })),
+    // Kept for backwards compat of Codex path tests; Claude uses
+    // refreshModels only in v2 (refreshEngineCatalog is not called).
+    refreshEngineCatalog: vi.fn(async () => ({
+      host_id: "host-a",
+      engine: "claude-code",
+      request_id: "test-req",
+      ok: true,
+      models_count: 0,
+    })),
     ...overrides,
   } as unknown as KaoiroConnection;
 }
@@ -361,6 +379,228 @@ describe("phase-16 dashboard model switch integration", () => {
     button!.click();
     await tick();
     expect(conn.refreshModels).toHaveBeenCalledWith("host-a.fuji");
+  });
+
+  it("refresh button は result 到着まで disabled、成功で再有効化 (藤 review turn-10 must-fix 3)", async () => {
+    // Deferred: 手動で resolve するまで refreshModels() が settle しない
+    // → button loading が最後まで維持されることを pin。
+    type RefreshResult = {
+      agent_id: string;
+      request_id: string;
+      ok: boolean;
+      models_count?: number;
+    };
+    let resolveRefresh: (r: RefreshResult) => void = () => {};
+    const conn = connection({
+      refreshModels: (async () =>
+        new Promise<RefreshResult>((resolve) => {
+          resolveRefresh = resolve;
+        })) as unknown as (agentId: string) => Promise<RefreshResult>,
+    });
+    const { target } = await renderDetail(
+      {
+        engine: "claude-code",
+        model: "default",
+        models: claudeBootstrap,
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_model_switch: true,
+          supports_effort_switch: true,
+        },
+      },
+      conn,
+    );
+    const btn = () =>
+      target.querySelector(
+        '[aria-label="モデル一覧を再取得"]',
+      ) as HTMLButtonElement | null;
+    btn()!.click();
+    await tick();
+    // Ack fired but result not yet arrived: button stays disabled.
+    expect(btn()?.disabled).toBe(true);
+    resolveRefresh({
+      agent_id: "host-a.fuji",
+      request_id: "req-1",
+      ok: true,
+      models_count: 3,
+    });
+    // Two ticks: microtask + svelte reactivity.
+    await tick();
+    await tick();
+    expect(btn()?.disabled).toBe(false);
+  });
+
+  it("refresh failure reason は switchNotice error 表示 (藤 review turn-10 must-fix 3)", async () => {
+    const conn = connection({
+      refreshModels: vi.fn(async () => ({
+        agent_id: "host-a.fuji",
+        request_id: "req-fail",
+        ok: false,
+        reason: "auth_failed",
+      })),
+    });
+    const { target } = await renderDetail(
+      {
+        engine: "claude-code",
+        model: "default",
+        models: claudeBootstrap,
+        session_capabilities: {
+          supports_attachments: true,
+          supports_user_input_dialog: true,
+          supports_model_switch: true,
+          supports_effort_switch: true,
+        },
+      },
+      conn,
+    );
+    const btn = target.querySelector(
+      '[aria-label="モデル一覧を再取得"]',
+    ) as HTMLButtonElement | null;
+    btn!.click();
+    // microtask + reactivity
+    await tick();
+    await tick();
+    const notice = target.textContent ?? "";
+    expect(notice).toContain("auth_failed");
+  });
+
+  it("refresh button click 後、reactive envelope 更新で default-only → rich models へ遷移し effort 切替 button が出る (藤 review turn-13 追加指示)", async () => {
+    // 同じ mount 済み AgentDetail 上で:
+    // 1) 初期は models=[default] のみで effort_levels 空 → effort 切替 button 非表示
+    // 2) refresh button click で refreshingModels=true (button disabled)
+    // 3) wrapper からの state_change (envelope 更新) が rich models +
+    //    supports_effort_switch=true を持って先に到達 → 選択肢が増え、
+    //    active model の effort_levels により effort 切替 button が出る
+    // 4) その後 refresh_models_result が Promise を resolve するが、
+    //    completion result envelope 自体は AgentDetail の generic state に
+    //    入らない (wrapper/agents_channel の gating 契約) 前提で、UI 側は
+    //    button の disabled 解除だけが起きる
+    let resolveRefresh: (r: {
+      agent_id: string;
+      request_id: string;
+      ok: boolean;
+      models_count?: number;
+    }) => void = () => {};
+    const conn = connection({
+      refreshModels: (async () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        })) as unknown as (agentId: string) => Promise<{
+        agent_id: string;
+        request_id: string;
+        ok: boolean;
+        models_count?: number;
+      }>,
+    });
+
+    // 初期: default-only、effort_levels 未提供 → supports_effort_switch=false
+    // (wrapper 側 host.ts が active model の effort_levels 有無で narrow)。
+    const defaultOnlyEnv: Envelope = switchEnvelope({
+      engine: "claude-code",
+      model: "default",
+      models: [{ value: "default", display_name: "Default" }],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: false,
+      },
+    });
+
+    const target = document.createElement("div");
+    document.body.append(target);
+    const props = makeReactiveAgentDetailProps({
+      envelope: defaultOnlyEnv,
+      connection: conn,
+      onClose: vi.fn(),
+    });
+    const component = mount(AgentDetail, { target, props });
+    mounted.push(component);
+    await tick();
+
+    // Pre-refresh: effort 切替 button 非表示。model 切替 button は存在。
+    expect(target.querySelector('[title="effort を切替"]')).toBeNull();
+    const modelBtn = target.querySelector(
+      '[title="モデルを切替"]',
+    ) as HTMLButtonElement | null;
+    expect(modelBtn).not.toBeNull();
+    // 選択肢を開いて 1 件しかないことを確認、閉じる。
+    modelBtn!.click();
+    await tick();
+    let options = [...target.querySelectorAll('[role="option"]')].map(
+      (n) => n.textContent,
+    );
+    expect(options).toEqual(["Default"]);
+    modelBtn!.click();
+    await tick();
+
+    // Refresh を発火 (完了は保留、button disabled のまま)。
+    const refreshBtn = target.querySelector(
+      '[aria-label="モデル一覧を再取得"]',
+    ) as HTMLButtonElement;
+    expect(refreshBtn).not.toBeNull();
+    refreshBtn.click();
+    await tick();
+    expect(refreshBtn.disabled).toBe(true);
+
+    // Wrapper が rich models を stamp した state_change を先に emit する経路
+    // (ADR-0039 F9 v2 = 藤 review turn-7 D2a)。AgentDetail に届く形は envelope
+    // の reactive 差替え。effort_levels を active model が持つので、
+    // supports_effort_switch も true に narrow される。
+    props.envelope = switchEnvelope({
+      engine: "claude-code",
+      model: "default",
+      models: [
+        {
+          value: "default",
+          display_name: "Default",
+          effort_levels: ["low", "medium", "high"],
+        },
+        {
+          value: "sonnet",
+          display_name: "Sonnet",
+          effort_levels: ["low", "medium", "high", "xhigh"],
+        },
+        { value: "haiku", display_name: "Haiku", effort_levels: ["low", "medium"] },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    await tick();
+
+    // effort 切替 button が現れる。
+    expect(target.querySelector('[title="effort を切替"]')).not.toBeNull();
+
+    // Model dropdown を再度開くと選択肢が増えている。
+    const modelBtnAfter = target.querySelector(
+      '[title="モデルを切替"]',
+    ) as HTMLButtonElement;
+    modelBtnAfter.click();
+    await tick();
+    options = [...target.querySelectorAll('[role="option"]')]
+      .filter((n) => n.closest('[aria-label="モデル候補"]') !== null)
+      .map((n) => n.textContent);
+    expect(options).toEqual(["Default", "Sonnet", "Haiku"]);
+
+    // 対の refresh_models_result が最後に Promise を settle。completion result
+    // envelope 自体は refresh_models_result type で、agents_channel の allow-list
+    // gating (:viewer drop / :operator forward) と wrapper_channel の非 store
+    // 契約により generic state slot には反映されない。ここでは UI 面で
+    // refresh button の disabled 解除のみが起きることを pin する。
+    resolveRefresh({
+      agent_id: "host-a.fuji",
+      request_id: "req-e2e",
+      ok: true,
+      models_count: 3,
+    });
+    await tick();
+    await tick();
+    expect(refreshBtn.disabled).toBe(false);
   });
 
   it("refresh button is hidden on codex engine (ADR-0035 no-op cross-engine)", async () => {

@@ -205,6 +205,108 @@ toast は future work)。
 | probe を runner package に直実装 | Reject。runner が `@anthropic-ai/claude-agent-sdk` に直依存すると engine 境界が崩れる (ADR-0032 F1 分離を退行させる) |
 | server 側に engine validation | Reject。Option E で runner が SoT。server は agent-agnostic な relay に留める (ADR-0023 慣習) |
 
+### F9 v2 (2026-07-15、藤 review turn-5 で v1 は reject) — fresh-idle wrapper の即時 refresh
+
+v1 (下記) は initial spawn 経路 (A) のみでは AgentDetail ↻ 時に現画面が
+更新されない (`refresh_engine_catalog` は runner cache しか更新せず「次
+restart で反映」となり誤誘導) 問題があった。v2 で以下を追加:
+
+- **wrapper 側 短命 probe (B)**: `wrapper/claude-code/src/probe-client.ts`
+  を側効果なし reusable launcher として抽出 (旧 `runner/src/claude_probe.ts`
+  はここへ集約、runner は import で使う = SoT 一元化、藤 D1b)。probe CLI
+  entrypoint `probe.ts` は `import.meta.url === process.argv[1]` gate で
+  library import しても main が走らない構造に。
+- **host `refreshCatalogFor()`**: `#query!==null` は既存
+  `#refreshSupportedModels()` (SDK authoritative)、`#query===null` は
+  `runClaudeProbe()` (child subprocess) にフォールバック。成功時 `#models`
+  更新 + `#modelsSucceeded=true` + `#emitState` で ext.models を即時送出、
+  同じ AgentDetail の model/effort 選択肢が動的更新。in-flight dedup で
+  concurrent manual refresh は 1 execution に coalesce、各 caller は shared
+  outcome を受け取る。
+- **`refresh_models_result` envelope (D2a)**: 新 envelope type、payload =
+  `{request_id, ok, reason?, models_count?}`。wrapper が
+  `refreshCatalogFor()` 完了時に emit、operator-only (既存 handle_out の
+  viewer allow-list に含めず自動 drop = fail-closed)。
+- **`refresh_models` control payload の request_id 追加**: 既存 control は
+  agent_id のみ、client が UUIDv4 を付けて発火、wrapper→server ack は
+  透過、wrapper 側 `refresh_models_result` envelope で相関。
+- **client pending map**: `makeRefreshPendingStore` を instance scope で
+  作成、`connection.refreshModels()` の返り値を `Promise<RefreshModelsResult>`
+  に。unrelated request_id 無視、client-side timeout (45s、wrapper 側 35s
+  の上位)、disconnect/error で drain。
+- **A の row shape defensive validation**: `wrapper/core/src/persona.ts`
+  で `claude_engine_catalog` の各 row を per-field validate + defensive
+  copy。malformed row は loud reject。
+- **AgentDetail `refreshModels()`**: Promise.all + `refreshEngineCatalog`
+  廃止 (誤誘導の元)。単一 `connection.refreshModels(agent_id)` を await、
+  result.ok=false は reason を UI 表示、button loading は result 到着まで
+  維持。runner cache への同期は今回作らない (scope 分離: runner cache =
+  LaunchDialog/future spawn、wrapper #models = current agent)。
+
+副作用境界 (v2):
+
+- wrapper→probe child subprocess は launch 直後 (~1s) にのみ 2 プロセス
+  同時稼働、close 後は完全 cleanup (spike + probe-client test で pin)。
+- SDK authoritative 契約 (#query 存在時) は非回帰、既存
+  `#refreshSupportedModels` を再利用。
+- runner cache は wrapper probe の副産物としての更新経路は作らない
+  (藤 turn-7)。runner cache は LaunchDialog manual refresh で独立更新。
+- Codex 非回帰: `refresh_models` control は Codex 側で unregister (host
+  に refreshCatalogFor がない、codex adapter は refresh_models を受けない)。
+
+### F9 v1 (2026-07-15) — fresh-idle wrapper への initial catalog 輸送
+
+初回 shipment 後の dogfood で以下 2 症状が観測された:
+
+- AgentDetail 左 pane の model 切替が起動後も `default` 1 entry のまま
+  (LaunchDialog 側は F2-F8 で live 化済み)
+- 同画面の effort 切替 button が初回表示されない (rich model 群がなく
+  effort_levels 供給源が乏しいため)
+
+根因: (a) `wrapper/claude-code/src/host.ts` の `#models` 初期値が
+`claudeBootstrapCatalog()` ハードコード、(b) `AgentDetail` の既存 ↻ が
+`connection.refreshModels(agent_id) → wrapper.retrySupportedModels()` で
+running wrapper に届くが、fresh-idle wrapper は `deferQueryUntilFirstInput`
+で `#query=null` のため `#refreshSupportedModels()` が no-op、(c) runner の
+`ClaudeCatalogCache` は register 経路にのみ供給し、spawn 時 `WrapperConfig`
+へは載せていなかった。
+
+追補内容:
+
+- `WrapperConfig.claude_engine_catalog?: EngineModelInfo[]` を追加
+  (`protocol/src/index.ts`)。runner の live cache last-known-good を
+  spawn/restart/relaunch 時に relay。
+- `wrapper/core/src/persona.ts` で shape-only 検証 + セット。
+- `wrapper/claude-code/src/host.ts` constructor で
+  `#models = config.claude_engine_catalog ?? claudeBootstrapCatalog()`。
+  初回 `state_change.ext.models` から rich になり AgentDetail が起動直後
+  から複数 model + 各 effort_levels を surface できる。SDK の
+  `supportedModels()` 成功後は既存経路 (F2) が引き続き上書き。
+- `runner/src/supervisor.ts` の `SupervisorOptions` / `SupervisorRuntimeUpdate`
+  に `getClaudeEngineCatalog?: () => EngineModelInfo[] | null | undefined`
+  (live getter)、`resolveWrapperConfig` に第 7 引数 `claudeEngineCatalog`
+  追加、4 呼出しサイトで cache getter を渡す。engine !== "claude-code" /
+  null / undefined / 空配列は WrapperConfig に載せず bootstrap にフォール
+  スルー。
+- `runner/src/cli.ts` で `getClaudeEngineCatalog: () => claudeCatalog.getStale()`
+  を supervisor に渡し、hot-reload の `updateRuntimeConfig` でも同 getter
+  を再指定。
+- `server/assets/src/lib/AgentDetail.svelte` の `refreshModels()` を
+  Claude engine 判定で 2 経路並行発火に拡張: (i) 既存 `refreshModels`
+  (running wrapper 向け、fresh-idle では実質 no-op)、(ii)
+  `refreshEngineCatalog(hostId, "claude-code", true)` で runner cache を
+  live 更新 (次 restart/spawn で反映)。Codex では発火しない (静的 catalog)。
+
+副作用 / 境界:
+
+- ADR-0039 SoT 契約 (runner が catalog SoT) は維持。cache の輸送だけで、
+  wrapper 側新規 probe / server-side warm cache は追加しない。
+- catalog 空 / cache miss (cold start) は bootstrap fallback で LaunchDialog
+  と同一の UX。
+- SDK 実測が成功したらそちらが authoritative (F2 契約変更なし、非回帰)。
+- Codex 非回帰: `parsed.engine === "claude-code"` gate で codex_engine_catalog
+  相当は流さない。
+
 ## Implementation
 
 [phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md)。

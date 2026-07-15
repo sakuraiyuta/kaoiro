@@ -29,7 +29,11 @@ import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { PermissionBroker } from "@kaoiro/agent-common";
 import { PERMISSION_MODES, loadConfig } from "@kaoiro/wrapper-core";
 import { QuestionBroker } from "@kaoiro/agent-common";
-import { makeLog, makeStateChange } from "@kaoiro/agent-common";
+import {
+  makeLog,
+  makeRefreshModelsResult,
+  makeStateChange,
+} from "@kaoiro/agent-common";
 import { ServerLink } from "@kaoiro/wrapper-core";
 import type {
   Envelope,
@@ -314,12 +318,56 @@ async function main(): Promise<void> {
       process.stdout.write(`  set_effort: ${level}\n`);
       void host.setEffort(level).catch(() => {});
     },
-    onRefreshModels: () => {
-      // protocol.md (ADR-0037 F6, phase-18-5): manual retry of supportedModels()
-      // catalog. host.retrySupportedModels() is sync and only kicks the async
-      // fetch fire-and-forget; nothing to await here.
-      process.stdout.write("  refresh_models\n");
-      host.retrySupportedModels();
+    onRefreshModels: (payload) => {
+      // protocol.md (ADR-0037 F6, phase-18-5) + ADR-0039 F9 v2 = 藤 review
+      // D2a: manual refresh. When the server relays `request_id` we run
+      // host.refreshCatalogFor() (awaited) and emit refresh_models_result
+      // so AgentDetail's loading spinner can pair with the actual outcome.
+      // Bare payload (older client / test) still supports fire-and-forget
+      // via retrySupportedModels() for backwards compat.
+      if (payload?.request_id !== undefined) {
+        const rid = payload.request_id;
+        process.stdout.write(`  refresh_models (request_id=${rid})\n`);
+        // 藤 review turn-10 must-fix 2: even though refreshCatalogFor() is
+        // documented as never-reject, keep a defensive .catch backstop so
+        // a future refactor that accidentally throws still produces a
+        // paired result envelope. The client spinner MUST always settle.
+        void host
+          .refreshCatalogFor()
+          .catch(
+            (err): {
+              ok: false;
+              reason: "cli_error";
+              models_count?: number;
+            } => {
+              process.stderr.write(
+                `refresh_models handler unexpectedly threw: ${
+                  err instanceof Error ? err.message : String(err)
+                }\n`,
+              );
+              return { ok: false, reason: "cli_error" };
+            },
+          )
+          .then((outcome) => {
+            const env = makeRefreshModelsResult(
+              config,
+              host.state,
+              new Date().toISOString(),
+              {
+                request_id: rid,
+                ok: outcome.ok,
+                ...(outcome.reason ? { reason: outcome.reason } : {}),
+                ...(outcome.models_count !== undefined
+                  ? { models_count: outcome.models_count }
+                  : {}),
+              },
+            );
+            link?.send(env);
+          });
+      } else {
+        process.stdout.write("  refresh_models (legacy no request_id)\n");
+        host.retrySupportedModels();
+      }
     },
     onSetPermissionMode: (mode) => {
       // protocol.md (#58): operator pick OR server after-join push of the

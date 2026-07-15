@@ -101,6 +101,16 @@ export interface SupervisorOptions {
   codexAuthMode?: CodexAuthMode;
   codexChatgptPlan?: ChatGptPlan;
   codexInternalSubagents?: boolean;
+  /** ADR-0039 F9 追補: reads the current Claude engine-catalog from the
+   *  runner's live probe cache so every spawn/restart/relaunch relays the
+   *  latest known models to the wrapper's initial #models. Getter (not a
+   *  cached value) so a probe that finishes between spawns reaches the
+   *  next child, and a null return (cold start / probe never ran) falls
+   *  back to the bootstrap floor server-side. */
+  getClaudeEngineCatalog?: () =>
+    | WrapperConfig["claude_engine_catalog"]
+    | null
+    | undefined;
   sendResult: (result: SpawnResult) => void;
   sendSessions: (sessions: RunnerSessions) => void;
   /** phase-17 17-5: report a session-reset outcome (ADR-0036 F7). Required
@@ -267,6 +277,7 @@ export function resolveWrapperConfig(
   codexAuthMode?: CodexAuthMode,
   codexChatgptPlan?: ChatGptPlan,
   codexInternalSubagents?: boolean,
+  claudeEngineCatalog?: WrapperConfig["claude_engine_catalog"] | null,
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
@@ -287,6 +298,18 @@ export function resolveWrapperConfig(
     // authoritative over user-global Codex config, so relay a concrete
     // boolean for every codex spawn (default true when unset).
     config.codex_internal_subagents = codexInternalSubagents ?? true;
+  }
+  if (
+    parsed.engine === "claude-code" &&
+    claudeEngineCatalog !== undefined &&
+    claudeEngineCatalog !== null &&
+    claudeEngineCatalog.length > 0
+  ) {
+    // ADR-0039 F9 追補: hand the runner's live-probed Claude catalog to
+    // the wrapper so its initial #models is rich from the first
+    // state_change (fresh-idle wrappers never reach SDK.supportedModels()).
+    // Empty / null / undefined all fall through to the bootstrap floor.
+    config.claude_engine_catalog = claudeEngineCatalog;
   }
   if (parsed.permissionMode !== undefined) {
     config.permission_mode = parsed.permissionMode;
@@ -357,6 +380,12 @@ export interface SupervisorRuntimeUpdate {
   codexAuthMode: CodexAuthMode | undefined;
   codexChatgptPlan: ChatGptPlan | undefined;
   codexInternalSubagents: boolean | undefined;
+  /** Live getter for the runner's Claude engine-catalog cache (ADR-0039
+   *  F9 追補). Preserved on hot-reload so a config file change does not
+   *  disconnect an existing probe result from future spawns. */
+  getClaudeEngineCatalog:
+    | (() => WrapperConfig["claude_engine_catalog"] | null | undefined)
+    | undefined;
 }
 
 export class Supervisor {
@@ -380,6 +409,9 @@ export class Supervisor {
   #codexAuthMode: CodexAuthMode | undefined;
   #codexChatgptPlan: ChatGptPlan | undefined;
   #codexInternalSubagents: boolean | undefined;
+  #getClaudeEngineCatalog:
+    | (() => WrapperConfig["claude_engine_catalog"] | null | undefined)
+    | undefined;
   readonly #children = new Map<string, ChildEntry>();
   /** session_ids currently being resumed — the F4 local lock against a second
    *  concurrent resume of the same session. */
@@ -410,6 +442,7 @@ export class Supervisor {
     this.#codexAuthMode = options.codexAuthMode;
     this.#codexChatgptPlan = options.codexChatgptPlan;
     this.#codexInternalSubagents = options.codexInternalSubagents;
+    this.#getClaudeEngineCatalog = options.getClaudeEngineCatalog;
   }
 
   /** Hot-swap runtime config on a config-file reload. Full replacement per
@@ -425,6 +458,7 @@ export class Supervisor {
     this.#codexAuthMode = update.codexAuthMode;
     this.#codexChatgptPlan = update.codexChatgptPlan;
     this.#codexInternalSubagents = update.codexInternalSubagents;
+    this.#getClaudeEngineCatalog = update.getClaudeEngineCatalog;
   }
 
   /** Handles a server `spawn`: validates, enforces the cwd allow-list, the
@@ -836,6 +870,7 @@ export class Supervisor {
         this.#codexAuthMode,
         this.#codexChatgptPlan,
         this.#codexInternalSubagents,
+        this.#getClaudeEngineCatalog?.() ?? null,
       ),
       parsed.cwd,
       parsed.resumeSessionId,
@@ -921,6 +956,7 @@ export class Supervisor {
           this.#codexAuthMode,
           this.#codexChatgptPlan,
           this.#codexInternalSubagents,
+          this.#getClaudeEngineCatalog?.() ?? null,
         ),
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
@@ -966,6 +1002,7 @@ export class Supervisor {
           this.#codexAuthMode,
           this.#codexChatgptPlan,
           this.#codexInternalSubagents,
+          this.#getClaudeEngineCatalog?.() ?? null,
         ),
         entry.parsed.cwd,
         undefined, // fresh: no --resume
@@ -1061,6 +1098,7 @@ export class Supervisor {
           this.#codexAuthMode,
           this.#codexChatgptPlan,
           this.#codexInternalSubagents,
+          this.#getClaudeEngineCatalog?.() ?? null,
         ),
         entry.parsed.cwd,
         rollbackSid,
