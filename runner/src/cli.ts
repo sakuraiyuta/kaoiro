@@ -11,7 +11,7 @@ import type { EngineCatalogResult } from "@kaoiro/protocol";
 import { parseRunnerArgs } from "./args.js";
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
-import { type CodexAuthMode, detectCodexAuthMode } from "./codex-auth.js";
+import { type CodexAuthMode, resolveCodexAuthMode } from "./codex-auth.js";
 import {
   buildRegister,
   loadRunnerConfig,
@@ -27,9 +27,11 @@ import { RunnerLink } from "./transport.js";
 const HEARTBEAT_MS = 30_000;
 
 /** Config-reload diff: which top-level fields differ. `codex` is a whole-object
- *  compare so a chatgpt_plan change surfaces as one entry ("codex"). Uses
- *  JSON.stringify equality — parseRunnerConfig builds fields in a stable order
- *  so a byte-identical config produces byte-identical JSON. */
+ *  compare so any change inside the codex block — `auth_mode` (Phase-24),
+ *  `chatgpt_plan`, `internal_subagents` — surfaces as one entry ("codex")
+ *  and drives one reload. Uses JSON.stringify equality — parseRunnerConfig
+ *  builds fields in a stable order so a byte-identical config produces
+ *  byte-identical JSON. */
 function changedFields(prev: RunnerConfig, next: RunnerConfig): string[] {
   const fields: (keyof RunnerConfig)[] = [
     "host_id",
@@ -60,11 +62,16 @@ async function main(): Promise<void> {
   let config = loadRunnerConfig(configPath);
   const token = process.env.KAOIRO_RUNNER_TOKEN;
 
-  // Detection fails closed internally and never relays doctor output, which
-  // may contain credential-presence details alongside the auth mode.
-  let codexAuthMode: CodexAuthMode = isCodexEnabled(config)
-    ? await detectCodexAuthMode()
-    : "unknown";
+  // Phase-24: explicit `codex.auth_mode` > doctor detection > "unknown"。
+  // `resolveCodexAuthMode` never invokes doctor when the config declares
+  // an explicit value, so a runner environment whose PATH has no `codex`
+  // binary still gets the correct catalog (dogfood 環境依存回帰対策)。
+  // Detection fails closed internally and never relays doctor output,
+  // which may contain credential-presence details alongside the auth mode.
+  let codexAuthMode: CodexAuthMode = await resolveCodexAuthMode({
+    nextCodex: config.codex,
+    nextEnabled: isCodexEnabled(config),
+  });
 
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
@@ -143,13 +150,16 @@ async function main(): Promise<void> {
     );
     const prevCodexEnabled = isCodexEnabled(config);
     const nextCodexEnabled = isCodexEnabled(next);
-    // codex を新規 ON にした場合のみ doctor を再走。ON のまま / OFF のまま
-    // なら現在の mode を維持し、OFF にした場合は unknown に戻す。
-    if (nextCodexEnabled && !prevCodexEnabled) {
-      codexAuthMode = await detectCodexAuthMode();
-    } else if (!nextCodexEnabled) {
-      codexAuthMode = "unknown";
-    }
+    // Phase-24: hot reload の分岐は resolver に集約。explicit → explicit /
+    // explicit → absent / absent → explicit / off → on / on → off の 5
+    // 遷移が一貫して policy に従う。explicit set 時は必ず doctor 非呼出。
+    codexAuthMode = await resolveCodexAuthMode({
+      nextCodex: next.codex,
+      nextEnabled: nextCodexEnabled,
+      prevCodex: config.codex,
+      prevEnabled: prevCodexEnabled,
+      prevMode: codexAuthMode,
+    });
     supervisor.updateRuntimeConfig({
       cwdAllowlist: next.cwd_allowlist,
       wrapperServerUrl: wrapperUrlFrom(next.server_url),
