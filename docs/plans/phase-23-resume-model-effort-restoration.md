@@ -196,7 +196,7 @@ operator の明示的な model / effort 選択の喪失を解消しつつ、
 | 23-E7 | docs: ADR-0014 F1 追補 に three-tier lookup (F1 で確定、G1 で concrete miss fail-closed 追加) + union 拒否理由 + synthetic default 非採用 | ✅ | phase-23 plan status を dogfood 再検証待ちへ同期 |
 | 23-F1 | 3-tier lookup 修正 + fixture revert (藤 4 次 review must-fix) | ✅ | claudeBootstrap fixture の Haiku levels 追加を revert (`host.test.ts:1349` 契約復元)、Codex helper と dashboard を exact → real default → intersection の three-tier に、real vs synthetic default 違いを ADR に明文化、real default fallback / concrete miss / exact 欠落 / Codex null 各経路の pin、関連 suite pass |
 | 23-G1 | concrete miss は intersection に fallback しない (藤 5 次 review must-fix) | ✅ | Codex helper と dashboard に「concrete key exact miss + real default 無し → [] fail-closed」を追加。future/stale concrete model が catalog 候補のいずれかである保証がないため。intersection は model=null (account default) 経路のみに限定。docs (ADR/plan) 最終表現に同期、関連 suite pass |
-| 23-9 | dogfood 手動検証 | ⏳ | マスター実機確認 pending (D+E+F+G+R4-R6 修正後の再々々々検証) |
+| 23-9 | dogfood 手動検証 | ⏳ | マスター実機確認 pending (D+E+F+G+R4-R6 + [Phase 24](phase-24-codex-auth-mode-explicit.md) 修正後の再々々々検証。runner 環境 PATH に codex binary 無しで catalog 空 → 両 button 非表示 の直接原因は Phase 24 で解消) |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
 
@@ -256,6 +256,24 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
   hint が現 catalog に無いだけで `persist_alias_unknown` switch_error を
   出す穴を塞ぐ (藤 3 次 review R4)。詳細は ADR-0014 F1 追補「launch pin
   vs display hint の責務分離」節。
+- **runner 環境 PATH に codex binary 無しで catalog 空 → 両 button 非表示
+  (Phase 24 で解消)**: 再々々々 dogfood (23-9) で藤が `runner.log` から
+  「`Codex auth mode detection failed; model catalog will be empty`」を
+  観測。`runner/src/codex-auth.ts::detectCodexAuthMode` が
+  `execFile("codex", ["doctor",...])` に依存、runner 環境の PATH に codex
+  binary が無いホスト (dogfood 環境依存の典型) で ENOENT により auth mode
+  = "unknown" → `resolveCodexCatalog` が空配列 → wrapper に
+  `codex_auth_mode="unknown"` + `catalog=[]` が届く → CodexHost の
+  `initialStatusExtFromCatalog` で `supports_model_switch=false` /
+  `effortLevelsForModel([], model).length = 0` → 両 button 非表示。Phase
+  23 E-G の two-tier lookup は catalog 非空前提のロジックのため、catalog
+  自体が空だと E-G の tier 3/4 では救えない別系統の問題。修正は
+  [Phase 24](phase-24-codex-auth-mode-explicit.md) に分離
+  (`runner/src/config.ts::CodexConfig` に `auth_mode?: 'chatgpt' | 'apikey'`
+  を追加、priority `explicit config > doctor detection > "unknown"` で
+  runner 環境 PATH 非依存に catalog を resolve)。Phase 24 完了までは
+  23-9 dogfood は継続 pending、Phase 24 完了後に D+E+F+G+R4-R6+Phase 24
+  の全体を dogfood で再々々々検証する段取り。
 - **effort_levels の完全一致検索と model 表現ミスマッチ (E1-E7 + F1 で解消)**:
   D1-D7 の hint 復元でも救えない **前回セッションが turn 未完了で snapshot
   未 stamp** シナリオと **Claude で runner probe が返す specific id と

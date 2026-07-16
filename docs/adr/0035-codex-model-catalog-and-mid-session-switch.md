@@ -57,8 +57,9 @@ model switch の輸送路は既に存在する。`setModel(value)` が次 turn �
 ```
 
 `chatgpt_plan` は `free | go | plus | pro | business | enterprise` の closed enum。
-runner は `codex doctor --json` の stored auth mode とこの申告を組み合わせて
-catalog を構成する。
+runner は `codex.auth_mode` (Phase-24 で追加) の明示宣言、または
+`codex doctor --json` の stored auth mode 検出 (fallback) とこの申告を
+組み合わせて catalog を構成する。
 
 - auth mode `chatgpt` + plan 未申告: 空 catalog、account default 委任、stderr warn。
 - auth mode `chatgpt` + `free|go`: Terra のみ。
@@ -66,6 +67,44 @@ catalog を構成する。
 - auth mode `apikey`: API-key 用 curated catalog。残置された ChatGPT plan 申告は
   stderr warnを出して無視する。auth切替だけでrunner起動を壊さない。
 - auth mode 検出失敗: 空 catalogへ fail closedし、stderr warn。推測しない。
+
+#### auth mode 決定の priority (Phase-24 追補、2026-07-16)
+
+runner が catalog resolve に使う `codexAuthMode` は以下 priority で確定
+する (実装は `runner/src/codex-auth.ts::resolveCodexAuthMode` の
+injectable policy resolver に集約、startup と hot reload の両方から
+呼ばれる):
+
+1. **Codex disabled** (`capabilities` に `"codex"` 無し) → `"unknown"`。
+   doctor は絶対に呼ばれない。
+2. **explicit `codex.auth_mode`** (`"chatgpt"` / `"apikey"` の closed enum
+   を config で明示宣言) → その値を verbatim 採用、doctor は呼ばれない。
+   runner 環境 PATH に `codex` binary が無いホスト (dogfood 環境依存の
+   典型) でも catalog を正しく resolve する。auth_mode は catalog
+   selection 用の宣言 metadata のみで、runner は credential (OAuth token
+   / API key 等、Codex 側の credential store / environment) を付与も変更
+   もしない — その意味で escalation にならない。誤宣言時は catalog が
+   実 entitlement からずれ、unsupported な model / effort の explicit
+   request が SDK 側で loud fail → 既存 switch_error rollback に到達し
+   うる (auth 実体の invalid credentials エラーになるかどうかは runtime
+   の credential store / SDK 実装依存で、config だけからは断定しない)。
+3. **absent + Codex enabled** (旧 config 互換 fallback) → `detectCodexAuthMode`
+   (doctor 経由) を run。失敗 (spawn ENOENT / JSON parse 失敗 / mode 未報告)
+   なら `"unknown"` へ fail-closed、stderr warn (doctor stdout / stderr は
+   絶対に relay しない — credential-presence details を stored auth mode
+   と同一 JSON に含む可能性があるため)。
+4. **`chatgpt_plan` からの暗黙推定は禁止**。API-key runner でも `chatgpt_plan`
+   を config に残置しているケース (auth 切替の途中経過) を誤判定するため、
+   auth_mode 決定に `chatgpt_plan` を根拠として使わない。
+
+hot reload では priority は同じで、以下 5 遷移すべてが helper 側で一貫
+処理される (詳細は phase-24 plan を参照):
+
+- next disabled → `"unknown"` (prev mode 破棄、doctor 非呼出)
+- next explicit → 即採用 (doctor 非呼出、値は verbatim)
+- prev explicit → next absent → doctor 再走 (operator が pin を外した)
+- prev off → next on (absent) → doctor 走る (off から復帰した初回検出)
+- prev on (absent) → next on (absent) → prev mode 維持 (doctor 非呼出)
 
 案 A' の「chatgpt auth なら Plus とみなして trio を出す」は採らない。Free / Go
 にも Sol / Luna を提示して capability advertisement を偽るためである。非 entitled
