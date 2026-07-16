@@ -335,6 +335,21 @@
   const agentEngine = $derived(engineFrom(envelope));
   const permAxes = $derived(permissionFrom(envelope));
   const isCodexAgent = $derived(agentEngine === "codex");
+  // Codex OS sandbox の network 軸 (ADR-0033 F3, issue #118)。protocol の
+  // ResolvedSnapshotExt に沿って ext.effective.network_access を defensive に
+  // 読む。engine gate を derive に埋め込む (藤 R1): 他 wrapper が誤って
+  // boolean を stamp しても template gate だけでは hasCcStatus 経路で panel
+  // 開扉に効いてしまうため、非 Codex は最初から null に fail-closed。
+  // typeof boolean gate で false は落とさない。snapshot.ts
+  // effectiveStatusEnvelopeFields は network_access を top-level には展開せず
+  // effective 配下にのみ入れるため、effective 経路のみを読む。
+  const effectiveNetworkAccess = $derived.by(() => {
+    if (!isCodexAgent) return null;
+    const raw = envelope.ext?.effective;
+    if (typeof raw !== "object" || raw === null) return null;
+    const value = (raw as Record<string, unknown>).network_access;
+    return typeof value === "boolean" ? value : null;
+  });
   // ADR-0014 F1 addendum (phase-15 D8): the resume-launch drift entries the
   // wrapper stamped when this launch's effective values differ from the
   // resumed session's snapshot. null on a fresh spawn (nothing to compare),
@@ -444,6 +459,7 @@
       ccPermissionMode !== null ||
       ccFastMode !== null ||
       ctxPct !== null ||
+      effectiveNetworkAccess !== null ||
       ccRateRows.some((r) => r.pct !== null) ||
       models.length > 0 ||
       // Operator can always pick a permission mode (#58), even before init
@@ -1742,6 +1758,17 @@
                   > (host-fixed)</span>{/if}
                 </span>
               </dd>
+            </div>
+          {/if}
+          {#if isCodexAgent && effectiveNetworkAccess !== null}
+            <!-- Codex OS sandbox の network 軸 (ADR-0033 F3, issue #118):
+                 workspace-write sandbox 内での network 許可 toggle。protocol の
+                 ResolvedSnapshotExt / ext.effective.network_access と直結で
+                 raw boolean を表示。他 engine は stamp しない (typeof gate と
+                 isCodexAgent の二重防御)。 -->
+            <div class="cc-row">
+              <dt>network_access</dt>
+              <dd>{effectiveNetworkAccess}</dd>
             </div>
           {/if}
           {#if ccFastMode}
