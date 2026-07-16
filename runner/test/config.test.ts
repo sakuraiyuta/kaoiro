@@ -117,6 +117,35 @@ describe("parseRunnerConfig", () => {
     ).toThrowError("codex.internal_subagents must be a boolean");
   });
 
+  // Phase-24: explicit `codex.auth_mode` closed enum for the dogfood
+  // 環境依存回帰対策。旧 config 互換 (auth_mode 省略 = doctor fallback)
+  // も同時に pin する。
+  it.each(["chatgpt", "apikey"] as const)(
+    "codex.auth_mode の closed enum %s を受け入れる (Phase-24)",
+    (mode) => {
+      const config = parseRunnerConfig({
+        ...valid,
+        codex: { auth_mode: mode },
+      });
+      expect(config.codex?.auth_mode).toBe(mode);
+    },
+  );
+
+  it("codex.auth_mode 省略は undefined (旧 config 互換 / doctor fallback 経路)", () => {
+    expect(
+      parseRunnerConfig({ ...valid, codex: {} }).codex?.auth_mode,
+    ).toBeUndefined();
+  });
+
+  it("未知の codex.auth_mode を loud config error にする (fail-fast)", () => {
+    expect(() =>
+      parseRunnerConfig({
+        ...valid,
+        codex: { auth_mode: "oauth" },
+      }),
+    ).toThrowError("codex.auth_mode must be one of: chatgpt, apikey");
+  });
+
   it("host_id 欠落を弾く", () => {
     const { host_id: _omit, ...rest } = valid;
     void _omit;

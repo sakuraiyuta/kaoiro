@@ -58,6 +58,23 @@ export type ChatGptPlan =
   | "enterprise";
 
 export interface CodexConfig {
+  /** Explicit auth mode declaration for the Codex adapter's catalog resolve
+   *  (Phase-24, dogfood 環境依存の catalog 空回帰対策)。closed-enum:
+   *  `"chatgpt"` or `"apikey"`。Priority explicit > doctor detection >
+   *  `"unknown"`: 明示宣言があれば `detectCodexAuthMode` (codex CLI の
+   *  `doctor` サブコマンド依存) をスキップし、runner 環境の PATH に codex
+   *  binary が無くても catalog を正しく解決する。auth_mode は catalog
+   *  selection 用の宣言 metadata のみで、runner は credential (OAuth token
+   *  / API key 等、Codex 側の credential store / environment) を付与も変更
+   *  もしない — その意味で escalation にならない。誤宣言時は catalog が
+   *  実 entitlement からずれ、unsupported な model / effort の explicit
+   *  request が SDK 側で loud fail → 既存 switch_error rollback に到達し
+   *  うる。auth 実体の invalid credentials エラーになるかどうかは runtime
+   *  の credential store / SDK 実装依存で、config だけからは断定しない。
+   *  `chatgpt_plan` からの暗黙推定は禁止 (API-key auth で plan が設定されて
+   *  いる config を誤判定するため)。旧 config 互換: 未指定なら現行の doctor
+   *  detection にフォールバック、失敗時は "unknown"。 */
+  auth_mode?: "chatgpt" | "apikey";
   chatgpt_plan?: ChatGptPlan;
   /** Toggle for Codex's internal sub-agent spawning (ADR-0038 F2). Effective
    *  = configured ?? true; the host ALWAYS injects features.multi_agent = the
@@ -200,6 +217,17 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
       throw new ConfigError("codex must be an object");
     }
     const codex: CodexConfig = {};
+    if (raw.codex.auth_mode !== undefined) {
+      if (
+        raw.codex.auth_mode !== "chatgpt" &&
+        raw.codex.auth_mode !== "apikey"
+      ) {
+        throw new ConfigError(
+          "codex.auth_mode must be one of: chatgpt, apikey",
+        );
+      }
+      codex.auth_mode = raw.codex.auth_mode;
+    }
     if (raw.codex.chatgpt_plan !== undefined) {
       if (
         typeof raw.codex.chatgpt_plan !== "string" ||
