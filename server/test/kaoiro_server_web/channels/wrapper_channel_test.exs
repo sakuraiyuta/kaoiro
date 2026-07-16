@@ -499,6 +499,13 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   describe "inter_agent_message ルーティング (protocol-inter-agent, phase-8)" do
+    setup do
+      # This durable fixture uses a fixed sender id, so remove only its
+      # previous entries before and after each test run.
+      :ok = InterAgentHistory.delete_agent("test.iam-from")
+      on_exit(fn -> InterAgentHistory.delete_agent("test.iam-from") end)
+    end
+
     defp inter_envelope(agent_id, to, opts \\ []) do
       meta =
         opts[:meta] ||
