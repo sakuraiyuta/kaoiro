@@ -25,6 +25,7 @@ import type {
 import { ServerLink, loadConfig, parseCliArgs } from "@kaoiro/wrapper-core";
 import { CodexHost } from "./host.js";
 import { replayCodexHistory } from "./history.js";
+import { effectiveNetworkAccess } from "./network_access.js";
 import { resolveCodexSources } from "./source_resolution.js";
 
 const COLOR: Record<KaoiroState, string> = {
@@ -122,7 +123,15 @@ async function main(): Promise<void> {
     const sandbox = effectiveConfig.sandbox ?? "workspace-write";
     const sandboxSource: string =
       config.sandbox !== undefined ? "config" : "default";
-    const networkAccess = effectiveConfig.network_access ?? false;
+    // Sandbox-aware normalization (phase-22 藤 audit, ADR-0033 F3 追補):
+    // the raw toggle is meaningful only for workspace-write; danger-full-
+    // access always carries network, read-only never does. Same helper as
+    // CodexHost's effective-status snapshot (SSoT) so this log line never
+    // diverges from ext.effective / whoami.
+    const networkAccess = effectiveNetworkAccess(
+      sandbox,
+      effectiveConfig.network_access ?? false,
+    );
     const permissionModePart =
       config.permission_mode !== undefined
         ? ` permission_mode=${config.permission_mode}(ignored)`

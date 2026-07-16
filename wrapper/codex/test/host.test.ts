@@ -1121,6 +1121,66 @@ describe("CodexHost", () => {
       expect(host.statusSnapshot().network_access).toBe(false);
     });
 
+    // Phase-22 dogfood audit (藤): sandbox=danger-full-access は network
+    // が sandbox に内包されるため、素の toggle (未設定 = false) をそのまま
+    // effective に出すと実効状態と矛盾する semantic mismatch になる (restore
+    // relay が true を落とした直接証拠はなく、regression 断定ではない)。
+    // #threadOptions は
+    // 元々 workspace-write の時しか networkAccessEnabled を渡さない(実効
+    // enforcement は不変)ので、この fix は表示/永続化のみを是正する。
+    it("danger-full-access + network_access 省略は effective で true に正規化される", async () => {
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "danger-legacy" }, usageEvent()],
+      ]);
+      const host = new CodexHost(
+        { ...CONFIG, sandbox: "danger-full-access" },
+        {
+          onState: () => {},
+          appendSystemPrompt: "p",
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      await runOneTurn(host, "hi");
+      expect(calls.options[0]?.networkAccessEnabled).toBeUndefined();
+      expect(host.statusSnapshot().network_access).toBe(true);
+    });
+
+    // Legacy 自己修復: サーバ DETS に永続化された誤った snapshot
+    // ({sandbox: danger-full-access, network_access: false}) が resume_snapshot
+    // としてそのまま乗ってきても、正規化された effective (=true) との差分が
+    // resume_drift に一度出て、次の record_snapshot でサーバ側 DETS が
+    // true に上書きされる (server/runner 側は無変更、wrapper 側の是正のみで
+    // 自己修復する)。
+    it("legacy snapshot (danger-full-access + network_access=false) は resume_drift で自己修復する", async () => {
+      const states: Envelope[] = [];
+      const { client } = makeClient([
+        [{ type: "thread.started", thread_id: "danger-selfheal" }, usageEvent()],
+      ]);
+      const host = new CodexHost(
+        { ...CONFIG, sandbox: "danger-full-access", network_access: false },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          resumeSnapshot: {
+            sandbox: "danger-full-access",
+            network_access: false,
+          },
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+      await runOneTurn(host, "hi");
+      const last = states.at(-1);
+      expect(last?.ext.resume_drift).toEqual([
+        { field: "network_access", prev: false, now: true },
+      ]);
+      expect(
+        (last?.ext.effective as { network_access?: boolean } | undefined)
+          ?.network_access,
+      ).toBe(true);
+    });
+
     it("resumeSnapshot と effective が一致すれば resume_drift は空", async () => {
       const states: Envelope[] = [];
       const { client } = makeClient([

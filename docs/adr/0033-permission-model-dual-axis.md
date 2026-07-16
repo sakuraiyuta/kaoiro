@@ -79,6 +79,29 @@ Claude Agent SDK の `permissionMode` 全 6 値 → 二軸への写像は `wrapp
 
 resume 時の `sandbox` / `network_access` 復元経路は [ADR-0014 F1 追補「resume 時の privilege 三軸再適用」](0014-session-resume-and-restore.md) に集約する。本 F3 の「spawn 時固定」原則は維持され、fresh spawn 時に決めた値は snapshot 経由で restore / switch / reset の各 resume 操作にも波及するだけで、mid-session に切り替わる訳ではない (Codex adapter は `setPermissionMode` を throw する)。
 
+#### F3 追補: effective `network_access` の正規化 (phase-22 dogfood 藤 audit)
+
+phase-22 の dogfood 検証中、restart / resume 後の dashboard で Codex agent (`sandbox=danger-full-access`) の `network_access` が `false` と表示されていた事象を契機に監査を実施 (藤 audit)。旧 `runner.log` を確認すると当該 restart 以前から `false` が続いており、**今回の restore relay が `true` を落とした直接証拠はない**。root cause は「raw toggle が effective として伝播していた **semantic mismatch**」で、`WrapperConfig.network_access` の raw toggle を sandbox 分岐なしに `ext.effective.network_access` / whoami / server DETS snapshot へそのまま載せていた実装上の意味論不整合が発現していた。Codex SDK は `networkAccessEnabled` を `sandbox="workspace-write"` のときだけ enforcement に渡すため、`danger-full-access` では network が sandbox に内包され (実効有効)、`read-only` では常に不許可となる。両モードで raw toggle を報告すると**実効状態と矛盾**した表示・永続化になる。
+
+追補として、`network_access` を次の 2 概念に**分離**する:
+
+- **spawn config raw toggle** (`WrapperConfig.network_access`) — operator が指定した希望値。`workspace-write` サンドボックスのみ意味を持つ
+- **effective 実効値** (`ResolvedSnapshotExt.network_access`, `ext.effective.network_access`, whoami, サーバ DETS snapshot) — sandbox-aware に正規化された、実際に enforce されている network 状態
+
+正規化ルールは pure helper `effectiveNetworkAccess(sandbox, toggle)` として `wrapper/codex/src/network_access.ts` に単一実装し、Host の effective-status snapshot と CLI 起動時 resolved log の両 callsite が同じ helper を通す (SSoT):
+
+| sandbox | effective network_access |
+|---|---|
+| `danger-full-access` | `true` (network は full access に内包) |
+| `read-only` | `false` (network 不可) |
+| `workspace-write` | `configured` (raw toggle をそのまま反映、default `false`) |
+
+Host の `#threadOptions()` (SDK enforcement 経路) は元々 workspace-write のみ `networkAccessEnabled` を SDK に渡す実装で正しかったため無変更 — 本追補は**表示 / 永続化 layer の是正のみ**で、runtime 挙動 (実際に許可される network 呼び出し集合) は変わらない。
+
+**Legacy 自己修復契約**: 追補導入前に永続化された誤 snapshot (`{sandbox:danger-full-access, network_access:false}`) は次回 resume 時に wrapper 側で `effective=true` に正規化され、`ext.resume_drift` に `{field:network_access, prev:false, now:true}` が**一度だけ**出る。次の `record_snapshot` でサーバ DETS が `true` に更新され、以降 drift は解消。runner / server 側の Phase22 precedence (snapshot の explicit boolean を engine default より優先) および fresh spawn / crash restart / rollback の no-apply 契約は**変更しない** (是正は wrapper layer に閉じる)。
+
+**関連実装**: `wrapper/codex/src/network_access.ts` (helper、SSoT)、`wrapper/codex/src/host.ts` `#effectiveStatusSnapshot()` (置換)、`wrapper/codex/src/cli.ts` 起動時 resolved log (置換)、`protocol/src/index.ts` `ResolvedSnapshotExt` (doc comment 追補)。test は `wrapper/codex/test/network_access.test.ts` (3 sandbox matrix) と `wrapper/codex/test/host.test.ts` (danger-full 正規化 / legacy self-heal drift 各 1 case)。
+
 ### F4 — dashboard UI は engine-native 操作 + 二軸バッジ表示
 
 - **表示** (AgentCard / AgentDetail): `ext.permission` 由来の二軸バッジで engine 非依存に統一。

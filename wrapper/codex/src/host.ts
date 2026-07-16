@@ -55,6 +55,7 @@ import {
   threadEventToSessionId,
 } from "./adapter.js";
 import { effortLevelsForModel, resolveCodexCatalog } from "./catalog.js";
+import { effectiveNetworkAccess } from "./network_access.js";
 import { resolveCodexModel } from "./rollout.js";
 import { ToolHost } from "./toolhost.js";
 
@@ -314,7 +315,10 @@ export class CodexHost implements EngineAdapter {
           ? { effort_source: this.#effortSource }
           : {}),
         sandbox: this.#sandbox,
-        network_access: this.#networkAccess,
+        network_access: effectiveNetworkAccess(
+          this.#sandbox,
+          this.#networkAccess,
+        ),
       },
       permission,
     };

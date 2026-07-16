@@ -350,6 +350,12 @@ export interface ResolvedSnapshotExt {
   effort_source?: ModelSource;
   permission_mode?: PermissionMode;
   sandbox?: PermissionAxesExt["sandbox"];
+  /** Codex-only ACTUAL network state this run enforces — distinct from
+   *  `WrapperConfig.network_access` (the raw configured toggle, meaningful
+   *  only for the `workspace-write` sandbox). Sandbox-aware: always `true`
+   *  for `danger-full-access` (network is included in full access) and
+   *  always `false` for `read-only`, regardless of the toggle (ADR-0033
+   *  F3 追補, phase-22 dogfood 藤 audit). Claude ignores this field. */
   network_access?: boolean;
 }
 
