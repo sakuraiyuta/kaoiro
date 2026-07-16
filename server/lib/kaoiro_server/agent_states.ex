@@ -246,15 +246,6 @@ defmodule KaoiroServer.AgentStates do
     end
   end
 
-  defp cap_history_preserving_ia(entries, max) do
-    if length(entries) <= max do
-      entries
-    else
-      {newer, older} = Enum.split(entries, max)
-      newer ++ Enum.filter(older, &(Map.get(&1, "type") == "inter_agent_message"))
-    end
-  end
-
   def handle_call({:disconnect, agent_id, owner, ts}, _from, state) do
     case state do
       %{^agent_id => %{envelope: envelope, owner: ^owner} = entry} ->
@@ -368,6 +359,15 @@ defmodule KaoiroServer.AgentStates do
       end
 
     {:reply, connected, state}
+  end
+
+  defp cap_history_preserving_ia(entries, max) do
+    if length(entries) <= max do
+      entries
+    else
+      {newer, older} = Enum.split(entries, max)
+      newer ++ Enum.filter(older, &(Map.get(&1, "type") == "inter_agent_message"))
+    end
   end
 
   # phase-17 17-7: a boundary marker with to_session_id=nil (Codex lazy

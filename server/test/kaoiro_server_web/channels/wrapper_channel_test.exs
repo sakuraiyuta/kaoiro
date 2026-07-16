@@ -239,6 +239,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       # But snapshot latest is untouched — the rich_state remains.
       assert AgentStates.snapshot()[agent_id]["type"] == "state_change"
+
       assert AgentStates.snapshot()[agent_id]["ext"]["models"] == [
                %{"value" => "sonnet"}
              ]
