@@ -3,6 +3,7 @@
   import AgentCard from "./lib/AgentCard.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
   import LaunchDialog from "./lib/LaunchDialog.svelte";
+  import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import { adjacentAgentId } from "./lib/agentNavigation";
   import { expressionFor, spriteUrlFor } from "./lib/expression";
   import type {
@@ -64,6 +65,9 @@
   let hosts = $state<HostInfo[]>([]);
   let isOperator = $state(false);
   let showLaunch = $state(false);
+  // Client-side settings drawer (#85, operator- and viewer-visible: it only
+  // touches localStorage, no server round-trip).
+  let showSettings = $state(false);
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   // spawn の immediate reply は新 agent が state_change を出す前に届くため、
@@ -691,6 +695,15 @@
     </nav>
   {/if}
   <div class="session">
+    <button
+      type="button"
+      class="settings-toggle"
+      onclick={() => (showSettings = true)}
+      aria-label="設定"
+      title="設定"
+    >
+      ⚙
+    </button>
     {#if isOperator && connection}
       <button type="button" class="launch" onclick={() => (showLaunch = true)}>
         + 起動
@@ -714,6 +727,10 @@
     sessions={runnerSessions}
     onClose={() => (showLaunch = false)}
   />
+{/if}
+
+{#if showSettings}
+  <SettingsDrawer onClose={() => (showSettings = false)} />
 {/if}
 
 <main>
@@ -1239,6 +1256,25 @@
   }
 
   .launch:hover {
+    border-color: var(--fg-dim);
+  }
+
+  .settings-toggle {
+    font-size: var(--fs-body);
+    line-height: 1;
+    color: var(--fg-dim);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.25rem 0.55rem;
+    cursor: pointer;
+    transition:
+      color 0.2s,
+      border-color 0.2s;
+  }
+
+  .settings-toggle:hover {
+    color: var(--fg);
     border-color: var(--fg-dim);
   }
 

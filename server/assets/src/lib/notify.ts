@@ -7,6 +7,7 @@
 
 import { expressionFor } from "./expression";
 import type { Envelope } from "./protocol";
+import { settings } from "./settings.svelte";
 import inputSound from "./sounds/input.wav";
 import permissionSound from "./sounds/permission.wav";
 
@@ -68,12 +69,16 @@ export function soundUrlFor(state: string): string | undefined {
 
 /** Play the per-state cue for a wait-state envelope. Best-effort: silent
  *  where the HTMLAudioElement API is absent (test/node) or autoplay is
- *  blocked by browser policy until a user gesture. */
+ *  blocked by browser policy until a user gesture. Respects the operator's
+ *  notification-sound settings (#85): muted when disabled, scaled by volume. */
 function playWaitSound(state: string): void {
+  if (!settings.notificationSoundEnabled) return;
   const url = soundUrlFor(state);
   if (url === undefined || typeof Audio === "undefined") return;
   try {
-    void new Audio(url).play().catch(() => {
+    const audio = new Audio(url);
+    audio.volume = settings.notificationSoundVolume;
+    void audio.play().catch(() => {
       // Autoplay may be blocked until a user gesture; ignore.
     });
   } catch {
