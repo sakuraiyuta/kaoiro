@@ -26,6 +26,24 @@ import { RunnerLink } from "./transport.js";
 /** Liveness ping cadence; matches the phoenix transport heartbeat default. */
 const HEARTBEAT_MS = 30_000;
 
+// Silent-death guard (ADR-0023 observability gap): without these handlers,
+// a rejected promise or thrown exception outside a try/catch terminates the
+// runner with no context in runner.log — dogfood sessions surface as
+// "spawn押しても何も起きない" hours later. Log + exit(1) preserves Node
+// 15+'s default fail-visible behavior while making the cause traceable.
+process.on("unhandledRejection", (reason) => {
+  process.stderr.write(
+    `runner: unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`,
+  );
+  process.exit(1);
+});
+process.on("uncaughtException", (error) => {
+  process.stderr.write(
+    `runner: uncaughtException: ${error.stack ?? error.message}\n`,
+  );
+  process.exit(1);
+});
+
 /** Config-reload diff: which top-level fields differ. `codex` is a whole-object
  *  compare so any change inside the codex block — `auth_mode` (Phase-24),
  *  `chatgpt_plan`, `internal_subagents` — surfaces as one entry ("codex")

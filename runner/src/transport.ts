@@ -103,12 +103,45 @@ export class RunnerLink {
    *  `this.#register`, so a reconnect uses the values current AT the moment
    *  the reconnect fires — not the ones captured in the constructor. */
   #wire(serverUrl: string, hostId: string): { socket: Socket; channel: Channel } {
+    // Capture the host id for THIS wire() call: reconnect() (below) reassigns
+    // this.#hostId synchronously while the old socket's teardown callbacks
+    // (onError/onClose) fire asynchronously — reading the live field would
+    // mislabel the OLD socket's closure with the NEW host id.
+    const wiredHostId = hostId;
     const socket = new Socket(serverUrl, {
       transport: WebSocket,
       params: this.#token === undefined ? {} : { token: this.#token },
+      // Surface Phoenix transport / channel state to runner.log so silent
+      // reconnect failures (auth reject, vsn mismatch, sleep/wake) stop
+      // being invisible. Noise budget = ~2 lines / 30s (heartbeat push +
+      // reply) during steady state — acceptable for a control-plane log.
+      // Phoenix's "transport" kind embeds endPointURL() which appends the
+      // `params` object as a query string, so a raw pass-through would leak
+      // KAOIRO_RUNNER_TOKEN into runner.log on every connect/reconnect —
+      // redact any `token=<value>` before writing (security.md).
+      logger: (kind, msg, data) => {
+        const raw = `runner: phoenix ${kind}: ${msg} ${JSON.stringify(data)}\n`;
+        process.stderr.write(raw.replace(/(token=)[^&\s"]+/gi, "$1<REDACTED>"));
+      },
     });
     socket.connect();
     const channel = socket.channel(`runner:${hostId}`);
+
+    // Silent-disconnect guard (ADR-0023 observability gap): the phoenix
+    // client auto-reconnects, but persistent failures (invalid token,
+    // server-side forbid, macOS sleep/wake) go unnoticed without these
+    // hooks — the heartbeat push simply short-circuits on
+    // isConnected()==false and the server marks the host dead.
+    socket.onError((error) => {
+      process.stderr.write(
+        `runner: socket error host=${wiredHostId}: ${String(error)}\n`,
+      );
+    });
+    socket.onClose((event) => {
+      process.stderr.write(
+        `runner: socket closed host=${wiredHostId} code=${event.code} reason=${JSON.stringify(event.reason)}\n`,
+      );
+    });
 
     // Re-register on every socket (re)open: the server holds host state in
     // memory, so a reconnect after a deploy must re-announce. The push is
