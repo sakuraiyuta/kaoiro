@@ -56,7 +56,13 @@ import {
 } from "./adapter.js";
 import { effortLevelsForModel, resolveCodexCatalog } from "./catalog.js";
 import { effectiveNetworkAccess } from "./network_access.js";
-import { resolveCodexModel } from "./rollout.js";
+import {
+  codexRateLimitsFromRolloutIn,
+  codexRolloutsRoot,
+  resolveCodexModel,
+  type CodexRateLimitSnapshot,
+  type CodexRateLimitWindow,
+} from "./rollout.js";
 import { ToolHost } from "./toolhost.js";
 
 /** Structural view of the SDK surface the host drives; injectable so tests
@@ -155,6 +161,12 @@ export interface CodexHostOptions {
   codexFactory?: (options: CodexOptions) => CodexClientLike;
   /** Resolves the server-selected model from the Codex rollout. */
   modelResolver?: (sessionId: string) => Promise<string | null>;
+  /** Resolves the latest per-window rate-limit snapshots from the Codex
+   *  rollout. Injectable so tests can script snapshots without a rollout
+   *  file. Defaults to `codexRateLimitsFromRolloutIn(codexRolloutsRoot(), …)`. */
+  rateLimitResolver?: (
+    sessionId: string,
+  ) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
 }
@@ -163,6 +175,24 @@ export interface CodexHostOptions {
  *  dist/ (runtime) and src/ (tsx dev) alike — both point at dist/bridge.js,
  *  so dev spawns need a prior `pnpm build` of @kaoiro/codex. */
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
+
+function rateLimitsDiffer(
+  a: Map<CodexRateLimitWindow, CodexRateLimitSnapshot>,
+  b: Map<CodexRateLimitWindow, CodexRateLimitSnapshot>,
+): boolean {
+  if (a.size !== b.size) return true;
+  for (const [window, next] of b) {
+    const prev = a.get(window);
+    if (prev === undefined) return true;
+    if (
+      prev.utilization !== next.utilization ||
+      prev.resets_at !== next.resets_at
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export class CodexHost implements EngineAdapter {
   readonly #config: WrapperConfig;
@@ -201,6 +231,16 @@ export class CodexHost implements EngineAdapter {
   #modelResolutionGeneration = 0;
   /** tool_use_id -> tool_name for tool_result backfill (protocol.md #40). */
   readonly #toolNames = new Map<string, string>();
+  /** Latest per-window rate-limit snapshot (mirrors AgentHost's #rateLimits).
+   *  Populated fire-and-forget from the rollout tail after each terminal
+   *  ThreadEvent — Codex has no in-stream rate_limit event, unlike Claude. */
+  readonly #rateLimits = new Map<
+    CodexRateLimitWindow,
+    CodexRateLimitSnapshot
+  >();
+  /** In-flight guard for #refreshRateLimits(): coalesces multiple concurrent
+   *  refresh triggers so a slow rollout tail cannot pile up work. */
+  #rateLimitsInflight = false;
 
   constructor(config: WrapperConfig, options: CodexHostOptions) {
     this.#config = config;
@@ -571,10 +611,14 @@ export class CodexHost implements EngineAdapter {
               attempted.resolutionGeneration,
             );
           }
+          void this.#refreshRateLimits();
         } else if (event.type === "turn.failed") {
           sawResult = true;
           this.#finishTurn(false, attempted);
           this.#emitResult({ is_error: true });
+          // Failure paths (429 / max-output / auth error) still write a
+          // token_count event to the rollout, so refresh on both branches.
+          void this.#refreshRateLimits();
         }
         for (const adapterEvent of threadEventToEvents(event)) {
           this.#apply(adapterEvent);
@@ -714,6 +758,44 @@ export class CodexHost implements EngineAdapter {
     this.#emitState(this.#machine.state);
   }
 
+  /** Refreshes #rateLimits from the rollout tail after a terminal ThreadEvent.
+   *  Codex has no in-stream rate_limit event (unlike Claude's SDKRateLimitEvent),
+   *  so this reads the JSONL the SDK's own `codex exec` subprocess writes.
+   *  Fire-and-forget from the run loop; coalesces concurrent refreshes so a
+   *  slow tail cannot pile up work. Emits a state_change only when the
+   *  snapshot actually changes, matching #refreshAccountDefaultModel's
+   *  eventual-consistency contract. */
+  async #refreshRateLimits(): Promise<void> {
+    if (this.#closed) return;
+    if (this.#sessionId === null) return;
+    if (this.#rateLimitsInflight) return;
+    this.#rateLimitsInflight = true;
+    const sessionId = this.#sessionId;
+    try {
+      const resolver =
+        this.#options.rateLimitResolver ??
+        ((id: string) =>
+          Promise.resolve(codexRateLimitsFromRolloutIn(codexRolloutsRoot(), id)));
+      let next: Map<CodexRateLimitWindow, CodexRateLimitSnapshot>;
+      try {
+        next = await resolver(sessionId);
+      } catch {
+        // Rollout tail I/O errors are optional telemetry — never disturb the
+        // next turn. Absence stays absent.
+        return;
+      }
+      if (this.#closed) return;
+      if (!rateLimitsDiffer(this.#rateLimits, next)) return;
+      this.#rateLimits.clear();
+      for (const [window, snapshot] of next) {
+        this.#rateLimits.set(window, snapshot);
+      }
+      this.#emitState(this.#machine.state);
+    } finally {
+      this.#rateLimitsInflight = false;
+    }
+  }
+
   #apply(event: AdapterEvent): void {
     const { next, emitted } = stepState(this.#machine, event);
     this.#machine = next;
@@ -792,6 +874,9 @@ export class CodexHost implements EngineAdapter {
     // Only publish a model catalog when one exists (currently empty for
     // codex — the account default is used, see catalog.ts).
     if (this.#catalog.length > 0) ext.models = this.#catalog;
+    if (this.#rateLimits.size > 0) {
+      ext.rate_limits = Object.fromEntries(this.#rateLimits);
+    }
     if (this.#pendingPermission !== null) {
       ext.pending_permission = this.#pendingPermission;
     }

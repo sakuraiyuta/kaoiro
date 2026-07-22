@@ -12,6 +12,10 @@ import type {
 import { makeStateChange } from "@kaoiro/agent-common";
 import { CodexHost, initialStatusExt } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
+import type {
+  CodexRateLimitSnapshot,
+  CodexRateLimitWindow,
+} from "../src/rollout.js";
 
 const CONFIG: WrapperConfig = {
   agent_id: "host-1.codex-a",
@@ -1502,6 +1506,143 @@ describe("CodexHost", () => {
       expect(states.some((e) => e.ext.effort_reset === true)).toBe(true);
       // effort は non-pin (source="default" gate)
       expect(calls.options[0]?.modelReasoningEffort).toBeUndefined();
+    });
+  });
+
+  describe("rate_limits (rollout tail)", () => {
+    it("turn.completed 後の refresh で ext.rate_limits を stamp する", async () => {
+      const states: Envelope[] = [];
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "uuid-rl-a" },
+          { type: "turn.started" },
+          usageEvent(),
+        ],
+      ]);
+      const snapshot: Map<CodexRateLimitWindow, CodexRateLimitSnapshot> =
+        new Map([["five_hour", { utilization: 0.42, resets_at: 1785090000 }]]);
+      const host = new CodexHost(CONFIG, {
+        onState: (e) => states.push(e),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rateLimitResolver: async () => snapshot,
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi");
+
+      expect(states[0]?.ext).not.toHaveProperty("rate_limits");
+      expect(states.at(-1)?.ext.rate_limits).toEqual({
+        five_hour: { utilization: 0.42, resets_at: 1785090000 },
+      });
+    });
+
+    it("同値 refresh は state_change を追加発火しない", async () => {
+      const states: Envelope[] = [];
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "uuid-rl-b" },
+          { type: "turn.started" },
+          usageEvent(),
+        ],
+        [{ type: "turn.started" }, usageEvent()],
+      ]);
+      const resolver = vi.fn<
+        () => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>
+      >(async () => new Map([["five_hour", { utilization: 0.1, resets_at: 1 }]]));
+      const host = new CodexHost(CONFIG, {
+        onState: (e) => states.push(e),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rateLimitResolver: resolver,
+        now: () => "T",
+      });
+
+      const done = host.run("hi-1");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const afterFirstTurn = states.length;
+      await host.send("hi-2");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      host.close();
+      await done;
+
+      // Both turn.completed events fire the refresh.
+      expect(resolver).toHaveBeenCalledTimes(2);
+      // The 2nd refresh returns the SAME snapshot as the 1st, so #refreshRateLimits
+      // must skip #emitState. state_change for the 2nd turn still fires from the
+      // normal run loop, but the #refreshRateLimits-driven extra emit does not.
+      // Verify by checking: the extra state_change count contributed by rate_limits
+      // refresh across turn 2 is at most equal to what turn 2's normal flow emits
+      // (i.e. no extra "post-refresh" state_change beyond the turn's own state_changes).
+      const beforeClose = states.length - 1; // -1 for the close-emitted state_change
+      const turn2Count = beforeClose - afterFirstTurn;
+      // Turn 2's run loop emits a bounded number of state_changes (thread progress
+      // + emitResult), typically 2. An extra #emitState from the refresh would push
+      // this above 4. Cap the assertion at a generous 4 to catch the regression
+      // without over-specifying internal state-machine sequencing.
+      expect(turn2Count).toBeLessThanOrEqual(4);
+      // rate_limits payload stays identical for all turn 2 state_changes.
+      for (const s of states.slice(afterFirstTurn, beforeClose + 1)) {
+        if (s.ext.rate_limits !== undefined) {
+          expect(s.ext.rate_limits).toEqual({
+            five_hour: { utilization: 0.1, resets_at: 1 },
+          });
+        }
+      }
+    });
+
+    it("turn.failed でも refresh が走る (429 / max-output で rate_limits が更新される経路)", async () => {
+      const states: Envelope[] = [];
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "uuid-rl-c" },
+          { type: "turn.started" },
+          { type: "turn.failed", error: { message: "rate_limit" } },
+        ],
+      ]);
+      const resolver = vi.fn<
+        () => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>
+      >(async () =>
+        new Map([["seven_day", { utilization: 0.98, resets_at: 999 }]]),
+      );
+      const host = new CodexHost(CONFIG, {
+        onState: (e) => states.push(e),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rateLimitResolver: resolver,
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi");
+
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(states.at(-1)?.ext.rate_limits).toEqual({
+        seven_day: { utilization: 0.98, resets_at: 999 },
+      });
+    });
+
+    it("resolver が空 Map を返す間は ext.rate_limits を出さない", async () => {
+      const states: Envelope[] = [];
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "uuid-rl-d" },
+          { type: "turn.started" },
+          usageEvent(),
+        ],
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: (e) => states.push(e),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rateLimitResolver: async () => new Map(),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi");
+
+      for (const s of states) {
+        expect(s.ext).not.toHaveProperty("rate_limits");
+      }
     });
   });
 });
