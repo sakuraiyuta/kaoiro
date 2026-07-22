@@ -1828,8 +1828,20 @@
                   >
                     <div class="meter-fill" style:width="{r.pct ?? 0}%"></div>
                   </div>
-                  <span class="meter-val"
-                    >{r.pct === null ? "?" : r.pct + "%"}</span>
+                  <!-- Claude API は status="allowed" (安全圏) では utilization を
+                       送らず reset 時刻と status のみを push する。ヘビーユーザは
+                       reset 時刻を見て次の枠再開を計画するので、hover tooltip では
+                       なく inline に表示する。pct も reset も無い真の未受信状態のみ
+                       "?" にフォールバック。 -->
+                  <span class="meter-val">
+                    {#if r.pct !== null}
+                      {r.pct}%
+                    {:else if r.reset !== null}
+                      リセット {r.reset}
+                    {:else}
+                      ?
+                    {/if}
+                  </span>
                 {/if}
               </dd>
             </div>
