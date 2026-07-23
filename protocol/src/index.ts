@@ -611,11 +611,23 @@ export interface SpawnMessage {
    *  Omitted = false (Codex CLI default). */
   network_access?: boolean;
   /** Resume snapshot: the "last effective" resolved settings the server
-   *  had cached for this agent (ADR-0014 F1 追補, phase-15 D8). Only
-   *  present when resume_session_id is also set; the runner relays this
-   *  into the wrapper config so ext.resume_snapshot / ext.resume_drift can
-   *  ride the wrapper's first state_change. */
+   *  had cached for this agent (ADR-0014 F1 追補, phase-15 D8). Present
+   *  either alongside `resume_session_id` (restore an existing SDK session
+   *  and re-apply its snapshot) OR alongside `apply_resume_snapshot: true`
+   *  (fresh-restore, phase-25: `/clear`/未発話で session_id が失われた
+   *  agent を snapshot だけで同設定復元する). The runner relays this into
+   *  the wrapper config so ext.resume_snapshot / ext.resume_drift can ride
+   *  the wrapper's first state_change. */
   resume_snapshot?: ResolvedSnapshotExt;
+  /** Fresh-restore flag (phase-25, ADR-0030 D8 / ADR-0014 F1 追補).
+   *  Set to `true` on a spawn WITHOUT `resume_session_id` to request that
+   *  the runner apply the accompanying `resume_snapshot` as if this were
+   *  a resume operation — snapshot becomes SSOT for the engine-relevant
+   *  privilege axes (5-case pair rule included). Absent / false = the
+   *  ordinary fresh-spawn no-apply semantics from ADR-0014 F1 追補
+   *  (藤 D1). Ignored (paired with resume_session_id) if both are set;
+   *  the resume path already runs applyResumeSnapshot. */
+  apply_resume_snapshot?: boolean;
 }
 
 /** server -> runner, operator-only: stop the wrapper for agent_id. */
