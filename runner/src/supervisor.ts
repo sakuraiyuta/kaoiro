@@ -100,6 +100,14 @@ export interface ParsedSpawn {
    *  config.resume_snapshot so the wrapper can stamp ext.resume_snapshot
    *  / ext.resume_drift on its first state_change. */
   resumeSnapshot?: ResolvedSnapshotExt;
+  /** Fresh-restore flag (phase-25, ADR-0030 D8 / ADR-0014 F1 追補).
+   *  Set to `true` when the server wants a fresh spawn (no
+   *  `resume_session_id`) that nevertheless re-applies `resumeSnapshot`
+   *  as if it were a resume — used to revive a `/clear`-detached or
+   *  未発話 offline agent under the same model / effort / permission /
+   *  sandbox / network the pointer's snapshot last stamped. Absent =
+   *  the ordinary fresh-spawn no-apply semantics (藤 D1). */
+  applyResumeSnapshot?: boolean;
 }
 
 export interface SupervisorOptions {
@@ -271,6 +279,15 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
     const sanitized = validateResolvedSnapshot(payload.resume_snapshot);
     if (sanitized === null) return null;
     parsed.resumeSnapshot = sanitized;
+  }
+  // Fresh-restore flag (phase-25). Only meaningful on a fresh spawn
+  // (resume_session_id absent); ignored when both are set because the
+  // resume path already runs applyResumeSnapshot. Fail-loud on a
+  // present-but-non-boolean value so a compromised sender cannot slip
+  // truthy garbage past the guard.
+  if (payload.apply_resume_snapshot !== undefined) {
+    if (typeof payload.apply_resume_snapshot !== "boolean") return null;
+    if (payload.apply_resume_snapshot) parsed.applyResumeSnapshot = true;
   }
   return parsed;
 }
@@ -517,12 +534,22 @@ export class Supervisor {
     }
     const resume = parsed.resumeSessionId;
     if (resume === undefined) {
-      // Fresh spawn: never re-apply the snapshot (藤 D1). A resume_snapshot
-      // that happens to ride a fresh payload is still relayed to the
-      // wrapper as `config.resume_snapshot` for drift display only, but
-      // the engine-relevant privilege axes stay whatever the spawn payload
-      // explicitly set (top-level sandbox / network_access / permission_mode).
-      this.#launchSpawn(agentId, parsed);
+      // Fresh spawn: the ordinary rule is "never re-apply the snapshot"
+      // (藤 D1) — a resume_snapshot ride only reaches the wrapper's
+      // ext.resume_snapshot for drift display, not the engine-relevant
+      // axes.
+      //
+      // Exception (phase-25, ADR-0030 D8 追補): fresh-restore. The server
+      // sets `applyResumeSnapshot` when reviving a `/clear`-detached or
+      // 未発話 offline agent whose SessionPointer lost its session_id.
+      // Under this flag the snapshot IS SSOT for the privilege axes, so
+      // we run applyResumeSnapshot exactly like the resume path — no T3
+      // (no session file to check) and no F4 (no session id to lock), so
+      // this flows straight into #launchSpawn.
+      const freshParsed = parsed.applyResumeSnapshot
+        ? applyResumeSnapshot(parsed, parsed.resumeSnapshot, parsed.engine)
+        : parsed;
+      this.#launchSpawn(agentId, freshParsed);
       return;
     }
 
