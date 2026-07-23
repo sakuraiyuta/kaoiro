@@ -438,6 +438,125 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  # 実機検収 2 (2026-07-23 マスター指示): A の IA visibility 境界は
+  # SessionResets confirm_connection (Trigger 1) と外部 switch_session
+  # (Trigger 2) の 2 経路でのみ前進する。以下 4 pin はクロエ 追加条件:
+  #   - 条件 1: resume で境界を前進させない (dogfood 再起動 + 同一
+  #     session 復帰後の durable IA 表示が壊れないこと)
+  #   - 条件 2: 未発話 agent の初回 sid 報告で境界を前進させない
+  #     (fresh spawn 直後の IA が誤って hidden 化しないこと)
+  describe "IA visibility 境界の前進 trigger (実機検収 2)" do
+    alias KaoiroServer.ClearWatermarks
+    alias KaoiroServer.SessionPointers, as: SP
+
+    setup do
+      # 各 test 独立に境界と durable sid を purge。 テスト singleton は
+      # per-run tmp DETS だが agent_id 名前空間は共有なので on_exit で
+      # 明示 clean up する。
+      on_exit(fn -> :ok end)
+      :ok
+    end
+
+    test "条件 2a: fresh spawn の初 state_change (durable sid 未登録) で境界前進しない" do
+      agent_id = "test.boundary-fresh"
+
+      on_exit(fn ->
+        SP.delete(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      socket = join_wrapper(agent_id)
+
+      env =
+        envelope(agent_id, "thinking")
+        |> Map.put("session_id", "sess-fresh-1")
+
+      ref = push(socket, "envelope", env)
+      assert_reply ref, :ok
+
+      # durable sid が新規登録される (record_session_pointer 経由)。
+      assert %{session_id: "sess-fresh-1"} = SP.get(agent_id)
+      # 境界は未 seed のまま (Trigger 2 が「prior_sid nil のとき前進
+      # しない」を守る)。 未発話 agent の初回 IA 保護。
+      assert ClearWatermarks.get(agent_id) == nil
+    end
+
+    test "条件 1: 同一 sid の再報告 (dogfood restart + resume) で境界前進しない" do
+      agent_id = "test.boundary-resume"
+      # pre-restart 状態: durable sid が既に seed 済み。
+      SP.record(agent_id, "sess-durable", "/proj")
+      _ = :sys.get_state(SP)
+
+      on_exit(fn ->
+        SP.delete(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      socket = join_wrapper(agent_id)
+
+      # 同じ sid で state_change (resume 経路)。
+      env =
+        envelope(agent_id, "waiting_input")
+        |> Map.put("session_id", "sess-durable")
+
+      ref = push(socket, "envelope", env)
+      assert_reply ref, :ok
+
+      # 境界不変 (prior == new)。
+      assert ClearWatermarks.get(agent_id) == nil
+    end
+
+    test "Trigger 2: durable prior_sid と異なる sid が届いたら境界を前進 (external switch)" do
+      agent_id = "test.boundary-switch"
+      SP.record(agent_id, "sess-old", "/proj")
+      _ = :sys.get_state(SP)
+
+      on_exit(fn ->
+        SP.delete(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      socket = join_wrapper(agent_id)
+
+      # 明示的な別 sid (restore/resume_session 経由の外部 switch を模擬)。
+      env =
+        envelope(agent_id, "waiting_input")
+        |> Map.put("session_id", "sess-new")
+
+      ref = push(socket, "envelope", env)
+      assert_reply ref, :ok
+
+      # 境界が seed されている: tuple 記録 + display ISO。
+      assert {{us, seq}, iso} = ClearWatermarks.get(agent_id)
+      assert is_integer(us) and is_integer(seq)
+      assert String.match?(iso, ~r/^\d{4}-\d{2}-\d{2}T/)
+
+      # durable sid も update されている (Trigger 2 は
+      # record_session_pointer より前に走るので、record 前の値が読める
+      # ことを確認済み)。
+      assert %{session_id: "sess-new"} = SP.get(agent_id)
+    end
+
+    test "Trigger 2: session_id 未同梱 envelope は境界に影響しない" do
+      agent_id = "test.boundary-no-sid"
+      SP.record(agent_id, "sess-x", "/proj")
+      _ = :sys.get_state(SP)
+
+      on_exit(fn ->
+        SP.delete(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      socket = join_wrapper(agent_id)
+
+      # session_id 無し (permission_request 等の中間 envelope)。
+      ref = push(socket, "envelope", envelope(agent_id, "waiting_permission"))
+      assert_reply ref, :ok
+
+      assert ClearWatermarks.get(agent_id) == nil
+    end
+  end
+
   describe "成功 effective snapshot の永続 (ADR-0035 F3)" do
     test "pending/errorなしのeffectiveをsnapshotへ記録する" do
       agent_id = "test.snapshot-success"

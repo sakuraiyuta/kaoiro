@@ -645,23 +645,24 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # so every client re-filters its local transcript; viewers hold no reply
   # log and treat it as a no-op. `:noop` (unknown agent / current session
   # not known yet) is surfaced as an error so the operator UI can tell.
+  #
+  # 実機検収 2 must-fix (2026-07-23 マスター指示): the operator UI
+  # `clear_history` no longer advances the IA visibility cutoff. That
+  # cutoff — repurposed as A's CURRENT-session start boundary — moves
+  # forward only on genuine session transitions (SessionResets
+  # confirm_connection for /new・/clear, and external switch_session
+  # detected in wrapper_channel via a durable prior sid). This way the
+  # operator's UI clear (which is a display-only ring-buffer sweep) can
+  # no longer wipe the current session's IA bubbles, restoring the
+  # invariant that current-session lines survive. The `clear_watermark`
+  # display field on the broadcast now reports A's current session
+  # boundary display ISO (empty if none set yet) so the audit hint
+  # still reflects "IAs older than this are hidden".
   def handle_in("clear_history", payload, socket) do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_agent_id(payload),
          {:ok, session_id} <- AgentStates.clear_other_sessions(agent_id) do
-      # Watermark this clear on the SAME single serialized allocator
-      # every IA `InterAgentHistory.append/2` uses (ふじ R5 must-fix,
-      # 2026-07-23 — replaces the pre-R5 inline
-      # `{System.system_time(:microsecond),
-      # System.unique_integer([:positive, :monotonic])}` pair whose
-      # `unique_integer` half reset per-BEAM and whose wall clock could
-      # rollback). The ISO string goes on the broadcast as display-only
-      # audit hint. `record/4` is synchronous + fsync-gated (M7-a) and
-      # `IngressOrder.allocate/0` is likewise fsync-gated, so neither
-      # the broadcast nor the watermark can outrun disk persistence.
-      order = KaoiroServer.IngressOrder.allocate()
-      display = DateTime.utc_now() |> DateTime.to_iso8601()
-      :ok = ClearWatermarks.record(agent_id, order, display)
+      display = ClearWatermarks.get_display(agent_id) || ""
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_cleared", %{
         "agent_id" => agent_id,

@@ -197,6 +197,52 @@ defmodule KaoiroServer.SessionResetsTest do
          %{resets: sr} do
       assert :ok = SessionResets.confirm_connection("a.restart.norm", nil, sr)
       refute SessionResets.pending?("a.restart.norm", sr)
+      # 実機検収 2 (2026-07-23 マスター指示) Trigger 1 の陰性 pin:
+      # 通常 restart の confirm_connection では境界を advance しない
+      # (dogfood 再起動 + resume 保護の要)。
+      assert KaoiroServer.ClearWatermarks.get("a.restart.norm") == nil
+    end
+
+    test "Trigger 1 (実機検収 2): /new completion の confirm_connection で境界を advance",
+         %{resets: sr, pointers: sp} do
+      agent_id = "a.res.trigger1-new-#{System.unique_integer([:positive])}"
+      SessionPointers.record(agent_id, "sess-old", "/w", :codex, sp)
+      on_exit(fn -> KaoiroServer.ClearWatermarks.delete(agent_id) end)
+
+      {:ok, request_id, _} =
+        SessionResets.check_and_acquire(agent_id, "new", "idle", "sess-old", sr)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
+      # confirm_connection 直前は境界未 seed。
+      assert KaoiroServer.ClearWatermarks.get(agent_id) == nil
+
+      :ok = SessionResets.confirm_connection(agent_id, nil, sr)
+
+      # 境界が seed されている: /new completion が SessionResets 経由の
+      # 境界前進イベントの一つ。
+      assert {{us, seq}, iso} = KaoiroServer.ClearWatermarks.get(agent_id)
+      assert is_integer(us) and is_integer(seq)
+      assert String.match?(iso, ~r/^\d{4}-\d{2}-\d{2}T/)
+    end
+
+    test "Trigger 1 (実機検収 2): /clear completion でも境界を advance",
+         %{resets: sr} do
+      agent_id = "a.res.trigger1-clear-#{System.unique_integer([:positive])}"
+
+      on_exit(fn ->
+        InterAgentHistory.delete_agent(agent_id)
+        KaoiroServer.ClearWatermarks.delete(agent_id)
+      end)
+
+      {:ok, request_id, _} =
+        SessionResets.check_and_acquire(agent_id, "clear", "idle", "sess-old", sr)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
+      :ok = SessionResets.confirm_connection(agent_id, nil, sr)
+
+      # /clear は sender IA を purge するので peer 側 IA だけが境界の
+      # 対象になるが、境界自体は seed される (Trigger 1 の同一分岐)。
+      assert {{_us, _seq}, _iso} = KaoiroServer.ClearWatermarks.get(agent_id)
     end
 
     test "ok=false で lock を release、SessionPointers は変更しない", %{resets: sr} do

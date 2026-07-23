@@ -1767,11 +1767,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert agents[peer_id] == [env]
     end
 
-    test "clear 直後 (broadcast 発火時) の sender pane は past IA を含まない (event 順序 pin)" do
-      # M7 regression pin: IA(t1) → CLEAR(t2) の順序で到着した場合、
-      # CLEAR の直後 (broadcast 到達時点) には sender pane に IA が
-      # 見えなくなっていること (reload 時と live 反映が一致)。
-      # clear_history が session_id を要求するので state_change を先に。
+    test "clear_history は現行 session の IA を残す (実機検収 2 マスター指示、旧 M7 pin の仕様反転)" do
+      # 実機検収 2 (2026-07-23 マスター指示): 旧 M7/R4 pin では
+      # IA(t1) → CLEAR(t2) → 再 join で sender pane から IA が
+      # 消えることを assert していたが、これは「clear_history 実行で
+      # 現行 session の IA まで消える」という regression の直接原因
+      # だった。仕様修正: clear_history は現行 session の IA を残す
+      # (境界前進は SessionResets confirm_connection 経由のみ)。
+      # 反転した pin: clear 後の reload で env が **残っていること**。
       agent_id = "test.hist-order-1"
       peer_id = "test.hist-order-1-peer"
       env = durable_inter_agent_envelope(agent_id, peer_id, 1)
@@ -1802,11 +1805,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :ok
       assert_broadcast "history_cleared", %{"agent_id" => ^agent_id}
 
-      # 再 join (reload シミュレーション): IA は sender pane から消える。
+      # 再 join (reload シミュレーション): env は sender pane に残る
+      # (clear_history は境界を advance しないので filter は inert)。
       _socket2 = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
       assert_push "history", %{"agents" => after_agents}
-      refute Map.has_key?(after_agents, agent_id)
+      assert env in (after_agents[agent_id] || [])
+      # 境界も未 seed のまま。
+      assert ClearWatermarks.get(agent_id) == nil
     end
 
     test "CLEAR(t1) → IA(t2) の順序では新しい IA は sender pane に残る (event 順序 pin その 2)" do
@@ -1987,23 +1993,52 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref = push(socket, "clear_history", %{"agent_id" => agent_id})
 
       assert_reply ref, :ok
-      # issue #109: broadcast は clear_watermark を含み、ClearWatermarks
-      # へも同じ ts が記録される。ts は ISO-8601 UTC で envelope.ts と
-      # 直接比較できる形式 (先頭が 4 桁の年で始まる)。
+      # 実機検収 2 (2026-07-23 マスター指示): clear_history は IA
+      # visibility boundary を advance しなくなった (境界前進は
+      # SessionResets.confirm_connection と外部 switch_session 経由の
+      # み)。broadcast の `clear_watermark` は「A の現行 session 境界
+      # display ISO」の audit hint に意味 shift 済み — 境界が未設定
+      # なら空文字列を送る (wire は据置)。この test では ClearWatermarks
+      # は未 seed なので空文字列を assert。
       assert_broadcast "history_cleared", %{
         "agent_id" => ^agent_id,
         "session_id" => "s2",
-        "clear_watermark" => watermark
+        "clear_watermark" => ""
       }
 
-      assert is_binary(watermark)
-      assert String.match?(watermark, ~r/^\d{4}-\d{2}-\d{2}T/)
-      # record は synchronous + fsync-gated (M7-a): reply の時点で
-      # ClearWatermarks に載っている必要がある (poll 不要)。
-      assert {{us, uniq}, ^watermark} = ClearWatermarks.get(agent_id)
-      assert is_integer(us) and is_integer(uniq)
+      # ClearWatermarks には何も書き込まれない (境界前進なし)。
+      assert ClearWatermarks.get(agent_id) == nil
       # Only the current session's reply line survives server-side.
       assert [%{"payload" => %{"text" => "cur"}}] = AgentStates.histories()[agent_id]
+    end
+
+    # 実機検収 2 (2026-07-23 マスター指示): 境界が既に seed されている
+    # ケース (以前の session transition で advance 済み) では broadcast
+    # がその display ISO を audit hint として運ぶ。値は shift しない
+    # (clear_history は境界を触らない)。
+    test "clear_history broadcast は既存境界の display ISO を運ぶ (境界前進なし pin)" do
+      agent_id = "test.clear-boundary-hint"
+      on_exit(fn -> ClearWatermarks.delete(agent_id) end)
+      :ok = AgentStates.put(state_with_session(agent_id, "s2"))
+
+      # SessionResets 経由でセットされた既存境界を模擬。
+      existing_order = KaoiroServer.IngressOrder.allocate()
+      existing_display = "2026-07-20T10:00:00Z"
+      :ok = ClearWatermarks.record(agent_id, existing_order, existing_display)
+
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "clear_history", %{"agent_id" => agent_id})
+      assert_reply ref, :ok
+
+      assert_broadcast "history_cleared", %{
+        "agent_id" => ^agent_id,
+        "clear_watermark" => ^existing_display
+      }
+
+      # 境界は不変。
+      assert {^existing_order, ^existing_display} = ClearWatermarks.get(agent_id)
     end
 
     test "viewer の clear_history は forbidden" do

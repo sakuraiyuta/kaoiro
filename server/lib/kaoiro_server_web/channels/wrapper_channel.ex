@@ -189,6 +189,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
     with :ok <- validate(envelope, socket.assigns.agent_id),
          :ok <- route_inter_agent(envelope, socket.assigns.agent_id),
          :ok <- store(envelope) do
+      # 実機検収 2 Trigger 2 (2026-07-23): external session switch.
+      # Must run BEFORE `record_session_pointer` so the durable prior
+      # sid is still readable for the comparison.
+      maybe_advance_session_boundary(envelope, socket.assigns.agent_id)
       record_session_pointer(envelope)
       # phase-17 17-7: fill the pending boundary marker's to_session_id
       # when a fresh Codex session finally reports its thread ID
@@ -359,6 +363,49 @@ defmodule KaoiroServerWeb.WrapperChannel do
         :ok
     end
   end
+
+  # 実機検収 2 Trigger 2 (2026-07-23 マスター指示): advance A's IA
+  # visibility boundary when the envelope reports a session_id that
+  # differs from A's durable SessionPointers sid. This catches
+  # explicit session-switch cases (restore/resume to a different sid)
+  # that never go through SessionResets — Trigger 1 in
+  # `SessionResets.confirm_connection` covers /new and /clear.
+  #
+  # Deliberately reads SessionPointers (durable) instead of
+  # AgentStates.snapshot (揮発): a dogfood restart + wrapper reconnect
+  # with the SAME sid would appear as "AgentStates unknown → sid",
+  # falsely advancing the boundary and hiding the very durable IA
+  # #105 restored. SessionPointers survives restart, so a resume of
+  # the same session compares equal here → no advance.
+  #
+  # Also skips `prior_sid == nil` (未発話 agent の初回 sid 報告): a
+  # fresh spawn's first state_change (SDK init) would otherwise hide
+  # any IA that arrived before init. SessionResets covers the
+  # legitimate nil→sid case (/clear detach then fresh session) via
+  # its own boundary advance in Trigger 1.
+  #
+  # `ClearWatermarks.record` is monotonic-advance and fsync-gated, so
+  # a stale envelope that races with Trigger 1 cannot regress the
+  # boundary.
+  defp maybe_advance_session_boundary(%{"session_id" => new_sid}, agent_id)
+       when is_binary(new_sid) and new_sid != "" do
+    case SessionPointers.get(agent_id) do
+      %{session_id: prior} when is_binary(prior) and prior != new_sid ->
+        _ =
+          KaoiroServer.ClearWatermarks.record(
+            agent_id,
+            KaoiroServer.IngressOrder.allocate(),
+            DateTime.utc_now() |> DateTime.to_iso8601()
+          )
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_advance_session_boundary(_envelope, _agent_id), do: :ok
 
   # phase-17 17-7: patch the pending boundary marker's to_session_id
   # once a fresh session finally reports one. Only fires when a stash

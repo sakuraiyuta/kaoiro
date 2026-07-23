@@ -303,6 +303,25 @@ defmodule KaoiroServer.SessionResets do
             _ -> lock.to_session_id
           end
 
+        # 実機検収 2 (2026-07-23 マスター指示): a /new or /clear reaching
+        # confirm_connection is the ONE authoritative session-transition
+        # event that must advance A's IA visibility boundary
+        # (`ClearWatermarks`, semantic-shifted to "A's current-session
+        # start ingress order"). Doing it here — not in the wrapper
+        # `handle_info(:after_join)` — keeps the "boundary moves only
+        # on real transitions" invariant: a normal reconnect / dogfood
+        # restart / initial spawn all reach after_join but skip this
+        # branch (their pending lock is nil), so the boundary stays put
+        # and pre-restart / initial IA remain visible. Monotonic-advance
+        # inside `ClearWatermarks.record` makes the call idempotent even
+        # if the same completion is retried.
+        _ =
+          KaoiroServer.ClearWatermarks.record(
+            agent_id,
+            KaoiroServer.IngressOrder.allocate(),
+            DateTime.utc_now() |> DateTime.to_iso8601()
+          )
+
         # phase-17 17-7 (must-3): write the boundary marker into
         # AgentStates AND broadcast it via the ordinary envelope path so
         # every currently-connected client (operator: full payload,
