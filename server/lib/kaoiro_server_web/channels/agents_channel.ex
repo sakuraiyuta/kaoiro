@@ -969,12 +969,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # The restart-surviving resume pointer. Both session_id AND cwd must be known
-  # (the runner resumes under cwd and verifies the session exists there, T3); a
-  # pointer that never recorded a cwd cannot be restored.
+  # The restart-surviving resume pointer. cwd is mandatory (the runner
+  # resumes / relaunches under it and enforces the T1 allow-list). session_id
+  # may be nil when the pointer was left in a `/clear`-detached (ADR-0036 F4)
+  # or never-reported state (未発話, ADR-0014 Q-A4); the fresh-restore path
+  # (phase-25, ADR-0030 D8 追補) accepts that case and asks the runner to
+  # relaunch with snapshot re-applied. A binary session_id still drives the
+  # ordinary resume path with T3 existence check in the runner.
   defp session_pointer(agent_id) do
     case SessionPointers.get(agent_id) do
-      %{session_id: sid, cwd: cwd} = pointer when is_binary(sid) and is_binary(cwd) ->
+      %{session_id: sid, cwd: cwd} = pointer
+      when (is_binary(sid) or is_nil(sid)) and is_binary(cwd) ->
         # engine may be nil on pre-engine pointers; the runner then defaults
         # to claude-code, matching what those agents were (ADR-0032 F4a).
         {:ok, sid, cwd, Map.get(pointer, :engine)}
@@ -1045,6 +1050,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp fetch_resume_session_id(_payload), do: {:error, :missing_session_id}
 
+  # session_id nil = fresh-restore (phase-25, ADR-0030 D8 追補): the pointer
+  # lost its session_id via detach (/clear) or never received one (未発話).
+  # Omit resume_session_id and stamp apply_resume_snapshot=true so the runner
+  # takes the fresh-spawn + snapshot re-apply branch. resume_snapshot itself
+  # rides through the shared maybe_put_resume_snapshot pipe (nil-snapshot
+  # pointer degrades safely to engine defaults, fail-soft).
   defp build_restore_payload(agent_id, persona, cwd, session_id, engine) do
     spawn_payload =
       %{
@@ -1052,10 +1063,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
         "agent_id" => agent_id,
         "persona" => persona,
         "cwd" => cwd,
-        "token" => Auth.mint_wrapper_token(agent_id),
-        "resume_session_id" => session_id
+        "token" => Auth.mint_wrapper_token(agent_id)
       }
       |> maybe_put_engine(engine)
+      |> maybe_put_resume_session_id(session_id)
       |> maybe_put_resume_snapshot(agent_id)
 
     case check_relay_size(spawn_payload) do
@@ -1063,6 +1074,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp maybe_put_resume_session_id(map, sid) when is_binary(sid),
+    do: Map.put(map, "resume_session_id", sid)
+
+  defp maybe_put_resume_session_id(map, nil),
+    do: Map.put(map, "apply_resume_snapshot", true)
 
   # Bounds the whole relayed map, not just the whitelisted keys, so an
   # oversized blob in an opaque extra key cannot reach the wrapper process
