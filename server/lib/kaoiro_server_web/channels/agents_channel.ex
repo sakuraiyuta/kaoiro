@@ -86,10 +86,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # the intercept list to skip the per-socket round trip. The runner →
   # operator events (`runner_sessions` / `spawn_result` / `hosts`) carry
   # host/session info and are operator-only (ADR-0023, ADR-0021).
-  intercept [
+  intercept([
     "envelope",
     "history_cleared",
-    "session_boundary_advanced",
     "history_reset",
     "runner_sessions",
     "spawn_result",
@@ -106,7 +105,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     "session_reset_started",
     "session_reset_completed",
     "session_reset_failed"
-  ]
+  ])
 
   # Error reasons cleared for verbatim return to the client (issue #62).
   # Anything outside this set is a bug or a future internal value (a
@@ -209,15 +208,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_out("history_cleared", payload, socket) do
     if socket.assigns[:role] == :operator do
       push(socket, "history_cleared", payload)
-    end
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_out("session_boundary_advanced", payload, socket) do
-    if socket.assigns[:role] == :operator do
-      push(socket, "session_boundary_advanced", payload)
     end
 
     {:noreply, socket}
@@ -656,23 +646,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # log and treat it as a no-op. `:noop` (unknown agent / current session
   # not known yet) is surfaced as an error so the operator UI can tell.
   #
-  # 実機検収 2 must-fix (2026-07-23 マスター指示): the operator UI
-  # `clear_history` no longer advances the IA visibility cutoff. That
-  # cutoff — repurposed as A's CURRENT-session start boundary — moves
-  # forward only on genuine session transitions (SessionResets
-  # confirm_connection for /new・/clear, and external switch_session
-  # detected in wrapper_channel via a durable prior sid). This way the
-  # operator's UI clear (which is a display-only ring-buffer sweep) can
-  # no longer wipe the current session's IA bubbles, restoring the
-  # invariant that current-session lines survive. The `clear_watermark`
-  # display field on the broadcast now reports A's current session
-  # boundary display ISO (empty if none set yet) so the audit hint
-  # still reflects "IAs older than this are hidden".
+  # #109: transition paths write SessionStarts only; this operator action
+  # alone copies the known current-session start into ClearWatermarks.
+  # Missing starts intentionally leave IA visibility unchanged rather than
+  # using a clear-time fallback that could hide current-session IA.
   def handle_in("clear_history", payload, socket) do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_agent_id(payload),
          {:ok, session_id} <- AgentStates.clear_other_sessions(agent_id) do
-      display = ClearWatermarks.get_display(agent_id) || ""
+      display = adopt_session_start_watermark(agent_id)
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_cleared", %{
         "agent_id" => agent_id,
@@ -766,6 +748,25 @@ defmodule KaoiroServerWeb.AgentsChannel do
   #   4. finally, purge every other store (AgentStates + DETS ledgers).
   #      Any of these failing after revoke is safe — the token stays
   #      revoked and an operator retry finishes the cleanup.
+  # The clear boundary must be the known beginning of the current session,
+  # never "now": falling back to now can hide an IA emitted in the current
+  # session. A missing start therefore leaves IA visible and emits a warning;
+  # non-IA history still receives the normal session_id sweep (#109).
+  defp adopt_session_start_watermark(agent_id) do
+    case KaoiroServer.SessionStarts.get(agent_id) do
+      {{_us, _seq} = order, display, _sid} ->
+        :ok = ClearWatermarks.record(agent_id, order, display)
+        display
+
+      nil ->
+        Logger.warning(
+          "clear_history: no current session start for #{inspect(agent_id)}; IA visibility unchanged"
+        )
+
+        ClearWatermarks.get_display(agent_id) || ""
+    end
+  end
+
   defp purge_agent_records(agent_id) do
     with :ok <- require_disconnected(agent_id) do
       do_purge_agent_records(agent_id)
@@ -802,6 +803,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # under the same agent_id starts fresh (no lingering hide-past
       # filter from a prior operator).
       ClearWatermarks.delete(agent_id)
+      KaoiroServer.SessionStarts.delete(agent_id)
       :ok
     end
   end

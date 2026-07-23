@@ -31,7 +31,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Broadcast would fan out to the wrapper's WS as an ordinary event
   # without ever closing the channel process — the whole point of the
   # broadcast is to force the drop.
-  intercept ["revoked"]
+  intercept(["revoked"])
 
   @frame_keys ~w(version agent_id ts type state)
   @inter_agent_kinds ~w(request response query inform propose accept reject escalate-to-user done)
@@ -387,8 +387,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  # 実機検収 2 Trigger 2 (2026-07-23 マスター指示): advance A's IA
-  # visibility boundary when the envelope reports a session_id that
+  # Trigger 2 records A's session start when the envelope reports a session_id that
   # differs from A's durable SessionPointers sid. This catches
   # explicit session-switch cases (restore/resume to a different sid)
   # that never go through SessionResets — Trigger 1 in
@@ -415,9 +414,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # `adopt_sid/2` — no allocation, order/display unchanged, but future
   # retries of the same transition now match idempotently.
   #
-  # ふじ 検収 2 fix-round M1 (2026-07-23): when a Trigger 2 advance
-  # fires, broadcast `session_boundary_advanced` so live clients
-  # re-filter their in-memory IA projection.
+  # Visibility is unchanged here: `clear_history` alone adopts the recorded
+  # start and broadcasts the live client re-filter signal (#109).
   defp maybe_advance_session_boundary(%{"session_id" => new_sid}, agent_id)
        when is_binary(new_sid) and new_sid != "" do
     prior =
@@ -428,7 +426,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     cond do
       prior != nil and prior != new_sid ->
-        case KaoiroServer.ClearWatermarks.adopt_pending_sid(agent_id, new_sid, prior) do
+        case KaoiroServer.SessionStarts.adopt_pending_sid(agent_id, new_sid, prior) do
           {:ok, _same_boundary} ->
             # R1: a crash preserved Trigger 1's nil-sid boundary but not its
             # pointer detach. pending_from_sid proves this is the same reset,
@@ -436,14 +434,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
             :ok
 
           :noop ->
-            {:ok, {_order, boundary_display, _sid}} =
-              KaoiroServer.ClearWatermarks.advance_transition(agent_id, new_sid)
-
-            KaoiroServerWeb.Endpoint.broadcast(
-              "agents:lobby",
-              "session_boundary_advanced",
-              %{"agent_id" => agent_id, "boundary" => boundary_display}
-            )
+            {:ok, {_order, _display, _sid}} =
+              KaoiroServer.SessionStarts.advance_transition(agent_id, new_sid)
         end
 
         :ok
@@ -452,7 +444,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         # Codex lazy: adopt existing nil-sid boundary if the record
         # exists (Trigger 1 might have seeded it during /clear or /new
         # with nil sid). No-op when no such record.
-        _ = KaoiroServer.ClearWatermarks.adopt_sid(agent_id, new_sid)
+        _ = KaoiroServer.SessionStarts.adopt_sid(agent_id, new_sid)
         :ok
     end
   end

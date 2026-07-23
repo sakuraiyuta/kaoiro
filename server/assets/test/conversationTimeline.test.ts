@@ -1,6 +1,6 @@
 // 実機検収 3 (2026-07-23 マスター指示): 純関数 conversationEntries の
 // 分類ロジック pin。 マスター spec = 「agent の応答 + ユーザ送信
-// prompt」を含み、「tool running 系」を除外。 新しい順。
+// prompt」と IA を含み、「tool running 系」を除外。 新しい順。
 
 import { describe, expect, it } from "vitest";
 import {
@@ -151,7 +151,7 @@ describe("conversationEntries (実機検収 3)", () => {
     expect(entries[0]?.text).toBe("keep");
   });
 
-  it("state_change / inter_agent_message は除外 (会話行ではない)", () => {
+  it("state_change は除外し、IA は送信元・受信側つきの一行になる", () => {
     const logs = {
       "agent-a": [
         assistant("agent-a", "2026-07-23T14:00:00Z", "keep"),
@@ -160,8 +160,22 @@ describe("conversationEntries (実機検収 3)", () => {
       ],
     };
     const entries = conversationEntries(logs);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.kind).toBe("inter_agent");
+    expect(entries[0]?.agentId).toBe("agent-a");
+    expect(entries[0]?.recipientId).toBe("agent-b");
+    expect(entries[0]?.text).toBe("hello");
+    expect(entries[1]?.kind).toBe("agent");
+  });
+
+  it("sender/receiver pane に複製された同一 IA は一行に dedupe する", () => {
+    const message = interAgent("agent-a", "agent-b", "2026-07-23T14:10:00Z");
+    const entries = conversationEntries({
+      "agent-a": [message],
+      "agent-b": [message],
+    });
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.kind).toBe("agent");
+    expect(entries[0]?.kind).toBe("inter_agent");
   });
 
   it("user prompt entry の agentId は prompt が echoed された agent (送信先)", () => {

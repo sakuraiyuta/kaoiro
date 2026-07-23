@@ -1,30 +1,17 @@
 defmodule KaoiroServer.ClearWatermarks do
   @moduledoc """
-  Restart-surviving per-agent **IA visibility boundary** (issue #109;
-  semantic-shifted from "clear cutoff" to "current-session start
-  ingress order" by 実機検収 2, 2026-07-23). The module name is
-  historical; today the store answers "which IA count as part of A's
-  current session" for the operator's per-pane transcript. On
+  Restart-surviving per-agent **IA visibility watermark** (issue #109).
+  `clear_history` alone records this cutoff by adopting the independently
+  persisted `SessionStarts` record; session transitions never alter it. On
   subsequent history-merge paths, IA envelopes whose server-side
   order is `<= boundary_order` are hidden from `agent_id`'s
   transcript pane. Peer agents' panes are unaffected — their own
   boundary controls what they see — and the shared `InterAgentHistory`
   DETS ledger itself is untouched.
 
-  **Boundary advance trigger** (実機検収 2, 2026-07-23): the
-  operator UI `clear_history` no longer advances the boundary — it
-  is now a display-only sweep of past-session non-IA log lines.
-  Advances fire only on genuine session transitions:
-    - Trigger 1: `SessionResets.confirm_connection` when a /new or
-      /clear reset reaches its :awaiting_connect completion.
-    - Trigger 2: `wrapper_channel.handle_in("envelope", …)` when the
-      envelope's `session_id` differs from the durable
-      `SessionPointers` prior sid (external switch_session /
-      restore-to-different-sid).
-  Both flow through `advance_transition/3`, which is
-  transition-idempotent by the target `sid` (ふじ 検収 2 fix-round
-  M3, 2026-07-23) — a retry after a crash between advance and
-  pointer update no longer double-advances.
+  `advance_transition/*` and sid adoption remain private legacy helpers for
+  loading existing 5/4/3/2-field DETS rows; production transition callers
+  use `SessionStarts` instead.
 
   **Ordering domain** (ふじ #109 M6 must-fix, 2026-07-23 + R5 must-fix
   same date): the order tuple is allocated by `KaoiroServer.IngressOrder`,
@@ -53,10 +40,8 @@ defmodule KaoiroServer.ClearWatermarks do
   promotes the entry to a real order tuple.
 
   Storage: DETS with in-memory mirror. Writes are **synchronous +
-  fsync-gated** (`GenServer.call` + `:dets.sync/1` before reply) — a
-  Trigger 1/2 transition advance and the `session_boundary_advanced`
-  broadcast that follows (ふじ 検収 2 fix-round M1, 2026-07-23) never
-  fire ahead of disk persistence, so a crash inside
+  fsync-gated** (`GenServer.call` + `:dets.sync/1` before reply), so
+  `history_cleared` never fires ahead of disk persistence and a crash inside
   the persist window cannot silently drop the cutoff (M7-a must-fix,
   same policy `KaoiroServer.TokenDenylist` adopted for #72 revocation).
 
@@ -84,8 +69,7 @@ defmodule KaoiroServer.ClearWatermarks do
   (`{tuple, iso, sid} | {:iso_only, iso} | nil`) — kept
   server-internal (the wire never sees this shape; the operator client
   only ever receives `clear_watermarks: %{agent_id => iso}` via
-  `all_displays/1` and the `session_boundary_advanced` broadcast's
-  `boundary` display ISO).
+  `all_displays/1`).
   """
 
   use GenServer
@@ -233,11 +217,7 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   @doc """
-  Sender helper used by the M1 wire (`session_boundary_advanced`
-  broadcast): callers know they just advanced (via
-  `advance_transition/3` or `adopt_sid/2`) and want the display ISO
-  to ship in the broadcast payload. Returning nil is safe — the
-  caller skips the broadcast in that case.
+  Compatibility accessor for callers that need the display ISO.
   """
   def display_for_broadcast(agent_id, server \\ __MODULE__) do
     get_display(agent_id, server)

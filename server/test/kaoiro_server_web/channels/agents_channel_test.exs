@@ -1451,30 +1451,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "history_cleared", %{"agent_id" => ^agent_id}
     end
 
-    test "session_boundary_advanced は viewer に漏れず operator にのみ届く" do
-      agent_id = "test.boundary-gate"
-      put_agent(agent_id)
-      _viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
-
-      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "session_boundary_advanced", %{
-        "agent_id" => agent_id,
-        "boundary" => "2026-07-23T20:00:00Z"
-      })
-
-      refute_push "session_boundary_advanced", %{}
-
-      _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-
-      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "session_boundary_advanced", %{
-        "agent_id" => agent_id,
-        "boundary" => "2026-07-23T20:00:00Z"
-      })
-
-      assert_push "session_boundary_advanced", %{"agent_id" => ^agent_id}
-    end
-
     test "agent_deleted は viewer にも届く (grid 整合のため)" do
       agent_id = "test.ad-1"
       put_agent(agent_id)
@@ -1878,6 +1854,54 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert later in (after_agents[agent_id] || [])
     end
 
+    test "clear_history は過去 IA を隠し現行 session IA を残す (reload 一致)" do
+      agent_id = "test.clear-ia-projection"
+      peer_id = "test.clear-ia-projection-peer"
+      old = durable_inter_agent_envelope(agent_id, peer_id, 1)
+      :ok = InterAgentHistory.append(old)
+
+      {:ok, {_start_order, display, "sess-current"}} =
+        KaoiroServer.SessionStarts.advance_transition(agent_id, "sess-current")
+
+      current = durable_inter_agent_envelope(agent_id, peer_id, 2)
+      :ok = InterAgentHistory.append(current)
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "waiting_input",
+          "session_id" => "sess-current"
+        })
+
+      on_exit(fn ->
+        InterAgentHistory.delete_agent(agent_id)
+        ClearWatermarks.delete(agent_id)
+        KaoiroServer.SessionStarts.delete(agent_id)
+      end)
+
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => before}
+      assert old in (before[agent_id] || [])
+      assert current in (before[agent_id] || [])
+
+      assert_reply push(socket, "clear_history", %{"agent_id" => agent_id}), :ok
+
+      assert_broadcast "history_cleared", %{
+        "agent_id" => ^agent_id,
+        "clear_watermark" => ^display
+      }
+
+      _reload = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => after_clear}
+      refute old in (after_clear[agent_id] || [])
+      assert current in (after_clear[agent_id] || [])
+    end
+
     test "wire ts と server ingress order が乖離しても filter は server order を使う (clock-skew pin)" do
       # M6 core pin: envelope の wire ts (producer clock) が clear
       # watermark の display ISO より新しいのに、server の ingress
@@ -2036,19 +2060,22 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert [%{"payload" => %{"text" => "cur"}}] = AgentStates.histories()[agent_id]
     end
 
-    # 実機検収 2 (2026-07-23 マスター指示): 境界が既に seed されている
-    # ケース (以前の session transition で advance 済み) では broadcast
-    # がその display ISO を audit hint として運ぶ。値は shift しない
-    # (clear_history は境界を触らない)。
-    test "clear_history broadcast は既存境界の display ISO を運ぶ (境界前進なし pin)" do
+    test "clear_history は現行 session start を watermark として採用する" do
       agent_id = "test.clear-boundary-hint"
-      on_exit(fn -> ClearWatermarks.delete(agent_id) end)
+
+      on_exit(fn ->
+        ClearWatermarks.delete(agent_id)
+        KaoiroServer.SessionStarts.delete(agent_id)
+      end)
+
       :ok = AgentStates.put(state_with_session(agent_id, "s2"))
 
-      # SessionResets 経由でセットされた既存境界を模擬 (M3: sid 込みで
-      # advance_transition を通す)。
+      # A transition records only a start; visibility remains unchanged until
+      # this operator clear adopts it.
       {:ok, {existing_order, existing_display, "sess-existing"}} =
-        ClearWatermarks.advance_transition(agent_id, "sess-existing")
+        KaoiroServer.SessionStarts.advance_transition(agent_id, "sess-existing")
+
+      assert ClearWatermarks.get(agent_id) == nil
 
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
@@ -2061,8 +2088,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "clear_watermark" => ^existing_display
       }
 
-      # 境界は不変 (clear_history は境界を触らない)。
-      assert {^existing_order, ^existing_display, "sess-existing"} =
+      assert {^existing_order, ^existing_display, nil} =
                ClearWatermarks.get(agent_id)
     end
 

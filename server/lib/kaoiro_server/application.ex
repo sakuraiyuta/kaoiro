@@ -33,6 +33,9 @@ defmodule KaoiroServer.Application do
       # durable inter-agent messages from the cleared agent's transcript
       # on subsequent reloads (issue #109). Peer panes are unaffected.
       KaoiroServer.ClearWatermarks,
+      # Session-transition start records are intentionally independent from
+      # visibility: only clear_history adopts one into ClearWatermarks (#109).
+      KaoiroServer.SessionStarts,
       # Single serialized allocator for the server-side ingress ordering
       # domain (ふじ R5 must-fix, 2026-07-23). Both `InterAgentHistory`
       # (per-envelope order stamp) and the operator `clear_history`
@@ -43,7 +46,8 @@ defmodule KaoiroServer.Application do
       {KaoiroServer.IngressOrder,
        seed_from: [
          &KaoiroServer.InterAgentHistory.all_with_order/0,
-         &KaoiroServer.ClearWatermarks.all_orders/0
+         &KaoiroServer.ClearWatermarks.all_orders/0,
+         &KaoiroServer.SessionStarts.all_orders/0
        ]},
       # Per-agent_id token denylist (issue #72): additive revoke channel
       # for ADR-0024's server-minted wrapper tokens. Checked in

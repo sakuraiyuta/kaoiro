@@ -438,15 +438,17 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
-  # 実機検収 2 (2026-07-23 マスター指示): A の IA visibility 境界は
+  # #109: session transitions record SessionStarts only. They must not
+  # change ClearWatermarks visibility or broadcast a client filter event.
   # SessionResets confirm_connection (Trigger 1) と外部 switch_session
   # (Trigger 2) の 2 経路でのみ前進する。以下 4 pin はクロエ 追加条件:
   #   - 条件 1: resume で境界を前進させない (dogfood 再起動 + 同一
   #     session 復帰後の durable IA 表示が壊れないこと)
   #   - 条件 2: 未発話 agent の初回 sid 報告で境界を前進させない
   #     (fresh spawn 直後の IA が誤って hidden 化しないこと)
-  describe "IA visibility 境界の前進 trigger (実機検収 2)" do
+  describe "session start 記録 trigger (#109)" do
     alias KaoiroServer.ClearWatermarks
+    alias KaoiroServer.SessionStarts
     alias KaoiroServer.SessionPointers, as: SP
 
     setup do
@@ -478,7 +480,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert %{session_id: "sess-fresh-1"} = SP.get(agent_id)
       # 境界は未 seed のまま (Trigger 2 が「prior_sid nil のとき前進
       # しない」を守る)。 未発話 agent の初回 IA 保護。
-      assert ClearWatermarks.get(agent_id) == nil
+      assert SessionStarts.get(agent_id) == nil
     end
 
     test "条件 1: 同一 sid の再報告 (dogfood restart + resume) で境界前進しない" do
@@ -503,7 +505,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok
 
       # 境界不変 (prior == new)。
-      assert ClearWatermarks.get(agent_id) == nil
+      assert SessionStarts.get(agent_id) == nil
     end
 
     test "Trigger 2: durable prior_sid と異なる sid が届いたら境界を前進 (external switch)" do
@@ -527,9 +529,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok
 
       # 境界が seed されている: tuple 記録 + display ISO。
-      assert {{us, seq}, iso, sid} = ClearWatermarks.get(agent_id)
+      assert {{us, seq}, iso, sid} = SessionStarts.get(agent_id)
       assert is_integer(us) and is_integer(seq)
       assert String.match?(iso, ~r/^\d{4}-\d{2}-\d{2}T/)
+      assert ClearWatermarks.get(agent_id) == nil
       # M3: Trigger 2 は envelope.session_id を transition identity と
       # して record する (crash 後 restart で同一 transition を retry
       # しても no-op になる)。
@@ -549,19 +552,20 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       on_exit(fn ->
         SP.delete(agent_id)
         ClearWatermarks.delete(agent_id)
+        SessionStarts.delete(agent_id)
       end)
 
       # Trigger 1 は Codex lazy sid=nil のまま、old pointer identity を
       # fsync済 boundary に残す。ここで detach 前 crash を模擬する。
       assert {:ok, {order1, display1, nil}} =
-               ClearWatermarks.advance_transition(agent_id, nil, "sess-old", ClearWatermarks)
+               SessionStarts.advance_transition(agent_id, nil, "sess-old", SessionStarts)
 
       @endpoint.subscribe("agents:lobby")
       socket = join_wrapper(agent_id)
       env = envelope(agent_id, "waiting_input") |> Map.put("session_id", "sess-new")
       assert_reply push(socket, "envelope", env), :ok
 
-      assert ClearWatermarks.get(agent_id) == {order1, display1, "sess-new"}
+      assert SessionStarts.get(agent_id) == {order1, display1, "sess-new"}
       # Trigger 1 が既に通知済みの boundary を patch しただけで、O2 の
       # live re-filter event は追加発火しない。
       refute_receive %Phoenix.Socket.Broadcast{event: "session_boundary_advanced"}
@@ -572,7 +576,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       SP.record(agent_id, "sess-old", "/proj")
 
       assert {:ok, {order1, display1, nil}} =
-               ClearWatermarks.advance_transition(agent_id, nil, "sess-old", ClearWatermarks)
+               SessionStarts.advance_transition(agent_id, nil, "sess-old", SessionStarts)
 
       SP.detach_session(agent_id)
       _ = :sys.get_state(SP)
@@ -585,7 +589,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       socket = join_wrapper(agent_id)
       env = envelope(agent_id, "waiting_input") |> Map.put("session_id", "sess-new")
       assert_reply push(socket, "envelope", env), :ok
-      assert ClearWatermarks.get(agent_id) == {order1, display1, "sess-new"}
+      assert SessionStarts.get(agent_id) == {order1, display1, "sess-new"}
     end
 
     test "R3: AgentStates cap error はchannelをcrashせず error reply、boundaryは成立する" do
@@ -609,14 +613,14 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       env = envelope(agent_id, "waiting_input") |> Map.put("session_id", "sess-new")
       assert_reply push(socket, "envelope", env), :error, %{reason: "too_many_agents"}
       assert Process.alive?(socket.channel_pid)
-      assert {{_us, _seq}, _display, "sess-new"} = ClearWatermarks.get(agent_id)
+      assert {{_us, _seq}, _display, "sess-new"} = SessionStarts.get(agent_id)
 
       # A living channel can process the next message after capacity recovers.
       :sys.replace_state(AgentStates, fn _ -> original_state end)
       assert_reply push(socket, "envelope", env), :ok
     end
 
-    test "M1 wire (fix-round): Trigger 2 は session_boundary_advanced を agents:lobby へ broadcast する" do
+    test "Trigger 2 は session_boundary_advanced を broadcast しない" do
       agent_id = "test.boundary-broadcast"
       SP.record(agent_id, "sess-a", "/proj")
       _ = :sys.get_state(SP)
@@ -636,15 +640,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       ref = push(socket, "envelope", env)
       assert_reply ref, :ok
 
-      # M1: additive wire。 boundary display iso を payload に載せて
-      # live client が受信、in-memory IA を再 filter する契約。
-      assert_receive %Phoenix.Socket.Broadcast{
-        event: "session_boundary_advanced",
-        payload: %{"agent_id" => ^agent_id, "boundary" => boundary}
-      }
-
-      assert is_binary(boundary)
-      assert String.match?(boundary, ~r/^\d{4}-\d{2}-\d{2}T/)
+      refute_receive %Phoenix.Socket.Broadcast{event: "session_boundary_advanced"}
+      assert {{_us, _seq}, display, "sess-b"} = SessionStarts.get(agent_id)
+      assert String.match?(display, ~r/^\d{4}-\d{2}-\d{2}T/)
     end
 
     test "M2 fix-round: 新 session の初 envelope が IA でも、その IA が境界以下にならない" do
@@ -720,7 +718,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       # 境界の order は IA の order より小さい必要がある (advance が先)。
       [{ia_order, _ia_env}] = InterAgentHistory.all_with_order()[agent_id]
-      {boundary_order, _display, _sid} = ClearWatermarks.get(agent_id)
+      {boundary_order, _display, _sid} = SessionStarts.get(agent_id)
       assert boundary_order < ia_order
     end
 
@@ -740,7 +738,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       ref = push(socket, "envelope", envelope(agent_id, "waiting_permission"))
       assert_reply ref, :ok
 
-      assert ClearWatermarks.get(agent_id) == nil
+      assert SessionStarts.get(agent_id) == nil
     end
   end
 

@@ -16,9 +16,9 @@
 //   - log kind=tool_use / tool_result → tool running (マスター明示)
 //   - state_change / permission_request / session_boundary → 会話行では
 //     ないので UI で扱わない
-//   - inter_agent_message → agent 間の bubble は既に per-agent 詳細に
-//     表示されており、右ペインの主目的は「operator ↔ agent の一次
-//     会話」なので当面除外 (マスターの含む/除外 リストにも明記なし)
+//   - inter_agent_message → 送信元 persona で一行だけ表示する。server の
+//     per-pane projection は sender/receiver に同じ envelope を複製するが、
+//     timeline は identity で重複を落とす (#25)。
 //
 // 純関数のまま提供 (vitest で決定的に pin できるように)。 UI 側の
 // 描画は ResponseTimeline.svelte が担当。
@@ -28,7 +28,7 @@ import type { Envelope } from "./protocol";
 /** 1 行のプレビュー最大文字数。 latestReply.ts と同じ 80 で揃える。 */
 export const SUMMARY_MAX_CHARS = 80;
 
-export type EntryKind = "user" | "agent";
+export type EntryKind = "user" | "agent" | "inter_agent";
 
 export interface ConversationEntry {
   /** 対応 agent。 persona 画像の解決 + 行クリック時の詳細遷移先。
@@ -40,6 +40,8 @@ export interface ConversationEntry {
   /** user prompt か agent 発話かの区別。 UI は軽い styling で発信元
     が分かれば十分 (badge / opacity 等) — 描画側の判断。 */
   kind: EntryKind;
+  /** inter_agent の軽い方向表示用。 */
+  recipientId?: string;
   /** 1 行に丸めた plain-text preview。 空文字なら UI 側で
    *  placeholder ("(空応答)" 等) を出す判断。 */
   text: string;
@@ -72,6 +74,20 @@ function classify(agentId: string, env: Envelope): ConversationEntry | null {
   // 経路では会話行が拾えなくなるが、その場合の agent 発話は timeline
   // に載らないだけで per-agent 詳細には残る。
   if (env.type === "result") return null;
+  if (env.type === "inter_agent_message") {
+    const payload = env.payload as { to?: unknown; body?: unknown } | undefined;
+    const recipientId = typeof payload?.to === "string" ? payload.to : undefined;
+    return {
+      // `agentId` is the pane key for ordinary logs, but IA is displayed
+      // from its true sender so a receiver-pane duplicate cannot change its
+      // portrait or click target.
+      agentId: env.agent_id,
+      envelope: env,
+      kind: "inter_agent",
+      ...(recipientId ? { recipientId } : {}),
+      text: toSummary(typeof payload?.body === "string" ? payload.body : ""),
+    };
+  }
   if (env.type === "log") {
     const payload = env.payload as
       | { kind?: unknown; text?: unknown }
@@ -102,10 +118,24 @@ export function conversationEntries(
   logs: Record<string, Envelope[]>,
 ): ConversationEntry[] {
   const out: ConversationEntry[] = [];
+  const seenInterAgent = new Set<string>();
   for (const [agentId, transcript] of Object.entries(logs)) {
     for (const envelope of transcript) {
       const entry = classify(agentId, envelope);
-      if (entry) out.push(entry);
+      if (entry) {
+        if (entry.kind === "inter_agent") {
+          const key = [
+            envelope.agent_id,
+            envelope.session_id ?? "",
+            envelope.ts,
+            envelope.seq ?? 0,
+            envelope.type,
+          ].join("|");
+          if (seenInterAgent.has(key)) continue;
+          seenInterAgent.add(key);
+        }
+        out.push(entry);
+      }
     }
   }
   out.sort((a, b) => compareTs(b.envelope, a.envelope));

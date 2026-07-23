@@ -303,10 +303,10 @@ defmodule KaoiroServer.SessionResets do
             _ -> lock.to_session_id
           end
 
-        # 実機検収 2 (2026-07-23 マスター指示): a /new or /clear reaching
-        # confirm_connection is the ONE authoritative session-transition
-        # event that must advance A's IA visibility boundary
-        # (`ClearWatermarks`). Doing it here — not in the wrapper
+        # A /new or /clear reaching confirm_connection records the current
+        # session start. It deliberately does NOT alter IA visibility: only
+        # operator clear_history later adopts this record (#109). Doing it
+        # here — not in the wrapper
         # `handle_info(:after_join)` — keeps the "boundary moves only
         # on real transitions" invariant: a normal reconnect / dogfood
         # restart / initial spawn all reach after_join but skip this
@@ -320,49 +320,19 @@ defmodule KaoiroServer.SessionResets do
         # lazy 采番 passes `nil` here; `wrapper_channel` calls
         # `ClearWatermarks.adopt_sid/2` on the first envelope that
         # carries a real session_id.
-        {:ok, {_order, boundary_display, _sid}} =
-          KaoiroServer.ClearWatermarks.advance_transition(
+        {:ok, {_order, _display, _sid}} =
+          KaoiroServer.SessionStarts.advance_transition(
             agent_id,
             effective_to_sid,
             lock.previous_session_id,
-            KaoiroServer.ClearWatermarks
+            KaoiroServer.SessionStarts
           )
 
-        # ふじ 検収 2 fix-round M1 (2026-07-23): live clients must learn
-        # about the advance so their in-memory logs projection re-filters
-        # IA older than `boundary_display` — otherwise the old IA
-        # stays visible until reload and then suddenly disappears
-        # (breaks #109 AC). Additive wire; old clients ignore it.
-        KaoiroServerWeb.Endpoint.broadcast(
-          "agents:lobby",
-          "session_boundary_advanced",
-          %{"agent_id" => agent_id, "boundary" => boundary_display}
-        )
-
-        # phase-17 17-7 (must-3): write the boundary marker into
-        # AgentStates AND broadcast it via the ordinary envelope path so
-        # every currently-connected client (operator: full payload,
-        # viewer: mode/state only via handle_out sanitize) sees it. The
-        # `clear` mode also fires `history_reset` FIRST so client
-        # transcripts drop before the marker arrives — reversing the
-        # order would erase the marker along with the log.
+        # A session command is display-neutral (#109): append the marker
+        # without clearing ordinary logs or durable IA.
         marker = build_boundary_envelope(agent_id, lock, effective_to_sid)
 
-        case lock.mode do
-          "clear" ->
-            :ok = KaoiroServer.InterAgentHistory.delete_agent(agent_id)
-
-            KaoiroServerWeb.Endpoint.broadcast(
-              "agents:lobby",
-              "history_reset",
-              %{"agent_id" => agent_id, "preserve_inter_agent" => false}
-            )
-
-            _ = KaoiroServer.AgentStates.clear_history_with_boundary(agent_id, marker)
-
-          _ ->
-            _ = KaoiroServer.AgentStates.append_boundary(agent_id, marker)
-        end
+        _ = KaoiroServer.AgentStates.append_boundary(agent_id, marker)
 
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", marker)
 

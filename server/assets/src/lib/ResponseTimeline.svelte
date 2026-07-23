@@ -39,6 +39,16 @@
   } = $props();
 
   const entries = $derived(conversationEntries(logs));
+  let visibleCount = $state(50);
+  const visibleEntries = $derived(entries.slice(0, visibleCount));
+
+  function loadMore(event: Event): void {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 8) {
+      visibleCount = Math.min(entries.length, visibleCount + 50);
+    }
+  }
 
   function personaName(agentId: string): string {
     const p = agents[agentId]?.persona;
@@ -60,8 +70,8 @@
   {#if entries.length === 0}
     <p class="empty">まだ会話なし</p>
   {:else}
-    <ul class="rows">
-      {#each entries as entry (entry.envelope.agent_id + "|" + entry.envelope.ts + "|" + (entry.envelope.seq ?? 0) + "|" + entry.envelope.type + "|" + entry.kind)}
+    <ul class="rows" onscroll={loadMore}>
+      {#each visibleEntries as entry (entry.envelope.agent_id + "|" + entry.envelope.ts + "|" + (entry.envelope.seq ?? 0) + "|" + entry.envelope.type + "|" + entry.kind)}
         {@const state = stateFor(entry.agentId)}
         {@const sprite = personaSprite(entry.agentId, state)}
         <li>
@@ -70,6 +80,7 @@
             class="row"
             class:from-user={entry.kind === "user"}
             class:from-agent={entry.kind === "agent"}
+            class:inter-agent={entry.kind === "inter_agent"}
             onclick={() => onSelectAgent(entry.agentId)}
             title={`${personaName(entry.agentId)} の詳細を開く`}
           >
@@ -85,6 +96,8 @@
                 <span class="name">
                   {#if entry.kind === "user"}
                     <span class="who-badge" aria-label="operator prompt">→ {personaName(entry.agentId)}</span>
+                  {:else if entry.kind === "inter_agent"}
+                    <span class="who-name">{personaName(entry.agentId)} <span class="receiver">→ {entry.recipientId ? personaName(entry.recipientId) : "受信側"}</span></span>
                   {:else}
                     <span class="who-name">{personaName(entry.agentId)}</span>
                   {/if}
@@ -93,7 +106,7 @@
               </span>
               <span class="summary">
                 {entry.text ||
-                  (entry.kind === "user" ? "(空メッセージ)" : "(空応答)")}
+                  (entry.kind === "user" ? "(空メッセージ)" : entry.kind === "inter_agent" ? "(空の連携メッセージ)" : "(空応答)")}
               </span>
             </span>
           </button>
@@ -108,7 +121,10 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    height: calc(100vh - 2rem);
     max-height: 100%;
+    position: sticky;
+    top: 1rem;
     padding: 0.75rem 0.85rem 1rem;
     border: 1px solid var(--line);
     border-radius: 0.75rem;
@@ -164,6 +180,11 @@
      アクセントを付ける最小コスト。 */
   .row.from-user {
     border-left: 3px solid color-mix(in srgb, var(--c-thinking) 60%, transparent);
+    padding-left: 0.45rem;
+  }
+
+  .row.inter-agent {
+    border-left: 3px solid color-mix(in srgb, var(--c-success) 60%, transparent);
     padding-left: 0.45rem;
   }
 
@@ -223,6 +244,11 @@
   .who-name,
   .who-badge {
     font-weight: 600;
+  }
+
+  .receiver {
+    color: var(--fg-dim);
+    font-weight: 500;
   }
 
   .who-badge {
