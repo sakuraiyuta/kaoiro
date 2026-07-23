@@ -232,6 +232,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
           # state is authoritative" holds (history was already not
           # retained). Ack the wrapper — it did nothing wrong.
           {:reply, :ok, socket}
+
+        {:error, reason} ->
+          # Boundary advance intentionally precedes retention so a first IA
+          # gets a post-boundary order. A cap failure still leaves the
+          # transition durable; only volatile AgentStates retention failed.
+          {:reply, {:error, %{reason: to_string(reason)}}, socket}
       end
     else
       {:error, reason} when is_atom(reason) ->
@@ -422,14 +428,23 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     cond do
       prior != nil and prior != new_sid ->
-        {:ok, {_order, boundary_display, _sid}} =
-          KaoiroServer.ClearWatermarks.advance_transition(agent_id, new_sid)
+        case KaoiroServer.ClearWatermarks.adopt_pending_sid(agent_id, new_sid, prior) do
+          {:ok, _same_boundary} ->
+            # R1: a crash preserved Trigger 1's nil-sid boundary but not its
+            # pointer detach. pending_from_sid proves this is the same reset,
+            # so adopt without allocating or broadcasting a second boundary.
+            :ok
 
-        KaoiroServerWeb.Endpoint.broadcast(
-          "agents:lobby",
-          "session_boundary_advanced",
-          %{"agent_id" => agent_id, "boundary" => boundary_display}
-        )
+          :noop ->
+            {:ok, {_order, boundary_display, _sid}} =
+              KaoiroServer.ClearWatermarks.advance_transition(agent_id, new_sid)
+
+            KaoiroServerWeb.Endpoint.broadcast(
+              "agents:lobby",
+              "session_boundary_advanced",
+              %{"agent_id" => agent_id, "boundary" => boundary_display}
+            )
+        end
 
         :ok
 

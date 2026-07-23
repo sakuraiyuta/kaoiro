@@ -89,6 +89,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   intercept [
     "envelope",
     "history_cleared",
+    "session_boundary_advanced",
     "history_reset",
     "runner_sessions",
     "spawn_result",
@@ -208,6 +209,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_out("history_cleared", payload, socket) do
     if socket.assigns[:role] == :operator do
       push(socket, "history_cleared", payload)
+    end
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_out("session_boundary_advanced", payload, socket) do
+    if socket.assigns[:role] == :operator do
+      push(socket, "session_boundary_advanced", payload)
     end
 
     {:noreply, socket}

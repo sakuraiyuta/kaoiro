@@ -541,6 +541,81 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert %{session_id: "sess-new"} = SP.get(agent_id)
     end
 
+    test "R1: crash後の old pointer + pending lazy boundary は new sid を二重advanceせず adopt" do
+      agent_id = "test.boundary-r1-crash"
+      SP.record(agent_id, "sess-old", "/proj")
+      _ = :sys.get_state(SP)
+
+      on_exit(fn ->
+        SP.delete(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      # Trigger 1 は Codex lazy sid=nil のまま、old pointer identity を
+      # fsync済 boundary に残す。ここで detach 前 crash を模擬する。
+      assert {:ok, {order1, display1, nil}} =
+               ClearWatermarks.advance_transition(agent_id, nil, "sess-old", ClearWatermarks)
+
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+      env = envelope(agent_id, "waiting_input") |> Map.put("session_id", "sess-new")
+      assert_reply push(socket, "envelope", env), :ok
+
+      assert ClearWatermarks.get(agent_id) == {order1, display1, "sess-new"}
+      # Trigger 1 が既に通知済みの boundary を patch しただけで、O2 の
+      # live re-filter event は追加発火しない。
+      refute_receive %Phoenix.Socket.Broadcast{event: "session_boundary_advanced"}
+    end
+
+    test "R1 non-regression: 通常detach後の nil→sid は Trigger 2 不発で adopt_sid" do
+      agent_id = "test.boundary-r1-detach"
+      SP.record(agent_id, "sess-old", "/proj")
+
+      assert {:ok, {order1, display1, nil}} =
+               ClearWatermarks.advance_transition(agent_id, nil, "sess-old", ClearWatermarks)
+
+      SP.detach_session(agent_id)
+      _ = :sys.get_state(SP)
+
+      on_exit(fn ->
+        SP.delete(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      socket = join_wrapper(agent_id)
+      env = envelope(agent_id, "waiting_input") |> Map.put("session_id", "sess-new")
+      assert_reply push(socket, "envelope", env), :ok
+      assert ClearWatermarks.get(agent_id) == {order1, display1, "sess-new"}
+    end
+
+    test "R3: AgentStates cap error はchannelをcrashせず error reply、boundaryは成立する" do
+      agent_id = "test.boundary-cap"
+      SP.record(agent_id, "sess-old", "/proj")
+      _ = :sys.get_state(SP)
+      original_state = :sys.get_state(AgentStates)
+
+      on_exit(fn ->
+        :sys.replace_state(AgentStates, fn _ -> original_state end)
+        SP.delete(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      # Directly seed the singleton to its documented cap. The entry values
+      # are irrelevant to put/2's cap guard; this avoids 1000 channel joins.
+      full_state = Map.new(1..1000, fn n -> {"cap-#{n}", %{}} end)
+      :sys.replace_state(AgentStates, fn _ -> full_state end)
+      socket = join_wrapper(agent_id)
+
+      env = envelope(agent_id, "waiting_input") |> Map.put("session_id", "sess-new")
+      assert_reply push(socket, "envelope", env), :error, %{reason: "too_many_agents"}
+      assert Process.alive?(socket.channel_pid)
+      assert {{_us, _seq}, _display, "sess-new"} = ClearWatermarks.get(agent_id)
+
+      # A living channel can process the next message after capacity recovers.
+      :sys.replace_state(AgentStates, fn _ -> original_state end)
+      assert_reply push(socket, "envelope", env), :ok
+    end
+
     test "M1 wire (fix-round): Trigger 2 は session_boundary_advanced を agents:lobby へ broadcast する" do
       agent_id = "test.boundary-broadcast"
       SP.record(agent_id, "sess-a", "/proj")

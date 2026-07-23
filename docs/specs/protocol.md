@@ -313,6 +313,10 @@ resume 時に過去履歴を query() ストリームへ再 yield しないため
   残る transient window が発生。 reload で server の per-pane
   pre-fan-out を再受信して解消 (identity dedupe が重複を吸収する
   R3 rolling upgrade note と同じ運用前提)。
+- **live の一時的不一致**: wire ISO と server ingress order の比較差に
+  よる transient mismatch は、`onEnvelope` / `onHistoryCleared` に加えて
+  `onSessionBoundaryAdvanced` の live re-filter にも同じく起こり得る。
+  reload 時の server-order authoritative projection が収束点である。
 - **operator UI `clear_history`**: 境界を advance しない (現行
   session の IA を残す仕様)。 broadcast の `clear_watermark` は
   「A の現行境界 display ISO (未 seed なら空文字列)」の audit hint に

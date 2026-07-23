@@ -1451,6 +1451,30 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "history_cleared", %{"agent_id" => ^agent_id}
     end
 
+    test "session_boundary_advanced は viewer に漏れず operator にのみ届く" do
+      agent_id = "test.boundary-gate"
+      put_agent(agent_id)
+      _viewer = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "session_boundary_advanced", %{
+        "agent_id" => agent_id,
+        "boundary" => "2026-07-23T20:00:00Z"
+      })
+
+      refute_push "session_boundary_advanced", %{}
+
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "session_boundary_advanced", %{
+        "agent_id" => agent_id,
+        "boundary" => "2026-07-23T20:00:00Z"
+      })
+
+      assert_push "session_boundary_advanced", %{"agent_id" => ^agent_id}
+    end
+
     test "agent_deleted は viewer にも届く (grid 整合のため)" do
       agent_id = "test.ad-1"
       put_agent(agent_id)

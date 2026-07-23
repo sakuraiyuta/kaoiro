@@ -60,8 +60,13 @@ defmodule KaoiroServer.ClearWatermarks do
   the persist window cannot silently drop the cutoff (M7-a must-fix,
   same policy `KaoiroServer.TokenDenylist` adopted for #72 revocation).
 
-  Record shape: `agent_id => {order_tuple, display_iso, transition_sid | nil}`
-  for post-M3 records (ふじ 検収 2 fix-round must-fix M3, 2026-07-23),
+  Record shape: `agent_id => {order_tuple, display_iso, transition_sid | nil,
+  pending_from_sid | nil}` for post-R1 records. `pending_from_sid` is set
+  only for a Trigger 1 Codex lazy transition (`sid=nil`) and durably binds
+  that pending boundary to the old pointer sid; it distinguishes a genuine
+  pending reset from legacy pre-M3 nil-sid records after a crash/restart.
+  Pre-R1 post-M3 records load with `pending_from_sid = nil`
+  (ふじ 検収 2 fix-round must-fix M3, 2026-07-23),
   or `agent_id => {:iso_only, display_iso}` for legacy pre-M6 records
   loaded from DETS (ふじ R2 must-fix). The `transition_sid` is the
   target `session_id` of the transition that seeded this boundary —
@@ -74,8 +79,9 @@ defmodule KaoiroServer.ClearWatermarks do
   Accessor invariant: `get_order/2` returns the tuple only for tuple
   records (nil for `:iso_only`); the filter hot-path uses
   `all_filter_bounds/1` which tags both shapes. `get_display/2`
-  returns the ISO in both shapes. `get/2` returns the raw internal
-  shape (`{tuple, iso, sid} | {:iso_only, iso} | nil`) — kept
+  returns the ISO in both shapes. `get/2` hides the internal pending
+  identity and returns the stable shape
+  (`{tuple, iso, sid} | {:iso_only, iso} | nil`) — kept
   server-internal (the wire never sees this shape; the operator client
   only ever receives `clear_watermarks: %{agent_id => iso}` via
   `all_displays/1` and the `session_boundary_advanced` broadcast's
@@ -131,7 +137,18 @@ defmodule KaoiroServer.ClearWatermarks do
   """
   def advance_transition(agent_id, sid_opt, server \\ __MODULE__)
       when is_binary(agent_id) and (is_nil(sid_opt) or is_binary(sid_opt)) do
-    GenServer.call(server, {:advance_transition, agent_id, sid_opt})
+    GenServer.call(server, {:advance_transition, agent_id, sid_opt, nil})
+  end
+
+  @doc """
+  Trigger 1 variant for a Codex lazy transition. `previous_sid` is persisted
+  only while `sid_opt` is nil, so a restart with the old SessionPointers sid
+  can adopt the first real sid without allocating a second boundary (R1).
+  """
+  def advance_transition(agent_id, sid_opt, previous_sid, server)
+      when is_binary(agent_id) and (is_nil(sid_opt) or is_binary(sid_opt)) and
+             (is_nil(previous_sid) or is_binary(previous_sid)) do
+    GenServer.call(server, {:advance_transition, agent_id, sid_opt, previous_sid})
   end
 
   @doc """
@@ -148,10 +165,21 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   @doc """
-  Raw internal record: `{{us, seq}, display_iso, sid | nil}` for tuple
+  Atomically adopts a lazy Trigger 1 sid only when the persisted pending
+  transition was created from `previous_sid`. Legacy nil-sid records have no
+  pending identity and return `:noop`, allowing Trigger 2 to advance as a
+  genuine external switch instead (R1).
+  """
+  def adopt_pending_sid(agent_id, sid, previous_sid, server \\ __MODULE__)
+      when is_binary(agent_id) and is_binary(sid) and is_binary(previous_sid) do
+    GenServer.call(server, {:adopt_pending_sid, agent_id, sid, previous_sid})
+  end
+
+  @doc """
+  Stable record view: `{{us, seq}, display_iso, sid | nil}` for tuple
   records, `{:iso_only, display_iso}` for pre-M6 legacy, `nil` when
-  unknown. Kept for tests / debug; production callers use the
-  accessors below.
+  unknown. The R1-only pending transition identity remains private to
+  the store. Production callers use the accessors below.
   """
   def get(agent_id, server \\ __MODULE__) do
     GenServer.call(server, {:get, agent_id})
@@ -282,20 +310,29 @@ defmodule KaoiroServer.ClearWatermarks do
   defp load_watermarks(table) do
     case :dets.foldl(
            fn
+             # R1 current record: previous sid is a durable identity for a
+             # Codex lazy Trigger 1 boundary and is never inferred for old
+             # records (otherwise an old nil sid would mask a real switch).
+             {agent_id, {us, seq}, display, sid, pending_from_sid}, acc
+             when is_integer(us) and is_integer(seq) and is_binary(display) and
+                    (is_nil(sid) or is_binary(sid)) and
+                    (is_nil(pending_from_sid) or is_binary(pending_from_sid)) ->
+               Map.put(acc, agent_id, {{us, seq}, display, sid, pending_from_sid})
+
              # Current 4-tuple record (ふじ 検収 2 fix-round M3,
              # 2026-07-23): agent_id, order tuple, display ISO,
              # transition sid (nil until adopted for Codex lazy).
              {agent_id, {us, seq}, display, sid}, acc
              when is_integer(us) and is_integer(seq) and is_binary(display) and
                     (is_nil(sid) or is_binary(sid)) ->
-               Map.put(acc, agent_id, {{us, seq}, display, sid})
+               Map.put(acc, agent_id, {{us, seq}, display, sid, nil})
 
              # Pre-M3 3-tuple record (post-M6, pre-transition-idempotence):
              # sid unavailable; load as nil so `adopt_sid/2` can patch on
              # the next matching envelope.
              {agent_id, {us, seq}, display}, acc
              when is_integer(us) and is_integer(seq) and is_binary(display) ->
-               Map.put(acc, agent_id, {{us, seq}, display, nil})
+               Map.put(acc, agent_id, {{us, seq}, display, nil, nil})
 
              # Legacy 2-tuple record (pre-M6, ISO-only): keep it in
              # ISO-mode so the filter path (`all_filter_bounds/1` →
@@ -341,17 +378,17 @@ defmodule KaoiroServer.ClearWatermarks do
     current = Map.get(state.watermarks, agent_id)
 
     cond do
-      match?({{^us, ^seq}, _, _}, current) ->
+      match?({{^us, ^seq}, _, _, _}, current) ->
         {:reply, :ok, state}
 
-      match?({{_, _}, _, _}, current) and elem(current, 0) > order ->
+      match?({{_, _}, _, _, _}, current) and elem(current, 0) > order ->
         {:reply, :ok, state}
 
       true ->
-        write_record(state.table, agent_id, order, display, sid)
+        write_record(state.table, agent_id, order, display, sid, nil)
 
         {:reply, :ok,
-         %{state | watermarks: Map.put(state.watermarks, agent_id, {order, display, sid})}}
+         %{state | watermarks: Map.put(state.watermarks, agent_id, {order, display, sid, nil})}}
     end
   end
 
@@ -361,11 +398,11 @@ defmodule KaoiroServer.ClearWatermarks do
   # allocated first and then called record, so a crashing retry
   # double-advanced. See docstring on `advance_transition/3` for the
   # scenario.
-  def handle_call({:advance_transition, agent_id, sid_opt}, _from, state) do
+  def handle_call({:advance_transition, agent_id, sid_opt, previous_sid}, _from, state) do
     current = Map.get(state.watermarks, agent_id)
 
     case current do
-      {{_, _} = order, display, existing_sid}
+      {{_, _} = order, display, existing_sid, _pending_from_sid}
       when is_binary(sid_opt) and is_binary(existing_sid) and existing_sid == sid_opt ->
         # Same transition retry — no-op.
         {:reply, {:ok, {order, display, existing_sid}}, state}
@@ -373,10 +410,14 @@ defmodule KaoiroServer.ClearWatermarks do
       _ ->
         order = KaoiroServer.IngressOrder.allocate()
         display = DateTime.utc_now() |> DateTime.to_iso8601()
-        write_record(state.table, agent_id, order, display, sid_opt)
-        new_rec = {order, display, sid_opt}
 
-        {:reply, {:ok, new_rec},
+        pending_from_sid =
+          if is_nil(sid_opt) and is_binary(previous_sid), do: previous_sid, else: nil
+
+        write_record(state.table, agent_id, order, display, sid_opt, pending_from_sid)
+        new_rec = {order, display, sid_opt, pending_from_sid}
+
+        {:reply, {:ok, {order, display, sid_opt}},
          %{state | watermarks: Map.put(state.watermarks, agent_id, new_rec)}}
     end
   end
@@ -386,11 +427,25 @@ defmodule KaoiroServer.ClearWatermarks do
   # missing → no-op.
   def handle_call({:adopt_sid, agent_id, sid}, _from, state) do
     case Map.get(state.watermarks, agent_id) do
-      {{_, _} = order, display, nil} ->
-        write_record(state.table, agent_id, order, display, sid)
-        updated = {order, display, sid}
+      {{_, _} = order, display, nil, pending_from_sid} ->
+        write_record(state.table, agent_id, order, display, sid, pending_from_sid)
+        updated = {order, display, sid, pending_from_sid}
 
-        {:reply, {:ok, updated},
+        {:reply, {:ok, {order, display, sid}},
+         %{state | watermarks: Map.put(state.watermarks, agent_id, updated)}}
+
+      _ ->
+        {:reply, :noop, state}
+    end
+  end
+
+  def handle_call({:adopt_pending_sid, agent_id, sid, previous_sid}, _from, state) do
+    case Map.get(state.watermarks, agent_id) do
+      {{_, _} = order, display, nil, ^previous_sid} ->
+        write_record(state.table, agent_id, order, display, sid, previous_sid)
+        updated = {order, display, sid, previous_sid}
+
+        {:reply, {:ok, {order, display, sid}},
          %{state | watermarks: Map.put(state.watermarks, agent_id, updated)}}
 
       _ ->
@@ -399,7 +454,13 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   def handle_call({:get, agent_id}, _from, state) do
-    {:reply, Map.get(state.watermarks, agent_id), state}
+    record =
+      case Map.get(state.watermarks, agent_id) do
+        {order, display, sid, _pending_from_sid} -> {order, display, sid}
+        other -> other
+      end
+
+    {:reply, record, state}
   end
 
   def handle_call(:all, _from, state) do
@@ -408,7 +469,7 @@ defmodule KaoiroServer.ClearWatermarks do
 
   def handle_call(:all_orders, _from, state) do
     orders =
-      for {id, {{_us, _seq} = order, _display, _sid}} <- state.watermarks,
+      for {id, {{_us, _seq} = order, _display, _sid, _pending_from_sid}} <- state.watermarks,
           into: %{},
           do: {id, order}
 
@@ -418,7 +479,7 @@ defmodule KaoiroServer.ClearWatermarks do
   def handle_call(:all_filter_bounds, _from, state) do
     bounds =
       Map.new(state.watermarks, fn
-        {id, {{_us, _seq} = order, _display, _sid}} -> {id, {:order, order}}
+        {id, {{_us, _seq} = order, _display, _sid, _pending_from_sid}} -> {id, {:order, order}}
         {id, {:iso_only, display}} -> {id, {:iso, display}}
       end)
 
@@ -428,7 +489,7 @@ defmodule KaoiroServer.ClearWatermarks do
   def handle_call(:all_displays, _from, state) do
     displays =
       Map.new(state.watermarks, fn
-        {id, {{_us, _seq}, display, _sid}} -> {id, display}
+        {id, {{_us, _seq}, display, _sid, _pending_from_sid}} -> {id, display}
         {id, {:iso_only, display}} -> {id, display}
       end)
 
@@ -449,14 +510,14 @@ defmodule KaoiroServer.ClearWatermarks do
     :dets.close(state.table)
   end
 
-  # DETS write path: 4-tuple `{agent_id, order, display, sid}` (ふじ
-  # 検収 2 fix-round M3, 2026-07-23). fsync BEFORE reply — same
+  # DETS write path: 5-tuple `{agent_id, order, display, sid,
+  # pending_from_sid}` (R1). fsync BEFORE reply — same
   # M7-a policy as the pre-M3 record path. `open_table/2` may have
   # loaded pre-M3 3-tuple records (with sid inferred as nil); on the
   # first write for such a key, the 3-tuple in DETS is replaced by the
-  # 4-tuple (:dets uses key equality on the first element).
-  defp write_record(table, agent_id, order, display, sid) do
-    :ok = :dets.insert(table, {agent_id, order, display, sid})
+  # 5-tuple (:dets uses key equality on the first element).
+  defp write_record(table, agent_id, order, display, sid, pending_from_sid) do
+    :ok = :dets.insert(table, {agent_id, order, display, sid, pending_from_sid})
     :ok = :dets.sync(table)
   end
 

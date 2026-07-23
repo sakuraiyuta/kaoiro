@@ -94,7 +94,7 @@ function classify(agentId: string, env: Envelope): ConversationEntry | null {
   return null;
 }
 
-/** 全 agent の transcript を横断して assistant / user / result を取り出し、
+/** 全 agent の transcript を横断して assistant / user を取り出し、
  *  新しい順 (newest first) にマージした配列を返す。 マスター指示の
  *  「新しい順」は既存 latestReplies と揃った選択で、上部に最新の
  *  やり取りが積み上がる読み方になる。 */

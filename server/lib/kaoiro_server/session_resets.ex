@@ -321,7 +321,12 @@ defmodule KaoiroServer.SessionResets do
         # `ClearWatermarks.adopt_sid/2` on the first envelope that
         # carries a real session_id.
         {:ok, {_order, boundary_display, _sid}} =
-          KaoiroServer.ClearWatermarks.advance_transition(agent_id, effective_to_sid)
+          KaoiroServer.ClearWatermarks.advance_transition(
+            agent_id,
+            effective_to_sid,
+            lock.previous_session_id,
+            KaoiroServer.ClearWatermarks
+          )
 
         # ふじ 検収 2 fix-round M1 (2026-07-23): live clients must learn
         # about the advance so their in-memory logs projection re-filters

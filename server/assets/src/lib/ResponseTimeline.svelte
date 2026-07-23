@@ -27,8 +27,8 @@
      *  使わないので、切断済み agent の row も表示され得る (履歴が
      *  残っている限り)。 */
     agents: Record<string, Envelope>;
-    /** 全 transcript map。 conversationEntries が assistant / user /
-     *  result のみを取り出して時系列マージする。 */
+    /** 全 transcript map。 conversationEntries が assistant / user のみを
+     * 取り出して時系列マージする（result は turn boundary として除外）。 */
     logs: Record<string, Envelope[]>;
     manifest?: PersonaManifest | null;
     /** ms clock。 formatRelativeJa の tick 用に App から受ける。 */

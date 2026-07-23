@@ -18,7 +18,7 @@ defmodule KaoiroServer.ClearWatermarksTest do
   end
 
   # Same-domain tuple as InterAgentHistory.append/2 stamps at ingress.
-  defp order(us, uniq \\ 0), do: {us, uniq}
+  defp order(us, uniq), do: {us, uniq}
 
   test "record してから get すると {order, display} が返る", %{server: server} do
     :ok = ClearWatermarks.record("a.1", order(1_000_000, 1), "2026-07-23T15:00:00Z", server)
@@ -277,6 +277,59 @@ defmodule KaoiroServer.ClearWatermarksTest do
     test "record 未 seed の agent への adopt_sid は :noop",
          %{server: server} do
       assert :noop = ClearWatermarks.adopt_sid("a.none", "sess-x", server)
+    end
+  end
+
+  describe "R1 pending lazy transition identity" do
+    test "restart 後も pending_from_sid が old pointer と一致すれば order/display 不変で adopt",
+         %{server: server, path: path} do
+      agent_id = "a.r1.restart"
+
+      # (1) durable pointer=sess-old; (2) Trigger 1 /clear Codex lazy
+      # boundary is fsync'd with its old-pointer identity.
+      assert {:ok, {order1, display1, nil}} =
+               ClearWatermarks.advance_transition(agent_id, nil, "sess-old", server)
+
+      # (3-4) crash/restart: pointer would still be sess-old, while the
+      # boundary survives with nil sid + pending_from_sid=sess-old.
+      :ok = GenServer.stop(server)
+      boot = :"cw_r1_restart_#{System.unique_integer([:positive])}"
+      {:ok, _pid} = ClearWatermarks.start_link(name: boot, path: path)
+
+      # (5-7) first new sid adopts the pending transition, never allocates O2.
+      assert {:ok, {^order1, ^display1, "sess-new"}} =
+               ClearWatermarks.adopt_pending_sid(agent_id, "sess-new", "sess-old", boot)
+
+      assert ClearWatermarks.get(agent_id, boot) == {order1, display1, "sess-new"}
+
+      # The pending identity may remain internally, but an established sid
+      # must still make a later, genuinely different transition advance.
+      assert {:ok, {order2, _display2, "sess-later"}} =
+               ClearWatermarks.advance_transition(agent_id, "sess-later", boot)
+
+      assert order2 > order1
+      GenServer.stop(boot)
+    end
+
+    test "legacy 3-tuple nil は pending identity 無しなので external switch を advance",
+         %{server: server, path: path} do
+      :ok = GenServer.stop(server)
+      inject = :"cw_r1_legacy_inject_#{System.unique_integer([:positive])}"
+      {:ok, ^inject} = :dets.open_file(inject, file: String.to_charlist(path))
+      :ok = :dets.insert(inject, {"a.r1.legacy", {8_000_000, 5}, "2026-07-20T12:00:00Z"})
+      :ok = :dets.close(inject)
+
+      boot = :"cw_r1_legacy_boot_#{System.unique_integer([:positive])}"
+      {:ok, _pid} = ClearWatermarks.start_link(name: boot, path: path)
+
+      assert :noop =
+               ClearWatermarks.adopt_pending_sid("a.r1.legacy", "sess-new", "sess-old", boot)
+
+      assert {:ok, {order2, _display2, "sess-new"}} =
+               ClearWatermarks.advance_transition("a.r1.legacy", "sess-new", boot)
+
+      assert order2 > {8_000_000, 5}
+      GenServer.stop(boot)
     end
   end
 
