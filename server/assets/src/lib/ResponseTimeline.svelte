@@ -1,6 +1,18 @@
 <script lang="ts">
+  // 実機検収 3 (2026-07-23 マスター指示): per-agent 最終応答一覧から
+  // 「全 agent の会話ログを時系列マージ」に切り替え。 純関数の
+  // 分類ロジックは conversationTimeline.ts が担当し、この component は
+  // 描画と click routing のみ。
+  //
+  // 行の左には agent の persona 画像 (小サイズ) を置いて「誰との
+  // メッセージか」を判別できるように。 user prompt の場合も送信先
+  // agent の persona を出す (log kind=user の envelope は送信先 agent
+  // の transcript に echoed されるので、envelope.agent_id がそのまま
+  // 送信先 agent id)。 user 発と agent 発の見分けは軽い styling
+  // (badge + row 色の tone) で。
+
   import { spriteUrlFor } from "./expression";
-  import { latestReplies } from "./latestReply";
+  import { conversationEntries } from "./conversationTimeline";
   import { formatRelativeJa } from "./relativeTime";
   import type { Envelope, PersonaManifest } from "./protocol";
 
@@ -11,28 +23,22 @@
     now,
     onSelectAgent,
   }: {
-    /** Latest state map from App.svelte, used only for persona lookup
-     *  (name + sprite_set) — this pane never mutates or filters by
-     *  state, so a disconnected agent whose latest reply predates its
-     *  disconnect still shows here. */
+    /** Persona lookup 用の agent 状態 map。 state 変更や filter には
+     *  使わないので、切断済み agent の row も表示され得る (履歴が
+     *  残っている限り)。 */
     agents: Record<string, Envelope>;
-    /** Full transcript map (App.svelte's `logs`). The pane derives one
-     *  entry per agent from the assistant/result envelopes inside; agents
-     *  with no assistant/result envelope are omitted so the timeline shows
-     *  only rows with actual content. */
+    /** 全 transcript map。 conversationEntries が assistant / user /
+     *  result のみを取り出して時系列マージする。 */
     logs: Record<string, Envelope[]>;
     manifest?: PersonaManifest | null;
-    /** Millisecond clock owned by the parent (App.svelte). Passed in so
-     *  the pane refreshes as the clock ticks without each row calling
-     *  Date.now on its own — critical for test determinism. */
+    /** ms clock。 formatRelativeJa の tick 用に App から受ける。 */
     now: number;
-    /** Row click → open detail for that agent. App.svelte handles
-     *  origin=null so the click does not try to animate from a
-     *  non-existent tile centre. */
+    /** row click → 該当 agent の詳細を開く。 App.svelte 側で origin=null
+     *  にして expand animation を省略する契約。 */
     onSelectAgent: (agentId: string) => void;
   } = $props();
 
-  const entries = $derived(latestReplies(logs));
+  const entries = $derived(conversationEntries(logs));
 
   function personaName(agentId: string): string {
     const p = agents[agentId]?.persona;
@@ -49,19 +55,21 @@
   }
 </script>
 
-<aside class="timeline" aria-label="最新応答タイムライン">
-  <h2 class="title">最新応答</h2>
+<aside class="timeline" aria-label="会話タイムライン">
+  <h2 class="title">会話タイムライン</h2>
   {#if entries.length === 0}
-    <p class="empty">まだ応答なし</p>
+    <p class="empty">まだ会話なし</p>
   {:else}
     <ul class="rows">
-      {#each entries as entry (entry.agentId)}
+      {#each entries as entry (entry.envelope.agent_id + "|" + entry.envelope.ts + "|" + (entry.envelope.seq ?? 0) + "|" + entry.kind)}
         {@const state = stateFor(entry.agentId)}
         {@const sprite = personaSprite(entry.agentId, state)}
         <li>
           <button
             type="button"
             class="row"
+            class:from-user={entry.kind === "user"}
+            class:from-agent={entry.kind === "agent"}
             onclick={() => onSelectAgent(entry.agentId)}
             title={`${personaName(entry.agentId)} の詳細を開く`}
           >
@@ -74,11 +82,17 @@
             </span>
             <span class="meta">
               <span class="row-head">
-                <span class="name">{personaName(entry.agentId)}</span>
+                <span class="name">
+                  {#if entry.kind === "user"}
+                    <span class="who-badge" aria-label="operator prompt">→ {personaName(entry.agentId)}</span>
+                  {:else}
+                    <span class="who-name">{personaName(entry.agentId)}</span>
+                  {/if}
+                </span>
                 <span class="when">{formatRelativeJa(entry.envelope.ts, now)}</span>
               </span>
               <span class="summary">
-                {entry.summary || "(空応答)"}
+                {entry.text || "(空応答)"}
               </span>
             </span>
           </button>
@@ -144,6 +158,14 @@
       background 0.12s;
   }
 
+  /* user prompt は subtle に色を変え、agent 発話と一目で区別できる
+     ようにする。 マスター指示: 「軽い styling」なので border 左だけ
+     アクセントを付ける最小コスト。 */
+  .row.from-user {
+    border-left: 3px solid color-mix(in srgb, var(--c-thinking) 60%, transparent);
+    padding-left: 0.45rem;
+  }
+
   .row:hover,
   .row:focus-visible {
     border-color: var(--c-thinking);
@@ -195,6 +217,16 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .who-name,
+  .who-badge {
+    font-weight: 600;
+  }
+
+  .who-badge {
+    color: color-mix(in srgb, var(--c-thinking) 80%, var(--fg));
+    font-weight: 500;
   }
 
   .when {
