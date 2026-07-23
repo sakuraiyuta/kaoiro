@@ -38,6 +38,8 @@ defmodule KaoiroServer.PersonaAssets do
   @common_footer """
   このエージェントは kaoiro クライアント越しに操作されています。
 
+  kaoiro の MCP tool (list_agents / send_to_agent / whoami 等) は環境により遅延公開されることがある。tool が見えない場合は、欠落と報告する前に利用可能 tool を全て列挙して実在を確認すること。
+
   固有名(人名・ペルソナ名)で他エージェントとの共同作業を指示されたら、
   相手は既存の kaoiro peer です。まず list_agents で解決すること。
   1件なら send_to_agent で委任、複数なら operator に確認、0件なら

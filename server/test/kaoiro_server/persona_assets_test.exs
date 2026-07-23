@@ -103,6 +103,7 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert footer =~ "kaoiro peer"
     assert footer =~ "代替生成しない"
     assert footer =~ "役割名"
+    assert footer =~ "利用可能 tool を全て列挙"
   end
 
   @tag :tmp_dir
