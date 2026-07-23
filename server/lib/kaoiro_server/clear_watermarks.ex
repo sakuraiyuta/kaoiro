@@ -11,12 +11,22 @@ defmodule KaoiroServer.ClearWatermarks do
   DETS ledger itself is untouched.
 
   **Ordering domain** (ふじ #109 M6 must-fix, 2026-07-23): all comparisons
-  run on the server-generated tuple. Neither wire ISO timestamps nor
-  wrapper producer clocks feed the compare, so host-clock skew between
-  the operator's clear and a wrapper's IA emit can no longer misclassify
-  a message as "before" or "after" the cutoff. The tuple `{us, uniq}`
-  gives strict monotonic total ordering per BEAM node — identical to
-  what `InterAgentHistory.append/2` stamps at ingress.
+  for a **new** clear run on the server-generated tuple. Neither wire ISO
+  timestamps nor wrapper producer clocks feed that compare, so host-clock
+  skew between the operator's clear and a wrapper's IA emit can no longer
+  misclassify a message as "before" or "after" the cutoff. The tuple
+  `{us, uniq}` gives strict monotonic total ordering per BEAM node —
+  identical to what `InterAgentHistory.append/2` stamps at ingress.
+
+  **Legacy ISO-mode fallback** (ふじ R2 must-fix, 2026-07-23): a DETS
+  record laid down before M6 has no tuple, only a display ISO. Loading
+  it as `{{0, 0}, iso}` would render the watermark inert — every real
+  ingress order dominates `{0, 0}`, so a redeploy would re-expose every
+  IA that a pre-M6 clear had hidden. Instead legacy records load as
+  `{:iso_only, iso}` and the filter path (`all_filter_bounds/1`) tags
+  them so callers compare each envelope's wire `ts` against `iso`,
+  preserving the exact pre-M6 visibility until the next real clear
+  promotes the entry to a real order tuple.
 
   Storage: DETS with in-memory mirror. Writes are **synchronous +
   fsync-gated** (`GenServer.call` + `:dets.sync/1` before reply) — an
@@ -69,10 +79,14 @@ defmodule KaoiroServer.ClearWatermarks do
     GenServer.call(server, {:get, agent_id})
   end
 
-  @doc "Latest order tuple for the agent, or nil (filter-path helper)."
+  @doc """
+  Latest tuple order for the agent, or nil for legacy ISO-only entries
+  (they have no comparable tuple — use `get_filter_bound/2` when the
+  caller needs the ISO fallback too). Nil when unknown.
+  """
   def get_order(agent_id, server \\ __MODULE__) do
     case get(agent_id, server) do
-      {order, _display} -> order
+      {{_us, _uniq} = order, _display} -> order
       _ -> nil
     end
   end
@@ -80,14 +94,35 @@ defmodule KaoiroServer.ClearWatermarks do
   @doc "Latest display ISO ts for the agent, or nil (broadcast helper)."
   def get_display(agent_id, server \\ __MODULE__) do
     case get(agent_id, server) do
-      {_order, display} -> display
+      {{_us, _uniq}, display} -> display
+      {:iso_only, display} -> display
       _ -> nil
     end
   end
 
-  @doc "agent_id => order_tuple for every known clear (filter-path helper)."
+  @doc """
+  agent_id => order_tuple for every known clear. Legacy ISO-only entries
+  are OMITTED — they have no tuple to compare against. Callers on the
+  filter hot-path (agents_channel `merged_histories/*`) should use
+  `all_filter_bounds/1` instead so they also see the ISO-mode fallback.
+  Kept as a helper for tests and callers that specifically care about
+  tuple-domain entries.
+  """
   def all_orders(server \\ __MODULE__) do
     GenServer.call(server, :all_orders)
+  end
+
+  @doc """
+  agent_id => tagged filter bound for every known clear:
+  `{:order, {us, uniq}}` for tuple entries, `{:iso, display_iso}` for
+  legacy pre-M6 entries. Consumers must handle both — the `:order` case
+  compares against the envelope's server ingress order tuple, the `:iso`
+  case falls back to comparing the envelope's wire `ts` string against
+  `display_iso` (ふじ R2 must-fix, 2026-07-23). Absent agent = never
+  cleared → no filter applies.
+  """
+  def all_filter_bounds(server \\ __MODULE__) do
+    GenServer.call(server, :all_filter_bounds)
   end
 
   @doc "agent_id => display_iso for every known clear (audit helper)."
@@ -148,16 +183,19 @@ defmodule KaoiroServer.ClearWatermarks do
              when is_integer(us) and is_integer(uniq) and is_binary(display) ->
                Map.put(acc, agent_id, {{us, uniq}, display})
 
-             # Legacy 2-tuple record (pre-M6, ISO-only): promote by using
-             # the display ISO as both the display AND a lower-bound order
-             # synthesized from `{0, 0}`. Any subsequent clear moves the
-             # order forward via the monotonic-advance rule, and any
-             # subsequent IA gets a real ingress order that dominates the
-             # synthetic `{0, 0}`, so no legacy entry can accidentally
-             # dominate a new IA. The record is rewritten on the next
-             # record/4 call.
+             # Legacy 2-tuple record (pre-M6, ISO-only): keep it in
+             # ISO-mode so the filter path (`all_filter_bounds/1` →
+             # agents_channel `hidden_by?/3`) compares each envelope's
+             # wire `ts` string against `display`. Rewriting these to
+             # `{{0, 0}, display}` (the earlier fix) would render them
+             # inert — every real ingress order dominates `{0, 0}`, so a
+             # redeploy would re-expose every IA the pre-M6 clear had
+             # hidden. ふじ R2 must-fix (2026-07-23). Any subsequent
+             # `record/4` call for this agent promotes the entry to the
+             # new tuple domain via the wildcard `current` branch of
+             # `handle_call({:record, …})`.
              {agent_id, display}, acc when is_binary(display) ->
-               Map.put(acc, agent_id, {{0, 0}, display})
+               Map.put(acc, agent_id, {:iso_only, display})
 
              _malformed, acc ->
                acc
@@ -176,13 +214,19 @@ defmodule KaoiroServer.ClearWatermarks do
     # the tuple (BEAM's term ordering handles integers pairwise), so
     # this cannot regress even if `us` clock skews across restarts —
     # the `uniq` half is per-node strict monotonic.
+    #
+    # A legacy `{:iso_only, iso}` entry has no comparable order and is
+    # always overwritten — the new tuple is monotonically newer than any
+    # pre-M6 clear by construction (the pre-M6 clear was ISO-mode and
+    # ran with wall-clock time we cannot reconcile against the new
+    # ingress domain).
     current = Map.get(state.watermarks, agent_id)
 
     cond do
       match?({{^us, ^uniq}, _}, current) ->
         {:reply, :ok, state}
 
-      is_tuple(current) and elem(current, 0) > order ->
+      match?({{_, _}, _}, current) and elem(current, 0) > order ->
         {:reply, :ok, state}
 
       true ->
@@ -206,12 +250,31 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   def handle_call(:all_orders, _from, state) do
-    orders = Map.new(state.watermarks, fn {id, {order, _display}} -> {id, order} end)
+    orders =
+      for {id, {{_us, _uniq} = order, _display}} <- state.watermarks,
+          into: %{},
+          do: {id, order}
+
     {:reply, orders, state}
   end
 
+  def handle_call(:all_filter_bounds, _from, state) do
+    bounds =
+      Map.new(state.watermarks, fn
+        {id, {{_us, _uniq} = order, _display}} -> {id, {:order, order}}
+        {id, {:iso_only, display}} -> {id, {:iso, display}}
+      end)
+
+    {:reply, bounds, state}
+  end
+
   def handle_call(:all_displays, _from, state) do
-    displays = Map.new(state.watermarks, fn {id, {_order, display}} -> {id, display} end)
+    displays =
+      Map.new(state.watermarks, fn
+        {id, {{_us, _uniq}, display}} -> {id, display}
+        {id, {:iso_only, display}} -> {id, display}
+      end)
+
     {:reply, displays, state}
   end
 

@@ -22,6 +22,7 @@ defmodule KaoiroServer.ClearWatermarksTest do
 
   test "record してから get すると {order, display} が返る", %{server: server} do
     :ok = ClearWatermarks.record("a.1", order(1_000_000, 1), "2026-07-23T15:00:00Z", server)
+
     assert ClearWatermarks.get("a.1", server) ==
              {order(1_000_000, 1), "2026-07-23T15:00:00Z"}
 
@@ -129,15 +130,16 @@ defmodule KaoiroServer.ClearWatermarksTest do
     GenServer.stop(verify_name)
   end
 
-  # M6 backward-compat pin (ふじ #109 追加): legacy 2-tuple record
-  # `{agent_id, iso_display}` (pre-M6 shape) must be readable on restart
-  # and promoted to the new `{{0, 0}, iso}` form. Any subsequent IA has
-  # a real ingress order that dominates `{0, 0}`, so no legacy entry
-  # accidentally hides a new envelope.
-  test "レガシー 2-tuple record を再起動で読める (backward-compat)", %{server: server, path: path} do
+  # ふじ R2 must-fix (2026-07-23) — 前回の "レガシー 2-tuple record を
+  # {{0,0}, iso} に昇格" 方針は、新 IA (order tuple の us が非零) が
+  # `{0, 0}` を必ず上回るせいで legacy watermark が inert になり、redeploy
+  # で旧 clear 済み IA が全件再露出する regression を起こしていた。
+  # 修正: legacy record は :iso_only モードで保持し、all_filter_bounds が
+  # `{:iso, iso}` を返して agents_channel 側で wire ts と比較する。
+  test "legacy 2-tuple record は :iso_only モードで保持される (R2)",
+       %{server: server, path: path} do
     :ok = GenServer.stop(server)
 
-    # 旧 shape (agent_id + display のみ) を直接 DETS に書き込む。
     inject = :"cw_legacy_inject_#{System.unique_integer([:positive])}"
     {:ok, ^inject} = :dets.open_file(inject, file: String.to_charlist(path))
     :ok = :dets.insert(inject, {"a.legacy", "2026-07-01T00:00:00Z"})
@@ -146,8 +148,54 @@ defmodule KaoiroServer.ClearWatermarksTest do
     boot = :"cw_legacy_boot_#{System.unique_integer([:positive])}"
     {:ok, _pid} = ClearWatermarks.start_link(name: boot, path: path)
 
+    # 内部 shape は :iso_only。
     assert ClearWatermarks.get("a.legacy", boot) ==
-             {{0, 0}, "2026-07-01T00:00:00Z"}
+             {:iso_only, "2026-07-01T00:00:00Z"}
+
+    # display は取れる (audit / broadcast helper 用途)。
+    assert ClearWatermarks.get_display("a.legacy", boot) == "2026-07-01T00:00:00Z"
+
+    # 比較可能な tuple は無いので get_order / all_orders は nil / omit。
+    assert ClearWatermarks.get_order("a.legacy", boot) == nil
+    assert ClearWatermarks.all_orders(boot) == %{}
+
+    # filter path 用の all_filter_bounds は tagged で返る。
+    assert ClearWatermarks.all_filter_bounds(boot) == %{
+             "a.legacy" => {:iso, "2026-07-01T00:00:00Z"}
+           }
+
+    GenServer.stop(boot)
+  end
+
+  # 次回 record/4 で legacy 記録は tuple domain に promote される
+  # (R2: legacy は比較可能 order が無いので、monotonic-advance の
+  # 制約なく無条件で置換される)。
+  test "record/4 は :iso_only 記録を tuple 記録へ promote する (R2)",
+       %{server: server, path: path} do
+    :ok = GenServer.stop(server)
+
+    inject = :"cw_promote_inject_#{System.unique_integer([:positive])}"
+    {:ok, ^inject} = :dets.open_file(inject, file: String.to_charlist(path))
+    :ok = :dets.insert(inject, {"a.promote", "2026-07-01T00:00:00Z"})
+    :ok = :dets.close(inject)
+
+    boot = :"cw_promote_boot_#{System.unique_integer([:positive])}"
+    {:ok, _pid} = ClearWatermarks.start_link(name: boot, path: path)
+
+    :ok =
+      ClearWatermarks.record(
+        "a.promote",
+        order(7_000_000, 3),
+        "2026-07-23T17:00:00Z",
+        boot
+      )
+
+    assert ClearWatermarks.get("a.promote", boot) ==
+             {order(7_000_000, 3), "2026-07-23T17:00:00Z"}
+
+    assert ClearWatermarks.all_filter_bounds(boot) == %{
+             "a.promote" => {:order, order(7_000_000, 3)}
+           }
 
     GenServer.stop(boot)
   end

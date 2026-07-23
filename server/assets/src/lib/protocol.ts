@@ -709,25 +709,41 @@ export function mergeTranscriptEntries(
   return merged.sort(compareTranscriptEnvelopes);
 }
 
-/** Deprecated shim retained for one release for external callers
- *  (issue #109 M6/M7, 2026-07-23): the server now pre-fans-out AND
- *  pre-filters `inter_agent_message` history entries per pane using its
- *  own ingress ordering domain, so the client must not re-fanOut on top
- *  of what it already received (doing so would duplicate the sender
- *  copy). Kept as an identity-with-sort so App.svelte's build stays
- *  compatible during the transition. New code MUST NOT call this;
- *  App.svelte's `onHistory` now feeds `mergeHistories` directly.
- *  `clearWatermarks` is ignored — the server owns the filter. */
+/** Legacy-server branch of `onHistory` (ふじ R3 must-fix, 2026-07-23):
+ *  when the server omits `history_projection` (pre-M6/R3 build), the
+ *  history payload is still keyed by sender only, so the client must
+ *  fan each IA out to the receiver pane itself. Modern servers set
+ *  `history_projection: "per-pane-v1"` and this function is skipped —
+ *  the payload is already per-pane and running it again would duplicate
+ *  the sender copy on the receiver's transcript.
+ *
+ *  `clearWatermarks` (issue #109, ISO ts per agent) is applied to the
+ *  fan-out'd receiver copy only. The sender-side filter was already
+ *  performed by the legacy server (its sender-keyed `all/1` was
+ *  pre-filtered before the wire push). Peer transcripts stay unaffected
+ *  by an unrelated agent's clear — the "peer 側の表示にも影響なし"
+ *  semantics. */
 export function fanOutInterAgentHistory(
   histories: Record<string, Envelope[]>,
-  _clearWatermarks: Record<string, string> = {},
+  clearWatermarks: Record<string, string> = {},
 ): Record<string, Envelope[]> {
-  void _clearWatermarks;
-  const out: Record<string, Envelope[]> = {};
+  const expanded: Record<string, Envelope[]> = {};
   for (const [id, entries] of Object.entries(histories)) {
-    out[id] = [...entries].sort(compareTranscriptEnvelopes);
+    expanded[id] = [...(expanded[id] ?? []), ...entries];
+    for (const envelope of entries) {
+      if (envelope.type !== "inter_agent_message") continue;
+      const to = (envelope.payload as { to?: unknown } | undefined)?.to;
+      if (typeof to === "string" && to !== "" && to !== id) {
+        const wm = clearWatermarks[to];
+        if (typeof wm === "string" && envelope.ts <= wm) continue;
+        expanded[to] = [...(expanded[to] ?? []), envelope];
+      }
+    }
   }
-  return out;
+  for (const entries of Object.values(expanded)) {
+    entries.sort(compareTranscriptEnvelopes);
+  }
+  return expanded;
 }
 
 /** Resume JSONL replay cannot reconstruct structured inter-agent payloads. */
@@ -909,12 +925,19 @@ export interface KaoiroHandlers {
   /** Reply-log history per agent (operator-only, ADR-0012); pushed once
    *  on join, chronological. Absent for viewers. `clearWatermarks`
    *  (issue #109): agent_id => ISO-8601 UTC ts of that agent's most
-   *  recent operator `clear_history`; drives the per-pane IA filter in
-   *  `fanOutInterAgentHistory`. Empty map on legacy servers or when no
-   *  clears exist. */
+   *  recent operator `clear_history`; today display-only (server owns
+   *  the filter). `projection` (ふじ R3, 2026-07-23): wire marker for
+   *  how `histories` was projected — `"per-pane-v1"` means the server
+   *  already fanned each IA to both sender AND receiver panes and
+   *  applied the watermark filter, so the client must NOT re-fanOut
+   *  (that double-counts the sender copy). `undefined` means a legacy
+   *  server that keyed IA by sender only; the client must fanOut
+   *  itself, matching the pre-R3 behaviour. Empty map on legacy servers
+   *  or when no clears exist. */
   onHistory?: (
     histories: Record<string, Envelope[]>,
     clearWatermarks: Record<string, string>,
+    projection?: string,
   ) => void;
   /** A past-session log purge (issue #48): the named agent's transcript
    *  should drop every line outside `sessionId`. `clearWatermark`
@@ -1334,6 +1357,116 @@ export function parseHistoryReset(
   };
 }
 
+/** ふじ R4 must-fix (2026-07-23): best-effort per-pane filter for a
+ *  LIVE `inter_agent_message` envelope. The server-side authority is the
+ *  ingress order tuple (see agents_channel `merged_histories/*`), but
+ *  live delivery cannot ride that domain — it uses the envelope's wire
+ *  `ts` string against the display watermark string. Clock skew between
+ *  the operator and the wrapper may cause a transient mismatch; a
+ *  page reload re-runs the server-authoritative filter and converges.
+ *
+ *  Keeps every `candidate` pane where either the pane has no watermark,
+ *  the envelope has no string `ts`, or the envelope's `ts` is strictly
+ *  greater than the pane's watermark (post-clear). */
+export function filterInterAgentTargetsByWatermark(
+  envelope: Envelope,
+  candidates: Iterable<string>,
+  clearWatermarks: Record<string, string>,
+): string[] {
+  const ts = typeof envelope.ts === "string" ? envelope.ts : undefined;
+  const kept: string[] = [];
+  for (const id of candidates) {
+    const wm = clearWatermarks[id];
+    if (typeof wm !== "string" || ts === undefined || ts > wm) {
+      kept.push(id);
+    }
+  }
+  return kept;
+}
+
+/** ふじ R4 must-fix (2026-07-23): applies operator `clear_history` to a
+ *  single pane's transcript. Two-stage drop:
+ *   1. session filter (issue #48 original behaviour): keep only
+ *      envelopes whose `session_id` matches the current session.
+ *   2. watermark filter (R4): also drop any `inter_agent_message`
+ *      whose wire `ts` is `<= clearWatermark`, even if session_id
+ *      matches — a same-session pre-clear IA would otherwise leak on
+ *      the live path (the reload path already filters it server-side
+ *      via the ingress order tuple).
+ *  Both filters are best-effort against clock skew; a page reload uses
+ *  the authoritative server ordering domain. */
+export function filterAfterHistoryCleared(
+  entries: Envelope[],
+  sessionId: string,
+  clearWatermark?: string,
+): Envelope[] {
+  return entries.filter((entry) => {
+    if (entry.session_id !== sessionId) return false;
+    if (
+      entry.type === "inter_agent_message" &&
+      typeof clearWatermark === "string" &&
+      typeof entry.ts === "string" &&
+      entry.ts <= clearWatermark
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+export interface ParsedHistoryPayload {
+  histories: Record<string, Envelope[]>;
+  clearWatermarks: Record<string, string>;
+  projection?: string;
+}
+
+/** Extracts the fields the `history` push carries from an operator-role
+ *  join. Split out so tests can exercise the wire-shape handling without
+ *  spinning up a Phoenix channel mock (ふじ R3 must-fix, 2026-07-23):
+ *   - `agents`: per-agent envelope array (skipped when non-array).
+ *   - `clear_watermarks` (issue #109): agent_id => ISO ts display hint.
+ *     Missing/malformed values fall through to an empty map.
+ *   - `history_projection`: wire marker `"per-pane-v1"` when the server
+ *     has already fanned IA out per pane; absent (undefined) means a
+ *     legacy sender-keyed payload and the client must fanOut itself.
+ *     A non-string / empty value collapses to undefined — the safer
+ *     default is legacy branch (running fanOut on already-fanned data
+ *     duplicates; the reverse only re-sorts idempotently). */
+export function parseHistoryPayload(value: unknown): ParsedHistoryPayload {
+  const empty: ParsedHistoryPayload = { histories: {}, clearWatermarks: {} };
+  if (value === null || typeof value !== "object") return empty;
+  const payload = value as {
+    agents?: unknown;
+    clear_watermarks?: unknown;
+    history_projection?: unknown;
+  };
+  const histories: Record<string, Envelope[]> = {};
+  if (payload.agents !== null && typeof payload.agents === "object") {
+    for (const [id, entries] of Object.entries(payload.agents)) {
+      if (Array.isArray(entries)) {
+        histories[id] = entries.filter(isEnvelope);
+      }
+    }
+  }
+  const clearWatermarks: Record<string, string> = {};
+  const rawWm = payload.clear_watermarks;
+  if (rawWm !== null && typeof rawWm === "object") {
+    for (const [id, ts] of Object.entries(rawWm)) {
+      if (typeof ts === "string" && ts !== "") {
+        clearWatermarks[id] = ts;
+      }
+    }
+  }
+  const projection =
+    typeof payload.history_projection === "string" &&
+    payload.history_projection !== ""
+      ? payload.history_projection
+      : undefined;
+  return projection === undefined
+    ? { histories, clearWatermarks }
+    : { histories, clearWatermarks, projection };
+}
+
 /** Instance-scoped pending map for `refreshModels()` waiters (ADR-0039 F9
  *  v2). Same shape as `CatalogPendingStore` but scoped to
  *  `RefreshModelsResult` — kept separate so a mis-routed request_id
@@ -1593,31 +1726,14 @@ export function connectKaoiro(
       }
     }
   });
-  channel.on(
-    "history",
-    (payload: { agents?: unknown; clear_watermarks?: unknown }) => {
-      const histories: Record<string, Envelope[]> = {};
-      for (const [id, value] of Object.entries(payload.agents ?? {})) {
-        if (Array.isArray(value)) {
-          histories[id] = value.filter(isEnvelope);
-        }
-      }
-      // issue #109: parse clear_watermarks off the same push. Only accept
-      // string values (each entry is an ISO-8601 ts); non-object payload
-      // or non-string values fall through to an empty map so a malformed
-      // wire value does not silently hide entries.
-      const clearWatermarks: Record<string, string> = {};
-      const rawWm = payload.clear_watermarks;
-      if (rawWm !== null && typeof rawWm === "object") {
-        for (const [id, value] of Object.entries(rawWm)) {
-          if (typeof value === "string" && value !== "") {
-            clearWatermarks[id] = value;
-          }
-        }
-      }
-      handlers.onHistory?.(histories, clearWatermarks);
-    },
-  );
+  channel.on("history", (payload: unknown) => {
+    const parsed = parseHistoryPayload(payload);
+    handlers.onHistory?.(
+      parsed.histories,
+      parsed.clearWatermarks,
+      parsed.projection,
+    );
+  });
   channel.on(
     "history_cleared",
     (payload: {

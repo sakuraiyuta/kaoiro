@@ -20,6 +20,9 @@ import {
   pendingPermissionFrom,
   pendingQuestionFrom,
   parseHistoryReset,
+  parseHistoryPayload,
+  filterInterAgentTargetsByWatermark,
+  filterAfterHistoryCleared,
   resultOf,
   resetTranscriptHistory,
   resumeDriftFrom,
@@ -345,31 +348,32 @@ describe("inter-agent history replay (#105)", () => {
     type: "log",
   };
 
-  it("issue #109 M6/M7 (2026-07-23): server 側が pre-fan-out + pre-filter 済みなので client shim は identity + sort", () => {
-    // 新しい semantics: server から受け取る histories は既に per-pane
-    // 状態 (sender/receiver 双方に fan-out 済み + 各 pane の watermark で
-    // filter 済み)。client shim は pane 内 sort だけを行い、fanOut は
-    // しない (重複 dedup を避けるため)。
-    const perPane = {
-      "agent-a": [log, message],
-      "agent-b": [message],
-    };
-    const out = fanOutInterAgentHistory(perPane);
+  it("ふじ R3 (2026-07-23): fanOutInterAgentHistory は legacy-server branch — sender-keyed history を receiver pane にも複製する", () => {
+    // R3 で復活: modern server は `history_projection: 'per-pane-v1'` を
+    // 立てて pre-fan-out 済み payload を送る → client は fanOut スキップ。
+    // 旧 server (marker 無し) の payload は sender-keyed のみなので、
+    // client がこの関数で receiver pane へ fanOut する。この test は
+    // 後者の legacy branch を pin する。
+    const senderKeyed = { "agent-a": [log, message] };
+    const out = fanOutInterAgentHistory(senderKeyed);
+    // sender pane はそのまま。
     expect(out["agent-a"]).toEqual([log, message]);
+    // receiver pane に IA だけが複製される (log は fanOut 対象外)。
     expect(out["agent-b"]).toEqual([message]);
   });
 
-  it("issue #109 M6/M7: 廃止された clearWatermarks 引数を受けても filter しない (deprecated shim)", () => {
-    // 旧 API 互換のため 2 引数目を受けるが、server-authoritative filter
-    // 化に伴い client 側の filter は無効。server 側テスト
-    // (server/test/kaoiro_server_web/channels/agents_channel_test.exs の
-    // 「watermark 未記録の agent は durable IA が全部見える」 と 「clear
-    // watermark より古い ingress order の durable IA は sender pane から
-    // drop」 参照) で真の filter を pin する。
-    const perPane = { "agent-a": [message] };
-    // どんな watermark を渡しても client 側は変えない。
-    expect(fanOutInterAgentHistory(perPane, { "agent-a": "2099-01-01T00:00:00Z" }))
-      .toEqual({ "agent-a": [message] });
+  it("ふじ R3: legacy branch の fanOut では receiver 側 watermark が envelope.ts 以降なら drop", () => {
+    // pre-M6 の server は sender-keyed history のみを送ってきて、client
+    // が receiver 側 filter を担っていた。marker-less rolling upgrade で
+    // その旧 semantics に戻る場面の pin。
+    const senderKeyed = { "agent-a": [message] };
+    const out = fanOutInterAgentHistory(senderKeyed, {
+      "agent-b": "2099-01-01T00:00:00Z",
+    });
+    // sender pane は影響なし。
+    expect(out["agent-a"]).toEqual([message]);
+    // receiver pane は watermark >= envelope.ts で drop → key なし。
+    expect(out["agent-b"]).toBeUndefined();
   });
 
   it("resume history_reset では inter-agent envelope だけを保持する", () => {
@@ -391,6 +395,135 @@ describe("inter-agent history replay (#105)", () => {
         preserve_inter_agent: false,
       }),
     ).toEqual({ agent_id: "agent-a", preserve_inter_agent: false });
+  });
+
+  // ふじ R3 must-fix (2026-07-23): projection marker で rolling upgrade
+  // の両方向を pin する。marker あり = new server pre-fanned、marker
+  // 無し = old server sender-keyed のみ → client が fanOut を担当。
+  describe("parseHistoryPayload (R3 projection marker)", () => {
+    it("new server: history_projection=per-pane-v1 を通す", () => {
+      const parsed = parseHistoryPayload({
+        agents: { "agent-a": [message] },
+        clear_watermarks: { "agent-a": "2026-07-23T15:00:00Z" },
+        history_projection: "per-pane-v1",
+      });
+      expect(parsed.projection).toBe("per-pane-v1");
+      expect(parsed.histories["agent-a"]).toEqual([message]);
+      expect(parsed.clearWatermarks["agent-a"]).toBe("2026-07-23T15:00:00Z");
+    });
+
+    it("old server: history_projection 未同梱なら projection=undefined (legacy 分岐)", () => {
+      const parsed = parseHistoryPayload({
+        agents: { "agent-a": [message] },
+        clear_watermarks: {},
+      });
+      expect(parsed.projection).toBeUndefined();
+      expect(parsed.histories["agent-a"]).toEqual([message]);
+    });
+
+    it("garbage な history_projection 値は undefined に落として safe-legacy 分岐", () => {
+      // 非文字列 / 空文字列 は legacy 扱い。fanOut を再走行しても既に
+      // fan-out 済みデータには影響しないが、fan-out 未済みなら receiver
+      // pane を組み立てないと表示落ちする → 迷ったら legacy が安全。
+      const parsed = parseHistoryPayload({
+        agents: { "agent-a": [message] },
+        history_projection: 42,
+      });
+      expect(parsed.projection).toBeUndefined();
+    });
+
+    it("payload 全体が壊れていても空 map を返す (fail-safe)", () => {
+      expect(parseHistoryPayload(null)).toEqual({
+        histories: {},
+        clearWatermarks: {},
+      });
+      expect(parseHistoryPayload("string")).toEqual({
+        histories: {},
+        clearWatermarks: {},
+      });
+    });
+  });
+
+  // ふじ R4 must-fix (2026-07-23): live 経路の best-effort watermark
+  // filter を pin。server pre-fanout は reload 経路の authoritative filter、
+  // live は wire ts を watermark 文字列と比較する best-effort 版。
+  describe("R4 live watermark filter", () => {
+    it("filterInterAgentTargetsByWatermark: pane watermark が envelope.ts 以上なら pane を drop", () => {
+      const kept = filterInterAgentTargetsByWatermark(
+        message, // message.ts = "2026-07-13T05:00:00Z"
+        ["agent-a", "agent-b"],
+        {
+          "agent-a": "2026-07-14T00:00:00Z",
+          "agent-b": "2026-01-01T00:00:00Z",
+        },
+      );
+      // agent-a は watermark > ts で drop。agent-b は watermark < ts で keep。
+      expect(kept).toEqual(["agent-b"]);
+    });
+
+    it("filterInterAgentTargetsByWatermark: watermark 未設定 pane は常に keep", () => {
+      const kept = filterInterAgentTargetsByWatermark(
+        message,
+        ["agent-a", "agent-b"],
+        {},
+      );
+      expect(kept).toEqual(["agent-a", "agent-b"]);
+    });
+
+    it("filterInterAgentTargetsByWatermark: 同 ts (境界) は drop (server の <= と semantics 一致)", () => {
+      const kept = filterInterAgentTargetsByWatermark(
+        message,
+        ["agent-a"],
+        { "agent-a": message.ts },
+      );
+      expect(kept).toEqual([]);
+    });
+
+    it("filterAfterHistoryCleared: 旧 session の非 IA は session_id filter で drop", () => {
+      const stale = { ...log, session_id: "sess-old" };
+      const current = { ...log, session_id: "sess-cur" };
+      const kept = filterAfterHistoryCleared([stale, current], "sess-cur");
+      expect(kept).toEqual([current]);
+    });
+
+    it("filterAfterHistoryCleared: 同 session の IA でも watermark >= ts なら drop (R4)", () => {
+      // 「IA(t1)→clear(t2)」順序を想定: 同一 session_id の pre-clear IA が
+      // 残らないこと (以前は session_id filter だけだったので残っていた)。
+      const preClear = {
+        ...message,
+        ts: "2026-07-13T05:00:00Z",
+        session_id: "sess-cur",
+      };
+      const postClear = {
+        ...message,
+        ts: "2026-07-13T07:00:00Z",
+        session_id: "sess-cur",
+      };
+      const kept = filterAfterHistoryCleared(
+        [preClear, postClear],
+        "sess-cur",
+        "2026-07-13T06:00:00Z",
+      );
+      expect(kept).toEqual([postClear]);
+    });
+
+    it("filterAfterHistoryCleared: watermark 未指定なら watermark filter は無効", () => {
+      const ia = { ...message, session_id: "sess-cur" };
+      const kept = filterAfterHistoryCleared([ia], "sess-cur");
+      expect(kept).toEqual([ia]);
+    });
+
+    it("filterAfterHistoryCleared: 非 IA は watermark filter を bypass (session_id filter のみ)", () => {
+      // log は clear watermark に関係なく session_id で判断される
+      // (session_id === sess-cur なら残る)。
+      const nonIa = { ...log, session_id: "sess-cur" };
+      const kept = filterAfterHistoryCleared(
+        [nonIa],
+        "sess-cur",
+        "2099-01-01T00:00:00Z",
+      );
+      expect(kept).toEqual([nonIa]);
+    });
   });
 
   it("durable IA と SPA 残留 log を timestamp 順に merge する", () => {

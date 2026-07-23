@@ -169,9 +169,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # its own IA fanOut anymore (ふじ M6/M7 fix, 2026-07-23). Missing
       # key on a legacy client is ignored (additive, no protocol
       # version bump).
+      #
+      # `history_projection: "per-pane-v1"` (ふじ R3 must-fix, 2026-07-23)
+      # is the wire marker that this payload has already been fanned out
+      # to both sender and receiver panes per envelope. Old clients that
+      # do their own fanOut recognize the marker's absence (legacy
+      # servers) and keep fanning. New clients that see the marker skip
+      # fanOut so they do not double-count the sender copy. Marker
+      # values are additive — future projections bump the version tag,
+      # never remove the field.
       push(socket, "history", %{
         "agents" => merged_histories(),
-        "clear_watermarks" => ClearWatermarks.all_displays()
+        "clear_watermarks" => ClearWatermarks.all_displays(),
+        "history_projection" => "per-pane-v1"
       })
 
       push(socket, "hosts", %{"hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())})
@@ -639,18 +649,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_agent_id(payload),
          {:ok, session_id} <- AgentStates.clear_other_sessions(agent_id) do
-      # Watermark this clear on the same server ingress ordering domain
-      # `InterAgentHistory.append/2` uses (`{system_time_microsecond,
-      # unique_integer_positive_monotonic}`), so a subsequent
-      # `merged_histories/1` filter compares apples to apples — no
-      # host-clock skew leak (ふじ #109 M6 must-fix). The ISO string
-      # goes on the broadcast as display-only audit hint. `record/4` is
-      # synchronous + fsync-gated (M7-a), so the broadcast below cannot
-      # outrun disk persistence.
-      order =
-        {System.system_time(:microsecond),
-         System.unique_integer([:positive, :monotonic])}
-
+      # Watermark this clear on the SAME single serialized allocator
+      # every IA `InterAgentHistory.append/2` uses (ふじ R5 must-fix,
+      # 2026-07-23 — replaces the pre-R5 inline
+      # `{System.system_time(:microsecond),
+      # System.unique_integer([:positive, :monotonic])}` pair whose
+      # `unique_integer` half reset per-BEAM and whose wall clock could
+      # rollback). The ISO string goes on the broadcast as display-only
+      # audit hint. `record/4` is synchronous + fsync-gated (M7-a) and
+      # `IngressOrder.allocate/0` is likewise fsync-gated, so neither
+      # the broadcast nor the watermark can outrun disk persistence.
+      order = KaoiroServer.IngressOrder.allocate()
       display = DateTime.utc_now() |> DateTime.to_iso8601()
       :ok = ClearWatermarks.record(agent_id, order, display)
 
@@ -679,6 +688,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_in("delete_agent", payload, socket) do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
+         # ふじ R1 must-fix (2026-07-23): require disconnected BEFORE any
+         # mutation. The previous ordering ran TokenDenylist.revoke + the
+         # `revoked` broadcast first, then discovered live-ness inside
+         # purge_agent_records via AgentStates.delete → the operator saw a
+         # not_disconnected error while the token was already permanently
+         # revoked and the wrapper had been kicked. Non-mutating pre-check
+         # returns the same error without side-effects.
+         :ok <- require_disconnected(agent_id),
          :ok <- purge_agent_records(agent_id) do
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "agent_deleted", %{
         "agent_id" => agent_id
@@ -722,10 +739,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Removes the agent from every server-side store, in the order the
   # ふじ #72 M3 must-fix requires:
   #
-  #   1. eligibility (require_disconnected — caller already ran this
-  #      via delete_live_if_present, but we double-check by NOT touching
-  #      AgentStates until step 4, so a live agent whose disconnect
-  #      raced this call cannot be dropped from under its wrapper)
+  #   1. eligibility (require_disconnected — the caller in
+  #      handle_in("delete_agent") already gated this, and we re-check
+  #      here as a serialization point so a reconnect racing past the
+  #      upstream check cannot slip into the revoke+broadcast batch;
+  #      ふじ R1 must-fix, 2026-07-23)
   #   2. token revoke + fsync (TokenDenylist.revoke — synchronous +
   #      DETS sync) BEFORE anything else, so a crash between reply and
   #      finish cannot leave a still-valid token behind
@@ -738,6 +756,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   #      Any of these failing after revoke is safe — the token stays
   #      revoked and an operator retry finishes the cleanup.
   defp purge_agent_records(agent_id) do
+    with :ok <- require_disconnected(agent_id) do
+      do_purge_agent_records(agent_id)
+    end
+  end
+
+  defp do_purge_agent_records(agent_id) do
     # Step 2: token revoke + fsync — synchronous ClearWatermarks / DETS
     # semantics also make `TokenDenylist.revoke/3` block on `:dets.sync`.
     revoked_at = DateTime.utc_now() |> DateTime.to_iso8601()
@@ -804,8 +828,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
       end)
       |> Map.new()
 
-    watermark_orders = ClearWatermarks.all_orders()
-    durable_by_pane = pre_fanout_and_filter(watermark_orders)
+    # ふじ R2 must-fix (2026-07-23): `all_filter_bounds` returns tagged
+    # bounds — `{:order, tuple}` for post-M6 clears, `{:iso, iso}` for
+    # legacy pre-M6 entries. The ISO branch preserves the pre-M6 wire-ts
+    # filter until the next real clear promotes the entry.
+    watermark_bounds = ClearWatermarks.all_filter_bounds()
+    durable_by_pane = pre_fanout_and_filter(watermark_bounds)
 
     volatile_without_ia
     |> Map.merge(durable_by_pane, fn _agent_id, volatile, durable ->
@@ -827,21 +855,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # the pre-M6 default behaviour). Envelopes whose payload has no `"to"`
   # (server-synthesized skeletons) are only visible in the sender's
   # pane, matching the wrapper-side fanOut policy.
-  defp pre_fanout_and_filter(watermark_orders) do
+  defp pre_fanout_and_filter(watermark_bounds) do
     InterAgentHistory.all_with_order()
     |> Enum.reduce(%{}, fn {sender_id, entries}, acc ->
       Enum.reduce(entries, acc, fn {order, envelope}, acc2 ->
         acc2
-        |> maybe_add_to_pane(sender_id, order, envelope, watermark_orders)
-        |> maybe_fanout_to_receiver(order, envelope, watermark_orders, sender_id)
+        |> maybe_add_to_pane(sender_id, order, envelope, watermark_bounds)
+        |> maybe_fanout_to_receiver(order, envelope, watermark_bounds, sender_id)
       end)
     end)
   end
 
   # Adds `envelope` to `pane_agent_id`'s bucket unless the pane's
-  # watermark order dominates the envelope's server order.
-  defp maybe_add_to_pane(acc, pane_agent_id, order, envelope, watermark_orders) do
-    if hidden_by?(watermark_orders, pane_agent_id, order) do
+  # watermark bound hides it.
+  defp maybe_add_to_pane(acc, pane_agent_id, order, envelope, watermark_bounds) do
+    if hidden_by?(watermark_bounds, pane_agent_id, order, envelope) do
       acc
     else
       Map.update(acc, pane_agent_id, [envelope], fn existing -> existing ++ [envelope] end)
@@ -851,22 +879,37 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # If the envelope has a valid receiver id that is NOT the same as the
   # sender, add it to the receiver's pane too (subject to that pane's
   # watermark).
-  defp maybe_fanout_to_receiver(acc, order, envelope, watermark_orders, sender_id) do
+  defp maybe_fanout_to_receiver(acc, order, envelope, watermark_bounds, sender_id) do
     case get_in(envelope, ["payload", "to"]) do
       to when is_binary(to) and to != "" and to != sender_id ->
-        maybe_add_to_pane(acc, to, order, envelope, watermark_orders)
+        maybe_add_to_pane(acc, to, order, envelope, watermark_bounds)
 
       _ ->
         acc
     end
   end
 
-  # BEAM's term ordering handles the tuple comparison; `nil` watermark
-  # means never cleared → never hidden.
-  defp hidden_by?(watermark_orders, agent_id, order) do
-    case Map.get(watermark_orders, agent_id) do
-      {us, uniq} = watermark when is_integer(us) and is_integer(uniq) ->
+  # Two-mode hide check (ふじ R2 must-fix, 2026-07-23):
+  #   - `{:order, tuple}` — post-M6 clear, compare server ingress order
+  #     tuples (BEAM term ordering handles integers pairwise).
+  #   - `{:iso, iso}` — legacy pre-M6 clear, compare the envelope's wire
+  #     `ts` string against `iso` (ISO-8601 lex compare = time compare
+  #     when both are UTC-normalized, matching the pre-M6 filter that
+  #     shipped for this cutoff). An envelope with no / non-string ts
+  #     falls through as "not hidden" (fail-open for display; the entry
+  #     is still filtered by the receiver's own watermark on the next
+  #     post-M6 clear).
+  # Absent watermark = never cleared → never hidden.
+  defp hidden_by?(watermark_bounds, agent_id, order, envelope) do
+    case Map.get(watermark_bounds, agent_id) do
+      {:order, {us, uniq} = watermark} when is_integer(us) and is_integer(uniq) ->
         order <= watermark
+
+      {:iso, iso} when is_binary(iso) ->
+        case Map.get(envelope, "ts") do
+          ts when is_binary(ts) -> ts <= iso
+          _ -> false
+        end
 
       _ ->
         false
@@ -1132,9 +1175,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp maybe_put_string(map, _key, _value), do: map
 
-  # Restore is only for a disconnected agent (ADR-0014 F4: server-side owner
-  # fencing, the early-reject first stage before the runner-local lock). A live
-  # agent must not be re-spawned under its own agent_id (D5 二重接続).
+  # Non-mutating "is this agent-id currently owned by a live wrapper?"
+  # gate. Used by:
+  #   - restore (ADR-0014 F4 server-side owner fencing, the early-reject
+  #     first stage before the runner-local lock; D5 二重接続 prevention)
+  #   - delete_agent (ふじ R1 must-fix, 2026-07-23) — pre-checked upstream
+  #     in `handle_in` AND re-checked inside `purge_agent_records` as a
+  #     serialization point, so a reconnect racing past the upstream check
+  #     cannot slip into the revoke+broadcast batch. Directory-only
+  #     entries (AgentStates never knew them, or they were already purged)
+  #     pass — an operator can delete a stale identity whose wrapper is
+  #     gone.
   defp require_disconnected(agent_id) do
     if live_agent?(agent_id), do: {:error, :not_disconnected}, else: :ok
   end

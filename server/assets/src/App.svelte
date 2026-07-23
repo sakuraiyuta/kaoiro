@@ -22,6 +22,8 @@
     defaultSocketUrl,
     fanOutInterAgentHistory,
     fetchPersonaManifest,
+    filterAfterHistoryCleared,
+    filterInterAgentTargetsByWatermark,
     formatAgentLabel,
     isReplyEnvelope,
     mergeTranscriptEntries,
@@ -284,14 +286,26 @@
             // view shows the full conversation. Operator-only — viewers
             // never receive these envelopes (sanitize_envelope_for drops
             // them at the channel boundary).
-            const targets = new Set<string>([envelope.agent_id]);
+            let targets: Iterable<string> = new Set<string>([envelope.agent_id]);
             if (envelope.type === "inter_agent_message") {
               const to = (envelope.payload as { to?: unknown } | undefined)?.to;
-              if (typeof to === "string" && to !== "") targets.add(to);
+              const acc = new Set<string>(targets);
+              if (typeof to === "string" && to !== "") acc.add(to);
               // Server-synthesized escalates carry agent_id="server" with no
               // grid slot of their own; drop the synthetic sender so it does
               // not accumulate a phantom logs["server"] transcript.
-              if (envelope.agent_id === "server") targets.delete("server");
+              if (envelope.agent_id === "server") acc.delete("server");
+              // ふじ R4 must-fix (2026-07-23): best-effort watermark
+              // filter on the live path. A pane whose watermark >=
+              // envelope.ts already has this IA hidden on reload
+              // (server-authoritative ingress-order filter); drop it
+              // here too so live and reload stay consistent within
+              // clock-skew bounds.
+              targets = filterInterAgentTargetsByWatermark(
+                envelope,
+                acc,
+                clearWatermarks,
+              );
             }
             const next = { ...logs };
             for (const id of targets) {
@@ -316,36 +330,55 @@
             }
           }
         },
-        onHistory: (histories, watermarks) => {
+        onHistory: (histories, watermarks, projection) => {
           // issue #109 M6/M7 (2026-07-23): server pre-fans-out and
           // pre-filters IA per pane using its ingress ordering domain,
           // so `histories` already reflects the authoritative view for
-          // every agent. The client-side fanOut is retired to prevent
-          // double-counting the sender copy. Watermarks are kept only
-          // as a display hint for the live-clear UI.
+          // every agent when the projection marker is present.
+          // Watermarks are kept only as a display hint for the
+          // live-clear UI.
+          //
+          // ふじ R3 must-fix (2026-07-23): the projection marker gates
+          // the rolling-upgrade window. `"per-pane-v1"` = server already
+          // fanned out; merge directly. `undefined` = legacy server
+          // still keys IA by sender only; run the client-side fanOut so
+          // the receiver pane picks up its copy. Future markers just
+          // extend the case list.
           clearWatermarks = { ...clearWatermarks, ...watermarks };
-          logs = mergeHistories(histories, logs);
+          const projected =
+            projection === "per-pane-v1"
+              ? histories
+              : fanOutInterAgentHistory(histories, clearWatermarks);
+          logs = mergeHistories(projected, logs);
         },
         onHistoryCleared: (agentId, sessionId, watermark) => {
           // An operator purged past-session lines (#48); keep only the
           // surviving session's transcript to match the server buffer.
-          const prev = logs[agentId];
-          if (prev) {
-            logs = {
-              ...logs,
-              [agentId]: prev.filter((e) => e.session_id === sessionId),
-            };
-          }
-          // issue #109: live-refresh the watermark map so a subsequent
-          // history push (on another agent's join, e.g.) fan-outs with
-          // the new value. Move ONLY forward — same monotonic-advance
-          // rule as the server store, so an out-of-order retry cannot
-          // re-expose past IA in this session.
+          //
+          // ふじ R4 must-fix (2026-07-23): also drop any pre-clear
+          // inter_agent_message (same-session IA whose ts <= watermark).
+          // The session_id filter alone leaves IA whose session_id
+          // happens to match the current session visible on the live
+          // path — a reload would hide them because the server-side
+          // ingress-order filter dominates. Move the watermark FIRST so
+          // the filter uses the freshest value even if the server
+          // omitted `watermark` on the broadcast (legacy path).
           if (typeof watermark === "string") {
             const current = clearWatermarks[agentId];
             if (current === undefined || current < watermark) {
               clearWatermarks = { ...clearWatermarks, [agentId]: watermark };
             }
+          }
+          const prev = logs[agentId];
+          if (prev) {
+            logs = {
+              ...logs,
+              [agentId]: filterAfterHistoryCleared(
+                prev,
+                sessionId,
+                clearWatermarks[agentId],
+              ),
+            };
           }
         },
         onHistoryReset: (agentId, preserveInterAgent) => {

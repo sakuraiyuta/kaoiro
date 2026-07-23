@@ -599,12 +599,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       AgentDirectory.record(agent_id, @ao)
       SessionPointers.record(agent_id, "sess-del-1", "/home/user/proj")
       KaoiroServer.PermissionModes.record(agent_id, "plan")
+
       :ok =
         ClearWatermarks.record(
           agent_id,
           {System.system_time(:microsecond), System.unique_integer([:positive, :monotonic])},
           "2026-07-23T10:00:00Z"
         )
+
       :ok = InterAgentHistory.append(durable_inter_agent_envelope(agent_id, "test.del-peer", 1))
       :ok = InterAgentHistory.append(durable_inter_agent_envelope("test.del-peer", agent_id, 2))
       socket = join_as(:operator)
@@ -660,6 +662,36 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
 
       assert_reply ref, :error, %{reason: "not_disconnected"}
+      assert AgentStates.known?(agent_id)
+    end
+
+    # ふじ R1 must-fix (2026-07-23): live reject 時、revoke と revoked
+    # broadcast は一切走らない (以前は purge_agent_records の内側で live
+    # を検知していたので、拒否 reply の時点で token 恒久 revoke + live
+    # 切断が済んでいた regression の pin)。
+    test "live agent 拒否時は revoke も revoked broadcast も走らない (R1 side-effect pin)" do
+      agent_id = "test.del-live-noop"
+      put_agent(agent_id)
+      on_exit(fn -> TokenDenylist.restore(agent_id) end)
+
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
+      assert_reply ref, :error, %{reason: "not_disconnected"}
+
+      # denylist 反映を待って照合 — DETS write 経路と同じ GenServer.call
+      # を通すことで in-flight があれば必ず観測できる。
+      _ = TokenDenylist.all()
+      assert TokenDenylist.revoked?(agent_id) == false
+
+      # broadcast 到達を短い timeout で refute (Phoenix.PubSub は同期的に
+      # ローカル配送するので、即時 refute で十分観測できる)。
+      refute_broadcast "revoked", %{}, 100
+      refute_broadcast "agent_deleted", %{"agent_id" => ^agent_id}, 100
+
+      # agent state は無変化。
       assert AgentStates.known?(agent_id)
     end
 
@@ -734,6 +766,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # 削除直後、pre-revoke に mint された token を用いて再 join を試行
       # → denylist gate で unauthorized。
       token = KaoiroServer.Auth.mint_wrapper_token(agent_id)
+
       assert {:error, :unauthorized} =
                KaoiroServer.Auth.authorize_wrapper(agent_id, token)
     end
@@ -742,6 +775,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   describe "revoke_wrapper_token (issue #72)" do
     test "operator の revoke は TokenDenylist を投入し wrapper:<id> へ revoked を broadcast" do
       agent_id = "test.revoke-1"
+
       # live agent (稼働中でも revoke できる — 進行中の compromise を切る用途)。
       put_agent(agent_id)
       on_exit(fn -> TokenDenylist.restore(agent_id) end)
@@ -1485,6 +1519,21 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert [%{"payload" => %{"text" => "やります"}}] = agents[agent_id]
     end
 
+    # ふじ R3 must-fix (2026-07-23): history push は projection marker を
+    # 同梱する。 marker があるので new client は自前 fanOut をスキップし
+    # server pre-fan-out 結果をそのまま使い、marker が無い old server と
+    # new client の組合せでは client が自前 fanOut に fallback する
+    # (test/protocol.test.ts の parseHistoryPayload 群で pin)。
+    test "history push は history_projection=per-pane-v1 を同梱 (R3)" do
+      agent_id = "test.hist-projection"
+      put_agent(agent_id)
+      _socket = join_as(:operator)
+
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", payload
+      assert payload["history_projection"] == "per-pane-v1"
+    end
+
     test "AgentStates が空でも durable IA を join history に復元する (#105)" do
       agent_id = "test.hist-durable"
       env = durable_inter_agent_envelope(agent_id, "test.hist-peer", 1)
@@ -1559,10 +1608,22 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = InterAgentHistory.append(env)
       # env より後 order で sender / peer 双方に watermark を置く。
       Process.sleep(1)
-      sender_order = {System.system_time(:microsecond), System.unique_integer([:positive, :monotonic])}
-      peer_order = {System.system_time(:microsecond), System.unique_integer([:positive, :monotonic])}
-      :ok = ClearWatermarks.record(agent_id, sender_order, DateTime.utc_now() |> DateTime.to_iso8601())
-      :ok = ClearWatermarks.record(peer_id, peer_order, DateTime.utc_now() |> DateTime.to_iso8601())
+
+      sender_order =
+        {System.system_time(:microsecond), System.unique_integer([:positive, :monotonic])}
+
+      peer_order =
+        {System.system_time(:microsecond), System.unique_integer([:positive, :monotonic])}
+
+      :ok =
+        ClearWatermarks.record(
+          agent_id,
+          sender_order,
+          DateTime.utc_now() |> DateTime.to_iso8601()
+        )
+
+      :ok =
+        ClearWatermarks.record(peer_id, peer_order, DateTime.utc_now() |> DateTime.to_iso8601())
 
       on_exit(fn ->
         InterAgentHistory.delete_agent(agent_id)
@@ -1592,6 +1653,93 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert agents[agent_id] == [env]
       assert agents[peer_id] == [env]
       refute Map.has_key?(watermarks, agent_id)
+    end
+
+    # ふじ R2 must-fix (2026-07-23): 前回の M6 修正は legacy 2-tuple record
+    # を `{{0, 0}, iso}` に変換していたが、新 IA order は必ずそれを上回るの
+    # で watermark が inert 化 → 旧 clear 済み IA が redeploy で全件再露出
+    # する regression があった。修正: legacy は :iso_only モードで保持し、
+    # agents_channel filter path が wire ts と iso を比較する。以下 2 テ
+    # ストは「旧 watermark が隠していた IA は隠れ続ける」を pin。
+    test "legacy iso_only watermark は wire ts が iso 以前の IA を hide (R2)" do
+      agent_id = "test.hist-wm-legacy"
+      peer_id = "test.hist-wm-legacy-peer"
+      # 一方は legacy iso より前、一方は後。
+      old =
+        durable_inter_agent_envelope(agent_id, peer_id, 1)
+        |> Map.put("ts", "2026-06-01T00:00:00Z")
+
+      new =
+        durable_inter_agent_envelope(agent_id, peer_id, 2)
+        |> Map.put("ts", "2026-08-01T00:00:00Z")
+
+      :ok = InterAgentHistory.append(old)
+      :ok = InterAgentHistory.append(new)
+
+      # sender pane に legacy iso_only watermark を注入 (実運用では旧 DETS
+      # record が load_watermarks/1 経由でこの shape を作る)。
+      legacy_iso = "2026-07-01T00:00:00Z"
+
+      :sys.replace_state(ClearWatermarks, fn state ->
+        %{state | watermarks: Map.put(state.watermarks, agent_id, {:iso_only, legacy_iso})}
+      end)
+
+      on_exit(fn ->
+        InterAgentHistory.delete_agent(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => agents}
+
+      # sender pane: legacy iso 以前の old は drop、後の new のみ残る。
+      assert agents[agent_id] == [new]
+      # peer pane は watermark 未設定 → 両方見える (per-pane 独立性の維持)。
+      assert agents[peer_id] == [old, new]
+    end
+
+    test "次回 record/4 で legacy watermark は tuple domain に promote される (R2)" do
+      agent_id = "test.hist-wm-promote"
+      peer_id = "test.hist-wm-promote-peer"
+
+      env =
+        durable_inter_agent_envelope(agent_id, peer_id, 1)
+        |> Map.put("ts", "2026-08-01T00:00:00Z")
+
+      :ok = InterAgentHistory.append(env)
+
+      # まず legacy iso_only を注入。env の ts より後の iso なので env は
+      # 隠される (ts <= iso)。
+      :sys.replace_state(ClearWatermarks, fn state ->
+        %{
+          state
+          | watermarks: Map.put(state.watermarks, agent_id, {:iso_only, "2026-09-01T00:00:00Z"})
+        }
+      end)
+
+      # 新規 clear = tuple record: legacy は無条件に置換される (比較可能
+      # order が無いので monotonic-advance の制約なし)。
+      Process.sleep(1)
+
+      new_order =
+        {System.system_time(:microsecond), System.unique_integer([:positive, :monotonic])}
+
+      new_display = DateTime.utc_now() |> DateTime.to_iso8601()
+      :ok = ClearWatermarks.record(agent_id, new_order, new_display)
+
+      on_exit(fn ->
+        InterAgentHistory.delete_agent(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      # env の ingress order は new_order より前なので、tuple domain 昇格
+      # 後も env は sender pane から drop される (promotion 後も semantics
+      # が保存されることを pin)。
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => agents}
+      refute Map.has_key?(agents, agent_id)
     end
 
     test "sender clear は peer pane の表示に影響しない (peer 側 表示不変)" do
@@ -1628,14 +1776,16 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       peer_id = "test.hist-order-1-peer"
       env = durable_inter_agent_envelope(agent_id, peer_id, 1)
       :ok = InterAgentHistory.append(env)
-      :ok = AgentStates.put(%{
-        "version" => "0",
-        "agent_id" => agent_id,
-        "ts" => "2026-06-11T00:00:00Z",
-        "type" => "state_change",
-        "state" => "waiting_input",
-        "session_id" => "sess-order-1"
-      })
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "waiting_input",
+          "session_id" => "sess-order-1"
+        })
 
       on_exit(fn ->
         InterAgentHistory.delete_agent(agent_id)
@@ -1664,14 +1814,16 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # tuple が watermark を上回るので pane に残る。
       agent_id = "test.hist-order-2"
       peer_id = "test.hist-order-2-peer"
-      :ok = AgentStates.put(%{
-        "version" => "0",
-        "agent_id" => agent_id,
-        "ts" => "2026-06-11T00:00:00Z",
-        "type" => "state_change",
-        "state" => "waiting_input",
-        "session_id" => "sess-order-2"
-      })
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "waiting_input",
+          "session_id" => "sess-order-2"
+        })
 
       on_exit(fn ->
         InterAgentHistory.delete_agent(agent_id)

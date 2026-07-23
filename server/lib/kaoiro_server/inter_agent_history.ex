@@ -14,6 +14,8 @@ defmodule KaoiroServer.InterAgentHistory do
 
   require Logger
 
+  alias KaoiroServer.IngressOrder
+
   @max_per_agent 500
 
   def start_link(opts \\ []) do
@@ -77,7 +79,17 @@ defmodule KaoiroServer.InterAgentHistory do
       if Map.has_key?(authored, key) do
         {:reply, :ok, state}
       else
-        order = {System.system_time(:microsecond), System.unique_integer([:positive, :monotonic])}
+        # ふじ R5 must-fix (2026-07-23): every ingress order tuple flows
+        # through the single serialized allocator (`IngressOrder`) so
+        # this stamp shares the exact same domain the operator
+        # `clear_history` watermark stamp uses. Pre-R5 the tuple was
+        # `{System.system_time(:microsecond),
+        # System.unique_integer([:positive, :monotonic])}` inline —
+        # `unique_integer` half resets to an undefined offset on each
+        # BEAM start and `system_time` can rollback, so a wall-clock
+        # slip could let a post-clear IA report an order below the
+        # cutoff and slip past the filter.
+        order = IngressOrder.allocate()
         :ok = :dets.insert(state.table, {key, order, envelope})
         authored = Map.put(authored, key, {order, envelope})
         {authored, overflow_keys} = cap_entries(authored, state.max_per_agent)
