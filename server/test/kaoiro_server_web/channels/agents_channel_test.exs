@@ -1961,6 +1961,121 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "forbidden"}
     end
 
+    test "session_id nil pointer + snapshot → resume_session_id なし apply_resume_snapshot=true で fresh-restore (phase-25 25-3)" do
+      host_id = "lab-pc-1"
+      agent_id = "lab-pc-1.fresh-restore"
+      register_host(host_id)
+      disconnect_with_session(agent_id, "sess-was-detached")
+      # /clear 相当: pointer に cwd/engine/snapshot は残るが session_id は nil。
+      :ok = SessionPointers.record(agent_id, nil, "/home/user/proj", "claude-code")
+
+      :ok =
+        SessionPointers.record_snapshot(agent_id, %{
+          "model" => "claude-opus-4-7",
+          "model_source" => "launch",
+          "permission_mode" => "bypassPermissions"
+        })
+
+      _ = SessionPointers.get(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok
+      assert_broadcast "spawn", payload
+      assert payload["agent_id"] == agent_id
+      assert payload["cwd"] == "/home/user/proj"
+      assert payload["apply_resume_snapshot"] == true
+      refute Map.has_key?(payload, "resume_session_id")
+
+      assert payload["resume_snapshot"] == %{
+               "model" => "claude-opus-4-7",
+               "model_source" => "launch",
+               "permission_mode" => "bypassPermissions"
+             }
+    end
+
+    test "session_id nil pointer + snapshot なしでも fresh-restore は成立 (runner 側で engine default に降格、phase-25 fail-soft)" do
+      host_id = "lab-pc-1"
+      agent_id = "lab-pc-1.fresh-restore-nosnap"
+      register_host(host_id)
+      disconnect_with_session(agent_id, "sess-was-detached")
+      :ok = SessionPointers.record(agent_id, nil, "/home/user/proj", "claude-code")
+      _ = SessionPointers.get(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok
+      assert_broadcast "spawn", payload
+      assert payload["apply_resume_snapshot"] == true
+      refute Map.has_key?(payload, "resume_session_id")
+      refute Map.has_key?(payload, "resume_snapshot")
+    end
+
+    test "pointer 完全不在は依然として no_session (phase-25 では緩めない)" do
+      agent_id = "lab-pc-1.no-pointer-at-all"
+      disconnect_with_session(agent_id, "sess-any")
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => agent_id})
+
+      assert_reply ref, :error, %{reason: "no_session"}
+    end
+
+    test "cwd 欠落 pointer は no_session 維持 (fresh-restore に cwd は必須)" do
+      agent_id = "lab-pc-1.no-cwd"
+      disconnect_with_session(agent_id, "sess-nocwd")
+      # SessionPointers.record は cwd=nil でも merge で既存の cwd を残す
+      # 仕様なので、cwd 未 seed のまま session_id を nil にした状態を作る。
+      :ok = SessionPointers.record(agent_id, nil, nil, "claude-code")
+      _ = SessionPointers.get(agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => agent_id})
+
+      assert_reply ref, :error, %{reason: "no_session"}
+    end
+
+    test "resume_disconnected は pointer.session_id が nil でも operator 指定 sid で通る (phase-25 25-4)" do
+      host_id = "lab-pc-1"
+      agent_id = "lab-pc-1.dc-swap-null-ptr"
+      register_host(host_id)
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "persona" => @ao,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "disconnected"
+        })
+
+      :ok = AgentDirectory.record(agent_id, @ao)
+      _ = AgentDirectory.get(agent_id)
+      # session_id は nil、cwd/engine のみ持つ pointer。
+      :ok = SessionPointers.record(agent_id, nil, "/home/user/proj", "claude-code")
+      _ = SessionPointers.get(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "resume_session", %{
+          "agent_id" => agent_id,
+          "session_id" => "operator-picked-sess"
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "spawn", payload
+      # operator の明示 session pick を尊重、apply_resume_snapshot は付かない。
+      assert payload["resume_session_id"] == "operator-picked-sess"
+      assert payload["cwd"] == "/home/user/proj"
+      refute Map.has_key?(payload, "apply_resume_snapshot")
+    end
+
     test "AgentStates 空でも AgentDirectory と SessionPointers から restore が成立 (ADR-0030、#41 goal)" do
       # サーバ再起動シミュレーション: AgentStates は空、ただし AgentDirectory
       # の persona と SessionPointers の pointer は DETS で残っている状態。
