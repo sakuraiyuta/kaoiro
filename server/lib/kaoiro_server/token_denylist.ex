@@ -17,9 +17,15 @@ defmodule KaoiroServer.TokenDenylist do
   token bytes it wants to invalidate.
 
   Backed by DETS with an in-memory mirror for O(1) reads on the
-  hot wrapper-join path. Fire-and-forget writes so an operator's revoke
-  reply is not gated on disk fsync. Same store pattern as
-  `PermissionModes` / `SessionPointers` / `ClearWatermarks`.
+  hot wrapper-join path. Writes are **synchronous** and fsync-gated
+  (`GenServer.call` + `:dets.sync/1` before reply) — the operator's
+  revoke ack and the follow-up `revoked` / `agent_deleted` broadcast
+  never fire ahead of disk persistence, so a crash inside the persist
+  window cannot silently drop the revocation. This is the deliberate
+  difference from the sibling stores (`PermissionModes` /
+  `ClearWatermarks`, cast + lazy sync); those are UI-reflector settings
+  that can be reasserted from a user pick, whereas the denylist is the
+  per-agent revocation authority itself.
   """
 
   use GenServer
@@ -37,17 +43,20 @@ defmodule KaoiroServer.TokenDenylist do
   end
 
   @doc """
-  Marks `agent_id` as revoked. Fire-and-forget so the operator handler
-  can respond immediately; the fast in-memory mirror is updated inside
-  the GenServer message loop so a subsequent `revoked?/2` observes the
-  change (`Auth.authorize_wrapper/2` uses `revoked?/2`, so the check
-  order is: cast → mirror updated → next join sees it). `ts` is an
+  Marks `agent_id` as revoked. **Synchronous** and fsync-gated: the call
+  returns only after the DETS insert AND the following `:dets.sync/1`
+  return `:ok`, so an operator ack (or `delete_agent` broadcast) that
+  follows this call is safe against a crash inside the persist window.
+  This is the deliberate departure from the sibling stores
+  (`PermissionModes` / `ClearWatermarks`, cast + lazy sync) — those are
+  UI-reflector settings that can be reasserted, but the denylist IS the
+  per-agent revocation authority (ADR-0024 D4 + issue #72). `ts` is an
   optional ISO-8601 UTC stamp for the audit trail; the flag itself is
   what `revoked?/2` checks.
   """
   def revoke(agent_id, ts \\ nil, server \\ __MODULE__)
       when is_binary(agent_id) do
-    GenServer.cast(server, {:revoke, agent_id, ts})
+    GenServer.call(server, {:revoke, agent_id, ts})
   end
 
   @doc """
@@ -121,15 +130,18 @@ defmodule KaoiroServer.TokenDenylist do
   end
 
   @impl true
-  def handle_cast({:revoke, agent_id, ts}, state) do
+  def handle_call({:revoke, agent_id, ts}, _from, state) do
     # Overwrite-latest — a later revoke ts wins for the audit trail,
-    # earlier ts is ignored. Once revoked, the id stays revoked; `restore/2`
-    # is the only way out and is not exposed via delete_agent's path.
+    # earlier ts is ignored. Once revoked, the id stays revoked;
+    # `restore/2` is the only way out and is not exposed via
+    # delete_agent's path. fsync BEFORE reply so the operator ack /
+    # `agent_deleted` broadcast that follows this call cannot outrun
+    # disk persistence (issue #72 review advisory).
     :ok = :dets.insert(state.table, {agent_id, ts})
-    {:noreply, %{state | denylist: Map.put(state.denylist, agent_id, ts)}}
+    :ok = :dets.sync(state.table)
+    {:reply, :ok, %{state | denylist: Map.put(state.denylist, agent_id, ts)}}
   end
 
-  @impl true
   def handle_call({:revoked?, agent_id}, _from, state) do
     {:reply, Map.has_key?(state.denylist, agent_id), state}
   end
