@@ -1357,6 +1357,31 @@ export function parseHistoryReset(
   };
 }
 
+/** ふじ A2 must-fix (2026-07-23, 3rd review): merges a per-agent history
+ *  map (`histories`, from `onHistory`) with a per-agent live-buffer
+ *  map (`local`, accumulated between join and the history push). Each
+ *  pane is deduped by `mergeTranscriptEntries` on
+ *  `agent_id|session_id|ts|seq|type` — the identity key is what makes
+ *  the R3 rolling-upgrade case (old client + new server) safe: even
+ *  when old client's `fanOutInterAgentHistory` produces a receiver
+ *  copy the new server already sent, both hit the same identity key
+ *  and only one survives.
+ *
+ *  Extracted from App.svelte so the 4-quadrant composite test
+ *  (new/old client × new/old server → merged pane) can exercise the
+ *  same production code, not a reimplementation. */
+export function mergeHistories(
+  histories: Record<string, Envelope[]>,
+  local: Record<string, Envelope[]>,
+): Record<string, Envelope[]> {
+  const merged: Record<string, Envelope[]> = {};
+  const ids = new Set([...Object.keys(histories), ...Object.keys(local)]);
+  for (const id of ids) {
+    merged[id] = mergeTranscriptEntries(histories[id] ?? [], local[id] ?? []);
+  }
+  return merged;
+}
+
 /** ふじ A3 advisory (2026-07-23): layout gate for the response-timeline
  *  pane (#25). Wide-viewport switch is triggered by matchMedia
  *  (`≥ 1600px`); the operator gate is because reply logs are

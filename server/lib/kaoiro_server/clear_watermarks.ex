@@ -2,21 +2,27 @@ defmodule KaoiroServer.ClearWatermarks do
   @moduledoc """
   Restart-surviving per-agent clear watermark (issue #109). When operator
   `clear_history(agent_id)` succeeds, the server-ingress **order tuple**
-  (matched to `KaoiroServer.InterAgentHistory`'s append-time
-  `{system_time_microsecond, unique_integer_positive_monotonic}`) is
-  stored here; on subsequent history-merge paths, IA envelopes whose
+  is stored here; on subsequent history-merge paths, IA envelopes whose
   server-side order is `<= watermark_order` are hidden from `agent_id`'s
   transcript pane. Peer agents' panes are unaffected — their own
   watermark controls what they see — and the shared `InterAgentHistory`
   DETS ledger itself is untouched.
 
-  **Ordering domain** (ふじ #109 M6 must-fix, 2026-07-23): all comparisons
-  for a **new** clear run on the server-generated tuple. Neither wire ISO
-  timestamps nor wrapper producer clocks feed that compare, so host-clock
-  skew between the operator's clear and a wrapper's IA emit can no longer
-  misclassify a message as "before" or "after" the cutoff. The tuple
-  `{us, uniq}` gives strict monotonic total ordering per BEAM node —
-  identical to what `InterAgentHistory.append/2` stamps at ingress.
+  **Ordering domain** (ふじ #109 M6 must-fix, 2026-07-23 + R5 must-fix
+  same date): the order tuple is allocated by `KaoiroServer.IngressOrder`,
+  the single serialized allocator both this store and
+  `InterAgentHistory.append/2` share. The tuple shape is `{us, seq}`
+  where `us` is a wall-clock-rollback-clamped microsecond reading and
+  `seq` is a persistent counter that bumps within the same `us` —
+  strict monotonic across the fleet's whole `us` range AND across VM
+  restarts (the pre-R5 inline
+  `{System.system_time(:microsecond), System.unique_integer([:positive,
+  :monotonic])}` pair reset its `unique_integer` half on every BEAM
+  start and had no restart-safe monotonic guarantee). Neither wire ISO
+  timestamps nor wrapper producer clocks feed the compare, so
+  host-clock skew between the operator's clear and a wrapper's IA
+  emit can no longer misclassify a message as "before" or "after"
+  the cutoff.
 
   **Legacy ISO-mode fallback** (ふじ R2 must-fix, 2026-07-23): a DETS
   record laid down before M6 has no tuple, only a display ISO. Loading
@@ -76,8 +82,8 @@ defmodule KaoiroServer.ClearWatermarks do
   current entry is a no-op — an out-of-order retry cannot re-expose IA
   the newer clear just hid.
   """
-  def record(agent_id, {us, uniq} = order, display_ts, server \\ __MODULE__)
-      when is_integer(us) and is_integer(uniq) and is_binary(display_ts) do
+  def record(agent_id, {us, seq} = order, display_ts, server \\ __MODULE__)
+      when is_integer(us) and is_integer(seq) and is_binary(display_ts) do
     GenServer.call(server, {:record, agent_id, order, display_ts})
   end
 
@@ -92,12 +98,14 @@ defmodule KaoiroServer.ClearWatermarks do
 
   @doc """
   Latest tuple order for the agent, or nil for legacy ISO-only entries
-  (they have no comparable tuple — use `get_filter_bound/2` when the
-  caller needs the ISO fallback too). Nil when unknown.
+  (they have no comparable tuple — filter callers that need the ISO
+  fallback too must use `all_filter_bounds/1`, which returns the
+  tagged shape for both post-M6 tuple records and pre-M6 ISO records).
+  Nil when unknown.
   """
   def get_order(agent_id, server \\ __MODULE__) do
     case get(agent_id, server) do
-      {{_us, _uniq} = order, _display} -> order
+      {{_us, _seq} = order, _display} -> order
       _ -> nil
     end
   end
@@ -105,7 +113,7 @@ defmodule KaoiroServer.ClearWatermarks do
   @doc "Latest display ISO ts for the agent, or nil (broadcast helper)."
   def get_display(agent_id, server \\ __MODULE__) do
     case get(agent_id, server) do
-      {{_us, _uniq}, display} -> display
+      {{_us, _seq}, display} -> display
       {:iso_only, display} -> display
       _ -> nil
     end
@@ -125,7 +133,7 @@ defmodule KaoiroServer.ClearWatermarks do
 
   @doc """
   agent_id => tagged filter bound for every known clear:
-  `{:order, {us, uniq}}` for tuple entries, `{:iso, display_iso}` for
+  `{:order, {us, seq}}` for tuple entries, `{:iso, display_iso}` for
   legacy pre-M6 entries. Consumers must handle both — the `:order` case
   compares against the envelope's server ingress order tuple, the `:iso`
   case falls back to comparing the envelope's wire `ts` string against
@@ -190,9 +198,9 @@ defmodule KaoiroServer.ClearWatermarks do
     case :dets.foldl(
            fn
              # Current 3-tuple record: agent_id, order tuple, display ISO.
-             {agent_id, {us, uniq}, display}, acc
-             when is_integer(us) and is_integer(uniq) and is_binary(display) ->
-               Map.put(acc, agent_id, {{us, uniq}, display})
+             {agent_id, {us, seq}, display}, acc
+             when is_integer(us) and is_integer(seq) and is_binary(display) ->
+               Map.put(acc, agent_id, {{us, seq}, display})
 
              # Legacy 2-tuple record (pre-M6, ISO-only): keep it in
              # ISO-mode so the filter path (`all_filter_bounds/1` →
@@ -220,11 +228,15 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   @impl true
-  def handle_call({:record, agent_id, {us, uniq} = order, display}, _from, state) do
+  def handle_call({:record, agent_id, {us, seq} = order, display}, _from, state) do
     # Monotonically advance: same-or-older order is a no-op. Compare on
     # the tuple (BEAM's term ordering handles integers pairwise), so
-    # this cannot regress even if `us` clock skews across restarts —
-    # the `uniq` half is per-node strict monotonic.
+    # this cannot regress even under wall-clock rollback or a VM
+    # restart — every tuple is allocated by `KaoiroServer.IngressOrder`,
+    # which clamps `us` to at least `last_us` and bumps `seq` when
+    # `us` did not advance (ふじ R5 must-fix, 2026-07-23; pre-R5 the
+    # second half was `System.unique_integer/1` which reset on each
+    # BEAM start).
     #
     # A legacy `{:iso_only, iso}` entry has no comparable order and is
     # always overwritten — the new tuple is monotonically newer than any
@@ -234,7 +246,7 @@ defmodule KaoiroServer.ClearWatermarks do
     current = Map.get(state.watermarks, agent_id)
 
     cond do
-      match?({{^us, ^uniq}, _}, current) ->
+      match?({{^us, ^seq}, _}, current) ->
         {:reply, :ok, state}
 
       match?({{_, _}, _}, current) and elem(current, 0) > order ->
@@ -262,7 +274,7 @@ defmodule KaoiroServer.ClearWatermarks do
 
   def handle_call(:all_orders, _from, state) do
     orders =
-      for {id, {{_us, _uniq} = order, _display}} <- state.watermarks,
+      for {id, {{_us, _seq} = order, _display}} <- state.watermarks,
           into: %{},
           do: {id, order}
 
@@ -272,7 +284,7 @@ defmodule KaoiroServer.ClearWatermarks do
   def handle_call(:all_filter_bounds, _from, state) do
     bounds =
       Map.new(state.watermarks, fn
-        {id, {{_us, _uniq} = order, _display}} -> {id, {:order, order}}
+        {id, {{_us, _seq} = order, _display}} -> {id, {:order, order}}
         {id, {:iso_only, display}} -> {id, {:iso, display}}
       end)
 
@@ -282,7 +294,7 @@ defmodule KaoiroServer.ClearWatermarks do
   def handle_call(:all_displays, _from, state) do
     displays =
       Map.new(state.watermarks, fn
-        {id, {{_us, _uniq}, display}} -> {id, display}
+        {id, {{_us, _seq}, display}} -> {id, display}
         {id, {:iso_only, display}} -> {id, display}
       end)
 

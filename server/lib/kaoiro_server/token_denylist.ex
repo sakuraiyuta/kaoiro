@@ -21,11 +21,14 @@ defmodule KaoiroServer.TokenDenylist do
   (`GenServer.call` + `:dets.sync/1` before reply) — the operator's
   revoke ack and the follow-up `revoked` / `agent_deleted` broadcast
   never fire ahead of disk persistence, so a crash inside the persist
-  window cannot silently drop the revocation. This is the deliberate
-  difference from the sibling stores (`PermissionModes` /
-  `ClearWatermarks`, cast + lazy sync); those are UI-reflector settings
-  that can be reasserted from a user pick, whereas the denylist is the
-  per-agent revocation authority itself.
+  window cannot silently drop the revocation. `ClearWatermarks` also
+  adopted this synchronous+fsync policy (ふじ #109 M7-a must-fix,
+  2026-07-23) — the only remaining lazy-sync sibling is
+  `PermissionModes`, and only because a UI-reflector pick that is not
+  yet on disk can be re-asserted from the same operator picker on the
+  next connect; the denylist has no such re-assertion path (an
+  operator would need to re-issue every revoke by hand after a crash),
+  which is why it must fsync-gate on every write.
   """
 
   use GenServer
@@ -47,10 +50,12 @@ defmodule KaoiroServer.TokenDenylist do
   returns only after the DETS insert AND the following `:dets.sync/1`
   return `:ok`, so an operator ack (or `delete_agent` broadcast) that
   follows this call is safe against a crash inside the persist window.
-  This is the deliberate departure from the sibling stores
-  (`PermissionModes` / `ClearWatermarks`, cast + lazy sync) — those are
-  UI-reflector settings that can be reasserted, but the denylist IS the
-  per-agent revocation authority (ADR-0024 D4 + issue #72). `ts` is an
+  Same policy `ClearWatermarks` uses (ふじ #109 M7-a must-fix,
+  2026-07-23); the only remaining lazy-sync sibling is
+  `PermissionModes` (UI-reflector, re-assertable from the same
+  operator picker on next connect). The denylist IS the per-agent
+  revocation authority (ADR-0024 D4 + issue #72), so it has no
+  re-assertion path and must fsync-gate on every write. `ts` is an
   optional ISO-8601 UTC stamp for the audit trail; the flag itself is
   what `revoked?/2` checks.
   """

@@ -33,6 +33,21 @@ config :kaoiro_server,
          "kaoiro_test_inter_agent_history_#{System.unique_integer([:positive])}.dets"
        )
 
+# Per-run throwaway DETS file for the IngressOrder allocator (ふじ
+# R5 must-fix, 2026-07-23) and its A4 advisory (2026-07-23, 3rd
+# review): without this, the app-started singleton wrote the shared
+# `System.tmp_dir!()/kaoiro_ingress_order.dets` fallback that the
+# module default_path/0 returns, so successive `mix test` runs
+# accumulated `last_us` / `last_seq` state — and worse, collided with
+# a running `mix phx.server` dev instance on the same host. Same
+# per-run unique_integer suffix pattern as InterAgentHistory above.
+config :kaoiro_server,
+       :ingress_order_path,
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_ingress_order_#{System.unique_integer([:positive])}.dets"
+       )
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

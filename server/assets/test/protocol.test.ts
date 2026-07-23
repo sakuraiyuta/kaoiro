@@ -23,6 +23,7 @@ import {
   parseHistoryPayload,
   filterInterAgentTargetsByWatermark,
   filterAfterHistoryCleared,
+  mergeHistories,
   resultOf,
   resetTranscriptHistory,
   resumeDriftFrom,
@@ -523,6 +524,140 @@ describe("inter-agent history replay (#105)", () => {
         "2099-01-01T00:00:00Z",
       );
       expect(kept).toEqual([nonIa]);
+    });
+  });
+
+  // ふじ A2 must-fix (2026-07-23, 3rd review): R3 が生む 4 象限 (new/old
+  // client × new/old server) を production helper 1 本で通す合成 table
+  // test。App.svelte の onHistory glue は現状:
+  //   const projected = projection === "per-pane-v1"
+  //     ? histories
+  //     : fanOutInterAgentHistory(histories, clearWatermarks);
+  //   logs = mergeHistories(projected, logs);
+  // これを test 側で再現し、e503 の markerless-per-pane 中間版
+  // (server が pre-fan out しつつ marker を立てない実装、R3 前の状態)
+  // も含めて全経路で visible transcript が正しくなることを pin する。
+  describe("R3 4 象限 composite (parse → project → merge)", () => {
+    // IA の 1 turn。sender = agent-a, receiver = agent-b。
+    const ia: Envelope = {
+      version: "0",
+      agent_id: "agent-a",
+      ts: "2026-07-23T05:00:00Z",
+      seq: 1,
+      type: "inter_agent_message",
+      state: "tool_running",
+      payload: {
+        to: "agent-b",
+        conversation_id: "cid-comp",
+        turn_number: 1,
+        kind: "inform",
+        body: "hello",
+      },
+    };
+
+    // App.svelte onHistory の glue と 1 対 1 対応する compose 関数。
+    // 引数は payload の raw shape (server から届く形) + 前回まで
+    // client 側に貯まっていた local logs。返り値は post-merge logs。
+    function applyOnHistory(
+      payload: unknown,
+      local: Record<string, Envelope[]> = {},
+    ): Record<string, Envelope[]> {
+      const parsed = parseHistoryPayload(payload);
+      const projected =
+        parsed.projection === "per-pane-v1"
+          ? parsed.histories
+          : fanOutInterAgentHistory(parsed.histories, parsed.clearWatermarks);
+      return mergeHistories(projected, local);
+    }
+
+    it("quadrant 1: new server + new client (marker=per-pane-v1, direct merge)", () => {
+      // server pre-fan-out 済み: sender pane / receiver pane 双方に copy 済み。
+      const payload = {
+        agents: { "agent-a": [ia], "agent-b": [ia] },
+        clear_watermarks: {},
+        history_projection: "per-pane-v1",
+      };
+      const merged = applyOnHistory(payload);
+      expect(merged["agent-a"]).toEqual([ia]);
+      expect(merged["agent-b"]).toEqual([ia]);
+    });
+
+    it("quadrant 2: new server + old client (marker=per-pane-v1 だが client 側 fanOut 走る) → dedupe で 1 copy", () => {
+      // 「old client」= marker を無視して常に fanOut する挙動を再現するた
+      // め、marker を undefined にしたのと等価な payload を渡す (=
+      // marker present でも client が旧経路を走る shape)。
+      // このケースは new server が既に receiver pane に配った copy と
+      // client fanOut が生む receiver copy が identity key で dedupe
+      // されるため、最終的に receiver pane に 1 copy だけ残る。
+      const payload = {
+        agents: { "agent-a": [ia], "agent-b": [ia] },
+        clear_watermarks: {},
+        // marker を落として old-client の behavior を強制。
+      };
+      const merged = applyOnHistory(payload);
+      expect(merged["agent-a"]).toEqual([ia]);
+      // dedupe が効くので 1 copy のみ (fanOut が同じ envelope を追加
+      // 積みしても identity key で潰される)。
+      expect(merged["agent-b"]).toEqual([ia]);
+    });
+
+    it("quadrant 3: old server + new client (marker absent → fanOut fallback で receiver pane を組み立てる)", () => {
+      // 旧 server は sender-keyed history のみ送る (受信 pane 未組立)。
+      // 新 client が marker absent を検知して fanOut fallback を走らせ、
+      // receiver pane に copy を追加する。
+      const payload = {
+        agents: { "agent-a": [ia] },
+        clear_watermarks: {},
+      };
+      const merged = applyOnHistory(payload);
+      expect(merged["agent-a"]).toEqual([ia]);
+      expect(merged["agent-b"]).toEqual([ia]);
+    });
+
+    it("quadrant 4: old server + old client (baseline, marker absent → fanOut で receiver pane 組立)", () => {
+      // 前 R3 状態と等価。新 client の marker-absent 分岐がこの挙動を
+      // 保存していることを直接 pin (quadrant 3 と同 payload、同結果)。
+      const payload = {
+        agents: { "agent-a": [ia] },
+        clear_watermarks: {},
+      };
+      const merged = applyOnHistory(payload);
+      expect(merged["agent-a"]).toEqual([ia]);
+      expect(merged["agent-b"]).toEqual([ia]);
+    });
+
+    it("e503 中間版 (server pre-fan-out 済み だが marker 未添付) + new client → dedupe で receiver 1 copy", () => {
+      // R3 の regression が実際に起きた中間 build 状態: server は per-pane
+      // 化していたが marker を送っていなかったので、new client が
+      // fanOut fallback に落ちて receiver pane を 2 重に組立てるはず。
+      // でも identity key dedupe が働くので visible には 1 copy。
+      // (それでも protocol 標識を欠かすと意味論が曖昧なので R3 で
+      // marker を追加した、という regression pin)
+      const payload = {
+        agents: { "agent-a": [ia], "agent-b": [ia] },
+        clear_watermarks: {},
+      };
+      const merged = applyOnHistory(payload);
+      expect(merged["agent-a"]).toEqual([ia]);
+      expect(merged["agent-b"]).toEqual([ia]);
+    });
+
+    it("local 側 live-buffer との merge も pane ごとに identity dedupe される", () => {
+      // 実運用: join と history push の間に onEnvelope で live IA が
+      // 届いていることがある。history 到達時に merge して同じ envelope
+      // が 2 度描画されないことを pin (mergeHistories の invariant)。
+      const payload = {
+        agents: { "agent-a": [ia], "agent-b": [ia] },
+        clear_watermarks: {},
+        history_projection: "per-pane-v1",
+      };
+      const local: Record<string, Envelope[]> = {
+        "agent-a": [ia],
+        "agent-b": [ia],
+      };
+      const merged = applyOnHistory(payload, local);
+      expect(merged["agent-a"]).toEqual([ia]);
+      expect(merged["agent-b"]).toEqual([ia]);
     });
   });
 

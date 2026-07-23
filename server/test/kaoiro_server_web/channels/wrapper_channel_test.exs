@@ -4,6 +4,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.TokenDenylist
+  alias KaoiroServerWeb.WrapperChannel
 
   defp envelope(agent_id, state) do
     %{
@@ -96,6 +98,59 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     # terminate/2 が走って disconnected envelope が derive され、
     # 通常経路 (agents:lobby) に broadcast される。
     on_exit(fn -> AgentStates.delete(agent_id) end)
+  end
+
+  # ふじ R1-race must-fix (2026-07-23, 3rd review): Auth.authorize_wrapper
+  # の denylist=false 確認と Phoenix の topic subscribe 完了の間に
+  # delete_agent / revoke_wrapper_token が完走すると、`revoked` broadcast
+  # は未 subscribe channel に届かず、intercept("revoked") 経由の
+  # handle_out も走らないため after_join が persona_prompt を push して
+  # 初回 envelope で AgentStates を再 seed してしまう。fix:
+  # handle_info(:after_join, socket) 冒頭で TokenDenylist を再確認、
+  # revoked なら {:stop, :shutdown, socket}。
+  #
+  # 真の race を試験の中で決定的に再現するのは Phoenix.ChannelTest の
+  # 制約 (subscribe_and_join return と after_join 処理が別 process で
+  # 非決定的にインタリーブ) で困難なため、guard 自体を unit level で
+  # pin する: fabricated socket に対して handle_info(:after_join) を
+  # 直接呼び、denylist=true のときの return value を assert する。
+  test "after_join: TokenDenylist に revoked 済み agent は channel stop する (R1-race pin)" do
+    agent_id = "test.after-join-race"
+    on_exit(fn -> TokenDenylist.restore(agent_id) end)
+
+    :ok = TokenDenylist.revoke(agent_id, "2026-07-23T15:00:00Z")
+    assert TokenDenylist.revoked?(agent_id) == true
+
+    socket = %Phoenix.Socket{
+      assigns: %{agent_id: agent_id, persona_id: "default"},
+      channel: WrapperChannel,
+      endpoint: KaoiroServerWeb.Endpoint,
+      handler: KaoiroServerWeb.WrapperSocket,
+      pubsub_server: KaoiroServer.PubSub,
+      transport: :channel_test,
+      transport_pid: self(),
+      serializer: Phoenix.Socket.V2.JSONSerializer,
+      topic: "wrapper:" <> agent_id,
+      channel_pid: self()
+    }
+
+    assert {:stop, :shutdown, ^socket} = WrapperChannel.handle_info(:after_join, socket)
+  end
+
+  # 陽性 case (guard が誤発火しない) の pin: denylist に居ないなら
+  # 従来通り persona_prompt を push して continue。
+  test "after_join: denylist に無ければ従来通り persona_prompt を push (R1-race pin 陰性)" do
+    agent_id = "test.after-join-clean"
+    # revoke 履歴が無い状態を保証。
+    _ = TokenDenylist.restore(agent_id)
+    refute TokenDenylist.revoked?(agent_id)
+
+    socket = join_wrapper(agent_id)
+    # join_wrapper 内部で subscribe_and_join → after_join 経路が走る。
+    # denylist clean なら persona_prompt 到達を assert できる。
+    assert_push "persona_prompt", %{prompt: prompt}
+    assert is_binary(prompt)
+    _ = socket
   end
 
   test "フレームキー欠落の envelope を拒否し中継しない" do

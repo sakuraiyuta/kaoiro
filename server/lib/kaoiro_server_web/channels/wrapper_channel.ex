@@ -22,6 +22,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentId
 
   # Intercept the operator-initiated revoke broadcast (issue #72) so it
@@ -71,6 +72,28 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # handle_info is the standard idiom.
   @impl true
   def handle_info(:after_join, socket) do
+    # ふじ R1-race must-fix (2026-07-23, 3rd review): close the join
+    # window between (1) Auth.authorize_wrapper's denylist check and
+    # (4) Phoenix subscribing the channel to `wrapper:<agent_id>`. If
+    # an operator's `delete_agent` / `revoke_wrapper_token` completes
+    # inside 1-4, the `revoked` broadcast fires against a
+    # still-unsubscribed channel process — `handle_out("revoked", …)`
+    # is never invoked and the channel goes on to push persona_prompt,
+    # re-seed AgentStates via the wrapper's first envelope, etc.
+    # Re-checking the denylist HERE (after subscribe is guaranteed by
+    # the fact that our :after_join self-message is being processed)
+    # and stopping without side effects closes the window. Any revoke
+    # that lands after this point is picked up by the existing
+    # `intercept ["revoked"]` handler.
+    if TokenDenylist.revoked?(socket.assigns.agent_id) do
+      {:stop, :shutdown, socket}
+    else
+      after_join_handshake(socket)
+      {:noreply, socket}
+    end
+  end
+
+  defp after_join_handshake(socket) do
     case PersonaAssets.prompt(socket.assigns.persona_id) do
       prompt when is_binary(prompt) ->
         push(socket, "persona_prompt", %{prompt: prompt})
@@ -103,7 +126,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     # once the wrapper reports one.
     KaoiroServer.SessionResets.confirm_connection(socket.assigns.agent_id)
 
-    {:noreply, socket}
+    :ok
   end
 
   # Operator-initiated token revoke (issue #72): the AgentsChannel

@@ -2,8 +2,8 @@
   import { onMount } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
+  import AgentGridShell from "./lib/AgentGridShell.svelte";
   import LaunchDialog from "./lib/LaunchDialog.svelte";
-  import ResponseTimeline from "./lib/ResponseTimeline.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import { adjacentAgentId } from "./lib/agentNavigation";
   import { expressionFor, spriteUrlFor } from "./lib/expression";
@@ -26,9 +26,9 @@
     filterInterAgentTargetsByWatermark,
     formatAgentLabel,
     isReplyEnvelope,
+    mergeHistories,
     mergeTranscriptEntries,
     resetTranscriptHistory,
-    shouldShowResponseTimeline,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -160,24 +160,6 @@
   // only their effects (connection, status) need to be reactive.
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let destroyed = false;
-
-  // History is the authoritative recovered transcript, but log/result
-  // envelopes can arrive via onEnvelope between join and the history push.
-  // Merge those live-buffered entries with the history (deduped by producer,
-  // session, ts, seq, and type) so a reload never drops them. Always restore
-  // chronological order: after a server restart `local` can contain older SPA state,
-  // and after history_reset retained IA can precede older JSONL replay logs.
-  function mergeHistories(
-    histories: Record<string, Envelope[]>,
-    local: Record<string, Envelope[]>,
-  ): Record<string, Envelope[]> {
-    const merged: Record<string, Envelope[]> = {};
-    const ids = new Set([...Object.keys(histories), ...Object.keys(local)]);
-    for (const id of ids) {
-      merged[id] = mergeTranscriptEntries(histories[id] ?? [], local[id] ?? []);
-    }
-    return merged;
-  }
 
   // Live grid: agents whose wrapper is currently connected (state !== disconnected).
   // Disconnected agents move to the offline section below so restore UX is
@@ -895,57 +877,57 @@
     </p>
   {:else}
     <!-- #25: wide viewports show grid + timeline side-by-side.
-         `class:with-timeline` toggles the CSS grid template so the
-         narrow-viewport layout stays a single `.agents` block. -->
-    <div class="grid-with-timeline" class:with-timeline={shouldShowResponseTimeline(wideLayout, isOperator)}>
-      <ul class="agents" class:three-cols={shouldShowResponseTimeline(wideLayout, isOperator)}>
-        {#each sorted as envelope, index (envelope.agent_id)}
-          <li style:--stagger="{index * 60}ms">
-            <AgentCard
-              {envelope}
-              {manifest}
-              spawnError={spawnErrors[envelope.agent_id] ?? null}
-              onSelect={(o) => {
-                origin = o ?? null;
-                selected = envelope.agent_id;
-              }}
-              onInterrupt={connection
-                ? () => connection!.sendInterrupt(envelope.agent_id)
-                : undefined}
-              onStop={connection
-                ? () =>
-                    connection!
-                      .stop(envelope.agent_id)
-                      .catch((e) => notifyActionError("終了", e))
-                : undefined}
-              onRestore={connection
-                ? () =>
-                    connection!
-                      .restore(envelope.agent_id)
-                      .catch((e) => notifyActionError("復帰", e))
-                : undefined}
-              onDelete={connection
-                ? () => connection!.deleteAgent(envelope.agent_id)
-                : undefined}
-            />
-          </li>
-        {/each}
-      </ul>
-      {#if shouldShowResponseTimeline(wideLayout, isOperator)}
-        <ResponseTimeline
-          {agents}
-          {logs}
-          {manifest}
-          {now}
-          onSelectAgent={(id) => {
-            // 詳細を開く。timeline クリックには「元タイル座標」がないので
-            // origin=null に倒し、既存の expand-from-origin アニメは省略。
-            origin = null;
-            selected = id;
-          }}
-        />
-      {/if}
-    </div>
+         Layout gate + shell lives in AgentGridShell (ふじ A1 must-fix
+         2026-07-23, 3rd review): one production component wraps the
+         `.grid-with-timeline` + `.agents` + optional ResponseTimeline,
+         so the integration test can mount the same component instead
+         of a hand-built div stand-in. -->
+    <AgentGridShell
+      wide={wideLayout}
+      operator={isOperator}
+      {agents}
+      {logs}
+      {manifest}
+      {now}
+      onSelectAgent={(id) => {
+        // 詳細を開く。timeline クリックには「元タイル座標」がないので
+        // origin=null に倒し、既存の expand-from-origin アニメは省略。
+        origin = null;
+        selected = id;
+      }}
+    >
+      {#each sorted as envelope, index (envelope.agent_id)}
+        <li style:--stagger="{index * 60}ms">
+          <AgentCard
+            {envelope}
+            {manifest}
+            spawnError={spawnErrors[envelope.agent_id] ?? null}
+            onSelect={(o) => {
+              origin = o ?? null;
+              selected = envelope.agent_id;
+            }}
+            onInterrupt={connection
+              ? () => connection!.sendInterrupt(envelope.agent_id)
+              : undefined}
+            onStop={connection
+              ? () =>
+                  connection!
+                    .stop(envelope.agent_id)
+                    .catch((e) => notifyActionError("終了", e))
+              : undefined}
+            onRestore={connection
+              ? () =>
+                  connection!
+                    .restore(envelope.agent_id)
+                    .catch((e) => notifyActionError("復帰", e))
+              : undefined}
+            onDelete={connection
+              ? () => connection!.deleteAgent(envelope.agent_id)
+              : undefined}
+          />
+        </li>
+      {/each}
+    </AgentGridShell>
   {/if}
   {#if selectedEnvelope === null && isOperator && offlineEntries.length > 0}
     <!-- Offline agents (ADR-0030): directory-only (server restarted) OR live
@@ -1256,37 +1238,9 @@
     font-size: var(--fs-body);
   }
 
-  .agents {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
-    gap: 1.2rem;
-  }
-
-  /* #25: wide viewport (≥ 1600px), operator only. Pin the grid to 3
-     columns and expose the right pane for the response timeline. Only
-     applied via the class binding in the template, so the narrow
-     viewport keeps the auto-fill grid — no CSS query is checked here. */
-  .agents.three-cols {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .grid-with-timeline.with-timeline {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(22rem, 26rem);
-    gap: 1.5rem;
-    align-items: start;
-    /* Timeline uses its own scroll so long agent lists on the left do
-       not push the timeline out of the viewport. */
-    min-height: 0;
-  }
-
-  .agents > li {
-    animation: rise 0.45s ease-out backwards;
-    animation-delay: var(--stagger, 0ms);
-  }
+  /* #25 grid + timeline layout: moved to AgentGridShell.svelte
+     (ふじ A1 must-fix 2026-07-23, 3rd review). Only styles that
+     apply outside the shell (offline section, etc.) remain here. */
 
   /* Offline section (ADR-0030): collapsed by default; the restore button
      sits in the summary so it never crowds the header. */
