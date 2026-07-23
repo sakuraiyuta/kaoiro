@@ -306,21 +306,33 @@ defmodule KaoiroServer.SessionResets do
         # 実機検収 2 (2026-07-23 マスター指示): a /new or /clear reaching
         # confirm_connection is the ONE authoritative session-transition
         # event that must advance A's IA visibility boundary
-        # (`ClearWatermarks`, semantic-shifted to "A's current-session
-        # start ingress order"). Doing it here — not in the wrapper
+        # (`ClearWatermarks`). Doing it here — not in the wrapper
         # `handle_info(:after_join)` — keeps the "boundary moves only
         # on real transitions" invariant: a normal reconnect / dogfood
         # restart / initial spawn all reach after_join but skip this
         # branch (their pending lock is nil), so the boundary stays put
-        # and pre-restart / initial IA remain visible. Monotonic-advance
-        # inside `ClearWatermarks.record` makes the call idempotent even
-        # if the same completion is retried.
-        _ =
-          KaoiroServer.ClearWatermarks.record(
-            agent_id,
-            KaoiroServer.IngressOrder.allocate(),
-            DateTime.utc_now() |> DateTime.to_iso8601()
-          )
+        # and pre-restart / initial IA remain visible.
+        #
+        # ふじ 検収 2 fix-round M3 (2026-07-23): `advance_transition/3`
+        # is transition-idempotent by `sid_opt` — a crash between this
+        # call and SessionPointers.detach_session (below) followed by
+        # a same-target reset retry no longer double-advances. Codex
+        # lazy 采番 passes `nil` here; `wrapper_channel` calls
+        # `ClearWatermarks.adopt_sid/2` on the first envelope that
+        # carries a real session_id.
+        {:ok, {_order, boundary_display, _sid}} =
+          KaoiroServer.ClearWatermarks.advance_transition(agent_id, effective_to_sid)
+
+        # ふじ 検収 2 fix-round M1 (2026-07-23): live clients must learn
+        # about the advance so their in-memory logs projection re-filters
+        # IA older than `boundary_display` — otherwise the old IA
+        # stays visible until reload and then suddenly disappears
+        # (breaks #109 AC). Additive wire; old clients ignore it.
+        KaoiroServerWeb.Endpoint.broadcast(
+          "agents:lobby",
+          "session_boundary_advanced",
+          %{"agent_id" => agent_id, "boundary" => boundary_display}
+        )
 
         # phase-17 17-7 (must-3): write the boundary marker into
         # AgentStates AND broadcast it via the ordinary envelope path so

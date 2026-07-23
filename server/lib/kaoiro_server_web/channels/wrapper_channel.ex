@@ -186,37 +186,54 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   @impl true
   def handle_in("envelope", envelope, socket) do
-    with :ok <- validate(envelope, socket.assigns.agent_id),
-         :ok <- route_inter_agent(envelope, socket.assigns.agent_id),
-         :ok <- store(envelope) do
-      # 実機検収 2 Trigger 2 (2026-07-23): external session switch.
-      # Must run BEFORE `record_session_pointer` so the durable prior
-      # sid is still readable for the comparison.
-      maybe_advance_session_boundary(envelope, socket.assigns.agent_id)
-      record_session_pointer(envelope)
-      # phase-17 17-7: fill the pending boundary marker's to_session_id
-      # when a fresh Codex session finally reports its thread ID
-      # (SessionResets.confirm_connection could not confirm it earlier
-      # because Codex's采番 is lazy). No-op unless a stash exists.
-      maybe_patch_boundary_to_session_id(envelope, socket.assigns.agent_id)
-      # Refresh the memory-only last_seen hint used by the client's
-      # live/offline merge (ADR-0030). Cheap fire-and-forget; no disk I/O.
-      AgentDirectory.touch(socket.assigns.agent_id)
-      # The full envelope (incl. operator-only log/result tool I/O) goes onto
-      # agents:lobby unfiltered; role gating is per-subscriber in
-      # AgentsChannel.handle_out. Invariant: ONLY AgentsChannel may subscribe
-      # to this topic — any new subscriber MUST apply the same role gate
-      # (#27, specs/threat-model.md).
-      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
-      {:reply, :ok, socket}
-    else
-      # A reply before any state (append_log :noop) has no snapshot entry
-      # to anchor it; drop the live broadcast too so "latest state is
-      # authoritative" holds (history was already not retained). Ack the
-      # wrapper — it did nothing wrong.
-      :noop ->
-        {:reply, :ok, socket}
+    agent_id = socket.assigns.agent_id
 
+    with :ok <- validate(envelope, agent_id),
+         :ok <- route_inter_agent(envelope, agent_id) do
+      # ふじ 検収 2 fix-round M2 (2026-07-23): advance boundary BEFORE
+      # `store/1`. Pre-M2 this ran after store, so if the first envelope
+      # of a new session was an inter_agent_message its IA order was
+      # allocated first and the boundary allocated a strictly larger
+      # order — the very current-session IA was then filtered out on
+      # reload. Running maybe_advance first flips the ordering so any
+      # IA appended by this envelope gets a post-boundary order.
+      #
+      # Also handles Codex lazy 采番 adopt: an envelope whose
+      # session_id matches an already-boundary'd sid (Trigger 1 stored
+      # nil, now filled) patches the boundary's sid so future retries
+      # are transition-idempotent.
+      maybe_advance_session_boundary(envelope, agent_id)
+
+      case store(envelope) do
+        :ok ->
+          record_session_pointer(envelope)
+          # phase-17 17-7: fill the pending boundary marker's
+          # to_session_id when a fresh Codex session finally reports its
+          # thread ID (SessionResets.confirm_connection could not confirm
+          # it earlier because Codex's采番 is lazy). No-op unless a
+          # stash exists.
+          maybe_patch_boundary_to_session_id(envelope, agent_id)
+          # Refresh the memory-only last_seen hint used by the client's
+          # live/offline merge (ADR-0030). Cheap fire-and-forget; no
+          # disk I/O.
+          AgentDirectory.touch(agent_id)
+          # The full envelope (incl. operator-only log/result tool I/O)
+          # goes onto agents:lobby unfiltered; role gating is per-
+          # subscriber in AgentsChannel.handle_out. Invariant: ONLY
+          # AgentsChannel may subscribe to this topic — any new
+          # subscriber MUST apply the same role gate (#27,
+          # specs/threat-model.md).
+          KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+          {:reply, :ok, socket}
+
+        :noop ->
+          # A reply before any state (append_log :noop) has no snapshot
+          # entry to anchor it; drop the live broadcast too so "latest
+          # state is authoritative" holds (history was already not
+          # retained). Ack the wrapper — it did nothing wrong.
+          {:reply, :ok, socket}
+      end
+    else
       {:error, reason} when is_atom(reason) ->
         {:reply, {:error, %{reason: to_string(reason)}}, socket}
 
@@ -384,23 +401,43 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # legitimate nil→sid case (/clear detach then fresh session) via
   # its own boundary advance in Trigger 1.
   #
-  # `ClearWatermarks.record` is monotonic-advance and fsync-gated, so
-  # a stale envelope that races with Trigger 1 cannot regress the
-  # boundary.
+  # ふじ 検収 2 fix-round M3 (2026-07-23): `advance_transition/3` is
+  # transition-idempotent by sid, so a stale envelope racing with
+  # Trigger 1 cannot double-advance. Codex lazy 采番 adopt: when the
+  # existing boundary was seeded with `nil` sid (Trigger 1 for Codex),
+  # the first envelope carrying the real session_id patches it via
+  # `adopt_sid/2` — no allocation, order/display unchanged, but future
+  # retries of the same transition now match idempotently.
+  #
+  # ふじ 検収 2 fix-round M1 (2026-07-23): when a Trigger 2 advance
+  # fires, broadcast `session_boundary_advanced` so live clients
+  # re-filter their in-memory IA projection.
   defp maybe_advance_session_boundary(%{"session_id" => new_sid}, agent_id)
        when is_binary(new_sid) and new_sid != "" do
-    case SessionPointers.get(agent_id) do
-      %{session_id: prior} when is_binary(prior) and prior != new_sid ->
-        _ =
-          KaoiroServer.ClearWatermarks.record(
-            agent_id,
-            KaoiroServer.IngressOrder.allocate(),
-            DateTime.utc_now() |> DateTime.to_iso8601()
-          )
+    prior =
+      case SessionPointers.get(agent_id) do
+        %{session_id: sid} when is_binary(sid) -> sid
+        _ -> nil
+      end
+
+    cond do
+      prior != nil and prior != new_sid ->
+        {:ok, {_order, boundary_display, _sid}} =
+          KaoiroServer.ClearWatermarks.advance_transition(agent_id, new_sid)
+
+        KaoiroServerWeb.Endpoint.broadcast(
+          "agents:lobby",
+          "session_boundary_advanced",
+          %{"agent_id" => agent_id, "boundary" => boundary_display}
+        )
 
         :ok
 
-      _ ->
+      true ->
+        # Codex lazy: adopt existing nil-sid boundary if the record
+        # exists (Trigger 1 might have seeded it during /clear or /new
+        # with nil sid). No-op when no such record.
+        _ = KaoiroServer.ClearWatermarks.adopt_sid(agent_id, new_sid)
         :ok
     end
   end

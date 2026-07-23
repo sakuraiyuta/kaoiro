@@ -222,6 +222,7 @@ Channels のチャネルイベント名と内容。トピックは
 | サーバ → クライアント | `snapshot` | `{ agents: { <agent_id>: envelope } }`。join 直後に push |
 | サーバ → クライアント | `envelope` | エンベロープ全体(状態変化の都度 broadcast) |
 | サーバ → クライアント | `history_cleared` | `{ agent_id, session_id, clear_watermark }`。`clear_history` 成功後に broadcast。クライアントは当該 agent の表示用ログを `session_id` 一致のものだけへ再フィルタ(#48)。**operator 限定配信**(viewer は log 自体を持たないため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md))。`clear_watermark` は「A の現行 session 境界 display ISO」を運ぶ audit hint (境界が未 seed の場合は空文字列)。durable IA の authoritative filter は server 側 ordering domain (`{us, seq}` tuple) で行い、`KaoiroServer.ClearWatermarks` に永続。IA `append` の tuple は単一の serialized allocator `KaoiroServer.IngressOrder` を通して発行し、`{last_us, last_seq}` を DETS fsync 済みで持つ HLC-lite 方式で wall-clock rollback + VM restart を跨いで strict monotonic を保つ (ふじ #109 R5 must-fix、2026-07-23)。**境界前進の trigger** (実機検収 2、2026-07-23 マスター指示): 境界は operator UI `clear_history` では **advance しない** (この UI は現行 session の IA を残す仕様に反転)。代わりに (1) `SessionResets.confirm_connection` の :awaiting_connect 完了時 = /new・/clear の genuine session transition、(2) wrapper_channel envelope handler で `envelope.session_id` が durable な `SessionPointers` prior sid と異なる場合 = 外部 switch_session (restore/resume の別 sid) の 2 経路でのみ advance する。 durable な prior sid 比較で dogfood 再起動 + 同一 session resume が誤って前進しない (#105 durable IA 表示保護) + 未発話 agent の nil→sid 初報告 (fresh spawn) も advance しない (Trigger 1 が /clear detach 後の正当な nil→sid だけ扱う)。 再 join 時の history push には `agents` (server pre-fan-out 済み per-pane payload) + `clear_watermarks: {agent_id => iso}` + `history_projection: "per-pane-v1"` (ふじ #109 R3 must-fix、2026-07-23; rolling upgrade で marker absent なら client 側の legacy fanOut に fallback、marker present なら direct merge。逆方向 (marker 未対応の old client + new server) は old client が marker を無視して再 fanOut するが、server が既に receiver pane に配った copy と client fanOut が生む receiver copy は同じ envelope で `mergeTranscriptEntries` の identity dedupe (`agent_id|session_id|ts|seq|type` key) が描画前に片方を潰すので visible な重複は出ない ── e503 で完成した client は direct merge 側でこの経路自体を通らない) が同梱される。書き込みは synchronous + `:dets.sync/1` fsync-gated ── ack / broadcast は永続確定後に発火する。**live 経路の best-effort filter**: `App.svelte` の `onEnvelope` / `onHistoryCleared` も watermark を参照して pane に反映するが、live は wire ISO string と watermark ISO の比較なので操作端の clock skew による transient mismatch が起こる ── これは reload で server-order authoritative filter に収束する設計 (ふじ #109 R4 must-fix、2026-07-23。protocol 拡張見送り accept の条件として明記)。legacy watermark (pre-M6 の 2-tuple ISO-only 記録) は `:iso_only` モードで DETS load され、次回 real clear まで wire ts 比較で pre-M6 の非表示範囲を維持する (ふじ #109 R2 must-fix、2026-07-23) ([#109](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/109) M6/M7 実装 + R2-R5 must-fix + 実機検収 2 仕様反転、2026-07-23) |
+| サーバ → クライアント | `session_boundary_advanced` | `{ agent_id, boundary }`。ふじ 検収 2 fix-round M1 (2026-07-23) の additive wire。 Trigger 1 (SessionResets.confirm_connection の :awaiting_connect 完了) と Trigger 2 (wrapper_channel envelope handler の外部 switch 検知) が発火した瞬間に broadcast。 `boundary` は「A の新しい現行 session 開始 display ISO」で、live client は (a) 自 clearWatermarks map を更新、(b) `logs[agent_id]` 内の `inter_agent_message` で `ts <= boundary` のものを drop する (非 IA は触らない — session_id filter は `history_cleared` 側の責務)。 pre-M1 は advance が live に届かず、開いている dashboard で旧 session IA が残り reload で突然消える inconsistency があった。 **operator 限定配信** (viewer は log を持たない、[ADR-0021](../adr/0021-role-information-disclosure-policy.md))。 old client は handler 未実装 = 単に無視、次回 reload で server-authoritative filter へ収束する fail-safe |
 | サーバ → クライアント | `history_reset` | `{ agent_id, preserve_inter_agent: boolean }`。resume 再構築は `true` として JSONL で復元不能な structured IA を保持し、`/clear` は `false` として IA を含む表示projectionを完全消去する。flag 省略は旧serverとの後方互換のため `true` と解釈する。**operator 限定配信**(viewer は log を持たないため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)、#50、#105、[ADR-0036](../adr/0036-session-lifecycle-commands.md) F3) |
 | サーバ → クライアント | `agent_deleted` | `{ agent_id }`。`delete_agent` 成功後に broadcast。クライアントは当該 agent をグリッドと表示用ログから除去(#14)。viewer にも配信(grid 整合のため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 | クライアント → サーバ | `attach_open` | `{ agent_id, upload_id, filename, mime, size, chunks }`。**operator のみ**。ファイル添付の予告。upload_id は client 採番(セッション内一意)。該当ラッパーへ relay、未知 agent_id は `{:error, unknown_agent}`。詳細は下記「ファイルアップロード wire」 |
@@ -283,6 +284,39 @@ session の JSONL を直読して `user`/`assistant` 行を `log` エンベロ�
 `history_reset`(全消去)→ `log` 再生でサーバ表示履歴を上書きする
 ([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2、#50。SDK は
 resume 時に過去履歴を query() ストリームへ再 yield しないため直読が必須)。
+
+### Session-boundary semantics — rollout / 意味 shift 注記
+
+**背景 (実機検収 2 + ふじ 検収 2 fix-round、2026-07-23)**: `ClearWatermarks`
+の意味は「clear 時点の cutoff」から「A の現行 session 開始 ingress order」
+に shift 済み。 wire (`clear_watermarks` map / `history_cleared` の
+`clear_watermark` field / `session_boundary_advanced` の `boundary`) の
+形は据置。 実装内部の `ClearWatermarks` module 名も legacy 継承。
+以下の運用限定に留意する:
+
+- **deploy 前に DETS 上に残る record**: 旧 semantics (clear 時点 cutoff)
+  の解釈で書かれた watermark を新 code は「A の暫定 boundary」として
+  load する。 次の genuine session transition (Trigger 1 = /new・/clear、
+  Trigger 2 = external switch) が起きるまで、その暫定値は past-clear
+  時点相当を保持し続ける ── 完全な session-boundary semantics に
+  収束するのは Trigger が発火した後。 pre-M6 の legacy 2-tuple ISO
+  record は `:iso_only` fallback を継続 (R2 と同じ)。
+- **rolling upgrade (old server + new client)**: old server は
+  `session_boundary_advanced` を発火しない。 new client の handler は
+  event が来なければ何もしないだけなので regression 無し ── ただし
+  live で境界の advance が届かないので、旧 session の IA は reload
+  まで残り続ける (次 join 時に server-authoritative filter へ収束)。
+  この 期間は old-server semantics のまま。
+- **rolling upgrade (new server + old client)**: old client は
+  `session_boundary_advanced` handler 未実装で event を無視する。
+  live で境界更新が UI に反映されないので、旧 IA が dashboard に
+  残る transient window が発生。 reload で server の per-pane
+  pre-fan-out を再受信して解消 (identity dedupe が重複を吸収する
+  R3 rolling upgrade note と同じ運用前提)。
+- **operator UI `clear_history`**: 境界を advance しない (現行
+  session の IA を残す仕様)。 broadcast の `clear_watermark` は
+  「A の現行境界 display ISO (未 seed なら空文字列)」の audit hint に
+  意味 shift 済み。
 
 ### ファイルアップロード wire
 

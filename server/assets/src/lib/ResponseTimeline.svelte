@@ -61,7 +61,7 @@
     <p class="empty">まだ会話なし</p>
   {:else}
     <ul class="rows">
-      {#each entries as entry (entry.envelope.agent_id + "|" + entry.envelope.ts + "|" + (entry.envelope.seq ?? 0) + "|" + entry.kind)}
+      {#each entries as entry (entry.envelope.agent_id + "|" + entry.envelope.ts + "|" + (entry.envelope.seq ?? 0) + "|" + entry.envelope.type + "|" + entry.kind)}
         {@const state = stateFor(entry.agentId)}
         {@const sprite = personaSprite(entry.agentId, state)}
         <li>
@@ -92,7 +92,8 @@
                 <span class="when">{formatRelativeJa(entry.envelope.ts, now)}</span>
               </span>
               <span class="summary">
-                {entry.text || "(空応答)"}
+                {entry.text ||
+                  (entry.kind === "user" ? "(空メッセージ)" : "(空応答)")}
               </span>
             </span>
           </button>

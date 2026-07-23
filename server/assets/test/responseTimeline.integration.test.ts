@@ -195,21 +195,41 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     expect(onSelectAgent).toHaveBeenCalledWith("lab-pc.a");
   });
 
-  it("空 summary の result は '(空応答)' の placeholder を表示", async () => {
-    const emptyResult: Envelope = {
+  it("空 summary の assistant は '(空応答)' を表示", async () => {
+    const emptyAssistant: Envelope = {
       version: "0",
       agent_id: "lab-pc.a",
       ts: secAgo(5),
-      type: "result",
-      state: "done",
-      payload: { is_error: true },
+      type: "log",
+      state: "thinking",
+      payload: { kind: "assistant" },
     };
     const target = await renderTimeline({
       agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
-      logs: { "lab-pc.a": [emptyResult] },
+      logs: { "lab-pc.a": [emptyAssistant] },
     });
     expect(target.querySelector(".summary")?.textContent?.trim()).toBe(
       "(空応答)",
+    );
+  });
+
+  // ふじ 検収 2 fix-round A3 (2026-07-23): user 発の空 prompt は
+  // "(空メッセージ)" を表示 (agent 発の "(空応答)" と区別)。
+  it("空 summary の user prompt は '(空メッセージ)' を表示 (agent 側との区別)", async () => {
+    const emptyUser: Envelope = {
+      version: "0",
+      agent_id: "lab-pc.a",
+      ts: secAgo(5),
+      type: "log",
+      state: "sending",
+      payload: { kind: "user" },
+    };
+    const target = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [emptyUser] },
+    });
+    expect(target.querySelector(".summary")?.textContent?.trim()).toBe(
+      "(空メッセージ)",
     );
   });
 });

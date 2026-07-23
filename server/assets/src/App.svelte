@@ -23,6 +23,7 @@
     fetchPersonaManifest,
     filterAfterHistoryCleared,
     filterInterAgentTargetsByWatermark,
+    filterPaneAfterBoundaryAdvance,
     formatAgentLabel,
     isReplyEnvelope,
     mergeTranscriptEntries,
@@ -53,11 +54,16 @@
   // Per-agent reply transcript (operator-only, ADR-0012): log/result
   // envelopes accumulate here instead of overwriting the latest state.
   let logs = $state<Record<string, Envelope[]>>({});
-  // Per-agent clear watermarks (issue #109): agent_id => ISO-8601 UTC ts.
-  // Populated from the join history push and refreshed by every live
-  // `history_cleared` broadcast. Passed to `fanOutInterAgentHistory` so
-  // durable IA older than a pane's watermark stays hidden on subsequent
-  // reloads. Sender-side filtering already ran server-side.
+  // Per-agent IA visibility boundary (issue #109; semantic-shifted by
+  // 実機検収 2, 2026-07-23): agent_id => ISO-8601 UTC ts of A's
+  // current-session boundary display. Populated from the join history
+  // push and refreshed by (a) live `session_boundary_advanced`
+  // broadcasts (ふじ 検収 2 fix-round M1) and (b) `history_cleared`
+  // (audit hint only, since operator clear no longer moves the
+  // boundary). Passed to `fanOutInterAgentHistory` so durable IA older
+  // than a pane's boundary stays hidden on subsequent reloads. The
+  // variable name is legacy; today the value represents the session
+  // boundary, not a clear cutoff.
   let clearWatermarks = $state<Record<string, string>>({});
   // Ticking clock owned by App for the response-timeline pane (#25).
   // Passed to ResponseTimeline so its "N 分前" labels refresh live
@@ -333,6 +339,27 @@
             projection,
             logs,
           );
+        },
+        onSessionBoundaryAdvanced: (agentId, boundary) => {
+          // ふじ 検収 2 fix-round M1 (2026-07-23): live-refresh the
+          // watermark map so a later `onHistory` fanOut fallback and
+          // the R4 helpers see the fresh cutoff, then drop any IA
+          // already in this pane whose ts is at or before the new
+          // boundary. Non-IA logs stay untouched (they follow the
+          // session_id filter of `onHistoryCleared`). Without this,
+          // /new or an external switch left old-session IA visible
+          // until reload.
+          const current = clearWatermarks[agentId];
+          if (current === undefined || current < boundary) {
+            clearWatermarks = { ...clearWatermarks, [agentId]: boundary };
+          }
+          const prev = logs[agentId];
+          if (prev) {
+            const filtered = filterPaneAfterBoundaryAdvance(prev, boundary);
+            if (filtered !== prev) {
+              logs = { ...logs, [agentId]: filtered };
+            }
+          }
         },
         onHistoryCleared: (agentId, sessionId, watermark) => {
           // An operator purged past-session lines (#48); keep only the

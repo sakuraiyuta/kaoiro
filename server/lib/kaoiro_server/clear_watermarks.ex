@@ -1,12 +1,30 @@
 defmodule KaoiroServer.ClearWatermarks do
   @moduledoc """
-  Restart-surviving per-agent clear watermark (issue #109). When operator
-  `clear_history(agent_id)` succeeds, the server-ingress **order tuple**
-  is stored here; on subsequent history-merge paths, IA envelopes whose
-  server-side order is `<= watermark_order` are hidden from `agent_id`'s
+  Restart-surviving per-agent **IA visibility boundary** (issue #109;
+  semantic-shifted from "clear cutoff" to "current-session start
+  ingress order" by 実機検収 2, 2026-07-23). The module name is
+  historical; today the store answers "which IA count as part of A's
+  current session" for the operator's per-pane transcript. On
+  subsequent history-merge paths, IA envelopes whose server-side
+  order is `<= boundary_order` are hidden from `agent_id`'s
   transcript pane. Peer agents' panes are unaffected — their own
-  watermark controls what they see — and the shared `InterAgentHistory`
+  boundary controls what they see — and the shared `InterAgentHistory`
   DETS ledger itself is untouched.
+
+  **Boundary advance trigger** (実機検収 2, 2026-07-23): the
+  operator UI `clear_history` no longer advances the boundary — it
+  is now a display-only sweep of past-session non-IA log lines.
+  Advances fire only on genuine session transitions:
+    - Trigger 1: `SessionResets.confirm_connection` when a /new or
+      /clear reset reaches its :awaiting_connect completion.
+    - Trigger 2: `wrapper_channel.handle_in("envelope", …)` when the
+      envelope's `session_id` differs from the durable
+      `SessionPointers` prior sid (external switch_session /
+      restore-to-different-sid).
+  Both flow through `advance_transition/3`, which is
+  transition-idempotent by the target `sid` (ふじ 検収 2 fix-round
+  M3, 2026-07-23) — a retry after a crash between advance and
+  pointer update no longer double-advances.
 
   **Ordering domain** (ふじ #109 M6 must-fix, 2026-07-23 + R5 must-fix
   same date): the order tuple is allocated by `KaoiroServer.IngressOrder`,
@@ -20,9 +38,9 @@ defmodule KaoiroServer.ClearWatermarks do
   :monotonic])}` pair reset its `unique_integer` half on every BEAM
   start and had no restart-safe monotonic guarantee). Neither wire ISO
   timestamps nor wrapper producer clocks feed the compare, so
-  host-clock skew between the operator's clear and a wrapper's IA
+  host-clock skew between a session transition and a wrapper's IA
   emit can no longer misclassify a message as "before" or "after"
-  the cutoff.
+  the boundary.
 
   **Legacy ISO-mode fallback** (ふじ R2 must-fix, 2026-07-23): a DETS
   record laid down before M6 has no tuple, only a display ISO. Loading
@@ -35,27 +53,33 @@ defmodule KaoiroServer.ClearWatermarks do
   promotes the entry to a real order tuple.
 
   Storage: DETS with in-memory mirror. Writes are **synchronous +
-  fsync-gated** (`GenServer.call` + `:dets.sync/1` before reply) — an
-  operator's `clear_history` ack and the `history_cleared` broadcast
-  that follows never fire ahead of disk persistence, so a crash inside
+  fsync-gated** (`GenServer.call` + `:dets.sync/1` before reply) — a
+  Trigger 1/2 transition advance and the `session_boundary_advanced`
+  broadcast that follows (ふじ 検収 2 fix-round M1, 2026-07-23) never
+  fire ahead of disk persistence, so a crash inside
   the persist window cannot silently drop the cutoff (M7-a must-fix,
   same policy `KaoiroServer.TokenDenylist` adopted for #72 revocation).
 
-  Record shape: `agent_id => {order_tuple, display_iso}` for post-M6
-  clears, or `agent_id => {:iso_only, display_iso}` for legacy pre-M6
-  records loaded from DETS (ふじ R2 must-fix). The tuple drives
-  filtering when present; the ISO string is a display-only audit stamp
-  reported on the `history_cleared` broadcast so live dashboards can
-  show "cleared at ..." without a separate lookup.
+  Record shape: `agent_id => {order_tuple, display_iso, transition_sid | nil}`
+  for post-M3 records (ふじ 検収 2 fix-round must-fix M3, 2026-07-23),
+  or `agent_id => {:iso_only, display_iso}` for legacy pre-M6 records
+  loaded from DETS (ふじ R2 must-fix). The `transition_sid` is the
+  target `session_id` of the transition that seeded this boundary —
+  the transition-identity token that makes retries idempotent. Codex
+  lazy 采番 stores nil transiently until `adopt_sid/2` patches it on
+  the first envelope carrying a real sid. Pre-M3 records loaded from
+  DETS get `sid = nil` and are patched by whichever transition first
+  observes a durable session_id for that agent.
 
-  Accessor invariant (ふじ R2 fix follow-up): `get_order/2` returns
-  the tuple only for post-M6 records (nil for `:iso_only`); the filter
-  hot-path uses `all_filter_bounds/1` which tags both shapes.
-  `get_display/2` returns the ISO in both shapes. `get/2` returns the
-  raw internal shape (`{tuple, iso} | {:iso_only, iso} | nil`) — kept
+  Accessor invariant: `get_order/2` returns the tuple only for tuple
+  records (nil for `:iso_only`); the filter hot-path uses
+  `all_filter_bounds/1` which tags both shapes. `get_display/2`
+  returns the ISO in both shapes. `get/2` returns the raw internal
+  shape (`{tuple, iso, sid} | {:iso_only, iso} | nil`) — kept
   server-internal (the wire never sees this shape; the operator client
   only ever receives `clear_watermarks: %{agent_id => iso}` via
-  `all_displays/1`).
+  `all_displays/1` and the `session_boundary_advanced` broadcast's
+  `boundary` display ISO).
   """
 
   use GenServer
@@ -74,23 +98,60 @@ defmodule KaoiroServer.ClearWatermarks do
 
   @doc """
   Records `order` (an `InterAgentHistory`-domain tuple) as the agent's
-  clear watermark, alongside `display_ts` (ISO-8601 UTC) for the audit
-  trail / broadcast payload. **Synchronous + fsync-gated** so the
-  operator's `clear_history` ack and the `history_cleared` broadcast
-  that follow are safe against an in-flight crash (M7-a must-fix).
-  Monotonically advances: a call with an `order` at or below the
-  current entry is a no-op — an out-of-order retry cannot re-expose IA
-  the newer clear just hid.
+  boundary, alongside `display_ts` (ISO-8601 UTC) for the audit trail.
+  Sid defaults to nil (legacy tests + non-transition callers); genuine
+  session-transition callers should use `advance_transition/3`
+  instead, which atomically allocates the order AND records the sid
+  for retry idempotence.
+
+  **Synchronous + fsync-gated** so any follow-up broadcast is safe
+  against an in-flight crash (M7-a must-fix). Monotonically advances:
+  a call with an `order` at or below the current entry is a no-op.
   """
   def record(agent_id, {us, seq} = order, display_ts, server \\ __MODULE__)
       when is_integer(us) and is_integer(seq) and is_binary(display_ts) do
-    GenServer.call(server, {:record, agent_id, order, display_ts})
+    GenServer.call(server, {:record, agent_id, order, display_ts, nil})
   end
 
   @doc """
-  Latest `{order_tuple, display_iso}` for the agent, or nil. Callers
-  that only need the audit ts (broadcast payload, UI hint) use
-  `get_display/2`; the filter path uses `get_order/2`.
+  Atomically advances A's boundary for a genuine session transition
+  identified by `sid_opt` (Codex lazy passes `nil`; Trigger 2 external
+  switch passes the new sid; Trigger 1 SessionResets confirm_connection
+  passes `joined_session_id` or `lock.to_session_id`). ふじ 検収 2
+  fix-round must-fix M3 (2026-07-23): the sid is the transition
+  identity, so a retry of the same transition (crash / duplicate) is a
+  no-op and returns the existing record unchanged — the pre-M3 code
+  monotonically-advanced but was NOT idempotent, so a re-report of the
+  same transition after a crash between advance and pointer update
+  double-advanced the boundary.
+
+  Returns `{:ok, {order, display, sid_opt}}` (new or existing record).
+  Fsync-gated. Called inside the boundary GenServer so allocation +
+  record are a single serialized decision.
+  """
+  def advance_transition(agent_id, sid_opt, server \\ __MODULE__)
+      when is_binary(agent_id) and (is_nil(sid_opt) or is_binary(sid_opt)) do
+    GenServer.call(server, {:advance_transition, agent_id, sid_opt})
+  end
+
+  @doc """
+  Codex lazy sid adopt (ふじ 検収 2 fix-round M3, 2026-07-23): patches
+  an existing tuple record whose `sid` is nil so it now carries the
+  real `sid`. No-op if the record is missing, already has a sid, or
+  is `:iso_only`. Does NOT allocate a new order — the boundary itself
+  is unchanged; only its transition identity token is filled in so a
+  future retry of the same transition matches idempotently.
+  """
+  def adopt_sid(agent_id, sid, server \\ __MODULE__)
+      when is_binary(agent_id) and is_binary(sid) do
+    GenServer.call(server, {:adopt_sid, agent_id, sid})
+  end
+
+  @doc """
+  Raw internal record: `{{us, seq}, display_iso, sid | nil}` for tuple
+  records, `{:iso_only, display_iso}` for pre-M6 legacy, `nil` when
+  unknown. Kept for tests / debug; production callers use the
+  accessors below.
   """
   def get(agent_id, server \\ __MODULE__) do
     GenServer.call(server, {:get, agent_id})
@@ -105,7 +166,7 @@ defmodule KaoiroServer.ClearWatermarks do
   """
   def get_order(agent_id, server \\ __MODULE__) do
     case get(agent_id, server) do
-      {{_us, _seq} = order, _display} -> order
+      {{_us, _seq} = order, _display, _sid} -> order
       _ -> nil
     end
   end
@@ -113,8 +174,20 @@ defmodule KaoiroServer.ClearWatermarks do
   @doc "Latest display ISO ts for the agent, or nil (broadcast helper)."
   def get_display(agent_id, server \\ __MODULE__) do
     case get(agent_id, server) do
-      {{_us, _seq}, display} -> display
+      {{_us, _seq}, display, _sid} -> display
       {:iso_only, display} -> display
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Transition identity sid for the agent's current boundary, or nil
+  when unknown / iso_only / not yet adopted (Codex lazy). Used by
+  transition-idempotence checks (ふじ 検収 2 fix-round M3).
+  """
+  def get_sid(agent_id, server \\ __MODULE__) do
+    case get(agent_id, server) do
+      {{_us, _seq}, _display, sid} -> sid
       _ -> nil
     end
   end
@@ -129,6 +202,17 @@ defmodule KaoiroServer.ClearWatermarks do
   """
   def all_orders(server \\ __MODULE__) do
     GenServer.call(server, :all_orders)
+  end
+
+  @doc """
+  Sender helper used by the M1 wire (`session_boundary_advanced`
+  broadcast): callers know they just advanced (via
+  `advance_transition/3` or `adopt_sid/2`) and want the display ISO
+  to ship in the broadcast payload. Returning nil is safe — the
+  caller skips the broadcast in that case.
+  """
+  def display_for_broadcast(agent_id, server \\ __MODULE__) do
+    get_display(agent_id, server)
   end
 
   @doc """
@@ -177,16 +261,17 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   # A corrupt / unreadable DETS file must not crash-loop the supervisor.
-  # Losing watermarks re-exposes at most the pre-clear IA a single time;
-  # the operator can re-clear if it matters. Same fallback pattern as
-  # PermissionModes / SessionPointers.
+  # Losing boundaries re-exposes at most a pre-transition IA slice a
+  # single time; the next SessionResets or external switch will seed a
+  # fresh boundary. Same fallback pattern as PermissionModes /
+  # SessionPointers.
   defp open_table(name, path) do
     case :dets.open_file(name, file: String.to_charlist(path)) do
       {:ok, ^name} ->
         name
 
       {:error, reason} ->
-        Logger.warning("clear watermark store unreadable (#{inspect(reason)}); recreating")
+        Logger.warning("session boundary store unreadable (#{inspect(reason)}); recreating")
 
         File.rm(path)
         {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
@@ -197,10 +282,20 @@ defmodule KaoiroServer.ClearWatermarks do
   defp load_watermarks(table) do
     case :dets.foldl(
            fn
-             # Current 3-tuple record: agent_id, order tuple, display ISO.
+             # Current 4-tuple record (ふじ 検収 2 fix-round M3,
+             # 2026-07-23): agent_id, order tuple, display ISO,
+             # transition sid (nil until adopted for Codex lazy).
+             {agent_id, {us, seq}, display, sid}, acc
+             when is_integer(us) and is_integer(seq) and is_binary(display) and
+                    (is_nil(sid) or is_binary(sid)) ->
+               Map.put(acc, agent_id, {{us, seq}, display, sid})
+
+             # Pre-M3 3-tuple record (post-M6, pre-transition-idempotence):
+             # sid unavailable; load as nil so `adopt_sid/2` can patch on
+             # the next matching envelope.
              {agent_id, {us, seq}, display}, acc
              when is_integer(us) and is_integer(seq) and is_binary(display) ->
-               Map.put(acc, agent_id, {{us, seq}, display})
+               Map.put(acc, agent_id, {{us, seq}, display, nil})
 
              # Legacy 2-tuple record (pre-M6, ISO-only): keep it in
              # ISO-mode so the filter path (`all_filter_bounds/1` →
@@ -228,7 +323,7 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   @impl true
-  def handle_call({:record, agent_id, {us, seq} = order, display}, _from, state) do
+  def handle_call({:record, agent_id, {us, seq} = order, display, sid}, _from, state) do
     # Monotonically advance: same-or-older order is a no-op. Compare on
     # the tuple (BEAM's term ordering handles integers pairwise), so
     # this cannot regress even under wall-clock rollback or a VM
@@ -246,21 +341,60 @@ defmodule KaoiroServer.ClearWatermarks do
     current = Map.get(state.watermarks, agent_id)
 
     cond do
-      match?({{^us, ^seq}, _}, current) ->
+      match?({{^us, ^seq}, _, _}, current) ->
         {:reply, :ok, state}
 
-      match?({{_, _}, _}, current) and elem(current, 0) > order ->
+      match?({{_, _}, _, _}, current) and elem(current, 0) > order ->
         {:reply, :ok, state}
 
       true ->
-        :ok = :dets.insert(state.table, {agent_id, order, display})
-        # M7-a must-fix: fsync BEFORE reply so the operator's
-        # `history_cleared` broadcast that follows this call cannot
-        # outrun disk persistence.
-        :ok = :dets.sync(state.table)
+        write_record(state.table, agent_id, order, display, sid)
 
         {:reply, :ok,
-         %{state | watermarks: Map.put(state.watermarks, agent_id, {order, display})}}
+         %{state | watermarks: Map.put(state.watermarks, agent_id, {order, display, sid})}}
+    end
+  end
+
+  # ふじ 検収 2 fix-round M3 (2026-07-23): atomic allocate + record with
+  # transition idempotence by sid. Retry of same transition returns the
+  # existing record without allocating a new order — pre-M3 the caller
+  # allocated first and then called record, so a crashing retry
+  # double-advanced. See docstring on `advance_transition/3` for the
+  # scenario.
+  def handle_call({:advance_transition, agent_id, sid_opt}, _from, state) do
+    current = Map.get(state.watermarks, agent_id)
+
+    case current do
+      {{_, _} = order, display, existing_sid}
+      when is_binary(sid_opt) and is_binary(existing_sid) and existing_sid == sid_opt ->
+        # Same transition retry — no-op.
+        {:reply, {:ok, {order, display, existing_sid}}, state}
+
+      _ ->
+        order = KaoiroServer.IngressOrder.allocate()
+        display = DateTime.utc_now() |> DateTime.to_iso8601()
+        write_record(state.table, agent_id, order, display, sid_opt)
+        new_rec = {order, display, sid_opt}
+
+        {:reply, {:ok, new_rec},
+         %{state | watermarks: Map.put(state.watermarks, agent_id, new_rec)}}
+    end
+  end
+
+  # ふじ 検収 2 fix-round M3 (2026-07-23): Codex lazy 采番 adopt. Only
+  # patches records whose sid is nil; established sid / iso_only /
+  # missing → no-op.
+  def handle_call({:adopt_sid, agent_id, sid}, _from, state) do
+    case Map.get(state.watermarks, agent_id) do
+      {{_, _} = order, display, nil} ->
+        write_record(state.table, agent_id, order, display, sid)
+        updated = {order, display, sid}
+
+        {:reply, {:ok, updated},
+         %{state | watermarks: Map.put(state.watermarks, agent_id, updated)}}
+
+      _ ->
+        {:reply, :noop, state}
     end
   end
 
@@ -274,7 +408,7 @@ defmodule KaoiroServer.ClearWatermarks do
 
   def handle_call(:all_orders, _from, state) do
     orders =
-      for {id, {{_us, _seq} = order, _display}} <- state.watermarks,
+      for {id, {{_us, _seq} = order, _display, _sid}} <- state.watermarks,
           into: %{},
           do: {id, order}
 
@@ -284,7 +418,7 @@ defmodule KaoiroServer.ClearWatermarks do
   def handle_call(:all_filter_bounds, _from, state) do
     bounds =
       Map.new(state.watermarks, fn
-        {id, {{_us, _seq} = order, _display}} -> {id, {:order, order}}
+        {id, {{_us, _seq} = order, _display, _sid}} -> {id, {:order, order}}
         {id, {:iso_only, display}} -> {id, {:iso, display}}
       end)
 
@@ -294,7 +428,7 @@ defmodule KaoiroServer.ClearWatermarks do
   def handle_call(:all_displays, _from, state) do
     displays =
       Map.new(state.watermarks, fn
-        {id, {{_us, _seq}, display}} -> {id, display}
+        {id, {{_us, _seq}, display, _sid}} -> {id, display}
         {id, {:iso_only, display}} -> {id, display}
       end)
 
@@ -313,6 +447,17 @@ defmodule KaoiroServer.ClearWatermarks do
   @impl true
   def terminate(_reason, state) do
     :dets.close(state.table)
+  end
+
+  # DETS write path: 4-tuple `{agent_id, order, display, sid}` (ふじ
+  # 検収 2 fix-round M3, 2026-07-23). fsync BEFORE reply — same
+  # M7-a policy as the pre-M3 record path. `open_table/2` may have
+  # loaded pre-M3 3-tuple records (with sid inferred as nil); on the
+  # first write for such a key, the 3-tuple in DETS is replaced by the
+  # 4-tuple (:dets uses key equality on the first element).
+  defp write_record(table, agent_id, order, display, sid) do
+    :ok = :dets.insert(table, {agent_id, order, display, sid})
+    :ok = :dets.sync(table)
   end
 
   defp default_path do

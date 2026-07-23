@@ -24,7 +24,7 @@ defmodule KaoiroServer.ClearWatermarksTest do
     :ok = ClearWatermarks.record("a.1", order(1_000_000, 1), "2026-07-23T15:00:00Z", server)
 
     assert ClearWatermarks.get("a.1", server) ==
-             {order(1_000_000, 1), "2026-07-23T15:00:00Z"}
+             {order(1_000_000, 1), "2026-07-23T15:00:00Z", nil}
 
     # 便利 helper: order だけ / display だけ。
     assert ClearWatermarks.get_order("a.1", server) == order(1_000_000, 1)
@@ -67,7 +67,7 @@ defmodule KaoiroServer.ClearWatermarksTest do
     {:ok, _pid} = ClearWatermarks.start_link(name: name2, path: path)
 
     assert ClearWatermarks.get("a.3", name2) ==
-             {order(3_000_000, 7), "2026-07-23T15:30:00Z"}
+             {order(3_000_000, 7), "2026-07-23T15:30:00Z", nil}
 
     GenServer.stop(name2)
   end
@@ -125,7 +125,7 @@ defmodule KaoiroServer.ClearWatermarksTest do
     {:ok, _pid} = ClearWatermarks.start_link(name: verify_name, path: path)
 
     assert ClearWatermarks.get("a.sync", verify_name) ==
-             {order(9_000_000, 3), "2026-07-23T16:00:00Z"}
+             {order(9_000_000, 3), "2026-07-23T16:00:00Z", nil}
 
     GenServer.stop(verify_name)
   end
@@ -191,11 +191,115 @@ defmodule KaoiroServer.ClearWatermarksTest do
       )
 
     assert ClearWatermarks.get("a.promote", boot) ==
-             {order(7_000_000, 3), "2026-07-23T17:00:00Z"}
+             {order(7_000_000, 3), "2026-07-23T17:00:00Z", nil}
 
     assert ClearWatermarks.all_filter_bounds(boot) == %{
              "a.promote" => {:order, order(7_000_000, 3)}
            }
+
+    GenServer.stop(boot)
+  end
+
+  # ふじ 検収 2 fix-round M3 pin (2026-07-23): advance_transition/3 は
+  # (allocate + record) を単一 GenServer.call で serialize し、同一 sid
+  # の retry は既存 record を返して再 allocate しない。 pre-M3 の
+  # 「allocate → record」二段は crash 後 restart で SessionPointers の
+  # 旧 sid + ClearWatermarks の新 boundary の間隙を突かれると、次
+  # 報告で二重前進した (monotonicity は idempotence ではない、の芯)。
+  describe "advance_transition/3 (M3 transition idempotence)" do
+    test "同一 sid の retry は既存 record を返して boundary を advance しない",
+         %{server: server} do
+      assert {:ok, {order1, display1, "sess-A"}} =
+               ClearWatermarks.advance_transition("a.tx-1", "sess-A", server)
+
+      # 同 transition の retry: order も display も不変。
+      assert {:ok, {^order1, ^display1, "sess-A"}} =
+               ClearWatermarks.advance_transition("a.tx-1", "sess-A", server)
+
+      # 別 sid なら本当の別 transition なので advance する。
+      assert {:ok, {order2, _display2, "sess-B"}} =
+               ClearWatermarks.advance_transition("a.tx-1", "sess-B", server)
+
+      assert order2 > order1
+    end
+
+    test "nil sid (Codex lazy) 経由の初 advance と、後続の別 nil 呼び出しは別 transition 扱い",
+         %{server: server} do
+      # sid=nil は「transition identity 未確定」を意味する。 idempotence
+      # 判定は sid nil-vs-nil を「同一」とは扱わない (曖昧を避ける)。
+      # Codex lazy path は adopt_sid で確定する運用。
+      assert {:ok, {order1, _, nil}} =
+               ClearWatermarks.advance_transition("a.tx-2", nil, server)
+
+      assert {:ok, {order2, _, nil}} =
+               ClearWatermarks.advance_transition("a.tx-2", nil, server)
+
+      assert order2 > order1
+    end
+
+    test "restart 越しの同 sid retry でも boundary 不変 (crash 復旧 pin)",
+         %{server: server, path: path} do
+      assert {:ok, {order_pre, display_pre, "sess-boot"}} =
+               ClearWatermarks.advance_transition("a.tx-restart", "sess-boot", server)
+
+      :ok = GenServer.stop(server)
+
+      boot = :"cw_tx_restart_#{System.unique_integer([:positive])}"
+      {:ok, _pid} = ClearWatermarks.start_link(name: boot, path: path)
+
+      assert {:ok, {^order_pre, ^display_pre, "sess-boot"}} =
+               ClearWatermarks.advance_transition("a.tx-restart", "sess-boot", boot)
+
+      GenServer.stop(boot)
+    end
+  end
+
+  describe "adopt_sid/2 (M3 Codex lazy 采番 patch)" do
+    test "sid=nil の既存 record を real sid で patch、order/display は不変",
+         %{server: server} do
+      assert {:ok, {order, display, nil}} =
+               ClearWatermarks.advance_transition("a.adopt", nil, server)
+
+      assert {:ok, {^order, ^display, "sess-codex"}} =
+               ClearWatermarks.adopt_sid("a.adopt", "sess-codex", server)
+
+      # 以降は同 sid の advance_transition が idempotent。
+      assert {:ok, {^order, ^display, "sess-codex"}} =
+               ClearWatermarks.advance_transition("a.adopt", "sess-codex", server)
+    end
+
+    test "既に sid が入っている record への adopt_sid は :noop",
+         %{server: server} do
+      assert {:ok, _} = ClearWatermarks.advance_transition("a.set", "sess-A", server)
+      assert :noop = ClearWatermarks.adopt_sid("a.set", "sess-B", server)
+    end
+
+    test "record 未 seed の agent への adopt_sid は :noop",
+         %{server: server} do
+      assert :noop = ClearWatermarks.adopt_sid("a.none", "sess-x", server)
+    end
+  end
+
+  # pre-M3 3-tuple record (post-M6, pre-transition-idempotence) を
+  # 起動時に load できる backward-compat pin。 sid=nil で初期化され、
+  # adopt_sid で patch できる。
+  test "legacy 3-tuple record (pre-M3) を load、sid=nil として patch 可能",
+       %{server: server, path: path} do
+    :ok = GenServer.stop(server)
+
+    inject = :"cw_pre_m3_inject_#{System.unique_integer([:positive])}"
+    {:ok, ^inject} = :dets.open_file(inject, file: String.to_charlist(path))
+    :ok = :dets.insert(inject, {"a.legacy3", {8_000_000, 5}, "2026-07-20T12:00:00Z"})
+    :ok = :dets.close(inject)
+
+    boot = :"cw_pre_m3_boot_#{System.unique_integer([:positive])}"
+    {:ok, _pid} = ClearWatermarks.start_link(name: boot, path: path)
+
+    assert ClearWatermarks.get("a.legacy3", boot) ==
+             {{8_000_000, 5}, "2026-07-20T12:00:00Z", nil}
+
+    assert {:ok, {_, _, "sess-late"}} =
+             ClearWatermarks.adopt_sid("a.legacy3", "sess-late", boot)
 
     GenServer.stop(boot)
   end

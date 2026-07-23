@@ -220,9 +220,11 @@ defmodule KaoiroServer.SessionResetsTest do
 
       # 境界が seed されている: /new completion が SessionResets 経由の
       # 境界前進イベントの一つ。
-      assert {{us, seq}, iso} = KaoiroServer.ClearWatermarks.get(agent_id)
+      assert {{us, seq}, iso, sid} = KaoiroServer.ClearWatermarks.get(agent_id)
       assert is_integer(us) and is_integer(seq)
       assert String.match?(iso, ~r/^\d{4}-\d{2}-\d{2}T/)
+      # M3: Trigger 1 は resolve/6 の to_session_id を record に載せる。
+      assert sid == "sess-new"
     end
 
     test "Trigger 1 (実機検収 2): /clear completion でも境界を advance",
@@ -242,7 +244,9 @@ defmodule KaoiroServer.SessionResetsTest do
 
       # /clear は sender IA を purge するので peer 側 IA だけが境界の
       # 対象になるが、境界自体は seed される (Trigger 1 の同一分岐)。
-      assert {{_us, _seq}, _iso} = KaoiroServer.ClearWatermarks.get(agent_id)
+      # M3: sid も同時に記録される (transition idempotence 用 identity)。
+      assert {{_us, _seq}, _iso, "sess-new"} =
+               KaoiroServer.ClearWatermarks.get(agent_id)
     end
 
     test "ok=false で lock を release、SessionPointers は変更しない", %{resets: sr} do

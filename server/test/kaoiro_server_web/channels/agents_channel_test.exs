@@ -2021,10 +2021,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       on_exit(fn -> ClearWatermarks.delete(agent_id) end)
       :ok = AgentStates.put(state_with_session(agent_id, "s2"))
 
-      # SessionResets 経由でセットされた既存境界を模擬。
-      existing_order = KaoiroServer.IngressOrder.allocate()
-      existing_display = "2026-07-20T10:00:00Z"
-      :ok = ClearWatermarks.record(agent_id, existing_order, existing_display)
+      # SessionResets 経由でセットされた既存境界を模擬 (M3: sid 込みで
+      # advance_transition を通す)。
+      {:ok, {existing_order, existing_display, "sess-existing"}} =
+        ClearWatermarks.advance_transition(agent_id, "sess-existing")
 
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
@@ -2037,8 +2037,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "clear_watermark" => ^existing_display
       }
 
-      # 境界は不変。
-      assert {^existing_order, ^existing_display} = ClearWatermarks.get(agent_id)
+      # 境界は不変 (clear_history は境界を触らない)。
+      assert {^existing_order, ^existing_display, "sess-existing"} =
+               ClearWatermarks.get(agent_id)
     end
 
     test "viewer の clear_history は forbidden" do

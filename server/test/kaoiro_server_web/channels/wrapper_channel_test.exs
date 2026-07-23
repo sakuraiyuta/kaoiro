@@ -527,14 +527,126 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok
 
       # 境界が seed されている: tuple 記録 + display ISO。
-      assert {{us, seq}, iso} = ClearWatermarks.get(agent_id)
+      assert {{us, seq}, iso, sid} = ClearWatermarks.get(agent_id)
       assert is_integer(us) and is_integer(seq)
       assert String.match?(iso, ~r/^\d{4}-\d{2}-\d{2}T/)
+      # M3: Trigger 2 は envelope.session_id を transition identity と
+      # して record する (crash 後 restart で同一 transition を retry
+      # しても no-op になる)。
+      assert sid == "sess-new"
 
       # durable sid も update されている (Trigger 2 は
       # record_session_pointer より前に走るので、record 前の値が読める
       # ことを確認済み)。
       assert %{session_id: "sess-new"} = SP.get(agent_id)
+    end
+
+    test "M1 wire (fix-round): Trigger 2 は session_boundary_advanced を agents:lobby へ broadcast する" do
+      agent_id = "test.boundary-broadcast"
+      SP.record(agent_id, "sess-a", "/proj")
+      _ = :sys.get_state(SP)
+
+      on_exit(fn ->
+        SP.delete(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      env =
+        envelope(agent_id, "waiting_input")
+        |> Map.put("session_id", "sess-b")
+
+      ref = push(socket, "envelope", env)
+      assert_reply ref, :ok
+
+      # M1: additive wire。 boundary display iso を payload に載せて
+      # live client が受信、in-memory IA を再 filter する契約。
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "session_boundary_advanced",
+        payload: %{"agent_id" => ^agent_id, "boundary" => boundary}
+      }
+
+      assert is_binary(boundary)
+      assert String.match?(boundary, ~r/^\d{4}-\d{2}-\d{2}T/)
+    end
+
+    test "M2 fix-round: 新 session の初 envelope が IA でも、その IA が境界以下にならない" do
+      # pre-M2 は store(envelope) の後に maybe_advance を呼んでいたので、
+      # IA envelope が先に InterAgentHistory.append (order N) → boundary
+      # が後で allocate (order N+1) となり、その current-session IA が
+      # reload で filter 落ちする regression があった。 fix: advance を
+      # store より前に置く。
+      alias KaoiroServer.InterAgentHistory
+      agent_id = "test.boundary-order-ia"
+      peer_id = "test.boundary-order-ia-peer"
+      SP.record(agent_id, "sess-old", "/proj")
+      _ = :sys.get_state(SP)
+
+      # IA は route_inter_agent で受信 agent の existence check を通る
+      # ので、peer を AgentStates に seed しておく (直接 put)。
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => peer_id,
+          "persona" => %{"id" => "peer", "name" => "peer", "sprite_set" => "peer"},
+          "ts" => "2026-07-23T14:00:00Z",
+          "type" => "state_change",
+          "state" => "idle",
+          "payload" => %{},
+          "ext" => %{}
+        })
+
+      on_exit(fn ->
+        SP.delete(agent_id)
+        ClearWatermarks.delete(agent_id)
+        InterAgentHistory.delete_agent(agent_id)
+        AgentStates.delete(peer_id)
+      end)
+
+      socket = join_wrapper(agent_id)
+
+      # まず sess-old の state_change を送って AgentStates に snapshot を
+      # 作る (以後 IA の append_log が :noop にならないため)。
+      ref0 =
+        push(
+          socket,
+          "envelope",
+          envelope(agent_id, "idle") |> Map.put("session_id", "sess-old")
+        )
+
+      assert_reply ref0, :ok
+
+      # 新 session の初 envelope が IA (transition + IA が同時)。
+      ia_env = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-07-23T15:00:00Z",
+        "seq" => 1,
+        "type" => "inter_agent_message",
+        "state" => "tool_running",
+        "session_id" => "sess-new",
+        "payload" => %{
+          "to" => peer_id,
+          "conversation_id" => "cid-transition-#{System.unique_integer([:positive])}",
+          "turn_number" => 1,
+          "kind" => "inform",
+          "body" => "hello",
+          "meta" => %{"done" => false, "propose_next" => "reply"},
+          "owner" => %{"kind" => "agent", "id" => agent_id}
+        },
+        "ext" => %{}
+      }
+
+      ref = push(socket, "envelope", ia_env)
+      assert_reply ref, :ok
+
+      # 境界の order は IA の order より小さい必要がある (advance が先)。
+      [{ia_order, _ia_env}] = InterAgentHistory.all_with_order()[agent_id]
+      {boundary_order, _display, _sid} = ClearWatermarks.get(agent_id)
+      assert boundary_order < ia_order
     end
 
     test "Trigger 2: session_id 未同梱 envelope は境界に影響しない" do

@@ -949,6 +949,18 @@ export interface KaoiroHandlers {
     sessionId: string,
     clearWatermark?: string,
   ) => void;
+  /** ふじ 検収 2 fix-round M1 (2026-07-23): additive wire event fired
+   *  by the server when A's IA visibility boundary advances (via
+   *  SessionResets confirm_connection or wrapper_channel external
+   *  switch). Live clients must (a) update their local
+   *  `clearWatermarks[agentId]` map and (b) drop inter_agent_message
+   *  entries from `logs[agentId]` whose `ts` is `<= boundary` — but
+   *  NOT touch non-IA entries (those still ride the session_id
+   *  filter of `onHistoryCleared`). Absent handler = old client on
+   *  new server: falls back to the reload path once the operator
+   *  refreshes; no invariant break beyond a transient "old IA
+   *  visible" window. Operator-only. */
+  onSessionBoundaryAdvanced?: (agentId: string, boundary: string) => void;
   /** A transcript projection reset. Resume reconstruction preserves
    *  structured IA history; `/clear` removes it too. Operator-only. */
   onHistoryReset?: (agentId: string, preserveInterAgent: boolean) => void;
@@ -1355,6 +1367,51 @@ export function parseHistoryReset(
         ? p.preserve_inter_agent
         : true,
   };
+}
+
+export interface SessionBoundaryAdvancedPayload {
+  agentId: string;
+  boundary: string;
+}
+
+/** ふじ 検収 2 fix-round M1 (2026-07-23): strict parser for the
+ *  `session_boundary_advanced` broadcast. Returns `null` when
+ *  `agent_id` or `boundary` is missing / non-string / empty — a
+ *  garbage payload must not silently corrupt the client's watermark
+ *  map (which would mis-filter live IA). Extracted so both
+ *  `connectKaoiro` and a unit test can exercise the same guard. */
+export function parseSessionBoundaryAdvanced(
+  payload: unknown,
+): SessionBoundaryAdvancedPayload | null {
+  if (payload === null || typeof payload !== "object") return null;
+  const p = payload as { agent_id?: unknown; boundary?: unknown };
+  if (typeof p.agent_id !== "string" || p.agent_id === "") return null;
+  if (typeof p.boundary !== "string" || p.boundary === "") return null;
+  return { agentId: p.agent_id, boundary: p.boundary };
+}
+
+/** ふじ 検収 2 fix-round M1 (2026-07-23): drop pane entries that the
+ *  new boundary would hide on reload. Only `inter_agent_message`
+ *  entries with a string `ts` `<= boundary` are removed; non-IA
+ *  entries (log / result / state_change / boundary marker) stay in
+ *  place because they follow the session_id filter — the operator's
+ *  clear does NOT purge past-session log lines when triggered by a
+ *  session transition (実機検収 2 マスター指示 continues to hold).
+ *  Returns the same array when no change (identity preserved lets
+ *  the App avoid a spurious `logs = { ... }` update). */
+export function filterPaneAfterBoundaryAdvance(
+  entries: Envelope[],
+  boundary: string,
+): Envelope[] {
+  const filtered = entries.filter(
+    (e) =>
+      !(
+        e.type === "inter_agent_message" &&
+        typeof e.ts === "string" &&
+        e.ts <= boundary
+      ),
+  );
+  return filtered.length === entries.length ? entries : filtered;
 }
 
 /** ふじ 4th advisory 2 (2026-07-23): single production helper that
@@ -1835,6 +1892,12 @@ export function connectKaoiro(
     const reset = parseHistoryReset(payload);
     if (reset !== null) {
       handlers.onHistoryReset?.(reset.agent_id, reset.preserve_inter_agent);
+    }
+  });
+  channel.on("session_boundary_advanced", (payload: unknown) => {
+    const parsed = parseSessionBoundaryAdvanced(payload);
+    if (parsed !== null) {
+      handlers.onSessionBoundaryAdvanced?.(parsed.agentId, parsed.boundary);
     }
   });
   channel.on("agent_deleted", (payload: { agent_id?: unknown }) => {

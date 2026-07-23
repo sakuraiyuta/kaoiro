@@ -2,10 +2,13 @@ defmodule KaoiroServer.IngressOrder do
   @moduledoc """
   Serialized, restart-durable allocator for the single server-side
   ordering domain that stamps every `inter_agent_message` at
-  `InterAgentHistory.append/2` AND every operator `clear_history`
-  watermark record. Both must share one allocator so a wall-clock
-  rollback or a VM restart cannot let an IA slip past a watermark
-  (or vice versa) — the exact concern ふじ R5 must-fix (2026-07-23)
+  `InterAgentHistory.append/2` AND every session-transition boundary
+  in `ClearWatermarks` (Trigger 1: SessionResets.confirm_connection
+  for /new・/clear, Trigger 2: wrapper_channel external switch —
+  実機検収 2, 2026-07-23; operator UI `clear_history` no longer
+  advances). Both must share one allocator so a wall-clock rollback
+  or a VM restart cannot let an IA slip past a session boundary (or
+  vice versa) — the exact concern ふじ R5 must-fix (2026-07-23)
   flagged with the pre-R5 `{System.system_time(:microsecond),
   System.unique_integer([:positive, :monotonic])}` inline pair, whose
   `unique_integer` half resets to an undefined offset on every BEAM
@@ -21,9 +24,9 @@ defmodule KaoiroServer.IngressOrder do
       per BEAM node without requiring a distributed lower bound.
 
   State `{last_us, last_seq}` is persisted to DETS + `:dets.sync/1`
-  before the reply, so the operator's `history_cleared` broadcast (or
-  the wrapper's IA `:ok` reply) can never fire ahead of disk
-  persistence. On boot, `init/1` reads the persisted pair AND scans
+  before the reply, so the server's `session_boundary_advanced`
+  broadcast (or the wrapper's IA `:ok` reply) can never fire ahead
+  of disk persistence. On boot, `init/1` reads the persisted pair AND scans
   `InterAgentHistory.all_with_order/1` + `ClearWatermarks.all_orders/1`
   for the pairwise-max tuple seen — so an allocator-DETS wipe cannot
   regress below live-consumer state. Pairwise-max means `{same_us,

@@ -21,8 +21,10 @@ import {
   pendingQuestionFrom,
   parseHistoryReset,
   parseHistoryPayload,
+  parseSessionBoundaryAdvanced,
   filterInterAgentTargetsByWatermark,
   filterAfterHistoryCleared,
+  filterPaneAfterBoundaryAdvance,
   mergeHistories,
   projectAndMergeHistory,
   resultOf,
@@ -488,25 +490,27 @@ describe("inter-agent history replay (#105)", () => {
       expect(kept).toEqual([current]);
     });
 
-    it("filterAfterHistoryCleared: 同 session の IA でも watermark >= ts なら drop (R4)", () => {
-      // 「IA(t1)→clear(t2)」順序を想定: 同一 session_id の pre-clear IA が
-      // 残らないこと (以前は session_id filter だけだったので残っていた)。
-      const preClear = {
+    it("filterAfterHistoryCleared: 同 session の IA でも boundary >= ts なら drop (R4 helper 仕様)", () => {
+      // 実機検収 2 (2026-07-23) 以降、`clearWatermark` 引数の意味は
+      // 「clear 時点」から「A の現行 session 開始 (=IA 表示 boundary)」に
+      // shift 済み。 pre-boundary IA が同 session_id でも drop される
+      // 挙動は helper level では不変 (呼び手の意味が変わっただけ)。
+      const preBoundary = {
         ...message,
         ts: "2026-07-13T05:00:00Z",
         session_id: "sess-cur",
       };
-      const postClear = {
+      const postBoundary = {
         ...message,
         ts: "2026-07-13T07:00:00Z",
         session_id: "sess-cur",
       };
       const kept = filterAfterHistoryCleared(
-        [preClear, postClear],
+        [preBoundary, postBoundary],
         "sess-cur",
         "2026-07-13T06:00:00Z",
       );
-      expect(kept).toEqual([postClear]);
+      expect(kept).toEqual([postBoundary]);
     });
 
     it("filterAfterHistoryCleared: watermark 未指定なら watermark filter は無効", () => {
@@ -525,6 +529,78 @@ describe("inter-agent history replay (#105)", () => {
         "2099-01-01T00:00:00Z",
       );
       expect(kept).toEqual([nonIa]);
+    });
+  });
+
+  // ふじ 検収 2 fix-round M1 (2026-07-23): session_boundary_advanced
+  // wire の payload parse + IA-only filter helper を pin。
+  describe("M1 wire: session_boundary_advanced", () => {
+    it("parseSessionBoundaryAdvanced: agent_id と boundary が非空文字列なら受理", () => {
+      const parsed = parseSessionBoundaryAdvanced({
+        agent_id: "agent-a",
+        boundary: "2026-07-23T15:00:00Z",
+      });
+      expect(parsed).toEqual({
+        agentId: "agent-a",
+        boundary: "2026-07-23T15:00:00Z",
+      });
+    });
+
+    it("parseSessionBoundaryAdvanced: agent_id が空 / 欠落 / 非文字列は null (garbage guard)", () => {
+      expect(parseSessionBoundaryAdvanced({ boundary: "iso" })).toBeNull();
+      expect(
+        parseSessionBoundaryAdvanced({ agent_id: "", boundary: "iso" }),
+      ).toBeNull();
+      expect(
+        parseSessionBoundaryAdvanced({ agent_id: 42, boundary: "iso" }),
+      ).toBeNull();
+    });
+
+    it("parseSessionBoundaryAdvanced: boundary が空 / 欠落 / 非文字列は null", () => {
+      expect(parseSessionBoundaryAdvanced({ agent_id: "a" })).toBeNull();
+      expect(
+        parseSessionBoundaryAdvanced({ agent_id: "a", boundary: "" }),
+      ).toBeNull();
+      expect(
+        parseSessionBoundaryAdvanced({ agent_id: "a", boundary: 3 }),
+      ).toBeNull();
+    });
+
+    it("parseSessionBoundaryAdvanced: payload 自体が壊れていても null (fail-safe)", () => {
+      expect(parseSessionBoundaryAdvanced(null)).toBeNull();
+      expect(parseSessionBoundaryAdvanced("string")).toBeNull();
+    });
+
+    it("filterPaneAfterBoundaryAdvance: IA の ts が boundary 以下なら drop、非 IA は残す", () => {
+      const preIA = {
+        ...message,
+        ts: "2026-07-23T05:00:00Z",
+        session_id: "sess-x",
+      };
+      const postIA = {
+        ...message,
+        ts: "2026-07-23T15:00:00Z",
+        seq: 2,
+        session_id: "sess-x",
+      };
+      const nonIA = { ...log, ts: "2026-07-23T04:00:00Z", session_id: "sess-x" };
+      const out = filterPaneAfterBoundaryAdvance(
+        [preIA, nonIA, postIA],
+        "2026-07-23T10:00:00Z",
+      );
+      // preIA drop (IA + ts <= boundary)、nonIA 残 (非 IA)、postIA 残
+      // (IA + ts > boundary)。
+      expect(out).toEqual([nonIA, postIA]);
+    });
+
+    it("filterPaneAfterBoundaryAdvance: 何も drop されないなら同一参照を返す (App の logs shallow-eq 保護)", () => {
+      const postIA = {
+        ...message,
+        ts: "2026-07-23T15:00:00Z",
+      };
+      const entries = [postIA];
+      const out = filterPaneAfterBoundaryAdvance(entries, "2026-07-23T10:00:00Z");
+      expect(out).toBe(entries);
     });
   });
 
