@@ -106,6 +106,7 @@ defmodule KaoiroServer.TokenDenylist do
             # an operator can forensically inspect it; recovery is a
             # deliberate rename by hand followed by a restart.
             :ok = :dets.close(table)
+
             Logger.error(
               "token denylist load failed (#{inspect(reason)}); DETS file preserved " <>
                 "at #{path} — refusing to start with a partial denylist. Rename or " <>

@@ -35,10 +35,21 @@ defmodule KaoiroServer.ClearWatermarks do
   the persist window cannot silently drop the cutoff (M7-a must-fix,
   same policy `KaoiroServer.TokenDenylist` adopted for #72 revocation).
 
-  Record shape: `agent_id => {order_tuple, display_iso}` — the tuple
-  drives filtering; the ISO string is a display-only audit stamp
+  Record shape: `agent_id => {order_tuple, display_iso}` for post-M6
+  clears, or `agent_id => {:iso_only, display_iso}` for legacy pre-M6
+  records loaded from DETS (ふじ R2 must-fix). The tuple drives
+  filtering when present; the ISO string is a display-only audit stamp
   reported on the `history_cleared` broadcast so live dashboards can
   show "cleared at ..." without a separate lookup.
+
+  Accessor invariant (ふじ R2 fix follow-up): `get_order/2` returns
+  the tuple only for post-M6 records (nil for `:iso_only`); the filter
+  hot-path uses `all_filter_bounds/1` which tags both shapes.
+  `get_display/2` returns the ISO in both shapes. `get/2` returns the
+  raw internal shape (`{tuple, iso} | {:iso_only, iso} | nil`) — kept
+  server-internal (the wire never sees this shape; the operator client
+  only ever receives `clear_watermarks: %{agent_id => iso}` via
+  `all_displays/1`).
   """
 
   use GenServer
