@@ -41,4 +41,28 @@ describe("実機検収 1 regression pin: offline section grid CSS", () => {
     expect(rule).toMatch(/display:\s*grid/);
     expect(rule).toMatch(/grid-template-columns:\s*repeat\(auto-fill/);
   });
+
+  it("オフラインありでは、ライブ領域を残余高へ縮めて各ペインを内部スクロールにする", () => {
+    expect(appSvelteSource).toMatch(/class:with-offline=\{isOperator && offlineEntries\.length > 0\}/);
+
+    const dashboard = block(appSvelteSource, ".dashboard.with-offline");
+    expect(dashboard).toMatch(/display:\s*flex/);
+    expect(dashboard).toMatch(/flex-direction:\s*column/);
+
+    const live = block(appSvelteSource, ".dashboard.with-offline .live-dashboard");
+    expect(live).toMatch(/flex:\s*1 1 0/);
+    expect(live).toMatch(/overflow:\s*hidden/);
+
+    const offlineList = block(
+      appSvelteSource,
+      ".dashboard.with-offline .offline\[open\] .agents",
+    );
+    expect(offlineList).toMatch(/overflow-y:\s*auto/);
+
+    expect(agentGridShellSource).toMatch(/class:fit-viewport=\{fitViewport\}/);
+    expect(agentGridShellSource).toMatch(/grid-template-rows:\s*minmax\(0, 1fr\)/);
+    const liveList = block(agentGridShellSource, ".fit-viewport .agents");
+    expect(liveList).toMatch(/overflow-y:\s*auto/);
+    expect(agentGridShellSource).toMatch(/\.fit-viewport :global\(\.timeline\)/);
+  });
 });

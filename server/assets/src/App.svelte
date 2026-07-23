@@ -873,125 +873,137 @@
       no agents yet — start a wrapper with <code>server_url</code> set.
     </p>
   {:else}
-    <!-- #25: wide viewports show grid + timeline side-by-side.
-         Layout gate + shell lives in AgentGridShell (ふじ A1 must-fix
-         2026-07-23, 3rd review): one production component wraps the
-         `.grid-with-timeline` + `.agents` + optional ResponseTimeline,
-         so the integration test can mount the same component instead
-         of a hand-built div stand-in. -->
-    <AgentGridShell
-      wide={wideLayout}
-      operator={isOperator}
-      {agents}
-      {directory}
-      {logs}
-      {manifest}
-      {now}
-      onSelectAgent={(id) => {
-        // 詳細を開く。timeline クリックには「元タイル座標」がないので
-        // origin=null に倒し、既存の expand-from-origin アニメは省略。
-        origin = null;
-        selected = id;
-      }}
+    <!-- When offline entries exist, this vertical shell assigns all remaining
+         viewport height to the live grid/timeline. This keeps the offline
+         summary visible at the bottom instead of letting the timeline's
+         independent scroll area push it below the page fold. -->
+    <div
+      class="dashboard"
+      class:with-offline={isOperator && offlineEntries.length > 0}
     >
-      {#each sorted as envelope, index (envelope.agent_id)}
-        <li style:--stagger="{index * 60}ms">
-          <AgentCard
-            {envelope}
-            {manifest}
-            spawnError={spawnErrors[envelope.agent_id] ?? null}
-            onSelect={(o) => {
-              origin = o ?? null;
-              selected = envelope.agent_id;
-            }}
-            onInterrupt={connection
-              ? () => connection!.sendInterrupt(envelope.agent_id)
-              : undefined}
-            onStop={connection
-              ? () =>
-                  connection!
-                    .stop(envelope.agent_id)
-                    .catch((e) => notifyActionError("終了", e))
-              : undefined}
-            onRestore={connection
-              ? () =>
-                  connection!
-                    .restore(envelope.agent_id)
-                    .catch((e) => notifyActionError("復帰", e))
-              : undefined}
-            onDelete={connection
-              ? () => connection!.deleteAgent(envelope.agent_id)
-              : undefined}
-          />
-        </li>
-      {/each}
-    </AgentGridShell>
-  {/if}
-  {#if selectedEnvelope === null && isOperator && offlineEntries.length > 0}
-    <!-- Offline agents (ADR-0030): directory-only (server restarted) OR live
-         disconnected (wrapper died but server survived — hot reload etc.).
-         Collapsed by default so the live section stays uncluttered; expand +
-         "前回の状態を復元" surfaces the restore affordance. Live-disconnected
-         tiles keep click-to-detail so the operator can still browse the
-         transcript history; directory-only tiles have no live envelope to
-         detail against, so they stay non-interactive (offline label + no click). -->
-    <details class="offline">
-      <summary>
-        オフライン({offlineEntries.length})
-        {#if connection}
-          <button
-            type="button"
-            class="restore-all"
-            onclick={(e) => {
-              e.preventDefault();
-              void restoreAllOffline();
-            }}
-            title="オフライン全体を一括復元"
-          >
-            前回の状態を復元
-          </button>
-          <button
-            type="button"
-            class="delete-all"
-            disabled={deletingAllOffline}
-            onclick={(e) => {
-              e.preventDefault();
-              void deleteAllOffline();
-            }}
-            title="オフライン全体を台帳ごと削除"
-          >
-            {deletingAllOffline ? "削除中…" : "すべて削除"}
-          </button>
-        {/if}
-      </summary>
-      <ul class="agents">
-        {#each offlineEntries as tile, index (tile.id)}
-          <li style:--stagger="{index * 60}ms">
-            <AgentCard
-              envelope={tile.envelope}
-              {manifest}
-              directoryOnly={tile.directoryOnly}
-              spawnError={spawnErrors[tile.id] ?? null}
-              onSelect={tile.directoryOnly
-                ? undefined
-                : (o) => {
-                    origin = o ?? null;
-                    selected = tile.id;
-                  }}
-              onRestore={connection
-                ? () =>
-                    connection!
-                      .restore(tile.id)
-                      .catch((e) => notifyActionError("復帰", e))
-                : undefined}
-              onDelete={connection
-                ? () => connection!.deleteAgent(tile.id)
-                : undefined}
-            />
-          </li>
-        {/each}
-      </ul>
-    </details>
+      <div class="live-dashboard">
+        <!-- #25: wide viewports show grid + timeline side-by-side.
+             Layout gate + shell lives in AgentGridShell (ふじ A1 must-fix
+             2026-07-23, 3rd review): one production component wraps the
+             `.grid-with-timeline` + `.agents` + optional ResponseTimeline,
+             so the integration test can mount the same component instead
+             of a hand-built div stand-in. -->
+        <AgentGridShell
+          wide={wideLayout}
+          operator={isOperator}
+          fitViewport={isOperator && offlineEntries.length > 0}
+          {agents}
+          {directory}
+          {logs}
+          {manifest}
+          {now}
+          onSelectAgent={(id) => {
+            // 詳細を開く。timeline クリックには「元タイル座標」がないので
+            // origin=null に倒し、既存の expand-from-origin アニメは省略。
+            origin = null;
+            selected = id;
+          }}
+        >
+          {#each sorted as envelope, index (envelope.agent_id)}
+            <li style:--stagger="{index * 60}ms">
+              <AgentCard
+                {envelope}
+                {manifest}
+                spawnError={spawnErrors[envelope.agent_id] ?? null}
+                onSelect={(o) => {
+                  origin = o ?? null;
+                  selected = envelope.agent_id;
+                }}
+                onInterrupt={connection
+                  ? () => connection!.sendInterrupt(envelope.agent_id)
+                  : undefined}
+                onStop={connection
+                  ? () =>
+                      connection!
+                        .stop(envelope.agent_id)
+                        .catch((e) => notifyActionError("終了", e))
+                  : undefined}
+                onRestore={connection
+                  ? () =>
+                      connection!
+                        .restore(envelope.agent_id)
+                        .catch((e) => notifyActionError("復帰", e))
+                  : undefined}
+                onDelete={connection
+                  ? () => connection!.deleteAgent(envelope.agent_id)
+                  : undefined}
+              />
+            </li>
+          {/each}
+        </AgentGridShell>
+      </div>
+      {#if selectedEnvelope === null && isOperator && offlineEntries.length > 0}
+        <!-- Offline agents (ADR-0030): directory-only (server restarted) OR live
+             disconnected (wrapper died but server survived — hot reload etc.).
+             Collapsed by default so the live section stays uncluttered; expand +
+             "前回の状態を復元" surfaces the restore affordance. Live-disconnected
+             tiles keep click-to-detail so the operator can still browse the
+             transcript history; directory-only tiles have no live envelope to
+             detail against, so they stay non-interactive (offline label + no click). -->
+        <details class="offline">
+          <summary>
+            オフライン({offlineEntries.length})
+            {#if connection}
+              <button
+                type="button"
+                class="restore-all"
+                onclick={(e) => {
+                  e.preventDefault();
+                  void restoreAllOffline();
+                }}
+                title="オフライン全体を一括復元"
+              >
+                前回の状態を復元
+              </button>
+              <button
+                type="button"
+                class="delete-all"
+                disabled={deletingAllOffline}
+                onclick={(e) => {
+                  e.preventDefault();
+                  void deleteAllOffline();
+                }}
+                title="オフライン全体を台帳ごと削除"
+              >
+                {deletingAllOffline ? "削除中…" : "すべて削除"}
+              </button>
+            {/if}
+          </summary>
+          <ul class="agents">
+            {#each offlineEntries as tile, index (tile.id)}
+              <li style:--stagger="{index * 60}ms">
+                <AgentCard
+                  envelope={tile.envelope}
+                  {manifest}
+                  directoryOnly={tile.directoryOnly}
+                  spawnError={spawnErrors[tile.id] ?? null}
+                  onSelect={tile.directoryOnly
+                    ? undefined
+                    : (o) => {
+                        origin = o ?? null;
+                        selected = tile.id;
+                      }}
+                  onRestore={connection
+                    ? () =>
+                        connection!
+                          .restore(tile.id)
+                          .catch((e) => notifyActionError("復帰", e))
+                    : undefined}
+                  onDelete={connection
+                    ? () => connection!.deleteAgent(tile.id)
+                    : undefined}
+                />
+              </li>
+            {/each}
+          </ul>
+        </details>
+      {/if}
+    </div>
   {/if}
 </main>
 {:else}
@@ -1240,12 +1252,43 @@
      (ふじ A1 must-fix 2026-07-23, 3rd review). Only styles that
      apply outside the shell (offline section, etc.) remain here. */
 
+  /* In the offline state, this is the viewport-bounded dashboard body.
+     `live-dashboard` may shrink, while the offline section keeps its summary
+     at the bottom edge. The individual live panes opt into their own scroll
+     in AgentGridShell. */
+  .dashboard.with-offline {
+    block-size: 100%;
+    min-block-size: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dashboard.with-offline .live-dashboard {
+    flex: 1 1 0;
+    min-block-size: 0;
+    overflow: hidden;
+  }
+
   /* Offline section (ADR-0030): collapsed by default; the restore button
      sits in the summary so it never crowds the header. */
   .offline {
     margin-top: 2rem;
     border-top: 1px solid var(--line);
     padding-top: 1rem;
+  }
+
+  /* A large expanded offline list stays useful without displacing the live
+     dashboard: it takes at most half the available height and scrolls its
+     own card grid. The collapsed summary remains at the viewport bottom. */
+  .dashboard.with-offline .offline {
+    flex: 0 0 auto;
+    max-block-size: 50%;
+  }
+
+  .dashboard.with-offline .offline[open] {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
   .offline > summary {
@@ -1277,6 +1320,12 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
     gap: 1.2rem;
+  }
+
+  .dashboard.with-offline .offline[open] .agents {
+    flex: 1 1 auto;
+    min-block-size: 0;
+    overflow-y: auto;
   }
 
   .offline .agents > li {

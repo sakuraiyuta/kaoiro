@@ -24,6 +24,7 @@
   let {
     wide,
     operator,
+    fitViewport = false,
     agents,
     directory,
     logs,
@@ -34,6 +35,7 @@
   }: {
     wide: boolean;
     operator: boolean;
+    fitViewport?: boolean;
     agents: Record<string, Envelope>;
     directory: Record<string, DirectoryEntry>;
     logs: Record<string, Envelope[]>;
@@ -46,7 +48,11 @@
   const showTimeline = $derived(shouldShowResponseTimeline(wide, operator));
 </script>
 
-<div class="grid-with-timeline" class:with-timeline={showTimeline}>
+<div
+  class="grid-with-timeline"
+  class:with-timeline={showTimeline}
+  class:fit-viewport={fitViewport}
+>
   <ul class="agents" class:three-cols={showTimeline}>
     {@render children?.()}
   </ul>
@@ -81,6 +87,32 @@
     /* Timeline uses its own scroll so long agent lists on the left do
        not push the timeline out of the viewport. */
     min-height: 0;
+  }
+
+  /* When App has an offline section, the live dashboard gets only the
+     viewport height left after that section. Both the card grid and timeline
+     scroll inside this bounded region; outside that state, preserve the
+     existing page-flow layout. */
+  .grid-with-timeline.fit-viewport {
+    block-size: 100%;
+    min-block-size: 0;
+  }
+
+  .grid-with-timeline.with-timeline.fit-viewport {
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .fit-viewport .agents {
+    block-size: 100%;
+    min-block-size: 0;
+    overflow-y: auto;
+    align-content: start;
+  }
+
+  .fit-viewport :global(.timeline) {
+    block-size: 100%;
+    max-block-size: none;
   }
 
   /* Slotted <li> tiles receive their `data-svelte-*` scope from
