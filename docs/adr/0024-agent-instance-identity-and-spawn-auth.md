@@ -113,6 +113,53 @@ per-agent token を spawn payload に注入してから runner へ中継**する
   再発行機構)。本 ADR は **「server が発行し runner が配送する」**ところまでを決定
   し、機構詳細は phase-4 の #22 再配線で詰める。
 
+## D4 追補 — per-agent_id revoke 経路 (2026-07-23、[#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))
+
+D4 が採用した `Phoenix.Token` 署名方式は stateless で secret_key_base
+ローテーションが唯一の revoke 手段だった (fleet 全体一括失効の重量
+オプション)。個別の agent_id を revoke したい ── 特に OSS 公開後の
+compromise 対応で必要 ── ため、以下を **署名方式は不変のまま additive
+拡張** として追加する。
+
+- **`KaoiroServer.TokenDenylist`** (新規 DETS 永続 store):
+  `agent_id => {revoked_at_iso, ...}` を保持。`Auth.authorize_wrapper/2`
+  が既存の signature check より **前** で `revoked?/2` を照合し、
+  listed agent_id は `{:error, :unauthorized}` を返す。dev モード
+  (`KAOIRO_WRAPPER_TOKENS` 未設定 = 誰でも通る) でも denylist は
+  override せず維持 (security 操作を dev convenience に潰させない)。
+- **書き込みは synchronous + `:dets.sync/1` fsync-gated**: operator の
+  revoke ack と `agent_deleted` / `revoked` broadcast は永続確定後に
+  発火する ── crash が revoke と disk 書き込みの間に落ちても revocation
+  が消えない (ふじ #72 M2 review advisory)。sibling stores
+  (`PermissionModes` / `ClearWatermarks`) の遅延 sync 方針とは意図的に
+  違え、denylist だけが per-agent revocation の唯一の authority である
+  ため。
+- **store corruption 時は fail-closed** (ふじ #72 M2 must-fix、
+  2026-07-23): DETS open エラーや malformed row を検出したら init を
+  `{:stop, ...}` で落とし、元ファイルを削除せず forensic 用に保持する。
+  operator が意図的に rename + 再起動して空 denylist から始める。
+- **`delete_agent` 経路の auto-revoke** (ふじ #72 M3 must-fix):
+  `agents_channel.purge_agent_records/1` は
+  `revoke + fsync → wrapper:<id> revoked broadcast → live cut-off →
+  store purge` の順で線形化。revoke が最初なので途中 crash でも
+  「token 有効なのに directory 消失」の逆転は起こらず、`AgentStates.delete`
+  と revoke の隙間に rejoin してきた live channel も broadcast で
+  即切断される。
+- **operator 明示 revoke**: `agents_channel` の `revoke_wrapper_token`
+  operator-only handler。live / disconnected 双方対応 (進行中の
+  compromise を即断つ用途)。live channel は `wrapper:<id>` topic 上の
+  `revoked` broadcast を intercept して `handle_out` で
+  `{:stop, :shutdown, socket}` する (同 topic の他 event と混ざらないよう
+  reason field で区別: `operator_revoke` / `agent_deleted`)。
+- **粒度は agent_id 単位** ── ADR-0024 D3 の `<host>.<rand>` 12 char
+  random suffix により、purge 済み id と将来 spawn の id 衝突は無視でき、
+  「revoke = 恒久」の semantics で運用できる。`TokenDenylist.restore/2`
+  は明示 UI (未実装) からのみ使う想定で、`delete_agent` の purge から
+  除外している。
+
+`Auth.mint_wrapper_token/1` の docstring も 2 revoke channel を明示、
+`docs/specs/auth-and-authz.md` の gap 表もこの追補で「実装済」に更新済み。
+
 ## Consequences
 
 ### Positive

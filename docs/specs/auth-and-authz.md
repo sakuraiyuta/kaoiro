@@ -114,8 +114,16 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。
 1. **Pre-registered**: env `KAOIRO_WRAPPER_TOKENS` の `agent_id:token` ペア
 2. **Server-minted signed token**: spawn 経路 (ADR-0024) で `Auth.mint_wrapper_token/1` が
    `Phoenix.Token.sign/3` で発行。secret は `Endpoint.secret_key_base`。
-   有効期限は無期限、 revoke は key rotation か per-agent denylist
-   ([#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))
+   有効期限は無期限、revoke は以下 2 経路 (2026-07-23、[#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72) 実装済):
+    - **per-agent_id denylist** (`KaoiroServer.TokenDenylist`、DETS 永続):
+      `Auth.authorize_wrapper/2` が既存 signature check より前で照合、
+      `delete_agent` 経路が auto-revoke で seed、operator の
+      `revoke_wrapper_token` handler が明示投入。書き込みは synchronous +
+      `:dets.sync/1` fsync-gated (ack / broadcast 前に永続確定)。live
+      channel は `wrapper:<id>` topic への `revoked` broadcast を
+      intercept して `handle_out` で `{:stop, :shutdown, socket}`。fail-closed:
+      store corruption 時は起動 fail (DETS ファイルは forensic 用に保持)。
+    - **secret_key_base rotation**: fleet 全体一括失効 (heavy-hammer)
 
 ## Known gaps (設計上の選択 + 未対応)
 
@@ -125,7 +133,7 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。
 | **メッセージ内容検査** | server は payload を解釈しない (size cap のみ) | なし — prompt injection 攻撃は素通り | [#18](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/18) Phase 2 |
 | **operator role 細分** | operator は全権 (spawn / interrupt / approve / clear など) | なし — 単一テナント前提 | [#65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65) OAuth + RBAC |
 | **トークン即時失効** | 稼働中 WS の強制切断は未実装 | env 更新 + 再起動で次接続から効く / heartbeat 失敗で client 自発切断 | [#47](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/47) |
-| **signed token revoke** | per-agent denylist 未実装 | key rotation で全失効 | [#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72) |
+| **signed token revoke** | **per-agent_id denylist 実装済 (2026-07-23、[#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))**: TokenDenylist DETS + Auth.authorize_wrapper 照合 + delete_agent 連動 auto-revoke + operator 明示 revoke handler + revoked broadcast による live disconnect | key rotation はいまも fleet 全体一括失効の重量オプションとして残る | 実装完 |
 | **マルチテナント隔離** | 全 operator が全エージェントを操作可能 | なし — single tenant 前提 | OAuth 本実装まで保留 |
 | **dev fallback の混入リスク** | `KAOIRO_WRAPPER_TOKENS` / `KAOIRO_RUNNER_TOKENS` 未設定で **全許可** | 起動時 WARN ログのみ | prod 配備手順で env 必須化を担保 |
 | **監査ログ** | 「誰がいつどの agent に何を送ったか」の永続記録なし | なし | 将来 (SQLite 導入時) |
