@@ -3,7 +3,7 @@
 // personality (ADR-0029 F3), then drives a CodexHost. Mirrors the Claude
 // composition (@kaoiro/claude-code/src/cli.ts) minus the Claude-only parts:
 // no permission broker wiring (approval is launch-fixed, ADR-0033 F3), no
-// upload rendering (attachments are rejected), rollout history replay.
+// image-only upload rendering, rollout history replay.
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
@@ -12,7 +12,6 @@ import {
   QuestionBroker,
   askUserQuestionDescriptor,
   formatInboundMessage,
-  makeAttachRejected,
   makeLog,
   makeStateChange,
 } from "@kaoiro/agent-common";
@@ -229,19 +228,11 @@ async function main(): Promise<void> {
         `  set_permission_mode: ignored (codex is launch-fixed): ${mode}\n`,
       );
     },
-    // No upload pipeline on codex yet (file-upload spec is Claude-side):
-    // reject each attach_open so the operator's upload fails loudly instead
-    // of hanging (the dashboard clears its pending upload on the reject).
     onAttachOpen: (msg) => {
-      process.stdout.write(`  attach_open rejected: ${msg.upload_id}\n`);
-      link?.send(
-        makeAttachRejected(config, host.state, new Date().toISOString(), {
-          upload_id: msg.upload_id,
-          reason: "sdk_error",
-          detail: "codex adapter does not support attachments yet",
-        }),
-      );
+      host.attachOpen(msg);
     },
+    onAttachChunk: (payload) => host.attachChunk(payload),
+    onAttachClose: (uploadId) => host.attachClose(uploadId),
     onInterAgentMessage: (envelope) => {
       if (interAgent?.receiveInbound(envelope)) {
         process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
@@ -282,6 +273,7 @@ async function main(): Promise<void> {
     onLog,
     appendSystemPrompt,
     onInstructionRejected: (envelope) => link?.send(envelope),
+    onAttachRejected: (envelope) => link?.send(envelope),
     onSessionId: (id) => link?.setSessionId(id),
     toolDescriptors: [
       ...interAgent.descriptors(),

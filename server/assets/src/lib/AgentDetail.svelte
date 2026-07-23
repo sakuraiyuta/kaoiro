@@ -719,8 +719,20 @@
   const effortSwitchSupported = $derived(
     sessionCaps?.supports_effort_switch === true,
   );
+  const attachmentTypes = $derived(sessionCaps?.attachment_types);
   const attachmentsSupported = $derived(
-    sessionCaps?.supports_attachments === true,
+    sessionCaps?.supports_attachments === true &&
+      (attachmentTypes === undefined || attachmentTypes.length > 0),
+  );
+  const imagesOnlyAttachments = $derived(
+    attachmentTypes !== undefined &&
+      attachmentTypes.length === 1 &&
+      attachmentTypes[0] === "image",
+  );
+  const attachmentAccept = $derived(
+    attachmentTypes === undefined
+      ? "image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/xml,application/yaml,application/x-yaml,application/javascript,application/typescript,application/sql,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+      : "image/*",
   );
   const dialogAvailability = $derived(
     userInputDialogAvailability(sessionCaps, displayPermLabel),
@@ -1146,9 +1158,19 @@
       }
       return;
     }
+    const allowed = attachmentTypes;
+    const accepted = allowed === undefined
+      ? picked
+      : picked.filter((file) => allowed.includes("image") && file.type.startsWith("image/"));
+    const rejectedByType = picked.length - accepted.length;
+    if (rejectedByType > 0) {
+      actionError = imagesOnlyAttachments
+        ? "このセッションでは画像のみ添付できます"
+        : "このセッションではこの種類の添付は未対応です";
+    }
     const next: StagedEntry[] = [...stagedFiles];
     let dropped = 0;
-    for (const f of picked) {
+    for (const f of accepted) {
       if (next.length >= MAX_STAGED) {
         dropped++;
         continue;
@@ -1178,7 +1200,8 @@
   // Scoped to the composer area so a drop on one agent's transcript cannot
   // bleed across to another agent (the spec calls out "複数 agent 間で
   // 曖昧にならない"). The spec also says client は規範を持たない — so we do
-  // NOT MIME-filter here, leaving wrapper to reject with mime_denied.
+  // Type restrictions are capability-derived in addStagedFiles(), so picker,
+  // drop, and paste all share the same fail-closed image-only guard.
   let dropActive = $state(false);
   // dragenter / dragleave fire for every child crossing too, so a single
   // boolean would flicker. Counter pattern keeps the highlight stable
@@ -2329,12 +2352,12 @@
               class="attach"
               class:attach-disabled={!attachmentsSupported}
               title={attachmentsSupported
-                ? "ファイル添付(画像 / テキスト / コード / PDF / Office、複数可)"
+                ? (imagesOnlyAttachments ? "画像を添付(複数可)" : "ファイル添付(画像 / テキスト / コード / PDF / Office、複数可)")
                 : "このセッションでは未対応"}
             >
               <input
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/xml,application/yaml,application/x-yaml,application/javascript,application/typescript,application/sql,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                accept={attachmentAccept}
                 multiple
                 onchange={onFilePicked}
                 bind:this={stagedFileInput}

@@ -38,7 +38,8 @@ describe("initialStatusExt", () => {
     expect(initial.ext).toMatchObject({
       engine: "codex",
       session_capabilities: {
-        supports_attachments: false,
+        supports_attachments: true,
+        attachment_types: ["image"],
         supports_user_input_dialog: true,
         supports_model_switch: true,
         supports_effort_switch: true,
@@ -80,15 +81,21 @@ function usageEvent(): ThreadEvent {
  *  records the thread options / resume ids it was constructed with. */
 function makeClient(turns: ThreadEvent[][]): {
   client: CodexClientLike;
-  calls: { resume: (string | null)[]; options: (ThreadOptions | undefined)[] };
+  calls: {
+    resume: (string | null)[];
+    options: (ThreadOptions | undefined)[];
+    inputs: Array<string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>>;
+  };
 } {
   let turn = 0;
   const calls: {
     resume: (string | null)[];
     options: (ThreadOptions | undefined)[];
-  } = { resume: [], options: [] };
+    inputs: Array<string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>>;
+  } = { resume: [], options: [], inputs: [] };
   const thread: CodexThreadLike = {
-    async runStreamed() {
+    async runStreamed(input) {
+      calls.inputs.push(input);
       const events = turns[turn] ?? [];
       turn += 1;
       async function* gen(): AsyncGenerator<ThreadEvent> {
@@ -782,23 +789,46 @@ describe("CodexHost", () => {
     ]);
   });
 
-  it("添付付き指示は instruction_rejected で弾く", async () => {
-    const rejected: Envelope[] = [];
-    const { client } = makeClient([]);
+  it("画像 upload を SDK local_image input にし、turn 後に temp file を削除する", async () => {
+    const { client, calls } = makeClient([[usageEvent()]]);
     const host = new CodexHost(CONFIG, {
       onState: () => {},
       appendSystemPrompt: "p",
-      onInstructionRejected: (e) => rejected.push(e),
       codexFactory: () => client,
       now: () => "T",
     });
-    await host.send("with files", ["up-1"]);
-    expect(rejected).toHaveLength(1);
-    expect(rejected[0]?.type).toBe("instruction_rejected");
-    expect(rejected[0]?.payload).toMatchObject({
-      attachment_ids: ["up-1"],
-      reason: "sdk_error",
+    host.attachOpen({ upload_id: "up-1", filename: "screen.png", mime: "image/png", size: 3, chunks: 1 });
+    const id = new TextEncoder().encode("up-1");
+    const payload = new Uint8Array(4 + id.length + 4 + 3);
+    new DataView(payload.buffer).setUint32(0, id.length, false);
+    payload.set(id, 4);
+    new DataView(payload.buffer).setUint32(4 + id.length, 0, false);
+    payload.set([1, 2, 3], 4 + id.length + 4);
+    host.attachChunk(payload);
+    host.attachClose("up-1");
+    await host.send("with image", ["up-1"]);
+    const running = host.run();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    host.close();
+    await running;
+    expect(calls.inputs).toHaveLength(1);
+    expect(calls.inputs[0]).toMatchObject([
+      { type: "text", text: "with image" },
+      { type: "local_image" },
+    ]);
+    const input = calls.inputs[0] as Array<{ type: string; path?: string }>;
+    await expect(import("node:fs/promises").then(({ access }) => access(input[1]!.path!))).rejects.toThrow();
+  });
+
+  it("非画像 upload は attach_rejected で loud に弾く", () => {
+    const rejected: Envelope[] = [];
+    const { client } = makeClient([]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {}, appendSystemPrompt: "p", codexFactory: () => client,
+      onAttachRejected: (e) => rejected.push(e), now: () => "T",
     });
+    host.attachOpen({ upload_id: "not-image", filename: "note.txt", mime: "text/plain", size: 1, chunks: 1 });
+    expect(rejected[0]?.payload).toMatchObject({ upload_id: "not-image", reason: "mime_denied" });
   });
 
   it("setPendingQuestion が waiting_question / 復帰を駆動する", () => {
@@ -938,7 +968,8 @@ describe("CodexHost", () => {
     // → undefined → false で account default 経路が非表示だった)。
     const first = states[0]!;
     expect(first.ext?.session_capabilities).toEqual({
-      supports_attachments: false,
+      supports_attachments: true,
+      attachment_types: ["image"],
       supports_user_input_dialog: true,
       supports_model_switch: true,
       supports_effort_switch: true,

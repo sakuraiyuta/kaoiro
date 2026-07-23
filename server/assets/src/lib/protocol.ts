@@ -183,6 +183,9 @@ export type SessionResetErrorReason =
  *  capabilities. */
 export interface SessionCapabilities {
   supports_attachments: boolean;
+  /** Absent means unrestricted for backwards compatibility; present is the
+   * closed set of types this session accepts. */
+  attachment_types?: Array<"image">;
   supports_user_input_dialog: boolean;
   /** Optional constraint: dialog only fires in these permission_mode /
    *  sandbox contexts. Absent / empty = unconditional (matches on=true).
@@ -245,6 +248,15 @@ export function sessionCapabilitiesFrom(
   }
   if (typeof r.supports_context_usage === "boolean") {
     out.supports_context_usage = r.supports_context_usage;
+  }
+  if (Array.isArray(r.attachment_types)) {
+    const types: Array<"image"> = [];
+    for (const type of r.attachment_types) {
+      if (type === "image") types.push(type);
+    }
+    // A present-but-invalid / empty list is intentionally retained as an
+    // empty restriction: fail closed rather than widening a malformed stamp.
+    out.attachment_types = types;
   }
   if (Array.isArray(r.user_input_modes)) {
     const modes: string[] = [];

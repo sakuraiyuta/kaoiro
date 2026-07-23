@@ -17,6 +17,7 @@ import type {
 } from "@openai/codex-sdk";
 import {
   initialMachineState,
+  makeAttachRejected,
   makeInstructionRejected,
   makeLog,
   makeResult,
@@ -35,6 +36,8 @@ import type {
   PendingPermissionExt,
   PendingQuestionExt,
   PermissionMode,
+  AttachRejectedPayload,
+  InstructionRejectedPayload,
   ResolvedSnapshotExt,
   SwitchErrorExt,
   ToolDescriptor,
@@ -64,12 +67,27 @@ import {
   type CodexRateLimitWindow,
 } from "./rollout.js";
 import { ToolHost } from "./toolhost.js";
+import {
+  MAX_ATTACHMENTS_PER_INSTRUCTION,
+  MAX_INFLIGHT_UPLOADS,
+  PENDING_UPLOAD_GC_INTERVAL_MS,
+  PENDING_UPLOAD_TTL_MS,
+  PROTOCOL_FILE_SIZE_LIMIT_BYTES,
+  cleanupLocalImages,
+  materializeLocalImages,
+  parseChunkPayload,
+  sweepOrphanLocalImages,
+  type PendingUpload,
+  type UploadMeta,
+  validateClose,
+  validateOpen,
+} from "./upload.js";
 
 /** Structural view of the SDK surface the host drives; injectable so tests
  *  script ThreadEvents without a codex binary. */
 export interface CodexThreadLike {
   runStreamed(
-    input: string,
+    input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>,
     turnOptions?: { signal?: AbortSignal },
   ): Promise<{ events: AsyncIterable<ThreadEvent> }>;
 }
@@ -87,7 +105,8 @@ function initialStatusExtFromCatalog(
   return {
     engine: "codex",
     session_capabilities: {
-      supports_attachments: false,
+      supports_attachments: true,
+      attachment_types: ["image"],
       supports_user_input_dialog: true,
       supports_model_switch: catalog.length > 0,
       // Phase-23 dogfood 再回帰対策 (藤 修正版方針 3): exact match の
@@ -133,9 +152,10 @@ export interface CodexHostOptions {
    *  a developer-role message via config.developer_instructions (ADR-0032
    *  F3, verified 2026-07-10). */
   appendSystemPrompt: string;
-  /** instruction_rejected sink (file-upload spec; codex rejects attachments
-   *  wholesale for now). */
+  /** instruction_rejected sink (file-upload spec). */
   onInstructionRejected?: (envelope: Envelope) => void;
+  /** attach_rejected sink for malformed / unsupported upload frames. */
+  onAttachRejected?: (envelope: Envelope) => void;
   /** Reports the thread id (kaoiro session_id) once known (ADR-0014). */
   onSessionId?: (sessionId: string) => void;
   /** Common tools served to codex through the MCP bridge (ADR-0032 F5):
@@ -169,6 +189,8 @@ export interface CodexHostOptions {
   ) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
+  /** Epoch clock for deterministic upload TTL tests. */
+  nowMs?: () => number;
 }
 
 /** Bridge entry point, resolved against the built package layout. Works from
@@ -222,8 +244,15 @@ export class CodexHost implements EngineAdapter {
   readonly #catalog: CodexCatalog;
   #pendingPermission: PendingPermissionExt | null = null;
   #pendingQuestion: PendingQuestionExt | null = null;
-  /** Queued operator instructions; #wake resolves the run loop's wait. */
-  readonly #queue: string[] = [];
+  /** Queued SDK input. A local_image temp directory belongs to exactly one
+   * turn and is deleted from #runTurn's finally path. */
+  readonly #queue: Array<{
+    input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
+    tempDir?: string;
+  }> = [];
+  readonly #pendingUploads = new Map<string, PendingUpload>();
+  readonly #nowMs: () => number;
+  #gcTimer: ReturnType<typeof setInterval> | null = null;
   #wake: (() => void) | null = null;
   #abort: AbortController | null = null;
   #closed = false;
@@ -246,6 +275,7 @@ export class CodexHost implements EngineAdapter {
     this.#config = config;
     this.#options = options;
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#nowMs = options.nowMs ?? Date.now;
     this.#model = config.model ?? null;
     this.#modelSource = options.modelSource ?? null;
     this.#effort = config.effort ?? null;
@@ -365,37 +395,108 @@ export class CodexHost implements EngineAdapter {
   }
 
   async send(text: string, attachmentIds?: string[]): Promise<void> {
-    if (attachmentIds !== undefined && attachmentIds.length > 0) {
-      // Codex MVP has no attachment rendering path (file-upload spec is
-      // Claude-side); reject the whole instruction loudly rather than
-      // silently dropping the files.
-      this.#options.onInstructionRejected?.(
-        makeInstructionRejected(
-          this.#config,
-          this.#machine.state,
-          this.#now(),
-          {
-            attachment_ids: attachmentIds,
-            reason: "sdk_error",
-            detail: "codex adapter does not support attachments yet",
-          },
-        ),
-      );
+    if (
+      attachmentIds !== undefined &&
+      attachmentIds.length > MAX_ATTACHMENTS_PER_INSTRUCTION
+    ) {
+      this.#emitInstructionRejected({
+        attachment_ids: attachmentIds,
+        reason: "count_over",
+        detail: `attachments=${attachmentIds.length} cap=${MAX_ATTACHMENTS_PER_INSTRUCTION}`,
+      });
       return;
     }
+    let input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }> = text;
+    let tempDir: string | undefined;
+    if (attachmentIds !== undefined && attachmentIds.length > 0) {
+      const uploads = this.#resolveAttachments(attachmentIds);
+      if (uploads === null) return;
+      try {
+        const materialized = await materializeLocalImages(this.#config.agent_id, uploads);
+        tempDir = materialized.dir;
+        input = [
+          { type: "text", text },
+          ...materialized.paths.map((path) => ({ type: "local_image" as const, path })),
+        ];
+      } catch (error) {
+        this.#emitInstructionRejected({
+          attachment_ids: attachmentIds,
+          reason: "sdk_error",
+          detail: `local_image materialization failed: ${String(error)}`,
+        });
+        return;
+      }
+      for (const upload of uploads) this.#pendingUploads.delete(upload.meta.upload_id);
+    }
     this.#apply({ kind: "user_send" });
-    this.#queue.push(text);
+    this.#queue.push({ input, ...(tempDir === undefined ? {} : { tempDir }) });
     this.#wake?.();
   }
 
   async interrupt(): Promise<void> {
+    this.#dropPendingUploads("interrupted");
+    await this.#dropQueuedTempTurns();
     this.#abort?.abort();
   }
 
   close(): void {
     this.#closed = true;
+    this.#dropPendingUploads("interrupted");
+    if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
+    this.#gcTimer = null;
+    void this.#dropQueuedTempTurns();
     this.#abort?.abort();
     this.#wake?.();
+  }
+
+  attachOpen(meta: UploadMeta): void {
+    if (this.#pendingUploads.size >= MAX_INFLIGHT_UPLOADS) {
+      this.#emitAttachRejected({ upload_id: meta.upload_id, reason: "count_over", detail: `in-flight=${this.#pendingUploads.size} cap=${MAX_INFLIGHT_UPLOADS}` });
+      return;
+    }
+    const result = validateOpen(meta);
+    if (!result.ok) {
+      this.#emitAttachRejected({ upload_id: meta.upload_id, reason: result.reason, ...(result.detail === undefined ? {} : { detail: result.detail }) });
+      return;
+    }
+    this.#pendingUploads.set(meta.upload_id, { meta, chunks: new Map(), sealed: false, accumulatedBytes: 0, addedAt: this.#nowMs() });
+  }
+
+  attachChunk(payload: ArrayBuffer | ArrayBufferView): void {
+    let parsed;
+    try { parsed = parseChunkPayload(payload); } catch { return; }
+    const upload = this.#pendingUploads.get(parsed.upload_id);
+    if (!upload || upload.sealed || parsed.chunk_index >= upload.meta.chunks) return;
+    const total = upload.accumulatedBytes - (upload.chunks.get(parsed.chunk_index)?.byteLength ?? 0) + parsed.bytes.byteLength;
+    if (total > upload.meta.size || total > PROTOCOL_FILE_SIZE_LIMIT_BYTES) {
+      this.#pendingUploads.delete(parsed.upload_id);
+      this.#emitAttachRejected({ upload_id: parsed.upload_id, reason: "size_over", detail: `accumulated=${total} declared=${upload.meta.size} cap=${PROTOCOL_FILE_SIZE_LIMIT_BYTES}` });
+      return;
+    }
+    upload.chunks.set(parsed.chunk_index, parsed.bytes);
+    upload.accumulatedBytes = total;
+  }
+
+  attachClose(uploadId: string): void {
+    const upload = this.#pendingUploads.get(uploadId);
+    if (!upload) return;
+    const result = validateClose(upload);
+    if (!result.ok) {
+      this.#pendingUploads.delete(uploadId);
+      this.#emitAttachRejected({ upload_id: uploadId, reason: result.reason, ...(result.detail === undefined ? {} : { detail: result.detail }) });
+      return;
+    }
+    upload.sealed = true;
+  }
+
+  tickGC(): void {
+    const cutoff = this.#nowMs() - PENDING_UPLOAD_TTL_MS;
+    for (const [uploadId, upload] of this.#pendingUploads) {
+      if (upload.addedAt < cutoff) {
+        this.#pendingUploads.delete(uploadId);
+        this.#emitAttachRejected({ upload_id: uploadId, reason: "timeout", detail: `ttl exceeded (added_at=${upload.addedAt} cutoff=${cutoff})` });
+      }
+    }
   }
 
   async setModel(value: string): Promise<void> {
@@ -487,22 +588,33 @@ export class CodexHost implements EngineAdapter {
 
     if (initialPrompt !== undefined) {
       this.#apply({ kind: "user_send" });
-      this.#queue.push(initialPrompt);
+      this.#queue.push({ input: initialPrompt });
     }
+
+    await sweepOrphanLocalImages(
+      this.#config.agent_id,
+      this.#warn,
+      new Set(this.#queue.flatMap((turn) => turn.tempDir === undefined ? [] : [turn.tempDir])),
+    );
+    this.#gcTimer = setInterval(() => this.tickGC(), PENDING_UPLOAD_GC_INTERVAL_MS);
 
     try {
       while (!this.#closed) {
-        const text = this.#queue.shift();
-        if (text === undefined) {
+        const turn = this.#queue.shift();
+        if (turn === undefined) {
           await new Promise<void>((resolve) => {
             this.#wake = resolve;
           });
           this.#wake = null;
           continue;
         }
-        await this.#runTurn(codex, text);
+        await this.#runTurn(codex, turn.input, turn.tempDir);
       }
     } finally {
+      if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
+      this.#gcTimer = null;
+      this.#dropPendingUploads("interrupted");
+      await this.#dropQueuedTempTurns();
       toolHost?.close();
     }
   }
@@ -549,7 +661,11 @@ export class CodexHost implements EngineAdapter {
     return options;
   }
 
-  async #runTurn(codex: CodexClientLike, text: string): Promise<void> {
+  async #runTurn(
+    codex: CodexClientLike,
+    input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>,
+    tempDir?: string,
+  ): Promise<void> {
     const resolutionGeneration = ++this.#modelResolutionGeneration;
     const attempted = {
       model: this.#modelPending,
@@ -581,7 +697,7 @@ export class CodexHost implements EngineAdapter {
     let finalText: string | null = null;
     let sawResult = false;
     try {
-      const { events } = await thread.runStreamed(text, {
+      const { events } = await thread.runStreamed(input, {
         signal: this.#abort.signal,
       });
       for await (const event of events) {
@@ -644,7 +760,67 @@ export class CodexHost implements EngineAdapter {
       }
     } finally {
       this.#abort = null;
+      if (tempDir !== undefined) await cleanupLocalImages(tempDir, this.#warn);
     }
+  }
+
+  #resolveAttachments(ids: string[]): PendingUpload[] | null {
+    const uploads: PendingUpload[] = [];
+    for (const id of ids) {
+      const upload = this.#pendingUploads.get(id);
+      if (!upload) {
+        this.#emitInstructionRejected({ attachment_ids: ids, reason: "timeout", detail: `unknown upload_id ${id}` });
+        return null;
+      }
+      const result = validateClose(upload);
+      if (!result.ok) {
+        this.#emitInstructionRejected({ attachment_ids: ids, reason: result.reason, ...(result.detail === undefined ? {} : { detail: result.detail }) });
+        return null;
+      }
+      uploads.push(upload);
+    }
+    return uploads;
+  }
+
+  #dropPendingUploads(reason: "interrupted"): void {
+    for (const uploadId of this.#pendingUploads.keys()) {
+      this.#emitAttachRejected({ upload_id: uploadId, reason });
+    }
+    this.#pendingUploads.clear();
+  }
+
+  /** An interrupt drops not-yet-started image turns too: their local_image
+   * paths must never outlive the cancelled instruction (ADR-0025 F3/F11). */
+  async #dropQueuedTempTurns(): Promise<void> {
+    const retained: Array<{
+      input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
+      tempDir?: string;
+    }> = [];
+    for (const turn of this.#queue) {
+      if (turn.tempDir === undefined) {
+        retained.push(turn);
+      } else {
+        await cleanupLocalImages(turn.tempDir, this.#warn);
+      }
+    }
+    this.#queue.length = 0;
+    this.#queue.push(...retained);
+  }
+
+  #warn = (message: string): void => {
+    process.stderr.write(`${message}\n`);
+  };
+
+  #emitAttachRejected(payload: AttachRejectedPayload): void {
+    this.#options.onAttachRejected?.(
+      makeAttachRejected(this.#config, this.#machine.state, this.#now(), payload),
+    );
+  }
+
+  #emitInstructionRejected(payload: InstructionRejectedPayload): void {
+    this.#options.onInstructionRejected?.(
+      makeInstructionRejected(this.#config, this.#machine.state, this.#now(), payload),
+    );
   }
 
   #finishTurn(
@@ -838,12 +1014,13 @@ export class CodexHost implements EngineAdapter {
         effectiveStatus.resolved,
       ).filter((entry) => !this.#operatorSwitchedFields.has(entry.field));
     }
-    // Session capabilities (ADR-0034 F1/F4, phase-15 15-14): advertised
+    // Session capabilities (ADR-0034 F1/F4, #112): advertised
     // from the first state_change onward (adapter-static values, no
     // thread.started await — that event fires only once a turn runs,
-    // so an idle-wait agent would stay "not yet reported"). Codex
-    // wholesale-rejects attach_open today (see cli.ts onAttachOpen);
-    // the MCP bridge exposes ask_user_question. supports_model_switch /
+    // so an idle-wait agent would stay "not yet reported"). Codex accepts
+    // image attachments only; SDK-specific local_image path mapping remains
+    // inside this adapter. The MCP bridge exposes ask_user_question.
+    // supports_model_switch /
     // supports_effort_switch are reserved for phase-16 (ADR-0035 F4).
     // supports_session_reset (ADR-0036 F5, phase-17 17-6 flip): the
     // Codex adapter now supports the F2 fresh-relaunch handshake, which

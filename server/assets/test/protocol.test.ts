@@ -899,20 +899,37 @@ describe("sessionCapabilitiesFrom (ADR-0034 F1/F2)", () => {
     expect(parsed?.supports_effort_switch === true).toBe(false);
   });
 
-  it("Codex 相当: attachments=false / dialog=true", () => {
+  it("Codex 相当: image-only attachment capability を保持する", () => {
     const envelope: Envelope = {
       ...base,
       ext: {
         session_capabilities: {
-          supports_attachments: false,
+          supports_attachments: true,
+          attachment_types: ["image"],
           supports_user_input_dialog: true,
         },
       },
     };
     expect(sessionCapabilitiesFrom(envelope)).toEqual({
-      supports_attachments: false,
+      supports_attachments: true,
+      attachment_types: ["image"],
       supports_user_input_dialog: true,
     });
+  });
+
+  it("attachment_types は closed vocabulary にし、unknown は空 restriction として fail-closed", () => {
+    const envelope: Envelope = {
+      ...base,
+      ext: { session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        attachment_types: ["image", "pdf"],
+      } },
+    };
+    expect(sessionCapabilitiesFrom(envelope)?.attachment_types).toEqual(["image"]);
+    expect(sessionCapabilitiesFrom({ ...envelope, ext: { session_capabilities: {
+      supports_attachments: true, supports_user_input_dialog: true, attachment_types: ["pdf"],
+    } } })?.attachment_types).toEqual([]);
   });
 
   it("boolean が欠けたら null (partial 判定は許可しない)", () => {

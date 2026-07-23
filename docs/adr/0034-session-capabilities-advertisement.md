@@ -43,7 +43,8 @@ session_init 相当のイベント (Claude の `SDKSystemMessage(init)`、Codex 
     "engine": "codex",
     "permission": { "sandbox": "workspace-write", "approval": "never" },
     "session_capabilities": {
-      "supports_attachments": false,
+      "supports_attachments": true,
+      "attachment_types": ["image"],
       "supports_user_input_dialog": true,
       "user_input_modes": ["plan"]
     }
@@ -60,6 +61,7 @@ session_init 相当のイベント (Claude の `SDKSystemMessage(init)`、Codex 
 | field | 型 | 意味 |
 |---|---|---|
 | `supports_attachments` | `boolean` | 添付ファイル (file upload) を受け入れるか。false のとき Composer の attach ボタンは disabled + tooltip「このセッションでは未対応」 |
+| `attachment_types` | `("image")[]` (optional) | 添付の種類制限。**absent = 種類制限なし**で既存 `supports_attachments` の意味を維持し、present = 列挙された型のみ許可する。初期 vocabulary は engine-neutral な `"image"` のみ。 |
 | `supports_user_input_dialog` | `boolean` | `ask_user_question` (MCP tool / SDK 特別分岐 いずれでも) が使えるか。false のとき AgentDetail の質問 UI 系は「未対応」表示 |
 | `user_input_modes` | `string[]` (optional) | dialog が使える権限 mode / sandbox の条件集合 (例: `["plan"]` = plan mode でのみ dialog が発火する)。空/未指定 = 無条件 |
 
@@ -81,7 +83,11 @@ UI は engine 名 (`ext.engine`) では機能可用性を判定しない。以�
 初期実装:
 
 - `wrapper/claude-code` (Claude adapter): `supports_attachments: true` / `supports_user_input_dialog: true` (無条件)。将来 SDK 側で条件が付いた際は本箇所で追加分岐。
-- `wrapper/codex` (Codex adapter): 現状 `supports_attachments: false` / `supports_user_input_dialog: true`。plan tier 判定は [codex-model-catalog](../specs/codex-model-catalog.md) の `codex doctor` 情報から派生させたいが plan tier 自体が取得不能なため、MVP は無条件 true。Free/Go plan で dialog が使えない挙動が観測されたら、その時点で `user_input_modes` を advertise する形へ縮退。
+- `wrapper/codex` (Codex adapter): `supports_attachments: true, attachment_types: ["image"]` / `supports_user_input_dialog: true`。`"image"` は adapter 内で SDK の `local_image` path input へ変換し、SDK 用語を protocol に漏らさない。Claude は `attachment_types` を advertise しないため、既存どおり種類制限なし。plan tier 判定は [codex-model-catalog](../specs/codex-model-catalog.md) の `codex doctor` 情報から派生させたいが plan tier 自体が取得不能なため、MVP は無条件 true。Free/Go plan で dialog が使えない挙動が観測されたら、その時点で `user_input_modes` を advertise する形へ縮退。
+
+### F6 — #112 attachment type addendum (2026-07-23)
+
+`attachment_types` は engine 名分岐を増やさず、session が受け入れる添付の種類を UI と wrapper に伝える。初期 closed vocabulary は `"image"` のみで、将来 `"text"` / `"pdf"` 等を追加する場合も protocol vocabulary を先に拡張する。field absent を unrestricted とすることで、既存 Claude wrapper と rolling upgrade の互換性を保つ。
 
 ### F5 — deprecation / migration
 

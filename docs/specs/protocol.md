@@ -137,6 +137,7 @@ session 単位の機能可用性を第一級表現する envelope field。engine
 
 - shape (`SessionCapabilitiesExt` 型):
   - `supports_attachments: boolean` — 添付ファイル受け入れ可否 (false 時 Composer attach ボタン disabled + tooltip「このセッションでは未対応」)
+  - `attachment_types?: ("image")[]` — 添付種類の任意の制限。**absent は従来互換で種類制限なし**、present 時は列挙型だけ許可する。SDK 固有の block 名はこの protocol に露出しない。Codex は `supports_attachments: true, attachment_types: ["image"]` を advertise し、UI は picker / paste / drop を画像に限定する。Claude は field を省略して従来どおり全対応種別を受け入れる。
   - `supports_user_input_dialog: boolean` — `ask_user_question` 可用性
   - `user_input_modes?: string[]` — dialog 発火が特定 mode / sandbox に限定される場合の条件集合 (空/未指定 = 無条件)
 - **stamp タイミング**: **spawn 直後の初回 state_change から** (session_init 相当のイベントを待たない。Codex `thread.started` は毎ターン発生モデルで初ターン発生まで到達しないため、待つと fail-closed default で誤表示になる)

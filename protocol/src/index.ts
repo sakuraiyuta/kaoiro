@@ -244,6 +244,10 @@ export interface PendingQuestionExt {
  *  engine's own default. */
 export type ModelSource = "launch" | "env" | "config" | "default";
 
+/** Engine-neutral attachment category. The initial closed vocabulary is
+ * image only; adapters map it to their SDK representation internally. */
+export type AttachmentType = "image";
+
 /** state_change.ext.session_capabilities shape (ADR-0034 F1/F2). Advertised
  *  by the adapter from the first state_change onward (spawn-direct — the
  *  session_init events like Claude's SDKSystemMessage(init) or Codex's
@@ -254,6 +258,10 @@ export type ModelSource = "launch" | "env" | "config" | "default";
  *  ("not supported"). */
 export interface SessionCapabilitiesExt {
   supports_attachments: boolean;
+  /** Optional attachment type restriction. Absent preserves the original
+   * supports_attachments=true meaning (all protocol-supported types). When
+   * present, only listed types are accepted. */
+  attachment_types?: AttachmentType[];
   supports_user_input_dialog: boolean;
   /** Optional constraint: dialog fires only in these permission modes /
    *  sandbox contexts. Absent / empty array = unconditional. */

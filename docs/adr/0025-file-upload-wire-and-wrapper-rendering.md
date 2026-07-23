@@ -69,6 +69,22 @@ rejected:
 rejected: spill-to-temp-FS / 常時 temp FS — MVP 不要、 ディスク到達原則違反。
 OQ5 で将来余地。
 
+#### #112 追補 (2026-07-23、マスター承認): Codex `local_image` 限定例外
+
+Codex SDK 0.144.1 の画像入力は bytes / base64 ではなく path を受け取る
+`local_image` block だけである。このため Codex wrapper に限り、**画像のみ**を
+instruction 受理後に wrapper-private temp directory へ materialize して SDK に渡す。
+directory は `mkdtemp` (0700)、file は 0600、prefix に `agent_id` を含め、自分の
+orphan だけを次回起動時に sweep する。`image/*` の形式細別 allow-list は持たず、
+SDK が不受理なら既存 turn error 経路で表面化する。上限は F4 の一律 128 MB をその
+まま適用し、種別別 cap を導入しない。
+
+成功・失敗・interrupt を含む turn 完了時に file と directory を必ず削除する。
+cleanup 失敗は stderr warn で loud に残し、次回起動時の prefix-scoped sweep で回収する。
+F11 の interrupt drop semantics にはこの temp file cleanup も含む。これは SDK が
+path 入力しか受理しないこと、会話内容自体は SDK rollout により既に disk 永続される
+ことを踏まえた限定的な受容判断であり、マスターが 2026-07-23 に承認した。
+
 ### F4: 個別ファイル上限 = 一律 128 MB
 
 UI スクショ・ デザインデータ・ 大物論文等の多種多様な入力を「リソース
