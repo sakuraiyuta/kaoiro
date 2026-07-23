@@ -135,6 +135,15 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     }
 
     assert {:stop, :shutdown, ^socket} = WrapperChannel.handle_info(:after_join, socket)
+
+    # ふじ 4th advisory 1 (2026-07-23): stop の前に persona_prompt を
+    # 決して push しないことも直接 pin。`{:stop, ...}` を返しても実装が
+    # うっかり先に push(socket, "persona_prompt", …) してしまう改変を
+    # 検出する security property test — revoked agent には prompt を
+    # 与えないという不変条件が「実装順序」に依存することを回避する。
+    # (fake socket は transport_pid: self() で push を test 側の
+    # mailbox へ落とすので refute_push が有効。)
+    refute_push "persona_prompt", %{}, 50
   end
 
   # 陽性 case (guard が誤発火しない) の pin: denylist に居ないなら

@@ -24,6 +24,7 @@ import {
   filterInterAgentTargetsByWatermark,
   filterAfterHistoryCleared,
   mergeHistories,
+  projectAndMergeHistory,
   resultOf,
   resetTranscriptHistory,
   resumeDriftFrom,
@@ -556,18 +557,22 @@ describe("inter-agent history replay (#105)", () => {
     };
 
     // App.svelte onHistory の glue と 1 対 1 対応する compose 関数。
-    // 引数は payload の raw shape (server から届く形) + 前回まで
-    // client 側に貯まっていた local logs。返り値は post-merge logs。
+    // ふじ 4th advisory 2 (2026-07-23): production helper
+    // `projectAndMergeHistory` を呼ぶだけの薄いラッパ。App の glue も
+    // 同じ helper を呼ぶので、この test は本物の production 経路を
+    // 通しで pin することになる (旧版は fanOut/merge を手動合成して
+    // いたので drift 余地があった)。
     function applyOnHistory(
       payload: unknown,
       local: Record<string, Envelope[]> = {},
     ): Record<string, Envelope[]> {
       const parsed = parseHistoryPayload(payload);
-      const projected =
-        parsed.projection === "per-pane-v1"
-          ? parsed.histories
-          : fanOutInterAgentHistory(parsed.histories, parsed.clearWatermarks);
-      return mergeHistories(projected, local);
+      return projectAndMergeHistory(
+        parsed.histories,
+        parsed.clearWatermarks,
+        parsed.projection,
+        local,
+      );
     }
 
     it("quadrant 1: new server + new client (marker=per-pane-v1, direct merge)", () => {

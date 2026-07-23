@@ -1357,6 +1357,36 @@ export function parseHistoryReset(
   };
 }
 
+/** ふじ 4th advisory 2 (2026-07-23): single production helper that
+ *  wraps the `onHistory` glue App.svelte used to inline (branch on
+ *  projection marker → fanOut fallback for markerless legacy servers →
+ *  merge with local live-buffer). Extracted so App and the R3 composite
+ *  table test both call the same code path — the pre-4th test's
+ *  `applyOnHistory` was a hand-rolled re-implementation that could
+ *  drift silently.
+ *
+ *  Contract:
+ *    - `projection === "per-pane-v1"` → server already fanned out per
+ *      pane; use `histories` directly.
+ *    - anything else (undefined, unknown value, empty string) → legacy
+ *      sender-keyed payload; run `fanOutInterAgentHistory` to build
+ *      the receiver copies before merge.
+ *    - `mergeHistories` dedupes by identity key so the old-client +
+ *      new-server case (marker ignored, fanOut re-adds a receiver
+ *      copy already present) collapses to one visible copy per pane. */
+export function projectAndMergeHistory(
+  histories: Record<string, Envelope[]>,
+  clearWatermarks: Record<string, string>,
+  projection: string | undefined,
+  local: Record<string, Envelope[]>,
+): Record<string, Envelope[]> {
+  const projected =
+    projection === "per-pane-v1"
+      ? histories
+      : fanOutInterAgentHistory(histories, clearWatermarks);
+  return mergeHistories(projected, local);
+}
+
 /** ふじ A2 must-fix (2026-07-23, 3rd review): merges a per-agent history
  *  map (`histories`, from `onHistory`) with a per-agent live-buffer
  *  map (`local`, accumulated between join and the history push). Each

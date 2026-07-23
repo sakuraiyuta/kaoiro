@@ -20,14 +20,13 @@
   import {
     connectKaoiro,
     defaultSocketUrl,
-    fanOutInterAgentHistory,
     fetchPersonaManifest,
     filterAfterHistoryCleared,
     filterInterAgentTargetsByWatermark,
     formatAgentLabel,
     isReplyEnvelope,
-    mergeHistories,
     mergeTranscriptEntries,
+    projectAndMergeHistory,
     resetTranscriptHistory,
   } from "./lib/protocol";
   import {
@@ -322,17 +321,18 @@
           // live-clear UI.
           //
           // ふじ R3 must-fix (2026-07-23): the projection marker gates
-          // the rolling-upgrade window. `"per-pane-v1"` = server already
-          // fanned out; merge directly. `undefined` = legacy server
-          // still keys IA by sender only; run the client-side fanOut so
-          // the receiver pane picks up its copy. Future markers just
-          // extend the case list.
+          // the rolling-upgrade window (per-pane-v1 → direct merge,
+          // absent → legacy fanOut). ふじ 4th advisory 2 (same date):
+          // the projection-branch + fanOut + merge chain lives in
+          // `projectAndMergeHistory` so this glue and the R3 composite
+          // table test call the same production helper.
           clearWatermarks = { ...clearWatermarks, ...watermarks };
-          const projected =
-            projection === "per-pane-v1"
-              ? histories
-              : fanOutInterAgentHistory(histories, clearWatermarks);
-          logs = mergeHistories(projected, logs);
+          logs = projectAndMergeHistory(
+            histories,
+            clearWatermarks,
+            projection,
+            logs,
+          );
         },
         onHistoryCleared: (agentId, sessionId, watermark) => {
           // An operator purged past-session lines (#48); keep only the

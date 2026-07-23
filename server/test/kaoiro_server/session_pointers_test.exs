@@ -11,7 +11,17 @@ defmodule KaoiroServer.SessionPointersTest do
     {:ok, pid} = SessionPointers.start_link(name: name, path: path)
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      # ふじ 4th advisory 3 (2026-07-23): Process.alive?/1 と
+      # GenServer.stop/1 の間に process が natural に死ぬと stop が
+      # `no process` で exit する TOCTOU flake が観測された (今回差分
+      # とは無関係の既存問題)。try/catch で cushion — テスト本体は
+      # 既に完了しているので on_exit を fail させない。
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
+      end
+
       File.rm(path)
     end)
 
