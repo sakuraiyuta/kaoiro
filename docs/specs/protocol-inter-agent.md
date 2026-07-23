@@ -246,7 +246,7 @@ agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの�
 （`body` / `meta` を含む）をその **同じ tool result** で返す。
 
 - 既定は `false` であり、既存の fire-and-forget / 次turn注入の挙動は不変。
-- `timeout_ms` は省略時 60,000ms、正の整数、最大 300,000ms。timeout時は
+- `timeout_ms` は省略時 300,000ms、正の整数、最大 300,000ms。timeout時は
   送信済み ack と `reply_pending=true` を返し、送信を取り消さない。
 - waiter が受け取った envelope は次 SDK turn へ重複注入しない。timeout後に
   遅れて到着した envelope は通常どおり次turn注入する。

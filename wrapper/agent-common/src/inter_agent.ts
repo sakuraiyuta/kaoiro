@@ -80,7 +80,7 @@ const KIND_VALUES = [
 
 /** Default wait chosen for synchronous peer collaboration. Callers may raise
  * it to the master-approved hard maximum below for a long-running peer. */
-const DEFAULT_REPLY_TIMEOUT_MS = 60_000;
+const DEFAULT_REPLY_TIMEOUT_MS = 300_000;
 const MAX_REPLY_TIMEOUT_MS = 300_000;
 
 /** Zod raw shape of send_to_agent's input — the SSOT the Claude adapter
@@ -144,7 +144,7 @@ export const SEND_TO_AGENT_INPUT_SHAPE = {
     .max(MAX_REPLY_TIMEOUT_MS)
     .optional()
     .describe(
-      "Maximum synchronous wait in milliseconds when wait_for_response=true (default 60000, maximum 300000).",
+      "Maximum synchronous wait in milliseconds when wait_for_response=true (default and maximum 300000).",
     ),
 };
 

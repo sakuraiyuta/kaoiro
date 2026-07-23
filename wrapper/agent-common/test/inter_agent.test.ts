@@ -187,13 +187,13 @@ describe("InterAgentTool", () => {
         kind: "query",
         conversation_id: "cnv-timeout",
         wait_for_response: true,
-        timeout_ms: 10,
       });
 
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(300_000);
       const { result } = await pending;
       expect(result.content[0]!.text).toContain("sent to peer.agent");
       expect(result.content[0]!.text).toContain("reply_pending=true");
+      expect(result.content[0]!.text).toContain("timeout_ms=300000");
       expect(tool.receiveInbound(inboundEnvelope("cnv-timeout"))).toBe(false);
     } finally {
       vi.useRealTimers();
