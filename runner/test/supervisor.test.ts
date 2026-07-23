@@ -1105,6 +1105,80 @@ describe("resume-privilege-restoration apply (藤 D1/D2, P0)", () => {
     });
   });
 
+  // phase-25: fresh-restore 経路 (ADR-0030 D8 追補)。session_id を失った
+  // pointer から server が resume_session_id を積まず apply_resume_snapshot
+  // だけ立てて fresh spawn を投げてくるケースで、runner が snapshot を
+  // engine 軸へ apply することを pin する。
+  describe("fresh-restore (apply_resume_snapshot flag、phase-25)", () => {
+    it("Codex: apply_resume_snapshot=true + snapshot ありで fresh spawn の sandbox / network が snapshot 由来になる", () => {
+      const h = harness();
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        apply_resume_snapshot: true,
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      // fresh: resume_session_id なし = launch には --resume が渡らない。
+      expect(h.resumes[0]).toBeUndefined();
+      expect(h.configs[0]!.sandbox).toBe("danger-full-access");
+      expect(h.configs[0]!.network_access).toBe(true);
+    });
+
+    it("Claude: apply_resume_snapshot=true で model/effort/permission_mode が snapshot 由来で launch される", () => {
+      const h = harness();
+      h.sup.handleSpawn({
+        ...claudeSpawn,
+        apply_resume_snapshot: true,
+        resume_snapshot: {
+          model: "claude-opus-4-7",
+          model_source: "launch",
+          effort: "high",
+          effort_source: "launch",
+          permission_mode: "bypassPermissions",
+        },
+      });
+      expect(h.resumes[0]).toBeUndefined();
+      expect(h.configs[0]!.model).toBe("claude-opus-4-7");
+      expect(h.configs[0]!.model_source).toBe("launch");
+      expect(h.configs[0]!.effort).toBe("high");
+      expect(h.configs[0]!.effort_source).toBe("launch");
+      expect(h.configs[0]!.permission_mode).toBe("bypassPermissions");
+    });
+
+    it("apply_resume_snapshot なし fresh spawn は resume_snapshot が居ても apply されない (D1 pin 維持)", () => {
+      const h = harness();
+      // 25-6 の実装で apply_resume_snapshot 未指定時は従来の no-apply
+      // semantics を維持することの regression pin。
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        sandbox: "read-only",
+        network_access: false,
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      expect(h.configs[0]!.sandbox).toBe("read-only");
+      expect(h.configs[0]!.network_access).toBe(false);
+    });
+
+    it("apply_resume_snapshot=true + snapshot なしは engine default に降格 (fail-soft)", () => {
+      const h = harness();
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        // top-level に何も指定しない状態で fresh-restore 要求
+        apply_resume_snapshot: true,
+      });
+      // applyResumeSnapshot は snapshot undefined で no-op、なので top-level
+      // が空なら wrapper config も engine default に落ちる (Codex は
+      // sandbox / network_access キー自体を積まない)。
+      expect(h.configs[0]!.sandbox).toBeUndefined();
+      expect(h.configs[0]!.network_access).toBeUndefined();
+    });
+  });
+
   describe("handleSwitchSession", () => {
     it("Codex live switch: payload.resume_snapshot の sandbox / network を relaunch config に apply", () => {
       const h = harness({ exists: true });
