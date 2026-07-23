@@ -161,17 +161,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # directory carries persona (+ operator-picked custom name) so the client
     # can render offline agents' tiles for the restore UI (ADR-0030 D5).
     if role == :operator do
-      # `clear_watermarks` (issue #109) rides the same push so a rejoining
-      # client can filter durable IA that predates each agent's most recent
-      # `clear_history`. Empty map = no clears recorded (either fresh state
-      # or all-purged). Missing key on legacy clients is treated as `{}`
-      # (unknown key = ignored, forward-compatible additive field — no
-      # protocol version bump).
-      watermarks = ClearWatermarks.all()
-
+      # `clear_watermarks` (issue #109) rides the same push as a
+      # display-only hint (agent_id => ISO ts) so a live dashboard can
+      # show "cleared at ..." without a follow-up round trip. The
+      # authoritative filter has already run server-side inside
+      # `merged_histories/0` before this push — the client does NOT do
+      # its own IA fanOut anymore (ふじ M6/M7 fix, 2026-07-23). Missing
+      # key on a legacy client is ignored (additive, no protocol
+      # version bump).
       push(socket, "history", %{
-        "agents" => merged_histories(watermarks),
-        "clear_watermarks" => watermarks
+        "agents" => merged_histories(),
+        "clear_watermarks" => ClearWatermarks.all_displays()
       })
 
       push(socket, "hosts", %{"hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())})
@@ -639,19 +639,25 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_agent_id(payload),
          {:ok, session_id} <- AgentStates.clear_other_sessions(agent_id) do
-      # Watermark this clear so durable inter-agent messages that predate
-      # it stay hidden from the cleared agent's transcript on subsequent
-      # reloads (issue #109). The peer's own pane is unaffected — the
-      # ledger is untouched and only the merge into agent_id's transcript
-      # runs the filter. Ride the ts back on the broadcast so live
-      # dashboards update their local watermark map without a reload.
-      watermark = DateTime.utc_now() |> DateTime.to_iso8601()
-      ClearWatermarks.record(agent_id, watermark)
+      # Watermark this clear on the same server ingress ordering domain
+      # `InterAgentHistory.append/2` uses (`{system_time_microsecond,
+      # unique_integer_positive_monotonic}`), so a subsequent
+      # `merged_histories/1` filter compares apples to apples — no
+      # host-clock skew leak (ふじ #109 M6 must-fix). The ISO string
+      # goes on the broadcast as display-only audit hint. `record/4` is
+      # synchronous + fsync-gated (M7-a), so the broadcast below cannot
+      # outrun disk persistence.
+      order =
+        {System.system_time(:microsecond),
+         System.unique_integer([:positive, :monotonic])}
+
+      display = DateTime.utc_now() |> DateTime.to_iso8601()
+      :ok = ClearWatermarks.record(agent_id, order, display)
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_cleared", %{
         "agent_id" => agent_id,
         "session_id" => session_id,
-        "clear_watermark" => watermark
+        "clear_watermark" => display
       })
 
       {:reply, :ok, socket}
@@ -713,14 +719,42 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # Removes the agent from every server-side store. AgentStates.delete keeps
-  # the disconnected guard (a live agent cannot be dropped); a directory-only
-  # entry skips that step (never in AgentStates) and still purges the DETS
-  # ledgers. AgentDirectory / SessionPointers / PermissionModes /
-  # InterAgentHistory deletes are
-  # idempotent, so a stale pointer for an already-vanished AgentStates entry
-  # still yields :ok — a single delete request cleans up everything.
+  # Removes the agent from every server-side store, in the order the
+  # ふじ #72 M3 must-fix requires:
+  #
+  #   1. eligibility (require_disconnected — caller already ran this
+  #      via delete_live_if_present, but we double-check by NOT touching
+  #      AgentStates until step 4, so a live agent whose disconnect
+  #      raced this call cannot be dropped from under its wrapper)
+  #   2. token revoke + fsync (TokenDenylist.revoke — synchronous +
+  #      DETS sync) BEFORE anything else, so a crash between reply and
+  #      finish cannot leave a still-valid token behind
+  #   3. live cut-off: broadcast `revoked` on `wrapper:<id>` so any
+  #      channel that raced in between step 2 and step 4 is closed
+  #      (issue #72: without this, a live channel that joined after
+  #      revoke but before AgentStates.delete would keep pushing
+  #      envelopes until the wrapper reconnects)
+  #   4. finally, purge every other store (AgentStates + DETS ledgers).
+  #      Any of these failing after revoke is safe — the token stays
+  #      revoked and an operator retry finishes the cleanup.
   defp purge_agent_records(agent_id) do
+    # Step 2: token revoke + fsync — synchronous ClearWatermarks / DETS
+    # semantics also make `TokenDenylist.revoke/3` block on `:dets.sync`.
+    revoked_at = DateTime.utc_now() |> DateTime.to_iso8601()
+    :ok = TokenDenylist.revoke(agent_id, revoked_at)
+
+    # Step 3: broadcast revoke so any channel that grabbed a socket in
+    # the split-second between step 2 and step 4 is force-closed. Same
+    # topic the operator `revoke_wrapper_token` handler uses, same
+    # `handle_out("revoked", …)` shutdown.
+    KaoiroServerWeb.Endpoint.broadcast(
+      "wrapper:#{agent_id}",
+      "revoked",
+      %{"reason" => "agent_deleted", "revoked_at" => revoked_at}
+    )
+
+    # Step 4: purge every other store (order among them is unimportant —
+    # they are all idempotent and independent).
     with :ok <- delete_live_if_present(agent_id) do
       AgentDirectory.delete(agent_id)
       SessionPointers.delete(agent_id)
@@ -733,29 +767,35 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # under the same agent_id starts fresh (no lingering hide-past
       # filter from a prior operator).
       ClearWatermarks.delete(agent_id)
-      # issue #72: seed the token denylist with this agent_id so any
-      # still-valid signed wrapper token for it can never re-join, even
-      # in the vanishingly rare case that a future spawn's
-      # `<host>.<rand>` collides with this deleted id. Kept ACROSS
-      # server restarts (DETS) and NOT reversed by any other purge.
-      revoked_at = DateTime.utc_now() |> DateTime.to_iso8601()
-      TokenDenylist.revoke(agent_id, revoked_at)
       :ok
     end
   end
 
-  # Ordinary log/result/boundary history remains memory-only and is rebuilt
-  # from SDK JSONL. Structured IA cannot be rebuilt, so DETS is authoritative
-  # for that type. Drop volatile IA before merging to avoid live-run doubles.
+  # Ordinary log/result/boundary history remains memory-only and is
+  # rebuilt from SDK JSONL. Structured IA cannot be rebuilt, so DETS is
+  # authoritative for that type. Drop volatile IA before merging to
+  # avoid live-run doubles.
   #
-  # `watermarks` (issue #109): agent_id => ISO-8601 UTC timestamp. Durable
-  # IA whose sender was cleared at or after the envelope's ts is dropped
-  # from THAT sender's transcript key here. The receiver-side filter runs
-  # on the client during fanOut (protocol.ts fanOutInterAgentHistory) —
-  # doing it there lets the same envelope stay visible in the peer's pane
-  # (whose watermark may not cover it), which is exactly the "peer 側の
-  # 表示にも影響なし" semantics クロエ D 2026-07-23 nails down.
-  defp merged_histories(watermarks) do
+  # Server-authoritative per-pane projection (ふじ #109 M6/M7 must-fix,
+  # 2026-07-23):
+  #   1. Load durable IA WITH its server-ingress order tuple, then
+  #      fan it out to both the sender's key AND the receiver's key —
+  #      the client no longer does its own fanOut on the history push
+  #      (it still fans a LIVE IA to both panes; that path stays in
+  #      onEnvelope for real-time delivery latency).
+  #   2. Per pane, drop IA whose order tuple is `<= watermark(pane)`.
+  #      Both sender-view and receiver-view filters run in the same
+  #      ordering domain the watermark was recorded in, so a wrapper's
+  #      producer clock skew cannot misclassify a cutoff crossing.
+  #   3. Merge with the volatile non-IA histories, sort chronologically
+  #      by wire `{ts, seq}` (display ordering, same key
+  #      `compareTranscriptEnvelopes` uses on the client).
+  #
+  # Peer transcripts stay untouched — dropping an entry from receiver's
+  # pane by receiver's watermark does not touch what sender's pane
+  # shows (the same envelope is filtered per pane by that pane's own
+  # cutoff, so the "peer 側 表示にも影響なし" contract holds).
+  defp merged_histories do
     volatile_without_ia =
       AgentStates.histories()
       |> Enum.flat_map(fn {agent_id, entries} ->
@@ -764,16 +804,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
       end)
       |> Map.new()
 
-    durable_filtered =
-      InterAgentHistory.all()
-      |> Enum.flat_map(fn {sender_id, entries} ->
-        kept = filter_ia_by_watermark(entries, Map.get(watermarks, sender_id))
-        if kept == [], do: [], else: [{sender_id, kept}]
-      end)
-      |> Map.new()
+    watermark_orders = ClearWatermarks.all_orders()
+    durable_by_pane = pre_fanout_and_filter(watermark_orders)
 
     volatile_without_ia
-    |> Map.merge(durable_filtered, fn _agent_id, volatile, durable ->
+    |> Map.merge(durable_by_pane, fn _agent_id, volatile, durable ->
       volatile ++ durable
     end)
     |> Map.new(fn {agent_id, entries} ->
@@ -786,22 +821,56 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end)
   end
 
-  # Drops IA entries whose envelope `ts` is at or before the watermark —
-  # the sender-side half of the issue #109 filter. Watermark nil = never
-  # cleared, keep everything. Envelope without a ts field survives (a
-  # malformed record without a ts cannot be time-ordered anyway; the
-  # separate write-side gate in InterAgentHistory keeps genuine garbage
-  # out). ISO-8601 UTC strings compare lexicographically in time order,
-  # so no DateTime parse is needed here.
-  defp filter_ia_by_watermark(entries, nil), do: entries
-
-  defp filter_ia_by_watermark(entries, watermark) when is_binary(watermark) do
-    Enum.reject(entries, fn envelope ->
-      case Map.get(envelope, "ts") do
-        ts when is_binary(ts) -> ts <= watermark
-        _ -> false
-      end
+  # Pre-fanOut IA envelopes to sender AND receiver panes, then drop
+  # entries whose server order tuple is `<= watermark(pane)`. Watermark
+  # absent (nil) = never cleared, keep the entry (regression pin for
+  # the pre-M6 default behaviour). Envelopes whose payload has no `"to"`
+  # (server-synthesized skeletons) are only visible in the sender's
+  # pane, matching the wrapper-side fanOut policy.
+  defp pre_fanout_and_filter(watermark_orders) do
+    InterAgentHistory.all_with_order()
+    |> Enum.reduce(%{}, fn {sender_id, entries}, acc ->
+      Enum.reduce(entries, acc, fn {order, envelope}, acc2 ->
+        acc2
+        |> maybe_add_to_pane(sender_id, order, envelope, watermark_orders)
+        |> maybe_fanout_to_receiver(order, envelope, watermark_orders, sender_id)
+      end)
     end)
+  end
+
+  # Adds `envelope` to `pane_agent_id`'s bucket unless the pane's
+  # watermark order dominates the envelope's server order.
+  defp maybe_add_to_pane(acc, pane_agent_id, order, envelope, watermark_orders) do
+    if hidden_by?(watermark_orders, pane_agent_id, order) do
+      acc
+    else
+      Map.update(acc, pane_agent_id, [envelope], fn existing -> existing ++ [envelope] end)
+    end
+  end
+
+  # If the envelope has a valid receiver id that is NOT the same as the
+  # sender, add it to the receiver's pane too (subject to that pane's
+  # watermark).
+  defp maybe_fanout_to_receiver(acc, order, envelope, watermark_orders, sender_id) do
+    case get_in(envelope, ["payload", "to"]) do
+      to when is_binary(to) and to != "" and to != sender_id ->
+        maybe_add_to_pane(acc, to, order, envelope, watermark_orders)
+
+      _ ->
+        acc
+    end
+  end
+
+  # BEAM's term ordering handles the tuple comparison; `nil` watermark
+  # means never cleared → never hidden.
+  defp hidden_by?(watermark_orders, agent_id, order) do
+    case Map.get(watermark_orders, agent_id) do
+      {us, uniq} = watermark when is_integer(us) and is_integer(uniq) ->
+        order <= watermark
+
+      _ ->
+        false
+    end
   end
 
   defp delete_live_if_present(agent_id) do

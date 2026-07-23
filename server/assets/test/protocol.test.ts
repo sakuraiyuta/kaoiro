@@ -345,40 +345,31 @@ describe("inter-agent history replay (#105)", () => {
     type: "log",
   };
 
-  it("sender-keyed history を sender と receiver の両 transcript へ展開する", () => {
-    const expanded = fanOutInterAgentHistory({ "agent-a": [message, log] });
-    expect(expanded["agent-a"]).toEqual([log, message]);
-    expect(expanded["agent-b"]).toEqual([message]);
+  it("issue #109 M6/M7 (2026-07-23): server 側が pre-fan-out + pre-filter 済みなので client shim は identity + sort", () => {
+    // 新しい semantics: server から受け取る histories は既に per-pane
+    // 状態 (sender/receiver 双方に fan-out 済み + 各 pane の watermark で
+    // filter 済み)。client shim は pane 内 sort だけを行い、fanOut は
+    // しない (重複 dedup を避けるため)。
+    const perPane = {
+      "agent-a": [log, message],
+      "agent-b": [message],
+    };
+    const out = fanOutInterAgentHistory(perPane);
+    expect(out["agent-a"]).toEqual([log, message]);
+    expect(out["agent-b"]).toEqual([message]);
   });
 
-  it("issue #109: receiver の clear watermark が envelope.ts 以上なら peer pane から drop", () => {
-    // agent-b (receiver) の watermark が envelope.ts と同じ → drop (<=)。
-    const expanded = fanOutInterAgentHistory(
-      { "agent-a": [message] },
-      { "agent-b": message.ts },
-    );
-    // sender pane (server で既に filter 済みだが、client fanOut は sender
-    // pane 由来のエントリを丸ごと入れる、そこは既存挙動と一致)。
-    expect(expanded["agent-a"]).toEqual([message]);
-    // receiver pane では drop されているので key 自体が生えない。
-    expect(expanded["agent-b"]).toBeUndefined();
-  });
-
-  it("issue #109: receiver の watermark が envelope.ts より古ければ peer pane に届く", () => {
-    const older = "2026-07-13T04:00:00Z"; // message.ts (05:00:00Z) より前
-    const expanded = fanOutInterAgentHistory(
-      { "agent-a": [message] },
-      { "agent-b": older },
-    );
-    expect(expanded["agent-b"]).toEqual([message]);
-  });
-
-  it("issue #109: 該当 pane に watermark 未設定なら従来どおり fanOut される (regression pin)", () => {
-    const expanded = fanOutInterAgentHistory(
-      { "agent-a": [message] },
-      { "unrelated-agent": "2999-01-01T00:00:00Z" },
-    );
-    expect(expanded["agent-b"]).toEqual([message]);
+  it("issue #109 M6/M7: 廃止された clearWatermarks 引数を受けても filter しない (deprecated shim)", () => {
+    // 旧 API 互換のため 2 引数目を受けるが、server-authoritative filter
+    // 化に伴い client 側の filter は無効。server 側テスト
+    // (server/test/kaoiro_server_web/channels/agents_channel_test.exs の
+    // 「watermark 未記録の agent は durable IA が全部見える」 と 「clear
+    // watermark より古い ingress order の durable IA は sender pane から
+    // drop」 参照) で真の filter を pin する。
+    const perPane = { "agent-a": [message] };
+    // どんな watermark を渡しても client 側は変えない。
+    expect(fanOutInterAgentHistory(perPane, { "agent-a": "2099-01-01T00:00:00Z" }))
+      .toEqual({ "agent-a": [message] });
   });
 
   it("resume history_reset では inter-agent envelope だけを保持する", () => {

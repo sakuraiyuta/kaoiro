@@ -317,13 +317,14 @@
           }
         },
         onHistory: (histories, watermarks) => {
-          // issue #109: persist watermarks BEFORE fan-out so the receiver-side
-          // filter uses the freshest values on the same push.
+          // issue #109 M6/M7 (2026-07-23): server pre-fans-out and
+          // pre-filters IA per pane using its ingress ordering domain,
+          // so `histories` already reflects the authoritative view for
+          // every agent. The client-side fanOut is retired to prevent
+          // double-counting the sender copy. Watermarks are kept only
+          // as a display hint for the live-clear UI.
           clearWatermarks = { ...clearWatermarks, ...watermarks };
-          logs = mergeHistories(
-            fanOutInterAgentHistory(histories, clearWatermarks),
-            logs,
-          );
+          logs = mergeHistories(histories, logs);
         },
         onHistoryCleared: (agentId, sessionId, watermark) => {
           // An operator purged past-session lines (#48); keep only the

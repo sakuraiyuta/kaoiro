@@ -38,6 +38,21 @@ defmodule KaoiroServer.InterAgentHistory do
     GenServer.call(server, :all)
   end
 
+  @doc """
+  Same as `all/1` but each entry is `{order, envelope}` where `order` is
+  the server-ingress monotonic tuple stamped at `append/2` time
+  (`{system_time_microsecond, unique_integer_positive_monotonic}`).
+  Consumers (agents_channel `merged_histories/*`) compare that order
+  against the same-domain `KaoiroServer.ClearWatermarks.get_order/2`
+  cutoff to filter IA visibility — this is the single server-side
+  ordering domain that closes the clock-owner / lexicographic-string
+  compare gap between wrapper producer clocks and server clear ts
+  (ふじ #109 M6 must-fix).
+  """
+  def all_with_order(server \\ __MODULE__) do
+    GenServer.call(server, :all_with_order)
+  end
+
   @doc "Purge messages sent by or addressed to a deleted agent."
   def delete_agent(agent_id, server \\ __MODULE__) do
     GenServer.call(server, {:delete_agent, agent_id})
@@ -86,6 +101,16 @@ defmodule KaoiroServer.InterAgentHistory do
           authored != %{},
           into: %{},
           do: {agent_id, chronological(authored)}
+
+    {:reply, histories, state}
+  end
+
+  def handle_call(:all_with_order, _from, state) do
+    histories =
+      for {agent_id, authored} <- state.entries,
+          authored != %{},
+          into: %{},
+          do: {agent_id, chronological_with_order(authored)}
 
     {:reply, histories, state}
   end
@@ -163,6 +188,12 @@ defmodule KaoiroServer.InterAgentHistory do
     authored
     |> Enum.sort_by(fn {_key, {order, _envelope}} -> order end)
     |> Enum.map(fn {_key, {_order, envelope}} -> envelope end)
+  end
+
+  defp chronological_with_order(authored) do
+    authored
+    |> Enum.sort_by(fn {_key, {order, _envelope}} -> order end)
+    |> Enum.map(fn {_key, {order, envelope}} -> {order, envelope} end)
   end
 
   defp open_table(name, path) do

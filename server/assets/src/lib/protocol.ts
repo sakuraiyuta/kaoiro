@@ -709,42 +709,25 @@ export function mergeTranscriptEntries(
   return merged.sort(compareTranscriptEnvelopes);
 }
 
-/** Expands server history into the same per-agent transcript routing used by
- * live envelopes. AgentStates retains the sender copy; replay must also copy
- * it to payload.to so reload and live delivery are symmetric (#105).
- *
- * Optional `clearWatermarks` (issue #109): `agent_id => ISO-8601 UTC ts`
- * from server's `clear_history` state. When set, inter-agent envelopes are
- * dropped from a pane whose agent has a watermark at or after the
- * envelope's ts. The server pre-applies the sender-side filter (its
- * sender-keyed `InterAgentHistory.all()` is filtered before being sent
- * over the wire), so the same envelope arriving here has already been
- * hidden from its sender's pane. This function is responsible for the
- * receiver-side half of the filter: an envelope fan-out to `payload.to`
- * is dropped if that receiver's watermark covers it. Doing it here keeps
- * peer transcripts unaffected by an unrelated agent's clear — exactly
- * the "peer 側の表示にも影響なし" semantics. */
+/** Deprecated shim retained for one release for external callers
+ *  (issue #109 M6/M7, 2026-07-23): the server now pre-fans-out AND
+ *  pre-filters `inter_agent_message` history entries per pane using its
+ *  own ingress ordering domain, so the client must not re-fanOut on top
+ *  of what it already received (doing so would duplicate the sender
+ *  copy). Kept as an identity-with-sort so App.svelte's build stays
+ *  compatible during the transition. New code MUST NOT call this;
+ *  App.svelte's `onHistory` now feeds `mergeHistories` directly.
+ *  `clearWatermarks` is ignored — the server owns the filter. */
 export function fanOutInterAgentHistory(
   histories: Record<string, Envelope[]>,
-  clearWatermarks: Record<string, string> = {},
+  _clearWatermarks: Record<string, string> = {},
 ): Record<string, Envelope[]> {
-  const expanded: Record<string, Envelope[]> = {};
+  void _clearWatermarks;
+  const out: Record<string, Envelope[]> = {};
   for (const [id, entries] of Object.entries(histories)) {
-    expanded[id] = [...(expanded[id] ?? []), ...entries];
-    for (const envelope of entries) {
-      if (envelope.type !== "inter_agent_message") continue;
-      const to = (envelope.payload as { to?: unknown } | undefined)?.to;
-      if (typeof to === "string" && to !== "" && to !== id) {
-        const wm = clearWatermarks[to];
-        if (typeof wm === "string" && envelope.ts <= wm) continue;
-        expanded[to] = [...(expanded[to] ?? []), envelope];
-      }
-    }
+    out[id] = [...entries].sort(compareTranscriptEnvelopes);
   }
-  for (const entries of Object.values(expanded)) {
-    entries.sort(compareTranscriptEnvelopes);
-  }
-  return expanded;
+  return out;
 }
 
 /** Resume JSONL replay cannot reconstruct structured inter-agent payloads. */
