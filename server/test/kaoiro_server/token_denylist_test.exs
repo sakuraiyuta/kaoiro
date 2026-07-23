@@ -82,4 +82,53 @@ defmodule KaoiroServer.TokenDenylistTest do
   test "restore は未 revoke agent でも :ok (冪等)", %{server: server} do
     assert TokenDenylist.restore("a.none", server) == :ok
   end
+
+  # M2 (ふじ #72 must-fix): fail-closed startup on store corruption.
+  # Sibling stores auto-recreate empty on unreadable DETS files; here
+  # that would silently drop every revoked agent_id and let it join
+  # again. Test both (a) whole-file corruption and (b) malformed row.
+  # In both cases start_link must return `{:error, ...}` (init fails),
+  # and the DETS file must remain on disk for forensic inspection.
+  test "corrupt file は fail-closed で start_link error 、file は forensic 用に保持" do
+    name = :"td_corrupt_#{System.unique_integer([:positive])}"
+    path = Path.join(System.tmp_dir!(), "#{name}.dets")
+    # Write non-DETS bytes so :dets.open_file rejects it.
+    File.write!(path, "not a dets file")
+    on_exit(fn -> File.rm(path) end)
+
+    Process.flag(:trap_exit, true)
+
+    assert {:error, {:token_denylist_open_failed, _reason, ^path}} =
+             TokenDenylist.start_link(name: name, path: path)
+
+    # forensic: file が silently 削除されていないこと。
+    assert File.exists?(path)
+    assert File.read!(path) == "not a dets file"
+  end
+
+  test "malformed row は fail-closed で load error に落ちる (silent drop 禁止)" do
+    name = :"td_malformed_#{System.unique_integer([:positive])}"
+    path = Path.join(System.tmp_dir!(), "#{name}.dets")
+    File.rm(path)
+
+    # まず正常な DETS ファイルを作る (empty)。
+    {:ok, pid} = TokenDenylist.start_link(name: name, path: path)
+    GenServer.stop(pid)
+
+    # DETS を再 open して schema drift を注入 (3-tuple、value shape 違反)。
+    {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
+    :ok = :dets.insert(name, {"corrupted", "should be", "2-tuple only"})
+    :ok = :dets.close(name)
+
+    on_exit(fn -> File.rm(path) end)
+    Process.flag(:trap_exit, true)
+
+    name2 = :"td_malformed_load_#{System.unique_integer([:positive])}"
+
+    assert {:error, {:token_denylist_load_failed, _reason, ^path}} =
+             TokenDenylist.start_link(name: name2, path: path)
+
+    # forensic: 破損 row を含むファイルもそのまま残す。
+    assert File.exists?(path)
+  end
 end

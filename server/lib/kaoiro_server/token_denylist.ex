@@ -90,42 +90,81 @@ defmodule KaoiroServer.TokenDenylist do
   @impl true
   def init({name, path}) do
     path |> Path.dirname() |> File.mkdir_p!()
-    table = open_table(name, path)
-    _ = File.chmod(path, 0o600)
-    {:ok, %{table: table, denylist: load_denylist(table)}}
-  end
 
-  # Corrupt / unreadable DETS: recreate empty rather than crash-loop the
-  # supervisor. Losing denylist entries is a fail-open regression (agents
-  # that WERE revoked could join again), so we ALSO log it at :error
-  # instead of :warning — this is the one store where silent recovery is
-  # a security downgrade the operator must notice.
-  defp open_table(name, path) do
-    case :dets.open_file(name, file: String.to_charlist(path)) do
-      {:ok, ^name} ->
-        name
+    case open_table(name, path) do
+      {:ok, table} ->
+        _ = File.chmod(path, 0o600)
+
+        case load_denylist(table) do
+          {:ok, denylist} ->
+            {:ok, %{table: table, denylist: denylist}}
+
+          {:error, reason} ->
+            # M2 (ふじ #72 must-fix): corrupt row detected. FAIL-CLOSED
+            # startup rather than silently drop the row and let a
+            # revoked agent_id join again. Preserve the DETS file so
+            # an operator can forensically inspect it; recovery is a
+            # deliberate rename by hand followed by a restart.
+            :ok = :dets.close(table)
+            Logger.error(
+              "token denylist load failed (#{inspect(reason)}); DETS file preserved " <>
+                "at #{path} — refusing to start with a partial denylist. Rename or " <>
+                "move the file aside and restart to boot with an empty denylist."
+            )
+
+            {:stop, {:token_denylist_load_failed, reason, path}}
+        end
 
       {:error, reason} ->
+        # M2: same fail-closed policy for the whole-file corruption
+        # case (previously auto-recreated empty, which is exactly the
+        # silent-downgrade the reviewer called out). File is left in
+        # place; operator recovery = rename + restart.
         Logger.error(
-          "token denylist store unreadable (#{inspect(reason)}); recreating EMPTY — " <>
-            "previously revoked agent_ids can join again until re-revoked. " <>
-            "Investigate the DETS file at #{path}."
+          "token denylist store unreadable (#{inspect(reason)}); DETS file preserved " <>
+            "at #{path} — refusing to start with an empty denylist. Rename or move " <>
+            "the file aside and restart to boot with an empty denylist."
         )
 
-        File.rm(path)
-        {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
-        name
+        {:stop, {:token_denylist_open_failed, reason, path}}
     end
   end
 
+  # M2 (ふじ #72 must-fix): NO silent recreate on open error. The
+  # sibling stores auto-recreate for convenience, but here that
+  # convenience is exactly the fail-open regression the reviewer
+  # called out — a corrupted denylist re-lets every revoked agent_id
+  # in. Return {:error, reason} so the caller can fail-closed at the
+  # startup boundary AND keep the on-disk file for forensics.
+  defp open_table(name, path) do
+    case :dets.open_file(name, file: String.to_charlist(path)) do
+      {:ok, ^name} -> {:ok, name}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # M2: {:error, reason} on any malformed row (or fold-time error);
+  # the caller fails-closed at init. Wrapping the fold in a try lets
+  # us treat non-2-tuple rows (schema drift / bit-flip) the same way
+  # as an outright fold failure.
   defp load_denylist(table) do
-    case :dets.foldl(
-           fn {agent_id, ts}, acc -> Map.put(acc, agent_id, ts) end,
-           %{},
-           table
-         ) do
-      denylist when is_map(denylist) -> denylist
-      {:error, _reason} -> %{}
+    try do
+      folded =
+        :dets.foldl(
+          fn
+            {agent_id, ts}, acc when is_binary(agent_id) -> Map.put(acc, agent_id, ts)
+            malformed, _acc -> throw({:malformed_denylist_row, malformed})
+          end,
+          %{},
+          table
+        )
+
+      case folded do
+        denylist when is_map(denylist) -> {:ok, denylist}
+        {:error, reason} -> {:error, reason}
+      end
+    catch
+      {:malformed_denylist_row, _} = reason -> {:error, reason}
     end
   end
 
