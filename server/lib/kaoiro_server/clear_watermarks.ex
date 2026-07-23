@@ -196,9 +196,9 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   # A corrupt / unreadable DETS file must not crash-loop the supervisor.
-  # Losing boundaries re-exposes at most a pre-transition IA slice a
-  # single time; the next SessionResets or external switch will seed a
-  # fresh boundary. Same fallback pattern as PermissionModes /
+  # Losing boundaries re-exposes at most a pre-clear IA slice a
+  # single time; the next operator clear_history will seed a fresh
+  # boundary. Same fallback pattern as PermissionModes /
   # SessionPointers.
   defp open_table(name, path) do
     case :dets.open_file(name, file: String.to_charlist(path)) do

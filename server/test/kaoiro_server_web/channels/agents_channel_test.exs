@@ -51,6 +51,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     socket
   end
 
+  defp wait_until_clear_workflow(predicate, attempts \\ 50) do
+    cond do
+      predicate.() -> :ok
+      attempts <= 0 -> :timeout
+      true -> Process.sleep(5) && wait_until_clear_workflow(predicate, attempts - 1)
+    end
+  end
+
   test "join 後に現在のスナップショットが push される" do
     agent_id = "test.snapshot-1"
 
@@ -2133,6 +2141,57 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert {^existing_order, ^existing_display, nil} =
                ClearWatermarks.get(agent_id)
+    end
+
+    test "clear_history は CAS clear → watermark fsync → broadcast の順に実行する" do
+      agent_id = "test.clear-workflow-order"
+
+      on_exit(fn ->
+        case Process.whereis(ClearWatermarks) do
+          pid when is_pid(pid) -> :sys.resume(pid)
+          _ -> :ok
+        end
+
+        ClearWatermarks.delete(agent_id)
+        KaoiroServer.SessionStarts.delete(agent_id)
+      end)
+
+      :ok = AgentStates.put(state_with_session(agent_id, "s-current"))
+      :ok = AgentStates.append_log(log_with_session(agent_id, "old", "s-old"))
+      :ok = AgentStates.append_log(log_with_session(agent_id, "current", "s-current"))
+
+      {:ok, {_order, display, "s-current"}} =
+        KaoiroServer.SessionStarts.advance_transition(agent_id, "s-current")
+
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      # Suspending the fsync-gated watermark store makes the channel stop
+      # exactly between CAS clear and broadcast. Reversing either boundary
+      # operation causes the assertions below to fail.
+      :ok = :sys.suspend(ClearWatermarks)
+      ref = push(socket, "clear_history", %{"agent_id" => agent_id})
+
+      assert :ok =
+               wait_until_clear_workflow(fn ->
+                 case AgentStates.histories()[agent_id] do
+                   [%{"payload" => %{"text" => "current"}}] -> true
+                   _ -> false
+                 end
+               end)
+
+      refute_broadcast "history_cleared", %{"agent_id" => ^agent_id}
+
+      :ok = :sys.resume(ClearWatermarks)
+
+      assert_reply ref, :ok
+
+      assert_broadcast "history_cleared", %{
+        "agent_id" => ^agent_id,
+        "clear_watermark" => ^display
+      }
+
+      assert {_, ^display, nil} = ClearWatermarks.get(agent_id)
     end
 
     test "viewer の clear_history は forbidden" do
