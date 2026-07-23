@@ -1,7 +1,7 @@
 ---
 title: Phase 25 — session_id なし offline agent の fresh-restore
 description: /clear 直後・未発話のまま全再起動 (dogfood.sh) したエージェントが offline 復元候補に出るのに restore が :no_session で弾かれ ⚠ になる問題を解消。SessionPointer に session_id が無くても cwd/engine/persona/snapshot から fresh spawn + resume snapshot 再適用で「同じ model/effort/engine/permission 設定」のエージェントとして復元する。
-status: in-progress
+status: implemented
 phase: 25
 depends_on: [22, 23]
 last_updated: 2026-07-23
@@ -65,7 +65,7 @@ launch する。
   を黙って上書きしない原則)。
 - **後方互換**: 旧 runner は未知 field を無視 → engine default の
   fresh spawn に degrade (復元自体は成功、設定は default)。旧 server
-  + 新 runner は flag が来ないので完全不変。
+  - 新 runner は flag が来ないので完全不変。
 - snapshot が nil の pointer (きわめて古い record 等) は
   `resume_snapshot` 自体が payload に乗らず、runner apply は no-op →
   engine default で fresh 復元 (fail-soft、復元不能よりよい)。
@@ -82,9 +82,10 @@ launch する。
 | 25-6 | runner: `parseSpawn` に optional boolean `apply_resume_snapshot` → `ParsedSpawn.applyResumeSnapshot`。`handleSpawn` の fresh 分岐で flag 時のみ `applyResumeSnapshot(parsed, parsed.resumeSnapshot, engine)` 適用後 `#launchSpawn` (T3/F4 なし) | `runner/src/supervisor.ts` | done |
 | 25-7 | runner tests: (a) flag + snapshot 付き fresh spawn で model/effort/permission_mode/sandbox/network_access が snapshot 由来で launch される (b) flag なし fresh spawn は従来どおり apply されない regression pin (c) flag + snapshot なしは engine default | `runner/test/supervisor.test.ts` | done (4 case 追加、runner 全 236 tests 全緑) |
 | 25-8 | docs: `docs/specs/protocol.md` spawn message に field 追記、ADR-0030 (D8) / ADR-0014 (F1 追補) に fresh-restore 追補 | docs | done |
-| 25-9 | 手動 dogfood 検証 (下記) | — | pending (マスター環境で実施予定) |
+| 25-9 | 手動 dogfood 検証 (下記) | — | done (2026-07-23 マスター環境で検収、問題なし) |
 
 **scope 外**:
+
 - client 変更なし (復元ボタンは既に無条件表示、成功すれば ⚠ は既存
   ロジックで消える)。
 - 「session_id はあるが JSONL が消えている」T3 失敗時の fresh-restore
@@ -112,6 +113,6 @@ launch する。
   分だけ engine default に落ちる (安全側)。25-5/25-7 のテストで
   「snapshot に入っている値は必ず復元される」ことのみ保証する。
 - `apply_resume_snapshot` を悪用しても snapshot は server 側 write-side
-  + runner 側 read-side の二重 sanitize 済みで、既存の resume 経路と
+  - runner 側 read-side の二重 sanitize 済みで、既存の resume 経路と
   同じ trust boundary (ADR-0014 F1 追補) の内側。新規の権限昇格面は
   増えない。
