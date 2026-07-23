@@ -300,6 +300,32 @@ defmodule KaoiroServer.AgentStatesTest do
       assert length(AgentStates.histories(store)["a"]) == 1
     end
 
+    test "CAS clear は watermark fsync 前の session 遷移を検知して history を変えない", %{
+      store: store
+    } do
+      :ok =
+        AgentStates.put(envelope("a", %{"state" => "thinking", "session_id" => "s-current"}),
+          server: store
+        )
+
+      :ok = AgentStates.append_log(log_sid("a", 1, "s-old"), server: store)
+      :ok = AgentStates.append_log(log_sid("a", 2, "s-current"), server: store)
+
+      # The channel reads this sid, then a new wrapper state races in before
+      # the CAS clear. It must not prune with the stale sid.
+      assert {:ok, "s-current"} = AgentStates.current_session_id("a", server: store)
+
+      :ok =
+        AgentStates.put(envelope("a", %{"state" => "thinking", "session_id" => "s-raced"}),
+          server: store
+        )
+
+      assert :noop = AgentStates.clear_other_sessions("a", "s-current", server: store)
+
+      texts = Enum.map(AgentStates.histories(store)["a"], & &1["payload"]["text"])
+      assert texts == ["m1", "m2"]
+    end
+
     test "未知 agent_id は noop", %{store: store} do
       assert :noop = AgentStates.clear_other_sessions("ghost", server: store)
     end

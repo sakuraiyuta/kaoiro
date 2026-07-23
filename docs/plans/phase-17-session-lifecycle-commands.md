@@ -1,6 +1,6 @@
 ---
 title: Phase 17 — /new・/clear session lifecycle commands
-description: /new・/clearをengine promptではなく第一級controlとして扱い、同一agentのfresh session生成、表示projection差、resume可能性、capability、busy拒否を実装する。
+description: /new・/clearをengine promptではなく第一級controlとして扱い、同一agentのfresh session生成、表示維持、resume可能性、capability、busy拒否を実装する。
 status: completed
 phase: 17
 depends_on: [phase-15-wrapper-ux-parity]
@@ -33,8 +33,9 @@ phase-15完了時の状況を見てマスターが決める。相互depends_on�
       permission/sandbox/network等はphase-15 D8と同じ最後のeffective snapshotを使う。
 - [ ] `/new`後も既存表示logが残り、session boundary marker以降へ新sessionのlogが
       追加される。
-- [ ] `/clear`完了時にserver AgentStates ringと全client表示が消え、先頭にboundary
-      markerが表示される。再接続しても旧表示logが復活しない。
+- [ ] `/new`・`/clear`とも既存表示logと structured IA を維持し、history末尾へ
+      boundary markerを追加する。表示を過去session分だけ隠すのはoperator
+      `clear_history`のみで、現行session分は残る。
 - [ ] どちらのmodeも旧Claude JSONL/Codex rolloutを削除せず、session pickerから
       旧sessionをresumeしてhistory projectionを再構築できる。
 - [ ] `SessionPointers`がreset時にsession IDだけをnilへ明示detachしcwd/engineを保持。

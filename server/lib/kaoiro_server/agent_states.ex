@@ -26,9 +26,10 @@ defmodule KaoiroServer.AgentStates do
   is nil (Codex lazy采番), stashes the request_id in
   `pending_boundary_patch` so `patch_boundary_to_session_id/2` can
   fill it in later when the fresh session's first envelope arrives at
-  `WrapperChannel`. `clear_history_with_boundary/2` (used for `clear`
-  mode) atomically drops all history and places the marker as the sole
-  line. The pending-patch stash is per-agent; the SessionResets lock
+  `WrapperChannel`. Both session modes append their marker and preserve
+  history. `clear_history_with_boundary/2` remains only as a legacy
+  projection-reset primitive; no `/clear` path calls it. The pending-patch
+  stash is per-agent; the SessionResets lock
   already prevents overlapping resets from racing here.
 
   The one server-derived exception is `disconnected` (specs/protocol.md):
@@ -141,10 +142,11 @@ defmodule KaoiroServer.AgentStates do
   end
 
   @doc """
-  Drops ALL history and places a single `session_boundary` marker
-  envelope as the sole line, atomically (ADR-0036 F3, phase-17 17-7).
-  Used for the `clear` reset mode. Same nil-to_session_id → pending
-  stash behaviour as `append_boundary/2`.
+  Legacy projection-reset primitive: drops ALL history and places a single
+  `session_boundary` marker envelope as the sole line, atomically. Session
+  commands do not call this; both `/new` and `/clear` use
+  `append_boundary/3` so existing history remains visible. Same
+  nil-to_session_id → pending stash behaviour as `append_boundary/2`.
   """
   def clear_history_with_boundary(agent_id, marker_envelope, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)

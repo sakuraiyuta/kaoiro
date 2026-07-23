@@ -125,8 +125,8 @@ resume replay 専用で、`/new`・`/clear` は structured IA を含むログを
 markerは`{mode, previous_session_id?, to_session_id?, request_id, ts}`をoperator向け
 payloadに持つ。`to_session_id`はID確定後に追記し、lazy採番時は一時nullを許す。
 viewerへはsession IDを除いた安全な表示通知だけを配信する。会話履歴の正本である
-host JSONL/rolloutはどちらも保持するため、`clear`はデータ削除ではない。UIには
-「表示とcontextをreset。旧sessionはresume可能」と明記する。
+host JSONL/rolloutはどちらも保持するため、`clear`はデータ削除でも表示resetでもない。UIには
+「新しいsessionを開始。旧sessionはresume可能」と明記する。
 
 server AgentStatesを表示projectionのSSOTとし、client local storeだけを消す実装は
 採らない。再接続で消したlogが復活するためである。
@@ -223,7 +223,7 @@ resumeを禁止する。stderrにも
 
 - 同じagent/persona/cwdのまま、CLI相当の会話仕切り直しができる。
 - Claude/Codex差をrunnerのfresh relaunchへ閉じ、clientはcapabilityだけを見る。
-- `/clear`後も旧sessionをpickerからresumeでき、データ削除と表示resetを混同しない。
+- `/clear`後も旧sessionをpickerからresumeでき、データ削除や表示resetを伴わない。
 - busy操作は即時rejectされ、遅延resetや暗黙interruptが起きない。
 
 ### Negative
@@ -245,7 +245,7 @@ resumeを禁止する。stderrにも
 | wrapperが`user_message`先頭一致でslashを解釈 | model入力とcontrol責務が混ざり、literal textやattachmentの扱いがadapterごとにdriftする |
 | clientだけでintercept | 旧/外部clientのexact commandがengineへ素通しされる。server防御rejectが必要 |
 | adapter内部でsessionIdだけnullへ変更 | Codexには近いがClaude長寿命queryと非対称。queue/tool/pending stateの完全resetを証明しにくい |
-| `/clear`でhost session fileも削除 | resume不能なdestructive operationになり、名称から予想しにくい。表示projection resetに限定する |
+| `/clear`でhost session fileも削除 | resume不能なdestructive operationになり、名称から予想しにくい。session遷移は表示も保持する |
 | serverにprevious session stackを保存 | ADR-0014 F3/A4のlatest pointer + host列挙SSOTと重複。既存pickerで戻れる |
 | busy時にinterruptしてreset | write/tool中断とcontext破棄が一clickで起きる。operatorの明示interruptを要求する |
 | busy時にresetをqueue | 実行完了後の遅延破棄が予測困難で、次の入力先を誤認する |

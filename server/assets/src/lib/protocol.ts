@@ -949,8 +949,9 @@ export interface KaoiroHandlers {
     sessionId: string,
     clearWatermark?: string,
   ) => void;
-  /** A transcript projection reset. Resume reconstruction preserves
-   *  structured IA history; `/clear` removes it too. Operator-only. */
+  /** A transcript projection reset used only by resume replay. It preserves
+   *  structured IA history; `/new` and `/clear` leave the projection intact.
+   *  Operator-only. */
   onHistoryReset?: (agentId: string, preserveInterAgent: boolean) => void;
   /** A disconnected agent was removed (issue #14): drop it from the grid.
    *  Operator-only. */

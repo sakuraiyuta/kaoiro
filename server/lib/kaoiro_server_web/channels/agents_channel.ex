@@ -654,8 +654,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_agent_id(payload),
          {:ok, session_id} <- AgentStates.current_session_id(agent_id),
-         display <- adopt_session_start_watermark(agent_id),
-         {:ok, ^session_id} <- AgentStates.clear_other_sessions(agent_id, session_id, []) do
+         {:ok, ^session_id} <- AgentStates.clear_other_sessions(agent_id, session_id, []),
+         display <- adopt_session_start_watermark(agent_id) do
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_cleared", %{
         "agent_id" => agent_id,
         "session_id" => session_id,

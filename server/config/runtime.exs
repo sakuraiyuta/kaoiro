@@ -77,17 +77,17 @@ config :kaoiro_server,
 
 # #109 visibility data must survive a full container recreation together
 # with durable IA history. Both stores are fsync-gated before clear ack.
-config :kaoiro_server,
-       :clear_watermarks_path,
-       System.get_env("KAOIRO_CLEAR_WATERMARKS_PATH")
+if path = System.get_env("KAOIRO_CLEAR_WATERMARKS_PATH") do
+  config :kaoiro_server, :clear_watermarks_path, path
+end
 
-config :kaoiro_server,
-       :session_starts_path,
-       System.get_env("KAOIRO_SESSION_STARTS_PATH")
+if path = System.get_env("KAOIRO_SESSION_STARTS_PATH") do
+  config :kaoiro_server, :session_starts_path, path
+end
 
-config :kaoiro_server,
-       :ingress_order_path,
-       System.get_env("KAOIRO_INGRESS_ORDER_PATH")
+if path = System.get_env("KAOIRO_INGRESS_ORDER_PATH") do
+  config :kaoiro_server, :ingress_order_path, path
+end
 
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.

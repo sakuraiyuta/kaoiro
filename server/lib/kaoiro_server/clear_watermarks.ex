@@ -9,9 +9,9 @@ defmodule KaoiroServer.ClearWatermarks do
   boundary controls what they see — and the shared `InterAgentHistory`
   DETS ledger itself is untouched.
 
-  `advance_transition/*` and sid adoption remain private legacy helpers for
-  loading existing 5/4/3/2-field DETS rows; production transition callers
-  use `SessionStarts` instead.
+  Session transition identity belongs exclusively to `SessionStarts`.
+  This store only loads existing 5/4/3/2-field DETS rows so previously
+  hidden IA never reappears after the migration.
 
   **Ordering domain** (ふじ #109 M6 must-fix, 2026-07-23 + R5 must-fix
   same date): the order tuple is allocated by `KaoiroServer.IngressOrder`,
@@ -54,12 +54,9 @@ defmodule KaoiroServer.ClearWatermarks do
   (ふじ 検収 2 fix-round must-fix M3, 2026-07-23),
   or `agent_id => {:iso_only, display_iso}` for legacy pre-M6 records
   loaded from DETS (ふじ R2 must-fix). The `transition_sid` is the
-  target `session_id` of the transition that seeded this boundary —
-  the transition-identity token that makes retries idempotent. Codex
-  lazy 采番 stores nil transiently until `adopt_sid/2` patches it on
-  the first envelope carrying a real sid. Pre-M3 records loaded from
-  DETS get `sid = nil` and are patched by whichever transition first
-  observes a durable session_id for that agent.
+  target `session_id` from the historical transition that seeded this
+  boundary. It is retained only for load compatibility; current transition
+  idempotence and Codex lazy adoption live in `SessionStarts`.
 
   Accessor invariant: `get_order/2` returns the tuple only for tuple
   records (nil for `:iso_only`); the filter hot-path uses
@@ -89,10 +86,8 @@ defmodule KaoiroServer.ClearWatermarks do
   @doc """
   Records `order` (an `InterAgentHistory`-domain tuple) as the agent's
   boundary, alongside `display_ts` (ISO-8601 UTC) for the audit trail.
-  Sid defaults to nil (legacy tests + non-transition callers); genuine
-  session-transition callers should use `advance_transition/3`
-  instead, which atomically allocates the order AND records the sid
-  for retry idempotence.
+  The sid is nil for current records because only `SessionStarts` owns
+  transition identity. Older sid-bearing records remain readable.
 
   **Synchronous + fsync-gated** so any follow-up broadcast is safe
   against an in-flight crash (M7-a must-fix). Monotonically advances:
@@ -101,66 +96,6 @@ defmodule KaoiroServer.ClearWatermarks do
   def record(agent_id, {us, seq} = order, display_ts, server \\ __MODULE__)
       when is_integer(us) and is_integer(seq) and is_binary(display_ts) do
     GenServer.call(server, {:record, agent_id, order, display_ts, nil})
-  end
-
-  @doc """
-  **Deprecated compatibility API.** Production session transitions use
-  `SessionStarts`; this remains only to read and exercise historical DETS
-  record shapes during the migration.
-
-  Atomically advances A's boundary for a genuine session transition
-  identified by `sid_opt` (Codex lazy passes `nil`; Trigger 2 external
-  switch passes the new sid; Trigger 1 SessionResets confirm_connection
-  passes `joined_session_id` or `lock.to_session_id`). ふじ 検収 2
-  fix-round must-fix M3 (2026-07-23): the sid is the transition
-  identity, so a retry of the same transition (crash / duplicate) is a
-  no-op and returns the existing record unchanged — the pre-M3 code
-  monotonically-advanced but was NOT idempotent, so a re-report of the
-  same transition after a crash between advance and pointer update
-  double-advanced the boundary.
-
-  Returns `{:ok, {order, display, sid_opt}}` (new or existing record).
-  Fsync-gated. Called inside the boundary GenServer so allocation +
-  record are a single serialized decision.
-  """
-  def advance_transition(agent_id, sid_opt, server \\ __MODULE__)
-      when is_binary(agent_id) and (is_nil(sid_opt) or is_binary(sid_opt)) do
-    GenServer.call(server, {:advance_transition, agent_id, sid_opt, nil})
-  end
-
-  @doc """
-  Trigger 1 variant for a Codex lazy transition. `previous_sid` is persisted
-  only while `sid_opt` is nil, so a restart with the old SessionPointers sid
-  can adopt the first real sid without allocating a second boundary (R1).
-  """
-  def advance_transition(agent_id, sid_opt, previous_sid, server)
-      when is_binary(agent_id) and (is_nil(sid_opt) or is_binary(sid_opt)) and
-             (is_nil(previous_sid) or is_binary(previous_sid)) do
-    GenServer.call(server, {:advance_transition, agent_id, sid_opt, previous_sid})
-  end
-
-  @doc """
-  **Deprecated compatibility API.** Codex lazy sid adopt (ふじ 検収 2 fix-round M3, 2026-07-23): patches
-  an existing tuple record whose `sid` is nil so it now carries the
-  real `sid`. No-op if the record is missing, already has a sid, or
-  is `:iso_only`. Does NOT allocate a new order — the boundary itself
-  is unchanged; only its transition identity token is filled in so a
-  future retry of the same transition matches idempotently.
-  """
-  def adopt_sid(agent_id, sid, server \\ __MODULE__)
-      when is_binary(agent_id) and is_binary(sid) do
-    GenServer.call(server, {:adopt_sid, agent_id, sid})
-  end
-
-  @doc """
-  **Deprecated compatibility API.** Atomically adopts a lazy Trigger 1 sid only when the persisted pending
-  transition was created from `previous_sid`. Legacy nil-sid records have no
-  pending identity and return `:noop`, allowing Trigger 2 to advance as a
-  genuine external switch instead (R1).
-  """
-  def adopt_pending_sid(agent_id, sid, previous_sid, server \\ __MODULE__)
-      when is_binary(agent_id) and is_binary(sid) and is_binary(previous_sid) do
-    GenServer.call(server, {:adopt_pending_sid, agent_id, sid, previous_sid})
   end
 
   @doc """
@@ -192,18 +127,6 @@ defmodule KaoiroServer.ClearWatermarks do
     case get(agent_id, server) do
       {{_us, _seq}, display, _sid} -> display
       {:iso_only, display} -> display
-      _ -> nil
-    end
-  end
-
-  @doc """
-  Transition identity sid for the agent's current boundary, or nil
-  when unknown / iso_only / not yet adopted (Codex lazy). Used by
-  transition-idempotence checks (ふじ 検収 2 fix-round M3).
-  """
-  def get_sid(agent_id, server \\ __MODULE__) do
-    case get(agent_id, server) do
-      {{_us, _seq}, _display, sid} -> sid
       _ -> nil
     end
   end
@@ -311,9 +234,8 @@ defmodule KaoiroServer.ClearWatermarks do
                     (is_nil(sid) or is_binary(sid)) ->
                Map.put(acc, agent_id, {{us, seq}, display, sid, nil})
 
-             # Pre-M3 3-tuple record (post-M6, pre-transition-idempotence):
-             # sid unavailable; load as nil so `adopt_sid/2` can patch on
-             # the next matching envelope.
+             # Pre-M3 3-tuple record (post-M6, before SessionStarts was
+             # split out): preserve its visibility tuple and retain a nil sid.
              {agent_id, {us, seq}, display}, acc
              when is_integer(us) and is_integer(seq) and is_binary(display) ->
                Map.put(acc, agent_id, {{us, seq}, display, nil, nil})
@@ -373,67 +295,6 @@ defmodule KaoiroServer.ClearWatermarks do
 
         {:reply, :ok,
          %{state | watermarks: Map.put(state.watermarks, agent_id, {order, display, sid, nil})}}
-    end
-  end
-
-  # ふじ 検収 2 fix-round M3 (2026-07-23): atomic allocate + record with
-  # transition idempotence by sid. Retry of same transition returns the
-  # existing record without allocating a new order — pre-M3 the caller
-  # allocated first and then called record, so a crashing retry
-  # double-advanced. See docstring on `advance_transition/3` for the
-  # scenario.
-  def handle_call({:advance_transition, agent_id, sid_opt, previous_sid}, _from, state) do
-    current = Map.get(state.watermarks, agent_id)
-
-    case current do
-      {{_, _} = order, display, existing_sid, _pending_from_sid}
-      when is_binary(sid_opt) and is_binary(existing_sid) and existing_sid == sid_opt ->
-        # Same transition retry — no-op.
-        {:reply, {:ok, {order, display, existing_sid}}, state}
-
-      _ ->
-        order = KaoiroServer.IngressOrder.allocate()
-        display = DateTime.utc_now() |> DateTime.to_iso8601()
-
-        pending_from_sid =
-          if is_nil(sid_opt) and is_binary(previous_sid), do: previous_sid, else: nil
-
-        write_record(state.table, agent_id, order, display, sid_opt, pending_from_sid)
-        new_rec = {order, display, sid_opt, pending_from_sid}
-
-        {:reply, {:ok, {order, display, sid_opt}},
-         %{state | watermarks: Map.put(state.watermarks, agent_id, new_rec)}}
-    end
-  end
-
-  # ふじ 検収 2 fix-round M3 (2026-07-23): Codex lazy 采番 adopt. Only
-  # patches records whose sid is nil; established sid / iso_only /
-  # missing → no-op.
-  def handle_call({:adopt_sid, agent_id, sid}, _from, state) do
-    case Map.get(state.watermarks, agent_id) do
-      {{_, _} = order, display, nil, pending_from_sid} ->
-        write_record(state.table, agent_id, order, display, sid, pending_from_sid)
-        updated = {order, display, sid, pending_from_sid}
-
-        {:reply, {:ok, {order, display, sid}},
-         %{state | watermarks: Map.put(state.watermarks, agent_id, updated)}}
-
-      _ ->
-        {:reply, :noop, state}
-    end
-  end
-
-  def handle_call({:adopt_pending_sid, agent_id, sid, previous_sid}, _from, state) do
-    case Map.get(state.watermarks, agent_id) do
-      {{_, _} = order, display, nil, ^previous_sid} ->
-        write_record(state.table, agent_id, order, display, sid, previous_sid)
-        updated = {order, display, sid, previous_sid}
-
-        {:reply, {:ok, {order, display, sid}},
-         %{state | watermarks: Map.put(state.watermarks, agent_id, updated)}}
-
-      _ ->
-        {:reply, :noop, state}
     end
   end
 

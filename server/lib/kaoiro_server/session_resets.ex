@@ -318,7 +318,7 @@ defmodule KaoiroServer.SessionResets do
         # call and SessionPointers.detach_session (below) followed by
         # a same-target reset retry no longer double-advances. Codex
         # lazy 采番 passes `nil` here; `wrapper_channel` calls
-        # `ClearWatermarks.adopt_sid/2` on the first envelope that
+        # `SessionStarts.adopt_sid/2` on the first envelope that
         # carries a real session_id.
         {:ok, {_order, _display, _sid}} =
           KaoiroServer.SessionStarts.advance_transition(
