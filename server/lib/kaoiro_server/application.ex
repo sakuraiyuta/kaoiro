@@ -29,6 +29,10 @@ defmodule KaoiroServer.Application do
       # Structured inter-agent history cannot be rebuilt from SDK JSONL;
       # persist it across server/container restarts (#105).
       KaoiroServer.InterAgentHistory,
+      # Per-agent clear watermarks so operator `clear_history` hides past
+      # durable inter-agent messages from the cleared agent's transcript
+      # on subsequent reloads (issue #109). Peer panes are unaffected.
+      KaoiroServer.ClearWatermarks,
       # Session-reset pending lock (ADR-0036 F6/F7, phase-17 17-4).
       # In-memory only; a reset in flight when the server dies is a wash.
       KaoiroServer.SessionResets,

@@ -62,6 +62,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
+  alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.PersonaAssets
@@ -159,7 +160,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # directory carries persona (+ operator-picked custom name) so the client
     # can render offline agents' tiles for the restore UI (ADR-0030 D5).
     if role == :operator do
-      push(socket, "history", %{"agents" => merged_histories()})
+      # `clear_watermarks` (issue #109) rides the same push so a rejoining
+      # client can filter durable IA that predates each agent's most recent
+      # `clear_history`. Empty map = no clears recorded (either fresh state
+      # or all-purged). Missing key on legacy clients is treated as `{}`
+      # (unknown key = ignored, forward-compatible additive field — no
+      # protocol version bump).
+      watermarks = ClearWatermarks.all()
+
+      push(socket, "history", %{
+        "agents" => merged_histories(watermarks),
+        "clear_watermarks" => watermarks
+      })
+
       push(socket, "hosts", %{"hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())})
       push(socket, "directory", %{"entries" => AgentDirectory.all()})
     end
@@ -625,9 +638,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_agent_id(payload),
          {:ok, session_id} <- AgentStates.clear_other_sessions(agent_id) do
+      # Watermark this clear so durable inter-agent messages that predate
+      # it stay hidden from the cleared agent's transcript on subsequent
+      # reloads (issue #109). The peer's own pane is unaffected — the
+      # ledger is untouched and only the merge into agent_id's transcript
+      # runs the filter. Ride the ts back on the broadcast so live
+      # dashboards update their local watermark map without a reload.
+      watermark = DateTime.utc_now() |> DateTime.to_iso8601()
+      ClearWatermarks.record(agent_id, watermark)
+
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_cleared", %{
         "agent_id" => agent_id,
-        "session_id" => session_id
+        "session_id" => session_id,
+        "clear_watermark" => watermark
       })
 
       {:reply, :ok, socket}
@@ -676,6 +699,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # phase-17 17-4: clear any dangling reset lock + dispatch cooldown
       # so a respawn under the same agent_id does not inherit stale state.
       SessionResets.delete(agent_id)
+      # issue #109: purge the clear watermark too, so an agent respawned
+      # under the same agent_id starts fresh (no lingering hide-past
+      # filter from a prior operator).
+      ClearWatermarks.delete(agent_id)
       :ok
     end
   end
@@ -683,7 +710,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Ordinary log/result/boundary history remains memory-only and is rebuilt
   # from SDK JSONL. Structured IA cannot be rebuilt, so DETS is authoritative
   # for that type. Drop volatile IA before merging to avoid live-run doubles.
-  defp merged_histories do
+  #
+  # `watermarks` (issue #109): agent_id => ISO-8601 UTC timestamp. Durable
+  # IA whose sender was cleared at or after the envelope's ts is dropped
+  # from THAT sender's transcript key here. The receiver-side filter runs
+  # on the client during fanOut (protocol.ts fanOutInterAgentHistory) —
+  # doing it there lets the same envelope stay visible in the peer's pane
+  # (whose watermark may not cover it), which is exactly the "peer 側の
+  # 表示にも影響なし" semantics クロエ D 2026-07-23 nails down.
+  defp merged_histories(watermarks) do
     volatile_without_ia =
       AgentStates.histories()
       |> Enum.flat_map(fn {agent_id, entries} ->
@@ -692,8 +727,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
       end)
       |> Map.new()
 
+    durable_filtered =
+      InterAgentHistory.all()
+      |> Enum.flat_map(fn {sender_id, entries} ->
+        kept = filter_ia_by_watermark(entries, Map.get(watermarks, sender_id))
+        if kept == [], do: [], else: [{sender_id, kept}]
+      end)
+      |> Map.new()
+
     volatile_without_ia
-    |> Map.merge(InterAgentHistory.all(), fn _agent_id, volatile, durable ->
+    |> Map.merge(durable_filtered, fn _agent_id, volatile, durable ->
       volatile ++ durable
     end)
     |> Map.new(fn {agent_id, entries} ->
@@ -703,6 +746,24 @@ defmodule KaoiroServerWeb.AgentsChannel do
         end)
 
       {agent_id, sorted}
+    end)
+  end
+
+  # Drops IA entries whose envelope `ts` is at or before the watermark —
+  # the sender-side half of the issue #109 filter. Watermark nil = never
+  # cleared, keep everything. Envelope without a ts field survives (a
+  # malformed record without a ts cannot be time-ordered anyway; the
+  # separate write-side gate in InterAgentHistory keeps genuine garbage
+  # out). ISO-8601 UTC strings compare lexicographically in time order,
+  # so no DateTime parse is needed here.
+  defp filter_ia_by_watermark(entries, nil), do: entries
+
+  defp filter_ia_by_watermark(entries, watermark) when is_binary(watermark) do
+    Enum.reject(entries, fn envelope ->
+      case Map.get(envelope, "ts") do
+        ts when is_binary(ts) -> ts <= watermark
+        _ -> false
+      end
     end)
   end
 

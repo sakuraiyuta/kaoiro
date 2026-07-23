@@ -5,6 +5,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.SessionPointers
@@ -597,6 +598,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       AgentDirectory.record(agent_id, @ao)
       SessionPointers.record(agent_id, "sess-del-1", "/home/user/proj")
       KaoiroServer.PermissionModes.record(agent_id, "plan")
+      ClearWatermarks.record(agent_id, "2026-07-23T10:00:00Z")
       :ok = InterAgentHistory.append(durable_inter_agent_envelope(agent_id, "test.del-peer", 1))
       :ok = InterAgentHistory.append(durable_inter_agent_envelope("test.del-peer", agent_id, 2))
       socket = join_as(:operator)
@@ -612,6 +614,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # PermissionModes.record は cast なので poll
       _ = KaoiroServer.PermissionModes.all()
       assert KaoiroServer.PermissionModes.get(agent_id) == nil
+      # issue #109: ClearWatermarks も一緒に purge される (agent が消えた後に
+      # 同名 agent_id で再 spawn されても過去の hide-past filter を引きずらない)。
+      _ = ClearWatermarks.all()
+      assert ClearWatermarks.get(agent_id) == nil
       assert InterAgentHistory.list_for(agent_id) == []
       assert InterAgentHistory.list_for("test.del-peer") == []
     end
@@ -1372,6 +1378,53 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert agents[agent_id] == [env]
     end
 
+    test "clear watermark 以前の durable IA は sender pane から drop (issue #109)" do
+      agent_id = "test.hist-wm"
+      old = durable_inter_agent_envelope(agent_id, "test.hist-wm-peer", 1)
+      # ts field を書き換えて古い/新しい 2 件用意。
+      old = Map.put(old, "ts", "2026-07-13T00:00:00Z")
+      new = durable_inter_agent_envelope(agent_id, "test.hist-wm-peer", 2)
+      new = Map.put(new, "ts", "2026-07-23T20:00:00Z")
+      :ok = InterAgentHistory.append(old)
+      :ok = InterAgentHistory.append(new)
+      # 2026-07-15 を watermark に = old は消え、new は残る。
+      ClearWatermarks.record(agent_id, "2026-07-15T00:00:00Z")
+      _ = ClearWatermarks.all()
+
+      on_exit(fn ->
+        InterAgentHistory.delete_agent(agent_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      assert_push "history", %{
+        "agents" => agents,
+        "clear_watermarks" => watermarks
+      }
+
+      # sender pane: watermark 以前の old は落ちる、new のみ残る。
+      assert agents[agent_id] == [new]
+      # watermarks は history push に同梱、client 側 fanOut が peer pane
+      # 用にも filter できるようにするため。
+      assert watermarks[agent_id] == "2026-07-15T00:00:00Z"
+    end
+
+    test "watermark 未記録の agent は durable IA が全部見える (regression pin)" do
+      agent_id = "test.hist-nowm"
+      env = durable_inter_agent_envelope(agent_id, "test.hist-nowm-peer", 1)
+      env = Map.put(env, "ts", "2026-07-13T00:00:00Z")
+      :ok = InterAgentHistory.append(env)
+      on_exit(fn -> InterAgentHistory.delete_agent(agent_id) end)
+
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => agents, "clear_watermarks" => watermarks}
+      assert agents[agent_id] == [env]
+      refute Map.has_key?(watermarks, agent_id)
+    end
+
     test "viewer には履歴 push が来ない" do
       agent_id = "test.hist-2"
       put_agent(agent_id)
@@ -1469,6 +1522,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "operator の clear_history は過去セッションを消し history_cleared を broadcast" do
       agent_id = "test.clear-1"
+      on_exit(fn -> ClearWatermarks.delete(agent_id) end)
       :ok = AgentStates.put(state_with_session(agent_id, "s2"))
       :ok = AgentStates.append_log(log_with_session(agent_id, "old", "s1"))
       :ok = AgentStates.append_log(log_with_session(agent_id, "cur", "s2"))
@@ -1478,7 +1532,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref = push(socket, "clear_history", %{"agent_id" => agent_id})
 
       assert_reply ref, :ok
-      assert_broadcast "history_cleared", %{"agent_id" => ^agent_id, "session_id" => "s2"}
+      # issue #109: broadcast は clear_watermark を含み、ClearWatermarks
+      # へも同じ ts が記録される。ts は ISO-8601 UTC で envelope.ts と
+      # 直接比較できる形式 (先頭が 4 桁の年で始まる)。
+      assert_broadcast "history_cleared", %{
+        "agent_id" => ^agent_id,
+        "session_id" => "s2",
+        "clear_watermark" => watermark
+      }
+
+      assert is_binary(watermark)
+      assert String.match?(watermark, ~r/^\d{4}-\d{2}-\d{2}T/)
+      # DETS 永続の同期を GenServer.call で待ってから読む (record は cast)。
+      _ = ClearWatermarks.all()
+      assert ClearWatermarks.get(agent_id) == watermark
       # Only the current session's reply line survives server-side.
       assert [%{"payload" => %{"text" => "cur"}}] = AgentStates.histories()[agent_id]
     end
