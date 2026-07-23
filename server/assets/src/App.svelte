@@ -1265,8 +1265,25 @@
     color: var(--fg-dim);
   }
 
+  /* A1 refactor (2026-07-23) moved the live-grid `.agents { display:
+     grid; ... }` rule to AgentGridShell.svelte's component-scoped
+     styles. The offline section still uses its own `<ul class="agents">`
+     under this file's scope and needs the same grid layout, otherwise
+     each `<li>` collapses to a full-width block (実機検収 1,
+     2026-07-23 マスター指示). Keep the auto-fill grid identical to
+     AgentGridShell so the offline card size matches the live grid. */
   .offline .agents {
     margin-top: 1rem;
+    list-style: none;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+    gap: 1.2rem;
+  }
+
+  .offline .agents > li {
+    animation: rise 0.45s ease-out backwards;
+    animation-delay: var(--stagger, 0ms);
   }
 
   .restore-all {
