@@ -541,6 +541,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # is derived from the agent_id (`<host>.<rand>`, ADR-0024 D3). Reuses the
   # spawn → runner path, so the runner is unchanged (it does the T3 existence
   # check + F4 lock). Reviving the same agent_id keeps the face / mood / tile.
+  #
+  # Two branches based on the SessionPointer's session_id (phase-25, ADR-0030
+  # D8 追補 / ADR-0014 F1 追補 fresh-restore):
+  # - **binary session_id (通常 resume)**: build_restore_payload stamps
+  #   `resume_session_id` and the runner takes the resume path (T3 existence
+  #   check under cwd + F4 same-session lock).
+  # - **nil session_id (fresh-restore)**: `/clear` detach (ADR-0036 F3 追補)
+  #   や未発話 session (ADR-0014 Q-A4) で pointer が session_id を持たない
+  #   ケース。build_restore_payload は `resume_session_id` を omit し
+  #   `apply_resume_snapshot: true` を stamp、runner は fresh 分岐で
+  #   applyResumeSnapshot を発火して同 model / effort / engine / permission
+  #   設定の fresh session を立ち上げる (T3 / F4 対象外 — session file を
+  #   読まないし session id lock も存在しない)。
   def handle_in("restore", payload, socket) do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),

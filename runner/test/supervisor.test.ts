@@ -1177,6 +1177,86 @@ describe("resume-privilege-restoration apply (藤 D1/D2, P0)", () => {
       expect(h.configs[0]!.sandbox).toBeUndefined();
       expect(h.configs[0]!.network_access).toBeUndefined();
     });
+
+    // ふじ advisory A1 (phase-25): fresh-restore で snapshot 由来値が
+    // entry.parsed へ確定した後、crash-restart 経路が resume 経路と同様に
+    // その値を継承することを pin する。resumes[1] は undefined (fresh 継続、
+    // 二度目も --resume なし) であることも同時 pin。
+    it("fresh-restore 後の crash-restart は snapshot 適用済み値を継承 (Codex)", () => {
+      const h = harness();
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        apply_resume_snapshot: true,
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      expect(h.configs[0]!.sandbox).toBe("danger-full-access");
+      // Crash → auto-restart。entry.parsed が snapshot 適用済み state を
+      // 保持しているので relaunch の config にも継承される。
+      h.children[0]!.exit();
+      expect(h.configs[1]!.sandbox).toBe("danger-full-access");
+      expect(h.configs[1]!.network_access).toBe(true);
+      // fresh-restore は resumeSessionId を持たないため crash-restart も
+      // fresh 継続 (--resume なし)。
+      expect(h.resumes[1]).toBeUndefined();
+    });
+
+    // ふじ advisory A2(a) (phase-25): 型不正な apply_resume_snapshot は
+    // parseSpawn が null を返して fail-loud reject する (truthy garbage を
+    // 通さない)。
+    it("apply_resume_snapshot が boolean 以外 → parseSpawn は null で reject", () => {
+      const rejected = parseSpawn({
+        ...codexSpawn,
+        apply_resume_snapshot: "yes",
+      });
+      expect(rejected).toBeNull();
+    });
+
+    // ふじ advisory A2(b) (phase-25): flag と resume_session_id が同時に
+    // 立つ payload は resume 経路が優先 (T3/F4 発火、resume snapshot apply も
+    // resume 経路の 1 回だけ)。fresh 分岐の apply_resume_snapshot handling
+    // には流れないので二重 apply は起こらない。
+    it("apply_resume_snapshot + resume_session_id 両方 set → resume 経路優先で二重 apply なし", () => {
+      const h = harness({ exists: true });
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        apply_resume_snapshot: true,
+        resume_session_id: "aaaaaaaa-1111-2222-3333-444444444444",
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+      // resume path が発火: --resume 付き、snapshot は 1 度だけ apply。
+      expect(h.resumes[0]).toBe("aaaaaaaa-1111-2222-3333-444444444444");
+      expect(h.configs[0]!.sandbox).toBe("danger-full-access");
+      expect(h.configs[0]!.network_access).toBe(true);
+    });
+
+    // ふじ advisory A2(c) (phase-25): sparse な snapshot (P0 field 欠け) は
+    // 欠けた分だけ engine safe default に落ち、載っている field は snapshot
+    // 由来のまま保持される。model は P1 pair rule で載る。
+    it("sparse snapshot (P0 欠け) の fresh-restore は missing 分だけ safe default", () => {
+      const h = harness();
+      h.sup.handleSpawn({
+        ...codexSpawn,
+        apply_resume_snapshot: true,
+        // P1 (model / model_source) だけ載せ、P0 (sandbox / network_access)
+        // は完全に欠落させる。
+        resume_snapshot: {
+          model: "gpt-5",
+          model_source: "launch",
+        },
+      });
+      // P0 は safe default (Codex): workspace-write / false。
+      expect(h.configs[0]!.sandbox).toBe("workspace-write");
+      expect(h.configs[0]!.network_access).toBe(false);
+      // P1 は snapshot 由来がそのまま届く。
+      expect(h.configs[0]!.model).toBe("gpt-5");
+      expect(h.configs[0]!.model_source).toBe("launch");
+    });
   });
 
   describe("handleSwitchSession", () => {
