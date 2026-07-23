@@ -33,6 +33,20 @@ config :kaoiro_server,
          "kaoiro_test_inter_agent_history_#{System.unique_integer([:positive])}.dets"
        )
 
+config :kaoiro_server,
+       :clear_watermarks_path,
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_clear_watermarks_#{System.unique_integer([:positive])}.dets"
+       )
+
+config :kaoiro_server,
+       :session_starts_path,
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_session_starts_#{System.unique_integer([:positive])}.dets"
+       )
+
 # Per-run throwaway DETS file for the IngressOrder allocator (ふじ
 # R5 must-fix, 2026-07-23) and its A4 advisory (2026-07-23, 3rd
 # review): without this, the app-started singleton wrote the shared

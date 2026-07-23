@@ -101,6 +101,7 @@ async function mountShell(operator: boolean): Promise<HTMLElement> {
       wide,
       operator,
       agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      directory: {},
       logs: { "lab-pc.a": [assistant("lab-pc.a", "hi")] },
       manifest: null,
       now: NOW,
@@ -163,5 +164,81 @@ describe("#25 layout gate (A3, ふじ 3rd review re-re-review 2026-07-23)", () =
     expect(target.querySelector(".agents.three-cols")).toBeNull();
     expect(target.querySelector(".grid-with-timeline.with-timeline")).toBeNull();
     expect(target.querySelector("aside.timeline")).toBeNull();
+  });
+
+  it("restart 後も directory persona で durable IA の送信元を表示する", async () => {
+    const target = document.createElement("div");
+    document.body.append(target);
+    const ia: Envelope = {
+      version: "0",
+      agent_id: "offline.sender",
+      ts: "2026-07-23T14:59:30Z",
+      type: "inter_agent_message",
+      state: "done",
+      payload: { to: "offline.receiver", body: "durable message" },
+    };
+    const component = mount(AgentGridShell, {
+      target,
+      props: {
+        wide: true,
+        operator: true,
+        agents: {},
+        directory: {
+          "offline.sender": { persona: { id: "ao", name: "あお", sprite_set: "ao" }, last_seen: null },
+          "offline.receiver": { persona: { id: "momo", name: "もも", sprite_set: "momo" }, last_seen: null },
+        },
+        logs: { "offline.sender": [ia] },
+        manifest: null,
+        now: NOW,
+        onSelectAgent: vi.fn(),
+      },
+    });
+    mounted.push(component);
+    await tick();
+    expect(target.querySelector(".who-name")?.textContent).toContain("あお");
+    expect(target.querySelector(".receiver")?.textContent).toContain("もも");
+    expect(target.querySelector(".portrait-fallback")).not.toBeNull();
+  });
+
+  it("production timeline は初期50件から bottom scroll ごとに増分描画する", async () => {
+    const target = document.createElement("div");
+    document.body.append(target);
+    const logs = Array.from({ length: 101 }, (_, index) => ({
+      ...assistant("lab-pc.a", `row ${index + 1}`),
+      seq: index + 1,
+    }));
+    const component = mount(AgentGridShell, {
+      target,
+      props: {
+        wide: true,
+        operator: true,
+        agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+        directory: {},
+        logs: { "lab-pc.a": logs },
+        manifest: null,
+        now: NOW,
+        onSelectAgent: vi.fn(),
+      },
+    });
+    mounted.push(component);
+    await tick();
+
+    const rows = target.querySelector("ul.rows") as HTMLElement;
+    expect(rows.querySelectorAll("li")).toHaveLength(50);
+    Object.defineProperties(rows, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 100 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+
+    rows.dispatchEvent(new Event("scroll"));
+    await tick();
+    expect(rows.querySelectorAll("li")).toHaveLength(100);
+    rows.dispatchEvent(new Event("scroll"));
+    await tick();
+    expect(rows.querySelectorAll("li")).toHaveLength(101);
+    rows.dispatchEvent(new Event("scroll"));
+    await tick();
+    expect(rows.querySelectorAll("li")).toHaveLength(101);
   });
 });

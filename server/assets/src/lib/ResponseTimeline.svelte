@@ -14,10 +14,11 @@
   import { spriteUrlFor } from "./expression";
   import { conversationEntries } from "./conversationTimeline";
   import { formatRelativeJa } from "./relativeTime";
-  import type { Envelope, PersonaManifest } from "./protocol";
+  import type { DirectoryEntry, Envelope, PersonaManifest } from "./protocol";
 
   let {
     agents,
+    directory,
     logs,
     manifest = null,
     now,
@@ -27,6 +28,9 @@
      *  使わないので、切断済み agent の row も表示され得る (履歴が
      *  残っている限り)。 */
     agents: Record<string, Envelope>;
+    /** Restart-persistent persona fallback for durable IA after AgentStates
+     * is empty following a full server restart. */
+    directory?: Record<string, DirectoryEntry>;
     /** 全 transcript map。 conversationEntries が assistant / user のみを
      * 取り出して時系列マージする（result は turn boundary として除外）。 */
     logs: Record<string, Envelope[]>;
@@ -51,17 +55,17 @@
   }
 
   function personaName(agentId: string): string {
-    const p = agents[agentId]?.persona;
+    const p = agents[agentId]?.persona ?? directory?.[agentId]?.persona;
     return p?.name ?? agentId;
   }
 
   function personaSprite(agentId: string, state: string): string | null {
-    const p = agents[agentId]?.persona;
+    const p = agents[agentId]?.persona ?? directory?.[agentId]?.persona;
     return spriteUrlFor(manifest, p?.sprite_set, state);
   }
 
   function stateFor(agentId: string): string {
-    return agents[agentId]?.state ?? "idle";
+    return agents[agentId]?.state ?? "disconnected";
   }
 </script>
 

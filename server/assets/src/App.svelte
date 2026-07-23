@@ -362,8 +362,8 @@
           }
         },
         onHistoryReset: (agentId, preserveInterAgent) => {
-          // Resume replay cannot rebuild structured IA (#105), while
-          // `/clear` explicitly resets the complete display projection.
+          // history_reset is resume replay only; /new and /clear preserve
+          // the existing display projection (#109).
           logs = {
             ...logs,
             [agentId]: resetTranscriptHistory(
@@ -883,6 +883,7 @@
       wide={wideLayout}
       operator={isOperator}
       {agents}
+      {directory}
       {logs}
       {manifest}
       {now}

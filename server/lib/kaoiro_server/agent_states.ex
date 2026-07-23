@@ -102,6 +102,18 @@ defmodule KaoiroServer.AgentStates do
     GenServer.call(server, {:clear_other_sessions, agent_id})
   end
 
+  @doc "Reads the current non-empty session_id without mutating history."
+  def current_session_id(agent_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:current_session_id, agent_id})
+  end
+
+  @doc "CAS variant: clears only when the current session still equals `sid`."
+  def clear_other_sessions(agent_id, sid, opts) when is_binary(sid) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:clear_other_sessions, agent_id, sid})
+  end
+
   @doc """
   Drops the JSONL-replayable reply-log history (issue #50, ADR-0014 phase-2),
   leaving the latest state and `inter_agent_message` lines untouched. The
@@ -262,6 +274,28 @@ defmodule KaoiroServer.AgentStates do
          sid when is_binary(sid) and sid != "" <- Map.get(env, "session_id") do
       kept = Enum.filter(history, &(Map.get(&1, "session_id") == sid))
       {:reply, {:ok, sid}, Map.put(state, agent_id, %{entry | history: kept})}
+    else
+      _ -> {:reply, :noop, state}
+    end
+  end
+
+  def handle_call({:current_session_id, agent_id}, _from, state) do
+    reply =
+      with %{envelope: env} <- Map.get(state, agent_id),
+           sid when is_binary(sid) and sid != "" <- Map.get(env, "session_id") do
+        {:ok, sid}
+      else
+        _ -> :noop
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:clear_other_sessions, agent_id, expected_sid}, _from, state) do
+    with %{^agent_id => %{envelope: env, history: history} = entry} <- state,
+         ^expected_sid <- Map.get(env, "session_id") do
+      kept = Enum.filter(history, &(Map.get(&1, "session_id") == expected_sid))
+      {:reply, {:ok, expected_sid}, Map.put(state, agent_id, %{entry | history: kept})}
     else
       _ -> {:reply, :noop, state}
     end

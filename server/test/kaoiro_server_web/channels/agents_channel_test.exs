@@ -1902,6 +1902,49 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert current in (after_clear[agent_id] || [])
     end
 
+    test "開始点なし clear は既存 watermark を変えず hidden IA を再露出しない" do
+      agent_id = "test.clear-missing-start-preserve"
+      peer_id = "test.clear-missing-start-peer"
+      old = durable_inter_agent_envelope(agent_id, peer_id, 1)
+      :ok = InterAgentHistory.append(old)
+
+      :ok =
+        ClearWatermarks.record(
+          agent_id,
+          {System.system_time(:microsecond), 0},
+          "2026-07-23T15:00:00Z"
+        )
+
+      before = ClearWatermarks.get(agent_id)
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "waiting_input",
+          "session_id" => "sess-current"
+        })
+
+      on_exit(fn ->
+        InterAgentHistory.delete_agent(agent_id)
+        ClearWatermarks.delete(agent_id)
+        KaoiroServer.SessionStarts.delete(agent_id)
+      end)
+
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => _}
+      assert_reply push(socket, "clear_history", %{"agent_id" => agent_id}), :ok
+      assert ClearWatermarks.get(agent_id) == before
+
+      _reload = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => histories}
+      refute old in (histories[agent_id] || [])
+    end
+
     test "wire ts と server ingress order が乖離しても filter は server order を使う (clock-skew pin)" do
       # M6 core pin: envelope の wire ts (producer clock) が clear
       # watermark の display ISO より新しいのに、server の ingress

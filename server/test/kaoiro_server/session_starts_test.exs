@@ -38,4 +38,18 @@ defmodule KaoiroServer.SessionStartsTest do
 
     assert SessionStarts.get("a.restart", name) == {order, display, "sess-a"}
   end
+
+  test "pending lazy start survives restart and adopts without reallocating", %{
+    name: name,
+    path: path
+  } do
+    assert {:ok, {order, display, nil}} =
+             SessionStarts.advance_transition("a.pending", nil, "sess-old", name)
+
+    GenServer.stop(Process.whereis(name))
+    {:ok, _pid} = SessionStarts.start_link(name: name, path: path)
+
+    assert {:ok, {^order, ^display, "sess-new"}} =
+             SessionStarts.adopt_pending_sid("a.pending", "sess-new", "sess-old", name)
+  end
 end

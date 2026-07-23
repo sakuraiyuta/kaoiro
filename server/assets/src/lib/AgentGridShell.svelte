@@ -18,13 +18,14 @@
 
   import ResponseTimeline from "./ResponseTimeline.svelte";
   import { shouldShowResponseTimeline } from "./protocol";
-  import type { Envelope, PersonaManifest } from "./protocol";
+  import type { DirectoryEntry, Envelope, PersonaManifest } from "./protocol";
   import type { Snippet } from "svelte";
 
   let {
     wide,
     operator,
     agents,
+    directory,
     logs,
     manifest,
     now,
@@ -34,6 +35,7 @@
     wide: boolean;
     operator: boolean;
     agents: Record<string, Envelope>;
+    directory: Record<string, DirectoryEntry>;
     logs: Record<string, Envelope[]>;
     manifest: PersonaManifest | null;
     now: number;
@@ -49,7 +51,7 @@
     {@render children?.()}
   </ul>
   {#if showTimeline}
-    <ResponseTimeline {agents} {logs} {manifest} {now} {onSelectAgent} />
+    <ResponseTimeline {agents} {directory} {logs} {manifest} {now} {onSelectAgent} />
   {/if}
 </div>
 

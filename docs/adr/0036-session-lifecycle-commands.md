@@ -116,22 +116,11 @@ sandbox/network、MCP configを通常のspawn経路から再適用する。値�
 
 「通常のspawn経路から再適用」の具体化は [ADR-0014 F1 追補「resume 時の privilege 三軸再適用」](0014-session-resume-and-restore.md) に集約する: `ResetSessionCommand.resume_snapshot?` を server が同梱し、runner の `applyResumeSnapshot` pure helper が P0 の privilege 三軸 (Codex `sandbox` / `network_access`、Claude `permission_mode`) を fresh 相当の `ParsedSpawn` に反映する。`model` / `effort` は sanitized snapshot に保持され drift 計算にも入るが実 apply は P1。
 
-### F3 — /newは表示維持、/clearは表示projectionをreset
+### F3 — /new・/clear とも表示維持
 
-両modeとも新しいSDK sessionを作り、旧session fileは削除しない。差はserver表示
-projectionだけ:
-
-- **`new`**: AgentStatesの既存logを保持し、`session_boundary` markerを末尾に追加。
-  marker以降が新sessionであることをUIに明示する。
-- **`clear`**: AgentStatesの当該agent表示ringを全消去し、全clientへ既存
-  `history_reset`をbroadcastした後、先頭に`session_boundary` markerを追加する。
-
-`clear` は structured inter-agent message を含む表示projectionの完全resetである。
-resume再構築時の IA 保持と区別するため、`history_reset` は
-`preserve_inter_agent=false` を明示し、durable store も
-`InterAgentHistory.delete_agent/1` で消去する。resume経路は
-`preserve_inter_agent=true`（旧payloadでflag省略時もtrue）として #105 の保持契約を
-維持する。
+両 mode とも新しい SDK session を作り、旧 session file と表示 projection を保持する。
+`session_boundary` marker は既存 history の末尾に append する。`history_reset` は
+resume replay 専用で、`/new`・`/clear` は structured IA を含むログを削除しない。
 
 markerは`{mode, previous_session_id?, to_session_id?, request_id, ts}`をoperator向け
 payloadに持つ。`to_session_id`はID確定後に追記し、lazy採番時は一時nullを許す。
