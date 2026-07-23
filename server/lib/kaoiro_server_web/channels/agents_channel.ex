@@ -68,6 +68,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
+  alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentId
 
   # Resource bound for an operator instruction; generous for prose,
@@ -683,6 +684,35 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # Operator-only explicit revoke of an agent's wrapper token (issue #72,
+  # additive to ADR-0024). Adds `agent_id` to the persistent
+  # `TokenDenylist` so `Auth.authorize_wrapper/2` rejects future joins
+  # under that id, and broadcasts a `revoked` event on the agent's
+  # wrapper topic so a currently-connected wrapper is force-dropped
+  # rather than left holding a valid channel until it happens to
+  # reconnect. Accepts a live OR disconnected agent (unlike
+  # `delete_agent`) — an active compromise is exactly the case a live
+  # revoke needs to cut off. `fetch_restorable_agent_id/1` gates the
+  # same anti-probe check as `restore` (charset + directory/AgentStates
+  # existence).
+  def handle_in("revoke_wrapper_token", payload, socket) do
+    with :ok <- require_operator(socket),
+         {:ok, agent_id} <- fetch_restorable_agent_id(payload) do
+      revoked_at = DateTime.utc_now() |> DateTime.to_iso8601()
+      TokenDenylist.revoke(agent_id, revoked_at)
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "wrapper:#{agent_id}",
+        "revoked",
+        %{"reason" => "operator_revoke", "revoked_at" => revoked_at}
+      )
+
+      {:reply, {:ok, %{"revoked_at" => revoked_at}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
   # Removes the agent from every server-side store. AgentStates.delete keeps
   # the disconnected guard (a live agent cannot be dropped); a directory-only
   # entry skips that step (never in AgentStates) and still purges the DETS
@@ -703,6 +733,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # under the same agent_id starts fresh (no lingering hide-past
       # filter from a prior operator).
       ClearWatermarks.delete(agent_id)
+      # issue #72: seed the token denylist with this agent_id so any
+      # still-valid signed wrapper token for it can never re-join, even
+      # in the vanishingly rare case that a future spawn's
+      # `<host>.<rand>` collides with this deleted id. Kept ACROSS
+      # server restarts (DETS) and NOT reversed by any other purge.
+      revoked_at = DateTime.utc_now() |> DateTime.to_iso8601()
+      TokenDenylist.revoke(agent_id, revoked_at)
       :ok
     end
   end

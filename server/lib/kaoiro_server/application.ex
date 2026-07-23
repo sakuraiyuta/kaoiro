@@ -33,6 +33,11 @@ defmodule KaoiroServer.Application do
       # durable inter-agent messages from the cleared agent's transcript
       # on subsequent reloads (issue #109). Peer panes are unaffected.
       KaoiroServer.ClearWatermarks,
+      # Per-agent_id token denylist (issue #72): additive revoke channel
+      # for ADR-0024's server-minted wrapper tokens. Checked in
+      # `Auth.authorize_wrapper/2`; seeded by `delete_agent` and by
+      # operator revoke.
+      KaoiroServer.TokenDenylist,
       # Session-reset pending lock (ADR-0036 F6/F7, phase-17 17-4).
       # In-memory only; a reset in flight when the server dies is a wash.
       KaoiroServer.SessionResets,

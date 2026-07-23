@@ -24,6 +24,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.SessionPointers
   alias KaoiroServerWeb.AgentId
 
+  # Intercept the operator-initiated revoke broadcast (issue #72) so it
+  # goes through `handle_out/3` (channel-local stop) instead of the
+  # default noop-relay to the client. Without this intercept the
+  # Broadcast would fan out to the wrapper's WS as an ordinary event
+  # without ever closing the channel process — the whole point of the
+  # broadcast is to force the drop.
+  intercept ["revoked"]
+
   @frame_keys ~w(version agent_id ts type state)
   @inter_agent_kinds ~w(request response query inform propose accept reject escalate-to-user done)
 
@@ -96,6 +104,21 @@ defmodule KaoiroServerWeb.WrapperChannel do
     KaoiroServer.SessionResets.confirm_connection(socket.assigns.agent_id)
 
     {:noreply, socket}
+  end
+
+  # Operator-initiated token revoke (issue #72): the AgentsChannel
+  # `revoke_wrapper_token` handler broadcasts on this wrapper's topic to
+  # force-drop a currently-connected wrapper (otherwise the denylist
+  # only takes effect on the next join). The channel stops with a normal
+  # `:shutdown`; `terminate/2` still runs and derives the usual
+  # `disconnected` envelope, so the dashboard reflects the drop without
+  # a special-case UI. Any subsequent reconnect fails at
+  # `Auth.authorize_wrapper/2` because the denylist entry is now
+  # persistent. The event is `intercept`ed at the top of the module so
+  # this callback runs instead of the default noop-relay to the wrapper.
+  @impl true
+  def handle_out("revoked", _payload, socket) do
+    {:stop, :shutdown, socket}
   end
 
   # persona_id rides join params (channel-level) rather than the socket

@@ -67,6 +67,54 @@ defmodule KaoiroServer.AuthTest do
 
       assert {:error, :unauthorized} = Auth.authorize_wrapper("lab.spawned", "garbage")
     end
+
+    test "denylist に載る agent_id は署名トークンでも拒否する (issue #72)" do
+      # signing scheme はそのまま、denylist は additive gate。
+      # 通常の signed token は通るが、revoke 後は同じ token が unauth に落ちる。
+      Application.put_env(:kaoiro_server, :wrapper_tokens, "other.a:tok-a")
+      agent_id = "lab.denylisted-#{System.unique_integer([:positive])}"
+      token = Auth.mint_wrapper_token(agent_id)
+
+      # revoke 前は通る。
+      assert :ok = Auth.authorize_wrapper(agent_id, token)
+
+      KaoiroServer.TokenDenylist.revoke(agent_id, "2026-07-23T15:00:00Z")
+
+      on_exit(fn ->
+        KaoiroServer.TokenDenylist.restore(agent_id)
+      end)
+
+      # cast の反映を待ってから照合する。
+      :ok = poll_until(fn -> KaoiroServer.TokenDenylist.revoked?(agent_id) end)
+      assert {:error, :unauthorized} = Auth.authorize_wrapper(agent_id, token)
+    end
+
+    test "denylist は dev モード (wrapper_tokens 未設定) でも効く (issue #72)" do
+      # 「未設定なら誰でも通る」ゆるい dev モードでも、明示 revoke だけは
+      # override せず維持する (security 操作は operator が意図的に取った
+      # もの — dev convenience に潰されてはいけない)。
+      Application.delete_env(:kaoiro_server, :wrapper_tokens)
+      agent_id = "lab.denylisted-dev-#{System.unique_integer([:positive])}"
+
+      assert :ok = Auth.authorize_wrapper(agent_id, "anything")
+
+      KaoiroServer.TokenDenylist.revoke(agent_id)
+
+      on_exit(fn ->
+        KaoiroServer.TokenDenylist.restore(agent_id)
+      end)
+
+      :ok = poll_until(fn -> KaoiroServer.TokenDenylist.revoked?(agent_id) end)
+      assert {:error, :unauthorized} = Auth.authorize_wrapper(agent_id, "anything")
+    end
+  end
+
+  defp poll_until(pred, attempts \\ 50) do
+    cond do
+      pred.() -> :ok
+      attempts <= 0 -> :timeout
+      true -> Process.sleep(5) && poll_until(pred, attempts - 1)
+    end
   end
 
   describe "authorize_runner/2 (ADR-0023)" do

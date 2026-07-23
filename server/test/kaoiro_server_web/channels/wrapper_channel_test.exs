@@ -70,6 +70,34 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
              )
   end
 
+  test "wrapper:<id> への 'revoked' broadcast で channel が shutdown する (issue #72)" do
+    agent_id = "test.revoke-live"
+    # ChannelCase は test process を channel process と link するので、
+    # :shutdown exit が test process を巻き添えにする。trap_exit で吸収。
+    Process.flag(:trap_exit, true)
+    socket = join_wrapper(agent_id)
+    ref = push(socket, "envelope", envelope(agent_id, "idle"))
+    assert_reply ref, :ok
+
+    channel_pid = socket.channel_pid
+    monitor_ref = Process.monitor(channel_pid)
+
+    KaoiroServerWeb.Endpoint.broadcast(
+      "wrapper:" <> agent_id,
+      "revoked",
+      %{"reason" => "operator_revoke", "revoked_at" => "2026-07-23T15:00:00Z"}
+    )
+
+    # handle_out で {:stop, :shutdown, socket} を返すので channel 終了。
+    assert_receive {:DOWN, ^monitor_ref, :process, ^channel_pid, :shutdown}, 500
+    # trap_exit で受けた {:EXIT, ...} も drain (test 分離のため)。
+    assert_receive {:EXIT, ^channel_pid, :shutdown}
+
+    # terminate/2 が走って disconnected envelope が derive され、
+    # 通常経路 (agents:lobby) に broadcast される。
+    on_exit(fn -> AgentStates.delete(agent_id) end)
+  end
+
   test "フレームキー欠落の envelope を拒否し中継しない" do
     agent_id = "test.invalid-1"
     @endpoint.subscribe("agents:lobby")

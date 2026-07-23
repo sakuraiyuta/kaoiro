@@ -9,6 +9,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentsChannel
 
   defp put_agent(agent_id) do
@@ -618,6 +619,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # 同名 agent_id で再 spawn されても過去の hide-past filter を引きずらない)。
       _ = ClearWatermarks.all()
       assert ClearWatermarks.get(agent_id) == nil
+      # issue #72: delete_agent は auto-revoke で TokenDenylist に永続投入
+      # される。restore は明示 UI からのみ (delete_agent 経路では戻さない)、
+      # なので同名 agent_id での token 復活は起こらない。
+      on_exit(fn -> TokenDenylist.restore(agent_id) end)
+      _ = TokenDenylist.all()
+      assert TokenDenylist.revoked?(agent_id) == true
       assert InterAgentHistory.list_for(agent_id) == []
       assert InterAgentHistory.list_for("test.del-peer") == []
     end
@@ -666,6 +673,72 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "snapshot", %{"agents" => _}
 
       ref = push(socket, "delete_agent", %{"agent_id" => "test.del-none"})
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+  end
+
+  describe "revoke_wrapper_token (issue #72)" do
+    test "operator の revoke は TokenDenylist を投入し wrapper:<id> へ revoked を broadcast" do
+      agent_id = "test.revoke-1"
+      # live agent (稼働中でも revoke できる — 進行中の compromise を切る用途)。
+      put_agent(agent_id)
+      on_exit(fn -> TokenDenylist.restore(agent_id) end)
+
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "revoke_wrapper_token", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok, %{"revoked_at" => revoked_at}
+      assert is_binary(revoked_at)
+      # DETS 反映を待ってから照合。
+      _ = TokenDenylist.all()
+      assert TokenDenylist.revoked?(agent_id) == true
+
+      assert_broadcast "revoked", %{
+        "reason" => "operator_revoke",
+        "revoked_at" => ^revoked_at
+      }
+    end
+
+    test "disconnected agent の revoke も通る (再接続を封じる恒久対策)" do
+      agent_id = "test.revoke-dc"
+      put_disconnected(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+      _ = AgentDirectory.get(agent_id)
+      on_exit(fn -> TokenDenylist.restore(agent_id) end)
+
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "revoke_wrapper_token", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok, %{}
+      _ = TokenDenylist.all()
+      assert TokenDenylist.revoked?(agent_id) == true
+    end
+
+    test "viewer の revoke は forbidden" do
+      agent_id = "test.revoke-viewer"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "revoke_wrapper_token", %{"agent_id" => agent_id})
+      assert_reply ref, :error, %{reason: "forbidden"}
+      # denylist にも入らない (副作用なし)。
+      _ = TokenDenylist.all()
+      refute TokenDenylist.revoked?(agent_id)
+    end
+
+    test "未知 agent の revoke は unknown_agent" do
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref =
+        push(socket, "revoke_wrapper_token", %{"agent_id" => "test.revoke-none"})
+
       assert_reply ref, :error, %{reason: "unknown_agent"}
     end
   end

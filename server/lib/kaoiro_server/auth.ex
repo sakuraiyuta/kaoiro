@@ -34,11 +34,26 @@ defmodule KaoiroServer.Auth do
   is disabled (dev), the token matches a pre-registered `:wrapper_tokens`
   entry, or it is a valid server-minted signed token for this agent_id
   (the spawn path, ADR-0024). Otherwise `{:error, :unauthorized}`.
+
+  Per-agent_id revocation (issue #72): a `TokenDenylist`-listed agent_id
+  is rejected BEFORE the ordinary token compare, so even a token that
+  would otherwise pass the signature check cannot re-join under a
+  revoked id. The check is by agent_id — not by token bytes — because
+  ADR-0024's stateless mint never persists the token, and the
+  `<host>.<rand>` id space makes post-purge collisions negligible.
+  Applies to dev mode too: a denylist entry is a security operation the
+  operator explicitly took (or was applied by `delete_agent`), and dev
+  mode's "any wrapper may connect" must not silently override it.
   """
   def authorize_wrapper(agent_id, token) do
     tokens = parse_pairs(Application.get_env(:kaoiro_server, :wrapper_tokens))
 
     cond do
+      # Fail-closed denylist gate: takes precedence over both the dev
+      # convenience branch and the signed-token branch. An unknown
+      # agent_id (never revoked) returns false here so behaviour for
+      # everyone else is unchanged.
+      KaoiroServer.TokenDenylist.revoked?(agent_id) -> {:error, :unauthorized}
       # Dev convenience: no wrapper tokens configured → any wrapper connects.
       tokens == %{} -> :ok
       registered_wrapper_token?(tokens, agent_id, token) -> :ok
@@ -50,9 +65,11 @@ defmodule KaoiroServer.Auth do
   @doc """
   Mints a per-agent wrapper token for a server-initiated spawn (ADR-0024).
   Signed with the endpoint's `secret_key_base` and bound to `agent_id`, with
-  no expiry — revocation is via key rotation (a per-agent denylist is the
-  future refinement, issue #72). This lets a spawned wrapper authenticate
-  without a pre-registered `:wrapper_tokens` entry.
+  no expiry. Two revocation channels: (a) per-agent_id via
+  `KaoiroServer.TokenDenylist` (issue #72, seeded by `delete_agent` and by
+  operator revoke), and (b) whole-fleet via `secret_key_base` rotation
+  (invalidates every signed token at once). This lets a spawned wrapper
+  authenticate without a pre-registered `:wrapper_tokens` entry.
   """
   def mint_wrapper_token(agent_id) do
     Phoenix.Token.sign(KaoiroServerWeb.Endpoint, @wrapper_token_salt, agent_id)
