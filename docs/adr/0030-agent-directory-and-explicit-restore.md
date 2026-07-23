@@ -93,6 +93,21 @@ goal: **server と runner が同時ダウン・再起動した後、client 側�
   のみで判定し、session_id の有無で gate しない — 実復元可否(SessionPointer
   の存在)はサーバ側判定に一任し、失敗は spawn_result → sticky icon で
   surface する(2026-07-07 追記)。**
+
+  **fresh-restore 追補(phase-25, 2026-07-23)**: SessionPointer は
+  cwd / engine / snapshot を保持しつつ session_id だけが nil のケース
+  (`/clear` detach = ADR-0036 F3 追補 / 未発話 session = ADR-0014 Q-A4)が
+  ある。以前は server の `session_pointer/1` が binary session_id を
+  要求していたため復元ボタンが `no_session` → ⚠ で必ず失敗した。phase-25
+  でこの経路を **fresh-restore** として救済する: server は `resume_session_id`
+  を omit した spawn payload に `apply_resume_snapshot: true` を stamp し、
+  runner は fresh 分岐で snapshot を再適用して同 model / effort / engine /
+  permission 設定の fresh session として立ち上げ直す。詳細は
+  [ADR-0014 F1 追補「session_id なし pointer の fresh-restore」](0014-session-resume-and-restore.md)
+  および [phase-25 計画](../plans/phase-25-fresh-restore-without-session.md)。
+  なお D8 本体の「復元ボタンは disconnected のみで gate」ポリシーは不変で、
+  session_id の有無で表示制御しないという原則は fresh-restore 導入後も
+  そのまま維持される。
 - **D9(二重接続防止)**: 既存 `require_disconnected/1`(ADR-0014 F4)を再利用。
   live agent は復元対象から除外される。
 - **D10(権限)**: 一覧・復元操作とも operator 限定

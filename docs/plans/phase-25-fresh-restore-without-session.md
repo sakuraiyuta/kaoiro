@@ -1,7 +1,7 @@
 ---
 title: Phase 25 — session_id なし offline agent の fresh-restore
 description: /clear 直後・未発話のまま全再起動 (dogfood.sh) したエージェントが offline 復元候補に出るのに restore が :no_session で弾かれ ⚠ になる問題を解消。SessionPointer に session_id が無くても cwd/engine/persona/snapshot から fresh spawn + resume snapshot 再適用で「同じ model/effort/engine/permission 設定」のエージェントとして復元する。
-status: planned
+status: in-progress
 phase: 25
 depends_on: [22, 23]
 last_updated: 2026-07-23
@@ -74,15 +74,15 @@ launch する。
 
 | # | task | file | status |
 |---|------|------|--------|
-| 25-1 | protocol: `SpawnMessage.apply_resume_snapshot?: boolean` 追加、`resume_snapshot` の doc comment を「resume_session_id または apply_resume_snapshot と併走」に更新 | `protocol/src/index.ts` | planned |
-| 25-2 | server: `session_pointer/1` を「cwd 必須・session_id は nil 許容」の形に緩和 (返値 `{:ok, session_id_or_nil, cwd, engine}`)。pointer 不在 / cwd なしは従来どおり `:no_session` | `server/lib/kaoiro_server_web/channels/agents_channel.ex` | planned |
-| 25-3 | server: `build_restore_payload` — session_id nil のとき `resume_session_id` を omit し `"apply_resume_snapshot" => true` を put (binary のときは現行どおり) | 同上 | planned |
-| 25-4 | server: `resume_disconnected` (operator 明示 session pick) は cwd/engine のみ pointer から取るよう修正 — pointer session_id が nil でも explicit resume が通るように | 同上 | planned |
-| 25-5 | server tests: (a) nil-session pointer への restore が resume_session_id なし + apply_resume_snapshot + resume_snapshot 付き spawn を broadcast する (b) pointer 不在 / cwd なしは :no_session 維持 (c) resume_disconnected が nil-session pointer + explicit sid で通る | `server/test/kaoiro_server_web/channels/agents_channel_test.exs` | planned |
-| 25-6 | runner: `parseSpawn` に optional boolean `apply_resume_snapshot` → `ParsedSpawn.applyResumeSnapshot`。`handleSpawn` の fresh 分岐で flag 時のみ `applyResumeSnapshot(parsed, parsed.resumeSnapshot, engine)` 適用後 `#launchSpawn` (T3/F4 なし) | `runner/src/supervisor.ts` | planned |
-| 25-7 | runner tests: (a) flag + snapshot 付き fresh spawn で model/effort/permission_mode/sandbox/network_access が snapshot 由来で launch される (b) flag なし fresh spawn は従来どおり apply されない regression pin (c) flag + snapshot なしは engine default | `runner/test/supervisor.test.ts` | planned |
-| 25-8 | docs: `docs/specs/protocol.md` spawn message に field 追記、ADR-0030 (D8) / ADR-0014 (F1 追補) に fresh-restore 追補 | docs | planned |
-| 25-9 | 手動 dogfood 検証 (下記) | — | planned |
+| 25-1 | protocol: `SpawnMessage.apply_resume_snapshot?: boolean` 追加、`resume_snapshot` の doc comment を「resume_session_id または apply_resume_snapshot と併走」に更新 | `protocol/src/index.ts` | done |
+| 25-2 | server: `session_pointer/1` を「cwd 必須・session_id は nil 許容」の形に緩和 (返値 `{:ok, session_id_or_nil, cwd, engine}`)。pointer 不在 / cwd なしは従来どおり `:no_session` | `server/lib/kaoiro_server_web/channels/agents_channel.ex` | done |
+| 25-3 | server: `build_restore_payload` — session_id nil のとき `resume_session_id` を omit し `"apply_resume_snapshot" => true` を put (binary のときは現行どおり) | 同上 | done |
+| 25-4 | server: `resume_disconnected` (operator 明示 session pick) は cwd/engine のみ pointer から取るよう修正 — pointer session_id が nil でも explicit resume が通るように | 同上 | done (session_pointer/1 の緩和で自動的に通るようになったため個別修正なし) |
+| 25-5 | server tests: (a) nil-session pointer への restore が resume_session_id なし + apply_resume_snapshot + resume_snapshot 付き spawn を broadcast する (b) pointer 不在 / cwd なしは :no_session 維持 (c) resume_disconnected が nil-session pointer + explicit sid で通る | `server/test/kaoiro_server_web/channels/agents_channel_test.exs` | done (5 case 追加、server 全 433 tests 全緑) |
+| 25-6 | runner: `parseSpawn` に optional boolean `apply_resume_snapshot` → `ParsedSpawn.applyResumeSnapshot`。`handleSpawn` の fresh 分岐で flag 時のみ `applyResumeSnapshot(parsed, parsed.resumeSnapshot, engine)` 適用後 `#launchSpawn` (T3/F4 なし) | `runner/src/supervisor.ts` | done |
+| 25-7 | runner tests: (a) flag + snapshot 付き fresh spawn で model/effort/permission_mode/sandbox/network_access が snapshot 由来で launch される (b) flag なし fresh spawn は従来どおり apply されない regression pin (c) flag + snapshot なしは engine default | `runner/test/supervisor.test.ts` | done (4 case 追加、runner 全 236 tests 全緑) |
+| 25-8 | docs: `docs/specs/protocol.md` spawn message に field 追記、ADR-0030 (D8) / ADR-0014 (F1 追補) に fresh-restore 追補 | docs | done |
+| 25-9 | 手動 dogfood 検証 (下記) | — | pending (マスター環境で実施予定) |
 
 **scope 外**:
 - client 変更なし (復元ボタンは既に無条件表示、成功すれば ⚠ は既存

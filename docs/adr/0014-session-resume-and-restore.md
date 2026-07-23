@@ -376,6 +376,60 @@ semantic を破らない) ことを両立する。
   `[]` (仕様の一貫性、operator が明示選択した model が実際 effort 未対応
   なら button を出さない)。
 
+#### F1 追補 — session_id なし pointer の fresh-restore (phase-25, 2026-07-23)
+
+F1 の pointer が `session_id: nil` (cwd / engine / snapshot は保持) と
+なるケースは 2 経路で発生する:
+
+- `/clear` による detach ([ADR-0036](0036-session-lifecycle-commands.md) F3
+  追補): `SessionPointers.detach_session/1` で session_id を明示 nil に
+  落とし、cwd / engine / snapshot は保持する仕様。
+- **未発話 session**: SDK が init を出さないため wrapper が session_id を
+  一度も報告しない (上記 Q-A4 の init 挙動)。
+
+いずれも server 再起動後の offline tile として復元候補に出るが、phase-25
+以前は restore handler の `session_pointer/1` が binary session_id を要求
+していたため `{:error, :no_session}` で reject → `spawn_result` error → ⚠
+となり、削除 + 手動再 launch しか復元手段がなかった。
+
+**fresh-restore (phase-25)**: session_id が nil でも cwd + snapshot が
+残っていれば復元できるよう、以下を運用する:
+
+- server `session_pointer/1` を「cwd 必須・session_id は nil 許容」に緩和。
+- `build_restore_payload` は session_id が binary のとき従来どおり
+  `resume_session_id` を積み、nil のときは `resume_session_id` を **omit** し
+  **`apply_resume_snapshot: true`** を stamp する (protocol.md の spawn 拡張)。
+- runner の `handleSpawn` fresh 分岐 (resume_session_id 不在) で
+  `apply_resume_snapshot` が true のときのみ `applyResumeSnapshot(parsed,
+  parsed.resumeSnapshot, engine)` を発火 (P0 privilege 三軸 + P1 model/effort
+  pair)。T3 (session file 実在) と F4 (同一 session lock) は対象外 —
+  session file を読まないし session id lock も存在しないため直接
+  `#launchSpawn` へ流れる。
+
+**SSOT は runner のまま**: snapshot apply の SSOT は resume 経路と同じく
+runner 側 `applyResumeSnapshot` に一本化する。server で snapshot を
+top-level launch picks に展開して runner へ渡す案は、5-case pair rule の
+Elixir 重複実装 + `*_source` の嘘 stamp を招くため不採用 (上記 F1 追補
+phase-22「server は relay のみ、top-level 二重表現禁止」を維持)。
+
+**flag なし fresh spawn の regression pin**: `apply_resume_snapshot` が
+未指定 or false のときの fresh spawn は従来どおり snapshot を engine 軸へ
+apply しない (D1 no-apply invariant)。resume_snapshot が同じ payload に
+乗っていても drift display 用の wrapper `config.resume_snapshot` として
+passthrough されるだけで、privilege 軸は spawn payload の top-level 値が
+効く。LaunchDialog 経由の operator 明示 launch を fresh-restore 経路が
+黙って上書きすることはない。
+
+**fail-soft**: snapshot が nil の pointer (きわめて古い record 等) は
+`resume_snapshot` 自体が spawn payload に乗らず、runner の
+`applyResumeSnapshot` は no-op → engine default で fresh 復元される。
+削除 + 再 launch よりは常に良い挙動。
+
+**後方互換**: 旧 runner は未知 `apply_resume_snapshot` field を parseSpawn
+の unknown key 経路で無視 → engine default での fresh spawn に degrade
+(復元自体は成功、設定は default)。旧 server + 新 runner は flag が来ない
+ので完全不変。
+
 ### 履歴の正本(A4)
 
 会話履歴の **正本は wrapper ホストの SDK JSONL** とし、サーバの表示用
