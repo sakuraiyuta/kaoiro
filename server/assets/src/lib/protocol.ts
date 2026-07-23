@@ -1357,6 +1357,21 @@ export function parseHistoryReset(
   };
 }
 
+/** ふじ A3 advisory (2026-07-23): layout gate for the response-timeline
+ *  pane (#25). Wide-viewport switch is triggered by matchMedia
+ *  (`≥ 1600px`); the operator gate is because reply logs are
+ *  operator-only (ADR-0012). Extracted so `App.svelte` and the
+ *  integration test share the exact same gate — the pre-A3 test
+ *  duplicated the expression inline, which passed even when App's real
+ *  gate drifted. Kept as `(wide, operator) => boolean` because both
+ *  callers already hold those two booleans in local state. */
+export function shouldShowResponseTimeline(
+  wide: boolean,
+  operator: boolean,
+): boolean {
+  return wide && operator;
+}
+
 /** ふじ R4 must-fix (2026-07-23): best-effort per-pane filter for a
  *  LIVE `inter_agent_message` envelope. The server-side authority is the
  *  ingress order tuple (see agents_channel `merged_histories/*`), but

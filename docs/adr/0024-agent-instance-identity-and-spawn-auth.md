@@ -130,10 +130,10 @@ compromise 対応で必要 ── ため、以下を **署名方式は不変の�
 - **書き込みは synchronous + `:dets.sync/1` fsync-gated**: operator の
   revoke ack と `agent_deleted` / `revoked` broadcast は永続確定後に
   発火する ── crash が revoke と disk 書き込みの間に落ちても revocation
-  が消えない (ふじ #72 M2 review advisory)。sibling stores
-  (`PermissionModes` / `ClearWatermarks`) の遅延 sync 方針とは意図的に
-  違え、denylist だけが per-agent revocation の唯一の authority である
-  ため。
+  が消えない (ふじ #72 M2 review advisory)。`ClearWatermarks` も同じ
+  synchronous+fsync 方針を採用済み (ふじ #109 M7-a must-fix、2026-07-23);
+  `PermissionModes` は現状 lazy sync のまま (operator 選好の記録で、
+  fsync 前 crash なら「未反映で復帰」と semantics 上等価)。
 - **store corruption 時は fail-closed** (ふじ #72 M2 must-fix、
   2026-07-23): DETS open エラーや malformed row を検出したら init を
   `{:stop, ...}` で落とし、元ファイルを削除せず forensic 用に保持する。

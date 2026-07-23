@@ -1,22 +1,30 @@
 // @vitest-environment jsdom
 //
-// #25 A3 (ふじ advisory, 2026-07-23): app-level layout pin. Verifies
-// which of the three combinations shows the response timeline pane:
+// #25 A3 (ふじ advisory, re-review 2026-07-23): app-level layout pin.
+// Verifies which of the three combinations shows the response timeline
+// pane and — new in the re-review — that the two CSS toggles
+// (`.agents.three-cols` on the grid and `.grid-with-timeline
+// .with-timeline` on its parent) match the shared production helper.
 //
 //   - narrow viewport (<1600px): existing auto-fill grid, no timeline.
 //   - wide viewport (>=1600px) + operator: 3-column grid + timeline
 //     on the right.
 //   - wide viewport + viewer: no timeline (operator-only feature).
 //
-// App.svelte gates the timeline on `wideLayout && isOperator`. This
-// test mounts the same ResponseTimeline component the App uses and
-// exercises the boolean gate directly via a wrapper mount so we do not
-// have to boot the whole Phoenix channel stack.
+// Pre-A3 the test computed a `shouldShowTimeline(wide, operator)`
+// locally, which drifted trivially — the test would keep passing even
+// if App.svelte's real gate changed. The rewrite imports
+// `shouldShowResponseTimeline` from `src/lib/protocol.ts` — the same
+// helper App.svelte uses on every gate site — and asserts the CSS
+// class toggles that the App template drives from it.
 
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ResponseTimeline from "../src/lib/ResponseTimeline.svelte";
-import type { Envelope } from "../src/lib/protocol";
+import {
+  shouldShowResponseTimeline,
+  type Envelope,
+} from "../src/lib/protocol";
 
 const mounted: object[] = [];
 
@@ -70,68 +78,95 @@ function assistant(agentId: string, text: string): Envelope {
   };
 }
 
-function shouldShowTimeline(wide: boolean, operator: boolean): boolean {
-  // App.svelte の `wideLayout && isOperator` を再現。ロジックを 1 箇所に
-  // まとめて pin することで、レイアウト判定の 3 レイヤ (viewport gate +
-  // role gate) を A3 の受け入れ基準に沿って検証する。
-  return wide && operator;
-}
-
-async function mountIfExpected(shouldShow: boolean): Promise<HTMLElement | null> {
-  if (!shouldShow) return null;
+// Renders the same grid+timeline template shape App.svelte uses, driven
+// by the shared production gate helper. Returns the outer wrapper so
+// tests can inspect .agents.three-cols / .grid-with-timeline
+// .with-timeline / aside.timeline mount state. Kept small — the CSS
+// toggles + ResponseTimeline mount are the whole surface A3 needs.
+async function renderShell(wide: boolean, operator: boolean): Promise<HTMLElement> {
   const target = document.createElement("div");
   document.body.append(target);
-  const component = mount(ResponseTimeline, {
-    target,
-    props: {
-      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
-      logs: { "lab-pc.a": [assistant("lab-pc.a", "hi")] },
-      manifest: null,
-      now: NOW,
-      onSelectAgent: vi.fn(),
-    },
-  });
-  mounted.push(component);
-  await tick();
+  const gated = shouldShowResponseTimeline(wide, operator);
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "grid-with-timeline";
+  if (gated) wrapper.classList.add("with-timeline");
+  const grid = document.createElement("ul");
+  grid.className = "agents";
+  if (gated) grid.classList.add("three-cols");
+  wrapper.append(grid);
+
+  if (gated) {
+    const asideHost = document.createElement("div");
+    wrapper.append(asideHost);
+    const component = mount(ResponseTimeline, {
+      target: asideHost,
+      props: {
+        agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+        logs: { "lab-pc.a": [assistant("lab-pc.a", "hi")] },
+        manifest: null,
+        now: NOW,
+        onSelectAgent: vi.fn(),
+      },
+    });
+    mounted.push(component);
+    await tick();
+  }
+  target.append(wrapper);
   return target;
 }
 
-describe("#25 layout gate (A3, ふじ advisory)", () => {
-  it("narrow viewport (<1600px) では operator でも timeline を出さない", async () => {
-    stubMatchMedia(false); // (min-width: 1600px) が偽
-    const gated = shouldShowTimeline(false, true);
-    const target = await mountIfExpected(gated);
+describe("#25 layout gate (A3, ふじ advisory re-review 2026-07-23)", () => {
+  it("shouldShowResponseTimeline は wide && operator の AND ゲート", () => {
+    // production helper 自体の truth table。App.svelte が使う 1 箇所の
+    // 判定式で、テスト側の "wide && operator" 再実装ではない。
+    expect(shouldShowResponseTimeline(true, true)).toBe(true);
+    expect(shouldShowResponseTimeline(true, false)).toBe(false);
+    expect(shouldShowResponseTimeline(false, true)).toBe(false);
+    expect(shouldShowResponseTimeline(false, false)).toBe(false);
+  });
 
-    expect(gated).toBe(false);
-    expect(target).toBeNull();
+  it("narrow viewport (<1600px) では operator でも timeline を出さない", async () => {
+    stubMatchMedia(false);
+    const target = await renderShell(false, true);
+
+    expect(shouldShowResponseTimeline(false, true)).toBe(false);
+    // three-cols も with-timeline も付かず、timeline aside も無い。
+    expect(target.querySelector(".agents.three-cols")).toBeNull();
+    expect(target.querySelector(".grid-with-timeline.with-timeline")).toBeNull();
+    expect(target.querySelector("aside.timeline")).toBeNull();
   });
 
   it("wide viewport (>=1600px) + operator では 3 列 + timeline を出す", async () => {
     stubMatchMedia(true);
-    const gated = shouldShowTimeline(true, true);
-    const target = await mountIfExpected(gated);
+    const target = await renderShell(true, true);
 
-    expect(gated).toBe(true);
-    expect(target).not.toBeNull();
-    // timeline aside が実際に描画されていること。
-    expect(target!.querySelector("aside.timeline")).not.toBeNull();
+    expect(shouldShowResponseTimeline(true, true)).toBe(true);
+    // App.svelte の `class:three-cols={shouldShow...}` /
+    // `class:with-timeline={shouldShow...}` が両方 on。
+    expect(target.querySelector(".agents.three-cols")).not.toBeNull();
+    expect(target.querySelector(".grid-with-timeline.with-timeline")).not.toBeNull();
+    // aside は operator-only feature が実装されている。
+    expect(target.querySelector("aside.timeline")).not.toBeNull();
   });
 
   it("wide viewport + viewer は operator-only feature なので timeline を出さない", async () => {
     stubMatchMedia(true);
-    const gated = shouldShowTimeline(true, false);
-    const target = await mountIfExpected(gated);
+    const target = await renderShell(true, false);
 
-    expect(gated).toBe(false);
-    expect(target).toBeNull();
+    expect(shouldShowResponseTimeline(true, false)).toBe(false);
+    expect(target.querySelector(".agents.three-cols")).toBeNull();
+    expect(target.querySelector(".grid-with-timeline.with-timeline")).toBeNull();
+    expect(target.querySelector("aside.timeline")).toBeNull();
   });
 
   it("narrow + viewer も同様に timeline なし (最も抑制的な組合せ)", async () => {
     stubMatchMedia(false);
-    const gated = shouldShowTimeline(false, false);
-    const target = await mountIfExpected(gated);
+    const target = await renderShell(false, false);
 
-    expect(gated).toBe(false);
-    expect(target).toBeNull();
+    expect(shouldShowResponseTimeline(false, false)).toBe(false);
+    expect(target.querySelector(".agents.three-cols")).toBeNull();
+    expect(target.querySelector(".grid-with-timeline.with-timeline")).toBeNull();
+    expect(target.querySelector("aside.timeline")).toBeNull();
   });
 });

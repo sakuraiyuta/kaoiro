@@ -28,6 +28,7 @@
     isReplyEnvelope,
     mergeTranscriptEntries,
     resetTranscriptHistory,
+    shouldShowResponseTimeline,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -896,8 +897,8 @@
     <!-- #25: wide viewports show grid + timeline side-by-side.
          `class:with-timeline` toggles the CSS grid template so the
          narrow-viewport layout stays a single `.agents` block. -->
-    <div class="grid-with-timeline" class:with-timeline={wideLayout && isOperator}>
-      <ul class="agents" class:three-cols={wideLayout && isOperator}>
+    <div class="grid-with-timeline" class:with-timeline={shouldShowResponseTimeline(wideLayout, isOperator)}>
+      <ul class="agents" class:three-cols={shouldShowResponseTimeline(wideLayout, isOperator)}>
         {#each sorted as envelope, index (envelope.agent_id)}
           <li style:--stagger="{index * 60}ms">
             <AgentCard
@@ -930,7 +931,7 @@
           </li>
         {/each}
       </ul>
-      {#if wideLayout && isOperator}
+      {#if shouldShowResponseTimeline(wideLayout, isOperator)}
         <ResponseTimeline
           {agents}
           {logs}
