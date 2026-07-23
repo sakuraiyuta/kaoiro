@@ -237,6 +237,22 @@ agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの�
 返信しない場合は通常の応答(`result` envelope)を返し、conversation
 は自然消滅(server 側 wallclock タイムアウトで自動 done を付与)。
 
+#### 同期 reply 待ち (`send_to_agent.wait_for_response`)
+
+通常の受信は上記どおり次 SDK turn への注入である。現在の SDK turn
+の中で peer の応答を必要とする場合だけ、送信側は
+`wait_for_response: true` を指定できる。wrapper は送信後、同じ
+`conversation_id` の次 inbound envelope を待ち、受信 envelope 全文
+（`body` / `meta` を含む）をその **同じ tool result** で返す。
+
+- 既定は `false` であり、既存の fire-and-forget / 次turn注入の挙動は不変。
+- `timeout_ms` は省略時 60,000ms、正の整数、最大 300,000ms。timeout時は
+  送信済み ack と `reply_pending=true` を返し、送信を取り消さない。
+- waiter が受け取った envelope は次 SDK turn へ重複注入しない。timeout後に
+  遅れて到着した envelope は通常どおり次turn注入する。
+- 同一 `conversation_id` では waiter を1件だけ許可する。重複した同期waitは
+  送信前に tool error とする。
+
 ### コンパニオンツール (wrapper の SDK MCP)
 
 wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allowedTools

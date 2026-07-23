@@ -38,7 +38,6 @@ import { ServerLink } from "@kaoiro/wrapper-core";
 import { resolveClaudeSources } from "./source_resolution.js";
 import type {
   Envelope,
-  InterAgentMessagePayload,
   KaoiroState,
   ModelSource,
   PermissionMode,
@@ -398,22 +397,16 @@ async function main(): Promise<void> {
       host.attachClose(uploadId);
     },
     onInterAgentMessage: (envelope) => {
+      if (interAgent?.receiveInbound(envelope)) {
+        process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
+        return;
+      }
       // Server routed an inter_agent_message to this wrapper (peer reply or
       // synthesized escalate-to-user). Track the inbound turn_number so our
       // next outbound send_to_agent stays monotonic, then inject the
       // formatted text as a new SDK turn (protocol-inter-agent spec
       // 「受信側の挙動」). The host serialises through instructionChain so a
       // mid-PDF render cannot reorder this against an operator instruction.
-      const payload = envelope.payload as Partial<InterAgentMessagePayload>;
-      if (
-        typeof payload.conversation_id === "string" &&
-        typeof payload.turn_number === "number"
-      ) {
-        interAgent?.observeInbound(
-          payload.conversation_id,
-          payload.turn_number,
-        );
-      }
       const text = formatInboundMessage(envelope);
       process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
       instructionChain = instructionChain.then(() =>

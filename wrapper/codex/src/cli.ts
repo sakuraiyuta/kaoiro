@@ -18,7 +18,6 @@ import {
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
-  InterAgentMessagePayload,
   KaoiroState,
   ModelSource,
 } from "@kaoiro/agent-common";
@@ -244,15 +243,9 @@ async function main(): Promise<void> {
       );
     },
     onInterAgentMessage: (envelope) => {
-      const payload = envelope.payload as Partial<InterAgentMessagePayload>;
-      if (
-        typeof payload.conversation_id === "string" &&
-        typeof payload.turn_number === "number"
-      ) {
-        interAgent?.observeInbound(
-          payload.conversation_id,
-          payload.turn_number,
-        );
+      if (interAgent?.receiveInbound(envelope)) {
+        process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
+        return;
       }
       const text = formatInboundMessage(envelope);
       process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);

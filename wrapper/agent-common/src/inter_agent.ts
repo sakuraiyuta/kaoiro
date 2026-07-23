@@ -78,6 +78,11 @@ const KIND_VALUES = [
   "done",
 ] as const satisfies readonly InterAgentMessageKind[];
 
+/** Default wait chosen for synchronous peer collaboration. Callers may raise
+ * it to the master-approved hard maximum below for a long-running peer. */
+const DEFAULT_REPLY_TIMEOUT_MS = 60_000;
+const MAX_REPLY_TIMEOUT_MS = 300_000;
+
 /** Zod raw shape of send_to_agent's input — the SSOT the Claude adapter
  *  hands to the SDK's `tool()` helper and from which the JSON Schema for
  *  the codex bridge is derived (z.toJSONSchema). */
@@ -126,6 +131,21 @@ export const SEND_TO_AGENT_INPUT_SHAPE = {
     .describe(
       "Required when kind=reject; concrete reason for refusing the proposal.",
     ),
+  wait_for_response: z
+    .boolean()
+    .optional()
+    .describe(
+      "Wait for the next inbound message in this conversation and return it from this tool call. Defaults to false.",
+    ),
+  timeout_ms: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_REPLY_TIMEOUT_MS)
+    .optional()
+    .describe(
+      "Maximum synchronous wait in milliseconds when wait_for_response=true (default 60000, maximum 300000).",
+    ),
 };
 
 /** Compiled Zod object for validation + JSON Schema derivation. */
@@ -139,7 +159,7 @@ const EMPTY_OBJECT_SCHEMA: Record<string, unknown> = {
 };
 
 const TOOL_DESCRIPTION =
-  "Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass `conversation_id` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. The `to` field MUST be an exact agent_id — if you only know a peer by their display name, call `list_agents` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.";
+  "Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass `conversation_id` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. Set wait_for_response=true only when the current turn needs the peer's next reply: its full envelope is returned by this same tool call; timeout returns a non-destructive reply_pending acknowledgement. The `to` field MUST be an exact agent_id — if you only know a peer by their display name, call `list_agents` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.";
 
 const LIST_AGENTS_DESCRIPTION =
   "List other kaoiro agents currently known to the server. Returns each peer's agent_id, persona (id/name/sprite_set), current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected), and engine/model/effort when reported. Use this to resolve a peer's display name and execution traits before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address. A proper-name collaboration request refers to an existing kaoiro peer — resolve it here first: 1 match → send_to_agent, several → ask the operator, 0 matches → report the persona is absent and never spawn a same-named internal sub-agent as a substitute.";
@@ -150,6 +170,11 @@ const WHOAMI_DESCRIPTION =
 interface ConversationTrack {
   /** Highest turn_number observed so far in this conversation. */
   turnNumber: number;
+}
+
+interface ReplyWaiter {
+  resolve: (envelope: Envelope | undefined) => void;
+  timeout: ReturnType<typeof setTimeout>;
 }
 
 export interface InterAgentToolOptions {
@@ -183,6 +208,7 @@ export class InterAgentTool {
   readonly #now: () => string;
   readonly #newId: () => string;
   readonly #conversations = new Map<string, ConversationTrack>();
+  readonly #replyWaiters = new Map<string, ReplyWaiter>();
 
   constructor(options: InterAgentToolOptions) {
     this.#options = options;
@@ -198,6 +224,29 @@ export class InterAgentTool {
     const track = this.#conversations.get(conversationId) ?? { turnNumber: 0 };
     if (turnNumber > track.turnNumber) track.turnNumber = turnNumber;
     this.#conversations.set(conversationId, track);
+  }
+
+  /** Handles an inbound envelope before the CLI schedules normal next-turn
+   * injection. A matching synchronous waiter consumes exactly one reply, so
+   * its body/meta reaches the current tool result instead of being injected a
+   * second time on the SDK's next turn. Returns true only when consumed. */
+  receiveInbound(envelope: Envelope): boolean {
+    const payload = envelope.payload as Partial<InterAgentMessagePayload>;
+    if (
+      typeof payload.conversation_id !== "string" ||
+      typeof payload.turn_number !== "number"
+    ) {
+      return false;
+    }
+
+    this.observeInbound(payload.conversation_id, payload.turn_number);
+    const waiter = this.#replyWaiters.get(payload.conversation_id);
+    if (!waiter) return false;
+
+    this.#replyWaiters.delete(payload.conversation_id);
+    clearTimeout(waiter.timeout);
+    waiter.resolve(envelope);
+    return true;
   }
 
   /** The engine-agnostic descriptors of the three tools (ADR-0032 F5):
@@ -299,9 +348,20 @@ export class InterAgentTool {
     }
 
     const conversationId = args.conversation_id ?? this.#newId();
+    const waitForResponse = args.wait_for_response === true;
+    if (waitForResponse && this.#replyWaiters.has(conversationId)) {
+      return errorResult(
+        `send_to_agent failed: a synchronous reply wait is already active for conversation_id=${conversationId}`,
+      );
+    }
+
     const track = this.#conversations.get(conversationId) ?? { turnNumber: 0 };
     track.turnNumber += 1;
     this.#conversations.set(conversationId, track);
+    // receiveInbound() can advance the shared conversation track while this
+    // invocation awaits a peer, but the acknowledgement must describe the
+    // turn that was actually sent.
+    const sentTurnNumber = track.turnNumber;
 
     const meta: InterAgentMessagePayload["meta"] = {
       done: args.done ?? false,
@@ -315,7 +375,7 @@ export class InterAgentTool {
     const payload: InterAgentMessagePayload = {
       to: args.to,
       conversation_id: conversationId,
-      turn_number: track.turnNumber,
+      turn_number: sentTurnNumber,
       kind: args.kind,
       body: args.body,
       meta,
@@ -328,16 +388,62 @@ export class InterAgentTool {
       this.#now(),
       payload,
     );
+
+    const timeoutMs = args.timeout_ms ?? DEFAULT_REPLY_TIMEOUT_MS;
+    const reply = waitForResponse
+      ? this.#waitForReply(conversationId, timeoutMs)
+      : undefined;
     this.#options.send(envelope);
+
+    const sent = `sent to ${args.to} (conversation_id=${conversationId}, turn_number=${sentTurnNumber})`;
+    if (!reply) {
+      return { content: [{ type: "text", text: sent }] };
+    }
+
+    const inbound = await reply;
+    if (!inbound) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${sent}; reply_pending=true (timeout_ms=${timeoutMs})`,
+          },
+        ],
+      };
+    }
 
     return {
       content: [
         {
           type: "text",
-          text: `sent to ${args.to} (conversation_id=${conversationId}, turn_number=${track.turnNumber})`,
+          text: JSON.stringify(
+            {
+              sent: {
+                to: args.to,
+                conversation_id: conversationId,
+                turn_number: sentTurnNumber,
+              },
+              reply: inbound,
+            },
+            null,
+            2,
+          ),
         },
       ],
     };
+  }
+
+  #waitForReply(
+    conversationId: string,
+    timeoutMs: number,
+  ): Promise<Envelope | undefined> {
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.#replyWaiters.delete(conversationId);
+        resolve(undefined);
+      }, timeoutMs);
+      this.#replyWaiters.set(conversationId, { resolve, timeout });
+    });
   }
 }
 

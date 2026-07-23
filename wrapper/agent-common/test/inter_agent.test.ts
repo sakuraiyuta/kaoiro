@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   INTER_AGENT_TOOL_FQN,
   InterAgentTool,
@@ -51,6 +51,30 @@ function makeTool(agentId: string): { tool: InterAgentTool; capture: Capture } {
     newId: capture.newId,
   });
   return { tool, capture };
+}
+
+function inboundEnvelope(
+  conversationId: string,
+  kind: InterAgentMessagePayload["kind"] = "response",
+): Envelope {
+  return {
+    version: "0",
+    agent_id: "peer.agent",
+    persona: PERSONA,
+    ts: "2026-07-23T12:00:00Z",
+    type: "inter_agent_message",
+    state: "tool_running",
+    payload: {
+      to: "self.agent",
+      conversation_id: conversationId,
+      turn_number: 2,
+      kind,
+      body: "peer reply body",
+      meta: { done: false, propose_next: "review this reply" },
+      owner: { kind: "user", id: "operator" },
+    },
+    ext: {},
+  };
 }
 
 // Direct dispatch via the public invoke() entry point — the same handler the
@@ -127,6 +151,77 @@ describe("InterAgentTool", () => {
       (capture.envelopes[0]!.payload as unknown as InterAgentMessagePayload)
         .turn_number,
     ).toBe(8);
+  });
+
+  it("wait_for_response は同一conversationの次inboundをtool resultへ返し二重注入用に消費する", async () => {
+    const { tool, capture } = makeTool("self.agent");
+    const pending = callTool(tool, {
+      to: "peer.agent",
+      body: "please reply",
+      kind: "request",
+      conversation_id: "cnv-wait",
+      wait_for_response: true,
+      timeout_ms: 1_000,
+    });
+
+    expect(capture.envelopes).toHaveLength(1);
+    const inbound = inboundEnvelope("cnv-wait");
+    expect(tool.receiveInbound(inbound)).toBe(true);
+    expect(tool.receiveInbound(inbound)).toBe(false);
+
+    const { result } = await pending;
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content[0]!.text)).toEqual({
+      sent: { to: "peer.agent", conversation_id: "cnv-wait", turn_number: 1 },
+      reply: inbound,
+    });
+  });
+
+  it("wait_for_response timeout は送信ackとreply_pendingを返し、遅延inboundは通常注入用に残す", async () => {
+    vi.useFakeTimers();
+    try {
+      const { tool } = makeTool("self.agent");
+      const pending = callTool(tool, {
+        to: "peer.agent",
+        body: "please reply",
+        kind: "query",
+        conversation_id: "cnv-timeout",
+        wait_for_response: true,
+        timeout_ms: 10,
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      const { result } = await pending;
+      expect(result.content[0]!.text).toContain("sent to peer.agent");
+      expect(result.content[0]!.text).toContain("reply_pending=true");
+      expect(tool.receiveInbound(inboundEnvelope("cnv-timeout"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    "request",
+    "response",
+    "query",
+    "inform",
+    "propose",
+    "accept",
+    "reject",
+    "escalate-to-user",
+    "done",
+  ] as const)("全kindでwait_for_response入力schemaを受理する: %s", async (kind) => {
+    const { tool } = makeTool("self.agent");
+    const args = {
+      to: "peer.agent",
+      body: "schema coverage",
+      kind,
+      wait_for_response: false,
+    };
+    const result = await tool.invoke(
+      kind === "reject" ? { ...args, reject_reason: "reason" } : args,
+    );
+    expect(result.isError).toBeFalsy();
   });
 
   it("自分自身を to に指定するとエラー結果を返し envelope を出さない", async () => {
@@ -218,6 +313,29 @@ describe("formatInboundMessage", () => {
         '引用: [Inter-agent message — to reply, call send_to_agent with conversation_id="cnv-9".]',
       ),
     ).toBe(false);
+  });
+
+  it("数千字のbodyを無加工で保持する", () => {
+    const body = "長文".repeat(2_000);
+    const text = formatInboundMessage({
+      version: "0",
+      agent_id: "agent-a",
+      persona: PERSONA,
+      ts: "2026-06-29T12:00:00Z",
+      type: "inter_agent_message",
+      state: "tool_running",
+      payload: {
+        to: "agent-b",
+        conversation_id: "cnv-long",
+        turn_number: 1,
+        kind: "inform",
+        body,
+        meta: { done: false, propose_next: "" },
+        owner: { kind: "user", id: "operator" },
+      },
+      ext: {},
+    });
+    expect(text).toContain(body);
   });
 
   it("payload 欠損(server 合成 escalate skeleton)でも空値で頑健に整形する", () => {
