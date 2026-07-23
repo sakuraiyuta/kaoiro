@@ -49,6 +49,12 @@
   // Per-agent reply transcript (operator-only, ADR-0012): log/result
   // envelopes accumulate here instead of overwriting the latest state.
   let logs = $state<Record<string, Envelope[]>>({});
+  // Per-agent clear watermarks (issue #109): agent_id => ISO-8601 UTC ts.
+  // Populated from the join history push and refreshed by every live
+  // `history_cleared` broadcast. Passed to `fanOutInterAgentHistory` so
+  // durable IA older than a pane's watermark stays hidden on subsequent
+  // reloads. Sender-side filtering already ran server-side.
+  let clearWatermarks = $state<Record<string, string>>({});
   // agent_id of the agent shown full-screen, or null for the grid.
   let selected = $state<string | null>(null);
   // Viewport centre of the tile that opened the detail, for the expand
@@ -295,17 +301,36 @@
             }
           }
         },
-        onHistory: (histories) =>
-          (logs = mergeHistories(fanOutInterAgentHistory(histories), logs)),
-        onHistoryCleared: (agentId, sessionId) => {
+        onHistory: (histories, watermarks) => {
+          // issue #109: persist watermarks BEFORE fan-out so the receiver-side
+          // filter uses the freshest values on the same push.
+          clearWatermarks = { ...clearWatermarks, ...watermarks };
+          logs = mergeHistories(
+            fanOutInterAgentHistory(histories, clearWatermarks),
+            logs,
+          );
+        },
+        onHistoryCleared: (agentId, sessionId, watermark) => {
           // An operator purged past-session lines (#48); keep only the
           // surviving session's transcript to match the server buffer.
           const prev = logs[agentId];
-          if (!prev) return;
-          logs = {
-            ...logs,
-            [agentId]: prev.filter((e) => e.session_id === sessionId),
-          };
+          if (prev) {
+            logs = {
+              ...logs,
+              [agentId]: prev.filter((e) => e.session_id === sessionId),
+            };
+          }
+          // issue #109: live-refresh the watermark map so a subsequent
+          // history push (on another agent's join, e.g.) fan-outs with
+          // the new value. Move ONLY forward — same monotonic-advance
+          // rule as the server store, so an out-of-order retry cannot
+          // re-expose past IA in this session.
+          if (typeof watermark === "string") {
+            const current = clearWatermarks[agentId];
+            if (current === undefined || current < watermark) {
+              clearWatermarks = { ...clearWatermarks, [agentId]: watermark };
+            }
+          }
         },
         onHistoryReset: (agentId, preserveInterAgent) => {
           // Resume replay cannot rebuild structured IA (#105), while

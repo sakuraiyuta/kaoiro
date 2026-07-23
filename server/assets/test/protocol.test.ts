@@ -351,6 +351,36 @@ describe("inter-agent history replay (#105)", () => {
     expect(expanded["agent-b"]).toEqual([message]);
   });
 
+  it("issue #109: receiver の clear watermark が envelope.ts 以上なら peer pane から drop", () => {
+    // agent-b (receiver) の watermark が envelope.ts と同じ → drop (<=)。
+    const expanded = fanOutInterAgentHistory(
+      { "agent-a": [message] },
+      { "agent-b": message.ts },
+    );
+    // sender pane (server で既に filter 済みだが、client fanOut は sender
+    // pane 由来のエントリを丸ごと入れる、そこは既存挙動と一致)。
+    expect(expanded["agent-a"]).toEqual([message]);
+    // receiver pane では drop されているので key 自体が生えない。
+    expect(expanded["agent-b"]).toBeUndefined();
+  });
+
+  it("issue #109: receiver の watermark が envelope.ts より古ければ peer pane に届く", () => {
+    const older = "2026-07-13T04:00:00Z"; // message.ts (05:00:00Z) より前
+    const expanded = fanOutInterAgentHistory(
+      { "agent-a": [message] },
+      { "agent-b": older },
+    );
+    expect(expanded["agent-b"]).toEqual([message]);
+  });
+
+  it("issue #109: 該当 pane に watermark 未設定なら従来どおり fanOut される (regression pin)", () => {
+    const expanded = fanOutInterAgentHistory(
+      { "agent-a": [message] },
+      { "unrelated-agent": "2999-01-01T00:00:00Z" },
+    );
+    expect(expanded["agent-b"]).toEqual([message]);
+  });
+
   it("resume history_reset では inter-agent envelope だけを保持する", () => {
     expect(resetTranscriptHistory([log, message], true)).toEqual([message]);
   });
