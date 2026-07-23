@@ -3,6 +3,7 @@
   import AgentCard from "./lib/AgentCard.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
   import LaunchDialog from "./lib/LaunchDialog.svelte";
+  import ResponseTimeline from "./lib/ResponseTimeline.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import { adjacentAgentId } from "./lib/agentNavigation";
   import { expressionFor, spriteUrlFor } from "./lib/expression";
@@ -31,6 +32,7 @@
     notifyWait,
     requestNotificationPermission,
   } from "./lib/notify";
+  import { RELATIVE_TIME_TICK_MS } from "./lib/relativeTime";
 
   let agents = $state<Record<string, Envelope>>({});
   // Restart-surviving identity ledger (ADR-0030) — every agent_id we have
@@ -55,6 +57,19 @@
   // durable IA older than a pane's watermark stays hidden on subsequent
   // reloads. Sender-side filtering already ran server-side.
   let clearWatermarks = $state<Record<string, string>>({});
+  // Ticking clock owned by App for the response-timeline pane (#25).
+  // Passed to ResponseTimeline so its "N 分前" labels refresh live
+  // without each row calling Date.now on its own. Advanced on
+  // RELATIVE_TIME_TICK_MS by a setInterval in onMount; the same clock
+  // also lets svelte-check track the reactivity chain cleanly.
+  let now = $state(Date.now());
+  let nowTimer: ReturnType<typeof setInterval> | undefined;
+  // Wide-viewport switch for the 3-col grid + timeline layout (#25).
+  // Fires at ≥ 1600px; below that, the current auto-fill grid stays
+  // (responsive fallback). Uses matchMedia so the browser handles the
+  // transitions and svelte-check does not have to reason about window
+  // resize listeners.
+  let wideLayout = $state(false);
   // agent_id of the agent shown full-screen, or null for the grid.
   let selected = $state<string | null>(null);
   // Viewport centre of the tile that opened the detail, for the expand
@@ -654,7 +669,40 @@
       if (!destroyed) authChecked = true;
     })();
 
+    // #25: refresh the timeline clock on a fixed cadence. Kept short
+    // enough (30 s) that "たった今" gives way to concrete minutes but
+    // not so short that it fires every animation frame; the tick is
+    // idempotent (just Date.now()) so a missed tick during background
+    // throttling costs nothing.
+    nowTimer = setInterval(() => {
+      now = Date.now();
+    }, RELATIVE_TIME_TICK_MS);
+
+    // #25: track the wide-layout breakpoint. matchMedia so the browser
+    // fires on transitions and we do not re-read layout on every render.
+    // Guard for jsdom (test env) that lacks matchMedia; default = narrow.
+    const mql =
+      typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia("(min-width: 1600px)")
+        : null;
+    if (mql !== null) {
+      wideLayout = mql.matches;
+      const onChange = (e: MediaQueryListEvent) => (wideLayout = e.matches);
+      mql.addEventListener("change", onChange);
+      // Cleanup captured below in the return; scoped ref so we can remove.
+      const detachMql = () => mql.removeEventListener("change", onChange);
+      return () => {
+        detachMql();
+        if (nowTimer !== undefined) clearInterval(nowTimer);
+        nowTimer = undefined;
+        destroyed = true;
+        endSession();
+      };
+    }
+
     return () => {
+      if (nowTimer !== undefined) clearInterval(nowTimer);
+      nowTimer = undefined;
       destroyed = true;
       endSession();
     };
@@ -811,39 +859,58 @@
       no agents yet — start a wrapper with <code>server_url</code> set.
     </p>
   {:else}
-    <ul class="agents">
-      {#each sorted as envelope, index (envelope.agent_id)}
-        <li style:--stagger="{index * 60}ms">
-          <AgentCard
-            {envelope}
-            {manifest}
-            spawnError={spawnErrors[envelope.agent_id] ?? null}
-            onSelect={(o) => {
-              origin = o ?? null;
-              selected = envelope.agent_id;
-            }}
-            onInterrupt={connection
-              ? () => connection!.sendInterrupt(envelope.agent_id)
-              : undefined}
-            onStop={connection
-              ? () =>
-                  connection!
-                    .stop(envelope.agent_id)
-                    .catch((e) => notifyActionError("終了", e))
-              : undefined}
-            onRestore={connection
-              ? () =>
-                  connection!
-                    .restore(envelope.agent_id)
-                    .catch((e) => notifyActionError("復帰", e))
-              : undefined}
-            onDelete={connection
-              ? () => connection!.deleteAgent(envelope.agent_id)
-              : undefined}
-          />
-        </li>
-      {/each}
-    </ul>
+    <!-- #25: wide viewports show grid + timeline side-by-side.
+         `class:with-timeline` toggles the CSS grid template so the
+         narrow-viewport layout stays a single `.agents` block. -->
+    <div class="grid-with-timeline" class:with-timeline={wideLayout && isOperator}>
+      <ul class="agents" class:three-cols={wideLayout && isOperator}>
+        {#each sorted as envelope, index (envelope.agent_id)}
+          <li style:--stagger="{index * 60}ms">
+            <AgentCard
+              {envelope}
+              {manifest}
+              spawnError={spawnErrors[envelope.agent_id] ?? null}
+              onSelect={(o) => {
+                origin = o ?? null;
+                selected = envelope.agent_id;
+              }}
+              onInterrupt={connection
+                ? () => connection!.sendInterrupt(envelope.agent_id)
+                : undefined}
+              onStop={connection
+                ? () =>
+                    connection!
+                      .stop(envelope.agent_id)
+                      .catch((e) => notifyActionError("終了", e))
+                : undefined}
+              onRestore={connection
+                ? () =>
+                    connection!
+                      .restore(envelope.agent_id)
+                      .catch((e) => notifyActionError("復帰", e))
+                : undefined}
+              onDelete={connection
+                ? () => connection!.deleteAgent(envelope.agent_id)
+                : undefined}
+            />
+          </li>
+        {/each}
+      </ul>
+      {#if wideLayout && isOperator}
+        <ResponseTimeline
+          {agents}
+          {logs}
+          {manifest}
+          {now}
+          onSelectAgent={(id) => {
+            // 詳細を開く。timeline クリックには「元タイル座標」がないので
+            // origin=null に倒し、既存の expand-from-origin アニメは省略。
+            origin = null;
+            selected = id;
+          }}
+        />
+      {/if}
+    </div>
   {/if}
   {#if selectedEnvelope === null && isOperator && offlineEntries.length > 0}
     <!-- Offline agents (ADR-0030): directory-only (server restarted) OR live
@@ -1161,6 +1228,24 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
     gap: 1.2rem;
+  }
+
+  /* #25: wide viewport (≥ 1600px), operator only. Pin the grid to 3
+     columns and expose the right pane for the response timeline. Only
+     applied via the class binding in the template, so the narrow
+     viewport keeps the auto-fill grid — no CSS query is checked here. */
+  .agents.three-cols {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .grid-with-timeline.with-timeline {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(22rem, 26rem);
+    gap: 1.5rem;
+    align-items: start;
+    /* Timeline uses its own scroll so long agent lists on the left do
+       not push the timeline out of the viewport. */
+    min-height: 0;
   }
 
   .agents > li {
