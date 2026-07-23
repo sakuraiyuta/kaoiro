@@ -104,6 +104,10 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   @doc """
+  **Deprecated compatibility API.** Production session transitions use
+  `SessionStarts`; this remains only to read and exercise historical DETS
+  record shapes during the migration.
+
   Atomically advances A's boundary for a genuine session transition
   identified by `sid_opt` (Codex lazy passes `nil`; Trigger 2 external
   switch passes the new sid; Trigger 1 SessionResets confirm_connection
@@ -136,7 +140,7 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   @doc """
-  Codex lazy sid adopt (ふじ 検収 2 fix-round M3, 2026-07-23): patches
+  **Deprecated compatibility API.** Codex lazy sid adopt (ふじ 検収 2 fix-round M3, 2026-07-23): patches
   an existing tuple record whose `sid` is nil so it now carries the
   real `sid`. No-op if the record is missing, already has a sid, or
   is `:iso_only`. Does NOT allocate a new order — the boundary itself
@@ -149,7 +153,7 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   @doc """
-  Atomically adopts a lazy Trigger 1 sid only when the persisted pending
+  **Deprecated compatibility API.** Atomically adopts a lazy Trigger 1 sid only when the persisted pending
   transition was created from `previous_sid`. Legacy nil-sid records have no
   pending identity and return `:noop`, allowing Trigger 2 to advance as a
   genuine external switch instead (R1).
