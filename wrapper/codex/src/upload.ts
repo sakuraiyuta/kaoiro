@@ -2,6 +2,7 @@
 // instruction is accepted; the short-lived file is the ADR-0025 F3 exception
 // required because Codex SDK 0.144.1 accepts image paths, not image bytes.
 
+import { createHash } from "node:crypto";
 import { chmod, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
@@ -27,6 +28,14 @@ export interface PendingUpload {
   sealed: boolean;
   accumulatedBytes: number;
   addedAt: number;
+}
+
+/** Hooks bind an in-flight materialization to the host lifecycle before the
+ * first await after mkdtemp. This prevents interrupt/close/sweep races. */
+export interface MaterializeLifecycle {
+  cancelled: () => boolean;
+  onDirectoryCreated: (dir: string) => void;
+  onDirectoryDisposed: (dir: string) => void;
 }
 
 export interface ChunkPayload {
@@ -64,6 +73,20 @@ export function parseChunkPayload(
 /** Codex supports the protocol's image capability only. Format validation is
  * deliberately delegated to the SDK: it owns the concrete local_image set. */
 export function validateOpen(meta: UploadMeta): ValidationResult {
+  if (
+    !Number.isFinite(meta.size) ||
+    !Number.isInteger(meta.size) ||
+    meta.size < 0 ||
+    !Number.isFinite(meta.chunks) ||
+    !Number.isInteger(meta.chunks) ||
+    meta.chunks <= 0
+  ) {
+    return {
+      ok: false,
+      reason: "size_over",
+      detail: `invalid metadata size=${meta.size} chunks=${meta.chunks}`,
+    };
+  }
   if (!meta.mime.startsWith("image/")) {
     return { ok: false, reason: "mime_denied", detail: `mime=${meta.mime}` };
   }
@@ -106,12 +129,11 @@ export function assembleBytes(upload: PendingUpload): Uint8Array {
 
 const TEMP_PREFIX = "kaoiro-codex-local-image-";
 
-function safeAgentId(agentId: string): string {
-  return agentId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
-}
-
 export function tempDirPrefix(agentId: string): string {
-  return `${TEMP_PREFIX}${safeAgentId(agentId)}-`;
+  // Full-ID SHA-256 namespace: no sanitized-prefix or truncation collision
+  // can make one agent sweep another agent's active temp directory.
+  const namespace = createHash("sha256").update(agentId).digest("hex");
+  return `${TEMP_PREFIX}${namespace}-`;
 }
 
 function safeExtension(filename: string): string {
@@ -122,20 +144,29 @@ function safeExtension(filename: string): string {
 export async function materializeLocalImages(
   agentId: string,
   uploads: PendingUpload[],
+  lifecycle?: MaterializeLifecycle,
 ): Promise<{ dir: string; paths: string[] }> {
   const dir = await mkdtemp(join(tmpdir(), tempDirPrefix(agentId)));
+  lifecycle?.onDirectoryCreated(dir);
+  const dispose = async (): Promise<void> => {
+    await cleanupLocalImages(dir, () => {});
+    lifecycle?.onDirectoryDisposed(dir);
+  };
   try {
+    if (lifecycle?.cancelled()) throw new Error("local_image materialization cancelled");
     await chmod(dir, 0o700);
     const paths: string[] = [];
     for (const [index, upload] of uploads.entries()) {
+      if (lifecycle?.cancelled()) throw new Error("local_image materialization cancelled");
       const path = join(dir, `${index}-${crypto.randomUUID()}${safeExtension(upload.meta.filename)}`);
       await writeFile(path, assembleBytes(upload), { mode: 0o600 });
       await chmod(path, 0o600);
       paths.push(path);
     }
+    if (lifecycle?.cancelled()) throw new Error("local_image materialization cancelled");
     return { dir, paths };
   } catch (error) {
-    await cleanupLocalImages(dir, () => {});
+    await dispose();
     throw error;
   }
 }
@@ -155,7 +186,7 @@ export async function cleanupLocalImages(
 export async function sweepOrphanLocalImages(
   agentId: string,
   warn: (message: string) => void,
-  preserve: ReadonlySet<string> = new Set(),
+  preserve: () => ReadonlySet<string> = () => new Set(),
 ): Promise<void> {
   const prefix = tempDirPrefix(agentId);
   try {
@@ -163,7 +194,7 @@ export async function sweepOrphanLocalImages(
     await Promise.all(
       names.filter((name) => name.startsWith(prefix)).map(async (name) => {
         const dir = join(tmpdir(), name);
-        if (preserve.has(dir)) return;
+        if (preserve().has(dir)) return;
         await cleanupLocalImages(dir, warn);
       }),
     );

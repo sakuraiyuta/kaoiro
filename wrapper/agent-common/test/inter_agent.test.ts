@@ -200,6 +200,39 @@ describe("InterAgentTool", () => {
     }
   });
 
+  it("複数conversationと同tick timeout/reply の勝者を独立に確定する (#114 A1)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { tool } = makeTool("self.agent");
+      let aConsumed = false;
+      let bConsumed = true;
+      // Registered before A's waiter: at the exact 1000ms boundary the reply
+      // wins. B's reply is registered after its waiter: timeout wins.
+      setTimeout(() => {
+        aConsumed = tool.receiveInbound(inboundEnvelope("cnv-a"));
+      }, 1_000);
+      const timeoutFirst = callTool(tool, {
+        to: "peer.agent", body: "A", kind: "query", conversation_id: "cnv-a",
+        wait_for_response: true, timeout_ms: 1_000,
+      });
+      const replyFirst = callTool(tool, {
+        to: "peer.agent", body: "B", kind: "query", conversation_id: "cnv-b",
+        wait_for_response: true, timeout_ms: 1_000,
+      });
+      await Promise.resolve();
+      setTimeout(() => {
+        bConsumed = tool.receiveInbound(inboundEnvelope("cnv-b"));
+      }, 1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(aConsumed).toBe(true);
+      expect(bConsumed).toBe(false);
+      expect((await timeoutFirst).result.content[0]!.text).toContain('"reply"');
+      expect((await replyFirst).result.content[0]!.text).toContain("reply_pending=true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     "request",
     "response",

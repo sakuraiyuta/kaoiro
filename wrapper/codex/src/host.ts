@@ -78,6 +78,7 @@ import {
   parseChunkPayload,
   sweepOrphanLocalImages,
   type PendingUpload,
+  type MaterializeLifecycle,
   type UploadMeta,
   validateClose,
   validateOpen,
@@ -191,6 +192,12 @@ export interface CodexHostOptions {
   now?: () => string;
   /** Epoch clock for deterministic upload TTL tests. */
   nowMs?: () => number;
+  /** Test seam for deterministic materialization lifecycle races. */
+  materializeImages?: (
+    agentId: string,
+    uploads: PendingUpload[],
+    lifecycle: MaterializeLifecycle,
+  ) => Promise<{ dir: string; paths: string[] }>;
 }
 
 /** Bridge entry point, resolved against the built package layout. Works from
@@ -251,6 +258,11 @@ export class CodexHost implements EngineAdapter {
     tempDir?: string;
   }> = [];
   readonly #pendingUploads = new Map<string, PendingUpload>();
+  /** Includes dirs still being materialized, queued, or streaming. */
+  readonly #activeTempDirs = new Set<string>();
+  /** Incremented before interrupt/close cleanup; makes in-flight async
+   * materialization observe cancellation before it can enqueue a turn. */
+  #lifecycleGeneration = 0;
   readonly #nowMs: () => number;
   #gcTimer: ReturnType<typeof setInterval> | null = null;
   #wake: (() => void) | null = null;
@@ -395,6 +407,7 @@ export class CodexHost implements EngineAdapter {
   }
 
   async send(text: string, attachmentIds?: string[]): Promise<void> {
+    if (this.#closed) return;
     if (
       attachmentIds !== undefined &&
       attachmentIds.length > MAX_ATTACHMENTS_PER_INSTRUCTION
@@ -411,14 +424,27 @@ export class CodexHost implements EngineAdapter {
     if (attachmentIds !== undefined && attachmentIds.length > 0) {
       const uploads = this.#resolveAttachments(attachmentIds);
       if (uploads === null) return;
+      const generation = this.#lifecycleGeneration;
+      const lifecycle: MaterializeLifecycle = {
+        cancelled: () => this.#closed || generation !== this.#lifecycleGeneration,
+        onDirectoryCreated: (dir) => this.#activeTempDirs.add(dir),
+        onDirectoryDisposed: (dir) => this.#activeTempDirs.delete(dir),
+      };
       try {
-        const materialized = await materializeLocalImages(this.#config.agent_id, uploads);
+        const materialize = this.#options.materializeImages ?? materializeLocalImages;
+        const materialized = await materialize(this.#config.agent_id, uploads, lifecycle);
+        this.#activeTempDirs.add(materialized.dir);
+        if (lifecycle.cancelled()) {
+          await this.#cleanupTempDir(materialized.dir);
+          return;
+        }
         tempDir = materialized.dir;
         input = [
           { type: "text", text },
           ...materialized.paths.map((path) => ({ type: "local_image" as const, path })),
         ];
       } catch (error) {
+        if (lifecycle.cancelled()) return;
         this.#emitInstructionRejected({
           attachment_ids: attachmentIds,
           reason: "sdk_error",
@@ -434,6 +460,7 @@ export class CodexHost implements EngineAdapter {
   }
 
   async interrupt(): Promise<void> {
+    this.#lifecycleGeneration += 1;
     this.#dropPendingUploads("interrupted");
     await this.#dropQueuedTempTurns();
     this.#abort?.abort();
@@ -441,6 +468,7 @@ export class CodexHost implements EngineAdapter {
 
   close(): void {
     this.#closed = true;
+    this.#lifecycleGeneration += 1;
     this.#dropPendingUploads("interrupted");
     if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
     this.#gcTimer = null;
@@ -579,6 +607,10 @@ export class CodexHost implements EngineAdapter {
           // (send_to_agent per-call on Claude; ask_user_question IS the
           // operator prompt), so auto-approving them is safe.
           default_tools_approval_mode: "approve",
+          // Must outlive the 300s synchronous send_to_agent waiter. Leaving
+          // Codex's 60s default here could cancel the outer MCP call while
+          // the common-layer waiter still consumes a late reply (#114 M1).
+          tool_timeout_sec: 310,
         },
       };
     }
@@ -594,7 +626,7 @@ export class CodexHost implements EngineAdapter {
     await sweepOrphanLocalImages(
       this.#config.agent_id,
       this.#warn,
-      new Set(this.#queue.flatMap((turn) => turn.tempDir === undefined ? [] : [turn.tempDir])),
+      () => this.#activeTempDirs,
     );
     this.#gcTimer = setInterval(() => this.tickGC(), PENDING_UPLOAD_GC_INTERVAL_MS);
 
@@ -760,7 +792,7 @@ export class CodexHost implements EngineAdapter {
       }
     } finally {
       this.#abort = null;
-      if (tempDir !== undefined) await cleanupLocalImages(tempDir, this.#warn);
+      if (tempDir !== undefined) await this.#cleanupTempDir(tempDir);
     }
   }
 
@@ -800,11 +832,16 @@ export class CodexHost implements EngineAdapter {
       if (turn.tempDir === undefined) {
         retained.push(turn);
       } else {
-        await cleanupLocalImages(turn.tempDir, this.#warn);
+        await this.#cleanupTempDir(turn.tempDir);
       }
     }
     this.#queue.length = 0;
     this.#queue.push(...retained);
+  }
+
+  async #cleanupTempDir(dir: string): Promise<void> {
+    await cleanupLocalImages(dir, this.#warn);
+    this.#activeTempDirs.delete(dir);
   }
 
   #warn = (message: string): void => {

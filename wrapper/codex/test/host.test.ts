@@ -894,7 +894,50 @@ describe("CodexHost", () => {
     const config = captured!.config as Record<string, unknown>;
     const mcp = config.mcp_servers as Record<string, Record<string, unknown>>;
     expect(mcp.kaoiro!.default_tools_approval_mode).toBe("approve");
+    expect(mcp.kaoiro!.tool_timeout_sec).toBe(310);
     expect(config.developer_instructions).toBe("persona");
+  });
+
+  it("materialize 中の interrupt は completion 後にも local_image turn を enqueue しない (#112 M5)", async () => {
+    const { client, calls } = makeClient([[usageEvent()]]);
+    let entered!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      materializeImages: async (_agentId, _uploads, lifecycle) => {
+        lifecycle.onDirectoryCreated("/tmp/kaoiro-test-race");
+        entered();
+        await barrier;
+        if (lifecycle.cancelled()) {
+          lifecycle.onDirectoryDisposed("/tmp/kaoiro-test-race");
+          throw new Error("cancelled");
+        }
+        return { dir: "/tmp/kaoiro-test-race", paths: ["/tmp/kaoiro-test-race/image.png"] };
+      },
+    });
+    host.attachOpen({ upload_id: "race", filename: "race.png", mime: "image/png", size: 1, chunks: 1 });
+    const id = new TextEncoder().encode("race");
+    const payload = new Uint8Array(4 + id.length + 4 + 1);
+    new DataView(payload.buffer).setUint32(0, id.length, false);
+    payload.set(id, 4);
+    new DataView(payload.buffer).setUint32(4 + id.length, 0, false);
+    payload[payload.length - 1] = 1;
+    host.attachChunk(payload);
+    host.attachClose("race");
+    const sending = host.send("race", ["race"]);
+    await enteredPromise;
+    await host.interrupt();
+    release();
+    await sending;
+    const running = host.run();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    host.close();
+    await running;
+    expect(calls.inputs).toEqual([]);
   });
 
   it("楽観 stamp: modelSource='config' + effortSource='config' で ext に stamp する (phase-15 15-4c)", async () => {
