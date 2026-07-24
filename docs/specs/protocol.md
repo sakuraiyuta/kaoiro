@@ -207,7 +207,7 @@ resume 直後の意図しない差替えのみ drift として emit する。
 | `instruction_rejected` | **確定** | `{ attachment_ids?, reason, detail? }`。instruction 全体の拒否(合計上限超 / SDK エラー / interrupt 等)。reason enum と配信ガードは `attach_rejected` と同じ。追補のため `version` 据え置き |
 | `inter_agent_message` | **確定** | エージェント A→B の対話メッセージ。payload に `to` / `conversation_id` / `turn_number` / `kind`(9 種 enum)/ `body` / `meta {done, propose_next, confidence?, reject_reason?}` / `owner {kind, id}` を持つ。server は `to` でルーティング + observation broadcast を行う(意味論は解釈しない)。仕様正本は [protocol-inter-agent](protocol-inter-agent.md)。**operator 限定配信**。追補のため `version` 据え置き |
 | `external_message`(予約) | **予約** | 外部人間との Discord メッセージ(`direction: outbound\|inbound`)。payload は `channel` / `to`\|`from` / `conversation_id` / `turn_number` / `body` / `meta` 等。server は `to` で discord-wrapper へルーティング(意味論は解釈しない)。inbound の `ext.interpretation` は discord-wrapper のフィルタが付与。仕様正本は [protocol-external-human](protocol-external-human.md)、実装は [phase-9](../plans/phase-9-external-human-messaging.md)。**operator 限定配信**。追補のため `version` 据え置き |
-| `session_boundary` | **確定** | `{ mode: "new" \| "clear", request_id: string, ts, previous_session_id?: string, to_session_id?: string \| null }`。`/new`・`/clear` の session lifecycle 遷移マーカー。両 mode とも既存 history 末尾に append し、通常 `envelope` 経路で broadcast（session 遷移は表示を変えず `history_reset` を送らない）。Codex lazy 采番時は `to_session_id: null` を初回 envelope で後追い patch。viewer payload は `{ "mode" }` のみに sanitize。 |
+| `session_boundary` | **確定** | `{ mode: "new" \| "clear", request_id: string, ts, previous_session_id?: string, to_session_id?: string \| null }`。`/new`・`/clear` の session lifecycle 遷移マーカー。通常 `envelope` 経路で broadcast し、`/new` は既存 history 末尾に append、`/clear` は当該 agent の history を marker 1 行だけに絞る（ADR-0036 F3 復元、2026-07-24）。`history_reset` は resume replay 専用でどちらも発火しない。Codex lazy 采番時は `to_session_id: null` を初回 envelope で後追い patch。viewer payload は `{ "mode" }` のみに sanitize。 |
 
 ### 方向別メッセージ種別(v0 確定)
 
@@ -221,8 +221,8 @@ Channels のチャネルイベント名と内容。トピックは
 | ラッパー → サーバ | `directory_request` | `{}`。inter-agent messaging で wrapper が persona 名 → agent_id 解決を行うための peer 一覧取得。 サーバは `AgentStates.snapshot()` から **送信元 wrapper を除外** し、 各 entry を `{agent_id, persona: {id, name, sprite_set}, state}` の最小形に丸めて `{:ok, %{agents: [...]}}` で reply。 wrapper 側は `mcp__kaoiro__list_agents` ツールでこれを呼ぶ([protocol-inter-agent](protocol-inter-agent.md) コンパニオンツール) |
 | サーバ → クライアント | `snapshot` | `{ agents: { <agent_id>: envelope } }`。join 直後に push |
 | サーバ → クライアント | `envelope` | エンベロープ全体(状態変化の都度 broadcast) |
-| サーバ → クライアント | `history_cleared` | `{ agent_id, session_id, clear_watermark }`。operator の `clear_history` 成功後に broadcast。非 IA は `session_id` 一致へ再 filter、IA は `clear_watermark`（現行 session 開始点を `SessionStarts` から fsync 採用した `ClearWatermarks`）以前を隠す。`/new`・`/clear`・external switch は表示を変えず、この event も発火しない。開始点が無い場合は warning を出して watermark を更新せず IA を残す。**operator 限定配信**。既存 `ClearWatermarks` DETS row は migration で残置し、再露出を防ぐ。 |
-| サーバ → クライアント | `history_reset` | `{ agent_id, preserve_inter_agent: boolean }`。resume 再構築時のみ送る。JSONL で復元不能な structured IA を保持するため `preserve_inter_agent: true`。`/new`・`/clear` は表示を変えないのでこのイベントを送らない。flag 省略は旧serverとの後方互換のため `true` と解釈する。**operator 限定配信** |
+| サーバ → クライアント | `history_cleared` | `{ agent_id, session_id, clear_watermark }`。operator の `clear_history` (#48) 成功後に broadcast。非 IA は `session_id` 一致へ再 filter、IA は `clear_watermark`（現行 session 開始点を `SessionStarts` から fsync 採用した `ClearWatermarks`）以前を隠す。`/new`・`/clear` は本 event を使わず、それぞれ session_reset lifecycle broadcast (下記) 経由で表示を扱う。external switch も本 event を発火しない。開始点が無い場合は warning を出して watermark を更新せず IA を残す。**operator 限定配信**。既存 `ClearWatermarks` DETS row は migration で残置し、再露出を防ぐ。 |
+| サーバ → クライアント | `history_reset` | `{ agent_id, preserve_inter_agent: boolean }`。resume 再構築時のみ送る。JSONL で復元不能な structured IA を保持するため `preserve_inter_agent: true`。`/new` は表示を変えないので送らず、`/clear` は session_reset_completed 経由で当該 agent の pane を marker 1 行だけに絞るのでこの event は使わない。flag 省略は旧serverとの後方互換のため `true` と解釈する。**operator 限定配信** |
 | サーバ → クライアント | `agent_deleted` | `{ agent_id }`。`delete_agent` 成功後に broadcast。クライアントは当該 agent をグリッドと表示用ログから除去(#14)。viewer にも配信(grid 整合のため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 | クライアント → サーバ | `attach_open` | `{ agent_id, upload_id, filename, mime, size, chunks }`。**operator のみ**。ファイル添付の予告。upload_id は client 採番(セッション内一意)。該当ラッパーへ relay、未知 agent_id は `{:error, unknown_agent}`。詳細は下記「ファイルアップロード wire」 |
 | クライアント → サーバ | `attach_chunk` | **binary frame**(`<u32 upload_id_len><upload_id utf8><u32 chunk_index><chunk_bytes>`)。**operator のみ**。該当ラッパーへ透過 relay。詳細は下記「ファイルアップロード wire」 |
@@ -251,7 +251,7 @@ Channels のチャネルイベント名と内容。トピックは
 | サーバ → ラッパー | `set_permission_mode` | `{ mode }`(relay または after_join push)。ラッパーは session 開始済なら `Query.setPermissionMode(mode)` を呼ぶ。未開始時は内部状態のみ更新し、次回 `query()` 構築時の `permissionMode` に反映する (= after_join 経路で起動モードを復元する仕組み)。`bypassPermissions` は wrapper が起動時に `allowDangerouslySkipPermissions: true` で開いた場合のみ受理、mid-session の bypass 切替は session が non-bypass で開始されていれば SDK が拒否する (#58) |
 | クライアント → サーバ | `session_reset` | `{ agent_id, mode: "new" \| "clear" }`。**operator のみ**。attachment 無し exact `/new`・`/clear` を Composer が intercept して発火([ADR-0036](../adr/0036-session-lifecycle-commands.md) F1)。server は operator role + agent 存在 + mode 検証 + capability advertise (`ext.session_capabilities.supports_session_reset`) + KaoiroState (`idle`/`waiting_input` のみ)+ SessionResets の pending lock を単一 handle_call で atomic 検証(F6 TOCTOU 芯)、成功で `session_reset_started` broadcast + `runner:<host>` へ `reset_session` push。旧/外部 client の literal `/new`・`/clear` は `send_instruction` handler の先頭で `reserved_session_command` reject。close vocab reject reason: `agent_busy` / `unsupported_session_reset` / `session_reset_pending` / `invalid_mode` / `unknown_agent` / `forbidden` |
 | サーバ → クライアント | `session_reset_started` | `{ request_id, agent_id, mode, previous_session_id? }`。**operator 限定配信**(session_id を含むため `intercept` + `handle_out` role gate、[ADR-0021](../adr/0021-role-information-disclosure-policy.md))。dashboard は「新しいsessionを開始中」progress banner + Composer disable |
-| サーバ → クライアント | `session_reset_completed` | `{ request_id, agent_id, mode, previous_session_id?, to_session_id: string \| null }`。**operator 限定配信**。fresh wrapper の `WrapperChannel.after_join` 時に `SessionResets.confirm_connection/2` が発火(F2 「接続確認した時だけ」の two-phase completion)。`to_session_id` は Claude なら init 到達で binary、Codex lazy 采番は `null`(後追い patch は AgentStates 側の marker で行い、broadcast は再送しない意図的決定) |
+| サーバ → クライアント | `session_reset_completed` | `{ request_id, agent_id, mode, previous_session_id?, to_session_id: string \| null, clear_watermark?: string }`。**operator 限定配信**。fresh wrapper の `WrapperChannel.after_join` 時に `SessionResets.confirm_connection/2` が発火(F2 「接続確認した時だけ」の two-phase completion)。`to_session_id` は Claude なら init 到達で binary、Codex lazy 采番は `null`(後追い patch は AgentStates 側の marker で行い、broadcast は再送しない意図的決定)。`clear_watermark` は `/clear` 完了時のみ含み(ADR-0036 F3 復元、2026-07-24)、SessionStarts 由来の ISO ts。live client はこの ts で per-agent watermark map を更新し、marker 以外の pane 行を drop する |
 | サーバ → クライアント | `session_reset_failed` | `{ request_id, agent_id, mode, reason }`。**operator 限定配信**。close vocab reason: `agent_busy` / `unsupported_session_reset` / `session_reset_pending` / `runner_unavailable` / `spawn_failed` / `rollback_failed` / `timeout`。dashboard は loud notice で reason を表示 |
 | サーバ → runner | `reset_session` | `{ version, agent_id, mode, request_id, previous_session_id?, resume_snapshot? }`。session_reset relay。runner supervisor は `handleResetSession` で同 agent entry を kill + fresh relaunch(resume_session_id なし、`resume_snapshot` は server が `SessionPointers` から同梱し runner の `applyResumeSnapshot` が P0 privilege 三軸を `ParsedSpawn` に反映)、spawn 例外なら旧 `previous_session_id` で resume 再試行(rollback、reset 前に適用済みの `entry.parsed` を保持)、失敗で `rollback_failed` + entry drop(disconnected)([ADR-0036](../adr/0036-session-lifecycle-commands.md) F2、[ADR-0014 F1 追補](../adr/0014-session-resume-and-restore.md) resume 時 privilege 三軸再適用) |
 | runner → サーバ | `session_reset_result` | `{ version, host_id, agent_id, mode, request_id, ok, reason?, to_session_id?: string \| null }`。fresh spawn / rollback の結果。`RunnerChannel` は `AgentId.host_id_from(agent_id) == host_id` の exact match で **host binding** を検証(nested-prefix spoof 防止)、`SessionResets.resolve/6` へ cast。`ok=true` は `:awaiting_connect` 遷移(broadcast は fresh wrapper join まで待つ)、`ok=false` は close vocab reason を伴い即座に `session_reset_failed` broadcast + lock release |
@@ -284,16 +284,26 @@ session の JSONL を直読して `user`/`assistant` 行を `log` エンベロ�
 ([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2、#50。SDK は
 resume 時に過去履歴を query() ストリームへ再 yield しないため直読が必須)。
 
-### Session visibility semantics (#109)
+### Session visibility semantics (#109 / ADR-0036 F3 復元, 2026-07-24)
 
-`/new`・`/clear`・external session switch は `SessionStarts` に開始点を
-fsync 記録するだけで、ログ・IA の表示も `ClearWatermarks` も変更しない。
-operator の `clear_history` だけがその開始点を visibility watermark として
-採用し、`history_cleared.clear_watermark` で live client を再 filter する。
-開始点が無い場合は warning を出して watermark を更新せず IA を残す（現行
-session IA を誤って消す fallback を禁止）。既存 `ClearWatermarks` DETS row
-は migration で消さず、既に hidden の IA を再露出させない。pre-M6 ISO-only
-row も次の real clear まで維持する。
+`/new`・external session switch は `SessionStarts` に開始点を fsync 記録
+するだけで、ログ・IA の表示も `ClearWatermarks` も変更しない。`/clear` は
+SessionStarts 記録に加え、`SessionResets.confirm_connection/2` がその
+`{order, display}` を `ClearWatermarks.record/3` に採用し、当該 agent の
+`AgentStates` history を marker 1 行だけに絞る。IA の相手 pane は既存の
+per-pane `ClearWatermarks` filter (`agents_channel.merged_histories/0`) で
+hide されるため、durable ledger (`InterAgentHistory` DETS) は削除しない。
+operator の `clear_history` (#48) は依然として現行 session の他 session
+ログ purge 用途で `history_cleared` を broadcast する別 API のまま。
+
+/clear の live client 更新は `session_reset_completed.clear_watermark`
+で行い、reload 経路は server 側 `merged_histories` が SSOT。`/new` /
+`/clear` いずれも `history_reset` broadcast は使わない (resume replay
+専用)。開始点が無い場合、operator `clear_history` は warning を出して
+watermark を更新せず IA を残す（現行 session IA を誤って消す fallback を
+禁止）。既存 `ClearWatermarks` DETS row は migration で消さず、既に
+hidden の IA を再露出させない。pre-M6 ISO-only row も次の real clear まで
+維持する。
 
 ### ファイルアップロード wire
 

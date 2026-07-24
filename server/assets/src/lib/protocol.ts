@@ -1029,6 +1029,10 @@ export interface SessionResetCompletedPayload {
   mode: SessionResetMode;
   previous_session_id?: string;
   to_session_id: string | null;
+  /** `/clear` only (ADR-0036 F3 復元, 2026-07-24): ISO ts of the pane's
+   *  fresh IA visibility cutoff. Absent for `/new` completions. Let the
+   *  live client update its per-agent watermark map without a reload. */
+  clear_watermark?: string;
 }
 
 export interface SessionResetFailedPayload {
@@ -1326,6 +1330,9 @@ export function parseSessionResetCompleted(
     to_session_id,
     ...(typeof p.previous_session_id === "string"
       ? { previous_session_id: p.previous_session_id }
+      : {}),
+    ...(typeof p.clear_watermark === "string" && p.clear_watermark !== ""
+      ? { clear_watermark: p.clear_watermark }
       : {}),
   };
 }

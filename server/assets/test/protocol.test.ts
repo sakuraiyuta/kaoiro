@@ -1637,6 +1637,55 @@ describe("parseSessionResetCompleted (ADR-0036 F7, phase-17 17-9)", () => {
       }),
     ).toBeNull();
   });
+
+  it("clear_watermark 文字列は保持 (ADR-0036 F3 復元, 2026-07-24)", () => {
+    expect(
+      parseSessionResetCompleted({
+        request_id: "rs_3",
+        agent_id: "a.3",
+        mode: "clear",
+        to_session_id: "sess-new",
+        clear_watermark: "2026-07-24T00:00:00.000Z",
+      }),
+    ).toEqual({
+      request_id: "rs_3",
+      agent_id: "a.3",
+      mode: "clear",
+      to_session_id: "sess-new",
+      clear_watermark: "2026-07-24T00:00:00.000Z",
+    });
+  });
+
+  it("clear_watermark が空文字/非文字列/欠落なら key を落とす", () => {
+    expect(
+      parseSessionResetCompleted({
+        request_id: "rs_4",
+        agent_id: "a.4",
+        mode: "clear",
+        to_session_id: null,
+        clear_watermark: "",
+      }),
+    ).toEqual({
+      request_id: "rs_4",
+      agent_id: "a.4",
+      mode: "clear",
+      to_session_id: null,
+    });
+
+    expect(
+      parseSessionResetCompleted({
+        request_id: "rs_5",
+        agent_id: "a.5",
+        mode: "new",
+        to_session_id: null,
+      }),
+    ).toEqual({
+      request_id: "rs_5",
+      agent_id: "a.5",
+      mode: "new",
+      to_session_id: null,
+    });
+  });
 });
 
 describe("parseSessionResetFailed (ADR-0036 F7, phase-17 17-9)", () => {

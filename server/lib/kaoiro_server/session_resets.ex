@@ -77,7 +77,10 @@ defmodule KaoiroServer.SessionResets do
 
   require Logger
 
+  alias KaoiroServer.AgentStates
+  alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.SessionStarts
 
   # 60 s upper bound on a reset (fresh relaunch + optional rollback).
   # ADR-0036 F7 leaves the number unspecified; anything shorter risks
@@ -320,25 +323,40 @@ defmodule KaoiroServer.SessionResets do
         # lazy 采番 passes `nil` here; `wrapper_channel` calls
         # `SessionStarts.adopt_sid/2` on the first envelope that
         # carries a real session_id.
-        {:ok, {_order, _display, _sid}} =
-          KaoiroServer.SessionStarts.advance_transition(
+        {:ok, {order, display, _sid}} =
+          SessionStarts.advance_transition(
             agent_id,
             effective_to_sid,
             lock.previous_session_id,
-            KaoiroServer.SessionStarts
+            SessionStarts
           )
 
-        # A session command is display-neutral (#109): append the marker
-        # without clearing ordinary logs or durable IA.
         marker = build_boundary_envelope(agent_id, lock, effective_to_sid)
 
-        _ = KaoiroServer.AgentStates.append_boundary(agent_id, marker)
+        # ADR-0036 F3: `/new` は表示 projection を保持しつつ marker を
+        # append し、`/clear` は当該 agent の pane 表示を marker 1 行だけに
+        # 絞る。IA の相手 pane は #109 per-pane ClearWatermarks で hide
+        # するので、durable ledger (InterAgentHistory DETS) は触らない。
+        # ClearWatermarks.record は fsync-gated なので broadcast より先に
+        # 通し、crash 時にも watermark が durable であることを保証する
+        # (M7-a と同じポリシー)。
+        clear_watermark =
+          case lock.mode do
+            "clear" ->
+              :ok = ClearWatermarks.record(agent_id, order, display)
+              _ = AgentStates.clear_history_with_boundary(agent_id, marker)
+              display
+
+            _ ->
+              _ = AgentStates.append_boundary(agent_id, marker)
+              nil
+          end
 
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", marker)
 
         detach_session_safely(agent_id)
 
-        broadcast_completed(agent_id, lock, effective_to_sid)
+        broadcast_completed(agent_id, lock, effective_to_sid, clear_watermark)
 
         {:reply, :ok, %{s | pending: Map.delete(s.pending, agent_id)}}
 
@@ -399,12 +417,15 @@ defmodule KaoiroServer.SessionResets do
     end
   end
 
-  defp broadcast_completed(agent_id, lock, to_session_id) do
+  defp broadcast_completed(agent_id, lock, to_session_id, clear_watermark) do
     # `previous_session_id` is optional per the protocol type
     # `SessionResetCompleted { previous_session_id?: string }` (only
     # `to_session_id: string | null` is nullable to cover Codex lazy
     # thread采番). Omit the key entirely when nil so the wire matches
-    # the type shape (review advisory).
+    # the type shape (review advisory). `clear_watermark` is a `/clear`-
+    # only ISO ts (ADR-0036 F3) that lets the live client update its
+    # per-agent watermark map without waiting for a reload; absent for
+    # `/new` completions.
     payload =
       %{
         "request_id" => lock.request_id,
@@ -413,6 +434,7 @@ defmodule KaoiroServer.SessionResets do
         "to_session_id" => to_session_id
       }
       |> maybe_put_previous_session_id(lock.previous_session_id)
+      |> maybe_put_clear_watermark(clear_watermark)
 
     KaoiroServerWeb.Endpoint.broadcast(
       "agents:lobby",
@@ -420,6 +442,11 @@ defmodule KaoiroServer.SessionResets do
       payload
     )
   end
+
+  defp maybe_put_clear_watermark(payload, ts) when is_binary(ts),
+    do: Map.put(payload, "clear_watermark", ts)
+
+  defp maybe_put_clear_watermark(payload, _ts), do: payload
 
   defp maybe_put_previous_session_id(payload, sid) when is_binary(sid),
     do: Map.put(payload, "previous_session_id", sid)

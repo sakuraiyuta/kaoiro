@@ -452,6 +452,39 @@
           const { [payload.agent_id]: _drop, ...rest } = sessionResets;
           void _drop;
           sessionResets = rest;
+          // ADR-0036 F3 復元 (2026-07-24): /clear は当該 agent の pane 表示を
+          // marker 1 行だけに絞る。marker envelope は同じ session_reset で
+          // 先に届いているので、非 marker を drop する形で pane を空にする。
+          // clear_watermark は future の live IA を per-pane hide するために
+          // ローカル map へ反映する — reload 時は server merged_histories が
+          // authoritative に filter するのでこの map は live 用途のみ。
+          if (payload.mode === "clear") {
+            if (typeof payload.clear_watermark === "string") {
+              const current = clearWatermarks[payload.agent_id];
+              if (current === undefined || current < payload.clear_watermark) {
+                clearWatermarks = {
+                  ...clearWatermarks,
+                  [payload.agent_id]: payload.clear_watermark,
+                };
+              }
+            }
+            const prev = logs[payload.agent_id];
+            if (prev) {
+              // Match against THIS reset's own marker (request_id) rather
+              // than filtering by type — prior /new・/clear markers held in
+              // the live buffer would otherwise survive and the pane would
+              // show 2+ boundary lines instead of exactly one.
+              logs = {
+                ...logs,
+                [payload.agent_id]: prev.filter(
+                  (entry) =>
+                    entry.type === "session_boundary" &&
+                    (entry.payload as { request_id?: unknown } | undefined)
+                      ?.request_id === payload.request_id,
+                ),
+              };
+            }
+          }
         },
         onSessionResetFailed: (payload) => {
           const { [payload.agent_id]: _drop, ...rest } = sessionResets;

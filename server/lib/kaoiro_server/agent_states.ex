@@ -26,11 +26,13 @@ defmodule KaoiroServer.AgentStates do
   is nil (Codex lazy采番), stashes the request_id in
   `pending_boundary_patch` so `patch_boundary_to_session_id/2` can
   fill it in later when the fresh session's first envelope arrives at
-  `WrapperChannel`. Both session modes append their marker and preserve
-  history. `clear_history_with_boundary/2` remains only as a legacy
-  projection-reset primitive; no `/clear` path calls it. The pending-patch
-  stash is per-agent; the SessionResets lock
-  already prevents overlapping resets from racing here.
+  `WrapperChannel`. `/clear` mode drops every prior line and leaves the
+  marker as the sole surviving entry via `clear_history_with_boundary/2`
+  (ADR-0036 F3 復元, 2026-07-24); durable IA is left in the ledger and
+  hidden per-pane by `ClearWatermarks` instead. Same nil-to_session_id
+  stash behaviour applies. The pending-patch stash is per-agent; the
+  SessionResets lock already prevents overlapping resets from racing
+  here.
 
   The one server-derived exception is `disconnected` (specs/protocol.md):
   `disconnect/3` overlays it when the wrapper channel that wrote the
@@ -142,11 +144,12 @@ defmodule KaoiroServer.AgentStates do
   end
 
   @doc """
-  Legacy projection-reset primitive: drops ALL history and places a single
-  `session_boundary` marker envelope as the sole line, atomically. Session
-  commands do not call this; both `/new` and `/clear` use
-  `append_boundary/3` so existing history remains visible. Same
-  nil-to_session_id → pending stash behaviour as `append_boundary/2`.
+  `/clear` projection-reset primitive (ADR-0036 F3): drops ALL history and
+  places a single `session_boundary` marker envelope as the sole line,
+  atomically. `/new` keeps history and calls `append_boundary/3` instead.
+  Durable IA is not touched here — the reload path filters it per-pane via
+  `ClearWatermarks`, which `SessionResets` records alongside this call.
+  Same nil-to_session_id → pending stash behaviour as `append_boundary/2`.
   """
   def clear_history_with_boundary(agent_id, marker_envelope, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)

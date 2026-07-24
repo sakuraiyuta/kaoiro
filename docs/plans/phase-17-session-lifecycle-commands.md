@@ -4,7 +4,7 @@ description: /new・/clearをengine promptではなく第一級controlとして�
 status: completed
 phase: 17
 depends_on: [phase-15-wrapper-ux-parity]
-last_updated: 2026-07-13
+last_updated: 2026-07-24
 
 ---
 
@@ -107,6 +107,28 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blo
   実測した後の将来拡張候補
 - **rollback 経路の人為的 spawn 失敗試験**: ε 完走後の検収では含めず、
   将来 followup で
+
+## Followup: /clear の F3 復元 (2026-07-24、マスター指示)
+
+- **背景**: 7/23 の #109 修正ラウンド (commit f6ef0b0) で ADR-0036 F3 が
+  「/new・/clear とも表示維持」に書き換えられ、/clear が何も消さない
+  コマンドになった。仕様の取り違えで、元の F3 (「/new は表示維持、/clear
+  は当該 agent の表示 projection を reset」) が正。マスターと 2026-07-24 に
+  仕様を再確定。
+- **反映**: ADR-0036 F3 を復元記述に戻し (2026-07-24)、
+  `SessionResets.confirm_connection/2` に `mode == "clear"` 分岐を追加
+  (`ClearWatermarks.record/3` + `AgentStates.clear_history_with_boundary/2`)、
+  `session_reset_completed` broadcast の payload に `clear_watermark`
+  フィールドを追加。client (App.svelte / protocol.ts) は `onSessionResetCompleted`
+  で mode="clear" 時に pane を marker 1 行だけに絞り、watermark map を更新。
+- **依然として真**: operator `clear_history` (#48) は現状 API 維持 (現行
+  session の他 session ログ purge)。engine 側 session file (JSONL/rollout)
+  も削除しない。/clear の IA の相手 pane は #109 の per-pane ClearWatermarks
+  で hide されるので、durable ledger (InterAgentHistory DETS) は削除しない。
+- **task 表と Acceptance Criteria の該当行は歴史記録として原文維持**
+  (2026-07-13 close 時の合格基準は当時の解釈で通っていたもの)。仕様の SSOT
+  は ADR-0036 F3 と `docs/specs/protocol.md` の Session visibility semantics
+  節に集約する。
 
 ## 実地検収記録 (2026-07-12、マスター + director で実施 → phase close)
 

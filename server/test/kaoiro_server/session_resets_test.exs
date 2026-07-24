@@ -147,7 +147,7 @@ defmodule KaoiroServer.SessionResetsTest do
       refute SessionResets.pending?("a.res.confirm", sr)
     end
 
-    test "clear completion は表示を変えず durable IA を保持",
+    test "clear completion は該当 agent の表示 projection を marker 1 行に絞り、durable IA は per-pane hide 用の watermark で残す (ADR-0036 F3 復元, 2026-07-24)",
          %{resets: sr} do
       agent_id = "a.res.clear-#{System.unique_integer([:positive])}"
 
@@ -161,8 +161,41 @@ defmodule KaoiroServer.SessionResetsTest do
         }
       }
 
+      # 既存の表示 log を仕込む: put で latest state、append_log で history。
+      pre_state = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "type" => "state_change",
+        "state" => "idle",
+        "session_id" => "sess-old",
+        "persona" => %{},
+        "ts" => "2026-07-24T00:00:00.000Z",
+        "payload" => %{},
+        "ext" => %{}
+      }
+
+      :ok = KaoiroServer.AgentStates.put(pre_state)
+
+      pre_log = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "type" => "log",
+        "session_id" => "sess-old",
+        "ts" => "2026-07-24T00:00:01.000Z",
+        "payload" => %{"text" => "旧 session の log"},
+        "ext" => %{}
+      }
+
+      :ok = KaoiroServer.AgentStates.append_log(pre_log)
+
       :ok = InterAgentHistory.append(ia)
-      on_exit(fn -> InterAgentHistory.delete_agent(agent_id) end)
+
+      on_exit(fn ->
+        InterAgentHistory.delete_agent(agent_id)
+        KaoiroServer.ClearWatermarks.delete(agent_id)
+        KaoiroServer.SessionStarts.delete(agent_id)
+      end)
+
       KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
 
       assert {:ok, request_id, _} =
@@ -171,8 +204,97 @@ defmodule KaoiroServer.SessionResetsTest do
       :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
       :ok = SessionResets.confirm_connection(agent_id, nil, sr)
 
-      refute_receive %Phoenix.Socket.Broadcast{event: "history_reset"}
+      # 表示 projection: history は session_boundary marker 1 行だけになる。
+      histories = KaoiroServer.AgentStates.histories()
+      assert [%{"type" => "session_boundary", "payload" => marker_payload}] = histories[agent_id]
+      assert marker_payload["mode"] == "clear"
+      assert marker_payload["previous_session_id"] == "sess-old"
+      assert marker_payload["to_session_id"] == "sess-new"
+
+      # ClearWatermarks: SessionStarts.advance_transition の {order, display}
+      # を採用して record されている (per-pane IA hide の SSOT)。
+      assert {{_us, _seq}, display_iso, "sess-new"} =
+               KaoiroServer.SessionStarts.get(agent_id)
+
+      assert KaoiroServer.ClearWatermarks.get_display(agent_id) == display_iso
+
+      # durable IA (DETS) は削除しない: 相手側 pane に IA が残る要件。
+      # hide は agents_channel.merged_histories が watermark で per-pane に行う。
       assert InterAgentHistory.list_for(agent_id) == [ia]
+
+      # session_reset_completed broadcast の payload に clear_watermark が入る。
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "session_reset_completed",
+        payload: %{
+          "mode" => "clear",
+          "clear_watermark" => ^display_iso,
+          "to_session_id" => "sess-new"
+        }
+      }
+
+      # /clear は history_reset broadcast を発火しない (resume replay 専用)。
+      refute_receive %Phoenix.Socket.Broadcast{event: "history_reset"}
+    end
+
+    test "new completion は表示 projection を維持し ClearWatermarks を触らない (ADR-0036 F3 復元, 2026-07-24)",
+         %{resets: sr} do
+      agent_id = "a.res.new-preserve-#{System.unique_integer([:positive])}"
+
+      pre_state = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "type" => "state_change",
+        "state" => "idle",
+        "session_id" => "sess-old",
+        "persona" => %{},
+        "ts" => "2026-07-24T00:00:00.000Z",
+        "payload" => %{},
+        "ext" => %{}
+      }
+
+      :ok = KaoiroServer.AgentStates.put(pre_state)
+
+      pre_log = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "type" => "log",
+        "session_id" => "sess-old",
+        "ts" => "2026-07-24T00:00:01.000Z",
+        "payload" => %{"text" => "旧 session の log"},
+        "ext" => %{}
+      }
+
+      :ok = KaoiroServer.AgentStates.append_log(pre_log)
+
+      on_exit(fn ->
+        KaoiroServer.ClearWatermarks.delete(agent_id)
+        KaoiroServer.SessionStarts.delete(agent_id)
+      end)
+
+      KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "sess-old", sr)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
+      :ok = SessionResets.confirm_connection(agent_id, nil, sr)
+
+      # 表示 projection は保持され、末尾に marker が append される。
+      histories = KaoiroServer.AgentStates.histories()
+      assert entries = histories[agent_id]
+      assert Enum.any?(entries, &(Map.get(&1, "type") == "log"))
+      assert Enum.any?(entries, &(Map.get(&1, "type") == "session_boundary"))
+
+      # /new では ClearWatermarks は動かない (Trigger 1 は SessionStarts だけ更新)。
+      assert KaoiroServer.ClearWatermarks.get(agent_id) == nil
+
+      # session_reset_completed broadcast に clear_watermark は入らない (mode=new)。
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "session_reset_completed",
+        payload: %{"mode" => "new"} = payload
+      }
+
+      refute Map.has_key?(payload, "clear_watermark")
     end
 
     test "confirm_connection は :spawning フェーズでは no-op (runner ok 未受信)",
@@ -218,7 +340,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert sid == "sess-new"
     end
 
-    test "Trigger 1: /clear completion でも開始点のみを記録",
+    test "Trigger 1: /clear completion は開始点と ClearWatermarks 両方を記録 (ADR-0036 F3 復元, 2026-07-24)",
          %{resets: sr} do
       agent_id = "a.res.trigger1-clear-#{System.unique_integer([:positive])}"
 
@@ -234,10 +356,15 @@ defmodule KaoiroServer.SessionResetsTest do
       :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
       :ok = SessionResets.confirm_connection(agent_id, nil, sr)
 
-      assert KaoiroServer.ClearWatermarks.get(agent_id) == nil
-
-      assert {{_us, _seq}, _iso, "sess-new"} =
+      assert {{us, seq}, iso, "sess-new"} =
                KaoiroServer.SessionStarts.get(agent_id)
+
+      # /clear は SessionStarts の {order, display} を ClearWatermarks に採用する
+      # (operator clear_history の adopt_session_start_watermark と同型)。
+      # ClearWatermarks は transition sid を持たない (record/4 は sid=nil で
+      # 呼ばれる) が、pane hide filter は order tuple だけを見るので機能する。
+      assert {{^us, ^seq}, ^iso, nil} =
+               KaoiroServer.ClearWatermarks.get(agent_id)
     end
 
     test "ok=false で lock を release、SessionPointers は変更しない", %{resets: sr} do

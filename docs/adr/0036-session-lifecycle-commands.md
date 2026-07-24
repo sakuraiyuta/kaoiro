@@ -116,20 +116,36 @@ sandbox/network、MCP configを通常のspawn経路から再適用する。値�
 
 「通常のspawn経路から再適用」の具体化は [ADR-0014 F1 追補「resume 時の privilege 三軸再適用」](0014-session-resume-and-restore.md) に集約する: `ResetSessionCommand.resume_snapshot?` を server が同梱し、runner の `applyResumeSnapshot` pure helper が P0 の privilege 三軸 (Codex `sandbox` / `network_access`、Claude `permission_mode`) を fresh 相当の `ParsedSpawn` に反映する。`model` / `effort` は sanitized snapshot に保持され drift 計算にも入るが実 apply は P1。
 
-### F3 — /new・/clear とも表示維持
+### F3 — /new は表示維持、/clear は当該 agent の表示 projection を reset
 
-両 mode とも新しい SDK session を作り、旧 session file と表示 projection を保持する。
-`session_boundary` marker は既存 history の末尾に append する。`history_reset` は
-resume replay 専用で、`/new`・`/clear` は structured IA を含むログを削除しない。
+両 mode とも新しい SDK session を作り、旧 session file (host JSONL/rollout) は保持
+する。表示側の差は次のとおり:
 
-markerは`{mode, previous_session_id?, to_session_id?, request_id, ts}`をoperator向け
-payloadに持つ。`to_session_id`はID確定後に追記し、lazy採番時は一時nullを許す。
-viewerへはsession IDを除いた安全な表示通知だけを配信する。会話履歴の正本である
-host JSONL/rolloutはどちらも保持するため、`clear`はデータ削除でも表示resetでもない。UIには
-「新しいsessionを開始。旧sessionはresume可能」と明記する。
+- `/new` — 表示 projection を維持する。`session_boundary` marker を既存 history の
+  末尾に append し、以降の SDK 出力が続く。旧 log と structured IA はそのまま。
+- `/clear` — 当該 agent の pane 表示を **空にする**。通常 log も IA バブルも区別せず
+  全て drop し、`session_boundary` marker 1 行だけを残す。IA の相手 pane は #109 の
+  per-pane `ClearWatermarks` で hide するので、durable ledger
+  (`InterAgentHistory` DETS) は削除しない (相手 agent の pane では IA が残る)。
+  engine 側 session file (JSONL/rollout) は削除せず、旧 session は picker から
+  resume 可能のままとする。
 
-server AgentStatesを表示projectionのSSOTとし、client local storeだけを消す実装は
-採らない。再接続で消したlogが復活するためである。
+`server` 側 `AgentStates` を表示 projection の SSOT とし、client local store だけを
+消す実装は採らない。再接続で消した log が復活するためである。/clear 完了時、
+`SessionResets.confirm_connection/2` は `SessionStarts.advance_transition/3` が返す
+`{order, display}` を `ClearWatermarks.record/3` に採用 (operator `clear_history`
+の `adopt_session_start_watermark` と同型) し、`AgentStates.clear_history_with_boundary/2`
+で history を marker 1 行だけに絞る。fsync-gated な `ClearWatermarks` を先に通し、
+crash 時にも watermark を durable に残す (`M7-a` と同じポリシー)。
+
+marker は `{mode, previous_session_id?, to_session_id?, request_id, ts}` を
+operator 向け payload に持つ。`to_session_id` は ID 確定後に追記し、lazy 采番時
+は一時 null を許す。`session_reset_completed` broadcast の payload には `/clear`
+時のみ `clear_watermark`(ISO ts)を追加で載せ、live client が reload を待たず
+watermark map を更新できるようにする。viewer への通知は ADR-0021 の allow-list
+で operator に限定し、session ID を含む payload を漏らさない。operator `clear_history`
+(#48) と /clear は **別機能**(前者は現行 session の他 session ログ purge、後者は
+当該 agent の pane 全消去 + marker 保持)としてそれぞれ現状 API を維持する。
 
 ### F4 — SessionPointersは最新1件のまま、明示detachを追加
 
@@ -223,7 +239,9 @@ resumeを禁止する。stderrにも
 
 - 同じagent/persona/cwdのまま、CLI相当の会話仕切り直しができる。
 - Claude/Codex差をrunnerのfresh relaunchへ閉じ、clientはcapabilityだけを見る。
-- `/clear`後も旧sessionをpickerからresumeでき、データ削除や表示resetを伴わない。
+- `/clear`後も旧sessionをpickerからresumeでき、session file (JSONL/rollout) は
+  削除しない。当該 agent の pane 表示だけを reset し、IA の相手 pane は
+  watermark で per-pane に hide する。
 - busy操作は即時rejectされ、遅延resetや暗黙interruptが起きない。
 
 ### Negative
@@ -245,7 +263,7 @@ resumeを禁止する。stderrにも
 | wrapperが`user_message`先頭一致でslashを解釈 | model入力とcontrol責務が混ざり、literal textやattachmentの扱いがadapterごとにdriftする |
 | clientだけでintercept | 旧/外部clientのexact commandがengineへ素通しされる。server防御rejectが必要 |
 | adapter内部でsessionIdだけnullへ変更 | Codexには近いがClaude長寿命queryと非対称。queue/tool/pending stateの完全resetを証明しにくい |
-| `/clear`でhost session fileも削除 | resume不能なdestructive operationになり、名称から予想しにくい。session遷移は表示も保持する |
+| `/clear`でhost session fileも削除 | resume不能なdestructive operationになり、名称から予想しにくい。当該 agent の pane 表示だけを reset し、host session file (JSONL/rollout) は保持する |
 | serverにprevious session stackを保存 | ADR-0014 F3/A4のlatest pointer + host列挙SSOTと重複。既存pickerで戻れる |
 | busy時にinterruptしてreset | write/tool中断とcontext破棄が一clickで起きる。operatorの明示interruptを要求する |
 | busy時にresetをqueue | 実行完了後の遅延破棄が予測困難で、次の入力先を誤認する |
