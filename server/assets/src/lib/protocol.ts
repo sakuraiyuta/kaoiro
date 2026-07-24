@@ -1420,19 +1420,15 @@ export function mergeHistories(
   return merged;
 }
 
-/** ふじ A3 advisory (2026-07-23): layout gate for the response-timeline
- *  pane (#25). Wide-viewport switch is triggered by matchMedia
- *  (`≥ 1600px`); the operator gate is because reply logs are
- *  operator-only (ADR-0012). Extracted so `App.svelte` and the
- *  integration test share the exact same gate — the pre-A3 test
- *  duplicated the expression inline, which passed even when App's real
- *  gate drifted. Kept as `(wide, operator) => boolean` because both
- *  callers already hold those two booleans in local state. */
-export function shouldShowResponseTimeline(
-  wide: boolean,
-  operator: boolean,
-): boolean {
-  return wide && operator;
+/** Layout gate for the response-timeline pane. Reply logs are
+ *  operator-only (ADR-0012), so viewer sessions never see the pane.
+ *  Previously AND-gated with a `wide` (`min-width: 1600px`) viewport
+ *  switch (#25); that threshold was removed on 2026-07-24 so the pane
+ *  shows at all widths — narrow viewports accept smaller tiles instead
+ *  of hiding the pane. Extracted so `App.svelte`, `AgentGridShell`,
+ *  and the integration test share the exact same gate. */
+export function shouldShowResponseTimeline(operator: boolean): boolean {
+  return operator;
 }
 
 /** ふじ R4 must-fix (2026-07-23): best-effort per-pane filter for a

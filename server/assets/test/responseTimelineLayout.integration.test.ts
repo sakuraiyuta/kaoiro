@@ -1,26 +1,16 @@
 // @vitest-environment jsdom
 //
-// #25 A3 (ふじ advisory, re-review 2026-07-23) + A1 (ふじ 3rd review
-// re-re-review 2026-07-23): true App-integration layout gate pin.
-// Verifies which of the three combinations shows the response timeline
-// pane and — new since A1 — that the pin actually mounts the same
-// production component App.svelte uses (`AgentGridShell.svelte`) and
-// derives `wide` from the stubbed matchMedia matcher instead of
-// passing an explicit boolean.
+// Response-timeline layout gate pin. Mounts the SAME production
+// component App.svelte uses (`AgentGridShell.svelte`) so a drift in
+// the gate is caught end-to-end.
 //
-//   - narrow viewport (<1600px): existing auto-fill grid, no timeline.
-//   - wide viewport (>=1600px) + operator: 3-column grid + timeline
-//     on the right.
-//   - wide viewport + viewer: no timeline (operator-only feature).
+//   - operator: 3-column grid + timeline pane on the right.
+//   - viewer:   auto-fill grid, no timeline (operator-only per
+//               ADR-0012 — reply logs are operator-only).
 //
-// Pre-A3 the test computed a `shouldShowTimeline(wide, operator)`
-// locally, which drifted trivially. Pre-A1 the test derived `wide`
-// from an explicit arg (stubMatchMedia was set but never consulted).
-// The rewrite mounts AgentGridShell — the same component App.svelte
-// wraps its tile list with — and derives `wide` from
-// `window.matchMedia("(min-width: 1600px)").matches`, so the
-// stubMatchMedia effect actually flows into the gate the same way it
-// does in App.
+// The viewport-width threshold (`min-width: 1600px`, #25) was removed
+// on 2026-07-24 so the pane shows at all widths for operators —
+// narrow viewports accept smaller tiles instead of hiding the pane.
 
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,23 +33,6 @@ afterEach(async () => {
 });
 
 const NOW = Date.parse("2026-07-23T15:00:00Z");
-const MEDIA_QUERY = "(min-width: 1600px)";
-
-function stubMatchMedia(matches: boolean): void {
-  vi.stubGlobal(
-    "matchMedia",
-    vi.fn((_query: string) => ({
-      matches,
-      media: MEDIA_QUERY,
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    })),
-  );
-}
 
 function stateEnv(agentId: string, name: string): Envelope {
   return {
@@ -83,22 +56,13 @@ function assistant(agentId: string, text: string): Envelope {
   };
 }
 
-// Mount AgentGridShell with `wide` sourced from the stubbed matchMedia
-// (the same matchMedia read App.svelte's onMount performs, so the stub
-// actually flows into the gate). `operator` still rides an explicit
-// arg because App derives it from role assignment which is out of
-// scope for a layout test.
 async function mountShell(operator: boolean): Promise<HTMLElement> {
   const target = document.createElement("div");
   document.body.append(target);
-  // App.svelte reads `window.matchMedia(MEDIA_QUERY).matches`; do the
-  // same here so stubMatchMedia decides `wide`.
-  const wide = window.matchMedia(MEDIA_QUERY).matches;
 
   const component = mount(AgentGridShell, {
     target,
     props: {
-      wide,
       operator,
       agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
       directory: {},
@@ -113,34 +77,19 @@ async function mountShell(operator: boolean): Promise<HTMLElement> {
   return target;
 }
 
-describe("#25 layout gate (A3, ふじ 3rd review re-re-review 2026-07-23)", () => {
-  it("shouldShowResponseTimeline は wide && operator の AND ゲート", () => {
+describe("response-timeline layout gate (operator-only, ADR-0012)", () => {
+  it("shouldShowResponseTimeline は operator gate に等価", () => {
     // production helper 自体の truth table。App.svelte /
-    // AgentGridShell が使う 1 箇所の判定式で、test 側の
-    // "wide && operator" 再実装ではない。
-    expect(shouldShowResponseTimeline(true, true)).toBe(true);
-    expect(shouldShowResponseTimeline(true, false)).toBe(false);
-    expect(shouldShowResponseTimeline(false, true)).toBe(false);
-    expect(shouldShowResponseTimeline(false, false)).toBe(false);
+    // AgentGridShell が使う 1 箇所の判定式で、test 側の再実装ではない。
+    expect(shouldShowResponseTimeline(true)).toBe(true);
+    expect(shouldShowResponseTimeline(false)).toBe(false);
   });
 
-  it("narrow viewport (<1600px) では operator でも timeline を出さない", async () => {
-    stubMatchMedia(false);
+  it("operator では 3 列 + timeline を出す (viewport 幅に非依存)", async () => {
     const target = await mountShell(true);
 
-    // three-cols も with-timeline も付かず、timeline aside も無い。
-    expect(target.querySelector(".agents.three-cols")).toBeNull();
-    expect(target.querySelector(".grid-with-timeline.with-timeline")).toBeNull();
-    expect(target.querySelector("aside.timeline")).toBeNull();
-  });
-
-  it("wide viewport (>=1600px) + operator では 3 列 + timeline を出す", async () => {
-    stubMatchMedia(true);
-    const target = await mountShell(true);
-
-    // App.svelte が持つ `class:three-cols={shouldShow...}` /
-    // `class:with-timeline={shouldShow...}` の gate は AgentGridShell
-    // に移設済み。同じ helper 経由で両方 on になっている。
+    // AgentGridShell の class 切替が operator gate と同じ helper 経由
+    // で両方 on になっていることを確認。
     expect(target.querySelector(".agents.three-cols")).not.toBeNull();
     expect(target.querySelector(".grid-with-timeline.with-timeline")).not.toBeNull();
     // production の ResponseTimeline が実際に mount されている
@@ -148,17 +97,7 @@ describe("#25 layout gate (A3, ふじ 3rd review re-re-review 2026-07-23)", () =
     expect(target.querySelector("aside.timeline")).not.toBeNull();
   });
 
-  it("wide viewport + viewer は operator-only feature なので timeline を出さない", async () => {
-    stubMatchMedia(true);
-    const target = await mountShell(false);
-
-    expect(target.querySelector(".agents.three-cols")).toBeNull();
-    expect(target.querySelector(".grid-with-timeline.with-timeline")).toBeNull();
-    expect(target.querySelector("aside.timeline")).toBeNull();
-  });
-
-  it("narrow + viewer も同様に timeline なし (最も抑制的な組合せ)", async () => {
-    stubMatchMedia(false);
+  it("viewer は operator-only feature なので timeline を出さない", async () => {
     const target = await mountShell(false);
 
     expect(target.querySelector(".agents.three-cols")).toBeNull();
@@ -180,7 +119,6 @@ describe("#25 layout gate (A3, ふじ 3rd review re-re-review 2026-07-23)", () =
     const component = mount(AgentGridShell, {
       target,
       props: {
-        wide: true,
         operator: true,
         agents: {},
         directory: {
@@ -210,7 +148,6 @@ describe("#25 layout gate (A3, ふじ 3rd review re-re-review 2026-07-23)", () =
     const component = mount(AgentGridShell, {
       target,
       props: {
-        wide: true,
         operator: true,
         agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
         directory: {},

@@ -63,12 +63,6 @@
   // also lets svelte-check track the reactivity chain cleanly.
   let now = $state(Date.now());
   let nowTimer: ReturnType<typeof setInterval> | undefined;
-  // Wide-viewport switch for the 3-col grid + timeline layout (#25).
-  // Fires at ≥ 1600px; below that, the current auto-fill grid stays
-  // (responsive fallback). Uses matchMedia so the browser handles the
-  // transitions and svelte-check does not have to reason about window
-  // resize listeners.
-  let wideLayout = $state(false);
   // agent_id of the agent shown full-screen, or null for the grid.
   let selected = $state<string | null>(null);
   // Viewport centre of the tile that opened the detail, for the expand
@@ -725,28 +719,6 @@
       now = Date.now();
     }, RELATIVE_TIME_TICK_MS);
 
-    // #25: track the wide-layout breakpoint. matchMedia so the browser
-    // fires on transitions and we do not re-read layout on every render.
-    // Guard for jsdom (test env) that lacks matchMedia; default = narrow.
-    const mql =
-      typeof window !== "undefined" && typeof window.matchMedia === "function"
-        ? window.matchMedia("(min-width: 1600px)")
-        : null;
-    if (mql !== null) {
-      wideLayout = mql.matches;
-      const onChange = (e: MediaQueryListEvent) => (wideLayout = e.matches);
-      mql.addEventListener("change", onChange);
-      // Cleanup captured below in the return; scoped ref so we can remove.
-      const detachMql = () => mql.removeEventListener("change", onChange);
-      return () => {
-        detachMql();
-        if (nowTimer !== undefined) clearInterval(nowTimer);
-        nowTimer = undefined;
-        destroyed = true;
-        endSession();
-      };
-    }
-
     return () => {
       if (nowTimer !== undefined) clearInterval(nowTimer);
       nowTimer = undefined;
@@ -915,14 +887,14 @@
       class:with-offline={isOperator && offlineEntries.length > 0}
     >
       <div class="live-dashboard">
-        <!-- #25: wide viewports show grid + timeline side-by-side.
-             Layout gate + shell lives in AgentGridShell (ふじ A1 must-fix
-             2026-07-23, 3rd review): one production component wraps the
-             `.grid-with-timeline` + `.agents` + optional ResponseTimeline,
-             so the integration test can mount the same component instead
-             of a hand-built div stand-in. -->
+        <!-- Grid + response-timeline side-by-side (operator only).
+             Layout gate + shell lives in AgentGridShell: one production
+             component wraps the `.grid-with-timeline` + `.agents` +
+             optional ResponseTimeline, so the integration test can
+             mount the same component instead of a hand-built div
+             stand-in. Viewport-width threshold removed 2026-07-24 —
+             the pane now shows at all widths. -->
         <AgentGridShell
-          wide={wideLayout}
           operator={isOperator}
           fitViewport={isOperator && offlineEntries.length > 0}
           {agents}

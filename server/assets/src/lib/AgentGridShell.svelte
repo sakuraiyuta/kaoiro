@@ -1,11 +1,10 @@
 <script lang="ts">
-  // ふじ A1 must-fix (2026-07-23, 3rd review): extract the response-
-  // timeline layout gate out of App.svelte so the integration test can
-  // mount the SAME production component instead of a hand-built
-  // <div>/<ul> stand-in. `shouldShowResponseTimeline(wide, operator)`
-  // is the single source of truth for both class toggles AND the
-  // aside mount — the pre-A1 test computed the gate in test-scope
-  // (`wide && operator`) and did not observe stubMatchMedia's effect.
+  // Layout shell for the agent grid + optional response-timeline pane.
+  // `shouldShowResponseTimeline(operator)` is the single source of
+  // truth for the class toggles AND the aside mount. The pane rides
+  // an operator-only gate (ADR-0012 — reply logs are operator-only);
+  // the previous wide-viewport threshold (#25, `min-width: 1600px`)
+  // was removed on 2026-07-24 so the pane shows at all widths.
   //
   // Kept minimal: the outer `.grid-with-timeline` div + `.agents` ul
   // + optional ResponseTimeline aside. The tile list rides through
@@ -22,7 +21,6 @@
   import type { Snippet } from "svelte";
 
   let {
-    wide,
     operator,
     fitViewport = false,
     agents,
@@ -33,7 +31,6 @@
     onSelectAgent,
     children,
   }: {
-    wide: boolean;
     operator: boolean;
     fitViewport?: boolean;
     agents: Record<string, Envelope>;
@@ -45,7 +42,7 @@
     children?: Snippet;
   } = $props();
 
-  const showTimeline = $derived(shouldShowResponseTimeline(wide, operator));
+  const showTimeline = $derived(shouldShowResponseTimeline(operator));
 </script>
 
 <div
@@ -71,10 +68,12 @@
     gap: 1.2rem;
   }
 
-  /* #25: wide viewport (≥ 1600px), operator only. Pin the grid to 3
-     columns and expose the right pane for the response timeline. Only
-     applied via the class binding in the template, so the narrow
-     viewport keeps the auto-fill grid — no CSS query is checked here. */
+  /* Operator sessions: pin the grid to 3 columns so the right pane
+     (response timeline) fits alongside. `minmax(0, 1fr)` lets tiles
+     shrink freely on narrow viewports — smaller tiles are the
+     accepted tradeoff for keeping the timeline always visible
+     (2026-07-24 spec change). Viewer sessions keep the auto-fill
+     grid via `.agents` alone. */
   .agents.three-cols {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
