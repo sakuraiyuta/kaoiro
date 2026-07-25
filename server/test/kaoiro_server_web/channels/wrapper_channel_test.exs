@@ -936,6 +936,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         "owner" => opts[:owner] || %{"kind" => "user", "id" => "operator"}
       }
 
+      # 応答不能エラー通知 (#131) は optional。指定時のみ payload に載せる。
+      payload =
+        if opts[:error], do: Map.put(payload, "error", opts[:error]), else: payload
+
       %{
         "version" => "0",
         "agent_id" => agent_id,
@@ -1107,6 +1111,123 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           }
         }
       }
+    end
+
+    test "payload.error 付き envelope をそのまま宛先へ中継する (#131)" do
+      from_id = "test.iam-err-from"
+      to_id = "test.iam-err-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      @endpoint.subscribe("wrapper:" <> to_id)
+
+      env =
+        inter_envelope(from_id, to_id,
+          error: %{"code" => "rate_limit", "message" => "peer quota reached"}
+        )
+
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :ok
+
+      # server は error の意味を解釈せず、構造検証のみで素通しする。
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: "wrapper:" <> ^to_id,
+                       event: "envelope",
+                       payload: ^env
+                     },
+                     500
+    end
+
+    test "payload.error の構造不正を拒否する (#131)" do
+      from_id = "test.iam-badErr-from"
+      to_id = "test.iam-badErr-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env = inter_envelope(from_id, to_id, error: %{"code" => "", "message" => "x"})
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "invalid value: payload.error"}
+
+      env2 = inter_envelope(from_id, to_id, error: %{"code" => "timeout"})
+      ref2 = push(from_socket, "envelope", env2)
+      assert_reply ref2, :error, %{reason: "invalid value: payload.error"}
+    end
+
+    test "wrapper 切断で会話相手へ error.code=disconnected を合成 push する (#131)" do
+      # ChannelCase は channel process を test process と link するので、
+      # close/1 の {:shutdown, :closed} exit を trap して吸収する。
+      Process.flag(:trap_exit, true)
+
+      from_id = "test.iam-disc-from"
+      to_id = "test.iam-disc-to"
+      cid = "cnv-disc-#{System.unique_integer([:positive])}"
+      to_socket = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      # 会話を 1 通成立させて ConversationStates に participants を登録する。
+      ref = push(from_socket, "envelope", inter_envelope(from_id, to_id, cid: cid))
+      assert_reply ref, :ok
+
+      @endpoint.subscribe("wrapper:" <> from_id)
+
+      # 相手 (to) の wrapper が切断 → 送信元 (from) に応答不能が届く。
+      :ok = close(to_socket)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: "wrapper:" <> ^from_id,
+                       event: "envelope",
+                       payload: %{
+                         "agent_id" => "server",
+                         "type" => "inter_agent_message",
+                         "payload" => %{
+                           "kind" => "inform",
+                           "to" => ^from_id,
+                           "conversation_id" => ^cid,
+                           "error" => %{"code" => "disconnected"},
+                           "meta" => %{"done" => false}
+                         }
+                       }
+                     },
+                     500
+
+      # 合成 notice は turn/token に加算しない (対話ターンではない)。
+      assert %{turns: 1} = KaoiroServer.ConversationStates.get(cid)
+
+      on_exit(fn -> AgentStates.delete(to_id) end)
+    end
+
+    test "stale terminate (再接続で entry を失った側) では合成しない (#131)" do
+      Process.flag(:trap_exit, true)
+
+      from_id = "test.iam-stale-from"
+      to_id = "test.iam-stale-to"
+      cid = "cnv-stale-#{System.unique_integer([:positive])}"
+      to_socket = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      ref = push(from_socket, "envelope", inter_envelope(from_id, to_id, cid: cid))
+      assert_reply ref, :ok
+
+      # 再接続相当: 別 pid が AgentStates の entry を持ち直した状態を作る。
+      # 以後 to_socket の terminate は :noop になり、生存中の agent について
+      # 「unreachable」を誤送信してはならない。
+      other_owner = spawn(fn -> Process.sleep(:infinity) end)
+      :ok = AgentStates.put(envelope(to_id, "idle"), owner: other_owner)
+
+      @endpoint.subscribe("wrapper:" <> from_id)
+      :ok = close(to_socket)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       topic: "wrapper:" <> ^from_id,
+                       event: "envelope",
+                       payload: %{"agent_id" => "server"}
+                     },
+                     200
+
+      on_exit(fn ->
+        Process.exit(other_owner, :kill)
+        AgentStates.delete(to_id)
+      end)
     end
 
     test "片側のみ done=true ではエントリは閉じない (両 owner-side 同意要件)" do

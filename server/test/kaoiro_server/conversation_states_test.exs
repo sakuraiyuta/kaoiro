@@ -110,6 +110,66 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert :ok = ConversationStates.record_message("c1", "a", "b", "y", false, name)
   end
 
+  test "claim_unreachable_targets は参加中の cid と自分以外の参加者を返す (#131)" do
+    name = start_tracker(:cs_participants)
+    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", false, name)
+    assert :ok = ConversationStates.record_message("c2", "b", "c", "y", false, name)
+
+    assert {[{"c1", ["b"]}], 0} =
+             ConversationStates.claim_unreachable_targets("a", 50, name)
+
+    assert {[], 0} = ConversationStates.claim_unreachable_targets("zzz", 50, name)
+
+    {claimed, 0} = ConversationStates.claim_unreachable_targets("b", 50, name)
+    assert [{"c1", ["a"]}, {"c2", ["c"]}] = Enum.sort(claimed)
+  end
+
+  test "閉じた conversation は claim 対象にならない (#131)" do
+    name = start_tracker(:cs_participants_closed)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", true, name)
+
+    assert :both_done =
+             ConversationStates.record_message("c", "b", "a", "y", true, name)
+
+    assert {[], 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
+  end
+
+  test "同じ conversation を二重に claim しない (フラッピング抑止, #131)" do
+    name = start_tracker(:cs_claim_once)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", false, name)
+
+    assert {[{"c", ["b"]}], 0} =
+             ConversationStates.claim_unreachable_targets("a", 50, name)
+
+    # 再接続しないまま切断を繰り返しても 2 度目は返らない。
+    assert {[], 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
+
+    # 相手の発言だけでは解除しない (a はまだ戻ってきていない)。
+    assert :ok = ConversationStates.record_message("c", "b", "a", "y", false, name)
+    assert {[], 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
+
+    # a 自身が同じ conversation で再び発言したら再武装する。
+    assert :ok = ConversationStates.record_message("c", "a", "b", "z", false, name)
+
+    assert {[{"c", ["b"]}], 0} =
+             ConversationStates.claim_unreachable_targets("a", 50, name)
+  end
+
+  test "claim は limit で打ち切り、未claim 件数を返す (#131)" do
+    name = start_tracker(:cs_claim_limit)
+
+    for n <- 1..3 do
+      assert :ok = ConversationStates.record_message("c#{n}", "a", "b", "x", false, name)
+    end
+
+    assert {claimed, 2} = ConversationStates.claim_unreachable_targets("a", 1, name)
+    assert length(claimed) == 1
+
+    # 打ち切られた分は notified 扱いにしないので次回 claim で拾える。
+    assert {rest, 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
+    assert length(rest) == 2
+  end
+
   test "limits は GenServer 起動時に Application env から取り込む" do
     name =
       start_tracker(:cs_envread,

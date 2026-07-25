@@ -7,8 +7,10 @@ defmodule KaoiroServer.ConversationStates do
   For each `conversation_id` we keep the turn count, the running token
   approximation (`byte_size(body) ÷ 3` per message — protocol-inter-agent
   spec, intentionally coarse), the wallclock start time, the participating
-  agent_id set, and the set of agent_ids that have signalled `meta.done=true`
-  so far. `record_message/5` increments the counters and returns:
+  agent_id set, the set of agent_ids that have signalled `meta.done=true`
+  so far, and the set already reported unreachable to their peers
+  (`claim_unreachable_targets/3`, issue #131). `record_message/5`
+  increments the counters and returns:
 
     * `:ok` — within limits, conversation still open.
     * `:both_done` — within limits, this message carried `done=true` and the
@@ -56,6 +58,27 @@ defmodule KaoiroServer.ConversationStates do
   @doc "Returns the current entry for inspection (test helper)."
   def get(conversation_id, server \\ __MODULE__) do
     GenServer.call(server, {:get, conversation_id})
+  end
+
+  @doc """
+  Claims at most `limit` still-open conversations in which `agent_id` takes
+  part and whose peers have not been told yet that this agent is
+  unreachable, marks them as notified, and returns
+  `{[{conversation_id, other_participant_ids}], unclaimed_count}`. The
+  wrapper channel calls it on disconnect (protocol-inter-agent
+  「応答不能エラーの通知」, issue #131).
+
+  Claiming — rather than plain listing — is what keeps a crash-looping or
+  flapping wrapper from re-injecting the same notice into its peers on
+  every reconnect cycle: the mark is only released when `agent_id` sends
+  another message in that conversation (`record_message/6`), i.e. when it
+  has demonstrably come back. `limit` bounds the per-disconnect fan-out;
+  the leftover count is returned so the caller can log what it dropped.
+  Counters (turns / tokens / wallclock) are never touched here — a
+  server-derived notice is not a conversation turn.
+  """
+  def claim_unreachable_targets(agent_id, limit, server \\ __MODULE__) do
+    GenServer.call(server, {:claim_unreachable, agent_id, limit})
   end
 
   @impl true
@@ -107,7 +130,8 @@ defmodule KaoiroServer.ConversationStates do
               tokens: 0,
               started_at: now,
               agents: MapSet.new(),
-              done_by: MapSet.new()
+              done_by: MapSet.new(),
+              notified_unreachable: MapSet.new()
             }
 
         agents = entry.agents |> MapSet.put(from) |> MapSet.put(to)
@@ -118,7 +142,10 @@ defmodule KaoiroServer.ConversationStates do
           | turns: entry.turns + 1,
             tokens: entry.tokens + token_estimate(body),
             agents: agents,
-            done_by: done_by
+            done_by: done_by,
+            # `from` just spoke here, so any earlier "unreachable" mark for it
+            # is stale: a later disconnect must notify its peers again.
+            notified_unreachable: MapSet.delete(entry.notified_unreachable, from)
         }
 
         evaluate(state, cid, next, limits, now)
@@ -127,6 +154,26 @@ defmodule KaoiroServer.ConversationStates do
 
   def handle_call({:get, cid}, _from, state) do
     {:reply, Map.get(state.conversations, cid), state}
+  end
+
+  def handle_call({:claim_unreachable, agent_id, limit}, _from, state) do
+    pending =
+      for {cid, entry} <- state.conversations,
+          MapSet.member?(entry.agents, agent_id),
+          not MapSet.member?(entry.notified_unreachable, agent_id) do
+        {cid, entry.agents |> MapSet.delete(agent_id) |> MapSet.to_list()}
+      end
+
+    {claimed, unclaimed} = Enum.split(pending, limit)
+
+    conversations =
+      Enum.reduce(claimed, state.conversations, fn {cid, _peers}, acc ->
+        Map.update!(acc, cid, fn entry ->
+          %{entry | notified_unreachable: MapSet.put(entry.notified_unreachable, agent_id)}
+        end)
+      end)
+
+    {:reply, {claimed, length(unclaimed)}, %{state | conversations: conversations}}
   end
 
   @impl true
