@@ -7,23 +7,32 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
   secret_key_base: "QuGyT2gNZpDdXTzHcZKPuBUNVFi4omSMAOW2apvMFd3dOx453osH4dzIL8LjwC6e",
   server: false
 
-# Throwaway DETS file for the session_id pointer store (issue #49); the
-# app-started instance writes here, isolated from any real data.
+# Per-run throwaway DETS file for the session_id pointer store (issue
+# #49). unique_integer suffix isolates concurrent `mix test` invocations
+# and prevents accumulation across test-suite runs — same rationale as
+# the InterAgentHistory / IngressOrder per-run configs below.
 config :kaoiro_server,
        :session_pointers_path,
-       Path.join(System.tmp_dir!(), "kaoiro_test_session_pointers.dets")
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_session_pointers_#{System.unique_integer([:positive])}.dets"
+       )
 
-# Throwaway DETS file for the permission_mode pick store (#58); the app-
-# started instance writes here, isolated from any real data.
+# Per-run throwaway DETS file for the permission_mode pick store (#58).
 config :kaoiro_server,
        :permission_modes_path,
-       Path.join(System.tmp_dir!(), "kaoiro_test_permission_modes.dets")
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_permission_modes_#{System.unique_integer([:positive])}.dets"
+       )
 
-# Throwaway DETS file for the agent identity ledger (ADR-0030); the
-# app-started instance writes here, isolated from any real data.
+# Per-run throwaway DETS file for the agent identity ledger (ADR-0030).
 config :kaoiro_server,
        :agent_directory_path,
-       Path.join(System.tmp_dir!(), "kaoiro_test_agent_directory.dets")
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_agent_directory_#{System.unique_integer([:positive])}.dets"
+       )
 
 # Per-run throwaway DETS file for durable inter-agent history (#105).
 config :kaoiro_server,
