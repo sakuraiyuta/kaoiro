@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -105,6 +111,11 @@ describe("buildRunnerConfig", () => {
       codexAuthMode: "chatgpt",
     });
     expect(withCodex.codex).toEqual({ auth_mode: "chatgpt" });
+
+    // The loader's literal is "apikey" (no hyphen) — "api-key" would make
+    // parseRunnerConfig throw and take the whole wizard down.
+    const apiKey = buildRunnerConfig({ ...answers, codexAuthMode: "apikey" });
+    expect(apiKey.codex).toEqual({ auth_mode: "apikey" });
 
     const withoutCodex = buildRunnerConfig({
       ...answers,
@@ -268,6 +279,55 @@ describe("runSetup", () => {
     expect(readFileSync(result.envPath, "utf8")).toContain(
       "#KAOIRO_RUNNER_TOKEN=",
     );
+  });
+
+  it("codex を API key 認証にすると auth_mode=apikey を書く", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-setup-"));
+    const prompt = scripted([
+      "lab-pc-1",
+      "ws://localhost:4000/runner",
+      "/tmp/work",
+      "",
+      "n", // claude-code off
+      "y", // codex on
+      "n", // ChatGPT plan? -> no, so API key
+      "n", // no token
+      "", // node path
+    ]);
+
+    const result = await runSetup(prompt, options(dir));
+
+    const config = JSON.parse(readFileSync(result.configPath, "utf8"));
+    expect(config.codex).toEqual({ auth_mode: "apikey" });
+  });
+
+  it("既存 runner.env を上書きしても 0600 に締め直す", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-setup-"));
+    const envPath = join(dir, "runner.env");
+    writeFileSync(envPath, "OLD=1\n");
+    // A file left at 0644 by an earlier hand-edit: writeFileSync's `mode` is
+    // ignored on overwrite, so only an explicit chmod re-tightens it.
+    chmodSync(envPath, 0o644);
+
+    const prompt = scripted([
+      "lab-pc-1",
+      "ws://localhost:4000/runner",
+      "/tmp/work",
+      "",
+      "y", // claude-code
+      "n", // codex
+      "y", // set a token
+      "n", // generate?
+      "tok", // token
+      "", // node path
+      "y", // runner.env exists -> overwrite
+    ]);
+
+    const result = await runSetup(prompt, options(dir));
+
+    expect(result.skipped).toEqual([]);
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
+    expect(readFileSync(envPath, "utf8")).not.toContain("OLD=1");
   });
 
   it("engine を全部 off にしたら claude-code へ落とす", async () => {

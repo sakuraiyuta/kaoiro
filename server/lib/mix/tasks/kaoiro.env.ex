@@ -123,7 +123,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
   # -- prompts ---------------------------------------------------------------
 
   defp ask_secret do
-    if Mix.shell().yes?("Generate SECRET_KEY_BASE automatically?") do
+    if confirm("Generate SECRET_KEY_BASE automatically?") do
       secret = generate_secret()
       Mix.shell().info("  generated (64 chars)")
       secret
@@ -157,7 +157,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
       token = ask_token("client ##{index}")
 
       role =
-        if Mix.shell().yes?("  operator? (no = viewer)"),
+        if confirm("  operator? (no = viewer)"),
           do: "operator",
           else: "viewer"
 
@@ -174,7 +174,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
   end
 
   defp collect(kind, build) do
-    if Mix.shell().yes?("Add #{kind} tokens?") do
+    if confirm("Add #{kind} tokens?") do
       collect_loop(kind, build, 1, [])
     else
       []
@@ -185,7 +185,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
     entry = build.(index)
     acc = acc ++ [entry]
 
-    if Mix.shell().yes?("Add another #{kind} token?") do
+    if confirm("Add another #{kind} token?") do
       collect_loop(kind, build, index + 1, acc)
     else
       acc
@@ -193,7 +193,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
   end
 
   defp ask_token(label) do
-    if Mix.shell().yes?("  generate the #{label} token?") do
+    if confirm("  generate the #{label} token?") do
       token = generate_token()
       Mix.shell().info("    #{token}")
       token
@@ -211,11 +211,25 @@ defmodule Mix.Tasks.Kaoiro.Env do
     end
   end
 
+  # Not Mix.shell().yes?/1: that answers "no" on EOF, so a closed stdin would
+  # look like a deliberate decline — and at the final overwrite prompt it would
+  # exit 0 having written nothing. Routing through prompt/1 makes EOF abort the
+  # same way it does for free-text answers.
+  defp confirm(question, default \\ true) do
+    hint = if default, do: "[Y/n]", else: "[y/N]"
+
+    case String.downcase(prompt("#{question} #{hint}")) do
+      "" -> default
+      answer -> answer in ["y", "yes"]
+    end
+  end
+
   # -- output ----------------------------------------------------------------
 
   defp write(path, body) do
+    # Default to NO here: overwriting a live .env destroys working tokens.
     if File.exists?(path) and
-         not Mix.shell().yes?("#{path} exists — overwrite?") do
+         not confirm("#{path} exists — overwrite?", false) do
       Mix.shell().info("\nKept #{path}; nothing written.")
     else
       File.write!(path, body)

@@ -21,6 +21,10 @@ die_config() {
 # Per-OS user config dir (ADR-0018). KAOIRO_RUNNER_DIR overrides it, but must
 # come from the service definition's environment rather than the env file
 # below — that file's own location depends on it.
+#
+# MUST stay in sync with resolveConfigDir() in ../src/setup.ts: the wizard
+# writes where this resolves, so a divergence hides the config from the
+# service.
 if [ "$(uname -s)" = "Darwin" ]; then
   default_dir="$HOME/Library/Application Support/kaoiro"
 else

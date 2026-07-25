@@ -5,6 +5,7 @@
 
 import { platform } from "node:os";
 import { createInterface } from "node:readline/promises";
+import { ConfigError } from "./config.js";
 import { type Prompt, nextSteps, runSetup } from "./setup.js";
 
 async function main(): Promise<void> {
@@ -52,10 +53,28 @@ async function main(): Promise<void> {
   };
 
   process.stdout.write("kaoiro runner setup\n\n");
-  const result = await runSetup(prompt, {
-    env: process.env,
-    platform: platform(),
-  });
+
+  let result;
+  try {
+    result = await runSetup(prompt, {
+      env: process.env,
+      platform: platform(),
+    });
+  } catch (error) {
+    // runSetup validates through parseRunnerConfig before writing. A rejection
+    // here means the wizard built something the loader refuses — report it as
+    // a config error instead of dumping a stack trace over the operator's
+    // answers.
+    finished = true;
+    rl.close();
+    if (error instanceof ConfigError) {
+      process.stderr.write(
+        `kaoiro-runner-setup: the answers did not form a valid config: ${error.message}\n`,
+      );
+      process.exit(78);
+    }
+    throw error;
+  }
 
   process.stdout.write("\nDone.\n\n");
   for (const line of nextSteps(result, result.token)) {

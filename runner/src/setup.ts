@@ -6,7 +6,7 @@
 // without a TTY; `setup-cli.ts` wires the readline implementation.
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { type RunnerConfig, parseRunnerConfig } from "./config.js";
@@ -49,8 +49,10 @@ export interface SetupAnswers {
   /** Absolute path to node, for hosts where a version manager owns it. */
   nodePath?: string;
   /** Only meaningful when capabilities include codex. Explicit values keep the
-   *  runner from shelling out to `codex doctor` (phase-24). */
-  codexAuthMode?: "chatgpt" | "api-key";
+   *  runner from shelling out to `codex doctor` (phase-24). The literals must
+   *  match `CodexConfig["auth_mode"]` in config.ts — `parseRunnerConfig`
+   *  rejects anything else. */
+  codexAuthMode?: "chatgpt" | "apikey";
 }
 
 /** Builds the config and validates it through the runtime loader, so the
@@ -195,6 +197,11 @@ async function writeGuarded(
   }
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, { mode });
+  // `mode` on writeFileSync only applies when the file is CREATED — POSIX
+  // open(2) ignores it for an existing path. Overwriting a runner.env that was
+  // previously created 0644 would otherwise leave the token world-readable, so
+  // enforce the mode unconditionally.
+  chmodSync(path, mode);
 }
 
 /**
@@ -230,7 +237,7 @@ export async function runSetup(
       true,
     ))
       ? "chatgpt"
-      : "api-key";
+      : "apikey";
   }
 
   // The token pairs with the server's KAOIRO_RUNNER_TOKENS entry
