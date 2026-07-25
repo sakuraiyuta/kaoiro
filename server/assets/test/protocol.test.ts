@@ -3,8 +3,10 @@ import type { EngineCatalogResult } from "../src/lib/protocol";
 import {
   ATTACH_CHUNK_SIZE,
   buildChunkPayload,
+  errorSubtypeLabel,
   fetchPersonaManifest,
   fanOutInterAgentHistory,
+  findPrecedingUserPrompt,
   formatAgentLabel,
   hostIdFromAgentId,
   interAgentMessageOf,
@@ -1768,5 +1770,149 @@ describe("EngineCatalogResult (Option E, ADR-0039)", () => {
     };
     expect(ok.ok).toBe(true);
     expect(fail.reason).toBe("auth_failed");
+  });
+});
+
+describe("errorSubtypeLabel (issue #127)", () => {
+  it("既知の 4 subtype を日本語ラベルに変換", () => {
+    expect(errorSubtypeLabel("error_max_turns")).toBe("最大ターン数到達");
+    expect(errorSubtypeLabel("error_during_execution")).toBe("実行中エラー");
+    expect(errorSubtypeLabel("error_max_budget_usd")).toBe("予算上限到達");
+    expect(errorSubtypeLabel("error_max_structured_output_retries")).toBe(
+      "構造化出力リトライ上限",
+    );
+  });
+
+  it("未知 / 空 / undefined は null (caller 側で omit または fallback)", () => {
+    expect(errorSubtypeLabel(undefined)).toBeNull();
+    expect(errorSubtypeLabel("")).toBeNull();
+    expect(errorSubtypeLabel("some_new_subtype")).toBeNull();
+  });
+});
+
+describe("findPrecedingUserPrompt (issue #128)", () => {
+  function userLog(seq: number, text: string): Envelope {
+    return {
+      version: "0",
+      agent_id: "agent-a",
+      session_id: "s1",
+      ts: `2026-07-25T00:00:0${seq}Z`,
+      seq,
+      type: "log",
+      state: "thinking",
+      payload: { kind: "user", text },
+    } as unknown as Envelope;
+  }
+
+  function assistantLog(seq: number, text: string): Envelope {
+    return {
+      version: "0",
+      agent_id: "agent-a",
+      session_id: "s1",
+      ts: `2026-07-25T00:00:0${seq}Z`,
+      seq,
+      type: "log",
+      state: "thinking",
+      payload: { kind: "assistant", text },
+    } as unknown as Envelope;
+  }
+
+  function errorResult(seq: number): Envelope {
+    return {
+      version: "0",
+      agent_id: "agent-a",
+      session_id: "s1",
+      ts: `2026-07-25T00:00:0${seq}Z`,
+      seq,
+      type: "result",
+      state: "error",
+      payload: { is_error: true, error_subtype: "error_during_execution" },
+    } as unknown as Envelope;
+  }
+
+  it("直近の user log の text を返す (同 turn 内)", () => {
+    const entries = [
+      userLog(1, "問題を解いて"),
+      assistantLog(2, "考え中…"),
+      errorResult(3),
+    ];
+    expect(findPrecedingUserPrompt(entries, 2)).toBe("問題を解いて");
+  });
+
+  it("前 turn の result envelope で走査を止める (別 turn の user は再送対象外)", () => {
+    const entries = [
+      userLog(1, "旧 turn の質問"),
+      errorResult(2),
+      // 現 turn: user log が無く先頭が assistant のみ
+      assistantLog(3, "reply"),
+      errorResult(4),
+    ];
+    expect(findPrecedingUserPrompt(entries, 3)).toBeNull();
+  });
+
+  it("同 turn 内に user log が無ければ null", () => {
+    const entries = [assistantLog(1, "hi"), errorResult(2)];
+    expect(findPrecedingUserPrompt(entries, 1)).toBeNull();
+  });
+
+  it("text が空文字なら null", () => {
+    const entries = [userLog(1, ""), errorResult(2)];
+    expect(findPrecedingUserPrompt(entries, 1)).toBeNull();
+  });
+
+  it("resultIndex=0 (先頭) では走査対象なしで null", () => {
+    const entries = [errorResult(1)];
+    expect(findPrecedingUserPrompt(entries, 0)).toBeNull();
+  });
+
+  it("複数 user log があれば最後 (直近) の text", () => {
+    const entries = [
+      userLog(1, "first"),
+      userLog(2, "second"),
+      errorResult(3),
+    ];
+    expect(findPrecedingUserPrompt(entries, 2)).toBe("second");
+  });
+
+  it("session_boundary で走査を止める (クロエ round 2 must-fix 1)", () => {
+    // /new が積む session_boundary marker を越えると前 session の user prompt
+    // を拾ってしまう。/new 直後の inter-agent 起因エラー turn は user log を
+    // 持たないため boundary で null 返しにしないと stale text が飛ぶ。
+    function sessionBoundary(seq: number): Envelope {
+      return {
+        version: "0",
+        agent_id: "agent-a",
+        session_id: "s2",
+        ts: `2026-07-25T00:00:0${seq}Z`,
+        seq,
+        type: "session_boundary",
+        state: "thinking",
+        payload: {},
+      } as unknown as Envelope;
+    }
+    const entries = [
+      userLog(1, "前 session の prompt"),
+      sessionBoundary(2),
+      // 現 session に user log 無し (inter-agent 起因)
+      assistantLog(3, "reply"),
+      errorResult(4),
+    ];
+    expect(findPrecedingUserPrompt(entries, 3)).toBeNull();
+  });
+
+  it("truncated:true の user log は null (原文再送保証、クロエ round 2 must-fix 2)", () => {
+    // wrapper 側 16KB クリップ済の user log。原文そのまま再送できないので
+    // ボタン非表示 (null 返し)。
+    const truncated: Envelope = {
+      version: "0",
+      agent_id: "agent-a",
+      session_id: "s1",
+      ts: "2026-07-25T00:00:01Z",
+      seq: 1,
+      type: "log",
+      state: "thinking",
+      payload: { kind: "user", text: "truncated head…", truncated: true },
+    } as unknown as Envelope;
+    expect(findPrecedingUserPrompt([truncated, errorResult(2)], 1)).toBeNull();
   });
 });

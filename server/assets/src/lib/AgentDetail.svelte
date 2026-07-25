@@ -7,6 +7,7 @@
   import {
     engineFrom,
     errorSubtypeLabel,
+    findPrecedingUserPrompt,
     formatAgentLabel,
     hostIdFromAgentId,
     interAgentMessageOf,
@@ -585,6 +586,32 @@
   // disconnected (nothing left to terminate — delete handles those).
   const canStop = $derived(envelope.state !== "disconnected");
   let stopping = $state(false);
+
+  // Retry button (#128 round 2 must-fix 3): in-flight guard for the per-turn
+  // retry button. Keyed by conversationEntryKey(env) so multiple errored
+  // turns can each show their own button in independent states. Matches the
+  // uploading/interrupting/stopping pattern elsewhere in this file.
+  let retryingKeys = $state<ReadonlySet<string>>(new Set());
+  async function retryPrompt(
+    entryKey: string,
+    agentId: string,
+    text: string,
+  ): Promise<void> {
+    if (retryingKeys.has(entryKey) || !connection) return;
+    retryingKeys = new Set([...retryingKeys, entryKey]);
+    try {
+      await connection.sendInstruction(agentId, text);
+    } catch (err) {
+      // 送信失敗 (forbidden / unknown_agent / timeout): 現状 AgentDetail に
+      // toast 機構がないので console.warn。sendInstruction reject は
+      // instruction_rejected server push とは別経路 (server ack 失敗のみ)。
+      console.warn("retry failed:", err);
+    } finally {
+      const next = new Set(retryingKeys);
+      next.delete(entryKey);
+      retryingKeys = next;
+    }
+  }
 
   // Restore is offered for any disconnected agent (#22, ADR-0014); it sits
   // in the terminate button's slot (the two never show at once — terminate
@@ -2221,10 +2248,15 @@
             {@const errLabel = res.is_error
               ? errorSubtypeLabel(res.error_subtype)
               : null}
+            {@const retryText = res.is_error
+              ? findPrecedingUserPrompt(logs, i)
+              : null}
             <!-- The reply text already shows as the final assistant log; the
                  result only marks the turn boundary, not a duplicate (#29).
                  On error, issue #127: subtype label (max_turns 等) と SDK 由来
-                 detail (errors[] / stop_reason) を併記して原因特定を可能に。 -->
+                 detail (errors[] / stop_reason) を併記して原因特定を可能に。
+                 issue #128: 直前の user プロンプトを findPrecedingUserPrompt で
+                 拾って再送ボタンを表示 (slash command と null は button 非表示)。 -->
             <p class="turn-end" class:error={res.is_error}>
               {res.is_error
                 ? errLabel
@@ -2236,6 +2268,18 @@
                   class="cost"
                   title="API 標準単価での推定値。Claude サブスク利用時は実課金額ではありません(従量 API キー利用時のみ実コストに近い)。セッション開始からの累計。"
                   >累計 ~${cost.toFixed(4)}</span>
+              {/if}
+              {#if res.is_error && retryText !== null && !retryText.startsWith("/") && connection}
+                {@const entryKey = conversationEntryKey(env)}
+                {@const isRetrying = retryingKeys.has(entryKey)}
+                <button
+                  type="button"
+                  class="retry"
+                  disabled={isRetrying}
+                  title="このプロンプトを新規 instruction として再送します (テキストのみ。元の添付ファイルは含まれません)"
+                  onclick={() => {
+                    void retryPrompt(entryKey, env.agent_id, retryText);
+                  }}>{isRetrying ? "再送中…" : "再送"}</button>
               {/if}
               <time class="ts" datetime={env.ts}>{time}</time>
             </p>
@@ -3545,6 +3589,36 @@
 
   .turn-end.error {
     color: var(--c-error);
+  }
+
+  /* Error detail line (issue #127): shows SDK errors[] / stop_reason under
+     the turn-end when an error terminated the turn. Same tone as turn-end
+     but wraps normally instead of being centred. */
+  .turn-end-detail {
+    margin: 0 1rem 0.4rem;
+    text-align: center;
+    font-size: var(--fs-metadata);
+    color: var(--c-error);
+    opacity: 0.85;
+    word-break: break-word;
+  }
+
+  /* Retry button (issue #128): inline on the error turn-end line, subtle
+     to avoid overshadowing the primary composer. */
+  .turn-end .retry {
+    margin-left: 0.5em;
+    padding: 0 0.5em;
+    font-size: var(--fs-metadata);
+    color: var(--c-accent, currentColor);
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1.4;
+  }
+
+  .turn-end .retry:hover {
+    background: rgba(128, 128, 128, 0.1);
   }
 
   /* Per-line wall-clock time (#38): small, dim, monospaced digits. */
