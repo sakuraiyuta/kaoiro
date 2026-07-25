@@ -1082,6 +1082,17 @@ export interface SessionResetFailedPayload {
 
 export interface KaoiroConnection {
   disconnect: () => void;
+  /** Force-cycles the Phoenix socket: disconnect then reconnect (issue
+   *  #123). Use when the tab or network reappears in a state where
+   *  Phoenix's built-in reconnect timer never fired — macOS sleep resume
+   *  can drop the WebSocket without a close event, leaving Phoenix stuck.
+   *  Phoenix's `socket.disconnect(cb)` first clears its internal reconnect
+   *  timers, then closes the WS, then invokes the callback; `socket.connect()`
+   *  from that callback opens a fresh WS and Phoenix auto-rejoins every
+   *  already-joined channel. Safe to call repeatedly — Phoenix's connect()
+   *  is a no-op when a connection is already in-flight, so no duplicate
+   *  socket is created. */
+  reconnect: () => void;
   /** Sends an operator instruction; rejects on server refusal
    * (forbidden / unknown_agent) or timeout. `attachmentIds` references
    * uploads previously sent through uploadFile / attach* (file-upload spec
@@ -1990,6 +2001,9 @@ export function connectKaoiro(
     disconnect: () => {
       channel.leave();
       socket.disconnect();
+    },
+    reconnect: () => {
+      socket.disconnect(() => socket.connect());
     },
     sendInstruction: (agentId, text, attachmentIds) =>
       pushAsync(

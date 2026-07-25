@@ -179,6 +179,11 @@
   // only their effects (connection, status) need to be reactive.
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let destroyed = false;
+  // Handlers for tab-visibility / network-online wake-ups (issue #123).
+  // Retained across startSession / endSession so removeEventListener can pair
+  // the exact function references addEventListener registered.
+  let wakeHandler: (() => void) | undefined;
+  let visibilityHandler: (() => void) | undefined;
 
   // Live grid: agents whose wrapper is currently connected (state !== disconnected).
   // Disconnected agents move to the offline section below so restore UX is
@@ -628,6 +633,19 @@
     };
     if (slideNow) refresh();
     refreshTimer = setInterval(refresh, 12 * 60 * 60 * 1000);
+
+    // issue #123: macOS スリープ復帰時などブラウザが WS を切っても close
+    // event が届かず Phoenix 内蔵 reconnect が発火しないケースの救済。
+    // タブ復帰 / ネット復帰時に status が disconnected なら明示的に socket を
+    // 張り直す。connected の間は no-op なので誤検知で無限リトライしない。
+    wakeHandler = () => {
+      if (status === "disconnected") connection?.reconnect();
+    };
+    visibilityHandler = () => {
+      if (document.visibilityState === "visible") wakeHandler?.();
+    };
+    document.addEventListener("visibilitychange", visibilityHandler);
+    window.addEventListener("online", wakeHandler);
   }
 
   // Tears down the live socket and its slide timer without touching the
@@ -636,6 +654,14 @@
     if (refreshTimer !== undefined) {
       clearInterval(refreshTimer);
       refreshTimer = undefined;
+    }
+    if (visibilityHandler !== undefined) {
+      document.removeEventListener("visibilitychange", visibilityHandler);
+      visibilityHandler = undefined;
+    }
+    if (wakeHandler !== undefined) {
+      window.removeEventListener("online", wakeHandler);
+      wakeHandler = undefined;
     }
     connection?.disconnect();
     connection = null;
