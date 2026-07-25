@@ -164,7 +164,12 @@ pnpm --filter=@kaoiro/runner --prod deploy "$stage_rel/$name" --legacy >/dev/nul
 printf '%s\n' "$rev" >"$stage/$name/VERSION"
 
 echo "build-runner-tarball: archiving"
-tar czf "$out/$name.tar.gz" -C "$stage" "$name"
+# COPYFILE_DISABLE=1 stops macOS bsdtar from embedding its copyfile
+# metadata (resource forks / ACLs) as AppleDouble `._*` files, which a
+# GNU tar extraction on the Linux deploy target otherwise unpacks as
+# bogus top-level entries (issue #153, found in #148's real-host
+# verification). A no-op on Linux, where GNU tar ignores the var.
+COPYFILE_DISABLE=1 tar czf "$out/$name.tar.gz" -C "$stage" "$name"
 
 echo "build-runner-tarball: done"
 du -h "$out/$name.tar.gz"
