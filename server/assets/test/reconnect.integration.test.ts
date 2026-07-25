@@ -24,11 +24,14 @@ import {
   shouldForceReconnectOnVisible,
 } from "../src/lib/protocol";
 
-// stuck fake: send は無視、close は readyState を CLOSED にするだけで
-// close event を発火しない。Phoenix teardown() の waitForSocketClosed は
-// 150 ms 毎に readyState を polling するので、advanceTimersByTimeAsync で
-// 200ms ほど進めれば teardown callback は発火する。heartbeat 応答は決して
-// 返さないので Phoenix 内部の heartbeatTimeout 経路を通ることになる。
+// open-then-stuck fake (ふじ round 3 must-fix 1): constructor で次 tick に
+// onopen を発火し Phoenix の onConnOpen → resetHeartbeat を実際に arm する。
+// その後 send / close event を返さない stuck 状態になるので、Phoenix 側は
+// heartbeatIntervalMs × 2 (test では 200ms) で heartbeatTimeout 経路に落ち、
+// 破棄した旧 Socket が clearHeartbeats されないと reconnectTimer.scheduleTimeout
+// で自己復活してしまう (これが本 issue の実 macOS スリープ再現)。
+// teardown() の waitForSocketClosed は readyState=CLOSED を polling するので
+// close() で CLOSED にセットするだけで teardown callback は 150ms 後に発火する。
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   static CONNECTING = 0;
@@ -45,10 +48,19 @@ class FakeWebSocket {
 
   constructor(public url: string) {
     FakeWebSocket.instances.push(this);
+    // Fire onopen on the next tick so Phoenix's onConnOpen runs (which arms
+    // resetHeartbeat/heartbeatTimer). vi.useFakeTimers means the caller must
+    // advance timers to trigger it — advanceTimersByTimeAsync(1) suffices.
+    setTimeout(() => {
+      if (this.readyState === FakeWebSocket.CLOSED) return;
+      this.readyState = FakeWebSocket.OPEN;
+      this.onopen?.({});
+    }, 0);
   }
 
   send(data: string): void {
     this.sentFrames.push(data);
+    // stuck: heartbeat push を含めて何も応答しない。
   }
 
   close(_code?: number, _reason?: string): void {
@@ -92,31 +104,34 @@ describe("Phoenix Socket internal API existence (issue #123 round 3)", () => {
   });
 });
 
-describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3)", () => {
-  it("(A) reconnect() 後、stuck transport の heartbeatTimeout でも 3 本目 transport が生えない", async () => {
+describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", () => {
+  it("(A) reconnect() 後、open-then-stuck transport の heartbeatTimeout でも 3 本目 transport が生えない", async () => {
     const handlers = makeHandlers();
     const conn = connectKaoiro("ws://test/client", handlers, {
       // 案 A: Socket は 1 instance のまま cycle される。
       transport: FakeWebSocket as unknown,
       heartbeatIntervalMs: 100,
     });
-    // 初回 transport が生成される
+    // 初回 transport 生成。onopen は次 tick に発火 (round 4 must-fix 1)。
     expect(FakeWebSocket.instances.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    // Phoenix onConnOpen → resetHeartbeat が arm 済。
 
     conn.reconnect();
-    // Phoenix teardown() の waitForSocketClosed polling (150ms 起点) を
-    // 通過させる。FakeWebSocket.close で readyState=CLOSED になるので
-    // 次の polling tick で teardown callback が発火する。
-    await vi.advanceTimersByTimeAsync(500);
+    // teardown は FakeWebSocket.close で readyState=CLOSED になった時点で
+    // waitForSocketClosed が即 callback → cb 内で drain + subscribeChannel
+    // + socket.connect() が同期実行。新 transport 生成もこの tick で行われる。
+    // 次 tick で新 transport の onopen が発火するので 1ms 進める。
+    await vi.advanceTimersByTimeAsync(1);
 
-    // 2 本目 transport (WS 張り直し) は生成される。ここは案 A の期待挙動。
+    // 2 本目 transport (WS 張り直し) が生成される。案 A の期待挙動。
     expect(FakeWebSocket.instances.length).toBe(2);
 
-    // heartbeatIntervalMs=100 の 2 回検知 (200ms 相当) を超えて更に待つ。
-    // 案 A の drainPhoenixTimers() が旧 socket の heartbeatTimer を clear
-    // 済のため、heartbeatTimeout → reconnectTimer.scheduleTimeout は発火
-    // せず、3 本目 transport は生えない (ふじ再レビュー must-fix 1)。
-    await vi.advanceTimersByTimeAsync(1000);
+    // ここから 199ms 進めて heartbeat cycle 前 window で 3 本目が生えて
+    // いないことを assert (旧 socket 由来の残余 chain がない pin)。
+    // heartbeatIntervalMs=100 の 2 回検知 (~200ms) に達すると Phoenix 標準
+    // self-healing で新 transport が更に生えるので、そのスコープ外を狙う。
+    await vi.advanceTimersByTimeAsync(199);
     expect(FakeWebSocket.instances.length).toBe(2);
 
     conn.disconnect();
@@ -130,29 +145,31 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3)", ()
       heartbeatIntervalMs: 100,
     });
     expect(FakeWebSocket.instances.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(1); // open trigger
 
     conn.disconnect();
     // teardown + heartbeat 2 回検知 window を過ぎさせる。drainPhoenixTimers
     // で timer 停止済み + disposed guard で cb は no-op。2 本目は生えない。
-    await vi.advanceTimersByTimeAsync(1500);
+    await vi.advanceTimersByTimeAsync(2000);
 
     expect(FakeWebSocket.instances.length).toBe(1);
   });
 
-  it("(A') reconnect() 連打でも cycle は 1 つだけ (cycleInFlight guard)", async () => {
+  it("(A') reconnect() 連打 (同一 tick) でも cycle は 1 つだけ (cycleInFlight guard)", async () => {
     const handlers = makeHandlers();
     const conn = connectKaoiro("ws://test/client", handlers, {
       transport: FakeWebSocket as unknown,
       heartbeatIntervalMs: 100,
     });
     expect(FakeWebSocket.instances.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(1); // open trigger
 
     conn.reconnect();
     conn.reconnect(); // guard で no-op
     conn.reconnect(); // no-op
 
-    await vi.advanceTimersByTimeAsync(500);
-    // 2 本目のみ生成される
+    // 新 transport 生成後の onopen 発火だけ進める (heartbeat cycle 前 window)。
+    await vi.advanceTimersByTimeAsync(1);
     expect(FakeWebSocket.instances.length).toBe(2);
 
     conn.disconnect();
@@ -165,13 +182,14 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3)", ()
       transport: FakeWebSocket as unknown,
       heartbeatIntervalMs: 100,
     });
+    await vi.advanceTimersByTimeAsync(1);
 
     conn.reconnect();
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1); // teardown 同期完了 + 新 open
     expect(FakeWebSocket.instances.length).toBe(2);
 
     conn.reconnect();
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1);
     expect(FakeWebSocket.instances.length).toBe(3);
 
     conn.disconnect();
@@ -184,11 +202,56 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3)", ()
       transport: FakeWebSocket as unknown,
       heartbeatIntervalMs: 100,
     });
+    await vi.advanceTimersByTimeAsync(1);
     conn.disconnect();
 
     conn.reconnect();
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(FakeWebSocket.instances.length).toBe(1);
+  });
+
+  it("(D) invert-test: clearHeartbeats を no-op 化すると heartbeatTimeout 経由で 3 本目以降 transport が生える (drain 実効性 pin)", async () => {
+    // ふじ round 3 must-fix 1 (round 4 対応): drain 実装をうっかり削っても
+    // 前 test 群が緑のまま通ってしまう構造的弱点を塞ぐ。Socket.prototype の
+    // clearHeartbeats を monkeypatch で no-op 化し、Phoenix 内蔵の
+    // heartbeatTimer が生き残るケースをシミュレート。この invert 状態では
+    // 旧 socket の heartbeatTimeout → reconnectTimer.scheduleTimeout の
+    // 自己復活経路が働き、3 本目以降の transport が生えることを assert。
+    // drainPhoenixTimers の実装本体を消したりバイパスすると、この test が
+    // 「3 本目が生える」を pin できず fail する — drain が実効していること
+    // を間接 pin する。
+    const proto = Socket.prototype as unknown as {
+      clearHeartbeats: () => void;
+    };
+    const origClear = proto.clearHeartbeats;
+    proto.clearHeartbeats = () => {
+      // no-op: heartbeatTimer を clear しない
+    };
+    try {
+      const handlers = makeHandlers();
+      const conn = connectKaoiro("ws://test/client", handlers, {
+        transport: FakeWebSocket as unknown,
+        heartbeatIntervalMs: 100,
+      });
+      await vi.advanceTimersByTimeAsync(1); // open trigger → heartbeat arm
+
+      conn.reconnect();
+      await vi.advanceTimersByTimeAsync(1); // teardown 同期 + 新 transport open
+      expect(FakeWebSocket.instances.length).toBe(2);
+
+      // heartbeatTimer が clear されていないため旧 arm が生き残り、Phoenix
+      // の cycle と重なって transport が短時間で複数生成される。500ms までに
+      // 3 本目以降が生えることを invert-test として pin (drain 実装が消えたら
+      // この test が「3 本目が生えている」を pin できない = 実効性の regression
+      // 検出)。
+      await vi.advanceTimersByTimeAsync(500);
+      expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(3);
+
+      conn.disconnect();
+      await vi.advanceTimersByTimeAsync(500);
+    } finally {
+      proto.clearHeartbeats = origClear;
+    }
   });
 });
 

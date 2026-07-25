@@ -2172,6 +2172,11 @@ export function connectKaoiro(
 
       socket.disconnect(() => {
         if (disposed || gen !== cycleGeneration) return;
+        // ふじ round 3 must-fix 2 hardening: teardown 中に発火した
+        // heartbeatTimeout → teardown → reconnectTimer.scheduleTimeout の
+        // chain は pre-drain の reset 時点では未 arm。cb 実行時に再度 drain
+        // して in-flight schedule も潰す (drainPhoenixTimers は idempotent)。
+        drainPhoenixTimers();
         // Socket instance は使い回し (window listener leak と自己復活防止)。
         // WS transport は socket.connect() が張り直す。Channel は Phoenix の
         // 自動 rejoin に頼らず明示的に new して join する (implicit rejoin は
