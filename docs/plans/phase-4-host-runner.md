@@ -1,7 +1,7 @@
 ---
 title: Phase 4 — ホスト常駐 runner
 description: 各ホストに常駐 runner を置き、wrapper の spawn/監督/再起動とホスト登録・生存通知・session 列挙を担わせる。
-status: in_progress
+status: done
 phase: 4
 depends_on: [phase-3-server-multiagent]
 last_updated: 2026-07-25
@@ -29,8 +29,10 @@ spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
 - [x] 1 wrapper = 1 agent = 1 process を runner が監督し、クラッシュを隔離する。
 - [x] wrapper は従来どおりサーバへ直結し、データ経路は runner を通らない。
 - [x] 二重起動が server owner フェンシング + runner ローカルロックの二段で防がれる。
-- [ ] runner / wrapper が `kaoiro-runner` 単一バイナリとして配布できる
-      ([ADR-0018](../adr/0018-runner-distribution.md))。
+- [x] runner / wrapper を**自己完結アーカイブとして配布できる**(解凍 → 設定
+      編集 → ワンコマンド実行で稼働し、配布先で pnpm install / build を要さない。
+      単一バイナリ化は撤回・延期 —
+      [ADR-0018](../adr/0018-runner-distribution.md) 2026-07-25 改訂)。
 - [x] operator が起動 UI から (host / persona / 登録済み cwd / 初期プロンプト) を
       指定して新規 spawn でき、同 UI から既存セッションの resume もできる(範囲=中。
       任意 cwd / 任意 repo clone は初版外、
@@ -47,7 +49,7 @@ spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
 | 4-4 | runner: プロセス監督ループ + config 解決 + spawn/stop/restart | ✅ | #68。TS/Node。4-4a(接続+register/heartbeat)+ 4-4b(spawn/stop/restart 監督・config 解決・crash 再起動・cwd allow-list T1)。ライブ verify=実 wrapper spawn→server 接続 |
 | 4-5 | runner: session JSONL 列挙 + resume 起動 | ✅ | #68。当該 cwd 配下を列挙、T3 実在検証([ADR-0014](../adr/0014-session-resume-and-restore.md) F2/F6)+ in-memory ローカルロック(F4) |
 | 4-6 | wrapper: resume flag(`--resume <session_id>` 等)追加 | ✅ | #69(d073b4e)。args.ts/cli.ts に実装 |
-| 4-7 | `kaoiro-runner` 単一バイナリ化 | ⏳ | [ADR-0018](../adr/0018-runner-distribution.md)。主要機能が出揃ってからでも可 |
+| 4-7 | `kaoiro-runner` の配布物整備 | ✅ | #70。単一バイナリ(bun compile)は 2026-07-25 に撤回・延期し、Node 前提の自己完結 tarball へ([ADR-0018](../adr/0018-runner-distribution.md) 改訂)。生成は `scripts/build-runner-tarball.sh`、対象は darwin-arm64 / linux-x64。release への資産アップロード自動化は #145 |
 | 4-8 | dashboard: 起動指示 UI(host/persona/登録済み cwd/初期プロンプト)+ client→server spawn 要求 | ✅ | #22 phase-0(0db7234 系)。範囲=中。案A=サーバ補完([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))。`LaunchDialog.svelte` + protocol.ts(spawn/hosts/spawn_result)。operator 判定は `hosts` push で |
 | 4-9 | dashboard: 起動 UI に resume(runner 列挙の session_id 候補選択)追加 | ✅ | #22 phase-1。新規/再開タブ + enumerate_sessions → `runner_sessions` で候補表示。resume は fresh agent_id + `resume_session_id`(D1 と整合、runner が T3/F4)|
 | 4-10 | server: spawn 補完(`agent_id` 採番 + per-agent token 注入)+ 署名トークン認証 | ✅ | #22 の前提([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4)。`server_url` は runner 供給に変更。token = Phoenix.Token 署名・無期限(失効=鍵ローテーション、個別 denylist は [#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))。D5 二重 live join 拒否は未実装(下記)|
@@ -105,7 +107,8 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 - runner: バックエンド(4-4-0〜4-5)・server 補完(4-10)・dashboard 起動 UI
   (4-8/4-9)・**D5(二重 live join 拒否)**は完了(#22 実装済)。常駐化(4-11、
-  #141)も完了。**残るは 4-7(#70)**。
+  #141)・配布物整備(4-7、#70)も完了し、**本フェーズのタスクは全て完了**。
+  Gitea release への資産アップロード自動化のみ #145 へ分離した。
 - **D5**: wrapper join 経路(`wrapper_channel`)で live owner 済み agent_id を
   **reject-newcomer** で拒否([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5、
   `AgentStates.connected?/2`)。既存を蹴る案はトークン保持者による敵対的 eviction を
