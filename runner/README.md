@@ -125,7 +125,15 @@ sudo loginctl enable-linger "$USER"   # ログインなしで boot 起動させ�
 
 - 状態: `systemctl --user status kaoiro-runner`
 - ログ: `journalctl --user -u kaoiro-runner -f`
-- `enable-linger` を忘れると boot 時に起動しない(ログイン時のみ起動)
+- `enable-linger` を忘れると boot 時に起動しない(ログイン時のみ起動)。
+  さらに **SSH セッションのたびに user systemd インスタンス自体が再起動され、
+  enabled unit も道連れで再起動される**(issue #148 実機検証で確認、2026-07-26)。
+  再起動ポリシー(`Restart=on-failure` / `RestartPreventExitStatus=78`)自体は
+  1 つの user systemd インスタンス内では正しく機能するが、`enable-linger` なし
+  のホストを SSH 越しに検証すると、接続のたびに unit が再起動しているように
+  見えて紛らわしい。「起動 → 異常時再起動」を確認するときは 1 回の SSH
+  セッション内で完結させ、接続を跨いだタイムスタンプ変化だけで再起動と
+  誤認しないこと。
 
 ### macOS(launchd LaunchAgent)
 
