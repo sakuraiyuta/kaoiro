@@ -92,9 +92,17 @@ docker compose up -d --build
 `.env` を変更したら `docker compose up -d`(`restart` では env_file が再読込
 されない)、サーバのコードを変えたら `--build` も付けてコンテナを作り直す。
 
-既定で `127.0.0.1:4000` のみに bind(loopback)。LAN 公開時は両トークン必須 +
-中央 nginx(WebSocket の Upgrade/Connection 転送・`proxy_read_timeout` > 60s)
-配下に置く。
+既定で `127.0.0.1:4000` のみに bind(loopback、`docker-compose.yaml` の
+`ports` マッピング)。LAN 公開時は両トークン必須 + 中央 nginx(WebSocket の
+Upgrade/Connection 転送・`proxy_read_timeout` > 60s)配下に置く。
+
+コンテナ内の Phoenix 自体の bind IP(compose の `ports` とは別レイヤー)は
+既定で prod = 全インターフェース。`docker compose` を使わずホストで直接
+release を動かす場合など bind IP を変えたいときは `KAOIRO_BIND_IP`(IPv4/
+IPv6 リテラル、例 `0.0.0.0` / `::` / `192.168.1.10`)で上書きできる
+(issue #139)。**`:prod` (release) にのみ効き、`mix phx.server`(dev)は
+`config/dev.exs` の loopback 固定のまま**— 後述の dev secret_key_base
+警告どおり dev を誤って外部公開しないための意図的な仕様。
 
 ### ローカル開発(ホットリロード)
 
@@ -113,6 +121,13 @@ env は **docker と同じ `.env` を共用する**(二重管理を避ける)。
 dev で最低限必要なのは `KAOIRO_CLIENT_TOKENS` のみ(`SECRET_KEY_BASE` は
 `config/dev.exs` のハードコード値、`PHX_HOST` は `localhost` 既定が効くため
 dev では不要)。
+
+> **注意(issue #139)**: `config/dev.exs` の `SECRET_KEY_BASE` はリポジトリに
+> 平文でハードコードされた固定値。`mix phx.server`(dev モード)を
+> `127.0.0.1` 以外に bind して公開すると、この既知の鍵で署名 wrapper
+> token(ADR-0024)を偽造できてしまう。**dev モードは常に loopback 限定
+> で運用し**、LAN や公開ホストで動かす場合は必ず上の Docker(prod
+> release、`SECRET_KEY_BASE` は `.env` の生成値)を使うこと。
 
 ```sh
 cd server
