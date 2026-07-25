@@ -7,13 +7,16 @@
 # This file is based on these images:
 #
 #   - https://hub.docker.com/r/hexpm/elixir/tags - for the build image
-#   - https://hub.docker.com/_/debian/tags?name=trixie-20260518-slim - for the release image
+#   - https://hub.docker.com/_/debian/tags?name=trixie-20260610-slim - for the release image
 #   - https://pkgs.org/ - resource for finding needed packages
-#   - Ex: docker.io/hexpm/elixir:1.19.5-erlang-26.2.5.1-debian-trixie-20260518-slim
+#   - Ex: docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim
 #
-ARG ELIXIR_VERSION=1.19.5
-ARG OTP_VERSION=26.2.5.1
-ARG DEBIAN_VERSION=trixie-20260518-slim
+# Keep these in step with the Elixir/OTP the CI `server` job runs the suite on
+# (.gitea/workflows/ci.yml) — they diverged once, and OTP 26 turned out to be
+# unable to compile this suite's Japanese test names at all (issue #150).
+ARG ELIXIR_VERSION=1.20.1
+ARG OTP_VERSION=29.0.2
+ARG DEBIAN_VERSION=trixie-20260610-slim
 
 ARG BUILDER_IMAGE="docker.io/hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="docker.io/debian:${DEBIAN_VERSION}"
@@ -90,8 +93,12 @@ RUN mix release
 # the compiled release and other runtime necessities
 FROM ${RUNNER_IMAGE} AS final
 
+# inotify-tools backs :file_system, which watches the persona pack dir for
+# live reloads. Without it the watcher fails to boot
+# (fs_inotify_bootstrap_error) and pack changes only apply on restart —
+# found on a real Linux host during issue #148's deployment check.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates \
+  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates inotify-tools \
   && rm -rf /var/lib/apt/lists/*
 
 # Set the locale
