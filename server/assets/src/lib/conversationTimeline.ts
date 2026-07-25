@@ -61,6 +61,15 @@ export function conversationEntryKey(
   ].join("|");
 }
 
+/** #125 のライブ到着シグナル対象。operator 自身が送った prompt は
+ * 通知対象にせず、agent の応答と inter-agent 連携だけを視覚的に知らせる。 */
+export function isTimelineArrival(envelope: Envelope): boolean {
+  if (envelope.type === "inter_agent_message") return true;
+  if (envelope.type !== "log") return false;
+  const payload = envelope.payload as { kind?: unknown } | undefined;
+  return payload?.kind === "assistant";
+}
+
 // ふじ 検収 2 fix-round A3 (2026-07-23): 丸めは code point 単位で
 // 行う (UTF-16 code unit 単位の `.slice` は絵文字などの surrogate
 // pair を割って壊れた文字を生む)。 `Array.from(str)` が code point

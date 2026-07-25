@@ -28,6 +28,7 @@
     logs,
     manifest,
     now,
+    newTimelineEntryKeys = new Set<string>(),
     onSelectAgent,
     children,
   }: {
@@ -38,6 +39,7 @@
     logs: Record<string, Envelope[]>;
     manifest: PersonaManifest | null;
     now: number;
+    newTimelineEntryKeys?: ReadonlySet<string>;
     onSelectAgent: (agentId: string) => void;
     children?: Snippet;
   } = $props();
@@ -54,7 +56,15 @@
     {@render children?.()}
   </ul>
   {#if showTimeline}
-    <ResponseTimeline {agents} {directory} {logs} {manifest} {now} {onSelectAgent} />
+    <ResponseTimeline
+      {agents}
+      {directory}
+      {logs}
+      {manifest}
+      {now}
+      {newTimelineEntryKeys}
+      {onSelectAgent}
+    />
   {/if}
 </div>
 

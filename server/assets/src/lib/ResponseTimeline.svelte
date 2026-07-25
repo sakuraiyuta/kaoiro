@@ -23,6 +23,7 @@
     logs,
     manifest = null,
     now,
+    newTimelineEntryKeys = new Set<string>(),
     onSelectAgent,
   }: {
     /** Persona lookup 用の agent 状態 map。 state 変更や filter には
@@ -38,6 +39,10 @@
     manifest?: PersonaManifest | null;
     /** ms clock。 formatRelativeJa の tick 用に App から受ける。 */
     now: number;
+    /** onEnvelope 経由で追加された行だけの一回限り arrival marker (#125)。
+     * history / snapshot は App がこの set に入れないため、初期描画では
+     * アニメーションしない。 */
+    newTimelineEntryKeys?: ReadonlySet<string>;
     /** row click → 該当 agent の詳細を開く。 App.svelte 側で origin=null
      *  にして expand animation を省略する契約。 */
     onSelectAgent: (agentId: string) => void;
@@ -49,6 +54,9 @@
   // #124: 既読情報はこのブラウザ・この mount の中だけに置く。永続化しない
   // ため、リロード時には agent / inter-agent の全行が再び未閲覧になる。
   let readEntryKeys = $state<ReadonlySet<string>>(new Set());
+  // CSS animation が終わった行を記録しておく。live marker は App 側に
+  // 残しても、load-more などで row が再 mount したときに再点滅しない。
+  let completedArrivalKeys = $state<ReadonlySet<string>>(new Set());
   const readTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const HOVER_READ_DELAY_MS = 300;
 
@@ -80,6 +88,11 @@
     if (timer === undefined) return;
     clearTimeout(timer);
     readTimers.delete(key);
+  }
+
+  function completeArrival(key: string): void {
+    if (completedArrivalKeys.has(key)) return;
+    completedArrivalKeys = new Set(completedArrivalKeys).add(key);
   }
 
   onDestroy(() => {
@@ -128,8 +141,12 @@
             class:from-agent={entry.kind === "agent"}
             class:inter-agent={entry.kind === "inter_agent"}
             class:unread={canBeUnread(entry.kind) && !readEntryKeys.has(key)}
+            class:new-arrival={canBeUnread(entry.kind) && newTimelineEntryKeys.has(key) && !completedArrivalKeys.has(key)}
             onmouseenter={() => scheduleRead(key, entry.kind)}
             onmouseleave={() => cancelScheduledRead(key)}
+            onanimationend={(event) => {
+              if (event.animationName === "timeline-arrival") completeArrival(key);
+            }}
             onclick={() => {
               markRead(key);
               onSelectAgent(entry.agentId);
@@ -256,6 +273,33 @@
   .row.unread:hover,
   .row.unread:focus-visible {
     background: color-mix(in srgb, var(--c-thinking) 18%, var(--bg-card));
+  }
+
+  /* #125: live stream で追加された行だけを 1 回パルスさせる。最終色を
+     未閲覧の背景色と揃えることで、アニメーション終了後も #124 の静的な
+     マーカーが自然に残る。 */
+  .row.new-arrival {
+    animation: timeline-arrival 1.35s ease-in-out;
+  }
+
+  @keyframes timeline-arrival {
+    0% {
+      background: color-mix(in srgb, var(--c-thinking) 34%, var(--bg-card));
+    }
+
+    38% {
+      background: color-mix(in srgb, var(--c-thinking) 22%, var(--bg-card));
+    }
+
+    100% {
+      background: color-mix(in srgb, var(--c-thinking) 14%, var(--bg-card));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row.new-arrival {
+      animation-duration: 0.01ms;
+    }
   }
 
   .portrait {

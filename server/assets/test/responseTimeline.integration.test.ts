@@ -18,6 +18,7 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ResponseTimeline from "../src/lib/ResponseTimeline.svelte";
+import { conversationEntryKey } from "../src/lib/conversationTimeline";
 import type { Envelope } from "../src/lib/protocol";
 
 const mounted: object[] = [];
@@ -80,6 +81,7 @@ async function renderTimeline(options: {
   agents: Record<string, Envelope>;
   logs: Record<string, Envelope[]>;
   now?: number;
+  newTimelineEntryKeys?: ReadonlySet<string>;
   onSelectAgent?: (id: string) => void;
 }) {
   const target = document.createElement("div");
@@ -91,6 +93,9 @@ async function renderTimeline(options: {
       logs: options.logs,
       manifest: null,
       now: options.now ?? NOW,
+      ...(options.newTimelineEntryKeys
+        ? { newTimelineEntryKeys: options.newTimelineEntryKeys }
+        : {}),
       onSelectAgent: options.onSelectAgent ?? vi.fn(),
     },
   });
@@ -201,6 +206,18 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     await vi.advanceTimersByTimeAsync(300);
     await tick();
     expect(row.classList.contains("unread")).toBe(false);
+  });
+
+  it("live arrival key を渡した agent 行だけに一回限りの点滅 class を付ける", async () => {
+    const env = assistant("lab-pc.a", secAgo(10), "live reply");
+    const target = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [env] },
+      newTimelineEntryKeys: new Set([conversationEntryKey(env)]),
+    });
+    expect(target.querySelector(".row")?.classList.contains("new-arrival")).toBe(
+      true,
+    );
   });
 
   it("tool_use / tool_result / state_change / inter_agent_message は除外", async () => {

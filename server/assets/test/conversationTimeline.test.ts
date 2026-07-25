@@ -4,7 +4,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  conversationEntryKey,
   conversationEntries,
+  isTimelineArrival,
   SUMMARY_MAX_CHARS,
 } from "../src/lib/conversationTimeline";
 import type { Envelope } from "../src/lib/protocol";
@@ -200,6 +202,24 @@ describe("conversationEntries (実機検収 3)", () => {
       "agent-b": [b],
     });
     expect(entries).toHaveLength(2);
+  });
+
+  it("行 identity は agent_id / ts / seq / type の複合 key", () => {
+    const env = { ...assistant("agent-a", "2026-07-23T14:00:00Z", "a"), seq: 7 };
+    expect(conversationEntryKey(env)).toBe("agent-a|2026-07-23T14:00:00Z|7|log");
+  });
+
+  it("live arrival は agent 応答と inter-agent だけを対象にする", () => {
+    expect(isTimelineArrival(assistant("agent-a", "2026-07-23T14:00:00Z", "a"))).toBe(
+      true,
+    );
+    expect(isTimelineArrival(interAgent("agent-a", "agent-b", "2026-07-23T14:00:00Z"))).toBe(
+      true,
+    );
+    expect(isTimelineArrival(user("agent-a", "2026-07-23T14:00:00Z", "prompt"))).toBe(
+      false,
+    );
+    expect(isTimelineArrival(toolUse("agent-a", "2026-07-23T14:00:00Z"))).toBe(false);
   });
 
   it("長文 assistant は SUMMARY_MAX_CHARS で切り詰め + 省略記号", () => {

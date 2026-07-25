@@ -6,6 +6,7 @@
   import LaunchDialog from "./lib/LaunchDialog.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import { adjacentAgentId } from "./lib/agentNavigation";
+  import { conversationEntryKey, isTimelineArrival } from "./lib/conversationTimeline";
   import { expressionFor, spriteUrlFor } from "./lib/expression";
   import type {
     ConnectionStatus,
@@ -53,6 +54,10 @@
   // Per-agent reply transcript (operator-only, ADR-0012): log/result
   // envelopes accumulate here instead of overwriting the latest state.
   let logs = $state<Record<string, Envelope[]>>({});
+  // #125: live socket envelope が実際に transcript へ追加されたときだけ
+  // timeline に渡す one-shot CSS animation marker。history / snapshot は
+  // この state を更新しないため、初回一括描画では点滅しない。
+  let newTimelineEntryKeys = $state<ReadonlySet<string>>(new Set());
   // Per-agent IA visibility watermark (issue #109). It changes only after
   // operator clear_history; session transitions do not affect display.
   let clearWatermarks = $state<Record<string, string>>({});
@@ -281,10 +286,19 @@
               );
             }
             const next = { ...logs };
+            let addedToTranscript = false;
             for (const id of targets) {
-              next[id] = mergeTranscriptEntries(next[id] ?? [], [envelope]);
+              const previous = next[id] ?? [];
+              const merged = mergeTranscriptEntries(previous, [envelope]);
+              if (merged.length > previous.length) addedToTranscript = true;
+              next[id] = merged;
             }
             logs = next;
+            if (addedToTranscript && isTimelineArrival(envelope)) {
+              newTimelineEntryKeys = new Set(newTimelineEntryKeys).add(
+                conversationEntryKey(envelope),
+              );
+            }
           } else {
             const prevState = agents[envelope.agent_id]?.state;
             agents = { ...agents, [envelope.agent_id]: envelope };
@@ -902,6 +916,7 @@
           {logs}
           {manifest}
           {now}
+          {newTimelineEntryKeys}
           onSelectAgent={(id) => {
             // 詳細を開く。timeline クリックには「元タイル座標」がないので
             // origin=null に倒し、既存の expand-from-origin アニメは省略。
