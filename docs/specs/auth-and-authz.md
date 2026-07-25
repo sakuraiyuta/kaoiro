@@ -38,13 +38,18 @@ flowchart LR
 
 | Socket | Topic 規約 | 認証 | env | 未設定時 |
 |---|---|---|---|---|
-| Wrapper | `wrapper:<agent_id>` | `agent_id:token` ペア / 又は server-minted signed token (ADR-0024) | `KAOIRO_WRAPPER_TOKENS` | **dev 緩和** — 誰でも join 可 (warn ログ) |
-| Runner | `runner:<host_id>` | `host_id:token` ペア | `KAOIRO_RUNNER_TOKENS` | **dev 緩和** — 同上 |
-| Client | `agents:lobby` | `token → role` (operator/viewer) | `KAOIRO_CLIENT_TOKENS` | **fail-closed** — 全 client 拒否 |
+| Wrapper | `wrapper:<agent_id>` | `agent_id:token` ペア / 又は server-minted signed token (ADR-0024) | `KAOIRO_WRAPPER_TOKENS` | `:dev`/`:test` = **dev 緩和** (誰でも join 可、warn ログ) / `:prod` = **fail-closed** (issue #138) |
+| Runner | `runner:<host_id>` | `host_id:token` ペア | `KAOIRO_RUNNER_TOKENS` | 同上 (issue #138) |
+| Client | `agents:lobby` | `token → role` (operator/viewer) | `KAOIRO_CLIENT_TOKENS` | **fail-closed** — 全 env で全 client 拒否 |
 
 3 種ともトークン比較は `Plug.Crypto.secure_compare/2` で定数時間。
 未配置 id でも比較が走るのでタイミング側チャネルなし。未設定時の状態は
 起動時 `Auth.warn_token_config/0` が WARN ログを残す。
+
+wrapper/runner の dev 緩和は `:prod` (`config.exs` の `env: config_env()` を
+`Application.get_env(:kaoiro_server, :env)` で実行時参照) では働かない。
+release を token 未設定のまま起動すると全 wrapper/runner 接続が拒否され、
+`scripts/dev.sh` の `:dev` 実行には影響しない (issue #138)。
 
 ### Topic 認可 (channel `join/3`)
 
@@ -135,7 +140,7 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。
 | **トークン即時失効** | 稼働中 WS の強制切断は未実装 | env 更新 + 再起動で次接続から効く / heartbeat 失敗で client 自発切断 | [#47](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/47) |
 | **signed token revoke** | **per-agent_id denylist 実装済 (2026-07-23、[#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))**: TokenDenylist DETS + Auth.authorize_wrapper 照合 + delete_agent 連動 auto-revoke + operator 明示 revoke handler + revoked broadcast による live disconnect | key rotation はいまも fleet 全体一括失効の重量オプションとして残る | 実装完 |
 | **マルチテナント隔離** | 全 operator が全エージェントを操作可能 | なし — single tenant 前提 | OAuth 本実装まで保留 |
-| **dev fallback の混入リスク** | `KAOIRO_WRAPPER_TOKENS` / `KAOIRO_RUNNER_TOKENS` 未設定で **全許可** | 起動時 WARN ログのみ | prod 配備手順で env 必須化を担保 |
+| **dev fallback の混入リスク** | **解消済 (2026-07-25、[#138](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/138))**: `:dev`/`:test` は従来通り未設定で全許可、`:prod` は未設定なら fail-closed (全拒否) | 起動時 WARN ログ (env 別文言) | 実装完 |
 | **監査ログ** | 「誰がいつどの agent に何を送ったか」の永続記録なし | なし | 将来 (SQLite 導入時) |
 | **tool input マスキング** | コマンドライン / パスは生のまま operator dialog に表示 | operator 限定配信 + 16KB 切り詰め | 将来 |
 | **runner-less wrapper auth** | localhost 直結のみ。spawn を経由しないと token 取得できない | runner 必須 | [#71](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/71) |
@@ -163,7 +168,8 @@ OSS 公開前監査 ([#91](https://gitea.example.invalid/sakurai.yuta/kaoiro/iss
   (sanitize_envelope_for 網羅性 + テスト coverage)
 - [ ] operator-only inbound の `require_operator/1` 抜けなし
   (grep + テスト)
-- [ ] dev fallback の risk 評価 (prod deploy 手順で env 必須化を保証)
+- [ ] dev fallback の risk 評価 ( `:prod` は token 未設定で fail-closed に
+  なることをテストで担保、issue #138)
 - [ ] secret 系の log 出力なし
   (Logger 経由で token / cookie / signed token を出していないか)
 - [ ] `Phoenix.Token.sign` の `secret_key_base` が prod で固定値でない

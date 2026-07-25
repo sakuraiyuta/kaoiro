@@ -8,6 +8,7 @@ defmodule KaoiroServer.AuthTest do
     # Clear before AND after each test: config/runtime.exs loads
     # KAOIRO_*_TOKENS in :test too, so a host that exports them would leak
     # into the first "未設定" test before any on_exit has run.
+    original_env = Application.get_env(:kaoiro_server, :env)
     Application.delete_env(:kaoiro_server, :wrapper_tokens)
     Application.delete_env(:kaoiro_server, :runner_tokens)
     Application.delete_env(:kaoiro_server, :client_tokens)
@@ -16,6 +17,9 @@ defmodule KaoiroServer.AuthTest do
       Application.delete_env(:kaoiro_server, :wrapper_tokens)
       Application.delete_env(:kaoiro_server, :runner_tokens)
       Application.delete_env(:kaoiro_server, :client_tokens)
+      # issue #138 tests flip :env to :prod; restore it so later tests keep
+      # exercising the ordinary :test dev-convenience path.
+      Application.put_env(:kaoiro_server, :env, original_env)
     end)
   end
 
@@ -89,6 +93,26 @@ defmodule KaoiroServer.AuthTest do
       assert {:error, :unauthorized} = Auth.authorize_wrapper(agent_id, token)
     end
 
+    test ":prod では未設定でも fail-closed になる (issue #138)" do
+      Application.put_env(:kaoiro_server, :env, :prod)
+
+      assert {:error, :unauthorized} = Auth.authorize_wrapper("any-agent", nil)
+      assert {:error, :unauthorized} = Auth.authorize_wrapper("any-agent", "whatever")
+    end
+
+    test ":prod でも登録済みトークンでの認証は通る (issue #138)" do
+      Application.put_env(:kaoiro_server, :env, :prod)
+
+      Application.put_env(
+        :kaoiro_server,
+        :wrapper_tokens,
+        "lab.a:tok-a"
+      )
+
+      assert :ok = Auth.authorize_wrapper("lab.a", "tok-a")
+      assert {:error, :unauthorized} = Auth.authorize_wrapper("lab.a", "wrong")
+    end
+
     test "denylist は dev モード (wrapper_tokens 未設定) でも効く (issue #72)" do
       # 「未設定なら誰でも通る」ゆるい dev モードでも、明示 revoke だけは
       # override せず維持する (security 操作は operator が意図的に取った
@@ -135,6 +159,13 @@ defmodule KaoiroServer.AuthTest do
       assert {:error, :unauthorized} = Auth.authorize_runner("lab-pc-1", "tok-2")
       assert {:error, :unauthorized} = Auth.authorize_runner("lab-pc-1", nil)
       assert {:error, :unauthorized} = Auth.authorize_runner("unknown", "tok-1")
+    end
+
+    test ":prod では未設定でも fail-closed になる (issue #138)" do
+      Application.put_env(:kaoiro_server, :env, :prod)
+
+      assert {:error, :unauthorized} = Auth.authorize_runner("any-host", nil)
+      assert {:error, :unauthorized} = Auth.authorize_runner("any-host", "whatever")
     end
   end
 
@@ -210,6 +241,16 @@ defmodule KaoiroServer.AuthTest do
       assert log =~ "KAOIRO_CLIENT_TOKENS unset"
       refute log =~ "KAOIRO_WRAPPER_TOKENS unset"
       refute log =~ "KAOIRO_RUNNER_TOKENS unset"
+    end
+
+    test ":prod では wrapper/runner 未設定を fail-closed 文言で警告する (issue #138)" do
+      Application.put_env(:kaoiro_server, :env, :prod)
+
+      log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
+      assert log =~ "KAOIRO_WRAPPER_TOKENS unset: wrapper connections are rejected"
+      assert log =~ "fail-closed in prod"
+      assert log =~ "KAOIRO_RUNNER_TOKENS unset: runner connections are rejected"
+      refute log =~ "dev mode"
     end
   end
 end

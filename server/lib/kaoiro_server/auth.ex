@@ -10,14 +10,17 @@ defmodule KaoiroServer.Auth do
 
   The unset/empty behaviour differs by socket:
 
-  - `:wrapper_tokens` unset — wrapper auth disabled (dev convenience):
-    any wrapper may connect.
-  - `:runner_tokens` unset — runner auth disabled (dev convenience):
-    any runner may connect. Mirrors wrapper (ADR-0011 per-entity tokens,
-    extended to hosts by ADR-0023).
-  - `:client_tokens` unset — fail-closed: every client connection is
-    rejected (no token can authenticate), so a misconfigured deployment
-    never silently grants operator (issue #28).
+  - `:wrapper_tokens` unset — in `:dev`/`:test` (`Application.get_env(
+    :kaoiro_server, :env)`), wrapper auth is disabled (dev convenience):
+    any wrapper may connect. In `:prod`, fail-closed instead: every
+    wrapper connection is rejected (issue #138) — an operator running a
+    release must set `KAOIRO_WRAPPER_TOKENS` to accept any wrapper.
+  - `:runner_tokens` unset — mirrors `:wrapper_tokens` (ADR-0011
+    per-entity tokens, extended to hosts by ADR-0023; issue #138 applies
+    the same prod fail-closed).
+  - `:client_tokens` unset — fail-closed in every env: every client
+    connection is rejected (no token can authenticate), so a
+    misconfigured deployment never silently grants operator (issue #28).
 
   Either unset state is logged at startup via `warn_token_config/0`
   (specs/protocol.md, specs/threat-model.md).
@@ -31,9 +34,10 @@ defmodule KaoiroServer.Auth do
 
   @doc """
   Authorizes a wrapper connection for `agent_id`. `:ok` when wrapper auth
-  is disabled (dev), the token matches a pre-registered `:wrapper_tokens`
-  entry, or it is a valid server-minted signed token for this agent_id
-  (the spawn path, ADR-0024). Otherwise `{:error, :unauthorized}`.
+  is disabled (dev/test convenience — never in `:prod`, issue #138), the
+  token matches a pre-registered `:wrapper_tokens` entry, or it is a
+  valid server-minted signed token for this agent_id (the spawn path,
+  ADR-0024). Otherwise `{:error, :unauthorized}`.
 
   Per-agent_id revocation (issue #72): a `TokenDenylist`-listed agent_id
   is rejected BEFORE the ordinary token compare, so even a token that
@@ -54,8 +58,11 @@ defmodule KaoiroServer.Auth do
       # agent_id (never revoked) returns false here so behaviour for
       # everyone else is unchanged.
       KaoiroServer.TokenDenylist.revoked?(agent_id) -> {:error, :unauthorized}
-      # Dev convenience: no wrapper tokens configured → any wrapper connects.
-      tokens == %{} -> :ok
+      # Dev/test convenience: no wrapper tokens configured → any wrapper
+      # connects. In :prod this must NOT silently open up (issue #138):
+      # an operator running a release without KAOIRO_WRAPPER_TOKENS set
+      # gets fail-closed instead.
+      tokens == %{} -> if prod_env?(), do: {:error, :unauthorized}, else: :ok
       registered_wrapper_token?(tokens, agent_id, token) -> :ok
       valid_signed_wrapper_token?(agent_id, token) -> :ok
       true -> {:error, :unauthorized}
@@ -100,15 +107,16 @@ defmodule KaoiroServer.Auth do
 
   @doc """
   Authorizes a runner connection for `host_id` (ADR-0023). `:ok` when the
-  token matches, or when no runner tokens are configured. Mirrors
-  `authorize_wrapper/2` against a separate `:runner_tokens` list since the
-  host control channel is a distinct entity from the per-agent_id wrapper.
+  token matches, or when no runner tokens are configured outside `:prod`.
+  Mirrors `authorize_wrapper/2` against a separate `:runner_tokens` list
+  since the host control channel is a distinct entity from the
+  per-agent_id wrapper; also mirrors its :prod fail-closed (issue #138).
   """
   def authorize_runner(host_id, token) do
     tokens = parse_pairs(Application.get_env(:kaoiro_server, :runner_tokens))
 
     if tokens == %{} do
-      :ok
+      if prod_env?(), do: {:error, :unauthorized}, else: :ok
     else
       # Run the comparison even for an unknown host_id so timing does not
       # reveal which host_ids have token entries.
@@ -171,15 +179,15 @@ defmodule KaoiroServer.Auth do
 
   @doc """
   Logs a startup warning for each token list that is unset, so the
-  locked / dev-mode state is visible in logs rather than silent
-  (specs/threat-model.md, issue #28):
+  locked / dev-mode / fail-closed state is visible in logs rather than
+  silent (specs/threat-model.md, issue #28, issue #138):
 
   - `:client_tokens` unset — client connections are rejected
-    (fail-closed); the env must be set to grant access.
-  - `:wrapper_tokens` unset — wrapper auth disabled (dev mode); any
-    wrapper may connect.
-  - `:runner_tokens` unset — runner auth disabled (dev mode); any
-    runner may connect (ADR-0023).
+    (fail-closed in every env); the env must be set to grant access.
+  - `:wrapper_tokens` unset — dev/test: wrapper auth disabled, any
+    wrapper may connect. `:prod`: fail-closed, every wrapper is
+    rejected.
+  - `:runner_tokens` unset — mirrors `:wrapper_tokens` (ADR-0023).
   """
   def warn_token_config do
     if parse_pairs(Application.get_env(:kaoiro_server, :client_tokens)) == %{} do
@@ -192,22 +200,33 @@ defmodule KaoiroServer.Auth do
 
     if parse_pairs(Application.get_env(:kaoiro_server, :wrapper_tokens)) == %{} do
       Logger.warning(
-        "KAOIRO_WRAPPER_TOKENS unset: wrapper auth disabled (dev mode); " <>
-          "any wrapper may connect. Set it before exposing beyond loopback " <>
-          "(specs/threat-model.md)."
+        "KAOIRO_WRAPPER_TOKENS unset: " <> unset_wrapper_or_runner_message("wrapper")
       )
     end
 
     if parse_pairs(Application.get_env(:kaoiro_server, :runner_tokens)) == %{} do
-      Logger.warning(
-        "KAOIRO_RUNNER_TOKENS unset: runner auth disabled (dev mode); " <>
-          "any runner may connect. Set it before exposing beyond loopback " <>
-          "(specs/threat-model.md)."
-      )
+      Logger.warning("KAOIRO_RUNNER_TOKENS unset: " <> unset_wrapper_or_runner_message("runner"))
     end
 
     :ok
   end
+
+  defp unset_wrapper_or_runner_message(entity) do
+    if prod_env?() do
+      "#{entity} connections are rejected (fail-closed in prod, issue #138). " <>
+        "Set it to allow #{entity}s to connect."
+    else
+      "#{entity} auth disabled (dev mode); any #{entity} may connect. " <>
+        "Set it before exposing beyond loopback (specs/threat-model.md)."
+    end
+  end
+
+  # issue #138: dev/test keep the pre-existing "unset → wide open"
+  # convenience; :prod fails closed instead so a release started without
+  # KAOIRO_WRAPPER_TOKENS / KAOIRO_RUNNER_TOKENS never silently accepts
+  # any wrapper/runner. Backed by config.exs' `env: config_env()` since
+  # config_env() itself cannot be called at runtime.
+  defp prod_env?, do: Application.get_env(:kaoiro_server, :env) == :prod
 
   defp parse_role("viewer"), do: :viewer
   defp parse_role("operator"), do: :operator
