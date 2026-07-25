@@ -57,10 +57,14 @@ mix dashboard.build   # cd ../dashboard && pnpm build → server/priv/static へ
   誤設定で operator が無防備に公開される事故を防ぐため、無認証では稼働せず
   認証不可能な状態で起動する。**ローカル開発・デモでもトークン設定が必須**
   (未設定だとダッシュボードが繋がらず空表示になる)。
-- **`KAOIRO_WRAPPER_TOKENS` 未設定 → ラッパー認証を無効化(dev mode)**。
-  任意のラッパーが接続可。loopback 限定の開発向け。
-- **`KAOIRO_RUNNER_TOKENS` 未設定 → ランナー認証を無効化(dev mode)**。
-  任意のランナーが接続可(ラッパーと同型、ADR-0023)。
+- **`KAOIRO_WRAPPER_TOKENS` 未設定 → リリース(`:prod`)は全ラッパーを拒否
+  (fail-closed、issue #138)**。認証を無効化して任意のラッパーを通すのは
+  `mix` を `:dev` / `:test` で動かした場合だけで、loopback 限定の開発向け。
+- **`KAOIRO_RUNNER_TOKENS` 未設定 → 同じ規則を host_id 単位でランナーに適用
+  (ADR-0023)**。`:prod` では join が `unauthorized` で全拒否される。
+  docker compose と [`scripts/dogfood.sh`](../scripts/dogfood.sh) は
+  リリースイメージを起動するのでこちらに該当する(dogfood は未設定を検出
+  すると `.env` にエントリを自動生成し、同じ値を runner へ渡す)。
 
 いずれも未設定なら起動時に警告をログ出力する([threat-model](../docs/specs/threat-model.md))。
 
@@ -111,8 +115,8 @@ cp .env.example .env
 # .env を編集:
 #   SECRET_KEY_BASE       … `mix phx.gen.secret` で生成
 #   KAOIRO_CLIENT_TOKENS  … 必須(未設定だとダッシュボードが接続拒否される)
-#   KAOIRO_WRAPPER_TOKENS … LAN 公開時は必須
-#   KAOIRO_RUNNER_TOKENS  … LAN 公開時は必須(ランナー認証)
+#   KAOIRO_WRAPPER_TOKENS … 必須(未設定だとリリースが全ラッパーを拒否)
+#   KAOIRO_RUNNER_TOKENS  … 必須(未設定だとリリースが全ランナーを拒否)
 docker compose up -d --build
 # ダッシュボード: http://localhost:4000/?token=<KAOIRO_CLIENT_TOKENS の token>
 ```
