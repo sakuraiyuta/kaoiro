@@ -13,7 +13,11 @@
   // (badge + row 色の tone) で。
 
   import { spriteUrlFor } from "./expression";
-  import { conversationEntries, conversationEntryKey } from "./conversationTimeline";
+  import {
+    conversationEntries,
+    conversationEntryKey,
+    type ConversationEntry,
+  } from "./conversationTimeline";
   import { formatRelativeJa } from "./relativeTime";
   import type { DirectoryEntry, Envelope, PersonaManifest } from "./protocol";
 
@@ -23,7 +27,10 @@
     logs,
     manifest = null,
     now,
+    readTimelineEntryKeys = new Set<string>(),
     newTimelineEntryKeys = new Set<string>(),
+    onMarkRead = () => {},
+    onArrivalAnimationComplete = () => {},
     onSelectAgent,
   }: {
     /** Persona lookup 用の agent 状態 map。 state 変更や filter には
@@ -39,24 +46,24 @@
     manifest?: PersonaManifest | null;
     /** ms clock。 formatRelativeJa の tick 用に App から受ける。 */
     now: number;
+    /** App session が所有する既読 marker。detail 表示でこの component が
+     * unmount しても既読状態を失わない。 */
+    readTimelineEntryKeys?: ReadonlySet<string>;
     /** onEnvelope 経由で追加された行だけの一回限り arrival marker (#125)。
      * history / snapshot は App がこの set に入れないため、初期描画では
      * アニメーションしない。 */
     newTimelineEntryKeys?: ReadonlySet<string>;
+    onMarkRead?: (key: string) => void;
+    /** CSS animation 完了時に App の one-shot marker を消費する。 */
+    onArrivalAnimationComplete?: (key: string) => void;
     /** row click → 該当 agent の詳細を開く。 App.svelte 側で origin=null
      *  にして expand animation を省略する契約。 */
-    onSelectAgent: (agentId: string, target: Envelope) => void;
+    onSelectAgent: (entry: ConversationEntry) => void;
   } = $props();
 
   const entries = $derived(conversationEntries(logs));
   let visibleCount = $state(50);
   const visibleEntries = $derived(entries.slice(0, visibleCount));
-  // #124: 既読情報はこのブラウザ・この mount の中だけに置く。永続化しない
-  // ため、リロード時には agent / inter-agent の全行が再び未閲覧になる。
-  let readEntryKeys = $state<ReadonlySet<string>>(new Set());
-  // CSS animation が終わった行を記録しておく。live marker は App 側に
-  // 残しても、load-more などで row が再 mount したときに再点滅しない。
-  let completedArrivalKeys = $state<ReadonlySet<string>>(new Set());
   const readTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const HOVER_READ_DELAY_MS = 300;
 
@@ -70,13 +77,16 @@
       clearTimeout(timer);
       readTimers.delete(key);
     }
-    if (readEntryKeys.has(key)) return;
-    // Set を丸ごと置き換え、Svelte の依存追跡を明示的に起こす。
-    readEntryKeys = new Set(readEntryKeys).add(key);
+    if (readTimelineEntryKeys.has(key)) return;
+    onMarkRead(key);
   }
 
   function scheduleRead(key: string, kind: string): void {
-    if (!canBeUnread(kind) || readEntryKeys.has(key) || readTimers.has(key)) return;
+    if (
+      !canBeUnread(kind) ||
+      readTimelineEntryKeys.has(key) ||
+      readTimers.has(key)
+    ) return;
     readTimers.set(
       key,
       setTimeout(() => markRead(key), HOVER_READ_DELAY_MS),
@@ -88,11 +98,6 @@
     if (timer === undefined) return;
     clearTimeout(timer);
     readTimers.delete(key);
-  }
-
-  function completeArrival(key: string): void {
-    if (completedArrivalKeys.has(key)) return;
-    completedArrivalKeys = new Set(completedArrivalKeys).add(key);
   }
 
   onDestroy(() => {
@@ -140,16 +145,18 @@
             class:from-user={entry.kind === "user"}
             class:from-agent={entry.kind === "agent"}
             class:inter-agent={entry.kind === "inter_agent"}
-            class:unread={canBeUnread(entry.kind) && !readEntryKeys.has(key)}
-            class:new-arrival={canBeUnread(entry.kind) && newTimelineEntryKeys.has(key) && !completedArrivalKeys.has(key)}
+            class:unread={canBeUnread(entry.kind) && !readTimelineEntryKeys.has(key)}
+            class:new-arrival={canBeUnread(entry.kind) && newTimelineEntryKeys.has(key)}
             onmouseenter={() => scheduleRead(key, entry.kind)}
             onmouseleave={() => cancelScheduledRead(key)}
             onanimationend={(event) => {
-              if (event.animationName === "timeline-arrival") completeArrival(key);
+              if (event.animationName === "timeline-arrival") {
+                onArrivalAnimationComplete(key);
+              }
             }}
             onclick={() => {
               markRead(key);
-              onSelectAgent(entry.agentId, entry.envelope);
+              onSelectAgent(entry);
             }}
             title={`${personaName(entry.agentId)} の詳細を開く`}
           >

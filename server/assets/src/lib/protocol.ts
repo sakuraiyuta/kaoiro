@@ -158,6 +158,17 @@ export type SessionResetMode = "new" | "clear";
 export interface HistoryResetPayload {
   agent_id: string;
   preserve_inter_agent?: boolean;
+  /** Pairs the reset with `history_replay_complete`. New wrappers always
+   * provide it; omission keeps the pre-#125 wire shape readable. */
+  replay_id?: string;
+}
+
+/** Completion boundary for a resume's JSONL replay. The wrapper sends this
+ * only after the final reconstructed log envelope, allowing the dashboard to
+ * distinguish historical replay from the next live assistant reply. */
+export interface HistoryReplayCompletePayload {
+  agent_id: string;
+  replay_id: string;
 }
 
 /** Closed vocabulary of session-reset failure reasons broadcast on the
@@ -685,6 +696,32 @@ export function compareTranscriptEnvelopes(
   return (a.seq ?? 0) - (b.seq ?? 0);
 }
 
+/** Stable identity for a transcript envelope.
+ *
+ * A quota auto-termination can synthesize two server IA envelopes at the
+ * same timestamp and sequence. `payload.to` is the only discriminator in
+ * that case, so retain it for the synthetic server producer. Session is also
+ * part of the identity: a resumed session may legitimately reuse a wrapper
+ * timestamp/sequence pair. This key is shared by merging, DOM anchors and
+ * timeline UI state; changing one without the others reintroduces collisions.
+ */
+export function transcriptEntryKey(
+  envelope: Pick<Envelope, "agent_id" | "session_id" | "ts" | "seq" | "type" | "payload">,
+): string {
+  const recipient =
+    envelope.agent_id === "server" && envelope.type === "inter_agent_message"
+      ? (envelope.payload as { to?: unknown } | undefined)?.to
+      : undefined;
+  return [
+    envelope.agent_id,
+    envelope.session_id ?? "",
+    envelope.ts,
+    envelope.seq ?? 0,
+    envelope.type,
+    typeof recipient === "string" ? recipient : "",
+  ].join("|");
+}
+
 /** Merge an authoritative history with buffered/live entries, dedupe the
  *  overlap, and restore chronological order. This also handles resume replay:
  *  retained structured IA lines may be newer than JSONL logs arriving later,
@@ -693,15 +730,10 @@ export function mergeTranscriptEntries(
   history: Envelope[],
   buffered: Envelope[],
 ): Envelope[] {
-  // A receiver transcript can contain fan-out IA envelopes authored by
-  // several agents. Include producer/session so equal timestamps and seq
-  // values from independent producer streams are not collapsed together.
-  const key = (e: Envelope): string =>
-    `${e.agent_id}|${e.session_id ?? ""}|${e.ts}|${e.seq ?? ""}|${e.type}`;
   const seen = new Set<string>();
   const merged: Envelope[] = [];
   for (const envelope of [...history, ...buffered]) {
-    const identity = key(envelope);
+    const identity = transcriptEntryKey(envelope);
     if (seen.has(identity)) continue;
     seen.add(identity);
     merged.push(envelope);
@@ -952,7 +984,13 @@ export interface KaoiroHandlers {
   /** A transcript projection reset used only by resume replay. It preserves
    *  structured IA history; `/new` and `/clear` leave the projection intact.
    *  Operator-only. */
-  onHistoryReset?: (agentId: string, preserveInterAgent: boolean) => void;
+  onHistoryReset?: (
+    agentId: string,
+    preserveInterAgent: boolean,
+    replayId?: string,
+  ) => void;
+  /** Deterministic end boundary for the resume replay paired by replay_id. */
+  onHistoryReplayComplete?: (agentId: string, replayId: string) => void;
   /** A disconnected agent was removed (issue #14): drop it from the grid.
    *  Operator-only. */
   onAgentDeleted?: (agentId: string) => void;
@@ -1352,7 +1390,7 @@ export function parseSessionResetFailed(
 /** Normalizes the backwards-compatible `history_reset` payload. */
 export function parseHistoryReset(
   value: unknown,
-): { agent_id: string; preserve_inter_agent: boolean } | null {
+): { agent_id: string; preserve_inter_agent: boolean; replay_id?: string } | null {
   if (typeof value !== "object" || value === null) return null;
   const p = value as Partial<HistoryResetPayload>;
   if (typeof p.agent_id !== "string") return null;
@@ -1362,7 +1400,25 @@ export function parseHistoryReset(
       typeof p.preserve_inter_agent === "boolean"
         ? p.preserve_inter_agent
         : true,
+    ...(typeof p.replay_id === "string" && p.replay_id !== ""
+      ? { replay_id: p.replay_id }
+      : {}),
   };
+}
+
+export function parseHistoryReplayComplete(
+  value: unknown,
+): HistoryReplayCompletePayload | null {
+  if (typeof value !== "object" || value === null) return null;
+  const p = value as Partial<HistoryReplayCompletePayload>;
+  if (
+    typeof p.agent_id !== "string" ||
+    typeof p.replay_id !== "string" ||
+    p.replay_id === ""
+  ) {
+    return null;
+  }
+  return { agent_id: p.agent_id, replay_id: p.replay_id };
 }
 
 /** ふじ 4th advisory 2 (2026-07-23): single production helper that
@@ -1838,7 +1894,20 @@ export function connectKaoiro(
   channel.on("history_reset", (payload: unknown) => {
     const reset = parseHistoryReset(payload);
     if (reset !== null) {
-      handlers.onHistoryReset?.(reset.agent_id, reset.preserve_inter_agent);
+      handlers.onHistoryReset?.(
+        reset.agent_id,
+        reset.preserve_inter_agent,
+        reset.replay_id,
+      );
+    }
+  });
+  channel.on("history_replay_complete", (payload: unknown) => {
+    const complete = parseHistoryReplayComplete(payload);
+    if (complete !== null) {
+      handlers.onHistoryReplayComplete?.(
+        complete.agent_id,
+        complete.replay_id,
+      );
     }
   });
   channel.on("agent_deleted", (payload: { agent_id?: unknown }) => {

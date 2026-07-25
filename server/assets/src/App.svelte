@@ -6,7 +6,15 @@
   import LaunchDialog from "./lib/LaunchDialog.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import { adjacentAgentId } from "./lib/agentNavigation";
-  import { conversationEntryKey, isTimelineArrival } from "./lib/conversationTimeline";
+  import {
+    conversationEntryKey,
+    isTimelineArrival,
+  } from "./lib/conversationTimeline";
+  import {
+    beginTimelineReplay,
+    completeTimelineReplay,
+    isTimelineReplayEnvelope,
+  } from "./lib/timelineArrival";
   import { expressionFor, spriteUrlFor } from "./lib/expression";
   import type {
     ConnectionStatus,
@@ -54,10 +62,18 @@
   // Per-agent reply transcript (operator-only, ADR-0012): log/result
   // envelopes accumulate here instead of overwriting the latest state.
   let logs = $state<Record<string, Envelope[]>>({});
+  // #124: read marker belongs to this session owner, rather than the
+  // response-timeline mount. Opening a detail unmounts the grid/timeline;
+  // keeping it here prevents an already-read row from becoming unread again.
+  let readTimelineEntryKeys = $state<ReadonlySet<string>>(new Set());
   // #125: live socket envelope が実際に transcript へ追加されたときだけ
   // timeline に渡す one-shot CSS animation marker。history / snapshot は
   // この state を更新しないため、初回一括描画では点滅しない。
   let newTimelineEntryKeys = $state<ReadonlySet<string>>(new Set());
+  // `history_reset` begins JSONL replay. The wrapper's explicit completion
+  // boundary clears this map, so replayed assistant rows never look like a
+  // live arrival while the first post-replay assistant still does.
+  let activeTimelineReplays = $state<Record<string, string>>({});
   // Per-agent IA visibility watermark (issue #109). It changes only after
   // operator clear_history; session transitions do not affect display.
   let clearWatermarks = $state<Record<string, string>>({});
@@ -70,9 +86,10 @@
   let nowTimer: ReturnType<typeof setInterval> | undefined;
   // agent_id of the agent shown full-screen, or null for the grid.
   let selected = $state<string | null>(null);
-  // Timeline click の発話位置。AgentDetail はこの envelope identity を DOM
-  // anchor に照合して、該当箇所まで smooth scroll する (#122)。
-  let timelineScrollTarget = $state<Envelope | null>(null);
+  // Timeline click の発話位置。AgentDetail は stable entry identity を DOM
+  // anchor に照合して、該当箇所まで smooth scroll する (#122)。 Object を
+  // 毎回新規にして、同じ行の再クリックも reactive request として届かせる。
+  let timelineScrollTarget = $state<{ entryKey: string } | null>(null);
   // Viewport centre of the tile that opened the detail, for the expand
   // animation (#36); null when no tile origin is known.
   let origin = $state<{ x: number; y: number } | null>(null);
@@ -211,10 +228,49 @@
       state: "disconnected",
     };
   }
-  // Falls back to the grid if the selected agent vanishes from the map.
-  const selectedEnvelope = $derived(
-    selected !== null ? (agents[selected] ?? null) : null,
-  );
+
+  function markTimelineEntryRead(key: string): void {
+    if (readTimelineEntryKeys.has(key)) return;
+    readTimelineEntryKeys = new Set(readTimelineEntryKeys).add(key);
+  }
+
+  function consumeTimelineArrival(key: string): void {
+    if (!newTimelineEntryKeys.has(key)) return;
+    const next = new Set(newTimelineEntryKeys);
+    next.delete(key);
+    newTimelineEntryKeys = next;
+  }
+
+  /** Removes ephemeral timeline state whose rows belong to an agent pane.
+   * Used on transcript lifecycle boundaries so discarded rows cannot revive
+   * as unread or pulse markers after a remount. */
+  function pruneTimelineStateForAgent(agentId: string): void {
+    const stale = new Set(
+      (logs[agentId] ?? []).map((entry) => conversationEntryKey(entry)),
+    );
+    if (stale.size === 0) return;
+    readTimelineEntryKeys = new Set(
+      [...readTimelineEntryKeys].filter((key) => !stale.has(key)),
+    );
+    newTimelineEntryKeys = new Set(
+      [...newTimelineEntryKeys].filter((key) => !stale.has(key)),
+    );
+  }
+
+  function clearTimelineState(): void {
+    readTimelineEntryKeys = new Set();
+    newTimelineEntryKeys = new Set();
+    activeTimelineReplays = {};
+  }
+
+  // A directory entry is enough to render a read-only offline detail. This
+  // makes durable IA rows clickable even immediately after a server restart,
+  // before their sender has reconnected and emitted a live state envelope.
+  const selectedEnvelope = $derived.by<Envelope | null>(() => {
+    if (selected === null) return null;
+    return agents[selected] ??
+      (directory[selected] ? directoryEnvelope(selected, directory[selected]) : null);
+  });
   // Detail navigation follows the live grid's displayed order. Disconnected
   // cards live in a separate collapsed section and are intentionally absent
   // from the ring, matching the existing detail header's live-agent strip.
@@ -298,7 +354,19 @@
               next[id] = merged;
             }
             logs = next;
-            if (addedToTranscript && isTimelineArrival(envelope)) {
+            // JSONL resume replay deliberately reuses ordinary `envelope`
+            // events. Its explicit reset/complete boundary, rather than an
+            // arrival-count heuristic, is what distinguishes it from a live
+            // assistant reply.
+            const isResumeReplay = isTimelineReplayEnvelope(
+              activeTimelineReplays,
+              envelope,
+            );
+            if (
+              addedToTranscript &&
+              isTimelineArrival(envelope) &&
+              !isResumeReplay
+            ) {
               newTimelineEntryKeys = new Set(newTimelineEntryKeys).add(
                 conversationEntryKey(envelope),
               );
@@ -361,6 +429,7 @@
               clearWatermarks = { ...clearWatermarks, [agentId]: watermark };
             }
           }
+          pruneTimelineStateForAgent(agentId);
           const prev = logs[agentId];
           if (prev) {
             logs = {
@@ -373,9 +442,10 @@
             };
           }
         },
-        onHistoryReset: (agentId, preserveInterAgent) => {
+        onHistoryReset: (agentId, preserveInterAgent, replayId) => {
           // history_reset is resume replay only; /new and /clear preserve
           // the existing display projection (#109).
+          pruneTimelineStateForAgent(agentId);
           logs = {
             ...logs,
             [agentId]: resetTranscriptHistory(
@@ -383,6 +453,20 @@
               preserveInterAgent,
             ),
           };
+          activeTimelineReplays = beginTimelineReplay(
+            activeTimelineReplays,
+            agentId,
+            replayId,
+          );
+        },
+        onHistoryReplayComplete: (agentId, replayId) => {
+          // Ignore stale completions from an older reconnect; only the
+          // boundary paired to the currently active reset may enable pulse.
+          activeTimelineReplays = completeTimelineReplay(
+            activeTimelineReplays,
+            agentId,
+            replayId,
+          );
         },
         onAgentDeleted: (agentId) => {
           // A disconnected agent was removed (#14, ADR-0030 D6): drop it
@@ -393,6 +477,12 @@
           // page reload re-fetches the shrunk directory. The detail view
           // falls back to the grid on its own when the selected agent
           // vanishes (selectedEnvelope).
+          pruneTimelineStateForAgent(agentId);
+          activeTimelineReplays = beginTimelineReplay(
+            activeTimelineReplays,
+            agentId,
+            undefined,
+          );
           agents = Object.fromEntries(
             Object.entries(agents).filter(([id]) => id !== agentId),
           );
@@ -677,6 +767,7 @@
     // Don't keep the previous session's data behind the login form.
     agents = {};
     logs = {};
+    clearTimelineState();
     timelineScrollTarget = null;
     selected = null;
     needLogin = true;
@@ -870,7 +961,7 @@
           sessions={runnerSessions}
           resetMode={sessionResets[selectedEnvelope.agent_id] ?? null}
           {origin}
-          scrollToEnvelope={timelineScrollTarget}
+          scrollToEntryKey={timelineScrollTarget?.entryKey ?? null}
           onClose={() => {
             timelineScrollTarget = null;
             selected = null;
@@ -927,15 +1018,26 @@
           {logs}
           {manifest}
           {now}
+          {readTimelineEntryKeys}
           {newTimelineEntryKeys}
-          onSelectAgent={(id, target) => {
+          onMarkRead={markTimelineEntryRead}
+          onArrivalAnimationComplete={consumeTimelineArrival}
+          onSelectAgent={(entry) => {
             // 詳細を開く。timeline クリックには「元タイル座標」がないので
             // origin=null に倒し、既存の expand-from-origin アニメは省略。
             // 同じ行を再度クリックしても scroll request を発火できるよう、
-            // envelope は shallow copy で request ごとに新しい参照へする。
+            // target object は request ごとに新しい参照へする。 server
+            // synthetic IA は `detailAgentId` (= recipient) へ、directory
+            // only IA は directory fallback の read-only pane へ進める。
+            if (
+              agents[entry.detailAgentId] === undefined &&
+              directory[entry.detailAgentId] === undefined
+            ) return;
             origin = null;
-            timelineScrollTarget = { ...target };
-            selected = id;
+            timelineScrollTarget = {
+              entryKey: conversationEntryKey(entry.envelope),
+            };
+            selected = entry.detailAgentId;
           }}
         >
           {#each sorted as envelope, index (envelope.agent_id)}

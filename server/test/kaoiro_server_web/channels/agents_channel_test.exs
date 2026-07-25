@@ -1164,6 +1164,32 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       refute_push "history_reset", %{}
     end
+
+    test "operator は history_replay_complete を受け取る" do
+      agent_id = "test.reset-complete-op"
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_complete", %{
+        "agent_id" => agent_id,
+        "replay_id" => "replay-1"
+      })
+
+      assert_push "history_replay_complete", %{
+        "agent_id" => ^agent_id,
+        "replay_id" => "replay-1"
+      }
+    end
+
+    test "viewer には history_replay_complete を配信しない (fail-closed)" do
+      _socket = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_complete", %{
+        "agent_id" => "test.reset-complete-vw",
+        "replay_id" => "replay-1"
+      })
+
+      refute_push "history_replay_complete", %{}
+    end
   end
 
   # ADR-0039 F9 v2 = 藤 review turn-13 追加指示 (must-fix 3): allow-list の

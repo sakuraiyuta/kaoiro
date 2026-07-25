@@ -19,6 +19,7 @@ import {
   parseSessions,
   pendingPermissionFrom,
   pendingQuestionFrom,
+  parseHistoryReplayComplete,
   parseHistoryReset,
   parseHistoryPayload,
   filterInterAgentTargetsByWatermark,
@@ -397,6 +398,29 @@ describe("inter-agent history replay (#105)", () => {
         preserve_inter_agent: false,
       }),
     ).toEqual({ agent_id: "agent-a", preserve_inter_agent: false });
+  });
+
+  it("resume replay completion は agent_id と replay_id が揃う場合だけ受け取る", () => {
+    expect(
+      parseHistoryReplayComplete({ agent_id: "agent-a", replay_id: "replay-1" }),
+    ).toEqual({ agent_id: "agent-a", replay_id: "replay-1" });
+    expect(parseHistoryReplayComplete({ agent_id: "agent-a" })).toBeNull();
+    expect(parseHistoryReplayComplete({ replay_id: "replay-1" })).toBeNull();
+  });
+
+  it("server synthetic IA は同 ts/seq でも recipient ごとに merge で別行を保つ", () => {
+    const first: Envelope = {
+      ...message,
+      agent_id: "server",
+      session_id: "quota-session",
+      seq: 42,
+      payload: { ...message.payload!, to: "agent-a" },
+    };
+    const second: Envelope = {
+      ...first,
+      payload: { ...first.payload!, to: "agent-b" },
+    };
+    expect(mergeTranscriptEntries([], [first, second])).toEqual([first, second]);
   });
 
   // ふじ R3 must-fix (2026-07-23): projection marker で rolling upgrade

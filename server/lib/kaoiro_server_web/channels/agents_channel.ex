@@ -90,6 +90,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     "envelope",
     "history_cleared",
     "history_reset",
+    "history_replay_complete",
     "runner_sessions",
     "spawn_result",
     "hosts",
@@ -221,6 +222,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_out("history_reset", payload, socket) do
     if socket.assigns[:role] == :operator do
       push(socket, "history_reset", payload)
+    end
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_out("history_replay_complete", payload, socket) do
+    if socket.assigns[:role] == :operator do
+      push(socket, "history_replay_complete", payload)
     end
 
     {:noreply, socket}

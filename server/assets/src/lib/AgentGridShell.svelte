@@ -16,6 +16,7 @@
   // the stagger animation.
 
   import ResponseTimeline from "./ResponseTimeline.svelte";
+  import type { ConversationEntry } from "./conversationTimeline";
   import { shouldShowResponseTimeline } from "./protocol";
   import type { DirectoryEntry, Envelope, PersonaManifest } from "./protocol";
   import type { Snippet } from "svelte";
@@ -28,7 +29,10 @@
     logs,
     manifest,
     now,
+    readTimelineEntryKeys = new Set<string>(),
     newTimelineEntryKeys = new Set<string>(),
+    onMarkRead = () => {},
+    onArrivalAnimationComplete = () => {},
     onSelectAgent,
     children,
   }: {
@@ -39,8 +43,11 @@
     logs: Record<string, Envelope[]>;
     manifest: PersonaManifest | null;
     now: number;
+    readTimelineEntryKeys?: ReadonlySet<string>;
     newTimelineEntryKeys?: ReadonlySet<string>;
-    onSelectAgent: (agentId: string, target: Envelope) => void;
+    onMarkRead?: (key: string) => void;
+    onArrivalAnimationComplete?: (key: string) => void;
+    onSelectAgent: (entry: ConversationEntry) => void;
     children?: Snippet;
   } = $props();
 
@@ -62,7 +69,10 @@
       {logs}
       {manifest}
       {now}
+      {readTimelineEntryKeys}
       {newTimelineEntryKeys}
+      {onMarkRead}
+      {onArrivalAnimationComplete}
       {onSelectAgent}
     />
   {/if}

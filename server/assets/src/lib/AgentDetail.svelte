@@ -42,7 +42,7 @@
     sessions = null,
     resetMode = null,
     origin = null,
-    scrollToEnvelope = null,
+    scrollToEntryKey = null,
     onClose,
     onSelectAgent,
   }: {
@@ -62,9 +62,10 @@
     resetMode?: SessionResetMode | null;
     /** Viewport centre of the originating tile, for the expand anim (#36). */
     origin?: { x: number; y: number } | null;
-    /** Timeline row that opened this detail. When set, its transcript entry
-     * is smooth-scrolled to the top with a small reading margin (#122). */
-    scrollToEnvelope?: Envelope | null;
+    /** Stable identity of the timeline row that opened this detail. It is
+     * deliberately a key rather than an envelope so server-synthetic IA can
+     * target the recipient pane even though its producer is `server`. */
+    scrollToEntryKey?: string | null;
     onClose: () => void;
     /** Switch the detail view to another agent (clicked peer link in an
      *  inter-agent message bubble). Omitted = peer name renders as static
@@ -992,22 +993,39 @@
   // the browser clamps at the transcript's bottom and cannot place it 24px
   // below the top edge. This is reset for ordinary detail navigation.
   let timelineScrollTailPx = $state(0);
-  let handledTimelineScrollTarget: Envelope | null = null;
+  let handledTimelineScrollTarget: string | null = null;
 
-  async function scrollToTimelineEnvelope(target: Envelope): Promise<boolean> {
+  function resetTimelineScrollTail(): void {
+    timelineScrollTailPx = 0;
+    logEl?.style.setProperty("--timeline-scroll-tail", "0px");
+  }
+
+  async function scrollToTimelineEntry(targetKey: string): Promise<boolean> {
     if (!logEl) return false;
-    const key = conversationEntryKey(target);
     const findEntry = (): HTMLElement | undefined =>
       [...logEl!.querySelectorAll<HTMLElement>("[data-envelope-key]")].find(
-        (candidate) => candidate.dataset.envelopeKey === key,
+        (candidate) => candidate.dataset.envelopeKey === targetKey,
       );
     const entry = findEntry();
-    if (!entry) return false;
+    if (!entry) {
+      // clear/reset can remove a previously selected target. Do not leave
+      // its temporary scroll room behind on the next ordinary transcript.
+      resetTimelineScrollTail();
+      return false;
+    }
 
-    const tailPx = Math.max(
-      0,
-      logEl.clientHeight - entry.getBoundingClientRect().height - TIMELINE_SCROLL_TOP_GAP_PX,
-    );
+    // Start from natural content height. A previous near-tail target may have
+    // left temporary padding in place; including it would under/over-estimate
+    // the next target's needed tail.
+    resetTimelineScrollTail();
+    const entryTop =
+      entry.getBoundingClientRect().top - logEl.getBoundingClientRect().top +
+      logEl.scrollTop;
+    const desiredTop = Math.max(0, entryTop - TIMELINE_SCROLL_TOP_GAP_PX);
+    const naturalMaxTop = Math.max(0, logEl.scrollHeight - logEl.clientHeight);
+    // Existing content below the row already supplies some scroll range;
+    // append only the shortfall rather than a whole viewport for every row.
+    const tailPx = Math.max(0, desiredTop - naturalMaxTop);
     timelineScrollTailPx = tailPx;
     // Svelte の次の DOM flush を待たず、padding を即時反映して末尾行でも
     // scroll range を確保する。state も同時に更新するので以後の re-render
@@ -1062,14 +1080,24 @@
     void logs.length;
     const agentId = envelope.agent_id;
     const switching = scrollAgent !== agentId;
-    const timelineTarget = scrollToEnvelope;
+    const timelineTarget = scrollToEntryKey;
     if (timelineTarget === null) {
-      timelineScrollTailPx = 0;
+      resetTimelineScrollTail();
+      handledTimelineScrollTarget = null;
+    }
+    const timelineTargetPresent =
+      timelineTarget !== null &&
+      logs.some((entry) => conversationEntryKey(entry) === timelineTarget);
+    if (timelineTarget !== null && !timelineTargetPresent) {
+      // history clear/reset can replace a handled row with a same-length
+      // transcript. Check membership, not only `logs.length`, so its old
+      // tail padding cannot survive that replacement.
+      resetTimelineScrollTail();
       handledTimelineScrollTarget = null;
     }
     const shouldScrollTimelineTarget =
       timelineTarget !== null &&
-      timelineTarget.agent_id === agentId &&
+      timelineTargetPresent &&
       timelineTarget !== handledTimelineScrollTarget;
     // Snapshot synchronously BEFORE the new logs commit: once Svelte renders
     // the new envelopes, scrollHeight grows and a fresh "at the bottom"
@@ -1103,7 +1131,7 @@
       if (
         shouldScrollTimelineTarget &&
         timelineTarget !== null &&
-        (await scrollToTimelineEnvelope(timelineTarget))
+        (await scrollToTimelineEntry(timelineTarget))
       ) {
         handledTimelineScrollTarget = timelineTarget;
         return;

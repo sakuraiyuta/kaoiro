@@ -228,7 +228,8 @@ export function readCodexHistory(
 
 export interface HistoryTransport {
   setSessionId(sessionId: string): void;
-  sendHistoryReset(): void;
+  sendHistoryReset(): string;
+  sendHistoryReplayComplete(replayId: string): void;
   send(envelope: Envelope): void;
 }
 
@@ -243,7 +244,8 @@ export function replayCodexHistory(
   link.setSessionId(sessionId);
   if (seed !== undefined) link.send(seed);
   const history = readCodexHistory(sessionId, config, root);
-  link.sendHistoryReset();
+  const replayId = link.sendHistoryReset();
   for (const envelope of history) link.send(envelope);
+  link.sendHistoryReplayComplete(replayId);
   return history;
 }

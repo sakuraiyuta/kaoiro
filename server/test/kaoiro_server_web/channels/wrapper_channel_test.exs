@@ -386,12 +386,13 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok
       assert [%{"payload" => %{"text" => "やります"}}] = AgentStates.histories()[agent_id]
 
-      ref = push(socket, "history_reset", %{})
+      ref = push(socket, "history_reset", %{"replay_id" => "replay-1"})
       assert_reply ref, :ok
 
       assert_broadcast "history_reset", %{
         "agent_id" => ^agent_id,
-        "preserve_inter_agent" => true
+        "preserve_inter_agent" => true,
+        "replay_id" => "replay-1"
       }
 
       # History gone; latest state untouched.
@@ -407,6 +408,20 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       ref = push(socket, "history_reset", %{})
       assert_reply ref, :ok
       refute_broadcast "history_reset", %{}
+    end
+
+    test "history_replay_complete は reset token を operator へ broadcast する" do
+      agent_id = "test.reset-complete"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      ref = push(socket, "history_replay_complete", %{"replay_id" => "replay-1"})
+      assert_reply ref, :ok
+
+      assert_broadcast "history_replay_complete", %{
+        "agent_id" => ^agent_id,
+        "replay_id" => "replay-1"
+      }
     end
   end
 
