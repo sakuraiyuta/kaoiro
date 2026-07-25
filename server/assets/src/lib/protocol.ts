@@ -594,6 +594,23 @@ export interface ResultPayload {
   error_detail?: string;
 }
 
+/** Human-readable Japanese label for a wrapper's error_subtype (issue #127).
+ *  Falls back to null for absent / unknown subtypes so the caller can either
+ *  omit the label or default to the plain "エラーで終了" wording. Kept
+ *  co-located with ResultPayload so #128 (retry button) can share the same
+ *  error-classification path. */
+const ERROR_SUBTYPE_LABELS: Record<string, string> = {
+  error_max_turns: "最大ターン数到達",
+  error_during_execution: "実行中エラー",
+  error_max_budget_usd: "予算上限到達",
+  error_max_structured_output_retries: "構造化出力リトライ上限",
+};
+
+export function errorSubtypeLabel(subtype: string | undefined): string | null {
+  if (typeof subtype !== "string" || subtype === "") return null;
+  return ERROR_SUBTYPE_LABELS[subtype] ?? null;
+}
+
 /** Narrows a log envelope's payload, or null for any other envelope. */
 export function logOf(envelope: Envelope): LogPayload | null {
   if (envelope.type !== "log") return null;
