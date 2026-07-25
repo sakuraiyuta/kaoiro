@@ -46,32 +46,36 @@ jobs:
       - run: pnpm -C runner typecheck
       - run: pnpm -C runner test
 
-  # Runs inside the same image server/Dockerfile builds the release with, so CI
-  # and the shipped artifact share one compiler. This also replaces
-  # erlef/setup-beam, whose prebuilt OTP could not load :crypto on the Gitea
-  # runner image (no matching libssl) — mix failed before it could even fetch
-  # rebar.
+  # Checks out on the host, then runs mix inside a pinned Elixir image.
+  #
+  # Three findings from measuring this on the actual runner:
+  #   - erlef/setup-beam: its prebuilt OTP cannot load :crypto on the Gitea
+  #     runner image (no matching libssl), so mix dies fetching rebar.
+  #   - `container:` with a hexpm image: it ships no node, so every JS action
+  #     (actions/checkout) fails with exit 127. Hence the explicit
+  #     `docker run`, which the server-image job proves works here.
+  #   - The image is NOT the one server/Dockerfile builds the release with
+  #     (Elixir 1.19.5 / OTP 26.2.5.1). OTP 26's beam_asm cannot compile this
+  #     suite's Japanese test names ("argument 1: not an iolist term"), so
+  #     `mix test` is impossible there. This pins the development
+  #     environment's versions instead; the release image is covered by the
+  #     server-image job. Closing that gap is tracked separately.
   server:
     runs-on: ubuntu-latest
-    container: docker.io/hexpm/elixir:1.19.5-erlang-26.2.5.1-debian-trixie-20260518-slim
-    defaults:
-      run:
-        working-directory: server
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/cache@v4
-        with:
-          path: |
-            server/deps
-            server/_build
-          key: mix-${{ hashFiles('server/mix.lock') }}
-          restore-keys: mix-
-      # The hexpm image ships neither, same as the Dockerfile's builder stage.
-      - run: mix local.hex --force && mix local.rebar --force
-      - run: mix deps.get
-      - run: mix format --check-formatted
-      - run: mix compile --warnings-as-errors
-      - run: mix test
+      - name: mix checks
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src/server \
+            docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
+            sh -euc '
+              mix local.hex --force
+              mix local.rebar --force
+              mix deps.get
+              mix format --check-formatted
+              mix compile --warnings-as-errors
+              mix test
+            '
 
   dashboard:
     runs-on: ubuntu-latest
