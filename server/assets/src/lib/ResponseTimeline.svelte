@@ -271,9 +271,13 @@
     color: var(--fg-dim);
     font-size: var(--fs-body-sm);
     line-height: 1.35;
+    /* #126: 短い preview も 3 行ぶんの面積を確保する。固定値ではなく
+       line-height と同じ em 基準にすることで、文字サイズの設定変更にも
+       追従する。 */
+    min-block-size: 4.05em;
     display: -webkit-box;
-    -webkit-line-clamp: 1;
-    line-clamp: 1;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
