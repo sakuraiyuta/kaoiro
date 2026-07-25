@@ -2017,7 +2017,7 @@ export function connectKaoiro(
       );
     }
   });
-  channel.on("history_replay_complete", (payload: unknown) => {
+  c.on("history_replay_complete", (payload: unknown) => {
     const complete = parseHistoryReplayComplete(payload);
     if (complete !== null) {
       handlers.onHistoryReplayComplete?.(
