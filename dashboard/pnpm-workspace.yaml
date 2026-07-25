@@ -1,0 +1,11 @@
+# The dashboard is its own pnpm root, NOT a member of the repo-root
+# workspace (issue #44 — it has a separate build system and its own
+# lockfile). Without this file pnpm walks up, finds the root
+# pnpm-workspace.yaml, and installs THAT workspace instead, leaving
+# dashboard/node_modules empty.
+packages: []
+
+# pnpm 10 build-script approval. vite pulls esbuild, whose postinstall
+# must be allowed (mirrors the repo-root workspace file).
+onlyBuiltDependencies:
+  - esbuild

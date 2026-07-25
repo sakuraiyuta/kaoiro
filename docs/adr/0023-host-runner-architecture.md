@@ -131,7 +131,7 @@ D3 の「wrapper と型を共有」を、**複数 wrapper を前提**に具体�
   参照に切替。**リネームは codex 版追加時まで先送り**(今は型抽出のみ、挙動不変)。
   → **2026-07-10 追記**: Codex adapter 追加が [ADR-0032](0032-codex-adapter.md) F1 で決まり、リネーム (`@kaoiro/wrapper` → `@kaoiro/claude-code`) は [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md) で**実行済み** (同日完了)。
 - runner(`@kaoiro/runner`)および将来の wrapper 群はこの共有パッケージを consume。
-- **適用範囲は Node 側に限定**。dashboard(`server/assets`)は別ビルド系のため
+- **適用範囲は Node 側に限定**。dashboard(`dashboard/`)は別ビルド系のため
   本作業では据え置き(独自 `protocol.ts` 継続、整合は将来別件)。
 - 単一バイナリ([ADR-0018](0018-runner-distribution.md))への複数 wrapper バンドル
   方式は隣接論点として配布フェーズ([#70](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/70))で詰める。本決定は型 / パッケージ構造のみ。

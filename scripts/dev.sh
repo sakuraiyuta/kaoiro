@@ -109,7 +109,7 @@ pids+=("$!")
 # State T (SIGSTOP) on WSL2 when its stdin was still bound to the TTY;
 # SIGCONT could not revive the process group, only a full stack restart
 # did. Cutting the TTY input path here removes the SIGTTIN trigger.
-( cd "$root/server/assets" && pnpm install </dev/null && exec pnpm dev ) \
+( cd "$root/dashboard" && pnpm install </dev/null && exec pnpm dev ) \
   </dev/null 2>&1 | tee -a "$logdir/dashboard.log" &
 pids+=("$!")
 

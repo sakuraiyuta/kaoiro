@@ -26,7 +26,7 @@ erl_crash.dump
 kaoiro_server-*.tar
 
 
-# Dashboard build output (mix assets.build) and node deps.
+# Dashboard build output (`mix dashboard.build`; sources live in
+# /dashboard since issue #44).
 /priv/static/index.html
 /priv/static/assets/
-/assets/node_modules/

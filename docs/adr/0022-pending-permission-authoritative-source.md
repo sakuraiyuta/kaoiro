@@ -22,8 +22,8 @@ Phase 3 で導入された permission ダイアログには、表示直後に他
 600 秒後にラッパーの broker タイムアウトで自動 deny → セッションが詰む致命的
 不具合がある(issue #59)。
 
-直接原因はクライアント (`server/assets/src/App.svelte`,
-`server/assets/src/lib/AgentDetail.svelte`) が agent ごとに **最新 envelope
+直接原因はクライアント (`dashboard/src/App.svelte`,
+`dashboard/src/lib/AgentDetail.svelte`) が agent ごとに **最新 envelope
 1 件** をバケットに上書き保持しており、`permission_request` envelope が
 `state_change` で上書きされた瞬間に永続性を失うこと。
 

@@ -87,7 +87,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   class → manual retry → 回復。決定論化には wrapper 境界で fake SDK を差す設計
   が必須 (実 Anthropic API は flaky)
 - ~~`models_error` の toggle (false→true→false→true) を単一 component instance で
-  span する test~~ **18-12 A1 で解消済み** (新 `server/assets/test/reactiveProps.svelte.ts`
+  span する test~~ **18-12 A1 で解消済み** (新 `dashboard/test/reactiveProps.svelte.ts`
   の `.svelte.ts` `$state` reactive helper 経由で `mount(AgentDetail)` に流し、
   click 挿入で 2 度目 fire を genuine に pin。ふじ 18-10 監督申し送りの最重要
   gap を e2e (Tier A) で塞いだ)

@@ -291,7 +291,7 @@ running wrapper に届くが、fresh-idle wrapper は `deferQueryUntilFirstInput
 - `runner/src/cli.ts` で `getClaudeEngineCatalog: () => claudeCatalog.getStale()`
   を supervisor に渡し、hot-reload の `updateRuntimeConfig` でも同 getter
   を再指定。
-- `server/assets/src/lib/AgentDetail.svelte` の `refreshModels()` を
+- `dashboard/src/lib/AgentDetail.svelte` の `refreshModels()` を
   Claude engine 判定で 2 経路並行発火に拡張: (i) 既存 `refreshModels`
   (running wrapper 向け、fresh-idle では実質 no-op)、(ii)
   `refreshEngineCatalog(hostId, "claude-code", true)` で runner cache を

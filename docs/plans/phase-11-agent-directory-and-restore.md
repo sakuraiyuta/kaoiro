@@ -75,10 +75,10 @@ session_id で resume-spawn できるようにする。gap は persona の永続
   (grayscale スプライト、ADR-0030 承認済 UX)。
 - **2026-07-07 追加**: offline セクションを directory-only(サーバ再起動起因)
   だけでなく live disconnected(wrapper 単独切断・ホットリロード起因)も
-  集約するよう拡張([App.svelte](../../server/assets/src/App.svelte) の
+  集約するよう拡張([App.svelte](../../dashboard/src/App.svelte) の
   `sorted` は state=disconnected を除外、`offlineEntries` は両者を merge)。
-  併せて [AgentCard.svelte](../../server/assets/src/lib/AgentCard.svelte) と
-  [AgentDetail.svelte](../../server/assets/src/lib/AgentDetail.svelte) の
+  併せて [AgentCard.svelte](../../dashboard/src/lib/AgentCard.svelte) と
+  [AgentDetail.svelte](../../dashboard/src/lib/AgentDetail.svelte) の
   `canRestore` から session_id gate を撤去し、復元可否はサーバの
   SessionPointer 判定に一任(ADR-0030 D4 / D8 の追記に対応)。
 

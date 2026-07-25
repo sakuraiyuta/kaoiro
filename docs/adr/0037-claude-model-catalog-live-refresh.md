@@ -46,8 +46,8 @@ BOOTSTRAP snapshot の drift が実データで確認された。
 
 | 経路 | 対応する call site | SDK 実測可能か |
 |---|---|---|
-| **(i) register 経路** | `runner/src/config.ts:288` → `server/assets/src/lib/LaunchDialog.svelte` | **原理的に不可能** — host 接続時点で wrapper プロセスも SDK Query も存在しない。catalog を得るために spawn したいが、spawn の前に catalog が要る (鶏と卵) |
-| **(ii) ext.models 経路** | `wrapper/claude-code/src/host.ts:116, 279` → `server/assets/src/lib/AgentDetail.svelte` | **可能** — init 後 `#refreshSupportedModels()` が実測に置換 |
+| **(i) register 経路** | `runner/src/config.ts:288` → `dashboard/src/lib/LaunchDialog.svelte` | **原理的に不可能** — host 接続時点で wrapper プロセスも SDK Query も存在しない。catalog を得るために spawn したいが、spawn の前に catalog が要る (鶏と卵) |
+| **(ii) ext.models 経路** | `wrapper/claude-code/src/host.ts:116, 279` → `dashboard/src/lib/AgentDetail.svelte` | **可能** — init 後 `#refreshSupportedModels()` が実測に置換 |
 
 (i) は wrapper プロセスがまだ生きていない状態のため、`supportedModels()` を
 呼ぶ余地が構造的にない。この鶏と卵制約を受け入れつつ、保守負担を消す形を

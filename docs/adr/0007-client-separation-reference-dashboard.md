@@ -56,6 +56,10 @@ CUI・neovim プラグインなど多様なクライアントをユーザが選�
 
 - 接続方式は Phoenix Channels に一本化で決定済み
   ([ADR-0009](0009-client-transport.md))。
+- 同梱ダッシュボードのソース位置は repo ルートの `dashboard/`(issue #44 で
+  `server/assets/` から移出、独立 pnpm ルート + 独立 lockfile)。「同梱」は
+  リリースビルド時に成果物を焼き込む形で維持し、成果物はコミットしない
+  (`server/Dockerfile` の node ステージ)。別リポジトリ化は依然未着手。
 - 描画種別の段階導入([ADR-0004](0004-client-rendering-staged.md))は各
   クライアントの関心事になる。
 

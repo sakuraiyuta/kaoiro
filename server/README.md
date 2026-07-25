@@ -27,10 +27,22 @@ WebSocket(Phoenix Channels, vsn=2.0.0)で受け、最新状態を保持して
 ## 開発
 
 ```sh
-mix setup       # 依存導入
+mix setup       # 依存導入(Elixir のみ)
 mix test        # ExUnit
 mix phx.server  # localhost:4000
 ```
+
+ダッシュボードのソースは repo ルートの [`dashboard/`](../dashboard) にあり
+(issue #44)、`mix setup` には含めない(Node/pnpm の失敗が server ビルドを
+壊さないようにするため)。開発は Vite dev server(下記「ローカル開発」)を使う。
+`mix phx.server` 単体で `/` から静的配信させたいときだけ、明示的にビルドする:
+
+```sh
+mix dashboard.setup   # cd ../dashboard && pnpm install
+mix dashboard.build   # cd ../dashboard && pnpm build → server/priv/static へ出力
+```
+
+リリースイメージでは `Dockerfile` の node ステージが同等のビルドを行う。
 
 ソケットエンドポイント: `/wrapper/websocket`(ラッパー)、
 `/client/websocket`(クライアント)、`/runner/websocket`(ランナー)。
@@ -123,7 +135,7 @@ cp .env.example .env        # Docker 用に用意済みならそのまま使え�
 set -a && . ./.env && set +a && mix phx.server
 
 # 2) クライアント(別ターミナル。Vite dev server で HMR)
-cd assets && pnpm dev
+cd ../dashboard && pnpm dev
 
 # 3) runner(別ターミナル、repo ルートから。エージェントの起動・再開は
 #    ダッシュボードの「+ 起動」から行う)
@@ -135,7 +147,7 @@ cd runner &&
   自動再コンパイル・反映。`.env` を書き換えたときだけ source し直して再起動する。
 - クライアント: Vite が表示する URL(既定 `http://localhost:5173`)を開く。
   `defaultSocketUrl` は origin 基準で `/client` に繋ぐため、その WebSocket は
-  `assets/vite.config.ts` の proxy で 4000 の Phoenix へ転送される
+  `../dashboard/vite.config.ts` の proxy で 4000 の Phoenix へ転送される
   (dev は `check_origin: false`)。ダッシュボードは従来どおり `?token=<token>`
   が必要: `http://localhost:5173/?token=dev-op`。
 - runner: 設定は `runner/runner.config.json`(gitignored。初回は
