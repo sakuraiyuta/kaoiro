@@ -1873,4 +1873,46 @@ describe("findPrecedingUserPrompt (issue #128)", () => {
     ];
     expect(findPrecedingUserPrompt(entries, 2)).toBe("second");
   });
+
+  it("session_boundary で走査を止める (クロエ round 2 must-fix 1)", () => {
+    // /new が積む session_boundary marker を越えると前 session の user prompt
+    // を拾ってしまう。/new 直後の inter-agent 起因エラー turn は user log を
+    // 持たないため boundary で null 返しにしないと stale text が飛ぶ。
+    function sessionBoundary(seq: number): Envelope {
+      return {
+        version: "0",
+        agent_id: "agent-a",
+        session_id: "s2",
+        ts: `2026-07-25T00:00:0${seq}Z`,
+        seq,
+        type: "session_boundary",
+        state: "thinking",
+        payload: {},
+      } as unknown as Envelope;
+    }
+    const entries = [
+      userLog(1, "前 session の prompt"),
+      sessionBoundary(2),
+      // 現 session に user log 無し (inter-agent 起因)
+      assistantLog(3, "reply"),
+      errorResult(4),
+    ];
+    expect(findPrecedingUserPrompt(entries, 3)).toBeNull();
+  });
+
+  it("truncated:true の user log は null (原文再送保証、クロエ round 2 must-fix 2)", () => {
+    // wrapper 側 16KB クリップ済の user log。原文そのまま再送できないので
+    // ボタン非表示 (null 返し)。
+    const truncated: Envelope = {
+      version: "0",
+      agent_id: "agent-a",
+      session_id: "s1",
+      ts: "2026-07-25T00:00:01Z",
+      seq: 1,
+      type: "log",
+      state: "thinking",
+      payload: { kind: "user", text: "truncated head…", truncated: true },
+    } as unknown as Envelope;
+    expect(findPrecedingUserPrompt([truncated, errorResult(2)], 1)).toBeNull();
+  });
 });

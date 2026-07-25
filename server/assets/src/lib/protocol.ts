@@ -632,7 +632,13 @@ export function resultOf(envelope: Envelope): ResultPayload | null {
  *  paired with the SAME turn's user prompt. Returns null when no user
  *  prompt survives in the current turn (typical for wrapper-side history
  *  boundaries where the user echo was pruned). Pure so the retry-button
- *  gating can be unit-tested without mounting AgentDetail. */
+ *  gating can be unit-tested without mounting AgentDetail.
+ *
+ *  クロエ round 2 must-fix: (a) session_boundary marker (/new が積む) にも
+ *  停止する — /new 直後の inter-agent 起因エラー turn は user log を持たない
+ *  ため、boundary を素通りすると前 session の無関係 prompt を返してしまう。
+ *  (b) log.truncated === true (wrapper 側 16KB クリップ済) は null で
+ *  ボタン非表示 — 「原文そのまま再送」の受け入れ基準を守るため。 */
 export function findPrecedingUserPrompt(
   entries: readonly Envelope[],
   resultIndex: number,
@@ -641,8 +647,14 @@ export function findPrecedingUserPrompt(
     const entry = entries[i];
     if (entry === undefined) continue;
     if (resultOf(entry) !== null) return null;
+    // session_boundary は /new が積む turn 境界 marker (App.svelte)。
+    // 越えると前 session の user prompt を拾ってしまうので必ず停止する。
+    if (entry.type === "session_boundary") return null;
     const log = logOf(entry);
     if (log?.kind !== "user") continue;
+    // truncated:true = wrapper 側 16KB クリップ済。原文再送ができないので
+    // ボタン非表示 (再送しない)。
+    if (log.truncated === true) return null;
     return typeof log.text === "string" && log.text !== "" ? log.text : null;
   }
   return null;
