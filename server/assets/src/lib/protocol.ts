@@ -625,6 +625,29 @@ export function resultOf(envelope: Envelope): ResultPayload | null {
   return (envelope.payload ?? {}) as ResultPayload;
 }
 
+/** Locate the user prompt (log kind="user") that produced the errored result
+ *  at `resultIndex` in the transcript (issue #128 エラー再送ボタン)。
+ *  Walks backwards through `entries` and returns the first user log's text,
+ *  stopping at the previous turn's result envelope so a re-send is always
+ *  paired with the SAME turn's user prompt. Returns null when no user
+ *  prompt survives in the current turn (typical for wrapper-side history
+ *  boundaries where the user echo was pruned). Pure so the retry-button
+ *  gating can be unit-tested without mounting AgentDetail. */
+export function findPrecedingUserPrompt(
+  entries: readonly Envelope[],
+  resultIndex: number,
+): string | null {
+  for (let i = resultIndex - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry === undefined) continue;
+    if (resultOf(entry) !== null) return null;
+    const log = logOf(entry);
+    if (log?.kind !== "user") continue;
+    return typeof log.text === "string" && log.text !== "" ? log.text : null;
+  }
+  return null;
+}
+
 /** payload of a type="inter_agent_message" envelope (protocol-inter-agent
  *  spec, phase-8). The sender is the surrounding envelope's agent_id; `to` is
  *  the destination agent_id. Both sides' transcripts hold the same envelope —
