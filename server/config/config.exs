@@ -9,6 +9,11 @@ import Config
 
 config :kaoiro_server,
   generators: [timestamp_type: :utc_datetime],
+  # Exposed at runtime as Application.get_env(:kaoiro_server, :env) since
+  # config_env() itself is a compile-time-only macro (unavailable in a
+  # release). Auth.authorize_wrapper/2 and authorize_runner/2 read this to
+  # fail-closed on an unset token list in :prod only (issue #138).
+  env: config_env(),
   # Static serving of the bundled dashboard (ADR-0007). Channels and the
   # public API stay on regardless.
   serve_dashboard: true,
