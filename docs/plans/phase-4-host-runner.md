@@ -4,7 +4,7 @@ description: 各ホストに常駐 runner を置き、wrapper の spawn/監督/�
 status: in_progress
 phase: 4
 depends_on: [phase-3-server-multiagent]
-last_updated: 2026-07-03
+last_updated: 2026-07-25
 ---
 
 # Phase 4 — ホスト常駐 runner
@@ -51,6 +51,7 @@ spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
 | 4-8 | dashboard: 起動指示 UI(host/persona/登録済み cwd/初期プロンプト)+ client→server spawn 要求 | ✅ | #22 phase-0(0db7234 系)。範囲=中。案A=サーバ補完([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))。`LaunchDialog.svelte` + protocol.ts(spawn/hosts/spawn_result)。operator 判定は `hosts` push で |
 | 4-9 | dashboard: 起動 UI に resume(runner 列挙の session_id 候補選択)追加 | ✅ | #22 phase-1。新規/再開タブ + enumerate_sessions → `runner_sessions` で候補表示。resume は fresh agent_id + `resume_session_id`(D1 と整合、runner が T3/F4)|
 | 4-10 | server: spawn 補完(`agent_id` 採番 + per-agent token 注入)+ 署名トークン認証 | ✅ | #22 の前提([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4)。`server_url` は runner 供給に変更。token = Phoenix.Token 署名・無期限(失効=鍵ローテーション、個別 denylist は [#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))。D5 二重 live join 拒否は未実装(下記)|
+| 4-11 | 常駐化: systemd user unit / launchd LaunchAgent + 導入手順 | ✅ | #141。`runner/deploy/` に起動シム + unit + plist + env 雛形。token は 0600 env ファイル(ユニットに平文を載せない)。user サービス限定([ADR-0023](../adr/0023-host-runner-architecture.md) の資格情報アクセス前提)。単一バイナリ移行はシムの `exec` 行 1 行(4-7)|
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
@@ -103,8 +104,8 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 ## Followups (in-phase but unfinished)
 
 - runner: バックエンド(4-4-0〜4-5)・server 補完(4-10)・dashboard 起動 UI
-  (4-8/4-9)・**D5(二重 live join 拒否)**は完了(#22 実装済)。**残るは 4-7
-  (単一バイナリ化、#70)**。
+  (4-8/4-9)・**D5(二重 live join 拒否)**は完了(#22 実装済)。常駐化(4-11、
+  #141)も完了。**残るは 4-7(#70)**。
 - **D5**: wrapper join 経路(`wrapper_channel`)で live owner 済み agent_id を
   **reject-newcomer** で拒否([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5、
   `AgentStates.connected?/2`)。既存を蹴る案はトークン保持者による敵対的 eviction を
