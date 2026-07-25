@@ -126,19 +126,47 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  # A silently-wrong default here breaks URL generation and check_origin
+  # without an obvious symptom (issue #139) — fail fast like
+  # SECRET_KEY_BASE above instead of falling back to "example.com".
+  host =
+    System.get_env("PHX_HOST") ||
+      raise """
+      environment variable PHX_HOST is missing.
+      Set it to the public hostname this server is reachable at (used for
+      URL generation and WebSocket check_origin).
+      """
 
   config :kaoiro_server, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  # Bind IP override (issue #139). Unset keeps the default below (all
+  # interfaces). Accepts any IPv4/IPv6 literal :inet.parse_address/1
+  # understands (e.g. "0.0.0.0", "::", "192.168.1.10"). Deliberately
+  # scoped to :prod only — config/dev.exs hardcodes both loopback
+  # (127.0.0.1) AND a repo-committed, publicly-known secret_key_base, so
+  # a KAOIRO_BIND_IP effective in :dev too would let a value in the
+  # .env shared with the prod/docker flow (server/README.md) silently
+  # expose that known key to the network the "dev is loopback-only"
+  # warning above assumes never happens.
+  bind_ip =
+    case System.get_env("KAOIRO_BIND_IP") do
+      nil ->
+        # Enable IPv6 and bind on all interfaces.
+        # Set it to {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
+        # See https://hexdocs.pm/bandit/Bandit.html#t:options/0 for
+        # IPv6 vs IPv4 and loopback vs public addresses.
+        {0, 0, 0, 0, 0, 0, 0, 0}
+
+      v ->
+        case :inet.parse_address(String.to_charlist(v)) do
+          {:ok, ip} -> ip
+          {:error, _reason} -> raise "invalid KAOIRO_BIND_IP: #{inspect(v)}"
+        end
+    end
+
   config :kaoiro_server, KaoiroServerWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
-    http: [
-      # Enable IPv6 and bind on all interfaces.
-      # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
-      # See the documentation on https://hexdocs.pm/bandit/Bandit.html#t:options/0
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
-    ],
+    http: [ip: bind_ip],
     secret_key_base: secret_key_base
 
   # ## SSL Support

@@ -83,8 +83,9 @@ related: [protocol, threat-model]
 | 項目 | env | 必須 | 備考 |
 |---|---|---|---|
 | シークレットキー | `SECRET_KEY_BASE` | 本番必須 | `mix phx.gen.secret`(64 バイト)生成。`openssl rand -hex 32` では短い |
-| ホスト名 | `PHX_HOST` | 本番必須 | 既定 `localhost` |
+| ホスト名 | `PHX_HOST` | 本番必須 | 未設定は起動時 raise (fail-fast、issue #139)。`.env.example` の既定値 `localhost` は開発/検証用 |
 | ポート | `PORT` | 任意 | 既定 4000 |
+| bind IP | `KAOIRO_BIND_IP` | 任意 | `:prod` (release) 限定。既定 = 全 IF。IPv4/IPv6 リテラル。dev (`mix phx.server`) は常に loopback 固定で対象外 (issue #139) |
 | クライアント認証 | `KAOIRO_CLIENT_TOKENS` | 実質必須 | `token:role` の複数。role = `operator` / `viewer`。未設定だと全クライアント拒否(fail-closed) |
 | wrapper 認証 | `KAOIRO_WRAPPER_TOKENS` | LAN 公開時必須 | `agent_id:token` の複数。未設定 = dev mode(loopback 限定) |
 | 立ち絵ディレクトリ | `KAOIRO_PERSONA_DIR` | 任意 | コンテナ内パス |
