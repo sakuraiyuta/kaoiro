@@ -20,7 +20,7 @@
 //   disables keychain reads (OAuth-only deployments would auth-fail).
 // - No MCP servers, no built-in tools, no hooks, no agents, no additional
 //   directories, no system prompt, no plugins. `settingsSources` is not
-//   available on SDK 0.3.208 Options (verified 2026-07-15); user settings
+//   available on SDK 0.3.220 Options (verified 2026-07-25); user settings
 //   are always loaded, which the isolated cwd cannot suppress.
 // - The prompt is a never-yielding AsyncIterable so no user_message is sent
 //   (no chat tokens, no session file write in practice — spike observed
@@ -172,7 +172,7 @@ async function main(): Promise<number> {
     const init = await q.initializationResult();
 
     // ADR-0039 F3: prefer init.models (the init control response already
-    // carries the catalog on SDK 0.3.208). Fall back to supportedModels()
+    // carries the catalog on SDK 0.3.220). Fall back to supportedModels()
     // only when init did not surface a usable array — future-proofs against
     // SDK response shape drift without paying the second round-trip today.
     let modelsRaw: unknown[] = [];
