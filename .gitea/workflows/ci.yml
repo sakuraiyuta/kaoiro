@@ -54,6 +54,11 @@ jobs:
   #   - `container:` with a hexpm image: it ships no node, so every JS action
   #     (actions/checkout) fails with exit 127. Hence the explicit
   #     `docker run`, which the server-image job proves works here.
+  #   - `docker run -v "$PWD:/src"`: the step itself already runs inside a
+  #     container, so the daemon resolves the bind mount against ITS OWN
+  #     filesystem and mounts an empty dir ("Could not find a Mix.Project").
+  #     The source therefore has to reach the container as a stream, the same
+  #     way `docker build` sends its context — hence the tar pipe below.
   #   - The image is NOT the one server/Dockerfile builds the release with
   #     (Elixir 1.19.5 / OTP 26.2.5.1). OTP 26's beam_asm cannot compile this
   #     suite's Japanese test names ("argument 1: not an iolist term"), so
@@ -66,9 +71,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: mix checks
         run: |
-          docker run --rm -v "$PWD:/src" -w /src/server \
+          # --no-xattrs drops attributes the build has no use for. Reproducing
+          # this on macOS additionally needs COPYFILE_DISABLE=1: bsdtar's
+          # copyfile metadata is separate from xattrs and unpacks as
+          # AppleDouble files, which `mix format` then parses as Elixir.
+          tar --no-xattrs -cf - server | docker run --rm -i -w /w \
             docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
             sh -euc '
+              tar -xf - -C /w
+              cd /w/server
               mix local.hex --force
               mix local.rebar --force
               mix deps.get
