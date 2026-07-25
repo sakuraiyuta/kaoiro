@@ -273,19 +273,30 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # not append — a server that survived the crash still holds the same
   # session's pre-crash lines). Broadcast `history_reset` so every connected
   # operator clears its transcript before the replayed lines arrive
-  # (operator-only gate in AgentsChannel). Empty payload; the topic carries
-  # the agent_id. `:noop` (no state entry yet) is still acked — the wrapper
-  # did nothing wrong.
+  # (operator-only gate in AgentsChannel). replay_id pairs this reset with
+  # `history_replay_complete`, the deterministic boundary after the final
+  # reconstructed JSONL row. `:noop` (no state entry yet) is still acked —
+  # the wrapper did nothing wrong.
   @impl true
-  def handle_in("history_reset", _payload, socket) do
+  def handle_in("history_reset", payload, socket) do
     agent_id = socket.assigns.agent_id
+    replay_id = if is_map(payload), do: Map.get(payload, "replay_id"), else: nil
 
     case AgentStates.reset_history(agent_id) do
       :ok ->
-        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_reset", %{
+        reset_payload = %{
           "agent_id" => agent_id,
           "preserve_inter_agent" => true
-        })
+        }
+
+        reset_payload =
+          if is_binary(replay_id) and replay_id != "" do
+            Map.put(reset_payload, "replay_id", replay_id)
+          else
+            reset_payload
+          end
+
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_reset", reset_payload)
 
         {:reply, :ok, socket}
 
@@ -293,6 +304,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
         {:reply, :ok, socket}
     end
   end
+
+  # Explicitly closes a reset/replay window. Reconstructed log envelopes use
+  # the ordinary `envelope` route, so this marker is the only deterministic
+  # distinction available to a dashboard before the next live assistant line.
+  @impl true
+  def handle_in("history_replay_complete", %{"replay_id" => replay_id}, socket)
+      when is_binary(replay_id) and replay_id != "" do
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_complete", %{
+      "agent_id" => socket.assigns.agent_id,
+      "replay_id" => replay_id
+    })
+
+    {:reply, :ok, socket}
+  end
+
+  def handle_in("history_replay_complete", _payload, socket), do: {:reply, :ok, socket}
 
   # log / result are reply transcript lines kept as history (ADR-0012);
   # state_change / permission_request refresh the latest state.

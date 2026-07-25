@@ -556,8 +556,9 @@ async function main(): Promise<void> {
       // this session's pre-crash lines is overwritten even when
       // reconstruction yields nothing (e.g. a transcript of only bookkeeping
       // lines); then replay whatever was rebuilt.
-      link.sendHistoryReset();
+      const replayId = link.sendHistoryReset();
       for (const envelope of history) link.send(envelope);
+      link.sendHistoryReplayComplete(replayId);
     }
     await host.run(prompt);
   } finally {

@@ -18,13 +18,18 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ResponseTimeline from "../src/lib/ResponseTimeline.svelte";
-import type { Envelope } from "../src/lib/protocol";
+import {
+  conversationEntryKey,
+  type ConversationEntry,
+} from "../src/lib/conversationTimeline";
+import type { DirectoryEntry, Envelope } from "../src/lib/protocol";
 
 const mounted: object[] = [];
 
 afterEach(async () => {
   for (const component of mounted.splice(0)) await unmount(component);
   document.body.innerHTML = "";
+  vi.useRealTimers();
 });
 
 const NOW = Date.parse("2026-07-23T15:00:00Z");
@@ -75,11 +80,27 @@ function toolUse(agentId: string, ts: string): Envelope {
   };
 }
 
+function interAgent(agentId: string, to: string, ts: string): Envelope {
+  return {
+    version: "0",
+    agent_id: agentId,
+    ts,
+    type: "inter_agent_message",
+    state: "tool_running",
+    payload: { to, body: "handoff" },
+  };
+}
+
 async function renderTimeline(options: {
   agents: Record<string, Envelope>;
+  directory?: Record<string, DirectoryEntry>;
   logs: Record<string, Envelope[]>;
   now?: number;
-  onSelectAgent?: (id: string) => void;
+  readTimelineEntryKeys?: ReadonlySet<string>;
+  newTimelineEntryKeys?: ReadonlySet<string>;
+  onMarkRead?: (key: string) => void;
+  onArrivalAnimationComplete?: (key: string) => void;
+  onSelectAgent?: (entry: ConversationEntry) => void;
 }) {
   const target = document.createElement("div");
   document.body.append(target);
@@ -87,9 +108,20 @@ async function renderTimeline(options: {
     target,
     props: {
       agents: options.agents,
+      ...(options.directory ? { directory: options.directory } : {}),
       logs: options.logs,
       manifest: null,
       now: options.now ?? NOW,
+      ...(options.readTimelineEntryKeys
+        ? { readTimelineEntryKeys: options.readTimelineEntryKeys }
+        : {}),
+      ...(options.newTimelineEntryKeys
+        ? { newTimelineEntryKeys: options.newTimelineEntryKeys }
+        : {}),
+      ...(options.onMarkRead ? { onMarkRead: options.onMarkRead } : {}),
+      ...(options.onArrivalAnimationComplete
+        ? { onArrivalAnimationComplete: options.onArrivalAnimationComplete }
+        : {}),
       onSelectAgent: options.onSelectAgent ?? vi.fn(),
     },
   });
@@ -166,6 +198,114 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     expect(name?.textContent).toBe("あお");
   });
 
+  it("agent 発話は未閲覧で始まり、300ms hover または click で既読になる", async () => {
+    vi.useFakeTimers();
+    const onSelectAgent = vi.fn();
+    const onMarkRead = vi.fn();
+    const target = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [assistant("lab-pc.a", secAgo(10), "hi")] },
+      onSelectAgent,
+      onMarkRead,
+    });
+    const row = target.querySelector<HTMLButtonElement>(".row")!;
+    expect(row.classList.contains("unread")).toBe(true);
+
+    row.dispatchEvent(new MouseEvent("mouseenter"));
+    await vi.advanceTimersByTimeAsync(299);
+    expect(row.classList.contains("unread")).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    await tick();
+    expect(onMarkRead).toHaveBeenCalledWith(
+      conversationEntryKey(assistant("lab-pc.a", secAgo(10), "hi")),
+    );
+
+    row.click();
+    expect(onSelectAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detailAgentId: "lab-pc.a",
+        envelope: expect.objectContaining({
+        agent_id: "lab-pc.a",
+        type: "log",
+        }),
+      }),
+    );
+  });
+
+  it("user prompt は初期から既読で、短い hover では未閲覧状態を作らない", async () => {
+    vi.useFakeTimers();
+    const target = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [user("lab-pc.a", secAgo(10), "hey")] },
+    });
+    const row = target.querySelector<HTMLButtonElement>(".row")!;
+    expect(row.classList.contains("unread")).toBe(false);
+    row.dispatchEvent(new MouseEvent("mouseenter"));
+    await vi.advanceTimersByTimeAsync(300);
+    await tick();
+    expect(row.classList.contains("unread")).toBe(false);
+  });
+
+  it("live arrival key を渡した agent 行だけに一回限りの点滅 class を付ける", async () => {
+    const env = assistant("lab-pc.a", secAgo(10), "live reply");
+    const target = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [env] },
+      newTimelineEntryKeys: new Set([conversationEntryKey(env)]),
+    });
+    expect(target.querySelector(".row")?.classList.contains("new-arrival")).toBe(
+      true,
+    );
+  });
+
+  it("row click → detail → close 相当の remount 後も既読を維持する", async () => {
+    const env = assistant("lab-pc.a", secAgo(10), "read persists");
+    let readKeys = new Set<string>();
+    const first = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [env] },
+      onMarkRead: (key) => (readKeys = new Set(readKeys).add(key)),
+    });
+    first.querySelector<HTMLButtonElement>(".row")!.click();
+    expect(readKeys).toEqual(new Set([conversationEntryKey(env)]));
+
+    // App owns this Set while the detail view unmounts the timeline. Closing
+    // the detail mounts a fresh ResponseTimeline with the same session state.
+    const remounted = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [env] },
+      readTimelineEntryKeys: readKeys,
+    });
+    expect(remounted.querySelector(".row")?.classList.contains("unread")).toBe(false);
+  });
+
+  it("animationend で消費した arrival marker は remount 後に再点滅しない", async () => {
+    const env = assistant("lab-pc.a", secAgo(10), "one shot");
+    let arrivalKeys = new Set([conversationEntryKey(env)]);
+    const first = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [env] },
+      newTimelineEntryKeys: arrivalKeys,
+      onArrivalAnimationComplete: (key) => {
+        const next = new Set(arrivalKeys);
+        next.delete(key);
+        arrivalKeys = next;
+      },
+    });
+    const row = first.querySelector<HTMLButtonElement>(".row")!;
+    const end = new Event("animationend");
+    Object.defineProperty(end, "animationName", { value: "timeline-arrival" });
+    row.dispatchEvent(end);
+    expect(arrivalKeys).toEqual(new Set());
+
+    const remounted = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [env] },
+      newTimelineEntryKeys: arrivalKeys,
+    });
+    expect(remounted.querySelector(".row")?.classList.contains("new-arrival")).toBe(false);
+  });
+
   it("tool_use / tool_result / state_change / inter_agent_message は除外", async () => {
     const agents = { "lab-pc.a": stateEnv("lab-pc.a", "あお") };
     const logs = {
@@ -180,7 +320,7 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     expect(rows[0]?.querySelector(".summary")?.textContent).toContain("keep");
   });
 
-  it("row クリックで onSelectAgent(agentId) を発火 (送信先 agent を渡す)", async () => {
+  it("row クリックで agent と該当 envelope を渡す", async () => {
     const onSelectAgent = vi.fn();
     const target = await renderTimeline({
       agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
@@ -191,8 +331,56 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     });
     const button = target.querySelector<HTMLButtonElement>(".row")!;
     button.click();
-    // user prompt でも click は送信先 agent の詳細を開く。
-    expect(onSelectAgent).toHaveBeenCalledWith("lab-pc.a");
+    // user prompt でも click は送信先 agent と transcript anchor を渡す。
+    expect(onSelectAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detailAgentId: "lab-pc.a",
+        envelope: expect.objectContaining({
+          agent_id: "lab-pc.a",
+          type: "log",
+          payload: { kind: "user", text: "hey" },
+        }),
+      }),
+    );
+  });
+
+  it("directory-only IA の click は directory fallback の sender pane を選ぶ", async () => {
+    const onSelectAgent = vi.fn();
+    const target = await renderTimeline({
+      agents: {},
+      directory: {
+        "offline.sender": {
+          persona: { id: "ao", name: "あお", sprite_set: "ao" },
+          last_seen: null,
+        },
+      },
+      logs: {
+        "offline.sender": [
+          interAgent("offline.sender", "agent-b", secAgo(10)),
+        ],
+      },
+      onSelectAgent,
+    });
+    target.querySelector<HTMLButtonElement>(".row")!.click();
+    expect(onSelectAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ detailAgentId: "offline.sender" }),
+    );
+  });
+
+  it("server synthetic IA の click は recipient pane を選ぶ", async () => {
+    const onSelectAgent = vi.fn();
+    const target = await renderTimeline({
+      agents: { "agent-b": stateEnv("agent-b", "もも") },
+      logs: { "agent-b": [interAgent("server", "agent-b", secAgo(10))] },
+      onSelectAgent,
+    });
+    target.querySelector<HTMLButtonElement>(".row")!.click();
+    expect(onSelectAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "server",
+        detailAgentId: "agent-b",
+      }),
+    );
   });
 
   it("空 summary の assistant は '(空応答)' を表示", async () => {

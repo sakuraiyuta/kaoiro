@@ -370,9 +370,17 @@ export class ServerLink {
    *  resume history replay (ADR-0014 phase-2, issue #50), so the
    *  reconstructed lines overwrite rather than duplicate any pre-crash lines
    *  the server still holds for the same session. The topic carries the
-   *  agent_id; the payload is empty. */
-  sendHistoryReset(): void {
-    this.#channel.push("history_reset", {});
+   *  agent_id. Its replay token pairs reset with the completion boundary so
+   *  clients can distinguish reconstructed rows from the next live reply. */
+  sendHistoryReset(): string {
+    const replayId = `resume-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    this.#channel.push("history_reset", { replay_id: replayId });
+    return replayId;
+  }
+
+  /** Pushes the explicit end boundary after the final resume JSONL row. */
+  sendHistoryReplayComplete(replayId: string): void {
+    this.#channel.push("history_replay_complete", { replay_id: replayId });
   }
 
   /** Fetches the peer directory (protocol-inter-agent companion tool). The

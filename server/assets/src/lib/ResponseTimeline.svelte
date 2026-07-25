@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   // 実機検収 3 (2026-07-23 マスター指示): per-agent 最終応答一覧から
   // 「全 agent の会話ログを時系列マージ」に切り替え。 純関数の
   // 分類ロジックは conversationTimeline.ts が担当し、この component は
@@ -12,7 +13,11 @@
   // (badge + row 色の tone) で。
 
   import { spriteUrlFor } from "./expression";
-  import { conversationEntries } from "./conversationTimeline";
+  import {
+    conversationEntries,
+    conversationEntryKey,
+    type ConversationEntry,
+  } from "./conversationTimeline";
   import { formatRelativeJa } from "./relativeTime";
   import type { DirectoryEntry, Envelope, PersonaManifest } from "./protocol";
 
@@ -22,6 +27,10 @@
     logs,
     manifest = null,
     now,
+    readTimelineEntryKeys = new Set<string>(),
+    newTimelineEntryKeys = new Set<string>(),
+    onMarkRead = () => {},
+    onArrivalAnimationComplete = () => {},
     onSelectAgent,
   }: {
     /** Persona lookup 用の agent 状態 map。 state 変更や filter には
@@ -37,14 +46,64 @@
     manifest?: PersonaManifest | null;
     /** ms clock。 formatRelativeJa の tick 用に App から受ける。 */
     now: number;
+    /** App session が所有する既読 marker。detail 表示でこの component が
+     * unmount しても既読状態を失わない。 */
+    readTimelineEntryKeys?: ReadonlySet<string>;
+    /** onEnvelope 経由で追加された行だけの一回限り arrival marker (#125)。
+     * history / snapshot は App がこの set に入れないため、初期描画では
+     * アニメーションしない。 */
+    newTimelineEntryKeys?: ReadonlySet<string>;
+    onMarkRead?: (key: string) => void;
+    /** CSS animation 完了時に App の one-shot marker を消費する。 */
+    onArrivalAnimationComplete?: (key: string) => void;
     /** row click → 該当 agent の詳細を開く。 App.svelte 側で origin=null
      *  にして expand animation を省略する契約。 */
-    onSelectAgent: (agentId: string) => void;
+    onSelectAgent: (entry: ConversationEntry) => void;
   } = $props();
 
   const entries = $derived(conversationEntries(logs));
   let visibleCount = $state(50);
   const visibleEntries = $derived(entries.slice(0, visibleCount));
+  const readTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const HOVER_READ_DELAY_MS = 300;
+
+  function canBeUnread(kind: string): boolean {
+    return kind === "agent" || kind === "inter_agent";
+  }
+
+  function markRead(key: string): void {
+    const timer = readTimers.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      readTimers.delete(key);
+    }
+    if (readTimelineEntryKeys.has(key)) return;
+    onMarkRead(key);
+  }
+
+  function scheduleRead(key: string, kind: string): void {
+    if (
+      !canBeUnread(kind) ||
+      readTimelineEntryKeys.has(key) ||
+      readTimers.has(key)
+    ) return;
+    readTimers.set(
+      key,
+      setTimeout(() => markRead(key), HOVER_READ_DELAY_MS),
+    );
+  }
+
+  function cancelScheduledRead(key: string): void {
+    const timer = readTimers.get(key);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    readTimers.delete(key);
+  }
+
+  onDestroy(() => {
+    for (const timer of readTimers.values()) clearTimeout(timer);
+    readTimers.clear();
+  });
 
   function loadMore(event: Event): void {
     const target = event.currentTarget;
@@ -75,9 +134,10 @@
     <p class="empty">まだ会話なし</p>
   {:else}
     <ul class="rows" onscroll={loadMore}>
-      {#each visibleEntries as entry (entry.envelope.agent_id + "|" + entry.envelope.ts + "|" + (entry.envelope.seq ?? 0) + "|" + entry.envelope.type + "|" + entry.kind)}
+      {#each visibleEntries as entry (conversationEntryKey(entry.envelope))}
         {@const state = stateFor(entry.agentId)}
         {@const sprite = personaSprite(entry.agentId, state)}
+        {@const key = conversationEntryKey(entry.envelope)}
         <li>
           <button
             type="button"
@@ -85,7 +145,19 @@
             class:from-user={entry.kind === "user"}
             class:from-agent={entry.kind === "agent"}
             class:inter-agent={entry.kind === "inter_agent"}
-            onclick={() => onSelectAgent(entry.agentId)}
+            class:unread={canBeUnread(entry.kind) && !readTimelineEntryKeys.has(key)}
+            class:new-arrival={canBeUnread(entry.kind) && newTimelineEntryKeys.has(key)}
+            onmouseenter={() => scheduleRead(key, entry.kind)}
+            onmouseleave={() => cancelScheduledRead(key)}
+            onanimationend={(event) => {
+              if (event.animationName === "timeline-arrival") {
+                onArrivalAnimationComplete(key);
+              }
+            }}
+            onclick={() => {
+              markRead(key);
+              onSelectAgent(entry);
+            }}
             title={`${personaName(entry.agentId)} の詳細を開く`}
           >
             <span class="portrait" aria-hidden="true">
@@ -199,6 +271,44 @@
     outline: none;
   }
 
+  /* #124: 静かな青紫の面で未閲覧を残す。hover 中も少しだけ明度を上げる
+     ので、既存の focus/hover 枠と区別しながら 300ms 後の既読化も分かる。 */
+  .row.unread {
+    background: color-mix(in srgb, var(--c-thinking) 14%, var(--bg-card));
+  }
+
+  .row.unread:hover,
+  .row.unread:focus-visible {
+    background: color-mix(in srgb, var(--c-thinking) 18%, var(--bg-card));
+  }
+
+  /* #125: live stream で追加された行だけを 1 回パルスさせる。最終色を
+     未閲覧の背景色と揃えることで、アニメーション終了後も #124 の静的な
+     マーカーが自然に残る。 */
+  .row.new-arrival {
+    animation: timeline-arrival 1.35s ease-in-out;
+  }
+
+  @keyframes timeline-arrival {
+    0% {
+      background: color-mix(in srgb, var(--c-thinking) 34%, var(--bg-card));
+    }
+
+    38% {
+      background: color-mix(in srgb, var(--c-thinking) 22%, var(--bg-card));
+    }
+
+    100% {
+      background: color-mix(in srgb, var(--c-thinking) 14%, var(--bg-card));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row.new-arrival {
+      animation-duration: 0.01ms;
+    }
+  }
+
   .portrait {
     flex: 0 0 auto;
     width: 2.25rem;
@@ -271,9 +381,13 @@
     color: var(--fg-dim);
     font-size: var(--fs-body-sm);
     line-height: 1.35;
+    /* #126: 短い preview も 3 行ぶんの面積を確保する。固定値ではなく
+       line-height と同じ em 基準にすることで、文字サイズの設定変更にも
+       追従する。 */
+    min-block-size: 4.05em;
     display: -webkit-box;
-    -webkit-line-clamp: 1;
-    line-clamp: 1;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }

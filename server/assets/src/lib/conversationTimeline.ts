@@ -23,7 +23,7 @@
 // 純関数のまま提供 (vitest で決定的に pin できるように)。 UI 側の
 // 描画は ResponseTimeline.svelte が担当。
 
-import type { Envelope } from "./protocol";
+import { transcriptEntryKey, type Envelope } from "./protocol";
 
 /** 1 行のプレビュー最大文字数。 latestReply.ts と同じ 80 で揃える。 */
 export const SUMMARY_MAX_CHARS = 80;
@@ -36,6 +36,10 @@ export interface ConversationEntry {
    *  transcript 内に log kind=user として現れるので、その agent の
    *  persona を左に置くのが自然 (「誰との会話か」を判別)。 */
   agentId: string;
+  /** Detail pane and transcript anchor that owns this displayed row. IA is
+   * duplicated across panes; synthetic server IA deliberately targets its
+   * real recipient pane instead of a phantom `server` pane. */
+  detailAgentId: string;
   envelope: Envelope;
   /** user prompt か agent 発話かの区別。 UI は軽い styling で発信元
     が分かれば十分 (badge / opacity 等) — 描画側の判断。 */
@@ -45,6 +49,22 @@ export interface ConversationEntry {
   /** 1 行に丸めた plain-text preview。 空文字なら UI 側で
    *  placeholder ("(空応答)" 等) を出す判断。 */
   text: string;
+}
+
+/** A timeline row's stable identity. Kept identical to transcript merging so
+ * quota-generated synthetic IA rows cannot collapse or share read/pulse UI
+ * state. */
+export function conversationEntryKey(envelope: Envelope): string {
+  return transcriptEntryKey(envelope);
+}
+
+/** #125 のライブ到着シグナル対象。operator 自身が送った prompt は
+ * 通知対象にせず、agent の応答と inter-agent 連携だけを視覚的に知らせる。 */
+export function isTimelineArrival(envelope: Envelope): boolean {
+  if (envelope.type === "inter_agent_message") return true;
+  if (envelope.type !== "log") return false;
+  const payload = envelope.payload as { kind?: unknown } | undefined;
+  return payload?.kind === "assistant";
 }
 
 // ふじ 検収 2 fix-round A3 (2026-07-23): 丸めは code point 単位で
@@ -66,7 +86,7 @@ function compareTs(a: Envelope, b: Envelope): number {
   return (a.seq ?? 0) - (b.seq ?? 0);
 }
 
-function classify(agentId: string, env: Envelope): ConversationEntry | null {
+function classify(paneAgentId: string, env: Envelope): ConversationEntry | null {
   // ふじ 検収 2 fix-round M4 (2026-07-23): result は turn boundary
   // 扱いで除外。 assistant と result の text は同一なので、両方採用
   // すると通常 turn が 2 行重複表示になる (AgentDetail の #29 前例と
@@ -82,6 +102,13 @@ function classify(agentId: string, env: Envelope): ConversationEntry | null {
       // from its true sender so a receiver-pane duplicate cannot change its
       // portrait or click target.
       agentId: env.agent_id,
+      // Ordinary IA opens the source pane, while server-generated IA has no
+      // source pane and must open the real recipient's transcript. The
+      // server stores that synthetic envelope in the recipient pane too.
+      detailAgentId:
+        env.agent_id === "server" && recipientId !== undefined
+          ? recipientId
+          : paneAgentId,
       envelope: env,
       kind: "inter_agent",
       ...(recipientId ? { recipientId } : {}),
@@ -95,14 +122,21 @@ function classify(agentId: string, env: Envelope): ConversationEntry | null {
     const text = typeof payload?.text === "string" ? payload.text : "";
     if (payload?.kind === "assistant") {
       return {
-        agentId,
+        agentId: paneAgentId,
+        detailAgentId: paneAgentId,
         envelope: env,
         kind: "agent",
         text: toSummary(text),
       };
     }
     if (payload?.kind === "user") {
-      return { agentId, envelope: env, kind: "user", text: toSummary(text) };
+      return {
+        agentId: paneAgentId,
+        detailAgentId: paneAgentId,
+        envelope: env,
+        kind: "user",
+        text: toSummary(text),
+      };
     }
     // tool_use / tool_result などは exclude。
     return null;
@@ -124,13 +158,7 @@ export function conversationEntries(
       const entry = classify(agentId, envelope);
       if (entry) {
         if (entry.kind === "inter_agent") {
-          const key = [
-            envelope.agent_id,
-            envelope.session_id ?? "",
-            envelope.ts,
-            envelope.seq ?? 0,
-            envelope.type,
-          ].join("|");
+          const key = conversationEntryKey(envelope);
           if (seenInterAgent.has(key)) continue;
           seenInterAgent.add(key);
         }

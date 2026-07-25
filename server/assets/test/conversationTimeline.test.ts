@@ -4,7 +4,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  conversationEntryKey,
   conversationEntries,
+  isTimelineArrival,
   SUMMARY_MAX_CHARS,
 } from "../src/lib/conversationTimeline";
 import type { Envelope } from "../src/lib/protocol";
@@ -178,6 +180,27 @@ describe("conversationEntries (実機検収 3)", () => {
     expect(entries[0]?.kind).toBe("inter_agent");
   });
 
+  it("directory-only sender の IA は sender detail pane へ到達できる", () => {
+    const message = interAgent("offline.sender", "agent-b", "2026-07-23T14:10:00Z");
+    const [entry] = conversationEntries({ "offline.sender": [message] });
+    expect(entry?.agentId).toBe("offline.sender");
+    expect(entry?.detailAgentId).toBe("offline.sender");
+  });
+
+  it("server synthetic IA は recipient detail pane へ到達し、recipient 別行を保つ", () => {
+    const first = { ...interAgent("server", "agent-a", "2026-07-23T14:10:00Z"), seq: 9 };
+    const second = { ...first, payload: { ...first.payload!, to: "agent-b" } };
+    const entries = conversationEntries({
+      "agent-a": [first],
+      "agent-b": [second],
+    });
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.detailAgentId).sort()).toEqual([
+      "agent-a",
+      "agent-b",
+    ]);
+  });
+
   it("user prompt entry の agentId は prompt が echoed された agent (送信先)", () => {
     // user prompt は operator が agent-a に送ったので、agent-a の
     // transcript に log kind=user として現れる。 entry.agentId が
@@ -200,6 +223,33 @@ describe("conversationEntries (実機検収 3)", () => {
       "agent-b": [b],
     });
     expect(entries).toHaveLength(2);
+  });
+
+  it("行 identity は session を含み、server synthetic IA は recipient も含む", () => {
+    const env = {
+      ...assistant("agent-a", "2026-07-23T14:00:00Z", "a"),
+      seq: 7,
+      session_id: "session-a",
+    };
+    expect(conversationEntryKey(env)).toBe(
+      "agent-a|session-a|2026-07-23T14:00:00Z|7|log|",
+    );
+    const first = { ...interAgent("server", "agent-a", "2026-07-23T14:00:00Z"), seq: 7 };
+    const second = { ...first, payload: { ...first.payload!, to: "agent-b" } };
+    expect(conversationEntryKey(first)).not.toBe(conversationEntryKey(second));
+  });
+
+  it("live arrival は agent 応答と inter-agent だけを対象にする", () => {
+    expect(isTimelineArrival(assistant("agent-a", "2026-07-23T14:00:00Z", "a"))).toBe(
+      true,
+    );
+    expect(isTimelineArrival(interAgent("agent-a", "agent-b", "2026-07-23T14:00:00Z"))).toBe(
+      true,
+    );
+    expect(isTimelineArrival(user("agent-a", "2026-07-23T14:00:00Z", "prompt"))).toBe(
+      false,
+    );
+    expect(isTimelineArrival(toolUse("agent-a", "2026-07-23T14:00:00Z"))).toBe(false);
   });
 
   it("長文 assistant は SUMMARY_MAX_CHARS で切り詰め + 省略記号", () => {

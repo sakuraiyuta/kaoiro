@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from "svelte";
+  import { conversationEntryKey } from "./conversationTimeline";
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
@@ -41,6 +42,7 @@
     sessions = null,
     resetMode = null,
     origin = null,
+    scrollToEntryKey = null,
     onClose,
     onSelectAgent,
   }: {
@@ -60,6 +62,10 @@
     resetMode?: SessionResetMode | null;
     /** Viewport centre of the originating tile, for the expand anim (#36). */
     origin?: { x: number; y: number } | null;
+    /** Stable identity of the timeline row that opened this detail. It is
+     * deliberately a key rather than an envelope so server-synthetic IA can
+     * target the recipient pane even though its producer is `server`. */
+    scrollToEntryKey?: string | null;
     onClose: () => void;
     /** Switch the detail view to another agent (clicked peer link in an
      *  inter-agent message bubble). Omitted = peer name renders as static
@@ -982,6 +988,62 @@
   // highlight while hovered (#40).
   let hoveredTool = $state<string | null>(null);
   let logEl = $state<HTMLDivElement | null>(null);
+  const TIMELINE_SCROLL_TOP_GAP_PX = 24;
+  // A target near the end needs temporary scrollable room below it; otherwise
+  // the browser clamps at the transcript's bottom and cannot place it 24px
+  // below the top edge. This is reset for ordinary detail navigation.
+  let timelineScrollTailPx = $state(0);
+  let handledTimelineScrollTarget: string | null = null;
+
+  function resetTimelineScrollTail(): void {
+    timelineScrollTailPx = 0;
+    logEl?.style.setProperty("--timeline-scroll-tail", "0px");
+  }
+
+  async function scrollToTimelineEntry(targetKey: string): Promise<boolean> {
+    if (!logEl) return false;
+    const findEntry = (): HTMLElement | undefined =>
+      [...logEl!.querySelectorAll<HTMLElement>("[data-envelope-key]")].find(
+        (candidate) => candidate.dataset.envelopeKey === targetKey,
+      );
+    const entry = findEntry();
+    if (!entry) {
+      // clear/reset can remove a previously selected target. Do not leave
+      // its temporary scroll room behind on the next ordinary transcript.
+      resetTimelineScrollTail();
+      return false;
+    }
+
+    // Start from natural content height. A previous near-tail target may have
+    // left temporary padding in place; including it would under/over-estimate
+    // the next target's needed tail.
+    resetTimelineScrollTail();
+    const entryTop =
+      entry.getBoundingClientRect().top - logEl.getBoundingClientRect().top +
+      logEl.scrollTop;
+    const desiredTop = Math.max(0, entryTop - TIMELINE_SCROLL_TOP_GAP_PX);
+    const naturalMaxTop = Math.max(0, logEl.scrollHeight - logEl.clientHeight);
+    // Existing content below the row already supplies some scroll range;
+    // append only the shortfall rather than a whole viewport for every row.
+    const tailPx = Math.max(0, desiredTop - naturalMaxTop);
+    timelineScrollTailPx = tailPx;
+    // Svelte の次の DOM flush を待たず、padding を即時反映して末尾行でも
+    // scroll range を確保する。state も同時に更新するので以後の re-render
+    // では同じ値が維持される。
+    logEl.style.setProperty("--timeline-scroll-tail", `${tailPx}px`);
+    const settledEntry = findEntry();
+    if (!settledEntry) return false;
+    const top = Math.max(
+      0,
+      settledEntry.getBoundingClientRect().top - logEl.getBoundingClientRect().top +
+        logEl.scrollTop -
+        TIMELINE_SCROLL_TOP_GAP_PX,
+    );
+    logEl.scrollTo({ top, behavior: "smooth" });
+    stickToBottom = false;
+    scrollMemory.set(envelope.agent_id, { top, stick: false });
+    return true;
+  }
 
   // Pin-to-bottom intent: true while the operator is reading the tail of
   // the log, false once they scroll up to inspect earlier output. The
@@ -1018,6 +1080,25 @@
     void logs.length;
     const agentId = envelope.agent_id;
     const switching = scrollAgent !== agentId;
+    const timelineTarget = scrollToEntryKey;
+    if (timelineTarget === null) {
+      resetTimelineScrollTail();
+      handledTimelineScrollTarget = null;
+    }
+    const timelineTargetPresent =
+      timelineTarget !== null &&
+      logs.some((entry) => conversationEntryKey(entry) === timelineTarget);
+    if (timelineTarget !== null && !timelineTargetPresent) {
+      // history clear/reset can replace a handled row with a same-length
+      // transcript. Check membership, not only `logs.length`, so its old
+      // tail padding cannot survive that replacement.
+      resetTimelineScrollTail();
+      handledTimelineScrollTarget = null;
+    }
+    const shouldScrollTimelineTarget =
+      timelineTarget !== null &&
+      timelineTargetPresent &&
+      timelineTarget !== handledTimelineScrollTarget;
     // Snapshot synchronously BEFORE the new logs commit: once Svelte renders
     // the new envelopes, scrollHeight grows and a fresh "at the bottom"
     // measurement no longer reflects the operator's prior intent. untrack
@@ -1042,6 +1123,19 @@
       }
       // The component may have unmounted during the await; re-check logEl.
       if (!logEl) return;
+      // #122: timeline click has an explicit reading target. Do this before
+      // the ordinary pin/restore path so its smooth scroll cannot be
+      // overwritten by the default "latest message" position. If history has
+      // not arrived yet, leave the target pending; the next logs update tries
+      // again with the same envelope identity.
+      if (
+        shouldScrollTimelineTarget &&
+        timelineTarget !== null &&
+        (await scrollToTimelineEntry(timelineTarget))
+      ) {
+        handledTimelineScrollTarget = timelineTarget;
+        return;
+      }
       if (restoreTop === null && !shouldStick) return;
       // The composer reflows one frame late (e.g. stagedFiles clearing on
       // send), and an in-flow permission/question dock appearing or clearing
@@ -1967,7 +2061,12 @@
     </aside>
 
     <div class="main">
-      <div class="log" bind:this={logEl} onscroll={handleLogScroll}>
+      <div
+        class="log"
+        bind:this={logEl}
+        onscroll={handleLogScroll}
+        style={`--timeline-scroll-tail: ${timelineScrollTailPx}px`}
+      >
         {#if logs.length === 0}
           <p class="empty">まだ返答はありません。</p>
         {/if}
@@ -1977,10 +2076,14 @@
           {@const iam = interAgentMessageOf(env)}
           {@const time = formatTime(env.ts)}
           {@const dateLabel = dayDividers.get(i)}
-          {#if dateLabel}
-            <div class="day-divider"><span>{dateLabel}</span></div>
-          {/if}
-          {#if env.type === "session_boundary"}
+          <div
+            class="transcript-entry"
+            data-envelope-key={conversationEntryKey(env)}
+          >
+            {#if dateLabel}
+              <div class="day-divider"><span>{dateLabel}</span></div>
+            {/if}
+            {#if env.type === "session_boundary"}
             <!-- phase-17 17-7 (ADR-0036 F3): session boundary marker. The
                  operator payload carries mode / request_id /
                  previous_session_id / to_session_id; the viewer sees only
@@ -2126,7 +2229,8 @@
               {/if}
               <time class="ts" datetime={env.ts}>{time}</time>
             </p>
-          {/if}
+            {/if}
+          </div>
         {/each}
       </div>
 
@@ -3245,7 +3349,20 @@
     flex-direction: column;
     gap: 0.6rem;
     overflow-y: auto;
-    padding-right: 0.4rem;
+    box-sizing: border-box;
+    padding: 0 0.4rem var(--timeline-scroll-tail, 0) 0;
+    scroll-padding-top: 24px;
+  }
+
+  /* #122: Each envelope exposes a stable DOM anchor for timeline navigation.
+     Keep the former direct-child rhythm by putting the date divider and its
+     envelope body in the same small flex group. */
+  .transcript-entry {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 0.6rem;
+    scroll-margin-top: 24px;
   }
 
   .empty {

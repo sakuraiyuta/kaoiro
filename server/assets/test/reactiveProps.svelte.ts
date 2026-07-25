@@ -31,6 +31,22 @@ export function makeReactiveAgentDetailProps(
   return state;
 }
 
+/** Test-only reactive props for #122 scroll-target lifecycle checks. */
+export interface ReactiveTimelineDetailProps {
+  envelope: Envelope;
+  logs: Envelope[];
+  agents: Record<string, Envelope>;
+  scrollToEntryKey: string | null;
+  onClose: () => void;
+}
+
+export function makeReactiveTimelineDetailProps(
+  initial: ReactiveTimelineDetailProps,
+): ReactiveTimelineDetailProps {
+  const state = $state(initial);
+  return state;
+}
+
 // Phase 20 (ADR-0039): reactive wrapper for LaunchDialog props so an
 // integration test can rotate `hosts[i].engines[].models` in-place and pin
 // that the auto-refresh $effect does NOT re-fire on catalog-only rotations
