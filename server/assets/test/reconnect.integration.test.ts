@@ -210,47 +210,48 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", 
     expect(FakeWebSocket.instances.length).toBe(1);
   });
 
-  it("(D) invert-test: clearHeartbeats を no-op 化すると heartbeatTimeout 経由で 3 本目以降 transport が生える (drain 実効性 pin)", async () => {
-    // ふじ round 3 must-fix 1 (round 4 対応): drain 実装をうっかり削っても
-    // 前 test 群が緑のまま通ってしまう構造的弱点を塞ぐ。Socket.prototype の
-    // clearHeartbeats を monkeypatch で no-op 化し、Phoenix 内蔵の
-    // heartbeatTimer が生き残るケースをシミュレート。この invert 状態では
-    // 旧 socket の heartbeatTimeout → reconnectTimer.scheduleTimeout の
-    // 自己復活経路が働き、3 本目以降の transport が生えることを assert。
-    // drainPhoenixTimers の実装本体を消したりバイパスすると、この test が
-    // 「3 本目が生える」を pin できず fail する — drain が実効していること
-    // を間接 pin する。
-    const proto = Socket.prototype as unknown as {
-      clearHeartbeats: () => void;
-    };
-    const origClear = proto.clearHeartbeats;
-    proto.clearHeartbeats = () => {
-      // no-op: heartbeatTimer を clear しない
-    };
+  it("(D) reconnect() / disconnect() が Socket.prototype.clearHeartbeats を実際に呼ぶ (drain call-site pin)", async () => {
+    // ふじ round 4 レビュー must-fix 2: 前 D 実装は自前 monkeypatch で
+    // production の drainPhoenixTimers 経路と切断されていた (drain 実装を
+    // no-op 化しても pass する false-positive)。spy に置き換え、
+    // production の reconnect() / disconnect() が実際に Socket.prototype の
+    // clearHeartbeats を呼ぶことを直接 pin する。drainPhoenixTimers 実装が
+    // 消えたり clearHeartbeats を呼ばなくなればこの test が fail する
+    // (drain call-site の regression 検出)。
+    const spy = vi.spyOn(
+      Socket.prototype as unknown as { clearHeartbeats: () => void },
+      "clearHeartbeats",
+    );
     try {
       const handlers = makeHandlers();
       const conn = connectKaoiro("ws://test/client", handlers, {
         transport: FakeWebSocket as unknown,
         heartbeatIntervalMs: 100,
       });
-      await vi.advanceTimersByTimeAsync(1); // open trigger → heartbeat arm
+      await vi.advanceTimersByTimeAsync(1);
+      // initial connect 中に Phoenix 自身が resetHeartbeat 経由で
+      // clearHeartbeats を呼ぶことがあるので基点を clear してから測る。
+      spy.mockClear();
 
       conn.reconnect();
-      await vi.advanceTimersByTimeAsync(1); // teardown 同期 + 新 transport open
-      expect(FakeWebSocket.instances.length).toBe(2);
+      // reconnect() は pre-drain (即時) と teardown cb の post-drain
+      // (round 3 hardening) を呼ぶ。Phoenix teardown() の waitForSocketClosed
+      // は readyState=CLOSED なら synchronous に callback を呼ぶため、
+      // reconnect() 呼び出し直後で既に 2 回 called (+ Phoenix 内部の追加
+      // clear も来得るので >= 2 で assert)。
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      const afterReconnect = spy.mock.calls.length;
 
-      // heartbeatTimer が clear されていないため旧 arm が生き残り、Phoenix
-      // の cycle と重なって transport が短時間で複数生成される。500ms までに
-      // 3 本目以降が生えることを invert-test として pin (drain 実装が消えたら
-      // この test が「3 本目が生えている」を pin できない = 実効性の regression
-      // 検出)。
-      await vi.advanceTimersByTimeAsync(500);
-      expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(3);
+      await vi.advanceTimersByTimeAsync(1);
 
       conn.disconnect();
+      // disconnect() の pre-drain + round 5 の teardown cb 内 post-drain で
+      // 2 回追加される (ふじ round 4 must-fix 1 hardening)。
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(afterReconnect + 2);
+
       await vi.advanceTimersByTimeAsync(500);
     } finally {
-      proto.clearHeartbeats = origClear;
+      spy.mockRestore();
     }
   });
 });

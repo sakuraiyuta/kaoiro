@@ -2144,10 +2144,22 @@ export function connectKaoiro(
       // can outlive teardown on a stuck transport and self-resurrect via
       // heartbeatTimeout → reconnectTimer.scheduleTimeout (ふじ再レビュー).
       drainPhoenixTimers();
-      // Fire-and-forget leave: on a dead transport the leave push never
-      // acknowledges. We do not want teardown to wait for a phantom reply.
-      channel.leave();
-      socket.disconnect();
+      // Fire-and-forget leave (対称化: reconnect() 側と同じ try/catch)。
+      try {
+        channel.leave();
+      } catch {
+        // leave push の同期例外は握り潰す — teardown を止めない。
+      }
+      // ふじ round 4 レビュー must-fix 1 hardening: reconnect() と同じく
+      // teardown cb 内でも drain を再実行する。disconnect() を呼ぶ時点で
+      // 既に arm 済みの heartbeatTimeout → teardown → scheduleTimeout の
+      // 非同期 chain は事前 drain の reset 時点では未 arm。cb 実行時に
+      // 再 drain して in-flight schedule も潰す (drainPhoenixTimers は
+      // idempotent)。disposed は上で true にしているので guard を通した
+      // 再 arm は起きない。
+      socket.disconnect(() => {
+        drainPhoenixTimers();
+      });
     },
     reconnect: () => {
       // ふじ再レビュー must-fix 1 (round 3): Socket は使い回し、Channel と
