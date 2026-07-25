@@ -93,8 +93,12 @@ RUN mix release
 # the compiled release and other runtime necessities
 FROM ${RUNNER_IMAGE} AS final
 
+# inotify-tools backs :file_system, which watches the persona pack dir for
+# live reloads. Without it the watcher fails to boot
+# (fs_inotify_bootstrap_error) and pack changes only apply on restart —
+# found on a real Linux host during issue #148's deployment check.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates \
+  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates inotify-tools \
   && rm -rf /var/lib/apt/lists/*
 
 # Set the locale
