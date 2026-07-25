@@ -1082,6 +1082,17 @@ export interface SessionResetFailedPayload {
 
 export interface KaoiroConnection {
   disconnect: () => void;
+  /** Force-cycles the Phoenix socket: disconnect then reconnect (issue
+   *  #123). Use when the tab or network reappears in a state where
+   *  Phoenix's built-in reconnect timer never fired — macOS sleep resume
+   *  can drop the WebSocket without a close event, leaving Phoenix stuck.
+   *  Phoenix's `socket.disconnect(cb)` first clears its internal reconnect
+   *  timers, then closes the WS, then invokes the callback; `socket.connect()`
+   *  from that callback opens a fresh WS and Phoenix auto-rejoins every
+   *  already-joined channel. Safe to call repeatedly — Phoenix's connect()
+   *  is a no-op when a connection is already in-flight, so no duplicate
+   *  socket is created. */
+  reconnect: () => void;
   /** Sends an operator instruction; rejects on server refusal
    * (forbidden / unknown_agent) or timeout. `attachmentIds` references
    * uploads previously sent through uploadFile / attach* (file-upload spec
@@ -1229,6 +1240,16 @@ export interface ConnectOptions {
   /** Short-lived WS ticket fetched from the auth cookie (ADR-0013) — the
    *  reload path, where the token is not in the URL. */
   ticket?: string;
+  /** Test-only: WebSocket-compatible transport class handed to Phoenix
+   *  Socket (issue #123 regression tests). Production leaves this undefined
+   *  and Phoenix falls through to global.WebSocket. Typed as `unknown`
+   *  because Phoenix's own transport option is untyped. */
+  transport?: unknown;
+  /** Test-only: shortened Phoenix heartbeat interval (ms) so tests can
+   *  exercise the heartbeatTimeout path in bounded wall-clock (issue
+   *  #123). Production leaves this undefined and Phoenix defaults to
+   *  30000. */
+  heartbeatIntervalMs?: number;
 }
 
 function isEnvelope(value: unknown): value is Envelope {
@@ -1757,6 +1778,77 @@ function pushAsync(
   });
 }
 
+/** Wake-guard threshold for the tab-visibility rebuild path (issue #123).
+ *  On visible resume, if the tab was hidden longer than this, App.svelte
+ *  calls connectKaoiro's reconnect() unconditionally to catch the
+ *  macOS-sleep case where the WebSocket died silently but Phoenix's
+ *  onClose / heartbeat-timeout has not yet fired. 60000 ms matches
+ *  Phoenix client's heartbeat_interval (30 s) × 2 dead-connection horizon,
+ *  so anything Phoenix would eventually catch on its own is caught here
+ *  up-front without brief tab switches triggering a rebuild. */
+export const HIDDEN_RECONNECT_THRESHOLD_MS = 60_000;
+
+/** Pure helper for App.svelte's visibilitychange handler (issue #123).
+ *  `hiddenAt` is the timestamp the tab last went hidden (null if it never
+ *  hid while this session was alive). Returns whether the visible-resume
+ *  transition should trigger a full socket rebuild. Isolated here so the
+ *  60000-ms boundary is unit-testable without mounting App.svelte. */
+export function shouldForceReconnectOnVisible(
+  hiddenAt: number | null,
+  now: number,
+  thresholdMs: number = HIDDEN_RECONNECT_THRESHOLD_MS,
+): boolean {
+  if (hiddenAt === null) return false;
+  return now - hiddenAt >= thresholdMs;
+}
+
+/** Wake-signal reasons App.svelte forwards to decideWakeAction (issue #123
+ *  round 3). Kept as a discriminated string union so tests can enumerate
+ *  every branch. */
+export type WakeReason =
+  | "online"
+  | "visibility-visible"
+  | "visibility-hidden";
+
+/** Decision App.svelte should carry out in response to a wake signal.
+ *   - noop: no action; status is healthy and the visibility gap is short.
+ *   - reconnect: status is `disconnected` and we should ask the connection
+ *     to cycle. Both `online` and short-hidden `visibility-visible` land
+ *     here — App.svelte does not need to distinguish.
+ *   - force-reconnect: hidden gap crossed HIDDEN_RECONNECT_THRESHOLD_MS,
+ *     so we cycle regardless of `status` (heartbeat-death catch-up).
+ *   - record-hidden: hidden transition; App.svelte should capture the
+ *     current timestamp into `hiddenAt`. */
+export type WakeDecision =
+  | "noop"
+  | "reconnect"
+  | "force-reconnect"
+  | "record-hidden";
+
+/** Pure lifecycle decision for App.svelte's wake handlers (issue #123
+ *  round 3, ふじ再レビュー must-fix 2 A). Concentrates the DOM-event ->
+ *  action mapping in one testable function so the visibility / online
+ *  branches can be pinned without mounting App.svelte. `hiddenAt` is the
+ *  timestamp the tab last went hidden (null if it never hid while this
+ *  session was alive); `now` is Date.now() at signal receipt; `status` is
+ *  the latest ConnectionStatus observed. */
+export function decideWakeAction(
+  reason: WakeReason,
+  status: ConnectionStatus,
+  hiddenAt: number | null,
+  now: number,
+  thresholdMs: number = HIDDEN_RECONNECT_THRESHOLD_MS,
+): WakeDecision {
+  if (reason === "visibility-hidden") return "record-hidden";
+  if (
+    reason === "visibility-visible" &&
+    shouldForceReconnectOnVisible(hiddenAt, now, thresholdMs)
+  ) {
+    return "force-reconnect";
+  }
+  return status === "disconnected" ? "reconnect" : "noop";
+}
+
 /**
  * Connects to the kaoiro server's client socket and forwards protocol
  * events to the handlers. `url` is the socket endpoint, e.g.
@@ -1770,33 +1862,63 @@ export function connectKaoiro(
   const params: Record<string, string> = {};
   if (options.token !== undefined) params.token = options.token;
   if (options.ticket !== undefined) params.ticket = options.ticket;
-  const socket = new Socket(url, {
-    params,
-  });
-  handlers.onStatus("connecting");
-  socket.onOpen(() => handlers.onStatus("connected"));
-  socket.onClose(() => handlers.onStatus("disconnected"));
-  socket.onError(() => handlers.onStatus("disconnected"));
-  socket.connect();
 
-  const channel = socket.channel("agents:lobby");
-  // Instance-scoped pending map for refreshEngineCatalog waiters (Option E,
-  // ADR-0039). Kept LOCAL so a second connectKaoiro's disconnect cannot
-  // drain this one's pending — 藤 review must-fix A.
+  // Instance-scoped pending maps (ADR-0039 F9 v2 = 藤 review D2a): a second
+  // connectKaoiro's disconnect cannot drain THIS instance's waiters. Kept
+  // above socket/channel so setupChannelHandlers / setupSocketHandlers can
+  // close over them from a single lexical scope.
   const catalogPending = makeCatalogPendingStore();
-  // ADR-0039 F9 v2 = 藤 review D2a: instance-scoped pending map for the
-  // per-agent refresh_models_result envelope. Same isolation invariant as
-  // catalogPending (a second connectKaoiro's disconnect cannot drain this
-  // one's waits).
   const refreshPending = makeRefreshPendingStore();
-  channel.on("snapshot", (payload: { agents?: unknown }) => {
+
+  // ふじ review must-fix (issue #123): safe Socket+Channel rebuild state.
+  //   disposed        — terminal flag; after disconnect() every pending
+  //                     teardown callback is a no-op so a delayed
+  //                     socket.disconnect(cb) cannot resurrect a zombie
+  //                     socket ~1.5 s after endSession (must-fix 2).
+  //   cycleGeneration — bumped on every reconnect() AND on disconnect(); a
+  //                     teardown callback whose generation is stale refuses
+  //                     to rebuild.
+  //   cycleInFlight   — reconnect serialisation guard. visibilitychange +
+  //                     online often fire within milliseconds of each other
+  //                     on wake; without this each event would start its
+  //                     own rebuild and multiply the socket count.
+  //   (round 7 note) arm-time chain-provenance guarding — how we tell a
+  //     stale teardown chain from a live one when scheduleTimeout fires —
+  //     lives on the wrapped socket.teardown below (closure over
+  //     teardownGen). A prior round-6 attempt used a fire-time live compare
+  //     (allowedScheduleGen); a completed reconnect re-baselined it and let
+  //     stale chains slip through. arm-time capture is the fix.
+  let disposed = false;
+  let cycleGeneration = 0;
+  let cycleInFlight = false;
+
+  function setupSocketHandlers(s: Socket): void {
+    s.onOpen(() => handlers.onStatus("connected"));
+    s.onClose(() => handlers.onStatus("disconnected"));
+    s.onError(() => handlers.onStatus("disconnected"));
+    // Reject every outstanding wait on disconnect so callers do not hang
+    // forever behind a dropped socket. `onClose` fires on both operator
+    // disconnect and server shutdown; `onError` catches transport failures.
+    // Both flow into the same drain path (藤 review A).
+    s.onClose(() => {
+      catalogPending.drain("socket closed");
+      refreshPending.drain("socket closed");
+    });
+    s.onError(() => {
+      catalogPending.drain("socket error");
+      refreshPending.drain("socket error");
+    });
+  }
+
+  function setupChannelHandlers(c: Channel): void {
+    c.on("snapshot", (payload: { agents?: unknown }) => {
     const agents: Record<string, Envelope> = {};
     for (const value of Object.values(payload.agents ?? {})) {
       if (isEnvelope(value)) agents[value.agent_id] = value;
     }
     handlers.onSnapshot(agents);
   });
-  channel.on("envelope", (payload: unknown) => {
+  c.on("envelope", (payload: unknown) => {
     if (!isEnvelope(payload)) return;
     // ADR-0039 F9 v2 = 藤 review turn-10 must-fix 1: refresh_models_result
     // is a transient completion envelope, NOT a state. Special-dispatch it
@@ -1856,7 +1978,7 @@ export function connectKaoiro(
       }
     }
   });
-  channel.on("history", (payload: unknown) => {
+  c.on("history", (payload: unknown) => {
     const parsed = parseHistoryPayload(payload);
     handlers.onHistory?.(
       parsed.histories,
@@ -1864,7 +1986,7 @@ export function connectKaoiro(
       parsed.projection,
     );
   });
-  channel.on(
+  c.on(
     "history_cleared",
     (payload: {
       agent_id?: unknown;
@@ -1891,7 +2013,7 @@ export function connectKaoiro(
       }
     },
   );
-  channel.on("history_reset", (payload: unknown) => {
+  c.on("history_reset", (payload: unknown) => {
     const reset = parseHistoryReset(payload);
     if (reset !== null) {
       handlers.onHistoryReset?.(
@@ -1901,7 +2023,7 @@ export function connectKaoiro(
       );
     }
   });
-  channel.on("history_replay_complete", (payload: unknown) => {
+  c.on("history_replay_complete", (payload: unknown) => {
     const complete = parseHistoryReplayComplete(payload);
     if (complete !== null) {
       handlers.onHistoryReplayComplete?.(
@@ -1910,18 +2032,18 @@ export function connectKaoiro(
       );
     }
   });
-  channel.on("agent_deleted", (payload: { agent_id?: unknown }) => {
+  c.on("agent_deleted", (payload: { agent_id?: unknown }) => {
     if (typeof payload.agent_id === "string") {
       handlers.onAgentDeleted?.(payload.agent_id);
     }
   });
-  channel.on("hosts", (payload: { hosts?: unknown }) => {
+  c.on("hosts", (payload: { hosts?: unknown }) => {
     handlers.onHosts?.(parseHosts(payload.hosts));
   });
-  channel.on("directory", (payload: { entries?: unknown }) => {
+  c.on("directory", (payload: { entries?: unknown }) => {
     handlers.onDirectory?.(parseDirectory(payload.entries));
   });
-  channel.on("spawn_result", (payload: unknown) => {
+  c.on("spawn_result", (payload: unknown) => {
     const p = payload as Partial<SpawnResult>;
     if (
       typeof p.host_id === "string" &&
@@ -1936,7 +2058,7 @@ export function connectKaoiro(
       });
     }
   });
-  channel.on("runner_sessions", (payload: unknown) => {
+  c.on("runner_sessions", (payload: unknown) => {
     const p = payload as Partial<RunnerSessions>;
     if (typeof p.host_id === "string" && typeof p.cwd === "string") {
       handlers.onSessions?.({
@@ -1949,19 +2071,19 @@ export function connectKaoiro(
   // Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17 17-9).
   // Payload is validated defensively; malformed drops so the UI never
   // fires on an ill-formed event.
-  channel.on("session_reset_started", (payload: unknown) => {
+  c.on("session_reset_started", (payload: unknown) => {
     const parsed = parseSessionResetStarted(payload);
     if (parsed !== null) handlers.onSessionResetStarted?.(parsed);
   });
-  channel.on("session_reset_completed", (payload: unknown) => {
+  c.on("session_reset_completed", (payload: unknown) => {
     const parsed = parseSessionResetCompleted(payload);
     if (parsed !== null) handlers.onSessionResetCompleted?.(parsed);
   });
-  channel.on("session_reset_failed", (payload: unknown) => {
+  c.on("session_reset_failed", (payload: unknown) => {
     const parsed = parseSessionResetFailed(payload);
     if (parsed !== null) handlers.onSessionResetFailed?.(parsed);
   });
-  channel.on("catalog_result", (payload: unknown) => {
+  c.on("catalog_result", (payload: unknown) => {
     const parsed = parseCatalogResult(payload);
     if (parsed === null) return;
     // Route to any pending refreshEngineCatalog() caller first so its
@@ -1970,26 +2092,194 @@ export function connectKaoiro(
     catalogPending.onResult(parsed);
     handlers.onCatalogResult?.(parsed);
   });
-  // Reject every outstanding wait on disconnect so callers do not hang
-  // forever behind a dropped socket. `onClose` fires on both operator
-  // disconnect and server shutdown; `onError` catches transport
-  // failures. Both flow into the same drain path. Instance-scoped so a
-  // second connection's disconnect cannot drain this one's pending
-  // (藤 review A).
-  socket.onClose(() => {
-    catalogPending.drain("socket closed");
-    refreshPending.drain("socket closed");
-  });
-  socket.onError(() => {
-    catalogPending.drain("socket error");
-    refreshPending.drain("socket error");
-  });
-  channel.join();
+  }
+
+  function subscribeChannel(s: Socket): Channel {
+    const ch = s.channel("agents:lobby");
+    setupChannelHandlers(ch);
+    ch.join();
+    return ch;
+  }
+
+  // ふじ再レビュー must-fix 1 (issue #123 round 3): Socket instance を
+  // 使い回す。cycle するのは Channel と WebSocket transport のみ。
+  //   - Phoenix Socket constructor は remove 不能な window listener を 3 本
+  //     (pagehide / pageshow / visibilitychange) 登録するため、cycle ごとに
+  //     new Socket を作ると旧 Socket 全体が leak する。
+  //   - stuck transport の teardown は onConnClose を通らないケースがあり、
+  //     旧 Socket 内部の heartbeatTimer が生き残って heartbeatTimeout →
+  //     reconnectTimer.scheduleTimeout で旧 socket を自己復活させる
+  //     (ふじ実測: reconnect() 2.2 秒後 transportsCreated:3)。
+  // Socket 1 つを維持し、reconnect は Phoenix 内部 timer の明示停止 →
+  // WS transport の張り直し → Channel の完全再作成の順で行う。
+  const socketOpts: Record<string, unknown> = { params };
+  if (options.transport !== undefined) socketOpts.transport = options.transport;
+  if (options.heartbeatIntervalMs !== undefined) {
+    socketOpts.heartbeatIntervalMs = options.heartbeatIntervalMs;
+  }
+  const socket = new Socket(url, socketOpts);
+  // Round 7 must-fix (issue #123): arm-time chain-provenance guard on
+  // Phoenix's teardown. Phoenix's chain heartbeatTimeout → abnormalClose
+  // → teardown(cb=scheduleTimeout) starts at teardown time; the eventual
+  // cb (and its follow-on scheduleTimeout) must NOT execute if a rebuild
+  // has re-baselined the socket in between. A fire-time compare against
+  // a live global (round 6's allowedScheduleGen) is insufficient because
+  // a completed reconnect brings the live generation back in line with
+  // the stale chain's world view, letting it slip through (round 7
+  // レビュー実測: 6000ms 遅延 + 途中 reconnect() で transportsCreated:3)。
+  //
+  // Capture cycleGeneration at teardown call time (arm time) in the
+  // callback's closure. On cb fire, skip if the generation moved. This
+  // closes the stuck-transport heartbeat chain regardless of the wall
+  // clock — the same wrap covers our own reconnect() / disconnect()
+  // teardown callbacks (they capture the current generation and match on
+  // fire, so they proceed normally).
+  //
+  // Phoenix 1.8.x internal API — typeof guard makes a future upgrade
+  // that renames/removes teardown fail loudly at test time (regression
+  // test pins its existence).
+  const socketWithTeardown = socket as unknown as {
+    teardown?: (cb?: () => void, code?: number, reason?: string) => void;
+  };
+  if (typeof socketWithTeardown.teardown === "function") {
+    const originalTeardown = socketWithTeardown.teardown.bind(socket);
+    socketWithTeardown.teardown = (
+      cb?: () => void,
+      code?: number,
+      reason?: string,
+    ) => {
+      const teardownGen = cycleGeneration;
+      originalTeardown(
+        cb === undefined
+          ? undefined
+          : () => {
+              if (cycleGeneration !== teardownGen) return;
+              cb();
+            },
+        code,
+        reason,
+      );
+    };
+  }
+  // Belt-and-suspenders: permanent kill switch on Phoenix's own
+  // reconnectTimer for the terminal disconnect() case. The teardown
+  // arm-time guard already blocks stale teardown-cb → scheduleTimeout
+  // chains; this covers a non-teardown-originated scheduleTimeout
+  // (Phoenix's onConnClose when an unclean close beats our
+  // onclose=noop) after disposed=true.
+  // Phoenix 1.8.x internal API — typeof guard.
+  const timerInternals = socket as unknown as {
+    reconnectTimer?: { scheduleTimeout?: () => void };
+  };
+  if (
+    timerInternals.reconnectTimer &&
+    typeof timerInternals.reconnectTimer.scheduleTimeout === "function"
+  ) {
+    const originalScheduleTimeout =
+      timerInternals.reconnectTimer.scheduleTimeout.bind(
+        timerInternals.reconnectTimer,
+      );
+    timerInternals.reconnectTimer.scheduleTimeout = () => {
+      if (disposed) return;
+      originalScheduleTimeout();
+    };
+  }
+  handlers.onStatus("connecting");
+  setupSocketHandlers(socket);
+  socket.connect();
+  let channel = subscribeChannel(socket);
+
+  // Phoenix 1.8.7 internal-API accessor for cycle bookkeeping. clearHeartbeats()
+  // is on the Socket prototype (phoenix.js:1424); reconnectTimer is a Timer
+  // instance with reset() (phoenix.js:1163). Both are private fields but we
+  // need them to defuse the self-resurrection path documented above — Phoenix
+  // itself only clears them via onConnClose(), which stuck transports skip.
+  // typeof guard makes a future Phoenix upgrade that removes/renames them
+  // fail loudly at test time (regression test pins these existences).
+  function drainPhoenixTimers(): void {
+    const s = socket as unknown as {
+      clearHeartbeats?: () => void;
+      reconnectTimer?: { reset?: () => void };
+    };
+    if (typeof s.clearHeartbeats === "function") s.clearHeartbeats();
+    if (typeof s.reconnectTimer?.reset === "function") s.reconnectTimer.reset();
+  }
 
   return {
     disconnect: () => {
-      channel.leave();
-      socket.disconnect();
+      // Terminal: block any in-flight reconnect's teardown callback from
+      // rebuilding after we tear down (must-fix 2). Bumping the generation
+      // is defence in depth — the disposed check alone is enough.
+      disposed = true;
+      cycleGeneration += 1;
+      // Drain Phoenix internal timers first. Without this the heartbeatTimer
+      // can outlive teardown on a stuck transport and self-resurrect via
+      // heartbeatTimeout → reconnectTimer.scheduleTimeout (ふじ再レビュー).
+      drainPhoenixTimers();
+      // Fire-and-forget leave (対称化: reconnect() 側と同じ try/catch)。
+      try {
+        channel.leave();
+      } catch {
+        // leave push の同期例外は握り潰す — teardown を止めない。
+      }
+      // ふじ round 4 レビュー must-fix 1 hardening: reconnect() と同じく
+      // teardown cb 内でも drain を再実行する。disconnect() を呼ぶ時点で
+      // 既に arm 済みの heartbeatTimeout → teardown → scheduleTimeout の
+      // 非同期 chain は事前 drain の reset 時点では未 arm。cb 実行時に
+      // 再 drain して in-flight schedule も潰す (drainPhoenixTimers は
+      // idempotent)。disposed は上で true にしているので guard を通した
+      // 再 arm は起きない。
+      socket.disconnect(() => {
+        drainPhoenixTimers();
+      });
+    },
+    reconnect: () => {
+      // ふじ再レビュー must-fix 1 (round 3): Socket は使い回し、Channel と
+      // WebSocket transport を張り直す。
+      // (a) disposed / cycleInFlight で terminal / 直列化 guard、
+      // (b) generation snapshot で cb 実行時に「まだこの世代か」を再確認、
+      // (c) Phoenix 内部 timer を明示停止して stuck transport 経由の
+      //     自己復活を防ぐ、
+      // (d) leave は fire-and-forget (dead transport 対策)、
+      // (e) socket.disconnect の cb で new Channel を subscribe → socket.connect。
+      if (disposed || cycleInFlight) return;
+      cycleInFlight = true;
+      const gen = ++cycleGeneration;
+
+      drainPhoenixTimers();
+
+      try {
+        channel.leave();
+      } catch {
+        // leave push の同期例外は握り潰す — rebuild を止めない。
+      }
+
+      socket.disconnect(() => {
+        if (disposed || gen !== cycleGeneration) return;
+        // ふじ round 3 must-fix 2 hardening: teardown 中に発火した
+        // heartbeatTimeout → teardown → reconnectTimer.scheduleTimeout の
+        // chain は pre-drain の reset 時点では未 arm。cb 実行時に再度 drain
+        // して in-flight schedule も潰す (drainPhoenixTimers は idempotent)。
+        drainPhoenixTimers();
+        // Socket instance は使い回し (window listener leak と自己復活防止)。
+        // WS transport は socket.connect() が張り直す。Channel は Phoenix の
+        // 自動 rejoin に頼らず明示的に new して join する (implicit rejoin は
+        // stuck transport 由来の handler 無効化タイミングで join が飛ばない
+        // 事例あり — ふじ round 2 実測)。
+        channel = subscribeChannel(socket);
+        socket.connect();
+      });
+
+      // cycleInFlight は microtask boundary で解除する。Phoenix teardown() の
+      // waitForSocketClosed は readyState=CLOSED なら synchronous に callback
+      // を呼ぶため、cb 内で cycleInFlight=false にすると同一 tick 内の連続
+      // reconnect が全て新 cycle を起こしてしまう (visibilitychange と
+      // online の near-simultaneous fire で socket が multiply する)。
+      // microtask で解除すれば同一 tick は 1 cycle に coalesce、次 tick 以降は
+      // 再走可能。
+      queueMicrotask(() => {
+        cycleInFlight = false;
+      });
     },
     sendInstruction: (agentId, text, attachmentIds) =>
       pushAsync(
