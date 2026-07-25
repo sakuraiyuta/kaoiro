@@ -24,10 +24,10 @@ server/priv/persona-packs/.cache/
 node_modules/
 *.tsbuildinfo
 
-# Runner distribution archives and their staging dir
-# (scripts/build-runner-tarball.sh, issue #70).
+# Runner distribution archives, plus the staging dirs and lock dir the build
+# script creates (scripts/build-runner-tarball.sh, issue #70).
 /dist-tarball/
-/.tarball-build/
+/.tarball-build*
 
 # Env / secrets
 .env

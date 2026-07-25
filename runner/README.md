@@ -175,16 +175,25 @@ wrapper 一式・エンジン CLI(Claude Code / codex は platform 別 npm パ�
 として実体が入る)・ネイティブモジュールがすべて同梱されるため、**配布先で
 `pnpm install` も build も要らない**。
 
+**リポジトリルートで実行する**(スクリプトは自身の位置からルートを解決して
+`cd` する)。
+
 ```sh
 ./scripts/build-runner-tarball.sh                      # このホスト向け
 ./scripts/build-runner-tarball.sh --target linux-x64   # クロス生成
 ./scripts/build-runner-tarball.sh --out /path/to/dir   # 出力先を変える
 ```
 
-対象は `darwin-arm64` / `linux-x64`(実需要の 2 arch)。出力先は既定で
-`dist-tarball/kaoiro-runner-<rev>-<os>-<arch>.tar.gz`(gitignore 済み)。
+対象は `darwin-arm64` / `linux-x64`(実需要の 2 arch)。それ以外のホスト
+(Intel mac、arm64 Linux)では `--target` を明示しないとエラーになる。出力先は
+既定で `dist-tarball/kaoiro-runner-<rev>-<os>-<arch>.tar.gz`(gitignore 済み)。
+`--out` に相対パスを渡した場合は**リポジトリルート基準**で解決される。
+
 クロス生成は pnpm の `supportedArchitectures` をビルド中だけ
-`pnpm-workspace.yaml` に注入して行い、終了時(中断時も)復元する。
+`pnpm-workspace.yaml` に注入して行い、終了時(中断時も)復元する。この注入は
+追跡ファイルを書き換えるため **2 つのビルドを同時に走らせられない**。
+`.tarball-build.lock` で排他し、取得できなければ exit 75 で止まるので、
+**2 arch は逐次実行する**(異常終了でロックが残った場合はディレクトリを消す)。
 
 サイズ実測(tar.gz): darwin-arm64 **256 MB** / linux-x64 **368 MB**。エンジン
 CLI の実体が大半を占める。linux 版は musl 変種も含むため glibc / musl 両対応。

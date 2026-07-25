@@ -10,12 +10,19 @@
 #   scripts/build-runner-tarball.sh [--target <os>-<arch>] [--out <dir>]
 #
 #   --target  darwin-arm64 | linux-x64   (default: this host)
-#   --out     output directory           (default: <repo>/dist-tarball)
+#   --out     output directory (default: <repo>/dist-tarball). A RELATIVE path
+#             is resolved against the repository root, not the caller's cwd,
+#             because the script cds to the root first.
 #
 # Cross-building works because pnpm can fetch another platform's optional
 # dependencies (`supportedArchitectures`), which this script injects into
 # pnpm-workspace.yaml for the duration of the build and then reverts. A
 # darwin host can therefore produce the linux-x64 archive.
+#
+# NOT SAFE TO RUN CONCURRENTLY. That injection mutates a tracked file in the
+# working tree, so two builds would race on it (and on the staging dir), and a
+# lost revert would leave the tree dirty. A lock dir enforces one build at a
+# time — build the two targets sequentially.
 #
 # Three pnpm quirks are handled here so callers never see them:
 #   1. `pnpm deploy` needs `--legacy` unless the workspace sets
@@ -50,7 +57,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h | --help)
-      sed -n '2,20p' "$0"
+      # Print the header block, whatever its length: everything between the
+      # shebang and `set -`.
+      awk 'NR > 1 && /^set -/ { exit } NR > 1' "$0"
       exit 0
       ;;
     *)
@@ -60,11 +69,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Only the two officially distributed targets (ADR-0018 改訂). A host outside
+# them (Intel mac, arm64 Linux) must pass --target explicitly; widen this list
+# together with that decision, not ahead of it.
 case "$target" in
-  darwin-arm64 | darwin-x64 | linux-x64 | linux-arm64) ;;
+  darwin-arm64 | linux-x64) ;;
   *)
     echo "build-runner-tarball: unsupported target: $target" >&2
-    echo "  expected darwin-arm64 | darwin-x64 | linux-x64 | linux-arm64" >&2
+    echo "  expected darwin-arm64 | linux-x64" >&2
     exit 64
     ;;
 esac
@@ -82,8 +94,20 @@ rev=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 git diff --quiet 2>/dev/null || rev="$rev-dirty"
 name="kaoiro-runner-$rev-$target"
 
-# Staging dir must be workspace-relative (quirk 2 above).
-stage_rel=".tarball-build"
+# Serialise builds. mkdir is atomic, so it doubles as the lock; taking it
+# BEFORE touching the working tree is what keeps two runs from racing on the
+# pnpm-workspace.yaml injection.
+lock="$root/.tarball-build.lock"
+if ! mkdir "$lock" 2>/dev/null; then
+  echo "build-runner-tarball: another build holds $lock" >&2
+  echo "  builds mutate pnpm-workspace.yaml and cannot run in parallel —" >&2
+  echo "  run the targets sequentially, or remove a stale lock dir." >&2
+  exit 75 # EX_TEMPFAIL
+fi
+
+# Staging dir must be workspace-relative (quirk 2 above). The pid keeps the
+# leftovers of a SIGKILLed run from colliding with a later build.
+stage_rel=".tarball-build.$$"
 stage="$root/$stage_rel"
 ws="$root/pnpm-workspace.yaml"
 ws_backup="$stage/pnpm-workspace.yaml.orig"
@@ -93,6 +117,7 @@ cleanup() {
     cp "$ws_backup" "$ws"
   fi
   rm -rf "$stage"
+  rmdir "$lock" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 

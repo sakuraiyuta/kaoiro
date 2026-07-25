@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "kaoiro \u30db\u30b9\u30c8\u5e38\u99d0 runner \u2014 supervisor \u5c02\u4efb (ADR-0023)",
+  "description": "kaoiro ホスト常駐 runner — supervisor 専任 (ADR-0023)",
   "files": [
     "dist",
     "deploy",
