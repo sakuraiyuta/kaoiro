@@ -25,6 +25,58 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
+  # No `working-directory` default here: the install has to happen at the
+  # workspace root, and runner's typecheck needs the wrapper packages' emitted
+  # .d.ts files (they are workspace deps, so an unbuilt wrapper fails with
+  # TS2307).
+  runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C wrapper build
+      - run: pnpm -C runner typecheck
+      - run: pnpm -C runner test
+
+  # Checks out on the host, then runs mix inside a pinned Elixir image.
+  #
+  # Three findings from measuring this on the actual runner:
+  #   - erlef/setup-beam: its prebuilt OTP cannot load :crypto on the Gitea
+  #     runner image (no matching libssl), so mix dies fetching rebar.
+  #   - `container:` with a hexpm image: it ships no node, so every JS action
+  #     (actions/checkout) fails with exit 127. Hence the explicit
+  #     `docker run`, which the server-image job proves works here.
+  #   - The image is NOT the one server/Dockerfile builds the release with
+  #     (Elixir 1.19.5 / OTP 26.2.5.1). OTP 26's beam_asm cannot compile this
+  #     suite's Japanese test names ("argument 1: not an iolist term"), so
+  #     `mix test` is impossible there. This pins the development
+  #     environment's versions instead; the release image is covered by the
+  #     server-image job. Closing that gap is tracked separately.
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: mix checks
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src/server \
+            docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
+            sh -euc '
+              mix local.hex --force
+              mix local.rebar --force
+              mix deps.get
+              mix format --check-formatted
+              mix compile --warnings-as-errors
+              mix test
+            '
+
   dashboard:
     runs-on: ubuntu-latest
     defaults:
@@ -44,3 +96,13 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
+
+  # Build context is the repository root (issue #70): the Dockerfile's node
+  # stage bundles the dashboard from /dashboard. Publishing waits on the
+  # registry decision (issue #145), so this only proves the image still
+  # builds.
+  server-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f server/Dockerfile -t kaoiro-server:ci .
