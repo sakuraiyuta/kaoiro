@@ -184,6 +184,20 @@
   // the exact function references addEventListener registered.
   let wakeHandler: (() => void) | undefined;
   let visibilityHandler: (() => void) | undefined;
+  // Timestamp when the tab last went hidden (issue #123 案B). On visible
+  // resume, if the gap exceeds HIDDEN_RECONNECT_THRESHOLD_MS the socket is
+  // force-cycled regardless of `status`, catching the macOS-sleep case where
+  // the WS silently died but Phoenix's internal close/heartbeat-timeout has
+  // not yet fired — so status is still 'connected' and the disconnected-only
+  // path below cannot help.
+  let hiddenAt: number | null = null;
+  // Phoenix client's heartbeat_interval defaults to 30s; a dead connection
+  // is detected only on the SECOND missed heartbeat, i.e. up to ~60s. A
+  // 60s threshold therefore matches Phoenix's own dead-connection horizon:
+  // any hidden gap Phoenix would have caught on its own is also caught here
+  // on visible resume, without earlier windows triggering on brief tab
+  // switches.
+  const HIDDEN_RECONNECT_THRESHOLD_MS = 60_000;
 
   // Live grid: agents whose wrapper is currently connected (state !== disconnected).
   // Disconnected agents move to the offline section below so restore UX is
@@ -642,7 +656,20 @@
       if (status === "disconnected") connection?.reconnect();
     };
     visibilityHandler = () => {
-      if (document.visibilityState === "visible") wakeHandler?.();
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      // visible: 案B — 閾値超えの hidden gap は heartbeat 途絶とみなし
+      // status に関わらず force reconnect。閾値未満は disconnected 判定
+      // のみに委ねる (誤検知でタブ切替のたびに socket を張り直さない)。
+      const staleGap = hiddenAt !== null ? Date.now() - hiddenAt : 0;
+      hiddenAt = null;
+      if (staleGap >= HIDDEN_RECONNECT_THRESHOLD_MS) {
+        connection?.reconnect();
+        return;
+      }
+      wakeHandler?.();
     };
     document.addEventListener("visibilitychange", visibilityHandler);
     window.addEventListener("online", wakeHandler);
@@ -663,6 +690,7 @@
       window.removeEventListener("online", wakeHandler);
       wakeHandler = undefined;
     }
+    hiddenAt = null;
     connection?.disconnect();
     connection = null;
     // Hide the launch UI until the next connection re-announces hosts; a
