@@ -40,7 +40,7 @@
     manifest: PersonaManifest | null;
     now: number;
     newTimelineEntryKeys?: ReadonlySet<string>;
-    onSelectAgent: (agentId: string) => void;
+    onSelectAgent: (agentId: string, target: Envelope) => void;
     children?: Snippet;
   } = $props();
 

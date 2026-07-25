@@ -82,7 +82,7 @@ async function renderTimeline(options: {
   logs: Record<string, Envelope[]>;
   now?: number;
   newTimelineEntryKeys?: ReadonlySet<string>;
-  onSelectAgent?: (id: string) => void;
+  onSelectAgent?: (id: string, target: Envelope) => void;
 }) {
   const target = document.createElement("div");
   document.body.append(target);
@@ -191,7 +191,13 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     expect(row.classList.contains("unread")).toBe(false);
 
     row.click();
-    expect(onSelectAgent).toHaveBeenCalledWith("lab-pc.a");
+    expect(onSelectAgent).toHaveBeenCalledWith(
+      "lab-pc.a",
+      expect.objectContaining({
+        agent_id: "lab-pc.a",
+        type: "log",
+      }),
+    );
   });
 
   it("user prompt は初期から既読で、短い hover では未閲覧状態を作らない", async () => {
@@ -234,7 +240,7 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     expect(rows[0]?.querySelector(".summary")?.textContent).toContain("keep");
   });
 
-  it("row クリックで onSelectAgent(agentId) を発火 (送信先 agent を渡す)", async () => {
+  it("row クリックで agent と該当 envelope を渡す", async () => {
     const onSelectAgent = vi.fn();
     const target = await renderTimeline({
       agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
@@ -245,8 +251,15 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     });
     const button = target.querySelector<HTMLButtonElement>(".row")!;
     button.click();
-    // user prompt でも click は送信先 agent の詳細を開く。
-    expect(onSelectAgent).toHaveBeenCalledWith("lab-pc.a");
+    // user prompt でも click は送信先 agent と transcript anchor を渡す。
+    expect(onSelectAgent).toHaveBeenCalledWith(
+      "lab-pc.a",
+      expect.objectContaining({
+        agent_id: "lab-pc.a",
+        type: "log",
+        payload: { kind: "user", text: "hey" },
+      }),
+    );
   });
 
   it("空 summary の assistant は '(空応答)' を表示", async () => {

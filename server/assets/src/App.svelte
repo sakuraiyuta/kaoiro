@@ -70,6 +70,9 @@
   let nowTimer: ReturnType<typeof setInterval> | undefined;
   // agent_id of the agent shown full-screen, or null for the grid.
   let selected = $state<string | null>(null);
+  // Timeline click の発話位置。AgentDetail はこの envelope identity を DOM
+  // anchor に照合して、該当箇所まで smooth scroll する (#122)。
+  let timelineScrollTarget = $state<Envelope | null>(null);
   // Viewport centre of the tile that opened the detail, for the expand
   // animation (#36); null when no tile origin is known.
   let origin = $state<{ x: number; y: number } | null>(null);
@@ -234,6 +237,7 @@
     // Side navigation originates from the detail itself, not a grid tile.
     // Avoid replaying the expand-from-card animation with a stale origin.
     origin = null;
+    timelineScrollTarget = null;
     selected = agentId;
   }
 
@@ -673,6 +677,7 @@
     // Don't keep the previous session's data behind the login form.
     agents = {};
     logs = {};
+    timelineScrollTarget = null;
     selected = null;
     needLogin = true;
   }
@@ -783,6 +788,7 @@
           title="{envelope.persona?.name ?? envelope.agent_id} — {expr.label}"
           onclick={() => {
             origin = null;
+            timelineScrollTarget = null;
             selected = envelope.agent_id;
           }}
         >
@@ -864,7 +870,11 @@
           sessions={runnerSessions}
           resetMode={sessionResets[selectedEnvelope.agent_id] ?? null}
           {origin}
-          onClose={() => (selected = null)}
+          scrollToEnvelope={timelineScrollTarget}
+          onClose={() => {
+            timelineScrollTarget = null;
+            selected = null;
+          }}
           onSelectAgent={(id) => {
             // Inter-agent bubble の peer ボタンから呼ばれる。 origin はタイルの
             // 中心ではなく detail 内クリック由来なので null に倒し、 既存の
@@ -872,6 +882,7 @@
             // 再選択した時と同じ素直な切替えが得られる)。
             if (agents[id]) {
               origin = null;
+              timelineScrollTarget = null;
               selected = id;
             }
           }}
@@ -917,10 +928,13 @@
           {manifest}
           {now}
           {newTimelineEntryKeys}
-          onSelectAgent={(id) => {
+          onSelectAgent={(id, target) => {
             // 詳細を開く。timeline クリックには「元タイル座標」がないので
             // origin=null に倒し、既存の expand-from-origin アニメは省略。
+            // 同じ行を再度クリックしても scroll request を発火できるよう、
+            // envelope は shallow copy で request ごとに新しい参照へする。
             origin = null;
+            timelineScrollTarget = { ...target };
             selected = id;
           }}
         >
@@ -932,6 +946,7 @@
                 spawnError={spawnErrors[envelope.agent_id] ?? null}
                 onSelect={(o) => {
                   origin = o ?? null;
+                  timelineScrollTarget = null;
                   selected = envelope.agent_id;
                 }}
                 onInterrupt={connection
@@ -1006,6 +1021,7 @@
                     ? undefined
                     : (o) => {
                         origin = o ?? null;
+                        timelineScrollTarget = null;
                         selected = tile.id;
                       }}
                   onRestore={connection

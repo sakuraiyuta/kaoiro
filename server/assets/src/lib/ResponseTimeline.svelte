@@ -45,7 +45,7 @@
     newTimelineEntryKeys?: ReadonlySet<string>;
     /** row click → 該当 agent の詳細を開く。 App.svelte 側で origin=null
      *  にして expand animation を省略する契約。 */
-    onSelectAgent: (agentId: string) => void;
+    onSelectAgent: (agentId: string, target: Envelope) => void;
   } = $props();
 
   const entries = $derived(conversationEntries(logs));
@@ -149,7 +149,7 @@
             }}
             onclick={() => {
               markRead(key);
-              onSelectAgent(entry.agentId);
+              onSelectAgent(entry.agentId, entry.envelope);
             }}
             title={`${personaName(entry.agentId)} の詳細を開く`}
           >
