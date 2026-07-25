@@ -49,10 +49,9 @@ fi
 # instance on the same host. dogfood.sh already sits on a docker named
 # volume /var/lib/kaoiro; this is the dev.sh-side counterpart. Each var uses
 # ${VAR:-default} so an operator-set env (server/.env, direct export) still
-# overrides. KAOIRO_TOKEN_DENYLIST_PATH is intentionally omitted: no
-# runtime.exs entry wires that env into :token_denylist_path yet
-# (TokenDenylist reads its module default_path fallback), so setting it
-# here would have no effect.
+# overrides. KAOIRO_TOKEN_DENYLIST_PATH is included since #120 must-fix
+# wired it into runtime.exs — the authoritative revocation store deserves
+# the same dev / test / OS-tmp isolation as the other DETS ledgers.
 data_dir="$root/tmp/dev-data"
 mkdir -p "$data_dir"
 export KAOIRO_INTER_AGENT_HISTORY_PATH="${KAOIRO_INTER_AGENT_HISTORY_PATH:-$data_dir/inter_agent_history.dets}"
@@ -62,6 +61,7 @@ export KAOIRO_PERMISSION_MODES_PATH="${KAOIRO_PERMISSION_MODES_PATH:-$data_dir/p
 export KAOIRO_CLEAR_WATERMARKS_PATH="${KAOIRO_CLEAR_WATERMARKS_PATH:-$data_dir/clear_watermarks.dets}"
 export KAOIRO_SESSION_STARTS_PATH="${KAOIRO_SESSION_STARTS_PATH:-$data_dir/session_starts.dets}"
 export KAOIRO_INGRESS_ORDER_PATH="${KAOIRO_INGRESS_ORDER_PATH:-$data_dir/ingress_order.dets}"
+export KAOIRO_TOKEN_DENYLIST_PATH="${KAOIRO_TOKEN_DENYLIST_PATH:-$data_dir/token_denylist.dets}"
 
 pids=()
 cleanup() {
