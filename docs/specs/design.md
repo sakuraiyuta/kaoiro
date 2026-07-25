@@ -1,6 +1,6 @@
 ---
 title: kaoiro デザイン方針
-description: ダッシュボード/UI の視覚デザイン仕様。DESIGN.md フォーマット (YAML トークン + 散文) で記述し、既存実装 (server/assets/src/) を canonical source として追認する。
+description: ダッシュボード/UI の視覚デザイン仕様。DESIGN.md フォーマット (YAML トークン + 散文) で記述し、既存実装 (dashboard/src/) を canonical source として追認する。
 status: accepted
 related: [overview, personas, protocol]
 format: stitch-design-md
@@ -433,7 +433,7 @@ DESIGN.md の標準 components プロパティ (`backgroundColor` / `textColor` 
 
 ## References
 
-- 実装本体: [server/assets/src/app.css](../../server/assets/src/app.css), [App.svelte](../../server/assets/src/App.svelte), [AgentCard.svelte](../../server/assets/src/lib/AgentCard.svelte), [AgentDetail.svelte](../../server/assets/src/lib/AgentDetail.svelte), [LaunchDialog.svelte](../../server/assets/src/lib/LaunchDialog.svelte)
+- 実装本体: [dashboard/src/app.css](../../dashboard/src/app.css), [App.svelte](../../dashboard/src/App.svelte), [AgentCard.svelte](../../dashboard/src/lib/AgentCard.svelte), [AgentDetail.svelte](../../dashboard/src/lib/AgentDetail.svelte), [LaunchDialog.svelte](../../dashboard/src/lib/LaunchDialog.svelte)
 - 状態定義: [protocol.md](protocol.md) (state palette と 1:1 対応)
 - 顔表情・ペルソナ立ち絵: [personas.md](personas.md)
 - フォーマット仕様: [DESIGN.md (Google, alpha)](https://github.com/google/design.md)

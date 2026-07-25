@@ -55,7 +55,7 @@ pnpm build      # 依存順に各パッケージの dist/ を生成
 
 `pnpm test` / `pnpm typecheck` は push / PR ごとに Gitea Actions
 ([.gitea/workflows/ci.yml](../.gitea/workflows/ci.yml))でも実行する
-(ダッシュボード `server/assets` の `check` / `build` も同 CI で回す)。
+(ダッシュボード `dashboard/` の `check` / `build` も同 CI で回す)。
 
 ## 設定(kaoiro.config.json)
 

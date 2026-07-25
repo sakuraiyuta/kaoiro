@@ -1,9 +1,9 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vite";
 
-// Builds straight into Phoenix's priv/static (output is gitignored;
-// `mix assets.build` runs this). emptyOutDir stays false so favicon and
-// robots.txt survive.
+// Builds straight into the Phoenix server's priv/static (output is
+// gitignored; `mix dashboard.build` from server/ runs this). emptyOutDir
+// stays false so favicon and robots.txt survive.
 export default defineConfig({
   plugins: [svelte()],
   // Component integration tests mount Svelte into jsdom. Without the browser
@@ -13,7 +13,7 @@ export default defineConfig({
     conditions: ["browser"],
   },
   build: {
-    outDir: "../priv/static",
+    outDir: "../server/priv/static",
     emptyOutDir: false,
   },
   server: {

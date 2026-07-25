@@ -1,0 +1,48 @@
+# Excludes paths from the Docker build context.
+#
+# The context is the REPOSITORY ROOT (not server/) because the dashboard
+# was moved out to /dashboard while server/Dockerfile still bundles it in
+# a node stage (issue #44). See server/docker-compose.yaml `build:`.
+#
+# Strategy: whitelist — deny everything, re-admit only the two trees the
+# server image needs, then drop the heavy / generated / secret bits back
+# out. Adding a new top-level dir therefore does NOT silently bloat the
+# context. Note `.git` stays excluded (nothing in the build reads it).
+#
+# https://docs.docker.com/engine/reference/builder/#dockerignore-file
+*
+!server/
+!dashboard/
+
+# Node deps (dashboard/node_modules must be rebuilt inside the image so
+# the lockfile install stays the single source of truth).
+**/node_modules/
+
+# Mix artifacts — fetched and compiled inside the image.
+server/_build/
+server/deps/
+*.ez
+
+# Development/test artifacts
+server/cover/
+server/doc/
+server/test/
+server/tmp/
+server/.elixir_ls/
+
+# Generated on crash by the VM
+erl_crash.dump
+
+# Dashboard build output — produced by the node stage, never copied in
+# (https://hexdocs.pm/phoenix/Mix.Tasks.Phx.Gen.Release.html#module-docker).
+server/priv/static/assets/
+server/priv/static/cache_manifest.json
+server/priv/static/index.html
+
+# Persona pack extraction cache (derived from the checked-in zips, ADR-0029)
+server/priv/persona-packs/.cache/
+
+# Local env files (secrets) must never enter the build context
+server/.env
+server/.env.*
+!server/.env.example

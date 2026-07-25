@@ -21,7 +21,7 @@ wrapper(Claude Code アダプタ)でエラー(例 500 Overloaded)が起きても
 本文がクライアントへ届かない。`wrapper/src/host.ts` の `run()` は SDK エラーを
 catch せず、落ちると `cli.ts` の catch が stderr に出すだけ。`result` payload は
 `{text?, is_error?}` のみでエラー本文フィールドが無く、クライアント
-(`server/assets/src/lib/AgentDetail.svelte`)は `is_error` を見て「エラーで終了」
+(`dashboard/src/lib/AgentDetail.svelte`)は `is_error` を見て「エラーで終了」
 固定文字列を表示するだけ。原因が分からず対処できない。
 
 ## Decision

@@ -60,10 +60,10 @@ fallback 描画。
 - [x] `server/lib/kaoiro_server_web/channels/runner_channel.ex` に
       `handle_in("catalog_result", ...)` を追加 (`forward_to_operators`
       パターン、host_id stamp)。
-- [x] `server/assets/src/lib/protocol.ts` に `refreshEngineCatalog` /
+- [x] `dashboard/src/lib/protocol.ts` に `refreshEngineCatalog` /
       `onCatalogResult` / `EngineCatalogResult` を追加。`parseCatalogResult`
       で defensive parse。
-- [x] `server/assets/src/lib/LaunchDialog.svelte` に engine=claude-code
+- [x] `dashboard/src/lib/LaunchDialog.svelte` に engine=claude-code
       選択時の auto refresh (force=false)、Claude 限定の手動 refresh button
       (force=true)、error 表示、default fallback 維持。
 - [x] Unit tests: `runner/test/claude_catalog_cache.test.ts` (TTL / force /

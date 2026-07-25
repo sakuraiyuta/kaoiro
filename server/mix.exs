@@ -57,9 +57,13 @@ defmodule KaoiroServer.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
-      setup: ["deps.get", "assets.setup", "assets.build"],
-      "assets.setup": ["cmd --cd assets pnpm install"],
-      "assets.build": ["cmd --cd assets pnpm build"],
+      # The dashboard lives outside server/ (../dashboard, issue #44) and is
+      # NOT part of `setup`: a Node/pnpm failure must not break the server
+      # build. Release bundling happens in the Dockerfile's node stage; run
+      # these two by hand for a local non-Vite (priv/static) dashboard.
+      setup: ["deps.get"],
+      "dashboard.setup": ["cmd --cd ../dashboard pnpm install"],
+      "dashboard.build": ["cmd --cd ../dashboard pnpm build"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

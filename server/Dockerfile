@@ -18,19 +18,27 @@ ARG DEBIAN_VERSION=trixie-20260518-slim
 ARG BUILDER_IMAGE="docker.io/hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="docker.io/debian:${DEBIAN_VERSION}"
 
+# The build context is the REPOSITORY ROOT, not server/ — the dashboard
+# was moved out to ../dashboard (issue #44) and has to stay reachable.
+# docker-compose.yaml sets `context: ..` + `dockerfile: server/Dockerfile`;
+# a bare `docker build` must be run as `docker build -f server/Dockerfile .`
+# from the repo root. Hence every COPY below is repo-root relative.
+#
 # Dashboard build (Svelte 5 + Vite, pnpm via corepack — version pinned
-# by assets/package.json packageManager). vite.config.ts outputs to
-# ../priv/static, i.e. /app/priv/static here.
-FROM docker.io/node:22-slim AS assets
+# by dashboard/package.json packageManager). vite.config.ts outputs to
+# ../server/priv/static, i.e. /app/server/priv/static here.
+FROM docker.io/node:22-slim AS dashboard
 
-WORKDIR /app/assets
+WORKDIR /app/dashboard
 
 RUN corepack enable
 
-COPY assets/package.json assets/pnpm-lock.yaml ./
+# pnpm-workspace.yaml carries the build-script approval (esbuild), so it
+# has to be in the deps layer alongside the manifest and lockfile.
+COPY dashboard/package.json dashboard/pnpm-lock.yaml dashboard/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
-COPY assets ./
+COPY dashboard ./
 RUN pnpm build
 
 FROM ${BUILDER_IMAGE} AS builder
@@ -51,31 +59,31 @@ RUN mix local.hex --force \
 ENV MIX_ENV="prod"
 
 # install mix dependencies
-COPY mix.exs mix.lock ./
+COPY server/mix.exs server/mix.lock ./
 RUN mix deps.get --only $MIX_ENV
 RUN mkdir config
 
 # copy compile-time config files before we compile dependencies
 # to ensure any relevant config change will trigger the dependencies
 # to be re-compiled.
-COPY config/config.exs config/${MIX_ENV}.exs config/
+COPY server/config/config.exs server/config/${MIX_ENV}.exs config/
 RUN mix deps.compile
 
 # priv carries the bundled persona pack (ADR-0008) and favicon/robots;
-# the dashboard build from the assets stage is layered on top (the
+# the dashboard build from the dashboard stage is layered on top (the
 # standard assets.deploy flow is replaced by the node stage above).
-COPY priv priv
-COPY --from=assets /app/priv/static priv/static
+COPY server/priv priv
+COPY --from=dashboard /app/server/priv/static priv/static
 
-COPY lib lib
+COPY server/lib lib
 
 # Compile the release
 RUN mix compile
 
 # Changes to config/runtime.exs don't require recompiling the code
-COPY config/runtime.exs config/
+COPY server/config/runtime.exs config/
 
-COPY rel rel
+COPY server/rel rel
 RUN mix release
 
 # start a new build stage so that the final image will only contain

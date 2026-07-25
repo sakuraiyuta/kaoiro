@@ -13,7 +13,12 @@
 # and proxy_read_timeout > 60s for the 30s channel heartbeat).
 services:
   kaoiro:
-    build: .
+    # Context is the repo root, not server/: the Dockerfile's node stage
+    # builds the dashboard from /dashboard, which sits outside server/
+    # (issue #44). Root .dockerignore keeps the context small.
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
     image: kaoiro-server:latest
     # Loopback-only by default. Auth (issue #28): KAOIRO_CLIENT_TOKENS
     # unset REJECTS all dashboard connections (fail-closed) — set it even

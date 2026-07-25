@@ -17,7 +17,7 @@ Accepted
 
 ## Context
 
-ダッシュボード(`server/assets`, Svelte)はユーザトークン(ADR-0011)を
+ダッシュボード(`dashboard/`, Svelte)はユーザトークン(ADR-0011)を
 URL の `?token=…` で受け取り、受領直後に `history.replaceState` で
 アドレスバーから消し、以降は JS のメモリにしか保持していなかった。その
 ため**ブラウザをリロードすると URL 側もメモリ側も両方トークンを失い**、

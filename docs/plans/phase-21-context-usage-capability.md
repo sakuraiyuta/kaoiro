@@ -56,22 +56,22 @@ stamp + dead code 撤去。旧固定文言「初回応答後に取得」を撤�
       advertise する旨に切替。
 - [x] `docs/specs/plugin-model.md` L32-37 に `ext.context` の Codex 扱い
       (adapter 直接付与、ADR-0040 参照) を追記。
-- [x] `server/assets/src/lib/protocol.ts`:
+- [x] `dashboard/src/lib/protocol.ts`:
   - `SessionCapabilities` に `supports_context_usage?: boolean` 追加、
       JSDoc に 3-state UI 契約を明記。
   - `sessionCapabilitiesFrom` parser で boolean のみ保存、malformed は
       drop (fail-closed absent 相当)。
-- [x] `server/assets/src/lib/AgentDetail.svelte`:
+- [x] `dashboard/src/lib/AgentDetail.svelte`:
   - ctx 行を capability-driven 3-state 分岐に書き換え
       (true+value/true+null/false)。
   - `undefined` は行そのものを非表示 (rolling upgrade 対応)。
   - 旧固定文言「初回応答後に取得」を撤回、`true+null` は「取得中」に。
-- [x] `server/assets/test/protocol.test.ts` に tri-state 保存 + malformed
+- [x] `dashboard/test/protocol.test.ts` に tri-state 保存 + malformed
       drop の parser test を追加。
-- [x] `server/assets/test/contextUsageDisplay.integration.test.ts` を新設
+- [x] `dashboard/test/contextUsageDisplay.integration.test.ts` を新設
       (5 test): AgentDetail mount で 4 状態 (true+null / true+value /
       false / absent) を検査、engine 名分岐禁止の consistency も検証。
-- [x] `server/assets/test/modelSwitch.integration.test.ts` の fresh-idle
+- [x] `dashboard/test/modelSwitch.integration.test.ts` の fresh-idle
       テスト fixture を `supports_context_usage: true` に更新、旧固定文言
       「初回応答後に取得」除去を assert (計 191 test 全 pass)。
 - [x] Elixir 側の `wrapper_channel.ex` / `agents_channel.ex` は変更なし

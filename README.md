@@ -43,6 +43,8 @@ Phase 3.5(返答表示)までのダッシュボード実用化、Phase 7(ファ�
   - 1 接続(エージェント)= 1 GenServer で最新状態を保持、Supervisor 配下で監視
   - PubSub で fan-out、クライアントへ realtime 配信
 - **クライアント: Web フロント(TypeScript)**(描画は静的差分 — `docs/adr/0004-client-rendering-staged.md`)
+  - リファレンスダッシュボード(Svelte 5 + Vite)は `dashboard/`。pnpm
+    workspace の非メンバで独立ルート・独立 lockfile(issue #44)
 - **ランナー: TypeScript / Node**(`@kaoiro/runner`、単一バイナリ配布予定 —
   `docs/adr/0018-runner-distribution.md`)
 - TS 側は pnpm workspace 構成。共有パッケージ `@kaoiro/protocol` に
