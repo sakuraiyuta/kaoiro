@@ -24,6 +24,15 @@ node dist/cli.js [configPath]   # configPath 既定 = runner.config.json
 (未設定 = サーバ側 runner 認証が無効な dev 時)。設定例は
 [runner.config.example.json](runner.config.example.json) を参照。
 
+接続先 `server_url` は環境変数 `KAOIRO_RUNNER_SERVER_URL` で上書きできる
+(**env が config ファイルより優先**、issue #140)。配布バイナリ/サービス運用
+(systemd/launchd ユニット、`env_file` 等)で `runner.config.json` を編集せず
+接続先を切り替えたい場合に使う。`ws://` または `wss://` で始まる必要があり、
+不正な形式は起動時 / config reload 時に fail-fast する。ホットリロード
+(`watchRunnerConfig`)でも同じ優先順位を維持するため、env 設定中に
+`runner.config.json` の `server_url` を書き換えても実際の接続先は変わらない
+(host_id 等の他フィールド変更によるホットリロード自体は通常どおり効く)。
+
 ## 常駐化(systemd / launchd)
 
 ホスト常駐用のサービス定義は [`deploy/`](deploy) にある(issue #141)。
@@ -67,8 +76,9 @@ chmod 600 "$conf/runner.env"
 # runner.env に KAOIRO_RUNNER_TOKEN を書く
 ```
 
-`server_url` は現状 `runner.config.json` から読む(env 上書きは issue #140 の
-予定。入り次第 `runner.env` 側へ移せる)。
+`server_url` は `runner.config.json` から読むほか、`runner.env` に
+`KAOIRO_RUNNER_SERVER_URL` を書いて上書きできる(env が優先 — 冒頭の説明を
+参照。issue #140)。
 
 ### Linux(systemd user unit)
 

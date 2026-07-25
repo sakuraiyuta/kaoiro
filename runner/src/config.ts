@@ -376,4 +376,28 @@ export function wrapperUrlFrom(serverUrl: string): string {
   return `${url.protocol}//${url.host}/wrapper`;
 }
 
+/** env override name for `server_url` (issue #140). */
+export const SERVER_URL_ENV = "KAOIRO_RUNNER_SERVER_URL";
+
+/**
+ * Applies the `KAOIRO_RUNNER_SERVER_URL` env override to a loaded config's
+ * `server_url` (issue #140): distribution/service deployments (systemd/
+ * launchd units, #141) inject the connection target via env rather than
+ * editing the gitignored `runner.config.json`. Precedence: env > config
+ * file — unset/empty env leaves the config untouched. Re-validates the
+ * same `ws://`/`wss://` shape `parseRunnerConfig` enforces on the file
+ * value, so a malformed env fails fast at startup/reload instead of
+ * reaching `RunnerLink`. Called on both initial load and every config-
+ * watcher reload (cli.ts) so the override consistently outranks the file
+ * across hot-reloads too.
+ */
+export function applyServerUrlOverride(config: RunnerConfig): RunnerConfig {
+  const override = process.env[SERVER_URL_ENV];
+  if (override === undefined || override === "") return config;
+  if (!override.startsWith("ws://") && !override.startsWith("wss://")) {
+    throw new ConfigError(`${SERVER_URL_ENV} must start with ws:// or wss://`);
+  }
+  return { ...config, server_url: override };
+}
+
 export { ConfigError };

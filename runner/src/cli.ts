@@ -13,6 +13,7 @@ import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
 import { type CodexAuthMode, resolveCodexAuthMode } from "./codex-auth.js";
 import {
+  applyServerUrlOverride,
   buildRegister,
   loadRunnerConfig,
   type RunnerConfig,
@@ -77,7 +78,10 @@ function isCodexEnabled(config: RunnerConfig): boolean {
 
 async function main(): Promise<void> {
   const { configPath } = parseRunnerArgs(process.argv.slice(2));
-  let config = loadRunnerConfig(configPath);
+  // KAOIRO_RUNNER_SERVER_URL outranks the file (issue #140) — applied here
+  // and again on every config-watcher reload below, so the precedence
+  // holds across hot-reloads too.
+  let config = applyServerUrlOverride(loadRunnerConfig(configPath));
   const token = process.env.KAOIRO_RUNNER_TOKEN;
 
   // Phase-24: explicit `codex.auth_mode` > doctor detection > "unknown"。
@@ -208,7 +212,10 @@ async function main(): Promise<void> {
     configPath,
     (next) => {
       reloadQueue = reloadQueue
-        .then(() => applyReload(next))
+        // Re-apply the env override on every reload (issue #140): without
+        // this, a file save would silently revert server_url to the file
+        // value and reconnect the runner to the wrong host.
+        .then(() => applyReload(applyServerUrlOverride(next)))
         .catch((error) => {
           process.stderr.write(
             `runner: config apply failed: ${String(error)}\n`,
