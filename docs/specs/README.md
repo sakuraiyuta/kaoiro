@@ -23,6 +23,7 @@
 | [threat-model](threat-model.md) | accepted | 双方向ルーティングの脅威と緩和策 |
 | [auth-and-authz](auth-and-authz.md) | accepted | 各ノードの認証・認可境界の現状マップ。OSS 公開前監査 (#91) の起点 |
 | [setup-wizards](setup-wizards.md) | provisional | 設定 / env 生成ウィザード(wrapper config・server .env) |
+| [deployment](deployment.md) | accepted | マルチホスト配備手順書(nginx・env 一覧・DETS パス・wss 制約) |
 | [non-goals](non-goals.md) | accepted | 非スコープ |
 | [glossary](glossary.md) | accepted | 用語集 |
 
