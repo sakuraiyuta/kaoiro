@@ -51,8 +51,22 @@ if [ -f "$env_file" ]; then
   set +a
 fi
 
+# Resolve our own directory before the config check: it is needed both for the
+# entry point and for naming the setup wizard when the config is missing.
+# (unset CDPATH so a stray value in the env file cannot redirect the cd)
+unset CDPATH
+deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+
+# A missing config is the first-run case. Point at the wizard rather than
+# launching it: this script also runs from systemd / launchd, where an
+# interactive prompt would hang with no terminal (issue #144).
 config="${KAOIRO_RUNNER_CONFIG:-$conf_dir/runner.config.json}"
-[ -f "$config" ] || die_config "config not found: $config"
+if [ ! -f "$config" ]; then
+  printf 'kaoiro-runner: config not found: %s\n' "$config" >&2
+  printf 'kaoiro-runner: run %s to create it\n' \
+    "$deploy_dir/kaoiro-runner-setup.sh" >&2
+  exit 78
+fi
 
 # systemd user units and launchd agents start with a minimal PATH, so a
 # version-managed node (nvm / fnm / asdf) has to be pinned via KAOIRO_NODE.
@@ -61,9 +75,6 @@ command -v "$node_bin" >/dev/null 2>&1 ||
   die_config "node not found: $node_bin (set KAOIRO_NODE in $env_file)"
 
 # <install>/runner/deploy/<this script> -> <install>/runner/dist/cli.js
-# (unset CDPATH so a stray value in the env file cannot redirect the cd)
-unset CDPATH
-deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 entry="$deploy_dir/../dist/cli.js"
 [ -f "$entry" ] ||
   die_config "runner not built: $entry (run 'pnpm -C runner build')"

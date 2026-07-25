@@ -33,6 +33,35 @@ node dist/cli.js [configPath]   # configPath 既定 = runner.config.json
 `runner.config.json` の `server_url` を書き換えても実際の接続先は変わらない
 (host_id 等の他フィールド変更によるホットリロード自体は通常どおり効く)。
 
+## 設定ウィザード
+
+`runner.config.json` と `runner.env` を対話生成する(issue #144、
+[setup-wizards](../docs/specs/setup-wizards.md))。手で書くより取り違えが
+少ないので、初回はこちらを使う。
+
+```sh
+./deploy/kaoiro-runner-setup.sh   # 配布物・リポジトリのどちらからでも
+node dist/setup-cli.js            # 直接叩く場合 (runner/ から)
+```
+
+聞かれるのは host_id / server URL / 起動許可 cwd / engine / トークン / node の
+絶対パス。出力先は OS 別ユーザ設定ディレクトリ(Linux
+`${XDG_CONFIG_HOME:-~/.config}/kaoiro`、macOS
+`~/Library/Application Support/kaoiro`。`KAOIRO_RUNNER_DIR` で上書き可)で、
+起動シムが読む場所と同じ。
+
+- トークンは「手入力 / 自動生成(32 バイト hex)」を選べる。`runner.env` は 0600
+  で書き、**config JSON にトークンは入らない**
+- 書き出す前に runner のローダ(`parseRunnerConfig`)を通すので、起動時に
+  reject される設定は生成されない
+- 既存ファイルは上書き前に確認する(断ればそのファイルは保持される)
+- **対話専用**。TTY が無い環境では exit 78 で止まる(systemd / launchd から
+  呼ばれたときに無応答で固まるのを防ぐため)。無人配備向けのフラグ指定は
+  [#146](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/146)
+- server 側の `.env` は別ウィザード(`mix kaoiro.env`、
+  [server/README.md](../server/README.md))。トークンは自動連携しないので、
+  表示された値を server 側の `KAOIRO_RUNNER_TOKENS` に貼る
+
 ## 常駐化(systemd / launchd)
 
 ホスト常駐用のサービス定義は [`deploy/`](deploy) にある(issue #141)。
@@ -65,8 +94,11 @@ ACL 運用のホストを弾いてしまうため)ので、運用側で担保す
 pnpm install --frozen-lockfile
 pnpm -C wrapper build && pnpm -C runner build   # dist/cli.js を作る
 
-# 設定ディレクトリ(Linux: ${XDG_CONFIG_HOME:-~/.config}/kaoiro、
-#                  macOS: ~/Library/Application Support/kaoiro)
+# 設定は上記「設定ウィザード」で作るのが早い:
+./runner/deploy/kaoiro-runner-setup.sh
+
+# 手で置く場合(Linux: ${XDG_CONFIG_HOME:-~/.config}/kaoiro、
+#              macOS: ~/Library/Application Support/kaoiro)
 conf="${XDG_CONFIG_HOME:-$HOME/.config}/kaoiro"   # macOS は上記に読み替え
 mkdir -p "$conf"
 cp runner/runner.config.example.json "$conf/runner.config.json"
@@ -214,18 +246,13 @@ CLI の実体が大半を占める。linux 版は musl 変種も含むため gli
 tar xzf kaoiro-runner-<rev>-linux-x64.tar.gz
 cd kaoiro-runner-<rev>-linux-x64
 
-# 設定ディレクトリ(Linux: ${XDG_CONFIG_HOME:-~/.config}/kaoiro、
-#                  macOS: ~/Library/Application Support/kaoiro)
-conf="${XDG_CONFIG_HOME:-$HOME/.config}/kaoiro"
-mkdir -p "$conf"
-cp runner.config.example.json "$conf/runner.config.json"
-cp deploy/runner.env.example "$conf/runner.env"
-chmod 600 "$conf/runner.env"
-# runner.config.json の host_id / server_url / cwd_allowlist を編集し、
-# runner.env に KAOIRO_RUNNER_TOKEN を書く
-
+./deploy/kaoiro-runner-setup.sh    # 対話で設定を生成
 ./deploy/kaoiro-runner-launch.sh   # 前景起動で疎通確認
 ```
+
+ウィザードを使わず手で置く場合は、上記「設定ウィザード」節に挙げた設定
+ディレクトリへ `runner.config.example.json` / `deploy/runner.env.example` を
+コピーして編集する(`runner.env` は `chmod 600`)。
 
 常駐させるときは上記「常駐化」節の unit / plist を配置する
 (`@@DEPLOY_DIR@@` には展開先の `deploy/` の絶対パスを入れる)。**配布物内の
