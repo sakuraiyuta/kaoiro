@@ -28,10 +28,13 @@ defmodule KaoiroServer.RuntimeConfigTest do
     end
   end
 
-  # ふじ #120 must-fix 1 追加検証 (2026-07-25): 全 8 path が同一 run で
-  # 共有される run-scoped nonce を持ち、path 同士が重複しないこと (BEAM-safe
-  # nonce の pin)。unique_integer 弱点回帰を検出するテスト。
-  test "全 DETS path は互いに一意で同じ nonce を共有する" do
+  # ふじ #120 must-fix 1 追加検証 (2026-07-25): 全 8 path が互いに衝突しない
+  # ことの smoke test。真の nonce 共有 (unique_integer への per-store 退行
+  # 検出) は捕まえられない — 各 basename の prefix (kaoiro_test_<store>_) が
+  # store ごとに一意なのでこの assert は退行しても pass する。suffix を
+  # normalize して比較する形へ retrofit するのは将来の候補 (クロエ #120
+  # 再レビュー 2026-07-25 advisory 1)。
+  test "全 DETS path は互いに一意 (basename 全体で衝突しない smoke test)" do
     paths =
       for {key, _prefix} <- @paths, do: Application.fetch_env!(:kaoiro_server, key)
 
