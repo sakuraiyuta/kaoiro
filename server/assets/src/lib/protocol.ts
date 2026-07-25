@@ -1882,23 +1882,15 @@ export function connectKaoiro(
   //                     online often fire within milliseconds of each other
   //                     on wake; without this each event would start its
   //                     own rebuild and multiply the socket count.
-  //   allowedScheduleGen — the cycleGeneration under which Phoenix's own
-  //                     reconnectTimer.scheduleTimeout is allowed to arm an
-  //                     auto-reconnect (round 6, structural fix). Initially
-  //                     matches cycleGeneration (0) so Phoenix's normal
-  //                     recovery works pre-first-cycle. On reconnect()
-  //                     cycleGeneration is bumped ahead of it, blocking any
-  //                     stale teardown chain that fires scheduleTimeout
-  //                     during our rebuild; the reconnect cb re-baselines
-  //                     it to the current generation after socket.connect()
-  //                     so future auto-recovery on the new socket works.
-  //                     disconnect() bumps cycleGeneration too but never
-  //                     re-baselines, so disposed || mismatch permanently
-  //                     shuts auto-reconnect down.
+  //   (round 7 note) arm-time chain-provenance guarding — how we tell a
+  //     stale teardown chain from a live one when scheduleTimeout fires —
+  //     lives on the wrapped socket.teardown below (closure over
+  //     teardownGen). A prior round-6 attempt used a fire-time live compare
+  //     (allowedScheduleGen); a completed reconnect re-baselined it and let
+  //     stale chains slip through. arm-time capture is the fix.
   let disposed = false;
   let cycleGeneration = 0;
   let cycleInFlight = false;
-  let allowedScheduleGen = cycleGeneration;
 
   function setupSocketHandlers(s: Socket): void {
     s.onOpen(() => handlers.onStatus("connected"));
@@ -2126,18 +2118,56 @@ export function connectKaoiro(
     socketOpts.heartbeatIntervalMs = options.heartbeatIntervalMs;
   }
   const socket = new Socket(url, socketOpts);
-  // Round 6 must-fix (issue #123): structural (time-agnostic) guard on
-  // Phoenix's own reconnect trigger. Phoenix wires
-  // heartbeatTimeout → abnormalClose → teardown(cb=scheduleTimeout);
-  // a slow teardown lets scheduleTimeout fire AFTER drainPhoenixTimers
-  // has run, resurrecting the torn-down socket. drainPhoenixTimers can
-  // only cancel already-armed timers — it cannot block a future arm.
-  // This wrap closes the window regardless of when the chain completes,
-  // covering BOTH the terminal disconnect() and mid-reconnect() rebuild
-  // windows in one place (round 5 実測: teardown cb 遅延 2000ms で
-  // transportsCreated:3). Phoenix 1.8.x internal API — typeof guard
-  // makes a future upgrade that removes/renames scheduleTimeout fail
-  // loudly at test time (regression test pins its existence).
+  // Round 7 must-fix (issue #123): arm-time chain-provenance guard on
+  // Phoenix's teardown. Phoenix's chain heartbeatTimeout → abnormalClose
+  // → teardown(cb=scheduleTimeout) starts at teardown time; the eventual
+  // cb (and its follow-on scheduleTimeout) must NOT execute if a rebuild
+  // has re-baselined the socket in between. A fire-time compare against
+  // a live global (round 6's allowedScheduleGen) is insufficient because
+  // a completed reconnect brings the live generation back in line with
+  // the stale chain's world view, letting it slip through (round 7
+  // レビュー実測: 6000ms 遅延 + 途中 reconnect() で transportsCreated:3)。
+  //
+  // Capture cycleGeneration at teardown call time (arm time) in the
+  // callback's closure. On cb fire, skip if the generation moved. This
+  // closes the stuck-transport heartbeat chain regardless of the wall
+  // clock — the same wrap covers our own reconnect() / disconnect()
+  // teardown callbacks (they capture the current generation and match on
+  // fire, so they proceed normally).
+  //
+  // Phoenix 1.8.x internal API — typeof guard makes a future upgrade
+  // that renames/removes teardown fail loudly at test time (regression
+  // test pins its existence).
+  const socketWithTeardown = socket as unknown as {
+    teardown?: (cb?: () => void, code?: number, reason?: string) => void;
+  };
+  if (typeof socketWithTeardown.teardown === "function") {
+    const originalTeardown = socketWithTeardown.teardown.bind(socket);
+    socketWithTeardown.teardown = (
+      cb?: () => void,
+      code?: number,
+      reason?: string,
+    ) => {
+      const teardownGen = cycleGeneration;
+      originalTeardown(
+        cb === undefined
+          ? undefined
+          : () => {
+              if (cycleGeneration !== teardownGen) return;
+              cb();
+            },
+        code,
+        reason,
+      );
+    };
+  }
+  // Belt-and-suspenders: permanent kill switch on Phoenix's own
+  // reconnectTimer for the terminal disconnect() case. The teardown
+  // arm-time guard already blocks stale teardown-cb → scheduleTimeout
+  // chains; this covers a non-teardown-originated scheduleTimeout
+  // (Phoenix's onConnClose when an unclean close beats our
+  // onclose=noop) after disposed=true.
+  // Phoenix 1.8.x internal API — typeof guard.
   const timerInternals = socket as unknown as {
     reconnectTimer?: { scheduleTimeout?: () => void };
   };
@@ -2150,7 +2180,7 @@ export function connectKaoiro(
         timerInternals.reconnectTimer,
       );
     timerInternals.reconnectTimer.scheduleTimeout = () => {
-      if (disposed || cycleGeneration !== allowedScheduleGen) return;
+      if (disposed) return;
       originalScheduleTimeout();
     };
   }
@@ -2238,11 +2268,6 @@ export function connectKaoiro(
         // 事例あり — ふじ round 2 実測)。
         channel = subscribeChannel(socket);
         socket.connect();
-        // Round 6: re-baseline the scheduleTimeout guard to the current
-        // generation. Any stale chain armed BEFORE this rebuild still
-        // fails the gen check; future auto-recovery on the new socket
-        // (a legitimate heartbeatTimeout on WS2) is now allowed.
-        allowedScheduleGen = cycleGeneration;
       });
 
       // cycleInFlight は microtask boundary で解除する。Phoenix teardown() の

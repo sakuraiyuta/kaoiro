@@ -317,6 +317,111 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", 
     }
   });
 
+  it("(E3) stale heartbeat teardown chain が reconnect() の re-baseline を跨いで発火しても transport は増えない (round 7)", async () => {
+    // レビュー probe pin (round 7 must-fix): 発火時の live 比較だけでは
+    // 「完走した reconnect() が baseline を戻した後に、旧世代 chain の
+    // scheduleTimeout が発火する」ケースを区別できない。arm-time
+    // provenance (teardown 呼び出し時点の cycleGeneration を closure
+    // capture) が chain 出自で block することを pin。
+    //
+    // Phoenix teardown の reason で 2 chain の遅延を独立制御:
+    //   reason="heartbeat timeout" → 6000ms 遅延 (stuck transport の chain)
+    //   それ以外                    → 遅延なし (reconnect() 側の chain)
+    // これにより stuck chain の完了と reconnect の rebuild を時間的に分離
+    // できる。前実装 (fedbb9f, round 6) ではこの scenario で transports が
+    // 3 本に膨らむ (レビュー実測)。
+    const teardownProto = Socket.prototype as unknown as {
+      teardown: (cb: () => void, code?: number, reason?: string) => void;
+    };
+    const originalTeardown = teardownProto.teardown;
+    teardownProto.teardown = function (
+      this: Socket,
+      callback: () => void,
+      code?: number,
+      reason?: string,
+    ) {
+      const delayMs = reason === "heartbeat timeout" ? 6000 : 0;
+      return originalTeardown.call(
+        this,
+        delayMs > 0 ? () => setTimeout(callback, delayMs) : callback,
+        code,
+        reason,
+      );
+    };
+    try {
+      const handlers = makeHandlers();
+      const conn = connectKaoiro("ws://test/client", handlers, {
+        transport: FakeWebSocket as unknown,
+        heartbeatIntervalMs: 100,
+      });
+      await vi.advanceTimersByTimeAsync(1); // WS 1 onopen
+      expect(FakeWebSocket.instances.length).toBe(1);
+
+      // heartbeat push t=101 → timeout t=201 → teardown(reason="heartbeat
+      // timeout") → 6000ms 遅延 → 旧 chain の scheduleTimeoutFn 発火予定
+      // が t≈6201。t=300 で reconnect() を投げる: reason=undefined の
+      // teardown は遅延なし → 即 cbR → rebuild → WS 2 が生える。
+      // rebuild 後の WS 2 の自 heartbeat cycle は
+      //   push t=400 → timeout t=500 → teardown(heartbeat, 6000ms 遅延)
+      //   → 正規 self-heal scheduleTimeoutFn は t≈6500 →
+      //   Timer(10ms 後) t≈6510 で WS 3 生成 — これは round 7 で許容される
+      //   Phoenix 標準経路 (F test で pin)。
+      await vi.advanceTimersByTimeAsync(299);
+      conn.reconnect();
+
+      // t=6400 で assertion: 旧 chain の scheduleTimeoutFn (t≈6201) 発火
+      // 後 かつ 正規 self-heal (t≈6510) 発火前の window。
+      //   round 7 (arm-time guard): 旧 chain の cb は teardownGen(0) !==
+      //     cycleGeneration(1) で skip → transports=2 (WS 1 + WS 2 のみ)
+      //   round 6 (fire-time compare): allowedScheduleGen が rebuild cb で
+      //     1 に再 baseline されるため、t=6201 の scheduleTimeoutFn 素通り
+      //     → Timer(10ms) → t=6211 で connect() → transports=3
+      // ここで disconnect() を挟むと disposed=true で救われて round 6 の
+      // bug が masked されるため、assertion 前には呼ばない。
+      await vi.advanceTimersByTimeAsync(6100); // t=6400
+      expect(FakeWebSocket.instances.length).toBe(2);
+
+      // Cleanup: 以降の WS 2 正規 self-heal / 累積 heartbeat cycle を止める
+      // (transport 数の後続断定は F test の責務、この test は round 7 の
+      // arm-time guard そのものを pin する)。
+      conn.disconnect();
+      await vi.advanceTimersByTimeAsync(2000);
+    } finally {
+      teardownProto.teardown = originalTeardown;
+    }
+  });
+
+  it("(F) reconnect()/disconnect() を呼ばない通常経路: Phoenix 標準 self-heal で transport が再生成される (round 7)", async () => {
+    // レビュー probe pin (round 7 must-fix): round 6/7 の構造ガードが
+    // 「本番の主要フォールバック経路 = Phoenix 標準 self-heal」を塞いで
+    // いないことを常設 pin。reconnect() も disconnect() も呼ばず、単に
+    // stuck transport の heartbeatTimeout → teardown → scheduleTimeout
+    // → connect() が走って WS 2 が生えることを確認する。arm-time guard
+    // (teardownGen === cycleGeneration) と disposed 未セットの条件が
+    // どちらも満たされるので正規経路は通る。
+    const handlers = makeHandlers();
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 onopen
+    expect(FakeWebSocket.instances.length).toBe(1);
+
+    // Phoenix 標準タイムライン (heartbeatIntervalMs=100,
+    // socketWaitTimeoutMs=0 相当, timerCalc(1)=10):
+    //   t=101: heartbeat push (未返信)
+    //   t=201: heartbeat timeout → teardown(reason="heartbeat timeout")
+    //   t=201+ε: waitForSocketClosed → scheduleTimeoutFn
+    //   t=~211: Timer callback → teardown → connect() → WS 2 生成
+    await vi.advanceTimersByTimeAsync(300); // t=301
+    expect(FakeWebSocket.instances.length).toBe(2);
+
+    // WS 2 も同じ stuck 挙動なので次の self-heal cycle が更に fire する
+    // より前に確定 stop。
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+
   it("(D) reconnect() / disconnect() が Socket.prototype.clearHeartbeats を実際に呼ぶ (drain call-site pin)", async () => {
     // ふじ round 4 レビュー must-fix 2: 前 D 実装は自前 monkeypatch で
     // production の drainPhoenixTimers 経路と切断されていた (drain 実装を
