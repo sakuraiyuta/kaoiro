@@ -6,6 +6,7 @@
   import { renderMarkdown, renderMermaidIn } from "./markdown";
   import {
     engineFrom,
+    errorSubtypeLabel,
     formatAgentLabel,
     hostIdFromAgentId,
     interAgentMessageOf,
@@ -2217,10 +2218,19 @@
             </details>
           {:else if res}
             {@const cost = costUsd(env)}
+            {@const errLabel = res.is_error
+              ? errorSubtypeLabel(res.error_subtype)
+              : null}
             <!-- The reply text already shows as the final assistant log; the
-                 result only marks the turn boundary, not a duplicate (#29). -->
+                 result only marks the turn boundary, not a duplicate (#29).
+                 On error, issue #127: subtype label (max_turns 等) と SDK 由来
+                 detail (errors[] / stop_reason) を併記して原因特定を可能に。 -->
             <p class="turn-end" class:error={res.is_error}>
-              {res.is_error ? "エラーで終了" : "応答完了"}
+              {res.is_error
+                ? errLabel
+                  ? `エラーで終了 (${errLabel})`
+                  : "エラーで終了"
+                : "応答完了"}
               {#if cost !== null}
                 <span
                   class="cost"
@@ -2229,6 +2239,9 @@
               {/if}
               <time class="ts" datetime={env.ts}>{time}</time>
             </p>
+            {#if res.is_error && res.error_detail}
+              <p class="turn-end-detail">{res.error_detail}</p>
+            {/if}
             {/if}
           </div>
         {/each}

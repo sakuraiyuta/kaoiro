@@ -205,7 +205,10 @@ export function sdkMessageToLogs(message: SDKMessage): LogEntry[] {
 
 /** Final-reply payload of a result message, or null for other messages.
  *  Only the success subtype carries reply text; failures surface as
- *  is_error with the state machine already showing `error`. */
+ *  is_error, plus (issue #127) an error_subtype for UI branching and,
+ *  when present, an error_detail string joined from SDKResultError.errors
+ *  (falling back to stop_reason) — otherwise the AgentDetail turn-end
+ *  line shows a bare "エラーで終了" without cause. */
 export function sdkMessageToResult(message: SDKMessage): ResultPayload | null {
   if (message.type !== "result") return null;
   const payload: ResultPayload = {};
@@ -214,6 +217,23 @@ export function sdkMessageToResult(message: SDKMessage): ResultPayload | null {
   }
   if (message.subtype !== "success" || message.is_error === true) {
     payload.is_error = true;
+    payload.error_subtype = resultSubtype(message);
+    // TypeScript narrows to SDKResultError here; that shape carries no
+    // `result` string but an `errors: string[]` (SDK-level exception /
+    // tool crash messages) plus `stop_reason`. Concatenate the errors
+    // list (SDK returns 1+ per turn-end); fall back to stop_reason so
+    // the UI always has some cue on error termination.
+    if (message.subtype !== "success") {
+      const errs = message.errors;
+      if (Array.isArray(errs) && errs.length > 0) {
+        payload.error_detail = errs.join("; ");
+      } else if (
+        typeof message.stop_reason === "string" &&
+        message.stop_reason !== ""
+      ) {
+        payload.error_detail = message.stop_reason;
+      }
+    }
   }
   return payload;
 }

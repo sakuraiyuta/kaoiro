@@ -1720,6 +1720,15 @@ export class AgentHost implements EngineAdapter {
     if (typeof payload.text === "string")
       out.text = clipText(payload.text).text;
     if (payload.is_error) out.is_error = true;
+    // issue #127: only forward error metadata on error results. The
+    // adapter never sets these on success, but the guard keeps the wire
+    // payload minimal even if a future caller reuses this shape.
+    if (typeof payload.error_subtype === "string") {
+      out.error_subtype = payload.error_subtype;
+    }
+    if (typeof payload.error_detail === "string") {
+      out.error_detail = clipText(payload.error_detail).text;
+    }
     const ext = cost !== null ? { cost } : {};
     onLog(makeResult(this.#config, this.#now(), out, ext));
   }

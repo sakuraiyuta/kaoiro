@@ -197,10 +197,76 @@ describe("sdkMessageToResult", () => {
     ).toEqual({ text: "完了" });
   });
 
-  it("error subtype は is_error のみ", () => {
+  it("error subtype は is_error と error_subtype を返す (issue #127)", () => {
     expect(
       sdkMessageToResult(msg({ type: "result", subtype: "error_max_turns" })),
-    ).toEqual({ is_error: true });
+    ).toEqual({ is_error: true, error_subtype: "error_max_turns" });
+  });
+
+  it("error result の errors[] は error_detail に join される (issue #127)", () => {
+    expect(
+      sdkMessageToResult(
+        msg({
+          type: "result",
+          subtype: "error_during_execution",
+          errors: ["tool failed"],
+        }),
+      ),
+    ).toEqual({
+      is_error: true,
+      error_subtype: "error_during_execution",
+      error_detail: "tool failed",
+    });
+  });
+
+  it("errors[] が複数なら '; ' で連結 (issue #127)", () => {
+    expect(
+      sdkMessageToResult(
+        msg({
+          type: "result",
+          subtype: "error_during_execution",
+          errors: ["tool crashed", "cleanup failed"],
+        }),
+      ),
+    ).toEqual({
+      is_error: true,
+      error_subtype: "error_during_execution",
+      error_detail: "tool crashed; cleanup failed",
+    });
+  });
+
+  it("errors[] が空なら stop_reason を fallback で使う (issue #127)", () => {
+    expect(
+      sdkMessageToResult(
+        msg({
+          type: "result",
+          subtype: "error_max_turns",
+          errors: [],
+          stop_reason: "max_turns_reached",
+        }),
+      ),
+    ).toEqual({
+      is_error: true,
+      error_subtype: "error_max_turns",
+      error_detail: "max_turns_reached",
+    });
+  });
+
+  it("success 時は error_subtype / error_detail を載せない (issue #127)", () => {
+    const payload = sdkMessageToResult(
+      msg({ type: "result", subtype: "success", result: "完了" }),
+    );
+    expect(payload).toEqual({ text: "完了" });
+    expect(payload).not.toHaveProperty("error_subtype");
+    expect(payload).not.toHaveProperty("error_detail");
+  });
+
+  it("error result で errors 空 + stop_reason なしなら error_detail は載せない (issue #127)", () => {
+    expect(
+      sdkMessageToResult(
+        msg({ type: "result", subtype: "error_max_budget_usd", errors: [] }),
+      ),
+    ).toEqual({ is_error: true, error_subtype: "error_max_budget_usd" });
   });
 
   it("result 以外は null", () => {
