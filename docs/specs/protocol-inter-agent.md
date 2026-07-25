@@ -314,8 +314,12 @@ enum にはしない。未知の `code` を受けた側は `api_error` と同等
 | server | wrapper channel の切断 (terminate) | `code=disconnected` を server が合成し、当該 wrapper が参加中の各 conversation の他参加者へ push |
 
 engine 差は共通 classifier の中で吸収する(engine-agnostic、
-[ADR-0032](../adr/0032-codex-adapter.md) F5)。取得不能な
-項目は `api_error` + 生 message に縮退する。
+[ADR-0032](../adr/0032-codex-adapter.md) F5)。分類不能な事象は
+`api_error` に縮退する。engine 由来の reason / detail 文字列は
+**分類のキーワード検査にのみ内部利用**し、`error.message` / `body`
+には常に code ごとの固定テンプレート文言を用いる(生の例外文字列を
+peer の LLM コンテキストへ露出させない。秘匿情報マスクの MUST は
+この固定テンプレート化で担保する)。
 
 #### server 合成 (`disconnected`) の規則
 
