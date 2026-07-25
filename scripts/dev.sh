@@ -13,6 +13,10 @@
 # agent.*.json — the runner supervises them (ADR-0023/0024, issue #22).
 # Manual equivalent is documented in server/README.md
 # ("ローカル開発(ホットリロード)").
+#
+# DETS は $root/tmp/dev-data/*.dets に per-project 隔離する (issue #121)。
+# OS 共有 tmp や `mix test` の DETS と衝突しない。dogfood.sh の docker
+# named volume /var/lib/kaoiro による隔離と対称。
 set -euo pipefail
 # Job-control: each background job becomes its own process-group leader, so a
 # single `kill -TERM -<pgid>` reliably reaps grandchildren (beam, vite, tsx)
@@ -37,6 +41,27 @@ else
   echo "dev: warn — server/.env not found; set KAOIRO_CLIENT_TOKENS" \
     "or the dashboard will be rejected" >&2
 fi
+
+# Isolate dev DETS stores under $root/tmp/dev-data/ (issue #121). Unset
+# envs would otherwise fall through to each store's default_path (a shared
+# $TMPDIR/kaoiro_*.dets), which is then read/written by both `mix test`
+# (test fixture rows leaking into the dev dashboard) and any other dev
+# instance on the same host. dogfood.sh already sits on a docker named
+# volume /var/lib/kaoiro; this is the dev.sh-side counterpart. Each var uses
+# ${VAR:-default} so an operator-set env (server/.env, direct export) still
+# overrides. KAOIRO_TOKEN_DENYLIST_PATH is intentionally omitted: no
+# runtime.exs entry wires that env into :token_denylist_path yet
+# (TokenDenylist reads its module default_path fallback), so setting it
+# here would have no effect.
+data_dir="$root/tmp/dev-data"
+mkdir -p "$data_dir"
+export KAOIRO_INTER_AGENT_HISTORY_PATH="${KAOIRO_INTER_AGENT_HISTORY_PATH:-$data_dir/inter_agent_history.dets}"
+export KAOIRO_SESSION_POINTERS_PATH="${KAOIRO_SESSION_POINTERS_PATH:-$data_dir/session_pointers.dets}"
+export KAOIRO_AGENT_DIRECTORY_PATH="${KAOIRO_AGENT_DIRECTORY_PATH:-$data_dir/agent_directory.dets}"
+export KAOIRO_PERMISSION_MODES_PATH="${KAOIRO_PERMISSION_MODES_PATH:-$data_dir/permission_modes.dets}"
+export KAOIRO_CLEAR_WATERMARKS_PATH="${KAOIRO_CLEAR_WATERMARKS_PATH:-$data_dir/clear_watermarks.dets}"
+export KAOIRO_SESSION_STARTS_PATH="${KAOIRO_SESSION_STARTS_PATH:-$data_dir/session_starts.dets}"
+export KAOIRO_INGRESS_ORDER_PATH="${KAOIRO_INGRESS_ORDER_PATH:-$data_dir/ingress_order.dets}"
 
 pids=()
 cleanup() {
