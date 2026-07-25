@@ -24,6 +24,15 @@ node dist/cli.js [configPath]   # configPath 既定 = runner.config.json
 (未設定 = サーバ側 runner 認証が無効な dev 時)。設定例は
 [runner.config.example.json](runner.config.example.json) を参照。
 
+接続先 `server_url` は環境変数 `KAOIRO_RUNNER_SERVER_URL` で上書きできる
+(**env が config ファイルより優先**、issue #140)。配布バイナリ/サービス運用
+(systemd/launchd ユニット、`env_file` 等)で `runner.config.json` を編集せず
+接続先を切り替えたい場合に使う。`ws://` または `wss://` で始まる必要があり、
+不正な形式は起動時 / config reload 時に fail-fast する。ホットリロード
+(`watchRunnerConfig`)でも同じ優先順位を維持するため、env 設定中に
+`runner.config.json` の `server_url` を書き換えても実際の接続先は変わらない
+(host_id 等の他フィールド変更によるホットリロード自体は通常どおり効く)。
+
 ## Codex 設定
 
 `runner.config.json` の `codex` ブロックで Codex engine 固有の設定を渡す。

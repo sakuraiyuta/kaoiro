@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ConfigError,
+  SERVER_URL_ENV,
+  applyServerUrlOverride,
   buildHeartbeat,
   buildRegister,
   parseRunnerConfig,
@@ -357,5 +359,40 @@ describe("wrapperUrlFrom", () => {
     expect(wrapperUrlFrom("wss://kaoiro.example:8443/runner")).toBe(
       "wss://kaoiro.example:8443/wrapper",
     );
+  });
+});
+
+describe("applyServerUrlOverride (issue #140)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it(`${SERVER_URL_ENV} 未設定なら config をそのまま返す`, () => {
+    vi.stubEnv(SERVER_URL_ENV, "");
+    const config = parseRunnerConfig(valid);
+    expect(applyServerUrlOverride(config)).toEqual(config);
+  });
+
+  it(`${SERVER_URL_ENV} 設定時は server_url を上書きする (env > config file)`, () => {
+    vi.stubEnv(SERVER_URL_ENV, "wss://prod.example:4000/runner");
+    const config = parseRunnerConfig(valid);
+    expect(applyServerUrlOverride(config)).toEqual({
+      ...config,
+      server_url: "wss://prod.example:4000/runner",
+    });
+  });
+
+  it("ws:// / wss:// 以外は ConfigError にする", () => {
+    vi.stubEnv(SERVER_URL_ENV, "http://prod.example:4000/runner");
+    const config = parseRunnerConfig(valid);
+    expect(() => applyServerUrlOverride(config)).toThrow(ConfigError);
+  });
+
+  it("config 自体は変更せず新しいオブジェクトを返す", () => {
+    vi.stubEnv(SERVER_URL_ENV, "wss://prod.example:4000/runner");
+    const config = parseRunnerConfig(valid);
+    const overridden = applyServerUrlOverride(config);
+    expect(overridden).not.toBe(config);
+    expect(config.server_url).toBe(valid.server_url);
   });
 });
