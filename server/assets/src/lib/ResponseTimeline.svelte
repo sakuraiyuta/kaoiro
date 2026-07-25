@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   // 実機検収 3 (2026-07-23 マスター指示): per-agent 最終応答一覧から
   // 「全 agent の会話ログを時系列マージ」に切り替え。 純関数の
   // 分類ロジックは conversationTimeline.ts が担当し、この component は
@@ -12,7 +13,7 @@
   // (badge + row 色の tone) で。
 
   import { spriteUrlFor } from "./expression";
-  import { conversationEntries } from "./conversationTimeline";
+  import { conversationEntries, conversationEntryKey } from "./conversationTimeline";
   import { formatRelativeJa } from "./relativeTime";
   import type { DirectoryEntry, Envelope, PersonaManifest } from "./protocol";
 
@@ -45,6 +46,46 @@
   const entries = $derived(conversationEntries(logs));
   let visibleCount = $state(50);
   const visibleEntries = $derived(entries.slice(0, visibleCount));
+  // #124: 既読情報はこのブラウザ・この mount の中だけに置く。永続化しない
+  // ため、リロード時には agent / inter-agent の全行が再び未閲覧になる。
+  let readEntryKeys = $state<ReadonlySet<string>>(new Set());
+  const readTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const HOVER_READ_DELAY_MS = 300;
+
+  function canBeUnread(kind: string): boolean {
+    return kind === "agent" || kind === "inter_agent";
+  }
+
+  function markRead(key: string): void {
+    const timer = readTimers.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      readTimers.delete(key);
+    }
+    if (readEntryKeys.has(key)) return;
+    // Set を丸ごと置き換え、Svelte の依存追跡を明示的に起こす。
+    readEntryKeys = new Set(readEntryKeys).add(key);
+  }
+
+  function scheduleRead(key: string, kind: string): void {
+    if (!canBeUnread(kind) || readEntryKeys.has(key) || readTimers.has(key)) return;
+    readTimers.set(
+      key,
+      setTimeout(() => markRead(key), HOVER_READ_DELAY_MS),
+    );
+  }
+
+  function cancelScheduledRead(key: string): void {
+    const timer = readTimers.get(key);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    readTimers.delete(key);
+  }
+
+  onDestroy(() => {
+    for (const timer of readTimers.values()) clearTimeout(timer);
+    readTimers.clear();
+  });
 
   function loadMore(event: Event): void {
     const target = event.currentTarget;
@@ -75,9 +116,10 @@
     <p class="empty">まだ会話なし</p>
   {:else}
     <ul class="rows" onscroll={loadMore}>
-      {#each visibleEntries as entry (entry.envelope.agent_id + "|" + entry.envelope.ts + "|" + (entry.envelope.seq ?? 0) + "|" + entry.envelope.type + "|" + entry.kind)}
+      {#each visibleEntries as entry (conversationEntryKey(entry.envelope))}
         {@const state = stateFor(entry.agentId)}
         {@const sprite = personaSprite(entry.agentId, state)}
+        {@const key = conversationEntryKey(entry.envelope)}
         <li>
           <button
             type="button"
@@ -85,7 +127,13 @@
             class:from-user={entry.kind === "user"}
             class:from-agent={entry.kind === "agent"}
             class:inter-agent={entry.kind === "inter_agent"}
-            onclick={() => onSelectAgent(entry.agentId)}
+            class:unread={canBeUnread(entry.kind) && !readEntryKeys.has(key)}
+            onmouseenter={() => scheduleRead(key, entry.kind)}
+            onmouseleave={() => cancelScheduledRead(key)}
+            onclick={() => {
+              markRead(key);
+              onSelectAgent(entry.agentId);
+            }}
             title={`${personaName(entry.agentId)} の詳細を開く`}
           >
             <span class="portrait" aria-hidden="true">
@@ -197,6 +245,17 @@
     border-color: var(--c-thinking);
     background: color-mix(in srgb, var(--c-thinking) 8%, var(--bg-card));
     outline: none;
+  }
+
+  /* #124: 静かな青紫の面で未閲覧を残す。hover 中も少しだけ明度を上げる
+     ので、既存の focus/hover 枠と区別しながら 300ms 後の既読化も分かる。 */
+  .row.unread {
+    background: color-mix(in srgb, var(--c-thinking) 14%, var(--bg-card));
+  }
+
+  .row.unread:hover,
+  .row.unread:focus-visible {
+    background: color-mix(in srgb, var(--c-thinking) 18%, var(--bg-card));
   }
 
   .portrait {

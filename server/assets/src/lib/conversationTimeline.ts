@@ -47,6 +47,20 @@ export interface ConversationEntry {
   text: string;
 }
 
+/** A timeline row's stable identity. The same four fields are used for
+ * Svelte's keyed rendering and the session-local read marker, so a replayed
+ * envelope cannot accidentally inherit another message's UI state. */
+export function conversationEntryKey(
+  envelope: Pick<Envelope, "agent_id" | "ts" | "seq" | "type">,
+): string {
+  return [
+    envelope.agent_id,
+    envelope.ts,
+    envelope.seq ?? 0,
+    envelope.type,
+  ].join("|");
+}
+
 // ふじ 検収 2 fix-round A3 (2026-07-23): 丸めは code point 単位で
 // 行う (UTF-16 code unit 単位の `.slice` は絵文字などの surrogate
 // pair を割って壊れた文字を生む)。 `Array.from(str)` が code point

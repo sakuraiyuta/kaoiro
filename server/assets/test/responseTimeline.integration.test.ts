@@ -25,6 +25,7 @@ const mounted: object[] = [];
 afterEach(async () => {
   for (const component of mounted.splice(0)) await unmount(component);
   document.body.innerHTML = "";
+  vi.useRealTimers();
 });
 
 const NOW = Date.parse("2026-07-23T15:00:00Z");
@@ -164,6 +165,42 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     expect(badge).toBeNull();
     const name = row?.querySelector(".who-name");
     expect(name?.textContent).toBe("あお");
+  });
+
+  it("agent 発話は未閲覧で始まり、300ms hover または click で既読になる", async () => {
+    vi.useFakeTimers();
+    const onSelectAgent = vi.fn();
+    const target = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [assistant("lab-pc.a", secAgo(10), "hi")] },
+      onSelectAgent,
+    });
+    const row = target.querySelector<HTMLButtonElement>(".row")!;
+    expect(row.classList.contains("unread")).toBe(true);
+
+    row.dispatchEvent(new MouseEvent("mouseenter"));
+    await vi.advanceTimersByTimeAsync(299);
+    expect(row.classList.contains("unread")).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    await tick();
+    expect(row.classList.contains("unread")).toBe(false);
+
+    row.click();
+    expect(onSelectAgent).toHaveBeenCalledWith("lab-pc.a");
+  });
+
+  it("user prompt は初期から既読で、短い hover では未閲覧状態を作らない", async () => {
+    vi.useFakeTimers();
+    const target = await renderTimeline({
+      agents: { "lab-pc.a": stateEnv("lab-pc.a", "あお") },
+      logs: { "lab-pc.a": [user("lab-pc.a", secAgo(10), "hey")] },
+    });
+    const row = target.querySelector<HTMLButtonElement>(".row")!;
+    expect(row.classList.contains("unread")).toBe(false);
+    row.dispatchEvent(new MouseEvent("mouseenter"));
+    await vi.advanceTimersByTimeAsync(300);
+    await tick();
+    expect(row.classList.contains("unread")).toBe(false);
   });
 
   it("tool_use / tool_result / state_change / inter_agent_message は除外", async () => {
