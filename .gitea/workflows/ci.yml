@@ -59,12 +59,11 @@ jobs:
   #     filesystem and mounts an empty dir ("Could not find a Mix.Project").
   #     The source therefore has to reach the container as a stream, the same
   #     way `docker build` sends its context — hence the tar pipe below.
-  #   - The image is NOT the one server/Dockerfile builds the release with
-  #     (Elixir 1.19.5 / OTP 26.2.5.1). OTP 26's beam_asm cannot compile this
-  #     suite's Japanese test names ("argument 1: not an iolist term"), so
-  #     `mix test` is impossible there. This pins the development
-  #     environment's versions instead; the release image is covered by the
-  #     server-image job. Closing that gap is tracked separately.
+  #
+  # The image matches what server/Dockerfile builds the release with — issue
+  # #150 aligned the two. Keep them in step when bumping either: the previous
+  # release pin (OTP 26) could not compile this suite's Japanese test names at
+  # all ("argument 1: not an iolist term"), which is what surfaced the drift.
   server:
     runs-on: ubuntu-latest
     steps:
