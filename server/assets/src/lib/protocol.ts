@@ -1768,6 +1768,30 @@ function pushAsync(
   });
 }
 
+/** Wake-guard threshold for the tab-visibility rebuild path (issue #123).
+ *  On visible resume, if the tab was hidden longer than this, App.svelte
+ *  calls connectKaoiro's reconnect() unconditionally to catch the
+ *  macOS-sleep case where the WebSocket died silently but Phoenix's
+ *  onClose / heartbeat-timeout has not yet fired. 60000 ms matches
+ *  Phoenix client's heartbeat_interval (30 s) × 2 dead-connection horizon,
+ *  so anything Phoenix would eventually catch on its own is caught here
+ *  up-front without brief tab switches triggering a rebuild. */
+export const HIDDEN_RECONNECT_THRESHOLD_MS = 60_000;
+
+/** Pure helper for App.svelte's visibilitychange handler (issue #123).
+ *  `hiddenAt` is the timestamp the tab last went hidden (null if it never
+ *  hid while this session was alive). Returns whether the visible-resume
+ *  transition should trigger a full socket rebuild. Isolated here so the
+ *  60000-ms boundary is unit-testable without mounting App.svelte. */
+export function shouldForceReconnectOnVisible(
+  hiddenAt: number | null,
+  now: number,
+  thresholdMs: number = HIDDEN_RECONNECT_THRESHOLD_MS,
+): boolean {
+  if (hiddenAt === null) return false;
+  return now - hiddenAt >= thresholdMs;
+}
+
 /**
  * Connects to the kaoiro server's client socket and forwards protocol
  * events to the handlers. `url` is the socket endpoint, e.g.
@@ -1781,33 +1805,57 @@ export function connectKaoiro(
   const params: Record<string, string> = {};
   if (options.token !== undefined) params.token = options.token;
   if (options.ticket !== undefined) params.ticket = options.ticket;
-  const socket = new Socket(url, {
-    params,
-  });
-  handlers.onStatus("connecting");
-  socket.onOpen(() => handlers.onStatus("connected"));
-  socket.onClose(() => handlers.onStatus("disconnected"));
-  socket.onError(() => handlers.onStatus("disconnected"));
-  socket.connect();
 
-  const channel = socket.channel("agents:lobby");
-  // Instance-scoped pending map for refreshEngineCatalog waiters (Option E,
-  // ADR-0039). Kept LOCAL so a second connectKaoiro's disconnect cannot
-  // drain this one's pending — 藤 review must-fix A.
+  // Instance-scoped pending maps (ADR-0039 F9 v2 = 藤 review D2a): a second
+  // connectKaoiro's disconnect cannot drain THIS instance's waiters. Kept
+  // above socket/channel so setupChannelHandlers / setupSocketHandlers can
+  // close over them from a single lexical scope.
   const catalogPending = makeCatalogPendingStore();
-  // ADR-0039 F9 v2 = 藤 review D2a: instance-scoped pending map for the
-  // per-agent refresh_models_result envelope. Same isolation invariant as
-  // catalogPending (a second connectKaoiro's disconnect cannot drain this
-  // one's waits).
   const refreshPending = makeRefreshPendingStore();
-  channel.on("snapshot", (payload: { agents?: unknown }) => {
+
+  // ふじ review must-fix (issue #123): safe Socket+Channel rebuild state.
+  //   disposed        — terminal flag; after disconnect() every pending
+  //                     teardown callback is a no-op so a delayed
+  //                     socket.disconnect(cb) cannot resurrect a zombie
+  //                     socket ~1.5 s after endSession (must-fix 2).
+  //   cycleGeneration — bumped on every reconnect() AND on disconnect(); a
+  //                     teardown callback whose generation is stale refuses
+  //                     to rebuild.
+  //   cycleInFlight   — reconnect serialisation guard. visibilitychange +
+  //                     online often fire within milliseconds of each other
+  //                     on wake; without this each event would start its
+  //                     own rebuild and multiply the socket count.
+  let disposed = false;
+  let cycleGeneration = 0;
+  let cycleInFlight = false;
+
+  function setupSocketHandlers(s: Socket): void {
+    s.onOpen(() => handlers.onStatus("connected"));
+    s.onClose(() => handlers.onStatus("disconnected"));
+    s.onError(() => handlers.onStatus("disconnected"));
+    // Reject every outstanding wait on disconnect so callers do not hang
+    // forever behind a dropped socket. `onClose` fires on both operator
+    // disconnect and server shutdown; `onError` catches transport failures.
+    // Both flow into the same drain path (藤 review A).
+    s.onClose(() => {
+      catalogPending.drain("socket closed");
+      refreshPending.drain("socket closed");
+    });
+    s.onError(() => {
+      catalogPending.drain("socket error");
+      refreshPending.drain("socket error");
+    });
+  }
+
+  function setupChannelHandlers(c: Channel): void {
+    c.on("snapshot", (payload: { agents?: unknown }) => {
     const agents: Record<string, Envelope> = {};
     for (const value of Object.values(payload.agents ?? {})) {
       if (isEnvelope(value)) agents[value.agent_id] = value;
     }
     handlers.onSnapshot(agents);
   });
-  channel.on("envelope", (payload: unknown) => {
+  c.on("envelope", (payload: unknown) => {
     if (!isEnvelope(payload)) return;
     // ADR-0039 F9 v2 = 藤 review turn-10 must-fix 1: refresh_models_result
     // is a transient completion envelope, NOT a state. Special-dispatch it
@@ -1867,7 +1915,7 @@ export function connectKaoiro(
       }
     }
   });
-  channel.on("history", (payload: unknown) => {
+  c.on("history", (payload: unknown) => {
     const parsed = parseHistoryPayload(payload);
     handlers.onHistory?.(
       parsed.histories,
@@ -1875,7 +1923,7 @@ export function connectKaoiro(
       parsed.projection,
     );
   });
-  channel.on(
+  c.on(
     "history_cleared",
     (payload: {
       agent_id?: unknown;
@@ -1902,7 +1950,7 @@ export function connectKaoiro(
       }
     },
   );
-  channel.on("history_reset", (payload: unknown) => {
+  c.on("history_reset", (payload: unknown) => {
     const reset = parseHistoryReset(payload);
     if (reset !== null) {
       handlers.onHistoryReset?.(
@@ -1921,18 +1969,18 @@ export function connectKaoiro(
       );
     }
   });
-  channel.on("agent_deleted", (payload: { agent_id?: unknown }) => {
+  c.on("agent_deleted", (payload: { agent_id?: unknown }) => {
     if (typeof payload.agent_id === "string") {
       handlers.onAgentDeleted?.(payload.agent_id);
     }
   });
-  channel.on("hosts", (payload: { hosts?: unknown }) => {
+  c.on("hosts", (payload: { hosts?: unknown }) => {
     handlers.onHosts?.(parseHosts(payload.hosts));
   });
-  channel.on("directory", (payload: { entries?: unknown }) => {
+  c.on("directory", (payload: { entries?: unknown }) => {
     handlers.onDirectory?.(parseDirectory(payload.entries));
   });
-  channel.on("spawn_result", (payload: unknown) => {
+  c.on("spawn_result", (payload: unknown) => {
     const p = payload as Partial<SpawnResult>;
     if (
       typeof p.host_id === "string" &&
@@ -1947,7 +1995,7 @@ export function connectKaoiro(
       });
     }
   });
-  channel.on("runner_sessions", (payload: unknown) => {
+  c.on("runner_sessions", (payload: unknown) => {
     const p = payload as Partial<RunnerSessions>;
     if (typeof p.host_id === "string" && typeof p.cwd === "string") {
       handlers.onSessions?.({
@@ -1960,19 +2008,19 @@ export function connectKaoiro(
   // Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17 17-9).
   // Payload is validated defensively; malformed drops so the UI never
   // fires on an ill-formed event.
-  channel.on("session_reset_started", (payload: unknown) => {
+  c.on("session_reset_started", (payload: unknown) => {
     const parsed = parseSessionResetStarted(payload);
     if (parsed !== null) handlers.onSessionResetStarted?.(parsed);
   });
-  channel.on("session_reset_completed", (payload: unknown) => {
+  c.on("session_reset_completed", (payload: unknown) => {
     const parsed = parseSessionResetCompleted(payload);
     if (parsed !== null) handlers.onSessionResetCompleted?.(parsed);
   });
-  channel.on("session_reset_failed", (payload: unknown) => {
+  c.on("session_reset_failed", (payload: unknown) => {
     const parsed = parseSessionResetFailed(payload);
     if (parsed !== null) handlers.onSessionResetFailed?.(parsed);
   });
-  channel.on("catalog_result", (payload: unknown) => {
+  c.on("catalog_result", (payload: unknown) => {
     const parsed = parseCatalogResult(payload);
     if (parsed === null) return;
     // Route to any pending refreshEngineCatalog() caller first so its
@@ -1981,29 +2029,62 @@ export function connectKaoiro(
     catalogPending.onResult(parsed);
     handlers.onCatalogResult?.(parsed);
   });
-  // Reject every outstanding wait on disconnect so callers do not hang
-  // forever behind a dropped socket. `onClose` fires on both operator
-  // disconnect and server shutdown; `onError` catches transport
-  // failures. Both flow into the same drain path. Instance-scoped so a
-  // second connection's disconnect cannot drain this one's pending
-  // (藤 review A).
-  socket.onClose(() => {
-    catalogPending.drain("socket closed");
-    refreshPending.drain("socket closed");
-  });
-  socket.onError(() => {
-    catalogPending.drain("socket error");
-    refreshPending.drain("socket error");
-  });
-  channel.join();
+  }
+
+  function createSocket(): Socket {
+    const s = new Socket(url, { params });
+    handlers.onStatus("connecting");
+    setupSocketHandlers(s);
+    s.connect();
+    return s;
+  }
+
+  function subscribeChannel(s: Socket): Channel {
+    const ch = s.channel("agents:lobby");
+    setupChannelHandlers(ch);
+    ch.join();
+    return ch;
+  }
+
+  let socket = createSocket();
+  let channel = subscribeChannel(socket);
 
   return {
     disconnect: () => {
+      // Terminal: block any in-flight reconnect's teardown callback from
+      // rebuilding after we tear down (must-fix 2). Bumping the generation
+      // is defence in depth — the disposed check alone is enough.
+      disposed = true;
+      cycleGeneration += 1;
+      // Fire-and-forget leave: on a dead transport the leave push never
+      // acknowledges. We do not want teardown to wait for a phantom reply.
       channel.leave();
       socket.disconnect();
     },
     reconnect: () => {
-      socket.disconnect(() => socket.connect());
+      // must-fix 1: implicit-rejoin から Socket+Channel の完全 rebuild へ。
+      // Phoenix JS 1.8.7 の socket.disconnect(cb) teardown() は旧 transport
+      // が閉じなくても ~1.5s で cb を呼び旧 handler を無効化するため、旧
+      // Channel が joined のまま新 transport が open して phx_join が送ら
+      // れないケースがあった (ふじ再現)。ここでは Channel を明示 leave し
+      // socket.disconnect の cb で新 socket / 新 channel を丸ごと作り直す。
+      // (a) disposed / cycleInFlight で terminal / 直列化 guard、
+      // (b) generation snapshot で cb 実行時に「まだこの世代か」を再確認、
+      // (c) leave は fire-and-forget (dead transport 対策)。
+      if (disposed || cycleInFlight) return;
+      cycleInFlight = true;
+      const gen = ++cycleGeneration;
+      try {
+        channel.leave();
+      } catch {
+        // leave push の同期例外は握り潰す — rebuild を止めない。
+      }
+      socket.disconnect(() => {
+        cycleInFlight = false;
+        if (disposed || gen !== cycleGeneration) return;
+        socket = createSocket();
+        channel = subscribeChannel(socket);
+      });
     },
     sendInstruction: (agentId, text, attachmentIds) =>
       pushAsync(
