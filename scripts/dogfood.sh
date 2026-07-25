@@ -156,7 +156,96 @@ if [[ ! -f "$runner_config" ]]; then
 JSON
 fi
 
-# 4) Start the docker stack (server + bundled dashboard). --build rebuilds
+# 4) Runner auth token (issue #138). dogfood runs the *release* image, so
+# the server evaluates auth in :prod — there an unset KAOIRO_RUNNER_TOKENS
+# rejects EVERY runner join (fail-closed), unlike dev.sh which runs mix in
+# :dev where the unset list still means "auth off". Wire both ends here:
+# mint a pair into server/.env on first run, then hand the matching value
+# to the runner via KAOIRO_RUNNER_TOKEN. The token deliberately never
+# enters runner.config.json (runner/README.md) — the runner reads it from
+# the env only.
+env_file="$root/server/.env"
+host_id="$(node -e \
+  'process.stdout.write(String(require(process.argv[1]).host_id ?? ""))' \
+  "$runner_config")"
+# Same charset the runner enforces on its side (HOST_ID_PATTERN in
+# runner/src/config.ts). Checked BEFORE the value reaches the env file: a
+# newline in host_id would otherwise append arbitrary KEY=VALUE lines
+# that compose loads with last-one-wins, silently overriding
+# SECRET_KEY_BASE or the client tokens. Every exit in this step clears
+# the EXIT trap first — nothing is up yet, so the cleanup handler would
+# otherwise `docker compose down` a stack this run never started.
+if [[ ! "$host_id" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "dogfood: error — host_id in $runner_config must match" \
+    "[A-Za-z0-9._-]+" >&2
+  trap - EXIT
+  exit 1
+fi
+
+# Only mint when the key is absent entirely. An existing line is the
+# operator's own pairing (possibly shared with a real deployment), so it
+# is read, never rewritten.
+if ! grep -qE '^[[:space:]]*KAOIRO_RUNNER_TOKENS=' "$env_file"; then
+  echo "dogfood: server/.env has no KAOIRO_RUNNER_TOKENS — minting one for" \
+    "host_id=$host_id (the release rejects runners without it)"
+  # Mint into a variable first. A command substitution that fails inside
+  # printf's ARGUMENT list leaves printf's own status at 0, so set -e
+  # would not catch it and a valueless `<host_id>:` pair would land in
+  # the file — which the server drops as malformed (Auth.parse_pairs/1)
+  # while the grep above still sees the key, blocking every later re-mint.
+  minted_token="$(node -e "process.stdout.write(
+    require('crypto').randomBytes(32).toString('hex'))")"
+  if [[ ${#minted_token} -ne 64 ]]; then
+    echo "dogfood: error — runner token generation failed" >&2
+    trap - EXIT
+    exit 1
+  fi
+  {
+    printf '\n# Added by scripts/dogfood.sh: the release image rejects\n'
+    printf '# runner joins while this is unset (issue #138). dogfood hands\n'
+    printf '# the matching value to the runner as KAOIRO_RUNNER_TOKEN.\n'
+    printf 'KAOIRO_RUNNER_TOKENS=%s:%s\n' "$host_id" "$minted_token"
+  } >>"$env_file"
+  # The file now carries a secret this script minted, so match the 0600
+  # the runner wizard gives runner.env (runner/src/setup.ts).
+  chmod go-rwx "$env_file" 2>/dev/null || true
+fi
+
+# A pre-set env var wins, so an operator can point the runner at another
+# token without touching server/.env.
+if [[ -z "${KAOIRO_RUNNER_TOKEN:-}" ]]; then
+  # Last assignment wins, matching how compose reads env_file. The value
+  # is piped (not passed as an argv) so it stays out of the process list,
+  # and the pair split honours only the FIRST colon — server-side
+  # parsing (Auth.parse_pairs/1) allows a colon inside the token.
+  KAOIRO_RUNNER_TOKEN="$(
+    grep -E '^[[:space:]]*KAOIRO_RUNNER_TOKENS=' "$env_file" | tail -n 1 |
+      sed -E "s/^[[:space:]]*KAOIRO_RUNNER_TOKENS=//; s/^['\"]//; s/['\"]$//" |
+      awk -v host="$host_id" -F, '{
+        for (i = 1; i <= NF; i++) {
+          at = index($i, ":")
+          if (at == 0) continue
+          key = substr($i, 1, at - 1)
+          value = substr($i, at + 1)
+          gsub(/^[ \t]+|[ \t]+$/, "", key)
+          gsub(/^[ \t]+|[ \t]+$/, "", value)
+          if (key == host) { print value; exit }
+        }
+      }'
+  )"
+  if [[ -z "$KAOIRO_RUNNER_TOKEN" ]]; then
+    echo "dogfood: error — server/.env sets KAOIRO_RUNNER_TOKENS but has no" \
+      "entry for host_id=$host_id" >&2
+    echo "  add '$host_id:<token>' to it (an entry with an empty token" \
+      "counts as missing), or export KAOIRO_RUNNER_TOKEN=<token> before" \
+      "re-running" >&2
+    trap - EXIT
+    exit 1
+  fi
+fi
+export KAOIRO_RUNNER_TOKEN
+
+# 5) Start the docker stack (server + bundled dashboard). --build rebuilds
 # only when the image inputs changed, so re-runs after a no-op edit are
 # fast. Detached so we can tail logs into stack.log while the runner
 # takes the foreground.
@@ -164,7 +253,7 @@ echo "dogfood: starting docker stack (rebuilds if inputs changed)..."
 ( cd "$root/server" && "${dc[@]}" up -d --build ) 2>&1 |
   tee -a "$logdir/stack.log"
 
-# 5) Tail docker logs into stack.log for post-mortem. --tail=0 skips the
+# 6) Tail docker logs into stack.log for post-mortem. --tail=0 skips the
 # backlog so the file only carries the current session's output. Runner
 # has its own reconnect loop, so we do not gate its launch on a readiness
 # poll — if Phoenix is still binding :4000 the runner retries.
@@ -172,7 +261,7 @@ echo "dogfood: starting docker stack (rebuilds if inputs changed)..."
   >>"$logdir/stack.log" 2>&1 &
 pids+=("$!")
 
-# 6) Pin the Claude wrapper's startup model (parity with dev.sh — the
+# 7) Pin the Claude wrapper's startup model (parity with dev.sh — the
 # SDK otherwise falls back to its own default, currently Opus 4.8).
 # Runner inherits env and passes it to each spawned wrapper. Pre-set
 # the var to override; setModel from the dashboard still overrides at
@@ -180,7 +269,7 @@ pids+=("$!")
 : "${KAOIRO_CLAUDE_CODE_DEFAULT_MODEL:=claude-opus-4-7}"
 export KAOIRO_CLAUDE_CODE_DEFAULT_MODEL
 
-# 7) Launch runner from dist (no watch). Source-maps on so stack traces
+# 8) Launch runner from dist (no watch). Source-maps on so stack traces
 # stay useful. Log via process substitution rather than a trailing
 # `| tee` pipeline: under `set -m` a backgrounded pipeline puts `$!`
 # on the LAST command (tee), while the PG leader is the FIRST command
