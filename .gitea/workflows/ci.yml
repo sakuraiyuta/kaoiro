@@ -25,6 +25,52 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
+  # No `working-directory` default here: the install has to happen at the
+  # workspace root, and runner's typecheck needs the wrapper packages' emitted
+  # .d.ts files (they are workspace deps, so an unbuilt wrapper fails with
+  # TS2307).
+  runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C wrapper build
+      - run: pnpm -C runner typecheck
+      - run: pnpm -C runner test
+
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned to the versions server/Dockerfile builds the release with, so
+      # CI and the shipped image agree on the compiler.
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19.5"
+          otp-version: "26.2.5.1"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            server/deps
+            server/_build
+          key: mix-${{ runner.os }}-${{ hashFiles('server/mix.lock') }}
+          restore-keys: mix-${{ runner.os }}-
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix test
+
   dashboard:
     runs-on: ubuntu-latest
     defaults:
@@ -44,3 +90,13 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
+
+  # Build context is the repository root (issue #70): the Dockerfile's node
+  # stage bundles the dashboard from /dashboard. Publishing waits on the
+  # registry decision (issue #145), so this only proves the image still
+  # builds.
+  server-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f server/Dockerfile -t kaoiro-server:ci .
