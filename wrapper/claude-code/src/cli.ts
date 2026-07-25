@@ -39,6 +39,7 @@ import { ServerLink } from "@kaoiro/wrapper-core";
 import { resolveClaudeSources } from "./source_resolution.js";
 import type {
   Envelope,
+  InterAgentMessagePayload,
   KaoiroState,
   ModelSource,
   PermissionMode,
@@ -410,12 +411,17 @@ async function main(): Promise<void> {
       // mid-PDF render cannot reorder this against an operator instruction.
       const text = formatInboundMessage(envelope);
       process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
-      // issue #131: this wrapper now owes a reply on the conversation. If
-      // the turn this injection starts ends in error before send_to_agent
-      // is called, onTurnError below surfaces that back to the sender.
+      // issue #131: this wrapper now owes a reply on the conversation. Tag
+      // the queued turn with the conversation_id (must-fix 1: turn-scoped
+      // resolution) so onTurnEnd below resolves exactly THIS turn, not
+      // whatever else happens to be pending — send() ties the tag to this
+      // specific queue slot, not to "the next turn" in general.
+      const conversationId = (
+        envelope.payload as Partial<InterAgentMessagePayload>
+      ).conversation_id;
       interAgent?.notePendingInjection(envelope);
       instructionChain = instructionChain.then(() =>
-        host.send(text).catch((err: unknown) => {
+        host.send(text, undefined, conversationId).catch((err: unknown) => {
           process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
         }),
       );
@@ -457,16 +463,18 @@ async function main(): Promise<void> {
   host = new AgentHost(config, {
     onState,
     onLog,
-    // issue #131: a turn ending in error may leave an injected inter-agent
-    // message unanswered. Classify what the SDK reported and, if any
-    // conversation is still owed a reply, push the resulting notice
-    // envelopes straight through ServerLink — this bypasses the model/tool
-    // path entirely since the model just failed to produce a turn at all,
-    // so no broker approval applies.
-    onTurnError: (info) => {
-      const error = classifyInterAgentError(info);
-      for (const envelope of interAgent?.drainPendingErrorNotices(error) ??
-        []) {
+    // issue #131: resolve exactly the conversation this turn was tagged
+    // with (must-fix 1 — turn-scoped, never a sweep of everything pending).
+    // On error, classify what the SDK reported and push the resulting
+    // notice envelope straight through ServerLink — this bypasses the
+    // model/tool path entirely since the model just failed to produce a
+    // turn at all, so no broker approval applies.
+    onTurnEnd: ({ conversationId, error }) => {
+      const classified = error ? classifyInterAgentError(error) : undefined;
+      for (const envelope of interAgent?.resolveTurnEnd(
+        conversationId,
+        classified,
+      ) ?? []) {
         link?.send(envelope);
       }
     },

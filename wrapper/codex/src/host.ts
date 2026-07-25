@@ -150,16 +150,26 @@ export interface CodexHostOptions {
   onState: (envelope: Envelope) => void;
   /** Invoked per relayable log line (assistant text / tool call / result). */
   onLog?: (envelope: Envelope) => void;
-  /** Invoked once per turn that ends with is_error=true, alongside (not
-   *  instead of) onLog's result envelope (issue #131). Codex has no
-   *  structured failure taxonomy like Claude's terminal_reason — `reason`
-   *  is never populated here; `detail` carries whatever raw message is
-   *  available (ThreadError.message / the runStreamed rejection), or is
-   *  omitted when the stream simply ended without a terminal event. The CLI
-   *  feeds this into the shared inter-agent error classifier, which
-   *  keyword-sniffs `detail` and otherwise degrades to "api_error". Omitted
-   *  = no notice is ever emitted (unit tests only — production wires it). */
-  onTurnError?: (info: { reason?: string; detail?: string }) => void;
+  /** Invoked once per turn boundary (success or error), alongside (not
+   *  instead of) onLog's result envelope (issue #131). `conversationId` is
+   *  the inter-agent conversation that turn's injection came from (the value
+   *  passed as send()'s third argument for that queued turn), or null for an
+   *  ordinary operator-instruction turn — must-fix 1: turn-scoped, so the CLI
+   *  never resolves a conversation the current turn was not actually
+   *  answering. `error` is present only when the turn ended with
+   *  is_error=true. Codex has no structured failure taxonomy like Claude's
+   *  terminal_reason — `error.reason` is never populated here; `error.detail`
+   *  carries whatever raw message is available (ThreadError.message / the
+   *  runStreamed rejection), or is omitted when the stream simply ended
+   *  without a terminal event. The CLI feeds `error` into the shared
+   *  inter-agent error classifier, which keyword-sniffs `detail` and
+   *  otherwise degrades to "api_error", then resolves exactly this turn's
+   *  conversation via InterAgentTool#resolveTurnEnd. Omitted = no notice is
+   *  ever emitted (unit tests only — production wires it). */
+  onTurnEnd?: (info: {
+    conversationId: string | null;
+    error?: { reason?: string; detail?: string };
+  }) => void;
   /** Server-composed personality + common footer (ADR-0029 F5), injected as
    *  a developer-role message via config.developer_instructions (ADR-0032
    *  F3, verified 2026-07-10). */
@@ -263,10 +273,14 @@ export class CodexHost implements EngineAdapter {
   #pendingPermission: PendingPermissionExt | null = null;
   #pendingQuestion: PendingQuestionExt | null = null;
   /** Queued SDK input. A local_image temp directory belongs to exactly one
-   * turn and is deleted from #runTurn's finally path. */
+   * turn and is deleted from #runTurn's finally path. `conversationId`
+   * (issue #131 must-fix 1) tags a turn injected to answer an inter-agent
+   * message; undefined for an ordinary operator instruction. Threaded
+   * through #runTurn so onTurnEnd resolves exactly this turn's conversation. */
   readonly #queue: Array<{
     input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
     tempDir?: string;
+    conversationId?: string;
   }> = [];
   readonly #pendingUploads = new Map<string, PendingUpload>();
   /** Includes dirs still being materialized, queued, or streaming. */
@@ -417,7 +431,11 @@ export class CodexHost implements EngineAdapter {
     };
   }
 
-  async send(text: string, attachmentIds?: string[]): Promise<void> {
+  async send(
+    text: string,
+    attachmentIds?: string[],
+    interAgentConversationId?: string,
+  ): Promise<void> {
     if (this.#closed) return;
     if (
       attachmentIds !== undefined &&
@@ -466,7 +484,13 @@ export class CodexHost implements EngineAdapter {
       for (const upload of uploads) this.#pendingUploads.delete(upload.meta.upload_id);
     }
     this.#apply({ kind: "user_send" });
-    this.#queue.push({ input, ...(tempDir === undefined ? {} : { tempDir }) });
+    this.#queue.push({
+      input,
+      ...(tempDir === undefined ? {} : { tempDir }),
+      ...(interAgentConversationId === undefined
+        ? {}
+        : { conversationId: interAgentConversationId }),
+    });
     this.#wake?.();
   }
 
@@ -651,7 +675,12 @@ export class CodexHost implements EngineAdapter {
           this.#wake = null;
           continue;
         }
-        await this.#runTurn(codex, turn.input, turn.tempDir);
+        await this.#runTurn(
+          codex,
+          turn.input,
+          turn.tempDir,
+          turn.conversationId ?? null,
+        );
       }
     } finally {
       if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
@@ -708,6 +737,7 @@ export class CodexHost implements EngineAdapter {
     codex: CodexClientLike,
     input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>,
     tempDir?: string,
+    conversationId: string | null = null,
   ): Promise<void> {
     const resolutionGeneration = ++this.#modelResolutionGeneration;
     const attempted = {
@@ -760,6 +790,7 @@ export class CodexHost implements EngineAdapter {
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
           });
+          this.#options.onTurnEnd?.({ conversationId });
           // Resolve only after the terminal event: at turn.started an existing
           // rollout can still expose the previous turn_context and look
           // spuriously "resolved". Keep this background so filesystem timing
@@ -776,7 +807,10 @@ export class CodexHost implements EngineAdapter {
           this.#finishTurn(false, attempted);
           this.#emitResult({ is_error: true });
           const detail = threadEventToErrorDetail(event);
-          this.#options.onTurnError?.(detail !== null ? { detail } : {});
+          this.#options.onTurnEnd?.({
+            conversationId,
+            error: detail !== null ? { detail } : {},
+          });
           // Failure paths (429 / max-output / auth error) still write a
           // token_count event to the rollout, so refresh on both branches.
           void this.#refreshRateLimits();
@@ -792,7 +826,7 @@ export class CodexHost implements EngineAdapter {
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
-        this.#options.onTurnError?.({});
+        this.#options.onTurnEnd?.({ conversationId, error: {} });
       }
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
@@ -800,7 +834,17 @@ export class CodexHost implements EngineAdapter {
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
-        this.#options.onTurnError?.({ detail: String(err) });
+        // issue #131 must-fix 2: String(err) is unstructured, untrusted text
+        // (subprocess/exception message, possibly containing paths or other
+        // detail unsafe to inject verbatim into a peer's LLM context). Safe
+        // to pass as `detail` regardless: classifyInterAgentError uses
+        // `detail` ONLY to keyword-sniff a code and never copies it into the
+        // produced notice's message — the raw string itself never leaves
+        // this process.
+        this.#options.onTurnEnd?.({
+          conversationId,
+          error: { detail: String(err) },
+        });
       }
       if (!this.#closed) {
         process.stderr.write(`codex turn failed: ${String(err)}\n`);

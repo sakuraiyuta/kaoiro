@@ -151,14 +151,22 @@ export interface AgentHostOptions {
    * Omitted = replies are not relayed.
    */
   onLog?: (envelope: Envelope) => void;
-  /** Invoked once per SDK turn that ends with is_error=true, alongside (not
-   *  instead of) onLog's result envelope (issue #131). `reason` is the SDK's
-   *  terminal_reason when reported; `detail` mirrors the turn's
-   *  error_detail. The CLI feeds this into the shared inter-agent error
-   *  classifier and, if the turn had an unreplied inter-agent injection,
-   *  emits a peer-error notice straight through ServerLink. Omitted = no
-   *  notice is ever emitted (unit tests only — production always wires it). */
-  onTurnError?: (info: { reason?: string; detail?: string }) => void;
+  /** Invoked once per SDK turn boundary (success or error), alongside (not
+   *  instead of) onLog's result envelope (issue #131). `conversationId` is
+   *  the inter-agent conversation that turn's injection came from (the value
+   *  passed as send()'s third argument for that turn), or null for an
+   *  ordinary operator-instruction turn — must-fix 1: turn-scoped, so the CLI
+   *  never resolves a conversation the current turn was not actually
+   *  answering. `error` is present only when the turn ended with
+   *  is_error=true: `reason` is the SDK's terminal_reason when reported,
+   *  `detail` mirrors the turn's error_detail. The CLI feeds `error` into the
+   *  shared inter-agent error classifier and resolves exactly this turn's
+   *  conversation via InterAgentTool#resolveTurnEnd. Omitted = no notice is
+   *  ever emitted (unit tests only — production always wires it). */
+  onTurnEnd?: (info: {
+    conversationId: string | null;
+    error?: { reason?: string; detail?: string };
+  }) => void;
   /** Invoked when wrapper rejects an individual upload (file-upload spec /
    *  ADR-0025 F9). Omitted = rejections are not relayed (validation still
    *  runs, the message just does not leave the host). */
@@ -259,6 +267,15 @@ export class AgentHost implements EngineAdapter {
   #gcTimer: ReturnType<typeof setInterval> | null = null;
 
   readonly #queue: SDKUserMessage[] = [];
+  /** Parallel FIFO to #queue (issue #131 must-fix 1): the inter-agent
+   *  conversation_id (if any) that each queued turn's injection came from,
+   *  null for an ordinary operator instruction. Shifted in lockstep with
+   *  #queue in #input() so #currentTurnConversationId always names exactly
+   *  the turn in flight — never a stale or unrelated conversation. */
+  readonly #turnConversationIds: (string | null)[] = [];
+  /** conversation_id of the turn currently being processed by the SDK
+   *  session loop, set by #input() when it dequeues that turn's message. */
+  #currentTurnConversationId: string | null = null;
   #notify: (() => void) | null = null;
   #closed = false;
   #query: Query | null = null;
@@ -510,8 +527,19 @@ export class AgentHost implements EngineAdapter {
    *  missing, incomplete, or unfittable. Successful resolution consumes the
    *  uploads. Async because the PDF fit-to-SDK pass is async; cli.ts
    *  serialises onInstruction calls through a promise chain so async render
-   *  cost does not reorder concurrent instructions on the SDK queue. */
-  async send(text: string, attachmentIds?: string[]): Promise<void> {
+   *  cost does not reorder concurrent instructions on the SDK queue.
+   *
+   *  `interAgentConversationId` (issue #131 must-fix 1) tags this specific
+   *  queued turn with the inter-agent conversation it was injected to answer
+   *  — cli.ts passes it only from the inter-agent injection path, never for
+   *  an ordinary operator instruction. Threaded through #turnConversationIds
+   *  in lockstep with #queue so onTurnEnd resolves exactly this turn's
+   *  conversation, not whatever else happens to be pending. */
+  async send(
+    text: string,
+    attachmentIds?: string[],
+    interAgentConversationId?: string,
+  ): Promise<void> {
     if (this.#closed) throw new Error("agent host is closed");
     // Fail fast instead of growing without bound when nothing drains.
     if (this.#queue.length >= MAX_QUEUED_TURNS) {
@@ -598,6 +626,7 @@ export class AgentHost implements EngineAdapter {
       // narrows our local ContentBlock union to the SDK's wider shape.
       message: { role: "user", content: content as never },
     });
+    this.#turnConversationIds.push(interAgentConversationId ?? null);
     // Optimistic `sending` state (#32): raised here, where the host knows the
     // instruction was accepted, rather than waiting for an SDK message that
     // may not land until the model's first token.
@@ -1175,14 +1204,22 @@ export class AgentHost implements EngineAdapter {
       const result = sdkMessageToResult(message);
       if (result) {
         this.#emitResult(result, sdkMessageToCost(message));
+        // issue #131 must-fix 1: resolve exactly the conversation #input()
+        // tagged this turn with — never sweep whatever else is pending.
+        const conversationId = this.#currentTurnConversationId;
         if (result.is_error) {
           const terminalReason = sdkMessageToTerminalReason(message);
-          this.#options.onTurnError?.({
-            ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
-            ...(result.error_detail !== undefined
-              ? { detail: result.error_detail }
-              : {}),
+          this.#options.onTurnEnd?.({
+            conversationId,
+            error: {
+              ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
+              ...(result.error_detail !== undefined
+                ? { detail: result.error_detail }
+                : {}),
+            },
           });
+        } else {
+          this.#options.onTurnEnd?.({ conversationId });
         }
         this.#toolNames.clear();
       }
@@ -1754,6 +1791,9 @@ export class AgentHost implements EngineAdapter {
   async *#input(): AsyncGenerator<SDKUserMessage> {
     while (true) {
       while (this.#queue.length > 0) {
+        // Shift in lockstep with #queue (issue #131 must-fix 1) so the tag
+        // always names the turn about to be fed to the SDK, not a stale one.
+        this.#currentTurnConversationId = this.#turnConversationIds.shift() ?? null;
         yield this.#queue.shift() as SDKUserMessage;
       }
       if (this.#closed) return;

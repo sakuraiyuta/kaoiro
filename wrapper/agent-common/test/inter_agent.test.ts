@@ -334,17 +334,17 @@ describe("InterAgentTool", () => {
   });
 });
 
-describe("pending-injection error notices (issue #131)", () => {
-  it("drainPendingErrorNotices は notePendingInjection 済みの conversation を送信元宛の envelope にして返す", () => {
+describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEnd)", () => {
+  it("resolveTurnEnd は notePendingInjection 済みの conversation を送信元宛の envelope にして返す", () => {
     const { tool, capture } = makeTool("self.agent");
     tool.notePendingInjection(inboundEnvelope("cnv-pending"));
 
-    const notices = tool.drainPendingErrorNotices({
+    const notices = tool.resolveTurnEnd("cnv-pending", {
       code: "context_overflow",
       message: "prompt too long",
     });
 
-    expect(capture.envelopes).toHaveLength(0); // drain returns, doesn't send
+    expect(capture.envelopes).toHaveLength(0); // resolveTurnEnd returns, doesn't send
     expect(notices).toHaveLength(1);
     const payload = notices[0]!.payload as unknown as InterAgentMessagePayload;
     expect(payload.to).toBe("peer.agent"); // the injected envelope's agent_id
@@ -358,7 +358,33 @@ describe("pending-injection error notices (issue #131)", () => {
     expect(payload.body).toContain("context_overflow");
   });
 
-  it("invoke() で同じ conversation に返信すると pending が解消し drain は何も返さない", async () => {
+  it("conversationId が null なら常に空配列 (操作者ターンのタグ無し)", () => {
+    const { tool } = makeTool("self.agent");
+    tool.notePendingInjection(inboundEnvelope("cnv-untouched"));
+    expect(
+      tool.resolveTurnEnd(null, { code: "api_error", message: "x" }),
+    ).toEqual([]);
+    // untouched entry survives a null-tagged turn resolution
+    expect(
+      tool.resolveTurnEnd("cnv-untouched", { code: "api_error", message: "y" }),
+    ).toHaveLength(1);
+  });
+
+  it("成功ターン (error省略) は通知を出さず pending を消費するだけ", () => {
+    const { tool } = makeTool("self.agent");
+    tool.notePendingInjection(inboundEnvelope("cnv-quiet-success"));
+
+    expect(tool.resolveTurnEnd("cnv-quiet-success")).toEqual([]);
+    // already cleared — a LATER, unrelated turn's error must not resurrect it
+    expect(
+      tool.resolveTurnEnd("cnv-quiet-success", {
+        code: "api_error",
+        message: "unrelated later failure",
+      }),
+    ).toEqual([]);
+  });
+
+  it("invoke() で同じ conversation に返信すると pending が解消し resolveTurnEnd は何も返さない", async () => {
     const { tool } = makeTool("self.agent");
     tool.notePendingInjection(inboundEnvelope("cnv-replied"));
     await tool.invoke({
@@ -369,41 +395,54 @@ describe("pending-injection error notices (issue #131)", () => {
     });
 
     expect(
-      tool.drainPendingErrorNotices({ code: "api_error", message: "x" }),
+      tool.resolveTurnEnd("cnv-replied", { code: "api_error", message: "x" }),
     ).toEqual([]);
   });
 
-  it("drain は一度返した pending を消費し、pending が無ければ空配列を返す", () => {
+  it("同じ conversationId を2回 resolve しても2回目は空配列 (二重通知防止)", () => {
     const { tool } = makeTool("self.agent");
     expect(
-      tool.drainPendingErrorNotices({ code: "api_error", message: "x" }),
+      tool.resolveTurnEnd("cnv-none", { code: "api_error", message: "x" }),
     ).toEqual([]);
 
     tool.notePendingInjection(inboundEnvelope("cnv-once"));
-    const first = tool.drainPendingErrorNotices({
+    const first = tool.resolveTurnEnd("cnv-once", {
       code: "api_error",
       message: "first",
     });
     expect(first).toHaveLength(1);
-    const second = tool.drainPendingErrorNotices({
+    const second = tool.resolveTurnEnd("cnv-once", {
       code: "api_error",
       message: "second",
     });
     expect(second).toEqual([]);
   });
 
-  it("複数 conversation の pending をそれぞれ独立した notice にする", () => {
+  it("並存する複数 conversation は互いに独立して resolve される (must-fix 1: ターン非スコープの誤通知防止)", () => {
     const { tool } = makeTool("self.agent");
-    tool.notePendingInjection(inboundEnvelope("cnv-1"));
-    tool.notePendingInjection(inboundEnvelope("cnv-2"));
+    // Two inbound injections queued before either turn completes — the bug
+    // this regression test targets: resolving turn A's outcome must not
+    // touch conversation B's still-pending entry, and vice versa.
+    tool.notePendingInjection(inboundEnvelope("cnv-a"));
+    tool.notePendingInjection(inboundEnvelope("cnv-b"));
 
-    const notices = tool.drainPendingErrorNotices({
+    // Turn for cnv-a fails: only cnv-a gets a notice, cnv-b stays pending.
+    const noticesA = tool.resolveTurnEnd("cnv-a", {
       code: "timeout",
       message: "no response",
     });
-    expect(notices.map((n) => (n.payload as unknown as InterAgentMessagePayload).conversation_id).sort()).toEqual(
-      ["cnv-1", "cnv-2"],
-    );
+    expect(noticesA).toHaveLength(1);
+    expect(
+      (noticesA[0]!.payload as unknown as InterAgentMessagePayload)
+        .conversation_id,
+    ).toBe("cnv-a");
+
+    // cnv-b's turn later succeeds quietly: cleared, no notice, no leftover
+    // that a further-later unrelated failure could misattribute.
+    expect(tool.resolveTurnEnd("cnv-b")).toEqual([]);
+    expect(
+      tool.resolveTurnEnd("cnv-b", { code: "api_error", message: "late" }),
+    ).toEqual([]);
   });
 });
 
@@ -443,7 +482,7 @@ describe("classifyInterAgentError (issue #131)", () => {
       detail: "unexpected stream termination",
     });
     expect(result.code).toBe("api_error");
-    expect(result.message).toBe("unexpected stream termination");
+    expect(result.message).toBe("the peer reported an unspecified error");
   });
 
   it("disconnected はサーバ専管のため wrapper 側の分類結果には現れない", () => {
@@ -462,13 +501,29 @@ describe("classifyInterAgentError (issue #131)", () => {
     }
   });
 
-  it("message は既存の clip 慣行 (MAX_LOG_BYTES) に従って上限を超えない", () => {
-    const huge = "x".repeat(20_000);
-    const result = classifyInterAgentError({ detail: huge });
-    expect(Buffer.byteLength(result.message, "utf8")).toBeLessThanOrEqual(
-      16_384,
-    );
+  it("message は常に固定テンプレートで、reason/detail の生テキストを一切含まない (issue #131 must-fix 2)", () => {
+    const secretLike = "Error: ENOENT /Users/user/.ssh/id_ed25519 token=sk-abc123";
+    const byReason = classifyInterAgentError({
+      reason: "blocking_limit",
+      detail: secretLike,
+    });
+    expect(byReason.message).toBe("the peer hit a rate limit");
+    expect(byReason.message).not.toContain(secretLike);
+
+    const byKeyword = classifyInterAgentError({
+      detail: `rate limited — ${secretLike}`,
+    });
+    expect(byKeyword.code).toBe("rate_limit");
+    expect(byKeyword.message).toBe("the peer hit a rate limit");
+    expect(byKeyword.message).not.toContain(secretLike);
+
+    const fallback = classifyInterAgentError({ detail: secretLike });
+    expect(fallback.message).toBe("the peer reported an unspecified error");
+    expect(fallback.message).not.toContain(secretLike);
+    expect(fallback.message).not.toContain("id_ed25519");
+    expect(fallback.message).not.toContain("sk-abc123");
   });
+
 });
 
 describe("formatInboundMessage", () => {
