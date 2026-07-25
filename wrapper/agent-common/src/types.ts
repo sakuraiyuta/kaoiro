@@ -22,6 +22,7 @@ export type {
   FileUploadRejectReason,
   AttachRejectedPayload,
   InstructionRejectedPayload,
+  InterAgentErrorPayload,
   InterAgentMessageKind,
   InterAgentMessagePayload,
   EngineKind,

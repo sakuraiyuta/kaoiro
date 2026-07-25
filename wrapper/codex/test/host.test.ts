@@ -1719,4 +1719,71 @@ describe("CodexHost", () => {
       }
     });
   });
+
+  describe("onTurnError (issue #131)", () => {
+    it("turn.failed は onTurnError に error.message を detail として渡す", async () => {
+      const turnErrors: { reason?: string; detail?: string }[] = [];
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "uuid-err-1" },
+          { type: "turn.started" },
+          { type: "turn.failed", error: { message: "rate limited" } },
+        ],
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnError: (info) => turnErrors.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi");
+
+      expect(turnErrors).toEqual([{ detail: "rate limited" }]);
+    });
+
+    it("終端イベント無しでストリームが終わると detail 無しで onTurnError を呼ぶ", async () => {
+      const turnErrors: unknown[] = [];
+      const { client } = makeClient([
+        [{ type: "thread.started", thread_id: "uuid-err-2" }],
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnError: (info) => turnErrors.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi");
+
+      expect(turnErrors).toEqual([{}]);
+    });
+
+    it("runStreamed の reject は err を detail 文字列化して onTurnError に渡す", async () => {
+      const turnErrors: { reason?: string; detail?: string }[] = [];
+      const thread: CodexThreadLike = {
+        async runStreamed() {
+          throw new Error("exec exited 1");
+        },
+      };
+      const client: CodexClientLike = {
+        startThread: () => thread,
+        resumeThread: () => thread,
+      };
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnError: (info) => turnErrors.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi");
+
+      expect(turnErrors).toHaveLength(1);
+      expect(turnErrors[0]?.detail).toContain("exec exited 1");
+    });
+  });
 });

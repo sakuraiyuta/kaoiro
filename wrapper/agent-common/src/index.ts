@@ -11,10 +11,15 @@ export {
   LIST_AGENTS_TOOL_FQN,
   SEND_TO_AGENT_INPUT_SHAPE,
   WHOAMI_TOOL_FQN,
+  classifyInterAgentError,
   formatInboundMessage,
   isFormattedInterAgentMessage,
 } from "./inter_agent.js";
-export type { InterAgentToolOptions, WhoamiSnapshot } from "./inter_agent.js";
+export type {
+  InterAgentErrorClassifyInput,
+  InterAgentToolOptions,
+  WhoamiSnapshot,
+} from "./inter_agent.js";
 export { MAX_LOG_BYTES, clipText, logEntryToPayload } from "./logpayload.js";
 export { PendingRegistry } from "./pending.js";
 export {

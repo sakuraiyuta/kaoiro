@@ -62,6 +62,7 @@ import {
   sdkMessageToResultMeta,
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
+  sdkMessageToTerminalReason,
 } from "./adapter.js";
 import {
   clipText,
@@ -150,6 +151,14 @@ export interface AgentHostOptions {
    * Omitted = replies are not relayed.
    */
   onLog?: (envelope: Envelope) => void;
+  /** Invoked once per SDK turn that ends with is_error=true, alongside (not
+   *  instead of) onLog's result envelope (issue #131). `reason` is the SDK's
+   *  terminal_reason when reported; `detail` mirrors the turn's
+   *  error_detail. The CLI feeds this into the shared inter-agent error
+   *  classifier and, if the turn had an unreplied inter-agent injection,
+   *  emits a peer-error notice straight through ServerLink. Omitted = no
+   *  notice is ever emitted (unit tests only — production always wires it). */
+  onTurnError?: (info: { reason?: string; detail?: string }) => void;
   /** Invoked when wrapper rejects an individual upload (file-upload spec /
    *  ADR-0025 F9). Omitted = rejections are not relayed (validation still
    *  runs, the message just does not leave the host). */
@@ -1166,6 +1175,15 @@ export class AgentHost implements EngineAdapter {
       const result = sdkMessageToResult(message);
       if (result) {
         this.#emitResult(result, sdkMessageToCost(message));
+        if (result.is_error) {
+          const terminalReason = sdkMessageToTerminalReason(message);
+          this.#options.onTurnError?.({
+            ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
+            ...(result.error_detail !== undefined
+              ? { detail: result.error_detail }
+              : {}),
+          });
+        }
         this.#toolNames.clear();
       }
     }

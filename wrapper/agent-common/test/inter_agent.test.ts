@@ -4,6 +4,7 @@ import {
   InterAgentTool,
   LIST_AGENTS_TOOL_FQN,
   WHOAMI_TOOL_FQN,
+  classifyInterAgentError,
   formatInboundMessage,
   isFormattedInterAgentMessage,
   type WhoamiSnapshot,
@@ -11,6 +12,7 @@ import {
 import type { DirectoryEntry } from "@kaoiro/wrapper-core";
 import type {
   Envelope,
+  InterAgentErrorPayload,
   InterAgentMessagePayload,
   WrapperConfig,
 } from "../src/types.js";
@@ -56,6 +58,7 @@ function makeTool(agentId: string): { tool: InterAgentTool; capture: Capture } {
 function inboundEnvelope(
   conversationId: string,
   kind: InterAgentMessagePayload["kind"] = "response",
+  error?: InterAgentErrorPayload,
 ): Envelope {
   return {
     version: "0",
@@ -72,6 +75,7 @@ function inboundEnvelope(
       body: "peer reply body",
       meta: { done: false, propose_next: "review this reply" },
       owner: { kind: "user", id: "operator" },
+      ...(error ? { error } : {}),
     },
     ext: {},
   };
@@ -281,6 +285,34 @@ describe("InterAgentTool", () => {
     expect(capture.envelopes).toHaveLength(0);
   });
 
+  it("wait_for_response は payload.error 付き inbound を peer_error として返し reply とは判別する (#131)", async () => {
+    const { tool } = makeTool("self.agent");
+    const pending = callTool(tool, {
+      to: "peer.agent",
+      body: "please reply",
+      kind: "request",
+      conversation_id: "cnv-err",
+      wait_for_response: true,
+      timeout_ms: 1_000,
+    });
+
+    const inbound = inboundEnvelope("cnv-err", "inform", {
+      code: "rate_limit",
+      message: "peer hit its rate limit",
+    });
+    expect(tool.receiveInbound(inbound)).toBe(true);
+
+    const { result } = await pending;
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.reply).toBeUndefined();
+    expect(parsed.peer_error).toEqual({
+      code: "rate_limit",
+      message: "peer hit its rate limit",
+      from: "peer.agent",
+    });
+  });
+
   it("optional フィールド(confidence/reject_reason/propose_next)を payload.meta に反映する", async () => {
     const { tool, capture } = makeTool("agent-a");
     await callTool(tool, {
@@ -299,6 +331,143 @@ describe("InterAgentTool", () => {
     expect(meta.reject_reason).toBe("ベンチ未収束");
     expect(meta.propose_next).toBe("別案を検討");
     expect(meta.done).toBe(true);
+  });
+});
+
+describe("pending-injection error notices (issue #131)", () => {
+  it("drainPendingErrorNotices は notePendingInjection 済みの conversation を送信元宛の envelope にして返す", () => {
+    const { tool, capture } = makeTool("self.agent");
+    tool.notePendingInjection(inboundEnvelope("cnv-pending"));
+
+    const notices = tool.drainPendingErrorNotices({
+      code: "context_overflow",
+      message: "prompt too long",
+    });
+
+    expect(capture.envelopes).toHaveLength(0); // drain returns, doesn't send
+    expect(notices).toHaveLength(1);
+    const payload = notices[0]!.payload as unknown as InterAgentMessagePayload;
+    expect(payload.to).toBe("peer.agent"); // the injected envelope's agent_id
+    expect(payload.conversation_id).toBe("cnv-pending");
+    expect(payload.kind).toBe("inform");
+    expect(payload.meta.done).toBe(false);
+    expect(payload.error).toEqual({
+      code: "context_overflow",
+      message: "prompt too long",
+    });
+    expect(payload.body).toContain("context_overflow");
+  });
+
+  it("invoke() で同じ conversation に返信すると pending が解消し drain は何も返さない", async () => {
+    const { tool } = makeTool("self.agent");
+    tool.notePendingInjection(inboundEnvelope("cnv-replied"));
+    await tool.invoke({
+      to: "peer.agent",
+      body: "実は返信できた",
+      kind: "response",
+      conversation_id: "cnv-replied",
+    });
+
+    expect(
+      tool.drainPendingErrorNotices({ code: "api_error", message: "x" }),
+    ).toEqual([]);
+  });
+
+  it("drain は一度返した pending を消費し、pending が無ければ空配列を返す", () => {
+    const { tool } = makeTool("self.agent");
+    expect(
+      tool.drainPendingErrorNotices({ code: "api_error", message: "x" }),
+    ).toEqual([]);
+
+    tool.notePendingInjection(inboundEnvelope("cnv-once"));
+    const first = tool.drainPendingErrorNotices({
+      code: "api_error",
+      message: "first",
+    });
+    expect(first).toHaveLength(1);
+    const second = tool.drainPendingErrorNotices({
+      code: "api_error",
+      message: "second",
+    });
+    expect(second).toEqual([]);
+  });
+
+  it("複数 conversation の pending をそれぞれ独立した notice にする", () => {
+    const { tool } = makeTool("self.agent");
+    tool.notePendingInjection(inboundEnvelope("cnv-1"));
+    tool.notePendingInjection(inboundEnvelope("cnv-2"));
+
+    const notices = tool.drainPendingErrorNotices({
+      code: "timeout",
+      message: "no response",
+    });
+    expect(notices.map((n) => (n.payload as unknown as InterAgentMessagePayload).conversation_id).sort()).toEqual(
+      ["cnv-1", "cnv-2"],
+    );
+  });
+});
+
+describe("classifyInterAgentError (issue #131)", () => {
+  it("既知の terminal_reason を対応する code へ写像する", () => {
+    expect(classifyInterAgentError({ reason: "blocking_limit" }).code).toBe(
+      "rate_limit",
+    );
+    expect(
+      classifyInterAgentError({ reason: "rapid_refill_breaker" }).code,
+    ).toBe("rate_limit");
+    expect(classifyInterAgentError({ reason: "prompt_too_long" }).code).toBe(
+      "context_overflow",
+    );
+    expect(classifyInterAgentError({ reason: "aborted_streaming" }).code).toBe(
+      "interrupted",
+    );
+    expect(classifyInterAgentError({ reason: "api_error" }).code).toBe(
+      "api_error",
+    );
+  });
+
+  it("未知の reason は detail のキーワードで rate_limit/context_overflow を推定する", () => {
+    expect(
+      classifyInterAgentError({
+        reason: "unknown_engine_reason",
+        detail: "HTTP 429 Too Many Requests",
+      }).code,
+    ).toBe("rate_limit");
+    expect(
+      classifyInterAgentError({ detail: "context window exceeded" }).code,
+    ).toBe("context_overflow");
+  });
+
+  it("分類不能な入力は api_error に縮退する (Codex の raw message 想定)", () => {
+    const result = classifyInterAgentError({
+      detail: "unexpected stream termination",
+    });
+    expect(result.code).toBe("api_error");
+    expect(result.message).toBe("unexpected stream termination");
+  });
+
+  it("disconnected はサーバ専管のため wrapper 側の分類結果には現れない", () => {
+    const reasons = [
+      "blocking_limit",
+      "rapid_refill_breaker",
+      "prompt_too_long",
+      "aborted_streaming",
+      "aborted_tools",
+      "timeout",
+      "api_error",
+      "max_turns",
+    ];
+    for (const reason of reasons) {
+      expect(classifyInterAgentError({ reason }).code).not.toBe("disconnected");
+    }
+  });
+
+  it("message は既存の clip 慣行 (MAX_LOG_BYTES) に従って上限を超えない", () => {
+    const huge = "x".repeat(20_000);
+    const result = classifyInterAgentError({ detail: huge });
+    expect(Buffer.byteLength(result.message, "utf8")).toBeLessThanOrEqual(
+      16_384,
+    );
   });
 });
 
@@ -393,6 +562,29 @@ describe("formatInboundMessage", () => {
     const text = formatInboundMessage(env);
     expect(text).toContain("[from server] escalate-to-user");
     expect(text).toContain("done=true");
+  });
+
+  it("payload.error 付きは peer-error 専用行 + 行動指針で整形する (issue #131)", () => {
+    const env = inboundEnvelope("cnv-notice", "inform", {
+      code: "context_overflow",
+      message: "context window exhausted",
+    });
+    const text = formatInboundMessage(env);
+    expect(text).toContain(
+      "[from peer.agent] peer-error(context_overflow): context window exhausted — retrying is pointless — summarize the context or escalate to the operator.",
+    );
+    expect(text).not.toContain("[from peer.agent] inform:");
+  });
+
+  it("未知の error code は既定の行動指針にフォールバックする", () => {
+    const env = inboundEnvelope("cnv-unknown-code", "inform", {
+      code: "some_future_code",
+      message: "not yet catalogued",
+    });
+    const text = formatInboundMessage(env);
+    expect(text).toContain(
+      "peer-error(some_future_code): not yet catalogued — confirm the peer's state before retrying.",
+    );
   });
 });
 
@@ -545,5 +737,17 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     expect(
       descriptors.find((d) => d.name === "send_to_agent")?.description,
     ).toContain("do not spawn a same-named agent");
+  });
+
+  it("send_to_agent の description に peer_error の code→推奨行動を明記する (issue #131)", () => {
+    const { tool } = makeTool("self.agent");
+    const description = tool
+      .descriptors()
+      .find((d) => d.name === "send_to_agent")!.description;
+    expect(description).toContain("peer_error: {code, message, from}");
+    expect(description).toContain("rate_limit = wait before retrying");
+    expect(description).toContain("context_overflow = retrying is pointless");
+    expect(description).toContain("api_error = retry at most once");
+    expect(description).toContain("disconnected = the peer is unreachable");
   });
 });

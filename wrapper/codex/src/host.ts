@@ -52,6 +52,7 @@ import {
   logEntryToPayload,
 } from "@kaoiro/agent-common";
 import {
+  threadEventToErrorDetail,
   threadEventToEvents,
   threadEventToFinalText,
   threadEventToLogs,
@@ -149,6 +150,16 @@ export interface CodexHostOptions {
   onState: (envelope: Envelope) => void;
   /** Invoked per relayable log line (assistant text / tool call / result). */
   onLog?: (envelope: Envelope) => void;
+  /** Invoked once per turn that ends with is_error=true, alongside (not
+   *  instead of) onLog's result envelope (issue #131). Codex has no
+   *  structured failure taxonomy like Claude's terminal_reason — `reason`
+   *  is never populated here; `detail` carries whatever raw message is
+   *  available (ThreadError.message / the runStreamed rejection), or is
+   *  omitted when the stream simply ended without a terminal event. The CLI
+   *  feeds this into the shared inter-agent error classifier, which
+   *  keyword-sniffs `detail` and otherwise degrades to "api_error". Omitted
+   *  = no notice is ever emitted (unit tests only — production wires it). */
+  onTurnError?: (info: { reason?: string; detail?: string }) => void;
   /** Server-composed personality + common footer (ADR-0029 F5), injected as
    *  a developer-role message via config.developer_instructions (ADR-0032
    *  F3, verified 2026-07-10). */
@@ -764,6 +775,8 @@ export class CodexHost implements EngineAdapter {
           sawResult = true;
           this.#finishTurn(false, attempted);
           this.#emitResult({ is_error: true });
+          const detail = threadEventToErrorDetail(event);
+          this.#options.onTurnError?.(detail !== null ? { detail } : {});
           // Failure paths (429 / max-output / auth error) still write a
           // token_count event to the rollout, so refresh on both branches.
           void this.#refreshRateLimits();
@@ -779,6 +792,7 @@ export class CodexHost implements EngineAdapter {
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
+        this.#options.onTurnError?.({});
       }
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
@@ -786,6 +800,7 @@ export class CodexHost implements EngineAdapter {
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
+        this.#options.onTurnError?.({ detail: String(err) });
       }
       if (!this.#closed) {
         process.stderr.write(`codex turn failed: ${String(err)}\n`);

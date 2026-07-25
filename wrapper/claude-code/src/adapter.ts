@@ -238,6 +238,18 @@ export function sdkMessageToResult(message: SDKMessage): ResultPayload | null {
   return payload;
 }
 
+/** The SDK's terminal_reason for a result message (issue #131), or undefined
+ *  for other messages or when the SDK did not report one. Deliberately kept
+ *  out of ResultPayload/the wire envelope (scope: no raw engine detail on
+ *  the wire) — it exists only to feed the wrapper-local inter-agent error
+ *  classifier (classifyInterAgentError, @kaoiro/agent-common) when a turn
+ *  ends in error. */
+export function sdkMessageToTerminalReason(
+  message: SDKMessage,
+): string | undefined {
+  return message.type === "result" ? message.terminal_reason : undefined;
+}
+
 /** Cumulative session cost (USD) from a result message for the ext.cost
  *  filter (#8), or null for non-result messages. Carried in the envelope's
  *  ext, not the result payload, per the plugin-model. */

@@ -11,6 +11,7 @@ import {
   InterAgentTool,
   QuestionBroker,
   askUserQuestionDescriptor,
+  classifyInterAgentError,
   formatInboundMessage,
   makeLog,
   makeStateChange,
@@ -240,6 +241,10 @@ async function main(): Promise<void> {
       }
       const text = formatInboundMessage(envelope);
       process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
+      // issue #131: this wrapper now owes a reply on the conversation. If
+      // the turn this injection starts ends in error before send_to_agent
+      // is called, onTurnError below surfaces that back to the sender.
+      interAgent?.notePendingInjection(envelope);
       instructionChain = instructionChain.then(() =>
         host.send(text).catch((err: unknown) => {
           process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
@@ -271,6 +276,20 @@ async function main(): Promise<void> {
   host = new CodexHost(effectiveConfig, {
     onState,
     onLog,
+    // issue #131: a turn ending in error may leave an injected inter-agent
+    // message unanswered. Classify what codex reported (best-effort — no
+    // structured reason, only a raw message when one is available) and, if
+    // any conversation is still owed a reply, push the resulting notice
+    // envelopes straight through ServerLink — this bypasses the model/tool
+    // path entirely since the turn just failed to produce one, so no
+    // broker approval applies.
+    onTurnError: (info) => {
+      const error = classifyInterAgentError(info);
+      for (const envelope of interAgent?.drainPendingErrorNotices(error) ??
+        []) {
+        link?.send(envelope);
+      }
+    },
     appendSystemPrompt,
     onInstructionRejected: (envelope) => link?.send(envelope),
     onAttachRejected: (envelope) => link?.send(envelope),

@@ -218,6 +218,37 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("error result は onTurnError に terminal_reason/error_detail を渡す (issue #131)", async () => {
+    const turnErrors: { reason?: string; detail?: string }[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnError: (info) => turnErrors.push(info),
+      queryFn: scriptedQuery([
+        result("error_during_execution", {
+          errors: ["tool crashed: EACCES"],
+          terminal_reason: "prompt_too_long",
+        }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(turnErrors).toEqual([
+      { reason: "prompt_too_long", detail: "tool crashed: EACCES" },
+    ]);
+  });
+
+  it("success result は onTurnError を呼ばない (issue #131)", async () => {
+    const turnErrors: unknown[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnError: (info) => turnErrors.push(info),
+      queryFn: scriptedQuery([result("success", { result: "done" })]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(turnErrors).toEqual([]);
+  });
+
   it("rate_limit_event を ext.rate_limits として state_change に付与する (#16)", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {
