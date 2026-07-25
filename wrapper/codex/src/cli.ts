@@ -11,12 +11,14 @@ import {
   InterAgentTool,
   QuestionBroker,
   askUserQuestionDescriptor,
+  classifyInterAgentError,
   formatInboundMessage,
   makeLog,
   makeStateChange,
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
+  InterAgentMessagePayload,
   KaoiroState,
   ModelSource,
 } from "@kaoiro/agent-common";
@@ -240,8 +242,16 @@ async function main(): Promise<void> {
       }
       const text = formatInboundMessage(envelope);
       process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
+      // issue #131: this wrapper now owes a reply on the conversation. Tag
+      // the queued turn with the conversation_id (must-fix 1: turn-scoped
+      // resolution) so onTurnEnd below resolves exactly THIS turn, not
+      // whatever else happens to be pending.
+      const conversationId = (
+        envelope.payload as Partial<InterAgentMessagePayload>
+      ).conversation_id;
+      interAgent?.notePendingInjection(envelope);
       instructionChain = instructionChain.then(() =>
-        host.send(text).catch((err: unknown) => {
+        host.send(text, undefined, conversationId).catch((err: unknown) => {
           process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
         }),
       );
@@ -271,6 +281,22 @@ async function main(): Promise<void> {
   host = new CodexHost(effectiveConfig, {
     onState,
     onLog,
+    // issue #131: resolve exactly the conversation this turn was tagged
+    // with (must-fix 1 — turn-scoped, never a sweep of everything pending).
+    // On error, classify what codex reported (best-effort — no structured
+    // reason, only a raw message when one is available) and push the
+    // resulting notice envelope straight through ServerLink — this bypasses
+    // the model/tool path entirely since the turn just failed to produce
+    // one, so no broker approval applies.
+    onTurnEnd: ({ conversationId, error }) => {
+      const classified = error ? classifyInterAgentError(error) : undefined;
+      for (const envelope of interAgent?.resolveTurnEnd(
+        conversationId,
+        classified,
+      ) ?? []) {
+        link?.send(envelope);
+      }
+    },
     appendSystemPrompt,
     onInstructionRejected: (envelope) => link?.send(envelope),
     onAttachRejected: (envelope) => link?.send(envelope),

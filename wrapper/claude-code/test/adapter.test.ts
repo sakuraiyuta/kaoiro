@@ -11,6 +11,7 @@ import {
   sdkMessageToResultMeta,
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
+  sdkMessageToTerminalReason,
 } from "../src/adapter.js";
 import { reduceStates } from "@kaoiro/agent-common";
 
@@ -271,6 +272,34 @@ describe("sdkMessageToResult", () => {
 
   it("result 以外は null", () => {
     expect(sdkMessageToResult(assistant([{ type: "text", text: "x" }]))).toBeNull();
+  });
+});
+
+describe("sdkMessageToTerminalReason (issue #131)", () => {
+  it("result message の terminal_reason を返す", () => {
+    expect(
+      sdkMessageToTerminalReason(
+        msg({
+          type: "result",
+          subtype: "error_during_execution",
+          terminal_reason: "prompt_too_long",
+        }),
+      ),
+    ).toBe("prompt_too_long");
+  });
+
+  it("terminal_reason 欠落なら undefined", () => {
+    expect(
+      sdkMessageToTerminalReason(
+        msg({ type: "result", subtype: "success", result: "完了" }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("result 以外は undefined", () => {
+    expect(
+      sdkMessageToTerminalReason(assistant([{ type: "text", text: "x" }])),
+    ).toBeUndefined();
   });
 });
 

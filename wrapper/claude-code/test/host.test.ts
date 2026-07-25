@@ -218,6 +218,87 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("error result は onTurnEnd に conversationId=null(未タグ) + terminal_reason/error_detail を渡す (issue #131)", async () => {
+    const turnEnds: {
+      conversationId: string | null;
+      error?: { reason?: string; detail?: string };
+    }[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn: scriptedQuery([
+        result("error_during_execution", {
+          errors: ["tool crashed: EACCES"],
+          terminal_reason: "prompt_too_long",
+        }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(turnEnds).toEqual([
+      {
+        conversationId: null,
+        error: { reason: "prompt_too_long", detail: "tool crashed: EACCES" },
+      },
+    ]);
+  });
+
+  it("success result は onTurnEnd に conversationId のみ(error無し)で渡す (issue #131)", async () => {
+    const turnEnds: unknown[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn: scriptedQuery([result("success", { result: "done" })]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(turnEnds).toEqual([{ conversationId: null }]);
+  });
+
+  it("並存する複数 inter-agent injection は各ターンの conversationId だけを解決する (issue #131 must-fix 1)", async () => {
+    const turnEnds: {
+      conversationId: string | null;
+      error?: { reason?: string; detail?: string };
+    }[] = [];
+    // Faithfully drains args.prompt (unlike scriptedQuery, which replays a
+    // fixed script blind to input) so #input()'s per-turn tag shifting is
+    // actually exercised: turn 1 (cnv-a) fails, turn 2 (cnv-b) succeeds.
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        let turn = 0;
+        for await (const _m of args.prompt) {
+          turn += 1;
+          if (turn === 1) {
+            yield msg({
+              type: "result",
+              subtype: "error_during_execution",
+              errors: ["boom"],
+            });
+          } else {
+            yield msg({ type: "result", subtype: "success", result: "ok" });
+          }
+        }
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+    const done = host.run();
+    await host.send("peer A injection", undefined, "cnv-a");
+    await host.send("peer B injection", undefined, "cnv-b");
+    host.close();
+    await done;
+
+    expect(turnEnds).toEqual([
+      { conversationId: "cnv-a", error: { detail: "boom" } },
+      { conversationId: "cnv-b" },
+    ]);
+  });
+
   it("rate_limit_event を ext.rate_limits として state_change に付与する (#16)", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {

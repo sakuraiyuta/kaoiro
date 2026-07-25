@@ -513,11 +513,29 @@ export type InterAgentMessageKind =
   | "escalate-to-user"
   | "done";
 
+/** Peer-unresponsive-error attachment on an inter_agent_message (issue #131).
+ *  `code` is an intentionally open string — the initial vocabulary is
+ *  `rate_limit` / `context_overflow` / `api_error` / `timeout` /
+ *  `interrupted` / `disconnected`; a classifier that cannot map its input to
+ *  one of these degrades to `api_error`. `message` is a human-readable,
+ *  secret-masked, length-clipped reason so the receiving agent can decide
+ *  whether to retry, wait, or escalate to the operator. */
+export interface InterAgentErrorPayload {
+  code: string;
+  message: string;
+}
+
 /** payload of a type="inter_agent_message" envelope (protocol-inter-agent
  *  spec). The sender lives in the surrounding envelope's `agent_id`; `to`
  *  is the destination agent_id used by the server for routing. `meta.done`
  *  must be true from both owner-side agents for the conversation to
- *  complete; `meta.reject_reason` is required when `kind === "reject"`. */
+ *  complete; `meta.reject_reason` is required when `kind === "reject"`.
+ *  `error` (issue #131) marks this envelope as a peer-unresponsive-error
+ *  notice rather than an ordinary message: `kind` stays `"inform"` (no new
+ *  enum value, so older receivers degrade gracefully) and `body` repeats the
+ *  human-readable reason for clients that only render `body`. `meta.done` is
+ *  always `false` on an error notice — ending the conversation is left to
+ *  the receiving agent's judgement. */
 export interface InterAgentMessagePayload {
   to: string;
   conversation_id: string;
@@ -534,6 +552,7 @@ export interface InterAgentMessagePayload {
     kind: "user" | "agent";
     id: string;
   };
+  error?: InterAgentErrorPayload;
 }
 
 // Runner control messages (protocol.md "runner 制御メッセージ", #66 / ADR-0023).

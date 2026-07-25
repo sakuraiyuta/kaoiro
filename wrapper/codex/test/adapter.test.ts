@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { reduceStates } from "@kaoiro/agent-common";
 import {
+  threadEventToErrorDetail,
   threadEventToEvents,
   threadEventToFinalText,
   threadEventToLogs,
@@ -218,4 +219,13 @@ describe("helpers", () => {
     expect(threadEventToFinalText(COMMAND_COMPLETED)).toBeNull();
   });
 
+  it("threadEventToErrorDetail は turn.failed の error.message を返す (issue #131)", () => {
+    expect(
+      threadEventToErrorDetail({
+        type: "turn.failed",
+        error: { message: "rate limited" },
+      }),
+    ).toBe("rate limited");
+    expect(threadEventToErrorDetail(COMMAND_COMPLETED)).toBeNull();
+  });
 });

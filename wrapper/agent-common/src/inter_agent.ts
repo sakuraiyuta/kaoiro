@@ -26,6 +26,7 @@ import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import type {
   Envelope,
   EngineKind,
+  InterAgentErrorPayload,
   InterAgentMessageKind,
   InterAgentMessagePayload,
   KaoiroState,
@@ -77,6 +78,124 @@ const KIND_VALUES = [
   "escalate-to-user",
   "done",
 ] as const satisfies readonly InterAgentMessageKind[];
+
+/** Recommended sender-side action per error code (issue #131 design
+ *  decision). Shared verbatim between TOOL_DESCRIPTION and
+ *  formatInboundMessage()'s error-notice line so both surfaces agree. Codes
+ *  outside this table (open vocabulary) fall back to a generic caution. */
+const ERROR_CODE_GUIDANCE: Readonly<Record<string, string>> = {
+  rate_limit: "wait before retrying",
+  context_overflow:
+    "retrying is pointless — summarize the context or escalate to the operator",
+  api_error: "retry at most once",
+  timeout: "the peer may still be mid-turn — wait before retrying",
+  interrupted: "confirm the peer's state before retrying",
+  disconnected: "the peer is unreachable — do not retry, escalate to the operator",
+};
+
+const DEFAULT_ERROR_GUIDANCE = "confirm the peer's state before retrying";
+
+/** One-line action hint for an error code, used in the async inbound notice
+ *  text (issue #131). */
+function errorGuidance(code: string): string {
+  return ERROR_CODE_GUIDANCE[code] ?? DEFAULT_ERROR_GUIDANCE;
+}
+
+const ERROR_CODE_GUIDANCE_SUMMARY = Object.entries(ERROR_CODE_GUIDANCE)
+  .map(([code, guidance]) => `${code} = ${guidance}`)
+  .join("; ");
+
+/** Adapter-supplied classification input for issue #131's error-notice
+ *  vocabulary (ADR-0032 F5: agent-common owns the classification rule,
+ *  engine adapters supply what they know). `reason` is an engine-reported
+ *  machine-readable tag when the adapter has one (e.g. Claude's
+ *  SDKResultMessage.terminal_reason); `detail` is a free-form human-readable
+ *  message (an SDK exception string, a raw `String(err)`, …). Neither field
+ *  is ever copied into the produced notice: `detail` is used ONLY to
+ *  keyword-sniff a code when `reason` does not resolve to one (security
+ *  review, issue #131 must-fix 2) — ending up unstructured, untrusted text
+ *  in another agent's LLM context is a materially different exposure than
+ *  the operator-only display #127 relies on for the same kind of string. */
+export interface InterAgentErrorClassifyInput {
+  reason?: string;
+  detail?: string;
+}
+
+const RATE_LIMIT_REASONS = new Set(["blocking_limit", "rapid_refill_breaker"]);
+const CONTEXT_OVERFLOW_REASONS = new Set(["prompt_too_long"]);
+const INTERRUPTED_REASONS = new Set(["aborted_streaming", "aborted_tools", "interrupted"]);
+const TIMEOUT_REASONS = new Set(["timeout"]);
+
+/** Keyword fallback for engines that expose only a free-form error string
+ *  (e.g. Codex's ThreadError.message, which carries no structured reason) —
+ *  best-effort, deliberately narrow to avoid false positives. The matched
+ *  text itself is discarded; only the resulting code is kept. */
+function classifyByDetailKeywords(detail: string): string | null {
+  const lower = detail.toLowerCase();
+  if (/rate.?limit|too many requests|\b429\b/.test(lower)) return "rate_limit";
+  if (/context (window|length)|prompt too long|token limit/.test(lower)) {
+    return "context_overflow";
+  }
+  return null;
+}
+
+/** Fixed, safe notice text per error code (issue #131 must-fix 2): never the
+ *  adapter's raw reason/detail, which may carry unstructured text (subprocess
+ *  exception strings, SDK error text) unsafe to inject verbatim into a peer
+ *  agent's LLM context. `disconnected` is documented for vocabulary parity
+ *  with the server-synthesized notice even though this classifier never
+ *  produces it (see classifyInterAgentError doc). */
+const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
+  rate_limit: "the peer hit a rate limit",
+  context_overflow: "the peer's context window overflowed",
+  api_error: "the peer reported an unspecified error",
+  timeout: "the peer's turn timed out",
+  interrupted: "the peer's turn was interrupted",
+  disconnected: "the peer disconnected",
+};
+const DEFAULT_ERROR_MESSAGE = "the peer reported an unrecognized error";
+
+function messageForCode(code: string): string {
+  return ERROR_CODE_MESSAGE[code] ?? DEFAULT_ERROR_MESSAGE;
+}
+
+/** Maps adapter-reported engine error info to the open error-code vocabulary
+ *  (issue #131: rate_limit / context_overflow / api_error / timeout /
+ *  interrupted / disconnected). Unrecognized input degrades to "api_error"
+ *  per the design decision — "disconnected" is intentionally never produced
+ *  here since only the server can observe a wrapper disconnect. The returned
+ *  `message` is always one of the fixed ERROR_CODE_MESSAGE templates, never
+ *  the raw `reason`/`detail` (must-fix 2) — those are classification input
+ *  only, not notice content. */
+export function classifyInterAgentError(
+  input: InterAgentErrorClassifyInput,
+): InterAgentErrorPayload {
+  const reason = input.reason;
+  if (reason !== undefined) {
+    if (RATE_LIMIT_REASONS.has(reason)) {
+      return { code: "rate_limit", message: messageForCode("rate_limit") };
+    }
+    if (CONTEXT_OVERFLOW_REASONS.has(reason)) {
+      return { code: "context_overflow", message: messageForCode("context_overflow") };
+    }
+    if (INTERRUPTED_REASONS.has(reason)) {
+      return { code: "interrupted", message: messageForCode("interrupted") };
+    }
+    if (TIMEOUT_REASONS.has(reason)) {
+      return { code: "timeout", message: messageForCode("timeout") };
+    }
+    if (reason === "api_error") {
+      return { code: "api_error", message: messageForCode("api_error") };
+    }
+  }
+  if (input.detail !== undefined) {
+    const byKeyword = classifyByDetailKeywords(input.detail);
+    if (byKeyword !== null) {
+      return { code: byKeyword, message: messageForCode(byKeyword) };
+    }
+  }
+  return { code: "api_error", message: messageForCode("api_error") };
+}
 
 /** Default wait chosen for synchronous peer collaboration. Callers may raise
  * it to the master-approved hard maximum below for a long-running peer. */
@@ -159,7 +278,7 @@ const EMPTY_OBJECT_SCHEMA: Record<string, unknown> = {
 };
 
 const TOOL_DESCRIPTION =
-  "Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass `conversation_id` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. Set wait_for_response=true only when the current turn needs the peer's next reply: its full envelope is returned by this same tool call; timeout returns a non-destructive reply_pending acknowledgement. The `to` field MUST be an exact agent_id — if you only know a peer by their display name, call `list_agents` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.";
+  `Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass \`conversation_id\` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. Set wait_for_response=true only when the current turn needs the peer's next reply: its full envelope is returned by this same tool call; timeout returns a non-destructive reply_pending acknowledgement. If the peer became unresponsive instead of replying (rate limit, context overflow, API error, timeout, interrupt, or disconnect), the result carries \`peer_error: {code, message, from}\` instead of \`reply\` — recommended action by code: ${ERROR_CODE_GUIDANCE_SUMMARY}. The same \`peer_error\` can also arrive asynchronously as an inbound inform message when you were not waiting. The \`to\` field MUST be an exact agent_id — if you only know a peer by their display name, call \`list_agents\` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.`;
 
 const LIST_AGENTS_DESCRIPTION =
   "List other kaoiro agents currently known to the server. Returns each peer's agent_id, persona (id/name/sprite_set), current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected), and engine/model/effort when reported. Use this to resolve a peer's display name and execution traits before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address. A proper-name collaboration request refers to an existing kaoiro peer — resolve it here first: 1 match → send_to_agent, several → ask the operator, 0 matches → report the persona is absent and never spawn a same-named internal sub-agent as a substitute.";
@@ -175,6 +294,14 @@ interface ConversationTrack {
 interface ReplyWaiter {
   resolve: (envelope: Envelope | undefined) => void;
   timeout: ReturnType<typeof setTimeout>;
+}
+
+/** One inbound inter-agent message injected into the SDK as ordinary user
+ *  input (cli.ts's formatInboundMessage branch), still awaiting an outbound
+ *  reply on the same conversation_id (issue #131). */
+interface PendingInjection {
+  /** agent_id of the envelope that was injected — the notice's addressee. */
+  from: string;
 }
 
 export interface InterAgentToolOptions {
@@ -209,6 +336,7 @@ export class InterAgentTool {
   readonly #newId: () => string;
   readonly #conversations = new Map<string, ConversationTrack>();
   readonly #replyWaiters = new Map<string, ReplyWaiter>();
+  readonly #pendingInjections = new Map<string, PendingInjection>();
 
   constructor(options: InterAgentToolOptions) {
     this.#options = options;
@@ -247,6 +375,77 @@ export class InterAgentTool {
     clearTimeout(waiter.timeout);
     waiter.resolve(envelope);
     return true;
+  }
+
+  /** Records that an inbound inter-agent message is about to be injected
+   *  into the SDK as ordinary user input (cli.ts's formatInboundMessage
+   *  branch — i.e. `receiveInbound` did NOT consume it as a waiter reply),
+   *  so this wrapper now owes a reply on the conversation. Called by cli.ts
+   *  right before it queues the injection (the same call also tags the queued
+   *  turn with this conversation_id — see AgentHost#send /
+   *  CodexHost#send's third parameter). If the SPECIFIC turn that injection
+   *  started ends without an outbound reply clearing the entry (see
+   *  `invoke()`), `resolveTurnEnd()` resolves it (issue #131). */
+  notePendingInjection(envelope: Envelope): void {
+    const payload = envelope.payload as Partial<InterAgentMessagePayload>;
+    if (typeof payload.conversation_id !== "string") return;
+    this.#pendingInjections.set(payload.conversation_id, {
+      from: envelope.agent_id,
+    });
+  }
+
+  /** Called by cli.ts once per SDK turn boundary (success or error), with the
+   *  conversation_id the CLI/host tagged that specific turn with — null for
+   *  an ordinary operator-instruction turn, or an inter-agent conversation_id
+   *  when that turn started from an injected inbound message. Turn-scoped by
+   *  design (issue #131 must-fix 1): sweeping the entire pending set on any
+   *  is_error turn misattributes failures across unrelated, concurrently
+   *  queued conversations and never resolves a conversation whose turn
+   *  quietly succeeded without a reply. A no-op when `conversationId` is null
+   *  or was already resolved (`invoke()` sent a reply during the turn — the
+   *  primary resolution path; this is the fallback for when it didn't).
+   *
+   *  On success (`error` omitted) the entry is simply cleared — the model had
+   *  its turn to reply and chose not to, which is not itself an error worth
+   *  surfacing. On failure, one error-notice envelope is built and returned,
+   *  addressed back to the original sender — kind="inform" (no new enum
+   *  value), meta.done=false (ending the conversation is the sender's call),
+   *  payload.error set. Callers push the result straight through
+   *  ServerLink#send: this notice did not come from a model tool call (the
+   *  turn just failed to produce one), so it bypasses the broker entirely. */
+  resolveTurnEnd(
+    conversationId: string | null,
+    error?: InterAgentErrorPayload,
+  ): Envelope[] {
+    if (conversationId === null) return [];
+    const injection = this.#pendingInjections.get(conversationId);
+    if (!injection) return [];
+    this.#pendingInjections.delete(conversationId);
+    if (!error) return [];
+
+    const track = this.#conversations.get(conversationId) ?? {
+      turnNumber: 0,
+    };
+    track.turnNumber += 1;
+    this.#conversations.set(conversationId, track);
+    const payload: InterAgentMessagePayload = {
+      to: injection.from,
+      conversation_id: conversationId,
+      turn_number: track.turnNumber,
+      kind: "inform",
+      body: `peer error (${error.code}): ${error.message}`,
+      meta: { done: false, propose_next: "" },
+      owner: { kind: "user", id: "operator" },
+      error,
+    };
+    return [
+      makeInterAgentMessage(
+        this.#options.config,
+        this.#options.getState(),
+        this.#now(),
+        payload,
+      ),
+    ];
   }
 
   /** The engine-agnostic descriptors of the three tools (ADR-0032 F5):
@@ -389,6 +588,11 @@ export class InterAgentTool {
       payload,
     );
 
+    // This wrapper is replying on the conversation, so it no longer owes an
+    // error notice for whatever inbound message it was injected to answer
+    // (issue #131 — see notePendingInjection/resolveTurnEnd).
+    this.#pendingInjections.delete(conversationId);
+
     const timeoutMs = args.timeout_ms ?? DEFAULT_REPLY_TIMEOUT_MS;
     const reply = waitForResponse
       ? this.#waitForReply(conversationId, timeoutMs)
@@ -412,22 +616,43 @@ export class InterAgentTool {
       };
     }
 
+    const sentAck = {
+      to: args.to,
+      conversation_id: conversationId,
+      turn_number: sentTurnNumber,
+    };
+    const inboundPayload = inbound.payload as Partial<InterAgentMessagePayload>;
+    // issue #131: a peer-unresponsive-error notice is distinguished from an
+    // ordinary reply by peer_error (not reply) so the caller can tell
+    // "got a reply" apart from "the peer never got the chance to reply" —
+    // both otherwise share the same wait_for_response=true return path.
+    if (inboundPayload.error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                sent: sentAck,
+                peer_error: {
+                  code: inboundPayload.error.code,
+                  message: inboundPayload.error.message,
+                  from: inbound.agent_id,
+                },
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
+
     return {
       content: [
         {
           type: "text",
-          text: JSON.stringify(
-            {
-              sent: {
-                to: args.to,
-                conversation_id: conversationId,
-                turn_number: sentTurnNumber,
-              },
-              reply: inbound,
-            },
-            null,
-            2,
-          ),
+          text: JSON.stringify({ sent: sentAck, reply: inbound }, null, 2),
         },
       ],
     };
@@ -475,10 +700,17 @@ export function formatInboundMessage(envelope: Envelope): string {
   const proposeNext = payload.meta?.propose_next ?? "";
   const conversationId = payload.conversation_id ?? "";
   const turnNumber = payload.turn_number ?? 0;
+  const error = payload.error;
+  // issue #131: an error notice gets its own line format — a plain
+  // "kind: body" render would bury the machine-readable code the receiving
+  // model needs to decide whether retrying is worthwhile.
+  const messageLine = error
+    ? `[from ${from}] peer-error(${error.code}): ${error.message} — ${errorGuidance(error.code)}.`
+    : `[from ${from}] ${kind}: ${body}`;
   return [
     `${INTER_AGENT_MESSAGE_PREFIX}${conversationId}".]`,
     "",
-    `[from ${from}] ${kind}: ${body}`,
+    messageLine,
     "",
     `(meta: done=${done}, propose_next=${proposeNext}, conversation_id=${conversationId}, turn_number=${turnNumber})`,
   ].join("\n");

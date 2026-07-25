@@ -1719,4 +1719,136 @@ describe("CodexHost", () => {
       }
     });
   });
+
+  describe("onTurnEnd (issue #131)", () => {
+    it("turn.failed は onTurnEnd に conversationId=null(未タグ) + error.detail を渡す", async () => {
+      const turnEnds: {
+        conversationId: string | null;
+        error?: { reason?: string; detail?: string };
+      }[] = [];
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "uuid-err-1" },
+          { type: "turn.started" },
+          { type: "turn.failed", error: { message: "rate limited" } },
+        ],
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi");
+
+      expect(turnEnds).toEqual([
+        { conversationId: null, error: { detail: "rate limited" } },
+      ]);
+    });
+
+    it("成功 turn は onTurnEnd に conversationId のみ(error無し)で渡す", async () => {
+      const turnEnds: unknown[] = [];
+      const { client } = makeClient([[usageEvent()]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi");
+
+      expect(turnEnds).toEqual([{ conversationId: null }]);
+    });
+
+    it("終端イベント無しでストリームが終わると detail 無しの error で onTurnEnd を呼ぶ", async () => {
+      const turnEnds: unknown[] = [];
+      const { client } = makeClient([
+        [{ type: "thread.started", thread_id: "uuid-err-2" }],
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi");
+
+      expect(turnEnds).toEqual([{ conversationId: null, error: {} }]);
+    });
+
+    it("runStreamed の reject は err を detail 文字列化して onTurnEnd に渡す (must-fix 2: raw文字列は message に出ないことは classifyInterAgentError 側で保証)", async () => {
+      const turnEnds: {
+        conversationId: string | null;
+        error?: { reason?: string; detail?: string };
+      }[] = [];
+      const thread: CodexThreadLike = {
+        async runStreamed() {
+          throw new Error("exec exited 1");
+        },
+      };
+      const client: CodexClientLike = {
+        startThread: () => thread,
+        resumeThread: () => thread,
+      };
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi");
+
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]?.conversationId).toBeNull();
+      expect(turnEnds[0]?.error?.detail).toContain("exec exited 1");
+    });
+
+    it("並存する複数 inter-agent injection は各ターンの conversationId だけを解決する (must-fix 1)", async () => {
+      const turnEnds: {
+        conversationId: string | null;
+        error?: { detail?: string };
+      }[] = [];
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "uuid-multi" },
+          { type: "turn.started" },
+          { type: "turn.failed", error: { message: "boom" } },
+        ],
+        [usageEvent()],
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      // Queue turn 1's tag before run() starts (matches the file's existing
+      // send()-before-run() pattern), let it settle, then queue turn 2's tag
+      // — verifying the SECOND turn's outcome never gets attributed to the
+      // FIRST (still-registered-as-pending only via notePendingInjection,
+      // which this host-level test doesn't exercise) conversation_id.
+      await host.send("peer A injection", undefined, "cnv-a");
+      const done = host.run();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await host.send("peer B injection", undefined, "cnv-b");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      host.close();
+      await done;
+
+      expect(turnEnds).toEqual([
+        { conversationId: "cnv-a", error: { detail: "boom" } },
+        { conversationId: "cnv-b" },
+      ]);
+    });
+  });
 });
