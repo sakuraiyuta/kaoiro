@@ -103,6 +103,16 @@ if path = System.get_env("KAOIRO_INGRESS_ORDER_PATH") do
   config :kaoiro_server, :ingress_order_path, path
 end
 
+# Token denylist DETS store (ふじ #120 must-fix 1, 2026-07-25). This is
+# the authoritative store of revoked agent_ids for fail-closed auth: a lost
+# entry silently re-grants a revoked identity. Point at a persistent volume
+# in production; unset falls back to KaoiroServer.TokenDenylist.default_path/0
+# (a shared `$TMPDIR/kaoiro_token_denylist.dets`) which does NOT survive a
+# container recreation.
+if path = System.get_env("KAOIRO_TOKEN_DENYLIST_PATH") do
+  config :kaoiro_server, :token_denylist_path, path
+end
+
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

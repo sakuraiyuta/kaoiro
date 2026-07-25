@@ -7,15 +7,24 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
   secret_key_base: "QuGyT2gNZpDdXTzHcZKPuBUNVFi4omSMAOW2apvMFd3dOx453osH4dzIL8LjwC6e",
   server: false
 
+# ふじ #120 must-fix 2: BEAM-safe run-scoped nonce (2026-07-25).
+# System.unique_integer([:positive]) は同一 BEAM 内でしか一意でなく、
+# 並行 mix test invocation (16 process 同時起動) で path が衝突すると
+# 実測された。System.pid() (OS プロセス pid) と 8 バイトの暗号乱数を
+# 組み合わせ、別 BEAM 間でも衝突しない run-scoped nonce を 1 回生成し、
+# 全 DETS store が共有する。文字列は path-safe な base64 (padding なし)。
+run_nonce =
+  "#{System.pid()}_" <>
+    Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
+
 # Per-run throwaway DETS file for the session_id pointer store (issue
-# #49). unique_integer suffix isolates concurrent `mix test` invocations
-# and prevents accumulation across test-suite runs — same rationale as
-# the InterAgentHistory / IngressOrder per-run configs below.
+# #49). run_nonce 共有により concurrent `mix test` invocations 間でも
+# path が衝突しない — 同じ理由で下の全 DETS store も同じ nonce を使う。
 config :kaoiro_server,
        :session_pointers_path,
        Path.join(
          System.tmp_dir!(),
-         "kaoiro_test_session_pointers_#{System.unique_integer([:positive])}.dets"
+         "kaoiro_test_session_pointers_#{run_nonce}.dets"
        )
 
 # Per-run throwaway DETS file for the permission_mode pick store (#58).
@@ -23,7 +32,7 @@ config :kaoiro_server,
        :permission_modes_path,
        Path.join(
          System.tmp_dir!(),
-         "kaoiro_test_permission_modes_#{System.unique_integer([:positive])}.dets"
+         "kaoiro_test_permission_modes_#{run_nonce}.dets"
        )
 
 # Per-run throwaway DETS file for the agent identity ledger (ADR-0030).
@@ -31,7 +40,7 @@ config :kaoiro_server,
        :agent_directory_path,
        Path.join(
          System.tmp_dir!(),
-         "kaoiro_test_agent_directory_#{System.unique_integer([:positive])}.dets"
+         "kaoiro_test_agent_directory_#{run_nonce}.dets"
        )
 
 # Per-run throwaway DETS file for durable inter-agent history (#105).
@@ -39,21 +48,21 @@ config :kaoiro_server,
        :inter_agent_history_path,
        Path.join(
          System.tmp_dir!(),
-         "kaoiro_test_inter_agent_history_#{System.unique_integer([:positive])}.dets"
+         "kaoiro_test_inter_agent_history_#{run_nonce}.dets"
        )
 
 config :kaoiro_server,
        :clear_watermarks_path,
        Path.join(
          System.tmp_dir!(),
-         "kaoiro_test_clear_watermarks_#{System.unique_integer([:positive])}.dets"
+         "kaoiro_test_clear_watermarks_#{run_nonce}.dets"
        )
 
 config :kaoiro_server,
        :session_starts_path,
        Path.join(
          System.tmp_dir!(),
-         "kaoiro_test_session_starts_#{System.unique_integer([:positive])}.dets"
+         "kaoiro_test_session_starts_#{run_nonce}.dets"
        )
 
 # Per-run throwaway DETS file for the IngressOrder allocator (ふじ
@@ -68,7 +77,19 @@ config :kaoiro_server,
        :ingress_order_path,
        Path.join(
          System.tmp_dir!(),
-         "kaoiro_test_ingress_order_#{System.unique_integer([:positive])}.dets"
+         "kaoiro_test_ingress_order_#{run_nonce}.dets"
+       )
+
+# Per-run throwaway DETS file for the token denylist (ふじ #120 must-fix 1,
+# 2026-07-25). 未設定時は module 側 default_path が共有 `/tmp/kaoiro_token_denylist.dets`
+# に落ち、app supervisor が singleton を常時起動するため test の revocation
+# 状態が dev/prod と交錯していた。認証境界の正本なので他 DETS store と
+# 同じ per-run 隔離を適用。
+config :kaoiro_server,
+       :token_denylist_path,
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_token_denylist_#{run_nonce}.dets"
        )
 
 # Print only warnings and errors during test
