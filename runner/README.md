@@ -111,19 +111,39 @@ launchctl bootstrap gui/"$(id -u)" \
 
 ### 動作確認
 
-サービス登録前に起動シムだけを試せる。**`server_url` は到達不能な値にする**
-(`runner.config.example.json` のまま実行すると、稼働中の localhost:4000 の
-サーバに同じ `host_id` で register してしまい、既存 runner のホスト登録を
-上書き・削除する)。
+サービス登録前に起動シムだけを試せる。**`server_url` を到達不能な値にし、かつ
+`host_id` を実環境と衝突しない値にする**。二重に必要な理由:
+
+- `server_url` を実サーバに向けたまま起動すると、そのサーバへ register して
+  しまう
+- `HostRegistry.register/4` は `host_id` をキーに entry を**上書き**し(runner_pid
+  も差し替わる)、切断時の `drop/3` は pid 一致で**エントリを削除**する。実 runner
+  は socket を維持している間 re-register しないため(`updateRegister` は config
+  reload 時のみ発火)、**同じ host_id で一瞬繋ぐだけで実ホストの登録が消える**。
+  host_id が違えば `server_url` を間違えても上書きは起きない
 
 ```sh
 tmp=$(mktemp -d)
-cp runner/runner.config.example.json "$tmp/runner.config.json"
-# server_url を ws://127.0.0.1:59999/runner 等に書き換える
+python3 - "$tmp/runner.config.json" <<'PY'
+import json, sys, os
+cfg = json.load(open("runner/runner.config.example.json"))
+cfg["host_id"] = f"test-host-{os.urandom(3).hex()}"   # 実環境と衝突しない
+cfg["server_url"] = "ws://127.0.0.1:59999/runner"     # 到達不能にする
+cfg["cwd_allowlist"] = [os.getcwd()]
+json.dump(cfg, open(sys.argv[1], "w"), indent=2)
+PY
 printf 'KAOIRO_RUNNER_TOKEN=dummy\n' > "$tmp/runner.env"
 chmod 600 "$tmp/runner.env"
 KAOIRO_RUNNER_DIR="$tmp" timeout 6 sh runner/deploy/kaoiro-runner-launch.sh
 # 接続エラーを出しつつ生存すれば OK(timeout の 124 で終了)
+```
+
+設定不備の扱いも同じ手順で確認できる(いずれも exit 78):
+
+```sh
+KAOIRO_RUNNER_DIR=$(mktemp -d) sh runner/deploy/kaoiro-runner-launch.sh
+KAOIRO_RUNNER_DIR="$tmp" KAOIRO_NODE=/nonexistent sh \
+  runner/deploy/kaoiro-runner-launch.sh
 ```
 
 ### nvm / fnm / asdf を使っている場合
