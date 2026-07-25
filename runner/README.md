@@ -42,7 +42,15 @@ node dist/cli.js [configPath]   # configPath 既定 = runner.config.json
 **トークンはユニット/plist に書かない**。起動シムが 0600 の env ファイルから
 読む。`token` は Phoenix transport のログでも `token=<REDACTED>` に伏せられる。
 
+env ファイルは起動シムに **`source` される**ため、シェルとして妥当な内容でなければ
+ならない(`KEY=VALUE` の羅列、`=` の前後に空白を入れない、空白を含む値は
+クォート)。構文が壊れているとシムは exit 78 で止まる(下記「再起動ポリシーと
+終了コード」)。**0600 はシムでは検査しない**(モード確認の可搬性が OS 依存で、
+ACL 運用のホストを弾いてしまうため)ので、運用側で担保する。
+
 ### 共通の準備
+
+以下のコマンドはすべて**リポジトリルートで実行する**(パスが相対のため)。
 
 ```sh
 pnpm install --frozen-lockfile
@@ -138,6 +146,10 @@ KAOIRO_RUNNER_DIR="$tmp" timeout 6 sh runner/deploy/kaoiro-runner-launch.sh
 # 接続エラーを出しつつ生存すれば OK(timeout の 124 で終了)
 ```
 
+`timeout` は GNU coreutils のコマンドで、macOS には標準で入っていない。
+`brew install coreutils` で入る `gtimeout` に読み替えるか、`timeout` を外して
+Ctrl-C で止める。
+
 設定不備の扱いも同じ手順で確認できる(いずれも exit 78):
 
 ```sh
@@ -155,11 +167,53 @@ systemd user unit と launchd agent は最小の PATH で起動するため、
 KAOIRO_NODE=/home/you/.nvm/versions/node/v22.20.0/bin/node
 ```
 
-### 単一バイナリ配布へ移行するとき
+## 配布物の作成(tarball)
 
-配布形態が変わっても差分は
-[`deploy/kaoiro-runner-launch.sh`](deploy/kaoiro-runner-launch.sh) 末尾の
-`exec` 行 1 行(issue #70)。unit / plist は変更不要。
+Node ランタイムだけを前提とする自己完結アーカイブを作る(issue #70、
+[ADR-0018](../docs/adr/0018-runner-distribution.md) の 2026-07-25 改訂)。
+wrapper 一式・エンジン CLI(Claude Code / codex は platform 別 npm パッケージ
+として実体が入る)・ネイティブモジュールがすべて同梱されるため、**配布先で
+`pnpm install` も build も要らない**。
+
+```sh
+./scripts/build-runner-tarball.sh                      # このホスト向け
+./scripts/build-runner-tarball.sh --target linux-x64   # クロス生成
+./scripts/build-runner-tarball.sh --out /path/to/dir   # 出力先を変える
+```
+
+対象は `darwin-arm64` / `linux-x64`(実需要の 2 arch)。出力先は既定で
+`dist-tarball/kaoiro-runner-<rev>-<os>-<arch>.tar.gz`(gitignore 済み)。
+クロス生成は pnpm の `supportedArchitectures` をビルド中だけ
+`pnpm-workspace.yaml` に注入して行い、終了時(中断時も)復元する。
+
+サイズ実測(tar.gz): darwin-arm64 **256 MB** / linux-x64 **368 MB**。エンジン
+CLI の実体が大半を占める。linux 版は musl 変種も含むため glibc / musl 両対応。
+
+### 配布先での設置
+
+```sh
+tar xzf kaoiro-runner-<rev>-linux-x64.tar.gz
+cd kaoiro-runner-<rev>-linux-x64
+
+# 設定ディレクトリ(Linux: ${XDG_CONFIG_HOME:-~/.config}/kaoiro、
+#                  macOS: ~/Library/Application Support/kaoiro)
+conf="${XDG_CONFIG_HOME:-$HOME/.config}/kaoiro"
+mkdir -p "$conf"
+cp runner.config.example.json "$conf/runner.config.json"
+cp deploy/runner.env.example "$conf/runner.env"
+chmod 600 "$conf/runner.env"
+# runner.config.json の host_id / server_url / cwd_allowlist を編集し、
+# runner.env に KAOIRO_RUNNER_TOKEN を書く
+
+./deploy/kaoiro-runner-launch.sh   # 前景起動で疎通確認
+```
+
+常駐させるときは上記「常駐化」節の unit / plist を配置する
+(`@@DEPLOY_DIR@@` には展開先の `deploy/` の絶対パスを入れる)。**配布物内の
+シムは無改造でそのまま使える**。
+
+Gitea release への資産アップロードは
+[#145](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/145) で扱う。
 
 ## Codex 設定
 

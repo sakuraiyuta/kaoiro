@@ -24,7 +24,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=@@DEPLOY_DIR@@/kaoiro-runner-launch.sh
+# Quoted so a deploy path containing spaces still resolves as one argument.
+ExecStart="@@DEPLOY_DIR@@/kaoiro-runner-launch.sh"
 Restart=on-failure
 RestartSec=5s
 # 78 = EX_CONFIG from the launch shim (missing config / node / build). A

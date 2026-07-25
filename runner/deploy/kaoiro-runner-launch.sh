@@ -29,10 +29,22 @@ fi
 conf_dir="${KAOIRO_RUNNER_DIR:-$default_dir}"
 env_file="${KAOIRO_RUNNER_ENV:-$conf_dir/runner.env}"
 
-# KAOIRO_RUNNER_TOKEN and any overrides live in the 0600 env file. `set -a`
-# exports every assignment it makes; nothing is echoed, so the token stays out
-# of journald / the launchd log.
+# KAOIRO_RUNNER_TOKEN and any overrides live in the env file, which is SOURCED
+# — so it must be valid shell (plain KEY=VALUE; quote values with spaces).
+# `set -a` exports every assignment it makes; nothing is echoed, so the token
+# stays out of journald / the launchd log.
+#
+# The file's 0600 mode is the operator's responsibility and deliberately NOT
+# enforced here: portable mode inspection differs per OS (GNU vs BSD `stat`),
+# and refusing to start would break hosts that legitimately use ACLs. README
+# states the requirement.
 if [ -f "$env_file" ]; then
+  # Validate before sourcing: `.` on a syntactically broken file aborts this
+  # shell with the shell's own status under `set -e`, bypassing die_config —
+  # and with it the unit's RestartPreventExitStatus=78, so systemd would treat
+  # a typo as a crash and restart-loop. Fail as a config error instead.
+  sh -n "$env_file" 2>/dev/null ||
+    die_config "env file is not valid shell: $env_file"
   set -a
   # shellcheck source=/dev/null
   . "$env_file"
