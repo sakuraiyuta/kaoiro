@@ -46,26 +46,28 @@ jobs:
       - run: pnpm -C runner typecheck
       - run: pnpm -C runner test
 
+  # Runs inside the same image server/Dockerfile builds the release with, so CI
+  # and the shipped artifact share one compiler. This also replaces
+  # erlef/setup-beam, whose prebuilt OTP could not load :crypto on the Gitea
+  # runner image (no matching libssl) — mix failed before it could even fetch
+  # rebar.
   server:
     runs-on: ubuntu-latest
+    container: docker.io/hexpm/elixir:1.19.5-erlang-26.2.5.1-debian-trixie-20260518-slim
     defaults:
       run:
         working-directory: server
     steps:
       - uses: actions/checkout@v4
-      # Pinned to the versions server/Dockerfile builds the release with, so
-      # CI and the shipped image agree on the compiler.
-      - uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.19.5"
-          otp-version: "26.2.5.1"
       - uses: actions/cache@v4
         with:
           path: |
             server/deps
             server/_build
-          key: mix-${{ runner.os }}-${{ hashFiles('server/mix.lock') }}
-          restore-keys: mix-${{ runner.os }}-
+          key: mix-${{ hashFiles('server/mix.lock') }}
+          restore-keys: mix-
+      # The hexpm image ships neither, same as the Dockerfile's builder stage.
+      - run: mix local.hex --force && mix local.rebar --force
       - run: mix deps.get
       - run: mix format --check-formatted
       - run: mix compile --warnings-as-errors
