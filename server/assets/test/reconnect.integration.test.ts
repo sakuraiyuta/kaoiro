@@ -1,113 +1,62 @@
 // @vitest-environment jsdom
-// Regression tests for issue #123 (macOS sleep resume auto-reconnect).
-// Covers ふじ review must-fix 1/2 and the wake-guard boundary:
-//   (a) close event が来ないケースでも新 Socket+Channel が完全再構築される
-//   (b) reconnect 中の terminal disconnect 後に teardown cb が socket を復活させない
-//   (c) visibility/online 近接連発で socket が複数化しない (直列化 guard)
-//   (d) shouldForceReconnectOnVisible の 59_999 / 60_000 ms 境界
+// Regression tests for issue #123 round 3 (macOS sleep resume auto-reconnect).
+// Runs against the REAL phoenix client — only the WebSocket transport is
+// swapped for a stuck fake, and Phoenix's heartbeat interval is shortened
+// so heartbeatTimeout paths fit in bounded wall-clock. ふじ再レビュー
+// must-fix 1 のカバレッジ:
+//   (A) reconnect() 後、stuck transport の heartbeatTimeout でも 3 本目
+//       transport が生えない (旧 socket の自己復活防止)
+//   (B) terminal disconnect() 後、heartbeat timeout でも 2 本目 transport が
+//       生えない
+//   (C) Phoenix Socket prototype に clearHeartbeats / reconnectTimer.reset
+//       が存在する (Phoenix upgrade で消えたら loud fail)
+// および must-fix 2 の wake lifecycle helper pin:
+//   (a) online + disconnected → reconnect
+//   (b) 短時間 hidden→visible + disconnected → reconnect
+//   (c) 60_000ms hidden→visible + connected → force-reconnect
+//   (境界) shouldForceReconnectOnVisible の 59_999 / 60_000 ms + null +
+//   threshold 引数上書き
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Socket } from "phoenix";
+import {
+  connectKaoiro,
+  decideWakeAction,
+  shouldForceReconnectOnVisible,
+} from "../src/lib/protocol";
 
-// vi.hoisted with the FakeSocket definitions so vi.mock's factory (hoisted
-// to top-of-file) can reference them without the "cannot access before
-// initialization" error. The `createdSockets` array is shared with the tests
-// below so each test can reset and inspect it.
-const { FakeSocket, createdSockets } = vi.hoisted(() => {
-  class FakePush {
-    receive(_status: string, _cb: (resp?: unknown) => void): FakePush {
-      return this;
-    }
+// stuck fake: send は無視、close は readyState を CLOSED にするだけで
+// close event を発火しない。Phoenix teardown() の waitForSocketClosed は
+// 150 ms 毎に readyState を polling するので、advanceTimersByTimeAsync で
+// 200ms ほど進めれば teardown callback は発火する。heartbeat 応答は決して
+// 返さないので Phoenix 内部の heartbeatTimeout 経路を通ることになる。
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = [];
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+
+  readyState: number = FakeWebSocket.CONNECTING;
+  onopen: ((event: unknown) => void) | null = null;
+  onclose: ((event: unknown) => void) | null = null;
+  onmessage: ((event: unknown) => void) | null = null;
+  onerror: ((event: unknown) => void) | null = null;
+  sentFrames: string[] = [];
+
+  constructor(public url: string) {
+    FakeWebSocket.instances.push(this);
   }
 
-  class FakeChannel {
-    joinCalled = 0;
-    leaveCalled = 0;
-    handlers: Record<string, ((p: unknown) => void)[]> = {};
-    constructor(public topic: string) {}
-    on(evt: string, cb: (p: unknown) => void): number {
-      (this.handlers[evt] ??= []).push(cb);
-      return this.handlers[evt].length;
-    }
-    join(): FakePush {
-      this.joinCalled += 1;
-      return new FakePush();
-    }
-    leave(): FakePush {
-      this.leaveCalled += 1;
-      return new FakePush();
-    }
-    push(_evt: string, _payload?: unknown): FakePush {
-      return new FakePush();
-    }
-    fire(evt: string, payload: unknown): void {
-      for (const cb of this.handlers[evt] ?? []) cb(payload);
-    }
+  send(data: string): void {
+    this.sentFrames.push(data);
   }
 
-  const created: FakeSocketInstance[] = [];
-
-  interface FakeSocketInstance {
-    channels: FakeChannel[];
-    onOpenCallbacks: (() => void)[];
-    onCloseCallbacks: (() => void)[];
-    onErrorCallbacks: (() => void)[];
-    connectCalled: number;
-    disconnectCalled: number;
-    onOpen(cb: () => void): void;
-    onClose(cb: () => void): void;
-    onError(cb: () => void): void;
-    connect(): void;
-    disconnect(cb?: () => void): void;
-    fireClose(): void;
-    channel(topic: string): FakeChannel;
+  close(_code?: number, _reason?: string): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    // Note: onclose is NOT invoked. issue #123 のシナリオは close event が
+    // 届かない (stuck transport) ケースを模擬する。
   }
-
-  class FakeSocket implements FakeSocketInstance {
-    channels: FakeChannel[] = [];
-    onOpenCallbacks: (() => void)[] = [];
-    onCloseCallbacks: (() => void)[] = [];
-    onErrorCallbacks: (() => void)[] = [];
-    connectCalled = 0;
-    disconnectCalled = 0;
-    constructor(public url: string, public opts: unknown) {
-      created.push(this);
-    }
-    onOpen(cb: () => void): void {
-      this.onOpenCallbacks.push(cb);
-    }
-    onClose(cb: () => void): void {
-      this.onCloseCallbacks.push(cb);
-    }
-    onError(cb: () => void): void {
-      this.onErrorCallbacks.push(cb);
-    }
-    connect(): void {
-      this.connectCalled += 1;
-      for (const cb of this.onOpenCallbacks) cb();
-    }
-    disconnect(cb?: () => void): void {
-      this.disconnectCalled += 1;
-      if (cb !== undefined) setTimeout(cb, 1500);
-      // Note: onClose is NOT fired here — the whole point of issue #123 is
-      // the case where close events never arrive. Individual tests that want
-      // to model a graceful close call `fireClose()` explicitly.
-    }
-    fireClose(): void {
-      for (const cb of this.onCloseCallbacks) cb();
-    }
-    channel(topic: string): FakeChannel {
-      const c = new FakeChannel(topic);
-      this.channels.push(c);
-      return c;
-    }
-  }
-
-  return { FakeSocket, createdSockets: created };
-});
-
-vi.mock("phoenix", () => ({ Socket: FakeSocket }));
-
-// Import AFTER vi.mock so connectKaoiro binds to FakeSocket.
-import { connectKaoiro, shouldForceReconnectOnVisible } from "../src/lib/protocol";
+}
 
 function makeHandlers() {
   return {
@@ -119,7 +68,7 @@ function makeHandlers() {
 }
 
 beforeEach(() => {
-  createdSockets.length = 0;
+  FakeWebSocket.instances.length = 0;
   vi.useFakeTimers();
 });
 
@@ -127,119 +76,187 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("connectKaoiro reconnect (issue #123)", () => {
-  it("(a) close event が来なくても新 Socket+Channel が完全再構築される", () => {
-    const handlers = makeHandlers();
-    const conn = connectKaoiro("ws://test/client", handlers);
-
-    expect(createdSockets.length).toBe(1);
-    const socket1 = createdSockets[0]!;
-    expect(socket1.connectCalled).toBe(1);
-    expect(socket1.channels.length).toBe(1);
-    const channel1 = socket1.channels[0]!;
-    expect(channel1.joinCalled).toBe(1);
-
-    conn.reconnect();
-    // 旧 channel は fire-and-forget leave 済 (dead transport でも block しない)
-    expect(channel1.leaveCalled).toBe(1);
-    // teardown cb 発火前は socket はまだ1つ
-    expect(createdSockets.length).toBe(1);
-
-    // Phoenix teardown 相当の 1500 ms を進める。fireClose は呼ばない
-    // (close event が届かないケースを模擬)。
-    vi.advanceTimersByTime(1500);
-
-    // 新 socket / 新 channel が丸ごと作られる (implicit rejoin 依存を廃止)
-    expect(createdSockets.length).toBe(2);
-    const socket2 = createdSockets[1]!;
-    expect(socket2.connectCalled).toBe(1);
-    expect(socket2.channels.length).toBe(1);
-    const channel2 = socket2.channels[0]!;
-    expect(channel2.joinCalled).toBe(1);
-
-    // snapshot handler が新 channel に登録されており live 経路が生きている
-    channel2.fire("snapshot", { agents: {} });
-    expect(handlers.onSnapshot).toHaveBeenCalledTimes(1);
+describe("Phoenix Socket internal API existence (issue #123 round 3)", () => {
+  it("(C) Socket prototype に clearHeartbeats / reconnectTimer.reset が存在する", () => {
+    // ふじ条件: Phoenix 内部 API 直触りは silent に壊れず明示的に検知でき
+    // るよう typeof チェックを test で pin する。Phoenix upgrade で消え
+    // たらこの test が最初に落ちる。
+    const s = new Socket("ws://dummy", {});
+    const proto = s as unknown as {
+      clearHeartbeats?: unknown;
+      reconnectTimer?: { reset?: unknown };
+    };
+    expect(typeof proto.clearHeartbeats).toBe("function");
+    expect(proto.reconnectTimer).toBeTruthy();
+    expect(typeof proto.reconnectTimer?.reset).toBe("function");
   });
+});
 
-  it("(b) reconnect 中の disconnect 後に teardown cb が socket を復活させない", () => {
+describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3)", () => {
+  it("(A) reconnect() 後、stuck transport の heartbeatTimeout でも 3 本目 transport が生えない", async () => {
     const handlers = makeHandlers();
-    const conn = connectKaoiro("ws://test/client", handlers);
-    expect(createdSockets.length).toBe(1);
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      // 案 A: Socket は 1 instance のまま cycle される。
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    // 初回 transport が生成される
+    expect(FakeWebSocket.instances.length).toBe(1);
 
     conn.reconnect();
-    vi.advanceTimersByTime(700); // teardown 途中
-    expect(createdSockets.length).toBe(1);
+    // Phoenix teardown() の waitForSocketClosed polling (150ms 起点) を
+    // 通過させる。FakeWebSocket.close で readyState=CLOSED になるので
+    // 次の polling tick で teardown callback が発火する。
+    await vi.advanceTimersByTimeAsync(500);
+
+    // 2 本目 transport (WS 張り直し) は生成される。ここは案 A の期待挙動。
+    expect(FakeWebSocket.instances.length).toBe(2);
+
+    // heartbeatIntervalMs=100 の 2 回検知 (200ms 相当) を超えて更に待つ。
+    // 案 A の drainPhoenixTimers() が旧 socket の heartbeatTimer を clear
+    // 済のため、heartbeatTimeout → reconnectTimer.scheduleTimeout は発火
+    // せず、3 本目 transport は生えない (ふじ再レビュー must-fix 1)。
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeWebSocket.instances.length).toBe(2);
 
     conn.disconnect();
-    // teardown timer 発火まで進める
-    vi.advanceTimersByTime(1000);
-
-    // disposed で早期 return するため新 socket は作られない
-    expect(createdSockets.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(500);
   });
 
-  it("(c) reconnect 連打でも cycle は 1 つだけ (直列化 guard)", () => {
+  it("(B) terminal disconnect() 後、heartbeat timeout でも 2 本目 transport が生えない", async () => {
     const handlers = makeHandlers();
-    const conn = connectKaoiro("ws://test/client", handlers);
-    expect(createdSockets.length).toBe(1);
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    expect(FakeWebSocket.instances.length).toBe(1);
+
+    conn.disconnect();
+    // teardown + heartbeat 2 回検知 window を過ぎさせる。drainPhoenixTimers
+    // で timer 停止済み + disposed guard で cb は no-op。2 本目は生えない。
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(FakeWebSocket.instances.length).toBe(1);
+  });
+
+  it("(A') reconnect() 連打でも cycle は 1 つだけ (cycleInFlight guard)", async () => {
+    const handlers = makeHandlers();
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    expect(FakeWebSocket.instances.length).toBe(1);
 
     conn.reconnect();
-    conn.reconnect(); // cycleInFlight で no-op
+    conn.reconnect(); // guard で no-op
     conn.reconnect(); // no-op
-    conn.reconnect(); // no-op
 
-    const socket1 = createdSockets[0]!;
-    // disconnect が複数回呼ばれていないこと
-    expect(socket1.disconnectCalled).toBe(1);
+    await vi.advanceTimersByTimeAsync(500);
+    // 2 本目のみ生成される
+    expect(FakeWebSocket.instances.length).toBe(2);
 
-    vi.advanceTimersByTime(1500);
-    // 新 socket は 1 つだけ
-    expect(createdSockets.length).toBe(2);
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
   });
 
-  it("(c') teardown 完了後の reconnect は再び走る (guard がリセットされる)", () => {
+  it("(A'') teardown 完了後の reconnect は再走 (guard がリセットされる)", async () => {
     const handlers = makeHandlers();
-    const conn = connectKaoiro("ws://test/client", handlers);
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
 
     conn.reconnect();
-    vi.advanceTimersByTime(1500);
-    expect(createdSockets.length).toBe(2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(FakeWebSocket.instances.length).toBe(2);
 
     conn.reconnect();
-    vi.advanceTimersByTime(1500);
-    expect(createdSockets.length).toBe(3);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(FakeWebSocket.instances.length).toBe(3);
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
   });
 
-  it("disconnect 後の reconnect は no-op (terminal)", () => {
+  it("disconnect 後の reconnect は no-op (terminal)", async () => {
     const handlers = makeHandlers();
-    const conn = connectKaoiro("ws://test/client", handlers);
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
     conn.disconnect();
 
     conn.reconnect();
-    vi.advanceTimersByTime(1500);
-    expect(createdSockets.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(FakeWebSocket.instances.length).toBe(1);
+  });
+});
+
+describe("decideWakeAction (issue #123 round 3, must-fix 2)", () => {
+  it("(a) online + disconnected → reconnect", () => {
+    expect(decideWakeAction("online", "disconnected", null, 0)).toBe("reconnect");
+  });
+
+  it("online + connected → noop (誤検知回避)", () => {
+    expect(decideWakeAction("online", "connected", null, 0)).toBe("noop");
+  });
+
+  it("(b) 短時間 hidden→visible + disconnected → reconnect", () => {
+    // hidden 500ms → visible 1000ms: gap=500ms<60000 なので force ではなく
+    // 通常の disconnected 判定経路。
+    expect(
+      decideWakeAction("visibility-visible", "disconnected", 500, 1000),
+    ).toBe("reconnect");
+  });
+
+  it("短時間 hidden→visible + connected → noop", () => {
+    expect(
+      decideWakeAction("visibility-visible", "connected", 500, 1000),
+    ).toBe("noop");
+  });
+
+  it("(c) 60_000ms hidden→visible + connected → force-reconnect", () => {
+    // heartbeat 途絶 (見かけ上 connected のまま WS が死んでいるケース) の
+    // 救済経路。status に関わらず force reconnect。
+    expect(decideWakeAction("visibility-visible", "connected", 0, 60_000)).toBe(
+      "force-reconnect",
+    );
+  });
+
+  it("60_000ms hidden→visible + disconnected → force-reconnect (閾値超え優先)", () => {
+    expect(
+      decideWakeAction("visibility-visible", "disconnected", 0, 60_000),
+    ).toBe("force-reconnect");
+  });
+
+  it("visibility-hidden → record-hidden (status 問わず)", () => {
+    expect(decideWakeAction("visibility-hidden", "connected", null, 0)).toBe(
+      "record-hidden",
+    );
+    expect(
+      decideWakeAction("visibility-hidden", "disconnected", 500, 1000),
+    ).toBe("record-hidden");
   });
 });
 
 describe("shouldForceReconnectOnVisible boundary (issue #123)", () => {
-  it("(d) hiddenAt が null なら false (未 hidden で visible)", () => {
+  it("hiddenAt が null なら false (未 hidden で visible)", () => {
     expect(shouldForceReconnectOnVisible(null, 100_000)).toBe(false);
   });
 
-  it("(d) 59_999 ms は false (閾値未満はタブ切替として無視)", () => {
+  it("59_999 ms は false (閾値未満はタブ切替として無視)", () => {
     expect(shouldForceReconnectOnVisible(1_000, 60_999)).toBe(false);
   });
 
-  it("(d) 60_000 ms は true (閾値ちょうどで force reconnect)", () => {
+  it("60_000 ms は true (閾値ちょうどで force reconnect)", () => {
     expect(shouldForceReconnectOnVisible(1_000, 61_000)).toBe(true);
   });
 
-  it("(d) 60_001 ms は true (閾値超え)", () => {
+  it("60_001 ms は true (閾値超え)", () => {
     expect(shouldForceReconnectOnVisible(1_000, 61_001)).toBe(true);
   });
 
-  it("(d) threshold 引数で境界を上書きできる", () => {
+  it("threshold 引数で境界を上書きできる", () => {
     expect(shouldForceReconnectOnVisible(0, 30_000, 30_000)).toBe(true);
     expect(shouldForceReconnectOnVisible(0, 29_999, 30_000)).toBe(false);
   });

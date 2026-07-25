@@ -1240,6 +1240,16 @@ export interface ConnectOptions {
   /** Short-lived WS ticket fetched from the auth cookie (ADR-0013) — the
    *  reload path, where the token is not in the URL. */
   ticket?: string;
+  /** Test-only: WebSocket-compatible transport class handed to Phoenix
+   *  Socket (issue #123 regression tests). Production leaves this undefined
+   *  and Phoenix falls through to global.WebSocket. Typed as `unknown`
+   *  because Phoenix's own transport option is untyped. */
+  transport?: unknown;
+  /** Test-only: shortened Phoenix heartbeat interval (ms) so tests can
+   *  exercise the heartbeatTimeout path in bounded wall-clock (issue
+   *  #123). Production leaves this undefined and Phoenix defaults to
+   *  30000. */
+  heartbeatIntervalMs?: number;
 }
 
 function isEnvelope(value: unknown): value is Envelope {
@@ -1792,6 +1802,53 @@ export function shouldForceReconnectOnVisible(
   return now - hiddenAt >= thresholdMs;
 }
 
+/** Wake-signal reasons App.svelte forwards to decideWakeAction (issue #123
+ *  round 3). Kept as a discriminated string union so tests can enumerate
+ *  every branch. */
+export type WakeReason =
+  | "online"
+  | "visibility-visible"
+  | "visibility-hidden";
+
+/** Decision App.svelte should carry out in response to a wake signal.
+ *   - noop: no action; status is healthy and the visibility gap is short.
+ *   - reconnect: status is `disconnected` and we should ask the connection
+ *     to cycle. Both `online` and short-hidden `visibility-visible` land
+ *     here — App.svelte does not need to distinguish.
+ *   - force-reconnect: hidden gap crossed HIDDEN_RECONNECT_THRESHOLD_MS,
+ *     so we cycle regardless of `status` (heartbeat-death catch-up).
+ *   - record-hidden: hidden transition; App.svelte should capture the
+ *     current timestamp into `hiddenAt`. */
+export type WakeDecision =
+  | "noop"
+  | "reconnect"
+  | "force-reconnect"
+  | "record-hidden";
+
+/** Pure lifecycle decision for App.svelte's wake handlers (issue #123
+ *  round 3, ふじ再レビュー must-fix 2 A). Concentrates the DOM-event ->
+ *  action mapping in one testable function so the visibility / online
+ *  branches can be pinned without mounting App.svelte. `hiddenAt` is the
+ *  timestamp the tab last went hidden (null if it never hid while this
+ *  session was alive); `now` is Date.now() at signal receipt; `status` is
+ *  the latest ConnectionStatus observed. */
+export function decideWakeAction(
+  reason: WakeReason,
+  status: ConnectionStatus,
+  hiddenAt: number | null,
+  now: number,
+  thresholdMs: number = HIDDEN_RECONNECT_THRESHOLD_MS,
+): WakeDecision {
+  if (reason === "visibility-hidden") return "record-hidden";
+  if (
+    reason === "visibility-visible" &&
+    shouldForceReconnectOnVisible(hiddenAt, now, thresholdMs)
+  ) {
+    return "force-reconnect";
+  }
+  return status === "disconnected" ? "reconnect" : "noop";
+}
+
 /**
  * Connects to the kaoiro server's client socket and forwards protocol
  * events to the handlers. `url` is the socket endpoint, e.g.
@@ -2031,14 +2088,6 @@ export function connectKaoiro(
   });
   }
 
-  function createSocket(): Socket {
-    const s = new Socket(url, { params });
-    handlers.onStatus("connecting");
-    setupSocketHandlers(s);
-    s.connect();
-    return s;
-  }
-
   function subscribeChannel(s: Socket): Channel {
     const ch = s.channel("agents:lobby");
     setupChannelHandlers(ch);
@@ -2046,8 +2095,43 @@ export function connectKaoiro(
     return ch;
   }
 
-  let socket = createSocket();
+  // ふじ再レビュー must-fix 1 (issue #123 round 3): Socket instance を
+  // 使い回す。cycle するのは Channel と WebSocket transport のみ。
+  //   - Phoenix Socket constructor は remove 不能な window listener を 3 本
+  //     (pagehide / pageshow / visibilitychange) 登録するため、cycle ごとに
+  //     new Socket を作ると旧 Socket 全体が leak する。
+  //   - stuck transport の teardown は onConnClose を通らないケースがあり、
+  //     旧 Socket 内部の heartbeatTimer が生き残って heartbeatTimeout →
+  //     reconnectTimer.scheduleTimeout で旧 socket を自己復活させる
+  //     (ふじ実測: reconnect() 2.2 秒後 transportsCreated:3)。
+  // Socket 1 つを維持し、reconnect は Phoenix 内部 timer の明示停止 →
+  // WS transport の張り直し → Channel の完全再作成の順で行う。
+  const socketOpts: Record<string, unknown> = { params };
+  if (options.transport !== undefined) socketOpts.transport = options.transport;
+  if (options.heartbeatIntervalMs !== undefined) {
+    socketOpts.heartbeatIntervalMs = options.heartbeatIntervalMs;
+  }
+  const socket = new Socket(url, socketOpts);
+  handlers.onStatus("connecting");
+  setupSocketHandlers(socket);
+  socket.connect();
   let channel = subscribeChannel(socket);
+
+  // Phoenix 1.8.7 internal-API accessor for cycle bookkeeping. clearHeartbeats()
+  // is on the Socket prototype (phoenix.js:1424); reconnectTimer is a Timer
+  // instance with reset() (phoenix.js:1163). Both are private fields but we
+  // need them to defuse the self-resurrection path documented above — Phoenix
+  // itself only clears them via onConnClose(), which stuck transports skip.
+  // typeof guard makes a future Phoenix upgrade that removes/renames them
+  // fail loudly at test time (regression test pins these existences).
+  function drainPhoenixTimers(): void {
+    const s = socket as unknown as {
+      clearHeartbeats?: () => void;
+      reconnectTimer?: { reset?: () => void };
+    };
+    if (typeof s.clearHeartbeats === "function") s.clearHeartbeats();
+    if (typeof s.reconnectTimer?.reset === "function") s.reconnectTimer.reset();
+  }
 
   return {
     disconnect: () => {
@@ -2056,34 +2140,56 @@ export function connectKaoiro(
       // is defence in depth — the disposed check alone is enough.
       disposed = true;
       cycleGeneration += 1;
+      // Drain Phoenix internal timers first. Without this the heartbeatTimer
+      // can outlive teardown on a stuck transport and self-resurrect via
+      // heartbeatTimeout → reconnectTimer.scheduleTimeout (ふじ再レビュー).
+      drainPhoenixTimers();
       // Fire-and-forget leave: on a dead transport the leave push never
       // acknowledges. We do not want teardown to wait for a phantom reply.
       channel.leave();
       socket.disconnect();
     },
     reconnect: () => {
-      // must-fix 1: implicit-rejoin から Socket+Channel の完全 rebuild へ。
-      // Phoenix JS 1.8.7 の socket.disconnect(cb) teardown() は旧 transport
-      // が閉じなくても ~1.5s で cb を呼び旧 handler を無効化するため、旧
-      // Channel が joined のまま新 transport が open して phx_join が送ら
-      // れないケースがあった (ふじ再現)。ここでは Channel を明示 leave し
-      // socket.disconnect の cb で新 socket / 新 channel を丸ごと作り直す。
+      // ふじ再レビュー must-fix 1 (round 3): Socket は使い回し、Channel と
+      // WebSocket transport を張り直す。
       // (a) disposed / cycleInFlight で terminal / 直列化 guard、
       // (b) generation snapshot で cb 実行時に「まだこの世代か」を再確認、
-      // (c) leave は fire-and-forget (dead transport 対策)。
+      // (c) Phoenix 内部 timer を明示停止して stuck transport 経由の
+      //     自己復活を防ぐ、
+      // (d) leave は fire-and-forget (dead transport 対策)、
+      // (e) socket.disconnect の cb で new Channel を subscribe → socket.connect。
       if (disposed || cycleInFlight) return;
       cycleInFlight = true;
       const gen = ++cycleGeneration;
+
+      drainPhoenixTimers();
+
       try {
         channel.leave();
       } catch {
         // leave push の同期例外は握り潰す — rebuild を止めない。
       }
+
       socket.disconnect(() => {
-        cycleInFlight = false;
         if (disposed || gen !== cycleGeneration) return;
-        socket = createSocket();
+        // Socket instance は使い回し (window listener leak と自己復活防止)。
+        // WS transport は socket.connect() が張り直す。Channel は Phoenix の
+        // 自動 rejoin に頼らず明示的に new して join する (implicit rejoin は
+        // stuck transport 由来の handler 無効化タイミングで join が飛ばない
+        // 事例あり — ふじ round 2 実測)。
         channel = subscribeChannel(socket);
+        socket.connect();
+      });
+
+      // cycleInFlight は microtask boundary で解除する。Phoenix teardown() の
+      // waitForSocketClosed は readyState=CLOSED なら synchronous に callback
+      // を呼ぶため、cb 内で cycleInFlight=false にすると同一 tick 内の連続
+      // reconnect が全て新 cycle を起こしてしまう (visibilitychange と
+      // online の near-simultaneous fire で socket が multiply する)。
+      // microtask で解除すれば同一 tick は 1 cycle に coalesce、次 tick 以降は
+      // 再走可能。
+      queueMicrotask(() => {
+        cycleInFlight = false;
       });
     },
     sendInstruction: (agentId, text, attachmentIds) =>

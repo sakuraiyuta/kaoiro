@@ -30,6 +30,7 @@
   } from "./lib/protocol";
   import {
     connectKaoiro,
+    decideWakeAction,
     defaultSocketUrl,
     fetchPersonaManifest,
     filterAfterHistoryCleared,
@@ -39,7 +40,6 @@
     mergeTranscriptEntries,
     projectAndMergeHistory,
     resetTranscriptHistory,
-    shouldForceReconnectOnVisible,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -643,25 +643,34 @@
     // event が届かず Phoenix 内蔵 reconnect が発火しないケースの救済。
     // タブ復帰 / ネット復帰時に status が disconnected なら明示的に socket を
     // 張り直す。connected の間は no-op なので誤検知で無限リトライしない。
+    // wake / visibility lifecycle (issue #123 round 3). Decision logic
+    // is factored into decideWakeAction (protocol.ts) so every branch is
+    // unit-testable without mounting this component.
     wakeHandler = () => {
-      if (status === "disconnected") connection?.reconnect();
+      const decision = decideWakeAction(
+        "online",
+        status,
+        hiddenAt,
+        Date.now(),
+      );
+      if (decision === "reconnect" || decision === "force-reconnect") {
+        connection?.reconnect();
+      }
     };
     visibilityHandler = () => {
-      if (document.visibilityState === "hidden") {
+      const reason =
+        document.visibilityState === "hidden"
+          ? "visibility-hidden"
+          : "visibility-visible";
+      const decision = decideWakeAction(reason, status, hiddenAt, Date.now());
+      if (decision === "record-hidden") {
         hiddenAt = Date.now();
         return;
       }
-      // visible: 閾値超えの hidden gap は heartbeat 途絶とみなし status に
-      // 関わらず force reconnect。閾値未満は disconnected 判定のみに委ねる
-      // (誤検知でタブ切替のたびに socket を張り直さない)。境界判定は
-      // shouldForceReconnectOnVisible に切り出して単体テスト可能に。
-      const shouldForce = shouldForceReconnectOnVisible(hiddenAt, Date.now());
       hiddenAt = null;
-      if (shouldForce) {
+      if (decision === "reconnect" || decision === "force-reconnect") {
         connection?.reconnect();
-        return;
       }
-      wakeHandler?.();
     };
     document.addEventListener("visibilitychange", visibilityHandler);
     window.addEventListener("online", wakeHandler);
