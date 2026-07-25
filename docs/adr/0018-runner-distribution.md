@@ -30,6 +30,11 @@ wrapper/runner を各ホスト(Linux/macOS/Windows、ヘッドレス含む)へ�
 - 設定生成は setup-wizards の拡張: (i) 設定が無ければ**初回起動でウィザードを
   自動起動**、(ii) 設定を **OS 別ユーザ設定ディレクトリ**(Linux `~/.config`、
   macOS `~/Library/Application Support`、Windows `%APPDATA%`)に置く。
+  **(i) は撤回済み** — [setup-wizards](../specs/setup-wizards.md)(2026-07-25
+  accepted、issue #144)で「自動起動はせず、起動シムは exit 78 で止まって
+  ウィザードのコマンドを案内する」に上書きした。systemd / launchd から起動
+  された非対話セッションで対話プロンプトが立ち上がると、TTY が無いまま無応答
+  で止まるため。(ii) はそのまま有効。
 - 配布チャネルは **当面 Gitea の release(バイナリ資産)**、将来 GitHub 公開時に
   GitHub releases。
 

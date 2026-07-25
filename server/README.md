@@ -89,6 +89,22 @@ cookie を WS に乗せられないため)、dev でもリロード後の再接�
 
 ### Docker(推奨)
 
+`.env` は対話ウィザードで作れる(issue #144、
+[setup-wizards](../docs/specs/setup-wizards.md)):
+
+```sh
+cd server
+mix kaoiro.env        # SECRET_KEY_BASE 生成・token 3 種の組み立てまで対話で
+```
+
+トークンは手入力と自動生成(32 バイト hex)を選べる。DETS パスは同梱
+`docker-compose.yaml` が設定するのでウィザードでは聞かず、生成した `.env` に
+コメントとして残る。runner 側の設定は別ウィザード
+([runner/README.md](../runner/README.md) の「設定ウィザード」)で、トークンは
+自動連携しないため値を貼り合わせる。
+
+手で書く場合:
+
 ```sh
 cd server
 cp .env.example .env
