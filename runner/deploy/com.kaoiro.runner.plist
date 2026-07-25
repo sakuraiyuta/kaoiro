@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  kaoiro runner — launchd LaunchAgent (issue #141).
+
+  A LaunchAgent, not a LaunchDaemon: the runner reads the login user's
+  ~/.claude / ~/.codex credentials and spawns wrappers inside that user's own
+  repositories (ADR-0023).
+
+  The auth token is deliberately NOT here — kaoiro-runner-launch.sh reads it
+  from a 0600 env file. Replace @@DEPLOY_DIR@@ and @@HOME@@ before installing
+  (plists do not expand `~` or shell variables); see runner/README.md「常駐化」.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kaoiro.runner</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@@DEPLOY_DIR@@/kaoiro-runner-launch.sh</string>
+  </array>
+
+  <!-- Start at login (and at boot once the user session comes up). -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on abnormal exit only; a clean SIGTERM shutdown stays down.
+       Mirrors the systemd unit's Restart=on-failure. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- launchd has no RestartPreventExitStatus equivalent, so a
+       misconfiguration (exit 78) does keep retrying. 30s throttling keeps that
+       cheap; the reason is in the log file below. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <!-- launchd does NOT create these directories or rotate these files:
+       mkdir -p ~/Library/Logs/kaoiro first, and rotate via newsyslog if the
+       host runs for months (see runner/README.md). -->
+  <key>StandardOutPath</key>
+  <string>@@HOME@@/Library/Logs/kaoiro/runner.log</string>
+  <key>StandardErrorPath</key>
+  <string>@@HOME@@/Library/Logs/kaoiro/runner.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

@@ -1,0 +1,42 @@
+# kaoiro runner — systemd USER unit (issue #141).
+#
+# A user unit, never a root system service: the runner reads the host user's
+# ~/.claude / ~/.codex credentials and spawns wrapper processes inside that
+# user's own repositories (ADR-0023).
+#
+# Install (replace @@DEPLOY_DIR@@ first — see runner/README.md「常駐化」):
+#   install -Dm644 kaoiro-runner.service \
+#     ~/.config/systemd/user/kaoiro-runner.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now kaoiro-runner
+#   sudo loginctl enable-linger "$USER"   # required to start at boot
+[Unit]
+Description=kaoiro runner (wrapper supervisor)
+Documentation=https://gitea.example.invalid/sakurai.yuta/kaoiro/src/branch/main/runner/README.md
+# Ordering only — the runner retries the WebSocket itself, so a late network is
+# not fatal.
+Wants=network-online.target
+After=network-online.target
+# A config typo that throws at startup would otherwise restart forever.
+# StartLimit* belong to [Unit] on systemd >= 230.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=@@DEPLOY_DIR@@/kaoiro-runner-launch.sh
+Restart=on-failure
+RestartSec=5s
+# 78 = EX_CONFIG from the launch shim (missing config / node / build). A
+# restart cannot fix it, so stay failed and surface it in
+# `systemctl --user status` instead of looping.
+RestartPreventExitStatus=78
+# SIGTERM makes the runner stop its wrapper children, then exit 0. Leave time
+# for that before the cgroup is SIGKILLed.
+TimeoutStopSec=30
+# journalctl --user -u kaoiro-runner -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
