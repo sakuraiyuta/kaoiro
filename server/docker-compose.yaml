@@ -42,6 +42,11 @@ services:
       KAOIRO_CLEAR_WATERMARKS_PATH: /var/lib/kaoiro/clear_watermarks.dets
       KAOIRO_SESSION_STARTS_PATH: /var/lib/kaoiro/session_starts.dets
       KAOIRO_INGRESS_ORDER_PATH: /var/lib/kaoiro/ingress_order.dets
+      # Token denylist: authoritative store of revoked agent_ids for
+      # fail-closed auth (ふじ #120 must-fix 1, 2026-07-25). Must live on
+      # the named volume — a lost entry silently re-grants a revoked
+      # identity.
+      KAOIRO_TOKEN_DENYLIST_PATH: /var/lib/kaoiro/token_denylist.dets
     volumes:
       - kaoiro-state:/var/lib/kaoiro
       # Sprite overlay (ADR-0008): uncomment and set KAOIRO_PERSONA_DIR

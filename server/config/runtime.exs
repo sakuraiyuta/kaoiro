@@ -28,15 +28,29 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
 # manifest on every filesystem change. Unset falls back to
 # `priv/persona-packs/` bundled with the app dir so a fresh `mix
 # phx.server` still ships the reference 4 packs.
-config :kaoiro_server, :persona_dir, System.get_env("KAOIRO_PERSONA_DIR")
+# Env override guard (issue #120): only overwrite compile-time config when
+# the corresponding env is actually set, so `config/test.exs` (loaded
+# earlier) is not silently clobbered with nil. Same pattern as the three
+# `if path = System.get_env(...)` blocks below (commit a0b49ab).
+if v = System.get_env("KAOIRO_PERSONA_DIR") do
+  config :kaoiro_server, :persona_dir, v
+end
 
 # Socket auth (ADR-0011). Unset lists disable enforcement (dev mode —
 # clients then act as operator); always set all in production. Formats:
 # wrapper "agent_id:token,...", runner "host_id:token,..." (ADR-0023),
 # client "token:role,...".
-config :kaoiro_server, :wrapper_tokens, System.get_env("KAOIRO_WRAPPER_TOKENS")
-config :kaoiro_server, :runner_tokens, System.get_env("KAOIRO_RUNNER_TOKENS")
-config :kaoiro_server, :client_tokens, System.get_env("KAOIRO_CLIENT_TOKENS")
+if v = System.get_env("KAOIRO_WRAPPER_TOKENS") do
+  config :kaoiro_server, :wrapper_tokens, v
+end
+
+if v = System.get_env("KAOIRO_RUNNER_TOKENS") do
+  config :kaoiro_server, :runner_tokens, v
+end
+
+if v = System.get_env("KAOIRO_CLIENT_TOKENS") do
+  config :kaoiro_server, :client_tokens, v
+end
 
 # DETS file for the restart-surviving session_id pointers (ADR-0014 F1,
 # issue #49). Point this at a persistent volume in production; the unset
@@ -45,9 +59,9 @@ config :kaoiro_server, :client_tokens, System.get_env("KAOIRO_CLIENT_TOKENS")
 # owner-only (chmod 600) since records carry cwd (sensitive, #46). A lost
 # pointer only drops the default resume target — the runner re-enumerates
 # (ADR-0014 F2).
-config :kaoiro_server,
-       :session_pointers_path,
-       System.get_env("KAOIRO_SESSION_POINTERS_PATH")
+if path = System.get_env("KAOIRO_SESSION_POINTERS_PATH") do
+  config :kaoiro_server, :session_pointers_path, path
+end
 
 # DETS file for the restart-surviving agent identity ledger (ADR-0030).
 # Point this at a persistent volume in production; the unset default
@@ -55,25 +69,25 @@ config :kaoiro_server,
 # process restart but not a fresh container. The file is created
 # owner-only (chmod 600); a lost entry only drops the ability to restore
 # that agent until it is spawned fresh.
-config :kaoiro_server,
-       :agent_directory_path,
-       System.get_env("KAOIRO_AGENT_DIRECTORY_PATH")
+if path = System.get_env("KAOIRO_AGENT_DIRECTORY_PATH") do
+  config :kaoiro_server, :agent_directory_path, path
+end
 
 # DETS file for the per-agent permission-mode ledger. Same rationale as
 # the two paths above: unset falls back to a tmp path
 # (KaoiroServer.PermissionModes) which is destroyed together with the
 # container on `docker compose down`. Point at a persistent volume so the
 # per-agent mode survives a dogfood restart.
-config :kaoiro_server,
-       :permission_modes_path,
-       System.get_env("KAOIRO_PERMISSION_MODES_PATH")
+if path = System.get_env("KAOIRO_PERMISSION_MODES_PATH") do
+  config :kaoiro_server, :permission_modes_path, path
+end
 
 # DETS source of truth for structured inter-agent envelopes (#105). SDK
 # JSONL can reconstruct ordinary logs but not these messages, so production
 # must point this at the same restart-surviving volume as the other ledgers.
-config :kaoiro_server,
-       :inter_agent_history_path,
-       System.get_env("KAOIRO_INTER_AGENT_HISTORY_PATH")
+if path = System.get_env("KAOIRO_INTER_AGENT_HISTORY_PATH") do
+  config :kaoiro_server, :inter_agent_history_path, path
+end
 
 # #109 visibility data must survive a full container recreation together
 # with durable IA history. Both stores are fsync-gated before clear ack.
@@ -87,6 +101,16 @@ end
 
 if path = System.get_env("KAOIRO_INGRESS_ORDER_PATH") do
   config :kaoiro_server, :ingress_order_path, path
+end
+
+# Token denylist DETS store (ふじ #120 must-fix 1, 2026-07-25). This is
+# the authoritative store of revoked agent_ids for fail-closed auth: a lost
+# entry silently re-grants a revoked identity. Point at a persistent volume
+# in production; unset falls back to KaoiroServer.TokenDenylist.default_path/0
+# (a shared `$TMPDIR/kaoiro_token_denylist.dets`) which does NOT survive a
+# container recreation.
+if path = System.get_env("KAOIRO_TOKEN_DENYLIST_PATH") do
+  config :kaoiro_server, :token_denylist_path, path
 end
 
 if config_env() == :prod do
