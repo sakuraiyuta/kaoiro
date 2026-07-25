@@ -15,6 +15,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   use Phoenix.Channel
 
+  require Logger
+
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
@@ -39,6 +41,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Resource bound only; content/type refinement is Phase 1.5-4. Clients
   # must still treat all envelope strings as untrusted when rendering.
   @max_envelope_bytes 65_536
+
+  # Upper bound on conversations notified in one disconnect (#131). Phase 1
+  # caps a conversation at 2 agents and a wrapper realistically holds a
+  # handful; the tracker's own cap is global (max_conversations), so without
+  # this a single wrapper's disconnect could fan out thousands of broadcasts.
+  @max_unreachable_notices 50
 
   @impl true
   def join("wrapper:" <> agent_id, params, socket) do
@@ -510,10 +518,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
     # applies it while this channel still owns the entry, so a stale
     # terminate after a reconnect cannot clobber the new state.
     ts = DateTime.utc_now() |> DateTime.to_iso8601()
+    agent_id = socket.assigns.agent_id
 
-    case AgentStates.disconnect(socket.assigns.agent_id, self(), ts) do
+    case AgentStates.disconnect(agent_id, self(), ts) do
       {:ok, envelope} ->
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+        # Only on an adopted disconnect: a stale terminate that lost the
+        # entry to a reconnect must not tell peers the agent is gone.
+        broadcast_peer_unreachable(agent_id, ts)
 
       :noop ->
         :ok
@@ -611,6 +623,78 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp synth_escalate_envelope(cid, recipient, reason, ts) do
+    synth_inter_agent_envelope(
+      %{
+        "to" => recipient,
+        "conversation_id" => cid,
+        "turn_number" => 0,
+        "kind" => "escalate-to-user",
+        "body" => "conversation auto-terminated: #{reason}",
+        "meta" => %{"done" => true, "propose_next" => ""},
+        "owner" => %{"kind" => "user", "id" => "system"}
+      },
+      ts
+    )
+  end
+
+  # Tells the peers still in an open conversation with the leaving wrapper
+  # that this agent became unreachable, so the sender agent can tell a real
+  # failure from a plain reply_pending timeout (protocol-inter-agent
+  # 「応答不能エラーの通知」, issue #131). The notice is server-derived: it
+  # is NOT recorded against the conversation's turn/token budget, and the
+  # entry stays so a reconnecting wrapper can resume the same
+  # conversation_id (stale entries fall to the existing wallclock GC).
+  #
+  # The tracker hands out each conversation ONCE per disconnect and only
+  # re-arms it when the agent speaks there again, so a crash-looping
+  # wrapper cannot re-inject the same notice into its peers' turns every
+  # few seconds. `@max_unreachable_notices` additionally bounds the burst:
+  # every notice costs two Endpoint broadcasts (one of them fanned out to
+  # every dashboard), and a wrapper may hold far more open conversations
+  # than it has live peers.
+  defp broadcast_peer_unreachable(agent_id, ts) do
+    message = "peer #{agent_id} is unreachable: wrapper disconnected"
+
+    {targets, unclaimed} =
+      ConversationStates.claim_unreachable_targets(agent_id, @max_unreachable_notices)
+
+    for {cid, peers} <- targets, peer <- peers do
+      envelope = synth_unreachable_envelope(cid, peer, message, ts)
+      KaoiroServerWeb.Endpoint.broadcast("wrapper:#{peer}", "envelope", envelope)
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+    end
+
+    if unclaimed > 0 do
+      Logger.warning(
+        "disconnect notice cap hit for #{agent_id}: " <>
+          "#{unclaimed} conversation(s) left unnotified"
+      )
+    end
+
+    :ok
+  end
+
+  # kind stays within the 9-value enum ("inform"); `payload.error` is the
+  # discriminator and `body` repeats the reason for older receivers that
+  # do not read it. meta.done is false — whether to end the conversation is
+  # the receiving agent's call (spec Phase 1).
+  defp synth_unreachable_envelope(cid, recipient, message, ts) do
+    synth_inter_agent_envelope(
+      %{
+        "to" => recipient,
+        "conversation_id" => cid,
+        "turn_number" => 0,
+        "kind" => "inform",
+        "body" => message,
+        "error" => %{"code" => "disconnected", "message" => message},
+        "meta" => %{"done" => false, "propose_next" => ""},
+        "owner" => %{"kind" => "user", "id" => "system"}
+      },
+      ts
+    )
+  end
+
+  defp synth_inter_agent_envelope(payload, ts) do
     %{
       "version" => "0",
       "agent_id" => "server",
@@ -621,15 +705,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       "ts" => ts,
       "type" => "inter_agent_message",
       "state" => "idle",
-      "payload" => %{
-        "to" => recipient,
-        "conversation_id" => cid,
-        "turn_number" => 0,
-        "kind" => "escalate-to-user",
-        "body" => "conversation auto-terminated: #{reason}",
-        "meta" => %{"done" => true, "propose_next" => ""},
-        "owner" => %{"kind" => "user", "id" => "system"}
-      },
+      "payload" => payload,
       "ext" => %{}
     }
   end
@@ -669,6 +745,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
       not valid_inter_agent_owner?(payload["owner"]) ->
         {:error, "invalid value: payload.owner"}
 
+      not valid_inter_agent_error?(payload["error"]) ->
+        {:error, "invalid value: payload.error"}
+
       true ->
         :ok
     end
@@ -692,4 +771,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
        do: true
 
   defp valid_inter_agent_owner?(_), do: false
+
+  # Optional 応答不能 notice (#131). Absent on ordinary messages. Shape only:
+  # `code` is an open string whose meaning belongs to the receiving agent,
+  # not to the server (protocol-inter-agent Constraints carve-out).
+  defp valid_inter_agent_error?(nil), do: true
+
+  defp valid_inter_agent_error?(%{"code" => code, "message" => message}),
+    do: is_binary(code) and code != "" and is_binary(message)
+
+  defp valid_inter_agent_error?(_), do: false
 end

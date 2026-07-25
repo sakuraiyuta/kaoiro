@@ -92,6 +92,8 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 | `meta.propose_next` | MUST | string。次に何を期待するか(空文字可) |
 | `meta.confidence` | optional | 0.0〜1.0 |
 | `meta.reject_reason` | `kind=reject` 時 MUST | string。提案を拒否する具体的理由 |
+| `error.code` | optional | 相手が応答不能になったことを示すエラー種別コード(open string)。詳細は「応答不能エラーの通知」節 |
+| `error.message` | `error` 有時 MUST | string。人間可読の理由(秘匿情報マスク済・切り詰め済) |
 | `owner.kind` | MUST | `"user"` または `"agent"` |
 | `owner.id` | MUST | owner の識別子。user の場合は接続トークンに紐づく user_id、agent の場合は `agent_id` |
 
@@ -202,6 +204,7 @@ capability の公開が必要になった場合は、別の設計変更として
 |---|---|---|
 | `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | (a) `payload.to` で指定された `wrapper:<to>` channel に push、(b) `agents:lobby` に broadcast(operator 限定)、(c) 該当 conversation の turn count / token count / wallclock を更新 |
 | `envelope` 合成 (S→W) | ハード制限超過時 | 両 wrapper の `wrapper:<id>` + `agents:lobby` へ push |
+| `envelope` 合成 (S→W) | wrapper 切断時 | 当該 wrapper が参加中の各 conversation の他参加者へ `kind=inform` + `error.code=disconnected` を push(「応答不能エラーの通知」節) |
 | `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の `{agent_id, persona:{id,name,sprite_set}, state, engine?, model?, effort?}` リストを `{:ok, %{agents: [...]}}` 返却で受け取る。optional 3 field は上記の省略規則に従う。list_agents 用 (後述) |
 
 未知 `to` / 自己 routing / participants 不一致時のエラー (`unknown_agent` /
@@ -252,6 +255,101 @@ agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの�
   遅れて到着した envelope は通常どおり次turn注入する。
 - 同一 `conversation_id` では waiter を1件だけ許可する。重複した同期waitは
   送信前に tool error とする。
+
+### 応答不能エラーの通知 (`payload.error`)
+
+相手エージェントが利用制限・コンテキスト超過・接続断などで応答不能に
+なったとき、その事実を **送信元エージェント自身** に返す
+([issue #131](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/131))。
+送信元が「再送しても無駄か / 時間を置くべきか / operator に
+エスカレートすべきか」を自ら判断できることが要件であり、単なる無応答
+タイムアウト (`reply_pending`) と区別できなければならない。
+
+新 envelope type も kind enum 拡張も行わない。判別は `payload.error` の
+有無のみで行う。
+
+```json
+{
+  "to": "lab-pc-1.claude-a",
+  "conversation_id": "cnv-7f3a1c",
+  "turn_number": 0,
+  "kind": "inform",
+  "body": "peer lab-pc-1.claude-b is unreachable: rate limit reached",
+  "error": {
+    "code": "rate_limit",
+    "message": "peer lab-pc-1.claude-b is unreachable: rate limit reached"
+  },
+  "meta": { "done": false, "propose_next": "" },
+  "owner": { "kind": "user", "id": "system" }
+}
+```
+
+- `kind` は `"inform"` を流用する(9 種 enum 不変)。`error` を知らない
+  旧受信側は通常の inform として劣化表示する
+- `body` にも同じ人間可読理由を重複記載する(旧クライアント表示互換)
+- `meta.done` は false 固定(Phase 1。会話を打ち切るかの判断は送信元
+  エージェントに委ねる)
+- `error.message` に秘匿情報(トークン等)を載せない。マスクと切り詰めは
+  発火元 wrapper の責務
+
+#### エラー種別コード(初期セット)
+
+`code` は open string。将来の engine 固有コード追加を阻害しないため
+enum にはしない。未知の `code` を受けた側は `api_error` と同等に扱う。
+
+| code | 意味 | 送信元エージェントの推奨行動 |
+|---|---|---|
+| `rate_limit` | 利用制限・クォータ超過 | 即時再送は無駄。時間を置くか operator にエスカレート |
+| `context_overflow` | コンテキスト長超過 | 同内容の再送は無駄。要約・分割するか operator にエスカレート |
+| `api_error` | engine / API 側エラー。分類不能時の縮退先 | 一度の再送は可。続くならエスカレート |
+| `timeout` | peer 側処理のタイムアウト | 時間を置いて再送 |
+| `interrupted` | peer の turn が中断された | operator 都合の可能性。再送前に状況確認 |
+| `disconnected` | peer wrapper の接続断 | 復帰まで再送は無駄。エスカレート |
+
+#### 発火元(2 系統)
+
+| 発火元 | 契機 | 経路 |
+|---|---|---|
+| peer 側 wrapper | SDK turn が is_error 終了し、その turn に未返信の inter-agent 注入があった | 当該 conversation の送信元へ ServerLink 直送(モデル経由でないため broker 承認なし)。通常の `inter_agent_message` として既存ルーティングに乗る |
+| server | wrapper channel の切断 (terminate) | `code=disconnected` を server が合成し、当該 wrapper が参加中の各 conversation の他参加者へ push |
+
+engine 差は共通 classifier の中で吸収する(engine-agnostic、
+[ADR-0032](../adr/0032-codex-adapter.md) F5)。取得不能な
+項目は `api_error` + 生 message に縮退する。
+
+#### server 合成 (`disconnected`) の規則
+
+- 合成 envelope の `agent_id` は `"server"`、`turn_number` は 0、`owner`
+  は `{kind: "user", id: "system"}`。ハード制限超過時の合成 envelope と
+  同形(recipient ごとに `payload.to` をその受信者にする)
+- 宛先は当該 wrapper が参加中の各 conversation の **他参加者全員**
+  (Phase 1 は `max_concurrent_agents` = 2 なので実質は送信元のみ)
+- `wrapper:<recipient>` と `agents:lobby` の双方へ push する(合成
+  escalate と同じ観測経路)
+- 合成 notice は turn / token カウントに **加算しない**。server 由来の
+  メタ通知であって対話ターンではないため(合成 escalate と同じ扱い)
+- conversation entry は削除しない。wrapper が復帰すれば同じ
+  `conversation_id` で継続でき、放置分は既存の wallclock GC が回収する
+- 再接続後に遅れて走った stale な terminate では合成しない(server が
+  `disconnected` 状態を実際に採用した場合のみ発火する)
+- 同一 conversation への通知は 1 回きり。当該 agent がその conversation で
+  再び発言するまで再通知しない。entry は切断で消えず turn/token にも
+  加算しないため、この抑止がないと crash loop / フラッピングする wrapper が
+  peer のターンを消費し続ける
+- 1 回の切断で通知する conversation 数には上限を設ける(実装既定 50)。
+  通知 1 件につき `wrapper:<peer>` と `agents:lobby` の 2 broadcast が
+  走るため、多数の conversation を抱えた wrapper の切断が fan-out を
+  増幅させないようにする。打ち切った分は warning ログに残す(黙って
+  落とさない)
+
+#### 受信側の扱い
+
+- `wait_for_response: true` の待受中に `error` 付き envelope を受けた
+  場合、wrapper はそれを reply として同じ tool result で返す。送信元は
+  `error.code` の有無で `reply_pending` と区別する
+- 非同期(次 turn 注入)の場合、注入テキストに `error.code` を含める
+  (SHOULD)。既存の注入形の meta 行へ `error=<code>` を併記する形を
+  推奨する。送信元エージェントが code から行動を選べることが要件
 
 ### コンパニオンツール (wrapper の SDK MCP)
 
@@ -306,6 +404,14 @@ operator が `@あお` のような名前で指示しても、 model は send_to
 
 - MUST: server は payload の意味論(kind / body / meta)を解釈しない。
   `to` フィールドのみをルーティング目的で参照する
+  - carve-out (issue #131): `payload.error` については **構造のみ**
+    検証する(`code` は非空 string、`message` は string)。code の値や
+    message の内容は解釈しない。加えて wrapper 切断時に限り server が
+    `code=disconnected` の envelope を合成する。いずれも意味論の解釈
+    ではなく、可観測性のための最小限の構造的関与に留める
+- MUST: `payload.error` を持つ envelope の `kind` も 9 種 enum の
+  いずれか。応答不能エラーの通知は `inform` を使う
+- MUST: server 合成の error notice は turn / token カウントに加算しない
 - MUST: `inter_agent_message` envelope は **operator 限定配信**
   ([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
   viewer には完全除去する
@@ -348,4 +454,4 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   [0021 role-information-disclosure-policy](../adr/0021-role-information-disclosure-policy.md),
   [0022 pending-permission-authoritative-source](../adr/0022-pending-permission-authoritative-source.md)
 - kaoiro issue #17(本実装の起点)、#18(メッセージフィルタ)、
-  #87(調査の傘 issue)
+  #87(調査の傘 issue)、#131(応答不能エラーの通知)
