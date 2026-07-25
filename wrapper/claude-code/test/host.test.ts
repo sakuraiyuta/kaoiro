@@ -197,6 +197,27 @@ describe("AgentHost — query injection", () => {
     expect(res?.ext).toEqual({});
   });
 
+  it("error result は payload に is_error / error_subtype / error_detail を relay (issue #127)", async () => {
+    const logs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      queryFn: scriptedQuery([
+        result("error_during_execution", {
+          errors: ["tool crashed: EACCES"],
+        }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const res = logs.find((l) => l.type === "result");
+    expect(res?.payload).toEqual({
+      is_error: true,
+      error_subtype: "error_during_execution",
+      error_detail: "tool crashed: EACCES",
+    });
+  });
+
   it("rate_limit_event を ext.rate_limits として state_change に付与する (#16)", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {

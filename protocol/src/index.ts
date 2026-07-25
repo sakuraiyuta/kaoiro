@@ -43,6 +43,16 @@ export interface LogPayload {
 export interface ResultPayload {
   text?: string;
   is_error?: boolean;
+  /** SDK error termination subtype (issue #127). Set on error results only
+   *  so the UI can differentiate max_turns / during_execution / max_budget /
+   *  max_structured_output_retries. Wire-typed as a plain string here so
+   *  this shared type stays SDK-agnostic; wrapper-side callers narrow to
+   *  their ResultSubtype union. Absent on success. */
+  error_subtype?: string;
+  /** SDK error termination detail (issue #127): the free-form message the
+   *  SDK returned alongside is_error (e.g. tool error text). Absent on
+   *  success; may be omitted on error if the SDK provided no text. */
+  error_detail?: string;
 }
 
 /** Wire-safe subset of Persona used in every network-facing type

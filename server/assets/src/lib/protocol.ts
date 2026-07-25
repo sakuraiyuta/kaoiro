@@ -581,6 +581,17 @@ export function buildChunkPayload(
 export interface ResultPayload {
   text?: string;
   is_error?: boolean;
+  /** SDK error termination subtype relayed from the wrapper (issue #127).
+   *  Present on error results only, absent on success. Values mirror
+   *  wrapper's ResultSubtype (`error_max_turns` / `error_during_execution`
+   *  / `error_max_budget_usd` / `error_max_structured_output_retries`);
+   *  the UI treats unknown strings as fallback wording. */
+  error_subtype?: string;
+  /** SDK error termination detail text (issue #127) — the wrapper forwards
+   *  what the SDK returned alongside is_error (e.g. tool error message).
+   *  Absent on success; may be omitted on error when the SDK provided no
+   *  text. */
+  error_detail?: string;
 }
 
 /** Narrows a log envelope's payload, or null for any other envelope. */
