@@ -12,7 +12,9 @@
   } from "./lib/conversationTimeline";
   import {
     beginTimelineReplay,
+    clearTimelineReplay,
     completeTimelineReplay,
+    computeStaleTimelineKeys,
     isTimelineReplayEnvelope,
   } from "./lib/timelineArrival";
   import { expressionFor, spriteUrlFor } from "./lib/expression";
@@ -87,8 +89,10 @@
   // agent_id of the agent shown full-screen, or null for the grid.
   let selected = $state<string | null>(null);
   // Timeline click の発話位置。AgentDetail は stable entry identity を DOM
-  // anchor に照合して、該当箇所まで smooth scroll する (#122)。 Object を
-  // 毎回新規にして、同じ行の再クリックも reactive request として届かせる。
+  // anchor に照合して、該当箇所まで smooth scroll する (#122)。primitive の
+  // entryKey しか渡さないため、同じ行の再クリックでは reactive 変化として
+  // 届かない (現状は開き直し = 別 selected → 別 target なので実運用では
+  // 問題にならないが、同一 detail 内での repeat click は N/A)。
   let timelineScrollTarget = $state<{ entryKey: string } | null>(null);
   // Viewport centre of the tile that opened the detail, for the expand
   // animation (#36); null when no tile origin is known.
@@ -241,13 +245,16 @@
     newTimelineEntryKeys = next;
   }
 
-  /** Removes ephemeral timeline state whose rows belong to an agent pane.
-   * Used on transcript lifecycle boundaries so discarded rows cannot revive
-   * as unread or pulse markers after a remount. */
-  function pruneTimelineStateForAgent(agentId: string): void {
-    const stale = new Set(
-      (logs[agentId] ?? []).map((entry) => conversationEntryKey(entry)),
-    );
+  /** Removes ephemeral timeline state for a specific set of stale keys.
+   * ふじ再レビュー must-fix (2026-07-25): the previous "prune all of the
+   * agent's rows" version dropped read/pulse state for entries that
+   * filterAfterHistoryCleared / resetTranscriptHistory kept alive (IA
+   * envelopes with preserve_inter_agent: true), so previously-read rows
+   * reappeared as unread after resume. Callers now compute the actual
+   * before→after diff via computeStaleTimelineKeys and pass only the
+   * discarded keys; full-drop cases (agent_deleted) still pass every key.
+   */
+  function pruneTimelineStateByKeys(stale: Set<string>): void {
     if (stale.size === 0) return;
     readTimelineEntryKeys = new Set(
       [...readTimelineEntryKeys].filter((key) => !stale.has(key)),
@@ -429,30 +436,28 @@
               clearWatermarks = { ...clearWatermarks, [agentId]: watermark };
             }
           }
-          pruneTimelineStateForAgent(agentId);
           const prev = logs[agentId];
           if (prev) {
-            logs = {
-              ...logs,
-              [agentId]: filterAfterHistoryCleared(
-                prev,
-                sessionId,
-                clearWatermarks[agentId],
-              ),
-            };
+            const next = filterAfterHistoryCleared(
+              prev,
+              sessionId,
+              clearWatermarks[agentId],
+            );
+            pruneTimelineStateByKeys(
+              computeStaleTimelineKeys(prev, next, conversationEntryKey),
+            );
+            logs = { ...logs, [agentId]: next };
           }
         },
         onHistoryReset: (agentId, preserveInterAgent, replayId) => {
           // history_reset is resume replay only; /new and /clear preserve
           // the existing display projection (#109).
-          pruneTimelineStateForAgent(agentId);
-          logs = {
-            ...logs,
-            [agentId]: resetTranscriptHistory(
-              logs[agentId] ?? [],
-              preserveInterAgent,
-            ),
-          };
+          const prev = logs[agentId] ?? [];
+          const next = resetTranscriptHistory(prev, preserveInterAgent);
+          pruneTimelineStateByKeys(
+            computeStaleTimelineKeys(prev, next, conversationEntryKey),
+          );
+          logs = { ...logs, [agentId]: next };
           activeTimelineReplays = beginTimelineReplay(
             activeTimelineReplays,
             agentId,
@@ -477,11 +482,17 @@
           // page reload re-fetches the shrunk directory. The detail view
           // falls back to the grid on its own when the selected agent
           // vanishes (selectedEnvelope).
-          pruneTimelineStateForAgent(agentId);
-          activeTimelineReplays = beginTimelineReplay(
+          // agent_deleted は transcript を丸ごと破棄するので、prev の全 key
+          // が stale (= next=[] との差集合)。
+          {
+            const prev = logs[agentId] ?? [];
+            pruneTimelineStateByKeys(
+              computeStaleTimelineKeys(prev, [], conversationEntryKey),
+            );
+          }
+          activeTimelineReplays = clearTimelineReplay(
             activeTimelineReplays,
             agentId,
-            undefined,
           );
           agents = Object.fromEntries(
             Object.entries(agents).filter(([id]) => id !== agentId),
