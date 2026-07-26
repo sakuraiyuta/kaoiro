@@ -37,6 +37,17 @@ defmodule KaoiroServerWeb.Router do
     post "/session/new", KaoiroServerWeb.SessionController, :create
     get "/session/ticket", KaoiroServerWeb.SessionController, :ticket
     get "/session/refresh", KaoiroServerWeb.SessionController, :refresh
+    get "/session/auth-methods", KaoiroServerWeb.SessionController, :auth_methods
     delete "/session", KaoiroServerWeb.SessionController, :delete
+  end
+
+  # OAuth login (ADR-0042). Both legs ride the session cookie: the
+  # request leg stashes the OAuth2 state in it, the callback leg reads it
+  # back and replaces it with the authenticated identity.
+  scope "/auth", KaoiroServerWeb do
+    pipe_through :browser
+
+    get "/:provider", AuthController, :request
+    get "/:provider/callback", AuthController, :callback
   end
 end

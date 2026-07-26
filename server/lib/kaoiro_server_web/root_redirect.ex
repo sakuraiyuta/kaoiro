@@ -36,15 +36,28 @@ defmodule KaoiroServerWeb.RootRedirect do
   defp maybe_store_token(conn) do
     conn = Plug.Conn.fetch_query_params(conn)
 
-    case conn.query_params["token"] do
-      token when is_binary(token) and token != "" ->
-        case Auth.client_role(token) do
-          {:ok, _role} -> Plug.Conn.put_session(conn, "client_token", token)
-          {:error, _reason} -> conn
-        end
-
-      _ ->
-        conn
+    # An established OAuth identity is never displaced here (ADR-0042).
+    # This is a plain top-level navigation, so any site can trigger it and
+    # SameSite=Lax still sends the victim's cookie — honouring the token
+    # would let anyone holding a shared token swap an authenticated
+    # operator's session out from under them. Switching credentials goes
+    # through an explicit logout instead. The sibling POST /session/new
+    # path is closed differently, by requiring a JSON content-type: there
+    # Lax withholds the victim's cookie, so this session-shaped guard
+    # would see an empty session and could not fire at all.
+    if Plug.Conn.get_session(conn, "oauth_identity") do
+      conn
+    else
+      store_token(conn, conn.query_params["token"])
     end
   end
+
+  defp store_token(conn, token) when is_binary(token) and token != "" do
+    case Auth.client_role(token) do
+      {:ok, _role} -> Plug.Conn.put_session(conn, "client_token", token)
+      {:error, _reason} -> conn
+    end
+  end
+
+  defp store_token(conn, _token), do: conn
 end

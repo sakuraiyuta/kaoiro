@@ -178,6 +178,33 @@ defmodule KaoiroServer.Auth do
   def socket_id(_token), do: nil
 
   @doc """
+  The `socket_id/1` counterpart for an OAuth identity (ADR-0042).
+
+  Hashes `"oauth:<provider>:<uid>"` so an OAuth session gets a stable id
+  in the same namespace as the token one, letting logout / allow-list
+  revocation force-drop its live sockets through the same broadcast.
+  The `"oauth:"` prefix keeps the two id spaces from ever colliding on a
+  token whose bytes happen to look like an identity.
+  """
+  def oauth_socket_id(provider, uid)
+      when is_binary(provider) and provider != "" and is_binary(uid) and uid != "" do
+    digest = :crypto.hash(:sha256, "oauth:" <> provider <> ":" <> uid)
+    "client_socket:" <> Base.url_encode64(digest, padding: false)
+  end
+
+  def oauth_socket_id(_provider, _uid), do: nil
+
+  @doc """
+  Whether shared-token client auth is usable at all, i.e. whether
+  `:client_tokens` holds at least one well-formed entry. The dashboard
+  reads this through `GET /session/auth-methods` so it only shows the
+  token form when a token can actually authenticate (ADR-0042).
+  """
+  def token_auth_enabled? do
+    parse_pairs(Application.get_env(:kaoiro_server, :client_tokens)) != %{}
+  end
+
+  @doc """
   Logs a startup warning for each token list that is unset, so the
   locked / dev-mode / fail-closed state is visible in logs rather than
   silent (specs/threat-model.md, issue #28, issue #138):
@@ -188,6 +215,10 @@ defmodule KaoiroServer.Auth do
     wrapper may connect. `:prod`: fail-closed, every wrapper is
     rejected.
   - `:runner_tokens` unset — mirrors `:wrapper_tokens` (ADR-0023).
+
+  Also forwards to `KaoiroServer.OAuth.warn_config/0` so the OAuth login
+  path (ADR-0042) reports its own half-configured states from the same
+  startup call.
   """
   def warn_token_config do
     if parse_pairs(Application.get_env(:kaoiro_server, :client_tokens)) == %{} do
@@ -208,7 +239,7 @@ defmodule KaoiroServer.Auth do
       Logger.warning("KAOIRO_RUNNER_TOKENS unset: " <> unset_wrapper_or_runner_message("runner"))
     end
 
-    :ok
+    KaoiroServer.OAuth.warn_config()
   end
 
   defp unset_wrapper_or_runner_message(entity) do

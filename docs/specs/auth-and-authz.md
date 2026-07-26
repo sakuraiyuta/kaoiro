@@ -27,7 +27,7 @@ threat-model 側へ、**HOW** は本 doc + コード参照へという役割分�
 flowchart LR
   W[Wrapper N台] -->|ws| WS["/wrapper<br/>KAOIRO_WRAPPER_TOKENS<br/>or signed (ADR-0024)"]
   R[Runner N台] -->|ws| RS["/runner<br/>KAOIRO_RUNNER_TOKENS"]
-  C[Client dashboard] -->|ws| CS["/socket<br/>cookie + ticket (ADR-0013)"]
+  C[Client dashboard] -->|ws| CS["/client<br/>cookie + ticket (ADR-0013)<br/>token or OAuth identity (ADR-0042)"]
   WS --> SRV[Phoenix Server]
   RS --> SRV
   CS --> SRV
@@ -40,11 +40,18 @@ flowchart LR
 |---|---|---|---|---|
 | Wrapper | `wrapper:<agent_id>` | `agent_id:token` ペア / 又は server-minted signed token (ADR-0024) | `KAOIRO_WRAPPER_TOKENS` | `:dev`/`:test` = **dev 緩和** (誰でも join 可、warn ログ) / `:prod` = **fail-closed** (issue #138) |
 | Runner | `runner:<host_id>` | `host_id:token` ペア | `KAOIRO_RUNNER_TOKENS` | 同上 (issue #138) |
-| Client | `agents:lobby` | `token → role` (operator/viewer) | `KAOIRO_CLIENT_TOKENS` | **fail-closed** — 全 env で全 client 拒否 |
+| Client (token) | `agents:lobby` | `token → role` (operator/viewer) | `KAOIRO_CLIENT_TOKENS` | **fail-closed** — 全 env で全 client 拒否 |
+| Client (OAuth) | `agents:lobby` | `identity (provider+uid) → role` (許可リスト、[ADR-0042](../adr/0042-oauth-allowlist-login.md)) | `KAOIRO_OAUTH_*` + `KAOIRO_OAUTH_ALLOWLIST_PATH` | **fail-closed** — provider 未設定/許可リスト未設定・欠落・不一致は全拒否 |
 
-3 種ともトークン比較は `Plug.Crypto.secure_compare/2` で定数時間。
+トークン比較は 3 種とも `Plug.Crypto.secure_compare/2` で定数時間。
 未配置 id でも比較が走るのでタイミング側チャネルなし。未設定時の状態は
-起動時 `Auth.warn_token_config/0` が WARN ログを残す。
+起動時 `Auth.warn_token_config/0` (OAuth 分は `OAuth.warn_config/0` へ
+委譲) が WARN ログを残す。
+
+client の 2 経路は独立で併存する。`KAOIRO_CLIENT_TOKENS` 未設定 +
+OAuth 有効なら OAuth のみ、逆なら token のみ、両方未設定なら誰も
+入れない。dashboard は認証不要の `GET /session/auth-methods`
+(`{"token": bool, "oauth": [provider, ...]}`) でログイン画面を出し分ける。
 
 wrapper/runner の dev 緩和は `:prod` (`config.exs` の `env: config_env()` を
 `Application.get_env(:kaoiro_server, :env)` で実行時参照) では働かない。
@@ -113,6 +120,47 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。
 - WS 再接続: GET `/session/ticket` で 30s 短命 Phoenix.Token → WS query
   接続 (Vite dev proxy が cookie を WS upgrade に転送できない制約への対応)
 - socket id は `Auth.socket_id/1` で SHA-256 ハッシュ (revoke 用 ID、 raw token は保持しない)
+- session が持つ資格情報は常に 1 つ。token ログイン
+  (`POST /session/new`) は `oauth_identity` を、OAuth ログインは
+  `client_token` を、それぞれ書き込み時に消す
+- login CSRF 対策 (ADR-0042): 資格情報を書く 2 経路を別々に塞ぐ。
+  `POST /session/new` は **JSON content-type 必須** (それ以外は 415) —
+  SameSite=Lax は cross-site POST に cookie を**付けない**だけで、応答の
+  first-party `Set-Cookie` は保存されるため、共有トークン保有者が
+  auto-submit form でログイン済み operator の session を差し替えられる。
+  cross-site の HTML form は JSON content-type を送れず、cross-origin
+  `fetch` は preflight で止まる。`GET /?token=` は cookie が付く素の
+  ナビゲーションなので、逆に session を見て
+  `oauth_identity` があれば token を無視する
+
+### OAuth ログイン ([ADR-0042](../adr/0042-oauth-allowlist-login.md))
+
+- provider は Google / GitHub / Nextcloud。`assent` + `Req`、Nextcloud
+  だけ `Assent.Strategy.OAuth2.Base` の自前 strategy
+  (`KaoiroServer.OAuth.Nextcloud`、identity は OCS
+  `/ocs/v2.php/cloud/user`、`OCS-APIRequest: true` 必須)
+- route: `GET /auth/:provider` (302、OAuth2 `state` を session に保存し
+  provider 名で束縛) → `GET /auth/:provider/callback` (state 検証 →
+  identity 正規化 → 許可リスト照合 → `put_session` → 302
+  `/index.html`)。未設定 provider は 404、失敗は 302
+  `/index.html?auth_error={provider_error|not_allowed|invalid_state}`
+- 許可リスト (`KaoiroServer.OAuthAllowlist`) は
+  `provider:identifier[:role]` のテキスト。role 省略は viewer、`#` 行と
+  空行は無視、malformed 行は warn + skip (fail-visible)。**毎回 parse**
+  なので行削除は再起動なしで次の connect / refresh に効く
+- session に入るのは identity (`%{provider, uid}`) のみで role は入らない。
+  role は connect / refresh のたび許可リストから再解決する
+  (token 経路の `Auth.client_role/1` 再検証と同型)
+- socket id は `Auth.oauth_socket_id/2` =
+  `sha256("oauth:" <> provider <> ":" <> uid)`。logout / refresh 401 の
+  強制切断は ADR-0013 / #47 の broadcast 配管をそのまま共用
+- **provider の access token は identity 取得後に破棄**し、session /
+  cookie / DETS / ログのどこにも残さない (Nextcloud OAuth2 は scope 非
+  対応でトークンがフルアクセス)。assent の例外はレスポンス構造体経由で
+  `Authorization: Bearer …` を描画しうるため、`AuthController` は例外の
+  **型名だけ**をログに出す
+- Google は localhost 以外で https redirect URI 必須 → `KAOIRO_PLAIN_HTTP=true`
+  配備では Google ログインは使えない (GitHub / Nextcloud は http 可)
 
 ### Wrapper トークンの 2 系統
 
@@ -136,10 +184,10 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。
 |---|---|---|---|
 | **エージェント間 ACL** | A→B 送信のサーバ側許可リストなし | broker dialog (operator 都度承認) が唯一の人間ゲート | [#17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17) Phase 1 意図的選択 |
 | **メッセージ内容検査** | server は payload を解釈しない (size cap のみ) | なし — prompt injection 攻撃は素通り | [#18](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/18) Phase 2 |
-| **operator role 細分** | operator は全権 (spawn / interrupt / approve / clear など) | なし — 単一テナント前提 | [#65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65) OAuth + RBAC |
+| **operator role 細分** | operator は全権 (spawn / interrupt / approve / clear など)。[#65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65) の OAuth 個人認証は実装済だが role は operator / viewer の 2 値のまま | なし — 単一テナント前提 | [ADR-0042](../adr/0042-oauth-allowlist-login.md) Out of scope (approver 等の細分は将来) |
 | **トークン即時失効** | 稼働中 WS の強制切断は未実装 | env 更新 + 再起動で次接続から効く / heartbeat 失敗で client 自発切断 | [#47](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/47) |
 | **signed token revoke** | **per-agent_id denylist 実装済 (2026-07-23、[#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))**: TokenDenylist DETS + Auth.authorize_wrapper 照合 + delete_agent 連動 auto-revoke + operator 明示 revoke handler + revoked broadcast による live disconnect | key rotation はいまも fleet 全体一括失効の重量オプションとして残る | 実装完 |
-| **マルチテナント隔離** | 全 operator が全エージェントを操作可能 | なし — single tenant 前提 | OAuth 本実装まで保留 |
+| **マルチテナント隔離** | 全 operator が全エージェントを操作可能 (OAuth で個人は識別できるが、エージェントの所有者境界は無い) | なし — single tenant 前提 | [ADR-0042](../adr/0042-oauth-allowlist-login.md) Out of scope |
 | **dev fallback の混入リスク** | **解消済 (2026-07-25、[#138](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/138))**: `:dev`/`:test` は従来通り未設定で全許可、`:prod` は未設定なら fail-closed (全拒否) | 起動時 WARN ログ (env 別文言) | 実装完 |
 | **監査ログ** | 「誰がいつどの agent に何を送ったか」の永続記録なし | なし | 将来 (SQLite 導入時) |
 | **tool input マスキング** | コマンドライン / パスは生のまま operator dialog に表示 | operator 限定配信 + 16KB 切り詰め | 将来 |
@@ -164,6 +212,9 @@ OSS 公開前監査 ([#91](https://gitea.example.invalid/sakurai.yuta/kaoiro/iss
 本 doc を基準に以下を確認する。issue 側の checklist と同期させる。
 
 - [ ] 各 socket の token 未設定時挙動 (warn + 緩和 / fail-closed) が doc 通り
+- [ ] OAuth 許可リスト未設定 / 欠落 / 不一致で全 OAuth ログインが拒否される
+  (ADR-0042 fail-closed)
+- [ ] provider access token が session / cookie / DETS / ログに残らない
 - [ ] `AgentsChannel.handle_out` の allow-list が新規 envelope を漏らさない
   (sanitize_envelope_for 網羅性 + テスト coverage)
 - [ ] operator-only inbound の `require_operator/1` 抜けなし
@@ -195,7 +246,8 @@ OSS 公開前監査 ([#91](https://gitea.example.invalid/sakurai.yuta/kaoiro/iss
   [0021](../adr/0021-role-information-disclosure-policy.md) (operator/viewer allow-list),
   [0022](../adr/0022-pending-permission-authoritative-source.md) (pending permission),
   [0023](../adr/0023-host-runner-architecture.md) (runner),
-  [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) (spawn auth)
+  [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) (spawn auth),
+  [0042](../adr/0042-oauth-allowlist-login.md) (OAuth + 許可リスト)
 - 関連 issue: [#17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17) (inter-agent),
   [#28](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/28) (client fail-closed),
   [#46](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/46) (cwd 露出),

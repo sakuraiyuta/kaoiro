@@ -45,7 +45,13 @@ defmodule KaoiroServer.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
-      {:file_system, "~> 1.1"}
+      {:file_system, "~> 1.1"},
+      # OAuth login for the dashboard (ADR-0042). Assent is a plain
+      # function library (no plug coupling), and Req is the HTTP client it
+      # picks up automatically — `Assent.HTTPAdapter.Req` is the default
+      # when :req is available, so no :http_adapter config is needed.
+      {:assent, "~> 0.3.1"},
+      {:req, "~> 0.5"}
     ]
   end
 

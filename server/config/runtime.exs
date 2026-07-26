@@ -52,6 +52,47 @@ if v = System.get_env("KAOIRO_CLIENT_TOKENS") do
   config :kaoiro_server, :client_tokens, v
 end
 
+# Dashboard OAuth login (ADR-0042). A provider is offered only when its
+# whole set is present, so a half-filled pair silently disables it —
+# KaoiroServer.OAuth.warn_config/0 says so at boot. Google additionally
+# requires an https redirect URI off localhost, so it cannot be used
+# together with KAOIRO_PLAIN_HTTP=true.
+if v = System.get_env("KAOIRO_OAUTH_GOOGLE_CLIENT_ID") do
+  config :kaoiro_server, :oauth_google_client_id, v
+end
+
+if v = System.get_env("KAOIRO_OAUTH_GOOGLE_CLIENT_SECRET") do
+  config :kaoiro_server, :oauth_google_client_secret, v
+end
+
+if v = System.get_env("KAOIRO_OAUTH_GITHUB_CLIENT_ID") do
+  config :kaoiro_server, :oauth_github_client_id, v
+end
+
+if v = System.get_env("KAOIRO_OAUTH_GITHUB_CLIENT_SECRET") do
+  config :kaoiro_server, :oauth_github_client_secret, v
+end
+
+if v = System.get_env("KAOIRO_OAUTH_NEXTCLOUD_CLIENT_ID") do
+  config :kaoiro_server, :oauth_nextcloud_client_id, v
+end
+
+if v = System.get_env("KAOIRO_OAUTH_NEXTCLOUD_CLIENT_SECRET") do
+  config :kaoiro_server, :oauth_nextcloud_client_secret, v
+end
+
+if v = System.get_env("KAOIRO_OAUTH_NEXTCLOUD_BASE_URL") do
+  config :kaoiro_server, :oauth_nextcloud_base_url, v
+end
+
+# Text file mapping OAuth identities to roles (`provider:identifier[:role]`,
+# KaoiroServer.OAuthAllowlist). Unset or unreadable rejects every OAuth
+# login (fail-closed). Re-read on every lookup, so removing a line takes
+# effect at that identity's next connect/refresh without a restart.
+if path = System.get_env("KAOIRO_OAUTH_ALLOWLIST_PATH") do
+  config :kaoiro_server, :oauth_allowlist_path, path
+end
+
 # DETS file for the restart-surviving session_id pointers (ADR-0014 F1,
 # issue #49). Point this at a persistent volume in production; the unset
 # default (a tmp path, resolved in KaoiroServer.SessionPointers) survives

@@ -27,4 +27,21 @@ defmodule KaoiroServerWeb.RootRedirectTest do
     assert redirected_to(conn, 302) == "/index.html"
     assert get_session(conn, "client_token") == nil
   end
+
+  test "?token= は確立済みの OAuth identity を置き換えない (login CSRF 防止)", %{conn: conn} do
+    # `/` は他サイトからも誘導できる素のナビゲーションで、SameSite=Lax でも
+    # cookie は付く。ここで token を受け入れると、共有トークンを持つ相手が
+    # OAuth ログイン済み operator の session を差し替えられる (ADR-0042)。
+    Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+    identity = %{provider: "nextcloud", uid: "ao"}
+
+    conn =
+      conn
+      |> init_test_session(%{"oauth_identity" => identity})
+      |> get("/?token=tok-op")
+
+    assert redirected_to(conn, 302) == "/index.html"
+    assert get_session(conn, "client_token") == nil
+    assert get_session(conn, "oauth_identity") == identity
+  end
 end
