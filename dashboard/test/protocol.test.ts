@@ -4,6 +4,7 @@ import {
   ATTACH_CHUNK_SIZE,
   buildChunkPayload,
   errorSubtypeLabel,
+  fetchAuthMethods,
   fetchPersonaManifest,
   fanOutInterAgentHistory,
   findPrecedingUserPrompt,
@@ -68,6 +69,44 @@ describe("fetchPersonaManifest", () => {
       }),
     );
     expect(await fetchPersonaManifest()).toBeNull();
+  });
+});
+
+describe("fetchAuthMethods (issue #65 / ADR-0042)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("auth-methods JSON を返す", async () => {
+    const methods = { token: true, oauth: ["google", "github"] };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => methods })),
+    );
+
+    expect(await fetchAuthMethods()).toEqual(methods);
+    expect(fetch).toHaveBeenCalledWith("/session/auth-methods");
+  });
+
+  it("404 は null(#65 以前の server へのフォールバック用)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 404 })));
+    expect(await fetchAuthMethods()).toBeNull();
+  });
+
+  it("形の壊れたレスポンスは null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({ token: true }) })),
+    );
+    expect(await fetchAuthMethods()).toBeNull();
+  });
+
+  it("ネットワークエラーは null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    );
+    expect(await fetchAuthMethods()).toBeNull();
   });
 });
 

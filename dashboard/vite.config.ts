@@ -31,6 +31,9 @@ export default defineConfig({
       // Token->cookie exchange, WS ticket, and cookie refresh (ADR-0013).
       // These HTTP routes DO carry cookies through the proxy.
       "/session": { target: "http://localhost:4000" },
+      // OAuth authorize redirect + callback (ADR-0042 / #65). Carries
+      // cookies the same as /session above.
+      "/auth": { target: "http://localhost:4000" },
     },
   },
 });

@@ -916,6 +916,40 @@ export async function fetchPersonaManifest(
   }
 }
 
+/** Which login paths the login screen should offer (issue #65 / ADR-0042). */
+export interface AuthMethods {
+  token: boolean;
+  oauth: string[];
+}
+
+/**
+ * Fetches which auth methods this server offers. Null on any failure,
+ * including a 404 from a pre-#65 server that has no `/session/auth-methods`
+ * route, or a malformed body — callers should fall back to the pre-OAuth
+ * default (token only).
+ */
+export async function fetchAuthMethods(
+  base = "",
+): Promise<AuthMethods | null> {
+  try {
+    const res = await fetch(`${base}/session/auth-methods`);
+    if (!res.ok) return null;
+    const body = (await res.json()) as unknown;
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      typeof (body as AuthMethods).token !== "boolean" ||
+      !Array.isArray((body as AuthMethods).oauth) ||
+      !(body as AuthMethods).oauth.every((p) => typeof p === "string")
+    ) {
+      return null;
+    }
+    return body as AuthMethods;
+  } catch {
+    return null;
+  }
+}
+
 /** Launch catalog of one engine (ADR-0032 F4bc), from the host's register
  *  payload. models reuses the ext.models entry shape (#54) so the launch
  *  cascade and the running-agent switcher share one renderer. */

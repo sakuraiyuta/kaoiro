@@ -19,6 +19,7 @@
   } from "./lib/timelineArrival";
   import { expressionFor, spriteUrlFor } from "./lib/expression";
   import type {
+    AuthMethods,
     ConnectionStatus,
     DirectoryEntry,
     Envelope,
@@ -32,6 +33,7 @@
     connectKaoiro,
     decideWakeAction,
     defaultSocketUrl,
+    fetchAuthMethods,
     fetchPersonaManifest,
     filterAfterHistoryCleared,
     filterInterAgentTargetsByWatermark,
@@ -170,6 +172,10 @@
   let loginToken = $state("");
   let loginError = $state<string | null>(null);
   let loginBusy = $state(false);
+  // Which login paths the server offers (issue #65 / ADR-0042), fetched at
+  // startup. Defaults to token-only so a pre-#65 server (auth-methods
+  // 404/unreachable) keeps today's behavior — see fetchAuthMethods.
+  let authMethods = $state<AuthMethods>({ token: true, oauth: [] });
 
   // The first auth check (onMount) is async; until it resolves, render a
   // neutral loading state instead of flashing the dashboard before we know
@@ -839,6 +845,35 @@
     needLogin = true;
   }
 
+  // Japanese wording for the callback's `?auth_error=` code (ADR-0042 API
+  // contract). Unknown codes fall back to a generic message rather than
+  // showing nothing.
+  function authErrorMessage(code: string): string {
+    switch (code) {
+      case "provider_error":
+        return "認証プロバイダでのログインに失敗しました。";
+      case "not_allowed":
+        return "このアカウントはアクセスを許可されていません。管理者に確認してください。";
+      case "invalid_state":
+        return "認証セッションの有効期限が切れました。もう一度お試しください。";
+      default:
+        return "ログインに失敗しました。もう一度お試しください。";
+    }
+  }
+
+  function oauthProviderLabel(provider: string): string {
+    switch (provider) {
+      case "google":
+        return "Google";
+      case "github":
+        return "GitHub";
+      case "nextcloud":
+        return "Nextcloud";
+      default:
+        return provider;
+    }
+  }
+
   onMount(() => {
     // Cards render the CSS face until the manifest arrives (or on
     // fetch failure), then swap to persona sprites.
@@ -851,7 +886,26 @@
       // Auth (ADR-0011/0013). A `?token=` in the URL is the first load (dev
       // Vite, or a direct link): set the httpOnly cookie so reloads can mint
       // a ticket, authenticate this load with the token, then scrub the URL.
-      const urlToken = new URLSearchParams(location.search).get("token");
+      const params = new URLSearchParams(location.search);
+      const urlToken = params.get("token");
+
+      // A failed OAuth callback (ADR-0042 API contract) redirects here with
+      // `?auth_error=`; show it on the login form and scrub the URL the same
+      // way as `?token=` below.
+      const authErrorCode = params.get("auth_error");
+      if (authErrorCode !== null) {
+        loginError = authErrorMessage(authErrorCode);
+        const scrubbed = new URL(location.href);
+        scrubbed.searchParams.delete("auth_error");
+        history.replaceState(null, "", scrubbed);
+      }
+
+      // Fetched in parallel with the token/cookie flow below so authMethods
+      // is already settled by the time authChecked reveals the login form
+      // (no flash of the wrong form).
+      const authMethodsPromise = fetchAuthMethods().then((next) => {
+        if (next !== null) authMethods = next;
+      });
 
       if (urlToken !== null) {
         // Token in the POST body, not the query string, so it does not land
@@ -881,6 +935,7 @@
         // itself never reaches JS on this path.
         await connectFromCookie();
       }
+      await authMethodsPromise;
       // The auth check is done; reveal the form or dashboard instead of the
       // neutral loading state.
       if (!destroyed) authChecked = true;
@@ -908,20 +963,45 @@
   <main class="login">
     <form class="login-card" onsubmit={login}>
       <h1>kaoiro</h1>
-      <p class="login-note">アクセストークンを入力してください。</p>
-      <input
-        type="password"
-        bind:value={loginToken}
-        placeholder="トークン"
-        autocomplete="off"
-        aria-label="アクセストークン"
-      />
+      {#if authMethods.token}
+        <p class="login-note">アクセストークンを入力してください。</p>
+      {:else if authMethods.oauth.length > 0}
+        <p class="login-note">ログイン方法を選択してください。</p>
+      {:else}
+        <p class="login-note">
+          認証手段が構成されていません。管理者に問い合わせてください。
+        </p>
+      {/if}
       {#if loginError}
         <p class="login-error" role="alert">{loginError}</p>
       {/if}
-      <button type="submit" disabled={loginBusy || loginToken.trim() === ""}>
-        {loginBusy ? "確認中…" : "ログイン"}
-      </button>
+      {#if authMethods.token}
+        <input
+          type="password"
+          bind:value={loginToken}
+          placeholder="トークン"
+          autocomplete="off"
+          aria-label="アクセストークン"
+        />
+        <button
+          type="submit"
+          disabled={loginBusy || loginToken.trim() === ""}
+        >
+          {loginBusy ? "確認中…" : "ログイン"}
+        </button>
+      {/if}
+      {#if authMethods.token && authMethods.oauth.length > 0}
+        <p class="login-divider">または</p>
+      {/if}
+      {#if authMethods.oauth.length > 0}
+        <div class="login-oauth">
+          {#each authMethods.oauth as provider (provider)}
+            <a class="login-oauth-button" href={`/auth/${provider}`}>
+              {oauthProviderLabel(provider)} でログイン
+            </a>
+          {/each}
+        </div>
+      {/if}
     </form>
   </main>
 {:else if authChecked}
@@ -1719,5 +1799,30 @@
   .login-card button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .login-divider {
+    margin: 0;
+    font-size: var(--fs-body-sm);
+    text-align: center;
+    color: var(--fg-dim);
+  }
+
+  .login-oauth {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .login-oauth-button {
+    padding: 0.55rem;
+    font-size: var(--fs-body);
+    text-align: center;
+    text-decoration: none;
+    color: var(--fg);
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    cursor: pointer;
   }
 </style>
