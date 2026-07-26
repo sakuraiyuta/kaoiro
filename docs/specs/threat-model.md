@@ -19,7 +19,7 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 
 | レイヤ | 防御 | 出典 |
 |---|---|---|
-| 経路 | リバースプロキシ終端の TLS | 2026-06-11 決定 |
+| 経路 | リバースプロキシ終端の TLS。VPN 内限定配備のみ例外として plain HTTP を許容(`KAOIRO_PLAIN_HTTP`、[deployment](deployment.md) 1.5 — token/cookie が VPN 内平文で流れるため、経路の秘匿は VPN(WireGuard)に委譲) | 2026-06-11 決定 / 2026-07-26 VPN 直結モード |
 | ラッパー接続 | agent_id 別トークン | [ADR-0011](../adr/0011-phase3-reliability-and-auth.md) |
 | クライアント接続 | ユーザトークン + role(指示・承認は operator のみ。token は httpOnly + 暗号化 cookie に保持) | 同上 / [ADR-0013](../adr/0013-user-token-cookie-persistence.md) |
 

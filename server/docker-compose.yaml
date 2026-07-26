@@ -19,6 +19,11 @@ services:
     build:
       context: ..
       dockerfile: server/Dockerfile
+      args:
+        # Compile-time plain-HTTP toggle (config/prod.exs). Interpolated
+        # from .env so build and runtime always get the same value —
+        # the release raises at boot when they disagree.
+        KAOIRO_PLAIN_HTTP: ${KAOIRO_PLAIN_HTTP:-false}
     image: kaoiro-server:latest
     # Loopback-only by default. Auth (issue #28): KAOIRO_CLIENT_TOKENS
     # unset REJECTS all dashboard connections (fail-closed) — set it even
@@ -27,9 +32,11 @@ services:
     # an operator can drive tool execution on agent hosts
     # (specs/threat-model.md) — never publish beyond 127.0.0.1 without it.
     # Behind the central nginx proxy, widen the bind (or drop ports for a
-    # shared network) only together with mandatory tokens.
+    # shared network) only together with mandatory tokens. Direct VPN
+    # deployments (no proxy) set KAOIRO_PUBLISH_IP in .env to the host's
+    # VPN-side interface IP — never a public one.
     ports:
-      - "127.0.0.1:4000:4000"
+      - "${KAOIRO_PUBLISH_IP:-127.0.0.1}:4000:4000"
     env_file:
       - .env
     # Restart-surviving state (session pointers / agent identity ledger /

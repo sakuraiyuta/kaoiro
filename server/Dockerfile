@@ -61,6 +61,13 @@ RUN mix local.hex --force \
 # set build ENV
 ENV MIX_ENV="prod"
 
+# Plain-HTTP deployment mode (config/prod.exs): compile-time toggle for
+# force_ssl / Secure cookie. docker-compose.yaml wires this from the same
+# .env value the release reads at runtime; the two must match (verified
+# at boot).
+ARG KAOIRO_PLAIN_HTTP=false
+ENV KAOIRO_PLAIN_HTTP=${KAOIRO_PLAIN_HTTP}
+
 # install mix dependencies
 COPY server/mix.exs server/mix.lock ./
 RUN mix deps.get --only $MIX_ENV

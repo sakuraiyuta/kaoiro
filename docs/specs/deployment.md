@@ -30,6 +30,7 @@ flowchart LR
 
 server は 1 台、runner は host_id ごとに任意台数。TLS は nginx で終端し、
 server は plain HTTP のまま(2026-06-11 決定、`docker-compose.yaml` 参照)。
+VPN 内限定で公開する場合のみ、nginx を置かない直結配備(1.5)も選べる。
 
 ## 1. server の配備
 
@@ -122,7 +123,28 @@ server {
 `proxy_set_header X-Forwarded-Proto $scheme;` を必ず設定し、**nginx を
 介さず `ws://<host>:4000` へ直結することはできない**(`PHX_HOST` が
 `localhost`/`127.0.0.1` の場合のみ `force_ssl` の対象外)。wrapper/runner
-は必ず nginx 経由の `wss://` で接続する。
+は必ず nginx 経由の `wss://` で接続する。VPN 内直結配備(1.5)では
+`force_ssl` 自体をビルド時に無効化するため、この制約は掛からない。
+
+### 1.5 VPN 内直結配備(nginx なし・plain HTTP、2026-07-26)
+
+到達経路が VPN(WireGuard)内に閉じるホストでは、nginx を置かず
+`http://<host>:<port>` へ直結する配備を選べる。token・cookie が VPN 内を
+平文で流れるため、**経路の秘匿は VPN に委譲**する構成([threat-model](threat-model.md))。
+公開インターネットには決して使わない。
+
+`.env` に次の 2 つを追加する(それ以外の手順は 1.1〜1.3 と同じ):
+
+| env | 値 | 意味 |
+|---|---|---|
+| `KAOIRO_PLAIN_HTTP` | `true` | ビルド時: `force_ssl`・Secure cookie を無効化(compile-time)。実行時: URL 生成・check_origin を `http://PHX_HOST:PORT` に切替。compose が同じ値を build arg と実行 env の両方へ配線し、不一致はサーバが起動時 raise |
+| `KAOIRO_PUBLISH_IP` | ホストの VPN 側 IF の IP | compose の公開先(既定 `127.0.0.1`)。全 IF 公開ではなく VPN 側 IP に限定する |
+
+`PHX_HOST` は接続に使う FQDN(例 `linux-host.example`)。値を変えたら
+`docker compose up -d --build` で再ビルドする(compile-time フラグのため
+イメージ再利用不可)。runner の `server_url` は
+`ws://<PHX_HOST>:<PORT>/runner`、ダッシュボードは
+`http://<PHX_HOST>:<PORT>/?token=...` となる。
 
 ## 2. runner の配備(複数ホスト)
 
@@ -145,7 +167,8 @@ cd kaoiro-runner-<rev>-linux-x64
 ### `runner.config.json` の実例(`wss://` 必須)
 
 nginx 越しの prod 配備では `server_url` は必ず `wss://` にする(1.4 の
-制約どおり `ws://` 直結は 301 で弾かれる)。`host_id` はホストごとに
+制約どおり `ws://` 直結は 301 で弾かれる)。VPN 内直結配備(1.5)のみ
+`ws://<PHX_HOST>:<PORT>/runner` とする。`host_id` はホストごとに
 一意にする(サーバ側 `HostRegistry` が host_id をキーに register するため、
 重複させると片方のホストが上書きされる)。
 

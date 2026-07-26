@@ -7,6 +7,11 @@ defmodule KaoiroServer.Application do
 
   @impl true
   def start(_type, _args) do
+    # A release built with/without KAOIRO_PLAIN_HTTP must run the same
+    # way (config/prod.exs) — fail fast instead of serving broken
+    # redirects or a Secure-less cookie behind TLS.
+    :ok = verify_plain_http_config!()
+
     # Warn about unset token lists (client = locked / wrapper = dev mode)
     # so the state is visible in logs (specs/threat-model.md, issue #28).
     :ok = KaoiroServer.Auth.warn_token_config()
@@ -83,5 +88,34 @@ defmodule KaoiroServer.Application do
   def config_change(changed, _new, removed) do
     KaoiroServerWeb.Endpoint.config_change(changed, removed)
     :ok
+  end
+
+  # `:plain_http_build` is set only by config/prod.exs (compile time), so
+  # dev/test — where force_ssl/session_secure are off anyway — skip the
+  # check. In a release, the flag baked into the build must match the
+  # runtime env: a TLS build run with KAOIRO_PLAIN_HTTP=true would still
+  # 301 every http request (force_ssl is compile-time), and a plain-HTTP
+  # build run without it would emit http URLs while claiming https.
+  def verify_plain_http_config! do
+    case Application.fetch_env(:kaoiro_server, :plain_http_build) do
+      :error ->
+        :ok
+
+      {:ok, built?} ->
+        runtime? = System.get_env("KAOIRO_PLAIN_HTTP") == "true"
+
+        if built? != runtime? do
+          raise """
+          KAOIRO_PLAIN_HTTP mismatch: this release was built with \
+          KAOIRO_PLAIN_HTTP=#{built?} but is running with \
+          KAOIRO_PLAIN_HTTP=#{runtime?}. The flag is compile-time \
+          (force_ssl / Secure cookie) — rebuild the image with the same \
+          value set in .env (docker compose wires it to both build and \
+          runtime), or unset it in both places.
+          """
+        end
+
+        :ok
+    end
   end
 end

@@ -126,7 +126,10 @@ docker compose up -d --build
 
 既定で `127.0.0.1:4000` のみに bind(loopback、`docker-compose.yaml` の
 `ports` マッピング)。LAN 公開時は両トークン必須 + 中央 nginx(WebSocket の
-Upgrade/Connection 転送・`proxy_read_timeout` > 60s)配下に置く。
+Upgrade/Connection 転送・`proxy_read_timeout` > 60s)配下に置く。VPN 内
+限定なら nginx なしの plain-HTTP 直結も選べる(`KAOIRO_PLAIN_HTTP` +
+`KAOIRO_PUBLISH_IP`、[docs/specs/deployment.md](../docs/specs/deployment.md)
+1.5 参照)。
 
 コンテナ内の Phoenix 自体の bind IP(compose の `ports` とは別レイヤー)は
 既定で prod = 全インターフェース。`docker compose` を使わずホストで直接

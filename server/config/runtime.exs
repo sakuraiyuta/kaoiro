@@ -164,8 +164,24 @@ if config_env() == :prod do
         end
     end
 
+  # Plain-HTTP deployment (config/prod.exs): generated URLs and
+  # check_origin must match the http://<host>:<port> the browser actually
+  # uses. Requires an image BUILT with KAOIRO_PLAIN_HTTP=true as well —
+  # KaoiroServer.Application.verify_plain_http_config!/0 raises at boot
+  # when build and runtime disagree.
+  url_config =
+    if System.get_env("KAOIRO_PLAIN_HTTP") == "true" do
+      [
+        host: host,
+        port: String.to_integer(System.get_env("PORT", "4000")),
+        scheme: "http"
+      ]
+    else
+      [host: host, port: 443, scheme: "https"]
+    end
+
   config :kaoiro_server, KaoiroServerWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: url_config,
     http: [ip: bind_ip],
     secret_key_base: secret_key_base
 

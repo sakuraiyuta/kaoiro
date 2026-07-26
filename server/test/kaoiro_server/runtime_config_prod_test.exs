@@ -8,6 +8,7 @@ defmodule KaoiroServer.RuntimeConfigProdTest do
   use ExUnit.Case, async: false
 
   @runtime_exs Path.join([__DIR__, "..", "..", "config", "runtime.exs"])
+  @prod_exs Path.join([__DIR__, "..", "..", "config", "prod.exs"])
   @valid_secret String.duplicate("a", 64)
 
   setup do
@@ -15,6 +16,8 @@ defmodule KaoiroServer.RuntimeConfigProdTest do
       System.delete_env("PHX_HOST")
       System.delete_env("SECRET_KEY_BASE")
       System.delete_env("KAOIRO_BIND_IP")
+      System.delete_env("KAOIRO_PLAIN_HTTP")
+      System.delete_env("PORT")
     end)
   end
 
@@ -94,6 +97,57 @@ defmodule KaoiroServer.RuntimeConfigProdTest do
       endpoint_config = config[:kaoiro_server][KaoiroServerWeb.Endpoint]
 
       refute Keyword.has_key?(endpoint_config[:http] || [], :ip)
+    end
+  end
+
+  describe "KAOIRO_PLAIN_HTTP (VPN 直結配備, 2026-07-26)" do
+    test "plain-HTTP ビルドは force_ssl を落とし session_secure を無効化する" do
+      System.put_env("KAOIRO_PLAIN_HTTP", "true")
+
+      config = Config.Reader.read!(@prod_exs, env: :prod)
+
+      refute Keyword.has_key?(
+               config[:kaoiro_server][KaoiroServerWeb.Endpoint] || [],
+               :force_ssl
+             )
+
+      assert config[:kaoiro_server][:session_secure] == false
+      assert config[:kaoiro_server][:plain_http_build] == true
+    end
+
+    test "既定ビルドは force_ssl + Secure cookie のまま (現行挙動)" do
+      System.delete_env("KAOIRO_PLAIN_HTTP")
+
+      config = Config.Reader.read!(@prod_exs, env: :prod)
+      endpoint_config = config[:kaoiro_server][KaoiroServerWeb.Endpoint]
+
+      assert endpoint_config[:force_ssl][:rewrite_on] == [:x_forwarded_proto]
+      assert config[:kaoiro_server][:session_secure] == true
+      assert config[:kaoiro_server][:plain_http_build] == false
+    end
+
+    test "runtime: 未設定なら url は https/443 のまま" do
+      System.put_env("SECRET_KEY_BASE", @valid_secret)
+      System.put_env("PHX_HOST", "example.org")
+      System.delete_env("KAOIRO_PLAIN_HTTP")
+
+      config = Config.Reader.read!(@runtime_exs, env: :prod)
+      url = config[:kaoiro_server][KaoiroServerWeb.Endpoint][:url]
+
+      assert url[:scheme] == "https"
+      assert url[:port] == 443
+    end
+
+    test "runtime: 設定時は url が http/PORT になる (check_origin 整合)" do
+      System.put_env("SECRET_KEY_BASE", @valid_secret)
+      System.put_env("PHX_HOST", "linux-host.example")
+      System.put_env("KAOIRO_PLAIN_HTTP", "true")
+      System.put_env("PORT", "8080")
+
+      config = Config.Reader.read!(@runtime_exs, env: :prod)
+      url = config[:kaoiro_server][KaoiroServerWeb.Endpoint][:url]
+
+      assert url == [host: "linux-host.example", port: 8080, scheme: "http"]
     end
   end
 end
