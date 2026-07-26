@@ -25,6 +25,7 @@
 | 18 | [phase-18-claude-model-catalog-live](phase-18-claude-model-catalog-live.md) | ⏳ | Claude モデル catalog live 実測一元化と bootstrap default floor 縮小、[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) |
 | 19 | [phase-19-codex-internal-subagents-toggle](phase-19-codex-internal-subagents-toggle.md) | 🟡 | Codex 内部サブエージェント toggle と固有名 peer-routing contract、[ADR-0038](../adr/0038-codex-internal-subagents-toggle.md) |
 | 20 | [phase-20-engine-catalog-live-probe](phase-20-engine-catalog-live-probe.md) | 🟡 | LaunchDialog モデル catalog を短命 SDK probe + runner memory cache で live 化 (Option E)、[ADR-0039](../adr/0039-engine-catalog-live-probe.md) |
+| 26 | [phase-26-oauth-allowlist-login](phase-26-oauth-allowlist-login.md) | 🟡 | dashboard OAuth ログイン (Google/GitHub/Nextcloud) + テキスト許可リスト、token 認証は KAOIRO_CLIENT_TOKENS 設定時のみ併存、[ADR-0042](../adr/0042-oauth-allowlist-login.md) / [issue #65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65) |
 
 ## Feature-local plans
 
