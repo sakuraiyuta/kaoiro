@@ -6,7 +6,7 @@
   "description": "kaoiro リファレンスダッシュボード(Svelte 5 + Vite)",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "rm -rf ../server/priv/static/assets && vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run"
   },
