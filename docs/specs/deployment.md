@@ -140,6 +140,12 @@ server {
 | `KAOIRO_PLAIN_HTTP` | `true` | ビルド時: `force_ssl`・Secure cookie を無効化(compile-time)。実行時: URL 生成・check_origin を `http://PHX_HOST:PORT` に切替。compose が同じ値を build arg と実行 env の両方へ配線し、不一致はサーバが起動時 raise |
 | `KAOIRO_PUBLISH_IP` | ホストの VPN 側 IF の IP | compose の公開先(既定 `127.0.0.1`)。全 IF 公開ではなく VPN 側 IP に限定する |
 
+`check_origin` は `http://PHX_HOST:PORT` と loopback の 2 つだけを許可する
+(#154 M1 — 既定の host のみ比較では同一ホストの別ポートから operator
+socket を奪える)。**それ以外の名前や IP 直打ちでダッシュボードを開くと
+画面は出るが client socket が 403 になる** ので、必ず `PHX_HOST` と同じ
+名前でアクセスする。
+
 `PHX_HOST` は接続に使う FQDN(例 `linux-host.example`)。値を変えたら
 `docker compose up -d --build` で再ビルドする(compile-time フラグのため
 イメージ再利用不可)。runner の `server_url` は

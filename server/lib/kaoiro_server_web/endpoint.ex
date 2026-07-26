@@ -32,7 +32,13 @@ defmodule KaoiroServerWeb.Endpoint do
 
   # Resident-runner control channel (ADR-0023): separate system from the
   # wrapper data path and the client fan-out, with its own host-token auth.
-  socket "/runner", KaoiroServerWeb.RunnerSocket, websocket: true, longpoll: false
+  # max_frame_size matches the two sockets above: `RunnerSocket.connect/3`
+  # accepts unconditionally (auth happens at channel join), so without a cap
+  # an unauthenticated peer could park a multi-GB frame in the receive
+  # buffer and OOM the node.
+  socket "/runner", KaoiroServerWeb.RunnerSocket,
+    websocket: [max_frame_size: 8_000_000],
+    longpoll: false
 
   socket "/client", KaoiroServerWeb.ClientSocket,
     websocket: [

@@ -169,19 +169,40 @@ if config_env() == :prod do
   # uses. Requires an image BUILT with KAOIRO_PLAIN_HTTP=true as well —
   # KaoiroServer.Application.verify_plain_http_config!/0 raises at boot
   # when build and runtime disagree.
+  plain_http? = System.get_env("KAOIRO_PLAIN_HTTP") == "true"
+  port = String.to_integer(System.get_env("PORT", "4000"))
+
   url_config =
-    if System.get_env("KAOIRO_PLAIN_HTTP") == "true" do
-      [
-        host: host,
-        port: String.to_integer(System.get_env("PORT", "4000")),
-        scheme: "http"
-      ]
+    if plain_http? do
+      [host: host, port: port, scheme: "http"]
     else
       [host: host, port: 443, scheme: "https"]
     end
 
+  # WebSocket origin allow-list. Phoenix's default (`true`) compares the
+  # HOST ONLY — scheme and port are ignored — so any other service on the
+  # same host (a different port, an XSS'd dev server) passes the check and
+  # can open an operator socket riding the victim's session cookie, which
+  # SameSite cannot stop because it is site- (not port-) scoped. Pinning
+  # scheme+host+port closes that. Requests WITHOUT an Origin header (the
+  # runner/wrapper ws clients) skip the check entirely and are unaffected.
+  # Loopback is allowed in BOTH branches: config/prod.exs keeps
+  # localhost/127.0.0.1 out of force_ssl, so a local release
+  # (scripts/dogfood.sh) is reached over http and cannot match
+  # `https://host`; and on the server host itself `http://localhost:PORT`
+  # must not serve the page but 403 the socket.
+  loopback_origins = ["http://localhost:#{port}", "http://127.0.0.1:#{port}"]
+
+  check_origin =
+    if plain_http? do
+      ["http://#{host}:#{port}" | loopback_origins]
+    else
+      ["https://#{host}" | loopback_origins]
+    end
+
   config :kaoiro_server, KaoiroServerWeb.Endpoint,
     url: url_config,
+    check_origin: check_origin,
     http: [ip: bind_ip],
     secret_key_base: secret_key_base
 

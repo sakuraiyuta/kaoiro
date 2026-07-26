@@ -150,4 +150,51 @@ defmodule KaoiroServer.RuntimeConfigProdTest do
       assert url == [host: "linux-host.example", port: 8080, scheme: "http"]
     end
   end
+
+  describe "check_origin (#154 M1: scheme/port を含めた origin 固定)" do
+    setup do
+      System.put_env("SECRET_KEY_BASE", @valid_secret)
+      System.put_env("PHX_HOST", "example.org")
+      :ok
+    end
+
+    test "TLS 配備は https の公開 host + loopback の http を許可する" do
+      System.delete_env("KAOIRO_PLAIN_HTTP")
+
+      config = Config.Reader.read!(@runtime_exs, env: :prod)
+      origins = config[:kaoiro_server][KaoiroServerWeb.Endpoint][:check_origin]
+
+      # loopback は prod.exs が force_ssl から除外しているので http で来る
+      # (dogfood)。それ以外の scheme/port は許可しない。
+      assert origins == [
+               "https://example.org",
+               "http://localhost:4000",
+               "http://127.0.0.1:4000"
+             ]
+    end
+
+    test "plain-HTTP 配備は http の公開 host:PORT + loopback を許可する" do
+      System.put_env("KAOIRO_PLAIN_HTTP", "true")
+      System.put_env("PORT", "8080")
+
+      config = Config.Reader.read!(@runtime_exs, env: :prod)
+      origins = config[:kaoiro_server][KaoiroServerWeb.Endpoint][:check_origin]
+
+      assert origins == [
+               "http://example.org:8080",
+               "http://localhost:8080",
+               "http://127.0.0.1:8080"
+             ]
+    end
+
+    test "既定の true (host のみ比較) にフォールバックしない" do
+      System.delete_env("KAOIRO_PLAIN_HTTP")
+
+      config = Config.Reader.read!(@runtime_exs, env: :prod)
+      origins = config[:kaoiro_server][KaoiroServerWeb.Endpoint][:check_origin]
+
+      assert is_list(origins)
+      refute origins == true
+    end
+  end
 end
