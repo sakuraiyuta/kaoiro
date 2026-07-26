@@ -94,3 +94,6 @@ issue は [#65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65)。
   制約は assent 0.3.1 Req adapter のヘッダ混入バグ (upstream 修正済・
   未リリース) が根拠。assent 更新時に緩和可否を再判断。Nextcloud が
   PKCE 対応したら strategy に code_verifier: true を追加可
+- 2026-07-26: 全コミット完了・push 済 (5887df0 dashboard / 8f75e92
+  docs / 7f57a4c server)。残: マスターによる provider 登録 + 実機 E2E
+  (手順はクロエがチャットで提示済)、role 降格は #158
