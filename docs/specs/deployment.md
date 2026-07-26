@@ -152,6 +152,76 @@ socket を奪える)。**それ以外の名前や IP 直打ちでダッシュボ
 `ws://<PHX_HOST>:<PORT>/runner`、ダッシュボードは
 `http://<PHX_HOST>:<PORT>/?token=...` となる。
 
+### 1.6 OAuth ログイン(個人認証)の設定(任意、ADR-0042 / issue #65)
+
+dashboard に Google / GitHub / Nextcloud の OAuth ログインを追加できる。
+仕組みと設計判断は [ADR-0042](../adr/0042-oauth-allowlist-login.md)、
+境界の地図は [auth-and-authz](auth-and-authz.md)。`KAOIRO_CLIENT_TOKENS`
+未設定なら token 認証は無効(OAuth のみ)、設定時は併存する。
+
+**redirect URI**(全 provider 共通。server が endpoint `url` 設定から
+導出するため、登録値は必ずこの形):
+
+```text
+{scheme}://{PHX_HOST}[:{PORT}]/auth/{provider}/callback
+# 例: https://kaoiro.example.com/auth/github/callback
+#     http://localhost:4000/auth/google/callback   (dev)
+```
+
+**provider ごとの client 登録**(経路は 2026-07 時点):
+
+| provider | 登録場所 | 注意 |
+|---|---|---|
+| Google | [console.cloud.google.com](https://console.cloud.google.com) → Google Auth Platform(初回は Get started で Branding/Audience 設定、Testing なら Test users に対象アカウント追加)→ Clients → Create Client → Web application → Authorized redirect URIs | **redirect URI は https 必須(localhost のみ http 可)**。plain-HTTP 配備(1.5)では使えない |
+| GitHub | Settings → Developer settings → OAuth Apps → New OAuth App → Authorization callback URL。登録後 Generate a new client secret | **callback URL は 1 App につき 1 個**。環境ごとに別 App を作る |
+| Nextcloud | 対象インスタンスの 設定 → 管理 → セキュリティ → OAuth 2.0 クライアント → 名前 + Redirection URI を追加 | scope 非対応(token はフルアクセス)だが server は identity 取得後に token を破棄する(ADR-0042)。PKCE 非対応、CSRF 防御は state のみ |
+
+**`.env` への追記**(id + secret が揃った provider のみ有効化される。
+Nextcloud は base_url も必須):
+
+```sh
+KAOIRO_OAUTH_GOOGLE_CLIENT_ID=...
+KAOIRO_OAUTH_GOOGLE_CLIENT_SECRET=...
+KAOIRO_OAUTH_GITHUB_CLIENT_ID=...
+KAOIRO_OAUTH_GITHUB_CLIENT_SECRET=...
+KAOIRO_OAUTH_NEXTCLOUD_CLIENT_ID=...
+KAOIRO_OAUTH_NEXTCLOUD_CLIENT_SECRET=...
+KAOIRO_OAUTH_NEXTCLOUD_BASE_URL=https://cloud.example.com
+KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt
+```
+
+**許可リスト**(未設定・ファイル欠落・不一致はすべて認証拒否 =
+fail-closed。malformed 行は warn ログの上 skip):
+
+```text
+# provider:identifier[:role]   role 省略時は viewer
+# identifier: google=email(小文字)/ github=login / nextcloud=user id
+google:alice@example.com:operator
+github:octocat:viewer
+nextcloud:alice:operator
+```
+
+compose 運用ではファイルを `server/` に置き、`docker-compose.yaml` の
+`volumes:` へ read-only mount を 1 行足す:
+
+```yaml
+      - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
+```
+
+**確認**:
+
+```sh
+curl http://<PHX_HOST>:<PORT>/session/auth-methods
+# → {"token":true|false,"oauth":["github","nextcloud",...]}
+```
+
+ログイン画面に有効 provider のボタンが並び、許可リスト外のアカウントは
+`auth_error=not_allowed` で拒否される。許可リストの行削除は次回接続 /
+refresh(最長 12h)で反映。**operator→viewer の「降格」は稼働中 socket
+に反映されない既知の穴がある(issue #158)**。拒否時の warn ログには
+`provider:uid` がそのまま出るため、許可リストへ写す識別子はログから
+確認できる。
+
 ## 2. runner の配備(複数ホスト)
 
 現状は tarball 配布(issue #70、[ADR-0018](../adr/0018-runner-distribution.md)
