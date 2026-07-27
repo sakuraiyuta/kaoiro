@@ -29,6 +29,23 @@ defmodule KaoiroServer.SessionResetsTest do
     %{resets: resets_name, pointers: pointers_name}
   end
 
+  defp assert_waiter_stashed(server, agent_id, pid, attempts \\ 50)
+
+  defp assert_waiter_stashed(server, agent_id, pid, attempts) do
+    case :sys.get_state(server) do
+      %{pending: %{^agent_id => %{early_join_from: {^pid, _}, early_join_monitor: monitor}}}
+      when is_reference(monitor) ->
+        :ok
+
+      _ when attempts > 0 ->
+        Process.sleep(10)
+        assert_waiter_stashed(server, agent_id, pid, attempts - 1)
+
+      state ->
+        flunk("early waiter was not stashed: #{inspect(state)}")
+    end
+  end
+
   describe "check_and_acquire/5 (F6 の TOCTOU 芯)" do
     test "idle 状態で lock を獲得、request_id と previous_session_id を返す", %{resets: sr} do
       assert {:ok, request_id, "sess-A"} =
@@ -172,7 +189,7 @@ defmodule KaoiroServer.SessionResetsTest do
 
       caller = Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, sr) end)
 
-      :sys.get_state(sr)
+      assert_waiter_stashed(sr, agent_id, caller.pid)
       assert SessionResets.pending?(agent_id, sr)
       refute_receive %Phoenix.Socket.Broadcast{event: "session_reset_completed"}
 
@@ -198,7 +215,7 @@ defmodule KaoiroServer.SessionResetsTest do
       waiter =
         Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, request_id, sr) end)
 
-      :sys.get_state(sr)
+      assert_waiter_stashed(sr, agent_id, waiter.pid)
       assert Task.yield(waiter, 5_100) == nil
 
       :ok = SessionResets.resolve(agent_id, request_id, false, "spawn_failed", nil, sr)
@@ -212,19 +229,12 @@ defmodule KaoiroServer.SessionResetsTest do
       assert {:ok, request_id, _} =
                SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
 
-      parent = self()
+      waiter = spawn(fn -> SessionResets.confirm_connection(agent_id, nil, request_id, sr) end)
 
-      waiter =
-        spawn(fn ->
-          send(parent, :early_waiter_started)
-          SessionResets.confirm_connection(agent_id, nil, request_id, sr)
-        end)
-
-      assert_receive :early_waiter_started
-      :sys.get_state(sr)
+      assert_waiter_stashed(sr, agent_id, waiter)
       Process.exit(waiter, :kill)
       ref = Process.monitor(waiter)
-      assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}
+      assert_receive {:DOWN, ^ref, :process, _pid, _reason}
       :sys.get_state(sr)
 
       :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
@@ -242,11 +252,48 @@ defmodule KaoiroServer.SessionResetsTest do
       first =
         Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, request_id, sr) end)
 
-      :sys.get_state(sr)
-      assert :mismatch = SessionResets.confirm_connection(agent_id, nil, request_id, sr)
+      assert_waiter_stashed(sr, agent_id, first.pid)
+      assert :duplicate_waiter = SessionResets.confirm_connection(agent_id, nil, request_id, sr)
 
       :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
       assert :matched = Task.await(first)
+    end
+
+    test "absent waiter は後着 exact request_id に譲り、single owner を維持する", %{resets: sr} do
+      agent_id = "a.absent-yields-exact-#{System.unique_integer([:positive])}"
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
+
+      absent = Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, sr) end)
+      assert_waiter_stashed(sr, agent_id, absent.pid)
+
+      exact =
+        Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, request_id, sr) end)
+
+      assert :duplicate_waiter = Task.await(absent)
+      assert_waiter_stashed(sr, agent_id, exact.pid)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      assert :matched = Task.await(exact)
+    end
+
+    test "dead first waiter の後の live reconnect が reset を完了できる", %{resets: sr} do
+      agent_id = "a.dead-then-reconnect-#{System.unique_integer([:positive])}"
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
+
+      first = spawn(fn -> SessionResets.confirm_connection(agent_id, nil, request_id, sr) end)
+
+      assert_waiter_stashed(sr, agent_id, first)
+      Process.exit(first, :kill)
+      :sys.get_state(sr)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :sys.get_state(sr)
+      assert :matched = SessionResets.confirm_connection(agent_id, nil, request_id, sr)
+      refute SessionResets.pending?(agent_id, sr)
     end
 
     test "delete は deferred waiter を :deleted で解除し reset を commit させない", %{resets: sr} do
@@ -259,7 +306,7 @@ defmodule KaoiroServer.SessionResetsTest do
       waiter =
         Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, request_id, sr) end)
 
-      :sys.get_state(sr)
+      assert_waiter_stashed(sr, agent_id, waiter.pid)
       assert :ok = SessionResets.delete(agent_id, sr)
       assert :deleted = Task.await(waiter)
 

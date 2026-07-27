@@ -185,13 +185,14 @@ defmodule KaoiroServer.SessionResets do
 
   Called from `WrapperChannel.after_join` (or the first envelope's
   handler when join alone is not enough) with the joining agent_id and
-  the session_id the wrapper reported so far (`nil` when unknown). No-op
-  when no lock is held, when the lock is not yet in `:awaiting_connect`
-  (the runner has not reported `ok=true` — this is a normal restart, not
-  a reset), or when the mismatched request_id indicates a stale join.
+  the session_id the wrapper reported so far (`nil` when unknown). A
+  `:spawning` absent join is deferred just like the explicit /4 path;
+  no lock is held remains `:noop`.
 
-  Sync so tests can assert the sequence of side effects deterministically;
-  the caller (wrapper_channel) already runs in its own process.
+  Sync so tests can assert the sequence of side effects deterministically.
+  The 65 s call timeout only outlives the 60 s lock timer; wrappers themselves
+  close a handshake that receives no persona prompt after 10 s, and the caller
+  monitor—not this call timeout—is what prevents a dead channel from commit.
   """
   def confirm_connection(agent_id, joined_session_id \\ nil, server \\ __MODULE__) do
     GenServer.call(
@@ -204,10 +205,13 @@ defmodule KaoiroServer.SessionResets do
   @doc """
   Confirms a joining wrapper against the reset lock's request_id.
 
-  Returns exactly `:matched | :legacy_absent | :mismatch | :noop` for a live
+  Returns `:matched | :legacy_absent | :mismatch | :noop | :duplicate_waiter` for a live
   transaction. During `:spawning`, a matching/absent join waits (up to the
   reset lock's 60 s lifetime) until runner success also arrives; the first
-  live waiter wins deterministically, later early joins receive `:mismatch`.
+  live waiter wins deterministically. A same-transition duplicate receives
+  `:duplicate_waiter` so the channel boundary rejects it without rebind. An
+  absent first waiter is superseded by a later exact request_id, because exact
+  correlation is stronger than the rolling-upgrade fallback.
   `:absent` is reserved for a join parameter whose key was actually absent;
   nil, empty, and malformed present values are mismatches and never enter the
   legacy fallback.
@@ -241,7 +245,7 @@ defmodule KaoiroServer.SessionResets do
 
   @impl true
   def init(%{timeout_ms: timeout_ms}),
-    do: {:ok, %{pending: %{}, last_dispatch: %{}, timeout_ms: timeout_ms, waiter_generation: 0}}
+    do: {:ok, %{pending: %{}, last_dispatch: %{}, timeout_ms: timeout_ms}}
 
   @impl true
   def handle_call(
@@ -299,8 +303,7 @@ defmodule KaoiroServer.SessionResets do
           early_join_session_id: :none,
           early_join_from: nil,
           early_join_outcome: nil,
-          early_join_monitor: nil,
-          early_join_generation: nil
+          early_join_monitor: nil
         }
 
         {:reply, {:ok, request_id, prev_sid}, %{s | pending: Map.put(s.pending, agent_id, lock)}}
@@ -351,8 +354,40 @@ defmodule KaoiroServer.SessionResets do
         {:noreply, stash_early_waiter(s, agent_id, lock, from, joined_session_id, :legacy_absent)}
 
       %{phase: :spawning, request_id: request_id} = lock when transition_id == request_id ->
+        if lock.early_join_outcome == :legacy_absent and early_waiter_alive?(lock) do
+          # Exact request_id is stronger than an absent rolling-upgrade
+          # fallback. Reject the fallback channel, then retain only the exact
+          # waiter as this transaction's prospective owner.
+          reply_early(lock, :duplicate_waiter)
+
+          {:noreply,
+           stash_early_waiter(
+             s,
+             agent_id,
+             clear_early_waiter(lock),
+             from,
+             joined_session_id,
+             :matched
+           )}
+        else
+          if early_waiter_alive?(lock) do
+            {:reply, :duplicate_waiter, s}
+          else
+            {:noreply,
+             stash_early_waiter(
+               s,
+               agent_id,
+               discard_early_waiter(lock),
+               from,
+               joined_session_id,
+               :matched
+             )}
+          end
+        end
+
+      %{phase: :spawning} = lock when transition_id == :absent ->
         if early_waiter_alive?(lock) do
-          {:reply, :mismatch, s}
+          {:reply, :duplicate_waiter, s}
         else
           {:noreply,
            stash_early_waiter(
@@ -362,21 +397,6 @@ defmodule KaoiroServer.SessionResets do
              from,
              joined_session_id,
              :matched
-           )}
-        end
-
-      %{phase: :spawning} = lock when transition_id == :absent ->
-        if early_waiter_alive?(lock) do
-          {:reply, :mismatch, s}
-        else
-          {:noreply,
-           stash_early_waiter(
-             s,
-             agent_id,
-             discard_early_waiter(lock),
-             from,
-             joined_session_id,
-             :legacy_absent
            )}
         end
 
@@ -493,18 +513,16 @@ defmodule KaoiroServer.SessionResets do
 
   defp stash_early_waiter(s, agent_id, lock, from, joined_session_id, outcome) do
     monitor = Process.monitor(elem(from, 0))
-    generation = s.waiter_generation + 1
 
     updated = %{
       lock
       | early_join_session_id: joined_session_id,
         early_join_from: from,
         early_join_outcome: outcome,
-        early_join_monitor: monitor,
-        early_join_generation: generation
+        early_join_monitor: monitor
     }
 
-    %{s | pending: Map.put(s.pending, agent_id, updated), waiter_generation: generation}
+    %{s | pending: Map.put(s.pending, agent_id, updated)}
   end
 
   defp clear_early_waiter(lock) do
@@ -513,8 +531,7 @@ defmodule KaoiroServer.SessionResets do
       | early_join_session_id: :none,
         early_join_from: nil,
         early_join_outcome: nil,
-        early_join_monitor: nil,
-        early_join_generation: nil
+        early_join_monitor: nil
     }
   end
 

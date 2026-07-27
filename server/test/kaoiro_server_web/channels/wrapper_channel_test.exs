@@ -42,6 +42,23 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     :ok
   end
 
+  defp assert_global_waiter(agent_id, pid, attempts \\ 50)
+
+  defp assert_global_waiter(agent_id, pid, attempts) do
+    case :sys.get_state(KaoiroServer.SessionResets) do
+      %{pending: %{^agent_id => %{early_join_from: {^pid, _}, early_join_monitor: monitor}}}
+      when is_reference(monitor) ->
+        :ok
+
+      _ when attempts > 0 ->
+        Process.sleep(10)
+        assert_global_waiter(agent_id, pid, attempts - 1)
+
+      state ->
+        flunk("global early waiter was not stashed: #{inspect(state)}")
+    end
+  end
+
   test "envelope を受けて agents:lobby へ中継し最新状態を保持する" do
     agent_id = "test.relay-1"
     @endpoint.subscribe("agents:lobby")
@@ -189,6 +206,72 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     assert owner == socket.channel_pid
     assert is_binary(started_at)
+  end
+
+  test "matching duplicate early join は channel を停止し owner/prompt を奪わない" do
+    agent_id = "test.after-join-duplicate-#{System.unique_integer([:positive])}"
+
+    assert {:ok, request_id, _} =
+             KaoiroServer.SessionResets.check_and_acquire(agent_id, "new", "idle", "old")
+
+    first =
+      Task.async(fn ->
+        KaoiroServer.SessionResets.confirm_connection(
+          agent_id,
+          nil,
+          request_id,
+          KaoiroServer.SessionResets
+        )
+      end)
+
+    assert_global_waiter(agent_id, first.pid)
+
+    socket = %Phoenix.Socket{
+      assigns: %{agent_id: agent_id, persona_id: "default", transition_id: request_id},
+      channel: WrapperChannel,
+      endpoint: KaoiroServerWeb.Endpoint,
+      handler: KaoiroServerWeb.WrapperSocket,
+      pubsub_server: KaoiroServer.PubSub,
+      transport: :channel_test,
+      transport_pid: self(),
+      serializer: Phoenix.Socket.V2.JSONSerializer,
+      topic: "wrapper:" <> agent_id,
+      channel_pid: self()
+    }
+
+    assert {:stop, :shutdown, _} = WrapperChannel.handle_info(:after_join, socket)
+    assert AgentActivity.get(agent_id) == nil
+    refute_push "persona_prompt", %{}, 50
+
+    :ok = KaoiroServer.SessionResets.resolve(agent_id, request_id, false, "spawn_failed", nil)
+    assert :noop = Task.await(first)
+  end
+
+  test "delete が deferred join を解除した channel は Activity/prompt を再生成せず停止する" do
+    agent_id = "test.after-join-deleted-#{System.unique_integer([:positive])}"
+
+    assert {:ok, request_id, _} =
+             KaoiroServer.SessionResets.check_and_acquire(agent_id, "new", "idle", "old")
+
+    socket = %Phoenix.Socket{
+      assigns: %{agent_id: agent_id, persona_id: "default", transition_id: request_id},
+      channel: WrapperChannel,
+      endpoint: KaoiroServerWeb.Endpoint,
+      handler: KaoiroServerWeb.WrapperSocket,
+      pubsub_server: KaoiroServer.PubSub,
+      transport: :channel_test,
+      transport_pid: self(),
+      serializer: Phoenix.Socket.V2.JSONSerializer,
+      topic: "wrapper:" <> agent_id,
+      channel_pid: self()
+    }
+
+    waiter = Task.async(fn -> WrapperChannel.handle_info(:after_join, socket) end)
+    assert_global_waiter(agent_id, waiter.pid)
+    assert :ok = KaoiroServer.SessionResets.delete(agent_id)
+    assert {:stop, :shutdown, _} = Task.await(waiter)
+    assert AgentActivity.get(agent_id) == nil
+    refute_push "persona_prompt", %{}, 50
   end
 
   test "フレームキー欠落の envelope を拒否し中継しない" do

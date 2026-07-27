@@ -106,7 +106,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       {:stop, :shutdown, socket}
     else
       case after_join_handshake(socket) do
-        :deleted -> {:stop, :shutdown, socket}
+        result when result in [:deleted, :duplicate_waiter] -> {:stop, :shutdown, socket}
         :ok -> {:noreply, socket}
       end
     end
@@ -123,10 +123,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
     reset_result =
       KaoiroServer.SessionResets.confirm_connection(agent_id, nil, transition_id, SessionResets)
 
-    if reset_result == :deleted do
+    if reset_result in [:deleted, :duplicate_waiter] do
       # Deletion released a deferred join. Rebinding here would recreate the
-      # just-deleted Activity entry before the channel terminates.
-      :deleted
+      # just-deleted Activity entry before the channel terminates. A duplicate
+      # waiter is likewise rejected before it can steal owner generation or
+      # receive a persona prompt.
+      reset_result
     else
       if reset_result in [:matched, :legacy_absent] and is_binary(reset_id) do
         :ok =
