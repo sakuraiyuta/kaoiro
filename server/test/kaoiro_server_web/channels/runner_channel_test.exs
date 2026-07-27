@@ -282,6 +282,65 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert :activated = KaoiroServer.AgentActivity.activate_or_rebind(agent_id, self(), "p1")
     end
 
+    test "spawn_result failure は matching pending だけ abort し、absent/mismatch は保持する" do
+      host_id = "lab-pc-spawn-fail-cas"
+      agent_id = host_id <> ".a"
+
+      :ok =
+        KaoiroServer.AgentActivity.begin_transition(
+          agent_id,
+          "p1",
+          :spawn,
+          "2026-07-28T00:00:00Z"
+        )
+
+      socket = join_runner(host_id)
+
+      ref = push(socket, "spawn_result", %{"agent_id" => agent_id, "ok" => false})
+      assert_reply ref, :ok
+      assert :activated = KaoiroServer.AgentActivity.activate_or_rebind(agent_id, self(), "p1")
+
+      :ok = KaoiroServer.AgentActivity.delete(agent_id)
+
+      :ok =
+        KaoiroServer.AgentActivity.begin_transition(
+          agent_id,
+          "p2",
+          :spawn,
+          "2026-07-28T00:00:01Z"
+        )
+
+      ref =
+        push(socket, "spawn_result", %{
+          "agent_id" => agent_id,
+          "ok" => false,
+          "request_id" => "other"
+        })
+
+      assert_reply ref, :ok
+      assert :activated = KaoiroServer.AgentActivity.activate_or_rebind(agent_id, self(), "p2")
+
+      :ok = KaoiroServer.AgentActivity.delete(agent_id)
+
+      :ok =
+        KaoiroServer.AgentActivity.begin_transition(
+          agent_id,
+          "p3",
+          :spawn,
+          "2026-07-28T00:00:02Z"
+        )
+
+      ref =
+        push(socket, "spawn_result", %{
+          "agent_id" => agent_id,
+          "ok" => false,
+          "request_id" => "p3"
+        })
+
+      assert_reply ref, :ok
+      assert KaoiroServer.AgentActivity.get(agent_id) == nil
+    end
+
     test "catalog_result は host_id を付与して agents:lobby へ転送する (Option E, ADR-0039)" do
       host_id = "lab-pc-catalog"
       @endpoint.subscribe("agents:lobby")
