@@ -22,14 +22,14 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     }
   end
 
-  defp join_wrapper(agent_id, persona_id \\ "default") do
+  defp join_wrapper(agent_id, persona_id \\ "default", params \\ %{}) do
     {:ok, _reply, socket} =
       KaoiroServerWeb.WrapperSocket
       |> socket(nil, %{})
       |> subscribe_and_join(
         KaoiroServerWeb.WrapperChannel,
         "wrapper:" <> agent_id,
-        %{"persona_id" => persona_id}
+        Map.put(params, "persona_id", persona_id)
       )
 
     socket
@@ -162,6 +162,33 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert_push "persona_prompt", %{prompt: prompt}
     assert is_binary(prompt)
     _ = socket
+  end
+
+  test "after_join は confirm→Activity pending→activate の順で reset join を確定する" do
+    agent_id = "test.after-join-l2-#{System.unique_integer([:positive])}"
+    on_exit(fn -> KaoiroServer.SessionStarts.delete(agent_id) end)
+
+    assert {:ok, request_id, _} =
+             KaoiroServer.SessionResets.check_and_acquire(agent_id, "new", "idle", "old")
+
+    :ok = KaoiroServer.SessionResets.resolve(agent_id, request_id, true, nil, "new")
+    :sys.get_state(KaoiroServer.SessionResets)
+
+    socket = join_wrapper(agent_id, "default", %{"transition_id" => request_id})
+    assert_push "persona_prompt", %{prompt: _}
+    :sys.get_state(KaoiroServer.AgentActivity)
+
+    refute KaoiroServer.SessionResets.pending?(agent_id)
+
+    assert %{
+             owner: owner,
+             session_start_observed: true,
+             session_started_at: started_at,
+             projection_suppressed: false
+           } = AgentActivity.get(agent_id)
+
+    assert owner == socket.channel_pid
+    assert is_binary(started_at)
   end
 
   test "フレームキー欠落の envelope を拒否し中継しない" do
@@ -1476,6 +1503,25 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(absent, "context")
       refute Map.has_key?(false_value, "context")
       assert true_value["context"] == context
+
+      absent_context_socket = join_wrapper("test.dir-context-true-absent")
+
+      ref =
+        push(
+          absent_context_socket,
+          "envelope",
+          envelope("test.dir-context-true-absent", "idle")
+          |> Map.put("ext", %{"session_capabilities" => %{"supports_context_usage" => true}})
+        )
+
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => refreshed_agents}
+
+      true_without_context =
+        Enum.find(refreshed_agents, &(&1["agent_id"] == "test.dir-context-true-absent"))
+
+      refute Map.has_key?(true_without_context, "context")
     end
 
     test "rate_limits は allow-list・bound・canonical 優先で projection する" do
@@ -1656,6 +1702,147 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
       refute Map.has_key?(entry, "session_started_at")
       refute Map.has_key?(entry, "turns")
+    end
+
+    test "observed Activity は session_started_at・turns・last_activity_at を directory に投影する" do
+      peer_id = "test.dir-observed-activity-peer"
+      sid = "observed-sid"
+      peer_socket = join_wrapper(peer_id)
+
+      assert :ok =
+               AgentActivity.begin_transition(
+                 peer_id,
+                 "observed-transition",
+                 :reset,
+                 "2026-07-28T00:00:00Z"
+               )
+
+      assert :activated =
+               AgentActivity.activate_or_rebind(
+                 peer_id,
+                 peer_socket.channel_pid,
+                 "observed-transition"
+               )
+
+      ref =
+        push(
+          peer_socket,
+          "envelope",
+          envelope(peer_id, "thinking") |> Map.put("session_id", sid)
+        )
+
+      assert_reply ref, :ok
+
+      ref =
+        push(
+          peer_socket,
+          "envelope",
+          envelope(peer_id, "idle")
+          |> Map.put("type", "result")
+          |> Map.put("session_id", sid)
+        )
+
+      assert_reply ref, :ok
+      :sys.get_state(AgentActivity)
+
+      self_socket = join_wrapper("test.dir-observed-activity-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-observed-activity-self", "idle"))
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      assert is_binary(entry["session_started_at"])
+      assert entry["turns"] == 1
+      assert is_binary(entry["last_activity_at"])
+    end
+
+    test "G2 sid mismatch は session fields だけ閉じ、last_activity_at と conversation は残す" do
+      peer_id = "test.dir-g2-peer"
+      self_id = "test.dir-g2-self"
+      peer_socket = join_wrapper(peer_id)
+
+      ref =
+        push(
+          peer_socket,
+          "envelope",
+          envelope(peer_id, "idle") |> Map.put("session_id", "activity-sid")
+        )
+
+      assert_reply ref, :ok
+      :sys.get_state(AgentActivity)
+
+      # AgentStates だけを次の sid に進め、cast Activity が未到達な G2
+      # window を決定的に再現する。
+      assert :ok =
+               AgentStates.put(
+                 envelope(peer_id, "idle") |> Map.put("session_id", "snapshot-sid"),
+                 owner: peer_socket.channel_pid
+               )
+
+      assert :ok = ConversationStates.record_message("dir-g2", peer_id, self_id, "x", false)
+
+      self_socket = join_wrapper(self_id)
+      ref = push(self_socket, "envelope", envelope(self_id, "idle"))
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      refute Map.has_key?(entry, "session_started_at")
+      refute Map.has_key?(entry, "turns")
+      assert is_binary(entry["last_activity_at"])
+      assert entry["conversation"] == %{"active" => true, "peers" => [self_id]}
+    end
+
+    test "SessionStarts positive fallback は start を投影し、suppression でも activity と会話は残す" do
+      peer_id = "test.dir-fallback-positive-peer"
+      self_id = "test.dir-fallback-positive-self"
+      sid = "fallback-sid"
+      peer_socket = join_wrapper(peer_id)
+      on_exit(fn -> KaoiroServer.SessionStarts.delete(peer_id) end)
+
+      assert :ok =
+               AgentStates.put(
+                 Map.put(envelope(peer_id, "idle"), "session_id", sid),
+                 owner: peer_socket.channel_pid
+               )
+
+      assert {:ok, {_order, started_at, ^sid}} =
+               KaoiroServer.SessionStarts.advance_transition(peer_id, sid)
+
+      # The join-created Activity entry is unobserved. It remains a valid
+      # fallback witness until a mismatch marks its session projection unsafe.
+      AgentActivity.record_envelope(
+        envelope(peer_id, "idle"),
+        peer_socket.channel_pid,
+        "2026-07-28T00:00:00Z"
+      )
+
+      :sys.get_state(AgentActivity)
+      assert %{session_start_observed: false} = AgentActivity.get(peer_id)
+      assert :ok = ConversationStates.record_message("dir-fallback", peer_id, self_id, "x", false)
+
+      self_socket = join_wrapper(self_id)
+      ref = push(self_socket, "envelope", envelope(self_id, "idle"))
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      assert entry["session_started_at"] == started_at
+      refute Map.has_key?(entry, "turns")
+
+      assert :rebound =
+               AgentActivity.activate_or_rebind(peer_id, peer_socket.channel_pid, "stale",
+                 reset_result: :mismatch
+               )
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => suppressed_agents}
+      suppressed = Enum.find(suppressed_agents, &(&1["agent_id"] == peer_id))
+      refute Map.has_key?(suppressed, "session_started_at")
+      assert is_binary(suppressed["last_activity_at"])
+      assert suppressed["conversation"] == %{"active" => true, "peers" => [self_id]}
     end
 
     test "conversation は常時同梱し peer agent_id だけを返す" do

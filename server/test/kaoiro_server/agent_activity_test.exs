@@ -220,7 +220,7 @@ defmodule KaoiroServer.AgentActivityTest do
 
     :sys.get_state(store)
 
-    assert :rebound =
+    assert :capped =
              AgentActivity.activate_or_rebind("rebind-overflow", self(), nil, server: store)
 
     assert AgentActivity.get("rebind-overflow", store) == nil

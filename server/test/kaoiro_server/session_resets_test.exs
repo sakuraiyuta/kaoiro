@@ -189,6 +189,106 @@ defmodule KaoiroServer.SessionResetsTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "session_reset_completed"}
     end
 
+    test "early join は default 5 秒を越えても lock timeout まで待機する", %{resets: sr} do
+      agent_id = "a.early-over-five-#{System.unique_integer([:positive])}"
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
+
+      waiter =
+        Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, request_id, sr) end)
+
+      :sys.get_state(sr)
+      assert Task.yield(waiter, 5_100) == nil
+
+      :ok = SessionResets.resolve(agent_id, request_id, false, "spawn_failed", nil, sr)
+      assert :noop = Task.await(waiter)
+    end
+
+    test "dead early waiter は遅延 runner ok の commit witness にならない", %{resets: sr} do
+      agent_id = "a.dead-waiter-#{System.unique_integer([:positive])}"
+      KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
+
+      parent = self()
+
+      waiter =
+        spawn(fn ->
+          send(parent, :early_waiter_started)
+          SessionResets.confirm_connection(agent_id, nil, request_id, sr)
+        end)
+
+      assert_receive :early_waiter_started
+      :sys.get_state(sr)
+      Process.exit(waiter, :kill)
+      ref = Process.monitor(waiter)
+      assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}
+      :sys.get_state(sr)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :sys.get_state(sr)
+      assert SessionResets.pending?(agent_id, sr)
+      refute_receive %Phoenix.Socket.Broadcast{event: "session_reset_completed"}
+    end
+
+    test "second early join は first waiter を上書きせず mismatch で返す", %{resets: sr} do
+      agent_id = "a.two-waiters-#{System.unique_integer([:positive])}"
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
+
+      first =
+        Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, request_id, sr) end)
+
+      :sys.get_state(sr)
+      assert :mismatch = SessionResets.confirm_connection(agent_id, nil, request_id, sr)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      assert :matched = Task.await(first)
+    end
+
+    test "delete は deferred waiter を :deleted で解除し reset を commit させない", %{resets: sr} do
+      agent_id = "a.delete-waiter-#{System.unique_integer([:positive])}"
+      KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
+
+      waiter =
+        Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, request_id, sr) end)
+
+      :sys.get_state(sr)
+      assert :ok = SessionResets.delete(agent_id, sr)
+      assert :deleted = Task.await(waiter)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      refute_receive %Phoenix.Socket.Broadcast{event: "session_reset_completed"}
+    end
+
+    test "reset timeout は deferred waiter を :noop で解除して failed を broadcast する" do
+      sr = :"sr_timeout_#{System.unique_integer([:positive])}"
+      {:ok, pid} = SessionResets.start_link(name: sr, timeout_ms: 20)
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      agent_id = "a.timeout-waiter-#{System.unique_integer([:positive])}"
+      KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
+
+      waiter =
+        Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, request_id, sr) end)
+
+      assert :noop = Task.await(waiter)
+      refute SessionResets.pending?(agent_id, sr)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "session_reset_failed",
+        payload: %{"agent_id" => ^agent_id, "request_id" => ^request_id, "reason" => "timeout"}
+      }
+    end
+
     test "ok=true は :awaiting_connect に移行 (broadcast はまだ、lock は保持)",
          %{resets: sr, pointers: sp} do
       # ADR-0036 F2 の two-phase completion: runner の ok=true は spawn 成功

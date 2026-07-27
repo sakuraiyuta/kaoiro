@@ -87,6 +87,9 @@ defmodule KaoiroServer.SessionResets do
   # false timeouts on a slow spawn, anything longer keeps the lock stale
   # after a crashed runner and blocks the operator's next attempt.
   @timeout_ms 60_000
+  # A deferred early join must outlive GenServer.call's default 5 s timeout.
+  # The reset lock's own timer remains the authority for terminating it.
+  @waiter_call_timeout @timeout_ms + 5_000
 
   # Grace window after any instruction / model / effort / permission_mode
   # dispatch during which a reset is refused with `:agent_busy`, even if
@@ -106,7 +109,10 @@ defmodule KaoiroServer.SessionResets do
   """
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, %{}, name: name)
+
+    GenServer.start_link(__MODULE__, %{timeout_ms: Keyword.get(opts, :timeout_ms, @timeout_ms)},
+      name: name
+    )
   end
 
   @doc """
@@ -188,19 +194,30 @@ defmodule KaoiroServer.SessionResets do
   the caller (wrapper_channel) already runs in its own process.
   """
   def confirm_connection(agent_id, joined_session_id \\ nil, server \\ __MODULE__) do
-    GenServer.call(server, {:confirm_connection, agent_id, joined_session_id, :absent})
+    GenServer.call(
+      server,
+      {:confirm_connection, agent_id, joined_session_id, :absent},
+      @waiter_call_timeout
+    )
   end
 
   @doc """
   Confirms a joining wrapper against the reset lock's request_id.
 
-  Returns exactly `:matched | :legacy_absent | :mismatch | :noop`. `:absent`
-  is reserved for a join parameter whose key was actually absent; nil, empty,
-  and malformed present values are mismatches and never enter the legacy
-  fallback.
+  Returns exactly `:matched | :legacy_absent | :mismatch | :noop` for a live
+  transaction. During `:spawning`, a matching/absent join waits (up to the
+  reset lock's 60 s lifetime) until runner success also arrives; the first
+  live waiter wins deterministically, later early joins receive `:mismatch`.
+  `:absent` is reserved for a join parameter whose key was actually absent;
+  nil, empty, and malformed present values are mismatches and never enter the
+  legacy fallback.
   """
   def confirm_connection(agent_id, joined_session_id, transition_id, server) do
-    GenServer.call(server, {:confirm_connection, agent_id, joined_session_id, transition_id})
+    GenServer.call(
+      server,
+      {:confirm_connection, agent_id, joined_session_id, transition_id},
+      @waiter_call_timeout
+    )
   end
 
   @doc "Returns the live reset request_id for the L2 Activity transaction."
@@ -223,7 +240,8 @@ defmodule KaoiroServer.SessionResets do
   end
 
   @impl true
-  def init(_arg), do: {:ok, %{pending: %{}, last_dispatch: %{}}}
+  def init(%{timeout_ms: timeout_ms}),
+    do: {:ok, %{pending: %{}, last_dispatch: %{}, timeout_ms: timeout_ms, waiter_generation: 0}}
 
   @impl true
   def handle_call(
@@ -259,7 +277,7 @@ defmodule KaoiroServer.SessionResets do
         request_id = generate_request_id()
 
         timer_ref =
-          Process.send_after(self(), {:timeout, agent_id, request_id}, @timeout_ms)
+          Process.send_after(self(), {:timeout, agent_id, request_id}, s.timeout_ms)
 
         lock = %{
           mode: mode,
@@ -280,7 +298,9 @@ defmodule KaoiroServer.SessionResets do
           # the same transaction instead of waiting for a second join.
           early_join_session_id: :none,
           early_join_from: nil,
-          early_join_outcome: nil
+          early_join_outcome: nil,
+          early_join_monitor: nil,
+          early_join_generation: nil
         }
 
         {:reply, {:ok, request_id, prev_sid}, %{s | pending: Map.put(s.pending, agent_id, lock)}}
@@ -305,8 +325,12 @@ defmodule KaoiroServer.SessionResets do
 
   def handle_call({:delete, agent_id}, _from, s) do
     case Map.get(s.pending, agent_id) do
-      %{timer_ref: ref} -> _ = Process.cancel_timer(ref)
-      _ -> :ok
+      %{timer_ref: ref} = lock ->
+        _ = Process.cancel_timer(ref)
+        reply_early(lock, :deleted)
+
+      _ ->
+        :ok
     end
 
     {:reply, :ok,
@@ -319,28 +343,47 @@ defmodule KaoiroServer.SessionResets do
 
   def handle_call({:confirm_connection, agent_id, joined_session_id, transition_id}, from, s) do
     case Map.get(s.pending, agent_id) do
-      %{phase: :spawning, request_id: request_id} = lock when transition_id == request_id ->
-        updated = %{
-          lock
-          | early_join_session_id: joined_session_id,
-            early_join_from: from,
-            early_join_outcome: :matched
-        }
+      %{phase: :spawning, request_id: request_id, early_join_from: nil} = lock
+      when transition_id == request_id ->
+        {:noreply, stash_early_waiter(s, agent_id, lock, from, joined_session_id, :matched)}
 
-        # Do not claim :matched until runner ok also arrived. Keeping this
-        # call pending makes the L0 caller observe one outcome only after the
-        # two independent websocket paths have both committed.
-        {:noreply, %{s | pending: Map.put(s.pending, agent_id, updated)}}
+      %{phase: :spawning, early_join_from: nil} = lock when transition_id == :absent ->
+        {:noreply, stash_early_waiter(s, agent_id, lock, from, joined_session_id, :legacy_absent)}
+
+      %{phase: :spawning, request_id: request_id} = lock when transition_id == request_id ->
+        if early_waiter_alive?(lock) do
+          {:reply, :mismatch, s}
+        else
+          {:noreply,
+           stash_early_waiter(
+             s,
+             agent_id,
+             discard_early_waiter(lock),
+             from,
+             joined_session_id,
+             :matched
+           )}
+        end
 
       %{phase: :spawning} = lock when transition_id == :absent ->
-        updated = %{
-          lock
-          | early_join_session_id: joined_session_id,
-            early_join_from: from,
-            early_join_outcome: :legacy_absent
-        }
+        if early_waiter_alive?(lock) do
+          {:reply, :mismatch, s}
+        else
+          {:noreply,
+           stash_early_waiter(
+             s,
+             agent_id,
+             discard_early_waiter(lock),
+             from,
+             joined_session_id,
+             :legacy_absent
+           )}
+        end
 
-        {:noreply, %{s | pending: Map.put(s.pending, agent_id, updated)}}
+      %{phase: :spawning, early_join_from: _from} ->
+        # First live waiter wins. A second pre-envelope join must not steal
+        # the first caller's reply or create two possible commit witnesses.
+        {:reply, :mismatch, s}
 
       %{phase: :spawning} ->
         # A present but mismatching/malformed id is stale regardless of the
@@ -374,9 +417,9 @@ defmodule KaoiroServer.SessionResets do
   def handle_cast({:resolve, agent_id, request_id, ok, reason, to_session_id}, s) do
     case Map.get(s.pending, agent_id) do
       %{request_id: ^request_id} = lock ->
-        if ok and lock.early_join_session_id != :none do
+        if ok and lock.early_join_session_id != :none and early_waiter_alive?(lock) do
           completed = complete_early_join(s, agent_id, lock, to_session_id)
-          GenServer.reply(lock.early_join_from, lock.early_join_outcome)
+          reply_early(lock, lock.early_join_outcome)
           {:noreply, completed}
         else
           if ok do
@@ -386,6 +429,7 @@ defmodule KaoiroServer.SessionResets do
             # as well as the spawn window.
             updated =
               lock
+              |> discard_early_waiter()
               |> Map.put(:phase, :awaiting_connect)
               |> Map.put(:to_session_id, to_session_id)
 
@@ -404,6 +448,23 @@ defmodule KaoiroServer.SessionResets do
         # the agent was deleted. Ignore per ADR-0036 F7.
         {:noreply, s}
     end
+  end
+
+  @impl true
+  def handle_info({:DOWN, monitor, :process, _pid, _reason}, s) do
+    pending =
+      Map.new(s.pending, fn {agent_id, lock} ->
+        if lock.early_join_monitor == monitor do
+          # The channel died before runner ok. Keep the reset transaction,
+          # but remove its stale commit witness so only a later live join can
+          # complete it.
+          {agent_id, clear_early_waiter(lock)}
+        else
+          {agent_id, lock}
+        end
+      end)
+
+    {:noreply, %{s | pending: pending}}
   end
 
   @impl true
@@ -429,6 +490,45 @@ defmodule KaoiroServer.SessionResets do
     commit_connection(agent_id, lock, lock.early_join_session_id)
     %{s | pending: Map.delete(s.pending, agent_id)}
   end
+
+  defp stash_early_waiter(s, agent_id, lock, from, joined_session_id, outcome) do
+    monitor = Process.monitor(elem(from, 0))
+    generation = s.waiter_generation + 1
+
+    updated = %{
+      lock
+      | early_join_session_id: joined_session_id,
+        early_join_from: from,
+        early_join_outcome: outcome,
+        early_join_monitor: monitor,
+        early_join_generation: generation
+    }
+
+    %{s | pending: Map.put(s.pending, agent_id, updated), waiter_generation: generation}
+  end
+
+  defp clear_early_waiter(lock) do
+    %{
+      lock
+      | early_join_session_id: :none,
+        early_join_from: nil,
+        early_join_outcome: nil,
+        early_join_monitor: nil,
+        early_join_generation: nil
+    }
+  end
+
+  defp discard_early_waiter(lock) do
+    if is_reference(lock.early_join_monitor),
+      do: Process.demonitor(lock.early_join_monitor, [:flush])
+
+    clear_early_waiter(lock)
+  end
+
+  defp early_waiter_alive?(%{early_join_from: {pid, _tag}}) when is_pid(pid),
+    do: Process.alive?(pid)
+
+  defp early_waiter_alive?(_lock), do: false
 
   # Both arrival orders commit through this helper. `:matched` and
   # `:legacy_absent` are exposed only after all commit side effects finish.
@@ -468,8 +568,11 @@ defmodule KaoiroServer.SessionResets do
     broadcast_completed(agent_id, lock, effective_to_sid, clear_watermark)
   end
 
-  defp reply_early(%{early_join_from: from}, outcome) when is_tuple(from),
-    do: GenServer.reply(from, outcome)
+  defp reply_early(%{early_join_from: from, early_join_monitor: monitor}, outcome)
+       when is_tuple(from) do
+    if is_reference(monitor), do: Process.demonitor(monitor, [:flush])
+    GenServer.reply(from, outcome)
+  end
 
   defp reply_early(_lock, _outcome), do: :ok
 

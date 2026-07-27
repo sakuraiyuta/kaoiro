@@ -105,8 +105,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
     if TokenDenylist.revoked?(socket.assigns.agent_id) do
       {:stop, :shutdown, socket}
     else
-      after_join_handshake(socket)
-      {:noreply, socket}
+      case after_join_handshake(socket) do
+        :deleted -> {:stop, :shutdown, socket}
+        :ok -> {:noreply, socket}
+      end
     end
   end
 
@@ -121,42 +123,48 @@ defmodule KaoiroServerWeb.WrapperChannel do
     reset_result =
       KaoiroServer.SessionResets.confirm_connection(agent_id, nil, transition_id, SessionResets)
 
-    if reset_result in [:matched, :legacy_absent] and is_binary(reset_id) do
-      :ok =
-        AgentActivity.begin_transition(
-          agent_id,
-          reset_id,
-          :reset,
-          DateTime.utc_now() |> DateTime.to_iso8601()
+    if reset_result == :deleted do
+      # Deletion released a deferred join. Rebinding here would recreate the
+      # just-deleted Activity entry before the channel terminates.
+      :deleted
+    else
+      if reset_result in [:matched, :legacy_absent] and is_binary(reset_id) do
+        :ok =
+          AgentActivity.begin_transition(
+            agent_id,
+            reset_id,
+            :reset,
+            DateTime.utc_now() |> DateTime.to_iso8601()
+          )
+      end
+
+      _ =
+        AgentActivity.activate_or_rebind(agent_id, self(), transition_id,
+          reset_result: reset_result
         )
+
+      case PersonaAssets.prompt(socket.assigns.persona_id) do
+        prompt when is_binary(prompt) ->
+          push(socket, "persona_prompt", %{prompt: prompt})
+
+        nil ->
+          # The join gate accepted this persona_id, but the pack has since
+          # gone from the manifest (rebuild between join and after_join).
+          # Fail closed by refusing the prompt — the wrapper's spawn
+          # timeout will surface it.
+          :ok
+      end
+
+      case KaoiroServer.PermissionModes.get(socket.assigns.agent_id) do
+        mode when is_binary(mode) ->
+          push(socket, "set_permission_mode", %{mode: mode})
+
+        _ ->
+          :ok
+      end
+
+      :ok
     end
-
-    _ =
-      AgentActivity.activate_or_rebind(agent_id, self(), transition_id,
-        reset_result: reset_result
-      )
-
-    case PersonaAssets.prompt(socket.assigns.persona_id) do
-      prompt when is_binary(prompt) ->
-        push(socket, "persona_prompt", %{prompt: prompt})
-
-      nil ->
-        # The join gate accepted this persona_id, but the pack has since
-        # gone from the manifest (rebuild between join and after_join).
-        # Fail closed by refusing the prompt — the wrapper's spawn
-        # timeout will surface it.
-        :ok
-    end
-
-    case KaoiroServer.PermissionModes.get(socket.assigns.agent_id) do
-      mode when is_binary(mode) ->
-        push(socket, "set_permission_mode", %{mode: mode})
-
-      _ ->
-        :ok
-    end
-
-    :ok
   end
 
   # Operator-initiated token revoke (issue #72): the AgentsChannel

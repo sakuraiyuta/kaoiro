@@ -260,6 +260,36 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       refute_broadcast "spawn_result", _
     end
 
+    test "oversized spawn_result は最初に ack され、broadcast も pending mutation もしない" do
+      host_id = "lab-pc-spawn-size"
+      agent_id = host_id <> ".a"
+      @endpoint.subscribe("agents:lobby")
+
+      :ok =
+        KaoiroServer.AgentActivity.begin_transition(
+          agent_id,
+          "size-pending",
+          :spawn,
+          "2026-07-28T00:00:00Z"
+        )
+
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "spawn_result", %{
+          "agent_id" => agent_id,
+          "ok" => false,
+          "request_id" => "size-pending",
+          "padding" => String.duplicate("x", 66_000)
+        })
+
+      assert_reply ref, :ok
+      refute_broadcast "spawn_result", _
+
+      assert :activated =
+               KaoiroServer.AgentActivity.activate_or_rebind(agent_id, self(), "size-pending")
+    end
+
     test "spawn_result ok=true は matching request_id でも Activity を activate しない" do
       host_id = "lab-pc-spawn-ok"
       agent_id = host_id <> ".a"

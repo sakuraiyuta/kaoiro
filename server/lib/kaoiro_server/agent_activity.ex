@@ -135,7 +135,7 @@ defmodule KaoiroServer.AgentActivity do
 
     cond do
       reset_result in [:mismatch, :legacy_absent] ->
-        {:reply, :rebound, rebind(state, agent_id, owner, true)}
+        reply_rebind(state, agent_id, owner, true)
 
       reset_result == :matched and matching_pending?(pending, id) ->
         if new_entry_at_cap?(state, agent_id) do
@@ -152,10 +152,10 @@ defmodule KaoiroServer.AgentActivity do
         end
 
       reset_result == :noop and pending != nil ->
-        {:reply, :rebound, rebind(state, agent_id, owner, true)}
+        reply_rebind(state, agent_id, owner, true)
 
       true ->
-        {:reply, :rebound, rebind(state, agent_id, owner, false)}
+        reply_rebind(state, agent_id, owner, false)
     end
   end
 
@@ -267,6 +267,14 @@ defmodule KaoiroServer.AgentActivity do
           | owner: owner,
             projection_suppressed: entry.projection_suppressed or suppress?
         })
+    end
+  end
+
+  defp reply_rebind(state, agent_id, owner, suppress?) do
+    if new_entry_at_cap?(state, agent_id) do
+      {:reply, :capped, state}
+    else
+      {:reply, :rebound, rebind(state, agent_id, owner, suppress?)}
     end
   end
 
