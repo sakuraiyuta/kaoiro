@@ -151,6 +151,15 @@ export interface WrapperConfig {
    *  the wrapper stamps it as ext.resume_snapshot and computes ext.resume_drift
    *  against the values it is enforcing this run. */
   resume_snapshot?: ResolvedSnapshotExt;
+  /** Session-transition correlation id relayed from the spawn / restore /
+   *  reset command that launched this wrapper (phase-27, #160). The wrapper
+   *  echoes it verbatim in its channel join params so the server can tell
+   *  "the connection this transition produced" from any other join — a
+   *  session_id cannot, because a same-session resume reuses the old one.
+   *  Absent on a legacy runner, in which case the server declines to
+   *  activate the pending transition and omits the affected activity
+   *  metadata; spawn / restore themselves are unaffected. */
+  transition_id?: string;
 }
 
 /** Closed enum of SDK PermissionMode values (#58). Mirrors the SDK union
@@ -665,6 +674,14 @@ export interface SpawnMessage {
    *  (藤 D1). Ignored (paired with resume_session_id) if both are set;
    *  the resume path already runs applyResumeSnapshot. */
   apply_resume_snapshot?: boolean;
+  /** Session-transition correlation id, server-allocated per spawn
+   *  (phase-27, #160). Mirrors the four-hop `request_id` discipline the
+   *  session-reset flow already uses (ADR-0036 F7): the runner relays it
+   *  into the wrapper config as `transition_id` and echoes it back on
+   *  `SpawnResult`, so a late result and a join from an unrelated
+   *  connection can both be discarded by CAS. Absent = legacy server;
+   *  the runner passes nothing along and the spawn behaves as before. */
+  request_id?: string;
 }
 
 /** server -> runner, operator-only: stop the wrapper for agent_id. */
@@ -690,6 +707,11 @@ export interface SwitchSessionMessage {
   version: "0";
   agent_id: string;
   resume_session_id: string;
+  /** Session-transition correlation id, same semantics as
+   *  {@link SpawnMessage.request_id} (phase-27, #160). A live switch
+   *  reuses the SDK session id, so this is the only way to tell the
+   *  connection this switch produced from the outgoing one. */
+  request_id?: string;
 }
 
 /** Why a spawn failed (protocol.md). already_running = a live wrapper already
@@ -709,6 +731,14 @@ export interface SpawnResult {
   agent_id: string;
   ok: boolean;
   reason?: SpawnFailReason;
+  /** Verbatim echo of {@link SpawnMessage.request_id} /
+   *  {@link SwitchSessionMessage.request_id} (phase-27, #160). The server
+   *  aborts a pending transition only when this matches the one it is
+   *  holding, so a result that arrives after the transition was superseded
+   *  or garbage-collected cannot tear down its successor. Absent = legacy
+   *  runner (or a spawn the server issued without one); the server discards
+   *  the correlation silently rather than acting on it. */
+  request_id?: string;
 }
 
 /** operator -> server -> runner (Option E, ADR-0039): request a fresh probe
