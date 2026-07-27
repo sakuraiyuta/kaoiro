@@ -129,12 +129,35 @@ defmodule KaoiroServer.SessionResetsTest do
       assert {:ok, request_id, _} =
                SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
 
-      assert :matched = SessionResets.confirm_connection(agent_id, "new", request_id, sr)
+      caller =
+        Task.async(fn -> SessionResets.confirm_connection(agent_id, "new", request_id, sr) end)
+
+      :sys.get_state(sr)
       assert SessionResets.pending?(agent_id, sr)
 
       :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
       :sys.get_state(sr)
+      assert :matched = Task.await(caller)
       refute SessionResets.pending?(agent_id, sr)
+    end
+
+    test "early mismatch is immediate suppression outcome and early join failure replies noop", %{
+      resets: sr
+    } do
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire("a.early-fail", "new", "idle", "old", sr)
+
+      assert :mismatch = SessionResets.confirm_connection("a.early-fail", nil, "wrong", sr)
+
+      caller =
+        Task.async(fn ->
+          SessionResets.confirm_connection("a.early-fail", nil, request_id, sr)
+        end)
+
+      :sys.get_state(sr)
+      :ok = SessionResets.resolve("a.early-fail", request_id, false, "spawn_failed", nil, sr)
+      assert :noop = Task.await(caller)
+      refute SessionResets.pending?("a.early-fail", sr)
     end
 
     test "ok=true は :awaiting_connect に移行 (broadcast はまだ、lock は保持)",
@@ -325,14 +348,14 @@ defmodule KaoiroServer.SessionResetsTest do
       refute Map.has_key?(payload, "clear_watermark")
     end
 
-    test "confirm_connection は :spawning フェーズでは no-op (runner ok 未受信)",
+    test "confirm_connection は :spawning 中でも present mismatch を抑止として返す",
          %{resets: sr} do
       assert {:ok, _rid, _} =
                SessionResets.check_and_acquire("a.res.early", "new", "idle", "sess", sr)
 
-      # runner の ok=true が来る前の join (通常は起こらないが fail-safe)。
-      # lock は :spawning のまま維持、broadcast も発火しない。
-      :noop = SessionResets.confirm_connection("a.res.early", nil, sr)
+      # runner ok より前でも stale id は :mismatch。legacy absent / matching
+      # join は runner outcome まで caller を待たせるので、ここでは使わない。
+      :mismatch = SessionResets.confirm_connection("a.res.early", nil, "wrong", sr)
       assert SessionResets.pending?("a.res.early", sr)
     end
 

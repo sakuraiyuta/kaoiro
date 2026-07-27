@@ -278,7 +278,9 @@ defmodule KaoiroServer.SessionResets do
           # Matching wrapper joins may race ahead of the runner websocket
           # result. Stash that commit signal so resolve(ok=true) can finish
           # the same transaction instead of waiting for a second join.
-          early_join_session_id: :none
+          early_join_session_id: :none,
+          early_join_from: nil,
+          early_join_outcome: nil
         }
 
         {:reply, {:ok, request_id, prev_sid}, %{s | pending: Map.put(s.pending, agent_id, lock)}}
@@ -315,14 +317,35 @@ defmodule KaoiroServer.SessionResets do
      }}
   end
 
-  def handle_call({:confirm_connection, agent_id, joined_session_id, transition_id}, _from, s) do
+  def handle_call({:confirm_connection, agent_id, joined_session_id, transition_id}, from, s) do
     case Map.get(s.pending, agent_id) do
       %{phase: :spawning, request_id: request_id} = lock when transition_id == request_id ->
-        updated = %{lock | early_join_session_id: joined_session_id}
-        # The matching join is real evidence of a live child. Activity may
-        # activate its pending generation now; reset side effects remain
-        # gated on the runner's ok result and are completed in resolve/6.
-        {:reply, :matched, %{s | pending: Map.put(s.pending, agent_id, updated)}}
+        updated = %{
+          lock
+          | early_join_session_id: joined_session_id,
+            early_join_from: from,
+            early_join_outcome: :matched
+        }
+
+        # Do not claim :matched until runner ok also arrived. Keeping this
+        # call pending makes the L0 caller observe one outcome only after the
+        # two independent websocket paths have both committed.
+        {:noreply, %{s | pending: Map.put(s.pending, agent_id, updated)}}
+
+      %{phase: :spawning} = lock when transition_id == :absent ->
+        updated = %{
+          lock
+          | early_join_session_id: joined_session_id,
+            early_join_from: from,
+            early_join_outcome: :legacy_absent
+        }
+
+        {:noreply, %{s | pending: Map.put(s.pending, agent_id, updated)}}
+
+      %{phase: :spawning} ->
+        # A present but mismatching/malformed id is stale regardless of the
+        # runner result's arrival order; WrapperChannel must force suppress.
+        {:reply, :mismatch, s}
 
       %{phase: :awaiting_connect, request_id: request_id} = lock
       when transition_id == request_id ->
@@ -452,7 +475,9 @@ defmodule KaoiroServer.SessionResets do
     case Map.get(s.pending, agent_id) do
       %{request_id: ^request_id} = lock ->
         if ok and lock.early_join_session_id != :none do
-          {:noreply, complete_early_join(s, agent_id, lock, to_session_id)}
+          completed = complete_early_join(s, agent_id, lock, to_session_id)
+          GenServer.reply(lock.early_join_from, lock.early_join_outcome)
+          {:noreply, completed}
         else
           if ok do
             # Two-phase F2: runner spawn succeeded, but wait for the fresh
@@ -467,6 +492,7 @@ defmodule KaoiroServer.SessionResets do
             {:noreply, %{s | pending: Map.put(s.pending, agent_id, updated)}}
           else
             # Failure path: fire the loud broadcast immediately, no detach.
+            reply_early(lock, :noop)
             _ = Process.cancel_timer(lock.timer_ref)
             broadcast_failed(agent_id, lock, reason)
             {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
@@ -488,6 +514,7 @@ defmodule KaoiroServer.SessionResets do
         # rollback path can recover it. UI shows the loud failure. Covers
         # both phases — a slow spawn AND a spawn that succeeds but whose
         # wrapper never joins.
+        reply_early(lock, :noop)
         broadcast_failed(agent_id, lock, "timeout")
 
         {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
@@ -533,6 +560,11 @@ defmodule KaoiroServer.SessionResets do
     broadcast_completed(agent_id, lock, effective_to_sid, clear_watermark)
     %{s | pending: Map.delete(s.pending, agent_id)}
   end
+
+  defp reply_early(%{early_join_from: from}, outcome) when is_tuple(from),
+    do: GenServer.reply(from, outcome)
+
+  defp reply_early(_lock, _outcome), do: :ok
 
   defp broadcast_completed(agent_id, lock, to_session_id, clear_watermark) do
     # `previous_session_id` is optional per the protocol type
