@@ -116,6 +116,32 @@ defmodule KaoiroServer.AgentActivityTest do
     assert %{turns: 1} = AgentActivity.get("a", store)
   end
 
+  test "L2 mismatch is force-suppressed even without an Activity pending", %{store: store} do
+    assert :rebound =
+             AgentActivity.activate_or_rebind("a", self(), "stale",
+               reset_result: :mismatch,
+               server: store
+             )
+
+    assert %{projection_suppressed: true} = AgentActivity.get("a", store)
+  end
+
+  test "legacy absent is force-suppressed and a consumed id reconnect is not", %{store: store} do
+    :ok = AgentActivity.begin_transition("a", "p1", :reset, ts(1), server: store)
+
+    assert :rebound =
+             AgentActivity.activate_or_rebind("a", self(), :absent,
+               reset_result: :legacy_absent,
+               server: store
+             )
+
+    assert %{projection_suppressed: true} = AgentActivity.get("a", store)
+    assert :activated = AgentActivity.activate_or_rebind("a", self(), "p1", server: store)
+    assert %{projection_suppressed: false} = AgentActivity.get("a", store)
+    assert :rebound = AgentActivity.activate_or_rebind("a", self(), "p1", server: store)
+    assert %{projection_suppressed: false} = AgentActivity.get("a", store)
+  end
+
   test "pending CAS, failure behavior, and ttl preserve newer transactions", %{store: store} do
     assert :ok = AgentActivity.begin_transition("a", "p1", :spawn, ts(1), server: store)
     assert :ok = AgentActivity.begin_transition("a", "p2", :restore, ts(2), server: store)
