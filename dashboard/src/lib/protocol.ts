@@ -1190,6 +1190,10 @@ export interface KaoiroConnection {
    *  is a no-op when a connection is already in-flight, so no duplicate
    *  socket is created. */
   reconnect: () => void;
+  /** Informs the connection that the browser has regained network access.
+   *  Resets ticket-mint backoff and immediately retries a ticket request that
+   *  was waiting for its retry timer; it never cycles a healthy transport. */
+  notifyOnline: () => void;
   /** Sends an operator instruction; rejects on server refusal
    * (forbidden / unknown_agent) or timeout. `attachmentIds` references
    * uploads previously sent through uploadFile / attach* (file-upload spec
@@ -1342,7 +1346,7 @@ export interface ConnectOptions {
    *  been revoked. Rejections represent transient failures (offline/server
    *  unavailable) and are retried without opening a socket with the stale
    *  ticket. */
-  refreshTicket?: () => Promise<TicketRefreshResult>;
+  refreshTicket?: (signal: AbortSignal) => Promise<TicketRefreshResult>;
   /** Called exactly once when refreshTicket reports `unauthorized`. The UI
    *  owns the resulting session teardown / login-form transition. */
   onTicketRefreshUnauthorized?: () => void;
@@ -1356,12 +1360,22 @@ export interface ConnectOptions {
    *  #123). Production leaves this undefined and Phoenix defaults to
    *  30000. */
   heartbeatIntervalMs?: number;
+  /** Test-only override for the HTTP ticket-mint deadline. Production uses
+   *  TICKET_REFRESH_TIMEOUT_MS, deliberately far below the ticket's 30 s
+   *  server TTL so a stalled proxy cannot keep reconnect gated forever. */
+  ticketRefreshTimeoutMs?: number;
 }
 
 /** Result of renewing the cookie-backed, short-lived WebSocket ticket. */
 export type TicketRefreshResult =
   | { kind: "ok"; ticket: string }
   | { kind: "unauthorized" };
+
+/** A ticket request must fail well before the server's 30-second ticket TTL. */
+export const TICKET_REFRESH_TIMEOUT_MS = 8_000;
+
+/** Retry no more aggressively than Phoenix's own reconnect behaviour. */
+const TICKET_REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 
 function isEnvelope(value: unknown): value is Envelope {
   return (
@@ -2013,6 +2027,10 @@ export function connectKaoiro(
   let ticketRefreshPendingConnect = false;
   let ticketRefreshGeneration = 0;
   let ticketRefreshRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  let ticketRefreshRetryAttempt = 0;
+  let ticketRefreshController: AbortController | undefined;
+  let ticketRefreshTimeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  let rejectTicketRefresh: ((reason: Error) => void) | undefined;
 
   function cancelTicketRefreshRetry(): void {
     if (ticketRefreshRetryTimer !== undefined) {
@@ -2021,19 +2039,38 @@ export function connectKaoiro(
     }
   }
 
+  function resetTicketRefreshBackoff(): void {
+    ticketRefreshRetryAttempt = 0;
+  }
+
+  function abortTicketRefresh(): void {
+    ticketRefreshController?.abort();
+    // Promise.race below must settle even when a custom refreshTicket
+    // callback ignores AbortSignal (as a stalled mock/proxy can). Otherwise
+    // ticketRefreshInFlight would permanently close every reconnect gate.
+    rejectTicketRefresh?.(new Error("ticket refresh aborted"));
+  }
+
   function requireFreshTicket(): void {
     if (options.refreshTicket === undefined) return;
+    const refreshWasInFlight = ticketRefreshInFlight;
     ticketRefreshRequired = true;
     ticketRefreshGeneration += 1;
     // A close/error can race a prior renewal. Preserve one follow-up connect
     // request so that prior result is discarded and the newest generation
     // still gets a chance to mint its own ticket.
-    ticketRefreshPendingConnect ||= ticketRefreshInFlight;
+    ticketRefreshPendingConnect ||= refreshWasInFlight;
+    if (refreshWasInFlight) abortTicketRefresh();
     cancelTicketRefreshRetry();
   }
 
   function setupSocketHandlers(s: Socket): void {
-    s.onOpen(() => handlers.onStatus("connected"));
+    s.onOpen(() => {
+      // A successful transport means the endpoint is reachable again; the
+      // next outage starts at the gentle first backoff step.
+      resetTicketRefreshBackoff();
+      handlers.onStatus("connected");
+    });
     s.onClose(() => {
       // Phoenix's native reconnectTimer calls socket.connect() itself. Mark
       // the ticket stale here so that path cannot accidentally reuse the
@@ -2286,6 +2323,8 @@ export function connectKaoiro(
     disposed = true;
     cycleGeneration += 1;
     ticketRefreshGeneration += 1;
+    ticketRefreshPendingConnect = false;
+    abortTicketRefresh();
     cancelTicketRefreshRetry();
     drainPhoenixTimers();
     try {
@@ -2310,13 +2349,54 @@ export function connectKaoiro(
     }
     // Do not fall back to Phoenix's reconnect timer after an HTTP failure:
     // that would open a transport with the stale ticket. Retrying this gate
-    // instead preserves the ordinary offline-recovery behaviour once the
-    // network returns.
+    // instead preserves offline recovery once the network returns, without
+    // polling an offline endpoint at a fixed 60 requests/minute.
+    const retryIndex = Math.min(
+      ticketRefreshRetryAttempt,
+      TICKET_REFRESH_RETRY_DELAYS_MS.length - 1,
+    );
+    const retryDelayMs = TICKET_REFRESH_RETRY_DELAYS_MS[retryIndex]!;
+    ticketRefreshRetryAttempt += 1;
     ticketRefreshRetryTimer = setTimeout(() => {
       ticketRefreshRetryTimer = undefined;
       if (disposed || generation !== ticketRefreshGeneration) return;
       socketWithConnect.connect();
-    }, 1000);
+    }, retryDelayMs);
+  }
+
+  function refreshTicketWithTimeout(): Promise<TicketRefreshResult> {
+    // This wrapper races the callback itself, not only fetch's AbortSignal.
+    // A caller that accidentally ignores the signal must still release the
+    // reconnect gate at the deadline.
+    const refreshTicket = options.refreshTicket;
+    if (refreshTicket === undefined) {
+      return Promise.reject(new Error("ticket refresh is unavailable"));
+    }
+    const controller = new AbortController();
+    ticketRefreshController = controller;
+    const timeoutMs = options.ticketRefreshTimeoutMs ?? TICKET_REFRESH_TIMEOUT_MS;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      rejectTicketRefresh = reject;
+      ticketRefreshTimeoutTimer = setTimeout(() => {
+        controller.abort();
+        reject(new Error("ticket refresh timed out"));
+      }, timeoutMs);
+    });
+    return Promise.race([
+      // Normalise a synchronously-throwing adapter callback into the same
+      // retry path as a rejected fetch.
+      Promise.resolve().then(() => refreshTicket(controller.signal)),
+      timeout,
+    ]).finally(() => {
+      if (ticketRefreshController === controller) {
+        ticketRefreshController = undefined;
+        rejectTicketRefresh = undefined;
+        if (ticketRefreshTimeoutTimer !== undefined) {
+          clearTimeout(ticketRefreshTimeoutTimer);
+          ticketRefreshTimeoutTimer = undefined;
+        }
+      }
+    });
   }
 
   function connectWithFreshTicket(): void {
@@ -2335,8 +2415,7 @@ export function connectKaoiro(
 
     const generation = ticketRefreshGeneration;
     ticketRefreshInFlight = true;
-    void options
-      .refreshTicket()
+    void refreshTicketWithTimeout()
       .then((result) => {
         if (disposed || generation !== ticketRefreshGeneration) return;
         if (result.kind === "unauthorized") {
@@ -2467,6 +2546,7 @@ export function connectKaoiro(
       cycleGeneration += 1;
       ticketRefreshGeneration += 1;
       ticketRefreshPendingConnect = false;
+      abortTicketRefresh();
       cancelTicketRefreshRetry();
       // Drain Phoenix internal timers first. Without this the heartbeatTimer
       // can outlive teardown on a stuck transport and self-resurrect via
@@ -2501,6 +2581,11 @@ export function connectKaoiro(
       if (disposed || cycleInFlight) return;
       cycleInFlight = true;
       const gen = ++cycleGeneration;
+
+      // App.svelte invokes reconnect() for the browser's `online` event and
+      // wake recovery. Treat that new external signal as a fresh outage, so
+      // the next transient ticket failure starts from the first backoff step.
+      resetTicketRefreshBackoff();
 
       // A wake rebuild must never put the ticket from the old transport on
       // the new URL. connectWithFreshTicket() also guards Phoenix's native
@@ -2542,6 +2627,20 @@ export function connectKaoiro(
       queueMicrotask(() => {
         cycleInFlight = false;
       });
+    },
+    notifyOnline: () => {
+      resetTicketRefreshBackoff();
+      if (disposed || !ticketRefreshRequired) return;
+      if (ticketRefreshInFlight) {
+        // The old request may be stuck behind a captive portal/proxy. A new
+        // online signal is useful evidence to abandon it and mint again.
+        requireFreshTicket();
+        return;
+      }
+      if (ticketRefreshRetryTimer !== undefined) {
+        cancelTicketRefreshRetry();
+        socketWithConnect.connect();
+      }
     },
     sendInstruction: (agentId, text, attachmentIds) =>
       pushAsync(

@@ -343,8 +343,10 @@
       connectOpts.ticket === undefined
         ? {}
         : {
-            refreshTicket: async (): Promise<TicketRefreshResult> => {
-              const res = await fetch("/session/ticket");
+            refreshTicket: async (
+              signal: AbortSignal,
+            ): Promise<TicketRefreshResult> => {
+              const res = await fetch("/session/ticket", { signal });
               if (res.status === 401) return { kind: "unauthorized" };
               if (!res.ok) {
                 throw new Error(`ticket refresh failed (${res.status})`);
@@ -682,6 +684,11 @@
     // is factored into decideWakeAction (protocol.ts) so every branch is
     // unit-testable without mounting this component.
     wakeHandler = () => {
+      // This is intentionally independent from decideWakeAction: a healthy
+      // socket is not force-cycled merely because the browser says online,
+      // but a ticket-mint retry waiting under exponential backoff should run
+      // immediately when the network becomes available again.
+      connection?.notifyOnline();
       const decision = decideWakeAction(
         "online",
         status,

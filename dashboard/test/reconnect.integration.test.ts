@@ -79,6 +79,16 @@ function makeHandlers() {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   FakeWebSocket.instances.length = 0;
   vi.useFakeTimers();
@@ -218,6 +228,233 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", 
 
     conn.disconnect();
     await vi.advanceTimersByTimeAsync(500);
+  });
+
+  it("hung ticket fetch は deadline 後に abort され、次の ticket fetch へ進む", async () => {
+    const handlers = makeHandlers();
+    let firstSignal: AbortSignal | undefined;
+    const refreshTicket = vi
+      .fn()
+      // AbortSignal を無視して永久 pending する proxy / custom callback の
+      // 再現。protocol 側の Promise.race が gate を開ける必要がある。
+      .mockImplementationOnce((signal: AbortSignal) => {
+        firstSignal = signal;
+        return new Promise<never>(() => {});
+      })
+      .mockResolvedValueOnce({
+        kind: "ok" as const,
+        ticket: "after-timeout-ticket",
+      });
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      ticketRefreshTimeoutMs: 100,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(1);
+
+    // deadline (100ms) -> retry first step (1000ms) -> fresh ticket -> WS 2.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(firstSignal?.aborted).toBe(true);
+    expect(FakeWebSocket.instances.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refreshTicket).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(FakeWebSocket.instances[1]?.url).toContain(
+      "ticket=after-timeout-ticket",
+    );
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
+  });
+
+  it("ticket refresh の retry は 1s, 2s, 5s と指数 backoff する", async () => {
+    const handlers = makeHandlers();
+    const refreshTicket = vi.fn().mockRejectedValue(new Error("offline"));
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(refreshTicket).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refreshTicket).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refreshTicket).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(refreshTicket).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(refreshTicket).toHaveBeenCalledTimes(4);
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+
+  it("browser online は待機中の ticket retry を即時再開し backoff を reset する", async () => {
+    const handlers = makeHandlers();
+    const refreshTicket = vi.fn().mockRejectedValue(new Error("offline"));
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+
+    conn.notifyOnline();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshTicket).toHaveBeenCalledTimes(2);
+
+    // online で reset 済みなので、次の retry は 2 秒ではなく先頭の 1 秒。
+    await vi.advanceTimersByTimeAsync(500);
+    expect(refreshTicket).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(refreshTicket).toHaveBeenCalledTimes(3);
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+
+  it("pending refresh 中の別 wake reconnect は旧 fetch を abort して 1 transport に収束する", async () => {
+    const handlers = makeHandlers();
+    const first = deferred<{ kind: "ok"; ticket: string }>();
+    const second = deferred<{ kind: "ok"; ticket: string }>();
+    const refreshTicket = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+
+    // online と visibility-visible のような別 wake task。先の mint は
+    // generation 更新で abort され、finally が最新 generation のみを再開。
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshTicket).toHaveBeenCalledTimes(2);
+    second.resolve({ kind: "ok", ticket: "wake-race-ticket" });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(FakeWebSocket.instances[1]?.url).toContain(
+      "ticket=wake-race-ticket",
+    );
+
+    // Late completion of the aborted mint must not create WS 3.
+    first.resolve({ kind: "ok", ticket: "stale-ticket" });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(FakeWebSocket.instances.length).toBe(2);
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
+  });
+
+  it("pending refresh と 401 が競合しても session expiry は一度だけ", async () => {
+    const handlers = makeHandlers();
+    const first = deferred<{ kind: "ok"; ticket: string }>();
+    const refreshTicket = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ kind: "unauthorized" as const });
+    const onTicketRefreshUnauthorized = vi.fn();
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      onTicketRefreshUnauthorized,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+    conn.reconnect(); // abort first mint, then latest mint reports 401
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(refreshTicket).toHaveBeenCalledTimes(2);
+    expect(onTicketRefreshUnauthorized).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(1);
+
+    first.resolve({ kind: "ok", ticket: "late-ticket" });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(onTicketRefreshUnauthorized).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(1);
+  });
+
+  it("retry timer 待機中の terminal disconnect は ticket fetch を再開しない", async () => {
+    const handlers = makeHandlers();
+    const refreshTicket = vi.fn().mockRejectedValue(new Error("offline"));
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(1);
+  });
+
+  it("Phoenix heartbeat 自動再接続での ticket 401 も terminal にする", async () => {
+    const handlers = makeHandlers();
+    const refreshTicket = vi
+      .fn()
+      .mockResolvedValue({ kind: "unauthorized" as const });
+    const onTicketRefreshUnauthorized = vi.fn();
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      onTicketRefreshUnauthorized,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+    expect(onTicketRefreshUnauthorized).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
   });
 
   it("(A) reconnect() 後、open-then-stuck transport の heartbeatTimeout でも 3 本目 transport が生えない", async () => {
