@@ -30,10 +30,49 @@ export interface QuestionResponseMessage {
   cancelled?: boolean;
 }
 
+/** context usage as it reaches a peer (phase-27, #160). Same three numbers
+ *  the dashboard's ctx meter reads, so the two never disagree. The server
+ *  only projects this when the reporting wrapper advertised
+ *  `supports_context_usage: true`; an engine without the capability omits the
+ *  field entirely rather than sending a null or an estimate (ADR-0040). */
+export interface DirectoryContext {
+  used_tokens: number;
+  max_tokens: number;
+  used_percentage: number;
+}
+
+/** One rate-limit window as it reaches a peer (phase-27, #160). Every field
+ *  is optional because the engine reports what it knows; a window with none
+ *  of them is dropped rather than sent empty. The snapshot is from the peer's
+ *  LAST turn and is not refreshed while it idles — read `resets_at` against
+ *  the current time and stop trusting `utilization` / `status` once it has
+ *  passed. */
+export interface DirectoryRateLimitWindow {
+  status?: string;
+  utilization?: number;
+  resets_at?: number;
+}
+
+/** Active inter-agent conversation state of a peer (phase-27, #160). Always
+ *  present on a current server (`{active: false, peers: []}` when idle), so
+ *  an absent field means the server predates the feature — not "no
+ *  conversation". `conversation_id` is deliberately not disclosed: the agreed
+ *  disclosure scope is presence plus counterpart ids. */
+export interface DirectoryConversation {
+  active: boolean;
+  peers: string[];
+}
+
 /** Single entry returned from `directory_request` (protocol-inter-agent
  * companion tool). Runtime traits are optional because an old/not-yet-init
  * wrapper may not have stamped them. Operator-grade cwd / permission /
- * session / context / capabilities / source fields remain excluded. */
+ * session / capabilities / source fields remain excluded.
+ *
+ * phase-27 (#160) adds the situational fields below so an agent can pick a
+ * delegate on its own. Every one of them is omitted rather than defaulted
+ * when the server cannot vouch for it — **read an absent field as "unknown",
+ * never as zero or "fine"**. `turns` in particular is omitted (not `0`) when
+ * the server never observed this session's start. */
 export interface DirectoryEntry {
   agent_id: string;
   persona: { id?: string; name?: string; sprite_set?: string };
@@ -41,6 +80,19 @@ export interface DirectoryEntry {
   engine?: string;
   model?: string;
   effort?: string;
+  context?: DirectoryContext;
+  /** ISO8601 UTC. The time the SERVER observed the session start, not a
+   *  wrapper-measured value. */
+  session_started_at?: string;
+  /** Reply round-trips counted in the current session. */
+  turns?: number;
+  /** ISO8601 UTC of the last envelope the server accepted from this peer.
+   *  Grades how stale `context` / `rate_limits` are. */
+  last_activity_at?: string;
+  conversation?: DirectoryConversation;
+  /** Keyed by window: `five_hour` / `seven_day` plus any engine-specific
+   *  ones. */
+  rate_limits?: Record<string, DirectoryRateLimitWindow>;
 }
 
 /** attach_open payload (protocol.md / file-upload spec, server -> wrapper
@@ -121,10 +173,128 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** Bounds mirrored from the server's own projection (phase-27, #160). The two
+ *  sides MUST agree: a looser client would re-open the pass-through the
+ *  server closed, since the model reads whatever survives here. */
+const MAX_RATE_WINDOWS = 8;
+const MAX_WINDOW_KEY_BYTES = 32;
+const MAX_STATUS_BYTES = 64;
+const WINDOW_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
+/** Windows every engine is expected to report; kept ahead of engine-specific
+ *  ones when the count has to be trimmed, so the two that drive delegation
+ *  decisions never get pushed out. */
+const CANONICAL_WINDOWS = ["five_hour", "seven_day"];
+
+const utf8Bytes = new TextEncoder();
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+/** Non-negative counters and Unix-second timestamps alike: a negative or
+ *  fractional value is not one, and a value past the safe-integer range has
+ *  already lost precision. */
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function nonEmptyText(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/** Copies only the three canonical numbers. An unknown nested key is not
+ *  carried over, and a malformed one drops the whole field rather than
+ *  handing the model a partial reading it would compare against a full one. */
+function projectContext(value: unknown): DirectoryContext | undefined {
+  if (!isObject(value)) return undefined;
+  const used_tokens = finiteNumber(value.used_tokens);
+  const max_tokens = finiteNumber(value.max_tokens);
+  const used_percentage = finiteNumber(value.used_percentage);
+  if (
+    used_tokens === undefined ||
+    max_tokens === undefined ||
+    used_percentage === undefined
+  ) {
+    return undefined;
+  }
+  return { used_tokens, max_tokens, used_percentage };
+}
+
+/** `utilization` is deliberately NOT range-checked to 0..1 here: #164 is
+ *  still reconciling what the engines actually report, and clamping now
+ *  would hide the very values that investigation needs. */
+function projectRateLimitWindow(
+  key: string,
+  value: unknown,
+): DirectoryRateLimitWindow | undefined {
+  if (!isObject(value)) return undefined;
+  if (utf8Bytes.encode(key).length > MAX_WINDOW_KEY_BYTES) return undefined;
+  if (!WINDOW_KEY_PATTERN.test(key)) return undefined;
+  const window: DirectoryRateLimitWindow = {};
+  const status = value.status;
+  if (
+    typeof status === "string" &&
+    utf8Bytes.encode(status).length <= MAX_STATUS_BYTES
+  ) {
+    window.status = status;
+  }
+  const utilization = finiteNumber(value.utilization);
+  if (utilization !== undefined) window.utilization = utilization;
+  const resetsAt = nonNegativeInteger(value.resets_at);
+  if (resetsAt !== undefined) window.resets_at = resetsAt;
+  // Nothing survived validation — an empty window name tells a peer nothing.
+  return Object.keys(window).length === 0 ? undefined : window;
+}
+
+function windowSortKey(key: string): [number, string] {
+  const canonical = CANONICAL_WINDOWS.indexOf(key);
+  return canonical === -1 ? [CANONICAL_WINDOWS.length, key] : [canonical, ""];
+}
+
+function projectRateLimits(
+  value: unknown,
+): Record<string, DirectoryRateLimitWindow> | undefined {
+  if (!isObject(value)) return undefined;
+  const valid: [string, DirectoryRateLimitWindow][] = [];
+  for (const [key, raw] of Object.entries(value)) {
+    const window = projectRateLimitWindow(key, raw);
+    if (window !== undefined) valid.push([key, window]);
+  }
+  // Deterministic trim: canonical windows first, then the rest in lexical
+  // order, so which windows survive never depends on object key order.
+  valid.sort(([a], [b]) => {
+    const [rankA, tieA] = windowSortKey(a);
+    const [rankB, tieB] = windowSortKey(b);
+    return rankA - rankB || tieA.localeCompare(tieB);
+  });
+  const kept = valid.slice(0, MAX_RATE_WINDOWS);
+  return kept.length === 0 ? undefined : Object.fromEntries(kept);
+}
+
+function projectConversation(
+  value: unknown,
+): DirectoryConversation | undefined {
+  if (!isObject(value)) return undefined;
+  if (typeof value.active !== "boolean") return undefined;
+  if (!Array.isArray(value.peers)) return undefined;
+  if (!value.peers.every((peer): peer is string => typeof peer === "string")) {
+    return undefined;
+  }
+  return { active: value.active, peers: value.peers };
+}
+
 /** Structural narrow for a single `directory_request` entry. Asserts every
  *  field DirectoryEntry declares non-optional, so a server response that
  *  drops `persona` or `state` cannot smuggle a malformed entry through the
- *  type system. */
+ *  type system.
+ *
+ *  The optional fields are projected one at a time: a malformed one is
+ *  dropped on its own and its valid siblings still reach the model, matching
+ *  the "omit what we cannot vouch for" rule the whole feature is built on. */
 function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   if (!isObject(value)) return null;
   const v = value as Record<string, unknown>;
@@ -144,6 +314,20 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
     const field = v[key];
     if (typeof field === "string" && field !== "") entry[key] = field;
   }
+  const context = projectContext(v.context);
+  if (context !== undefined) entry.context = context;
+  const startedAt = nonEmptyText(v.session_started_at);
+  if (startedAt !== undefined) entry.session_started_at = startedAt;
+  // A non-negative integer; absent means "the server never observed this
+  // session start", which is NOT the same as zero round-trips.
+  const turns = nonNegativeInteger(v.turns);
+  if (turns !== undefined) entry.turns = turns;
+  const lastActivityAt = nonEmptyText(v.last_activity_at);
+  if (lastActivityAt !== undefined) entry.last_activity_at = lastActivityAt;
+  const conversation = projectConversation(v.conversation);
+  if (conversation !== undefined) entry.conversation = conversation;
+  const rateLimits = projectRateLimits(v.rate_limits);
+  if (rateLimits !== undefined) entry.rate_limits = rateLimits;
   return entry;
 }
 
