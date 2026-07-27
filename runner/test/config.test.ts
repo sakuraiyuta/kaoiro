@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ConfigError,
+  PHOENIX_HEARTBEAT_LOGS_ENV,
   SERVER_URL_ENV,
   applyServerUrlOverride,
   buildHeartbeat,
   buildRegister,
+  isPhoenixHeartbeatLoggingEnabled,
   parseRunnerConfig,
   wrapperUrlFrom,
 } from "../src/config.js";
@@ -394,5 +396,23 @@ describe("applyServerUrlOverride (issue #140)", () => {
     const overridden = applyServerUrlOverride(config);
     expect(overridden).not.toBe(config);
     expect(config.server_url).toBe(valid.server_url);
+  });
+});
+
+describe("isPhoenixHeartbeatLoggingEnabled", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("未設定では heartbeat wire log を抑止する", () => {
+    vi.stubEnv(PHOENIX_HEARTBEAT_LOGS_ENV, "");
+    expect(isPhoenixHeartbeatLoggingEnabled()).toBe(false);
+  });
+
+  it("値 1 のときだけ全量 wire log を有効化する", () => {
+    vi.stubEnv(PHOENIX_HEARTBEAT_LOGS_ENV, "1");
+    expect(isPhoenixHeartbeatLoggingEnabled()).toBe(true);
+    vi.stubEnv(PHOENIX_HEARTBEAT_LOGS_ENV, "true");
+    expect(isPhoenixHeartbeatLoggingEnabled()).toBe(false);
   });
 });

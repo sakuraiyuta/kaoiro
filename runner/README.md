@@ -33,6 +33,11 @@ node dist/cli.js [configPath]   # configPath 既定 = runner.config.json
 `runner.config.json` の `server_url` を書き換えても実際の接続先は変わらない
 (host_id 等の他フィールド変更によるホットリロード自体は通常どおり効く)。
 
+runner の Phoenix wire log は、定期 heartbeat の push と対応する reply を既定で
+省略する。他の transport / reconnect / error / 制御メッセージは従来どおり出力される。
+接続レベルの調査で従来の全量出力が必要な場合だけ、`runner.env` に
+`KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1` を設定する。`1` 以外・未設定は省略のまま。
+
 ## 設定ウィザード
 
 `runner.config.json` と `runner.env` を対話生成する(issue #144、

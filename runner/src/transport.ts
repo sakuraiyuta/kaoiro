@@ -14,7 +14,10 @@ import type {
   SessionResetResult,
   SpawnResult,
 } from "@kaoiro/protocol";
-import { buildHeartbeat } from "./config.js";
+import {
+  buildHeartbeat,
+  isPhoenixHeartbeatLoggingEnabled,
+} from "./config.js";
 
 export interface RunnerLinkOptions {
   /** Per-host runner auth token (ADR-0023), sent as a connect param. Omitted
@@ -54,6 +57,118 @@ interface ChannelCallbacks {
   onSwitchSession: ChannelCallback | undefined;
   onResetSession: ChannelCallback | undefined;
   onRefreshEngineCatalog: ChannelCallback | undefined;
+}
+
+const MAX_TRACKED_HEARTBEAT_REFS = 64;
+
+/** Phoenix's logger receives only a formatted message plus payload, so the
+ * reply's ref has to be recovered from the formatted message. These patterns
+ * deliberately match Phoenix 1.8's `Socket.push` / `onConnMessage` format:
+ *
+ *   push:    "runner:host heartbeat (join_ref, ref)"
+ *   receive: "ok runner:host phx_reply (ref)"
+ */
+function parsePushLog(message: string):
+  | { topic: string; event: string; ref: string }
+  | undefined {
+  const match = message.match(/^([^\s]+)\s+([^\s]+)\s+\([^,]*,\s*([^)]+)\)$/);
+  if (match === null) return undefined;
+  const [, topic, event, ref] = match;
+  if (topic === undefined || event === undefined || ref === undefined) {
+    return undefined;
+  }
+  return { topic, event, ref };
+}
+
+function parseReplyLog(message: string):
+  | { topic: string; ref: string }
+  | undefined {
+  // `payload.status` is optional, hence match from the stable tail rather
+  // than assuming an initial "ok" / "error" word.
+  const match = message.match(/\s([^\s]+)\s+phx_reply\s+\(([^)]+)\)$/);
+  if (match === null) return undefined;
+  const [, topic, ref] = match;
+  if (topic === undefined || ref === undefined) return undefined;
+  return { topic, ref };
+}
+
+/** Suppresses only the runner channel's periodic heartbeat and the matching
+ * reply. `phx_reply` alone is intentionally never suppressed: a ref recorded
+ * from an actual heartbeat push is required, so command acknowledgements on
+ * the same runner topic remain visible. */
+export class PhoenixHeartbeatLogFilter {
+  readonly #channelTopic: string;
+  readonly #includeHeartbeats: boolean;
+  readonly #heartbeatRefs = new Set<string>();
+
+  constructor(channelTopic: string, includeHeartbeats: boolean) {
+    this.#channelTopic = channelTopic;
+    this.#includeHeartbeats = includeHeartbeats;
+  }
+
+  shouldWrite(kind: string, message: string): boolean {
+    if (this.#includeHeartbeats) return true;
+
+    if (kind === "push") {
+      const push = parsePushLog(message);
+      if (
+        push !== undefined &&
+        push.event === "heartbeat" &&
+        (push.topic === "phoenix" || push.topic === this.#channelTopic)
+      ) {
+        // Both Socket and Channel heartbeat pushes have a ref. Be defensive
+        // about malformed logger input: without a usable ref the push itself
+        // is still noise, but no later reply is suppressed blindly.
+        if (push.ref !== "null" && push.ref !== "undefined") {
+          if (this.#heartbeatRefs.size >= MAX_TRACKED_HEARTBEAT_REFS) {
+            const oldest = this.#heartbeatRefs.values().next().value;
+            if (oldest !== undefined) this.#heartbeatRefs.delete(oldest);
+          }
+          this.#heartbeatRefs.add(push.ref);
+        }
+        return false;
+      }
+      return true;
+    }
+
+    if (kind === "receive") {
+      const reply = parseReplyLog(message);
+      if (
+        reply !== undefined &&
+        (reply.topic === "phoenix" || reply.topic === this.#channelTopic) &&
+        this.#heartbeatRefs.delete(reply.ref)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+}
+
+export interface PhoenixWireLoggerOptions {
+  /** Retain heartbeat push/reply lines. Default false for an operationally
+   *  useful runner.log; KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1 enables it. */
+  includeHeartbeats: boolean;
+  /** Injectable sink for focused unit tests; production writes stderr. */
+  write?: (line: string) => void;
+}
+
+/** Builds the Phoenix Socket logger without changing the established token
+ * redaction. The filter owns ref correlation for this one Socket instance. */
+export function createPhoenixWireLogger(
+  channelTopic: string,
+  options: PhoenixWireLoggerOptions,
+): (kind: string, message: string, data: unknown) => void {
+  const filter = new PhoenixHeartbeatLogFilter(
+    channelTopic,
+    options.includeHeartbeats,
+  );
+  const write = options.write ?? ((line: string) => process.stderr.write(line));
+  return (kind, message, data) => {
+    if (!filter.shouldWrite(kind, message)) return;
+    const raw = `runner: phoenix ${kind}: ${message} ${JSON.stringify(data)}\n`;
+    write(raw.replace(/(token=)[^&\s"]+/gi, "$1<REDACTED>"));
+  };
 }
 
 export class RunnerLink {
@@ -108,24 +223,25 @@ export class RunnerLink {
     // (onError/onClose) fire asynchronously — reading the live field would
     // mislabel the OLD socket's closure with the NEW host id.
     const wiredHostId = hostId;
+    const channelTopic = `runner:${hostId}`;
     const socket = new Socket(serverUrl, {
       transport: WebSocket,
       params: this.#token === undefined ? {} : { token: this.#token },
       // Surface Phoenix transport / channel state to runner.log so silent
       // reconnect failures (auth reject, vsn mismatch, sleep/wake) stop
-      // being invisible. Noise budget = ~2 lines / 30s (heartbeat push +
-      // reply) during steady state — acceptable for a control-plane log.
+      // being invisible. The periodic heartbeat push/reply pair is omitted
+      // by default; KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1 restores full wire
+      // output for protocol debugging.
       // Phoenix's "transport" kind embeds endPointURL() which appends the
       // `params` object as a query string, so a raw pass-through would leak
       // KAOIRO_RUNNER_TOKEN into runner.log on every connect/reconnect —
       // redact any `token=<value>` before writing (security.md).
-      logger: (kind, msg, data) => {
-        const raw = `runner: phoenix ${kind}: ${msg} ${JSON.stringify(data)}\n`;
-        process.stderr.write(raw.replace(/(token=)[^&\s"]+/gi, "$1<REDACTED>"));
-      },
+      logger: createPhoenixWireLogger(channelTopic, {
+        includeHeartbeats: isPhoenixHeartbeatLoggingEnabled(),
+      }),
     });
     socket.connect();
-    const channel = socket.channel(`runner:${hostId}`);
+    const channel = socket.channel(channelTopic);
 
     // Silent-disconnect guard (ADR-0023 observability gap): the phoenix
     // client auto-reconnects, but persistent failures (invalid token,

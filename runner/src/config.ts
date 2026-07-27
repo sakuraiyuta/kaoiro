@@ -379,6 +379,21 @@ export function wrapperUrlFrom(serverUrl: string): string {
 /** env override name for `server_url` (issue #140). */
 export const SERVER_URL_ENV = "KAOIRO_RUNNER_SERVER_URL";
 
+/** Set to `1` to include Phoenix's periodic heartbeat wire logs. They are
+ *  suppressed by default because the steady-state push/reply pair obscures
+ *  operational messages in runner.log. */
+export const PHOENIX_HEARTBEAT_LOGS_ENV =
+  "KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS";
+
+/** Whether the runner should retain the normally-suppressed periodic Phoenix
+ *  heartbeat push/reply wire logs. Kept as an explicit `1` opt-in so a typo
+ *  cannot unexpectedly make a production control-plane log noisy. */
+export function isPhoenixHeartbeatLoggingEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env[PHOENIX_HEARTBEAT_LOGS_ENV] === "1";
+}
+
 /**
  * Applies the `KAOIRO_RUNNER_SERVER_URL` env override to a loaded config's
  * `server_url` (issue #140): distribution/service deployments (systemd/
