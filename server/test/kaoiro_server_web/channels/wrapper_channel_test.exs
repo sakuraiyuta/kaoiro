@@ -1583,6 +1583,43 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(entry, "rate_limits")
     end
 
+    test "unobserved かつ suppressed な same-sid SessionStarts fallback は session field を復活させない" do
+      peer_id = "test.dir-suppressed-fallback-peer"
+      sid = "same-sid"
+      peer_socket = join_wrapper(peer_id)
+      on_exit(fn -> KaoiroServer.SessionStarts.delete(peer_id) end)
+
+      # Server restart 後を模して、AgentStates だけに same-sid の最新
+      # envelope があり、Activity は未観測のまま SessionStarts を fallback
+      # 候補として持つ状態を組む。
+      assert :ok =
+               AgentStates.put(
+                 Map.put(envelope(peer_id, "idle"), "session_id", sid),
+                 owner: peer_socket.channel_pid
+               )
+
+      assert {:ok, {_order, _display, ^sid}} =
+               KaoiroServer.SessionStarts.advance_transition(peer_id, sid)
+
+      assert :rebound =
+               AgentActivity.activate_or_rebind(peer_id, peer_socket.channel_pid, "stale",
+                 reset_result: :mismatch
+               )
+
+      assert %{session_start_observed: false, projection_suppressed: true} =
+               AgentActivity.get(peer_id)
+
+      self_socket = join_wrapper("test.dir-suppressed-fallback-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-suppressed-fallback-self", "idle"))
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      refute Map.has_key?(entry, "session_started_at")
+      refute Map.has_key?(entry, "turns")
+    end
+
     test "conversation は常時同梱し peer agent_id だけを返す" do
       peer_id = "test.dir-conversation-peer"
       peer_socket = join_wrapper(peer_id)
