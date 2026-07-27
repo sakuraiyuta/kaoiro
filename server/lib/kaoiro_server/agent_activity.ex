@@ -246,7 +246,8 @@ defmodule KaoiroServer.AgentActivity do
       nil ->
         # A reconnect before its first accepted envelope has nothing to
         # project yet, but binding the owner makes L6 deterministic.
-        put_entry(state, agent_id, base_entry(owner, nil, false, nil))
+        entry = %{base_entry(owner, nil, false, nil) | projection_suppressed: suppress?}
+        put_entry(state, agent_id, entry)
 
       entry ->
         put_entry(state, agent_id, %{

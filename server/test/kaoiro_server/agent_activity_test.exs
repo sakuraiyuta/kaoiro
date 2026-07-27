@@ -72,6 +72,50 @@ defmodule KaoiroServer.AgentActivityTest do
     assert %{owner: ^new_owner, turns: 0, session_id: nil} = AgentActivity.get("a", store)
   end
 
+  test "begin から activate まで旧 current の result は継続計測される", %{store: store} do
+    AgentActivity.record_envelope(env("a", "result", "old"), self(), ts(1), server: store)
+    :sys.get_state(store)
+    assert :ok = AgentActivity.begin_transition("a", "p1", :restore, ts(2), server: store)
+
+    AgentActivity.record_envelope(env("a", "result", "old"), self(), ts(3), server: store)
+    :sys.get_state(store)
+    assert %{turns: 2, session_id: "old"} = AgentActivity.get("a", store)
+  end
+
+  test "restore failure keeps old current entry while spawn failure removes it", %{store: store} do
+    AgentActivity.record_envelope(env("a", "result", "old"), self(), ts(1), server: store)
+    :sys.get_state(store)
+    :ok = AgentActivity.begin_transition("a", "restore", :restore, ts(2), server: store)
+    assert :aborted = AgentActivity.resolve_transition("a", "restore", false, server: store)
+    assert %{turns: 1, session_id: "old"} = AgentActivity.get("a", store)
+
+    :ok = AgentActivity.begin_transition("fresh", "spawn", :spawn, ts(3), server: store)
+    assert :aborted = AgentActivity.resolve_transition("fresh", "spawn", false, server: store)
+    assert AgentActivity.get("fresh", store) == nil
+  end
+
+  test "superseded p1 join cannot activate p2 pending", %{store: store} do
+    :ok = AgentActivity.begin_transition("a", "p1", :restore, ts(1), server: store)
+    :ok = AgentActivity.begin_transition("a", "p2", :restore, ts(2), server: store)
+    assert :rebound = AgentActivity.activate_or_rebind("a", self(), "p1", server: store)
+    assert %{projection_suppressed: true} = AgentActivity.get("a", store)
+    assert :activated = AgentActivity.activate_or_rebind("a", self(), "p2", server: store)
+
+    assert %{session_started_at: started, projection_suppressed: false} =
+             AgentActivity.get("a", store)
+
+    assert started == ts(2)
+  end
+
+  test "error result も加算し log/state/IA は加算しない", %{store: store} do
+    AgentActivity.record_envelope(env("a", "state_change"), self(), ts(1), server: store)
+    AgentActivity.record_envelope(env("a", "log"), self(), ts(2), server: store)
+    AgentActivity.record_envelope(env("a", "inter_agent_message"), self(), ts(3), server: store)
+    AgentActivity.record_envelope(env("a", "result"), self(), ts(4), server: store)
+    :sys.get_state(store)
+    assert %{turns: 1} = AgentActivity.get("a", store)
+  end
+
   test "pending CAS, failure behavior, and ttl preserve newer transactions", %{store: store} do
     assert :ok = AgentActivity.begin_transition("a", "p1", :spawn, ts(1), server: store)
     assert :ok = AgentActivity.begin_transition("a", "p2", :restore, ts(2), server: store)
