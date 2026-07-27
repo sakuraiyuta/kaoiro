@@ -28,6 +28,18 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert tokens > 0
   end
 
+  test "peer_index は会話ごとの副作用なし batch snapshot を重複排除してソートする" do
+    name = start_tracker(:cs_peer_index)
+    assert :ok = ConversationStates.record_message("c1", "b", "a", "x", false, name)
+    assert :ok = ConversationStates.record_message("c2", "a", "c", "x", false, name)
+
+    assert %{"a" => ["b", "c"], "b" => ["a"], "c" => ["a"]} =
+             ConversationStates.peer_index(name)
+
+    # Read-only: the ordinary entry is still present and has the same turns.
+    assert %{turns: 1} = ConversationStates.get("c1", name)
+  end
+
   test "max_turns を超えると :exceeded :max_turns でエントリを削除する" do
     name = start_tracker(:cs_turns, max_turns: 2)
     assert :ok = ConversationStates.record_message("c", "a", "b", "x", false, name)

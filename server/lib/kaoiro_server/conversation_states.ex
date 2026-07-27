@@ -61,6 +61,16 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @doc """
+  Returns one read-only `agent_id => sorted peer agent_ids` index for every
+  active conversation. Agents without a conversation are absent. Directory
+  projection deliberately uses this single batch call rather than one call
+  per peer, because `directory_request` is auto-allow.
+  """
+  def peer_index(server \\ __MODULE__) do
+    GenServer.call(server, :peer_index)
+  end
+
+  @doc """
   Claims at most `limit` still-open conversations in which `agent_id` takes
   part and whose peers have not been told yet that this agent is
   unreachable, marks them as notified, and returns
@@ -154,6 +164,18 @@ defmodule KaoiroServer.ConversationStates do
 
   def handle_call({:get, cid}, _from, state) do
     {:reply, Map.get(state.conversations, cid), state}
+  end
+
+  def handle_call(:peer_index, _from, state) do
+    index =
+      Enum.reduce(state.conversations, %{}, fn {_cid, entry}, acc ->
+        for agent_id <- entry.agents, peer_id <- entry.agents, peer_id != agent_id, reduce: acc do
+          acc -> Map.update(acc, agent_id, MapSet.new([peer_id]), &MapSet.put(&1, peer_id))
+        end
+      end)
+      |> Map.new(fn {agent_id, peers} -> {agent_id, peers |> MapSet.to_list() |> Enum.sort()} end)
+
+    {:reply, index, state}
   end
 
   def handle_call({:claim_unreachable, agent_id, limit}, _from, state) do
