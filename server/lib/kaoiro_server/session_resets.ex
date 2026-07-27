@@ -349,107 +349,12 @@ defmodule KaoiroServer.SessionResets do
 
       %{phase: :awaiting_connect, request_id: request_id} = lock
       when transition_id == request_id ->
-        _ = Process.cancel_timer(lock.timer_ref)
-
-        # The lock's to_session_id came from the runner (Codex will be nil;
-        # Claude may already have it). If the joining wrapper reported a
-        # non-nil session_id itself (only Claude does this via init), prefer
-        # that; it is the fresher source and matches what the wrapper will
-        # broadcast in its first envelope.
-        effective_to_sid =
-          case joined_session_id do
-            binary when is_binary(binary) -> binary
-            _ -> lock.to_session_id
-          end
-
-        # A /new or /clear reaching confirm_connection records the current
-        # session start. It deliberately does NOT alter IA visibility: only
-        # operator clear_history later adopts this record (#109). Doing it
-        # here — not in the wrapper
-        # `handle_info(:after_join)` — keeps the "boundary moves only
-        # on real transitions" invariant: a normal reconnect / dogfood
-        # restart / initial spawn all reach after_join but skip this
-        # branch (their pending lock is nil), so the boundary stays put
-        # and pre-restart / initial IA remain visible.
-        #
-        # ふじ 検収 2 fix-round M3 (2026-07-23): `advance_transition/3`
-        # is transition-idempotent by `sid_opt` — a crash between this
-        # call and SessionPointers.detach_session (below) followed by
-        # a same-target reset retry no longer double-advances. Codex
-        # lazy 采番 passes `nil` here; `wrapper_channel` calls
-        # `SessionStarts.adopt_sid/2` on the first envelope that
-        # carries a real session_id.
-        {:ok, {order, display, _sid}} =
-          SessionStarts.advance_transition(
-            agent_id,
-            effective_to_sid,
-            lock.previous_session_id,
-            SessionStarts
-          )
-
-        marker = build_boundary_envelope(agent_id, lock, effective_to_sid)
-
-        # ADR-0036 F3: `/new` は表示 projection を保持しつつ marker を
-        # append し、`/clear` は当該 agent の pane 表示を marker 1 行だけに
-        # 絞る。IA の相手 pane は #109 per-pane ClearWatermarks で hide
-        # するので、durable ledger (InterAgentHistory DETS) は触らない。
-        # ClearWatermarks.record は fsync-gated なので broadcast より先に
-        # 通し、crash 時にも watermark が durable であることを保証する
-        # (M7-a と同じポリシー)。
-        clear_watermark =
-          case lock.mode do
-            "clear" ->
-              :ok = ClearWatermarks.record(agent_id, order, display)
-              _ = AgentStates.clear_history_with_boundary(agent_id, marker)
-              display
-
-            _ ->
-              _ = AgentStates.append_boundary(agent_id, marker)
-              nil
-          end
-
-        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", marker)
-
-        detach_session_safely(agent_id)
-
-        broadcast_completed(agent_id, lock, effective_to_sid, clear_watermark)
+        commit_connection(agent_id, lock, joined_session_id)
 
         {:reply, :matched, %{s | pending: Map.delete(s.pending, agent_id)}}
 
       %{phase: :awaiting_connect} = lock when transition_id == :absent ->
-        _ = Process.cancel_timer(lock.timer_ref)
-
-        effective_to_sid =
-          case joined_session_id do
-            binary when is_binary(binary) -> binary
-            _ -> lock.to_session_id
-          end
-
-        {:ok, {order, display, _sid}} =
-          SessionStarts.advance_transition(
-            agent_id,
-            effective_to_sid,
-            lock.previous_session_id,
-            SessionStarts
-          )
-
-        marker = build_boundary_envelope(agent_id, lock, effective_to_sid)
-
-        clear_watermark =
-          case lock.mode do
-            "clear" ->
-              :ok = ClearWatermarks.record(agent_id, order, display)
-              _ = AgentStates.clear_history_with_boundary(agent_id, marker)
-              display
-
-            _ ->
-              _ = AgentStates.append_boundary(agent_id, marker)
-              nil
-          end
-
-        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", marker)
-        detach_session_safely(agent_id)
-        broadcast_completed(agent_id, lock, effective_to_sid, clear_watermark)
+        commit_connection(agent_id, lock, joined_session_id)
 
         {:reply, :legacy_absent, %{s | pending: Map.delete(s.pending, agent_id)}}
 
@@ -460,12 +365,7 @@ defmodule KaoiroServer.SessionResets do
         {:reply, :mismatch, s}
 
       _ ->
-        # No pending, or still in :spawning (the runner hasn't reported
-        # spawn success yet — so this join is either a normal restart or
-        # the fresh wrapper joining before we heard from the runner; the
-        # latter is impossible under Phoenix's ordering guarantees because
-        # the runner spawn precedes the wrapper's socket open, but staying
-        # a no-op here is the fail-safe).
+        # No pending: normal restart with no transaction to confirm.
         {:reply, :noop, s}
     end
   end
@@ -525,12 +425,20 @@ defmodule KaoiroServer.SessionResets do
   end
 
   defp complete_early_join(s, agent_id, lock, joined_session_id) do
+    lock = %{lock | to_session_id: joined_session_id}
+    commit_connection(agent_id, lock, lock.early_join_session_id)
+    %{s | pending: Map.delete(s.pending, agent_id)}
+  end
+
+  # Both arrival orders commit through this helper. `:matched` and
+  # `:legacy_absent` are exposed only after all commit side effects finish.
+  defp commit_connection(agent_id, lock, joined_session_id) do
     _ = Process.cancel_timer(lock.timer_ref)
 
     effective_to_sid =
-      case lock.early_join_session_id do
+      case joined_session_id do
         binary when is_binary(binary) -> binary
-        _ -> joined_session_id
+        _ -> lock.to_session_id
       end
 
     {:ok, {order, display, _sid}} =
@@ -558,7 +466,6 @@ defmodule KaoiroServer.SessionResets do
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", marker)
     detach_session_safely(agent_id)
     broadcast_completed(agent_id, lock, effective_to_sid, clear_watermark)
-    %{s | pending: Map.delete(s.pending, agent_id)}
   end
 
   defp reply_early(%{early_join_from: from}, outcome) when is_tuple(from),
