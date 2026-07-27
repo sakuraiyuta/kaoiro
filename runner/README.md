@@ -37,6 +37,10 @@ runner の Phoenix wire log は、定期 heartbeat の push と対応する repl
 省略する。他の transport / reconnect / error / 制御メッセージは従来どおり出力される。
 接続レベルの調査で従来の全量出力が必要な場合だけ、`runner.env` に
 `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1` を設定する。`1` 以外・未設定は省略のまま。
+この値は runner 起動時に `process.env` から読むため、変更後は runner サービスを
+再起動する。dogfood の一時調査では
+`KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1 scripts/dogfood.sh` として起動すれば、
+`tmp/dogfood-logs/runner.log` にも全量が出る。
 
 ## 設定ウィザード
 

@@ -92,10 +92,12 @@ function parseReplyLog(message: string):
   return { topic, ref };
 }
 
-/** Suppresses only the runner channel's periodic heartbeat and the matching
- * reply. `phx_reply` alone is intentionally never suppressed: a ref recorded
- * from an actual heartbeat push is required, so command acknowledgements on
- * the same runner topic remain visible. */
+/** Suppresses only the runner channel's periodic heartbeat and its matching
+ * successful reply. `phx_reply` alone is intentionally never suppressed: a
+ * ref recorded from an actual heartbeat push is required, so command
+ * acknowledgements on the same runner topic remain visible. Error replies are
+ * operationally significant (for example, an unmatched topic) and stay in
+ * runner.log. */
 export class PhoenixHeartbeatLogFilter {
   readonly #channelTopic: string;
   readonly #includeHeartbeats: boolean;
@@ -106,7 +108,7 @@ export class PhoenixHeartbeatLogFilter {
     this.#includeHeartbeats = includeHeartbeats;
   }
 
-  shouldWrite(kind: string, message: string): boolean {
+  shouldWrite(kind: string, message: string, data: unknown): boolean {
     if (this.#includeHeartbeats) return true;
 
     if (kind === "push") {
@@ -133,12 +135,19 @@ export class PhoenixHeartbeatLogFilter {
 
     if (kind === "receive") {
       const reply = parseReplyLog(message);
+      const status =
+        typeof data === "object" && data !== null
+          ? (data as { status?: unknown }).status
+          : undefined;
       if (
         reply !== undefined &&
-        (reply.topic === "phoenix" || reply.topic === this.#channelTopic) &&
-        this.#heartbeatRefs.delete(reply.ref)
+        (reply.topic === "phoenix" || reply.topic === this.#channelTopic)
       ) {
-        return false;
+        // Always retire the observed ref; only a successful heartbeat reply
+        // is noise. An error reply is the most useful sign that the channel
+        // disappeared while the client still believed it joined.
+        const isHeartbeatReply = this.#heartbeatRefs.delete(reply.ref);
+        if (isHeartbeatReply && status === "ok") return false;
       }
     }
     return true;
@@ -165,7 +174,7 @@ export function createPhoenixWireLogger(
   );
   const write = options.write ?? ((line: string) => process.stderr.write(line));
   return (kind, message, data) => {
-    if (!filter.shouldWrite(kind, message)) return;
+    if (!filter.shouldWrite(kind, message, data)) return;
     const raw = `runner: phoenix ${kind}: ${message} ${JSON.stringify(data)}\n`;
     write(raw.replace(/(token=)[^&\s"]+/gi, "$1<REDACTED>"));
   };

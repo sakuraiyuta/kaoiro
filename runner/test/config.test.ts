@@ -405,7 +405,7 @@ describe("isPhoenixHeartbeatLoggingEnabled", () => {
   });
 
   it("未設定では heartbeat wire log を抑止する", () => {
-    vi.stubEnv(PHOENIX_HEARTBEAT_LOGS_ENV, "");
+    vi.stubEnv(PHOENIX_HEARTBEAT_LOGS_ENV, undefined);
     expect(isPhoenixHeartbeatLoggingEnabled()).toBe(false);
   });
 
