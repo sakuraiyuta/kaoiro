@@ -1,7 +1,7 @@
 ---
 title: Phase 27 — list_agents に状況判断メタデータを追加 (issue #160)
 description: MCP list_agents (directory_request) の peer entry に 6 field (残コンテキスト / セッション開始日時 / turn 数 / 最終活動時刻 / IA 対話状況 / rate_limits) を追加し、agent が委任先選定・割り込み回避・停滞検知を自律判断できるようにする。取得は server が envelope から蓄積した snapshot で完結し、初版は in-memory (session 開始日時のみ SessionStarts DETS を fallback 参照)。
-status: in_progress
+status: implemented
 phase: 27
 depends_on: [8, 21]
 last_updated: 2026-07-28
@@ -592,6 +592,11 @@ current の `session_id` / `session_started_at` / `turns` を保持するため�
 
 #### `session_started_at` の解決順序
 
+0. **`projection_suppressed` が立っていれば、以下を評価せず即 field 省略**
+   (実装 fix、2026-07-28)。suppression は fallback より **前** に効く。
+   後段に置くと、tracker が観測を失った後の same-sid legacy restore で
+   `SessionStarts` 経由の古い開始時刻が再公開されてしまい、抑止の意味が
+   無くなる
 1. `session_start_observed == true` → tracker の値を使う
 2. そうでなく、`SessionStarts.get(agent_id)` の `sid` が当該 agent の
    現 `session_id` と一致する → その `display` を使う (server 再起動を
@@ -989,7 +994,7 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 | 27-A2 | ✅ | `ConversationStates.peer_index/1` (batch) |
 | 27-A3 | ✅ | lifecycle (L0-L3) / ingest / spawn_result cleanup 配線 |
 | 27-A4 | ✅ | `directory_entry/4` 6 field 拡張 + capability gate + projection |
-| 27-A5 | 🟡 | server テスト (AC 全件の消し込みを継続中) |
+| 27-A5 | ✅ | server テスト (AC 全件 + レビュー指摘の regression、mix test 665 pass) |
 | 27-B1 | ✅ | `DirectoryEntry` 型拡張 |
 | 27-B2 | ✅ | `directoryEntryFrom` narrow 拡張 |
 | 27-B3 | ✅ | `LIST_AGENTS_DESCRIPTION` 更新 |
@@ -998,7 +1003,7 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 | 27-C1 | ✅ | ADR-0021 F6 追記 |
 | 27-C2 | ✅ | `protocol-inter-agent.md` 更新 |
 | 27-C3 | ✅ | `protocol.md` の entry shape を 6 field 込みへ更新 (#102 drift は設計時に先行修正済み)、`threat-model.md` に agent 間開示軸を緩和策表 + Constraints へ追記 |
-| 27-C4 | 🟡 | Progress 表・README を実状へ更新。frontmatter の status は 27-A5 と ふじ レビュー完了後に `implemented` へ |
+| 27-C4 | ✅ | Progress 表・README・frontmatter を最終化 (ふじ approve / close 後) |
 
 ## Acceptance Criteria
 

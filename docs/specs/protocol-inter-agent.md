@@ -203,8 +203,8 @@ issue #160 (phase-27) はこれをさらに **「peer の稼働状況を見て�
 | `state` | string | 現在状態 | MUST |
 | `engine` / `model` / `effort` | string | 実行特性(#102) | non-empty string でないとき |
 | `context` | `{used_tokens, max_tokens, used_percentage}` | context 使用量 | 下記 capability gate 不成立、未報告、shape 不正、切断済み |
-| `session_started_at` | ISO8601 (UTC) | **server が観測した**現セッション開始時刻 | server が開始を観測しておらず `SessionStarts` からも復元できないとき |
-| `turns` | 非負整数 | 現セッションの応答往復数 | server が当該セッションの開始を観測していないとき(fallback で開始時刻だけ復元した場合も省略) |
+| `session_started_at` | ISO8601 (UTC) | **server が観測した**現セッション開始時刻 | server が開始を観測しておらず `SessionStarts` からも復元できないとき。**相関できない join を受けた connection では、`SessionStarts` から復元できる場合でも省略する**(下記) |
+| `turns` | 非負整数 | 現セッションの応答往復数 | server が当該セッションの開始を観測していないとき(fallback で開始時刻だけ復元した場合も省略)。上と同じく、相関できない join を受けた connection でも省略 |
 | `last_activity_at` | ISO8601 (UTC) | server が envelope を最後に受理した時刻 | まだ 1 通も受理していないとき |
 | `conversation` | `{active, peers[]}` | active な IA 会話の有無と相手 | **省略しない**(下記) |
 | `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | 最終 turn 時点の利用上限 snapshot | 未報告、全 window が projection で drop、切断済み |
@@ -264,6 +264,23 @@ allow-list を nested 階層まで適用)。
 ごと absent になるので、消費側は **absent(不明)と `active: false`
 (会話なし)を区別できる**。`conversation_id` は開示しない
 (ADR-0021 F6-5)。
+
+##### 相関できない接続では session 系 field を省略する
+
+server は spawn / restore / reset のたびに遷移の相関子を発行し、その遷移
+が生んだ wrapper 接続を join 時に照合する(実装詳細は
+[phase-27](../plans/phase-27-list-agents-metadata.md) D3)。照合できない
+接続 — 相関子を返さない旧 wrapper や、別の遷移に属する join — を受けた
+場合、その接続については `session_started_at` と `turns` を **省略する**。
+
+**`SessionStarts` からの復元より優先して省略する。** 後段に置くと、
+同一 session_id で復帰する legacy な restore のときに、restore 前の
+開始時刻と往復数が再公開されてしまう。「相関を確認できなかった」以上
+その値は現セッションのものと断定できないため、誤った値を見せるより
+省略する(本 spec 全体の「省略 = 不明」規約と同じ立場)。
+
+`last_activity_at` と `conversation` は session に紐づかないので、この
+省略の対象外。
 
 ##### 継続除外
 
