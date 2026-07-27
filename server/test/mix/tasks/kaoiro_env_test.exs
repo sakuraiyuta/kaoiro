@@ -210,6 +210,55 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       refute output =~ "github-secret"
     end
 
+    test "既定の相対パスでは compose mount と OAuth の次の手順を正しく出す" do
+      dir = Path.join(System.tmp_dir!(), "kaoiro_env_test_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      File.cd!(dir, fn ->
+        [
+          "",
+          "kaoiro.example.com",
+          "",
+          "",
+          "n",
+          "n",
+          "n",
+          "",
+          "y",
+          "n",
+          "y",
+          "github-id",
+          "github-secret",
+          "n",
+          "github:ao",
+          "n"
+        ]
+        |> Enum.each(&send(self(), {:mix_shell_input, :prompt, &1}))
+
+        Env.run([])
+
+        assert File.exists?(".env")
+        assert File.exists?("oauth-allowlist.txt")
+
+        assert shell_output() =~ """
+               Next:
+                 1. Review .env (tokens and OAuth secrets are in plain text — keep it out of git).
+                 2. Keep ./oauth-allowlist.txt out of git, then add this read-only mount under
+                    docker-compose.yaml's service `volumes:`:
+                      - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
+                 3. Register each provider's redirect URI in its console; see
+                    docs/specs/deployment.md section 1.6.
+                 4. Start the stack: docker compose up -d --build
+                 5. On each agent host, run the runner wizard
+                    (deploy/kaoiro-runner-setup.sh) and pair its token with the
+                    KAOIRO_RUNNER_TOKENS entry above.
+               Deployment details live in the runbook (issue #142).
+               """
+      end)
+    end
+
     test "既存 allowlist の上書きを断ると内容を保ち、Google の注意を出す" do
       dir = Path.join(System.tmp_dir!(), "kaoiro_env_test_#{System.unique_integer([:positive])}")
       env_path = Path.join(dir, ".env")

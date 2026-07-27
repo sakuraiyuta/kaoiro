@@ -423,7 +423,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
            - #{mount_source}:/etc/kaoiro/oauth-allowlist.txt:ro
       3. Register each provider's redirect URI in its console; see
          docs/specs/deployment.md section 1.6.
-    #{google_plain_http_note}#{start_step}. Start the stack: docker compose up -d --build
+      #{google_plain_http_note}#{start_step}. Start the stack: docker compose up -d --build
       #{runner_step}. On each agent host, run the runner wizard
          (deploy/kaoiro-runner-setup.sh) and pair its token with the
          KAOIRO_RUNNER_TOKENS entry above.
@@ -442,6 +442,8 @@ defmodule Mix.Tasks.Kaoiro.Env do
     Deployment details live in the runbook (issue #142).
     """)
   end
+
+  defp compose_mount_source("./" <> _rest = path), do: path
 
   defp compose_mount_source(path) do
     if Path.type(path) == :absolute, do: path, else: "./#{path}"
