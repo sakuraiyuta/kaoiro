@@ -1528,6 +1528,61 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
              ]
     end
 
+    test "数値は safe-integer 境界までだけ投影し、巨大値は field/window ごと落とす" do
+      max = 9_007_199_254_740_991
+      peer_id = "test.dir-safe-integer-peer"
+      peer_socket = join_wrapper(peer_id)
+
+      ext = %{
+        "session_capabilities" => %{"supports_context_usage" => true},
+        "context" => %{
+          "used_tokens" => max,
+          "max_tokens" => max,
+          "used_percentage" => 1.0
+        },
+        "rate_limits" => %{
+          "at_limit" => %{"utilization" => max, "resets_at" => max},
+          "over_limit" => %{"utilization" => max + 1},
+          "huge" => %{"resets_at" => max * max}
+        }
+      }
+
+      ref = push(peer_socket, "envelope", envelope(peer_id, "idle") |> Map.put("ext", ext))
+      assert_reply ref, :ok
+
+      self_socket = join_wrapper("test.dir-safe-integer-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-safe-integer-self", "idle"))
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      assert entry["context"]["used_tokens"] == max
+      assert entry["rate_limits"] == %{"at_limit" => %{"utilization" => max, "resets_at" => max}}
+    end
+
+    test "rate_limits の top-level array は directory field ごと落とす" do
+      peer_id = "test.dir-rate-array-peer"
+      peer_socket = join_wrapper(peer_id)
+
+      ref =
+        push(
+          peer_socket,
+          "envelope",
+          envelope(peer_id, "idle") |> Map.put("ext", %{"rate_limits" => []})
+        )
+
+      assert_reply ref, :ok
+      self_socket = join_wrapper("test.dir-rate-array-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-rate-array-self", "idle"))
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      refute Map.has_key?(entry, "rate_limits")
+    end
+
     test "conversation は常時同梱し peer agent_id だけを返す" do
       peer_id = "test.dir-conversation-peer"
       peer_socket = join_wrapper(peer_id)
