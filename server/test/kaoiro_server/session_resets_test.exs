@@ -2,6 +2,7 @@ defmodule KaoiroServer.SessionResetsTest do
   use ExUnit.Case, async: false
 
   alias KaoiroServer.InterAgentHistory
+  alias KaoiroServer.AgentActivity
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
 
@@ -243,7 +244,7 @@ defmodule KaoiroServer.SessionResetsTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "session_reset_completed"}
     end
 
-    test "second early join は first waiter を上書きせず mismatch で返す", %{resets: sr} do
+    test "second early join は first waiter を上書きせず duplicate_waiter で返す", %{resets: sr} do
       agent_id = "a.two-waiters-#{System.unique_integer([:positive])}"
 
       assert {:ok, request_id, _} =
@@ -294,6 +295,56 @@ defmodule KaoiroServer.SessionResetsTest do
       :sys.get_state(sr)
       assert :matched = SessionResets.confirm_connection(agent_id, nil, request_id, sr)
       refute SessionResets.pending?(agent_id, sr)
+    end
+
+    test "dead absent waiter の置換も legacy_absent で L0 suppression に入る", %{resets: sr} do
+      agent_id = "a.dead-absent-replacement-#{System.unique_integer([:positive])}"
+
+      activity =
+        start_supervised!(
+          {AgentActivity, name: :"activity_#{System.unique_integer([:positive])}"}
+        )
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
+
+      first = spawn(fn -> SessionResets.confirm_connection(agent_id, nil, sr) end)
+      assert_waiter_stashed(sr, agent_id, first)
+      Process.exit(first, :kill)
+
+      # DOWN delivery before the next call is scheduler-dependent. Replace
+      # the live lock with the same dead waiter shape so this test pins the
+      # actual replacement branch rather than only the already-cleared path.
+      :sys.replace_state(sr, fn state ->
+        update_in(state, [:pending, agent_id], fn lock ->
+          %{
+            lock
+            | early_join_from: {first, make_ref()},
+              early_join_monitor: make_ref(),
+              early_join_outcome: :legacy_absent
+          }
+        end)
+      end)
+
+      replacement = Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, sr) end)
+      assert_waiter_stashed(sr, agent_id, replacement.pid)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      assert :legacy_absent = Task.await(replacement)
+
+      :ok =
+        AgentActivity.begin_transition(agent_id, request_id, :reset, "2026-07-28T00:00:00Z",
+          server: activity
+        )
+
+      assert :rebound =
+               AgentActivity.activate_or_rebind(agent_id, self(), :absent,
+                 reset_result: :legacy_absent,
+                 server: activity
+               )
+
+      assert %{projection_suppressed: true, session_start_observed: false} =
+               AgentActivity.get(agent_id, activity)
     end
 
     test "delete は deferred waiter を :deleted で解除し reset を commit させない", %{resets: sr} do

@@ -459,7 +459,7 @@ join」という発火条件では **抑止に到達できない** (pending が�
 | `:legacy_absent` | commit 済み + L2 pending 作成済み (legacy fallback) | **force suppress** して rebind (activate しない) |
 | `:mismatch` | **no-op** (pending も作られない) | **pending の有無に依存せず force suppress**。かつ **この join では他の Activity pending を activate しない** |
 | `:noop` | reset lock 無し / phase 違い | 通常の L1・L3 CAS、または純粋な reconnect |
-| `:duplicate_waiter` | 同じ reset の先着 live waiter が既に存在するため **no-op**。ただし absent 先着に後着 exact id が来た場合は、先着 absent をこの結果で解除して exact waiter を採用 | **rebind も prompt 送出もせず channel を stop**。後着 connection は owner generation を取得しない |
+| `:duplicate_waiter` | 同じ reset の先着 live waiter が既に存在するため **no-op**。ただし absent 先着に後着 exact id が来た場合は、先着 absent をこの結果で解除して exact waiter を採用 | **rebind も prompt 送出もせず channel を stop**。**この outcome を受けた connection** は owner generation を取得しない |
 
 `:duplicate_waiter` は `:mismatch` と同一視してはならない。`:mismatch` は
 **値が不一致**で別 transition の混入を示すため force suppress + rebind する。

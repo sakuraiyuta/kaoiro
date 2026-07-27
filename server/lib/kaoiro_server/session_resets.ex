@@ -396,7 +396,7 @@ defmodule KaoiroServer.SessionResets do
              discard_early_waiter(lock),
              from,
              joined_session_id,
-             :matched
+             :legacy_absent
            )}
         end
 
