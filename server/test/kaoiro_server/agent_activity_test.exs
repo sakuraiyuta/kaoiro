@@ -212,4 +212,18 @@ defmodule KaoiroServer.AgentActivityTest do
     assert AgentActivity.get("overflow", store) == nil
     assert map_size(AgentActivity.snapshot(store)) == 1000
   end
+
+  test "first rebind cannot bypass the active-entry cap", %{store: store} do
+    for n <- 1..1000 do
+      AgentActivity.record_envelope(env("rebind-cap-#{n}"), self(), ts(1), server: store)
+    end
+
+    :sys.get_state(store)
+
+    assert :rebound =
+             AgentActivity.activate_or_rebind("rebind-overflow", self(), nil, server: store)
+
+    assert AgentActivity.get("rebind-overflow", store) == nil
+    assert map_size(AgentActivity.snapshot(store)) == 1000
+  end
 end
