@@ -40,10 +40,11 @@ defmodule Mix.Tasks.Kaoiro.Env do
       client_tokens: ask_client_tokens(),
       wrapper_tokens: ask_pair_tokens("wrapper", "agent_id"),
       runner_tokens: ask_pair_tokens("runner", "host_id"),
-      persona_dir: ask_optional("Persona overlay dir (KAOIRO_PERSONA_DIR)")
+      persona_dir: ask_optional("Persona overlay dir (KAOIRO_PERSONA_DIR)"),
+      oauth: ask_oauth()
     }
 
-    write(path, render(answers))
+    write(path, render(answers), answers.oauth)
   end
 
   # -- generation ------------------------------------------------------------
@@ -92,6 +93,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
       token_line("KAOIRO_CLIENT_TOKENS", answers.client_tokens),
       token_line("KAOIRO_WRAPPER_TOKENS", answers.wrapper_tokens),
       token_line("KAOIRO_RUNNER_TOKENS", answers.runner_tokens),
+      oauth_env_lines(answers[:oauth]),
       "",
       optional("KAOIRO_PERSONA_DIR", answers[:persona_dir], "container path"),
       "",
@@ -107,6 +109,28 @@ defmodule Mix.Tasks.Kaoiro.Env do
       "#KAOIRO_INGRESS_ORDER_PATH=/var/lib/kaoiro/ingress_order.dets",
       "#KAOIRO_TOKEN_DENYLIST_PATH=/var/lib/kaoiro/token_denylist.dets"
     ]
+    |> List.flatten()
+    |> Enum.join("\n")
+    |> Kernel.<>("\n")
+  end
+
+  @doc """
+  Renders the editable OAuth allow-list mounted into the compose container.
+  Entries deliberately remain plain `provider:identifier[:role]` lines so
+  removing an account is a small, reviewable file edit (ADR-0042).
+  """
+  def render_allowlist(entries) do
+    [
+      "# Kaoiro OAuth allow-list (ADR-0042).",
+      "# One entry per line: provider:identifier[:role]",
+      "# provider: google | github | nextcloud",
+      "# identifier: google=email (case-insensitive); github=login; nextcloud=user id",
+      "# role: viewer | operator (optional; defaults to viewer)",
+      "# Blank lines and lines starting with # are ignored.",
+      "",
+      entries
+    ]
+    |> List.flatten()
     |> Enum.join("\n")
     |> Kernel.<>("\n")
   end
@@ -119,6 +143,34 @@ defmodule Mix.Tasks.Kaoiro.Env do
 
   defp token_line(name, []), do: "##{name}="
   defp token_line(name, entries), do: "#{name}=#{Enum.join(entries, ",")}"
+
+  defp oauth_env_lines(%{providers: [_ | _] = providers}) do
+    [
+      "",
+      "# Dashboard OAuth login (ADR-0042).",
+      Enum.flat_map(providers, &provider_env_lines/1),
+      "KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt"
+    ]
+  end
+
+  defp oauth_env_lines(_), do: []
+
+  defp provider_env_lines(%{provider: "nextcloud"} = provider) do
+    [
+      "KAOIRO_OAUTH_NEXTCLOUD_CLIENT_ID=#{provider.client_id}",
+      "KAOIRO_OAUTH_NEXTCLOUD_CLIENT_SECRET=#{provider.client_secret}",
+      "KAOIRO_OAUTH_NEXTCLOUD_BASE_URL=#{provider.base_url}"
+    ]
+  end
+
+  defp provider_env_lines(%{provider: provider} = config) do
+    prefix = provider |> String.upcase() |> then(&"KAOIRO_OAUTH_#{&1}")
+
+    [
+      "#{prefix}_CLIENT_ID=#{config.client_id}",
+      "#{prefix}_CLIENT_SECRET=#{config.client_secret}"
+    ]
+  end
 
   # -- prompts ---------------------------------------------------------------
 
@@ -149,6 +201,99 @@ defmodule Mix.Tasks.Kaoiro.Env do
   end
 
   defp ask_optional(label), do: prompt(label)
+
+  # OAuth credentials belong to provider consoles and are intentionally never
+  # generated here. In particular, do not print them back as a confirmation:
+  # the generated .env is the only place this task writes them.
+  defp ask_oauth do
+    if confirm("Configure OAuth login?", false) do
+      providers =
+        [
+          ask_oauth_provider("google"),
+          ask_oauth_provider("github"),
+          ask_oauth_provider("nextcloud")
+        ]
+        |> Enum.reject(&is_nil/1)
+
+      case providers do
+        [] ->
+          Mix.shell().info("  no provider enabled; OAuth settings will not be written")
+          nil
+
+        _ ->
+          %{providers: providers, allowlist_entries: ask_allowlist_entries()}
+      end
+    end
+  end
+
+  defp ask_oauth_provider(provider) do
+    if confirm("Enable #{provider} OAuth login?", false) do
+      config = %{
+        provider: provider,
+        client_id: ask_required("  #{provider} client ID", nil),
+        client_secret: ask_required("  #{provider} client secret", nil)
+      }
+
+      if provider == "nextcloud" do
+        Map.put(config, :base_url, ask_required("  nextcloud base URL", nil))
+      else
+        config
+      end
+    end
+  end
+
+  defp ask_allowlist_entries do
+    Mix.shell().info(
+      "  Add at least one OAuth allow-list entry. An empty or missing allow-list " <>
+        "rejects every OAuth login (fail-closed)."
+    )
+
+    collect_allowlist_entries(1, [])
+  end
+
+  defp collect_allowlist_entries(index, entries) do
+    entry = ask_allowlist_entry(index)
+    entries = entries ++ [entry]
+
+    if confirm("Add another OAuth allow-list entry?", false) do
+      collect_allowlist_entries(index + 1, entries)
+    else
+      entries
+    end
+  end
+
+  defp ask_allowlist_entry(index) do
+    value =
+      ask_required(
+        "  OAuth allow-list entry ##{index} (provider:identifier[:role]; role defaults to viewer)",
+        nil
+      )
+
+    case normalize_allowlist_entry(value) do
+      {:ok, entry} ->
+        entry
+
+      :error ->
+        Mix.shell().error("  expected provider:identifier[:role] (role: viewer or operator)")
+        ask_allowlist_entry(index)
+    end
+  end
+
+  defp normalize_allowlist_entry(value) do
+    case value |> String.split(":") |> Enum.map(&String.trim/1) do
+      [provider, identifier]
+      when provider in ["google", "github", "nextcloud"] and identifier != "" ->
+        {:ok, "#{provider}:#{identifier}"}
+
+      [provider, identifier, role]
+      when provider in ["google", "github", "nextcloud"] and identifier != "" and
+             role in ["viewer", "operator"] ->
+        {:ok, "#{provider}:#{identifier}:#{role}"}
+
+      _ ->
+        :error
+    end
+  end
 
   # `token:role` entries. Roles are a closed set server-side, so only those
   # two are offered.
@@ -226,7 +371,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
 
   # -- output ----------------------------------------------------------------
 
-  defp write(path, body) do
+  defp write(path, body, oauth) do
     # Default to NO here: overwriting a live .env destroys working tokens.
     if File.exists?(path) and
          not confirm("#{path} exists — overwrite?", false) do
@@ -235,15 +380,53 @@ defmodule Mix.Tasks.Kaoiro.Env do
       File.write!(path, body)
       Mix.shell().info("\nWrote #{path}\n")
 
-      Mix.shell().info("""
-      Next:
-        1. Review #{path} (tokens are in plain text — keep it out of git).
-        2. Start the stack: docker compose up -d --build
-        3. On each agent host, run the runner wizard
-           (deploy/kaoiro-runner-setup.sh) and pair its token with the
-           KAOIRO_RUNNER_TOKENS entry above.
-      Deployment details live in the runbook (issue #142).
-      """)
+      write_allowlist(path, oauth)
+      print_next_steps(path, oauth)
     end
+  end
+
+  defp write_allowlist(_path, %{providers: []}), do: :ok
+  defp write_allowlist(_path, nil), do: :ok
+
+  defp write_allowlist(env_path, %{allowlist_entries: entries}) do
+    path = allowlist_path(env_path)
+
+    if File.exists?(path) and not confirm("#{path} exists — overwrite?", false) do
+      Mix.shell().info("Kept #{path}; existing OAuth allow-list unchanged.\n")
+    else
+      File.write!(path, render_allowlist(entries))
+      Mix.shell().info("Wrote #{path}\n")
+    end
+  end
+
+  defp allowlist_path(env_path), do: Path.join(Path.dirname(env_path), "oauth-allowlist.txt")
+
+  defp print_next_steps(path, %{providers: [_ | _]}) do
+    Mix.shell().info("""
+    Next:
+      1. Review #{path} (tokens and OAuth secrets are in plain text — keep it out of git).
+      2. Add this read-only mount under docker-compose.yaml's service `volumes:`:
+           - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
+      3. Register each provider's redirect URI in its console; see
+         docs/specs/deployment.md section 1.6.
+      4. Google OAuth cannot be used on a plain-HTTP deployment (localhost is the exception).
+      5. Start the stack: docker compose up -d --build
+      6. On each agent host, run the runner wizard
+         (deploy/kaoiro-runner-setup.sh) and pair its token with the
+         KAOIRO_RUNNER_TOKENS entry above.
+    Deployment details live in the runbook (issue #142).
+    """)
+  end
+
+  defp print_next_steps(path, _oauth) do
+    Mix.shell().info("""
+    Next:
+      1. Review #{path} (tokens are in plain text — keep it out of git).
+      2. Start the stack: docker compose up -d --build
+      3. On each agent host, run the runner wizard
+         (deploy/kaoiro-runner-setup.sh) and pair its token with the
+         KAOIRO_RUNNER_TOKENS entry above.
+    Deployment details live in the runbook (issue #142).
+    """)
   end
 end

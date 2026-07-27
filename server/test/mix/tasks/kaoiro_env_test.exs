@@ -1,5 +1,5 @@
 defmodule Mix.Tasks.Kaoiro.EnvTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Mix.Tasks.Kaoiro.Env
 
@@ -92,6 +92,163 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
 
       assert body =~ "fail-closed"
       assert body =~ "issue #138"
+    end
+
+    test "OAuth を設定しない場合は従来の .env 本文のまま" do
+      without_oauth = Env.render(@answers)
+      no_provider_enabled = Env.render(Map.put(@answers, :oauth, nil))
+
+      all_providers_disabled =
+        Env.render(Map.put(@answers, :oauth, %{providers: [], allowlist_entries: []}))
+
+      assert no_provider_enabled == without_oauth
+      assert all_providers_disabled == without_oauth
+      refute no_provider_enabled =~ "KAOIRO_OAUTH_"
+      refute no_provider_enabled =~ "Dashboard OAuth"
+    end
+
+    test "有効にした provider だけ OAuth 環境変数へ書く" do
+      body =
+        Env.render(
+          Map.put(@answers, :oauth, %{
+            providers: [
+              %{provider: "google", client_id: "google-id", client_secret: "google-secret"},
+              %{
+                provider: "nextcloud",
+                client_id: "nextcloud-id",
+                client_secret: "nextcloud-secret",
+                base_url: "https://cloud.example.com"
+              }
+            ],
+            allowlist_entries: ["google:master@example.com:operator"]
+          })
+        )
+
+      assert body =~ "KAOIRO_OAUTH_GOOGLE_CLIENT_ID=google-id"
+      assert body =~ "KAOIRO_OAUTH_GOOGLE_CLIENT_SECRET=google-secret"
+      assert body =~ "KAOIRO_OAUTH_NEXTCLOUD_CLIENT_ID=nextcloud-id"
+      assert body =~ "KAOIRO_OAUTH_NEXTCLOUD_CLIENT_SECRET=nextcloud-secret"
+      assert body =~ "KAOIRO_OAUTH_NEXTCLOUD_BASE_URL=https://cloud.example.com"
+      assert body =~ "KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt"
+      refute body =~ "KAOIRO_OAUTH_GITHUB_CLIENT_ID="
+    end
+  end
+
+  describe "render_allowlist/1" do
+    test "書式コメント付きの許可リストを生成する" do
+      body =
+        Env.render_allowlist([
+          "google:master@example.com:operator",
+          "github:ao"
+        ])
+
+      assert body =~ "# One entry per line: provider:identifier[:role]"
+      assert body =~ "# role: viewer | operator (optional; defaults to viewer)"
+      assert body =~ "google:master@example.com:operator"
+      assert body =~ "github:ao"
+      assert String.ends_with?(body, "\n")
+    end
+  end
+
+  describe "interactive OAuth setup" do
+    setup do
+      original_shell = Mix.shell()
+      Mix.shell(Mix.Shell.Process)
+
+      on_exit(fn -> Mix.shell(original_shell) end)
+
+      :ok
+    end
+
+    test "OAuth の .env と allowlist を生成し、secret を出力へ再表示しない" do
+      dir = Path.join(System.tmp_dir!(), "kaoiro_env_test_#{System.unique_integer([:positive])}")
+      env_path = Path.join(dir, ".env")
+      allowlist_path = Path.join(dir, "oauth-allowlist.txt")
+      File.mkdir_p!(dir)
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      [
+        "",
+        "kaoiro.example.com",
+        "",
+        "",
+        "n",
+        "n",
+        "n",
+        "",
+        "y",
+        "n",
+        "y",
+        "github-id",
+        "github-secret",
+        "n",
+        "github:ao",
+        "n"
+      ]
+      |> Enum.each(&send(self(), {:mix_shell_input, :prompt, &1}))
+
+      Env.run(["--path", env_path])
+
+      env = File.read!(env_path)
+      allowlist = File.read!(allowlist_path)
+      output = shell_output()
+
+      assert env =~ "KAOIRO_OAUTH_GITHUB_CLIENT_ID=github-id"
+      assert env =~ "KAOIRO_OAUTH_GITHUB_CLIENT_SECRET=github-secret"
+      assert env =~ "KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt"
+      refute env =~ "KAOIRO_OAUTH_GOOGLE_CLIENT_ID="
+      assert allowlist =~ "github:ao"
+      assert output =~ "./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro"
+      assert output =~ "docs/specs/deployment.md section 1.6"
+      assert output =~ "plain-HTTP deployment"
+      refute output =~ "github-secret"
+    end
+
+    test "OAuth をスキップすると従来の生成物と次の手順を保つ" do
+      dir = Path.join(System.tmp_dir!(), "kaoiro_env_test_#{System.unique_integer([:positive])}")
+      env_path = Path.join(dir, ".env")
+      File.mkdir_p!(dir)
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      ["n", "s3cret", "kaoiro.example.com", "", "", "n", "n", "n", "", "n"]
+      |> Enum.each(&send(self(), {:mix_shell_input, :prompt, &1}))
+
+      Env.run(["--path", env_path])
+
+      assert File.read!(env_path) ==
+               Env.render(%{
+                 secret_key_base: "s3cret",
+                 phx_host: "kaoiro.example.com",
+                 port: "",
+                 bind_ip: "",
+                 client_tokens: [],
+                 wrapper_tokens: [],
+                 runner_tokens: [],
+                 persona_dir: ""
+               })
+
+      refute File.exists?(Path.join(dir, "oauth-allowlist.txt"))
+
+      assert shell_output() =~ """
+             Next:
+               1. Review #{env_path} (tokens are in plain text — keep it out of git).
+               2. Start the stack: docker compose up -d --build
+               3. On each agent host, run the runner wizard
+                  (deploy/kaoiro-runner-setup.sh) and pair its token with the
+                  KAOIRO_RUNNER_TOKENS entry above.
+             Deployment details live in the runbook (issue #142).
+             """
+    end
+  end
+
+  defp shell_output(messages \\ []) do
+    receive do
+      {:mix_shell, _kind, [message]} when is_binary(message) ->
+        shell_output([message | messages])
+    after
+      0 -> messages |> Enum.reverse() |> Enum.join("\n")
     end
   end
 end

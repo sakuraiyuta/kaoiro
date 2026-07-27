@@ -70,6 +70,7 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
 | クライアント認証 | `KAOIRO_CLIENT_TOKENS` | 実質必須 | `token:role` の複数。role = `operator` / `viewer`。未設定で全クライアント拒否(fail-closed) |
 | wrapper 認証 | `KAOIRO_WRAPPER_TOKENS` | 公開時必須 | `agent_id:token` の複数(client と順序が逆) |
 | runner 認証 | `KAOIRO_RUNNER_TOKENS` | 公開時必須 | `host_id:token` の複数([ADR-0023](../adr/0023-host-runner-architecture.md)) |
+| OAuth 個人認証 | `KAOIRO_OAUTH_*` / `KAOIRO_OAUTH_ALLOWLIST_PATH` | 任意 | Google / GitHub / Nextcloud。詳細は[配備手順 1.6](deployment.md) |
 | 立ち絵ディレクトリ | `KAOIRO_PERSONA_DIR` | 任意 | コンテナ内パス |
 
 - トークン 3 種は「追加するか」「もう 1 件追加するか」を繰り返し聞いて複数
@@ -79,6 +80,23 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
   残し、意味と一覧は配備手順書(#142)に委ねる。
 - 収集しなかった任意項目は**空代入ではなくコメント行**で出す(未設定と空文字の
   取り違えを防ぐ)。
+- 既存の質問の後で **「OAuth ログインを設定しますか?」** を既定 No で尋ねる。No
+  なら OAuth 用の env / allowlist / 次の手順は出さず、従来の生成物と案内を保つ。
+- Yes のときは Google / GitHub / Nextcloud を個別に有効化するか尋ねる。有効な
+  provider は provider console で発行した client ID / client secret を**手入力**する
+  (自動生成しない)。Nextcloud は base URL も必須。すべて無効なら OAuth 設定なしとして
+  扱う。secret は入力後に再表示しない。
+- 1 provider 以上を有効にしたときは、`.env` と同じ server ディレクトリに
+  `oauth-allowlist.txt` を書く。書式コメントを添え、少なくとも 1 件の
+  `provider:identifier[:role]` (role 省略時は viewer) を入力させる。空・欠落の
+  allowlist は OAuth ログインを全拒否する fail-closed であることを入力時に表示する。
+  既存 allowlist は `.env` と同じく上書き確認を行う。
+- 有効 provider のみ `KAOIRO_OAUTH_*` を `.env` に書き、
+  `KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt` を設定する。compose
+  では `docker-compose.yaml` の `volumes:` に
+  `- ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro` を追加するよう案内する。
+  provider console の登録は配備手順 1.6 を参照する。Google は localhost 以外の
+  plain-HTTP 配備では使えない。
 
 ## runner 設定ウィザード(`deploy/kaoiro-runner-setup.sh`)
 
