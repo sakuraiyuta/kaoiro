@@ -160,6 +160,35 @@ defmodule KaoiroServer.SessionResetsTest do
       refute SessionResets.pending?("a.early-fail", sr)
     end
 
+    test "early absent join は runner ok まで commit せず、完了 broadcast は一度だけ送る", %{
+      resets: sr
+    } do
+      agent_id = "a.early-absent-#{System.unique_integer([:positive])}"
+      KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
+      on_exit(fn -> KaoiroServer.SessionStarts.delete(agent_id) end)
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
+
+      caller = Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, sr) end)
+
+      :sys.get_state(sr)
+      assert SessionResets.pending?(agent_id, sr)
+      refute_receive %Phoenix.Socket.Broadcast{event: "session_reset_completed"}
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+
+      assert :legacy_absent = Task.await(caller)
+      refute SessionResets.pending?(agent_id, sr)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "session_reset_completed",
+        payload: %{"agent_id" => ^agent_id, "to_session_id" => "new"}
+      }
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "session_reset_completed"}
+    end
+
     test "ok=true は :awaiting_connect に移行 (broadcast はまだ、lock は保持)",
          %{resets: sr, pointers: sp} do
       # ADR-0036 F2 の two-phase completion: runner の ok=true は spawn 成功
