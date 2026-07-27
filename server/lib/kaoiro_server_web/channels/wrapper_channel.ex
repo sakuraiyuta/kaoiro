@@ -214,8 +214,17 @@ defmodule KaoiroServerWeb.WrapperChannel do
       # are transition-idempotent.
       maybe_advance_session_boundary(envelope, agent_id)
 
+      # This timestamp belongs to the accepting WrapperChannel, not the
+      # activity GenServer: a delayed cast must not make last_activity_at
+      # look newer than the envelope the server actually accepted.
+      received_at = DateTime.utc_now() |> DateTime.to_iso8601()
+
       case store(envelope) do
         :ok ->
+          # G1: record only after validate / route / store have all accepted
+          # the envelope. In particular an orphan reply must not consume an
+          # AgentActivity entry merely because it reached the channel.
+          AgentActivity.record_envelope(envelope, self(), received_at)
           record_session_pointer(envelope)
           # phase-17 17-7: fill the pending boundary marker's
           # to_session_id when a fresh Codex session finally reports its
