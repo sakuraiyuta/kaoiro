@@ -138,10 +138,18 @@ defmodule KaoiroServer.AgentActivity do
         {:reply, :rebound, rebind(state, agent_id, owner, true)}
 
       reset_result == :matched and matching_pending?(pending, id) ->
-        {:reply, :activated, activate(state, agent_id, owner, pending)}
+        if new_entry_at_cap?(state, agent_id) do
+          {:reply, :capped, state}
+        else
+          {:reply, :activated, activate(state, agent_id, owner, pending)}
+        end
 
       reset_result == :noop and matching_pending?(pending, id) ->
-        {:reply, :activated, activate(state, agent_id, owner, pending)}
+        if new_entry_at_cap?(state, agent_id) do
+          {:reply, :capped, state}
+        else
+          {:reply, :activated, activate(state, agent_id, owner, pending)}
+        end
 
       reset_result == :noop and pending != nil ->
         {:reply, :rebound, rebind(state, agent_id, owner, true)}
@@ -246,8 +254,12 @@ defmodule KaoiroServer.AgentActivity do
       nil ->
         # A reconnect before its first accepted envelope has nothing to
         # project yet, but binding the owner makes L6 deterministic.
-        entry = %{base_entry(owner, nil, false, nil) | projection_suppressed: suppress?}
-        put_entry(state, agent_id, entry)
+        if new_entry_at_cap?(state, agent_id) do
+          state
+        else
+          entry = %{base_entry(owner, nil, false, nil) | projection_suppressed: suppress?}
+          put_entry(state, agent_id, entry)
+        end
 
       entry ->
         put_entry(state, agent_id, %{
@@ -290,5 +302,9 @@ defmodule KaoiroServer.AgentActivity do
         _ = Process.cancel_timer(ref)
         %{state | pending: pending}
     end
+  end
+
+  defp new_entry_at_cap?(state, agent_id) do
+    not Map.has_key?(state.entries, agent_id) and map_size(state.entries) >= @max_agents
   end
 end

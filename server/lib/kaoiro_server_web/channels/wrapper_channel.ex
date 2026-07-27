@@ -532,10 +532,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp valid_resets_at?(value),
     do: is_integer(value) and value >= 0 and value <= 9_007_199_254_740_991
 
-  defp is_finite_number(value) when is_integer(value), do: true
+  @max_safe_integer 9_007_199_254_740_991
+
+  defp is_finite_number(value) when is_integer(value), do: abs(value) <= @max_safe_integer
 
   defp is_finite_number(value) when is_float(value) do
-    value == value and value <= 1.7976931348623157e308 and value >= -1.7976931348623157e308
+    value == value and value <= @max_safe_integer and value >= -@max_safe_integer
   end
 
   defp is_finite_number(_), do: false
@@ -574,6 +576,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
        when is_binary(sid) and sid != "" and is_binary(started_at) and is_integer(turns) and
               turns >= 0,
        do: {:observed, started_at, turns}
+
+  # Suppression applies before every resolution branch, including the
+  # SessionStarts restart fallback. Otherwise a same-sid legacy restore can
+  # re-publish old start metadata after the tracker lost its observation.
+  defp session_projection(_id, _envelope, %{projection_suppressed: true}), do: :omit
 
   defp session_projection(id, %{"session_id" => sid}, %{session_start_observed: false})
        when is_binary(sid) and sid != "" do

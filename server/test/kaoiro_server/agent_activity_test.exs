@@ -200,4 +200,16 @@ defmodule KaoiroServer.AgentActivityTest do
     assert :rebound = AgentActivity.activate_or_rebind("a", self(), nil, server: store)
     assert %{projection_suppressed: true} = AgentActivity.get("a", store)
   end
+
+  test "activate cannot bypass the active-entry cap", %{store: store} do
+    for n <- 1..1000 do
+      AgentActivity.record_envelope(env("cap-#{n}"), self(), ts(1), server: store)
+    end
+
+    :sys.get_state(store)
+    :ok = AgentActivity.begin_transition("overflow", "p1", :spawn, ts(2), server: store)
+    assert :capped = AgentActivity.activate_or_rebind("overflow", self(), "p1", server: store)
+    assert AgentActivity.get("overflow", store) == nil
+    assert map_size(AgentActivity.snapshot(store)) == 1000
+  end
 end

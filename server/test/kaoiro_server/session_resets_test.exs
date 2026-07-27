@@ -123,6 +123,20 @@ defmodule KaoiroServer.SessionResetsTest do
       assert :noop = SessionResets.confirm_connection("a.noop", nil, "anything", sr)
     end
 
+    test "matching join が runner ok より先でも resolve(ok) が reset を完了する", %{resets: sr} do
+      agent_id = "a.early-join"
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
+
+      assert :matched = SessionResets.confirm_connection(agent_id, "new", request_id, sr)
+      assert SessionResets.pending?(agent_id, sr)
+
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :sys.get_state(sr)
+      refute SessionResets.pending?(agent_id, sr)
+    end
+
     test "ok=true は :awaiting_connect に移行 (broadcast はまだ、lock は保持)",
          %{resets: sr, pointers: sp} do
       # ADR-0036 F2 の two-phase completion: runner の ok=true は spawn 成功

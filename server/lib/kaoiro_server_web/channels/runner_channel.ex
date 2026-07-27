@@ -153,11 +153,10 @@ defmodule KaoiroServerWeb.RunnerChannel do
 
   # ADR-0024 D3 allocates every agent_id under the host as
   # `<host_id>.<rand>`. Enforce that binding here so a runner cannot
-  # release another host's reset lock (or cause its detach) by echoing
-  # an agent_id it does not own. spawn_result / sessions do not need this
-  # check because they only stamp host_id onto a forwarded broadcast and
-  # have no cross-agent side effect; session_reset_result mutates the
-  # SessionResets store, so the binding must be verified here.
+  # release another host's reset lock (or cause its detach), or abort another
+  # host's AgentActivity pending transition, by echoing an agent_id it does
+  # not own. `sessions` remains forwarding-only; both session_reset_result
+  # and spawn_result mutate server state and must pass this guard.
   #
   # We must inverse the allocation exactly (`AgentId.host_id_from/1` —
   # everything before the LAST dot). A naive `starts_with?(agent_id,

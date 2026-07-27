@@ -274,7 +274,11 @@ defmodule KaoiroServer.SessionResets do
           phase: :spawning,
           # to_session_id runner reported (nil for Codex lazy采番); rolls
           # into the completed broadcast when confirm_connection fires.
-          to_session_id: nil
+          to_session_id: nil,
+          # Matching wrapper joins may race ahead of the runner websocket
+          # result. Stash that commit signal so resolve(ok=true) can finish
+          # the same transaction instead of waiting for a second join.
+          early_join_session_id: :none
         }
 
         {:reply, {:ok, request_id, prev_sid}, %{s | pending: Map.put(s.pending, agent_id, lock)}}
@@ -313,6 +317,13 @@ defmodule KaoiroServer.SessionResets do
 
   def handle_call({:confirm_connection, agent_id, joined_session_id, transition_id}, _from, s) do
     case Map.get(s.pending, agent_id) do
+      %{phase: :spawning, request_id: request_id} = lock when transition_id == request_id ->
+        updated = %{lock | early_join_session_id: joined_session_id}
+        # The matching join is real evidence of a live child. Activity may
+        # activate its pending generation now; reset side effects remain
+        # gated on the runner's ok result and are completed in resolve/6.
+        {:reply, :matched, %{s | pending: Map.put(s.pending, agent_id, updated)}}
+
       %{phase: :awaiting_connect, request_id: request_id} = lock
       when transition_id == request_id ->
         _ = Process.cancel_timer(lock.timer_ref)
@@ -440,22 +451,26 @@ defmodule KaoiroServer.SessionResets do
   def handle_cast({:resolve, agent_id, request_id, ok, reason, to_session_id}, s) do
     case Map.get(s.pending, agent_id) do
       %{request_id: ^request_id} = lock ->
-        if ok do
-          # Two-phase F2: runner spawn succeeded, but wait for the fresh
-          # wrapper's actual channel join before firing completed. Keep
-          # the timer running — it now covers the awaiting_connect window
-          # as well as the spawn window.
-          updated =
-            lock
-            |> Map.put(:phase, :awaiting_connect)
-            |> Map.put(:to_session_id, to_session_id)
-
-          {:noreply, %{s | pending: Map.put(s.pending, agent_id, updated)}}
+        if ok and lock.early_join_session_id != :none do
+          {:noreply, complete_early_join(s, agent_id, lock, to_session_id)}
         else
-          # Failure path: fire the loud broadcast immediately, no detach.
-          _ = Process.cancel_timer(lock.timer_ref)
-          broadcast_failed(agent_id, lock, reason)
-          {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
+          if ok do
+            # Two-phase F2: runner spawn succeeded, but wait for the fresh
+            # wrapper's actual channel join before firing completed. Keep
+            # the timer running — it now covers the awaiting_connect window
+            # as well as the spawn window.
+            updated =
+              lock
+              |> Map.put(:phase, :awaiting_connect)
+              |> Map.put(:to_session_id, to_session_id)
+
+            {:noreply, %{s | pending: Map.put(s.pending, agent_id, updated)}}
+          else
+            # Failure path: fire the loud broadcast immediately, no detach.
+            _ = Process.cancel_timer(lock.timer_ref)
+            broadcast_failed(agent_id, lock, reason)
+            {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
+          end
         end
 
       _ ->
@@ -480,6 +495,43 @@ defmodule KaoiroServer.SessionResets do
       _ ->
         {:noreply, s}
     end
+  end
+
+  defp complete_early_join(s, agent_id, lock, joined_session_id) do
+    _ = Process.cancel_timer(lock.timer_ref)
+
+    effective_to_sid =
+      case lock.early_join_session_id do
+        binary when is_binary(binary) -> binary
+        _ -> joined_session_id
+      end
+
+    {:ok, {order, display, _sid}} =
+      SessionStarts.advance_transition(
+        agent_id,
+        effective_to_sid,
+        lock.previous_session_id,
+        SessionStarts
+      )
+
+    marker = build_boundary_envelope(agent_id, lock, effective_to_sid)
+
+    clear_watermark =
+      case lock.mode do
+        "clear" ->
+          :ok = ClearWatermarks.record(agent_id, order, display)
+          _ = AgentStates.clear_history_with_boundary(agent_id, marker)
+          display
+
+        _ ->
+          _ = AgentStates.append_boundary(agent_id, marker)
+          nil
+      end
+
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", marker)
+    detach_session_safely(agent_id)
+    broadcast_completed(agent_id, lock, effective_to_sid, clear_watermark)
+    %{s | pending: Map.delete(s.pending, agent_id)}
   end
 
   defp broadcast_completed(agent_id, lock, to_session_id, clear_watermark) do
