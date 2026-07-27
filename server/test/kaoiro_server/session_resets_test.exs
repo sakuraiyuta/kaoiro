@@ -109,6 +109,20 @@ defmodule KaoiroServer.SessionResetsTest do
   end
 
   describe "resolve/6" do
+    test "join transition_id は matched / mismatch / legacy_absent / noop を区別する", %{resets: sr} do
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire("a.cas", "new", "idle", "old", sr)
+
+      :ok = SessionResets.resolve("a.cas", request_id, true, nil, "new", sr)
+      :sys.get_state(sr)
+      assert :mismatch = SessionResets.confirm_connection("a.cas", nil, "other", sr)
+      assert SessionResets.pending?("a.cas", sr)
+      assert :matched = SessionResets.confirm_connection("a.cas", nil, request_id, sr)
+      refute SessionResets.pending?("a.cas", sr)
+
+      assert :noop = SessionResets.confirm_connection("a.noop", nil, "anything", sr)
+    end
+
     test "ok=true は :awaiting_connect に移行 (broadcast はまだ、lock は保持)",
          %{resets: sr, pointers: sp} do
       # ADR-0036 F2 の two-phase completion: runner の ok=true は spawn 成功
