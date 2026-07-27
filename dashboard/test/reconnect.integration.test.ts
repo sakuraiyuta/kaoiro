@@ -105,6 +105,121 @@ describe("Phoenix Socket internal API existence (issue #123 round 3)", () => {
 });
 
 describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", () => {
+  it("期限切れ ticket を明示 reconnect 前に更新し、新しい ticket で WS を張る", async () => {
+    const handlers = makeHandlers();
+    const refreshTicket = vi.fn().mockResolvedValue({
+      kind: "ok" as const,
+      ticket: "renewed-ticket",
+    });
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(FakeWebSocket.instances[1]?.url).toContain("ticket=renewed-ticket");
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
+  });
+
+  it("Phoenix の heartbeat 自動再接続も stale ticket を使わない", async () => {
+    const handlers = makeHandlers();
+    const refreshTicket = vi.fn().mockResolvedValue({
+      kind: "ok" as const,
+      ticket: "native-retry-ticket",
+    });
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    // heartbeat timeout -> Phoenix reconnectTimer -> socket.connect() の
+    // 経路。connect() を更新 gate しているので、ここも renewal 後まで
+    // transportConnect されない。
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(FakeWebSocket.instances[1]?.url).toContain(
+      "ticket=native-retry-ticket",
+    );
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
+  });
+
+  it("ticket 更新の 401 は session expiry を通知し、再接続を止める", async () => {
+    const handlers = makeHandlers();
+    const refreshTicket = vi.fn().mockResolvedValue({
+      kind: "unauthorized" as const,
+    });
+    const onTicketRefreshUnauthorized = vi.fn();
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      onTicketRefreshUnauthorized,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+    expect(onTicketRefreshUnauthorized).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(1);
+
+    // terminal 化しているため、Phoenix の timer / 後続 wake reconnect で
+    // stale ticket の追加試行が発生しない。
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(1);
+  });
+
+  it("ticket 更新の一時的な通信失敗は stale ticket を送らずに再試行する", async () => {
+    const handlers = makeHandlers();
+    const refreshTicket = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        kind: "ok" as const,
+        ticket: "retry-ticket",
+      });
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refreshTicket).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(FakeWebSocket.instances[1]?.url).toContain("ticket=retry-ticket");
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
+  });
+
   it("(A) reconnect() 後、open-then-stuck transport の heartbeatTimeout でも 3 本目 transport が生えない", async () => {
     const handlers = makeHandlers();
     const conn = connectKaoiro("ws://test/client", handlers, {

@@ -1337,6 +1337,15 @@ export interface ConnectOptions {
   /** Short-lived WS ticket fetched from the auth cookie (ADR-0013) — the
    *  reload path, where the token is not in the URL. */
   ticket?: string;
+  /** Reissues the short-lived WS ticket before every reconnect. A returned
+   *  `unauthorized` is terminal: the httpOnly session cookie has expired or
+   *  been revoked. Rejections represent transient failures (offline/server
+   *  unavailable) and are retried without opening a socket with the stale
+   *  ticket. */
+  refreshTicket?: () => Promise<TicketRefreshResult>;
+  /** Called exactly once when refreshTicket reports `unauthorized`. The UI
+   *  owns the resulting session teardown / login-form transition. */
+  onTicketRefreshUnauthorized?: () => void;
   /** Test-only: WebSocket-compatible transport class handed to Phoenix
    *  Socket (issue #123 regression tests). Production leaves this undefined
    *  and Phoenix falls through to global.WebSocket. Typed as `unknown`
@@ -1348,6 +1357,11 @@ export interface ConnectOptions {
    *  30000. */
   heartbeatIntervalMs?: number;
 }
+
+/** Result of renewing the cookie-backed, short-lived WebSocket ticket. */
+export type TicketRefreshResult =
+  | { kind: "ok"; ticket: string }
+  | { kind: "unauthorized" };
 
 function isEnvelope(value: unknown): value is Envelope {
   return (
@@ -1989,10 +2003,48 @@ export function connectKaoiro(
   let cycleGeneration = 0;
   let cycleInFlight = false;
 
+  // Tickets last just 30 seconds. Phoenix evaluates Socket params on every
+  // transport connect, but that evaluation is synchronous, whereas minting a
+  // replacement ticket is HTTP. Keep the params object mutable and gate every
+  // post-initial socket.connect() through refreshTicket below. This covers
+  // both our explicit wake rebuild and Phoenix's own reconnectTimer path.
+  let ticketRefreshRequired = false;
+  let ticketRefreshInFlight = false;
+  let ticketRefreshPendingConnect = false;
+  let ticketRefreshGeneration = 0;
+  let ticketRefreshRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function cancelTicketRefreshRetry(): void {
+    if (ticketRefreshRetryTimer !== undefined) {
+      clearTimeout(ticketRefreshRetryTimer);
+      ticketRefreshRetryTimer = undefined;
+    }
+  }
+
+  function requireFreshTicket(): void {
+    if (options.refreshTicket === undefined) return;
+    ticketRefreshRequired = true;
+    ticketRefreshGeneration += 1;
+    // A close/error can race a prior renewal. Preserve one follow-up connect
+    // request so that prior result is discarded and the newest generation
+    // still gets a chance to mint its own ticket.
+    ticketRefreshPendingConnect ||= ticketRefreshInFlight;
+    cancelTicketRefreshRetry();
+  }
+
   function setupSocketHandlers(s: Socket): void {
     s.onOpen(() => handlers.onStatus("connected"));
-    s.onClose(() => handlers.onStatus("disconnected"));
-    s.onError(() => handlers.onStatus("disconnected"));
+    s.onClose(() => {
+      // Phoenix's native reconnectTimer calls socket.connect() itself. Mark
+      // the ticket stale here so that path cannot accidentally reuse the
+      // ticket which authenticated the now-closed transport.
+      if (!disposed) requireFreshTicket();
+      handlers.onStatus("disconnected");
+    });
+    s.onError(() => {
+      if (!disposed) requireFreshTicket();
+      handlers.onStatus("disconnected");
+    });
     // Reject every outstanding wait on disconnect so callers do not hang
     // forever behind a dropped socket. `onClose` fires on both operator
     // disconnect and server shutdown; `onError` catches transport failures.
@@ -2215,6 +2267,104 @@ export function connectKaoiro(
     socketOpts.heartbeatIntervalMs = options.heartbeatIntervalMs;
   }
   const socket = new Socket(url, socketOpts);
+
+  // Keep Phoenix's single Socket instance, while interposing on its
+  // connect() method. Its reconnectTimer eventually invokes this very method,
+  // so the guard also protects native heartbeat/error recovery rather than
+  // only the dashboard's explicit reconnect() call.
+  const socketWithConnect = socket as unknown as {
+    connect: () => void;
+  };
+  const originalSocketConnect = socketWithConnect.connect.bind(socket);
+
+  function expireTicketSession(): void {
+    // A 401 is not a transport hiccup: retrying can only repeat the same
+    // failure. Become terminal before notifying the UI so a pending Phoenix
+    // timer, delayed teardown callback, or duplicate wake event cannot start
+    // another WS attempt while endSession() switches to the login form.
+    if (disposed) return;
+    disposed = true;
+    cycleGeneration += 1;
+    ticketRefreshGeneration += 1;
+    cancelTicketRefreshRetry();
+    drainPhoenixTimers();
+    try {
+      channel.leave();
+    } catch {
+      // A dead transport can throw synchronously from leave; session expiry
+      // must still reach the login form.
+    }
+    socket.disconnect(() => {
+      drainPhoenixTimers();
+    });
+    options.onTicketRefreshUnauthorized?.();
+  }
+
+  function retryTicketRefresh(generation: number): void {
+    if (
+      disposed ||
+      generation !== ticketRefreshGeneration ||
+      ticketRefreshRetryTimer !== undefined
+    ) {
+      return;
+    }
+    // Do not fall back to Phoenix's reconnect timer after an HTTP failure:
+    // that would open a transport with the stale ticket. Retrying this gate
+    // instead preserves the ordinary offline-recovery behaviour once the
+    // network returns.
+    ticketRefreshRetryTimer = setTimeout(() => {
+      ticketRefreshRetryTimer = undefined;
+      if (disposed || generation !== ticketRefreshGeneration) return;
+      socketWithConnect.connect();
+    }, 1000);
+  }
+
+  function connectWithFreshTicket(): void {
+    if (disposed) return;
+    if (options.refreshTicket === undefined || !ticketRefreshRequired) {
+      originalSocketConnect();
+      return;
+    }
+    if (ticketRefreshInFlight) {
+      // A later reconnect cycle superseded the ticket fetch in progress.
+      // Let its finally block start one fresh fetch for the newest generation
+      // instead of allowing that older result to open a transport.
+      ticketRefreshPendingConnect = true;
+      return;
+    }
+
+    const generation = ticketRefreshGeneration;
+    ticketRefreshInFlight = true;
+    void options
+      .refreshTicket()
+      .then((result) => {
+        if (disposed || generation !== ticketRefreshGeneration) return;
+        if (result.kind === "unauthorized") {
+          expireTicketSession();
+          return;
+        }
+        // Socket constructor params are wrapped in Phoenix's closure(), so
+        // mutating this object is observed when transportConnect builds the
+        // next WebSocket URL. No second Socket instance is needed.
+        params.ticket = result.ticket;
+        ticketRefreshRequired = false;
+        originalSocketConnect();
+      })
+      .catch(() => {
+        if (disposed || generation !== ticketRefreshGeneration) return;
+        retryTicketRefresh(generation);
+      })
+      .finally(() => {
+        ticketRefreshInFlight = false;
+        if (ticketRefreshPendingConnect && !disposed) {
+          ticketRefreshPendingConnect = false;
+          connectWithFreshTicket();
+        }
+      });
+  }
+
+  socketWithConnect.connect = connectWithFreshTicket;
+
   // Round 7 must-fix (issue #123): arm-time chain-provenance guard on
   // Phoenix's teardown. Phoenix's chain heartbeatTimeout → abnormalClose
   // → teardown(cb=scheduleTimeout) starts at teardown time; the eventual
@@ -2245,6 +2395,12 @@ export function connectKaoiro(
       code?: number,
       reason?: string,
     ) => {
+      // heartbeatTimeout reaches reconnectTimer through teardown() without
+      // firing Socket.onClose/onError (Phoenix intentionally replaces the
+      // transport callbacks while it closes it). Mark the ticket stale at
+      // this lower-level common point so that native recovery is protected
+      // too; explicit reconnect() takes this same path and remains coalesced.
+      if (!disposed) requireFreshTicket();
       const teardownGen = cycleGeneration;
       originalTeardown(
         cb === undefined
@@ -2309,6 +2465,9 @@ export function connectKaoiro(
       // is defence in depth — the disposed check alone is enough.
       disposed = true;
       cycleGeneration += 1;
+      ticketRefreshGeneration += 1;
+      ticketRefreshPendingConnect = false;
+      cancelTicketRefreshRetry();
       // Drain Phoenix internal timers first. Without this the heartbeatTimer
       // can outlive teardown on a stuck transport and self-resurrect via
       // heartbeatTimeout → reconnectTimer.scheduleTimeout (ふじ再レビュー).
@@ -2342,6 +2501,12 @@ export function connectKaoiro(
       if (disposed || cycleInFlight) return;
       cycleInFlight = true;
       const gen = ++cycleGeneration;
+
+      // A wake rebuild must never put the ticket from the old transport on
+      // the new URL. connectWithFreshTicket() also guards Phoenix's native
+      // retry path, so this is safe even when close/error and wake signals
+      // race each other.
+      requireFreshTicket();
 
       drainPhoenixTimers();
 

@@ -28,6 +28,7 @@
     PersonaManifest,
     RunnerSessions,
     SpawnResult,
+    TicketRefreshResult,
   } from "./lib/protocol";
   import {
     connectKaoiro,
@@ -333,6 +334,34 @@
     slideNow: boolean,
   ): void {
     status = "connecting";
+    // A WebSocket ticket lives for only 30 seconds. Keep its minting here,
+    // next to the cookie-owned session lifecycle, while protocol.ts gates
+    // every reconnect (including Phoenix's native retry) on this callback.
+    // Only 401 is terminal; a transient failed request is retried by the
+    // connection without ever reusing the expired ticket.
+    const ticketRefreshOptions =
+      connectOpts.ticket === undefined
+        ? {}
+        : {
+            refreshTicket: async (): Promise<TicketRefreshResult> => {
+              const res = await fetch("/session/ticket");
+              if (res.status === 401) return { kind: "unauthorized" };
+              if (!res.ok) {
+                throw new Error(`ticket refresh failed (${res.status})`);
+              }
+              const body = (await res.json()) as { ticket?: string };
+              if (typeof body.ticket !== "string" || body.ticket === "") {
+                throw new Error("ticket refresh returned no ticket");
+              }
+              return { kind: "ok", ticket: body.ticket };
+            },
+            onTicketRefreshUnauthorized: (): void => {
+              if (!destroyed) {
+                endSession();
+                needLogin = true;
+              }
+            },
+          };
     connection = connectKaoiro(
       defaultSocketUrl(location),
       {
@@ -624,7 +653,7 @@
           );
         },
       },
-      connectOpts,
+      { ...connectOpts, ...ticketRefreshOptions },
     );
 
     // Slide the httpOnly cookie while this tab is open so future reloads can
