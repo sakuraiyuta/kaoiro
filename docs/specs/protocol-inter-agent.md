@@ -180,32 +180,104 @@ dashboard は受信時、`agent_id`(送信側)と `payload.to`(受信側)の
 inter_agent_message 本体は既存 `envelope` イベント上で運ばれるが、
 コンパニオン機能のため **`directory_request`** を追補する。
 
-#### peer directory の情報境界 (#102)
+#### peer directory の情報境界 (#102 / #160)
 
 phase-8 では宛先名の解決だけを目的に directory entry を
 `agent_id / persona / state` へ絞っていた。phase-15 で engine 間の state
 envelope schema が確定したため、#102 ではこの最小性判断を
 **「名前解決に加え、peer の実行特性を見て委譲先を選べる read-only
-directory」**へ引き直す。wrapper が state envelope の `ext` に報告済みの
-`engine / model / effort` だけを optional field として公開する。
+directory」**へ引き直し、`engine / model / effort` を公開した。
 
-各 optional field は non-empty string の場合だけ entry に含める。旧 wrapper、
-SDK 初期化前、engine が値を持たない場合、未 stamp、malformed 値ではその field
-だけを省略し、peer entry 自体は返す。`engine` は将来 engine を阻害しない open
-string とする。
+issue #160 (phase-27) はこれをさらに **「peer の稼働状況を見て委譲の
+可否まで判断できる directory」** へ広げる。エージェントが operator の介在なしに
+「context が逼迫した peer に重い委任をしない」「利用上限に張り付いた peer
+を避ける」「対話中の peer に割り込まない」「長時間無活動の peer を報告
+する」を判断できることが要件。
+
+##### 開示 field 一覧
+
+| field | 型 | 意味 | 省略される条件 |
+|---|---|---|---|
+| `agent_id` | string | 宛先識別子 | MUST(常に存在) |
+| `persona` | `{id, name, sprite_set}` | 表示名解決用 | MUST |
+| `state` | string | 現在状態 | MUST |
+| `engine` / `model` / `effort` | string | 実行特性(#102) | non-empty string でないとき |
+| `context` | `{used_tokens, max_tokens, used_percentage}` | context 使用量 | 下記 capability gate 不成立、未報告、shape 不正、切断済み |
+| `session_started_at` | ISO8601 (UTC) | **server が観測した**現セッション開始時刻 | server が開始を観測しておらず `SessionStarts` からも復元できないとき |
+| `turns` | 非負整数 | 現セッションの応答往復数 | server が当該セッションの開始を観測していないとき(fallback で開始時刻だけ復元した場合も省略) |
+| `last_activity_at` | ISO8601 (UTC) | server が envelope を最後に受理した時刻 | まだ 1 通も受理していないとき |
+| `conversation` | `{active, peers[]}` | active な IA 会話の有無と相手 | **省略しない**(下記) |
+| `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | 最終 turn 時点の利用上限 snapshot | 未報告、全 window が projection で drop、切断済み |
+
+`session_started_at` / `last_activity_at` は **server 側の時刻** である。
+wrapper が実測した値ではなく、envelope の `ts`(wrapper ホストの時計)
+とも別軸。ホスト跨ぎの時計ズレを判断材料に混ぜないための規約。
+
+##### `context` の capability gate
+
+`ext.context` の存在では判定しない。
+`ext.session_capabilities.supports_context_usage == true` かつ
+`used_tokens` / `max_tokens` / `used_percentage` がすべて数値のときだけ
+投影する。capability が absent(旧 wrapper)や explicit `false`(Codex)
+では **field ごと省略** し、`null` も推定値も出さない
+([ADR-0040](../adr/0040-context-usage-capability.md) D1 の 3-state 判定を
+dashboard と揃える)。capability field 自体は peer に開示しない。
+
+##### `ext` からの projection
+
+`ext` は wrapper が自由に拡張できる open schema なので、**raw を素通し
+しない**。canonical key だけを写した新しい map を組み立てる
+([ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6-2 の
+allow-list を nested 階層まで適用)。
+
+| 対象 | 許可 key | 検証 |
+|---|---|---|
+| `context` | `used_tokens` / `max_tokens` / `used_percentage` のみ | すべて有限数。1 つでも欠ける・不正なら `context` ごと省略 |
+| `rate_limits` の window 値 | `status` / `utilization` / `resets_at` のみ(3 つとも optional) | `status` = string かつ UTF-8 64 bytes 以下、`utilization` = 有限数、`resets_at` = 非負の safe integer |
+| `rate_limits` の window key | open string | UTF-8 32 bytes 以下、charset `[A-Za-z0-9_-]` |
+| `rate_limits` の window 数 | — | 8 件以下 |
+
+- **key 自体が無い**ときだけ absent として許容する。key があって値が
+  invalid(`null` を含む)なら **当該 window ごと drop** する。値を 1 つ
+  だけ捨てて残りを返すと、不完全な窓が完全な窓と同じ形で読めてしまう。
+- projection 後に値が 1 つも残らない **empty window は drop**。
+- window 数が 8 を超えるときは、**validation と empty drop を通過した
+  valid window 集合** に対して canonical(`five_hour` → `seven_day`)を
+  無条件優先し、残り枠を lexical 昇順で埋める。canonical であっても
+  validation を通らない window は保持しない。
+- **malformed は top-level field 単位で drop** し、valid な sibling は
+  残す(`context` が壊れていても `rate_limits` は載る)。
+- 数値は換算しない。projection は「写す key を絞る」操作であって値の
+  加工ではない。`utilization` の 0..1 range 検査は入れない
+  ([#164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164) の
+  実データ確認後に判断)。
+- drop のログは window 単位で無制限に warn せず、agent / request 単位で
+  集約する(`list_agents` は auto-allow 経路であり、log amplification を
+  作らないため)。
+- **同じ規約・同じ上限値を wrapper 側の narrow にも適用する**。片側だけ
+  緩いと server が閉じた素通しを client が開け直すことになる。
+
+##### `conversation` は常に載せる
+
+他の field と違い engine 非依存で server が必ず判定できるため、会話が
+無くても `{"active": false, "peers": []}` を返す。旧 server では field
+ごと absent になるので、消費側は **absent(不明)と `active: false`
+(会話なし)を区別できる**。`conversation_id` は開示しない
+(ADR-0021 F6-5)。
+
+##### 継続除外
 
 この変更は ext 全体の peer 公開ではない。`cwd`、permission / sandbox、
-`session_id`、context / token / rate limit、model catalog、pending state、
-resume snapshot / drift、`model_source / effort_source`、
-`session_capabilities` は引き続き directory から除外する。source field と
-capability の公開が必要になった場合は、別の設計変更として情報境界を再評価する。
+`session_id`、model catalog、pending state、resume snapshot / drift、
+`model_source / effort_source`、`session_capabilities`、`cost` は引き続き
+directory から除外する。除外集合の正本は ADR-0021 F6-4。
 
 | event (方向) | 形 | server の振る舞い |
 |---|---|---|
 | `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | (a) `payload.to` で指定された `wrapper:<to>` channel に push、(b) `agents:lobby` に broadcast(operator 限定)、(c) 該当 conversation の turn count / token count / wallclock を更新 |
 | `envelope` 合成 (S→W) | ハード制限超過時 | 両 wrapper の `wrapper:<id>` + `agents:lobby` へ push |
 | `envelope` 合成 (S→W) | wrapper 切断時 | 当該 wrapper が参加中の各 conversation の他参加者へ `kind=inform` + `error.code=disconnected` を push(「応答不能エラーの通知」節) |
-| `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の `{agent_id, persona:{id,name,sprite_set}, state, engine?, model?, effort?}` リストを `{:ok, %{agents: [...]}}` 返却で受け取る。optional 3 field は上記の省略規則に従う。list_agents 用 (後述) |
+| `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...]}}` 返却で受け取る。entry の field と省略規則は上記「peer directory の情報境界」。list_agents 用 (後述) |
 
 未知 `to` / 自己 routing / participants 不一致時のエラー (`unknown_agent` /
 `self_routing` / `participants_mismatch`) は `envelope` の reply で返す。
@@ -363,7 +435,7 @@ wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allow
 
 | Tool (full name) | 用途 | 経路 |
 |---|---|---|
-| `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧 (id / persona name / state / 報告済み engine・model・effort) を取得 | wrapper → server の `directory_request` を呼び、reply の `agents` をそのまま返す |
+| `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧を取得。宛先解決 (id / persona name / state) に加え、委譲先選定のための実行特性 (engine / model / effort) と稼働状況 (context / session_started_at / turns / last_activity_at / conversation / rate_limits) を返す | wrapper → server の `directory_request` を呼び、reply の `agents` を narrow して返す |
 | `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd を返す | wrapper のローカル `EffectiveStatusSnapshot` を読むのみ。server round-trip なし |
 
 `whoami` の実効設定は state envelope と別に組み立てず、各 host が持つ共通
@@ -432,6 +504,37 @@ operator が `@あお` のような名前で指示しても、 model は send_to
 - MUST: `send_to_agent.to` は agent_id のみ受理 (charset 制約あり)。
   persona 名による解決は wrapper の `list_agents` ツールが担い、
   ambiguous 時は operator 確認を経由する
+- MUST: peer directory は **allow-list**。`directory_entry` が明示列挙
+  した field だけを agent 間に出し、`ext` を丸ごと流し込まない。
+  allow-list は nested 階層まで適用し、canonical key だけを写した新しい
+  map を組み立てる([ADR-0021](../adr/0021-role-information-disclosure-policy.md)
+  F6-2、上記「`ext` からの projection」)
+- MUST: `context` は
+  `ext.session_capabilities.supports_context_usage == true` のときだけ
+  投影する。capability が absent / explicit false では field ごと省略し、
+  `null` も推定値も出さない([ADR-0040](../adr/0040-context-usage-capability.md))
+- MUST: `rate_limits` の window は、key が無いときだけ absent として
+  許容し、key があって値が invalid(`null` 含む)なら **当該 window ごと
+  drop** する。値が 1 つも残らない window も drop する
+- MUST: server と wrapper は **同一の projection 規約・同一の上限値** を
+  適用する。片側だけ緩いと server が閉じた素通しを client が開け直す
+- MUST: `conversation` は会話が無くても
+  `{"active": false, "peers": []}` を返す(省略しない)。
+  `conversation_id` は開示しない
+- MUST: `session_started_at` / `last_activity_at` は **server が観測した
+  時刻** であり、wrapper の実測値でも envelope の `ts` でもない
+- MUST: `list_agents` の消費側(呼び出した agent)は、`rate_limits` の
+  `resets_at`(Unix 秒)を現在時刻と比較し、**過去であればその window は
+  窓が明けたものとみなして `utilization` / `status` を信用しない**。
+  snapshot は peer の最終 turn 時点の値であり idle 中は更新されないため。
+  ただしこれは **deterministic に強制される仕組みではない** — server も
+  wrapper も判定を代行せず、model の解釈に委ねる best-effort な規約で
+  ある。dashboard 側の同等対応は
+  [#164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164) の
+  scope
+- MUST: 省略された field は **「不明」であって 0 でも「問題なし」でも
+  ない**。`turns` の省略は 0 往復ではなく、`context` の省略は余裕が
+  あることでも、`rate_limits` の省略は無制限でもない
 - SHOULD: `conversation_id` は UUIDv4 ベースで採番、衝突回避と
   グルーピング容易性を両立する
 - SHOULD: `body` は protocol 全体の他フィールド同様 wrapper 側で
@@ -452,10 +555,16 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   [subagent-tasks](subagent-tasks.md)(類似の予約 type パターン)、
   [plugin-model](plugin-model.md)(将来のフィルタ挿入位置)、
   [threat-model](threat-model.md)(operator 限定配信の根拠)
-- 関連 plans: [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)
+- 関連 plans: [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)、
+  [phase-27-list-agents-metadata](../plans/phase-27-list-agents-metadata.md)
+  (peer directory の稼働状況 6 field)
 - ADRs: [0010 protocol-precisification](../adr/0010-protocol-precisification.md),
   [0015 protocol-version-stamping](../adr/0015-protocol-version-stamping.md),
-  [0021 role-information-disclosure-policy](../adr/0021-role-information-disclosure-policy.md),
-  [0022 pending-permission-authoritative-source](../adr/0022-pending-permission-authoritative-source.md)
+  [0021 role-information-disclosure-policy](../adr/0021-role-information-disclosure-policy.md)
+  (F6 = agent 間開示の allow-list),
+  [0022 pending-permission-authoritative-source](../adr/0022-pending-permission-authoritative-source.md),
+  [0040 context-usage-capability](../adr/0040-context-usage-capability.md)
+  (`context` の capability gate)
 - kaoiro issue #17(本実装の起点)、#18(メッセージフィルタ)、
-  #87(調査の傘 issue)、#131(応答不能エラーの通知)
+  #87(調査の傘 issue)、#131(応答不能エラーの通知)、
+  #160(peer directory の稼働状況)、#164(rate_limits 表示不具合)

@@ -59,6 +59,7 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | envelope の `ext`(cwd / model / context / rate_limits / slash_commands / 将来追加分)を全 type で viewer 除去 | #46 で実装(コミット 9b32c34 / ef7b606) |
 | viewer 配信を **allow-list 方式** へ転換(operator 限定がデフォルト、viewer 配信は明示宣言)。`permission_request` envelope を viewer 完全除去(合成 `state_change(waiting_permission)` に置換し grid 整合保持) | #46 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) |
 | log/result 等 operator 限定 envelope は `agents:lobby` に平文 broadcast され `AgentsChannel.handle_out` が per-subscriber で絞り込む(購読時点 gate ではない)。`agents:lobby` の購読者を `AgentsChannel` のみに保つ不変条件で担保し、operator 専用トピック分離は採用しない | #27(評価の上 **現状維持** を決定。新規購読者は下記 MUST 参照) |
+| **agent 間開示**(peer directory)を viewer/operator とは別軸の第 3 主体として定義し、`directory_entry` の明示列挙 field のみ agent に出す allow-list とする。`ext` の nested key を素通しせず canonical key だけを写す。`cwd` / permission / `session_id` / `pending_permission` / `session_capabilities` 等は継続除外 | #160 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6([protocol-inter-agent](protocol-inter-agent.md)「peer directory の情報境界」が field の正本) |
 | ユーザトークンを httpOnly + 暗号化 session cookie に保持(XSS でも JS から読めず、cookie jar 上でも秘匿)。CSRF は SameSite=Lax + prod の `check_origin` で抑止 | Phase 3.5([ADR-0013](../adr/0013-user-token-cookie-persistence.md)) |
 | OAuth + RBAC 本実装 | 将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
 | セッション召喚時に runner が返す JSONL メタ(先頭プロンプト要約等)を operator role 限定・最小限に露出(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) | 将来(resume 機能と同時) |
@@ -81,6 +82,13 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 - MUST: `permission_request` envelope は viewer 完全除去。grid 整合のため
   合成 `state_change(waiting_permission)`(`payload={}` / `ext` なし)に
   置換して viewer へ配信([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
+- MUST: **agent 間開示も allow-list 方式**。peer directory
+  (`directory_request`)は viewer 配信とは **別実装・別経路** であり、
+  片方の allow-list がもう片方を守らない。`directory_entry` が明示列挙
+  した field だけを出し、`ext` の未知 nested key は canonical key への
+  写し替えで落とす(ADR-0021 F6、#160)。peer directory に field を
+  足すときは viewer 配信の要否と同様に **agent 開示の要否も明示判断**
+  する。
 - MUST: `agents:lobby` を直接購読してよいのは `AgentsChannel` のみ
   (#27)。`WrapperChannel` は log/result の tool I/O を含む全 envelope を
   同トピックへ平文 broadcast し、role 絞り込みは `AgentsChannel.handle_out`

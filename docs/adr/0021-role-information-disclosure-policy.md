@@ -5,8 +5,8 @@ date: 2026-06-22
 opened: 2026-06-22
 supersedes: []
 superseded_by: null
-related_specs: [protocol, threat-model]
-related_adrs: [11, 12, 13, 22, 25, 27, 28, 30]
+related_specs: [protocol, threat-model, protocol-inter-agent]
+related_adrs: [11, 12, 13, 22, 25, 27, 28, 30, 40]
 ---
 
 # ADR-0021 — viewer / operator ロールの情報公開ポリシ
@@ -102,6 +102,65 @@ viewer が当該 agent を見失わないよう合成置換が必要。
 3. 機微フィールドが ext に乗る場合は引き続き catch-all の ext 除去で守られる
    (allow した type でも viewer には ext は届かない)。
 
+### F6: agent 間開示 (peer directory)
+
+F1〜F5 は client (dashboard) 向けの `agents:lobby` 配信を対象とする。
+[issue #160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160)
+で agent が peer の稼働状況を読んで委任判断を行う要求が生じたため、
+**第 3 の開示主体として `agent` を定義する**(2026-07-28 追記、
+[phase-27](../plans/phase-27-list-agents-metadata.md))。
+
+**F6-1 — `agent` は `operator` の部分集合ではない。** operator が
+見る経路(`agents:lobby` / `AgentsChannel.sanitize_envelope_for/2`)と
+agent が見る経路(`wrapper:<id>` /
+`WrapperChannel.handle_in("directory_request", …)`)は別実装であり、
+片方の allow-list がもう片方を守らない。両者は独立に判断する。
+
+**F6-2 — peer directory も allow-list 方式。** `directory_entry/4` が
+明示列挙した field だけが agent 間に出る。envelope の `ext` を丸ごと
+流し込む実装は禁止する(F2 と同じ fail-closed)。allow-list は
+**nested 階層まで適用** する — `ext` 由来の構造体を載せる場合も
+canonical key だけを写した新しい map を組み立て、未知の nested key は
+開示しない。
+
+**F6-3 — 現時点の allow 集合**: `agent_id` /
+`persona{id, name, sprite_set}` / `state` / `engine` / `model` /
+`effort` / `context` / `session_started_at` / `turns` /
+`last_activity_at` / `conversation` / `rate_limits`。
+後半 6 field は #160(phase-27)で追加。
+
+**F6-4 — 明示 deny(継続除外)**: `cwd`、`permission`(`sandbox` /
+`approval`)、`permission_mode` / `fast_mode`、`session_id`、
+`pending_permission`(特に `input`)、`pending_question`、
+`slash_commands`、`models` catalog、`resume_snapshot` /
+`resume_drift`、`model_source` / `effort_source`、
+`session_capabilities`、`cost`。委任判断に不要か、operator 固有の
+作業内容を推測させるため。`session_capabilities` は
+`supports_context_usage` を `context` 投影の gate 入力として **server
+内部で読むだけ** で、値そのものは peer に出さない
+([ADR-0040](0040-context-usage-capability.md) D1 の 3-state 判定を
+dashboard と揃えるため)。
+
+**F6-5 — `conversation` は相手 `agent_id` までを開示し、
+`conversation_id` は開示しない。** 開示範囲として決定されたのが
+「active な会話の有無 + 相手 agent_id 一覧」(#160 決定 4)であり、
+識別子はその範囲を超えるため。範囲外だから出さないという判断であって、
+[#17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17) の
+conversation_id 機密性についてここで結論を出したわけではない。信頼
+境界そのものの再評価は F6-6 の将来項目に含める。
+
+**F6-6 — 妥当性の根拠と再評価条件。** 現状 kaoiro は単一 operator
+配下の閉じた系であり、peer は同一の人間が起動した agent に限られる。
+稼働状況の相互可視化による露出リスクは小さく、operator 介在の削減
+という便益が上回る。外部 inbound
+([#98](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/98))
+導入時、または agent 間の信頼境界が operator 単位でなくなった時点で
+本節を再評価する。
+
+**F6-7 — 拡張手順。** peer directory に新 field を足すときは、F5 の
+viewer 判断と同様に **agent 開示の要否を明示判断** し、F6-3 / F6-4 の
+どちらかに列挙してからテストで両主体の可視性を covering する。
+
 ## Consequences
 
 ### Positive
@@ -112,6 +171,8 @@ viewer が当該 agent を見失わないよう合成置換が必要。
   漏洩が止まる(operator が使っているツールの推測経路を塞ぐ)。
 - viewer ロールの仕様が一覧表で読める(threat-model.md / protocol.md
   にも反映)。
+- F6 で agent 間開示も同じ allow-list 規律に載り、peer directory へ
+  field を足すときの判断手順が viewer と揃った(#160)。
 
 ### Negative
 
@@ -145,4 +206,8 @@ viewer が当該 agent を見失わないよう合成置換が必要。
   土台)、[0012](0012-response-display-and-dashboard-scope.md)(log/result の
   operator 限定の出発点)、[0013](0013-user-token-cookie-persistence.md)
   (token 保管)。
+- F6 の由来: [issue #160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160)、
+  実装は [phase-27](../plans/phase-27-list-agents-metadata.md)。開示 field の
+  wire は [protocol-inter-agent](../specs/protocol-inter-agent.md)
+  「peer directory の情報境界」が正本。
 - 由来: [issue #46](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/46)。

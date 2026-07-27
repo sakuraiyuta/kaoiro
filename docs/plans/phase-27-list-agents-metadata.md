@@ -961,20 +961,20 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 
 | Task | 状態 | 内容 |
 |---|---|---|
-| 27-A1 | ⏳ | `AgentActivity` 新設 |
-| 27-A2 | ⏳ | `ConversationStates.peer_index/1` (batch) |
-| 27-A3 | ⏳ | lifecycle (L0-L3) / ingest / spawn_result cleanup 配線 |
-| 27-A4 | ⏳ | `directory_entry/2` 6 field 拡張 |
-| 27-A5 | ⏳ | server テスト |
-| 27-B1 | ⏳ | `DirectoryEntry` 型拡張 |
-| 27-B2 | ⏳ | `directoryEntryFrom` narrow 拡張 |
-| 27-B3 | ⏳ | `LIST_AGENTS_DESCRIPTION` 更新 |
-| 27-B4 | ⏳ | wrapper テスト |
-| 27-B5 | ⏳ | MF-C1 相関子 (protocol additive + runner 伝播 + join params) |
-| 27-C1 | ⏳ | ADR-0021 F6 追記 |
-| 27-C2 | ⏳ | `protocol-inter-agent.md` 更新 |
-| 27-C3 | 🟡 | `protocol.md` L222 の #102 drift 修正のみ設計時に先行実施。`threat-model.md` の agent 間開示軸 1 行追記が未 |
-| 27-C4 | 🟡 | README へ phase 27 行を登録済み。plan status の更新は実装後 |
+| 27-A1 | ✅ | `AgentActivity` 新設 |
+| 27-A2 | ✅ | `ConversationStates.peer_index/1` (batch) |
+| 27-A3 | ✅ | lifecycle (L0-L3) / ingest / spawn_result cleanup 配線 |
+| 27-A4 | ✅ | `directory_entry/4` 6 field 拡張 + capability gate + projection |
+| 27-A5 | 🟡 | server テスト (AC 全件の消し込みを継続中) |
+| 27-B1 | ✅ | `DirectoryEntry` 型拡張 |
+| 27-B2 | ✅ | `directoryEntryFrom` narrow 拡張 |
+| 27-B3 | ✅ | `LIST_AGENTS_DESCRIPTION` 更新 |
+| 27-B4 | ✅ | wrapper テスト |
+| 27-B5 | ✅ | MF-C1 相関子 (protocol additive + runner 伝播 + join params) |
+| 27-C1 | ✅ | ADR-0021 F6 追記 |
+| 27-C2 | ✅ | `protocol-inter-agent.md` 更新 |
+| 27-C3 | ✅ | `protocol.md` の entry shape を 6 field 込みへ更新 (#102 drift は設計時に先行修正済み)、`threat-model.md` に agent 間開示軸を緩和策表 + Constraints へ追記 |
+| 27-C4 | 🟡 | Progress 表・README を実状へ更新。frontmatter の status は 27-A5 と ふじ レビュー完了後に `implemented` へ |
 
 ## Acceptance Criteria
 
