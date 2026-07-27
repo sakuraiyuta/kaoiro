@@ -1920,3 +1920,107 @@ describe("Supervisor P1 pair-aware apply integration (phase-23)", () => {
     });
   });
 });
+
+// phase-27 (#160): the session-transition correlation id must survive every
+// hop the runner owns — into the wrapper config, back out on spawn_result,
+// and across a switch's relaunch. The server matches a wrapper's join
+// against this id, so a dropped or stale value silently costs the agent its
+// activity metadata.
+describe("Supervisor — session transition 相関子 (#160)", () => {
+  const withId = { ...spawnMsg, request_id: "tr-spawn-1" };
+
+  it("spawn 成功の result に request_id を echo する", () => {
+    const h = harness();
+    h.sup.handleSpawn(withId);
+    expect(h.results[0]).toMatchObject({ ok: true, request_id: "tr-spawn-1" });
+  });
+
+  it("spawn 失敗の result にも request_id を echo する", () => {
+    const h = harness();
+    h.sup.handleSpawn({ ...withId, cwd: "/etc" });
+    expect(h.results[0]).toMatchObject({
+      ok: false,
+      reason: "cwd_not_found",
+      request_id: "tr-spawn-1",
+    });
+  });
+
+  it("parseSpawn が弾く payload でも request_id を echo する", () => {
+    // parsed が得られない経路でも、server は対象の pending transition を
+    // 特定して abort できなければならない。
+    const h = harness();
+    const { persona: _omit, ...broken } = withId;
+    void _omit;
+    h.sup.handleSpawn(broken);
+    expect(h.results[0]).toMatchObject({
+      ok: false,
+      reason: "error",
+      request_id: "tr-spawn-1",
+    });
+  });
+
+  it("wrapper config へ transition_id として伝播する", () => {
+    const h = harness();
+    h.sup.handleSpawn(withId);
+    expect(h.configs[0]).toMatchObject({ transition_id: "tr-spawn-1" });
+  });
+
+  it("legacy (request_id なし) では config にも result にも載せない", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    expect(h.configs[0]).not.toHaveProperty("transition_id");
+    expect(h.results[0]).not.toHaveProperty("request_id");
+  });
+
+  it("空文字の request_id は落として wrapper へ渡さない", () => {
+    // server は blank を legacy absent ではなく mismatch として扱うため、
+    // blank が CAS の迂回経路にならないようにする。
+    const h = harness();
+    h.sup.handleSpawn({ ...spawnMsg, request_id: "" });
+    expect(h.configs[0]).not.toHaveProperty("transition_id");
+  });
+
+  it("switch の relaunch は switch 自身の id を運ぶ", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      resume_session_id: "11111111-2222-3333-4444-555555555555",
+      request_id: "tr-spawn-1",
+    });
+    h.sup.handleSwitchSession({
+      agent_id: spawnMsg.agent_id,
+      resume_session_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      request_id: "tr-switch-1",
+    });
+    h.last().exit();
+    expect(h.configs[1]).toMatchObject({ transition_id: "tr-switch-1" });
+  });
+
+  it("legacy switch は前回 spawn の stale な id を持ち込まない", () => {
+    const h = harness({ exists: true });
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      resume_session_id: "11111111-2222-3333-4444-555555555555",
+      request_id: "tr-spawn-1",
+    });
+    h.sup.handleSwitchSession({
+      agent_id: spawnMsg.agent_id,
+      resume_session_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    });
+    h.last().exit();
+    expect(h.configs[1]).not.toHaveProperty("transition_id");
+  });
+
+  it("stop による spawn 取消は request_id なしで報告する", () => {
+    // 元コマンドの相関子を保持していないため。server 側は CAS 不一致として
+    // 破棄し、pending は TTL で回収される (plan の degrade path)。
+    const h = harness({ exists: new Promise<boolean>(() => {}) });
+    h.sup.handleSpawn({
+      ...withId,
+      resume_session_id: "11111111-2222-3333-4444-555555555555",
+    });
+    h.sup.handleStop({ agent_id: spawnMsg.agent_id });
+    expect(h.results[0]).toMatchObject({ ok: false, reason: "error" });
+    expect(h.results[0]).not.toHaveProperty("request_id");
+  });
+});

@@ -505,6 +505,53 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     expect(narrowed.rate_limits).toEqual({ five_hour: { utilization: 0.3 } });
   });
 
+  it("array を object として受理しない (server の is_map と揃える)", async () => {
+    // typeof [] === "object" なので素朴な判定では rate_limits: [{...}] が
+    // key "0" の window として通る。Elixir 側は is_map/1 で落とすため、
+    // 通してしまうと両側の受理集合がずれる。
+    const narrowed = await narrowOne({
+      context: [1, 2, 3],
+      rate_limits: [{ utilization: 0.1 }],
+      conversation: ["peer.2"],
+    });
+
+    expect(narrowed).toEqual({
+      agent_id: "peer.1",
+      persona: {},
+      state: "idle",
+    });
+  });
+
+  it("window 値が array の場合も drop する", async () => {
+    const narrowed = await narrowOne({
+      rate_limits: {
+        five_hour: [{ utilization: 0.1 }],
+        seven_day: { utilization: 0.71 },
+      },
+    });
+
+    expect(narrowed.rate_limits).toEqual({ seven_day: { utilization: 0.71 } });
+  });
+
+  it("safe integer 範囲を超える数値は drop する", async () => {
+    // Number.isFinite だけでは 2^53 超を通すが、その値は既に精度を失って
+    // おり、Elixir が受理した任意精度整数と一致しない。
+    const narrowed = await narrowOne({
+      context: {
+        used_tokens: Number.MAX_SAFE_INTEGER + 2,
+        max_tokens: 200000,
+        used_percentage: 1,
+      },
+      rate_limits: {
+        five_hour: { utilization: Number.MAX_SAFE_INTEGER + 2 },
+        seven_day: { utilization: 0.71 },
+      },
+    });
+
+    expect(narrowed.context).toBeUndefined();
+    expect(narrowed.rate_limits).toEqual({ seven_day: { utilization: 0.71 } });
+  });
+
   it("window 数超過は canonical 優先 + lexical で決定的に 8 件へ切る", async () => {
     const many: Record<string, unknown> = {};
     // 挿入順は canonical を最後にして、key 順に依存しないことを示す。
@@ -525,6 +572,29 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
       "z4",
       "z5",
       "z6",
+    ]);
+  });
+
+  it("大小文字混在の overflow は ASCII code-unit 順で切る", async () => {
+    // localeCompare だと多くの locale で "a" < "Z" になり、binary sort の
+    // server ("Z" < "a") と生存 window が食い違う。ASCII 順で固定する。
+    const many: Record<string, unknown> = {};
+    for (const key of ["a1", "a2", "a3", "Z1", "Z2", "Z3", "B1", "B2", "B3"]) {
+      many[key] = { utilization: 0.1 };
+    }
+
+    const narrowed = await narrowOne({ rate_limits: many });
+
+    // ASCII: 大文字 (0x42 'B', 0x5A 'Z') がすべて小文字 (0x61 'a') より前。
+    expect(Object.keys(narrowed.rate_limits as object)).toEqual([
+      "B1",
+      "B2",
+      "B3",
+      "Z1",
+      "Z2",
+      "Z3",
+      "a1",
+      "a2",
     ]);
   });
 

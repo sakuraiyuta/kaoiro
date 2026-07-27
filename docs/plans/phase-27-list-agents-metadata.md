@@ -591,11 +591,18 @@ ADR-0040 の「推定値を出さない」作法の踏襲)。
 (AgentsChannel / SessionResets)・read (directory_request) の 3 系統から
 触られる。次の 3 点を守る。
 
-- **G1 — 記録対象の限定**: `record_envelope/3` は `validate/2` /
+- **G1 — 記録対象の限定** (owner-placeholder 方針、2026-07-28 裁定で
+  実装を追認): entry は **join 時に owner を bind した placeholder**
+  (`turns: 0` / `last_activity_at` 未設定) として作られる。owner fence を
+  envelope 受理まで遅らせると、どの connection が current なのかを最初の
+  envelope が届くまで決められないため。したがって G1 が禁じるのは
+  「entry が存在すること」ではなく **「reject された envelope が計測を
+  進めること」** である。`record_envelope/3` は `validate/2` /
   `route_inter_agent/2` / `store/1` がすべて `:ok` を返した envelope に
-  対してのみ呼ぶ。reject された envelope で entry を作ると、存在しない
-  agent の orphan entry ができ、tracker の agent 数上限を独立に食い潰す
-  経路になる。
+  対してのみ呼ぶ。reject された envelope で計測を進めると、送信が拒否
+  されたはずの相手が活動しているように見え、委任判断を誤らせる。
+  agent 数上限は join 時点の placeholder で押さえるので、認証を通らない
+  接続が tracker を膨らませる経路は残らない。
 - **G2 — 投影時の session 一致検査**: `directory_request` で
   session-specific field (`session_started_at` / `turns`) を載せるのは、
   **`AgentActivity` の `session_id` と `AgentStates` latest envelope の
@@ -1137,7 +1144,12 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
       は復元されず省略される (裁定 O2)
 - [ ] `AgentActivity` の `session_id` と latest envelope の `session_id`
       が不一致のとき、`session_started_at` / `turns` が省略される (G2)
-- [ ] reject された envelope で tracker entry が作られない (G1)
+- [ ] reject された envelope が tracker を **進めない** (G1)。join 時点で
+      owner を bind した placeholder entry (`turns: 0` / `last_activity_at`
+      未設定) が既に存在するため、検証すべきは「entry が存在しないこと」
+      ではなく「reject された envelope が `turns` / `last_activity_at` を
+      動かさないこと」である (owner-placeholder 方針、2026-07-28 裁定で
+      実装を追認)
 
 ### 互換 / 一貫性
 

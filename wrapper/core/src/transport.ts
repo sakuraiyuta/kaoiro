@@ -173,6 +173,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** `isObject` answers true for arrays (`typeof [] === "object"`), which the
+ *  projection must not accept: the server's Elixir side tests `is_map/1`, so
+ *  `rate_limits: [{...}]` is rejected there but would arrive here as a window
+ *  named "0". Projection uses this stricter test to keep the two sides
+ *  admitting the same inputs. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return isObject(value) && !Array.isArray(value);
+}
+
 /** Bounds mirrored from the server's own projection (phase-27, #160). The two
  *  sides MUST agree: a looser client would re-open the pass-through the
  *  server closed, since the model reads whatever survives here. */
@@ -187,8 +196,15 @@ const CANONICAL_WINDOWS = ["five_hour", "seven_day"];
 
 const utf8Bytes = new TextEncoder();
 
+/** Finite AND within +-(2^53-1). `Number.isFinite` alone admits values past
+ *  the safe-integer range, where a JS number has already lost precision
+ *  against the arbitrary-precision integer the Elixir side accepted — the two
+ *  would then disagree about the same wire value. The magnitude bound is the
+ *  agreed common ceiling for every numeric field (phase-27, #160). */
 function finiteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value)
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    Math.abs(value) <= Number.MAX_SAFE_INTEGER
     ? value
     : undefined;
 }
@@ -210,7 +226,7 @@ function nonEmptyText(value: unknown): string | undefined {
  *  carried over, and a malformed one drops the whole field rather than
  *  handing the model a partial reading it would compare against a full one. */
 function projectContext(value: unknown): DirectoryContext | undefined {
-  if (!isObject(value)) return undefined;
+  if (!isPlainObject(value)) return undefined;
   const used_tokens = finiteNumber(value.used_tokens);
   const max_tokens = finiteNumber(value.max_tokens);
   const used_percentage = finiteNumber(value.used_percentage);
@@ -231,7 +247,7 @@ function projectRateLimitWindow(
   key: string,
   value: unknown,
 ): DirectoryRateLimitWindow | undefined {
-  if (!isObject(value)) return undefined;
+  if (!isPlainObject(value)) return undefined;
   if (utf8Bytes.encode(key).length > MAX_WINDOW_KEY_BYTES) return undefined;
   if (!WINDOW_KEY_PATTERN.test(key)) return undefined;
   // Each field is optional, but a PRESENT one that fails validation drops the
@@ -268,18 +284,23 @@ function windowSortKey(key: string): [number, string] {
 function projectRateLimits(
   value: unknown,
 ): Record<string, DirectoryRateLimitWindow> | undefined {
-  if (!isObject(value)) return undefined;
+  if (!isPlainObject(value)) return undefined;
   const valid: [string, DirectoryRateLimitWindow][] = [];
   for (const [key, raw] of Object.entries(value)) {
     const window = projectRateLimitWindow(key, raw);
     if (window !== undefined) valid.push([key, window]);
   }
-  // Deterministic trim: canonical windows first, then the rest in lexical
-  // order, so which windows survive never depends on object key order.
+  // Deterministic trim: canonical windows first, then the rest in ASCII
+  // code-unit order, so which windows survive never depends on object key
+  // order. NOT localeCompare — it is locale-dependent and orders case
+  // differently from the server's binary sort ("Z" before "a" there, after
+  // it under many locales), which would make the two keep different windows
+  // once more than MAX_RATE_WINDOWS survive validation.
   valid.sort(([a], [b]) => {
     const [rankA, tieA] = windowSortKey(a);
     const [rankB, tieB] = windowSortKey(b);
-    return rankA - rankB || tieA.localeCompare(tieB);
+    if (rankA !== rankB) return rankA - rankB;
+    return tieA < tieB ? -1 : tieA > tieB ? 1 : 0;
   });
   const kept = valid.slice(0, MAX_RATE_WINDOWS);
   return kept.length === 0 ? undefined : Object.fromEntries(kept);
@@ -288,7 +309,7 @@ function projectRateLimits(
 function projectConversation(
   value: unknown,
 ): DirectoryConversation | undefined {
-  if (!isObject(value)) return undefined;
+  if (!isPlainObject(value)) return undefined;
   if (typeof value.active !== "boolean") return undefined;
   if (!Array.isArray(value.peers)) return undefined;
   if (!value.peers.every((peer): peer is string => typeof peer === "string")) {
