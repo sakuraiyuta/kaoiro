@@ -322,7 +322,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
 
       # confirm_connection (wrapper join 相当) で completed 発火。
       # Claude 側で init が到達した後の session_id を明示的に渡す想定。
-      :ok = KaoiroServer.SessionResets.confirm_connection(agent_id, "sess-new-init")
+      :legacy_absent = KaoiroServer.SessionResets.confirm_connection(agent_id, "sess-new-init")
 
       assert_broadcast "session_reset_completed", %{
         "agent_id" => ^agent_id,
@@ -360,7 +360,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert_reply ref, :ok
       refute_broadcast "session_reset_completed", _
 
-      :ok = KaoiroServer.SessionResets.confirm_connection(agent_id, nil)
+      :legacy_absent = KaoiroServer.SessionResets.confirm_connection(agent_id, nil)
 
       assert_broadcast "session_reset_completed",
                        %{"agent_id" => ^agent_id, "to_session_id" => nil}

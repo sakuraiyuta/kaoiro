@@ -25,6 +25,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.SessionResets
   alias KaoiroServer.SessionStarts
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentId
@@ -52,6 +53,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   @impl true
   def join("wrapper:" <> agent_id, params, socket) do
+    transition_id =
+      if Map.has_key?(params, "transition_id"),
+        do: Map.get(params, "transition_id"),
+        else: :absent
+
     with :ok <- validate_agent_id(agent_id),
          :ok <- Auth.authorize_wrapper(agent_id, socket.assigns[:wrapper_token]),
          {:ok, persona_id} <- fetch_persona_id(params),
@@ -65,6 +71,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
        socket
        |> assign(:agent_id, agent_id)
        |> assign(:persona_id, persona_id)
+       |> assign(:transition_id, transition_id)
        |> assign(:wrapper_token, nil)}
     else
       {:error, reason} -> {:error, %{reason: to_string(reason)}}
@@ -104,6 +111,31 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp after_join_handshake(socket) do
+    agent_id = socket.assigns.agent_id
+    transition_id = socket.assigns.transition_id
+    reset_id = KaoiroServer.SessionResets.pending_request_id(agent_id)
+
+    # L2 order is intentionally pinned: confirm commits the existing reset
+    # only after join-id CAS, then creates the Activity pending transaction,
+    # then lets Activity decide activation/rebind using the same outcome.
+    reset_result =
+      KaoiroServer.SessionResets.confirm_connection(agent_id, nil, transition_id, SessionResets)
+
+    if reset_result in [:matched, :legacy_absent] and is_binary(reset_id) do
+      :ok =
+        AgentActivity.begin_transition(
+          agent_id,
+          reset_id,
+          :reset,
+          DateTime.utc_now() |> DateTime.to_iso8601()
+        )
+    end
+
+    _ =
+      AgentActivity.activate_or_rebind(agent_id, self(), transition_id,
+        reset_result: reset_result
+      )
+
     case PersonaAssets.prompt(socket.assigns.persona_id) do
       prompt when is_binary(prompt) ->
         push(socket, "persona_prompt", %{prompt: prompt})
@@ -123,18 +155,6 @@ defmodule KaoiroServerWeb.WrapperChannel do
       _ ->
         :ok
     end
-
-    # phase-17 17-5 (must-2, ADR-0036 F2): a fresh wrapper joining while
-    # a reset is in `:awaiting_connect` is the actual completion signal.
-    # SessionResets no-ops when no lock is held or the lock is still in
-    # `:spawning`, so a normal restart join (or a Codex per-turn re-join
-    # pattern) does not accidentally fire a completed broadcast. The
-    # joining wrapper does not yet have a session_id in most cases —
-    # Claude reports it in the init state_change that follows, Codex only
-    # after the first turn — so pass `nil` here; the ordinary envelope
-    # ingest path (SessionPointers.record) still updates the pointer
-    # once the wrapper reports one.
-    KaoiroServer.SessionResets.confirm_connection(socket.assigns.agent_id)
 
     :ok
   end

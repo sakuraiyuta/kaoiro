@@ -143,7 +143,7 @@ defmodule KaoiroServer.SessionResetsTest do
       _ = :sys.get_state(sr)
       assert SessionResets.pending?("a.res.confirm", sr)
 
-      :ok = SessionResets.confirm_connection("a.res.confirm", nil, sr)
+      :legacy_absent = SessionResets.confirm_connection("a.res.confirm", nil, sr)
       refute SessionResets.pending?("a.res.confirm", sr)
     end
 
@@ -202,7 +202,7 @@ defmodule KaoiroServer.SessionResetsTest do
                SessionResets.check_and_acquire(agent_id, "clear", "idle", "sess-old", sr)
 
       :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
-      :ok = SessionResets.confirm_connection(agent_id, nil, sr)
+      :legacy_absent = SessionResets.confirm_connection(agent_id, nil, sr)
 
       # 表示 projection: history は session_boundary marker 1 行だけになる。
       histories = KaoiroServer.AgentStates.histories()
@@ -277,7 +277,7 @@ defmodule KaoiroServer.SessionResetsTest do
                SessionResets.check_and_acquire(agent_id, "new", "idle", "sess-old", sr)
 
       :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
-      :ok = SessionResets.confirm_connection(agent_id, nil, sr)
+      :legacy_absent = SessionResets.confirm_connection(agent_id, nil, sr)
 
       # 表示 projection は保持され、末尾に marker が append される。
       histories = KaoiroServer.AgentStates.histories()
@@ -304,13 +304,13 @@ defmodule KaoiroServer.SessionResetsTest do
 
       # runner の ok=true が来る前の join (通常は起こらないが fail-safe)。
       # lock は :spawning のまま維持、broadcast も発火しない。
-      :ok = SessionResets.confirm_connection("a.res.early", nil, sr)
+      :noop = SessionResets.confirm_connection("a.res.early", nil, sr)
       assert SessionResets.pending?("a.res.early", sr)
     end
 
     test "confirm_connection は pending 無し (通常 restart) では no-op",
          %{resets: sr} do
-      assert :ok = SessionResets.confirm_connection("a.restart.norm", nil, sr)
+      assert :noop = SessionResets.confirm_connection("a.restart.norm", nil, sr)
       refute SessionResets.pending?("a.restart.norm", sr)
       # 実機検収 2 (2026-07-23 マスター指示) Trigger 1 の陰性 pin:
       # 通常 restart の confirm_connection では境界を advance しない
@@ -331,7 +331,7 @@ defmodule KaoiroServer.SessionResetsTest do
       # confirm_connection 直前は開始点未 seed。
       assert KaoiroServer.ClearWatermarks.get(agent_id) == nil
 
-      :ok = SessionResets.confirm_connection(agent_id, nil, sr)
+      :legacy_absent = SessionResets.confirm_connection(agent_id, nil, sr)
 
       assert {{us, seq}, iso, sid} = KaoiroServer.SessionStarts.get(agent_id)
       assert is_integer(us) and is_integer(seq)
@@ -354,7 +354,7 @@ defmodule KaoiroServer.SessionResetsTest do
         SessionResets.check_and_acquire(agent_id, "clear", "idle", "sess-old", sr)
 
       :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
-      :ok = SessionResets.confirm_connection(agent_id, nil, sr)
+      :legacy_absent = SessionResets.confirm_connection(agent_id, nil, sr)
 
       assert {{us, seq}, iso, "sess-new"} =
                KaoiroServer.SessionStarts.get(agent_id)

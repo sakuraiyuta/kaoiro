@@ -60,6 +60,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   require Logger
 
   alias KaoiroServer.AgentDirectory
+  alias KaoiroServer.AgentActivity
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.ClearWatermarks
@@ -528,8 +529,22 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, cwd} <- fetch_allowed_cwd(host, payload),
          {:ok, engine} <- fetch_allowed_engine(host, payload),
          {:ok, agent_id} <- allocate_agent_id(host_id),
+         request_id <- generate_transition_id(),
          {:ok, spawn_payload} <-
-           build_spawn_payload(agent_id, persona, cwd, engine, payload) do
+           build_spawn_payload(
+             agent_id,
+             persona,
+             cwd,
+             engine,
+             Map.put(payload, "request_id", request_id)
+           ),
+         :ok <-
+           AgentActivity.begin_transition(
+             agent_id,
+             request_id,
+             :spawn,
+             DateTime.utc_now() |> DateTime.to_iso8601()
+           ) do
       KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
       # Seed the cwd now so restore works even if the wrapper never reports a
       # statusline cwd (#22, ADR-0014): the real session_id arrives later and
@@ -596,8 +611,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, session_id, cwd, engine} <- session_pointer(agent_id),
          {:ok, host} <- fetch_host(host_id_of(agent_id)),
          {:ok, engine} <- fetch_allowed_engine(host, %{"engine" => engine}),
+         request_id <- generate_transition_id(),
          {:ok, spawn_payload} <-
-           build_restore_payload(agent_id, persona, cwd, session_id, engine) do
+           build_restore_payload(agent_id, persona, cwd, session_id, engine, request_id),
+         :ok <-
+           AgentActivity.begin_transition(
+             agent_id,
+             request_id,
+             :restore,
+             DateTime.utc_now() |> DateTime.to_iso8601()
+           ) do
       KaoiroServerWeb.Endpoint.broadcast(
         "runner:#{host_id_of(agent_id)}",
         "spawn",
@@ -627,13 +650,24 @@ defmodule KaoiroServerWeb.AgentsChannel do
         # ext.resume_snapshot / ext.resume_drift on its first state_change.
         # Without this the relaunched wrapper would retain the original
         # spawn-time snapshot (post-review Finding 2).
+        request_id = generate_transition_id()
+
         switch_payload =
           %{
             "version" => "0",
             "agent_id" => agent_id,
-            "resume_session_id" => session_id
+            "resume_session_id" => session_id,
+            "request_id" => request_id
           }
           |> maybe_put_resume_snapshot(agent_id)
+
+        :ok =
+          AgentActivity.begin_transition(
+            agent_id,
+            request_id,
+            :restore,
+            DateTime.utc_now() |> DateTime.to_iso8601()
+          )
 
         KaoiroServerWeb.Endpoint.broadcast(
           "runner:#{host_id_of(agent_id)}",
@@ -809,6 +843,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # phase-17 17-4: clear any dangling reset lock + dispatch cooldown
       # so a respawn under the same agent_id does not inherit stale state.
       SessionResets.delete(agent_id)
+      AgentActivity.delete(agent_id)
       # issue #109: purge the clear watermark too, so an agent respawned
       # under the same agent_id starts fresh (no lingering hide-past
       # filter from a prior operator).
@@ -1087,6 +1122,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       }
       |> maybe_put_string("initial_prompt", payload["initial_prompt"])
       |> maybe_put_string("resume_session_id", payload["resume_session_id"])
+      |> maybe_put_string("request_id", payload["request_id"])
       |> maybe_put_engine(engine)
       # Launch-time picks (ADR-0032 F4bc / ADR-0033 F3): free-form model /
       # effort strings (value sets belong to the engine catalog) plus the
@@ -1259,8 +1295,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, _sid, cwd, engine} <- session_pointer(agent_id),
          {:ok, host} <- fetch_host(host_id_of(agent_id)),
          {:ok, engine} <- fetch_allowed_engine(host, %{"engine" => engine}),
+         request_id <- generate_transition_id(),
          {:ok, spawn_payload} <-
-           build_restore_payload(agent_id, persona, cwd, session_id, engine) do
+           build_restore_payload(agent_id, persona, cwd, session_id, engine, request_id),
+         :ok <-
+           AgentActivity.begin_transition(
+             agent_id,
+             request_id,
+             :restore,
+             DateTime.utc_now() |> DateTime.to_iso8601()
+           ) do
       KaoiroServerWeb.Endpoint.broadcast(
         "runner:#{host_id_of(agent_id)}",
         "spawn",
@@ -1304,13 +1348,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp fetch_resume_session_id(_payload), do: {:error, :missing_session_id}
 
+  defp generate_transition_id do
+    "at_" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+  end
+
   # session_id nil = fresh-restore (phase-25, ADR-0030 D8 追補): the pointer
   # lost its session_id via detach (/clear) or never received one (未発話).
   # Omit resume_session_id and stamp apply_resume_snapshot=true so the runner
   # takes the fresh-spawn + snapshot re-apply branch. resume_snapshot itself
   # rides through the shared maybe_put_resume_snapshot pipe (nil-snapshot
   # pointer degrades safely to engine defaults, fail-soft).
-  defp build_restore_payload(agent_id, persona, cwd, session_id, engine) do
+  defp build_restore_payload(agent_id, persona, cwd, session_id, engine, request_id) do
     spawn_payload =
       %{
         "version" => "0",
@@ -1321,6 +1369,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       }
       |> maybe_put_engine(engine)
       |> maybe_put_resume_session_id(session_id)
+      |> maybe_put_string("request_id", request_id)
       |> maybe_put_resume_snapshot(agent_id)
 
     case check_relay_size(spawn_payload) do

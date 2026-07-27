@@ -21,7 +21,7 @@ defmodule KaoiroServer.SessionResets do
     `session_reset_started`, runner is told to fresh-relaunch.
   * `mark_spawn_ok/3` → `:awaiting_connect`. Runner has confirmed the
     fresh child spawned; we still wait for the wrapper to join.
-  * `confirm_connection/2` → completed. Fresh wrapper joined; detach the
+  * `confirm_connection/4` → completed. Fresh wrapper joined; detach the
     pointer and broadcast `session_reset_completed`.
   * `resolve_failure/3` (formerly `resolve/6` on the failure branch) or
     the 60 s timeout → `session_reset_failed`, no detach.
@@ -188,7 +188,24 @@ defmodule KaoiroServer.SessionResets do
   the caller (wrapper_channel) already runs in its own process.
   """
   def confirm_connection(agent_id, joined_session_id \\ nil, server \\ __MODULE__) do
-    GenServer.call(server, {:confirm_connection, agent_id, joined_session_id})
+    GenServer.call(server, {:confirm_connection, agent_id, joined_session_id, :absent})
+  end
+
+  @doc """
+  Confirms a joining wrapper against the reset lock's request_id.
+
+  Returns exactly `:matched | :legacy_absent | :mismatch | :noop`. `:absent`
+  is reserved for a join parameter whose key was actually absent; nil, empty,
+  and malformed present values are mismatches and never enter the legacy
+  fallback.
+  """
+  def confirm_connection(agent_id, joined_session_id, transition_id, server) do
+    GenServer.call(server, {:confirm_connection, agent_id, joined_session_id, transition_id})
+  end
+
+  @doc "Returns the live reset request_id for the L2 Activity transaction."
+  def pending_request_id(agent_id, server \\ __MODULE__) do
+    GenServer.call(server, {:pending_request_id, agent_id})
   end
 
   @doc "True when a reset lock is currently held for the agent."
@@ -276,6 +293,10 @@ defmodule KaoiroServer.SessionResets do
     {:reply, Map.has_key?(s.pending, agent_id), s}
   end
 
+  def handle_call({:pending_request_id, agent_id}, _from, s) do
+    {:reply, get_in(s, [:pending, agent_id, :request_id]), s}
+  end
+
   def handle_call({:delete, agent_id}, _from, s) do
     case Map.get(s.pending, agent_id) do
       %{timer_ref: ref} -> _ = Process.cancel_timer(ref)
@@ -290,9 +311,10 @@ defmodule KaoiroServer.SessionResets do
      }}
   end
 
-  def handle_call({:confirm_connection, agent_id, joined_session_id}, _from, s) do
+  def handle_call({:confirm_connection, agent_id, joined_session_id, transition_id}, _from, s) do
     case Map.get(s.pending, agent_id) do
-      %{phase: :awaiting_connect} = lock ->
+      %{phase: :awaiting_connect, request_id: request_id} = lock
+      when transition_id == request_id ->
         _ = Process.cancel_timer(lock.timer_ref)
 
         # The lock's to_session_id came from the runner (Codex will be nil;
@@ -358,7 +380,50 @@ defmodule KaoiroServer.SessionResets do
 
         broadcast_completed(agent_id, lock, effective_to_sid, clear_watermark)
 
-        {:reply, :ok, %{s | pending: Map.delete(s.pending, agent_id)}}
+        {:reply, :matched, %{s | pending: Map.delete(s.pending, agent_id)}}
+
+      %{phase: :awaiting_connect} = lock when transition_id == :absent ->
+        _ = Process.cancel_timer(lock.timer_ref)
+
+        effective_to_sid =
+          case joined_session_id do
+            binary when is_binary(binary) -> binary
+            _ -> lock.to_session_id
+          end
+
+        {:ok, {order, display, _sid}} =
+          SessionStarts.advance_transition(
+            agent_id,
+            effective_to_sid,
+            lock.previous_session_id,
+            SessionStarts
+          )
+
+        marker = build_boundary_envelope(agent_id, lock, effective_to_sid)
+
+        clear_watermark =
+          case lock.mode do
+            "clear" ->
+              :ok = ClearWatermarks.record(agent_id, order, display)
+              _ = AgentStates.clear_history_with_boundary(agent_id, marker)
+              display
+
+            _ ->
+              _ = AgentStates.append_boundary(agent_id, marker)
+              nil
+          end
+
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", marker)
+        detach_session_safely(agent_id)
+        broadcast_completed(agent_id, lock, effective_to_sid, clear_watermark)
+
+        {:reply, :legacy_absent, %{s | pending: Map.delete(s.pending, agent_id)}}
+
+      %{phase: :awaiting_connect} ->
+        # A present but non-matching id proves this is a stale join. Unlike
+        # the key-absent rolling-upgrade path, do not commit any irreversible
+        # reset side effect and keep the lock/timer for its real wrapper.
+        {:reply, :mismatch, s}
 
       _ ->
         # No pending, or still in :spawning (the runner hasn't reported
@@ -367,7 +432,7 @@ defmodule KaoiroServer.SessionResets do
         # latter is impossible under Phoenix's ordering guarantees because
         # the runner spawn precedes the wrapper's socket open, but staying
         # a no-op here is the fail-safe).
-        {:reply, :ok, s}
+        {:reply, :noop, s}
     end
   end
 

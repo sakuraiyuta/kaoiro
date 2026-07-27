@@ -25,6 +25,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
   require Logger
 
   alias KaoiroServer.Auth
+  alias KaoiroServer.AgentActivity
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
   alias KaoiroServerWeb.AgentId
@@ -82,9 +83,33 @@ defmodule KaoiroServerWeb.RunnerChannel do
     forward_to_operators("runner_sessions", payload, socket)
   end
 
-  # Runner's spawn outcome: same operator-only forward path.
+  # A spawn result can now abort an Activity pending transaction, so unlike
+  # the old forwarding-only path it must pass the same size/shape/ownership/
+  # correlation gates as session_reset_result. Every rejected result is still
+  # acknowledged: retries cannot make a stale completion become current.
   def handle_in("spawn_result", payload, socket) do
-    forward_to_operators("spawn_result", payload, socket)
+    host_id = socket.assigns.host_id
+
+    with :ok <- check_size(payload),
+         {:ok, agent_id, ok?, request_id, _reason} <- parse_spawn_result(payload),
+         :ok <- require_host_owns_agent(host_id, agent_id) do
+      if not ok? do
+        _ = AgentActivity.resolve_transition(agent_id, request_id, false)
+      end
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "spawn_result",
+        Map.put(payload, "host_id", host_id)
+      )
+
+      {:reply, :ok, socket}
+    else
+      # This is deliberately an ack, not an error reply: a malformed,
+      # cross-host, or stale completion must not be retried into a later
+      # pending transition. It is also not forwarded to operators.
+      {:error, _reason} -> {:reply, :ok, socket}
+    end
   end
 
   # Runner's engine-catalog probe outcome (Option E, ADR-0039). Stamps the
@@ -337,6 +362,24 @@ defmodule KaoiroServerWeb.RunnerChannel do
       {:error, :payload_too_large}
     end
   end
+
+  defp parse_spawn_result(%{"agent_id" => agent_id, "ok" => ok?} = payload)
+       when is_binary(agent_id) and is_boolean(ok?) do
+    with {:ok, request_id} <- parse_optional_request_id(Map.get(payload, "request_id")),
+         {:ok, reason} <- parse_optional_reason(Map.get(payload, "reason")) do
+      {:ok, agent_id, ok?, request_id, reason}
+    end
+  end
+
+  defp parse_spawn_result(_payload), do: {:error, :invalid_spawn_result}
+
+  defp parse_optional_request_id(nil), do: {:ok, nil}
+  defp parse_optional_request_id(value) when is_binary(value), do: {:ok, value}
+  defp parse_optional_request_id(_), do: {:error, :invalid_spawn_result}
+
+  defp parse_optional_reason(nil), do: {:ok, nil}
+  defp parse_optional_reason(value) when is_binary(value), do: {:ok, value}
+  defp parse_optional_reason(_), do: {:error, :invalid_spawn_result}
 
   # Closed-vocabulary parse for `session_reset_result` (ADR-0036 F7,
   # phase-17 17-4). Structural gates only; SessionResets owns the lock /
