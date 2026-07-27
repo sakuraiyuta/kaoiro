@@ -100,6 +100,13 @@ export interface ParsedSpawn {
    *  config.resume_snapshot so the wrapper can stamp ext.resume_snapshot
    *  / ext.resume_drift on its first state_change. */
   resumeSnapshot?: ResolvedSnapshotExt;
+  /** Session-transition correlation id from the command that launched (or
+   *  relaunched) this wrapper — spawn, switch_session, or reset_session
+   *  (phase-27, #160). Rides into the wrapper as `config.transition_id`
+   *  and is echoed back on `spawn_result`. Switch and reset overwrite it
+   *  on `entry.parsed` so the relaunch carries the id of the transition
+   *  that caused it, not the original spawn's. Absent = legacy server. */
+  requestId?: string;
   /** Fresh-restore flag (phase-25, ADR-0030 D8 / ADR-0014 F1 追補).
    *  Set to `true` when the server wants a fresh spawn (no
    *  `resume_session_id`) that nevertheless re-applies `resumeSnapshot`
@@ -160,6 +167,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+/** Like {@link optionalString} but also drops the empty string. Used for the
+ *  transition correlation id (phase-27, #160): a present-but-blank value must
+ *  not reach the wrapper, because the server reads a blank `transition_id` as
+ *  a mismatch rather than as the legacy "absent" case. */
+function nonEmptyString(value: unknown): string | undefined {
+  const text = optionalString(value);
+  return text === undefined || text === "" ? undefined : text;
 }
 
 function isPromise<T>(value: MaybePromise<T>): value is Promise<T> {
@@ -289,6 +305,12 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
     if (typeof payload.apply_resume_snapshot !== "boolean") return null;
     if (payload.apply_resume_snapshot) parsed.applyResumeSnapshot = true;
   }
+  // Session-transition correlation id (phase-27, #160). Relayed verbatim;
+  // the runner never interprets it. An empty string is dropped so it cannot
+  // reach the wrapper as a present-but-blank transition_id — the server
+  // treats that as a mismatch, not as the legacy absent case.
+  const requestId = nonEmptyString(payload.request_id);
+  if (requestId !== undefined) parsed.requestId = requestId;
   return parsed;
 }
 
@@ -319,6 +341,10 @@ export function resolveWrapperConfig(
     server_url: parsed.serverUrl ?? fallbackServerUrl,
   };
   if (parsed.token !== undefined) config.server_token = parsed.token;
+  // Session-transition correlation id (phase-27, #160): the wrapper echoes
+  // it in its channel join params so the server can recognise the
+  // connection this transition produced.
+  if (parsed.requestId !== undefined) config.transition_id = parsed.requestId;
   // Launch-time picks (ADR-0032 F4bc / ADR-0033 F3). Engines ignore the
   // fields that are not theirs (sandbox on Claude, permission_mode on codex).
   if (parsed.model !== undefined) config.model = parsed.model;
@@ -519,17 +545,22 @@ export class Supervisor {
       process.stderr.write("runner: spawn with missing/invalid agent_id\n");
       return;
     }
+    // Read the correlation id before parsing so even a rejected payload
+    // reports against the right pending transition (phase-27, #160).
+    const requestId = isObject(payload)
+      ? nonEmptyString(payload.request_id)
+      : undefined;
     const parsed = parseSpawn(payload);
     if (parsed === null) {
-      this.#fail(agentId, "error");
+      this.#fail(agentId, "error", requestId);
       return;
     }
     if (!isCwdAllowed(parsed.cwd, this.#cwdAllowlist)) {
-      this.#fail(agentId, "cwd_not_found");
+      this.#fail(agentId, "cwd_not_found", requestId);
       return;
     }
     if (this.#children.has(agentId) || this.#pendingSpawns.has(agentId)) {
-      this.#fail(agentId, "already_running");
+      this.#fail(agentId, "already_running", requestId);
       return;
     }
     const resume = parsed.resumeSessionId;
@@ -586,7 +617,7 @@ export class Supervisor {
         process.stderr.write(
           `runner: resume session scan failed for ${agentId}: ${String(error)}\n`,
         );
-        this.#fail(agentId, "error");
+        this.#fail(agentId, "error", resumedParsed.requestId);
       });
   }
 
@@ -643,9 +674,10 @@ export class Supervisor {
     const entry = this.#children.get(agentId);
     if (entry === undefined) return;
     if (!isObject(payload)) return;
+    const requestId = nonEmptyString(payload.request_id);
     const resume = optionalString(payload.resume_session_id);
     if (resume === undefined || resume === "") {
-      this.#fail(agentId, "error");
+      this.#fail(agentId, "error", requestId);
       return;
     }
     // A newer switch supersedes an older async validation for the same agent.
@@ -679,7 +711,7 @@ export class Supervisor {
           `runner: switch_session scan failed for ${agentId}: ${String(error)}\n`,
         );
         if (this.#children.get(agentId) === entry && !entry.stopping) {
-          this.#fail(agentId, "error");
+          this.#fail(agentId, "error", requestId);
         }
       });
   }
@@ -694,11 +726,12 @@ export class Supervisor {
     // The child can stop/crash while Codex I/O is pending. Never resurrect or
     // mutate a stale entry after the scan completes.
     if (this.#children.get(agentId) !== entry || entry.stopping) return;
+    const requestId = nonEmptyString(payload.request_id);
     if (!exists) {
       process.stderr.write(
         `runner: switch_session target not found under cwd (agent ${agentId})\n`,
       );
-      this.#fail(agentId, "session_not_found");
+      this.#fail(agentId, "session_not_found", requestId);
       return;
     }
     // Resume snapshot (ADR-0014 F1 追補「resume 時の privilege 三軸再適用」,
@@ -721,7 +754,7 @@ export class Supervisor {
         process.stderr.write(
           `runner: switch_session with malformed resume_snapshot for ${agentId}\n`,
         );
-        this.#fail(agentId, "error");
+        this.#fail(agentId, "error", requestId);
         return;
       }
       nextSnapshot = sanitized;
@@ -733,7 +766,7 @@ export class Supervisor {
     // click (drop stale in-memory state), so we only guard against a foreign
     // holder.
     if (resume !== old && this.#activeSessions.has(resume)) {
-      this.#fail(agentId, "already_running");
+      this.#fail(agentId, "already_running", requestId);
       return;
     }
     if (old !== undefined && old !== resume) this.#activeSessions.delete(old);
@@ -749,10 +782,20 @@ export class Supervisor {
       nextSnapshot,
       entry.parsed.engine,
     );
+    // The relaunch belongs to THIS switch, so it must carry this command's
+    // correlation id — never the previous spawn's (phase-27, #160). Drop the
+    // inherited value first so a legacy switch (no request_id) relaunches
+    // with none rather than with a stale one; the server then declines to
+    // activate and suppresses the affected metadata instead of trusting it.
+    // Destructure-and-drop matches the resumeSessionId handling below and
+    // satisfies exactOptionalPropertyTypes.
+    const { requestId: _dropRequestId, ...appliedWithoutRequestId } = applied;
+    void _dropRequestId;
     entry.parsed = {
-      ...applied,
+      ...appliedWithoutRequestId,
       resumeSessionId: resume,
       ...(nextSnapshot !== undefined ? { resumeSnapshot: nextSnapshot } : {}),
+      ...(requestId !== undefined ? { requestId } : {}),
     };
     // Take the same restart path a `restart` uses: reset the crash budget
     // (this is a deliberate cycle, not a crash) and kill; #onExit sees
@@ -860,6 +903,11 @@ export class Supervisor {
     const { resumeSessionId: _drop, ...withoutResume } = {
       ...applied,
       ...(nextSnapshot !== undefined ? { resumeSnapshot: nextSnapshot } : {}),
+      // The fresh session belongs to THIS reset, so the relaunch carries the
+      // reset's request_id (phase-27, #160). Overwriting the inherited spawn
+      // value is what lets the server match the fresh wrapper's join against
+      // the reset lock it is holding.
+      requestId,
     };
     void _drop;
     entry.parsed = withoutResume;
@@ -955,14 +1003,14 @@ export class Supervisor {
       process.stderr.write(
         `runner: resume session not found under cwd (agent ${agentId})\n`,
       );
-      this.#fail(agentId, "session_not_found");
+      this.#fail(agentId, "session_not_found", parsed.requestId);
       return;
     }
     // F4: after an async T3 check resumes, this check+add remains one
     // synchronous JS turn. Two concurrent scans therefore cannot both claim
     // the same session.
     if (this.#activeSessions.has(resume)) {
-      this.#fail(agentId, "already_running");
+      this.#fail(agentId, "already_running", parsed.requestId);
       return;
     }
     this.#activeSessions.add(resume);
@@ -981,7 +1029,7 @@ export class Supervisor {
       );
       this.#children.delete(agentId);
       if (resume !== undefined) this.#activeSessions.delete(resume);
-      this.#fail(agentId, "error");
+      this.#fail(agentId, "error", parsed.requestId);
       return;
     }
     this.#sendResult({
@@ -989,16 +1037,30 @@ export class Supervisor {
       host_id: this.#hostId,
       agent_id: agentId,
       ok: true,
+      ...(parsed.requestId !== undefined
+        ? { request_id: parsed.requestId }
+        : {}),
     });
   }
 
-  #fail(agentId: string, reason: SpawnFailReason): void {
+  /** `requestId` echoes the transition correlation id of the command that
+   *  failed (phase-27, #160) so the server can abort exactly that pending
+   *  transition. Omitted when the id is unknown — a malformed payload, or a
+   *  failure raised outside the originating command (e.g. a `stop` that
+   *  cancels an in-flight spawn). The server then discards the result and
+   *  lets the pending transition expire instead of acting on it. */
+  #fail(
+    agentId: string,
+    reason: SpawnFailReason,
+    requestId?: string | undefined,
+  ): void {
     this.#sendResult({
       version: "0",
       host_id: this.#hostId,
       agent_id: agentId,
       ok: false,
       reason,
+      ...(requestId !== undefined ? { request_id: requestId } : {}),
     });
   }
 
