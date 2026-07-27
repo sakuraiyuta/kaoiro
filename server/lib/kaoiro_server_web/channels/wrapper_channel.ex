@@ -489,19 +489,19 @@ defmodule KaoiroServerWeb.WrapperChannel do
       # indistinguishable from an engine that intentionally reports only
       # those fields.
       with {:ok, projected} <-
-             maybe_put_rate_field(%{}, "status", Map.get(value, "status"), &valid_status?/1),
+             maybe_put_rate_field(%{}, value, "status", &valid_status?/1),
            {:ok, projected} <-
              maybe_put_rate_field(
                projected,
+               value,
                "utilization",
-               Map.get(value, "utilization"),
                &is_finite_number/1
              ),
            {:ok, projected} <-
              maybe_put_rate_field(
                projected,
+               value,
                "resets_at",
-               Map.get(value, "resets_at"),
                &valid_resets_at?/1
              ) do
         if map_size(projected) == 0, do: :drop, else: {:ok, {key, projected}}
@@ -515,10 +515,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp project_rate_limit_window(_key, _value), do: :drop
 
-  defp maybe_put_rate_field(map, _key, nil, _validator), do: {:ok, map}
-
-  defp maybe_put_rate_field(map, key, value, validator) do
-    if validator.(value), do: {:ok, Map.put(map, key, value)}, else: :drop
+  defp maybe_put_rate_field(map, source, key, validator) do
+    case Map.fetch(source, key) do
+      :error -> {:ok, map}
+      {:ok, value} -> if validator.(value), do: {:ok, Map.put(map, key, value)}, else: :drop
+    end
   end
 
   defp window_sort_key("five_hour"), do: {0, ""}

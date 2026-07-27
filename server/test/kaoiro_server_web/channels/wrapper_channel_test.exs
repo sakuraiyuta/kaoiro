@@ -1450,7 +1450,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "five_hour" => %{"status" => "allowed", "resets_at" => 123, "extra" => true},
           "seven_day" => %{"utilization" => 0.9},
           "bad!" => %{"utilization" => 0.1},
-          "too-long-status" => %{"status" => String.duplicate("x", 65), "utilization" => 0.2}
+          "too-long-status" => %{"status" => String.duplicate("x", 65), "utilization" => 0.2},
+          "null-status" => %{"status" => nil, "utilization" => 0.2}
         })
 
       ref =
@@ -1484,6 +1485,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert entry["rate_limits"]["five_hour"] == %{"status" => "allowed", "resets_at" => 123}
       refute Map.has_key?(entry["rate_limits"], "bad!")
       refute Map.has_key?(entry["rate_limits"], "too-long-status")
+      refute Map.has_key?(entry["rate_limits"], "null-status")
     end
 
     test "conversation は常時同梱し peer agent_id だけを返す" do
