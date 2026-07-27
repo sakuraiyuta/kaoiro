@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.AgentActivity
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.SessionPointers
@@ -173,6 +174,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert_reply ref, :error, %{reason: "missing key: state"}
     refute_broadcast "envelope", %{}
     refute Map.has_key?(AgentStates.snapshot(), agent_id)
+    assert %{turns: 0, last_activity_at: nil} = AgentActivity.get(agent_id)
   end
 
   test "topic と不一致の agent_id を拒否する" do
@@ -181,6 +183,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     ref = push(socket, "envelope", envelope("test.other", "idle"))
 
     assert_reply ref, :error, %{reason: "agent_id does not match topic"}
+    assert %{turns: 0, last_activity_at: nil} = AgentActivity.get("test.mismatch-1")
   end
 
   test "オブジェクトでない envelope を拒否する" do
