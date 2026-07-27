@@ -311,22 +311,24 @@ field が省略されたら黙って機能を落とす、という本 phase 全�
   新しい `begin_transition/3` は既存 pending を supersede する
   (置換して古い方を捨てる)。supersede された id の結果 / join は以降
   すべて CAS 不一致となり無視される。
-- **activate の条件 (L0、MUST)**: 次を **すべて** 満たすときだけ
-  activate する。
-  1. pending が存在する
-  2. join params の `transition_id` が `pending.id` と一致する
-  3. (L1 / L3 の場合) 当該 id の `spawn_result(ok: true)` を受領済み、
-     または `spawn_result` より先に join が届いた場合は join を優先し、
-     後続の同 id の成功結果を冪等に受け入れる
+- **activate の条件 (L0、MUST)**: pending が存在し、かつ join params の
+  `transition_id` が `pending.id` と一致するときだけ activate する。
+  **matching `transition_id` を持つ join が commit signal** であり、
+  `spawn_result(ok: true)` は operator への forward と runner への ack
+  だけを行い Activity を mutate しない (mutate するのは
+  `ok == false` の abort 経路のみ)。
 - **activate の内容**: pending を current entry へ昇格させる。
   `turns = 0`、`session_started_at = pending.started_at` (**hook 時刻
   `t0` を保持**、join 時刻ではない)、`session_start_observed = true`、
   `session_id = nil`、`awaiting_sid = true`、`owner` = 新
   `WrapperChannel` の pid。pending は消す。
-- **rebind のみ (L0、pending 無し / id 不一致 / id absent)**: `owner`
-  を差し替えるだけ。`turns` / `session_started_at` / `session_id` は
-  **保持**。通常の reconnect、server 再起動後の再接続、旧 wrapper
-  (相関子 absent) がここに落ちる。
+- **rebind のみ (L0)**: `owner` を差し替えるだけで `turns` /
+  `session_started_at` / `session_id` は **保持** する。通常の
+  reconnect と server 再起動後の再接続がここに落ちる。
+  - ただし **pending がある状態での id absent / mismatch の join** は
+    rebind に加えて `projection_suppressed` を立てる (下記
+    「相関できない join の projection 抑止」)。pending が無い純粋な
+    reconnect と混同しないこと。
 - **adopt (L5)**: `session_id` を埋め `awaiting_sid = false` にする
   だけ。`session_started_at` と `turns` は保持。Codex の lazy 采番
   (reset 時点で sid が nil、最初の turn 完了後に確定) がこの経路。
@@ -410,6 +412,75 @@ pending は **transaction** として扱い、失敗時に current entry を壊�
 `runner_channel.ex` の「spawn_result は所有検査不要」というコメントは
 本 phase で **更新が必要**。
 
+#### L2 の join CAS と absent の扱い (MUST)
+
+L2 (/new・/clear) には固有の問題がある。`SessionResets.confirm_connection/2`
+は現状 `%{phase: :awaiting_connect}` であることだけを見て、timer cancel →
+`SessionStarts.advance_transition` → boundary 更新 / detach /
+`session_reset_completed` broadcast まで **不可逆に commit** する。既存の
+`request_id` CAS は結果側 (`session_reset_result` →
+`SessionResets.resolve/5`) にしかなく、**join 側には無い**。したがって
+Activity 側の `activate_or_rebind/3` が id 不一致で拒否しても、その前に
+SessionResets の commit が完了してしまう。
+
+(なお `confirm_connection/2` の docstring は既に「mismatched request_id
+indicates a stale join」を no-op 条件として謳っているが、実装は
+`request_id` を受け取っていない。本 phase で実装が docstring に追いつく
+形になる。)
+
+修正:
+
+- **join の `transition_id` を `confirm_connection` へ渡す (MUST)**。
+  `lock.request_id` と一致した場合にのみ、timer cancel 以降の副作用と
+  L2 pending の作成へ進む。
+- **mismatch (値があり不一致) は stale join として no-op (MUST)**。
+  SessionStarts / detach / completed broadcast / Activity pending の
+  いずれも動かさない。その join は続く L0 で **通常の rebind** として
+  処理される。
+- **absent (旧 wrapper) は L2 に限り legacy fallback (裁定)**。
+  `transition_id` を持たない join は SessionResets 側では **従来どおり
+  受理** し、timer cancel・`advance_transition`・detach・completed まで
+  既存挙動を維持する。Activity 側だけが fail-closed に振る舞う
+  (pending を activate せず、下記の projection 抑止に従う)。
+
+##### end-to-end 相関の例外整理 (MUST として明記)
+
+本 phase の相関子は「全 hop を end-to-end で通す」のが原則だが、L2 の
+absent だけは意図的な例外である。3 通りの扱いを取り違えないこと:
+
+| 状況 | SessionResets (既存機能) | AgentActivity (新機能) |
+|---|---|---|
+| id 一致 | commit する | activate する |
+| id mismatch | **no-op** (stale join) | activate しない。rebind + projection 抑止 |
+| id absent (旧 wrapper) | **従来どおり commit** (legacy fallback) | activate しない。rebind + projection 抑止 |
+
+absent を fail-closed に倒して timeout へ落とすと、rolling upgrade 中の
+**/new・/clear という既存 operator 機能が壊れる**。本 phase の原則は
+「新機能 (計測) は静かに落ちる、既存機能は壊さない」であり、
+SessionResets の commit は既存機能側にある。一方 mismatch は「別の
+transition の join が紛れ込んだ」ことの証拠なので、既存機能側も止める。
+
+#### 相関できない join の projection 抑止 (MUST)
+
+「activate しない」だけでは fail-closed にならない。rebind only は
+current の `session_id` / `session_started_at` / `turns` を保持するため、
+旧 runner / 旧 wrapper での **same-sid restore** では G2 の一致検査も
+通過し、**restore 前の開始時刻と往復数がそのまま再公開される**。
+
+そこで、**pending がある状態で `transition_id` が absent または
+mismatch の join を受けたら、その connection generation に
+`projection_suppressed` フラグを立てる**。
+
+- 効果: `session_started_at` と `turns` の投影を **抑止する**
+  (`directory_request` で両 field を省略)。`last_activity_at` と
+  `conversation` は対象外。
+- **解除条件は 2 つだけ**: (a) matched な transition が成立して
+  activate されたとき、(b) 信頼できる新しい境界を観測したとき
+  (L4 の sid 変化による reset)。
+- **相関付きの fail が確定しても、TTL で pending が消えても、旧
+  current の値は復元しない (裁定)**。復元は stale な値を再公開する
+  リスクを再導入する。裁定 O2 と同じ「誤情報より欠落」の整理に従う。
+
 #### 呼び出し順序 (MUST)
 
 相関子と owner 束縛が効くのは、hook の呼び出し順が正しい場合に限る。
@@ -474,6 +545,10 @@ ADR-0040 の「推定値を出さない」作法の踏襲)。
   の間 (`session_id = nil`) も不一致として扱い省略する。
   `last_activity_at` と `conversation` は session に紐づかないので本
   検査の対象外。
+  - **`projection_suppressed` が立っている generation でも同じ 2 field
+    を省略する**。G2 は「tracker と latest envelope のズレ」を、
+    suppression は「そもそも相関できなかった遷移」をそれぞれ塞ぐ。
+    same-sid restore では G2 が通過してしまうため、両方が必要。
 - **G3 — hook の同期性**: `record_envelope/3` は hot path なので cast
   (fire-and-forget)。同一 `WrapperChannel` プロセスからの cast は
   GenServer への到達順が保証されるので、同一 connection の envelope 間で
@@ -682,8 +757,11 @@ def peer_index(server \\ __MODULE__)
 
 新 field は既存 `DirectoryEntry` を拡張する形で `wrapper-core` に足す。
 この方針は裁定 O1 で確定済みで、`@kaoiro/protocol` への移設はクロエが
-別 issue として起票する。Track B の担当 path から `protocol/**` を外して
-あるのはこのため。
+別 issue として起票する。
+
+なお Track B の担当 path には `protocol/**` が **含まれている** が、
+それは MF-C1 の相関子 (`request_id` 等) を additive に足すためであって、
+`DirectoryEntry` の移設許可ではない。この 2 つを混同しないこと。
 
 ## 影響範囲 (spec docs)
 
@@ -774,11 +852,11 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 
 | Task | 内容 | 主な path |
 |---|---|---|
-| 27-A1 | `KaoiroServer.AgentActivity` 新設 (D3)。`record_envelope/3` (cast、**owner + 送信側で capture した受理時刻**)、`begin_transition/3` (call、**`transition_id` 付き pending 作成** = L1〜L3、single-flight で既存 pending を supersede)、`activate_or_rebind/3` (call、L0、**join の `transition_id` と CAS**)、`resolve_transition/3` (call、runner 結果の CAS + abort)、`get/1`、`delete/1`。entry に `owner` / `awaiting_sid`、別枠で `pending = %{id, started_at, kind, created_at}`。**owner 不一致の cast は無視**、`last_activity_at` は max 更新、D2 の reducer order を実装。pending は TTL 60 秒で GC し **agent 数上限を消費しない**。`Application` の supervision tree へ登録 | `server/lib/kaoiro_server/agent_activity.ex`, `server/lib/kaoiro_server/application.ex` |
+| 27-A1 | `KaoiroServer.AgentActivity` 新設 (D3)。`record_envelope/3` (cast、**owner + 送信側で capture した受理時刻**)、`begin_transition/3` (call、**`transition_id` 付き pending 作成** = L1〜L3、single-flight で既存 pending を supersede)、`activate_or_rebind/3` (call、L0、**join の `transition_id` と CAS**)、`resolve_transition/3` (call、runner 結果の CAS + abort)、`get/1`、`delete/1`。entry に `owner` / `awaiting_sid` / **`projection_suppressed`**、別枠で `pending = %{id, started_at, kind, created_at}`。**owner 不一致の cast は無視**、`last_activity_at` は max 更新、D2 の reducer order を実装。pending がある状態で id absent / mismatch の join を受けたら rebind + `projection_suppressed` を立て、**matched activate または L4 reset でのみ解除** (fail 確定・TTL 後も復元しない)。pending は TTL 60 秒で GC し **agent 数上限を消費しない**。`Application` の supervision tree へ登録 | `server/lib/kaoiro_server/agent_activity.ex`, `server/lib/kaoiro_server/application.ex` |
 | 27-A2 | `ConversationStates.peer_index/1` 追加 (D5)。**batch で 1 call**、副作用なし、重複排除 + ソート。per-peer call 版は作らない | `server/lib/kaoiro_server/conversation_states.ex` |
-| 27-A3 | lifecycle + ingest 配線 (D3 の L0〜L6) と **呼び出し順序の遵守**。(1) spawn / `resume_session` / restore / `switch_session` の各発行点で **`begin_transition/3` の完了後に** runner へ broadcast (L1・L3、`request_id` を発行してコマンドに載せる)。(2) `after_join_handshake` で `confirm_connection` → **成功 branch で L2 pending を同期作成** → 返却後に `activate_or_rebind/3` (L0、join params の `transition_id` を渡す)。(3) `RunnerChannel.handle_in("spawn_result", …)` を mutation 化 — `check_size` → shape parse → **`require_host_owns_agent/2`** → **CAS (`pending.id == request_id`)** → `ok == false` のときだけ `resolve_transition/3` で abort (L1 fail は entry ごと削除 / L3 fail は pending 破棄のみ)。弾いた場合も ack は返す。所有検査不要と書いた既存コメントを更新。(4) `WrapperChannel.handle_in("envelope", …)` の **validate/route/store が :ok の後** → `record_envelope/3` (G1、owner = `self()`)。(5) `delete_agent` → `delete/1` | `server/lib/kaoiro_server_web/channels/wrapper_channel.ex`, `server/lib/kaoiro_server_web/channels/runner_channel.ex`, `server/lib/kaoiro_server/session_resets.ex`, `server/lib/kaoiro_server_web/channels/agents_channel.ex` |
-| 27-A4 | `directory_entry/2` を 6 field 対応に拡張 (D1/D3/D4/D5)。**capability gate** (`supports_context_usage == true` のときだけ `context`)、**projection/validation** (canonical key のみ写す、window 数・key 長 bound)、**G2 の session 一致検査**、`SessionStarts` fallback (D3 解決順序 2)。省略規約は helper に集約 | `server/lib/kaoiro_server_web/channels/wrapper_channel.ex` |
-| 27-A5 | テスト。`agent_activity_test.exs` 新設: **lifecycle 4 ケース** (fresh spawn / same-sid restore / different-sid restore / Codex の nil→sid adopt)、**owner 束縛と遷移 transaction** (AC 参照)、**相関 CAS 3 ケース** (TTL GC 後に p2 開始 → 遅延 p1 fail が p2 を abort しない / pending 中の無関係な reconnect が activate しない / p2 pending 中に p1 の join が来ても activate しない)、**新 session の最初が result で +1**、加算網羅表 (success/error result=+1、log・state_change・IA・resume replay・server 合成=0)、二重 reset しないこと、`last_activity_at` の max 更新、pending TTL GC、pending が cap を消費しないこと、single-flight supersede、fallback、上限。`conversation_states_test.exs` に `peer_index/1`。`runner_channel_test.exs` に `spawn_result` の **host 所有検査** (別 host の agent_id を騙る runner が pending を破棄できないこと)・size/shape 検査・CAS 不一致の破棄・`ok == true` では mutate しないこと・fail 時の cleanup。**channel-level の順序テスト** (begin → broadcast、confirm → pending → activate、L2 失敗時に current untouched)。`wrapper_channel_test.exs` に directory reply 検査: capability absent/false/true × context 有無の 4 組、projection (未知 nested key 非開示 / malformed top-level のみ drop / valid sibling 保持 / `status` 64 bytes 超過 drop / window 数超過時の canonical 優先 + lexical / empty window drop)、G2 不一致時の省略、`conversation` 常時同梱、切断後に `context`/`rate_limits` が消えること | `server/test/**` |
+| 27-A3 | lifecycle + ingest 配線 (D3 の L0〜L6) と **呼び出し順序の遵守**。(1) spawn / `resume_session` / restore / `switch_session` の各発行点で **`begin_transition/3` の完了後に** runner へ broadcast (L1・L3、`request_id` を発行してコマンドに載せる)。(2) `after_join_handshake` で `confirm_connection` → **成功 branch で L2 pending を同期作成** → 返却後に `activate_or_rebind/3` (L0、join params の `transition_id` を渡す)。**`SessionResets.confirm_connection` に join の `transition_id` を渡す引数を追加** し、`lock.request_id` と一致した場合だけ timer cancel 以降の副作用へ進む。mismatch は完全 no-op、absent は legacy fallback で従来どおり commit (D3「L2 の join CAS」)。既存 docstring が既に謳っている挙動に実装を合わせる形。(3) `RunnerChannel.handle_in("spawn_result", …)` を mutation 化 — `check_size` → shape parse → **`require_host_owns_agent/2`** → **CAS (`pending.id == request_id`)** → `ok == false` のときだけ `resolve_transition/3` で abort (L1 fail は entry ごと削除 / L3 fail は pending 破棄のみ)。弾いた場合も ack は返す。所有検査不要と書いた既存コメントを更新。(4) `WrapperChannel.handle_in("envelope", …)` の **validate/route/store が :ok の後** → `record_envelope/3` (G1、owner = `self()`)。(5) `delete_agent` → `delete/1` | `server/lib/kaoiro_server_web/channels/wrapper_channel.ex`, `server/lib/kaoiro_server_web/channels/runner_channel.ex`, `server/lib/kaoiro_server/session_resets.ex`, `server/lib/kaoiro_server_web/channels/agents_channel.ex` |
+| 27-A4 | `directory_entry/2` を 6 field 対応に拡張 (D1/D3/D4/D5)。**capability gate** (`supports_context_usage == true` のときだけ `context`)、**projection/validation** (canonical key のみ写す、window 数・key 長 bound)、**G2 の session 一致検査** と **`projection_suppressed` の検査** (どちらか一方でも該当すれば `session_started_at` / `turns` を省略)、`SessionStarts` fallback (D3 解決順序 2)。省略規約は helper に集約 | `server/lib/kaoiro_server_web/channels/wrapper_channel.ex` |
+| 27-A5 | テスト。`agent_activity_test.exs` 新設: **lifecycle 4 ケース** (fresh spawn / same-sid restore / different-sid restore / Codex の nil→sid adopt)、**owner 束縛と遷移 transaction** (AC 参照)、**相関 CAS 3 ケース** (TTL GC 後に p2 開始 → 遅延 p1 fail が p2 を abort しない / pending 中の無関係な reconnect が activate しない / p2 pending 中に p1 の join が来ても activate しない)、**新 session の最初が result で +1**、加算網羅表 (success/error result=+1、log・state_change・IA・resume replay・server 合成=0)、二重 reset しないこと、`last_activity_at` の max 更新、pending TTL GC、pending が cap を消費しないこと、single-flight supersede、fallback、上限。`conversation_states_test.exs` に `peer_index/1`。`runner_channel_test.exs` に `spawn_result` の **host 所有検査** (別 host の agent_id を騙る runner が pending を破棄できないこと)・size/shape 検査・CAS 不一致の破棄・`ok == true` では mutate しないこと・fail 時の cleanup。**channel-level の順序テスト** (begin → broadcast、confirm → pending → activate、L2 失敗時に current untouched)。`session_resets_test.exs` に **join CAS 3 ケース** (id 一致で commit / mismatch は完全 no-op — SessionStarts・detach・completed・Activity pending のいずれも動かない / absent は legacy fallback で従来どおり commit)。`wrapper_channel_test.exs` に **projection 抑止** (旧 wrapper の same-sid restore 後に `session_started_at` / `turns` が省略される、TTL 経過後も復活しない、matched activate と L4 reset でのみ解除、`last_activity_at` / `conversation` は抑止対象外)。`wrapper_channel_test.exs` に directory reply 検査: capability absent/false/true × context 有無の 4 組、projection (未知 nested key 非開示 / malformed top-level のみ drop / valid sibling 保持 / `status` 64 bytes 超過 drop / window 数超過時の canonical 優先 + lexical / empty window drop)、G2 不一致時の省略、`conversation` 常時同梱、切断後に `context`/`rate_limits` が消えること | `server/test/**` |
 
 ### Track B — TypeScript (wrapper / protocol / runner)
 
@@ -870,8 +948,10 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 ### owner 束縛と遷移 transaction (再レビュー MF-A)
 
 - [ ] **旧 connection の混入排除**: L3 の command 発行後・新 wrapper の
-      join 前に旧 wrapper が **旧 sid の `result`** を送っても、adopt も
-      加算もされない
+      join 前に旧 wrapper が **旧 sid の `result`** を送っても、pending
+      および新 generation には adopt も加算もされない (この期間の
+      `result` は **旧 current の `turns` には積まれる** — 遷移確定まで
+      旧セッションの計測は継続する。MF-C4 の整理)
 - [ ] **巻き戻しの排除**: 新 sid を adopt した後に旧 owner の遅延 cast が
       届いても L4 が発火せず、`session_id` / `turns` が巻き戻らない
 - [ ] **same-sid restore**: 同一 sid を resume しても旧 `result` が混ざら
@@ -916,6 +996,27 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
       ならない
 - [ ] **順序 3**: L2 の失敗 / timeout では Activity が untouched のまま
       `SessionResets` が閉じる (Activity 側に L2 の abort 経路が無い)
+
+### L2 join CAS と absent projection (再レビュー MF-D1 / D2)
+
+- [ ] **別 id の join**: `:awaiting_connect` 中に `transition_id` が
+      `lock.request_id` と **一致しない** join が来ても、
+      `SessionStarts` / detach / `session_reset_completed` broadcast /
+      Activity の pending が **一切動かない** (完全な no-op)
+- [ ] **absent の join (legacy fallback)**: `transition_id` を持たない
+      join では `SessionResets` が **従来どおり** commit する
+      (timer cancel → `advance_transition` → detach → completed)。
+      一方 Activity は activate せず、rolling upgrade 中でも
+      /new・/clear は壊れない
+- [ ] **absent / mismatch での projection 抑止**: 旧 runner / 旧 wrapper
+      による **same-sid restore** の後、`session_started_at` と `turns`
+      が **省略される** (restore 前の値が再公開されない)
+- [ ] **抑止の永続性**: 相関付きの fail が確定しても、pending が TTL で
+      消えても、抑止された値は **復活しない**
+- [ ] **抑止の解除**: matched な transition の activate、または L4 の
+      sid 変化による reset を観測したときにだけ抑止が解ける
+- [ ] `last_activity_at` と `conversation` は抑止の対象外で、抑止中も
+      返る
 
 ### turn カウント (MF3)
 
@@ -1088,6 +1189,34 @@ absent なら **fail-closed に degrade** する (activate されず計測 field
 **裁定 O1 (`DirectoryEntry` の `@kaoiro/protocol` 移設をしない) は
 引き続き有効** で、`protocol/**` に触れてよいのは相関子の additive 追加に
 限られる。
+
+### 四巡目 (e5aa3d7 対象)
+
+MF-C1〜C3 の本体と三巡目 advisory 3 件は解消判定 (`spawn_result` の
+5 段検査 / begin-before-broadcast / L2 の順序は妥当と明言)。must-fix
+3 件 + advisory 2 件を反映した。
+
+| 指摘 | 内容 | 反映先 |
+|---|---|---|
+| MF-D1 | `SessionResets.confirm_connection` が join id を照合せず不可逆に commit するため、Activity が拒否しても既存側の副作用が先に完了する | D3「L2 の join CAS と absent の扱い (MUST)」新設 + 「end-to-end 相関の例外整理」表、AC「L2 join CAS と absent projection」、27-A3 / 27-A5 |
+| MF-D2 | absent / mismatch の rebind only は current を保持するため、旧構成の same-sid restore で restore 前の start / turns が再公開される | D3「相関できない join の projection 抑止 (MUST)」新設、G2 に追記、lifecycle の rebind 項、AC、27-A1 / 27-A4 / 27-A5 |
+| MF-D3 | MF-C4 の旧 AC が残存し新 AC と矛盾 | AC「owner 束縛と遷移 transaction」の該当行を「pending / 新 generation には adopt・加算されない (旧 current には加算される)」へ修正 |
+| Ad-1 | D7 の「Track B から `protocol/**` を外してある」が現状と逆 | D7 末尾 |
+| Ad-2 | activate 条件 3 が tautology | lifecycle の activate 条件を「matching `transition_id` の join を commit signal とし、`ok=true` は forward / ack のみ」へ簡潔化 |
+
+MF-D1 の absent 扱いは **本 phase で唯一の end-to-end 相関の例外** に
+なる。裁定どおり L2 の absent join は SessionResets 側では従来どおり
+commit し、Activity 側だけが fail-closed に振る舞う。fail-closed に倒して
+timeout へ落とすと rolling upgrade 中の /new・/clear という **既存
+operator 機能** が壊れるためで、「新機能 (計測) は静かに落ちる、既存
+機能は壊さない」という本 phase の原則に従った判断である。mismatch は
+「別 transition の join が紛れ込んだ」証拠なので既存側も止める —
+absent と mismatch を同一視しないことが要点。
+
+MF-D2 の抑止は G2 とは別の穴を塞ぐ。G2 は「tracker と latest envelope の
+ズレ」を見るが、same-sid restore では両者が一致してしまうため通過する。
+`projection_suppressed` は「そもそも相関できなかった遷移」を記録する
+別軸のフラグで、両方が要る。
 
 ## References
 
