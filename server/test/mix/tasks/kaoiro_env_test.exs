@@ -92,6 +92,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
 
       assert body =~ "fail-closed"
       assert body =~ "issue #138"
+      assert body =~ "CLIENT token unset"
     end
 
     test "OAuth を設定しない場合は従来の .env 本文のまま" do
@@ -130,6 +131,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       assert body =~ "KAOIRO_OAUTH_NEXTCLOUD_CLIENT_SECRET=nextcloud-secret"
       assert body =~ "KAOIRO_OAUTH_NEXTCLOUD_BASE_URL=https://cloud.example.com"
       assert body =~ "KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt"
+      assert body =~ "OAuth login is enabled; access follows the allow-list"
       refute body =~ "KAOIRO_OAUTH_GITHUB_CLIENT_ID="
     end
   end
@@ -199,10 +201,55 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       assert env =~ "KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt"
       refute env =~ "KAOIRO_OAUTH_GOOGLE_CLIENT_ID="
       assert allowlist =~ "github:ao"
-      assert output =~ "./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro"
+      assert Bitwise.band(File.stat!(env_path).mode, 0o777) == 0o600
+      assert Bitwise.band(File.stat!(allowlist_path).mode, 0o777) == 0o600
+      assert output =~ "Keep #{allowlist_path} out of git"
+      assert output =~ "- #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro"
       assert output =~ "docs/specs/deployment.md section 1.6"
-      assert output =~ "plain-HTTP deployment"
+      refute output =~ "plain-HTTP deployment"
       refute output =~ "github-secret"
+    end
+
+    test "既存 allowlist の上書きを断ると内容を保ち、Google の注意を出す" do
+      dir = Path.join(System.tmp_dir!(), "kaoiro_env_test_#{System.unique_integer([:positive])}")
+      env_path = Path.join(dir, ".env")
+      allowlist_path = Path.join(dir, "oauth-allowlist.txt")
+      original_allowlist = "github:existing:operator\n"
+      File.mkdir_p!(dir)
+      File.write!(allowlist_path, original_allowlist)
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      [
+        "",
+        "kaoiro.example.com",
+        "",
+        "",
+        "n",
+        "n",
+        "n",
+        "",
+        "y",
+        "y",
+        "google-id",
+        "google-secret",
+        "n",
+        "n",
+        "google:master@example.com:operator",
+        "n",
+        "n"
+      ]
+      |> Enum.each(&send(self(), {:mix_shell_input, :prompt, &1}))
+
+      Env.run(["--path", env_path])
+
+      output = shell_output()
+
+      assert File.read!(allowlist_path) == original_allowlist
+      assert Bitwise.band(File.stat!(env_path).mode, 0o777) == 0o600
+      assert output =~ "Kept #{allowlist_path}; existing OAuth allow-list unchanged."
+      assert output =~ "Google OAuth cannot be used on a plain-HTTP deployment"
+      assert output =~ "- #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro"
     end
 
     test "OAuth をスキップすると従来の生成物と次の手順を保つ" do
@@ -230,6 +277,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
                })
 
       refute File.exists?(Path.join(dir, "oauth-allowlist.txt"))
+      assert Bitwise.band(File.stat!(env_path).mode, 0o777) == 0o600
 
       assert shell_output() =~ """
              Next:

@@ -87,9 +87,10 @@ defmodule Mix.Tasks.Kaoiro.Env do
       ),
       "",
       "# Socket auth (ADR-0011). Unset behaves differently per socket:",
-      "#   CLIENT unset  -> dashboard connections are REJECTED (fail-closed)",
+      "#   CLIENT token unset -> dashboard token authentication is REJECTED (fail-closed)",
       "#   WRAPPER/RUNNER unset -> auth disabled in dev; prod rejects",
       "#   (issue #138). Set all three for anything network-reachable.",
+      oauth_auth_note(answers[:oauth]),
       token_line("KAOIRO_CLIENT_TOKENS", answers.client_tokens),
       token_line("KAOIRO_WRAPPER_TOKENS", answers.wrapper_tokens),
       token_line("KAOIRO_RUNNER_TOKENS", answers.runner_tokens),
@@ -143,6 +144,12 @@ defmodule Mix.Tasks.Kaoiro.Env do
 
   defp token_line(name, []), do: "##{name}="
   defp token_line(name, entries), do: "#{name}=#{Enum.join(entries, ",")}"
+
+  defp oauth_auth_note(%{providers: [_ | _]}) do
+    "# OAuth login is enabled; access follows the allow-list (ADR-0042)."
+  end
+
+  defp oauth_auth_note(_), do: []
 
   defp oauth_env_lines(%{providers: [_ | _] = providers}) do
     [
@@ -378,6 +385,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
       Mix.shell().info("\nKept #{path}; nothing written.")
     else
       File.write!(path, body)
+      File.chmod!(path, 0o600)
       Mix.shell().info("\nWrote #{path}\n")
 
       write_allowlist(path, oauth)
@@ -395,23 +403,28 @@ defmodule Mix.Tasks.Kaoiro.Env do
       Mix.shell().info("Kept #{path}; existing OAuth allow-list unchanged.\n")
     else
       File.write!(path, render_allowlist(entries))
+      File.chmod!(path, 0o600)
       Mix.shell().info("Wrote #{path}\n")
     end
   end
 
   defp allowlist_path(env_path), do: Path.join(Path.dirname(env_path), "oauth-allowlist.txt")
 
-  defp print_next_steps(path, %{providers: [_ | _]}) do
+  defp print_next_steps(path, oauth = %{providers: [_ | _]}) do
+    allowlist_path = allowlist_path(path)
+    mount_source = compose_mount_source(allowlist_path)
+    {google_plain_http_note, start_step, runner_step} = google_next_steps(oauth)
+
     Mix.shell().info("""
     Next:
       1. Review #{path} (tokens and OAuth secrets are in plain text — keep it out of git).
-      2. Add this read-only mount under docker-compose.yaml's service `volumes:`:
-           - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
+      2. Keep #{allowlist_path} out of git, then add this read-only mount under
+         docker-compose.yaml's service `volumes:`:
+           - #{mount_source}:/etc/kaoiro/oauth-allowlist.txt:ro
       3. Register each provider's redirect URI in its console; see
          docs/specs/deployment.md section 1.6.
-      4. Google OAuth cannot be used on a plain-HTTP deployment (localhost is the exception).
-      5. Start the stack: docker compose up -d --build
-      6. On each agent host, run the runner wizard
+    #{google_plain_http_note}#{start_step}. Start the stack: docker compose up -d --build
+      #{runner_step}. On each agent host, run the runner wizard
          (deploy/kaoiro-runner-setup.sh) and pair its token with the
          KAOIRO_RUNNER_TOKENS entry above.
     Deployment details live in the runbook (issue #142).
@@ -428,5 +441,18 @@ defmodule Mix.Tasks.Kaoiro.Env do
          KAOIRO_RUNNER_TOKENS entry above.
     Deployment details live in the runbook (issue #142).
     """)
+  end
+
+  defp compose_mount_source(path) do
+    if Path.type(path) == :absolute, do: path, else: "./#{path}"
+  end
+
+  defp google_next_steps(%{providers: providers}) do
+    if Enum.any?(providers, &(&1.provider == "google")) do
+      {"4. Google OAuth cannot be used on a plain-HTTP deployment (localhost is the exception).\n",
+       5, 6}
+    else
+      {"", 4, 5}
+    end
   end
 end

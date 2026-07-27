@@ -2,7 +2,7 @@
 title: セットアップウィザード(設定 / env 生成)
 description: server の .env と runner の設定(runner.config.json / runner.env)を一問一答で生成する対話ウィザードの仕様。
 status: accepted
-last_updated: 2026-07-25
+last_updated: 2026-07-27
 related: [protocol, threat-model]
 ---
 
@@ -90,11 +90,14 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
   `oauth-allowlist.txt` を書く。書式コメントを添え、少なくとも 1 件の
   `provider:identifier[:role]` (role 省略時は viewer) を入力させる。空・欠落の
   allowlist は OAuth ログインを全拒否する fail-closed であることを入力時に表示する。
-  既存 allowlist は `.env` と同じく上書き確認を行う。
+  `.env` と allowlist はともに 0600 で生成し、既存 allowlist は `.env` と同じく
+  上書き確認を行う。
 - 有効 provider のみ `KAOIRO_OAUTH_*` を `.env` に書き、
   `KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt` を設定する。compose
   では `docker-compose.yaml` の `volumes:` に
   `- ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro` を追加するよう案内する。
+  compose を使わない単体起動では `KAOIRO_OAUTH_ALLOWLIST_PATH` を allowlist の実ファイル
+  パスへ書き換える。
   provider console の登録は配備手順 1.6 を参照する。Google は localhost 以外の
   plain-HTTP 配備では使えない。
 
