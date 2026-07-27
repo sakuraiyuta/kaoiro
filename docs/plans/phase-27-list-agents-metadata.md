@@ -202,62 +202,116 @@ peer に出さない (F6-2 の allow-list を nested 階層まで適用する)�
 ### D3. server 側データモデル — `KaoiroServer.AgentActivity` (新設)
 
 entry は
-`agent_id => %{session_id, session_started_at, session_start_observed,
-awaiting_sid, turns, last_activity_at}` の in-memory GenServer とする。
-既存 `AgentStates` に相乗りさせない理由: `AgentStates` は「latest
-envelope の保管庫」という単一責務で、履歴 ring / boundary patch /
-disconnect race guard を既に抱えている。計測状態を混ぜると
-put/append_log の分岐がさらに増える。
+`agent_id => %{owner, session_id, session_started_at,
+session_start_observed, awaiting_sid, turns, last_activity_at}` に加え、
+遷移中の `pending` を別に持つ in-memory GenServer とする。既存
+`AgentStates` に相乗りさせない理由: `AgentStates` は「latest envelope の
+保管庫」という単一責務で、履歴 ring / boundary patch / disconnect race
+guard を既に抱えている。計測状態を混ぜると put/append_log の分岐が
+さらに増える。
 
 `ts` ではなく **server の受理時刻 / hook 実行時刻** を使う。`ts` は
 wrapper ホストの時計であり、ホスト跨ぎのズレを判断材料に混ぜたくない
 (protocol.md「ホスト跨ぎの時刻ズレに注意」)。
 
+#### owner generation による connection 束縛 (MUST)
+
+`awaiting_sid` だけでは **旧 connection の envelope 混入を排除できない**。
+live resume (旧 session A → 新 session B) では、reset hook から runner が
+旧 wrapper を kill するまでの窓で旧 wrapper が sid=A の envelope を
+送りうる。sid だけを見る設計だと、それを新セッションの初 sid として
+adopt してしまい (`result` なら `turns` に混入)、その後 sid=B の到達で
+再 reset して `t0` を失う。同一 sid の resume (A → A) では sid 変化が
+起きないため旧 turn の混入が永久に残る。
+
+そこで entry を **connection に束縛** する:
+
+- `owner` = 当該 agent の `WrapperChannel` プロセス (`self()`)。server
+  ローカルの値で足りるため **wire 追加は不要**。
+- `AgentActivity` は「今 active な owner」を 1 つだけ持ち、**それ以外の
+  owner から来た記録要求を無視する**。
+- `record_envelope/3` の引数に owner と **WrapperChannel 側で capture
+  した受理時刻** を渡す。cast の配送遅延で時刻が後ろにずれないように
+  するため、時刻は送信側で採る。
+
 #### セッション lifecycle (MUST)
 
-セッション境界は 6 ケースを区別する。**「wrapper の join ごとに reset」は
+セッション境界は 7 ケースを区別する。**「wrapper の join ごとに reset」は
 禁止** — 通常の reconnect と server 再起動後の復元を壊し、生きている
 セッションの `turns` を毎回 0 に落とすため。
 
 | # | ケース | 検知点 | 挙動 |
 |---|---|---|---|
-| L1 | fresh spawn | `AgentsChannel` の spawn コマンド発行点 | **seed** |
-| L2 | /new・/clear | `SessionResets` の完了点 (既存の boundary 確定と同じ箇所) | **reset** |
-| L3 | restore / resume | `resume_session` / restore コマンド発行点 | **reset** |
-| L4 | server が関与しない session 変化 | envelope の `session_id` が **既知の非空値から別の非空値へ** 変化 | **reset** |
-| L5 | lazy 采番の adopt | `awaiting_sid == true` の entry に非空 `session_id` が初到達 | **adopt** (reset しない) |
-| L6 | 未知 agent の初 envelope | entry が無い | `session_start_observed = false` で entry 作成 |
+| L1 | fresh spawn | `AgentsChannel` の spawn コマンド発行点 | **pending 作成** (`t0` を確定。current entry は壊さない) |
+| L2 | /new・/clear | `SessionResets` の完了点 (既存の boundary 確定と同じ箇所) | **pending 作成** |
+| L3 | restore / resume (同一 sid を含む) | `resume_session` / restore / `switch_session` コマンド発行点 | **pending 作成** |
+| L0 | 新 connection の確立 | 新 `WrapperChannel` の join 確定点 (`after_join_handshake` — L2 が使う `SessionResets.confirm_connection` と同じ成功境界) | **pending があれば activate**、無ければ **owner の rebind のみ** |
+| L4 | server が関与しない session 変化 | **active owner** の envelope で `session_id` が既知の非空値から別の非空値へ変化 | **reset** |
+| L5 | lazy 采番の adopt | **active かつ `awaiting_sid == true`** の entry に非空 `session_id` が初到達 | **adopt** (reset しない) |
+| L6 | 未知 agent の初 envelope | entry が無い | `session_start_observed = false` で entry 作成、owner を bind |
 
-- **seed / reset の内容**: `turns = 0`、`session_started_at` = hook 実行
-  時刻、`session_start_observed = true`、`session_id = nil`、
-  `awaiting_sid = true`。開始時刻を **先に確定** させ、実 sid は後から
-  adopt する。
-- **adopt (L5) の内容**: `session_id` を埋め `awaiting_sid = false` に
-  するだけ。`session_started_at` と `turns` は **保持する**。
+- **pending の内容 (L1〜L3)**: `%{started_at: t0, kind: :spawn |
+  :reset | :restore, created_at: t0}`。**current entry には触れない。**
+  遷移が確定するまで旧 entry の `turns` / `session_started_at` は
+  そのまま読める。
+- **activate (L0)**: pending を current entry へ昇格させる。
+  `turns = 0`、`session_started_at = pending.started_at` (**hook 時刻
+  `t0` を保持**、join 時刻ではない)、`session_start_observed = true`、
+  `session_id = nil`、`awaiting_sid = true`、`owner` = 新
+  `WrapperChannel` の pid。pending は消す。
+- **rebind のみ (L0、pending 無し)**: `owner` を差し替えるだけ。
+  `turns` / `session_started_at` / `session_id` は **保持**。通常の
+  reconnect と server 再起動後の再接続がこれに当たる。
+- **adopt (L5)**: `session_id` を埋め `awaiting_sid = false` にする
+  だけ。`session_started_at` と `turns` は保持。Codex の lazy 采番
+  (reset 時点で sid が nil、最初の turn 完了後に確定) がこの経路。
+- **旧 owner の無視 (MUST)**: `owner` が current と一致しない
+  `record_envelope/3` は **完全に無視する** (加算も adopt も
+  `last_activity_at` 更新もしない)。これで L1/L3 発行後・新 join 前に
+  旧 wrapper が投げた sid=A の envelope が新セッションに混入しない。
+  同一 sid resume でも同じ理由で排除される。
+- **`last_activity_at` は max 更新 (MUST)**: 遅延して届いた cast で
+  時刻を巻き戻さない。
 - **二重 reset の禁止 (MUST)**: `awaiting_sid == true` の間は L4 を
-  発火させない。L1〜L3 の explicit reset 後に新 sid を載せた envelope が
-  届いても、それは L5 の adopt であって新たな遷移ではない。Codex の
-  lazy 采番 (reset 時点では sid が nil、最初の turn 完了後に確定) が
-  この経路に乗る。
+  発火させない。加えて **adopt 済みの entry に旧 owner の遅延 cast が
+  届いても L4 を発火させない** (旧 owner は上の規則で無視されるため、
+  新 → 旧への巻き戻しが起きない)。
 - L1 が必要な理由: fresh spawn は `nil → 非空 sid` であり L4 の条件
   (既知の非空 → 別の非空) に該当しない。かつ `SessionStarts` にも
-  record が無い (advance_transition は `prior != nil` 条件下でしか
+  record が無い (`advance_transition` は `prior != nil` 条件下でしか
   発火しない) ため、L1 が無いと新規 agent の `session_started_at` /
   `turns` が永久に省略される。
 - L3 が必要な理由: 通常の restore は **同一 SDK session_id を resume**
   するため、L4 (sid 変化) も L2 (SessionResets) も発火しない。#160 本文
   の「restore でリセット」を満たすには、server がコマンドを出した時点で
-  明示 reset する必要がある。異なる sid での復帰も同じ hook で覆える。
-- spawn / restore が失敗した場合 (`spawn_result` が fail) は seed した
-  entry を削除する。成功しなかったセッションの開始時刻を残さない。
+  pending を作る必要がある。
+
+##### 遷移の失敗 / 未達 (MUST)
+
+pending は **transaction** として扱い、失敗時に current entry を壊さない。
+
+| 失敗 | 挙動 | 理由 |
+|---|---|---|
+| L3 (live restore / `switch_session`) が fail | **pending を破棄し、current entry はそのまま保持** | live switch の失敗では **旧 child が生き続ける**。旧セッションの計測を消してはならない |
+| L1 (fresh spawn) が fail | pending を破棄し、当該 agent の entry も削除 | 成功しなかったセッションの開始時刻を残さない。元から entry が無い |
+| L2 (/new・/clear) が fail | pending を破棄、current entry 保持 | `SessionResets` は timeout 時も detach しない (旧 session が live のまま) 規約と揃える |
+| `spawn_result` も join も来ない (runner offline 等) | pending を **TTL で GC**。既定 60 秒 = `SessionResets.@timeout_ms` と同値 (SPAWN + AWAITING_CONNECT を覆う既存の窓) | pending を残すと遷移が永久に宙吊りになる |
+
+- 失敗の受信点は **`RunnerChannel.handle_in("spawn_result", …)`**。
+  現状 operator へ forward するだけの箇所に cleanup hook を足す
+  (27-A3 の担当 path に `runner_channel.ex` と対応 test を追加)。
+- **pending は agent 数 cap を消費しない (MUST)**。L1 の pending 作成で
+  `AgentActivity` の上限を埋められると、spawn を連打するだけで tracker を
+  枯渇させられる。cap は activate 済み entry にのみ適用する。
 
 #### その他の更新契機
 
 | 契機 | 更新 |
 |---|---|
-| 任意の envelope を受理 (validate / route / store 通過後) | `last_activity_at` を受理時刻で更新 |
-| `type == "result"` | `turns` を +1 (順序は D2 の reducer order) |
-| `AgentsChannel` の `delete_agent` | entry を削除 (既存の `AgentDirectory.delete` / `SessionStarts.delete` と同じ箇所) |
+| **active owner** の envelope を受理 (validate / route / store 通過後) | `last_activity_at` を受理時刻で max 更新 |
+| 同上で `type == "result"` | `turns` を +1 (順序は D2 の reducer order) |
+| 旧 owner の envelope | **無視** |
+| `AgentsChannel` の `delete_agent` | entry と pending を削除 (既存の `AgentDirectory.delete` / `SessionStarts.delete` と同じ箇所) |
 
 #### `session_started_at` の解決順序
 
@@ -292,14 +346,22 @@ ADR-0040 の「推定値を出さない」作法の踏襲)。
   の間 (`session_id = nil`) も不一致として扱い省略する。
   `last_activity_at` と `conversation` は session に紐づかないので本
   検査の対象外。
-- **G3 — hook の同期性**: `record_envelope/2` は hot path なので cast
+- **G3 — hook の同期性**: `record_envelope/3` は hot path なので cast
   (fire-and-forget)。同一 `WrapperChannel` プロセスからの cast は
-  GenServer への到達順が保証されるので、同一 agent の envelope 間で
-  順序は狂わない。一方 lifecycle hook (L1〜L3) は **別プロセス**
-  (AgentsChannel / SessionResets) から出るため順序保証が無い。よって
-  **lifecycle hook は synchronous call とし、reset の完了を待って
-  から** spawn / reset / restore の後続処理へ進む。これで「reset より
-  後に受理された envelope が reset 前の entry に加算される」経路を塞ぐ。
+  GenServer への到達順が保証されるので、同一 connection の envelope 間で
+  順序は狂わない。lifecycle hook (L0〜L3) は別プロセスから出るため
+  **synchronous call** とし、pending の作成 / activate の完了を待って
+  から後続処理へ進む。
+- **G4 — owner 束縛が順序保証の本体 (MUST)**: G3 の call は
+  **hook の呼び出し元との順序しか保証しない**。旧 `WrapperChannel` は
+  別 sender なので、その cast と hook との global order は保証されない
+  — call だけでは旧 connection の envelope 混入を防げない。防いでいるのは
+  **owner 一致検査** (上記「旧 owner の無視」) であり、これが本設計の
+  race 対策の本体である。G3 は補助に過ぎない。
+  - 旧 owner の cast が hook より後に届いても、owner 不一致で捨てられる
+  - 新 sid を adopt した後に旧 owner の遅延 cast が届いても、同じ理由で
+    L4 の巻き戻しが起きない
+  - 時刻の逆転は `last_activity_at` の max 更新で吸収する
 
 ### D4. `context` / `rate_limits` の取得元と projection
 
@@ -307,6 +369,16 @@ ADR-0040 の「推定値を出さない」作法の踏襲)。
 `ext.context` / `ext.rate_limits`。tracker には持たせない (二重の真実源
 を作らない)。ただし **raw を素通ししない** — 下記の gate と projection を
 通した新しい map を組み立てて載せる。
+
+**既知の一時欠損 (初版では許容)**: `permission_request` /
+`question_request` は `AgentStates.put/2` の対象で、かつ `ext` を持た
+ない。よって peer が `waiting_permission` / `waiting_question` の間は
+latest envelope から `context` / `rate_limits` が消え、両 field が省略
+される。次の `state_change` で復帰する。**初版はこれを best-effort な
+一時欠損として許容する** — 承認待ちの peer に重い委任をしないという
+判断は `state` だけでも下せるため。latest とは別に status ext を保持
+する案は採らない (P1 が許容した staleness と同じ整理)。実運用で問題に
+なれば後続 issue で扱う。
 
 #### `context` は capability driven (MUST)
 
@@ -340,12 +412,35 @@ b)。
 
 | 対象 | 許可する key | 検証 | 逸脱時 |
 |---|---|---|---|
-| `context` | `used_tokens` / `max_tokens` / `used_percentage` の 3 つのみ | すべて数値 | `context` field ごと省略 |
-| `rate_limits` | 各 window の `status` / `utilization` / `resets_at` のみ | `status` = string、`utilization` = number、`resets_at` = integer。存在する key だけ検査 (3 つとも optional) | 当該 window を drop。他の window は残す |
-| `rate_limits` の window key | open string (engine 固有 window を阻害しない) | 長さ ≤ 32、charset `[A-Za-z0-9_-]`、**window 数 ≤ 8** | 逸脱 window を drop。上限超過分は drop してログに残す (黙って落とさない) |
+| `context` | `used_tokens` / `max_tokens` / `used_percentage` の 3 つのみ | すべて有限数 (`Number.isFinite` 相当) | `context` field ごと省略 |
+| `rate_limits` の window 値 | `status` / `utilization` / `resets_at` のみ (3 つとも optional) | `status` = string かつ **UTF-8 で 64 bytes 以下**、`utilization` = 有限数、`resets_at` = **非負の safe integer** | 当該 window を drop。他の window は残す |
+| `rate_limits` の window key | open string (engine 固有 window を阻害しない) | 長さ ≤ 32、charset `[A-Za-z0-9_-]` | 当該 window を drop |
+| `rate_limits` の window 数 | — | **8 件以下** | 下記の選択規則で 8 件に切り詰め |
+
+**値側の bound が必要な理由 (MUST)**: key 側だけ縛っても `status` が
+unbounded だと、1 window に envelope cap 近く (約 256 KB) の文字列を
+入れられる。`list_agents` は auto-allow で 1 応答に全 peer が載るため、
+peer 数を掛けた response amplification が値側に残る。`status` は
+**64 bytes を上限とし、超過した window は drop** する。TS narrow も
+**同一の上限に揃える** (片側だけ緩いと素通し経路になる)。
+
+**window 数超過時の選択は決定的でなければならない (MUST)**:
+
+1. canonical window (`five_hour` / `seven_day`) を **無条件で優先** して
+   採用する。engine 固有 window に押し出されて消えることがあってはならない
+2. 残り枠を、残った window key の **lexical 昇順** で埋める
+3. 溢れた分を drop
+
+**empty window の drop**: projection 後に `status` / `utilization` /
+`resets_at` が 1 つも残らなかった window は drop する (中身の無い
+window key だけを peer に見せない)。
+
+その他の規約:
 
 - 数値の **換算はしない** (D1)。projection は「写す key を絞る」操作
-  であって値の加工ではない。
+  であって値の加工ではない。`utilization` を 0..1 に強制するかは
+  [#164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164) で
+  実データを確認してから判断する (現状は range 検査を **入れない**)。
 - **malformed は top-level field 単位で drop し、valid な sibling は
   残す**。例: `context` が壊れていても `rate_limits` は載る。
 - 未知 nested key は写さない (allow-list を nested 階層まで適用)。
@@ -354,6 +449,11 @@ b)。
 - 同じ規約を TS 側 narrow (`directoryEntryFrom`) にも適用する。server が
   新しくても旧 narrow が素通しする経路を作らないため、**両側で** テスト
   する (27-A5 / 27-B4)。
+- **drop のログは window 単位で無制限に warn しない (MUST)**。
+  `list_agents` は auto-allow 経路なので、window ごとの warn は log
+  amplification になる。**agent / request 単位で 1 行に集約** するか
+  rate-limit する。黙って落とさないことと、ログを溢れさせないことを
+  両立させる。
 
 #### `resets_at` 経過時の解釈規約 (#160 明記事項 c)
 
@@ -445,15 +545,16 @@ def peer_index(server \\ __MODULE__)
   置く実利が現時点で無い。
 
 新 field は既存 `DirectoryEntry` を拡張する形で `wrapper-core` に足す。
-`@kaoiro/protocol` への移設が必要になったら別 issue とする
-(→ Open items O1)。
+この方針は裁定 O1 で確定済みで、`@kaoiro/protocol` への移設はクロエが
+別 issue として起票する。Track B の担当 path から `protocol/**` を外して
+あるのはこのため。
 
 ## 影響範囲 (spec docs)
 
 | doc | 差分方針 |
 |---|---|
 | `docs/specs/protocol-inter-agent.md` | 主戦場。「peer directory の情報境界 (#102)」節を 6 field 追加に合わせて書き直し、除外リストから `context` / `rate_limit` を外す。`directory_request` 行の entry shape を更新。コンパニオンツール表の `list_agents` 用途説明を更新。`conversation` の常時同梱 (D5) を Constraints に MUST として追加。`resets_at` 解釈規約 (D4) は **消費側 agent の MUST** として書き、deterministic に強制される仕組みではない旨も併記する (dashboard が実装済みと読める書き方をしない、#164 へ委譲)。`ext` からの projection 規約 (canonical key のみ、未知 nested key 非開示) を情報境界節に明記。`session_started_at` / `last_activity_at` は「**server が観測した時刻**」であり wrapper 実測値ではないと定義を明記する (裁定 O3) |
-| `docs/specs/protocol.md` | L222 の `directory_request` 行が #102 の `engine`/`model`/`effort` 追加を反映しておらず既に drift している。本 phase で 6 field 込みの現行 shape に修正し、詳細は protocol-inter-agent へのポインタに寄せる (重複記述を作らない) |
+| `docs/specs/protocol.md` | `directory_request` 行にあった #102 (`engine`/`model`/`effort`) の drift は **設計時 (a9688bd) に修正済み**。本 phase では同じ行を 6 field 込みの shape へ更新し、詳細は protocol-inter-agent へのポインタに寄せる (重複記述を作らない) |
 | `docs/specs/threat-model.md` | 緩和策表と Constraints は viewer/operator 軸のまま。agent 間開示という第 3 の軸が入ったことを 1 行追記し、ADR-0021 の新節を参照させる |
 | `docs/adr/0021-role-information-disclosure-policy.md` | F6「agent 間開示 (peer directory)」を追記。詳細は下記 |
 
@@ -537,11 +638,11 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 
 | Task | 内容 | 主な path |
 |---|---|---|
-| 27-A1 | `KaoiroServer.AgentActivity` 新設 (D3)。`record_envelope/2` (cast)、`start_session/2` / `reset_session/2` (**call**、G3)、`get/1`、`delete/1`。entry に `awaiting_sid` を持ち L5 adopt と L4 reset を判別。D2 の reducer order を実装。agent 数上限を持つ。`Application` の supervision tree へ登録 | `server/lib/kaoiro_server/agent_activity.ex`, `server/lib/kaoiro_server/application.ex` |
+| 27-A1 | `KaoiroServer.AgentActivity` 新設 (D3)。`record_envelope/3` (cast、**owner + 送信側で capture した受理時刻** を引数に取る)、`begin_transition/3` (call、pending 作成 = L1〜L3)、`activate_or_rebind/2` (call、L0)、`abort_transition/2` (call、遷移失敗)、`get/1`、`delete/1`。entry に `owner` / `awaiting_sid`、別枠で `pending` を持つ。**owner 不一致の cast は無視**、`last_activity_at` は max 更新、D2 の reducer order を実装。pending は TTL 60 秒で GC し **agent 数上限を消費しない**。`Application` の supervision tree へ登録 | `server/lib/kaoiro_server/agent_activity.ex`, `server/lib/kaoiro_server/application.ex` |
 | 27-A2 | `ConversationStates.peer_index/1` 追加 (D5)。**batch で 1 call**、副作用なし、重複排除 + ソート。per-peer call 版は作らない | `server/lib/kaoiro_server/conversation_states.ex` |
-| 27-A3 | lifecycle + ingest 配線 (D3 の L1〜L6)。spawn コマンド発行点 → `start_session/2` (L1、spawn 失敗時は `delete/1`)、`SessionResets` 完了点 → `reset_session/2` (L2)、`resume_session` / restore 発行点 → `reset_session/2` (L3)、`WrapperChannel.handle_in("envelope", …)` の **validate/route/store が :ok の後** → `record_envelope/2` (G1)、`delete_agent` → `delete/1` | `server/lib/kaoiro_server_web/channels/wrapper_channel.ex`, `server/lib/kaoiro_server/session_resets.ex`, `server/lib/kaoiro_server_web/channels/agents_channel.ex` |
+| 27-A3 | lifecycle + ingest 配線 (D3 の L0〜L6)。spawn / `resume_session` / restore / `switch_session` の各コマンド発行点 → `begin_transition/3` (L1・L3)、`SessionResets` 完了点 → `begin_transition/3` (L2)、**新 `WrapperChannel` の `after_join_handshake`** (`SessionResets.confirm_connection` と同じ成功境界) → `activate_or_rebind/2` (L0)、**`RunnerChannel.handle_in("spawn_result", …)`** → `abort_transition/2` (L1 fail は entry ごと削除 / L3・L2 fail は pending 破棄のみ)、`WrapperChannel.handle_in("envelope", …)` の **validate/route/store が :ok の後** → `record_envelope/3` (G1、owner = `self()`)、`delete_agent` → `delete/1` | `server/lib/kaoiro_server_web/channels/wrapper_channel.ex`, `server/lib/kaoiro_server_web/channels/runner_channel.ex`, `server/lib/kaoiro_server/session_resets.ex`, `server/lib/kaoiro_server_web/channels/agents_channel.ex` |
 | 27-A4 | `directory_entry/2` を 6 field 対応に拡張 (D1/D3/D4/D5)。**capability gate** (`supports_context_usage == true` のときだけ `context`)、**projection/validation** (canonical key のみ写す、window 数・key 長 bound)、**G2 の session 一致検査**、`SessionStarts` fallback (D3 解決順序 2)。省略規約は helper に集約 | `server/lib/kaoiro_server_web/channels/wrapper_channel.ex` |
-| 27-A5 | テスト。`agent_activity_test.exs` 新設: **lifecycle 4 ケース** (fresh spawn / same-sid restore / different-sid restore / Codex の nil→sid adopt)、**新 session の最初が result で +1**、加算網羅表 (success/error result=+1、log・state_change・IA・resume replay・server 合成=0)、二重 reset しないこと、fallback、上限。`conversation_states_test.exs` に `peer_index/1`。`wrapper_channel_test.exs` に directory reply 検査: capability absent/false/true × context 有無の 4 組、projection (未知 nested key 非開示 / malformed top-level のみ drop / valid sibling 保持 / window 数超過 drop)、G2 不一致時の省略、`conversation` 常時同梱、切断後に `context`/`rate_limits` が消えること | `server/test/**` |
+| 27-A5 | テスト。`agent_activity_test.exs` 新設: **lifecycle 4 ケース** (fresh spawn / same-sid restore / different-sid restore / Codex の nil→sid adopt)、**owner 束縛 5 ケース** (下記)、**新 session の最初が result で +1**、加算網羅表 (success/error result=+1、log・state_change・IA・resume replay・server 合成=0)、二重 reset しないこと、`last_activity_at` の max 更新、pending TTL GC、pending が cap を消費しないこと、fallback、上限。`conversation_states_test.exs` に `peer_index/1`。`runner_channel_test.exs` に `spawn_result` fail 時の cleanup。`wrapper_channel_test.exs` に directory reply 検査: capability absent/false/true × context 有無の 4 組、projection (未知 nested key 非開示 / malformed top-level のみ drop / valid sibling 保持 / `status` 64 bytes 超過 drop / window 数超過時の canonical 優先 + lexical / empty window drop)、G2 不一致時の省略、`conversation` 常時同梱、切断後に `context`/`rate_limits` が消えること | `server/test/**` |
 
 ### Track B — wrapper (TypeScript)
 
@@ -552,7 +653,7 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 | Task | 内容 | 主な path |
 |---|---|---|
 | 27-B1 | `DirectoryEntry` に 6 field を optional 追加 (D1/D7)。JSDoc に欠損規約 (省略 = 不明、`null` は出さない、`turns` 省略を 0 と読まない) を明記 | `wrapper/core/src/transport.ts` |
-| 27-B2 | `directoryEntryFrom` の narrow 拡張。**server と同じ projection 規約を適用する** (D4): canonical key のみ採用、未知 nested key は写さない、malformed は top-level field 単位で drop して valid な sibling は残す。`context` は 3 数値 field、`rate_limits` は window ごとに `status`/`utilization`/`resets_at` の型検査 + window 数・key 長 bound、`conversation` は `{active: boolean, peers: string[]}` | `wrapper/core/src/transport.ts` |
+| 27-B2 | `directoryEntryFrom` の narrow 拡張。**server と同じ projection 規約・同じ上限値を適用する** (D4): canonical key のみ採用、未知 nested key は写さない、malformed は top-level field 単位で drop して valid な sibling は残す。数値は `Number.isFinite`、`resets_at` は非負の safe integer (`Number.isSafeInteger` + `>= 0`)、`status` は **UTF-8 64 bytes 以下**、window key は長さ ≤ 32 / charset、window 数 ≤ 8 (canonical 優先 + lexical)、empty window は drop。`conversation` は `{active: boolean, peers: string[]}`。`utilization` の 0..1 range 検査は **入れない** (#164 の実データ確認後に判断、と JSDoc に注記) | `wrapper/core/src/transport.ts` |
 | 27-B3 | `LIST_AGENTS_DESCRIPTION` を更新。追加 field の意味と、model が取るべき判断を記述: 残 context 逼迫 peer に重い委任をしない / **`resets_at` (Unix 秒) を現在時刻と比較し、過去なら `utilization`・`status` を信用しない** (D4 の MUST、owner は agent 側) / `conversation.active` な peer への割り込みを控える / `last_activity_at` が古い peer は停滞を疑う。**省略された field を「0」や「問題なし」と読まない** ことも明記 | `wrapper/agent-common/src/inter_agent.ts` |
 | 27-B4 | テスト: `transport.test.ts` に narrow の正常系・malformed top-level のみ drop・valid sibling 保持・未知 nested key 非開示・window 数超過 drop、`inter_agent.test.ts` に list_agents 結果が新 field を欠落なく model へ渡すことの検査 | `wrapper/core/test/**`, `wrapper/agent-common/test/**` |
 
@@ -574,7 +675,7 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 |---|---|---|
 | 27-A1 | ⏳ | `AgentActivity` 新設 |
 | 27-A2 | ⏳ | `ConversationStates.peer_index/1` (batch) |
-| 27-A3 | ⏳ | lifecycle (L1-L3) / ingest / delete 配線 |
+| 27-A3 | ⏳ | lifecycle (L0-L3) / ingest / spawn_result cleanup 配線 |
 | 27-A4 | ⏳ | `directory_entry/2` 6 field 拡張 |
 | 27-A5 | ⏳ | server テスト |
 | 27-B1 | ⏳ | `DirectoryEntry` 型拡張 |
@@ -616,6 +717,24 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 - [ ] wrapper の通常 reconnect と server 再起動後の復元で reset が
       **起きない** (join ごと reset になっていない)
 
+### owner 束縛と遷移 transaction (再レビュー MF-A)
+
+- [ ] **旧 connection の混入排除**: L3 の command 発行後・新 wrapper の
+      join 前に旧 wrapper が **旧 sid の `result`** を送っても、adopt も
+      加算もされない
+- [ ] **巻き戻しの排除**: 新 sid を adopt した後に旧 owner の遅延 cast が
+      届いても L4 が発火せず、`session_id` / `turns` が巻き戻らない
+- [ ] **same-sid restore**: 同一 sid を resume しても旧 `result` が混ざら
+      ず、`turns` が 0 から数え直される
+- [ ] **遷移の失敗**: live `switch_session` の失敗では **旧 entry が保持
+      される** (`turns` / `session_started_at` が消えない)。fresh spawn の
+      失敗では pending と entry が削除される
+- [ ] **通常 reconnect**: pending が無い join では owner の rebind だけが
+      起き、`turns` / `session_started_at` が保持される
+- [ ] `spawn_result` も join も来ないまま TTL (60 秒) を過ぎた pending が
+      GC される。pending は `AgentActivity` の agent 数上限を消費しない
+- [ ] `last_activity_at` は遅れて届いた記録で巻き戻らない (max 更新)
+
 ### turn カウント (MF3)
 
 - [ ] 新セッションの **最初の envelope が `result`** のとき `turns == 1`
@@ -631,13 +750,26 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 - [ ] malformed な top-level field だけが drop され、valid な sibling
       (例: `context` 不正時の `rate_limits`) は残る
 - [ ] window 数・key 長の上限を超えた `rate_limits` の window が drop
-      され、超過分がログに残る
-- [ ] 同じ検査が **server と TS narrow の双方** にテストされている
+      される
+- [ ] **`status` が 64 bytes を超える window が drop される** (再レビュー
+      MF-B の response amplification 対策)
+- [ ] **window 数が 8 を超えるとき、`five_hour` / `seven_day` が必ず
+      残る** (engine 固有 window に押し出されない)。残り枠は lexical 昇順
+      で決定的に選ばれる
+- [ ] projection 後に値が 1 つも残らない empty window が drop される
+- [ ] `resets_at` が負値 / 非整数 / unsafe integer の window が drop される
+- [ ] drop のログが **agent / request 単位で集約** され、window ごとの
+      無制限 warn になっていない
+- [ ] 同じ検査・**同じ上限値** が server と TS narrow の双方に
+      テストされている
 
 ### 欠損規約 / 並行性
 
 - [ ] `rate_limits` を未報告の engine / セッションでは field ごと省略される
 - [ ] 切断済み peer では `context` / `rate_limits` が消える
+- [ ] `waiting_permission` / `waiting_question` 中の peer では
+      `context` / `rate_limits` が一時的に省略され、次の `state_change`
+      で復帰する (初版の既知欠損として許容、Ad1)
 - [ ] `conversation` は常に含まれ、会話が無ければ
       `{active: false, peers: []}` になる。`conversation_id` は含まれない
 - [ ] server 再起動直後、まだ envelope を受けていない agent では
@@ -724,6 +856,28 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 A2 / A3 / A4 はむしろ裁定内容を各節へ波及させる指摘だったため、
 同じ方向で統合してある。
 
+### 二巡目 (fa027df 対象)
+
+MF1 / MF3 / MF6・A1 / A2 / A4 / A5・`SessionStarts` read-only fallback は
+解消済み判定。G2 の切り分けも妥当と明言あり。残 must-fix 2 件 +
+advisory 4 件を反映した。
+
+| 指摘 | 内容 | 反映先 |
+|---|---|---|
+| MF-A | `awaiting_sid` 方式では旧 connection の envelope 混入を排除できない (live resume の kill 待ち窓、same-sid resume での永久残留、遅延 cast による巻き戻し) | D3「owner generation による connection 束縛」新設、lifecycle を pending / activate 方式へ全面改訂 (L0 追加、L1〜L3 は pending 作成に変更)、「遷移の失敗 / 未達」表を新設、G4 を追加、AC「owner 束縛と遷移 transaction」、27-A1 / 27-A3 / 27-A5 |
+| MF-B | `rate_limits` の値側 bound 不足 (`status` unbounded による response amplification)、window 数超過時の非決定性、log amplification | D4「projection / validation」の表と規約を改訂 (`status` ≤ 64 bytes、canonical 優先 + lexical、empty window drop、ログ集約)、AC「projection / validation」、27-B2 |
+| Ad1 | `permission_request` / `question_request` は `ext` を持たないため waiting 中に `context` / `rate_limits` が消える (**裁定: 初版は許容 + 明記**) | D4 冒頭「既知の一時欠損」、AC「欠損規約 / 並行性」 |
+| Ad2 | TS narrow の数値検査を pin (`Number.isFinite` / 非負 safe integer)。`utilization` の range 強制は #164 の実データ確認後 | D4 の projection 表、27-B2 |
+| Ad3 | References の #17 説明を P4 開示範囲外の整理に合わせる | References |
+| Ad4 | D7 末尾の「→ Open items O1」と影響範囲表の「既に drift している」を現状へ | D7、影響範囲表 |
+
+MF-A の要点: `awaiting_sid` は「sid を見て判断する」設計なので、旧
+connection が旧 sid で喋り続ける窓を塞げない。**judgement の軸を sid から
+connection (owner) へ移した** のが今回の修正で、pending / activate は
+「遷移中に current entry を壊さない」ための transaction 化である。
+G3 (synchronous call) は hook caller との順序しか保証しないため補助に
+格下げし、race 対策の本体は G4 (owner 一致検査) と明記した。
+
 ## References
 
 - [issue #160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160)
@@ -731,7 +885,8 @@ A2 / A3 / A4 はむしろ裁定内容を各節へ波及させる指摘だった�
 - [issue #164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164)
   — rate_limits 表示不具合 (同一データ源、検収の前提)
 - [issue #17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17)
-  — conversation_id 機密性の論点
+  — inter-agent messaging の起点。`conversation_id` は P4 が定めた開示
+  範囲を超えるため本 phase では非開示 (機密性そのものの判断は行わない)
 - [ADR-0040](../adr/0040-context-usage-capability.md) — capability driven
   な context 表示、推定値を出さない作法
 - [ADR-0021](../adr/0021-role-information-disclosure-policy.md) —
