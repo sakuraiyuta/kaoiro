@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.ConversationStates
   alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TokenDenylist
@@ -1399,6 +1400,112 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(entry, "engine")
       refute Map.has_key?(entry, "model")
       refute Map.has_key?(entry, "effort")
+    end
+
+    test "context は capability=true と完全な有限数の組でのみ公開する" do
+      peer_id = "test.dir-context-peer"
+      peer_socket = join_wrapper(peer_id)
+
+      ext = %{
+        "session_capabilities" => %{"supports_context_usage" => true},
+        "context" => %{
+          "used_tokens" => 12,
+          "max_tokens" => 100,
+          "used_percentage" => 12.0,
+          "unknown" => "never-disclose"
+        }
+      }
+
+      ref = push(peer_socket, "envelope", envelope(peer_id, "idle") |> Map.put("ext", ext))
+      assert_reply ref, :ok
+
+      self_socket = join_wrapper("test.dir-context-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-context-self", "idle"))
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+
+      assert entry["context"] == %{
+               "used_tokens" => 12,
+               "max_tokens" => 100,
+               "used_percentage" => 12.0
+             }
+
+      refute Map.has_key?(entry["context"], "unknown")
+      refute Map.has_key?(entry, "session_capabilities")
+    end
+
+    test "rate_limits は allow-list・bound・canonical 優先で projection する" do
+      peer_id = "test.dir-rates-peer"
+      peer_socket = join_wrapper(peer_id)
+
+      windows =
+        for key <- ["z", "a", "b", "c", "d", "e", "f", "g"] do
+          {key, %{"utilization" => 0.5, "secret" => "no"}}
+        end
+        |> Map.new()
+        |> Map.merge(%{
+          "five_hour" => %{"status" => "allowed", "resets_at" => 123, "extra" => true},
+          "seven_day" => %{"utilization" => 0.9},
+          "bad!" => %{"utilization" => 0.1},
+          "too-long-status" => %{"status" => String.duplicate("x", 65)}
+        })
+
+      ref =
+        push(
+          peer_socket,
+          "envelope",
+          envelope(peer_id, "idle")
+          |> Map.put("ext", %{"rate_limits" => windows})
+        )
+
+      assert_reply ref, :ok
+      self_socket = join_wrapper("test.dir-rates-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-rates-self", "idle"))
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+
+      assert Map.keys(entry["rate_limits"]) |> Enum.sort() == [
+               "a",
+               "b",
+               "c",
+               "d",
+               "e",
+               "f",
+               "five_hour",
+               "seven_day"
+             ]
+
+      assert entry["rate_limits"]["five_hour"] == %{"status" => "allowed", "resets_at" => 123}
+      refute Map.has_key?(entry["rate_limits"], "bad!")
+      refute Map.has_key?(entry["rate_limits"], "too-long-status")
+    end
+
+    test "conversation は常時同梱し peer agent_id だけを返す" do
+      peer_id = "test.dir-conversation-peer"
+      peer_socket = join_wrapper(peer_id)
+      ref = push(peer_socket, "envelope", envelope(peer_id, "idle"))
+      assert_reply ref, :ok
+
+      self_id = "test.dir-conversation-self"
+      self_socket = join_wrapper(self_id)
+      ref = push(self_socket, "envelope", envelope(self_id, "idle"))
+      assert_reply ref, :ok
+
+      assert :ok =
+               ConversationStates.record_message("dir-conversation", peer_id, self_id, "x", false)
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      assert entry["conversation"] == %{"active" => true, "peers" => [self_id]}
+      refute Map.has_key?(entry["conversation"], "conversation_id")
     end
   end
 

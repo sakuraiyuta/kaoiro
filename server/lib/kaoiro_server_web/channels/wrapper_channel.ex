@@ -18,12 +18,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
   require Logger
 
   alias KaoiroServer.AgentDirectory
+  alias KaoiroServer.AgentActivity
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.SessionStarts
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentId
 
@@ -266,11 +268,15 @@ defmodule KaoiroServerWeb.WrapperChannel do
   @impl true
   def handle_in("directory_request", _payload, socket) do
     self_id = socket.assigns.agent_id
+    activities = AgentActivity.snapshot()
+    peer_index = ConversationStates.peer_index()
 
     agents =
       AgentStates.snapshot()
       |> Enum.reject(fn {id, _} -> id == self_id end)
-      |> Enum.map(fn {id, env} -> directory_entry(id, env) end)
+      |> Enum.map(fn {id, env} ->
+        directory_entry(id, env, Map.get(activities, id), Map.get(peer_index, id, []))
+      end)
 
     {:reply, {:ok, %{"agents" => agents}}, socket}
   end
@@ -355,7 +361,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp store(envelope), do: AgentStates.put(envelope, owner: self())
 
-  defp directory_entry(id, envelope) do
+  defp directory_entry(id, envelope, activity, peers) do
     persona =
       case envelope do
         %{"persona" => %{} = p} -> Map.take(p, ["id", "name", "sprite_set"])
@@ -374,11 +380,170 @@ defmodule KaoiroServerWeb.WrapperChannel do
         _ -> %{}
       end
 
-    %{"agent_id" => id, "persona" => persona, "state" => state}
-    |> maybe_put_directory_field("engine", ext["engine"])
-    |> maybe_put_directory_field("model", ext["model"])
-    |> maybe_put_directory_field("effort", ext["effort"])
+    entry =
+      %{"agent_id" => id, "persona" => persona, "state" => state}
+      |> maybe_put_directory_field("engine", ext["engine"])
+      |> maybe_put_directory_field("model", ext["model"])
+      |> maybe_put_directory_field("effort", ext["effort"])
+      |> Map.put("conversation", %{"active" => peers != [], "peers" => peers})
+
+    entry = maybe_put_context(entry, ext)
+    entry = maybe_put_rate_limits(entry, ext, id)
+    put_activity_fields(entry, id, envelope, activity)
   end
+
+  # `context` is capability-gated rather than presence-gated. In particular,
+  # an old Claude wrapper can report context while lacking the capability; the
+  # dashboard hides it in that situation, so the peer directory must too.
+  defp maybe_put_context(entry, %{
+         "session_capabilities" => %{"supports_context_usage" => true},
+         "context" => %{} = context
+       }) do
+    with %{
+           "used_tokens" => used_tokens,
+           "max_tokens" => max_tokens,
+           "used_percentage" => used_percentage
+         } <- Map.take(context, ["used_tokens", "max_tokens", "used_percentage"]),
+         true <- is_finite_number(used_tokens),
+         true <- is_finite_number(max_tokens),
+         true <- is_finite_number(used_percentage) do
+      Map.put(entry, "context", %{
+        "used_tokens" => used_tokens,
+        "max_tokens" => max_tokens,
+        "used_percentage" => used_percentage
+      })
+    else
+      _ -> entry
+    end
+  end
+
+  defp maybe_put_context(entry, _ext), do: entry
+
+  defp maybe_put_rate_limits(entry, %{"rate_limits" => limits}, agent_id) when is_map(limits) do
+    {projected, dropped} = project_rate_limits(limits)
+
+    if dropped > 0 do
+      # directory_request is auto-allow. Aggregate all malformed windows into
+      # one warning per agent/request instead of producing unbounded logs.
+      Logger.warning(
+        "directory rate_limits projection dropped #{dropped} window(s) for #{agent_id}"
+      )
+    end
+
+    if map_size(projected) == 0, do: entry, else: Map.put(entry, "rate_limits", projected)
+  end
+
+  defp maybe_put_rate_limits(entry, _ext, _agent_id), do: entry
+
+  defp project_rate_limits(limits) do
+    {valid, dropped} =
+      Enum.reduce(limits, {[], 0}, fn {key, value}, {valid, dropped} ->
+        case project_rate_limit_window(key, value) do
+          {:ok, window} -> {[window | valid], dropped}
+          :drop -> {valid, dropped + 1}
+        end
+      end)
+
+    ordered =
+      valid
+      |> Enum.sort_by(fn {key, _} -> window_sort_key(key) end)
+      |> Enum.take(8)
+
+    {Map.new(ordered), dropped + max(length(valid) - length(ordered), 0)}
+  end
+
+  defp project_rate_limit_window(key, value)
+       when is_binary(key) and byte_size(key) <= 32 and is_map(value) do
+    if Regex.match?(~r/^[A-Za-z0-9_-]+$/, key) do
+      projected =
+        %{}
+        |> maybe_put_rate_field("status", Map.get(value, "status"), &valid_status?/1)
+        |> maybe_put_rate_field("utilization", Map.get(value, "utilization"), &is_finite_number/1)
+        |> maybe_put_rate_field("resets_at", Map.get(value, "resets_at"), &valid_resets_at?/1)
+
+      if map_size(projected) == 0, do: :drop, else: {:ok, {key, projected}}
+    else
+      :drop
+    end
+  end
+
+  defp project_rate_limit_window(_key, _value), do: :drop
+
+  defp maybe_put_rate_field(map, _key, nil, _validator), do: map
+
+  defp maybe_put_rate_field(map, key, value, validator) do
+    if validator.(value), do: Map.put(map, key, value), else: map
+  end
+
+  defp window_sort_key("five_hour"), do: {0, ""}
+  defp window_sort_key("seven_day"), do: {1, ""}
+  defp window_sort_key(key), do: {2, key}
+
+  defp valid_status?(value),
+    do: is_binary(value) and String.valid?(value) and byte_size(value) <= 64
+
+  defp valid_resets_at?(value),
+    do: is_integer(value) and value >= 0 and value <= 9_007_199_254_740_991
+
+  defp is_finite_number(value) when is_integer(value), do: true
+
+  defp is_finite_number(value) when is_float(value) do
+    value == value and value <= 1.7976931348623157e308 and value >= -1.7976931348623157e308
+  end
+
+  defp is_finite_number(_), do: false
+
+  defp put_activity_fields(entry, id, envelope, activity) do
+    entry =
+      case activity do
+        %{last_activity_at: value} when is_binary(value) ->
+          Map.put(entry, "last_activity_at", value)
+
+        _ ->
+          entry
+      end
+
+    case session_projection(id, envelope, activity) do
+      {:observed, started_at, turns} ->
+        entry |> Map.put("session_started_at", started_at) |> Map.put("turns", turns)
+
+      {:fallback, started_at} ->
+        Map.put(entry, "session_started_at", started_at)
+
+      :omit ->
+        entry
+    end
+  end
+
+  # G2: a casted record may briefly lag AgentStates. Never project
+  # session-specific values unless both stores name the same non-empty sid.
+  defp session_projection(_id, %{"session_id" => sid}, %{
+         session_id: sid,
+         session_started_at: started_at,
+         session_start_observed: true,
+         turns: turns,
+         projection_suppressed: false
+       })
+       when is_binary(sid) and sid != "" and is_binary(started_at) and is_integer(turns) and
+              turns >= 0,
+       do: {:observed, started_at, turns}
+
+  defp session_projection(id, %{"session_id" => sid}, %{session_start_observed: false})
+       when is_binary(sid) and sid != "" do
+    case SessionStarts.get(id) do
+      {_order, started_at, ^sid} when is_binary(started_at) -> {:fallback, started_at}
+      _ -> :omit
+    end
+  end
+
+  defp session_projection(id, %{"session_id" => sid}, nil) when is_binary(sid) and sid != "" do
+    case SessionStarts.get(id) do
+      {_order, started_at, ^sid} when is_binary(started_at) -> {:fallback, started_at}
+      _ -> :omit
+    end
+  end
+
+  defp session_projection(_id, _envelope, _activity), do: :omit
 
   defp maybe_put_directory_field(entry, key, value)
        when is_binary(value) and value != "",
