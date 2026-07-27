@@ -1450,7 +1450,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "five_hour" => %{"status" => "allowed", "resets_at" => 123, "extra" => true},
           "seven_day" => %{"utilization" => 0.9},
           "bad!" => %{"utilization" => 0.1},
-          "too-long-status" => %{"status" => String.duplicate("x", 65)}
+          "too-long-status" => %{"status" => String.duplicate("x", 65), "utilization" => 0.2}
         })
 
       ref =

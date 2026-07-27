@@ -484,13 +484,30 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp project_rate_limit_window(key, value)
        when is_binary(key) and byte_size(key) <= 32 and is_map(value) do
     if Regex.match?(~r/^[A-Za-z0-9_-]+$/, key) do
-      projected =
-        %{}
-        |> maybe_put_rate_field("status", Map.get(value, "status"), &valid_status?/1)
-        |> maybe_put_rate_field("utilization", Map.get(value, "utilization"), &is_finite_number/1)
-        |> maybe_put_rate_field("resets_at", Map.get(value, "resets_at"), &valid_resets_at?/1)
-
-      if map_size(projected) == 0, do: :drop, else: {:ok, {key, projected}}
+      # Values are optional, but a present malformed value invalidates the
+      # whole window. Keeping its valid siblings would make a redacted window
+      # indistinguishable from an engine that intentionally reports only
+      # those fields.
+      with {:ok, projected} <-
+             maybe_put_rate_field(%{}, "status", Map.get(value, "status"), &valid_status?/1),
+           {:ok, projected} <-
+             maybe_put_rate_field(
+               projected,
+               "utilization",
+               Map.get(value, "utilization"),
+               &is_finite_number/1
+             ),
+           {:ok, projected} <-
+             maybe_put_rate_field(
+               projected,
+               "resets_at",
+               Map.get(value, "resets_at"),
+               &valid_resets_at?/1
+             ) do
+        if map_size(projected) == 0, do: :drop, else: {:ok, {key, projected}}
+      else
+        :drop -> :drop
+      end
     else
       :drop
     end
@@ -498,10 +515,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp project_rate_limit_window(_key, _value), do: :drop
 
-  defp maybe_put_rate_field(map, _key, nil, _validator), do: map
+  defp maybe_put_rate_field(map, _key, nil, _validator), do: {:ok, map}
 
   defp maybe_put_rate_field(map, key, value, validator) do
-    if validator.(value), do: Map.put(map, key, value), else: map
+    if validator.(value), do: {:ok, Map.put(map, key, value)}, else: :drop
   end
 
   defp window_sort_key("five_hour"), do: {0, ""}
