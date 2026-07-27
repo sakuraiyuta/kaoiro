@@ -241,6 +241,47 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       }
     end
 
+    test "spawn_result の host spoof と malformed shape は ack するが転送も mutation もしない" do
+      @endpoint.subscribe("agents:lobby")
+      socket = join_runner("lab-pc-spawn-guard")
+
+      ref =
+        push(socket, "spawn_result", %{
+          "agent_id" => "other-host.a",
+          "ok" => false,
+          "request_id" => "stale"
+        })
+
+      assert_reply ref, :ok
+      refute_broadcast "spawn_result", _
+
+      ref = push(socket, "spawn_result", %{"agent_id" => "lab-pc-spawn-guard.a", "ok" => "false"})
+      assert_reply ref, :ok
+      refute_broadcast "spawn_result", _
+    end
+
+    test "spawn_result ok=true は matching request_id でも Activity を activate しない" do
+      host_id = "lab-pc-spawn-ok"
+      agent_id = host_id <> ".a"
+
+      :ok =
+        KaoiroServer.AgentActivity.begin_transition(
+          agent_id,
+          "p1",
+          :spawn,
+          "2026-07-28T00:00:00Z"
+        )
+
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "spawn_result", %{"agent_id" => agent_id, "ok" => true, "request_id" => "p1"})
+
+      assert_reply ref, :ok
+      # A following matching join is still the only activation signal.
+      assert :activated = KaoiroServer.AgentActivity.activate_or_rebind(agent_id, self(), "p1")
+    end
+
     test "catalog_result は host_id を付与して agents:lobby へ転送する (Option E, ADR-0039)" do
       host_id = "lab-pc-catalog"
       @endpoint.subscribe("agents:lobby")
