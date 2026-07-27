@@ -1440,6 +1440,44 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(entry, "session_capabilities")
     end
 
+    test "context capability は absent・false を閉じ、true だけを通す" do
+      context = %{"used_tokens" => 1, "max_tokens" => 2, "used_percentage" => 0.5}
+
+      for {agent_id, capabilities} <- [
+            {"test.dir-context-absent", %{}},
+            {"test.dir-context-false",
+             %{"session_capabilities" => %{"supports_context_usage" => false}}},
+            {"test.dir-context-true",
+             %{"session_capabilities" => %{"supports_context_usage" => true}}}
+          ] do
+        socket = join_wrapper(agent_id)
+
+        ref =
+          push(
+            socket,
+            "envelope",
+            envelope(agent_id, "idle")
+            |> Map.put("ext", Map.put(capabilities, "context", context))
+          )
+
+        assert_reply ref, :ok
+      end
+
+      self_socket = join_wrapper("test.dir-context-matrix-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-context-matrix-self", "idle"))
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      absent = Enum.find(agents, &(&1["agent_id"] == "test.dir-context-absent"))
+      false_value = Enum.find(agents, &(&1["agent_id"] == "test.dir-context-false"))
+      true_value = Enum.find(agents, &(&1["agent_id"] == "test.dir-context-true"))
+
+      refute Map.has_key?(absent, "context")
+      refute Map.has_key?(false_value, "context")
+      assert true_value["context"] == context
+    end
+
     test "rate_limits は allow-list・bound・canonical 優先で projection する" do
       peer_id = "test.dir-rates-peer"
       peer_socket = join_wrapper(peer_id)
