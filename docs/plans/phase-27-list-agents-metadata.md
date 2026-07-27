@@ -459,6 +459,17 @@ join」という発火条件では **抑止に到達できない** (pending が�
 | `:legacy_absent` | commit 済み + L2 pending 作成済み (legacy fallback) | **force suppress** して rebind (activate しない) |
 | `:mismatch` | **no-op** (pending も作られない) | **pending の有無に依存せず force suppress**。かつ **この join では他の Activity pending を activate しない** |
 | `:noop` | reset lock 無し / phase 違い | 通常の L1・L3 CAS、または純粋な reconnect |
+| `:duplicate_waiter` | 同じ reset の先着 live waiter が既に存在するため **no-op**。ただし absent 先着に後着 exact id が来た場合は、先着 absent をこの結果で解除して exact waiter を採用 | **rebind も prompt 送出もせず channel を stop**。後着 connection は owner generation を取得しない |
+
+`:duplicate_waiter` は `:mismatch` と同一視してはならない。`:mismatch` は
+**値が不一致**で別 transition の混入を示すため force suppress + rebind する。
+一方 `:duplicate_waiter` は同じ transition の二重接続であり、接続を継続すると
+Activity owner と AgentStates owner が分裂するため newcomer を拒否する。
+
+**single-owner 規約 (MUST)**: `:spawning` 中の early join は first-live-waiter
+wins とする。後着の同一 request_id / absent は `:duplicate_waiter` で停止する。
+唯一の優先規則として、**absent 先着には後着の exact request_id を優先**し、
+先着 absent を `:duplicate_waiter` で停止して exact waiter だけを残す。
 
 **L0 の判定優先順位 (MUST)**:
 
@@ -471,6 +482,8 @@ join」という発火条件では **抑止に到達できない** (pending が�
    一致すれば activate、pending があって absent / mismatch なら
    suppress + rebind、**pending が無ければ純粋な reconnect として
    rebind のみ (抑止しない)**
+5. `:duplicate_waiter` → **channel stop**。Activity / AgentStates の owner、
+   pending、projection suppression を変更しない
 
 `confirm_connection` の中から直接 suppression を立てる実装も可能だが、
 その場合も **後続の L0 が別の pending を誤って activate しないよう**、
@@ -553,7 +566,11 @@ current の `session_id` / `session_started_at` / `turns` を保持するため�
    transition_id)` を呼ぶ (現行 signature は
    `confirm_connection(agent_id, joined_session_id \\ nil, server)`。
    join の `transition_id` を受ける引数を追加し、戻り値を
-   `:matched | :legacy_absent | :mismatch | :noop` にする) →
+   `:matched | :legacy_absent | :mismatch | :noop | :duplicate_waiter` にする。
+   `:spawning` で matching / absent join が runner outcome より先に来た場合は
+   caller を defer し、monitor した first-live-waiter だけを保持する。後着
+   duplicate は `:duplicate_waiter` で stop（absent 先着 + exact 後着のみ
+   exact を優先）する) →
    (b) その **`:matched` / `:legacy_absent` branch の完了点** で L2 の
    pending を同期作成する →
    (c) `confirm_connection` から戻った **後** に、その戻り値を渡して
