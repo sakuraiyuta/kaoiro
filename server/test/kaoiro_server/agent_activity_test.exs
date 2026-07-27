@@ -174,4 +174,30 @@ defmodule KaoiroServer.AgentActivityTest do
     assert %{last_activity_at: activity} = AgentActivity.get("a", store)
     assert activity == ts(8)
   end
+
+  test "ordinary reconnect rebinds owner without resetting observed session", %{store: store} do
+    :ok = AgentActivity.begin_transition("a", "p1", :restore, ts(1), server: store)
+    :activated = AgentActivity.activate_or_rebind("a", self(), "p1", server: store)
+    AgentActivity.record_envelope(env("a", "result", "sid"), self(), ts(2), server: store)
+    :sys.get_state(store)
+
+    next_owner = spawn(fn -> Process.sleep(50) end)
+    assert :rebound = AgentActivity.activate_or_rebind("a", next_owner, nil, server: store)
+
+    assert %{owner: ^next_owner, session_id: "sid", turns: 1, session_started_at: started} =
+             AgentActivity.get("a", store)
+
+    assert started == ts(1)
+  end
+
+  test "absent correlation degrades without activation and TTL does not revive suppression", %{
+    store: store
+  } do
+    :ok = AgentActivity.begin_transition("a", "p1", :restore, ts(1), server: store)
+    assert :rebound = AgentActivity.activate_or_rebind("a", self(), nil, server: store)
+    assert %{projection_suppressed: true} = AgentActivity.get("a", store)
+    Process.sleep(30)
+    assert :rebound = AgentActivity.activate_or_rebind("a", self(), nil, server: store)
+    assert %{projection_suppressed: true} = AgentActivity.get("a", store)
+  end
 end
