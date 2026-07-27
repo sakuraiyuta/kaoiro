@@ -263,6 +263,9 @@ async function main(): Promise<void> {
   });
   link = new ServerLink(config.server_url, config.agent_id, {
     personaId: config.persona.id,
+    ...(config.transition_id === undefined
+      ? {}
+      : { transitionId: config.transition_id }),
     ...(config.server_token === undefined
       ? {}
       : { token: config.server_token }),

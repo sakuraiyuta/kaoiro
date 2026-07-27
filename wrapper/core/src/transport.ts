@@ -59,6 +59,14 @@ export interface ServerLinkOptions {
    *  (or the reserved `default`); the wrapper then never opens its SDK
    *  session. Required — there is no fallback under fail-closed. */
   personaId: string;
+  /** Session-transition correlation id relayed from the command that
+   *  launched this wrapper (`config.transition_id`, phase-27 / #160). Sent
+   *  verbatim as a join param so the server can recognise the connection a
+   *  spawn / restore / reset produced — a session_id cannot identify it,
+   *  because a same-session resume reuses the old one. Absent on a legacy
+   *  runner; the server then declines to activate the pending transition
+   *  and omits the affected activity metadata. */
+  transitionId?: string;
   /** Wrapper auth token (ADR-0011), sent as a connect param. */
   token?: string;
   /** The server-composed personality + common footer (ADR-0029 F5)
@@ -165,9 +173,16 @@ export class ServerLink {
     this.#socket.connect();
     // persona_id rides join params (channel-level) so the server can
     // reject an unknown-persona join before it consumes any state
-    // (ADR-0029 F3, protocol.md「人格プロンプト配送」).
+    // (ADR-0029 F3, protocol.md「人格プロンプト配送」). transition_id rides
+    // the same params (phase-27, #160) so the server can tell this join
+    // apart from any other connection for the agent; omitted entirely when
+    // unknown, since the server reads a blank value as a mismatch rather
+    // than as the legacy absent case.
     this.#channel = this.#socket.channel(`wrapper:${agentId}`, {
       persona_id: options.personaId,
+      ...(options.transitionId !== undefined && options.transitionId !== ""
+        ? { transition_id: options.transitionId }
+        : {}),
     });
 
     // ADR-0029 F5: the server pushes the ready-to-inject prompt (persona

@@ -6,9 +6,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // `lastPush` exposes the most recent channel.push() so a test can drive
 // its receive("ok") / receive("error") / receive("timeout") branches.
 type PushReceivers = Map<string, (payload: unknown) => void>;
+// `lastChannelParams` exposes the join params the channel was opened with,
+// so a test can assert what rides the handshake (persona_id / transition_id).
 const mock = vi.hoisted(() => ({
   handlers: new Map<string, (payload: unknown) => void>(),
   lastPush: null as { event: string; payload: unknown; receivers: Map<string, (payload: unknown) => void> } | null,
+  lastChannelParams: null as unknown,
 }));
 
 vi.mock("phoenix", () => {
@@ -40,7 +43,8 @@ vi.mock("phoenix", () => {
   }
   class Socket {
     connect(): void {}
-    channel(): Channel {
+    channel(_topic: string, params?: unknown): Channel {
+      mock.lastChannelParams = params;
       return new Channel();
     }
     onOpen(): void {}
@@ -82,6 +86,42 @@ describe("ServerLink — initial envelope sequence (#107)", () => {
       seq: 1, ext: { engine: "claude-code",
         session_capabilities: { supports_attachments: true } },
     } });
+  });
+});
+
+describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastChannelParams = null;
+  });
+
+  it("transitionId を transition_id として join params に載せる", () => {
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      transitionId: "tr-1",
+    });
+
+    expect(mock.lastChannelParams).toEqual({
+      persona_id: "ao",
+      transition_id: "tr-1",
+    });
+  });
+
+  it("transitionId 未指定なら key ごと省略する", () => {
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+
+    expect(mock.lastChannelParams).toEqual({ persona_id: "ao" });
+  });
+
+  it("空文字の transitionId も key ごと省略する", () => {
+    // The server reads a blank transition_id as a mismatch, not as the
+    // legacy absent case, so a blank must never reach the handshake.
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      transitionId: "",
+    });
+
+    expect(mock.lastChannelParams).toEqual({ persona_id: "ao" });
   });
 });
 
