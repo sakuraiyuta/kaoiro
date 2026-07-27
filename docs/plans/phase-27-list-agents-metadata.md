@@ -289,7 +289,7 @@ def peers_of(agent_id, server \\ __MODULE__)
 
 | doc | 差分方針 |
 |---|---|
-| `docs/specs/protocol-inter-agent.md` | 主戦場。「peer directory の情報境界 (#102)」節を 6 field 追加に合わせて書き直し、除外リストから `context` / `rate_limit` を外す。`directory_request` 行の entry shape を更新。コンパニオンツール表の `list_agents` 用途説明を更新。`resets_at` 解釈規約 (D4) と `conversation` の常時同梱 (D5) を Constraints に MUST として追加 |
+| `docs/specs/protocol-inter-agent.md` | 主戦場。「peer directory の情報境界 (#102)」節を 6 field 追加に合わせて書き直し、除外リストから `context` / `rate_limit` を外す。`directory_request` 行の entry shape を更新。コンパニオンツール表の `list_agents` 用途説明を更新。`resets_at` 解釈規約 (D4) と `conversation` の常時同梱 (D5) を Constraints に MUST として追加。`session_started_at` / `last_activity_at` は「**server が観測した時刻**」であり wrapper 実測値ではないと定義を明記する (裁定 O3) |
 | `docs/specs/protocol.md` | L222 の `directory_request` 行が #102 の `engine`/`model`/`effort` 追加を反映しておらず既に drift している。本 phase で 6 field 込みの現行 shape に修正し、詳細は protocol-inter-agent へのポインタに寄せる (重複記述を作らない) |
 | `docs/specs/threat-model.md` | 緩和策表と Constraints は viewer/operator 軸のまま。agent 間開示という第 3 の軸が入ったことを 1 行追記し、ADR-0021 の新節を参照させる |
 | `docs/adr/0021-role-information-disclosure-policy.md` | F6「agent 間開示 (peer directory)」を追記。詳細は下記 |
@@ -460,13 +460,16 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 | GC 周期の遅れ | `conversation.active` は `ConversationStates` の GC (60 秒周期) に従うため、wallclock 超過直後の最大 60 秒は active に見えうる。判断材料としては許容範囲だが spec に注記する |
 | 時計 | `last_activity_at` / `session_started_at` は server clock。peer の `ts` (wrapper ホスト clock) と混ぜない |
 
-## Open items (クロエ確認事項)
+## 裁定済み論点 (2026-07-28、クロエ経由でマスター裁定)
 
-| # | 論点 | 起案者の推奨 |
+起案時の Open items 3 点は起案者推奨どおり確定した。以降は決定事項として
+扱う (再提起不要)。
+
+| # | 論点 | 裁定 |
 |---|---|---|
-| O1 | #160 本文の「共有型は `@kaoiro/protocol` に追加」と現状 (`DirectoryEntry` は `wrapper-core` 在) の食い違い。D7 では移設しない判断 | 本 phase は `wrapper-core` 拡張に留め、移設は別 issue 化。移設を本 phase に含めるなら Track B の工数が増える |
-| O2 | `turns` の省略条件 (D3)。「再起動後は 0 から数え直すが省略」は安全側だが、`last_activity_at` だけ出て `turns` が無い状態が発生する | 推奨どおり省略 (誤情報を出さない側に倒す)。数値の連続性より正確さを優先 |
-| O3 | `session_started_at` の fallback (`SessionStarts.display`) は「server が遷移を認識した時刻」であり、wrapper のセッション開始時刻と厳密には一致しない (通常は秒未満のズレ) | 許容し、spec に「server 観測時刻」と定義を明記する |
+| O1 | #160 本文の「共有型は `@kaoiro/protocol` に追加」と現状 (`DirectoryEntry` は `wrapper-core` 在) の食い違い | **本 phase は `wrapper-core` 拡張に留める** (D7 のとおり)。`@kaoiro/protocol` への移設は別 issue 化 (クロエが起票)。Track B の工数は現行見積のまま |
+| O2 | `turns` の省略条件 (D3)。再起動後は `last_activity_at` だけ出て `turns` が無い状態が発生する | **observed するまで省略**。「0」と偽るより欠落が正しい。数値の連続性より正確さを優先 |
+| O3 | `session_started_at` の fallback (`SessionStarts.display`) は wrapper のセッション開始時刻と厳密には一致しない | **許容**。ただし spec (27-C2) に「**server が遷移を観測した時刻**」と定義を明記すること。実測値ではないと読み手が判別できる形にする |
 
 ## References
 
