@@ -1,7 +1,7 @@
 ---
 title: Phase 27 — list_agents に状況判断メタデータを追加 (issue #160)
 description: MCP list_agents (directory_request) の peer entry に 6 field (残コンテキスト / セッション開始日時 / turn 数 / 最終活動時刻 / IA 対話状況 / rate_limits) を追加し、agent が委任先選定・割り込み回避・停滞検知を自律判断できるようにする。取得は server が envelope から蓄積した snapshot で完結し、初版は in-memory (session 開始日時のみ SessionStarts DETS を fallback 参照)。
-status: draft
+status: in_progress
 phase: 27
 depends_on: [8, 21]
 last_updated: 2026-07-28
