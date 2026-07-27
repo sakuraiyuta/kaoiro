@@ -377,6 +377,157 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     ]);
   });
 
+  /** Drives one entry through the narrow and returns what survived. */
+  async function narrowOne(
+    entry: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+    });
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("ok")!({
+      agents: [
+        { agent_id: "peer.1", persona: {}, state: "idle", ...entry },
+      ],
+    });
+    const [narrowed] = await pending;
+    return narrowed as unknown as Record<string, unknown>;
+  }
+
+  it("状況判断メタデータ 6 field を素通しする (#160)", async () => {
+    const narrowed = await narrowOne({
+      context: { used_tokens: 1200, max_tokens: 200000, used_percentage: 0.6 },
+      session_started_at: "2026-07-28T01:12:44Z",
+      turns: 17,
+      last_activity_at: "2026-07-28T03:41:09Z",
+      conversation: { active: true, peers: ["peer.2"] },
+      rate_limits: {
+        five_hour: { status: "allowed", utilization: 0.42, resets_at: 1785200000 },
+      },
+    });
+
+    expect(narrowed).toEqual({
+      agent_id: "peer.1",
+      persona: {},
+      state: "idle",
+      context: { used_tokens: 1200, max_tokens: 200000, used_percentage: 0.6 },
+      session_started_at: "2026-07-28T01:12:44Z",
+      turns: 17,
+      last_activity_at: "2026-07-28T03:41:09Z",
+      conversation: { active: true, peers: ["peer.2"] },
+      rate_limits: {
+        five_hour: { status: "allowed", utilization: 0.42, resets_at: 1785200000 },
+      },
+    });
+  });
+
+  it("未知の nested key は写さない", async () => {
+    const narrowed = await narrowOne({
+      context: {
+        used_tokens: 1,
+        max_tokens: 2,
+        used_percentage: 3,
+        cwd: "/secret",
+      },
+      rate_limits: { five_hour: { utilization: 0.1, quota_owner: "operator" } },
+    });
+
+    expect(narrowed.context).toEqual({
+      used_tokens: 1,
+      max_tokens: 2,
+      used_percentage: 3,
+    });
+    expect(narrowed.rate_limits).toEqual({ five_hour: { utilization: 0.1 } });
+  });
+
+  it("malformed な top-level field だけを落とし sibling は残す", async () => {
+    const narrowed = await narrowOne({
+      // 3 数値が揃わない context は field ごと drop
+      context: { used_tokens: 1, max_tokens: "many", used_percentage: 3 },
+      conversation: { active: "yes", peers: [] },
+      turns: -1,
+      session_started_at: "",
+      rate_limits: { seven_day: { utilization: 0.71 } },
+    });
+
+    expect(narrowed).toEqual({
+      agent_id: "peer.1",
+      persona: {},
+      state: "idle",
+      rate_limits: { seven_day: { utilization: 0.71 } },
+    });
+  });
+
+  it("status が 64 bytes を超える window は drop する", async () => {
+    const narrowed = await narrowOne({
+      rate_limits: {
+        five_hour: { status: "あ".repeat(22), utilization: 0.1 },
+        seven_day: { status: "allowed" },
+      },
+    });
+
+    // 22 全角文字 = 66 bytes > 64。値側 bound を超えた window ごと落とす。
+    expect(narrowed.rate_limits).toEqual({ seven_day: { status: "allowed" } });
+  });
+
+  it("present な値が 1 つでも不正なら window ごと drop する", async () => {
+    // utilization だけを落として resets_at を残すと、不完全な窓が完全な窓の
+    // ように読める。plan D4 の「逸脱時は当該 window を drop」に従う。
+    const narrowed = await narrowOne({
+      rate_limits: {
+        five_hour: { utilization: "high", resets_at: 1785200000 },
+        seven_day: { resets_at: 1785600000 },
+      },
+    });
+
+    expect(narrowed.rate_limits).toEqual({
+      seven_day: { resets_at: 1785600000 },
+    });
+  });
+
+  it("field を 1 つも持たない window は drop する", async () => {
+    const narrowed = await narrowOne({
+      rate_limits: { five_hour: {}, seven_day: { utilization: 0.71 } },
+    });
+
+    expect(narrowed.rate_limits).toEqual({ seven_day: { utilization: 0.71 } });
+  });
+
+  it("window key の charset / 長さ違反を drop する", async () => {
+    const narrowed = await narrowOne({
+      rate_limits: {
+        "five hour": { utilization: 0.1 },
+        [`w${"x".repeat(32)}`]: { utilization: 0.2 },
+        five_hour: { utilization: 0.3 },
+      },
+    });
+
+    expect(narrowed.rate_limits).toEqual({ five_hour: { utilization: 0.3 } });
+  });
+
+  it("window 数超過は canonical 優先 + lexical で決定的に 8 件へ切る", async () => {
+    const many: Record<string, unknown> = {};
+    // 挿入順は canonical を最後にして、key 順に依存しないことを示す。
+    for (const key of ["z9", "z8", "z7", "z6", "z5", "z4", "z3", "z2", "z1"]) {
+      many[key] = { utilization: 0.1 };
+    }
+    many.seven_day = { utilization: 0.7 };
+    many.five_hour = { utilization: 0.5 };
+
+    const narrowed = await narrowOne({ rate_limits: many });
+
+    expect(Object.keys(narrowed.rate_limits as object)).toEqual([
+      "five_hour",
+      "seven_day",
+      "z1",
+      "z2",
+      "z3",
+      "z4",
+      "z5",
+      "z6",
+    ]);
+  });
+
   it("agents が無い reply でも空配列で resolve する", async () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     const pending = link.requestDirectory();

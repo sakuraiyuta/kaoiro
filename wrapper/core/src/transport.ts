@@ -234,19 +234,29 @@ function projectRateLimitWindow(
   if (!isObject(value)) return undefined;
   if (utf8Bytes.encode(key).length > MAX_WINDOW_KEY_BYTES) return undefined;
   if (!WINDOW_KEY_PATTERN.test(key)) return undefined;
+  // Each field is optional, but a PRESENT one that fails validation drops the
+  // whole window rather than just itself: a window reporting `utilization`
+  // while silently discarding an out-of-spec `status` would read as a
+  // complete picture when it is not.
   const window: DirectoryRateLimitWindow = {};
-  const status = value.status;
-  if (
-    typeof status === "string" &&
-    utf8Bytes.encode(status).length <= MAX_STATUS_BYTES
-  ) {
-    window.status = status;
+  if (value.status !== undefined) {
+    if (typeof value.status !== "string") return undefined;
+    if (utf8Bytes.encode(value.status).length > MAX_STATUS_BYTES) {
+      return undefined;
+    }
+    window.status = value.status;
   }
-  const utilization = finiteNumber(value.utilization);
-  if (utilization !== undefined) window.utilization = utilization;
-  const resetsAt = nonNegativeInteger(value.resets_at);
-  if (resetsAt !== undefined) window.resets_at = resetsAt;
-  // Nothing survived validation — an empty window name tells a peer nothing.
+  if (value.utilization !== undefined) {
+    const utilization = finiteNumber(value.utilization);
+    if (utilization === undefined) return undefined;
+    window.utilization = utilization;
+  }
+  if (value.resets_at !== undefined) {
+    const resetsAt = nonNegativeInteger(value.resets_at);
+    if (resetsAt === undefined) return undefined;
+    window.resets_at = resetsAt;
+  }
+  // No field at all — an empty window name tells a peer nothing.
   return Object.keys(window).length === 0 ? undefined : window;
 }
 
