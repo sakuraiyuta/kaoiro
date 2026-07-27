@@ -265,8 +265,8 @@ Channels のチャネルイベント名と内容。トピックは
 tool_running / session_init 由来の idle 等)が間に挟まっても消失しない
 ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md))。
 無応答時の既定は SDK と同じく **無制限待機**(タイムアウトなし。
-有限タイムアウトはラッパー設定で opt-in 可、設定面の整備は別 issue
-# 60)。deny でもセッションは継続する。サーバは指示・承認の**中身を解釈せず
+有限タイムアウトはラッパー設定で opt-in 可、設定面の整備は別
+issue #60)。deny でもセッションは継続する。サーバは指示・承認の**中身を解釈せず
 relay するだけ**で、agent 非依存を維持する。配達保証はしない(未接続
 ラッパーへの relay は消失し、要求側は次回 join 時の snapshot で
 ext.pending_permission を復元する)。
