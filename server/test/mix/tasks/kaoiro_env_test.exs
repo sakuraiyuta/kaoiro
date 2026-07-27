@@ -299,6 +299,22 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       assert output =~ "Kept #{allowlist_path}; existing OAuth allow-list unchanged."
       assert output =~ "Google OAuth cannot be used on a plain-HTTP deployment"
       assert output =~ "- #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro"
+
+      assert output =~ """
+             Next:
+               1. Review #{env_path} (tokens and OAuth secrets are in plain text — keep it out of git).
+               2. Keep #{allowlist_path} out of git, then add this read-only mount under
+                  docker-compose.yaml's service `volumes:`:
+                    - #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro
+               3. Register each provider's redirect URI in its console; see
+                  docs/specs/deployment.md section 1.6.
+               4. Google OAuth cannot be used on a plain-HTTP deployment (localhost is the exception).
+               5. Start the stack: docker compose up -d --build
+               6. On each agent host, run the runner wizard
+                  (deploy/kaoiro-runner-setup.sh) and pair its token with the
+                  KAOIRO_RUNNER_TOKENS entry above.
+             Deployment details live in the runbook (issue #142).
+             """
     end
 
     test "OAuth をスキップすると従来の生成物と次の手順を保つ" do

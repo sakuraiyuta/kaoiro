@@ -413,20 +413,28 @@ defmodule Mix.Tasks.Kaoiro.Env do
   defp print_next_steps(path, oauth = %{providers: [_ | _]}) do
     allowlist_path = allowlist_path(path)
     mount_source = compose_mount_source(allowlist_path)
-    {google_plain_http_note, start_step, runner_step} = google_next_steps(oauth)
+    {google_steps, start_step, runner_step} = google_next_steps(oauth)
+
+    steps =
+      [
+        "1. Review #{path} (tokens and OAuth secrets are in plain text — keep it out of git).",
+        "2. Keep #{allowlist_path} out of git, then add this read-only mount under\n" <>
+          "     docker-compose.yaml's service `volumes:`:\n" <>
+          "       - #{mount_source}:/etc/kaoiro/oauth-allowlist.txt:ro",
+        "3. Register each provider's redirect URI in its console; see\n" <>
+          "     docs/specs/deployment.md section 1.6."
+      ] ++
+        google_steps ++
+        [
+          "#{start_step}. Start the stack: docker compose up -d --build",
+          "#{runner_step}. On each agent host, run the runner wizard\n" <>
+            "     (deploy/kaoiro-runner-setup.sh) and pair its token with the\n" <>
+            "     KAOIRO_RUNNER_TOKENS entry above."
+        ]
 
     Mix.shell().info("""
     Next:
-      1. Review #{path} (tokens and OAuth secrets are in plain text — keep it out of git).
-      2. Keep #{allowlist_path} out of git, then add this read-only mount under
-         docker-compose.yaml's service `volumes:`:
-           - #{mount_source}:/etc/kaoiro/oauth-allowlist.txt:ro
-      3. Register each provider's redirect URI in its console; see
-         docs/specs/deployment.md section 1.6.
-      #{google_plain_http_note}#{start_step}. Start the stack: docker compose up -d --build
-      #{runner_step}. On each agent host, run the runner wizard
-         (deploy/kaoiro-runner-setup.sh) and pair its token with the
-         KAOIRO_RUNNER_TOKENS entry above.
+      #{Enum.join(steps, "\n  ")}
     Deployment details live in the runbook (issue #142).
     """)
   end
@@ -451,10 +459,11 @@ defmodule Mix.Tasks.Kaoiro.Env do
 
   defp google_next_steps(%{providers: providers}) do
     if Enum.any?(providers, &(&1.provider == "google")) do
-      {"4. Google OAuth cannot be used on a plain-HTTP deployment (localhost is the exception).\n",
-       5, 6}
+      {[
+         "4. Google OAuth cannot be used on a plain-HTTP deployment (localhost is the exception)."
+       ], 5, 6}
     else
-      {"", 4, 5}
+      {[], 4, 5}
     end
   end
 end
