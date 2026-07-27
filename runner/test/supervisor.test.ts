@@ -2024,3 +2024,23 @@ describe("Supervisor — session transition 相関子 (#160)", () => {
     expect(h.results[0]).not.toHaveProperty("request_id");
   });
 });
+
+// phase-27 (#160) MF-R3: the fresh session a reset creates belongs to THAT
+// reset, so its relaunch must carry the reset's request_id — the server
+// matches the fresh wrapper's join against the reset lock it holds, and an
+// inherited spawn id would read as a mismatch and suppress the metadata.
+describe("Supervisor.handleResetSession — transition 相関子 (#160)", () => {
+  it("fresh relaunch は reset の request_id を transition_id として運ぶ", () => {
+    const h = harness();
+    h.sup.handleSpawn({ ...spawnMsg, request_id: "tr-spawn-1" });
+    h.sup.handleResetSession({
+      agent_id: spawnMsg.agent_id,
+      mode: "new",
+      request_id: "rs-reset-1",
+      previous_session_id: "sess-old-xyz",
+    });
+    h.children[0]!.exit();
+
+    expect(h.configs[1]).toMatchObject({ transition_id: "rs-reset-1" });
+  });
+});

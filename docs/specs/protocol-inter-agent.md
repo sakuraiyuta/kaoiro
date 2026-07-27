@@ -232,8 +232,8 @@ allow-list を nested 階層まで適用)。
 
 | 対象 | 許可 key | 検証 |
 |---|---|---|
-| `context` | `used_tokens` / `max_tokens` / `used_percentage` のみ | すべて有限数。1 つでも欠ける・不正なら `context` ごと省略 |
-| `rate_limits` の window 値 | `status` / `utilization` / `resets_at` のみ(3 つとも optional) | `status` = string かつ UTF-8 64 bytes 以下、`utilization` = 有限数、`resets_at` = 非負の safe integer |
+| `context` | `used_tokens` / `max_tokens` / `used_percentage` のみ | すべて **有限かつ `\|x\| <= 2^53-1`**。1 つでも欠ける・不正なら `context` ごと省略 |
+| `rate_limits` の window 値 | `status` / `utilization` / `resets_at` のみ(3 つとも optional) | `status` = string かつ UTF-8 64 bytes 以下、`utilization` = **有限かつ `\|x\| <= 2^53-1`**、`resets_at` = 非負の safe integer |
 | `rate_limits` の window key | open string | UTF-8 32 bytes 以下、charset `[A-Za-z0-9_-]` |
 | `rate_limits` の window 数 | — | 8 件以下 |
 

@@ -533,6 +533,41 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     expect(narrowed.rate_limits).toEqual({ seven_day: { utilization: 0.71 } });
   });
 
+  it("MAX_SAFE_INTEGER ちょうどは受理する (境界)", async () => {
+    const narrowed = await narrowOne({
+      context: {
+        used_tokens: Number.MAX_SAFE_INTEGER,
+        max_tokens: Number.MAX_SAFE_INTEGER,
+        used_percentage: 1,
+      },
+      rate_limits: {
+        five_hour: { utilization: -Number.MAX_SAFE_INTEGER },
+      },
+    });
+
+    expect(narrowed.context).toEqual({
+      used_tokens: Number.MAX_SAFE_INTEGER,
+      max_tokens: Number.MAX_SAFE_INTEGER,
+      used_percentage: 1,
+    });
+    expect(narrowed.rate_limits).toEqual({
+      five_hour: { utilization: -Number.MAX_SAFE_INTEGER },
+    });
+  });
+
+  it("finite でも 1e20 のような巨大値は drop する", async () => {
+    // normative contract は「有限数」ではなく |x| <= 2^53-1。1e20 は
+    // finite だが double の精度劣化域にあり、Elixir の任意精度整数と
+    // 一致しないため drop する。
+    const narrowed = await narrowOne({
+      context: { used_tokens: 1e20, max_tokens: 200000, used_percentage: 1 },
+      rate_limits: { five_hour: { resets_at: 1e20 } },
+    });
+
+    expect(narrowed.context).toBeUndefined();
+    expect(narrowed.rate_limits).toBeUndefined();
+  });
+
   it("safe integer 範囲を超える数値は drop する", async () => {
     // Number.isFinite だけでは 2^53 超を通すが、その値は既に精度を失って
     // おり、Elixir が受理した任意精度整数と一致しない。

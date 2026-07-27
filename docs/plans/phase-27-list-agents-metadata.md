@@ -683,8 +683,8 @@ b)。
 
 | 対象 | 許可する key | 検証 | 逸脱時 |
 |---|---|---|---|
-| `context` | `used_tokens` / `max_tokens` / `used_percentage` の 3 つのみ | すべて有限数 (`Number.isFinite` 相当) | `context` field ごと省略 |
-| `rate_limits` の window 値 | `status` / `utilization` / `resets_at` のみ (3 つとも optional) | `status` = string かつ **UTF-8 で 64 bytes 以下**、`utilization` = 有限数、`resets_at` = **非負の safe integer** | 当該 window を drop。他の window は残す |
+| `context` | `used_tokens` / `max_tokens` / `used_percentage` の 3 つのみ | すべて **有限かつ `\|x\| <= 2^53-1`** (safe-integer magnitude) | `context` field ごと省略 |
+| `rate_limits` の window 値 | `status` / `utilization` / `resets_at` のみ (3 つとも optional) | `status` = string かつ **UTF-8 で 64 bytes 以下**、`utilization` = **有限かつ `\|x\| <= 2^53-1`**、`resets_at` = **非負の safe integer** | 当該 window を drop。他の window は残す |
 | `rate_limits` の window key | open string (engine 固有 window を阻害しない) | 長さ ≤ 32、charset `[A-Za-z0-9_-]` | 当該 window を drop |
 | `rate_limits` の window 数 | — | **8 件以下** | 下記の選択規則で 8 件に切り詰め |
 
@@ -940,7 +940,7 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 | Task | 内容 | 主な path |
 |---|---|---|
 | 27-B1 | `DirectoryEntry` に 6 field を optional 追加 (D1/D7)。JSDoc に欠損規約 (省略 = 不明、`null` は出さない、`turns` 省略を 0 と読まない) を明記 | `wrapper/core/src/transport.ts` |
-| 27-B2 | `directoryEntryFrom` の narrow 拡張。**server と同じ projection 規約・同じ上限値を適用する** (D4): canonical key のみ採用、未知 nested key は写さない、malformed は top-level field 単位で drop して valid な sibling は残す。数値は `Number.isFinite`、`resets_at` は非負の safe integer (`Number.isSafeInteger` + `>= 0`)、`status` は **UTF-8 64 bytes 以下**、window key は長さ ≤ 32 / charset、window 数 ≤ 8 (canonical 優先 + lexical)、empty window は drop。`conversation` は `{active: boolean, peers: string[]}`。`utilization` の 0..1 range 検査は **入れない** (#164 の実データ確認後に判断、と JSDoc に注記) | `wrapper/core/src/transport.ts` |
+| 27-B2 | `directoryEntryFrom` の narrow 拡張。**server と同じ projection 規約・同じ上限値を適用する** (D4): canonical key のみ採用、未知 nested key は写さない、malformed は top-level field 単位で drop して valid な sibling は残す。数値は **有限かつ `Math.abs(x) <= Number.MAX_SAFE_INTEGER`**、`resets_at` は非負の safe integer (`Number.isSafeInteger` + `>= 0`)、`status` は **UTF-8 64 bytes 以下**、window key は長さ ≤ 32 / charset、window 数 ≤ 8 (canonical 優先 + lexical)、empty window は drop。`conversation` は `{active: boolean, peers: string[]}`。`utilization` の 0..1 range 検査は **入れない** (#164 の実データ確認後に判断、と JSDoc に注記) | `wrapper/core/src/transport.ts` |
 | 27-B3 | `LIST_AGENTS_DESCRIPTION` を更新。追加 field の意味と、model が取るべき判断を記述: 残 context 逼迫 peer に重い委任をしない / **`resets_at` (Unix 秒) を現在時刻と比較し、過去なら `utilization`・`status` を信用しない** (D4 の MUST、owner は agent 側) / `conversation.active` な peer への割り込みを控える / `last_activity_at` が古い peer は停滞を疑う。**省略された field を「0」や「問題なし」と読まない** ことも明記 | `wrapper/agent-common/src/inter_agent.ts` |
 | 27-B4 | テスト: `transport.test.ts` に narrow の正常系・malformed top-level のみ drop・valid sibling 保持・未知 nested key 非開示・`status` 64 bytes 超過 drop・window 数超過時の canonical 優先 + lexical、`inter_agent.test.ts` に list_agents 結果が新 field を欠落なく model へ渡すことの検査 | `wrapper/core/test/**`, `wrapper/agent-common/test/**` |
 | 27-B5 | **MF-C1 の相関子 (additive)**。`protocol/src/index.ts` の `SpawnMessage` / `SwitchSessionMessage` に `request_id?`、`SpawnResult` に `request_id?`、`WrapperConfig` に相関子 field を追加 (すべて optional、JSDoc に「absent なら server 側は activate せず degrade する」と明記)。runner は受け取った相関子を wrapper config へ伝播し、`spawn_result` に verbatim echo する。wrapper は join params に `transition_id` として載せる。旧 runner / 旧 wrapper との後方互換 (absent) を test で固定 | `protocol/src/index.ts`, `runner/**`, `wrapper/core/src/transport.ts` |
@@ -1122,6 +1122,9 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
       で決定的に選ばれる
 - [ ] projection 後に値が 1 つも残らない empty window が drop される
 - [ ] `resets_at` が負値 / 非整数 / unsafe integer の window が drop される
+- [ ] **数値の境界**: `Number.MAX_SAFE_INTEGER` ちょうどは受理され、
+      `+1` した値と `1e20` のような巨大値は drop される (server / TS の
+      双方で同じ境界)
 - [ ] drop のログが **agent / request 単位で集約** され、window ごとの
       無制限 warn になっていない
 - [ ] 同じ検査・**同じ上限値** が server と TS narrow の双方に
@@ -1322,6 +1325,35 @@ join params を再送する正当な reconnect まで計測を失う。実装方
 戻り値で L0 へ渡す方を推奨した (SessionResets から Activity を直接触ると
 層の依存が逆向きになるため)。`confirm_connection` 内で直接 suppression を
 立てる場合も同じ優先順位を守ることを条件にしてある。
+
+### 実装フェーズの差分レビュー (Track A+B 一括)
+
+実装後に ふじ が Track A / B を一括レビューした。Track B 側の対応:
+
+| 指摘 | 内容 | 反映先 |
+|---|---|---|
+| MF4-1 | `typeof [] === "object"` のため array が object として通り、`rate_limits: [{...}]` が key `"0"` の window になる。Elixir は `is_map/1` で落とすので受理集合がずれる | projection 専用の plain-object 判定を新設 (既存 `isObject` は他用途のため据置) |
+| MF4-2 | window の tie-break が `localeCompare` で locale 依存。多くの locale で `"a" < "Z"` となり、binary sort の server と生存 window が食い違う | ASCII code-unit 順へ変更 + mixed-case overflow test |
+| MF4-3 | `Number.isFinite` だけでは safe-integer 範囲外を通す。精度を失った値が Elixir の任意精度整数と一致しない | `Math.abs(x) <= Number.MAX_SAFE_INTEGER` を追加 |
+| MF5 | runner の非 reset 相関子 path に assertion が無い | `supervisor.test.ts` に 9 件 (echo / 伝播 / switch 上書き / legacy / 空文字 / stop 取消) |
+| MF-R2 | 実装が `\|x\| <= 2^53-1` に揃った一方、D4 / 27-B2 / protocol-inter-agent.md は「有限数」を normative としたままで **spec と実装が乖離** (`1e20` は finite だが drop される) | 下記のとおり normative を改訂 + 境界 test |
+| MF-R3 (runner 分) | reset の fresh relaunch が reset の `request_id` を `transition_id` として運ぶ assertion が欠けている | `supervisor.test.ts` に 1 件追加 |
+| Ad3 | G1 の AC が「entry なし」を要求しているが、実装は join 時 placeholder を作る owner-placeholder 方針 | **裁定: 実装を追認**。AC と D3 の G1 を placeholder 方針へ書き換え |
+
+#### 数値 bound を finite から safe-integer magnitude へ狭めた理由
+
+**normative contract は `|x| <= 2^53-1`(safe-integer magnitude)とする**
+(2026-07-28 裁定)。従来の「有限数」から意図的に狭めた。根拠:
+
+1. 実データ域(token 数・Unix 秒・`utilization` ≤ 1)に対して 2^53-1 は
+   十分に広く、**実運用で落ちる正当値が存在しない**
+2. IEEE-754 の max finite を境界にすると Elixir と TS で同値実装が煩雑に
+   なる。safe-integer は両言語で決定論的に一致する
+3. 2^53 を超える領域は double の精度劣化域であり、値として信頼できない。
+   drop する方が安全側
+
+`resets_at` だけは以前から非負の safe integer(magnitude だけでなく
+整数性も要求)で、これは変更しない。
 
 ## References
 
