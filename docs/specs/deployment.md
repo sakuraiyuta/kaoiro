@@ -176,6 +176,12 @@ dashboard に Google / GitHub / Nextcloud の OAuth ログインを追加でき�
 | GitHub | Settings → Developer settings → OAuth Apps → New OAuth App → Authorization callback URL。登録後 Generate a new client secret | **callback URL は 1 App につき 1 個**。環境ごとに別 App を作る |
 | Nextcloud | 対象インスタンスの 設定 → 管理 → セキュリティ → OAuth 2.0 クライアント → 名前 + Redirection URI を追加 | scope 非対応(token はフルアクセス)だが server は identity 取得後に token を破棄する(ADR-0042)。PKCE 非対応、CSRF 防御は state のみ |
 
+**設定の生成は `mix kaoiro.env` で自動化できる**(2026-07-27、
+[setup-wizards](setup-wizards.md))。ウィザードの OAuth 質問群が
+provider 選択 → id/secret 入力 → 許可リスト生成(最低 1 エントリを
+促す)→ compose mount 行の案内までを行い、生成物は 0600 で書き出す。
+以下は手動で設定する場合(およびウィザードが書く内容)の説明。
+
 **`.env` への追記**(id + secret が揃った provider のみ有効化される。
 Nextcloud は base_url も必須):
 
