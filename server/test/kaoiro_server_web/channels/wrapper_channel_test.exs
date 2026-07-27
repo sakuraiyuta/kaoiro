@@ -1491,6 +1491,43 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(entry["rate_limits"], "null-status")
     end
 
+    test "rate_limits overflow は binary (ASCII code-unit) 順で window を選ぶ" do
+      peer_id = "test.dir-rates-ascii-peer"
+      peer_socket = join_wrapper(peer_id)
+
+      windows =
+        Map.new(["B1", "B2", "B3", "Z1", "Z2", "Z3", "a1", "a2", "a3"], fn key ->
+          {key, %{"utilization" => 0.1}}
+        end)
+
+      ref =
+        push(
+          peer_socket,
+          "envelope",
+          envelope(peer_id, "idle") |> Map.put("ext", %{"rate_limits" => windows})
+        )
+
+      assert_reply ref, :ok
+      self_socket = join_wrapper("test.dir-rates-ascii-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-rates-ascii-self", "idle"))
+      assert_reply ref, :ok
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+
+      assert Map.keys(entry["rate_limits"]) |> Enum.sort() == [
+               "B1",
+               "B2",
+               "B3",
+               "Z1",
+               "Z2",
+               "Z3",
+               "a1",
+               "a2"
+             ]
+    end
+
     test "conversation は常時同梱し peer agent_id だけを返す" do
       peer_id = "test.dir-conversation-peer"
       peer_socket = join_wrapper(peer_id)
