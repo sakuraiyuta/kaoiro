@@ -164,7 +164,7 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 |---|---|---|
 | B1 | 閾値通知: `#context` 更新時に wrapper が機械判定し、既定 70% 超過で agent へ通知を 1 回注入 | あお |
 | B2 | MCP tool `request_compact`: permission_broker 都度承認 → 承認後 wrapper が instruction queue へ `/compact` を投入 | あお |
-| B3 | ADR-0036 Context の「CLI native slash command parser を経由しない」を Codex 限定へ追補 (Track S 実測を根拠に) | もも |
+| B3 | ADR-0036 Context の「CLI native slash command parser を経由しない」を Codex 限定へ追補 (Track S 実測を根拠に) | もも (完了: 879db29、未 push) |
 | BR | B1+B2 の diff レビュー | ふじ (quota 窓明け 8/3 以降) |
 
 ### B1 — 閾値通知
