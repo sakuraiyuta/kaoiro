@@ -491,6 +491,16 @@ used_percentage}` を返す。peer が `list_agents` で読む `context` と
 ([#168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168)
 決定 P2、[ADR-0028](../adr/0028-external-human-messaging.md) D4 と同じ形)。
 
+**承認の実効性は agent の permission mode に従属する**
+([ADR-0043](../adr/0043-agent-initiated-session-reset.md) D4 追補、
+2026-07-28 実機確定)。canUseTool → `permission_broker` のダイアログが
+出るのは SDK が canUseTool を照会する mode (`default` 系) に限られ、
+`auto` / `dontAsk` / `bypassPermissions` では SDK が mode の意味論として
+自動承認するためダイアログは出ない。これは `send_to_agent` /
+`request_session_reset` を含む canUseTool 経由の全 tool に共通する。
+厳格な都度承認が必要な agent は operator が mode を `default` 系へ
+設定する。
+
 | 項目 | 内容 |
 |---|---|
 | 入力 | `{ reason?: string }`。任意。承認ダイアログに表示され、tool result にも echo される |
@@ -630,8 +640,10 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   ([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
   viewer には完全除去する
 - MUST: `send_to_agent` ツール呼び出しは Phase 1 では permission_broker
-  の都度承認を経由する。autonomous な承認スキップは Phase 3 まで導入
-  しない
+  の都度承認を経由する (実効性は permission mode に従属 — 「セッション
+  操作ツール」節の注記と ADR-0043 D4 追補を参照。auto 系 mode では mode
+  が承認を包含する)。kaoiro 側の autonomous な承認スキップ機構は
+  Phase 3 まで導入しない
 - MUST: server は config のハード制限(`max_turns` / `max_tokens` /
   `max_wallclock` / `max_concurrent_agents`)を機械的に強制する
 - MUST: `meta.done` は両 owner-side エージェントから true で

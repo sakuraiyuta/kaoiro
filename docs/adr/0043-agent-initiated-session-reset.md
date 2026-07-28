@@ -77,6 +77,24 @@ state / pending lock / cooldown が不適格なら reset は拒否される。re
 permission_broker の都度承認を必要とする。auto-allow、永続許可、agent 自己承認は
 導入しない。operator は reason と mode を確認して予約を許可または拒否する。
 
+### D4 追補 (2026-07-28 — 承認の permission mode 従属)
+
+実機受け入れで、dogfood の Claude persona (`permission_mode=auto`) では
+承認ダイアログが operator に出ないことが判明した。`auto` 等の自律 mode
+では SDK が mode の意味論として tool 呼び出しを自動承認するため、
+canUseTool → permission_broker 経路が発火しない。wrapper の gate 実装
+(READ_ONLY_TOOLS 非登録 → canUseTool 行き) は正しく、`default` 系 mode
+では都度ダイアログが出る。
+
+マスター決裁 (2026-07-28): **承認は agent の permission mode に従属する**
+ことを正式仕様とする。D4 の「auto-allow・永続許可・agent 自己承認を導入
+しない」は「kaoiro 側が mode を迂回する独自の auto-allow 機構を持たない」
+の意味に限定される。mode 自体が与える自動承認は、operator が当該 agent
+に与えた自律性の一部として有効であり、厳格な都度承認が必要な agent は
+operator が mode を `default` 系に設定することで gate を回復する。この
+セマンティクスは `request_compact` / `send_to_agent` を含む canUseTool
+経由の全 tool に共通する。
+
 ### D5 — handoff は機構化せず、外部化を tool description で促す
 
 reset 前の handoff summary を protocol や server state に保存する機構は作らない。

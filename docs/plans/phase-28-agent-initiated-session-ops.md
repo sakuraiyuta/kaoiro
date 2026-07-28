@@ -1,7 +1,7 @@
 ---
 title: Phase 28 — コンテキスト疲労の自己認識と自発 session 操作 (issue #168)
 description: エージェントが自身の context 使用量を認識し、/compact・/new・/clear 相当の回復操作を自発できるようにする。本 plan は Phase A (可視化) と spike を実装粒度に落とす。Phase B (自発 compact) / C (自発 new・clear) は spike と Phase A の結果を受けて追補する。
-status: in-progress
+status: implemented
 phase: 28
 depends_on: [21, 27]
 last_updated: 2026-07-28
@@ -464,3 +464,30 @@ server 側 (もも 担当) を除く 3.5 群。
 - C: wrapper→server 新 control event + 新 MCP tool + deferred reset
   (turn 境界発火)。ADR-0036 F1 (operator-only) / F6 (busy 拒否) の改訂
   を伴う。permission は全承認から開始 (P2)。
+
+## Phase C 実機受け入れ結果 (あお + マスター、2026-07-28)
+
+dogfood 再起動後、`request_session_reset (mode:"new", reason:"phase-28
+実機受け入れ")` の全区間が成立した。
+
+- tool call → 予約受理 (CR-MF2-R の非断定文言を実機で確認) → turn 終了 →
+  `session_reset_request` → server 受理 → kill + fresh relaunch。
+- reset 前 context 311,986 tokens (31%) が relaunch 後に完全消失
+  (stale 値の残留なし)。agent_id / persona / model / effort は snapshot
+  復元 (ADR-0036 F2)。マスターが pane の boundary marker と composer
+  復帰を目視確認。
+- D5 の引き継ぎ外部化 (WORKLOG) も運用どおり実施された。
+
+### 承認セマンティクスの確定 (マスター決裁、2026-07-28)
+
+受け入れ中に「承認ダイアログが operator に出ない」ことが判明した。
+原因は dogfood の Claude persona が `permission_mode=auto` で起動して
+おり、SDK が mode の意味論として tool を自動承認するため
+canUseTool → permission_broker 経路が発火しないこと。wrapper の gate
+実装自体は正しい (default 系 mode ではダイアログが出る)。
+
+マスター決裁: **承認は agent の permission mode に従属する**ことを正式
+仕様とする (auto 系 = mode が承認を包含 / default 系 = 都度ダイアログ)。
+`request_compact` / `request_session_reset` / `send_to_agent` に共通適用。
+正本は ADR-0043 の追補、spec は protocol-inter-agent.md の注記を参照。
+P2 の「全て permission_broker 都度承認」はこの意味で読み替える。
