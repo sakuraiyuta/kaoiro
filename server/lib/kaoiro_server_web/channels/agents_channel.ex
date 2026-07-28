@@ -268,11 +268,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   @impl true
   def handle_in("instruction", payload, socket) do
+    # One live resolution per handler, shared by the guard and the relay
+    # (ふじ must-fix B on issue #158).
+    role = current_role(socket)
+
     with :ok <- reject_reserved_session_command(payload),
-         :ok <- guard_against_reset_pending(socket, payload) do
-      relay(socket, payload, "instruction", [
-        {"text", &valid_instruction_text?/1}
-      ])
+         :ok <- guard_against_reset_pending(role, payload) do
+      relay(
+        socket,
+        payload,
+        "instruction",
+        [{"text", &valid_instruction_text?/1}],
+        role
+      )
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -309,8 +317,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # applies it to subsequent turns via setModel / applyFlagSettings — the
   # server stays agent-agnostic and never interprets the value (protocol.md).
   def handle_in("set_model", payload, socket) do
-    with :ok <- guard_against_reset_pending(socket, payload) do
-      relay(socket, payload, "set_model", [{"model", &is_binary/1}])
+    role = current_role(socket)
+
+    with :ok <- guard_against_reset_pending(role, payload) do
+      relay(socket, payload, "set_model", [{"model", &is_binary/1}], role)
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -318,8 +328,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   def handle_in("set_effort", payload, socket) do
-    with :ok <- guard_against_reset_pending(socket, payload) do
-      relay(socket, payload, "set_effort", [{"effort", &is_binary/1}])
+    role = current_role(socket)
+
+    with :ok <- guard_against_reset_pending(role, payload) do
+      relay(socket, payload, "set_effort", [{"effort", &is_binary/1}], role)
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -333,8 +345,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # cap state. Mirrors set_model / set_effort exactly (relay via require_operator,
   # reset-pending gate, unknown_agent from the relay helper).
   def handle_in("refresh_models", payload, socket) do
-    with :ok <- guard_against_reset_pending(socket, payload) do
-      relay(socket, payload, "refresh_models", [])
+    role = current_role(socket)
+
+    with :ok <- guard_against_reset_pending(role, payload) do
+      relay(socket, payload, "refresh_models", [], role)
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -360,9 +374,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @permission_modes ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"]
   def handle_in("set_permission_mode", payload, socket) do
     is_known_mode = fn value -> is_binary(value) and value in @permission_modes end
+    role = current_role(socket)
 
-    with :ok <- guard_against_reset_pending(socket, payload) do
-      case relay(socket, payload, "set_permission_mode", [{"mode", is_known_mode}]) do
+    with :ok <- guard_against_reset_pending(role, payload) do
+      case relay(socket, payload, "set_permission_mode", [{"mode", is_known_mode}], role) do
         {:reply, :ok, _} = ok ->
           # Validation already passed; persist before returning so a quick
           # reconnect sees the new pick on its after_join push.
@@ -641,8 +656,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # disconnected agent reuses the restore path — same wire, same D5 checks —
   # with the payload session_id in place of the SessionPointer's latest.
   def handle_in("resume_session", payload, socket) do
-    with :ok <- require_operator(socket),
-         :ok <- guard_against_reset_pending(socket, payload),
+    role = current_role(socket)
+
+    with :ok <- require_operator(role),
+         :ok <- guard_against_reset_pending(role, payload),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          {:ok, session_id} <- fetch_resume_session_id(payload) do
       if live_agent?(agent_id) do
@@ -989,10 +1006,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # server stays agent-agnostic); the listed keys must be present and
   # well-typed so a malformed value is rejected at this boundary instead
   # of relying on the wrapper's guard.
-  defp relay(socket, payload, event, key_checks) do
+  defp relay(socket, payload, event, key_checks),
+    do: relay(socket, payload, event, key_checks, current_role(socket))
+
+  defp relay(socket, payload, event, key_checks, role) do
     relayed = Map.delete(payload, "agent_id")
 
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(role),
          :ok <- check_relay_size(relayed),
          {:ok, agent_id} <- fetch_agent_id(payload),
          :ok <- check_keys(payload, key_checks) do
@@ -1518,9 +1538,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # cookie only every 12 h, so the refresh path alone is far too slow to
   # be the enforcement point (issue #158). Resolve from the credential
   # instead, which reads the allow-list / token list live.
-  defp require_operator(socket) do
-    if current_role(socket) == :operator, do: :ok, else: {:error, :forbidden}
-  end
+  # Takes either the socket (resolve here) or an already-resolved role, so
+  # a handler that gates twice — reset-pending guard + relay — resolves
+  # once and both decisions come from the same authority (ふじ must-fix B
+  # on issue #158). Resolving per call would let a role change land
+  # between the two and fire a second disconnect broadcast.
+  defp require_operator(%Phoenix.Socket{} = socket),
+    do: require_operator(current_role(socket))
+
+  defp require_operator(:operator), do: :ok
+  defp require_operator(_role), do: {:error, :forbidden}
 
   # A resolved role that no longer matches the snapshot also invalidates
   # everything else this socket derives from the snapshot — above all the
@@ -1644,24 +1671,24 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # race (a reset arriving right after we hand this instruction off).
   #
   # Viewer-side calls are no-ops: they would be rejected downstream by
-  # `require_operator/1` inside relay/4, but that reject happens AFTER
+  # `require_operator/1` inside relay/5, but that reject happens AFTER
   # the guard. Stamping `last_dispatch` here would let a viewer poison
   # the operator's dispatch-cooldown window and delay a legitimate
   # reset. Bounce viewers before the stamp so the cooldown only reflects
   # accepted operator dispatches.
   #
+  # The role is the one the handler resolved live, NOT the connect-time
+  # assign (ふじ must-fix B on issue #158): reading the snapshot here let
+  # a demoted socket stamp the cooldown before its relay was refused, and
+  # let a promoted one skip the guard the relay would then honour.
+  #
   # A missing agent_id passes through; the normal `fetch_agent_id/1`
-  # inside relay/4 surfaces the correct error.
-  defp guard_against_reset_pending(socket, %{"agent_id" => agent_id})
-       when is_binary(agent_id) do
-    if socket.assigns[:role] == :operator do
-      SessionResets.guard_instruction(agent_id)
-    else
-      :ok
-    end
-  end
+  # inside relay/5 surfaces the correct error.
+  defp guard_against_reset_pending(:operator, %{"agent_id" => agent_id})
+       when is_binary(agent_id),
+       do: SessionResets.guard_instruction(agent_id)
 
-  defp guard_against_reset_pending(_socket, _payload), do: :ok
+  defp guard_against_reset_pending(_role, _payload), do: :ok
 
   defp fetch_reset_mode(%{"mode" => mode}) when mode in @session_reset_modes,
     do: {:ok, mode}

@@ -67,11 +67,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
   defp client_assigns(role) do
     token = "tok-#{role}"
+    fingerprint = KaoiroServer.Auth.socket_id(token)
 
+    # ClientSocket.connect/3 と同じく raw token ではなく fingerprint を
+    # 持つ (ふじ must-fix A)。
     %{
       role: role,
-      credential: {:token, token},
-      socket_id: KaoiroServer.Auth.socket_id(token)
+      credential: {:token_fingerprint, fingerprint},
+      socket_id: fingerprint
     }
   end
 
@@ -4009,6 +4012,48 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :error, %{reason: "session_reset_pending"}
       refute_broadcast "set_permission_mode", _
+
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    # ふじ must-fix B (#158): guard と relay が同じ live role を見ることを
+    # pin する。connect 時の snapshot を guard が見ていた頃は、この 2 本が
+    # どちらも逆側へ倒れていた。
+    test "昇格した socket も reset-pending guard を通る (snapshot 素通り防止)" do
+      agent_id = "gp.promoted"
+      acquire_reset_lock(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      # snapshot は viewer のまま operator へ昇格させる。guard が snapshot を
+      # 見ていると viewer 扱いで素通りし、relay 側は live の operator と
+      # 判定するので指示が pending 中に通ってしまう。
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-viewer:operator")
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "hi"})
+
+      assert_reply ref, :error, %{reason: "session_reset_pending"}
+      refute_broadcast "instruction", _
+
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "降格した socket は forbidden 前に dispatch cooldown を汚さない" do
+      agent_id = "gp.demoted"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-operator:viewer")
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "hi"})
+      assert_reply ref, :error, %{reason: "forbidden"}
+
+      # guard_instruction/1 は成功時に last_dispatch を stamp する。降格済み
+      # socket の指示でそれが入ると、正当な reset の cooldown が延びる。
+      state = :sys.get_state(KaoiroServer.SessionResets)
+      refute Map.has_key?(state.last_dispatch, agent_id)
 
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
