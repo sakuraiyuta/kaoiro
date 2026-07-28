@@ -33,9 +33,9 @@ last_updated: 2026-07-28
 | Track | 内容 | 担当 | 状態 |
 |---|---|---|---|
 | S | spike: Claude wrapper 経路 (SDK streaming input) で `/compact` が slash command として解釈されるか実測 | もも | 完了 (解釈される — 下記「Track S 実測結果」) |
-| A1 | compact 可視化: `compact_boundary` / `status(compacting, compact_result)` / `conversation_reset` を wrapper で処理し operator に見せる | あお | 未着手 |
-| A2 | whoami に `context` を追加 (自己認識の最小実装) | あお | 未着手 |
-| R | 設計レビュー (本 plan + 決定記録) / A1+A2 diff レビュー | ふじ | 未着手 |
+| A1 | compact 可視化: `compact_boundary` / `status(compacting, compact_result)` / `conversation_reset` を wrapper で処理し operator に見せる | あお | 実装完了 (1c57045 ほか、レビュー中) |
+| A2 | whoami に `context` を追加 (自己認識の最小実装) | あお | 実装完了 (同上) |
+| R | 設計レビュー (本 plan + 決定記録) / A1+A2 diff レビュー | ふじ | 前段完了 (3 件採用済み)・後段 diff レビュー中 |
 | B | 自発 compact (閾値通知 + agent 判断 + 発動経路) | 未割当 | Phase A 後に詳細化 |
 | C | 自発 new/clear (ADR-0036 F1/F6 改訂 + 新 control event + deferred reset) | 未割当 | Phase B 後に詳細化 |
 
