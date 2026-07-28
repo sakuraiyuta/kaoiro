@@ -261,13 +261,13 @@ echo "dogfood: starting docker stack (rebuilds if inputs changed)..."
   >>"$logdir/stack.log" 2>&1 &
 pids+=("$!")
 
-# 7) Pin the Claude wrapper's startup model (parity with dev.sh — the
-# SDK otherwise falls back to its own default, currently Opus 4.8).
-# Runner inherits env and passes it to each spawned wrapper. Pre-set
-# the var to override; setModel from the dashboard still overrides at
-# runtime. Codex has no dev pin (account default).
-: "${KAOIRO_CLAUDE_CODE_DEFAULT_MODEL:=claude-opus-4-7}"
-export KAOIRO_CLAUDE_CODE_DEFAULT_MODEL
+# 7) Claude wrapper startup model: no pin (parity with dev.sh) — the
+# SDK default applies (Opus 5 as of 2026-07-28). The old claude-opus-4-7
+# pin dated from Opus 4.8 misbehaving in Japanese environments and was
+# removed. To pin a model, pre-set KAOIRO_CLAUDE_CODE_DEFAULT_MODEL when
+# launching this script — the runner inherits it and passes it to each
+# spawned Claude wrapper; setModel from the dashboard still overrides at
+# runtime. Codex has no pin (account default).
 
 # 8) Launch runner from dist (no watch). Source-maps on so stack traces
 # stay useful. Log via process substitution rather than a trailing
