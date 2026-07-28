@@ -32,7 +32,7 @@ last_updated: 2026-07-28
 
 | Track | 内容 | 担当 | 状態 |
 |---|---|---|---|
-| S | spike: Claude wrapper 経路 (SDK streaming input) で `/compact` が slash command として解釈されるか実測 | もも | 未着手 |
+| S | spike: Claude wrapper 経路 (SDK streaming input) で `/compact` が slash command として解釈されるか実測 | もも | 完了 (解釈される — 下記「Track S 実測結果」) |
 | A1 | compact 可視化: `compact_boundary` / `status(compacting, compact_result)` / `conversation_reset` を wrapper で処理し operator に見せる | あお | 未着手 |
 | A2 | whoami に `context` を追加 (自己認識の最小実装) | あお | 未着手 |
 | R | 設計レビュー (本 plan + 決定記録) / A1+A2 diff レビュー | ふじ | 未着手 |
@@ -110,11 +110,36 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 - 後段: A1+A2 の diff レビュー (小径。must-fix / suggestion を区別して
   クロエへ報告)。
 
+## Track S 実測結果 (もも、2026-07-28)
+
+環境: SDK 0.3.220 / Claude Code CLI 2.1.220、streaming input mode
+(`persistSession:false`, model haiku, tools 空)。通常 3 turn 後に
+文字列 `/compact` を同 stream へ送信。スクリプトは repo 外 (未 commit)。
+
+- **`/compact` は slash command として解釈される** (streaming input でも)。
+  model への通常 user turn として渡った痕跡なし。
+- イベント順序: `system/status {status:'compacting'}` →
+  `system/status {status:null, compact_result:'success'}` →
+  `system/compact_boundary` → 空文字の `result (success)`。
+- `compact_metadata` 実値: `{trigger:'manual', pre_tokens:22315,
+  post_tokens:882, cumulative_dropped_tokens:21433, duration_ms:13692}`
+  (SDK 型定義より field が多い)。manual compact で所要 ~13.7 秒。
+- **caveat**: compact 直後の `getContextUsage()` は totalTokens
+  23,247/200,000 を返し減少を反映しなかった (boundary は post_tokens
+  882 を報告)。**compact 成否・削減量の根拠は boundary metadata を正**
+  とし、`getContextUsage()` 直後値に依存しない — A1 の refresh kick は
+  meter の eventual な更新用と位置づける。
+- `compact_result:'failed'` / `compact_error` は未再現 (失敗系は実装時に
+  型定義準拠で防御)。
+- 帰結: ADR-0036 Context の「CLI native slash command parser を経由
+  しない」は Codex 限定の記述へ要修正 (Phase B 着手時に ADR 追補)。
+
 ## Phase B / C の概要 (後続詳細化)
 
 - B: wrapper 機械判定 (`used_percentage` 閾値) → 超過時に agent へ通知
   注入 → agent が判断し permission_broker 承認経由で `/compact` 発動。
-  **Track S の spike 通過が前提** (不通過なら発動経路を再設計)。
+  Track S 通過により **prompt 経由 + boundary 監視で実装可能と確定**。
+  manual compact は十数秒かかる点を UX (state 表示) 設計に織り込む。
 - C: wrapper→server 新 control event + 新 MCP tool + deferred reset
   (turn 境界発火)。ADR-0036 F1 (operator-only) / F6 (busy 拒否) の改訂
   を伴う。permission は全承認から開始 (P2)。
