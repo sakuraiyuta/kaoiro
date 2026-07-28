@@ -9,9 +9,13 @@
 //
 // Safety: allowedTools defaults to read-only tools; config.allowed_tools
 // raises that ceiling per wrapper (local config only). Other tools go to
-// the canUseTool ask path — when that path fires (issue #1), the decision
-// comes from the server's approval flow (PermissionBroker), defaulting to
-// deny on timeout. The ceiling cannot be widened from the server side
+// the canUseTool ask path (issue #1). Whether that path actually fires
+// depends on the agent's permission_mode (ADR-0043 D4 追補): default 系
+// mode では canUseTool が発火し PermissionBroker の operator dialog に
+// 回る (deny on timeout)、auto 等の自律 mode では SDK が mode の意味論
+// として自動承認するため dialog は出ない。厳格な都度承認が必要な agent
+// は operator が mode を default 系に設定して gate を回復する。ceiling
+// itself (allowedTools) cannot be widened from the server side
 // (specs/threat-model.md).
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
@@ -562,11 +566,14 @@ async function main(): Promise<void> {
       // The kaoiro in-process MCP server is always registered under the
       // server-connected model (phase-8). send_to_agent surfaces as
       // mcp__kaoiro__send_to_agent and is NOT in the read-only default
-      // allowedTools, so canUseTool fires and the broker runs the
-      // per-call operator dialog (Phase 1 都度承認). request_compact
-      // (phase-28 B2) and request_session_reset (C2) are gated the same way
-      // — their absence from READ_ONLY_TOOLS (read_only_tools.ts) is what
-      // makes them 都度承認, so do not add them there.
+      // allowedTools, so it routes through canUseTool. Whether the broker
+      // then runs the per-call operator dialog is permission_mode 従属
+      // (ADR-0043 D4 追補): default 系 mode でのみ dialog が出る (auto 等
+      // の自律 mode では SDK 側で自動承認され dialog は発火しない)。
+      // request_compact (phase-28 B2) と request_session_reset (C2) も
+      // 同じ扱いで、READ_ONLY_TOOLS (read_only_tools.ts) に登録しない
+      // ことで canUseTool 経路に乗せる — mode 従属の gate を効かせる
+      // ため、これらを READ_ONLY_TOOLS に足してはいけない。
       mcpServers: {
         kaoiro: buildKaoiroMcpServer(interAgent!, [
           {
