@@ -398,6 +398,108 @@ describe("AgentHost — query injection", () => {
     expect(ctxOf(envs.at(-1) as Envelope)).toBeUndefined();
   });
 
+  // phase-28 B1 (#168 P3): 閾値超過を epoch あたり 1 回だけ agent へ通知する。
+  // 注入は instruction queue 経由なので、SDK には user turn として現れる。
+  function contextQueryFn(
+    usages: { totalTokens: number; maxTokens: number; percentage: number }[],
+    script: () => AsyncGenerator<SDKMessage, void>,
+  ): { queryFn: QueryFn; injected: string[] } {
+    const injected: string[] = [];
+    let call = 0;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      // Drain the input stream so queued turns (the B1 notice among them)
+      // are observable — the host only injects, it never renders.
+      void (async () => {
+        for await (const turn of args.prompt) {
+          const content = turn.message.content;
+          if (typeof content === "string") injected.push(content);
+        }
+      })();
+      return asQuery(
+        script(),
+        async () => {},
+        async () => usages[Math.min(call++, usages.length - 1)],
+      );
+    });
+    return { queryFn, injected };
+  }
+
+  it("閾値超過で通知を 1 回だけ注入する (B1)", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [
+        { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
+        { totalTokens: 160000, maxTokens: 200000, percentage: 80 },
+      ],
+      async function* () {
+        yield result("success", { result: "1" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "2" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    // 2 回目の refresh (80%) では再送しない — epoch あたり 1 回。
+    const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("75%");
+    expect(notices[0]).toContain("request_compact");
+    // 切迫を煽らない文言であること (P3)。
+    expect(notices[0]).toContain("There is no need to act now");
+  });
+
+  it("閾値未満では注入しない (B1)", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [{ totalTokens: 100000, maxTokens: 200000, percentage: 50 }],
+      async function* () {
+        yield result("success", { result: "1" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toEqual(
+      [],
+    );
+  });
+
+  it("compact 境界で dedup が解除され次の epoch で再度通知する (B1)", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [
+        { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
+        // 境界後、再び閾値を超えるまで積み上がった 2 つ目の epoch。
+        { totalTokens: 155000, maxTokens: 200000, percentage: 78 },
+      ],
+      async function* () {
+        yield result("success", { result: "1" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "manual", pre_tokens: 150000 },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
+    expect(notices).toHaveLength(2);
+    expect(notices[1]).toContain("78%");
+  });
+
   // 藤 review S1: compact_error は SDK 由来の任意長文字列。log 上限を
   // 素通りしないことを path 全体で pin する。
   it("巨大な compact_error は system log として clip される (S1)", async () => {

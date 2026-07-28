@@ -134,6 +134,33 @@ export function initialStatusExt(): Record<string, unknown> {
  *  user turn. Exported so tests can inspect without duplicating the constant. */
 export const CONTEXT_INIT_RETRY_DELAY_MS = 100;
 
+/** Context-usage share (percent) at or above which the wrapper tells the
+ *  agent ONCE per context epoch that recovery is available (phase-28 B1,
+ *  #168 決定 P3). The hybrid split: the wrapper does the machine judgement,
+ *  the agent decides whether to act. Deliberately a constant — a config
+ *  field would have to travel through WrapperConfig in @kaoiro/protocol, and
+ *  Phase B is scoped to close inside the wrapper. TODO(#168 Phase C or a
+ *  follow-up): make configurable once operators want per-agent thresholds;
+ *  the number itself is a guess pending dogfood data. */
+export const CONTEXT_NOTICE_THRESHOLD_PERCENT = 70;
+
+/** The turn injected when usage first crosses the threshold in an epoch.
+ *  Wording is load-bearing (P3: context anxiety): it states the fact, names
+ *  the one action available, explicitly removes urgency, and promises not to
+ *  repeat — an agent told "you are running out" every turn starts optimizing
+ *  for the meter instead of the work. */
+function contextNoticeText(usedPercentage: number): string {
+  return (
+    `[kaoiro] Context usage for this session has reached ` +
+    `${usedPercentage}%. If you judge that headroom is starting to limit ` +
+    "the work, you can call request_compact to ask the operator to approve " +
+    "compacting it. There is no need to act now — finish what you are " +
+    "doing and decide at a natural break, or ignore this if the remaining " +
+    "room is enough. This notice is not repeated until the next compaction " +
+    "or conversation reset."
+  );
+}
+
 // PermissionDecision / QuestionDecision moved to @kaoiro/agent-common with
 // the brokers (phase-13); re-exported here so the host's public surface is
 // unchanged.
@@ -374,6 +401,11 @@ export class AgentHost implements EngineAdapter {
    *  a mismatch discards the result so stale data cannot overwrite a fresh
    *  post-switch snapshot. */
   #contextGeneration = 0;
+  /** True once this context epoch's threshold notice has been queued
+   *  (phase-28 B1). Cleared by `#invalidateContextEpoch()`, so a compaction
+   *  or a conversation reset re-arms it and nothing else does — that is the
+   *  whole dedup: one notice per epoch, never a per-turn nag (P3). */
+  #contextNoticeSent = false;
   readonly #rateLimits = new Map<
     string,
     { status?: string; utilization?: number; resets_at?: number }
@@ -1728,6 +1760,7 @@ export class AgentHost implements EngineAdapter {
         prev.used_percentage !== next.used_percentage;
       if (!changed) return;
       this.#context = next;
+      this.#maybeNotifyContextThreshold(next.used_percentage);
       // Authoritative stamp rides #statusExt on every state_change (L1233);
       // this explicit re-emit satisfies the "取得成功時の即時反映" contract
       // (藤 review turn-3 S7) without waiting for the next natural transition.
@@ -1770,8 +1803,36 @@ export class AgentHost implements EngineAdapter {
     const hadReading = this.#context !== null;
     this.#contextGeneration += 1;
     this.#context = null;
+    // New epoch, new notice budget (phase-28 B1).
+    this.#contextNoticeSent = false;
     if (hadReading) this.#emitState(this.#machine.state);
     void this.#refreshContextUsage();
+  }
+
+  /** Queues the one threshold notice this context epoch is allowed
+   *  (phase-28 B1, #168 P3). Called from `#refreshContextUsage` on every
+   *  reading that actually changed, so the notice lands the first time usage
+   *  crosses the line and never again until the epoch ends.
+   *
+   *  Routed through `send()` — the ordinary instruction queue — so it becomes
+   *  a normal turn behind whatever is in flight. Nothing interrupts, nothing
+   *  is injected mid-turn (ADR-0036 F6 stays intact). */
+  #maybeNotifyContextThreshold(usedPercentage: number): void {
+    if (this.#contextNoticeSent) return;
+    if (usedPercentage < CONTEXT_NOTICE_THRESHOLD_PERCENT) return;
+    // Claim the budget BEFORE the async send so two refreshes resolving in
+    // the same tick cannot both queue a notice.
+    this.#contextNoticeSent = true;
+    void this.send(contextNoticeText(usedPercentage)).catch(
+      (err: unknown) => {
+        // Closed or full queue. Re-arm rather than burning the epoch's one
+        // notice on a send that never reached the model.
+        this.#contextNoticeSent = false;
+        process.stderr.write(
+          `context threshold notice not queued: ${String(err)}\n`,
+        );
+      },
+    );
   }
 
   /** Init-time refresh with a small bounded retry (ADR-0040 phase-21,
