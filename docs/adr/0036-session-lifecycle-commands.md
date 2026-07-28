@@ -17,6 +17,10 @@ Accepted (2026-07-12、マスター決裁)。実装は
 [phase-17-session-lifecycle-commands](../plans/phase-17-session-lifecycle-commands.md)。
 phase-15 initial完了後に着手し、phase-16との実装順は着手時にマスターが決める。
 
+**追補 (2026-07-28)**: 本決定の F1 と F6 は
+[ADR-0043](0043-agent-initiated-session-reset.md) により一部改訂された。operator
+起点の既存意味論を維持したまま、agent 自身の permission 付き deferred reset を追加する。
+
 ## Context
 
 kaoiro Composerはengineが報告したslash commandを補完できるが、command自体を
@@ -79,6 +83,10 @@ exact文字列をmodelへ説明目的で送りたい場合はcode block、また
 `\/new` / `\/clear`を用い、reserved exact tokenを避ける。phase-17はescape文字を
 除去してexact tokenを送る特別経路を作らない。reserved command防御を迂回する裏口に
 なるためである。
+
+**追補 (2026-07-28、ADR-0043)**: F1 の起点は operator に加えて agent 自身へ拡張する。
+agent 起点は `request_session_reset` MCP tool と wrapper→server control event を通るため、
+user text の再 parse と reserved command 防御の意味論は変更しない。
 
 serverはoperator role、agent存在、live owner、capability、現在stateを検証し、
 reset requestを一意`request_id`付きでrunnerへrelayする。client pushの`:ok`は受付
@@ -214,6 +222,10 @@ operatorが次の入力先を誤認する。必要ならoperatorが既存interru
 serverはstate検証と同時にF2のpending lockを獲得し、新instructionとのTOCTOUを防ぐ。
 runner/wrapperもreset requestのgeneration/request IDを検証し、stale completionを
 無視する。
+
+**追補 (2026-07-28、ADR-0043)**: agent 自身が承認済みの reset を要求する場合は、
+tool call 時には予約だけを受理し、当該 turn の完了後に発火する。operator 起点の
+busy 拒否・自動 interrupt 不採用・queue 不採用は変更しない。
 
 ### F7 — protocol eventとfailureをSSOT化
 
