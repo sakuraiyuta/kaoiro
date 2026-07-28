@@ -471,11 +471,17 @@ describe("AgentHost — query injection", () => {
     );
   });
 
-  it("compact 境界で dedup が解除され次の epoch で再度通知する (B1)", async () => {
+  // BR MF1 (a): 境界直後の `getContextUsage()` は圧縮前の総量を返し得る
+  // (Track S 実測)。その値で 2 通目を出すと、たった今 compact した使用量に
+  // ついてもう一度警告することになる。**この 3 本は元々「境界直後の 78%
+  // で 2 通目が出る」を期待していた旧テストの置き換えであり、旧版は誤動作
+  // の方を pin していた** (BR MF1)。
+  it("境界直後の stale な reading では 2 通目を出さない (MF1-a)", async () => {
     const { queryFn, injected } = contextQueryFn(
       [
         { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
-        // 境界後、再び閾値を超えるまで積み上がった 2 つ目の epoch。
+        // 境界を跨いでも SDK がまだ返してくる圧縮前の値。閾値超えだが、
+        // 新 epoch の実態を表していないので通知の根拠にならない。
         { totalTokens: 155000, maxTokens: 200000, percentage: 78 },
       ],
       async function* () {
@@ -486,7 +492,45 @@ describe("AgentHost — query injection", () => {
           subtype: "compact_boundary",
           compact_metadata: { trigger: "manual", pre_tokens: 150000 },
         });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("75%");
+    expect(notices.some((t) => t.includes("78%"))).toBe(false);
+  });
+
+  // BR MF1 (b): 圧縮が見えた reading (直前 epoch の最終値を下回るもの) を
+  // 観測して初めて新 epoch の判定を再開し、そこから改めて閾値を跨いだ
+  // ときだけ 1 通出す。
+  it("信頼できる post 値の後に閾値を跨いだときだけ次の 1 通を出す (MF1-b)", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [
+        { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
+        { totalTokens: 155000, maxTokens: 200000, percentage: 78 }, // stale
+        { totalTokens: 20000, maxTokens: 200000, percentage: 10 }, // 圧縮確認
+        { totalTokens: 146000, maxTokens: 200000, percentage: 73 }, // 再超過
+      ],
+      async function* () {
+        yield result("success", { result: "1" });
         await new Promise((resolve) => setTimeout(resolve, 20));
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "manual", pre_tokens: 150000 },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "2" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "3" });
+        await new Promise((resolve) => setTimeout(resolve, 40));
       },
     );
     const host = new AgentHost(config, {
@@ -497,7 +541,169 @@ describe("AgentHost — query injection", () => {
     await host.run();
     const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
     expect(notices).toHaveLength(2);
-    expect(notices[1]).toContain("78%");
+    expect(notices[0]).toContain("75%");
+    expect(notices[1]).toContain("73%");
+  });
+
+  // BR MF1 (c): compact が予約され境界が来た epoch の通知は、queue で
+  // 順番待ちしている間に無効になる。後追いで注入してはいけない。
+  it("epoch が変わった後の通知は queue から破棄する (MF1-c / MF2)", async () => {
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const { queryFn, injected } = contextQueryFn(
+      [
+        { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
+        { totalTokens: 20000, maxTokens: 200000, percentage: 10 },
+      ],
+      async function* () {
+        yield result("success", { result: "1" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "manual", pre_tokens: 150000 },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        // 境界が確定してから初めて queue を流す。
+        releaseGate();
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+      enqueueInjection: async (task) => {
+        await gate;
+        await task();
+      },
+    });
+    await host.run();
+    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toEqual(
+      [],
+    );
+  });
+
+  // BR MF2: 通知は operator instruction と同じ直列化に乗る。先に積まれた
+  // 遅い send を追い越して SDK 入力ストリームへ出てはいけない。
+  it("先行する遅い send を追い越さない (MF2)", async () => {
+    let host!: AgentHost;
+    let chain: Promise<void> = Promise.resolve();
+    const enqueueInjection = (task: () => Promise<void>): Promise<void> => {
+      const queued = chain.then(task);
+      chain = queued.catch(() => {});
+      return queued;
+    };
+    const { queryFn, injected } = contextQueryFn(
+      [{ totalTokens: 150000, maxTokens: 200000, percentage: 75 }],
+      async function* () {
+        yield result("success", { result: "1" });
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      },
+    );
+    host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+      enqueueInjection,
+    });
+    // 大きな添付のレンダリングなどで詰まった先行 instruction を模す。
+    void enqueueInjection(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await host.send("prior instruction");
+    });
+    await host.run();
+    const noticeAt = injected.findIndex((t) =>
+      t.startsWith("[kaoiro] Context"),
+    );
+    expect(noticeAt).toBeGreaterThan(-1);
+    expect(injected.indexOf("prior instruction")).toBeLessThan(noticeAt);
+  });
+
+  // BR MF2: 同一 epoch での queue 失敗は budget を戻す — 通知 1 通を
+  // 届かなかった send に食わせない。
+  it("同 epoch の queue 失敗は次の変化した reading で再送する (MF2)", async () => {
+    let call = 0;
+    const { queryFn, injected } = contextQueryFn(
+      [
+        { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
+        { totalTokens: 160000, maxTokens: 200000, percentage: 80 },
+      ],
+      async function* () {
+        yield result("success", { result: "1" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "2" });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+      enqueueInjection: (task) => {
+        call += 1;
+        return call === 1
+          ? Promise.reject(new Error("queue full"))
+          : task();
+      },
+    });
+    await host.run();
+    const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("80%");
+  });
+
+  // BR MF2: 旧 epoch の遅延 reject が、新 epoch が既に確保した budget を
+  // 巻き戻してはいけない (巻き戻すと新 epoch で 2 通目が出る)。
+  it("旧 epoch の遅延 reject は新 epoch の budget を戻さない (MF2)", async () => {
+    let rejectStale!: (err: Error) => void;
+    let call = 0;
+    const { queryFn, injected } = contextQueryFn(
+      [
+        { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
+        { totalTokens: 20000, maxTokens: 200000, percentage: 10 }, // 圧縮確認
+        { totalTokens: 150000, maxTokens: 200000, percentage: 75 }, // 再超過
+        { totalTokens: 160000, maxTokens: 200000, percentage: 80 },
+      ],
+      async function* () {
+        yield result("success", { result: "1" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "manual", pre_tokens: 150000 },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "2" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "3" });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+      enqueueInjection: (task) => {
+        call += 1;
+        // 1 本目 (旧 epoch) は宙吊りにし、新 epoch が通知を確保した直後に
+        // 初めて reject させる。
+        if (call === 1) {
+          return new Promise<void>((_resolve, reject) => {
+            rejectStale = reject;
+          });
+        }
+        return task().then(() => rejectStale(new Error("late")));
+      },
+    });
+    await host.run();
+    const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
+    // 新 epoch の 1 通だけ。80% の reading で 2 通目が出ていない。
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("75%");
+    expect(notices.some((t) => t.includes("80%"))).toBe(false);
   });
 
   // 藤 review S1: compact_error は SDK 由来の任意長文字列。log 上限を

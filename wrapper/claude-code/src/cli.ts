@@ -21,12 +21,11 @@ import { readSessionHistory } from "./history.js";
 import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
 import {
   InterAgentTool,
-  LIST_AGENTS_TOOL_FQN,
-  WHOAMI_TOOL_FQN,
   classifyInterAgentError,
   formatInboundMessage,
 } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
+import { READ_ONLY_TOOLS } from "./read_only_tools.js";
 import { requestCompactDescriptor } from "./request_compact.js";
 import { PermissionBroker } from "@kaoiro/agent-common";
 import { PERMISSION_MODES, loadConfig } from "@kaoiro/wrapper-core";
@@ -57,22 +56,6 @@ const COLOR: Record<KaoiroState, string> = {
   done: "92", // bright green
   error: "31", // red
 };
-
-const READ_ONLY_TOOLS = new Set([
-  "Read",
-  "Grep",
-  "Glob",
-  "LS",
-  "NotebookRead",
-  // Companion tools for inter-agent messaging (protocol-inter-agent). Both
-  // are server-round-trip or local-state read with no side effects, so the
-  // operator's permission dialog adds no safety — only friction. Keep them
-  // auto-allowed so the model can resolve peer names and self-narrate
-  // without a broker round-trip per call. Use the exported FQN constants so
-  // a rename in inter_agent.ts cannot silently desync the auto-allow set.
-  LIST_AGENTS_TOOL_FQN,
-  WHOAMI_TOOL_FQN,
-]);
 
 /** Upper bound on the wait for the server's `persona_prompt` push after
  *  join (ADR-0029 F3, fail-closed). Long enough for a slow initial
@@ -216,6 +199,17 @@ async function main(): Promise<void> {
   // PDF) does not let the next instruction's queue.push run first, which
   // would reorder turns on the SDK input stream.
   let instructionChain: Promise<void> = Promise.resolve();
+  /** The single tail of that chain. Everything that puts a turn on the SDK
+   *  input stream — operator instructions, inter-agent deliveries, the B2
+   *  `/compact`, the B1 threshold notice (phase-28 BR MF2) — goes through
+   *  here, so ordering is decided in one place. The returned promise settles
+   *  with `task`, letting a caller surface its own failure, while the chain
+   *  itself always continues. */
+  const enqueueInstruction = (task: () => Promise<void>): Promise<void> => {
+    const queued = instructionChain.then(task);
+    instructionChain = queued.catch(() => {});
+    return queued;
+  };
 
   const onState = (envelope: Envelope): void => {
     printState(envelope);
@@ -289,7 +283,7 @@ async function main(): Promise<void> {
       // Serialise async sends so render cost (PDF fit, etc.) cannot
       // reorder instructions on the SDK queue. swallow per-call failures
       // so one bad turn does not break the chain.
-      instructionChain = instructionChain.then(() =>
+      void enqueueInstruction(() =>
         host.send(text, attachmentIds).catch((err: unknown) => {
           process.stderr.write(`send failed: ${String(err)}\n`);
         }),
@@ -424,7 +418,7 @@ async function main(): Promise<void> {
         envelope.payload as Partial<InterAgentMessagePayload>
       ).conversation_id;
       interAgent?.notePendingInjection(envelope);
-      instructionChain = instructionChain.then(() =>
+      void enqueueInstruction(() =>
         host.send(text, undefined, conversationId).catch((err: unknown) => {
           process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
         }),
@@ -467,6 +461,9 @@ async function main(): Promise<void> {
   host = new AgentHost(config, {
     onState,
     onLog,
+    // phase-28 BR MF2: the B1 threshold notice is an injection like any
+    // other, so it queues on the one chain instead of racing it.
+    enqueueInjection: enqueueInstruction,
     // issue #131: resolve exactly the conversation this turn was tagged
     // with (must-fix 1 — turn-scoped, never a sweep of everything pending).
     // On error, classify what the SDK reported and push the resulting
@@ -533,8 +530,8 @@ async function main(): Promise<void> {
       // allowedTools, so canUseTool fires and the broker runs the
       // per-call operator dialog (Phase 1 都度承認). request_compact
       // (phase-28 B2) is gated the same way — its absence from
-      // READ_ONLY_TOOLS above is what makes it 都度承認, so do not add it
-      // there.
+      // READ_ONLY_TOOLS (read_only_tools.ts) is what makes it 都度承認, so
+      // do not add it there.
       mcpServers: {
         kaoiro: buildKaoiroMcpServer(
           interAgent!,
@@ -543,11 +540,7 @@ async function main(): Promise<void> {
             // /compact cannot overtake an instruction still rendering its
             // attachments. Awaiting `queued` lets the tool report a closed
             // or full queue instead of claiming a reservation it never made.
-            send: (text) => {
-              const queued = instructionChain.then(() => host.send(text));
-              instructionChain = queued.catch(() => {});
-              return queued;
-            },
+            send: (text) => enqueueInstruction(() => host.send(text)),
           }),
         ),
       },

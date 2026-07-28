@@ -14,9 +14,11 @@
 // message to the model instead).
 //
 // Track S measured that a `/compact` string sent on the streaming input is
-// interpreted as a slash command, and that a manual compact takes ~13.7 s.
-// So the tool reserves the compaction rather than awaiting it: completion is
-// observed through the Phase A `compact_boundary` log line, not here.
+// interpreted as a slash command. How long the compaction then takes scales
+// with the context being compacted — 13.7 s at ~22k tokens, 168.8 s at ~293k
+// (phase-28 実機受け入れ) — so the tool reserves the compaction rather than
+// awaiting it, and promises no duration. Completion is observed through the
+// Phase A `compact_boundary` log line, not here.
 
 import type { ToolDescriptor, ToolResult } from "@kaoiro/agent-common";
 
@@ -31,7 +33,7 @@ export const REQUEST_COMPACT_TOOL_FQN = "mcp__kaoiro__request_compact";
 export const COMPACT_COMMAND = "/compact";
 
 const REQUEST_COMPACT_DESCRIPTION =
-  "Ask the operator to approve compacting this session's context. On approval the wrapper queues `/compact`, which runs at the next turn boundary and replaces the older conversation with a summary; the call returns as soon as the compaction is RESERVED, not when it finishes (it takes on the order of ten seconds, and the transcript shows a completion line with the before/after token counts). Use this when you have judged that context headroom is actually limiting the work — after a long session, or before taking on a large task — not as routine hygiene. The operator may decline, in which case carry on as you were. Anything you still need after the compaction should be written down first (a file, an issue, a message to a peer): a compaction summarizes and drops detail, and nothing restores it.";
+  "Ask the operator to approve compacting this session's context. On approval the wrapper queues `/compact`, which runs at the next turn boundary and replaces the older conversation with a summary; the call returns as soon as the compaction is RESERVED, not when it finishes. How long it then takes scales with how much context there is to compact and can run to several minutes; the transcript reports completion with whatever token counts the engine provides. Use this when you have judged that context headroom is actually limiting the work — after a long session, or before taking on a large task — not as routine hygiene. The operator may decline, in which case carry on as you were. Anything you still need after the compaction should be written down first (a file, an issue, a message to a peer): a compaction summarizes and drops detail, and nothing restores it.";
 
 const REQUEST_COMPACT_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -79,8 +81,9 @@ export function requestCompactDescriptor(
             type: "text",
             text:
               `compaction reserved${because}. It runs at the next turn ` +
-              "boundary; the transcript reports completion with the " +
-              "before/after token counts. Nothing further is needed from you.",
+              "boundary and can take several minutes on a large context; " +
+              "the transcript reports completion. Nothing further is " +
+              "needed from you.",
           },
         ],
       };

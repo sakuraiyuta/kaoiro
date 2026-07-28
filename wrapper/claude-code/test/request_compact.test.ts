@@ -14,7 +14,12 @@ import {
   requestCompactDescriptor,
 } from "../src/request_compact.js";
 import { kaoiroToolDescriptors } from "../src/inter_agent_sdk.js";
-import { InterAgentTool } from "@kaoiro/agent-common";
+import { READ_ONLY_TOOLS } from "../src/read_only_tools.js";
+import {
+  InterAgentTool,
+  LIST_AGENTS_TOOL_FQN,
+  WHOAMI_TOOL_FQN,
+} from "@kaoiro/agent-common";
 import type { WrapperConfig } from "@kaoiro/agent-common";
 
 const config: WrapperConfig = {
@@ -93,6 +98,16 @@ describe("kaoiro MCP server registration", () => {
       "request_compact",
     ]);
     expect(REQUEST_COMPACT_TOOL_FQN).toBe("mcp__kaoiro__request_compact");
+  });
+
+  // BR S1: 承認ゲートは「auto-allow 既定に載っていないこと」そのもの。
+  // 追加した瞬間に 都度承認 が消えるので、不在を直接 pin する。
+  it("auto-allow 既定に request_compact は載らない (S1)", () => {
+    expect(READ_ONLY_TOOLS.has(REQUEST_COMPACT_TOOL_FQN)).toBe(false);
+    // 同居する読み取り専用 tool は載っている — set 自体が空だから通った、
+    // という抜けを塞ぐ。
+    expect(READ_ONLY_TOOLS.has(WHOAMI_TOOL_FQN)).toBe(true);
+    expect(READ_ONLY_TOOLS.has(LIST_AGENTS_TOOL_FQN)).toBe(true);
   });
 
   it("渡さなければ従来の 3 tool のまま (codex 側は出さない前提)", () => {

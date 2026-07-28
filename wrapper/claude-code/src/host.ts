@@ -195,6 +195,15 @@ export interface AgentHostOptions {
     conversationId: string | null;
     error?: { reason?: string; detail?: string };
   }) => void;
+  /** Serialises a wrapper-initiated injection behind everything already
+   *  queued (phase-28 BR MF2). cli.ts owns one promise chain for operator
+   *  instructions, inter-agent deliveries and the B2 `/compact`; the B1
+   *  threshold notice must ride the same chain or it can reach the SDK input
+   *  stream ahead of a turn that was queued first. `task` re-checks its own
+   *  preconditions when the chain reaches it, so a queue this deep is free to
+   *  delay it arbitrarily. Omitted = the task runs inline (unit tests,
+   *  embedders); production always wires it. */
+  enqueueInjection?: (task: () => Promise<void>) => Promise<void>;
   /** Invoked when wrapper rejects an individual upload (file-upload spec /
    *  ADR-0025 F9). Omitted = rejections are not relayed (validation still
    *  runs, the message just does not leave the host). */
@@ -406,6 +415,21 @@ export class AgentHost implements EngineAdapter {
    *  or a conversation reset re-arms it and nothing else does — that is the
    *  whole dedup: one notice per epoch, never a per-turn nag (P3). */
   #contextNoticeSent = false;
+  /** `used_tokens` of the last reading taken BEFORE the current epoch opened
+   *  (phase-28 BR MF1). Non-null means the epoch is still *unconfirmed*: a
+   *  compaction (or reset) has happened, but no measurement has yet proven
+   *  that `getContextUsage()` reflects it — Track S measured the call right
+   *  after a boundary still reporting the PRE-compact total. Any reading at
+   *  or above this baseline is treated as that stale value and must not feed
+   *  the threshold notice, or the wrapper warns the agent again about usage
+   *  it just compacted away. The first reading strictly below the baseline
+   *  proves the post-compact state is visible and clears it back to null.
+   *
+   *  A reading cannot climb back over the baseline without first passing
+   *  below it, so this cannot latch permanently — except when the compaction
+   *  freed nothing at all, in which case suppression is still the honest
+   *  answer. */
+  #contextEpochBaseline: number | null = null;
   readonly #rateLimits = new Map<
     string,
     { status?: string; utilization?: number; resets_at?: number }
@@ -1760,7 +1784,7 @@ export class AgentHost implements EngineAdapter {
         prev.used_percentage !== next.used_percentage;
       if (!changed) return;
       this.#context = next;
-      this.#maybeNotifyContextThreshold(next.used_percentage);
+      this.#maybeNotifyContextThreshold(next);
       // Authoritative stamp rides #statusExt on every state_change (L1233);
       // this explicit re-emit satisfies the "取得成功時の即時反映" contract
       // (藤 review turn-3 S7) without waiting for the next natural transition.
@@ -1801,6 +1825,12 @@ export class AgentHost implements EngineAdapter {
    *  boundary metadata in the log line, not from here. */
   #invalidateContextEpoch(): void {
     const hadReading = this.#context !== null;
+    // Carry the closing epoch's last reading forward as the staleness
+    // baseline (BR MF1). Readings at or above it are the pre-boundary total
+    // the SDK keeps reporting for a while, and must not trigger a notice.
+    // No prior reading means nothing to compare against, so the new epoch
+    // starts confirmed rather than permanently muted.
+    this.#contextEpochBaseline = this.#context?.used_tokens ?? null;
     this.#contextGeneration += 1;
     this.#context = null;
     // New epoch, new notice budget (phase-28 B1).
@@ -1814,25 +1844,66 @@ export class AgentHost implements EngineAdapter {
    *  reading that actually changed, so the notice lands the first time usage
    *  crosses the line and never again until the epoch ends.
    *
-   *  Routed through `send()` — the ordinary instruction queue — so it becomes
-   *  a normal turn behind whatever is in flight. Nothing interrupts, nothing
-   *  is injected mid-turn (ADR-0036 F6 stays intact). */
-  #maybeNotifyContextThreshold(usedPercentage: number): void {
+   *  Two guards beyond the per-epoch dedup (BR MF1 / MF2):
+   *
+   *  - a reading that has not yet cleared `#contextEpochBaseline` is the
+   *    pre-boundary total the SDK still reports right after a compaction;
+   *    warning on it would nag the agent about usage it just compacted away;
+   *  - the injection rides the caller-supplied serialization (cli.ts's
+   *    instruction chain — the same one operator / inter-agent / B2 turns use)
+   *    and re-checks the epoch when the chain reaches it, so a notice queued
+   *    behind a slow send is dropped rather than carried across a boundary.
+   *
+   *  It is still an ordinary queued turn: nothing interrupts and nothing is
+   *  injected mid-turn (ADR-0036 F6 stays intact). */
+  #maybeNotifyContextThreshold(reading: {
+    used_tokens: number;
+    used_percentage: number;
+  }): void {
+    if (
+      this.#contextEpochBaseline !== null &&
+      reading.used_tokens >= this.#contextEpochBaseline
+    ) {
+      return;
+    }
+    // Below the baseline: the post-boundary state is visible, so this and
+    // every later reading of the epoch can be trusted.
+    this.#contextEpochBaseline = null;
     if (this.#contextNoticeSent) return;
-    if (usedPercentage < CONTEXT_NOTICE_THRESHOLD_PERCENT) return;
+    if (reading.used_percentage < CONTEXT_NOTICE_THRESHOLD_PERCENT) return;
     // Claim the budget BEFORE the async send so two refreshes resolving in
     // the same tick cannot both queue a notice.
     this.#contextNoticeSent = true;
-    void this.send(contextNoticeText(usedPercentage)).catch(
-      (err: unknown) => {
-        // Closed or full queue. Re-arm rather than burning the epoch's one
-        // notice on a send that never reached the model.
+    const generation = this.#contextGeneration;
+    const text = contextNoticeText(reading.used_percentage);
+    void this.#enqueueInjection(async () => {
+      // The chain may have held us across a compaction the agent already
+      // acted on. Injecting now would deliver the old epoch's warning into
+      // the new one, which is exactly what the operator just fixed.
+      if (this.#closed || generation !== this.#contextGeneration) return;
+      await this.send(text);
+    }).catch((err: unknown) => {
+      // Closed or full queue. Re-arm rather than burning the epoch's one
+      // notice on a send that never reached the model — but only while the
+      // epoch that claimed the budget is still current. A late rejection
+      // from a previous epoch must not unset the flag the new epoch owns.
+      if (generation === this.#contextGeneration) {
         this.#contextNoticeSent = false;
-        process.stderr.write(
-          `context threshold notice not queued: ${String(err)}\n`,
-        );
-      },
-    );
+      }
+      process.stderr.write(
+        `context threshold notice not queued: ${String(err)}\n`,
+      );
+    });
+  }
+
+  /** Runs `task` on the caller-supplied injection queue when one was wired
+   *  (cli.ts serialises every instruction through a single promise chain so a
+   *  slow render cannot let a later turn reach the SDK input stream first).
+   *  With no queue — unit tests, embedders — it runs inline, which preserves
+   *  the pre-MF2 behaviour. */
+  #enqueueInjection(task: () => Promise<void>): Promise<void> {
+    const enqueue = this.#options.enqueueInjection;
+    return enqueue ? enqueue(task) : task();
   }
 
   /** Init-time refresh with a small bounded retry (ADR-0040 phase-21,
