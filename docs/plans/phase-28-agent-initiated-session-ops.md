@@ -265,7 +265,73 @@ B2 の「承認→実行 / 拒否→不実行」分岐は unit test で踏めな
   られた。閾値判断を whoami 値のみで行うとこの程度は過小評価するが、
   B1 の 70% には十分な余裕があり実害はない。
 
-## Phase C の概要 (後続詳細化)
+## Phase C — 自発 new/clear (詳細化 2026-07-28、クロエ裁定)
+
+設計方針: B2 (`request_compact`) と同型の tool 経路 + 新 wrapper→server
+event。reset の実行系 (kill + relaunch) は ADR-0036 F2 の既存機構に
+完全に乗り、runner / 実行 flow は変更しない。
+
+| Track | 内容 | 担当 |
+|---|---|---|
+| C1 | 改訂 ADR 起草 (ADR-0036 F1/F6 を改訂する新 ADR) | もも |
+| C2 | wrapper: `request_session_reset` tool + turn 境界での server への要求送信 | あお (BR 完了後) |
+| C3 | server: `session_reset_request` 受理経路 + origin 追加 + threat-model / protocol.md 更新 | もも (C1 承認後) |
+| CR | C2+C3 の diff レビュー | ふじ |
+
+### 設計決定 (C1 の ADR に落とす内容)
+
+- **F1 改訂**: session_reset の起点に「agent 自身 (self-initiated)」を
+  追加する。発動は MCP tool 経由であり、「wrapper が user text を再
+  parse しない」原則は維持 (text parse は導入しない)。reserved command
+  防御 (`/new` `/clear` の instruction reject) も維持。
+- **他 agent 起点の経路は設けない** (P5)。operator が都度 director を
+  指名し、指示された agent が自分の tool で要求 → operator 承認、で
+  成立するため専用機構は不要。
+- **F6 追補**: 自発 reset は turn 境界発火 (deferred)。tool call 時は
+  「予約受理」を返し、当該 turn の完了後に wrapper が server へ要求を
+  送る。operator 発 reset の busy 拒否・自動 interrupt 却下・queue
+  却下は全て維持。
+- **permission**: `request_session_reset` は P2 の「重」— permission_broker
+  都度承認 (canUseTool 経路、B2 と同型)。承認は tool call 時、実行は
+  turn 境界 — この時間差は P4 (deferred) の織り込み済み挙動とする。
+- **handoff**: P6 のとおり機構化しない。tool description に「実行前に
+  WORKLOG 等へ引き継ぎを外部化してから呼ぶ」ことを明記する。
+
+### C2 — wrapper (あお)
+
+- `request_session_reset` tool: 入力 `mode: "new" | "clear"` + 任意
+  `reason`。B2 と同じ構造 (claude-code 限定配置 / canUseTool 承認 /
+  reason は server への要求 payload にのみ載せ、どこにも連結しない)。
+- 承認後は「予約」を保持し、**当該 turn の result 処理後** (wrapper が
+  自分の turn 境界を確定できた時点) に新 event
+  `session_reset_request {mode, reason?}` を WrapperChannel へ送る。
+- server から reject (agent_busy / cooldown 等) が返った場合は 1 回だけ
+  短い delay 後に再送、それでも駄目なら次 turn で agent に失敗を通知
+  (log にも出す)。
+- 観測は in-process SDK message / server reply のみ (session jsonl 禁止
+  — 実機受け入れで確定した原則)。
+- codex には露出しない。
+
+### C3 — server (もも)
+
+- `WrapperChannel.handle_in("session_reset_request")` を新設し、
+  capability 検証 + `SessionResets.check_and_acquire` の既存 gate
+  (pending lock / state / cooldown) を通して既存の runner push 経路へ
+  合流させる。**実行系は一切変更しない**。
+- `SessionResets` に origin (`:operator` / `:agent_self`) を追加し、
+  `session_reset_started` broadcast に載せる (dashboard 表示は最小限、
+  なくても可 — 判断は実装時に軽い方へ)。
+- `docs/specs/threat-model.md` の 6 段防御と `docs/specs/protocol.md` の
+  「operator のみ」記述を改訂 ADR に整合させる。
+- viewer への情報境界 (ADR-0021) は現行のまま。
+
+### C 共通の完了条件
+
+- wrapper: test/typecheck green。server: `mix test` green +
+  `mix format` 済み。
+- reserved command 防御・operator 経路の既存テストが全て green のまま
+  (回帰なし) であること。
+- push は CR 通過後。実機受け入れ (マスター) を最終 gate とする。
 - C: wrapper→server 新 control event + 新 MCP tool + deferred reset
   (turn 境界発火)。ADR-0036 F1 (operator-only) / F6 (busy 拒否) の改訂
   を伴う。permission は全承認から開始 (P2)。
