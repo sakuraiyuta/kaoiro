@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { HookInput, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   cwdChangedHookToCwd,
+  sdkMessageToCompactNotice,
   sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToInitMeta,
@@ -186,6 +187,117 @@ describe("sdkMessageToLogs", () => {
     expect(sdkMessageToLogs(msg({ type: "result", subtype: "success" }))).toEqual(
       [],
     );
+  });
+});
+
+// phase-28 A1 (#168). Shapes follow Track S's measured order:
+// status(compacting) -> status(null, compact_result) -> compact_boundary
+// -> empty result.
+describe("sdkMessageToCompactNotice", () => {
+  it("status(compacting) -> 圧縮中の通知", () => {
+    expect(
+      sdkMessageToCompactNotice(
+        msg({ type: "system", subtype: "status", status: "compacting" }),
+      ),
+    ).toEqual({ kind: "compacting", text: "コンテキストを圧縮しています…" });
+  });
+
+  it("compact_boundary は trigger と前後 token を載せる", () => {
+    expect(
+      sdkMessageToCompactNotice(
+        msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: {
+            trigger: "manual",
+            pre_tokens: 22315,
+            post_tokens: 882,
+            // Track S saw undeclared extras alongside the typed fields.
+            cumulative_dropped_tokens: 21433,
+            duration_ms: 13692,
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "compact_boundary",
+      text: "手動コンテキスト圧縮が完了しました (前 22315 tokens → 後 882 tokens) 13.7 秒",
+    });
+  });
+
+  it("relink 系など未知の metadata は本文に出さない", () => {
+    const notice = sdkMessageToCompactNotice(
+      msg({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: {
+          trigger: "auto",
+          pre_tokens: 100,
+          preserved_segment: { head_uuid: "h", anchor_uuid: "a", tail_uuid: "t" },
+          uuids: ["u1", "u2"],
+        },
+      }),
+    );
+    expect(notice?.text).toBe("自動コンテキスト圧縮が完了しました (前 100 tokens)");
+  });
+
+  it("compact_metadata が欠けても通知は落とさない", () => {
+    expect(
+      sdkMessageToCompactNotice(
+        msg({ type: "system", subtype: "compact_boundary" }),
+      ),
+    ).toEqual({ kind: "compact_boundary", text: "コンテキストを圧縮しました" });
+  });
+
+  it("compact_result=failed は compact_error を添えて通知", () => {
+    expect(
+      sdkMessageToCompactNotice(
+        msg({
+          type: "system",
+          subtype: "status",
+          status: null,
+          compact_result: "failed",
+          compact_error: "context too small",
+        }),
+      ),
+    ).toEqual({
+      kind: "compact_result",
+      text: "コンテキスト圧縮に失敗しました: context too small",
+    });
+  });
+
+  it("compact_result=success は boundary と二重になるので通知しない", () => {
+    expect(
+      sdkMessageToCompactNotice(
+        msg({
+          type: "system",
+          subtype: "status",
+          status: null,
+          compact_result: "success",
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("conversation_reset は新 conversation_id を添えて通知", () => {
+    expect(
+      sdkMessageToCompactNotice(
+        msg({ type: "conversation_reset", new_conversation_id: "c-9" }),
+      ),
+    ).toEqual({ kind: "conversation_reset", text: "会話がリセットされました (c-9)" });
+  });
+
+  it("無関係な message は null", () => {
+    expect(
+      sdkMessageToCompactNotice(msg({ type: "system", subtype: "init" })),
+    ).toBeNull();
+    expect(
+      sdkMessageToCompactNotice(
+        msg({ type: "system", subtype: "status", permissionMode: "default" }),
+      ),
+    ).toBeNull();
+    expect(
+      sdkMessageToCompactNotice(msg({ type: "result", subtype: "success" })),
+    ).toBeNull();
   });
 });
 

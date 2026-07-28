@@ -350,6 +350,108 @@ export function cwdChangedHookToCwd(input: HookInput): string | null {
     : null;
 }
 
+/** Compaction / conversation-reset notice extracted from one SDK message
+ *  (phase-28 A1, #168), or null when the message carries none. The host turns
+ *  it into a `system`-kind log line so the operator sees compaction happen —
+ *  until this, a compact was completely invisible in kaoiro.
+ *
+ *  `kind` names the observed event, `text` is the operator-facing line.
+ *  Track S measured the real event order as
+ *  `status(compacting)` → `status(null, compact_result)` → `compact_boundary`
+ *  → empty `result`, so three distinct messages contribute here. The token
+ *  numbers come from `compact_metadata` — Track S found `getContextUsage()`
+ *  right after a boundary still reports the PRE-compact total, so the
+ *  boundary metadata is the authoritative source for "how much was freed"
+ *  and the host's context refresh is only for the meter's eventual update. */
+export interface CompactNotice {
+  kind:
+    | "compacting"
+    | "compact_result"
+    | "compact_boundary"
+    | "conversation_reset";
+  text: string;
+}
+
+/** Reads `compact_metadata` defensively: the SDK type declares
+ *  trigger/pre_tokens as required and post_tokens/duration_ms as optional,
+ *  but Track S observed further undeclared fields (cumulative_dropped_tokens),
+ *  so treat every field as best-effort rather than trusting the declaration.
+ *
+ *  Only trigger / pre_tokens / post_tokens / duration_ms are surfaced. The
+ *  relink fields (preserved_segment, uuids, …) are resume plumbing with no
+ *  operator meaning, and unknown extras are not guessed at (ふじ review). */
+function compactBoundaryText(metadata: unknown): string {
+  if (!isRecord(metadata)) return "コンテキストを圧縮しました";
+  const { trigger, pre_tokens, post_tokens, duration_ms } = metadata;
+  const how = trigger === "auto" ? "自動" : trigger === "manual" ? "手動" : "";
+  const parts: string[] = [];
+  if (typeof pre_tokens === "number") parts.push(`前 ${pre_tokens} tokens`);
+  if (typeof post_tokens === "number") parts.push(`後 ${post_tokens} tokens`);
+  const detail = parts.length > 0 ? ` (${parts.join(" → ")})` : "";
+  // Track S measured ~13.7 s for a manual compact — long enough that the
+  // operator wants to see it next to the turn it interrupted.
+  const took =
+    typeof duration_ms === "number"
+      ? ` ${(duration_ms / 1000).toFixed(1)} 秒`
+      : "";
+  return `${how}コンテキスト圧縮が完了しました${detail}${took}`;
+}
+
+/** Maps one SDK message to its compaction / reset notice, or null when it
+ *  carries none. Pure, like the other sdkMessageTo* mappers; the host owns
+ *  the emit and the follow-up context refresh. Deliberately kept out of
+ *  `sdkMessageToLogs`, which history.ts reuses to rebuild a resumed
+ *  transcript — these are live-session observations, not transcript
+ *  content. */
+export function sdkMessageToCompactNotice(
+  message: SDKMessage,
+): CompactNotice | null {
+  // conversation_reset is its own top-level type, not a system subtype.
+  if (message.type === "conversation_reset") {
+    const id = (message as { new_conversation_id?: unknown })
+      .new_conversation_id;
+    const suffix = typeof id === "string" && id !== "" ? ` (${id})` : "";
+    return {
+      kind: "conversation_reset",
+      text: `会話がリセットされました${suffix}`,
+    };
+  }
+  if (message.type !== "system") return null;
+  if (message.subtype === "compact_boundary") {
+    return {
+      kind: "compact_boundary",
+      text: compactBoundaryText(
+        (message as { compact_metadata?: unknown }).compact_metadata,
+      ),
+    };
+  }
+  if (message.subtype !== "status") return null;
+  const m = message as {
+    status?: unknown;
+    compact_result?: unknown;
+    compact_error?: unknown;
+  };
+  // A failure never reaches compact_boundary, so this status is the only
+  // place the operator can learn the compact did not happen.
+  if (m.compact_result === "failed") {
+    const detail =
+      typeof m.compact_error === "string" && m.compact_error !== ""
+        ? `: ${m.compact_error}`
+        : "";
+    return {
+      kind: "compact_result",
+      text: `コンテキスト圧縮に失敗しました${detail}`,
+    };
+  }
+  // compact_result === "success" is deliberately NOT relayed: the
+  // compact_boundary that follows it carries the same news plus the token
+  // numbers, and relaying both would double every compact in the transcript.
+  if (m.status === "compacting") {
+    return { kind: "compacting", text: "コンテキストを圧縮しています…" };
+  }
+  return null;
+}
+
 /** The SDK conversation session id carried by a message (every SDKMessage
  *  variant has one), or null when absent/empty. The host reports it so the
  *  server can group history by session (protocol.md / ADR-0014 phase-0). */

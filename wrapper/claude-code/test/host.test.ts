@@ -74,6 +74,34 @@ describe("AgentHost whoami effective projection (#113)", () => {
     });
     expect(host.statusSnapshot()).not.toHaveProperty("network_access");
   });
+
+  // phase-28 A2 (#168): 自分の context を whoami で見られるようにする。
+  it("context 未取得なら key ごと省略する (absent = unknown)", () => {
+    const host = new AgentHost(config, { onState: () => {} });
+    expect(host.statusSnapshot()).not.toHaveProperty("context");
+  });
+
+  it("getContextUsage 済みなら whoami に context が載る", async () => {
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen(), async () => {}, async () => ({
+        totalTokens: 42000,
+        maxTokens: 200000,
+        percentage: 21,
+      }));
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(host.statusSnapshot()).toMatchObject({
+      context: { used_tokens: 42000, max_tokens: 200000, used_percentage: 21 },
+    });
+  });
 });
 
 // The host reads only a few SDK fields; build minimal shapes and cast.
@@ -182,6 +210,73 @@ describe("AgentHost — query injection", () => {
     const res = logs.find((l) => l.type === "result");
     expect(res?.ext).toEqual({ cost: 0.0123 });
     expect(res?.payload).toMatchObject({ text: "done!" });
+  });
+
+  // phase-28 A1 (#168). Message order mirrors Track S's measurement.
+  it("compact の一連イベントを kind=system の log として中継する", async () => {
+    const logs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "status", status: "compacting" }),
+        msg({
+          type: "system",
+          subtype: "status",
+          status: null,
+          compact_result: "success",
+        }),
+        msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: {
+            trigger: "auto",
+            pre_tokens: 180000,
+            post_tokens: 9000,
+          },
+        }),
+        msg({ type: "conversation_reset", new_conversation_id: "c-2" }),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+
+    // compact_result=success は boundary と重複するので中継しない。
+    expect(
+      logs.filter((l) => l.payload.kind === "system").map((l) => l.payload.text),
+    ).toEqual([
+      "コンテキストを圧縮しています…",
+      "自動コンテキスト圧縮が完了しました (前 180000 tokens → 後 9000 tokens)",
+      "会話がリセットされました (c-2)",
+    ]);
+  });
+
+  it("compact_boundary は context refresh を kick する (#168)", async () => {
+    const getContextUsage = vi.fn(async () => ({
+      totalTokens: 9000,
+      maxTokens: 200000,
+      percentage: 5,
+    }));
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "manual", pre_tokens: 22315 },
+        });
+      }
+      return asQuery(gen(), async () => {}, getContextUsage);
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    // Track S: 直後値は減少を反映しないので、これは meter の eventual な
+    // 更新のための kick。呼ばれること自体を pin する。
+    expect(getContextUsage).toHaveBeenCalled();
   });
 
   it("コスト不明の result は ext.cost を付けない", async () => {

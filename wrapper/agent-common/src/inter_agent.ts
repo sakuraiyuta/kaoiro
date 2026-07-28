@@ -20,7 +20,7 @@
 
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { DirectoryEntry } from "@kaoiro/wrapper-core";
+import type { DirectoryContext, DirectoryEntry } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import type {
@@ -52,6 +52,14 @@ export interface WhoamiSnapshot {
   permission_mode?: string;
   fast_mode?: string;
   session_id?: string;
+  /** Own context-window usage (phase-28 A2, #168). Same three numbers a peer
+   *  reads via `list_agents` (`DirectoryContext`), so self and peer views of
+   *  context never disagree. The host's LAST SUCCESSFUL measurement — whoami
+   *  reads the cached value and never triggers a refresh, so it can lag the
+   *  current turn. Omitted — never zeroed or estimated — when the engine has
+   *  not reported it (codex: `supports_context_usage: false`), so absent
+   *  keeps meaning unknown. */
+  context?: DirectoryContext;
 }
 
 /** The common ToolResult shape (tooling.ts); alias kept so the existing
@@ -284,7 +292,7 @@ const LIST_AGENTS_DESCRIPTION =
   "List other kaoiro agents currently known to the server. Returns each peer's agent_id, persona (id/name/sprite_set), current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected), and engine/model/effort when reported. Use this to resolve a peer's display name and execution traits before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address. A proper-name collaboration request refers to an existing kaoiro peer — resolve it here first: 1 match → send_to_agent, several → ask the operator, 0 matches → report the persona is absent and never spawn a same-named internal sub-agent as a substitute.\n\nEach peer may also carry status fields for deciding WHO to delegate to: `context` ({used_tokens, max_tokens, used_percentage}) — avoid handing heavy work to a peer whose context is nearly full; `rate_limits` ({<window>: {status?, utilization?, resets_at?}}, windows `five_hour` / `seven_day`) — a peer near its limit will fail or stall, so prefer another or wait; `conversation` ({active, peers}) — a peer already in an active conversation is mid-collaboration, so avoid interrupting unless your message belongs to that work; `session_started_at` / `turns` / `last_activity_at` — a long-idle `last_activity_at` suggests the peer is stalled or done, worth reporting rather than delegating to.\n\nTwo rules when reading these: (1) `rate_limits` is a snapshot from the peer's LAST turn and is NOT refreshed while it idles — compare `resets_at` (Unix seconds) against the current time yourself, and once it has passed, treat that window as reset and stop trusting its `utilization` / `status`; use `last_activity_at` to judge how stale the snapshot is. (2) A field that is ABSENT means unknown, never zero and never fine — an omitted `turns` does not mean no turns, an omitted `context` does not mean plenty of room, and an omitted `rate_limits` does not mean unlimited. Ask the operator instead of assuming when an absent field would change your decision.";
 
 const WHOAMI_DESCRIPTION =
-  "Return this agent's identity from the kaoiro server's perspective: agent_id, persona (id/name/sprite_set), current state, engine, effective model/effort and their sources, engine-neutral permission (sandbox/approval), network_access, legacy permission_mode/fast_mode when applicable, session_id, and working directory. Fields that the SDK has not yet reported are omitted. Use this to confirm what the operator sees you as, or to self-narrate (e.g., when telling a peer who you are).";
+  "Return this agent's identity from the kaoiro server's perspective: agent_id, persona (id/name/sprite_set), current state, engine, effective model/effort and their sources, engine-neutral permission (sandbox/approval), network_access, legacy permission_mode/fast_mode when applicable, session_id, working directory, and — on engines that report it — `context` ({used_tokens, max_tokens, used_percentage}), your own context-window usage in the same shape peers see via list_agents. Fields that the SDK has not yet reported are omitted. Use this to confirm what the operator sees you as, or to self-narrate (e.g., when telling a peer who you are). `context` is a cached last successful measurement; whoami itself does not refresh it, so it can lag the current turn. Read it only when a decision actually turns on it — sizing a delegation you are about to accept, or answering the operator's question about your own headroom. It is not a meter to watch: do not check it each turn and do not bring it up unprompted. An absent `context` means unknown, not empty.";
 
 interface ConversationTrack {
   /** Highest turn_number observed so far in this conversation. */

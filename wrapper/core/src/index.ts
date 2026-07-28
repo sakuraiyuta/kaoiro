@@ -7,6 +7,7 @@ export { ConfigError, PERMISSION_MODES, loadConfig, parseConfig } from "./person
 export { ServerLink } from "./transport.js";
 export type {
   AttachOpenMessage,
+  DirectoryContext,
   DirectoryEntry,
   PermissionDecisionMessage,
   QuestionResponseMessage,

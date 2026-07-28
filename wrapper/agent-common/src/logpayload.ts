@@ -59,6 +59,14 @@ export function logEntryToPayload(
       }
       return payload;
     }
+    case "system": {
+      // Wrapper-authored and short by construction, but clipped like every
+      // other line so no single kind can bypass the envelope cap.
+      const { text, truncated } = clipText(entry.text);
+      return truncated
+        ? { kind: "system", text, truncated: true }
+        : { kind: "system", text };
+    }
     case "tool_result": {
       const { text, truncated } = clipText(entry.output);
       const payload: LogPayload = { kind: "tool_result", output: text };

@@ -53,6 +53,7 @@ import {
 } from "@kaoiro/agent-common";
 import {
   cwdChangedHookToCwd,
+  sdkMessageToCompactNotice,
   sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToInitMeta,
@@ -493,6 +494,10 @@ export class AgentHost implements EngineAdapter {
     };
     if (this.#cwd !== null) out.cwd = this.#cwd;
     if (this.#sessionId !== null) out.session_id = this.#sessionId;
+    // phase-28 A2 (#168): the agent's own context usage, in the same shape
+    // peers already read via list_agents. Null (never fetched, or dropped by
+    // a model switch) omits the key so absent keeps meaning unknown.
+    if (this.#context !== null) out.context = this.#context;
     return out;
   }
 
@@ -1201,6 +1206,22 @@ export class AgentHost implements EngineAdapter {
       // settled into; then relay the message's reply lines.
       for (const event of sdkMessageToEvents(message)) this.#apply(event);
       for (const entry of sdkMessageToLogs(message)) this.#emitLog(entry);
+      // Compaction / conversation-reset notices (phase-28 A1, #168). Emitted
+      // as their own log line rather than folded into sdkMessageToLogs: that
+      // mapper is shared with resume history reconstruction (history.ts), and
+      // these are live-session observations, not transcript content.
+      const compact = sdkMessageToCompactNotice(message);
+      if (compact) {
+        this.#emitLog({ kind: "system", text: compact.text });
+        if (compact.kind === "compact_boundary") {
+          // Eventual meter update only. Track S measured getContextUsage()
+          // right after a boundary still reporting the PRE-compact total, so
+          // the freed-token numbers the operator reads come from the boundary
+          // metadata above; this refresh just lets ext.context catch up once
+          // the SDK's own accounting settles.
+          void this.#refreshContextUsage();
+        }
+      }
       const result = sdkMessageToResult(message);
       if (result) {
         this.#emitResult(result, sdkMessageToCost(message));

@@ -453,7 +453,7 @@ wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allow
 | Tool (full name) | 用途 | 経路 |
 |---|---|---|
 | `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧を取得。宛先解決 (id / persona name / state) に加え、委譲先選定のための実行特性 (engine / model / effort) と稼働状況 (context / session_started_at / turns / last_activity_at / conversation / rate_limits) を返す | wrapper → server の `directory_request` を呼び、reply の `agents` を narrow して返す |
-| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd を返す | wrapper のローカル `EffectiveStatusSnapshot` を読むのみ。server round-trip なし |
+| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd / `context` を返す | wrapper のローカル `EffectiveStatusSnapshot` と host の context キャッシュを読むのみ。server round-trip なし |
 
 `whoami` の実効設定は state envelope と別に組み立てず、各 host が持つ共通
 `EffectiveStatusSnapshot` から投影する。`model` / `effort` / source と
@@ -461,6 +461,20 @@ wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allow
 `{sandbox, approval}`、`permission_mode` / `fast_mode` は Claude 互換 field
 として取得済みの場合だけ併記する。SDK / rollout がまだ値を報告していない field
 は stale 値や推測値で埋めず、key 自体を省略する。
+
+`context` は phase-28 A2 ([#168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168))
+の追補で、自分の context window 使用量 `{used_tokens, max_tokens,
+used_percentage}` を返す。peer が `list_agents` で読む形と同一 (`DirectoryContext`)
+なので、自己認識と他者認識が食い違わない。
+
+- **cached last successful measurement**: whoami 自身は refresh を起こさない。
+  host が最後に成功した計測値をそのまま返すため、現ターンの実値から遅れうる。
+  on-demand refresh は提供しない(呼ぶだけで control request が走る tool は
+  常時参照を誘発する)
+- `supports_context_usage: false` の engine (codex) は key ごと省略する。
+  **absent = unknown** であり 0 でも「余裕あり」でもない
+- tool 説明では「必要なときに見る」に留め、常時参照を促さない
+  (context anxiety 回避。#168 comment-2287 の決定 P3)
 
 #### 宛先解決の指針
 
