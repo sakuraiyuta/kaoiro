@@ -7,12 +7,33 @@
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
+const MARKDOWN_SANITIZER_POLICY = {
+  // Untrusted markdown must not be able to cover controls in the surrounding
+  // application with positioned raw HTML. CSS is not needed for chat prose,
+  // so reject both inline style attributes and raw <style> blocks entirely.
+  FORBID_ATTR: ["style"],
+  FORBID_TAGS: ["style"],
+};
+
+const MERMAID_SANITIZER_POLICY = {
+  // Mermaid's strict renderer emits SVG styling in a <style> block. This is a
+  // deliberately separate policy from raw markdown: only generated diagram
+  // SVG reaches this path, and DOMPurify still removes scripts/handlers.
+  USE_PROFILES: { svg: true, svgFilters: true, html: true },
+  ADD_TAGS: ["style"],
+};
+
 /** Markdown -> sanitized HTML. Never returns script/handler markup. */
 export function renderMarkdown(text: string): string {
   // async:false selects marked's synchronous overload (returns string,
   // not Promise); breaks turns single newlines into <br> for chat text.
   const html = marked.parse(text, { async: false, breaks: true });
-  return DOMPurify.sanitize(html);
+  return DOMPurify.sanitize(html, MARKDOWN_SANITIZER_POLICY);
+}
+
+/** Sanitizes Mermaid's generated SVG under its narrowly-scoped style policy. */
+export function sanitizeMermaidSvg(svg: string): string {
+  return DOMPurify.sanitize(svg, MERMAID_SANITIZER_POLICY);
 }
 
 // Mermaid (#42) is lazy-loaded so non-diagram replies never pull the large
@@ -70,9 +91,7 @@ export async function renderMermaidIn(container: HTMLElement): Promise<void> {
       // <foreignObject> HTML labels are emitted); the html profile is kept
       // defensively for any stray inline HTML, while scripts/handlers are
       // still stripped.
-      figure.innerHTML = DOMPurify.sanitize(svg, {
-        USE_PROFILES: { svg: true, svgFilters: true, html: true },
-      });
+      figure.innerHTML = sanitizeMermaidSvg(svg);
       pre.replaceWith(figure);
     } catch {
       // Mermaid leaves an orphan node behind on a parse error; it is the
