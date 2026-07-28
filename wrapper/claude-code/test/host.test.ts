@@ -576,6 +576,41 @@ describe("AgentHost — query injection", () => {
     expect(notices[1]).toContain("80%");
   });
 
+  // BR MF1-R2: settle counter は「値が変化した reading」ではなく
+  // 「計測回数」でなければならない。圧縮しても使用量が同じ高い値に
+  // 貼り付いたままの列では、equality dedup が先に効くと counter が
+  // 一度も進まず liveness bound が成立しない。
+  it("同値の reading でも settle counter は進む (MF1-R2)", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [
+        // 境界後、まったく同じ high 値が 3 回返る。
+        { totalTokens: 155000, maxTokens: 200000, percentage: 78 },
+      ],
+      async function* () {
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "manual", pre_tokens: 150000 },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "1" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "2" });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
+    // 1・2 回目は未確定で無通知、3 回目で allowance を使い切り 1 通出る。
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("78%");
+  });
+
   // BR MF1-R: post_tokens が報告された境界では、それが新 epoch の
   // 権威ある基準になる。allowance を使い切るまで待たずに 1 回目の
   // reading で確定する。

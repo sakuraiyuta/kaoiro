@@ -365,6 +365,10 @@ export interface HistoryResetPayload {
  *  old-session resume. `session_reset_pending` covers duplicate reset
  *  requests as well as instruction/model switches attempted while a
  *  reset is in flight. */
+/** Who initiated a session reset (protocol.md, ADR-0043 D1). Added with the
+ *  agent-initiated path; `operator` covers every pre-existing reset. */
+export type SessionResetOrigin = "operator" | "agent_self";
+
 export type SessionResetErrorReason =
   | "agent_busy"
   | "unsupported_session_reset"
@@ -934,7 +938,16 @@ export interface SessionResetStarted {
   request_id: string;
   agent_id: string;
   mode: SessionResetMode;
+  /** Who asked (protocol.md / ADR-0043 D1). `agent_self` is the agent's own
+   *  broker-approved `request_session_reset`; `operator` is the Composer's
+   *  `/new` / `/clear`. Operator-only disclosure — this broadcast is role
+   *  gated (ADR-0021), so viewers never see either this or `reason`. */
+  origin: SessionResetOrigin;
   previous_session_id?: string;
+  /** Present only on `agent_self`, and only when the agent supplied one:
+   *  the sentence it gave the operator in the approval dialog. Never echoed
+   *  back into any engine input. */
+  reason?: string;
 }
 
 /** server -> clients (ADR-0036 F7, phase-17 17-1). Fired once the runner

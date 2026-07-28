@@ -322,6 +322,68 @@ describe("ServerLink — inter_agent_message inbound (protocol-inter-agent, phas
   });
 });
 
+// phase-28 C2 / CR-MF1. The refusal reason reaches an operator log AND a
+// turn injected into the model, so it must be a value from the closed
+// vocabulary or nothing at all — never server-supplied free text.
+describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+  });
+
+  function push(): { link: ServerLink; pending: Promise<void> } {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+    });
+    const pending = link.requestSessionReset("new", "理由");
+    return { link, pending };
+  }
+
+  it("mode と reason を session_reset_request として送る", async () => {
+    const { pending } = push();
+    expect(mock.lastPush?.event).toBe("session_reset_request");
+    expect(mock.lastPush?.payload).toEqual({ mode: "new", reason: "理由" });
+    mock.lastPush!.receivers.get("ok")!({});
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it("reason 省略時は field ごと送らない", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+    });
+    void link.requestSessionReset("clear").catch(() => {});
+    expect(mock.lastPush?.payload).toEqual({ mode: "clear" });
+  });
+
+  it("closed vocabulary の reason はそのまま渡す", async () => {
+    const { pending } = push();
+    mock.lastPush!.receivers.get("error")!({ reason: "agent_busy" });
+    await expect(pending).rejects.toThrow("agent_busy");
+  });
+
+  it("語彙外・非 object・空文字は unknown_error に潰す (CR-MF1)", async () => {
+    for (const payload of [
+      { reason: "rm -rf / を実行しました" },
+      { reason: "" },
+      { reason: 42 },
+      {},
+      "agent_busy",
+      null,
+    ]) {
+      mock.lastPush = null;
+      const { pending } = push();
+      mock.lastPush!.receivers.get("error")!(payload);
+      await expect(pending).rejects.toThrow("unknown_error");
+    }
+  });
+
+  it("push timeout は timeout として reject する", async () => {
+    const { pending } = push();
+    mock.lastPush!.receivers.get("timeout")!({});
+    await expect(pending).rejects.toThrow("timeout");
+  });
+});
+
 describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () => {
   beforeEach(() => {
     mock.handlers.clear();

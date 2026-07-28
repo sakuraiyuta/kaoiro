@@ -152,19 +152,73 @@ describe("SessionResetCoordinator", () => {
     expect(h.notices).toEqual([]);
   });
 
-  it("再試行も失敗したら agent に通知し operator にも log する", async () => {
-    const h = harness(["agent_busy", "session_reset_pending"]);
+  it("再試行も拒否されたら『実行されなかった』と通知する", async () => {
+    const h = harness(["agent_busy", "agent_busy"]);
     h.coordinator.reserve("clear");
     h.coordinator.onTurnEnd();
     await settle();
     expect(h.requests).toHaveLength(2);
     expect(h.notices).toHaveLength(1);
-    // 何が起きなかったのか / 今どういう状態なのか / 次にどうできるのかを
-    // 含むこと。黙って諦めると agent は reset 済みのつもりで書き続ける。
+    // 2 度とも同じ確定的な拒否なので、断定してよい。何が起きなかったのか /
+    // 今どういう状態か / 次にどうできるかを含むこと。黙って諦めると agent は
+    // reset 済みのつもりで書き続ける。
     expect(h.notices[0]).toContain("was not carried out");
-    expect(h.notices[0]).toContain("session_reset_pending");
+    expect(h.notices[0]).toContain("agent_busy");
     expect(h.notices[0]).toContain("continue as you were");
-    expect(h.logs.some((l) => l.includes("session_reset_pending"))).toBe(true);
+    expect(h.logs.some((l) => l.includes("実行されませんでした"))).toBe(true);
+  });
+
+  // CR-MF2: Phoenix の push timeout は「server が受け取っていない」ことを
+  // 意味しない。再送は受理済みの reset を二重要求しかねないので行わず、
+  // 断定もしない。
+  it("timeout は再送せず、結果未確認として通知する (CR-MF2)", async () => {
+    const h = harness(["timeout"]);
+    h.coordinator.reserve("new");
+    h.coordinator.onTurnEnd();
+    await settle();
+    expect(h.requests).toHaveLength(1);
+    expect(h.slept).toEqual([]);
+    expect(h.notices).toHaveLength(1);
+    expect(h.notices[0]).toContain("could not be confirmed");
+    expect(h.notices[0]).toContain("may still be running");
+    // 断定文言を混ぜないこと。
+    expect(h.notices[0]).not.toContain("was not carried out");
+    expect(h.notices[0]).not.toContain("context is unchanged");
+    expect(h.logs.some((l) => l.includes("確認できませんでした"))).toBe(true);
+  });
+
+  // CR-MF2 反例: 1 回目が受理され reply だけ落ちた場合、次に見えるのは
+  // session_reset_pending で、それは自分の reset が進行中である可能性が
+  // 高い。「実行されなかった」と言ってはいけない。
+  it("session_reset_pending も結果未確認として扱う (CR-MF2)", async () => {
+    const h = harness(["session_reset_pending"]);
+    h.coordinator.reserve("new");
+    h.coordinator.onTurnEnd();
+    await settle();
+    expect(h.requests).toHaveLength(1);
+    expect(h.notices[0]).toContain("could not be confirmed");
+    expect(h.notices[0]).not.toContain("was not carried out");
+  });
+
+  it("agent_busy 再送後の timeout も結果未確認として扱う (CR-MF2)", async () => {
+    const h = harness(["agent_busy", "timeout"]);
+    h.coordinator.reserve("new");
+    h.coordinator.onTurnEnd();
+    await settle();
+    expect(h.requests).toHaveLength(2);
+    expect(h.notices[0]).toContain("could not be confirmed");
+    expect(h.notices[0]).not.toContain("was not carried out");
+  });
+
+  it("確定的な拒否は再送しないが断定はしてよい (CR-MF2)", async () => {
+    const h = harness(["unsupported_session_reset"]);
+    h.coordinator.reserve("clear");
+    h.coordinator.onTurnEnd();
+    await settle();
+    expect(h.requests).toHaveLength(1);
+    expect(h.slept).toEqual([]);
+    expect(h.notices[0]).toContain("was not carried out");
+    expect(h.notices[0]).toContain("unsupported_session_reset");
   });
 
   it("通知の注入自体が失敗しても log には残す", async () => {
@@ -186,7 +240,7 @@ describe("SessionResetCoordinator", () => {
   });
 
   it("失敗通知が作る turn の境界で再送しない", async () => {
-    const h = harness(["agent_busy", "agent_busy"]);
+    const h = harness(["agent_busy", "agent_busy", "agent_busy"]);
     h.coordinator.reserve("new");
     h.coordinator.onTurnEnd();
     // 通知が新しい turn を作り、その境界がまた onTurnEnd を呼ぶ。予約は

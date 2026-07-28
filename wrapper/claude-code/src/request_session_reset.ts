@@ -32,6 +32,41 @@ const SESSION_RESET_MODES: readonly SessionResetMode[] = ["new", "clear"];
  *  turn boundary, and the one a retry actually fixes. */
 export const SESSION_RESET_RETRY_DELAY_MS = 2_500;
 
+/** What a refusal actually establishes (phase-28 CR-MF2).
+ *
+ *  - `retryable` — the server definitively did not start a reset, and the
+ *    condition is one a moment's wait clears. Only this is retried.
+ *  - `refused` — the server definitively did not start a reset, and retrying
+ *    changes nothing. No retry, but "it did not happen" is a true statement.
+ *  - `unconfirmed` — the outcome is NOT known. A push timeout does not mean
+ *    the server never received the request, and `session_reset_pending` may
+ *    well be OUR OWN reset already running (first push accepted, its reply
+ *    lost). Claiming "not carried out" here would be a lie the agent then
+ *    acts on. */
+type ResetRefusalOutcome = "retryable" | "refused" | "unconfirmed";
+
+/** Refusals that establish "no reset was started" without being worth a
+ *  retry: a capability the engine lacks, a malformed request, an authz
+ *  failure, or a runner that is simply not there. */
+const DETERMINED_REFUSALS: ReadonlySet<string> = new Set([
+  "unsupported_session_reset",
+  "invalid_mode",
+  "unknown_agent",
+  "forbidden",
+  "runner_unavailable",
+]);
+
+/** Everything not named is `unconfirmed` — including `timeout`,
+ *  `session_reset_pending`, `spawn_failed` / `rollback_failed` (the reset was
+ *  attempted and the session's state is now in question) and the
+ *  `unknown_error` collapse. Defaulting to "we do not know" is the safe
+ *  direction: the honest message costs the agent a little caution, the
+ *  confident one costs it a wrong assumption about its own context. */
+function classifyRefusal(reason: string): ResetRefusalOutcome {
+  if (reason === "agent_busy") return "retryable";
+  return DETERMINED_REFUSALS.has(reason) ? "refused" : "unconfirmed";
+}
+
 const REQUEST_SESSION_RESET_DESCRIPTION =
   "Ask the operator to approve starting this session over from empty. `mode: \"new\"` keeps the operator's visible transcript and begins a fresh session below it; `mode: \"clear\"` also blanks your pane, leaving only the boundary marker. Either way the new session starts with NO memory of this conversation — unlike compaction, nothing is summarized and nothing is carried across. Write down anything you still need BEFORE calling this: a file, WORKLOG, an issue, a message to a peer. Work that exists only in this conversation is gone once the reset runs. The call returns as soon as the reset is RESERVED; it is applied at the end of the current turn, not immediately, and the server can still refuse it then (you are told in the next turn if it does). Use this when the conversation itself has become the problem — accumulated dead ends, a finished task whose context is now noise — rather than as routine hygiene. If you only need headroom and want to keep continuity, request_compact is the smaller tool.";
 
@@ -178,31 +213,50 @@ export class SessionResetCoordinator {
     mode: SessionResetMode;
     reason?: string;
   }): Promise<void> {
-    const first = await this.#attempt(reservation);
-    if (first === null) return;
+    let reason = await this.#attempt(reservation);
+    if (reason === null) return;
+    // Retry ONLY a refusal that establishes nothing happened AND is worth
+    // re-sending (CR-MF2). Re-sending after a timeout could hand the server
+    // a second reset for a request it already accepted.
+    if (classifyRefusal(reason) === "retryable") {
+      this.#options.log(
+        `セッションリセット (${reservation.mode}) が拒否されました: ${reason}。再試行します`,
+      );
+      const sleep =
+        this.#options.sleep ??
+        ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+      await sleep(this.#options.retryDelayMs ?? SESSION_RESET_RETRY_DELAY_MS);
+      const second = await this.#attempt(reservation);
+      if (second === null) return;
+      reason = second;
+    }
+    await this.#report(reservation.mode, reason);
+  }
+
+  /** Tells the agent — and the operator — what is known. A refusal that was
+   *  retried and refused again IS determined, so only a genuinely unknown
+   *  outcome gets the hedged wording. */
+  async #report(mode: SessionResetMode, reason: string): Promise<void> {
+    const unconfirmed = classifyRefusal(reason) === "unconfirmed";
     this.#options.log(
-      `セッションリセット (${reservation.mode}) が拒否されました: ${first}。再試行します`,
+      unconfirmed
+        ? `セッションリセット (${mode}) の結果を確認できませんでした: ${reason}`
+        : `セッションリセット (${mode}) は実行されませんでした: ${reason}`,
     );
-    const sleep =
-      this.#options.sleep ??
-      ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-    await sleep(this.#options.retryDelayMs ?? SESSION_RESET_RETRY_DELAY_MS);
-    const second = await this.#attempt(reservation);
-    if (second === null) return;
-    this.#options.log(
-      `セッションリセット (${reservation.mode}) は実行されませんでした: ${second}`,
-    );
-    await this.#options
-      .notify(
-        `[kaoiro] The session reset you requested (mode: ${reservation.mode}) was not carried out. ` +
-          `The server refused it: ${second}. Your context is unchanged, so continue as you were. ` +
-          "You may request it again at a better moment; the operator has to approve it again.",
-      )
-      .catch((err: unknown) => {
-        this.#options.log(
-          `セッションリセット失敗の通知を注入できませんでした: ${String(err)}`,
-        );
-      });
+    const text = unconfirmed
+      ? `[kaoiro] The session reset you requested (mode: ${mode}) could not be confirmed: ${reason}. ` +
+        "This does NOT mean it was cancelled — the request may have reached the server and a reset " +
+        "may still be running. Do not assume your context is about to be replaced, and do not assume " +
+        "it is safe either: make sure anything you still need is written somewhere durable. Do not " +
+        "request another reset yet; if none has happened by the end of the next turn, it did not run."
+      : `[kaoiro] The session reset you requested (mode: ${mode}) was not carried out. ` +
+        `The server refused it: ${reason}. Your context is unchanged, so continue as you were. ` +
+        "You may request it again at a better moment; the operator has to approve it again.";
+    await this.#options.notify(text).catch((err: unknown) => {
+      this.#options.log(
+        `セッションリセット結果の通知を注入できませんでした: ${String(err)}`,
+      );
+    });
   }
 
   /** Returns null when the server accepted, otherwise the refusal reason. */

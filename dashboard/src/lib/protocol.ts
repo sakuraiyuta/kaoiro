@@ -153,6 +153,10 @@ export function modelSourceFrom(envelope: Envelope): string | null {
  *  self-contained per this file's plain-TS contract. */
 export type SessionResetMode = "new" | "clear";
 
+/** Who initiated a reset (protocol.md, ADR-0043 D1). Mirrors
+ *  @kaoiro/protocol's SessionResetOrigin. */
+export type SessionResetOrigin = "operator" | "agent_self";
+
 /** `history_reset` broadcast payload. The optional form records the v0
  * compatibility rule: omission means preserve structured IA history. */
 export interface HistoryResetPayload {
@@ -1157,7 +1161,16 @@ export interface SessionResetStartedPayload {
   request_id: string;
   agent_id: string;
   mode: SessionResetMode;
+  /** Operator-only (the broadcast is role gated, ADR-0021). Nothing renders
+   *  it yet; the parser keeps it so the field is not silently dropped and a
+   *  later UI does not have to re-derive it. An unrecognised value falls
+   *  back to `operator` — the pre-ADR-0043 meaning of a payload without the
+   *  field — rather than discarding the whole event, which would leave the
+   *  composer disabled with no matching Completed. */
+  origin: SessionResetOrigin;
   previous_session_id?: string;
+  /** `agent_self` only, and only when the agent supplied one. */
+  reason?: string;
 }
 
 export interface SessionResetCompletedPayload {
@@ -1472,6 +1485,14 @@ function parseResetMode(value: unknown): SessionResetMode | null {
   return value === "new" || value === "clear" ? value : null;
 }
 
+/** Unknown / missing origin degrades to `operator` rather than rejecting the
+ *  event: a payload without the field is a pre-ADR-0043 server, where every
+ *  reset WAS operator-initiated. Dropping the Started broadcast would strand
+ *  the composer in its disabled state. */
+function parseResetOrigin(value: unknown): SessionResetOrigin {
+  return value === "agent_self" ? "agent_self" : "operator";
+}
+
 function parseResetReason(value: unknown): SessionResetErrorReason | null {
   return typeof value === "string" &&
       (SESSION_RESET_ERROR_REASONS as readonly string[]).includes(value)
@@ -1491,8 +1512,14 @@ export function parseSessionResetStarted(
     request_id: p.request_id,
     agent_id: p.agent_id,
     mode,
+    origin: parseResetOrigin(p.origin),
     ...(typeof p.previous_session_id === "string"
       ? { previous_session_id: p.previous_session_id }
+      : {}),
+    // Server-side free text, kept verbatim but never rendered as markdown
+    // by any current consumer. Absent unless the agent supplied one.
+    ...(typeof p.reason === "string" && p.reason !== ""
+      ? { reason: p.reason }
       : {}),
   };
 }

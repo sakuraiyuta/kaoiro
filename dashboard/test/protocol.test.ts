@@ -1620,12 +1620,14 @@ describe("parseSessionResetStarted (ADR-0036 F7, phase-17 17-9)", () => {
         request_id: "rs_1",
         agent_id: "a.1",
         mode: "new",
+        origin: "operator",
         previous_session_id: "sess-old",
       }),
     ).toEqual({
       request_id: "rs_1",
       agent_id: "a.1",
       mode: "new",
+      origin: "operator",
       previous_session_id: "sess-old",
     });
   });
@@ -1637,7 +1639,72 @@ describe("parseSessionResetStarted (ADR-0036 F7, phase-17 17-9)", () => {
         agent_id: "a.1",
         mode: "clear",
       }),
-    ).toEqual({ request_id: "rs_1", agent_id: "a.1", mode: "clear" });
+    ).toEqual({
+      request_id: "rs_1",
+      agent_id: "a.1",
+      mode: "clear",
+      origin: "operator",
+    });
+  });
+
+  // phase-28 CR-MF3 / ADR-0043 D1. 表示はまだ無いが、parser が field を
+  // 落とすと後から UI を足すときに再導出が要る。
+  it("agent_self origin と reason を保持する (CR-MF3)", () => {
+    expect(
+      parseSessionResetStarted({
+        request_id: "rs_2",
+        agent_id: "a.1",
+        mode: "clear",
+        origin: "agent_self",
+        reason: "行き止まりの調査で会話が埋まった",
+      }),
+    ).toEqual({
+      request_id: "rs_2",
+      agent_id: "a.1",
+      mode: "clear",
+      origin: "agent_self",
+      reason: "行き止まりの調査で会話が埋まった",
+    });
+  });
+
+  // origin だけを理由に event ごと捨てると、composer が disable のまま
+  // 対応する Completed を待ち続ける。旧 server の payload は origin を
+  // 持たず、そこでは全ての reset が operator 起点だった。
+  it("origin 不正・欠落は operator に degrade する (CR-MF3)", () => {
+    for (const origin of [undefined, "", "self", 1, null, {}]) {
+      expect(
+        parseSessionResetStarted({
+          request_id: "rs_3",
+          agent_id: "a.1",
+          mode: "new",
+          origin,
+        }),
+      ).toEqual({
+        request_id: "rs_3",
+        agent_id: "a.1",
+        mode: "new",
+        origin: "operator",
+      });
+    }
+  });
+
+  it("reason が文字列でない・空なら field ごと落とす (CR-MF3)", () => {
+    for (const reason of [42, "", null, ["x"]]) {
+      expect(
+        parseSessionResetStarted({
+          request_id: "rs_4",
+          agent_id: "a.1",
+          mode: "new",
+          origin: "agent_self",
+          reason,
+        }),
+      ).toEqual({
+        request_id: "rs_4",
+        agent_id: "a.1",
+        mode: "new",
+        origin: "agent_self",
+      });
+    }
   });
 
   it("mode 不正は null (fail-closed)", () => {

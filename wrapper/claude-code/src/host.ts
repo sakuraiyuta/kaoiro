@@ -1803,9 +1803,18 @@ export class AgentHost implements EngineAdapter {
         prev.used_tokens !== next.used_tokens ||
         prev.max_tokens !== next.max_tokens ||
         prev.used_percentage !== next.used_percentage;
-      if (!changed) return;
       this.#context = next;
+      // Runs on EVERY successful reading of this generation, deliberately
+      // ahead of the equality dedup (BR MF1-R2). The settling gate counts
+      // MEASUREMENTS, not value changes: a compaction that leaves usage
+      // pinned at the same high number produces identical readings, and
+      // gating this on `changed` would stall the liveness bound exactly in
+      // the case it exists for. Re-notification is already bounded by
+      // `#contextNoticeSent`, so the notice cannot spam either.
       this.#maybeNotifyContextThreshold(next);
+      // The emit, by contrast, IS deduped — a same-value refresh has nothing
+      // new to announce and would only spam state_change envelopes.
+      if (!changed) return;
       // Authoritative stamp rides #statusExt on every state_change (L1233);
       // this explicit re-emit satisfies the "取得成功時の即時反映" contract
       // (藤 review turn-3 S7) without waiting for the next natural transition.

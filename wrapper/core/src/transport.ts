@@ -173,17 +173,42 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** The reasons a `session_reset_request` may be refused with — the closed
+ *  vocabulary of ADR-0036 F7 plus the two request-shape rejections the
+ *  channel adds (protocol.md `session_reset` / `session_reset_request`).
+ *  A whitelist, not a filter: anything outside it is a server the wrapper
+ *  does not understand, and guessing at its wording is worse than admitting
+ *  that. */
+const SESSION_RESET_ERROR_REASONS: ReadonlySet<string> = new Set([
+  "agent_busy",
+  "unsupported_session_reset",
+  "session_reset_pending",
+  "runner_unavailable",
+  "spawn_failed",
+  "rollback_failed",
+  "timeout",
+  "invalid_mode",
+  "unknown_agent",
+  "forbidden",
+]);
+
+/** Collapses to this when the reply carries no recognised reason. */
+export const SESSION_RESET_UNKNOWN_REASON = "unknown_error";
+
 /** Pulls the server's `reason` out of a `session_reset_request` error reply
- *  (`{reason: "agent_busy"}`). Anything unrecognised collapses to a single
- *  opaque token rather than being echoed back: the value ends up in an
- *  operator log and a turn injected into the model, so it must not become a
- *  channel for arbitrary payload text. */
+ *  (`{reason: "agent_busy"}`). Anything outside the closed vocabulary — an
+ *  unknown token, a non-object payload, an empty string — collapses to
+ *  `unknown_error` rather than being echoed back. The value ends up in an
+ *  operator log AND in a turn injected into the model, so it must not become
+ *  a channel for arbitrary payload text. */
 function sessionResetErrorReason(payload: unknown): string {
   if (isObject(payload)) {
     const reason = (payload as { reason?: unknown }).reason;
-    if (typeof reason === "string" && reason !== "") return reason;
+    if (typeof reason === "string" && SESSION_RESET_ERROR_REASONS.has(reason)) {
+      return reason;
+    }
   }
-  return "unknown_error";
+  return SESSION_RESET_UNKNOWN_REASON;
 }
 
 /** `isObject` answers true for arrays (`typeof [] === "object"`), which the
