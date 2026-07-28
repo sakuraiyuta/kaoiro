@@ -152,6 +152,15 @@ socket を奪える)。**それ以外の名前や IP 直打ちでダッシュボ
 `ws://<PHX_HOST>:<PORT>/runner`、ダッシュボードは
 `http://<PHX_HOST>:<PORT>/?token=...` となる。
 
+nginx が担うはずのセキュリティヘッダ(CSP / `nosniff` /
+`X-Frame-Options` / `Referrer-Policy`)は、この構成では付与主体が居なく
+なるためサーバ自身が全レスポンスに付ける(#155、
+`KaoiroServerWeb.SecurityHeaders`。狙いと内訳は
+[threat-model](threat-model.md) 緩和策)。CSP の `connect-src` は
+`check_origin` と同じオリジンを `ws:`/`wss:` へ写して組み立てるので、
+`PHX_HOST` / `PORT` を変えれば追随する。逆に **ダッシュボードへ外部
+オリジンの script / style / 画像を持ち込む変更は CSP で落ちる**。
+
 ### 1.6 OAuth ログイン(個人認証)の設定(任意、ADR-0042 / issue #65)
 
 dashboard に Google / GitHub / Nextcloud の OAuth ログインを追加できる。

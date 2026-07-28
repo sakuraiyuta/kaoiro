@@ -47,6 +47,12 @@ defmodule KaoiroServerWeb.Endpoint do
     ],
     longpoll: false
 
+  # CSP and the other browser hardening headers (issue #155). Must stay
+  # ABOVE the two static plugs: they serve index.html and the built
+  # assets without ever reaching the router, so the :browser pipeline is
+  # too late to cover the SPA itself.
+  plug KaoiroServerWeb.SecurityHeaders
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # favicon/robots are always served; the dashboard files (index.html +
