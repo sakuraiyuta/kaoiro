@@ -173,6 +173,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** Pulls the server's `reason` out of a `session_reset_request` error reply
+ *  (`{reason: "agent_busy"}`). Anything unrecognised collapses to a single
+ *  opaque token rather than being echoed back: the value ends up in an
+ *  operator log and a turn injected into the model, so it must not become a
+ *  channel for arbitrary payload text. */
+function sessionResetErrorReason(payload: unknown): string {
+  if (isObject(payload)) {
+    const reason = (payload as { reason?: unknown }).reason;
+    if (typeof reason === "string" && reason !== "") return reason;
+  }
+  return "unknown_error";
+}
+
 /** `isObject` answers true for arrays (`typeof [] === "object"`), which the
  *  projection must not accept: the server's Elixir side tests `is_map/1`, so
  *  `rate_limits: [{...}]` is rejected there but would arrive here as a window
@@ -641,6 +654,36 @@ export class ServerLink {
         })
         .receive("timeout", () => {
           reject(new Error("directory_request timeout"));
+        });
+    });
+  }
+
+  /** Asks the server to reset THIS agent's session (ADR-0043 D1, phase-28
+   *  C2). Only ever sent after the `request_session_reset` tool was approved
+   *  by the operator and the wrapper reached its own turn boundary — the
+   *  channel derives the agent_id from the socket, so a wrapper can only
+   *  ever reset itself. `reason` travels solely in this payload; the server
+   *  copies it to the operator-facing lifecycle broadcast and nowhere else.
+   *
+   *  Resolves when the server accepted the request (the reset itself then
+   *  runs through the ordinary runner path and this process is replaced).
+   *  Rejects with the server's closed-vocabulary reason — `agent_busy`,
+   *  `session_reset_pending`, `unsupported_session_reset`, `invalid_mode`
+   *  (ADR-0036 F7) — so the caller can retry or report instead of assuming
+   *  a reset that never happened. */
+  requestSessionReset(mode: "new" | "clear", reason?: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.#channel
+        .push("session_reset_request", {
+          mode,
+          ...(reason !== undefined ? { reason } : {}),
+        })
+        .receive("ok", () => resolve())
+        .receive("error", (payload: unknown) => {
+          reject(new Error(sessionResetErrorReason(payload)));
+        })
+        .receive("timeout", () => {
+          reject(new Error("timeout"));
         });
     });
   }

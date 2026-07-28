@@ -21,6 +21,7 @@
 // Phase A `compact_boundary` log line, not here.
 
 import type { ToolDescriptor, ToolResult } from "@kaoiro/agent-common";
+import { z } from "zod";
 
 /** Full SDK-side tool name once mcpServers register the kaoiro server. */
 export const REQUEST_COMPACT_TOOL_FQN = "mcp__kaoiro__request_compact";
@@ -45,6 +46,13 @@ const REQUEST_COMPACT_INPUT_SCHEMA: Record<string, unknown> = {
     },
   },
   additionalProperties: false,
+};
+
+/** Zod mirror of REQUEST_COMPACT_INPUT_SCHEMA — `tool()` takes a Zod raw
+ *  shape, and keeping it beside the JSON Schema makes a divergence visible
+ *  in one file rather than across two. */
+export const REQUEST_COMPACT_INPUT_SHAPE = {
+  reason: z.string().optional(),
 };
 
 export interface RequestCompactOptions {

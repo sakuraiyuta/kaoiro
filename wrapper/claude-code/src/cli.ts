@@ -26,7 +26,15 @@ import {
 } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "./read_only_tools.js";
-import { requestCompactDescriptor } from "./request_compact.js";
+import {
+  REQUEST_COMPACT_INPUT_SHAPE,
+  requestCompactDescriptor,
+} from "./request_compact.js";
+import {
+  REQUEST_SESSION_RESET_INPUT_SHAPE,
+  SessionResetCoordinator,
+  requestSessionResetDescriptor,
+} from "./request_session_reset.js";
 import { PermissionBroker } from "@kaoiro/agent-common";
 import { PERMISSION_MODES, loadConfig } from "@kaoiro/wrapper-core";
 import { QuestionBroker } from "@kaoiro/agent-common";
@@ -220,6 +228,28 @@ async function main(): Promise<void> {
     printLog(envelope);
     link?.send(envelope);
   };
+
+  /** Wrapper-authored operator line (phase-28 A1's `system` log kind). */
+  const emitSystemLog = (text: string): void => {
+    onLog(
+      makeLog(config, host?.state ?? "idle", new Date().toISOString(), {
+        kind: "system",
+        text,
+      }),
+    );
+  };
+
+  // phase-28 C2: holds an operator-approved reset until the turn boundary,
+  // then asks the server. Failures are loud — one retry, then the agent is
+  // told in a turn of its own so it never proceeds believing it reset.
+  const sessionReset = new SessionResetCoordinator({
+    request: (mode, reason) => {
+      if (!link) return Promise.reject(new Error("server link unavailable"));
+      return link.requestSessionReset(mode, reason);
+    },
+    notify: (text) => enqueueInstruction(() => host.send(text)),
+    log: emitSystemLog,
+  });
 
   // Await the server-pushed personality + common footer (ADR-0029 F5)
   // before opening the SDK session. Fail-closed on no push within the
@@ -478,6 +508,11 @@ async function main(): Promise<void> {
       ) ?? []) {
         link?.send(envelope);
       }
+      // phase-28 C2 / ADR-0043 D3: this is the wrapper's own turn boundary —
+      // the result has been processed and nothing is mid-flight. An approved
+      // session reset fires here and nowhere else, so a relaunch can never
+      // cut a turn in half.
+      sessionReset.onTurnEnd();
     },
     appendSystemPrompt,
     // Keep Query unconstructed during fresh idle so AgentDetail model /
@@ -529,20 +564,29 @@ async function main(): Promise<void> {
       // mcp__kaoiro__send_to_agent and is NOT in the read-only default
       // allowedTools, so canUseTool fires and the broker runs the
       // per-call operator dialog (Phase 1 都度承認). request_compact
-      // (phase-28 B2) is gated the same way — its absence from
-      // READ_ONLY_TOOLS (read_only_tools.ts) is what makes it 都度承認, so
-      // do not add it there.
+      // (phase-28 B2) and request_session_reset (C2) are gated the same way
+      // — their absence from READ_ONLY_TOOLS (read_only_tools.ts) is what
+      // makes them 都度承認, so do not add them there.
       mcpServers: {
-        kaoiro: buildKaoiroMcpServer(
-          interAgent!,
-          requestCompactDescriptor({
-            // Ride the same chain operator instructions use, so an approved
-            // /compact cannot overtake an instruction still rendering its
-            // attachments. Awaiting `queued` lets the tool report a closed
-            // or full queue instead of claiming a reservation it never made.
-            send: (text) => enqueueInstruction(() => host.send(text)),
-          }),
-        ),
+        kaoiro: buildKaoiroMcpServer(interAgent!, [
+          {
+            descriptor: requestCompactDescriptor({
+              // Ride the same chain operator instructions use, so an approved
+              // /compact cannot overtake an instruction still rendering its
+              // attachments. Awaiting the queued promise lets the tool report
+              // a closed or full queue instead of claiming a reservation it
+              // never made.
+              send: (text) => enqueueInstruction(() => host.send(text)),
+            }),
+            inputShape: REQUEST_COMPACT_INPUT_SHAPE,
+          },
+          {
+            descriptor: requestSessionResetDescriptor({
+              reserve: (mode, reason) => sessionReset.reserve(mode, reason),
+            }),
+            inputShape: REQUEST_SESSION_RESET_INPUT_SHAPE,
+          },
+        ]),
       },
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },

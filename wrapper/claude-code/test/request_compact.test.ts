@@ -10,9 +10,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   COMPACT_COMMAND,
+  REQUEST_COMPACT_INPUT_SHAPE,
   REQUEST_COMPACT_TOOL_FQN,
   requestCompactDescriptor,
 } from "../src/request_compact.js";
+import {
+  REQUEST_SESSION_RESET_INPUT_SHAPE,
+  REQUEST_SESSION_RESET_TOOL_FQN,
+  requestSessionResetDescriptor,
+} from "../src/request_session_reset.js";
 import { kaoiroToolDescriptors } from "../src/inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "../src/read_only_tools.js";
 import {
@@ -86,24 +92,35 @@ describe("kaoiro MCP server registration", () => {
     return new InterAgentTool({ config, getState: () => "idle", send: vi.fn() });
   }
 
-  it("descriptor を渡すと request_compact が載る", () => {
-    const names = kaoiroToolDescriptors(
-      interAgent(),
-      requestCompactDescriptor({ send: async () => {} }),
-    ).map((d) => d.name);
+  it("descriptor を渡すと Claude 限定 tool が登録順に載る", () => {
+    const names = kaoiroToolDescriptors(interAgent(), [
+      {
+        descriptor: requestCompactDescriptor({ send: async () => {} }),
+        inputShape: REQUEST_COMPACT_INPUT_SHAPE,
+      },
+      {
+        descriptor: requestSessionResetDescriptor({ reserve: () => {} }),
+        inputShape: REQUEST_SESSION_RESET_INPUT_SHAPE,
+      },
+    ]).map((d) => d.name);
     expect(names).toEqual([
       "send_to_agent",
       "list_agents",
       "whoami",
       "request_compact",
+      "request_session_reset",
     ]);
     expect(REQUEST_COMPACT_TOOL_FQN).toBe("mcp__kaoiro__request_compact");
+    expect(REQUEST_SESSION_RESET_TOOL_FQN).toBe(
+      "mcp__kaoiro__request_session_reset",
+    );
   });
 
   // BR S1: 承認ゲートは「auto-allow 既定に載っていないこと」そのもの。
   // 追加した瞬間に 都度承認 が消えるので、不在を直接 pin する。
-  it("auto-allow 既定に request_compact は載らない (S1)", () => {
+  it("auto-allow 既定に承認必須 tool は載らない (S1)", () => {
     expect(READ_ONLY_TOOLS.has(REQUEST_COMPACT_TOOL_FQN)).toBe(false);
+    expect(READ_ONLY_TOOLS.has(REQUEST_SESSION_RESET_TOOL_FQN)).toBe(false);
     // 同居する読み取り専用 tool は載っている — set 自体が空だから通った、
     // という抜けを塞ぐ。
     expect(READ_ONLY_TOOLS.has(WHOAMI_TOOL_FQN)).toBe(true);

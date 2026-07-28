@@ -23,6 +23,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   // a rename in inter_agent.ts cannot silently desync the auto-allow set.
   LIST_AGENTS_TOOL_FQN,
   WHOAMI_TOOL_FQN,
-  // NOTE: mcp__kaoiro__request_compact is deliberately absent — its absence
-  // is the whole approval gate for phase-28 B2. Do not add it.
+  // NOTE: mcp__kaoiro__request_compact (phase-28 B2) and
+  // mcp__kaoiro__request_session_reset (C2) are deliberately absent — their
+  // absence IS the approval gate. Do not add them.
 ]);
