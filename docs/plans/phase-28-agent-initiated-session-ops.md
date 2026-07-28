@@ -198,10 +198,8 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
   直後の refresh は圧縮前の値を返し得る (Track S 実測)。その値が新 epoch の
   閾値判定に流れ、compact した直後に 2 通目を出せた。既存テストが**この
   誤動作の方を pin していた**ため、テストごと書き換えた。
-  対処: 直前 epoch の最終 `used_tokens` を staleness baseline として持ち越し、
-  それを下回る reading を観測するまで通知判定を保留する
-  (`#contextEpochBaseline`)。baseline を跨がずに再び上回ることは構造上
-  起こらないので恒久的な抑止にはならない。
+  対処: 下記 MF1-R で再設計 (初回対処の「直前 epoch の最終 reading を
+  baseline に使う」案は不成立だった)。
 - **MF2 — B1 通知が直列化を迂回**。operator / inter-agent / B2 は cli.ts の
   instruction chain に乗るが、B1 だけ `host.send` を直接叩いていた。
   対処: `AgentHostOptions.enqueueInjection` を追加し cli.ts の単一 chain
@@ -221,6 +219,38 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 - **S2** — 実機受け入れ節の「whoami 値のみで」を、B1 も whoami と同じ
   cached context measurement を読む旨の記述へ修正。
 
+#### MF1-R — baseline gate の再設計 (ふじ 再レビュー、2026-07-28)
+
+初回対処の「直前 epoch の最終 `used_tokens` を baseline とし、それを下回る
+reading で確定」は safety / liveness の**どちらも満たしていなかった**。
+ふじ が示した反例 2 列:
+
+1. **null baseline の誤通知** — 直前 epoch に成功 reading が無ければ
+   baseline は null になり確定扱いになるが、境界直後の fresh call が
+   pre-boundary の stale high を返す可能性は消えていない。gate が無い。
+2. **飛び越しによる永久 mute** — 観測は離散なので、境界後の reading が
+   一度も baseline を下回らない列 (大きな turn / attachment が挟まる、
+   reset 後の初期 context が baseline 以上) は普通に成立する。
+   「再び上回るには一度下回る必要がある」という初回の主張は誤り。
+   その epoch の正当な通知が永久に出なくなる。
+
+再設計 (`#contextEpochGate`)。**大小比較だけを確定条件にしない**:
+
+- 基準は cached reading ではなく **boundary metadata**。`post_tokens` が
+  あればそれ (新 epoch の正確な総量なので `<=` で確定)、無ければ
+  `pre_tokens - 1` (pre 以上は stale と区別できないため)。どちらも無い
+  event (`conversation_reset` 等) では null。
+- 上記を満たさなくても、その epoch で `CONTEXT_EPOCH_SETTLE_READINGS`
+  (= 3) 回目の reading に達したら確定する。これが liveness の担保で、
+  反例 2 を塞ぐ。3 は Track S の「境界直後の stale reading は 1 回」に
+  1 turn 分の余裕を足した値。誤通知は「1 turn 遅れで 1 回」に上界され、
+  承認ダイアログ 1 回で済む側へ倒している。
+- gate は `#invalidateContextEpoch()` でのみ張られる。確定後に再び
+  mute されることはない。
+
+mutation 確認: 初回案の semantics へ戻すと反例 2 本が落ち、metadata
+fast path を潰すと post_tokens テストが落ちる。
+
 ### B1 — 閾値通知
 
 - 判定点: `#context` が更新される箇所 (refresh 成功時)。既定閾値 70%
@@ -234,8 +264,10 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 - 注入経路は既存 instruction queue を使い、operator instruction と衝突
   しない直列化を維持。**BR MF2 で cli.ts の単一 chain
   (`enqueueInjection`) 経由へ是正**。
-- **BR MF1**: epoch 境界直後の未確定 reading では判定しない。直前 epoch の
-  最終値を下回る reading を観測して初めて判定を再開する。
+- **BR MF1 / MF1-R**: epoch 境界直後の未確定 reading では判定しない。確定は
+  boundary metadata (`post_tokens`、無ければ `pre_tokens`) を基準にした
+  判定か、境界後 3 回目の reading に達したことのいずれか。大小比較だけを
+  条件にすると永久 mute が起こり得る。
 
 ### B2 — request_compact tool
 

@@ -370,6 +370,13 @@ export interface CompactNotice {
     | "compact_boundary"
     | "conversation_reset";
   text: string;
+  /** Boundary token counts, when the event reported them (BR MF1-R). The
+   *  host needs the numbers, not just the rendered line: they are the only
+   *  authoritative statement of what the context became, and the host uses
+   *  them to decide when a later `getContextUsage()` can be believed. Absent
+   *  for every kind except `compact_boundary`, and `post` is absent whenever
+   *  the boundary omitted it (the SDK declares it optional). */
+  tokens?: { pre?: number; post?: number };
 }
 
 /** Reads `compact_metadata` defensively: the SDK type declares
@@ -397,6 +404,21 @@ function compactBoundaryText(metadata: unknown): string {
   return `${how}コンテキスト圧縮が完了しました${detail}${took}`;
 }
 
+/** Same defensive read as `compactBoundaryText`, but returning the numbers
+ *  rather than a rendered line. Non-numeric or missing fields are simply
+ *  omitted — the caller must work without them (実機受け入れ 2026-07-28
+ *  confirmed post_tokens is genuinely optional). */
+function compactBoundaryTokens(
+  metadata: unknown,
+): { pre?: number; post?: number } | undefined {
+  if (!isRecord(metadata)) return undefined;
+  const { pre_tokens, post_tokens } = metadata;
+  const tokens: { pre?: number; post?: number } = {};
+  if (typeof pre_tokens === "number") tokens.pre = pre_tokens;
+  if (typeof post_tokens === "number") tokens.post = post_tokens;
+  return tokens;
+}
+
 /** Maps one SDK message to its compaction / reset notice, or null when it
  *  carries none. Pure, like the other sdkMessageTo* mappers; the host owns
  *  the emit and the follow-up context refresh. Deliberately kept out of
@@ -418,11 +440,13 @@ export function sdkMessageToCompactNotice(
   }
   if (message.type !== "system") return null;
   if (message.subtype === "compact_boundary") {
+    const metadata = (message as { compact_metadata?: unknown })
+      .compact_metadata;
+    const tokens = compactBoundaryTokens(metadata);
     return {
       kind: "compact_boundary",
-      text: compactBoundaryText(
-        (message as { compact_metadata?: unknown }).compact_metadata,
-      ),
+      text: compactBoundaryText(metadata),
+      ...(tokens !== undefined ? { tokens } : {}),
     };
   }
   if (message.subtype !== "status") return null;

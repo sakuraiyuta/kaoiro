@@ -520,9 +520,14 @@ wrapper は `context` の計測が更新されるたびに `used_percentage` を
 compact 境界 / 会話リセットで解除される。
 
 - **MUST**: epoch 境界直後の未確定 reading では通知しない。境界直後の
-  `getContextUsage()` は圧縮前の値を返し得る (Track S 実測) ため、直前
-  epoch の最終値を下回る reading を観測するまで判定を保留する。さもないと
-  compact 直後に 2 通目を出してしまう
+  `getContextUsage()` は圧縮前の値を返し得る (Track S 実測) ため、
+  compact 直後に 2 通目を出してしまう。確定条件は次のいずれか:
+  boundary metadata (`post_tokens`、無ければ `pre_tokens`) を基準に
+  reading が新 epoch を反映していると言えること、または境界後の reading
+  が既定回数に達したこと
+- **MUST**: 確定条件を**大小比較だけにしない**。観測は離散なので、境界後の
+  reading が一度も基準を下回らない列は成立し得る。回数などの bounded な
+  逃げ道が無いと、その epoch の正当な通知が永久に出なくなる
 - **MUST**: 注入は operator instruction / inter-agent / `request_compact` と
   同じ直列化経路に乗せる。queue 待ちの間に epoch が変わった通知は破棄し、
   旧 epoch の通知を新 epoch へ持ち越さない

@@ -144,6 +144,19 @@ export const CONTEXT_INIT_RETRY_DELAY_MS = 100;
  *  the number itself is a guess pending dogfood data. */
 export const CONTEXT_NOTICE_THRESHOLD_PERCENT = 70;
 
+/** How many context readings a freshly-opened epoch may take before the
+ *  threshold notice is re-enabled regardless of the numbers (phase-28 BR
+ *  MF1-R). This is the liveness half of the settling gate: the magnitude
+ *  test can miss its window entirely, so something bounded has to end the
+ *  suppression or a legitimate warning is lost for the rest of the epoch.
+ *
+ *  3 was chosen against Track S, which saw exactly ONE stale reading after a
+ *  boundary — the refresh the boundary itself kicks. That leaves a full turn
+ *  of margin beyond the observed behaviour while capping a false notice at
+ *  "one turn late", the direction that costs an approval dialog rather than
+ *  a missed warning. */
+export const CONTEXT_EPOCH_SETTLE_READINGS = 3;
+
 /** The turn injected when usage first crosses the threshold in an epoch.
  *  Wording is load-bearing (P3: context anxiety): it states the fact, names
  *  the one action available, explicitly removes urgency, and promises not to
@@ -415,21 +428,29 @@ export class AgentHost implements EngineAdapter {
    *  or a conversation reset re-arms it and nothing else does — that is the
    *  whole dedup: one notice per epoch, never a per-turn nag (P3). */
   #contextNoticeSent = false;
-  /** `used_tokens` of the last reading taken BEFORE the current epoch opened
-   *  (phase-28 BR MF1). Non-null means the epoch is still *unconfirmed*: a
-   *  compaction (or reset) has happened, but no measurement has yet proven
-   *  that `getContextUsage()` reflects it — Track S measured the call right
-   *  after a boundary still reporting the PRE-compact total. Any reading at
-   *  or above this baseline is treated as that stale value and must not feed
-   *  the threshold notice, or the wrapper warns the agent again about usage
-   *  it just compacted away. The first reading strictly below the baseline
-   *  proves the post-compact state is visible and clears it back to null.
+  /** Settling gate for a context epoch that has just opened (phase-28 BR
+   *  MF1 / MF1-R). Non-null means a compaction or reset happened and
+   *  `getContextUsage()` has not yet been shown to reflect it — Track S
+   *  measured the call right after a boundary still reporting the PRE-compact
+   *  total, and a threshold notice computed from that stale figure warns the
+   *  agent about usage it just compacted away.
    *
-   *  A reading cannot climb back over the baseline without first passing
-   *  below it, so this cannot latch permanently — except when the compaction
-   *  freed nothing at all, in which case suppression is still the honest
-   *  answer. */
-  #contextEpochBaseline: number | null = null;
+   *  Two independent ways out, because neither alone is sound:
+   *
+   *  - `atOrBelow` — a reading no larger than this proves the measurement
+   *    reflects the new epoch. It comes from the boundary metadata, the only
+   *    authoritative statement of what the context became: `post_tokens` when
+   *    the boundary reported it, otherwise `pre_tokens - 1` (anything at or
+   *    above `pre_tokens` is indistinguishable from the stale reading).
+   *    Null when the event carried no usable numbers at all — a
+   *    `conversation_reset`, or a boundary whose metadata did not parse.
+   *  - `readings` — a hard cap of `CONTEXT_EPOCH_SETTLE_READINGS`
+   *    measurements. Magnitude alone cannot settle the gate: readings are
+   *    discrete, so an epoch can jump from below `atOrBelow` to above it
+   *    between two samples and never be seen in between (BR MF1-R). Without
+   *    this cap such an epoch would be muted for its whole life. */
+  #contextEpochGate: { atOrBelow: number | null; readings: number } | null =
+    null;
   readonly #rateLimits = new Map<
     string,
     { status?: string; utilization?: number; resets_at?: number }
@@ -1276,7 +1297,7 @@ export class AgentHost implements EngineAdapter {
           compact.kind === "compact_boundary" ||
           compact.kind === "conversation_reset"
         ) {
-          this.#invalidateContextEpoch();
+          this.#invalidateContextEpoch(compact.tokens);
         }
       }
       const result = sdkMessageToResult(message);
@@ -1823,14 +1844,19 @@ export class AgentHost implements EngineAdapter {
    *  `getContextUsage()` right after a boundary still reporting the PRE-compact
    *  total, so the freed-token numbers the operator reads come from the
    *  boundary metadata in the log line, not from here. */
-  #invalidateContextEpoch(): void {
+  #invalidateContextEpoch(tokens?: { pre?: number; post?: number }): void {
     const hadReading = this.#context !== null;
-    // Carry the closing epoch's last reading forward as the staleness
-    // baseline (BR MF1). Readings at or above it are the pre-boundary total
-    // the SDK keeps reporting for a while, and must not trigger a notice.
-    // No prior reading means nothing to compare against, so the new epoch
-    // starts confirmed rather than permanently muted.
-    this.#contextEpochBaseline = this.#context?.used_tokens ?? null;
+    // Arm the settling gate for the epoch now opening (BR MF1-R). The bound
+    // comes from the boundary's own metadata, never from a cached reading:
+    // a cached reading may be missing or itself stale, whereas the event
+    // states what the context became. post_tokens is the exact new total, so
+    // a reading at or below it is proof; with only pre_tokens the best that
+    // can be said is "not the stale value", hence pre - 1.
+    this.#contextEpochGate = {
+      atOrBelow:
+        tokens?.post ?? (tokens?.pre !== undefined ? tokens.pre - 1 : null),
+      readings: 0,
+    };
     this.#contextGeneration += 1;
     this.#context = null;
     // New epoch, new notice budget (phase-28 B1).
@@ -1844,11 +1870,12 @@ export class AgentHost implements EngineAdapter {
    *  reading that actually changed, so the notice lands the first time usage
    *  crosses the line and never again until the epoch ends.
    *
-   *  Two guards beyond the per-epoch dedup (BR MF1 / MF2):
+   *  Two guards beyond the per-epoch dedup (BR MF1 / MF1-R / MF2):
    *
-   *  - a reading that has not yet cleared `#contextEpochBaseline` is the
-   *    pre-boundary total the SDK still reports right after a compaction;
-   *    warning on it would nag the agent about usage it just compacted away;
+   *  - a freshly-opened epoch is muted until `#settleContextEpoch` says its
+   *    readings can be believed; right after a compaction the SDK still
+   *    reports the pre-compact total, and warning on that would nag the agent
+   *    about usage it just compacted away;
    *  - the injection rides the caller-supplied serialization (cli.ts's
    *    instruction chain — the same one operator / inter-agent / B2 turns use)
    *    and re-checks the epoch when the chain reaches it, so a notice queued
@@ -1860,15 +1887,7 @@ export class AgentHost implements EngineAdapter {
     used_tokens: number;
     used_percentage: number;
   }): void {
-    if (
-      this.#contextEpochBaseline !== null &&
-      reading.used_tokens >= this.#contextEpochBaseline
-    ) {
-      return;
-    }
-    // Below the baseline: the post-boundary state is visible, so this and
-    // every later reading of the epoch can be trusted.
-    this.#contextEpochBaseline = null;
+    if (!this.#settleContextEpoch(reading.used_tokens)) return;
     if (this.#contextNoticeSent) return;
     if (reading.used_percentage < CONTEXT_NOTICE_THRESHOLD_PERCENT) return;
     // Claim the budget BEFORE the async send so two refreshes resolving in
@@ -1894,6 +1913,27 @@ export class AgentHost implements EngineAdapter {
         `context threshold notice not queued: ${String(err)}\n`,
       );
     });
+  }
+
+  /** Answers whether this reading can be trusted to describe the current
+   *  context epoch, consuming one of the gate's allowance in the process
+   *  (phase-28 BR MF1-R). True once the epoch has settled — which is the
+   *  steady state, so the ordinary path is a single null check.
+   *
+   *  A settled epoch NEVER re-arms here: only `#invalidateContextEpoch()`
+   *  opens a gate, so a later reading cannot silently re-mute the notice. */
+  #settleContextEpoch(usedTokens: number): boolean {
+    const gate = this.#contextEpochGate;
+    if (gate === null) return true;
+    gate.readings += 1;
+    const provenFresh = gate.atOrBelow !== null && usedTokens <= gate.atOrBelow;
+    // Liveness backstop: readings are discrete samples, so an epoch can grow
+    // past `atOrBelow` between two of them and never be caught below it.
+    // Without this the gate would stay shut for the whole epoch (BR MF1-R).
+    const allowanceSpent = gate.readings >= CONTEXT_EPOCH_SETTLE_READINGS;
+    if (!provenFresh && !allowanceSpent) return false;
+    this.#contextEpochGate = null;
+    return true;
   }
 
   /** Runs `task` on the caller-supplied injection queue when one was wired

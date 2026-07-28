@@ -221,6 +221,27 @@ describe("sdkMessageToCompactNotice", () => {
     ).toEqual({
       kind: "compact_boundary",
       text: "手動コンテキスト圧縮が完了しました (前 22315 tokens → 後 882 tokens) 13.7 秒",
+      // BR MF1-R: host は表示文字列ではなく数値そのものを要る。undeclared
+      // な extras (cumulative_dropped_tokens) は載せない。
+      tokens: { pre: 22315, post: 882 },
+    });
+  });
+
+  // 実機受け入れ (2026-07-28) で post_tokens 欠落は型どおり起こり得ると
+  // 確認済み。落とさず、pre だけを渡す。
+  it("post_tokens 欠落でも pre だけを載せる (MF1-R)", () => {
+    expect(
+      sdkMessageToCompactNotice(
+        msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "manual", pre_tokens: 293221 },
+        }),
+      ),
+    ).toEqual({
+      kind: "compact_boundary",
+      text: "手動コンテキスト圧縮が完了しました (前 293221 tokens)",
+      tokens: { pre: 293221 },
     });
   });
 

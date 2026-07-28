@@ -507,9 +507,115 @@ describe("AgentHost — query injection", () => {
     expect(notices.some((t) => t.includes("78%"))).toBe(false);
   });
 
-  // BR MF1 (b): 圧縮が見えた reading (直前 epoch の最終値を下回るもの) を
-  // 観測して初めて新 epoch の判定を再開し、そこから改めて閾値を跨いだ
-  // ときだけ 1 通出す。
+  // BR MF1-R 反例 1: 直前 epoch に成功 reading が無くても、境界直後の
+  // reading が stale high である可能性は消えない。「比較対象が無いから
+  // 確定扱い」にすると、そこで誤通知できてしまう。
+  it("直前 epoch に reading が無くても境界直後の stale では通知しない (MF1-R)", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      // この epoch で取れる唯一の reading。閾値超えだが圧縮前の値。
+      [{ totalTokens: 155000, maxTokens: 200000, percentage: 78 }],
+      async function* () {
+        // result より先に境界が来る = 直前 epoch の cached reading が無い。
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "manual", pre_tokens: 150000 },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toEqual(
+      [],
+    );
+  });
+
+  // BR MF1-R 反例 2: 観測は離散なので、境界後の reading が一度も
+  // `atOrBelow` を下回らない列は普通に成立する (大きな turn が挟まる等)。
+  // 大小比較だけを確定条件にすると、その epoch の正当な通知が永久に
+  // 出なくなる。readings 上限がその liveness を担保する。
+  it("観測列が終始 atOrBelow を上回っても永久 mute にしない (MF1-R)", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [
+        { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
+        // 以降すべて pre_tokens 以上のまま推移する。
+        { totalTokens: 155000, maxTokens: 200000, percentage: 78 },
+        { totalTokens: 158000, maxTokens: 200000, percentage: 79 },
+        { totalTokens: 160000, maxTokens: 200000, percentage: 80 },
+      ],
+      async function* () {
+        yield result("success", { result: "1" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "manual", pre_tokens: 150000 },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "2" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "3" });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
+    expect(notices).toHaveLength(2);
+    expect(notices[0]).toContain("75%");
+    // 3 回目の reading で allowance を使い切り、そこで通知が復活する。
+    expect(notices[1]).toContain("80%");
+  });
+
+  // BR MF1-R: post_tokens が報告された境界では、それが新 epoch の
+  // 権威ある基準になる。allowance を使い切るまで待たずに 1 回目の
+  // reading で確定する。
+  it("post_tokens があれば最初の reading で確定する (MF1-R)", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [
+        { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
+        { totalTokens: 9000, maxTokens: 200000, percentage: 5 },
+        { totalTokens: 145000, maxTokens: 200000, percentage: 72 },
+      ],
+      async function* () {
+        yield result("success", { result: "1" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: {
+            trigger: "manual",
+            pre_tokens: 150000,
+            post_tokens: 9000,
+          },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield result("success", { result: "2" });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      },
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
+    expect(notices).toHaveLength(2);
+    expect(notices[1]).toContain("72%");
+  });
+
+  // BR MF1 (b): 圧縮が見えた reading を観測して初めて新 epoch の判定を
+  // 再開し、そこから改めて閾値を跨いだときだけ 1 通出す。
   it("信頼できる post 値の後に閾値を跨いだときだけ次の 1 通を出す (MF1-b)", async () => {
     const { queryFn, injected } = contextQueryFn(
       [
