@@ -157,9 +157,11 @@ nginx が担うはずのセキュリティヘッダ(CSP / `nosniff` /
 なるためサーバ自身が全レスポンスに付ける(#155、
 `KaoiroServerWeb.SecurityHeaders`。狙いと内訳は
 [threat-model](threat-model.md) 緩和策)。CSP の `connect-src` は
-`check_origin` と同じオリジンを `ws:`/`wss:` へ写して組み立てるので、
-`PHX_HOST` / `PORT` を変えれば追随する。逆に **ダッシュボードへ外部
-オリジンの script / style / 画像を持ち込む変更は CSP で落ちる**。
+**そのレスポンスを返しているオリジンと一致する `check_origin` エントリ
+だけ**を `ws:`/`wss:` へ写すので、`PHX_HOST` / `PORT` を変えれば追随し、
+外部 host 向けのページに loopback の WS 宛先が載ることもない。逆に
+**ダッシュボードへ外部オリジンの script / style / 画像を持ち込む変更は
+CSP で落ちる**。
 
 ### 1.6 OAuth ログイン(個人認証)の設定(任意、ADR-0042 / issue #65)
 

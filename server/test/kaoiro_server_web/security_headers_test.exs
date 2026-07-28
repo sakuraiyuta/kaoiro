@@ -58,39 +58,59 @@ defmodule KaoiroServerWeb.SecurityHeadersTest do
     end
   end
 
-  describe "connect_src/2" do
-    test "check_origin のリストを ws/wss へ写す" do
-      # plain-HTTP 配備と TLS 配備、それぞれ runtime.exs が組み立てる形。
+  describe "connect_src/3" do
+    # plain-HTTP 配備で runtime.exs が組み立てる check_origin。
+    @plain_http [
+      "http://linux-host.example:4000",
+      "http://localhost:4000",
+      "http://127.0.0.1:4000"
+    ]
+
+    test "リクエスト元と一致する 1 件だけを ws へ写す" do
+      # ふじ advisory (#155): check_origin は「socket を開いてよい発信元」、
+      # connect-src は「このページが繋いでよい宛先」。全件写すと外部 host
+      # 向けのページに ws://localhost:4000 が載る。
       assert SecurityHeaders.connect_src(
-               [
-                 "http://linux-host.example:4000",
-                 "http://localhost:4000",
-                 "http://127.0.0.1:4000"
-               ],
+               @plain_http,
+               "http://linux-host.example:4000",
                "http://unused.example"
-             ) == [
-               "'self'",
-               "ws://linux-host.example:4000",
-               "ws://localhost:4000",
-               "ws://127.0.0.1:4000"
-             ]
+             ) == ["'self'", "ws://linux-host.example:4000"]
 
       assert SecurityHeaders.connect_src(
+               @plain_http,
+               "http://localhost:4000",
+               "http://unused.example"
+             ) == ["'self'", "ws://localhost:4000"]
+    end
+
+    test "TLS 配備は既定ポート省略形と一致する" do
+      # conn 側は port 443 を持つので、正規化しないと突き合わない。
+      assert SecurityHeaders.connect_src(
                ["https://kaoiro.example.com", "http://localhost:4000"],
+               "https://kaoiro.example.com",
                "https://unused.example"
-             ) == [
-               "'self'",
-               "wss://kaoiro.example.com",
-               "ws://localhost:4000"
-             ]
+             ) == ["'self'", "wss://kaoiro.example.com"]
+    end
+
+    test "check_origin に無い origin には ws 宛先を出さない" do
+      # そのオリジンからの socket は check_origin 側で 403 になるので、
+      # CSP でも許可しないのが整合的。
+      assert SecurityHeaders.connect_src(
+               @plain_http,
+               "http://attacker.example",
+               "http://unused.example"
+             ) == ["'self'"]
     end
 
     test "check_origin がリストでなければ endpoint の URL を使う" do
-      assert SecurityHeaders.connect_src(true, "http://localhost:4002") ==
+      assert SecurityHeaders.connect_src(true, "http://any.example", "http://localhost:4002") ==
                ["'self'", "ws://localhost:4002"]
 
-      assert SecurityHeaders.connect_src(false, "https://kaoiro.example.com") ==
-               ["'self'", "wss://kaoiro.example.com"]
+      assert SecurityHeaders.connect_src(
+               false,
+               "http://any.example",
+               "https://kaoiro.example.com"
+             ) == ["'self'", "wss://kaoiro.example.com"]
     end
 
     test "origin として使えない要素は落とす" do
@@ -98,6 +118,7 @@ defmodule KaoiroServerWeb.SecurityHeadersTest do
       # ならない値をそのまま流すと policy 全体が壊れる。
       assert SecurityHeaders.connect_src(
                [:conn, "//*.example.com", "http://localhost:4000"],
+               "http://localhost:4000",
                "http://unused.example"
              ) == ["'self'", "ws://localhost:4000"]
     end

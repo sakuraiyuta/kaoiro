@@ -33,27 +33,60 @@ defmodule KaoiroServerWeb.SecurityHeaders do
   def call(conn, _opts) do
     conn
     |> merge_resp_headers(@fixed_headers)
-    |> put_resp_header("content-security-policy", policy())
+    |> put_resp_header("content-security-policy", policy(conn))
   end
 
   @doc """
-  CSP `connect-src` sources for a `:check_origin` value and the
-  endpoint's own URL.
+  CSP `connect-src` sources for a `:check_origin` value, the origin THIS
+  response is being served from, and the endpoint's own URL.
 
   `'self'` alone is not enough: it does not resolve to the `ws:`/`wss:`
-  variant of the page origin in every browser, so the socket origins
-  are listed explicitly. They are the `:check_origin` list
-  `config/runtime.exs` derives from `plain_http?` / host / port — by
-  definition the origins a browser is allowed to open a socket from —
-  with the scheme swapped. Anything else (dev/test leave it `false`)
-  falls back to the endpoint's own URL. Entries that are not http(s)
-  URLs (wildcards, `:conn`) carry no usable origin and are dropped.
+  variant of the page origin in every browser, so the socket origin is
+  listed explicitly. But `:check_origin` and `connect-src` sit on
+  opposite trust axes (ふじ advisory on issue #155): the former lists
+  every origin a browser may open a socket FROM, the latter every
+  destination THIS page may connect TO. Copying the whole list would put
+  `ws://localhost:4000` into a page served to an external host.
+
+  So the list is narrowed to the entry matching the request's own
+  origin, and the WS destination is derived from that. The matched
+  CONFIG string is what reaches the header — the request's Host is used
+  for comparison only, so a hostile Host header cannot inject into the
+  policy. No match (an origin `:check_origin` would 403 anyway) leaves
+  `'self'` alone; a non-list `:check_origin` (dev/test) falls back to
+  the endpoint's own URL. Entries that are not http(s) URLs (wildcards,
+  `:conn`) carry no usable origin and are dropped.
   """
-  def connect_src(check_origin, endpoint_url) do
-    origins = if is_list(check_origin), do: check_origin, else: [endpoint_url]
+  def connect_src(check_origin, request_origin, endpoint_url) do
+    origins =
+      case check_origin do
+        list when is_list(list) -> Enum.filter(list, &same_origin?(&1, request_origin))
+        _ -> [endpoint_url]
+      end
 
     ["'self'" | Enum.flat_map(origins, &ws_origin/1)]
   end
+
+  defp same_origin?(configured, request_origin) when is_binary(configured),
+    do: normalize(configured) == request_origin
+
+  defp same_origin?(_configured, _request_origin), do: false
+
+  # Default ports are dropped so "https://host" and "https://host:443"
+  # (the shape `conn` yields) compare equal.
+  defp normalize(origin) do
+    case URI.parse(origin) do
+      %URI{scheme: scheme, host: host, port: port} when is_binary(scheme) and is_binary(host) ->
+        origin_string(scheme, host, port)
+
+      _ ->
+        origin
+    end
+  end
+
+  defp origin_string("http", host, port) when port in [nil, 80], do: "http://#{host}"
+  defp origin_string("https", host, port) when port in [nil, 443], do: "https://#{host}"
+  defp origin_string(scheme, host, port), do: "#{scheme}://#{host}:#{port}"
 
   # The dashboard loads scripts, styles, images and fonts from its own
   # origin only. Inline <style> is the one exception: mermaid emits one
@@ -62,10 +95,11 @@ defmodule KaoiroServerWeb.SecurityHeaders do
   # strict — the built index.html carries no inline <script> — so the
   # untrusted agent output rendered through {@html} has no script
   # vector left even if the DOMPurify chokepoint were bypassed.
-  defp policy do
+  defp policy(conn) do
     connect =
       connect_src(
         KaoiroServerWeb.Endpoint.config(:check_origin),
+        request_origin(conn),
         KaoiroServerWeb.Endpoint.url()
       )
 
@@ -85,6 +119,11 @@ defmodule KaoiroServerWeb.SecurityHeaders do
       "; "
     )
   end
+
+  # The origin the browser actually used for this request, in the same
+  # normalized shape as the configured entries.
+  defp request_origin(conn),
+    do: origin_string(to_string(conn.scheme), conn.host, conn.port)
 
   defp ws_origin("https://" <> rest), do: ["wss://" <> rest]
   defp ws_origin("http://" <> rest), do: ["ws://" <> rest]
