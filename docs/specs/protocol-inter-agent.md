@@ -504,9 +504,11 @@ used_percentage}` を返す。peer が `list_agents` で読む `context` と
 - **MUST**: 投入テキストは固定リテラル `/compact`。`reason` を連結しない。
   model が入力ストリームへ任意テキストを流し込む経路にしない
 - **MUST**: 投入は queue 経由。turn 境界で自然に発火するため、実行中の
-  turn を interrupt しない ([ADR-0036](../adr/0036-session-reset-and-slash-commands.md) F6 と非衝突)
+  turn を interrupt しない ([ADR-0036](../adr/0036-session-lifecycle-commands.md) F6 と非衝突)
 - 完了は Phase A の `compact_boundary` log (`kind:"system"`) で観測する。
-  tool は完了を待たない (実測 ~13.7 秒)
+  tool は完了を待たない。所要は圧縮対象の文脈量に依存し (実測 13.7 秒
+  @ ~22k tokens / 168.8 秒 @ ~293k tokens)、数分に達し得る。tool
+  description も tool result も所要秒数を約束しない
 - 85% 等での**自動発動は実装しない**。SDK native の autoCompact を最終
   防衛線とし、kaoiro 側の発動は必ず operator 承認を通す (P2)
 
@@ -516,6 +518,14 @@ wrapper は `context` の計測が更新されるたびに `used_percentage` を
 既定 70% 以上で **その context epoch につき 1 回だけ** agent へ通知を注入する
 (通常の instruction queue 経由の user turn)。dedup は epoch 単位で、
 compact 境界 / 会話リセットで解除される。
+
+- **MUST**: epoch 境界直後の未確定 reading では通知しない。境界直後の
+  `getContextUsage()` は圧縮前の値を返し得る (Track S 実測) ため、直前
+  epoch の最終値を下回る reading を観測するまで判定を保留する。さもないと
+  compact 直後に 2 通目を出してしまう
+- **MUST**: 注入は operator instruction / inter-agent / `request_compact` と
+  同じ直列化経路に乗せる。queue 待ちの間に epoch が変わった通知は破棄し、
+  旧 epoch の通知を新 epoch へ持ち越さない
 
 常時表示や毎 turn の再注入はしない (#168 決定 P3: context anxiety の回避)。
 文言も「切迫」ではなく「回復手段があること」と「今すぐ動く必要はないこと」を

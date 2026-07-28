@@ -174,7 +174,7 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 | B1 | 閾値通知: `#context` 更新時に wrapper が機械判定し、既定 70% 超過で agent へ通知を 1 回注入 | あお (完了: f772277、未 push) |
 | B2 | MCP tool `request_compact`: permission_broker 都度承認 → 承認後 wrapper が instruction queue へ `/compact` を投入 | あお (完了: 7748a2f、未 push) |
 | B3 | ADR-0036 Context の「CLI native slash command parser を経由しない」を Codex 限定へ追補 (Track S 実測を根拠に) | もも (完了: 879db29、未 push) |
-| BR | B1-B3 の diff レビュー | ふじ (quota 窓明け 8/3 以降) |
+| BR | B1-B3 の diff レビュー | ふじ (完了: must-fix 3 群 + suggestion 2 件 → 下記「BR 指摘と修正」) |
 
 実装時の確定判断 (2026-07-28、クロエ承認):
 
@@ -192,6 +192,35 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
   canUseTool を呼ぶことに依存し unit test で踏めない (send_to_agent と
   同じ既存制約)。実機受け入れで確認する。
 
+### BR 指摘と修正 (ふじ、2026-07-28。判定: push 不可 → 全採用で修正)
+
+- **MF1 — 境界直後の stale 値による誤通知**。`#invalidateContextEpoch()`
+  直後の refresh は圧縮前の値を返し得る (Track S 実測)。その値が新 epoch の
+  閾値判定に流れ、compact した直後に 2 通目を出せた。既存テストが**この
+  誤動作の方を pin していた**ため、テストごと書き換えた。
+  対処: 直前 epoch の最終 `used_tokens` を staleness baseline として持ち越し、
+  それを下回る reading を観測するまで通知判定を保留する
+  (`#contextEpochBaseline`)。baseline を跨がずに再び上回ることは構造上
+  起こらないので恒久的な抑止にはならない。
+- **MF2 — B1 通知が直列化を迂回**。operator / inter-agent / B2 は cli.ts の
+  instruction chain に乗るが、B1 だけ `host.send` を直接叩いていた。
+  対処: `AgentHostOptions.enqueueInjection` を追加し cli.ts の単一 chain
+  (`enqueueInstruction`) を注入。chain が届いた時点で epoch を再確認して
+  drop、re-arm は**同 generation の失敗のみ** (旧 epoch の遅延 reject が
+  新 epoch の budget を巻き戻さない)。
+- **MF3 — 実測と矛盾する文言**。`request_compact` の description /
+  tool result から「~十数秒」「before/after token counts」の約束を撤去し、
+  「文脈量により数分に達し得る」「完了は boundary log で観測」へ。
+  `protocol-inter-agent.md` の「実測 ~13.7 秒」も文脈量依存の表現へ直し、
+  ADR-0036 への broken link を修正した。
+- **S1** — `READ_ONLY_TOOLS` を `read_only_tools.ts` へ分離し (cli.ts は
+  import 時に `main()` が走るためテストから読めない)、
+  `REQUEST_COMPACT_TOOL_FQN` が含まれないことを直接 pin。承認ゲートの
+  実体は「auto-allow 既定に載っていないこと」そのものなので、不在自体を
+  テストで固定する。
+- **S2** — 実機受け入れ節の「whoami 値のみで」を、B1 も whoami と同じ
+  cached context measurement を読む旨の記述へ修正。
+
 ### B1 — 閾値通知
 
 - 判定点: `#context` が更新される箇所 (refresh 成功時)。既定閾値 70%
@@ -202,8 +231,11 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 - 通知文言は「context が N% に達した。回復するなら request_compact を
   使える。作業の切りが良いところで判断せよ」程度の中立なもの。
   切迫を煽らない。
-- 注入経路は既存 instruction queue (`host.send`) を使い、operator
-  instruction と衝突しない直列化を維持。
+- 注入経路は既存 instruction queue を使い、operator instruction と衝突
+  しない直列化を維持。**BR MF2 で cli.ts の単一 chain
+  (`enqueueInjection`) 経由へ是正**。
+- **BR MF1**: epoch 境界直後の未確定 reading では判定しない。直前 epoch の
+  最終値を下回る reading を観測して初めて判定を再開する。
 
 ### B2 — request_compact tool
 
@@ -230,7 +262,8 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
   既存の `status:compacting` log (Phase A) で観測可能なため、追加の state
   語彙は導入しない。`request_compact` の tool description も所要秒数を
   約束していない (「次のターン境界で走る」のみ) — この表現を維持する。
-- push はレビュー通過後 (BR は 8/3 以降のため、それまで unpushed 保持)。
+- push は BR 通過後。2026-07-28 の BR は **push 不可**判定 (must-fix 3 群)。
+  修正差分の再レビューを通すまで unpushed 保持。
 
 ## 実機受け入れ結果 (あお、2026-07-28)
 
@@ -262,8 +295,9 @@ B2 の「承認→実行 / 拒否→不実行」分岐は unit test で踏めな
 - **whoami の lag が定量化された**: whoami の compact 前値 269,858 に対し
   boundary の `pre_tokens` は 293,221 で 23,363 の乖離。A2 の "cached last
   successful measurement; whoami itself does not refresh" が実測で裏付け
-  られた。閾値判断を whoami 値のみで行うとこの程度は過小評価するが、
-  B1 の 70% には十分な余裕があり実害はない。
+  られた。B1 の閾値判定も whoami と同じ cached context measurement を
+  読むため、同じだけ過小評価し得る。70% という閾値には十分な余裕があり
+  実害はない。
 
 ## Phase C — 自発 new/clear (詳細化 2026-07-28、クロエ裁定)
 
