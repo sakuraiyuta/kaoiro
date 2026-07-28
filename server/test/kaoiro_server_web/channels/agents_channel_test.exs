@@ -3420,6 +3420,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                        %{
                          "agent_id" => ^agent_id,
                          "mode" => "new",
+                         "origin" => "operator",
                          "previous_session_id" => "sess-prev",
                          "request_id" => request_id
                        }

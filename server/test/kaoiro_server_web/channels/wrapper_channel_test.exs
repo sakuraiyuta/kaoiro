@@ -2044,11 +2044,11 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply second, :error, %{reason: "session_reset_pending"}
     end
 
-    test "reason は string かつ既存 frame 上限内だけを受理する" do
+    test "契約外の mode / reason は fixed lifecycle vocabulary へ正規化する" do
       socket = seed_reset_agent("self-reset.reason")
 
       invalid = push(socket, "session_reset_request", %{"mode" => "new", "reason" => 42})
-      assert_reply invalid, :error, %{reason: "invalid value: reason"}
+      assert_reply invalid, :error, %{reason: "unsupported_session_reset"}
 
       too_large =
         push(socket, "session_reset_request", %{
@@ -2056,7 +2056,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "reason" => String.duplicate("x", 65_537)
         })
 
-      assert_reply too_large, :error, %{reason: "invalid value: reason"}
+      assert_reply too_large, :error, %{reason: "unsupported_session_reset"}
+
+      invalid_mode = push(socket, "session_reset_request", %{"mode" => "restart"})
+      assert_reply invalid_mode, :error, %{reason: "unsupported_session_reset"}
       refute_broadcast "session_reset_started", _
     end
   end

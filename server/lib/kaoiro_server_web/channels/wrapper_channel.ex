@@ -418,14 +418,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       {:reply, :ok, socket}
     else
-      {:error, :invalid_mode} ->
-        {:reply, {:error, %{reason: "invalid_mode"}}, socket}
-
-      {:error, {:invalid_value, key}} ->
-        {:reply, {:error, %{reason: "invalid value: #{key}"}}, socket}
-
       {:error, reason} ->
-        {:reply, {:error, %{reason: to_string(reason)}}, socket}
+        {:reply, {:error, %{reason: reset_request_reason(reason)}}, socket}
     end
   end
 
@@ -851,6 +845,21 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp fetch_reset_reason(%{"reason" => _}), do: {:error, {:invalid_value, "reason"}}
   defp fetch_reset_reason(payload) when is_map(payload), do: {:ok, nil}
+
+  # `session_reset_request` is a control wire, not a human-facing form: its
+  # reply reason must stay in ADR-0036 F7's fixed lifecycle vocabulary. A
+  # malformed mode/reason cannot safely be more specific without adding a new
+  # wire word, so it fails closed as an unsupported reset request.
+  defp reset_request_reason(reason)
+       when reason in [
+              :agent_busy,
+              :session_reset_pending,
+              :unsupported_session_reset,
+              :runner_unavailable
+            ],
+       do: Atom.to_string(reason)
+
+  defp reset_request_reason(_reason), do: "unsupported_session_reset"
 
   defp fetch_reset_envelope(agent_id) do
     case AgentStates.snapshot()[agent_id] do
