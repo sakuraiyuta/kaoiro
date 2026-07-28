@@ -483,6 +483,45 @@ used_percentage}` を返す。peer が `list_agents` で読む `context` と
 - tool 説明では「必要なときに見る」に留め、常時参照を促さない
   (context anxiety 回避。#168 comment-2287 の決定 P3)
 
+#### セッション操作ツール — `request_compact` (phase-28 B2)
+
+`mcp__kaoiro__request_compact` は上の 2 つと違い **auto-allow しない**。
+`send_to_agent` と同じく既定 allowedTools に含めないことで canUseTool が
+発火し、`permission_broker` が operator に都度承認を求める
+([#168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168)
+決定 P2、[ADR-0028](../adr/0028-external-human-messaging.md) D4 と同じ形)。
+
+| 項目 | 内容 |
+|---|---|
+| 入力 | `{ reason?: string }`。任意。承認ダイアログに表示され、tool result にも echo される |
+| 承認時 | wrapper が instruction queue へ **固定文字列 `/compact`** を投入し、「予約受理」を返す。圧縮完了は待たない |
+| 拒否時 | SDK が deny message を tool result として model に返す。handler は走らない |
+| timeout | `permission_broker` の既存規約 (`permission_timeout_ms` 未設定なら無期限待機、[ADR-0022](../adr/0022-pending-permission-authoritative-source.md) F6) |
+| engine | **Claude のみ**。codex には出さない (`/compact` 経路が無く、engine 側 auto-compaction 前提) |
+
+規約:
+
+- **MUST**: 投入テキストは固定リテラル `/compact`。`reason` を連結しない。
+  model が入力ストリームへ任意テキストを流し込む経路にしない
+- **MUST**: 投入は queue 経由。turn 境界で自然に発火するため、実行中の
+  turn を interrupt しない ([ADR-0036](../adr/0036-session-reset-and-slash-commands.md) F6 と非衝突)
+- 完了は Phase A の `compact_boundary` log (`kind:"system"`) で観測する。
+  tool は完了を待たない (実測 ~13.7 秒)
+- 85% 等での**自動発動は実装しない**。SDK native の autoCompact を最終
+  防衛線とし、kaoiro 側の発動は必ず operator 承認を通す (P2)
+
+#### 閾値通知 (phase-28 B1)
+
+wrapper は `context` の計測が更新されるたびに `used_percentage` を機械判定し、
+既定 70% 以上で **その context epoch につき 1 回だけ** agent へ通知を注入する
+(通常の instruction queue 経由の user turn)。dedup は epoch 単位で、
+compact 境界 / 会話リセットで解除される。
+
+常時表示や毎 turn の再注入はしない (#168 決定 P3: context anxiety の回避)。
+文言も「切迫」ではなく「回復手段があること」と「今すぐ動く必要はないこと」を
+述べるに留める。閾値は現状 wrapper 内の定数
+(`CONTEXT_NOTICE_THRESHOLD_PERCENT`)。config 配線は dogfood 後に判断する。
+
 #### 宛先解決の指針
 
 `send_to_agent.to` は **agent_id を必須** とする (charset `[A-Za-z0-9._-]`)。

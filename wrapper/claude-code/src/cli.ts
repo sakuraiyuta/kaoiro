@@ -27,6 +27,7 @@ import {
   formatInboundMessage,
 } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
+import { requestCompactDescriptor } from "./request_compact.js";
 import { PermissionBroker } from "@kaoiro/agent-common";
 import { PERMISSION_MODES, loadConfig } from "@kaoiro/wrapper-core";
 import { QuestionBroker } from "@kaoiro/agent-common";
@@ -530,8 +531,26 @@ async function main(): Promise<void> {
       // server-connected model (phase-8). send_to_agent surfaces as
       // mcp__kaoiro__send_to_agent and is NOT in the read-only default
       // allowedTools, so canUseTool fires and the broker runs the
-      // per-call operator dialog (Phase 1 都度承認).
-      mcpServers: { kaoiro: buildKaoiroMcpServer(interAgent!) },
+      // per-call operator dialog (Phase 1 都度承認). request_compact
+      // (phase-28 B2) is gated the same way — its absence from
+      // READ_ONLY_TOOLS above is what makes it 都度承認, so do not add it
+      // there.
+      mcpServers: {
+        kaoiro: buildKaoiroMcpServer(
+          interAgent!,
+          requestCompactDescriptor({
+            // Ride the same chain operator instructions use, so an approved
+            // /compact cannot overtake an instruction still rendering its
+            // attachments. Awaiting `queued` lets the tool report a closed
+            // or full queue instead of claiming a reservation it never made.
+            send: (text) => {
+              const queued = instructionChain.then(() => host.send(text));
+              instructionChain = queued.catch(() => {});
+              return queued;
+            },
+          }),
+        ),
+      },
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
   });
