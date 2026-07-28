@@ -1020,7 +1020,7 @@ describe("AgentHost — query injection", () => {
     });
   });
 
-  it("partial な rate_limit_event でも既知 utilization を失わず、overage 込み週次を 7day に統合する", async () => {
+  it("同一windowのpartial eventだけutilizationを保持し、新resetでは破棄してoverage込み週次を7dayへ統合する", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {
       onState: (e) => envs.push(e),
@@ -1039,6 +1039,14 @@ describe("AgentHost — query injection", () => {
           rate_limit_info: {
             status: "allowed",
             rateLimitType: "five_hour",
+          },
+        }),
+        assistant([{ type: "text", text: "same window" }]),
+        msg({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed",
+            rateLimitType: "five_hour",
             resetsAt: 1781490000,
           },
         }),
@@ -1051,18 +1059,37 @@ describe("AgentHost — query injection", () => {
             resetsAt: 1782000000,
           },
         }),
-        assistant([{ type: "text", text: "hi" }]),
+        assistant([{ type: "text", text: "new window" }]),
       ]),
       now: () => "T",
     });
     await host.run();
 
-    const thinking = envs.find((e) => e.state === "thinking");
-    expect(thinking?.ext).toMatchObject({
+    const sameWindow = envs.find(
+      (e) =>
+        e.state === "thinking" &&
+        (e.ext.rate_limits as Record<string, { resets_at?: number }> | undefined)
+          ?.five_hour?.resets_at === 1781480000,
+    );
+    expect(sameWindow?.ext).toMatchObject({
       rate_limits: {
         five_hour: {
           status: "allowed",
           utilization: 0.42,
+          resets_at: 1781480000,
+        },
+      },
+    });
+    const newWindow = envs.find(
+      (e) =>
+        e.state === "thinking" &&
+        (e.ext.rate_limits as Record<string, { resets_at?: number }> | undefined)
+          ?.five_hour?.resets_at === 1781490000,
+    );
+    expect(newWindow?.ext).toMatchObject({
+      rate_limits: {
+        five_hour: {
+          status: "allowed",
           resets_at: 1781490000,
         },
         seven_day: {
@@ -1072,6 +1099,10 @@ describe("AgentHost — query injection", () => {
         },
       },
     });
+    expect(
+      (newWindow?.ext.rate_limits as Record<string, Record<string, unknown>> | undefined)
+        ?.five_hour,
+    ).not.toHaveProperty("utilization");
   });
 
   it("init メッセージから ext.model / ext.cwd を付与する (#16)", async () => {

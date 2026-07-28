@@ -1552,22 +1552,28 @@ export class AgentHost implements EngineAdapter {
         : info.rateLimitType;
     if (window === undefined) return;
     const previous = this.#rateLimits.get(window);
+    const nextReset =
+      typeof info.resetsAt === "number" && Number.isFinite(info.resetsAt)
+        ? info.resetsAt
+        : undefined;
+    // A reset timestamp identifies the quota window. A partial event without
+    // it is an update to that known window, so retaining utilization is safe.
+    // Conversely, a finite new timestamp denotes a new window: never carry
+    // old utilization into it unless this event provides a fresh value.
+    const resetChanged = nextReset !== undefined && previous?.resets_at !== nextReset;
     const snapshot: {
       status?: string;
       utilization?: number;
       resets_at?: number;
-    } = {
-      ...previous,
-      status: info.status,
-    };
-    // `allowed` refreshes commonly carry only status + reset. Preserve the
-    // last measured utilization instead of turning that partial update into
-    // an empty (visually 0%) meter.
+    } = resetChanged ? { status: info.status } : { ...previous, status: info.status };
+    // `allowed` refreshes commonly omit both utilization and resetsAt. Such a
+    // no-reset partial update keeps the last measured value; a reset change
+    // above intentionally starts a fresh snapshot instead.
     if (typeof info.utilization === "number" && Number.isFinite(info.utilization)) {
       snapshot.utilization = info.utilization;
     }
-    if (typeof info.resetsAt === "number" && Number.isFinite(info.resetsAt)) {
-      snapshot.resets_at = info.resetsAt;
+    if (nextReset !== undefined) {
+      snapshot.resets_at = nextReset;
     }
     this.#rateLimits.set(window, snapshot);
   }

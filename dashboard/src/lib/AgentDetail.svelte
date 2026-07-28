@@ -283,11 +283,27 @@
     resetComplete: boolean;
   }
 
+  function resetAtMs(value: unknown): number | null {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    return value < 1e12 ? value * 1000 : value;
+  }
+
+  function nextRateReset(raw: unknown, now: number): number | null {
+    if (typeof raw !== "object" || raw === null) return null;
+    let next: number | null = null;
+    for (const value of Object.values(raw as Record<string, unknown>)) {
+      if (typeof value !== "object" || value === null) continue;
+      const at = resetAtMs((value as Record<string, unknown>).resets_at);
+      if (at !== null && at >= now && (next === null || at < next)) next = at;
+    }
+    return next;
+  }
+
   /** Build display rows from ext.rate_limits, in a stable window order. The
    *  weekly `seven_day` window is always emitted (with a null pct = "awaiting
    *  data" placeholder) so its absence reads as pending, not a missing
    *  feature; other windows appear only once the SDK surfaces them. */
-  function buildRateRows(raw: unknown): RateRow[] {
+  function buildRateRows(raw: unknown, now: number): RateRow[] {
     const limits =
       typeof raw === "object" && raw !== null
         ? (raw as Record<string, Record<string, unknown> | undefined>)
@@ -308,17 +324,12 @@
         }
         continue;
       }
-      const resetsAt =
-        typeof win.resets_at === "number" && Number.isFinite(win.resets_at)
-          ? win.resets_at < 1e12
-            ? win.resets_at * 1000
-            : win.resets_at
-          : null;
+      const resetsAt = resetAtMs(win.resets_at);
       // rate_limits is a last-turn snapshot. Once its reset has passed, its
       // utilization / status describe the old window and must not be rendered
       // as live usage. Equality deliberately remains live: the contract is
       // strictly "past", which also makes the clock boundary deterministic.
-      const resetComplete = resetsAt !== null && resetsAt < Date.now();
+      const resetComplete = resetsAt !== null && resetsAt < now;
       rows.push({
         key,
         label: RATE_LABELS[key],
@@ -406,7 +417,28 @@
   //   true       → adapter は stamp する意思がある: value 到着で meter、
   //                未到着なら「取得中」placeholder
 
-  const ccRateRows = $derived(buildRateRows(envelope.ext?.rate_limits));
+  let rateClock = $state(Date.now());
+  $effect(() => {
+    const rawRateLimits = envelope.ext?.rate_limits;
+    // Depend on the timer tick so a crossed deadline re-arms this effect for
+    // the next window. Date.now() is sampled anew for every envelope too, so
+    // a new snapshot received after a long idle never uses an old clock.
+    rateClock;
+    const now = Date.now();
+    const next = nextRateReset(rawRateLimits, now);
+    if (next === null) return;
+    // The contract is strictly "past", so wake one millisecond after an exact
+    // reset boundary. Updating rateClock re-arms this effect for the next
+    // window without needing a perpetual ticker.
+    const timer = window.setTimeout(() => {
+      rateClock = Date.now();
+    }, Math.max(0, next - now) + 1);
+    return () => window.clearTimeout(timer);
+  });
+  const ccRateRows = $derived.by(() => {
+    rateClock;
+    return buildRateRows(envelope.ext?.rate_limits, Date.now());
+  });
   // Selectable models + per-model effort levels for the switch dialogs (#54).
   // Operator-only: ext is stripped for viewers (#46), so these stay empty and
   // the switch controls never render for non-operators.

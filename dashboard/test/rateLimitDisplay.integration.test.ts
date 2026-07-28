@@ -72,4 +72,15 @@ describe("AgentDetail rate-limit snapshot freshness (#164)", () => {
     expect(rateValue(target, "5h")).toBe("83%");
     expect(target.querySelector(".meter")?.getAttribute("data-status")).toBe("allowed_warning");
   });
+
+  it("panelを開いたまま次のresetを跨ぐとtimerでリセット済みへ更新する", async () => {
+    const target = await render(Date.parse("2026-07-28T10:00:01Z") / 1000);
+    expect(rateValue(target, "5h")).toBe("83%");
+
+    await vi.advanceTimersByTimeAsync(1001);
+    await tick();
+
+    expect(rateValue(target, "5h")).toBe("リセット済み");
+    expect(target.querySelector(".meter")?.getAttribute("data-status")).toBe("allowed");
+  });
 });
