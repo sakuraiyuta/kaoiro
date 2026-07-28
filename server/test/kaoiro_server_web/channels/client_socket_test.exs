@@ -137,5 +137,51 @@ defmodule KaoiroServerWeb.ClientSocketTest do
     end
   end
 
+  # ふじ must-fix A (#158): 稼働中 socket の role 再解決のために raw token を
+  # 抱えると、crash report / heap dump へ secret が戻る回帰になる。
+  describe "credential の再解決可能形 (#158)" do
+    test "socket assigns に raw token を残さない" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-secret:operator")
+
+      assert {:ok, socket} =
+               ClientSocket.connect(%{"token" => "tok-secret"}, %Phoenix.Socket{}, %{})
+
+      # assigns 全体を文字列化しても token が出てこないこと (crash report が
+      # 撮るのはこの形)。
+      refute inspect(socket.assigns, limit: :infinity) =~ "tok-secret"
+      assert {:token_fingerprint, fingerprint} = socket.assigns.credential
+      assert fingerprint == KaoiroServer.Auth.socket_id("tok-secret")
+    end
+
+    test "fingerprint からの再解決が降格と剥奪に追従する" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-secret:operator")
+
+      {:ok, socket} =
+        ClientSocket.connect(%{"token" => "tok-secret"}, %Phoenix.Socket{}, %{})
+
+      credential = socket.assigns.credential
+      assert ClientSocket.role_for(credential) == :operator
+
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-secret:viewer")
+      assert ClientSocket.role_for(credential) == :viewer
+
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-other:operator")
+      assert ClientSocket.role_for(credential) == nil
+    end
+
+    test "未設定・不正な fingerprint は fail-closed" do
+      assert KaoiroServer.Auth.client_role_by_fingerprint("client_socket:xxx") ==
+               {:error, :unauthorized}
+
+      assert KaoiroServer.Auth.client_role_by_fingerprint(nil) ==
+               {:error, :unauthorized}
+
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-secret:operator")
+
+      assert KaoiroServer.Auth.client_role_by_fingerprint("") ==
+               {:error, :unauthorized}
+    end
+  end
+
   defp identity, do: %{provider: "nextcloud", uid: "ao"}
 end

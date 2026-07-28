@@ -15,11 +15,14 @@ defmodule KaoiroServerWeb.ClientSocket do
   allow-list is rejected the same way. A misconfigured deployment is
   locked, not silently exposed as operator.
 
-  The credential itself is kept in the assigns so the resolution can be
-  REPEATED while the socket is open: `role_for/1` is what
-  `AgentsChannel`'s operator gate calls on every inbound operator
+  A re-resolvable form of the credential is kept in the assigns so the
+  resolution can be REPEATED while the socket is open: `role_for/1` is
+  what `AgentsChannel`'s operator gate calls on every inbound operator
   action, so an allow-list demotion lands on a socket that is already
-  connected instead of waiting for its next connect (issue #158).
+  connected instead of waiting for its next connect (issue #158). A
+  shared token is reduced to its `Auth.socket_id/1` fingerprint first —
+  the raw token never enters socket or channel state, so it cannot
+  resurface in a crash report or heap dump.
   """
 
   use Phoenix.Socket
@@ -50,10 +53,16 @@ defmodule KaoiroServerWeb.ClientSocket do
         {:ok,
          socket
          |> assign(:role, role)
-         |> assign(:credential, credential)
+         |> assign(:credential, re_resolvable(credential))
          |> assign(:socket_id, socket_id(credential))}
     end
   end
+
+  # What the gate re-resolves from later. A shared token is replaced by
+  # its fingerprint so the secret itself is not retained (ふじ must-fix A
+  # on issue #158); an OAuth identity is not a secret and is kept as is.
+  defp re_resolvable({:token, token}), do: {:token_fingerprint, Auth.socket_id(token)}
+  defp re_resolvable({:oauth, _identity} = credential), do: credential
 
   @doc """
   Resolves a credential to its role, or `nil` when it authorizes nothing
@@ -63,19 +72,24 @@ defmodule KaoiroServerWeb.ClientSocket do
   at login time, so removing or downgrading an allow-list line lands at
   the next call — connect (ADR-0042) or an operator action on an
   already-open socket (issue #158).
+
+  `{:token, token}` is the connect-time shape (the presented secret);
+  `{:token_fingerprint, fp}` is what an open socket carries, resolved by
+  digest so the token stays out of process state.
   """
   @spec role_for(term()) :: :viewer | :operator | nil
-  def role_for({:token, token}) do
-    case Auth.client_role(token) do
-      {:ok, role} -> role
-      {:error, _reason} -> nil
-    end
-  end
+  def role_for({:token, token}), do: unwrap(Auth.client_role(token))
+
+  def role_for({:token_fingerprint, fingerprint}),
+    do: unwrap(Auth.client_role_by_fingerprint(fingerprint))
 
   def role_for({:oauth, %{provider: provider, uid: uid}}),
     do: OAuthAllowlist.role_for(provider, uid)
 
   def role_for(_credential), do: nil
+
+  defp unwrap({:ok, role}), do: role
+  defp unwrap({:error, _reason}), do: nil
 
   defp socket_id({:token, token}), do: Auth.socket_id(token)
 

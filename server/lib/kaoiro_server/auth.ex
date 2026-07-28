@@ -178,6 +178,43 @@ defmodule KaoiroServer.Auth do
   def socket_id(_token), do: nil
 
   @doc """
+  Resolves a client token's role from its `socket_id/1` fingerprint
+  instead of the token itself (issue #158, ふじ must-fix A).
+
+  A live socket has to re-resolve its role on every operator action, but
+  retaining the shared token in socket/channel state to do so would put
+  the secret back into crash reports and heap dumps — exactly what
+  `socket_id/1` exists to avoid. Hashing every configured token and
+  comparing digests keeps the raw token out of process state entirely.
+
+  Scans the whole list in constant time like `client_role/1`, and is
+  fail-closed the same way: no configured tokens means no match.
+  """
+  def client_role_by_fingerprint(fingerprint) when is_binary(fingerprint) do
+    tokens = parse_pairs(Application.get_env(:kaoiro_server, :client_tokens))
+
+    case role_by_fingerprint(tokens, fingerprint) do
+      nil -> {:error, :unauthorized}
+      role -> {:ok, role}
+    end
+  end
+
+  def client_role_by_fingerprint(_fingerprint), do: {:error, :unauthorized}
+
+  defp role_by_fingerprint(tokens, fingerprint) do
+    Enum.reduce(tokens, nil, fn {token, role}, acc ->
+      if fingerprint_matches?(token, fingerprint), do: parse_role(role), else: acc
+    end)
+  end
+
+  defp fingerprint_matches?(token, fingerprint) do
+    case socket_id(token) do
+      nil -> false
+      id -> Plug.Crypto.secure_compare(id, fingerprint)
+    end
+  end
+
+  @doc """
   The `socket_id/1` counterpart for an OAuth identity (ADR-0042).
 
   Hashes `"oauth:<provider>:<uid>"` so an OAuth session gets a stable id
