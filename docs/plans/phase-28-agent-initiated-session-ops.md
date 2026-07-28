@@ -407,9 +407,12 @@ server 側 (もも 担当) を除く 3.5 群。
   ではない。
 - **CR-MF1 — `unknown_error` への潰し込みが未実装だった**。申告と plan と
   コメントには書いたのに、`sessionResetErrorReason()` は任意 string を
-  素通ししていた。対処: F7 closed vocabulary + channel が返す request 形式
-  拒否 (`invalid_mode` / `unknown_agent` / `forbidden`) を明示 whitelist し、
-  それ以外は `unknown_error`。transport test で pin。
+  素通ししていた。対処: この endpoint の合意語彙 4 値
+  (`agent_busy` / `session_reset_pending` / `unsupported_session_reset` /
+  `runner_unavailable`。もも の 9f6b7ca で server 側も同じ 4 値へ正規化
+  済み) を明示 whitelist し、それ以外は `unknown_error`。`timeout` は
+  payload 値ではなく transport 自身が起こすので whitelist には入れない。
+  transport test で pin。
 - **CR-MF2 — timeout / pending を「未実行」と断定していた**。Phoenix の
   push timeout は不受理を意味しない。反例: 1 回目受理 + reply 落ち →
   再送が `session_reset_pending` → 「実行されなかった」と通知、しかし

@@ -173,23 +173,22 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** The reasons a `session_reset_request` may be refused with — the closed
- *  vocabulary of ADR-0036 F7 plus the two request-shape rejections the
- *  channel adds (protocol.md `session_reset` / `session_reset_request`).
- *  A whitelist, not a filter: anything outside it is a server the wrapper
- *  does not understand, and guessing at its wording is worse than admitting
- *  that. */
+/** The reasons a `session_reset_request` reply may carry — exactly the four
+ *  the server can answer with (protocol.md `session_reset_request`; the
+ *  channel normalises malformed requests into `unsupported_session_reset`
+ *  rather than minting new tokens). A whitelist, not a filter: anything
+ *  outside it is a server the wrapper does not understand, and guessing at
+ *  its wording is worse than admitting that.
+ *
+ *  `timeout` is deliberately absent — it is not a payload value. The
+ *  transport raises it itself when the push never gets a reply, and the
+ *  distinction matters to the caller (see SessionResetCoordinator: a
+ *  timeout does not establish that nothing happened). */
 const SESSION_RESET_ERROR_REASONS: ReadonlySet<string> = new Set([
   "agent_busy",
-  "unsupported_session_reset",
   "session_reset_pending",
+  "unsupported_session_reset",
   "runner_unavailable",
-  "spawn_failed",
-  "rollback_failed",
-  "timeout",
-  "invalid_mode",
-  "unknown_agent",
-  "forbidden",
 ]);
 
 /** Collapses to this when the reply carries no recognised reason. */

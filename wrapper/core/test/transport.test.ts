@@ -366,6 +366,11 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
       { reason: "rm -rf / を実行しました" },
       { reason: "" },
       { reason: 42 },
+      // この endpoint の合意語彙は 4 値。lifecycle 全体の語彙 (spawn_failed
+      // 等) や旧 operator 経路の語彙 (invalid_mode / forbidden) は reply
+      // には現れないので通さない。
+      { reason: "spawn_failed" },
+      { reason: "invalid_mode" },
       {},
       "agent_busy",
       null,
