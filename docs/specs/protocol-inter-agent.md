@@ -568,6 +568,13 @@ agent が自分自身の session を作り直すよう operator に要求する 
   語彙外) を「実行されなかった」「context は変わっていない」と断定しない。
   「結果を確認できていない・reset が進行中の可能性がある」と正直に伝える。
   断定は agent がそれを前提に行動するぶんだけ害が大きい
+- **MUST**: 未確定を解消する**時限を切らない**。「次の turn までに何も
+  起きなければ実行されていない」といった期限は根拠が無い — server の
+  reset transaction は独自の timeout (60 秒) を持ち、wrapper の turn 境界
+  とは無関係で、短い turn の直後に受理済み reset が process を置換する列
+  は普通に成立する。確定は process 置換または operator 向け lifecycle
+  event のみが与える。通知は「再要求しない」「どちらの結果でも安全なよう
+  durable state を保つ」までに留める
 - **MUST**: server から返る reason は closed vocabulary の値のみ採用し、
   語彙外・非 object・空文字は `unknown_error` に潰す。reason は operator
   log と agent への注入 turn の両方に載るため、任意テキストの通り道に

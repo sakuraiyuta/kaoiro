@@ -46,13 +46,14 @@ export const SESSION_RESET_RETRY_DELAY_MS = 2_500;
 type ResetRefusalOutcome = "retryable" | "refused" | "unconfirmed";
 
 /** Refusals that establish "no reset was started" without being worth a
- *  retry: a capability the engine lacks, a malformed request, an authz
- *  failure, or a runner that is simply not there. */
+ *  retry. Scoped to the four-value reply contract of `session_reset_request`
+ *  (protocol.md): the engine cannot reset at all — which is also where the
+ *  channel normalises a malformed request — or the runner is simply not
+ *  there. Reasons from other reset paths never reach this endpoint, and
+ *  anything unrecognised is collapsed to `unknown_error` by the transport
+ *  before it gets here. */
 const DETERMINED_REFUSALS: ReadonlySet<string> = new Set([
   "unsupported_session_reset",
-  "invalid_mode",
-  "unknown_agent",
-  "forbidden",
   "runner_unavailable",
 ]);
 
@@ -243,12 +244,20 @@ export class SessionResetCoordinator {
         ? `セッションリセット (${mode}) の結果を確認できませんでした: ${reason}`
         : `セッションリセット (${mode}) は実行されませんでした: ${reason}`,
     );
+    // The unconfirmed wording states only what is known. It deliberately
+    // offers no deadline after which the reset "did not run" (CR-MF2-R): the
+    // server's reset transaction runs on its own 60 s timeout with no
+    // relation to this wrapper's turn boundaries, so a short turn can easily
+    // end before an accepted reset replaces the process. The only
+    // authoritative answers are the process actually being replaced or an
+    // operator-visible lifecycle event — neither of which this notice can
+    // promise.
     const text = unconfirmed
       ? `[kaoiro] The session reset you requested (mode: ${mode}) could not be confirmed: ${reason}. ` +
         "This does NOT mean it was cancelled — the request may have reached the server and a reset " +
         "may still be running. Do not assume your context is about to be replaced, and do not assume " +
-        "it is safe either: make sure anything you still need is written somewhere durable. Do not " +
-        "request another reset yet; if none has happened by the end of the next turn, it did not run."
+        "it is safe either. Do not request another reset. Keep working in a way that is safe under " +
+        "both outcomes: make sure anything you still need is written somewhere durable."
       : `[kaoiro] The session reset you requested (mode: ${mode}) was not carried out. ` +
         `The server refused it: ${reason}. Your context is unchanged, so continue as you were. ` +
         "You may request it again at a better moment; the operator has to approve it again.";

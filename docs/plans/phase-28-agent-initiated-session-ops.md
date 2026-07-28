@@ -422,6 +422,18 @@ server 側 (もも 担当) を除く 3.5 群。
   よい) / `unconfirmed` (timeout・`session_reset_pending`・`spawn_failed`・
   `unknown_error` 等 — 再送せず、断定もしない)。既定は `unconfirmed`。
   正直な文言のコストは agent の慎重さ、断定のコストは誤った前提での行動。
+- **CR-MF2-R — 未確定通知に時限断定が残っていた**。「次の turn の終わり
+  までに何も起きなければ実行されていない」と書いていたが、server の reset
+  transaction は `SessionResets.@timeout_ms` = 60 秒で wrapper の turn 境界
+  とは無関係。短い turn の直後に受理済み reset が process を置換する列は
+  普通に成立する。対処: 時限文を削除し、確定は process 置換 / operator
+  lifecycle event のみとする。通知は「再要求しない」「どちらの結果でも
+  安全なよう durable state を保つ」までに留め、断定文言 (`was not carried
+  out` / `it did not run` / `next turn` 等) が含まれないことを negative
+  pin で固定した。
+- **suggestion 3 件 (全採用)**: `requestSessionReset` の JSDoc を 4 値契約へ
+  同期 / transport test の既知 reason を 4 値の table pin へ /
+  `DETERMINED_REFUSALS` から到達不能な 3 値を落とし 4 値契約へ整理。
 - **CR-MF3 — `SessionResetStarted` の TS 型が wire と未同期**。
   `origin: "operator" | "agent_self"` と `reason?` を protocol と dashboard
   parser に追加。表示はまだ無いが parser が保持する。**不正 origin は

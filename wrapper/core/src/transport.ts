@@ -691,10 +691,12 @@ export class ServerLink {
    *
    *  Resolves when the server accepted the request (the reset itself then
    *  runs through the ordinary runner path and this process is replaced).
-   *  Rejects with the server's closed-vocabulary reason — `agent_busy`,
-   *  `session_reset_pending`, `unsupported_session_reset`, `invalid_mode`
-   *  (ADR-0036 F7) — so the caller can retry or report instead of assuming
-   *  a reset that never happened. */
+   *  Rejects with the reply's closed-vocabulary reason — `agent_busy`,
+   *  `session_reset_pending`, `unsupported_session_reset` or
+   *  `runner_unavailable` (protocol.md `session_reset_request`) — or with
+   *  `timeout` when the push itself never got a reply, or `unknown_error`
+   *  for anything outside that contract. The caller must distinguish these:
+   *  a rejection is NOT proof that no reset started. */
   requestSessionReset(mode: "new" | "clear", reason?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       this.#channel

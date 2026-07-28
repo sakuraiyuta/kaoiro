@@ -103,6 +103,24 @@ function harness(outcomes: (string | null)[]): Harness {
 const settle = (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, 0));
 
+/** Negative pin for the unconfirmed notice (CR-MF2 / CR-MF2-R). Nothing in
+ *  it may state that the reset did not happen, nor name a deadline after
+ *  which the agent may conclude that: the server's reset transaction has its
+ *  own 60 s timeout and no relation to this wrapper's turn boundaries, so an
+ *  accepted reset can replace the process after a short turn has ended. */
+function expectNoAssertion(notice: string | undefined): void {
+  expect(notice).toBeTypeOf("string");
+  for (const claim of [
+    "was not carried out",
+    "context is unchanged",
+    "it did not run",
+    "did not happen",
+    "next turn",
+  ]) {
+    expect(notice).not.toContain(claim);
+  }
+}
+
 describe("SessionResetCoordinator", () => {
   it("turn 境界まで送らず、境界で 1 度だけ送る (ADR-0043 D3)", async () => {
     const h = harness([null]);
@@ -181,9 +199,7 @@ describe("SessionResetCoordinator", () => {
     expect(h.notices).toHaveLength(1);
     expect(h.notices[0]).toContain("could not be confirmed");
     expect(h.notices[0]).toContain("may still be running");
-    // 断定文言を混ぜないこと。
-    expect(h.notices[0]).not.toContain("was not carried out");
-    expect(h.notices[0]).not.toContain("context is unchanged");
+    expectNoAssertion(h.notices[0]);
     expect(h.logs.some((l) => l.includes("確認できませんでした"))).toBe(true);
   });
 
@@ -197,7 +213,7 @@ describe("SessionResetCoordinator", () => {
     await settle();
     expect(h.requests).toHaveLength(1);
     expect(h.notices[0]).toContain("could not be confirmed");
-    expect(h.notices[0]).not.toContain("was not carried out");
+    expectNoAssertion(h.notices[0]);
   });
 
   it("agent_busy 再送後の timeout も結果未確認として扱う (CR-MF2)", async () => {
@@ -207,7 +223,21 @@ describe("SessionResetCoordinator", () => {
     await settle();
     expect(h.requests).toHaveLength(2);
     expect(h.notices[0]).toContain("could not be confirmed");
-    expect(h.notices[0]).not.toContain("was not carried out");
+    expectNoAssertion(h.notices[0]);
+  });
+
+  // CR-MF2-R: 未確認のまま何をすべきかは伝える。「再要求しない」と
+  // 「どちらの結果でも安全なよう durable state を保つ」だけに留め、
+  // 時限を切らない。
+  it("未確認通知は再要求の抑止と durable state だけを求める (CR-MF2-R)", async () => {
+    const h = harness(["unknown_error"]);
+    h.coordinator.reserve("clear");
+    h.coordinator.onTurnEnd();
+    await settle();
+    expect(h.notices[0]).toContain("Do not request another reset");
+    expect(h.notices[0]).toContain("safe under both outcomes");
+    expect(h.notices[0]).toContain("durable");
+    expectNoAssertion(h.notices[0]);
   });
 
   it("確定的な拒否は再送しないが断定はしてよい (CR-MF2)", async () => {

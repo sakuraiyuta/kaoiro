@@ -355,10 +355,16 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
     expect(mock.lastPush?.payload).toEqual({ mode: "clear" });
   });
 
-  it("closed vocabulary の reason はそのまま渡す", async () => {
+  it.each([
+    "agent_busy",
+    "session_reset_pending",
+    "unsupported_session_reset",
+    "runner_unavailable",
+  ])("合意語彙の reason %s はそのまま渡す", async (reason) => {
+    mock.lastPush = null;
     const { pending } = push();
-    mock.lastPush!.receivers.get("error")!({ reason: "agent_busy" });
-    await expect(pending).rejects.toThrow("agent_busy");
+    mock.lastPush!.receivers.get("error")!({ reason });
+    await expect(pending).rejects.toThrow(reason);
   });
 
   it("語彙外・非 object・空文字は unknown_error に潰す (CR-MF1)", async () => {
