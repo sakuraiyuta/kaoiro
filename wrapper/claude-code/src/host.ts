@@ -1213,13 +1213,14 @@ export class AgentHost implements EngineAdapter {
       const compact = sdkMessageToCompactNotice(message);
       if (compact) {
         this.#emitLog({ kind: "system", text: compact.text });
-        if (compact.kind === "compact_boundary") {
-          // Eventual meter update only. Track S measured getContextUsage()
-          // right after a boundary still reporting the PRE-compact total, so
-          // the freed-token numbers the operator reads come from the boundary
-          // metadata above; this refresh just lets ext.context catch up once
-          // the SDK's own accounting settles.
-          void this.#refreshContextUsage();
+        // A boundary or a reset ENDS the context epoch the current reading
+        // belongs to; `compacting` / a failed `compact_result` do not (nothing
+        // was discarded yet). 藤 review MF1.
+        if (
+          compact.kind === "compact_boundary" ||
+          compact.kind === "conversation_reset"
+        ) {
+          this.#invalidateContextEpoch();
         }
       }
       const result = sdkMessageToResult(message);
@@ -1746,6 +1747,31 @@ export class AgentHost implements EngineAdapter {
         void this.#refreshContextUsage();
       }
     }
+  }
+
+  /** Closes the current context-usage epoch and opens the next one
+   *  (phase-28 A1, 藤 review MF1). Same three steps setModel() runs when the
+   *  model — and with it the context window — changes, in the same order:
+   *
+   *  1. bump `#contextGeneration` FIRST, so any refresh already awaiting the
+   *     SDK mismatches on completion and its pre-boundary reading is dropped
+   *     instead of landing in `#context` after the epoch it measured ended;
+   *  2. null `#context`, so `#statusExt` stops stamping the stale number;
+   *  3. re-emit state when there WAS a reading, retracting `ext.context` from
+   *     the operator's view. Without this a failed follow-up refresh would
+   *     leave the pre-compact figure on screen and in whoami indefinitely —
+   *     "unknown" is the honest reading between epochs, not the old value.
+   *
+   *  The follow-up refresh is the eventual meter update only: Track S measured
+   *  `getContextUsage()` right after a boundary still reporting the PRE-compact
+   *  total, so the freed-token numbers the operator reads come from the
+   *  boundary metadata in the log line, not from here. */
+  #invalidateContextEpoch(): void {
+    const hadReading = this.#context !== null;
+    this.#contextGeneration += 1;
+    this.#context = null;
+    if (hadReading) this.#emitState(this.#machine.state);
+    void this.#refreshContextUsage();
   }
 
   /** Init-time refresh with a small bounded retry (ADR-0040 phase-21,

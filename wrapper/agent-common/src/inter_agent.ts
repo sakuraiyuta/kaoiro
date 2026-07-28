@@ -52,13 +52,15 @@ export interface WhoamiSnapshot {
   permission_mode?: string;
   fast_mode?: string;
   session_id?: string;
-  /** Own context-window usage (phase-28 A2, #168). Same three numbers a peer
-   *  reads via `list_agents` (`DirectoryContext`), so self and peer views of
-   *  context never disagree. The host's LAST SUCCESSFUL measurement — whoami
-   *  reads the cached value and never triggers a refresh, so it can lag the
-   *  current turn. Omitted — never zeroed or estimated — when the engine has
-   *  not reported it (codex: `supports_context_usage: false`), so absent
-   *  keeps meaning unknown. */
+  /** Own context-window usage (phase-28 A2, #168). Same shape and semantics
+   *  as the `context` a peer reads via `list_agents` (`DirectoryContext`), so
+   *  the two are directly comparable — not necessarily the same instant: the
+   *  peer's copy travels through the server's directory projection, so the
+   *  two readings can differ transiently. The host's LAST SUCCESSFUL
+   *  measurement — whoami reads the cached value and never triggers a
+   *  refresh, so it can lag the current turn. Omitted — never zeroed or
+   *  estimated — when the engine has not reported it (codex:
+   *  `supports_context_usage: false`), so absent keeps meaning unknown. */
   context?: DirectoryContext;
 }
 

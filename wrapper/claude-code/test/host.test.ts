@@ -279,6 +279,151 @@ describe("AgentHost — query injection", () => {
     expect(getContextUsage).toHaveBeenCalled();
   });
 
+  // 藤 review MF1: boundary / reset は context epoch の確定境界。generation を
+  // 上げないと、境界前から in-flight の応答が境界後に landing して圧縮前の値が
+  // 残る。setModel と同じ invalidate を踏むことを pin する。
+  it("compact_boundary は取得済み context を retract する (MF1)", async () => {
+    const envs: Envelope[] = [];
+    const pre = { totalTokens: 180000, maxTokens: 200000, percentage: 90 };
+    let call = 0;
+    // 境界後の refresh は決着させない — 「次の計測が成功するまで absent」を
+    // 決定論的に観測するため。
+    const getContextUsage = vi.fn(async () => {
+      call += 1;
+      if (call === 1) return pre;
+      await new Promise(() => {});
+      return pre;
+    });
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+        // 圧縮前の値が #context に載るまで待つ。
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "auto", pre_tokens: 180000 },
+        });
+      }
+      return asQuery(gen(), async () => {}, getContextUsage);
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    const ctxOf = (e: Envelope) =>
+      (e.ext as { context?: { used_tokens?: number } }).context;
+    // 境界前は圧縮前の値が載り、境界を跨いだ最後の envelope では消えている。
+    expect(envs.some((e) => ctxOf(e)?.used_tokens === 180000)).toBe(true);
+    expect(ctxOf(envs.at(-1) as Envelope)).toBeUndefined();
+  });
+
+  it("境界前 inflight の応答は epoch 不一致で採用しない (MF1)", async () => {
+    const stale = { totalTokens: 180000, maxTokens: 200000, percentage: 90 };
+    let releaseStale: () => void = () => {};
+    const stalePending = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    let call = 0;
+    // 境界後の refresh は決着させない。こうすると #context に入りうる値は
+    // 境界前 inflight の stale だけになり、「捨てられた」ことを直接観測できる
+    // (境界後に fresh を返させると、fix の有無に関わらず最終値が fresh に
+    // なってしまい MF1 を差別化できない)。
+    const getContextUsage = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        // 境界前に発火した refresh。境界を跨いでから resolve させる。
+        await stalePending;
+        return stale;
+      }
+      await new Promise(() => {});
+      return stale;
+    });
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        yield msg({
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "manual", pre_tokens: 180000 },
+        });
+        releaseStale();
+        // stale が resolve して landing しうる猶予を与える。
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      return asQuery(gen(), async () => {}, getContextUsage);
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(getContextUsage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // 圧縮前の epoch で測った値は、境界後に届いても採用されない。
+    expect(host.statusSnapshot()).not.toHaveProperty("context");
+  });
+
+  it("conversation_reset も context epoch を切る (MF1)", async () => {
+    const envs: Envelope[] = [];
+    const pre = { totalTokens: 50000, maxTokens: 200000, percentage: 25 };
+    let call = 0;
+    const getContextUsage = vi.fn(async () => {
+      call += 1;
+      if (call === 1) return pre;
+      await new Promise(() => {});
+      return pre;
+    });
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield result("success", { result: "ok" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield msg({ type: "conversation_reset", new_conversation_id: "c-3" });
+      }
+      return asQuery(gen(), async () => {}, getContextUsage);
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    const ctxOf = (e: Envelope) =>
+      (e.ext as { context?: { used_tokens?: number } }).context;
+    // reset 前には載っていた値が、reset 後の envelope では消えている。
+    expect(envs.some((e) => ctxOf(e)?.used_tokens === 50000)).toBe(true);
+    expect(ctxOf(envs.at(-1) as Envelope)).toBeUndefined();
+  });
+
+  // 藤 review S1: compact_error は SDK 由来の任意長文字列。log 上限を
+  // 素通りしないことを path 全体で pin する。
+  it("巨大な compact_error は system log として clip される (S1)", async () => {
+    const logs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      queryFn: scriptedQuery([
+        msg({
+          type: "system",
+          subtype: "status",
+          status: null,
+          compact_result: "failed",
+          compact_error: "e".repeat(20_000),
+        }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const line = logs.find((l) => l.payload.kind === "system");
+    expect(line?.payload.truncated).toBe(true);
+    expect(
+      Buffer.byteLength(line?.payload.text as string, "utf8"),
+    ).toBeLessThanOrEqual(16_384);
+  });
+
   it("コスト不明の result は ext.cost を付けない", async () => {
     const logs: Envelope[] = [];
     const host = new AgentHost(config, {

@@ -464,8 +464,11 @@ wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allow
 
 `context` は phase-28 A2 ([#168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168))
 の追補で、自分の context window 使用量 `{used_tokens, max_tokens,
-used_percentage}` を返す。peer が `list_agents` で読む形と同一 (`DirectoryContext`)
-なので、自己認識と他者認識が食い違わない。
+used_percentage}` を返す。peer が `list_agents` で読む `context` と
+**shape も semantics も同一** (`DirectoryContext`) なので、自己認識と
+他者認識をそのまま比較できる。ただし同時点の値とは限らない — peer 側の
+コピーは server の directory projection を経由するため、配送差で一時的に
+値がずれうる。
 
 - **cached last successful measurement**: whoami 自身は refresh を起こさない。
   host が最後に成功した計測値をそのまま返すため、現ターンの実値から遅れうる。
@@ -473,6 +476,10 @@ used_percentage}` を返す。peer が `list_agents` で読む形と同一 (`Dir
   常時参照を誘発する)
 - `supports_context_usage: false` の engine (codex) は key ごと省略する。
   **absent = unknown** であり 0 でも「余裕あり」でもない
+- context 圧縮 / 会話リセットの境界で epoch が切れ、次の計測が成功する
+  までは key ごと省略される (圧縮前の値を残さない)。取得済みだった値は
+  その時点で撤回されるので、absent は「一度も測っていない」だけでなく
+  「直前の値がもう有効でない」も意味する
 - tool 説明では「必要なときに見る」に留め、常時参照を促さない
   (context anxiety 回避。#168 comment-2287 の決定 P3)
 
