@@ -22,8 +22,18 @@ defmodule KaoiroServer.SessionResetsTest do
     {:ok, sr_pid} = SessionResets.start_link(name: resets_name)
 
     on_exit(fn ->
-      if Process.alive?(sr_pid), do: GenServer.stop(sr_pid)
-      if Process.alive?(sp_pid), do: GenServer.stop(sp_pid)
+      # #169: alive? と stop の間にテスト終了のリンク死が挟まると
+      # `no process` / `:sys.terminate` で teardown だけが落ちる
+      # (full run seed 4 で実測)。詳細は session_starts_test.exs の同
+      # cushion を参照。
+      for pid <- [sr_pid, sp_pid] do
+        try do
+          if Process.alive?(pid), do: GenServer.stop(pid)
+        catch
+          :exit, _ -> :ok
+        end
+      end
+
       File.rm(pointers_path)
     end)
 

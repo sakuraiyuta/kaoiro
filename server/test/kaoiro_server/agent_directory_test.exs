@@ -11,7 +11,15 @@ defmodule KaoiroServer.AgentDirectoryTest do
     {:ok, pid} = AgentDirectory.start_link(name: name, path: path)
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      # #169: alive? と stop の間にテスト終了のリンク死が挟まると
+      # `no process` で teardown だけが落ちる。詳細は
+      # session_starts_test.exs の同 cushion を参照。
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
+      end
+
       File.rm(path)
     end)
 
