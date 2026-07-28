@@ -68,6 +68,15 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
   `compact_metadata.trigger/pre_tokens`) を受けたら operator に見える形で
   log event を emit する (既存の log emit パターンに従う。wire 変更が
   必要なら `docs/specs/protocol.md` も更新)。
+- **決定 (2026-07-28, あお の提起で確定)**: `LogKind` が閉じた 4 値の
+  ため、`protocol/src/index.ts` と dashboard に log kind `"system"` を
+  追加する (C 案)。既存 kind の流用 (assistant/tool_result への偽装) は
+  Phase B で同経路を使う際に意味論の誤りが増幅するため不採用。server は
+  kind を検証せず素通しのため変更不要。commit は (i) protocol/dashboard
+  の語彙追加、(ii) wrapper の可視化実装 + A2、の 2 本に分割する。
+- log event には boundary metadata の実値 (pre_tokens / post_tokens) を
+  載せる。compact 成否・削減量の正は boundary metadata (Track S 実測:
+  直後の `getContextUsage()` は減少を反映しない)。
 - `SDKStatusMessage` の `compact_result: 'failed'` + `compact_error` は
   エラーとして log する。`SDKStatus = 'compacting'` の state 反映は
   任意 (state 語彙の追加が要るなら今回は見送り、log のみで可)。
