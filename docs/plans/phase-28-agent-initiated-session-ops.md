@@ -77,6 +77,12 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 - log event には boundary metadata の実値 (pre_tokens / post_tokens) を
   載せる。compact 成否・削減量の正は boundary metadata (Track S 実測:
   直後の `getContextUsage()` は減少を反映しない)。
+- **log 規約 (ふじ suggestion 採用)**: success は `compact_boundary` を
+  正として 1 行 (`trigger`, `pre_tokens`, 任意で `post_tokens` /
+  `duration_ms`)。`compact_result:'success'` で別の成功行を出して二重
+  表示しない。failure は `compact_error` を既存 log 上限で clip。
+  `conversation_reset` は `new_conversation_id` を operator-only log に
+  含める。内部 `preserved_*` 等の未知 metadata は載せない。
 - `SDKStatusMessage` の `compact_result: 'failed'` + `compact_error` は
   エラーとして log する。`SDKStatus = 'compacting'` の state 反映は
   任意 (state 語彙の追加が要るなら今回は見送り、log のみで可)。
@@ -101,12 +107,19 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 - `WHOAMI_DESCRIPTION` (tool 説明) に context field の説明を追記。
   常時参照を促す文言にはしない (P3: context anxiety 回避。「委任判断や
   operator への報告で必要なときに見る」程度)。
+- **(ふじ suggestion 採用)** 返す値は last successful snapshot であり
+  whoami 自体は refresh しない旨を description と spec に明記する
+  ("cached last successful measurement; whoami itself does not refresh")。
+  false precision の防止。on-demand refresh は追加しない。
 - `docs/specs/protocol-inter-agent.md` の whoami 節を更新。
 
 ## Track A 共通の完了条件
 
 - `cd wrapper && pnpm test && pnpm typecheck` green (既存 suite に
   合わせてテスト追加)。
+- **(ふじ must-fix, 2026-07-28)** C 案で protocol/dashboard に触れるため
+  `protocol`: `pnpm typecheck`、`dashboard`: `pnpm check && pnpm test`
+  も green にする (system kind の render test 追加を含む)。
 - 変更は上記 scope に限定 (閾値通知・MCP tool 追加・server 変更は
   Phase B/C。scope creep 禁止)。
 - commit は日本語 conventional 形式、path 指定 add。push は
