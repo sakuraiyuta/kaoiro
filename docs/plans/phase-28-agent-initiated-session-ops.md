@@ -156,12 +156,56 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 - 帰結: ADR-0036 Context の「CLI native slash command parser を経由
   しない」は Codex 限定の記述へ要修正 (Phase B 着手時に ADR 追補)。
 
-## Phase B / C の概要 (後続詳細化)
+## Phase B — 自発 compact (詳細化 2026-07-28、クロエ裁定)
 
-- B: wrapper 機械判定 (`used_percentage` 閾値) → 超過時に agent へ通知
-  注入 → agent が判断し permission_broker 承認経由で `/compact` 発動。
-  Track S 通過により **prompt 経由 + boundary 監視で実装可能と確定**。
-  manual compact は十数秒かかる点を UX (state 表示) 設計に織り込む。
+設計方針: **wrapper + docs に閉じる** (server / protocol wire 変更なし)。
+
+| Track | 内容 | 担当 |
+|---|---|---|
+| B1 | 閾値通知: `#context` 更新時に wrapper が機械判定し、既定 70% 超過で agent へ通知を 1 回注入 | あお |
+| B2 | MCP tool `request_compact`: permission_broker 都度承認 → 承認後 wrapper が instruction queue へ `/compact` を投入 | あお |
+| B3 | ADR-0036 Context の「CLI native slash command parser を経由しない」を Codex 限定へ追補 (Track S 実測を根拠に) | もも |
+| BR | B1+B2 の diff レビュー | ふじ (quota 窓明け 8/3 以降) |
+
+### B1 — 閾値通知
+
+- 判定点: `#context` が更新される箇所 (refresh 成功時)。既定閾値 70%
+  (`used_percentage >= 70`)。設定で上書き可能なら configurable に、
+  config 配線が重ければ定数 + TODO で可。
+- 注入は **epoch 毎に 1 回** (dedup。`#invalidateContextEpoch` で解除)。
+  毎 turn の再注入や常時表示は禁止 (P3: context anxiety 回避)。
+- 通知文言は「context が N% に達した。回復するなら request_compact を
+  使える。作業の切りが良いところで判断せよ」程度の中立なもの。
+  切迫を煽らない。
+- 注入経路は既存 instruction queue (`host.send`) を使い、operator
+  instruction と衝突しない直列化を維持。
+
+### B2 — request_compact tool
+
+- wrapper-local MCP tool (`inter_agent.ts` の 3 tool と同居)。入力なし
+  (または任意の reason 文字列)。
+- フロー: tool call → permission_broker で operator に承認要求
+  (ADR-0028 D4 のパターン、P2 準拠) → 承認なら `/compact` を instruction
+  queue へ投入 (queue が turn 境界を自然に保証、ADR-0036 F6 と非衝突)
+  → tool result は「予約受理」を返す (compact 完了は boundary log で観測)。
+- 拒否なら tool result にその旨。timeout は permission_broker の既存
+  規約 (未設定なら無期限待機) に従う。
+- 85% 自動 fallback は kaoiro 側では実装しない。SDK native の
+  autoCompact を最終防衛線とする (P2 の全承認原則と矛盾させない)。
+- codex wrapper には tool を出さない (compact 経路なし、engine 側
+  auto-compaction 前提)。
+- `docs/specs/protocol-inter-agent.md` に tool 仕様を追記 (B2 内で実施。
+  B3 の ADR とはファイル非重複)。
+
+### B 共通の完了条件
+
+- wrapper test/typecheck green (B1 の dedup、B2 の承認/拒否/投入をテスト)。
+- manual compact ~13.7 秒 (Track S 実測) — 発動中は既存の
+  `status:compacting` log (Phase A) で観測可能なため、追加の state 語彙は
+  導入しない。
+- push はレビュー通過後 (BR は 8/3 以降のため、それまで unpushed 保持)。
+
+## Phase C の概要 (後続詳細化)
 - C: wrapper→server 新 control event + 新 MCP tool + deferred reset
   (turn 境界発火)。ADR-0036 F1 (operator-only) / F6 (busy 拒否) の改訂
   を伴う。permission は全承認から開始 (P2)。
