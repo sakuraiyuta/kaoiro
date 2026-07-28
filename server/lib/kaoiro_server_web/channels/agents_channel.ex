@@ -71,6 +71,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.SessionResets
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentId
+  alias KaoiroServerWeb.ClientSocket
 
   # Resource bound for an operator instruction; generous for prose,
   # far below the wrapper-side envelope cap.
@@ -1511,8 +1512,38 @@ defmodule KaoiroServerWeb.AgentsChannel do
     "internal_error"
   end
 
+  # The role in the assigns is a CONNECT-TIME snapshot, so an allow-list
+  # demotion (ADR-0042) would leave a socket that is already open acting
+  # as operator until it happens to reconnect — the dashboard slides its
+  # cookie only every 12 h, so the refresh path alone is far too slow to
+  # be the enforcement point (issue #158). Resolve from the credential
+  # instead, which reads the allow-list / token list live.
   defp require_operator(socket) do
-    if socket.assigns[:role] == :operator, do: :ok, else: {:error, :forbidden}
+    if current_role(socket) == :operator, do: :ok, else: {:error, :forbidden}
+  end
+
+  # A resolved role that no longer matches the snapshot also invalidates
+  # everything else this socket derives from the snapshot — above all the
+  # operator-only fan-out in handle_out, which cannot afford a live lookup
+  # per envelope per subscriber. Dropping the socket (the issue #47
+  # revocation path) makes the client reconnect and rebuild all of it from
+  # a fresh connect, and gets the UI off the operator controls it can no
+  # longer use.
+  defp current_role(socket) do
+    snapshot = socket.assigns[:role]
+    socket_id = socket.assigns[:socket_id]
+
+    case ClientSocket.role_for(socket.assigns[:credential]) do
+      ^snapshot ->
+        snapshot
+
+      resolved ->
+        if is_binary(socket_id) do
+          KaoiroServerWeb.Endpoint.broadcast(socket_id, "disconnect", %{})
+        end
+
+        resolved
+    end
   end
 
   defp fetch_agent_id(%{"agent_id" => agent_id} = _payload)

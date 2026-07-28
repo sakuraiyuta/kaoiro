@@ -14,6 +14,12 @@ defmodule KaoiroServerWeb.ClientSocket do
   rejected (fail-closed, issue #28), and an identity that has left the
   allow-list is rejected the same way. A misconfigured deployment is
   locked, not silently exposed as operator.
+
+  The credential itself is kept in the assigns so the resolution can be
+  REPEATED while the socket is open: `role_for/1` is what
+  `AgentsChannel`'s operator gate calls on every inbound operator
+  action, so an allow-list demotion lands on a socket that is already
+  connected instead of waiting for its next connect (issue #158).
   """
 
   use Phoenix.Socket
@@ -33,39 +39,48 @@ defmodule KaoiroServerWeb.ClientSocket do
       ticket_credential(socket, params["ticket"]) || credential(params["token"]) ||
         session_credential(connect_info)
 
-    case authorize(credential) do
-      {:ok, role, socket_id} ->
+    case role_for(credential) do
+      nil ->
+        :error
+
+      role ->
         # Stamp a credential-derived id (issue #47) so a logout /
         # revocation can target this socket via Endpoint.disconnect.
         # Derived from the underlying token or identity, never stored raw.
         {:ok,
          socket
          |> assign(:role, role)
-         |> assign(:socket_id, socket_id)}
-
-      :error ->
-        :error
+         |> assign(:credential, credential)
+         |> assign(:socket_id, socket_id(credential))}
     end
   end
 
-  defp authorize({:token, token}) do
+  @doc """
+  Resolves a credential to its role, or `nil` when it authorizes nothing
+  (unknown token, identity off the allow-list, unusable shape).
+
+  Both sources are consulted live rather than trusting a role captured
+  at login time, so removing or downgrading an allow-list line lands at
+  the next call — connect (ADR-0042) or an operator action on an
+  already-open socket (issue #158).
+  """
+  @spec role_for(term()) :: :viewer | :operator | nil
+  def role_for({:token, token}) do
     case Auth.client_role(token) do
-      {:ok, role} -> {:ok, role, Auth.socket_id(token)}
-      {:error, _reason} -> :error
+      {:ok, role} -> role
+      {:error, _reason} -> nil
     end
   end
 
-  # The allow-list is consulted on every connect rather than trusting a
-  # role stored at login time, so removing a line drops the identity at
-  # its next reconnect (ADR-0042).
-  defp authorize({:oauth, %{provider: provider, uid: uid}}) do
-    case OAuthAllowlist.role_for(provider, uid) do
-      nil -> :error
-      role -> {:ok, role, Auth.oauth_socket_id(provider, uid)}
-    end
-  end
+  def role_for({:oauth, %{provider: provider, uid: uid}}),
+    do: OAuthAllowlist.role_for(provider, uid)
 
-  defp authorize(_credential), do: :error
+  def role_for(_credential), do: nil
+
+  defp socket_id({:token, token}), do: Auth.socket_id(token)
+
+  defp socket_id({:oauth, %{provider: provider, uid: uid}}),
+    do: Auth.oauth_socket_id(provider, uid)
 
   # Decrypts a short-lived WS ticket back to its credential (ADR-0013), or
   # nil when absent/expired/forged — Vite cannot carry the cookie on a WS

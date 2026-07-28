@@ -42,13 +42,37 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       )
   end
 
+  # The operator gate re-resolves the role from the credential (#158), so
+  # a test socket carries the same three assigns ClientSocket.connect/3
+  # stamps: role snapshot, credential, and the credential-derived id the
+  # force-disconnect broadcast targets.
+  setup do
+    Application.put_env(
+      :kaoiro_server,
+      :client_tokens,
+      "tok-operator:operator,tok-viewer:viewer"
+    )
+
+    on_exit(fn -> Application.delete_env(:kaoiro_server, :client_tokens) end)
+  end
+
   defp join_as(role) do
     {:ok, _reply, socket} =
       KaoiroServerWeb.ClientSocket
-      |> socket(nil, %{role: role})
+      |> socket(nil, client_assigns(role))
       |> subscribe_and_join(KaoiroServerWeb.AgentsChannel, "agents:lobby")
 
     socket
+  end
+
+  defp client_assigns(role) do
+    token = "tok-#{role}"
+
+    %{
+      role: role,
+      credential: {:token, token},
+      socket_id: KaoiroServer.Auth.socket_id(token)
+    }
   end
 
   defp wait_until_clear_workflow(predicate, attempts \\ 50) do
@@ -75,6 +99,108 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     assert_push "snapshot", %{"agents" => agents}
     assert agents[agent_id] == envelope
+  end
+
+  # connect 時の role は snapshot にすぎない (#158)。許可リスト/トークン
+  # 側の降格が、接続しっぱなしの socket に効くことを pin する。
+  describe "operator gate の role 再解決 (#158)" do
+    test "降格した operator の操作は forbidden になり socket が切られる" do
+      agent_id = "test.demote-1"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      @endpoint.subscribe(KaoiroServer.Auth.socket_id("tok-operator"))
+
+      # 稼働中に role を落とす (許可リスト行の編集に相当)。
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-operator:viewer")
+
+      ref =
+        push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+
+      # handle_out の operator 限定 fan-out は snapshot を見続けるので、
+      # 判定不一致を検知した時点で張り直させる。
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
+    test "credential ごと無効化された socket も forbidden + 切断" do
+      agent_id = "test.demote-2"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      @endpoint.subscribe(KaoiroServer.Auth.socket_id("tok-operator"))
+
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-other:operator")
+
+      ref =
+        push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
+    test "role が変わっていなければ切断しない" do
+      agent_id = "test.demote-3"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      @endpoint.subscribe(KaoiroServer.Auth.socket_id("tok-operator"))
+
+      ref =
+        push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
+
+      assert_reply ref, :ok
+      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 50
+    end
+
+    test "昇格も張り直しの対象 (fan-out を新しい role で組み直す)" do
+      agent_id = "test.demote-4"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+      @endpoint.subscribe(KaoiroServer.Auth.socket_id("tok-viewer"))
+
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-viewer:operator")
+
+      ref =
+        push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
+
+      assert_reply ref, :ok
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
+    test "OAuth 許可リストの降格が稼働中 socket に効く (ADR-0042)" do
+      agent_id = "test.demote-oauth"
+      put_agent(agent_id)
+
+      on_exit(fn ->
+        Application.delete_env(:kaoiro_server, :oauth_allowlist_path)
+      end)
+
+      KaoiroServer.OAuthAllowlistFixture.put_allowlist("github:ao:operator\n")
+      socket_id = KaoiroServer.Auth.oauth_socket_id("github", "ao")
+
+      {:ok, _reply, socket} =
+        KaoiroServerWeb.ClientSocket
+        |> socket(nil, %{
+          role: :operator,
+          credential: {:oauth, %{provider: "github", uid: "ao"}},
+          socket_id: socket_id
+        })
+        |> subscribe_and_join(KaoiroServerWeb.AgentsChannel, "agents:lobby")
+
+      assert_push "snapshot", %{"agents" => _}
+      @endpoint.subscribe(socket_id)
+
+      KaoiroServer.OAuthAllowlistFixture.put_allowlist("github:ao:viewer\n")
+
+      ref =
+        push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
   end
 
   describe "instruction relay (3-2)" do

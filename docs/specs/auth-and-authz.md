@@ -151,6 +151,15 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。
 - session に入るのは identity (`%{provider, uid}`) のみで role は入らない。
   role は connect / refresh のたび許可リストから再解決する
   (token 経路の `Auth.client_role/1` 再検証と同型)
+- **稼働中 socket でも再解決する** ([#158](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/158)、2026-07-28)。
+  connect 時の role は snapshot にすぎず、これを固定すると降格
+  (operator → viewer) が接続中のタブに効かない。ダッシュボードの
+  cookie スライドは 12 時間間隔なので refresh 契機だけでは遅すぎる。
+  `ClientSocket` は credential (`{:token, …}` / `{:oauth, …}`) を
+  assigns に持ち、`AgentsChannel.require_operator/1` が operator 操作の
+  たび `ClientSocket.role_for/1` で解決し直す。snapshot と食い違ったら
+  `socket_id` topic へ #47 の `disconnect` を撃ち、fan-out
+  (`handle_out` の operator 限定配信) と client UI は再接続で組み直す
 - socket id は `Auth.oauth_socket_id/2` =
   `sha256("oauth:" <> provider <> ":" <> uid)`。logout / refresh 401 の
   強制切断は ADR-0013 / #47 の broadcast 配管をそのまま共用
