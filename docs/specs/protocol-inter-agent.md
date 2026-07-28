@@ -558,9 +558,20 @@ agent が自分自身の session を作り直すよう operator に要求する 
   時間差は仕様であり、その間に state が変われば server が拒否してよい
 - **MUST**: `reason` は `session_reset_request` payload にのみ載せる。
   instruction や runner payload へ連結せず、tool result にも echo しない
-- **MUST**: server が拒否したら黙って諦めない。短い delay で 1 回だけ再送し、
-  それでも駄目なら agent へ次 turn で通知し operator にも log する。
-  reset したつもりの agent が書き続けるのを防ぐ
+- **MUST**: server が拒否したら黙って諦めない。agent へ次 turn で通知し
+  operator にも log する。reset したつもりの agent が書き続けるのを防ぐ
+- **MUST**: 再送は**結果が確定した retryable な拒否** (`agent_busy`) に
+  限る。push timeout は不受理を意味せず、`session_reset_pending` は自分の
+  reset が進行中である可能性がある。これらを再送すると受理済みの reset を
+  二重要求しかねない
+- **MUST**: 結果が確定していない拒否 (timeout / `session_reset_pending` /
+  語彙外) を「実行されなかった」「context は変わっていない」と断定しない。
+  「結果を確認できていない・reset が進行中の可能性がある」と正直に伝える。
+  断定は agent がそれを前提に行動するぶんだけ害が大きい
+- **MUST**: server から返る reason は closed vocabulary の値のみ採用し、
+  語彙外・非 object・空文字は `unknown_error` に潰す。reason は operator
+  log と agent への注入 turn の両方に載るため、任意テキストの通り道に
+  しない
 - **MUST**: tool description に「呼ぶ前に引き継ぎを外部へ書き出す」ことを
   明記する (D5)。compact と違い要約は作られず、何も引き継がれない
 - 所要秒数や結果 metadata を約束しない (B2 の MF3 と同じ理由)

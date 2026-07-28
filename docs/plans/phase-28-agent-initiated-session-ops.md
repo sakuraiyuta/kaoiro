@@ -390,10 +390,41 @@ event。reset の実行系 (kill + relaunch) は ADR-0036 F2 の既存機構に
   持つ。
 - 再送は 1 回、delay 2.5 秒 (`SESSION_RESET_RETRY_DELAY_MS`)。server の
   dispatch cooldown が 2 秒で、turn 境界直後に最も起きやすい `agent_busy`
-  はこれで解ける。再送も失敗したら agent へ通知し log する。
+  はこれで解ける。**再送するのは `agent_busy` だけ** (下記 CR-MF2)。
 - server の error reason は closed vocabulary (ADR-0036 F7) だが、
   wrapper 側は未知の値を echo せず `unknown_error` に潰す。reason は
   operator log と agent への注入 turn に載るため。
+
+### CR 指摘と修正 (ふじ、2026-07-28。判定: push 不可 → 全採用)
+
+server 側 (もも 担当) を除く 3.5 群。
+
+- **MF1-R2 — settle counter が「値の変化」を数えていた**。equality dedup が
+  先に return するため、圧縮後も使用量が同じ高い値に貼り付いた列では
+  counter が一度も進まず、MF1-R で入れた liveness bound が成立しなかった。
+  対処: dedup は `#emitState` にのみ効かせ、freshness の計数と閾値判定は
+  成功 reading ごとに走らせる。counter は**計測回数**であって値の変化回数
+  ではない。
+- **CR-MF1 — `unknown_error` への潰し込みが未実装だった**。申告と plan と
+  コメントには書いたのに、`sessionResetErrorReason()` は任意 string を
+  素通ししていた。対処: F7 closed vocabulary + channel が返す request 形式
+  拒否 (`invalid_mode` / `unknown_agent` / `forbidden`) を明示 whitelist し、
+  それ以外は `unknown_error`。transport test で pin。
+- **CR-MF2 — timeout / pending を「未実行」と断定していた**。Phoenix の
+  push timeout は不受理を意味しない。反例: 1 回目受理 + reply 落ち →
+  再送が `session_reset_pending` → 「実行されなかった」と通知、しかし
+  reset は進行中。対処: 拒否理由を 3 分類する。
+  `retryable` (`agent_busy` のみ — 再送する) /
+  `refused` (capability・形式・authz・runner 不在 — 再送しないが断定して
+  よい) / `unconfirmed` (timeout・`session_reset_pending`・`spawn_failed`・
+  `unknown_error` 等 — 再送せず、断定もしない)。既定は `unconfirmed`。
+  正直な文言のコストは agent の慎重さ、断定のコストは誤った前提での行動。
+- **CR-MF3 — `SessionResetStarted` の TS 型が wire と未同期**。
+  `origin: "operator" | "agent_self"` と `reason?` を protocol と dashboard
+  parser に追加。表示はまだ無いが parser が保持する。**不正 origin は
+  event ごと捨てず `operator` へ degrade** — 捨てると composer が disable
+  のまま対応する Completed を待ち続ける。旧 server の payload には origin
+  が無く、そこでは全 reset が operator 起点だった。
 
 ### C3 — server (もも)
 
