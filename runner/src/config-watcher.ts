@@ -23,6 +23,12 @@ export interface ConfigWatcher {
   close(): void;
 }
 
+/** Injectable only at the filesystem boundary so debounce behaviour can be
+ * tested without depending on the host kernel's fs.watch delivery timing. */
+export interface WatchRunnerConfigOptions {
+  watch?: typeof watch;
+}
+
 /**
  * `configPath` の親ディレクトリを watch し、対象ファイルの change イベントを
  * `CONFIG_WATCH_DEBOUNCE_MS` 束ねてから `loadRunnerConfig` を再走する。
@@ -36,11 +42,13 @@ export function watchRunnerConfig(
   configPath: string,
   onReload: (next: RunnerConfig) => void,
   onParseError: (error: unknown) => void,
+  options: WatchRunnerConfigOptions = {},
 ): ConfigWatcher {
   const abs = resolve(configPath);
   const dir = dirname(abs);
   const name = basename(abs);
   let timer: NodeJS.Timeout | undefined;
+  let closed = false;
 
   const trigger = (): void => {
     timer = undefined;
@@ -52,14 +60,15 @@ export function watchRunnerConfig(
     }
   };
 
-  const watcher: FSWatcher = watch(
+  const watcher: FSWatcher = (options.watch ?? watch)(
     dir,
     { persistent: false },
     (_event, filename) => {
+      if (closed) return;
       // filename は Linux の inotify では通常 basename が入るが、環境に
       // よっては null が来る。null のときも保守的に発火して debounce に
       // 委ねる (取りこぼしより空振りの方が安全)。
-      if (filename !== null && filename !== name) return;
+      if (filename !== null && String(filename) !== name) return;
       if (timer !== undefined) clearTimeout(timer);
       timer = setTimeout(trigger, CONFIG_WATCH_DEBOUNCE_MS);
     },
@@ -79,6 +88,7 @@ export function watchRunnerConfig(
 
   return {
     close: (): void => {
+      closed = true;
       if (timer !== undefined) {
         clearTimeout(timer);
         timer = undefined;
