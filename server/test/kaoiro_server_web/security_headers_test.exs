@@ -58,6 +58,86 @@ defmodule KaoiroServerWeb.SecurityHeadersTest do
     end
   end
 
+  # ふじ 2nd review must-fix (#155): TLS reverse proxy 配備では
+  # rewrite_on: [:x_forwarded_proto] が scheme だけを書き換えるため、
+  # conn は内部 port を持ったままになる。既存の connect_src/3 テストは
+  # 正規化済み文字列を直接渡していて、この形を通していなかった。
+  describe "request_origin/2 (proxy 配備の外向き port 復元)" do
+    @tls_url [host: "kaoiro.example", port: 443, scheme: "https"]
+
+    # proxy は http://host:4000 へ転送し、x-forwarded-proto だけが https を
+    # 伝える (config/prod.exs の force_ssl rewrite_on と同じ経路)。
+    defp proxied_conn(host) do
+      :get
+      |> Plug.Test.conn("http://#{host}:4000/index.html")
+      |> Plug.Conn.put_req_header("x-forwarded-proto", "https")
+      |> Plug.RewriteOn.call(Plug.RewriteOn.init([:x_forwarded_proto]))
+    end
+
+    test "前提の pin: rewrite 後も conn は内部 port を持ったまま" do
+      conn = proxied_conn("kaoiro.example")
+
+      assert conn.scheme == :https
+      assert conn.port == 4000
+    end
+
+    test "外向き scheme/host が一致するとき port は :url から復元する" do
+      assert SecurityHeaders.request_origin(proxied_conn("kaoiro.example"), @tls_url) ==
+               "https://kaoiro.example"
+    end
+
+    test "復元した origin が check_origin の TLS エントリと一致する" do
+      # 復元前は https://kaoiro.example:4000 となり一致せず、connect-src が
+      # 'self' だけに落ちて production の socket が CSP block されていた。
+      origin = SecurityHeaders.request_origin(proxied_conn("kaoiro.example"), @tls_url)
+
+      assert SecurityHeaders.connect_src(
+               [
+                 "https://kaoiro.example",
+                 "http://localhost:4000",
+                 "http://127.0.0.1:4000"
+               ],
+               origin,
+               "https://unused.example"
+             ) == ["'self'", "wss://kaoiro.example"]
+    end
+
+    test "loopback 直アクセスは conn の値のまま復元しない" do
+      conn = Plug.Test.conn(:get, "http://localhost:4000/index.html")
+
+      assert SecurityHeaders.request_origin(conn, @tls_url) == "http://localhost:4000"
+    end
+
+    test "偽装 Host は :url と一致しないので復元されない" do
+      conn = proxied_conn("attacker.example")
+      origin = SecurityHeaders.request_origin(conn, @tls_url)
+
+      assert origin == "https://attacker.example:4000"
+
+      assert SecurityHeaders.connect_src(
+               ["https://kaoiro.example", "http://localhost:4000"],
+               origin,
+               "https://unused.example"
+             ) == ["'self'"]
+    end
+
+    test "plain-HTTP 直結配備は外向き port がそのまま一致する" do
+      conn = Plug.Test.conn(:get, "http://linux-host.example:4000/index.html")
+      url = [host: "linux-host.example", port: 4000, scheme: "http"]
+
+      assert SecurityHeaders.request_origin(conn, url) == "http://linux-host.example:4000"
+    end
+
+    test "url に scheme が無い (dev/test) 場合は conn の値を使う" do
+      conn = Plug.Test.conn(:get, "http://localhost:4002/index.html")
+
+      assert SecurityHeaders.request_origin(conn, host: "localhost") ==
+               "http://localhost:4002"
+
+      assert SecurityHeaders.request_origin(conn, nil) == "http://localhost:4002"
+    end
+  end
+
   describe "connect_src/3" do
     # plain-HTTP 配備で runtime.exs が組み立てる check_origin。
     @plain_http [

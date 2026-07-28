@@ -99,7 +99,7 @@ defmodule KaoiroServerWeb.SecurityHeaders do
     connect =
       connect_src(
         KaoiroServerWeb.Endpoint.config(:check_origin),
-        request_origin(conn),
+        request_origin(conn, KaoiroServerWeb.Endpoint.config(:url)),
         KaoiroServerWeb.Endpoint.url()
       )
 
@@ -120,10 +120,37 @@ defmodule KaoiroServerWeb.SecurityHeaders do
     )
   end
 
-  # The origin the browser actually used for this request, in the same
-  # normalized shape as the configured entries.
-  defp request_origin(conn),
-    do: origin_string(to_string(conn.scheme), conn.host, conn.port)
+  @doc """
+  The origin the browser used for this request, normalized for
+  comparison against the configured entries.
+
+  Behind a TLS reverse proxy the connection is NOT the outside view of
+  itself: `config/prod.exs` rewrites only `:x_forwarded_proto`, so the
+  scheme becomes `https` while the port stays at the internal listen
+  port — a proxied request looks like `https://host:4000` and never
+  matches the `https://host` in `:check_origin` (ふじ 2nd review
+  must-fix on issue #155; left unfixed, `connect-src` collapses to
+  `'self'` and the socket is CSP-blocked in the browsers that do not
+  resolve `'self'` to `wss:`).
+
+  So when the request's scheme and host match the endpoint's advertised
+  `:url` — the deployment's own trusted statement of how it is reached
+  from outside — the port is taken from there instead of from the
+  connection. Everything else (loopback, a forged Host) keeps the
+  connection's own values. This only decides WHICH configured entry is
+  selected; the header still carries the config string, never a request
+  value.
+  """
+  def request_origin(conn, url_config) do
+    url = url_config || []
+    scheme = to_string(conn.scheme)
+
+    if scheme == url[:scheme] and conn.host == url[:host] do
+      origin_string(scheme, conn.host, url[:port])
+    else
+      origin_string(scheme, conn.host, conn.port)
+    end
+  end
 
   defp ws_origin("https://" <> rest), do: ["wss://" <> rest]
   defp ws_origin("http://" <> rest), do: ["ws://" <> rest]
