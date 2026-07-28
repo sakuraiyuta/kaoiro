@@ -21,8 +21,19 @@ export type KaoiroState =
 
 /** log payload kind (protocol.md). assistant=model speech, tool_use=tool
  *  call, tool_result=tool output, user=operator instruction echoed into the
- *  transcript (#31). thinking is intentionally not relayed. */
-export type LogKind = "assistant" | "tool_use" | "tool_result" | "user";
+ *  transcript (#31), system=session-level event the wrapper observed rather
+ *  than anything either party said (context compaction, conversation reset —
+ *  phase-28 A1 / #168). thinking is intentionally not relayed.
+ *
+ *  `system` is deliberately its own kind: relaying these as `assistant` would
+ *  put wrapper-authored notices into the operator's "latest reply" timeline
+ *  as though the model had said them. */
+export type LogKind =
+  | "assistant"
+  | "tool_use"
+  | "tool_result"
+  | "user"
+  | "system";
 
 /** payload of a type="log" envelope (protocol.md). The fields present
  *  depend on `kind`; `truncated` flags wrapper-side size clipping. */

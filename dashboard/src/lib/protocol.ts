@@ -514,9 +514,11 @@ export function modelsFrom(envelope: Envelope): ModelOption[] {
 }
 
 /** payload of a type="log" envelope (protocol.md / ADR-0012).
- *  kind=user is the operator's instruction echoed into the transcript (#31). */
+ *  kind=user is the operator's instruction echoed into the transcript (#31);
+ *  kind=system is a session-level event the wrapper observed — context
+ *  compaction, conversation reset (phase-28 A1 / #168) — not model speech. */
 export interface LogPayload {
-  kind: "assistant" | "tool_use" | "tool_result" | "user";
+  kind: "assistant" | "tool_use" | "tool_result" | "user" | "system";
   text?: string;
   tool_name?: string;
   /** Pairs a tool_use with its tool_result (#40); present when known. */

@@ -2195,6 +2195,14 @@
               {@html renderMarkdown(log.text ?? "")}
               <time class="ts" datetime={env.ts}>{time}</time>
             </div>
+          {:else if log?.kind === "system"}
+            <!-- Session-level event observed by the wrapper (phase-28 A1 /
+                 #168): context compaction, conversation reset. Wrapper-
+                 authored text, so plain-text rendering — no markdown. -->
+            <p class="sysline">
+              {log.text ?? ""}
+              <time class="ts" datetime={env.ts}>{time}</time>
+            </p>
           {:else if log?.kind === "tool_use"}
             {@const tuid = log.tool_use_id}
             <details
@@ -3497,6 +3505,16 @@
     background: var(--bg-card);
     border: 1px solid var(--line);
     color: var(--fg);
+  }
+
+  /* Session-level wrapper notice (phase-28 A1 / #168): deliberately not a
+     .msg bubble — it is neither party speaking, so it reads as a dim
+     centred rule-like line between the surrounding turns. */
+  .sysline {
+    margin: 0;
+    align-self: center;
+    color: var(--fg-dim);
+    font-size: var(--fs-body-sm);
   }
 
   /* Operator's own instruction echoed into the transcript (#31): a
