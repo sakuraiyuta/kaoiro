@@ -99,6 +99,15 @@ export function parseConfig(raw: unknown): WrapperConfig {
     config.server_token = nonEmptyString(raw.server_token, "server_token");
   }
 
+  // transition_id is the runner-relayed spawn correlation id (phase-27,
+  // #160). A blank or ill-typed value is dropped silently rather than
+  // thrown: the server already treats an absent id as legacy_absent, and
+  // failing the whole config would break wrapper startup on a legacy
+  // runner that never writes the field.
+  if (typeof raw.transition_id === "string" && raw.transition_id !== "") {
+    config.transition_id = raw.transition_id;
+  }
+
   // permission_timeout_ms precedence (#60): explicit config wins (per-persona
   // override) over the process-wide env var; both absent leaves it undefined,
   // letting the broker fall back to the SDK default (no timeout, ADR-0022 F6).

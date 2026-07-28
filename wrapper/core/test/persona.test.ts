@@ -104,6 +104,25 @@ describe("parseConfig", () => {
     );
   });
 
+  it("transition_id を保持する (phase-27, #160)", () => {
+    expect(parseConfig({ ...valid, transition_id: "tr-1" })).toMatchObject({
+      transition_id: "tr-1",
+    });
+  });
+
+  it("transition_id 欠落は undefined のまま (legacy runner)", () => {
+    expect(parseConfig(valid)).not.toHaveProperty("transition_id");
+  });
+
+  it("空文字 / 型不正の transition_id は throw せず落とす", () => {
+    expect(parseConfig({ ...valid, transition_id: "" })).not.toHaveProperty(
+      "transition_id",
+    );
+    expect(parseConfig({ ...valid, transition_id: 42 })).not.toHaveProperty(
+      "transition_id",
+    );
+  });
+
   it("Codex catalog contextを受け入れる", () => {
     expect(
       parseConfig({
