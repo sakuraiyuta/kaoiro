@@ -77,6 +77,13 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 - log event には boundary metadata の実値 (pre_tokens / post_tokens) を
   載せる。compact 成否・削減量の正は boundary metadata (Track S 実測:
   直後の `getContextUsage()` は減少を反映しない)。
+  **ただし `post_tokens` は SDK 型上 optional (`post_tokens?: number`) で
+  あり、常に載る保証はない。表示は「前 N → 後 M」を前提にせず、存在する
+  field だけを条件付きで組み立てる** (欠落時は `前 N tokens` のみを出す
+  degrade)。2026-07-28 の実機受け入れでは in-process の
+  `SDKCompactBoundaryMessage` に `post_tokens` が載り、dashboard に
+  `前 293221 tokens → 後 9187 tokens` として表示された。欠落ケース自体は
+  未観測 (下記「実機受け入れ結果」の artifact 差異も参照)。
 - **log 規約 (ふじ suggestion 採用)**: success は `compact_boundary` を
   正として 1 行 (`trigger`, `pre_tokens`, 任意で `post_tokens` /
   `duration_ms`)。`compact_result:'success'` で別の成功行を出して二重
@@ -146,6 +153,8 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 - `compact_metadata` 実値: `{trigger:'manual', pre_tokens:22315,
   post_tokens:882, cumulative_dropped_tokens:21433, duration_ms:13692}`
   (SDK 型定義より field が多い)。manual compact で所要 ~13.7 秒。
+  **所要は文脈量依存で、この 13.7 秒は ~22k tokens という小さい文脈での
+  値である** (下記「実機受け入れ結果」では ~293k tokens で 168.8 秒)。
 - **caveat**: compact 直後の `getContextUsage()` は totalTokens
   23,247/200,000 を返し減少を反映しなかった (boundary は post_tokens
   882 を報告)。**compact 成否・削減量の根拠は boundary metadata を正**
@@ -216,10 +225,45 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 ### B 共通の完了条件
 
 - wrapper test/typecheck green (B1 の dedup、B2 の承認/拒否/投入をテスト)。
-- manual compact ~13.7 秒 (Track S 実測) — 発動中は既存の
-  `status:compacting` log (Phase A) で観測可能なため、追加の state 語彙は
-  導入しない。
+- manual compact の所要は文脈量依存 (実測: 13.7 秒 @ ~22k tokens /
+  168.8 秒 @ ~293k tokens)。実運用の文脈規模では数分に達し得る。発動中は
+  既存の `status:compacting` log (Phase A) で観測可能なため、追加の state
+  語彙は導入しない。`request_compact` の tool description も所要秒数を
+  約束していない (「次のターン境界で走る」のみ) — この表現を維持する。
 - push はレビュー通過後 (BR は 8/3 以降のため、それまで unpushed 保持)。
+
+## 実機受け入れ結果 (あお、2026-07-28)
+
+B2 の「承認→実行 / 拒否→不実行」分岐は unit test で踏めない (上記「既知の
+限界」) ため、あお 自身の本番 session で end-to-end を実施した。
+
+- **B2 全区間成立**: `mcp__kaoiro__request_compact` 呼び出し → canUseTool →
+  permission_broker → operator (マスター) 承認 → handler が instruction
+  queue へ `/compact` 投入 → 予約受理を tool result で返却 → 次のターン
+  境界で compact 実行 → 完了。`reason` は tool result に echo されたが投入
+  テキストには連結されていない (設計どおり)。
+- **context の実測**: whoami で compact 前 269,858 / 1,000,000 (27%)、
+  compact 後 **52,887 / 1,000,000 (5%)**。cached snapshot は旧値のままでは
+  なく更新されていた = **MF1 の epoch 無効化 + refresh kick が実機で機能**。
+- **A1 の表示 (マスターが dashboard 目視・スクリーンショット確認)**:
+  `手動コンテキスト圧縮が完了しました（前 293221 tokens → 後 9187 tokens）
+  168.8 秒` の 1 行。meter の 27%→5% 更新も同時に確認。
+- **B1 は非発火** (27% < 閾値 70%)。期待どおり。
+- **所要 168.8 秒** (~293k tokens)。Track S の 13.7 秒 (~22k tokens) の
+  12 倍で、所要が文脈量依存であることの根拠 (P-b)。
+- **artifact による metadata 表現差**: in-process の SDK message には
+  `post_tokens` が載っていた一方、CLI の session jsonl (ディスク上の別
+  artifact) の同 event には `postTokens` が無く `preTokens` /
+  `durationMs` のみだった。field 名も snake_case / camelCase で異なる。
+  観測事実のみ記す — jsonl は resume 用に CLI が別途書き出す永続表現で、
+  SDK が consumer へ渡す in-process message とは生成経路が別、というのが
+  当たりだが確証はない。**wrapper が読むべきは in-process message であり
+  jsonl ではない** (Phase C で reset 系 event を扱う際も同じ)。
+- **whoami の lag が定量化された**: whoami の compact 前値 269,858 に対し
+  boundary の `pre_tokens` は 293,221 で 23,363 の乖離。A2 の "cached last
+  successful measurement; whoami itself does not refresh" が実測で裏付け
+  られた。閾値判断を whoami 値のみで行うとこの程度は過小評価するが、
+  B1 の 70% には十分な余裕があり実害はない。
 
 ## Phase C の概要 (後続詳細化)
 - C: wrapper→server 新 control event + 新 MCP tool + deferred reset

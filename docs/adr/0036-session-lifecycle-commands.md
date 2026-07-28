@@ -38,6 +38,11 @@ session IDをnull化して次turnを`startThread()`にする経路も未実測�
 
 2026-07-28 に実施した [phase-28 の Track S 実測結果](../plans/phase-28-agent-initiated-session-ops.md#track-s-実測結果)では、Claude Agent SDK 0.3.220 は streaming input mode でも文字列 `/compact` を CLI native slash command として解釈し、manual compact を実行した。したがって、上記の「Claude/CodexともCLI native slash command parserを経由しない」という断定は、Codex 側の実測に限る。Claude 側にはこの断定を適用しない。
 
+同日の [phase-28 実機受け入れ](../plans/phase-28-agent-initiated-session-ops.md#実機受け入れ結果-あお2026-07-28)で、agent 発の `request_compact` 経由の manual compact も本番 session で成立した。追加で判明した 2 点を記録する。
+
+- **`compact_metadata.post_tokens` は SDK 型上 optional** (`post_tokens?: number`) であり、常に載る保証はない。実機では in-process の `SDKCompactBoundaryMessage` に載っていたが、CLI が書き出す session jsonl 上の同 event には無く、artifact により表現が異なった (field 名も snake_case / camelCase で相違)。compact の削減量を扱う実装は in-process message を正とし、`post_tokens` 欠落時に degrade する経路を持つこと。
+- **manual compact の所要は文脈量依存で、数分に達し得る**。実測は 13.7 秒 @ ~22k tokens に対し 168.8 秒 @ ~293k tokens。session lifecycle 操作の UI / tool description は所要秒数を約束せず、「次のターン境界で走る」「完了は boundary event で観測する」という表現に留めること。
+
 operatorが同じagent/persona/cwdのまま新しい会話を始めるには、現状agent削除と
 再spawnが必要である。必要なのは文章入力ではなく、表示履歴、resume pointer、
 wrapper process、新しいSDK sessionを協調して切り替える第一級control operationで
