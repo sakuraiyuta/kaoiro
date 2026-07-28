@@ -340,9 +340,9 @@ event。reset の実行系 (kill + relaunch) は ADR-0036 F2 の既存機構に
 | Track | 内容 | 担当 |
 |---|---|---|
 | C1 | 改訂 ADR 起草 (ADR-0036 F1/F6 を改訂する新 ADR) | もも (完了: ADR-0043, 5b24a6f) |
-| C2 | wrapper: `request_session_reset` tool + turn 境界での server への要求送信 | あお (完了: 未 push) |
-| C3 | server: `session_reset_request` 受理経路 + origin 追加 + threat-model / protocol.md 更新 | もも (完了: 416c2da、mix test 671 passed) |
-| CR | C2+C3 の diff レビュー | ふじ |
+| C2 | wrapper: `request_session_reset` tool + turn 境界での server への要求送信 | あお (完了: 040145e + 678a1c6 + CR 修正群) |
+| C3 | server: `session_reset_request` 受理経路 + origin 追加 + threat-model / protocol.md 更新 | もも (完了: 416c2da + 9f6b7ca) |
+| CR | C2+C3 の diff レビュー | ふじ (完了: must-fix 4 群 + CR-MF2-R 検出→全解消、2026-07-28 push 可判定) |
 
 ### 設計決定 (C1 の ADR に落とす内容)
 
