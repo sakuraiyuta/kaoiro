@@ -340,7 +340,7 @@ event。reset の実行系 (kill + relaunch) は ADR-0036 F2 の既存機構に
 | Track | 内容 | 担当 |
 |---|---|---|
 | C1 | 改訂 ADR 起草 (ADR-0036 F1/F6 を改訂する新 ADR) | もも (完了: ADR-0043, 5b24a6f) |
-| C2 | wrapper: `request_session_reset` tool + turn 境界での server への要求送信 | あお (BR 修正完了後) |
+| C2 | wrapper: `request_session_reset` tool + turn 境界での server への要求送信 | あお (完了: 未 push) |
 | C3 | server: `session_reset_request` 受理経路 + origin 追加 + threat-model / protocol.md 更新 | もも (完了: 416c2da、mix test 671 passed) |
 | CR | C2+C3 の diff レビュー | ふじ |
 
@@ -377,6 +377,23 @@ event。reset の実行系 (kill + relaunch) は ADR-0036 F2 の既存機構に
 - 観測は in-process SDK message / server reply のみ (session jsonl 禁止
   — 実機受け入れで確定した原則)。
 - codex には露出しない。
+
+実装時の確定判断 (2026-07-28):
+
+- 予約の保持と turn 境界での送信は `SessionResetCoordinator` に切り出し、
+  cli.ts の `onTurnEnd` から呼ぶ。cli.ts は import 時に `main()` が走り
+  テストできないため、判断ロジックを外に置く (S1 と同じ理由)。
+- `buildKaoiroMcpServer` / `kaoiroToolDescriptors` の第 2 引数を
+  「Claude 限定 tool の配列 (`{descriptor, inputShape}`)」へ変更した。
+  B2 の形 (optional な単一 descriptor) は 2 本目で破綻し、Zod shape を
+  この file に書き足し続けることになるため。shape は各 tool の file が
+  持つ。
+- 再送は 1 回、delay 2.5 秒 (`SESSION_RESET_RETRY_DELAY_MS`)。server の
+  dispatch cooldown が 2 秒で、turn 境界直後に最も起きやすい `agent_busy`
+  はこれで解ける。再送も失敗したら agent へ通知し log する。
+- server の error reason は closed vocabulary (ADR-0036 F7) だが、
+  wrapper 側は未知の値を echo せず `unknown_error` に潰す。reason は
+  operator log と agent への注入 turn に載るため。
 
 ### C3 — server (もも)
 

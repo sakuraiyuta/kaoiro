@@ -537,6 +537,34 @@ compact 境界 / 会話リセットで解除される。
 述べるに留める。閾値は現状 wrapper 内の定数
 (`CONTEXT_NOTICE_THRESHOLD_PERCENT`)。config 配線は dogfood 後に判断する。
 
+#### `request_session_reset` (phase-28 C2)
+
+agent が自分自身の session を作り直すよう operator に要求する tool
+([ADR-0043](../adr/0043-agent-initiated-session-reset.md))。`request_compact`
+と同じく Claude 限定・都度承認だが、**効果の発生時点が違う**。
+
+| 項目 | 内容 |
+|---|---|
+| 入力 | `{ mode: "new" \| "clear", reason?: string }`。`mode` 必須 |
+| 承認時 | wrapper は**予約のみ**返す。実行は当該 turn の `result` 処理後 |
+| turn 境界 | wrapper が `session_reset_request {mode, reason?}` を server へ送る。server は operator 起点と同じ gate (capability / pending lock / state / cooldown) を通す |
+| 拒否時 | SDK が deny message を tool result として model に返す。予約は作られない |
+| engine | **Claude のみ**。codex には出さない |
+
+規約:
+
+- **MUST**: 実行は turn 境界のみ。tool call 時点では reset しない
+  ([ADR-0043](../adr/0043-agent-initiated-session-reset.md) D3)。承認と実行の
+  時間差は仕様であり、その間に state が変われば server が拒否してよい
+- **MUST**: `reason` は `session_reset_request` payload にのみ載せる。
+  instruction や runner payload へ連結せず、tool result にも echo しない
+- **MUST**: server が拒否したら黙って諦めない。短い delay で 1 回だけ再送し、
+  それでも駄目なら agent へ次 turn で通知し operator にも log する。
+  reset したつもりの agent が書き続けるのを防ぐ
+- **MUST**: tool description に「呼ぶ前に引き継ぎを外部へ書き出す」ことを
+  明記する (D5)。compact と違い要約は作られず、何も引き継がれない
+- 所要秒数や結果 metadata を約束しない (B2 の MF3 と同じ理由)
+
 #### 宛先解決の指針
 
 `send_to_agent.to` は **agent_id を必須** とする (charset `[A-Za-z0-9._-]`)。
