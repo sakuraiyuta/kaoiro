@@ -407,7 +407,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",
         "session_reset_started",
-        started_payload(agent_id, mode, request_id, prev_sid)
+        started_payload(agent_id, mode, request_id, prev_sid, "operator")
       )
 
       KaoiroServerWeb.Endpoint.broadcast(
@@ -1688,7 +1688,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp maybe_put_previous_session_id(payload, _sid), do: payload
 
-  defp started_payload(agent_id, mode, request_id, previous_session_id) do
+  defp started_payload(agent_id, mode, request_id, previous_session_id, origin) do
     # `previous_session_id` is optional in the protocol type — omit the
     # key entirely when nil so the wire payload matches
     # `SessionResetStarted { previous_session_id?: string }` instead of
@@ -1696,7 +1696,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
     %{
       "request_id" => request_id,
       "agent_id" => agent_id,
-      "mode" => mode
+      "mode" => mode,
+      "origin" => origin
     }
     |> maybe_put_previous_session_id(previous_session_id)
   end

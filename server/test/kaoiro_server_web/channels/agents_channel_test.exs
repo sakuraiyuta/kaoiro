@@ -3437,6 +3437,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                          "version" => "0",
                          "previous_session_id" => "sess-prev"
                        }
+
+      assert %{origin: :operator} = :sys.get_state(KaoiroServer.SessionResets).pending[agent_id]
     end
 
     test "envelope に session_id が無ければ reset_session payload に previous_session_id を載せない" do
@@ -3605,6 +3607,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "request_id" => "rs_gate_st",
           "agent_id" => "gate.st.a",
           "mode" => "new",
+          "origin" => "agent_self",
+          "reason" => "WORKLOG を外部化済み",
           "previous_session_id" => "sess-leak"
         }
       )

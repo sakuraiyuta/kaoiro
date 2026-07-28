@@ -1951,6 +1951,116 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  describe "session_reset_request (ADR-0043 self-initiated reset)" do
+    defp reset_envelope(agent_id, state, caps) do
+      default_caps = %{
+        "supports_session_reset" => true,
+        "session_reset_modes" => ["new", "clear"]
+      }
+
+      envelope(agent_id, state)
+      |> Map.put("session_id", "sess-prev")
+      |> Map.put("ext", %{"session_capabilities" => Map.merge(default_caps, caps)})
+    end
+
+    defp seed_reset_agent(agent_id, opts \\ []) do
+      socket = join_wrapper(agent_id)
+      state = Keyword.get(opts, :state, "idle")
+      caps = Keyword.get(opts, :caps, %{})
+
+      on_exit(fn ->
+        AgentStates.delete(agent_id)
+        KaoiroServer.SessionResets.delete(agent_id)
+      end)
+
+      ref = push(socket, "envelope", reset_envelope(agent_id, state, caps))
+      assert_reply ref, :ok
+      socket
+    end
+
+    test "agent_self は capability と atomic gate を通って started / runner flow に合流する" do
+      agent_id = "self-reset.happy"
+      socket = seed_reset_agent(agent_id)
+      @endpoint.subscribe("agents:lobby")
+      @endpoint.subscribe("runner:self-reset")
+
+      ref =
+        push(socket, "session_reset_request", %{
+          "mode" => "new",
+          "reason" => "context を外部化済み"
+        })
+
+      assert_reply ref, :ok
+
+      assert_broadcast "session_reset_started",
+                       %{
+                         "agent_id" => ^agent_id,
+                         "mode" => "new",
+                         "origin" => "agent_self",
+                         "reason" => "context を外部化済み",
+                         "previous_session_id" => "sess-prev",
+                         "request_id" => request_id
+                       }
+
+      assert_broadcast "reset_session",
+                       %{
+                         "version" => "0",
+                         "agent_id" => ^agent_id,
+                         "mode" => "new",
+                         "request_id" => ^request_id,
+                         "previous_session_id" => "sess-prev"
+                       } = runner_payload
+
+      refute Map.has_key?(runner_payload, "reason")
+      assert %{origin: :agent_self} = :sys.get_state(KaoiroServer.SessionResets).pending[agent_id]
+    end
+
+    test "busy agent の self request は agent_busy で拒否する" do
+      socket = seed_reset_agent("self-reset.busy", state: "thinking")
+
+      ref = push(socket, "session_reset_request", %{"mode" => "clear"})
+      assert_reply ref, :error, %{reason: "agent_busy"}
+      refute_broadcast "session_reset_started", _
+    end
+
+    test "reset capability 未 advertise は unsupported_session_reset で拒否する" do
+      socket =
+        seed_reset_agent("self-reset.no-cap",
+          caps: %{"supports_session_reset" => false, "session_reset_modes" => []}
+        )
+
+      ref = push(socket, "session_reset_request", %{"mode" => "new"})
+      assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+      refute_broadcast "session_reset_started", _
+    end
+
+    test "pending 中の self request は session_reset_pending で拒否する" do
+      socket = seed_reset_agent("self-reset.pending")
+
+      first = push(socket, "session_reset_request", %{"mode" => "new"})
+      assert_reply first, :ok
+
+      second = push(socket, "session_reset_request", %{"mode" => "clear"})
+      assert_reply second, :error, %{reason: "session_reset_pending"}
+    end
+
+    test "reason は string かつ既存 frame 上限内だけを受理する" do
+      socket = seed_reset_agent("self-reset.reason")
+
+      invalid = push(socket, "session_reset_request", %{"mode" => "new", "reason" => 42})
+      assert_reply invalid, :error, %{reason: "invalid value: reason"}
+
+      too_large =
+        push(socket, "session_reset_request", %{
+          "mode" => "new",
+          "reason" => String.duplicate("x", 65_537)
+        })
+
+      assert_reply too_large, :error, %{reason: "invalid value: reason"}
+      refute_broadcast "session_reset_started", _
+    end
+  end
+
   describe "切断時の disconnected 導出" do
     test "channel 終了で disconnected を broadcast し snapshot を更新する" do
       agent_id = "test.disc-1"

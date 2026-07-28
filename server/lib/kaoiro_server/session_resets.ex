@@ -17,7 +17,7 @@ defmodule KaoiroServer.SessionResets do
   longer exists. The completion is gated on the fresh wrapper's actual
   channel join (`WrapperChannel.after_join`), not on the runner report.
 
-  * `check_and_acquire/5` → `:spawning`. Server broadcasts
+  * `check_and_acquire/5` / `check_and_acquire/6` → `:spawning`. Server broadcasts
     `session_reset_started`, runner is told to fresh-relaunch.
   * `mark_spawn_ok/3` → `:awaiting_connect`. Runner has confirmed the
     fresh child spawned; we still wait for the wrapper to join.
@@ -32,7 +32,7 @@ defmodule KaoiroServer.SessionResets do
 
   ## Two concurrency windows
 
-  * **TOCTOU between check and acquire.** `check_and_acquire/5` runs the
+  * **TOCTOU between check and acquire.** `check_and_acquire/5` / `/6` runs the
     lock-availability check, the KaoiroState precondition
     (`idle`/`waiting_input`), the dispatch-cooldown check, and the lock
     write in ONE `handle_call` — no separate `pending?` → `acquire` pair,
@@ -130,9 +130,21 @@ defmodule KaoiroServer.SessionResets do
   """
   def check_and_acquire(agent_id, mode, state, previous_session_id, server \\ __MODULE__)
       when mode in ["new", "clear"] and is_binary(agent_id) do
+    check_and_acquire(agent_id, mode, state, previous_session_id, :operator, server)
+  end
+
+  @doc """
+  Atomically acquires a reset lock with the initiating origin. `:operator`
+  preserves the ADR-0036 path; `:agent_self` is the ADR-0043 deferred tool
+  path. The origin is retained in the lock so the caller can expose it only
+  in the operator-gated `session_reset_started` lifecycle event.
+  """
+  def check_and_acquire(agent_id, mode, state, previous_session_id, origin, server)
+      when mode in ["new", "clear"] and is_binary(agent_id) and
+             origin in [:operator, :agent_self] do
     GenServer.call(
       server,
-      {:check_and_acquire, agent_id, mode, state, previous_session_id}
+      {:check_and_acquire, agent_id, mode, state, previous_session_id, origin}
     )
   end
 
@@ -249,7 +261,7 @@ defmodule KaoiroServer.SessionResets do
 
   @impl true
   def handle_call(
-        {:check_and_acquire, agent_id, mode, state, prev_sid},
+        {:check_and_acquire, agent_id, mode, state, prev_sid, origin},
         _from,
         s
       ) do
@@ -285,6 +297,7 @@ defmodule KaoiroServer.SessionResets do
 
         lock = %{
           mode: mode,
+          origin: origin,
           request_id: request_id,
           previous_session_id: prev_sid,
           acquired_at: now,

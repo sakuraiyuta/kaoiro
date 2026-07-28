@@ -107,15 +107,20 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 
 ### Session-reset control (`/new`・`/clear`、phase-17)
 
-`session_reset` は operator が agent の実行環境を強制再起動できる
+`session_reset` は operator、または permission_broker に都度承認された agent 自身が
+agent の実行環境を強制再起動できる
 高権限操作(fresh wrapper spawn + 旧 session 放棄、model / effort /
 permission_mode / sandbox / network_access は phase-15 D8 の最終
 effective 値で再適用)。乱発は work-in-progress の喪失や DoS 相当に
 なり得るため、**6 段防御**で権限境界を守る
 ([ADR-0036](../adr/0036-session-lifecycle-commands.md))。
 
-- **operator-only 検証**: `AgentsChannel.handle_in("session_reset", ...)`
-  の先頭で `require_operator/1`。viewer は forbidden。
+- **起点・承認検証**: operator 起点の `AgentsChannel.handle_in("session_reset", ...)`
+  は従来どおり先頭で `require_operator/1` を通り、viewer は forbidden。agent 自身の
+  `WrapperChannel.handle_in("session_reset_request", ...)` は wrapper topic に bind された
+  自 agent にしか作用せず、Claude の `request_session_reset` tool に対する
+  permission_broker 都度承認後、当該 turn 完了時だけ送信される([ADR-0043](../adr/0043-agent-initiated-session-reset.md))。
+  他 agent 起点の専用経路は持たない。
 - **capability advertise**: `ext.session_capabilities.supports_session_reset`
   - `session_reset_modes` を wrapper adapter が spawn 直後に stamp。
   未 stamp / false / true+空 modes は fail-closed で dashboard の
@@ -144,7 +149,7 @@ effective 値で再適用)。乱発は work-in-progress の喪失や DoS 相当�
   dispatch と wrapper state_change 到達の race を塞ぐ)。
 - **viewer 情報境界**: `session_reset_started` / `session_reset_completed`
   / `session_reset_failed` broadcast は `intercept` + `handle_out` で
-  operator-only。`session_boundary` envelope は viewer 側で payload を
+  operator-only (`session_reset_started` の origin / reason も viewer に流さない)。`session_boundary` envelope は viewer 側で payload を
   `{"mode"}` のみに sanitize(request_id / previous_session_id /
   to_session_id は viewer に不可視化、
   [ADR-0021](../adr/0021-role-information-disclosure-policy.md) 継承 +

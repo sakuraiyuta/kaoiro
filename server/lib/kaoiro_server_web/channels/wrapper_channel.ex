@@ -44,6 +44,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Resource bound only; content/type refinement is Phase 1.5-4. Clients
   # must still treat all envelope strings as untrusted when rendering.
   @max_envelope_bytes 65_536
+  @session_reset_modes ["new", "clear"]
 
   # Upper bound on conversations notified in one disconnect (#131). Phase 1
   # caps a conversation at 2 agents and a wrapper realistically holds a
@@ -373,6 +374,60 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   def handle_in("history_replay_complete", _payload, socket), do: {:reply, :ok, socket}
+
+  # ADR-0043 D1/D3: a wrapper may request a reset only for its own agent,
+  # after its MCP tool has been broker-approved and after the wrapper has
+  # reached its turn boundary. The request does not re-parse model text and
+  # joins the exact SessionResets gate used by operator `session_reset`.
+  @impl true
+  def handle_in("session_reset_request", payload, socket) do
+    agent_id = socket.assigns.agent_id
+
+    with {:ok, mode} <- fetch_reset_mode(payload),
+         {:ok, reason} <- fetch_reset_reason(payload),
+         {:ok, envelope} <- fetch_reset_envelope(agent_id),
+         :ok <- require_reset_capability(envelope, mode),
+         {:ok, state} <- fetch_kaoiro_state(envelope),
+         {:ok, request_id, prev_sid} <-
+           SessionResets.check_and_acquire(
+             agent_id,
+             mode,
+             state,
+             Map.get(envelope, "session_id"),
+             :agent_self,
+             SessionResets
+           ) do
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "session_reset_started",
+        started_reset_payload(agent_id, mode, request_id, prev_sid, reason)
+      )
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "runner:#{AgentId.host_id_from(agent_id)}",
+        "reset_session",
+        %{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "mode" => mode,
+          "request_id" => request_id
+        }
+        |> maybe_put_previous_session_id(prev_sid)
+        |> maybe_put_resume_snapshot(agent_id)
+      )
+
+      {:reply, :ok, socket}
+    else
+      {:error, :invalid_mode} ->
+        {:reply, {:error, %{reason: "invalid_mode"}}, socket}
+
+      {:error, {:invalid_value, key}} ->
+        {:reply, {:error, %{reason: "invalid value: #{key}"}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
 
   # log / result are reply transcript lines kept as history (ADR-0012);
   # state_change / permission_request refresh the latest state.
@@ -781,6 +836,72 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp validate(_envelope, _agent_id), do: {:error, "envelope must be an object"}
+
+  defp fetch_reset_mode(%{"mode" => mode}) when mode in @session_reset_modes,
+    do: {:ok, mode}
+
+  defp fetch_reset_mode(_payload), do: {:error, :invalid_mode}
+
+  # The reason never enters an instruction or runner payload. Bound it by the
+  # channel's established inbound frame limit before copying it only to the
+  # operator-gated lifecycle broadcast.
+  defp fetch_reset_reason(%{"reason" => reason})
+       when is_binary(reason) and byte_size(reason) <= @max_envelope_bytes,
+       do: {:ok, reason}
+
+  defp fetch_reset_reason(%{"reason" => _}), do: {:error, {:invalid_value, "reason"}}
+  defp fetch_reset_reason(payload) when is_map(payload), do: {:ok, nil}
+
+  defp fetch_reset_envelope(agent_id) do
+    case AgentStates.snapshot()[agent_id] do
+      envelope when is_map(envelope) -> {:ok, envelope}
+      _ -> {:error, :unsupported_session_reset}
+    end
+  end
+
+  defp fetch_kaoiro_state(%{"state" => state}) when is_binary(state), do: {:ok, state}
+  defp fetch_kaoiro_state(_envelope), do: {:error, :agent_busy}
+
+  defp require_reset_capability(envelope, mode) do
+    caps = envelope |> Map.get("ext", %{}) |> Map.get("session_capabilities")
+
+    with true <- is_map(caps),
+         true <- Map.get(caps, "supports_session_reset") == true,
+         modes when is_list(modes) and modes != [] <- Map.get(caps, "session_reset_modes"),
+         true <- mode in modes do
+      :ok
+    else
+      _ -> {:error, :unsupported_session_reset}
+    end
+  end
+
+  defp started_reset_payload(agent_id, mode, request_id, previous_session_id, reason) do
+    %{
+      "request_id" => request_id,
+      "agent_id" => agent_id,
+      "mode" => mode,
+      "origin" => "agent_self"
+    }
+    |> maybe_put_previous_session_id(previous_session_id)
+    |> maybe_put_reason(reason)
+  end
+
+  defp maybe_put_previous_session_id(payload, sid) when is_binary(sid),
+    do: Map.put(payload, "previous_session_id", sid)
+
+  defp maybe_put_previous_session_id(payload, _sid), do: payload
+
+  defp maybe_put_reason(payload, reason) when is_binary(reason),
+    do: Map.put(payload, "reason", reason)
+
+  defp maybe_put_reason(payload, _reason), do: payload
+
+  defp maybe_put_resume_snapshot(payload, agent_id) do
+    case SessionPointers.get(agent_id) do
+      %{snapshot: snapshot} when is_map(snapshot) -> Map.put(payload, "resume_snapshot", snapshot)
+      _ -> payload
+    end
+  end
 
   # Routes an inter_agent_message envelope to the destination wrapper after
   # checking per-conversation quotas (protocol-inter-agent spec). Other types
