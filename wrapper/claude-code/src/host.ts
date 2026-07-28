@@ -1542,15 +1542,33 @@ export class AgentHost implements EngineAdapter {
 
   /** Records the latest rate-limit snapshot for its window (#16). */
   #applyRateLimit(info: SDKRateLimitInfo): void {
-    const window = info.rateLimitType;
+    // The SDK's weekly event gained `seven_day_overage_included`. It is the
+    // same weekly subscription window for the operator-facing meter; keeping
+    // it as a separate raw key makes it invisible to the stable dashboard
+    // seven_day row.
+    const window =
+      info.rateLimitType === "seven_day_overage_included"
+        ? "seven_day"
+        : info.rateLimitType;
     if (window === undefined) return;
+    const previous = this.#rateLimits.get(window);
     const snapshot: {
       status?: string;
       utilization?: number;
       resets_at?: number;
-    } = { status: info.status };
-    if (info.utilization !== undefined) snapshot.utilization = info.utilization;
-    if (info.resetsAt !== undefined) snapshot.resets_at = info.resetsAt;
+    } = {
+      ...previous,
+      status: info.status,
+    };
+    // `allowed` refreshes commonly carry only status + reset. Preserve the
+    // last measured utilization instead of turning that partial update into
+    // an empty (visually 0%) meter.
+    if (typeof info.utilization === "number" && Number.isFinite(info.utilization)) {
+      snapshot.utilization = info.utilization;
+    }
+    if (typeof info.resetsAt === "number" && Number.isFinite(info.resetsAt)) {
+      snapshot.resets_at = info.resetsAt;
+    }
     this.#rateLimits.set(window, snapshot);
   }
 

@@ -280,6 +280,7 @@
     pct: number | null;
     reset: string | null;
     status: string | undefined;
+    resetComplete: boolean;
   }
 
   /** Build display rows from ext.rate_limits, in a stable window order. The
@@ -302,16 +303,33 @@
             pct: null,
             reset: null,
             status: undefined,
+            resetComplete: false,
           });
         }
         continue;
       }
+      const resetsAt =
+        typeof win.resets_at === "number" && Number.isFinite(win.resets_at)
+          ? win.resets_at < 1e12
+            ? win.resets_at * 1000
+            : win.resets_at
+          : null;
+      // rate_limits is a last-turn snapshot. Once its reset has passed, its
+      // utilization / status describe the old window and must not be rendered
+      // as live usage. Equality deliberately remains live: the contract is
+      // strictly "past", which also makes the clock boundary deterministic.
+      const resetComplete = resetsAt !== null && resetsAt < Date.now();
       rows.push({
         key,
         label: RATE_LABELS[key],
-        pct: pctNorm(win.utilization),
-        reset: fmtReset(win.resets_at),
-        status: typeof win.status === "string" ? win.status : undefined,
+        pct: resetComplete ? 0 : pctNorm(win.utilization),
+        reset: resetComplete ? null : fmtReset(win.resets_at),
+        status: resetComplete
+          ? "allowed"
+          : typeof win.status === "string"
+            ? win.status
+            : undefined,
+        resetComplete,
       });
     }
     return rows;
@@ -1979,7 +1997,9 @@
                        なく inline に表示する。pct も reset も無い真の未受信状態のみ
                        "?" にフォールバック。 -->
                   <span class="meter-val">
-                    {#if r.pct !== null}
+                    {#if r.resetComplete}
+                      リセット済み
+                    {:else if r.pct !== null}
                       {r.pct}%
                     {:else if r.reset !== null}
                       リセット {r.reset}

@@ -135,6 +135,41 @@ describe("codexRateLimitsFromRolloutIn", () => {
     expect(out.has("seven_day")).toBe(false);
   });
 
+  it("window ごとに最新の token_count を集め、片方しかない最新 event でも 7day を落とさない", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-rl-"));
+    const id = "uuid-split-windows";
+    writeFileSync(
+      join(root, `rollout-${id}.jsonl`),
+      [
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            rate_limits: {
+              primary: { used_percent: 17, window_minutes: 10080, resets_at: 7 },
+              secondary: null,
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            rate_limits: {
+              primary: { used_percent: 55, window_minutes: 300, resets_at: 2 },
+              secondary: null,
+            },
+          },
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const out = codexRateLimitsFromRolloutIn(root, id);
+    expect(out.get("five_hour")).toEqual({ utilization: 0.55, resets_at: 2 });
+    expect(out.get("seven_day")).toEqual({ utilization: 0.17, resets_at: 7 });
+  });
+
   it("rate_limits なし・不正パス・secondary null は空 Map", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-rl-"));
     const noRateLimits = "uuid-none";

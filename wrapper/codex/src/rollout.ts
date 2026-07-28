@@ -152,8 +152,11 @@ function codexRateLimitsFromPath(
         out.set(routed.window, routed.snapshot);
       }
     }
-    // First (latest) token_count wins; earlier ones are stale.
-    return true;
+    // Codex currently emits one window per token_count (in `primary`), rather
+    // than a pair on every event. Keep walking until each known window has its
+    // newest value; stopping at the newest event alone loses (for example) a
+    // seven_day value when the following event only carries five_hour.
+    return out.size === 2;
   });
   return out;
 }

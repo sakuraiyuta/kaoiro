@@ -1020,6 +1020,60 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("partial な rate_limit_event でも既知 utilization を失わず、overage 込み週次を 7day に統合する", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: scriptedQuery([
+        msg({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed",
+            rateLimitType: "five_hour",
+            utilization: 0.42,
+            resetsAt: 1781480000,
+          },
+        }),
+        msg({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed",
+            rateLimitType: "five_hour",
+            resetsAt: 1781490000,
+          },
+        }),
+        msg({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "seven_day_overage_included",
+            utilization: 0.73,
+            resetsAt: 1782000000,
+          },
+        }),
+        assistant([{ type: "text", text: "hi" }]),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+
+    const thinking = envs.find((e) => e.state === "thinking");
+    expect(thinking?.ext).toMatchObject({
+      rate_limits: {
+        five_hour: {
+          status: "allowed",
+          utilization: 0.42,
+          resets_at: 1781490000,
+        },
+        seven_day: {
+          status: "allowed_warning",
+          utilization: 0.73,
+          resets_at: 1782000000,
+        },
+      },
+    });
+  });
+
   it("init メッセージから ext.model / ext.cwd を付与する (#16)", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {
