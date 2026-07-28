@@ -34,6 +34,10 @@ fresh task)、`Ctrl+L` (表示だけ消去)、`/delete` (恒久削除)の意味�
 session IDをnull化して次turnを`startThread()`にする経路も未実測であり、本ADRは
 その成立を前提にしない。
 
+### 追補 (2026-07-28 — Claude Agent SDK `/compact` 実測)
+
+2026-07-28 に実施した [phase-28 の Track S 実測結果](../plans/phase-28-agent-initiated-session-ops.md#track-s-実測結果)では、Claude Agent SDK 0.3.220 は streaming input mode でも文字列 `/compact` を CLI native slash command として解釈し、manual compact を実行した。したがって、上記の「Claude/CodexともCLI native slash command parserを経由しない」という断定は、Codex 側の実測に限る。Claude 側にはこの断定を適用しない。
+
 operatorが同じagent/persona/cwdのまま新しい会話を始めるには、現状agent削除と
 再spawnが必要である。必要なのは文章入力ではなく、表示履歴、resume pointer、
 wrapper process、新しいSDK sessionを協調して切り替える第一級control operationで
