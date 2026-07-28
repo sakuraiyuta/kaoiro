@@ -162,10 +162,26 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 
 | Track | 内容 | 担当 |
 |---|---|---|
-| B1 | 閾値通知: `#context` 更新時に wrapper が機械判定し、既定 70% 超過で agent へ通知を 1 回注入 | あお |
-| B2 | MCP tool `request_compact`: permission_broker 都度承認 → 承認後 wrapper が instruction queue へ `/compact` を投入 | あお |
+| B1 | 閾値通知: `#context` 更新時に wrapper が機械判定し、既定 70% 超過で agent へ通知を 1 回注入 | あお (完了: f772277、未 push) |
+| B2 | MCP tool `request_compact`: permission_broker 都度承認 → 承認後 wrapper が instruction queue へ `/compact` を投入 | あお (完了: 7748a2f、未 push) |
 | B3 | ADR-0036 Context の「CLI native slash command parser を経由しない」を Codex 限定へ追補 (Track S 実測を根拠に) | もも (完了: 879db29、未 push) |
-| BR | B1+B2 の diff レビュー | ふじ (quota 窓明け 8/3 以降) |
+| BR | B1-B3 の diff レビュー | ふじ (quota 窓明け 8/3 以降) |
+
+実装時の確定判断 (2026-07-28、クロエ承認):
+
+- descriptor は `claude-code/src/request_compact.ts` に配置 (inter_agent.ts
+  同居だと codex の stdio bridge に露出するため。Claude 限定を条件分岐で
+  なく構造で担保)。
+- tool の `reason` は承認ダイアログ / tool result のみに使い、投入
+  テキストへは連結しない (固定リテラル `/compact` のみ。model からの
+  入力ストリーム injection を遮断。テストで pin)。
+- 承認は canUseTool 経路 (`READ_ONLY_TOOLS` 非登録) で既存
+  permission_broker に乗せる。broker を直接叩く新経路は作らない。
+- 閾値は定数 + TODO (config 化は `WrapperConfig` = protocol wire に
+  触れるため見送り)。
+- 既知の限界: 「承認→実行 / 拒否→不実行」の分岐自体は SDK が
+  canUseTool を呼ぶことに依存し unit test で踏めない (send_to_agent と
+  同じ既存制約)。実機受け入れで確認する。
 
 ### B1 — 閾値通知
 
