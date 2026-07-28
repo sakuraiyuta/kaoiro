@@ -83,4 +83,17 @@ describe("AgentDetail rate-limit snapshot freshness (#164)", () => {
     expect(rateValue(target, "5h")).toBe("リセット済み");
     expect(target.querySelector(".meter")?.getAttribute("data-status")).toBe("allowed");
   });
+
+  it("far-future reset はint32上限のtimer sliceにして1ms hot loopを作らない", async () => {
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    const target = await render(1e20);
+    expect(rateValue(target, "5h")).toBe("83%");
+    expect(
+      setTimeoutSpy.mock.calls.some(([, delay]) => delay === 2_147_483_647),
+    ).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await tick();
+    expect(rateValue(target, "5h")).toBe("83%");
+  });
 });

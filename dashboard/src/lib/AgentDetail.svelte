@@ -273,6 +273,9 @@
     seven_day_sonnet: "7day Sonnet",
     overage: "追加",
   };
+  // Browser/Node timers clamp a delay above signed int32 to 1ms. Keep a long
+  // reset as finite slices instead; every wake re-evaluates the raw deadline.
+  const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
   interface RateRow {
     key: string;
@@ -432,7 +435,7 @@
     // window without needing a perpetual ticker.
     const timer = window.setTimeout(() => {
       rateClock = Date.now();
-    }, Math.max(0, next - now) + 1);
+    }, Math.min(Math.max(0, next - now) + 1, MAX_TIMER_DELAY_MS));
     return () => window.clearTimeout(timer);
   });
   const ccRateRows = $derived.by(() => {
