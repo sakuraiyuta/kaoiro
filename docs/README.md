@@ -57,6 +57,13 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0035](adr/0035-codex-model-catalog-and-mid-session-switch.md) | Codex model catalog 復活と mid-session switch 契約 | accepted |
 | [0036](adr/0036-session-lifecycle-commands.md) | /new・/clear を第一級 session lifecycle command として扱う | accepted |
 | [0037](adr/0037-claude-model-catalog-live-refresh.md) | Claude モデル catalog live 経路の SDK 実測一元化と launch bootstrap の default floor 縮小 | accepted |
+| [0038](adr/0038-codex-internal-subagents-toggle.md) | Codex internal sub-agent の runner toggle と固有名 peer-routing contract | accepted |
+| [0039](adr/0039-engine-catalog-live-probe.md) | LaunchDialog モデル catalog を短命 SDK probe + runner memory cache で live 化する (Option E) | accepted |
+| [0040](adr/0040-context-usage-capability.md) | context-window 使用量表示を capability driven にし Codex の estimated 投影は行わない | accepted |
+| [0041](adr/0041-operator-measurement-schema.md) | operator permission latency と dashboard 表示条件の measurement schema | proposed |
+| [0042](adr/0042-oauth-allowlist-login.md) | dashboard の OAuth 個人認証 (Google/GitHub/Nextcloud) + 許可リスト | accepted |
+| [0043](adr/0043-agent-initiated-session-reset.md) | agent 自身が turn 境界で要求する session reset | accepted |
+| [0044](adr/0044-coordination-injection-hitl.md) | 協調指針の共通フッター自動注入と director 媒介の自律協調 | proposed |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。
