@@ -1,6 +1,6 @@
 ---
-title: 協調指針の共通フッター自動注入と director 媒介の自律協調
-status: proposed
+title: 協調指針の共通フッター自動注入と都度指名 director 下の責務内自律
+status: accepted
 date: 2026-07-29
 opened: 2026-07-28
 supersedes: []
@@ -9,22 +9,24 @@ related_specs: [protocol-inter-agent, persona-personality-injection, threat-mode
 related_adrs: [21, 22, 29, 43]
 ---
 
-# ADR-0044 — 協調指針の共通フッター自動注入と director 媒介の自律協調
+# ADR-0044 — 協調指針の共通フッター自動注入と都度指名 director 下の責務内自律
 
 ## Status
 
-Proposed (2026-07-28 起草、2026-07-29 に proposed へ差し戻し)。実装は
-kaoiro issue #87 (調査の傘) からの派生 issue で扱う。実装 phase は
-着手時に採番する。
+Accepted (2026-07-28 起草、2026-07-29 マスター再決裁で F2 を改訂)。
+実装は kaoiro issue #87 (調査の傘) からの派生 issue で扱う。実装 phase
+は着手時に採番する。
 
-本 ADR は 2026-07-28 13:55 に my-idea-brief 経由の意図確認をもって
-accepted として起草した。その約 2 時間後の
+起草時の F2 は**永続的な** director 役を前提としており、その約 2 時間後
+に下された
 [#168 comment-2287](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168#issuecomment-2287)
-でマスターは **P5「永続 director 役は定義しない。都度 operator 指示 +
-permission_broker 都度承認」** を決裁しており、永続 director 役を
-前提とする F2 はこれと矛盾する。F1 (フッター注入) と F3 (受動発動) は
-P5 と独立に成立するが、ADR 全体の HITL 境界が未確定であるため status
-を proposed へ戻す。再決裁を要する論点は F2 のみ。
+の P5「永続 director 役は定義しない。都度 operator 指示 +
+permission_broker 都度承認」と矛盾していた。2026-07-29 のマスター再決裁
+により F2 を「operator が都度指名する director のもとで各エージェントに
+責務が割り当てられ、その責務の範囲内で自律する」形へ改訂し、永続役を
+定義しない点で P5 および
+[ADR-0043](0043-agent-initiated-session-reset.md) D2 と整合させた。
+F1 (フッター注入) / F3 (受動発動) は起草時から変更しない。
 
 ## Context
 
@@ -57,27 +59,29 @@ auto-allow を「Phase 2 以降」と保留)。運用ルール上も「作業配
 [coordination-footer-scope](../open-questions/coordination-footer-scope.md)
 で確定する。
 
-### F2 — HITL 境界は「director 媒介で自律」(要再決裁)
+### F2 — HITL 境界は「都度指名 director のもとでの責務内自律」
 
-> **未確定**: 本節は上記 P5 決裁 (永続 director 役は定義しない) と
-> 矛盾する。P5 は phase-28 の session reset 文脈で下されたが文言は
-> 一般的であり、協調の文脈へ及ぶか否かを含めて再決裁が要る。以下は
-> 差し戻し前の記述であり、確定仕様ではない。
+**永続的な director 役は定義しない。** operator が作業単位ごとに
+director を都度指名する
+([ADR-0043](0043-agent-initiated-session-reset.md) D2 および #168 P5 と
+同じ形)。指名された director は配下エージェントへ役割 (責務範囲) を
+割り当て、各エージェントはその責務の範囲内では operator 承認なしに
+`send_to_agent` で協調 (作業分担の合意・調整・事後報告) してよい。
+責務の外へ出る判断は director への確認、または operator への escalate
+とする。
 
-作業分担の合意は **director 役を経由すれば operator 承認不要**
-(事後報告) とする。peer 同士の直接分担は director への報告を条件に
-許可する。これに伴い、現行運用「作業配分の約束は escalate 対象」
-(2026-07-21 決裁) を改訂する。前提として `send_to_agent` の
-auto-allow を protocol-inter-agent の「Phase 2 以降」から前倒しで
-決定する必要がある — 範囲は
+HITL の起点は **director の指名と責務範囲の設定** であり、責務内の
+個々の `send_to_agent` ではない。これに伴い現行運用「作業配分の約束は
+escalate 対象」(2026-07-21 決裁) を、責務範囲内に限って改訂する。
+前提として `send_to_agent` の auto-allow を protocol-inter-agent の
+「Phase 2 以降」から前倒しで決定する必要がある — 技術的な適用範囲は
 [send-to-agent-auto-allow](../open-questions/send-to-agent-auto-allow.md)
 で確定する。
 
-director 役の定義・指定・永続化は未定である。
-[ADR-0043](0043-agent-initiated-session-reset.md) D2 は同じ論点を
-session reset の文脈で扱い、他 agent 起点の専用経路と永続 director 役
-をいずれも不採用として operator の都度指名に委ねた。協調の文脈で
-別扱いにするならその根拠が要る。
+**破壊的操作は責務内自律の対象外。** session reset (`/new`・`/clear`)
+は ADR-0043 D2/D4 のとおり、対象エージェント自身の tool 呼び出し +
+permission broker 都度承認を維持する。director が配下の reset を直接
+起動する経路は作らない。
 
 ### F3 — 発動は受動 (作業契機)
 
@@ -109,6 +113,9 @@ peer を監視して支援を申し出る能動監視 (polling 常駐) はスコ
 - dashboard の観測経路 (inter-agent message の operator 限定配信、
   [ADR-0021](0021-role-information-disclosure-policy.md)) は不変。
   自律化するのは送信の承認であって開示範囲ではない。
+- director が指名されていない作業では従来どおり `send_to_agent` に
+  operator 承認を要する。自律が働くのは指名と責務割り当てを経た範囲に
+  限られ、既定状態は現行のままである。
 
 ## Alternatives Considered
 
@@ -117,5 +124,6 @@ peer を監視して支援を申し出る能動監視 (polling 常駐) はスコ
 | Claude Code skill (SKILL.md) 配布 | engine 依存の仕組みになる |
 | フッター + skill の併用 | SoT 管理の複雑化 |
 | 完全自律 + 事後報告 (director なし) | 暴走・重複作業のリスク |
+| 永続 director 役を定義し指名を持続させる | 役割が固定され operator の統制点が失われる。#168 P5 / ADR-0043 D2 で不採用 |
 | 分担確定は operator 承認 (現状維持) | 自律性の向上が限定的 |
 | 能動監視 (polling 常駐) | token コストと雑音 |

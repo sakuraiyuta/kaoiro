@@ -34,8 +34,8 @@ ADR-0044 の実装 (kaoiro issue #87 派生) のうち、フッター文面の�
 - 行動原則を何行で表現できるかの試作
 - [coordination-report-routing](coordination-report-routing.md) の
   決定内容 (文面に含めるべき規約の量が変わる)
-- ADR-0044 F2 (director 媒介) の再決裁結果 — director 規約を文面に
-  含めるか否かが決まる
+- ADR-0044 F2 の責務内自律規約 (director の都度指名・責務範囲・責務外
+  の escalate) をどこまでフッターに書き下すか
 
 ## 暫定方針
 

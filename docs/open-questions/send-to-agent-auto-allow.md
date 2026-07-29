@@ -10,8 +10,8 @@ decided: null
 
 ## 背景
 
-[ADR-0044](../adr/0044-coordination-injection-hitl.md) F2 (director
-媒介の自律協調、要再決裁) の前提として、`send_to_agent` の
+[ADR-0044](../adr/0044-coordination-injection-hitl.md) F2 (都度指名
+director 下の責務内自律) の前提として、`send_to_agent` の
 `canUseTool` 承認
 ([protocol-inter-agent](../specs/protocol-inter-agent.md) の承認
 フロー) を緩和する必要がある。同 spec は「自動承認の仕組み (per
@@ -35,8 +35,8 @@ ADR-0044 の実装 (kaoiro issue #87 派生) がブロックされる。
 
 - #87 の「終わり方設計」(timeout / max_turns / escalate) の整備状況
   — ガードが強いほど広い auto-allow を許容できる
-- director 媒介の検証 (director 経由の会話だけ自動、等の折衷案) の
-  実装コスト
+- F2 の責務範囲を auto-allow の判定軸に使えるか (責務内の会話だけ自動、
+  等の折衷案) と、その実装コスト
 
 ## 暫定方針
 

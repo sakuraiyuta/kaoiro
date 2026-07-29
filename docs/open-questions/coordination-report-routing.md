@@ -10,10 +10,9 @@ decided: null
 
 ## 背景
 
-[ADR-0044](../adr/0044-coordination-injection-hitl.md) F2 は「作業
-分担は director 経由なら operator 承認不要 (事後報告)」を案として
-置いたが (F2 自体が要再決裁)、事後報告の宛先と形式も未定。director
-役が不採用となれば本問は報告先ごと再定義になる。現行運用では
+[ADR-0044](../adr/0044-coordination-injection-hitl.md) F2 は「都度
+指名された director のもとで、責務範囲内の作業分担は operator 承認
+不要 (事後報告)」と決めたが、事後報告の宛先と形式は未定。現行運用では
 「各エージェントの成果は
 director (クロエ) が巻き取り、マスター向け意思決定まとめを作る」
 (2026-07-11 マスター指示) が先行しており、これとの整合が論点。
@@ -33,8 +32,8 @@ ADR-0044 の実装 (kaoiro issue #87 派生) のうち、報告規約の文面
 
 ## 判断材料
 
-- director 役そのものの存否 (ADR-0044 F2 の再決裁)。存置する場合は
-  director 不在・疲労時のフォールバックも要る
+- director が未指名の作業、および指名 director の疲労・離脱時の報告先
+  フォールバック (F2 の指名は都度・非永続)
 - dashboard 側の表示設計コスト (subagent-tasks の集約表示との関係)
 
 ## 暫定方針

@@ -63,7 +63,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0041](adr/0041-operator-measurement-schema.md) | operator permission latency と dashboard 表示条件の measurement schema | proposed |
 | [0042](adr/0042-oauth-allowlist-login.md) | dashboard の OAuth 個人認証 (Google/GitHub/Nextcloud) + 許可リスト | accepted |
 | [0043](adr/0043-agent-initiated-session-reset.md) | agent 自身が turn 境界で要求する session reset | accepted |
-| [0044](adr/0044-coordination-injection-hitl.md) | 協調指針の共通フッター自動注入と director 媒介の自律協調 | proposed |
+| [0044](adr/0044-coordination-injection-hitl.md) | 協調指針の共通フッター自動注入と都度指名 director 下の責務内自律 | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。

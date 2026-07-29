@@ -10,8 +10,8 @@ decided: null
 
 ## 背景
 
-[ADR-0044](../adr/0044-coordination-injection-hitl.md) (proposed) に
-より作業分担が operator 承認なしで成立すれば、複数エージェントが
+[ADR-0044](../adr/0044-coordination-injection-hitl.md) F2 により責務
+範囲内の作業分担が operator 承認なしで成立すると、複数エージェントが
 同一ファイル・同一課題へ同時に手を入れる競合が起きうる。kaoiro
 issue #87 の起票時 AI 意見も「最小 deterministic guard + 自由対話で
 観察し、破綻パターンをデータで見る」実験経済学的アプローチを推して
