@@ -929,6 +929,112 @@ describe("phase-16 dashboard model switch integration", () => {
     expect(target.textContent).toContain("モデル一覧の再取得に失敗");
     expect(target.textContent).toContain("session_reset_pending");
   });
+
+  it("canonical status はaliasを主表示し、menuはcanonicalも識別してaliasを送る", async () => {
+    const conn = connection();
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "claude-sonnet-5",
+      models: [
+        {
+          value: "sonnet",
+          display_name: "Sonnet",
+          resolved_model: "claude-sonnet-5",
+          effort_levels: ["low", "medium", "high"],
+        },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    }, conn);
+
+    const modelValue = target.querySelector(".cc-model");
+    expect(modelValue?.textContent).toContain("sonnet");
+    expect(modelValue?.textContent).toContain("claude-sonnet-5");
+
+    (target.querySelector('[title="モデルを切替"]') as HTMLButtonElement).click();
+    await tick();
+    const option = target.querySelector(
+      '[aria-label="モデル候補"] [role="option"]',
+    ) as HTMLButtonElement;
+    expect(option.textContent).toContain("Sonnet (sonnet → claude-sonnet-5)");
+    expect(option.getAttribute("aria-selected")).toBe("true");
+    option.click();
+    await tick();
+    expect(conn.setModel).not.toHaveBeenCalled();
+
+    // A different active alias still sends its selectable value, never the
+    // resolved_model display metadata.
+    const { target: alternate } = await renderDetail({
+      engine: "claude-code",
+      model: "default",
+      models: [
+        {
+          value: "default",
+          display_name: "Default",
+          resolved_model: "claude-default-5",
+        },
+        {
+          value: "sonnet",
+          display_name: "Sonnet",
+          resolved_model: "claude-sonnet-5",
+        },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: false,
+      },
+    }, conn);
+    (alternate.querySelector('[title="モデルを切替"]') as HTMLButtonElement).click();
+    await tick();
+    (alternate.querySelectorAll('[aria-label="モデル候補"] [role="option"]')[1] as HTMLButtonElement).click();
+    await tick();
+    expect(conn.setModel).toHaveBeenCalledWith("host-a.fuji", "sonnet");
+    // Metadataがある行はoptimistic pending中もfriendly nameではなくaliasを
+    // 主表示し、canonical IDを副表示する。
+    expect(alternate.textContent).toContain("pending: sonnet");
+    expect(alternate.textContent).toContain("claude-sonnet-5");
+  });
+
+  it("canonical multi-match はaliasを捏造せずmenuの全候補を未選択にする", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "claude-shared-5",
+      models: [
+        {
+          value: "default",
+          display_name: "Default",
+          resolved_model: "claude-shared-5",
+        },
+        {
+          value: "opus[1m]",
+          display_name: "Opus 1M",
+          resolved_model: "claude-shared-5",
+        },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: false,
+      },
+    });
+
+    const modelValue = target.querySelector(".cc-model");
+    expect(modelValue?.textContent?.trim()).toBe("claude-shared-5");
+    (target.querySelector('[title="モデルを切替"]') as HTMLButtonElement).click();
+    await tick();
+    const options = [
+      ...target.querySelectorAll('[aria-label="モデル候補"] [role="option"]'),
+    ];
+    expect(options).toHaveLength(2);
+    expect(options.every((option) => option.getAttribute("aria-selected") === "false")).toBe(true);
+  });
 });
 
 // Phase-23 dogfood 再回帰対策 (藤 修正版方針 5): effortLevels 派生の
@@ -963,6 +1069,141 @@ describe("effortLevels 派生 (3-tier: exact → real default → intersection f
       (n) => n.textContent?.trim(),
     );
     expect(options).toEqual(["low", "medium", "high"]);
+  });
+
+  it("Tier 1 はcanonical model keyをalias rowのresolved_modelで解決する", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "claude-sonnet-5",
+      models: [
+        {
+          value: "default",
+          display_name: "Default",
+          effort_levels: ["low"],
+          resolved_model: "claude-default-5",
+        },
+        {
+          value: "sonnet",
+          display_name: "Sonnet",
+          effort_levels: ["medium", "high", "xhigh"],
+          resolved_model: "claude-sonnet-5",
+        },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    const effortBtn = target.querySelector(
+      '[title="effort を切替"]',
+    ) as HTMLButtonElement | null;
+    expect(effortBtn).not.toBeNull();
+    effortBtn!.click();
+    await tick();
+    const options = [...target.querySelectorAll('[role="option"]')].map(
+      (n) => n.textContent?.trim(),
+    );
+    // value に canonical は無いので、Tier 1 の resolved_model pass で
+    // sonnet row を拾う。Tier 2 の default levels へは進まない。
+    expect(options).toEqual(["medium", "high", "xhigh"]);
+  });
+
+  it("canonical multi-match の同一effort domainは維持する", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "claude-shared-5",
+      models: [
+        {
+          value: "default",
+          display_name: "Default",
+          effort_levels: ["low", "high"],
+          resolved_model: "claude-shared-5",
+        },
+        {
+          value: "opus[1m]",
+          display_name: "Opus 1M",
+          effort_levels: ["low", "high"],
+          resolved_model: "claude-shared-5",
+        },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    const effortBtn = target.querySelector(
+      '[title="effort を切替"]',
+    ) as HTMLButtonElement | null;
+    expect(effortBtn).not.toBeNull();
+    effortBtn!.click();
+    await tick();
+    const options = [...target.querySelectorAll('[role="option"]')].map(
+      (n) => n.textContent?.trim(),
+    );
+    expect(options).toEqual(["low", "high"]);
+  });
+
+  it("canonical multi-match はeffort intersectionだけを提示し、欠落はfail closed", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "claude-shared-5",
+      models: [
+        {
+          value: "default",
+          display_name: "Default",
+          effort_levels: ["low", "high"],
+          resolved_model: "claude-shared-5",
+        },
+        {
+          value: "opus[1m]",
+          display_name: "Opus 1M",
+          effort_levels: ["medium", "high"],
+          resolved_model: "claude-shared-5",
+        },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    (target.querySelector('[title="effort を切替"]') as HTMLButtonElement).click();
+    await tick();
+    expect([...target.querySelectorAll('[role="option"]')].map((n) => n.textContent?.trim())).toEqual([
+      "high",
+    ]);
+
+    const { target: missing } = await renderDetail({
+      engine: "claude-code",
+      model: "claude-shared-5",
+      models: [
+        {
+          value: "default",
+          display_name: "Default",
+          effort_levels: ["high"],
+          resolved_model: "claude-shared-5",
+        },
+        {
+          value: "opus[1m]",
+          display_name: "Opus 1M",
+          resolved_model: "claude-shared-5",
+        },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        // Host must advertise false for this shape. Keep this true here to
+        // prove the dashboard's derived effort domain also fails closed.
+        supports_effort_switch: true,
+      },
+    });
+    expect(missing.querySelector('[title="effort を切替"]')).toBeNull();
   });
 
   // 藤指示 (a): Claude bootstrap は real "default" alias entry を持つので

@@ -478,6 +478,9 @@ export interface ModelOption {
   description?: string;
   effort_levels?: string[];
   default_effort?: string;
+  /** Canonical model ID this selectable alias resolves to. Read-only
+   *  metadata; omitted when the engine cannot report it. */
+  resolved_model?: string;
 }
 
 /** Reads ext.models off an envelope into well-typed ModelOption entries
@@ -510,6 +513,9 @@ export function modelsFrom(envelope: Envelope): ModelOption[] {
           : {}),
         ...(typeof m.default_effort === "string"
           ? { default_effort: m.default_effort }
+          : {}),
+        ...(typeof m.resolved_model === "string" && m.resolved_model.length > 0
+          ? { resolved_model: m.resolved_model }
           : {}),
       });
     }

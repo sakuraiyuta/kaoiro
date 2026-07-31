@@ -243,6 +243,7 @@ describe("modelsFrom (#54)", () => {
             description: "d",
             effort_levels: ["low", "high", "max"],
             default_effort: "high",
+            resolved_model: "claude-sonnet-5",
           },
           { value: "haiku", display_name: "Haiku" },
         ],
@@ -255,6 +256,7 @@ describe("modelsFrom (#54)", () => {
         description: "d",
         effort_levels: ["low", "high", "max"],
         default_effort: "high",
+        resolved_model: "claude-sonnet-5",
       },
       { value: "haiku", display_name: "Haiku" },
     ]);
@@ -285,6 +287,28 @@ describe("modelsFrom (#54)", () => {
     const out = modelsFrom(envelope);
     expect(out[0]?.effort_levels).toEqual(["low", "high"]);
     expect(out[1]).not.toHaveProperty("effort_levels");
+  });
+
+  it("resolved_model は文字列だけを保持し、欠落・不正値では property を生やさない", () => {
+    const out = modelsFrom({
+      ...base,
+      ext: {
+        models: [
+          {
+            value: "sonnet",
+            display_name: "Sonnet",
+            resolved_model: "claude-sonnet-5",
+          },
+          { value: "haiku", display_name: "Haiku" },
+          { value: "empty", display_name: "Empty", resolved_model: "" },
+          { value: "bad", display_name: "Bad", resolved_model: 42 },
+        ],
+      },
+    });
+    expect(out[0]?.resolved_model).toBe("claude-sonnet-5");
+    expect(out[1]).not.toHaveProperty("resolved_model");
+    expect(out[2]).not.toHaveProperty("resolved_model");
+    expect(out[3]).not.toHaveProperty("resolved_model");
   });
 });
 

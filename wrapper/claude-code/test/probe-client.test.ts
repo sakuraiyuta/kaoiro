@@ -42,6 +42,28 @@ describe("parseProbeStdout", () => {
     expect(out?.models?.[0]?.value).toBe("sonnet");
   });
 
+  it("resolved_model を落とさず parse 結果に残す (isEngineModelInfo は行を丸ごと通す)", () => {
+    const out = parseProbeStdout(
+      JSON.stringify({
+        ok: true,
+        models: [
+          {
+            value: "sonnet",
+            display_name: "Sonnet",
+            description: "",
+            resolved_model: "claude-sonnet-5",
+          },
+          { value: "haiku", display_name: "Haiku", description: "" },
+        ],
+        elapsed_ms: 100,
+        source: "init",
+      }),
+    );
+    expect(out?.models?.[0]?.resolved_model).toBe("claude-sonnet-5");
+    const second = out?.models?.[1];
+    expect(second !== undefined && "resolved_model" in second).toBe(false);
+  });
+
   it("ok:true でも空 models は invalid_output に落とす", () => {
     const out = parseProbeStdout(
       JSON.stringify({ ok: true, models: [], elapsed_ms: 10 }),

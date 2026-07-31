@@ -307,6 +307,31 @@ running wrapper に届くが、fresh-idle wrapper は `deferQueryUntilFirstInput
 - Codex 非回帰: `parsed.engine === "claude-code"` gate で codex_engine_catalog
   相当は流さない。
 
+### F10 (2026-07-31 追補) — probe 経路も canonical ID を透過する
+
+[ADR-0037](0037-claude-model-catalog-live-refresh.md) F9 で
+`EngineModelInfo.resolved_model` を追加したのに伴い、本 ADR の probe 経路でも
+同 field を透過する。対象は F3 の projection (`probe.ts` `projectModel()`) と、
+F9 v2 の fresh-idle 手動 refresh が使う `host.ts` `#executeManualRefresh()` の
+2 箇所。`probe-client.ts` の `parseProbeStdout()` は row を object のまま通す
+ため実装変更は不要だが、将来 whitelist 化されて静かに落ちるのを防ぐ回帰テストを
+置いた。
+
+F5 の runner memory cache は `EngineModelInfo[]` を素通しするため無変更。
+F6 / F7 の event / relay も無変更で、server (Elixir) は `runner_channel.ex` が
+`%{"id", "models"}` の形だけを検証して engines を保持するため touch していない。
+
+wire と UI を分けて扱う。register 経路の catalog row にも `resolved_model` は
+**透過される** (probe → cache → register payload)。そのうえで **LaunchDialog の
+UI では表示しない**。cache が持つ「最後に成功した probe 時点」の解決値
+(TTL 超過後も据え置かれうる) と init 後実測とで精度が異なり、特に `default`
+行は account 推奨に追随して表示値と起動結果がズレるため。透過を止めない理由は、経路ごとに row の形が変わると consumer 側が
+「absent = unknown」以外の分岐を持たされるから。表示是非は独立した UX 判断と
+して Gitea
+[issue #176](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/176)
+へ外部化した (理由の詳細は
+[plugin-model](../specs/plugin-model.md) の該当節)。
+
 ## Implementation
 
 [phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md)。

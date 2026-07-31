@@ -7,6 +7,9 @@ export interface SupportedModel {
   display_name: string;
   description: string;
   effort_levels?: EffortLevel[];
+  /** Canonical wire model ID this entry resolves to, mirrored from the SDK's
+   * ModelInfo.resolvedModel. Read-only metadata; absent = unknown. */
+  resolved_model?: string;
 }
 
 const FULL_EFFORT = [

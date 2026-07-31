@@ -49,6 +49,9 @@ interface ProbeModel {
   description: string;
   effort_levels?: string[];
   default_effort?: string;
+  /** Canonical wire model ID this row's `value` resolves to, mirrored from
+   *  ModelInfo.resolvedModel. Read-only metadata; absent = unknown. */
+  resolved_model?: string;
 }
 
 interface ProbeSuccess {
@@ -103,8 +106,9 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 /** Map an SDK ModelInfo (structural — the SDK type may have extra optional
- *  fields we don't need) to the ProbeModel row shape. */
-function projectModel(m: unknown): ProbeModel | null {
+ *  fields we don't need) to the ProbeModel row shape. Exported for unit
+ *  tests; the CLI itself only uses it through main(). */
+export function projectModel(m: unknown): ProbeModel | null {
   if (typeof m !== "object" || m === null) return null;
   const rec = m as Record<string, unknown>;
   const value = typeof rec.value === "string" ? rec.value : null;
@@ -123,6 +127,14 @@ function projectModel(m: unknown): ProbeModel | null {
       (l): l is string => typeof l === "string",
     );
     if (levels.length > 0) out.effort_levels = levels;
+  }
+  // Read-only metadata: carried only when the SDK reports a non-empty id, so
+  // a row without resolvedModel stays byte-identical to the pre-field wire
+  // shape. `""` is not a canonical wire ID — it collapses to absent (unknown)
+  // rather than publishing a value no lookup could ever match. Not trimmed:
+  // the wire ID is preserved verbatim.
+  if (typeof rec.resolvedModel === "string" && rec.resolvedModel.length > 0) {
+    out.resolved_model = rec.resolvedModel;
   }
   return out;
 }

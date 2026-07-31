@@ -137,12 +137,74 @@ BOOTSTRAP 縮小 PR を後続で実施する。
 同 PR での同時実施は避ける。理由は SDK upgrade に伴う挙動変化と BOOTSTRAP 縮小
 の影響を切り分けるため。
 
-### F8 — persist alias が SDK 実測に含まれない場合の fallback
+### F8 — persist された model identifier が SDK 実測に含まれない場合の fallback
 
-session state / config 等に persist された `model` alias (例: `sonnet[1m]`)
-が起動後の SDK 実測に含まれない場合、起動時検証で `default` に fallback し、
-UI に通知 event を発行する。通知の粒度 (toast 1 度 / session log / 明示
-ダイアログ) は phase-18-3 の実装 PR で確定する。
+session state / config 等に persist された `model` identifier (例:
+`sonnet[1m]`) が起動後の SDK 実測に含まれない場合、起動時検証で `default` に
+fallback し、UI に通知 event を発行する。通知の粒度 (toast 1 度 / session log /
+明示ダイアログ) は phase-18-3 の実装 PR で確定する。
+
+本 ADR 制定時 (2026-07-14) は persist 値を alias のみと想定していたが、F9 追補
+以降は alias / canonical のいずれもありうる。判定は `value` 完全一致 →
+`resolved_model` 一致の 2-pass で行い、どちらにも当たらないものだけを
+fallback 対象とする。canonical が複数行に一致した場合も **1 件以上あれば
+valid** として rollback しない — persist 検証が問うのは「その識別子が catalog に
+存在するか」であって、どの行に帰属するかではないため。`switch_error.reason` の
+wire 値は互換のため `"persist_alias_unknown"` のまま据え置く。
+
+### F9 (2026-07-31 追補) — catalog row に canonical ID を透過し、突合を 2-pass 化する
+
+Context 節で実測した `resolvedModel` (`default` → `claude-opus-4-8[1m]`、
+`sonnet` → `claude-sonnet-5`) は projection で落とされ、wire に出ていなかった。
+これが 2 つの実害を生んでいた:
+
+1. F8 の persist 検証は `value` 完全一致のみのため、persist された canonical を
+   「catalog にない alias」と誤判定して `default` へ rollback していた
+2. `#model` が canonical になった場合 (init / status が canonical を報告する、
+   operator が canonical を直接 `setModel` する、その値が resume snapshot 経由で
+   次回起動に渡る) catalog 突合が全経路で miss する。`system/init` の `model` が
+   実際どちらの表現かは未観測 (後述) のため、これは「canonical が入りうる経路が
+   存在する」ことに基づく条件付きの defect である
+
+`EngineModelInfo` に `resolved_model?: string` を optional 追加し、突合を
+「`value` 完全一致 → `resolved_model` 一致」の 2-pass に変更する。
+
+canonical 側は**多重一致しうる**。実 probe は `default` と `opus[1m]` を同じ
+canonical に解決するため、これは例外ではなく既定である。したがって pass (2) は
+全一致行を返し、用途ごとに畳む: membership / persist 有効性は 1 件以上で valid、
+effort domain は一致行の intersection (1 行でも `effort_levels` 欠落があれば空)、
+`supports_effort_switch` はその intersection が空なら `false`、UI は一致が
+ちょうど 1 件のときだけ alias 主 + canonical 副で、多重一致時は raw canonical を
+主表示し model menu の `aria-selected` を全行 `false` にする (属性は付くが
+どの行も選択済みにしない)。送信 / 保持は一致件数に関わらず入力表現保存のまま。
+
+先頭一致の採用は却下した。決定論的ではあるが意味的根拠がなく、pin された
+`opus[1m]` を浮動の `default` として表示してしまう — 下で normalization を
+却下したのと同じ意味破壊を、送信経路ではなく表示経路で犯すことになる。
+規則の詳細は [plugin-model](../specs/plugin-model.md) の該当節。
+
+F4 の
+「protocol schema は現状維持」は `EngineCatalogEntry` の形 (配列・空可) に
+ついての判断であり、row への optional field 追加はこれに抵触しない。旧
+producer は field を出さず、旧 consumer は落とすだけなので後方互換は保たれる。
+
+あわせて**入力表現保存**を契約として明文化する。catalog 突合は effort domain の
+決定と未知モデル判定にのみ使い、SDK へ送る値・保持する値は呼出元から受け取った
+文字列をそのまま保存する。alias ↔ canonical のいずれの方向にも正規化しない —
+canonical → alias は非単射で、正規化すると `opus` の pin が `default` の浮動
+選択に化けるため。
+
+canonical ID が pre-init `Options.model` と live `Query.setModel()` の双方で
+受理されることは 2026-07-31 に tokenless で実測済み。一方 `system/init` の
+`model` の表現は観測に課金を要するため未確定で、alias / canonical どちらを
+返されても壊れないことをテストで pin する形に留めた。
+
+仕様の正本は [plugin-model](../specs/plugin-model.md) の該当節、実測の生値は
+[agent-sdk-events](../specs/agent-sdk-events.md)。LaunchDialog への canonical
+表示は精度差 (register 経路は last-known-good cache が持つ最後に成功した
+probe 時点値で、TTL 超過後も据え置かれうる) を理由に対象外とし、Gitea
+[issue #176](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/176)
+へ外部化した。
 
 ## Consequences
 
@@ -152,7 +214,12 @@ UI に通知 event を発行する。通知の粒度 (toast 1 度 / session log 
 - Claude live 経路の source of truth が SDK 実測に一元化され、account
   依存の解決 (plan / team / entitled model) が正確に反映される
 - protocol schema / server / client / codex を触らない localized 改修に留まり、
-  改修範囲が Claude wrapper 中心に閉じる
+  改修範囲が Claude wrapper 中心に閉じる。**追補 (2026-07-31、F9)**: この
+  「localized」は F9 で一部崩れた。現在の実態は server 無変更 / codex 無変更を
+  維持しつつ、protocol は `EngineModelInfo` row に optional field 1 個
+  (`resolved_model`) を追加、client は `modelsFrom` の projection と model 行の
+  表示・突合を変更、である。container 形 (F4) と server / codex 非改修は保たれて
+  いる
 - `default` エントリという安全牌が保たれ、init 前後どちらでも "モデル選択が
   ゼロ" 状態にはならない
 
@@ -162,7 +229,12 @@ UI に通知 event を発行する。通知の粒度 (toast 1 度 / session log 
   (F5、[claude-effort-levels-init-transition](../open-questions/claude-effort-levels-init-transition.md))
 - launch dialog では init 前は "Default" のみの提示となり、Sonnet 5 のような
   特定モデルを init 前に pre-select はできない。init 完了後の mid-session
-  switch で選ぶ運用となる
+  switch で選ぶ運用となる。**追補 (2026-07-31、
+  [ADR-0039](0039-engine-catalog-live-probe.md))**: この制約は解消済み。runner の
+  短命 probe + memory cache により、通常は live-probe 実測の rich catalog が
+  launch dialog に出て特定モデルを pre-select できる。"Default" のみの提示に
+  なるのは、成功 cache を一度も持たない場合 (cold start / 初回 probe 失敗) に
+  限られる
 - retry 実装の追加分だけ wrapper 側の複雑度が増す (F6)
 
 ### Neutral

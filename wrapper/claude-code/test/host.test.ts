@@ -2403,6 +2403,419 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     await done;
   });
 
+  it("live canonical setModel はcanonical入力をSDKと#modelへそのまま渡す", async () => {
+    const setModel = vi.fn(async () => {});
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) void _;
+      }
+      return asQuery(gen(), async () => {}, undefined, { setModel });
+    });
+    const host = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "default",
+            display_name: "Default",
+            resolved_model: "claude-opus-5",
+          },
+          {
+            value: "opus",
+            display_name: "Opus",
+            resolved_model: "claude-opus-5",
+          },
+        ],
+      },
+      { onState: () => {}, queryFn, now: () => "T" },
+    );
+
+    const done = host.run();
+    await host.setModel("claude-opus-5");
+    // Both rows resolve to this canonical ID; metadata uses their shared
+    // effort intersection, but must never normalize the SDK argument.
+    expect(setModel).toHaveBeenCalledWith("claude-opus-5");
+    expect(host.statusSnapshot()).toMatchObject({ model: "claude-opus-5" });
+    host.close();
+    await done;
+  });
+
+  it("run前 setModel(canonical) はfirst Query Optionsへそのまま保持する", async () => {
+    let seenOptions: Options | undefined;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      seenOptions = args.options;
+      async function* gen(): AsyncGenerator<SDKMessage, void> {}
+      return asQuery(gen());
+    });
+    const host = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "sonnet",
+            display_name: "Sonnet",
+            resolved_model: "claude-sonnet-5",
+          },
+        ],
+      },
+      {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+      },
+    );
+
+    // This pins the wrapper's pre-init transfer contract. It is not evidence
+    // that the SDK accepts canonical input; that acceptance comes from the
+    // separate runtime observation documented in agent-sdk-events.md.
+    await host.setModel("claude-sonnet-5");
+    expect(host.statusSnapshot()).toMatchObject({ model: "claude-sonnet-5" });
+    await host.run();
+    expect(seenOptions?.model).toBe("claude-sonnet-5");
+  });
+
+  it("persisted canonical model はalias catalog rowに解決され、default rollbackしない", async () => {
+    const host = new AgentHost(config, {
+      onState: () => {},
+      modelSource: "config",
+      queryOptions: { model: "claude-sonnet-5" },
+      probeFn: async () => ({
+        ok: true,
+        models: [
+          {
+            value: "sonnet",
+            display_name: "Sonnet",
+            description: "",
+            resolved_model: "claude-sonnet-5",
+          },
+          {
+            value: "opus[1m]",
+            display_name: "Opus 1M",
+            description: "",
+            resolved_model: "claude-sonnet-5",
+          },
+        ],
+        elapsed_ms: 1,
+      }),
+      now: () => "T",
+    });
+
+    await expect(host.refreshCatalogFor()).resolves.toEqual({
+      ok: true,
+      models_count: 2,
+    });
+    expect(host.statusSnapshot()).toMatchObject({
+      model: "claude-sonnet-5",
+      model_source: "config",
+    });
+    expect(host.statusExtSnapshot()).not.toHaveProperty("switch_error");
+  });
+
+  it("canonical active model はalias catalog rowから effort capability を得る", () => {
+    const host = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "sonnet",
+            display_name: "Sonnet",
+            effort_levels: ["low", "medium", "high"],
+            resolved_model: "claude-sonnet-5",
+          },
+        ],
+      },
+      {
+        onState: () => {},
+        modelSource: "config",
+        queryOptions: { model: "claude-sonnet-5" },
+      },
+    );
+
+    expect(host.statusExtSnapshot().session_capabilities).toMatchObject({
+      supports_effort_switch: true,
+    });
+  });
+
+  it("init aliasはcanonical startup stateを上書きしてexact catalog rowを使う", async () => {
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: "sonnet" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "default",
+            display_name: "Default",
+            resolved_model: "claude-sonnet-5",
+          },
+          {
+            value: "sonnet",
+            display_name: "Sonnet",
+            effort_levels: ["low", "medium", "high"],
+            resolved_model: "claude-sonnet-5",
+          },
+        ],
+      },
+      {
+        onState: (env) => envs.push(env),
+        queryFn,
+        modelSource: "config",
+        queryOptions: { model: "claude-sonnet-5" },
+        now: () => "T",
+      },
+    );
+
+    await host.run();
+    // init's SDK-reported alias is authoritative for current #model, while
+    // the explicit source remains the launch/config provenance.
+    expect(host.statusSnapshot()).toMatchObject({
+      model: "sonnet",
+      model_source: "config",
+    });
+    const ext = host.statusExtSnapshot();
+    // default resolves to the same canonical ID but lacks effort. True proves
+    // the post-init alias got the value-exact sonnet row, not the first
+    // resolved_model match.
+    expect(ext.session_capabilities).toMatchObject({
+      supports_effort_switch: true,
+    });
+    expect(ext.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: "sonnet",
+          resolved_model: "claude-sonnet-5",
+        }),
+      ]),
+    );
+    expect(envs.some((env) => env.ext.model === "sonnet")).toBe(true);
+  });
+
+  it("canonical lookup rowのeffort_levelsでinvalid effortを判定する", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "sonnet",
+            display_name: "Sonnet",
+            effort_levels: ["low"],
+            resolved_model: "claude-sonnet-5",
+          },
+        ],
+      },
+      {
+        onState: (env) => envs.push(env),
+        effortSource: "config",
+        queryOptions: { effort: "high" },
+      },
+    );
+
+    await host.setModel("claude-sonnet-5");
+    expect(host.statusSnapshot()).toMatchObject({ model: "claude-sonnet-5" });
+    expect(host.statusSnapshot()).not.toHaveProperty("effort");
+    expect(envs.at(-1)?.ext).toMatchObject({ effort_reset: true });
+  });
+
+  it("canonical multi-match setModel は非共通のpre-init effortをresetし入力を保持する", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "default",
+            display_name: "Default",
+            effort_levels: ["low", "high"],
+            resolved_model: "claude-shared-5",
+          },
+          {
+            value: "opus[1m]",
+            display_name: "Opus 1M",
+            effort_levels: ["medium", "high"],
+            resolved_model: "claude-shared-5",
+          },
+        ],
+      },
+      {
+        onState: (env) => envs.push(env),
+        modelSource: "config",
+        effortSource: "config",
+        queryOptions: { model: "default", effort: "low" },
+      },
+    );
+
+    await host.setModel("claude-shared-5");
+
+    // Canonical fallback uses the shared ["high"] domain, so retained low
+    // is invalid. The chosen canonical input itself is never normalized.
+    expect(host.statusSnapshot()).toMatchObject({ model: "claude-shared-5" });
+    expect(host.statusSnapshot()).not.toHaveProperty("effort");
+    expect(envs.at(-1)?.ext).toMatchObject({ effort_reset: true });
+  });
+
+  it("value exact match wins before a shared resolved_model match", async () => {
+    const host = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "default",
+            display_name: "Default",
+            effort_levels: ["low"],
+            resolved_model: "claude-opus-5",
+          },
+          {
+            value: "opus",
+            display_name: "Opus",
+            effort_levels: ["high"],
+            resolved_model: "claude-opus-5",
+          },
+        ],
+      },
+      {
+        onState: () => {},
+        modelSource: "config",
+        effortSource: "config",
+        queryOptions: { model: "default", effort: "high" },
+      },
+    );
+
+    await host.setModel("opus");
+    // If canonical matching ran in the same pass as value matching, the
+    // preceding default row would win and clear the retained high effort.
+    expect(host.statusSnapshot()).toMatchObject({
+      model: "opus",
+      effort: "high",
+    });
+  });
+
+  it("canonical multi-match with a shared effort domain keeps switching enabled", async () => {
+    const host = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "default",
+            display_name: "Default",
+            effort_levels: ["low", "high"],
+            resolved_model: "claude-shared-5",
+          },
+          {
+            value: "opus[1m]",
+            display_name: "Opus 1M",
+            effort_levels: ["low", "high"],
+            resolved_model: "claude-shared-5",
+          },
+        ],
+      },
+      {
+        onState: () => {},
+        modelSource: "config",
+        queryOptions: { model: "claude-shared-5" },
+      },
+    );
+
+    expect(host.statusExtSnapshot().session_capabilities).toMatchObject({
+      supports_effort_switch: true,
+    });
+    await expect(host.setEffort("high")).resolves.toBeUndefined();
+    expect(host.statusSnapshot()).toMatchObject({ effort: "high" });
+  });
+
+  it("canonical multi-match intersects effort and missing levels fail closed", async () => {
+    const intersecting = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "default",
+            display_name: "Default",
+            effort_levels: ["low", "high"],
+            resolved_model: "claude-shared-5",
+          },
+          {
+            value: "opus[1m]",
+            display_name: "Opus 1M",
+            effort_levels: ["medium", "high"],
+            resolved_model: "claude-shared-5",
+          },
+        ],
+      },
+      {
+        onState: () => {},
+        modelSource: "config",
+        queryOptions: { model: "claude-shared-5" },
+      },
+    );
+
+    await expect(intersecting.setEffort("low")).rejects.toThrow(
+      "unsupported bootstrap effort: low",
+    );
+    await expect(intersecting.setEffort("high")).resolves.toBeUndefined();
+
+    const missingLevels = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "default",
+            display_name: "Default",
+            effort_levels: ["high"],
+            resolved_model: "claude-shared-5",
+          },
+          {
+            value: "opus[1m]",
+            display_name: "Opus 1M",
+            resolved_model: "claude-shared-5",
+          },
+        ],
+      },
+      {
+        onState: () => {},
+        modelSource: "config",
+        queryOptions: { model: "claude-shared-5" },
+      },
+    );
+
+    expect(missingLevels.statusExtSnapshot().session_capabilities).toMatchObject({
+      supports_effort_switch: false,
+    });
+    await expect(missingLevels.setEffort("high")).rejects.toThrow(
+      "unsupported bootstrap effort: high",
+    );
+  });
+
+  it("empty resolved_model is not a canonical catalog join key", async () => {
+    const host = new AgentHost(
+      {
+        ...config,
+        claude_engine_catalog: [
+          {
+            value: "sonnet",
+            display_name: "Sonnet",
+            effort_levels: ["high"],
+            resolved_model: "",
+          },
+        ],
+      },
+      {
+        onState: () => {},
+        modelSource: "config",
+        queryOptions: { model: "" },
+      },
+    );
+
+    await expect(host.setEffort("high")).rejects.toThrow(
+      "unsupported bootstrap effort: high",
+    );
+  });
+
   it("setModel 成功で context 世代が進み古い refresh 結果が捨てられる (ADR-0040 must-fix C)", async () => {
     // model 切替中に旧 model の refresh が in-flight → 新 trigger は
     // inflight guard で drop、finally の re-kick で新 generation の refresh が

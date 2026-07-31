@@ -64,6 +64,53 @@ describe("AgentHost.refreshCatalogFor (fresh-idle #query=null path)", () => {
     expect(models?.[0]?.effort_levels).toEqual(["low", "medium", "high"]);
   });
 
+  it("probe outcome の resolved_model を ext.models へ透過し、欠落行/空文字行は absent のまま", async () => {
+    const states: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (env) => states.push(env),
+      probeFn: async (): Promise<ProbeOutcome> => ({
+        ok: true,
+        models: [
+          {
+            value: "sonnet",
+            display_name: "Sonnet",
+            description: "",
+            resolved_model: "claude-sonnet-5",
+          },
+          { value: "haiku", display_name: "Haiku", description: "" },
+          {
+            value: "opus",
+            display_name: "Opus",
+            description: "",
+            resolved_model: "",
+          },
+        ],
+        elapsed_ms: 12,
+        source: "init",
+      }),
+      queryFn: (() => {
+        throw new Error("query should not be constructed in this test");
+      }) as never,
+      now: () => "T",
+    });
+
+    expect(await host.refreshCatalogFor()).toEqual({
+      ok: true,
+      models_count: 3,
+    });
+    const models = states.at(-1)?.ext?.models as
+      | Array<Record<string, unknown>>
+      | undefined;
+    expect(models?.[0]?.resolved_model).toBe("claude-sonnet-5");
+    expect(models?.[1] !== undefined && "resolved_model" in models[1]).toBe(
+      false,
+    );
+    // 空文字は canonical wire ID ではないので absent へ畳む。
+    expect(models?.[2] !== undefined && "resolved_model" in models[2]).toBe(
+      false,
+    );
+  });
+
   it("probe 失敗で #models は last-known-good (bootstrap) を保持し、structured failure を返す (never-reject)", async () => {
     const states: Envelope[] = [];
     const host = new AgentHost(config, {
@@ -247,6 +294,49 @@ describe("AgentHost.refreshCatalogFor (#query !== null live SDK path)", () => {
       | undefined;
     expect(models?.map((m) => m.value)).toEqual(["sonnet", "haiku"]);
     expect(models?.[0]?.effort_levels).toEqual(["low", "medium", "high"]);
+  });
+
+  it("SDK.supportedModels() の resolvedModel を ext.models へ透過し、欠落行/空文字行は absent のまま", async () => {
+    const states: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (env) => states.push(env),
+      queryFn: runningQueryFn(async () => [
+        {
+          value: "sonnet",
+          displayName: "Sonnet",
+          description: "",
+          resolvedModel: "claude-sonnet-5",
+        } as ModelInfo,
+        { value: "haiku", displayName: "Haiku", description: "" } as ModelInfo,
+        {
+          value: "opus",
+          displayName: "Opus",
+          description: "",
+          resolvedModel: "",
+        } as ModelInfo,
+      ]),
+      probeFn: async () => {
+        throw new Error("probeFn must not run in live SDK path");
+      },
+      now: () => "T",
+    });
+    await host.run();
+
+    expect(await host.refreshCatalogFor()).toEqual({
+      ok: true,
+      models_count: 3,
+    });
+    const models = states.at(-1)?.ext?.models as
+      | Array<Record<string, unknown>>
+      | undefined;
+    expect(models?.[0]?.resolved_model).toBe("claude-sonnet-5");
+    expect(models?.[1] !== undefined && "resolved_model" in models[1]).toBe(
+      false,
+    );
+    // 空文字は canonical wire ID ではないので absent へ畳む。
+    expect(models?.[2] !== undefined && "resolved_model" in models[2]).toBe(
+      false,
+    );
   });
 
   it("SDK.supportedModels() 失敗で last-known #models を保持し structured failure を返す", async () => {

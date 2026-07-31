@@ -917,24 +917,26 @@ export class AgentHost implements EngineAdapter {
     await this.#query?.interrupt();
   }
 
-  /** Switch the model for subsequent turns (#54, ADR-0020). `value` is an
-   *  alias from supportedModels (e.g. "opus[1m]", "sonnet", "default"); the
-   *  SDK resolves it. Next-message granularity — the active turn is unaffected.
-   *  Before run(), buffers the choice into the first Query's Options. */
+  /** Switch the model for subsequent turns (#54, ADR-0020). `value` accepts
+   *  either a supportedModels alias (e.g. "opus[1m]", "sonnet", "default")
+   *  or its resolved canonical ID. Input representation is preserved: the
+   *  exact string received is sent to the SDK and stored in #model; catalog
+   *  lookup only determines the compatible effort domain. Next-message
+   *  granularity — the active turn is unaffected. Before run(), buffers that
+   *  same string into the first Query's Options. */
   async setModel(value: string): Promise<void> {
     const current = this.#query;
-    const nextModel = this.#models?.find((model) => model.value === value);
+    const nextModels = this.#findCatalogEntries(value);
+    const nextEffortLevels = this.#effortLevelsForCatalogEntries(nextModels);
     const invalidEffort =
       this.#effort !== null &&
-      nextModel !== undefined &&
-      !(
-        nextModel.effort_levels?.includes(this.#effort as EffortLevel) ?? false
-      );
+      nextModels.length > 0 &&
+      !nextEffortLevels.includes(this.#effort as EffortLevel);
     // Before run(), commit into the fields used to construct query Options.
     // This closes the fresh-idle race where the dashboard can send set_model
     // after the CLI's idle announce but before #query exists.
     if (current === null) {
-      if (nextModel === undefined) {
+      if (nextModels.length === 0) {
         this.#switchErrorOnce = {
           kind: "model",
           requested: value,
@@ -1038,10 +1040,9 @@ export class AgentHost implements EngineAdapter {
   async setEffort(level: string): Promise<void> {
     const current = this.#query;
     if (current === null) {
-      const active = this.#models.find(
-        (model) => model.value === (this.#model ?? "default"),
-      );
-      if (!(active?.effort_levels?.includes(level as EffortLevel) ?? false)) {
+      const activeModels = this.#findCatalogEntries(this.#model ?? "default");
+      const activeEffortLevels = this.#effortLevelsForCatalogEntries(activeModels);
+      if (!activeEffortLevels.includes(level as EffortLevel)) {
         this.#switchErrorOnce = {
           kind: "effort",
           requested: level,
@@ -1463,12 +1464,13 @@ export class AgentHost implements EngineAdapter {
       if (consumeOneShot) this.#switchErrorOnce = null;
     }
     if (this.#models !== null && this.#model !== null) {
-      const active = this.#models.find((model) => model.value === this.#model);
-      if (active !== undefined) {
+      const activeModels = this.#findCatalogEntries(this.#model);
+      if (activeModels.length > 0) {
+        const activeEffortLevels = this.#effortLevelsForCatalogEntries(activeModels);
         const caps = ext.session_capabilities as Record<string, unknown>;
         ext.session_capabilities = {
           ...caps,
-          supports_effort_switch: (active.effort_levels?.length ?? 0) > 0,
+          supports_effort_switch: activeEffortLevels.length > 0,
         };
       }
     }
@@ -1603,6 +1605,12 @@ export class AgentHost implements EngineAdapter {
         ...(m.supportedEffortLevels
           ? { effort_levels: m.supportedEffortLevels }
           : {}),
+        // Read-only metadata (ADR-0037 追補): absent when the SDK omits
+        // resolvedModel, so ext.models keeps its pre-field shape. `""` is
+        // not a canonical wire ID and collapses to absent (unknown) too.
+        ...(typeof m.resolvedModel === "string" && m.resolvedModel.length > 0
+          ? { resolved_model: m.resolvedModel }
+          : {}),
       }));
       this.#modelsSucceeded = true;
       this.#validatePersistModelAgainstCatalog();
@@ -1623,13 +1631,13 @@ export class AgentHost implements EngineAdapter {
 
   /** Validates a persisted `#model` (spawn config / env / resume snapshot)
    *  against the SDK's measured catalog once #refreshSupportedModels() has
-   *  populated it (ADR-0037 F8, phase-18-7). A persist alias that the account
-   *  no longer entitles — Anthropic drops a model, the operator's plan
-   *  changes, a resume snapshot outlives its catalog — is dropped to
+   *  populated it (ADR-0037 F8, phase-18-7). A persisted alias or canonical
+   *  ID that the account no longer entitles — Anthropic drops a model, the
+   *  operator's plan changes, a resume snapshot outlives its catalog — is dropped to
    *  `"default"` (BOOTSTRAP floor, always in the SDK catalog) and reported
    *  once via `#switchErrorOnce` for UI feedback. Runs only in the
    *  refresh-success branch, so the FIRST turn before that success can still
-   *  hit the SDK with a stale alias and be rejected there — accepted trade-off
+   *  hit the SDK with a stale input string and be rejected there — accepted trade-off
    *  under the pre-init chicken-and-egg (there is no earlier point to see the
    *  measured catalog). Operator-explicit setModel with a floor-out value at
    *  pre-init stays a loud throw (`setModel` L717-725) — that is a dashboard
@@ -1642,7 +1650,7 @@ export class AgentHost implements EngineAdapter {
     // refresh cycle. Manual retry that legitimately wants to re-validate
     // could re-seed #persistedModel; the current UX has no such path.
     this.#persistedModel = null;
-    if (this.#models.some((m) => m.value === requested)) return;
+    if (this.#findCatalogEntries(requested).length > 0) return;
     this.#model = "default";
     // Paired reset: the explicit source (config / env / launch) that
     // supplied the alias no longer owns the effective value, mirroring the
@@ -1657,6 +1665,35 @@ export class AgentHost implements EngineAdapter {
       reason: "persist_alias_unknown",
       rolled_back_to: "default",
     };
+  }
+
+  /** Finds the catalog rows for an alias or the canonical model ID reported
+   *  by the SDK. A value-exact hit is one row and always wins. Otherwise all
+   *  non-empty resolved_model matches are returned so callers can derive a
+   *  conservative shared effort domain. Keep this metadata-only — callers
+   *  continue sending the string they were given to the SDK. */
+  #findCatalogEntries(key: string): SupportedModel[] {
+    const exact = this.#models.find((model) => model.value === key);
+    if (exact !== undefined) return [exact];
+    return this.#models.filter(
+      (model) =>
+        typeof model.resolved_model === "string" &&
+        model.resolved_model.length > 0 &&
+        model.resolved_model === key,
+    );
+  }
+
+  /** Derives the effort domain for catalog matches. A value-exact lookup has
+   *  one row; canonical fallback can have several and only exposes their
+   *  intersection. Missing effort_levels in any canonical row fails closed. */
+  #effortLevelsForCatalogEntries(models: readonly SupportedModel[]): EffortLevel[] {
+    const first = models[0];
+    if (first === undefined || first.effort_levels === undefined) return [];
+    if (models.length === 1) return [...first.effort_levels];
+    if (models.some((model) => model.effort_levels === undefined)) return [];
+    return first.effort_levels.filter((level) =>
+      models.slice(1).every((model) => model.effort_levels?.includes(level)),
+    );
   }
 
   /** Manual retry of supportedModels() (ADR-0037 F6, phase-18-5). Resets the
@@ -1765,6 +1802,11 @@ export class AgentHost implements EngineAdapter {
         description: m.description,
         ...(m.effort_levels ? { effort_levels: [...m.effort_levels] } : {}),
         ...(m.default_effort ? { default_effort: m.default_effort } : {}),
+        // Same absent = unknown contract as the live-SDK mapping above; an
+        // empty id from a stale/foreign probe payload is dropped here too.
+        ...(typeof m.resolved_model === "string" && m.resolved_model.length > 0
+          ? { resolved_model: m.resolved_model }
+          : {}),
       })) as SupportedModel[];
       this.#modelsSucceeded = true;
       this.#validatePersistModelAgainstCatalog();

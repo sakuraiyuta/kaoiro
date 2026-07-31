@@ -446,6 +446,33 @@
   // Operator-only: ext is stripped for viewers (#46), so these stay empty and
   // the switch controls never render for non-operators.
   const models = $derived(modelsFrom(envelope));
+  /** Resolves a status key against the catalog. A value-exact hit always
+   *  wins alone; canonical fallback returns every non-empty resolved_model
+   *  match so callers can fail closed over their shared effort domain. */
+  function findCatalogEntries(key: string | null | undefined) {
+    if (key === null || key === undefined) return [];
+    const exact = models.find((m) => m.value === key);
+    if (exact !== undefined) return [exact];
+    return models.filter(
+      (m) =>
+        typeof m.resolved_model === "string" &&
+        m.resolved_model.length > 0 &&
+        m.resolved_model === key,
+    );
+  }
+  /** A one-row exact match keeps that row's order. Canonical multi-match
+   *  exposes only the intersection, and a missing effort_levels fails closed. */
+  function effortLevelsForCatalogEntries(
+    entries: readonly { effort_levels?: string[] }[],
+  ): string[] {
+    const first = entries[0];
+    if (first === undefined || first.effort_levels === undefined) return [];
+    if (entries.length === 1) return [...first.effort_levels];
+    if (entries.some((entry) => entry.effort_levels === undefined)) return [];
+    return first.effort_levels.filter((level) =>
+      entries.slice(1).every((entry) => entry.effort_levels?.includes(level)),
+    );
+  }
   // Effort choices belong to the active (or pending) model. Offering a union
   // would permit an invalid model/effort pair and invite the silent downgrade
   // ADR-0035 explicitly forbids.
@@ -453,9 +480,10 @@
   const effortLevels = $derived.by(() => {
     // Phase-23 dogfood 再回帰対策 (藤 修正版方針 5 + G1): three-tier lookup。
     //
-    // 1) **concrete key exact hit** — pending / ccModel が set され models
-    //    の entry と一致するならその effort_levels (欠落なら []、fallback
-    //    しない)。通常経路。
+    // 1) **concrete catalog hit** — pending / ccModel を value 完全一致で
+    //    先に探し、無いときだけ resolved_model の全matchを取る。exactなら
+    //    そのrow、canonical複数matchならeffort_levelsのintersection
+    //    (1件でも欠落なら[])。Tier 2へfallbackしない。
     // 2) **exact miss / key 未報告** で real `value="default"` entry あり
     //    → その effort_levels (欠落なら [])。Claude bootstrap の default
     //    entry は engine が宣言した account-default effort domain。
@@ -476,11 +504,11 @@
     // 有無だけで判定する。
     const key = pendingModel?.value ?? ccModel;
     const hasConcreteKey = key !== null && key !== undefined;
-    // Tier 1: concrete key exact match
+    // Tier 1: value exact, then all canonical resolved_model matches
     if (hasConcreteKey) {
-      const active = models.find((m) => m.value === key);
-      if (active !== undefined) {
-        const seen = new Set(active.effort_levels ?? []);
+      const activeModels = findCatalogEntries(key);
+      if (activeModels.length > 0) {
+        const seen = new Set(effortLevelsForCatalogEntries(activeModels));
         return EFFORT_ORDER.filter((l) => seen.has(l));
       }
     }
@@ -824,10 +852,11 @@
   const dialogAvailability = $derived(
     userInputDialogAvailability(sessionCaps, displayPermLabel),
   );
-  // Optimistic model label shown the instant the operator switches: ext.model
-  // (the authoritative resolved id) only catches up a turn later, so without
-  // this the model row stays on the old value until the next reply (#54).
-  // Cleared once ext.model actually changes, or on agent switch.
+  // Optimistic model selection shown the instant the operator switches:
+  // ext.model (which may be the authoritative resolved id) only catches up
+  // a turn later, so without this the model row stays on the old value until
+  // the next reply (#54). Cleared once ext.model actually changes, or on
+  // agent switch.
   let pendingModel = $state<{ value: string; label: string } | null>(null);
   let lastCcModel = untrack(() => ccModel);
   $effect(() => {
@@ -836,7 +865,28 @@
       pendingModel = null;
     }
   });
-  const modelLabel = $derived(pendingModel?.label ?? ccModel);
+  const modelCatalogKey = $derived(pendingModel?.value ?? ccModel);
+  const activeModels = $derived.by(() => findCatalogEntries(modelCatalogKey));
+  // A unique canonical match can name its alias. Multiple aliases resolving
+  // to one canonical ID are intentionally ambiguous, so render raw key and
+  // leave every menu row unselected.
+  const activeModel = $derived(
+    activeModels.length === 1 ? activeModels[0] : undefined,
+  );
+  const resolvedModel = $derived(
+    typeof activeModel?.resolved_model === "string" &&
+      activeModel.resolved_model.length > 0
+      ? activeModel.resolved_model
+      : null,
+  );
+  // New catalog metadata exposes the selectable alias as primary and its
+  // canonical ID as supporting context. Without that metadata retain the
+  // established friendly pending label (notably Codex's `pending: Sol`).
+  const modelPrimary = $derived(
+    resolvedModel !== null
+      ? activeModel?.value ?? modelCatalogKey
+      : pendingModel?.label ?? activeModel?.value ?? modelCatalogKey,
+  );
   const effectiveEffort = $derived.by(() => {
     const raw = envelope.ext?.effective;
     if (typeof raw !== "object" || raw === null) return null;
@@ -978,10 +1028,10 @@
   function chooseModel(value: string): void {
     modelMenuOpen = false;
     if (!connection) return;
-    if (value === ccModel) return;
-    // Reflect the pick immediately (ext.model lags a turn); show the friendly
-    // name when known, else the raw alias.
-    const choice = models.find((m) => m.value === value);
+    if (value === activeModel?.value) return;
+    // Reflect the alias immediately while the authoritative ext.model catches
+    // up; the value sent to the wrapper remains this catalog alias.
+    const choice = findCatalogEntries(value)[0];
     pendingModel = { value, label: choice?.display_name ?? value };
     switchNotice = null;
     void run(async () => {
@@ -1012,7 +1062,7 @@
   // state only bridges the channel round trip after the operator clicks.
   $effect(() => {
     if (switchState.pending_model !== null) {
-      const choice = models.find((m) => m.value === switchState.pending_model);
+      const choice = findCatalogEntries(switchState.pending_model)[0];
       pendingModel = {
         value: switchState.pending_model,
         label: choice?.display_name ?? switchState.pending_model,
@@ -1742,13 +1792,13 @@
         <!-- Claude Code status meta (#16): mirrors the local statusline's
              model / ctx / 5h / 7d segments for this agent. -->
         <dl class="cc">
-          {#if connection || modelLabel || isAccountDefault}
+          {#if connection || modelPrimary || isAccountDefault}
             <div class="cc-row">
               <dt>model</dt>
               <dd>
                 <div class="cc-switchbox">
                   <span class="cc-model">
-                    {#if pendingModel}pending: {modelLabel}{:else if modelLabel}{modelLabel}{:else if isAccountDefault}アカウント既定{:else}<span class="cc-pending">確認待ち</span>{/if}
+                    {#if pendingModel}pending:{" "}{/if}{#if modelPrimary}{modelPrimary}{#if resolvedModel && resolvedModel !== modelPrimary}<span class="cc-model-resolved">{resolvedModel}</span>{/if}{:else if isAccountDefault}アカウント既定{:else}<span class="cc-pending">確認待ち</span>{/if}
                   </span>
                   {#if connection && modelSwitchSupported && models.length > 0}
                     <button
@@ -1784,10 +1834,10 @@
                           <button
                             type="button"
                             role="option"
-                            aria-selected={ccModel === m.value}
+                            aria-selected={activeModel?.value === m.value}
                             title={m.description}
                             onclick={() => chooseModel(m.value)}
-                          >{m.display_name}</button>
+                          >{m.display_name}{#if m.resolved_model}{" "}({m.value} → {m.resolved_model}){/if}</button>
                         </li>
                       {/each}
                     </ul>
@@ -3234,6 +3284,12 @@
   .cc-model {
     color: var(--fg);
     overflow-wrap: anywhere;
+  }
+
+  .cc-model-resolved {
+    display: block;
+    color: var(--muted);
+    font-size: 0.82em;
   }
 
   .switch-notice dd {

@@ -4,7 +4,7 @@ description: BOOTSTRAP を default 1 エントリに縮小、Claude live 経路�
 status: completed
 phase: 18
 depends_on: []
-last_updated: 2026-07-14
+last_updated: 2026-07-31
 ---
 
 # Phase 18 — Claude モデル catalog live 実測一元化と bootstrap default floor
@@ -100,11 +100,17 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 - Phase 18-2 の Q1 実測で SDK 側 `ModelInfo` に拡張 5 field (`resolvedModel`
   / `supportsEffort` / `supportsAdaptiveThinking` / `supportsFastMode` /
   `supportsAutoMode`) が新規追加されているのを検出済み。現行
-  `#refreshSupportedModels()` (`wrapper/claude-code/src/host.ts:1237-1244`)
-  は既存 4 field (`value` / `displayName` / `description` /
-  `supportedEffortLevels`) のみを転写しており拡張 field は projection
-  対象外。UI (switcher / toast / display) での projection 是非は Phase 18-9
-  (switcher UI) / Phase 18-10 (通知実装) で判断する
+  `#refreshSupportedModels()` は既存 4 field (`value` / `displayName` /
+  `description` / `supportedEffortLevels`) のみを転写しており拡張 field は
+  projection 対象外。**うち `resolvedModel` は 2026-07-31 に解消済み** —
+  `EngineModelInfo.resolved_model` として全 4 経路に透過し、catalog 突合を
+  2-pass 化した (canonical 側は多重一致しうるため全一致行を返し、effort は
+  intersection で fail-closed、UI は unique 時のみ alias 主)
+  ([ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md)
+  F9 追補 / [ADR-0039](../adr/0039-engine-catalog-live-probe.md) F10 追補、
+  仕様は [plugin-model](../specs/plugin-model.md))。残る 4 field
+  (`supportsEffort` / `supportsAdaptiveThinking` / `supportsFastMode` /
+  `supportsAutoMode`) は未着手で、projection 是非は未判断のまま
 - Phase 18-5 の Elixir baseline 検証で `wrapper_channel_test.exs`
   の inter_agent_message ルーティング test の決定論的赤を確認済み。
   **SDK / phase-18 と完全直交**、config-watcher #116 とは別種の

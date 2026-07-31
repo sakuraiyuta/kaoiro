@@ -179,6 +179,19 @@ effort を切り替えられる。ヘッドレス実走行で確定した境界:
   first turnそのものへ適用される。
 - **モデル切替**: `Query.setModel(value)`。`value` は上記エイリアス。無例外で
   成立。
+- **canonical ID の追実測 (2026-07-31, SDK 0.3.220)**: 隔離 temporary
+  directory と never-yielding prompt で `Options.model =
+  "claude-sonnet-5"` の `Query` を作ると、`initializationResult` は成功した。
+  ただしその result の keys に `model` は無かった。first user input を渡さず
+  iterator を8秒観測した範囲では `hook_started` / `hook_response` のみで、
+  `system/init` は観測されなかった。そのため init が返す `model` の表現
+  (alias / canonical) はこの実測からは未確定である。初期化後の
+  `await q.setModel("claude-sonnet-5")` は例外なく完了した。
+
+  kaoiro の入力表現保存はSDKのinit表現に関する推論ではなくwrapper境界の
+  契約である。catalogの alias / `resolvedModel` は突合用metadataとしてだけ
+  使い、`setModel`、startup `Options.model`、状態の `#model` は呼出元の
+  文字列を保存する。alias→canonical / canonical→alias のいずれにも書き換えない。
 - **effort 切替**: 専用 setter は無く `Query.applyFlagSettings({ effortLevel })`。
   値域 `EffortLevel = low|medium|high|xhigh|max`(`maxThinkingTokens` は
   deprecated)。`Settings.effortLevel` の型は `xhigh` 止まりだが、runtime は

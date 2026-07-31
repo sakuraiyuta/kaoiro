@@ -215,6 +215,10 @@ export interface EngineModelInfo {
   /** Preferred launch effort when this model is explicitly selected. Must be
    *  one of effort_levels when present (ADR-0035 F2, phase-16). */
   default_effort?: string;
+  /** Canonical wire model ID this entry resolves to, mirrored from the
+   *  upstream ModelInfo.resolvedModel (e.g. the concrete id an alias like
+   *  `default` maps to). Read-only metadata; absent = unknown. */
+  resolved_model?: string;
 }
 
 /** Launch catalog for one engine, sent by the runner in its register
