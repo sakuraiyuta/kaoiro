@@ -455,6 +455,13 @@ export class AgentHost implements EngineAdapter {
     string,
     { status?: string; utilization?: number; resets_at?: number }
   >();
+  /** The SDK's in-stream rate_limit_event is deliberately sparse for an
+   *  allowed subscription (it can carry just five_hour status + reset). The
+   *  /usage control request is the authoritative complete snapshot, so
+   *  coalesce concurrent event/init/result refreshes rather than issuing a
+   *  control request for every message. */
+  #rateLimitsInflight = false;
+  #rateLimitsRefreshPending = false;
   /** Authoritative pending-permission record (ADR-0022, #59). Set by the
    *  broker via setPendingPermission() so every state_change emitted while
    *  waiting_permission carries it in ext, surviving any intermediate
@@ -1261,9 +1268,22 @@ export class AgentHost implements EngineAdapter {
         // race gets one more shot before we fall back to result-time refresh
         // — otherwise the "ctx" meter would spin until the first turn ends.
         void this.#refreshContextUsageForInit();
+        // rate_limit_event is only a sparse notification: for an allowed
+        // account it currently omits utilization and may omit seven_day
+        // altogether. The SDK's /usage control request carries the complete
+        // subscription snapshot, including both windows.
+        void this.#refreshRateLimits();
       }
       const rateLimit = sdkMessageToRateLimit(message);
-      if (rateLimit) this.#applyRateLimit(rateLimit);
+      if (rateLimit) {
+        this.#applyRateLimit(rateLimit);
+        // SDK 0.3.220's rate_limit_event may omit both utilization and the
+        // seven_day window even though its /usage control response has them.
+        // Refresh on an event as well as the normal init/result opportunities
+        // so a sparse push cannot leave the dashboard stuck at a zero-width
+        // meter until a later turn.
+        void this.#refreshRateLimits();
+      }
       const statusMeta = sdkMessageToStatusMeta(message);
       if (statusMeta?.permission_mode !== undefined) {
         this.#permissionMode = statusMeta.permission_mode;
@@ -1274,6 +1294,7 @@ export class AgentHost implements EngineAdapter {
       }
       if (message.type === "result") {
         void this.#refreshContextUsage();
+        void this.#refreshRateLimits();
         // Turn-boundary retry for supportedModels() when init-time fetch or
         // an earlier retry failed. Guarded internally against overrun of
         // MAX_MODEL_REFRESH_RETRIES and post-success no-ops.
@@ -1578,6 +1599,96 @@ export class AgentHost implements EngineAdapter {
       snapshot.resets_at = nextReset;
     }
     this.#rateLimits.set(window, snapshot);
+  }
+
+  /**
+   * Fetches the complete subscription-limit snapshot exposed by the SDK's
+   * experimental `/usage` control request.
+   *
+   * `rate_limit_event` is not a complete snapshot: on SDK 0.3.220 an allowed
+   * account emits only `{status, resetsAt, rateLimitType: "five_hour"}`. In
+   * particular it omits both utilization and seven_day, although this control
+   * response reports both. Keep the protocol's existing 0..1 utilization
+   * convention by converting the control response's documented 0..100 percent
+   * before stamping it into `ext.rate_limits`.
+   *
+   * The API is explicitly experimental, so failure and an unavailable plan are
+   * best-effort no-ops. Existing sparse event data remains visible in either
+   * case. */
+  async #refreshRateLimits(): Promise<void> {
+    if (this.#rateLimitsInflight) {
+      this.#rateLimitsRefreshPending = true;
+      return;
+    }
+    this.#rateLimitsInflight = true;
+    try {
+      const usage =
+        await this.#query?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+      if (
+        this.#closed ||
+        usage === undefined ||
+        !usage.rate_limits_available ||
+        usage.rate_limits === null
+      ) {
+        return;
+      }
+
+      let changed = false;
+      const windows = [
+        ["five_hour", usage.rate_limits.five_hour],
+        ["seven_day", usage.rate_limits.seven_day],
+      ] as const;
+      for (const [window, reported] of windows) {
+        if (reported === null || reported === undefined) continue;
+        const utilization =
+          typeof reported.utilization === "number" &&
+          Number.isFinite(reported.utilization) &&
+          reported.utilization >= 0 &&
+          reported.utilization <= 100
+            ? reported.utilization / 100
+            : undefined;
+        const parsedReset =
+          typeof reported.resets_at === "string"
+            ? Date.parse(reported.resets_at)
+            : Number.NaN;
+        // The stream event's resetsAt is whole epoch seconds. Match that
+        // precision so its partial follow-up is recognized as the same quota
+        // window instead of discarding this authoritative utilization.
+        const resets_at = Number.isFinite(parsedReset)
+          ? Math.floor(parsedReset / 1000)
+          : undefined;
+        if (utilization === undefined && resets_at === undefined) continue;
+
+        const previous = this.#rateLimits.get(window);
+        const next = { ...previous } as {
+          status?: string;
+          utilization?: number;
+          resets_at?: number;
+        };
+        if (utilization !== undefined) next.utilization = utilization;
+        if (resets_at !== undefined) next.resets_at = resets_at;
+        if (
+          previous?.status === next.status &&
+          previous?.utilization === next.utilization &&
+          previous?.resets_at === next.resets_at
+        ) {
+          continue;
+        }
+        this.#rateLimits.set(window, next);
+        changed = true;
+      }
+      // A rate_limit_event itself has no AdapterEvent / state transition. A
+      // deduped explicit emit is therefore what makes the newly fetched 5h and
+      // 7day snapshot reach the dashboard immediately, including while idle.
+      if (changed) this.#emitState(this.#machine.state);
+    } catch {
+      // Experimental optional telemetry must never disrupt the agent session.
+    } finally {
+      this.#rateLimitsInflight = false;
+      const shouldReRun = this.#rateLimitsRefreshPending;
+      this.#rateLimitsRefreshPending = false;
+      if (shouldReRun && !this.#closed) void this.#refreshRateLimits();
+    }
   }
 
   /** Fetches the selectable model list (#54, ADR-0020, ADR-0037 F6). Called

@@ -1105,6 +1105,67 @@ describe("AgentHost — query injection", () => {
     ).not.toHaveProperty("utilization");
   });
 
+  it("sparse な rate_limit_event を /usage の5h・7day利用率で補完する (#164)", async () => {
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        // SDK 0.3.220 の実測形: allowed 中の stream event は 5h の
+        // status/reset だけで utilization と seven_day を省略する。
+        yield msg({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed",
+            rateLimitType: "five_hour",
+            resetsAt: 1785644400,
+          },
+        });
+        yield assistant([{ type: "text", text: "hi" }]);
+      }
+      return asQuery(gen(), async () => {}, undefined, {
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({
+          rate_limits_available: true,
+          rate_limits: {
+            five_hour: {
+              utilization: 3,
+              resets_at: "2026-08-02T04:20:00.307635+00:00",
+            },
+            seven_day: {
+              utilization: 2,
+              resets_at: "2026-08-08T04:00:00.307656+00:00",
+            },
+          },
+        }),
+      });
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+
+    await host.run();
+    // The control request is deliberately fire-and-forget from the SDK
+    // message loop; let its immediate response publish the deduped re-emit.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const limits = envs.at(-1)?.ext.rate_limits as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    expect(limits).toMatchObject({
+      five_hour: {
+        status: "allowed",
+        // /usage is a 0..100 percent API; the wrapper normalizes it to the
+        // ext.rate_limits 0..1 convention consumed by the dashboard.
+        utilization: 0.03,
+        resets_at: 1785644400,
+      },
+      seven_day: {
+        utilization: 0.02,
+        resets_at: 1786161600,
+      },
+    });
+  });
+
   it("init メッセージから ext.model / ext.cwd を付与する (#16)", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {
