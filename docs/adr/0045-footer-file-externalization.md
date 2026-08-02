@@ -84,7 +84,8 @@ footer 設置ディレクトリ(F1)の `user-footer.md` を footer prompt の
 **末尾**に連結する。
 合成順は `preset + personality → system-footer → user-footer`。連結の
 区切りは既存の personality / footer 結合と同じ空行(`\n\n`)とする。
-空・欠落・read_error 時は F1 / F6 に従い「何も足さない」へ縮退する。
+空・欠落時は「何も足さない」へ縮退する。read_error の扱いは F6 に
+従う(cold start は縮退、稼働中は直前の正常値を維持)。
 `system-footer.md` / `user-footer.md` はいずれも**全ペルソナ共通 1 枚
 のみ**とし、persona 別の上乗せファイル(`user-footer.<persona_id>.md`)
 は持たない。persona 固有の指示は従来どおり pack の `personality.md`
@@ -108,12 +109,19 @@ watcher で監視し(persona pack の watcher とは分離。任意の `*.md`
 ことは許容する(直後の rebuild で収斂)。接続中の wrapper には反映
 せず、次に接続する wrapper のスナップショットから効く
 ([ADR-0029](0029-persona-server-sot-and-pack-distribution.md) F9 を維持)。
+`KAOIRO_FOOTER_DIR` が設定済みでもディレクトリが欠落・読めない場合、
+cold start は fail-soft(内蔵版のみ + warn)とし、watch は無効のまま
+起動する。server は mkdir しない(`:ro` 前提)。ディレクトリ作成後の
+有効化には再起動が要る。
 
 ### F5: 合成結果は rebuild ログで常時可視化する
 
-rebuild のたびに、各層の由来(file / built-in / missing / empty /
-read_error)・文字数・正規化後の短縮 SHA-256 を info レベルでログに
-出す。read_error は missing / empty と区別し、絶対 path と理由を
+rebuild のたびに、各層について
+`input_state=file|missing|empty|read_error` /
+`effective_source=file|built-in|last-known-good|absent` の 2 軸と、
+実効値(F6 の正規化後)の文字数・短縮 SHA-256 を info レベルでログに
+出す(例: system が missing なら input_state=missing かつ
+effective_source=built-in)。read_error は加えて絶対 path と理由を
 warn で出す(silent failure にしない)。長さの warn 閾値は設けない
 (根拠ある閾値が立たず、常時 warn は無視される)。肥大への気付きと
 3 層合成の配送文字列の追跡(下記 Negative)は文字数 + hash で担保し、
@@ -123,8 +131,10 @@ warn で出す(silent failure にしない)。長さの warn 閾値は設けな�
 
 ### F6: 読み取りの意味論
 
-- UTF-8 必須。先頭 BOM は除去し、CRLF は LF へ正規化する。invalid
-  UTF-8 は read_error として扱う(rebuild は落とさない)。
+- UTF-8 必須。実効値は **BOM 除去 → CRLF→LF 正規化 → trim** の順で
+  正規化した本文とする(「空」判定も F5 の文字数 / hash もこの実効値
+  に対して行う)。invalid UTF-8 は read_error として扱う(rebuild は
+  落とさない)。
 - regular file のみ読む。symlink・FIFO 等は read_error 扱いで拒否する
   (FIFO の `File.read` ブロックや、root 外 target の変更を watcher
   が拾えない問題を避ける)。
