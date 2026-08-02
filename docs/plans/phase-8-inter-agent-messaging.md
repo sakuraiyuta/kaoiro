@@ -1,10 +1,10 @@
 ---
 title: Phase 8 — エージェント間メッセージング
 description: 複数 AI エージェントの直接対話を可能にする。Stage A 仕様整合→Stage B Phase 1 MVP(ユーザ明示指示)→Stage C Phase 2 permission gate 改善。Stage D Phase 3(自発判断)は #87 完了後。
-status: in_progress
+status: done
 phase: 8
 depends_on: [phase-3-server-multiagent, phase-4-host-runner]
-last_updated: 2026-07-03
+last_updated: 2026-08-02
 ---
 
 # Phase 8 — エージェント間メッセージング
@@ -151,6 +151,20 @@ kaoiro issue #87(複数 AI エージェント間の協調コミュニケーシ�
 
 Phase 3 着手は本 plan のスコープ外。 #87 の方針が固まった時点で
 別 plan(または本 plan の追補)として起こす。
+
+## 進捗ログ
+
+- 2026-08-02: マスター判断により close (status: done)。根拠:
+  - Stage A/B は実装済で稼働中 (`send_to_agent` /
+    [protocol-inter-agent spec](../specs/protocol-inter-agent.md)、
+    起点 issue #17 は closed)
+  - Stage C の未実施分 (conversation whitelist 等の承認緩和) は
+    [ADR-0044](../adr/0044-coordination-injection-hitl.md) /
+    [open-question send-to-agent-auto-allow](../open-questions/send-to-agent-auto-allow.md)
+    に前倒しで引き継ぎ済
+  - Stage D (自発判断以降) は本 plan の明示的スコープ外であり、
+    issue #87 (協調設計調査、open) / issue #18 (メッセージフィルタ、
+    open) / ADR-0044 で追跡される
 
 ## 参照
 

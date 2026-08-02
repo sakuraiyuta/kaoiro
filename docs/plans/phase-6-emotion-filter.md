@@ -1,10 +1,10 @@
 ---
 title: Phase 6 — 感情フィルタ(味付け)
 description: 正規化イベントに感情 property を付与するフィルタを追加し、表情に情緒を重ねる。
-status: planned
+status: shelved
 phase: 6
 depends_on: [phase-3-server-multiagent]
-last_updated: 2026-06-24
+last_updated: 2026-08-02
 ---
 
 # Phase 6 — 感情フィルタ(味付け)
@@ -37,6 +37,11 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 ## Open Questions Blocking This Phase
 
 なし。
+
+## 進捗ログ
+
+- 2026-08-02: マスター判断により当分の間塩漬け (status: shelved)。
+  再開時期は未定、着手時に本 plan を再活性化する
 
 ## See Also
 

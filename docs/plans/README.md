@@ -13,9 +13,9 @@
 | 3.6 | [phase-3.6-dashboard-separation](phase-3.6-dashboard-separation.md) | ⏳ | ダッシュボード別ディレクトリ化 + 同梱整理(優先度低) |
 | 4 | [phase-4-host-runner](phase-4-host-runner.md) | 🟡 | ホスト常駐 runner(spawn/監督/ホスト登録、[ADR-0023](../adr/0023-host-runner-architecture.md))。単一バイナリ配布(4-7)のみ残 |
 | 5 | [phase-5-i18n](phase-5-i18n.md) | ⏳ | ベータ前 英訳工程 |
-| 6 | [phase-6-emotion-filter](phase-6-emotion-filter.md) | ⏳ | 感情フィルタ(味付け) |
+| 6 | [phase-6-emotion-filter](phase-6-emotion-filter.md) | ⏳ | 感情フィルタ(味付け)。当分の間塩漬け(2026-08-02 マスター判断) |
 | 7 | [phase-7-file-upload](phase-7-file-upload.md) | ✅ | ファイルアップロード(添付の取り込み、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)) |
-| 8 | [phase-8-inter-agent-messaging](phase-8-inter-agent-messaging.md) | 🟡 | エージェント間メッセージング(複数 AI エージェントの協調対話、[issue #17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17))。Stage B(MVP)まで実装、Stage C/D 未着手 |
+| 8 | [phase-8-inter-agent-messaging](phase-8-inter-agent-messaging.md) | ✅ | エージェント間メッセージング(複数 AI エージェントの協調対話、[issue #17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17) closed)。Stage C 残 / Stage D は [ADR-0044](../adr/0044-coordination-injection-hitl.md)・[#87](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/87)・[#18](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/18) へ引き継ぎ(2026-08-02 close) |
 | 9 | [phase-9-external-human-messaging](phase-9-external-human-messaging.md) | ⏳ | 外部人間メッセージング(Discord、双方向 transport / 一方向 authority、[ADR-0028](../adr/0028-external-human-messaging.md)) |
 | 10 | [phase-10-persona-server-sot](phase-10-persona-server-sot.md) | ✅ | ペルソナ server 集約 SoT + zip pack 配布、[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) |
 | 11 | [phase-11-agent-directory-and-restore](phase-11-agent-directory-and-restore.md) | ✅ | サーバ再起動越しの agent identity 永続と client 明示復元(一括/個別)、[ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md)、[issue #41](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/41) |

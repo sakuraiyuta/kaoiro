@@ -1,10 +1,10 @@
 ---
 title: Phase 24 — runner config で codex auth mode を明示宣言
 description: Phase 23 dogfood 再々々々検証 (23-9) を阻む「runner 環境 PATH に codex binary が無いと `detectCodexAuthMode` が失敗して catalog 空 → 両 button 非表示」回帰を、runner config に `codex.auth_mode?: 'chatgpt' | 'apikey'` を明示宣言する経路を追加して解消。priority explicit config > doctor detection > "unknown"、chatgpt_plan からの暗黙推定は禁止。旧 config 互換維持 (未指定なら現行 doctor fallback)。
-status: implemented-pending-dogfood
+status: done
 phase: 24
 depends_on: [23]
-last_updated: 2026-07-16
+last_updated: 2026-08-02
 ---
 
 # Phase 24 — runner config で codex auth mode を明示宣言
@@ -25,6 +25,7 @@ Phase 23 の dogfood 再々々々検証 (23-9) を阻んでいた「runner 環�
 ## Scope
 
 **追加**:
+
 - `runner/src/config.ts::CodexConfig` に `auth_mode?: 'chatgpt' | 'apikey'`
   optional field + `parseRunnerConfig` の closed-enum validation
 - `runner/src/codex-auth.ts` に injectable policy resolver
@@ -36,6 +37,7 @@ Phase 23 の dogfood 再々々々検証 (23-9) を阻んでいた「runner 環�
 - `runner/runner.config.example.json` に `codex.auth_mode` 例を追記
 
 **scope 外**:
+
 - `scripts/dogfood.sh` の初回 auto-generate 変更 (API-key dev host を
   誤宣言するリスクがあるため。tracked 変更は example のみ)
 - untracked `runner/runner.config.json` の更新 (藤 review 合格後、
@@ -158,3 +160,7 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
   のみで credential は含まない。ADR-0035 の既存の trust boundary
   (「credential 本体は codex CLI 側で管理、runner config には載せない」)
   を継承。誤宣言による escalation リスクなし。
+
+## 進捗ログ
+
+- 2026-08-02: dogfood 確認 OK のマスター判断により close (status: done)

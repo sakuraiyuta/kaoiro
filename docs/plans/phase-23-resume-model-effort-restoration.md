@@ -1,10 +1,10 @@
 ---
 title: Phase 23 — resume 時の model / effort / *_source 再適用 (P1)
 description: Phase 22 で P0 punt した model / effort / *_source を、両 engine で resume 経路 (initial restore / switch_session / reset_session) から復元する。5-case source-aware pair rule で "source が嘘にならない" セマンティクスを維持し、Codex は catalog 互換 reset、Claude は invalid effort pair drop を wrapper 側で担う。
-status: implemented-pending-dogfood
+status: done
 phase: 23
 depends_on: [15, 17, 21, 22]
-last_updated: 2026-07-16
+last_updated: 2026-08-02
 ---
 
 # Phase 23 — resume 時の model / effort / *_source 再適用 (P1)
@@ -310,3 +310,7 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
   engine の supportedModels() 応答に含まれる正式 alias で model 切替 menu
   に出しても意味がある、synthetic はローカル合成で禁止 (責務汚染)。
   詳細は ADR-0014 F1 追補「effortLevels の three-tier lookup」節。
+
+## 進捗ログ
+
+- 2026-08-02: dogfood 確認 OK のマスター判断により close (status: done)
