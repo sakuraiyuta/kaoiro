@@ -8,6 +8,8 @@
 import { Socket } from "phoenix";
 import type { Channel } from "phoenix";
 
+import { randomUUID } from "./uuid";
+
 /** Envelope v0 frame (docs/specs/protocol.md). */
 export interface Persona {
   id: string;
@@ -2709,7 +2711,7 @@ export function connectKaoiro(
       // returned promise settles on the wrapper's refresh_models_result
       // envelope, not just the server ack. Register BEFORE the push so a
       // fast wrapper reply cannot arrive before we can correlate.
-      const request_id = crypto.randomUUID();
+      const request_id = randomUUID();
       const promise = refreshPending.register(request_id);
       try {
         await pushAsync(channel, "refresh_models", {
@@ -2725,7 +2727,7 @@ export function connectKaoiro(
       return promise;
     },
     refreshEngineCatalog: async (hostId, engine, force) => {
-      const request_id = crypto.randomUUID();
+      const request_id = randomUUID();
       // Register BEFORE sending so a fast catalog_result cannot arrive
       // before we can correlate it. The returned promise resolves on
       // catalog_result / rejects on disconnect / timeout / ack failure.
@@ -2812,7 +2814,7 @@ export function connectKaoiro(
         upload_id: uploadId,
       }),
     uploadFile: async (agentId, file, onProgress) => {
-      const upload_id = crypto.randomUUID();
+      const upload_id = randomUUID();
       const buffer = await file.arrayBuffer();
       const size = buffer.byteLength;
       const chunks = Math.max(1, Math.ceil(size / ATTACH_CHUNK_SIZE));

@@ -4,6 +4,7 @@
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
+  import { randomUUID } from "./uuid";
   import {
     engineFrom,
     errorSubtypeLabel,
@@ -1412,7 +1413,7 @@
         dropped++;
         continue;
       }
-      next.push({ id: crypto.randomUUID(), file: f, progress: 0 });
+      next.push({ id: randomUUID(), file: f, progress: 0 });
     }
     stagedFiles = next;
     if (dropped > 0) {
