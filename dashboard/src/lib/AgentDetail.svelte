@@ -349,6 +349,18 @@
     return rows;
   }
 
+  /** #164 supplements utilization from /usage, so pct is now populated even
+   *  for status="allowed" — pct and reset must render together, not as an
+   *  either/or fallback, or the reset time a heavy user needs disappears
+   *  whenever pct is available. */
+  function rateValueLabel(row: RateRow): string {
+    if (row.resetComplete) return "リセット済み";
+    const parts: string[] = [];
+    if (row.pct !== null) parts.push(`${row.pct}%`);
+    if (row.reset !== null) parts.push(`リセット ${row.reset}`);
+    return parts.length > 0 ? parts.join(" ・ ") : "?";
+  }
+
   const ccModel = $derived(
     typeof envelope.ext?.model === "string" ? envelope.ext.model : null,
   );
@@ -2066,7 +2078,7 @@
             <div class="cc-row">
               <dt>{r.label}</dt>
               <dd>
-                {#if r.key === "seven_day" && r.pct === null}
+                {#if r.key === "seven_day" && r.pct === null && r.reset === null}
                   <span class="cc-pending">まだ情報がありません</span>
                 {:else}
                   <div
@@ -2077,21 +2089,13 @@
                     <div class="meter-fill" style:width="{r.pct ?? 0}%"></div>
                   </div>
                   <!-- Claude API は status="allowed" (安全圏) では utilization を
-                       送らず reset 時刻と status のみを push する。ヘビーユーザは
-                       reset 時刻を見て次の枠再開を計画するので、hover tooltip では
-                       なく inline に表示する。pct も reset も無い真の未受信状態のみ
-                       "?" にフォールバック。 -->
-                  <span class="meter-val">
-                    {#if r.resetComplete}
-                      リセット済み
-                    {:else if r.pct !== null}
-                      {r.pct}%
-                    {:else if r.reset !== null}
-                      リセット {r.reset}
-                    {:else}
-                      ?
-                    {/if}
-                  </span>
+                       送らず reset 時刻と status のみを push することがある。
+                       ヘビーユーザは reset 時刻を見て次の枠再開を計画するので、
+                       hover tooltip ではなく inline に表示する。#164 で /usage
+                       から utilization を補完するようになり pct が常時入るように
+                       なったため、pct と reset は排他ではなく併記する(pct も
+                       reset も無い真の未受信状態のみ "?" にフォールバック)。 -->
+                  <span class="meter-val">{rateValueLabel(r)}</span>
                 {/if}
               </dd>
             </div>
