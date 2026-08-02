@@ -89,6 +89,37 @@ UI は engine 名 (`ext.engine`) では機能可用性を判定しない。以�
 
 `attachment_types` は engine 名分岐を増やさず、session が受け入れる添付の種類を UI と wrapper に伝える。初期 closed vocabulary は `"image"` のみで、将来 `"text"` / `"pdf"` 等を追加する場合も protocol vocabulary を先に拡張する。field absent を unrestricted とすることで、既存 Claude wrapper と rolling upgrade の互換性を保つ。
 
+### F7 — 添付 capability の publish 判断を吸収 (2026-08-03)
+
+旧 open-question `file-upload-capability-publish` (2026-06-27 起票、
+urgency low) をここへ畳んだ。同 OQ は
+[ADR-0025](0025-file-upload-wire-and-wrapper-rendering.md) F8 (A4-α)
+「弾く場所は wrapper、client は規範を持たない」を受けて、次の 2 案を
+未決としていた。
+
+| 案 | 内容 | 評価 |
+|--|--|--|
+| A (当時の暫定方針) | wrapper が reject し client は error 表示のみ。capability は publish しない | 知識が wrapper に一元化され protocol 面の追加もないが、UX は「送って 1 秒以内に reject」 |
+| B | 受理可種別を `ext.capabilities` として publish し、client が disable UI に反映 | UX 良・第三者 client も利用可だが、知識を 2 系統に publish して wrapper 一元化を侵食し protocol 面が +1 |
+
+**決定: 実質 B を採用した。** ただし OQ が想定した独立フィールド
+`ext.capabilities` ではなく、本 ADR の `ext.session_capabilities` の一部
+(F2 の `supports_attachments`、F6 の `attachment_types`) として実現して
+いる。これにより「知識を 2 系統に publish」という A 側の懸念は、capability
+advertise という単一の仕組みへ吸収されて実害を持たなくなった — client は
+engine 名で分岐せず capability だけを読む (F3) ため、規範の所在は
+adapter 側に留まる。
+
+現に Codex アダプタは `attachment_types: ["image"]` を advertise し、
+Composer は attach ボタンの disable と picker / paste / drop の画像限定を
+この field だけで判定している。案 A が想定した「reject トーストを見て
+送り直す」UX は、少なくとも種類不一致については発生しない。
+
+**残る余地**: `attachment_types` の closed vocabulary を `"image"` 以外
+(`"text"` / `"pdf"` 等) へ広げるか。F6 のとおり拡張時は protocol
+vocabulary を先に広げる手順が既に定まっているため、独立した
+open-question としては追跡せず、必要になった時点で F6 の追補として扱う。
+
 ### F5 — deprecation / migration
 
 engine 名判定はレビュー時に禁止し、既存コードで engine 名分岐しているものは phase-15 実装時に本 ADR の判定へ置換する。envelope 上 `ext.session_capabilities` の未 stamp 期間はない (phase-15 の同一 PR で両 adapter の advertise を実装するため、UI 側の fail-closed default が実効果を持つのは開発中の中間状態のみ)。

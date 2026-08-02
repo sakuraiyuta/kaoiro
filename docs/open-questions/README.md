@@ -11,7 +11,6 @@
 | [subagent-task-envelope-schema](subagent-task-envelope-schema.md) | high | subagent-tasks | 2026-06-16 |
 | [subagent-task-aggregation](subagent-task-aggregation.md) | medium | subagent-tasks | 2026-06-16 |
 | [file-upload-fs-read-fallback](file-upload-fs-read-fallback.md) | low | — | 2026-06-27 |
-| [file-upload-capability-publish](file-upload-capability-publish.md) | low | — | 2026-06-27 |
 | [file-upload-json-fallback](file-upload-json-fallback.md) | low | — | 2026-06-27 |
 | [file-upload-spill-storage](file-upload-spill-storage.md) | low | — | 2026-06-27 |
 | [file-upload-exif-stripping](file-upload-exif-stripping.md) | low | — | 2026-06-27 |
@@ -35,17 +34,6 @@
 | [coordination-report-routing](coordination-report-routing.md) | medium | — | 2026-07-28 |
 | [work-division-conflict-guard](work-division-conflict-guard.md) | low | — | 2026-07-28 |
 | [footer-default-visibility](footer-default-visibility.md) | medium | persona-personality-injection | 2026-08-02 |
-
-## 昇格候補
-
-実装が暫定方針を追い越しており、次の棚卸しで ADR へ畳める候補:
-
-- [file-upload-capability-publish](file-upload-capability-publish.md) —
-  「capability を publish しない」が暫定方針だったが、実装は
-  [ADR-0034](../adr/0034-session-capabilities-advertisement.md) の
-  `ext.session_capabilities`(`supports_attachments` / `attachment_types`)
-  で publish 側に決着済み。残る論点は `attachment_types` の語彙を
-  `image` 以外へ広げるかだけ。
 
 ## Recently decided
 

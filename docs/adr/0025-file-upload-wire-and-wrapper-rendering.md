@@ -239,7 +239,7 @@ MVP: 1 chunk 64 KB、 並列度 client 任意。 「間口を広げる」路線�
 | OQ | スラグ |
 |--|--|
 | Q1 | [file-upload-fs-read-fallback](../open-questions/file-upload-fs-read-fallback.md) |
-| Q2 | [file-upload-capability-publish](../open-questions/file-upload-capability-publish.md) |
+| Q2 | 解決済 — [ADR-0034](0034-session-capabilities-advertisement.md) F7 |
 | Q3 | [file-upload-json-fallback](../open-questions/file-upload-json-fallback.md) |
 | Q5 | [file-upload-spill-storage](../open-questions/file-upload-spill-storage.md) |
 | Q6 | [file-upload-exif-stripping](../open-questions/file-upload-exif-stripping.md) |

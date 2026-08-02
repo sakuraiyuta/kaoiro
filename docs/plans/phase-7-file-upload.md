@@ -113,8 +113,9 @@ Stage B の wire を据え置きで機能を全面展開。 Session 1 (backend a
 
 - Q1 ([file-upload-fs-read-fallback](../open-questions/file-upload-fs-read-fallback.md)):
   (1) でメモリ/速度に問題が出たら切替判断
-- Q2 ([file-upload-capability-publish](../open-questions/file-upload-capability-publish.md)):
-  client UX 改善が欲しくなったら
+- Q2: 解決済 — 受理可種別の publish は
+  [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F7 で
+  `ext.session_capabilities` に吸収された
 - Q3 ([file-upload-json-fallback](../open-questions/file-upload-json-fallback.md)):
   simple-client 要望が出たら
 - Q5 ([file-upload-spill-storage](../open-questions/file-upload-spill-storage.md)):

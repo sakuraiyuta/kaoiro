@@ -199,7 +199,7 @@ instruction 不発時の fail-safe。
 | ID | スラグ | urgency |
 |--|--|--|
 | Q1 | [file-upload-fs-read-fallback](../open-questions/file-upload-fs-read-fallback.md) | low |
-| Q2 | [file-upload-capability-publish](../open-questions/file-upload-capability-publish.md) | low |
+| Q2 | 解決済 — [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F7 へ畳んだ(受理可種別は `ext.session_capabilities` で publish する) | — |
 | Q3 | [file-upload-json-fallback](../open-questions/file-upload-json-fallback.md) | low |
 | Q5 | [file-upload-spill-storage](../open-questions/file-upload-spill-storage.md) | low |
 | Q6 | [file-upload-exif-stripping](../open-questions/file-upload-exif-stripping.md) | low |
