@@ -348,17 +348,20 @@ export interface SessionCapabilitiesExt {
   supports_context_usage?: boolean;
 }
 
-/** Reset modes for /new・/clear (ADR-0036 F1/F3, phase-17 17-1). `new` keeps
- *  the display log and appends a session_boundary marker; `clear` resets
- *  the server-side AgentStates ring and broadcasts history_reset, then
- *  writes a boundary marker at the head. Neither deletes the underlying
- *  session file. */
+/** Reset modes for /new・/clear (ADR-0036 F3 復元, 2026-07-24). `new` keeps
+ *  the display log and appends a session_boundary marker at the end;
+ *  `clear` narrows the agent's AgentStates history down to a single
+ *  boundary marker and records a ClearWatermark. **Neither broadcasts
+ *  `history_reset`** — that event is resume-replay only. Neither deletes
+ *  the underlying session file either. */
 export type SessionResetMode = "new" | "clear";
 
-/** server -> dashboard transcript reset. Resume reconstruction preserves
- * structured inter-agent envelopes because SDK JSONL cannot replay them;
- * `/clear` sets this false for a complete display-projection reset. Legacy
- * servers may omit the flag, which clients interpret as true. */
+/** server -> dashboard transcript reset, sent ONLY when a resuming wrapper
+ * rebuilds its display history from the SDK JSONL. Structured inter-agent
+ * envelopes cannot be replayed from that JSONL, so they are preserved and
+ * the flag is always true on this path; legacy servers may omit it, which
+ * clients also read as true. `/clear` does not use this event (see
+ * {@link SessionResetMode}). */
 export interface HistoryResetPayload {
   agent_id: string;
   preserve_inter_agent?: boolean;
@@ -463,11 +466,18 @@ export interface EnvelopeExt extends Record<string, unknown> {
 }
 
 /**
- * Common event envelope v0 (protocol.md). The type enum fixes
- * state_change / permission_request (ADR-0010/0011), log / result
- * (ADR-0012), and attach_rejected / instruction_rejected (ADR-0025).
- * payload stays loosely typed; the per-type shapes are
+ * Common event envelope v0 (protocol.md) — **the shape a wrapper emits**.
+ * The type enum fixes state_change / permission_request (ADR-0010/0011),
+ * log / result (ADR-0012), and attach_rejected / instruction_rejected
+ * (ADR-0025). payload stays loosely typed; the per-type shapes are
  * LogPayload / ResultPayload / Attach*Payload above.
+ *
+ * This is deliberately the PRODUCER type: `ServerLink.send`, the adapter
+ * sinks, and the permission / question / inter-agent brokers all take it,
+ * so every member of the union is something a wrapper is allowed to send.
+ * Server-authored envelopes that ride the same channel event live in
+ * {@link ClientEnvelope} instead — widening this union would let an adapter
+ * emit them and still typecheck.
  */
 export interface Envelope {
   version: "0";
@@ -494,18 +504,27 @@ export interface Envelope {
      *  payload = { request_id, ok, reason?, models_count? }. Wrapper emits
      *  after refreshCatalogFor() settles so AgentDetail can pair server
      *  ack + actual result and settle its loading spinner. */
-    | "refresh_models_result"
-    /** `/new`・`/clear` の session lifecycle marker (ADR-0036 F3, phase-17
-     *  17-7). payload = {@link SessionBoundaryMarker}. **The server builds
-     *  and broadcasts this one, not a wrapper** — it is listed here because
-     *  the union describes the wire envelope every consumer may receive,
-     *  and a client that narrows on `type` needs the member to exist. No
-     *  adapter should emit it. */
-    | "session_boundary";
+    | "refresh_models_result";
   state: KaoiroState;
   payload: Record<string, unknown>;
   ext: EnvelopeExt;
 }
+
+/** The `session_boundary` marker envelope (ADR-0036 F3, phase-17 17-7).
+ *  **Built and broadcast by the server** (`SessionResets` composes it and
+ *  `AgentStates` appends it to the history ring), never by a wrapper — but
+ *  it rides the same `envelope` channel event, so anything reading the wire
+ *  must handle it. Kept out of {@link Envelope} so an adapter cannot emit
+ *  one and still typecheck. */
+export type SessionBoundaryEnvelope = Omit<Envelope, "type" | "payload"> & {
+  type: "session_boundary";
+  payload: SessionBoundaryMarker;
+};
+
+/** Every envelope shape a client may receive on `agents:lobby`: what the
+ *  wrappers emit, plus the server-authored markers. Consumers that narrow on
+ *  `type` should read this; producers keep taking {@link Envelope}. */
+export type ClientEnvelope = Envelope | SessionBoundaryEnvelope;
 
 /** reason enum for attach_rejected / instruction_rejected (file-upload spec,
  *  ADR-0025 F9). Single source of truth for both envelopes. */
@@ -738,6 +757,13 @@ export interface SwitchSessionMessage {
   version: "0";
   agent_id: string;
   resume_session_id: string;
+  /** The agent's CURRENT `SessionPointers.snapshot`, attached by the server
+   *  on a live switch (ADR-0014 F1 追補, phase-15 D8). Without it the
+   *  relaunched wrapper would fall back to its original spawn-time snapshot
+   *  and stamp a stale `ext.resume_snapshot` / `ext.resume_drift`. Absent
+   *  when the pointer holds no snapshot yet, in which case the runner's
+   *  apply helper is a no-op. */
+  resume_snapshot?: ResolvedSnapshotExt;
   /** Session-transition correlation id, same semantics as
    *  {@link SpawnMessage.request_id} (phase-27, #160). A live switch
    *  reuses the SDK session id, so this is the only way to tell the
@@ -853,12 +879,24 @@ export interface EngineCatalogResult {
   models_count?: number;
 }
 
-/** server -> runner, operator-only: list the resume candidates under cwd for
- *  agent_id (ADR-0014 F2). `engine` scopes the listing to one engine's
- *  session store (ADR-0032 F8); omitted = "claude-code". */
+/** server -> runner, operator-only: list the resume candidates under cwd
+ *  (ADR-0014 F2). `engine` scopes the listing to one engine's session store
+ *  (ADR-0032 F8); omitted = "claude-code".
+ *
+ *  `version` follows the ADR-0015 stamping rule, but note the server does
+ *  NOT currently add it on this message: the client's payload is relayed
+ *  opaquely after `host_id` is stripped, and the dashboard sends none. The
+ *  same holds for `refresh_engine_catalog` / `stop` / `restart`. The runner
+ *  never reads it, so the gap is inert — recorded here so nobody codes
+ *  against a field that is not on the wire. */
 export interface EnumerateSessions {
   version: "0";
-  agent_id: string;
+  /** Present only when the operator opened the listing from an agent's
+   *  detail view. The LaunchDialog path sends `{host_id, cwd, engine?}` with
+   *  no agent_id, and the server resolves a missing `cwd` from
+   *  SessionPointers using this field — so exactly one of the two is
+   *  required on the client side, not both. */
+  agent_id?: string;
   cwd: string;
   engine?: EngineKind;
 }
