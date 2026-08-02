@@ -28,7 +28,10 @@ related: [protocol, agent-sdk-events, subagent-task-envelope-schema, subagent-ta
 | 進捗 | system / task_progress | `subagent_type`, `usage{total_tokens,tool_uses,duration_ms}`, `last_tool_name`, `summary` |
 | 終了 | system / task_notification | `status`(completed/failed/stopped), `summary`, `usage` |
 
-現状 `wrapper/src/adapter.ts` はこれらを破棄しており、ここにパース経路を新設する。
+現状 `wrapper/claude-code/src/adapter.ts` はこれらを破棄しており(2026-08-03
+時点で `task_started` / `task_progress` / `task_notification` を参照する
+コードは存在しない)、ここにパース経路を新設する。本 spec 全体が**未着手**で、
+段階1〜3 のいずれも実装されていない。
 
 ### エンティティモデル
 

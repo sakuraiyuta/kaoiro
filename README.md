@@ -9,14 +9,16 @@
 
 ## ステータス
 
-Phase 3.5(返答表示)までのダッシュボード実用化、Phase 7(ファイル
-アップロード)、Phase 10(ペルソナ server 集約 SoT + zip pack 配布、
-[ADR-0029](docs/adr/0029-persona-server-sot-and-pack-distribution.md))
-は完了。Phase 4(ホスト常駐 runner)は単一バイナリ配布(4-7)を残して
-実装済み。Phase 8(エージェント間メッセージング)は Stage B(MVP)まで
-実装済み(Stage C/D 未着手)。共通プロトコルは確定済み
-([docs/specs/protocol.md](docs/specs/protocol.md))。最新の進捗と
-未完 phase は [docs/plans/](docs/plans/) を参照。
+Phase 0〜4・7・10〜22・25・27・28 が完了しており、ダッシュボードからの
+起動・監視・指示・承認、ホスト常駐 runner、ファイルアップロード、
+ペルソナの server 集約 SoT、Codex アダプタ、session lifecycle
+(`/new`・`/clear`)、エージェント間メッセージングまで一通り動く。
+Phase 26(dashboard の OAuth ログイン)は実装完了で provider 登録と
+実機 E2E が残り、Phase 23 / 24 は dogfood の手動検証待ち。未着手は
+Phase 5(国際化)と Phase 9(外部人間メッセージング)で、Phase 6
+(感情フィルタ)は当分の間塩漬け。共通プロトコルは確定済み
+([docs/specs/protocol.md](docs/specs/protocol.md))。フェーズ別の
+正確な状態は [docs/plans/README.md](docs/plans/README.md) が正本。
 
 ## 全体像
 
@@ -45,15 +47,21 @@ Phase 3.5(返答表示)までのダッシュボード実用化、Phase 7(ファ�
 - **クライアント: Web フロント(TypeScript)**(描画は静的差分 — `docs/adr/0004-client-rendering-staged.md`)
   - リファレンスダッシュボード(Svelte 5 + Vite)は `dashboard/`。pnpm
     workspace の非メンバで独立ルート・独立 lockfile(issue #44)
-- **ランナー: TypeScript / Node**(`@kaoiro/runner`、単一バイナリ配布予定 —
+- **ランナー: TypeScript / Node**(`@kaoiro/runner`。配布は単一バイナリを
+  撤回し、Node 前提の自己完結 tarball —
   `docs/adr/0018-runner-distribution.md`)
 - TS 側は pnpm workspace 構成。共有パッケージ `@kaoiro/protocol` に
   envelope・制御メッセージ・状態型を集約
 
-## 当面の対象
+## 対象エージェント
 
-Claude Code を最初の対象とする。他エージェント(Codex 等)は将来、
-**アダプタ・プラグイン**として追加する(`docs/specs/plugin-model.md`)。
+Claude Code を最初の対象として実装し、続いて **Codex** アダプタを
+追加した(Phase 14、[ADR-0032](docs/adr/0032-codex-adapter.md))。engine は
+起動時に選択でき、engine 固有の差は envelope の
+`ext.session_capabilities` で吸収して UI からは engine 名で分岐しない
+([ADR-0034](docs/adr/0034-session-capabilities-advertisement.md))。以降の
+エージェントも同じ**アダプタ・プラグイン**境界で足す
+(`docs/specs/plugin-model.md`)。
 
 ## 開発(ローカル起動)
 
@@ -86,11 +94,13 @@ runner 経由で spawn する。env・トークン設定や各コンポーネン
 
 ## 現在のゴール
 
-Phase 10(ペルソナ server 集約 SoT)を 2026-07-06 に完了したところ。
-次期の候補は未完の Phase 3.5(返答表示 Stage ポリッシュ)/ Phase 3.6
-(ダッシュボード分離)/ Phase 4(ホスト常駐 runner の単一バイナリ配布)/
-Phase 8(エージェント間メッセージング Stage C/D)から選択予定。詳細は
-[docs/plans/](docs/plans/) を参照。
+2026-08-02 に Phase 23 / 24 / 8 を close し、Phase 6 を塩漬けにした。
+直近の焦点は協調指針の共通フッター自動注入
+([ADR-0044](docs/adr/0044-coordination-injection-hitl.md)、accepted)と
+そのフッターを外部ファイル化する
+[ADR-0045](docs/adr/0045-footer-file-externalization.md)(proposed)の
+決着、および Phase 26 の実機 E2E。未着手フェーズの着手順は
+[docs/plans/README.md](docs/plans/README.md) を参照。
 
 ## 思想
 

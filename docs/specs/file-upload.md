@@ -86,7 +86,13 @@ Claude Agent SDK の場合:
 | PDF | `document` content block |
 | Office | wrapper 内 officeparser(pure JS、docx/xlsx/pptx)でテキスト化 → `text` block |
 
-将来 engine が増えた場合は per-engine wrapper が独自ポリシーを持つ。
+上表は Claude Code アダプタ(`wrapper/claude-code/src/upload.ts`)の
+ポリシー。engine ごとに wrapper が独自ポリシーを持つ設計で、**Codex
+アダプタ(`wrapper/codex/src/upload.ts`)は画像のみ受け付ける** —
+`ext.session_capabilities` に `attachment_types: ["image"]` を advertise し、
+UI 側の picker / paste / drop もそれに合わせて画像へ絞る
+([plugin-model](plugin-model.md))。protocol 上限(128 MB / in-flight 20 /
+TTL 5 分)は両 engine で共通。
 
 ### fit-to-SDK
 
@@ -109,6 +115,11 @@ Claude Agent SDK の場合:
 | PDF | 先頭 N ページ抽出 → 32 MB / モデル別ページ上限 以内 | `unfittable_pdf` | pdf-lib(pure JS) |
 | text / code | 先頭 N MB 切り詰め(`truncated` 印付き)+ Anthropic SDK の `countTokens` で context window 検証 | `text_too_large` | 自前 + `@anthropic-ai/sdk` `countTokens` |
 | Office (docx/xlsx/pptx) | text に変換 → text 同様 | 同上 | officeparser(pure JS、 markitdown は OQ で fallback 余地) |
+
+**zip bomb ガード**: OOXML は zip コンテナなので、圧縮サイズが 128 MB 制限を
+通っても展開後に爆発しうる。wrapper は entry の**展開後合計**が
+`OFFICE_MAX_UNCOMPRESSED_BYTES`(64 MB)を超えた時点で変換を打ち切り、
+呼出元へ bomb として報告する(`wrapper/claude-code/src/upload.ts`)。
 
 wrapper は instruction 着信時に **全 attachment の base64 後合計サイズを
 事前検証**し、 32 MB を超える場合は

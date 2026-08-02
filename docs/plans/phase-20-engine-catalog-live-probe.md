@@ -1,7 +1,7 @@
 ---
 title: Phase 20 — LaunchDialog engine catalog live probe (Option E)
 description: LaunchDialog の Claude モデル catalog を短命 SDK probe + runner memory cache で live 化。probe CLI を wrapper/claude-code に切り出し、runner が cache/dedup/TTL/orchestration を担う。server は薄い relay のみ。
-status: completed
+status: done
 phase: 20
 depends_on: [18]
 last_updated: 2026-07-15

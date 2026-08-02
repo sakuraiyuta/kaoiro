@@ -6,7 +6,7 @@ opened: 2026-07-11
 supersedes: []
 superseded_by: null
 related_specs: [protocol, plugin-model]
-related_adrs: [22, 32, 33, 35, 36, 37]
+related_adrs: [22, 32, 33, 35, 36, 37, 40]
 ---
 
 # ADR-0034 — セッション機能 (session capabilities) の envelope advertisement

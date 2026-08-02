@@ -6,7 +6,7 @@ opened: 2026-07-14
 supersedes: []
 superseded_by: null
 related_specs: [plugin-model, protocol]
-related_adrs: [32, 34, 35]
+related_adrs: [32, 34, 35, 39, 40]
 ---
 
 # ADR-0037 — Claude モデル catalog live 経路の SDK 実測一元化と launch bootstrap の default floor 縮小

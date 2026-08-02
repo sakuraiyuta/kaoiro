@@ -1,7 +1,7 @@
 ---
 title: Phase 21 — context 使用量表示の capability 化と Codex 側 estimated 撤回
 description: ext.session_capabilities.supports_context_usage を導入し UI を capability-only gating に切替。Claude 側は init/model-switch trigger + guards を追加、Codex 側は capability=false stamp と dead helper 撤去。
-status: completed
+status: done
 phase: 21
 depends_on: [20]
 last_updated: 2026-07-16

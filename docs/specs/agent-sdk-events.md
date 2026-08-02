@@ -63,7 +63,8 @@ type SDKMessage =
 | task_notification | status(completed/failed/stopped), summary, usage |
 
 これらは `KaoiroState` には**載らない**(親の状態を変えない)。専用 envelope へ別経路で
-導出する。現状 `wrapper/src/adapter.ts` は未処理(破棄)。
+導出する。現状 `wrapper/claude-code/src/adapter.ts` は未処理(破棄)で、
+[subagent-tasks](subagent-tasks.md) は spec ごと未着手。
 
 ### 権限コールバック(canUseTool)
 

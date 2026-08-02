@@ -1,7 +1,7 @@
 ---
 title: Phase 16 — Codex model catalog と session継続switch
 description: ChatGPT plan申告に基づくCodex model catalogを復活し、同一session/historyを維持するmodel・effort切替、loud fail、rollback、capability広告を実装する。
-status: completed
+status: done
 phase: 16
 depends_on: [phase-15-wrapper-ux-parity]
 last_updated: 2026-07-13

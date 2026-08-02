@@ -14,7 +14,7 @@ kaoiro のラッパー層(TypeScript)。AI エージェント CLI をホスト�
 | `@kaoiro/wrapper-core` | `core/` | エンティティ非依存の基盤: サーバ transport (`ServerLink`)、config 読込/検証、CLI 引数解析 |
 | `@kaoiro/agent-common` | `agent-common/` | AI エージェント共通層: 状態機械 (`stepState`)・エンベロープ生成、`EngineAdapter` interface、permission / question broker、共通 Tool 記述層 (`ToolDescriptor`) |
 | `@kaoiro/claude-code` | `claude-code/` | Claude Code アダプタ (旧 `@kaoiro/wrapper`): `AgentHost` の `query()` 配線、SDK メッセージ → `AdapterEvent` 変換、file upload、inter-agent tools、CLI 本体 |
-| `@kaoiro/codex` | `codex/` | Codex アダプタ (phase-14 実装予定の scaffold。`EngineAdapter` を satisfies する未実装 stub のみ) |
+| `@kaoiro/codex` | `codex/` | Codex アダプタ (phase-14 で実装済み): Codex SDK の thread/turn イベント → `AdapterEvent` 変換、tool host bridge、rollout からの session 復元、model catalog、file upload、CLI 本体 |
 
 依存グラフ (上が下に依存):
 
@@ -74,7 +74,7 @@ config は gitignore 済み)。スキーマと読み込みは `core/src/persona.
 | `persona` | ✓ | `{ id, name, sprite_set }`。表示名・立ち絵セット |
 | `server_url` | ✓ | サーバの wrapper ソケット(例 `ws://localhost:4000/wrapper`)。ADR-0029 F3 で必須(server 集約 SoT + fail-closed) |
 | `server_token` | | wrapper 認証トークン。サーバで `KAOIRO_WRAPPER_TOKENS` を設定した時に必要(下記) |
-| `permission_timeout_ms` | | ツール許可の無応答 deny までの時間(既定 600000 = 600 秒) |
+| `permission_timeout_ms` | | ツール許可の無応答 deny までの時間(ms)。**省略時はタイムアウトなし**で operator の決定まで待つ(SDK の `canUseTool` と同じ挙動、[ADR-0022](../docs/adr/0022-pending-permission-authoritative-source.md) F6)。正の整数を与えたときだけ fail-closed deny になる |
 
 ### engine × config field 対応
 
@@ -126,8 +126,12 @@ wrapper は常駐モードで動作する。起動後、server の join に成�
 サーバでトークンを設定した場合:
 
 - **ラッパー**: `server_token` を設定し、サーバ側 `KAOIRO_WRAPPER_TOKENS` の
-  `agent_id:token` と一致させる(サーバ側未設定なら dev mode で不要)。
-- **ダッシュボード(クライアント)**: サーバは `KAOIRO_CLIENT_TOKENS` 未設定
-  だと**全クライアント接続を拒否する(fail-closed、issue #28)**。ローカル
-  でも必ず設定し、`http://localhost:4000/?token=<token>` で開く。手順は
-  [server/README.md](../server/README.md) を参照。
+  `agent_id:token` と一致させる。サーバ側未設定時の挙動は `MIX_ENV` 依存で、
+  `:dev` / `:test` はラッパー認証が無効(トークン不要)、**`:prod` は
+  fail-closed**(ただし runner の spawn 経路が注入するサーバ署名トークンは
+  通るため、runner 一本化の配備ならペア登録は不要 — issue #138)。
+- **ダッシュボード(クライアント)**: `KAOIRO_CLIENT_TOKENS` 未設定だと
+  トークン認証は成立しない(fail-closed、issue #28)。トークンを設定する
+  場合は `http://localhost:4000/?token=<token>` で開く。トークンを使わない
+  運用は OAuth ログイン([ADR-0042](../docs/adr/0042-oauth-allowlist-login.md))
+  が代替経路。手順は [server/README.md](../server/README.md) を参照。

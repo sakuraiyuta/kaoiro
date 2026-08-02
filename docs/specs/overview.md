@@ -35,8 +35,10 @@ kaoiro はエージェントを「顔色(キャラ + 表情)」で可視化し�
 
 ### スコープ(やること・初期)
 
-- Claude Code 1 エージェントの状態を Agent SDK のメッセージ列から取得し、状態
-  機械として表現([architecture](architecture.md))。
+- エージェント 1 個の状態を engine SDK のメッセージ列から取得し、状態機械
+  として表現([architecture](architecture.md))。Claude Code を最初の対象と
+  し、Codex は phase-14 で同じ `EngineAdapter` 境界の裏に追加した
+  ([ADR-0032](../adr/0032-codex-adapter.md))。
 - 複数エージェントの状態をサーバへ集約し、クライアントで可視化。
 - 特定エージェントへ指示を送る(双方向)。
 - 権限承認(ツール実行の許可待ち)をクライアント UI へ回す。
@@ -47,7 +49,7 @@ kaoiro はエージェントを「顔色(キャラ + 表情)」で可視化し�
 
 ## Constraints
 
-- SHOULD: ラッパーは TypeScript + Claude Agent SDK、サーバは Elixir/Phoenix、
+- SHOULD: ラッパーは TypeScript + engine SDK、サーバは Elixir/Phoenix、
   クライアントは Web(TS)。詳細は [architecture](architecture.md)。
 
 ## Open Questions

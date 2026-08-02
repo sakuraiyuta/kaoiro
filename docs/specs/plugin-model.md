@@ -104,9 +104,9 @@ engine 名では表現しきれない**session 単位の機能可用性** (auth 
 - **UI 判定原則**: UI は engine 名 (`ext.engine`) では機能可用性を判定しない
   (レビュー禁則、[ADR-0034](../adr/0034-session-capabilities-advertisement.md)
   F3)。`ext.session_capabilities` の boolean / 条件配列のみを見る。
-- **初期実装値**:
-  - `wrapper/claude-code`: `supports_attachments: true` / `supports_user_input_dialog: true` (無条件)
-  - `wrapper/codex`: `supports_attachments: false` / `supports_user_input_dialog: true`
+- **現在の advertise 値**:
+  - `wrapper/claude-code`: `supports_attachments: true` / `supports_user_input_dialog: true` (無条件。`attachment_types` は省略 = 種類制限なし)
+  - `wrapper/codex`: `supports_attachments: true` / `attachment_types: ["image"]` / `supports_user_input_dialog: true`。UI は picker / paste / drop を画像に限定する(phase-14 で添付対応を入れた際に、当初計画の `false` から改めた)
 - **`supports_model_switch` / `supports_effort_switch`** (phase-16、2026-07-13 実装済、
   [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4):
   session 途中で `set_model` / `set_effort` を受け付けるかを advertise。

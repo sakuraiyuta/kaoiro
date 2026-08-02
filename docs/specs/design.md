@@ -19,6 +19,7 @@ colors:
   state-thinking: "#7fd4e8"
   state-tool_running: "#f2d27c"
   state-waiting_permission: "#c9a2f5"
+  state-waiting_question: "#e0a6e6"
   state-waiting_input: "#98df9a"
   state-done: "#7fe3c5"
   state-error: "#f08498"
@@ -170,6 +171,7 @@ protocol で定義された 9 状態に 1:1 対応する。**この対応は pro
 | thinking | `{colors.state-thinking}` | 涼やかシアン | 思考中ランプ、`code` 装飾 |
 | tool_running | `{colors.state-tool_running}` | 明るい琥珀 | ツール実行中ランプ・tool linked flash |
 | waiting_permission | `{colors.state-waiting_permission}` | 藤紫 | 許可ドック輪郭・attention badge |
+| waiting_question | `{colors.state-waiting_question}` | 淡い菫桃 | AskUserQuestion ドック輪郭・選択肢の強調 |
 | waiting_input | `{colors.state-waiting_input}` | 若芽グリーン | restore ボタン、meter fill |
 | done | `{colors.state-done}` | ミントターコイズ | 完了時ランプ・顔のサイン |
 | error | `{colors.state-error}` | 朱桃 | エラー badge・danger ボタン (terminate) |
@@ -177,7 +179,7 @@ protocol で定義された 9 状態に 1:1 対応する。**この対応は pro
 
 ### `--tone` Variable (Component-level State Channel)
 
-各エージェントカード/詳細は `--tone` という CSS 変数を 1 本持ち、現在の state に応じて 9 色のうちのいずれかに動的に切り替わる:
+各エージェントカード/詳細は `--tone` という CSS 変数を 1 本持ち、現在の state に応じて 10 色のうちのいずれかに動的に切り替わる:
 
 ```css
 .card { --tone: var(--c-idle); }            /* 既定 */

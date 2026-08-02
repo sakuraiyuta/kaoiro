@@ -7,12 +7,24 @@
 ## 現状
 
 - runner config(JSON)を読み、サーバへ接続して**ホスト登録(register)**と
-  **生存通知(heartbeat)**を行う(4-4a)。
+  **生存通知(heartbeat)**を行う(4-4a)。config はホットリロードに対応
+  (`config-watcher.ts`)。
 - operator 指示で wrapper を **spawn / stop / restart** する監督ループ(4-4b)、
-  当該 cwd 配下の **session 列挙 + resume**(4-5、T3 実在検証 + F4 ローカルロック)。
+  当該 cwd 配下の **session 列挙 + resume**(4-5、T3 実在検証 + F4 ローカルロック)、
+  稼働中 agent の resume 先差し替え(`switch_session`)。
 - spawn は dashboard からの案A 経路に対応([ADR-0024](../docs/adr/0024-agent-instance-identity-and-spawn-auth.md)):
   agent_id 採番・per-agent token 発行はサーバが行い、runner は `server_url` を
   自 config から補完する。
+- **session reset**(`/new`・`/clear`)の実行主体。kill → fresh relaunch し、
+  失敗時は旧 session へ rollback する([ADR-0036](../docs/adr/0036-session-lifecycle-commands.md) F2)。
+- **resume snapshot の再適用**。server が同梱する最後の実効設定(model /
+  effort / permission_mode / sandbox / network_access)を 5-case の pair
+  ルールで `ParsedSpawn` へ反映する([ADR-0014](../docs/adr/0014-session-resume-and-restore.md)
+  F1 追補、phase-22 / 23)。session_id を持たない agent の fresh-restore
+  (`apply_resume_snapshot`)も同経路(phase-25)。
+- **engine catalog の live probe**。`refresh_engine_catalog` を受けて短命な
+  SDK probe を回し、memory-only の last-known-good キャッシュを更新して
+  再 register する([ADR-0039](../docs/adr/0039-engine-catalog-live-probe.md))。
 
 ## 使い方
 
@@ -20,8 +32,10 @@
 node dist/cli.js [configPath]   # configPath 既定 = runner.config.json
 ```
 
-認証トークンは設定ファイルに置かず、環境変数 `KAOIRO_RUNNER_TOKEN` から渡す
-(未設定 = サーバ側 runner 認証が無効な dev 時)。設定例は
+認証トークンは設定ファイルに置かず、環境変数 `KAOIRO_RUNNER_TOKEN` から渡す。
+サーバ側 `KAOIRO_RUNNER_TOKENS` が未設定のとき、runner 認証が無効になるのは
+`:dev` / `:test` のみで、**`:prod` では全 runner が拒否される**(runner には
+wrapper のようなサーバ署名トークン経路が無いため、issue #138)。設定例は
 [runner.config.example.json](runner.config.example.json) を参照。
 
 接続先 `server_url` は環境変数 `KAOIRO_RUNNER_SERVER_URL` で上書きできる
@@ -53,8 +67,10 @@ runner の Phoenix wire log は、定期 heartbeat の push と対応する repl
 node dist/setup-cli.js            # 直接叩く場合 (runner/ から)
 ```
 
-聞かれるのは host_id / server URL / 起動許可 cwd / engine / トークン / node の
-絶対パス。出力先は OS 別ユーザ設定ディレクトリ(Linux
+聞かれるのは host_id / server URL / 起動許可 cwd / engine(capabilities)/
+Codex を選んだ場合はその auth mode / トークン / node の絶対パス。
+`codex.chatgpt_plan` と `codex.internal_subagents` はウィザードでは聞かず、
+必要なら生成後の `runner.config.json` に手で足す。出力先は OS 別ユーザ設定ディレクトリ(Linux
 `${XDG_CONFIG_HOME:-~/.config}/kaoiro`、macOS
 `~/Library/Application Support/kaoiro`。`KAOIRO_RUNNER_DIR` で上書き可)で、
 起動シムが読む場所と同じ。
@@ -282,6 +298,15 @@ Gitea release への資産アップロードは
 
 `runner.config.json` の `codex` ブロックで Codex engine 固有の設定を渡す。
 
+- `auth_mode`(`"chatgpt"` / `"apikey"`)— Codex アダプタの catalog 解決に
+  使う auth mode の明示宣言(phase-24)。優先順位は **明示宣言 > codex CLI
+  の `doctor` 検出 > `"unknown"`** で、宣言があれば検出をスキップするため
+  runner の PATH に codex binary が無くても catalog が空にならない。これは
+  catalog 選択用の宣言 metadata にすぎず、runner は credential を付与も変更
+  もしない。`chatgpt_plan` からの暗黙推定はしない(API-key auth なのに plan
+  が書かれた config を誤判定するため)。誤宣言すると catalog が実 entitlement
+  とずれ、未対応 model / effort の明示要求が SDK 側で loud fail して既存の
+  `switch_error` rollback に落ちる。
 - `chatgpt_plan` — operator 申告の ChatGPT plan(catalog 解決に使用、
   API-key auth では無視)。
 - `internal_subagents`(boolean、既定 `true`)— Codex の内部サブエージェント

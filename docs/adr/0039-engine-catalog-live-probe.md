@@ -6,7 +6,7 @@ opened: 2026-07-15
 supersedes: []
 superseded_by: null
 related_specs: [protocol, plugin-model]
-related_adrs: [23, 32, 35, 37]
+related_adrs: [23, 32, 35, 37, 40]
 ---
 
 # ADR-0039 — LaunchDialog モデル catalog を短命 SDK probe + runner memory cache で live 化する (Option E)

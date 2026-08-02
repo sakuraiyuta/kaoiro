@@ -1,6 +1,6 @@
 ---
 title: アーキテクチャ
-description: ラッパー(TS/Agent SDK)/サーバ(Elixir/Phoenix)/クライアント(Web)の3層構成とデータフロー。
+description: ラッパー(TS/engine SDK)/サーバ(Elixir/Phoenix)/クライアント(Web)の3層構成に、ホスト常駐 runner を加えた構成とデータフロー。
 status: accepted
 related: [plugin-model, protocol]
 ---
@@ -42,11 +42,11 @@ LaunchDialog は host の `capabilities` が 2 種以上のときのみ engine
 flowchart LR
   subgraph Agents[AI エージェント群]
     CC1[Claude Code #1]
-    CX[Codex 将来]
+    CX[Codex #2]
   end
   subgraph Host["ホスト(runner 常駐)"]
     RUN[runner<br/>spawn/監督/ホスト登録]
-    subgraph Wrappers[ラッパー層 TS + Agent SDK / ローカル]
+    subgraph Wrappers[ラッパー層 TS + engine SDK / ローカル]
       W1[Wrapper #1<br/>Adapter+Filters]
       W2[Wrapper #2]
     end
@@ -69,17 +69,24 @@ flowchart LR
   UI -- 指示 / 承認 --> REG --> W1
 ```
 
-### 統合方式 — Claude Agent SDK
+### 統合方式 — engine SDK のホスティング
 
-ラッパーは公式 Claude Agent SDK(TS: `@anthropic-ai/claude-agent-sdk`)を
-ホストし、観測・制御・権限ルーティングを1機構で行う。採用理由・代替検討は
-[ADR-0001](../adr/0001-agent-sdk-integration.md)。
+ラッパーは engine の公式 SDK をホストし、観測・制御・権限ルーティングを
+1 機構で行う。Claude Code は Claude Agent SDK
+(TS: `@anthropic-ai/claude-agent-sdk`)、Codex は Codex SDK を使い、
+どちらも `EngineAdapter` interface の裏に入る。PTY スクレイプを採らない
+理由・代替検討は [ADR-0001](../adr/0001-agent-sdk-integration.md)、Codex 側の
+決定は [ADR-0032](../adr/0032-codex-adapter.md)。
 
 | 用途 | SDK での実現 |
 |---|---|
 | 状態観測 | 型付きメッセージ列から状態導出([protocol](protocol.md)) |
 | 指示注入 | セッション resume / ストリーミング入力 |
-| 権限待ち | `PreToolUse`/`canUseTool` を外部 UI へ回す |
+| 権限待ち | `canUseTool`(Claude)/ tool host bridge(Codex)を外部 UI へ回す |
+
+engine ごとの差は envelope の `ext.session_capabilities` として advertise
+し、UI は engine 名ではなくこの capability で機能可否を判定する
+([ADR-0034](../adr/0034-session-capabilities-advertisement.md))。
 
 ### 各層の責務
 
@@ -120,8 +127,13 @@ flowchart LR
 
 ### アクセス制御
 
-クライアント ↔ サーバのユーザ認証は OAuth + RBAC、プロトタイプは stub
-(ホワイトリスト)。[ADR-0005](../adr/0005-access-control-oauth-stub.md)。
+クライアント ↔ サーバのユーザ認証は OAuth + RBAC
+([ADR-0005](../adr/0005-access-control-oauth-stub.md))。プロトタイプ期は
+共有トークン + role の stub で始め、phase-26 で Google / GitHub /
+Nextcloud の OAuth 個人認証とテキスト許可リストを実装した
+([ADR-0042](../adr/0042-oauth-allowlist-login.md))。両者は併存し、
+トークン認証は `KAOIRO_CLIENT_TOKENS` を設定したときだけ有効。詳細は
+[auth-and-authz](auth-and-authz.md)。
 
 ### Elixir / OTP マッピング(サーバ側)
 
@@ -130,9 +142,10 @@ flowchart LR
 | 接続ごとの分離 | 接続ごとに 1 channel プロセス(Phoenix 管理) |
 | エージェント状態保持 | 単一 `AgentStates` GenServer(`agent_id → 最新エンベロープ` のマップ、owner pid で再接続レース防止)。phase-17 17-7 で `session_boundary` marker envelope の history append と、Codex lazy 采番用の `pending_boundary_patch` stash を追加 |
 | session-reset ライフサイクル | 単一 `SessionResets` GenServer(in-memory)。`check_and_acquire/5` が lock + KaoiroState + dispatch-cooldown を単一 handle_call で atomic 検証 (ADR-0036 F6 TOCTOU 芯)、`resolve/6` が runner の spawn 結果を `:spawning → :awaiting_connect` に遷移、`confirm_connection/2` が fresh wrapper の `WrapperChannel.after_join` からの発火で `session_reset_completed` broadcast と `SessionPointers.detach_session/1` を実行 (F2 「接続確認した時だけ」の two-phase completion) |
+| 再起動を越える永続 | DETS ベースの GenServer 群。`AgentDirectory`(identity 台帳、[ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md))、`SessionPointers`(最新 session_id + 最後の実効設定 snapshot)、`PermissionModes`、`InterAgentHistory` / `IngressOrder`、`SessionStarts` / `ClearWatermarks`、`TokenDenylist`。保存先は `KAOIRO_*_PATH` で差し替える |
 | 障害隔離・再起動 | Supervisor 配下に配置 |
 | 状態の fan-out | Phoenix.PubSub |
-| クライアント realtime 配信 | Phoenix Channels(または LiveView) |
+| クライアント realtime 配信 | Phoenix Channels 一本化([ADR-0009](../adr/0009-client-transport.md))。LiveView も素の WebSocket / SSE も併設しない |
 | ラッパー接続 | Phoenix Channels(WebSocket)+ トークン認証 |
 
 ### データフロー
@@ -166,4 +179,8 @@ flowchart LR
   [0008](../adr/0008-persona-asset-distribution.md)(superseded),
   [0014](../adr/0014-session-resume-and-restore.md),
   [0023](../adr/0023-host-runner-architecture.md),
-  [0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+  [0029](../adr/0029-persona-server-sot-and-pack-distribution.md),
+  [0030](../adr/0030-agent-directory-and-explicit-restore.md),
+  [0032](../adr/0032-codex-adapter.md),
+  [0034](../adr/0034-session-capabilities-advertisement.md),
+  [0042](../adr/0042-oauth-allowlist-login.md)

@@ -6,7 +6,7 @@ opened: 2026-06-22
 supersedes: []
 superseded_by: null
 related_specs: [protocol, threat-model]
-related_adrs: [10, 11, 12, 21, 27, 32, 33, 34]
+related_adrs: [10, 11, 12, 21, 27, 32, 33, 34, 40, 41, 43, 44]
 ---
 
 # ADR-0022 — pending_permission の authoritative source を `state_change.ext` へ

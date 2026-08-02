@@ -1,6 +1,6 @@
 ---
 title: 非スコープ
-description: kaoiro が初期に扱わない範囲(本格 OAuth/RBAC、アニメ/3D 描画、エージェント本体改変、高度な感情分析、同梱ダッシュボードの会話オーサリング化・永続履歴)。
+description: kaoiro が初期に扱わない範囲(多人数 RBAC/マルチテナント、アニメ/3D 描画、エージェント本体改変、高度な感情分析、同梱ダッシュボードの会話オーサリング化・永続履歴)。
 status: accepted
 related: [overview]
 ---
@@ -18,9 +18,13 @@ kaoiro が初期に扱わない範囲を明示する。スコープは [overview
 - **エージェント本体の機能改変・自作**。kaoiro はラッパー/可視化層に徹する。
 - **高度な感情分析**。まずは味付けとして最小限
   ([plans/phase-6-emotion-filter](../plans/phase-6-emotion-filter.md))。
-- **本格的な OAuth 認証・多人数アクセス・RBAC**。プロトタイプはアクセス制御を
-  stub(メールのホワイトリスト: テキスト/SQLite)に留める
-  ([ADR-0005](../adr/0005-access-control-oauth-stub.md))。
+- **多人数アクセス・きめ細かい RBAC・マルチテナント隔離**。OAuth 個人認証
+  そのものは phase-26 で実装した(Google / GitHub / Nextcloud +
+  テキスト許可リスト、[ADR-0042](../adr/0042-oauth-allowlist-login.md))が、
+  role は `operator` / `viewer` の 2 値のままで、approver 等の細分も
+  エージェントの所有者境界も持たない(単一テナント前提)。当初の stub
+  方針は [ADR-0005](../adr/0005-access-control-oauth-stub.md)、現状の境界は
+  [auth-and-authz](auth-and-authz.md) の Known gaps。
 - **アニメ/3D の高度な描画**。プロトタイプは静的な表情差分の切り替え
   ([ADR-0004](../adr/0004-client-rendering-staged.md))。
 - **クライアント本体のリッチ化(別プロジェクトとして分離)**。多様な
@@ -48,6 +52,7 @@ kaoiro が初期に扱わない範囲を明示する。スコープは [overview
 - 関連 specs: [overview](overview.md)
 - ADRs: [0004](../adr/0004-client-rendering-staged.md),
   [0005](../adr/0005-access-control-oauth-stub.md),
+  [0042](../adr/0042-oauth-allowlist-login.md),
   [0007](../adr/0007-client-separation-reference-dashboard.md),
   [0012](../adr/0012-response-display-and-dashboard-scope.md),
   [0020](../adr/0020-dashboard-battery-included-client.md)

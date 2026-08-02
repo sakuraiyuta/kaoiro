@@ -15,7 +15,9 @@ kaoiro のドメイン用語を統一する。
 
 | 用語 | 意味 |
 |---|---|
-| ラッパー(Wrapper) | エージェント1個を起動・観測し共通イベントへ翻訳する TS プロセス。Agent SDK をホストする |
+| ラッパー(Wrapper) | エージェント1個を起動・観測し共通イベントへ翻訳する TS プロセス。engine の SDK(Claude Agent SDK / Codex SDK)をホストする |
+| エンジン(Engine) | wrapper がホストする AI エージェント CLI の種別。値は `claude-code` / `codex`([ADR-0032](../adr/0032-codex-adapter.md))。機能可否の判定には engine 名ではなく `ext.session_capabilities` を使う([ADR-0034](../adr/0034-session-capabilities-advertisement.md)) |
+| ランナー(Runner) | 各ホストに 1 つ常駐し、wrapper プロセスの spawn / stop / restart とホスト登録・session 列挙を担う監督層([ADR-0023](../adr/0023-host-runner-architecture.md))。データ経路は終端しない |
 | サーバ(Server) | 複数ラッパーを集約し状態を保持・配信する Elixir/Phoenix |
 | クライアント(Client) | 状態をキャラ+表情で可視化するフロントエンド。実装は別プロジェクト。本体同梱はリファレンス簡易ダッシュボードのみ([ADR-0007](../adr/0007-client-separation-reference-dashboard.md)) |
 | アダプタ(Adapter) | エージェント別の起動・翻訳・状態導出プラグイン([plugin-model](plugin-model.md)) |
@@ -26,7 +28,7 @@ kaoiro のドメイン用語を統一する。
 | ext | フィルタが付加する拡張領域([protocol](protocol.md)) |
 | Channels フレーム | トランスポート層の `[join_ref, ref, topic, event, payload]`。payload スロットにエンベロープ全体を格納([protocol](protocol.md)、[ADR-0009](../adr/0009-client-transport.md)) |
 | ペルソナ(Persona) | エージェントに割り当てる固定の人格・立ち絵。安定 ID で永続([ADR-0003](../adr/0003-persona-identity-persistence.md)) |
-| 状態(State) | idle/thinking/tool_running/waiting_permission/waiting_input/done/error/disconnected |
+| 状態(State) | idle/sending/thinking/tool_running/waiting_permission/waiting_question/waiting_input/done/error/disconnected。`disconnected` だけはサーバ側で導出し、wrapper は送らない([protocol](protocol.md)) |
 
 ## See Also
 

@@ -1,7 +1,7 @@
 ---
 title: Phase 28 — コンテキスト疲労の自己認識と自発 session 操作 (issue #168)
 description: エージェントが自身の context 使用量を認識し、/compact・/new・/clear 相当の回復操作を自発できるようにする。本 plan は Phase A (可視化) と spike を実装粒度に落とす。Phase B (自発 compact) / C (自発 new・clear) は spike と Phase A の結果を受けて追補する。
-status: implemented
+status: done
 phase: 28
 depends_on: [21, 27]
 last_updated: 2026-07-28

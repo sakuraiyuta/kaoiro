@@ -8,21 +8,41 @@ WebSocket(Phoenix Channels, vsn=2.0.0)で受け、最新状態を保持して
 [docs/specs/protocol.md](../docs/specs/protocol.md)。
 接続方式の決定: [docs/adr/0009-client-transport.md](../docs/adr/0009-client-transport.md)。
 
-## 現状(Phase 3.5)
+## 現状
 
 ラッパーからのエンベロープを受けて最新状態を保持・配信し、双方向ルーティング
-(指示・承認)、トークン認証(ADR-0011、issue #28 で client は fail-closed)、
-返答ログのインメモリ履歴・operator 限定配信(ADR-0012)、runner のホスト
-登録・spawn/resume 中継(ADR-0023/0024)まで実装済み。TLS はリバース
-プロキシ終端。詳細は [docs/plans/](../docs/plans/)。
+(指示・承認・質問)、トークン認証(ADR-0011、issue #28 で client は
+fail-closed)と OAuth ログイン(ADR-0042)、返答ログのインメモリ履歴・
+operator 限定配信(ADR-0012)、runner のホスト登録と spawn/resume/session
+reset 中継(ADR-0023/0024/0036)、ペルソナ pack の集約 SoT 配信(ADR-0029)、
+エージェント間メッセージングの routing と durable ledger、再起動を越える
+agent identity の永続と明示復元(ADR-0030)まで実装済み。TLS はリバース
+プロキシ終端。フェーズ別の状態は [docs/plans/README.md](../docs/plans/README.md)。
+
+チャネル層:
 
 | モジュール | 役割 |
 |---|---|
-| `KaoiroServer.AgentStates` | agent_id → 最新エンベロープ + 返答ログ履歴(リングバッファ)の保持 |
-| `KaoiroServer.Auth` | wrapper/client トークン認証(client は token 未設定で fail-closed) |
-| `KaoiroServerWeb.WrapperSocket` / `WrapperChannel` | ラッパー受信(`wrapper:<agent_id>`)、検証、中継、disconnected 導出 |
-| `KaoiroServerWeb.ClientSocket` / `AgentsChannel` | クライアント配信(`agents:lobby`)、snapshot/history、指示・承認 relay、role 配信制御 |
-| `KaoiroServerWeb.RunnerSocket` / `RunnerChannel` | ランナー受信(`runner:<host_id>`)、ホスト登録・生存通知、spawn/stop/restart 中継(ADR-0023) |
+| `KaoiroServerWeb.WrapperSocket` / `WrapperChannel` | ラッパー受信(`wrapper:<agent_id>`)、検証、中継、disconnected 導出、`persona_prompt` push |
+| `KaoiroServerWeb.ClientSocket` / `AgentsChannel` | クライアント配信(`agents:lobby`)、snapshot/history、指示・承認・起動制御 relay、role 配信制御 |
+| `KaoiroServerWeb.RunnerSocket` / `RunnerChannel` | ランナー受信(`runner:<host_id>`)、ホスト登録・生存通知、spawn/stop/restart/session reset/catalog probe 中継(ADR-0023) |
+| `KaoiroServerWeb.AuthController` / `SessionController` | OAuth ログイン(`/auth/:provider`)と session cookie / WS チケットの発行(ADR-0013 / ADR-0042) |
+
+状態ストア(`Restart-surviving` は DETS 永続、他はインメモリ):
+
+| モジュール | 役割 |
+|---|---|
+| `AgentStates` | agent_id → 最新エンベロープ + 返答ログ履歴(リングバッファ) |
+| `AgentDirectory` | 再起動を越える identity 台帳 `agent_id => {persona, last_seen}`(ADR-0030、restart-surviving) |
+| `AgentActivity` | peer-directory メタデータ用の稼働状況投影(phase-27) |
+| `SessionPointers` | agent ごとの最新 `session_id` と最後の実効設定 snapshot(ADR-0014、restart-surviving) |
+| `SessionStarts` / `ClearWatermarks` | 現行 session の開始点と IA 表示 watermark(issue #109、restart-surviving) |
+| `SessionResets` | `/new`・`/clear` の pending lock SSOT と two-phase 完了(ADR-0036 F6/F7) |
+| `PermissionModes` | operator が最後に選んだ `permission_mode`(issue #58、restart-surviving) |
+| `InterAgentHistory` / `ConversationStates` / `IngressOrder` | エージェント間メッセージの durable ledger・会話追跡・順序採番(phase-8) |
+| `HostRegistry` | 稼働中ホストと persona trust policy + cwd allow-list(ADR-0023 / ADR-0031) |
+| `PersonaAssets` / `PersonaWatcher` | persona pack の取り込み・manifest 生成と zip 変更の auto-watch(ADR-0029) |
+| `Auth` / `TokenDenylist` / `OAuth` / `OAuthAllowlist` | wrapper/client/runner のトークン認証、agent_id 単位の失効、OAuth provider 配線と許可リスト |
 
 ## 開発
 
@@ -51,12 +71,16 @@ mix dashboard.build   # cd ../dashboard && pnpm build → server/priv/static へ
 
 ### 認証(必読、issue #28)
 
-接続認証はトークン + role(ADR-0011)。**未設定時の挙動は socket で異なる**:
+接続認証はトークン + role(ADR-0011)で、ダッシュボードだけは OAuth 個人認証
+との**併存**([ADR-0042](../docs/adr/0042-oauth-allowlist-login.md))。
+**未設定時の挙動は socket で異なる**:
 
-- **`KAOIRO_CLIENT_TOKENS` 未設定 → クライアント接続を全拒否(fail-closed)**。
-  誤設定で operator が無防備に公開される事故を防ぐため、無認証では稼働せず
-  認証不可能な状態で起動する。**ローカル開発・デモでもトークン設定が必須**
-  (未設定だとダッシュボードが繋がらず空表示になる)。
+- **`KAOIRO_CLIENT_TOKENS` 未設定 → トークン認証は成立しない(fail-closed)**。
+  誤設定で operator が無防備に公開される事故を防ぐため、無認証では稼働しない。
+  この状態で入れるのは OAuth ログインを構成した場合だけで、**どちらも未構成
+  ならダッシュボードは繋がらず空表示になる**(ローカル開発・デモは通常
+  トークンを設定する)。有効な認証手段はダッシュボードが
+  `GET /session/auth-methods` で取得して入力欄を出し分ける。
 - **`KAOIRO_WRAPPER_TOKENS` 未設定 → リリース(`:prod`)は全ラッパーを拒否
   (fail-closed、issue #138)**。認証を無効化して任意のラッパーを通すのは
   `mix` を `:dev` / `:test` で動かした場合だけで、loopback 限定の開発向け。
@@ -73,6 +97,8 @@ mix dashboard.build   # cd ../dashboard && pnpm build → server/priv/static へ
 | `KAOIRO_CLIENT_TOKENS` | `token:role,...`(role = `viewer` / `operator`) | `dev-op:operator,view1:viewer` |
 | `KAOIRO_WRAPPER_TOKENS` | `agent_id:token,...` | `lab-pc-1.claude-a:wrap-tok` |
 | `KAOIRO_RUNNER_TOKENS` | `host_id:token,...` | `lab-pc-1:runner-tok` |
+| `KAOIRO_OAUTH_{GOOGLE,GITHUB,NEXTCLOUD}_CLIENT_{ID,SECRET}` | provider ごとの OAuth クレデンシャル(Nextcloud は `KAOIRO_OAUTH_NEXTCLOUD_BASE_URL` も) | — |
+| `KAOIRO_OAUTH_ALLOWLIST_PATH` | 許可リストのパス。1 行 `provider:identifier[:role]`(role 省略 = `viewer`)。**未設定/読めない場合は全 OAuth ログインを拒否**(fail-closed) | `/etc/kaoiro/oauth-allowlist.txt` |
 
 **形式の注意**: `KAOIRO_CLIENT_TOKENS` は `<token>:<role>` の順。生成した
 シークレット(例 `openssl rand -hex 32`)は **`<token>` 側(コロンの前)** に

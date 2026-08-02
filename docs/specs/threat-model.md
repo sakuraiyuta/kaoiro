@@ -50,7 +50,7 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | 緩和策 | 状態 |
 |---|---|
 | 指示・承認を operator role に限定 | Phase 3 で実装 |
-| `KAOIRO_CLIENT_TOKENS` 未設定時はクライアント接続を fail-closed(全拒否)— 誤設定で operator が無防備に公開される事故を防ぐ(起動時に警告ログ) | Phase 3.5([issue #28](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/28)) |
+| `KAOIRO_CLIENT_TOKENS` 未設定時はトークン認証を fail-closed(そのトークン経路では全拒否)— 誤設定で operator が無防備に公開される事故を防ぐ(起動時に警告ログ)。OAuth 経路も許可リスト未設定・欠落・不一致で全拒否 | Phase 3.5([issue #28](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/28))/ OAuth 分は phase-26 |
 | `permission_request.input` のサイズ上限(16KB 切り詰め、`truncated` 明示) | Phase 3 で実装([protocol](protocol.md)) |
 | ラッパー側の `allowedTools` 上限 — 指示が来ても実行可能なツールは ラッパー設定が天井(サーバ・クライアントからは拡張不可) | ラッパー設計で担保(canUseTool はサーバ側から上書き不可) |
 | 指示の監査ログ(誰が・いつ・どの agent に何を送ったか) | 将来(SQLite 導入時) |
@@ -62,11 +62,11 @@ Phase 3 の双方向ルーティング(指示・承認)は、**設計上、ク�
 | **agent 間開示**(peer directory)を viewer/operator とは別軸の第 3 主体として定義し、`directory_entry` の明示列挙 field のみ agent に出す allow-list とする。`ext` の nested key を素通しせず canonical key だけを写す。`cwd` / permission / `session_id` / `pending_permission` / `session_capabilities` 等は継続除外 | #160 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6([protocol-inter-agent](protocol-inter-agent.md)「peer directory の情報境界」が field の正本) |
 | ユーザトークンを httpOnly + 暗号化 session cookie に保持(XSS でも JS から読めず、cookie jar 上でも秘匿)。CSRF は SameSite=Lax + prod の `check_origin` で抑止 | Phase 3.5([ADR-0013](../adr/0013-user-token-cookie-persistence.md)) |
 | ブラウザ側の多層防御ヘッダ(CSP / `X-Content-Type-Options: nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: strict-origin-when-cross-origin`)を **endpoint の静的配信より前段**で付与(`KaoiroServerWeb.SecurityHeaders`)。`index.html` と built assets は router を通らないため `:browser` pipeline では SPA 本体に効かない。CSP は `script-src 'self'`(untrusted なエージェント出力を `{@html}` で描く経路の DOMPurify 単独依存を解消)、`frame-ancestors 'none'`(クリックジャッキング経由の operator 操作誘導)、`connect-src` は当該レスポンスのオリジンと一致する `check_origin` エントリだけを `ws:`/`wss:` へ写す(`check_origin` は「socket を開いてよい発信元」、`connect-src` は「このページが繋いでよい宛先」で信頼軸が違うため、全件は写さない)。TLS リバースプロキシ配備では `rewrite_on: [:x_forwarded_proto]` が scheme しか書き換えず `conn` の port が内部 port のまま残るので、外向き scheme/host が endpoint の `:url` 設定と一致する場合に限り port をそこから復元して突き合わせる。ヘッダに出るのは常に config 側の文字列で、リクエストの Host は照合にしか使わない。nginx を置かない VPN 内直結配備([deployment](deployment.md) 1.5)では付与主体がサーバしかない | #155 で実装 |
-| OAuth + RBAC 本実装 | 将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
-| セッション召喚時に runner が返す JSONL メタ(先頭プロンプト要約等)を operator role 限定・最小限に露出(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) | 将来(resume 機能と同時) |
-| resume 対象 session_id を当該 agent 束縛 cwd 配下に実在検証し、他 cwd/任意パスの resume を拒否(T3、runner が検証) | 将来(resume 機能と同時) |
-| 起動指示 UI(#22)は任意 cwd / 任意 repo clone を提示せず、選択可能 cwd を runner-config の allow-list に限定して RCE 面を bound(範囲=中、T1/T5) | 将来([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22) / [ADR-0023](../adr/0023-host-runner-architecture.md)) |
-| spawn 認証を runner 起動経由(常駐 or ワンショット)に一本化し、per-host runner トークン + サーバ発行の per-agent token で認証(秘匿値はサーバ内に留め operator/クライアントへ出さない)。漏洩被害がスコープ全体へ広がるワイルドカード共有トークンは**不採用**(検討は #71 へ棚上げ) | 将来([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4 / [#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22)) |
+| OAuth 個人認証 + 許可リスト(Google / GitHub / Nextcloud)。role は許可リストから接続・操作のたび再解決し、降格を稼働中 socket にも効かせる | phase-26 で実装([ADR-0042](../adr/0042-oauth-allowlist-login.md) / [#158](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/158))。role の細分(approver 等)とマルチテナント隔離は将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
+| セッション召喚時に runner が返す JSONL メタ(先頭プロンプト要約等)を operator role 限定・最小限に露出(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) | Phase 4(4-5)で実装 |
+| resume 対象 session_id を当該 agent 束縛 cwd 配下に実在検証し、他 cwd/任意パスの resume を拒否(T3、runner が検証)。`switch_session` の差し替え先も同じ cwd で再検証 | Phase 4(4-5)で実装 |
+| 起動指示 UI(#22)は任意 cwd / 任意 repo clone を提示せず、選択可能 cwd を runner-config の allow-list に限定して RCE 面を bound(範囲=中、T1/T5) | Phase 4(4-8)で実装([ADR-0023](../adr/0023-host-runner-architecture.md)) |
+| spawn 認証を runner 起動経由(常駐 or ワンショット)に一本化し、per-host runner トークン + サーバ発行の per-agent token で認証(秘匿値はサーバ内に留め operator/クライアントへ出さない)。漏洩被害がスコープ全体へ広がるワイルドカード共有トークンは**不採用**(検討は #71 へ棚上げ) | Phase 4(4-10)で実装([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4)。失効は agent_id 単位の denylist([#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72)) |
 
 ## Constraints
 
@@ -169,4 +169,9 @@ effective 値で再適用)。乱発は work-in-progress の喪失や DoS 相当�
   [0012](../adr/0012-response-display-and-dashboard-scope.md),
   [0014](../adr/0014-session-resume-and-restore.md),
   [0021](../adr/0021-role-information-disclosure-policy.md),
-  [0023](../adr/0023-host-runner-architecture.md)
+  [0023](../adr/0023-host-runner-architecture.md),
+  [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md),
+  [0036](../adr/0036-session-lifecycle-commands.md),
+  [0042](../adr/0042-oauth-allowlist-login.md),
+  [0043](../adr/0043-agent-initiated-session-reset.md)
+- 境界の実装マップ: [auth-and-authz](auth-and-authz.md)

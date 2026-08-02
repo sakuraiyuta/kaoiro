@@ -6,7 +6,7 @@ opened: 2026-07-10
 supersedes: []
 superseded_by: null
 related_specs: [protocol, plugin-model]
-related_adrs: [22, 32, 34]
+related_adrs: [22, 32, 34, 38, 41, 43]
 ---
 
 # ADR-0033 — 権限モデル共通抽象を sandbox × approval の二軸へ拡張

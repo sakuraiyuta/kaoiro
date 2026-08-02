@@ -1,7 +1,7 @@
 ---
 title: Phase 22 — resume 時の privilege 三軸再適用 (P0)
 description: SessionPointers.snapshot を SSOT に格上げし、Codex sandbox/network_access と Claude permission_mode を restore/switch/reset 経路で復元する。runner-central pure helper が engine 関連 field を authoritative に上書きし、fresh spawn/crash-restart/rollback は no-apply を維持。
-status: implemented
+status: done
 phase: 22
 depends_on: [15, 17, 21]
 last_updated: 2026-07-16

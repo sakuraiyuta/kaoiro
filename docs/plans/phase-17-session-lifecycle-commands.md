@@ -1,7 +1,7 @@
 ---
 title: Phase 17 — /new・/clear session lifecycle commands
 description: /new・/clearをengine promptではなく第一級controlとして扱い、同一agentのfresh session生成、表示維持、resume可能性、capability、busy拒否を実装する。
-status: completed
+status: done
 phase: 17
 depends_on: [phase-15-wrapper-ux-parity]
 last_updated: 2026-07-24

@@ -17,12 +17,13 @@
 | [codex-model-catalog](codex-model-catalog.md) | accepted | Codex プラン別 model 表・変更 3 経路 (Web UI / CLI / config.toml)・認証 2 モード非対称。ADR-0032 F4bc 根拠 |
 | [subagent-tasks](subagent-tasks.md) | provisional | subagent/workflow タスクの検知と専用 envelope 通知 |
 | [file-upload](file-upload.md) | provisional | ダッシュボードからの添付(画像/テキスト/PDF/Office)を wrapper で SDK へ render |
+| [design](design.md) | accepted | ダッシュボード/UI の視覚デザイン仕様。DESIGN.md フォーマット(YAML トークン + 散文)で `dashboard/src/` を canonical source として追認 |
 | [personas](personas.md) | accepted | ペルソナ立ち絵のデザイン方針・画像規格・生成ワークフロー |
-| [persona-pack-schema](persona-pack-schema.md) | provisional | persona pack (zip) の内部スキーマ・manifest.json フィールド定義 |
+| [persona-pack-schema](persona-pack-schema.md) | accepted | persona pack (zip) の内部スキーマ・manifest.json フィールド定義 |
 | [persona-personality-injection](persona-personality-injection.md) | provisional | 口調・一人称等の人格プロンプトを Claude Agent SDK に注入する仕組み |
 | [threat-model](threat-model.md) | accepted | 双方向ルーティングの脅威と緩和策 |
 | [auth-and-authz](auth-and-authz.md) | accepted | 各ノードの認証・認可境界の現状マップ。OSS 公開前監査 (#91) の起点 |
-| [setup-wizards](setup-wizards.md) | provisional | 設定 / env 生成ウィザード(wrapper config・server .env) |
+| [setup-wizards](setup-wizards.md) | accepted | 設定 / env 生成ウィザード(runner config・server .env) |
 | [deployment](deployment.md) | accepted | マルチホスト配備手順書(nginx・env 一覧・DETS パス・wss 制約) |
 | [non-goals](non-goals.md) | accepted | 非スコープ |
 | [glossary](glossary.md) | accepted | 用語集 |

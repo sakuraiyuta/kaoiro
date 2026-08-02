@@ -83,21 +83,34 @@ release を token 未設定のまま起動すると全 wrapper/runner 接続が�
 
 ### Operator 限定 inbound (`handle_in`)
 
-`require_operator(socket)` を最初に通す:
+`require_operator(socket)` を最初に通す(直接呼ぶものと、
+`relay_to_wrapper_guarded/3` / `relay_to_runner_guarded/3` が内部で
+最初に通すものの両方):
 
-- `instruction` / `permission_decision` / `interrupt`
-- `set_model` / `set_effort` / `set_permission_mode`
-- `spawn` / `stop` / `restart` / `enumerate_sessions` / `restore`
-- `clear_history` / `delete_agent`
+- `instruction` / `permission_decision` / `question_response` / `interrupt`
+- `set_model` / `set_effort` / `set_permission_mode` / `refresh_models`
+- `refresh_engine_catalog`
+- `spawn` / `stop` / `restart` / `enumerate_sessions` / `restore` /
+  `resume_session`
+- `session_reset`
+- `clear_history` / `delete_agent` / `revoke_wrapper_token`
 - `attach_open` / `attach_chunk` / `attach_close`
 
-viewer からの同 event は `{:error, :forbidden}` で拒否。
+viewer からの同 event は `{:error, :forbidden}` で拒否。role は snapshot
+ではなく操作のたび `ClientSocket.role_for/1` で解決し直す(下記 OAuth 節
+の #158)。
 
 ### ツール認可 — canUseTool / PermissionBroker
 
 - wrapper の `Options.allowedTools` (config の `allowed_tools`) が SDK
   ツール実行の **天井**。server / client から拡張不可
-- 既定 allow は read-only セット (Read / Grep / Glob / LS / NotebookRead)
+- 既定 allow (`READ_ONLY_TOOLS`、`wrapper/claude-code/src/read_only_tools.ts`)
+  は read-only セット (Read / Grep / Glob / LS / NotebookRead) に、副作用の
+  無い inter-agent 補助 tool `mcp__kaoiro__list_agents` /
+  `mcp__kaoiro__whoami` を加えたもの。**メンバーシップは利便ではなく
+  セキュリティ判断**で、ここに載らないことが都度承認ゲートそのもの
+  (`mcp__kaoiro__send_to_agent` / `request_compact` /
+  `request_session_reset` は意図的に非掲載)
 - それ以外は SDK の `canUseTool` → `PermissionBroker.decide/2` → dashboard
   に `permission_request` envelope (operator 限定) → operator が許可/拒否
   (`permission_decision`、operator 限定 relay)
@@ -107,9 +120,11 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。
 
 ### MCP (`mcp__kaoiro__send_to_agent`)
 
-- `wrapper/src/inter_agent.ts` の in-process SDK MCP server を
-  `Options.mcpServers` に注入
-- ツール名規約により **既定 allowedTools に含めない** → 必ず broker 経由
+- `wrapper/agent-common/src/inter_agent.ts` の in-process MCP server を
+  engine 側へ注入 (Claude は `Options.mcpServers`、Codex は tool host bridge)
+- `send_to_agent` は **既定 allowedTools に含めない** → 必ず broker 経由。
+  同居する `list_agents` / `whoami` は読み取りのみなので auto-allow(上記
+  `READ_ONLY_TOOLS`)
 - routing は server の `route_inter_agent`、quota は `ConversationStates`
 - 詳細: [protocol-inter-agent](protocol-inter-agent.md)
 

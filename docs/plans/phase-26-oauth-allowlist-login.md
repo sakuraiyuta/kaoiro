@@ -1,7 +1,7 @@
 ---
 title: Phase 26 — dashboard OAuth ログイン + 許可リスト (issue #65)
 description: Google/GitHub/Nextcloud の OAuth 個人認証を dashboard に導入し、テキスト許可リスト (provider:identifier[:role]) で認可する。KAOIRO_CLIENT_TOKENS 未設定時は token 認証無効 (OAuth のみ)。設計は ADR-0042。
-status: in-progress
+status: in_progress
 phase: 26
 depends_on: []
 last_updated: 2026-07-26

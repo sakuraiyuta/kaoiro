@@ -1,7 +1,7 @@
 ---
 title: Phase 19 — Codex internal sub-agent toggle と peer-routing contract
 description: runner の codex.internal_subagents で Codex 内部サブエージェントを無効化可能にし、固有名 peer と内部サブエージェントの取り違えを footer/tool description/spec の soft guard で抑止する。
-status: completed
+status: done
 phase: 19
 depends_on: [14]
 last_updated: 2026-07-15

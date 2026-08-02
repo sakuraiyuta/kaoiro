@@ -6,7 +6,7 @@ opened: 2026-06-17
 supersedes: []
 superseded_by: null
 related_specs: [non-goals, overview, architecture, protocol]
-related_adrs: [7, 12, 25, 36]
+related_adrs: [7, 12, 25, 36, 41]
 ---
 
 # ADR-0020 — 同梱ダッシュボードを battery-included な最低限実用クライアントへ格上げ

@@ -1,7 +1,7 @@
 ---
 title: Phase 18 — Claude モデル catalog live 実測一元化と bootstrap default floor
 description: BOOTSTRAP を default 1 エントリに縮小、Claude live 経路を SDK 実測に一元化、retry 契約を実装する。
-status: completed
+status: done
 phase: 18
 depends_on: []
 last_updated: 2026-07-31

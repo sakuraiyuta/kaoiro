@@ -176,6 +176,14 @@ kaoiro 側は `codex doctor --json` を parse すれば auth mode 判別まで�
   [phase-16](../plans/phase-16-codex-model-switch.md)。
 - **entitle 判定の非対称性は解消していない**: catalog は operator 申告に
   依拠しており、SDK からの列挙 API 出現時は再検討する余地あり。
+- **auth mode も明示宣言できる (phase-24)**: `runner.config.json` の
+  `codex.auth_mode`(`"chatgpt"` / `"apikey"`)を書くと、優先順位
+  **明示宣言 > `codex doctor` 検出 > `"unknown"`** で解決され、doctor 検出
+  自体をスキップする。runner の PATH に codex binary が無い環境で catalog が
+  空になる回帰への対処。宣言はあくまで catalog 選択用の metadata で、runner は
+  credential を付与も変更もしない。誤宣言は catalog と実 entitlement のズレを
+  生み、未対応 model / effort の明示要求が 400/404 で loud fail して既存の
+  `switch_error` rollback に落ちる。`chatgpt_plan` からの暗黙推定はしない。
 - **切替の実行モデル**: switch は現 turn を保持したまま次 turn から適用する
   ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1)。不正 slug は turn 開始時に 400/404 で loud fail し、
   silent fallback せず旧 pinned model へ rollback する

@@ -42,9 +42,27 @@ A の場合は protocol 不変。 B 採用時は `state_change.ext` に新フィ
 
 A — MVP は wrapper の reject と client の error 表示で十分とみなす。
 
+**現況 (2026-08-03 追記): 実装は事実上 B を採っている。**
+phase-14 / phase-15 で
+[ADR-0034](../adr/0034-session-capabilities-advertisement.md) が
+`state_change.ext.session_capabilities` を導入し、`supports_attachments`
+と `attachment_types`(現状 `["image"]` のみ)を wrapper が spawn 直後から
+advertise する。Codex アダプタは `supports_attachments: true` +
+`attachment_types: ["image"]` を出し、UI 側の Composer は attach ボタンの
+disable と picker / paste / drop の画像限定をこの capability だけで判定
+している(engine 名で分岐しない)。当 OQ が想定した `ext.capabilities` と
+いう独立フィールドではなく、session capability の一部として実現された点が
+案 B との差分。
+
+したがって残る論点は「A か B か」ではなく、**`attachment_types` の語彙を
+`image` 以外へ広げるか(document / text 等の細分)** に縮小している。
+
 ## 解決時のアクション
 
-- [ ] `ext.capabilities` の正確なフィールド形を spec 化
-- [ ] wrapper が SDK / モデル仕様から capability を導出する経路を実装
-- [ ] client の file picker disable UI を実装
-- [ ] ADR 昇格、 本ファイル削除
+- [x] capability のフィールド形を spec 化(`ext.session_capabilities` の
+      `supports_attachments` / `attachment_types`、[protocol](../specs/protocol.md))
+- [x] wrapper が capability を導出して advertise する経路を実装
+      (ADR-0034、両 engine)
+- [x] client の attach ボタン disable / picker 限定 UI を実装
+- [ ] 残論点(`attachment_types` の語彙拡張)を判断し、本 OQ を
+      ADR-0034 の追補へ畳んで削除する

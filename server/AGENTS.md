@@ -3,7 +3,20 @@ This is a web application written using the Phoenix web framework.
 ## Project guidelines
 
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
+  (`compile --warnings-as-errors` → `deps.unlock --unused` → `format` → `test`)
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
+
+### kaoiro-specific notes
+
+- **This app has no LiveView.** `phoenix_live_view` is not a dependency and
+  there is no `core_components.ex` / `Layouts` module. The Phoenix v1.8
+  LiveView guidelines below are the framework's stock advice — they apply
+  only if LiveView is ever introduced, and today no template, `<.input>`,
+  `<.icon>`, or `current_scope` assign exists to follow them with. The UI is
+  the Svelte dashboard in `../dashboard`, served as static assets.
+- The server's own surface is Phoenix **Channels** (`wrapper:<agent_id>` /
+  `agents:lobby` / `runner:<host_id>`) plus a few plain controllers
+  (`AuthController` / `SessionController`). See `README.md` for the module map.
 
 ### Phoenix v1.8 guidelines
 

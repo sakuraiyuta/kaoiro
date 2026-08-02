@@ -1,7 +1,7 @@
 ---
 title: Phase 15 — wrapper UX parity (Claude Code と Codex の使い勝手対称化)
 description: phase-14 完了後の実運用検証で顕在化した Claude / Codex 間の UX 非対称の解消。model 解決経路の対称化と source 明示、権限二軸 UI 拡張、engine 別 config field の loud warn 化、session capabilities による engine 中立化、resume 時の設定差分検出、docs 整備を含む。
-status: completed
+status: done
 phase: 15
 depends_on: [phase-14-codex-adapter]
 last_updated: 2026-07-12

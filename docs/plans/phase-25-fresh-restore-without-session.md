@@ -1,7 +1,7 @@
 ---
 title: Phase 25 — session_id なし offline agent の fresh-restore
 description: /clear 直後・未発話のまま全再起動 (dogfood.sh) したエージェントが offline 復元候補に出るのに restore が :no_session で弾かれ ⚠ になる問題を解消。SessionPointer に session_id が無くても cwd/engine/persona/snapshot から fresh spawn + resume snapshot 再適用で「同じ model/effort/engine/permission 設定」のエージェントとして復元する。
-status: implemented
+status: done
 phase: 25
 depends_on: [22, 23]
 last_updated: 2026-07-23

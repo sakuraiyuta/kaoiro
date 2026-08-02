@@ -1,6 +1,6 @@
 ---
 title: 人格プロンプト注入
-description: ペルソナごとの口調・一人称・語尾・返答スタイルを Claude Agent SDK の systemPrompt.append 経由で注入する仕組み。プロンプト本文の SoT は server 側 persona pack、配送は WS ハンドシェイクで push。
+description: ペルソナごとの口調・一人称・語尾・返答スタイルを engine SDK(Claude は systemPrompt.append、Codex は developer_instructions)へ注入する仕組み。プロンプト本文の SoT は server 側 persona pack、配送は WS ハンドシェイクで push。
 status: provisional
 related: [personas, persona-pack-schema, protocol, threat-model, footer-default-visibility]
 ---
@@ -65,8 +65,11 @@ server から wrapper に「人格記述 + 共通フッター」を結合済み�
 
 ### SDK への注入
 
-Claude Agent SDK の `systemPrompt` は `{ type: 'preset', preset:
-'claude_code', append?: string }` を受ける。ハンドシェイクで受信した
+engine ごとに注入口は違うが、**wrapper は受信文字列をそのまま渡すだけ**で
+結合ロジックを持たない点は共通。
+
+**Claude Code**: Claude Agent SDK の `systemPrompt` は `{ type: 'preset',
+preset: 'claude_code', append?: string }` を受ける。ハンドシェイクで受信した
 プロンプト文字列をそのまま `append` に入れる。
 
 ```typescript
@@ -81,13 +84,27 @@ systemPrompt: {
 安全指示は保持される。人格記述はその末尾に足される追記であり、preset
 を置換しない。
 
+**Codex**: 同じ文字列を per-run config の `developer_instructions` として
+developer ロールのメッセージに載せる([ADR-0032](../adr/0032-codex-adapter.md)
+F3、2026-07-10 に実測で確認)。Codex 側に preset 相当の概念は無い。
+
 ### 共通フッター
 
 全ペルソナ (`default` 含む) に対して、共通のフッターを append 末尾に
 足す。**結合は server 側で行う**
-([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-F5)。フッターは取り込みディレクトリ root の md 2 枚で構成される
-([ADR-0045](../adr/0045-footer-file-externalization.md))。
+([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5)。
+
+**現状の実装**: フッターは `KaoiroServer.PersonaAssets` のモジュール属性
+`@common_footer` として server 実装に内蔵された **1 枚のみ**。内容は
+「kaoiro クライアント越しに操作されている」という環境認識と、MCP tool の
+遅延公開への対処、そして固有名での共同作業依頼を既存 peer へ解決させる
+peer-routing 規約([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md)
+のソフトガード)。pack が無い予約 persona `default` では、この
+フッターだけが prompt になる。文面の改訂は server 実装の変更として扱う。
+
+**将来 (未実装)**: [ADR-0045](../adr/0045-footer-file-externalization.md)
+は取り込みディレクトリ root の md 2 枚への外部化を提案しているが、同 ADR は
+`proposed` のままで**実装されていない**。決着したら以下の形になる:
 
 | ファイル | 位置付け | 欠落時 |
 |---|---|---|
@@ -99,8 +116,7 @@ F5)。フッターは取り込みディレクトリ root の md 2 枚で構成�
 - どちらも**全ペルソナ共通 1 枚のみ**。persona 別ファイル
   (`user-footer.<persona_id>.md`) は持たない。persona 固有の指示は
   pack の `personality.md` 側で表現する。
-- 既定文面の改訂は server 実装の変更として扱う(全ペルソナ共通のため)。
-  運用者による上書きは実装変更を伴わず、ファイル編集だけで完結する。
+- 運用者による上書きは実装変更を伴わず、ファイル編集だけで完結する。
 - 反映は `KaoiroServer.PersonaWatcher` 経由。md の編集で再構築が走り、
   次に接続する wrapper のスナップショットから効く(接続中セッションは
   F9 どおり据え置き)。
@@ -121,22 +137,23 @@ F5)。フッターは取り込みディレクトリ root の md 2 枚で構成�
 
 ## Constraints
 
-- MUST: SDK への注入は `systemPrompt: { type: 'preset', preset:
+- MUST: Claude への注入は `systemPrompt: { type: 'preset', preset:
   'claude_code', append: ... }` の `append` を使う。`preset` を捨てて
-  自作 string に置換しない。
+  自作 string に置換しない。Codex は `developer_instructions` を使う。
 - MUST: 人格文字列を wrapper→server の Envelope に載せない
   ([threat-model](threat-model.md))。
-- MUST: server 側で `personality + system-footer + user-footer` を結合
-  して配送する。wrapper 側では結合ロジックを持たない
-  ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  F5、[ADR-0045](../adr/0045-footer-file-externalization.md))。
-- MUST: フッターファイルの欠落は fail-closed にしない。
-  `system-footer.md` が無ければ内蔵デフォルト、`user-footer.md` が
-  無ければ何も足さない。
-- MUST NOT: persona 別のフッターファイルを設けない
-  (`user-footer.<persona_id>.md` は読まない)。
-- MUST NOT: 運用者が置いた `system-footer.md` / `user-footer.md` を
-  リポジトリで追跡しない(`.gitignore` 対象。環境ごとに変わる設定)。
+- MUST: server 側で `personality + 共通フッター` を結合して配送する。
+  wrapper 側では結合ロジックを持たない
+  ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5)。
+- 以下は [ADR-0045](../adr/0045-footer-file-externalization.md) 実装時に
+  効く条件で、**現状の内蔵 1 枚構成では適用されない**:
+  - MUST: フッターファイルの欠落は fail-closed にしない。
+    `system-footer.md` が無ければ内蔵デフォルト、`user-footer.md` が
+    無ければ何も足さない。
+  - MUST NOT: persona 別のフッターファイルを設けない
+    (`user-footer.<persona_id>.md` は読まない)。
+  - MUST NOT: 運用者が置いた `system-footer.md` / `user-footer.md` を
+    リポジトリで追跡しない(`.gitignore` 対象。環境ごとに変わる設定)。
 - MUST: 未知の `persona.id` を名乗る wrapper 接続は server が reject
   する。
 - MUST: server 到達不能時は wrapper spawn が失敗する(fail-closed)。

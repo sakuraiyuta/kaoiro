@@ -6,7 +6,7 @@ opened: 2026-06-26
 supersedes: []
 superseded_by: null
 related_specs: [plugin-model, protocol, architecture, personas, codex-sdk-events, agent-sdk-events]
-related_adrs: [17, 22, 23, 33, 34, 35, 37]
+related_adrs: [17, 22, 23, 33, 34, 35, 37, 38, 39, 40]
 ---
 
 # ADR-0032 — Codex アダプタ追加と wrapper マルチパッケージ構造の materialise

@@ -6,7 +6,7 @@ opened: 2026-07-16
 supersedes: []
 superseded_by: null
 related_specs: [protocol, plugin-model, agent-sdk-events, codex-sdk-events]
-related_adrs: [22, 32, 34, 35, 37, 39]
+related_adrs: [21, 22, 32, 34, 35, 37, 39]
 ---
 
 # ADR-0040 — context-window 使用量表示を capability driven にし Codex の estimated 投影は行わない
