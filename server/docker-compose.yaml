@@ -64,6 +64,8 @@ services:
       # Sprite overlay (ADR-0008): uncomment and set KAOIRO_PERSONA_DIR
       # =/personas in .env to override bundled sets.
       # - ./personas-overlay:/personas:ro
+      - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
+
     restart: unless-stopped
 
 volumes:
