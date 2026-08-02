@@ -18,7 +18,7 @@
     "dompurify": "^3.4.10",
     "marked": "^18.0.5",
     "mermaid": "^11.15.0",
-    "phoenix": "^1.8.7"
+    "phoenix": "^1.8.9"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
