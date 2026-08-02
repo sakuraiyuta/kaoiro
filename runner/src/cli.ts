@@ -1,11 +1,13 @@
 // Runner entry point — loads the runner config, connects to the kaoiro server
 // on `runner:<host_id>`, registers the host, heartbeats, and supervises the
 // host's wrapper processes on operator spawn/stop/restart (ADR-0023, phases
-// 4-4a/4-4b). Session enumeration / resume arrive in phase 4-5.
+// 4-4a/4-4b), plus session enumeration / resume (4-5).
 //
 // Usage: node dist/cli.js [configPath]
 //   configPath defaults to runner.config.json. The auth token is read from
-//   KAOIRO_RUNNER_TOKEN (unset = the server's runner auth is disabled, dev).
+//   KAOIRO_RUNNER_TOKEN. Leaving it unset only disables the server's runner
+//   auth in :dev / :test — :prod is fail-closed and rejects every runner,
+//   since runners have no server-minted signed-token path (issue #138).
 
 import type { EngineCatalogResult } from "@kaoiro/protocol";
 import { parseRunnerArgs } from "./args.js";

@@ -362,6 +362,11 @@ export type SessionResetMode = "new" | "clear";
 export interface HistoryResetPayload {
   agent_id: string;
   preserve_inter_agent?: boolean;
+  /** Pairs the reset with the `history_replay_complete` that closes the
+   *  replay window (#125). The wrapper allocates it and sends it on its own
+   *  `history_reset` push; the server echoes it into this broadcast when
+   *  present. Absent keeps the pre-#125 wire shape readable. */
+  replay_id?: string;
 }
 
 /** Closed vocabulary of session-reset failure reasons (ADR-0036 F7,
@@ -489,7 +494,14 @@ export interface Envelope {
      *  payload = { request_id, ok, reason?, models_count? }. Wrapper emits
      *  after refreshCatalogFor() settles so AgentDetail can pair server
      *  ack + actual result and settle its loading spinner. */
-    | "refresh_models_result";
+    | "refresh_models_result"
+    /** `/new`・`/clear` の session lifecycle marker (ADR-0036 F3, phase-17
+     *  17-7). payload = {@link SessionBoundaryMarker}. **The server builds
+     *  and broadcasts this one, not a wrapper** — it is listed here because
+     *  the union describes the wire envelope every consumer may receive,
+     *  and a client that narrows on `type` needs the member to exist. No
+     *  adapter should emit it. */
+    | "session_boundary";
   state: KaoiroState;
   payload: Record<string, unknown>;
   ext: EnvelopeExt;
