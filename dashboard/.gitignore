@@ -1,0 +1,4 @@
+# #184 bench: runBench.mjs generates this from a pinned baseline SHA
+# (git show <SHA>:dashboard/src/lib/AgentDetail.svelte) and removes it when
+# done; never a checked-in file.
+src/lib/.AgentDetail.before.bench.svelte

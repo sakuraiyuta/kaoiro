@@ -618,6 +618,128 @@
     return labels;
   });
 
+  // #184: render only the most recent LOG_WINDOW_SIZE entries by default.
+  // `logs` (full history, App.svelte's memory) is unchanged; only the DOM
+  // render is windowed here. Unbounded per-entry DOM (markdown HTML +
+  // mermaid SVG) made the composer's in-flow layout (e.g. the slash-menu
+  // insertion) scale with total history length, degrading input latency.
+  // 200 is a round number comfortably above a screenful while keeping DOM
+  // growth bounded.
+  //
+  // ふじ round-1 must-fix M1: the window MUST be a stable absolute start
+  // index, not a "keep last N" count — a count re-derives its start from
+  // `logs.length` on every render, so an expanded/jumped-to state silently
+  // un-expands the moment a new envelope appends.
+  //
+  // ふじ round-2 must-fix M1: a frozen window needs to know WHY it froze.
+  // A reading-freeze (operator scrolled away mid-read, or jumped to a
+  // target) is incidental — once they return to the bottom it should
+  // resume tracking the tail, or a long-lived session mid-read once slowly
+  // regrows to the full unbounded render the fix was meant to remove. An
+  // explicit "show all" click is a deliberate request and must NOT
+  // silently collapse back. `frozenWindow`: null = track the tail
+  // dynamically (last LOG_WINDOW_SIZE); non-null = a fixed absolute start
+  // appends cannot move, tagged with which of the two reasons froze it.
+  // `anchorLength` (ふじ round-3 S1) is the most recently CONFIRMED
+  // `logs.length` for a reading-freeze — a reading-freeze is stale not only
+  // once its `start` falls out of bounds but on any shrink relative to this
+  // anchor (history clear/reset can reorganize a transcript without
+  // necessarily pushing `start` past the new length). While this agent is
+  // actively being viewed, the scroll $effect refreshes `anchorLength` on
+  // every legitimate append (ふじ round-4 S1), so a live "freeze at 1000 ->
+  // append to 1050 -> shrink to 1020" sequence is still caught even though
+  // 1020 is above the ORIGINAL freeze point. Known gap: a background agent
+  // whose logs shrink-then-regrow (or get replaced at the same length)
+  // while it is NOT the active view cannot be detected this way — only a
+  // stable entry-key check at the frozen boundary would catch that, which
+  // is a larger change than a length count; see the shrink-invalidation
+  // check in the scroll $effect for both paths.
+  const LOG_WINDOW_SIZE = 200;
+  let frozenWindow = $state<
+    | {
+        start: number;
+        mode: "reading-frozen" | "explicit-expanded";
+        anchorLength: number;
+      }
+    | null
+  >(null);
+  const effectiveWindowStart = $derived(
+    frozenWindow !== null
+      ? Math.min(frozenWindow.start, logs.length)
+      : Math.max(0, logs.length - LOG_WINDOW_SIZE),
+  );
+  const visibleLogs = $derived(logs.slice(effectiveWindowStart));
+  const hiddenLogCount = $derived(effectiveWindowStart);
+
+  // Expand the window to include `absoluteIndex` (a `logs[]` index) if it is
+  // currently hidden, else no-op. Shared by the timeline jump (#122) and the
+  // tool_use/tool_result partner jump (#40, ふじ round-1 S1) so both use the
+  // same "expand -> tick -> query DOM" sequence instead of duplicating it.
+  // A jump target is a reading-freeze (see frozenWindow above) — it reverts
+  // once the operator scrolls back to the bottom.
+  //
+  // ふじ round-4 should-fix S2: `effectiveWindowStart` reads `frozenWindow`,
+  // so calling this from inside the main scroll $effect (the #122 path)
+  // registered `frozenWindow` as one of THAT effect's tracked dependencies
+  // whenever a timeline target was pending — an unrelated later write to
+  // `frozenWindow` (e.g. handleLogScroll) could then re-trigger the whole
+  // effect and double-run its renderMermaidIn/scroll continuation before
+  // `handledTimelineScrollTarget` had a chance to settle. untrack here for
+  // the same reason the effect's own shrink-guard read is untracked.
+  function ensureIndexVisible(absoluteIndex: number): void {
+    const start = untrack(() => effectiveWindowStart);
+    if (absoluteIndex >= 0 && absoluteIndex < start) {
+      frozenWindow = {
+        start: absoluteIndex,
+        mode: "reading-frozen",
+        anchorLength: logs.length,
+      };
+    }
+  }
+
+  // Reveal the remaining (earlier) history at once (fixed start=0, stable
+  // under further appends — M1). Captures scroll height before the DOM
+  // grows, re-renders mermaid diagrams newly in view (round-1 must-fix M3 —
+  // the main $effect below only renders diagrams for the CURRENT logs.length
+  // dependency, which does not change here), then restores the visual
+  // offset against the POST-mermaid height so the prepend does not jump the
+  // viewport (#184). Kept independent of the pin/restore $effect below
+  // (different trigger, no shared state write).
+  //
+  // ふじ round-2 must-fix M3: capture the agent this click was for and
+  // re-check it after every await. AgentDetail is a single reused instance
+  // (props change, it does not remount) — if the operator switches agents
+  // mid-flight, `logEl`/`envelope.agent_id` now belong to a DIFFERENT
+  // agent, and applying this scroll delta / writing scrollMemory under the
+  // CURRENT agent_id would corrupt that other agent's state.
+  async function showEarlierLogs(): Promise<void> {
+    const el = logEl;
+    const agentId = envelope.agent_id;
+    if (!el) return;
+    const prevScrollHeight = el.scrollHeight;
+    const prevScrollTop = el.scrollTop;
+    frozenWindow = { start: 0, mode: "explicit-expanded", anchorLength: logs.length };
+    await tick();
+    if (logEl !== el || envelope.agent_id !== agentId) return;
+    try {
+      await renderMermaidIn(el);
+    } catch (error) {
+      console.error("mermaid render failed", error);
+    }
+    if (logEl !== el || envelope.agent_id !== agentId) return;
+    el.scrollTop = prevScrollTop + (el.scrollHeight - prevScrollHeight);
+    // ふじ round-1 must-fix M2: unlike a scroll-driven freeze (handled inside
+    // handleLogScroll), this expansion has no scroll event of its own to
+    // persist it — without this, switching agents right after clicking
+    // "show all" (before any manual scroll) would restore `frozenWindow:
+    // null` and silently re-collapse to the tail.
+    scrollMemory.set(agentId, {
+      top: el.scrollTop,
+      stick: stickToBottom,
+      frozenWindow,
+    });
+  }
+
   // Blind-spot: other agents needing attention while this detail hides the
   // grid (ADR-0012 F8). Colour follows the most urgent: error first.
   const attention = $derived(
@@ -1185,7 +1307,7 @@
     );
     logEl.scrollTo({ top, behavior: "smooth" });
     stickToBottom = false;
-    scrollMemory.set(envelope.agent_id, { top, stick: false });
+    scrollMemory.set(envelope.agent_id, { top, stick: false, frozenWindow });
     return true;
   }
 
@@ -1202,16 +1324,56 @@
   // switch. Plain Map (not $state) — it is read/written imperatively, never
   // rendered. `scrollAgent` tracks which agent the log currently reflects so
   // the auto-scroll effect can tell a switch from a same-agent log update.
-  const scrollMemory = new Map<string, { top: number; stick: boolean }>();
+  // `frozenWindow` travels with top/stick (ふじ round-1 must-fix M2):
+  // without it, switching back to an agent with >200 entries restores a raw
+  // pixel `top` against a freshly-collapsed 200-entry window, which the
+  // browser silently clamps to a smaller max scrollTop — landing near the
+  // bottom instead of the remembered position.
+  const scrollMemory = new Map<
+    string,
+    {
+      top: number;
+      stick: boolean;
+      frozenWindow:
+        | {
+            start: number;
+            mode: "reading-frozen" | "explicit-expanded";
+            anchorLength: number;
+          }
+        | null;
+    }
+  >();
   let scrollAgent = untrack(() => envelope.agent_id);
 
   function handleLogScroll(): void {
     if (!logEl) return;
     const distance = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
     stickToBottom = distance <= STICK_THRESHOLD_PX;
+    if (stickToBottom) {
+      // ふじ round-2 must-fix M1: only a reading-freeze (incidental — the
+      // operator scrolled away to read, or jumped to a target) reverts to
+      // the tail once they return to the bottom. An explicit "show all" is
+      // a deliberate request and must not silently collapse back.
+      if (frozenWindow?.mode === "reading-frozen") {
+        frozenWindow = null;
+      }
+    } else if (frozenWindow === null) {
+      // ふじ round-1 must-fix M2 (2nd half): once the operator scrolls away
+      // from the tail to read older entries, freeze the window at its
+      // current boundary. Left dynamic, a streaming append would keep
+      // advancing `effectiveWindowStart` and silently evict the very rows
+      // they are reading, with no scroll compensation (unlike the explicit
+      // showEarlierLogs expand, which does compensate).
+      frozenWindow = {
+        start: effectiveWindowStart,
+        mode: "reading-frozen",
+        anchorLength: logs.length,
+      };
+    }
     scrollMemory.set(envelope.agent_id, {
       top: logEl.scrollTop,
       stick: stickToBottom,
+      frozenWindow,
     });
   }
 
@@ -1224,6 +1386,68 @@
     void logs.length;
     const agentId = envelope.agent_id;
     const switching = scrollAgent !== agentId;
+    // ふじ round-1 must-fix M2: restore the incoming agent's remembered
+    // window state BEFORE the timeline-target check below, so that check
+    // (and scrollTop restoration further down) sees the right starting
+    // point rather than a window still reflecting the outgoing agent. An
+    // unseen agent (no memory) starts fresh (null = tail).
+    const mem = switching ? scrollMemory.get(agentId) : undefined;
+    // ふじ round-2 must-fix M2 / round-3 M1+S1: history clear/reset
+    // (App.svelte onHistoryCleared / onHistoryReset) can SHRINK `logs` — or
+    // replace it with a shorter transcript — either for the agent being
+    // viewed live, or for an agent whose remembered `mem` we are about to
+    // restore. A reading-freeze anchored to a `logs.length` that has since
+    // DECREASED is stale even when its `start` still happens to be a valid
+    // index (a shrink can reorganize content, not just truncate the tail),
+    // so compare against `anchorLength` rather than only bounds-checking
+    // `start`. `frozenWindow` is read via untrack: this effect must fire on
+    // logs.length / agent_id changes only — reading it tracked made
+    // showEarlierLogs's own state write re-trigger this effect too, firing
+    // renderMermaidIn a second time for the same click (round-3 M2). An
+    // explicit "show all" (start=0) is exempt: it stays valid at any
+    // length, including 0.
+    const candidateFrozenWindow = switching
+      ? (mem?.frozenWindow ?? null)
+      : untrack(() => frozenWindow);
+    const shrinkInvalidated =
+      candidateFrozenWindow !== null &&
+      candidateFrozenWindow.mode === "reading-frozen" &&
+      logs.length < candidateFrozenWindow.anchorLength;
+    if (switching) {
+      // A shrink-invalidated mem entry must not resurrect its stale
+      // `stick`/`top` either (handled below via `effectiveMem`) — drop it
+      // here so a LATER switch back cannot reuse the same stale data.
+      if (shrinkInvalidated) scrollMemory.delete(agentId);
+      frozenWindow = shrinkInvalidated ? null : candidateFrozenWindow;
+    } else if (shrinkInvalidated) {
+      // ふじ round-4 must-fix M1: a shrink invalidates the WINDOW, but a
+      // reading-freeze also carries a logical "not at the bottom" pin
+      // (`stickToBottom`) that a length-only reset does not touch — left
+      // false, no future append for this agent auto-follows, even though
+      // the window looks like a fresh tail. Treat this exactly like the
+      // switching path's `effectiveMem = undefined`: a shrink starts the
+      // agent over, defaulting to pinned.
+      frozenWindow = null;
+      scrollMemory.delete(agentId);
+      stickToBottom = true;
+    } else if (
+      candidateFrozenWindow !== null &&
+      candidateFrozenWindow.mode === "reading-frozen" &&
+      logs.length > candidateFrozenWindow.anchorLength
+    ) {
+      // ふじ round-4 should-fix S1: `anchorLength` is fixed at freeze time,
+      // so a live "freeze at 1000 -> append to 1050 -> shrink to 1020"
+      // sequence went undetected (1020 is still >= the ORIGINAL anchor
+      // 1000, even though it IS a shrink from the 1050 this agent actually
+      // reached). Refreshing the anchor on every legitimate append means
+      // the next shrink check compares against the most recently confirmed
+      // length, not the stale original one. This still cannot catch a
+      // same-length (or grown) CONTENT replacement while this agent is not
+      // being viewed — that would need a stable entry-key check at the
+      // frozen boundary, not just a length count; accepted as a known gap
+      // for the switching-restore path (see the `mem` comment above).
+      frozenWindow = { ...candidateFrozenWindow, anchorLength: logs.length };
+    }
     const timelineTarget = scrollToEntryKey;
     if (timelineTarget === null) {
       resetTimelineScrollTail();
@@ -1243,6 +1467,16 @@
       timelineTarget !== null &&
       timelineTargetPresent &&
       timelineTarget !== handledTimelineScrollTarget;
+    if (shouldScrollTimelineTarget) {
+      // #184: the target row must be in the rendered window before
+      // scrollToTimelineEntry can find it via data-envelope-key. Expand
+      // synchronously so Svelte flushes the wider window before the tick()
+      // below queries the DOM.
+      const targetIndex = logs.findIndex(
+        (entry) => conversationEntryKey(entry) === timelineTarget,
+      );
+      ensureIndexVisible(targetIndex);
+    }
     // Snapshot synchronously BEFORE the new logs commit: once Svelte renders
     // the new envelopes, scrollHeight grows and a fresh "at the bottom"
     // measurement no longer reflects the operator's prior intent. untrack
@@ -1251,12 +1485,19 @@
     let restoreTop: number | null = null;
     if (switching) {
       scrollAgent = agentId;
-      const mem = scrollMemory.get(agentId);
       // Adopt the incoming agent's pin intent (unseen agent => bottom), and
       // restore its exact offset when it was parked away from the bottom.
-      shouldStick = mem ? mem.stick : true;
+      // Its window was already restored above, so a non-stick `mem.top`
+      // lands inside a DOM sized to match (not silently clamped by a
+      // freshly-collapsed 200-entry window — M2). ふじ round-3 M1: a
+      // shrink-invalidated `mem` is treated as fully absent here too — its
+      // `stick: false` predates the shrink and would otherwise stick around
+      // forever, silently blocking auto-follow on every future arrival for
+      // this agent even though the window itself was correctly reset.
+      const effectiveMem = shrinkInvalidated ? undefined : mem;
+      shouldStick = effectiveMem ? effectiveMem.stick : true;
       stickToBottom = shouldStick;
-      restoreTop = mem && !mem.stick ? mem.top : null;
+      restoreTop = effectiveMem && !effectiveMem.stick ? effectiveMem.top : null;
     }
     void tick().then(async () => {
       if (!logEl) return;
@@ -1609,12 +1850,26 @@
   }
 
   // Scroll to and flash the partner of a tool block (#40): from a tool_use to
-  // its tool_result and vice versa, matched by tool_use_id.
-  function jumpToTool(event: MouseEvent, id: string, fromKind: string): void {
+  // its tool_result and vice versa, matched by tool_use_id. ふじ round-1
+  // must-fix S1: the partner can be outside the current render window
+  // (#184) — expand to its absolute index (the same helper #122 uses)
+  // before querying the DOM, or a partner beyond the window silently no-ops.
+  async function jumpToTool(
+    event: MouseEvent,
+    id: string,
+    fromKind: string,
+  ): Promise<void> {
     event.preventDefault();
     event.stopPropagation(); // don't toggle the <details> we live inside
     if (!logEl) return;
     const toKind = fromKind === "tool_use" ? "tool_result" : "tool_use";
+    const targetIndex = logs.findIndex((entry) => {
+      const log = logOf(entry);
+      return log?.tool_use_id === id && log?.kind === toKind;
+    });
+    ensureIndexVisible(targetIndex);
+    await tick();
+    if (!logEl) return;
     const target = logEl.querySelector<HTMLElement>(
       `[data-tuid="${CSS.escape(id)}"][data-kind="${toKind}"]`,
     );
@@ -2208,12 +2463,19 @@
         {#if logs.length === 0}
           <p class="empty">まだ返答はありません。</p>
         {/if}
-        {#each logs as env, i (env.ts + ":" + (env.seq ?? i))}
+        {#if hiddenLogCount > 0}
+          <!-- #184: render window — only the tail is DOM'd by default. -->
+          <button type="button" class="load-earlier" onclick={showEarlierLogs}>
+            以前のログを表示 ({hiddenLogCount} 件)
+          </button>
+        {/if}
+        {#each visibleLogs as env, i (env.ts + ":" + (env.seq ?? (effectiveWindowStart + i)))}
+          {@const absoluteIndex = effectiveWindowStart + i}
           {@const log = logOf(env)}
           {@const res = resultOf(env)}
           {@const iam = interAgentMessageOf(env)}
           {@const time = formatTime(env.ts)}
-          {@const dateLabel = dayDividers.get(i)}
+          {@const dateLabel = i === 0 ? formatDate(env.ts) : dayDividers.get(absoluteIndex)}
           <div
             class="transcript-entry"
             data-envelope-key={conversationEntryKey(env)}
@@ -2367,7 +2629,7 @@
               ? errorSubtypeLabel(res.error_subtype)
               : null}
             {@const retryText = res.is_error
-              ? findPrecedingUserPrompt(logs, i)
+              ? findPrecedingUserPrompt(logs, absoluteIndex)
               : null}
             <!-- The reply text already shows as the final assistant log; the
                  result only marks the turn boundary, not a duplicate (#29).
@@ -3549,6 +3811,30 @@
   .empty {
     color: var(--fg-dim);
     font-size: var(--fs-body);
+  }
+
+  .load-earlier {
+    align-self: center;
+    margin: 0.2rem 0 0.6rem;
+    padding: 0.3rem 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--bg-card);
+    color: var(--fg-dim);
+    font-size: var(--fs-caption);
+    cursor: pointer;
+  }
+
+  .load-earlier:hover {
+    color: var(--fg);
+    border-color: var(--tone);
+  }
+
+  .load-earlier:focus-visible {
+    color: var(--fg);
+    border-color: var(--tone);
+    background: color-mix(in srgb, var(--tone) 10%, var(--bg-card));
+    outline: none;
   }
 
   .msg {

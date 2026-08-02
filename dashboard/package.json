@@ -21,6 +21,7 @@
     "phoenix": "^1.8.9"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@types/phoenix": "^1.6.7",
     "jsdom": "^29.1.1",

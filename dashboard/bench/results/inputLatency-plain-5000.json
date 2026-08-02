@@ -1,0 +1,19 @@
+{
+  "count": 5000,
+  "keystrokes": 30,
+  "mode": "plain",
+  "before": {
+    "n": 30,
+    "avgMs": 9.92,
+    "medianMs": 9,
+    "p95Ms": 9.4,
+    "maxMs": 36.6
+  },
+  "after": {
+    "n": 30,
+    "avgMs": 4.2,
+    "medianMs": 1,
+    "p95Ms": 12,
+    "maxMs": 13.5
+  }
+}
