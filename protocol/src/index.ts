@@ -476,8 +476,8 @@ export interface EnvelopeExt extends Record<string, unknown> {
  * sinks, and the permission / question / inter-agent brokers all take it,
  * so every member of the union is something a wrapper is allowed to send.
  * Server-authored envelopes that ride the same channel event live in
- * {@link ClientEnvelope} instead — widening this union would let an adapter
- * emit them and still typecheck.
+ * {@link OperatorEnvelope} instead — widening this union would let an
+ * adapter emit them and still typecheck.
  */
 export interface Envelope {
   version: "0";
@@ -521,10 +521,17 @@ export type SessionBoundaryEnvelope = Omit<Envelope, "type" | "payload"> & {
   payload: SessionBoundaryMarker;
 };
 
-/** Every envelope shape a client may receive on `agents:lobby`: what the
+/** Every envelope shape an **operator** receives on `agents:lobby`: what the
  *  wrappers emit, plus the server-authored markers. Consumers that narrow on
- *  `type` should read this; producers keep taking {@link Envelope}. */
-export type ClientEnvelope = Envelope | SessionBoundaryEnvelope;
+ *  `type` should read this; producers keep taking {@link Envelope}.
+ *
+ *  Deliberately NOT "whatever a client receives" — the viewer projection
+ *  (ADR-0021) is a different, narrower shape that these types do not model:
+ *  `ext` is stripped from every type, `permission_request` is replaced by a
+ *  synthetic `state_change`, and `session_boundary.payload` is sanitized
+ *  down to `{ mode }` alone. Model that separately if a consumer ever needs
+ *  it; do not read this union as covering it. */
+export type OperatorEnvelope = Envelope | SessionBoundaryEnvelope;
 
 /** reason enum for attach_rejected / instruction_rejected (file-upload spec,
  *  ADR-0025 F9). Single source of truth for both envelopes. */
@@ -619,6 +626,19 @@ export interface InterAgentMessagePayload {
 // from the wrapper data path. `version` is the flat outer key (ADR-0015), "0"
 // for now. The spawn/stop/restart/enumerate and sessions/spawn_result shapes
 // are added with the phases that consume them.
+//
+// `version` on the opaque-relay messages
+// --------------------------------------
+// ADR-0015 asks every message to carry `version`, and the ones the server or
+// the runner BUILDS do (register / heartbeat / sessions / spawn /
+// spawn_result / switch_session / reset_session / session_reset_result /
+// catalog_result). The four the server merely forwards — StopMessage,
+// RestartMessage, EnumerateSessions, RefreshEngineCatalog — do not: the
+// dashboard omits `version` and the server relays the client payload
+// verbatim after stripping `host_id`, so nothing stamps it. Those four
+// therefore declare `version?`, matching the wire rather than the rule; the
+// runner never reads the field either way. Closing the gap means stamping at
+// the server's relay, at which point these can go back to required.
 
 /** runner -> server, once per (re)connection: declares how much the host
  *  trusts the server's persona catalog (ADR-0031) and the operator-selectable
@@ -736,13 +756,15 @@ export interface SpawnMessage {
 
 /** server -> runner, operator-only: stop the wrapper for agent_id. */
 export interface StopMessage {
-  version: "0";
+  /** Absent on the wire — see "version on the opaque-relay messages" above. */
+  version?: "0";
   agent_id: string;
 }
 
 /** server -> runner, operator-only: restart the wrapper for agent_id. */
 export interface RestartMessage {
-  version: "0";
+  /** Absent on the wire — see "version on the opaque-relay messages" above. */
+  version?: "0";
   agent_id: string;
 }
 
@@ -809,7 +831,8 @@ export interface SpawnResult {
  *  addressed by `request_id`, and (on ok=true) re-registers the host so the
  *  usual `hosts` broadcast repaints LaunchDialog. */
 export interface RefreshEngineCatalog {
-  version: "0";
+  /** Absent on the wire — see "version on the opaque-relay messages" above. */
+  version?: "0";
   /** Target engine. Currently only "claude-code" needs live probing —
    *  Codex advertises statically (ADR-0035 F1). */
   engine: EngineKind;
@@ -883,19 +906,18 @@ export interface EngineCatalogResult {
  *  (ADR-0014 F2). `engine` scopes the listing to one engine's session store
  *  (ADR-0032 F8); omitted = "claude-code".
  *
- *  `version` follows the ADR-0015 stamping rule, but note the server does
- *  NOT currently add it on this message: the client's payload is relayed
- *  opaquely after `host_id` is stripped, and the dashboard sends none. The
- *  same holds for `refresh_engine_catalog` / `stop` / `restart`. The runner
- *  never reads it, so the gap is inert — recorded here so nobody codes
- *  against a field that is not on the wire. */
+ *  This models what the RUNNER receives, which is not what the client sent:
+ *  the server strips `host_id` and, when `cwd` was omitted, resolves it from
+ *  SessionPointers via `agent_id` and puts it on the payload. So `cwd` is
+ *  always present by the time it reaches the runner, while `agent_id`
+ *  survives only on the detail-view path (the LaunchDialog path never sends
+ *  one). The client must supply at least one of the two — sending both is
+ *  accepted, and an explicit `cwd` simply wins. */
 export interface EnumerateSessions {
-  version: "0";
-  /** Present only when the operator opened the listing from an agent's
-   *  detail view. The LaunchDialog path sends `{host_id, cwd, engine?}` with
-   *  no agent_id, and the server resolves a missing `cwd` from
-   *  SessionPointers using this field — so exactly one of the two is
-   *  required on the client side, not both. */
+  /** Absent on the wire — see "version on the opaque-relay messages" above. */
+  version?: "0";
+  /** Present when the operator opened the listing from an agent's detail
+   *  view; absent on the LaunchDialog path. */
   agent_id?: string;
   cwd: string;
   engine?: EngineKind;
