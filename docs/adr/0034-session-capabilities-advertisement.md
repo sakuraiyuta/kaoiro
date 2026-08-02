@@ -5,8 +5,8 @@ date: 2026-07-11
 opened: 2026-07-11
 supersedes: []
 superseded_by: null
-related_specs: [protocol, plugin-model]
-related_adrs: [22, 32, 33, 35, 36, 37, 40]
+related_specs: [protocol, plugin-model, file-upload]
+related_adrs: [22, 25, 32, 33, 35, 36, 37, 40]
 ---
 
 # ADR-0034 — セッション機能 (session capabilities) の envelope advertisement
@@ -19,7 +19,7 @@ Accepted (実装は [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-pa
 
 [phase-14](../plans/phase-14-codex-adapter.md) で Codex adapter が accepted 昇格した後の実運用検証で、UI 側で「機能可用性を engine 名で分岐しがちなコード動線」が複数箇所存在することが判明した。具体例:
 
-- Composer の添付 (file upload) ボタン: Codex adapter は attach_open を wholesale reject するが、engine 名で「Codex なら disable」判定を入れると、将来 Codex が画像入力等の attachment を実装した際 false negative になる (SDK 側実装は追随せず UI だけ古い判定で塞ぐ)。
+- Composer の添付 (file upload) ボタン: 当時の Codex adapter は attach_open を wholesale reject していたが、engine 名で「Codex なら disable」判定を入れると、将来 Codex が画像入力等の attachment を実装した際 false negative になる (SDK 側実装は追随せず UI だけ古い判定で塞ぐ)。実際 phase-14 で Codex は画像添付に対応し、この懸念は現実になった。
 - AskUserQuestion (`ask_user_question` MCP tool) の可用性: Codex では MCP bridge 経由で提供しているが、実運用上 plan tier (Free / Go) や別の実装制約で「その session で dialog が発火しない」ケースが起こりうる (もも実運用視点、2026-07-11 挙動確認)。
 - session 単位で可変な項目 (auth mode / plan tier / wrapper 実装状況の差) を engine 名だけでは表現不能。
 
@@ -85,6 +85,10 @@ UI は engine 名 (`ext.engine`) では機能可用性を判定しない。以�
 - `wrapper/claude-code` (Claude adapter): `supports_attachments: true` / `supports_user_input_dialog: true` (無条件)。将来 SDK 側で条件が付いた際は本箇所で追加分岐。
 - `wrapper/codex` (Codex adapter): `supports_attachments: true, attachment_types: ["image"]` / `supports_user_input_dialog: true`。`"image"` は adapter 内で SDK の `local_image` path input へ変換し、SDK 用語を protocol に漏らさない。Claude は `attachment_types` を advertise しないため、既存どおり種類制限なし。plan tier 判定は [codex-model-catalog](../specs/codex-model-catalog.md) の `codex doctor` 情報から派生させたいが plan tier 自体が取得不能なため、MVP は無条件 true。Free/Go plan で dialog が使えない挙動が観測されたら、その時点で `user_input_modes` を advertise する形へ縮退。
 
+### F5 — deprecation / migration
+
+engine 名判定はレビュー時に禁止し、既存コードで engine 名分岐しているものは phase-15 実装時に本 ADR の判定へ置換する。envelope 上 `ext.session_capabilities` の未 stamp 期間はない (phase-15 の同一 PR で両 adapter の advertise を実装するため、UI 側の fail-closed default が実効果を持つのは開発中の中間状態のみ)。
+
 ### F6 — #112 attachment type addendum (2026-07-23)
 
 `attachment_types` は engine 名分岐を増やさず、session が受け入れる添付の種類を UI と wrapper に伝える。初期 closed vocabulary は `"image"` のみで、将来 `"text"` / `"pdf"` 等を追加する場合も protocol vocabulary を先に拡張する。field absent を unrestricted とすることで、既存 Claude wrapper と rolling upgrade の互換性を保つ。
@@ -105,24 +109,27 @@ urgency low) をここへ畳んだ。同 OQ は
 **決定: 実質 B を採用した。** ただし OQ が想定した独立フィールド
 `ext.capabilities` ではなく、本 ADR の `ext.session_capabilities` の一部
 (F2 の `supports_attachments`、F6 の `attachment_types`) として実現して
-いる。これにより「知識を 2 系統に publish」という A 側の懸念は、capability
-advertise という単一の仕組みへ吸収されて実害を持たなくなった — client は
-engine 名で分岐せず capability だけを読む (F3) ため、規範の所在は
-adapter 側に留まる。
+いる。
+
+「知識を 2 系統に publish」という A 側の懸念については、**2 層は意図的に
+分けたまま**である点が重要。capability が authority を持つのは
+「添付が使えるか」と「どの category を受けるか」までで、**exact MIME の
+規範は wrapper 側にある** ([ADR-0025](0025-file-upload-wire-and-wrapper-rendering.md)
+F8 の A4-α を維持)。client が読むのは事前ヒントであり、最終判定ではない。
+規範を二重に持たないので、A が避けたかった侵食は起きていない。
 
 現に Codex アダプタは `attachment_types: ["image"]` を advertise し、
 Composer は attach ボタンの disable と picker / paste / drop の画像限定を
-この field だけで判定している。案 A が想定した「reject トーストを見て
-送り直す」UX は、少なくとも種類不一致については発生しない。
+この field だけで判定している。これで**非画像 category は事前に除外される**。
+ただし UI は `image/*` を許すため SVG / BMP 等は stage でき、wrapper の
+exact MIME allow-list で `mime_denied` として reject されうる — 案 A の
+「reject を見て送り直す」経路が消えたわけではなく、category レベルで
+起きなくなった、が正しい。
 
 **残る余地**: `attachment_types` の closed vocabulary を `"image"` 以外
 (`"text"` / `"pdf"` 等) へ広げるか。F6 のとおり拡張時は protocol
 vocabulary を先に広げる手順が既に定まっているため、独立した
 open-question としては追跡せず、必要になった時点で F6 の追補として扱う。
-
-### F5 — deprecation / migration
-
-engine 名判定はレビュー時に禁止し、既存コードで engine 名分岐しているものは phase-15 実装時に本 ADR の判定へ置換する。envelope 上 `ext.session_capabilities` の未 stamp 期間はない (phase-15 の同一 PR で両 adapter の advertise を実装するため、UI 側の fail-closed default が実効果を持つのは開発中の中間状態のみ)。
 
 ## Consequences
 

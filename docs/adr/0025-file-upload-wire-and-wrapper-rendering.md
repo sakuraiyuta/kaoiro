@@ -6,7 +6,7 @@ opened: 2026-06-27
 supersedes: []
 superseded_by: null
 related_specs: [file-upload, protocol, non-goals]
-related_adrs: [9, 15, 20, 21]
+related_adrs: [9, 15, 20, 21, 34]
 ---
 
 # ADR-0025 — ファイルアップロードの wire と wrapper-internal レンダリング

@@ -37,6 +37,24 @@ catch せず、落ちると `cli.ts` の catch が stderr に出すだけ。`res
 - 配信は `result` 同様 **operator role 限定**
   ([ADR-0012](0012-response-display-and-dashboard-scope.md))。
 
+## Implementation status (2026-08-03 追記)
+
+本 ADR の方針「エラー本文を整形せず operator へリレーする」は生きているが、
+**decision が指定した field 形はそのまま実装されなかった**。
+
+- `error_message` という field はコードベースに存在したことがない。実装は
+  issue #127 で `result` payload に `error_subtype` と `error_detail` の
+  2 field を追加する形になった。UI がエラー種別で分岐できるよう、SDK の
+  終了 subtype (`error_max_turns` / `error_during_execution` /
+  `error_max_budget_usd` / `error_max_structured_output_retries`) を
+  本文と分けたため。
+- 「wrapper プロセスの異常終了時に落ちる直前の最後のエラーを送る」(b) は
+  **未実装**。プロセス終了フックは無い。
+- `error_detail` は envelope 上限に合わせて 16,384 UTF-8 バイトへ切り詰めて
+  から送る。要約・マスキングはしないという原則は保たれている。
+
+現行の wire 仕様は [protocol](../specs/protocol.md) の `result` 行が正本。
+
 ## Consequences
 
 ### Positive

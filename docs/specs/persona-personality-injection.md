@@ -15,7 +15,8 @@ kaoiro が dogfooding 可能な段階に入り、実行時の会話にも一貫�
 キャラクター性を持たせる価値が出た。
 
 本 spec は、ペルソナごとの人格記述 (口調・一人称・語尾・返答スタイル)
-を Claude Agent SDK の `systemPrompt` に追記する仕組みを定める。既存の
+を engine SDK へ注入する仕組みを定める (Claude は `systemPrompt.append`、
+Codex は `developer_instructions`。下記「SDK への注入」)。既存の
 [ADR-0003](../adr/0003-persona-identity-persistence.md)(ペルソナ同一性
 の永続化)を延長し、「同じ persona は再起動をまたいで同じ**口調**でも
 喋る」を実現するのがゴール。
@@ -193,5 +194,6 @@ peer-routing 規約([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md)
   [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
   (本 spec の適用モデル、旧 ADR-0026 を supersede)、
   [ADR-0045](../adr/0045-footer-file-externalization.md)(共通フッターの
-  外部ファイル化、ADR-0029 F5/D5 を部分改訂)
+  外部ファイル化。**proposed / 未実装**で、accepted になれば ADR-0029
+  F5/D5 を部分改訂する案)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)
