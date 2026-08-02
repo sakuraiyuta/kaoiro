@@ -84,8 +84,10 @@ manifest.json 側)。長さは 200〜1000 字を SHOULD 目安とする(hard
 上限なし)。
 
 server は取り込み時にこの本文をそのまま保持し、wrapper への配送時に
-[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) の
-common footer を末尾に concat して push する。
+共通フッター(取り込みディレクトリ root の `system-footer.md` +
+`user-footer.md`、[ADR-0045](../adr/0045-footer-file-externalization.md))
+を末尾に concat して push する。結合が server 側の責務である点は
+[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5。
 
 ### sprites/
 

@@ -6,7 +6,7 @@ opened: 2026-07-28
 supersedes: []
 superseded_by: null
 related_specs: [protocol-inter-agent, persona-personality-injection, threat-model]
-related_adrs: [21, 22, 29, 43]
+related_adrs: [21, 22, 29, 43, 45]
 ---
 
 # ADR-0044 — 協調指針の共通フッター自動注入と都度指名 director 下の責務内自律

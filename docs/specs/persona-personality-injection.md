@@ -2,7 +2,7 @@
 title: 人格プロンプト注入
 description: ペルソナごとの口調・一人称・語尾・返答スタイルを Claude Agent SDK の systemPrompt.append 経由で注入する仕組み。プロンプト本文の SoT は server 側 persona pack、配送は WS ハンドシェイクで push。
 status: provisional
-related: [personas, persona-pack-schema, protocol, threat-model]
+related: [personas, persona-pack-schema, protocol, threat-model, footer-default-visibility]
 ---
 
 # 人格プロンプト注入
@@ -83,17 +83,27 @@ systemPrompt: {
 
 ### 共通フッター
 
-全ペルソナ (`default` 含む) に対して、環境認識の 1 文を append 末尾に
+全ペルソナ (`default` 含む) に対して、共通のフッターを append 末尾に
 足す。**結合は server 側で行う**
 ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-F5)。
+F5)。フッターは取り込みディレクトリ root の md 2 枚で構成される
+([ADR-0045](../adr/0045-footer-file-externalization.md))。
 
-- 中身:「このエージェントは kaoiro クライアント越しに操作されて
-  います」相当の 1 文([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  D5)。
-- 合成順: `preset(claude_code) + personality + common footer`。
-- 中身と合成順の変更は、pack 更新ではなく server 実装の変更として扱う
-  (全ペルソナ共通のため)。
+| ファイル | 位置付け | 欠落時 |
+|---|---|---|
+| `system-footer.md` | kaoiro 既定 (環境認識 + peer-routing 規約)。置けば内蔵デフォルトを完全に置き換える | server バイナリ内蔵の既定文面を使う |
+| `user-footer.md` | 運用者が自由記述する上乗せ。env 相当の環境固有ファイル | 何も足さない |
+
+- 合成順: `preset(claude_code) + personality + system-footer +
+  user-footer`。
+- どちらも**全ペルソナ共通 1 枚のみ**。persona 別ファイル
+  (`user-footer.<persona_id>.md`) は持たない。persona 固有の指示は
+  pack の `personality.md` 側で表現する。
+- 既定文面の改訂は server 実装の変更として扱う(全ペルソナ共通のため)。
+  運用者による上書きは実装変更を伴わず、ファイル編集だけで完結する。
+- 反映は `KaoiroServer.PersonaWatcher` 経由。md の編集で再構築が走り、
+  次に接続する wrapper のスナップショットから効く(接続中セッションは
+  F9 どおり据え置き)。
 
 ### 変更可能範囲
 
@@ -116,10 +126,17 @@ F5)。
   自作 string に置換しない。
 - MUST: 人格文字列を wrapper→server の Envelope に載せない
   ([threat-model](threat-model.md))。
-- MUST: server 側で `personality + common footer` を結合して配送する。
-  wrapper 側では結合ロジックを持たない
+- MUST: server 側で `personality + system-footer + user-footer` を結合
+  して配送する。wrapper 側では結合ロジックを持たない
   ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  F5)。
+  F5、[ADR-0045](../adr/0045-footer-file-externalization.md))。
+- MUST: フッターファイルの欠落は fail-closed にしない。
+  `system-footer.md` が無ければ内蔵デフォルト、`user-footer.md` が
+  無ければ何も足さない。
+- MUST NOT: persona 別のフッターファイルを設けない
+  (`user-footer.<persona_id>.md` は読まない)。
+- MUST NOT: 運用者が置いた `system-footer.md` / `user-footer.md` を
+  リポジトリで追跡しない(`.gitignore` 対象。環境ごとに変わる設定)。
 - MUST: 未知の `persona.id` を名乗る wrapper 接続は server が reject
   する。
 - MUST: server 到達不能時は wrapper spawn が失敗する(fail-closed)。
@@ -144,6 +161,10 @@ F5)。
   再検討要
 - [persona-personality-vs-dialogue](../open-questions/persona-personality-vs-dialogue.md)
   — セリフ吹き出し UI 導入時の再検討
+- [footer-default-visibility](../open-questions/footer-default-visibility.md)
+  — 既定フッター文面の実物を運用者にどう提示するか
+- [coordination-footer-scope](../open-questions/coordination-footer-scope.md)
+  — フッターへ追記する協調指針の文面と長さ(肥大 = 常時 context 消費)
 
 ## See Also
 
@@ -153,5 +174,7 @@ F5)。
 - ADRs: [ADR-0003](../adr/0003-persona-identity-persistence.md)(ペルソナ
   同一性)、[ADR-0006](../adr/0006-doc-language-i18n.md)(言語方針)、
   [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  (本 spec の適用モデル、旧 ADR-0026 を supersede)
+  (本 spec の適用モデル、旧 ADR-0026 を supersede)、
+  [ADR-0045](../adr/0045-footer-file-externalization.md)(共通フッターの
+  外部ファイル化、ADR-0029 F5/D5 を部分改訂)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)

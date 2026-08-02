@@ -34,6 +34,7 @@
 | [coordination-footer-scope](coordination-footer-scope.md) | medium | — | 2026-07-28 |
 | [coordination-report-routing](coordination-report-routing.md) | medium | — | 2026-07-28 |
 | [work-division-conflict-guard](work-division-conflict-guard.md) | low | — | 2026-07-28 |
+| [footer-default-visibility](footer-default-visibility.md) | medium | persona-personality-injection | 2026-08-02 |
 
 ## Recently decided
 

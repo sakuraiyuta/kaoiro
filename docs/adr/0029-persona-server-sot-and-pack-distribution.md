@@ -6,7 +6,7 @@ opened: 2026-07-05
 supersedes: [8, 26]
 superseded_by: null
 related_specs: [personas, persona-pack-schema, persona-personality-injection, setup-wizards, protocol, threat-model]
-related_adrs: [2, 3, 8, 24, 26, 31]
+related_adrs: [2, 3, 8, 24, 26, 31, 45]
 ---
 
 # ADR-0029 — ペルソナは server 集約 SoT、zip pack で配布し auto-watch で反映
@@ -107,6 +107,12 @@ wrapper に渡す最終 prompt は **`personality + common footer` を server
 本 ADR の付録節 D5 で確定する(旧 open-question `persona-common-footer`
 を吸収)。
 
+**[ADR-0045](0045-footer-file-externalization.md) による改訂**: 結合
+対象は `personality + system-footer + user-footer` に拡張され、footer
+文面の SoT はコードから persona 設置ディレクトリ root の md ファイルへ
+移った。「結合は server 側の責務、wrapper は受領文字列をそのまま注入」
+という本節の帰属は変わらない。
+
 ### F6: auto-watch は Elixir FileSystem library
 
 取り込みディレクトリの watch は Elixir の `FileSystem` library
@@ -158,6 +164,12 @@ personality.md, sprites/}`)で編集し、build スクリプトで zip 化する
   (personality が上、footer が下)。
 - 結合は server 側で実施(F5)。dogfooding で不足が見えたら別 ADR で
   拡張する。
+
+**後継**: 文面の SoT は
+[ADR-0045](0045-footer-file-externalization.md) で persona 設置
+ディレクトリ root の `system-footer.md` / `user-footer.md` へ移管された。
+「中身と合成順の変更は server 実装の変更として扱う」という本節の前提は、
+既定文面の改訂にのみ当てはまる(運用者による上書きは実装変更を伴わない)。
 
 ## Consequences
 
