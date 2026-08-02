@@ -583,6 +583,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :ok
       assert_broadcast "refresh_engine_catalog", payload
       refute Map.has_key?(payload, "host_id")
+      assert payload["version"] == "0"
       assert payload["engine"] == "claude-code"
       assert payload["request_id"] == "req-cat-1"
       assert payload["force"] == true
@@ -2627,7 +2628,53 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         assert_reply ref, :ok
         assert_broadcast ^event, payload
         refute Map.has_key?(payload, "host_id")
+        assert payload["version"] == "0"
       end
+    end
+
+    test "version 不一致は警告してから v0 へ normalize する (ADR-0015)" do
+      host_id = "lab-pc-2v"
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      # Warn-then-accept: the mismatch is observable in the log (this is the
+      # only hop that can see it), and the outbound hop is still v0.
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "stop", %{
+              "host_id" => host_id,
+              "agent_id" => "lab-pc-2v.a",
+              "version" => "99"
+            })
+
+          assert_reply ref, :ok
+        end)
+
+      assert log =~ "client declared protocol version"
+      assert log =~ "\"99\""
+      assert_broadcast "stop", payload
+      assert payload["version"] == "0"
+    end
+
+    test "version 省略時は警告せず stamp だけする" do
+      host_id = "lab-pc-2w"
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      # The current dashboard omits `version`; warning on that shape would
+      # log on every operator click.
+      log =
+        capture_log(fn ->
+          ref = push(socket, "stop", %{"host_id" => host_id, "agent_id" => "lab-pc-2w.a"})
+          assert_reply ref, :ok
+        end)
+
+      refute log =~ "client declared protocol version"
+      assert_broadcast "stop", payload
+      assert payload["version"] == "0"
     end
 
     test "viewer の spawn / stop / restart / enumerate_sessions は forbidden" do

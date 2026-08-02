@@ -430,20 +430,22 @@ session_id を指定して **resume** する単一機構で行う
 付与する([ADR-0015](../adr/0015-protocol-version-stamping.md))。新メッセージ種別の
 追加は前方互換のため version は据え置き。
 
-**既知の gap**: この規約が実際に守られているのは、サーバまたは runner が
-payload を**組み立てる**メッセージ(`register` / `heartbeat` / `sessions` /
-`spawn` / `spawn_result` / `switch_session` / `reset_session` /
-`session_reset_result` / `catalog_result`)だけ。クライアント発の payload を
-サーバが `host_id` だけ剥がして**素通し**する経路 —
-`enumerate_sessions` / `refresh_engine_catalog` / `stop` / `restart` —
-にはダッシュボードが `version` を載せず、サーバも stamp しないため、実
-wire に `version` が存在しない。runner はいずれの経路でも `version` を
-読んでいないので実害は出ていないが、ADR-0015 の規範には未達である。
+`version` の**付与主体**は 2 通りある。サーバまたは runner が payload を
+**組み立てる**メッセージ(`register` / `heartbeat` / `sessions` / `spawn` /
+`spawn_result` / `switch_session` / `reset_session` /
+`session_reset_result` / `catalog_result`)は組み立て時に載せる。
+クライアント発の payload をサーバが `host_id` だけ剥がして**素通し**する
+経路 — `enumerate_sessions` / `refresh_engine_catalog` / `stop` /
+`restart` — はダッシュボードが `version` を載せないため、サーバの relay
+(`relay_to_runner/4`)が `"0"` へ **normalize** する。クライアントが
+`"0"` 以外を明示していたときは**先に警告ログを出してから** normalize する
+(ここが不一致を観測できる唯一の hop。runner は `version` を読まない)。
+省略時は無警告 — 現行ダッシュボードの通常形であり、警告すると operator の
+操作ごとにログが出てしまうため。
 
-`@kaoiro/protocol` の該当 4 型はこの実態に合わせて `version?` を宣言して
-いる(規約どおり required にすると、存在しない field を型が保証して
-しまうため)。解消するならサーバの relay 時 stamp が筋で、そのときに 4 型を
-required へ戻す。
+**本変更のスコープ**: これで閉じたのは ADR-0015 の要求のうち
+**サーバ → runner 経路の key presence** のみ。受信側 (runner) の不一致検査と、
+クライアント → サーバ側の `version` 付与は別の gap として残っている。
 
 **安全性**(spawn = 実質リモートコード実行): spawn / resume / resume_session /
 stop / restart の受理は **operator 限定**。resume 対象 session_id は当該 agent

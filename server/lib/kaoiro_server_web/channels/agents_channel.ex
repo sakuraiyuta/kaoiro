@@ -1039,8 +1039,25 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # to `runner:<host_id>` without interpreting the contents (ADR-0023,
   # server stays host/agent-agnostic). The whole map is size-bounded so an
   # oversized opaque blob cannot reach the runner process (issue #26).
+  #
+  # `version` is stamped here rather than left to the client (ADR-0015): the
+  # messages on this path (stop / restart / enumerate_sessions /
+  # refresh_engine_catalog) are the only runner-bound ones the server does
+  # not build itself, so without this they would reach the runner unversioned.
+  # The stamp NORMALIZES the outbound hop, it does not authenticate the
+  # client: a declared version other than "0" is warned about first, because
+  # this is the only hop that can observe the mismatch (the runner never
+  # reads the field). Warn-then-accept is ADR-0015's rule for a receiver.
+  # An ABSENT version stays silent — that is the current dashboard's normal
+  # shape, so warning on it would log on every operator click. Closing that
+  # side means stamping client -> server too, which is a separate gap.
   defp relay_to_runner(socket, payload, host_id, event) do
-    relayed = Map.delete(payload, "host_id")
+    warn_on_version_mismatch(payload, event)
+
+    relayed =
+      payload
+      |> Map.delete("host_id")
+      |> Map.put("version", "0")
 
     case check_relay_size(relayed) do
       :ok ->
@@ -1051,6 +1068,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
   end
+
+  # The inspect is bounded because `version` is unvalidated client input and
+  # the size guard has not run yet (issue #26's concern applies to the log
+  # sink too, not just the runner process).
+  defp warn_on_version_mismatch(%{"version" => version}, event) when version != "0" do
+    Logger.warning(
+      "#{event}: client declared protocol version " <>
+        "#{inspect(version, printable_limit: 64, limit: 8)}; relaying as \"0\" " <>
+        "(ADR-0015 best-effort accept)"
+    )
+  end
+
+  defp warn_on_version_mismatch(_payload, _event), do: :ok
 
   defp fetch_host(host_id) do
     # get_public so the resolver sees the same persona set the operator UI

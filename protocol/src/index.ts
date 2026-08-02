@@ -629,16 +629,18 @@ export interface InterAgentMessagePayload {
 //
 // `version` on the opaque-relay messages
 // --------------------------------------
-// ADR-0015 asks every message to carry `version`, and the ones the server or
-// the runner BUILDS do (register / heartbeat / sessions / spawn /
-// spawn_result / switch_session / reset_session / session_reset_result /
-// catalog_result). The four the server merely forwards — StopMessage,
-// RestartMessage, EnumerateSessions, RefreshEngineCatalog — do not: the
-// dashboard omits `version` and the server relays the client payload
-// verbatim after stripping `host_id`, so nothing stamps it. Those four
-// therefore declare `version?`, matching the wire rather than the rule; the
-// runner never reads the field either way. Closing the gap means stamping at
-// the server's relay, at which point these can go back to required.
+// Most of these the server or the runner BUILDS, so they stamp `version`
+// themselves. Four do not — StopMessage, RestartMessage, EnumerateSessions,
+// RefreshEngineCatalog originate at the dashboard, which omits the field,
+// and the server forwards the client payload after stripping `host_id`.
+// For those the server's `relay_to_runner/4` normalizes `version` to "0" on
+// the way out (warning first when the client declared something else), so
+// `version` is required here for every runner-bound message alike.
+//
+// Scope: that closes ADR-0015's key-PRESENCE requirement on the
+// server -> runner hop only. The runner still never reads the field, so it
+// runs no mismatch check of its own, and the dashboard -> server payloads
+// for these four carry no `version` at all — both are separate gaps.
 
 /** runner -> server, once per (re)connection: declares how much the host
  *  trusts the server's persona catalog (ADR-0031) and the operator-selectable
@@ -756,15 +758,17 @@ export interface SpawnMessage {
 
 /** server -> runner, operator-only: stop the wrapper for agent_id. */
 export interface StopMessage {
-  /** Absent on the wire — see "version on the opaque-relay messages" above. */
-  version?: "0";
+  /** Stamped by the server's relay — see "version on the opaque-relay
+   *  messages" above; the dashboard does not send it. */
+  version: "0";
   agent_id: string;
 }
 
 /** server -> runner, operator-only: restart the wrapper for agent_id. */
 export interface RestartMessage {
-  /** Absent on the wire — see "version on the opaque-relay messages" above. */
-  version?: "0";
+  /** Stamped by the server's relay — see "version on the opaque-relay
+   *  messages" above; the dashboard does not send it. */
+  version: "0";
   agent_id: string;
 }
 
@@ -831,8 +835,9 @@ export interface SpawnResult {
  *  addressed by `request_id`, and (on ok=true) re-registers the host so the
  *  usual `hosts` broadcast repaints LaunchDialog. */
 export interface RefreshEngineCatalog {
-  /** Absent on the wire — see "version on the opaque-relay messages" above. */
-  version?: "0";
+  /** Stamped by the server's relay — see "version on the opaque-relay
+   *  messages" above; the dashboard does not send it. */
+  version: "0";
   /** Target engine. Currently only "claude-code" needs live probing —
    *  Codex advertises statically (ADR-0035 F1). */
   engine: EngineKind;
@@ -914,8 +919,9 @@ export interface EngineCatalogResult {
  *  one). The client must supply at least one of the two — sending both is
  *  accepted, and an explicit `cwd` simply wins. */
 export interface EnumerateSessions {
-  /** Absent on the wire — see "version on the opaque-relay messages" above. */
-  version?: "0";
+  /** Stamped by the server's relay — see "version on the opaque-relay
+   *  messages" above; the dashboard does not send it. */
+  version: "0";
   /** Present when the operator opened the listing from an agent's detail
    *  view; absent on the LaunchDialog path. */
   agent_id?: string;
