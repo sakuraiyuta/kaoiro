@@ -107,11 +107,12 @@ wrapper に渡す最終 prompt は **`personality + common footer` を server
 本 ADR の付録節 D5 で確定する(旧 open-question `persona-common-footer`
 を吸収)。
 
-**[ADR-0045](0045-footer-file-externalization.md) による改訂案(proposed、
-未実装)**: 結合対象を `personality + system-footer + user-footer` へ拡張し、
-footer 文面の SoT をコードから persona 設置ディレクトリ root の md ファイル
-へ移す提案。**現状の実装は依然 `PersonaAssets.@common_footer` の 1 枚内蔵**
-で、accepted かつ実装された時点で本節をそのように改訂する。いずれにせよ
+**[ADR-0045](0045-footer-file-externalization.md) による改訂(accepted、
+実装未着手)**: 結合対象を `personality + system-footer + user-footer` へ
+拡張し、footer 文面の SoT をコードから footer 設置ディレクトリ
+(`KAOIRO_FOOTER_DIR`)の md ファイルへ移す決定。**現状の実装は依然
+`PersonaAssets.@common_footer` の 1 枚内蔵**で、実装完了時点で本節を
+そのように改訂する。いずれにせよ
 「結合は server 側の責務、wrapper は受領文字列をそのまま注入」という本節の
 帰属は変わらない。
 
@@ -167,10 +168,11 @@ personality.md, sprites/}`)で編集し、build スクリプトで zip 化する
 - 結合は server 側で実施(F5)。dogfooding で不足が見えたら別 ADR で
   拡張する。
 
-**後継案**: 文面の SoT を persona 設置ディレクトリ root の
-`system-footer.md` / `user-footer.md` へ移す提案が
-[ADR-0045](0045-footer-file-externalization.md) にある(**proposed、未実装**)。
-実現すれば「中身と合成順の変更は server 実装の変更として扱う」という本節の
+**後継**: 文面の SoT を footer 設置ディレクトリ(`KAOIRO_FOOTER_DIR`)の
+`system-footer.md` / `user-footer.md` へ移す決定が
+[ADR-0045](0045-footer-file-externalization.md) にある(**accepted、
+実装未着手**)。
+実装されれば「中身と合成順の変更は server 実装の変更として扱う」という本節の
 前提は既定文面の改訂にのみ当てはまることになる(運用者による上書きは実装
 変更を伴わない)。現状は内蔵 1 枚なので本節がそのまま有効。
 

@@ -84,9 +84,10 @@ manifest.json 側)。長さは 200〜1000 字を SHOULD 目安とする(hard
 上限なし)。
 
 server は取り込み時にこの本文をそのまま保持し、wrapper への配送時に
-共通フッター(取り込みディレクトリ root の `system-footer.md` +
-`user-footer.md`、[ADR-0045](../adr/0045-footer-file-externalization.md))
-を末尾に concat して push する。結合が server 側の責務である点は
+共通フッター(現状は内蔵 1 枚。
+[ADR-0045](../adr/0045-footer-file-externalization.md)(accepted・実装
+未着手)の実装後は footer 設置ディレクトリ `KAOIRO_FOOTER_DIR` の
+`system-footer.md` + `user-footer.md`)を末尾に concat して push する。結合が server 側の責務である点は
 [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5。
 
 ### sprites/

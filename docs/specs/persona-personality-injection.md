@@ -2,7 +2,7 @@
 title: 人格プロンプト注入
 description: ペルソナごとの口調・一人称・語尾・返答スタイルを engine SDK(Claude は systemPrompt.append、Codex は developer_instructions)へ注入する仕組み。プロンプト本文の SoT は server 側 persona pack、配送は WS ハンドシェイクで push。
 status: provisional
-related: [personas, persona-pack-schema, protocol, threat-model, footer-default-visibility]
+related: [personas, persona-pack-schema, protocol, threat-model]
 ---
 
 # 人格プロンプト注入
@@ -103,9 +103,11 @@ peer-routing 規約([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md)
 のソフトガード)。pack が無い予約 persona `default` では、この
 フッターだけが prompt になる。文面の改訂は server 実装の変更として扱う。
 
-**将来 (未実装)**: [ADR-0045](../adr/0045-footer-file-externalization.md)
-は取り込みディレクトリ root の md 2 枚への外部化を提案しているが、同 ADR は
-`proposed` のままで**実装されていない**。決着したら以下の形になる:
+**決定済み・実装待ち**: [ADR-0045](../adr/0045-footer-file-externalization.md)
+(accepted) は footer 設置ディレクトリ(新設 env `KAOIRO_FOOTER_DIR`。
+persona 取り込みディレクトリとは分離、未設定なら内蔵版のみ)の md
+2 枚への外部化を決定した。実装 phase は着手時に採番する (**未着手**)。
+実装後は以下の形になる:
 
 | ファイル | 位置付け | 欠落時 |
 |---|---|---|
@@ -113,14 +115,22 @@ peer-routing 規約([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md)
 | `user-footer.md` | 運用者が自由記述する上乗せ。env 相当の環境固有ファイル | 何も足さない |
 
 - 合成順: `preset(claude_code) + personality + system-footer +
-  user-footer`。
+  user-footer`(区切りは `\n\n`)。
 - どちらも**全ペルソナ共通 1 枚のみ**。persona 別ファイル
   (`user-footer.<persona_id>.md`) は持たない。persona 固有の指示は
   pack の `personality.md` 側で表現する。
 - 運用者による上書きは実装変更を伴わず、ファイル編集だけで完結する。
-- 反映は `KaoiroServer.PersonaWatcher` 経由。md の編集で再構築が走り、
-  次に接続する wrapper のスナップショットから効く(接続中セッションは
-  F9 どおり据え置き)。
+- 内蔵デフォルトの実体は `server/priv/footers/system-footer.md`
+  (build source。`@external_resource` で再コンパイル追跡 +
+  コンパイル時 `File.read!` で取り込み)。運用者はリポジトリまたは
+  release 同梱の `priv/` でこのファイルを閲覧して既定文面を確認
+  できる (ADR-0045 F1)。
+- 反映は専用 watcher 経由(`KAOIRO_FOOTER_DIR` 設定時のみ、2 ファイル
+  名の完全一致を監視)。編集で再構築が走り、次に接続する wrapper の
+  スナップショットから効く(接続中セッションは F9 どおり据え置き)。
+  rebuild ごとに各層の由来・文字数・短縮 hash を info ログへ出す
+  (ADR-0045 F5)。読み取りの意味論(UTF-8 / regular file 限定 /
+  一時 read_error の last-known-good)は ADR-0045 F6。
 
 ### 変更可能範囲
 
@@ -146,15 +156,16 @@ peer-routing 規約([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md)
 - MUST: server 側で `personality + 共通フッター` を結合して配送する。
   wrapper 側では結合ロジックを持たない
   ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5)。
-- 以下は [ADR-0045](../adr/0045-footer-file-externalization.md) 実装時に
-  効く条件で、**現状の内蔵 1 枚構成では適用されない**:
+- 以下は [ADR-0045](../adr/0045-footer-file-externalization.md)
+  (accepted・実装未着手) の実装完了時に効く条件で、**現状の内蔵
+  1 枚構成ではまだ適用されない**:
   - MUST: フッターファイルの欠落は fail-closed にしない。
     `system-footer.md` が無ければ内蔵デフォルト、`user-footer.md` が
     無ければ何も足さない。
   - MUST NOT: persona 別のフッターファイルを設けない
     (`user-footer.<persona_id>.md` は読まない)。
   - MUST NOT: 運用者が置いた `system-footer.md` / `user-footer.md` を
-    リポジトリで追跡しない(`.gitignore` 対象。環境ごとに変わる設定)。
+    リポジトリに置かない(env と同じ環境固有ファイル。ADR-0045 F3)。
 - MUST: 未知の `persona.id` を名乗る wrapper 接続は server が reject
   する。
 - MUST: server 到達不能時は wrapper spawn が失敗する(fail-closed)。
@@ -179,10 +190,9 @@ peer-routing 規約([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md)
   再検討要
 - [persona-personality-vs-dialogue](../open-questions/persona-personality-vs-dialogue.md)
   — セリフ吹き出し UI 導入時の再検討
-- [footer-default-visibility](../open-questions/footer-default-visibility.md)
-  — 既定フッター文面の実物を運用者にどう提示するか
 - [coordination-footer-scope](../open-questions/coordination-footer-scope.md)
-  — フッターへ追記する協調指針の文面と長さ(肥大 = 常時 context 消費)
+  — フッターへ追記する協調指針の文面(長さ担保は ADR-0045 F5 で
+  決着済み)
 
 ## See Also
 
@@ -194,6 +204,5 @@ peer-routing 規約([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md)
   [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
   (本 spec の適用モデル、旧 ADR-0026 を supersede)、
   [ADR-0045](../adr/0045-footer-file-externalization.md)(共通フッターの
-  外部ファイル化。**proposed / 未実装**で、accepted になれば ADR-0029
-  F5/D5 を部分改訂する案)
+  外部ファイル化。**accepted・実装未着手**。ADR-0029 F5/D5 を部分改訂)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)
