@@ -12,12 +12,15 @@ defmodule KaoiroServer.Auth do
 
   - `:wrapper_tokens` unset — in `:dev`/`:test` (`Application.get_env(
     :kaoiro_server, :env)`), wrapper auth is disabled (dev convenience):
-    any wrapper may connect. In `:prod`, fail-closed instead: every
-    wrapper connection is rejected (issue #138) — an operator running a
-    release must set `KAOIRO_WRAPPER_TOKENS` to accept any wrapper.
-  - `:runner_tokens` unset — mirrors `:wrapper_tokens` (ADR-0011
-    per-entity tokens, extended to hosts by ADR-0023; issue #138 applies
-    the same prod fail-closed).
+    any wrapper may connect. In `:prod`, pair auth is simply absent:
+    server-minted signed tokens (the spawn path, ADR-0024) still
+    authenticate, everything else is rejected (fail-closed, issue
+    #138) — a runner-only deployment needs no pair entries.
+  - `:runner_tokens` unset — mirrors only the dev/test relaxation and
+    the prod fail-closed (ADR-0011 per-entity tokens, extended to hosts
+    by ADR-0023; issue #138). Runners have NO signed-token path: unset
+    in `:prod` rejects every runner, unlike the wrapper's ADR-0024
+    exception above.
   - `:client_tokens` unset — fail-closed in every env: every client
     connection is rejected (no token can authenticate), so a
     misconfigured deployment never silently grants operator (issue #28).
@@ -59,10 +62,15 @@ defmodule KaoiroServer.Auth do
       # everyone else is unchanged.
       KaoiroServer.TokenDenylist.revoked?(agent_id) -> {:error, :unauthorized}
       # Dev/test convenience: no wrapper tokens configured → any wrapper
-      # connects. In :prod this must NOT silently open up (issue #138):
-      # an operator running a release without KAOIRO_WRAPPER_TOKENS set
-      # gets fail-closed instead.
-      tokens == %{} -> if prod_env?(), do: {:error, :unauthorized}, else: :ok
+      # connects. In :prod an empty registry must NOT silently open up
+      # (issue #138) — but it must not block the spawn path either: fall
+      # through so a server-minted signed token (ADR-0024) still
+      # authenticates. A runner-only deployment has no pair entries at
+      # all, and gating the signed branch on a non-empty registry refused
+      # every dashboard-launched wrapper as `unauthorized` (2026-08-02
+      # gateway). Anything unsigned still lands on the final
+      # fail-closed clause.
+      tokens == %{} and not prod_env?() -> :ok
       registered_wrapper_token?(tokens, agent_id, token) -> :ok
       valid_signed_wrapper_token?(agent_id, token) -> :ok
       true -> {:error, :unauthorized}
@@ -108,9 +116,12 @@ defmodule KaoiroServer.Auth do
   @doc """
   Authorizes a runner connection for `host_id` (ADR-0023). `:ok` when the
   token matches, or when no runner tokens are configured outside `:prod`.
-  Mirrors `authorize_wrapper/2` against a separate `:runner_tokens` list
-  since the host control channel is a distinct entity from the
-  per-agent_id wrapper; also mirrors its :prod fail-closed (issue #138).
+  Mirrors `authorize_wrapper/2`'s pair auth against a separate
+  `:runner_tokens` list since the host control channel is a distinct
+  entity from the per-agent_id wrapper, and mirrors its :prod
+  fail-closed (issue #138) — but NOT its signed-token branch: there is
+  no minted-token concept for runners, so unset in :prod rejects every
+  runner.
   """
   def authorize_runner(host_id, token) do
     tokens = parse_pairs(Application.get_env(:kaoiro_server, :runner_tokens))
@@ -249,9 +260,11 @@ defmodule KaoiroServer.Auth do
   - `:client_tokens` unset — client connections are rejected
     (fail-closed in every env); the env must be set to grant access.
   - `:wrapper_tokens` unset — dev/test: wrapper auth disabled, any
-    wrapper may connect. `:prod`: fail-closed, every wrapper is
-    rejected.
-  - `:runner_tokens` unset — mirrors `:wrapper_tokens` (ADR-0023).
+    wrapper may connect. `:prod`: pair auth off, only server-minted
+    signed tokens (ADR-0024) authenticate; anything else is rejected.
+  - `:runner_tokens` unset — dev/test relaxation and prod fail-closed
+    as above, but with no signed-token path (ADR-0023): unset in
+    `:prod` rejects every runner.
 
   Also forwards to `KaoiroServer.OAuth.warn_config/0` so the OAuth login
   path (ADR-0042) reports its own half-configured states from the same
@@ -280,12 +293,20 @@ defmodule KaoiroServer.Auth do
   end
 
   defp unset_wrapper_or_runner_message(entity) do
-    if prod_env?() do
-      "#{entity} connections are rejected (fail-closed in prod, issue #138). " <>
-        "Set it to allow #{entity}s to connect."
-    else
-      "#{entity} auth disabled (dev mode); any #{entity} may connect. " <>
-        "Set it before exposing beyond loopback (specs/threat-model.md)."
+    cond do
+      not prod_env?() ->
+        "#{entity} auth disabled (dev mode); any #{entity} may connect. " <>
+          "Set it before exposing beyond loopback (specs/threat-model.md)."
+
+      entity == "wrapper" ->
+        "pair auth disabled; only server-minted wrapper tokens (the " <>
+          "spawn path, ADR-0024) authenticate, anything else is " <>
+          "rejected (fail-closed in prod, issue #138). Set it to " <>
+          "pre-register fixed wrappers."
+
+      true ->
+        "#{entity} connections are rejected (fail-closed in prod, issue #138). " <>
+          "Set it to allow #{entity}s to connect."
     end
   end
 

@@ -58,12 +58,13 @@ cd server && cp .env.example .env
 | `PORT` | 任意 | 既定 4000 |
 | `KAOIRO_BIND_IP` | 任意 | :prod のみ有効。既定は全 IF。通常は既定のままで良い(issue #139) |
 | `KAOIRO_CLIENT_TOKENS` | 必須 | `<token>:<role>,...`(role = `operator`/`viewer`)。未設定は全 client 拒否 |
-| `KAOIRO_WRAPPER_TOKENS` | 必須 | `<agent_id>:<token>,...`(client と順序が逆) |
+| `KAOIRO_WRAPPER_TOKENS` | 任意 | `<agent_id>:<token>,...`(client と順序が逆)。spawn 経由のみの runner 配備では不要 — server-minted signed token で認証 (ADR-0024、2026-08-02 改訂)。固定 wrapper を pre-register する場合のみ設定 |
 | `KAOIRO_RUNNER_TOKENS` | 必須 | `<host_id>:<token>,...`。1.1 で発行した token を runner 側 `runner.env` の `KAOIRO_RUNNER_TOKEN` と対にする |
 | `KAOIRO_PERSONA_DIR` | 任意 | 立ち絵オーバーレイ用コンテナ内パス |
 
 3 種いずれも未設定時の挙動は env ごとに異なる(client = fail-closed、
-wrapper/runner = :prod で fail-closed・dev/test のみ緩和、issue #138)。
+runner = :prod で fail-closed・dev/test のみ緩和、wrapper = :prod では
+signed token のみ受理・dev/test は緩和、issue #138 / 2026-08-02 改訂)。
 
 **DETS パス 8 種**(restart 跨ぎで状態を残す DETS ファイルの格納先)は
 同梱 `docker-compose.yaml` が `environment:` + named volume `kaoiro-state`

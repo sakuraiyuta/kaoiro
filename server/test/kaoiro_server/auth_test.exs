@@ -100,6 +100,17 @@ defmodule KaoiroServer.AuthTest do
       assert {:error, :unauthorized} = Auth.authorize_wrapper("any-agent", "whatever")
     end
 
+    test ":prod では未設定でも server-minted 署名トークンは通る (runner-only 配備)" do
+      # ペア登録ゼロの runner-only 配備 (2026-08-02 gateway) で、
+      # dashboard 起点の spawn (ADR-0024) が fail-closed に巻き込まれて
+      # 全拒否されない — 署名検証は registry の有無と独立に走る。
+      Application.put_env(:kaoiro_server, :env, :prod)
+      token = Auth.mint_wrapper_token("lab.spawned")
+
+      assert :ok = Auth.authorize_wrapper("lab.spawned", token)
+      assert {:error, :unauthorized} = Auth.authorize_wrapper("lab.other", token)
+    end
+
     test ":prod でも登録済みトークンでの認証は通る (issue #138)" do
       Application.put_env(:kaoiro_server, :env, :prod)
 
@@ -247,7 +258,8 @@ defmodule KaoiroServer.AuthTest do
       Application.put_env(:kaoiro_server, :env, :prod)
 
       log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
-      assert log =~ "KAOIRO_WRAPPER_TOKENS unset: wrapper connections are rejected"
+      assert log =~ "KAOIRO_WRAPPER_TOKENS unset: pair auth disabled"
+      assert log =~ "only server-minted wrapper tokens"
       assert log =~ "fail-closed in prod"
       assert log =~ "KAOIRO_RUNNER_TOKENS unset: runner connections are rejected"
       refute log =~ "dev mode"
