@@ -631,16 +631,18 @@ export interface InterAgentMessagePayload {
 // --------------------------------------
 // Most of these the server or the runner BUILDS, so they stamp `version`
 // themselves. Four do not — StopMessage, RestartMessage, EnumerateSessions,
-// RefreshEngineCatalog originate at the dashboard, which omits the field,
-// and the server forwards the client payload after stripping `host_id`.
-// For those the server's `relay_to_runner/4` normalizes `version` to "0" on
-// the way out (warning first when the client declared something else), so
+// RefreshEngineCatalog originate at a client, and the server forwards the
+// payload after stripping `host_id`. For those the server's
+// `relay_to_runner/4` normalizes `version` to "0" on the way out (warning
+// first when the client declared anything else, absent included), so
 // `version` is required here for every runner-bound message alike.
 //
-// Scope: that closes ADR-0015's key-PRESENCE requirement on the
-// server -> runner hop only. The runner still never reads the field, so it
-// runs no mismatch check of its own, and the dashboard -> server payloads
-// for these four carry no `version` at all — both are separate gaps.
+// ADR-0015's receiver rule is now enforced on both hops: the dashboard
+// stamps these payloads (#182), the server warns on any non-"0" it relays,
+// and the runner re-checks every message it receives before handing it to
+// the supervisor (#181). RestartMessage is the one shape the bundled
+// dashboard never sends — the server still accepts it for other clients, and
+// an unstamped one warns like any other.
 
 /** runner -> server, once per (re)connection: declares how much the host
  *  trusts the server's persona catalog (ADR-0031) and the operator-selectable
@@ -758,16 +760,19 @@ export interface SpawnMessage {
 
 /** server -> runner, operator-only: stop the wrapper for agent_id. */
 export interface StopMessage {
-  /** Stamped by the server's relay — see "version on the opaque-relay
-   *  messages" above; the dashboard does not send it. */
+  /** Stamped by the dashboard and re-normalized by the server's relay — see
+   *  "version on the opaque-relay messages" above. */
   version: "0";
   agent_id: string;
 }
 
 /** server -> runner, operator-only: restart the wrapper for agent_id. */
 export interface RestartMessage {
-  /** Stamped by the server's relay — see "version on the opaque-relay
-   *  messages" above; the dashboard does not send it. */
+  /** The one relay shape the bundled dashboard never sends — see "version on
+   *  the opaque-relay messages" above. Another client's restart is normalized
+   *  to "0" by the server's relay, and an unstamped one warns like any other,
+   *  so this is the relay path where the absent-version warning actually
+   *  fires today. */
   version: "0";
   agent_id: string;
 }
@@ -835,8 +840,8 @@ export interface SpawnResult {
  *  addressed by `request_id`, and (on ok=true) re-registers the host so the
  *  usual `hosts` broadcast repaints LaunchDialog. */
 export interface RefreshEngineCatalog {
-  /** Stamped by the server's relay — see "version on the opaque-relay
-   *  messages" above; the dashboard does not send it. */
+  /** Stamped by the dashboard and re-normalized by the server's relay — see
+   *  "version on the opaque-relay messages" above. */
   version: "0";
   /** Target engine. Currently only "claude-code" needs live probing —
    *  Codex advertises statically (ADR-0035 F1). */
@@ -919,8 +924,8 @@ export interface EngineCatalogResult {
  *  one). The client must supply at least one of the two — sending both is
  *  accepted, and an explicit `cwd` simply wins. */
 export interface EnumerateSessions {
-  /** Stamped by the server's relay — see "version on the opaque-relay
-   *  messages" above; the dashboard does not send it. */
+  /** Stamped by the dashboard and re-normalized by the server's relay — see
+   *  "version on the opaque-relay messages" above. */
   version: "0";
   /** Present when the operator opened the listing from an agent's detail
    *  view; absent on the LaunchDialog path. */

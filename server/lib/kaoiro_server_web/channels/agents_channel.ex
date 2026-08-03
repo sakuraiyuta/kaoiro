@@ -1045,12 +1045,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # refresh_engine_catalog) are the only runner-bound ones the server does
   # not build itself, so without this they would reach the runner unversioned.
   # The stamp NORMALIZES the outbound hop, it does not authenticate the
-  # client: a declared version other than "0" is warned about first, because
-  # this is the only hop that can observe the mismatch (the runner never
-  # reads the field). Warn-then-accept is ADR-0015's rule for a receiver.
-  # An ABSENT version stays silent — that is the current dashboard's normal
-  # shape, so warning on it would log on every operator click. Closing that
-  # side means stamping client -> server too, which is a separate gap.
+  # client: anything but "0" — including an ABSENT version — is warned about
+  # first. Warn-then-accept is ADR-0015's rule for a receiver.
+  #
+  # Absent used to be silent, because the dashboard omitted the field and
+  # warning would have logged on every operator click. #182 closed that: the
+  # dashboard now stamps these payloads, so a missing version means an
+  # unversioned client, which is exactly what ADR-0015 asks to surface. The
+  # runner runs the same check on delivery (#181), so both hops now agree.
   defp relay_to_runner(socket, payload, host_id, event) do
     warn_on_version_mismatch(payload, event)
 
@@ -1069,18 +1071,25 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  defp warn_on_version_mismatch(%{"version" => "0"}, _event), do: :ok
+
   # The inspect is bounded because `version` is unvalidated client input and
   # the size guard has not run yet (issue #26's concern applies to the log
   # sink too, not just the runner process).
-  defp warn_on_version_mismatch(%{"version" => version}, event) when version != "0" do
-    Logger.warning(
-      "#{event}: client declared protocol version " <>
-        "#{inspect(version, printable_limit: 64, limit: 8)}; relaying as \"0\" " <>
-        "(ADR-0015 best-effort accept)"
-    )
+  defp warn_on_version_mismatch(%{"version" => version}, event) do
+    warn_relayed_version(event, inspect(version, printable_limit: 64, limit: 8))
   end
 
-  defp warn_on_version_mismatch(_payload, _event), do: :ok
+  defp warn_on_version_mismatch(_payload, event) do
+    warn_relayed_version(event, "(absent)")
+  end
+
+  defp warn_relayed_version(event, declared) do
+    Logger.warning(
+      "#{event}: client declared protocol version #{declared}; " <>
+        "relaying as \"0\" (ADR-0015 best-effort accept)"
+    )
+  end
 
   defp fetch_host(host_id) do
     # get_public so the resolver sees the same persona set the operator UI

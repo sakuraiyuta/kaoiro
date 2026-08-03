@@ -59,6 +59,102 @@ interface ChannelCallbacks {
   onRefreshEngineCatalog: ChannelCallback | undefined;
 }
 
+/** Server → runner control events, keyed by the callback that handles them.
+ *  `Record<keyof ChannelCallbacks, string>` requires EVERY key, so adding a
+ *  command to `ChannelCallbacks` without listing its event here is a compile
+ *  error — which is how the version check below stays impossible to forget
+ *  (issue #181: "各ハンドラに散らすと漏れる"). */
+export const CONTROL_EVENT_BY_CALLBACK: Record<keyof ChannelCallbacks, string> =
+  {
+    onSpawn: "spawn",
+    onStop: "stop",
+    onRestart: "restart",
+    onEnumerateSessions: "enumerate_sessions",
+    onSwitchSession: "switch_session",
+    onResetSession: "reset_session",
+    onRefreshEngineCatalog: "refresh_engine_catalog",
+  };
+
+/** The protocol version this runner speaks (ADR-0015). Mirrors the "0" the
+ *  send side stamps in config.ts / supervisor.ts / engine_catalog_refresh.ts. */
+export const RUNNER_PROTOCOL_VERSION = "0";
+
+/** `version` is unvalidated wire input, so it is rendered bounded — the same
+ *  reason the server bounds its own inspect of the field. */
+const MAX_LOGGED_VERSION_CHARS = 64;
+
+function readVersion(payload: unknown): unknown {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  return (payload as { version?: unknown }).version;
+}
+
+function describeVersion(value: unknown): string {
+  if (value === undefined) return "(absent)";
+
+  let text: string;
+  try {
+    text = JSON.stringify(value) ?? "(unserializable)";
+  } catch {
+    text = "(unserializable)";
+  }
+
+  return text.length > MAX_LOGGED_VERSION_CHARS
+    ? `${text.slice(0, MAX_LOGGED_VERSION_CHARS)}…(truncated)`
+    : text;
+}
+
+/** ADR-0015's receiver rule: only an exact match is normal, a mismatch is
+ *  warned about, and the message is processed EITHER WAY (best-effort accept
+ *  — rejecting would halt operations over a field nothing varies on yet).
+ *
+ *  An ABSENT version warns too. The server stamps "0" on every runner-bound
+ *  message — the four it relays and the three it builds itself — so a missing
+ *  field means that invariant broke, not that some sender has yet to catch
+ *  up. The server's relay-side check treats absent the same way since #182
+ *  gave the dashboard its own stamp, so both hops now agree (#181 / #182). */
+export function warnOnVersionMismatch(
+  event: string,
+  payload: unknown,
+  write: (line: string) => void = (line) => process.stderr.write(line),
+): void {
+  const version = readVersion(payload);
+  if (version === RUNNER_PROTOCOL_VERSION) return;
+
+  write(
+    `runner: ${event}: server declared protocol version ` +
+      `${describeVersion(version)}; accepting as ` +
+      `${JSON.stringify(RUNNER_PROTOCOL_VERSION)} (ADR-0015 best-effort accept)\n`,
+  );
+}
+
+/** The slice of a phoenix `Channel` this binding needs. Declared here so a
+ *  test can drive `bindControlEvents` without standing up a live Socket. */
+export interface ControlEventChannel {
+  on(event: string, callback: (payload: unknown) => void): unknown;
+}
+
+/** Binds every server → runner control event, with the ADR-0015 version check
+ *  in front of the handler. One loop rather than seven `channel.on` calls: the
+ *  check is then structurally impossible to bind without.
+ *
+ *  `callbacks` is a getter, not a value, so the handler resolves the callback
+ *  at DELIVERY time — the behaviour the previous per-event bindings had. */
+export function bindControlEvents(
+  channel: ControlEventChannel,
+  callbacks: () => ChannelCallbacks,
+  write?: (line: string) => void,
+): void {
+  for (const [key, event] of Object.entries(CONTROL_EVENT_BY_CALLBACK) as [
+    keyof ChannelCallbacks,
+    string,
+  ][]) {
+    channel.on(event, (payload: unknown) => {
+      warnOnVersionMismatch(event, payload, write);
+      callbacks()[key]?.(payload);
+    });
+  }
+}
+
 const MAX_TRACKED_HEARTBEAT_REFS = 64;
 
 /** Phoenix's logger receives only a formatted message plus payload, so the
@@ -288,24 +384,9 @@ export class RunnerLink {
 
     // Operator lifecycle control, relayed by the server onto this topic
     // (ADR-0023). Payloads are forwarded opaquely to the supervisor, which
-    // validates them.
-    channel.on("spawn", (payload: unknown) => this.#callbacks.onSpawn?.(payload));
-    channel.on("stop", (payload: unknown) => this.#callbacks.onStop?.(payload));
-    channel.on("restart", (payload: unknown) =>
-      this.#callbacks.onRestart?.(payload),
-    );
-    channel.on("enumerate_sessions", (payload: unknown) =>
-      this.#callbacks.onEnumerateSessions?.(payload),
-    );
-    channel.on("switch_session", (payload: unknown) =>
-      this.#callbacks.onSwitchSession?.(payload),
-    );
-    channel.on("reset_session", (payload: unknown) =>
-      this.#callbacks.onResetSession?.(payload),
-    );
-    channel.on("refresh_engine_catalog", (payload: unknown) =>
-      this.#callbacks.onRefreshEngineCatalog?.(payload),
-    );
+    // validates them — but the ADR-0015 version check runs for all of them
+    // here, before the payload leaves this layer (issue #181).
+    bindControlEvents(channel, () => this.#callbacks);
 
     channel
       .join()

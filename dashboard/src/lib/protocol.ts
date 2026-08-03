@@ -1924,6 +1924,14 @@ function parseCatalogResult(payload: unknown): EngineCatalogResult | null {
   };
 }
 
+/** Runner-bound protocol version (ADR-0015, protocol.md 「version」節).
+ *  Stamped on the client -> server hop for the messages the server passes
+ *  through opaquely to the runner (`stop` / `enumerate_sessions` /
+ *  `refresh_engine_catalog` — `relay_to_runner/4`), so the server's
+ *  version-mismatch warning has a value to compare instead of silently
+ *  normalizing an absent one. Single fixed value per ADR-0015. */
+const RUNNER_CONTROL_VERSION = "0";
+
 function pushAsync(
   channel: Channel,
   event: string,
@@ -2734,6 +2742,7 @@ export function connectKaoiro(
       const promise = catalogPending.register(request_id);
       try {
         await pushAsync(channel, "refresh_engine_catalog", {
+          version: RUNNER_CONTROL_VERSION,
           host_id: hostId,
           engine,
           request_id,
@@ -2760,6 +2769,7 @@ export function connectKaoiro(
       pushAsync(channel, "delete_agent", { agent_id: agentId }),
     stop: (agentId) =>
       pushAsync(channel, "stop", {
+        version: RUNNER_CONTROL_VERSION,
         host_id: hostIdFromAgentId(agentId),
         agent_id: agentId,
       }),
@@ -2791,12 +2801,14 @@ export function connectKaoiro(
       }),
     enumerateSessions: (hostId, cwd, engine) =>
       pushAsync(channel, "enumerate_sessions", {
+        version: RUNNER_CONTROL_VERSION,
         host_id: hostId,
         cwd,
         ...(engine === undefined ? {} : { engine }),
       }),
     enumerateAgentSessions: (agentId) =>
       pushAsync(channel, "enumerate_sessions", {
+        version: RUNNER_CONTROL_VERSION,
         host_id: hostIdFromAgentId(agentId),
         agent_id: agentId,
       }),

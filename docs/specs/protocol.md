@@ -436,16 +436,15 @@ session_id を指定して **resume** する単一機構で行う
 `session_reset_result` / `catalog_result`)は組み立て時に載せる。
 クライアント発の payload をサーバが `host_id` だけ剥がして**素通し**する
 経路 — `enumerate_sessions` / `refresh_engine_catalog` / `stop` /
-`restart` — はダッシュボードが `version` を載せないため、サーバの relay
-(`relay_to_runner/4`)が `"0"` へ **normalize** する。クライアントが
-`"0"` 以外を明示していたときは**先に警告ログを出してから** normalize する
-(ここが不一致を観測できる唯一の hop。runner は `version` を読まない)。
-省略時は無警告 — 現行ダッシュボードの通常形であり、警告すると operator の
-操作ごとにログが出てしまうため。
+`restart` — のうち、dashboard は `stop` / `enumerate_sessions` /
+`refresh_engine_catalog` に `version: "0"` を載せる(実装済み)。runner は
+受信した `version` を検査し、不一致(省略を含む)を warn したうえで
+ベストエフォートに受理する(ADR-0015)。
 
-**本変更のスコープ**: これで閉じたのは ADR-0015 の要求のうち
-**サーバ → runner 経路の key presence** のみ。受信側 (runner) の不一致検査と、
-クライアント → サーバ側の `version` 付与は別の gap として残っている。
+これにより client → server の `version` 付与と runner 受信側の不一致検査の
+gap は解消済みである。`restart` は dashboard に push 呼び出し producer が
+未実装の既知 gap として残る。restart UI を実装する際は `version: "0"` を
+付与する。
 
 **安全性**(spawn = 実質リモートコード実行): spawn / resume / resume_session /
 stop / restart の受理は **operator 限定**。resume 対象 session_id は当該 agent
@@ -469,11 +468,11 @@ dashboard(operator)が起動 UI から出す要求。サーバは `runner:<host_
 | 方向 | イベント | payload |
 |---|---|---|
 | クライアント → サーバ | `spawn` | `{ host_id, persona, cwd, name?, initial_prompt?, resume_session_id?, engine?, model?, effort?, permission_mode?, sandbox?, network_access? }`。**operator 限定**。`model` / `effort` / `permission_mode` / `sandbox` / `network_access` は LaunchDialog の選択値で、サーバ経由でそのまま `spawn`(runner 向け)へ渡る(engine 別の適用範囲は上記 runner 制御メッセージの `spawn` 行を参照)。`persona` は id 文字列で、サーバが host 申告の persona へ解決する。サーバが `agent_id` を採番して per-agent `token` を発行する(案A、D3/D4)。`server_url` はサーバが載せず runner が自 config から補う。`name?` は per-instance 表示名で persona.name を上書き(agent_id/persona.id は不変、64 文字上限・制御文字不可)。`resume_session_id` 指定で resume 起動。サーバは復帰用に cwd を SessionPointers へ seed する。`engine?` は LaunchDialog の engine セレクト値(host の `capabilities` に含まれる値)で、server は照合して runner へ転送する ([ADR-0032](../adr/0032-codex-adapter.md) F1、[phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)) |
-| クライアント → サーバ | `stop` / `restart` | `{ host_id, agent_id }`。**operator 限定**。`stop` は dashboard の「終了」ボタン由来(host_id は agent_id から導出) |
+| クライアント → サーバ | `stop` / `restart` | `{ version, host_id, agent_id }`。**operator 限定**。`stop` は dashboard の「終了」ボタン由来(host_id は agent_id から導出)。dashboard は stop に `version: "0"` を付与。restart の producer は未実装で、実装時に同じ値を付与 |
 | クライアント → サーバ | `restore` | `{ agent_id }`。**operator 限定**。切断済みエージェントを**同一 agent_id で resume 再 spawn**して復帰させる(ADR-0014 復帰)。サーバが SessionPointers の `{session_id, cwd}` と最後の persona を引いて runner へ `spawn` を中継。稼働中は `not_disconnected`、session pointer 無し(cwd 含む)は `no_session` |
 | クライアント → サーバ | `resume_session` | `{ agent_id, session_id }`。**operator 限定**。**同一 agent_id / cwd** のまま、resume 先を operator が選んだ `session_id` に切り替える(ADR-0014 resume-swap)。稼働中は `runner:<host_id>` へ `switch_session` を中継(kill→relaunch)、切断済みは `restore` と同経路で `spawn`(cwd は SessionPointers、`session_id` は payload)。`session_id` charset は `[A-Za-z0-9-]{1,128}`(欠落 `missing_session_id` / 不正 `invalid_session_id`)。切断済みで cwd 未記録なら `no_session` |
-| クライアント → サーバ | `enumerate_sessions` | `{ host_id, cwd }` または `{ host_id, agent_id }`。**operator 限定**。resume 候補の列挙要求。`cwd` 省略時は `agent_id` を SessionPointers に引き当てて server が cwd を補完(詳細画面から wrapper の ext.cwd を待たずに列挙できるようにするため)。`cwd` も `agent_id` も無ければ `invalid_cwd`、`agent_id` はあるが SessionPointers に cwd 記録が無ければ `no_session` |
-| クライアント → サーバ | `refresh_engine_catalog` | `{ host_id, engine, request_id, force? }`。**operator 限定**。LaunchDialog の「モデル一覧を再取得」。サーバが見るのは operator role・`host_id`・payload サイズだけで、`host_id` を剥がした残りは**中身を解釈せず** `runner:<host_id>` へ relay する。`engine` / `request_id` / `force` の妥当性検証は runner 側([ADR-0039](../adr/0039-engine-catalog-live-probe.md)) |
+| クライアント → サーバ | `enumerate_sessions` | `{ version, host_id, cwd }` または `{ version, host_id, agent_id }`。**operator 限定**。dashboard は `version: "0"` を付与する。resume 候補の列挙要求。`cwd` 省略時は `agent_id` を SessionPointers に引き当てて server が cwd を補完(詳細画面から wrapper の ext.cwd を待たずに列挙できるようにするため)。`cwd` も `agent_id` も無ければ `invalid_cwd`、`agent_id` はあるが SessionPointers に cwd 記録が無ければ `no_session` |
+| クライアント → サーバ | `refresh_engine_catalog` | `{ version, host_id, engine, request_id, force? }`。**operator 限定**。dashboard は `version: "0"` を付与する。LaunchDialog の「モデル一覧を再取得」。サーバが見るのは operator role・`host_id`・payload サイズだけで、`host_id` を剥がした残りは**中身を解釈せず** `runner:<host_id>` へ relay する。`engine` / `request_id` / `force` の妥当性検証は runner 側([ADR-0039](../adr/0039-engine-catalog-live-probe.md)) |
 | サーバ → クライアント | `hosts` | `{ hosts: { "<host_id>": { personas, cwd_allowlist, capabilities?, engines?, registered_at } } }`。**host_id をキーとする map**(配列ではない)。host 登録の変化と join 直後に push。`personas` は host の trust policy([ADR-0031](../adr/0031-runner-persona-trust-mode.md))を server SoT の persona プールに適用した結果で、runner が申告した生の id 列ではない。**operator 限定**(cwd 許可リスト等は機微、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 | サーバ → クライアント | `runner_sessions` | `enumerate_sessions` 応答(runner の `sessions`)の転送。**operator 限定** |
 | サーバ → クライアント | `spawn_result` | `{ host_id, agent_id, ok, reason?, request_id? }` の転送。**operator 限定** |

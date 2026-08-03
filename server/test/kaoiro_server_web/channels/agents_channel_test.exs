@@ -2658,17 +2658,43 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert payload["version"] == "0"
     end
 
-    test "version 省略時は警告せず stamp だけする" do
+    # #182 で dashboard が version を stamp するようになったので、absent の
+    # 無警告受理 (carve-out) を廃止した。欠落は「まだ版を送らない client」
+    # ではなく検知したい状態そのもの。
+    test "version 省略も警告する (stamp は従来どおり)" do
       host_id = "lab-pc-2w"
       register_host(host_id)
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
 
-      # The current dashboard omits `version`; warning on that shape would
-      # log on every operator click.
       log =
         capture_log(fn ->
           ref = push(socket, "stop", %{"host_id" => host_id, "agent_id" => "lab-pc-2w.a"})
+          assert_reply ref, :ok
+        end)
+
+      assert log =~ "client declared protocol version (absent)"
+      assert_broadcast "stop", payload
+      assert payload["version"] == "0"
+    end
+
+    # 一致は無音であること。これが無いと「全部 warn する」実装でも上の 2 件が
+    # 通ってしまい、閾値のない warn が常時鳴る退行を検出できない。
+    test "version が \"0\" なら警告しない" do
+      host_id = "lab-pc-2x"
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "stop", %{
+              "host_id" => host_id,
+              "agent_id" => "lab-pc-2x.a",
+              "version" => "0"
+            })
+
           assert_reply ref, :ok
         end)
 
