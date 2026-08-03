@@ -1,8 +1,8 @@
 ---
 title: subagent/workflow タスクのクライアント通知
 description: ラップ対象が起動する subagent/workflow の存在・同時実行数・種別/名前・状態を専用 envelope でクライアントへ通知する仕様。
-status: provisional
-related: [protocol, agent-sdk-events, subagent-task-envelope-schema, subagent-task-aggregation]
+status: accepted
+related: [protocol, agent-sdk-events]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -39,15 +39,23 @@ subagent / workflow は「視覚表現は独立した別の存在」「identity 
 エージェントに紐づく**子エンティティ**」(ADR-0019 F1)。各タスクは親 `agent_id` 参照
 でリンクし、ライフサイクルは親セッションに束縛。視覚表現の決定はクライアント責務。
 
-### 専用 envelope type(予約)
+### 専用 envelope type `task`
 
-タスクのライフサイクルは**専用 envelope type**で流す(ADR-0019 F2)。親の
-`state_change` は親自身の `KaoiroState` のまま不変。正式名称・スキーマは未確定
-([subagent-task-envelope-schema](../open-questions/subagent-task-envelope-schema.md))。
-暫定方針は単一 type + subtype(started/updated/completed)。運ぶフィールド(暫定):
-親 `agent_id` / `task_id` / タスク種別 / `subagent_type` / `workflow_name` /
-`description` / `status` / `usage` / `last_tool_name` / `summary` / `skip_transcript`。
+タスクのライフサイクルは**専用 envelope type `task`**で流す(ADR-0019 F2)。
+親の `state_change` は親自身の `KaoiroState` のまま不変。スキーマは
+[ADR-0047](../adr/0047-task-envelope-schema.md) で確定:
+
+- 単一 type `task` + `payload.kind`(`started` / `updated` / `completed`)。
+- 必須: 親 `agent_id` / `task_id` / `task_type` / `status`。
+- optional 進捗メタ: `subagent_type` / `workflow_name` / `description` /
+  `usage` / `last_tool_name` / `summary` / `skip_transcript`。
+- `task_type` は拡張可能 enum(初期 `subagent` | `workflow`。将来 tasklist
+  等を追補可。受信側は未知値を汎用表示へフォールバック)。
+
 [protocol](protocol.md) には予約追補(同一 `version`)として載せる。
+`kind=updated` は wrapper 発行側で一定間隔 + 差分閾値により間引く
+(`started` / `completed` は即時、
+[ADR-0048](../adr/0048-task-aggregation-delivery.md) F2)。
 
 ### 同時実行数とライフサイクル
 
@@ -64,7 +72,7 @@ subagent / workflow は「視覚表現は独立した別の存在」「identity 
 | 段階 | 範囲 | in / out |
 |---|---|---|
 | 段階1: wrapper + protocol | 検知・配信の最小スライス | in: adapter が task_* を解釈 / 専用 envelope の発行 / 同時実行数の算出 / 親 state_change が不変 / adapter 変換の単体テスト(vitest) / protocol・agent-sdk-events 追補。out: server 集約・クライアント表示 |
-| 段階2: server 集約・中継 | 子タスクの保持と配信 | in: 親に紐づく子エンティティとして集約 / active set 維持 / クライアントへ中継 / 後続接続へのスナップショット。out: クライアント視覚表現 |
+| 段階2: server 集約・中継 | 子タスクの保持と配信 | in: フラットな task テーブル + 親 `agent_id` 参照で集約([ADR-0048](../adr/0048-task-aggregation-delivery.md) F1)/ active set 維持(親離脱時に破棄)/ クライアントへ中継 / 後続接続へは既存 snapshot 枠で接続時一括送信(同 F3)。out: クライアント視覚表現 |
 | 段階3: client 受信 | 受け口のみ | in: 専用 envelope を受信し描画できる最小受け口。out: 具体的なキャラ/従者表現の意匠(クライアント責務) |
 
 ### 要検証(段階1 着手項目)
@@ -80,14 +88,10 @@ subagent / workflow は「視覚表現は独立した別の存在」「identity 
   [ADR-0015](../adr/0015-protocol-version-stamping.md))。
 - SHOULD: `skip_transcript` タスクはフラグで区別できるようにする。
 
-## Open Questions
-
-- [subagent-task-envelope-schema](../open-questions/subagent-task-envelope-schema.md)
-  — 新 envelope type の名称/スキーマ(high)。
-- [subagent-task-aggregation](../open-questions/subagent-task-aggregation.md)
-  — server 集約・進捗間引き・スナップショット機構(medium)。
-
 ## See Also
 
 - 関連 specs: [protocol](protocol.md), [agent-sdk-events](agent-sdk-events.md)
 - ADR: [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
+  (エンティティモデル・transport)、
+  [0047](../adr/0047-task-envelope-schema.md)(envelope スキーマ)、
+  [0048](../adr/0048-task-aggregation-delivery.md)(server 集約・配信)

@@ -6,7 +6,7 @@ opened: 2026-06-16
 supersedes: []
 superseded_by: null
 related_specs: [protocol, agent-sdk-events, subagent-tasks]
-related_adrs: [10, 15]
+related_adrs: [10, 15, 47, 48]
 ---
 
 # ADR-0019 — subagent/workflow の子エンティティ化と専用 envelope type
@@ -56,10 +56,10 @@ Accepted
   subagent / workflow をどう視覚表現するかはクライアントが決める(既存の
   persona→sprite→表情の所有と同じ流儀、[overview](../specs/overview.md) の A/B 分離)。
 - 新 envelope type の正式名称 / スキーマ詳細は
-  [subagent-task-envelope-schema](../open-questions/subagent-task-envelope-schema.md)
-  で確定する。**予約 type の追補**([ADR-0010](0010-protocol-precisification.md))
-  にあたるため protocol の `version` は据え置く
-  ([ADR-0015](0015-protocol-version-stamping.md))。
+  [ADR-0047](0047-task-envelope-schema.md) で確定した(単一 type `task` +
+  `payload.kind`)。**予約 type の追補**
+  ([ADR-0010](0010-protocol-precisification.md))にあたるため protocol の
+  `version` は据え置く([ADR-0015](0015-protocol-version-stamping.md))。
 
 ## Consequences
 
@@ -70,8 +70,8 @@ Accepted
 
 ### Negative
 
-- server が子タスクの active set を維持・配信する責務を負う(集約方法は未決、
-  [subagent-task-aggregation](../open-questions/subagent-task-aggregation.md))。
+- server が子タスクの active set を維持・配信する責務を負う(集約方法は
+  [ADR-0048](0048-task-aggregation-delivery.md) で確定)。
 - envelope の type 種別が増える。
 
 ### Neutral
@@ -94,6 +94,8 @@ Accepted
   [protocol](../specs/protocol.md)(type と payload)、
   [agent-sdk-events](../specs/agent-sdk-events.md)(源メッセージ)。
 - 関連 ADR: [0010](0010-protocol-precisification.md)(予約 type 方針)、
-  [0015](0015-protocol-version-stamping.md)(version 据え置き)。
+  [0015](0015-protocol-version-stamping.md)(version 据え置き)、
+  [0047](0047-task-envelope-schema.md)(envelope スキーマ)、
+  [0048](0048-task-aggregation-delivery.md)(server 集約・配信)。
 - 由来: my-idea-brief(走り書き「subagent/workflow の起動・体数・種別をクライアントへ
   通知」)。

@@ -8,8 +8,6 @@
 | Slug | Urgency | Blocks | Opened |
 |------|---------|--------|--------|
 | [live2d-oss-rendering](live2d-oss-rendering.md) | low | — | 2026-06-15 |
-| [subagent-task-envelope-schema](subagent-task-envelope-schema.md) | high | subagent-tasks | 2026-06-16 |
-| [subagent-task-aggregation](subagent-task-aggregation.md) | medium | subagent-tasks | 2026-06-16 |
 | [file-upload-fs-read-fallback](file-upload-fs-read-fallback.md) | low | — | 2026-06-27 |
 | [file-upload-json-fallback](file-upload-json-fallback.md) | low | — | 2026-06-27 |
 | [file-upload-spill-storage](file-upload-spill-storage.md) | low | — | 2026-06-27 |

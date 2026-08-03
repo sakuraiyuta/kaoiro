@@ -66,6 +66,8 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0044](adr/0044-coordination-injection-hitl.md) | 協調指針の共通フッター自動注入と都度指名 director 下の責務内自律 | accepted |
 | [0045](adr/0045-footer-file-externalization.md) | 共通フッターの外部ファイル化 — system-footer.md と user-footer.md | accepted |
 | [0046](adr/0046-persona-cache-relocation.md) | persona 取り込みディレクトリの extraction cache 外部化 | accepted |
+| [0047](adr/0047-task-envelope-schema.md) | task envelope の正式名称と payload スキーマ | accepted |
+| [0048](adr/0048-task-aggregation-delivery.md) | task の server 集約・進捗間引き・スナップショット | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。
