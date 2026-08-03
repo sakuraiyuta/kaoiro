@@ -5,7 +5,7 @@
 // (persona-personality-injection spec, protocol.md「人格プロンプト配送」).
 
 import { readFileSync } from "node:fs";
-import type { PermissionMode, WrapperConfig } from "@kaoiro/protocol";
+import type { ModelSource, PermissionMode, WrapperConfig } from "@kaoiro/protocol";
 
 // The protocol package is types-only (no runtime exports), so the closed
 // enum's value list is duplicated here. Keep in sync with the PermissionMode
@@ -18,6 +18,31 @@ export const PERMISSION_MODES = [
   "dontAsk",
   "auto",
 ] as const satisfies readonly PermissionMode[];
+
+// Same protocol-types-only duplication rationale as PERMISSION_MODES above,
+// for the ModelSource closed enum (#167, issue #160 follow-up: model_source /
+// effort_source were declared on WrapperConfig but never copied by
+// parseConfig's manual allow-list — the exact drift class this file's
+// round-trip test now guards against).
+export const MODEL_SOURCES = [
+  "launch",
+  "env",
+  "config",
+  "default",
+] as const satisfies readonly ModelSource[];
+
+// The `satisfies` above only checks that MODEL_SOURCES' elements are valid
+// ModelSource values -- it says nothing about the OTHER direction (藤 review
+// #167 S1). Without this, a future ModelSource addition that forgets to
+// join MODEL_SOURCES would still typecheck, and parseConfig would then
+// wrongly REJECT that legitimate new value as `ConfigError`. `_exhaustive`
+// fails to compile (`true` is not assignable to `false`) the moment
+// MODEL_SOURCES falls behind the ModelSource union.
+type ModelSourcesCoverAllValues = ModelSource extends (typeof MODEL_SOURCES)[number]
+  ? true
+  : false;
+const _exhaustive: ModelSourcesCoverAllValues = true;
+void _exhaustive;
 
 /** Upper bound for identity string fields. They are embedded verbatim in every
  *  Envelope and broadcast, so a sane length cap keeps the wire payload bounded. */
@@ -164,6 +189,30 @@ export function parseConfig(raw: unknown): WrapperConfig {
   }
   if (raw.effort !== undefined) {
     config.effort = nonEmptyString(raw.effort, "effort");
+  }
+  // Resume-relayed provenance of model/effort (ADR-0014 F1 追補 P1,
+  // phase-23). Closed enum, validated the same way as permission_mode.
+  if (raw.model_source !== undefined) {
+    if (
+      typeof raw.model_source !== "string" ||
+      !(MODEL_SOURCES as readonly string[]).includes(raw.model_source)
+    ) {
+      throw new ConfigError(
+        `model_source must be one of: ${MODEL_SOURCES.join(", ")}`,
+      );
+    }
+    config.model_source = raw.model_source as ModelSource;
+  }
+  if (raw.effort_source !== undefined) {
+    if (
+      typeof raw.effort_source !== "string" ||
+      !(MODEL_SOURCES as readonly string[]).includes(raw.effort_source)
+    ) {
+      throw new ConfigError(
+        `effort_source must be one of: ${MODEL_SOURCES.join(", ")}`,
+      );
+    }
+    config.effort_source = raw.effort_source as ModelSource;
   }
   if (
     raw.codex_auth_mode === "chatgpt" ||

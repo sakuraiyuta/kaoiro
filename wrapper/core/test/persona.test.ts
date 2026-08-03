@@ -1,10 +1,52 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WrapperConfig } from "@kaoiro/protocol";
 import { ConfigError, parseConfig } from "../src/persona.js";
 
 const valid = {
   agent_id: "lab-pc-1.claude-a",
   persona: { id: "mio", name: "澪", sprite_set: "mio" },
   server_url: "ws://localhost:4000/wrapper",
+};
+
+// issue #167 (follow-up to #160): parseConfig copies WrapperConfig's optional
+// fields by hand, one `if (raw.x !== undefined)` block per field — exactly
+// the allow-list shape that let transition_id's copy line go missing once
+// already, and (found while building this test, fixed alongside it)
+// model_source/effort_source's copy blocks go missing a second time.
+// WrapperConfigOptionalKey is derived from the WrapperConfig type itself, so
+// ROUND_TRIP_CASES is a mapped type over that key set: adding a new optional
+// field to WrapperConfig without adding a matching entry here is a compile
+// error (`pnpm typecheck`), not a silently-skipped test case.
+type OptionalKey<T> = {
+  [K in keyof T]-?: undefined extends T[K] ? K : never;
+}[keyof T];
+
+type WrapperConfigOptionalKey = OptionalKey<WrapperConfig>;
+
+const ROUND_TRIP_CASES: {
+  [K in WrapperConfigOptionalKey]: { value: NonNullable<WrapperConfig[K]> };
+} = {
+  server_token: { value: "tok-1" },
+  permission_timeout_ms: { value: 5000 },
+  permission_mode: { value: "acceptEdits" },
+  allowed_tools: { value: ["Read", "Edit"] },
+  model: { value: "sonnet" },
+  effort: { value: "high" },
+  // Deliberately distinct from effort_source's value below: if the copy
+  // logic ever cross-wired the two fields, a shared value would not catch
+  // it, but distinct ones will.
+  model_source: { value: "config" },
+  effort_source: { value: "env" },
+  codex_auth_mode: { value: "chatgpt" },
+  codex_chatgpt_plan: { value: "plus" },
+  codex_internal_subagents: { value: true },
+  claude_engine_catalog: {
+    value: [{ value: "sonnet", display_name: "Sonnet", description: "" }],
+  },
+  sandbox: { value: "workspace-write" },
+  network_access: { value: true },
+  resume_snapshot: { value: { model: "sonnet" } },
+  transition_id: { value: "tr-99" },
 };
 
 describe("parseConfig", () => {
@@ -301,6 +343,30 @@ describe("parseConfig", () => {
     });
   });
 
+  describe("model_source / effort_source (#167, ADR-0014 F1 追補 P1)", () => {
+    it("有効な ModelSource を受け入れる", () => {
+      for (const source of ["launch", "env", "config", "default"]) {
+        expect(
+          parseConfig({ ...valid, model_source: source }),
+        ).toMatchObject({ model_source: source });
+        expect(
+          parseConfig({ ...valid, effort_source: source }),
+        ).toMatchObject({ effort_source: source });
+      }
+    });
+
+    it("不正な model_source / effort_source は ConfigError", () => {
+      for (const bad of ["", "yolo", "LAUNCH", 1, null]) {
+        expect(() =>
+          parseConfig({ ...valid, model_source: bad }),
+        ).toThrow(ConfigError);
+        expect(() =>
+          parseConfig({ ...valid, effort_source: bad }),
+        ).toThrow(ConfigError);
+      }
+    });
+  });
+
   it("allowed_tools は非空文字列の配列のみ受け入れる", () => {
     expect(
       parseConfig({ ...valid, allowed_tools: ["Read", "Edit", "Bash"] }),
@@ -332,5 +398,23 @@ describe("parseConfig", () => {
     expect(() =>
       parseConfig({ ...valid, allowed_tools: [...max, "Extra"] }),
     ).toThrow(ConfigError);
+  });
+
+  // Nested inside "parseConfig" (not a sibling top-level describe) so this
+  // inherits the outer beforeEach clearing KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS
+  // (藤 review #167 S2): 15 of these 16 cases leave permission_timeout_ms
+  // unset, so without that cleanup a leftover/invalid env value made
+  // parseConfig throw for every one of them when this describe ran standalone.
+  describe("WrapperConfig optional field round-trip (issue #167, 型駆動)", () => {
+    for (const field of Object.keys(
+      ROUND_TRIP_CASES,
+    ) as WrapperConfigOptionalKey[]) {
+      it(`${field} が config JSON → parseConfig を round-trip する`, () => {
+        const { value } = ROUND_TRIP_CASES[field];
+        const raw = { ...valid, [field]: value };
+        const parsed = parseConfig(raw);
+        expect(parsed[field]).toEqual(value);
+      });
+    }
   });
 });
