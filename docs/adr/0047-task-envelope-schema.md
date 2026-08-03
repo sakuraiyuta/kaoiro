@@ -6,7 +6,7 @@ opened: 2026-06-16
 supersedes: []
 superseded_by: null
 related_specs: [protocol, subagent-tasks, agent-sdk-events]
-related_adrs: [10, 15, 19, 48]
+related_adrs: [10, 15, 19, 48, 49]
 ---
 
 # ADR-0047 — task envelope の正式名称と payload スキーマ
@@ -59,8 +59,9 @@ protocol で予約済みの名称 `task` をそのまま正式名称とする。
 
 ### F4: `task_type` は拡張可能 enum
 
-初期値は `subagent` | `workflow`。閉じた enum にはせず、将来の追補
-(例: Tasklist 可視化 #188 の `tasklist`、codex 対応)で値を追加できる。
+初期値は `subagent` | `workflow`。閉じた enum にはせず、追補で値を追加
+できる(`tasklist` は [ADR-0049](0049-tasklist-on-task-envelope.md) で
+追加決定)。
 受信側は未知の `task_type` を破棄せず、汎用のタスク表示へフォールバック
 する(前方互換)。
 

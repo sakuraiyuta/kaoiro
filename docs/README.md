@@ -68,6 +68,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0046](adr/0046-persona-cache-relocation.md) | persona 取り込みディレクトリの extraction cache 外部化 | accepted |
 | [0047](adr/0047-task-envelope-schema.md) | task envelope の正式名称と payload スキーマ | accepted |
 | [0048](adr/0048-task-aggregation-delivery.md) | task の server 集約・進捗間引き・スナップショット | accepted |
+| [0049](adr/0049-tasklist-on-task-envelope.md) | Tasklist (todo) を task envelope に相乗りさせる | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。
