@@ -1,6 +1,8 @@
 defmodule KaoiroServer.SessionStartsTest do
   use ExUnit.Case, async: false
 
+  import KaoiroServer.TestTeardown
+
   alias KaoiroServer.SessionStarts
 
   setup do
@@ -10,19 +12,11 @@ defmodule KaoiroServer.SessionStartsTest do
     {:ok, _pid} = SessionStarts.start_link(name: name, path: path)
 
     on_exit(fn ->
-      # #169: ふじ 4th advisory 3 (2026-07-23) と同型の TOCTOU。ExUnit は
-      # テスト終了時にテストプロセスを落とし、`start_link` でリンクした
-      # この GenServer も巻き添えで死ぬ。on_exit は別プロセスなので、
-      # whereis が生きて見えた直後に死ぬと GenServer.stop が
-      # `no process` で exit し、本体が通っているのに teardown だけが
-      # 落ちる。full run の負荷下でのみ出る (単体実行では再現しない)。
-      # try で cushion する — テスト本体は完了済みで、DETS は書き込み
-      # ごとに sync 済み、owner 死亡時に閉じられる。
-      try do
-        if current = Process.whereis(name), do: GenServer.stop(current)
-      catch
-        :exit, _ -> :ok
-      end
+      # #169 / #171: ExUnit のリンク死と stop が競合して teardown だけが
+      # 落ちる (full run の負荷下でのみ出る)。良性の exit だけ吸収する
+      # — テスト本体は完了済みで、DETS は書き込みごとに sync 済み、
+      # owner 死亡時に閉じられる (詳細は KaoiroServer.TestTeardown)。
+      stop_quietly(name)
 
       File.rm(path)
     end)

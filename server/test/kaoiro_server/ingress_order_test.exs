@@ -1,6 +1,8 @@
 defmodule KaoiroServer.IngressOrderTest do
   use ExUnit.Case, async: true
 
+  import KaoiroServer.TestTeardown
+
   alias KaoiroServer.IngressOrder
 
   # ふじ R5 must-fix (2026-07-23): every test spins up an isolated
@@ -13,14 +15,9 @@ defmodule KaoiroServer.IngressOrderTest do
     File.rm(path)
 
     on_exit(fn ->
-      # 別 process 経由なので whereis→stop の間に死ぬ可能性がある。
-      # try で cushion して on_exit を fail させない (テスト本体は既に
-      # 完了している)。
-      try do
-        if pid = Process.whereis(name), do: GenServer.stop(pid)
-      catch
-        :exit, _ -> :ok
-      end
+      # #169 / #171: ExUnit のリンク死と stop が競合して teardown だけが
+      # 落ちる。良性の exit だけ吸収する (KaoiroServer.TestTeardown)。
+      stop_quietly(name)
 
       File.rm(path)
     end)

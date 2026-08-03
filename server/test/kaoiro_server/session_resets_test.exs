@@ -1,6 +1,8 @@
 defmodule KaoiroServer.SessionResetsTest do
   use ExUnit.Case, async: false
 
+  import KaoiroServer.TestTeardown
+
   alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.SessionPointers
@@ -22,17 +24,9 @@ defmodule KaoiroServer.SessionResetsTest do
     {:ok, sr_pid} = SessionResets.start_link(name: resets_name)
 
     on_exit(fn ->
-      # #169: alive? と stop の間にテスト終了のリンク死が挟まると
-      # `no process` / `:sys.terminate` で teardown だけが落ちる
-      # (full run seed 4 で実測)。詳細は session_starts_test.exs の同
-      # cushion を参照。
-      for pid <- [sr_pid, sp_pid] do
-        try do
-          if Process.alive?(pid), do: GenServer.stop(pid)
-        catch
-          :exit, _ -> :ok
-        end
-      end
+      # #169 / #171: ExUnit のリンク死と stop が競合して teardown だけが
+      # 落ちる。良性の exit だけ吸収する (KaoiroServer.TestTeardown)。
+      Enum.each([sr_pid, sp_pid], &stop_quietly/1)
 
       File.rm(pointers_path)
     end)
@@ -378,7 +372,9 @@ defmodule KaoiroServer.SessionResetsTest do
     test "reset timeout は deferred waiter を :noop で解除して failed を broadcast する" do
       sr = :"sr_timeout_#{System.unique_integer([:positive])}"
       {:ok, pid} = SessionResets.start_link(name: sr, timeout_ms: 20)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      # setup と同じ teardown race に晒されるので同じ扱いにする
+      # (#169 はこの 1 箇所を取りこぼしていた)。
+      on_exit(fn -> stop_quietly(pid) end)
       agent_id = "a.timeout-waiter-#{System.unique_integer([:positive])}"
       KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
 

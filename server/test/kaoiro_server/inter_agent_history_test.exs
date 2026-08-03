@@ -1,6 +1,8 @@
 defmodule KaoiroServer.InterAgentHistoryTest do
   use ExUnit.Case, async: true
 
+  import KaoiroServer.TestTeardown
+
   alias KaoiroServer.InterAgentHistory
 
   setup do
@@ -10,14 +12,9 @@ defmodule KaoiroServer.InterAgentHistoryTest do
     {:ok, pid} = InterAgentHistory.start_link(name: name, path: path, max_per_agent: 3)
 
     on_exit(fn ->
-      # #169: alive? と stop の間にテスト終了のリンク死が挟まると
-      # `no process` で teardown だけが落ちる。詳細は
-      # session_starts_test.exs の同 cushion を参照。
-      try do
-        if Process.alive?(pid), do: GenServer.stop(pid)
-      catch
-        :exit, _ -> :ok
-      end
+      # #169 / #171: ExUnit のリンク死と stop が競合して teardown だけが
+      # 落ちる。良性の exit だけ吸収する (KaoiroServer.TestTeardown)。
+      stop_quietly(pid)
 
       File.rm(path)
     end)
