@@ -38,6 +38,8 @@ followup が issue へ外出しされている場合は 🟡 とする。
 | 26 | [phase-26-oauth-allowlist-login](phase-26-oauth-allowlist-login.md) | 🟡 | dashboard OAuth ログイン (Google/GitHub/Nextcloud) + テキスト許可リスト、token 認証は KAOIRO_CLIENT_TOKENS 設定時のみ併存、[ADR-0042](../adr/0042-oauth-allowlist-login.md) / [issue #65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65)。実装タスク 26-1〜26-12 は完了・push 済で、残るのはマスターによる provider 登録と実機 E2E。許可リストの role 降格が稼働中 socket に効かない件は [#158](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/158) |
 | 27 | [phase-27-list-agents-metadata](phase-27-list-agents-metadata.md) | ✅ | `list_agents` に状況判断メタデータ 6 field (残 context / セッション開始 / turn 数 / 最終活動 / IA 対話状況 / rate_limits) を追加、[issue #160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160) / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6 (agent 間開示) |
 | 28 | [phase-28-agent-initiated-session-ops](phase-28-agent-initiated-session-ops.md) | ✅ | コンテキスト疲労の自己認識と、agent 自身が turn 境界で要求する session reset / compact、[ADR-0043](../adr/0043-agent-initiated-session-reset.md) / [issue #168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168) |
+| 29 | [P29](phase-29-footer-and-persona-cache.md) | 🟡 | footer / cache |
+| | | | 実装完了、レビュー中 (ADR-0045 / ADR-0046) |
 
 ## Feature-local plans
 

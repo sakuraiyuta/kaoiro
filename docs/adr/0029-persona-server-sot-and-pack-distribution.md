@@ -6,7 +6,7 @@ opened: 2026-07-05
 supersedes: [8, 26]
 superseded_by: null
 related_specs: [personas, persona-pack-schema, persona-personality-injection, setup-wizards, protocol, threat-model]
-related_adrs: [2, 3, 8, 24, 26, 31, 44, 45]
+related_adrs: [2, 3, 8, 24, 26, 31, 44, 45, 46]
 ---
 
 # ADR-0029 — ペルソナは server 集約 SoT、zip pack で配布し auto-watch で反映
@@ -107,16 +107,19 @@ wrapper に渡す最終 prompt は **`personality + common footer` を server
 本 ADR の付録節 D5 で確定する(旧 open-question `persona-common-footer`
 を吸収)。
 
-**[ADR-0045](0045-footer-file-externalization.md) による改訂(accepted、
-実装未着手)**: 結合対象を `personality + system-footer + user-footer` へ
-拡張し、footer 文面の SoT をコードから footer 設置ディレクトリ
-(`KAOIRO_FOOTER_DIR`)の md ファイルへ移す決定。**現状の実装は依然
-`PersonaAssets.@common_footer` の 1 枚内蔵**で、実装完了時点で本節を
-そのように改訂する。いずれにせよ
+**[ADR-0045](0045-footer-file-externalization.md) による改訂(accepted・
+実装済み)**: 結合対象を `personality + system-footer + user-footer` とする。
+footer 文面の SoT は footer 設置ディレクトリ(`KAOIRO_FOOTER_DIR`)直下の
+`system-footer.md` / `user-footer.md` である。未設定時は内蔵既定を使い、
+user footer は加えない。いずれにせよ
 「結合は server 側の責務、wrapper は受領文字列をそのまま注入」という本節の
 帰属は変わらない。
 
 ### F6: auto-watch は Elixir FileSystem library
+
+extraction cache の物理位置は
+[ADR-0046](0046-persona-cache-relocation.md) で persona dir 外へ移設
+(accepted)。
 
 取り込みディレクトリの watch は Elixir の `FileSystem` library
 (fs.notify wrapper。Linux inotify / macOS FSEvents / Windows
@@ -168,13 +171,11 @@ personality.md, sprites/}`)で編集し、build スクリプトで zip 化する
 - 結合は server 側で実施(F5)。dogfooding で不足が見えたら別 ADR で
   拡張する。
 
-**後継**: 文面の SoT を footer 設置ディレクトリ(`KAOIRO_FOOTER_DIR`)の
-`system-footer.md` / `user-footer.md` へ移す決定が
-[ADR-0045](0045-footer-file-externalization.md) にある(**accepted、
-実装未着手**)。
-実装されれば「中身と合成順の変更は server 実装の変更として扱う」という本節の
-前提は既定文面の改訂にのみ当てはまることになる(運用者による上書きは実装
-変更を伴わない)。現状は内蔵 1 枚なので本節がそのまま有効。
+**現行**: [ADR-0045](0045-footer-file-externalization.md) の実装により、
+文面の SoT は footer 設置ディレクトリ(`KAOIRO_FOOTER_DIR`)直下の
+`system-footer.md` / `user-footer.md` へ移った。D5 の暫定文面は内蔵既定の
+内容としてのみ残る。運用者の上書きはファイル編集だけで反映でき、server
+実装の変更を伴わない。
 
 ## Consequences
 

@@ -87,6 +87,17 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       refute body =~ ~r/^KAOIRO_[A-Z_]*_PATH=/m
     end
 
+    # ADR-0045 / ADR-0046 の 2 env も wizard の質問は増やさず hint のみ
+    # (ふじ S5, 2026-08-03)。生の代入で出ると compose 側の値を上書きする。
+    test "cache root / footer dir は常にコメントのみ (wizard 対象外)" do
+      body = Env.render(@answers)
+
+      assert body =~ "#KAOIRO_PERSONA_CACHE_DIR=/var/lib/kaoiro/persona-cache"
+      assert body =~ "#KAOIRO_FOOTER_DIR=/etc/kaoiro/footers"
+      refute body =~ ~r/^KAOIRO_PERSONA_CACHE_DIR=/m
+      refute body =~ ~r/^KAOIRO_FOOTER_DIR=/m
+    end
+
     test "fail-closed / fail-open の違いを注意書きに残す" do
       body = Env.render(@answers)
 

@@ -83,11 +83,10 @@ zip ファイル名は任意(推奨: `<id>-<version>.zip`。例:
 manifest.json 側)。長さは 200〜1000 字を SHOULD 目安とする(hard
 上限なし)。
 
-server は取り込み時にこの本文をそのまま保持し、wrapper への配送時に
-共通フッター(現状は内蔵 1 枚。
-[ADR-0045](../adr/0045-footer-file-externalization.md)(accepted・実装
-未着手)の実装後は footer 設置ディレクトリ `KAOIRO_FOOTER_DIR` の
-`system-footer.md` + `user-footer.md`)を末尾に concat して push する。結合が server 側の責務である点は
+server は取り込み時にこの本文をそのまま保持する。wrapper への配送時、
+`KAOIRO_FOOTER_DIR` 設定時は同ディレクトリの `system-footer.md` と
+`user-footer.md` を末尾に concat して push する。未設定時は内蔵既定の
+system footer だけを concat する。結合が server 側の責務である点は
 [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5。
 
 ### sprites/

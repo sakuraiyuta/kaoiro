@@ -5,9 +5,9 @@ defmodule KaoiroServer.PersonaWatcher do
 
   Subscribes to the `file_system` library (inotify / FSEvents / RDCW
   wrapper), so a new pack drop propagates without polling or restart.
-  Events under the private `.cache/` subdirectory are filtered — the
-  extractor writes there, and treating those writes as source changes
-  would loop.
+  What keeps our own extraction writes from looping back in is the
+  `*.zip` filter — no extracted file is a zip, wherever the cache root
+  lives (ADR-0046 F1 moved it out of the ingest dir entirely).
 
   Bursts of events (e.g. `mv *.zip` staging several packs at once)
   collapse into one rebuild via a short debounce timer.
@@ -29,11 +29,23 @@ defmodule KaoiroServer.PersonaWatcher do
   def init(opts) do
     dir = Keyword.get(opts, :dir) || KaoiroServer.PersonaAssets.ingest_dir()
 
-    unless File.dir?(dir) do
-      Logger.warning("PersonaWatcher: creating missing ingest dir #{dir}")
-      File.mkdir_p!(dir)
-    end
+    if File.dir?(dir) do
+      start_watching(dir)
+    else
+      # ADR-0046 F2: the ingest dir may be a `:ro` mount, so we no longer
+      # create it. PersonaAssets already serves an empty manifest and
+      # warns; watching a path that does not exist would only fail, so
+      # stay out of the tree until a restart picks the dir up.
+      Logger.warning(
+        "PersonaWatcher: ingest dir #{dir} not found; live updates " <>
+          "disabled (restart after creating it)"
+      )
 
+      :ignore
+    end
+  end
+
+  defp start_watching(dir) do
     # `FileSystem.start_link/1` returns a `GenServer.on_start`. Besides
     # `{:ok, pid}`, a boot failure surfaces as `{:error, reason}` or as
     # `:ignore` (the latter when the backend cannot start, e.g.
@@ -78,12 +90,14 @@ defmodule KaoiroServer.PersonaWatcher do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
-  # Only *.zip changes matter; `.cache/` writes are our own extraction
-  # (would loop) and non-zip drops (README, .gitkeep) do not affect the
-  # manifest.
+  # Only *.zip changes matter — that extension test is what actually
+  # excludes extracted files and non-zip drops (README, .gitkeep). The
+  # `.cache/` exclusion is a cheap guard for the pre-ADR-0046 layout,
+  # kept for ingest dirs still holding one; the trailing separator keeps
+  # it from also swallowing a sibling `.cache-old/`.
   defp relevant?(path, root) do
     ext = Path.extname(path)
-    within_cache = String.starts_with?(path, Path.join(root, ".cache"))
+    within_cache = String.starts_with?(path, Path.join(root, ".cache") <> "/")
     ext == ".zip" and not within_cache
   end
 

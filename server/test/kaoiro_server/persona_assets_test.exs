@@ -2,6 +2,9 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # Mutates the :persona_dir config and the persistent_term cache.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
+  alias KaoiroServer.FooterAssets
   alias KaoiroServer.PersonaAssets
 
   @states ~w(idle thinking tool_running waiting_input
@@ -9,19 +12,19 @@ defmodule KaoiroServer.PersonaAssetsTest do
 
   setup do
     original = Application.get_env(:kaoiro_server, :persona_dir)
+    original_cache = Application.get_env(:kaoiro_server, :persona_cache_dir)
 
     on_exit(fn ->
-      if original == nil do
-        Application.delete_env(:kaoiro_server, :persona_dir)
-      else
-        Application.put_env(:kaoiro_server, :persona_dir, original)
-      end
-
+      restore_env(:persona_dir, original)
+      restore_env(:persona_cache_dir, original_cache)
       PersonaAssets.rebuild()
     end)
 
     :ok
   end
+
+  defp restore_env(key, nil), do: Application.delete_env(:kaoiro_server, key)
+  defp restore_env(key, value), do: Application.put_env(:kaoiro_server, key, value)
 
   # Builds a minimal-but-valid pack zip at `<dir>/<name>.zip`. The zip's
   # top-level entries are `manifest.json`, `personality.md`, `sprites/
@@ -84,7 +87,7 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert PersonaAssets.known_persona?("ao")
 
     assert PersonaAssets.prompt("ao") ==
-             "body-ao\n\n" <> PersonaAssets.common_footer()
+             "body-ao\n\n" <> FooterAssets.built_in_system_footer()
   end
 
   @tag :tmp_dir
@@ -92,18 +95,39 @@ defmodule KaoiroServer.PersonaAssetsTest do
     use_ingest(tmp)
 
     assert PersonaAssets.known_persona?("default")
-    assert PersonaAssets.prompt("default") == PersonaAssets.common_footer()
+    assert PersonaAssets.prompt("default") == FooterAssets.built_in_system_footer()
     refute PersonaAssets.known_persona?("unknown")
     assert PersonaAssets.prompt("unknown") == nil
   end
 
-  test "common footer は peer-routing contract (ADR-0038) を含む" do
-    footer = PersonaAssets.common_footer()
-    assert footer =~ "list_agents"
-    assert footer =~ "kaoiro peer"
-    assert footer =~ "代替生成しない"
-    assert footer =~ "役割名"
-    assert footer =~ "利用可能 tool を全て列挙"
+  # ADR-0045 F2: personality → system-footer → user-footer を空行で連結。
+  @tag :tmp_dir
+  test "prompt は personality → system → user の 3 層を空行で結合する", %{tmp_dir: tmp} do
+    footer_dir = Path.join(tmp, "footers")
+    File.mkdir_p!(footer_dir)
+    File.write!(Path.join(footer_dir, "system-footer.md"), "system 層")
+    File.write!(Path.join(footer_dir, "user-footer.md"), "user 層")
+
+    original_footer_dir = Application.get_env(:kaoiro_server, :footer_dir)
+
+    on_exit(fn ->
+      if original_footer_dir == nil do
+        Application.delete_env(:kaoiro_server, :footer_dir)
+      else
+        Application.put_env(:kaoiro_server, :footer_dir, original_footer_dir)
+      end
+
+      FooterAssets.rebuild()
+    end)
+
+    Application.put_env(:kaoiro_server, :footer_dir, footer_dir)
+    :ok = FooterAssets.rebuild()
+
+    :ok = write_pack(tmp, "mm-1.0.0", base_manifest("mm"), "body-mm")
+    use_ingest(tmp)
+
+    assert PersonaAssets.prompt("mm") == "body-mm\n\nsystem 層\n\nuser 層"
+    assert PersonaAssets.prompt("default") == "system 層\n\nuser 層"
   end
 
   @tag :tmp_dir
@@ -247,5 +271,548 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert personas == %{}
     # default は pack 不要で常に known。
     assert PersonaAssets.known_persona?("default")
+  end
+
+  # --- extraction cache の外出し (ADR-0046 / #183) ---
+
+  @tag :tmp_dir
+  test "ingest dir へは一切書き込まない (:ro でも rebuild が通る)", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "ro-1.0.0", base_manifest("ro"), "body-ro")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+    File.chmod!(ingest, 0o500)
+    on_exit(fn -> File.chmod(ingest, 0o700) end)
+
+    use_ingest(ingest)
+
+    %{"personas" => personas} = PersonaAssets.manifest()
+    assert Map.keys(personas) == ["ro"]
+    assert PersonaAssets.prompt("ro") =~ "body-ro"
+    refute File.exists?(Path.join(ingest, ".cache"))
+  end
+
+  @tag :tmp_dir
+  test "既定 cache path は expand 後の ingest dir から導出する", %{tmp_dir: tmp} do
+    Application.delete_env(:kaoiro_server, :persona_cache_dir)
+    ingest = Path.join(tmp, "packs")
+    File.mkdir_p!(ingest)
+
+    Application.put_env(:kaoiro_server, :persona_dir, ingest)
+    expected = PersonaAssets.cache_dir()
+
+    assert Path.dirname(expected) == System.tmp_dir!() |> Path.expand()
+    assert Path.basename(expected) =~ ~r/^kaoiro-persona-cache-[0-9a-f]{16}$/
+
+    # 相対要素や末尾スラッシュで namespace が揺れない (ADR-0046 F1)。
+    for equivalent <- [
+          Path.join(tmp, "./packs"),
+          Path.join(tmp, "packs/"),
+          Path.join(tmp, "packs/sub/..")
+        ] do
+      Application.put_env(:kaoiro_server, :persona_dir, equivalent)
+      assert PersonaAssets.cache_dir() == expected
+    end
+  end
+
+  @tag :tmp_dir
+  test "reclaim は cache-key 形式の entry だけを消す", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+    File.mkdir_p!(cache)
+    :ok = write_pack(ingest, "rc-1.0.0", base_manifest("rc"), "body-rc")
+
+    # 無関係な dir/file と、live でない cache-key 形式の dir を並べる。
+    bystanders = ["important-data", "0123456789abcde", "0123456789abcdefg", "not_hex_16chars_"]
+    for name <- bystanders, do: File.mkdir_p!(Path.join(cache, name))
+    File.write!(Path.join(cache, "notes.txt"), "keep me")
+    stale = Path.join(cache, String.duplicate("a", 16))
+    File.mkdir_p!(stale)
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    use_ingest(ingest)
+
+    refute File.exists?(stale), "live でない cache-key dir は消えるべき"
+    assert File.exists?(Path.join(cache, "notes.txt"))
+
+    for name <- bystanders do
+      assert File.exists?(Path.join(cache, name)), "#{name} を消してはいけない"
+    end
+  end
+
+  @tag :tmp_dir
+  test "cold start で cache root が作れなければ raise する", %{tmp_dir: tmp} do
+    parent = Path.join(tmp, "locked")
+    File.mkdir_p!(parent)
+    File.chmod!(parent, 0o500)
+    on_exit(fn -> File.chmod(parent, 0o700) end)
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(parent, "cache"))
+    Application.put_env(:kaoiro_server, :persona_dir, tmp)
+
+    # cold start = persistent_term に cache が無い状態。
+    :persistent_term.erase({PersonaAssets, :cache})
+
+    assert_raise RuntimeError, ~r/cold start.*cache dir unusable/, fn ->
+      PersonaAssets.rebuild()
+    end
+  end
+
+  # ふじ裁定 (2026-08-03): 明示 root は強制 chmod せず warning に留める。
+  @tag :tmp_dir
+  test "group/world-writable な明示 root は warn するが mode は変えない", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+    File.mkdir_p!(cache)
+    File.chmod!(cache, 0o777)
+    :persistent_term.erase({PersonaAssets, :warned_cache_root})
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+
+    log = capture_log(fn -> use_ingest(ingest) end)
+
+    assert log =~ "group/world-writable"
+    assert log =~ "mode 777"
+
+    %File.Stat{mode: mode} = File.stat!(cache)
+    assert Bitwise.band(mode, 0o7777) == 0o777, "明示 root の mode を変えてはいけない"
+
+    # 同じ root/mode では鳴り続けない。
+    refute capture_log(fn -> PersonaAssets.rebuild() end) =~ "group/world-writable"
+  end
+
+  @tag :tmp_dir
+  test "既定 root は 0700 へ落とす", %{tmp_dir: tmp} do
+    Application.delete_env(:kaoiro_server, :persona_cache_dir)
+    ingest = Path.join(tmp, "packs")
+    File.mkdir_p!(ingest)
+    Application.put_env(:kaoiro_server, :persona_dir, ingest)
+
+    default_root = PersonaAssets.cache_dir()
+    File.mkdir_p!(default_root)
+    File.chmod!(default_root, 0o777)
+    on_exit(fn -> File.rm_rf(default_root) end)
+
+    PersonaAssets.rebuild()
+
+    %File.Stat{mode: mode} = File.stat!(default_root)
+    assert Bitwise.band(mode, 0o7777) == 0o700
+  end
+
+  @tag :tmp_dir
+  test "cache root が symlink なら unusable として弾く", %{tmp_dir: tmp} do
+    real = Path.join(tmp, "real")
+    File.mkdir_p!(real)
+    link = Path.join(tmp, "linked-cache")
+    :ok = File.ln_s(real, link)
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, link)
+    Application.put_env(:kaoiro_server, :persona_dir, tmp)
+    :persistent_term.erase({PersonaAssets, :cache})
+
+    assert_raise RuntimeError, ~r/not_a_directory/, fn -> PersonaAssets.rebuild() end
+  end
+
+  # --- cache infra error と pack validation error の分離 (ふじ M1) ---
+
+  # `:zip.unzip` の書き込み失敗は通常の FS では決定論的に作れない
+  # (ensure_cache_dir の probe が root の writable を先に証明するので、
+  # 残るのは disk full か rebuild 途中の remount だけ)。実際に OTP が返す
+  # term を実測で固定し、分類器へ直接通す。
+  describe "classify_zip_error/2" do
+    @tag :tmp_dir
+    test "cache 配下への書き込み不能 (:eacces) は cache_error", %{tmp_dir: tmp} do
+      zip = build_zip(tmp, "z1")
+      cache = Path.join(tmp, "cache")
+      target = Path.join(cache, "abcdef0123456789")
+      File.mkdir_p!(target)
+      File.chmod!(target, 0o500)
+      on_exit(fn -> File.chmod(target, 0o700) end)
+
+      reason = unzip_error(zip, target)
+
+      # OTP がこの形を返すこと自体の回帰テスト (末端の posix atom が
+      # 分類の唯一の手掛かりなので、形が変わったら気付く必要がある)。
+      assert {_path, {{:file, :open, _args}, :eacces}} = reason
+      assert {:cache_error, message} = PersonaAssets.classify_zip_error(reason, cache)
+      assert message =~ "unzip failed writing the cache"
+    end
+
+    # ふじ S1 (2 巡目): root そのものを指す error path が「配下でない」と
+    # 誤判定されて pack error に落ちていた。
+    test "error path が cache root そのものでも cache_error" do
+      reason = {~c"/cache", {{:file, :open, []}, :eacces}}
+
+      assert {:cache_error, _} = PersonaAssets.classify_zip_error(reason, "/cache")
+      assert {:cache_error, _} = PersonaAssets.classify_zip_error(reason, "/cache/")
+    end
+
+    test "兄弟 path (/cache-old) は cache root 配下と見なさない" do
+      reason = {~c"/cache-old/x", {{:file, :open, []}, :eacces}}
+
+      assert {:error, _} = PersonaAssets.classify_zip_error(reason, "/cache")
+    end
+
+    test "error path が binary で来ても解釈する" do
+      reason = {"/cache/x", {{:file, :open, []}, :eacces}}
+
+      assert {:cache_error, _} = PersonaAssets.classify_zip_error(reason, "/cache")
+    end
+
+    @tag :tmp_dir
+    test "cache 外の :eacces (source zip が読めない等) は pack error", %{tmp_dir: tmp} do
+      zip = build_zip(tmp, "z2")
+      outside = Path.join(tmp, "elsewhere")
+      File.mkdir_p!(outside)
+      File.chmod!(outside, 0o500)
+      on_exit(fn -> File.chmod(outside, 0o700) end)
+
+      reason = unzip_error(zip, outside)
+
+      assert {:error, _} = PersonaAssets.classify_zip_error(reason, Path.join(tmp, "cache"))
+    end
+
+    @tag :tmp_dir
+    test "壊れた zip (:einval) は pack error のまま", %{tmp_dir: tmp} do
+      broken = Path.join(tmp, "broken.zip")
+      File.write!(broken, "this is not a zip archive")
+      target = Path.join(tmp, "out")
+      File.mkdir_p!(target)
+
+      reason = unzip_error(broken, target)
+
+      assert {:error, message} = PersonaAssets.classify_zip_error(reason, target)
+      assert message =~ "unzip failed"
+    end
+
+    # アーカイブの中身が原因の errno を cache 障害へ倒すと、不正 zip 1 本で
+    # rebuild が止まり cold start が raise する。:enotdir / :eloop は必ず
+    # pack error 側であること。
+    test "アーカイブ形状由来の errno は cache_error にしない" do
+      for errno <- [:enotdir, :eloop, :eisdir, :einval, :enoent] do
+        reason = {~c"/cache/0123456789abcdef/x", {{:file, :open, []}, errno}}
+
+        assert {:error, _} = PersonaAssets.classify_zip_error(reason, "/cache"),
+               "#{errno} を cache_error に分類してはいけない"
+      end
+    end
+  end
+
+  defp build_zip(dir, name) do
+    src = Path.join(dir, "_zipsrc_" <> name)
+    File.mkdir_p!(src)
+    File.write!(Path.join(src, "a.txt"), "hello")
+    zip = Path.join(dir, "#{name}.zip")
+
+    {:ok, _} =
+      :zip.create(String.to_charlist(zip), [~c"a.txt"], cwd: String.to_charlist(src))
+
+    zip
+  end
+
+  defp unzip_error(zip, target) do
+    {:error, reason} =
+      :zip.unzip(String.to_charlist(zip), cwd: String.to_charlist(target))
+
+    reason
+  end
+
+  # cache 内のファイルが読めない = pack のせいではないので、skip + 成功扱い
+  # ではなく rebuild 失敗として F4 契約に載せる。read_error を投げる bang
+  # 経路 (下の I/O テスト) とは別に、non-raising tuple 経路をここで固定する。
+  for {label, target} <- [
+        {"manifest.json", "manifest.json"},
+        {"personality.md", "personality.md"},
+        {"sprites/", "sprites"}
+      ] do
+    @tag :tmp_dir
+    test "cache 内 #{label} が読めなければ pack skip でなく rebuild 失敗", %{tmp_dir: tmp} do
+      ingest = Path.join(tmp, "packs")
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(ingest)
+      :ok = write_pack(ingest, "ce-1.0.0", base_manifest("ce"), "body-ce")
+
+      Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+      use_ingest(ingest)
+      assert Map.keys(PersonaAssets.manifest()["personas"]) == ["ce"]
+
+      blocked =
+        cache
+        |> Path.join("*/#{unquote(target)}")
+        |> Path.wildcard()
+        |> hd()
+
+      File.chmod!(blocked, 0o000)
+      on_exit(fn -> File.chmod(blocked, 0o700) end)
+
+      # 空 manifest へ差し替わらず、直前の manifest が残ること。
+      assert :ok = PersonaAssets.rebuild()
+      assert Map.keys(PersonaAssets.manifest()["personas"]) == ["ce"]
+    end
+  end
+
+  @tag :tmp_dir
+  test "壊れた zip 1 本は他の pack を巻き込まず skip される", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "good-1.0.0", base_manifest("good"), "body-good")
+    File.write!(Path.join(ingest, "bad-1.0.0.zip"), "not a zip archive")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+    use_ingest(ingest)
+
+    # cache_error なら build 全体が止まって空 manifest のままになる。
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
+  end
+
+  # entry 名が自己衝突する zip (`a` と `a/b/c`) は展開中に :enotdir を出す。
+  # これを cache 障害に倒すと、ingest dir にそれを置くだけで cold start が
+  # raise し、稼働中も rebuild が永久に失敗する (可用性の DoS)。
+  @tag :tmp_dir
+  test "entry が自己衝突する zip は skip され、cold start も通る", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "good-1.0.0", base_manifest("good"), "body-good")
+    write_colliding_zip(Path.join(ingest, "zcollide-1.0.0.zip"))
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+    Application.put_env(:kaoiro_server, :persona_dir, ingest)
+    :persistent_term.erase({PersonaAssets, :cache})
+
+    # cold start でも raise しないこと (application.ex は :ok を assert する)。
+    assert :ok = PersonaAssets.rebuild()
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
+  end
+
+  @tag :tmp_dir
+  test "sprites が通常ファイルの pack は skip される (:enotdir)", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    src = Path.join(tmp, "_stage_flat")
+    File.mkdir_p!(ingest)
+    File.mkdir_p!(src)
+    File.write!(Path.join(src, "manifest.json"), Jason.encode!(base_manifest("flat")))
+    File.write!(Path.join(src, "personality.md"), "body")
+    File.write!(Path.join(src, "sprites"), "a regular file, not a dir")
+
+    {:ok, _} =
+      :zip.create(
+        String.to_charlist(Path.join(ingest, "flat-1.0.0.zip")),
+        Enum.map(["manifest.json", "personality.md", "sprites"], &String.to_charlist/1),
+        cwd: String.to_charlist(src)
+      )
+
+    :ok = write_pack(ingest, "good-1.0.0", base_manifest("good"), "body-good")
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+    use_ingest(ingest)
+
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
+  end
+
+  # zip slip (CWE-22): `..` を含むエントリ名は cwd の外を指す。ADR-0046 で
+  # cache が認証 DETS 台帳と同じ volume に載ったので、逸脱の blast radius が
+  # 失効リストまで届く。
+  #
+  # 実測 (OTP 29.0.2 / stdlib 8.0.1) では :zip.unzip 自身も "Illegal path"
+  # で拒否するので、「外にファイルが出ない」だけを見ても guard の有無を
+  # 区別できない (展開先 dir も reclaim が掃除してしまう)。防御が発動した
+  # ことの観測点は skip 理由のログなので、そこを固定する — OTP 任せに
+  # 退行したらメッセージが "unzip failed" に変わって落ちる。
+  @tag :tmp_dir
+  test "extraction dir の外へ出る entry を持つ pack は展開前に拒否する", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    victim = Path.join(tmp, "token_denylist.dets")
+    File.mkdir_p!(ingest)
+    File.write!(victim, "original ledger")
+
+    write_escaping_zip(Path.join(ingest, "evil-1.0.0.zip"), "../../token_denylist.dets")
+    :ok = write_pack(ingest, "good-1.0.0", base_manifest("good"), "body-good")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    log = capture_log(fn -> use_ingest(ingest) end)
+
+    assert log =~ "skip persona pack evil-1.0.0.zip: entry escapes the extraction dir"
+    assert File.read!(victim) == "original ledger", "cache の外へ書き出された"
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
+  end
+
+  # ZIP は名前を central directory と local header の 2 箇所に持ち、
+  # `:zip.list_dir/1` は前者、`:zip.unzip/2` は後者で動く。central だけを
+  # 見る guard は、central=safe / local=逸脱 の zip で素通りする
+  # (ふじ M1 2 巡目、実機再現済み)。
+  @tag :tmp_dir
+  test "central と local で名前が食い違う pack は展開前に拒否する", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+
+    File.write!(
+      Path.join(ingest, "lslip-1.0.0.zip"),
+      mismatched_zip("../../kaoiro-local-slip", "safe.txt", "PWNED")
+    )
+
+    :ok = write_pack(ingest, "good-1.0.0", base_manifest("good"), "body-good")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    log = capture_log(fn -> use_ingest(ingest) end)
+
+    # 事前検証固有かつ local header を読んだ証拠になるメッセージ。central
+    # だけを見る実装や OTP 任せへ退行すると出ない (後者は "unzip failed")。
+    assert log =~
+             "skip persona pack lslip-1.0.0.zip: " <>
+               "entry escapes the extraction dir (local header): \"../../kaoiro-local-slip\""
+
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
+
+    refute Enum.any?(Path.wildcard(Path.join(cache, "**"), match_dot: true), fn path ->
+             Path.basename(path) == "kaoiro-local-slip"
+           end)
+  end
+
+  # 展開前に弾いていることの直接確認 (E2E だけだと reclaim_cache が
+  # 中途半端な展開先を消してしまい、guard 有無の痕跡が残らない)。
+  @tag :tmp_dir
+  test "verify_entry_names/1 は central・local の両方を検証する", %{tmp_dir: tmp} do
+    ok_zip = Path.join(tmp, "ok.zip")
+    File.write!(ok_zip, mismatched_zip("a.txt", "a.txt", "body"))
+    assert :ok = PersonaAssets.verify_entry_names(ok_zip)
+
+    central_bad = Path.join(tmp, "central.zip")
+    File.write!(central_bad, mismatched_zip("../x", "../x", "body"))
+    assert {:error, msg} = PersonaAssets.verify_entry_names(central_bad)
+    assert msg =~ "central directory"
+
+    local_bad = Path.join(tmp, "local.zip")
+    File.write!(local_bad, mismatched_zip("../x", "safe.txt", "body"))
+    assert {:error, msg} = PersonaAssets.verify_entry_names(local_bad)
+    assert msg =~ "escapes the extraction dir (local header)" or msg =~ "entry name mismatch"
+
+    mismatch = Path.join(tmp, "mismatch.zip")
+    File.write!(mismatch, mismatched_zip("b.txt", "a.txt", "body"))
+    assert {:error, msg} = PersonaAssets.verify_entry_names(mismatch)
+    assert msg =~ "entry name mismatch"
+  end
+
+  # `:zip.create/3` は実ファイルからしか作れず `..` 名を通さないので、
+  # zip を手組みする (store 無圧縮の最小構成)。
+  defp write_escaping_zip(path, entry_name) do
+    File.write!(path, minimal_zip(entry_name, "pwned"))
+  end
+
+  # local header と central directory に別々の名前を書く 1 entry zip。
+  defp mismatched_zip(local_name, central_name, body) do
+    crc = :erlang.crc32(body)
+    size = byte_size(body)
+    ln = byte_size(local_name)
+    cn = byte_size(central_name)
+
+    local =
+      <<0x04034B50::little-32, 20::little-16, 0::little-16, 0::little-16, 0::little-16,
+        0::little-16, crc::little-32, size::little-32, size::little-32, ln::little-16,
+        0::little-16>> <> local_name <> body
+
+    central =
+      <<0x02014B50::little-32, 20::little-16, 20::little-16, 0::little-16, 0::little-16,
+        0::little-16, 0::little-16, crc::little-32, size::little-32, size::little-32,
+        cn::little-16, 0::little-16, 0::little-16, 0::little-16, 0::little-16, 0::little-32,
+        0::little-32>> <> central_name
+
+    eocd =
+      <<0x06054B50::little-32, 0::little-16, 0::little-16, 1::little-16, 1::little-16,
+        byte_size(central)::little-32, byte_size(local)::little-32, 0::little-16>>
+
+    local <> central <> eocd
+  end
+
+  defp write_colliding_zip(path) do
+    # `a` を通常ファイルとして書いたあと `a/b` を要求する。展開側は
+    # `a/` を作ろうとして :enotdir になる。
+    File.write!(path, multi_entry_zip([{"a", "x"}, {"a/b", "y"}]))
+  end
+
+  defp minimal_zip(name, body), do: multi_entry_zip([{name, body}])
+
+  # Store-only (無圧縮) zip を素で組む。local header → central directory →
+  # EOCD の最小形。
+  defp multi_entry_zip(entries) do
+    {locals, centrals, _offset} =
+      Enum.reduce(entries, {[], [], 0}, fn {name, body}, {locals, centrals, offset} ->
+        crc = :erlang.crc32(body)
+        n = byte_size(name)
+        size = byte_size(body)
+
+        local =
+          <<0x04034B50::little-32, 20::little-16, 0::little-16, 0::little-16, 0::little-16,
+            0::little-16, crc::little-32, size::little-32, size::little-32, n::little-16,
+            0::little-16>> <> name <> body
+
+        central =
+          <<0x02014B50::little-32, 20::little-16, 20::little-16, 0::little-16, 0::little-16,
+            0::little-16, 0::little-16, crc::little-32, size::little-32, size::little-32,
+            n::little-16, 0::little-16, 0::little-16, 0::little-16, 0::little-16, 0::little-32,
+            offset::little-32>> <> name
+
+        {[local | locals], [central | centrals], offset + byte_size(local)}
+      end)
+
+    local_blob = locals |> Enum.reverse() |> IO.iodata_to_binary()
+    central_blob = centrals |> Enum.reverse() |> IO.iodata_to_binary()
+    count = length(entries)
+
+    eocd =
+      <<0x06054B50::little-32, 0::little-16, 0::little-16, count::little-16, count::little-16,
+        byte_size(central_blob)::little-32, byte_size(local_blob)::little-32, 0::little-16>>
+
+    local_blob <> central_blob <> eocd
+  end
+
+  @tag :tmp_dir
+  test "展開途中の I/O 失敗も稼働中は現 manifest を維持する", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "io-1.0.0", base_manifest("io"), "body-io")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    use_ingest(ingest)
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["io"]
+
+    # cache root 自体は健全なまま (write-probe は通る) 展開済みファイルが
+    # 読めなくなる = collect_sprites の File.read! が raise する経路。
+    sprite =
+      cache
+      |> Path.join("*/sprites/idle.png")
+      |> Path.wildcard()
+      |> hd()
+
+    File.chmod!(sprite, 0o000)
+    on_exit(fn -> File.chmod(sprite, 0o600) end)
+
+    assert :ok = PersonaAssets.rebuild()
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["io"]
+  end
+
+  @tag :tmp_dir
+  test "稼働中に cache root が使えなくなっても現 manifest を維持する", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    parent = Path.join(tmp, "vol")
+    File.mkdir_p!(ingest)
+    File.mkdir_p!(parent)
+    :ok = write_pack(ingest, "lkg-1.0.0", base_manifest("lkg"), "body-lkg")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(parent, "cache"))
+    use_ingest(ingest)
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["lkg"]
+
+    # volume が読み取り専用になった、のような稼働中の失敗。
+    File.rm_rf!(Path.join(parent, "cache"))
+    File.chmod!(parent, 0o500)
+    on_exit(fn -> File.chmod(parent, 0o700) end)
+
+    assert :ok = PersonaAssets.rebuild()
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["lkg"]
   end
 end

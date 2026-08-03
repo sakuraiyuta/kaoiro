@@ -95,19 +95,11 @@ F3、2026-07-10 に実測で確認)。Codex 側に preset 相当の概念は無�
 足す。**結合は server 側で行う**
 ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5)。
 
-**現状の実装**: フッターは `KaoiroServer.PersonaAssets` のモジュール属性
-`@common_footer` として server 実装に内蔵された **1 枚のみ**。内容は
-「kaoiro クライアント越しに操作されている」という環境認識と、MCP tool の
-遅延公開への対処、そして固有名での共同作業依頼を既存 peer へ解決させる
-peer-routing 規約([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md)
-のソフトガード)。pack が無い予約 persona `default` では、この
-フッターだけが prompt になる。文面の改訂は server 実装の変更として扱う。
-
-**決定済み・実装待ち**: [ADR-0045](../adr/0045-footer-file-externalization.md)
-(accepted) は footer 設置ディレクトリ(新設 env `KAOIRO_FOOTER_DIR`。
-persona 取り込みディレクトリとは分離、未設定なら内蔵版のみ)の md
-2 枚への外部化を決定した。実装 phase は着手時に採番する (**未着手**)。
-実装後は以下の形になる:
+[ADR-0045](../adr/0045-footer-file-externalization.md) の実装により、
+footer 設置ディレクトリ(`KAOIRO_FOOTER_DIR`。persona 取り込み
+ディレクトリとは分離)の md 2 枚を使う。未設定時は内蔵既定のみとなる。
+pack が無い予約 persona `default` でも、以下の footer 合成結果が prompt
+になる。
 
 | ファイル | 位置付け | 欠落時 |
 |---|---|---|
@@ -156,16 +148,13 @@ persona 取り込みディレクトリとは分離、未設定なら内蔵版の
 - MUST: server 側で `personality + 共通フッター` を結合して配送する。
   wrapper 側では結合ロジックを持たない
   ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5)。
-- 以下は [ADR-0045](../adr/0045-footer-file-externalization.md)
-  (accepted・実装未着手) の実装完了時に効く条件で、**現状の内蔵
-  1 枚構成ではまだ適用されない**:
-  - MUST: フッターファイルの欠落は fail-closed にしない。
-    `system-footer.md` が無ければ内蔵デフォルト、`user-footer.md` が
-    無ければ何も足さない。
-  - MUST NOT: persona 別のフッターファイルを設けない
-    (`user-footer.<persona_id>.md` は読まない)。
-  - MUST NOT: 運用者が置いた `system-footer.md` / `user-footer.md` を
-    リポジトリに置かない(env と同じ環境固有ファイル。ADR-0045 F3)。
+- MUST: フッターファイルの欠落は fail-closed にしない。
+  `system-footer.md` が無ければ内蔵デフォルト、`user-footer.md` が
+  無ければ何も足さない。
+- MUST NOT: persona 別のフッターファイルを設けない
+  (`user-footer.<persona_id>.md` は読まない)。
+- MUST NOT: 運用者が置いた `system-footer.md` / `user-footer.md` を
+  リポジトリに置かない(env と同じ環境固有ファイル。ADR-0045 F3)。
 - MUST: 未知の `persona.id` を名乗る wrapper 接続は server が reject
   する。
 - MUST: server 到達不能時は wrapper spawn が失敗する(fail-closed)。
@@ -204,5 +193,5 @@ persona 取り込みディレクトリとは分離、未設定なら内蔵版の
   [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
   (本 spec の適用モデル、旧 ADR-0026 を supersede)、
   [ADR-0045](../adr/0045-footer-file-externalization.md)(共通フッターの
-  外部ファイル化。**accepted・実装未着手**。ADR-0029 F5/D5 を部分改訂)
+  外部ファイル化。実装済み。ADR-0029 F5/D5 を部分改訂)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)

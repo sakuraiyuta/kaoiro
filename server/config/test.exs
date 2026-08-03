@@ -92,6 +92,18 @@ config :kaoiro_server,
          "kaoiro_test_token_denylist_#{run_nonce}.dets"
        )
 
+# Per-run persona extraction cache root (ADR-0046 F1). Without this the
+# default lands in `$TMPDIR/kaoiro-persona-cache-<hash of ingest dir>`,
+# which two concurrent `mix test` invocations pointed at the same ingest
+# dir would share — and reclaim/extract there is rm_rf + unzip, not a
+# DETS append. Same run_nonce isolation as the stores above.
+config :kaoiro_server,
+       :persona_cache_dir,
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_persona_cache_#{run_nonce}"
+       )
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

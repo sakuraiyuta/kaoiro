@@ -60,11 +60,28 @@ cd server && cp .env.example .env
 | `KAOIRO_CLIENT_TOKENS` | 必須 | `<token>:<role>,...`(role = `operator`/`viewer`)。未設定は全 client 拒否 |
 | `KAOIRO_WRAPPER_TOKENS` | 任意 | `<agent_id>:<token>,...`(client と順序が逆)。spawn 経由のみの runner 配備では不要 — server-minted signed token で認証 (ADR-0024、2026-08-02 改訂)。固定 wrapper を pre-register する場合のみ設定 |
 | `KAOIRO_RUNNER_TOKENS` | 必須 | `<host_id>:<token>,...`。1.1 で発行した token を runner 側 `runner.env` の `KAOIRO_RUNNER_TOKEN` と対にする |
-| `KAOIRO_PERSONA_DIR` | 任意 | 立ち絵オーバーレイ用コンテナ内パス |
+| `KAOIRO_PERSONA_DIR` | 任意 | persona pack 取り込み用コンテナ内パス。読み取り専用 mount 可 |
+| `KAOIRO_FOOTER_DIR` | 任意 | footer 2 ファイルのコンテナ内 root |
+| | | 未設定時は内蔵既定のみ |
+| `KAOIRO_PERSONA_CACHE_DIR` | 任意 | zip extraction cache のコンテナ内 path |
+| | | compose 既定は `/var/lib/kaoiro/persona-cache` |
 
 3 種いずれも未設定時の挙動は env ごとに異なる(client = fail-closed、
 runner = :prod で fail-closed・dev/test のみ緩和、wrapper = :prod では
 signed token のみ受理・dev/test は緩和、issue #138 / 2026-08-02 改訂)。
+
+persona pack 取り込みは [ADR-0046](../adr/0046-persona-cache-relocation.md)
+により extraction cache と分離済みであり、`KAOIRO_PERSONA_DIR` は `:ro`
+mount できる。footer を運用者が差し替える場合は、host 側の
+`/srv/kaoiro/footers` を次のように読み取り専用で mount する:
+
+```yaml
+      - /srv/kaoiro/footers:/etc/kaoiro/footers:ro
+```
+
+同梱 compose は `KAOIRO_PERSONA_CACHE_DIR=/var/lib/kaoiro/persona-cache`
+を設定する。cache は書き込み可能な永続領域に置き、persona pack の
+mount とは分離する。
 
 **DETS パス 8 種**(restart 跨ぎで状態を残す DETS ファイルの格納先)は
 同梱 `docker-compose.yaml` が `environment:` + named volume `kaoiro-state`

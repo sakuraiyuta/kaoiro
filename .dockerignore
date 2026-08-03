@@ -39,7 +39,8 @@ server/priv/static/assets/
 server/priv/static/cache_manifest.json
 server/priv/static/index.html
 
-# Persona pack extraction cache (derived from the checked-in zips, ADR-0029)
+# Legacy persona extraction cache (moved out of the persona dir by
+# ADR-0046; kept so pre-move leftovers cannot enter the build context)
 server/priv/persona-packs/.cache/
 
 # Local env files (secrets) must never enter the build context

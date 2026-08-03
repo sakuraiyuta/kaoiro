@@ -214,4 +214,6 @@ sprite_set は server 側 manifest を優先する(host ローカルの表示名
   リスクが顕在化した時点で別 ADR として扱う。
 - server 側で pack manifest の署名検証(誰が pack を作ったか)は
   本 ADR とは独立の課題。ingest 時点でのハッシュチェック
-  (`server/priv/persona-packs/.cache/`)は ADR-0029 で既に導入済み。
+  (`server/priv/persona-packs/.cache/`、当時の位置)は ADR-0029 で既に
+  導入済み。現行の extraction cache は ADR-0046 により persona dir 外へ
+  移設済み。

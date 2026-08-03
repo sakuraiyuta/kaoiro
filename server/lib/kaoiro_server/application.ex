@@ -72,9 +72,17 @@ defmodule KaoiroServer.Application do
       # Per-conversation hard limits for inter-agent messaging
       # (protocol-inter-agent spec, phase-8 Stage B).
       KaoiroServer.ConversationStates,
+      # Single owner of the common-footer snapshot + last-known-good
+      # (ADR-0045). Must precede FooterWatcher, which rebuilds through it,
+      # and the Endpoint, whose WrapperChannel reads the snapshot.
+      KaoiroServer.FooterAssets,
       # Watch persona ingest dir for zip changes and rebuild the manifest
       # cache without restart (ADR-0029 F6).
       KaoiroServer.PersonaWatcher,
+      # Watch KAOIRO_FOOTER_DIR for system-footer.md / user-footer.md
+      # (ADR-0045 F4). Ignores itself when the env is unset or the dir is
+      # absent — file-based footers are opt-in.
+      KaoiroServer.FooterWatcher,
       # Start to serve requests, typically the last entry
       KaoiroServerWeb.Endpoint
     ]

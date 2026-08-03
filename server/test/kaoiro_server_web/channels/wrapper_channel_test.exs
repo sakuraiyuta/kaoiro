@@ -362,7 +362,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     test "reserved default は pack なしでも known 扱い + footer のみが push される" do
       _socket = join_wrapper("test.persona-default", "default")
       assert_push "persona_prompt", %{prompt: prompt}
-      assert prompt == KaoiroServer.PersonaAssets.common_footer()
+      assert prompt == KaoiroServer.FooterAssets.built_in_system_footer()
     end
   end
 

@@ -72,12 +72,17 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
 | runner 認証 | `KAOIRO_RUNNER_TOKENS` | 公開時必須 | `host_id:token` の複数([ADR-0023](../adr/0023-host-runner-architecture.md)) |
 | OAuth 個人認証 | `KAOIRO_OAUTH_*` / `KAOIRO_OAUTH_ALLOWLIST_PATH` | 任意 | Google / GitHub / Nextcloud。詳細は[配備手順 1.6](deployment.md) |
 | 立ち絵ディレクトリ | `KAOIRO_PERSONA_DIR` | 任意 | コンテナ内パス |
+| footer ディレクトリ | `KAOIRO_FOOTER_DIR` | 任意 | 質問せず comment hint を出す |
+| persona cache dir | `KAOIRO_PERSONA_CACHE_DIR` | 任意 | comment hint を出す |
 
 - トークン 3 種は「追加するか」「もう 1 件追加するか」を繰り返し聞いて複数
   エントリを組み立てる。prod では 3 種すべて必須(未設定は接続拒否、issue #138)。
 - **DETS パス 8 種は聞かない**。同梱 `docker-compose.yaml` が `environment:` で
   設定済みで、compose 外運用のときだけ必要になる。生成ファイルにはコメントとして
   残し、意味と一覧は配備手順書(#142)に委ねる。
+- `KAOIRO_FOOTER_DIR` / `KAOIRO_PERSONA_CACHE_DIR` も質問項目を増やさない。
+  `mix kaoiro.env` は未設定時の挙動と compose の設定例を comment hint として
+  render する。質問なしで既定の設定を保ちつつ、必要な運用導線を示す。
 - 収集しなかった任意項目は**空代入ではなくコメント行**で出す(未設定と空文字の
   取り違えを防ぐ)。
 - 既存の質問の後で **「OAuth ログインを設定しますか?」** を既定 No で尋ねる。No

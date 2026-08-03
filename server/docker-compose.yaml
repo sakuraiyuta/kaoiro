@@ -59,11 +59,23 @@ services:
       # the named volume — a lost entry silently re-grants a revoked
       # identity.
       KAOIRO_TOKEN_DENYLIST_PATH: /var/lib/kaoiro/token_denylist.dets
+      # Persona pack extraction cache (ADR-0046). Kept off the ingest dir
+      # so a `:ro` persona overlay still cold-starts. On the named volume
+      # rather than /tmp only to skip re-extracting every pack after a
+      # container recreation — the cache is derived from the zips.
+      KAOIRO_PERSONA_CACHE_DIR: /var/lib/kaoiro/persona-cache
     volumes:
       - kaoiro-state:/var/lib/kaoiro
       # Sprite overlay (ADR-0008): uncomment and set KAOIRO_PERSONA_DIR
       # =/personas in .env to override bundled sets.
       # - ./personas-overlay:/personas:ro
+      # Common footer (ADR-0045): uncomment and set KAOIRO_FOOTER_DIR
+      # =/etc/kaoiro/footers in .env to edit system-footer.md /
+      # user-footer.md without rebuilding. Read-only by design — the
+      # server only reads this root. Keep the HOST side outside this
+      # repo (F3: operator footers stay out of git, and no .gitignore
+      # line backstops a `./footers` here the way it does for .env).
+      # - /srv/kaoiro/footers:/etc/kaoiro/footers:ro
       - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
 
     restart: unless-stopped

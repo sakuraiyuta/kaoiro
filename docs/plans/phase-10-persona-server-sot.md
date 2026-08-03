@@ -28,8 +28,9 @@ last_updated: 2026-07-06
       時は `server/priv/persona-packs/` へフォールバック)で指定に統合
 - [x] bundled `server/priv/personas/` を完全撤去(既存 4 体は取り込み
       ディレクトリへ zip として移送)
-- [x] zip 展開ロジック(取り込みディレクトリ内の zip をコンテンツ
-      ハッシュ済み `.cache/<hash>/` に冪等展開)
+- [x] zip 展開ロジック(当時は取り込みディレクトリ内のコンテンツ
+      ハッシュ済み `.cache/<hash>/` に冪等展開)。現行は
+      ADR-0046 により persona dir 外の extraction cache へ移設済み
 - [x] Elixir `file_system` library による auto-watch + 300ms debounce
 - [x] manifest 再構築(取り込みディレクトリの走査 → 全 pack を対象に
       manifest 集約)

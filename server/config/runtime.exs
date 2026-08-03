@@ -24,8 +24,11 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 # Persona pack ingest directory (ADR-0029, phase-10). Server scans it
-# for `*.zip` packs, extracts into a `.cache/` subdir, and rebuilds the
-# manifest on every filesystem change. Unset falls back to
+# for `*.zip` packs and rebuilds the manifest on every filesystem
+# change. READ-ONLY as of ADR-0046: extraction goes to
+# KAOIRO_PERSONA_CACHE_DIR (below), so this may be a `:ro` mount. A
+# missing dir warns, serves an empty manifest, and disables the watcher
+# — the server never creates it. Unset falls back to
 # `priv/persona-packs/` bundled with the app dir so a fresh `mix
 # phx.server` still ships the reference 4 packs.
 # Env override guard (issue #120): only overwrite compile-time config when
@@ -34,6 +37,31 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
 # `if path = System.get_env(...)` blocks below (commit a0b49ab).
 if v = System.get_env("KAOIRO_PERSONA_DIR") do
   config :kaoiro_server, :persona_dir, v
+end
+
+# Footer file directory (ADR-0045 F1). Server reads `system-footer.md` /
+# `user-footer.md` directly under it and watches them for changes; it
+# never writes here and never creates the directory, so a `:ro` mount is
+# the intended shape. UNSET DISABLES file-based footers entirely — the
+# built-in default (`priv/footers/system-footer.md`, embedded at compile
+# time) is used and no user footer is appended. Deliberately separate
+# from KAOIRO_PERSONA_DIR — that root's default sits inside the repo, so
+# operational footers placed there would land in git and the docker
+# build context — and because pack distribution and prompt policy are
+# different concerns with different edit cadences.
+if v = System.get_env("KAOIRO_FOOTER_DIR") do
+  config :kaoiro_server, :footer_dir, v
+end
+
+# Persona pack extraction cache root (ADR-0046 F1). Kept OUT of the
+# ingest dir so that dir can be mounted `:ro`. Unset falls back to a tmp
+# path namespaced by the ingest dir's hash (KaoiroServer.PersonaAssets);
+# the cache is regenerated from the zips, so losing it costs one
+# re-extraction. Point it at a persistent volume to skip that on every
+# container recreation. One cache root per server process — sharing a
+# root across processes is not supported (ADR-0046 F5).
+if v = System.get_env("KAOIRO_PERSONA_CACHE_DIR") do
+  config :kaoiro_server, :persona_cache_dir, v
 end
 
 # Socket auth (ADR-0011). Unset lists disable enforcement (dev mode —

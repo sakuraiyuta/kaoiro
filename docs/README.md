@@ -65,6 +65,7 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0043](adr/0043-agent-initiated-session-reset.md) | agent 自身が turn 境界で要求する session reset | accepted |
 | [0044](adr/0044-coordination-injection-hitl.md) | 協調指針の共通フッター自動注入と都度指名 director 下の責務内自律 | accepted |
 | [0045](adr/0045-footer-file-externalization.md) | 共通フッターの外部ファイル化 — system-footer.md と user-footer.md | accepted |
+| [0046](adr/0046-persona-cache-relocation.md) | persona 取り込みディレクトリの extraction cache 外部化 | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。

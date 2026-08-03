@@ -16,8 +16,8 @@ erl_crash.dump
 /assets/node_modules/
 npm-debug.log
 
-# Persona pack ingest — content-hashed extraction cache is derived from
-# the checked-in zips (ADR-0029, KaoiroServer.PersonaAssets).
+# Legacy persona extraction cache. ADR-0046 moved the cache out of the
+# persona dir; this line stays so pre-move leftovers keep being ignored.
 server/priv/persona-packs/.cache/
 
 # Node / pnpm (workspace root). Per-package .gitignore covers dist/ etc.

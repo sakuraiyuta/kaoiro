@@ -6,7 +6,7 @@ opened: 2026-08-02
 supersedes: []
 superseded_by: null
 related_specs: [persona-personality-injection, persona-pack-schema]
-related_adrs: [29, 44]
+related_adrs: [29, 44, 46]
 ---
 
 # ADR-0045 — 共通フッターの外部ファイル化
@@ -30,10 +30,10 @@ Accepted(2026-08-02 起草、2026-08-03 マスター決裁)。
 ## Context
 
 共通フッターは全エージェントの system prompt 末尾に常時載る運用
-パラメータでありながら、現在は Elixir のモジュール属性
+パラメータでありながら、起草時は Elixir のモジュール属性
 (`server/lib/kaoiro_server/persona_assets.ex` の `@common_footer`)
-にハードコードされている。1 文字の変更にも server の再ビルドと再デプロイ
-が要る。
+にハードコードされていた。1 文字の変更にも server の再ビルドと再デプロイ
+が必要だった。
 
 これが実務問題として顕在化しているのが ADR-0044 F1 の文面確定
 ([coordination-footer-scope](../open-questions/coordination-footer-scope.md))
@@ -45,10 +45,10 @@ Accepted(2026-08-02 起草、2026-08-03 マスター決裁)。
 
 制約が 2 つある。設置ディレクトリは `:ro` でマウントされうるため、
 server 側からファイルを書き出す前提の設計は採れない。また persona
-設置ディレクトリ自体は pack ingest が `.cache/` を書き込むため、現状
-`:ro` を保証できない(`server/docker-compose.yaml` の overlay 例と
-矛盾する既存不具合。本 ADR とは独立に別課題で扱う)。footer はこの
-問題を避けるため専用 root へ分離する(F1)。
+設置ディレクトリの extraction cache は
+[ADR-0046](0046-persona-cache-relocation.md) により persona dir 外へ
+移設済みであり、persona dir は `:ro` mount できる。footer は運用ファイルを
+persona pack と分離するため、専用 root を使う(F1)。
 
 ## Decision
 
@@ -62,10 +62,10 @@ server 側からファイルを書き出す前提の設計は採れない。ま�
 footer 設置ディレクトリは新設 env `KAOIRO_FOOTER_DIR` で指定する。
 **未設定ならファイル優先は無効**(内蔵版のみ・user-footer なし)で、
 persona 設置ディレクトリ(`KAOIRO_PERSONA_DIR`)には footer を
-置かない。分離の理由は 2 つ — pack ingest の `.cache/` 書き込みで
-persona dir は `:ro` を保証できないこと、既定の pack dir が repo
-追跡下にあり運用ファイルが git / docker build context へ混入し得る
-こと。container では `./footers:/etc/kaoiro/footers:ro` のような
+置かない。分離の理由は 2 つ — persona dir を `:ro` で mount できる
+pack の SoT と運用ファイルを混在させないこと、既定の pack dir が repo
+追跡下にあり運用ファイルが git / docker build context へ混入し得ること。
+container では `./footers:/etc/kaoiro/footers:ro` のような
 `:ro` mount を想定する。env/path の変更は server 再起動で反映する
 (watcher の監視 root は起動時固定)。
 
