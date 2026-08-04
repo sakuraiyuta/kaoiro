@@ -135,6 +135,94 @@ traversal の影響範囲は広がる。OTP 自身の `:zip.unzip` も Illegal p
 (OTP 29.0.2 で実測)が、実装詳細に依存しない多層防御と、書き込み開始前の拒否を
 得るために事前検証を置く。
 
+### F8: 展開後サイズとエントリ数を展開前に上限で reject する
+
+pack の展開後合計サイズを **1 GiB (1_073_741_824 byte)**、エントリ数を
+**4096 件** に制限する。いずれかを超える pack は展開を開始せず reject し、当該
+pack のみ skip する (ADR-0029)。上限超過は errno ではなく明示的な検査結果として
+扱い、F4 の errno 分類には影響させない。
+
+上限値は 2026-08-04 にマスターが決定した。1 GiB は高解像度画像および将来の拡張
+(3D モデル等) を見込んだ余裕値で、2 進接頭辞 (1024^3) として解釈する。4096 件は
+サイズ上限だけでは防げない「合計サイズは小さいが件数のみ膨大な pack」(inode 枯渇・
+展開時間攻撃) を塞ぐためのもので、正当 pack (sprite 数十〜3D で数百) を弾かない
+余裕を持たせた。ディレクトリ entry も 1 件として数える。
+
+**申告された uncompressed size は使わない。** `:zip.list_dir/1` が返す展開後
+サイズは local header と
+central directory の申告値であり、攻撃者が自由に書ける。`:zip.unzip/2` はこの申告を
+一切参照せず実データを最後まで展開する — OTP 29.0.2 実測で、双方の header に
+100 byte と申告した entry がエラーなしで 10,000,000 byte 書き出された。したがって
+サイズ上限は、展開前に raw deflate ストリームを実際に inflate して実測する。出力は
+書き出さず、64 KiB の固定チャンクで供給して破棄しながら byte 数だけ積算するため、
+単一の巨大 entry でもメモリは一定である。上限到達時点で即中断するので、展開時間
+攻撃も同時に緩和される。
+
+この決定は issue #189 の当初案 (「`:zip.list_dir/1` が展開後サイズを返すので
+それを検査する」) を実測により棄却したものである。将来「list_dir で足りるのでは」
+と戻されないよう、棄却の根拠をここに固定する。
+
+**method と flag は local header を正本とする。** OTP 29.0.2 実測で、`:zip.unzip/2`
+は local header の compression method で展開する (central が STORE・local が DEFLATE
+の entry は inflate され、逆は拒否された)。central から method を読む実装は申告
+サイズと同型の bypass になるため、central の method は参照しない。暗号化 entry
+(general purpose bit 0) は inflate で実量を測れないため reject する — 同 OTP は
+暗号化ビットを無視して暗号文をそのまま書き出すため、素通しにはできない。DEFLATE と
+STORE 以外の method も同様に reject する。
+
+**data descriptor (general purpose bit 3) は central directory の comp_size で
+測る。** bit 3 が立つ entry は local header の size が placeholder であり、OTP は
+central directory の comp_size を読んで展開する (stdlib 8.0.1 `zip.erl`
+`get_z_file/9`: `GPFlag band 8 =:= 8 -> ZipFile#zip_file.comp_size`)。したがって
+実測の読み取り span もそこから取る。local header だけを読む実装は当該 entry を
+0 byte と数えて上限検査を素通りさせる — local に csize 0、central に真値を書いた
+zip で、実測は 0 byte、`:zip.unzip/2` は 10,000,000 byte を書き出した (実測)。
+bit 3 は streaming zip writer (Java `ZipOutputStream`、Go `archive/zip` 等) が
+日常的に立てるため reject はせず、extractor と同じ field を読む。判定に使う flag
+自体は local header 側から取る (これも `get_z_file/9` と同じ) ので、central だけに
+立てた flag で信頼先を切り替えることはできない。
+
+**ZIP64 の sentinel は local の extra field で解決する。** 32-bit の size field が
+`0xffffffff` のとき、実サイズは ZIP64 extended information extra field
+(id 0x0001) にある。bit 3 が無ければ OTP はこれを local 側で解決してから展開する
+ため、実測も local extra を読む (central では代用しない — bit 3 なしでは local が
+正本であり、central と食い違わせられる)。
+
+読み方は **OTP の `update_zip64/2` と同じループ**でなければならない。この record
+は index できる固定レイアウトではなく、8 byte 消費するたびに「その field はまだ
+sentinel か」を再評価する。64-bit 値それ自体が `0xffffffff` のとき OTP はさらに
+8 byte を同じ field として消費するため、固定位置で読むと comp_size を 1 つ手前
+から取る。実測 (テストは検証を現実的な規模で行うため縮小した上限を使う): payload
+の 64-bit field を 3 つ並べた形に対し、固定位置版は 2 つ目の値を comp_size と
+誤読して極小の値を測る一方、`:zip.unzip/2` は 3 つ目を正本として読み、1 MB の
+展開を行った。テスト上は 999,999 byte 上限を bypass する形で固定してある。
+比率がそのまま拡大するため、同じ構成を 1 GiB 超の展開量へスケールでき、
+production の上限も同型で bypass される。
+
+以上より、compressed size の正本は次の優先順で決まる。bit 3 あり → central
+directory の comp_size / bit 3 なしかつ 32-bit が sentinel → local ZIP64 extra
+(上記ループで解決) / それ以外 → local header の 32-bit field。
+
+**STORE の境界はアーカイブ自身のサイズで与える。** DEFLATE は stream 終端で実測が
+閉じるが、STORE には終端が無く、その長さは偽装可能な申告フィールドにしか存在しない。
+偽装できないのはアーカイブのファイルサイズであり、STORE は膨張しないため、アーカイブ
+自体を同じ 1 GiB 上限で縛れば STORE 由来の展開量も必ず上限内に収まる。会計上は
+STORE entry を上記の優先順で決まった comp_size で加算する。過小申告は bypass に
+ならない — 展開側も同じ comp_size 分しか読まないため実書き込みも同じだけ減る
+(local と central の**双方**で csize を 0 とした data descriptor 形は、OTP が
+アーカイブごと拒否することを DEFLATE / STORE 双方で実測。central に真値が残って
+いれば展開されるため、bit 3 entry の comp_size は上記のとおり central を正本と
+する)。
+
+**検査順序は cheap reject 優先とする。** アーカイブサイズ → entry 数 → zip slip /
+local header 整合 (F7) → inflate 実測。名前だけで reject できる traversal 付き
+zip bomb に、最大 1 GiB 分の inflate CPU を払わせないためである。F7 と本検査は
+いずれも書き込みを一切行わない層であり、この不変条件は順序の変更に依らず維持する。
+
+なお `:zip.unzip/2` の entry 列挙元は central directory であることを実測した
+(central に載っていない local entry は展開されない)。よって entry 数を central
+directory から数えることは、展開側の挙動と一致する。
+
 ## Consequences
 
 ### Positive
@@ -143,6 +231,9 @@ traversal の影響範囲は広がる。OTP 自身の `:zip.unzip` も Illegal p
 - persona pack の正本と、再生成可能な展開物の書き込み先が分離される。
 - cache root の作成不能は起動時に明確に失敗し、稼働中の一時失敗では既存の
   manifest を保つ。
+- 1 本の高圧縮 pack で cache volume を埋める攻撃 (zip bomb) を、展開を開始する
+  前に遮断できる。cache は認証 DETS 台帳と同一 volume にあるため、これは失効
+  ストアの劣化防止でもある (F8)。
 
 ### Negative
 
@@ -151,12 +242,33 @@ traversal の影響範囲は広がる。OTP 自身の `:zip.unzip` も Illegal p
   運用者が担保する必要がある。
 - アーカイブ形状由来の errno を cache 障害側に誤分類すると、ingest dir に
   ファイルを置くだけで cold start を raise させる可用性 DoS になる。
+- 正当な pack でも展開前に 1 回 inflate するため、展開が実質 2 回分の CPU を
+  要する (数 MB の pack では無視できる、F8)。
+- 上限内の pack を ingest dir へ大量に並べる攻撃は F8 の範囲外である。cache
+  全体の容量管理は別の層で扱う必要がある。
+- **entry 数上限は central directory を読み切った後に効く。** 検査は
+  `:zip.list_dir/1` の結果を数えるため、central directory の materialize
+  そのものは 4096 件で bound されない。1 GiB のアーカイブには数百万件の
+  entry を詰められ、`list_dir` が数 GB の BEAM heap を消費しうる (実測:
+  40 万 entry で 278 MB / 5.7 秒、10 万 entry で 65 MB / 2.1 秒)。F8 の
+  アーカイブサイズ上限はこの窓を 1 GiB へ狭めるが、塞いではいない。F8 導入前は
+  この経路に一切のゲートが無かったため net では改善であり、EOCD の申告 entry 数
+  (または central directory の申告サイズ) を先読みして列挙前に弾く案は
+  kaoiro issue #194 で扱う (解決時に本項を更新する)。
+- **上限検査と展開の間に TOCTOU がある。** 検査はパス経由で zip を読み、
+  `:zip.unzip/2` は同じパスを開き直すため、両者が同一バイト列である保証は無い。
+  ingest dir に書ける者は、検査通過後・展開開始前に zip bomb へ差し替えることで
+  上限を回避できる。ただし ingest dir へ書ける主体は既に pack を置ける信頼境界の
+  内側 (F6) であり、同じ volume 枯渇はレース無しでも到達可能な受容済み残存リスク
+  でもあるため、深刻度は低い。kaoiro issue #195 で扱う (解決時に本項を更新する)。
 
 ### Neutral
 
 - tmp 配下の既定 cache は消失しても、次の取り込みで zip から再生成される。
 - 取り込みディレクトリの欠落は empty manifest と watch 無効で表現し、
   再起動まで自動復帰しない。
+- F8 の上限値は module attribute の定数であり、環境変数では変更できない。
+  運用上の変更が必要になった時点で別 issue とする (issue #189 で決定)。
 
 ## Alternatives Considered
 

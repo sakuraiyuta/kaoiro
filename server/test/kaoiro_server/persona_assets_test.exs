@@ -10,6 +10,11 @@ defmodule KaoiroServer.PersonaAssetsTest do
   @states ~w(idle thinking tool_running waiting_input
              waiting_permission done error)
 
+  # DOS date 1980-01-01 (day 1, month 1, year 0 = 1980). 手組み zip で日付を
+  # 0 にすると 1980-00-00 という無効日付になり、展開そのものは成功した直後の
+  # `write_file_info` が :badarg で落ちる — 展開まで到達するテストが必要。
+  @dos_date 0x0021
+
   setup do
     original = Application.get_env(:kaoiro_server, :persona_dir)
     original_cache = Application.get_env(:kaoiro_server, :persona_cache_dir)
@@ -1273,5 +1278,504 @@ defmodule KaoiroServer.PersonaAssetsTest do
 
     assert :ok = PersonaAssets.rebuild()
     assert Map.keys(PersonaAssets.manifest()["personas"]) == ["lkg"]
+  end
+
+  # ---- 展開上限 (#189, ADR-0046 F8) ----
+  #
+  # 上限は「アーカイブが申告するサイズ」では張れない。申告は攻撃者が書ける
+  # フィールドで、`:zip.unzip/2` はそれを一切参照しない (OTP 29.0.2 実測:
+  # local header と central directory の双方で 100 byte と申告したエントリが
+  # エラーなしで 10,000,000 byte 書き出された)。よって実 inflate で測る。
+  #
+  # 本番の上限は 1 GiB なので、境界・drain・方式別の会計は小さい上限を渡す
+  # `measure_archive/2` で張り、本番の配線 (@max_extracted_bytes を渡して
+  # いること) は下の E2E 1 本で張る。
+  describe "measure_archive/2" do
+    @tag :tmp_dir
+    test "申告サイズを偽装しても実展開量で弾かれる", %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "forged.zip")
+      body = String.duplicate("Z", 50_000)
+
+      File.write!(
+        zip,
+        custom_zip(name: "big.bin", body: deflate(body), method: 8, declared_size: 100)
+      )
+
+      # 申告は 100 byte。申告を読む実装ならこの上限を素通りする。
+      assert {:error, msg} = PersonaAssets.measure_archive(zip, 49_999)
+      assert msg =~ "extracted size exceeds 49999 bytes"
+      assert msg =~ "reached 50000"
+    end
+
+    @tag :tmp_dir
+    test "上限ちょうどは通り、1 byte 超過で落ちる", %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "boundary.zip")
+      File.write!(zip, custom_zip(name: "b.bin", body: deflate(String.duplicate("Z", 50_000))))
+
+      assert :ok = PersonaAssets.measure_archive(zip, 50_000)
+      assert {:error, _msg} = PersonaAssets.measure_archive(zip, 49_999)
+    end
+
+    # `:zlib.safeInflate/2` の `:finished` は「stream 終端」ではなく「queue
+    # した input を使い切った」の意味 (OTP 29.0.2 実測: 500 KB を 8 チャンクで
+    # 供給すると 8 回返る)。終端と誤読して 1 チャンク目で打ち切る実装は
+    # 8 KB 程度しか数えず、この上限を超えられない。
+    @tag :tmp_dir
+    test "64 KiB を超えるエントリも全チャンク合算される", %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "multichunk.zip")
+
+      # 非圧縮データ = csize が 64 KiB を大きく超え、複数チャンクの供給が要る。
+      payload = :crypto.strong_rand_bytes(500_000)
+      File.write!(zip, custom_zip(name: "r.bin", body: deflate(payload), method: 8))
+
+      assert :ok = PersonaAssets.measure_archive(zip, 500_000)
+      assert {:error, msg} = PersonaAssets.measure_archive(zip, 499_999)
+      assert msg =~ "reached 500000"
+    end
+
+    @tag :tmp_dir
+    test "STORE エントリも会計に載る", %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "stored.zip")
+      File.write!(zip, custom_zip(name: "s.bin", body: String.duplicate("x", 10_000), method: 0))
+
+      assert :ok = PersonaAssets.measure_archive(zip, 10_000)
+      assert {:error, _msg} = PersonaAssets.measure_archive(zip, 9_999)
+    end
+
+    # OTP 29.0.2 実測: `:zip.unzip/2` は暗号化ビットを無視して暗号文をその
+    # まま書き出す。inflate では実量を測れないので、展開前に pack ごと拒否する。
+    @tag :tmp_dir
+    test "暗号化エントリは測れないので pack ごと拒否する", %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "enc.zip")
+
+      File.write!(
+        zip,
+        custom_zip(name: "e.bin", body: deflate("x"), method: 8, flags: 0x0001)
+      )
+
+      assert {:error, msg} = PersonaAssets.measure_archive(zip, 1_000_000)
+      assert msg =~ "encrypted entry cannot be size-checked"
+    end
+
+    # レビュー must-fix (2026-08-04)。GPBF bit 3 の entry は local header の
+    # size が placeholder で、OTP は central directory の comp_size を使って
+    # 展開する (stdlib 8.0.1 `zip.erl` get_z_file/9)。local だけを読む実装は
+    # この entry を 0 byte と数え、展開側は実データを全部展開する — 実測で
+    # local csize 0 の申告に対し 10,000,000 byte が書き出された。
+    @tag :tmp_dir
+    test "data descriptor entry は central の comp_size で測る", %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "descriptor.zip")
+      payload = String.duplicate("Z", 50_000)
+
+      File.write!(
+        zip,
+        custom_zip(
+          name: "d.bin",
+          body: deflate(payload),
+          method: 8,
+          flags: 0x0008,
+          local_compressed: 0,
+          crc: :erlang.crc32(payload)
+        )
+      )
+
+      # 仕掛けの premise: OTP が本当にこの entry を展開できること。bit 3 で
+      # central を見なくなったら、下のアサーションは「元から穴が無かった」
+      # だけで通ってしまう。
+      out = Path.join(tmp, "premise")
+      File.mkdir_p!(out)
+
+      assert {:ok, _files} =
+               :zip.unzip(String.to_charlist(zip), cwd: String.to_charlist(out)),
+             "仕掛けた zip の展開自体が失敗した — premise の検査になっていない"
+
+      assert File.stat!(Path.join(out, "d.bin")).size == 50_000
+
+      assert {:error, msg} = PersonaAssets.measure_archive(zip, 49_999)
+      assert msg =~ "reached 50000"
+    end
+
+    # ふじ本レビュー must M1。ZIP64 の 32-bit size field は sentinel
+    # (0xffffffff) で、実サイズは local の ZIP64 extra (0x0001) にある。OTP は
+    # それを読んでから展開するので、32-bit 値を生で使うと 4,294,967,295 byte と
+    # 数え、valid な pack を 1 GiB 超過として誤 reject する。bypass ではなく
+    # 正当な pack の欠落だが、「extractor と同じ field を読む」が全経路で
+    # 成立していないことの現れなので blocker 扱い。
+    @tag :tmp_dir
+    test "ZIP64 STORE は local extra の 64-bit comp_size で測る", %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "zip64.zip")
+      File.write!(zip, zip64_zip(name: "s.bin", body: "hello world", method: 0))
+
+      # premise: OTP はこの pack を問題なく展開する。
+      out = Path.join(tmp, "zip64_premise")
+      File.mkdir_p!(out)
+
+      assert {:ok, _files} =
+               :zip.unzip(String.to_charlist(zip), cwd: String.to_charlist(out)),
+             "仕掛けた ZIP64 の展開自体が失敗した — premise の検査になっていない"
+
+      assert File.stat!(Path.join(out, "s.bin")).size == 11
+
+      assert :ok = PersonaAssets.measure_archive(zip, 11)
+      assert {:error, msg} = PersonaAssets.measure_archive(zip, 10)
+      assert msg =~ "reached 11"
+      assert :ok = PersonaAssets.verify_archive(zip)
+    end
+
+    # bit 3 が無ければ comp_size の正本は local 側 (32-bit field、sentinel なら
+    # local ZIP64 extra)。central で代用すると両者を食い違わせられる。
+    @tag :tmp_dir
+    test "bit 3 なしの ZIP64 は central ではなく local extra を正本にする", %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "zip64_split.zip")
+
+      File.write!(
+        zip,
+        zip64_zip(name: "s.bin", body: "hello world", method: 0, central_compressed: 4096)
+      )
+
+      # premise: local 11 / central 4096 と食い違わせた唯一の fixture なので、
+      # OTP がどちらを正本にしているかはここでしか判別できない。上の ZIP64
+      # STORE テストは両者が一致しているため判別に使えない (レビュー round 4)。
+      out = Path.join(tmp, "zip64_split_premise")
+      File.mkdir_p!(out)
+
+      assert {:ok, _files} =
+               :zip.unzip(String.to_charlist(zip), cwd: String.to_charlist(out)),
+             "仕掛けた zip の展開自体が失敗した — premise の検査になっていない"
+
+      assert File.stat!(Path.join(out, "s.bin")).size == 11,
+             "central の 4096 で展開された — OTP が bit 3 なしでも central を " <>
+               "comp_size の正本としなくなった可能性がある"
+
+      assert :ok = PersonaAssets.measure_archive(zip, 11)
+      assert {:error, msg} = PersonaAssets.measure_archive(zip, 10)
+      assert msg =~ "reached 11"
+    end
+
+    # レビュー round 4 must-fix (Critical)。OTP の `update_zip64/2`
+    # (stdlib 8.0.1 `zip.erl`) は 8 byte 消費するたびに「その field はまだ
+    # sentinel か」を再評価する **ループ** であり、ZIP64 の 64-bit
+    # uncompressed 値それ自体が 0xffffffff なら、さらに 8 byte を同じ field
+    # として消費する。固定位置で読む実装は comp_size を 1 つ手前から取り、
+    # extractor が実際に読む span より小さく数える = 上限を素通りさせる。
+    @tag :tmp_dir
+    test "ZIP64 の 64-bit uncompressed が sentinel でも OTP と同じ位置から測る",
+         %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "zip64_loop.zip")
+      payload = :binary.copy(<<0>>, 1_000_000)
+      body = deflate(payload)
+
+      # 1 番目は 64-bit の sentinel なので OTP はこれを uncompressed として
+      # 消費し、まだ sentinel なので 2 番目も uncompressed として消費する。
+      # comp_size になるのは 3 番目。固定位置で読むと 2 番目 (100) を取る。
+      File.write!(
+        zip,
+        zip64_zip(
+          name: "s.bin",
+          body: body,
+          method: 8,
+          crc: :erlang.crc32(payload),
+          local_extra_payload:
+            <<0xFFFFFFFF::little-64, 100::little-64, byte_size(body)::little-64>>
+        )
+      )
+
+      # premise: OTP はこの pack を 1,000,000 byte として展開しきる。
+      out = Path.join(tmp, "zip64_loop_premise")
+      File.mkdir_p!(out)
+
+      assert {:ok, _files} =
+               :zip.unzip(String.to_charlist(zip), cwd: String.to_charlist(out)),
+             "仕掛けた zip の展開自体が失敗した — premise の検査になっていない"
+
+      assert File.stat!(Path.join(out, "s.bin")).size == 1_000_000,
+             "OTP が update_zip64 のループをやめた可能性がある"
+
+      assert {:error, msg} = PersonaAssets.measure_archive(zip, 999_999)
+      assert msg =~ "reached 1000000"
+    end
+
+    @tag :tmp_dir
+    test "未対応の圧縮方式は pack ごと拒否する", %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "bzip2.zip")
+      File.write!(zip, custom_zip(name: "b.bin", body: "whatever", method: 12))
+
+      assert {:error, msg} = PersonaAssets.measure_archive(zip, 1_000_000)
+      assert msg =~ "unsupported compression method 12"
+    end
+
+    # method は local header が正本 (OTP 29.0.2 実測: central が STORE、local が
+    # DEFLATE のエントリは inflate された)。central を読む実装に退行すると、
+    # 実データは deflate なのに STORE として csize 分しか数えなくなる。
+    @tag :tmp_dir
+    test "central が偽る method ではなく local header の method で測る", %{tmp_dir: tmp} do
+      zip = Path.join(tmp, "lying_central.zip")
+      payload = String.duplicate("Z", 50_000)
+
+      # crc は展開後データのもの。既定 (格納バイト列の crc) のままだと下の
+      # premise が :bad_crc で落ち、展開の検査にならない。
+      File.write!(
+        zip,
+        custom_zip(
+          name: "m.bin",
+          body: deflate(payload),
+          method: 8,
+          central_method: 0,
+          crc: :erlang.crc32(payload)
+        )
+      )
+
+      # premise: OTP がこの fixture を local の DEFLATE として展開すること。
+      # preflight の結果だけを見ていると、将来 OTP が central を正本へ変えた
+      # 場合にテストは緑のまま bypass になる (ふじ S2)。
+      out = Path.join(tmp, "method_premise")
+      File.mkdir_p!(out)
+
+      assert {:ok, _files} =
+               :zip.unzip(String.to_charlist(zip), cwd: String.to_charlist(out)),
+             "仕掛けた zip の展開自体が失敗した — premise の検査になっていない"
+
+      assert File.stat!(Path.join(out, "m.bin")).size == 50_000,
+             "central の STORE 宣言で展開された — OTP が local header を " <>
+               "method の正本としなくなった可能性がある"
+
+      assert {:error, msg} = PersonaAssets.measure_archive(zip, 49_999)
+      assert msg =~ "reached 50000"
+    end
+  end
+
+  @tag :tmp_dir
+  test "エントリ数はちょうど 4096 まで通り、4097 で落ちる", %{tmp_dir: tmp} do
+    ok = Path.join(tmp, "ok.zip")
+    File.write!(ok, multi_entry_zip(for i <- 1..4096, do: {"f#{i}", ""}))
+    assert :ok = PersonaAssets.verify_archive(ok)
+
+    over = Path.join(tmp, "over.zip")
+    File.write!(over, multi_entry_zip(for i <- 1..4097, do: {"f#{i}", ""}))
+    assert {:error, msg} = PersonaAssets.verify_archive(over)
+    assert msg =~ "archive holds 4097 entries, over the 4096 entry limit"
+  end
+
+  # レビュー must-fix (round 2)。`:zlib.safeInflate/2` は壊れた圧縮データに対し
+  # `{:error, _}` を返さず :data_error を raise する。preflight がこれを捕まえ
+  # 損ねると例外が rebuild/0 まで抜け (その rescue は File.Error 限定)、pack を
+  # 1 本置くだけで cold start が起動不能・稼働中は PersonaWatcher が crash
+  # ループする。導入前は `:zip.unzip/2` が `{:error, {:EXIT, _}}` を返して当該
+  # pack のみ skip していたので、これは preflight が持ち込む退行だった。
+  # 攻撃者が要らないのも重要 — 配布中の切り詰めや bit rot で踏める。
+  @tag :tmp_dir
+  test "deflate が壊れた pack は skip され、同居する健全 pack は残る (cold start も通る)",
+       %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "good-1.0.0", base_manifest("good"), "body-good")
+
+    # method=8 と宣言しつつ中身は deflate ですらないバイト列。
+    File.write!(
+      Path.join(ingest, "rot-1.0.0.zip"),
+      custom_zip(name: "rot.bin", body: :crypto.strong_rand_bytes(300), method: 8)
+    )
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+    Application.put_env(:kaoiro_server, :persona_dir, ingest)
+    :persistent_term.erase({PersonaAssets, :cache})
+
+    log = capture_log(fn -> assert :ok = PersonaAssets.rebuild() end)
+
+    assert log =~ "skip persona pack rot-1.0.0.zip: cannot inflate"
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
+  end
+
+  # STORE には stream 終端が無く、その長さは偽装可能な申告フィールドにしか
+  # 無い。偽装できないのはアーカイブ自身のサイズで、STORE は膨張しないので
+  # ファイルを縛れば STORE 由来の展開量も縛れる (ふじ案 a)。sparse file なので
+  # 実ディスクは消費しない。
+  @tag :tmp_dir
+  test "アーカイブ自体が 1 GiB を超えていれば中身を読む前に拒否する", %{tmp_dir: tmp} do
+    path = Path.join(tmp, "huge.zip")
+    {:ok, fd} = File.open(path, [:write, :binary])
+    :ok = :file.pwrite(fd, 1024 * 1024 * 1024, "x")
+    :ok = File.close(fd)
+
+    assert {:error, msg} = PersonaAssets.verify_archive(path)
+    assert msg =~ "over the 1073741824 byte limit"
+  end
+
+  # クロエ/ふじ指示: 検査は「書き込み開始前の拒否」層にある。順序を入れ替えても
+  # この不変条件は保たれること。
+  #
+  # 2 経路を別々に張る。名前で弾かれる pack は inflate まで到達しないので、
+  # 1 本にまとめると実測側の不変条件が張れていないのに張れているように読める
+  # (レビュー round 3 advisory: 元のこのテストが実際にそうなっていた)。
+  @tag :tmp_dir
+  test "検査は 1 byte も書かない (zip-slip 経路・inflate 経路の双方)", %{tmp_dir: tmp} do
+    work = Path.join(tmp, "work")
+    File.mkdir_p!(work)
+
+    # (1) 名前で弾かれる経路。inflate までは走らない。
+    slip = Path.join(work, "slip.zip")
+    File.write!(slip, custom_zip(name: "../escaped", body: deflate("x"), method: 8))
+
+    before = snapshot(work)
+    assert {:error, msg} = PersonaAssets.verify_archive(slip)
+    assert msg =~ "escapes the extraction dir"
+    assert snapshot(work) == before
+
+    # (2) 名前は安全で、inflate 実測まで走ってから上限で弾かれる経路。
+    big = Path.join(work, "big.zip")
+
+    File.write!(
+      big,
+      custom_zip(name: "big.bin", body: deflate(String.duplicate("Z", 50_000)), method: 8)
+    )
+
+    before = snapshot(work)
+    assert {:error, msg} = PersonaAssets.measure_archive(big, 49_999)
+    assert msg =~ "reached 50000"
+    assert snapshot(work) == before
+  end
+
+  # 本番の配線 (verify_archive/1 が @max_extracted_bytes を渡していること) は
+  # 実物の bomb でしか張れない。ADR-0029 の「1 本の不正 pack が全体を止めない」
+  # も同時に見る。
+  @tag :tmp_dir
+  test "1 GiB を超えて展開される pack は skip され、同居する健全 pack は残る", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "good-1.0.0", base_manifest("good"), "body-good")
+
+    {bomb, bomb_crc} = deflate_bomb(1024 * 1024 * 1024 + 1_048_576)
+
+    File.write!(
+      Path.join(ingest, "bomb-1.0.0.zip"),
+      custom_zip(name: "bomb.bin", body: bomb, method: 8, crc: bomb_crc)
+    )
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    log = capture_log(fn -> use_ingest(ingest) end)
+
+    assert log =~ "skip persona pack bomb-1.0.0.zip: extracted size exceeds 1073741824 bytes"
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
+
+    # 展開されかけた痕跡が cache に残っていないこと。
+    assert cache |> Path.join("*/bomb.bin") |> Path.wildcard() == []
+  end
+
+  defp snapshot(dir) do
+    dir
+    |> Path.join("**")
+    |> Path.wildcard(match_dot: true)
+    |> Enum.sort()
+    |> Enum.map(&{&1, File.lstat!(&1).size})
+  end
+
+  # raw deflate (zip が entry に格納する、zlib/gzip の枠無しの生ストリーム)。
+  defp deflate(payload) do
+    z = :zlib.open()
+    :ok = :zlib.deflateInit(z, :best_speed, :deflated, -15, 8, :default)
+    out = IO.iodata_to_binary([:zlib.deflate(z, payload), :zlib.deflate(z, "", :finish)])
+    :zlib.close(z)
+    out
+  end
+
+  # 1 GiB 級の展開量を持つ raw deflate ストリーム。全量をメモリに載せずに
+  # 作るためチャンクで食わせる (:best_speed で約 1.8 秒)。
+  #
+  # crc は展開後データのものを返す。これを正しく入れておかないと、上限検査を
+  # 外した mutation が :bad_crc で弾かれて「検査が効いている」ように見えて
+  # しまう — 検査が無ければ本当に 1 GiB が書かれる、という前提を保つ。
+  defp deflate_bomb(total_bytes) do
+    z = :zlib.open()
+    :ok = :zlib.deflateInit(z, :best_speed, :deflated, -15, 8, :default)
+    chunk = :binary.copy(<<0>>, 1_048_576)
+
+    {body, crc} =
+      Enum.reduce(1..ceil(total_bytes / 1_048_576), {[], 0}, fn _i, {acc, crc} ->
+        {[acc, :zlib.deflate(z, chunk)], :erlang.crc32(crc, chunk)}
+      end)
+
+    out = IO.iodata_to_binary([body, :zlib.deflate(z, "", :finish)])
+    :zlib.close(z)
+    {out, crc}
+  end
+
+  # ZIP64: 32-bit の size field を sentinel (0xffffffff) にし、実サイズを
+  # ZIP64 extended information extra field (header id 0x0001) へ置く。
+  # payload の順序は固定 (uncompressed, compressed, offset, disk) で、対応する
+  # 32-bit field が sentinel のものだけが現れる。ここでは両方 sentinel にする。
+  defp zip64_zip(opts) do
+    name = Keyword.fetch!(opts, :name)
+    body = Keyword.fetch!(opts, :body)
+    method = Keyword.get(opts, :method, 0)
+    csize = byte_size(body)
+    usize = Keyword.get(opts, :declared_size, byte_size(body))
+    central_csize = Keyword.get(opts, :central_compressed, csize)
+    crc = Keyword.get(opts, :crc, :erlang.crc32(body))
+    n = byte_size(name)
+    sentinel = 0xFFFFFFFF
+
+    # 既定は仕様どおり (uncompressed, compressed) の 16 byte。攻撃側の形を
+    # 張るテストのために payload を直接差し替えられるようにしてある。
+    local_payload =
+      Keyword.get(opts, :local_extra_payload, <<usize::little-64, csize::little-64>>)
+
+    local_extra =
+      <<0x0001::little-16, byte_size(local_payload)::little-16>> <> local_payload
+
+    central_extra =
+      <<0x0001::little-16, 16::little-16, usize::little-64, central_csize::little-64>>
+
+    local =
+      <<0x04034B50::little-32, 45::little-16, 0::little-16, method::little-16, 0::little-16,
+        @dos_date::little-16, crc::little-32, sentinel::little-32, sentinel::little-32,
+        n::little-16, byte_size(local_extra)::little-16>> <> name <> local_extra <> body
+
+    central =
+      <<0x02014B50::little-32, 45::little-16, 45::little-16, 0::little-16, method::little-16,
+        0::little-16, @dos_date::little-16, crc::little-32, sentinel::little-32,
+        sentinel::little-32, n::little-16, byte_size(central_extra)::little-16, 0::little-16,
+        0::little-16, 0::little-16, 0::little-32, 0::little-32>> <> name <> central_extra
+
+    eocd =
+      <<0x06054B50::little-32, 0::little-16, 0::little-16, 1::little-16, 1::little-16,
+        byte_size(central)::little-32, byte_size(local)::little-32, 0::little-16>>
+
+    local <> central <> eocd
+  end
+
+  # `:zip.create/3` では method / general purpose flag / 申告 size を指定できず、
+  # central と local で別の値を書くこともできないので手組みする。`body` は
+  # 「アーカイブに格納されるバイト列」(deflate 済みならその圧縮データ)。
+  defp custom_zip(opts) do
+    name = Keyword.fetch!(opts, :name)
+    body = Keyword.fetch!(opts, :body)
+    method = Keyword.get(opts, :method, 8)
+    central_method = Keyword.get(opts, :central_method, method)
+    flags = Keyword.get(opts, :flags, 0)
+    declared = Keyword.get(opts, :declared_size, byte_size(body))
+    crc = Keyword.get(opts, :crc, :erlang.crc32(body))
+    csize = byte_size(body)
+    # data descriptor (GPBF bit 3) を張るとき、local header 側だけ別の
+    # (placeholder の) 値を書けるようにする。central には真値が残る。
+    local_csize = Keyword.get(opts, :local_compressed, csize)
+    n = byte_size(name)
+
+    local =
+      <<0x04034B50::little-32, 20::little-16, flags::little-16, method::little-16, 0::little-16,
+        @dos_date::little-16, crc::little-32, local_csize::little-32, declared::little-32,
+        n::little-16, 0::little-16>> <> name <> body
+
+    central =
+      <<0x02014B50::little-32, 20::little-16, 20::little-16, flags::little-16,
+        central_method::little-16, 0::little-16, @dos_date::little-16, crc::little-32,
+        csize::little-32, declared::little-32, n::little-16, 0::little-16, 0::little-16,
+        0::little-16, 0::little-16, 0::little-32, 0::little-32>> <> name
+
+    eocd =
+      <<0x06054B50::little-32, 0::little-16, 0::little-16, 1::little-16, 1::little-16,
+        byte_size(central)::little-32, byte_size(local)::little-32, 0::little-16>>
+
+    local <> central <> eocd
   end
 end

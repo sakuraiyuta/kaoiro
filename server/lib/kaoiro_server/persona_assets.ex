@@ -23,6 +23,11 @@ defmodule KaoiroServer.PersonaAssets do
   fields, the 7 sprite states, `min_kaoiro_version` under the server's
   own version — and a zip that fails any check is dropped with a warning
   (partial ingest, not fatal, so one bad drop cannot lock the whole set).
+  Extraction is bounded before it starts: entry names may not escape the
+  cache slot (ADR-0046 F7) and the pack may not expand past 1 GiB across
+  4096 entries (ADR-0046 F8 — spelled out because ADR-0029 numbers an
+  unrelated F8), the latter measured by a real inflate because the sizes
+  an archive declares are forgeable.
 
   The result is cached in `:persistent_term`; `rebuild/0` rescans and
   replaces it. `KaoiroServer.PersonaWatcher` calls `rebuild/0` on
@@ -651,7 +656,7 @@ defmodule KaoiroServer.PersonaAssets do
   end
 
   defp extract(zip_path, extracted_dir, cache_dir) do
-    with :ok <- verify_entry_names(zip_path),
+    with :ok <- verify_archive(zip_path),
          :ok <- discard(extracted_dir, cache_dir),
          :ok <- prepare_slot(extracted_dir, cache_dir) do
       result =
@@ -849,6 +854,321 @@ defmodule KaoiroServer.PersonaAssets do
   @local_header_signature 0x04034B50
   @local_header_size 30
 
+  # Extraction bounds (#189, ADR-0046 F8), decided 2026-08-04 by マスター:
+  # a pack may expand to at most 1 GiB across at most 4096 entries.
+  # Generous on purpose — high-resolution sprites now, 3D assets later —
+  # so a pack that trips either bound is not a plausible legitimate one.
+  # 1 GiB reads as the binary prefix (1024³): the figure is headroom for
+  # asset growth, so the larger of the two readings matches the intent.
+  @max_extracted_bytes 1024 * 1024 * 1024
+  @max_entries 4096
+
+  # The two compression methods this preflight can account for, which are
+  # also the only two OTP's extractor handles. An entry declaring anything
+  # else cannot be measured, so the pack is refused rather than guessed at.
+  @method_stored 0
+  @method_deflate 8
+
+  # General purpose bit flag 0: the entry is encrypted. Measured on OTP
+  # 29.0.2 — `:zip.unzip/2` IGNORES this bit and writes the ciphertext as
+  # though it were plaintext, so inflating such an entry would measure
+  # nothing meaningful and the pack is refused instead.
+  @flag_encrypted 0x0001
+
+  # General purpose bit flag 3: the entry's sizes are placeholders in the
+  # local header and the real ones trail the compressed data in a data
+  # descriptor. OTP's extractor then takes comp_size from the CENTRAL
+  # directory instead (stdlib 8.0.1 `zip.erl` `get_z_file/9`: `GPFlag band
+  # 8 =:= 8 -> ZipFile#zip_file.comp_size`), so the measurement has to read
+  # the same field. Reading only the local header counts ZERO for such an
+  # entry while the extractor inflates it in full — measured: a local
+  # header declaring csize 0 alongside an untouched central directory had
+  # 10,000,000 bytes written (レビュー must-fix, 2026-08-04).
+  @flag_data_descriptor 0x0008
+
+  # ZIP64. A 32-bit size field holding this sentinel means the real value
+  # lives in the entry's ZIP64 extended information extra field, and OTP
+  # resolves it there before extracting. Using the raw 32-bit field instead
+  # counts 4,294,967,295 bytes for an entry that is 11, refusing a perfectly
+  # valid pack as oversized — not a bypass, but the same "read what the
+  # extractor reads" rule failing on the other side (ふじ M1, 2026-08-04).
+  @zip64_extra_id 0x0001
+  @size_sentinel 0xFFFFFFFF
+
+  # A ZIP entry carries a bare deflate stream, without the zlib or gzip
+  # framing `inflateInit/1` would otherwise expect.
+  @raw_deflate_window -15
+
+  @inflate_chunk 65_536
+
+  @doc false
+  # Bounds the extraction BEFORE anything is written (#189, ADR-0046 F8).
+  #
+  # The declared sizes cannot carry this check. `:zip.list_dir/1` reports
+  # what an archive SAYS each entry expands to, and that number is the
+  # attacker's to write: measured on OTP 29.0.2, an entry declaring 100
+  # bytes in BOTH the local header and the central directory still had
+  # 10,000,000 bytes written to disk by `:zip.unzip/2`, with no error — the
+  # extractor never consults the declared size at all. So the size bound is
+  # enforced against a real inflate, run here with the output discarded.
+  #
+  # Cheapest reject first: a stat, then a listing, then one pread per
+  # entry, and only then the inflate. A pack that escapes its extraction
+  # dir or declares 100k entries is refused without a byte being inflated —
+  # otherwise a traversal zip bomb would cost a gigabyte of inflate CPU
+  # before the name check that was going to reject it anyway (ふじ).
+  def verify_archive(zip_path) do
+    with :ok <- verify_archive_bytes(zip_path),
+         {:ok, entries} <- central_entries(zip_path),
+         :ok <- verify_entry_count(entries),
+         :ok <- verify_entry_names(zip_path) do
+      measure_entries(zip_path, entries, @max_extracted_bytes)
+    end
+  end
+
+  @doc false
+  # The size walk with the bound supplied by the caller. Public in this
+  # form because the production bound is a gigabyte: staging an archive
+  # that crosses it costs seconds per case, so the boundary itself, the
+  # drain loop and the per-method accounting are pinned against small
+  # bounds here, and one end-to-end case with a real bomb pins that
+  # `verify_archive/1` passes @max_extracted_bytes through.
+  def measure_archive(zip_path, limit) do
+    with {:ok, entries} <- central_entries(zip_path) do
+      measure_entries(zip_path, entries, limit)
+    end
+  end
+
+  # STORE is why this bound exists. A deflate entry ends its own stream, so
+  # the walk below measures it exactly; a stored entry has no terminator,
+  # and its length lives only in the declared field just shown to be
+  # forgeable. What cannot be forged is the archive's own size on disk, and
+  # STORE does not expand — so capping the file caps everything STORE can
+  # contribute (ふじ案 a, 2026-08-04).
+  #
+  # Stored entries are still added up below at their declared length, which
+  # keeps mixed archives honest. Understating it is not a bypass: the
+  # extractor reads exactly that many bytes for a stored entry, so a
+  # smaller declaration writes less (an entry declaring 0 — the streamed
+  # `data descriptor` shape — makes it refuse the archive outright,
+  # measured for both methods).
+  defp verify_archive_bytes(zip_path) do
+    case File.stat(zip_path) do
+      {:ok, %File.Stat{size: size}} when size > @max_extracted_bytes ->
+        {:error, "archive is #{size} bytes, over the #{@max_extracted_bytes} byte limit"}
+
+      {:ok, _stat} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, "cannot stat archive: #{inspect(reason)}"}
+    end
+  end
+
+  # Directory entries count too: 4096 has room to spare for a legitimate
+  # pack, so special-casing them would buy a branch and nothing else.
+  #
+  # Counting from the central directory is what the extractor does —
+  # measured on OTP 29.0.2, an archive whose EOCD listed 1 of its 2 entries
+  # extracted exactly the listed one, so an entry reachable only through a
+  # local header is not a way past this.
+  defp verify_entry_count(entries) do
+    count = length(entries)
+
+    if count > @max_entries do
+      {:error, "archive holds #{count} entries, over the #{@max_entries} entry limit"}
+    else
+      :ok
+    end
+  end
+
+  defp measure_entries(zip_path, entries, limit) do
+    with {:ok, fd} <- open_raw(zip_path) do
+      try do
+        with {:ok, headers} <- measurable_headers(fd, entries) do
+          measure_extracted(fd, headers, limit)
+        end
+      after
+        File.close(fd)
+      end
+    end
+  end
+
+  # Every local header is read and vetted before the first inflate, so an
+  # unmeasurable entry cannot hide behind a legitimate-looking first one
+  # and cost a gigabyte of CPU on the way to being rejected.
+  #
+  # The LOCAL header is the source of truth throughout, because it is what
+  # the extractor uses: measured on OTP 29.0.2, an entry whose central
+  # directory said STORE and whose local header said DEFLATE was inflated,
+  # and the reverse was refused. Reading the method from the central copy
+  # would reintroduce exactly the declared-value bypass this whole preflight
+  # exists to close, so that copy is never consulted (ふじ).
+  defp measurable_headers(fd, entries) do
+    entries
+    |> Enum.reduce_while({:ok, []}, fn {_name, offset, comp_size}, {:ok, acc} ->
+      with {:ok, header} <- read_local_header(fd, offset),
+           :ok <- measurable_entry(header) do
+        {:cont, {:ok, [authoritative_span(header, comp_size) | acc]}}
+      else
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, headers} -> {:ok, Enum.reverse(headers)}
+      error -> error
+    end
+  end
+
+  # How many compressed bytes the extractor will actually read for this
+  # entry. Normally the local header's own field; for a data-descriptor
+  # entry it is the central directory's, because that is the one OTP reads
+  # (see `@flag_data_descriptor`). The FLAG is still taken from the local
+  # header, matching `get_z_file/9`, so a central-only flag cannot redirect
+  # which field is trusted.
+  defp authoritative_span(%{flags: flags} = header, central_comp_size) do
+    if Bitwise.band(flags, @flag_data_descriptor) != 0 do
+      %{header | compressed: central_comp_size}
+    else
+      header
+    end
+  end
+
+  defp measurable_entry(%{name: name, flags: flags, method: method}) do
+    cond do
+      Bitwise.band(flags, @flag_encrypted) != 0 ->
+        {:error, "encrypted entry cannot be size-checked: #{inspect(name)}"}
+
+      method not in [@method_stored, @method_deflate] ->
+        {:error, "unsupported compression method #{method}: #{inspect(name)}"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp measure_extracted(fd, headers, limit) do
+    headers
+    |> Enum.reduce_while({:ok, 0}, fn header, {:ok, total} ->
+      case measure_entry(fd, header, total, limit) do
+        {:ok, total} -> {:cont, {:ok, total}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, _total} -> :ok
+      error -> error
+    end
+  end
+
+  defp measure_entry(_fd, %{method: @method_stored} = header, total, limit) do
+    within_limit(total + header.compressed, header.name, limit)
+  end
+
+  # `:zlib.safeInflate/2` does not REPORT a corrupt stream, it raises
+  # (`ErlangError` carrying `:data_error`, measured on OTP 29.0.2 by feeding
+  # it random bytes). Left uncaught, that exception walks out through
+  # `rebuild/0` — whose own rescue is deliberately narrowed to `File.Error`
+  # — and one truncated or bit-rotted pack in the ingest dir stops the
+  # server booting and crash-loops PersonaWatcher while it runs.
+  #
+  # That would also be a REGRESSION this preflight introduced: the same
+  # archive handed straight to `:zip.unzip/2` comes back as
+  # `{:error, {:EXIT, {:data_error, _}}}`, which `classify_zip_error/2`
+  # already classifies as this pack's problem and skips (measured both
+  # ways). A malformed stream is the pack's fault, so it is reported as
+  # one — exactly what ADR-0029 requires.
+  #
+  # ONLY `:data_error`, though. zlib also raises `:badarg`,
+  # `:not_initialized`, `:not_on_controlling_process` and `:stream_error`,
+  # and none of those describe bad INPUT — they describe this module
+  # misusing the stream. Turning them into a pack error would hide our own
+  # defect behind a silently skipped pack, so they are re-raised (ふじ S1).
+  # The `MatchError` from the `inflateInit` assertion is left uncaught for
+  # the same reason.
+  defp measure_entry(fd, %{method: @method_deflate} = header, total, limit) do
+    z = :zlib.open()
+
+    try do
+      :ok = :zlib.inflateInit(z, @raw_deflate_window)
+      inflate_entry(fd, z, header, header.data_offset, header.compressed, total, limit)
+    rescue
+      e in ErlangError ->
+        if e.original == :data_error do
+          {:error, "cannot inflate #{inspect(header.name)}: #{inspect(e.original)}"}
+        else
+          reraise e, __STACKTRACE__
+        end
+    after
+      :zlib.close(z)
+    end
+  end
+
+  # Reads exactly the compressed span the extractor would read, in fixed
+  # chunks, and throws the inflated bytes away once counted — so memory
+  # stays at one chunk however far the entry expands.
+  defp inflate_entry(_fd, _z, _header, _offset, remaining, total, _limit) when remaining <= 0 do
+    {:ok, total}
+  end
+
+  defp inflate_entry(fd, z, header, offset, remaining, total, limit) do
+    case :file.pread(fd, offset, min(@inflate_chunk, remaining)) do
+      {:ok, chunk} ->
+        case pump(z, chunk, header.name, total, limit) do
+          {:ok, total} ->
+            inflate_entry(
+              fd,
+              z,
+              header,
+              offset + byte_size(chunk),
+              remaining - byte_size(chunk),
+              total,
+              limit
+            )
+
+          error ->
+            error
+        end
+
+      :eof ->
+        {:ok, total}
+
+      {:error, reason} ->
+        {:error, "cannot read archive data: #{inspect(reason)}"}
+    end
+  end
+
+  # `:zlib.safeInflate/2` takes its input once and then has to be drained
+  # with `[]` until it stops answering `:continue`; handing it the next
+  # chunk while output is still queued would lose that output (ふじ).
+  #
+  # Measured on OTP 29.0.2: `:finished` means "the queued input is spent",
+  # NOT "the deflate stream ended" — a 500 KB entry fed in 8 chunks
+  # answered `:finished` once per chunk and totalled its real size exactly.
+  # Reading it as end-of-stream would stop after the first chunk and
+  # undercount every entry larger than one. A truncated stream ends the
+  # drain in a finite number of calls, so a malformed entry cannot spin.
+  defp pump(z, data, name, total, limit) do
+    case :zlib.safeInflate(z, data) do
+      {:finished, out} ->
+        within_limit(total + :erlang.iolist_size(out), name, limit)
+
+      {:continue, out} ->
+        case within_limit(total + :erlang.iolist_size(out), name, limit) do
+          {:ok, total} -> pump(z, [], name, total, limit)
+          error -> error
+        end
+    end
+  end
+
+  # Checked per drain rather than per entry, so a bomb stops inflating the
+  # moment it crosses the line instead of running to its end.
+  defp within_limit(total, name, limit) when total > limit do
+    {:error, "extracted size exceeds #{limit} bytes (reached #{total} at #{inspect(name)})"}
+  end
+
+  defp within_limit(total, _name, _limit), do: {:ok, total}
+
   @doc false
   # `:zip.unzip/2` writes wherever the entry names point: an absolute name
   # or one escaping through `..` lands outside `cwd` entirely (zip slip,
@@ -888,8 +1208,8 @@ defmodule KaoiroServer.PersonaAssets do
     case :zip.list_dir(String.to_charlist(zip_path)) do
       {:ok, entries} ->
         named =
-          for {:zip_file, name, _info, _comment, offset, _comp_size} <- entries,
-              do: {List.to_string(name), offset}
+          for {:zip_file, name, _info, _comment, offset, comp_size} <- entries,
+              do: {List.to_string(name), offset, comp_size}
 
         {:ok, named}
 
@@ -905,9 +1225,9 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  defp verify_entry(fd, {central_name, offset}) do
+  defp verify_entry(fd, {central_name, offset, _comp_size}) do
     with :ok <- safe_entry_name(central_name, "central directory"),
-         {:ok, local_name} <- read_local_name(fd, offset),
+         {:ok, %{name: local_name}} <- read_local_header(fd, offset),
          :ok <- safe_entry_name(local_name, "local header") do
       if local_name == central_name do
         :ok
@@ -927,12 +1247,31 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  defp read_local_name(fd, offset) do
+  # Both the name check and the size accounting read this header, and both
+  # need it to be the LOCAL one — see `measurable_headers/2`. `compressed`
+  # is the span the extractor reads for this entry, and `data_offset` is
+  # where that span starts (past the name and the extra field).
+  defp read_local_header(fd, offset) do
     case :file.pread(fd, offset, @local_header_size) do
       {:ok,
-       <<@local_header_signature::little-32, _fixed::binary-size(22), name_len::little-16,
-         _extra_len::little-16>>} ->
-        read_exact(fd, offset + @local_header_size, name_len)
+       <<@local_header_signature::little-32, _version::little-16, flags::little-16,
+         method::little-16, _modified::little-32, _crc::little-32, compressed::little-32,
+         uncompressed::little-32, name_len::little-16, extra_len::little-16>>} ->
+        name_offset = offset + @local_header_size
+        extra_offset = name_offset + name_len
+
+        with {:ok, name} <- read_exact(fd, name_offset, name_len, "local file header name"),
+             {:ok, span} <-
+               local_span(fd, extra_offset, extra_len, flags, compressed, uncompressed) do
+          {:ok,
+           %{
+             name: name,
+             flags: flags,
+             method: method,
+             compressed: span,
+             data_offset: extra_offset + extra_len
+           }}
+        end
 
       {:ok, _other} ->
         {:error, "bad local file header signature at offset #{offset}"}
@@ -942,12 +1281,85 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  defp read_exact(_fd, _offset, 0), do: {:ok, ""}
+  # The compressed span this entry's LOCAL header declares. A data
+  # descriptor entry's local sizes are placeholders, and the central
+  # directory's copy replaces them later (`authoritative_span/2`) — the
+  # sentinel must NOT be resolved from the extra field there, since without
+  # bit 3 the local side is the authority and substituting the central one
+  # would let the two be played off against each other (ふじ M1).
+  defp local_span(fd, extra_offset, extra_len, flags, compressed, uncompressed) do
+    cond do
+      Bitwise.band(flags, @flag_data_descriptor) != 0 ->
+        {:ok, compressed}
 
-  defp read_exact(fd, offset, length) do
+      compressed != @size_sentinel ->
+        {:ok, compressed}
+
+      true ->
+        zip64_span(fd, extra_offset, extra_len, uncompressed, compressed)
+    end
+  end
+
+  defp zip64_span(fd, extra_offset, extra_len, uncompressed, compressed) do
+    with {:ok, extra} <- read_exact(fd, extra_offset, extra_len, "ZIP64 extra field") do
+      case zip64_record(extra) do
+        {:ok, payload} -> {:ok, zip64_sizes(payload, uncompressed, compressed)}
+        :error -> {:error, "ZIP64 size marker without a usable extra field"}
+      end
+    end
+  end
+
+  # TLV walk to the ZIP64 record. Anything else (timestamps, unix uid/gid)
+  # is stepped over by its declared length; a length running past the end
+  # fails the match and lands on the `:error` clause.
+  defp zip64_record(
+         <<@zip64_extra_id::little-16, len::little-16, payload::binary-size(len), _rest::binary>>
+       ),
+       do: {:ok, payload}
+
+  defp zip64_record(<<_id::little-16, len::little-16, _skip::binary-size(len), rest::binary>>),
+    do: zip64_record(rest)
+
+  defp zip64_record(_extra), do: :error
+
+  # This mirrors OTP's `update_zip64/2` (stdlib 8.0.1 `zip.erl`), and it has
+  # to: the record is NOT a fixed layout that can be indexed into. It is a
+  # LOOP that re-tests each field after consuming 8 bytes, so when a 64-bit
+  # value is ITSELF 0xffffffff the extractor consumes another 8 bytes for
+  # the same field and takes comp_size from further along.
+  #
+  # Reading it positionally — skip 8 iff the 32-bit uncompressed field was
+  # sentinel, then take the next 8 — puts comp_size one slot early on such a
+  # record, so the preflight measures a span the extractor never reads. The
+  # regression test pins that bypass against a 999,999-byte bound; the ratio
+  # is what matters, so the same shape walks past the production 1 GiB bound
+  # (レビュー Critical, 2026-08-04).
+  #
+  # The equivalence claimed here holds WITHIN the first ZIP64 record — the
+  # one `zip64_record/1` selects. OTP walks every extra record, so a
+  # duplicate one could resolve a field this leaves at the sentinel. That
+  # difference can only ever LEAVE a field sentinel-valued, which is the
+  # safe side under the current bounds: a STORE entry is then counted as
+  # 0xffffffff and rejected as oversized, and a DEFLATE entry reads to EOF
+  # within the archive-size cap. It never measures less than the extractor
+  # reads (ふじ, 2026-08-04).
+  defp zip64_sizes(<<value::little-64, rest::binary>>, @size_sentinel, compressed),
+    do: zip64_sizes(rest, value, compressed)
+
+  defp zip64_sizes(<<value::little-64, rest::binary>>, uncompressed, @size_sentinel),
+    do: zip64_sizes(rest, uncompressed, value)
+
+  defp zip64_sizes(_rest, _uncompressed, compressed), do: compressed
+
+  # `what` names the field being read: the same truncation now reaches here
+  # from the entry name and from the ZIP64 extra, and a fixed "name" in the
+  # message sends whoever reads the skip log to the wrong offset.
+  defp read_exact(_fd, _offset, 0, _what), do: {:ok, ""}
+
+  defp read_exact(fd, offset, length, what) do
     case :file.pread(fd, offset, length) do
       {:ok, bin} when byte_size(bin) == length -> {:ok, bin}
-      _ -> {:error, "truncated local file header name at offset #{offset}"}
+      _ -> {:error, "truncated #{what} at offset #{offset}"}
     end
   end
 
