@@ -18,10 +18,15 @@ describe("loadSettings", () => {
   });
 
   it("保存済み値を round-trip で復元する", () => {
-    saveSettings({ notificationSoundEnabled: false, notificationSoundVolume: 0.3 });
+    saveSettings({
+      notificationSoundEnabled: false,
+      notificationSoundVolume: 0.3,
+      agentCardStatsEnabled: false,
+    });
     expect(loadSettings()).toEqual({
       notificationSoundEnabled: false,
       notificationSoundVolume: 0.3,
+      agentCardStatsEnabled: false,
     });
   });
 
@@ -58,16 +63,39 @@ describe("loadSettings", () => {
       DEFAULT_SETTINGS.notificationSoundVolume,
     );
   });
+
+  it("agentCardStatsEnabled の保存値を復元する", () => {
+    localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({ agentCardStatsEnabled: false }),
+    );
+    expect(loadSettings().agentCardStatsEnabled).toBe(false);
+  });
+
+  it("agentCardStatsEnabled が boolean でなければ default に戻す", () => {
+    localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({ agentCardStatsEnabled: "yes" }),
+    );
+    expect(loadSettings().agentCardStatsEnabled).toBe(
+      DEFAULT_SETTINGS.agentCardStatsEnabled,
+    );
+  });
 });
 
 describe("updateSettings", () => {
   it("設定を更新して永続化する", () => {
-    updateSettings({ notificationSoundEnabled: false, notificationSoundVolume: 0.2 });
+    updateSettings({
+      notificationSoundEnabled: false,
+      notificationSoundVolume: 0.2,
+      agentCardStatsEnabled: true,
+    });
     expect(settings.notificationSoundEnabled).toBe(false);
     expect(settings.notificationSoundVolume).toBe(0.2);
     expect(loadSettings()).toEqual({
       notificationSoundEnabled: false,
       notificationSoundVolume: 0.2,
+      agentCardStatsEnabled: true,
     });
   });
 
@@ -81,5 +109,19 @@ describe("updateSettings", () => {
     updateSettings({ notificationSoundEnabled: false });
     expect(settings.notificationSoundEnabled).toBe(false);
     expect(settings.notificationSoundVolume).toBe(0.5);
+  });
+
+  it("agentCardStatsEnabled を更新して永続化する", () => {
+    updateSettings({ agentCardStatsEnabled: false });
+    expect(settings.agentCardStatsEnabled).toBe(false);
+    expect(loadSettings().agentCardStatsEnabled).toBe(false);
+  });
+
+  it("agentCardStatsEnabled のみの更新は他の設定を保持する", () => {
+    updateSettings({ notificationSoundEnabled: false, notificationSoundVolume: 0.5 });
+    updateSettings({ agentCardStatsEnabled: false });
+    expect(settings.notificationSoundEnabled).toBe(false);
+    expect(settings.notificationSoundVolume).toBe(0.5);
+    expect(settings.agentCardStatsEnabled).toBe(false);
   });
 });

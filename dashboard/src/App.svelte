@@ -1640,6 +1640,10 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
     gap: 1.2rem;
+    /* Kept identical to AgentGridShell's `.agents` (see its comment,
+       issue #193): directory-only tiles never show the stats block, but
+       stay consistent so the two grids never silently drift apart. */
+    align-items: start;
   }
 
   .dashboard.with-offline .offline[open] .agents {

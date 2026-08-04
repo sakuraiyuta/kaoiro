@@ -86,6 +86,13 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
     gap: 1.2rem;
+    /* Grid's default stretch would equalize every row's card height to its
+       tallest member. AgentCard's optional stats block (issue #193) now
+       makes card height vary a lot more than before (badges/labels alone),
+       so a stats-less neighbour would stretch far past its own content and
+       strand its corner buttons well below the sprite. Each card sizes to
+       its own content instead. */
+    align-items: start;
   }
 
   /* Operator sessions: pin the grid to 3 columns so the right pane

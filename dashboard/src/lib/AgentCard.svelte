@@ -3,12 +3,14 @@
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import {
+    engineFrom,
     pendingPermissionFrom,
     pendingQuestionFrom,
     RUNNING_STATES,
     STOP_SAFE_STATES,
   } from "./protocol";
   import type { Envelope, PersonaManifest } from "./protocol";
+  import { settings } from "./settings.svelte";
 
   let {
     envelope,
@@ -85,6 +87,191 @@
     envelope.state === "waiting_permission" ||
       envelope.state === "waiting_question" ||
       envelope.state === "error",
+  );
+
+  // --- engine·model·effort / ctx·5h·7day stats (issue #193) ---
+  // agent_id itself (the existing `.id` element below) predates #193 and is
+  // NOT part of this block or its settings toggle — it is a top-level
+  // envelope field the server sends to viewers too, so it cannot be gated
+  // by ext-presence, and this issue never asked it to be (director
+  // clarification, round 2: the issue text calling for an "agent_id row"
+  // was written before noticing the row already existed).
+  // Everything else here is sourced from ext.*, which the server never
+  // delivers to viewers (ADR-0021) — so "render only when the field is
+  // present" alone already satisfies the operator-only requirement without
+  // a separate role check. Kept local (not shared with AgentDetail.svelte,
+  // which has its own richer capability-gated version): #193 scopes
+  // AgentDetail as out of bounds, and this card only needs a plain
+  // "show if present" read, not AgentDetail's switch-state / capability
+  // tri-state machinery.
+
+  /** Normalise a rate-limit utilization (0-1 fraction, or already a
+   *  percentage) to an integer 0..100. */
+  function pctNorm(value: unknown): number | null {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    const pct = value <= 1 ? value * 100 : value;
+    return Math.max(0, Math.min(100, Math.round(pct)));
+  }
+
+  /** Clamp an already-percentage value (0-100) — ctx's used_percentage. */
+  function pctClamp(value: unknown): number | null {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    return Math.max(0, Math.min(100, Math.round(value)));
+  }
+
+  /** A finite epoch ms, or null for anything that would render as an
+   *  Invalid Date (out of JS's representable range despite being a finite
+   *  number — ふじ round-2 S2). Centralised here so every consumer (the
+   *  resetComplete check, fmtHHMM, fmtMD, the timer's deadline scan) is
+   *  covered without re-checking `new Date(...).getTime()` at each site. */
+  function resetAtMs(value: unknown): number | null {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    const ms = value < 1e12 ? value * 1000 : value;
+    return Number.isFinite(new Date(ms).getTime()) ? ms : null;
+  }
+
+  /** Non-empty (post-trim) string, or null — ふじ round-2 S2: ccModel /
+   *  ccEffort must reject "" the same way protocol.ts's engineFrom does,
+   *  and additionally reject whitespace-only values so a blank-but-present
+   *  field cannot render as an empty slot in the combined meta line. */
+  function nonEmptyString(value: unknown): string | null {
+    return typeof value === "string" && value.trim() !== "" ? value : null;
+  }
+
+  /** HH:MM, 24h, zero-padded — the 5h bar's reset display (e.g. "05:24"). */
+  function fmtHHMM(atMs: number): string {
+    const d = new Date(atMs);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(
+      d.getMinutes(),
+    ).padStart(2, "0")}`;
+  }
+
+  /** M/D, no zero-padding — the 7day bar's reset display (e.g. "8/7"). */
+  function fmtMD(atMs: number): string {
+    const d = new Date(atMs);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  }
+
+  const agentEngine = $derived(engineFrom(envelope));
+  const ccModel = $derived(nonEmptyString(envelope.ext?.model));
+  const ccEffort = $derived.by(() => {
+    const raw = envelope.ext?.effective;
+    if (typeof raw !== "object" || raw === null) return null;
+    return nonEmptyString((raw as Record<string, unknown>).effort);
+  });
+  // Combined engine/model/effort line (issue #193 sketch: one row). Missing
+  // fields drop out of the join; the whole line hides only once ALL three
+  // are absent, so a partial ext payload still shows what it has.
+  const metaLine = $derived(
+    [agentEngine, ccModel, ccEffort].filter((v) => v !== null).join(" / "),
+  );
+
+  const ccContext = $derived(
+    envelope.ext?.context as Record<string, unknown> | undefined,
+  );
+  const ctxPct = $derived(pctClamp(ccContext?.used_percentage));
+  const ccRateLimits = $derived(
+    envelope.ext?.rate_limits as Record<string, unknown> | undefined,
+  );
+
+  interface RateBar {
+    pct: number | null;
+    reset: string | null;
+    status: string | undefined;
+    resetComplete: boolean;
+  }
+
+  /** rate_limits is a last-turn snapshot (does not update while idle) — once
+   *  its resets_at has passed, its utilization/status describe a dead
+   *  window and must not read as live usage (issue #193). Equality stays
+   *  live, matching AgentDetail's identical rule. Returns null both when the
+   *  window is absent AND when it carries nothing displayable (no pct, no
+   *  reset, not reset-complete) — the row hides rather than showing a bare
+   *  "?", which would only clutter this compact card. */
+  function buildRateBar(
+    raw: unknown,
+    fmtReset: (atMs: number) => string,
+    now: number,
+  ): RateBar | null {
+    if (typeof raw !== "object" || raw === null) return null;
+    const win = raw as Record<string, unknown>;
+    const resetsAt = resetAtMs(win.resets_at);
+    const resetComplete = resetsAt !== null && resetsAt < now;
+    const pct = resetComplete ? 0 : pctNorm(win.utilization);
+    const reset = !resetComplete && resetsAt !== null ? fmtReset(resetsAt) : null;
+    if (pct === null && reset === null && !resetComplete) return null;
+    return {
+      pct,
+      reset,
+      status: resetComplete
+        ? "allowed"
+        : typeof win.status === "string"
+          ? win.status
+          : undefined,
+      resetComplete,
+    };
+  }
+
+  function rateBarLabel(bar: RateBar): string {
+    if (bar.resetComplete) return "リセット済み";
+    const parts: string[] = [];
+    if (bar.pct !== null) parts.push(`${bar.pct}%`);
+    if (bar.reset !== null) parts.push(bar.reset);
+    return parts.length > 0 ? parts.join(" ・ ") : "?";
+  }
+
+  // Browser/Node timers clamp a delay above signed int32 to 1ms.
+  const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+  // A snapshot's resets_at can pass while this card sits untouched in the
+  // grid (no new envelope to re-derive from) — wake once at that boundary so
+  // a stale window falls to "リセット済み" without waiting on next activity.
+  // ふじ round-2 S1: gated on the toggle (a grid can hold many cards, and
+  // #184 already paid down a dashboard input-lag regression from a similar
+  // per-tile-timer cost — a hidden card must not keep one alive) and scoped
+  // to only the two windows actually rendered, so an unrendered window
+  // (`seven_day_opus`, `overage`, ...) cannot arm a timer for a bar nobody
+  // sees. Reading `settings.agentCardStatsEnabled` here makes toggling it
+  // off a reactive dependency: Svelte re-runs this effect, invoking the
+  // PREVIOUS run's cleanup (clearing any live timer) before the guard below
+  // exits early with no new one.
+  let statsClock = $state(Date.now());
+  $effect(() => {
+    if (!settings.agentCardStatsEnabled) return;
+    const limits = ccRateLimits;
+    statsClock;
+    const now = Date.now();
+    let next: number | null = null;
+    for (const key of ["five_hour", "seven_day"] as const) {
+      const win = limits?.[key];
+      if (typeof win !== "object" || win === null) continue;
+      const at = resetAtMs((win as Record<string, unknown>).resets_at);
+      if (at !== null && at >= now && (next === null || at < next)) next = at;
+    }
+    if (next === null) return;
+    const timer = window.setTimeout(
+      () => {
+        statsClock = Date.now();
+      },
+      Math.min(Math.max(0, next - now) + 1, MAX_TIMER_DELAY_MS),
+    );
+    return () => window.clearTimeout(timer);
+  });
+
+  const fiveHourBar = $derived.by(() => {
+    statsClock;
+    return buildRateBar(ccRateLimits?.five_hour, fmtHHMM, Date.now());
+  });
+  const sevenDayBar = $derived.by(() => {
+    statsClock;
+    return buildRateBar(ccRateLimits?.seven_day, fmtMD, Date.now());
+  });
+  const hasStats = $derived(
+    settings.agentCardStatsEnabled &&
+      (metaLine !== "" ||
+        ctxPct !== null ||
+        fiveHourBar !== null ||
+        sevenDayBar !== null),
   );
 
   // Interrupt button visible only when the agent is executing (#51 C2). Live
@@ -238,6 +425,40 @@
       <p class="state">{expression.label}</p>
     {/key}
     <p class="id">{envelope.agent_id}</p>
+    {#if hasStats}
+      <div class="stats">
+        {#if metaLine !== ""}
+          <p class="meta-line">{metaLine}</p>
+        {/if}
+        {#if ctxPct !== null}
+          <div class="stat-row">
+            <span class="stat-label">ctx</span>
+            <div class="meter">
+              <div class="meter-fill" style:width="{ctxPct}%"></div>
+            </div>
+            <span class="meter-val">{ctxPct}%</span>
+          </div>
+        {/if}
+        {#if fiveHourBar !== null}
+          <div class="stat-row">
+            <span class="stat-label">5h</span>
+            <div class="meter" data-status={fiveHourBar.status}>
+              <div class="meter-fill" style:width="{fiveHourBar.pct ?? 0}%"></div>
+            </div>
+            <span class="meter-val">{rateBarLabel(fiveHourBar)}</span>
+          </div>
+        {/if}
+        {#if sevenDayBar !== null}
+          <div class="stat-row">
+            <span class="stat-label">7day</span>
+            <div class="meter" data-status={sevenDayBar.status}>
+              <div class="meter-fill" style:width="{sevenDayBar.pct ?? 0}%"></div>
+            </div>
+            <span class="meter-val">{rateBarLabel(sevenDayBar)}</span>
+          </div>
+        {/if}
+      </div>
+    {/if}
   </button>
   {#if canStop}
     <button
@@ -543,6 +764,66 @@
     font-size: var(--fs-caption);
     color: var(--fg-dim);
     overflow-wrap: anywhere;
+  }
+
+  /* engine·model·effort / ctx·5h·7day (issue #193). Bottom
+     margin reserves room for the terminate/interrupt/restore/delete chips,
+     which are absolutely positioned in the card's bottom corners and would
+     otherwise sit on top of the last bar. */
+  .stats {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin: 0.5rem 0 1.7rem;
+    text-align: left;
+  }
+
+  .meta-line {
+    margin: 0;
+    font-size: var(--fs-caption);
+    color: var(--fg-dim);
+    overflow-wrap: anywhere;
+  }
+
+  .stat-row {
+    display: grid;
+    grid-template-columns: 2.4rem 1fr auto;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .stat-label {
+    font-size: var(--fs-micro);
+    color: var(--fg-dim);
+  }
+
+  .stats .meter {
+    width: 100%;
+    height: 0.4rem;
+    border-radius: 0.25rem;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    overflow: hidden;
+  }
+
+  .stats .meter-fill {
+    height: 100%;
+    background: var(--c-waiting_input);
+  }
+
+  .stats .meter[data-status="allowed_warning"] .meter-fill {
+    background: var(--c-tool_running);
+  }
+
+  .stats .meter[data-status="rejected"] .meter-fill {
+    background: var(--c-error);
+  }
+
+  .stats .meter-val {
+    font-size: var(--fs-micro);
+    color: var(--fg-dim);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   /* Card has the interrupt button as a sibling of the open region, so make

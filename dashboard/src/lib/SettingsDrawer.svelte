@@ -53,6 +53,18 @@
       >{Math.round(settings.notificationSoundVolume * 100)}%</span
     >
   </label>
+
+  <label class="row">
+    <input
+      type="checkbox"
+      checked={settings.agentCardStatsEnabled}
+      onchange={(e) =>
+        updateSettings({
+          agentCardStatsEnabled: e.currentTarget.checked,
+        })}
+    />
+    カードに engine・model・effort と ctx・5h・7day を表示
+  </label>
 </div>
 
 <style>

@@ -5,6 +5,13 @@
 export interface Settings {
   notificationSoundEnabled: boolean;
   notificationSoundVolume: number;
+  /** AgentCard の engine・model・effort / ctx・5h・7day 追加表示 (issue #193)。
+   *  agent_id 行は #193 以前からの既存表示でこのトグルの対象外 — 常に表示
+   *  する (envelope の top-level フィールドで viewer にも配信されるため
+   *  ext の有無ではそもそも gate できない)。ext はそもそも viewer に配信
+   *  されない (ADR-0021) ので、この設定は operator 限定表示を別途判定せず
+   *  自然に満たす。既定 on。 */
+  agentCardStatsEnabled: boolean;
 }
 
 export const SETTINGS_STORAGE_KEY = "kaoiro:settings:v1";
@@ -12,6 +19,7 @@ export const SETTINGS_STORAGE_KEY = "kaoiro:settings:v1";
 export const DEFAULT_SETTINGS: Settings = {
   notificationSoundEnabled: true,
   notificationSoundVolume: 0.7,
+  agentCardStatsEnabled: true,
 };
 
 function clampVolume(value: number): number {
@@ -34,7 +42,15 @@ export function loadSettings(): Settings {
       Number.isFinite(parsed.notificationSoundVolume)
         ? clampVolume(parsed.notificationSoundVolume)
         : DEFAULT_SETTINGS.notificationSoundVolume;
-    return { notificationSoundEnabled: enabled, notificationSoundVolume: volume };
+    const agentCardStatsEnabled =
+      typeof parsed.agentCardStatsEnabled === "boolean"
+        ? parsed.agentCardStatsEnabled
+        : DEFAULT_SETTINGS.agentCardStatsEnabled;
+    return {
+      notificationSoundEnabled: enabled,
+      notificationSoundVolume: volume,
+      agentCardStatsEnabled,
+    };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -61,6 +77,9 @@ export function updateSettings(patch: Partial<Settings>): void {
   }
   if (patch.notificationSoundVolume !== undefined) {
     settings.notificationSoundVolume = clampVolume(patch.notificationSoundVolume);
+  }
+  if (patch.agentCardStatsEnabled !== undefined) {
+    settings.agentCardStatsEnabled = patch.agentCardStatsEnabled;
   }
   saveSettings(settings);
 }
