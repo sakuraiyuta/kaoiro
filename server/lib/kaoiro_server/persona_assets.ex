@@ -863,6 +863,32 @@ defmodule KaoiroServer.PersonaAssets do
   @max_extracted_bytes 1024 * 1024 * 1024
   @max_entries 4096
 
+  # Bound on the region `:zip.list_dir/1` may read while enumerating (#194,
+  # ADR-0046 F8 追補), decided 2026-08-04 by クロエ: @max_entries KiB, 4 MiB.
+  # A healthy pack's central directory measures ~800 KB at the 4096-entry
+  # ceiling (46 fixed bytes plus a ~100-byte name and ~30 bytes of extra per
+  # entry), so this is roughly five times the plausible maximum.
+  #
+  # The bound exists because the entry COUNT alone does not cap the heap.
+  # `get_cd_loop/6` reads name + extra + comment per entry, each a 16-bit
+  # length, and OTP hands names and comments back as charlists — 16 bytes
+  # per character on a 64-bit VM. Measured on OTP 29.0.2: 500 entries with
+  # 64 KB names occupy 31 MB on disk and 516 MB of heap, an amplification of
+  # 16.5x. Extrapolated to the entry ceiling that is a 268 MB pack costing
+  # ~4.2 GB — inside the 1 GiB archive bound and inside 4096 entries, so
+  # neither existing limit sees it. At 4 MiB the same amplification tops out
+  # near 66 MB.
+  #
+  # Spent as ONE budget across every metadata region the enumeration reads,
+  # not per region: a ZIP64 record's own declared length is charged against
+  # the same 4 MiB as the central directory tail (ふじ, 2026-08-04). Keeping
+  # them separate would let an archive spend the cap twice, and a single
+  # figure is also what the "how much can listing cost" question actually
+  # asks. Excluded from the budget is the fixed tail window the record
+  # search itself walks — the doubling loop reads at most ~131 KB in total
+  # and OTP bounds it the same way, so it is not attacker-scaled.
+  @max_central_dir_bytes @max_entries * 1024
+
   # The two compression methods this preflight can account for, which are
   # also the only two OTP's extractor handles. An entry declaring anything
   # else cannot be measured, so the pack is refused rather than guessed at.
@@ -901,6 +927,27 @@ defmodule KaoiroServer.PersonaAssets do
 
   @inflate_chunk 65_536
 
+  # End of central directory records, mirrored from stdlib 8.0.1 `zip.erl`
+  # (see `read_eocd/2`). These carry the VALUES OTP's macros carry, which is
+  # not the same thing as the records' widths: ?END_OF_CENTRAL_DIR_64_LOCATOR_SZ
+  # is `(4+8+4)` = 16 (zip.erl:253) although a ZIP64 locator is physically 20
+  # bytes, and only the sum feeding the search window below is affected. Four
+  # bytes of difference is a bypass, not a rounding error — the window is what
+  # decides which record the search can see, so a wider one lets this preflight
+  # resolve a decoy at an offset `:zip.list_dir/1` never examines, and all
+  # three bounds are then computed from the decoy (レビュー must-fix,
+  # 2026-08-04; reproduced end to end). Copy the constant, never the format.
+  # @eocd64_fixed_size is ?END_OF_CENTRAL_DIR_64_SZ, the part of a ZIP64
+  # record before its trailing extra field, and IS a width.
+  @eocd_magic 0x06054B50
+  @eocd64_magic 0x06064B50
+  @eocd64_locator_magic 0x07064B50
+  @eocd_size 22
+  @eocd64_locator_size 16
+  @eocd64_fixed_size 44
+  @eocd64_header_size 12
+  @count_sentinel 0xFFFF
+
   @doc false
   # Bounds the extraction BEFORE anything is written (#189, ADR-0046 F8).
   #
@@ -912,13 +959,20 @@ defmodule KaoiroServer.PersonaAssets do
   # extractor never consults the declared size at all. So the size bound is
   # enforced against a real inflate, run here with the output discarded.
   #
-  # Cheapest reject first: a stat, then a listing, then one pread per
-  # entry, and only then the inflate. A pack that escapes its extraction
-  # dir or declares 100k entries is refused without a byte being inflated —
-  # otherwise a traversal zip bomb would cost a gigabyte of inflate CPU
-  # before the name check that was going to reject it anyway (ふじ).
+  # Cheapest reject first: a stat, then the end of central directory, then
+  # a listing, then one pread per entry, and only then the inflate. A pack
+  # that escapes its extraction dir or declares 100k entries is refused
+  # without a byte being inflated — otherwise a traversal zip bomb would
+  # cost a gigabyte of inflate CPU before the name check that was going to
+  # reject it anyway (ふじ).
+  #
+  # `verify_central_dir_bounds/2` comes before the listing because the
+  # listing is itself the resource being bounded: `:zip.list_dir/1`
+  # materialises the whole central directory, and until #194 nothing capped
+  # what that cost (ADR-0046 F8 追補).
   def verify_archive(zip_path) do
-    with :ok <- verify_archive_bytes(zip_path),
+    with {:ok, size} <- verify_archive_bytes(zip_path),
+         :ok <- verify_central_dir_bounds(zip_path, size),
          {:ok, entries} <- central_entries(zip_path),
          :ok <- verify_entry_count(entries),
          :ok <- verify_entry_names(zip_path) do
@@ -957,8 +1011,8 @@ defmodule KaoiroServer.PersonaAssets do
       {:ok, %File.Stat{size: size}} when size > @max_extracted_bytes ->
         {:error, "archive is #{size} bytes, over the #{@max_extracted_bytes} byte limit"}
 
-      {:ok, _stat} ->
-        :ok
+      {:ok, %File.Stat{size: size}} ->
+        {:ok, size}
 
       {:error, reason} ->
         {:error, "cannot stat archive: #{inspect(reason)}"}
@@ -1203,6 +1257,192 @@ defmodule KaoiroServer.PersonaAssets do
       end
     end
   end
+
+  # Bounds what `:zip.list_dir/1` may spend BEFORE it is called (#194).
+  #
+  # Three declared fields carry the check, and every one is used only in the
+  # refusing direction:
+  #
+  #   * the entry count, because `get_central_dir/4` hands it straight to
+  #     `get_cd_loop/6` as the iteration count (stdlib 8.0.1 `zip.erl`
+  #     1916-1921). Understating it enumerates FEWER entries, not more —
+  #     measured on OTP 29.0.2, an archive holding 400,000 records but
+  #     declaring 10 listed 11 in 1 ms, where declaring 400,000 cost 5.7 s
+  #     and 203 MB. Overstating it runs out of file and throws
+  #     `bad_central_directory`.
+  #   * the span from the declared central directory offset to end of file,
+  #     because `get_cd_loop/6` seeks to that offset and only reads forward,
+  #     so it caps the bytes the enumeration can touch whatever the count
+  #     says. Understating the offset makes the span LARGER and so refuses
+  #     sooner; overstating it seeks past the records and throws.
+  #   * a ZIP64 record's declared length, because `find_eocd64/5` reads that
+  #     many bytes BEFORE the central offset above is known (`zip.erl`
+  #     2121-2138). Without it, a record parked near the front of the file
+  #     could declare a gigabyte of body while its central offset sat just
+  #     inside the span bound: the span check passes and the read has already
+  #     happened (ふじ, 2026-08-04).
+  #
+  # The declared central directory SIZE is deliberately unused — OTP reads
+  # that field nowhere, so bounding it would bound nothing.
+  defp verify_central_dir_bounds(zip_path, size) do
+    with {:ok, fd} <- open_raw(zip_path) do
+      try do
+        with {:ok, eocd} <- read_eocd(fd, size) do
+          central_dir_within_bounds(eocd, size)
+        end
+      after
+        File.close(fd)
+      end
+    end
+  end
+
+  defp central_dir_within_bounds(%{entries: entries}, _size)
+       when entries > @max_entries do
+    {:error, "archive declares #{entries} entries, over the #{@max_entries} entry limit"}
+  end
+
+  defp central_dir_within_bounds(%{offset: offset}, size) when offset > size do
+    {:error, "central directory offset #{offset} is past the end of the archive"}
+  end
+
+  defp central_dir_within_bounds(%{offset: offset, meta_bytes: meta}, size) do
+    spent = size - offset + meta
+
+    if spent > @max_central_dir_bytes do
+      {:error,
+       "archive's listing metadata spans #{spent} bytes, over the " <>
+         "#{@max_central_dir_bytes} byte limit"}
+    else
+      :ok
+    end
+  end
+
+  # Mirrors stdlib 8.0.1 `zip.erl` `get_end_of_central_dir/4`, `find_eocd/1`
+  # and `find_eocd64/5`, so this preflight bounds the SAME record the
+  # enumeration goes on to read. An independent scan invites the two to
+  # disagree: OTP takes the first structural match walking FORWARD from
+  # `eof - window`, doubling the window on a miss, so a decoy record planted
+  # earlier in the tail wins there while a conventional backward scan takes
+  # the last one. #189 spent a review round on exactly that shape.
+  #
+  # `meta_bytes` is what resolving the record itself cost — 0 outside ZIP64,
+  # header plus declared body inside it — so the caller can charge every
+  # metadata region to one budget.
+  defp read_eocd(_fd, size) when size < @eocd_size do
+    {:error, "archive is #{size} bytes, too small to hold a central directory"}
+  end
+
+  defp read_eocd(fd, size) do
+    limit = min(@count_sentinel + @eocd_size + @eocd64_locator_size, size)
+    scan_eocd(fd, size, @eocd_size, limit)
+  end
+
+  defp scan_eocd(fd, size, window, limit) do
+    with {:ok, buf} <- read_exact(fd, size - window, window, "end of central directory") do
+      case find_eocd(buf) do
+        {:eocd, eocd} -> {:ok, eocd}
+        {:locator, eocd64_offset, eocd} -> read_eocd64(fd, size, eocd64_offset, eocd)
+        :none when window >= limit -> {:error, "no end of central directory record"}
+        :none -> scan_eocd(fd, size, min(window * 2, limit), limit)
+      end
+    end
+  end
+
+  # OTP's two record shapes, in its clause order, with its guards. The
+  # locator clause ANDs the two entry-count sentinels where the bare clause
+  # ORs them; that asymmetry is `zip.erl`'s, not a transcription slip. Both
+  # patterns must consume the buffer exactly — the comment length is what
+  # makes the record end at EOF — and a clause that matches structurally but
+  # fails its guard yields `:none` for the whole buffer rather than falling
+  # through to the byte walk, which is also OTP's behaviour.
+  defp find_eocd(
+         <<@eocd64_locator_magic::little-32, _locator_disk::little-32, eocd64_offset::little-64,
+           _total_disks::little-32, @eocd_magic::little-32, disk_num::little-16,
+           start_disk_num::little-16, entries_on_disk::little-16, entries::little-16,
+           cd_size::little-32, cd_offset::little-32, comment_len::little-16,
+           _comment::binary-size(comment_len)>>
+       ) do
+    if disk_num == @count_sentinel or start_disk_num == @count_sentinel or
+         (entries_on_disk == @count_sentinel and entries == @count_sentinel) or
+         cd_size == @size_sentinel or cd_offset == @size_sentinel do
+      {:locator, eocd64_offset, %{entries: entries, offset: cd_offset, meta_bytes: 0}}
+    else
+      :none
+    end
+  end
+
+  defp find_eocd(
+         <<@eocd_magic::little-32, disk_num::little-16, start_disk_num::little-16,
+           entries_on_disk::little-16, entries::little-16, cd_size::little-32,
+           cd_offset::little-32, comment_len::little-16, _comment::binary-size(comment_len)>>
+       ) do
+    if disk_num == @count_sentinel or start_disk_num == @count_sentinel or
+         entries_on_disk == @count_sentinel or entries == @count_sentinel or
+         cd_size == @size_sentinel or cd_offset == @size_sentinel do
+      :none
+    else
+      {:eocd, %{entries: entries, offset: cd_offset, meta_bytes: 0}}
+    end
+  end
+
+  defp find_eocd(<<_::8, rest::binary>>) when byte_size(rest) > @eocd_size - 4,
+    do: find_eocd(rest)
+
+  defp find_eocd(_), do: :none
+
+  # The header is read on its own so the declared length can be refused
+  # before it is honoured: OTP reads the body first and only then produces
+  # the central offset the span check needs, which is the whole reason this
+  # bound has to sit here rather than one level up.
+  defp read_eocd64(fd, size, offset, eocd) do
+    with {:ok, <<@eocd64_magic::little-32, declared::little-64>>} <-
+           read_exact(fd, offset, @eocd64_header_size, "ZIP64 end of central directory"),
+         spent = @eocd64_header_size + declared,
+         :ok <- eocd64_declared_ok(declared, spent, offset, size),
+         {:ok, body} <-
+           read_exact(
+             fd,
+             offset + @eocd64_header_size,
+             declared,
+             "ZIP64 end of central directory"
+           ),
+         <<_version_made_by::8, _os_made_by::8, _extract_version::little-16, _disk_num::little-32,
+           _start_disk_num::little-32, _entries_on_disk::little-64, entries::little-64,
+           _cd_size::little-64, cd_offset::little-64, _extra::binary>> <- body do
+      {:ok, %{eocd | entries: entries, offset: cd_offset, meta_bytes: spent}}
+    else
+      {:error, reason} ->
+        {:error, reason}
+
+      _ ->
+        {:error, "malformed ZIP64 end of central directory at offset #{offset}"}
+    end
+  end
+
+  defp eocd64_declared_ok(declared, _spent, offset, _size)
+       when declared < @eocd64_fixed_size do
+    {:error,
+     "ZIP64 end of central directory at offset #{offset} declares #{declared} " <>
+       "bytes, under the #{@eocd64_fixed_size} byte minimum"}
+  end
+
+  # The budget is checked before the end-of-file check on purpose: it needs
+  # nothing but the declared figure, so an absurd declaration is refused
+  # without the archive having to be large enough to make it look plausible.
+  defp eocd64_declared_ok(_declared, spent, _offset, _size)
+       when spent > @max_central_dir_bytes do
+    {:error,
+     "ZIP64 end of central directory declares #{spent} bytes, over the " <>
+       "#{@max_central_dir_bytes} byte limit"}
+  end
+
+  defp eocd64_declared_ok(_declared, spent, offset, size) when offset + spent > size do
+    {:error,
+     "ZIP64 end of central directory at offset #{offset} runs #{spent} bytes " <>
+       "past the end of the archive"}
+  end
+
+  defp eocd64_declared_ok(_declared, _spent, _offset, _size), do: :ok
 
   defp central_entries(zip_path) do
     case :zip.list_dir(String.to_charlist(zip_path)) do

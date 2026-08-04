@@ -1553,7 +1553,346 @@ defmodule KaoiroServer.PersonaAssetsTest do
     over = Path.join(tmp, "over.zip")
     File.write!(over, multi_entry_zip(for i <- 1..4097, do: {"f#{i}", ""}))
     assert {:error, msg} = PersonaAssets.verify_archive(over)
-    assert msg =~ "archive holds 4097 entries, over the 4096 entry limit"
+
+    # #194 以降、超過は列挙前の EOCD 先読みで弾かれる ("declares")。列挙後の
+    # `verify_entry_count/1` ("holds") は、OTP の列挙件数が申告値と一致しなく
+    # なった場合にだけ発火する backstop として残してある — その一致自体は
+    # 下の premise assertion で固定している。
+    assert msg =~ "archive declares 4097 entries, over the 4096 entry limit"
+  end
+
+  # premise assertion (ふじ 2026-08-04)。前検査が健全なのは「OTP の列挙件数が
+  # EOCD の申告値そのもの」だからで、それは我々のコードでなく upstream の性質。
+  # `get_central_dir/4` が `N = EOCD#eocd.entries` を `get_cd_loop/6` の
+  # ループ回数に渡している (stdlib 8.0.1 zip.erl 1916-1921)。ここが変われば
+  # 申告値による bound は無効になるので、同じテストで upstream を固定する。
+  @tag :tmp_dir
+  test "OTP は EOCD の申告 entry 数だけ列挙する (前検査の前提)", %{tmp_dir: tmp} do
+    under = Path.join(tmp, "under.zip")
+    File.write!(under, bounds_zip(records: 3, declared: 1))
+    assert {:ok, listed} = :zip.list_dir(String.to_charlist(under))
+    assert length(for {:zip_file, _, _, _, _, _} <- listed, do: 1) == 1
+
+    over = Path.join(tmp, "over.zip")
+    File.write!(over, bounds_zip(records: 3, declared: 5))
+    assert {:error, :bad_central_directory} = :zip.list_dir(String.to_charlist(over))
+  end
+
+  # premise assertion。4 MiB という上限は「name/comment が charlist で返る」
+  # ことから逆算した数字 (1 文字 16 byte、実測 16.5 倍)。binary で返るように
+  # なれば上限は過剰に厳しくなるだけだが、逆算の根拠が消えたことに気付ける
+  # ようにしておく。
+  @tag :tmp_dir
+  test "OTP は entry 名を charlist で返す (4 MiB 上限の逆算根拠)", %{tmp_dir: tmp} do
+    path = Path.join(tmp, "long.zip")
+    File.write!(path, bounds_zip(records: 1, namelen: 4096))
+    assert {:ok, listed} = :zip.list_dir(String.to_charlist(path))
+    [name] = for {:zip_file, n, _, _, _, _} <- listed, do: n
+    assert is_list(name)
+    assert length(name) == 4096
+  end
+
+  # #194 本体。申告 entry 数は実体と切り離して弾けること — このアーカイブは
+  # 200 byte 程度しかなく、列挙コストでは弾きようがない。
+  @tag :tmp_dir
+  test "申告 entry 数が上限超なら列挙前に弾く", %{tmp_dir: tmp} do
+    path = Path.join(tmp, "declared.zip")
+    File.write!(path, bounds_zip(records: 1, declared: 4097))
+    assert File.stat!(path).size < 1024
+
+    assert {:error, msg} = PersonaAssets.verify_archive(path)
+    assert msg =~ "archive declares 4097 entries, over the 4096 entry limit"
+  end
+
+  # entry 数だけでは塞がらない経路。name/comment は 16-bit 長なので 1 entry で
+  # 192KB 引ける上、charlist で 16 倍に膨らむ。4096 件以内・1 GiB 以内のまま
+  # heap を数 GB 食わせられるので、central directory の span も bound する。
+  @tag :tmp_dir
+  test "central directory の span が上限超なら列挙前に弾く", %{tmp_dir: tmp} do
+    path = Path.join(tmp, "wide.zip")
+    File.write!(path, bounds_zip(records: 70, namelen: 60_000))
+
+    assert {:error, msg} = PersonaAssets.verify_archive(path)
+    assert msg =~ "listing metadata spans"
+    assert msg =~ "over the 4194304 byte limit"
+  end
+
+  @tag :tmp_dir
+  test "span はちょうど 4 MiB まで通り、1 byte 超で落ちる", %{tmp_dir: tmp} do
+    # span = central_blob + EOCD(22)。63 x (46+65535) + 1 x (46+62633) で
+    # 4194282 になり、EOCD を足して丁度 4194304。
+    full = for _ <- 1..63, do: 65_535
+    at = Path.join(tmp, "at.zip")
+    File.write!(at, bounds_zip(name_lengths: full ++ [62_633]))
+    assert {:error, msg} = PersonaAssets.verify_archive(at)
+    refute msg =~ "listing metadata spans"
+
+    over = Path.join(tmp, "over.zip")
+    File.write!(over, bounds_zip(name_lengths: full ++ [62_634]))
+    assert {:error, msg} = PersonaAssets.verify_archive(over)
+    assert msg =~ "listing metadata spans 4194305 bytes, over the 4194304 byte limit"
+  end
+
+  # ZIP64 経路。32-bit EOCD の entry 数は 0xffff が sentinel で、実数は EOCD64
+  # の 64-bit field にある。sentinel をそのまま読むと 65535 件として通ってしまう。
+  @tag :tmp_dir
+  test "ZIP64 EOCD の 64-bit entry 数で弾く", %{tmp_dir: tmp} do
+    path = Path.join(tmp, "z64.zip")
+    File.write!(path, bounds_zip(records: 1, declared: 400_000, zip64: true))
+
+    assert {:error, msg} = PersonaAssets.verify_archive(path)
+    assert msg =~ "archive declares 400000 entries, over the 4096 entry limit"
+  end
+
+  # ふじ指摘 (2026-08-04)。`find_eocd64/5` は locator 先の 12 byte を読んだ後、
+  # central offset を得る **前に** 申告 EOCDSize バイトを read する。ZIP64 EOCD
+  # をファイル前方へ置き、巨大 EOCDSize を申告しつつ central offset を EOF 近く
+  # に申告すると、tail span の検査だけでは read が終わった後にしか効かない。
+  @tag :tmp_dir
+  test "ZIP64 EOCD の申告 body 長が予算超なら read 前に弾く", %{tmp_dir: tmp} do
+    path = Path.join(tmp, "z64big.zip")
+
+    File.write!(
+      path,
+      bounds_zip(records: 1, zip64: true, eocd64_front: true, eocd64_size: 7_000_000)
+    )
+
+    assert {:error, msg} = PersonaAssets.verify_archive(path)
+    assert msg =~ "ZIP64 end of central directory declares 7000012 bytes"
+    assert msg =~ "over the 4194304 byte limit"
+  end
+
+  @tag :tmp_dir
+  test "ZIP64 EOCD の申告 body 長が固定部未満なら弾く", %{tmp_dir: tmp} do
+    path = Path.join(tmp, "z64short.zip")
+    File.write!(path, bounds_zip(records: 1, zip64: true, eocd64_size: 43))
+
+    assert {:error, msg} = PersonaAssets.verify_archive(path)
+    assert msg =~ "declares 43 bytes, under the 44 byte minimum"
+  end
+
+  @tag :tmp_dir
+  test "ZIP64 EOCD の申告 body 長がファイル末尾を超えるなら弾く", %{tmp_dir: tmp} do
+    path = Path.join(tmp, "z64past.zip")
+    File.write!(path, bounds_zip(records: 1, zip64: true, eocd64_size: 100_000))
+
+    assert {:error, msg} = PersonaAssets.verify_archive(path)
+    assert msg =~ "past the end of the archive"
+  end
+
+  # ふじ should-fix (2026-08-04)。上の 2 本は central tail 単独境界と ZIP64 body
+  # 単独上限しか張っていないため、「両者を 1 本の予算に合算する」という設計判断
+  # そのものが固定されていない — 合算をやめても領域別 cap へ戻しても、どちらの
+  # 形も全テストを通ってしまう。各領域は上限内だが合算が limit+2 になる形を
+  # 直接 pin する。
+  @tag :tmp_dir
+  test "central tail と ZIP64 body は 1 本の予算を共有する", %{tmp_dir: tmp} do
+    over = Path.join(tmp, "over.zip")
+    File.write!(over, budget_zip(2_097_132, 2_097_174))
+    assert {:error, msg} = PersonaAssets.verify_archive(over)
+    assert msg =~ "listing metadata spans 4194306 bytes, over the 4194304 byte limit"
+
+    # 2 byte 削って丁度 4 MiB。合算検査は通り、以降の段で落ちる。
+    at = Path.join(tmp, "at.zip")
+    File.write!(at, budget_zip(2_097_132, 2_097_172))
+    assert {:error, msg} = PersonaAssets.verify_archive(at)
+    refute msg =~ "listing metadata spans"
+  end
+
+  # ZIP64 record の消費バイト数 (header 12 + 申告 body 長) と central tail
+  # (filesize - 申告 central offset) を独立に指定できる zip。record の実体は
+  # ディスク上に存在させる — 存在しないと合算検査より前に末尾超過で落ちる。
+  defp budget_zip(eocd64_spent, tail_span) do
+    declared_body = eocd64_spent - 12
+
+    local =
+      <<0x04034B50::little-32, 20::little-16, 0::little-16, 0::little-16, @dos_date::little-16,
+        @dos_date::little-16, 0::little-32, 0::little-32, 0::little-32, 1::little-16,
+        0::little-16, "a">>
+
+    central =
+      <<0x02014B50::little-32, 20::little-16, 20::little-16, 0::little-16, 0::little-16,
+        @dos_date::little-16, @dos_date::little-16, 0::little-32, 0::little-32, 0::little-32,
+        1::little-16, 0::little-16, 0::little-16, 0::little-16, 0::little-16, 0::little-32,
+        0::little-32, "b">>
+
+    size = byte_size(local) + eocd64_spent + byte_size(central) + 20 + 22
+    cd_offset = size - tail_span
+
+    fixed =
+      <<20, 3, 45::little-16, 0::little-32, 0::little-32, 1::little-64, 1::little-64,
+        byte_size(central)::little-64, cd_offset::little-64>>
+
+    record =
+      <<0x06064B50::little-32, declared_body::little-64>> <>
+        fixed <> :binary.copy(<<0>>, declared_body - byte_size(fixed))
+
+    locator =
+      <<0x07064B50::little-32, 0::little-32, byte_size(local)::little-64, 1::little-32>>
+
+    eocd32 =
+      <<0x06054B50::little-32, 0::little-16, 0::little-16, 0xFFFF::little-16, 0xFFFF::little-16,
+        0xFFFFFFFF::little-32, 0xFFFFFFFF::little-32, 0::little-16>>
+
+    local <> record <> central <> locator <> eocd32
+  end
+
+  # レビュー must-fix (2026-08-04)。OTP の ?END_OF_CENTRAL_DIR_64_LOCATOR_SZ は
+  # `(4+8+4)` = 16 で、locator の物理サイズ 20 byte と一致しない。探索窓の上限は
+  # `0xffff + 22 + 16` = 65573 になる。ここに 20 を書くと窓が 4 byte 広くなり、
+  # OTP が決して見ない位置に置いた decoy を先読みだけが採る — 3 本の bound が
+  # すべて decoy から計算されるので全部素通りし、#194 の欠陥がそのまま戻る
+  # (実機再現済み)。境界を両側から張り、同じテストで OTP 側も premise として
+  # 固定する。仕様上の幅ではなく実装の定数を写す、という #189 の教訓の再適用。
+  @tag :tmp_dir
+  test "EOCD 探索窓は OTP と同じ 65573 byte で切れる", %{tmp_dir: tmp} do
+    inside = Path.join(tmp, "in.zip")
+    File.write!(inside, window_zip(65_573))
+    # premise: ここまでは OTP も EOCD を見つけ、列挙まで進む。
+    assert {:error, :bad_central_directory} = :zip.list_dir(String.to_charlist(inside))
+    assert {:error, msg} = PersonaAssets.verify_archive(inside)
+    assert msg =~ "archive declares 200000 entries"
+
+    outside = Path.join(tmp, "out.zip")
+    File.write!(outside, window_zip(65_574))
+
+    # premise: 1 byte 外側では OTP は EOCD を見つけられない。先読みも同じでなければ
+    # ならない — 見つけてしまうと OTP と別のレコードを根拠に判定することになる。
+    assert {:error, :bad_eocd} = :zip.list_dir(String.to_charlist(outside))
+    assert {:error, msg} = PersonaAssets.verify_archive(outside)
+    assert msg =~ "no end of central directory record"
+  end
+
+  # locator + EOCD32 の構造が EOF から `distance` byte 手前に始まる zip。
+  # comment 長で末尾まで丁度使い切らせ、探索窓の境界だけを動かす。
+  defp window_zip(distance) do
+    comment_len = distance - 20 - 22
+
+    local =
+      <<0x04034B50::little-32, 20::little-16, 0::little-16, 0::little-16, @dos_date::little-16,
+        @dos_date::little-16, 0::little-32, 0::little-32, 0::little-32, 1::little-16,
+        0::little-16, "a">>
+
+    central =
+      <<0x02014B50::little-32, 20::little-16, 20::little-16, 0::little-16, 0::little-16,
+        @dos_date::little-16, @dos_date::little-16, 0::little-32, 0::little-32, 0::little-32,
+        1::little-16, 0::little-16, 0::little-16, 0::little-16, 0::little-16, 0::little-32,
+        0::little-32, "b">>
+
+    record =
+      <<0x06064B50::little-32, 44::little-64, 20, 3, 45::little-16, 0::little-32, 0::little-32,
+        200_000::little-64, 200_000::little-64, byte_size(central)::little-64,
+        byte_size(local)::little-64>>
+
+    locator =
+      <<0x07064B50::little-32, 0::little-32, byte_size(local) + byte_size(central)::little-64,
+        1::little-32>>
+
+    eocd32 =
+      <<0x06054B50::little-32, 0::little-16, 0::little-16, 0xFFFF::little-16, 0xFFFF::little-16,
+        0xFFFFFFFF::little-32, 0xFFFFFFFF::little-32, comment_len::little-16>>
+
+    local <> central <> record <> locator <> eocd32 <> :binary.copy(<<0>>, comment_len)
+  end
+
+  # OTP の locator 節だけ entries_on_disk と entries を AND で結合している
+  # (他の sentinel は OR)。この非対称は zip.erl の写しであって書き間違いでは
+  # ないので、片方だけ sentinel の形が ZIP64 と見なされないことを固定する。
+  # 先読みが OR で判定すると EOCD64 を読みに行き、OTP が列挙すらしない
+  # アーカイブについて別の値を根拠に通す/弾くことになる。
+  @tag :tmp_dir
+  test "entries_on_disk だけ sentinel の EOCD は ZIP64 扱いしない", %{tmp_dir: tmp} do
+    path = Path.join(tmp, "half.zip")
+    File.write!(path, bounds_zip(records: 1, declared: 400_000, zip64: true, half_sentinel: true))
+
+    # premise: OTP もこの形では EOCD を見つけられない。
+    assert {:error, :bad_eocd} = :zip.list_dir(String.to_charlist(path))
+
+    assert {:error, msg} = PersonaAssets.verify_archive(path)
+    assert msg =~ "no end of central directory record"
+  end
+
+  # #194 の bound 検査用。EOCD の申告値 (entry 数 / central offset) と ZIP64
+  # 経路を個別に張れる最小 zip。実体の central record 数と申告値を独立に
+  # 指定できるのが要点 — 「申告値で弾く」ことを実体と切り離して測る。
+  defp bounds_zip(opts) do
+    lengths =
+      Keyword.get_lazy(opts, :name_lengths, fn ->
+        List.duplicate(Keyword.get(opts, :namelen, 4), Keyword.get(opts, :records, 1))
+      end)
+
+    declared = Keyword.get(opts, :declared, length(lengths))
+    zip64 = Keyword.get(opts, :zip64, false)
+    eocd64_size = Keyword.get(opts, :eocd64_size, 44)
+    front? = Keyword.get(opts, :eocd64_front, false)
+
+    local =
+      <<0x04034B50::little-32, 20::little-16, 0::little-16, 0::little-16, @dos_date::little-16,
+        @dos_date::little-16, 0::little-32, 0::little-32, 0::little-32, 1::little-16,
+        0::little-16, "a">>
+
+    centrals =
+      for len <- lengths do
+        name = :binary.copy("a", len)
+
+        <<0x02014B50::little-32, 20::little-16, 20::little-16, 0::little-16, 0::little-16,
+          @dos_date::little-16, @dos_date::little-16, 0::little-32, 0::little-32, 0::little-32,
+          len::little-16, 0::little-16, 0::little-16, 0::little-16, 0::little-16, 0::little-32,
+          0::little-32>> <> name
+      end
+
+    central_blob = IO.iodata_to_binary(centrals)
+    cd_offset = byte_size(local)
+
+    if zip64 do
+      # record の実体は magic(4) + size(8) + 固定部(44)。`eocd64_size` は
+      # ヘッダが申告する長さで、実体と独立に張れる。
+      record_body = fn cd_start ->
+        <<20, 3, 45::little-16, 0::little-32, 0::little-32, declared::little-64,
+          declared::little-64, byte_size(central_blob)::little-64, cd_start::little-64>>
+      end
+
+      record = fn cd_start ->
+        <<0x06064B50::little-32, eocd64_size::little-64>> <> record_body.(cd_start)
+      end
+
+      record_size = 12 + 44
+
+      # front? は EOCD64 をファイル先頭へ置き、central offset を EOF 近くに
+      # 申告する配置 — tail span の検査だけでは read 後にしか効かない形。
+      {record_offset, cd_start} =
+        if front?,
+          do: {0, record_size + byte_size(local)},
+          else: {byte_size(local) + byte_size(central_blob), cd_offset}
+
+      locator = <<0x07064B50::little-32, 0::little-32, record_offset::little-64, 1::little-32>>
+
+      # half_sentinel: entries_on_disk だけ sentinel にし、他の field は実値の
+      # まま。OTP の locator 節は entries_on_disk と entries を AND で見るので
+      # これは ZIP64 と見なされない (他の節は OR)。
+      eocd32 =
+        if Keyword.get(opts, :half_sentinel, false) do
+          <<0x06054B50::little-32, 0::little-16, 0::little-16, 0xFFFF::little-16,
+            declared::little-16, byte_size(central_blob)::little-32, cd_offset::little-32,
+            0::little-16>>
+        else
+          <<0x06054B50::little-32, 0::little-16, 0::little-16, 0xFFFF::little-16,
+            0xFFFF::little-16, 0xFFFFFFFF::little-32, 0xFFFFFFFF::little-32, 0::little-16>>
+        end
+
+      if front? do
+        record.(cd_start) <> local <> central_blob <> locator <> eocd32
+      else
+        local <> central_blob <> record.(cd_start) <> locator <> eocd32
+      end
+    else
+      eocd =
+        <<0x06054B50::little-32, 0::little-16, 0::little-16, declared::little-16,
+          declared::little-16, byte_size(central_blob)::little-32, cd_offset::little-32,
+          0::little-16>>
+
+      local <> central_blob <> eocd
+    end
   end
 
   # レビュー must-fix (round 2)。`:zlib.safeInflate/2` は壊れた圧縮データに対し

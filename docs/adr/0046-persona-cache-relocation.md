@@ -203,6 +203,52 @@ production の上限も同型で bypass される。
 directory の comp_size / bit 3 なしかつ 32-bit が sentinel → local ZIP64 extra
 (上記ループで解決) / それ以外 → local header の 32-bit field。
 
+**列挙そのものを列挙前に bound する。** 上記のサイズ・件数検査はいずれも
+`:zip.list_dir/1` の結果に対して働くが、その `list_dir` 自体が bound されて
+いなければ意味を成さない。OTP は central directory を全件 materialize する
+ため、1 GiB のアーカイブは数 GB の BEAM heap を要求しうる (実測: 40 万 entry
+で 203 MB / 5.7 秒)。よって EOCD (end of central directory) を `list_dir` の
+**前に**読み、3 つの申告値で bound する。いずれも「申告が上限を超えるなら
+弾く」方向にのみ使い、申告を信じる方向は持たない。
+
+| 申告値 | なぜ bound になるか |
+|---|---|
+| entry 数 | `get_central_dir/4` が `N = EOCD#eocd.entries` を `get_cd_loop/6` のループ回数へそのまま渡す (stdlib 8.0.1 `zip.erl` 1916-1921)。過小申告は列挙を**減らす**だけで増やせない (実測: 40 万件を持つが 10 と申告したアーカイブは 1ms で列挙が終わる。`list_dir` の戻りは 11 要素だが、内訳は `:zip_file` 10 件 + `:zip_comment` 1 件で、entry 数上限が数えるのは前者のみ)。過大申告はファイルが尽きて `bad_central_directory` を throw する |
+| `filesize - 申告 central offset` | `get_cd_loop/6` は申告 offset へ seek して前進 read しかしないため、列挙が触れうるバイト数の上限になる。offset の過小申告はこの span を**大きく**するので早く弾かれ、過大申告は seek 先にレコードが無く throw する |
+| ZIP64 record の申告 body 長 | `find_eocd64/5` は locator 先の 12 byte を読んだ後、**central offset を得る前に**申告バイト数を read する (`zip.erl` 2121-2138)。この段を bound しないと、record をファイル前方に置いて巨大な body 長を申告しつつ central offset を EOF 近くに申告することで、span 検査が通る時点では read が既に終わっている |
+
+**申告された central directory サイズは使わない。** OTP はこの field を
+どこでも読まないため、bound しても何も bound しない。
+
+**上限は 1 本の予算 4 MiB (`@max_entries * 1024`)。** 健全な pack の central
+directory は 4096 件上限でも約 800 KB (固定 46 byte + name 100 前後 +
+extra 30 前後) なので約 5 倍の余裕がある。central directory tail と ZIP64
+record の申告長を**合算して**この 1 本に充てる — 領域ごとに別枠にすると同じ
+上限を二重に使えてしまうし、「列挙にいくらかかりうるか」という問いは元々
+合計に対する問いである。
+
+**entry 数だけでは塞がらない。** `get_cd_loop/6` は 1 件ごとに
+name + extra + comment を read し、3 つとも 16-bit 長なので 1 entry で最大
+192 KB 引ける。さらに OTP は name と comment を charlist で返すため、64-bit
+VM では 1 文字 16 byte に膨らむ。実測 (OTP 29.0.2): 64 KB の name を持つ
+500 entry はディスク上 31 MB に対し heap 516 MB、増幅 16.5 倍。entry 数上限
+まで外挿すると 268 MB の pack が約 4.2 GB を要求し、**1 GiB のアーカイブ
+上限にも 4096 件の entry 上限にも触れない**。span の bound はこの経路を
+塞ぐためのもので、4 MiB では同じ増幅率で約 66 MB に収まる。
+
+**EOCD の探索手順は OTP を写す。** 独立実装は decoy を仕込まれたときに採用
+位置が食い違う。OTP は `eof - window` から**前方へ** 1 バイトずつ走査して
+最初の構造マッチを採り、外れたら window を倍化する (22 → 44 → ... →
+min(0xffff+42, filesize))。慣例的な後方走査は最後のレコードを採るため、
+両者は別の EOCD を根拠にしうる。locator 有りの節だけ `entries_on_disk` と
+`entries` を AND で結合する非対称も含めて写す。定数は ZIP 仕様上のフィールド
+幅ではなく **OTP のマクロ値**を採る — locator は物理 20 byte だが
+`?END_OF_CENTRAL_DIR_64_LOCATOR_SZ` は `(4+8+4)` = 16 であり (`zip.erl`:253)、
+実装はその値で動く。仕様側の 20 を採ると探索窓が OTP より 4 byte 広くなり、
+OTP が決して見ない位置の decoy を先読みだけが採用して 3 本の bound が同時に
+無効化される (実測で再現)。走査窓そのもの (倍化ループ全体で最大約 131 KB) は
+攻撃者がスケールできないため予算の対象外とする。
+
 **STORE の境界はアーカイブ自身のサイズで与える。** DEFLATE は stream 終端で実測が
 閉じるが、STORE には終端が無く、その長さは偽装可能な申告フィールドにしか存在しない。
 偽装できないのはアーカイブのファイルサイズであり、STORE は膨張しないため、アーカイブ
@@ -214,7 +260,8 @@ STORE entry を上記の優先順で決まった comp_size で加算する。過
 いれば展開されるため、bit 3 entry の comp_size は上記のとおり central を正本と
 する)。
 
-**検査順序は cheap reject 優先とする。** アーカイブサイズ → entry 数 → zip slip /
+**検査順序は cheap reject 優先とする。** アーカイブサイズ → central metadata の
+preflight (entry 数 / span / ZIP64 body 長。`:zip.list_dir/1` より前) → zip slip /
 local header 整合 (F7) → inflate 実測。名前だけで reject できる traversal 付き
 zip bomb に、最大 1 GiB 分の inflate CPU を払わせないためである。F7 と本検査は
 いずれも書き込みを一切行わない層であり、この不変条件は順序の変更に依らず維持する。
@@ -246,29 +293,38 @@ directory から数えることは、展開側の挙動と一致する。
   要する (数 MB の pack では無視できる、F8)。
 - 上限内の pack を ingest dir へ大量に並べる攻撃は F8 の範囲外である。cache
   全体の容量管理は別の層で扱う必要がある。
-- **entry 数上限は central directory を読み切った後に効く。** 検査は
-  `:zip.list_dir/1` の結果を数えるため、central directory の materialize
-  そのものは 4096 件で bound されない。1 GiB のアーカイブには数百万件の
-  entry を詰められ、`list_dir` が数 GB の BEAM heap を消費しうる (実測:
-  40 万 entry で 278 MB / 5.7 秒、10 万 entry で 65 MB / 2.1 秒)。F8 の
-  アーカイブサイズ上限はこの窓を 1 GiB へ狭めるが、塞いではいない。F8 導入前は
-  この経路に一切のゲートが無かったため net では改善であり、EOCD の申告 entry 数
-  (または central directory の申告サイズ) を先読みして列挙前に弾く案は
-  kaoiro issue #194 で扱う (解決時に本項を更新する)。
-- **上限検査と展開の間に TOCTOU がある。** 検査はパス経由で zip を読み、
+- **`verify_archive/1` は central directory を 2 回 materialize する。**
+  検査本体と `verify_entry_names/1` がそれぞれ `:zip.list_dir/1` を呼ぶため、
+  列挙コストは 2 回分かかる。2 回は逐次であり 1 回目の charlist は binary 名へ
+  変換した時点で到達不能になるので、peak が単純に倍になるわけではない。
+  4 MiB の予算により各回はおよそ 66 MB で頭打ちになる。
+- **4 MiB を超える central directory を持つ pack は、健全であっても skip
+  される。** 予算は実測でも申告値の検証でもなく上限値であり、name や comment
+  を極端に長く持つ正当な pack を弾きうる。実在しないと判断してこの方向を選んだ
+  (当該 pack のみ skip、ADR-0029)。
+- **EOCD の探索窓は予算の外側にある。** 倍化ループは最大約 131 KB を読む。
+  OTP 自身が同じ上限で読むため攻撃者にスケールさせられないが、「列挙前に読む
+  バイト数はすべて 4 MiB 以内」という言い方は正確ではない。
+- **preflight と展開の間に TOCTOU がある。** 検査はパス経由で zip を読み、
   `:zip.unzip/2` は同じパスを開き直すため、両者が同一バイト列である保証は無い。
-  ingest dir に書ける者は、検査通過後・展開開始前に zip bomb へ差し替えることで
-  上限を回避できる。ただし ingest dir へ書ける主体は既に pack を置ける信頼境界の
-  内側 (F6) であり、同じ volume 枯渇はレース無しでも到達可能な受容済み残存リスク
-  でもあるため、深刻度は低い。kaoiro issue #195 で扱う (解決時に本項を更新する)。
+  失われうるのは F8 の上限検査だけでなく、F7 の entry 名検証を含む preflight
+  全体である。ingest dir に書ける者は、検査通過後・展開開始前に別の zip へ
+  差し替えられる。ただし攻撃には operator が管理する ingest mount へ継続的に
+  書ける主体が必要であり、現行 OTP の `:zip.unzip/2` 自体にも zip-slip 拒否が
+  あって多層防御の 1 層が残る。同じ volume 枯渇はレース無しでも到達可能な
+  受容済み残存リスクでもあるため、深刻度は低い。kaoiro issue #195 で扱う
+  (解決時に本項を更新する)。
 
 ### Neutral
 
 - tmp 配下の既定 cache は消失しても、次の取り込みで zip から再生成される。
 - 取り込みディレクトリの欠落は empty manifest と watch 無効で表現し、
   再起動まで自動復帰しない。
-- F8 の上限値は module attribute の定数であり、環境変数では変更できない。
-  運用上の変更が必要になった時点で別 issue とする (issue #189 で決定)。
+- F8 の上限値 (1 GiB / 4096 件 / `@max_central_dir_bytes` 4 MiB) はいずれも
+  module attribute の定数であり、環境変数では変更できない。運用上の変更が
+  必要になった時点で別 issue とする (issue #189 で決定)。1 GiB と 4096 件は
+  マスター決定 (2026-08-04) であるのに対し、4 MiB は製品判断が絡まない内部
+  マージンとしてクロエ決定 (2026-08-04) である。
 
 ## Alternatives Considered
 
