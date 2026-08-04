@@ -69,22 +69,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: mix checks
+        shell: bash
         run: |
           # --no-xattrs drops attributes the build has no use for. Reproducing
           # this on macOS additionally needs COPYFILE_DISABLE=1: bsdtar's
           # copyfile metadata is separate from xattrs and unpacks as
           # AppleDouble files, which `mix format` then parses as Elixir.
+          #
+          # mix runs as a non-root `ci` user (issue #192): the container
+          # otherwise runs as root, under which the phase-29 permission-denial
+          # tests (chmod-based simulations) are no-ops, since root ignores
+          # permission bits — the suite passed 781/784 with the 3 permission
+          # tests silently not exercising their raise/error path.
+          #
+          # set -o pipefail (issue #192, ふじ M1): without it, this pipe's
+          # exit status is the RIGHT side's (docker run) only, so a `tar`
+          # failure that still hands docker a consumable stream would go
+          # unnoticed.
+          set -euo pipefail
           tar --no-xattrs -cf - server | docker run --rm -i -w /w \
             docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
             sh -euc '
               tar -xf - -C /w
-              cd /w/server
-              mix local.hex --force
-              mix local.rebar --force
-              mix deps.get
-              mix format --check-formatted
-              mix compile --warnings-as-errors
-              mix test
+              useradd -m -d /home/ci ci
+              chown -R ci:ci /w
+              su ci -c "
+                set -e
+                export HOME=/home/ci
+                cd /w/server
+                mix local.hex --force
+                mix local.rebar --force
+                mix deps.get
+                mix format --check-formatted
+                mix compile --warnings-as-errors
+                mix test
+              "
             '
 
   dashboard:
