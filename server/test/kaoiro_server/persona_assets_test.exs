@@ -855,7 +855,8 @@ defmodule KaoiroServer.PersonaAssetsTest do
     Application.put_env(:kaoiro_server, :persona_dir, ingest)
     :persistent_term.erase({PersonaAssets, :cache})
 
-    # cold start でも raise しないこと (application.ex は :ok を assert する)。
+    # cold start でも raise しないこと (PersonaRebuildLock.init/1 の warm
+    # rebuild が :ok を assert する)。
     assert :ok = PersonaAssets.rebuild()
     assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
   end
@@ -2116,5 +2117,286 @@ defmodule KaoiroServer.PersonaAssetsTest do
         byte_size(central)::little-32, byte_size(local)::little-32, 0::little-16>>
 
     local <> central <> eocd
+  end
+
+  # issue #195 テスト共通ヘルパー群 (ふじ 2026-08-05 spec)。
+
+  defp sha256_hex(path) do
+    path |> File.read!() |> then(&:crypto.hash(:sha256, &1)) |> Base.encode16(case: :lower)
+  end
+
+  defp assert_no_stage_leftover(cache_dir) do
+    entries =
+      case File.ls(cache_dir) do
+        {:ok, names} -> names
+        {:error, _} -> []
+      end
+
+    refute Enum.any?(entries, &String.starts_with?(&1, ".stage-")),
+           "cache root に .stage-* が残っている: #{inspect(entries)}"
+  end
+
+  describe "issue #195: staging (TOCTOU 対策)" do
+    @tag :tmp_dir
+    test "stage_archive/3: exact limit は受理、limit+1 は明示 oversize で拒否 (must-2)", %{
+      tmp_dir: tmp
+    } do
+      ingest = Path.join(tmp, "packs")
+      File.mkdir_p!(ingest)
+      :ok = write_pack(ingest, "sz-1.0.0", base_manifest("sz"), "body-sz")
+      zip = Path.join(ingest, "sz-1.0.0.zip")
+      {:ok, %File.Stat{size: size}} = File.stat(zip)
+
+      dest_ok = Path.join(tmp, "staged-ok.zip")
+      assert {:ok, ^size, hash} = PersonaAssets.stage_archive(zip, dest_ok, size)
+      assert hash == sha256_hex(zip)
+      assert {:ok, %File.Stat{size: ^size}} = File.stat(dest_ok)
+
+      dest_over = Path.join(tmp, "staged-over.zip")
+      assert {:oversize, ^size} = PersonaAssets.stage_archive(zip, dest_over, size - 1)
+    end
+
+    @tag :tmp_dir
+    test "stage 確定後の元 path rename は staged bytes に影響しない (must-3)", %{tmp_dir: tmp} do
+      ingest = Path.join(tmp, "packs")
+      File.mkdir_p!(ingest)
+      :ok = write_pack(ingest, "orig-1.0.0", base_manifest("orig"), "body-orig")
+      zip = Path.join(ingest, "orig-1.0.0.zip")
+      {:ok, original_bytes} = File.read(zip)
+
+      dest = Path.join(tmp, "staged.zip")
+      assert {:ok, _total, _hash} = PersonaAssets.stage_archive(zip, dest, 10_000_000)
+
+      :ok = write_pack(ingest, "swap-1.0.0", base_manifest("swap"), "body-swap")
+      File.rename!(Path.join(ingest, "swap-1.0.0.zip"), zip)
+      refute File.read!(zip) == original_bytes, "premise: rename 後は元 path の内容が変わっている"
+
+      assert File.read!(dest) == original_bytes
+    end
+
+    @tag :tmp_dir
+    test "stage 確定後の元 path 同 inode 上書きは staged bytes に影響しない (must-3)", %{
+      tmp_dir: tmp
+    } do
+      ingest = Path.join(tmp, "packs")
+      File.mkdir_p!(ingest)
+      :ok = write_pack(ingest, "orig2-1.0.0", base_manifest("orig2"), "body-orig2")
+      zip = Path.join(ingest, "orig2-1.0.0.zip")
+      {:ok, original_bytes} = File.read(zip)
+
+      dest = Path.join(tmp, "staged2.zip")
+      assert {:ok, _total, staged_hash} = PersonaAssets.stage_archive(zip, dest, 10_000_000)
+
+      # 同一 path への File.write! は truncate+write で同一 inode を書き換える
+      # (rename ではなく in-place overwrite)。
+      File.write!(zip, "junk-not-a-zip-anymore")
+
+      assert File.read!(dest) == original_bytes
+      assert staged_hash == sha256_hex_bytes(original_bytes)
+    end
+
+    @tag :tmp_dir
+    test "digest 不一致は予定 slot へ展開せず、race と分かる文言で報告する (must-1, 追補)", %{
+      tmp_dir: tmp
+    } do
+      ingest = Path.join(tmp, "packs")
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(ingest)
+      File.mkdir_p!(cache)
+      :ok = write_pack(ingest, "race-1.0.0", base_manifest("race"), "body-race")
+      zip = Path.join(ingest, "race-1.0.0.zip")
+      extracted_dir = Path.join(cache, "deadbeefdeadbeef")
+      wrong_hash = String.duplicate("0", 64)
+
+      assert {:error, msg} = PersonaAssets.extract(zip, wrong_hash, extracted_dir, cache)
+      assert msg =~ "digest mismatch"
+      assert msg =~ "update race"
+      refute msg =~ "unzip failed", "malformed archive と同じ文言に落ちてはいけない"
+
+      refute File.exists?(extracted_dir)
+      assert_no_stage_leftover(cache)
+    end
+
+    @tag :tmp_dir
+    test "success 経路で stage が消える (must-4)", %{tmp_dir: tmp} do
+      ingest = Path.join(tmp, "packs")
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(ingest)
+      File.mkdir_p!(cache)
+      :ok = write_pack(ingest, "ok-1.0.0", base_manifest("ok"), "body-ok")
+      zip = Path.join(ingest, "ok-1.0.0.zip")
+      extracted_dir = Path.join(cache, "cafecafecafecafe")
+
+      assert :ok = PersonaAssets.extract(zip, sha256_hex(zip), extracted_dir, cache)
+      assert File.dir?(extracted_dir)
+      assert_no_stage_leftover(cache)
+    end
+
+    @tag :tmp_dir
+    test "pack error 経路で stage が消える (must-4)", %{tmp_dir: tmp} do
+      ingest = Path.join(tmp, "packs")
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(ingest)
+      File.mkdir_p!(cache)
+      zip = Path.join(ingest, "bad.zip")
+      File.write!(zip, "not a valid zip archive")
+      extracted_dir = Path.join(cache, "badbadbadbadbad0")
+
+      assert {:error, _msg} = PersonaAssets.extract(zip, sha256_hex(zip), extracted_dir, cache)
+      refute File.dir?(extracted_dir)
+      assert_no_stage_leftover(cache)
+    end
+
+    @tag :tmp_dir
+    test "exception raise 経路でも stage が消える (must-4)", %{tmp_dir: tmp} do
+      # digest 一致後、`discard/2` (`normalize_modes/1` → `File.lstat/1`) に
+      # 渡る `extracted_dir` を非バイナリにして FunctionClauseError を確実に
+      # raise させる — 実測(2026-08-05): この OTP (29.0.2) の `:zip.unzip/2`
+      # は date=0 の不正エントリでも `write_file_info` の `:badarg` を内部で
+      # 捕まえて `{:error, {...}}` タプルへ落とす(raise しない、既存コメント
+      # が想定していた挙動とは異なる)ので、archive 由来では raise を再現
+      # できなかった。この型ミスマッチは exception / raise 経路そのもの
+      # (`extract/4` の try/rescue が正しく動くか)を検証する目的には十分。
+      ingest = Path.join(tmp, "packs")
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(ingest)
+      File.mkdir_p!(cache)
+      :ok = write_pack(ingest, "raiser-1.0.0", base_manifest("raiser"), "body-raiser")
+      zip = Path.join(ingest, "raiser-1.0.0.zip")
+
+      assert_raise FunctionClauseError, fn ->
+        PersonaAssets.extract(zip, sha256_hex(zip), _not_a_path = 12345, cache)
+      end
+
+      assert_no_stage_leftover(cache)
+    end
+
+    @tag :tmp_dir
+    test "staging dir/file は 0700/0600、exclusive create で symlink を辿らない (must-4)", %{
+      tmp_dir: tmp
+    } do
+      ingest = Path.join(tmp, "packs")
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(ingest)
+      File.mkdir_p!(cache)
+      :ok = write_pack(ingest, "perm-1.0.0", base_manifest("perm"), "body-perm")
+      zip = Path.join(ingest, "perm-1.0.0.zip")
+
+      assert {:ok, stage_dir, stage_path} = PersonaAssets.new_stage(cache)
+      on_exit(fn -> File.rm_rf(stage_dir) end)
+
+      assert {:ok, %File.Stat{mode: dir_mode}} = File.lstat(stage_dir)
+      assert Bitwise.band(dir_mode, 0o777) == 0o700
+
+      assert {:ok, _total, _hash} = PersonaAssets.stage_archive(zip, stage_path, 10_000_000)
+      assert {:ok, %File.Stat{mode: file_mode}} = File.lstat(stage_path)
+      assert Bitwise.band(file_mode, 0o777) == 0o600
+
+      # 事前に symlink を仕込んだ path への stage は辿らず失敗する。
+      target = Path.join(tmp, "symlink-target")
+      File.write!(target, "should-not-be-touched")
+      planted = Path.join(tmp, "planted-dest.zip")
+      File.ln_s!(target, planted)
+
+      assert {:write_error, _reason} = PersonaAssets.stage_archive(zip, planted, 10_000_000)
+      assert File.read!(target) == "should-not-be-touched"
+    end
+
+    @tag :tmp_dir
+    test "stage_archive/3: source read 失敗と destination write 失敗は別側に分類される (must-3)", %{
+      tmp_dir: tmp
+    } do
+      missing = Path.join(tmp, "nope.zip")
+      dest1 = Path.join(tmp, "dest1.zip")
+      assert {:read_error, _reason} = PersonaAssets.stage_archive(missing, dest1, 1000)
+      refute File.exists?(dest1)
+
+      ingest = Path.join(tmp, "packs")
+      File.mkdir_p!(ingest)
+      :ok = write_pack(ingest, "wf-1.0.0", base_manifest("wf"), "body-wf")
+      zip = Path.join(ingest, "wf-1.0.0.zip")
+      bad_dest = Path.join([tmp, "no-such-dir", "dest2.zip"])
+      assert {:write_error, _reason} = PersonaAssets.stage_archive(zip, bad_dest, 10_000_000)
+
+      # extract/4 経由でも read 失敗は cache_error ではなく pack error(=archive
+      # の問題)として報告される — cache 側の障害と取り違えてはいけない。
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(cache)
+      extracted_dir = Path.join(cache, "readfailreadfail")
+      assert {:error, msg} = PersonaAssets.extract(missing, "irrelevant", extracted_dir, cache)
+      assert msg =~ "reading source archive failed"
+      assert_no_stage_leftover(cache)
+    end
+
+    @tag :tmp_dir
+    test "crash 残骸の .stage-* は厳密な shape のものだけ age に関わらず即時 reclaim される (must-1, must-2)",
+         %{tmp_dir: tmp} do
+      ingest = Path.join(tmp, "packs")
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(ingest)
+      File.mkdir_p!(cache)
+      :ok = write_pack(ingest, "orphan-1.0.0", base_manifest("orphan"), "body-orphan")
+
+      # 正確な shape(`.stage-` + 22 文字、charset A-Za-z0-9_-)。
+      # `PersonaRebuildLock` による直列化(must-1)で build/1 開始時点では
+      # live な staging 領域があり得ないため、mtime を更新せず「作られた
+      # ばかり」のままにしても即時 reclaim される — age-gate 撤廃の pin。
+      fresh_exact = Path.join(cache, ".stage-" <> String.duplicate("a", 22))
+      File.mkdir_p!(fresh_exact)
+
+      # 前方一致はするが厳密な shape に合わない entry(ふじ round-2 レビュー
+      # 2026-08-05 が挙げた具体例)。`.stage-` っぽく見えても正規表現に
+      # 一致しない限り永続として扱う(ADR-0046 F3 追補、must-2)。
+      important = Path.join(cache, ".stage-important")
+      File.mkdir_p!(important)
+      on_exit(fn -> File.rm_rf(important) end)
+
+      freshtest = Path.join(cache, ".stage-freshtest")
+      File.mkdir_p!(freshtest)
+      on_exit(fn -> File.rm_rf(freshtest) end)
+
+      # 内部レビュー指摘 (2026-08-05): 末尾改行付きの 22 文字 entry。
+      # `~r/.../{22}$/` の `$` は PCRE 流儀では文字列末尾の直前の1個の
+      # 改行にもマッチする(`\z` ではない)ため、`random_stage_name/0` が
+      # 絶対に生成しない「22 文字 + 改行」という shape が exact-match を
+      # すり抜けて reclaim されてしまう穴だった。Linux のファイル名は
+      # `/` と NUL 以外の任意バイトを許すため、この directory は実際に
+      # 作成できる。
+      trailing_newline = Path.join(cache, ".stage-" <> String.duplicate("a", 22) <> "\n")
+      File.mkdir_p!(trailing_newline)
+      on_exit(fn -> File.rm_rf(trailing_newline) end)
+
+      Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+      use_ingest(ingest)
+
+      refute File.exists?(fresh_exact),
+             "厳密な shape の stage orphan は age に関わらず即時 reclaim されるべき"
+
+      assert File.exists?(important), "前方一致だけの entry (.stage-important) は消してはいけない"
+      assert File.exists?(freshtest), "前方一致だけの entry (.stage-freshtest) は消してはいけない"
+
+      assert File.exists?(trailing_newline),
+             "末尾改行付きの 22 文字 entry は random_stage_name/0 が生成し得ない形なので消してはいけない"
+    end
+
+    @tag :tmp_dir
+    test "new_stage/1: chmod 失敗時は作成済みの stage_dir を discard する (must-3)", %{
+      tmp_dir: tmp
+    } do
+      # 単一 UID では genuine な chmod 失敗を再現できない(new_stage/1 自身
+      # の既存コメント参照)。discard_new_stage/3 を synthetic reason で
+      # 直接駆動し、「実在する stage_dir が discard_stage/2 で本当に消える
+      # こと」(配線そのもの)を pin する — merge_cleanup_error/2 の純粋な
+      # ロジックは別 describe (line 701 付近) で既に検証済み。
+      stage_dir = Path.join(tmp, ".stage-" <> String.duplicate("b", 22))
+      :ok = File.mkdir(stage_dir)
+
+      assert {:error, _msg} = PersonaAssets.discard_new_stage(:eacces, stage_dir, tmp)
+      refute File.exists?(stage_dir), "chmod 失敗時も stage_dir は discard されるべき"
+    end
+  end
+
+  defp sha256_hex_bytes(bytes) do
+    :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
   end
 end

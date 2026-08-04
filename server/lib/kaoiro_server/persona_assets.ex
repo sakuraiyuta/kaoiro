@@ -86,12 +86,32 @@ defmodule KaoiroServer.PersonaAssets do
   @doc """
   Rescans the ingest dir and replaces the cache.
 
+  Serialized within this BEAM node via `KaoiroServer.PersonaRebuildLock`
+  (issue #195 must-fix 1): the rebuild operation has 3 real triggers in
+  production (boot, via the lock's own `init/1` started with
+  `warm: true`; `KaoiroServer.PersonaWatcher`; and this module's own
+  cache-miss fallback in `cache/0` below) with no coordination between
+  them otherwise, so two racing rebuilds could stage/reclaim over each
+  other's work. Boot goes through the SAME lock as every other trigger
+  — see `KaoiroServer.PersonaRebuildLock`'s moduledoc "Boot ownership"
+  and `KaoiroServer.Application` for how a cold-start failure there
+  still preserves ADR-0046 F4's fail-fast contract.
+
   Failure contract (ADR-0046 F4): a failed rebuild raises on cold start —
   a server that cannot extract packs must not come up pretending it has
   none — but on a later rebuild it only logs and leaves the current
   manifest in place as the last-known-good.
   """
-  def rebuild do
+  def rebuild, do: KaoiroServer.PersonaRebuildLock.rebuild()
+
+  @doc false
+  # The actual rebuild logic. Runs exclusively inside
+  # `KaoiroServer.PersonaRebuildLock` — its `handle_call/3` for every
+  # runtime trigger, and its own `init/1` (started `warm: true`) for the
+  # boot trigger — so every path is serialized through the same process,
+  # boot included. Public so `PersonaRebuildLock` can reach it without a
+  # cyclic module alias.
+  def do_rebuild do
     cold_start? = :persistent_term.get(@cache_key, nil) == nil
 
     case attempt_build() do
@@ -332,6 +352,17 @@ defmodule KaoiroServer.PersonaAssets do
   end
 
   defp build(cache_dir) do
+    # Runs first, before any pack is touched (issue #195 must-fix 1):
+    # `rebuild/0` is now serialized within this node via
+    # `PersonaRebuildLock`, so no other rebuild can be mid-staging when
+    # this line runs — any `.stage-*` matching F9's exact name shape is
+    # unconditionally a crash orphan, never a live peer's work in
+    # progress. Reclaiming here (rather than after `load_packs/2`, where
+    # it used to run) also means a volume filled with orphans gets
+    # cleared before the cache_error that same fullness would otherwise
+    # cause, instead of never being reached.
+    reclaim_stage_orphans(cache_dir)
+
     dir = resolve_ingest_dir()
 
     unless File.dir?(dir) do
@@ -414,9 +445,9 @@ defmodule KaoiroServer.PersonaAssets do
   # this pack's fault and must not be downgraded to a skip (ふじ M1,
   # 2026-08-03).
   defp extract_and_load(zip_path, cache_dir) do
-    with {:ok, hash} <- hash_file(zip_path),
+    with {:ok, %{short: hash, full: full_hash}} <- hash_file(zip_path),
          extracted_dir <- Path.join(cache_dir, hash),
-         :ok <- ensure_extracted(zip_path, extracted_dir, cache_dir),
+         :ok <- ensure_extracted(zip_path, full_hash, extracted_dir, cache_dir),
          {:ok, manifest} <- read_manifest(extracted_dir),
          :ok <- validate_manifest(manifest, zip_path),
          :ok <- validate_min_version(manifest, zip_path),
@@ -549,24 +580,6 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  # SHA256 of the whole zip file. The short prefix (16 hex) drives cache
-  # dir naming so the cache-key survives content changes but stays short
-  # enough for filesystem listings.
-  defp hash_file(path) do
-    try do
-      hash =
-        File.stream!(path, 65_536)
-        |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
-        |> :crypto.hash_final()
-        |> Base.encode16(case: :lower)
-        |> String.slice(0, 16)
-
-      {:ok, hash}
-    rescue
-      e -> {:error, "read failed: #{Exception.message(e)}"}
-    end
-  end
-
   # Idempotent. The cache dir's name is the content hash, so an existing one
   # holds the right bytes — but presence alone does not prove it is finished
   # or ours, so it is reused only when it looks complete AND we can still
@@ -583,10 +596,10 @@ defmodule KaoiroServer.PersonaAssets do
   @extracted_dir_mode 0o700
   @extracted_file_mode 0o600
 
-  defp ensure_extracted(zip_path, extracted_dir, cache_dir) do
+  defp ensure_extracted(zip_path, expected_full_hash, extracted_dir, cache_dir) do
     case reuse_extracted(extracted_dir) do
       :ok -> :ok
-      :stale -> extract(zip_path, extracted_dir, cache_dir)
+      :stale -> extract(zip_path, expected_full_hash, extracted_dir, cache_dir)
     end
   end
 
@@ -655,18 +668,112 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  defp extract(zip_path, extracted_dir, cache_dir) do
-    with :ok <- verify_archive(zip_path),
+  @doc false
+  # issue #195 (ふじ 2026-08-05 spec): preflight (`verify_archive/1`) and
+  # `:zip.unzip/2` used to open `zip_path` — an ingest-writer-controlled
+  # path — separately, several times each, with no guarantee any two of
+  # those opens saw the same bytes. An ingest writer could pass a small
+  # benign zip through preflight, then swap it for a different archive
+  # before `:zip.unzip/2` reopened the path, defeating every check
+  # preflight ran (F7 name validation, F8 size/entry bounds). Watcher
+  # rebuilds have no rate limit, so the race was retriable without limit.
+  #
+  # Fixed by staging: the source is copied ONCE, through a single already-
+  # open fd (immune to the source path being swapped mid-copy — an open
+  # fd stays bound to its original inode even if the path is re-pointed;
+  # NOT immune to the SAME inode being truncated/overwritten in place,
+  # which is why the digest re-check below still matters), into a private
+  # file under the trusted cache root that the ingest writer cannot reach.
+  # Every check downstream — this function's own `verify_archive/1` AND
+  # `:zip.unzip/2` — runs against that staged copy only, never the
+  # original path again. The guarantee holds inside a cache root the
+  # ingest writer cannot write into (ADR-0046 F6); a shared, permissive
+  # cache root is a different trust boundary this does not extend.
+  #
+  # Public for direct unit testing (mirrors `measure_archive/2` /
+  # `prepare_slot/2`): the digest-mismatch and all-exit-paths-cleanup
+  # properties need to drive this function with a deliberately WRONG
+  # `expected_full_hash` or observe `cache_dir` after a raise, neither of
+  # which is reachable by staging genuine race timing through the public
+  # `rebuild/0` entry point.
+  def extract(zip_path, expected_full_hash, extracted_dir, cache_dir) do
+    with {:ok, stage_dir, stage_path} <- new_stage(cache_dir) do
+      try do
+        result =
+          stage_then_extract(zip_path, expected_full_hash, stage_path, extracted_dir, cache_dir)
+
+        merge_cleanup_error(result, discard_stage(stage_dir, cache_dir))
+      rescue
+        # A `with`/`case` result carries a cache-vs-pack error through
+        # `merge_cleanup_error/2` above; an EXCEPTION skips straight past
+        # that — a raise anywhere in the `with` body above (issue #195
+        # must-4, the "exception / raise 経路" all-exit-paths cleanup
+        # case) — so it gets its own best-effort cleanup here before
+        # re-raising. Only `rescue`-caught exceptions are handled: throw
+        # / exit are not caught here, and `reclaim_stage_orphans/1`
+        # running unconditionally at the start of the next `build/1` (no
+        # age gate — must-fix 1) is what reclaims a stage left behind by
+        # those, or by this rescue's own cleanup failing, or by a crash
+        # so hard this `rescue` never runs at all.
+        e ->
+          case discard_stage(stage_dir, cache_dir) do
+            :ok ->
+              :ok
+
+            {_class, cleanup_reason} ->
+              Logger.warning(
+                "persona cache stage cleanup failed while unwinding " <>
+                  "#{Exception.message(e)}: #{cleanup_reason} " <>
+                  "(stage #{stage_dir} may be left behind)"
+              )
+          end
+
+          reraise e, __STACKTRACE__
+      end
+    end
+  end
+
+  # A mismatch here means the ingest-writer-controlled source changed
+  # between the identity hash `extract_and_load/2` computed and the bytes
+  # this rebuild actually staged — an in-flight update race, not a
+  # malformed archive. Logged with distinct wording on purpose (ふじ
+  # addendum, 2026-08-05): an operator seeing "unzip failed" and an
+  # operator seeing "source changed during staging" need to reach
+  # different conclusions (corruption to investigate vs. a benign race
+  # the next watcher-triggered rebuild already retries on its own).
+  defp verify_staged_digest(
+         staged_hash,
+         staged_hash,
+         _zip_path,
+         stage_path,
+         extracted_dir,
+         cache_dir
+       ) do
+    with :ok <- verify_archive(stage_path),
          :ok <- discard(extracted_dir, cache_dir),
          :ok <- prepare_slot(extracted_dir, cache_dir) do
       result =
-        case :zip.unzip(String.to_charlist(zip_path), cwd: String.to_charlist(extracted_dir)) do
+        case :zip.unzip(String.to_charlist(stage_path), cwd: String.to_charlist(extracted_dir)) do
           {:ok, _files} -> normalize_modes(extracted_dir)
           {:error, reason} -> classify_zip_error(reason, cache_dir)
         end
 
       discard_unless_clean(result, extracted_dir, cache_dir)
     end
+  end
+
+  defp verify_staged_digest(
+         _staged_hash,
+         _expected_full_hash,
+         zip_path,
+         _stage_path,
+         _extracted_dir,
+         _cache_dir
+       ) do
+    {:error,
+     "source changed during ingest (digest mismatch after staging) for " <>
+       "#{Path.basename(zip_path)} — treating as an update race, not corruption; " <>
+       "skipped this rebuild, the next watcher-triggered rebuild will retry"}
   end
 
   # `:zip.unzip/2` applies a FILE's declared mode as it writes that entry,
@@ -720,6 +827,224 @@ defmodule KaoiroServer.PersonaAssets do
     case File.mkdir(extracted_dir) do
       :ok -> :ok
       {:error, reason} -> classify_discard(reason, extracted_dir, probe_writable(cache_dir))
+    end
+  end
+
+  # issue #195: every staging directory this module creates carries this
+  # prefix, both for `reclaim_stage_orphans/1`'s sweep (below) and so a
+  # `.stage-*` entry is unmistakably ours if an operator has to look at
+  # the cache root by hand. Leading dot keeps it out of anything that
+  # globs cache entries by the bare 16-hex `@cache_key_name` shape.
+  @stage_prefix ".stage-"
+
+  # Exact shape `reclaim_stage_orphans/1` matches (issue #195 must-fix 2,
+  # ADR-0046 F3 追補): `@stage_prefix` followed by EXACTLY the 22-char
+  # base64url encoding `random_stage_name/0` produces for 16 random bytes
+  # (128 bits / 6 bits-per-char, no padding — charset `A-Za-z0-9_-`).
+  # `String.starts_with?/2` on the bare prefix used to match ANY entry
+  # shaped like `.stage-*`, including an operator's own
+  # `.stage-important` or `.stage-freshtest` directory — reclaim must
+  # never touch anything this module did not create itself.
+  #
+  # `\z`, not `$`: Elixir/Erlang `re` is PCRE-style, where an unanchored
+  # (no `/m`) `$` matches end-of-string OR immediately before a single
+  # trailing newline — measured: `.stage-<22 chars>\n` matches `$` but
+  # not `\z` (internal review, 2026-08-05). A directory name may legally
+  # contain a literal newline byte on Linux (only `/` and NUL are
+  # forbidden), so `$` would let a name shaped like `.stage-<22
+  # chars>\n` — which `random_stage_name/0` never produces — slip past
+  # this "exact match only" guarantee on a shared cache root.
+  @stage_dir_name ~r/^\.stage-[A-Za-z0-9_-]{22}\z/
+
+  # Random, not content- or basename-derived (ふじ 2026-08-05 spec):
+  # entropy here is purely for COLLISION avoidance, not a security
+  # boundary (that is the exclusive create below plus the cache root's
+  # own permissions, ADR-0046 F6). `PersonaRebuildLock` (issue #195
+  # must-fix 1) now serializes whole `rebuild/0` calls within this node,
+  # so two stages are never created concurrently by DIFFERENT rebuilds —
+  # but `reclaim_stage_orphans/1` runs best-effort (a listing or removal
+  # failure only logs, ADR-0046 F4 does not apply to slot operations) and
+  # could still leave a prior orphan on disk when a new stage is created
+  # in the same rebuild; randomness keeps that name collision-free too.
+  defp random_stage_name do
+    @stage_prefix <> (:crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false))
+  end
+
+  # Creates `<cache_dir>/.stage-<random>/`, narrowed to owner-only BEFORE
+  # anything is written under it — same insertion-window reasoning as
+  # `prepare_slot/2` (a permissive umask leaves `File.mkdir/1`'s result at
+  # 0755 until the chmod runs). Returns the directory and the archive path
+  # inside it; the caller is responsible for removing the directory in
+  # every exit path (`discard_stage/2`).
+  # Public for direct unit testing (mode 0700 is only observable while the
+  # stage lives — `extract/4` always cleans it up before returning).
+  @doc false
+  def new_stage(cache_dir) do
+    stage_dir = Path.join(cache_dir, random_stage_name())
+
+    with :ok <- File.mkdir(stage_dir) do
+      case File.chmod(stage_dir, @extracted_dir_mode) do
+        :ok -> {:ok, stage_dir, Path.join(stage_dir, "archive.zip")}
+        {:error, reason} -> discard_new_stage(reason, stage_dir, cache_dir)
+      end
+    else
+      {:error, reason} -> classify_discard(reason, stage_dir, probe_writable(cache_dir))
+    end
+  end
+
+  @doc false
+  # issue #195 must-fix 3: `File.mkdir/1` above already created `stage_dir`
+  # by the time `File.chmod/2` can fail, so that failure (unlike the
+  # `with`-else branch above, where nothing was created) must discard the
+  # directory it just made — a `discard_stage/2` originally missing from
+  # this path left the stage_dir to accumulate until `reclaim_stage_orphans/1`
+  # next ran, silently widening the same exposure F9 exists to close.
+  # Split out from `new_stage/1` so this wiring is pinnable directly: a
+  # genuine chmod failure needs a second OS user (single-UID CI cannot
+  # produce one, same constraint as `classify_discard/3`'s own callers),
+  # but this helper can be driven with a stage_dir that genuinely exists
+  # on disk and a synthetic reason, observing that `discard_stage/2`
+  # really ran — `merge_cleanup_error/2`'s own pure logic is already
+  # pinned separately.
+  def discard_new_stage(reason, stage_dir, cache_dir) do
+    classification = classify_discard(reason, stage_dir, probe_writable(cache_dir))
+    merge_cleanup_error(classification, discard_stage(stage_dir, cache_dir))
+  end
+
+  # Mirrors `discard/2`'s widen-then-remove shape, but a stage never holds
+  # anything but the one archive file this module wrote itself (no
+  # archive-declared modes to fight, unlike an extracted pack), so there
+  # is no `normalize_modes/1` step to run first.
+  @doc false
+  def discard_stage(stage_dir, cache_dir) do
+    case File.rm_rf(stage_dir) do
+      {:ok, _removed} -> :ok
+      {:error, reason, path} -> classify_discard(reason, path, probe_writable(cache_dir))
+    end
+  end
+
+  # Reclaims a `.stage-*` left behind by a crash between `new_stage/1` and
+  # `discard_stage/2` (issue #195, ふじ round-2 spec, 2026-08-05).
+  #
+  # Runs unconditionally, no age gate: `build/1` calls this FIRST, before
+  # any pack is touched, and `PersonaRebuildLock` (must-fix 1) guarantees
+  # only one `rebuild/0` executes at a time within this node, so no OTHER
+  # rebuild can be mid-staging when this runs — every `.stage-*` matching
+  # `@stage_dir_name`'s exact shape at this point is unreachable by any
+  # live code path and is therefore, unconditionally, a crash orphan. The
+  # earlier design gated on 10 minutes of directory age instead, because
+  # `rebuild/0` then carried no lock and a stage another concurrent
+  # rebuild was still actively writing had to be told apart from one truly
+  # abandoned — that hazard no longer exists.
+  #
+  # `Regex.match?(@stage_dir_name, entry)`, not `String.starts_with?/2`:
+  # the prefix alone matched ANY `.stage-*`-shaped entry, including one an
+  # operator created by hand (`.stage-important`, `.stage-freshtest`) —
+  # reclaim must never remove anything this module did not create itself
+  # (ADR-0046 F3 追補). `real_dir?/1` (lstat-based) rather than
+  # `File.dir?/1`, so a symlink placed at a matching name is rejected
+  # instead of followed and reclaimed via its target.
+  defp reclaim_stage_orphans(cache_dir) do
+    case File.ls(cache_dir) do
+      {:ok, entries} ->
+        for entry <- entries,
+            Regex.match?(@stage_dir_name, entry),
+            path = Path.join(cache_dir, entry),
+            real_dir?(path) do
+          case File.rm_rf(path) do
+            {:ok, _removed} ->
+              :ok
+
+            {:error, reason, file} ->
+              Logger.warning(
+                "persona cache stage reclaim failed for #{file}: #{inspect(reason)} " <>
+                  "(stale staging dir left behind)"
+              )
+          end
+        end
+
+      {:error, reason} ->
+        Logger.warning(
+          "persona cache stage reclaim skipped: cannot list #{cache_dir}: #{inspect(reason)}"
+        )
+    end
+
+    :ok
+  end
+
+  # issue #195: source is opened exactly once and the SAME fd is read from
+  # start to finish, so a source path swapped mid-copy (rename/relink)
+  # cannot affect an already-open fd — POSIX binds an open fd to the
+  # inode, not the path. An in-place truncate/overwrite of that SAME inode
+  # is NOT covered by this property (the fd would read the new bytes); the
+  # digest re-check in `stage_then_extract/5` is what catches that case,
+  # not the fd itself. Destination is created exclusively (refuses to
+  # follow a pre-planted symlink) and narrowed to owner-only before any
+  # byte is written, same insertion-window reasoning as `new_stage/1`.
+  #
+  # Bounded to `limit + 1` bytes via `bounded_read/4` (not `File.copy/3`):
+  # `File.copy/3`'s `{:error, reason}` cannot say which SIDE failed, and
+  # ADR-0046 F4 needs that distinction — a source (ingest path) read
+  # failure is this pack's problem, a destination (cache path) write
+  # failure is ours. Hashing happens in the SAME pass as the copy so the
+  # returned digest is exactly what got staged, with no separate read.
+  #
+  # Public for direct unit testing with a small `limit` (mirrors
+  # `measure_archive/2`): the production bound is a gigabyte, so pinning
+  # the exact-limit/limit+1 boundary and the exclusive-create/symlink
+  # guard needs a caller-supplied small bound, not the real constant.
+  @doc false
+  def stage_archive(source_path, dest_path, limit) do
+    case File.open(source_path, [:read, :binary, :raw]) do
+      {:ok, in_fd} ->
+        try do
+          open_stage_dest(in_fd, dest_path, limit)
+        after
+          File.close(in_fd)
+        end
+
+      {:error, reason} ->
+        {:read_error, reason}
+    end
+  end
+
+  defp open_stage_dest(in_fd, dest_path, limit) do
+    case File.open(dest_path, [:write, :exclusive, :raw, :binary]) do
+      {:ok, out_fd} ->
+        try do
+          case File.chmod(dest_path, @extracted_file_mode) do
+            :ok -> copy_and_hash(in_fd, out_fd, limit)
+            {:error, reason} -> {:write_error, reason}
+          end
+        after
+          File.close(out_fd)
+        end
+
+      {:error, reason} ->
+        {:write_error, reason}
+    end
+  end
+
+  defp copy_and_hash(in_fd, out_fd, limit) do
+    chunk_fun = fn data, {ctx, count} ->
+      case :file.write(out_fd, data) do
+        :ok -> {:ok, {:crypto.hash_update(ctx, data), count + byte_size(data)}}
+        {:error, reason} -> {:error, {:write, reason}}
+      end
+    end
+
+    case bounded_read(in_fd, limit, chunk_fun, {:crypto.hash_init(:sha256), 0}) do
+      {:ok, total, {ctx, _count}} ->
+        {:ok, total, ctx |> :crypto.hash_final() |> Base.encode16(case: :lower)}
+
+      {:oversize, total} ->
+        {:oversize, total}
+
+      {:read_error, reason} ->
+        {:read_error, reason}
+
+      {:error, {:write, reason}} ->
+        {:write_error, reason}
     end
   end
 
@@ -889,6 +1214,97 @@ defmodule KaoiroServer.PersonaAssets do
   # and OTP bounds it the same way, so it is not attacker-scaled.
   @max_central_dir_bytes @max_entries * 1024
 
+  # SHA256 of the whole zip file, capped at `@max_extracted_bytes + 1`
+  # bytes read (issue #195, ふじ 2026-08-05 spec) so a persistently
+  # oversized ingest drop cannot burn a full read-and-hash pass on every
+  # watcher-triggered rebuild attempt — PersonaWatcher's debounce is the
+  # only throttle, so an ingest writer can trigger this path essentially
+  # without limit. Returns both the 16-hex prefix (cache dir naming,
+  # unchanged) and the full 64-hex digest: the prefix alone is a 64-bit
+  # value and too weak for the safety-critical re-check `extract/4` does
+  # against the STAGED copy after `ensure_extracted/4` decides extraction
+  # is needed (must compare full digests there, not the truncated key).
+  defp hash_file(path) do
+    with {:ok, fd} <- open_raw(path) do
+      try do
+        chunk_fun = fn data, ctx -> {:ok, :crypto.hash_update(ctx, data)} end
+
+        case bounded_read(fd, @max_extracted_bytes, chunk_fun, :crypto.hash_init(:sha256)) do
+          {:ok, _total, ctx} ->
+            full = ctx |> :crypto.hash_final() |> Base.encode16(case: :lower)
+            {:ok, %{short: String.slice(full, 0, 16), full: full}}
+
+          {:oversize, _total} ->
+            {:error, "archive is over the #{@max_extracted_bytes} byte limit"}
+
+          {:read_error, reason} ->
+            {:error, "read failed: #{inspect(reason)}"}
+        end
+      after
+        File.close(fd)
+      end
+    end
+  end
+
+  # Shared bounded-read core (issue #195). Reads at most `limit + 1` bytes
+  # from an already-open raw fd, 64 KiB at a time, folding each chunk
+  # through `chunk_fun.(chunk, acc)`. Stopping at `limit + 1` rather than
+  # `limit` is what lets a caller tell "exactly at the limit" (accept)
+  # apart from "over the limit" (reject) without draining an arbitrarily
+  # large malicious source — once `limit + 1` bytes have been read, the
+  # answer is already "over", so nothing past that point is ever read.
+  # `chunk_fun` returns `{:ok, new_acc}` to continue or `{:error, reason}`
+  # to stop early (used by the staging copy below to surface a
+  # destination WRITE failure distinctly from a source READ failure).
+  defp bounded_read(fd, limit, chunk_fun, acc) do
+    bounded_read_loop(fd, limit + 1, 0, chunk_fun, acc)
+  end
+
+  defp bounded_read_loop(_fd, cap, total, _chunk_fun, _acc) when total >= cap do
+    {:oversize, total}
+  end
+
+  defp bounded_read_loop(fd, cap, total, chunk_fun, acc) do
+    want = min(65_536, cap - total)
+
+    case :file.read(fd, want) do
+      {:ok, data} ->
+        case chunk_fun.(data, acc) do
+          {:ok, acc} -> bounded_read_loop(fd, cap, total + byte_size(data), chunk_fun, acc)
+          {:error, _reason} = error -> error
+        end
+
+      :eof ->
+        {:ok, total, acc}
+
+      {:error, reason} ->
+        {:read_error, reason}
+    end
+  end
+
+  defp stage_then_extract(zip_path, expected_full_hash, stage_path, extracted_dir, cache_dir) do
+    case stage_archive(zip_path, stage_path, @max_extracted_bytes) do
+      {:ok, _total, staged_hash} ->
+        verify_staged_digest(
+          staged_hash,
+          expected_full_hash,
+          zip_path,
+          stage_path,
+          extracted_dir,
+          cache_dir
+        )
+
+      {:oversize, _total} ->
+        {:error, "staged archive is over the #{@max_extracted_bytes} byte limit"}
+
+      {:read_error, reason} ->
+        {:error, "reading source archive failed: #{inspect(reason)}"}
+
+      {:write_error, reason} ->
+        {:cache_error, "staging write failed: #{inspect(reason)}"}
+    end
+  end
+
   # The two compression methods this preflight can account for, which are
   # also the only two OTP's extractor handles. An entry declaring anything
   # else cannot be measured, so the pack is refused rather than guessed at.
@@ -1006,6 +1422,12 @@ defmodule KaoiroServer.PersonaAssets do
   # smaller declaration writes less (an entry declaring 0 — the streamed
   # `data descriptor` shape — makes it refuse the archive outright,
   # measured for both methods).
+  # Defense-in-depth only (issue #195): `verify_archive/1` runs against
+  # `stage_path`, so the AUTHORITATIVE size bound is already enforced by
+  # `stage_archive/3`'s own `limit + 1` cap before this ever runs — a
+  # file that got this far cannot be over the limit. Kept as a stat-based
+  # cheap check anyway so `measure_archive/2`'s pinned tests (small
+  # bounds, no staging involved) still exercise this exact path.
   defp verify_archive_bytes(zip_path) do
     case File.stat(zip_path) do
       {:ok, %File.Stat{size: size}} when size > @max_extracted_bytes ->

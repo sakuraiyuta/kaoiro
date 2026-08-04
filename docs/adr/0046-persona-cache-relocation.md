@@ -47,6 +47,20 @@ dir では cold start が壊れる。問題は ADR-0045 のレビュー中に発
 reclaim は 16 hex の cache-key 形式に一致する entry だけを削除する。誤って
 指定した root 配下の無関係なディレクトリを保護する。
 
+**追補 (issue #195 must-fix 2, 2026-08-05):** staging 領域の孤児 reclaim
+(`reclaim_stage_orphans/1`, F9 参照)も同じ原則に従う。対象は F9 が生成
+する `.stage-` に続く 22 文字の random suffix(charset `A-Za-z0-9_-`)まで
+**厳密に一致**する entry だけであり、正規表現は
+`~r/^\.stage-[A-Za-z0-9_-]{22}\z/` — 前方一致(`.stage-` で始まってさえ
+いれば良い、という緩い条件)ではない。`.stage-important` や
+`.stage-freshtest` のように前方一致はするが厳密な shape に合わない
+entry は永続として扱い、reclaim は絶対に削除しない。`$` ではなく `\z`:
+Elixir/Erlang `re` は PCRE 流儀で、`/m` 無しの `$` は文字列末尾の直前の
+1個の改行にもマッチするため、`.stage-<22文字>\n` という(生成され得ない)
+shape が exact-match をすり抜ける穴が内部レビューで見つかった
+(2026-08-05、実装側は修正済み、本 ADR の記述が古いままだった点をふじ
+round-3 で指摘・修正)。
+
 ### F4: cache の失敗契約を分ける
 
 cache root を cold start 時に作成または書き込みできない場合は fail-fast で
@@ -266,6 +280,81 @@ local header 整合 (F7) → inflate 実測。名前だけで reject できる t
 zip bomb に、最大 1 GiB 分の inflate CPU を払わせないためである。F7 と本検査は
 いずれも書き込みを一切行わない層であり、この不変条件は順序の変更に依らず維持する。
 
+### F9: preflight と展開の TOCTOU を staging で閉じる (issue #195, ふじ 2026-08-05 spec)
+
+F7 / F8 の preflight (`verify_archive/1`) と `:zip.unzip/2` は、当初どちらも
+ingest writer が制御できる `zip_path` を独立に開いていた — 検査本体だけでも
+`:zip.list_dir/1` を 2 回、`File.open(raw)` を複数回、展開側の
+`:zip.unzip/2` を含めると同一パスを合計 5 回以上開き直す。両者が同一バイト列
+である保証は無く、ingest dir に書ける主体は検査通過後・展開開始前に別の
+archive へ差し替えることで F7 / F8 双方の検査を無効化できた
+(旧 Negative 記載、下記で解消)。
+
+**検討した対処案。** (a) 一度読んだ binary を preflight と展開の双方へ渡す —
+上限が 1 GiB である以上、一括 read は現行の 64 KiB streaming 設計 (F8) を
+破りそれ自体が新規メモリ DoS になるため却下。(b) preflight 直後の再ハッシュ —
+窓を狭めるが塞がないため却下。(c) OTP `:zip.zip_open/2` の fd 保持 API を
+使い切る — `zip_open` はパス指定時に 1 回だけ `file:open` し以後の
+`zip_get`/`zip_list_dir` は同一 fd の pread/read のみで再オープンしないこと
+を stdlib 8.0.1 ソースで確認したが、`zip_get/1` (memory オプション無し) は
+各 entry を直接ディスクへ書く設計で「展開後サイズだけ測って中身は保持しない」
+ができない。F8 の streaming inflate 測定をこの API 経由で作り直すか
+`:zip.unzip/2` 自体を自前実装へ置き換える必要があり、本 issue の severity
+(Low) には過大と判断し不採用(将来 severity が上がれば再検討の余地あり)。
+
+**採用した方式。** ingest から読んだ archive を、ingest writer が触れない
+trusted cache root 配下の private な staging 領域(exclusive mkdir 0700 の
+一時 dir + exclusive create 0600 のファイル、basename は collision 回避
+専用の random 値で security boundary ではない)へ、source を **1 回だけ
+open** した fd から 64 KiB チャンクで **bounded copy**(上限 `limit + 1`
+byte — ちょうど上限と上限超過を区別するための 1 byte で、それ以上は読まない)
+する。copy と同じパスで SHA-256 を計算し、**staged 側の full digest** と
+**識別用に事前計算していた full digest** を照合する。一致しなければ「取り込み
+中に source が変化した」と判断し、当該 pack を **race として skip**(malformed
+archive とは区別できる文言でログする)し、次の watcher-triggered rebuild に
+再試行を委ねる。一致すれば、以降の F7 / F8 preflight と `:zip.unzip/2` は
+**staging されたファイルだけ**を見る(元の ingest path には二度と触れない)。
+
+**この方式が保証すること。** open した fd は元の inode に紐づくため、copy
+開始後に ingest 側の path が rename/relink で差し替わっても、既に開いている
+fd は影響を受けない(POSIX の一般的性質)。**ただし同一 inode への
+truncate/上書きは影響を受ける** — copy 完了前に元ファイルの中身が同じ inode
+上で書き換わると、staged 側に新旧混在のバイト列が入り得る。この性質は
+「fd が source の時点 snapshot を保証する」という意味ではない —
+保証しているのは「**bounded copy が生成した、以後変化しない stable な
+artifact に対して、preflight と展開が同じものを見る**」という一貫性であり、
+仮に混在バイト列が staged されても、F7 / F8 と `:zip.unzip/2` はその
+staged artifact 全体に対して一貫して検査・展開するため安全性は破れない
+(不正な形であれば reject、正当な形であれば一貫して展開されるだけ)。
+
+**この保証は trust boundary の内側でのみ成立する。** cache root は ingest
+writer が書き込めないことが前提 (F6 の trust boundary と同じ前提)。F6 が
+述べるとおり、明示指定 cache root を group/world-writable にする運用は
+operator の判断に委ねられており、そのような root では staging 領域自体が
+ingest writer から到達可能になり得るため、本節の保証は適用されない。
+
+**stage の後始末。** 生成した staging 領域は success / pack error /
+cache error / exception raise の全経路で削除する。正常な戻り値
+(success / pack error / cache error)は `merge_cleanup_error/2` で
+cleanup 結果とマージして返す。`rescue` は例外 (`raise` で送出される
+error exception)だけを対象に cleanup 後 `reraise` する — `try`/`after`
+ではなく `try`/`rescue` であり、throw / exit はこの層では捕まえない
+(それらを含む untrappable な termination は下記の孤児 reclaim が最終
+防衛線となる)。
+
+VM crash 等で削除処理自体が走らなかった場合に備え、`.stage-*` の
+random suffix まで厳密に一致する命名パターンの孤児を reclaim する
+(issue #195 ふじ round-2 レビュー, 2026-08-05)。当初は 10 分の
+age-gate で保護していたが、それは `rebuild/0` に global lock が無く、
+他の並行 rebuild がまだ使用中の staging 領域を誤って掃除しないための
+ものだった。**must-fix 1** で `rebuild/0` 本体を
+`KaoiroServer.PersonaRebuildLock` 経由に直列化し、この BEAM node 内で
+同時に1本の rebuild しか走らないことを保証したため、`build/1` 開始
+時点で live な staging 領域は存在し得ない。したがって age-gate を撤廃
+し、`reclaim_stage_orphans/1` の呼び出しを `build/1` の先頭(pack 処理
+より前)へ移動、F3 が定める厳密な名前一致の entry を条件なしで即時
+reclaim する方式に改めた。
+
 なお `:zip.unzip/2` の entry 列挙元は central directory であることを実測した
 (central に載っていない local entry は展開されない)。よって entry 数を central
 directory から数えることは、展開側の挙動と一致する。
@@ -305,15 +394,11 @@ directory から数えることは、展開側の挙動と一致する。
 - **EOCD の探索窓は予算の外側にある。** 倍化ループは最大約 131 KB を読む。
   OTP 自身が同じ上限で読むため攻撃者にスケールさせられないが、「列挙前に読む
   バイト数はすべて 4 MiB 以内」という言い方は正確ではない。
-- **preflight と展開の間に TOCTOU がある。** 検査はパス経由で zip を読み、
-  `:zip.unzip/2` は同じパスを開き直すため、両者が同一バイト列である保証は無い。
-  失われうるのは F8 の上限検査だけでなく、F7 の entry 名検証を含む preflight
-  全体である。ingest dir に書ける者は、検査通過後・展開開始前に別の zip へ
-  差し替えられる。ただし攻撃には operator が管理する ingest mount へ継続的に
-  書ける主体が必要であり、現行 OTP の `:zip.unzip/2` 自体にも zip-slip 拒否が
-  あって多層防御の 1 層が残る。同じ volume 枯渇はレース無しでも到達可能な
-  受容済み残存リスクでもあるため、深刻度は低い。kaoiro issue #195 で扱う
-  (解決時に本項を更新する)。
+- ~~preflight と展開の間に TOCTOU がある。~~ **解決済み (F9, issue #195,
+  2026-08-05)。** 検査対象を trusted cache root 配下の staging artifact に
+  一本化し、staged full digest と識別用 full digest の照合で ingest 側の
+  差し替えを race として検出・skip する。保証は trust boundary の内側
+  (F6) でのみ成立する — 詳細は F9 参照。
 
 ### Neutral
 

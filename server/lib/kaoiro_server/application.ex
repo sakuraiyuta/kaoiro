@@ -16,10 +16,6 @@ defmodule KaoiroServer.Application do
     # so the state is visible in logs (specs/threat-model.md, issue #28).
     :ok = KaoiroServer.Auth.warn_token_config()
 
-    # Warm the persona pack manifest cache before the endpoint serves
-    # requests (ADR-0029). The watcher below reacts to live changes.
-    :ok = KaoiroServer.PersonaAssets.rebuild()
-
     children = [
       KaoiroServerWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:kaoiro_server, :dns_cluster_query) || :ignore},
@@ -76,6 +72,17 @@ defmodule KaoiroServer.Application do
       # (ADR-0045). Must precede FooterWatcher, which rebuilds through it,
       # and the Endpoint, whose WrapperChannel reads the snapshot.
       KaoiroServer.FooterAssets,
+      # Serializes PersonaAssets.rebuild/0 within this node (issue #195
+      # must-fix 1) and OWNS the boot-time warm rebuild (ADR-0029) via
+      # its own `init/1` (`warm: true`, issue #195 round-3, ふじ
+      # 2026-08-05 spec) — a raise there fails THIS Supervisor.start_link
+      # outright (a root supervisor's initial child-start failure does
+      # not enter the restart-intensity retry loop; measured OTP
+      # 29.0.2), preserving ADR-0046 F4's cold-start fail-fast with no
+      # boot-only bypass of the lock. Must precede PersonaWatcher, whose
+      # FS-event handler calls `PersonaAssets.rebuild/0` (routed through
+      # this lock).
+      {KaoiroServer.PersonaRebuildLock, warm: true},
       # Watch persona ingest dir for zip changes and rebuild the manifest
       # cache without restart (ADR-0029 F6).
       KaoiroServer.PersonaWatcher,
