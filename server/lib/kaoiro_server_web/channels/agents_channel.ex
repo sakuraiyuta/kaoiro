@@ -53,6 +53,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
   (`runner_sessions` / `spawn_result`) and host registration updates
   (`hosts`) ride `agents:lobby` but are operator-only in handle_out —
   host/session info must never reach a viewer (#27/ADR-0021, fail-closed).
+
+  `launch_defaults` (issue #88) is operator-only like the rest of the
+  launch UI's requests but, unlike them, never touches the runner: it
+  replies synchronously with a persona-scoped `%{persona_id => effort}`
+  map computed by joining `AgentDirectory` and `SessionPointers` at read
+  time (see `launch_defaults/0`), so LaunchDialog can default a persona's
+  effort picker to whatever it last committed. No new persistent store —
+  the 2026-07-23 scope decision on the issue found the two existing
+  stores already carry everything needed.
   """
 
   use Phoenix.Channel
@@ -599,6 +608,23 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # LaunchDialog persona-scoped effort default (issue #88). Operator-only;
+  # unlike enumerate_sessions/spawn this never touches the runner — it is a
+  # pure read-time join of AgentDirectory (agent_id -> persona) and
+  # SessionPointers (agent_id -> snapshot + effort_revision), computed and
+  # replied synchronously like `spawn`'s agent_id allocation. No new store
+  # (2026-07-23 scope decision on the issue). See `launch_defaults/0` for
+  # the selection order and `SessionPointers.record_snapshot/2` for how
+  # effort_revision advances.
+  def handle_in("launch_defaults", payload, socket) do
+    with :ok <- require_operator(socket) do
+      warn_on_version_mismatch(payload, "launch_defaults", "accepting")
+      {:reply, {:ok, %{"defaults" => launch_defaults()}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
   # Operator-only restore (#22, ADR-0014「復帰」): bring a disconnected agent
   # back under its SAME agent_id by re-spawning with resume. The server holds
   # everything needed: the SessionPointer (session_id + cwd, restart-surviving)
@@ -1071,23 +1097,29 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  defp warn_on_version_mismatch(%{"version" => "0"}, _event), do: :ok
+  # `action` names what happens to the request AFTER acceptance, so the log
+  # line reads correctly for both a pass-through (`relay_to_runner`, default
+  # "relaying") and a directly-answered request like `launch_defaults`
+  # (issue #88, "accepting" — nothing is relayed anywhere).
+  defp warn_on_version_mismatch(payload, event, action \\ "relaying")
+
+  defp warn_on_version_mismatch(%{"version" => "0"}, _event, _action), do: :ok
 
   # The inspect is bounded because `version` is unvalidated client input and
   # the size guard has not run yet (issue #26's concern applies to the log
   # sink too, not just the runner process).
-  defp warn_on_version_mismatch(%{"version" => version}, event) do
-    warn_relayed_version(event, inspect(version, printable_limit: 64, limit: 8))
+  defp warn_on_version_mismatch(%{"version" => version}, event, action) do
+    warn_relayed_version(event, inspect(version, printable_limit: 64, limit: 8), action)
   end
 
-  defp warn_on_version_mismatch(_payload, event) do
-    warn_relayed_version(event, "(absent)")
+  defp warn_on_version_mismatch(_payload, event, action) do
+    warn_relayed_version(event, "(absent)", action)
   end
 
-  defp warn_relayed_version(event, declared) do
+  defp warn_relayed_version(event, declared, action) do
     Logger.warning(
       "#{event}: client declared protocol version #{declared}; " <>
-        "relaying as \"0\" (ADR-0015 best-effort accept)"
+        "#{action} as \"0\" (ADR-0015 best-effort accept)"
     )
   end
 
@@ -1316,6 +1348,92 @@ defmodule KaoiroServerWeb.AgentsChannel do
     case AgentDirectory.get(agent_id) do
       %{persona: persona} when is_map(persona) -> {:ok, persona}
       _ -> {:error, :unknown_agent}
+    end
+  end
+
+  # LaunchDialog persona-scoped effort default (issue #88): a pure
+  # AgentDirectory x SessionPointers read-time join, `persona_id => effort`.
+  # Every agent_id known to AgentDirectory is grouped by its persona id; per
+  # persona, `pick_effort/1` (ふじ 2026-08-05 spec) applies the selection
+  # order below. Personas with no usable candidate are omitted entirely
+  # (LaunchDialog falls back to the model's own default_effort for those).
+  defp launch_defaults do
+    compute_launch_defaults(AgentDirectory.all(), SessionPointers.all())
+  end
+
+  @doc """
+  Pure join/selection core of `launch_defaults` (issue #88), split out from
+  the GenServer-backed `AgentDirectory.all/0` / `SessionPointers.all/0`
+  reads so the selection rules are directly testable against hand-built
+  `directory` / `pointers` maps — in particular the legacy
+  (`effort_revision: nil` with a valid effort) branches. The current write
+  API cannot CONSTRUCT that combination directly (any commit through
+  `SessionPointers.record_snapshot/2` that lands a valid effort always
+  assigns a revision), but it IS production-reachable: every pointer
+  persisted before this feature shipped is exactly a nil-revision row with
+  whatever valid effort it last held, and stays that way until its agent's
+  next snapshot commit lazily migrates it (ふじ review 2026-08-05). Public
+  for the testability reason above, not because callers outside this
+  module are expected to use it (mirrors `safe_reason/1` in this same
+  module).
+  """
+  def compute_launch_defaults(directory, pointers) do
+    directory
+    |> Enum.reduce(%{}, fn {agent_id, entry}, acc ->
+      case launch_default_candidate(entry, Map.get(pointers, agent_id)) do
+        {persona_id, revision, effort} ->
+          Map.update(acc, persona_id, [{revision, effort}], &[{revision, effort} | &1])
+
+        :skip ->
+          acc
+      end
+    end)
+    |> Map.new(fn {persona_id, candidates} -> {persona_id, pick_effort(candidates)} end)
+    |> Enum.reject(fn {_persona_id, effort} -> is_nil(effort) end)
+    |> Map.new()
+  end
+
+  # malformed/空 effort は defensive に skip する (ふじ指摘): the write-side
+  # sanitizer in SessionPointers only guards commits made through
+  # record_snapshot/2, not whatever a pre-#88 legacy DETS row already holds,
+  # so this read-time join re-validates rather than trusting stored content.
+  defp launch_default_candidate(%{persona: %{"id" => persona_id}}, pointer)
+       when is_binary(persona_id) do
+    effort = pointer && get_in(pointer, [:snapshot, "effort"])
+
+    if is_binary(effort) and effort != "" do
+      {persona_id, pointer[:effort_revision], effort}
+    else
+      :skip
+    end
+  end
+
+  defp launch_default_candidate(_entry, _pointer), do: :skip
+
+  # Selection order (ふじ, issue #88, 2026-08-05):
+  #   1. any candidate carries an effort_revision -> the highest-revision one
+  #   2. no revision anywhere, exactly one candidate -> that effort
+  #   3. no revision anywhere, several candidates that all agree -> that value
+  #   4. no revision anywhere, several candidates that disagree -> nil (no
+  #      preference; LaunchDialog falls back to the model's default_effort)
+  defp pick_effort(candidates) do
+    {revisioned, unrevisioned} = Enum.split_with(candidates, fn {rev, _} -> not is_nil(rev) end)
+
+    cond do
+      revisioned != [] ->
+        revisioned |> Enum.max_by(fn {rev, _} -> rev end) |> elem(1)
+
+      match?([_], unrevisioned) ->
+        unrevisioned |> hd() |> elem(1)
+
+      unrevisioned != [] ->
+        case unrevisioned |> Enum.map(&elem(&1, 1)) |> Enum.uniq() do
+          [only] -> only
+          _multiple -> nil
+        end
+
+      true ->
+        nil
     end
   end
 

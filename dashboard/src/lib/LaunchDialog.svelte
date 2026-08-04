@@ -8,7 +8,7 @@
     KaoiroConnection,
     RunnerSessions,
   } from "./protocol";
-  import { PERMISSION_MODE_AXES } from "./protocol";
+  import { PERMISSION_MODE_AXES, resolveLaunchDefaultEffort } from "./protocol";
 
   let {
     hosts,
@@ -54,6 +54,22 @@
   let engine = $state("claude-code");
   let model = $state("");
   let effort = $state("");
+  // Persona-scoped "last chosen effort" (issue #88): `persona_id => effort`
+  // fetched once per dialog open (see the $effect below), joined against
+  // the current model's effort_levels wherever `effort` is (re)computed.
+  // Kept SEPARATE from `effort` itself — writing it directly would fight
+  // the model-validity reset effect and the operator's own manual pick.
+  let launchDefaults = $state<Record<string, string>>({});
+  // True once the operator has directly touched the effort <select> for
+  // the CURRENT persona; guards a late getLaunchDefaults() reply (or a
+  // launchDefaults-triggered re-evaluation) from clobbering that pick
+  // (ふじ review). Reset on persona switch — see the effect below.
+  let manualEffortPick = $state(false);
+  // Plain (non-reactive) last-seen personaId so the effort-default effect
+  // can tell "persona actually changed" apart from "some other tracked
+  // value changed while personaId stayed the same" (mirrors this file's
+  // `alive`/`refreshGeneration` ref idiom).
+  let lastEffortDefaultPersona = { current: "" };
   let sandbox = $state<"read-only" | "workspace-write" | "danger-full-access">(
     "workspace-write",
   );
@@ -99,7 +115,24 @@
   function chooseModel(event: Event): void {
     model = (event.currentTarget as HTMLSelectElement).value;
     const choice = engineModels.find((m) => m.value === model);
-    effort = choice?.default_effort ?? "";
+    // issue #88: the persona's last-committed effort wins over the model's
+    // own default_effort when it is actually offered by the newly chosen
+    // model; otherwise fall back to default_effort exactly as before. A
+    // model change is a fresh baseline (manualPick: false forces a fresh
+    // evaluation here regardless of any prior pick), so it also clears
+    // manualEffortPick — there is no longer a "manual pick for this model"
+    // to protect.
+    const preferred = resolveLaunchDefaultEffort({
+      manualPick: false,
+      preferred: launchDefaults[personaId],
+      effortLevels: choice?.effort_levels ?? [],
+    });
+    effort = preferred ?? (choice?.default_effort ?? "");
+    manualEffortPick = false;
+  }
+  function chooseEffort(event: Event): void {
+    effort = (event.currentTarget as HTMLSelectElement).value;
+    manualEffortPick = true;
   }
   // Codex permission is launch-fixed (ADR-0033 F3): the sandbox axis is the
   // only selectable knob; approval is pinned to "never" upstream.
@@ -226,6 +259,61 @@
     }
     if (!h.cwd_allowlist.includes(cwd)) {
       cwd = h.cwd_allowlist[0] ?? "";
+    }
+  });
+
+  // issue #88: fetch the persona-scoped "last chosen effort" map once per
+  // dialog open. Failure falls back silently to the model's own
+  // default_effort (chooseModel's existing behavior) — this must never
+  // block launch, so no `error`/`catalogError`-style UI surfacing here.
+  $effect(() => {
+    let cancelled = false;
+    connection
+      .getLaunchDefaults()
+      .then((defaults) => {
+        if (!cancelled) launchDefaults = defaults;
+      })
+      .catch(() => {
+        // Silent by design (ふじ pin) — effort picker just stays on
+        // whatever chooseModel/default_effort already computed.
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  // Applies the current persona's preferred effort once launchDefaults
+  // resolves (chooseModel already applies it synchronously on a model
+  // change, using whatever launchDefaults holds at that moment; this
+  // effect re-applies it if the fetch resolves later). A persona switch
+  // always re-baselines (clears manualEffortPick for the new persona)
+  // before evaluating — an unrelated re-run (e.g. launchDefaults itself
+  // changing) must NOT clear a manual pick made for the CURRENT persona.
+  $effect(() => {
+    const persona = personaId;
+    const personaChanged = persona !== lastEffortDefaultPersona.current;
+    if (personaChanged) {
+      lastEffortDefaultPersona.current = persona;
+      manualEffortPick = false;
+    }
+
+    if (manualEffortPick) return;
+
+    const next = resolveLaunchDefaultEffort({
+      manualPick: false,
+      preferred: launchDefaults[persona],
+      effortLevels,
+    });
+
+    if (next !== undefined) {
+      effort = next;
+    } else if (personaChanged) {
+      // The newly selected persona has no usable preference (no mapping
+      // entry, or one invalid for the current model) — rebaseline to the
+      // model's own default rather than leaving the PREVIOUS persona's
+      // effort in place (ふじ review, must-fix 1).
+      const choice = engineModels.find((m) => m.value === model);
+      effort = choice?.default_effort ?? "";
     }
   });
 
@@ -394,7 +482,7 @@
       {#if effortLevels.length > 0}
         <label>
           effort
-          <select bind:value={effort}>
+          <select value={effort} onchange={chooseEffort}>
             <option value="">既定</option>
             {#each effortLevels as l (l)}
               <option value={l}>{l}</option>

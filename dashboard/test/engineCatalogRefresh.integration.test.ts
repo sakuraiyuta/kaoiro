@@ -90,6 +90,9 @@ function makeConnection() {
         return d.promise;
       },
     ),
+    // issue #88: LaunchDialog fetches this unconditionally on mount; this
+    // suite is not exercising the persona-default feature.
+    getLaunchDefaults: vi.fn(async () => ({})),
   } as unknown as KaoiroConnection;
   return { conn, calls };
 }

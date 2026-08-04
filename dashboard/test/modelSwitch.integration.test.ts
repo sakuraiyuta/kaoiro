@@ -55,6 +55,10 @@ function connection(overrides: Partial<KaoiroConnection> = {}): KaoiroConnection
       ok: true,
       models_count: 0,
     })),
+    // issue #88: LaunchDialog fetches this unconditionally on mount; this
+    // suite is not exercising the persona-default feature, so an empty
+    // resolve keeps chooseModel's existing default_effort behavior intact.
+    getLaunchDefaults: vi.fn(async () => ({})),
     ...overrides,
   } as unknown as KaoiroConnection;
 }

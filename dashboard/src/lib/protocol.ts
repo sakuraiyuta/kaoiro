@@ -1323,6 +1323,15 @@ export interface KaoiroConnection {
    * unknown_persona / cwd_not_allowed). The eventual launch outcome
    * arrives separately via onSpawnResult. */
   spawn: (request: SpawnRequest) => Promise<{ agentId: string }>;
+  /** LaunchDialog persona-scoped effort default (issue #88): resolves with
+   *  a `persona_id => effort` map computed server-side from a read-time
+   *  join of AgentDirectory and SessionPointers (no new store). Entries are
+   *  defensively parsed — a malformed persona_id/effort pair is dropped
+   *  without discarding the rest of the map. Rejects on forbidden /
+   *  transport disconnect / timeout; the caller (LaunchDialog) must fall
+   *  back to the model's own default_effort rather than block launch on
+   *  this failing. */
+  getLaunchDefaults: () => Promise<Record<string, string>>;
   /** Requests the resume candidates under (host, cwd) (#22 phase-1);
    * resolves when the server accepts the relay. The candidate list arrives
    * separately via onSessions. Rejects like sendInstruction. */
@@ -1922,6 +1931,43 @@ function parseCatalogResult(payload: unknown): EngineCatalogResult | null {
       ? { models_count: p.models_count }
       : {}),
   };
+}
+
+/** Defensive parse of the launch_defaults reply (issue #88): fail-closed
+ *  per entry, not per message — a malformed persona_id/effort pair is
+ *  dropped, but the rest of the map survives (ふじ review). */
+function parseLaunchDefaults(raw: unknown): Record<string, string> {
+  if (typeof raw !== "object" || raw === null) return {};
+  const out: Record<string, string> = {};
+  for (const [personaId, effort] of Object.entries(
+    raw as Record<string, unknown>,
+  )) {
+    if (personaId !== "" && typeof effort === "string" && effort !== "") {
+      out[personaId] = effort;
+    }
+  }
+  return out;
+}
+
+/** LaunchDialog persona effort default resolution (issue #88). Pure helper
+ *  isolated so the "a manual pick always wins" guard is unit-testable
+ *  without mounting LaunchDialog.svelte (mirrors `shouldForceReconnectOnVisible`
+ *  in this same file). Returns the effort to APPLY, or `undefined` for "no
+ *  change" — the caller only assigns when a value comes back, so a late
+ *  getLaunchDefaults() reply (or any other re-evaluation) can never
+ *  overwrite an operator's manual effort pick, and an unknown/invalid-for-
+ *  the-current-model preference simply leaves whatever chooseModel already
+ *  computed (its own default_effort fallback) in place. */
+export function resolveLaunchDefaultEffort(opts: {
+  manualPick: boolean;
+  preferred: string | undefined;
+  effortLevels: readonly string[];
+}): string | undefined {
+  if (opts.manualPick) return undefined;
+  if (opts.preferred !== undefined && opts.effortLevels.includes(opts.preferred)) {
+    return opts.preferred;
+  }
+  return undefined;
 }
 
 /** Runner-bound protocol version (ADR-0015, protocol.md 「version」節).
@@ -2793,6 +2839,24 @@ export function connectKaoiro(
             typeof resp?.agent_id === "string"
               ? resolve({ agentId: resp.agent_id })
               : reject(new Error("error")),
+          )
+          .receive("error", (reason: { reason?: string } | undefined) =>
+            reject(new Error(reason?.reason ?? "error")),
+          )
+          .receive("timeout", () => reject(new Error("timeout")));
+      }),
+    getLaunchDefaults: () =>
+      new Promise((resolve, reject) => {
+        // ADR-0015 stamps `version` on ALL three-party messages, not only
+        // the runner-relay subset RUNNER_CONTROL_VERSION documents — this
+        // event never reaches the runner, but it is still a client ->
+        // server message and the ADR draws no such exception (reviewed
+        // 2026-08-05; an earlier revision of this code wrongly scoped the
+        // ADR to the runner-relay set and omitted `version` here).
+        channel
+          .push("launch_defaults", { version: "0" })
+          .receive("ok", (resp: { defaults?: unknown }) =>
+            resolve(parseLaunchDefaults(resp?.defaults)),
           )
           .receive("error", (reason: { reason?: string } | undefined) =>
             reject(new Error(reason?.reason ?? "error")),

@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   import ExUnit.CaptureLog
+  import KaoiroServer.TestTeardown
 
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
@@ -2426,7 +2427,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :ok, %{"agent_id" => agent_id}
       # The cast is enqueued before the reply, so the pointer is set by now.
       assert SessionPointers.get(agent_id) ==
-               %{session_id: nil, cwd: "/home/user/seed", engine: "claude-code", snapshot: nil}
+               %{
+                 session_id: nil,
+                 cwd: "/home/user/seed",
+                 engine: "claude-code",
+                 snapshot: nil,
+                 effort_revision: nil
+               }
     end
 
     test "operator の spawn: engine/model/sandbox を検証して payload に中継する (ADR-0032)" do
@@ -4129,6 +4136,253 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute Map.has_key?(state.last_dispatch, agent_id)
 
       _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+  end
+
+  # issue #88: LaunchDialog persona-scoped effort default. Two tiers —
+  # `compute_launch_defaults/2` is exercised directly against hand-built
+  # directory/pointers maps for the full selection matrix (including the
+  # legacy `effort_revision: nil` branches — reachable in production from
+  # any pointer that predates this feature, just not CONSTRUCTABLE through
+  # the current write API in a single test call; see the moduledoc on that
+  # function), and the channel wire path is covered separately for the
+  # operator gate and the common (revision-bearing) case reachable through
+  # the real stores. A migration-path integration test (isolated DETS, the
+  # real loader) lives in session_pointers_test.exs / below.
+  describe "compute_launch_defaults/2 選択規則 (issue #88)" do
+    test "revision が最大の候補を採用する (a)" do
+      directory = %{
+        "a1" => %{persona: %{"id" => "p1"}},
+        "a2" => %{persona: %{"id" => "p1"}}
+      }
+
+      pointers = %{
+        "a1" => %{snapshot: %{"effort" => "low"}, effort_revision: 3},
+        "a2" => %{snapshot: %{"effort" => "high"}, effort_revision: 5}
+      }
+
+      assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{"p1" => "high"}
+    end
+
+    test "revision なし・単独 candidate はそのまま採用する (b)" do
+      directory = %{"a1" => %{persona: %{"id" => "p2"}}}
+      pointers = %{"a1" => %{snapshot: %{"effort" => "mid"}, effort_revision: nil}}
+
+      assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{"p2" => "mid"}
+    end
+
+    test "revision なし・複数 candidate が同値なら採用する (b)" do
+      directory = %{
+        "a1" => %{persona: %{"id" => "p3"}},
+        "a2" => %{persona: %{"id" => "p3"}}
+      }
+
+      pointers = %{
+        "a1" => %{snapshot: %{"effort" => "high"}, effort_revision: nil},
+        "a2" => %{snapshot: %{"effort" => "high"}, effort_revision: nil}
+      }
+
+      assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{"p3" => "high"}
+    end
+
+    test "revision なし・複数 candidate が不一致なら no preference で persona 自体を除外する (b)" do
+      directory = %{
+        "a1" => %{persona: %{"id" => "p4"}},
+        "a2" => %{persona: %{"id" => "p4"}}
+      }
+
+      pointers = %{
+        "a1" => %{snapshot: %{"effort" => "low"}, effort_revision: nil},
+        "a2" => %{snapshot: %{"effort" => "high"}, effort_revision: nil}
+      }
+
+      assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{}
+    end
+
+    test "revision ありと revision なしが混在しても revision ありが勝つ" do
+      directory = %{
+        "a1" => %{persona: %{"id" => "p5"}},
+        "a2" => %{persona: %{"id" => "p5"}}
+      }
+
+      pointers = %{
+        "a1" => %{snapshot: %{"effort" => "low"}, effort_revision: nil},
+        "a2" => %{snapshot: %{"effort" => "high"}, effort_revision: 1}
+      }
+
+      assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{"p5" => "high"}
+    end
+
+    test "空文字 effort は malformed として defensive に skip される" do
+      directory = %{"a1" => %{persona: %{"id" => "p6"}}}
+      pointers = %{"a1" => %{snapshot: %{"effort" => ""}, effort_revision: nil}}
+
+      assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{}
+    end
+
+    test "effort フィールド自体が無い snapshot は skip される (haiku 等 effort 非対応モデル)" do
+      directory = %{"a1" => %{persona: %{"id" => "p7"}}}
+      pointers = %{"a1" => %{snapshot: %{"model" => "haiku"}, effort_revision: nil}}
+
+      assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{}
+    end
+
+    test "persona に id が無い agent は skip され、他 persona には影響しない" do
+      directory = %{
+        "a1" => %{persona: %{"name" => "no-id"}},
+        "a2" => %{persona: %{"id" => "p8"}}
+      }
+
+      pointers = %{
+        "a1" => %{snapshot: %{"effort" => "high"}, effort_revision: 1},
+        "a2" => %{snapshot: %{"effort" => "low"}, effort_revision: 1}
+      }
+
+      assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{"p8" => "low"}
+    end
+
+    test "pointer が存在しない agent (SessionPointers 未記録) は skip される" do
+      directory = %{"a1" => %{persona: %{"id" => "p9"}}}
+
+      assert AgentsChannel.compute_launch_defaults(directory, %{}) == %{}
+    end
+
+    test "directory が空なら defaults も空" do
+      assert AgentsChannel.compute_launch_defaults(%{}, %{}) == %{}
+    end
+  end
+
+  describe "launch_defaults 経路 (issue #88, f)" do
+    test "viewer は forbidden" do
+      socket = join_as(:viewer)
+
+      ref = push(socket, "launch_defaults", %{})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "既知 agent が無ければ空 defaults" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "launch_defaults", %{})
+
+      assert_reply ref, :ok, %{"defaults" => %{}}
+    end
+
+    test "実ストア経由で同一 persona 複数 agent の最新 effort が返る" do
+      persona = %{"id" => "gp.ld-persona", "name" => "LD", "sprite_set" => "ao"}
+      agent_1 = "gp.ld-rev-1"
+      agent_2 = "gp.ld-rev-2"
+
+      :ok = AgentDirectory.record(agent_1, persona)
+      :ok = AgentDirectory.record(agent_2, persona)
+      :ok = SessionPointers.record(agent_1, "s1", "/home/user/proj")
+      :ok = SessionPointers.record(agent_2, "s2", "/home/user/proj")
+
+      :ok =
+        SessionPointers.record_snapshot(agent_1, %{
+          "effort" => "low",
+          "effort_source" => "launch"
+        })
+
+      _ = SessionPointers.get(agent_1)
+
+      # Committed strictly after agent_1's, so its effort_revision is higher
+      # regardless of what other (unrelated) tests bumped the counter to.
+      :ok =
+        SessionPointers.record_snapshot(agent_2, %{
+          "effort" => "high",
+          "effort_source" => "launch"
+        })
+
+      _ = SessionPointers.get(agent_2)
+
+      socket = join_as(:operator)
+      ref = push(socket, "launch_defaults", %{})
+
+      assert_reply ref, :ok, %{"defaults" => defaults}
+      assert defaults["gp.ld-persona"] == "high"
+    end
+  end
+
+  # ふじ review 2026-08-05, should-fix 1: the pure-selection test above and
+  # SessionPointers' own legacy-loader unit test cover the pieces
+  # separately; this connects them — a REAL isolated SessionPointers
+  # instance loads pre-#88 5-tuples off disk (no test-only shortcut), and
+  # the resulting `effort_revision: nil` pointers feed
+  # `compute_launch_defaults/2` directly. Isolated instance, not the app
+  # singleton — no need to restart the shared store for this.
+  describe "migration 統合: legacy 5-tuple -> compute_launch_defaults (issue #88, should-fix 1)" do
+    test "異 effort の legacy 2 agent は no preference、片方が正常 commit すると revisioned candidate が勝つ" do
+      name = :"sp_migration_#{System.unique_integer([:positive])}"
+      path = Path.join(System.tmp_dir!(), "#{name}.dets")
+      File.rm(path)
+      {:ok, _pid} = SessionPointers.start_link(name: name, path: path)
+
+      # Safety net for both a mid-test assertion failure (the explicit
+      # GenServer.stop/1 calls below would then never run) and the normal
+      # path (stop_quietly/1 on an already-stopped registered name is a
+      # no-op). Uses the ATOM `name`, not a captured pid, so it resolves
+      # to whichever process is currently registered even across the
+      # mid-test restart below (ふじ review, test hygiene).
+      on_exit(fn ->
+        stop_quietly(name)
+        File.rm(path)
+      end)
+
+      agent_1 = "gp.ld-legacy-1"
+      agent_2 = "gp.ld-legacy-2"
+
+      # Seed pre-#88 legacy 5-tuples directly on the DETS table (same
+      # technique as session_pointers_test.exs) — bypasses
+      # record_snapshot's revision-assigning write path entirely, so the
+      # loaded pointer is exactly what a pre-feature row looks like.
+      :ok =
+        :dets.insert(
+          name,
+          {agent_1, "s1", "/w", nil, %{"effort" => "low", "effort_source" => "launch"}}
+        )
+
+      :ok =
+        :dets.insert(
+          name,
+          {agent_2, "s2", "/w", nil, %{"effort" => "high", "effort_source" => "launch"}}
+        )
+
+      :ok = GenServer.stop(name)
+      {:ok, _pid} = SessionPointers.start_link(name: name, path: path)
+
+      persona = %{"id" => "gp.ld-legacy-persona", "name" => "Legacy", "sprite_set" => "ao"}
+
+      directory = %{
+        agent_1 => %{persona: persona, last_seen: nil},
+        agent_2 => %{persona: persona, last_seen: nil}
+      }
+
+      pointers = SessionPointers.all(name)
+      assert %{effort_revision: nil, snapshot: %{"effort" => "low"}} = pointers[agent_1]
+      assert %{effort_revision: nil, snapshot: %{"effort" => "high"}} = pointers[agent_2]
+
+      # Two disagreeing legacy candidates, neither revisioned -> no
+      # preference (selection rule 4).
+      assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{}
+
+      # agent_2 gets a real commit -> lazy migration assigns it a revision.
+      :ok =
+        SessionPointers.record_snapshot(
+          agent_2,
+          %{"effort" => "high", "effort_source" => "launch"},
+          name
+        )
+
+      pointers_after = SessionPointers.all(name)
+      assert %{effort_revision: rev} = pointers_after[agent_2]
+      assert is_integer(rev)
+
+      assert AgentsChannel.compute_launch_defaults(directory, pointers_after) ==
+               %{"gp.ld-legacy-persona" => "high"}
+
+      GenServer.stop(name)
     end
   end
 end

@@ -31,6 +31,7 @@ import {
   projectAndMergeHistory,
   resultOf,
   resetTranscriptHistory,
+  resolveLaunchDefaultEffort,
   resumeDriftFrom,
   parseSessionResetCompleted,
   parseSessionResetFailed,
@@ -1900,6 +1901,48 @@ describe("EngineCatalogResult (Option E, ADR-0039)", () => {
     };
     expect(ok.ok).toBe(true);
     expect(fail.reason).toBe("auth_failed");
+  });
+});
+
+describe("resolveLaunchDefaultEffort (issue #88)", () => {
+  it("manual pick 済みなら常に undefined (現在値を変えない)", () => {
+    expect(
+      resolveLaunchDefaultEffort({
+        manualPick: true,
+        preferred: "high",
+        effortLevels: ["low", "high"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preferred が現在モデルの effort_levels に含まれれば採用", () => {
+    expect(
+      resolveLaunchDefaultEffort({
+        manualPick: false,
+        preferred: "high",
+        effortLevels: ["low", "medium", "high"],
+      }),
+    ).toBe("high");
+  });
+
+  it("preferred が現在モデルの effort_levels に無ければ undefined (default_effort へ fallback は呼び出し側)", () => {
+    expect(
+      resolveLaunchDefaultEffort({
+        manualPick: false,
+        preferred: "ultra",
+        effortLevels: ["low", "medium", "high"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preferred が未知 (undefined) なら undefined", () => {
+    expect(
+      resolveLaunchDefaultEffort({
+        manualPick: false,
+        preferred: undefined,
+        effortLevels: ["low", "high"],
+      }),
+    ).toBeUndefined();
   });
 });
 

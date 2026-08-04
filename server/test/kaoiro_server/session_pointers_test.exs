@@ -30,7 +30,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "sess-1",
              cwd: "/home/x",
              engine: nil,
-             snapshot: nil
+             snapshot: nil,
+             effort_revision: nil
            }
   end
 
@@ -46,7 +47,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "sess-2",
              cwd: "/home/x",
              engine: nil,
-             snapshot: nil
+             snapshot: nil,
+             effort_revision: nil
            }
   end
 
@@ -57,7 +59,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "sess-3",
              cwd: nil,
              engine: nil,
-             snapshot: nil
+             snapshot: nil,
+             effort_revision: nil
            }
   end
 
@@ -71,7 +74,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "sess-2",
              cwd: "/home/x",
              engine: nil,
-             snapshot: nil
+             snapshot: nil,
+             effort_revision: nil
            }
   end
 
@@ -85,7 +89,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "sess-real",
              cwd: "/home/y",
              engine: nil,
-             snapshot: nil
+             snapshot: nil,
+             effort_revision: nil
            }
   end
 
@@ -96,7 +101,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "sess-4",
              cwd: "/w",
              engine: nil,
-             snapshot: nil
+             snapshot: nil,
+             effort_revision: nil
            }
 
     :ok = GenServer.stop(server)
@@ -108,7 +114,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "sess-4",
              cwd: "/w",
              engine: nil,
-             snapshot: nil
+             snapshot: nil,
+             effort_revision: nil
            }
 
     GenServer.stop(name2)
@@ -118,8 +125,22 @@ defmodule KaoiroServer.SessionPointersTest do
     SessionPointers.record("a.5", "s5", nil, nil, server)
     SessionPointers.record("a.6", "s6", "/c", nil, server)
     all = SessionPointers.all(server)
-    assert all["a.5"] == %{session_id: "s5", cwd: nil, engine: nil, snapshot: nil}
-    assert all["a.6"] == %{session_id: "s6", cwd: "/c", engine: nil, snapshot: nil}
+
+    assert all["a.5"] == %{
+             session_id: "s5",
+             cwd: nil,
+             engine: nil,
+             snapshot: nil,
+             effort_revision: nil
+           }
+
+    assert all["a.6"] == %{
+             session_id: "s6",
+             cwd: "/c",
+             engine: nil,
+             snapshot: nil,
+             effort_revision: nil
+           }
   end
 
   test "delete で pointer が消え、再起動後も残らない", %{server: server, path: path} do
@@ -156,7 +177,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "s",
              cwd: "/w",
              engine: :codex,
-             snapshot: %{"model" => "gpt-5.6-sol"}
+             snapshot: %{"model" => "gpt-5.6-sol"},
+             effort_revision: nil
            }
 
     SessionPointers.record_snapshot("a.snap", %{model: "gpt-5.6-terra"}, server)
@@ -177,7 +199,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "s",
              cwd: "/w",
              engine: :claude_code,
-             snapshot: %{"permission_mode" => "plan"}
+             snapshot: %{"permission_mode" => "plan"},
+             effort_revision: nil
            }
 
     GenServer.stop(name2)
@@ -198,7 +221,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "s-new",
              cwd: "/w",
              engine: :codex,
-             snapshot: %{"sandbox" => "workspace-write"}
+             snapshot: %{"sandbox" => "workspace-write"},
+             effort_revision: nil
            }
   end
 
@@ -223,7 +247,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: nil,
              cwd: "/w",
              engine: :codex,
-             snapshot: %{"model" => "x"}
+             snapshot: %{"model" => "x"},
+             effort_revision: nil
            }
   end
 
@@ -239,7 +264,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: nil,
              cwd: "/w",
              engine: :claude_code,
-             snapshot: nil
+             snapshot: nil,
+             effort_revision: nil
            }
 
     assert SessionPointers.detach_session("a.det.nil", server) == :ok
@@ -248,7 +274,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: nil,
              cwd: "/w",
              engine: :claude_code,
-             snapshot: nil
+             snapshot: nil,
+             effort_revision: nil
            }
   end
 
@@ -263,7 +290,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: "s-new",
              cwd: "/w",
              engine: :codex,
-             snapshot: nil
+             snapshot: nil,
+             effort_revision: nil
            }
   end
 
@@ -281,7 +309,8 @@ defmodule KaoiroServer.SessionPointersTest do
              session_id: nil,
              cwd: "/w",
              engine: :claude_code,
-             snapshot: %{"permission_mode" => "plan"}
+             snapshot: %{"permission_mode" => "plan"},
+             effort_revision: nil
            }
 
     GenServer.stop(name2)
@@ -494,6 +523,255 @@ defmodule KaoiroServer.SessionPointersTest do
 
       assert %{snapshot: %{"sandbox" => "danger-full-access"}} =
                SessionPointers.get("a.sanitize.dup_bad_atom", server)
+    end
+  end
+
+  # issue #88 (ふじ 2026-08-05 spec): monotonic effort_revision, used by
+  # agents_channel's launch_defaults to pick the persona's most recently
+  # effort-set agent across a read-time AgentDirectory/SessionPointers join.
+  describe "effort_revision (issue #88)" do
+    test "初めて valid effort を commit すると revision が付く", %{server: server} do
+      SessionPointers.record("a.rev.first", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.first",
+        %{"effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      assert %{effort_revision: rev} = SessionPointers.get("a.rev.first", server)
+      assert is_integer(rev)
+    end
+
+    test "effort が異なる値に変わると revision が進む", %{server: server} do
+      SessionPointers.record("a.rev.change", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.change",
+        %{"effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      %{effort_revision: rev1} = SessionPointers.get("a.rev.change", server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.change",
+        %{"effort" => "low", "effort_source" => "launch"},
+        server
+      )
+
+      %{effort_revision: rev2} = SessionPointers.get("a.rev.change", server)
+      assert rev2 > rev1
+    end
+
+    test "同じ {effort, effort_source} を再commitしても revision は進まない", %{server: server} do
+      SessionPointers.record("a.rev.same", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.same",
+        %{"effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      %{effort_revision: rev1} = SessionPointers.get("a.rev.same", server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.same",
+        %{"effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      %{effort_revision: rev2} = SessionPointers.get("a.rev.same", server)
+      assert rev2 == rev1
+    end
+
+    test "model だけが変わり effort pair が同じなら revision は進まない (snapshot 全体変化と混同しない)",
+         %{server: server} do
+      SessionPointers.record("a.rev.model_only", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.model_only",
+        %{"model" => "gpt-5", "effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      %{effort_revision: rev1} = SessionPointers.get("a.rev.model_only", server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.model_only",
+        %{"model" => "opus", "effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      %{effort_revision: rev2, snapshot: snap} =
+        SessionPointers.get("a.rev.model_only", server)
+
+      assert rev2 == rev1
+      assert snap["model"] == "opus"
+    end
+
+    test "effort-less モデルへの切替 (effort 消失) は revision を進めない", %{server: server} do
+      SessionPointers.record("a.rev.lose", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.lose",
+        %{"model" => "opus", "effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      %{effort_revision: rev1} = SessionPointers.get("a.rev.lose", server)
+
+      # The wrapper's ext.effective omits effort/effort_source entirely for
+      # an effort-less model (haiku); record_snapshot receives no effort key.
+      SessionPointers.record_snapshot("a.rev.lose", %{"model" => "haiku"}, server)
+
+      %{effort_revision: rev2, snapshot: snap} = SessionPointers.get("a.rev.lose", server)
+
+      assert rev2 == rev1
+      refute Map.has_key?(snap, "effort")
+    end
+
+    test "malformed effort (空文字) は revision を進めない", %{server: server} do
+      SessionPointers.record("a.rev.empty", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.empty",
+        %{"effort" => "", "effort_source" => "launch"},
+        server
+      )
+
+      assert %{effort_revision: nil} = SessionPointers.get("a.rev.empty", server)
+    end
+
+    test "revision は DETS 越しに永続し、再起動後の別 agent はそれより大きい値を得る", %{
+      server: server,
+      path: path
+    } do
+      SessionPointers.record("a.rev.persist", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.persist",
+        %{"effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      %{effort_revision: rev1} = SessionPointers.get("a.rev.persist", server)
+
+      :ok = GenServer.stop(server)
+
+      name2 = :"sp_rev_restart_#{System.unique_integer([:positive])}"
+      {:ok, _pid} = SessionPointers.start_link(name: name2, path: path)
+
+      assert %{effort_revision: ^rev1} = SessionPointers.get("a.rev.persist", name2)
+
+      # A second agent's first-ever revision after restart must stay ahead
+      # of everything already on disk — the counter must not rewind.
+      SessionPointers.record("a.rev.persist.2", "s2", "/w", nil, name2)
+
+      SessionPointers.record_snapshot(
+        "a.rev.persist.2",
+        %{"effort" => "low", "effort_source" => "launch"},
+        name2
+      )
+
+      %{effort_revision: rev2} = SessionPointers.get("a.rev.persist.2", name2)
+      assert rev2 > rev1
+
+      GenServer.stop(name2)
+    end
+
+    test "legacy pointer (revision 概念のない 5-tuple) は次の正常な commit で lazy migration される",
+         %{server: server, path: path} do
+      # Simulate data written before this feature: a valid effort already
+      # sits in the snapshot, but no effort_revision has ever been tracked.
+      SessionPointers.record("a.rev.legacy", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.rev.legacy",
+        %{"effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      # record_snapshot is an async cast; a synchronous get/2 call forces it
+      # to have been applied (GenServer processes its mailbox in FIFO order
+      # per sender) before the raw DETS overwrite below races it.
+      assert %{effort_revision: 1} = SessionPointers.get("a.rev.legacy", server)
+
+      # Overwrite the DETS row with the pre-#88 5-tuple shape directly
+      # (same table name the GenServer opened) — must happen before
+      # GenServer.stop/1 closes the file in terminate/2.
+      :ok =
+        :dets.insert(
+          server,
+          {"a.rev.legacy", "s", "/w", nil, %{"effort" => "high", "effort_source" => "launch"}}
+        )
+
+      :ok = GenServer.stop(server)
+
+      name2 = :"sp_legacy_#{System.unique_integer([:positive])}"
+      {:ok, _pid} = SessionPointers.start_link(name: name2, path: path)
+
+      assert %{effort_revision: nil, snapshot: %{"effort" => "high"}} =
+               SessionPointers.get("a.rev.legacy", name2)
+
+      # The next normal commit repeats the SAME effort (pair unchanged) —
+      # only the revision=nil lazy-migration branch explains a bump here.
+      SessionPointers.record_snapshot(
+        "a.rev.legacy",
+        %{"effort" => "high", "effort_source" => "launch"},
+        name2
+      )
+
+      assert %{effort_revision: rev} = SessionPointers.get("a.rev.legacy", name2)
+      assert is_integer(rev)
+
+      GenServer.stop(name2)
+    end
+
+    test "malformed effort_revision (非整数) は init を落とさず nil へ fail closed (ふじ review, non-blocker)",
+         %{server: server, path: path} do
+      SessionPointers.record("a.rev.malformed", "s", "/w", nil, server)
+      # record/5 is an async cast; force it to have been applied (same
+      # ordering guard as the legacy-migration test above) before the raw
+      # DETS overwrite below races it.
+      assert %{session_id: "s"} = SessionPointers.get("a.rev.malformed", server)
+
+      # Overwrite with a well-formed 6-tuple whose 6th element is NOT a
+      # non-negative integer (simulates a hand-edited / corrupted DETS
+      # file) — must happen before GenServer.stop/1 closes the file.
+      :ok =
+        :dets.insert(
+          server,
+          {"a.rev.malformed", "s", "/w", nil, %{"effort" => "high", "effort_source" => "launch"},
+           "not-a-revision"}
+        )
+
+      :ok = GenServer.stop(server)
+
+      name2 = :"sp_malformed_rev_#{System.unique_integer([:positive])}"
+      # Before the fix, next_revision_seed/1's `+ 1` on a non-number
+      # (Erlang term ordering puts any non-number above every integer, so
+      # `max/2` would return the bad value) raised ArithmeticError here,
+      # crash-looping the supervisor. Mutation check: reverting
+      # sanitize_effort_revision/1 to `defp sanitize_effort_revision(r),
+      # do: r` reproduces that crash on this exact assertion.
+      assert {:ok, _pid} = SessionPointers.start_link(name: name2, path: path)
+
+      assert %{effort_revision: nil, snapshot: %{"effort" => "high"}} =
+               SessionPointers.get("a.rev.malformed", name2)
+
+      # The counter still works normally afterward (falls back to treating
+      # the malformed row as revision 0 for seeding purposes).
+      SessionPointers.record_snapshot(
+        "a.rev.malformed",
+        %{"effort" => "low", "effort_source" => "launch"},
+        name2
+      )
+
+      assert %{effort_revision: rev} = SessionPointers.get("a.rev.malformed", name2)
+      assert is_integer(rev)
+
+      GenServer.stop(name2)
     end
   end
 end

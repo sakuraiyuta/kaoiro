@@ -553,7 +553,13 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok
 
       assert KaoiroServer.SessionPointers.get(agent_id) ==
-               %{session_id: "sess-xyz", cwd: "/home/user/proj", engine: nil, snapshot: nil}
+               %{
+                 session_id: "sess-xyz",
+                 cwd: "/home/user/proj",
+                 engine: nil,
+                 snapshot: nil,
+                 effort_revision: nil
+               }
     end
 
     test "session_id なし envelope はポインタを作らない" do

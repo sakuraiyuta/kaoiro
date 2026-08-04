@@ -161,4 +161,17 @@ describe("runner-control relay events carry version (issue #182, ADR-0015)", () 
     await pending;
     expect(payloadOf(ws, "restore").version).toBeUndefined();
   });
+
+  // issue #88 (ふじ review 2026-08-05, must-fix 2): launch_defaults never
+  // touches the runner, but ADR-0015 stamps `version` on ALL three-party
+  // messages, not only the runner-relay subset this file's title covers —
+  // `restore`'s no-version case above pins an EXISTING gap in that other
+  // subset, not a license to omit version from a NEW event.
+  it("launch_defaults には version を付与する (ADR-0015)", async () => {
+    const { conn, ws } = await connectAndJoin();
+    const pending = conn.getLaunchDefaults();
+    await settleSocket();
+    await pending;
+    expect(payloadOf(ws, "launch_defaults").version).toBe("0");
+  });
 });

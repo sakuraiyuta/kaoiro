@@ -46,8 +46,9 @@ defmodule KaoiroServer.SessionPointers do
   permission-axis settings, kept across session boundaries and purged only
   on agent delete. Split from `record/5` so envelope-ingest callers do not
   need to know about snapshots and vice versa; the two paths merge in
-  DETS via the shared 5-tuple record. No-ops when the agent is not yet
-  known (an envelope carrying the initial pointer must arrive first).
+  DETS via the shared 6-tuple record (issue #88 added `effort_revision` as
+  the 6th element; see below). No-ops when the agent is not yet known (an
+  envelope carrying the initial pointer must arrive first).
 
   The snapshot is sanitized before persistence (write-side validation,
   藤 D2, resume-privilege-restoration): only the known 7 `ResolvedSnapshotExt`
@@ -57,17 +58,27 @@ defmodule KaoiroServer.SessionPointers do
   wrapper cannot land an invalid enum through this door (though it can
   still stamp valid `danger-full-access` on its own, the trust boundary
   documented in ADR-0014 F1 追補「resume 時の privilege 三軸再適用」).
+
+  Also advances the pointer's `effort_revision` (issue #88, ふじ 2026-08-05
+  spec) — a monotonic counter, NOT a timestamp, tracking the last time the
+  sanitized `{effort, effort_source}` pair actually changed to a new valid
+  (non-empty) value. A commit that only changes model/permission/sandbox
+  leaves the revision untouched, and a commit that loses effort entirely
+  (switch to an effort-less model) does not advance it either — an absent
+  effort is not a "committed effort change". `launch_defaults` in
+  `agents_channel.ex` uses this to pick the most recently effort-set agent
+  across a persona's history.
   """
   def record_snapshot(agent_id, snapshot, server \\ __MODULE__) do
     GenServer.cast(server, {:record_snapshot, agent_id, snapshot})
   end
 
-  @doc "Latest pointer `%{session_id, cwd}` for the agent, or nil."
+  @doc "Latest pointer `%{session_id, cwd, engine, snapshot, effort_revision}` for the agent, or nil."
   def get(agent_id, server \\ __MODULE__) do
     GenServer.call(server, {:get, agent_id})
   end
 
-  @doc "agent_id => %{session_id, cwd} for every known pointer."
+  @doc "agent_id => %{session_id, cwd, engine, snapshot, effort_revision} for every known pointer."
   def all(server \\ __MODULE__) do
     GenServer.call(server, :all)
   end
@@ -108,7 +119,37 @@ defmodule KaoiroServer.SessionPointers do
     # so the default /tmp location is not world-readable on a shared host.
     # Best-effort — chmod can fail on non-POSIX filesystems, not fatal.
     _ = File.chmod(path, 0o600)
-    {:ok, %{table: table, pointers: load_pointers(table)}}
+    pointers = load_pointers(table)
+    {:ok, %{table: table, pointers: pointers, next_effort_revision: next_revision_seed(pointers)}}
+  end
+
+  # Restart-surviving counter seed (issue #88): the next revision must stay
+  # ahead of every value already on disk so a bump after a restart cannot
+  # collide with (or rewind before) one issued in a prior process. Safe to
+  # trust `effort_revision` here without re-validating: load_pointers
+  # already ran every entry through sanitize_effort_revision/1, so this
+  # only ever sees a non-negative integer or nil.
+  defp next_revision_seed(pointers) do
+    Enum.reduce(pointers, 0, fn {_agent_id, pointer}, acc ->
+      max(acc, pointer[:effort_revision] || 0)
+    end) + 1
+  end
+
+  # Defensive guard (ふじ review, non-blocker): a well-formed DETS row is
+  # server-written and owner-only, but a corrupted/hand-edited file could
+  # still carry a non-integer 6th element. Without this, next_revision_seed/1's
+  # `+ 1` would raise ArithmeticError on init (Erlang term ordering puts any
+  # non-number above every integer, so `max/2` would pick the bad value and
+  # hand it straight to `+`), crash-looping the supervisor. Falls back to
+  # nil (never-migrated) rather than crashing or fabricating a number.
+  defp sanitize_effort_revision(revision) when is_integer(revision) and revision >= 0,
+    do: revision
+
+  defp sanitize_effort_revision(nil), do: nil
+
+  defp sanitize_effort_revision(other) do
+    Logger.warning("SessionPointers: dropped malformed effort_revision #{inspect(other)}")
+    nil
   end
 
   # A corrupt/unreadable DETS file must not crash-loop the supervisor: the
@@ -133,16 +174,28 @@ defmodule KaoiroServer.SessionPointers do
   defp load_pointers(table) do
     case :dets.foldl(
            fn
-             # 5-tuple with resolved snapshot (ADR-0014 F1 追補, phase-15 D8):
-             # the agent-scoped "last effective" settings kept across session
-             # boundaries. 4-tuple = pre-snapshot record, snapshot nil.
-             # 3-tuple = pre-engine record (ADR-0032 F8), engine nil too.
+             # 6-tuple with effort_revision (issue #88, ふじ 2026-08-05
+             # spec): current canonical shape. 5-tuple = pre-revision
+             # record with resolved snapshot (ADR-0014 F1 追補, phase-15
+             # D8), effort_revision nil (no committed effort history yet).
+             # 4-tuple = pre-snapshot record, snapshot nil too. 3-tuple =
+             # pre-engine record (ADR-0032 F8), engine nil too.
+             {agent_id, session_id, cwd, engine, snapshot, effort_revision}, acc ->
+               Map.put(acc, agent_id, %{
+                 session_id: session_id,
+                 cwd: cwd,
+                 engine: engine,
+                 snapshot: snapshot,
+                 effort_revision: sanitize_effort_revision(effort_revision)
+               })
+
              {agent_id, session_id, cwd, engine, snapshot}, acc ->
                Map.put(acc, agent_id, %{
                  session_id: session_id,
                  cwd: cwd,
                  engine: engine,
-                 snapshot: snapshot
+                 snapshot: snapshot,
+                 effort_revision: nil
                })
 
              {agent_id, session_id, cwd, engine}, acc ->
@@ -150,7 +203,8 @@ defmodule KaoiroServer.SessionPointers do
                  session_id: session_id,
                  cwd: cwd,
                  engine: engine,
-                 snapshot: nil
+                 snapshot: nil,
+                 effort_revision: nil
                })
 
              {agent_id, session_id, cwd}, acc ->
@@ -158,7 +212,8 @@ defmodule KaoiroServer.SessionPointers do
                  session_id: session_id,
                  cwd: cwd,
                  engine: nil,
-                 snapshot: nil
+                 snapshot: nil,
+                 effort_revision: nil
                })
            end,
            %{},
@@ -184,12 +239,22 @@ defmodule KaoiroServer.SessionPointers do
     cwd = cwd || Map.get(existing, :cwd)
     engine = engine || Map.get(existing, :engine)
     snapshot = snapshot || Map.get(existing, :snapshot)
-    pointer = %{session_id: session_id, cwd: cwd, engine: engine, snapshot: snapshot}
+    effort_revision = Map.get(existing, :effort_revision)
+
+    pointer = %{
+      session_id: session_id,
+      cwd: cwd,
+      engine: engine,
+      snapshot: snapshot,
+      effort_revision: effort_revision
+    }
 
     if existing == pointer do
       {:noreply, state}
     else
-      :ok = :dets.insert(state.table, {agent_id, session_id, cwd, engine, snapshot})
+      :ok =
+        :dets.insert(state.table, {agent_id, session_id, cwd, engine, snapshot, effort_revision})
+
       {:noreply, %{state | pointers: Map.put(state.pointers, agent_id, pointer)}}
     end
   end
@@ -210,7 +275,14 @@ defmodule KaoiroServer.SessionPointers do
             {:noreply, state}
 
           existing ->
-            new_pointer = Map.put(existing, :snapshot, sanitized)
+            {effort_revision, next_effort_revision} =
+              bump_effort_revision(existing, sanitized, state.next_effort_revision)
+
+            new_pointer = %{
+              existing
+              | snapshot: sanitized,
+                effort_revision: effort_revision
+            }
 
             if existing == new_pointer do
               {:noreply, state}
@@ -218,10 +290,16 @@ defmodule KaoiroServer.SessionPointers do
               :ok =
                 :dets.insert(
                   state.table,
-                  {agent_id, existing.session_id, existing.cwd, existing.engine, sanitized}
+                  {agent_id, existing.session_id, existing.cwd, existing.engine, sanitized,
+                   effort_revision}
                 )
 
-              {:noreply, %{state | pointers: Map.put(state.pointers, agent_id, new_pointer)}}
+              {:noreply,
+               %{
+                 state
+                 | pointers: Map.put(state.pointers, agent_id, new_pointer),
+                   next_effort_revision: next_effort_revision
+               }}
             end
         end
     end
@@ -255,7 +333,8 @@ defmodule KaoiroServer.SessionPointers do
         :ok =
           :dets.insert(
             state.table,
-            {agent_id, nil, existing.cwd, existing.engine, existing.snapshot}
+            {agent_id, nil, existing.cwd, existing.engine, existing.snapshot,
+             existing.effort_revision}
           )
 
         {:reply, :ok, %{state | pointers: Map.put(state.pointers, agent_id, new_pointer)}}
@@ -270,6 +349,41 @@ defmodule KaoiroServer.SessionPointers do
   defp default_path do
     Application.get_env(:kaoiro_server, :session_pointers_path) ||
       Path.join(System.tmp_dir!(), "kaoiro_session_pointers.dets")
+  end
+
+  # effort_revision bump rule (issue #88, ふじ 2026-08-05 spec). Advances
+  # ONLY when:
+  #   (a) the sanitized {effort, effort_source} pair actually changes AND
+  #       the new effort is valid (non-empty), or
+  #   (b) this pointer predates the feature (effort_revision nil) and the
+  #       new commit carries a valid effort — lazy migration on the next
+  #       normal commit, regardless of whether the pair itself changed.
+  # Tying the bump to the WHOLE snapshot (model/permission/sandbox also
+  # commit through this same cast) would let an unrelated field change make
+  # an agent look like the persona's most recent effort pick; tying it to a
+  # transition INTO an invalid/absent effort (switching to an effort-less
+  # model) would advance the revision past a value `launch_defaults` can no
+  # longer read back from this pointer's current snapshot. `launch_defaults`
+  # additionally re-validates effort at read time (defensive skip of
+  # malformed/empty entries), so a revision left stale by such a transition
+  # is simply not selected there rather than pointing at nothing.
+  defp bump_effort_revision(existing, sanitized, next_revision) do
+    old_snapshot = existing.snapshot || %{}
+    old_pair = {Map.get(old_snapshot, "effort"), Map.get(old_snapshot, "effort_source")}
+    new_effort = Map.get(sanitized, "effort")
+    new_pair = {new_effort, Map.get(sanitized, "effort_source")}
+    valid_new_effort? = is_binary(new_effort) and new_effort != ""
+
+    cond do
+      valid_new_effort? and old_pair != new_pair ->
+        {next_revision, next_revision + 1}
+
+      is_nil(existing.effort_revision) and valid_new_effort? ->
+        {next_revision, next_revision + 1}
+
+      true ->
+        {existing.effort_revision, next_revision}
+    end
   end
 
   # Snapshot sanitizer (ADR-0014 F1 追補, resume-privilege-restoration 藤 D2).
