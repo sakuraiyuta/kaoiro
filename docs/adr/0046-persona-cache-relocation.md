@@ -64,6 +64,35 @@ last-known-good を維持する。`:eacces` は `:zip.unzip` が ingest dir の 
 `:enoent` は pack error として skip する。たとえば entry `a` と `a/b` が衝突
 する zip や、`sprites` を通常ファイルとして持つ zip が該当する。
 
+**追補 (2026-08-04): cache slot 操作 (削除・作成・狭窄) の失敗の扱い。**
+上記の errno 表は
+cache の**読み書き**の失敗を分類するためのものであり、
+`<cache_root>/<hash>` の slot 自体の削除・作成・owner-only mode への狭窄
+(chmod)ができなかった場合にはそのまま適用しない。
+
+理由: `:eperm` / `:eacces` / `:eexist` / `:enotdir` は、共有 cache root
+(明示設定された root は group/world-writable でも警告に留める) に**他の
+OS ユーザが slot を 1 つ置いた**だけで発生する。foreign な非空 slot を
+除くには二段階の権限が要る — slot 内の子を unlink する権限は slot
+ディレクトリ自身の write/execute ビットに依存し、空になった slot 自体を
+除く権限は cache root 側に依存する。したがって root が書けても、他ユーザ
+所有で write ビットの無い非空 slot は削除できない。これを cache 障害と
+分類すると、置かれたディレクトリ 1 つで全 pack の取り込みが止まり cold
+start で raise する — ADR-0029「1 本の不正 drop が全体を止めてはならない」
+の逆転になる。
+
+したがって slot の削除・作成・mode 狭窄の失敗については、**cache root を
+再度 write-probe し**、
+
+- root がまだ書けて、かつ理由が `:eperm` / `:eacces` / `:eexist` /
+  `:enotdir` のいずれか → **当該 pack のみ skip** (pack error)
+- それ以外 (`:eio` / `:estale` / `:enospc` / `:erofs` 等)、または root
+  自体が書けない → **cache 障害** (表どおり)
+
+と分類する。slot 固有の I/O 障害や stale NFS handle は root を無傷で残す
+ため、root probe だけを条件にすると「pack が黙って欠けた manifest の公開」
+に化ける。errno 表による限定はそのために残す。
+
 ### F5: 同一 persona dir の複数 process 共有は保証外とする
 
 同一 persona dir を複数 server process が共有する構成は保証しない。
@@ -86,6 +115,15 @@ symlink なら拒否する。write probe は `:write + :exclusive` の O_EXCL �
 
 これは予測可能な共有 `/tmp` path に対する先回り攻撃、すなわち symlink を
 使う truncate や偽 pack 混入による prompt injection を緩和するためである。
+
+**追補 (2026-08-04): slot の安全性契約。** slot(`<cache_root>/<hash>`)の
+準備・展開は次を満たす。(1) slot root および slot 内部の special type
+(symlink 等)は lstat で検出して reject する — 通常ファイル・ディレクトリ
+以外を読取り経路が辿ることはない。(2) slot の作成は exclusive な mkdir で
+行う(`mkdir_p` 相当は既存 symlink を成功扱いするため不可)。(3) slot は
+**展開前に** owner-only(0700)へ狭窄し、展開後は entry の mode を
+owner-only へ正規化する — アーカイブが宣言した mode を採らない。これらは
+実装詳細ではなく安全性契約であり、緩和は本 ADR の改訂を要する。
 
 ### F7: zip slip を展開前に reject する
 

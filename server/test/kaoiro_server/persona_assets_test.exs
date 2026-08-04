@@ -50,6 +50,89 @@ defmodule KaoiroServer.PersonaAssetsTest do
     :ok
   end
 
+  # `:zip.create/3` の `{name, body, file_info}` 形は、アーカイブ側が mode を
+  # 宣言する唯一の作り方 (実ファイル経由だと mode 0 のファイルは create 自身が
+  # 読めない)。敵対的な pack が取る経路そのもの。
+  #
+  #   :manifest    — manifest.json を mode 0 で宣言する
+  #   :sprites_dir — sprites/ を mode 0 のディレクトリとして宣言する
+  #   :abort       — mode 0 の manifest.json を書かせた直後、必ず open に
+  #                  失敗する 300 byte 名で展開を中断させる
+  defp write_poisoned_pack(dir, name, manifest, poison) do
+    body = Jason.encode!(manifest)
+    sprites = Enum.map(@states, &{String.to_charlist("sprites/#{&1}.png"), "png-#{name}-#{&1}"})
+    unreadable = mode_record(dir, :regular, 0o100000, byte_size(body))
+
+    entries =
+      case poison do
+        :manifest ->
+          [{~c"manifest.json", body, unreadable}, {~c"personality.md", "body-#{name}"} | sprites]
+
+        :sprites_dir ->
+          [
+            {~c"manifest.json", body},
+            {~c"personality.md", "body-#{name}"},
+            {~c"sprites/", "", mode_record(dir, :directory, 0o040000, 0)}
+            | sprites
+          ]
+
+        :abort ->
+          [
+            {~c"manifest.json", body, unreadable},
+            {String.to_charlist(String.duplicate("n", 300)), "x"}
+          ]
+      end
+
+    {:ok, _} = :zip.create(String.to_charlist(Path.join(dir, "#{name}.zip")), entries)
+    :ok
+  end
+
+  defp mode_record(dir, type, mode, size) do
+    probe = Path.join(dir, "_mode_probe")
+    File.write!(probe, "x")
+    stat = %{File.stat!(probe) | type: type, mode: mode, size: size}
+    File.rm!(probe)
+    File.Stat.to_record(stat)
+  end
+
+  # 実装が退行すると mode 0 のディレクトリが tmp_dir に残り、ExUnit が次回
+  # 起動時に走らせる `File.rm_rf!/1` が降りられずに落ちる — つまりそのテストが
+  # 二度と走らなくなる。退行の報告は 1 回で済ませたいので、後片付けで必ず
+  # 広げておく。ファイルの mode は unlink に効かないのでディレクトリだけでよい。
+  defp widen_dir_modes(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} ->
+        File.chmod(path, 0o700)
+
+        case File.ls(path) do
+          {:ok, names} -> Enum.each(names, &widen_dir_modes(Path.join(path, &1)))
+          {:error, _} -> :ok
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  # 仕掛けが本当に仕掛けとして働いているかの確認。`:zip.unzip/2` が宣言 mode を
+  # 復元しなくなったら、下のアサーションは「元から制限が無かった」だけで通って
+  # しまう (レビュー: premise を検査していない回帰テストは空回りする)。
+  defp assert_declared_mode_survives(tmp, zip, entry) do
+    out = Path.join(tmp, "premise_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(out)
+
+    assert {:ok, _files} = :zip.unzip(String.to_charlist(zip), cwd: String.to_charlist(out)),
+           "仕掛けた zip の展開自体が失敗した — premise の検査になっていない"
+
+    on_exit(fn -> File.chmod(Path.join(out, entry), 0o700) end)
+
+    assert {:ok, %File.Stat{mode: mode}} = File.lstat(Path.join(out, entry))
+
+    assert Bitwise.band(mode, 0o777) == 0,
+           "#{entry} が mode #{Integer.to_string(mode, 8)} で展開された — " <>
+             "OTP がアーカイブ宣言の mode を復元しなくなった可能性がある"
+  end
+
   defp base_manifest(id, overrides \\ %{}) do
     Map.merge(
       %{
@@ -499,6 +582,41 @@ defmodule KaoiroServer.PersonaAssetsTest do
                "#{errno} を cache_error に分類してはいけない"
       end
     end
+
+    # 上は合成 term。こちらは OTP に実際に壊れたアーカイブを食わせて term を
+    # 取り、分類まで通す。posix_in?/2 が term を無制限に走査してよい根拠が
+    # 「アーカイブ形状由来の term には cache 側 errno atom が現れない」こと
+    # なので、その前提が OTP 更新で崩れたらここが最初に落ちる。
+    @tag :tmp_dir
+    test "実測: アーカイブ形状由来の失敗はどれも cache_error にならない", %{tmp_dir: tmp} do
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(cache)
+      cl = &String.to_charlist/1
+
+      collide = Path.join(tmp, "collide.zip")
+      {:ok, _} = :zip.create(cl.(collide), [{~c"a", "x"}, {~c"a/b", "y"}])
+
+      long_name = Path.join(tmp, "long.zip")
+      {:ok, _} = :zip.create(cl.(long_name), [{cl.(String.duplicate("n", 300)), "x"}])
+
+      garbage = Path.join(tmp, "garbage.zip")
+      File.write!(garbage, :crypto.strong_rand_bytes(512))
+
+      valid = Path.join(tmp, "valid.zip")
+      {:ok, _} = :zip.create(cl.(valid), [{~c"a.txt", "hello"}])
+      truncated = Path.join(tmp, "truncated.zip")
+      File.write!(truncated, binary_part(File.read!(valid), 0, 40))
+
+      for zip <- [collide, long_name, garbage, truncated] do
+        out = Path.join(cache, "out_#{System.unique_integer([:positive])}")
+        File.mkdir_p!(out)
+
+        assert {:error, reason} = :zip.unzip(cl.(zip), cwd: cl.(out))
+
+        assert {:error, _} = PersonaAssets.classify_zip_error(reason, cache),
+               "#{Path.basename(zip)}: #{inspect(reason, limit: 4)} を cache_error にしてはいけない"
+      end
+    end
   end
 
   defp build_zip(dir, name) do
@@ -520,19 +638,24 @@ defmodule KaoiroServer.PersonaAssetsTest do
     reason
   end
 
-  # cache 内のファイルが読めない = pack のせいではないので、skip + 成功扱い
-  # ではなく rebuild 失敗として F4 契約に載せる。read_error を投げる bang
-  # 経路 (下の I/O テスト) とは別に、non-raising tuple 経路をここで固定する。
+  # cache 内の展開物が読めなくなった場合、以前は cache_error に倒して LKG を
+  # 維持していた。normalize_modes/1 の導入後は rebuild の冒頭で mode が戻され、
+  # そのまま読み直される。「manifest が変わらない」だけでは修復と LKG 据え置きが
+  # 区別できず空振りになるので (レビュー R2)、修復されたことを直接見る。
+  # cache_error → LKG 維持の契約自体は下の cache root テストと
+  # classify_cache_read/3 の単体テストで張る。
   for {label, target} <- [
         {"manifest.json", "manifest.json"},
         {"personality.md", "personality.md"},
         {"sprites/", "sprites"}
       ] do
     @tag :tmp_dir
-    test "cache 内 #{label} が読めなければ pack skip でなく rebuild 失敗", %{tmp_dir: tmp} do
+    test "cache 内 #{label} が読めなくなっても rebuild が mode を戻して読み直す",
+         %{tmp_dir: tmp} do
       ingest = Path.join(tmp, "packs")
       cache = Path.join(tmp, "cache")
       File.mkdir_p!(ingest)
+      on_exit(fn -> widen_dir_modes(tmp) end)
       :ok = write_pack(ingest, "ce-1.0.0", base_manifest("ce"), "body-ce")
 
       Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
@@ -546,11 +669,156 @@ defmodule KaoiroServer.PersonaAssetsTest do
         |> hd()
 
       File.chmod!(blocked, 0o000)
-      on_exit(fn -> File.chmod(blocked, 0o700) end)
 
-      # 空 manifest へ差し替わらず、直前の manifest が残ること。
-      assert :ok = PersonaAssets.rebuild()
+      log = capture_log(fn -> assert :ok = PersonaAssets.rebuild() end)
+
+      refute log =~ "unreadable in the cache"
       assert Map.keys(PersonaAssets.manifest()["personas"]) == ["ce"]
+
+      assert {:ok, %File.Stat{mode: mode, type: type}} = File.lstat(blocked)
+      needed = if type == :directory, do: 0o500, else: 0o400
+
+      assert Bitwise.band(mode, needed) == needed,
+             "#{blocked} が mode #{Integer.to_string(mode, 8)} のまま残っている"
+    end
+  end
+
+  # 上の統合テストが修復側を張るようになったので、cache_error 側の契約は
+  # ここで直接固定する (実際のボリューム障害は fault injection なしには
+  # 起こせない)。分類を緩めると 1 本の不正 pack が全体を止める側へ倒れる。
+  # cache slot を消せない理由の切り分け。他ユーザ所有のディレクトリを作るには
+  # 2 つ目の OS ユーザが要り単一ユーザのテストでは再現できないので、判定だけを
+  # ここで固定する。緩めると仕込まれた 1 ディレクトリで全体が止まる。
+  # ふじ M1/S2: 元 error と後片付け error の優先順位。cache 障害はどちら側に
+  # あっても勝たないと、「pack を 1 本 skip した」形で build が続き、欠けた
+  # manifest を公開してしまう。純関数なので表を直接張る (この状況を作るには
+  # 壊れたボリュームが要り、単一ユーザのテストでは組めない)。
+  describe "merge_cleanup_error/2" do
+    test "cache 障害はどちら側にあっても勝つ" do
+      pack = {:error, "pack"}
+      volume = {:cache_error, "volume"}
+      cleanup_pack = {:error, "cleanup"}
+      cleanup_volume = {:cache_error, "cleanup"}
+
+      assert PersonaAssets.merge_cleanup_error(pack, :ok) == pack
+      assert PersonaAssets.merge_cleanup_error(pack, cleanup_pack) == pack
+      assert PersonaAssets.merge_cleanup_error(pack, cleanup_volume) == cleanup_volume
+      assert PersonaAssets.merge_cleanup_error(volume, :ok) == volume
+      assert PersonaAssets.merge_cleanup_error(volume, cleanup_pack) == volume
+      assert PersonaAssets.merge_cleanup_error(volume, cleanup_volume) == volume
+    end
+  end
+
+  # ふじ M1 (2 巡目): discard→mkdir の窓で slot が「既存ディレクトリへの
+  # symlink」として再占有されると、File.mkdir_p/1 は :ok を返し、続く chmod と
+  # 展開がリンク先を辿る (ふじ実機再現: リンク先が 0700 に狭窄され、中に
+  # manifest.json まで書かれた)。exclusive な File.mkdir/1 なら symlink でも
+  # ディレクトリでも :eexist で、何も書く前に止まる。lstat で確かめる形では
+  # check/use race が残るので不可。
+  #
+  # 「展開前に 0700」の順序も、別 UID の CI が無い以上ここで直接張るのが実効的
+  # (ふじ助言)。
+  describe "prepare_slot/2" do
+    @tag :tmp_dir
+    test "既存ディレクトリへの symlink はリンク先に触れず pack error", %{tmp_dir: tmp} do
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(cache)
+      target = Path.join(tmp, "outside")
+      File.mkdir_p!(target)
+      File.chmod!(target, 0o755)
+      slot = Path.join(cache, "0123456789abcdef")
+      File.ln_s!(target, slot)
+
+      assert {:error, message} = PersonaAssets.prepare_slot(slot, cache)
+      assert message =~ "cache slot operation failed"
+
+      # リンク先が狭窄されていないこと、中に何も書かれていないこと。
+      assert {:ok, %File.Stat{mode: mode}} = File.lstat(target)
+      assert Bitwise.band(mode, 0o777) == 0o755
+      assert {:ok, []} = File.ls(target)
+
+      # slot 自体も symlink のまま (辿って作り替えていない)。
+      assert {:ok, %File.Stat{type: :symlink}} = File.lstat(slot)
+    end
+
+    @tag :tmp_dir
+    test "空いている slot は 0700 で作られる", %{tmp_dir: tmp} do
+      cache = Path.join(tmp, "cache")
+      File.mkdir_p!(cache)
+      slot = Path.join(cache, "0123456789abcdef")
+
+      assert :ok = PersonaAssets.prepare_slot(slot, cache)
+
+      assert {:ok, %File.Stat{type: :directory, mode: mode}} = File.lstat(slot)
+
+      assert Bitwise.band(mode, 0o777) == 0o700,
+             "展開前に owner-only へ狭窄されていない (mode #{Integer.to_string(mode, 8)})"
+    end
+
+    @tag :tmp_dir
+    test "既に実ディレクトリが居る slot も pack error", %{tmp_dir: tmp} do
+      cache = Path.join(tmp, "cache")
+      slot = Path.join(cache, "0123456789abcdef")
+      File.mkdir_p!(slot)
+
+      assert {:error, _} = PersonaAssets.prepare_slot(slot, cache)
+    end
+  end
+
+  describe "classify_discard/3" do
+    # ADR-0046 F4 の errno 表は読み替えず、cache root がまだ書けるかで切り分ける。
+    # 実測: 非空ディレクトリの書き込みビットが無いと rm_rf は :eexist を返して
+    # ツリーが残る (ファイル単体なら :eacces / :eperm)。これは他ユーザが置いた
+    # slot でも起きるので、errno だけで cache 障害へ倒すと 1 ディレクトリで
+    # 全体が止まる。
+    test "cache root がまだ書けるなら該当 pack だけ skip" do
+      for reason <- [:eexist, :eacces, :eperm, :enotdir] do
+        assert {:error, message} =
+                 PersonaAssets.classify_discard(reason, "/cache/0123456789abcdef", :ok)
+
+        assert message =~ "cache slot operation failed"
+      end
+    end
+
+    # F4 の errno 表は slot 固有の理由にしか譲らない。slot だけの I/O 障害や
+    # stale NFS handle は root を無傷で残すので、probe が通っても pack skip に
+    # 倒すと「pack が黙って欠けた manifest」を公開してしまう。
+    test "slot 固有でない errno は root が書けても cache_error" do
+      for reason <- [:eio, :estale, :enospc, :erofs, :enomem] do
+        assert {:cache_error, _} =
+                 PersonaAssets.classify_discard(reason, "/cache/0123456789abcdef", :ok),
+               "#{reason} は root が書けても cache_error であるべき"
+      end
+    end
+
+    test "cache root ごと書けないなら cache_error" do
+      for reason <- [:eacces, :erofs, :eio, :eexist] do
+        assert {:cache_error, _} =
+                 PersonaAssets.classify_discard(
+                   reason,
+                   "/cache/0123456789abcdef",
+                   {:error, :erofs}
+                 ),
+               "root が死んでいるなら #{reason} は cache_error であるべき"
+      end
+    end
+  end
+
+  describe "classify_cache_read/3" do
+    test "cache 側の errno は cache_error" do
+      for errno <- [:eacces, :erofs, :eio, :enospc, :enomem] do
+        assert {:cache_error, message} =
+                 PersonaAssets.classify_cache_read("manifest.json", "/cache/x", errno)
+
+        assert message =~ "unreadable in the cache"
+      end
+    end
+
+    test "pack 側の errno は pack error のまま" do
+      for errno <- [:enoent, :eisdir, :enotdir, :eloop, :einval] do
+        assert {:error, _} = PersonaAssets.classify_cache_read("manifest.json", "/cache/x", errno),
+               "#{errno} を cache_error に分類してはいけない"
+      end
     end
   end
 
@@ -769,19 +1037,208 @@ defmodule KaoiroServer.PersonaAssetsTest do
     local_blob <> central_blob <> eocd
   end
 
+  # `:zip.unzip/2` はアーカイブが宣言した mode を復元するので、pack 側が
+  # cache 内のパーミッションを支配できてしまう。mode 0 の manifest.json を
+  # 仕込むと File.read が :eacces になり、それは「cache が本当に読めない」
+  # ケースと区別がつかないため cache_error に倒れ、rebuild 全体が止まる
+  # (修正前の実測: 同居する健全 pack が一切読み込まれず LKG が固定された。
+  # cold start なら ADR-0046 F4 で raise する)。展開直後に mode を正規化して
+  # pack から支配権を取り上げる。
   @tag :tmp_dir
-  test "展開途中の I/O 失敗も稼働中は現 manifest を維持する", %{tmp_dir: tmp} do
+  test "アーカイブ宣言の mode 0 は cache へ持ち込まれない", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
     File.mkdir_p!(ingest)
+    on_exit(fn -> widen_dir_modes(tmp) end)
+
+    :ok = write_pack(ingest, "good-1.0.0", base_manifest("good"), "body-good")
+    :ok = write_poisoned_pack(ingest, "evilfile-1.0.0", base_manifest("evilfile"), :manifest)
+    :ok = write_poisoned_pack(ingest, "evildir-1.0.0", base_manifest("evildir"), :sprites_dir)
+
+    # ファイルだけでなくディレクトリ経路も塞げていること。mode 0 の sprites/ は
+    # collect_sprites の File.ls を :eacces にする = 同じ DoS の第 2 経路で、
+    # 走査が top-down でなければ (mode 0 のディレクトリは列挙できない) 直せない。
+    assert_declared_mode_survives(tmp, Path.join(ingest, "evilfile-1.0.0.zip"), "manifest.json")
+    assert_declared_mode_survives(tmp, Path.join(ingest, "evildir-1.0.0.zip"), "sprites")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    use_ingest(ingest)
+
+    # 仕掛けた側が skip されるかどうかではなく、同居 pack が巻き添えに
+    # ならないことが要点。mode を落とせば evil 自体も正当な pack になる。
+    assert Enum.sort(Map.keys(PersonaAssets.manifest()["personas"])) ==
+             ["evildir", "evilfile", "good"]
+
+    for path <- Path.wildcard(Path.join(cache, "**"), match_dot: true) do
+      assert {:ok, %File.Stat{mode: mode, type: type}} = File.lstat(path)
+      needed = if type == :directory, do: 0o500, else: 0o400
+
+      assert Bitwise.band(mode, needed) == needed,
+             "#{path} (#{type}) が mode #{Integer.to_string(mode, 8)} で残っている"
+    end
+  end
+
+  # 共有 cache root に `<root>/<hash>` を symlink として置かれると、
+  # File.dir?/1 も File.exists?/1 も辿ってしまい「展開済み」と見なされる。
+  # 仕込まれた personality.md がそのペルソナの全プロンプトに載る = DoS では
+  # なく注入なので、slot は lstat で実体を確かめる。
+  @tag :tmp_dir
+  test "cache slot が symlink なら信頼せず作り直す", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "sl-1.0.0", base_manifest("sl"), "body-sl")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    use_ingest(ingest)
+    assert PersonaAssets.prompt("sl") =~ "body-sl"
+
+    slot = cache |> Path.join("*") |> Path.wildcard() |> Enum.find(&File.dir?/1)
+
+    planted = Path.join(tmp, "planted")
+    File.cp_r!(slot, planted)
+    File.write!(Path.join(planted, "personality.md"), "PLANTED")
+    File.rm_rf!(slot)
+    File.ln_s!(planted, slot)
+
+    capture_log(fn -> assert :ok = PersonaAssets.rebuild() end)
+
+    refute PersonaAssets.prompt("sl") =~ "PLANTED"
+    assert PersonaAssets.prompt("sl") =~ "body-sl"
+    assert {:ok, %File.Stat{type: :directory}} = File.lstat(slot)
+  end
+
+  # ふじ M2: slot 全体だけでなく、中のファイル 1 枚を symlink に差し替える経路も
+  # 塞げていること。ふじは実 pack の personality.md を外部 symlink に置き換えて
+  # prompt への注入を実再現している。
+  @tag :tmp_dir
+  test "slot 内のファイルが symlink なら信頼せず作り直す", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "in-1.0.0", base_manifest("in"), "body-in")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    use_ingest(ingest)
+    assert PersonaAssets.prompt("in") =~ "body-in"
+
+    slot = cache |> Path.join("*") |> Path.wildcard() |> Enum.find(&File.dir?/1)
+    planted = Path.join(tmp, "planted.txt")
+    File.write!(planted, "PLANTED")
+    swapped = ["personality.md", "sprites/idle.png"]
+
+    for target <- swapped do
+      path = Path.join(slot, target)
+      File.rm!(path)
+      File.ln_s!(planted, path)
+    end
+
+    capture_log(fn -> assert :ok = PersonaAssets.rebuild() end)
+
+    refute PersonaAssets.prompt("in") =~ "PLANTED"
+    assert PersonaAssets.prompt("in") =~ "body-in"
+
+    for target <- swapped do
+      assert {:ok, %File.Stat{type: :regular}} = File.lstat(Path.join(slot, target))
+    end
+  end
+
+  # 上とは別に切る必要がある。必須パスを差し替えると完成判定の側が先に再展開を
+  # 強制してしまい、normalize_modes/1 の special type 拒否を分離できない。
+  # 必須パスは無傷のまま余分な symlink を 1 本置く形なら、拒否だけが効く。
+  @tag :tmp_dir
+  test "必須パス以外の symlink でも slot を作り直す", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "ex-1.0.0", base_manifest("ex"), "body-ex")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    use_ingest(ingest)
+
+    slot = cache |> Path.join("*") |> Path.wildcard() |> Enum.find(&File.dir?/1)
+    planted = Path.join(tmp, "outside.txt")
+    File.write!(planted, "PLANTED")
+    extra = Path.join(slot, "extra.txt")
+    File.ln_s!(planted, extra)
+
+    capture_log(fn -> assert :ok = PersonaAssets.rebuild() end)
+
+    assert PersonaAssets.prompt("ex") =~ "body-ex"
+
+    assert {:error, :enoent} = File.lstat(extra),
+           "必須パス以外の symlink が cache に残っている"
+  end
+
+  # ふじ S1: 完成判定が manifest.json の存在だけだったので、sprite を 1 枚
+  # 失った tree が再展開されず、その pack だけ skip されて known_persona? が
+  # false になっていた (partial extraction / SIGKILL でも同じ状態になる)。
+  @tag :tmp_dir
+  test "sprite が 1 枚欠けた cache は skip せず作り直す", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "mi-1.0.0", base_manifest("mi"), "body-mi")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    use_ingest(ingest)
+    assert PersonaAssets.known_persona?("mi")
+
+    slot = cache |> Path.join("*") |> Path.wildcard() |> Enum.find(&File.dir?/1)
+    missing = Path.join([slot, "sprites", "idle.png"])
+    File.rm!(missing)
+
+    capture_log(fn -> assert :ok = PersonaAssets.rebuild() end)
+
+    assert PersonaAssets.known_persona?("mi")
+    assert {:ok, %File.Stat{type: :regular}} = File.lstat(missing)
+  end
+
+  # レビュー must-fix: `:zip.unzip/2` はエントリを書くたびに宣言 mode を適用
+  # するので、展開が途中で失敗すると mode 0 の manifest.json だけが残る。
+  # freshness check は stat ベースなのでそれを「完成した展開」と見なし、以後
+  # 正規化が二度と走らない。同一バイトの zip を 2 本置くと 1 回の rebuild 内で
+  # 決定的に踏める (2 本目が残骸を掴み cache_error → build 全体が停止 →
+  # reclaim も走らないので自己増殖する)。
+  @tag :tmp_dir
+  test "展開が途中で失敗しても毒入りの残骸を掴まない", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+
+    :ok = write_pack(ingest, "good-1.0.0", base_manifest("good"), "body-good")
+    :ok = write_poisoned_pack(ingest, "abort-a", base_manifest("abort"), :abort)
+
+    # 同一バイト = 同一 cache key。コピーで作らないと mtime 差で hash がずれる。
+    File.cp!(Path.join(ingest, "abort-a.zip"), Path.join(ingest, "abort-b.zip"))
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    log = capture_log(fn -> use_ingest(ingest) end)
+
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
+    refute log =~ "unreadable in the cache"
+
+    # 2 巡目も同じ。残骸が残っていれば cache_error でここが空になる。
+    capture_log(fn -> PersonaAssets.rebuild() end)
+    assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
+  end
+
+  # 展開済みの sprite が読めなくなった場合。以前は collect_sprites の bang が
+  # raise して rebuild 失敗 → LKG 維持だったが、normalize_modes/1 が冒頭で
+  # mode を戻すので今は素直に読み直される。どちらでも manifest は同じなので、
+  # 修復されたことを直接見る (レビュー R2)。
+  @tag :tmp_dir
+  test "展開済み sprite が読めなくなっても rebuild が mode を戻して読み直す", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+    on_exit(fn -> widen_dir_modes(tmp) end)
     :ok = write_pack(ingest, "io-1.0.0", base_manifest("io"), "body-io")
 
     Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
     use_ingest(ingest)
     assert Map.keys(PersonaAssets.manifest()["personas"]) == ["io"]
 
-    # cache root 自体は健全なまま (write-probe は通る) 展開済みファイルが
-    # 読めなくなる = collect_sprites の File.read! が raise する経路。
     sprite =
       cache
       |> Path.join("*/sprites/idle.png")
@@ -789,10 +1246,12 @@ defmodule KaoiroServer.PersonaAssetsTest do
       |> hd()
 
     File.chmod!(sprite, 0o000)
-    on_exit(fn -> File.chmod(sprite, 0o600) end)
 
-    assert :ok = PersonaAssets.rebuild()
+    log = capture_log(fn -> assert :ok = PersonaAssets.rebuild() end)
+
+    refute log =~ "unreadable in the cache"
     assert Map.keys(PersonaAssets.manifest()["personas"]) == ["io"]
+    assert {:ok, "png-io-1.0.0-idle"} = File.read(sprite)
   end
 
   @tag :tmp_dir

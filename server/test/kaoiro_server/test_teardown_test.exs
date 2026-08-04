@@ -42,6 +42,24 @@ defmodule KaoiroServer.TestTeardownTest do
     def terminate(_reason, on_terminate), do: on_terminate.()
   end
 
+  # handle_info で待たせておく GenServer。stop が送る system message を
+  # mailbox に積ませたまま殺す窓を作るのに使う。
+  defmodule Busy do
+    use GenServer
+
+    @impl true
+    def init(waiter), do: {:ok, waiter}
+
+    @impl true
+    def handle_info(:block, waiter) do
+      send(waiter, {:blocking, self()})
+
+      receive do
+        :never -> {:noreply, waiter}
+      end
+    end
+  end
+
   # link しない process を起こして殺す。GenServer.stop から見て「既に居ない」
   # 相手を作るための下ごしらえ。
   defp dead_pid do
@@ -50,6 +68,24 @@ defmodule KaoiroServer.TestTeardownTest do
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
     pid
+  end
+
+  # stop が送った system message が mailbox に積まれるまで待つ。sleep で
+  # 決め打ちせず、実際に積まれたことを見てから次へ進む。
+  defp wait_for_system_terminate(pid, attempts \\ 200) do
+    {:messages, messages} = Process.info(pid, :messages)
+
+    cond do
+      Enum.any?(messages, &match?({:system, _from, {:terminate, _}}, &1)) ->
+        :ok
+
+      attempts <= 0 ->
+        flunk("system terminate message が mailbox に積まれなかった")
+
+      true ->
+        Process.sleep(5)
+        wait_for_system_terminate(pid, attempts - 1)
+    end
   end
 
   # stop が terminate/2 に到達したところで `signal` を送り、GenServer.stop が
@@ -92,6 +128,28 @@ defmodule KaoiroServer.TestTeardownTest do
 
     test "stop 中に :kill で殺された場合は benign ではない" do
       refute benign_teardown_exit?(exit_during_terminate(:kill))
+    end
+
+    test "system message 待ちのまま :shutdown で殺されると :sys.terminate 層が残る" do
+      # 実測 3 形のうち入れ子形 (envelope 3) の live pin。callback を塞いで
+      # stop の {:system, _, {:terminate, _}} を mailbox に積ませ、処理される
+      # 前に :shutdown を届けると :gen の monitor が先に発火し、
+      # {:sys, :terminate, _} 層が reason に残る。OTP がこの層を畳むように
+      # 変わったらここが落ちる (ふじ #171-S2)。
+      {:ok, pid} = GenServer.start(Busy, self())
+      send(pid, :block)
+      assert_receive {:blocking, ^pid}, 1_000
+
+      task = Task.async(fn -> catch_exit(GenServer.stop(pid)) end)
+      wait_for_system_terminate(pid)
+      Process.exit(pid, :shutdown)
+
+      reason = Task.await(task, 5_000)
+
+      assert match?({{:shutdown, {:sys, :terminate, _}}, {GenServer, :stop, _}}, reason),
+             "envelope 3 の形が変わった: #{inspect(reason, limit: 6)}"
+
+      assert benign_teardown_exit?(reason)
     end
 
     test "terminate/2 の crash は benign ではない" do

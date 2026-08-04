@@ -455,6 +455,31 @@ defmodule KaoiroServer.PersonaAssets do
   # term (`{path, {{:file, :open, _}, :eacces}}` for unzip) whose shape
   # differs per operation and OTP release. The atom is the one stable
   # part, so look for it anywhere in the term.
+  #
+  # Walking the whole term is the loose part of this, and it was measured
+  # rather than assumed (2026-08-04, OTP 29.0.2 / stdlib 8.0.1). Feeding
+  # the extractor a self-colliding entry
+  # (`{:EXIT, {{:badmatch, {:error, :eexist}}, stacktrace}}`), a 300-byte
+  # entry name (`:enametoolong`), random bytes and a truncated archive
+  # (both `:bad_eocd`) produced no term carrying ANY atom from the two sets
+  # above — every archive-shape failure classified as a pack error, which
+  # is what ADR-0029's "one bad drop cannot lock the whole set" requires.
+  # So the walk stays unbounded on evidence, not taste. Those four are
+  # fixtured by "実測: アーカイブ形状由来の失敗はどれも cache_error に
+  # ならない" in the test suite, so an OTP release that moves an errno into
+  # a new position fails there first. (A broken central directory —
+  # `:bad_central_directory` — was measured the same way during the
+  # investigation but is not fixtured: it needs byte-patching a zip and
+  # carries no atom the other four do not already cover.)
+  #
+  # Two caveats for whoever re-measures. The `{:EXIT, _}` shape carries a
+  # stacktrace, so this walk also visits module and function atoms from
+  # unrelated frames — none can collide with an errno name today, but that
+  # is the first place a collision would come from. And narrowing the walk
+  # would NOT have caught the one real misclassification found here: a
+  # pack that declares mode 0 on its own `manifest.json` made `File.read/1`
+  # fail `:eacces` at exactly the position a genuine cache failure uses.
+  # That one is fixed at the source, in `normalize_modes/1`.
   defp posix_in?(term, set) when is_atom(term), do: term in set
   defp posix_in?(term, set) when is_tuple(term), do: term |> Tuple.to_list() |> posix_in?(set)
   defp posix_in?(term, set) when is_list(term), do: Enum.any?(term, &posix_in?(&1, set))
@@ -503,9 +528,15 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
+  @doc false
   # These paths are always inside the cache, so :eacces needs no scoping
   # here. A missing or malformed file is still the pack's problem.
-  defp classify_cache_read(label, path, reason) do
+  #
+  # Public for the same reason `classify_zip_error/2` is: since
+  # `normalize_modes/1` repairs any mode the pack (or an operator) put on an
+  # extracted file, this branch is no longer reachable from an integration
+  # test without injecting a genuine volume fault, so it is pinned directly.
+  def classify_cache_read(label, path, reason) do
     if posix_in?(reason, @cache_posix) or posix_in?(reason, @ambiguous_posix) do
       {:cache_error, "#{label} unreadable in the cache: #{path}: #{inspect(reason)}"}
     else
@@ -531,23 +562,285 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  # Idempotent: skip when the cache dir already exists (its name is the
-  # content hash, so presence proves freshness). Otherwise verify the
-  # entry names, wipe any stale target, extract with :zip, and mark done.
+  # Idempotent. The cache dir's name is the content hash, so an existing one
+  # holds the right bytes — but presence alone does not prove it is finished
+  # or ours, so it is reused only when it looks complete AND we can still
+  # impose our own modes on it (`reuse_extracted/1`). Anything else is
+  # discarded and re-extracted; nothing is "marked done", deliberately —
+  # see the note there on why a durability marker is not used.
   # `:zip.unzip`'s `cwd` charlist target is the extract root.
-  defp ensure_extracted(zip_path, extracted_dir, cache_dir) do
-    if File.dir?(extracted_dir) and File.exists?(Path.join(extracted_dir, "manifest.json")) do
-      :ok
-    else
-      with :ok <- verify_entry_names(zip_path) do
-        File.rm_rf!(extracted_dir)
-        File.mkdir_p!(extracted_dir)
+  # Owner-only, and owner-WRITABLE so `File.rm_rf/1` can always reclaim
+  # the tree. Nothing outside this OS user reads the cache: sprites are
+  # hashed and served through the channel, never from disk by Plug.Static.
+  # Defined here, above every user — a module attribute read before its
+  # definition silently expands to nil (caught by `:file.change_mode/2`
+  # raising FunctionClauseError, not by the compiler erroring out).
+  @extracted_dir_mode 0o700
+  @extracted_file_mode 0o600
 
+  defp ensure_extracted(zip_path, extracted_dir, cache_dir) do
+    case reuse_extracted(extracted_dir) do
+      :ok -> :ok
+      :stale -> extract(zip_path, extracted_dir, cache_dir)
+    end
+  end
+
+  # A cached tree is reused only if it looks complete AND our own modes can
+  # still be put on it. The freshness check is stat-based, so a mode-0
+  # `manifest.json` satisfies it; re-normalising instead of trusting also
+  # covers a tree written by a build from BEFORE `normalize_modes/1`
+  # existed, or left by a run that died between extraction and the walk.
+  # The walk is idempotent and a pack is a manifest, a markdown file and 7
+  # PNGs, so paying it each rebuild costs less than a durability marker,
+  # which an archive entry of the same name could forge anyway.
+  #
+  # A normalisation failure here is deliberately NOT infrastructure. `chmod`
+  # returns `:eperm` for a file this OS user does not own, and the module
+  # tolerates an explicitly configured, group/world-writable cache root
+  # (see `verify_cache_root/1`) — so treating it as `{:cache_error, _}`
+  # would let any local user plant `<root>/<16 hex>/manifest.json` and
+  # permanently stop the server from booting. Treating it as stale sends the
+  # entry to `discard/1`, which evicts it when it can and skips just this
+  # pack when it cannot.
+  # `File.lstat/1`, not `File.dir?/1`: the latter FOLLOWS symlinks, so a
+  # `<root>/<hash>` symlink planted on the shared root would pass the
+  # freshness check, and `normalize_modes/1` would wave it through as well
+  # (`:symlink` is neither `:regular` nor `:directory`). The pack's
+  # `personality.md` rides into every prompt for that persona, so this is
+  # content injection, not just a DoS. `verify_cache_root/1` already
+  # lstat-rejects a symlinked ROOT for the same reason — the slots inside it
+  # need the same guard. Anything that is not a real directory is stale, and
+  # `File.rm_rf/1` unlinks the symlink itself rather than its target.
+  #
+  # Symlinks INSIDE a slot are rejected by `normalize_modes/1` for the same
+  # reason — ふじ replaced a real slot's `personality.md` with a symlink and
+  # got planted text into that persona's prompt.
+  defp real_dir?(path) do
+    match?({:ok, %File.Stat{type: :directory}}, File.lstat(path))
+  end
+
+  defp real_file?(path) do
+    match?({:ok, %File.Stat{type: :regular}}, File.lstat(path))
+  end
+
+  # Everything the loader will read has to be there already, as a REAL file
+  # — `lstat`, so a symlink standing in for one is not accepted either.
+  # Checking only `manifest.json` accepted a tree that had lost a sprite (a
+  # partial extraction, a SIGKILL, a manual delete): it was never
+  # re-extracted, the pack was then skipped for the missing sprite, and
+  # `known_persona?/1` went false for a persona that is sitting on disk
+  # (ふじ, 実再現).
+  defp complete?(extracted_dir) do
+    real_dir?(extracted_dir) and Enum.all?(consumed_paths(extracted_dir), &real_file?/1)
+  end
+
+  defp consumed_paths(dir) do
+    [Path.join(dir, "manifest.json"), Path.join(dir, "personality.md")] ++
+      Enum.map(@required_states, &Path.join([dir, "sprites", "#{&1}.png"]))
+  end
+
+  defp reuse_extracted(extracted_dir) do
+    if complete?(extracted_dir) do
+      case normalize_modes(extracted_dir) do
+        :ok -> :ok
+        {:cache_error, _reason} -> :stale
+      end
+    else
+      :stale
+    end
+  end
+
+  defp extract(zip_path, extracted_dir, cache_dir) do
+    with :ok <- verify_entry_names(zip_path),
+         :ok <- discard(extracted_dir, cache_dir),
+         :ok <- prepare_slot(extracted_dir, cache_dir) do
+      result =
         case :zip.unzip(String.to_charlist(zip_path), cwd: String.to_charlist(extracted_dir)) do
-          {:ok, _files} -> :ok
+          {:ok, _files} -> normalize_modes(extracted_dir)
           {:error, reason} -> classify_zip_error(reason, cache_dir)
         end
+
+      discard_unless_clean(result, extracted_dir, cache_dir)
+    end
+  end
+
+  # `:zip.unzip/2` applies a FILE's declared mode as it writes that entry,
+  # and a DIRECTORY's only at the end of a successful extraction (measured
+  # on OTP 29.0.2). So an aborted extraction can leave an unreadable file —
+  # a pack ordering a mode-0 `manifest.json` first and a doomed entry second
+  # does exactly that — and a completed one can leave a mode-0 directory,
+  # which `File.rm_rf/1` cannot descend into. Both are the archive's choice,
+  # so widen before deleting, and never leave a half-written tree for the
+  # next rebuild's freshness check to accept.
+  defp discard(extracted_dir, cache_dir) do
+    _ = normalize_modes(extracted_dir)
+
+    case File.rm_rf(extracted_dir) do
+      {:ok, _removed} -> :ok
+      {:error, reason, path} -> classify_discard(reason, path, probe_writable(cache_dir))
+    end
+  end
+
+  @doc false
+  # Creates the slot and narrows it to owner-only, BEFORE `:zip.unzip/2`
+  # writes anything into it. Public so both properties can be pinned
+  # directly — the conditions that break them need a second OS user or a
+  # won race, neither of which a single-user suite can stage (ふじ).
+  #
+  # `File.mkdir/1`, exclusively, NOT `File.mkdir_p/1`. Nothing reserves the
+  # path between the wipe and this call, so the slot can be re-occupied in
+  # between, and `mkdir_p` answers `:ok` for a SYMLINK pointing at an
+  # existing directory — the chmod and the extraction then follow it out of
+  # the cache (ふじ reproduced the link target being narrowed to 0700 and a
+  # `manifest.json` written inside it). Exclusive `mkdir` reports `:eexist`
+  # for a directory or a symlink alike, before anything is written, and an
+  # `lstat` check would not do: that is a check/use race, this is not.
+  # `cache_dir` already exists and the slot sits one level below it, so the
+  # recursive form buys nothing anyway.
+  #
+  # The chmod then closes the insertion window: `File.mkdir/1` creates at
+  # the umask, so under the usual 022 the slot is briefly 0755 — no other
+  # user can write into that, but a permissive umask would leave it group-
+  # or world-writable until this runs.
+  def prepare_slot(extracted_dir, cache_dir) do
+    with :ok <- create_slot(extracted_dir, cache_dir) do
+      case File.chmod(extracted_dir, @extracted_dir_mode) do
+        :ok -> :ok
+        {:error, reason} -> classify_discard(reason, extracted_dir, probe_writable(cache_dir))
       end
+    end
+  end
+
+  defp create_slot(extracted_dir, cache_dir) do
+    case File.mkdir(extracted_dir) do
+      :ok -> :ok
+      {:error, reason} -> classify_discard(reason, extracted_dir, probe_writable(cache_dir))
+    end
+  end
+
+  @doc false
+  # Failing to clear our own cache slot is not automatically a volume fault.
+  # Unlink permission comes from the CONTAINING directory, not from the
+  # cache root, so a `<root>/<hash>/` owned by another OS user survives the
+  # wipe — measured: `File.rm_rf/1` on a non-empty directory without the
+  # write bit swallows the per-child failures and reports `:eexist` for the
+  # directory itself (a foreign file reports `:eacces` / `:eperm`; a file or
+  # an EMPTY directory is removable through the parent, which is why the
+  # earlier note here was wrong).
+  #
+  # ADR-0046 F4 fixes which POSIX atoms mean "the cache volume failed", and
+  # `classify_zip_error/2` and `classify_cache_read/3` apply that table
+  # unchanged. It cannot be applied to a failed SLOT OPERATION — removing
+  # the slot, creating it, or narrowing it to owner-only: `:eperm` and
+  # `:eacces` are exactly what a slot planted by another local user
+  # produces on the shared, group/world-writable root this module
+  # tolerates, so calling them infrastructure would let one planted
+  # directory abort every rebuild and every boot — the inversion ADR-0029
+  # forbids. The errno is therefore not reinterpreted; the cache ROOT is
+  # re-probed instead, which is the thing that actually differs. A
+  # read-only remount, a full volume or an I/O fault takes the root down
+  # with it; a foreign slot leaves it writable. F4 carries this as an
+  # explicit addendum (2026-08-04) covering exactly those three operations.
+  #
+  # The probe only disambiguates the atoms a foreign slot can actually
+  # produce — measured: a non-empty foreign directory gives `:eexist` from
+  # `File.rm_rf/1`, and a foreign file gives `:eacces` / `:eperm`. A slot
+  # re-occupied between the wipe and `File.mkdir/1` also gives `:eexist`,
+  # whatever re-occupied it — that is the point of the exclusive form, and
+  # why nothing is written before the classification runs. `:enotdir`
+  # stays in the set for the one remaining shape: a path whose parent
+  # stopped being a directory under us. Every other atom keeps F4's
+  # classification whatever the probe says — an `:eio` from a bad block in
+  # this slot, or an `:estale` NFS handle for it, leaves the ROOT perfectly
+  # writable, and downgrading those would publish a manifest that silently
+  # lost packs instead of failing the rebuild.
+  @slot_local ~w(eexist eacces eperm enotdir)a
+
+  def classify_discard(reason, path, :ok) when reason in @slot_local do
+    {:error, "cache slot operation failed: #{path}: #{inspect(reason)}"}
+  end
+
+  def classify_discard(reason, path, _probe) do
+    {:cache_error, "cache slot operation failed: #{path}: #{inspect(reason)}"}
+  end
+
+  defp discard_unless_clean(:ok, _extracted_dir, _cache_dir), do: :ok
+
+  defp discard_unless_clean(error, extracted_dir, cache_dir) do
+    merge_cleanup_error(error, discard(extracted_dir, cache_dir))
+  end
+
+  @doc false
+  # A cache fault outranks a pack fault. Dropping the cleanup result and
+  # returning the original error meant that a pack error whose cleanup then
+  # failed on a broken volume (`:eio`, `:estale`, `:enospc`) still read as
+  # "just skip this pack": the build carried on and published a manifest
+  # that had silently lost packs, instead of failing the rebuild and keeping
+  # the last-known-good (ADR-0046 F4). Pure on purpose so the whole table
+  # can be pinned directly — the situation that produces it needs a broken
+  # volume, which no single-user test can stage (ふじ M1).
+  def merge_cleanup_error({:cache_error, _} = original, _cleanup), do: original
+  def merge_cleanup_error(_original, {:cache_error, _} = cleanup), do: cleanup
+  def merge_cleanup_error(original, _cleanup), do: original
+
+  # `:zip.unzip/2` restores the modes the ARCHIVE declares, so the pack —
+  # an untrusted artifact — otherwise controls permissions inside OUR
+  # cache. A pack carrying `manifest.json` with mode 0 then makes
+  # `File.read/1` fail `:eacces`, which `classify_cache_read/3` must treat
+  # as infrastructure (a cache that really went unreadable is not the
+  # pack's fault, ふじ M1 2026-08-03) — so one crafted drop halts the whole
+  # rebuild, freezing every other pack and raising on cold start. Measured
+  # end-to-end on OTP 29.0.2 before this was added.
+  #
+  # The ambiguity cannot be resolved downstream: the errno is genuine and
+  # sits exactly where a real cache failure would put it. So the archive's
+  # control is removed at the source instead, right after extraction.
+  # Chmod top-down — a mode-0 directory cannot be listed until it is
+  # widened. A failure here IS ours, hence `:cache_error`.
+  defp normalize_modes(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} ->
+        with :ok <- chmod_extracted(path, @extracted_dir_mode),
+             {:ok, names} <- ls_extracted(path) do
+          Enum.reduce_while(names, :ok, fn name, :ok ->
+            case normalize_modes(Path.join(path, name)) do
+              :ok -> {:cont, :ok}
+              error -> {:halt, error}
+            end
+          end)
+        end
+
+      {:ok, %File.Stat{type: :regular}} ->
+        chmod_extracted(path, @extracted_file_mode)
+
+      # Measured on OTP 29.0.2: `:zip.unzip/2` writes only regular files
+      # and directories — a symlink entry is materialised as a regular file
+      # holding the target path. So anything else in this tree was put
+      # there by something that is not a legitimate extraction, and the
+      # loader would read straight through it: ふじ replaced a real slot's
+      # `personality.md` with a symlink and got planted text into that
+      # persona's prompt. Rejecting costs no compatibility for that reason,
+      # and the callers do the right thing with it — reuse discards and
+      # re-extracts, a fresh extraction cleans up and fails.
+      {:ok, %File.Stat{type: type}} ->
+        {:cache_error, "unexpected #{type} in the cache: #{path}"}
+
+      {:error, reason} ->
+        {:cache_error, "cache stat failed: #{path}: #{inspect(reason)}"}
+    end
+  end
+
+  defp chmod_extracted(path, mode) do
+    case File.chmod(path, mode) do
+      :ok -> :ok
+      {:error, reason} -> {:cache_error, "cache chmod failed: #{path}: #{inspect(reason)}"}
+    end
+  end
+
+  defp ls_extracted(path) do
+    case File.ls(path) do
+      {:ok, names} -> {:ok, names}
+      {:error, reason} -> {:cache_error, "cache listing failed: #{path}: #{inspect(reason)}"}
     end
   end
 
