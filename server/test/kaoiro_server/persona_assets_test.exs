@@ -7,6 +7,41 @@ defmodule KaoiroServer.PersonaAssetsTest do
   alias KaoiroServer.FooterAssets
   alias KaoiroServer.PersonaAssets
 
+  # issue #187: ExUnit's own `tmp_dir` tag path
+  # (`tmp/<module>/<test>-<hash>/`, see ex_unit/runner.ex
+  # `create_tmp_dir!/3`) is a DETERMINISTIC hash of the module + test
+  # name — no BEAM-specific entropy. That is fine for concurrency
+  # WITHIN one BEAM (ExUnit's own docs promise exactly that: a given
+  # test runs at most once per BEAM), but it collides across SEPARATE
+  # `mix test` invocations sharing this checkout — measured directly
+  # (issue #187): running 4 concurrent `mix test` processes with a
+  # fixed `--seed` reliably reproduced `File.Error: could not remove
+  # files ... file already exists` from `File.rm_rf!/1` racing another
+  # BEAM's `File.mkdir_p!/1` on the exact same path, plus assertions
+  # failing on files another BEAM had just overwritten/deleted out from
+  # under this one.
+  #
+  # Fixed by giving the tag a custom `extra_path` (an ExUnit-documented
+  # customization point: `tmp_dir: "my_path"` -> `tmp/<module>/<test>/
+  # my_path`) that IS BEAM-unique, same `pid + crypto nonce` pattern
+  # already established for exactly this cross-BEAM-collision reason
+  # elsewhere in this suite (`OAuthAllowlistFixture`, `config/test.exs`'s
+  # DETS store paths). `File.rm_rf!/1` / `File.mkdir_p!/1` then only
+  # ever touch this BEAM's own nested leaf directory — concurrent BEAMs
+  # sharing the parent `tmp/<module>/<test>-<hash>/` directory is safe
+  # (`mkdir_p` is idempotent for an already-existing directory).
+  #
+  # Applied via `@moduletag` (not per-`@tag :tmp_dir`, of which this
+  # file has ~80): individual test tags override a moduletag for the
+  # same key, so a bare `@tag :tmp_dir` left in place would win and
+  # reset this back to the non-unique default — every such tag below
+  # was removed rather than left to silently no-op this fix. The 10
+  # tests with no filesystem dependency get an unused `tmp_dir` context
+  # key too (harmless).
+  @run_nonce "#{System.pid()}_" <>
+               Base.url_encode64(:crypto.strong_rand_bytes(4), padding: false)
+  @moduletag tmp_dir: @run_nonce
+
   @states ~w(idle thinking tool_running waiting_input
              waiting_permission done error)
 
@@ -159,7 +194,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     PersonaAssets.rebuild()
   end
 
-  @tag :tmp_dir
   test "1 pack を取り込んで manifest と personality を返す", %{tmp_dir: tmp} do
     :ok = write_pack(tmp, "ao-1.0.0", base_manifest("ao"), "body-ao")
     use_ingest(tmp)
@@ -178,7 +212,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
              "body-ao\n\n" <> FooterAssets.built_in_system_footer()
   end
 
-  @tag :tmp_dir
   test "reserved default は pack 不要で known / footer のみが prompt", %{tmp_dir: tmp} do
     use_ingest(tmp)
 
@@ -189,7 +222,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   end
 
   # ADR-0045 F2: personality → system-footer → user-footer を空行で連結。
-  @tag :tmp_dir
   test "prompt は personality → system → user の 3 層を空行で結合する", %{tmp_dir: tmp} do
     footer_dir = Path.join(tmp, "footers")
     File.mkdir_p!(footer_dir)
@@ -218,7 +250,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert PersonaAssets.prompt("default") == "system 層\n\nuser 層"
   end
 
-  @tag :tmp_dir
   test "manifest.id 'default' の pack は取り込み拒否", %{tmp_dir: tmp} do
     :ok = write_pack(tmp, "default-1.0.0", base_manifest("default"), "body")
     use_ingest(tmp)
@@ -227,7 +258,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert personas == %{}
   end
 
-  @tag :tmp_dir
   test "manifest 必須フィールド欠落は skip", %{tmp_dir: tmp} do
     :ok =
       write_pack(
@@ -244,7 +274,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert Map.keys(personas) == ["ok"]
   end
 
-  @tag :tmp_dir
   test "sprites/ の PNG が 1 枚欠けても pack ごと skip", %{tmp_dir: tmp} do
     # Build a valid pack directory, then delete one PNG before zipping to
     # exercise the sprite check (the write_pack helper is complete by
@@ -276,7 +305,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     refute Map.has_key?(personas, "partial")
   end
 
-  @tag :tmp_dir
   test "min_kaoiro_version が server より高い pack は skip", %{tmp_dir: tmp} do
     :ok =
       write_pack(
@@ -291,7 +319,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     refute Map.has_key?(personas, "future")
   end
 
-  @tag :tmp_dir
   test "同 id の重複は先勝ちで 1 件だけ通す", %{tmp_dir: tmp} do
     :ok = write_pack(tmp, "aa-1.0.0", base_manifest("dup"), "first")
     # Second zip has the same manifest.id but a bumped version to force
@@ -305,7 +332,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert PersonaAssets.prompt("dup") =~ "first"
   end
 
-  @tag :tmp_dir
   test "fetch_file はマニフェスト掲載ファイルのみ解決する", %{tmp_dir: tmp} do
     :ok = write_pack(tmp, "kk-1.0.0", base_manifest("kk"), "body")
     use_ingest(tmp)
@@ -319,7 +345,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert :error = PersonaAssets.fetch_file("..", "idle.png")
   end
 
-  @tag :tmp_dir
   test "url とハッシュが content-addressed 形式に従う", %{tmp_dir: tmp} do
     :ok = write_pack(tmp, "cc-1.0.0", base_manifest("cc"), "body")
     use_ingest(tmp)
@@ -334,7 +359,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert url == "/personas/cc/idle.png?v=#{String.slice(hex, 0, 12)}"
   end
 
-  @tag :tmp_dir
   test "version はアセット内容の変化で変わる", %{tmp_dir: tmp} do
     :ok = write_pack(tmp, "vv-1.0.0", base_manifest("vv"), "body")
     use_ingest(tmp)
@@ -351,7 +375,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     refute before_version == after_version
   end
 
-  @tag :tmp_dir
   test "存在しない ingest dir でも起動できる (空 manifest)", %{tmp_dir: tmp} do
     use_ingest(Path.join(tmp, "nonexistent"))
 
@@ -363,7 +386,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
 
   # --- extraction cache の外出し (ADR-0046 / #183) ---
 
-  @tag :tmp_dir
   test "ingest dir へは一切書き込まない (:ro でも rebuild が通る)", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     File.mkdir_p!(ingest)
@@ -381,7 +403,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     refute File.exists?(Path.join(ingest, ".cache"))
   end
 
-  @tag :tmp_dir
   test "既定 cache path は expand 後の ingest dir から導出する", %{tmp_dir: tmp} do
     Application.delete_env(:kaoiro_server, :persona_cache_dir)
     ingest = Path.join(tmp, "packs")
@@ -404,7 +425,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     end
   end
 
-  @tag :tmp_dir
   test "reclaim は cache-key 形式の entry だけを消す", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -430,7 +450,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     end
   end
 
-  @tag :tmp_dir
   test "cold start で cache root が作れなければ raise する", %{tmp_dir: tmp} do
     parent = Path.join(tmp, "locked")
     File.mkdir_p!(parent)
@@ -449,7 +468,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   end
 
   # ふじ裁定 (2026-08-03): 明示 root は強制 chmod せず warning に留める。
-  @tag :tmp_dir
   test "group/world-writable な明示 root は warn するが mode は変えない", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -472,7 +490,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     refute capture_log(fn -> PersonaAssets.rebuild() end) =~ "group/world-writable"
   end
 
-  @tag :tmp_dir
   test "既定 root は 0700 へ落とす", %{tmp_dir: tmp} do
     Application.delete_env(:kaoiro_server, :persona_cache_dir)
     ingest = Path.join(tmp, "packs")
@@ -490,7 +507,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert Bitwise.band(mode, 0o7777) == 0o700
   end
 
-  @tag :tmp_dir
   test "cache root が symlink なら unusable として弾く", %{tmp_dir: tmp} do
     real = Path.join(tmp, "real")
     File.mkdir_p!(real)
@@ -511,7 +527,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # 残るのは disk full か rebuild 途中の remount だけ)。実際に OTP が返す
   # term を実測で固定し、分類器へ直接通す。
   describe "classify_zip_error/2" do
-    @tag :tmp_dir
     test "cache 配下への書き込み不能 (:eacces) は cache_error", %{tmp_dir: tmp} do
       zip = build_zip(tmp, "z1")
       cache = Path.join(tmp, "cache")
@@ -550,7 +565,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert {:cache_error, _} = PersonaAssets.classify_zip_error(reason, "/cache")
     end
 
-    @tag :tmp_dir
     test "cache 外の :eacces (source zip が読めない等) は pack error", %{tmp_dir: tmp} do
       zip = build_zip(tmp, "z2")
       outside = Path.join(tmp, "elsewhere")
@@ -563,7 +577,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert {:error, _} = PersonaAssets.classify_zip_error(reason, Path.join(tmp, "cache"))
     end
 
-    @tag :tmp_dir
     test "壊れた zip (:einval) は pack error のまま", %{tmp_dir: tmp} do
       broken = Path.join(tmp, "broken.zip")
       File.write!(broken, "this is not a zip archive")
@@ -592,7 +605,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     # 取り、分類まで通す。posix_in?/2 が term を無制限に走査してよい根拠が
     # 「アーカイブ形状由来の term には cache 側 errno atom が現れない」こと
     # なので、その前提が OTP 更新で崩れたらここが最初に落ちる。
-    @tag :tmp_dir
     test "実測: アーカイブ形状由来の失敗はどれも cache_error にならない", %{tmp_dir: tmp} do
       cache = Path.join(tmp, "cache")
       File.mkdir_p!(cache)
@@ -654,7 +666,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
         {"personality.md", "personality.md"},
         {"sprites/", "sprites"}
       ] do
-    @tag :tmp_dir
     test "cache 内 #{label} が読めなくなっても rebuild が mode を戻して読み直す",
          %{tmp_dir: tmp} do
       ingest = Path.join(tmp, "packs")
@@ -724,7 +735,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # 「展開前に 0700」の順序も、別 UID の CI が無い以上ここで直接張るのが実効的
   # (ふじ助言)。
   describe "prepare_slot/2" do
-    @tag :tmp_dir
     test "既存ディレクトリへの symlink はリンク先に触れず pack error", %{tmp_dir: tmp} do
       cache = Path.join(tmp, "cache")
       File.mkdir_p!(cache)
@@ -746,7 +756,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert {:ok, %File.Stat{type: :symlink}} = File.lstat(slot)
     end
 
-    @tag :tmp_dir
     test "空いている slot は 0700 で作られる", %{tmp_dir: tmp} do
       cache = Path.join(tmp, "cache")
       File.mkdir_p!(cache)
@@ -760,7 +769,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
              "展開前に owner-only へ狭窄されていない (mode #{Integer.to_string(mode, 8)})"
     end
 
-    @tag :tmp_dir
     test "既に実ディレクトリが居る slot も pack error", %{tmp_dir: tmp} do
       cache = Path.join(tmp, "cache")
       slot = Path.join(cache, "0123456789abcdef")
@@ -827,7 +835,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     end
   end
 
-  @tag :tmp_dir
   test "壊れた zip 1 本は他の pack を巻き込まず skip される", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     File.mkdir_p!(ingest)
@@ -844,7 +851,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # entry 名が自己衝突する zip (`a` と `a/b/c`) は展開中に :enotdir を出す。
   # これを cache 障害に倒すと、ingest dir にそれを置くだけで cold start が
   # raise し、稼働中も rebuild が永久に失敗する (可用性の DoS)。
-  @tag :tmp_dir
   test "entry が自己衝突する zip は skip され、cold start も通る", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     File.mkdir_p!(ingest)
@@ -861,7 +867,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert Map.keys(PersonaAssets.manifest()["personas"]) == ["good"]
   end
 
-  @tag :tmp_dir
   test "sprites が通常ファイルの pack は skip される (:enotdir)", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     src = Path.join(tmp, "_stage_flat")
@@ -894,7 +899,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # 区別できない (展開先 dir も reclaim が掃除してしまう)。防御が発動した
   # ことの観測点は skip 理由のログなので、そこを固定する — OTP 任せに
   # 退行したらメッセージが "unzip failed" に変わって落ちる。
-  @tag :tmp_dir
   test "extraction dir の外へ出る entry を持つ pack は展開前に拒否する", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -917,7 +921,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # `:zip.list_dir/1` は前者、`:zip.unzip/2` は後者で動く。central だけを
   # 見る guard は、central=safe / local=逸脱 の zip で素通りする
   # (ふじ M1 2 巡目、実機再現済み)。
-  @tag :tmp_dir
   test "central と local で名前が食い違う pack は展開前に拒否する", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -948,7 +951,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
 
   # 展開前に弾いていることの直接確認 (E2E だけだと reclaim_cache が
   # 中途半端な展開先を消してしまい、guard 有無の痕跡が残らない)。
-  @tag :tmp_dir
   test "verify_entry_names/1 は central・local の両方を検証する", %{tmp_dir: tmp} do
     ok_zip = Path.join(tmp, "ok.zip")
     File.write!(ok_zip, mismatched_zip("a.txt", "a.txt", "body"))
@@ -1050,7 +1052,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # (修正前の実測: 同居する健全 pack が一切読み込まれず LKG が固定された。
   # cold start なら ADR-0046 F4 で raise する)。展開直後に mode を正規化して
   # pack から支配権を取り上げる。
-  @tag :tmp_dir
   test "アーカイブ宣言の mode 0 は cache へ持ち込まれない", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -1088,7 +1089,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # File.dir?/1 も File.exists?/1 も辿ってしまい「展開済み」と見なされる。
   # 仕込まれた personality.md がそのペルソナの全プロンプトに載る = DoS では
   # なく注入なので、slot は lstat で実体を確かめる。
-  @tag :tmp_dir
   test "cache slot が symlink なら信頼せず作り直す", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -1117,7 +1117,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # ふじ M2: slot 全体だけでなく、中のファイル 1 枚を symlink に差し替える経路も
   # 塞げていること。ふじは実 pack の personality.md を外部 symlink に置き換えて
   # prompt への注入を実再現している。
-  @tag :tmp_dir
   test "slot 内のファイルが symlink なら信頼せず作り直す", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -1152,7 +1151,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # 上とは別に切る必要がある。必須パスを差し替えると完成判定の側が先に再展開を
   # 強制してしまい、normalize_modes/1 の special type 拒否を分離できない。
   # 必須パスは無傷のまま余分な symlink を 1 本置く形なら、拒否だけが効く。
-  @tag :tmp_dir
   test "必須パス以外の symlink でも slot を作り直す", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -1179,7 +1177,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # ふじ S1: 完成判定が manifest.json の存在だけだったので、sprite を 1 枚
   # 失った tree が再展開されず、その pack だけ skip されて known_persona? が
   # false になっていた (partial extraction / SIGKILL でも同じ状態になる)。
-  @tag :tmp_dir
   test "sprite が 1 枚欠けた cache は skip せず作り直す", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -1206,7 +1203,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # 正規化が二度と走らない。同一バイトの zip を 2 本置くと 1 回の rebuild 内で
   # 決定的に踏める (2 本目が残骸を掴み cache_error → build 全体が停止 →
   # reclaim も走らないので自己増殖する)。
-  @tag :tmp_dir
   test "展開が途中で失敗しても毒入りの残骸を掴まない", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -1233,7 +1229,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # raise して rebuild 失敗 → LKG 維持だったが、normalize_modes/1 が冒頭で
   # mode を戻すので今は素直に読み直される。どちらでも manifest は同じなので、
   # 修復されたことを直接見る (レビュー R2)。
-  @tag :tmp_dir
   test "展開済み sprite が読めなくなっても rebuild が mode を戻して読み直す", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -1260,7 +1255,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert {:ok, "png-io-1.0.0-idle"} = File.read(sprite)
   end
 
-  @tag :tmp_dir
   test "稼働中に cache root が使えなくなっても現 manifest を維持する", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     parent = Path.join(tmp, "vol")
@@ -1292,7 +1286,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # `measure_archive/2` で張り、本番の配線 (@max_extracted_bytes を渡して
   # いること) は下の E2E 1 本で張る。
   describe "measure_archive/2" do
-    @tag :tmp_dir
     test "申告サイズを偽装しても実展開量で弾かれる", %{tmp_dir: tmp} do
       zip = Path.join(tmp, "forged.zip")
       body = String.duplicate("Z", 50_000)
@@ -1308,7 +1301,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert msg =~ "reached 50000"
     end
 
-    @tag :tmp_dir
     test "上限ちょうどは通り、1 byte 超過で落ちる", %{tmp_dir: tmp} do
       zip = Path.join(tmp, "boundary.zip")
       File.write!(zip, custom_zip(name: "b.bin", body: deflate(String.duplicate("Z", 50_000))))
@@ -1321,7 +1313,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     # した input を使い切った」の意味 (OTP 29.0.2 実測: 500 KB を 8 チャンクで
     # 供給すると 8 回返る)。終端と誤読して 1 チャンク目で打ち切る実装は
     # 8 KB 程度しか数えず、この上限を超えられない。
-    @tag :tmp_dir
     test "64 KiB を超えるエントリも全チャンク合算される", %{tmp_dir: tmp} do
       zip = Path.join(tmp, "multichunk.zip")
 
@@ -1334,7 +1325,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert msg =~ "reached 500000"
     end
 
-    @tag :tmp_dir
     test "STORE エントリも会計に載る", %{tmp_dir: tmp} do
       zip = Path.join(tmp, "stored.zip")
       File.write!(zip, custom_zip(name: "s.bin", body: String.duplicate("x", 10_000), method: 0))
@@ -1345,7 +1335,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
 
     # OTP 29.0.2 実測: `:zip.unzip/2` は暗号化ビットを無視して暗号文をその
     # まま書き出す。inflate では実量を測れないので、展開前に pack ごと拒否する。
-    @tag :tmp_dir
     test "暗号化エントリは測れないので pack ごと拒否する", %{tmp_dir: tmp} do
       zip = Path.join(tmp, "enc.zip")
 
@@ -1363,7 +1352,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     # 展開する (stdlib 8.0.1 `zip.erl` get_z_file/9)。local だけを読む実装は
     # この entry を 0 byte と数え、展開側は実データを全部展開する — 実測で
     # local csize 0 の申告に対し 10,000,000 byte が書き出された。
-    @tag :tmp_dir
     test "data descriptor entry は central の comp_size で測る", %{tmp_dir: tmp} do
       zip = Path.join(tmp, "descriptor.zip")
       payload = String.duplicate("Z", 50_000)
@@ -1402,7 +1390,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     # 数え、valid な pack を 1 GiB 超過として誤 reject する。bypass ではなく
     # 正当な pack の欠落だが、「extractor と同じ field を読む」が全経路で
     # 成立していないことの現れなので blocker 扱い。
-    @tag :tmp_dir
     test "ZIP64 STORE は local extra の 64-bit comp_size で測る", %{tmp_dir: tmp} do
       zip = Path.join(tmp, "zip64.zip")
       File.write!(zip, zip64_zip(name: "s.bin", body: "hello world", method: 0))
@@ -1425,7 +1412,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
 
     # bit 3 が無ければ comp_size の正本は local 側 (32-bit field、sentinel なら
     # local ZIP64 extra)。central で代用すると両者を食い違わせられる。
-    @tag :tmp_dir
     test "bit 3 なしの ZIP64 は central ではなく local extra を正本にする", %{tmp_dir: tmp} do
       zip = Path.join(tmp, "zip64_split.zip")
 
@@ -1459,7 +1445,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     # uncompressed 値それ自体が 0xffffffff なら、さらに 8 byte を同じ field
     # として消費する。固定位置で読む実装は comp_size を 1 つ手前から取り、
     # extractor が実際に読む span より小さく数える = 上限を素通りさせる。
-    @tag :tmp_dir
     test "ZIP64 の 64-bit uncompressed が sentinel でも OTP と同じ位置から測る",
          %{tmp_dir: tmp} do
       zip = Path.join(tmp, "zip64_loop.zip")
@@ -1496,7 +1481,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert msg =~ "reached 1000000"
     end
 
-    @tag :tmp_dir
     test "未対応の圧縮方式は pack ごと拒否する", %{tmp_dir: tmp} do
       zip = Path.join(tmp, "bzip2.zip")
       File.write!(zip, custom_zip(name: "b.bin", body: "whatever", method: 12))
@@ -1508,7 +1492,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     # method は local header が正本 (OTP 29.0.2 実測: central が STORE、local が
     # DEFLATE のエントリは inflate された)。central を読む実装に退行すると、
     # 実データは deflate なのに STORE として csize 分しか数えなくなる。
-    @tag :tmp_dir
     test "central が偽る method ではなく local header の method で測る", %{tmp_dir: tmp} do
       zip = Path.join(tmp, "lying_central.zip")
       payload = String.duplicate("Z", 50_000)
@@ -1545,7 +1528,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     end
   end
 
-  @tag :tmp_dir
   test "エントリ数はちょうど 4096 まで通り、4097 で落ちる", %{tmp_dir: tmp} do
     ok = Path.join(tmp, "ok.zip")
     File.write!(ok, multi_entry_zip(for i <- 1..4096, do: {"f#{i}", ""}))
@@ -1567,7 +1549,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # `get_central_dir/4` が `N = EOCD#eocd.entries` を `get_cd_loop/6` の
   # ループ回数に渡している (stdlib 8.0.1 zip.erl 1916-1921)。ここが変われば
   # 申告値による bound は無効になるので、同じテストで upstream を固定する。
-  @tag :tmp_dir
   test "OTP は EOCD の申告 entry 数だけ列挙する (前検査の前提)", %{tmp_dir: tmp} do
     under = Path.join(tmp, "under.zip")
     File.write!(under, bounds_zip(records: 3, declared: 1))
@@ -1583,7 +1564,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # ことから逆算した数字 (1 文字 16 byte、実測 16.5 倍)。binary で返るように
   # なれば上限は過剰に厳しくなるだけだが、逆算の根拠が消えたことに気付ける
   # ようにしておく。
-  @tag :tmp_dir
   test "OTP は entry 名を charlist で返す (4 MiB 上限の逆算根拠)", %{tmp_dir: tmp} do
     path = Path.join(tmp, "long.zip")
     File.write!(path, bounds_zip(records: 1, namelen: 4096))
@@ -1595,7 +1575,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
 
   # #194 本体。申告 entry 数は実体と切り離して弾けること — このアーカイブは
   # 200 byte 程度しかなく、列挙コストでは弾きようがない。
-  @tag :tmp_dir
   test "申告 entry 数が上限超なら列挙前に弾く", %{tmp_dir: tmp} do
     path = Path.join(tmp, "declared.zip")
     File.write!(path, bounds_zip(records: 1, declared: 4097))
@@ -1608,7 +1587,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # entry 数だけでは塞がらない経路。name/comment は 16-bit 長なので 1 entry で
   # 192KB 引ける上、charlist で 16 倍に膨らむ。4096 件以内・1 GiB 以内のまま
   # heap を数 GB 食わせられるので、central directory の span も bound する。
-  @tag :tmp_dir
   test "central directory の span が上限超なら列挙前に弾く", %{tmp_dir: tmp} do
     path = Path.join(tmp, "wide.zip")
     File.write!(path, bounds_zip(records: 70, namelen: 60_000))
@@ -1618,7 +1596,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert msg =~ "over the 4194304 byte limit"
   end
 
-  @tag :tmp_dir
   test "span はちょうど 4 MiB まで通り、1 byte 超で落ちる", %{tmp_dir: tmp} do
     # span = central_blob + EOCD(22)。63 x (46+65535) + 1 x (46+62633) で
     # 4194282 になり、EOCD を足して丁度 4194304。
@@ -1636,7 +1613,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
 
   # ZIP64 経路。32-bit EOCD の entry 数は 0xffff が sentinel で、実数は EOCD64
   # の 64-bit field にある。sentinel をそのまま読むと 65535 件として通ってしまう。
-  @tag :tmp_dir
   test "ZIP64 EOCD の 64-bit entry 数で弾く", %{tmp_dir: tmp} do
     path = Path.join(tmp, "z64.zip")
     File.write!(path, bounds_zip(records: 1, declared: 400_000, zip64: true))
@@ -1649,7 +1625,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # central offset を得る **前に** 申告 EOCDSize バイトを read する。ZIP64 EOCD
   # をファイル前方へ置き、巨大 EOCDSize を申告しつつ central offset を EOF 近く
   # に申告すると、tail span の検査だけでは read が終わった後にしか効かない。
-  @tag :tmp_dir
   test "ZIP64 EOCD の申告 body 長が予算超なら read 前に弾く", %{tmp_dir: tmp} do
     path = Path.join(tmp, "z64big.zip")
 
@@ -1663,7 +1638,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert msg =~ "over the 4194304 byte limit"
   end
 
-  @tag :tmp_dir
   test "ZIP64 EOCD の申告 body 長が固定部未満なら弾く", %{tmp_dir: tmp} do
     path = Path.join(tmp, "z64short.zip")
     File.write!(path, bounds_zip(records: 1, zip64: true, eocd64_size: 43))
@@ -1672,7 +1646,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert msg =~ "declares 43 bytes, under the 44 byte minimum"
   end
 
-  @tag :tmp_dir
   test "ZIP64 EOCD の申告 body 長がファイル末尾を超えるなら弾く", %{tmp_dir: tmp} do
     path = Path.join(tmp, "z64past.zip")
     File.write!(path, bounds_zip(records: 1, zip64: true, eocd64_size: 100_000))
@@ -1686,7 +1659,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # そのものが固定されていない — 合算をやめても領域別 cap へ戻しても、どちらの
   # 形も全テストを通ってしまう。各領域は上限内だが合算が limit+2 になる形を
   # 直接 pin する。
-  @tag :tmp_dir
   test "central tail と ZIP64 body は 1 本の予算を共有する", %{tmp_dir: tmp} do
     over = Path.join(tmp, "over.zip")
     File.write!(over, budget_zip(2_097_132, 2_097_174))
@@ -1745,7 +1717,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # すべて decoy から計算されるので全部素通りし、#194 の欠陥がそのまま戻る
   # (実機再現済み)。境界を両側から張り、同じテストで OTP 側も premise として
   # 固定する。仕様上の幅ではなく実装の定数を写す、という #189 の教訓の再適用。
-  @tag :tmp_dir
   test "EOCD 探索窓は OTP と同じ 65573 byte で切れる", %{tmp_dir: tmp} do
     inside = Path.join(tmp, "in.zip")
     File.write!(inside, window_zip(65_573))
@@ -1801,7 +1772,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # ないので、片方だけ sentinel の形が ZIP64 と見なされないことを固定する。
   # 先読みが OR で判定すると EOCD64 を読みに行き、OTP が列挙すらしない
   # アーカイブについて別の値を根拠に通す/弾くことになる。
-  @tag :tmp_dir
   test "entries_on_disk だけ sentinel の EOCD は ZIP64 扱いしない", %{tmp_dir: tmp} do
     path = Path.join(tmp, "half.zip")
     File.write!(path, bounds_zip(records: 1, declared: 400_000, zip64: true, half_sentinel: true))
@@ -1903,7 +1873,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # ループする。導入前は `:zip.unzip/2` が `{:error, {:EXIT, _}}` を返して当該
   # pack のみ skip していたので、これは preflight が持ち込む退行だった。
   # 攻撃者が要らないのも重要 — 配布中の切り詰めや bit rot で踏める。
-  @tag :tmp_dir
   test "deflate が壊れた pack は skip され、同居する健全 pack は残る (cold start も通る)",
        %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
@@ -1930,7 +1899,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # 無い。偽装できないのはアーカイブ自身のサイズで、STORE は膨張しないので
   # ファイルを縛れば STORE 由来の展開量も縛れる (ふじ案 a)。sparse file なので
   # 実ディスクは消費しない。
-  @tag :tmp_dir
   test "アーカイブ自体が 1 GiB を超えていれば中身を読む前に拒否する", %{tmp_dir: tmp} do
     path = Path.join(tmp, "huge.zip")
     {:ok, fd} = File.open(path, [:write, :binary])
@@ -1947,7 +1915,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # 2 経路を別々に張る。名前で弾かれる pack は inflate まで到達しないので、
   # 1 本にまとめると実測側の不変条件が張れていないのに張れているように読める
   # (レビュー round 3 advisory: 元のこのテストが実際にそうなっていた)。
-  @tag :tmp_dir
   test "検査は 1 byte も書かない (zip-slip 経路・inflate 経路の双方)", %{tmp_dir: tmp} do
     work = Path.join(tmp, "work")
     File.mkdir_p!(work)
@@ -1978,7 +1945,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # 本番の配線 (verify_archive/1 が @max_extracted_bytes を渡していること) は
   # 実物の bomb でしか張れない。ADR-0029 の「1 本の不正 pack が全体を止めない」
   # も同時に見る。
-  @tag :tmp_dir
   test "1 GiB を超えて展開される pack は skip され、同居する健全 pack は残る", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
     cache = Path.join(tmp, "cache")
@@ -2137,7 +2103,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
   end
 
   describe "issue #195: staging (TOCTOU 対策)" do
-    @tag :tmp_dir
     test "stage_archive/3: exact limit は受理、limit+1 は明示 oversize で拒否 (must-2)", %{
       tmp_dir: tmp
     } do
@@ -2156,7 +2121,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert {:oversize, ^size} = PersonaAssets.stage_archive(zip, dest_over, size - 1)
     end
 
-    @tag :tmp_dir
     test "stage 確定後の元 path rename は staged bytes に影響しない (must-3)", %{tmp_dir: tmp} do
       ingest = Path.join(tmp, "packs")
       File.mkdir_p!(ingest)
@@ -2174,7 +2138,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert File.read!(dest) == original_bytes
     end
 
-    @tag :tmp_dir
     test "stage 確定後の元 path 同 inode 上書きは staged bytes に影響しない (must-3)", %{
       tmp_dir: tmp
     } do
@@ -2195,7 +2158,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert staged_hash == sha256_hex_bytes(original_bytes)
     end
 
-    @tag :tmp_dir
     test "digest 不一致は予定 slot へ展開せず、race と分かる文言で報告する (must-1, 追補)", %{
       tmp_dir: tmp
     } do
@@ -2217,7 +2179,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert_no_stage_leftover(cache)
     end
 
-    @tag :tmp_dir
     test "success 経路で stage が消える (must-4)", %{tmp_dir: tmp} do
       ingest = Path.join(tmp, "packs")
       cache = Path.join(tmp, "cache")
@@ -2232,7 +2193,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert_no_stage_leftover(cache)
     end
 
-    @tag :tmp_dir
     test "pack error 経路で stage が消える (must-4)", %{tmp_dir: tmp} do
       ingest = Path.join(tmp, "packs")
       cache = Path.join(tmp, "cache")
@@ -2247,7 +2207,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert_no_stage_leftover(cache)
     end
 
-    @tag :tmp_dir
     test "exception raise 経路でも stage が消える (must-4)", %{tmp_dir: tmp} do
       # digest 一致後、`discard/2` (`normalize_modes/1` → `File.lstat/1`) に
       # 渡る `extracted_dir` を非バイナリにして FunctionClauseError を確実に
@@ -2271,7 +2230,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert_no_stage_leftover(cache)
     end
 
-    @tag :tmp_dir
     test "staging dir/file は 0700/0600、exclusive create で symlink を辿らない (must-4)", %{
       tmp_dir: tmp
     } do
@@ -2302,7 +2260,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert File.read!(target) == "should-not-be-touched"
     end
 
-    @tag :tmp_dir
     test "stage_archive/3: source read 失敗と destination write 失敗は別側に分類される (must-3)", %{
       tmp_dir: tmp
     } do
@@ -2328,7 +2285,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
       assert_no_stage_leftover(cache)
     end
 
-    @tag :tmp_dir
     test "crash 残骸の .stage-* は厳密な shape のものだけ age に関わらず即時 reclaim される (must-1, must-2)",
          %{tmp_dir: tmp} do
       ingest = Path.join(tmp, "packs")
@@ -2379,7 +2335,6 @@ defmodule KaoiroServer.PersonaAssetsTest do
              "末尾改行付きの 22 文字 entry は random_stage_name/0 が生成し得ない形なので消してはいけない"
     end
 
-    @tag :tmp_dir
     test "new_stage/1: chmod 失敗時は作成済みの stage_dir を discard する (must-3)", %{
       tmp_dir: tmp
     } do

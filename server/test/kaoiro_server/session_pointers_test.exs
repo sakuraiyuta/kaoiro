@@ -7,8 +7,28 @@ defmodule KaoiroServer.SessionPointersTest do
 
   setup do
     # Isolated DETS file + table name per test so cases don't share state.
+    #
+    # `path` also has to be unique ACROSS separate `mix test` invocations,
+    # not just within this BEAM (issue #187): `System.tmp_dir!()` is a
+    # shared OS-level directory, and `System.unique_integer/1` alone only
+    # guarantees uniqueness within the calling BEAM — two concurrent
+    # `mix test` processes each start their own counter from a BEAM-
+    # dependent internal state (measured: NOT a fixed starting value), so
+    # nothing rules out both landing on the same integer for the same
+    # test. `name` (the GenServer registration atom) does not need this:
+    # process registration is BEAM-local, so a same-named process in a
+    # different BEAM's own registry causes no collision. `path` does,
+    # since two BEAMs racing to `File.rm/1` + open the SAME DETS file
+    # corrupt or lose each other's state. Same `pid + crypto nonce`
+    # pattern already established elsewhere in this suite for exactly
+    # this reason (`OAuthAllowlistFixture`, `config/test.exs`'s DETS
+    # store paths).
     name = :"sp_#{System.unique_integer([:positive])}"
-    path = Path.join(System.tmp_dir!(), "#{name}.dets")
+
+    beam_nonce =
+      "#{System.pid()}_" <> Base.url_encode64(:crypto.strong_rand_bytes(4), padding: false)
+
+    path = Path.join(System.tmp_dir!(), "#{name}_#{beam_nonce}.dets")
     File.rm(path)
     {:ok, pid} = SessionPointers.start_link(name: name, path: path)
 
