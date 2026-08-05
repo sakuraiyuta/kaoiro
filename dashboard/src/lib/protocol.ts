@@ -781,14 +781,30 @@ export function compareTranscriptEnvelopes(
  * part of the identity: a resumed session may legitimately reuse a wrapper
  * timestamp/sequence pair. This key is shared by merging, DOM anchors and
  * timeline UI state; changing one without the others reintroduces collisions.
+ *
+ * `payload.to` alone is not enough when the SAME peer pair runs 2+
+ * concurrent conversations and one side disconnects (issue #132): the
+ * server synthesizes one disconnected notice per conversation the
+ * disconnecting wrapper participated in
+ * (docs/specs/protocol-inter-agent.md 「server 合成 (disconnected) の
+ * 規則」), all addressed to the SAME `payload.to` (the same remaining
+ * peer) with the SAME `ts` — the opposite shape from the quota case above
+ * (same conversation, different recipients), so `conversation_id` is
+ * needed too. Scoped to the same synthetic-server-IA branch as
+ * `recipient`: every other envelope type/producer keeps an unchanged key
+ * (this segment is always "" for them, same as before this field existed).
  */
 export function transcriptEntryKey(
   envelope: Pick<Envelope, "agent_id" | "session_id" | "ts" | "seq" | "type" | "payload">,
 ): string {
-  const recipient =
+  const syntheticServerIaPayload =
     envelope.agent_id === "server" && envelope.type === "inter_agent_message"
-      ? (envelope.payload as { to?: unknown } | undefined)?.to
+      ? (envelope.payload as
+          | { to?: unknown; conversation_id?: unknown }
+          | undefined)
       : undefined;
+  const recipient = syntheticServerIaPayload?.to;
+  const conversationId = syntheticServerIaPayload?.conversation_id;
   return [
     envelope.agent_id,
     envelope.session_id ?? "",
@@ -796,6 +812,7 @@ export function transcriptEntryKey(
     envelope.seq ?? 0,
     envelope.type,
     typeof recipient === "string" ? recipient : "",
+    typeof conversationId === "string" ? conversationId : "",
   ].join("|");
 }
 

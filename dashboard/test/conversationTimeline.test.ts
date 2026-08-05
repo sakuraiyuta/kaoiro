@@ -225,18 +225,27 @@ describe("conversationEntries (実機検収 3)", () => {
     expect(entries).toHaveLength(2);
   });
 
-  it("行 identity は session を含み、server synthetic IA は recipient も含む", () => {
+  it("行 identity は session を含み、server synthetic IA は recipient と conversation_id も含む (#132)", () => {
     const env = {
       ...assistant("agent-a", "2026-07-23T14:00:00Z", "a"),
       seq: 7,
       session_id: "session-a",
     };
     expect(conversationEntryKey(env)).toBe(
-      "agent-a|session-a|2026-07-23T14:00:00Z|7|log|",
+      "agent-a|session-a|2026-07-23T14:00:00Z|7|log||",
     );
     const first = { ...interAgent("server", "agent-a", "2026-07-23T14:00:00Z"), seq: 7 };
     const second = { ...first, payload: { ...first.payload!, to: "agent-b" } };
     expect(conversationEntryKey(first)).not.toBe(conversationEntryKey(second));
+
+    // #132: 同一 recipient のまま conversation_id だけ異なる場合(同一
+    // ペアが並行 conversation 中に片方が切断する実際のシナリオ)も、
+    // recipient だけでは区別できないため conversation_id で区別する。
+    const third = {
+      ...first,
+      payload: { ...first.payload!, conversation_id: "cid-y" },
+    };
+    expect(conversationEntryKey(first)).not.toBe(conversationEntryKey(third));
   });
 
   it("live arrival は agent 応答と inter-agent だけを対象にする", () => {

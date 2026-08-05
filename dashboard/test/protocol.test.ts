@@ -39,6 +39,7 @@ import {
   sessionCapabilitiesFrom,
   sessionResetAvailability,
   shouldInterceptAsSessionReset,
+  transcriptEntryKey,
   userInputDialogAvailability,
 } from "../src/lib/protocol";
 import type { Envelope, SessionCapabilities } from "../src/lib/protocol";
@@ -487,6 +488,46 @@ describe("inter-agent history replay (#105)", () => {
       payload: { ...first.payload!, to: "agent-b" },
     };
     expect(mergeTranscriptEntries([], [first, second])).toEqual([first, second]);
+  });
+
+  // issue #132: 同一ペアが 2 本以上の conversation を並行中に片方が
+  // 切断すると、server は各 conversation ごとに disconnected 通知を
+  // 合成する (docs/specs/protocol-inter-agent.md 「server 合成
+  // (disconnected) の規則」) — agent_id="server" / ts / payload.to は
+  // 全て同一 (同じ受信者への通知が複数本届く)、conversation_id だけが
+  // 異なる。上のテストが pin する recipient 分岐 (#131) は「同一
+  // conversation・複数 recipient」用で、これは逆に「同一 recipient・
+  // 複数 conversation」なので recipient だけでは区別できない。
+  it("transcriptEntryKey は同一 recipient・異なる conversation_id の server synthetic IA を区別する (#132)", () => {
+    const first: Envelope = {
+      ...message,
+      agent_id: "server",
+      session_id: "",
+      payload: {
+        ...message.payload!,
+        to: "agent-b",
+        conversation_id: "cnv-parallel-1",
+      },
+    };
+    const second: Envelope = {
+      ...first,
+      payload: { ...first.payload!, conversation_id: "cnv-parallel-2" },
+    };
+    expect(transcriptEntryKey(first)).not.toBe(transcriptEntryKey(second));
+    expect(mergeTranscriptEntries([], [first, second])).toEqual([
+      first,
+      second,
+    ]);
+  });
+
+  it("conversation_id を持たない envelope 同士は従来どおり key が同一になる (inter_agent_message 以外は元々 conversation_id を持たない)", () => {
+    // #132 の修正は synthetic server IA の分岐にだけ conversation_id を
+    // 足す。log 等の他 type は元から conversation_id を持たないので、
+    // 追加後も key の末尾セグメントは常に空文字のまま — 新しい衝突源には
+    // ならないことを確認する (あお注意点4)。
+    const firstLog = { ...log, agent_id: "agent-a", seq: 9 };
+    const secondLog = { ...log, agent_id: "agent-a", seq: 9 };
+    expect(transcriptEntryKey(firstLog)).toBe(transcriptEntryKey(secondLog));
   });
 
   // ふじ R3 must-fix (2026-07-23): projection marker で rolling upgrade
