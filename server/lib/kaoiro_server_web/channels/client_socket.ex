@@ -19,10 +19,14 @@ defmodule KaoiroServerWeb.ClientSocket do
   resolution can be REPEATED while the socket is open: `role_for/1` is
   what `AgentsChannel`'s operator gate calls on every inbound operator
   action, so an allow-list demotion lands on a socket that is already
-  connected instead of waiting for its next connect (issue #158). A
-  shared token is reduced to its `Auth.socket_id/1` fingerprint first —
-  the raw token never enters socket or channel state, so it cannot
-  resurface in a crash report or heap dump.
+  connected instead of waiting for its next connect (issue #158).
+  `role_for/1` is also what `AgentsChannel.join/3` calls before
+  completing the join, closing the connect-to-join race where an
+  allow-list change lands between this module resolving the snapshot
+  role and the transport finishing its disconnect-topic subscription
+  (issue #170). A shared token is reduced to its `Auth.socket_id/1`
+  fingerprint first — the raw token never enters socket or channel
+  state, so it cannot resurface in a crash report or heap dump.
   """
 
   use Phoenix.Socket

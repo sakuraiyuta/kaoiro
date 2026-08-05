@@ -84,7 +84,10 @@ ADR-0005 は本線を「OAuth + RBAC、プロトタイプは許可メールの
 ### Positive
 
 - 個人単位の認証と role 付与ができ、許可リストの行削除が次の
-  connect/refresh (最長 12h) + 明示 revoke で失効に落ちる。
+  connect/refresh (最長 12h) + 明示 revoke で失効に落ちる。稼働中 socket
+  への反映は #158(操作のたび再解決)に加え #170(変更を一度も操作しない
+  passive socket にも change-driven に効く)で強化済み — 詳細は本 ADR
+  末尾の Addendum。
 - ADR-0013 の cookie/ticket/logout 配管を identity 差し替えのみで
   再利用し、WS 層・channel 層 (role gate) は無変更。
 
@@ -114,3 +117,70 @@ ADR-0005 は本線を「OAuth + RBAC、プロトタイプは許可メールの
 | 許可リストを DETS | server が書く runtime 状態向け。運用者が手編集する設定には不向き |
 | session に role を格納 | 失効が cookie 期限まで効かない。ADR-0013 と同じ理由で毎回再解決 |
 | provider token の保持 | Nextcloud token がフルアクセスで漏洩コスト過大。identity 取得後に破棄 |
+
+## Addendum (issue #170, 2026-08-05): passive socket への change-driven disconnect
+
+**背景。** #158 は「operator 操作のたびに role を再解決し、不一致なら
+disconnect」という方式で稼働中 socket への降格反映を実現したが、これは
+「操作した瞬間に切る」方式であり、降格後に一度も operator 操作をしない
+socket は `AgentsChannel.handle_out` の operator 限定配信(tool input
+等)を受け続けていた。#158 実装時点でこれは fan-out のホットパスで毎
+envelope × 毎 subscriber に許可リストを読み直すコストを理由に意図的に
+見送られていた(あお判断)。
+
+**決定。** 見送りの再検証の結果、ホットパスに触れない別方式を採用した:
+
+- `KaoiroServer.OAuthAllowlistWatcher` が許可リストファイルの変更を
+  file_system イベント(fast path、bounded debounce)と periodic
+  reconcile(backstop、event 取りこぼしを bound)の両方で検知する。
+- 検知のたびに許可リストの **snapshot 差分**(`{provider, identifier}
+  => role` の追加・削除・role 変更)だけを計算し、変更があった identity
+  にだけ `Endpoint.broadcast(oauth_socket_id, "disconnect", %{})` を撃つ
+  (#47/#158 と同じ機構の再利用、新しい broadcast 経路は増やさない)。
+  稼働中 socket の列挙は一切行わない(そのための機構はこのコードベース
+  に存在しないことを実測済み)。
+- 差分計算の checkpoint は `:persistent_term` に保持する。認可判断の
+  SoT は変わらず許可リストファイル自身(`role_for/2` は今までどおり
+  毎回ファイルを読み直す)で、checkpoint は watcher プロセスの再起動を
+  越えて「どこまで反映したか」を追跡するためだけの補助状態。
+  `:persistent_term.put/2` は global GC を誘発するため、差分が空なら
+  put しない。
+- `AgentsChannel.join/3` は connect → join の間に許可リストが変わった
+  socket を live re-resolve で弾く(connect と join の間、transport が
+  socket-id topic の subscribe を終える前に watcher の disconnect が
+  発火すると取りこぼす窓があるため、join 自体を最後の砦にする)。
+
+**Negative(このコードベースにとっての新しいトレードオフ)。**
+
+- watcher プロセスの crash → restart 自体は、**retained checkpoint と
+  現在の内容が unchanged なら disconnect も `:persistent_term.put` も
+  発生しない**(checkpoint は BEAM プロセスの生死と無関係に
+  `:persistent_term` に残るため)。副作用が出るのは
+  **crash のタイミングが「reconcile 途中(diff 計算後・broadcast 完了前)」
+  または「broadcast 一部失敗」に重なった場合のみ**で、その場合は
+  checkpoint が古いまま残り、restart 後(または次の periodic reconcile)
+  で **その時点の changed identities だけ**へ再度 disconnect が飛びうる
+  (broadcast は idempotent なので、稼働中でない socket への重複送信は
+  無害)。「稼働中の全 socket へ」ではなく「変更のあった identity へ、
+  条件が揃えば重複送信され得る」が正確な記述。
+  `:persistent_term.put/2` の global GC コストも、この**実変更があった
+  ときだけ**発生する(空 diff では put しない設計、moduledoc 参照)。
+  root supervisor は `max_restarts` を明示設定していない(OTP 既定 =
+  3 回 / 5 秒)ため、この watcher(や既存の PersonaWatcher/
+  FooterWatcher)がその範囲を超えて crash し続ければ server 全体が落ちる
+  ——これは既存の supervision tree の性質であり、上記の「変更時のみ
+  disconnect し得る」副作用の回数を直接規定するものではない(3 回に
+  限られるのは crash-loop 自体の話であって「全 socket への disconnect」
+  の話ではない)。
+- file_system イベントが失われる(backend 未起動 / event drop / 親 dir
+  の一時欠落)場合、変更の反映は periodic reconcile 任せになり、最大
+  `@reconcile_interval_ms` だけ遅延しうる(無期限に遅延することはない
+  — 詳細は `OAuthAllowlistWatcher` moduledoc 「Detection」節)。
+- 許可リストが部分書き込み中に読まれると、完全な内容に復旧するまでの
+  間、正当な operator も含めて過剰に disconnect されうる
+  (fail-closed の意図的な選択、LKG 維持はしない)。運用は temp-file +
+  atomic rename での編集を推奨するが、これは確率を下げるだけで保証で
+  はない。
+
+詳細な設計判断(ふじレビュー、あお承認)は issue #170 のコメント履歴、
+実装は `KaoiroServer.OAuthAllowlistWatcher` のモジュール doc を参照。

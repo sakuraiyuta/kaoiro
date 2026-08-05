@@ -175,6 +175,21 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。role は snapsh
   たび `ClientSocket.role_for/1` で解決し直す。snapshot と食い違ったら
   `socket_id` topic へ #47 の `disconnect` を撃ち、fan-out
   (`handle_out` の operator 限定配信) と client UI は再接続で組み直す
+- **一度も操作しない passive socket にも change-driven に効く**
+  ([#170](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/170)、
+  2026-08-05)。#158 は「操作した瞬間に切る」方式で、`handle_out` の
+  fan-out 自体は connect 時 snapshot を見続けるため、降格後に一度も
+  operator 操作をしない socket は配信を受け続けていた。
+  `KaoiroServer.OAuthAllowlistWatcher` が許可リストファイルの変更を
+  file_system イベント(fast path)+ periodic reconcile(backstop、
+  event 取りこぼしを bound)で検知し、変更のあった identity にだけ
+  `oauth_socket_id` 宛の #47 disconnect を撃つ(稼働中 socket の列挙は
+  一切しない — 差分は許可リストの snapshot 同士で取る)。差分計算の
+  checkpoint は `:persistent_term`(watcher プロセス再起動を越える
+  だけの補助状態、認可 SoT は変わらずファイル自身)。connect と join
+  の間で許可リストが変わる race は `AgentsChannel.join/3` の live
+  re-resolve で閉じる。設計判断の詳細は
+  [ADR-0042](../adr/0042-oauth-allowlist-login.md) Addendum 参照
 - socket id は `Auth.oauth_socket_id/2` =
   `sha256("oauth:" <> provider <> ":" <> uid)`。logout / refresh 401 の
   強制切断は ADR-0013 / #47 の broadcast 配管をそのまま共用
@@ -209,7 +224,7 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。role は snapsh
 | **エージェント間 ACL** | A→B 送信のサーバ側許可リストなし | broker dialog (operator 都度承認) が唯一の人間ゲート | [#17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17) Phase 1 意図的選択 |
 | **メッセージ内容検査** | server は payload を解釈しない (size cap のみ) | なし — prompt injection 攻撃は素通り | [#18](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/18) Phase 2 |
 | **operator role 細分** | operator は全権 (spawn / interrupt / approve / clear など)。[#65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65) の OAuth 個人認証は実装済だが role は operator / viewer の 2 値のまま | なし — 単一テナント前提 | [ADR-0042](../adr/0042-oauth-allowlist-login.md) Out of scope (approver 等の細分は将来) |
-| **トークン即時失効** | **稼働中 WS の強制切断 実装済 ([#47](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/47))**: logout (`DELETE /session`) と失効 credential の refresh 401 で `disconnect_sockets/1` が socket_id topic へ disconnect broadcast → 全接続 drop。即時 push ではなく検知契機の到来時に着弾する | 検知契機は次の operator 操作 ([#158](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/158) の gate 再解決) / 12h 周期の refresh / reconnect / 明示 logout。未操作 socket への operator 限定配信の残留は [#170](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/170)。共有トークン (`KAOIRO_CLIENT_TOKENS`) の値変更自体は env 再読込がなく再起動が必要 | 実装完 |
+| **トークン即時失効** | **稼働中 WS の強制切断 実装済 ([#47](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/47))**: logout (`DELETE /session`) と失効 credential の refresh 401 で `disconnect_sockets/1` が socket_id topic へ disconnect broadcast → 全接続 drop。即時 push ではなく検知契機の到来時に着弾する | 検知契機は次の operator 操作 ([#158](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/158) の gate 再解決) / OAuth 許可リストの change-driven disconnect ([#170](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/170)、未操作 passive socket もカバー済み) / 12h 周期の refresh / reconnect / 明示 logout。共有トークン (`KAOIRO_CLIENT_TOKENS`) の値変更自体は env 再読込がなく再起動が必要(この経路は #170 のスコープ外のまま) | 実装完 |
 | **signed token revoke** | **per-agent_id denylist 実装済 (2026-07-23、[#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))**: TokenDenylist DETS + Auth.authorize_wrapper 照合 + delete_agent 連動 auto-revoke + operator 明示 revoke handler + revoked broadcast による live disconnect | key rotation はいまも fleet 全体一括失効の重量オプションとして残る | 実装完 |
 | **マルチテナント隔離** | 全 operator が全エージェントを操作可能 (OAuth で個人は識別できるが、エージェントの所有者境界は無い) | なし — single tenant 前提 | [ADR-0042](../adr/0042-oauth-allowlist-login.md) Out of scope |
 | **dev fallback の混入リスク** | **解消済 (2026-07-25、[#138](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/138))**: `:dev`/`:test` は従来通り未設定で全許可、`:prod` は未設定なら fail-closed (2026-08-02 改訂: wrapper のみ server-minted signed token は受理 — 署名は secret_key_base 由来なので開放ではない) | 起動時 WARN ログ (env 別文言) | 実装完 |

@@ -205,6 +205,45 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "forbidden"}
       assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
     end
+
+    # issue #170 must-fix 2 (ふじ): connect と join の間で許可リストが
+    # 変わった socket は、一度も operator 操作をしなくても join 時点で
+    # 弾かれる。OAuthAllowlistWatcher の disconnect は connect 直後の
+    # transport-subscribe race を取りこぼしうるので(watcher の
+    # checkpoint はそのまま新しい内容へ進んでしまい、同じ diff は二度と
+    # 出ない)、join/3 自体の再検証が最後の砦になる。
+    test "stale operator snapshot を持つ socket は join 前再検証で拒否され、operator payload を一切 push しない" do
+      on_exit(fn -> Application.delete_env(:kaoiro_server, :oauth_allowlist_path) end)
+
+      KaoiroServer.OAuthAllowlistFixture.put_allowlist("github:ao:operator\n")
+      socket_id = KaoiroServer.Auth.oauth_socket_id("github", "ao")
+      @endpoint.subscribe(socket_id)
+
+      # connect/3 が :operator を解決した後、join より前に降格が起きた
+      # 状況を模す(connect を経由しないテスト構築なので、assigns に
+      # そのまま古い snapshot を持たせて join する)。
+      KaoiroServer.OAuthAllowlistFixture.put_allowlist("github:ao:viewer\n")
+
+      result =
+        KaoiroServerWeb.ClientSocket
+        |> socket(nil, %{
+          role: :operator,
+          credential: {:oauth, %{provider: "github", uid: "ao"}},
+          socket_id: socket_id
+        })
+        |> subscribe_and_join(KaoiroServerWeb.AgentsChannel, "agents:lobby")
+
+      assert {:error, %{reason: "forbidden"}} = result
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+      refute_push "snapshot", %{"agents" => _}
+      refute_push "history", %{}
+    end
+
+    test "role が変わっていない socket は通常どおり join できる" do
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{}
+    end
   end
 
   describe "instruction relay (3-2)" do

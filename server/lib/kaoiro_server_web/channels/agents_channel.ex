@@ -16,6 +16,23 @@ defmodule KaoiroServerWeb.AgentsChannel do
   neither, since reply lines carry tool I/O that may hold secrets
   (ADR-0012, specs/threat-model.md).
 
+  `handle_out`'s role gate above reads `socket.assigns[:role]`, the
+  role `ClientSocket.connect/3` resolved — a snapshot, not re-checked
+  per envelope (the per-subscriber-per-envelope cost of doing so was
+  weighed and rejected, issue #158/#170). `join/3` re-resolves that
+  snapshot live once, right before completing the join: an allow-list
+  change landing in the connect-to-join gap can otherwise race past
+  `KaoiroServer.OAuthAllowlistWatcher`'s disconnect broadcast (issue
+  #170 must-fix 2 — the transport's disconnect-topic subscription is
+  not yet live at `connect/3` return time, but always is by `join/3`).
+  A mismatch here refuses the join instead of proceeding, so a stale
+  role never gets the operator-only `snapshot`/`history`/`hosts` push
+  in the first place. The re-solved role, once fan-out is under way,
+  goes stale again until something forces a reconnect — the watcher's
+  ongoing per-identity disconnects (triggered by allow-list edits) and
+  `current_role/1`'s per-operator-action re-resolution (#158) are what
+  keep that window bounded, not this gate on its own.
+
   Inbound (Phase 3, specs/protocol.md): `instruction`,
   `permission_decision`, `interrupt` (issue #51), and `set_model` /
   `set_effort` (issue #54) are accepted from operator clients only and
@@ -142,13 +159,30 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   @impl true
   def join("agents:lobby", _params, socket) do
-    # The PubSub subscription only becomes active once join/3 returns, so a
-    # snapshot replied here could miss an envelope broadcast in between.
-    # Pushing it from handle_info runs after the subscription is live; a
-    # broadcast racing the snapshot is then delivered twice at worst
-    # (idempotent: last write per agent_id wins), never lost.
-    send(self(), :after_join)
-    {:ok, socket}
+    # Re-resolve live before completing the join (issue #170 must-fix 2,
+    # ふじ 2026-08-05): connect/3 resolved a role that may have gone
+    # stale in the window between connect and this join if the
+    # allow-list changed in between and OAuthAllowlistWatcher's
+    # disconnect broadcast raced the transport's socket-id subscription
+    # (Phoenix.Socket.__init__/1 subscribes AFTER connect/3 returns, so
+    # a broadcast fired in that gap is missed and never resent — the
+    # watcher's checkpoint has already advanced past that diff). By the
+    # time join/3 runs the subscription has always completed, so
+    # current_role/1's disconnect here is never itself racy. A mismatch
+    # refuses the join instead of proceeding to :after_join, which would
+    # otherwise push the operator-only snapshot/history/hosts payload
+    # under the stale role.
+    if current_role(socket) == socket.assigns[:role] do
+      # The PubSub subscription only becomes active once join/3 returns, so
+      # a snapshot replied here could miss an envelope broadcast in between.
+      # Pushing it from handle_info runs after the subscription is live; a
+      # broadcast racing the snapshot is then delivered twice at worst
+      # (idempotent: last write per agent_id wins), never lost.
+      send(self(), :after_join)
+      {:ok, socket}
+    else
+      {:error, %{reason: safe_reason(:forbidden)}}
+    end
   end
 
   @impl true

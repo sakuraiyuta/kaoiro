@@ -90,6 +90,19 @@ defmodule KaoiroServer.Application do
       # (ADR-0045 F4). Ignores itself when the env is unset or the dir is
       # absent — file-based footers are opt-in.
       KaoiroServer.FooterWatcher,
+      # Change-driven targeted disconnect for OAuth allow-list edits
+      # (issue #170, ふじ 2026-08-05 spec). MUST start after
+      # Phoenix.PubSub (broadcasts need it) and BEFORE Endpoint: no
+      # client socket can exist yet when this runs its first reconcile,
+      # so the :persistent_term checkpoint is seeded without diffing
+      # against an empty map (see OAuthAllowlistWatcher moduledoc
+      # "Checkpoint"). Ignores itself only when
+      # KAOIRO_OAUTH_ALLOWLIST_PATH is unset; otherwise degrades to
+      # periodic-poll-only rather than :ignore (unlike PersonaWatcher /
+      # FooterWatcher above) — this is an authorization control, not an
+      # asset cache, so a missing event source must not silently stop
+      # enforcing revocation.
+      KaoiroServer.OAuthAllowlistWatcher,
       # Start to serve requests, typically the last entry
       KaoiroServerWeb.Endpoint
     ]
