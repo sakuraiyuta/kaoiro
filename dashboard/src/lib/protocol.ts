@@ -2065,6 +2065,37 @@ export function decideWakeAction(
   return status === "disconnected" ? "reconnect" : "noop";
 }
 
+/** Dispatch for App.svelte's browser `online` handler (issue #162 advisory
+ *  2). The old handler called `connection.notifyOnline()` unconditionally
+ *  and THEN `connection.reconnect()` when `decideWakeAction` returned
+ *  "reconnect" — both from the same event. `reconnect()` already performs
+ *  everything `notifyOnline()` would in that case (it calls
+ *  `resetTicketRefreshBackoff()` and its own `requireFreshTicket()`, which
+ *  cancels any pending retry timer, PLUS the full socket/channel rebuild
+ *  `notifyOnline()` does not do), so the extra `notifyOnline()` call was
+ *  pure redundancy — worse, if `notifyOnline()`'s own immediate-retry
+ *  branch had just started a ticket mint, `reconnect()`'s
+ *  `requireFreshTicket()` would abort THAT mint and start another,
+ *  wasting an RTT (this turned out to be the dominant trigger for issue
+ *  #162 advisory 1's "in-flight mint aborted by a near-simultaneous wake"
+ *  symptom — see the analysis on `requireFreshTicket` below). Splitting
+ *  the two calls here removes both the redundant call and that self-
+ *  inflicted abort for the single-`online`-event case; only a genuine
+ *  near-simultaneous `visibilitychange` + `online` (two SEPARATE events)
+ *  can still race two `reconnect()`-driven mints against each other.
+ *  Exported and pure-dispatch (mirrors `decideWakeAction`) so the split is
+ *  unit-testable without mounting App.svelte. */
+export function dispatchOnlineWake(
+  decision: WakeDecision,
+  connection: Pick<KaoiroConnection, "notifyOnline" | "reconnect">,
+): void {
+  if (decision === "reconnect" || decision === "force-reconnect") {
+    connection.reconnect();
+  } else {
+    connection.notifyOnline();
+  }
+}
+
 /**
  * Connects to the kaoiro server's client socket and forwards protocol
  * events to the handlers. `url` is the socket endpoint, e.g.
@@ -2142,6 +2173,42 @@ export function connectKaoiro(
     rejectTicketRefresh?.(new Error("ticket refresh aborted"));
   }
 
+  // issue #162 advisory 1 design note — MEASURED, then SHELVED (あお
+  // 2026-08-05 判断). Left as analysis + decision record for whoever next
+  // looks at this, so "investigated and shelved" isn't mistaken for
+  // "missed":
+  //
+  // This one function conflates two distinct intents every caller relies on:
+  //   (a) "a fresh ticket is now required" — onClose / onError / reconnect() /
+  //       the teardown wrapper all just need this recorded. None of them has
+  //       any positive reason to distrust an ALREADY in-flight mint.
+  //   (b) "abandon whatever mint is in flight and start over" — ONLY
+  //       notifyOnline()'s in-flight branch has a stated reason for this
+  //       ("The old request may be stuck behind a captive portal/proxy").
+  // Today every caller gets (b)'s abort-and-restart behavior unconditionally,
+  // which is what lets a reconnect() arriving while a mint is already in
+  // flight (issue #162 advisory 1) throw that mint away and start another —
+  // wasting an RTT even though nothing about the mint itself was ever in
+  // doubt.
+  //
+  // Measured after the advisory-2 dispatch split (dispatchOnlineWake) shipped:
+  //   - Two reconnect-triggering calls in the SAME synchronous tick (no
+  //     await between them) were already harmless BEFORE this note — the
+  //     pre-existing `cycleInFlight` guard (reset only via queueMicrotask)
+  //     coalesces them into one cycle, so no extra mint occurs.
+  //   - The only surviving trigger is two genuinely SEPARATE events (e.g.
+  //     visibilitychange and online) landing close enough to straddle a
+  //     microtask boundary — rare, and costs exactly one wasted RTT, not a
+  //     correctness failure.
+  // Given how narrow the residual is, and that the (a)/(b) split touches the
+  // core of a reconnect state machine that took #123's 7 review rounds to
+  // harden — including the ONE caller ((b)) that has a real, stated need for
+  // abort-and-restart (captive-portal/proxy recovery in notifyOnline()) — the
+  // 1-RTT saving does not justify the risk of that path. Shelved, not fixed.
+  // If revisited: any (a)/(b) split MUST preserve notifyOnline()'s
+  // abort-and-restart behavior for its in-flight branch untouched; that is
+  // the one case where discarding an in-flight mint is intentional, not
+  // wasteful.
   function requireFreshTicket(): void {
     if (options.refreshTicket === undefined) return;
     const refreshWasInFlight = ticketRefreshInFlight;

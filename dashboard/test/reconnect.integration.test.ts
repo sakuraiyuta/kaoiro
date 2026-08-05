@@ -21,6 +21,7 @@ import { Socket } from "phoenix";
 import {
   connectKaoiro,
   decideWakeAction,
+  dispatchOnlineWake,
   shouldForceReconnectOnVisible,
 } from "../src/lib/protocol";
 
@@ -135,6 +136,53 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", 
     expect(refreshTicket).toHaveBeenCalledTimes(1);
     expect(FakeWebSocket.instances.length).toBe(2);
     expect(FakeWebSocket.instances[1]?.url).toContain("ticket=renewed-ticket");
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
+  });
+
+  it("(issue #129 回帰) ticket max_age(30s) 超過後の reconnect も新規 mint した ticket を使い、初期 ticket を使い回さない", async () => {
+    // issue #129 は「connectKaoiro が初期 ticket を reconnect 間で保持し
+    // 続け、30 秒超の再接続で再認証できない」という懸念だったが、
+    // c4a807a/dc492fd (issue #123) の fresh-ticket 機構により
+    // requireFreshTicket() が close/error/reconnect() の全経路で無条件に
+    // ticketRefreshRequired を立てるため、構造的に発生し得ない。このテスト
+    // はその構造を pin し、将来の変更で退行したら最初に落ちるようにする。
+    //
+    // heartbeatIntervalMs は明示的に設定しない(Phoenix のデフォルトのまま
+    // にする)こと。FakeWebSocket は send に一切応答しない stuck 実装なの
+    // で、短い heartbeatIntervalMs (例: 100ms) を設定すると 35 秒の fake
+    // time advance の間に Phoenix 自身の heartbeatTimeout 駆動 reconnect
+    // ループが多数回(実測 166 回)発火し、無関係な refreshTicket 呼び出し
+    // で埋もれてしまう。デフォルト間隔ならこの 35 秒の advance 中に heartbeat
+    // 由来の reconnect は起きない。
+    const handlers = makeHandlers();
+    const refreshTicket = vi.fn().mockResolvedValue({
+      kind: "ok" as const,
+      ticket: "freshly-minted-ticket",
+    });
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "initial-ticket-issued-at-page-load",
+      refreshTicket,
+      transport: FakeWebSocket as unknown,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    // ticket の max_age (ADR-0013: 30s) を超えるまで経過させる。
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(refreshTicket).not.toHaveBeenCalled();
+
+    conn.reconnect();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(FakeWebSocket.instances[1]?.url).toContain(
+      "ticket=freshly-minted-ticket",
+    );
+    expect(FakeWebSocket.instances[1]?.url).not.toContain(
+      "ticket=initial-ticket-issued-at-page-load",
+    );
 
     conn.disconnect();
     await vi.advanceTimersByTimeAsync(500);
@@ -377,6 +425,66 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", 
 
     conn.disconnect();
     await vi.advanceTimersByTimeAsync(500);
+  });
+
+  it("(issue #162 advisory 1/2) 旧: notifyOnline 直後の reconnect は開始直後の mint を abort して余分に mint する", async () => {
+    // Documents the bug dispatchOnlineWake below fixes: the OLD App.svelte
+    // wakeHandler called notifyOnline() unconditionally, then reconnect()
+    // when disconnected — both from the SAME browser `online` event.
+    const handlers = makeHandlers();
+    const refreshTicket = vi.fn().mockRejectedValue(new Error("offline"));
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect(); // enter disconnected + a pending backoff retry
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+
+    // Old wakeHandler order for a single `online` event.
+    conn.notifyOnline(); // cancels the pending retry, mints immediately
+    await vi.advanceTimersByTimeAsync(1);
+    conn.reconnect(); // aborts notifyOnline's mint mid-flight, mints again
+    await vi.advanceTimersByTimeAsync(1);
+
+    // 3 calls from ONE browser event: the initial mint plus two more for
+    // what should have been a single wake response.
+    expect(refreshTicket).toHaveBeenCalledTimes(3);
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+
+  it("(issue #162 advisory 1/2) 新: dispatchOnlineWake は同一 online イベントで mint を1本に収める", async () => {
+    const handlers = makeHandlers();
+    const refreshTicket = vi.fn().mockRejectedValue(new Error("offline"));
+    const conn = connectKaoiro("ws://test/client", handlers, {
+      ticket: "expired-ticket",
+      refreshTicket,
+      transport: FakeWebSocket as unknown,
+      heartbeatIntervalMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(1); // WS 1 open
+
+    conn.reconnect(); // enter disconnected + a pending backoff retry
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshTicket).toHaveBeenCalledTimes(1);
+
+    // New wakeHandler order: decideWakeAction("online", "disconnected", ...)
+    // always returns "reconnect" here, so dispatchOnlineWake calls ONLY
+    // connection.reconnect() — matching what App.svelte now does.
+    dispatchOnlineWake("reconnect", conn);
+    await vi.advanceTimersByTimeAsync(1);
+
+    // One mint for the wake response, not two.
+    expect(refreshTicket).toHaveBeenCalledTimes(2);
+
+    conn.disconnect();
+    await vi.advanceTimersByTimeAsync(30_000);
   });
 
   it("pending refresh と 401 が競合しても session expiry は一度だけ", async () => {
@@ -864,6 +972,44 @@ describe("decideWakeAction (issue #123 round 3, must-fix 2)", () => {
     expect(
       decideWakeAction("visibility-hidden", "disconnected", 500, 1000),
     ).toBe("record-hidden");
+  });
+});
+
+describe("dispatchOnlineWake (issue #162 advisory 2)", () => {
+  function makeConnection() {
+    return { notifyOnline: vi.fn(), reconnect: vi.fn() };
+  }
+
+  it("reconnect 判定なら reconnect() のみ呼ぶ (notifyOnline は呼ばない)", () => {
+    const connection = makeConnection();
+    dispatchOnlineWake("reconnect", connection);
+    expect(connection.reconnect).toHaveBeenCalledTimes(1);
+    expect(connection.notifyOnline).not.toHaveBeenCalled();
+  });
+
+  it("force-reconnect 判定でも reconnect() のみ呼ぶ", () => {
+    const connection = makeConnection();
+    dispatchOnlineWake("force-reconnect", connection);
+    expect(connection.reconnect).toHaveBeenCalledTimes(1);
+    expect(connection.notifyOnline).not.toHaveBeenCalled();
+  });
+
+  it("noop 判定なら notifyOnline() のみ呼ぶ (reconnect はしない)", () => {
+    const connection = makeConnection();
+    dispatchOnlineWake("noop", connection);
+    expect(connection.notifyOnline).toHaveBeenCalledTimes(1);
+    expect(connection.reconnect).not.toHaveBeenCalled();
+  });
+
+  it("record-hidden 判定でも(online では起きないが)notifyOnline() 側へ倒す", () => {
+    // decideWakeAction("online", ...) never actually returns
+    // "record-hidden" (that branch requires reason "visibility-hidden"),
+    // but dispatchOnlineWake stays total over the full WakeDecision union
+    // rather than assuming that invariant holds forever.
+    const connection = makeConnection();
+    dispatchOnlineWake("record-hidden", connection);
+    expect(connection.notifyOnline).toHaveBeenCalledTimes(1);
+    expect(connection.reconnect).not.toHaveBeenCalled();
   });
 });
 

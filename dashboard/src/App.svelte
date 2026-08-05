@@ -34,6 +34,7 @@
     connectKaoiro,
     decideWakeAction,
     defaultSocketUrl,
+    dispatchOnlineWake,
     fetchAuthMethods,
     fetchPersonaManifest,
     filterAfterHistoryCleared,
@@ -684,20 +685,23 @@
     // is factored into decideWakeAction (protocol.ts) so every branch is
     // unit-testable without mounting this component.
     wakeHandler = () => {
-      // This is intentionally independent from decideWakeAction: a healthy
-      // socket is not force-cycled merely because the browser says online,
-      // but a ticket-mint retry waiting under exponential backoff should run
-      // immediately when the network becomes available again.
-      connection?.notifyOnline();
+      if (connection === null) return;
+      // dispatchOnlineWake (issue #162 advisory 2) picks exactly one of
+      // notifyOnline() / reconnect(): a healthy socket (decision "noop")
+      // still needs notifyOnline() so a ticket-mint retry waiting under
+      // exponential backoff runs immediately when the network returns, but
+      // a disconnected socket (decision "reconnect") only needs reconnect()
+      // — it already performs everything notifyOnline() would, and calling
+      // both back-to-back let reconnect()'s requireFreshTicket() abort a
+      // mint notifyOnline() had just started (advisory 1's dominant
+      // trigger; see the analysis on requireFreshTicket in protocol.ts).
       const decision = decideWakeAction(
         "online",
         status,
         hiddenAt,
         Date.now(),
       );
-      if (decision === "reconnect" || decision === "force-reconnect") {
-        connection?.reconnect();
-      }
+      dispatchOnlineWake(decision, connection);
     };
     visibilityHandler = () => {
       const reason =
