@@ -6,6 +6,8 @@
 export { askUserQuestionDescriptor } from "./ask_user_question.js";
 export type { EngineAdapter } from "./engine.js";
 export {
+  INTER_AGENT_ERROR_CODES,
+  INTER_AGENT_ERROR_MESSAGE_CODES,
   INTER_AGENT_TOOL_FQN,
   InterAgentTool,
   LIST_AGENTS_TOOL_FQN,

@@ -165,6 +165,24 @@ const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
 };
 const DEFAULT_ERROR_MESSAGE = "the peer reported an unrecognized error";
 
+/** Canonical error-code list (issue #131's initial set), derived from
+ *  `ERROR_CODE_GUIDANCE` so there is exactly one place that enumerates the
+ *  codes this wrapper's classifier/templates recognize. Exported for issue
+ *  #134's docs-sync test (`docs/specs/protocol-inter-agent.md`'s
+ *  「エラー種別コード」table): that test asserts this set,
+ *  `ERROR_CODE_MESSAGE`'s key set (via `INTER_AGENT_ERROR_MESSAGE_CODES`
+ *  below), and the docs table's `code` column all agree, so a code added
+ *  to only one of the three is caught instead of drifting silently. */
+export const INTER_AGENT_ERROR_CODES: readonly string[] = Object.keys(
+  ERROR_CODE_GUIDANCE,
+);
+/** `ERROR_CODE_MESSAGE`'s key set, exported for the same issue #134
+ *  drift check as `INTER_AGENT_ERROR_CODES` above — the two tables have
+ *  no other mechanism keeping their key sets in sync with each other. */
+export const INTER_AGENT_ERROR_MESSAGE_CODES: readonly string[] = Object.keys(
+  ERROR_CODE_MESSAGE,
+);
+
 function messageForCode(code: string): string {
   return ERROR_CODE_MESSAGE[code] ?? DEFAULT_ERROR_MESSAGE;
 }
