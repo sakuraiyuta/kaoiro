@@ -256,6 +256,20 @@ async function main(): Promise<void> {
       instructionChain = instructionChain.then(() =>
         host.send(text, undefined, conversationId).catch((err: unknown) => {
           process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
+          // issue #136: host.send() rejecting here means the injection
+          // never reached the queue, so no turn will ever run for this
+          // conversation_id and onTurnEnd's resolveTurnEnd() below never
+          // fires for it either — the entry notePendingInjection just set
+          // would otherwise stay in the pending map forever. Resolve it
+          // here the same way a turn that ran and errored is resolved, so
+          // the peer gets a peer_error notice instead of silence.
+          const classified = classifyInterAgentError({ detail: String(err) });
+          for (const notice of interAgent?.resolveTurnEnd(
+            conversationId ?? null,
+            classified,
+          ) ?? []) {
+            link?.send(notice);
+          }
         }),
       );
     },
