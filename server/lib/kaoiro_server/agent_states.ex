@@ -62,6 +62,8 @@ defmodule KaoiroServer.AgentStates do
 
   use GenServer
 
+  require Logger
+
   # Wrapper connections may be unauthenticated (dev mode), so cap the map
   # to keep fabricated agent_ids from growing memory without bound.
   @max_agents 1000
@@ -547,11 +549,17 @@ defmodule KaoiroServer.AgentStates do
         {:reply, :not_required, state}
 
       _ when map_size(state.hydration) >= @max_agents ->
-        # Cap reached with no record of our own: refuse to start a new
-        # attempt rather than growing the map for a fabricated agent_id.
-        # `:not_required` would silently skip the replay, so fail toward
-        # "no attempt recorded" and let the next join retry.
-        {:reply, :not_required, state}
+        # Cap reached with no record of our own (dev mode admits arbitrary
+        # agent_ids, so this map needs the same bound the agent map has).
+        # Still ASK for the replay: `:not_required` would tell the wrapper
+        # its projection is intact, which is a lie that leaves the timeline
+        # empty for good. Without a recorded attempt the transcript replay
+        # still lands (reset + `log` envelopes need no attempt), `replay_ia`
+        # is refused as stale, and the completion CAS misses — so the next
+        # join asks again instead of the agent being stuck.
+        Logger.warning("hydration attempt not recorded for #{inspect(agent_id)}: tracker at cap")
+
+        {:reply, {:required, new_replay_id()}, state}
 
       _ ->
         replay_id = new_replay_id()

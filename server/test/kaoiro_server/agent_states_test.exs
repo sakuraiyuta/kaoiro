@@ -636,6 +636,18 @@ defmodule KaoiroServer.AgentStatesTest do
       assert {:required, _} = AgentStates.hydration_verdict("a", self(), server: store)
     end
 
+    test "tracker が cap でも replay は要求する (記録だけ落ちる)", %{store: store} do
+      # 記録できないときに :not_required を返すと「投影は無事」という嘘に
+      # なり、timeline が永久に空のままになる。要求はして、CAS が外れる
+      # ぶん次の join でまた要求されるほうが安全。
+      full = Map.new(1..1000, fn n -> {"cap-#{n}", :hydrated} end)
+      :sys.replace_state(store, fn state -> %{state | hydration: full} end)
+
+      assert {:required, replay_id} = AgentStates.hydration_verdict("a", self(), server: store)
+      refute AgentStates.hydration_in_flight?("a", replay_id, self(), server: store)
+      assert :stale = AgentStates.complete_hydration("a", replay_id, self(), server: store)
+    end
+
     test "epoch は boot ごとに変わり、同一 boot では安定する", %{store: store} do
       epoch = AgentStates.projection_epoch(store)
       assert is_binary(epoch) and epoch != ""
