@@ -40,6 +40,7 @@ followup が issue へ外出しされている場合は 🟡 とする。
 | 28 | [phase-28-agent-initiated-session-ops](phase-28-agent-initiated-session-ops.md) | ✅ | コンテキスト疲労の自己認識と、agent 自身が turn 境界で要求する session reset / compact、[ADR-0043](../adr/0043-agent-initiated-session-reset.md) / [issue #168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168) |
 | 29 | [P29](phase-29-footer-and-persona-cache.md) | 🟡 | footer / cache |
 | | | | 実装完了、レビュー中 (ADR-0045 / ADR-0046) |
+| 30 | [phase-30-history-restart-resilience](phase-30-history-restart-resilience.md) | ⏳ | 表示履歴の再起動耐性 — reconnect 時 replay・IA sidecar による DETS 撤廃・boot epoch 置換、[ADR-0051](../adr/0051-history-restart-resilience.md)(仕様レビュー待ち) |
 
 ## Feature-local plans
 
