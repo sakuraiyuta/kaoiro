@@ -29,7 +29,7 @@ server 再起動を跨いでも全 operator 端末が同一の timeline を見�
 | 30-7 | server: hydration 状態管理 + replay ingress + DETS 撤廃 | あお | ✅ | 2026-08-08 完了 (1493eb4)。 hydrated の無効化条件は ADR D2 追補 (あお Q1)。 AgentStates に hydration state (in_flight は replay_id + channel_owner の CAS)、join 応答 verdict、`replay_ia` の pane 所有権検証 + 投影 upsert、stamp と ClearWatermarks 比較、InterAgentHistory と purge 経路の除去、`preserve_inter_agent: false` 明示送信 (ADR D2/D3-3/D3-4) |
 | 30-8 | dashboard: projection epoch 再同期 | あお | ✅ | 2026-08-08 完了 (150b3a2)。 新接続 buffer の分離、epoch 不一致時の baseline 破棄 (logs / clearWatermarks / replay marker / 未読 state) + history と新接続 buffer のみ merge、epoch absent fallback (ADR D4) |
 | 30-9 | docs 整合 sweep | もも | ⏳ | 実装後の README / specs 齟齬確認 |
-| 30-10 | 実装レビュー | ふじ | ⏳ | must-fix ループ。 実装で確定した仕様差分 4 点 (Q1 hydrated 無効化 / Q2 stamp wire 形 / Q3 sidecar・pending path / Q4 因果順の quota atomic) と追補 1 点 (replay_ia の lobby broadcast) を併せてレビュー |
+| 30-10 | 実装レビュー | ふじ | ⏳ | must-fix ループ。 実装で確定した仕様差分 4 点 (Q1 hydrated 無効化 / Q2 stamp wire 形 / Q3 sidecar・pending path / Q4 因果順の quota atomic) と追補 1 点 (replay_ia の lobby broadcast) を併せてレビュー。 観点は下記「30-10 レビュー観点」 |
 | 30-11 | dogfood 検証 + atomic rollout 実施 | デフォルトくん + マスター | ⏳ | ADR D6 の maintenance 手順 (IA 停止 → 3 層同時更新 → 全タブ reload) で deploy し、下記シナリオを検証 |
 
 Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started,
@@ -86,6 +86,45 @@ failure matrix(ふじレビュー由来。(a)-(e)・(h)・(i)・(k) は
       `preserve_inter_agent: false` 明示送信が確認できる [dogfood]
 - [x] (k) sidecar の途中切れ・破損行が skip され replay が継続する
       [test]
+
+## 30-10 レビュー観点 (あお申し送り、2026-08-08)
+
+実装者が「ここは判断が入った / 見てほしい」と挙げた点。詳細は各 commit
+メッセージと該当箇所のコード注釈にある。
+
+1. **`replay_ia` 受理行の `agents:lobby` broadcast** (追補 1、150b3a2)。
+   ADR/spec に記述が無かった欠落への対処なので、設計判断として最優先で
+   見てほしい。`history_reset` が `preserve_inter_agent: false` を送る
+   ため接続中タブは IA を落とすが、`replay_ia` は投影 upsert のみで live
+   通知が無く、F5 まで IA バブルが戻らなかった。既知の粗さ: peer が
+   offline で replay しない場合、live タブでは peer の pane にもその IA が
+   見える (client は `agent_id ∪ payload.to` で fanout する) が reload で
+   消える。厳密化には pane を指す wire field が要る。
+2. **Q1 の invalidate trigger set の網羅性** (1493eb4)。`restore` の
+   resume 分岐と `resume_session` の 2 経路のみ。runner 起点の relaunch
+   (crash-restart / `reset_session`) は意図的に非対象。
+3. **因果順の実装分割** (1493eb4)。`WrapperChannel.preflight_inter_agent/2`
+   が reject 判定を全部引き受け、`accept_inter_agent/6` 以降は upsert →
+   peer push → broadcast → ack だけ、という分割が spec どおりか。
+4. **`replay_ia` の pane 注入面**。受信側 pane は peer 名義の envelope を
+   持つため `agent_id == topic` 検査を掛けられず、wrapper は自 pane に
+   任意の `agent_id` の envelope を注入できる。影響は当該 pane の operator
+   表示のみ (ADR の threat model 評価どおり) だが明示確認したい。
+5. **`AgentStates` の state 形変更** (1493eb4)。`%{agents, hydration,
+   epoch}` へ。`:sys.replace_state` を使う既存 test は追随済みだが、他に
+   生の state 形へ依存する箇所が無いか。
+6. **送信側 sidecar の記録契機** (186f542)。ack 到着時のみなので
+   reject / timeout / ack 喪失では記録されない (D7 (e) 受容)。stamp 無し
+   ack (旧 server) も記録せず stderr warn。
+7. **dashboard `liveSinceJoin` の窓** (150b3a2)。join → `history` push の
+   間だけを覆い、push 処理後に空にする。この窓の定義が D4 step 1 の意図と
+   合っているか。
+
+補足: hydration tracker が cap (1000) に達したときも verdict は
+`replay_required: true` を返す (4f26cda)。`:not_required` は「投影は無事」
+という嘘になり timeline が永久に空になるため。記録なしでも transcript
+replay は成立し、`replay_ia` は stale で弾かれ、complete の CAS も外れる
+ので次の join で再要求される。
 
 ## Dogfood 検証シナリオ (30-11)
 
