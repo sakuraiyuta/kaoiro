@@ -2255,6 +2255,39 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^peer_id}, 100
     end
 
+    test "replay_ia は復元行を agents:lobby へ流す (接続中タブの IA を戻すため)" do
+      agent_id = "test.hydr-replay-lobby"
+      peer_id = "test.hydr-replay-lobby-peer"
+
+      on_exit(fn ->
+        AgentStates.delete(agent_id)
+        AgentStates.delete(peer_id)
+      end)
+
+      {reply, socket} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_id" => replay_id}} = reply
+      seed_entry(socket, agent_id)
+
+      @endpoint.subscribe("agents:lobby")
+
+      restored = replay_ia_envelope(peer_id, agent_id, 1)
+      hidden = replay_ia_envelope(peer_id, agent_id, 2)
+
+      ref =
+        push(socket, "replay_ia", %{
+          "replay_id" => replay_id,
+          "items" => [
+            %{"envelope" => restored, "ingress_stamp" => [2000, 0]},
+            # stamp が壊れている行は投影にも lobby にも出ない。
+            %{"envelope" => hidden, "ingress_stamp" => "bad"}
+          ]
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "envelope", ^restored
+      refute_broadcast "envelope", ^hidden
+    end
+
     test "(k) stamp 欠落 / 壊れた行は skip され、残りの replay は継続する" do
       agent_id = "test.hydr-replay-corrupt"
       peer_id = "test.hydr-replay-corrupt-peer"

@@ -1252,6 +1252,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- validate_replayed_envelope(envelope),
          false <- ClearWatermarks.hidden?(bound, stamp, envelope) do
       _ = AgentStates.upsert_ia(pane_agent_id, stamp, envelope)
+
+      # ADR-0051 D3-3 追補 (実装時に判明した欠落): a dashboard that was
+      # ALREADY connected when the replay ran has just been told to drop
+      # its IA (`history_reset` now sends `preserve_inter_agent: false`),
+      # and nothing else would ever put them back before an F5 — the
+      # projection upsert alone is invisible to a live client. Replayed
+      # transcript lines already ride `agents:lobby` for exactly this
+      # reason; the restored IA does the same, inside the same replay
+      # window, so the client's existing reset/complete pairing keeps them
+      # out of the new-arrival animation. This is display fan-out only —
+      # none of the routing D3-3 forbids.
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
       :ok
     else
       _ -> :ok

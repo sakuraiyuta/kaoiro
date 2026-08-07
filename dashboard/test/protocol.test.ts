@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EngineCatalogResult } from "../src/lib/protocol";
 import {
+  applyProjectionEpoch,
   ATTACH_CHUNK_SIZE,
   buildChunkPayload,
   errorSubtypeLabel,
@@ -2128,5 +2129,159 @@ describe("findPrecedingUserPrompt (issue #128)", () => {
       payload: { kind: "user", text: "truncated head…", truncated: true },
     } as unknown as Envelope;
     expect(findPrecedingUserPrompt([truncated, errorResult(2)], 1)).toBeNull();
+  });
+});
+
+// ADR-0051 D4 — projection epoch. Failure-matrix row (i): an epoch
+// mismatch must drop the ghost baseline WITHOUT losing live envelopes that
+// arrived on this connection before the history push.
+describe("applyProjectionEpoch", () => {
+  function log(agentId: string, ts: string, text: string): Envelope {
+    return {
+      version: "0",
+      agent_id: agentId,
+      persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      ts,
+      type: "log",
+      state: "idle",
+      payload: { kind: "assistant", text },
+      ext: {},
+    } as unknown as Envelope;
+  }
+
+  const base = {
+    incomingWatermarks: {} as Record<string, string>,
+    previousWatermarks: {} as Record<string, string>,
+    projection: "per-pane-v1" as string | undefined,
+  };
+
+  it("(i) epoch 不一致では亡霊 baseline を捨て、この接続の live 行は残す", () => {
+    const ghost = log("a", "2026-08-01T00:00:00Z", "再起動前の亡霊");
+    const live = log("a", "2026-08-08T00:00:02Z", "join 後 history 前の live");
+    const authoritative = log("a", "2026-08-08T00:00:01Z", "再構築された履歴");
+
+    const result = applyProjectionEpoch({
+      ...base,
+      previousEpoch: "epoch-old",
+      incomingEpoch: "epoch-new",
+      histories: { a: [authoritative] },
+      baseline: { a: [ghost, live] },
+      sinceJoin: { a: [live] },
+    });
+
+    expect(result.discarded).toBe(true);
+    expect(result.epoch).toBe("epoch-new");
+    expect(result.logs.a?.map((e) => e.payload?.text)).toEqual([
+      "再構築された履歴",
+      "join 後 history 前の live",
+    ]);
+  });
+
+  it("epoch 一致なら従来どおり baseline へ merge する", () => {
+    const local = log("a", "2026-08-08T00:00:02Z", "local");
+    const authoritative = log("a", "2026-08-08T00:00:01Z", "history");
+
+    const result = applyProjectionEpoch({
+      ...base,
+      previousEpoch: "epoch-1",
+      incomingEpoch: "epoch-1",
+      histories: { a: [authoritative] },
+      baseline: { a: [local] },
+      sinceJoin: { a: [local] },
+    });
+
+    expect(result.discarded).toBe(false);
+    expect(result.logs.a?.map((e) => e.payload?.text)).toEqual([
+      "history",
+      "local",
+    ]);
+  });
+
+  it("epoch absent (旧 server) は従来動作へ fallback し、保持 epoch を変えない", () => {
+    const local = log("a", "2026-08-08T00:00:02Z", "local");
+
+    const result = applyProjectionEpoch({
+      ...base,
+      projection: undefined,
+      previousEpoch: "epoch-1",
+      incomingEpoch: undefined,
+      histories: {},
+      baseline: { a: [local] },
+      sinceJoin: {},
+    });
+
+    expect(result.discarded).toBe(false);
+    expect(result.epoch).toBe("epoch-1");
+    expect(result.logs.a?.map((e) => e.payload?.text)).toEqual(["local"]);
+  });
+
+  it("初回 push (保持 epoch なし) は破棄しない — 亡霊たり得る baseline が無い", () => {
+    const local = log("a", "2026-08-08T00:00:02Z", "local");
+
+    const result = applyProjectionEpoch({
+      ...base,
+      previousEpoch: null,
+      incomingEpoch: "epoch-1",
+      histories: {},
+      baseline: { a: [local] },
+      sinceJoin: {},
+    });
+
+    expect(result.discarded).toBe(false);
+    expect(result.epoch).toBe("epoch-1");
+    expect(result.logs.a?.map((e) => e.payload?.text)).toEqual(["local"]);
+  });
+
+  it("破棄時は clearWatermarks も新 projection のものだけにする", () => {
+    const result = applyProjectionEpoch({
+      ...base,
+      previousEpoch: "epoch-old",
+      incomingEpoch: "epoch-new",
+      previousWatermarks: { a: "2026-01-01T00:00:00Z", gone: "2026-01-01T00:00:00Z" },
+      incomingWatermarks: { a: "2026-08-08T00:00:00Z" },
+      histories: {},
+      baseline: {},
+      sinceJoin: {},
+    });
+
+    expect(result.clearWatermarks).toEqual({ a: "2026-08-08T00:00:00Z" });
+  });
+
+  it("一致時は clearWatermarks を従来どおり merge する", () => {
+    const result = applyProjectionEpoch({
+      ...base,
+      previousEpoch: "epoch-1",
+      incomingEpoch: "epoch-1",
+      previousWatermarks: { a: "2026-01-01T00:00:00Z", b: "2026-02-01T00:00:00Z" },
+      incomingWatermarks: { a: "2026-08-08T00:00:00Z" },
+      histories: {},
+      baseline: {},
+      sinceJoin: {},
+    });
+
+    expect(result.clearWatermarks).toEqual({
+      a: "2026-08-08T00:00:00Z",
+      b: "2026-02-01T00:00:00Z",
+    });
+  });
+});
+
+describe("parseHistoryPayload — projection_epoch (ADR-0051 D4)", () => {
+  it("文字列の projection_epoch を取り出す", () => {
+    const parsed = parseHistoryPayload({
+      agents: {},
+      projection_epoch: "epoch-1",
+    });
+    expect(parsed.projectionEpoch).toBe("epoch-1");
+  });
+
+  it("欠落 / 空 / 非文字列は undefined = legacy server 扱い", () => {
+    expect(parseHistoryPayload({ agents: {} }).projectionEpoch).toBeUndefined();
+    expect(
+      parseHistoryPayload({ agents: {}, projection_epoch: "" }).projectionEpoch,
+    ).toBeUndefined();
+    expect(
+      parseHistoryPayload({ agents: {}, projection_epoch: 7 }).projectionEpoch,
+    ).toBeUndefined();
   });
 });

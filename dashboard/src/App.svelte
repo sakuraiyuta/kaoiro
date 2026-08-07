@@ -42,7 +42,7 @@
     formatAgentLabel,
     isReplyEnvelope,
     mergeTranscriptEntries,
-    projectAndMergeHistory,
+    applyProjectionEpoch,
     resetTranscriptHistory,
   } from "./lib/protocol";
   import {
@@ -84,6 +84,16 @@
   // Per-agent IA visibility watermark (issue #109). It changes only after
   // operator clear_history; session transitions do not affect display.
   let clearWatermarks = $state<Record<string, string>>({});
+  // ADR-0051 D4: the server projection lifetime `logs` was merged against.
+  // A different value on the next `history` push means the projection we
+  // merged into is gone (server restart / AgentStates crash) and the local
+  // baseline is a ghost.
+  let projectionEpoch: string | null = null;
+  // Live reply envelopes received since THIS connection joined, kept apart
+  // from the baseline so an epoch mismatch can drop the stale merge target
+  // without losing rows that arrived before the history push (D4 step 1).
+  // Not $state: nothing renders from it, and it is cleared on every push.
+  let liveSinceJoin: Record<string, Envelope[]> = {};
   // Ticking clock owned by App for the response-timeline pane (#25).
   // Passed to ResponseTimeline so its "N 分前" labels refresh live
   // without each row calling Date.now on its own. Advanced on
@@ -407,6 +417,12 @@
               const merged = mergeTranscriptEntries(previous, [envelope]);
               if (merged.length > previous.length) addedToTranscript = true;
               next[id] = merged;
+              // ADR-0051 D4 step 1: remember it separately, so a history
+              // push that invalidates the baseline can still keep it.
+              liveSinceJoin[id] = mergeTranscriptEntries(
+                liveSinceJoin[id] ?? [],
+                [envelope],
+              );
             }
             logs = next;
             // JSONL resume replay deliberately reuses ordinary `envelope`
@@ -444,7 +460,7 @@
             }
           }
         },
-        onHistory: (histories, watermarks, projection) => {
+        onHistory: (histories, watermarks, projection, epoch) => {
           // issue #109 M6/M7 (2026-07-23): server pre-fans-out and
           // pre-filters IA per pane using its ingress ordering domain,
           // so `histories` already reflects the authoritative view for
@@ -458,13 +474,35 @@
           // the projection-branch + fanOut + merge chain lives in
           // `projectAndMergeHistory` so this glue and the R3 composite
           // table test call the same production helper.
-          clearWatermarks = { ...clearWatermarks, ...watermarks };
-          logs = projectAndMergeHistory(
+          //
+          // ADR-0051 D4: `projection_epoch` decides WHAT this push merges
+          // into. Same epoch (or a legacy server that sends none) keeps the
+          // old behaviour; a different one means the projection the local
+          // baseline was built against no longer exists, so the baseline is
+          // dropped and only this connection's live rows survive alongside
+          // the authoritative history.
+          const applied = applyProjectionEpoch({
+            previousEpoch: projectionEpoch,
+            incomingEpoch: epoch,
             histories,
-            clearWatermarks,
+            incomingWatermarks: watermarks,
+            previousWatermarks: clearWatermarks,
             projection,
-            logs,
-          );
+            baseline: logs,
+            sinceJoin: liveSinceJoin,
+          });
+          if (applied.discarded) {
+            // Everything else derived from the discarded history goes with
+            // it: replay pairing markers and the read / new timeline keys
+            // now point at rows that no longer exist.
+            clearTimelineState();
+          }
+          clearWatermarks = applied.clearWatermarks;
+          logs = applied.logs;
+          projectionEpoch = applied.epoch;
+          // The window this buffer covers — join until the history push —
+          // has closed; live envelopes now land in `logs` directly.
+          liveSinceJoin = {};
         },
         onHistoryCleared: (agentId, sessionId, watermark) => {
           // An operator purged past-session lines (#48); keep only the
@@ -879,6 +917,8 @@
     // Don't keep the previous session's data behind the login form.
     agents = {};
     logs = {};
+    liveSinceJoin = {};
+    projectionEpoch = null;
     clearTimelineState();
     timelineScrollTarget = null;
     selected = null;

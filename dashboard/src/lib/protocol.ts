@@ -1098,6 +1098,7 @@ export interface KaoiroHandlers {
     histories: Record<string, Envelope[]>,
     clearWatermarks: Record<string, string>,
     projection?: string,
+    projectionEpoch?: string,
   ) => void;
   /** A past-session log purge (issue #48): the named agent's transcript
    *  should drop every line outside `sessionId`. `clearWatermark`
@@ -1757,6 +1758,7 @@ export interface ParsedHistoryPayload {
   histories: Record<string, Envelope[]>;
   clearWatermarks: Record<string, string>;
   projection?: string;
+  projectionEpoch?: string;
 }
 
 /** Extracts the fields the `history` push carries from an operator-role
@@ -1778,6 +1780,7 @@ export function parseHistoryPayload(value: unknown): ParsedHistoryPayload {
     agents?: unknown;
     clear_watermarks?: unknown;
     history_projection?: unknown;
+    projection_epoch?: unknown;
   };
   const histories: Record<string, Envelope[]> = {};
   if (payload.agents !== null && typeof payload.agents === "object") {
@@ -1801,9 +1804,92 @@ export function parseHistoryPayload(value: unknown): ParsedHistoryPayload {
     payload.history_projection !== ""
       ? payload.history_projection
       : undefined;
-  return projection === undefined
-    ? { histories, clearWatermarks }
-    : { histories, clearWatermarks, projection };
+  // ADR-0051 D4: opaque id of the server-side projection's lifetime.
+  // Absent = legacy server, and `applyProjectionEpoch` then keeps the old
+  // merge behaviour rather than guessing.
+  const projectionEpoch =
+    typeof payload.projection_epoch === "string" &&
+    payload.projection_epoch !== ""
+      ? payload.projection_epoch
+      : undefined;
+  return {
+    histories,
+    clearWatermarks,
+    ...(projection === undefined ? {} : { projection }),
+    ...(projectionEpoch === undefined ? {} : { projectionEpoch }),
+  };
+}
+
+export interface ProjectionEpochInput {
+  /** Epoch the current baseline was built against; null before the first
+   *  `history` push of this page load. */
+  previousEpoch: string | null;
+  /** Epoch on the push being applied; undefined on a legacy server. */
+  incomingEpoch: string | undefined;
+  histories: Record<string, Envelope[]>;
+  /** Watermarks on this push. */
+  incomingWatermarks: Record<string, string>;
+  /** Watermarks the client currently holds. */
+  previousWatermarks: Record<string, string>;
+  projection: string | undefined;
+  /** Everything the client currently shows — the merge baseline. */
+  baseline: Record<string, Envelope[]>;
+  /** ONLY the live envelopes this connection received since it joined. */
+  sinceJoin: Record<string, Envelope[]>;
+}
+
+export interface ProjectionEpochResult {
+  logs: Record<string, Envelope[]>;
+  clearWatermarks: Record<string, string>;
+  epoch: string | null;
+  /** True when the baseline was thrown away. The caller owns the rest of
+   *  the history-derived state (replay markers, read / new timeline keys)
+   *  and must reset it too. */
+  discarded: boolean;
+}
+
+/** Applies the ADR-0051 D4 projection-epoch rule to one `history` push.
+ *
+ * The problem it solves: a tab left open across a server restart merges the
+ * authoritative history into a local buffer that still holds pre-restart
+ * lines the server no longer has — ghosts that never go away.
+ *
+ * Why not simply drop everything local on mismatch: between this
+ * connection's join and the `history` push, genuinely new live envelopes
+ * can already have arrived. They belong to the NEW projection and are not
+ * in the push (the server built it before they existed), so a blanket drop
+ * loses real rows (ふじ 1 巡目 must-fix 4). Hence the split: the old
+ * baseline goes, `sinceJoin` stays.
+ *
+ * A mismatch is only actionable when both epochs are known — an absent
+ * incoming epoch means a legacy server, and an absent previous one means
+ * this is the first push, where there is no stale baseline by definition.
+ */
+export function applyProjectionEpoch(
+  input: ProjectionEpochInput,
+): ProjectionEpochResult {
+  const discarded =
+    input.incomingEpoch !== undefined &&
+    input.previousEpoch !== null &&
+    input.incomingEpoch !== input.previousEpoch;
+
+  const clearWatermarks = discarded
+    ? { ...input.incomingWatermarks }
+    : { ...input.previousWatermarks, ...input.incomingWatermarks };
+
+  const local = discarded ? input.sinceJoin : input.baseline;
+
+  return {
+    logs: projectAndMergeHistory(
+      input.histories,
+      clearWatermarks,
+      input.projection,
+      local,
+    ),
+    clearWatermarks,
+    epoch: input.incomingEpoch ?? input.previousEpoch,
+    discarded,
+  };
 }
 
 /** Instance-scoped pending map for `refreshModels()` waiters (ADR-0039 F9
@@ -2345,6 +2431,7 @@ export function connectKaoiro(
       parsed.histories,
       parsed.clearWatermarks,
       parsed.projection,
+      parsed.projectionEpoch,
     );
   });
   c.on(
