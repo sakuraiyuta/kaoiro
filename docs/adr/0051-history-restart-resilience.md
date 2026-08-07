@@ -115,6 +115,15 @@ replay(reset 後に数件送って切断)で非ゼロのまま未完了確定す
   できる。
 - **wrapper 側 single-flight**: 1 attempt のみ実行し、実行中に別
   要求が来たら実行中 attempt の完了で応答する。
+- **hydrated の無効化条件**(2026-08-08 追補、あお Q1。当初版の
+  穴): server は **operator 起点で resume_session_id を伴う遷移**
+  (restore の binary session_id 分岐・resume_session の live
+  switch / disconnected resume)のときのみ hydration を明示
+  invalidate し、次回 join で replay を要求する。`/new`・`/clear`・
+  fresh-restore で invalidate すると empty replay の `history_reset`
+  が ADR-0036 F3 の表示維持 / marker 表示を壊すため invalidate
+  しない。crash-restart(runner 自律 relaunch、server 非経由)も
+  同一 session 継続で投影が既に正のため invalidate しない。
 
 replay 対象は現 session 分のみ。過去 session(`/new`・`/clear`
 以前)の再構築はスコープ外(受容した制約、D7)。両 engine とも
