@@ -30,26 +30,23 @@ defmodule KaoiroServer.Application do
       KaoiroServer.SessionPointers,
       # Restart-surviving per-agent permission_mode picks (#58).
       KaoiroServer.PermissionModes,
-      # Structured inter-agent history cannot be rebuilt from SDK JSONL;
-      # persist it across server/container restarts (#105).
-      KaoiroServer.InterAgentHistory,
       # Per-agent clear watermarks so operator `clear_history` hides past
-      # durable inter-agent messages from the cleared agent's transcript
-      # on subsequent reloads (issue #109). Peer panes are unaffected.
+      # inter-agent messages from the cleared agent's transcript on
+      # subsequent reloads (issue #109). Peer panes are unaffected.
       KaoiroServer.ClearWatermarks,
       # Session-transition start records are intentionally independent from
       # visibility: only clear_history adopts one into ClearWatermarks (#109).
       KaoiroServer.SessionStarts,
       # Single serialized allocator for the server-side ingress ordering
-      # domain (ふじ R5 must-fix, 2026-07-23). Both `InterAgentHistory`
-      # (per-envelope order stamp) and the operator `clear_history`
-      # watermark record allocate through it. Restart-durable + wall-
-      # clock-rollback safe. MUST start after InterAgentHistory and
-      # ClearWatermarks so its `seed_from` can read their current
-      # tuple state to bound `last_us` below live-consumer records.
+      # domain (ふじ R5 must-fix, 2026-07-23). The live IA ingress stamp
+      # (`WrapperChannel`), the `SessionStarts` transition record and the
+      # operator `clear_history` watermark all allocate through it.
+      # Restart-durable + wall-clock-rollback safe. MUST start after
+      # ClearWatermarks and SessionStarts so its `seed_from` can read
+      # their current tuple state to bound `last_us` below live-consumer
+      # records.
       {KaoiroServer.IngressOrder,
        seed_from: [
-         &KaoiroServer.InterAgentHistory.all_with_order/0,
          &KaoiroServer.ClearWatermarks.all_orders/0,
          &KaoiroServer.SessionStarts.all_orders/0
        ]},

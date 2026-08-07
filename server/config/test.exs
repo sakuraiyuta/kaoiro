@@ -43,14 +43,6 @@ config :kaoiro_server,
          "kaoiro_test_agent_directory_#{run_nonce}.dets"
        )
 
-# Per-run throwaway DETS file for durable inter-agent history (#105).
-config :kaoiro_server,
-       :inter_agent_history_path,
-       Path.join(
-         System.tmp_dir!(),
-         "kaoiro_test_inter_agent_history_#{run_nonce}.dets"
-       )
-
 config :kaoiro_server,
        :clear_watermarks_path,
        Path.join(
@@ -72,7 +64,7 @@ config :kaoiro_server,
 # module default_path/0 returns, so successive `mix test` runs
 # accumulated `last_us` / `last_seq` state — and worse, collided with
 # a running `mix phx.server` dev instance on the same host. Same
-# per-run unique_integer suffix pattern as InterAgentHistory above.
+# per-run unique_integer suffix pattern as the stores above.
 config :kaoiro_server,
        :ingress_order_path,
        Path.join(

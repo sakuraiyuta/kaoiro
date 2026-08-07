@@ -8,7 +8,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.HostRegistry
-  alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentsChannel
@@ -785,8 +784,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "2026-07-23T10:00:00Z"
         )
 
-      :ok = InterAgentHistory.append(durable_inter_agent_envelope(agent_id, "test.del-peer", 1))
-      :ok = InterAgentHistory.append(durable_inter_agent_envelope("test.del-peer", agent_id, 2))
+      _ = seed_ia(durable_inter_agent_envelope(agent_id, "test.del-peer", 1))
+      # seed_ia seeds a live entry for each pane; delete_agent only accepts
+      # a disconnected one, so restore the state this test is about.
+      put_disconnected(agent_id)
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -810,8 +811,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       on_exit(fn -> TokenDenylist.restore(agent_id) end)
       _ = TokenDenylist.all()
       assert TokenDenylist.revoked?(agent_id) == true
-      assert InterAgentHistory.list_for(agent_id) == []
-      assert InterAgentHistory.list_for("test.del-peer") == []
+      # ADR-0051 D3-5: there is no IA ledger left to purge. The deleted
+      # agent's own pane went with its AgentStates entry; the peer keeps
+      # its own copy, which is that peer's display to show.
+      refute Map.has_key?(AgentStates.ia_projection(), agent_id)
+      assert [{_stamp, _ia}] = AgentStates.ia_projection()["test.del-peer"]
     end
 
     test "AgentStates 不在の directory-only entry も削除できる (ADR-0030 D6)" do
@@ -1690,6 +1694,23 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       }
     end
 
+    # ADR-0051 D3-1: a live accept allocates ONE ingress stamp and upserts
+    # the envelope into both the sender's and the receiver's pane under it.
+    # Seeding through the same API keeps these tests on the production
+    # contract. Both panes need an AgentStates entry — the per-pane
+    # projection lives inside it, which is also why the pre-ADR-0051
+    # "IA survives an empty AgentStates" behaviour is gone (D3-5).
+    defp seed_ia(ia_env) do
+      sender_id = ia_env["agent_id"]
+      receiver_id = ia_env["payload"]["to"]
+      put_agent(sender_id)
+      put_agent(receiver_id)
+      stamp = KaoiroServer.IngressOrder.allocate()
+      :ok = AgentStates.upsert_ia(sender_id, stamp, ia_env)
+      :ok = AgentStates.upsert_ia(receiver_id, stamp, ia_env)
+      stamp
+    end
+
     defp log_envelope(agent_id, text) do
       %{
         "version" => "0",
@@ -1728,6 +1749,96 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # server pre-fan-out 結果をそのまま使い、marker が無い old server と
     # new client の組合せでは client が自前 fanOut に fallback する
     # (test/protocol.test.ts の parseHistoryPayload 群で pin)。
+    test "history push は projection_epoch を同梱する (ADR-0051 D4)" do
+      agent_id = "test.hist-epoch"
+      put_agent(agent_id)
+      _socket = join_as(:operator)
+
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", payload
+      assert payload["projection_epoch"] == AgentStates.projection_epoch()
+      assert is_binary(payload["projection_epoch"])
+    end
+
+    # ADR-0051 D6: the cap belongs to the FINAL merged projection. Before
+    # this the transcript capped at 200 on its own and IA was cap-exempt,
+    # so a pane could serve well past 200 rows.
+    test "(h) transcript + IA 合算 201 件は最終投影で newest 200 に切られる" do
+      agent_id = "test.cap-201"
+      peer_id = "test.cap-201-peer"
+      put_agent(agent_id)
+      put_agent(peer_id)
+
+      # 101 transcript rows then 100 IA rows, all with distinct {ts, seq}.
+      for n <- 1..101 do
+        :ok = AgentStates.append_log(capped_log(agent_id, n))
+      end
+
+      for n <- 102..201 do
+        :ok =
+          AgentStates.upsert_ia(
+            agent_id,
+            KaoiroServer.IngressOrder.allocate(),
+            capped_ia(agent_id, peer_id, n)
+          )
+      end
+
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => agents}
+
+      entries = agents[agent_id]
+      assert length(entries) == 200
+      # 最古の 1 件 (n=1) だけが落ちる。
+      assert List.first(entries)["seq"] == 2
+      assert List.last(entries)["seq"] == 201
+    end
+
+    test "(h) transcript 200 + IA 200 でも合算 400 にはならず 200 に切られる" do
+      agent_id = "test.cap-400"
+      peer_id = "test.cap-400-peer"
+      put_agent(agent_id)
+      put_agent(peer_id)
+
+      for n <- 1..200 do
+        :ok = AgentStates.append_log(capped_log(agent_id, n))
+      end
+
+      for n <- 201..400 do
+        :ok =
+          AgentStates.upsert_ia(
+            agent_id,
+            KaoiroServer.IngressOrder.allocate(),
+            capped_ia(agent_id, peer_id, n)
+          )
+      end
+
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", %{"agents" => agents}
+
+      entries = agents[agent_id]
+      assert length(entries) == 200
+      assert List.first(entries)["seq"] == 201
+      assert List.last(entries)["seq"] == 400
+    end
+
+    defp capped_log(agent_id, n) do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-06-11T00:00:00Z",
+        "seq" => n,
+        "type" => "log",
+        "state" => "thinking",
+        "payload" => %{"kind" => "assistant", "text" => "m#{n}"}
+      }
+    end
+
+    defp capped_ia(agent_id, peer_id, n) do
+      durable_inter_agent_envelope(agent_id, peer_id, n) |> Map.put("seq", n)
+    end
+
     test "history push は history_projection=per-pane-v1 を同梱 (R3)" do
       agent_id = "test.hist-projection"
       put_agent(agent_id)
@@ -1738,32 +1849,34 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert payload["history_projection"] == "per-pane-v1"
     end
 
-    test "AgentStates が空でも durable IA を join history に復元する (#105)" do
+    test "IA は per-pane projection から sender / receiver 両 pane に載る (ADR-0051 D3-1)" do
       agent_id = "test.hist-durable"
-      env = durable_inter_agent_envelope(agent_id, "test.hist-peer", 1)
-      :ok = InterAgentHistory.append(env)
-      on_exit(fn -> InterAgentHistory.delete_agent(agent_id) end)
+      peer_id = "test.hist-peer"
+      ia = durable_inter_agent_envelope(agent_id, peer_id, 1)
+      _stamp = seed_ia(ia)
 
+      # transcript history とは別の入れ物なので混ざらない。
       refute Map.has_key?(AgentStates.histories(), agent_id)
       _socket = join_as(:operator)
 
       assert_push "snapshot", %{"agents" => _}
       assert_push "history", %{"agents" => agents}
-      assert agents[agent_id] == [env]
+      assert agents[agent_id] == [ia]
+      assert agents[peer_id] == [ia]
     end
 
-    test "volatile IA と durable IA は join history で重複しない (#105)" do
+    test "同一 ingress stamp の再 upsert は pane 内で重複しない (replay retry 冪等)" do
       agent_id = "test.hist-dedupe"
-      env = durable_inter_agent_envelope(agent_id, "test.hist-peer", 1)
-      put_agent(agent_id)
-      :ok = AgentStates.append_log(env)
-      :ok = InterAgentHistory.append(env)
-      on_exit(fn -> InterAgentHistory.delete_agent(agent_id) end)
+      peer_id = "test.hist-dedupe-peer"
+      ia = durable_inter_agent_envelope(agent_id, peer_id, 1)
+      stamp = seed_ia(ia)
+      # A `replay_ia` retry of the same row lands on the same identity.
+      :ok = AgentStates.upsert_ia(agent_id, stamp, ia)
 
       _socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
       assert_push "history", %{"agents" => agents}
-      assert agents[agent_id] == [env]
+      assert agents[agent_id] == [ia]
     end
 
     test "clear watermark より古い ingress order の durable IA は sender pane から drop (issue #109 M6)" do
@@ -1771,7 +1884,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       peer_id = "test.hist-wm-peer"
       old = durable_inter_agent_envelope(agent_id, peer_id, 1)
       new = durable_inter_agent_envelope(agent_id, peer_id, 2)
-      :ok = InterAgentHistory.append(old)
+      _ = seed_ia(old)
       # sender の clear watermark を、old append 後 + new append 前 に置く。
       # ingress order tuple を server が発行しているので、時計 skew や wire
       # ts の言葉には依存しない (M6 must-fix)。
@@ -1780,10 +1893,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       display = DateTime.utc_now() |> DateTime.to_iso8601()
       :ok = ClearWatermarks.record(agent_id, order, display)
       Process.sleep(1)
-      :ok = InterAgentHistory.append(new)
+      _ = seed_ia(new)
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         ClearWatermarks.delete(agent_id)
       end)
 
@@ -1809,7 +1921,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.hist-wm-both"
       peer_id = "test.hist-wm-both-peer"
       env = durable_inter_agent_envelope(agent_id, peer_id, 1)
-      :ok = InterAgentHistory.append(env)
+      _ = seed_ia(env)
       # env より後 order で sender / peer 双方に watermark を置く。
       Process.sleep(1)
 
@@ -1830,7 +1942,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         ClearWatermarks.record(peer_id, peer_order, DateTime.utc_now() |> DateTime.to_iso8601())
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         ClearWatermarks.delete(agent_id)
         ClearWatermarks.delete(peer_id)
       end)
@@ -1847,8 +1958,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.hist-nowm"
       peer_id = "test.hist-nowm-peer"
       env = durable_inter_agent_envelope(agent_id, peer_id, 1)
-      :ok = InterAgentHistory.append(env)
-      on_exit(fn -> InterAgentHistory.delete_agent(agent_id) end)
+      _ = seed_ia(env)
 
       _socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
@@ -1877,8 +1987,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         durable_inter_agent_envelope(agent_id, peer_id, 2)
         |> Map.put("ts", "2026-08-01T00:00:00Z")
 
-      :ok = InterAgentHistory.append(old)
-      :ok = InterAgentHistory.append(new)
+      _ = seed_ia(old)
+      _ = seed_ia(new)
 
       # sender pane に legacy iso_only watermark を注入 (実運用では旧 DETS
       # record が load_watermarks/1 経由でこの shape を作る)。
@@ -1889,7 +1999,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         ClearWatermarks.delete(agent_id)
       end)
 
@@ -1911,7 +2020,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         durable_inter_agent_envelope(agent_id, peer_id, 1)
         |> Map.put("ts", "2026-08-01T00:00:00Z")
 
-      :ok = InterAgentHistory.append(env)
+      _ = seed_ia(env)
 
       # まず legacy iso_only を注入。env の ts より後の iso なので env は
       # 隠される (ts <= iso)。
@@ -1933,7 +2042,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = ClearWatermarks.record(agent_id, new_order, new_display)
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         ClearWatermarks.delete(agent_id)
       end)
 
@@ -1951,7 +2059,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.hist-peer-immune"
       peer_id = "test.hist-peer-immune-peer"
       env = durable_inter_agent_envelope(agent_id, peer_id, 1)
-      :ok = InterAgentHistory.append(env)
+      _ = seed_ia(env)
       # sender の watermark は envelope order の後に置く → sender pane
       # からは消える。peer pane は watermark 未記録なので env が残る。
       Process.sleep(1)
@@ -1960,7 +2068,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = ClearWatermarks.record(agent_id, order, display)
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         ClearWatermarks.delete(agent_id)
       end)
 
@@ -1982,7 +2089,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.hist-order-1"
       peer_id = "test.hist-order-1-peer"
       env = durable_inter_agent_envelope(agent_id, peer_id, 1)
-      :ok = InterAgentHistory.append(env)
+      _ = seed_ia(env)
 
       :ok =
         AgentStates.put(%{
@@ -1995,7 +2102,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         ClearWatermarks.delete(agent_id)
       end)
 
@@ -2036,7 +2142,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         ClearWatermarks.delete(agent_id)
       end)
 
@@ -2050,7 +2155,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       Process.sleep(1)
       later = durable_inter_agent_envelope(agent_id, peer_id, 42)
-      :ok = InterAgentHistory.append(later)
+      _ = seed_ia(later)
 
       _socket2 = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
@@ -2062,13 +2167,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.clear-ia-projection"
       peer_id = "test.clear-ia-projection-peer"
       old = durable_inter_agent_envelope(agent_id, peer_id, 1)
-      :ok = InterAgentHistory.append(old)
+      _ = seed_ia(old)
 
       {:ok, {_start_order, display, "sess-current"}} =
         KaoiroServer.SessionStarts.advance_transition(agent_id, "sess-current")
 
       current = durable_inter_agent_envelope(agent_id, peer_id, 2)
-      :ok = InterAgentHistory.append(current)
+      _ = seed_ia(current)
 
       :ok =
         AgentStates.put(%{
@@ -2081,7 +2186,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         ClearWatermarks.delete(agent_id)
         KaoiroServer.SessionStarts.delete(agent_id)
       end)
@@ -2110,7 +2214,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.clear-missing-start-preserve"
       peer_id = "test.clear-missing-start-peer"
       old = durable_inter_agent_envelope(agent_id, peer_id, 1)
-      :ok = InterAgentHistory.append(old)
+      _ = seed_ia(old)
 
       :ok =
         ClearWatermarks.record(
@@ -2132,7 +2236,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         ClearWatermarks.delete(agent_id)
         KaoiroServer.SessionStarts.delete(agent_id)
       end)
@@ -2160,7 +2263,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # ingress order = t0 (古い) だが wire ts は未来。
       env = durable_inter_agent_envelope(agent_id, peer_id, 1)
       env_future = Map.put(env, "ts", "2099-01-01T00:00:00Z")
-      :ok = InterAgentHistory.append(env_future)
+      _ = seed_ia(env_future)
       Process.sleep(1)
       # watermark を env の ingress order より後に置く
       # (display ISO は env の wire ts (2099-...) より過去)。
@@ -2169,7 +2272,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = ClearWatermarks.record(agent_id, order, display)
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         ClearWatermarks.delete(agent_id)
       end)
 
@@ -3110,6 +3212,33 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert payload["agent_id"] == agent_id
       assert payload["resume_session_id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
       refute_broadcast "spawn", %{}
+    end
+
+    # ADR-0051 D2 追補 (Q1, クロエ承認 2026-08-08): the counterpart of
+    # failure-matrix (c). An ordinary reconnect must NOT replay, but an
+    # operator pointing the wrapper at a different session must, or the
+    # pane keeps showing the session being left.
+    test "hydrated な agent の resume_session は hydration を invalidate する" do
+      host_id = "lab-pc-1"
+      agent_id = "lab-pc-1.live-swap-hydration"
+      put_agent(agent_id)
+      {:required, replay_id} = AgentStates.hydration_verdict(agent_id, self())
+      :ok = AgentStates.complete_hydration(agent_id, replay_id, self())
+      assert :not_required = AgentStates.hydration_verdict(agent_id, self())
+
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "resume_session", %{
+          "agent_id" => agent_id,
+          "session_id" => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "switch_session", %{}
+      # 次の wrapper join は replay を要求する。
+      assert {:required, _} = AgentStates.hydration_verdict(agent_id, self())
     end
 
     test "切断済み agent の resume_session は restore と同経路で spawn を中継" do

@@ -3,7 +3,6 @@ defmodule KaoiroServer.SessionResetsTest do
 
   import KaoiroServer.TestTeardown
 
-  alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
@@ -472,10 +471,13 @@ defmodule KaoiroServer.SessionResetsTest do
 
       :ok = KaoiroServer.AgentStates.append_log(pre_log)
 
-      :ok = InterAgentHistory.append(ia)
+      # ADR-0051 D3-1: IA lives in the per-pane volatile projection now,
+      # stamped with the same ingress-order tuple the watermark compares
+      # against.
+      ia_stamp = KaoiroServer.IngressOrder.allocate()
+      :ok = KaoiroServer.AgentStates.upsert_ia(agent_id, ia_stamp, ia)
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         KaoiroServer.ClearWatermarks.delete(agent_id)
         KaoiroServer.SessionStarts.delete(agent_id)
       end)
@@ -502,9 +504,9 @@ defmodule KaoiroServer.SessionResetsTest do
 
       assert KaoiroServer.ClearWatermarks.get_display(agent_id) == display_iso
 
-      # durable IA (DETS) は削除しない: 相手側 pane に IA が残る要件。
-      # hide は agents_channel.merged_histories が watermark で per-pane に行う。
-      assert InterAgentHistory.list_for(agent_id) == [ia]
+      # IA pane は削除しない: 相手側 pane に IA が残る要件。hide は
+      # agents_channel.merged_histories が watermark で per-pane に行う。
+      assert [{^ia_stamp, ^ia}] = KaoiroServer.AgentStates.ia_projection()[agent_id]
 
       # session_reset_completed broadcast の payload に clear_watermark が入る。
       assert_receive %Phoenix.Socket.Broadcast{
@@ -629,7 +631,6 @@ defmodule KaoiroServer.SessionResetsTest do
       agent_id = "a.res.trigger1-clear-#{System.unique_integer([:positive])}"
 
       on_exit(fn ->
-        InterAgentHistory.delete_agent(agent_id)
         KaoiroServer.ClearWatermarks.delete(agent_id)
         KaoiroServer.SessionStarts.delete(agent_id)
       end)

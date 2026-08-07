@@ -45,8 +45,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   only the in-memory ring buffer, never the wrapper's session logs.
   `delete_agent` (operator-only, issue #14; extended by ADR-0030 D6)
   purges an offline agent from every server-side store — `AgentStates`
-  (memory) + `AgentDirectory` / `SessionPointers` / `PermissionModes` /
-  `InterAgentHistory`
+  (memory) + `AgentDirectory` / `SessionPointers` / `PermissionModes`
   (persistent) — and broadcasts `agent_deleted` so every client drops it
   from the grid. Accepts both AgentStates-known disconnected agents and
   directory-only entries whose AgentStates counterpart is absent (server
@@ -91,7 +90,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.Auth
   alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.HostRegistry
-  alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
@@ -108,6 +106,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # this bounds the whole map. Sized above a max instruction (text alone
   # may reach @max_instruction_bytes) plus the decision/extra-key overhead.
   @max_relay_bytes 131_072
+
+  # Final per-pane display cap (ADR-0051 D6). Applies to the MERGED
+  # transcript + IA projection, so the two sources cannot add up past it.
+  @max_projection 200
 
   # All viewer-gated events go through handle_out. `agent_deleted` is the
   # only fan-out event that always reaches both roles, so it stays out of
@@ -224,10 +226,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # fanOut so they do not double-count the sender copy. Marker
       # values are additive — future projections bump the version tag,
       # never remove the field.
+      #
+      # `projection_epoch` (ADR-0051 D4) identifies THIS projection's
+      # lifetime. A tab that reconnects across a server restart sees a
+      # different value and discards the baseline it would otherwise
+      # merge into — the ghost-log fix. Absent on a legacy server, where
+      # the client keeps its old merge behaviour.
       push(socket, "history", %{
         "agents" => merged_histories(),
         "clear_watermarks" => ClearWatermarks.all_displays(),
-        "history_projection" => "per-pane-v1"
+        "history_projection" => "per-pane-v1",
+        "projection_epoch" => AgentStates.projection_epoch()
       })
 
       push(socket, "hosts", %{"hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())})
@@ -697,6 +706,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
              :restore,
              DateTime.utc_now() |> DateTime.to_iso8601()
            ) do
+      invalidate_projection_for_resume(agent_id, session_id)
+
       KaoiroServerWeb.Endpoint.broadcast(
         "runner:#{host_id_of(agent_id)}",
         "spawn",
@@ -746,6 +757,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
             :restore,
             DateTime.utc_now() |> DateTime.to_iso8601()
           )
+
+        invalidate_projection_for_resume(agent_id, session_id)
 
         KaoiroServerWeb.Endpoint.broadcast(
           "runner:#{host_id_of(agent_id)}",
@@ -917,7 +930,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
       AgentDirectory.delete(agent_id)
       SessionPointers.delete(agent_id)
       KaoiroServer.PermissionModes.delete(agent_id)
-      InterAgentHistory.delete_agent(agent_id)
+      # ADR-0051 D3-5: no IA ledger to purge any more. The deleted
+      # agent's own pane goes with its AgentStates entry; a peer's pane
+      # keeps its copies, which is that peer's display and its own
+      # sidecar's to restore. Host-local artifacts (engine transcript, IA
+      # sidecar) are never touched from here — same residency rule
+      # ADR-0030 states for the transcript.
       # phase-17 17-4: clear any dangling reset lock + dispatch cooldown
       # so a respawn under the same agent_id does not inherit stale state.
       SessionResets.delete(agent_id)
@@ -931,126 +949,69 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # Ordinary log/result/boundary history remains memory-only and is
-  # rebuilt from SDK JSONL. Structured IA cannot be rebuilt, so DETS is
-  # authoritative for that type. Drop volatile IA before merging to
-  # avoid live-run doubles.
+  # The operator-facing transcript projection (ADR-0051 D3-1 / D6).
   #
-  # Server-authoritative per-pane projection (ふじ #109 M6/M7 must-fix,
-  # 2026-07-23):
-  #   1. Load durable IA WITH its server-ingress order tuple, then
-  #      fan it out to both the sender's key AND the receiver's key —
-  #      the client no longer does its own fanOut on the history push
-  #      (it still fans a LIVE IA to both panes; that path stays in
-  #      onEnvelope for real-time delivery latency).
-  #   2. Per pane, drop IA whose order tuple is `<= watermark(pane)`.
-  #      Both sender-view and receiver-view filters run in the same
-  #      ordering domain the watermark was recorded in, so a wrapper's
-  #      producer clock skew cannot misclassify a cutoff crossing.
-  #   3. Merge with the volatile non-IA histories, sort chronologically
-  #      by wire `{ts, seq}` (display ordering, same key
-  #      `compareTranscriptEnvelopes` uses on the client).
+  # Both inputs are volatile per-agent projections rebuilt from the
+  # wrapper host's composite SSOT after a restart, so this function no
+  # longer reads any durable IA ledger:
+  #   1. `AgentStates.histories/0` — transcript lines (log / result /
+  #      boundary markers), already keyed by pane.
+  #   2. `AgentStates.ia_projection/0` — IA per pane WITH its server
+  #      ingress stamp. Sender and receiver copies were written under one
+  #      stamp at accept time (or restored under it by `replay_ia`), so
+  #      there is no client- or server-side fanOut left to do here.
   #
-  # Peer transcripts stay untouched — dropping an entry from receiver's
-  # pane by receiver's watermark does not touch what sender's pane
-  # shows (the same envelope is filtered per pane by that pane's own
-  # cutoff, so the "peer 側 表示にも影響なし" contract holds).
+  # Per pane, IA whose stamp is `<= watermark(pane)` is dropped. Both
+  # sender-view and receiver-view filters run in the same ordering domain
+  # the watermark was recorded in, so a wrapper's producer clock skew
+  # cannot misclassify a cutoff crossing (ふじ #109 M6, ADR-0051 D3-4).
+  # Peer transcripts stay untouched — hiding an entry in one pane by that
+  # pane's watermark says nothing about the other pane.
+  #
+  # The merged result is sorted chronologically by wire `{ts, seq}`
+  # (display ordering, same key `compareTranscriptEnvelopes` uses on the
+  # client) and THEN capped to the newest @max_projection envelopes.
+  # ADR-0051 D6: the cap belongs to the final projection, not to each
+  # source, so transcript 200 + IA 200 cannot show as 400.
   defp merged_histories do
-    volatile_without_ia =
-      AgentStates.histories()
-      |> Enum.flat_map(fn {agent_id, entries} ->
-        kept = Enum.reject(entries, &(Map.get(&1, "type") == "inter_agent_message"))
-        if kept == [], do: [], else: [{agent_id, kept}]
-      end)
-      |> Map.new()
-
     # ふじ R2 must-fix (2026-07-23): `all_filter_bounds` returns tagged
     # bounds — `{:order, tuple}` for post-M6 clears, `{:iso, iso}` for
     # legacy pre-M6 entries. The ISO branch preserves the pre-M6 wire-ts
     # filter until the next real clear promotes the entry.
     watermark_bounds = ClearWatermarks.all_filter_bounds()
-    durable_by_pane = pre_fanout_and_filter(watermark_bounds)
+    ia_by_pane = visible_ia_by_pane(watermark_bounds)
 
-    volatile_without_ia
-    |> Map.merge(durable_by_pane, fn _agent_id, volatile, durable ->
-      volatile ++ durable
-    end)
+    AgentStates.histories()
+    |> Map.merge(ia_by_pane, fn _agent_id, transcript, ia -> transcript ++ ia end)
     |> Map.new(fn {agent_id, entries} ->
       sorted =
         Enum.sort_by(entries, fn envelope ->
           {Map.get(envelope, "ts", ""), Map.get(envelope, "seq", 0)}
         end)
 
-      {agent_id, sorted}
+      {agent_id, cap_newest(sorted, @max_projection)}
     end)
   end
 
-  # Pre-fanOut IA envelopes to sender AND receiver panes, then drop
-  # entries whose server order tuple is `<= watermark(pane)`. Watermark
-  # absent (nil) = never cleared, keep the entry (regression pin for
-  # the pre-M6 default behaviour). Envelopes whose payload has no `"to"`
-  # (server-synthesized skeletons) are only visible in the sender's
-  # pane, matching the wrapper-side fanOut policy.
-  defp pre_fanout_and_filter(watermark_bounds) do
-    InterAgentHistory.all_with_order()
-    |> Enum.reduce(%{}, fn {sender_id, entries}, acc ->
-      Enum.reduce(entries, acc, fn {order, envelope}, acc2 ->
-        acc2
-        |> maybe_add_to_pane(sender_id, order, envelope, watermark_bounds)
-        |> maybe_fanout_to_receiver(order, envelope, watermark_bounds, sender_id)
-      end)
+  # Drops per pane the IA hidden by that pane's clear watermark. Watermark
+  # absent (nil) = never cleared, keep the entry.
+  defp visible_ia_by_pane(watermark_bounds) do
+    AgentStates.ia_projection()
+    |> Enum.flat_map(fn {pane_agent_id, entries} ->
+      bound = Map.get(watermark_bounds, pane_agent_id)
+
+      kept =
+        for {stamp, envelope} <- entries,
+            not ClearWatermarks.hidden?(bound, stamp, envelope),
+            do: envelope
+
+      if kept == [], do: [], else: [{pane_agent_id, kept}]
     end)
+    |> Map.new()
   end
 
-  # Adds `envelope` to `pane_agent_id`'s bucket unless the pane's
-  # watermark bound hides it.
-  defp maybe_add_to_pane(acc, pane_agent_id, order, envelope, watermark_bounds) do
-    if hidden_by?(watermark_bounds, pane_agent_id, order, envelope) do
-      acc
-    else
-      Map.update(acc, pane_agent_id, [envelope], fn existing -> existing ++ [envelope] end)
-    end
-  end
-
-  # If the envelope has a valid receiver id that is NOT the same as the
-  # sender, add it to the receiver's pane too (subject to that pane's
-  # watermark).
-  defp maybe_fanout_to_receiver(acc, order, envelope, watermark_bounds, sender_id) do
-    case get_in(envelope, ["payload", "to"]) do
-      to when is_binary(to) and to != "" and to != sender_id ->
-        maybe_add_to_pane(acc, to, order, envelope, watermark_bounds)
-
-      _ ->
-        acc
-    end
-  end
-
-  # Two-mode hide check (ふじ R2 must-fix, 2026-07-23):
-  #   - `{:order, tuple}` — post-M6 clear, compare server ingress order
-  #     tuples (BEAM term ordering handles integers pairwise).
-  #   - `{:iso, iso}` — legacy pre-M6 clear, compare the envelope's wire
-  #     `ts` string against `iso` (ISO-8601 lex compare = time compare
-  #     when both are UTC-normalized, matching the pre-M6 filter that
-  #     shipped for this cutoff). An envelope with no / non-string ts
-  #     falls through as "not hidden" (fail-open for display; the entry
-  #     is still filtered by the receiver's own watermark on the next
-  #     post-M6 clear).
-  # Absent watermark = never cleared → never hidden.
-  defp hidden_by?(watermark_bounds, agent_id, order, envelope) do
-    case Map.get(watermark_bounds, agent_id) do
-      {:order, {us, uniq} = watermark} when is_integer(us) and is_integer(uniq) ->
-        order <= watermark
-
-      {:iso, iso} when is_binary(iso) ->
-        case Map.get(envelope, "ts") do
-          ts when is_binary(ts) -> ts <= iso
-          _ -> false
-        end
-
-      _ ->
-        false
-    end
-  end
+  defp cap_newest(entries, max) when length(entries) <= max, do: entries
+  defp cap_newest(entries, max), do: Enum.slice(entries, -max..-1//1)
 
   defp delete_live_if_present(agent_id) do
     if AgentStates.known?(agent_id) do
@@ -1502,6 +1463,30 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # session_id, not the SessionPointer's latest. The pointer is still
   # consulted for cwd — a pointer that never recorded one blocks with
   # :no_session, matching restore's semantics.
+  # ADR-0051 D2 追補 — hydration invalidation.
+  #
+  # `hydrated` means "the server's projection matches what the wrapper
+  # would replay", and that stops being true exactly when an operator
+  # points the wrapper at a DIFFERENT session: the pane still shows the
+  # session being left. Forcing `unhydrated` here makes the next join
+  # return `replay_required: true`, so the resumed transcript rebuilds the
+  # pane the way the pre-ADR-0051 unconditional startup replay did.
+  #
+  # The three cases NOT invalidated, and why:
+  #  - `/new` / `/clear`: ADR-0036 F3 already defines their display
+  #    outcome (keep the log + boundary marker / marker only). A replay's
+  #    `history_reset` would wipe exactly that.
+  #  - fresh-restore (a restore with no resume target): a brand-new
+  #    session, same "keep the display" shape as `/new`.
+  #  - crash-restart (the runner relaunching a wrapper on its own, no
+  #    server-side transition): same session continuing, so the projection
+  #    is already correct — replaying would only cost a visible flicker.
+  defp invalidate_projection_for_resume(agent_id, session_id) when is_binary(session_id) do
+    AgentStates.invalidate_hydration(agent_id)
+  end
+
+  defp invalidate_projection_for_resume(_agent_id, _session_id), do: :ok
+
   defp resume_disconnected(agent_id, session_id, socket) do
     with {:ok, persona} <- agent_persona(agent_id),
          {:ok, _sid, cwd, engine} <- session_pointer(agent_id),
@@ -1517,6 +1502,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
              :restore,
              DateTime.utc_now() |> DateTime.to_iso8601()
            ) do
+      invalidate_projection_for_resume(agent_id, session_id)
+
       KaoiroServerWeb.Endpoint.broadcast(
         "runner:#{host_id_of(agent_id)}",
         "spawn",

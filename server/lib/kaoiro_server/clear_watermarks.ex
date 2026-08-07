@@ -6,8 +6,9 @@ defmodule KaoiroServer.ClearWatermarks do
   subsequent history-merge paths, IA envelopes whose server-side
   order is `<= boundary_order` are hidden from `agent_id`'s
   transcript pane. Peer agents' panes are unaffected — their own
-  boundary controls what they see — and the shared `InterAgentHistory`
-  DETS ledger itself is untouched.
+  boundary controls what they see — and the wrapper-host IA sidecar that
+  owns the messages themselves is untouched (ADR-0051 D3-4: hiding is a
+  per-pane display decision, never a deletion).
 
   Session transition identity belongs exclusively to `SessionStarts`.
   This store only loads existing 5/4/3/2-field DETS rows so previously
@@ -15,8 +16,8 @@ defmodule KaoiroServer.ClearWatermarks do
 
   **Ordering domain** (ふじ #109 M6 must-fix, 2026-07-23 + R5 must-fix
   same date): the order tuple is allocated by `KaoiroServer.IngressOrder`,
-  the single serialized allocator both this store and
-  `InterAgentHistory.append/2` share. The tuple shape is `{us, seq}`
+  the single serialized allocator both this store and the live IA
+  ingress stamp (`WrapperChannel`) share. The tuple shape is `{us, seq}`
   where `us` is a wall-clock-rollback-clamped microsecond reading and
   `seq` is a persistent counter that bumps within the same `us` —
   strict monotonic across the fleet's whole `us` range AND across VM
@@ -84,7 +85,7 @@ defmodule KaoiroServer.ClearWatermarks do
   end
 
   @doc """
-  Records `order` (an `InterAgentHistory`-domain tuple) as the agent's
+  Records `order` (an ingress-order-domain tuple) as the agent's
   boundary, alongside `display_ts` (ISO-8601 UTC) for the audit trail.
   The sid is nil for current records because only `SessionStarts` owns
   transition identity. Older sid-bearing records remain readable.
@@ -162,6 +163,41 @@ defmodule KaoiroServer.ClearWatermarks do
   def all_filter_bounds(server \\ __MODULE__) do
     GenServer.call(server, :all_filter_bounds)
   end
+
+  @doc """
+  Two-mode hide check against one `all_filter_bounds/1` entry
+  (ふじ R2 must-fix, 2026-07-23):
+
+    - `{:order, tuple}` — post-M6 clear, compare server ingress order
+      tuples (BEAM term ordering handles integers pairwise).
+    - `{:iso, iso}` — legacy pre-M6 clear, compare the envelope's wire
+      `ts` string against `iso` (ISO-8601 lex compare = time compare
+      when both are UTC-normalized, matching the pre-M6 filter that
+      shipped for this cutoff). An envelope with no / non-string ts
+      falls through as "not hidden" (fail-open for display; the entry
+      is still filtered by the pane's own watermark on the next
+      post-M6 clear).
+
+  Absent bound (`nil`) = never cleared → never hidden. Lives here rather
+  than in a channel because ADR-0051 D3-1 puts the live projection read
+  and the `replay_ia` ingress on the same contract — two copies of this
+  compare would be exactly the live/replay behaviour split the ADR
+  forbids.
+  """
+  def hidden?(bound, order, envelope)
+
+  def hidden?({:order, {us, uniq} = watermark}, order, _envelope)
+      when is_integer(us) and is_integer(uniq),
+      do: order <= watermark
+
+  def hidden?({:iso, iso}, _order, envelope) when is_binary(iso) do
+    case Map.get(envelope, "ts") do
+      ts when is_binary(ts) -> ts <= iso
+      _ -> false
+    end
+  end
+
+  def hidden?(_bound, _order, _envelope), do: false
 
   @doc "agent_id => display_iso for every known clear (audit helper)."
   def all_displays(server \\ __MODULE__) do

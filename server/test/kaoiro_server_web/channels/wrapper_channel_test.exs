@@ -4,7 +4,6 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.ConversationStates
-  alias KaoiroServer.InterAgentHistory
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.WrapperChannel
@@ -23,7 +22,14 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   defp join_wrapper(agent_id, persona_id \\ "default", params \\ %{}) do
-    {:ok, _reply, socket} =
+    {_reply, socket} = join_wrapper_with_reply(agent_id, persona_id, params)
+    socket
+  end
+
+  # ADR-0051 D2: the join reply carries the hydration verdict, so tests that
+  # exercise the handshake need it rather than just the socket.
+  defp join_wrapper_with_reply(agent_id, persona_id \\ "default", params \\ %{}) do
+    {:ok, reply, socket} =
       KaoiroServerWeb.WrapperSocket
       |> socket(nil, %{})
       |> subscribe_and_join(
@@ -32,7 +38,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         Map.put(params, "persona_id", persona_id)
       )
 
-    socket
+    {reply, socket}
   end
 
   defp seed_snapshot(agent_id, model) do
@@ -503,9 +509,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       ref = push(socket, "history_reset", %{"replay_id" => "replay-1"})
       assert_reply ref, :ok
 
+      # ADR-0051 D3-3: the field stays on the wire but is now always
+      # `false` — IA comes back via `replay_ia`, so an old dashboard that
+      # reads an absent field as `true` must be told explicitly.
       assert_broadcast "history_reset", %{
         "agent_id" => ^agent_id,
-        "preserve_inter_agent" => true,
+        "preserve_inter_agent" => false,
         "replay_id" => "replay-1"
       }
 
@@ -741,8 +750,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       # Directly seed the singleton to its documented cap. The entry values
       # are irrelevant to put/2's cap guard; this avoids 1000 channel joins.
-      full_state = Map.new(1..1000, fn n -> {"cap-#{n}", %{}} end)
-      :sys.replace_state(AgentStates, fn _ -> full_state end)
+      full_agents = Map.new(1..1000, fn n -> {"cap-#{n}", %{}} end)
+      :sys.replace_state(AgentStates, fn state -> %{state | agents: full_agents} end)
       socket = join_wrapper(agent_id)
 
       env = envelope(agent_id, "waiting_input") |> Map.put("session_id", "sess-new")
@@ -782,11 +791,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     test "M2 fix-round: 新 session の初 envelope が IA でも、その IA が境界以下にならない" do
       # pre-M2 は store(envelope) の後に maybe_advance を呼んでいたので、
-      # IA envelope が先に InterAgentHistory.append (order N) → boundary
-      # が後で allocate (order N+1) となり、その current-session IA が
-      # reload で filter 落ちする regression があった。 fix: advance を
-      # store より前に置く。
-      alias KaoiroServer.InterAgentHistory
+      # IA envelope が先に stamp を取り (order N) → boundary が後で
+      # allocate (order N+1) となり、その current-session IA が reload で
+      # filter 落ちする regression があった。 fix: advance を stamp 採番
+      # より前に置く。
       agent_id = "test.boundary-order-ia"
       peer_id = "test.boundary-order-ia-peer"
       SP.record(agent_id, "sess-old", "/proj")
@@ -809,7 +817,6 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       on_exit(fn ->
         SP.delete(agent_id)
         ClearWatermarks.delete(agent_id)
-        InterAgentHistory.delete_agent(agent_id)
         AgentStates.delete(peer_id)
       end)
 
@@ -849,10 +856,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
 
       ref = push(socket, "envelope", ia_env)
-      assert_reply ref, :ok
+      # ADR-0051 D3-1: the acceptance ack carries the ingress stamp.
+      assert_reply ref, :ok, %{"ingress_stamp" => [us, seq]}
+      ia_order = {us, seq}
 
       # 境界の order は IA の order より小さい必要がある (advance が先)。
-      [{ia_order, _ia_env}] = InterAgentHistory.all_with_order()[agent_id]
+      assert [{^ia_order, _ia_env}] = AgentStates.ia_projection()[agent_id]
       {boundary_order, _display, _sid} = SessionStarts.get(agent_id)
       assert boundary_order < ia_order
     end
@@ -1031,13 +1040,6 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   describe "inter_agent_message ルーティング (protocol-inter-agent, phase-8)" do
-    setup do
-      # This durable fixture uses a fixed sender id, so remove only its
-      # previous entries before and after each test run.
-      :ok = InterAgentHistory.delete_agent("test.iam-from")
-      on_exit(fn -> InterAgentHistory.delete_agent("test.iam-from") end)
-    end
-
     defp inter_envelope(agent_id, to, opts \\ []) do
       meta =
         opts[:meta] ||
@@ -1081,6 +1083,16 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       socket
     end
 
+    # ADR-0051 D3-1: an accepted IA is stamped at ingress, and the stamped
+    # envelope — not the raw one — is what gets projected, pushed to the
+    # peer and broadcast. The stamp comes back on the acceptance ack.
+    defp stamp_of(reply) do
+      %{"ingress_stamp" => [us, seq]} = reply
+      {us, seq}
+    end
+
+    defp with_stamp(env, {us, seq}), do: Map.put(env, "ingress_stamp", [us, seq])
+
     test "正常な inter_agent_message を wrapper:<to> へ broadcast し agents:lobby も流す" do
       from_id = "test.iam-from"
       to_id = "test.iam-to"
@@ -1092,22 +1104,27 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       env = inter_envelope(from_id, to_id)
       ref = push(from_socket, "envelope", env)
-      assert_reply ref, :ok
+      assert_reply ref, :ok, reply
+      stamp = stamp_of(reply)
+      stamped = with_stamp(env, stamp)
 
-      assert_broadcast "envelope", ^env
-      # ルーティング先(wrapper:<to>)にも同じ envelope が届く。
+      assert_broadcast "envelope", ^stamped
+      # ルーティング先(wrapper:<to>)にも stamp 付きで届く (受信側 wrapper が
+      # sidecar に verbatim 記録するため)。
       assert_received %Phoenix.Socket.Broadcast{
         topic: "wrapper:" <> ^to_id,
         event: "envelope",
-        payload: ^env
+        payload: ^stamped
       }
 
       # inter_agent_message は state_change ではないので AgentStates の latest
-      # 状態(state)を上書きしない。
+      # 状態(state)を上書きしない。transcript history にも入らず、per-pane
+      # IA projection の sender / receiver 両方に同一 stamp で載る。
       assert AgentStates.snapshot()[from_id]["state"] == "idle"
-      assert [stored] = AgentStates.histories()[from_id]
-      assert stored == env
-      assert InterAgentHistory.list_for(from_id) == [env]
+      refute Map.has_key?(AgentStates.histories(), from_id)
+      projection = AgentStates.ia_projection()
+      assert [{^stamp, ^stamped}] = projection[from_id]
+      assert [{^stamp, ^stamped}] = projection[to_id]
     end
 
     test "自己ルーティングは :self_routing で拒否する" do
@@ -1247,13 +1264,15 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         )
 
       ref = push(from_socket, "envelope", env)
-      assert_reply ref, :ok
+      assert_reply ref, :ok, reply
+      stamped = with_stamp(env, stamp_of(reply))
 
-      # server は error の意味を解釈せず、構造検証のみで素通しする。
+      # server は error の意味を解釈せず、構造検証のみで素通しする
+      # (ingress stamp の付与だけが server 側の追記)。
       assert_receive %Phoenix.Socket.Broadcast{
                        topic: "wrapper:" <> ^to_id,
                        event: "envelope",
-                       payload: ^env
+                       payload: ^stamped
                      },
                      500
     end
@@ -2088,6 +2107,310 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
 
       assert AgentStates.snapshot()[agent_id]["state"] == "disconnected"
+    end
+  end
+
+  # ADR-0051 D2 / D3-3. Covers the plan's failure-matrix rows that live on
+  # the wire: (a) mid-replay disconnect, (b) replay_id consistency + CAS,
+  # (c) no wasted replay on reconnect, (d) fresh-session empty replay,
+  # (e) a cleared IA must not come back through `replay_ia`, (g) server-
+  # synthesized notices, and (k) a corrupt sidecar row must not abort the
+  # rest of the replay.
+  describe "hydration handshake と replay_ia (ADR-0051 D2/D3-3)" do
+    alias KaoiroServer.ClearWatermarks
+
+    setup do
+      # ChannelCase links the channel process to the test process, so a
+      # `close/1` exit has to be trapped rather than killing the test.
+      Process.flag(:trap_exit, true)
+      :ok
+    end
+
+    defp replay_ia_envelope(from_id, to_id, turn) do
+      %{
+        "version" => "0",
+        "agent_id" => from_id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-08-08T00:00:00Z",
+        "seq" => turn,
+        "type" => "inter_agent_message",
+        "state" => "idle",
+        "payload" => %{
+          "to" => to_id,
+          "conversation_id" => "cid-replay-#{from_id}",
+          "turn_number" => turn,
+          "kind" => "inform",
+          "body" => "restored",
+          "meta" => %{"done" => false, "propose_next" => ""},
+          "owner" => %{"kind" => "user", "id" => "operator"}
+        },
+        "ext" => %{}
+      }
+    end
+
+    defp seed_entry(socket, agent_id) do
+      ref = push(socket, "envelope", envelope(agent_id, "idle"))
+      assert_reply ref, :ok
+    end
+
+    test "(b) 初回 join は replay_required: true と server 採番 replay_id を返す" do
+      agent_id = "test.hydr-first"
+      on_exit(fn -> AgentStates.delete(agent_id) end)
+
+      {reply, _socket} = join_wrapper_with_reply(agent_id)
+
+      assert %{"hydration" => %{"replay_required" => true, "replay_id" => replay_id}} = reply
+      assert is_binary(replay_id) and replay_id != ""
+    end
+
+    test "(c) complete 済みの agent への再接続は replay_required: false" do
+      agent_id = "test.hydr-reconnect"
+      on_exit(fn -> AgentStates.delete(agent_id) end)
+
+      {reply, socket} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_id" => replay_id}} = reply
+      seed_entry(socket, agent_id)
+      assert_reply push(socket, "history_replay_complete", %{"replay_id" => replay_id}), :ok
+      :ok = close(socket)
+
+      {reply2, _socket2} = join_wrapper_with_reply(agent_id)
+      assert %{"hydration" => %{"replay_required" => false}} = reply2
+      refute Map.has_key?(reply2["hydration"], "replay_id")
+    end
+
+    test "(a) replay 途中で切断すると次の join で別 id の replay を再要求する" do
+      agent_id = "test.hydr-partial"
+      on_exit(fn -> AgentStates.delete(agent_id) end)
+
+      {reply, socket} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_id" => first_id}} = reply
+      seed_entry(socket, agent_id)
+      # reset だけ届いて complete 前に落ちる = partial replay。
+      assert_reply push(socket, "history_reset", %{"replay_id" => first_id}), :ok
+      :ok = close(socket)
+
+      {reply2, _socket2} = join_wrapper_with_reply(agent_id)
+      assert %{"hydration" => %{"replay_required" => true, "replay_id" => second_id}} = reply2
+      assert second_id != first_id
+    end
+
+    test "(b) 別 attempt の replay_id での complete は hydrated にしない (CAS)" do
+      agent_id = "test.hydr-cas"
+      on_exit(fn -> AgentStates.delete(agent_id) end)
+
+      {_reply, socket} = join_wrapper_with_reply(agent_id)
+      seed_entry(socket, agent_id)
+
+      # 対応しない complete は ack されるが CAS で無視される。
+      assert_reply push(socket, "history_replay_complete", %{"replay_id" => "hydr-bogus"}), :ok
+      :ok = close(socket)
+
+      {reply2, _socket2} = join_wrapper_with_reply(agent_id)
+      assert %{"hydration" => %{"replay_required" => true}} = reply2
+    end
+
+    test "(d) fresh session の空 replay (reset → 即 complete) で hydrated になる" do
+      agent_id = "test.hydr-fresh"
+      on_exit(fn -> AgentStates.delete(agent_id) end)
+
+      {reply, socket} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_id" => replay_id}} = reply
+      seed_entry(socket, agent_id)
+
+      assert_reply push(socket, "history_reset", %{"replay_id" => replay_id}), :ok
+      assert_reply push(socket, "history_replay_complete", %{"replay_id" => replay_id}), :ok
+      :ok = close(socket)
+
+      {reply2, _socket2} = join_wrapper_with_reply(agent_id)
+      assert %{"hydration" => %{"replay_required" => false}} = reply2
+    end
+
+    test "replay_ia は自 pane へ upsert するだけで peer へ再配送しない" do
+      agent_id = "test.hydr-replay-pane"
+      peer_id = "test.hydr-replay-peer"
+
+      on_exit(fn ->
+        AgentStates.delete(agent_id)
+        AgentStates.delete(peer_id)
+      end)
+
+      {reply, socket} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_id" => replay_id}} = reply
+      seed_entry(socket, agent_id)
+
+      @endpoint.subscribe("wrapper:" <> peer_id)
+
+      # 受信側 pane の復元: envelope の agent_id は peer (自分ではない)。
+      ia = replay_ia_envelope(peer_id, agent_id, 1)
+
+      ref =
+        push(socket, "replay_ia", %{
+          "replay_id" => replay_id,
+          "items" => [%{"envelope" => ia, "ingress_stamp" => [1000, 0]}]
+        })
+
+      assert_reply ref, :ok
+      assert [{{1000, 0}, ^ia}] = AgentStates.ia_projection()[agent_id]
+      # 会話の再実行が起きていないこと: peer へ push されない。
+      refute_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^peer_id}, 100
+    end
+
+    test "(k) stamp 欠落 / 壊れた行は skip され、残りの replay は継続する" do
+      agent_id = "test.hydr-replay-corrupt"
+      peer_id = "test.hydr-replay-corrupt-peer"
+
+      on_exit(fn ->
+        AgentStates.delete(agent_id)
+        AgentStates.delete(peer_id)
+      end)
+
+      {reply, socket} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_id" => replay_id}} = reply
+      seed_entry(socket, agent_id)
+
+      good = replay_ia_envelope(peer_id, agent_id, 2)
+
+      items = [
+        # stamp 欠落 (legacy 行) — fail-closed で破棄。
+        %{"envelope" => replay_ia_envelope(peer_id, agent_id, 1)},
+        # stamp が壊れている。
+        %{"envelope" => replay_ia_envelope(peer_id, agent_id, 3), "ingress_stamp" => "1000-0"},
+        # envelope が inter_agent_message ではない。
+        %{"envelope" => envelope(peer_id, "idle"), "ingress_stamp" => [1001, 0]},
+        # payload が構造不正。
+        %{
+          "envelope" =>
+            put_in(replay_ia_envelope(peer_id, agent_id, 4), ["payload", "kind"], "nope"),
+          "ingress_stamp" => [1002, 0]
+        },
+        # 行そのものが object ですらない。
+        "garbage",
+        %{"envelope" => good, "ingress_stamp" => [1003, 0]}
+      ]
+
+      assert_reply push(socket, "replay_ia", %{"replay_id" => replay_id, "items" => items}), :ok
+      assert [{{1003, 0}, ^good}] = AgentStates.ia_projection()[agent_id]
+    end
+
+    test "(e) clear watermark 以前の stamp は replay で復活しない" do
+      agent_id = "test.hydr-replay-cleared"
+      peer_id = "test.hydr-replay-cleared-peer"
+
+      on_exit(fn ->
+        AgentStates.delete(agent_id)
+        AgentStates.delete(peer_id)
+        ClearWatermarks.delete(agent_id)
+      end)
+
+      :ok = ClearWatermarks.record(agent_id, {5000, 0}, "2026-08-08T00:00:00Z")
+
+      {reply, socket} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_id" => replay_id}} = reply
+      seed_entry(socket, agent_id)
+
+      hidden = replay_ia_envelope(peer_id, agent_id, 1)
+      visible = replay_ia_envelope(peer_id, agent_id, 2)
+
+      ref =
+        push(socket, "replay_ia", %{
+          "replay_id" => replay_id,
+          "items" => [
+            %{"envelope" => hidden, "ingress_stamp" => [4999, 0]},
+            # 境界と同値も hidden (`<=` cutoff)。
+            %{"envelope" => hidden, "ingress_stamp" => [5000, 0]},
+            %{"envelope" => visible, "ingress_stamp" => [5001, 0]}
+          ]
+        })
+
+      assert_reply ref, :ok
+      assert [{{5001, 0}, ^visible}] = AgentStates.ia_projection()[agent_id]
+    end
+
+    test "進行中でない replay_id の replay_ia は stale_replay で拒否" do
+      agent_id = "test.hydr-replay-stale"
+      peer_id = "test.hydr-replay-stale-peer"
+
+      on_exit(fn ->
+        AgentStates.delete(agent_id)
+        AgentStates.delete(peer_id)
+      end)
+
+      {reply, socket} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_id" => replay_id}} = reply
+      seed_entry(socket, agent_id)
+      assert_reply push(socket, "history_replay_complete", %{"replay_id" => replay_id}), :ok
+
+      ref =
+        push(socket, "replay_ia", %{
+          "replay_id" => replay_id,
+          "items" => [
+            %{
+              "envelope" => replay_ia_envelope(peer_id, agent_id, 1),
+              "ingress_stamp" => [9000, 0]
+            }
+          ]
+        })
+
+      assert_reply ref, :error, %{reason: "stale_replay"}
+      refute Map.has_key?(AgentStates.ia_projection(), agent_id)
+    end
+
+    test "(g) server 合成 IA は recipient pane のみ、同一 conversation で複数回共存する" do
+      speaker = "test.hydr-synth-speaker"
+      recipient = "test.hydr-synth-recipient"
+      cid = "cnv-synth-#{System.unique_integer([:positive])}"
+
+      on_exit(fn ->
+        AgentStates.delete(speaker)
+        AgentStates.delete(recipient)
+      end)
+
+      recipient_socket = join_wrapper(recipient)
+      seed_entry(recipient_socket, recipient)
+
+      # 同一 conversation で 2 回 disconnect notice を発生させる。合成通知は
+      # 常に turn_number=0 なので、identity が conversation_id|turn_number
+      # だった頃はここで衝突して 1 件に潰れていた (ADR-0051 D3-1)。
+      for turn <- 1..2 do
+        speaker_socket = join_wrapper(speaker)
+        seed_entry(speaker_socket, speaker)
+
+        ia = %{
+          "version" => "0",
+          "agent_id" => speaker,
+          "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+          "ts" => "2026-08-08T00:00:0#{turn}Z",
+          "seq" => turn,
+          "type" => "inter_agent_message",
+          "state" => "idle",
+          "payload" => %{
+            "to" => recipient,
+            "conversation_id" => cid,
+            "turn_number" => turn,
+            "kind" => "inform",
+            "body" => "hi #{turn}",
+            "meta" => %{"done" => false, "propose_next" => ""},
+            "owner" => %{"kind" => "user", "id" => "operator"}
+          },
+          "ext" => %{}
+        }
+
+        assert_reply push(speaker_socket, "envelope", ia), :ok, _
+        :ok = close(speaker_socket)
+        AgentStates.delete(speaker)
+      end
+
+      entries = AgentStates.ia_projection()[recipient]
+
+      notices =
+        for {stamp, env} <- entries,
+            env["agent_id"] == "server",
+            do: {stamp, get_in(env, ["payload", "error", "code"])}
+
+      assert [{first, "disconnected"}, {second, "disconnected"}] = notices
+      assert first < second
+      # 送信側 pane は存在しない: server 合成は recipient pane のみ。
+      refute Map.has_key?(AgentStates.ia_projection(), "server")
     end
   end
 end

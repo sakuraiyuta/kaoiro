@@ -196,48 +196,60 @@ defmodule KaoiroServer.AgentStatesTest do
       assert List.last(history)["payload"]["text"] == "m205"
     end
 
-    test "cap到達後も古いinter_agent_messageを保持する (#105)", %{store: store} do
+    # ADR-0051 D6 reverses the #105 cap exemption: IA no longer rides the
+    # transcript list at all, so the list caps like any other and the
+    # "IA survives past the cap" behaviour is gone by construction.
+    test "IA は history に入らず、history は cap で切られる (ADR-0051 D6)", %{store: store} do
       :ok = AgentStates.put(envelope("a"), server: store)
-      :ok = AgentStates.append_log(inter_agent_env("a", "b", "ia-old"), server: store)
+      :ok = AgentStates.upsert_ia("a", {1, 0}, inter_agent_env("a", "b", "ia-old"), server: store)
       for i <- 1..205, do: :ok = AgentStates.append_log(log_env("a", i), server: store)
 
       history = AgentStates.histories(store)["a"]
-      assert length(history) == 201
-      assert List.first(history)["payload"]["body"] == "ia-old"
-      assert Enum.at(history, 1)["payload"]["text"] == "m6"
+      assert length(history) == 200
+      assert List.first(history)["payload"]["text"] == "m6"
       assert List.last(history)["payload"]["text"] == "m205"
+      refute Enum.any?(history, &(&1["type"] == "inter_agent_message"))
 
-      # Internal storage remains newest-first, including the cap-exempt tail.
-      raw = :sys.get_state(store)["a"].history
+      # The IA is intact — it lives in the per-pane projection, which the
+      # channel merges with the transcript and caps once, at the end.
+      assert [{{1, 0}, %{"payload" => %{"body" => "ia-old"}}}] =
+               AgentStates.ia_projection(store)["a"]
+
+      # Internal transcript storage remains newest-first.
+      raw = :sys.get_state(store).agents["a"].history
       assert hd(raw)["payload"]["text"] == "m205"
-      assert List.last(raw)["payload"]["body"] == "ia-old"
+      assert List.last(raw)["payload"]["text"] == "m6"
     end
 
-    test "logとIAが混在しても全IAとnewest-first順序を保つ (#105)", %{store: store} do
+    test "per-pane IA は ingress stamp 順に返り、同一 stamp は冪等 upsert", %{store: store} do
       :ok = AgentStates.put(envelope("a"), server: store)
-      :ok = AgentStates.append_log(inter_agent_env("a", "b", "ia-1"), server: store)
-      for i <- 1..100, do: :ok = AgentStates.append_log(log_env("a", i), server: store)
-      :ok = AgentStates.append_log(inter_agent_env("a", "b", "ia-2"), server: store)
-      for i <- 101..205, do: :ok = AgentStates.append_log(log_env("a", i), server: store)
+      :ok = AgentStates.upsert_ia("a", {2, 0}, inter_agent_env("a", "b", "ia-2"), server: store)
+      :ok = AgentStates.upsert_ia("a", {1, 0}, inter_agent_env("a", "b", "ia-1"), server: store)
+      # A replay retry of the same message lands on the same key.
+      :ok = AgentStates.upsert_ia("a", {1, 0}, inter_agent_env("a", "b", "ia-1"), server: store)
 
-      history = AgentStates.histories(store)["a"]
-      assert length(history) == 201
+      assert [{{1, 0}, first}, {{2, 0}, second}] = AgentStates.ia_projection(store)["a"]
+      assert first["payload"]["body"] == "ia-1"
+      assert second["payload"]["body"] == "ia-2"
+    end
 
-      labels =
-        Enum.map(history, fn env ->
-          env["payload"]["body"] || env["payload"]["text"]
-        end)
+    test "per-pane IA は 200 件で newest 側を残して cap される", %{store: store} do
+      :ok = AgentStates.put(envelope("a"), server: store)
 
-      assert labels ==
-               ["ia-1"] ++
-                 Enum.map(7..100, &"m#{&1}") ++
-                 ["ia-2"] ++ Enum.map(101..205, &"m#{&1}")
+      for i <- 1..205 do
+        :ok =
+          AgentStates.upsert_ia("a", {i, 0}, inter_agent_env("a", "b", "ia-#{i}"), server: store)
+      end
 
-      raw_labels =
-        :sys.get_state(store)["a"].history
-        |> Enum.map(fn env -> env["payload"]["body"] || env["payload"]["text"] end)
+      entries = AgentStates.ia_projection(store)["a"]
+      assert length(entries) == 200
+      assert {{6, 0}, _} = List.first(entries)
+      assert {{205, 0}, _} = List.last(entries)
+    end
 
-      assert raw_labels == Enum.reverse(labels)
+    test "未知 pane への upsert_ia は noop", %{store: store} do
+      assert :noop =
+               AgentStates.upsert_ia("ghost", {1, 0}, inter_agent_env("a", "b"), server: store)
     end
 
     test "put は履歴を保持し最新状態のみ更新", %{store: store} do
@@ -377,13 +389,19 @@ defmodule KaoiroServer.AgentStatesTest do
       assert AgentStates.snapshot(store)["a"]["state"] == "thinking"
     end
 
-    test "JSONLで再構築不能な inter_agent_message は保持する (#105)", %{store: store} do
+    # ADR-0051 D3-3 reverses the #105 retention: the wrapper's sidecar
+    # re-projects IA through `replay_ia` inside the same replay window, so
+    # anything kept here would be a duplicate of what is about to arrive.
+    test "IA pane も含めて表示投影を全消去する (ADR-0051 D3-3)", %{store: store} do
       :ok = AgentStates.put(envelope("a"), server: store)
       :ok = AgentStates.append_log(log_env("a", 1), server: store)
-      :ok = AgentStates.append_log(inter_agent_env("a", "b"), server: store)
+      :ok = AgentStates.upsert_ia("a", {1, 0}, inter_agent_env("a", "b"), server: store)
 
       assert :ok = AgentStates.reset_history("a", server: store)
-      assert [%{"type" => "inter_agent_message"}] = AgentStates.histories(store)["a"]
+      refute Map.has_key?(AgentStates.histories(store), "a")
+      refute Map.has_key?(AgentStates.ia_projection(store), "a")
+      # Latest state survives — only the display projection is dropped.
+      assert AgentStates.snapshot(store)["a"]["state"] == "idle"
     end
 
     test "未知 agent_id は noop", %{store: store} do
@@ -521,6 +539,114 @@ defmodule KaoiroServer.AgentStatesTest do
       marker = boundary_marker("new", "rs_x", "s")
       assert :noop = AgentStates.append_boundary("ghost", marker, server: store)
       assert :noop = AgentStates.clear_history_with_boundary("ghost", marker, server: store)
+    end
+  end
+
+  # ADR-0051 D2 / D4. The failure-matrix cases the plan marks [test] and
+  # that live at this layer: (b) the replay_id/owner CAS, (c) no wasted
+  # replay on an ordinary reconnect, plus the resume invalidation that is
+  # (c)'s counterpart.
+  describe "hydration state と projection epoch (ADR-0051 D2/D4)" do
+    setup do
+      store =
+        start_supervised!(
+          {AgentStates, name: :"agent_states_hydration_#{:erlang.unique_integer([:positive])}"}
+        )
+
+      {:ok, store: store}
+    end
+
+    test "boot 直後は unhydrated: 最初の join で replay を要求する", %{store: store} do
+      assert {:required, replay_id} = AgentStates.hydration_verdict("a", self(), server: store)
+      assert is_binary(replay_id) and replay_id != ""
+    end
+
+    test "(c) complete 後の再接続では replay を要求しない", %{store: store} do
+      {:required, replay_id} = AgentStates.hydration_verdict("a", self(), server: store)
+      assert :ok = AgentStates.complete_hydration("a", replay_id, self(), server: store)
+
+      # Ordinary reconnect: a new channel pid, same live server.
+      reconnect = spawn(fn -> :ok end)
+      assert :not_required = AgentStates.hydration_verdict("a", reconnect, server: store)
+    end
+
+    test "(b) CAS: replay_id 不一致 / owner 不一致の complete は stale", %{store: store} do
+      {:required, replay_id} = AgentStates.hydration_verdict("a", self(), server: store)
+      other = spawn(fn -> :ok end)
+
+      assert :stale = AgentStates.complete_hydration("a", "hydr-bogus", self(), server: store)
+      assert :stale = AgentStates.complete_hydration("a", replay_id, other, server: store)
+      assert :ok = AgentStates.complete_hydration("a", replay_id, self(), server: store)
+    end
+
+    test "(b) 古い attempt の complete は新しい attempt を hydrated にしない", %{store: store} do
+      old_owner = spawn(fn -> :ok end)
+      {:required, old_id} = AgentStates.hydration_verdict("a", old_owner, server: store)
+      # The old connection dropped mid-replay; the next join re-requests.
+      assert :ok = AgentStates.release_hydration("a", old_owner, server: store)
+      {:required, new_id} = AgentStates.hydration_verdict("a", self(), server: store)
+      assert new_id != old_id
+
+      assert :stale = AgentStates.complete_hydration("a", old_id, old_owner, server: store)
+      # The live attempt is still in flight, so `replay_ia` still accepts it.
+      assert AgentStates.hydration_in_flight?("a", new_id, self(), server: store)
+      refute AgentStates.hydration_in_flight?("a", old_id, old_owner, server: store)
+    end
+
+    test "(a) in_flight のまま切断すると unhydrated に戻り再要求される", %{store: store} do
+      {:required, first} = AgentStates.hydration_verdict("a", self(), server: store)
+      assert :ok = AgentStates.release_hydration("a", self(), server: store)
+
+      assert {:required, second} = AgentStates.hydration_verdict("a", self(), server: store)
+      assert second != first
+    end
+
+    test "stale terminate は新 connection の attempt を巻き戻さない", %{store: store} do
+      stale_owner = spawn(fn -> :ok end)
+      {:required, _} = AgentStates.hydration_verdict("a", stale_owner, server: store)
+      {:required, live_id} = AgentStates.hydration_verdict("a", self(), server: store)
+
+      assert :ok = AgentStates.release_hydration("a", stale_owner, server: store)
+      assert AgentStates.hydration_in_flight?("a", live_id, self(), server: store)
+    end
+
+    test "hydrated な agent の切断は hydrated のまま (同一 session の継続)", %{store: store} do
+      {:required, replay_id} = AgentStates.hydration_verdict("a", self(), server: store)
+      :ok = AgentStates.complete_hydration("a", replay_id, self(), server: store)
+
+      assert :ok = AgentStates.release_hydration("a", self(), server: store)
+      assert :not_required = AgentStates.hydration_verdict("a", self(), server: store)
+    end
+
+    test "invalidate_hydration で hydrated が unhydrated へ戻る (resume 分岐)", %{store: store} do
+      {:required, replay_id} = AgentStates.hydration_verdict("a", self(), server: store)
+      :ok = AgentStates.complete_hydration("a", replay_id, self(), server: store)
+      assert :not_required = AgentStates.hydration_verdict("a", self(), server: store)
+
+      assert :ok = AgentStates.invalidate_hydration("a", server: store)
+      assert {:required, _} = AgentStates.hydration_verdict("a", self(), server: store)
+    end
+
+    test "delete で hydration record も落ちる", %{store: store} do
+      :ok = AgentStates.put(envelope("a", %{"state" => "disconnected"}), server: store)
+      {:required, replay_id} = AgentStates.hydration_verdict("a", self(), server: store)
+      :ok = AgentStates.complete_hydration("a", replay_id, self(), server: store)
+
+      assert :ok = AgentStates.delete("a", server: store)
+      assert {:required, _} = AgentStates.hydration_verdict("a", self(), server: store)
+    end
+
+    test "epoch は boot ごとに変わり、同一 boot では安定する", %{store: store} do
+      epoch = AgentStates.projection_epoch(store)
+      assert is_binary(epoch) and epoch != ""
+      assert AgentStates.projection_epoch(store) == epoch
+
+      other =
+        start_supervised!(
+          Supervisor.child_spec({AgentStates, name: :agent_states_epoch_second}, id: :second)
+        )
+
+      assert AgentStates.projection_epoch(other) != epoch
     end
   end
 end

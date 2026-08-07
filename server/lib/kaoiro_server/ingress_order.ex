@@ -1,11 +1,11 @@
 defmodule KaoiroServer.IngressOrder do
   @moduledoc """
   Serialized, restart-durable allocator for the single server-side
-  ordering domain that stamps every `inter_agent_message` at
-  `InterAgentHistory.append/2`, every `SessionStarts` transition record,
-  and a `clear_history` watermark adoption. Both must share one allocator so a wall-clock rollback
-  or a VM restart cannot let an IA slip past a session boundary (or
-  vice versa) — the exact concern ふじ R5 must-fix (2026-07-23)
+  ordering domain that stamps every accepted `inter_agent_message` at
+  `WrapperChannel` ingress, every `SessionStarts` transition record,
+  and a `clear_history` watermark adoption. All must share one allocator
+  so a wall-clock rollback or a VM restart cannot let an IA slip past a
+  session boundary (or vice versa) — the exact concern ふじ R5 must-fix (2026-07-23)
   flagged with the pre-R5 `{System.system_time(:microsecond),
   System.unique_integer([:positive, :monotonic])}` inline pair, whose
   `unique_integer` half resets to an undefined offset on every BEAM
@@ -21,12 +21,15 @@ defmodule KaoiroServer.IngressOrder do
       per BEAM node without requiring a distributed lower bound.
 
   State `{last_us, last_seq}` is persisted to DETS + `:dets.sync/1`
-  before the reply, so `history_cleared` (or the wrapper's IA `:ok` reply) can never fire ahead
-  of disk persistence. On boot, `init/1` reads the persisted pair AND scans
-  `InterAgentHistory.all_with_order/1` + `ClearWatermarks.all_orders/1` +
+  before the reply, so `history_cleared` (or the wrapper's IA acceptance
+  ack) can never fire ahead of disk persistence. On boot, `init/1` reads
+  the persisted pair AND scans `ClearWatermarks.all_orders/1` +
   `SessionStarts.all_orders/1`
   for the pairwise-max tuple seen — so an allocator-DETS wipe cannot
-  regress below live-consumer state. Pairwise-max means `{same_us,
+  regress below live-consumer state. Since ADR-0051 the IA stamps
+  themselves live in wrapper-host sidecars rather than a server ledger,
+  so they are no longer a seed source; the two durable stores above still
+  bound the allocator from below. Pairwise-max means `{same_us,
   large_uniq_from_pre_R5_records}` seeds `last_seq = large_uniq + 1`,
   never `0` — a pin test enforces this.
 
@@ -127,8 +130,8 @@ defmodule KaoiroServer.IngressOrder do
 
   # Each seed source is a 0-arg fn returning a map `%{key => tuple}` or
   # an enumerable of tuples. We fold them all through pairwise_max/2.
-  # Production supervisor wires `InterAgentHistory.all_with_order/0` and
-  # `ClearWatermarks.all_orders/0`; tests can pass literal fns.
+  # Production supervisor wires `ClearWatermarks.all_orders/0` and
+  # `SessionStarts.all_orders/0`; tests can pass literal fns.
   defp max_from_seed_sources(sources) do
     Enum.reduce(sources, nil, fn source, acc ->
       pairwise_max(acc, source_max(source))
@@ -142,7 +145,8 @@ defmodule KaoiroServer.IngressOrder do
   defp source_max(_), do: nil
 
   # Handles both %{id => tuple} maps (ClearWatermarks.all_orders) and
-  # %{id => [{tuple, envelope}, ...]} maps (InterAgentHistory.all_with_order).
+  # %{id => [{tuple, envelope}, ...]} list-shaped maps (kept so a future
+  # seed source with per-entry stamps needs no change here).
   defp collect_tuples(nil), do: []
 
   defp collect_tuples(%{} = map) do

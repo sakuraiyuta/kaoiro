@@ -21,8 +21,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
+  alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.ConversationStates
-  alias KaoiroServer.InterAgentHistory
+  alias KaoiroServer.IngressOrder
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
@@ -52,6 +53,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # this a single wrapper's disconnect could fan out thousands of broadcasts.
   @max_unreachable_notices 50
 
+  # Bound on one `replay_ia` push (ADR-0051 D3-3). The final projection is
+  # capped at 200 anyway (D6), so a larger batch could only ever be
+  # discarded — refusing to walk it keeps a malformed / hostile sidecar
+  # from costing an unbounded scan.
+  @max_replay_ia_items 200
+
   @impl true
   def join("wrapper:" <> agent_id, params, socket) do
     transition_id =
@@ -68,7 +75,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
       # logs / socket inspection.
       send(self(), :after_join)
 
-      {:ok,
+      # ADR-0051 D2: the join REPLY is the hydration handshake. There is no
+      # dedicated S→W event because a reconnect is always a fresh join, so
+      # the verdict always has a join to ride. Allocating the attempt here
+      # (rather than in :after_join) keeps it inside the same message the
+      # wrapper is already waiting on, so the wrapper never has to guess
+      # whether a verdict is still coming.
+      {:ok, %{"hydration" => hydration_verdict(agent_id)},
        socket
        |> assign(:agent_id, agent_id)
        |> assign(:persona_id, persona_id)
@@ -185,6 +198,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {:stop, :shutdown, socket}
   end
 
+  # ADR-0051 D2 verdict, shaped for the wire
+  # (`{replay_required, replay_id?}`). `replay_id` is server-allocated so
+  # the reset / `replay_ia` / complete triple and the server's own
+  # in-flight record can never disagree about which attempt they belong
+  # to — the ambiguity a wrapper-allocated id left open.
+  defp hydration_verdict(agent_id) do
+    case AgentStates.hydration_verdict(agent_id, self()) do
+      {:required, replay_id} -> %{"replay_required" => true, "replay_id" => replay_id}
+      :not_required -> %{"replay_required" => false}
+    end
+  end
+
   # persona_id rides join params (channel-level) rather than the socket
   # connect params (which only carry the auth token). Blank / missing is
   # an explicit reject — the wrapper MUST declare which persona it is
@@ -230,14 +255,15 @@ defmodule KaoiroServerWeb.WrapperChannel do
     agent_id = socket.assigns.agent_id
 
     with :ok <- validate(envelope, agent_id),
-         :ok <- route_inter_agent(envelope, agent_id) do
+         {:ok, inter_agent} <- preflight_inter_agent(envelope, agent_id) do
       # ふじ 検収 2 fix-round M2 (2026-07-23): advance boundary BEFORE
-      # `store/1`. Pre-M2 this ran after store, so if the first envelope
-      # of a new session was an inter_agent_message its IA order was
-      # allocated first and the boundary allocated a strictly larger
-      # order — the very current-session IA was then filtered out on
-      # reload. Running maybe_advance first flips the ordering so any
-      # IA appended by this envelope gets a post-boundary order.
+      # any ingress stamp is allocated. Pre-M2 this ran after store, so
+      # if the first envelope of a new session was an inter_agent_message
+      # its IA order was allocated first and the boundary allocated a
+      # strictly larger order — the very current-session IA was then
+      # filtered out on reload. Running maybe_advance first flips the
+      # ordering so any IA stamped by this envelope gets a post-boundary
+      # order.
       #
       # Also handles Codex lazy 采番 adopt: an envelope whose
       # session_id matches an already-boundary'd sid (Trigger 1 stored
@@ -250,44 +276,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
       # look newer than the envelope the server actually accepted.
       received_at = DateTime.utc_now() |> DateTime.to_iso8601()
 
-      case store(envelope) do
-        :ok ->
-          # G1: record only after validate / route / store have all accepted
-          # the envelope. In particular an orphan reply must not consume an
-          # AgentActivity entry merely because it reached the channel.
-          AgentActivity.record_envelope(envelope, self(), received_at)
-          record_session_pointer(envelope)
-          # phase-17 17-7: fill the pending boundary marker's
-          # to_session_id when a fresh Codex session finally reports its
-          # thread ID (SessionResets.confirm_connection could not confirm
-          # it earlier because Codex's采番 is lazy). No-op unless a
-          # stash exists.
-          maybe_patch_boundary_to_session_id(envelope, agent_id)
-          # Refresh the memory-only last_seen hint used by the client's
-          # live/offline merge (ADR-0030). Cheap fire-and-forget; no
-          # disk I/O.
-          AgentDirectory.touch(agent_id)
-          # The full envelope (incl. operator-only log/result tool I/O)
-          # goes onto agents:lobby unfiltered; role gating is per-
-          # subscriber in AgentsChannel.handle_out. Invariant: ONLY
-          # AgentsChannel may subscribe to this topic — any new
-          # subscriber MUST apply the same role gate (#27,
-          # specs/threat-model.md).
-          KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
-          {:reply, :ok, socket}
+      case inter_agent do
+        {:accept, to, escalate} ->
+          accept_inter_agent(envelope, agent_id, to, escalate, received_at, socket)
 
-        :noop ->
-          # A reply before any state (append_log :noop) has no snapshot
-          # entry to anchor it; drop the live broadcast too so "latest
-          # state is authoritative" holds (history was already not
-          # retained). Ack the wrapper — it did nothing wrong.
-          {:reply, :ok, socket}
-
-        {:error, reason} ->
-          # Boundary advance intentionally precedes retention so a first IA
-          # gets a post-boundary order. A cap failure still leaves the
-          # transition durable; only volatile AgentStates retention failed.
-          {:reply, {:error, %{reason: to_string(reason)}}, socket}
+        :not_inter_agent ->
+          store_and_broadcast(envelope, agent_id, received_at, socket)
       end
     else
       {:error, reason} when is_atom(reason) ->
@@ -338,9 +332,16 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     case AgentStates.reset_history(agent_id) do
       :ok ->
+        # ADR-0051 D3-3: IA is re-projected from the wrapper's sidecar via
+        # `replay_ia` inside this same replay window, so preserving the
+        # old copies would double every restored bubble. The field is kept
+        # on the wire and sent explicitly as `false` because an OLD
+        # dashboard reads an ABSENT `preserve_inter_agent` as `true` —
+        # dropping it would leave stale IA on those tabs. Physically
+        # removing the field is a later step, after old tabs are gone.
         reset_payload = %{
           "agent_id" => agent_id,
-          "preserve_inter_agent" => true
+          "preserve_inter_agent" => false
         }
 
         reset_payload =
@@ -365,15 +366,62 @@ defmodule KaoiroServerWeb.WrapperChannel do
   @impl true
   def handle_in("history_replay_complete", %{"replay_id" => replay_id}, socket)
       when is_binary(replay_id) and replay_id != "" do
+    agent_id = socket.assigns.agent_id
+
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_complete", %{
-      "agent_id" => socket.assigns.agent_id,
+      "agent_id" => agent_id,
       "replay_id" => replay_id
     })
+
+    # ADR-0051 D2: CAS. Only the attempt still recorded for THIS
+    # connection may declare the projection hydrated — a completion from
+    # a superseded connection (its replay was abandoned mid-way when the
+    # channel dropped) would otherwise mark a newer attempt done and
+    # strand the timeline half-rebuilt. The dashboard pairing above is
+    # independent of the CAS and always broadcasts.
+    _ = AgentStates.complete_hydration(agent_id, replay_id, self())
 
     {:reply, :ok, socket}
   end
 
   def handle_in("history_replay_complete", _payload, socket), do: {:reply, :ok, socket}
+
+  # Display-replay-only IA ingress (ADR-0051 D3-3). Deliberately NOT the
+  # ordinary `envelope` route: that one runs `route_inter_agent`, which
+  # would re-push to the peer wrapper and re-inject into its SDK — turning
+  # a history restore into a re-run of the conversation. Here the ONLY
+  # effect is a per-pane projection upsert; routing, ConversationStates,
+  # peer pushes and SDK injection are all untouched.
+  #
+  # The pane is bound to the channel topic, so a wrapper can only ever
+  # restore its own pane — the payload cannot name another agent's.
+  @impl true
+  def handle_in("replay_ia", %{"replay_id" => replay_id, "items" => items}, socket)
+      when is_binary(replay_id) and replay_id != "" and is_list(items) do
+    agent_id = socket.assigns.agent_id
+
+    if AgentStates.hydration_in_flight?(agent_id, replay_id, self()) do
+      # One lookup per push rather than per item: the bound cannot change
+      # mid-batch in a way that matters (a clear landing during the replay
+      # is caught by the read-time filter in AgentsChannel).
+      bound = Map.get(ClearWatermarks.all_filter_bounds(), agent_id)
+
+      items
+      |> Enum.take(@max_replay_ia_items)
+      |> Enum.each(&replay_ia_item(agent_id, &1, bound))
+
+      {:reply, :ok, socket}
+    else
+      # Not the attempt this server is waiting on: a wrapper resending an
+      # abandoned replay must not repopulate a pane the new attempt is
+      # rebuilding.
+      {:reply, {:error, %{reason: "stale_replay"}}, socket}
+    end
+  end
+
+  def handle_in("replay_ia", _payload, socket) do
+    {:reply, {:error, %{reason: "invalid value: replay_ia"}}, socket}
+  end
 
   # ADR-0043 D1/D3: a wrapper may request a reset only for its own agent,
   # after its MCP tool has been broker-approved and after the wrapper has
@@ -423,20 +471,100 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
+  # Non-IA envelopes: retain, then fan out. Unchanged from pre-ADR-0051
+  # except that `inter_agent_message` no longer reaches it (see
+  # `accept_inter_agent/6`).
+  defp store_and_broadcast(envelope, agent_id, received_at, socket) do
+    case store(envelope) do
+      :ok ->
+        # G1: record only after validate / preflight / store have all
+        # accepted the envelope. In particular an orphan reply must not
+        # consume an AgentActivity entry merely because it reached the
+        # channel.
+        record_accepted_envelope(envelope, agent_id, received_at)
+        # The full envelope (incl. operator-only log/result tool I/O)
+        # goes onto agents:lobby unfiltered; role gating is per-
+        # subscriber in AgentsChannel.handle_out. Invariant: ONLY
+        # AgentsChannel may subscribe to this topic — any new
+        # subscriber MUST apply the same role gate (#27,
+        # specs/threat-model.md).
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+        {:reply, :ok, socket}
+
+      :noop ->
+        # A reply before any state (append_log :noop) has no snapshot
+        # entry to anchor it; drop the live broadcast too so "latest
+        # state is authoritative" holds (history was already not
+        # retained). Ack the wrapper — it did nothing wrong.
+        {:reply, :ok, socket}
+
+      {:error, reason} ->
+        # Boundary advance intentionally precedes retention so a first IA
+        # gets a post-boundary order. A cap failure still leaves the
+        # transition durable; only volatile AgentStates retention failed.
+        {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
+  # Live inter-agent accept (ADR-0051 D3-1). The causal order below is the
+  # contract, not an implementation detail — protocol-inter-agent pins it:
+  #
+  #   1. validate + preflight (already done by the caller): EVERY check
+  #      that can still decide a reject, including the conversation quota,
+  #      runs before anything is projected. A rejected IA must never be
+  #      left sitting in a pane.
+  #   2. allocate the ingress stamp — the durable, globally unique
+  #      ordering-domain value the wrapper stores verbatim and replays
+  #      back, and the value `ClearWatermarks` is compared against.
+  #   3. upsert BOTH panes under that one stamp, so the sender copy and
+  #      the receiver copy are two views of one message rather than two
+  #      messages.
+  #   4. push to the peer wrapper (the only routing left after the
+  #      upsert) and broadcast to operators.
+  #   5. reply the stamp as the acceptance ack — this, not the MCP tool
+  #      result, is what triggers the sender's sidecar append (D3-2).
+  defp accept_inter_agent(envelope, from, to, escalate, received_at, socket) do
+    stamp = IngressOrder.allocate()
+    wire_stamp = encode_stamp(stamp)
+    stamped = Map.put(envelope, "ingress_stamp", wire_stamp)
+
+    retained = AgentStates.upsert_ia(from, stamp, stamped)
+    _ = AgentStates.upsert_ia(to, stamp, stamped)
+
+    push_to_wrapper(to, stamped)
+    if escalate != nil, do: broadcast_escalate(escalate)
+
+    # Same "no snapshot entry to anchor it" rule store_and_broadcast
+    # applies: a sender with no latest state yet gets routed but not
+    # displayed. The ack still carries the stamp — the message WAS
+    # accepted, and the sender's sidecar is what restores its own pane
+    # once an entry exists.
+    if retained == :ok do
+      record_accepted_envelope(envelope, from, received_at)
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", stamped)
+    end
+
+    {:reply, {:ok, %{"ingress_stamp" => wire_stamp}}, socket}
+  end
+
+  defp record_accepted_envelope(envelope, agent_id, received_at) do
+    AgentActivity.record_envelope(envelope, self(), received_at)
+    record_session_pointer(envelope)
+    # phase-17 17-7: fill the pending boundary marker's to_session_id
+    # when a fresh Codex session finally reports its thread ID
+    # (SessionResets.confirm_connection could not confirm it earlier
+    # because Codex's采番 is lazy). No-op unless a stash exists.
+    maybe_patch_boundary_to_session_id(envelope, agent_id)
+    # Refresh the memory-only last_seen hint used by the client's
+    # live/offline merge (ADR-0030). Cheap fire-and-forget; no disk I/O.
+    AgentDirectory.touch(agent_id)
+    :ok
+  end
+
   # log / result are reply transcript lines kept as history (ADR-0012);
   # state_change / permission_request refresh the latest state.
   defp store(%{"type" => type} = envelope) when type in ["log", "result"] do
     AgentStates.append_log(envelope)
-  end
-
-  # inter_agent_message is transcript-only like log/result: retain it for
-  # dashboard reconnect/resume without clobbering the sender's authoritative
-  # latest state. The client fans the retained sender copy out to both peers.
-  defp store(%{"type" => "inter_agent_message"} = envelope) do
-    case AgentStates.append_log(envelope) do
-      :ok -> InterAgentHistory.append(envelope)
-      :noop -> :noop
-    end
   end
 
   # refresh_models_result is a transient completion signal for a paired
@@ -798,6 +926,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
     ts = DateTime.utc_now() |> DateTime.to_iso8601()
     agent_id = socket.assigns.agent_id
 
+    # ADR-0051 D2: a replay abandoned mid-way (the wrapper dropped between
+    # `history_reset` and the completion boundary) rolls back to
+    # unhydrated so the next join re-requests it. Same owner guard as
+    # `disconnect/3` — a stale terminate arriving after a reconnect must
+    # not roll back the NEW connection's attempt.
+    AgentStates.release_hydration(agent_id, self())
+
     case AgentStates.disconnect(agent_id, self(), ts) do
       {:ok, envelope} ->
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
@@ -912,13 +1047,26 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  # Routes an inter_agent_message envelope to the destination wrapper after
-  # checking per-conversation quotas (protocol-inter-agent spec). Other types
-  # pass through. On quota overshoot, synthesizes an escalate-to-user envelope
-  # for both participants and returns :ok so the original still broadcasts to
-  # the dashboard for full observability.
-  defp route_inter_agent(
-         %{"type" => "inter_agent_message", "payload" => payload} = envelope,
+  # Decides whether an inter_agent_message may be accepted, WITHOUT
+  # projecting or routing anything (ADR-0051 D3-1 step 1). Every reject
+  # this server can produce for an IA is decided here, so the caller can
+  # rely on "past this point the message is accepted" before it touches a
+  # pane. Other types pass through as `:not_inter_agent`.
+  #
+  # `ConversationStates.record_message/5` checks the quota AND advances
+  # the counters in one GenServer call. protocol-inter-agent lists the
+  # counter update after the projection, but splitting the call to match
+  # that order would open a TOCTOU between check and update — the quota
+  # is one of the reject-deciding checks, so the atomic call belongs
+  # here. The hard requirement (no reject-able check after the upsert)
+  # holds either way.
+  #
+  # On quota overshoot the message still routes and is still displayed
+  # (full observability); the escalate notice is returned for the caller
+  # to emit after the projection, since it is a consequence of accepting,
+  # not a reject.
+  defp preflight_inter_agent(
+         %{"type" => "inter_agent_message", "payload" => payload},
          from
        ) do
     to = payload["to"]
@@ -935,18 +1083,15 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       true ->
         case ConversationStates.record_message(cid, from, to, body, done?) do
-          # Within limits — relay to the destination wrapper. `:both_done`
-          # means every participating agent has now signalled done; the
-          # tracker has already dropped the entry atomically (spec MUST:
-          # 両 owner-side done で対話完了). No extra close needed.
+          # Within limits. `:both_done` means every participating agent has
+          # now signalled done; the tracker has already dropped the entry
+          # atomically (spec MUST: 両 owner-side done で対話完了). No extra
+          # close needed.
           ok when ok in [:ok, :both_done] ->
-            push_to_wrapper(to, envelope)
-            :ok
+            {:ok, {:accept, to, nil}}
 
           {:exceeded, reason} ->
-            push_to_wrapper(to, envelope)
-            broadcast_escalate(cid, from, to, reason)
-            :ok
+            {:ok, {:accept, to, {cid, from, to, reason}}}
 
           # Cross-conversation pollution attempt or global cap reached:
           # reject the envelope at the routing boundary so a third party
@@ -959,7 +1104,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  defp route_inter_agent(_envelope, _from), do: :ok
+  defp preflight_inter_agent(_envelope, _from), do: {:ok, :not_inter_agent}
 
   defp push_to_wrapper(to, envelope) do
     KaoiroServerWeb.Endpoint.broadcast("wrapper:#{to}", "envelope", envelope)
@@ -969,15 +1114,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # so both wrappers and every operator dashboard see the auto-termination.
   # The envelope is recipient-addressed: each side gets its own envelope with
   # payload.to == that recipient so (a) any future receiver-side payload.to
-  # self-check works, and (b) the dashboard's transcript router (which keys
-  # on agent_id ∪ payload.to) populates both transcripts.
-  defp broadcast_escalate(cid, from, to, reason) do
+  # self-check works, and (b) each recipient's wrapper records it in its own
+  # sidecar and restores it into its own pane.
+  defp broadcast_escalate({cid, from, to, reason}) do
     ts = DateTime.utc_now() |> DateTime.to_iso8601()
 
     for recipient <- [from, to] do
-      envelope = synth_escalate_envelope(cid, recipient, reason, ts)
-      KaoiroServerWeb.Endpoint.broadcast("wrapper:#{recipient}", "envelope", envelope)
-      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+      deliver_synth_inter_agent(recipient, synth_escalate_envelope(cid, recipient, reason, ts))
     end
   end
 
@@ -1018,9 +1161,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       ConversationStates.claim_unreachable_targets(agent_id, @max_unreachable_notices)
 
     for {cid, peers} <- targets, peer <- peers do
-      envelope = synth_unreachable_envelope(cid, peer, message, ts)
-      KaoiroServerWeb.Endpoint.broadcast("wrapper:#{peer}", "envelope", envelope)
-      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+      deliver_synth_inter_agent(peer, synth_unreachable_envelope(cid, peer, message, ts))
     end
 
     if unclaimed > 0 do
@@ -1053,6 +1194,31 @@ defmodule KaoiroServerWeb.WrapperChannel do
     )
   end
 
+  # Server-synthesized IA (agent_id="server") reaches exactly one pane —
+  # the recipient's (ADR-0051 D3-1). There is no sender pane to mirror it
+  # into: "server" holds no transcript, and the peer named in the notice
+  # is precisely the side that could not receive it. The stamp is
+  # allocated the same way a live accept allocates one, so the notice
+  # sorts and clear-filters identically and the recipient's wrapper can
+  # record it verbatim in its sidecar.
+  defp deliver_synth_inter_agent(recipient, envelope) do
+    stamp = IngressOrder.allocate()
+    stamped = Map.put(envelope, "ingress_stamp", encode_stamp(stamp))
+    _ = AgentStates.upsert_ia(recipient, stamp, stamped)
+    KaoiroServerWeb.Endpoint.broadcast("wrapper:#{recipient}", "envelope", stamped)
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", stamped)
+    :ok
+  end
+
+  # Ingress stamps are Elixir 2-tuples but must survive JSON, so the wire
+  # form is a 2-element integer array (ADR-0051 D3-4 / protocol.md). Same
+  # shape everywhere: delivered envelope, acceptance ack, sidecar row,
+  # `replay_ia` item.
+  defp encode_stamp({us, seq}), do: [us, seq]
+
+  defp decode_stamp([us, seq]) when is_integer(us) and is_integer(seq), do: {:ok, {us, seq}}
+  defp decode_stamp(_), do: :error
+
   defp synth_inter_agent_envelope(payload, ts) do
     %{
       "version" => "0",
@@ -1067,6 +1233,47 @@ defmodule KaoiroServerWeb.WrapperChannel do
       "payload" => payload,
       "ext" => %{}
     }
+  end
+
+  # One restored row. Everything about it is untrusted host-local data, so
+  # each step fails CLOSED (drop the row, keep replaying the rest):
+  #  - a missing / malformed stamp cannot be re-derived, and falling back
+  #    to the wrapper's wire `ts` would re-introduce the clock-skew bug
+  #    the ingress-order domain exists to kill (D3-4);
+  #  - a row already hidden by this pane's clear watermark must not come
+  #    back;
+  #  - a structurally invalid envelope must not enter the projection the
+  #    live path validates on the way in.
+  # Deliberately NO `agent_id == topic` check: a receiver pane legitimately
+  # holds envelopes authored by the peer or by "server".
+  defp replay_ia_item(pane_agent_id, %{"envelope" => envelope, "ingress_stamp" => raw}, bound)
+       when is_map(envelope) do
+    with {:ok, stamp} <- decode_stamp(raw),
+         :ok <- validate_replayed_envelope(envelope),
+         false <- ClearWatermarks.hidden?(bound, stamp, envelope) do
+      _ = AgentStates.upsert_ia(pane_agent_id, stamp, envelope)
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  defp replay_ia_item(_pane_agent_id, _item, _bound), do: :ok
+
+  defp validate_replayed_envelope(envelope) do
+    cond do
+      missing = Enum.find(@frame_keys, &(not Map.has_key?(envelope, &1))) ->
+        {:error, "missing key: #{missing}"}
+
+      envelope["type"] != "inter_agent_message" ->
+        {:error, "invalid value: type"}
+
+      :erlang.external_size(envelope) > @max_envelope_bytes ->
+        {:error, "envelope too large"}
+
+      true ->
+        validate_inter_agent_payload(envelope["payload"])
+    end
   end
 
   # Structural check on the inter-agent payload. The body text is left

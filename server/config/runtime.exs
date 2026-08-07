@@ -151,15 +151,9 @@ if path = System.get_env("KAOIRO_PERMISSION_MODES_PATH") do
   config :kaoiro_server, :permission_modes_path, path
 end
 
-# DETS source of truth for structured inter-agent envelopes (#105). SDK
-# JSONL can reconstruct ordinary logs but not these messages, so production
-# must point this at the same restart-surviving volume as the other ledgers.
-if path = System.get_env("KAOIRO_INTER_AGENT_HISTORY_PATH") do
-  config :kaoiro_server, :inter_agent_history_path, path
-end
-
-# #109 visibility data must survive a full container recreation together
-# with durable IA history. Both stores are fsync-gated before clear ack.
+# #109 visibility data must survive a full container recreation: the
+# cutoff it records is compared against ingress stamps the wrapper hosts
+# replay back after a restart (ADR-0051 D3-4). fsync-gated before clear ack.
 if path = System.get_env("KAOIRO_CLEAR_WATERMARKS_PATH") do
   config :kaoiro_server, :clear_watermarks_path, path
 end
