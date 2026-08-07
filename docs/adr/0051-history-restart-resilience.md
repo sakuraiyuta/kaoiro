@@ -135,7 +135,12 @@ DETS fan-out」構成の置き換え)。
   sender pane + receiver pane へ同一 stamp で upsert → routing
   (peer push)の順に処理する(stamp 採番と投影反映は
   `route_inter_agent` の peer push より**前**。この因果順を spec で
-  固定する)。
+  固定する)。ここでの validate には participant / quota 等の routing
+  preflight を含め、**reject が確定し得る検査は全て projection
+  upsert より前**に置く。upsert 後に行う routing は peer push のみ
+  とし、reject 済み IA が pane に残らないことを protocol 文面
+  (30-2)と server test で pin する(ふじ 2 巡目 approve 時の
+  非 blocking 注意)。
 - server 合成 envelope(`agent_id: "server"` のエラー直送通知)は
   recipient pane のみへ upsert する。
 - clear filter(D3-4)と最終 pane cap(D6)もこの経路上で適用され、
