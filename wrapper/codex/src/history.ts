@@ -225,27 +225,3 @@ export function readCodexHistory(
     return [];
   }
 }
-
-export interface HistoryTransport {
-  setSessionId(sessionId: string): void;
-  sendHistoryReset(): string;
-  sendHistoryReplayComplete(replayId: string): void;
-  send(envelope: Envelope): void;
-}
-
-/** Fixed resume ordering, extracted so reset-before-replay is testable. */
-export function replayCodexHistory(
-  link: HistoryTransport,
-  config: WrapperConfig,
-  sessionId: string,
-  seed?: Envelope,
-  root?: string,
-): Envelope[] {
-  link.setSessionId(sessionId);
-  if (seed !== undefined) link.send(seed);
-  const history = readCodexHistory(sessionId, config, root);
-  const replayId = link.sendHistoryReset();
-  for (const envelope of history) link.send(envelope);
-  link.sendHistoryReplayComplete(replayId);
-  return history;
-}

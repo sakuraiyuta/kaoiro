@@ -4,12 +4,14 @@
 
 export { parseCliArgs } from "./args.js";
 export { ConfigError, PERMISSION_MODES, loadConfig, parseConfig } from "./persona.js";
-export { ServerLink } from "./transport.js";
+export { ServerLink, hydrationVerdictFrom } from "./transport.js";
 export type {
   AttachOpenMessage,
   DirectoryContext,
   DirectoryEntry,
+  HydrationVerdictMessage,
   PermissionDecisionMessage,
   QuestionResponseMessage,
+  ReplayIaItem,
   ServerLinkOptions,
 } from "./transport.js";

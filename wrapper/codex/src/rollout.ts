@@ -1,6 +1,6 @@
 import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 const TAIL_BYTES = 512 * 1024;
@@ -23,6 +23,19 @@ export function rolloutPathIn(root: string, sessionId: string): string | null {
   const suffix = `-${sessionId}.jsonl`;
   const rel = names.find((name) => basename(name).endsWith(suffix));
   return rel === undefined ? null : join(root, rel);
+}
+
+/** Absolute path to a session's IA sidecar — beside its rollout file, per
+ *  ADR-0051 D3-2. Null until the rollout itself exists: codex nests
+ *  rollouts by date, so the directory is not derivable from the session id
+ *  alone and the sidecar has to wait in the pending journal until it is. */
+export function codexSidecarPath(
+  sessionId: string,
+  root = codexRolloutsRoot(),
+): string | null {
+  const rollout = rolloutPathIn(root, sessionId);
+  if (rollout === null) return null;
+  return join(dirname(rollout), `${sessionId}.ia.jsonl`);
 }
 
 /** Reads only the end of a rollout and passes each complete JSONL entry

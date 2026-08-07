@@ -105,6 +105,22 @@ export interface AttachOpenMessage {
   chunks: number;
 }
 
+/** Hydration verdict from the wrapper channel's JOIN REPLY (ADR-0051 D2).
+ *  Structurally identical to `@kaoiro/agent-common`'s `HydrationVerdict`;
+ *  redeclared here because agent-common already depends on this package and
+ *  a back-import would close the cycle. */
+export interface HydrationVerdictMessage {
+  replay_required: boolean;
+  replay_id?: string;
+}
+
+/** One restored inter-agent row on the `replay_ia` wire (ADR-0051 D3-3).
+ *  Structural twin of agent-common's `SidecarRecord`, same reason. */
+export interface ReplayIaItem {
+  ingress_stamp: [number, number];
+  envelope: Envelope;
+}
+
 export interface ServerLinkOptions {
   /** persona.id declared to the server at join time (ADR-0029 F3).
    *  The server rejects the join when this id is not in its pack manifest
@@ -167,6 +183,25 @@ export interface ServerLinkOptions {
    *  ones (e.g. escalate-to-user on quota overshoot) to the receiving
    *  wrapper's topic — both flow through here. */
   onInterAgentMessage?: (envelope: Envelope) => void;
+  /** Acceptance ack for an OUTBOUND inter_agent_message (ADR-0051 D3-2).
+   *  Fires when the server replies to the `envelope` push with the ingress
+   *  stamp it allocated — the point at which the message is known to be
+   *  accepted, projected and routed. This, not the MCP tool result, is the
+   *  sender-side sidecar trigger: the tool result is a locally built string
+   *  and, under `wait_for_response=true`, does not return until the peer
+   *  replies, which can be a whole session generation later.
+   *
+   *  `envelope` is what actually went on the wire (seq / session_id
+   *  stamped), so recording it verbatim keeps the restored sender copy
+   *  identical to the live one. A reject, a timeout or a lost ack simply
+   *  never fires this — that message is not restorable, which D7 (e)
+   *  accepts. */
+  onInterAgentAck?: (envelope: Envelope, stamp: [number, number]) => void;
+  /** Hydration verdict from the join reply (ADR-0051 D2). Called on EVERY
+   *  (re)join, with `null` when the reply carried no `hydration` key — a
+   *  legacy server, where the wrapper keeps its old startup-replay
+   *  behaviour. */
+  onHydration?: (verdict: HydrationVerdictMessage | null) => void;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -399,6 +434,41 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   return entry;
 }
 
+/** Narrows the join reply's `hydration` object. Anything unexpected —
+ *  absent, a non-object, `replay_required: true` without a usable id —
+ *  collapses to `null` (treated as a legacy server), because guessing at a
+ *  malformed verdict is worse than falling back to the old behaviour. */
+export function hydrationVerdictFrom(
+  reply: unknown,
+): HydrationVerdictMessage | null {
+  if (!isObject(reply)) return null;
+  const hydration = (reply as { hydration?: unknown }).hydration;
+  if (!isObject(hydration)) return null;
+  const required = (hydration as { replay_required?: unknown }).replay_required;
+  if (typeof required !== "boolean") return null;
+  if (!required) return { replay_required: false };
+  const replayId = (hydration as { replay_id?: unknown }).replay_id;
+  if (typeof replayId !== "string" || replayId === "") return null;
+  return { replay_required: true, replay_id: replayId };
+}
+
+/** Narrows the acceptance ack's `ingress_stamp` (protocol.md: a 2-element
+ *  integer array). A malformed stamp is unusable — the server drops
+ *  stampless rows fail-closed on replay — so it is dropped here. */
+function ingressStampFrom(reply: unknown): [number, number] | null {
+  if (!isObject(reply)) return null;
+  const stamp = (reply as { ingress_stamp?: unknown }).ingress_stamp;
+  if (
+    !Array.isArray(stamp) ||
+    stamp.length !== 2 ||
+    !Number.isSafeInteger(stamp[0]) ||
+    !Number.isSafeInteger(stamp[1])
+  ) {
+    return null;
+  }
+  return [stamp[0] as number, stamp[1] as number];
+}
+
 export class ServerLink {
   readonly #socket: Socket;
   readonly #channel: Channel;
@@ -407,6 +477,9 @@ export class ServerLink {
   /** Latest SDK session id reported by the host (ADR-0014 phase-0); stamped
    *  onto every outgoing envelope until a newer one replaces it. */
   #sessionId: string | null = null;
+  /** Kept because `send/1` needs it per push, unlike the inbound handlers
+   *  which are bound once in the constructor. */
+  readonly #onInterAgentAck: ServerLinkOptions["onInterAgentAck"];
 
   /**
    * @param serverUrl Socket endpoint, e.g. "ws://localhost:4000/wrapper"
@@ -418,6 +491,7 @@ export class ServerLink {
     agentId: string,
     options: ServerLinkOptions,
   ) {
+    this.#onInterAgentAck = options.onInterAgentAck;
     this.#socket = new Socket(serverUrl, {
       transport: WebSocket,
       params: options.token === undefined ? {} : { token: options.token },
@@ -595,8 +669,15 @@ export class ServerLink {
 
     // Surface join failures; the client retries the join on its own, but a
     // silent rejection would otherwise leave sends buffering unnoticed.
+    // The "ok" hook also carries the ADR-0051 hydration verdict, and the
+    // phoenix client keeps receive hooks across a rejoin's `resend()`, so
+    // it fires again on every reconnect — which is exactly when the server
+    // needs to re-decide whether its projection survived.
     this.#channel
       .join()
+      .receive("ok", (reply: unknown) => {
+        options.onHydration?.(hydrationVerdictFrom(reply));
+      })
       .receive("error", (reason: unknown) => {
         process.stderr.write(
           `ServerLink join error: ${JSON.stringify(reason)}\n`,
@@ -614,6 +695,13 @@ export class ServerLink {
     this.#sessionId = sessionId;
   }
 
+  /** The SDK session id currently stamped onto outgoing envelopes, or null
+   *  before the engine has reported one (ADR-0051 D2: a fresh session with
+   *  no id replays empty). */
+  currentSessionId(): string | null {
+    return this.#sessionId;
+  }
+
   /** Pushes one envelope with the next seq; buffered while disconnected. */
   send(envelope: Envelope): void {
     // Only state_change / permission_request define the latest state worth
@@ -626,26 +714,59 @@ export class ServerLink {
       this.#lastEnvelope = envelope;
     }
     this.#seq += 1;
-    this.#channel.push("envelope", {
+    const wire = {
       ...envelope,
       ...(this.#sessionId !== null ? { session_id: this.#sessionId } : {}),
       seq: this.#seq,
-    });
+    };
+    const push = this.#channel.push("envelope", wire);
+    // ADR-0051 D3-2: only an inter-agent send has an ack worth reading —
+    // the server replies with the ingress stamp it allocated, which is the
+    // sender-side sidecar trigger. Everything else keeps the existing
+    // fire-and-forget shape.
+    const onAck = this.#onInterAgentAck;
+    if (envelope.type === "inter_agent_message" && onAck !== undefined) {
+      push.receive("ok", (reply: unknown) => {
+        const stamp = ingressStampFrom(reply);
+        if (stamp === null) {
+          // An old server acks without a stamp. The message was delivered;
+          // it just cannot be restored after a restart (ADR-0051 D6
+          // rollout: this mixed pairing is the documented degradation).
+          process.stderr.write(
+            "inter-agent ack carried no ingress_stamp; not recorded\n",
+          );
+          return;
+        }
+        onAck(wire as Envelope, stamp);
+      });
+    }
   }
 
-  /** Asks the server to drop this agent's reply-log ring buffer before a
-   *  resume history replay (ADR-0014 phase-2, issue #50), so the
-   *  reconstructed lines overwrite rather than duplicate any pre-crash lines
-   *  the server still holds for the same session. The topic carries the
-   *  agent_id. Its replay token pairs reset with the completion boundary so
-   *  clients can distinguish reconstructed rows from the next live reply. */
-  sendHistoryReset(): string {
-    const replayId = `resume-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    this.#channel.push("history_reset", { replay_id: replayId });
-    return replayId;
+  /** Asks the server to drop this agent's display projection before a
+   *  history replay (ADR-0014 phase-2 / ADR-0051 D3-3), so the
+   *  reconstructed lines overwrite rather than duplicate whatever the
+   *  server still holds. The topic carries the agent_id. `replayId` is the
+   *  server-allocated id from the join verdict; omitting it allocates a
+   *  wrapper-side one, which is only correct against a legacy server that
+   *  never issued a verdict. */
+  sendHistoryReset(replayId?: string): string {
+    const id =
+      replayId ??
+      `resume-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    this.#channel.push("history_reset", { replay_id: id });
+    return id;
   }
 
-  /** Pushes the explicit end boundary after the final resume JSONL row. */
+  /** Restores this wrapper's own inter-agent pane from its sidecar
+   *  (ADR-0051 D3-3). Display-only: the server upserts into the projection
+   *  and does not route, so no peer is re-pushed and no SDK is re-injected.
+   *  The pane is bound to the channel topic, so this cannot address another
+   *  agent's pane. */
+  sendReplayIa(replayId: string, items: readonly ReplayIaItem[]): void {
+    this.#channel.push("replay_ia", { replay_id: replayId, items });
+  }
+
+  /** Pushes the explicit end boundary after the final replayed row. */
   sendHistoryReplayComplete(replayId: string): void {
     this.#channel.push("history_replay_complete", { replay_id: replayId });
   }

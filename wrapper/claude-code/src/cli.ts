@@ -20,13 +20,17 @@
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
+import { randomUUID } from "node:crypto";
 import { parseCliArgs } from "@kaoiro/wrapper-core";
-import { readSessionHistory } from "./history.js";
+import { readSessionHistory, sessionSidecarPath } from "./history.js";
 import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
 import {
+  HistoryReplayer,
+  IaSidecar,
   InterAgentTool,
   classifyInterAgentError,
   formatInboundMessage,
+  isIngressStamp,
 } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "./read_only_tools.js";
@@ -290,6 +294,60 @@ async function main(): Promise<void> {
     requestDirectory: () => link?.requestDirectory() ?? Promise.resolve([]),
     getWhoami: () => host.statusSnapshot(),
   });
+  // ADR-0051 D3-2 / D3-5: the host-local record of this agent's
+  // inter-agent messages. Namespaced by the launch transition so a relaunch
+  // (or a rollback) cannot append into the previous generation's pending
+  // journal; a per-process id when the runner supplied none.
+  const sidecar = new IaSidecar({
+    agentId: config.agent_id,
+    generation: config.transition_id ?? randomUUID(),
+    resolveSessionPath: (sessionId) =>
+      sessionSidecarPath(process.cwd(), sessionId),
+  });
+
+  /** A delivered IA carries the server's ingress stamp; record it before
+   *  the SDK sees it (D3-2 receive side). Without a stamp the row cannot be
+   *  placed against a clear watermark on replay, so it is dropped rather
+   *  than stored with a wrapper clock. */
+  const recordInboundIa = (envelope: Envelope): void => {
+    const stamp = (envelope as { ingress_stamp?: unknown }).ingress_stamp;
+    if (!isIngressStamp(stamp)) {
+      process.stderr.write(
+        "inter_agent_message without ingress_stamp; not recorded\n",
+      );
+      return;
+    }
+    sidecar.append({ ingress_stamp: stamp, envelope });
+  };
+
+  // ADR-0051 D2. Constructed BEFORE the link: the join reply (and with it
+  // the hydration verdict) can land before `host` exists, so the replayer
+  // has to be there to hold the verdict until `markReady()`.
+  const replayer = new HistoryReplayer({
+    seedState: () =>
+      link?.send(
+        makeStateChange(
+          config,
+          host?.state ?? "idle",
+          new Date().toISOString(),
+          {},
+          host?.statusExtSnapshot() ?? {},
+        ),
+      ),
+    sessionId: () => link?.currentSessionId() ?? null,
+    readTranscript: (sessionId) =>
+      readSessionHistory(process.cwd(), sessionId, config),
+    readSidecar: () => sidecar.read(),
+    sendHistoryReset: (replayId) => link?.sendHistoryReset(replayId),
+    sendEnvelope: (envelope) => link?.send(envelope),
+    sendReplayIa: (replayId, items) => link?.sendReplayIa(replayId, items),
+    sendHistoryReplayComplete: (replayId) =>
+      link?.sendHistoryReplayComplete(replayId),
+    ...(resumeSessionId !== undefined
+      ? { legacyResumeSessionId: resumeSessionId }
+      : {}),
+  });
+
   link = new ServerLink(config.server_url, config.agent_id, {
     personaId: config.persona.id,
     ...(config.transition_id === undefined
@@ -299,6 +357,9 @@ async function main(): Promise<void> {
       ? {}
       : { token: config.server_token }),
     onPersonaPrompt: (received) => resolvePersonaPrompt(received),
+    onHydration: (verdict) => replayer.onVerdict(verdict),
+    onInterAgentAck: (envelope, stamp) =>
+      sidecar.append({ ingress_stamp: stamp, envelope }),
     onInstruction: (text, attachmentIds) => {
       const tag = attachmentIds && attachmentIds.length > 0
         ? `instruction(+${attachmentIds.length})`
@@ -431,6 +492,10 @@ async function main(): Promise<void> {
       host.attachClose(uploadId);
     },
     onInterAgentMessage: (envelope) => {
+      // Record BEFORE anything consumes the envelope (ADR-0051 D3-2): the
+      // sidecar documents what the server delivered, so a later injection
+      // failure leaving only the record is the correct outcome, not a bug.
+      recordInboundIa(envelope);
       if (interAgent?.receiveInbound(envelope)) {
         process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
         return;
@@ -542,7 +607,12 @@ async function main(): Promise<void> {
     // as state/log — the link relays them to the server (file-upload spec).
     onAttachRejected: (envelope) => link?.send(envelope),
     onInstructionRejected: (envelope) => link?.send(envelope),
-    onSessionId: (id) => link?.setSessionId(id),
+    onSessionId: (id) => {
+      link?.setSessionId(id);
+      // Binds (or re-binds) the sidecar to this session's file, carrying
+      // whatever the pending journal already holds (ADR-0051 D3-5).
+      sidecar.bind(id);
+    },
     decidePermission: (toolName, input) => broker!.decide(toolName, input),
     // AskUserQuestion path (ADR-0027): server-connected wrappers always
     // have a question broker, so route through it directly.
@@ -640,33 +710,19 @@ async function main(): Promise<void> {
       printState(idle);
       link?.send(idle);
     }
-    // Resume: rebuild the server's display history from the session JSONL
-    // (ADR-0014 phase-2, #50). The SDK does not replay past turns into the
-    // stream, so reconstruct them from disk and reset-then-replay — a server
-    // that kept the pre-crash lines for the same session must not double
-    // them. setSessionId stamps the resume id so both the replayed lines and
-    // the subsequent live ones group under this session.
+    // Resume: stamp the session so both the replayed lines and the
+    // subsequent live ones group under it, and point the sidecar at that
+    // session's file.
     if (resumeSessionId !== undefined) {
       link.setSessionId(resumeSessionId);
-      // The reset/replay need a server entry to attach to (append_log /
-      // reset_history are :noop without one). The idle announce above seeds
-      // it, but only in the no-prompt idle-wait mode; a resume that also
-      // carries a prompt (spawn with initial_prompt + resume_session_id)
-      // skipped it, so seed the entry here before the reset.
-      if (prompt !== undefined) {
-        link.send(makeStateChange(
-          config, "idle", new Date().toISOString(), {}, host.statusExtSnapshot(),
-        ));
-      }
-      const history = readSessionHistory(process.cwd(), resumeSessionId, config);
-      // Reset first — unconditionally on resume — so a server still holding
-      // this session's pre-crash lines is overwritten even when
-      // reconstruction yields nothing (e.g. a transcript of only bookkeeping
-      // lines); then replay whatever was rebuilt.
-      const replayId = link.sendHistoryReset();
-      for (const envelope of history) link.send(envelope);
-      link.sendHistoryReplayComplete(replayId);
+      sidecar.bind(resumeSessionId);
     }
+    // ADR-0051 D2: the replay itself is server-driven now. The join
+    // verdict decides whether one runs at all, on startup AND on every
+    // later reconnect (a restarted server asks again); this only says the
+    // wrapper is ready to serve one. A legacy server without a verdict
+    // falls back to the pre-ADR-0051 startup replay inside the replayer.
+    replayer.markReady();
     await host.run(prompt);
   } finally {
     // Deny in-flight permission requests, then release the socket so the

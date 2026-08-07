@@ -6,6 +6,7 @@ import {
   codexModelFromRolloutIn,
   codexRateLimitsFromRolloutIn,
   resolveCodexModel,
+  codexSidecarPath,
 } from "../src/rollout.js";
 
 describe("codexModelFromRolloutIn", () => {
@@ -251,5 +252,24 @@ describe("codexRateLimitsFromRolloutIn", () => {
     );
 
     expect(codexRateLimitsFromRolloutIn(root, id).size).toBe(0);
+  });
+});
+
+describe("codexSidecarPath (ADR-0051 D3-2)", () => {
+  it("rollout ファイルと同じディレクトリの <session-id>.ia.jsonl を返す", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-sidecar-"));
+    const day = join(root, "2026", "08", "08");
+    mkdirSync(day, { recursive: true });
+    writeFileSync(join(day, "rollout-2026-08-08T00-00-00-uuid-1.jsonl"), "");
+
+    expect(codexSidecarPath("uuid-1", root)).toBe(
+      join(day, "uuid-1.ia.jsonl"),
+    );
+  });
+
+  it("rollout 未生成なら null (pending journal のまま待つ)", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-sidecar-none-"));
+    expect(codexSidecarPath("uuid-missing", root)).toBeNull();
+    expect(codexSidecarPath("../escape", root)).toBeNull();
   });
 });

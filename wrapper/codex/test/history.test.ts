@@ -9,7 +9,6 @@ import { threadEventToLogs } from "../src/adapter.js";
 import {
   readCodexHistory,
   reconstructCodexHistory,
-  replayCodexHistory,
 } from "../src/history.js";
 
 const CONFIG: WrapperConfig = {
@@ -369,57 +368,6 @@ describe("Codex rollout history reconstruction (#106)", () => {
     expect(readCodexHistory("unreadable", CONFIG, root)).toEqual([]);
   });
 
-  it("resume配線はsession stamp→seed→reset→replay→completion の順", () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-history-"));
-    const id = "uuid-replay";
-    writeFileSync(
-      join(root, `rollout-${id}.jsonl`),
-      `${line({
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "past" }],
-      })}\n`,
-    );
-    const events: string[] = [];
-    const sent: Envelope[] = [];
-    const seed: Envelope = {
-      version: "0",
-      agent_id: CONFIG.agent_id,
-      persona: CONFIG.persona,
-      ts: "SEED",
-      type: "state_change",
-      state: "idle",
-      payload: {},
-      ext: {},
-    };
-    const history = replayCodexHistory(
-      {
-        setSessionId: (sessionId) => events.push(`session:${sessionId}`),
-        sendHistoryReset: () => {
-          events.push("reset");
-          return "replay-1";
-        },
-        sendHistoryReplayComplete: (replayId) => events.push(`complete:${replayId}`),
-        send: (envelope) => {
-          events.push(`send:${envelope.type}`);
-          sent.push(envelope);
-        },
-      },
-      CONFIG,
-      id,
-      seed,
-      root,
-    );
-    expect(events).toEqual([
-      "session:uuid-replay",
-      "send:state_change",
-      "reset",
-      "send:log",
-      "complete:replay-1",
-    ]);
-    expect(history).toHaveLength(1);
-    expect(sent[1]?.payload).toEqual({ kind: "assistant", text: "past" });
-  });
 });
 
 function livePayload(event: ThreadEvent, names = new Map<string, string>()) {

@@ -64,6 +64,23 @@ function sessionLogPath(cwd: string, sessionId: string): string {
   );
 }
 
+/** Absolute path to a session's IA sidecar — beside its transcript, per
+ *  ADR-0051 D3-2. Null for a session_id that is not a safe path component
+ *  (the same fail-closed guard `readSessionHistory` applies). */
+export function sessionSidecarPath(
+  cwd: string,
+  sessionId: string,
+): string | null {
+  if (!isValidSessionId(sessionId)) return null;
+  return join(
+    homedir(),
+    ".claude",
+    "projects",
+    encodeCwd(cwd),
+    `${sessionId}.ia.jsonl`,
+  );
+}
+
 /** One parsed JSONL transcript line — only the fields the mapping reads. The
  *  SDK persists each message as `{ type, message: { role, content }, ... }`
  *  plus bookkeeping lines (queue-operation / attachment / last-prompt / mode

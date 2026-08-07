@@ -7,12 +7,16 @@
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
+import { randomUUID } from "node:crypto";
 import {
+  HistoryReplayer,
+  IaSidecar,
   InterAgentTool,
   QuestionBroker,
   askUserQuestionDescriptor,
   classifyInterAgentError,
   formatInboundMessage,
+  isIngressStamp,
   makeLog,
   makeStateChange,
 } from "@kaoiro/agent-common";
@@ -24,7 +28,8 @@ import type {
 } from "@kaoiro/agent-common";
 import { ServerLink, loadConfig, parseCliArgs } from "@kaoiro/wrapper-core";
 import { CodexHost } from "./host.js";
-import { replayCodexHistory } from "./history.js";
+import { readCodexHistory } from "./history.js";
+import { codexSidecarPath } from "./rollout.js";
 import { effectiveNetworkAccess } from "./network_access.js";
 import { resolveCodexSources } from "./source_resolution.js";
 
@@ -187,6 +192,53 @@ async function main(): Promise<void> {
     requestDirectory: () => link?.requestDirectory() ?? Promise.resolve([]),
     getWhoami: () => host.statusSnapshot(),
   });
+  // ADR-0051 D3-2 / D3-5 — same contract as the Claude wrapper, with the
+  // codex rollout directory as the sidecar's home. That directory is
+  // date-nested and only resolvable once the rollout exists, which is
+  // exactly what the pending journal covers.
+  const sidecar = new IaSidecar({
+    agentId: config.agent_id,
+    generation: config.transition_id ?? randomUUID(),
+    resolveSessionPath: (sessionId) => codexSidecarPath(sessionId),
+  });
+
+  const recordInboundIa = (envelope: Envelope): void => {
+    const stamp = (envelope as { ingress_stamp?: unknown }).ingress_stamp;
+    if (!isIngressStamp(stamp)) {
+      process.stderr.write(
+        "inter_agent_message without ingress_stamp; not recorded\n",
+      );
+      return;
+    }
+    sidecar.append({ ingress_stamp: stamp, envelope });
+  };
+
+  // Constructed before the link: the join reply can arrive before `host`
+  // exists, so the verdict has to be held until markReady() (ADR-0051 D2).
+  const replayer = new HistoryReplayer({
+    seedState: () =>
+      link?.send(
+        makeStateChange(
+          effectiveConfig,
+          host?.state ?? "idle",
+          new Date().toISOString(),
+          {},
+          host?.statusExtSnapshot() ?? {},
+        ),
+      ),
+    sessionId: () => link?.currentSessionId() ?? null,
+    readTranscript: (sessionId) => readCodexHistory(sessionId, config),
+    readSidecar: () => sidecar.read(),
+    sendHistoryReset: (replayId) => link?.sendHistoryReset(replayId),
+    sendEnvelope: (envelope) => link?.send(envelope),
+    sendReplayIa: (replayId, items) => link?.sendReplayIa(replayId, items),
+    sendHistoryReplayComplete: (replayId) =>
+      link?.sendHistoryReplayComplete(replayId),
+    ...(resumeSessionId !== undefined
+      ? { legacyResumeSessionId: resumeSessionId }
+      : {}),
+  });
+
   link = new ServerLink(config.server_url, config.agent_id, {
     personaId: config.persona.id,
     ...(config.transition_id === undefined
@@ -196,6 +248,9 @@ async function main(): Promise<void> {
       ? {}
       : { token: config.server_token }),
     onPersonaPrompt: (received) => resolvePersonaPrompt(received),
+    onHydration: (verdict) => replayer.onVerdict(verdict),
+    onInterAgentAck: (envelope, stamp) =>
+      sidecar.append({ ingress_stamp: stamp, envelope }),
     onInstruction: (text, attachmentIds) => {
       const tag = attachmentIds && attachmentIds.length > 0
         ? `instruction(+${attachmentIds.length})`
@@ -239,6 +294,8 @@ async function main(): Promise<void> {
     onAttachChunk: (payload) => host.attachChunk(payload),
     onAttachClose: (uploadId) => host.attachClose(uploadId),
     onInterAgentMessage: (envelope) => {
+      // Recorded before anything consumes it (ADR-0051 D3-2 receive side).
+      recordInboundIa(envelope);
       if (interAgent?.receiveInbound(envelope)) {
         process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
         return;
@@ -317,7 +374,10 @@ async function main(): Promise<void> {
     appendSystemPrompt,
     onInstructionRejected: (envelope) => link?.send(envelope),
     onAttachRejected: (envelope) => link?.send(envelope),
-    onSessionId: (id) => link?.setSessionId(id),
+    onSessionId: (id) => {
+      link?.setSessionId(id);
+      sidecar.bind(id);
+    },
     toolDescriptors: [
       ...interAgent.descriptors(),
       askUserQuestionDescriptor((questions) => questionBroker!.decide(questions)),
@@ -354,23 +414,16 @@ async function main(): Promise<void> {
       printState(idle);
       link?.send(idle);
     }
+    // resumeThread continues only future turns; the display transcript is
+    // rebuilt from the rollout by the replay below (#106).
     if (resumeSessionId !== undefined) {
-      // resumeThread continues only future turns; rebuild the display
-      // transcript from the rollout before the host starts (#106). A prompt
-      // resume needs an idle seed because AgentStates reset/append are no-ops
-      // until the wrapper has established its latest-state entry.
-      replayCodexHistory(
-        link,
-        config,
-        resumeSessionId,
-        prompt === undefined
-          ? undefined
-          : makeStateChange(
-              effectiveConfig, "idle", new Date().toISOString(), {},
-              host.statusExtSnapshot(),
-            ),
-      );
+      link.setSessionId(resumeSessionId);
+      sidecar.bind(resumeSessionId);
     }
+    // ADR-0051 D2: the server's join verdict decides whether a replay runs,
+    // on startup and on every later reconnect. See the Claude CLI for the
+    // rationale; the two wrappers share the coordinator.
+    replayer.markReady();
     await host.run(prompt);
   } finally {
     questionBroker?.close();

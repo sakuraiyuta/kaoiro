@@ -12,6 +12,10 @@ const mock = vi.hoisted(() => ({
   handlers: new Map<string, (payload: unknown) => void>(),
   lastPush: null as { event: string; payload: unknown; receivers: Map<string, (payload: unknown) => void> } | null,
   lastChannelParams: null as unknown,
+  // ADR-0051 D2: the hydration verdict rides the JOIN reply, so a test has
+  // to be able to fire the join push's receive("ok") the way the phoenix
+  // client does on every (re)join.
+  joinReceivers: new Map<string, (payload: unknown) => void>(),
 }));
 
 vi.mock("phoenix", () => {
@@ -19,8 +23,18 @@ vi.mock("phoenix", () => {
     on(event: string, cb: (payload: unknown) => void): void {
       mock.handlers.set(event, cb);
     }
-    join(): { receive: (...args: unknown[]) => unknown } {
-      const chain = { receive: () => chain };
+    join(): {
+      receive: (
+        status: string,
+        cb: (payload: unknown) => void,
+      ) => ReturnType<Channel["join"]>;
+    } {
+      const chain = {
+        receive(status: string, cb: (payload: unknown) => void) {
+          mock.joinReceivers.set(status, cb);
+          return chain;
+        },
+      };
       return chain;
     }
     push(event: string, payload: unknown): {
@@ -57,7 +71,7 @@ vi.mock("phoenix", () => {
 // so the constructor does not depend on the node version's global.
 vi.stubGlobal("WebSocket", class {});
 
-import { ServerLink } from "../src/transport.js";
+import { ServerLink, hydrationVerdictFrom } from "../src/transport.js";
 import type { Envelope } from "@kaoiro/protocol";
 
 function emit(event: string, payload: unknown): void {
@@ -762,5 +776,182 @@ describe("ServerLink — question_response (ADR-0027)", () => {
     emit("question_response", { answers: {} }); // no request_id -> dropped
     emit("question_response", { request_id: "q-3", answers: "wrong" });
     expect(seen).toEqual([{ request_id: "q-3", answers: {} }]);
+  });
+});
+
+describe("hydrationVerdictFrom (ADR-0051 D2)", () => {
+  it("replay_required: true は replay_id とともに返す", () => {
+    expect(
+      hydrationVerdictFrom({
+        hydration: { replay_required: true, replay_id: "hydr-1" },
+      }),
+    ).toEqual({ replay_required: true, replay_id: "hydr-1" });
+  });
+
+  it("replay_required: false は id 無しで返す", () => {
+    expect(hydrationVerdictFrom({ hydration: { replay_required: false } })).toEqual(
+      { replay_required: false },
+    );
+  });
+
+  it("hydration が無い応答 (旧 server) は null = legacy fallback", () => {
+    expect(hydrationVerdictFrom({})).toBeNull();
+    expect(hydrationVerdictFrom(null)).toBeNull();
+    expect(hydrationVerdictFrom({ hydration: "yes" })).toBeNull();
+  });
+
+  it("required なのに replay_id が使えない応答は null に潰す", () => {
+    // 推測で wrapper 採番の id を使うと server の in_flight 記録と一致せず
+    // replay_ia が stale_replay で全部弾かれる。legacy 扱いのほうが安全。
+    expect(
+      hydrationVerdictFrom({ hydration: { replay_required: true } }),
+    ).toBeNull();
+    expect(
+      hydrationVerdictFrom({ hydration: { replay_required: true, replay_id: "" } }),
+    ).toBeNull();
+    expect(
+      hydrationVerdictFrom({ hydration: { replay_required: 1 } }),
+    ).toBeNull();
+  });
+});
+
+describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.joinReceivers.clear();
+  });
+
+  function interAgentEnvelope(): Envelope {
+    return {
+      version: "0",
+      agent_id: "host-1.self",
+      persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      ts: "2026-08-08T00:00:00Z",
+      type: "inter_agent_message",
+      state: "idle",
+      payload: {
+        to: "host-1.peer",
+        conversation_id: "cid-1",
+        turn_number: 1,
+        kind: "inform",
+        body: "hi",
+        meta: { done: false, propose_next: "" },
+        owner: { kind: "user", id: "operator" },
+      },
+      ext: {},
+    } as unknown as Envelope;
+  }
+
+  it("join 応答の hydration を onHydration へ渡す (再 join のたび)", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      onHydration: (verdict) => seen.push(verdict),
+    });
+
+    const ok = mock.joinReceivers.get("ok");
+    expect(ok).toBeDefined();
+    ok?.({ hydration: { replay_required: true, replay_id: "hydr-1" } });
+    ok?.({ hydration: { replay_required: false } });
+    // 旧 server の join 応答 (hydration 無し) は legacy fallback の null。
+    ok?.({});
+
+    expect(seen).toEqual([
+      { replay_required: true, replay_id: "hydr-1" },
+      { replay_required: false },
+      null,
+    ]);
+  });
+
+  it("IA 送信は acceptance ack の ingress_stamp で onInterAgentAck を呼ぶ", () => {
+    const acks: { seq: unknown; stamp: [number, number] }[] = [];
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      onInterAgentAck: (envelope, stamp) =>
+        acks.push({ seq: (envelope as unknown as { seq: unknown }).seq, stamp }),
+    });
+    link.setSessionId("sess-1");
+    link.send(interAgentEnvelope());
+
+    mock.lastPush?.receivers.get("ok")?.({ ingress_stamp: [42, 7] });
+
+    // 記録されるのは実際に wire に乗った envelope (seq / session_id 付き)。
+    expect(acks).toEqual([{ seq: 1, stamp: [42, 7] }]);
+  });
+
+  it("stamp の無い ack (旧 server) では記録しない", () => {
+    const acks: unknown[] = [];
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      onInterAgentAck: () => acks.push("recorded"),
+    });
+    link.send(interAgentEnvelope());
+
+    mock.lastPush?.receivers.get("ok")?.({});
+    mock.lastPush?.receivers.get("ok")?.({ ingress_stamp: [1] });
+
+    expect(acks).toEqual([]);
+  });
+
+  it("IA 以外の envelope には ack hook を張らない", () => {
+    const acks: unknown[] = [];
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      onInterAgentAck: () => acks.push("recorded"),
+    });
+    link.send({
+      version: "0",
+      agent_id: "host-1.self",
+      persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      ts: "2026-08-08T00:00:00Z",
+      type: "log",
+      state: "idle",
+      payload: { kind: "assistant", text: "x" },
+      ext: {},
+    } as unknown as Envelope);
+
+    expect(mock.lastPush?.receivers.size).toBe(0);
+    expect(acks).toEqual([]);
+  });
+
+  it("sendHistoryReset は server 採番 id を使い、省略時のみ wrapper 採番する", () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+    });
+
+    expect(link.sendHistoryReset("hydr-server")).toBe("hydr-server");
+    expect(mock.lastPush).toMatchObject({
+      event: "history_reset",
+      payload: { replay_id: "hydr-server" },
+    });
+
+    const legacyId = link.sendHistoryReset();
+    expect(legacyId).toMatch(/^resume-/);
+  });
+
+  it("sendReplayIa は replay_id と items をそのまま push する", () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+    });
+    const items = [
+      { ingress_stamp: [1, 0] as [number, number], envelope: interAgentEnvelope() },
+    ];
+
+    link.sendReplayIa("hydr-1", items);
+
+    expect(mock.lastPush).toMatchObject({
+      event: "replay_ia",
+      payload: { replay_id: "hydr-1", items },
+    });
+  });
+
+  it("currentSessionId は未報告なら null (fresh session = 空 replay)", () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+    });
+    expect(link.currentSessionId()).toBeNull();
+    link.setSessionId("sess-1");
+    expect(link.currentSessionId()).toBe("sess-1");
   });
 });

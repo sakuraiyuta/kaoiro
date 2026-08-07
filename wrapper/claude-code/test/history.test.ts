@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { reconstructHistory, readSessionHistory } from "../src/history.js";
+import { reconstructHistory, readSessionHistory, sessionSidecarPath
+} from "../src/history.js";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 
 const config: WrapperConfig = {
@@ -190,5 +191,19 @@ describe("readSessionHistory — filesystem read", () => {
         [],
       );
     }
+  });
+});
+
+describe("sessionSidecarPath (ADR-0051 D3-2)", () => {
+  it("transcript と同じディレクトリの <session-id>.ia.jsonl を返す", () => {
+    const path = sessionSidecarPath("/home/u/proj", "abc-123");
+    expect(path).not.toBeNull();
+    expect(path).toMatch(/\/\.claude\/projects\/-home-u-proj\/abc-123\.ia\.jsonl$/);
+  });
+
+  it("パス成分にできない session_id は null (traversal fail-closed)", () => {
+    expect(sessionSidecarPath("/home/u/proj", "../escape")).toBeNull();
+    expect(sessionSidecarPath("/home/u/proj", "a/b")).toBeNull();
+    expect(sessionSidecarPath("/home/u/proj", "")).toBeNull();
   });
 });

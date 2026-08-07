@@ -5,6 +5,19 @@
 
 export { askUserQuestionDescriptor } from "./ask_user_question.js";
 export type { EngineAdapter } from "./engine.js";
+export { HistoryReplayer } from "./history_replay.js";
+export type {
+  HistoryReplayerOptions,
+  HydrationVerdict,
+} from "./history_replay.js";
+export {
+  IaSidecar,
+  defaultPendingDir,
+  isIngressStamp,
+  isValidSidecarSessionId,
+  parseSidecarLine,
+} from "./ia_sidecar.js";
+export type { IaSidecarOptions, SidecarRecord } from "./ia_sidecar.js";
 export {
   INTER_AGENT_ERROR_CODES,
   INTER_AGENT_ERROR_MESSAGE_CODES,
