@@ -217,10 +217,10 @@ Channels のチャネルイベント名と内容。トピックは
 
 | 方向 | イベント | 内容 |
 |---|---|---|
-| ラッパー → サーバ | `envelope` | エンベロープ全体 |
+| ラッパー → サーバ | `envelope` | エンベロープ全体。 `type=inter_agent_message` を受理したときだけ reply が `{ ingress_stamp: [us, seq] }` を返す (acceptance ack、[ADR-0051](../adr/0051-history-restart-resilience.md) D3-2。送信側 wrapper の sidecar 記録トリガ)。他の type は従来どおり空 reply。因果順は [protocol-inter-agent](protocol-inter-agent.md) が正本 |
 | ラッパー → サーバ | `history_reset` | `{ replay_id }`。replay 開始境界。join 応答の hydration verdict で `replay_required: true` を受けた場合は **server 採番の `replay_id`** を用いる(verdict 不在 = 旧 server 相手の legacy startup replay のみ wrapper 採番)。サーバは当該 agent の表示投影(transcript 行 + IA pane)を消去し、`history_reset { agent_id, preserve_inter_agent: false, replay_id }` を broadcast する。IA は sidecar 由来の `replay_ia` で再投影されるため保持しない(意味論は [ADR-0051](../adr/0051-history-restart-resilience.md) D3-3。`preserve_inter_agent` field は旧 client 互換のため互換期間中 `false` を明示送信し、省略しない)。状態未確立(エントリ無し)は no-op で ack のみ。掃除は表示用履歴のみで wrapper の JSONL には触れない([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2、#50) |
 | ラッパー → サーバ | `history_replay_complete` | `{ replay_id }`。当該 `history_reset` 後の最後の再生(JSONL 由来 `log` および sidecar 由来 `replay_ia`)の直後に送る。サーバは `{ agent_id, replay_id }` を operator に broadcast し、`replay_id` と channel owner が `in_flight` 記録と一致する場合のみ hydration を `hydrated` へ CAS 遷移する([ADR-0051](../adr/0051-history-restart-resilience.md) D2)。再生 `envelope` と次の live assistant reply を決定的に区別する境界 (#125) |
-| ラッパー → サーバ | `replay_ia` | `{ replay_id, items: [{ envelope, ingress_stamp }] }`。**display replay 専用の IA ingress**([ADR-0051](../adr/0051-history-restart-resilience.md) D3-3)。wrapper が自分の IA sidecar から自 pane の表示行を復元するために送る。pane はチャネル topic の agent に bind され(payload で他 pane を指定できない)、サーバは per-pane projection へ `ingress_stamp\|pane_agent_id` identity で upsert **のみ**行う — routing・ConversationStates・peer wrapper push・SDK injection には一切触れない。`ingress_stamp` を durable `ClearWatermarks` と比較して clear 済み行は hide、stamp 欠落行は fail-closed で破棄。`replay_id` は進行中の hydration attempt と一致しない場合 reject |
+| ラッパー → サーバ | `replay_ia` | `{ replay_id, items: [{ envelope, ingress_stamp }] }`。**display replay 専用の IA ingress**([ADR-0051](../adr/0051-history-restart-resilience.md) D3-3)。wrapper が自分の IA sidecar から自 pane の表示行を復元するために送る。pane はチャネル topic の agent に bind され(payload で他 pane を指定できない)、サーバは per-pane projection へ `ingress_stamp\|pane_agent_id` identity で upsert **のみ**行う — routing・ConversationStates・peer wrapper push・SDK injection には一切触れない。`ingress_stamp` を durable `ClearWatermarks` と比較して clear 済み行は hide、stamp 欠落行は fail-closed で破棄。`replay_id` は進行中の hydration attempt と一致しない場合 `stale_replay` で reject。 `ingress_stamp` の wire 形は整数 2 要素配列 `[us, seq]`。 **追補 (実装時、2026-08-08)**: 受理した復元行は `agents:lobby` にも `envelope` として broadcast する — `history_reset` が `preserve_inter_agent: false` で接続中タブの IA を落とすため、投影 upsert だけでは F5 まで IA が戻らない。replay window 内なので client の reset/complete pairing が新着アニメーションから除外する。routing・ConversationStates・peer push・SDK 注入には依然として触れない |
 | ラッパー → サーバ | `directory_request` | `{}`。inter-agent messaging で wrapper が persona 名 → agent_id 解決を行うための peer 一覧取得。 サーバは `AgentStates.snapshot()` から **送信元 wrapper を除外** し、 各 entry を allow-list で丸めて `{:ok, %{agents: [...]}}` で reply。宛先解決の `{agent_id, persona, state}` に加え、実行特性 `engine? / model? / effort?`(#102)と稼働状況 `context? / session_started_at? / turns? / last_activity_at? / conversation / rate_limits?`(#160)を載せる。省略規則・projection・上限値の正本は [protocol-inter-agent](protocol-inter-agent.md)「peer directory の情報境界」、開示ポリシは [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6。 wrapper 側は `mcp__kaoiro__list_agents` ツールでこれを呼ぶ |
 | サーバ → クライアント | `snapshot` | `{ agents: { <agent_id>: envelope } }`。join 直後に push |
 | サーバ → クライアント | `envelope` | エンベロープ全体(状態変化の都度 broadcast) |
@@ -311,6 +311,17 @@ yield しないため直読が必須)。
   event 表)。`in_flight` のまま channel が切れたら `unhydrated` へ
   戻り、次回 join で再要求される。fresh session(session_id 未採番 /
   transcript 不在)は空 replay(`history_reset` → 即 complete)。
+- **hydrated の無効化**: server は operator 起点で `resume_session_id`
+  を伴う遷移(`restore` の resume 分岐 / `resume_session`)でのみ
+  hydration を捨て、次回 join の verdict を `replay_required: true` に
+  する。`/new`・`/clear`・fresh-restore・runner 自律の crash-restart は
+  無効化しない。条件と根拠の正本は
+  [ADR-0051](../adr/0051-history-restart-resilience.md) D2。
+- **ingress stamp の wire 形**: server の ingress-order tuple は JSON
+  では **整数 2 要素配列 `[us, seq]`** で運ぶ。配信 envelope の
+  top-level `ingress_stamp`、acceptance ack reply、wrapper sidecar の
+  行、`replay_ia` の item すべてで同形。受信側は 2 要素整数であること
+  を厳格検証し、外れた値は fail-closed で破棄する。
 - **projection epoch**: join 時の `history` push payload に
   `projection_epoch`(AgentStates init 時採番の opaque UUID)を追加
   する。client は保持 epoch と不一致なら旧 baseline(表示ログ・

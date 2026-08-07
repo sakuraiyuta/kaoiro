@@ -189,8 +189,11 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
 
 - **記録**: wrapper は IA を送受信した時点で、wire envelope 全体 +
   server 採番の `ingress_stamp` を engine transcript と同じ
-  ディレクトリの sidecar file(`<session-id>.ia.jsonl` 相当)へ
-  構造化のまま append する。
+  ディレクトリの sidecar file へ構造化のまま append する。1 行 =
+  `{"ingress_stamp": [us, seq], "envelope": {...}}` の JSONL。
+  - パス(実装時確定、2026-08-08): `<transcript dir>/<session-id>.ia.jsonl`。
+    claude-code は `~/.claude/projects/<encoded-cwd>/`、codex は当該
+    rollout ファイルと同じディレクトリ。
   - 受信側: server からの配信受領時(SDK 注入の**前**)。server 合成
     envelope(エラー直送通知)も同様に記録。注入失敗で sidecar だけ
     残る phantom は受容。
@@ -205,7 +208,15 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
 - **session lifecycle**: session_id 未採番期間は
   `{agent_id, reset_generation}` で namespace した pending journal へ
   append し、session_id 確定時に当該 session の sidecar へ bind
-  (rename)する。bind 前に crash した orphan journal は replay
+  (rename。bind 先が既にあれば追記)する。pending journal は
+  transcript ディレクトリには置けない — codex の rollout ディレクトリ
+  は日付ネストで session_id 確定まで解決できないため。パスは
+  `${KAOIRO_IA_PENDING_DIR:-~/.kaoiro/ia-pending}/<agent_id>__<generation>.ia.jsonl`
+  で、`generation` は launch 時の `transition_id`(runner が渡さない
+  場合はプロセス毎の乱数)(実装時確定、2026-08-08)。session_id が
+  途中で再採番された場合も同じ bind 処理で現行 sidecar を新パスへ移す
+  (replay 対象が現 session 分のみのため、移さないと当該会話の IA が
+  落ちる)。bind 前に crash した orphan journal は replay
   対象外で次回起動時に GC(fail-closed)。`/new`・`/clear` は旧
   generation への append を即停止して新 generation へ切り替え、
   reset rollback 時のみ旧 generation へ戻る。agent 削除では host
@@ -215,7 +226,9 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
   イベント表)で自 pane の表示行を再投影する。routing・SDK 注入は
   発生しない。clear 済み行は保存された `ingress_stamp` と durable
   `ClearWatermarks` の比較で hide、stamp 欠落行は fail-closed で
-  破棄。
+  破棄。受理された復元行は `agents:lobby` にも broadcast する
+  (接続中タブの IA を戻すための display fan-out。[protocol](protocol.md)
+  の `replay_ia` 行を参照)。
 - **resume reconstruction との関係**: SDK transcript 内の IA 注入
   framing テキストは従来どおり `kind=user` log へ再投影**しない**
   (structured 表示は sidecar 由来の `replay_ia` が担う。二重表示
@@ -337,7 +350,7 @@ directory から除外する。除外集合の正本は ADR-0021 F6-4。
 
 | event (方向) | 形 | server の振る舞い |
 |---|---|---|
-| `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | 因果順を固定([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate** — participant / quota / ハード制限等、**reject が確定し得る検査をすべてここで**行う、(2) **ingress stamp 採番**(ingress-order domain、globally unique)、(3) per-pane projection へ sender pane + receiver pane を同一 stamp で upsert(identity = `ingress_stamp\|pane_agent_id`)、(4) `payload.to` の `wrapper:<to>` channel に **stamp を載せた envelope** を push + `agents:lobby` broadcast(operator 限定)、(5) conversation の turn count / token count / wallclock を更新、(6) push の **acceptance ack reply として `{ingress_stamp}`** を送信元 wrapper に返す(送信側 sidecar 記録のトリガ)。upsert 後に行う routing は peer push のみで、reject 済み IA が pane に残らないこと |
+| `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | 因果順を固定([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate** — participant / ハード制限、および conversation quota の検査。quota は `ConversationStates.record_message/5` が検査と turn/token/wallclock 更新を単一呼び出しで atomic に行うため、**counter 更新もこの段で走る**(分割すると検査と更新の間に TOCTOU が開く。実装時確定、2026-08-08)。**reject が確定し得る検査はすべてここまでで終える**、(2) **ingress stamp 採番**(ingress-order domain、globally unique。wire 形は整数 2 要素配列 `[us, seq]`)、(3) per-pane projection へ sender pane + receiver pane を同一 stamp で upsert(identity = `ingress_stamp\|pane_agent_id`)、(4) `payload.to` の `wrapper:<to>` channel に **stamp を載せた envelope** を push + `agents:lobby` broadcast(operator 限定)、(5) push の **acceptance ack reply として `{ingress_stamp}`** を送信元 wrapper に返す(送信側 sidecar 記録のトリガ)。upsert 後に行う routing は peer push のみで、reject 済み IA が pane に残らないこと |
 | `envelope` 合成 (S→W) | ハード制限超過時 | 両 wrapper の `wrapper:<id>` + `agents:lobby` へ push |
 | `envelope` 合成 (S→W) | wrapper 切断時 | 当該 wrapper が参加中の各 conversation の他参加者へ `kind=inform` + `error.code=disconnected` を push(「応答不能エラーの通知」節) |
 | `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...]}}` 返却で受け取る。entry の field と省略規則は上記「peer directory の情報境界」。list_agents 用 (後述) |
