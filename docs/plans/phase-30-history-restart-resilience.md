@@ -1,7 +1,7 @@
 ---
 title: Phase 30 — 表示履歴の再起動耐性 (ADR-0051)
 description: hydration handshake による reconnect 時 replay・IA sidecar と per-pane projection contract による DETS 撤廃・projection epoch による client 再同期を実装する。
-status: draft
+status: in-progress
 phase: 30
 depends_on: []
 last_updated: 2026-08-08
@@ -20,8 +20,8 @@ server 再起動を跨いでも全 operator 端末が同一の timeline を見�
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 30-1 | ADR-0051 仕様レビュー | ふじ | 🟡 | 2 巡完了 (1 巡目 must-fix 5 / 2 巡目 must-fix 5、いずれも反映済み)。最終確認待ち |
-| 30-2 | ADR 確定 + specs 改訂 | クロエ | ⏳ | protocol.md (ADR D8 の 5 点: join hydration verdict / `replay_ia` / ingress stamp (配信 + acceptance ack) / projection epoch / `preserve_inter_agent` false 明示)、protocol-inter-agent.md (sidecar schema・pending journal namespace・generation・live projection の因果順)、architecture.md |
+| 30-1 | ADR-0051 仕様レビュー | ふじ | ✅ | 2 巡 (must-fix 計 10 件、全反映) → approve。マスター承認で accepted 化済み (2026-08-08) |
+| 30-2 | ADR 確定 + specs 改訂 | クロエ | 🟡 | protocol.md (ADR D8 の 5 点: join hydration verdict / `replay_ia` / ingress stamp (配信 + acceptance ack) / projection epoch / `preserve_inter_agent` false 明示)、protocol-inter-agent.md (sidecar schema・pending journal namespace・generation・live projection の因果順)、architecture.md |
 | 30-3 | 既存文書 amendment sweep | もも | ⏳ | ADR D8 の対象一覧: ADR-0014 A4 / ADR-0036 F3 / ADR-0030 D6 store 数 / protocol.md `preserve_inter_agent`・purge store 数 / deployment.md DETS 8 種 → 7 種 |
 | 30-4 | server: per-pane projection contract | あお | ⏳ | live/replay 共用の volatile per-pane upsert API。live accept 時の validate → stamp 採番 → 両 pane upsert → routing の因果順、server 合成 IA は recipient pane のみ、identity = `ingress_stamp\|pane_agent_id`、clear filter + 最終 200 cap 同経路 (ADR D3-1/D6) |
 | 30-5 | wrapper: IA sidecar 記録 | あお | ⏳ | agent-common 共通化、両 engine。受信 = 注入前 append (stamp 付き配信) / 送信 = transport acceptance ack (`{ingress_stamp}` reply) 到着時 append、pending journal ({agent_id, reset_generation} namespace) → session bind、/new・/clear generation 切替 (ADR D3-2/D3-5) |

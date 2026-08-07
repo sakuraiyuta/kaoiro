@@ -1,6 +1,6 @@
 ---
 title: 表示履歴の再起動耐性 — reconnect replay・IA sidecar・epoch 置換
-status: proposed
+status: accepted
 date: 2026-08-08
 opened: 2026-08-08
 supersedes: []
@@ -13,8 +13,8 @@ related_adrs: [12, 14, 30, 36]
 
 ## Status
 
-Proposed(マスター大筋合意 2026-08-08。ふじ仕様レビュー 2 巡
-(1 巡目 must-fix 5 / 2 巡目 must-fix 5)を反映済み、最終確認待ち)
+Accepted(2026-08-08。ふじ仕様レビュー 2 巡(must-fix 計 10 件)を
+全反映して approve、マスター最終承認済み)
 
 ## Context
 
