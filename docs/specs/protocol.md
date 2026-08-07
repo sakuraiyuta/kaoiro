@@ -218,13 +218,14 @@ Channels のチャネルイベント名と内容。トピックは
 | 方向 | イベント | 内容 |
 |---|---|---|
 | ラッパー → サーバ | `envelope` | エンベロープ全体 |
-| ラッパー → サーバ | `history_reset` | `{ replay_id }`。resume 起動時、wrapper が JSONL から再構築した表示履歴を `log` で再生する直前に送る。サーバは当該 agent の JSONL で再構築可能なリングバッファ行を消去し、`history_reset { agent_id, preserve_inter_agent: true, replay_id }` を broadcast。structured IA は SDK JSONL から復元できないため保持する。状態未確立(エントリ無し)は no-op で ack のみ。掃除は表示用履歴のみで wrapper の JSONL には触れない([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2、#50、#105) |
-| ラッパー → サーバ | `history_replay_complete` | `{ replay_id }`。当該 `history_reset` 後の最後の JSONL 再生 `log` の直後に送る。サーバは `{ agent_id, replay_id }` を operator に broadcast する。再生 `envelope` と次の live assistant reply を決定的に区別する境界 (#125) |
+| ラッパー → サーバ | `history_reset` | `{ replay_id }`。replay 開始境界。join 応答の hydration verdict で `replay_required: true` を受けた場合は **server 採番の `replay_id`** を用いる(verdict 不在 = 旧 server 相手の legacy startup replay のみ wrapper 採番)。サーバは当該 agent の表示投影(transcript 行 + IA pane)を消去し、`history_reset { agent_id, preserve_inter_agent: false, replay_id }` を broadcast する。IA は sidecar 由来の `replay_ia` で再投影されるため保持しない(意味論は [ADR-0051](../adr/0051-history-restart-resilience.md) D3-3。`preserve_inter_agent` field は旧 client 互換のため互換期間中 `false` を明示送信し、省略しない)。状態未確立(エントリ無し)は no-op で ack のみ。掃除は表示用履歴のみで wrapper の JSONL には触れない([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2、#50) |
+| ラッパー → サーバ | `history_replay_complete` | `{ replay_id }`。当該 `history_reset` 後の最後の再生(JSONL 由来 `log` および sidecar 由来 `replay_ia`)の直後に送る。サーバは `{ agent_id, replay_id }` を operator に broadcast し、`replay_id` と channel owner が `in_flight` 記録と一致する場合のみ hydration を `hydrated` へ CAS 遷移する([ADR-0051](../adr/0051-history-restart-resilience.md) D2)。再生 `envelope` と次の live assistant reply を決定的に区別する境界 (#125) |
+| ラッパー → サーバ | `replay_ia` | `{ replay_id, items: [{ envelope, ingress_stamp }] }`。**display replay 専用の IA ingress**([ADR-0051](../adr/0051-history-restart-resilience.md) D3-3)。wrapper が自分の IA sidecar から自 pane の表示行を復元するために送る。pane はチャネル topic の agent に bind され(payload で他 pane を指定できない)、サーバは per-pane projection へ `ingress_stamp\|pane_agent_id` identity で upsert **のみ**行う — routing・ConversationStates・peer wrapper push・SDK injection には一切触れない。`ingress_stamp` を durable `ClearWatermarks` と比較して clear 済み行は hide、stamp 欠落行は fail-closed で破棄。`replay_id` は進行中の hydration attempt と一致しない場合 reject |
 | ラッパー → サーバ | `directory_request` | `{}`。inter-agent messaging で wrapper が persona 名 → agent_id 解決を行うための peer 一覧取得。 サーバは `AgentStates.snapshot()` から **送信元 wrapper を除外** し、 各 entry を allow-list で丸めて `{:ok, %{agents: [...]}}` で reply。宛先解決の `{agent_id, persona, state}` に加え、実行特性 `engine? / model? / effort?`(#102)と稼働状況 `context? / session_started_at? / turns? / last_activity_at? / conversation / rate_limits?`(#160)を載せる。省略規則・projection・上限値の正本は [protocol-inter-agent](protocol-inter-agent.md)「peer directory の情報境界」、開示ポリシは [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6。 wrapper 側は `mcp__kaoiro__list_agents` ツールでこれを呼ぶ |
 | サーバ → クライアント | `snapshot` | `{ agents: { <agent_id>: envelope } }`。join 直後に push |
 | サーバ → クライアント | `envelope` | エンベロープ全体(状態変化の都度 broadcast) |
 | サーバ → クライアント | `history_cleared` | `{ agent_id, session_id, clear_watermark }`。operator の `clear_history` (#48) 成功後に broadcast。非 IA は `session_id` 一致へ再 filter、IA は `clear_watermark`（現行 session 開始点を `SessionStarts` から fsync 採用した `ClearWatermarks`）以前を隠す。`/new`・`/clear` は本 event を使わず、それぞれ session_reset lifecycle broadcast (下記) 経由で表示を扱う。external switch も本 event を発火しない。開始点が無い場合は warning を出して watermark を更新せず IA を残す。**operator 限定配信**。既存 `ClearWatermarks` DETS row は migration で残置し、再露出を防ぐ。 |
-| サーバ → クライアント | `history_reset` | `{ agent_id, preserve_inter_agent: boolean, replay_id? }`。resume 再構築時のみ送る。JSONL で復元不能な structured IA を保持するため `preserve_inter_agent: true`。`/new` は表示を変えないので送らず、`/clear` は session_reset_completed 経由で当該 agent の pane を marker 1 行だけに絞るのでこの event は使わない。flag 省略は旧serverとの後方互換のため `true` と解釈する。**operator 限定配信** |
+| サーバ → クライアント | `history_reset` | `{ agent_id, preserve_inter_agent: boolean, replay_id? }`。replay 再構築時のみ送る。[ADR-0051](../adr/0051-history-restart-resilience.md) D3-3 により IA も sidecar 経由で再投影されるため **`preserve_inter_agent` は意味論として廃止し、互換期間中は `false` を明示送信する**(省略は旧 server 後方互換のため `true` と解釈される規約が旧 client に残っており、単純省略・削除は不可。field の物理削除は旧 client 消滅後の別段階)。`/new` は表示を変えないので送らず、`/clear` は session_reset_completed 経由で当該 agent の pane を marker 1 行だけに絞るのでこの event は使わない。**operator 限定配信** |
 | サーバ → クライアント | `history_replay_complete` | `{ agent_id, replay_id }`。resume JSONL 再生の完了境界。`replay_id` が対応する `history_reset` と一致する間だけ、client は再生した assistant 行を新着アニメーションから除外する。**operator 限定配信** |
 | サーバ → クライアント | `agent_deleted` | `{ agent_id }`。`delete_agent` 成功後に broadcast。クライアントは当該 agent をグリッドと表示用ログから除去(#14)。viewer にも配信(grid 整合のため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 | クライアント → サーバ | `attach_open` | `{ agent_id, upload_id, filename, mime, size, chunks }`。**operator のみ**。ファイル添付の予告。upload_id は client 採番(セッション内一意)。該当ラッパーへ relay、未知 agent_id は `{:error, unknown_agent}`。詳細は下記「ファイルアップロード wire」 |
@@ -239,7 +240,7 @@ Channels のチャネルイベント名と内容。トピックは
 | クライアント → サーバ | `refresh_models` | `{ agent_id }`。**operator のみ**。ラッパーの `supportedModels()` catalog fetch を手動で再試行させる ([ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6)。payload に field なし (topic が agent を addressing)。該当ラッパーへ fire-and-forget で relay。未知 agent は `unknown_agent`。session_reset pending 中は `session_reset_pending` |
 | クライアント → サーバ | `set_permission_mode` | `{ agent_id, mode }`。**operator のみ**。`mode` は SDK の `PermissionMode` 6 値 (`default`/`acceptEdits`/`bypassPermissions`/`plan`/`dontAsk`/`auto`)。該当ラッパーへ relay すると同時にサーバが agent_id 単位で永続化 (DETS)、次回 wrapper join 時に after_join で配信されて起動モードを復元する。未知 mode は `invalid value: mode`、未知 agent は `unknown_agent` (#58) |
 | クライアント → サーバ | `clear_history` | `{ agent_id }`。**operator のみ**。当該 agent の過去セッション(現在の `session_id` 以外/無し)の返答ログを**サーバのインメモリ・リングバッファ**から消去し `history_cleared` を broadcast。掃除するのは表示用履歴のみで wrapper の JSONL には触れない。未知 agent は `unknown_agent`、現在 `session_id` 不明は `no_current_session`(#48) |
-| クライアント → サーバ | `delete_agent` | `{ agent_id }`。**operator のみ**。当該 agent が `disconnected` の時のみ受理。処理順は `require_disconnected` 非破壊 pre-check (ふじ #72 R1 must-fix、2026-07-23; live 拒否時に revoke と revoked broadcast が走らないよう revoke より前に置く) → `TokenDenylist.revoke + fsync` → `wrapper:<id>` topic に `revoked` broadcast (`reason=agent_deleted`、live channel を force disconnect) → 全 store を purge (`AgentStates` / `AgentDirectory` / `SessionPointers` / `PermissionModes` / `InterAgentHistory` / `SessionResets` / `SessionStarts` / `ClearWatermarks`) → `agent_deleted` broadcast。auto-revoke は恒久 (denylist は purge から除外)。稼働中は `not_disconnected`、未知 agent は `unknown_agent`([#14](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/14) / [#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72) 追補、2026-07-23) |
+| クライアント → サーバ | `delete_agent` | `{ agent_id }`。**operator のみ**。当該 agent が `disconnected` の時のみ受理。処理順は `require_disconnected` 非破壊 pre-check (ふじ #72 R1 must-fix、2026-07-23; live 拒否時に revoke と revoked broadcast が走らないよう revoke より前に置く) → `TokenDenylist.revoke + fsync` → `wrapper:<id>` topic に `revoked` broadcast (`reason=agent_deleted`、live channel を force disconnect) → 全 store を purge (`AgentStates` / `AgentDirectory` / `SessionPointers` / `PermissionModes` / `SessionResets` / `SessionStarts` / `ClearWatermarks`。`InterAgentHistory` は [ADR-0051](../adr/0051-history-restart-resilience.md) で撤廃済み。wrapper ホスト側の transcript / IA sidecar は server から消えない = host local artifact 残置) → `agent_deleted` broadcast。auto-revoke は恒久 (denylist は purge から除外)。稼働中は `not_disconnected`、未知 agent は `unknown_agent`([#14](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/14) / [#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72) 追補、2026-07-23) |
 | クライアント → サーバ | `revoke_wrapper_token` | `{ agent_id }`。**operator のみ**。当該 agent_id の per-agent 署名 wrapper token を per-agent_id denylist へ即時投入する ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D4 追補 / [#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))。live / disconnected どちらでも受理 (進行中の compromise を切る用途)。処理順は `TokenDenylist.revoke + fsync` → `wrapper:<id>` topic に `revoked` broadcast (`reason=operator_revoke`、live channel を force disconnect)。以後の再 join は `Auth.authorize_wrapper` の denylist gate で `unauthorized`。DETS 永続なので server restart を跨いで有効。未知 agent は `unknown_agent` |
 | サーバ → ラッパー | `attach_open` | `{ upload_id, filename, mime, size, chunks }`(relay)。wrapper は `pending_uploads[upload_id]` を作成、5 分 TTL で GC |
 | サーバ → ラッパー | `attach_chunk` | **binary**(relay)。wrapper は header(`<u32 upload_id_len><upload_id utf8><u32 chunk_index>`)をパースし当該 upload の chunk バッファに追加 |
@@ -279,14 +280,51 @@ ext.pending_permission を復元する)。
 キーは `seq`([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。
 join 時には最新状態に加え、直近の返答ログ履歴(サーバの**インメモリ・
 リングバッファ**、[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))も
-配信する(再読込・再接続で返答ログを復元)。履歴はインメモリのみで、サーバ
-再起動で消える(ディスク永続は将来 issue #24)。配信形の詳細は実装で確定。
-返答履歴の**正本は wrapper ホストの SDK JSONL**であり、リングバッファは
-そこから再構築可能な投影と位置づける。resume 起動時は wrapper が当該
-session の JSONL を直読して `user`/`assistant` 行を `log` エンベロープへ写像し、
-`history_reset`(全消去)→ `log` 再生でサーバ表示履歴を上書きする
-([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2、#50。SDK は
-resume 時に過去履歴を query() ストリームへ再 yield しないため直読が必須)。
+配信する(再読込・再接続で返答ログを復元)。履歴はインメモリのみだが、
+サーバ再起動後は wrapper の hydration handshake で自動再構築される
+(下記「投影 hydration と再起動耐性」、
+[ADR-0051](../adr/0051-history-restart-resilience.md)。server 側
+ディスク永続 issue #24 は不採用のまま)。
+返答履歴の**正本は wrapper ホストの composite SSOT**(engine
+transcript + IA sidecar)であり、リングバッファはそこから再構築可能な
+投影と位置づける。replay 時は wrapper が当該 session の transcript を
+直読して `user`/`assistant` 行を `log` エンベロープへ写像し、IA sidecar
+を `replay_ia` へ写像して、`history_reset` → 再生でサーバ表示履歴を
+上書きする([ADR-0014](../adr/0014-session-resume-and-restore.md)
+phase-2、#50。SDK は resume 時に過去履歴を query() ストリームへ再
+yield しないため直読が必須)。
+
+#### 投影 hydration と再起動耐性([ADR-0051](../adr/0051-history-restart-resilience.md))
+
+- **hydration verdict**: wrapper channel の **join 応答**に
+  `hydration: { replay_required: boolean, replay_id? }` を含める。
+  server は AgentStates 内の hydration 状態(`unhydrated` /
+  `in_flight(replay_id, channel_owner)` / `hydrated`、boot 毎に
+  揮発)から要否を決め、`replay_required: true` のとき server 採番の
+  `replay_id` を返す。wrapper は verdict を受けてから replay を開始
+  し、その `replay_id` を `history_reset` / `replay_ia` /
+  `history_replay_complete` で一貫使用する。verdict absent(旧
+  server)の場合のみ legacy startup replay(wrapper 採番 ID)へ
+  fallback する。専用の S→W event は設けない — 再接続 = 新 join で
+  あり、verdict は常に join 応答で届く。
+- **完了と再要求**: `history_replay_complete` の CAS 遷移(上記
+  event 表)。`in_flight` のまま channel が切れたら `unhydrated` へ
+  戻り、次回 join で再要求される。fresh session(session_id 未採番 /
+  transcript 不在)は空 replay(`history_reset` → 即 complete)。
+- **projection epoch**: join 時の `history` push payload に
+  `projection_epoch`(AgentStates init 時採番の opaque UUID)を追加
+  する。client は保持 epoch と不一致なら旧 baseline(表示ログ・
+  clearWatermarks・replay marker・未読 state)を破棄し、
+  authoritative history と「この接続で受信した live envelope」のみを
+  merge する。一致なら従来 merge、absent(旧 server)なら従来動作へ
+  fallback([ADR-0051](../adr/0051-history-restart-resilience.md)
+  D4)。
+- **per-pane projection contract**: IA の live 表示と replay 復元は
+  同一の per-pane upsert API に載る。live accept 時の因果順は
+  validate(participant / quota 等 **reject が確定し得る検査を
+  すべて含む**)→ ingress stamp 採番 → sender / receiver 両 pane へ
+  upsert → peer push、で固定する。詳細は
+  [protocol-inter-agent](protocol-inter-agent.md)。
 
 ### Session visibility semantics (#109 / ADR-0036 F3 復元, 2026-07-24)
 
@@ -294,9 +332,11 @@ resume 時に過去履歴を query() ストリームへ再 yield しないため
 するだけで、ログ・IA の表示も `ClearWatermarks` も変更しない。`/clear` は
 SessionStarts 記録に加え、`SessionResets.confirm_connection/2` がその
 `{order, display}` を `ClearWatermarks.record/3` に採用し、当該 agent の
-`AgentStates` history を marker 1 行だけに絞る。IA の相手 pane は既存の
-per-pane `ClearWatermarks` filter (`agents_channel.merged_histories/0`) で
-hide されるため、durable ledger (`InterAgentHistory` DETS) は削除しない。
+`AgentStates` history を marker 1 行だけに絞る。IA の相手 pane は
+per-pane `ClearWatermarks` filter で hide される。cutoff の比較は IA に
+永続付与された ingress stamp と行う([ADR-0051](../adr/0051-history-restart-resilience.md)
+D3-4。durable ledger `InterAgentHistory` DETS は同 ADR で撤廃、正本は
+wrapper ホストの IA sidecar)。
 operator の `clear_history` (#48) は依然として現行 session の他 session
 ログ purge 用途で `history_cleared` を broadcast する別 API のまま。
 
