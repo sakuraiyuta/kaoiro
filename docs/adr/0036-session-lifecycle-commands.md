@@ -147,6 +147,12 @@ sandbox/network、MCP configを通常のspawn経路から再適用する。値�
   engine 側 session file (JSONL/rollout) は削除せず、旧 session は picker から
   resume 可能のままとする。
 
+**2026-08-08 訂正:** IA visibility cutoff の durable ledger 前提は
+[ADR-0051](0051-history-restart-resilience.md) D3-4 で supersede された。
+`ClearWatermarks` は server 採番の ingress stamp と比較し、IA は wrapper
+ホストの sidecar から per-pane projection へ復元する。server 側の
+`InterAgentHistory` DETS は撤廃する。
+
 `server` 側 `AgentStates` を表示 projection の SSOT とし、client local store だけを
 消す実装は採らない。再接続で消した log が復活するためである。/clear 完了時、
 `SessionResets.confirm_connection/2` は `SessionStarts.advance_transition/3` が返す

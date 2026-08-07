@@ -125,6 +125,10 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blo
   session の他 session ログ purge)。engine 側 session file (JSONL/rollout)
   も削除しない。/clear の IA の相手 pane は #109 の per-pane ClearWatermarks
   で hide されるので、durable ledger (InterAgentHistory DETS) は削除しない。
+- **2026-08-08 訂正:** 前項の durable ledger 前提は
+  [ADR-0051](../adr/0051-history-restart-resilience.md) D3-4 により
+  supersede された。以後の IA cutoff は ingress stamp と wrapper ホストの
+  sidecar を用いる。ここまでの phase-17 記録は当時の実装記録として残す。
 - **task 表と Acceptance Criteria の該当行は歴史記録として原文維持**
   (2026-07-13 close 時の合格基準は当時の解釈で通っていたもの)。仕様の SSOT
   は ADR-0036 F3 と `docs/specs/protocol.md` の Session visibility semantics

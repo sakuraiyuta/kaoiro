@@ -449,6 +449,12 @@ dogfood/container再起動を跨いで保持する (#105)。operatorへのhistor
 volatile `AgentStates` のIAを除いてdurable IAをmergeし、既存dashboard fan-outで
 receiver側にも投影する。agent削除時はsender/receiver関連recordを同期purgeする。
 
+**2026-08-08 訂正:** この IA の「逆算不能」例外と server の
+`InterAgentHistory` 正本化は [ADR-0051](0051-history-restart-resilience.md)
+D3 で supersede された。構造化 IA の正本は wrapper ホストの sidecar とし、
+server 採番の ingress stamp を用いて per-pane projection と clear 境界を
+再構築する。
+
 ## Consequences
 
 ### Positive
@@ -538,6 +544,10 @@ runner 実装が前提。
     text が `user` turn として残るが、resume reconstruction ではこれを
     `kind=user` log へ再投影しない。そうしないと durable IA envelope の bubble
     と同じ内容が operator instruction として二重表示される。
+  - **2026-08-08 訂正(#105):** `InterAgentHistory` を正本・cap 免除とする
+    この追補は [ADR-0051](0051-history-restart-resilience.md) D3 により
+    supersede された。IA は wrapper ホストの sidecar から ingress stamp 付きで
+    replay し、server は揮発 per-pane projection のみを保持する。
 
 ## Related
 

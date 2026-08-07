@@ -49,6 +49,10 @@ Codex 個人設定の tracked 管理(`dotfiles/codex`)は settings repo 側。
       の 1 件のみ fail で、本変更とは非回帰(server 変更は persona_assets の
       footer のみ)。
 
+**2026-08-08 注記:** この #115 は phase-19 完了時点の検証記録である。
+`InterAgentHistory` DETS は [ADR-0051](../adr/0051-history-restart-resilience.md)
+に基づく phase 30-7 で撤廃予定であり、現在の durability 設計を示すものではない。
+
 ## Tasks
 
 | # | 対象 | 状態 |
@@ -75,3 +79,6 @@ Codex 個人設定の tracked 管理(`dotfiles/codex`)は settings repo 側。
   `InterAgentHistory.list_for`(DETS 固定 path `System.tmp_dir()/…dets` 非分離 =
   既知 #115)で、本変更と無関係の非回帰。review cycle は round1 medium /
   round2 small とも findings 0。
+
+**2026-08-08 注記:** 上記は当時の試験結果であり、`InterAgentHistory` の
+撤廃方針は [ADR-0051](../adr/0051-history-restart-resilience.md) D3 を参照する。

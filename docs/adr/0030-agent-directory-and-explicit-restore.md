@@ -82,6 +82,12 @@ goal: **server と runner が同時ダウン・再起動した後、client 側�
     live agent への削除は既存 `AgentStates.delete/1` の disconnected guard
     がそのまま効く(不変)。復元不可なゾンビ agent(`no_session` 等で
     復元 spawn が繰り返し失敗するケース)を operator が明示掃除できる。
+  - **2026-08-08 注記:** 現行の purge 契約は [protocol](../specs/protocol.md)
+    の `delete_agent` に同期する。対象は `AgentStates`、`AgentDirectory`、
+    `SessionPointers`、`PermissionModes`、`SessionResets`、`SessionStarts`、
+    `ClearWatermarks` の 7 store であり、`InterAgentHistory` は
+    [ADR-0051](0051-history-restart-resilience.md) で撤廃済み。恒久 revoke 用の
+    `TokenDenylist` は purge しない。
 - **D7(host_id 非永続)**: agent_id の命名規約(ADR-0024 D3 `<host_id>.<rand>`)
   から `host_id_of/1` で常時算出可能なため、host_id 単独の永続は不要。
   AgentDirectory には格納しない。

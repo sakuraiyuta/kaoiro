@@ -83,16 +83,21 @@ mount できる。footer を運用者が差し替える場合は、host 側の
 を設定する。cache は書き込み可能な永続領域に置き、persona pack の
 mount とは分離する。
 
-**DETS パス 8 種**(restart 跨ぎで状態を残す DETS ファイルの格納先)は
+**DETS パス 7 種**(restart 跨ぎで状態を残す DETS ファイルの格納先)は
 同梱 `docker-compose.yaml` が `environment:` + named volume `kaoiro-state`
 で設定済みのため、compose 運用では `.env` に書く必要はない。compose を
-使わずホストで直接 release を動かす場合のみ、この 8 種を書き込み可能な
+使わずホストで直接 release を動かす場合のみ、この 7 種を書き込み可能な
 永続パスへ明示する: `KAOIRO_SESSION_POINTERS_PATH` /
 `KAOIRO_AGENT_DIRECTORY_PATH` / `KAOIRO_PERMISSION_MODES_PATH` /
-`KAOIRO_INTER_AGENT_HISTORY_PATH` / `KAOIRO_CLEAR_WATERMARKS_PATH` /
-`KAOIRO_SESSION_STARTS_PATH` / `KAOIRO_INGRESS_ORDER_PATH` /
-`KAOIRO_TOKEN_DENYLIST_PATH`。未設定はコンテナの `/tmp` 相当に落ち、
+`KAOIRO_CLEAR_WATERMARKS_PATH` / `KAOIRO_SESSION_STARTS_PATH` /
+`KAOIRO_INGRESS_ORDER_PATH` / `KAOIRO_TOKEN_DENYLIST_PATH`。未設定は
+コンテナの `/tmp` 相当に落ち、
 `docker compose down` で消える(offline agent 一覧が失われる)。
+
+**2026-08-08 注記:** `KAOIRO_INTER_AGENT_HISTORY_PATH` は
+[ADR-0051](../adr/0051-history-restart-resilience.md) の実装完了
+(phase 30-7)時に削除する。同梱 `docker-compose.yaml` の当該設定は実装と
+同じ変更で除去するまで残る。本節の一覧は実装完了後の正本である。
 
 ### 1.3 docker compose で起動
 
