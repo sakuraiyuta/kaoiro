@@ -2251,6 +2251,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       assert_reply ref, :ok
       assert [{{1000, 0}, ^ia}] = AgentStates.ia_projection()[agent_id]
+      # (f) pane 独立: peer は offline (join すらしていない) が、この
+      # wrapper の pane は自分の sidecar だけで戻る。peer の pane は
+      # peer 自身が replay するまで空のまま。
+      refute Map.has_key?(AgentStates.ia_projection(), peer_id)
       # 会話の再実行が起きていないこと: peer へ push されない。
       refute_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^peer_id}, 100
     end

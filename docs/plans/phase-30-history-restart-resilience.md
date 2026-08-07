@@ -23,13 +23,13 @@ server 再起動を跨いでも全 operator 端末が同一の timeline を見�
 | 30-1 | ADR-0051 仕様レビュー | ふじ | ✅ | 2 巡 (must-fix 計 10 件、全反映) → approve。マスター承認で accepted 化済み (2026-08-08) |
 | 30-2 | ADR 確定 + specs 改訂 | クロエ | ✅ | wire 確定: hydration verdict は wrapper join 応答 `hydration: {replay_required, replay_id?}` (専用 S→W event なし)、`replay_ia {replay_id, items:[{envelope, ingress_stamp}]}` は topic bind、送信 ack は envelope push reply `{ingress_stamp}`。 protocol.md (ADR D8 の 5 点: join hydration verdict / `replay_ia` / ingress stamp (配信 + acceptance ack) / projection epoch / `preserve_inter_agent` false 明示)、protocol-inter-agent.md (sidecar schema・pending journal namespace・generation・live projection の因果順)、architecture.md |
 | 30-3 | 既存文書 amendment sweep | もも | ✅ | 完了 2026-08-08。ADR D8 の対象: ADR-0014 A4 / ADR-0036 F3 / ADR-0030 D6 store 数 / protocol.md `preserve_inter_agent`・purge store 数 / deployment.md DETS 8 種 → 7 種。phase-17 / 19 の旧 DETS 前提にも dated note を追補 |
-| 30-4 | server: per-pane projection contract | あお | 🟡 | 委任済 2026-08-08。 live/replay 共用の volatile per-pane upsert API。live accept 時の validate → stamp 採番 → 両 pane upsert → routing の因果順、server 合成 IA は recipient pane のみ、identity = `ingress_stamp\|pane_agent_id`、clear filter + 最終 200 cap 同経路 (ADR D3-1/D6) |
-| 30-5 | wrapper: IA sidecar 記録 | あお | 🟡 | 委任済 2026-08-08。 agent-common 共通化、両 engine。受信 = 注入前 append (stamp 付き配信) / 送信 = transport acceptance ack (`{ingress_stamp}` reply) 到着時 append、pending journal ({agent_id, reset_generation} namespace) → session bind、/new・/clear generation 切替 (ADR D3-2/D3-5) |
-| 30-6 | wrapper: hydration handshake + IA replay 送出 | あお | 🟡 | 委任済 2026-08-08。 join verdict (要否 + server replay_id) を待って replay 開始、legacy fallback (verdict absent → 従来 startup replay)、single-flight、fresh session の empty-complete、sidecar → `replay_ia` 送出 (ADR D2/D3-3) |
-| 30-7 | server: hydration 状態管理 + replay ingress + DETS 撤廃 | あお | 🟡 | 委任済 2026-08-08。 AgentStates に hydration state (in_flight は replay_id + channel_owner の CAS)、join 応答 verdict、`replay_ia` の pane 所有権検証 + 投影 upsert、stamp と ClearWatermarks 比較、InterAgentHistory と purge 経路の除去、`preserve_inter_agent: false` 明示送信 (ADR D2/D3-3/D3-4) |
-| 30-8 | dashboard: projection epoch 再同期 | あお | 🟡 | 委任済 2026-08-08。 新接続 buffer の分離、epoch 不一致時の baseline 破棄 (logs / clearWatermarks / replay marker / 未読 state) + history と新接続 buffer のみ merge、epoch absent fallback (ADR D4) |
+| 30-4 | server: per-pane projection contract | あお | ✅ | 2026-08-08 完了 (1493eb4)。 live/replay 共用の volatile per-pane upsert API。live accept 時の validate → stamp 採番 → 両 pane upsert → routing の因果順、server 合成 IA は recipient pane のみ、identity = `ingress_stamp\|pane_agent_id`、clear filter + 最終 200 cap 同経路 (ADR D3-1/D6) |
+| 30-5 | wrapper: IA sidecar 記録 | あお | ✅ | 2026-08-08 完了 (186f542)。 agent-common 共通化、両 engine。受信 = 注入前 append (stamp 付き配信) / 送信 = transport acceptance ack (`{ingress_stamp}` reply) 到着時 append、pending journal ({agent_id, reset_generation} namespace) → session bind、/new・/clear generation 切替 (ADR D3-2/D3-5) |
+| 30-6 | wrapper: hydration handshake + IA replay 送出 | あお | ✅ | 2026-08-08 完了 (186f542)。 join verdict (要否 + server replay_id) を待って replay 開始、legacy fallback (verdict absent → 従来 startup replay)、single-flight、fresh session の empty-complete、sidecar → `replay_ia` 送出 (ADR D2/D3-3) |
+| 30-7 | server: hydration 状態管理 + replay ingress + DETS 撤廃 | あお | ✅ | 2026-08-08 完了 (1493eb4)。 hydrated の無効化条件は ADR D2 追補 (あお Q1)。 AgentStates に hydration state (in_flight は replay_id + channel_owner の CAS)、join 応答 verdict、`replay_ia` の pane 所有権検証 + 投影 upsert、stamp と ClearWatermarks 比較、InterAgentHistory と purge 経路の除去、`preserve_inter_agent: false` 明示送信 (ADR D2/D3-3/D3-4) |
+| 30-8 | dashboard: projection epoch 再同期 | あお | ✅ | 2026-08-08 完了 (150b3a2)。 新接続 buffer の分離、epoch 不一致時の baseline 破棄 (logs / clearWatermarks / replay marker / 未読 state) + history と新接続 buffer のみ merge、epoch absent fallback (ADR D4) |
 | 30-9 | docs 整合 sweep | もも | ⏳ | 実装後の README / specs 齟齬確認 |
-| 30-10 | 実装レビュー | ふじ | ⏳ | must-fix ループ |
+| 30-10 | 実装レビュー | ふじ | ⏳ | must-fix ループ。 実装で確定した仕様差分 4 点 (Q1 hydrated 無効化 / Q2 stamp wire 形 / Q3 sidecar・pending path / Q4 因果順の quota atomic) と追補 1 点 (replay_ia の lobby broadcast) を併せてレビュー |
 | 30-11 | dogfood 検証 + atomic rollout 実施 | デフォルトくん + マスター | ⏳ | ADR D6 の maintenance 手順 (IA 停止 → 3 層同時更新 → 全タブ reload) で deploy し、下記シナリオを検証 |
 
 Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started,
@@ -46,44 +46,45 @@ Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started,
       経路、ADR D3-1)
 - [ ] IA バブルが sidecar + `replay_ia` 経由で復元され、replay が
       IA の再配送(peer への再 push・SDK 再注入)を一切起こさない
-- [ ] `InterAgentHistory` DETS がコードベース・deployment doc から
+- [x] `InterAgentHistory` DETS がコードベース・deployment doc から
       消えている
 - [ ] 再起動前から開いていたタブが再起動前ログを表示し続けない。
       複数端末で同一表示になる
 - [ ] server 稼働中の F5 全復元・端末間一致が従来どおり成立する
       (回帰なし)
-- [ ] 全テスト green(server `mix test` / wrapper `pnpm test` /
+- [x] 全テスト green(server `mix test` / wrapper `pnpm test` /
       dashboard `pnpm test`)
 
 failure matrix(ふじレビュー由来。(a)-(e)・(h)・(i)・(k) は
 **deterministic automated test 必須**、(f)(g) と全体 UX は dogfood
 併用):
 
-- [ ] (a) replay 途中(reset 後 partial)で wrapper 切断 → 再接続で
+- [x] (a) replay 途中(reset 後 partial)で wrapper 切断 → 再接続で
       再要求され完全な timeline に到達する [test]
-- [ ] (b) join verdict handshake: `required: true` の replay_id が
+- [x] (b) join verdict handshake: `required: true` の replay_id が
       reset / `replay_ia` / complete で一貫し、hydration 遷移が CAS
       で行われる。startup replay との二重実行が起きない [test]
-- [ ] (c) server 生存中の wrapper 再接続では verdict
+- [x] (c) server 生存中の wrapper 再接続では verdict
       `required: false` が返り、無駄 replay が走らない [test]
-- [ ] (d) fresh session(session_id nil / transcript 無し)は
+- [x] (d) fresh session(session_id nil / transcript 無し)は
       empty-complete で hydrated になる [test]
-- [ ] (e) `/new`・`/clear`・rollback・旧 session resume・
+- [x] (e) `/new`・`/clear`・rollback・旧 session resume・
       `clear_history` の各操作後に clear 済み IA が復活しない
       (ingress stamp 比較) [test]
 - [ ] (f) sender / receiver の片方 offline でも他方の pane が独立に
-      復元される [test + dogfood]
+      復元される [test + dogfood] — test 側は済 (30-11 の dogfood 待ち)
 - [ ] (g) server 合成 IA(エラー直送通知)が受信側 sidecar 経由で
       復元され、同一 conversation の複数回通知が識別・共存する
-      (`ingress_stamp|pane` identity) [test + dogfood]
-- [ ] (h) transcript + IA 合算で 200 件超のとき最終投影が newest 200
+      (`ingress_stamp|pane` identity) [test + dogfood] — test 側は済
+      (30-11 の dogfood 待ち)
+- [x] (h) transcript + IA 合算で 200 件超のとき最終投影が newest 200
       に cap される(201 件・400 件境界) [test]
-- [ ] (i) epoch 不一致 + history 到着前の live envelope 到着で、
+- [x] (i) epoch 不一致 + history 到着前の live envelope 到着で、
       live 行を失わず亡霊だけ消える [test]
 - [ ] (j) atomic maintenance rollout の運用条件(IA 停止・3 層同時
       更新・全タブ reload)が手順書どおり実施され、旧 client 向け
       `preserve_inter_agent: false` 明示送信が確認できる [dogfood]
-- [ ] (k) sidecar の途中切れ・破損行が skip され replay が継続する
+- [x] (k) sidecar の途中切れ・破損行が skip され replay が継続する
       [test]
 
 ## Dogfood 検証シナリオ (30-11)
