@@ -1,19 +1,31 @@
 import type { Envelope } from "./protocol";
 
+/** One open replay window. `generation` is the client's connection counter
+ * at the moment the `history_reset` arrived (ふじ 30-10 must-fix M1): an
+ * ADR-0051 D4 epoch discard throws away every piece of history-derived
+ * state, and without this tag it also threw away the marker for the replay
+ * THIS connection has running — after which the still-arriving replayed
+ * rows pulsed as if they were live arrivals. */
+export interface TimelineReplayMarker {
+  replayId: string;
+  generation: number;
+}
+
 /** Active JSONL replays indexed by producer agent. A replay's completion is
  * paired by `replay_id`, so a delayed completion from a prior reconnect
  * cannot accidentally enable live-pulse behavior for a newer replay. */
-export type ActiveTimelineReplays = Readonly<Record<string, string>>;
+export type ActiveTimelineReplays = Readonly<Record<string, TimelineReplayMarker>>;
 
 export function beginTimelineReplay(
   active: ActiveTimelineReplays,
   agentId: string,
   replayId: string | undefined,
+  generation: number,
 ): ActiveTimelineReplays {
   const { [agentId]: _previous, ...remaining } = active;
   return replayId === undefined
     ? remaining
-    : { ...remaining, [agentId]: replayId };
+    : { ...remaining, [agentId]: { replayId, generation } };
 }
 
 export function completeTimelineReplay(
@@ -21,7 +33,7 @@ export function completeTimelineReplay(
   agentId: string,
   replayId: string,
 ): ActiveTimelineReplays {
-  if (active[agentId] !== replayId) return active;
+  if (active[agentId]?.replayId !== replayId) return active;
   const { [agentId]: _complete, ...remaining } = active;
   return remaining;
 }
@@ -34,7 +46,22 @@ export function clearTimelineReplay(
   active: ActiveTimelineReplays,
   agentId: string,
 ): ActiveTimelineReplays {
-  return beginTimelineReplay(active, agentId, undefined);
+  return beginTimelineReplay(active, agentId, undefined, 0);
+}
+
+/** Keeps only the markers opened on `generation` — the epoch-discard and
+ * (re)join paths. Markers from an earlier connection can never complete
+ * (the wrapper restarts its handshake per connection), while the current
+ * connection's replay is still in flight and must keep suppressing pulses. */
+export function retainTimelineReplaysOfGeneration(
+  active: ActiveTimelineReplays,
+  generation: number,
+): ActiveTimelineReplays {
+  return Object.fromEntries(
+    Object.entries(active).filter(
+      ([, marker]) => marker.generation === generation,
+    ),
+  );
 }
 
 /** Ordinary `envelope` events are used for both JSONL reconstruction and live

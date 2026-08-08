@@ -7,6 +7,7 @@ import {
   completeTimelineReplay,
   computeStaleTimelineKeys,
   isTimelineReplayEnvelope,
+  retainTimelineReplaysOfGeneration,
 } from "../src/lib/timelineArrival";
 import { conversationEntryKey, isTimelineArrival } from "../src/lib/conversationTimeline";
 import type { Envelope } from "../src/lib/protocol";
@@ -26,7 +27,7 @@ function assistant(seq: number, text: string): Envelope {
 
 describe("timeline replay/live arrival integration (#125)", () => {
   it("history_reset → replayed assistant → complete → live assistant で replay だけ pulse しない", () => {
-    let active = beginTimelineReplay({}, "agent-a", "replay-1");
+    let active = beginTimelineReplay({}, "agent-a", "replay-1", 1);
     let pulseKeys = new Set<string>();
 
     const replayed = assistant(1, "JSONL replay");
@@ -44,9 +45,40 @@ describe("timeline replay/live arrival integration (#125)", () => {
   });
 
   it("古い replay complete は現行 replay の抑止を解除しない", () => {
-    let active = beginTimelineReplay({}, "agent-a", "replay-new");
+    let active = beginTimelineReplay({}, "agent-a", "replay-new", 1);
     active = completeTimelineReplay(active, "agent-a", "replay-old");
     expect(isTimelineReplayEnvelope(active, assistant(1, "still replay"))).toBe(true);
+  });
+});
+
+// ふじ 30-10 must-fix M1: an epoch discard wipes history-derived state, and
+// the replay marker of the CURRENT connection is not history-derived — its
+// replay is still arriving. Generation tagging is what tells the two apart.
+describe("retainTimelineReplaysOfGeneration (ふじ 30-10 M1)", () => {
+  it("現行 generation の marker は残り、旧 generation の marker は落ちる", () => {
+    let active = beginTimelineReplay({}, "agent-old", "replay-old", 1);
+    active = beginTimelineReplay(active, "agent-new", "replay-new", 2);
+
+    const retained = retainTimelineReplaysOfGeneration(active, 2);
+
+    expect(Object.keys(retained)).toEqual(["agent-new"]);
+    expect(retained["agent-new"]).toEqual({
+      replayId: "replay-new",
+      generation: 2,
+    });
+  });
+
+  it("epoch discard 後も現行 replay の pulse 抑止が続く", () => {
+    const active = retainTimelineReplaysOfGeneration(
+      beginTimelineReplay({}, "agent-a", "replay-2", 2),
+      2,
+    );
+    expect(isTimelineReplayEnvelope(active, assistant(1, "replayed"))).toBe(true);
+  });
+
+  it("再接続 (誰も新 generation を持たない) では全 marker が落ちる", () => {
+    const active = beginTimelineReplay({}, "agent-a", "replay-1", 1);
+    expect(retainTimelineReplaysOfGeneration(active, 2)).toEqual({});
   });
 });
 

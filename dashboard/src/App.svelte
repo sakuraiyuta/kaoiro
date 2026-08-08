@@ -16,6 +16,8 @@
     completeTimelineReplay,
     computeStaleTimelineKeys,
     isTimelineReplayEnvelope,
+    retainTimelineReplaysOfGeneration,
+    type ActiveTimelineReplays,
   } from "./lib/timelineArrival";
   import { expressionFor, spriteUrlFor } from "./lib/expression";
   import type {
@@ -79,8 +81,10 @@
   let newTimelineEntryKeys = $state<ReadonlySet<string>>(new Set());
   // `history_reset` begins JSONL replay. The wrapper's explicit completion
   // boundary clears this map, so replayed assistant rows never look like a
-  // live arrival while the first post-replay assistant still does.
-  let activeTimelineReplays = $state<Record<string, string>>({});
+  // live arrival while the first post-replay assistant still does. Each
+  // marker carries the connection generation that opened it, so an epoch
+  // discard can drop the dead ones without cancelling a running replay.
+  let activeTimelineReplays = $state<ActiveTimelineReplays>({});
   // Per-agent IA visibility watermark (issue #109). It changes only after
   // operator clear_history; session transitions do not affect display.
   let clearWatermarks = $state<Record<string, string>>({});
@@ -92,7 +96,17 @@
   // Live reply envelopes received since THIS connection joined, kept apart
   // from the baseline so an epoch mismatch can drop the stale merge target
   // without losing rows that arrived before the history push (D4 step 1).
-  // Not $state: nothing renders from it, and it is cleared on every push.
+  // Not $state: nothing renders from it.
+  //
+  // ふじ 30-10 must-fix M1: the window is one CONNECTION's join → that
+  // connection's `history` push, NOT "between two history pushes". The
+  // earlier version only ever reset on a push, so rows from a previous,
+  // now-dead projection sat in the buffer and an epoch mismatch promoted
+  // them straight back into the baseline — resurrecting the exact ghosts
+  // D4 exists to kill. `connectionGeneration` bumps on every channel join
+  // and `awaitingHistory` is the open/closed flag for the window.
+  let connectionGeneration = 0;
+  let awaitingHistory = false;
   let liveSinceJoin: Record<string, Envelope[]> = {};
   // Ticking clock owned by App for the response-timeline pane (#25).
   // Passed to ResponseTimeline so its "N 分前" labels refresh live
@@ -292,10 +306,44 @@
     );
   }
 
-  function clearTimelineState(): void {
+  /** Drops the ephemeral timeline state derived from a discarded history.
+   * `retainReplaysOfGeneration` keeps the replay markers opened on that
+   * connection: an epoch discard invalidates the BASELINE, not the replay
+   * the current wrapper still has in flight, and cancelling its marker made
+   * every remaining replayed row pulse as a live arrival. `null` (logout)
+   * wipes everything. */
+  function clearTimelineState(
+    retainReplaysOfGeneration: number | null = null,
+  ): void {
     readTimelineEntryKeys = new Set();
     newTimelineEntryKeys = new Set();
-    activeTimelineReplays = {};
+    activeTimelineReplays =
+      retainReplaysOfGeneration === null
+        ? {}
+        : retainTimelineReplaysOfGeneration(
+            activeTimelineReplays,
+            retainReplaysOfGeneration,
+          );
+  }
+
+  /** Applies to the join-window buffer the same transformation just applied
+   * to `logs`. The buffer becomes the baseline when an epoch mismatch
+   * discards the old one (D4 step 1), so a clear / reset / delete that the
+   * buffer never saw would come back to life exactly then — the case ふじ
+   * 30-10 M1 flagged alongside the window boundary itself. */
+  function mirrorIntoLiveBuffer(
+    agentId: string,
+    transform: (rows: Envelope[]) => Envelope[],
+  ): void {
+    const rows = liveSinceJoin[agentId];
+    if (rows === undefined) return;
+    const next = transform(rows);
+    if (next.length === 0) {
+      const { [agentId]: _drop, ...rest } = liveSinceJoin;
+      liveSinceJoin = rest;
+      return;
+    }
+    liveSinceJoin = { ...liveSinceJoin, [agentId]: next };
   }
 
   // A directory entry is enough to render a read-only offline detail. This
@@ -379,6 +427,20 @@
       defaultSocketUrl(location),
       {
         onStatus: (next) => (status = next),
+        onJoined: () => {
+          // A fresh connection: everything the previous one buffered belongs
+          // to a projection this connection has not been told about yet, and
+          // its replay markers can never be completed (the wrapper restarts
+          // its own handshake per connection). Both go now, before the first
+          // envelope of the new window arrives.
+          connectionGeneration += 1;
+          awaitingHistory = true;
+          liveSinceJoin = {};
+          activeTimelineReplays = retainTimelineReplaysOfGeneration(
+            activeTimelineReplays,
+            connectionGeneration,
+          );
+        },
         onSnapshot: (next) => (agents = next),
         onEnvelope: (envelope) => {
           // Reply lines feed the transcript; state envelopes update the
@@ -418,11 +480,16 @@
               if (merged.length > previous.length) addedToTranscript = true;
               next[id] = merged;
               // ADR-0051 D4 step 1: remember it separately, so a history
-              // push that invalidates the baseline can still keep it.
-              liveSinceJoin[id] = mergeTranscriptEntries(
-                liveSinceJoin[id] ?? [],
-                [envelope],
-              );
+              // push that invalidates the baseline can still keep it — but
+              // ONLY inside this connection's join→history window. Outside
+              // it the baseline is already authoritative and buffering
+              // would just hoard rows for the next mismatch to resurrect.
+              if (awaitingHistory) {
+                liveSinceJoin[id] = mergeTranscriptEntries(
+                  liveSinceJoin[id] ?? [],
+                  [envelope],
+                );
+              }
             }
             logs = next;
             // JSONL resume replay deliberately reuses ordinary `envelope`
@@ -493,15 +560,19 @@
           });
           if (applied.discarded) {
             // Everything else derived from the discarded history goes with
-            // it: replay pairing markers and the read / new timeline keys
-            // now point at rows that no longer exist.
-            clearTimelineState();
+            // it: the read / new timeline keys and the replay markers of
+            // PREVIOUS connections now point at rows that no longer exist.
+            // This connection's own markers stay — its replay is still
+            // running and its rows must not start pulsing as live.
+            clearTimelineState(connectionGeneration);
           }
           clearWatermarks = applied.clearWatermarks;
           logs = applied.logs;
           projectionEpoch = applied.epoch;
-          // The window this buffer covers — join until the history push —
-          // has closed; live envelopes now land in `logs` directly.
+          // The window this buffer covers — this connection's join until
+          // its history push — has closed; live envelopes now land in
+          // `logs` directly.
+          awaitingHistory = false;
           liveSinceJoin = {};
         },
         onHistoryCleared: (agentId, sessionId, watermark) => {
@@ -534,6 +605,9 @@
             );
             logs = { ...logs, [agentId]: next };
           }
+          mirrorIntoLiveBuffer(agentId, (rows) =>
+            filterAfterHistoryCleared(rows, sessionId, clearWatermarks[agentId]),
+          );
         },
         onHistoryReset: (agentId, preserveInterAgent, replayId) => {
           // history_reset is resume replay only; /new and /clear preserve
@@ -544,11 +618,33 @@
             computeStaleTimelineKeys(prev, next, conversationEntryKey),
           );
           logs = { ...logs, [agentId]: next };
+          mirrorIntoLiveBuffer(agentId, (rows) =>
+            resetTranscriptHistory(rows, preserveInterAgent),
+          );
           activeTimelineReplays = beginTimelineReplay(
             activeTimelineReplays,
             agentId,
             replayId,
+            connectionGeneration,
           );
+        },
+        onHistoryReplayEnvelope: (paneAgentId, envelope) => {
+          // ADR-0051 D3-3 追補: the server already decided which pane this
+          // restored row belongs to. Unlike `onEnvelope` above there is NO
+          // fan-out to payload.to — that widening is precisely what put a
+          // restored row into an offline peer's pane (ふじ 30-10 M2). No
+          // arrival marker either: this is a replay, not a live reply.
+          const previous = logs[paneAgentId] ?? [];
+          logs = {
+            ...logs,
+            [paneAgentId]: mergeTranscriptEntries(previous, [envelope]),
+          };
+          if (awaitingHistory) {
+            liveSinceJoin[paneAgentId] = mergeTranscriptEntries(
+              liveSinceJoin[paneAgentId] ?? [],
+              [envelope],
+            );
+          }
         },
         onHistoryReplayComplete: (agentId, replayId) => {
           // Ignore stale completions from an older reconnect; only the
@@ -593,6 +689,10 @@
               Object.entries(logs).filter(([id]) => id !== agentId),
             );
           }
+          // The join-window buffer holds a second copy of the transcript and
+          // becomes the baseline on an epoch mismatch, so a deleted agent
+          // left in it would reappear with its whole history.
+          mirrorIntoLiveBuffer(agentId, () => []);
           if (agentId in spawnErrors) {
             const { [agentId]: _drop, ...rest } = spawnErrors;
             spawnErrors = rest;
@@ -918,6 +1018,7 @@
     agents = {};
     logs = {};
     liveSinceJoin = {};
+    awaitingHistory = false;
     projectionEpoch = null;
     clearTimelineState();
     timelineScrollTarget = null;

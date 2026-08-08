@@ -2135,6 +2135,12 @@ describe("findPrecedingUserPrompt (issue #128)", () => {
 // ADR-0051 D4 — projection epoch. Failure-matrix row (i): an epoch
 // mismatch must drop the ghost baseline WITHOUT losing live envelopes that
 // arrived on this connection before the history push.
+//
+// These are unit tests of the merge rule ONLY. They hand `sinceJoin` in, so
+// they say nothing about what actually fills it — which is where ふじ 30-10
+// M1 found the defect (the buffer's window was wrong, not the merge). The
+// behavioural pin lives in projectionEpochWindow.integration.test.ts, which
+// drives App.svelte's real handlers.
 describe("applyProjectionEpoch", () => {
   function log(agentId: string, ts: string, text: string): Envelope {
     return {

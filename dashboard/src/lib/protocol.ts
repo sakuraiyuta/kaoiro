@@ -1078,6 +1078,13 @@ export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 export interface KaoiroHandlers {
   onStatus: (status: ConnectionStatus) => void;
+  /** The lobby channel completed a join — the opening edge of the
+   *  "join → this connection's `history` push" window (ADR-0051 D4 step 1).
+   *  Fires again on every Phoenix rejoin, because the join push's receive
+   *  hooks survive `resend()`. Distinct from `onStatus("connected")`, which
+   *  reports the TRANSPORT: a socket can open before the channel joins, and
+   *  the buffer's window is the channel's, not the socket's. */
+  onJoined?: () => void;
   /** Full re-sync; replaces all known agents (last-write-wins). */
   onSnapshot: (agents: Record<string, Envelope>) => void;
   /** Single-agent update (any envelope type; caller routes by type). */
@@ -1120,6 +1127,13 @@ export interface KaoiroHandlers {
   ) => void;
   /** Deterministic end boundary for the resume replay paired by replay_id. */
   onHistoryReplayComplete?: (agentId: string, replayId: string) => void;
+  /** One inter-agent row restored from a wrapper's sidecar, addressed to
+   *  exactly ONE pane (ADR-0051 D3-3 追補 / ふじ 30-10 must-fix M2). The
+   *  server chose `paneAgentId` from the replaying wrapper's channel topic,
+   *  so unlike an ordinary `envelope` this must NOT be fanned out across
+   *  `agent_id ∪ payload.to` — doing so puts the row in a pane a reload
+   *  would not show it in. Operator-only. */
+  onHistoryReplayEnvelope?: (paneAgentId: string, envelope: Envelope) => void;
   /** A disconnected agent was removed (issue #14): drop it from the grid.
    *  Operator-only. */
   onAgentDeleted?: (agentId: string) => void;
@@ -1629,6 +1643,27 @@ export function parseHistoryReplayComplete(
     return null;
   }
   return { agent_id: p.agent_id, replay_id: p.replay_id };
+}
+
+export interface HistoryReplayEnvelopePayload {
+  paneAgentId: string;
+  envelope: Envelope;
+}
+
+/** Narrows the `history_replay_envelope` push (ADR-0051 D3-3 追補). The pane
+ *  is server-chosen, so its absence is not something to guess around — a
+ *  malformed push is dropped rather than degraded into the fan-out this
+ *  event exists to avoid. Only `inter_agent_message` is accepted: replayed
+ *  transcript lines keep riding the ordinary `envelope` route. */
+export function parseHistoryReplayEnvelope(
+  value: unknown,
+): HistoryReplayEnvelopePayload | null {
+  if (typeof value !== "object" || value === null) return null;
+  const p = value as { pane_agent_id?: unknown; envelope?: unknown };
+  if (typeof p.pane_agent_id !== "string" || p.pane_agent_id === "") return null;
+  if (!isEnvelope(p.envelope)) return null;
+  if (p.envelope.type !== "inter_agent_message") return null;
+  return { paneAgentId: p.pane_agent_id, envelope: p.envelope };
 }
 
 /** ふじ 4th advisory 2 (2026-07-23): single production helper that
@@ -2480,6 +2515,12 @@ export function connectKaoiro(
       );
     }
   });
+  c.on("history_replay_envelope", (payload: unknown) => {
+    const restored = parseHistoryReplayEnvelope(payload);
+    if (restored !== null) {
+      handlers.onHistoryReplayEnvelope?.(restored.paneAgentId, restored.envelope);
+    }
+  });
   c.on("agent_deleted", (payload: { agent_id?: unknown }) => {
     if (typeof payload.agent_id === "string") {
       handlers.onAgentDeleted?.(payload.agent_id);
@@ -2545,7 +2586,11 @@ export function connectKaoiro(
   function subscribeChannel(s: Socket): Channel {
     const ch = s.channel("agents:lobby");
     setupChannelHandlers(ch);
-    ch.join();
+    // The join reply opens the ADR-0051 D4 buffer window. Phoenix keeps a
+    // join push's receive hooks across `rejoin()`'s `resend()`, so this
+    // fires on every reconnect too — which is exactly when the client has
+    // to forget what the previous connection buffered.
+    ch.join().receive("ok", () => handlers.onJoined?.());
     return ch;
   }
 
