@@ -258,7 +258,8 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
   ない peer の pane にも残ってしまうから(ふじ 30-10 must-fix M2、
   2026-08-08)。`pane_agent_id` は replay 中 wrapper の channel assign
   由来で、wrapper の payload には pane 指定権を与えない。
-  1 回の `replay_ia` push は wrapper 側が JSON 実 byte 長で分割する
+  1 回の `replay_ia` push は wrapper 側が JSON 実 byte 長 **1,000,000 bytes**
+  を上限に分割する
   (socket の `max_frame_size` 8MB に対し 200 行 × 64KiB envelope は
   約 12MB になり frame ごと reject され、complete が届かず永久に
   unhydrated になるため)。同一 `replay_id` の複数 push を

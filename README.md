@@ -13,9 +13,10 @@ Phase 0〜4・7・10〜22・25・27・28 が完了しており、ダッシュボ
 起動・監視・指示・承認、ホスト常駐 runner、ファイルアップロード、
 ペルソナの server 集約 SoT、Codex アダプタ、session lifecycle
 (`/new`・`/clear`)、エージェント間メッセージングまで一通り動く。
-Phase 26(dashboard の OAuth ログイン)は実装完了で provider 登録と
-実機 E2E が残り、Phase 23 / 24 は dogfood の手動検証待ち。未着手は
-Phase 5(国際化)と Phase 9(外部人間メッセージング)で、Phase 6
+Phase 30(表示履歴の再起動耐性)は実装・レビュー完了で、atomic rollout
+による dogfood 検証待ち。Phase 26(dashboard の OAuth ログイン)は実装完了で
+provider 登録と実機 E2E が残り、Phase 23 / 24 は dogfood の手動検証待ち。
+未着手は Phase 5(国際化)と Phase 9(外部人間メッセージング)で、Phase 6
 (感情フィルタ)は当分の間塩漬け。共通プロトコルは確定済み
 ([docs/specs/protocol.md](docs/specs/protocol.md))。フェーズ別の
 正確な状態は [docs/plans/README.md](docs/plans/README.md) が正本。
@@ -94,12 +95,11 @@ runner 経由で spawn する。env・トークン設定や各コンポーネン
 
 ## 現在のゴール
 
-2026-08-02 に Phase 23 / 24 / 8 を close し、Phase 6 を塩漬けにした。
-直近の焦点は協調指針の共通フッター自動注入
-([ADR-0044](docs/adr/0044-coordination-injection-hitl.md)、accepted)と
-そのフッターを外部ファイル化する
-[ADR-0045](docs/adr/0045-footer-file-externalization.md)(proposed)の
-決着、および Phase 26 の実機 E2E。未着手フェーズの着手順は
+直近の焦点は Phase 30 の atomic maintenance rollout と dogfood 検証
+(全 agent 停止 → server / wrapper / dashboard 同時更新 → 全タブ reload)。
+表示履歴の再起動耐性は [ADR-0051](docs/adr/0051-history-restart-resilience.md)
+に従い、実装・レビューまで完了している。並行して Phase 26 の provider 登録と
+実機 E2E、Phase 23 / 24 の手動 dogfood 検証が残る。未着手フェーズの着手順は
 [docs/plans/README.md](docs/plans/README.md) を参照。
 
 ## 思想

@@ -331,6 +331,17 @@ yield しないため直読が必須)。
   merge する。一致なら従来 merge、absent(旧 server)なら従来動作へ
   fallback([ADR-0051](../adr/0051-history-restart-resilience.md)
   D4)。
+  live buffer の窓は connection generation ごとの join から、その接続の
+  最初の `history` push までだけである。client は新 join ごとに前世代の
+  buffer と replay marker を捨て、窓が閉じた後の live envelope は buffer
+  へ蓄積しない。これにより切断済み接続の行が次の epoch mismatch で
+  baseline に復活しない(ふじ 30-10 must-fix M1)。
+- **`replay_ia` の batch 境界**: wrapper は 1 push を JSON 実 byte 長
+  **1,000,000 bytes** 以下に分割し、同じ `replay_id` の全 chunk を
+  `history_replay_complete` より前に送る。単独で上限に収まらない
+  sidecar 行は送らず fail-closed で drop する。送ると Phoenix frame が
+  reject して complete が届かず、再 join ごとに同じ行を再送する loop に
+  なるためである(ふじ 30-10 must-fix M4 / 2 巡目 should)。
 - **per-pane projection contract**: IA の live 表示と replay 復元は
   同一の per-pane upsert API に載る。live accept 時の因果順は
   validate(participant / quota 等 **reject が確定し得る検査を

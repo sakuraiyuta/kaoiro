@@ -51,7 +51,7 @@ Codex 個人設定の tracked 管理(`dotfiles/codex`)は settings repo 側。
 
 **2026-08-08 注記:** この #115 は phase-19 完了時点の検証記録である。
 `InterAgentHistory` DETS は [ADR-0051](../adr/0051-history-restart-resilience.md)
-に基づく phase 30-7 で撤廃予定であり、現在の durability 設計を示すものではない。
+に基づく phase 30-7 で撤廃済みであり、現在の durability 設計を示すものではない。
 
 ## Tasks
 

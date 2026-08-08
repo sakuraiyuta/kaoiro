@@ -28,7 +28,7 @@ server 再起動を跨いでも全 operator 端末が同一の timeline を見�
 | 30-6 | wrapper: hydration handshake + IA replay 送出 | あお | ✅ | 2026-08-08 完了 (186f542)。 join verdict (要否 + server replay_id) を待って replay 開始、legacy fallback (verdict absent → 従来 startup replay)、single-flight、fresh session の empty-complete、sidecar → `replay_ia` 送出 (ADR D2/D3-3) |
 | 30-7 | server: hydration 状態管理 + replay ingress + DETS 撤廃 | あお | ✅ | 2026-08-08 完了 (1493eb4)。 hydrated の無効化条件は ADR D2 追補 (あお Q1)。 AgentStates に hydration state (in_flight は replay_id + channel_owner の CAS)、join 応答 verdict、`replay_ia` の pane 所有権検証 + 投影 upsert、stamp と ClearWatermarks 比較、InterAgentHistory と purge 経路の除去、`preserve_inter_agent: false` 明示送信 (ADR D2/D3-3/D3-4) |
 | 30-8 | dashboard: projection epoch 再同期 | あお | ✅ | 2026-08-08 完了 (150b3a2)。 新接続 buffer の分離、epoch 不一致時の baseline 破棄 (logs / clearWatermarks / replay marker / 未読 state) + history と新接続 buffer のみ merge、epoch absent fallback (ADR D4) |
-| 30-9 | docs 整合 sweep | もも | ⏳ | 実装後の README / specs 齟齬確認 |
+| 30-9 | docs 整合 sweep | もも | ✅ | 完了 2026-08-08。README / plan index を実装・レビュー完了 / dogfood 待ちへ同期。specs に replay 1MB chunk・oversize drop と接続 generation の live buffer 窓を明記。`KAOIRO_INTER_AGENT_HISTORY_PATH` は未読化済みだが compose / dev.sh に unused export が残るため deployment 注記で追跡 |
 | 30-10 | 実装レビュー | ふじ | ✅ | 3 巡で完了 2026-08-08 (1 巡目 must-fix 5 → 2 巡目残 3 (R1-R3) → 最終確認 approve、残指摘なし)。独立実測 green、specs 追補 3 点も実装と一致を確認。経緯と対応は下記「30-10 レビュー観点」「30-10 must-fix 対応」 |
 | 30-11 | dogfood 検証 + atomic rollout 実施 | デフォルトくん + マスター | ⏳ | ADR D6 の maintenance 手順 (IA 停止 → 3 層同時更新 → 全タブ reload) で deploy し、下記シナリオを検証 |
 
@@ -46,8 +46,9 @@ Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started,
       経路、ADR D3-1)
 - [ ] IA バブルが sidecar + `replay_ia` 経由で復元され、replay が
       IA の再配送(peer への再 push・SDK 再注入)を一切起こさない
-- [x] `InterAgentHistory` DETS がコードベース・deployment doc から
-      消えている
+- [x] `InterAgentHistory` DETS の server 実装は撤廃済みで、deployment doc の
+      runtime 設定は 7 種。unused な `KAOIRO_INTER_AGENT_HISTORY_PATH` export が
+      compose / dev.sh に残るため、30-9 の deployment 注記で追跡する
 - [ ] 再起動前から開いていたタブが再起動前ログを表示し続けない。
       複数端末で同一表示になる
 - [ ] server 稼働中の F5 全復元・端末間一致が従来どおり成立する

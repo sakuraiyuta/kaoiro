@@ -15,9 +15,10 @@ WebSocket(Phoenix Channels, vsn=2.0.0)で受け、最新状態を保持して
 fail-closed)と OAuth ログイン(ADR-0042)、返答ログのインメモリ履歴・
 operator 限定配信(ADR-0012)、runner のホスト登録と spawn/resume/session
 reset 中継(ADR-0023/0024/0036)、ペルソナ pack の集約 SoT 配信(ADR-0029)、
-エージェント間メッセージングの routing と durable ledger、再起動を越える
-agent identity の永続と明示復元(ADR-0030)まで実装済み。TLS はリバース
-プロキシ終端。フェーズ別の状態は [docs/plans/README.md](../docs/plans/README.md)。
+エージェント間メッセージングの routing と wrapper ホスト sidecar による
+履歴復元(ADR-0051)、再起動を越える agent identity の永続と明示復元
+(ADR-0030)まで実装済み。TLS はリバースプロキシ終端。フェーズ別の状態は
+[docs/plans/README.md](../docs/plans/README.md)。
 
 チャネル層:
 
@@ -39,7 +40,7 @@ agent identity の永続と明示復元(ADR-0030)まで実装済み。TLS はリ
 | `SessionStarts` / `ClearWatermarks` | 現行 session の開始点と IA 表示 watermark(issue #109、restart-surviving) |
 | `SessionResets` | `/new`・`/clear` の pending lock SSOT と two-phase 完了(ADR-0036 F6/F7) |
 | `PermissionModes` | operator が最後に選んだ `permission_mode`(issue #58、restart-surviving) |
-| `InterAgentHistory` / `ConversationStates` / `IngressOrder` | エージェント間メッセージの durable ledger・会話追跡・順序採番(phase-8) |
+| `ConversationStates` / `IngressOrder` | エージェント間メッセージの会話追跡(in-memory)と、clear 境界・IA ingress 用の順序採番(restart-surviving)。IA 履歴の正本は wrapper ホスト sidecar([ADR-0051](../docs/adr/0051-history-restart-resilience.md)) |
 | `HostRegistry` | 稼働中ホストと persona trust policy + cwd allow-list(ADR-0023 / ADR-0031) |
 | `PersonaAssets` / `PersonaWatcher` | persona pack の取り込み・manifest 生成と zip 変更の auto-watch(ADR-0029) |
 | `Auth` / `TokenDenylist` / `OAuth` / `OAuthAllowlist` | wrapper/client/runner のトークン認証、agent_id 単位の失効、OAuth provider 配線と許可リスト |

@@ -94,10 +94,10 @@ mount とは分離する。
 コンテナの `/tmp` 相当に落ち、
 `docker compose down` で消える(offline agent 一覧が失われる)。
 
-**2026-08-08 注記:** `KAOIRO_INTER_AGENT_HISTORY_PATH` は
-[ADR-0051](../adr/0051-history-restart-resilience.md) の実装完了
-(phase 30-7)時に削除する。同梱 `docker-compose.yaml` の当該設定は実装と
-同じ変更で除去するまで残る。本節の一覧は実装完了後の正本である。
+**2026-08-08 注記:** phase 30-7 で `InterAgentHistory` DETS は撤廃し、
+`KAOIRO_INTER_AGENT_HISTORY_PATH` は server に読まれなくなった。同梱
+`docker-compose.yaml` と `scripts/dev.sh` には unused な export がなお残るが、
+本節の 7 種が実行時の正本である。export の物理削除は follow-up で行う。
 
 ### 1.3 docker compose で起動
 
