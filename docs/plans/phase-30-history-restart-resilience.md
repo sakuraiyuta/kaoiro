@@ -29,7 +29,7 @@ server 再起動を跨いでも全 operator 端末が同一の timeline を見�
 | 30-7 | server: hydration 状態管理 + replay ingress + DETS 撤廃 | あお | ✅ | 2026-08-08 完了 (1493eb4)。 hydrated の無効化条件は ADR D2 追補 (あお Q1)。 AgentStates に hydration state (in_flight は replay_id + channel_owner の CAS)、join 応答 verdict、`replay_ia` の pane 所有権検証 + 投影 upsert、stamp と ClearWatermarks 比較、InterAgentHistory と purge 経路の除去、`preserve_inter_agent: false` 明示送信 (ADR D2/D3-3/D3-4) |
 | 30-8 | dashboard: projection epoch 再同期 | あお | ✅ | 2026-08-08 完了 (150b3a2)。 新接続 buffer の分離、epoch 不一致時の baseline 破棄 (logs / clearWatermarks / replay marker / 未読 state) + history と新接続 buffer のみ merge、epoch absent fallback (ADR D4) |
 | 30-9 | docs 整合 sweep | もも | ⏳ | 実装後の README / specs 齟齬確認 |
-| 30-10 | 実装レビュー | ふじ | ⏳ | must-fix ループ。 実装で確定した仕様差分 4 点 (Q1 hydrated 無効化 / Q2 stamp wire 形 / Q3 sidecar・pending path / Q4 因果順の quota atomic) と追補 1 点 (replay_ia の lobby broadcast) を併せてレビュー。 観点は下記「30-10 レビュー観点」 |
+| 30-10 | 実装レビュー | ふじ | 🟡 | 1 巡目 2026-08-08: must-fix 5 → あおへ差し戻し中 (M1 liveSinceJoin の接続 generation 窓 / M2 replay 復元行を operator-only 専用 pane event へ / M3 sidecar の ingress_stamp sort / M4 replay_ia の 8MB chunk 分割 / M5 acceptance ack と tool outcome の接続) + should 3 (S1 reject 後 pane 不変 pin / S2 partial 置換 pin / S3 sidecar 全量 read は将来課題)。仕様差分 4 点 + 追補 1 点も併せてレビュー済み (追補 1 は M2 で wire 差し替え)。観点は下記「30-10 レビュー観点」 |
 | 30-11 | dogfood 検証 + atomic rollout 実施 | デフォルトくん + マスター | ⏳ | ADR D6 の maintenance 手順 (IA 停止 → 3 層同時更新 → 全タブ reload) で deploy し、下記シナリオを検証 |
 
 Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started,
