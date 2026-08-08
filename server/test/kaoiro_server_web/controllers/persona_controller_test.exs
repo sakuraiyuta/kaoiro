@@ -12,7 +12,7 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
                json_response(conn, 200)
 
       assert version =~ ~r/^[0-9a-f]{16}$/
-      assert Map.keys(personas) |> Enum.sort() == ~w(ao fuji kuroe momo)
+      assert Map.keys(personas) |> Enum.sort() == ~w(ao fuji kohaku kuroe momo)
 
       assert %{"url" => "/personas/ao/idle.png?v=" <> _, "hash" => _} =
                personas["ao"]["states"]["idle"]
@@ -20,7 +20,13 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       # Pack schema additions (persona-pack-schema.md): name /
       # pack_version / description transcribed from manifest.json.
       assert personas["ao"]["name"] == "あお"
-      assert personas["ao"]["pack_version"] == "1.0.0"
+
+      for id <- ~w(ao fuji kuroe momo) do
+        assert personas[id]["pack_version"] == "1.0.1"
+      end
+
+      assert personas["kohaku"]["name"] == "こはく"
+      assert personas["kohaku"]["pack_version"] == "1.0.0"
     end
   end
 

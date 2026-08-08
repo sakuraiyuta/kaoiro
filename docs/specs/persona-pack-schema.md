@@ -46,7 +46,7 @@ zip ファイル名は任意(推奨: `<id>-<version>.zip`。例:
 | `name` | string | 必須 | 表示名(日本語可)。1-256 文字 |
 | `sprite_set` | string | 必須 | スプライトセット識別子。通常は `id` と同一。1-256 文字 |
 | `version` | string | 必須 | semver(例 `1.0.0`)。作成者が pack を更新するたびに bump する |
-| `license` | string | 必須 | ライセンス識別子(SPDX 準拠推奨。例 `CC-BY-4.0`, `MIT`, `proprietary`) |
+| `license` | string | 必須 | ライセンス識別子(SPDX 準拠推奨。例 `CC0-1.0`, `CC-BY-4.0`, `MIT`, `proprietary`)。AI 生成物には著作権が発生しない場合があるため、ライセンス表示が実態と矛盾しないか確認する。使用モデルの条件は Outputs に及ぶ範囲を別途確認する |
 | `min_kaoiro_version` | string | 必須 | 動作に必要な server バージョンの下限 semver。server が下回れば取り込み拒否 |
 | `states` | string[] | 必須 | sprites/ に含まれる状態 id の列挙。順序不問、7 状態必須 |
 | `description` | string | 任意 | pack の 1 行説明。表示 UI に流す |
@@ -67,8 +67,8 @@ zip ファイル名は任意(推奨: `<id>-<version>.zip`。例:
   "id": "fuji",
   "name": "ふじ",
   "sprite_set": "fuji",
-  "version": "1.0.0",
-  "license": "CC-BY-4.0",
+  "version": "1.0.1",
+  "license": "CC0-1.0",
   "min_kaoiro_version": "0.1.0",
   "states": ["idle", "thinking", "tool_running", "waiting_input",
              "waiting_permission", "done", "error"],

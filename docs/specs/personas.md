@@ -155,6 +155,10 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
    は弱い(実測)。ブレ修復の手段としても用いる。
 5. 試作順: ao(ちび規格の検証)→ kuroe(非デフォルメ規格の検証)→
    momo 以降の量産。
+6. 本生成で使用した `animality_ap3.safetensors` の上位 Anima license は、
+   Model / Derivatives を非商用に限定する一方、Outputs の商用利用を許可
+   する。有償 API 等で Model を商用利用するには別途商用ライセンスを要する。
+   派生モデル固有の配布条件も併せて確認する。
 
 ### 生成実績(2026-06-11、再現用 provenance)
 
