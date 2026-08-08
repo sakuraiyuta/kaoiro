@@ -18,6 +18,8 @@
 | [subagent-tasks](subagent-tasks.md) | provisional | subagent/workflow タスクの検知と専用 envelope 通知 |
 | [file-upload](file-upload.md) | provisional | ダッシュボードからの添付(画像/テキスト/PDF/Office)を wrapper で SDK へ render |
 | [design](design.md) | accepted | ダッシュボード/UI の視覚デザイン仕様。DESIGN.md フォーマット(YAML トークン + 散文)で `dashboard/src/` を canonical source として追認 |
+| [responsive-layout](responsive-layout.md) | provisional | 3 サイズ対等のレスポンシブ規則。breakpoint 定義・領域別レイアウト・シート機構・セーフエリア |
+| [responsive-reachability](responsive-reachability.md) | provisional | サイズ別の到達経路インベントリ。要素ごとの到達経路・スクロール所有者・常時固定される操作 |
 | [personas](personas.md) | accepted | ペルソナ立ち絵のデザイン方針・画像規格・生成ワークフロー |
 | [persona-pack-schema](persona-pack-schema.md) | accepted | persona pack (zip) の内部スキーマ・manifest.json フィールド定義 |
 | [persona-personality-injection](persona-personality-injection.md) | provisional | 口調・一人称等の人格プロンプトを Claude Agent SDK に注入する仕組み |

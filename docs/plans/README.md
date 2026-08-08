@@ -41,6 +41,7 @@ followup が issue へ外出しされている場合は 🟡 とする。
 | 29 | [P29](phase-29-footer-and-persona-cache.md) | 🟡 | footer / cache |
 | | | | 実装完了、レビュー中 (ADR-0045 / ADR-0046) |
 | 30 | [phase-30-history-restart-resilience](phase-30-history-restart-resilience.md) | ✅ | 表示履歴の再起動耐性 — hydration handshake・IA sidecar による DETS 撤廃・projection epoch 再同期、[ADR-0051](../adr/0051-history-restart-resilience.md)(accepted、rollout・dogfood 含め完了 2026-08-08) |
+| 31 | [phase-31-responsive-ui](phase-31-responsive-ui.md) | ⏳ | dashboard の 3 サイズ対等レスポンシブ化 — breakpoint とシート機構の基盤、lobby / AgentDetail / 周辺 UI、[ADR-0052](../adr/0052-responsive-three-tier-layout.md) |
 
 ## Feature-local plans
 

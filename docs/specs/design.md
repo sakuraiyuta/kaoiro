@@ -2,7 +2,7 @@
 title: kaoiro デザイン方針
 description: ダッシュボード/UI の視覚デザイン仕様。DESIGN.md フォーマット (YAML トークン + 散文) で記述し、既存実装 (dashboard/src/) を canonical source として追認する。
 status: accepted
-related: [overview, personas, protocol]
+related: [overview, personas, protocol, responsive-layout, responsive-reachability]
 format: stitch-design-md
 version: alpha
 name: kaoiro Dashboard
@@ -250,7 +250,7 @@ flowchart TB
   body[".main (flex 1)"]
   log[".log (overflow-y auto)"]
   composer[".composer (bottom-pinned, drop-zone)"]
-  dock[".permission-dock (absolute, floating)"]
+  dock[".permission-dock / .question-dock (in-flow, log と composer の間)"]
 
   root --> header
   root --> main
@@ -278,11 +278,19 @@ flowchart TB
 
 ### グリッド
 
-ロビーは `repeat(auto-fill, minmax(15rem, 1fr))` の auto-fill グリッド。**列数を固定しない** — エージェント数が増えてもウィンドウ幅に合わせて自然に折り返る。詳細ビューは `max-width: 72rem` で中央寄せされ、画面が広くても 1 行が間延びしない。
+ロビーの基本は `repeat(auto-fill, minmax(15rem, 1fr))` の auto-fill グリッドで、**viewer セッションでは列数を固定しない** — エージェント数が増えてもウィンドウ幅に合わせて自然に折り返る。operator セッションは response timeline を右ペインに併置するため列数を固定し、grid とペインで幅を分け合う (ペイン自体は operator 限定 — [ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。詳細ビューは `max-width: 72rem` で中央寄せされ、画面が広くても 1 行が間延びしない。
+
+サイズ別の具体的な列数とペインの配置は [responsive-layout.md](responsive-layout.md) が正本。
 
 ### Responsive
 
-`@media (max-width: 640px)` で詳細ビューが column へ折れ、`.log` が `max-height: 60vh` に制限される。モバイル/狭幅は first-class ではないが、破綻はしない。
+**PC / tablet / smartphone の 3 サイズを対等に扱う。** どのサイズからも全機能・全情報へ到達でき、smartphone でも 確認 / 指示送信 / permission 承認 まで行える。到達経路はサイズごとに異なってよく、退避の対象は領域ごとに違う — **response timeline は smartphone 幅 (および低背 override 時) で**、**AgentDetail の status は tablet 幅以下で**ボトムシートへ退避する。
+
+breakpoint の値・領域別のレイアウト規則・シート機構・セーフエリアの扱いは [responsive-layout.md](responsive-layout.md) が正本。要素ごとのサイズ別到達経路は [responsive-reachability.md](responsive-reachability.md) が持つ。転換の経緯と却下した代替案は [ADR-0052](../adr/0052-responsive-three-tier-layout.md) にある。
+
+> 2026-08-09 以前、本節は「モバイル/狭幅は first-class ではないが、破綻はしない」と定めていた。ADR-0052 によりこの方針は撤回された。なお実測では、撤回前の時点で既に 640px 幅の grid が 136px まで潰れており、「破綻はしない」は事実ではなかった。
+>
+> **本節と参照先 2 spec は [phase-31](../plans/phase-31-responsive-ui.md) 完了までは ADR-0052 に基づく target 記述であり、実装の追認ではない。** 本ファイル冒頭が掲げる「実装を canonical source として追認する」原則の例外であり、phase-31 完了時に実装との同期を取り直す。
 
 ## Elevation & Depth
 
@@ -436,6 +444,8 @@ DESIGN.md の標準 components プロパティ (`backgroundColor` / `textColor` 
 ## References
 
 - 実装本体: [dashboard/src/app.css](../../dashboard/src/app.css), [App.svelte](../../dashboard/src/App.svelte), [AgentCard.svelte](../../dashboard/src/lib/AgentCard.svelte), [AgentDetail.svelte](../../dashboard/src/lib/AgentDetail.svelte), [LaunchDialog.svelte](../../dashboard/src/lib/LaunchDialog.svelte)
+- 寸法・レイアウト切替: [responsive-layout.md](responsive-layout.md) (breakpoint / 領域別規則 / シート機構)
+- サイズ別の到達経路: [responsive-reachability.md](responsive-reachability.md) (要素ごとの到達経路 / スクロール所有者)
 - 状態定義: [protocol.md](protocol.md) (state palette と 1:1 対応)
 - 顔表情・ペルソナ立ち絵: [personas.md](personas.md)
 - フォーマット仕様: [DESIGN.md (Google, alpha)](https://github.com/google/design.md)
