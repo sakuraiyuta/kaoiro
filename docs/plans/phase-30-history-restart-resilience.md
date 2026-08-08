@@ -29,7 +29,7 @@ server 再起動を跨いでも全 operator 端末が同一の timeline を見�
 | 30-7 | server: hydration 状態管理 + replay ingress + DETS 撤廃 | あお | ✅ | 2026-08-08 完了 (1493eb4)。 hydrated の無効化条件は ADR D2 追補 (あお Q1)。 AgentStates に hydration state (in_flight は replay_id + channel_owner の CAS)、join 応答 verdict、`replay_ia` の pane 所有権検証 + 投影 upsert、stamp と ClearWatermarks 比較、InterAgentHistory と purge 経路の除去、`preserve_inter_agent: false` 明示送信 (ADR D2/D3-3/D3-4) |
 | 30-8 | dashboard: projection epoch 再同期 | あお | ✅ | 2026-08-08 完了 (150b3a2)。 新接続 buffer の分離、epoch 不一致時の baseline 破棄 (logs / clearWatermarks / replay marker / 未読 state) + history と新接続 buffer のみ merge、epoch absent fallback (ADR D4) |
 | 30-9 | docs 整合 sweep | もも | ⏳ | 実装後の README / specs 齟齬確認 |
-| 30-10 | 実装レビュー | ふじ | 🟡 | 1 巡目 2026-08-08: must-fix 5 → あおへ差し戻し中 (M1 liveSinceJoin の接続 generation 窓 / M2 replay 復元行を operator-only 専用 pane event へ / M3 sidecar の ingress_stamp sort / M4 replay_ia の 8MB chunk 分割 / M5 acceptance ack と tool outcome の接続) + should 3 (S1 reject 後 pane 不変 pin / S2 partial 置換 pin / S3 sidecar 全量 read は将来課題)。仕様差分 4 点 + 追補 1 点も併せてレビュー済み (追補 1 は M2 で wire 差し替え)。観点は下記「30-10 レビュー観点」 |
+| 30-10 | 実装レビュー | ふじ | 🟡 | 1 巡目 2026-08-08: must-fix 5 → あお修正済み (c2f8a2a / 2428304 / c8ceec8 / 15dd791、下記「30-10 must-fix 対応」)、差分再レビュー待ち (M1 liveSinceJoin の接続 generation 窓 / M2 replay 復元行を operator-only 専用 pane event へ / M3 sidecar の ingress_stamp sort / M4 replay_ia の 8MB chunk 分割 / M5 acceptance ack と tool outcome の接続) + should 3 (S1 reject 後 pane 不変 pin / S2 partial 置換 pin / S3 sidecar 全量 read は将来課題)。仕様差分 4 点 + 追補 1 点も併せてレビュー済み (追補 1 は M2 で wire 差し替え)。観点は下記「30-10 レビュー観点」 |
 | 30-11 | dogfood 検証 + atomic rollout 実施 | デフォルトくん + マスター | ⏳ | ADR D6 の maintenance 手順 (IA 停止 → 3 層同時更新 → 全タブ reload) で deploy し、下記シナリオを検証 |
 
 Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started,
@@ -125,6 +125,42 @@ failure matrix(ふじレビュー由来。(a)-(e)・(h)・(i)・(k) は
 という嘘になり timeline が永久に空になるため。記録なしでも transcript
 replay は成立し、`replay_ia` は stale で弾かれ、complete の CAS も外れる
 ので次の join で再要求される。
+
+## 30-10 must-fix 対応 (あお、2026-08-08)
+
+1 巡目 must-fix 5 + should 2 を修正済み。差分再レビュー用の要点。
+
+| 項目 | commit | 修正の要 |
+|---|---|---|
+| M1 | c8ceec8 | `liveSinceJoin` の窓を「接続 generation の join → その接続の history push」へ。`onJoined` (lobby join 応答) で generation を進めて buffer を捨て、`awaitingHistory` の間だけ積む。`history_reset` / `history_cleared` / `agent_deleted` を buffer へ mirror。replay marker に generation を持たせ、epoch 破棄では旧世代のみ落とす |
+| M2 | 2428304 / c8ceec8 | 復元行を `history_replay_envelope {pane_agent_id, envelope}` (operator 限定) で broadcast。pane は channel assign 由来。client は指定 pane にのみ注入し fan-out しない |
+| M3 | c2f8a2a | sidecar `read()` を `ingress_stamp` 昇順 sort + 同 stamp dedupe の後に newest 200 |
+| M4 | c2f8a2a | `sendReplayIa` を JSON 実 byte 長 1MB で chunk。同一 `replay_id` の複数 push を complete 前に送る |
+| M5 | c2f8a2a | `ServerLink#sendInterAgent` が acceptance を Promise で返し、`send_to_agent` が await。reject = error result、timeout/ack 喪失 = 配送不明、いずれも reply waiter を解除 |
+| S1 | 2428304 | reject 5 種に sender/receiver 両 pane 不変の assert |
+| S2 | 2428304 | (a) を partial 残渣が次 attempt の全量で置換されるところまで pin |
+
+test の作り直し (M1/M3 の「前提を手渡ししていた」型への対応):
+
+- `dashboard/test/projectionEpochWindow.integration.test.ts` — App.svelte を
+  mount し、`connectKaoiro` だけ差し替えて **実 handler 列**を駆動する。
+  「旧 live → disconnect → 新 live → epoch 不一致 history」を含む 6 本 +
+  M2 の pane 限定 2 本。各 fix を 1 つずつ戻す mutation で落ちることを確認済み。
+- `dashboard/test/replayEnvelopeWire.integration.test.ts` — 実 phoenix client
+  で join 応答 → `onJoined`、`history_replay_envelope` → 専用 handler の
+  結線を pin。
+- `wrapper/agent-common/test/ia_sidecar.test.ts` — stamp 2..201 append 後に
+  stamp 1 を追いつかせる逆順 fixture。
+- `wrapper/core/test/transport.test.ts` — 200 行 × 60KB で分割前が 8MB を
+  超えることを前提 assert した上で、各 chunk が 8MB 未満・全行保持を確認。
+
+S3 (既知の制約、対応不要): sidecar は replay のたびに全量を同期 read する。
+長期 session では read コストが線形に伸びる。将来課題として記録のみ。
+
+未対応で ふじ の判断を仰ぎたい点: `InterAgentTool#invoke` は送信**前**に
+`#pendingInjections.delete(conversationId)` している。M5 で reject が可視化
+された今、拒否されたのに「返信した」扱いで #131 のエラー通知が抑止される
+経路が残る。今回の must-fix 範囲外と判断して触っていない。
 
 ## Dogfood 検証シナリオ (30-11)
 
