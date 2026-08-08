@@ -124,4 +124,8 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   [responsive-reachability](../specs/responsive-reachability.md),
   [design](../specs/design.md)
 - ADR: [0052-responsive-three-tier-layout](../adr/0052-responsive-three-tier-layout.md)
+- 実装 issue: [#207](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/207)
+  (Stage A-C + 31-10 Playwright)
+- 実機検証 issue: [#208](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/208)
+  (Stage D 31-9、運用者作業)
 - Previous phase: [phase-30-history-restart-resilience](phase-30-history-restart-resilience.md)
