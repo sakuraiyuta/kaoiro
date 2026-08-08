@@ -1364,6 +1364,34 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       refute_push "history_replay_complete", %{}
     end
+
+    # ふじ 30-10 must-fix M2: 復元 IA は pane を名乗る専用 event で届く。
+    # transcript 系と同じく operator 限定。
+    test "operator は history_replay_envelope を pane 付きで受け取る" do
+      agent_id = "test.replay-env-op"
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_envelope", %{
+        "pane_agent_id" => agent_id,
+        "envelope" => %{"type" => "inter_agent_message", "agent_id" => "test.peer"}
+      })
+
+      assert_push "history_replay_envelope", %{
+        "pane_agent_id" => ^agent_id,
+        "envelope" => %{"agent_id" => "test.peer"}
+      }
+    end
+
+    test "viewer には history_replay_envelope を配信しない (fail-closed)" do
+      _socket = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_envelope", %{
+        "pane_agent_id" => "test.replay-env-vw",
+        "envelope" => %{"type" => "inter_agent_message", "agent_id" => "test.peer"}
+      })
+
+      refute_push "history_replay_envelope", %{}
+    end
   end
 
   # ADR-0039 F9 v2 = 藤 review turn-13 追加指示 (must-fix 3): allow-list の

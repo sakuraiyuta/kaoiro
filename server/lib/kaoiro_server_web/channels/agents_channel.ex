@@ -121,6 +121,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
     "history_cleared",
     "history_reset",
     "history_replay_complete",
+    # Restored IA row addressed to ONE pane (ADR-0051 D3-3 追補). Operator-
+    # only like every other transcript event; intercepted so handle_out can
+    # gate it rather than letting it reach viewers who hold no reply log.
+    "history_replay_envelope",
     "runner_sessions",
     "spawn_result",
     "hosts",
@@ -285,6 +289,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_out("history_replay_complete", payload, socket) do
     if socket.assigns[:role] == :operator do
       push(socket, "history_replay_complete", payload)
+    end
+
+    {:noreply, socket}
+  end
+
+  # One restored inter-agent row, with the pane it belongs to (ADR-0051 D3-3
+  # 追補 / ふじ 30-10 must-fix M2). Sent as its own event precisely so the
+  # client does NOT re-fan it across `agent_id ∪ payload.to` the way an
+  # ordinary `envelope` is fanned: the pane was decided server-side from the
+  # replaying wrapper's channel assigns. Operator-only, like the reset and
+  # completion boundaries that bracket it.
+  @impl true
+  def handle_out("history_replay_envelope", payload, socket) do
+    if socket.assigns[:role] == :operator do
+      push(socket, "history_replay_envelope", payload)
     end
 
     {:noreply, socket}

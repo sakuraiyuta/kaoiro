@@ -1093,6 +1093,21 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     defp with_stamp(env, {us, seq}), do: Map.put(env, "ingress_stamp", [us, seq])
 
+    # ADR-0051 D3-1 の中心不変条件 / ふじ 30-10 should S1: a rejected IA must
+    # leave BOTH panes untouched. `ia_projection/0` omits panes whose `ia` map
+    # is empty, so an absent key is exactly "this pane holds no IA". Asserted
+    # per reject reason rather than once, because each reason exits the
+    # validate chain at a different point and only a per-branch pin catches a
+    # future check that gets moved after the upsert.
+    defp assert_panes_empty(agent_ids) do
+      projection = AgentStates.ia_projection()
+
+      for agent_id <- agent_ids do
+        refute Map.has_key?(projection, agent_id),
+               "rejected IA leaked into #{agent_id}'s pane"
+      end
+    end
+
     test "正常な inter_agent_message を wrapper:<to> へ broadcast し agents:lobby も流す" do
       from_id = "test.iam-from"
       to_id = "test.iam-to"
@@ -1134,6 +1149,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       env = inter_envelope(from_id, from_id)
       ref = push(from_socket, "envelope", env)
       assert_reply ref, :error, %{reason: "self_routing"}
+      assert_panes_empty([from_id])
     end
 
     test "未知の to_agent は :unknown_agent で拒否する" do
@@ -1143,6 +1159,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       env = inter_envelope(from_id, "test.iam-unk-target")
       ref = push(from_socket, "envelope", env)
       assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_panes_empty([from_id, "test.iam-unk-target"])
     end
 
     test "kind=reject で reject_reason 欠落の envelope を拒否する" do
@@ -1159,6 +1176,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       ref = push(from_socket, "envelope", env)
       assert_reply ref, :error, %{reason: "invalid value: payload.meta"}
+      assert_panes_empty([from_id, to_id])
     end
 
     test "kind=reject で reject_reason ありなら通す" do
@@ -1190,6 +1208,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       env = inter_envelope(from_id, to_id, kind: "shout")
       ref = push(from_socket, "envelope", env)
       assert_reply ref, :error, %{reason: "invalid value: payload.kind"}
+      assert_panes_empty([from_id, to_id])
     end
 
     test "ConversationStates が :exceeded を返したら side ごとに正しい payload.to で escalate を流す" do
@@ -1409,6 +1428,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       # 正規エントリは無傷
       assert %{turns: 1} = KaoiroServer.ConversationStates.get(cid)
+
+      # 拒否された c の pane にも、宛先 b の pane に c 由来の行が増えることも無い。
+      assert_panes_empty([c_id])
+      assert length(AgentStates.ia_projection()[b_id]) == 1
     end
   end
 
@@ -2194,6 +2217,66 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert second_id != first_id
     end
 
+    # ふじ 30-10 should S2: 上の (a) は「再要求される」までしか pin して
+    # いなかった。落ちた attempt が pane に残した部分復元が、次の attempt の
+    # reset で消えて全量に置き換わるところまでが (a) の主張。
+    test "(a) partial replay の残渣は次 attempt の full replay で置換される" do
+      agent_id = "test.hydr-partial-replace"
+      peer_id = "test.hydr-partial-replace-peer"
+
+      on_exit(fn ->
+        AgentStates.delete(agent_id)
+        AgentStates.delete(peer_id)
+      end)
+
+      {reply, socket} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_id" => first_id}} = reply
+      seed_entry(socket, agent_id)
+
+      # 1 巡目: reset は届き、2 行のうち 1 行だけ復元したところで切断。
+      assert_reply push(socket, "history_reset", %{"replay_id" => first_id}), :ok
+      first_row = replay_ia_envelope(peer_id, agent_id, 1)
+
+      assert_reply push(socket, "replay_ia", %{
+                     "replay_id" => first_id,
+                     "items" => [%{"envelope" => first_row, "ingress_stamp" => [3000, 0]}]
+                   }),
+                   :ok
+
+      assert [{{3000, 0}, ^first_row}] = AgentStates.ia_projection()[agent_id]
+      :ok = close(socket)
+
+      # 2 巡目: 別 id での reset が残渣を消す (append ではなく overwrite)。
+      {reply2, socket2} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_required" => true, "replay_id" => second_id}} = reply2
+      assert second_id != first_id
+      seed_entry(socket2, agent_id)
+
+      assert_reply push(socket2, "history_reset", %{"replay_id" => second_id}), :ok
+      refute Map.has_key?(AgentStates.ia_projection(), agent_id)
+
+      second_row = replay_ia_envelope(peer_id, agent_id, 2)
+
+      assert_reply push(socket2, "replay_ia", %{
+                     "replay_id" => second_id,
+                     "items" => [
+                       %{"envelope" => first_row, "ingress_stamp" => [3000, 0]},
+                       %{"envelope" => second_row, "ingress_stamp" => [3001, 0]}
+                     ]
+                   }),
+                   :ok
+
+      assert_reply push(socket2, "history_replay_complete", %{"replay_id" => second_id}), :ok
+
+      # 重複なしの全量 (部分復元と同じ stamp は upsert で 1 行のまま)。
+      assert Enum.map(AgentStates.ia_projection()[agent_id], fn {stamp, _} -> stamp end) ==
+               [{3000, 0}, {3001, 0}]
+
+      :ok = close(socket2)
+      {reply3, _socket3} = join_wrapper_with_reply(agent_id)
+      assert %{"hydration" => %{"replay_required" => false}} = reply3
+    end
+
     test "(b) 別 attempt の replay_id での complete は hydrated にしない (CAS)" do
       agent_id = "test.hydr-cas"
       on_exit(fn -> AgentStates.delete(agent_id) end)
@@ -2259,7 +2342,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^peer_id}, 100
     end
 
-    test "replay_ia は復元行を agents:lobby へ流す (接続中タブの IA を戻すため)" do
+    # ふじ 30-10 must-fix M2: 復元行は pane を名乗る専用 event で流す。
+    # 通常の `envelope` だと client 側が agent_id ∪ payload.to へ広げるため、
+    # 復元中の pane ではない peer の pane にも入ってしまう (F5 後の表示と
+    # 不一致、own-pane 境界の破れ)。pane は channel assign 由来で、wrapper の
+    # payload には決めさせない。
+    test "replay_ia は復元行を pane 指定の history_replay_envelope で流す" do
       agent_id = "test.hydr-replay-lobby"
       peer_id = "test.hydr-replay-lobby-peer"
 
@@ -2288,8 +2376,45 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         })
 
       assert_reply ref, :ok
-      assert_broadcast "envelope", ^restored
-      refute_broadcast "envelope", ^hidden
+
+      assert_broadcast "history_replay_envelope", %{
+        "pane_agent_id" => ^agent_id,
+        "envelope" => ^restored
+      }
+
+      # pane を持たない汎用 envelope では絶対に出さない (fan-out 経路の封鎖)。
+      refute_broadcast "envelope", ^restored
+      refute_broadcast "history_replay_envelope", %{"envelope" => ^hidden}
+    end
+
+    test "replay_ia の pane は payload ではなく channel assign が決める" do
+      agent_id = "test.hydr-replay-pane-src"
+      peer_id = "test.hydr-replay-pane-src-peer"
+
+      on_exit(fn ->
+        AgentStates.delete(agent_id)
+        AgentStates.delete(peer_id)
+      end)
+
+      {reply, socket} = join_wrapper_with_reply(agent_id)
+      %{"hydration" => %{"replay_id" => replay_id}} = reply
+      seed_entry(socket, agent_id)
+
+      @endpoint.subscribe("agents:lobby")
+
+      # payload.to は peer を指しているが、pane は replay 中の wrapper のもの。
+      restored = replay_ia_envelope(peer_id, agent_id, 1)
+
+      ref =
+        push(socket, "replay_ia", %{
+          "replay_id" => replay_id,
+          "items" => [%{"envelope" => restored, "ingress_stamp" => [2100, 0]}]
+        })
+
+      assert_reply ref, :ok
+      assert_broadcast "history_replay_envelope", %{"pane_agent_id" => broadcast_pane}
+      assert broadcast_pane == agent_id
+      refute broadcast_pane == peer_id
     end
 
     test "(k) stamp 欠落 / 壊れた行は skip され、残りの replay は継続する" do
