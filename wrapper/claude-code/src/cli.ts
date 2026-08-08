@@ -288,6 +288,11 @@ async function main(): Promise<void> {
     config,
     getState: () => host.state,
     send: (envelope) => link?.send(envelope),
+    // ADR-0051 D3-2: `send_to_agent`'s result is the server's acceptance
+    // ack, not the local push. No link yet means no server took it.
+    sendInterAgent: (envelope) =>
+      link?.sendInterAgent(envelope) ??
+      Promise.resolve({ kind: "unknown" as const, reason: "not_connected" }),
     // Wired below once host + link are constructed; until then the tools
     // return error/fallback results, which is correct because the SDK
     // session has not opened yet either.

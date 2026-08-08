@@ -11,6 +11,9 @@ type PushReceivers = Map<string, (payload: unknown) => void>;
 const mock = vi.hoisted(() => ({
   handlers: new Map<string, (payload: unknown) => void>(),
   lastPush: null as { event: string; payload: unknown; receivers: Map<string, (payload: unknown) => void> } | null,
+  // Every push in order — `replay_ia` is chunked into several (M4), so a
+  // test asserting the split cannot look at `lastPush` alone.
+  pushes: [] as { event: string; payload: unknown }[],
   lastChannelParams: null as unknown,
   // ADR-0051 D2: the hydration verdict rides the JOIN reply, so a test has
   // to be able to fire the join push's receive("ok") the way the phoenix
@@ -45,6 +48,7 @@ vi.mock("phoenix", () => {
     } {
       const receivers: PushReceivers = new Map();
       mock.lastPush = { event, payload, receivers };
+      mock.pushes.push({ event, payload });
       const chain = {
         receive(status: string, cb: (payload: unknown) => void) {
           receivers.set(status, cb);
@@ -71,7 +75,12 @@ vi.mock("phoenix", () => {
 // so the constructor does not depend on the node version's global.
 vi.stubGlobal("WebSocket", class {});
 
-import { ServerLink, hydrationVerdictFrom } from "../src/transport.js";
+import {
+  MAX_REPLAY_IA_PUSH_BYTES,
+  ServerLink,
+  chunkReplayIaItems,
+  hydrationVerdictFrom,
+} from "../src/transport.js";
 import type { Envelope } from "@kaoiro/protocol";
 
 function emit(event: string, payload: unknown): void {
@@ -84,6 +93,7 @@ describe("ServerLink — initial envelope sequence (#107)", () => {
   beforeEach(() => {
     mock.handlers.clear();
     mock.lastPush = null;
+    mock.pushes = [];
   });
 
   it("first send は seq=1 を付与し ext を透過する", () => {
@@ -343,6 +353,7 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
   beforeEach(() => {
     mock.handlers.clear();
     mock.lastPush = null;
+    mock.pushes = [];
   });
 
   function push(): { link: ServerLink; pending: Promise<void> } {
@@ -376,6 +387,7 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
     "runner_unavailable",
   ])("合意語彙の reason %s はそのまま渡す", async (reason) => {
     mock.lastPush = null;
+    mock.pushes = [];
     const { pending } = push();
     mock.lastPush!.receivers.get("error")!({ reason });
     await expect(pending).rejects.toThrow(reason);
@@ -396,6 +408,7 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
       null,
     ]) {
       mock.lastPush = null;
+    mock.pushes = [];
       const { pending } = push();
       mock.lastPush!.receivers.get("error")!(payload);
       await expect(pending).rejects.toThrow("unknown_error");
@@ -413,6 +426,7 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
   beforeEach(() => {
     mock.handlers.clear();
     mock.lastPush = null;
+    mock.pushes = [];
   });
 
   it("directory_request の reply から agents 配列を返す", async () => {
@@ -815,12 +829,75 @@ describe("hydrationVerdictFrom (ADR-0051 D2)", () => {
   });
 });
 
+// ふじ 30-10 must-fix M4 の境界。budget は JSON の実 byte 長で測る。
+describe("chunkReplayIaItems (ADR-0051 D3-3 / 8MB frame 対策)", () => {
+  function row(seq: number, bodyBytes: number): {
+    ingress_stamp: [number, number];
+    envelope: Envelope;
+  } {
+    return {
+      ingress_stamp: [seq, 0],
+      envelope: {
+        version: "0",
+        agent_id: "host-1.self",
+        persona: { id: "ao", name: "あお", sprite_set: "ao" },
+        ts: "2026-08-08T00:00:00Z",
+        type: "inter_agent_message",
+        state: "idle",
+        payload: { body: "x".repeat(bodyBytes) },
+        ext: {},
+      } as unknown as Envelope,
+    };
+  }
+
+  it("budget 以内なら 1 chunk のまま", () => {
+    const items = [row(1, 10), row(2, 10)];
+    expect(chunkReplayIaItems(items, 10_000)).toEqual([items]);
+  });
+
+  it("budget ちょうどでは分割せず、1 byte 超えた行から次 chunk へ回す", () => {
+    const first = row(1, 100);
+    const size = Buffer.byteLength(JSON.stringify(first), "utf8") + 1;
+
+    // 2 行ぶんちょうどの budget: 3 行目だけが溢れる。
+    const chunks = chunkReplayIaItems([first, row(2, 100), row(3, 100)], size * 2);
+
+    expect(chunks.map((c) => c.length)).toEqual([2, 1]);
+  });
+
+  it("budget 単体で超える 1 行も落とさず、単独 chunk として送る", () => {
+    const huge = row(1, 5_000);
+    const chunks = chunkReplayIaItems([huge, row(2, 10)], 100);
+    expect(chunks.map((c) => c.length)).toEqual([1, 1]);
+    expect(chunks[0]?.[0]).toBe(huge);
+  });
+
+  it("空入力は chunk なし (push を 1 本も出さないため)", () => {
+    expect(chunkReplayIaItems([])).toEqual([]);
+  });
+
+  it("既定 budget は 8MB frame 上限より十分小さい", () => {
+    expect(MAX_REPLAY_IA_PUSH_BYTES).toBeLessThanOrEqual(8_000_000 / 4);
+  });
+});
+
 describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", () => {
   beforeEach(() => {
     mock.handlers.clear();
     mock.lastPush = null;
+    mock.pushes = [];
     mock.joinReceivers.clear();
   });
+
+  /** An IA envelope whose body fills most of the server's 64 KiB
+   *  per-envelope budget — the size the M4 frame-overflow was measured at. */
+  function bulkyInterAgentEnvelope(bodyBytes: number): Envelope {
+    const envelope = interAgentEnvelope() as unknown as {
+      payload: { body: string };
+    };
+    envelope.payload = { ...envelope.payload, body: "x".repeat(bodyBytes) };
+    return envelope as unknown as Envelope;
+  }
 
   function interAgentEnvelope(): Envelope {
     return {
@@ -944,6 +1021,128 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
       event: "replay_ia",
       payload: { replay_id: "hydr-1", items },
     });
+    expect(mock.pushes.filter((p) => p.event === "replay_ia")).toHaveLength(1);
+  });
+
+  // ふじ 30-10 must-fix M5: the acceptance ack has three legs and the tool
+  // result depends on which one fires. `send()` only ever read "ok".
+  it("sendInterAgent は ok で accepted + stamp を返し、sidecar も記録する", async () => {
+    const acks: [number, number][] = [];
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      onInterAgentAck: (_envelope, stamp) => acks.push(stamp),
+    });
+
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("ok")?.({ ingress_stamp: [9, 1] });
+
+    await expect(pending).resolves.toEqual({ kind: "accepted", stamp: [9, 1] });
+    expect(acks).toEqual([[9, 1]]);
+  });
+
+  it("sendInterAgent は error で rejected + reason を返し、記録はしない", async () => {
+    const acks: unknown[] = [];
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      onInterAgentAck: () => acks.push("recorded"),
+    });
+
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("error")?.({ reason: "unknown_agent" });
+
+    await expect(pending).resolves.toEqual({
+      kind: "rejected",
+      reason: "unknown_agent",
+    });
+    expect(acks).toEqual([]);
+  });
+
+  it("sendInterAgent は timeout を unknown として返す (配送されたかは不明)", async () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+    });
+
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("timeout")?.({});
+
+    await expect(pending).resolves.toEqual({ kind: "unknown", reason: "timeout" });
+  });
+
+  it("reason の無い / 壊れた error 応答は unknown に正規化する", async () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+    });
+
+    for (const payload of [{}, { reason: "" }, { reason: 7 }, null]) {
+      const pending = link.sendInterAgent(interAgentEnvelope());
+      mock.lastPush?.receivers.get("error")?.(payload);
+      await expect(pending).resolves.toEqual({
+        kind: "rejected",
+        reason: "unknown",
+      });
+    }
+  });
+
+  it("stamp 無し ack でも accepted (旧 server): 配送は成功、復元だけ不可", async () => {
+    const acks: unknown[] = [];
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      onInterAgentAck: () => acks.push("recorded"),
+    });
+
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("ok")?.({});
+
+    await expect(pending).resolves.toEqual({ kind: "accepted", stamp: null });
+    expect(acks).toEqual([]);
+  });
+
+  // ふじ 30-10 must-fix M4: 200 行 × 最大 64 KiB envelope = 約 12 MB。
+  // wrapper socket の max_frame_size は 8 MB なので、単一 push だと frame
+  // ごと reject → complete 未達 → 再 join で同じ batch を無限に送り直す。
+  it("sendReplayIa は 8MB frame を超えない大きさに分割し、同じ replay_id で送る", () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+    });
+
+    // 実測に合わせた最悪ケース: 上限いっぱいの envelope が 200 行。
+    const items = Array.from({ length: 200 }, (_, i) => ({
+      ingress_stamp: [1000 + i, 0] as [number, number],
+      envelope: bulkyInterAgentEnvelope(60_000),
+    }));
+    // 前提の pin: 分割しなければ 8MB frame 上限を実際に超える入力である。
+    expect(
+      Buffer.byteLength(JSON.stringify({ replay_id: "hydr-1", items }), "utf8"),
+    ).toBeGreaterThan(8_000_000);
+
+    link.sendReplayIa("hydr-1", items);
+
+    const pushes = mock.pushes.filter((p) => p.event === "replay_ia");
+    expect(pushes.length).toBeGreaterThan(1);
+    for (const push of pushes) {
+      const payload = push.payload as { replay_id: string; items: unknown[] };
+      expect(payload.replay_id).toBe("hydr-1");
+      expect(Buffer.byteLength(JSON.stringify(push.payload), "utf8")).toBeLessThan(
+        8_000_000,
+      );
+      // 1 push あたりの行数も server の @max_replay_ia_items 内に収まる。
+      expect(payload.items.length).toBeLessThanOrEqual(200);
+    }
+    // 1 行も落とさない。
+    expect(
+      pushes.reduce(
+        (n, p) => n + (p.payload as { items: unknown[] }).items.length,
+        0,
+      ),
+    ).toBe(200);
+  });
+
+  it("空の items は push しない (server の hydration 状態を触らない)", () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+    });
+    link.sendReplayIa("hydr-1", []);
+    expect(mock.pushes.filter((p) => p.event === "replay_ia")).toEqual([]);
   });
 
   it("currentSessionId は未報告なら null (fresh session = 空 replay)", () => {

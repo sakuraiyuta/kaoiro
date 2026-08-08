@@ -20,7 +20,11 @@
 
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { DirectoryContext, DirectoryEntry } from "@kaoiro/wrapper-core";
+import type {
+  DirectoryContext,
+  DirectoryEntry,
+  InterAgentAcceptance,
+} from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import type {
@@ -338,6 +342,14 @@ export interface InterAgentToolOptions {
   getState: () => KaoiroState;
   /** Outbound envelope sink, normally ServerLink#send. */
   send: (envelope: Envelope) => void;
+  /** Inter-agent sink that resolves with the server's acceptance outcome
+   *  (ADR-0051 D3-2, normally ServerLink#sendInterAgent). Production always
+   *  wires it; without one `send_to_agent` falls back to the fire-and-forget
+   *  `send` above and reports "sent" without ever learning whether the
+   *  server took the message — the pre-ADR-0051 behaviour, kept only so
+   *  unit tests that exercise payload construction need not model a
+   *  transport. */
+  sendInterAgent?: (envelope: Envelope) => Promise<InterAgentAcceptance>;
   /** Peer directory provider, normally `ServerLink#requestDirectory` bound
    *  to the wrapper's channel. Omitting it (unit tests only — production
    *  always supplies it under ADR-0029 F10) makes `list_agents` return
@@ -625,9 +637,38 @@ export class InterAgentTool {
     const reply = waitForResponse
       ? this.#waitForReply(conversationId, timeoutMs)
       : undefined;
-    this.#options.send(envelope);
 
     const sent = `sent to ${args.to} (conversation_id=${conversationId}, turn_number=${sentTurnNumber})`;
+
+    // ふじ 30-10 must-fix M5: the acceptance ack decides the tool result.
+    // Reporting "sent" for a message the server explicitly refused
+    // (unknown_agent / participants_mismatch / quota) told the model its
+    // delegation had landed when no peer would ever see it — ADR-0051 D3-2
+    // requires reject and timeout to surface here.
+    const acceptance = await this.#dispatch(envelope);
+    if (acceptance.kind !== "accepted") {
+      // Nothing was routed, so nothing will ever reply on this conversation
+      // because of this call: release the waiter instead of parking the tool
+      // for the full reply timeout.
+      this.#cancelReplyWait(conversationId);
+      if (acceptance.kind === "rejected") {
+        return errorResult(
+          `send_to_agent failed: server rejected the message (${acceptance.reason})`,
+        );
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `send_to_agent delivery unknown: ${sent}; the server never ` +
+              `acknowledged it (${acceptance.reason}). It may or may not ` +
+              `have been delivered — resending could duplicate it.`,
+          },
+        ],
+      };
+    }
+
     if (!reply) {
       return { content: [{ type: "text", text: sent }] };
     }
@@ -684,6 +725,28 @@ export class InterAgentTool {
         },
       ],
     };
+  }
+
+  /** Pushes through the acceptance-aware sink when one is wired, else falls
+   *  back to the fire-and-forget sink and assumes acceptance (see
+   *  `sendInterAgent` in the options). */
+  #dispatch(envelope: Envelope): Promise<InterAgentAcceptance> {
+    const sink = this.#options.sendInterAgent;
+    if (sink === undefined) {
+      this.#options.send(envelope);
+      return Promise.resolve({ kind: "accepted", stamp: null });
+    }
+    return sink(envelope);
+  }
+
+  /** Settles a pending `wait_for_response` waiter as "no reply" without
+   *  waiting out its timer. */
+  #cancelReplyWait(conversationId: string): void {
+    const waiter = this.#replyWaiters.get(conversationId);
+    if (waiter === undefined) return;
+    clearTimeout(waiter.timeout);
+    this.#replyWaiters.delete(conversationId);
+    waiter.resolve(undefined);
   }
 
   #waitForReply(

@@ -9,7 +9,10 @@ import {
   isFormattedInterAgentMessage,
   type WhoamiSnapshot,
 } from "../src/inter_agent.js";
-import type { DirectoryEntry } from "@kaoiro/wrapper-core";
+import type {
+  DirectoryEntry,
+  InterAgentAcceptance,
+} from "@kaoiro/wrapper-core";
 import type {
   Envelope,
   InterAgentErrorPayload,
@@ -860,5 +863,129 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     expect(description).toContain("context_overflow = retrying is pointless");
     expect(description).toContain("api_error = retry at most once");
     expect(description).toContain("disconnected = the peer is unreachable");
+  });
+});
+
+// ふじ 30-10 must-fix M5: ADR-0051 D3-2 は「reject / timeout は tool result
+// に出す」と決めているのに、送信は fire-and-forget で ack を読んでいなかった。
+// server が unknown_agent などで明示的に拒否しても tool は "sent" を返す
+// ため、model は届いていない委任を届いたものとして扱ってしまう。
+describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
+  function makeAckTool(acceptance: InterAgentAcceptance): {
+    tool: InterAgentTool;
+    sent: Envelope[];
+  } {
+    const sent: Envelope[] = [];
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {
+        throw new Error("acceptance-aware sink must be used");
+      },
+      sendInterAgent: (envelope) => {
+        sent.push(envelope);
+        return Promise.resolve(acceptance);
+      },
+      now: () => "2026-08-08T00:00:00Z",
+      newId: () => "cnv-ack",
+    });
+    return { tool, sent };
+  }
+
+  it("accepted なら従来どおり sent を返す", async () => {
+    const { tool, sent } = makeAckTool({ kind: "accepted", stamp: [1, 0] });
+
+    const result = await tool.invoke({
+      to: "peer.agent",
+      body: "hi",
+      kind: "inform",
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]!.text).toContain("sent to peer.agent");
+  });
+
+  it("server が reject したら error result にし、reason を載せる", async () => {
+    const { tool } = makeAckTool({ kind: "rejected", reason: "unknown_agent" });
+
+    const result = await tool.invoke({
+      to: "peer.agent",
+      body: "hi",
+      kind: "inform",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("unknown_agent");
+    // 「送れた」と読める文言を混ぜない。
+    expect(result.content[0]!.text).not.toMatch(/^sent to /);
+  });
+
+  it("participants_mismatch などの他の reject も同じ経路で error になる", async () => {
+    for (const reason of [
+      "participants_mismatch",
+      "conversation_turn_limit",
+      "payload_too_large",
+    ]) {
+      const { tool } = makeAckTool({ kind: "rejected", reason });
+      const result = await tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain(reason);
+    }
+  });
+
+  it("ack 喪失 / timeout は「配送不明」— 失敗とも成功とも言わない", async () => {
+    const { tool } = makeAckTool({ kind: "unknown", reason: "timeout" });
+
+    const result = await tool.invoke({
+      to: "peer.agent",
+      body: "hi",
+      kind: "inform",
+    });
+
+    // 再送は重複配送になり得るので、error にして model に再試行させない。
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]!.text).toContain("delivery unknown");
+    expect(result.content[0]!.text).toContain("timeout");
+    expect(result.content[0]!.text).toContain("duplicate");
+  });
+
+  it("reject 時は wait_for_response の待ちも即座に解除する", async () => {
+    vi.useFakeTimers();
+    try {
+      const { tool } = makeAckTool({ kind: "rejected", reason: "unknown_agent" });
+
+      // timer を一切進めないまま解決する = 待ちが張られたままではない。
+      const result = await tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "query",
+        conversation_id: "cnv-reject-wait",
+        wait_for_response: true,
+      });
+
+      expect(result.isError).toBe(true);
+      // waiter が外れているので、後から届いた reply は誰も待っていない。
+      expect(tool.receiveInbound(inboundEnvelope("cnv-reject-wait"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sendInterAgent 未配線なら従来の fire-and-forget 動作 (unit test 用)", async () => {
+    const { tool, capture } = makeTool("self.agent");
+
+    const result = await tool.invoke({
+      to: "peer.agent",
+      body: "hi",
+      kind: "inform",
+    });
+
+    expect(capture.envelopes).toHaveLength(1);
+    expect(result.content[0]!.text).toContain("sent to peer.agent");
   });
 });

@@ -164,7 +164,7 @@ export class IaSidecar {
     this.#boundSessionId = sessionId;
   }
 
-  /** Reads back what this generation recorded, newest-last and capped.
+  /** Reads back what this generation recorded, in INGRESS order and capped.
    *  Malformed / truncated lines are skipped with a warning so one bad tail
    *  cannot stop the rest of the timeline from being restored (D3-2). */
   read(): SidecarRecord[] {
@@ -196,9 +196,7 @@ export class IaSidecar {
         `ia sidecar: skipped ${skipped} unreadable line(s) in ${this.#path}`,
       );
     }
-    return records.length > MAX_REPLAY_RECORDS
-      ? records.slice(-MAX_REPLAY_RECORDS)
-      : records;
+    return capNewestByStamp(records, MAX_REPLAY_RECORDS);
   }
 
   #move(from: string, to: string): void {
@@ -255,6 +253,37 @@ export class IaSidecar {
       }
     }
   }
+}
+
+/** Newest `max` records in the server's ORDERING domain, not in file order.
+ *
+ * ふじ 30-10 must-fix M3: append order is not ingress order. A quota
+ * overshoot makes the server synthesize an escalate notice and push it to
+ * the recipient immediately, while the message that triggered it is only
+ * appended on the sender side once its acceptance ack comes back — so the
+ * higher stamp can already be on disk when the lower one lands. Cutting the
+ * file's tail then drops the OLDER message and keeps the newer one, which is
+ * the reverse of what the cap means. Sorting by `ingress_stamp` first makes
+ * the cut agree with the projection the rows are replayed into (D6).
+ *
+ * Identical stamps collapse: a `bind` onto a session that already has a
+ * sidecar appends rather than clobbers, so the same row can appear twice,
+ * and the stamp is exactly the identity the server's projection upserts on.
+ */
+export function capNewestByStamp(
+  records: readonly SidecarRecord[],
+  max: number = MAX_REPLAY_RECORDS,
+): SidecarRecord[] {
+  const byStamp = new Map<string, SidecarRecord>();
+  for (const record of records) {
+    byStamp.set(`${record.ingress_stamp[0]}|${record.ingress_stamp[1]}`, record);
+  }
+  const sorted = [...byStamp.values()].sort(
+    (a, b) =>
+      a.ingress_stamp[0] - b.ingress_stamp[0] ||
+      a.ingress_stamp[1] - b.ingress_stamp[1],
+  );
+  return sorted.length > max ? sorted.slice(-max) : sorted;
 }
 
 /** Structural narrow of one persisted line. Anything that does not carry a

@@ -7,7 +7,7 @@
 // inbound pushes (instruction / permission_decision, protocol.md) are
 // validated structurally and forwarded to the handlers.
 
-import { Channel, Socket } from "phoenix";
+import { Channel, Socket, type Push } from "phoenix";
 import type { Envelope } from "@kaoiro/protocol";
 
 /** A client's permission decision relayed by the server (protocol.md).
@@ -119,6 +119,54 @@ export interface HydrationVerdictMessage {
 export interface ReplayIaItem {
   ingress_stamp: [number, number];
   envelope: Envelope;
+}
+
+/** What the server did with an outbound `inter_agent_message` push
+ *  (ADR-0051 D3-2). `unknown` is the honest answer for a timeout or a lost
+ *  ack: the message may well have been delivered, so the caller must not
+ *  present it as a failure the model can safely retry. */
+export type InterAgentAcceptance =
+  | { kind: "accepted"; stamp: [number, number] | null }
+  | { kind: "rejected"; reason: string }
+  | { kind: "unknown"; reason: string };
+
+/** Byte budget for ONE `replay_ia` push.
+ *
+ * ふじ 30-10 must-fix M4: the wrapper socket caps a frame at 8 MB
+ * (endpoint.ex) while a single envelope may be 64 KiB (wrapper_channel
+ * `@max_envelope_bytes`), so a full 200-row replay is ~12 MB of entirely
+ * VALID data. The frame is rejected before it is decoded — the server's
+ * own `Enum.take(200)` never runs — so `history_replay_complete` never
+ * lands, the agent stays unhydrated, and the next join replays the same
+ * oversized batch forever. Splitting on real JSON byte length is the only
+ * thing that breaks that loop. 1 MB leaves the Phoenix frame wrapper an
+ * order of magnitude of headroom. */
+export const MAX_REPLAY_IA_PUSH_BYTES = 1_000_000;
+
+/** Splits replay rows into pushes that stay under `maxBytes` of JSON.
+ *  A single row bigger than the budget still goes out alone: the server
+ *  drops it on its own envelope cap, which costs one row rather than
+ *  wedging the whole replay. */
+export function chunkReplayIaItems(
+  items: readonly ReplayIaItem[],
+  maxBytes: number = MAX_REPLAY_IA_PUSH_BYTES,
+): ReplayIaItem[][] {
+  const chunks: ReplayIaItem[][] = [];
+  let current: ReplayIaItem[] = [];
+  let size = 0;
+  for (const item of items) {
+    // +1 for the `,` this row adds to the JSON array.
+    const bytes = Buffer.byteLength(JSON.stringify(item), "utf8") + 1;
+    if (current.length > 0 && size + bytes > maxBytes) {
+      chunks.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(item);
+    size += bytes;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
 }
 
 export interface ServerLinkOptions {
@@ -469,6 +517,15 @@ function ingressStampFrom(reply: unknown): [number, number] | null {
   return [stamp[0] as number, stamp[1] as number];
 }
 
+/** Closed-vocabulary reason from a rejected push reply. The channel always
+ *  answers `{reason: "..."}`; anything else is normalised rather than
+ *  interpolated into the tool result verbatim. */
+function pushRejectReason(reply: unknown): string {
+  if (!isObject(reply)) return "unknown";
+  const reason = (reply as { reason?: unknown }).reason;
+  return typeof reason === "string" && reason !== "" ? reason : "unknown";
+}
+
 export class ServerLink {
   readonly #socket: Socket;
   readonly #channel: Channel;
@@ -704,6 +761,46 @@ export class ServerLink {
 
   /** Pushes one envelope with the next seq; buffered while disconnected. */
   send(envelope: Envelope): void {
+    const { wire, push } = this.#pushEnvelope(envelope);
+    // ADR-0051 D3-2: only an inter-agent send has an ack worth reading —
+    // the server replies with the ingress stamp it allocated, which is the
+    // sender-side sidecar trigger. Everything else keeps the existing
+    // fire-and-forget shape.
+    if (envelope.type === "inter_agent_message") {
+      push.receive("ok", (reply: unknown) =>
+        this.#recordInterAgentAck(wire, reply),
+      );
+    }
+  }
+
+  /** Pushes an inter-agent envelope and resolves with what the server did
+   *  with it (ADR-0051 D3-2 / ふじ 30-10 must-fix M5).
+   *
+   *  `send()` cannot answer this: it discards the `error` / `timeout` legs,
+   *  so an explicit reject (`unknown_agent`, `participants_mismatch`, …)
+   *  still surfaced to the model as "sent". The sidecar side-effect is
+   *  unchanged and stays on the ack — recording is about durability, this
+   *  Promise is about the tool result, and they settle at the same moment
+   *  only in the accepted case. */
+  sendInterAgent(envelope: Envelope): Promise<InterAgentAcceptance> {
+    const { wire, push } = this.#pushEnvelope(envelope);
+    return new Promise((resolve) => {
+      push
+        .receive("ok", (reply: unknown) => {
+          resolve({ kind: "accepted", stamp: this.#recordInterAgentAck(wire, reply) });
+        })
+        .receive("error", (reply: unknown) => {
+          resolve({ kind: "rejected", reason: pushRejectReason(reply) });
+        })
+        .receive("timeout", () => {
+          resolve({ kind: "unknown", reason: "timeout" });
+        });
+    });
+  }
+
+  /** Stamps and pushes one envelope, returning both the wire form (for the
+   *  sidecar) and the Push (for whichever ack legs the caller wants). */
+  #pushEnvelope(envelope: Envelope): { wire: Envelope; push: Push } {
     // Only state_change / permission_request define the latest state worth
     // re-announcing after a reconnect. log / result are transcript lines
     // the server keeps as history; re-sending them would duplicate it.
@@ -718,28 +815,25 @@ export class ServerLink {
       ...envelope,
       ...(this.#sessionId !== null ? { session_id: this.#sessionId } : {}),
       seq: this.#seq,
-    };
-    const push = this.#channel.push("envelope", wire);
-    // ADR-0051 D3-2: only an inter-agent send has an ack worth reading —
-    // the server replies with the ingress stamp it allocated, which is the
-    // sender-side sidecar trigger. Everything else keeps the existing
-    // fire-and-forget shape.
-    const onAck = this.#onInterAgentAck;
-    if (envelope.type === "inter_agent_message" && onAck !== undefined) {
-      push.receive("ok", (reply: unknown) => {
-        const stamp = ingressStampFrom(reply);
-        if (stamp === null) {
-          // An old server acks without a stamp. The message was delivered;
-          // it just cannot be restored after a restart (ADR-0051 D6
-          // rollout: this mixed pairing is the documented degradation).
-          process.stderr.write(
-            "inter-agent ack carried no ingress_stamp; not recorded\n",
-          );
-          return;
-        }
-        onAck(wire as Envelope, stamp);
-      });
+    } as Envelope;
+    return { wire, push: this.#channel.push("envelope", wire) };
+  }
+
+  /** Sidecar-records an accepted inter-agent send and returns the stamp the
+   *  server allocated, or null when the ack carried none. */
+  #recordInterAgentAck(wire: Envelope, reply: unknown): [number, number] | null {
+    const stamp = ingressStampFrom(reply);
+    if (stamp === null) {
+      // An old server acks without a stamp. The message was delivered;
+      // it just cannot be restored after a restart (ADR-0051 D6
+      // rollout: this mixed pairing is the documented degradation).
+      process.stderr.write(
+        "inter-agent ack carried no ingress_stamp; not recorded\n",
+      );
+      return null;
     }
+    this.#onInterAgentAck?.(wire, stamp);
+    return stamp;
   }
 
   /** Asks the server to drop this agent's display projection before a
@@ -763,7 +857,13 @@ export class ServerLink {
    *  The pane is bound to the channel topic, so this cannot address another
    *  agent's pane. */
   sendReplayIa(replayId: string, items: readonly ReplayIaItem[]): void {
-    this.#channel.push("replay_ia", { replay_id: replayId, items });
+    // Chunked on real byte length (M4): one 200-row push is ~12 MB of valid
+    // data against an 8 MB frame cap. Every chunk carries the SAME
+    // replay_id and all of them precede `history_replay_complete`, so the
+    // server's CAS still sees one attempt.
+    for (const chunk of chunkReplayIaItems(items)) {
+      this.#channel.push("replay_ia", { replay_id: replayId, items: chunk });
+    }
   }
 
   /** Pushes the explicit end boundary after the final replayed row. */

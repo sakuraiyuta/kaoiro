@@ -189,6 +189,11 @@ async function main(): Promise<void> {
     config,
     getState: () => host.state,
     send: (envelope) => link?.send(envelope),
+    // ADR-0051 D3-2: `send_to_agent`'s result is the server's acceptance
+    // ack, not the local push. No link yet means no server took it.
+    sendInterAgent: (envelope) =>
+      link?.sendInterAgent(envelope) ??
+      Promise.resolve({ kind: "unknown" as const, reason: "not_connected" }),
     requestDirectory: () => link?.requestDirectory() ?? Promise.resolve([]),
     getWhoami: () => host.statusSnapshot(),
   });
