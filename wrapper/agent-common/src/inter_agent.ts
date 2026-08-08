@@ -628,11 +628,6 @@ export class InterAgentTool {
       payload,
     );
 
-    // This wrapper is replying on the conversation, so it no longer owes an
-    // error notice for whatever inbound message it was injected to answer
-    // (issue #131 — see notePendingInjection/resolveTurnEnd).
-    this.#pendingInjections.delete(conversationId);
-
     const timeoutMs = args.timeout_ms ?? DEFAULT_REPLY_TIMEOUT_MS;
     const reply = waitForResponse
       ? this.#waitForReply(conversationId, timeoutMs)
@@ -646,16 +641,46 @@ export class InterAgentTool {
     // delegation had landed when no peer would ever see it — ADR-0051 D3-2
     // requires reject and timeout to surface here.
     const acceptance = await this.#dispatch(envelope);
-    if (acceptance.kind !== "accepted") {
+
+    // issue #131 / ふじ 30-10 R2: this wrapper stops owing an error notice
+    // for the inbound it was injected to answer only once the send actually
+    // got somewhere. A REJECTED send is not a reply — clearing the pending
+    // injection there would silently swallow the very notice #131 exists to
+    // produce. `unknown` still clears it: the message may well have been
+    // delivered, and layering an error notice on top of a delivered reply
+    // would read to the peer as two contradictory answers.
+    if (acceptance.kind !== "rejected") {
+      this.#pendingInjections.delete(conversationId);
+    }
+
+    if (acceptance.kind === "rejected") {
       // Nothing was routed, so nothing will ever reply on this conversation
       // because of this call: release the waiter instead of parking the tool
       // for the full reply timeout.
       this.#cancelReplyWait(conversationId);
-      if (acceptance.kind === "rejected") {
-        return errorResult(
-          `send_to_agent failed: server rejected the message (${acceptance.reason})`,
-        );
-      }
+      return errorResult(
+        `send_to_agent failed: server rejected the message (${acceptance.reason})`,
+      );
+    }
+
+    // ふじ 30-10 R3: a peer reply that has ALREADY landed is proof the
+    // message was delivered, whatever happened to the acceptance ack. The
+    // waiter is gone from the map exactly when it has settled, so consume
+    // it before deciding — otherwise a lost ack threw away a reply the
+    // caller was synchronously waiting for and reported "delivery unknown".
+    let settledReply: Envelope | undefined;
+    if (
+      acceptance.kind === "unknown" &&
+      reply !== undefined &&
+      !this.#replyWaiters.has(conversationId)
+    ) {
+      settledReply = await reply;
+    }
+
+    if (acceptance.kind === "unknown" && settledReply === undefined) {
+      // Still no evidence either way (no waiter, or the reply window itself
+      // expired without an envelope).
+      this.#cancelReplyWait(conversationId);
       return {
         content: [
           {
@@ -673,7 +698,7 @@ export class InterAgentTool {
       return { content: [{ type: "text", text: sent }] };
     }
 
-    const inbound = await reply;
+    const inbound = settledReply ?? (await reply);
     if (!inbound) {
       return {
         content: [

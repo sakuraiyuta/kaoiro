@@ -989,3 +989,148 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
     expect(result.content[0]!.text).toContain("sent to peer.agent");
   });
 });
+
+// ふじ 30-10 2 巡目 R2 / R3。どちらも「acceptance が確定するまでは送信の
+// 成否が分からない」ことの帰結で、M5 で ack を読むようにしたことで初めて
+// 表に出た。
+describe("acceptance と #131 pending injection / reply waiter の整合", () => {
+  function makeDeferredAckTool(): {
+    tool: InterAgentTool;
+    settle: (acceptance: InterAgentAcceptance) => void;
+    outbound: Envelope[];
+  } {
+    const outbound: Envelope[] = [];
+    let resolveAck!: (acceptance: InterAgentAcceptance) => void;
+    const pending = new Promise<InterAgentAcceptance>((resolve) => {
+      resolveAck = resolve;
+    });
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: (env) => outbound.push(env),
+      sendInterAgent: (env) => {
+        outbound.push(env);
+        return pending;
+      },
+      now: () => "2026-08-08T00:00:00Z",
+      newId: () => "cnv-deferred",
+    });
+    return { tool, settle: resolveAck, outbound };
+  }
+
+  // R2: reject は「返信した」ではない。pending injection を消してしまうと
+  // #131 のエラー通知が出なくなり、相手は無応答のまま待ち続ける。
+  it("R2: reject では pending injection を残し、turn 終了で error notice が出る", async () => {
+    const { tool, settle } = makeDeferredAckTool();
+    tool.notePendingInjection(inboundEnvelope("cnv-deferred", "request"));
+
+    const pending = tool.invoke({
+      to: "peer.agent",
+      body: "hi",
+      kind: "response",
+      conversation_id: "cnv-deferred",
+    });
+    settle({ kind: "rejected", reason: "unknown_agent" });
+    expect((await pending).isError).toBe(true);
+
+    const notices = tool.resolveTurnEnd("cnv-deferred", {
+      code: "api_error",
+      message: "turn failed",
+    });
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.payload).toMatchObject({ to: "peer.agent" });
+  });
+
+  it("R2: accepted では pending injection を消す (通知を重ねない)", async () => {
+    const { tool, settle } = makeDeferredAckTool();
+    tool.notePendingInjection(inboundEnvelope("cnv-deferred", "request"));
+
+    const pending = tool.invoke({
+      to: "peer.agent",
+      body: "hi",
+      kind: "response",
+      conversation_id: "cnv-deferred",
+    });
+    settle({ kind: "accepted", stamp: [1, 0] });
+    await pending;
+
+    expect(
+      tool.resolveTurnEnd("cnv-deferred", {
+        code: "api_error",
+        message: "turn failed",
+      }),
+    ).toEqual([]);
+  });
+
+  it("R2: 配送不明でも pending injection は消す (二重返信を作らない)", async () => {
+    const { tool, settle } = makeDeferredAckTool();
+    tool.notePendingInjection(inboundEnvelope("cnv-deferred", "request"));
+
+    const pending = tool.invoke({
+      to: "peer.agent",
+      body: "hi",
+      kind: "response",
+      conversation_id: "cnv-deferred",
+    });
+    settle({ kind: "unknown", reason: "timeout" });
+    await pending;
+
+    expect(
+      tool.resolveTurnEnd("cnv-deferred", {
+        code: "api_error",
+        message: "turn failed",
+      }),
+    ).toEqual([]);
+  });
+
+  // R3: ack を取りこぼしても、peer reply が既に着いていればそれが配送の
+  // 証拠。unknown を優先して reply を捨てると、同期待ちしていた呼び出しが
+  // 届いている返答を見ないまま「配送不明」で終わる。
+  it("R3: ack 喪失でも先に届いた reply があれば sent + reply を返す", async () => {
+    const { tool, settle } = makeDeferredAckTool();
+
+    const pending = tool.invoke({
+      to: "peer.agent",
+      body: "please reply",
+      kind: "query",
+      conversation_id: "cnv-deferred",
+      wait_for_response: true,
+    });
+    // invoke() が waiter を張るまで 1 tick 待つ (dispatch は await 済み)。
+    await Promise.resolve();
+
+    // ack より先に peer reply が着く。
+    expect(tool.receiveInbound(inboundEnvelope("cnv-deferred"))).toBe(true);
+    settle({ kind: "unknown", reason: "timeout" });
+
+    const result = await pending;
+    const text = result.content[0]!.text;
+    expect(result.isError).toBeUndefined();
+    expect(text).not.toContain("delivery unknown");
+    expect(text).toContain("peer reply body");
+  });
+
+  it("R3: reply がまだ来ていない ack 喪失は従来どおり配送不明で即返す", async () => {
+    vi.useFakeTimers();
+    try {
+      const { tool, settle } = makeDeferredAckTool();
+
+      const pending = tool.invoke({
+        to: "peer.agent",
+        body: "please reply",
+        kind: "query",
+        conversation_id: "cnv-deferred",
+        wait_for_response: true,
+        timeout_ms: 300_000,
+      });
+      settle({ kind: "unknown", reason: "timeout" });
+
+      // timer を進めずに解決する = waiter は解除済み。
+      const result = await pending;
+      expect(result.content[0]!.text).toContain("delivery unknown");
+      expect(tool.receiveInbound(inboundEnvelope("cnv-deferred"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

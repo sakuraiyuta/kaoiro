@@ -865,11 +865,18 @@ describe("chunkReplayIaItems (ADR-0051 D3-3 / 8MB frame 対策)", () => {
     expect(chunks.map((c) => c.length)).toEqual([2, 1]);
   });
 
-  it("budget 単体で超える 1 行も落とさず、単独 chunk として送る", () => {
+  // ふじ 30-10 2 巡目 should: 単独でも budget に収まらない行を送ると、
+  // frame reject → complete 未達 → 再 join で同じ行を送り直す loop に戻る。
+  // 破損 sidecar 行と同じく fail-closed で落とし、残りは通す。
+  it("budget 単体で超える 1 行は落とし、残りの行は通す", () => {
     const huge = row(1, 5_000);
-    const chunks = chunkReplayIaItems([huge, row(2, 10)], 100);
-    expect(chunks.map((c) => c.length)).toEqual([1, 1]);
-    expect(chunks[0]?.[0]).toBe(huge);
+    const small = row(2, 10);
+    const chunks = chunkReplayIaItems([huge, small], 1_000);
+    expect(chunks).toEqual([[small]]);
+  });
+
+  it("全行が budget 超なら chunk なし (push を出さない)", () => {
+    expect(chunkReplayIaItems([row(1, 5_000)], 100)).toEqual([]);
   });
 
   it("空入力は chunk なし (push を 1 本も出さないため)", () => {

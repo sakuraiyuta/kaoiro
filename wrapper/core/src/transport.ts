@@ -144,9 +144,15 @@ export type InterAgentAcceptance =
 export const MAX_REPLAY_IA_PUSH_BYTES = 1_000_000;
 
 /** Splits replay rows into pushes that stay under `maxBytes` of JSON.
- *  A single row bigger than the budget still goes out alone: the server
- *  drops it on its own envelope cap, which costs one row rather than
- *  wedging the whole replay. */
+ *
+ *  A single row that cannot fit the budget at all is DROPPED, not sent
+ *  alone (ふじ 30-10 2 巡目 should). Sending it re-creates the very loop
+ *  this function exists to break: the frame is rejected before decoding,
+ *  `history_replay_complete` never lands, and the next join replays the
+ *  same unsendable row forever. A host-local sidecar is the only thing
+ *  that can produce such a row, and D3-2 already drops corrupt sidecar
+ *  lines on the same fail-closed reasoning — one lost bubble against a
+ *  permanently unhydrated pane. `sendReplayIa` warns about the loss. */
 export function chunkReplayIaItems(
   items: readonly ReplayIaItem[],
   maxBytes: number = MAX_REPLAY_IA_PUSH_BYTES,
@@ -157,6 +163,7 @@ export function chunkReplayIaItems(
   for (const item of items) {
     // +1 for the `,` this row adds to the JSON array.
     const bytes = Buffer.byteLength(JSON.stringify(item), "utf8") + 1;
+    if (bytes > maxBytes) continue;
     if (current.length > 0 && size + bytes > maxBytes) {
       chunks.push(current);
       current = [];
@@ -861,7 +868,14 @@ export class ServerLink {
     // data against an 8 MB frame cap. Every chunk carries the SAME
     // replay_id and all of them precede `history_replay_complete`, so the
     // server's CAS still sees one attempt.
-    for (const chunk of chunkReplayIaItems(items)) {
+    const chunks = chunkReplayIaItems(items);
+    const sent = chunks.reduce((n, chunk) => n + chunk.length, 0);
+    if (sent < items.length) {
+      process.stderr.write(
+        `replay_ia: dropped ${items.length - sent} oversize sidecar row(s)\n`,
+      );
+    }
+    for (const chunk of chunks) {
       this.#channel.push("replay_ia", { replay_id: replayId, items: chunk });
     }
   }
