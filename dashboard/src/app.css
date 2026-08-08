@@ -21,6 +21,22 @@
   --c-error: #f08498;
   --c-disconnected: #4d4f63;
 
+  /* Breakpoint tokens (ADR-0052 / docs/specs/responsive-layout.md が正本。
+     1rem = 16px 前提で kaoiro の実装寸法から逆算):
+       desktop     min-width: 1199px
+       tablet      940px 〜 1198px
+       smartphone  max-width: 939px
+       short       max-height: 500px (幅と直交する縦圧縮 override)
+     CSS custom property は media query 条件に使えないため、各コンポーネント
+     の @media はリテラル px を書く。値を変えるときは 1199px / 1198px /
+     940px / 939px / 500px を全域 grep して同期すること。 */
+
+  /* z-index scale (responsive-layout.md 重なり順):
+       ページ本体 / in-flow dock 類  … auto (z 指定なし)
+       アンカー相対メニュー          … 5 (起動元と同じ層)
+       bottom sheet backdrop/panel/handle … 30 / 31 / 32
+       global dialog・drawer backdrop / panel … 40 / 41 */
+
   /* typography scale — semantic 8 段階 (docs/specs/design.md typography と 1:1) */
   --fs-h1: 1.1rem;
   --fs-h2: 0.95rem;
@@ -55,8 +71,23 @@ body {
 
 #app {
   height: 100%;
+  /* Mobile browsers resize the DYNAMIC viewport when the URL bar or the
+     software keyboard appears; 100dvh tracks it so the composer pinned at
+     the column bottom stays reachable (ADR-0052 受け入れ基準). Browsers
+     without dvh keep the 100% fallback above. */
+  height: 100dvh;
   display: flex;
   flex-direction: column;
+}
+
+/* While a bottom sheet is open, the page's main scroll owner is frozen so
+   the sheet content is the only vertical scroller (responsive-layout.md
+   シート契約). BottomSheet.svelte toggles this class. !important because
+   the component-scoped `main.svelte-*` rule ties or beats this global
+   mode override on specificity/order — same pattern as the
+   prefers-reduced-motion block below. */
+body.sheet-open main {
+  overflow: hidden !important;
 }
 
 code {

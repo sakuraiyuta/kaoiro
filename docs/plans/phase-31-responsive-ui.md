@@ -1,7 +1,7 @@
 ---
 title: Phase 31 — dashboard の 3 サイズ対等レスポンシブ化 (ADR-0052)
 description: timeline track 変更と breakpoint / シート機構の基盤を敷き、lobby / AgentDetail / 周辺 UI を PC / tablet / smartphone の 3 サイズで成立させる。
-status: planned
+status: in_progress
 phase: 31
 depends_on: []
 last_updated: 2026-08-09
@@ -48,10 +48,10 @@ dashboard を PC / tablet / smartphone のどの画面サイズでも実用に�
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 31-1 | timeline track を `22rem` 固定へ変更し、breakpoint トークンを定義 | | ⏳ | desktop 1199px / tablet 940px / short 500px。内訳は responsive-layout.md の表が正本。`1rem = 16px` 前提 |
-| 31-2 | viewport meta に `viewport-fit=cover` を追加し、セーフエリアを織り込む | | ⏳ | 対象は header / composer / シート / handle / fixed dialog / drawer。inset は加算でなく floor 扱いで、floor 値は要素ごとの既存 edge padding (`max(<既存 padding>, env(...))`)。本体 inline なら `max(2rem, env(...))` |
-| 31-3 | ボトムシート機構の共通コンポーネント化 | | ⏳ | 契約 (開閉手段・最大高 60%・単一 scroll owner・フォーカス・breakpoint 跨ぎ・重なり順) は responsive-layout.md が正本 |
-| 31-4 | lobby (AgentGridShell + ResponseTimeline) の 3 サイズ適用 | | ⏳ | smartphone で timeline をシートへ退避。列の固定は operator かつ timeline 横並び時のみ (`.three-cols` の条件を見直す) |
+| 31-1 | timeline track を `22rem` 固定へ変更し、breakpoint トークンを定義 | こはく | ✅ | desktop 1199px / tablet 940px / short 500px。内訳は responsive-layout.md の表が正本。`1rem = 16px` 前提。トークン一覧は `app.css` 冒頭コメント |
+| 31-2 | viewport meta に `viewport-fit=cover` を追加し、セーフエリアを織り込む | こはく | ✅ | 対象は header / composer / シート / handle / fixed dialog / drawer。inset は加算でなく floor 扱いで、floor 値は要素ごとの既存 edge padding (`max(<既存 padding>, env(...))`)。本体 inline なら `max(2rem, env(...))` |
+| 31-3 | ボトムシート機構の共通コンポーネント化 | こはく | ✅ | 契約 (開閉手段・最大高 60%・単一 scroll owner・フォーカス・breakpoint 跨ぎ・重なり順) は responsive-layout.md が正本。実装は `BottomSheet.svelte` (非シートサイズでは display:contents) |
+| 31-4 | lobby (AgentGridShell + ResponseTimeline) の 3 サイズ適用 | こはく | ✅ | smartphone で timeline をシートへ退避。列の固定は operator かつ timeline 横並び時のみ (smartphone 帯は `.three-cols` を auto-fill へ上書き) |
 
 **Stage A 完了判定**: 3 サイズで lobby が成立し timeline へ到達できる /
 viewer と offline が `auto-fill` のまま / viewport meta が反映され standalone
@@ -61,8 +61,8 @@ viewer と offline が `auto-fill` のまま / viewport meta が反映され sta
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 31-5 | `.status` のシート化と二重スクロール解消 | | ⏳ | tablet 幅以下が対象。`.status-scroll` と sheet wrapper のどちらを scroll owner にするか決めて片方を `overflow: hidden` に |
-| 31-6 | シートと in-flow dock 類の重なり解決、attention バッジの操作化 | | ⏳ | バッジは `button.blindspot` と同じ「一覧へ戻す」を実行する (ADR-0052 F3)。handle はコンテナとし、開閉トグルとバッジを兄弟の `button` にする (interactive 要素の入れ子を避ける) |
+| 31-5 | `.status` のシート化と二重スクロール解消 | こはく | ✅ | tablet 幅以下が対象。シート内は `.status` 自身を単一 scroll owner とし、identity header ごとスクロールさせる (pinned head + `.status-scroll` 分割は landscape 帯で実効高 0 になる — 外部レビュー実測)。desktop は従来どおり `.status-scroll` が owner。sheet panel は `overflow: hidden` の wrapper、portrait は 8rem にキャップ |
+| 31-6 | シートと in-flow dock 類の重なり解決、attention バッジの操作化 | こはく | ✅ | バッジは `button.blindspot` と同じ「一覧へ戻す」を実行する (ADR-0052 F3)。handle はコンテナとし、開閉トグルとバッジを兄弟の `button` にする (interactive 要素の入れ子を避ける)。加えて handle に現 agent の pending lamp を出す |
 
 **Stage B 完了判定**: status の全情報・全操作へ到達できる / 二重スクロールが
 ない / シート展開中も pending に気づけ、バッジから一覧へ戻れる。
@@ -71,8 +71,8 @@ viewer と offline が `auto-fill` のまま / viewport meta が反映され sta
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 31-7 | header / SettingsDrawer / LaunchDialog / offline 一覧の 3 サイズ対応 | | ⏳ | smartphone でログアウトを SettingsDrawer へ移す判断を含む。drawer (backdrop 1 / panel 2) と dialog (panel 1、backdrop 無指定) の層尺度を共通化する |
-| 31-8 | `short` の縦圧縮 override を適用 | | ⏳ | header の縦 padding / composer の初期高 / dock 類の高さ上限 + 内部スクロール / dialog・drawer の `max-block-size` と scroll owner。横方向のレイアウト・シート最大高・dock の展開状態は変更しない。390px 高でログが潰れる場合、`main` の block padding (現状 `1.6rem 0 3rem`) の縮退を最初の調整候補とする — 既存 spacing スケール内の実装調整で、仕様の追加決定は不要 |
+| 31-7 | header / SettingsDrawer / LaunchDialog / offline 一覧の 3 サイズ対応 | こはく | ✅ | smartphone ではログアウトを SettingsDrawer へ移した (drawer 側の行は全サイズで表示、header 側を CSS で隠す — DOM 共通維持)。層尺度は backdrop 40 / panel 41 に共通化 (`app.css` の z-index scale コメント) |
+| 31-8 | `short` の縦圧縮 override を適用 | こはく | ✅ | header の縦 padding / composer の初期高 (1 行、focus で拡張) / dock 類の高さ上限 45% + 内部スクロール (permission dock は question dock と同じ shell+scroll 構造へ変更) / dialog・drawer の `max-block-size` と scroll owner。横方向のレイアウト・シート最大高・dock の展開状態は変更しない。`main` の block padding は 0.5rem/2.6rem へ縮退 (bottom は handle の逃げ幅を確保) |
 
 **Stage C 完了判定**: header / drawer / dialog / offline の挙動が
 responsive-reachability.md の表と一致する / 低背で dialog・drawer・dock が
@@ -84,8 +84,8 @@ responsive-reachability.md の表と一致する / 低背で dialog・drawer・d
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 31-9 | 実機確認 (iOS/iPadOS Safari + Android Chrome) | | ⏳ | Android は Pixel 6a。ソフトウェアキーボード表示中の composer 到達を必ず確認する |
-| 31-10 | Playwright による viewport 回帰の固定 | | ⏳ | 下記シナリオ |
+| 31-9 | 実機確認 (iOS/iPadOS Safari + Android Chrome) | | ⏳ | Android は Pixel 6a。ソフトウェアキーボード表示中の composer 到達を必ず確認する。[#208](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/208) |
+| 31-10 | Playwright による viewport 回帰の固定 | こはく | ✅ | 下記シナリオ。`dashboard/e2e/` (fixture ハーネス + `pnpm exec playwright test`、Phoenix 不要)。T1-T10 + landscape 到達回帰の 26 テスト green |
 
 **テストシナリオ** (31-10)。軸の直積ではなく、成立する組のみを列挙する。
 

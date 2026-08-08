@@ -600,6 +600,9 @@
     background: rgba(0, 0, 0, 0.5);
     border: none;
     cursor: default;
+    /* Global dialog/drawer layer (app.css z-index scale): above the bottom
+       sheet (30-32); scale shared with SettingsDrawer (phase-31 31-7). */
+    z-index: 40;
   }
 
   .dialog {
@@ -607,12 +610,30 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: min(30rem, 92vw);
+    /* The implied 4vw side gap of the former 92vw acts as the safe-area
+       floor for landscape notches (responsive-layout.md セーフエリア). */
+    width: min(
+      30rem,
+      calc(100vw - max(4vw, env(safe-area-inset-left))
+        - max(4vw, env(safe-area-inset-right)))
+    );
     padding: 1.6rem;
     background: var(--bg-card);
     border: 1px solid var(--line);
     border-radius: 0.6rem;
-    z-index: 1;
+    z-index: 41;
+  }
+
+  /* short: cap the dialog and let it scroll internally so a low viewport
+     never clips the top/bottom (ADR-0052 F8, phase-31 31-8). */
+  @media (max-height: 500px) {
+    .dialog {
+      max-block-size: calc(
+        100dvh - max(1rem, env(safe-area-inset-top))
+          - max(1rem, env(safe-area-inset-bottom))
+      );
+      overflow-y: auto;
+    }
   }
 
   h2 {

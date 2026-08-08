@@ -1259,7 +1259,7 @@
       </button>
     {/if}
     <p class="conn" data-status={status}>
-      <span class="conn-dot"></span>{status}
+      <span class="conn-dot"></span><span class="conn-label">{status}</span>
     </p>
     <button type="button" class="logout" onclick={logout}>ログアウト</button>
   </div>
@@ -1279,7 +1279,7 @@
 {/if}
 
 {#if showSettings}
-  <SettingsDrawer onClose={() => (showSettings = false)} />
+  <SettingsDrawer onClose={() => (showSettings = false)} onLogout={logout} />
 {/if}
 
 <main>
@@ -1502,8 +1502,57 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    padding: 1.6rem 2rem 0.4rem;
+    /* Safe-area insets are a FLOOR on the existing edge padding, never an
+       addition (responsive-layout.md セーフエリア). */
+    padding: max(1.6rem, env(safe-area-inset-top))
+      max(2rem, env(safe-area-inset-right)) 0.4rem
+      max(2rem, env(safe-area-inset-left));
     border-bottom: 1px solid var(--line);
+  }
+
+  /* Smartphone header (responsive-reachability.md app chrome): the title
+     drops its "— 顔色" suffix, the connection badge shrinks to its dot,
+     logout moves into SettingsDrawer, and the agent strip scrolls
+     horizontally instead of wrapping the header taller. */
+  @media (max-width: 939px) {
+    header {
+      align-items: center;
+      gap: 0.6rem;
+      padding-inline: max(0.8rem, env(safe-area-inset-left));
+      padding-inline-end: max(0.8rem, env(safe-area-inset-right));
+    }
+
+    h1::after {
+      content: none;
+    }
+
+    .conn .conn-label {
+      display: none;
+    }
+
+    .conn .conn-dot {
+      margin-right: 0;
+    }
+
+    header .logout {
+      display: none;
+    }
+
+    .agent-strip {
+      flex-wrap: nowrap;
+      justify-content: flex-start;
+      overflow-x: auto;
+      min-width: 0;
+    }
+  }
+
+  /* short (max-height 500px): 縦圧縮 override — header の縦 padding のみ。
+     横方向のレイアウトは幅トークンが決めるので触らない (ADR-0052 F8). */
+  @media (max-height: 500px) {
+    header {
+      padding-top: max(0.5rem, env(safe-area-inset-top));
+      padding-bottom: 0.25rem;
+    }
   }
 
   h1 {
@@ -1662,7 +1711,20 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 1.6rem 2rem 3rem;
+    /* Inline padding = the 64px 本体 padding the breakpoint derivation in
+       responsive-layout.md assumes; env() is a floor, not an addition. The
+       3rem bottom band doubles as clearance for the fixed sheet handle. */
+    padding: 1.6rem max(2rem, env(safe-area-inset-right)) 3rem
+      max(2rem, env(safe-area-inset-left));
+  }
+
+  /* short: main の縦 padding 縮退 (phase-31 31-8 の第一調整候補)。bottom は
+     sheet handle (高さ約 2rem + safe-area) の逃げ幅を残す。 */
+  @media (max-height: 500px) {
+    main {
+      padding-top: 0.5rem;
+      padding-bottom: 2.6rem;
+    }
   }
 
   /* Full-height previous / next controls for detail browsing (#80). The
@@ -1713,7 +1775,9 @@
     outline: none;
   }
 
-  @media (max-width: 640px) {
+  /* Smartphone band (was an ad-hoc 640px query; aligned to the ADR-0052
+     breakpoint tokens). */
+  @media (max-width: 939px) {
     .detail-navigation.with-switchers {
       grid-template-columns: 1.75rem minmax(0, 1fr) 1.75rem;
       gap: 0.25rem;
@@ -1932,7 +1996,8 @@
   .spawn-notice {
     flex: 0 0 auto;
     margin: 0;
-    padding: 0.4rem 2rem;
+    padding: 0.4rem max(2rem, env(safe-area-inset-right)) 0.4rem
+      max(2rem, env(safe-area-inset-left));
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
     background: var(--bg-card);

@@ -1,5 +1,7 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
-import { defineConfig } from "vite";
+// vitest/config re-exports Vite's defineConfig with the `test` field typed;
+// `vite build` / `vite dev` read it identically.
+import { defineConfig } from "vitest/config";
 
 // Builds straight into the Phoenix server's priv/static (output is
 // gitignored; `mix dashboard.build` from server/ runs this). emptyOutDir
@@ -11,6 +13,11 @@ export default defineConfig({
   // intentionally unavailable.
   resolve: {
     conditions: ["browser"],
+  },
+  test: {
+    // Keep Vitest out of e2e/ — those are Playwright specs (31-10) with
+    // their own runner (`pnpm exec playwright test`).
+    include: ["test/**/*.test.ts"],
   },
   build: {
     outDir: "../server/priv/static",

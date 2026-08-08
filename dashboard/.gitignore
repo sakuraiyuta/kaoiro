@@ -2,3 +2,7 @@
 # (git show <SHA>:dashboard/src/lib/AgentDetail.svelte) and removes it when
 # done; never a checked-in file.
 src/lib/.AgentDetail.before.bench.svelte
+
+# Playwright (31-10 viewport regression): runner output, never checked in
+test-results/
+playwright-report/

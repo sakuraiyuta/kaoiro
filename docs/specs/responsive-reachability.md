@@ -106,6 +106,7 @@ Tasklist float は #188 が未実装のため、本表の行は同 issue 実装�
 | シートの handle | 当該領域がシート化されるサイズでは常時 (閉時も) | dock 類より前面 |
 | シートの panel / backdrop | 上記かつ展開時 | handle と同じ層 |
 | handle 上の attention バッジ | シート展開中 かつ 他エージェントに要対応在り | handle 内 |
+| handle 上の pending lamp | シート展開中 かつ 当該ビューに pending permission / question 在り (detail は当該 agent、lobby はいずれかの agent) | handle 内 (開閉トグル内の非対話表示) |
 | slash menu / switch menu (composer 由来) | 起動時 | ページ側 (シートより背面) |
 | resume menu (status 由来) | 起動時 | シート content 上 |
 
@@ -131,9 +132,14 @@ tool 出力の `pre`、アンカーメニュー、`question-dock` 内スクロ�
 高さ上限を持つ局所スクロールは対象外。
 
 シート自体は、wrapper と content のどちらか一方だけを縦スクロール所有者と
-する。`.status` をシートへ入れる場合、既存の `.status-scroll` を所有者とし
-wrapper は `overflow: hidden` にするか、その逆にする。両方が持つと即座に
-二重になる。
+する。両方が持つと即座に二重になる。
+
+`.status` をシートへ入れる場合の採用形は **`.status` 自身を所有者**とし、
+identity header (`.head`) ごとスクロールさせる。desktop の分割
+(pinned `.head` + `.status-scroll` 所有) をシートへ持ち込んではならない —
+panel 高が浅い landscape 帯 (例 844x390 で panel 234px) では pinned head
+が所有者の viewport を食い潰し、実効スクロール高が 0 になって status の
+全操作へ到達不能になる (phase-31 外部レビュー実測)。
 
 ### 常時固定される操作
 

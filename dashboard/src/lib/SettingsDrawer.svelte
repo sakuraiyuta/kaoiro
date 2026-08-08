@@ -4,7 +4,16 @@
   // via updateSettings() (no separate save step, the value set is small).
   import { settings, updateSettings } from "./settings.svelte";
 
-  let { onClose }: { onClose: () => void } = $props();
+  let {
+    onClose,
+    onLogout = undefined,
+  }: {
+    onClose: () => void;
+    /** Logout relay (phase-31 31-7): on smartphone the header hides its
+     *  logout button, so the drawer carries the affordance. Rendered at
+     *  every size (DOM stays common — ADR-0052 F6); omitted = no row. */
+    onLogout?: () => void | Promise<void>;
+  } = $props();
 </script>
 
 <div
@@ -65,6 +74,16 @@
     />
     カードに engine・model・effort と ctx・5h・7day を表示
   </label>
+
+  {#if onLogout}
+    <button
+      type="button"
+      class="logout"
+      onclick={() => void onLogout?.()}
+    >
+      ログアウト
+    </button>
+  {/if}
 </div>
 
 <style>
@@ -74,7 +93,9 @@
     background: rgba(0, 0, 0, 0.5);
     border: none;
     cursor: default;
-    z-index: 1;
+    /* Global dialog/drawer layer (app.css z-index scale): above the bottom
+       sheet (30-32). */
+    z-index: 40;
   }
 
   .drawer {
@@ -86,11 +107,24 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    padding: 1.6rem;
+    /* Fixed overlay: safe-area insets floor the existing edge padding
+       (responsive-layout.md セーフエリア). */
+    padding: max(1.6rem, env(safe-area-inset-top))
+      max(1.6rem, env(safe-area-inset-right))
+      max(1.6rem, env(safe-area-inset-bottom)) 1.6rem;
     background: var(--bg-card);
     border-left: 1px solid var(--line);
-    z-index: 2;
+    z-index: 41;
     animation: slide-in 0.2s ease-out;
+  }
+
+  /* short: the drawer becomes its own vertical scroll owner so low
+     viewports never clip its rows (ADR-0052 F8). */
+  @media (max-height: 500px) {
+    .drawer {
+      max-block-size: 100dvh;
+      overflow-y: auto;
+    }
   }
 
   @keyframes slide-in {
@@ -156,5 +190,25 @@
   .value {
     align-self: flex-end;
     color: var(--fg-dim);
+  }
+
+  /* Same look as the header logout button it stands in for (App.svelte). */
+  .logout {
+    margin-top: auto;
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.35rem 0.6rem;
+    cursor: pointer;
+    transition:
+      color 0.2s,
+      border-color 0.2s;
+  }
+
+  .logout:hover {
+    color: var(--fg);
+    border-color: var(--fg-dim);
   }
 </style>

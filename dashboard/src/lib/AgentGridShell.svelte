@@ -15,6 +15,7 @@
   // scoped-class rewrite so App's slotted `<li>` tiles still receive
   // the stagger animation.
 
+  import BottomSheet from "./BottomSheet.svelte";
   import ResponseTimeline from "./ResponseTimeline.svelte";
   import type { ConversationEntry } from "./conversationTimeline";
   import { shouldShowResponseTimeline } from "./protocol";
@@ -52,6 +53,22 @@
   } = $props();
 
   const showTimeline = $derived(shouldShowResponseTimeline(operator));
+
+  // Sheet-open pending lamp (responsive-layout.md MUST: シート展開中も
+  // pending permission / question に気づける表示を出す)。lobby では背景
+  // grid が backdrop で暗転するため、handle の lamp が唯一の signal。
+  // attention バッジは出さない — lobby は既に一覧であり「一覧へ戻す」が
+  // 無意味なため (シートを閉じれば grid が見える)。
+  const lobbyPendingTone = $derived.by(() => {
+    const values = Object.values(agents);
+    if (values.some((e) => e.state === "waiting_permission")) {
+      return "waiting_permission";
+    }
+    if (values.some((e) => e.state === "waiting_question")) {
+      return "waiting_question";
+    }
+    return null;
+  });
 </script>
 
 <div
@@ -63,18 +80,29 @@
     {@render children?.()}
   </ul>
   {#if showTimeline}
-    <ResponseTimeline
-      {agents}
-      {directory}
-      {logs}
-      {manifest}
-      {now}
-      {readTimelineEntryKeys}
-      {newTimelineEntryKeys}
-      {onMarkRead}
-      {onArrivalAnimationComplete}
-      {onSelectAgent}
-    />
+    <!-- Smartphone width sheets the timeline (ADR-0052 F1); above it the
+         BottomSheet wrapper is display:contents, so the aside stays the
+         grid's second column. The gate here is ROLE (operator-only pane,
+         ADR-0012), never viewport size — DOM stays common across sizes
+         (F6). -->
+    <BottomSheet
+      mode="smartphone"
+      label="タイムライン"
+      pendingTone={lobbyPendingTone}
+    >
+      <ResponseTimeline
+        {agents}
+        {directory}
+        {logs}
+        {manifest}
+        {now}
+        {readTimelineEntryKeys}
+        {newTimelineEntryKeys}
+        {onMarkRead}
+        {onArrivalAnimationComplete}
+        {onSelectAgent}
+      />
+    </BottomSheet>
   {/if}
 </div>
 
@@ -95,24 +123,61 @@
     align-items: start;
   }
 
-  /* Operator sessions: pin the grid to 3 columns so the right pane
-     (response timeline) fits alongside. `minmax(0, 1fr)` lets tiles
-     shrink freely on narrow viewports — smaller tiles are the
-     accepted tradeoff for keeping the timeline always visible
-     (2026-07-24 spec change). Viewer sessions keep the auto-fill
-     grid via `.agents` alone. */
+  /* Operator sessions with the timeline SIDE-BY-SIDE pin the grid columns
+     (ADR-0052 / responsive-layout.md 領域別レイアウト規則): desktop 3 列,
+     tablet 2 列 — the breakpoints are derived so tiles never drop below
+     the 240px (15rem) minimum. Smartphone sheets the timeline instead, so
+     the grid reverts to the same auto-fill as viewer sessions. Viewer
+     sessions keep the auto-fill grid via `.agents` alone. */
   .agents.three-cols {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  @media (max-width: 1198px) {
+    .agents.three-cols {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
   .grid-with-timeline.with-timeline {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(22rem, 26rem);
+    /* 22rem 固定 (ADR-0052 F5): the former minmax(22rem, 26rem) upper
+       bound pushed the 3-column viewport floor to 1263px; every breakpoint
+       in responsive-layout.md is derived from this fixed track. */
+    grid-template-columns: minmax(0, 1fr) 22rem;
     gap: 1.5rem;
     align-items: start;
     /* Timeline uses its own scroll so long agent lists on the left do
        not push the timeline out of the viewport. */
     min-height: 0;
+  }
+
+  @media (max-width: 939px) {
+    /* Smartphone: timeline moves into the bottom sheet (ADR-0052 F1); the
+       grid takes the full width and flows column-count from auto-fill. */
+    .agents.three-cols {
+      grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+    }
+
+    .grid-with-timeline.with-timeline {
+      grid-template-columns: minmax(0, 1fr);
+      /* Clearance so the last card row can scroll out from under the
+         fixed sheet handle (the handle sits in this band at scroll end). */
+      padding-bottom: 3rem;
+    }
+
+    /* Inside the sheet panel the timeline drops its side-pane sizing
+       (sticky + viewport-tall) and fills the panel's flex column; its
+       .rows list stays the single vertical scroll owner. */
+    .grid-with-timeline.with-timeline :global(.timeline) {
+      position: static;
+      height: auto;
+      max-height: none;
+      block-size: auto;
+      max-block-size: 100%;
+      flex: 1 1 auto;
+      min-block-size: 0;
+    }
   }
 
   /* When App has an offline section, the live dashboard gets only the

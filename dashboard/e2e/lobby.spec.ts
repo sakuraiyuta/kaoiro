@@ -1,0 +1,76 @@
+// T1-T3 (phase-31 31-10): lobby grid columns follow role + timeline
+// placement across the ADR-0052 breakpoints.
+import { expect, test, type Page } from "@playwright/test";
+
+const OPERATOR = "/e2e/harness/index.html?view=lobby&role=operator";
+const VIEWER = "/e2e/harness/index.html?view=lobby&role=viewer";
+
+async function gridColumnCount(page: Page): Promise<number> {
+  return page
+    .locator("ul.agents")
+    .evaluate(
+      (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
+    );
+}
+
+test.describe("T1: operator lobby 939/940 — timeline sheet ⇔ side pane", () => {
+  test("940px: timeline side-by-side, 2 columns, no handle", async ({ page }) => {
+    await page.setViewportSize({ width: 940, height: 800 });
+    await page.goto(OPERATOR);
+    await expect(page.locator("aside.timeline")).toBeVisible();
+    await expect(page.locator(".sheet .handle .toggle")).toBeHidden();
+    expect(await gridColumnCount(page)).toBe(2);
+  });
+
+  test("939px: timeline reachable via the sheet, grid follows auto-fill", async ({ page }) => {
+    await page.setViewportSize({ width: 939, height: 800 });
+    await page.goto(OPERATOR);
+    await expect(page.locator("aside.timeline")).toBeHidden();
+    const toggle = page.locator(".sheet .handle .toggle");
+    await expect(toggle).toBeVisible();
+    // 939 - 64 (本体 padding) = 875px → auto-fill fits 3 × 240px tiles.
+    expect(await gridColumnCount(page)).toBe(3);
+    await toggle.click();
+    await expect(page.locator("aside.timeline")).toBeVisible();
+  });
+});
+
+test.describe("T2: operator lobby 1198/1199 — 2 ⇔ 3 columns, tile ≥ 240px", () => {
+  test("1199px: 3 columns, tiles at least 240px wide", async ({ page }) => {
+    await page.setViewportSize({ width: 1199, height: 900 });
+    await page.goto(OPERATOR);
+    expect(await gridColumnCount(page)).toBe(3);
+    const tile = page.locator("ul.agents > li").first();
+    const box = await tile.boundingBox();
+    expect(box).not.toBeNull();
+    // 240px floor (`minmax(15rem, 1fr)`); breakpoint derivation allows a
+    // sub-pixel remainder, hence the 1px tolerance.
+    expect(box!.width).toBeGreaterThanOrEqual(239);
+  });
+
+  test("1198px: 2 columns", async ({ page }) => {
+    await page.setViewportSize({ width: 1198, height: 900 });
+    await page.goto(OPERATOR);
+    expect(await gridColumnCount(page)).toBe(2);
+  });
+});
+
+test("lobby sheet handle shows a pending lamp while an agent waits (S1)", async ({ page }) => {
+  await page.setViewportSize({ width: 939, height: 800 });
+  await page.goto(`${OPERATOR}&pending=1`);
+  await page.locator(".sheet .handle .toggle").click();
+  await expect(page.locator(".sheet .handle .pending-lamp")).toBeVisible();
+});
+
+test.describe("T3: viewer lobby — always auto-fill, no timeline, no handle", () => {
+  for (const width of [1400, 1000, 500]) {
+    test(`${width}px: auto-fill grid without timeline/handle`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(VIEWER);
+      await expect(page.locator("ul.agents")).toBeVisible();
+      await expect(page.locator("ul.agents")).not.toHaveClass(/three-cols/);
+      await expect(page.locator("aside.timeline")).toHaveCount(0);
+      await expect(page.locator(".sheet .handle")).toHaveCount(0);
+    });
+  }
+});

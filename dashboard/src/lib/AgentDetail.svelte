@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from "svelte";
+  import BottomSheet from "./BottomSheet.svelte";
   import { conversationEntryKey } from "./conversationTimeline";
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
@@ -986,6 +987,17 @@
   );
   const dialogAvailability = $derived(
     userInputDialogAvailability(sessionCaps, displayPermLabel),
+  );
+  // Handle lamp for the status sheet (phase-31 31-6): while the sheet is
+  // open the in-flow permission/question docks sit behind it, so the
+  // current agent's pending decision must stay noticeable on the handle
+  // (responsive-layout.md MUST). Mirrors the dock render gates.
+  const sheetPendingTone = $derived(
+    permission
+      ? "waiting_permission"
+      : question && dialogAvailability !== "unsupported"
+        ? "waiting_question"
+        : null,
   );
   // Optimistic model selection shown the instant the operator switches:
   // ext.model (which may be the authoritative resolved id) only catches up
@@ -2022,6 +2034,20 @@
   </div>
 
   <div class="body">
+    <!-- tablet 幅以下では status がボトムシートへ退避する (ADR-0052 F2)。
+         desktop では BottomSheet が display:contents になり、aside は従来
+         どおり .body の左カラムとして並ぶ (DOM は全サイズ共通 — F6)。
+         handle のバッジは blindspot と同じ「一覧へ戻す」を実行する (F3)。
+         aside 以下の中身は既存インデントのまま (構造ラップの diff を
+         最小に保つ — .status-scroll 導入時と同じ扱い)。 -->
+    <BottomSheet
+      mode="tablet"
+      label="ステータス"
+      attentionCount={attention.length}
+      {attentionTone}
+      onAttention={onClose}
+      pendingTone={sheetPendingTone}
+    >
     <aside class="status">
       <header class="head">
         <div class="portrait">
@@ -2452,6 +2478,7 @@
       {/if}
       </div>
     </aside>
+    </BottomSheet>
 
     <div class="main">
       <div
@@ -2717,26 +2744,32 @@
             </button>
           {:else}
             <div class="permission-dock">
+              <!-- .dock-min lives OUTSIDE .permission-scroll (same shell +
+                   scroll-child shape as the question dock) so the short
+                   height cap (31-8) can scroll the content without carrying
+                   the minimize button out of view. -->
               <button
                 class="dock-min"
                 type="button"
                 title="最小化"
                 aria-label="許可ダイアログを最小化"
                 onclick={() => (permMinimized = true)}></button>
-              <p class="permission-tool">
-                <code>{permission.tool_name}</code> の実行許可を求めています
-              </p>
-              {#if permission.input}
-                <details>
-                  <summary>input</summary>
-                  <pre>{JSON.stringify(permission.input, null, 2)}</pre>
-                </details>
-              {:else if permission.truncated}
-                <p class="permission-note">(input は大きすぎるため省略)</p>
-              {/if}
-              <div class="permission-actions">
-                <button class="allow" onclick={() => decide(true)}>許可</button>
-                <button class="deny" onclick={() => decide(false)}>拒否</button>
+              <div class="permission-scroll">
+                <p class="permission-tool">
+                  <code>{permission.tool_name}</code> の実行許可を求めています
+                </p>
+                {#if permission.input}
+                  <details>
+                    <summary>input</summary>
+                    <pre>{JSON.stringify(permission.input, null, 2)}</pre>
+                  </details>
+                {:else if permission.truncated}
+                  <p class="permission-note">(input は大きすぎるため省略)</p>
+                {/if}
+                <div class="permission-actions">
+                  <button class="allow" onclick={() => decide(true)}>許可</button>
+                  <button class="deny" onclick={() => decide(false)}>拒否</button>
+                </div>
               </div>
             </div>
           {/if}
@@ -3220,19 +3253,43 @@
     background: color-mix(in srgb, var(--tone) 20%, var(--bg-card));
   }
 
-  @media (max-width: 640px) {
-    .detail {
-      height: auto;
-      min-height: calc(100vh - 4rem);
-    }
-    .body {
-      flex-direction: column;
-    }
+  /* tablet 幅以下 (ADR-0052 F2): .status はボトムシートの panel (flex
+     column, 最大高 60dvh) を埋める。旧 640px query の縦積み (外側スクロール
+     と二重化して会話ログへ到達できない問題) はこの退避で置き換えた。
+     .detail の height:100% と composer の bottom 固定は全サイズ共通のまま。 */
+  @media (max-width: 1198px) {
+    /* Inside the sheet, .status ITSELF becomes the single scroll owner and
+       the identity header scrolls WITH the content — the desktop split
+       (pinned .head + scrolling .status-scroll) leaves .status-scroll an
+       effective height of 0 on landscape phones (844x390 → panel 234px vs
+       .head 181px; クロエ外部レビュー M1 実測), making every status
+       control unreachable. Flipping the owner is the reachability doc's
+       sanctioned alternative (「…か、その逆にする」) and works at any
+       panel height. */
     .status {
-      flex: none;
+      flex: 1 1 auto;
+      min-height: 0;
+      min-width: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }
-    .log {
-      max-height: 60vh;
+
+    .status-scroll {
+      flex: none;
+      min-height: auto;
+      overflow-y: visible;
+      overscroll-behavior: auto;
+    }
+
+    /* The sheet panel is viewport-wide; uncapped, the width-100% portrait
+       (sized for the 20% desktop sidebar) would dominate the panel. */
+    .portrait {
+      max-width: 8rem;
+      margin-inline: auto;
+    }
+
+    .head {
+      padding-bottom: 0.6rem;
     }
   }
 
@@ -4181,11 +4238,21 @@
      button at all. Bordered in the waiting_permission hue. */
   .permission-dock {
     position: relative;
-    padding: 0.7rem 0.8rem;
+    display: flex;
+    flex-direction: column;
     border: 1px solid var(--c-waiting_permission);
     border-radius: 0.45rem;
     background: var(--bg-card);
     font-size: var(--fs-body-sm);
+  }
+
+  /* Scrolling flex child (same shape as .question-scroll): carries the
+     shell's former padding so the short-height cap (31-8) scrolls the
+     content while .dock-min stays pinned to the shell. */
+  .permission-scroll {
+    min-height: 0;
+    overflow: auto;
+    padding: 0.7rem 0.8rem;
   }
 
   /* padding-right leaves room for the absolute .dock-min button. */
@@ -4655,5 +4722,25 @@
     height: 100%;
     background: var(--c-thinking);
     transition: width 0.15s ease-out;
+  }
+
+  /* short (max-height 500px, ADR-0052 F8): 縦方向の圧縮のみ。composer は
+     初期 1 行高でフォーカス時に拡張、dock 類は高さ上限 + 内部スクロール。
+     dock の展開状態は変えない — 新しい request_id ごとに折りたたみを解除
+     する契約 (pending を古い折りたたみで隠さない) を viewport 依存の初期
+     状態で壊さないため。横レイアウトとシート最大高も不変。 */
+  @media (max-height: 500px) {
+    /* :placeholder-shown scopes the 1-line compression to an EMPTY
+       composer — typed multi-line text must not get hidden the moment
+       focus moves to the send button (クロエ外部レビュー N6). */
+    .instruct textarea:placeholder-shown:not(:focus) {
+      height: 2.8em;
+      min-height: 0;
+    }
+
+    .permission-dock,
+    .question-dock {
+      max-block-size: 45%;
+    }
   }
 </style>
