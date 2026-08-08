@@ -54,7 +54,6 @@ fi
 # the same dev / test / OS-tmp isolation as the other DETS ledgers.
 data_dir="$root/tmp/dev-data"
 mkdir -p "$data_dir"
-export KAOIRO_INTER_AGENT_HISTORY_PATH="${KAOIRO_INTER_AGENT_HISTORY_PATH:-$data_dir/inter_agent_history.dets}"
 export KAOIRO_SESSION_POINTERS_PATH="${KAOIRO_SESSION_POINTERS_PATH:-$data_dir/session_pointers.dets}"
 export KAOIRO_AGENT_DIRECTORY_PATH="${KAOIRO_AGENT_DIRECTORY_PATH:-$data_dir/agent_directory.dets}"
 export KAOIRO_PERMISSION_MODES_PATH="${KAOIRO_PERMISSION_MODES_PATH:-$data_dir/permission_modes.dets}"

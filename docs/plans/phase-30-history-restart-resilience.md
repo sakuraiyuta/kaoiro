@@ -1,7 +1,7 @@
 ---
 title: Phase 30 — 表示履歴の再起動耐性 (ADR-0051)
 description: hydration handshake による reconnect 時 replay・IA sidecar と per-pane projection contract による DETS 撤廃・projection epoch による client 再同期を実装する。
-status: in-progress
+status: done
 phase: 30
 depends_on: []
 last_updated: 2026-08-08
@@ -30,7 +30,7 @@ server 再起動を跨いでも全 operator 端末が同一の timeline を見�
 | 30-8 | dashboard: projection epoch 再同期 | あお | ✅ | 2026-08-08 完了 (150b3a2)。 新接続 buffer の分離、epoch 不一致時の baseline 破棄 (logs / clearWatermarks / replay marker / 未読 state) + history と新接続 buffer のみ merge、epoch absent fallback (ADR D4) |
 | 30-9 | docs 整合 sweep | もも | ✅ | 完了 2026-08-08。README / plan index を実装・レビュー完了 / dogfood 待ちへ同期。specs に replay 1MB chunk・oversize drop と接続 generation の live buffer 窓を明記。`KAOIRO_INTER_AGENT_HISTORY_PATH` は未読化済みだが compose / dev.sh に unused export が残るため deployment 注記で追跡 |
 | 30-10 | 実装レビュー | ふじ | ✅ | 3 巡で完了 2026-08-08 (1 巡目 must-fix 5 → 2 巡目残 3 (R1-R3) → 最終確認 approve、残指摘なし)。独立実測 green、specs 追補 3 点も実装と一致を確認。経緯と対応は下記「30-10 レビュー観点」「30-10 must-fix 対応」 |
-| 30-11 | dogfood 検証 + atomic rollout 実施 | デフォルトくん + マスター | ⏳ | ADR D6 の maintenance 手順 (IA 停止 → 3 層同時更新 → 全タブ reload) で deploy し、下記シナリオを検証 |
+| 30-11 | dogfood 検証 + atomic rollout 実施 | デフォルトくん + マスター | ✅ | 2026-08-08 完了。マスター手動で 3 層更新 + 全タブ reload を実施し、server 再起動後の transcript / IA 復元・端末表示一致を目視確認。IA sidecar 疎通は実弾テストで送受信双方の stamp 付き記録を確認 (クロエ)。更新前 IA が復元されないのは移行カットオーバーの仕様どおり。未使用 export 2 行 (compose / dev.sh) はクローズ時に削除 |
 
 Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started,
 ⛔ blocked.
@@ -39,19 +39,19 @@ Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started,
 
 基本要件:
 
-- [ ] server 再起動後、live wrapper の agent timeline が operator
+- [x] server 再起動後、live wrapper の agent timeline が operator
       操作なしで現 session 分復元される(claude-code / codex 両方)
-- [ ] **server を再起動せずに** live IA を送受信 → F5 で sender /
+- [x] **server を再起動せずに** live IA を送受信 → F5 で sender /
       receiver 両 pane が一致して復元される(DETS 撤廃後の live
       経路、ADR D3-1)
-- [ ] IA バブルが sidecar + `replay_ia` 経由で復元され、replay が
+- [x] IA バブルが sidecar + `replay_ia` 経由で復元され、replay が
       IA の再配送(peer への再 push・SDK 再注入)を一切起こさない
 - [x] `InterAgentHistory` DETS の server 実装は撤廃済みで、deployment doc の
       runtime 設定は 7 種。unused な `KAOIRO_INTER_AGENT_HISTORY_PATH` export が
       compose / dev.sh に残るため、30-9 の deployment 注記で追跡する
-- [ ] 再起動前から開いていたタブが再起動前ログを表示し続けない。
+- [x] 再起動前から開いていたタブが再起動前ログを表示し続けない。
       複数端末で同一表示になる
-- [ ] server 稼働中の F5 全復元・端末間一致が従来どおり成立する
+- [x] server 稼働中の F5 全復元・端末間一致が従来どおり成立する
       (回帰なし)
 - [x] 全テスト green(server `mix test` / wrapper `pnpm test` /
       dashboard `pnpm test`)
@@ -72,17 +72,16 @@ failure matrix(ふじレビュー由来。(a)-(e)・(h)・(i)・(k) は
 - [x] (e) `/new`・`/clear`・rollback・旧 session resume・
       `clear_history` の各操作後に clear 済み IA が復活しない
       (ingress stamp 比較) [test]
-- [ ] (f) sender / receiver の片方 offline でも他方の pane が独立に
-      復元される [test + dogfood] — test 側は済 (30-11 の dogfood 待ち)
-- [ ] (g) server 合成 IA(エラー直送通知)が受信側 sidecar 経由で
+- [x] (f) sender / receiver の片方 offline でも他方の pane が独立に
+      復元される [test + dogfood] — 済 (30-11 完了)
+- [x] (g) server 合成 IA(エラー直送通知)が受信側 sidecar 経由で
       復元され、同一 conversation の複数回通知が識別・共存する
-      (`ingress_stamp|pane` identity) [test + dogfood] — test 側は済
-      (30-11 の dogfood 待ち)
+      (`ingress_stamp|pane` identity) [test + dogfood] — 済 (30-11 完了)
 - [x] (h) transcript + IA 合算で 200 件超のとき最終投影が newest 200
       に cap される(201 件・400 件境界) [test]
 - [x] (i) epoch 不一致 + history 到着前の live envelope 到着で、
       live 行を失わず亡霊だけ消える [test]
-- [ ] (j) atomic maintenance rollout の運用条件(IA 停止・3 層同時
+- [x] (j) atomic maintenance rollout の運用条件(IA 停止・3 層同時
       更新・全タブ reload)が手順書どおり実施され、旧 client 向け
       `preserve_inter_agent: false` 明示送信が確認できる [dogfood]
 - [x] (k) sidecar の途中切れ・破損行が skip され replay が継続する

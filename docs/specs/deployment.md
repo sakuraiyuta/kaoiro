@@ -96,8 +96,8 @@ mount とは分離する。
 
 **2026-08-08 注記:** phase 30-7 で `InterAgentHistory` DETS は撤廃し、
 `KAOIRO_INTER_AGENT_HISTORY_PATH` は server に読まれなくなった。同梱
-`docker-compose.yaml` と `scripts/dev.sh` には unused な export がなお残るが、
-本節の 7 種が実行時の正本である。export の物理削除は follow-up で行う。
+`docker-compose.yaml` と `scripts/dev.sh` の unused export も phase-30
+クローズ時に削除済み。本節の 7 種が実行時の正本である。
 
 ### 1.3 docker compose で起動
 
