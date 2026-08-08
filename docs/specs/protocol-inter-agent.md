@@ -202,9 +202,24 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
     使わない(`wait_for_response=true` では peer reply まで返らない
     ため)。reject / timeout / ack 喪失時は記録しない(loss 受容、
     stderr warn)。
+  - **ack と tool result の関係**(ふじ 30-10 must-fix M5、2026-08-08):
+    記録トリガは ack のままだが、`send_to_agent` の **tool result も
+    同じ ack で決まる**。accepted = 従来どおり `sent ...`、server の
+    明示 reject(`unknown_agent` / `participants_mismatch` 等)は
+    **error result に reason を載せる**、timeout / ack 喪失は
+    「配送不明」— 再送が重複配送になり得るため error にはせず、その旨を
+    result 本文に明記する。reject / 配送不明では `wait_for_response`
+    の待ちも即座に解除する(誰も応答しない会話を timeout まで待たない)。
   - 破損・途中切れ行は skip + stderr warn。fsync は要求しない。
     パスは transcript ディレクトリ固定・session_id サニタイズ・
     symlink は辿らない。
+  - **読み出し順**(ふじ 30-10 must-fix M3、2026-08-08): 復元時の
+    「新しい 200 件」は **file の末尾 200 行ではなく `ingress_stamp`
+    昇順の末尾 200 件**。append 順は ingress 順と一致しない — quota
+    overshoot では server 合成通知(高い stamp)が先に届き、それを
+    起こした元 message(低い stamp)は ack 後に append されるため、
+    file 順で切ると古い方を落として新しい方を残すという逆転が起きる。
+    同一 stamp の重複行は 1 行に畳む(bind 時の追記由来)。
 - **session lifecycle**: session_id 未採番期間は
   `{agent_id, reset_generation}` で namespace した pending journal へ
   append し、session_id 確定時に当該 session の sidecar へ bind
@@ -226,9 +241,20 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
   イベント表)で自 pane の表示行を再投影する。routing・SDK 注入は
   発生しない。clear 済み行は保存された `ingress_stamp` と durable
   `ClearWatermarks` の比較で hide、stamp 欠落行は fail-closed で
-  破棄。受理された復元行は `agents:lobby` にも broadcast する
-  (接続中タブの IA を戻すための display fan-out。[protocol](protocol.md)
-  の `replay_ia` 行を参照)。
+  破棄。受理された復元行は `agents:lobby` へ
+  **`history_replay_envelope { pane_agent_id, envelope }`** として
+  broadcast する(接続中タブの IA を戻すための display fan-out)。
+  通常の `envelope` を使わないのは、その形が pane を持たず client 側で
+  `agent_id ∪ payload.to` へ広がるため、復元行が reload 後には表示され
+  ない peer の pane にも残ってしまうから(ふじ 30-10 must-fix M2、
+  2026-08-08)。`pane_agent_id` は replay 中 wrapper の channel assign
+  由来で、wrapper の payload には pane 指定権を与えない。
+  1 回の `replay_ia` push は wrapper 側が JSON 実 byte 長で分割する
+  (socket の `max_frame_size` 8MB に対し 200 行 × 64KiB envelope は
+  約 12MB になり frame ごと reject され、complete が届かず永久に
+  unhydrated になるため)。同一 `replay_id` の複数 push を
+  `history_replay_complete` の前にすべて送る。詳細は
+  [protocol](protocol.md) の `replay_ia` 行を参照。
 - **resume reconstruction との関係**: SDK transcript 内の IA 注入
   framing テキストは従来どおり `kind=user` log へ再投影**しない**
   (structured 表示は sidecar 由来の `replay_ia` が担う。二重表示
@@ -403,6 +429,10 @@ agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの�
   遅れて到着した envelope は通常どおり次turn注入する。
 - 同一 `conversation_id` では waiter を1件だけ許可する。重複した同期waitは
   送信前に tool error とする。
+- server が送信そのものを reject した場合(`unknown_agent` 等)、および
+  acceptance ack が来なかった場合は、**waiter を即座に解除**して reject /
+  配送不明の tool result を返す(ふじ 30-10 must-fix M5、2026-08-08)。
+  誰も応答しない会話を `timeout_ms` いっぱい待たない。
 
 ### 応答不能エラーの通知 (`payload.error`)
 
