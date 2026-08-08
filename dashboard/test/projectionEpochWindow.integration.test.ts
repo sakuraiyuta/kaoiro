@@ -74,6 +74,25 @@ function stateEnvelope(agentId: string): Envelope {
   } as unknown as Envelope;
 }
 
+/** The `/new`・`/clear` boundary marker (ADR-0036 F3). `request_id` is what
+ *  `onSessionResetCompleted` matches on, so it must survive the clear. */
+function sessionBoundary(
+  agentId: string,
+  ts: string,
+  requestId: string,
+): Envelope {
+  return {
+    version: "0",
+    agent_id: agentId,
+    persona: { id: agentId, name: agentId, sprite_set: agentId },
+    ts,
+    type: "session_boundary",
+    state: "idle",
+    payload: { mode: "clear", request_id: requestId, text: "CLEAR-MARKER" },
+    ext: {},
+  } as unknown as Envelope;
+}
+
 function interAgent(from: string, to: string, ts: string, body: string): Envelope {
   return {
     version: "0",
@@ -229,6 +248,39 @@ describe("接続世代つき live buffer (ADR-0051 D4 / ふじ 30-10 M1)", () =>
     h.onHistory?.({}, {}, "per-pane-v1", "epoch-2");
 
     expect(await timelineText()).not.toContain("PRE-RESET");
+  });
+
+  // ふじ 30-10 2 巡目 R1: `/clear` は logs を「この reset 自身の
+  // session_boundary 1 行」へ絞る。mirror していないと epoch 不一致で
+  // buffer が baseline へ昇格したときに clear 前の行が蘇る。
+  it("窓の中で session_reset(clear) が来たら buffer 側も marker 1 行へ絞られる", async () => {
+    const h = await mountApp();
+
+    await joinWithHistory(h, {}, "epoch-1");
+
+    h.onStatus("disconnected");
+    h.onJoined?.();
+    h.onSnapshot({ "agent-a": stateEnvelope("agent-a") });
+    h.onHosts?.([]);
+    h.onEnvelope(assistantLog("agent-a", "2026-08-08T00:00:05Z", "PRE-CLEAR"));
+    // marker envelope は同じ session_reset で先に届く。
+    h.onEnvelope(
+      sessionBoundary("agent-a", "2026-08-08T00:00:06Z", "req-clear-1"),
+    );
+    h.onSessionResetCompleted?.({
+      agent_id: "agent-a",
+      mode: "clear",
+      request_id: "req-clear-1",
+      to_session_id: "sess-after-clear",
+      clear_watermark: "2026-08-08T00:00:07Z",
+    });
+    // clear 後の行は残る = mirror は「丸ごと捨てる」ではなく filter である。
+    h.onEnvelope(assistantLog("agent-a", "2026-08-08T00:00:08Z", "POST-CLEAR"));
+    h.onHistory?.({}, {}, "per-pane-v1", "epoch-2");
+
+    const text = await timelineText();
+    expect(text).not.toContain("PRE-CLEAR");
+    expect(text).toContain("POST-CLEAR");
   });
 
   it("窓の中で agent_deleted が来たら buffer 側からも消える", async () => {

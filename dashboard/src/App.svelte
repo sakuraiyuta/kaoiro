@@ -326,6 +326,25 @@
           );
   }
 
+  /** What a `/clear` leaves in the pane: THIS reset's own session_boundary
+   * marker and nothing else (ADR-0036 F3 復元, 2026-07-24). Matched by
+   * `request_id` rather than by type, because prior /new・/clear markers
+   * still held locally would otherwise survive and the pane would show 2+
+   * boundary lines instead of exactly one. Shared by the `logs` update and
+   * the join-window buffer mirror so the two cannot drift.
+   */
+  function retainClearMarkerOnly(
+    rows: Envelope[],
+    requestId: unknown,
+  ): Envelope[] {
+    return rows.filter(
+      (entry) =>
+        entry.type === "session_boundary" &&
+        (entry.payload as { request_id?: unknown } | undefined)?.request_id ===
+          requestId,
+    );
+  }
+
   /** Applies to the join-window buffer the same transformation just applied
    * to `logs`. The buffer becomes the baseline when an epoch mismatch
    * discards the old one (D4 step 1), so a clear / reset / delete that the
@@ -769,20 +788,20 @@
             }
             const prev = logs[payload.agent_id];
             if (prev) {
-              // Match against THIS reset's own marker (request_id) rather
-              // than filtering by type — prior /new・/clear markers held in
-              // the live buffer would otherwise survive and the pane would
-              // show 2+ boundary lines instead of exactly one.
               logs = {
                 ...logs,
-                [payload.agent_id]: prev.filter(
-                  (entry) =>
-                    entry.type === "session_boundary" &&
-                    (entry.payload as { request_id?: unknown } | undefined)
-                      ?.request_id === payload.request_id,
+                [payload.agent_id]: retainClearMarkerOnly(
+                  prev,
+                  payload.request_id,
                 ),
               };
             }
+            // ふじ 30-10 R1: `/clear` は他の 3 経路と同じく buffer にも
+            // 効かせる。epoch 不一致で buffer が baseline に昇格したとき、
+            // mirror していないと clear 前の行がそのまま蘇る。
+            mirrorIntoLiveBuffer(payload.agent_id, (rows) =>
+              retainClearMarkerOnly(rows, payload.request_id),
+            );
           }
         },
         onSessionResetFailed: (payload) => {
