@@ -210,6 +210,15 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
     「配送不明」— 再送が重複配送になり得るため error にはせず、その旨を
     result 本文に明記する。reject / 配送不明では `wait_for_response`
     の待ちも即座に解除する(誰も応答しない会話を timeout まで待たない)。
+    ただし **ack 喪失時に peer reply が既に着いていれば配送成功**として
+    扱い、通常の `sent + reply` を返す(reply の到着自体が配送の証拠。
+    ふじ 30-10 2 巡目 R3、2026-08-08)。
+  - **応答不能通知(#131)との関係**(ふじ 30-10 2 巡目 R2、2026-08-08):
+    注入された inbound に対する「返信済み」判定も acceptance で決まる。
+    accepted / 配送不明では pending injection を解消し、**reject では
+    解消しない** — 送信が成立していない以上、turn 終了時のエラー通知は
+    出さなければならない。配送不明で解消するのは、配送済みだった場合に
+    通知を重ねると相手に矛盾する 2 通が届くため。
   - 破損・途中切れ行は skip + stderr warn。fsync は要求しない。
     パスは transcript ディレクトリ固定・session_id サニタイズ・
     symlink は辿らない。
@@ -253,7 +262,10 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
   (socket の `max_frame_size` 8MB に対し 200 行 × 64KiB envelope は
   約 12MB になり frame ごと reject され、complete が届かず永久に
   unhydrated になるため)。同一 `replay_id` の複数 push を
-  `history_replay_complete` の前にすべて送る。詳細は
+  `history_replay_complete` の前にすべて送る。単独で分割上限に収まらない
+  行は **送らずに落とす**(送れば frame reject → complete 未達 → 再 join
+  で同じ行、の loop に戻るだけで、破損 sidecar 行と同じ fail-closed 判断。
+  ふじ 30-10 2 巡目 should、2026-08-08)。詳細は
   [protocol](protocol.md) の `replay_ia` 行を参照。
 - **resume reconstruction との関係**: SDK transcript 内の IA 注入
   framing テキストは従来どおり `kind=user` log へ再投影**しない**

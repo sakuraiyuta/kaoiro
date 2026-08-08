@@ -29,7 +29,7 @@ server 再起動を跨いでも全 operator 端末が同一の timeline を見�
 | 30-7 | server: hydration 状態管理 + replay ingress + DETS 撤廃 | あお | ✅ | 2026-08-08 完了 (1493eb4)。 hydrated の無効化条件は ADR D2 追補 (あお Q1)。 AgentStates に hydration state (in_flight は replay_id + channel_owner の CAS)、join 応答 verdict、`replay_ia` の pane 所有権検証 + 投影 upsert、stamp と ClearWatermarks 比較、InterAgentHistory と purge 経路の除去、`preserve_inter_agent: false` 明示送信 (ADR D2/D3-3/D3-4) |
 | 30-8 | dashboard: projection epoch 再同期 | あお | ✅ | 2026-08-08 完了 (150b3a2)。 新接続 buffer の分離、epoch 不一致時の baseline 破棄 (logs / clearWatermarks / replay marker / 未読 state) + history と新接続 buffer のみ merge、epoch absent fallback (ADR D4) |
 | 30-9 | docs 整合 sweep | もも | ⏳ | 実装後の README / specs 齟齬確認 |
-| 30-10 | 実装レビュー | ふじ | 🟡 | 1 巡目: must-fix 5 → 対応済み (c2f8a2a..32cd6fe)。2 巡目 2026-08-08: M2/M3/M4/S1/S2 確認済み、残 must-fix 3 (R1 /clear 完了の liveSinceJoin mirror 漏れ / R2 #pendingInjections を reject 前に delete し #131 通知が抑止される / R3 ack 喪失時に到着済み peer reply を捨てる race) + should 1 (oversize sidecar 行の fail-closed drop、non-blocking) → あお対応中。観点は下記「30-10 レビュー観点」 |
+| 30-10 | 実装レビュー | ふじ | 🟡 | 1 巡目: must-fix 5 → 対応済み (c2f8a2a..32cd6fe)。2 巡目 2026-08-08: M2/M3/M4/S1/S2 確認済み、残 must-fix 3 (R1 /clear 完了の liveSinceJoin mirror 漏れ / R2 #pendingInjections を reject 前に delete し #131 通知が抑止される / R3 ack 喪失時に到着済み peer reply を捨てる race) + should 1 (oversize sidecar 行の fail-closed drop、non-blocking) → あお対応済み (下記「2 巡目 must-fix 対応」)、最終確認待ち。観点は下記「30-10 レビュー観点」 |
 | 30-11 | dogfood 検証 + atomic rollout 実施 | デフォルトくん + マスター | ⏳ | ADR D6 の maintenance 手順 (IA 停止 → 3 層同時更新 → 全タブ reload) で deploy し、下記シナリオを検証 |
 
 Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started,
@@ -157,10 +157,20 @@ test の作り直し (M1/M3 の「前提を手渡ししていた」型への対�
 S3 (既知の制約、対応不要): sidecar は replay のたびに全量を同期 read する。
 長期 session では read コストが線形に伸びる。将来課題として記録のみ。
 
-未対応で ふじ の判断を仰ぎたい点: `InterAgentTool#invoke` は送信**前**に
-`#pendingInjections.delete(conversationId)` している。M5 で reject が可視化
-された今、拒否されたのに「返信した」扱いで #131 のエラー通知が抑止される
-経路が残る。今回の must-fix 範囲外と判断して触っていない。
+### 2 巡目 must-fix 対応 (あお、2026-08-08)
+
+ふじ 2 巡目で M2/M3/M4/S1/S2 は確認済み。残 3 件 + should 1 を修正。
+
+| 項目 | 修正の要 |
+|---|---|
+| R1 | `onSessionResetCompleted(mode="clear")` の「この reset の `request_id` を持つ session_boundary 1 行だけ残す」変換を helper 化し、`logs` と `mirrorIntoLiveBuffer` の双方へ適用。mirror 経路は clear を含む 4 経路になった |
+| R2 | `#pendingInjections.delete` を acceptance 確定後に移し、**rejected では消さない**。accepted / unknown は消す (配送済みだった場合に #131 通知を重ねると相手に矛盾する 2 通が届く) |
+| R3 | acceptance が unknown でも、waiter が既に settle していれば `await` して reply を取り出し、reply があれば通常の `sent + reply` を返す。reply の到着自体が配送の証拠。waiter がまだ active な unknown は従来どおり即解除 + 配送不明 |
+| should | `chunkReplayIaItems` は単独で budget に収まらない行を **落とす** (対応した)。送れば frame reject → complete 未達 → 再 join の loop に戻るだけで、D3-2 の破損行 policy と同じ fail-closed。guard 1 行 + `sendReplayIa` の warn + test 2 本で収まったため今回入れた |
+
+test はいずれも mutation で実効性を確認済み (R1: mirror 呼び出しを外す /
+R2: delete を無条件に戻す / R3: settledReply 分岐を外す → それぞれ対応する
+1 本だけが落ちる)。
 
 ## Dogfood 検証シナリオ (30-11)
 
