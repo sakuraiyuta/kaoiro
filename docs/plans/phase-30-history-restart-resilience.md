@@ -155,7 +155,9 @@ test の作り直し (M1/M3 の「前提を手渡ししていた」型への対�
   超えることを前提 assert した上で、各 chunk が 8MB 未満・全行保持を確認。
 
 S3 (既知の制約、対応不要): sidecar は replay のたびに全量を同期 read する。
-長期 session では read コストが線形に伸びる。将来課題として記録のみ。
+長期 session では read コストが線形に伸びる。将来課題として
+[#202](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/202) に
+起票済み (2026-08-08、priority/low)。
 
 ### 2 巡目 must-fix 対応 (あお、2026-08-08)
 
