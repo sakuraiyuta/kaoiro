@@ -33,6 +33,7 @@
       {agents}
       {connection}
       manifest={null}
+      activeTaskCount={scenario.taskRing ? 1 : 0}
       onClose={() => (closed = true)}
     />
   </main>

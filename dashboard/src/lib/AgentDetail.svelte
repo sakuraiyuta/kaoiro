@@ -5,6 +5,7 @@
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
+  import TaskRing from "./TaskRing.svelte";
   import { randomUUID } from "./uuid";
   import {
     engineFrom,
@@ -47,6 +48,7 @@
     resetMode = null,
     origin = null,
     scrollToEntryKey = null,
+    activeTaskCount = 0,
     onClose,
     onSelectAgent,
   }: {
@@ -70,6 +72,15 @@
      * deliberately a key rather than an envelope so server-synthetic IA can
      * target the recipient pane even though its producer is `server`. */
     scrollToEntryKey?: string | null;
+    /** Count of subagent/workflow tasks currently active under this agent
+     *  (ADR-0019/0047/0048, issue #180 follow-up 2026-08-10). Drives the
+     *  頭上リング (overhead ring) the same way AgentCard's does — on/off
+     *  only, no numeric display. The caller (App.svelte) is responsible
+     *  for zeroing this for a disconnected/directory-only envelope (a
+     *  disconnected agent cannot have an active subagent, and a stale
+     *  `tasks` entry must not leak through — クロエ 2026-08-10); this
+     *  component does not re-derive that guard itself. */
+    activeTaskCount?: number;
     onClose: () => void;
     /** Switch the detail view to another agent (clicked peer link in an
      *  inter-agent message bubble). Omitted = peer name renders as static
@@ -2062,6 +2073,33 @@
               </div>
             {/if}
           {/key}
+          {#if activeTaskCount > 0}
+            <!-- 頭上リング (issue #180 follow-up, 2026-08-10 — マスター
+                 指摘: AgentCard にはあるが AgentDetail には無かった。
+                 実装は TaskRing.svelte(AgentCard と共有)。{#key} の外に
+                 置き、state 遷移の影響を受けず単独で回り続ける。
+                 .portrait は幅が可変(デスクトップは .status の flex 比率、
+                 tablet 以下は max-width: 8rem)なので、軌道半径は rem
+                 固定ではなく cqw で .portrait 自身の幅に追随させる(クロエ
+                 2026-08-10、.portrait に container-type: inline-size を
+                 付与)。sprite 値(25cqw/9cqw)は AgentCard の rem 比率
+                 (2rem/8rem, 0.72rem/8rem)をそのまま cqw へ換算。face 値
+                 (17.5cqw/6.3cqw)は AgentCard の rem 比率(1.35rem/8rem,
+                 0.49rem/8rem)を単純換算したものではない — AgentCard の
+                 face 自体が 5.4rem(sprite の 8rem とは別サイズ)なのに
+                 対し、AgentDetail の face は .portrait 幅の 70% なので、
+                 face 相対で導出する必要がある: rx = 1.35rem/5.4rem = 25%
+                 → 70cqw × 25% = 17.5cqw、ry = 0.49rem/5.4rem ≈ 9.074%
+                 → 70cqw × 9.074% ≈ 6.35cqw(6.3 へ近似調整。厳密な
+                 四捨五入なら 6.4 だが、値自体はふじ round1 で妥当と
+                 承認済みのため変更しない)(ふじ round1 N1/round2
+                 wording fix, 2026-08-10)。 -->
+            <TaskRing
+              faceOrbit={!spriteUrl}
+              orbitRx={spriteUrl ? "25cqw" : "17.5cqw"}
+              orbitRy={spriteUrl ? "9cqw" : "6.3cqw"}
+            />
+          {/if}
           <span class="lamp" title={expression.label}></span>
         </div>
         <div class="meta">
@@ -3361,7 +3399,17 @@
   }
 
   /* Persona portrait (#16): fills the pane width with a subtle top light,
-     like the grid cards; a state-coloured lamp sits in the corner. */
+     like the grid cards; a state-coloured lamp sits in the corner.
+     `container-type: inline-size` (issue #180 follow-up, 2026-08-10):
+     lets the 頭上リング (TaskRing, absolutely positioned inside this
+     element) size its orbit in `cqw` — relative to THIS element's own
+     resolved width, which varies (`.status`'s flex share on desktop,
+     `max-width: 8rem` on tablet-and-below, see the media query above) —
+     rather than a fixed rem that would only look right at one width.
+     `.portrait`'s own box size is set entirely by its parent/media rules
+     above (`width: 100%` / `max-width`), never by its children's
+     intrinsic size, so establishing size containment here does not
+     change how `.portrait` itself is laid out. */
   .portrait {
     position: relative;
     width: 100%;
@@ -3369,6 +3417,7 @@
     justify-content: center;
     padding: 0.8rem;
     border-radius: 0.5rem;
+    container-type: inline-size;
     background:
       radial-gradient(
         circle at 50% 0%,

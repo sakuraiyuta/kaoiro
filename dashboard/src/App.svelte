@@ -50,6 +50,7 @@
     applyTaskEnvelope,
     purgeTasksForAgent,
     computeActiveTaskCountByAgent,
+    activeTaskCountForDetail,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -1398,6 +1399,10 @@
           resetMode={sessionResets[selectedEnvelope.agent_id] ?? null}
           {origin}
           scrollToEntryKey={timelineScrollTarget?.entryKey ?? null}
+          activeTaskCount={activeTaskCountForDetail(
+            selectedEnvelope,
+            activeTaskCountByAgent,
+          )}
           onClose={() => {
             timelineScrollTarget = null;
             selected = null;

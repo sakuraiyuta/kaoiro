@@ -36,6 +36,7 @@ import {
   applyTaskEnvelope,
   purgeTasksForAgent,
   computeActiveTaskCountByAgent,
+  activeTaskCountForDetail,
   resetTranscriptHistory,
   resolveLaunchDefaultEffort,
   resumeDriftFrom,
@@ -700,6 +701,34 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
         true,
       );
       expect(counts["__proto__"]).toBe(1);
+    });
+  });
+
+  // issue #180 follow-up (2026-08-10, マスター指摘): AgentDetail 用の
+  // ガード付き活性タスク数。disconnected な envelope
+  // (`directoryEnvelope()` の合成 envelope も state: "disconnected" を
+  // 共有する) では stale な activeTaskCountByAgent を素通ししない
+  // (クロエ 2026-08-10)。
+  describe("activeTaskCountForDetail", () => {
+    it("disconnected でなければ activeTaskCountByAgent をそのまま返す", () => {
+      const envelope = { ...base, agent_id: "host-a.p" };
+      expect(activeTaskCountForDetail(envelope, { "host-a.p": 2 })).toBe(2);
+    });
+
+    it("activeTaskCountByAgent に該当エントリが無ければ 0", () => {
+      const envelope = { ...base, agent_id: "host-a.p" };
+      expect(activeTaskCountForDetail(envelope, {})).toBe(0);
+    });
+
+    it("disconnected なら activeTaskCountByAgent に値があっても 0 (クロエ 2026-08-10)", () => {
+      const envelope = {
+        ...base,
+        agent_id: "host-a.p",
+        state: "disconnected" as const,
+      };
+      // stale な tasks purge 漏れ・directoryEnvelope() 合成 envelope の
+      // どちらもこの一本の分岐でガードされることを固定する。
+      expect(activeTaskCountForDetail(envelope, { "host-a.p": 3 })).toBe(0);
     });
   });
 

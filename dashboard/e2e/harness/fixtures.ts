@@ -46,6 +46,12 @@ export interface DetailScenario {
   /** Add a second agent in waiting_permission so the blindspot /
    *  handle-badge affordance renders. */
   attention?: boolean;
+  /** 頭上リング (issue #180 follow-up, 2026-08-10, ふじ S1): mirrors
+   *  LobbyHarness's own `taskRing` prop so a real-browser Playwright pass
+   *  can pin `.task-ring` visibility/animation for AgentDetail across the
+   *  responsive breakpoints, the way LobbyHarness already does for
+   *  AgentCard. */
+  taskRing?: boolean;
 }
 
 export function lobbyAgents(pending = false): Record<string, Envelope> {

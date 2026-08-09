@@ -820,6 +820,34 @@ export function computeActiveTaskCountByAgent(
   return counts;
 }
 
+/** AgentDetail's effective activeTaskCount for the currently-selected
+ *  envelope (issue #180 follow-up, 2026-08-10 — マスター指摘: AgentCard に
+ *  はある頭上リングが AgentDetail に無いのはマスター未承認のスコープ外
+ *  判断だったため追加。詳細は phase-32 プラン参照)。
+ *
+ *  Forces 0 for a disconnected envelope rather than passing
+ *  `activeTaskCountByAgent[agent_id] ?? 0` straight through (クロエ
+ *  2026-08-10): a disconnected agent cannot have an active subagent, and
+ *  this guards two distinct sources of a stale positive count that a
+ *  disconnected/offline detail view can otherwise show —
+ *  (a) `directoryEnvelope()` (App.svelte) always sets
+ *  `state: "disconnected"` for an offline tile that was never live THIS
+ *  session, so `tasks` may hold no purge for it at all yet still
+ *  coincidentally key-match a live agent_id reused after a restart, and
+ *  (b) the documented race between the server's separate AgentStates /
+ *  TaskStates broadcasts (App.svelte's `disconnected` purge comment) can
+ *  leave a just-disconnected agent's `tasks` entries un-purged for one
+ *  tick. Extracted as a pure function — same rationale as
+ *  computeActiveTaskCountByAgent above — so the guard is unit-testable
+ *  without mounting AgentDetail/App.svelte. */
+export function activeTaskCountForDetail(
+  envelope: Envelope,
+  activeTaskCountByAgent: Record<string, number>,
+): number {
+  if (envelope.state === "disconnected") return 0;
+  return activeTaskCountByAgent[envelope.agent_id] ?? 0;
+}
+
 /** Locate the user prompt (log kind="user") that produced the errored result
  *  at `resultIndex` in the transcript (issue #128 エラー再送ボタン)。
  *  Walks backwards through `entries` and returns the first user log's text,

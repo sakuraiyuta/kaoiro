@@ -101,6 +101,43 @@ for (const [taskId, pending, dockSelector] of [
   });
 }
 
+// T11 (issue #180 follow-up, 2026-08-10, ふじ round1 S1): 頭上リングが
+// 実ブラウザで AgentDetail 側にも描画・アニメーションされることを、
+// LobbyHarness が AgentCard 側で既にやっている taskRing パターンの
+// 対で固定する。App.svelte の配線 (activeTaskCountForDetail) までは
+// 通さない (このハーネスは AgentDetail を直接 mount する) —
+// activeTaskCountForDetail() 自体の guard semantics は protocol.test.ts
+// の単体テストが担当、App.svelte 側の一行配線は型付き直結のみで分岐・
+// 変換を持たないため静的レビューで確認する (ふじ round2, 2026-08-10:
+// 追加投資不要と判断)。
+test.describe("T11: 頭上リング (AgentDetail, issue #180 follow-up)", () => {
+  test("1199px desktop sidebar: taskRing=1 で .task-ring が描画・回転する", async ({ page }) => {
+    await page.setViewportSize({ width: 1199, height: 900 });
+    await page.goto(`${DETAIL}&taskRing=1`);
+    const ring = page.locator("aside.status .portrait .task-ring");
+    await expect(ring).toBeVisible();
+    await expect(ring).toHaveAttribute("role", "img");
+    const animationName = await ring.evaluate(
+      (el) => getComputedStyle(el).animationName,
+    );
+    expect(animationName).not.toBe("none");
+  });
+
+  test("1199px desktop sidebar: taskRing 省略時は .task-ring を描画しない", async ({ page }) => {
+    await page.setViewportSize({ width: 1199, height: 900 });
+    await page.goto(DETAIL);
+    await expect(page.locator("aside.status .portrait .task-ring")).toHaveCount(0);
+  });
+
+  test("844px sheet open: taskRing=1 で .task-ring が描画される", async ({ page }) => {
+    await page.setViewportSize({ width: 844, height: 900 });
+    await page.goto(`${DETAIL}&taskRing=1`);
+    await page.locator(".sheet .handle .toggle").click();
+    const ring = page.locator("aside.status .portrait .task-ring");
+    await expect(ring).toBeVisible();
+  });
+});
+
 test("T8: handle attention badge returns to the grid while the sheet is open", async ({ page }) => {
   await page.setViewportSize({ width: 844, height: 900 });
   await page.goto(`${DETAIL}&attention=1`);
