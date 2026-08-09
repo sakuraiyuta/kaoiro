@@ -9,7 +9,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { AgentHost, initialStatusExt } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
-import { makeStateChange } from "@kaoiro/agent-common";
+import { INTER_AGENT_TOOL_FQN, makeStateChange } from "@kaoiro/agent-common";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import {
   PENDING_UPLOAD_TTL_MS,
@@ -1982,6 +1982,249 @@ describe("AgentHost — permission", () => {
     const trIdx = states.findIndex((s) => s.state === "tool_running");
     expect(trIdx).toBeGreaterThanOrEqual(0);
     expect(states[trIdx]!.ext).not.toHaveProperty("pending_permission");
+  });
+});
+
+describe("AgentHost — send_to_agent auto-allow (issue #175, ADR-0044 F2 追補)", () => {
+  it("interAgentAutoAllow が true を返す (conversation_id, to) は decidePermission を経由せず allow する", async () => {
+    let decideCalled = false;
+    const states: string[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([
+          {
+            type: "tool_use",
+            id: "tu_1",
+            name: INTER_AGENT_TOOL_FQN,
+            input: { conversation_id: "cid-1", to: "peer-x" },
+          },
+        ]);
+        const decision = (await args.options.canUseTool!(
+          INTER_AGENT_TOOL_FQN,
+          { conversation_id: "cid-1", to: "peer-x" },
+          {} as never,
+        ))!;
+        expect(decision.behavior).toBe("allow");
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+
+    const host = new AgentHost(config, {
+      onState: (e) => states.push(e.state),
+      decidePermission: () => {
+        decideCalled = true;
+        return { allow: true };
+      },
+      interAgentAutoAllow: (conversationId, to) =>
+        conversationId === "cid-1" && to === "peer-x",
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+
+    expect(decideCalled).toBe(false);
+    expect(states).not.toContain("waiting_permission");
+  });
+
+  it("interAgentAutoAllow が false を返す conversation_id は通常どおり decidePermission を経由する", async () => {
+    let decideCalled = false;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([
+          {
+            type: "tool_use",
+            id: "tu_1",
+            name: INTER_AGENT_TOOL_FQN,
+            input: { conversation_id: "cid-2", to: "peer-x" },
+          },
+        ]);
+        const decision = (await args.options.canUseTool!(
+          INTER_AGENT_TOOL_FQN,
+          { conversation_id: "cid-2", to: "peer-x" },
+          {} as never,
+        ))!;
+        expect(decision.behavior).toBe("allow");
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+
+    const host = new AgentHost(config, {
+      onState: () => {},
+      decidePermission: () => {
+        decideCalled = true;
+        return { allow: true };
+      },
+      // Whitelisted under a DIFFERENT conversation_id only.
+      interAgentAutoAllow: (conversationId, to) =>
+        conversationId === "cid-1" && to === "peer-x",
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+
+    expect(decideCalled).toBe(true);
+  });
+
+  it(
+    "issue #175 review round 3 (ふじ M2): 同一 conversation_id でも to が " +
+      "異なれば decidePermission を経由する (unknown_agent reject 後の to " +
+      "差し替えが dialog を飛ばさない)",
+    async () => {
+      let decideCalled = false;
+      const queryFn = makeQueryFn((args: QueryArgs) => {
+        async function* gen(): AsyncGenerator<SDKMessage, void> {
+          yield assistant([
+            {
+              type: "tool_use",
+              id: "tu_1",
+              name: INTER_AGENT_TOOL_FQN,
+              input: { conversation_id: "cid-1", to: "peer-y" },
+            },
+          ]);
+          const decision = (await args.options.canUseTool!(
+            INTER_AGENT_TOOL_FQN,
+            { conversation_id: "cid-1", to: "peer-y" },
+            {} as never,
+          ))!;
+          expect(decision.behavior).toBe("allow");
+          yield result("success", { result: "ok" });
+        }
+        return asQuery(gen());
+      });
+
+      const host = new AgentHost(config, {
+        onState: () => {},
+        decidePermission: () => {
+          decideCalled = true;
+          return { allow: true };
+        },
+        // Whitelisted for cid-1 but only paired with peer-x, not peer-y.
+        interAgentAutoAllow: (conversationId, to) =>
+          conversationId === "cid-1" && to === "peer-x",
+        queryFn,
+        now: () => "T",
+      });
+      await host.run();
+
+      expect(decideCalled).toBe(true);
+    },
+  );
+
+  it("新規 conversation (conversation_id 省略) の最初の送信は必ず decidePermission を経由する", async () => {
+    let decideCalled = false;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([
+          {
+            type: "tool_use",
+            id: "tu_1",
+            name: INTER_AGENT_TOOL_FQN,
+            input: { to: "peer-x" },
+          },
+        ]);
+        const decision = (await args.options.canUseTool!(
+          INTER_AGENT_TOOL_FQN,
+          { to: "peer-x" },
+          {} as never,
+        ))!;
+        expect(decision.behavior).toBe("allow");
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+
+    const host = new AgentHost(config, {
+      onState: () => {},
+      decidePermission: () => {
+        decideCalled = true;
+        return { allow: true };
+      },
+      // Would auto-allow any string conversation_id/to pair — but no
+      // conversation_id is present.
+      interAgentAutoAllow: () => true,
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+
+    expect(decideCalled).toBe(true);
+  });
+
+  it("interAgentAutoAllow 未配線なら send_to_agent も通常どおり decidePermission を経由する", async () => {
+    let decideCalled = false;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([
+          {
+            type: "tool_use",
+            id: "tu_1",
+            name: INTER_AGENT_TOOL_FQN,
+            input: { conversation_id: "cid-1", to: "peer-x" },
+          },
+        ]);
+        const decision = (await args.options.canUseTool!(
+          INTER_AGENT_TOOL_FQN,
+          { conversation_id: "cid-1", to: "peer-x" },
+          {} as never,
+        ))!;
+        expect(decision.behavior).toBe("allow");
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+
+    const host = new AgentHost(config, {
+      onState: () => {},
+      decidePermission: () => {
+        decideCalled = true;
+        return { allow: true };
+      },
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+
+    expect(decideCalled).toBe(true);
+  });
+
+  it("他ツールでは interAgentAutoAllow が真を返しても無視され decidePermission を経由する", async () => {
+    let decideCalled = false;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([
+          {
+            type: "tool_use",
+            id: "tu_1",
+            name: "Read",
+            input: { conversation_id: "cid-1", to: "peer-x" },
+          },
+        ]);
+        const decision = (await args.options.canUseTool!(
+          "Read",
+          { conversation_id: "cid-1", to: "peer-x" },
+          {} as never,
+        ))!;
+        expect(decision.behavior).toBe("allow");
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+
+    const host = new AgentHost(config, {
+      onState: () => {},
+      decidePermission: () => {
+        decideCalled = true;
+        return { allow: true };
+      },
+      interAgentAutoAllow: () => true,
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+
+    expect(decideCalled).toBe(true);
   });
 });
 

@@ -613,34 +613,102 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
     expect(stillClosed.isError).toBe(true);
   });
 
-  it("M3: reject された brand-new conversation の track は残らない (review must-fix, AC6)", async () => {
-    const tool = new InterAgentTool({
-      config: configFor("self.agent"),
-      getState: () => "tool_running",
-      send: () => {
-        throw new Error("acceptance-aware sink must be used");
-      },
-      sendInterAgent: () =>
-        Promise.resolve({ kind: "rejected", reason: "unknown_agent" }),
-      now: () => "2026-08-08T00:00:00Z",
-      newId: () => "cnv-auto",
-    });
+  it(
+    "M3: reject された brand-new conversation は turn_number が新規扱いに戻る " +
+      "(review must-fix, AC6) — issue #175 review round 4: reject は " +
+      "whitelist を確立しない (ふじ 条件 A)",
+    async () => {
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"),
+        getState: () => "tool_running",
+        send: () => {
+          throw new Error("acceptance-aware sink must be used");
+        },
+        sendInterAgent: () =>
+          Promise.resolve({ kind: "rejected", reason: "unknown_agent" }),
+        now: () => "2026-08-08T00:00:00Z",
+        newId: () => "cnv-auto",
+      });
 
-    const first = await tool.invoke({
-      to: "peer.agent",
-      body: "hi",
-      kind: "inform",
-      conversation_id: "cnv-phantom",
-    });
-    expect(first.isError).toBe(true);
+      const first = await tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-phantom",
+      });
+      expect(first.isError).toBe(true);
 
-    // track が生き残っていれば turn_number=1 は既知の max として残るので
-    // stale 判定されるはず。track が削除されていれば新規会話扱いで stale
-    // にならない (= 拒否された brand-new track はどこにも残っていない)。
-    const inbound = inboundEnvelope("cnv-phantom", "inform");
-    (inbound.payload as unknown as InterAgentMessagePayload).turn_number = 1;
-    expect((await tool.receiveInbound(inbound)).inject).toBe(true);
-  });
+      // turn_number が生きていれば turn_number=1 は既知の max として残るので
+      // stale 判定されるはず。AC6 の reset により新規会話扱いに戻っていれば
+      // stale にならない(= 拒否された brand-new 送信の turn_number は
+      // 残らない)。
+      const inbound = inboundEnvelope("cnv-phantom", "inform");
+      (inbound.payload as unknown as InterAgentMessagePayload).turn_number = 1;
+      expect((await tool.receiveInbound(inbound)).inject).toBe(true);
+
+      // issue #175 review round 4 (ふじ design-review approve, #211 条件
+      // A — 意図的に反転したアサーション): a rejected send never
+      // establishes the whitelist under the round-4 design — only a
+      // server-ACCEPTED ack does (see `autoAllowedPeer`'s doc comment).
+      // Rounds 1-3 optimistically wrote it pre-dispatch and needed this
+      // exact AC6 reset to "survive" a rejection; round 4 removes the
+      // write itself, so there is nothing left to survive (failure
+      // history: #211 comment 2715).
+      expect(tool.isConversationAutoAllowed("cnv-phantom", "peer.agent")).toBe(false);
+    },
+  );
+
+  it(
+    "issue #175 review round 2: 同一 conversation_id への 2 回目以降の reject " +
+      "retry でも turn_number は新規扱いに戻り続ける",
+    async () => {
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"),
+        getState: () => "tool_running",
+        send: () => {
+          throw new Error("acceptance-aware sink must be used");
+        },
+        sendInterAgent: () =>
+          Promise.resolve({ kind: "rejected", reason: "unknown_agent" }),
+        now: () => "2026-08-08T00:00:00Z",
+        newId: () => "cnv-auto",
+      });
+
+      // Two rejected sends on the SAME explicit conversation_id — the
+      // round-1 fix's gate (`!trackExistedBefore`, map presence) reset
+      // the track only on the FIRST rejection: after the reset left the
+      // (blanked) track in the map instead of deleting it, the SECOND
+      // call read `trackExistedBefore=true` and skipped the reset
+      // entirely, leaving turn_number stuck at 1 forever. The fixed gate
+      // (`wasBlank`, reading track fields instead of map presence) must
+      // reset on every repeated failed retry, not just the first.
+      await tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-retry",
+      });
+      const second = await tool.invoke({
+        to: "peer.agent",
+        body: "hi again",
+        kind: "inform",
+        conversation_id: "cnv-retry",
+      });
+      expect(second.isError).toBe(true);
+
+      // A genuine inbound turn_number=1 must still be accepted (not
+      // dropped as a stale duplicate of the second rejected attempt's
+      // own turn_number=1).
+      const inbound = inboundEnvelope("cnv-retry", "inform");
+      (inbound.payload as unknown as InterAgentMessagePayload).turn_number = 1;
+      expect((await tool.receiveInbound(inbound)).inject).toBe(true);
+
+      // issue #175 review round 4 (ふじ 条件 A): neither rejection ever
+      // wrote the whitelist — both attempts were rejected, so
+      // `autoAllowedPeer` was never set for this conversation_id at all.
+      expect(tool.isConversationAutoAllowed("cnv-retry", "peer.agent")).toBe(false);
+    },
+  );
 
   // issue #177 review round 2 M3 ("open track の unbounded 経路"):
   // #pruneClosedTracks() only ever prunes tracks this wrapper itself
@@ -1981,6 +2049,912 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
     },
   );
 });
+
+describe("isConversationAutoAllowed (issue #175, ADR-0044 F2 追補)", () => {
+  it("未知の conversation_id は false", () => {
+    const { tool } = makeTool("agent-a");
+    expect(tool.isConversationAutoAllowed("never-sent", "agent-b")).toBe(false);
+  });
+
+  it(
+    "issue #175 review round 3 (ふじ M1): idle TTL (24h) を超えた track は " +
+      "次の invoke() を待たず、判定そのものが false になる",
+    async () => {
+      let clock = 0;
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"),
+        getState: () => "tool_running",
+        send: () => {},
+        now: () => "2026-08-08T00:00:00Z",
+        newId: () => "cnv-auto",
+        nowMs: () => clock,
+      });
+
+      await tool.invoke({
+        to: "agent-b",
+        kind: "query",
+        body: "hi",
+        conversation_id: "cid-idle",
+      });
+      expect(tool.isConversationAutoAllowed("cid-idle", "agent-b")).toBe(true);
+
+      // 24h + 1ms 経過 — invoke() を一度も挟まず、判定を直接読む。
+      clock += 24 * 60 * 60 * 1000 + 1;
+      expect(tool.isConversationAutoAllowed("cid-idle", "agent-b")).toBe(false);
+    },
+  );
+
+  it(
+    "issue #175 review round 3 (ふじ M1): cap eviction の対象になった track も " +
+      "次の invoke() を待たず、判定そのものが false になる",
+    async () => {
+      let clock = 0;
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"),
+        getState: () => "tool_running",
+        send: () => {},
+        now: () => "2026-08-08T00:00:00Z",
+        newId: () => "cnv-auto",
+        nowMs: () => clock,
+        maxTracks: 2,
+      });
+
+      for (const cid of ["cid-o1", "cid-o2", "cid-o3"]) {
+        clock += 1;
+        await tool.invoke({
+          to: "agent-b",
+          kind: "query",
+          body: "hi",
+          conversation_id: cid,
+        });
+      }
+
+      // maxTracks=2: 最も古い cid-o1 は 3 件目の invoke() の時点で既に
+      // evict されている想定だが、次の invoke() を挟まず直接読んでも
+      // false になっていなければ M1 は再発している。
+      expect(tool.isConversationAutoAllowed("cid-o1", "agent-b")).toBe(false);
+      // 新しい 2 件はまだ生きている。
+      expect(tool.isConversationAutoAllowed("cid-o2", "agent-b")).toBe(true);
+      expect(tool.isConversationAutoAllowed("cid-o3", "agent-b")).toBe(true);
+    },
+  );
+
+  it(
+    "issue #175 review round 4 (ふじ 条件 A/B、M2 brand-new reject の反転): " +
+      "unknown_agent reject は (conversation_id, to) いずれの組も " +
+      "auto-allow しない(両 peer false)",
+    async () => {
+      const rejecting = new InterAgentTool({
+        config: configFor("agent-a"),
+        getState: () => "tool_running",
+        send: () => {
+          throw new Error("acceptance-aware sink must be used");
+        },
+        sendInterAgent: () =>
+          Promise.resolve({ kind: "rejected", reason: "unknown_agent" }),
+        now: () => "2026-08-08T00:00:00Z",
+        newId: () => "cnv-auto",
+      });
+
+      const first = await rejecting.invoke({
+        to: "peer-x",
+        kind: "inform",
+        body: "hi",
+        conversation_id: "cid-retarget",
+      });
+      expect(first.isError).toBe(true);
+      // issue #175 review round 4 (ふじ 条件 A): reject された送信は
+      // autoAllowedPeer を一切書かないため、実際に宛てた peer-x に対して
+      // すら whitelist は成立していない — round 1-3 では pre-dispatch
+      // 楽観書き込みにより ここが true になっていたが、その書き込み自体が
+      // 廃止された。
+      expect(
+        rejecting.isConversationAutoAllowed("cid-retarget", "peer-x"),
+      ).toBe(false);
+      // 同一 conversation_id でも別 to (peer-y) には元々波及しない — これは
+      // host.ts の canUseTool が判定する対象だが、InterAgentTool 自身の
+      // 状態としても peer-y には紐付いていないことを確認する。
+      expect(
+        rejecting.isConversationAutoAllowed("cid-retarget", "peer-y"),
+      ).toBe(false);
+    },
+  );
+
+  it(
+    "issue #175 review round 3 (内部レビュー、M2 follow-up): 確立済み peer への " +
+      "auto-allow は、別 peer への reject された送信で上書きされない",
+    async () => {
+      let rejectNext = false;
+      const tool = new InterAgentTool({
+        config: configFor("agent-a"),
+        getState: () => "tool_running",
+        send: () => {
+          throw new Error("acceptance-aware sink must be used");
+        },
+        sendInterAgent: () =>
+          Promise.resolve(
+            rejectNext
+              ? { kind: "rejected", reason: "unknown_agent" }
+              : { kind: "accepted", stamp: null },
+          ),
+        now: () => "2026-08-08T00:00:00Z",
+        newId: () => "cnv-auto",
+      });
+
+      // peer-x への送信は成立し、(cid, peer-x) が auto-allow される。
+      const established = await tool.invoke({
+        to: "peer-x",
+        kind: "inform",
+        body: "hi",
+        conversation_id: "cid-established",
+      });
+      expect(established.isError).toBeFalsy();
+      expect(
+        tool.isConversationAutoAllowed("cid-established", "peer-x"),
+      ).toBe(true);
+
+      // 同一 conversation_id へ別 peer (peer-y) への送信が (canUseTool の
+      // dialog を経て) 承認され invoke() まで到達したが、server に
+      // reject される。
+      rejectNext = true;
+      const toDifferentPeer = await tool.invoke({
+        to: "peer-y",
+        kind: "inform",
+        body: "wrong peer?",
+        conversation_id: "cid-established",
+      });
+      expect(toDifferentPeer.isError).toBe(true);
+
+      // peer-x への auto-allow は生き残っているはず — 上書きされて
+      // いなければならない。
+      expect(
+        tool.isConversationAutoAllowed("cid-established", "peer-x"),
+      ).toBe(true);
+      // peer-y は reject されており、auto-allow は成立しない。
+      expect(
+        tool.isConversationAutoAllowed("cid-established", "peer-y"),
+      ).toBe(false);
+    },
+  );
+
+  // issue #175 review round 4, ふじ round 2 (#211, S1): the preceding two
+  // tests only exercise "accepted establishes" and "reject never touches" —
+  // neither one pins condition A's OWN defining property, that a SECOND
+  // accepted ack on the same conversation_id unconditionally REBINDS
+  // autoAllowedPeer (not sticky-first). Confirmed by ふじ: swapping
+  // `track.autoAllowedPeer = args.to` for `track.autoAllowedPeer ??= args.to`
+  // (round 2's original sticky-first bug, reintroduced) leaves every
+  // pre-existing regression green — only this test catches it. Mutation-
+  // tested per that instruction (see conversation record): with `=` changed
+  // to `??=`, ONLY this test fails.
+  it(
+    "issue #175 review round 4 (ふじ round 2, S1): 2 度目の accepted ack " +
+      "(server restart 後の別 peer での再確立を想定) は autoAllowedPeer を " +
+      "無条件に rebind する — sticky-first ではない",
+    async () => {
+      const tool = new InterAgentTool({
+        config: configFor("agent-a"),
+        getState: () => "tool_running",
+        send: () => {
+          throw new Error("acceptance-aware sink must be used");
+        },
+        // to に関わらず常に accepted — 実サーバーはどちらの peer への
+        // 送信も受理し得る (再確立の是非を判定するのは server 側)。
+        sendInterAgent: () => Promise.resolve({ kind: "accepted", stamp: null }),
+        now: () => "2026-08-09T00:00:00Z",
+        newId: () => "cnv-auto",
+      });
+
+      const first = await tool.invoke({
+        to: "peer-a",
+        kind: "inform",
+        body: "hi",
+        conversation_id: "cid-rebind",
+      });
+      expect(first.isError).toBeFalsy();
+      expect(tool.isConversationAutoAllowed("cid-rebind", "peer-a")).toBe(true);
+
+      // 同一 conversation_id への 2 回目の送信 (先方 wrapper の再起動等で
+      // 別 peer として再確立された想定) も server に accepted される。
+      const second = await tool.invoke({
+        to: "peer-b",
+        kind: "inform",
+        body: "hi, this is actually peer-b now",
+        conversation_id: "cid-rebind",
+      });
+      expect(second.isError).toBeFalsy();
+
+      // 無条件 rebind — peer-a の whitelist は失われ、peer-b に付け替わる。
+      // sticky-first (??=) だと peer-a が true のまま残り、この両方の
+      // 期待が崩れる。
+      expect(tool.isConversationAutoAllowed("cid-rebind", "peer-a")).toBe(
+        false,
+      );
+      expect(tool.isConversationAutoAllowed("cid-rebind", "peer-b")).toBe(
+        true,
+      );
+    },
+  );
+
+  it(
+    "issue #175 review round 3 (内部レビュー、round 2 follow-up): typo で " +
+      "reject された blank track の 1 回目送信は、訂正した 2 回目送信の " +
+      "auto-allow を永久に阻害しない",
+    async () => {
+      let rejectFirst = true;
+      const tool = new InterAgentTool({
+        config: configFor("agent-a"),
+        getState: () => "tool_running",
+        send: () => {
+          throw new Error("acceptance-aware sink must be used");
+        },
+        sendInterAgent: () =>
+          Promise.resolve(
+            rejectFirst
+              ? { kind: "rejected", reason: "unknown_agent" }
+              : { kind: "accepted", stamp: null },
+          ),
+        now: () => "2026-08-08T00:00:00Z",
+        newId: () => "cnv-auto",
+      });
+
+      // 1 回目: typo った peer 名で送信、reject される (blank track のまま)。
+      const typo = await tool.invoke({
+        to: "peer-typo",
+        kind: "inform",
+        body: "hi",
+        conversation_id: "cid-typo-fix",
+      });
+      expect(typo.isError).toBe(true);
+
+      // 2 回目: 訂正した peer 名で再送し、成立する。
+      rejectFirst = false;
+      const corrected = await tool.invoke({
+        to: "peer-correct",
+        kind: "inform",
+        body: "hi (corrected)",
+        conversation_id: "cid-typo-fix",
+      });
+      expect(corrected.isError).toBeFalsy();
+
+      // 訂正後の正しい peer が auto-allow されていなければならない —
+      // 誤った 1 回目の peer が永久にスロットを占有してはいけない。
+      expect(
+        tool.isConversationAutoAllowed("cid-typo-fix", "peer-correct"),
+      ).toBe(true);
+    },
+  );
+
+  it("新規 conversation (id 省略) は 1 回目送信後、割り当てられた id が true になる", async () => {
+    const { tool, capture } = makeTool("agent-a");
+    await tool.invoke({ to: "agent-b", kind: "query", body: "hi" });
+    const allocated = capture.ids[0]!;
+    expect(tool.isConversationAutoAllowed(allocated, "agent-b")).toBe(true);
+  });
+
+  it("明示 conversation_id での送信後、その id が true になる", async () => {
+    const { tool } = makeTool("agent-a");
+    await tool.invoke({
+      to: "agent-b",
+      kind: "query",
+      body: "hi",
+      conversation_id: "cid-explicit",
+    });
+    expect(tool.isConversationAutoAllowed("cid-explicit", "agent-b")).toBe(true);
+  });
+
+  it("別の conversation_id には波及しない(conversation 単位)", async () => {
+    const { tool } = makeTool("agent-a");
+    await tool.invoke({
+      to: "agent-b",
+      kind: "query",
+      body: "hi",
+      conversation_id: "cid-a",
+    });
+    expect(tool.isConversationAutoAllowed("cid-a", "agent-b")).toBe(true);
+    expect(tool.isConversationAutoAllowed("cid-b", "agent-b")).toBe(false);
+  });
+
+  it("wrapper インスタンスごとに独立する(同じ id でも別 InterAgentTool には波及しない)", async () => {
+    const { tool: toolA } = makeTool("agent-a");
+    const { tool: toolB } = makeTool("agent-b");
+    await toolA.invoke({
+      to: "agent-b",
+      kind: "query",
+      body: "hi",
+      conversation_id: "shared-cid",
+    });
+    expect(toolA.isConversationAutoAllowed("shared-cid", "agent-b")).toBe(true);
+    expect(toolB.isConversationAutoAllowed("shared-cid", "agent-b")).toBe(false);
+  });
+
+  it("AC10 のローカル reject (既に closed な会話への再送) は他 id へ波及しない", async () => {
+    const { tool } = makeTool("agent-a");
+    // Mutual done closes the conversation locally (turn_number=1 send +
+    // turn_number=2 inbound done=true reply).
+    await tool.invoke({
+      to: "agent-b",
+      kind: "done",
+      body: "bye",
+      conversation_id: "cid-closing",
+      done: true,
+    });
+    await tool.receiveInbound({
+      version: "0",
+      agent_id: "peer.agent",
+      persona: PERSONA,
+      ts: "2026-07-23T12:00:00Z",
+      type: "inter_agent_message",
+      state: "tool_running",
+      payload: {
+        to: "agent-a",
+        conversation_id: "cid-closing",
+        turn_number: 2,
+        kind: "done",
+        body: "bye too",
+        meta: { done: true, propose_next: "" },
+        owner: { kind: "user", id: "operator" },
+      },
+      ext: {},
+    });
+    // A further send on the now-closed conversation is locally rejected
+    // (AC10, an early return before any track mutation) — assert this
+    // neither falsely marks an unrelated conversation NOR corrupts
+    // cid-closing's own auto-allow status (established by the very
+    // first — accepted — send above, review round 2: the prior version
+    // of this test never checked the conversation it actually
+    // exercises).
+    const result = await tool.invoke({
+      to: "agent-b",
+      kind: "query",
+      body: "too late",
+      conversation_id: "cid-closing",
+    });
+    expect(JSON.stringify(result)).toContain("already closed");
+    expect(tool.isConversationAutoAllowed("cid-closing", "agent-b")).toBe(true);
+    expect(tool.isConversationAutoAllowed("cid-unrelated", "agent-b")).toBe(false);
+  });
+});
+
+// issue #175 review round 4 (ふじ design-review approve, #211 comment
+// 2719 条件 B): an `unknown` acceptance (ack never arrived — delivery
+// unconfirmed) must never promote a (conversation_id, to) pair into the
+// whitelist. Only `accepted` may. こはく/あお's provisional stance,
+// confirmed by ふじ: the asymmetry is deliberate — `unknown`-as-success
+// would let a send whose delivery is unconfirmed auto-allow every later
+// send to that peer (permission-bypass direction), while `accepted`-only
+// costs nothing worse than an extra operator dialog while `unknown`
+// persists.
+describe(
+  "isConversationAutoAllowed — unknown acceptance は whitelist へ " +
+    "昇格しない (issue #175 review round 4, ふじ 条件 B)",
+  () => {
+    it("brand-new conversation への unknown ack は whitelist を確立しない", async () => {
+      const tool = new InterAgentTool({
+        config: configFor("agent-a"),
+        getState: () => "tool_running",
+        send: () => {
+          throw new Error("acceptance-aware sink must be used");
+        },
+        sendInterAgent: () =>
+          Promise.resolve({ kind: "unknown", reason: "timeout" }),
+        now: () => "2026-08-09T00:00:00Z",
+        newId: () => "cnv-auto",
+      });
+
+      const first = await tool.invoke({
+        to: "peer-x",
+        kind: "inform",
+        body: "hi",
+        conversation_id: "cid-unknown-brand-new",
+      });
+      expect(first.isError).toBeFalsy();
+      expect(
+        tool.isConversationAutoAllowed("cid-unknown-brand-new", "peer-x"),
+      ).toBe(false);
+    });
+
+    it(
+      "accepted で確立済みの peer-x はそのまま — 別 to への operator-approved " +
+        "unknown (peer-y) は peer-y を false のままにする",
+      async () => {
+        let ackKind: "accepted" | "unknown" = "accepted";
+        const tool = new InterAgentTool({
+          config: configFor("agent-a"),
+          getState: () => "tool_running",
+          send: () => {
+            throw new Error("acceptance-aware sink must be used");
+          },
+          sendInterAgent: () =>
+            Promise.resolve(
+              ackKind === "accepted"
+                ? { kind: "accepted", stamp: null }
+                : { kind: "unknown", reason: "timeout" },
+            ),
+          now: () => "2026-08-09T00:00:00Z",
+          newId: () => "cnv-auto",
+        });
+
+        const first = await tool.invoke({
+          to: "peer-x",
+          kind: "inform",
+          body: "hi",
+          conversation_id: "cid-unknown-b",
+        });
+        expect(first.isError).toBeFalsy();
+        expect(
+          tool.isConversationAutoAllowed("cid-unknown-b", "peer-x"),
+        ).toBe(true);
+
+        ackKind = "unknown";
+        const second = await tool.invoke({
+          to: "peer-y",
+          kind: "inform",
+          body: "different peer, ack unknown",
+          conversation_id: "cid-unknown-b",
+        });
+        // unknown はエラーではない ("delivery unknown" の非エラーテキスト
+        // — ADR-0051 D3-2)。
+        expect(second.isError).toBeFalsy();
+
+        expect(
+          tool.isConversationAutoAllowed("cid-unknown-b", "peer-x"),
+        ).toBe(true);
+        expect(
+          tool.isConversationAutoAllowed("cid-unknown-b", "peer-y"),
+        ).toBe(false);
+      },
+    );
+
+    it(
+      "unknown の後に同一 (conversation_id, to) へ accepted が来て、その時点で " +
+        "初めて true になる",
+      async () => {
+        let ackKind: "accepted" | "unknown" = "unknown";
+        const tool = new InterAgentTool({
+          config: configFor("agent-a"),
+          getState: () => "tool_running",
+          send: () => {
+            throw new Error("acceptance-aware sink must be used");
+          },
+          sendInterAgent: () =>
+            Promise.resolve(
+              ackKind === "unknown"
+                ? { kind: "unknown", reason: "timeout" }
+                : { kind: "accepted", stamp: null },
+            ),
+          now: () => "2026-08-09T00:00:00Z",
+          newId: () => "cnv-auto",
+        });
+
+        const first = await tool.invoke({
+          to: "peer-x",
+          kind: "inform",
+          body: "hi",
+          conversation_id: "cid-unknown-then-accept",
+        });
+        expect(first.isError).toBeFalsy();
+        expect(
+          tool.isConversationAutoAllowed("cid-unknown-then-accept", "peer-x"),
+        ).toBe(false);
+
+        ackKind = "accepted";
+        const second = await tool.invoke({
+          to: "peer-x",
+          kind: "inform",
+          body: "retry",
+          conversation_id: "cid-unknown-then-accept",
+        });
+        expect(second.isError).toBeFalsy();
+        expect(
+          tool.isConversationAutoAllowed("cid-unknown-then-accept", "peer-x"),
+        ).toBe(true);
+      },
+    );
+  },
+);
+
+// issue #175 review round 3 (ふじ M3, gitea issue #211): #211's race —
+// receiveInbound() legitimately mutating a track while a non-`done`
+// invoke() is still awaiting #dispatch() — predates #175. Round 3 closed
+// it for the `closed`/`turnNumber` fields via the `mutationGen` guard on
+// the reject-cleanup branch (test (a) below, and the C1/C2/C3/C4/C5
+// mutation tests further down). Round 4 (ふじ design-review approve,
+// #211 comment 2719 条件 A) additionally closed a SEPARATE
+// permission-bypass window round 3 had reintroduced specifically for
+// `autoAllowedPeer` — by moving that field's write from an optimistic
+// pre-dispatch guess (preserved across resets) to "written only on a
+// server-accepted ack", a rejected send racing against this same
+// terminal inbound no longer establishes the whitelist AT ALL, so there
+// is nothing left for the race to leak past (test (b) below, now
+// asserting the inverse of round 3's expectation).
+describe(
+  "issue #175 review round 3 (ふじ M3, #211): 非 done 送信の dispatch 中 " +
+    "race から permission bypass を防ぐ",
+  () => {
+    function makeDeferredAckTool(agentId: string): {
+      tool: InterAgentTool;
+      settle: (acceptance: InterAgentAcceptance) => void;
+    } {
+      let resolveAck!: (acceptance: InterAgentAcceptance) => void;
+      const pending = new Promise<InterAgentAcceptance>((resolve) => {
+        resolveAck = resolve;
+      });
+      const tool = new InterAgentTool({
+        config: configFor(agentId),
+        getState: () => "tool_running",
+        send: () => {
+          throw new Error("acceptance-aware sink must be used");
+        },
+        sendInterAgent: () => pending,
+        now: () => "2026-08-09T00:00:00Z",
+        newId: () => "cnv-auto",
+      });
+      return { tool, settle: resolveAck };
+    }
+
+    function synthHardLimitClose(conversationId: string): Envelope {
+      return {
+        version: "0",
+        agent_id: "server",
+        persona: PERSONA,
+        ts: "2026-08-09T00:00:01Z",
+        type: "inter_agent_message",
+        state: "tool_running",
+        payload: {
+          to: "self.agent",
+          conversation_id: conversationId,
+          turn_number: 0,
+          kind: "escalate-to-user",
+          body: "conversation auto-terminated: max_turns",
+          meta: { done: true, propose_next: "" },
+          owner: { kind: "user", id: "system" },
+        },
+        ext: {},
+      };
+    }
+
+    // ふじ regression (a): ack 保留中に届いた terminal inbound は、その
+    // 後 conversation_closed 以外の理由で reject されても CLOSED を保持する。
+    // このシナリオ (synthetic terminal で closed が false→true に変化する)
+    // は、round 4 ふじ 条件 C が要求する mutation test 5 本のうち「synthetic
+    // terminal で closed false→true (cleanup 保全)」(C3) を兼ねる —
+    // 別途複製しない。
+    it(
+      "ack 保留中の terminal inbound は、非 conversation_closed reject 後も " +
+        "CLOSED を保持する (ふじ 条件 C mutation test C3 を兼ねる)",
+      async () => {
+        const { tool, settle } = makeDeferredAckTool("self.agent");
+
+        const invokePromise = tool.invoke({
+          to: "peer.agent",
+          body: "hi",
+          kind: "inform",
+          conversation_id: "cid-race",
+        });
+
+        // #dispatch() 未解決のうちに、正当な server 合成 hard-limit close
+        // が同じ conversation_id へ届く。
+        const disposition = await tool.receiveInbound(
+          synthHardLimitClose("cid-race"),
+        );
+        expect(disposition.mode).toBe("terminal");
+
+        // 送信は conversation_closed 以外の理由で reject される。
+        settle({ kind: "rejected", reason: "unknown_agent" });
+        await invokePromise;
+
+        // CLOSED は保持されているはず — 通常の inbound がまだ terminal
+        // と判定されることで確認する。turn_number=2: race が正しく検知
+        // されればこの送信の turnNumber=1 という自分自身の楽観的更新は
+        // 巻き戻されない(reset 分岐が発火しないため)ので、次の inbound
+        // は turn_number=1 では stale 判定されてしまう — 2 を使う。
+        const after = await tool.receiveInbound({
+          version: "0",
+          agent_id: "peer.agent",
+          persona: PERSONA,
+          ts: "2026-08-09T00:00:02Z",
+          type: "inter_agent_message",
+          state: "tool_running",
+          payload: {
+            to: "self.agent",
+            conversation_id: "cid-race",
+            turn_number: 2,
+            kind: "inform",
+            body: "are you still there?",
+            meta: { done: false, propose_next: "" },
+            owner: { kind: "user", id: "operator" },
+          },
+          ext: {},
+        });
+        expect(after.mode).toBe("terminal");
+      },
+    );
+
+    // ふじ regression (b) — issue #175 review round 4 (ふじ 条件 A、#211
+    // M3 regression (b) の反転) で意図的に反転: round 3 の設計では reject
+    // された送信でも autoAllowedPeer が pre-dispatch 楽観書き込みのまま
+    // 生き残っていたため、ここは true だった。round 4 では reject が
+    // 一切 whitelist を書かないため、whitelist はそもそも成立しない —
+    // CLOSED guard (AC10) と合わせた二重防御になる。
+    it(
+      "reject された送信は whitelist を確立せず (条件 A)、CLOSED guard " +
+        "(AC10) も別途迂回しない — 二重防御で再送はローカル reject される",
+      async () => {
+        const { tool, settle } = makeDeferredAckTool("self.agent");
+
+        const invokePromise = tool.invoke({
+          to: "peer.agent",
+          body: "hi",
+          kind: "inform",
+          conversation_id: "cid-race-2",
+        });
+        await tool.receiveInbound(synthHardLimitClose("cid-race-2"));
+        settle({ kind: "rejected", reason: "unknown_agent" });
+        await invokePromise;
+
+        // reject は autoAllowedPeer を一切書かない — whitelist はそもそも
+        // 成立していない。
+        expect(
+          tool.isConversationAutoAllowed("cid-race-2", "peer.agent"),
+        ).toBe(false);
+
+        // whitelist 不成立に加え、CLOSED guard (AC10) も独立に再送を
+        // ローカル reject する — server の tombstone TTL 経過後を想定した
+        // 再送でも、無承認で dispatch まで進むことはない。
+        const retry = await tool.invoke({
+          to: "peer.agent",
+          body: "still trying",
+          kind: "inform",
+          conversation_id: "cid-race-2",
+        });
+        expect(retry.isError).toBe(true);
+        expect(JSON.stringify(retry)).toContain("already closed");
+      },
+    );
+
+    // issue #175 review round 4 (ふじ 条件 C, #211 comment 2719): 5 本の
+    // mutation test のうち、C3 は上の "ack 保留中の terminal inbound..."
+    // テストが兼ねる。以下は残り 4 本 (C1/C2/C4/C5)。いずれも
+    // `mutationGen` の加算条件 (turnNumber / remoteDone / closed の実変化)
+    // を、invoke() の reject-cleanup ガードの発火有無という外部から観測
+    // 可能な効果を通じて検証する — `mutationGen` 自体に公開アクセサは
+    // ないため、これが唯一の観測経路。
+
+    it(
+      "mutation test C1: turnNumber のみ前進する inbound (done=false) は " +
+        "gen を進め、reject-cleanup を止める(turnNumber は前進したまま残る)",
+      async () => {
+        const { tool, settle } = makeDeferredAckTool("self.agent");
+        const invokePromise = tool.invoke({
+          to: "peer.agent",
+          body: "hi",
+          kind: "inform",
+          conversation_id: "cid-mut-c1",
+        });
+        // invoke() 自身の楽観的な turnNumber+=1 (0→1) が既に走っている
+        // ため、turn_number=2 でなければ stale 判定されてしまう。
+        await tool.receiveInbound({
+          version: "0",
+          agent_id: "peer.agent",
+          persona: PERSONA,
+          ts: "2026-08-09T00:00:01Z",
+          type: "inter_agent_message",
+          state: "tool_running",
+          payload: {
+            to: "self.agent",
+            conversation_id: "cid-mut-c1",
+            turn_number: 2,
+            kind: "inform",
+            body: "advance",
+            meta: { done: false, propose_next: "" },
+            owner: { kind: "user", id: "operator" },
+          },
+          ext: {},
+        });
+        settle({ kind: "rejected", reason: "unknown_agent" });
+        await invokePromise;
+
+        // turnNumber=2 が生き残っていれば(reset されていなければ)、
+        // turn_number=2 の再送は stale として扱われる。
+        const stale = await tool.receiveInbound({
+          version: "0",
+          agent_id: "peer.agent",
+          persona: PERSONA,
+          ts: "2026-08-09T00:00:02Z",
+          type: "inter_agent_message",
+          state: "tool_running",
+          payload: {
+            to: "self.agent",
+            conversation_id: "cid-mut-c1",
+            turn_number: 2,
+            kind: "inform",
+            body: "duplicate",
+            meta: { done: false, propose_next: "" },
+            owner: { kind: "user", id: "operator" },
+          },
+          ext: {},
+        });
+        expect(stale.inject).toBe(false);
+      },
+    );
+
+    it(
+      "mutation test C2: 通常 inbound の remoteDone false→true " +
+        "(turnNumber 前進を伴う) は gen を進め、reject-cleanup を止める",
+      async () => {
+        const { tool, settle } = makeDeferredAckTool("self.agent");
+        const invokePromise = tool.invoke({
+          to: "peer.agent",
+          body: "hi",
+          kind: "inform",
+          conversation_id: "cid-mut-c2",
+        });
+        // invoke() 自身の楽観的な turnNumber+=1 (0→1) があるため、ここも
+        // turn_number=2 を使う。
+        await tool.receiveInbound({
+          version: "0",
+          agent_id: "peer.agent",
+          persona: PERSONA,
+          ts: "2026-08-09T00:00:01Z",
+          type: "inter_agent_message",
+          state: "tool_running",
+          payload: {
+            to: "self.agent",
+            conversation_id: "cid-mut-c2",
+            turn_number: 2,
+            kind: "done",
+            body: "closing my side",
+            meta: { done: true, propose_next: "" },
+            owner: { kind: "user", id: "operator" },
+          },
+          ext: {},
+        });
+        settle({ kind: "rejected", reason: "unknown_agent" });
+        await invokePromise;
+
+        // remoteDone=true が生き残っていれば(reset されていなければ)、
+        // 後続の inbound は close-proposal と判定される。
+        const after = await tool.receiveInbound({
+          version: "0",
+          agent_id: "peer.agent",
+          persona: PERSONA,
+          ts: "2026-08-09T00:00:02Z",
+          type: "inter_agent_message",
+          state: "tool_running",
+          payload: {
+            to: "self.agent",
+            conversation_id: "cid-mut-c2",
+            turn_number: 3,
+            kind: "inform",
+            body: "still open?",
+            meta: { done: false, propose_next: "" },
+            owner: { kind: "user", id: "operator" },
+          },
+          ext: {},
+        });
+        expect(after.mode).toBe("close-proposal");
+      },
+    );
+
+    it(
+      "mutation test C4: synthetic disconnected 通知 (turn=0, done=false) " +
+        "は 3 field とも不変 → gen 不変 → brand-new reject cleanup が実行 " +
+        "され、後続 turn_number=1 は stale にならない",
+      async () => {
+        const { tool, settle } = makeDeferredAckTool("self.agent");
+        const invokePromise = tool.invoke({
+          to: "peer.agent",
+          body: "hi",
+          kind: "inform",
+          conversation_id: "cid-mut-c4",
+        });
+        await tool.receiveInbound({
+          version: "0",
+          agent_id: "server",
+          persona: PERSONA,
+          ts: "2026-08-09T00:00:01Z",
+          type: "inter_agent_message",
+          state: "tool_running",
+          payload: {
+            to: "self.agent",
+            conversation_id: "cid-mut-c4",
+            turn_number: 0,
+            kind: "inform",
+            body: "peer disconnected",
+            meta: { done: false, propose_next: "" },
+            owner: { kind: "user", id: "system" },
+          },
+          ext: {},
+        });
+        settle({ kind: "rejected", reason: "unknown_agent" });
+        await invokePromise;
+
+        // reset が実行されていれば turnNumber は 0 に戻るので、
+        // turn_number=1 は stale にならず注入される。
+        const after = await tool.receiveInbound({
+          version: "0",
+          agent_id: "peer.agent",
+          persona: PERSONA,
+          ts: "2026-08-09T00:00:02Z",
+          type: "inter_agent_message",
+          state: "tool_running",
+          payload: {
+            to: "self.agent",
+            conversation_id: "cid-mut-c4",
+            turn_number: 1,
+            kind: "inform",
+            body: "hello?",
+            meta: { done: false, propose_next: "" },
+            owner: { kind: "user", id: "operator" },
+          },
+          ext: {},
+        });
+        expect(after.inject).toBe(true);
+      },
+    );
+
+    it(
+      "mutation test C5: stale/duplicate な inbound は mutationGen に触れず " +
+        "(brand-new reject cleanup は引き続き実行される)",
+      async () => {
+        const { tool, settle } = makeDeferredAckTool("self.agent");
+        const invokePromise = tool.invoke({
+          to: "peer.agent",
+          body: "hi",
+          kind: "inform",
+          conversation_id: "cid-mut-c5",
+        });
+        // invoke() 自身の楽観的な turnNumber+=1 (0→1) により、
+        // turn_number=1 の inbound はこの時点で duplicate/stale 扱いになる。
+        const staleDisposition = await tool.receiveInbound({
+          version: "0",
+          agent_id: "peer.agent",
+          persona: PERSONA,
+          ts: "2026-08-09T00:00:01Z",
+          type: "inter_agent_message",
+          state: "tool_running",
+          payload: {
+            to: "self.agent",
+            conversation_id: "cid-mut-c5",
+            turn_number: 1,
+            kind: "inform",
+            body: "duplicate",
+            meta: { done: false, propose_next: "" },
+            owner: { kind: "user", id: "operator" },
+          },
+          ext: {},
+        });
+        expect(staleDisposition.inject).toBe(false);
+
+        settle({ kind: "rejected", reason: "unknown_agent" });
+        await invokePromise;
+
+        // reset が実行されていれば turnNumber は 0 に戻るので、
+        // turn_number=1 はもはや stale ではない。
+        const after = await tool.receiveInbound({
+          version: "0",
+          agent_id: "peer.agent",
+          persona: PERSONA,
+          ts: "2026-08-09T00:00:02Z",
+          type: "inter_agent_message",
+          state: "tool_running",
+          payload: {
+            to: "self.agent",
+            conversation_id: "cid-mut-c5",
+            turn_number: 1,
+            kind: "inform",
+            body: "hello?",
+            meta: { done: false, propose_next: "" },
+            owner: { kind: "user", id: "operator" },
+          },
+          ext: {},
+        });
+        expect(after.inject).toBe(true);
+      },
+    );
+  },
+);
 
 // issue #177 review M4 (AC13): two independent InterAgentTool instances
 // wired directly to each other — the routing a real server would do,

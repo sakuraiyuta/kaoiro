@@ -103,7 +103,7 @@ pack が無い予約 persona `default` でも、以下の footer 合成結果が
 
 | ファイル | 位置付け | 欠落時 |
 |---|---|---|
-| `system-footer.md` | kaoiro 既定 (環境認識 + peer-routing 規約)。置けば内蔵デフォルトを完全に置き換える | server バイナリ内蔵の既定文面を使う |
+| `system-footer.md` | kaoiro 既定 (環境認識 + peer-routing 規約 + 協調行動指針)。置けば内蔵デフォルトを完全に置き換える | server バイナリ内蔵の既定文面を使う |
 | `user-footer.md` | 運用者が自由記述する上乗せ。env 相当の環境固有ファイル | 何も足さない |
 
 - 合成順: `preset(claude_code) + personality + system-footer +
@@ -123,6 +123,14 @@ pack が無い予約 persona `default` でも、以下の footer 合成結果が
   rebuild ごとに各層の由来・文字数・短縮 hash を info ログへ出す
   (ADR-0045 F5)。読み取りの意味論(UTF-8 / regular file 限定 /
   一時 read_error の last-known-good)は ADR-0045 F6。
+- 協調行動指針 (`list_agents` で peer 状況を観察し判断し
+  `send_to_agent` で分担する原則) は `system-footer.md` 内蔵デフォルト
+  の一部として全ペルソナへ載る。文面は案 A (短い原則のみ、手順詳細は
+  含めない) で確定した ([ADR-0044](../adr/0044-coordination-injection-hitl.md)
+  F1 追補、issue #175)。運用者が `KAOIRO_FOOTER_DIR` の
+  `system-footer.md` で内蔵デフォルトを置き換えた場合、この指針も
+  含めて置き換わる (persona 固有ではなく全ペルソナ共通の指針である
+  ため)。
 
 ### 変更可能範囲
 
@@ -179,9 +187,6 @@ pack が無い予約 persona `default` でも、以下の footer 合成結果が
   再検討要
 - [persona-personality-vs-dialogue](../open-questions/persona-personality-vs-dialogue.md)
   — セリフ吹き出し UI 導入時の再検討
-- [coordination-footer-scope](../open-questions/coordination-footer-scope.md)
-  — フッターへ追記する協調指針の文面(長さ担保は ADR-0045 F5 で
-  決着済み)
 
 ## See Also
 
@@ -193,5 +198,7 @@ pack が無い予約 persona `default` でも、以下の footer 合成結果が
   [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
   (本 spec の適用モデル、旧 ADR-0026 を supersede)、
   [ADR-0045](../adr/0045-footer-file-externalization.md)(共通フッターの
-  外部ファイル化。実装済み。ADR-0029 F5/D5 を部分改訂)
+  外部ファイル化。実装済み。ADR-0029 F5/D5 を部分改訂)、
+  [ADR-0044](../adr/0044-coordination-injection-hitl.md)(協調行動指針の
+  フッター追記、F1)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)

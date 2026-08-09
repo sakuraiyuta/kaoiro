@@ -27,8 +27,6 @@
 | [codex-cwd-extraction](codex-cwd-extraction.md) | low | — | 2026-07-10 |
 | [codex-exec-approval-upstream](codex-exec-approval-upstream.md) | low | — | 2026-07-10 |
 | [claude-effort-levels-init-transition](claude-effort-levels-init-transition.md) | medium | — | 2026-07-14 |
-| [send-to-agent-auto-allow](send-to-agent-auto-allow.md) | high | protocol-inter-agent | 2026-07-28 |
-| [coordination-footer-scope](coordination-footer-scope.md) | medium | — | 2026-07-28 |
 | [coordination-report-routing](coordination-report-routing.md) | medium | — | 2026-07-28 |
 | [work-division-conflict-guard](work-division-conflict-guard.md) | low | — | 2026-07-28 |
 

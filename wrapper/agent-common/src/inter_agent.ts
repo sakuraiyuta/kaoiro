@@ -341,7 +341,36 @@ export type InboundReplyMode = "reply-owed" | "close-proposal" | "terminal";
  *  lookup) and drives the OPEN-track bound (`OPEN_TRACK_TTL_MS`,
  *  `#pruneStaleOpenTracks()`) — unlike `closedAtMs`, this one IS a sliding
  *  window, since an open track's own traffic is exactly the signal that it
- *  is still a real, live conversation. */
+ *  is still a real, live conversation. `autoAllowedPeer` (issue #175,
+ *  ADR-0044 F2 追補; issue #175 review round 4 — ふじ design-review
+ *  approve, gitea issue #211 comment 2719 条件 A) is the SOLE whitelist
+ *  authority for `send_to_agent` auto-allow: present and equal to some
+ *  `to` iff this wrapper has observed a SERVER-ACCEPTED ack for a
+ *  `send_to_agent` on this conversation_id addressed to that `to`.
+ *  `undefined` = no whitelist established yet. Written unconditionally
+ *  (not sticky-first) the moment `#dispatch()` resolves
+ *  `{kind: "accepted"}`, inside the same `#withCidLock` segment — see
+ *  `invoke()`'s acceptance handling. `rejected` and `unknown` acceptance
+ *  NEVER touch this field: an earlier design wrote it optimistically
+ *  before dispatch and needed three rounds of case-by-case guards to
+ *  approximate this same invariant, each round's guard reintroducing a
+ *  new bug (failure history: #211 comment 2715). Piggybacks on the
+ *  track's own TTL/cap eviction for cleanup (`#pruneTracks()`) rather
+ *  than a separate Set, so the field's lifetime never drifts from the
+ *  track it belongs to. Claude-only in practice (see
+ *  `isConversationAutoAllowed()`); Codex has no canUseTool gate to bypass
+ *  (ADR-0033 F3), so the field is written but never read there.
+ *  `mutationGen` (issue #175 review, ふじ M3; review round 4, ふじ 条件
+ *  C) is a monotonic counter bumped only when `receiveInbound()` /
+ *  `observeInbound()` actually CHANGES the value of `turnNumber` /
+ *  `remoteDone` / `closed` — see `invoke()`'s reject-cleanup branch for
+ *  why: it lets that branch detect whether a concurrent legitimate
+ *  inbound mutated the track WHILE this call's own send was in flight,
+ *  so a stale pre-dispatch snapshot can never silently clobber it. A
+ *  no-op touch (e.g. a synthetic `disconnected` notice with
+ *  turn_number=0/done=false, which changes nothing) must NOT bump it, or
+ *  that guard would wrongly read "something raced in" for a touch that
+ *  changed nothing. */
 interface ConversationTrack {
   turnNumber: number;
   localDone: boolean;
@@ -349,6 +378,8 @@ interface ConversationTrack {
   closed: boolean;
   closedAtMs?: number;
   lastActivityMs: number;
+  autoAllowedPeer?: string;
+  mutationGen: number;
 }
 
 /** How long a CLOSED track is kept before being pruned (issue #177: "長寿命
@@ -415,6 +446,7 @@ function freshTrack(nowMs: number): ConversationTrack {
     remoteDone: false,
     closed: false,
     lastActivityMs: nowMs,
+    mutationGen: 0,
   };
 }
 
@@ -593,7 +625,27 @@ export class InterAgentTool {
    *  (`#enforceTrackCap()`). Order matters only in that the two TTL passes
    *  should run before the count backstop, so the backstop only ever has
    *  to reach further when TTL alone did not already bring the map within
-   *  bound. */
+   *  bound.
+   *
+   *  issue #175 review round 3 (internal review perf finding, considered
+   *  and reverted): `isConversationAutoAllowed()` (canUseTool) and
+   *  `invoke()`'s own AC10 check both call this for the same
+   *  `send_to_agent` turn, an extra O(n) pass beyond what `skipPrune`
+   *  already avoids for invoke()'s own two internal call sites. A first
+   *  attempt memoized (nowMs, map size) to skip a same-tick repeat call,
+   *  but this is UNSAFE, not just imprecise: a `receiveInbound()` call
+   *  that flips an EXISTING track to `closed` (no size change) right
+   *  before a later, same-tick prune elsewhere would make that later
+   *  call wrongly skip the very pass meant to catch the now-excess
+   *  closed-track count — confirmed by an existing regression test
+   *  actually failing under a deterministic-clock repro before this was
+   *  reverted. A correct cache needs invalidation on every field
+   *  mutation that affects eviction eligibility (closed/closedAtMs
+   *  transitions across `receiveInbound()`/`invoke()`'s several
+   *  branches), not just size — a change with real risk of missing a
+   *  site, for a bounded-cost O(n) scan (n capped by `#maxTracks`) that
+   *  is not itself a correctness concern. Left as the accepted,
+   *  documented tradeoff. */
   #pruneTracks(): void {
     this.#pruneClosedTracks();
     this.#pruneStaleOpenTracks();
@@ -702,6 +754,44 @@ export class InterAgentTool {
     return prior === undefined ? run() : prior.then(run);
   }
 
+  /** Whether `send_to_agent` for `(conversationId, to)` may skip the
+   *  operator canUseTool dialog (issue #175, ADR-0044 F2 追補 —
+   *  conversation 単位 whitelist, 案 B). The whole invariant lives in one
+   *  field now (issue #175 review round 4 — ふじ design-review approve,
+   *  #211 comment 2719 条件 A): `to` is auto-allowed iff
+   *  `track.autoAllowedPeer === to` — see that field's doc comment on
+   *  `ConversationTrack`. Does NOT go through `#getTrack()`, which would
+   *  create a track (and touch `lastActivityMs`) as a side effect of
+   *  what must stay a pure read; an unknown or since-pruned
+   *  conversation_id simply reads as not auto-allowed, matching "this
+   *  wrapper has no live memory of having sent here before".
+   *
+   *  Prunes FIRST (issue #175 review, ふじ M1): without this, a
+   *  conversation_id whose track already aged out (TTL) or was evicted
+   *  (cap) still read auto-allowed until the NEXT `invoke()` call
+   *  happened to prune it from inside its own `#withCidLock` segment —
+   *  a real window where canUseTool would wrongly skip the dialog for a
+   *  conversation_id this wrapper no longer has any live memory of
+   *  having approved. `#pruneTracks()` only evicts; it never creates or
+   *  touches a surviving entry's `lastActivityMs`, so this stays a pure
+   *  read as far as `conversationId` itself is concerned. This does mean
+   *  a `send_to_agent` call now runs `#pruneTracks()` twice in the
+   *  common case — once here from canUseTool, once more from `invoke()`'s
+   *  own AC10 check moments later — see `#pruneTracks()`'s doc comment
+   *  for why that redundant O(n) pass is an accepted tradeoff rather
+   *  than something this method tries to cache around.
+   *
+   *  Consulted by the Claude host's canUseTool before invoking the
+   *  permission broker — Codex has no such gate to consult (ADR-0033
+   *  F3, approval pinned to `never`). Auto-allow gates only the DIALOG;
+   *  `invoke()` still runs its own validity checks (AC10 closed guard,
+   *  etc.) regardless of this flag. */
+  isConversationAutoAllowed(conversationId: string, to: string): boolean {
+    this.#pruneTracks();
+    const track = this.#conversations.get(conversationId);
+    return track?.autoAllowedPeer === to;
+  }
+
   /** Records the turn_number of an inbound message so subsequent outbound
    *  turns stay monotonic per conversation regardless of which side authored
    *  the latest message. A narrower sibling of `receiveInbound()` — no
@@ -709,7 +799,12 @@ export class InterAgentTool {
    *  bookkeeping (e.g. tests exercising outbound ordering in isolation). */
   observeInbound(conversationId: string, turnNumber: number): void {
     const track = this.#getTrack(conversationId);
-    if (turnNumber > track.turnNumber) track.turnNumber = turnNumber;
+    if (turnNumber > track.turnNumber) {
+      track.turnNumber = turnNumber;
+      // issue #175 review round 3 (ふじ M3): see `mutationGen`'s doc
+      // comment on `ConversationTrack` / `genAtDispatch` in `invoke()`.
+      track.mutationGen += 1;
+    }
   }
 
   /** Handles an inbound envelope before the CLI schedules normal next-turn
@@ -777,8 +872,23 @@ export class InterAgentTool {
       return { consumed: false, inject: false, mode: "reply-owed" };
     }
 
-    if (turnNumber > track.turnNumber) track.turnNumber = turnNumber;
-    if (payload.meta?.done === true) track.remoteDone = true;
+    // issue #175 review round 4 (ふじ 条件 C, #211 comment 2719):
+    // `mutated` tracks whether this envelope actually changed
+    // `turnNumber` / `remoteDone` / `closed` — `mutationGen` below is
+    // bumped only when it did (see that field's doc comment on
+    // `ConversationTrack`). A no-op touch (e.g. a synthetic
+    // `disconnected` notice with turn_number=0/done=false) must read as
+    // unmutated, or `invoke()`'s reject-cleanup race guard would wrongly
+    // treat it as proof that something raced in.
+    let mutated = false;
+    if (turnNumber > track.turnNumber) {
+      track.turnNumber = turnNumber;
+      mutated = true;
+    }
+    if (payload.meta?.done === true && !track.remoteDone) {
+      track.remoteDone = true;
+      mutated = true;
+    }
     // issue #177 (review must-fix): closed(terminal) has two independent
     // routes, not one — protocol-inter-agent.md's lifecycle section: "両
     // owner-side の done=true が揃った、または hard limit 超過". A
@@ -798,7 +908,15 @@ export class InterAgentTool {
     ) {
       track.closed = true;
       track.closedAtMs = this.#nowMs();
+      mutated = true;
     }
+    // issue #175 review round 3 (ふじ M3); round 4 (ふじ 条件 C): bumped
+    // only when `mutated` above is true — see `mutationGen`'s doc
+    // comment on `ConversationTrack` / `genAtDispatch` in `invoke()`.
+    // Deliberately still gated on reaching this point AFTER the `stale`
+    // early-return above: a stale/duplicate delivery is never a
+    // mutation candidate at all.
+    if (mutated) track.mutationGen += 1;
     const mode: InboundReplyMode = track.closed
       ? "terminal"
       : track.remoteDone
@@ -1038,18 +1156,82 @@ export class InterAgentTool {
           };
         }
 
-        // issue #177 review M3: remember whether THIS call creates a
-        // brand-new track, so a rejected send (nothing reached the peer)
-        // can remove it entirely instead of leaving a permanent phantom
-        // OPEN entry — an unbounded-growth vector distinct from the
-        // closed-track cap (AC6).
-        const trackExistedBefore = this.#conversations.has(conversationId);
         // review-round2 (QUALITY/perf): the AC10 check above already ran
         // #pruneTracks() moments ago, synchronously, with nothing having
         // touched #conversations in between (the closed-check and
         // dupe-waiter-check are both read-only) — re-pruning here would be
         // a pure redundant full-map rescan on every send_to_agent call.
         const track = this.#getTrack(conversationId, { skipPrune: true });
+        // issue #177 review M3 (originally `trackExistedBefore`, map
+        // presence): remember whether this track had NO real history yet
+        // — no turn, no done/closed signal from either side — so a
+        // rejected send (nothing reached the peer) can be treated as
+        // "nothing happened" below instead of leaving stale state behind.
+        //
+        // issue #175 review round 2: reads track FIELDS rather than map
+        // presence, and is captured BEFORE this call's own optimistic
+        // mutations just below. Map presence stopped being the right
+        // signal once the round-1 fix changed the rejection-cleanup gate
+        // (below) from deleting the track to resetting it in place — see
+        // that gate's comment (issue #175 review round 4) for the
+        // current rationale: once the entry is left in the map instead
+        // of removed, a SECOND
+        // rejected retry on the same conversation_id would read
+        // `trackExistedBefore=true` and skip the reset — leaving
+        // turnNumber stuck non-zero and misclassifying the next
+        // legitimate inbound as a stale duplicate (reproduced and
+        // confirmed). `wasBlank` instead reads true on every repeated
+        // failed retry, since each reset leaves the track blank again;
+        // an inbound arriving first (or a previously ACCEPTED send)
+        // leaves at least one field non-blank, so it still reads false —
+        // preserving the original "don't erase real history" intent.
+        const wasBlank =
+          track.turnNumber === 0 &&
+          !track.localDone &&
+          !track.remoteDone &&
+          !track.closed;
+        // issue #175 review round 3 (ふじ M3): the generation this track
+        // is at right now, BEFORE this call's own optimistic mutations
+        // and BEFORE the `#dispatch()` await below. `#pendingDoneAcks`
+        // only gates `done=true` sends against a concurrent
+        // `receiveInbound()` — a non-`done` send (this path) has no such
+        // protection, so a legitimate inbound (a genuine reply, or a
+        // server-synthesized hard-limit close) can race in and mutate
+        // this SAME track while `#dispatch()` is still in flight. If
+        // that happens and this send is then rejected for a reason
+        // OTHER than `conversation_closed`, the reject-cleanup below
+        // must NOT act on the stale `wasBlank` snapshot as if nothing
+        // happened — that would silently discard the concurrent
+        // inbound's legitimate mutation (e.g. an authoritative
+        // `closed=true` reverting to OPEN, restoring exactly the split-
+        // brain #177 review M2's `#pendingDoneAcks` gate was built to
+        // prevent for `done=true` sends, but here for the reject-cleanup
+        // path instead of the localDone flip). Comparing
+        // `track.mutationGen` against this snapshot after the await
+        // detects whether any such race happened, without needing to
+        // gate `receiveInbound()` behind a lock for every send (only
+        // `done=true` ones are — see `#pendingDoneAcks`).
+        const genAtDispatch = track.mutationGen;
+        // issue #175 (ADR-0044 F2 追補; issue #175 review round 4 — ふじ
+        // design-review approve, #211 comment 2719 条件 A): reaching
+        // this point already required canUseTool to allow this call
+        // (operator dialog or a prior auto-allow), but that alone is
+        // NOT sufficient to establish the (conversation_id, to)
+        // whitelist pair — `autoAllowedPeer` is written only once the
+        // SERVER has actually accepted the send (see the
+        // `acceptance.kind === "accepted"` branch below), never here,
+        // and never on reject/unknown. An earlier design wrote it
+        // optimistically here, pre-dispatch, and needed three rounds of
+        // case-by-case guards (sticky-first, `wasBlank`-gated overwrite,
+        // …) to approximate the same invariant, each guard
+        // reintroducing a new bug: an established peer's binding
+        // revoked by a rejected different-`to` attempt, a typo'd first
+        // attempt permanently squatting the slot, and a rejected peer
+        // ending up auto-allowed instead of the actually-established one
+        // (full failure history: #211 comment 2715). Moving the write
+        // to "accepted only, unconditional overwrite" makes all of
+        // those structurally impossible instead of separately guarded
+        // against.
         track.turnNumber += 1;
         // receiveInbound() can advance the shared conversation track while
         // this invocation awaits a peer, but the acknowledgement must
@@ -1187,6 +1369,22 @@ export class InterAgentTool {
             this.#pendingInjections.delete(conversationId);
           }
 
+          // issue #175 review round 4 (ふじ design-review approve, #211
+          // comment 2719 条件 A/B): the (conversation_id, to) whitelist
+          // pair is established HERE and ONLY here — a server-ACCEPTED
+          // ack, written unconditionally (overwriting any prior peer
+          // bound to this conversation_id; see `autoAllowedPeer`'s doc
+          // comment on `ConversationTrack` for why that overwrite is
+          // correct, not a regression). `unknown` deliberately does NOT
+          // promote (条件 B): an unacknowledged send is not proof the
+          // conversation is genuinely established with this peer —
+          // treating it as a whitelist trigger would let a send whose
+          // delivery is still unconfirmed auto-allow every later send to
+          // that peer.
+          if (acceptance.kind === "accepted") {
+            track.autoAllowedPeer = args.to;
+          }
+
           if (acceptance.kind === "rejected") {
             if (acceptance.reason === "conversation_closed") {
               // issue #177 review M2: the server is authoritative that
@@ -1205,14 +1403,56 @@ export class InterAgentTool {
                 track.closed = true;
                 track.closedAtMs = this.#nowMs();
               }
-            } else if (!trackExistedBefore) {
-              // A brand-new track created solely for this rejected
-              // attempt represents a conversation that never actually
-              // started; remove it rather than leaving a phantom OPEN
-              // entry (AC6). This also discards any optimistic localDone
-              // flip on the same track — no separate rollback needed for
-              // the brand-new case.
-              this.#conversations.delete(conversationId);
+            } else if (wasBlank && track.mutationGen === genAtDispatch) {
+              // A track with no real history, rejected on its first real
+              // attempt, represents a conversation that never actually
+              // started — reset it to a blank state rather than leaving
+              // it looking like a live conversation (AC6's phantom-OPEN-
+              // entry concern), which also discards any optimistic
+              // localDone flip on the same track (no separate rollback
+              // needed for the blank case).
+              //
+              // issue #175 review round 4 (ふじ design-review approve,
+              // #211 comment 2719 条件 A): `autoAllowedPeer` needs no
+              // explicit preservation here, unlike in rounds 1-3. It is
+              // never written before `#dispatch()` resolves to
+              // `{kind: "accepted"}` (see that branch above), and a
+              // rejected first attempt on a `wasBlank` track by
+              // definition never reached it — so there is nothing to
+              // preserve. `freshTrack()` does not set the field either,
+              // so `Object.assign` below simply leaves whatever value it
+              // already held (always `undefined` in this branch)
+              // untouched.
+              //
+              // issue #175 review round 3 (ふじ M3, #211): guarded by
+              // `track.mutationGen === genAtDispatch` in addition to
+              // `wasBlank`. `wasBlank` alone told us the track was blank
+              // BEFORE this call's own optimistic mutations — it says
+              // nothing about whether a concurrent `receiveInbound()`
+              // legitimately mutated the SAME track while `#dispatch()`
+              // was in flight (see `genAtDispatch`'s doc comment).
+              // Without this half, a race — non-`done` send in flight, a
+              // genuine inbound (including a server-synthesized
+              // hard-limit close) lands on the same conversation_id,
+              // THEN this send is rejected for a reason other than
+              // `conversation_closed` — would still reset here and
+              // silently discard that inbound's legitimate mutation
+              // (e.g. an authoritative `closed=true` reverting to OPEN).
+              // `mutationGen` is bumped only when `receiveInbound()` /
+              // `observeInbound()` actually changes `turnNumber` /
+              // `remoteDone` / `closed` (issue #175 review round 4, ふじ
+              // 条件 C — a no-op touch, e.g. a synthetic `disconnected`
+              // notice, must not trip this guard), so comparing it
+              // against the pre-dispatch snapshot detects exactly this:
+              // unchanged means nothing raced in, safe to reset; changed
+              // means fall through and leave the track as the
+              // concurrent, legitimate mutation left it (below, for a
+              // non-`done` send `localDoneSnapshot` is always null, so
+              // nothing further runs — the concurrent write stands as
+              // the final state, which is correct: it is the more
+              // recent, authoritative one).
+              Object.assign(track, freshTrack(track.lastActivityMs));
+              delete track.closedAtMs;
             } else if (localDoneSnapshot) {
               track.localDone = localDoneSnapshot.localDone;
               track.closed = localDoneSnapshot.closed;

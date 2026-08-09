@@ -584,7 +584,83 @@ wrapper-A が `send_to_agent` ツールを呼ぶ際、wrapper は既存の
   専用 UI に磨く
 - deny した場合、tool 呼び出しは失敗。wrapper-A は SDK に「送信
   拒否」のエラーを返し、エージェントは別の応答を試みる
-- 自動承認の仕組み(per conversation_id whitelist)は Phase 2 以降
+
+#### 自動承認 (conversation 単位 whitelist、ADR-0044 F2 追補・案 B)
+
+同一 `(conversation_id, to)` への 2 回目以降の `send_to_agent` は、
+**この wrapper プロセスが直前にその `(conversation_id, to)` への
+`send_to_agent` を server に受理 (accepted ack) させていれば**
+canUseTool を経由せず自動許可する(operator ダイアログは出ない)。
+
+- whitelist は **wrapper プロセスのメモリ内のみ**(conversation の
+  lifecycle track に載る field(`autoAllowedPeer`)、issue #177 の
+  `ConversationTrack` 拡張)。`conversation_id` と、承認時点の `to` の
+  **両方**に束縛される
+  (issue #175 review round 3、ふじ M2 — `conversation_id` 単独では、
+  `unknown_agent` reject 後に同一 `conversation_id` のまま別 `to` へ
+  差し替える送信も自動許可してしまう)。server 側の永続化はしない。
+  **wrapper プロセスの再起動 (再 launch を含む)**、または track 自体の
+  TTL/cap eviction で失われ、その conversation は再度初回承認からに
+  なる。transport の reconnect (WS 切断→再接続) はこれに含まれない
+  — 同一プロセス内の `InterAgentTool` インスタンスはそのまま生き続け、
+  reconnect は operator が既に承認した会話の信頼を失効させる理由には
+  ならない。
+- whitelist は **wrapper インスタンスごとに独立**する。A が開始した
+  conversation を B が初めて返信する際、B 側 wrapper にとってはその
+  conversation_id が未知のため、B の初回送信は通常どおり canUseTool
+  で承認を要する。
+- 新規 conversation(`conversation_id` 省略、送信後に wrapper が
+  新規採番して返す)の**最初の送信は必ず** canUseTool を経由する
+  (この時点では `conversation_id` が確定していないため whitelist に
+  何も無い)。
+- **whitelist を確立するのは「最初に operator-approved かつ
+  server-accepted な送信」のみ**(issue #175 review round 4、ふじ
+  design-review approve、条件 A — gitea issue #211
+  [comment 2719](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/211#issuecomment-2719))。
+  canUseTool の承認(operator dialog、または既存の auto-allow)は
+  「送信を試みてよいか」を決めるだけで、それ自体は whitelist を
+  書き込まない。実装は `#dispatch()` が server から
+  `{kind: "accepted"}` を返した時点で `(conversation_id, to)` を
+  whitelist へ登録する — **reject された送信、および ack が届かない
+  `unknown`(配送不明)は whitelist に一切触れない**。`unknown` を
+  昇格させない判断の根拠は、不明な状態は承認要求を維持する安全側へ
+  倒すという本リポジトリの一貫した設計方針
+  ([ADR-0051](../adr/0051-history-restart-resilience.md) D3-2 等)との
+  整合、および代償の非対称性(`accepted` のみに限定した場合の代償は
+  `unknown` が続く限り dialog が出続ける UX 上の不便に留まるのに対し、
+  `unknown` を whitelist 化した場合の代償は「配送されたか分からない
+  peer への送信が以後無承認で行われる」という permission bypass 方向の
+  リスクである)。
+  旧実装(issue #175 review round 1-3)は「canUseTool 通過時点で
+  楽観的に登録し、reject 時にケースごとに保護/巻き戻す」設計を採って
+  おり、3 巡の内部レビューで新規欠陥を出し続けた末に破棄した — 失敗
+  履歴は
+  [#211 comment 2715](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/211#issuecomment-2715)、
+  設計判定は
+  [#211 comment 2719](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/211#issuecomment-2719)
+  を参照。
+- **非 `done` 送信の dispatch 待機中に届いた inbound とのレース
+  (issue #175 review round 3、ふじ M3、gitea issue #211)**:
+  `#dispatch()` の応答を待っている間に、同じ `conversation_id` へ
+  正当な inbound (server 合成の hard-limit 強制終了通知を含む) が
+  届くケースでは、whitelist 登録が上記のとおり accepted 時のみに
+  限定されたため、reject された送信がこの race を通じて whitelist を
+  不正に確立することは構造的にない。track の `closed` / `turnNumber`
+  状態については、reject 時のクリーンアップが inbound の書き込み
+  (`closed=true` 等) を上書きしないよう `mutationGen`(実際に値が
+  変化した時のみ加算するカウンタ、issue #175 review round 4、ふじ
+  条件 C)で保護している — 詳細は
+  `wrapper/agent-common/src/inter_agent.ts` の `invoke()` /
+  `receiveInbound()` のコードコメントを正とする。
+- 本節は **Claude の canUseTool 経路にのみ適用される**。Codex は
+  approval が `never` 固定で canUseTool 相当の経路自体が無い
+  ([ADR-0033](../adr/0033-permission-model-dual-axis.md) F3) ため、
+  `send_to_agent` はもとから無条件で自動許可されており、本節の
+  whitelist を追加で適用する対象がない。
+- kind による区別はしない(query/response も request/propose も同じ
+  whitelist を共有する)。責務範囲(ADR-0044 F2)を auto-allow の判定
+  軸には使わない — 責務内外に関わらず、conversation 単位の初回承認
+  だけがゲートになる。
 
 ### 受信側(wrapper-B)の挙動
 

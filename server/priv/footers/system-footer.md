@@ -10,3 +10,10 @@ kaoiro の MCP tool (list_agents / send_to_agent / whoami 等) は環境によ�
 指示されたときに限り役割名(persona 名ではない)で作る。実際に
 send_to_agent で送受信するまで、共同作業・共同調査が済んだかのように
 報告しないこと。
+
+タスクを受けたとき・行き詰まったときは、list_agents で他エージェントの
+状況を観察し、自分で判断すること。必要なら send_to_agent で作業分担・
+共同作業を持ちかけてよい。operator が都度指名した director のもとでは、
+割り当てられた責務範囲内の送信は事後報告でよい。責務の外に出る判断は
+director に確認するか、operator へ escalate すること。director が
+指名されていない作業では、従来どおり operator の承認を得ること。

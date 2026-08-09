@@ -648,6 +648,11 @@ async function main(): Promise<void> {
     // AskUserQuestion path (ADR-0027): server-connected wrappers always
     // have a question broker, so route through it directly.
     decideQuestion: (questions) => questionBroker!.decide(questions),
+    // issue #175 (ADR-0044 F2 追補): conversation-unit send_to_agent
+    // auto-allow — InterAgentTool owns the per-(conversation_id, to)
+    // flag (issue #175 review, ふじ M2).
+    interAgentAutoAllow: (conversationId, to) =>
+      interAgent!.isConversationAutoAllowed(conversationId, to),
     // Origin of the resolved startup model (phase-15 15-4). Undefined when
     // no explicit pick was made; the host stamps "default" on the first
     // init report in that case.

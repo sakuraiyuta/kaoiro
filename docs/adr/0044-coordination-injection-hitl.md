@@ -55,9 +55,8 @@ auto-allow を「Phase 2 以降」と保留)。運用ルール上も「作業配
 の server 集約 SoT 共通フッターに追記し、kaoiro 上で起動した**全
 エージェント**へ system prompt append で自動注入する。engine 非依存
 の既存機構の延長であり、Claude Code skill (SKILL.md) 形式の配布は
-採らない。指針の文面と長さは
-[coordination-footer-scope](../open-questions/coordination-footer-scope.md)
-で確定する。
+採らない。指針の文面と長さは案 A (短い行動原則のみ) で確定した
+(2026-08-08 マスター決裁、詳細は下記追補)。
 
 ### F2 — HITL 境界は「都度指名 director のもとでの責務内自律」
 
@@ -73,10 +72,9 @@ director を都度指名する
 HITL の起点は **director の指名と責務範囲の設定** であり、責務内の
 個々の `send_to_agent` ではない。これに伴い現行運用「作業配分の約束は
 escalate 対象」(2026-07-21 決裁) を、責務範囲内に限って改訂する。
-前提として `send_to_agent` の auto-allow を protocol-inter-agent の
-「Phase 2 以降」から前倒しで決定する必要がある — 技術的な適用範囲は
-[send-to-agent-auto-allow](../open-questions/send-to-agent-auto-allow.md)
-で確定する。
+前提となる `send_to_agent` の auto-allow は、protocol-inter-agent の
+「Phase 2 以降」から前倒しし、案 B (conversation 単位 whitelist) で
+確定した (2026-08-08 マスター決裁、詳細は下記追補)。
 
 **破壊的操作は責務内自律の対象外。** session reset (`/new`・`/clear`)
 は ADR-0043 D2/D4 のとおり、対象エージェント自身の tool 呼び出し +
@@ -88,6 +86,34 @@ permission broker 都度承認を維持する。director が配下の reset を�
 協調判断の発動は、自分がタスクを受けた時・行き詰まった時に peer
 状況を確認して行う**受動型**とする。idle エージェントが定期的に
 peer を監視して支援を申し出る能動監視 (polling 常駐) はスコープ外。
+
+### 追補 (2026-08-09、issue #175 — 残 open-question の決着)
+
+2026-08-08 マスター決裁により、F1/F2 が前提としていた残り 2 件の
+open-question を決着した。
+
+- **send-to-agent-auto-allow**: 案 B (conversation 単位 whitelist) を
+  採用。最初に operator 承認 (`canUseTool`) を経て server に accepted
+  された送信のみがその `(conversation_id, to)` の組合せを確立し、
+  以降の `send_to_agent` を自動許可する — canUseTool の承認を経ただけ
+  (server がまだ受理していない、または reject/unknown) では組合せは
+  成立しない (`to` も束縛するのは外部レビューでの指摘、
+  [#211](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/211)
+  参照 — conversation_id 単独では reject 後の宛先差し替えが dialog を
+  飛ばしてしまう)。暴走ガード (#177 で一部対応) がまだ弱い現状では、
+  狭い範囲の自動許可が安全という判断。詳細な実装挙動 (dispatch 待機中
+  の受信レースへの耐性を含む) は
+  [protocol-inter-agent](../specs/protocol-inter-agent.md) 「自動承認」
+  節を正とする。
+- **coordination-footer-scope**: 案 A (短い行動原則のみ) を採用。
+  kind の使い分けや報告形式といった手順の詳細はフッターに含めない。
+  不足が判明すれば運用計測後に拡張する。長さ担保の機構は
+  [ADR-0045](0045-footer-file-externalization.md) F5 で別途決着済み。
+
+両 open-question は decided 反映のうえ close (削除) した。実装は本
+issue ([#175](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/175))
+で行う ([protocol-inter-agent](../specs/protocol-inter-agent.md)
+「承認フロー」節、server 側 `priv/footers/system-footer.md`)。
 
 ## Consequences
 

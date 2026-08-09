@@ -41,6 +41,7 @@ import type {
   QuestionDecision,
 } from "@kaoiro/agent-common";
 import {
+  INTER_AGENT_TOOL_FQN,
   initialMachineState,
   effectiveStatusEnvelopeFields,
   effectiveStatusWhoamiFields,
@@ -247,6 +248,20 @@ export interface AgentHostOptions {
   decideQuestion?: (
     questions: Question[],
   ) => Promise<QuestionDecision> | QuestionDecision;
+  /**
+   * Conversation-unit auto-allow for `send_to_agent` (issue #175, ADR-0044
+   * F2 追補 — 案 B). When it returns true for the call's
+   * `(conversation_id, to)` pair, `#canUseTool` allows the call without
+   * invoking `decidePermission` at all — no dialog, no waiting_permission
+   * transition. Bound to `to` as well as `conversation_id` (issue #175
+   * review, ふじ M2) so a retry to a DIFFERENT peer on the same
+   * conversation_id (e.g. after an `unknown_agent` reject from a typo'd
+   * `to`) still goes through the dialog. Normally
+   * `InterAgentTool#isConversationAutoAllowed`. Omitted = every
+   * `send_to_agent` call goes through the normal `decidePermission` path
+   * (pre-#175 behaviour).
+   */
+  interAgentAutoAllow?: (conversationId: string, to: string) => boolean;
   /**
    * Extra query options (tools, allowedTools, cwd, model, …). Merged over the
    * defaults; canUseTool is reserved by the host and cannot be overridden.
@@ -1357,6 +1372,28 @@ export class AgentHost implements EngineAdapter {
     const decideQuestion = this.#options.decideQuestion;
     if (toolName === "AskUserQuestion" && decideQuestion) {
       return this.#askUserQuestion(decideQuestion, input);
+    }
+    // issue #175 (ADR-0044 F2 追補, 案 B): a conversation-unit whitelist
+    // for send_to_agent. When this wrapper already had an approved send on
+    // the SAME `(input.conversation_id, input.to)` pair (issue #175
+    // review, ふじ M2 — not conversation_id alone), skip the broker (and
+    // the waiting_permission transition below) entirely — no dialog for
+    // this call. A brand-new conversation (conversation_id omitted), one
+    // this wrapper has never sent under, or a retry to a DIFFERENT `to`
+    // on a known conversation_id always falls through to the normal
+    // decide() path, since isConversationAutoAllowed() has nothing to
+    // match yet.
+    const autoAllow = this.#options.interAgentAutoAllow;
+    if (toolName === INTER_AGENT_TOOL_FQN && autoAllow) {
+      const conversationId = input.conversation_id;
+      const to = input.to;
+      if (
+        typeof conversationId === "string" &&
+        typeof to === "string" &&
+        autoAllow(conversationId, to)
+      ) {
+        return { behavior: "allow", updatedInput: input };
+      }
     }
     const decide = this.#options.decidePermission;
     // Kick off the decider FIRST so it (synchronously, in the broker

@@ -26,9 +26,9 @@ director (クロエ) が巻き取り、マスター向け意思決定まとめ�
 
 ## 影響
 
-ADR-0044 の実装 (kaoiro issue #87 派生) のうち、報告規約の文面
-([coordination-footer-scope](coordination-footer-scope.md)) が
-ブロックされる。
+ブロックする実装はない。coordination-footer-scope は #175 で案 A
+(短い行動原則のみ、報告規約の手順詳細はフッターに含めない) として
+本問と独立に決着したため、本問の解決を待たない。
 
 ## 判断材料
 
@@ -42,6 +42,7 @@ ADR-0044 の実装 (kaoiro issue #87 派生) のうち、報告規約の文面
 
 ## 解決時のアクション
 
-- [ ] 報告規約を確定し協調指針の文面へ反映する
+- [ ] 報告規約を確定する(協調指針フッターは案 A で確定済みのため、
+      手順詳細はフッターでなく参照文書側で表現する)
 - [ ] 必要なら通知 envelope を protocol spec に追記する
 - [ ] 本 open-question を close (削除)
