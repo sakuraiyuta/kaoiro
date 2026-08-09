@@ -298,14 +298,34 @@ async function main(): Promise<void> {
     },
     onAttachChunk: (payload) => host.attachChunk(payload),
     onAttachClose: (uploadId) => host.attachClose(uploadId),
-    onInterAgentMessage: (envelope) => {
+    // issue #177 review round 2 (ふじ差し戻し): async — receiveInbound() may
+    // gate briefly on a concurrently in-flight done=true send_to_agent for
+    // the same conversation_id, so it must be awaited before this handler
+    // acts on the disposition (host.send / notePendingInjection). The
+    // caller (transport.ts) does not await onInterAgentMessage — an async
+    // handler here is still fire-and-forget from its perspective, exactly
+    // as the previous synchronous one was.
+    onInterAgentMessage: async (envelope) => {
       // Recorded before anything consumes it (ADR-0051 D3-2 receive side).
       recordInboundIa(envelope);
-      if (interAgent?.receiveInbound(envelope)) {
+      const disposition = (await interAgent?.receiveInbound(envelope)) ?? {
+        consumed: false,
+        inject: true,
+        mode: "reply-owed" as const,
+      };
+      if (disposition.consumed) {
         process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
         return;
       }
-      const text = formatInboundMessage(envelope);
+      // issue #177 AC9: a late/stale/duplicate turn_number is neither a
+      // fresh reply nor owed one — drop it without touching the SDK queue.
+      if (!disposition.inject) {
+        process.stdout.write(
+          `  inter_agent_message stale/duplicate turn dropped: ${envelope.agent_id}\n`,
+        );
+        return;
+      }
+      const text = formatInboundMessage(envelope, { mode: disposition.mode });
       process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
       // issue #131: this wrapper now owes a reply on the conversation. Tag
       // the queued turn with the conversation_id (must-fix 1: turn-scoped
@@ -314,7 +334,13 @@ async function main(): Promise<void> {
       const conversationId = (
         envelope.payload as Partial<InterAgentMessagePayload>
       ).conversation_id;
-      interAgent?.notePendingInjection(envelope);
+      // issue #177 AC8: a terminal (both-done) message owes no reply, so it
+      // must not be tracked as a pending injection — that would make a
+      // silent (correctly unanswered) turn look like a failure to
+      // resolveTurnEnd() and produce a spurious error notice.
+      if (disposition.mode !== "terminal") {
+        interAgent?.notePendingInjection(envelope);
+      }
       instructionChain = instructionChain.then(() =>
         host.send(text, undefined, conversationId).catch((err: unknown) => {
           process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);

@@ -4,29 +4,66 @@ defmodule KaoiroServer.ConversationStates do
   spec, phase-8 Stage B). In-memory only — a conversation that lives across
   a server restart starts fresh (Phase 2 / ADR-0014 will address durability).
 
-  For each `conversation_id` we keep the turn count, the running token
-  approximation (`byte_size(body) ÷ 3` per message — protocol-inter-agent
-  spec, intentionally coarse), the wallclock start time, the participating
-  agent_id set, the set of agent_ids that have signalled `meta.done=true`
-  so far, and the set already reported unreachable to their peers
-  (`claim_unreachable_targets/3`, issue #131). `record_message/5`
+  For each `conversation_id` we keep the turn count, the highest
+  `turn_number` seen (`max_turn_number`, issue #177 review M1 — a
+  wrapper-supplied sequence distinct from `turns`, which merely counts
+  accepted messages), the running token approximation (`byte_size(body)
+  ÷ 3` per message — protocol-inter-agent spec, intentionally coarse),
+  the wallclock start time, the participating agent_id set, the set of
+  agent_ids that have signalled `meta.done=true` so far, and the set
+  already reported unreachable to their peers
+  (`claim_unreachable_targets/3`, issue #131). `record_message/6`
   increments the counters and returns:
 
     * `:ok` — within limits, conversation still open.
     * `:both_done` — within limits, this message carried `done=true` and the
-      counterpart side had already done so. The entry is removed atomically;
-      the caller relays the envelope but performs no further close.
+      counterpart side had already done so. The entry transitions atomically
+      to a CLOSED tombstone (below); the caller relays the envelope but
+      performs no further close.
     * `{:exceeded, reason}` — hard-limit overshoot (`:max_turns` / `:max_tokens`
-      / `:max_wallclock` / `:max_concurrent_agents`). The entry is removed.
+      / `:max_wallclock` / `:max_concurrent_agents`). The entry transitions to
+      a tombstone carrying that reason.
+    * `{:error, :conversation_closed}` — a message arrived for a
+      `conversation_id` that already holds a CLOSED tombstone (issue #177):
+      a delayed / duplicate / out-of-order message reaching a conversation
+      that already ended (both-done or a hard limit). Not relayed, stored,
+      or broadcast — this is what stops a completed conversation from
+      reopening into a done / escalate ping-pong.
+    * `{:error, :stale_turn}` — `turn_number` is not greater than
+      `max_turn_number` already recorded for this OPEN conversation (issue
+      #177 review M1): a late, duplicate, or out-of-order delivery. The
+      caller (channel ingress) only ever passes a positive integer here —
+      `turn_number=0` is reserved for server-synthesized notices, which
+      never reach this function (they are pushed directly, never submitted
+      through the wrapper ingress path this function serves).
     * `{:error, :participants_mismatch}` — the sender/recipient pair is not
-      part of an existing entry under that `conversation_id` (cross-conversation
-      pollution defense, protocol-inter-agent threat-model).
+      part of an existing OPEN entry under that `conversation_id`
+      (cross-conversation pollution defense, protocol-inter-agent
+      threat-model).
     * `{:error, :too_many_conversations}` — the global `max_conversations` cap
-      blocked a brand-new conversation; existing entries are unaffected.
+      blocked a brand-new conversation; existing entries (open or
+      tombstoned) are unaffected.
 
-  A periodic sweep (`:gc` self-message) drops entries whose wallclock has
-  expired even without further messages — without it, a stale entry would
-  pin memory until the next message under the same id.
+  A CLOSED tombstone (`status: :closed`) replaces the open entry in place
+  under the same key: `reason` (why it closed), `closed_at` (monotonic ms,
+  the TTL clock), `agents` (the former participant set) and `last_turn`
+  (the turn count reached at closing) are kept for observability and for
+  rejecting further sends; `tokens` / `started_at` / `done_by` /
+  `max_turn_number` / `notified_unreachable` are dropped — a closed
+  conversation never accepts another message, so nothing needs them again
+  (`{:error, :conversation_closed}` is checked before `:stale_turn`, so a
+  closed entry never needs its own turn bookkeeping). A tombstone still counts
+  against `max_conversations` (bounded memory) and is excluded from
+  `peer_index/1` and `claim_unreachable_targets/3` (not an active
+  conversation).
+
+  A periodic sweep (`:gc` self-message) transitions OPEN entries whose
+  wallclock has expired into a `:max_wallclock` tombstone even without
+  further messages — without it, a stale entry would pin memory until the
+  next message under the same id. The same sweep deletes tombstones once
+  `max_wallclock_ms` has elapsed since `closed_at`, so a `conversation_id`
+  may be reused for a brand-new conversation after that TTL (IDs are
+  UUIDs, so this is not a permanent tombstone).
   """
 
   use GenServer
@@ -38,21 +75,42 @@ defmodule KaoiroServer.ConversationStates do
   # so an expired conversation never lingers more than the sweep interval.
   @gc_interval_ms 60_000
 
-  @doc "Starts the tracker; tests can register an isolated instance via `:name`."
+  @doc """
+  Starts the tracker; tests can register an isolated instance via `:name`.
+
+  `:clock` (issue #177 review nit2, AGENTS.md「Avoid Process.sleep/1 in
+  tests」) overrides the monotonic-ms time source — a 0-arity function,
+  default `&System.monotonic_time(:millisecond)/0`. Tests inject a
+  deterministic clock (e.g. an `Agent` holding an integer) instead of
+  sleeping real wallclock time to make GC / TTL behaviour observable.
+  """
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, name, name: name)
+    clock = Keyword.get(opts, :clock, &default_clock/0)
+    GenServer.start_link(__MODULE__, {name, clock}, name: name)
   end
+
+  defp default_clock, do: System.monotonic_time(:millisecond)
 
   @doc """
   Records a new message in `conversation_id` from `from` to `to`, weighing
-  the body for token accounting. `done?` is `payload.meta.done` for this
-  message — `true` records the sender as having signalled done; the entry
-  only closes once every participating agent has done so (spec MUST: both
-  owner-side done で対話完了).
+  the body for token accounting. `turn_number` is the sender's claimed
+  sequence number for this message (issue #177 review M1) — the caller
+  (channel ingress) validates it is a positive integer before this call;
+  a value no greater than the conversation's already-recorded
+  `max_turn_number` is rejected as `{:error, :stale_turn}` without
+  advancing any counter (defense in depth: the channel already applies
+  the same positive-integer rule at ingress, this is the OPEN-entry
+  monotonicity check that rule alone cannot express). `done?` is
+  `payload.meta.done` for this message — `true` records the sender as
+  having signalled done; the entry only closes once every participating
+  agent has done so (spec MUST: both owner-side done で対話完了). A
+  message for an already-CLOSED `conversation_id` is rejected outright
+  (`{:error, :conversation_closed}`, issue #177) — see the moduledoc for
+  the tombstone lifecycle.
   """
-  def record_message(conversation_id, from, to, body, done?, server \\ __MODULE__) do
-    GenServer.call(server, {:record, conversation_id, from, to, body, done?})
+  def record_message(conversation_id, from, to, body, turn_number, done?, server \\ __MODULE__) do
+    GenServer.call(server, {:record, conversation_id, from, to, body, turn_number, done?})
   end
 
   @doc "Returns the current entry for inspection (test helper)."
@@ -81,7 +139,7 @@ defmodule KaoiroServer.ConversationStates do
   Claiming — rather than plain listing — is what keeps a crash-looping or
   flapping wrapper from re-injecting the same notice into its peers on
   every reconnect cycle: the mark is only released when `agent_id` sends
-  another message in that conversation (`record_message/6`), i.e. when it
+  another message in that conversation (`record_message/7`), i.e. when it
   has demonstrably come back. `limit` bounds the per-disconnect fan-out;
   the leftover count is returned so the caller can log what it dropped.
   Counters (turns / tokens / wallclock) are never touched here — a
@@ -92,9 +150,9 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @impl true
-  def init(_name) do
+  def init({_name, clock}) do
     schedule_gc()
-    {:ok, %{conversations: %{}, limits: load_limits()}}
+    {:ok, %{conversations: %{}, limits: load_limits(), clock: clock}}
   end
 
   defp load_limits do
@@ -113,30 +171,51 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @impl true
-  def handle_call({:record, cid, from, to, body, done?}, _from, state) do
-    now = System.monotonic_time(:millisecond)
+  def handle_call({:record, cid, from, to, body, turn_number, done?}, _from, state) do
+    now = state.clock.()
     limits = state.limits
     existing = Map.get(state.conversations, cid)
 
     cond do
-      # Cross-conversation pollution defense: an existing entry only accepts
-      # messages from its declared participants. A third party reusing a known
-      # cid would otherwise grow the agents set past max_concurrent_agents
-      # and wipe the legitimate counters via the :exceeded branch.
+      # issue #177: a CLOSED tombstone accepts no further messages at all —
+      # checked before the participants check so a reused/delayed message
+      # from ANY sender gets the same conversation_closed answer, not a
+      # misleading participants_mismatch.
+      existing != nil and existing.status == :closed ->
+        {:reply, {:error, :conversation_closed}, state}
+
+      # Cross-conversation pollution defense: an existing OPEN entry only
+      # accepts messages from its declared participants. A third party
+      # reusing a known cid would otherwise grow the agents set past
+      # max_concurrent_agents and wipe the legitimate counters via the
+      # :exceeded branch.
       existing != nil and not MapSet.subset?(MapSet.new([from, to]), existing.agents) ->
         {:reply, {:error, :participants_mismatch}, state}
 
+      # issue #177 review M1: a turn_number no greater than the highest
+      # already recorded for this OPEN conversation is late, duplicate, or
+      # out-of-order — reject before it can corrupt turns/tokens. Checked
+      # after participants_mismatch (only meaningful once from/to are
+      # confirmed legitimate) and before the brand-new-conversation cap
+      # (existing is never nil here).
+      existing != nil and turn_number <= existing.max_turn_number ->
+        {:reply, {:error, :stale_turn}, state}
+
       existing == nil and map_size(state.conversations) >= limits.max_conversations ->
         # Bound total in-flight conversations so a malicious wrapper streaming
-        # fresh cids cannot grow the map without limit. Existing entries are
-        # unaffected.
+        # fresh cids cannot grow the map without limit. Existing entries
+        # (open or tombstoned) are unaffected.
         {:reply, {:error, :too_many_conversations}, state}
 
       true ->
+        # `existing`, if present here, is guaranteed OPEN — the :closed case
+        # already returned above.
         entry =
           existing ||
             %{
+              status: :open,
               turns: 0,
+              max_turn_number: 0,
               tokens: 0,
               started_at: now,
               agents: MapSet.new(),
@@ -150,6 +229,7 @@ defmodule KaoiroServer.ConversationStates do
         next = %{
           entry
           | turns: entry.turns + 1,
+            max_turn_number: turn_number,
             tokens: entry.tokens + token_estimate(body),
             agents: agents,
             done_by: done_by,
@@ -168,7 +248,11 @@ defmodule KaoiroServer.ConversationStates do
 
   def handle_call(:peer_index, _from, state) do
     index =
-      Enum.reduce(state.conversations, %{}, fn {_cid, entry}, acc ->
+      state.conversations
+      # issue #177: a CLOSED tombstone is not an active conversation — it
+      # must not appear as an "active peer" in the directory.
+      |> Enum.filter(fn {_cid, entry} -> entry.status == :open end)
+      |> Enum.reduce(%{}, fn {_cid, entry}, acc ->
         for agent_id <- entry.agents, peer_id <- entry.agents, peer_id != agent_id, reduce: acc do
           acc -> Map.update(acc, agent_id, MapSet.new([peer_id]), &MapSet.put(&1, peer_id))
         end
@@ -181,6 +265,11 @@ defmodule KaoiroServer.ConversationStates do
   def handle_call({:claim_unreachable, agent_id, limit}, _from, state) do
     pending =
       for {cid, entry} <- state.conversations,
+          # issue #177: a CLOSED tombstone has no `notified_unreachable` set
+          # (dropped at close) and is not active — exclude it before the
+          # field accesses below, and checked first so the comprehension's
+          # short-circuit protects them.
+          entry.status == :open,
           MapSet.member?(entry.agents, agent_id),
           not MapSet.member?(entry.notified_unreachable, agent_id) do
         {cid, entry.agents |> MapSet.delete(agent_id) |> MapSet.to_list()}
@@ -201,49 +290,86 @@ defmodule KaoiroServer.ConversationStates do
   @impl true
   def handle_info(:gc, state) do
     schedule_gc()
-    now = System.monotonic_time(:millisecond)
+    now = state.clock.()
     cap = state.limits.max_wallclock_ms
 
-    pruned =
-      state.conversations
-      |> Enum.reject(fn {_cid, entry} -> now - entry.started_at > cap end)
-      |> Map.new()
+    {conversations, tombstoned, dropped} =
+      Enum.reduce(state.conversations, {%{}, 0, 0}, fn {cid, entry}, {acc, tomb, drop} ->
+        case gc_disposition(entry, now, cap) do
+          :keep -> {Map.put(acc, cid, entry), tomb, drop}
+          {:tombstone, closed_entry} -> {Map.put(acc, cid, closed_entry), tomb + 1, drop}
+          :drop -> {acc, tomb, drop + 1}
+        end
+      end)
 
-    dropped = map_size(state.conversations) - map_size(pruned)
-
-    if dropped > 0 do
-      Logger.debug("conversation_states gc: dropped #{dropped} expired entries")
+    if tombstoned > 0 or dropped > 0 do
+      Logger.debug(
+        "conversation_states gc: tombstoned #{tombstoned} expired open entries, " <>
+          "dropped #{dropped} expired tombstones"
+      )
     end
 
-    {:noreply, %{state | conversations: pruned}}
+    {:noreply, %{state | conversations: conversations}}
+  end
+
+  # issue #177: the periodic sweep must not silently delete an open entry —
+  # a delayed message reaching it afterwards would otherwise be treated as a
+  # brand-new conversation instead of a stale one. Transition to a
+  # :max_wallclock tombstone instead; a genuinely expired tombstone (its own
+  # `closed_at` TTL elapsed) is the only case still deleted outright.
+  defp gc_disposition(%{status: :closed, closed_at: closed_at}, now, cap) do
+    if now - closed_at > cap, do: :drop, else: :keep
+  end
+
+  defp gc_disposition(%{status: :open} = entry, now, cap) do
+    if now - entry.started_at > cap do
+      {:tombstone, close_entry(entry, :max_wallclock, now)}
+    else
+      :keep
+    end
   end
 
   defp evaluate(state, cid, next, limits, now) do
     cond do
       MapSet.size(next.agents) > limits.max_concurrent_agents ->
-        {:reply, {:exceeded, :max_concurrent_agents}, drop(state, cid)}
+        {:reply, {:exceeded, :max_concurrent_agents},
+         close(state, cid, next, :max_concurrent_agents, now)}
 
       next.turns > limits.max_turns ->
-        {:reply, {:exceeded, :max_turns}, drop(state, cid)}
+        {:reply, {:exceeded, :max_turns}, close(state, cid, next, :max_turns, now)}
 
       next.tokens > limits.max_tokens ->
-        {:reply, {:exceeded, :max_tokens}, drop(state, cid)}
+        {:reply, {:exceeded, :max_tokens}, close(state, cid, next, :max_tokens, now)}
 
       now - next.started_at > limits.max_wallclock_ms ->
-        {:reply, {:exceeded, :max_wallclock}, drop(state, cid)}
+        {:reply, {:exceeded, :max_wallclock}, close(state, cid, next, :max_wallclock, now)}
 
       # Spec MUST: every participating agent must have signalled done=true
-      # for the conversation to complete. Drop the entry only then.
+      # for the conversation to complete. Close the entry only then.
       MapSet.size(next.done_by) > 0 and MapSet.subset?(next.agents, next.done_by) ->
-        {:reply, :both_done, drop(state, cid)}
+        {:reply, :both_done, close(state, cid, next, :both_done, now)}
 
       true ->
         {:reply, :ok, %{state | conversations: Map.put(state.conversations, cid, next)}}
     end
   end
 
-  defp drop(state, cid) do
-    %{state | conversations: Map.delete(state.conversations, cid)}
+  # issue #177: transitions the OPEN entry in place to a CLOSED tombstone
+  # (moduledoc) rather than deleting it, so a late message on the same cid
+  # gets :conversation_closed instead of silently starting a new
+  # conversation.
+  defp close(state, cid, next, reason, now) do
+    %{state | conversations: Map.put(state.conversations, cid, close_entry(next, reason, now))}
+  end
+
+  defp close_entry(entry, reason, now) do
+    %{
+      status: :closed,
+      reason: reason,
+      closed_at: now,
+      agents: entry.agents,
+      last_turn: entry.turns
+    }
   end
 
   defp schedule_gc do

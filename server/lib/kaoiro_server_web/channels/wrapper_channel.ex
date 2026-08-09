@@ -957,7 +957,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         {:error, "envelope too large"}
 
       envelope["type"] == "inter_agent_message" ->
-        validate_inter_agent_payload(envelope["payload"])
+        validate_live_inter_agent_payload(envelope["payload"])
 
       true ->
         :ok
@@ -965,6 +965,31 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp validate(_envelope, _agent_id), do: {:error, "envelope must be an object"}
+
+  # issue #177 review M1: live ingress (this path) is exclusively
+  # wrapper-origin — a server-synthesized notice (hard-limit escalate,
+  # disconnected) is never submitted through `handle_in("envelope", ...)`;
+  # the server constructs and pushes it directly (`deliver_synth_inter_agent`).
+  # `turn_number=0` is reserved for that server provenance, so a wrapper
+  # claiming it (or any non-positive value) here is either a bug or an
+  # attempt to forge the server's reserved value and force a peer's
+  # RECEIVING wrapper into believing the conversation was authoritatively
+  # closed when it never was (split-brain: server=open, peer=closed).
+  # Rejecting it structurally, before `preflight_inter_agent` /
+  # `ConversationStates.record_message` ever run, closes that off
+  # regardless of what the receiving wrapper does with a forged value that
+  # slipped through. `validate_replayed_envelope/1` below intentionally
+  # calls the unrestricted `validate_inter_agent_payload/1` directly — a
+  # wrapper's own IA sidecar legitimately holds historical turn_number=0
+  # rows from real server-synthesized notices it received.
+  defp validate_live_inter_agent_payload(payload) do
+    with :ok <- validate_inter_agent_payload(payload) do
+      case payload["turn_number"] do
+        n when is_integer(n) and n > 0 -> :ok
+        _ -> {:error, "invalid value: payload.turn_number"}
+      end
+    end
+  end
 
   defp fetch_reset_mode(%{"mode" => mode}) when mode in @session_reset_modes,
     do: {:ok, mode}
@@ -1053,7 +1078,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # rely on "past this point the message is accepted" before it touches a
   # pane. Other types pass through as `:not_inter_agent`.
   #
-  # `ConversationStates.record_message/5` checks the quota AND advances
+  # `ConversationStates.record_message/6` checks the quota AND advances
   # the counters in one GenServer call. protocol-inter-agent lists the
   # counter update after the projection, but splitting the call to match
   # that order would open a TOCTOU between check and update — the quota
@@ -1072,6 +1097,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     to = payload["to"]
     cid = payload["conversation_id"]
     body = payload["body"] || ""
+    turn_number = payload["turn_number"]
     done? = get_in(payload, ["meta", "done"]) == true
 
     cond do
@@ -1082,11 +1108,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
         {:error, :unknown_agent}
 
       true ->
-        case ConversationStates.record_message(cid, from, to, body, done?) do
+        case ConversationStates.record_message(cid, from, to, body, turn_number, done?) do
           # Within limits. `:both_done` means every participating agent has
-          # now signalled done; the tracker has already dropped the entry
-          # atomically (spec MUST: 両 owner-side done で対話完了). No extra
-          # close needed.
+          # now signalled done; the tracker has already closed the entry
+          # into a tombstone atomically (issue #177; spec MUST: 両
+          # owner-side done で対話完了). No extra close needed.
           ok when ok in [:ok, :both_done] ->
             {:ok, {:accept, to, nil}}
 

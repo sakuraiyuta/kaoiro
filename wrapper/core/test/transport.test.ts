@@ -1064,6 +1064,24 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
     expect(acks).toEqual([]);
   });
 
+  // issue #177 / こはく合意の Stage 3 回帰: server が :conversation_closed を
+  // 返したときも、既存 reason (unknown_agent 等) と同じ pushRejectReason()
+  // 実コード経路で rejected + reason に写ることを確認する。「他 reason で
+  // 通っているから通るはず」の推定に留めない (こはく条件1)。
+  it("sendInterAgent は conversation_closed も他の reject reason と同じ経路で返す (#177)", async () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+    });
+
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("error")?.({ reason: "conversation_closed" });
+
+    await expect(pending).resolves.toEqual({
+      kind: "rejected",
+      reason: "conversation_closed",
+    });
+  });
+
   it("sendInterAgent は timeout を unknown として返す (配送されたかは不明)", async () => {
     const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
       personaId: "ao",

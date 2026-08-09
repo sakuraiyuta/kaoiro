@@ -158,6 +158,172 @@ server は conversation 単位で以下の制限を機械的に監視し、超�
 config は kaoiro server 設定で agent 単位 / global の二段。global を
 agent 単位で上書き可。
 
+### conversation のライフサイクルと終了後の扱い (issue #177)
+
+完了・打ち切り後の conversation は unknown/new と区別される状態
+(tombstone) として保持する。同じ `conversation_id` への遅延・重複・
+out-of-order message が新規 conversation として再受理され、done /
+escalate の ping-pong が止まらなくなる不具合(issue #177、2026-07-31
+observed)の再発防止。
+
+```mermaid
+stateDiagram-v2
+  [*] --> open: 最初の message
+  open --> half_closed: 片側 owner-side が done=true
+  half_closed --> closed: もう片側も done=true
+  open --> closed: hard limit 超過
+  half_closed --> closed: hard limit 超過
+  closed --> [*]: TTL(max_wallclock_ms)経過後に GC
+```
+
+- **open**: 通常の対話中。turn / token / wallclock を計測する。
+- **half-closed(one-sided done)**: 一方の owner-side が
+  `meta.done=true` を送り、もう一方はまだの状態。受信側には「close
+  proposal」として注入する — 一般の返信 directive ではなく、「閉じる
+  なら一度だけ `done=true` で応答、続けるなら通常の応答」という専用
+  文言にする(wrapper 側、下記)。
+- **closed(terminal)**: 両 owner-side の done=true が揃った、または
+  hard limit 超過。server はこの時点で entry を tombstone
+  (`status: closed`、`reason`、`closed_at`、参加 agent 集合、
+  `last_turn` を保持)へ遷移させ、削除しない。同一 `conversation_id`
+  への以後の message は relay・store・通常 broadcast せず
+  `{:error, :conversation_closed}` で拒否する。terminal 側の受信も
+  一般の返信 directive を持たない(「informational only、
+  send_to_agent を呼ぶな」という専用文言) — 追加の send_to_agent を
+  誘発しない。
+- **tombstone GC**: closed から `max_wallclock_ms` 以上経過した
+  tombstone は server の periodic GC が削除する。この TTL は
+  **UUID 衝突時のメモリ解放**であり、`conversation_id` を意図的に
+  再利用する運用パターンではない(下記「CID 再利用は契約にしない」
+  参照)。periodic GC は open entry も wallclock 超過時に即削除せず、
+  まず `max_wallclock` tombstone へ遷移させる — 削除してしまうと、
+  遅延到着した message が「新規」として再受理されてしまうため。
+- **turn_number の ingress 検証と stale_turn 拒否**(issue #177 review
+  M1): live ingress(通常の `envelope` push)は `payload.turn_number`
+  を正の整数のみ受理する — `0` は server 合成通知専用の予約値であり、
+  wrapper がこの経路で自称することはできない(server はこの経路を
+  経由する message を一切合成しないため、`0` はここでは常に不正)。
+  正の整数であっても、OPEN な conversation の `max_turn_number`
+  以下(重複・遅延到着)なら `{:error, :stale_turn}` で拒否し、
+  turns / tokens / max_turn_number を進めない。`replay_ia`(表示専用の
+  復元経路)は wrapper ホストの IA sidecar に記録された過去の
+  `turn_number=0` 行を正当に含むため、この live ingress 限定の
+  検証は適用しない。
+
+wrapper 側(`agent-common`)も上記と対になるローカル状態
+(`localDone` / `remoteDone` / `closed`)を conversation_id ごとに持つ:
+
+- 自分が既に `done=true` を送り、peer の `done=true` を受けたら
+  terminal。**加えて**、server 合成のハード制限超過通知
+  (`turn_number=0`、`kind: "escalate-to-user"`、`meta.done=true`)を
+  受けた時点でも、自分側の done 送信有無に関わらず即 terminal にする —
+  server 側は Stage 1 の tombstone で既にこの conversation を閉じて
+  おり、ローカルだけ「相手からの一方的な close 提案」と誤読すると、
+  受信側 wrapper がその通知に対して再度 `send_to_agent`
+  を呼んでしまい(close-proposal の注入文言が返信を誘う)、closed な
+  conversation への送信として server に往復拒否される無駄が起きる。
+  以後同一 `conversation_id` を指定した `send_to_agent` は
+  ローカルで即 tool error にする(server 往復なしで完結する)。
+  `conversation_id` を省略すれば新規 conversation を開始できる。
+- **同一 conversation_id への並行 send_to_agent の直列化**(issue #177
+  review 2巡目 M1): 同じ conversation_id への `send_to_agent` 呼び出しが
+  並行に(例えば同一ターン内で複数回)行われた場合、採番から
+  server 応答の反映までを conversation_id 単位で直列化する
+  (`wait_for_response` の応答待ち自体は対象外 — 最大 300 秒他方を
+  塞いでしまうため)。直列化がないと、片方が reject された際の
+  ロールバックが、その間に accept されたもう片方の状態
+  (`localDone` / `closed`)を巻き戻してしまう競合が起きる。
+- **pending-done 中の受信分類の遅延**(issue #177 review 2巡目、ふじ
+  差し戻し): `done=true` の `send_to_agent` がまだ acceptance 未確定
+  (楽観的な `localDone` 反映のみ)の間に、同じ conversation_id への
+  inbound(peer 自身の done、または server 合成のハード制限通知)が
+  届いた場合、その inbound の分類・状態反映は pending 中の
+  acceptance が確定するまで待つ(`wait_for_response` の応答待ち全体
+  ではなく、その 1 件の送信の ack が着くまでの短い gate)。これが
+  ないと 2 通りの不具合が起きる: (1) 権威的な server 合成 CLOSED を
+  その inbound が正当に反映した直後、後着の(`conversation_closed`
+  以外の理由の)generic reject のロールバックがそれを OPEN に巻き戻す
+  ("server=closed、wrapper=open" split-brain、AC10 も破られる)。
+  (2) 楽観的な `localDone` を見て「両側 done で terminal」と確定した
+  disposition が engine アダプタへ渡り、SDK 入力へ「informational
+  only、返信不要」と注入・`notePendingInjection` を skip した後で
+  その送信が reject されると、実際には片側提案 (close-proposal) の
+  ままなのに返信経路が失われる(取り消し不能)。
+- **`conversation_closed` reject の学習**(issue #177 review 2巡目
+  M2): `send_to_agent` の送信が server から `conversation_closed`
+  で拒否された場合、その conversation_id をこの wrapper が事前に
+  一度も追跡していなかった(brand-new local track)場合でも、
+  ローカル track を closed として学習する。学習せずに track を
+  破棄すると、同じ `conversation_id` を指定した次回の試行が毎回
+  server へ往復し、server 側 tombstone TTL(既定 10 分)が明けた
+  時点で受理されてしまい、下記「CID 再利用は契約にしない」の
+  wrapper 側 24 時間 guard が骨抜きになる。
+- **late / stale / duplicate turn の拒否**: 受信 `turn_number` が当該
+  conversation で既知の最大値以下なら、SDK 入力へ注入しない(返信待ち
+  の waiter も満たさない)。ただし server 合成 envelope(ハード制限
+  超過・応答不能通知)の `turn_number=0` は wrapper-origin の turn 系列
+  と別経路であり、この判定から除外する。**判定条件は `turn_number=0`
+  に加えて `agent_id === "server"` も必須**(issue #177 review M1)—
+  `turn_number` の値だけを見ると、peer wrapper 自身が(バグまたは
+  悪意で)`turn_number=0` を自称した message を送れてしまい、受信側が
+  それを server 合成通知と誤認して即座に自 track を closed
+  にしてしまう("server=open、受信側 wrapper だけ closed" という
+  split-brain)。この forge は live ingress の構造検証(下記)でも
+  server 側で拒否されるが、受信側 wrapper 自身も provenance を
+  検証することで二重に防ぐ。
+- wrapper 側の closed track も TTL(24 時間)経過後に GC する(長寿命
+  wrapper のメモリリーク防止)。
+- **OPEN track の idle TTL と総数上限**(issue #177 review 2巡目
+  M3、「open track の unbounded 経路」): 上記の closed track TTL は
+  この wrapper 自身が CLOSED と学習した track にしか効かない。
+  server の periodic GC は自発的な tombstone 化を wrapper へ通知
+  しない(issue #209、意図的に対象外)ため、closing turn を
+  取りこぼした・peer が再接続なしにクラッシュした等で wrapper が
+  closed を学習できなかった track は OPEN のまま残り続け、
+  closed track TTL では prune されない。これを塞ぐため、OPEN
+  track にも最終アクティビティから 24 時間の idle TTL を独立に
+  適用し、さらに open + closed 合算の総数上限(既定 20,000、最も
+  古い track から evict)も設ける。idle 対象になるほど長時間 open
+  な conversation は、server 側の既定 wallclock 上限(10 分)を
+  大幅に超過しており実質的に server 側で打ち切り済みである可能性が
+  高い — evict は該当 conversation_id のローカル bookkeeping
+  (`turnNumber` / `localDone` / `remoteDone`)を破棄するだけで、
+  以後同じ conversation_id を明示指定すれば新規 track として
+  再送でき、server からの正しい応答(`conversation_closed` なら
+  上記 M2 の学習で再度ローカルに反映される)を得られる。
+
+Claude Code / Codex いずれの engine アダプタも共通の `agent-common`
+判定(`InterAgentTool#receiveInbound` / `#invoke`)を経由するため、
+上記の状態機械はエンジンに依存しない。
+
+#### CID 再利用は契約にしない(issue #177 review S2)
+
+server の tombstone TTL(`max_wallclock_ms`、既定 10 分)だけを見ると
+「TTL 経過後は `conversation_id` を再利用できる」ように読めるが、
+これは server 単体の話であって system 全体の契約ではない。
+**wrapper 側の closed track TTL は 24 時間** であり、その `send_to_agent`
+/ `receiveInbound` を経由する限り、閉じた `conversation_id` は
+server 側 TTL が明けた後もこの 24 時間の間ローカルで
+「closed」のまま tool error を返し続ける。同一 wrapper が生存または
+再接続していれば、server 側 TTL 経過直後の再利用は失敗する。
+
+したがって:
+
+- server の tombstone TTL は **UUID 衝突を想定したメモリ解放** に過ぎず、
+  「同じ `conversation_id` を意図的に使い回してよい」という設計ではない。
+  `conversation_id` は UUIDv4 で採番される前提上、同一値が偶然再送され
+  る確率は無視できるほど小さく、積極的な再利用は起こらない想定である。
+- 実効的な「この会話はもう終わった」guard は **wrapper 側の 24 時間
+  TTL** である。エージェント側が同じ相手と新しい対話を始めたい場合は、
+  常に `conversation_id` を省略して新規 UUID を採番させること。閉じた
+  `conversation_id` を明示的に指定して再送する経路は、フォールバック
+  としても正式な API 契約としても提供しない。
+- server 側 TTL が短い(既定 10 分)一方 wrapper 側が長い(24 時間)の
+  は意図的な非対称: server 側は攻撃的な conversation_id 使い回しに
+  よるメモリ枯渇を防ぐ最小限の防御、wrapper 側は「もう終わった会話」
+  の再開を実務上ほぼ確実に防ぐための guard であり、両者は異なる目的
+  を持つため揃える必要はない。
+
 ### 観測経路(dashboard 表示)
 
 server は inter_agent_message envelope を `agents:lobby` にも
@@ -202,10 +368,15 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
     使わない(`wait_for_response=true` では peer reply まで返らない
     ため)。reject / timeout / ack 喪失時は記録しない(loss 受容、
     stderr warn)。
-  - **ack と tool result の関係**(ふじ 30-10 must-fix M5、2026-08-08):
+  - **ack と tool result の関係**(ふじ 30-10 must-fix M5、2026-08-08。
+    issue #177 の Stage 3 が要求する「ack 経路の追加・reject の tool
+    error 化」はこの ADR-0051 実装で先行して満たされていた —
+    #177 は新規実装ではなく、`conversation_closed` を下記の reject
+    reason 一覧へ追加しただけ):
     記録トリガは ack のままだが、`send_to_agent` の **tool result も
     同じ ack で決まる**。accepted = 従来どおり `sent ...`、server の
-    明示 reject(`unknown_agent` / `participants_mismatch` 等)は
+    明示 reject(`unknown_agent` / `self_routing` /
+    `participants_mismatch` / `conversation_closed`(issue #177)等)は
     **error result に reason を載せる**、timeout / ack 喪失は
     「配送不明」— 再送が重複配送になり得るため error にはせず、その旨を
     result 本文に明記する。reject / 配送不明では `wait_for_response`
@@ -394,8 +565,12 @@ directory から除外する。除外集合の正本は ADR-0021 F6-4。
 | `envelope` 合成 (S→W) | wrapper 切断時 | 当該 wrapper が参加中の各 conversation の他参加者へ `kind=inform` + `error.code=disconnected` を push(「応答不能エラーの通知」節) |
 | `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...]}}` 返却で受け取る。entry の field と省略規則は上記「peer directory の情報境界」。list_agents 用 (後述) |
 
-未知 `to` / 自己 routing / participants 不一致時のエラー (`unknown_agent` /
-`self_routing` / `participants_mismatch`) は `envelope` の reply で返す。
+未知 `to` / 自己 routing / participants 不一致 / turn_number 不正 /
+stale turn / closed な conversation への送信時のエラー(`unknown_agent` /
+`self_routing` / `participants_mismatch` /
+`invalid value: payload.turn_number` / `stale_turn` /
+`conversation_closed`、後 3 者は issue #177)は `envelope` の reply で
+返す。
 
 ### 承認フロー(permission_broker 統合)
 
@@ -750,6 +925,16 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   `max_wallclock` / `max_concurrent_agents`)を機械的に強制する
 - MUST: `meta.done` は両 owner-side エージェントから true で
   conversation が完了。片側だけでは done としない
+- MUST(issue #177): 完了(両 owner-side done)または hard limit 超過で
+  closed になった `conversation_id` は tombstone として保持し、
+  `max_wallclock_ms` 経過まで削除しない。closed 中の同一
+  `conversation_id` への送信は relay・store・通常 broadcast せず
+  `{:error, :conversation_closed}` で拒否する。counters
+  (turns / tokens / started_at / done_by)は closed 遷移時に破棄し、
+  再送によるリセットを許さない
+- MUST(issue #177): closed な conversation は `peer_index` /
+  disconnect 時の unreachable 通知("応答不能エラーの通知"節)で
+  active 扱いしない
 - MUST: `payload.to == agent_id` の自己ルーティングは server が拒否
 - MUST: `kind: "reject"` の envelope は `meta.reject_reason` を空でない
   string で持つ
@@ -819,4 +1004,5 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   (`context` の capability gate)
 - kaoiro issue #17(本実装の起点)、#18(メッセージフィルタ)、
   #87(調査の傘 issue)、#131(応答不能エラーの通知)、
-  #160(peer directory の稼働状況)、#164(rate_limits 表示不具合)
+  #160(peer directory の稼働状況)、#164(rate_limits 表示不具合)、
+  #177(conversation lifecycle・tombstone・stale turn 拒否)

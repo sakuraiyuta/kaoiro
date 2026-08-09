@@ -104,7 +104,16 @@ peer を監視して支援を申し出る能動監視 (polling 常駐) はスコ
   対話・重複作業のリスクが増す (#87 の「終わり方設計」「観測可能性」
   論点、および
   [work-division-conflict-guard](../open-questions/work-division-conflict-guard.md)
-  で追う)。
+  で追う)。**追補 (2026-08-09、issue #177)**: 「終わり方」の一部 —
+  完了済み conversation が再開して done / escalate の ping-pong が
+  止まらなくなる不具合 — は #177 が server 側 tombstone
+  (`conversation_closed` での再開拒否) と wrapper 側 lifecycle
+  (`localDone` / `remoteDone` / `closed`、stale/duplicate turn の
+  拒否) で機械的に閉じた
+  ([protocol-inter-agent](../specs/protocol-inter-agent.md)
+  「conversation のライフサイクルと終了後の扱い」節)。残る論点
+  (意味的に同一の提案が形を変えて繰り返されるループの検知等) は
+  #87 のまま継続する。
 - 共通フッターが肥大すると全エージェントの context を常時消費する
   (ADR-0029 の文字数 SHOULD 目安との折り合いが必要)。
 

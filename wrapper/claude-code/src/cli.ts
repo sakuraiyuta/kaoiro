@@ -496,13 +496,33 @@ async function main(): Promise<void> {
       process.stdout.write(`  attach_close: ${uploadId}\n`);
       host.attachClose(uploadId);
     },
-    onInterAgentMessage: (envelope) => {
+    // issue #177 review round 2 (ふじ差し戻し): async — receiveInbound() may
+    // gate briefly on a concurrently in-flight done=true send_to_agent for
+    // the same conversation_id, so it must be awaited before this handler
+    // acts on the disposition (host.send / notePendingInjection). The
+    // caller (transport.ts) does not await onInterAgentMessage — an async
+    // handler here is still fire-and-forget from its perspective, exactly
+    // as the previous synchronous one was.
+    onInterAgentMessage: async (envelope) => {
       // Record BEFORE anything consumes the envelope (ADR-0051 D3-2): the
       // sidecar documents what the server delivered, so a later injection
       // failure leaving only the record is the correct outcome, not a bug.
       recordInboundIa(envelope);
-      if (interAgent?.receiveInbound(envelope)) {
+      const disposition = (await interAgent?.receiveInbound(envelope)) ?? {
+        consumed: false,
+        inject: true,
+        mode: "reply-owed" as const,
+      };
+      if (disposition.consumed) {
         process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
+        return;
+      }
+      // issue #177 AC9: a late/stale/duplicate turn_number is neither a
+      // fresh reply nor owed one — drop it without touching the SDK queue.
+      if (!disposition.inject) {
+        process.stdout.write(
+          `  inter_agent_message stale/duplicate turn dropped: ${envelope.agent_id}\n`,
+        );
         return;
       }
       // Server routed an inter_agent_message to this wrapper (peer reply or
@@ -511,7 +531,7 @@ async function main(): Promise<void> {
       // formatted text as a new SDK turn (protocol-inter-agent spec
       // 「受信側の挙動」). The host serialises through instructionChain so a
       // mid-PDF render cannot reorder this against an operator instruction.
-      const text = formatInboundMessage(envelope);
+      const text = formatInboundMessage(envelope, { mode: disposition.mode });
       process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
       // issue #131: this wrapper now owes a reply on the conversation. Tag
       // the queued turn with the conversation_id (must-fix 1: turn-scoped
@@ -521,7 +541,13 @@ async function main(): Promise<void> {
       const conversationId = (
         envelope.payload as Partial<InterAgentMessagePayload>
       ).conversation_id;
-      interAgent?.notePendingInjection(envelope);
+      // issue #177 AC8: a terminal (both-done) message owes no reply, so it
+      // must not be tracked as a pending injection — that would make a
+      // silent (correctly unanswered) turn look like a failure to
+      // resolveTurnEnd() and produce a spurious error notice.
+      if (disposition.mode !== "terminal") {
+        interAgent?.notePendingInjection(envelope);
+      }
       void enqueueInstruction(() =>
         host.send(text, undefined, conversationId).catch((err: unknown) => {
           process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);

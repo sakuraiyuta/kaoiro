@@ -1211,6 +1211,51 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_panes_empty([from_id, to_id])
     end
 
+    test "turn_number が 0 以下だと live ingress で構造的に拒否する (#177 review M1)" do
+      from_id = "test.iam-turn0-from"
+      to_id = "test.iam-turn0-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      # turn_number=0 は server 合成通知専用(このライブ ingress 経路には
+      # 一切来ない)。wrapper が自称しても構造検証で落ちるので、受信側
+      # wrapper が server 由来と誤認する余地(split-brain)が生じない。
+      for bad_turn <- [0, -1] do
+        env = inter_envelope(from_id, to_id, turn: bad_turn)
+        ref = push(from_socket, "envelope", env)
+        assert_reply ref, :error, %{reason: "invalid value: payload.turn_number"}
+      end
+
+      assert_panes_empty([from_id, to_id])
+    end
+
+    test "既知の max_turn_number 以下の再送は stale_turn で拒否し relay も store もしない " <>
+           "(#177 review M1)" do
+      from_id = "test.iam-staleturn-from"
+      to_id = "test.iam-staleturn-to"
+      cid = "cnv-staleturn-#{System.unique_integer([:positive])}"
+      to_socket = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      ref = push(from_socket, "envelope", inter_envelope(from_id, to_id, cid: cid, turn: 1))
+      assert_reply ref, :ok
+      ref = push(to_socket, "envelope", inter_envelope(to_id, from_id, cid: cid, turn: 2))
+      assert_reply ref, :ok
+
+      projection_before = AgentStates.ia_projection()
+
+      # 重複 (直前と同じ turn_number)。
+      ref = push(from_socket, "envelope", inter_envelope(from_id, to_id, cid: cid, turn: 2))
+      assert_reply ref, :error, %{reason: "stale_turn"}
+
+      # 遅延到着 (既知の最大値より低い)。
+      ref = push(from_socket, "envelope", inter_envelope(from_id, to_id, cid: cid, turn: 1))
+      assert_reply ref, :error, %{reason: "stale_turn"}
+
+      # 拒否は relay も store もしない — どちらの pane にも行が増えない。
+      assert AgentStates.ia_projection() == projection_before
+    end
+
     test "ConversationStates が :exceeded を返したら side ごとに正しい payload.to で escalate を流す" do
       # default max_turns=20 を待たずに、テスト専用の conversation_id を直接
       # ConversationStates へ過去ターン分仕込んでおき、20 ターン状態の続きから
@@ -1232,6 +1277,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
             from_id,
             to_id,
             "msg-#{n}",
+            n,
             false
           )
       end
@@ -1432,6 +1478,40 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       # 拒否された c の pane にも、宛先 b の pane に c 由来の行が増えることも無い。
       assert_panes_empty([c_id])
       assert length(AgentStates.ia_projection()[b_id]) == 1
+    end
+
+    # issue #177 / こはく合意の Stage 3 回帰: server-synth した
+    # {:error, :conversation_closed} が preflight_inter_agent の汎用
+    # reject 経路 (unknown_agent / self_routing / participants_mismatch と
+    # 同じ分岐) を実コードで最後まで通ることを確認する。既存 reason の
+    # 通過実績からの推定に留めない (こはく条件1)。
+    test "両 owner-side done 後の同一 cid 送信は conversation_closed で拒否する (#177)" do
+      a_id = "test.iam-closed-a"
+      b_id = "test.iam-closed-b"
+      cid = "cnv-closed-#{System.unique_integer([:positive])}"
+      b_socket = seed_known(b_id)
+      a_socket = seed_known(a_id)
+
+      meta_done = %{"done" => true, "propose_next" => ""}
+
+      ref =
+        push(a_socket, "envelope", inter_envelope(a_id, b_id, cid: cid, turn: 1, meta: meta_done))
+
+      assert_reply ref, :ok
+
+      ref =
+        push(b_socket, "envelope", inter_envelope(b_id, a_id, cid: cid, turn: 2, meta: meta_done))
+
+      assert_reply ref, :ok
+
+      assert %{status: :closed, reason: :both_done} = KaoiroServer.ConversationStates.get(cid)
+      projection_before = AgentStates.ia_projection()
+
+      ref = push(a_socket, "envelope", inter_envelope(a_id, b_id, cid: cid, turn: 3))
+      assert_reply ref, :error, %{reason: "conversation_closed"}
+
+      # 拒否は relay も store もしない — どちらの pane にも行が増えない。
+      assert AgentStates.ia_projection() == projection_before
     end
   end
 
@@ -1911,7 +1991,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                  owner: peer_socket.channel_pid
                )
 
-      assert :ok = ConversationStates.record_message("dir-g2", peer_id, self_id, "x", false)
+      assert :ok = ConversationStates.record_message("dir-g2", peer_id, self_id, "x", 1, false)
 
       self_socket = join_wrapper(self_id)
       ref = push(self_socket, "envelope", envelope(self_id, "idle"))
@@ -1952,7 +2032,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       :sys.get_state(AgentActivity)
       assert %{session_start_observed: false} = AgentActivity.get(peer_id)
-      assert :ok = ConversationStates.record_message("dir-fallback", peer_id, self_id, "x", false)
+
+      assert :ok =
+               ConversationStates.record_message("dir-fallback", peer_id, self_id, "x", 1, false)
 
       self_socket = join_wrapper(self_id)
       ref = push(self_socket, "envelope", envelope(self_id, "idle"))
@@ -1988,7 +2070,14 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok
 
       assert :ok =
-               ConversationStates.record_message("dir-conversation", peer_id, self_id, "x", false)
+               ConversationStates.record_message(
+                 "dir-conversation",
+                 peer_id,
+                 self_id,
+                 "x",
+                 1,
+                 false
+               )
 
       ref = push(self_socket, "directory_request", %{})
       assert_reply ref, :ok, %{"agents" => agents}

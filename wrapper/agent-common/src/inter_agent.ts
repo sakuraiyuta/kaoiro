@@ -318,9 +318,123 @@ const LIST_AGENTS_DESCRIPTION =
 const WHOAMI_DESCRIPTION =
   "Return this agent's identity from the kaoiro server's perspective: agent_id, persona (id/name/sprite_set), current state, engine, effective model/effort and their sources, engine-neutral permission (sandbox/approval), network_access, legacy permission_mode/fast_mode when applicable, session_id, working directory, and — on engines that report it — `context` ({used_tokens, max_tokens, used_percentage}), your own context-window usage in the same shape peers see via list_agents. Fields that the SDK has not yet reported are omitted. Use this to confirm what the operator sees you as, or to self-narrate (e.g., when telling a peer who you are). `context` is a cached last successful measurement; whoami itself does not refresh it, so it can lag the current turn. Read it only when a decision actually turns on it — sizing a delegation you are about to accept, or answering the operator's question about your own headroom. It is not a meter to watch: do not check it each turn and do not bring it up unprompted. An absent `context` means unknown, not empty.";
 
+/** issue #177: how a `formatInboundMessage()`-injected inbound should read
+ *  to the model. `reply-owed` is the ordinary case (unchanged wording).
+ *  `close-proposal` is a one-sided done=true — the peer proposes closing
+ *  but this wrapper has not reciprocated, so a reply is still owed (either
+ *  a closing done=true or a substantive response). `terminal` is both
+ *  sides done — informational only, no reply directive (AC7/AC8). */
+export type InboundReplyMode = "reply-owed" | "close-proposal" | "terminal";
+
+/** Per-conversation_id lifecycle state (issue #177). `turnNumber` is the
+ *  highest turn_number observed so far, from either side — used both for
+ *  outbound monotonicity (existing behaviour) and to reject late / stale /
+ *  duplicate inbound turns (AC9). `localDone` / `remoteDone` track each
+ *  side's `meta.done=true` signal independently (spec MUST: both sides);
+ *  `closed` is true only once both are — the terminal state that stops the
+ *  done/escalate ping-pong the issue exists to fix. `closedAtMs` is set
+ *  exactly once, when `closed` flips true, and drives TTL cleanup
+ *  (`CLOSED_TRACK_TTL_MS`) independent of any later (stale) traffic on the
+ *  same conversation_id — a sliding "last activity" window would let a
+ *  flapping peer keep a closed track alive forever. `lastActivityMs` (issue
+ *  #177 review M3) is refreshed on every `#getTrack()` touch (create or
+ *  lookup) and drives the OPEN-track bound (`OPEN_TRACK_TTL_MS`,
+ *  `#pruneStaleOpenTracks()`) — unlike `closedAtMs`, this one IS a sliding
+ *  window, since an open track's own traffic is exactly the signal that it
+ *  is still a real, live conversation. */
 interface ConversationTrack {
-  /** Highest turn_number observed so far in this conversation. */
   turnNumber: number;
+  localDone: boolean;
+  remoteDone: boolean;
+  closed: boolean;
+  closedAtMs?: number;
+  lastActivityMs: number;
+}
+
+/** How long a CLOSED track is kept before being pruned (issue #177: "長寿命
+ *  wrapper の memory leak を防ぐ"). Deliberately much longer than the
+ *  server's own tombstone TTL (`max_wallclock_ms`, default 10 min) — the
+ *  wrapper has no visibility into that config, and a track surviving
+ *  longer than the server's costs only a few bytes of memory, while
+ *  pruning too early would let `invoke()`'s local closed-CID guard (AC10)
+ *  miss a conversation_id the server would still reject. 24h comfortably
+ *  outlives any realistic session. */
+const CLOSED_TRACK_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Upper bound on CLOSED tracks kept at once (issue #177 review M3, AC6),
+ *  independent of TTL — a long-lived wrapper that closes many
+ *  conversations within one TTL window must not grow `#conversations`
+ *  without bound. Mirrors the server's own `max_conversations` default
+ *  (conversation_states.ex) for a comparable order-of-magnitude memory
+ *  bound. When exceeded, the OLDEST closed tracks (by `closedAtMs`) are
+ *  evicted first — see `#pruneClosedTracks()`. */
+const DEFAULT_MAX_CLOSED_TRACKS = 10_000;
+
+/** Idle-age bound for OPEN tracks (issue #177 review round 2, "open track
+ *  の unbounded 経路"): `#pruneClosedTracks()` only ever prunes tracks this
+ *  wrapper itself learned were CLOSED, but the server's own periodic GC
+ *  does not push a tombstone notice to this wrapper when it closes a
+ *  conversation on its own (issue #209, deliberately deferred out of
+ *  #177's scope) — so a track this wrapper never learned was closed (a
+ *  dropped/missed closing turn, a crashed peer, …) stays OPEN, and
+ *  therefore un-prunable by `#pruneClosedTracks()`, for the life of the
+ *  process. Any conversation genuinely still open this long has already
+ *  vastly exceeded the server's own default hard wall-clock limit
+ *  (`max_wallclock_ms`, 10 min) and was almost certainly force-closed
+ *  there; evicting the local OPEN entry only discards this wrapper's now-
+ *  stale bookkeeping for it (`turnNumber` / `localDone` / `remoteDone`) —
+ *  a deliberate trade-off. A subsequent explicit send on the same
+ *  conversation_id simply starts a fresh local track and gets a fresh,
+ *  authoritative answer from the server: `conversation_closed` if the
+ *  server still remembers it (now correctly learned back into the track —
+ *  see the `conversation_closed` handling in `invoke()`, review M2) or an
+ *  ordinary acceptance/`stale_turn` if it does not. Reuses the same 24h
+ *  order of magnitude as `CLOSED_TRACK_TTL_MS` for the same reason: it
+ *  comfortably outlives any realistic session while still keeping the map
+ *  bounded for a long-lived wrapper. */
+const OPEN_TRACK_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Upper bound on ALL tracks combined — open and closed (issue #177 review
+ *  round 2, "open track の unbounded 経路") — independent of every TTL
+ *  above. A purely count-based backstop for a wrapper that is simply busy
+ *  enough (many distinct peers/conversations within one TTL window) that
+ *  TTL alone would not keep `#conversations` bounded; mirrors
+ *  `DEFAULT_MAX_CLOSED_TRACKS`'s rationale but applies across the whole
+ *  map. When exceeded, the globally OLDEST tracks are evicted first — see
+ *  `#enforceTrackCap()` — using `closedAtMs` for closed tracks (matching
+ *  `#pruneClosedTracks()`'s own ordering) and `lastActivityMs` for open
+ *  ones. Sized well above `DEFAULT_MAX_CLOSED_TRACKS` so normal traffic
+ *  hits the closed-specific bound first, as before; this one is a backstop
+ *  for the combined total, not a tighter replacement for it. */
+const DEFAULT_MAX_TRACKS = 20_000;
+
+function freshTrack(nowMs: number): ConversationTrack {
+  return {
+    turnNumber: 0,
+    localDone: false,
+    remoteDone: false,
+    closed: false,
+    lastActivityMs: nowMs,
+  };
+}
+
+/** Age used to order a track for the total-count backstop
+ *  (`#enforceTrackCap()`) — `closedAtMs` once closed (matching
+ *  `#pruneClosedTracks()`'s own ordering), else `lastActivityMs`. */
+function trackAge(track: ConversationTrack): number {
+  return track.closed ? (track.closedAtMs ?? track.lastActivityMs) : track.lastActivityMs;
+}
+
+/** Disposition returned by `receiveInbound()` for one inbound envelope
+ *  (issue #177). `consumed`: a `wait_for_response` waiter took it as its
+ *  reply — the caller injects nothing. `inject`: false only for a late /
+ *  stale / duplicate turn_number (AC9) — the caller must drop it silently,
+ *  it is neither a fresh reply nor owed one. `mode`: see
+ *  {@link InboundReplyMode}, meaningful only when `inject` is true. */
+export interface InboundDisposition {
+  consumed: boolean;
+  inject: boolean;
+  mode: InboundReplyMode;
 }
 
 interface ReplyWaiter {
@@ -363,7 +477,37 @@ export interface InterAgentToolOptions {
   now?: () => string;
   /** conversation_id source for new conversations; injectable for tests. */
   newId?: () => string;
+  /** ms-epoch clock for the closed-track TTL (issue #177); injectable for
+   *  tests. Separate from `now` (ISO string, stamped onto envelopes) since
+   *  this one only ever feeds arithmetic. */
+  nowMs?: () => number;
+  /** Cap on CLOSED tracks kept at once (issue #177 review M3, AC6);
+   *  injectable for tests. Default {@link DEFAULT_MAX_CLOSED_TRACKS}. */
+  maxClosedTracks?: number;
+  /** Cap on ALL tracks kept at once, open + closed combined (issue #177
+   *  review round 2, "open track の unbounded 経路"); injectable for
+   *  tests. Default {@link DEFAULT_MAX_TRACKS}. */
+  maxTracks?: number;
 }
+
+/** Result of `invoke()`'s locked segment (issue #177 review M1) — decides
+ *  what the caller does once `#withCidLock()` releases. `local-reject` /
+ *  `rejected` both resolve to an immediate `errorResult()`, kept distinct
+ *  only for clearer call-site naming (a local guard vs. a server answer).
+ *  `dispatched` carries everything the UNLOCKED remainder of `invoke()`
+ *  (the `wait_for_response` reply-await, which must NOT hold the lock —
+ *  see `#withCidLock()`) needs to finish building the tool result. */
+type InvokeLockOutcome =
+  | { kind: "local-reject"; message: string }
+  | { kind: "rejected"; message: string }
+  | {
+      kind: "dispatched";
+      acceptance: InterAgentAcceptance;
+      sentTurnNumber: number;
+      sent: string;
+      reply: Promise<Envelope | undefined> | undefined;
+      timeoutMs: number;
+    };
 
 /**
  * Owns the send_to_agent tool registration and the per-conversation turn
@@ -374,47 +518,300 @@ export class InterAgentTool {
   readonly #options: InterAgentToolOptions;
   readonly #now: () => string;
   readonly #newId: () => string;
+  readonly #nowMs: () => number;
+  readonly #maxClosedTracks: number;
+  readonly #maxTracks: number;
   readonly #conversations = new Map<string, ConversationTrack>();
   readonly #replyWaiters = new Map<string, ReplyWaiter>();
   readonly #pendingInjections = new Map<string, PendingInjection>();
+  /** Per-conversation_id serialization for `invoke()`'s turn-allocation-
+   *  through-acceptance-handling segment (issue #177 review M1). Holds the
+   *  tail promise of the current lock chain for a conversation_id; absent
+   *  when uncontended. See `#withCidLock()`. */
+  readonly #cidLocks = new Map<string, Promise<void>>();
+  /** Present for a conversation_id only while an `invoke()` call's
+   *  optimistic `localDone` flip (done=true) is unconfirmed — from the
+   *  flip itself until that call's acceptance is decided (issue #177
+   *  review round 2, ふじ差し戻し). `receiveInbound()` awaits this (when
+   *  present) before reading or mutating anything derived from
+   *  `localDone`/`closed`. Distinct from `#cidLocks`: this gate is NOT a
+   *  replacement or subset of it — `#cidLocks` for the same
+   *  conversation_id is held throughout this gate's entire lifetime and
+   *  is only released strictly AFTER it (both release inside the same
+   *  `#withCidLock` callback, this one first). `receiveInbound()` reads
+   *  only THIS map, never `#cidLocks` — the two locks are independent
+   *  mechanisms guarding different callers (`invoke()` vs `invoke()`, and
+   *  `invoke()` vs `receiveInbound()`, respectively), not layered stages
+   *  of one lock. See the registration site in `invoke()`. */
+  readonly #pendingDoneAcks = new Map<string, Promise<void>>();
 
   constructor(options: InterAgentToolOptions) {
     this.#options = options;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#newId = options.newId ?? randomUUID;
+    this.#nowMs = options.nowMs ?? Date.now;
+    this.#maxClosedTracks = options.maxClosedTracks ?? DEFAULT_MAX_CLOSED_TRACKS;
+    this.#maxTracks = options.maxTracks ?? DEFAULT_MAX_TRACKS;
+  }
+
+  /** Returns the track for `conversationId`, creating one if absent, and
+   *  refreshes its `lastActivityMs` (issue #177 review M3 — every touch,
+   *  create or lookup, counts as activity for the OPEN-track idle bound).
+   *  Opportunistically prunes stale tracks first (issue #177 /
+   *  #pruneTracks()) — cheap relative to normal traffic volume and keeps
+   *  the map bounded without a dedicated timer. */
+  /** `skipPrune` (review-round2 finding, QUALITY/perf): `invoke()`'s locked
+   *  segment already calls `#pruneTracks()` explicitly right before this —
+   *  to read the AC10 closed-check via a raw, unmutated map lookup ahead
+   *  of any track creation — so re-pruning here moments later, with
+   *  nothing having touched `#conversations` in between, is a pure
+   *  redundant full-map rescan on every `send_to_agent` call. Every OTHER
+   *  caller (`observeInbound`, `receiveInbound`, `resolveTurnEnd`) still
+   *  gets the default (prune-on-every-touch) behaviour unchanged. */
+  #getTrack(
+    conversationId: string,
+    opts?: { skipPrune?: boolean },
+  ): ConversationTrack {
+    if (!opts?.skipPrune) {
+      this.#pruneTracks();
+    }
+    const existing = this.#conversations.get(conversationId);
+    if (existing) {
+      existing.lastActivityMs = this.#nowMs();
+      return existing;
+    }
+    const track = freshTrack(this.#nowMs());
+    this.#conversations.set(conversationId, track);
+    return track;
+  }
+
+  /** Runs every track-pruning pass together (issue #177 review round 2
+   *  folds the new OPEN-track bounds into the same call sites that already
+   *  pruned CLOSED tracks): closed-track TTL + count-cap (unchanged,
+   *  `#pruneClosedTracks()`), then open-track idle TTL
+   *  (`#pruneStaleOpenTracks()`), then the whole-map count backstop
+   *  (`#enforceTrackCap()`). Order matters only in that the two TTL passes
+   *  should run before the count backstop, so the backstop only ever has
+   *  to reach further when TTL alone did not already bring the map within
+   *  bound. */
+  #pruneTracks(): void {
+    this.#pruneClosedTracks();
+    this.#pruneStaleOpenTracks();
+    this.#enforceTrackCap();
+  }
+
+  /** Removes TTL-expired closed tracks, then — issue #177 review M3, AC6 —
+   *  evicts the OLDEST remaining closed tracks (by `closedAtMs`) beyond
+   *  `#maxClosedTracks`, so a wrapper that closes many conversations
+   *  within one TTL window still has a hard memory bound. Open tracks are
+   *  never evicted here (only TTL/count-bound closed ones — an active
+   *  conversation's state must not be discarded out from under it by this
+   *  pass specifically; see `#pruneStaleOpenTracks()` for the OPEN-track
+   *  equivalent). */
+  #pruneClosedTracks(): void {
+    const now = this.#nowMs();
+    const closed: [string, ConversationTrack][] = [];
+    for (const [id, track] of this.#conversations) {
+      if (track.closed && track.closedAtMs !== undefined) {
+        if (now - track.closedAtMs > CLOSED_TRACK_TTL_MS) {
+          this.#conversations.delete(id);
+        } else {
+          closed.push([id, track]);
+        }
+      }
+    }
+    const excess = closed.length - this.#maxClosedTracks;
+    if (excess > 0) {
+      closed.sort(([, a], [, b]) => (a.closedAtMs ?? 0) - (b.closedAtMs ?? 0));
+      for (let i = 0; i < excess; i++) {
+        this.#conversations.delete(closed[i]![0]);
+      }
+    }
+  }
+
+  /** Removes OPEN tracks idle for longer than `OPEN_TRACK_TTL_MS` (issue
+   *  #177 review round 2, "open track の unbounded 経路") — see that
+   *  constant's doc comment for the full rationale. */
+  #pruneStaleOpenTracks(): void {
+    const now = this.#nowMs();
+    for (const [id, track] of this.#conversations) {
+      if (!track.closed && now - track.lastActivityMs > OPEN_TRACK_TTL_MS) {
+        this.#conversations.delete(id);
+      }
+    }
+  }
+
+  /** Whole-map count backstop beyond `#maxTracks`, open and closed
+   *  combined (issue #177 review round 2) — evicts the globally OLDEST
+   *  tracks first (`trackAge()`) once the TTL passes above have already
+   *  run. */
+  #enforceTrackCap(): void {
+    const excess = this.#conversations.size - this.#maxTracks;
+    if (excess <= 0) return;
+    const byAge = [...this.#conversations.entries()].sort(
+      ([, a], [, b]) => trackAge(a) - trackAge(b),
+    );
+    for (let i = 0; i < excess; i++) {
+      this.#conversations.delete(byAge[i]![0]);
+    }
+  }
+
+  /** Serializes `invoke()`'s turn-allocation-through-acceptance-handling
+   *  segment per conversation_id (issue #177 review M1) — NOT the whole
+   *  call: releasing the lock before an eventual `wait_for_response`
+   *  reply-await (up to 300s) would otherwise block a sibling `invoke()`
+   *  on the same conversation_id for the full timeout. A standard
+   *  promise-chained mutex, keyed by conversation_id.
+   *
+   *  Deliberately NOT declared `async`: an uncontended call (the common
+   *  case — no OTHER invoke() currently in flight for this
+   *  conversation_id) runs `fn` SYNCHRONOUSLY, in the same synchronous
+   *  frame as the caller, exactly as `invoke()` did before this lock
+   *  existed. An unconditional `await prior` here — even on an
+   *  already-resolved placeholder — would defer `fn`'s synchronous prefix
+   *  (envelope dispatch, waiter registration) by a full microtask tick for
+   *  EVERY call, uncontended or not, which several existing tests observe
+   *  synchronously (no tick) right after calling `invoke()` without
+   *  awaiting it.
+   *
+   *  The map slot for `conversationId` is still reserved SYNCHRONOUSLY on
+   *  every call, contended or not — this is what keeps 3-way-or-more
+   *  contention correctly ordered: a THIRD call issued in the same
+   *  synchronous burst, before the first two have had a chance to run,
+   *  must see the SECOND call's slot as its `prior`, not the first's, or
+   *  the second and third would both chain off the first independently
+   *  and could run concurrently with each other — reintroducing the same
+   *  race this lock exists to close, one level removed. */
+  #withCidLock<T>(conversationId: string, fn: () => Promise<T>): Promise<T> {
+    const prior = this.#cidLocks.get(conversationId);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const chained = prior === undefined ? held : prior.then(() => held);
+    this.#cidLocks.set(conversationId, chained);
+
+    const run = (): Promise<T> =>
+      fn().finally(() => {
+        release();
+        if (this.#cidLocks.get(conversationId) === chained) {
+          this.#cidLocks.delete(conversationId);
+        }
+      });
+
+    return prior === undefined ? run() : prior.then(run);
   }
 
   /** Records the turn_number of an inbound message so subsequent outbound
    *  turns stay monotonic per conversation regardless of which side authored
-   *  the latest message. Called by cli.ts when the host injects an incoming
-   *  inter_agent_message into the SDK input. */
+   *  the latest message. A narrower sibling of `receiveInbound()` — no
+   *  done/closed/staleness handling — kept for direct turn-number
+   *  bookkeeping (e.g. tests exercising outbound ordering in isolation). */
   observeInbound(conversationId: string, turnNumber: number): void {
-    const track = this.#conversations.get(conversationId) ?? { turnNumber: 0 };
+    const track = this.#getTrack(conversationId);
     if (turnNumber > track.turnNumber) track.turnNumber = turnNumber;
-    this.#conversations.set(conversationId, track);
   }
 
   /** Handles an inbound envelope before the CLI schedules normal next-turn
-   * injection. A matching synchronous waiter consumes exactly one reply, so
-   * its body/meta reaches the current tool result instead of being injected a
-   * second time on the SDK's next turn. Returns true only when consumed. */
-  receiveInbound(envelope: Envelope): boolean {
+   *  injection. A matching synchronous waiter consumes exactly one reply, so
+   *  its body/meta reaches the current tool result instead of being injected
+   *  a second time on the SDK's next turn.
+   *
+   *  issue #177: also classifies the envelope for the non-consumed path.
+   *  `inject: false` (AC9) fires for a turn_number no greater than the
+   *  highest already observed for this conversation_id — a late, stale, or
+   *  duplicate delivery, never the waiter's actual next reply either, so
+   *  staleness is checked BEFORE the waiter lookup. `turn_number=0` is
+   *  exempt (Stage 4): the server's own synthesized notices (hard-limit
+   *  escalate, disconnected) always use it, a distinct provenance from the
+   *  wrapper-origin turn stream that must not be judged against it. `mode`
+   *  (AC7/AC8) reflects the CONVERSATION's state after this envelope, not
+   *  just this message's own `meta.done` — once the peer has signalled done
+   *  at any point without this side reciprocating, every further inbound
+   *  reads as a close proposal until this side closes it too.
+   *
+   *  issue #177 review round 2 (ふじ差し戻し): async — awaits
+   *  `#pendingDoneAcks` (when set for this conversation_id) before reading
+   *  or mutating anything below. Without this, a done=true `invoke()` still
+   *  awaiting its own acceptance leaves `localDone` optimistically true;
+   *  this method could then either (a) hand the caller a "terminal, do not
+   *  reply" disposition that becomes wrong and unrecoverable the moment
+   *  that send is later rejected (the SDK queue already has the
+   *  "informational only" text, `notePendingInjection` was already
+   *  skipped), or (b) — for a server-synthesized hard-limit notice — set an
+   *  authoritative `closed=true` that the later-settling rejection's
+   *  rollback then reverts back to OPEN, a server=CLOSED / wrapper=OPEN
+   *  split-brain that also defeats the local AC10 guard. The gate is short
+   *  (until that ONE send's ack lands), never the full
+   *  `wait_for_response` window. */
+  async receiveInbound(envelope: Envelope): Promise<InboundDisposition> {
     const payload = envelope.payload as Partial<InterAgentMessagePayload>;
     if (
       typeof payload.conversation_id !== "string" ||
       typeof payload.turn_number !== "number"
     ) {
-      return false;
+      // Malformed shape: fail open to injection (existing behaviour) rather
+      // than silently dropping a message the model might still need to see.
+      return { consumed: false, inject: true, mode: "reply-owed" };
     }
 
-    this.observeInbound(payload.conversation_id, payload.turn_number);
-    const waiter = this.#replyWaiters.get(payload.conversation_id);
-    if (!waiter) return false;
+    const conversationId = payload.conversation_id;
+    const turnNumber = payload.turn_number;
+    const doneGate = this.#pendingDoneAcks.get(conversationId);
+    if (doneGate) await doneGate;
+    const track = this.#getTrack(conversationId);
+    // issue #177 review M1: turn_number=0 alone is not proof of server
+    // provenance — a peer wrapper's own live ingress is now rejected
+    // structurally by the server for any non-positive turn_number
+    // (wrapper_channel.ex), but this classifier must not rely on that
+    // alone. A malformed/forged turn_number=0 that slipped through would
+    // otherwise let a peer force THIS side's track into `closed` (or skip
+    // the stale check) without the server ever agreeing the conversation
+    // ended — a split-brain (server=open, this wrapper=closed). Server
+    // envelopes are always `agent_id: "server"`
+    // (`synth_inter_agent_envelope` in wrapper_channel.ex); require both.
+    const isSynthetic = turnNumber === 0 && envelope.agent_id === "server";
+    const stale = !isSynthetic && turnNumber <= track.turnNumber;
 
-    this.#replyWaiters.delete(payload.conversation_id);
+    if (stale) {
+      return { consumed: false, inject: false, mode: "reply-owed" };
+    }
+
+    if (turnNumber > track.turnNumber) track.turnNumber = turnNumber;
+    if (payload.meta?.done === true) track.remoteDone = true;
+    // issue #177 (review must-fix): closed(terminal) has two independent
+    // routes, not one — protocol-inter-agent.md's lifecycle section: "両
+    // owner-side の done=true が揃った、または hard limit 超過". A
+    // server-synthesized hard-limit termination (turn_number=0,
+    // meta.done=true, e.g. kind="escalate-to-user") ends the conversation
+    // for BOTH sides by server fiat — the server already tombstoned it
+    // (Stage 1) — regardless of whether THIS side ever sent its own
+    // done=true. Gating solely on `localDone && remoteDone` misread that
+    // broadcast as a one-sided close-proposal, which invited exactly the
+    // further send_to_agent call AC8 exists to prevent (and which the
+    // local AC10 guard below would not have caught either, since it also
+    // reads `closed`).
+    if (
+      !track.closed &&
+      ((track.localDone && track.remoteDone) ||
+        (isSynthetic && payload.meta?.done === true))
+    ) {
+      track.closed = true;
+      track.closedAtMs = this.#nowMs();
+    }
+    const mode: InboundReplyMode = track.closed
+      ? "terminal"
+      : track.remoteDone
+        ? "close-proposal"
+        : "reply-owed";
+
+    const waiter = this.#replyWaiters.get(conversationId);
+    if (!waiter) return { consumed: false, inject: true, mode };
+
+    this.#replyWaiters.delete(conversationId);
     clearTimeout(waiter.timeout);
     waiter.resolve(envelope);
-    return true;
+    return { consumed: true, inject: false, mode };
   }
 
   /** Records that an inbound inter-agent message is about to be injected
@@ -463,11 +860,8 @@ export class InterAgentTool {
     this.#pendingInjections.delete(conversationId);
     if (!error) return [];
 
-    const track = this.#conversations.get(conversationId) ?? {
-      turnNumber: 0,
-    };
+    const track = this.#getTrack(conversationId);
     track.turnNumber += 1;
-    this.#conversations.set(conversationId, track);
     const payload: InterAgentMessagePayload = {
       to: injection.from,
       conversation_id: conversationId,
@@ -588,80 +982,283 @@ export class InterAgentTool {
 
     const conversationId = args.conversation_id ?? this.#newId();
     const waitForResponse = args.wait_for_response === true;
-    if (waitForResponse && this.#replyWaiters.has(conversationId)) {
-      return errorResult(
-        `send_to_agent failed: a synchronous reply wait is already active for conversation_id=${conversationId}`,
-      );
-    }
 
-    const track = this.#conversations.get(conversationId) ?? { turnNumber: 0 };
-    track.turnNumber += 1;
-    this.#conversations.set(conversationId, track);
-    // receiveInbound() can advance the shared conversation track while this
-    // invocation awaits a peer, but the acknowledgement must describe the
-    // turn that was actually sent.
-    const sentTurnNumber = track.turnNumber;
+    // issue #177 review M1: the turn-allocation-through-acceptance-handling
+    // segment below is serialized per conversation_id via #withCidLock —
+    // NOT the whole call (releasing before an eventual wait_for_response
+    // reply-await, up to 300s, would otherwise block a sibling invoke() on
+    // the same conversation_id for the full timeout). Without this, two
+    // concurrent invoke() calls on the same conversation_id each run their
+    // synchronous prefix (turn number allocation, optimistic localDone
+    // flip / snapshot below) against the SAME shared track object before
+    // either awaits its own #dispatch — so a REJECTED call's rollback
+    // restores a snapshot that predates a sibling call's already-committed
+    // (accepted) mutation and silently erases it. See the M1 review
+    // finding for the concrete repro (two concurrent done=true sends, one
+    // rejected, one accepted, same conversation_id).
+    const outcome = await this.#withCidLock(
+      conversationId,
+      async (): Promise<InvokeLockOutcome> => {
+        // issue #177 AC10: a conversation this wrapper already knows is
+        // CLOSED is rejected locally, before any network round-trip — the
+        // server would say the same via conversation_closed, but there is
+        // no reason to pay a push for an answer we already know. Read
+        // (and pruned) INSIDE the lock — review M1 — so a concurrent
+        // sibling call cannot have changed `closed` out from under this
+        // check between reading it and acting on it. A freshly generated
+        // conversation_id (omitted by the caller) can never already be in
+        // the map, so this is a no-op for that case, same as before.
+        this.#pruneTracks();
+        const existing = this.#conversations.get(conversationId);
+        if (existing?.closed) {
+          // issue #177 review S3: reason-neutral — closed(terminal) has
+          // two routes (mutual done, OR a server hard-limit escalate), so
+          // this must not assert "both sides signalled done" when the
+          // real cause may have been a hard limit.
+          return {
+            kind: "local-reject",
+            message:
+              `send_to_agent failed: conversation_id=${conversationId} is ` +
+              "already closed — omit conversation_id to start a new " +
+              "conversation with this peer.",
+          };
+        }
 
-    const meta: InterAgentMessagePayload["meta"] = {
-      done: args.done ?? false,
-      propose_next: args.propose_next ?? "",
-    };
-    if (args.confidence !== undefined) meta.confidence = args.confidence;
-    if (args.reject_reason !== undefined && args.reject_reason !== "") {
-      meta.reject_reason = args.reject_reason;
-    }
+        // issue #177 review M1: checked HERE (not before the lock) so it
+        // is evaluated at the same point #waitForReply() actually
+        // registers, below — a sibling call queued behind this lock would
+        // otherwise pass a dupe-check performed before this call had
+        // registered its own waiter yet, then silently overwrite it.
+        if (waitForResponse && this.#replyWaiters.has(conversationId)) {
+          return {
+            kind: "local-reject",
+            message:
+              "send_to_agent failed: a synchronous reply wait is already " +
+              `active for conversation_id=${conversationId}`,
+          };
+        }
 
-    const payload: InterAgentMessagePayload = {
-      to: args.to,
-      conversation_id: conversationId,
-      turn_number: sentTurnNumber,
-      kind: args.kind,
-      body: args.body,
-      meta,
-      owner: { kind: "user", id: "operator" },
-    };
+        // issue #177 review M3: remember whether THIS call creates a
+        // brand-new track, so a rejected send (nothing reached the peer)
+        // can remove it entirely instead of leaving a permanent phantom
+        // OPEN entry — an unbounded-growth vector distinct from the
+        // closed-track cap (AC6).
+        const trackExistedBefore = this.#conversations.has(conversationId);
+        // review-round2 (QUALITY/perf): the AC10 check above already ran
+        // #pruneTracks() moments ago, synchronously, with nothing having
+        // touched #conversations in between (the closed-check and
+        // dupe-waiter-check are both read-only) — re-pruning here would be
+        // a pure redundant full-map rescan on every send_to_agent call.
+        const track = this.#getTrack(conversationId, { skipPrune: true });
+        track.turnNumber += 1;
+        // receiveInbound() can advance the shared conversation track while
+        // this invocation awaits a peer, but the acknowledgement must
+        // describe the turn that was actually sent.
+        const sentTurnNumber = track.turnNumber;
 
-    const envelope = makeInterAgentMessage(
-      this.#options.config,
-      this.#options.getState(),
-      this.#now(),
-      payload,
+        const meta: InterAgentMessagePayload["meta"] = {
+          done: args.done ?? false,
+          propose_next: args.propose_next ?? "",
+        };
+        if (args.confidence !== undefined) meta.confidence = args.confidence;
+        if (args.reject_reason !== undefined && args.reject_reason !== "") {
+          meta.reject_reason = args.reject_reason;
+        }
+
+        const payload: InterAgentMessagePayload = {
+          to: args.to,
+          conversation_id: conversationId,
+          turn_number: sentTurnNumber,
+          kind: args.kind,
+          body: args.body,
+          meta,
+          owner: { kind: "user", id: "operator" },
+        };
+
+        const envelope = makeInterAgentMessage(
+          this.#options.config,
+          this.#options.getState(),
+          this.#now(),
+          payload,
+        );
+
+        // issue #177 review M2: mark this side done=true BEFORE awaiting
+        // the send ack below, not after — otherwise a peer's closing
+        // reply that races in (via this wrapper's own independent
+        // onInterAgentMessage -> receiveInbound() path, e.g. while this
+        // call is still awaiting its OWN ack) reads `localDone` as still
+        // false and misclassifies a genuinely mutual close as a
+        // one-sided close-proposal, enqueueing a needless reply.
+        // Snapshotting the pre-flip state lets a REJECTED send (below)
+        // roll it back precisely — including any `closed` transition
+        // this flip alone caused — since a rejected send never reached
+        // the peer and must not close this side locally. Skipped when
+        // localDone is already true (idempotent repeat; nothing to roll
+        // back either way).
+        let localDoneSnapshot:
+          | {
+              localDone: boolean;
+              closed: boolean;
+              closedAtMs: number | undefined;
+            }
+          | null = null;
+        // issue #177 review round 2 (ふじ差し戻し): a short per-CID gate,
+        // held only while THIS optimistic flip is unconfirmed — distinct
+        // from #withCidLock (which serializes invoke() vs invoke(); the
+        // #cidLocks entry for this conversation_id is still held
+        // throughout this gate's lifetime too, released only strictly
+        // AFTER it, in the same #withCidLock callback — the two locks
+        // guard different callers, not two stages of one lock).
+        // receiveInbound() awaits this one (when present) before
+        // computing/mutating anything off of `localDone` or `closed`, so
+        // neither of two failure modes can happen: (1) an authoritative
+        // CLOSED set by a concurrently-arriving inbound (peer done, or a
+        // server hard-limit notice) getting reverted to OPEN by this
+        // call's rollback below, restoring a pre-flip snapshot that
+        // predates that inbound's legitimate mutation; (2) that SAME
+        // inbound reading the still-optimistic `localDone` and handing
+        // the adapter a "terminal, do not reply" disposition that turns
+        // out, once this send is actually rejected, to have been wrong
+        // and is by then unrecoverable (already injected into the SDK
+        // queue, already skipped notePendingInjection). Released via
+        // releaseGateIfHeld() in the `finally` below — unconditionally,
+        // even if #dispatch() throws or its promise rejects, so a
+        // transport failure can never leave this conversation_id's gate
+        // stuck forever (which would hang every later receiveInbound()
+        // call for it — review round 3 must-fix).
+        let releaseDoneGate: (() => void) | null = null;
+        if (args.done === true && !track.localDone) {
+          localDoneSnapshot = {
+            localDone: track.localDone,
+            closed: track.closed,
+            closedAtMs: track.closedAtMs,
+          };
+          track.localDone = true;
+          if (!track.closed && track.remoteDone) {
+            track.closed = true;
+            track.closedAtMs = this.#nowMs();
+          }
+          const gate = new Promise<void>((resolve) => {
+            releaseDoneGate = resolve;
+          });
+          this.#pendingDoneAcks.set(conversationId, gate);
+        }
+        const releaseGateIfHeld = (): void => {
+          if (releaseDoneGate) {
+            releaseDoneGate();
+            this.#pendingDoneAcks.delete(conversationId);
+          }
+        };
+
+        const timeoutMs = args.timeout_ms ?? DEFAULT_REPLY_TIMEOUT_MS;
+        const reply = waitForResponse
+          ? this.#waitForReply(conversationId, timeoutMs)
+          : undefined;
+
+        const sent = `sent to ${args.to} (conversation_id=${conversationId}, turn_number=${sentTurnNumber})`;
+
+        // review round 3 must-fix: everything from the dispatch call
+        // through the accept/reject decision runs inside try/finally so
+        // releaseGateIfHeld() ALWAYS runs — including when #dispatch()
+        // itself throws synchronously or its returned promise rejects
+        // (the injectable `sendInterAgent` sink's type only describes the
+        // resolved shape; it does not rule out either). Without this, an
+        // exception here would leave the pending-done gate registered
+        // forever, and every later receiveInbound() for this
+        // conversation_id (`if (doneGate) await doneGate;`) would hang.
+        try {
+          // ふじ 30-10 must-fix M5: the acceptance ack decides the tool
+          // result. Reporting "sent" for a message the server explicitly
+          // refused (unknown_agent / participants_mismatch / quota) told
+          // the model its delegation had landed when no peer would ever
+          // see it — ADR-0051 D3-2 requires reject and timeout to surface
+          // here.
+          const acceptance = await this.#dispatch(envelope);
+
+          // issue #131 / ふじ 30-10 R2: this wrapper stops owing an error
+          // notice for the inbound it was injected to answer only once
+          // the send actually got somewhere. A REJECTED send is not a
+          // reply — clearing the pending injection there would silently
+          // swallow the very notice #131 exists to produce. `unknown`
+          // still clears it: the message may well have been delivered,
+          // and layering an error notice on top of a delivered reply
+          // would read to the peer as two contradictory answers.
+          if (acceptance.kind !== "rejected") {
+            this.#pendingInjections.delete(conversationId);
+          }
+
+          if (acceptance.kind === "rejected") {
+            if (acceptance.reason === "conversation_closed") {
+              // issue #177 review M2: the server is authoritative that
+              // this CID is done — closed forever, whether or not THIS
+              // wrapper ever locally observed it (e.g. after a restart,
+              // or a hallucinated/reused id). Learn that into the local
+              // track instead of discarding it (brand-new-delete, below)
+              // or rolling back to a pre-flip snapshot: either would
+              // forget the closure and let the NEXT identical
+              // explicit-CID attempt round-trip to the server again — and
+              // once the server's own (much shorter) tombstone TTL
+              // elapses, succeed, directly undermining the wrapper's 24h
+              // guard being the real enforced CID-reuse boundary
+              // (protocol-inter-agent.md "CID 再利用は契約にしない").
+              if (!track.closed) {
+                track.closed = true;
+                track.closedAtMs = this.#nowMs();
+              }
+            } else if (!trackExistedBefore) {
+              // A brand-new track created solely for this rejected
+              // attempt represents a conversation that never actually
+              // started; remove it rather than leaving a phantom OPEN
+              // entry (AC6). This also discards any optimistic localDone
+              // flip on the same track — no separate rollback needed for
+              // the brand-new case.
+              this.#conversations.delete(conversationId);
+            } else if (localDoneSnapshot) {
+              track.localDone = localDoneSnapshot.localDone;
+              track.closed = localDoneSnapshot.closed;
+              // `exactOptionalPropertyTypes`: an optional field can be
+              // omitted but never explicitly assigned `undefined`.
+              if (localDoneSnapshot.closedAtMs === undefined) {
+                delete track.closedAtMs;
+              } else {
+                track.closedAtMs = localDoneSnapshot.closedAtMs;
+              }
+            }
+
+            // Nothing was routed, so nothing will ever reply on this
+            // conversation because of this call: release the waiter
+            // instead of parking the tool for the full reply timeout.
+            this.#cancelReplyWait(conversationId);
+            return {
+              kind: "rejected",
+              message: `send_to_agent failed: server rejected the message (${acceptance.reason})`,
+            };
+          }
+
+          return {
+            kind: "dispatched",
+            acceptance,
+            sentTurnNumber,
+            sent,
+            reply,
+            timeoutMs,
+          };
+        } finally {
+          // Final either way — accepted/unknown confirms localDone as
+          // sent (nothing to roll back), rejected has already applied its
+          // rollback/learn decision above; an uncaught exception leaves
+          // the track exactly as the optimistic flip left it, which is
+          // the same "assume nothing changed" posture the rest of this
+          // method takes when #dispatch's contract is violated.
+          releaseGateIfHeld();
+        }
+      },
     );
 
-    const timeoutMs = args.timeout_ms ?? DEFAULT_REPLY_TIMEOUT_MS;
-    const reply = waitForResponse
-      ? this.#waitForReply(conversationId, timeoutMs)
-      : undefined;
-
-    const sent = `sent to ${args.to} (conversation_id=${conversationId}, turn_number=${sentTurnNumber})`;
-
-    // ふじ 30-10 must-fix M5: the acceptance ack decides the tool result.
-    // Reporting "sent" for a message the server explicitly refused
-    // (unknown_agent / participants_mismatch / quota) told the model its
-    // delegation had landed when no peer would ever see it — ADR-0051 D3-2
-    // requires reject and timeout to surface here.
-    const acceptance = await this.#dispatch(envelope);
-
-    // issue #131 / ふじ 30-10 R2: this wrapper stops owing an error notice
-    // for the inbound it was injected to answer only once the send actually
-    // got somewhere. A REJECTED send is not a reply — clearing the pending
-    // injection there would silently swallow the very notice #131 exists to
-    // produce. `unknown` still clears it: the message may well have been
-    // delivered, and layering an error notice on top of a delivered reply
-    // would read to the peer as two contradictory answers.
-    if (acceptance.kind !== "rejected") {
-      this.#pendingInjections.delete(conversationId);
+    if (outcome.kind !== "dispatched") {
+      return errorResult(outcome.message);
     }
-
-    if (acceptance.kind === "rejected") {
-      // Nothing was routed, so nothing will ever reply on this conversation
-      // because of this call: release the waiter instead of parking the tool
-      // for the full reply timeout.
-      this.#cancelReplyWait(conversationId);
-      return errorResult(
-        `send_to_agent failed: server rejected the message (${acceptance.reason})`,
-      );
-    }
+    const { acceptance, sentTurnNumber, sent, reply, timeoutMs } = outcome;
 
     // ふじ 30-10 R3: a peer reply that has ALREADY landed is proof the
     // message was delivered, whatever happened to the acceptance ack. The
@@ -788,14 +1385,59 @@ export class InterAgentTool {
   }
 }
 
-const INTER_AGENT_MESSAGE_PREFIX =
+/** Canonical lead-in prefixes for the `[Inter-agent message...]` line
+ *  (issue #177 review S4). `reply-owed` has its own distinct wording;
+ *  `close-proposal` and `terminal` share the same lead-in up to the
+ *  conversation_id — only the guidance text after it differs (see
+ *  `markerLine()`). `isFormattedInterAgentMessage()` and resume
+ *  reconstruction (#105) key on these EXACT prefixes rather than a short
+ *  generic "[Inter-agent message" fragment, so unrelated text that merely
+ *  happens to start with that fragment cannot be mistaken for a genuine
+ *  injection. Do not trim either constant: an operator quoting one later
+ *  in ordinary text must remain an ordinary user log during resume
+ *  reconstruction. */
+const REPLY_OWED_MARKER_PREFIX =
   '[Inter-agent message — to reply, call send_to_agent with conversation_id="';
+const CLOSING_MARKER_PREFIX = '[Inter-agent message — conversation_id="';
 
-/** True only for the reserved first-line framing injected into an SDK turn.
- *  Do not trim: an operator quoting the marker later in ordinary text must
- *  remain an ordinary user log during resume reconstruction (#105). */
+/** True only for the reserved first-line framing injected into an SDK
+ *  turn — either canonical prefix above. */
 export function isFormattedInterAgentMessage(text: string): boolean {
-  return text.startsWith(INTER_AGENT_MESSAGE_PREFIX);
+  return (
+    text.startsWith(REPLY_OWED_MARKER_PREFIX) ||
+    text.startsWith(CLOSING_MARKER_PREFIX)
+  );
+}
+
+/** issue #177: the full leading marker line per {@link InboundReplyMode},
+ *  built from the canonical prefixes above (single source of truth with
+ *  `isFormattedInterAgentMessage()`). `reply-owed` is byte-identical to
+ *  the pre-#177 wording — existing callers and tests depend on the exact
+ *  string. `close-proposal` / `terminal` deliberately do NOT say "to
+ *  reply, call send_to_agent" (AC7/AC8: no reply directive once a close is
+ *  on the table) — folding that into the LEADING line rather than a
+ *  trailing disclaimer is what actually stops a model from acting on an
+ *  instruction-shaped opener before it reads the rest of the message.
+ *  `terminal`'s text is reason-neutral (issue #177 review S3): closed
+ *  (terminal) has two routes — mutual done, OR a server hard-limit
+ *  escalate — so it must not assert "both sides signalled done" when the
+ *  real cause may have been a hard limit. */
+function markerLine(conversationId: string, mode: InboundReplyMode): string {
+  switch (mode) {
+    case "reply-owed":
+      return `${REPLY_OWED_MARKER_PREFIX}${conversationId}".]`;
+    case "close-proposal":
+      return (
+        `${CLOSING_MARKER_PREFIX}${conversationId}": the peer signalled ` +
+        "done=true, proposing to close. Reply once with done=true to " +
+        "close it too, or send a substantive response to continue.]"
+      );
+    case "terminal":
+      return (
+        `${CLOSING_MARKER_PREFIX}${conversationId}" is now closed. This ` +
+        "message is informational only — do not call send_to_agent for it.]"
+      );
+  }
 }
 
 /** Formats an inbound inter_agent_message envelope into the user-message text
@@ -806,8 +1448,15 @@ export function isFormattedInterAgentMessage(text: string): boolean {
  *  send, which doubles the operator's workload (the broker already gates
  *  each send via its own permission dialog). Resilient to a malformed
  *  envelope (e.g. the server-synthesized escalate skeleton) — missing
- *  fields collapse to empty. */
-export function formatInboundMessage(envelope: Envelope): string {
+ *  fields collapse to empty.
+ *
+ *  `mode` (issue #177, default `"reply-owed"`) changes the leading marker
+ *  line's guidance text — see {@link InboundReplyMode} and `markerLine()`.
+ *  Everything after it (from/kind/body/meta) is unchanged across modes. */
+export function formatInboundMessage(
+  envelope: Envelope,
+  opts?: { mode?: InboundReplyMode },
+): string {
   const payload = envelope.payload as Partial<InterAgentMessagePayload>;
   const from = envelope.agent_id;
   const kind = payload.kind ?? "inform";
@@ -817,6 +1466,7 @@ export function formatInboundMessage(envelope: Envelope): string {
   const conversationId = payload.conversation_id ?? "";
   const turnNumber = payload.turn_number ?? 0;
   const error = payload.error;
+  const mode = opts?.mode ?? "reply-owed";
   // issue #131: an error notice gets its own line format — a plain
   // "kind: body" render would bury the machine-readable code the receiving
   // model needs to decide whether retrying is worthwhile.
@@ -824,7 +1474,7 @@ export function formatInboundMessage(envelope: Envelope): string {
     ? `[from ${from}] peer-error(${error.code}): ${error.message} — ${errorGuidance(error.code)}.`
     : `[from ${from}] ${kind}: ${body}`;
   return [
-    `${INTER_AGENT_MESSAGE_PREFIX}${conversationId}".]`,
+    markerLine(conversationId, mode),
     "",
     messageLine,
     "",

@@ -173,8 +173,15 @@ describe("InterAgentTool", () => {
 
     expect(capture.envelopes).toHaveLength(1);
     const inbound = inboundEnvelope("cnv-wait");
-    expect(tool.receiveInbound(inbound)).toBe(true);
-    expect(tool.receiveInbound(inbound)).toBe(false);
+    expect((await tool.receiveInbound(inbound)).consumed).toBe(true);
+    // issue #177 AC9: the exact same envelope delivered again is now also a
+    // stale/duplicate turn_number (<= the one just observed) — dropped, not
+    // just "not consumed".
+    expect(await tool.receiveInbound(inbound)).toEqual({
+      consumed: false,
+      inject: false,
+      mode: "reply-owed",
+    });
 
     const { result } = await pending;
     expect(result.isError).toBeFalsy();
@@ -201,7 +208,9 @@ describe("InterAgentTool", () => {
       expect(result.content[0]!.text).toContain("sent to peer.agent");
       expect(result.content[0]!.text).toContain("reply_pending=true");
       expect(result.content[0]!.text).toContain("timeout_ms=300000");
-      expect(tool.receiveInbound(inboundEnvelope("cnv-timeout"))).toBe(false);
+      expect(
+        (await tool.receiveInbound(inboundEnvelope("cnv-timeout"))).consumed,
+      ).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -216,7 +225,9 @@ describe("InterAgentTool", () => {
       // Registered before A's waiter: at the exact 1000ms boundary the reply
       // wins. B's reply is registered after its waiter: timeout wins.
       setTimeout(() => {
-        aConsumed = tool.receiveInbound(inboundEnvelope("cnv-a"));
+        void tool.receiveInbound(inboundEnvelope("cnv-a")).then((d) => {
+          aConsumed = d.consumed;
+        });
       }, 1_000);
       const timeoutFirst = callTool(tool, {
         to: "peer.agent", body: "A", kind: "query", conversation_id: "cnv-a",
@@ -228,7 +239,9 @@ describe("InterAgentTool", () => {
       });
       await Promise.resolve();
       setTimeout(() => {
-        bConsumed = tool.receiveInbound(inboundEnvelope("cnv-b"));
+        void tool.receiveInbound(inboundEnvelope("cnv-b")).then((d) => {
+          bConsumed = d.consumed;
+        });
       }, 1_000);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(aConsumed).toBe(true);
@@ -303,7 +316,7 @@ describe("InterAgentTool", () => {
       code: "rate_limit",
       message: "peer hit its rate limit",
     });
-    expect(tool.receiveInbound(inbound)).toBe(true);
+    expect((await tool.receiveInbound(inbound)).consumed).toBe(true);
 
     const { result } = await pending;
     expect(result.isError).toBeFalsy();
@@ -335,6 +348,412 @@ describe("InterAgentTool", () => {
     expect(meta.propose_next).toBe("別案を検討");
     expect(meta.done).toBe(true);
   });
+});
+
+describe("issue #177: conversation lifecycle (done / close-proposal / terminal / stale / TTL)", () => {
+  function doneInbound(conversationId: string, turnNumber: number): Envelope {
+    const env = inboundEnvelope(conversationId, "inform");
+    (env.payload as unknown as InterAgentMessagePayload).turn_number = turnNumber;
+    (env.payload as unknown as InterAgentMessagePayload).meta = {
+      done: true,
+      propose_next: "",
+    };
+    return env;
+  }
+
+  it("peer 側のみの done=true は close-proposal (AC7): 返信はまだ owed", async () => {
+    const { tool } = makeTool("self.agent");
+    const disposition = await tool.receiveInbound(doneInbound("cnv-close", 1));
+    expect(disposition).toEqual({
+      consumed: false,
+      inject: true,
+      mode: "close-proposal",
+    });
+  });
+
+  it("両側 done で terminal になり、以後の同一 CID 送信は AC10 で tool error", async () => {
+    const { tool } = makeTool("self.agent");
+    // 自分側が先に done=true を送信 (makeTool は sendInterAgent 未配線 =
+    // fire-and-forget accepted 扱い)。
+    const closing = await tool.invoke({
+      to: "peer.agent",
+      body: "bye",
+      kind: "done",
+      conversation_id: "cnv-terminal",
+      done: true,
+    });
+    expect(closing.isError).toBeFalsy();
+
+    // peer 側も done=true (turn_number は invoke() が消費した 1 より大きく
+    // ないと stale 判定に落ちる)。両側揃って terminal。
+    const disposition = await tool.receiveInbound(doneInbound("cnv-terminal", 2));
+    expect(disposition).toEqual({
+      consumed: false,
+      inject: true,
+      mode: "terminal",
+    });
+
+    // AC10: closed CID を指定した send_to_agent は tool error。
+    const retry = await tool.invoke({
+      to: "peer.agent",
+      body: "again?",
+      kind: "inform",
+      conversation_id: "cnv-terminal",
+    });
+    expect(retry.isError).toBe(true);
+    expect(retry.content[0]!.text).toContain("already closed");
+
+    // CID 省略なら新規 conversation として送信できる。
+    const fresh = await tool.invoke({
+      to: "peer.agent",
+      body: "new one",
+      kind: "inform",
+    });
+    expect(fresh.isError).toBeFalsy();
+  });
+
+  it("stale/duplicate turn_number は inject されない (AC9)", async () => {
+    const { tool } = makeTool("self.agent");
+    const first = inboundEnvelope("cnv-stale", "inform");
+    (first.payload as unknown as InterAgentMessagePayload).turn_number = 3;
+    expect(await tool.receiveInbound(first)).toEqual({
+      consumed: false,
+      inject: true,
+      mode: "reply-owed",
+    });
+
+    // 同じ turn_number の再送 (duplicate) は stale。
+    expect(await tool.receiveInbound(first)).toEqual({
+      consumed: false,
+      inject: false,
+      mode: "reply-owed",
+    });
+
+    // それより低い turn_number (out-of-order な遅延到着) も stale。
+    const earlier = inboundEnvelope("cnv-stale", "inform");
+    (earlier.payload as unknown as InterAgentMessagePayload).turn_number = 2;
+    expect(await tool.receiveInbound(earlier)).toEqual({
+      consumed: false,
+      inject: false,
+      mode: "reply-owed",
+    });
+  });
+
+  it("server 合成 envelope (agent_id=server) の turn_number=0 は stale 判定から除外される (Stage 4)", async () => {
+    const { tool } = makeTool("self.agent");
+    const first = inboundEnvelope("cnv-synth", "inform");
+    (first.payload as unknown as InterAgentMessagePayload).turn_number = 5;
+    await tool.receiveInbound(first);
+
+    const synth = inboundEnvelope("cnv-synth", "escalate-to-user");
+    synth.agent_id = "server";
+    (synth.payload as unknown as InterAgentMessagePayload).turn_number = 0;
+    expect((await tool.receiveInbound(synth)).inject).toBe(true);
+  });
+
+  it("peer が agent_id=server を伴わず turn_number=0 を自称しても synthetic 扱いしない " +
+       "(review must-fix M1: provenance を見ずに 0 だけで判定しない)", async () => {
+    const { tool } = makeTool("self.agent");
+    const first = inboundEnvelope("cnv-forged", "inform");
+    (first.payload as unknown as InterAgentMessagePayload).turn_number = 3;
+    await tool.receiveInbound(first);
+
+    // agent_id は既定の "peer.agent" のまま — server ではない。
+    const forged = inboundEnvelope("cnv-forged", "escalate-to-user");
+    (forged.payload as unknown as InterAgentMessagePayload).turn_number = 0;
+    (forged.payload as unknown as InterAgentMessagePayload).meta = {
+      done: true,
+      propose_next: "",
+    };
+    // isSynthetic は false になるので turn_number=0 <= track.turnNumber(3)
+    // により stale として drop される — server=open のまま、この wrapper
+    // 側だけが closed になる split-brain を起こさない。
+    expect(await tool.receiveInbound(forged)).toEqual({
+      consumed: false,
+      inject: false,
+      mode: "reply-owed",
+    });
+  });
+
+  it("hard-limit の server 合成 escalate (agent_id=server, turn_number=0, done=true) は " +
+       "terminal になり AC10 も働く (review must-fix)", async () => {
+    const { tool } = makeTool("self.agent");
+    // Neither side has sent done=true yet — a hard limit tripping on an
+    // otherwise-open conversation, the common case in practice.
+    const escalate = inboundEnvelope("cnv-hardlimit", "escalate-to-user");
+    escalate.agent_id = "server";
+    (escalate.payload as unknown as InterAgentMessagePayload).turn_number = 0;
+    (escalate.payload as unknown as InterAgentMessagePayload).meta = {
+      done: true,
+      propose_next: "",
+    };
+    const disposition = await tool.receiveInbound(escalate);
+    expect(disposition).toEqual({
+      consumed: false,
+      inject: true,
+      mode: "terminal",
+    });
+
+    // The server already tombstoned this conversation_id (Stage 1); the
+    // local AC10 guard must reject a further send on it too, without a
+    // round-trip.
+    const retry = await tool.invoke({
+      to: "peer.agent",
+      body: "still there?",
+      kind: "inform",
+      conversation_id: "cnv-hardlimit",
+    });
+    expect(retry.isError).toBe(true);
+    expect(retry.content[0]!.text).toContain("already closed");
+  });
+
+  it("markerLine は mode ごとに文言が変わり、全モードで isFormattedInterAgentMessage を満たす", () => {
+    const closeProposalText = formatInboundMessage(doneInbound("cnv-mode", 1), {
+      mode: "close-proposal",
+    });
+    expect(closeProposalText).toContain("proposing to close");
+    expect(closeProposalText).not.toContain("to reply, call send_to_agent");
+    expect(isFormattedInterAgentMessage(closeProposalText)).toBe(true);
+
+    const terminalText = formatInboundMessage(doneInbound("cnv-mode", 1), {
+      mode: "terminal",
+    });
+    expect(terminalText).toContain("now closed");
+    expect(terminalText).not.toContain("to reply, call send_to_agent");
+    expect(isFormattedInterAgentMessage(terminalText)).toBe(true);
+  });
+
+  it("closed track は TTL 経過後に GC され、同一 CID を新規会話として再利用できる", async () => {
+    let clock = 0;
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {},
+      now: () => "2026-08-08T00:00:00Z",
+      newId: () => "cnv-fresh",
+      nowMs: () => clock,
+    });
+
+    const closing = await tool.invoke({
+      to: "peer.agent",
+      body: "bye",
+      kind: "done",
+      conversation_id: "cnv-ttl",
+      done: true,
+    });
+    expect(closing.isError).toBeFalsy();
+    await tool.receiveInbound(doneInbound("cnv-ttl", 2));
+
+    // まだ TTL 内: AC10 の closed 拒否が働く。
+    const stillClosed = await tool.invoke({
+      to: "peer.agent",
+      body: "again",
+      kind: "inform",
+      conversation_id: "cnv-ttl",
+    });
+    expect(stillClosed.isError).toBe(true);
+
+    // closed_at からの TTL (24h) を超えて経過させる。
+    clock += 24 * 60 * 60 * 1000 + 1;
+
+    // TTL 超過後は closed track が prune され、同じ CID を新規会話として
+    // 送信できる — 完了済み conversation_id の永久ブロックにならない。
+    const reused = await tool.invoke({
+      to: "peer.agent",
+      body: "new conversation, same id",
+      kind: "inform",
+      conversation_id: "cnv-ttl",
+    });
+    expect(reused.isError).toBeFalsy();
+  });
+
+  it("M3: closed track は maxClosedTracks を超えると最も古いものから evict される " +
+       "(review must-fix, AC6)", async () => {
+    let clock = 0;
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {},
+      now: () => "2026-08-08T00:00:00Z",
+      newId: () => "cnv-auto",
+      nowMs: () => clock,
+      maxClosedTracks: 2,
+    });
+
+    for (const cid of ["cnv-a", "cnv-b", "cnv-c"]) {
+      clock += 1;
+      const closing = await tool.invoke({
+        to: "peer.agent",
+        body: "x",
+        kind: "done",
+        conversation_id: cid,
+        done: true,
+      });
+      expect(closing.isError).toBeFalsy();
+      await tool.receiveInbound(doneInbound(cid, 2));
+    }
+
+    // 3 件 close させたが上限 2 件 — 最も古い cnv-a は evict され、CID は
+    // 新規会話として再利用できる (完了済み扱いのまま残らない)。
+    const oldest = await tool.invoke({
+      to: "peer.agent",
+      body: "y",
+      kind: "inform",
+      conversation_id: "cnv-a",
+    });
+    expect(oldest.isError).toBeFalsy();
+
+    // 新しい 2 件 (cnv-b, cnv-c) はまだ closed のまま evict されない。
+    const stillClosed = await tool.invoke({
+      to: "peer.agent",
+      body: "y",
+      kind: "inform",
+      conversation_id: "cnv-c",
+    });
+    expect(stillClosed.isError).toBe(true);
+  });
+
+  it("M3: reject された brand-new conversation の track は残らない (review must-fix, AC6)", async () => {
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {
+        throw new Error("acceptance-aware sink must be used");
+      },
+      sendInterAgent: () =>
+        Promise.resolve({ kind: "rejected", reason: "unknown_agent" }),
+      now: () => "2026-08-08T00:00:00Z",
+      newId: () => "cnv-auto",
+    });
+
+    const first = await tool.invoke({
+      to: "peer.agent",
+      body: "hi",
+      kind: "inform",
+      conversation_id: "cnv-phantom",
+    });
+    expect(first.isError).toBe(true);
+
+    // track が生き残っていれば turn_number=1 は既知の max として残るので
+    // stale 判定されるはず。track が削除されていれば新規会話扱いで stale
+    // にならない (= 拒否された brand-new track はどこにも残っていない)。
+    const inbound = inboundEnvelope("cnv-phantom", "inform");
+    (inbound.payload as unknown as InterAgentMessagePayload).turn_number = 1;
+    expect((await tool.receiveInbound(inbound)).inject).toBe(true);
+  });
+
+  // issue #177 review round 2 M3 ("open track の unbounded 経路"):
+  // #pruneClosedTracks() only ever prunes tracks this wrapper itself
+  // learned were CLOSED. The server's own periodic GC does not push a
+  // tombstone notice to this wrapper when it closes a conversation on its
+  // own (issue #209, deferred), so a track this wrapper never learned was
+  // closed stayed OPEN — and therefore un-prunable — for the life of the
+  // process. Mutation-tested: with #pruneStaleOpenTracks() removed, the
+  // final assertion fails (turn_number=3, continuing the sequence, instead
+  // of resetting to 1) — confirmed manually before finalizing.
+  it(
+    "round2 M3: OPEN track は idle TTL を超えると evict され、turn_number が " +
+      "リセットされる (open track の unbounded 経路, review must-fix)",
+    async () => {
+      let clock = 0;
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"),
+        getState: () => "tool_running",
+        send: () => {},
+        now: () => "2026-08-08T00:00:00Z",
+        newId: () => "cnv-auto",
+        nowMs: () => clock,
+      });
+
+      const first = await tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-open-idle",
+      });
+      expect(first.isError).toBeFalsy();
+      expect(first.content[0]!.text).toContain("turn_number=1");
+
+      // まだ TTL 内: 同じ track が生きているので turn_number は単調増加。
+      const stillAlive = await tool.invoke({
+        to: "peer.agent",
+        body: "hi again",
+        kind: "inform",
+        conversation_id: "cnv-open-idle",
+      });
+      expect(stillAlive.content[0]!.text).toContain("turn_number=2");
+
+      // OPEN track の idle TTL (24h) を超えて経過させる — 何も送受信しない
+      // まま放置された open conversation を模す(server 側の tombstone 通知
+      // は #209 まで届かない前提)。
+      clock += 24 * 60 * 60 * 1000 + 1;
+
+      // track が evict されていれば、turn_number は 1 から採番し直される —
+      // ローカルの bookkeeping を失う代わりに map が無制限に育たない
+      // (こはく承認済みの trade-off)。
+      const afterIdle = await tool.invoke({
+        to: "peer.agent",
+        body: "hi once more",
+        kind: "inform",
+        conversation_id: "cnv-open-idle",
+      });
+      expect(afterIdle.isError).toBeFalsy();
+      expect(afterIdle.content[0]!.text).toContain("turn_number=1");
+    },
+  );
+
+  // Mutation-tested (my-code-review-cycle guard-shaped-fix rule): with
+  // #enforceTrackCap() removed, the "oldest" assertion fails (turn_number=2,
+  // continuing the sequence, instead of resetting to 1) — confirmed manually
+  // before finalizing.
+  it(
+    "round2 M3: OPEN + CLOSED 合算の総数が maxTracks を超えると最も古い " +
+      "track から evict される (open track の unbounded 経路, review " +
+      "must-fix)",
+    async () => {
+      let clock = 0;
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"),
+        getState: () => "tool_running",
+        send: () => {},
+        now: () => "2026-08-08T00:00:00Z",
+        newId: () => "cnv-auto",
+        nowMs: () => clock,
+        maxTracks: 2,
+      });
+
+      // 3 件、いずれも accepted / done=false のまま OPEN で残る経路。
+      for (const cid of ["cnv-o1", "cnv-o2", "cnv-o3"]) {
+        clock += 1;
+        const opened = await tool.invoke({
+          to: "peer.agent",
+          body: "hi",
+          kind: "inform",
+          conversation_id: cid,
+        });
+        expect(opened.isError).toBeFalsy();
+      }
+
+      // 上限 2 件 — 最も古い cnv-o1 は evict され、turn_number は 1 から
+      // 採番し直される。
+      const oldest = await tool.invoke({
+        to: "peer.agent",
+        body: "again",
+        kind: "inform",
+        conversation_id: "cnv-o1",
+      });
+      expect(oldest.content[0]!.text).toContain("turn_number=1");
+
+      // 新しい cnv-o3 はまだ残っている — turn_number は継続して 2。
+      const newer = await tool.invoke({
+        to: "peer.agent",
+        body: "again",
+        kind: "inform",
+        conversation_id: "cnv-o3",
+      });
+      expect(newer.content[0]!.text).toContain("turn_number=2");
+    },
+  );
 });
 
 describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEnd)", () => {
@@ -926,6 +1345,8 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
       "participants_mismatch",
       "conversation_turn_limit",
       "payload_too_large",
+      // issue #177: server 側 conversation_states.ex が新設した reason。
+      "conversation_closed",
     ]) {
       const { tool } = makeAckTool({ kind: "rejected", reason });
       const result = await tool.invoke({
@@ -970,7 +1391,10 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
 
       expect(result.isError).toBe(true);
       // waiter が外れているので、後から届いた reply は誰も待っていない。
-      expect(tool.receiveInbound(inboundEnvelope("cnv-reject-wait"))).toBe(false);
+      expect(
+        (await tool.receiveInbound(inboundEnvelope("cnv-reject-wait")))
+          .consumed,
+      ).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -1100,7 +1524,9 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
     await Promise.resolve();
 
     // ack より先に peer reply が着く。
-    expect(tool.receiveInbound(inboundEnvelope("cnv-deferred"))).toBe(true);
+    expect(
+      (await tool.receiveInbound(inboundEnvelope("cnv-deferred"))).consumed,
+    ).toBe(true);
     settle({ kind: "unknown", reason: "timeout" });
 
     const result = await pending;
@@ -1128,9 +1554,551 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
       // timer を進めずに解決する = waiter は解除済み。
       const result = await pending;
       expect(result.content[0]!.text).toContain("delivery unknown");
-      expect(tool.receiveInbound(inboundEnvelope("cnv-deferred"))).toBe(false);
+      expect(
+        (await tool.receiveInbound(inboundEnvelope("cnv-deferred"))).consumed,
+      ).toBe(false);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // issue #177 review M2: localDone was previously set only AFTER awaiting
+  // the send ack. A peer's own closing reply arriving (via this wrapper's
+  // independent receiveInbound() path) while that ack is still pending saw
+  // localDone still false and misclassified a genuinely mutual close as a
+  // one-sided close-proposal.
+  //
+  // issue #177 review round 2 (ふじ差し戻し, 理由2): revised — the ORIGINAL
+  // version of this test asserted mode="terminal" SYNCHRONOUSLY, before the
+  // pending done=true send's own acceptance had settled at all. That is
+  // exactly the bug round 2 fixes: a "terminal, do not reply" disposition
+  // handed to the adapter before the send is confirmed becomes wrong and
+  // unrecoverable the moment that send is later rejected. receiveInbound()
+  // now gates on the pending-done ack, so it settles ONLY once acceptance
+  // is known — this test asserts that resolved value, not an intermediate
+  // synchronous read.
+  it(
+    "M2: peer の closing reply は自分の pending done acceptance が確定するまで " +
+      "分類を確定しない — 確定後 (accepted) は terminal になる (review " +
+      "must-fix, round2 で修正)",
+    async () => {
+      const { tool, settle } = makeDeferredAckTool();
+
+      const pending = tool.invoke({
+        to: "peer.agent",
+        body: "bye",
+        kind: "done",
+        conversation_id: "cnv-deferred",
+        done: true,
+      });
+      // invoke() が dispatch を await するところまで 1 tick 待つ — この時点で
+      // localDone は既に楽観的に true になっているが、pending-done gate も
+      // 同時に張られているため receiveInbound() はまだ解決しない。
+      await Promise.resolve();
+
+      const closingReply = inboundEnvelope("cnv-deferred", "done");
+      (closingReply.payload as unknown as InterAgentMessagePayload).turn_number = 2;
+      (closingReply.payload as unknown as InterAgentMessagePayload).meta = {
+        done: true,
+        propose_next: "",
+      };
+      const receiving = tool.receiveInbound(closingReply);
+
+      settle({ kind: "accepted", stamp: [1, 0] });
+      expect((await pending).isError).toBeFalsy();
+      // gate が外れて初めて — accepted で localDone が確定した後 — terminal
+      // と分類される。
+      expect((await receiving).mode).toBe("terminal");
+    },
+  );
+
+  // Mutation-tested (my-code-review-cycle guard-shaped-fix rule): with the
+  // rollback removed, this assertion fails with mode="terminal" instead of
+  // "close-proposal" — confirmed manually before finalizing.
+  it("M2: reject された送信は楽観的な localDone をロールバックする (review must-fix)", async () => {
+    const { tool, settle } = makeDeferredAckTool();
+
+    const pending = tool.invoke({
+      to: "peer.agent",
+      body: "bye",
+      kind: "done",
+      conversation_id: "cnv-deferred",
+      done: true,
+    });
+    await Promise.resolve();
+    settle({ kind: "rejected", reason: "unknown_agent" });
+    expect((await pending).isError).toBe(true);
+
+    // ロールバック後: この送信は届いていない扱いなので、peer 側の
+    // done=true はまだ一方的な close 提案 — terminal ではない。
+    const peerDone = inboundEnvelope("cnv-deferred", "done");
+    (peerDone.payload as unknown as InterAgentMessagePayload).turn_number = 2;
+    (peerDone.payload as unknown as InterAgentMessagePayload).meta = {
+      done: true,
+      propose_next: "",
+    };
+    expect((await tool.receiveInbound(peerDone)).mode).toBe("close-proposal");
+  });
+
+  // Like makeDeferredAckTool(), but each sendInterAgent call gets its OWN
+  // independent deferred acceptance instead of sharing one — needed to
+  // settle two concurrent invoke() calls on the same conversation_id in a
+  // chosen order (review round 2 M1).
+  function makeMultiDeferredAckTool(): {
+    tool: InterAgentTool;
+    outbound: Envelope[];
+    settlers: ((acceptance: InterAgentAcceptance) => void)[];
+  } {
+    const outbound: Envelope[] = [];
+    const settlers: ((acceptance: InterAgentAcceptance) => void)[] = [];
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: (env) => outbound.push(env),
+      sendInterAgent: (env) => {
+        outbound.push(env);
+        return new Promise((resolve) => {
+          settlers.push(resolve);
+        });
+      },
+      now: () => "2026-08-08T00:00:00Z",
+    });
+    return { tool, outbound, settlers };
+  }
+
+  // issue #177 review round 2 M1: two concurrent invoke() calls on the SAME
+  // conversation_id previously each ran their synchronous prefix (turn
+  // allocation, optimistic localDone flip / snapshot) against the SAME
+  // shared track before either awaited its own #dispatch — so a REJECTED
+  // call's rollback restored a pre-flip snapshot that predated a sibling
+  // call's already-committed (accepted) mutation, silently erasing it.
+  // Mutation-tested: with #withCidLock removed (each invoke() runs
+  // unlocked), this test's final assertion fails with mode="close-proposal"
+  // instead of "terminal" — confirmed manually before finalizing.
+  it(
+    "round2 M1: 並行 invoke の rollback が同一 CID の別 invoke の成功状態を " +
+      "消さない (review must-fix)",
+    async () => {
+      const { tool, settlers } = makeMultiDeferredAckTool();
+
+      // Seed an existing (non-brand-new) OPEN track — neither side has
+      // signalled done yet, so neither invoke() below can short-circuit via
+      // the AC10 "already closed" guard before reaching #dispatch.
+      const seed = tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-race",
+      });
+      settlers[0]!({ kind: "accepted", stamp: null });
+      expect((await seed).isError).toBeFalsy();
+
+      // Two invoke() calls with done=true on the SAME conversation_id,
+      // kicked off before either settles — A will be rejected, B accepted.
+      const pendingA = tool.invoke({
+        to: "peer.agent",
+        body: "bye (A)",
+        kind: "done",
+        conversation_id: "cnv-race",
+        done: true,
+      });
+      const pendingB = tool.invoke({
+        to: "peer.agent",
+        body: "bye (B)",
+        kind: "done",
+        conversation_id: "cnv-race",
+        done: true,
+      });
+
+      settlers[1]!({ kind: "rejected", reason: "participants_mismatch" });
+      // B is queued behind the per-CID lock A currently holds — it only
+      // reaches its own dispatch call (registering settlers[2]) once A's
+      // lock section has fully released. Drain microtasks until then
+      // instead of guessing a fixed tick count; bounded so a regression
+      // that stalls B forever fails fast instead of hanging the run.
+      for (let i = 0; settlers.length < 3; i++) {
+        if (i > 100) {
+          throw new Error("settlers[2] never registered — B stalled");
+        }
+        await Promise.resolve();
+      }
+      settlers[2]!({ kind: "accepted", stamp: null });
+
+      expect((await pendingA).isError).toBe(true);
+      expect((await pendingB).isError).toBeFalsy();
+
+      // B's accepted done=true must have actually taken effect
+      // (localDone=true) — A's later rejection rollback must not have
+      // undone that shared commit. Probed indirectly: once the peer ALSO
+      // signals done=true, the conversation must read as fully terminal
+      // (both sides done), not a one-sided close-proposal.
+      const peerDone = inboundEnvelope("cnv-race", "done");
+      (peerDone.payload as unknown as InterAgentMessagePayload).turn_number = 10;
+      (peerDone.payload as unknown as InterAgentMessagePayload).meta = {
+        done: true,
+        propose_next: "",
+      };
+      expect((await tool.receiveInbound(peerDone)).mode).toBe("terminal");
+    },
+  );
+
+  // issue #177 review round 2 M2: a conversation_closed reject was
+  // previously treated like any other reject (rolled back / brand-new track
+  // discarded), so the wrapper never LEARNED the CID was closed — the next
+  // identical explicit-CID attempt round-tripped to the server again, every
+  // time, undermining the wrapper's 24h TTL as the real enforced CID-reuse
+  // guard (protocol-inter-agent.md "CID 再利用は契約にしない").
+  // Mutation-tested: with the conversation_closed branch removed (falling
+  // through to the brand-new-delete branch), the second call's dispatchCount
+  // assertion fails (2 instead of 1) and it no longer reports "already
+  // closed" — confirmed manually before finalizing.
+  it(
+    "round2 M2: conversation_closed reject は local track に学習され、" +
+      "以後は server へ round-trip せずローカルで拒否する (review must-fix)",
+    async () => {
+      let dispatchCount = 0;
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"),
+        getState: () => "tool_running",
+        send: () => {
+          throw new Error("acceptance-aware sink must be used");
+        },
+        sendInterAgent: () => {
+          dispatchCount += 1;
+          return Promise.resolve({
+            kind: "rejected",
+            reason: "conversation_closed",
+          });
+        },
+        now: () => "2026-08-08T00:00:00Z",
+      });
+
+      // This wrapper never locally tracked "cnv-server-closed" before (a
+      // brand-new local track) — e.g. after a restart, or a
+      // hallucinated/reused id — yet the server says it is already closed.
+      const first = await tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-server-closed",
+      });
+      expect(first.isError).toBe(true);
+      expect(dispatchCount).toBe(1);
+
+      // Second attempt on the same CID is rejected by the LOCAL AC10 guard
+      // — no second round-trip to the server.
+      const second = await tool.invoke({
+        to: "peer.agent",
+        body: "hi again",
+        kind: "inform",
+        conversation_id: "cnv-server-closed",
+      });
+      expect(second.isError).toBe(true);
+      expect(second.content[0]!.text).toContain("already closed");
+      expect(dispatchCount).toBe(1);
+    },
+  );
+
+  // issue #177 review round 2 (ふじ差し戻し、理由1): a done=true send's
+  // rollback previously restored `closed`/`closedAtMs` unconditionally to a
+  // pre-flip snapshot, even when a concurrently-arriving receiveInbound()
+  // (here: a server-synthesized hard-limit escalate) had, in the interim,
+  // legitimately set closed=true — a server=CLOSED / wrapper=OPEN
+  // split-brain that also defeated the local AC10 guard. Mutation-tested:
+  // with the pending-done gate removed (`#pendingDoneAcks` check deleted
+  // from `receiveInbound()`), the escalate's receiveInbound() call resolves
+  // BEFORE the reject's rollback, which then overwrites its closed=true —
+  // the "already closed" retry assertion fails (isError becomes falsy, a
+  // 3rd dispatch happens) — confirmed manually before finalizing.
+  it(
+    "round3(a): pending-done 中に server 合成 hard-limit が到着→送信が " +
+      "generic reject されても CLOSED は保持され、次の同一 CID invoke は " +
+      "ローカル拒否・dispatch count 不変 (review must-fix)",
+    async () => {
+      const { tool, settlers } = makeMultiDeferredAckTool();
+
+      // Seed an existing (non-brand-new) OPEN track — an ongoing
+      // conversation a hard limit later trips on, the realistic case.
+      const seed = tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-hardlimit-race",
+      });
+      settlers[0]!({ kind: "accepted", stamp: null });
+      expect((await seed).isError).toBeFalsy();
+
+      // Pending done=true send — registers the pending-done gate.
+      const pendingDone = tool.invoke({
+        to: "peer.agent",
+        body: "bye",
+        kind: "done",
+        conversation_id: "cnv-hardlimit-race",
+        done: true,
+      });
+      await Promise.resolve();
+
+      // Server-synthesized hard-limit escalate arrives WHILE the send
+      // above is still unconfirmed — gates on the pending-done ack
+      // instead of computing (and mutating track state from) a
+      // disposition immediately.
+      const escalate = inboundEnvelope("cnv-hardlimit-race", "escalate-to-user");
+      escalate.agent_id = "server";
+      (escalate.payload as unknown as InterAgentMessagePayload).turn_number = 0;
+      (escalate.payload as unknown as InterAgentMessagePayload).meta = {
+        done: true,
+        propose_next: "",
+      };
+      const receiving = tool.receiveInbound(escalate);
+
+      // The pending send is REJECTED for an unrelated (generic) reason —
+      // its rollback must not undo the authoritative CLOSED the escalate
+      // is about to establish.
+      settlers[1]!({ kind: "rejected", reason: "participants_mismatch" });
+      expect((await pendingDone).isError).toBe(true);
+
+      // Gate released — the escalate's own disposition settles now. The
+      // server-synthesized branch is unconditional on localDone, so this
+      // is terminal regardless of the reject above.
+      expect((await receiving).mode).toBe("terminal");
+
+      // The server already tombstoned this conversation (Stage 1) — a
+      // further send on the same CID must be rejected LOCALLY (AC10),
+      // without a second round-trip. Start it without awaiting first, so
+      // a regression that DOES dispatch again can still be unblocked
+      // (rather than hanging the test) before we assert on it.
+      expect(settlers.length).toBe(2);
+      const retryPromise = tool.invoke({
+        to: "peer.agent",
+        body: "still there?",
+        kind: "inform",
+        conversation_id: "cnv-hardlimit-race",
+      });
+      for (let i = 0; i < 10 && settlers.length < 3; i++) {
+        await Promise.resolve();
+      }
+      if (settlers.length >= 3) {
+        settlers[2]!({ kind: "accepted", stamp: null });
+      }
+      const retry = await retryPromise;
+      expect(retry.isError).toBe(true);
+      expect(retry.content[0]!.text).toContain("already closed");
+      expect(settlers.length).toBe(2); // unchanged — no round-trip
+    },
+  );
+
+  // issue #177 review round 2 (ふじ差し戻し、理由2): a receiveInbound() call
+  // could previously compute and return a "terminal" disposition off of a
+  // still-OPTIMISTIC (unconfirmed) localDone — the adapter (cli.ts) would
+  // then inject "this conversation is closed, do not reply" into the SDK
+  // queue and skip notePendingInjection. If that send was later rejected,
+  // the peer's own done=true had in fact only ever been a one-sided close
+  // proposal this side still owed a reply to — but the adapter had already
+  // told the model otherwise, unrecoverably. Mutation-tested: with the
+  // pending-done gate removed, this test's final assertion fails with
+  // mode="terminal" instead of "close-proposal" — confirmed manually
+  // before finalizing.
+  it(
+    "round3(b): pending-done 中に peer 自身の done が到着→送信が reject " +
+      "されると adapter には terminal が確定注入されず close-proposal に " +
+      "なる (review must-fix)",
+    async () => {
+      const { tool, settlers } = makeMultiDeferredAckTool();
+
+      const pendingDone = tool.invoke({
+        to: "peer.agent",
+        body: "bye",
+        kind: "done",
+        conversation_id: "cnv-peer-race",
+        done: true,
+      });
+      await Promise.resolve();
+
+      // Peer's OWN done=true arrives while the send above is still
+      // unconfirmed — gates instead of resolving off the optimistic,
+      // still-unconfirmed localDone.
+      const peerDone = inboundEnvelope("cnv-peer-race", "done");
+      (peerDone.payload as unknown as InterAgentMessagePayload).turn_number = 2;
+      (peerDone.payload as unknown as InterAgentMessagePayload).meta = {
+        done: true,
+        propose_next: "",
+      };
+      const receiving = tool.receiveInbound(peerDone);
+
+      settlers[0]!({ kind: "rejected", reason: "participants_mismatch" });
+      expect((await pendingDone).isError).toBe(true);
+
+      // Gate released — this side's done never actually reached the peer,
+      // so the peer's done=true correctly reads as a one-sided close
+      // proposal, still owed a reply — never a confirmed terminal that
+      // would have told the adapter not to reply.
+      const disposition = await receiving;
+      expect(disposition.mode).toBe("close-proposal");
+      expect(disposition.inject).toBe(true);
+    },
+  );
+
+  // issue #177 review round 3 must-fix: the pending-done gate was
+  // registered before `await this.#dispatch(envelope)` but only released
+  // from the two branches that assumed dispatch RESOLVED (accepted/
+  // rejected) — a thrown/rejected #dispatch() (a transport failure, not a
+  // server-level reject) skipped both, leaving the gate registered
+  // forever and hanging every later receiveInbound() for that
+  // conversation_id. Mutation-tested: with the try/finally removed (the
+  // two explicit releaseGateIfHeld() calls restored in their old
+  // branch-only positions), this test times out instead of completing —
+  // confirmed manually before finalizing.
+  it(
+    "round3: #dispatch が reject/throw しても pending-done gate は解放され " +
+      "receiveInbound() は永久停止しない (review must-fix)",
+    async () => {
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"),
+        getState: () => "tool_running",
+        send: () => {
+          throw new Error("acceptance-aware sink must be used");
+        },
+        sendInterAgent: () => Promise.reject(new Error("transport exploded")),
+        now: () => "2026-08-08T00:00:00Z",
+      });
+
+      await expect(
+        tool.invoke({
+          to: "peer.agent",
+          body: "bye",
+          kind: "done",
+          conversation_id: "cnv-dispatch-throw",
+          done: true,
+        }),
+      ).rejects.toThrow("transport exploded");
+
+      // If the gate had leaked, this would hang forever (bounded only by
+      // vitest's own test timeout) instead of resolving promptly.
+      const disposition = await tool.receiveInbound(
+        inboundEnvelope("cnv-dispatch-throw", "inform"),
+      );
+      expect(disposition.inject).toBe(true);
+    },
+  );
+});
+
+// issue #177 review M4 (AC13): two independent InterAgentTool instances
+// wired directly to each other — the routing a real server would do,
+// without a network or process boundary. This proves the CROSS-WRAPPER
+// termination behaviour AC13 cares about (does the exchange actually
+// stop after both sides agree done, even when a late message follows) at
+// the engine-agnostic agent-common level; a full 2-process/network E2E
+// would need new test infrastructure this repo does not have. The
+// adapter-level glue tests (claude-code/codex
+// test/inter_agent_lifecycle_glue.test.ts) separately prove each
+// engine's host wiring respects the same disposition contract this test
+// exercises.
+describe("issue #177 review M4: 2-agent in-process E2E (AC13)", () => {
+  function makeAgent(
+    agentId: string,
+    outbound: Envelope[],
+  ): InterAgentTool {
+    return new InterAgentTool({
+      config: configFor(agentId),
+      getState: () => "tool_running",
+      send: (env) => outbound.push(env),
+      now: () => "2026-08-08T00:00:00Z",
+      newId: () => "cnv-e2e",
+    });
+  }
+
+  it("両側 done 合意後、重複再送された過去 turn は追加の send を 0 件で止める", async () => {
+    const aOutbound: Envelope[] = [];
+    const bOutbound: Envelope[] = [];
+    const a = makeAgent("agent-a", aOutbound);
+    const b = makeAgent("agent-b", bOutbound);
+
+    // 1. A -> B: done=true (A が先に完了提案)。
+    const aSend = await a.invoke({
+      to: "agent-b",
+      body: "done from A",
+      kind: "done",
+      conversation_id: "cnv-e2e",
+      done: true,
+    });
+    expect(aSend.isError).toBeFalsy();
+    expect(aOutbound).toHaveLength(1);
+    const aToB = aOutbound[0]!;
+
+    // 2. B receives A's done=true — close-proposal (B はまだ done してい
+    // ない)。
+    expect((await b.receiveInbound(aToB)).mode).toBe("close-proposal");
+
+    // B、close proposal に応えて自分も done=true を返す。
+    const bSend = await b.invoke({
+      to: "agent-a",
+      body: "done from B too",
+      kind: "done",
+      conversation_id: "cnv-e2e",
+      done: true,
+    });
+    expect(bSend.isError).toBeFalsy();
+    expect(bOutbound).toHaveLength(1);
+    const bToA = bOutbound[0]!;
+
+    // 3. A receives B's done=true — 両側揃って terminal。
+    expect((await a.receiveInbound(bToA)).mode).toBe("terminal");
+
+    // 4. 遅延到着: B から A への同じ turn がネットワークの遅延で重複
+    // 配送されたとする。
+    const staleRedelivery: Envelope = { ...bToA, payload: { ...bToA.payload } };
+    expect((await a.receiveInbound(staleRedelivery)).inject).toBe(false);
+
+    // A / B とも、ここまでに追加の send は一切発生していない
+    // (追加往復 0 回で停止 — AC13)。
+    expect(aOutbound).toHaveLength(1);
+    expect(bOutbound).toHaveLength(1);
+  });
+
+  it("両側 done 合意後、stale ではない late message も terminal 分類され追加 send を誘発しない", async () => {
+    const aOutbound: Envelope[] = [];
+    const bOutbound: Envelope[] = [];
+    const a = makeAgent("agent-a", aOutbound);
+    const b = makeAgent("agent-b", bOutbound);
+
+    await a.invoke({
+      to: "agent-b",
+      body: "done from A",
+      kind: "done",
+      conversation_id: "cnv-e2e-late",
+      done: true,
+    });
+    const aToB = aOutbound[0]!;
+    await b.receiveInbound(aToB);
+
+    await b.invoke({
+      to: "agent-a",
+      body: "done from B too",
+      kind: "done",
+      conversation_id: "cnv-e2e-late",
+      done: true,
+    });
+    const bToA = bOutbound[0]!;
+    expect((await a.receiveInbound(bToA)).mode).toBe("terminal");
+
+    // B が事前に(想定外に)もう 1 ターン多く送っていた場合の遅延到着を
+    // 模す — turn_number は STALE ではない(新しい)が、A はもう
+    // terminal。mode は "terminal" のまま(inject はしてよいが、cli.ts
+    // 側は notePendingInjection を呼ばないので返信は誘発されない —
+    // adapter-level glue test の "AC8" ケースと同じ契約)。
+    const lateFresh = inboundEnvelope("cnv-e2e-late", "inform");
+    (lateFresh.payload as unknown as InterAgentMessagePayload).turn_number =
+      ((bToA.payload as unknown as InterAgentMessagePayload).turn_number ?? 0) + 1;
+    lateFresh.agent_id = "agent-b";
+    const lateDisposition = await a.receiveInbound(lateFresh);
+    expect(lateDisposition.inject).toBe(true);
+    expect(lateDisposition.mode).toBe("terminal");
+
+    // "terminal" は cli.ts 側で notePendingInjection をスキップする契約
+    // なので、A 側からの追加 send は起きない(この engine-agnostic
+    // 層では send 自体を呼ぶかどうかは cli.ts の役割だが、mode が
+    // terminal である限り契約上 0 件のはず — 実際に aOutbound は
+    // 増えていない)。
+    expect(aOutbound).toHaveLength(1);
   });
 });
