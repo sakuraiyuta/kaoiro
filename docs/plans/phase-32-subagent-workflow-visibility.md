@@ -95,6 +95,26 @@ Non-Goals へ回った。2026-08-10、マスターが実機確認でこの欠落
 (クロエ 2026-08-10: 素通し配線だと切断済みエージェントの stale `tasks`
 エントリが漏れる経路がある)。
 
+**追加修正 (マスター実機確認、2026-08-10)**: デスクトップは `.status`
+の幅可変(`flex: 0 0 20%`)により `.portrait` の実測幅が 8rem を大きく
+超えることがあり、`cqw` だけだと軌道が AgentCard の想定サイズより肥大
+して「グリッドへ戻る」ボタンにまで到達してしまう不具合を発見。
+`min(cqw値, AgentCard絶対値)` で上限キャップし、8rem 以下の狭い
+`.portrait` では引き続き cqw で比例縮小、8rem を超えるデスクトップでは
+AgentCard と同じ絶対サイズ(sprite: 2rem/0.72rem、face: 1.35rem/0.49rem)
+に頭打ちさせる。
+
+キャップ後も実測でわずかにはみ出しが残った(`.portrait` の padding
+0.8rem が AgentCard の `.card` の 1.4rem ほど広くないため)。
+`TaskRing.svelte` に新規 `topOffset` prop(既定は AgentCard 既存の
+`-2%`)を追加し、AgentDetail からは `topOffset="6%"` を渡して頭上退避の
+アンカーを下(顔寄り)へシフトすることで解消した(顔に多少かかるのは
+マスター了承済み)。Playwright e2e に T11(1600px 幅広デスクトップ)を
+新設し、CSS アニメーションを Web Animations API で最遠点(0%/100%
+キーフレーム)に静止させ、box-shadow の 6px ブラー込みで `.bar`(戻る
+ボタン)に重ならないことを固定(修正前の値に戻すと実際に失敗すること
+も確認済み)。
+
 ## Related
 
 - spec: [subagent-tasks](../specs/subagent-tasks.md)、

@@ -56,6 +56,7 @@ if (view === "app") {
   }
   if (params.get("attention") === "1") scenario.attention = true;
   if (params.get("taskRing") === "1") scenario.taskRing = true;
+  if (params.get("sprite") === "1") scenario.sprite = true;
   mount(DetailHarness, { target, props: { scenario } });
 } else if (view === "overlay") {
   const overlay = params.get("overlay") === "drawer" ? "drawer" : "dialog";

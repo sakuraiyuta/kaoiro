@@ -94,23 +94,38 @@ describe("AgentDetail 頭上リング (issue #180 follow-up)", () => {
     expect(target.querySelector(".portrait")?.textContent?.trim()).toBe("");
   });
 
-  it("sprite 無し (face fallback) は face 比率の cqw 軌道半径を使う", async () => {
+  // マスター実機確認 (2026-08-10): デスクトップ幅の .portrait では cqw
+  // だけだと軌道が肥大し画面上部のボタンへ到達してしまったため、
+  // AgentCard の絶対値(既知良好サイズ)を上限とする min() キャップを
+  // 追加した。
+  it("sprite 無し (face fallback) は face 比率の cqw を AgentCard 絶対値でキャップする", async () => {
     const target = await render(1, null);
     expect(target.querySelector(".face")).not.toBeNull();
     const ring = target.querySelector(".task-ring") as HTMLElement | null;
     expect(ring).not.toBeNull();
     expect(ring?.classList.contains("face-orbit")).toBe(true);
-    expect(ring?.style.getPropertyValue("--orbit-rx")).toBe("17.5cqw");
-    expect(ring?.style.getPropertyValue("--orbit-ry")).toBe("6.3cqw");
+    expect(ring?.style.getPropertyValue("--orbit-rx")).toBe("min(17.5cqw, 1.35rem)");
+    expect(ring?.style.getPropertyValue("--orbit-ry")).toBe("min(6.3cqw, 0.49rem)");
   });
 
-  it("sprite 有りは sprite 比率の cqw 軌道半径を使う", async () => {
+  it("sprite 有りは sprite 比率の cqw を AgentCard 絶対値でキャップする", async () => {
     const target = await render(1, manifestWithSprite);
     expect(target.querySelector("img.sprite")).not.toBeNull();
     const ring = target.querySelector(".task-ring") as HTMLElement | null;
     expect(ring).not.toBeNull();
     expect(ring?.classList.contains("face-orbit")).toBe(false);
-    expect(ring?.style.getPropertyValue("--orbit-rx")).toBe("25cqw");
-    expect(ring?.style.getPropertyValue("--orbit-ry")).toBe("9cqw");
+    expect(ring?.style.getPropertyValue("--orbit-rx")).toBe("min(25cqw, 2rem)");
+    expect(ring?.style.getPropertyValue("--orbit-ry")).toBe("min(9cqw, 0.72rem)");
+  });
+
+  // マスター実機確認 (2026-08-10): キャップ後もわずかに .portrait をはみ出し
+  // ていたため、頭上退避のアンカー(top)を AgentCard 既定の -2% より
+  // 下げて調整した(e2e T11 の 1600px 幅広テストが実際のはみ出し量を
+  // 固定する。ここでは prop が正しく inline style へ反映されることのみ
+  // 固定する)。
+  it("topOffset=6% が inline style の top へ反映される", async () => {
+    const target = await render(1, manifestWithSprite);
+    const ring = target.querySelector(".task-ring") as HTMLElement | null;
+    expect(ring?.style.top).toBe("6%");
   });
 });

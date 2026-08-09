@@ -2082,22 +2082,39 @@
                  tablet 以下は max-width: 8rem)なので、軌道半径は rem
                  固定ではなく cqw で .portrait 自身の幅に追随させる(クロエ
                  2026-08-10、.portrait に container-type: inline-size を
-                 付与)。sprite 値(25cqw/9cqw)は AgentCard の rem 比率
-                 (2rem/8rem, 0.72rem/8rem)をそのまま cqw へ換算。face 値
-                 (17.5cqw/6.3cqw)は AgentCard の rem 比率(1.35rem/8rem,
-                 0.49rem/8rem)を単純換算したものではない — AgentCard の
-                 face 自体が 5.4rem(sprite の 8rem とは別サイズ)なのに
-                 対し、AgentDetail の face は .portrait 幅の 70% なので、
-                 face 相対で導出する必要がある: rx = 1.35rem/5.4rem = 25%
-                 → 70cqw × 25% = 17.5cqw、ry = 0.49rem/5.4rem ≈ 9.074%
-                 → 70cqw × 9.074% ≈ 6.35cqw(6.3 へ近似調整。厳密な
-                 四捨五入なら 6.4 だが、値自体はふじ round1 で妥当と
-                 承認済みのため変更しない)(ふじ round1 N1/round2
-                 wording fix, 2026-08-10)。 -->
+                 付与)。cqw の比率換算は sprite 25cqw/9cqw(AgentCard の
+                 2rem/8rem, 0.72rem/8rem をそのまま換算)、face
+                 17.5cqw/6.3cqw(AgentCard の face は sprite とは別サイズ
+                 の 5.4rem 要素なので、face 自身の寸法比 rx=1.35rem/5.4rem
+                 =25%・ry=0.49rem/5.4rem≈9.074% を .portrait 幅の 70%
+                 (AgentDetail の face 比率)に掛けて導出、ふじ round1
+                 N1)。
+
+                 min(…, Xrem) キャップ (マスター実機確認 2026-08-10):
+                 デスクトップは `.status` が幅可変(flex: 0 0 20%)なので
+                 .portrait の実測幅が 8rem を大きく超えることがあり、cqw
+                 だけだと軌道が AgentCard の想定サイズより肥大して
+                 「グリッドへ戻る」ボタンにまで到達してしまうことを実機
+                 確認で発見。AgentCard の絶対値(sprite: 2rem/0.72rem、
+                 face: 1.35rem/0.49rem — 既に視認確認済みの既知良好サイズ)
+                 を上限にキャップする: 8rem 以下の狭い .portrait では cqw
+                 値の方が小さいので従来どおり比例縮小、8rem を超える
+                 デスクトップでは rem 値で頭打ちになり AgentCard と同じ
+                 絶対サイズに収まる。
+
+                 それでもキャップ後の実測でわずかにはみ出しが残ったため
+                 (.portrait の padding が AgentCard の .card ほど広くない
+                 ため — 実測で .bar まで 2px しか余裕が無かった)、
+                 topOffset="6%" で頭上退避のアンカーを AgentCard 既定の
+                 -2% より下げ、リング全体を少し下(顔寄り)へシフトした
+                 (顔に多少かかるのは許容、マスター了承済み)。1600px 幅の
+                 実測(e2e T11)で .bar から box-shadow の 6px ブラー込みで
+                 余裕を確認済み。 -->
             <TaskRing
               faceOrbit={!spriteUrl}
-              orbitRx={spriteUrl ? "25cqw" : "17.5cqw"}
-              orbitRy={spriteUrl ? "9cqw" : "6.3cqw"}
+              orbitRx={spriteUrl ? "min(25cqw, 2rem)" : "min(17.5cqw, 1.35rem)"}
+              orbitRy={spriteUrl ? "min(9cqw, 0.72rem)" : "min(6.3cqw, 0.49rem)"}
+              topOffset="6%"
             />
           {/if}
           <span class="lamp" title={expression.label}></span>

@@ -136,6 +136,52 @@ test.describe("T11: 頭上リング (AgentDetail, issue #180 follow-up)", () => 
     const ring = page.locator("aside.status .portrait .task-ring");
     await expect(ring).toBeVisible();
   });
+
+  // M1 regression (マスター実機確認, 2026-08-10): 広いデスクトップでは
+  // `.status` の flex 比率で `.portrait` が 8rem を大きく超え、cqw だけの
+  // 軌道半径だと肥大して .bar(「グリッドへ戻る」ボタン)まで到達して
+  // いた。実際の要求は「.bar に重ならない、.portrait/顔への多少のはみ出し
+  // は許容」(マスター 2026-08-10) なので、.portrait の枠そのものではなく
+  // .bar との重なりを基準にする。min(cqw, AgentCard絶対値) キャップ +
+  // topOffset(頭上退避のアンカーを AgentCard 用の -2% より下げる)の
+  // 実効性を、アニメーションを最遠点(0%/100% キーフレーム = 真上)で
+  // 静止させて幾何的に固定する。box-shadow の 6px ブラーぶんの安全マージン
+  // を含める。
+  //
+  // sprite/face 両分岐を検証する(round2, workflow-review QUALITY 指摘,
+  // 2026-08-10): DetailHarness は元々 manifest=null 固定で face-orbit
+  // (小さい方の半径)しか通らず、マスターが実際に見た報告(あお = sprite
+  // 解決済みペルソナ)側の、より大きく・はみ出しやすい sprite-orbit 半径
+  // が未検証だった。
+  for (const [label, query, expectFaceOrbit] of [
+    ["face fallback", "", true],
+    ["sprite", "&sprite=1", false],
+  ] as const) {
+    test(`1600px 幅広デスクトップ (${label}): 最遠点でも .bar(戻るボタン)に重ならない`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1600, height: 900 });
+      await page.goto(`${DETAIL}&taskRing=1${query}`);
+      const ring = page.locator("aside.status .portrait .task-ring");
+      await expect(ring).toBeVisible();
+      await expect(ring).toHaveClass(
+        expectFaceOrbit ? /face-orbit/ : /^(?!.*face-orbit).*$/,
+      );
+      // Web Animations API でアニメーションを 0ms (真上、最も高く伸びる点)
+      // へ固定する — ランダムな再生位置での flaky を避ける。
+      await ring.evaluate((el) => {
+        const anim = (el as HTMLElement).getAnimations()[0];
+        anim.pause();
+        anim.currentTime = 0;
+      });
+      const ringBox = (await ring.boundingBox())!;
+      const barBox = (await page.locator(".bar").boundingBox())!;
+      const GLOW_BLEED_PX = 6; // box-shadow: 0 0 6px var(--fg)
+      expect(ringBox.y - GLOW_BLEED_PX).toBeGreaterThanOrEqual(
+        barBox.y + barBox.height,
+      );
+    });
+  }
 });
 
 test("T8: handle attention badge returns to the grid while the sheet is open", async ({ page }) => {

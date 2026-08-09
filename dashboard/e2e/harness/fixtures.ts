@@ -1,7 +1,11 @@
 // Fixture envelopes + stub connection for the viewport-regression harness
 // (phase-31 31-10). Pure data — no network, no Phoenix socket: the specs
 // pin CSS/layout behaviour, not transport.
-import type { Envelope, KaoiroConnection } from "../../src/lib/protocol";
+import type {
+  Envelope,
+  KaoiroConnection,
+  PersonaManifest,
+} from "../../src/lib/protocol";
 
 function agent(
   agentId: string,
@@ -52,6 +56,36 @@ export interface DetailScenario {
    *  responsive breakpoints, the way LobbyHarness already does for
    *  AgentCard. */
   taskRing?: boolean;
+  /** 頭上リング back-button overlap regression (issue #180 follow-up
+   *  round 2, 2026-08-10, workflow-review QUALITY finding): DetailHarness
+   *  always mounted with manifest=null before this, so every T11 case
+   *  exercised only TaskRing's smaller face-orbit radii — never the
+   *  larger, more overlap-prone sprite-orbit radii the reported bug
+   *  actually involved (あお's persona card in the master's screenshot
+   *  resolves a sprite). Set true to supply a manifest with a resolved
+   *  sprite for the "ao" persona so DetailHarness's spriteUrl is
+   *  non-null. */
+  sprite?: boolean;
+}
+
+/** Manifest with a resolved sprite for the "ao" persona, covering every
+ *  state DetailScenario can put the agent in (idle default, plus the two
+ *  `pending` states) — see `sprite` field doc above. */
+export function detailManifest(scenario: DetailScenario): PersonaManifest | null {
+  if (!scenario.sprite) return null;
+  const sprite = { url: "/sprites/ao/idle.png", hash: "sha256:e2e-fixture" };
+  return {
+    version: "1",
+    personas: {
+      ao: {
+        states: {
+          idle: sprite,
+          waiting_permission: sprite,
+          waiting_question: sprite,
+        },
+      },
+    },
+  };
 }
 
 export function lobbyAgents(pending = false): Record<string, Envelope> {

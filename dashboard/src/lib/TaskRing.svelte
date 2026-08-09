@@ -3,6 +3,7 @@
     faceOrbit = false,
     orbitRx,
     orbitRy,
+    topOffset,
   }: {
     /** True when the caller is showing the face-fallback (no persona
      *  sprite resolved), whose orbit needs the smaller default radii
@@ -18,6 +19,19 @@
      *  responsive percentage, not a fixed rem. */
     orbitRx?: string;
     orbitRy?: string;
+    /** Override for the orbit ellipse's vertical anchor (CSS `top`,
+     *  percentage of the containing block's height). Omit to use the
+     *  `-2%` default below — AgentCard's original "頭上退避" value,
+     *  calibrated for `.card`'s own generous top padding (1.4rem).
+     *  AgentDetail's `.portrait` has far less headroom (0.8rem) and no
+     *  parent padding above it, so a wide/tall `.portrait` (desktop) can
+     *  push the ring past `.portrait` into the page chrome above it —
+     *  マスター実機確認 2026-08-10, it reached the "グリッドへ戻る"
+     *  button. AgentDetail passes a larger (less negative / positive)
+     *  `topOffset` to pull the ellipse's anchor down, trading some
+     *  overlap onto the face (explicitly accepted by マスター) for
+     *  staying clear of the button above. */
+    topOffset?: string;
   } = $props();
 </script>
 
@@ -37,6 +51,7 @@
   aria-label="サブエージェント実行中"
   style:--orbit-rx={orbitRx}
   style:--orbit-ry={orbitRy}
+  style:top={topOffset}
 ></span>
 
 <style>

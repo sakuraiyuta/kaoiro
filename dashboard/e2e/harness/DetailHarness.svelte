@@ -8,6 +8,7 @@
     detailAgents,
     detailEnvelope,
     detailLogs,
+    detailManifest,
     stubConnection,
     type DetailScenario,
   } from "./fixtures";
@@ -17,6 +18,7 @@
   const agents = detailAgents(scenario);
   const envelope = detailEnvelope(scenario);
   const logs = detailLogs();
+  const manifest = detailManifest(scenario);
   const connection = stubConnection();
   let closed = $state(false);
 </script>
@@ -32,7 +34,7 @@
       {logs}
       {agents}
       {connection}
-      manifest={null}
+      {manifest}
       activeTaskCount={scenario.taskRing ? 1 : 0}
       onClose={() => (closed = true)}
     />
