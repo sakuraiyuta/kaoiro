@@ -21,6 +21,7 @@ import {
   parseDirectory,
   parseHosts,
   parseSessions,
+  parseTasks,
   pendingPermissionFrom,
   pendingQuestionFrom,
   parseHistoryReplayComplete,
@@ -31,6 +32,10 @@ import {
   mergeHistories,
   projectAndMergeHistory,
   resultOf,
+  taskOf,
+  applyTaskEnvelope,
+  purgeTasksForAgent,
+  computeActiveTaskCountByAgent,
   resetTranscriptHistory,
   resolveLaunchDefaultEffort,
   resumeDriftFrom,
@@ -43,7 +48,7 @@ import {
   transcriptEntryKey,
   userInputDialogAvailability,
 } from "../src/lib/protocol";
-import type { Envelope, SessionCapabilities } from "../src/lib/protocol";
+import type { Envelope, SessionCapabilities, TaskTable } from "../src/lib/protocol";
 
 describe("fetchPersonaManifest", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -356,6 +361,364 @@ describe("logOf / resultOf / isReplyEnvelope", () => {
     expect(isReplyEnvelope({ ...log, type: "session_boundary" })).toBe(true);
     expect(isReplyEnvelope({ ...log, type: "state_change" })).toBe(false);
     expect(isReplyEnvelope({ ...log, type: "permission_request" })).toBe(false);
+  });
+});
+
+describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "host-a.p",
+    ts: "2026-08-09T00:00:00Z",
+    type: "task",
+    state: "tool_running",
+  };
+  const validPayload = {
+    kind: "started" as const,
+    agent_id: "host-a.p",
+    task_id: "t1",
+    task_type: "local_agent",
+    status: "running" as const,
+  };
+
+  it("整形済み payload を絞り込む", () => {
+    expect(taskOf({ ...base, payload: validPayload })).toEqual(validPayload);
+  });
+
+  it("type が task 以外なら null", () => {
+    expect(
+      taskOf({ ...base, type: "state_change", payload: validPayload }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["kind 欠落", { ...validPayload, kind: undefined }],
+    ["kind 不正値", { ...validPayload, kind: "bogus" }],
+    ["agent_id 欠落", { ...validPayload, agent_id: undefined }],
+    ["task_id 欠落", { ...validPayload, task_id: undefined }],
+    ["task_type 欠落", { ...validPayload, task_type: undefined }],
+    ["status 欠落", { ...validPayload, status: undefined }],
+    ["payload 無し", undefined],
+  ])("%s は null (fail-visible, coerce しない)", (_label, payload) => {
+    expect(taskOf({ ...base, payload } as unknown as Envelope)).toBeNull();
+  });
+
+  // N2 (クロエ 2026-08-09): status は前方互換のため非空文字列チェックのみ —
+  // 閉じた4値 enum に一致しなくても null にしない。
+  it("status が未知値でも(閉じた4値に一致しなくても)前方互換で narrowing する (N2)", () => {
+    const event = taskOf({
+      ...base,
+      payload: { ...validPayload, status: "future-status-value" },
+    });
+    expect(event).not.toBeNull();
+    expect(event?.status).toBe("future-status-value");
+  });
+
+  it("parseTasks は agent_id => task_id => envelope の envelope 形だけを検証する (payload 絞り込みは taskOf の役目)", () => {
+    const t2 = { ...base, payload: { ...validPayload, task_id: "t2" } };
+    // t3: envelope としては妥当 (agent_id/state 文字列あり) だが payload が
+    // 壊れている — parseTasks は agents スナップショット解析と同じ「envelope
+    // 形のみ検証」規約に倣うので、これは拾われる(taskOf が消費側で弾く)。
+    const t3 = { ...base, payload: { kind: "started" } };
+    expect(
+      parseTasks({
+        "host-a.p": {
+          t1: { ...base, payload: validPayload },
+          t2,
+          t3,
+        },
+        // agent_id の枝自体が非オブジェクトなら drop。
+        "host-b.p": "not an object",
+        // envelope 自体が不正 (agent_id 欠落) なものは枝ごと drop
+        // (中身が空になるので上位キーごと落ちる)。
+        "host-c.p": { t4: { ...base, agent_id: undefined, payload: validPayload } },
+        // type が task でない値も drop。
+        "host-d.p": { t5: { ...base, type: "state_change", payload: validPayload } },
+      }),
+    ).toEqual({
+      "host-a.p": { t1: { ...base, payload: validPayload }, t2, t3 },
+    });
+  });
+
+  it("parseTasks は非オブジェクト入力を {} に倒す", () => {
+    expect(parseTasks(undefined)).toEqual({});
+    expect(parseTasks(null)).toEqual({});
+    expect(parseTasks("nope")).toEqual({});
+  });
+
+  // Security review (issue #180 fix-round, 2026-08-09): agent_id/task_id
+  // の wire charset は "__proto__" を禁止していない — 素の {} への bracket
+  // 代入だと Object.prototype の __proto__ アクセサ経由で対象オブジェクトの
+  // [[Prototype]] を書き換えてしまう(prototype pollution)。fix 後は
+  // Object.create(null) ベースなのでキー名に関わらず通常の own property に
+  // なる。
+  //
+  // JS のオブジェクトリテラル構文はリテラルキー "__proto__" 自体を特別
+  // 扱いする(Annex B、own property の作成ではなく [[Prototype]] 設定に
+  // なる)ため、この攻撃入力はオブジェクトリテラルは経由できない(内側は
+  // もちろん、外側のリテラルキーとして "__proto__" を書いた時点で
+  // JSON.stringify にすら乗らない own property が消える)。実配線と同じ
+  // 生の JSON テキストを JSON.parse する経路でのみ、CreateDataProperty
+  // 由来の本物の own property "__proto__" を持つ値を再現できる。
+  it("parseTasks は agent_id/task_id が \"__proto__\" でも prototype pollution を起こさない", () => {
+    const polluted = { ...base, payload: { ...validPayload, agent_id: "__proto__" } };
+    const t2 = { ...base, payload: { ...validPayload, task_id: "t2" } };
+    const wire = JSON.parse(
+      `{"__proto__": {"__proto__": ${JSON.stringify(polluted)}, "t2": ${JSON.stringify(t2)}}}`,
+    );
+    expect(Object.prototype.hasOwnProperty.call(wire, "__proto__")).toBe(true);
+
+    const tasks = parseTasks(wire);
+
+    // 汚染されていれば Object.prototype 自体に task_id/kind 等が生え、
+    // 無関係の新規オブジェクトにも波及する。
+    expect(({}) as Record<string, unknown>).not.toHaveProperty("task_id");
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+    // 正常な own property としては拾われている(値そのものは壊れていない)。
+    expect(
+      Object.prototype.hasOwnProperty.call(tasks, "__proto__"),
+    ).toBe(true);
+    const agentTasks = tasks["__proto__"] as Record<string, Envelope>;
+    expect(Object.prototype.hasOwnProperty.call(agentTasks, "__proto__")).toBe(
+      true,
+    );
+    expect(agentTasks["__proto__"]).toEqual(polluted);
+    expect(agentTasks["t2"]).toBeDefined();
+  });
+
+  describe("applyTaskEnvelope", () => {
+    it("kind=started/updated は (agent_id, task_id) をキーに upsert する (ADR-0019 F4 +1)", () => {
+      const started = { ...base, payload: validPayload };
+      const afterStart = applyTaskEnvelope({}, started);
+      expect(afterStart).toEqual({ "host-a.p": { t1: started } });
+
+      const updated = {
+        ...base,
+        payload: { ...validPayload, kind: "updated" as const, summary: "half" },
+      };
+      const afterUpdate = applyTaskEnvelope(afterStart, updated);
+      expect(afterUpdate).toEqual({ "host-a.p": { t1: updated } });
+    });
+
+    it("kind=completed は (agent_id, task_id) を除去し、空になった agent の枝も剪定する (ADR-0019 F4 -1)", () => {
+      const started = { ...base, payload: validPayload };
+      const seeded = applyTaskEnvelope({}, started);
+      const completed = {
+        ...base,
+        payload: { ...validPayload, kind: "completed" as const, status: "completed" as const },
+      };
+      expect(applyTaskEnvelope(seeded, completed)).toEqual({});
+    });
+
+    it("他の task_id は完了しても残る", () => {
+      const t2 = {
+        ...base,
+        payload: { ...validPayload, task_id: "t2" },
+      };
+      let tasks = applyTaskEnvelope({}, { ...base, payload: validPayload });
+      tasks = applyTaskEnvelope(tasks, t2);
+      const completeT1 = {
+        ...base,
+        payload: { ...validPayload, kind: "completed" as const, status: "completed" as const },
+      };
+      expect(applyTaskEnvelope(tasks, completeT1)).toEqual({
+        "host-a.p": { t2 },
+      });
+    });
+
+    // M1 fix-round (2026-08-09, ふじ round1 must-fix): 同一 task_id を持つ
+    // 2 agent は独立に管理され、片方の completed が他方を消してはならない。
+    it("同一 task_id を持つ 2 agent は独立に管理される (M1 fix-round)", () => {
+      const agentA = { ...base, agent_id: "host-a.p", payload: validPayload };
+      const agentB = {
+        ...base,
+        agent_id: "host-b.p",
+        payload: { ...validPayload, agent_id: "host-b.p" },
+      };
+      let tasks = applyTaskEnvelope({}, agentA);
+      tasks = applyTaskEnvelope(tasks, agentB);
+      expect(tasks).toEqual({
+        "host-a.p": { t1: agentA },
+        "host-b.p": { t1: agentB },
+      });
+
+      const completeA = {
+        ...base,
+        agent_id: "host-a.p",
+        payload: { ...validPayload, kind: "completed" as const, status: "completed" as const },
+      };
+      const afterCompleteA = applyTaskEnvelope(tasks, completeA);
+      expect(afterCompleteA).toEqual({ "host-b.p": { t1: agentB } });
+    });
+
+    // Security review round 2 (issue #180, 2026-08-09): round 1 のコメント
+    // は「agentTasks が truthy になるのは先行する safe な upsert 経由の
+    // みで、それが __proto__ アクセサを既に shadow している」と主張して
+    // いたが、これは誤りだった — round 2 レビューが指摘し実測で反証: 素の
+    // `{}`(App.svelte の初期値そのもの)に対して `tasks["__proto__"]` を
+    // 読むだけで、一度も書き込みが無くても継承された Object.prototype が
+    // 返り(truthy)、"toString"/"constructor" 等も `in` 演算子でプロトタ
+    // イプチェーン越しに真になる。実害は prototype pollution ではなく
+    // 「同一参照を返す」契約違反(無駄な再描画)に留まるが、本物の穴では
+    // あった。fix: agentTasks の読み取りと task_id の存在確認を両方
+    // hasOwnProperty ベースへ変更(コード側コメント参照)。
+    it("agent_id/task_id が Object.prototype のメンバ名と衝突しても同一参照を返す (round2 fix-round)", () => {
+      const tasks: TaskTable = {};
+      // 一度も書き込みの無い素の {} に対し、Object.prototype のメンバ名を
+      // agent_id/task_id に持つ completed envelope を投げる — hasOwnProperty
+      // ガード無しだと tasks["__proto__"] は継承された Object.prototype
+      // (truthy) を返し、"toString" in agentTasks も真になってしまう。
+      const phantomComplete = {
+        ...base,
+        agent_id: "__proto__",
+        payload: {
+          ...validPayload,
+          agent_id: "__proto__",
+          task_id: "toString",
+          kind: "completed" as const,
+          status: "completed" as const,
+        },
+      };
+      expect(applyTaskEnvelope(tasks, phantomComplete)).toBe(tasks);
+    });
+
+    it("task 以外の envelope 型・不正 payload は no-op で同一参照を返す", () => {
+      const tasks = applyTaskEnvelope({}, { ...base, payload: validPayload });
+      expect(applyTaskEnvelope(tasks, { ...base, type: "state_change" })).toBe(
+        tasks,
+      );
+      expect(
+        applyTaskEnvelope(tasks, { ...base, payload: { kind: "started" } }),
+      ).toBe(tasks);
+    });
+
+    it("未知 task_id への completed は no-op で同一参照を返す", () => {
+      const tasks = applyTaskEnvelope({}, { ...base, payload: validPayload });
+      const completeUnknown = {
+        ...base,
+        payload: {
+          ...validPayload,
+          task_id: "never-started",
+          kind: "completed" as const,
+          status: "completed" as const,
+        },
+      };
+      expect(applyTaskEnvelope(tasks, completeUnknown)).toBe(tasks);
+    });
+
+    it("未知 agent_id への completed は no-op で同一参照を返す", () => {
+      const tasks = applyTaskEnvelope({}, { ...base, payload: validPayload });
+      const completeUnknownAgent = {
+        ...base,
+        agent_id: "host-never-seen.p",
+        payload: {
+          ...validPayload,
+          agent_id: "host-never-seen.p",
+          kind: "completed" as const,
+          status: "completed" as const,
+        },
+      };
+      expect(applyTaskEnvelope(tasks, completeUnknownAgent)).toBe(tasks);
+    });
+  });
+
+  // M3/クロエ M1 fix-round (2026-08-09, issue #180): client 側の disconnect
+  // purge 契約。App.svelte の onEnvelope が state_change disconnected 受信
+  // 時に呼ぶ。
+  describe("purgeTasksForAgent", () => {
+    it("該当 agent_id の task を全て除去する", () => {
+      const agentA = { ...base, agent_id: "host-a.p", payload: validPayload };
+      const agentB = {
+        ...base,
+        agent_id: "host-b.p",
+        payload: { ...validPayload, agent_id: "host-b.p" },
+      };
+      let tasks = applyTaskEnvelope({}, agentA);
+      tasks = applyTaskEnvelope(tasks, agentB);
+
+      expect(purgeTasksForAgent(tasks, "host-a.p")).toEqual({
+        "host-b.p": { t1: agentB },
+      });
+    });
+
+    it("未知 agent_id は no-op で同一参照を返す", () => {
+      const tasks = applyTaskEnvelope({}, { ...base, payload: validPayload });
+      expect(purgeTasksForAgent(tasks, "host-never-seen.p")).toBe(tasks);
+    });
+
+    // Security review round 2 (issue #180, 2026-08-09): 同じ hasOwnProperty
+    // ガードが purgeTasksForAgent 側にも要る — `in` はプロトタイプ
+    // チェーンを辿るため、素の {} でも "toString" 等は真になる。
+    it("agent_id が Object.prototype のメンバ名と衝突しても同一参照を返す (round2 fix-round)", () => {
+      const tasks: TaskTable = {};
+      expect(purgeTasksForAgent(tasks, "toString")).toBe(tasks);
+      expect(purgeTasksForAgent(tasks, "__proto__")).toBe(tasks);
+    });
+  });
+
+  // M2 fix-round (2026-08-09, ふじ round 2): App.svelte の
+  // activeTaskCountByAgent 派生を抽出した純粋関数。ここも既存規約通り
+  // mount 無しで固定する。
+  describe("computeActiveTaskCountByAgent", () => {
+    it("agent ごとの active task 件数を数える", () => {
+      const agentA = { ...base, agent_id: "host-a.p", payload: validPayload };
+      const agentB = {
+        ...base,
+        agent_id: "host-b.p",
+        payload: { ...validPayload, agent_id: "host-b.p", task_id: "t2" },
+      };
+      let tasks = applyTaskEnvelope({}, agentA);
+      tasks = applyTaskEnvelope(tasks, agentB);
+      tasks = applyTaskEnvelope(tasks, {
+        ...base,
+        agent_id: "host-a.p",
+        payload: { ...validPayload, task_id: "t3" },
+      });
+
+      expect(computeActiveTaskCountByAgent(tasks)).toEqual({
+        "host-a.p": 2,
+        "host-b.p": 1,
+      });
+    });
+
+    it("空の tasks table では空の Record を返す", () => {
+      expect(computeActiveTaskCountByAgent({})).toEqual({});
+    });
+
+    // M2 の本体: agent_id="__proto__" は plain {} 上の bracket 代入
+    // (counts[agentId] = n) では own property にならず、count が消える
+    // (リングが点かない) — Object.create(null) でないと再発する。
+    it("agent_id が __proto__ でも own count entry が作られる (M2 fix-round)", () => {
+      const envelope = {
+        ...base,
+        agent_id: "__proto__",
+        payload: { ...validPayload, agent_id: "__proto__" },
+      };
+      const tasks = applyTaskEnvelope({}, envelope);
+
+      const counts = computeActiveTaskCountByAgent(tasks);
+      expect(Object.prototype.hasOwnProperty.call(counts, "__proto__")).toBe(
+        true,
+      );
+      expect(counts["__proto__"]).toBe(1);
+    });
+  });
+
+  // ふじ round1 M3 必須 regression: started -> parent disconnect -> live
+  // accumulator empty。App.svelte の onEnvelope は type="task" を
+  // applyTaskEnvelope で処理し、state_change disconnected を
+  // purgeTasksForAgent で処理する — この 2 関数の合成が実際の client 側
+  // フローそのものなので、mount 無しでここに固定する(このリポジトリの
+  // 既存規約: App.svelte 内の配線はテストせず、protocol.ts の純粋関数側で
+  // 固定する)。
+  it("started -> 親の disconnected state_change -> tasks が空になる (M3 必須 regression)", () => {
+    const started = { ...base, payload: validPayload };
+    let tasks = applyTaskEnvelope({}, started);
+    expect(tasks).toEqual({ "host-a.p": { t1: started } });
+
+    // App.svelte: envelope.state === "disconnected" を受けたら
+    // purgeTasksForAgent(tasks, envelope.agent_id) を呼ぶ。
+    tasks = purgeTasksForAgent(tasks, "host-a.p");
+    expect(tasks).toEqual({});
   });
 });
 

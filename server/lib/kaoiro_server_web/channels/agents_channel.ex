@@ -93,6 +93,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
+  alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.ClientSocket
@@ -205,7 +206,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
       end)
       |> Map.new()
 
-    push(socket, "snapshot", %{"agents" => agents})
+    # issue #180 (ADR-0048 F3): the active task set rides the SAME
+    # join-time snapshot push, not a dedicated envelope — additive key,
+    # no protocol version bump. Operator-only (こはく決定 2026-08-09):
+    # F5's progress meta (summary/last_tool_name) is content-bearing, the
+    # issue's own goal is operator-facing, and ADR-0021 F2's fail-closed
+    # default is "narrow unless asked" — an empty map for viewer, exactly
+    # like every other role-gated field on this push, rather than a
+    # separate `sanitize_envelope_for` clause per task (the existing
+    # `:operator` / `:viewer` catch-alls in that function already gate
+    # `type=task` correctly for the LIVE broadcast path;
+    # see handle_out("envelope", ...) below — this key mirrors the same
+    # policy for the snapshot path specifically).
+    tasks = if role == :operator, do: TaskStates.snapshot(), else: %{}
+
+    push(socket, "snapshot", %{"agents" => agents, "tasks" => tasks})
 
     # Reply-log history, host set, and the identity ledger are operator-only;
     # viewers stay at the grid and never see host info (cwd allow-lists are

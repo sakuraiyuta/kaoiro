@@ -5,6 +5,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.WrapperChannel
 
@@ -490,6 +491,140 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute_broadcast "envelope", %{}
       refute Map.has_key?(AgentStates.snapshot(), agent_id)
       refute Map.has_key?(AgentStates.histories(), agent_id)
+    end
+
+    # issue #180 (ADR-0019/0047/0048): task envelope は AgentStates ではなく
+    # TaskStates の flat table へ行く — 親の state_change スロットを一切
+    # 上書きしない(refresh_models_result と同型の「中継するが latest slot
+    # は触らない」要件だが、task は TaskStates 側に実体を残す点が異なる)。
+    test "task は AgentStates の latest slot を上書きせず TaskStates へ入る" do
+      agent_id = "test.task-1"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      ref = push(socket, "envelope", envelope(agent_id, "tool_running"))
+      assert_reply ref, :ok
+      assert_broadcast "envelope", %{"state" => "tool_running"}
+
+      task_env = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-08-09T00:00:00Z",
+        "type" => "task",
+        "state" => "tool_running",
+        "payload" => %{
+          "kind" => "started",
+          "agent_id" => agent_id,
+          "task_id" => "t1",
+          "task_type" => "local_agent",
+          "status" => "running"
+        },
+        "ext" => %{}
+      }
+
+      ref = push(socket, "envelope", task_env)
+      assert_reply ref, :ok
+      assert_broadcast "envelope", %{"type" => "task"}
+
+      # AgentStates の latest slot は state_change のまま — task に上書き
+      # されていない。
+      assert AgentStates.snapshot()[agent_id]["type"] == "state_change"
+      assert AgentStates.snapshot()[agent_id]["state"] == "tool_running"
+
+      # 実体は TaskStates にある (M1 fix-round: agent_id => %{task_id =>
+      # envelope} の複合キー)。
+      assert %{^agent_id => %{"t1" => stored}} = TaskStates.snapshot()
+      assert stored["payload"]["task_id"] == "t1"
+    end
+
+    # code-review (issue #180, round 1): payload.agent_id はトピックの
+    # agent_id と別フィールドとして届く (ADR-0047 F2、self-contained のため
+    # payload にも複製される)。ここが未検証だと、他 agent_id を騙る payload
+    # が TaskStates へ誤帰属し、terminate/2 の discard_for_agent(実 agent_id
+    # で呼ばれる) が見つけられず孤児化する — inter_agent_message と同じ
+    # frame-boundary での拒否で塞ぐ。
+    test "payload.agent_id がトピックと不一致の task は reject する" do
+      agent_id = "test.task-mismatch"
+      socket = join_wrapper(agent_id)
+
+      task_env = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-08-09T00:00:00Z",
+        "type" => "task",
+        "state" => "tool_running",
+        "payload" => %{
+          "kind" => "started",
+          "agent_id" => "test.task-other",
+          "task_id" => "t1",
+          "task_type" => "local_agent",
+          "status" => "running"
+        },
+        "ext" => %{}
+      }
+
+      ref = push(socket, "envelope", task_env)
+      assert_reply ref, :error, %{reason: "payload.agent_id does not match topic"}
+      assert TaskStates.snapshot() == %{}
+    end
+
+    # S1 fix-round (2026-08-09, ふじ round1 should-fix): required payload
+    # fields (task_id/task_type/non-empty, kind enum, kind/status
+    # correspondence) are validated at the frame boundary, so a malformed
+    # task envelope is rejected outright — never reaches
+    # store_and_broadcast (no live broadcast, no TaskStates entry).
+    # trusted-wrapper leniency is deliberately not applied (#175 lesson).
+    test "task の必須 field 欠落・kind/status 不整合は reject する (S1 fix-round)" do
+      agent_id = "test.task-s1"
+      socket = join_wrapper(agent_id)
+
+      base_payload = %{
+        "kind" => "started",
+        "agent_id" => agent_id,
+        "task_id" => "t1",
+        "task_type" => "local_agent",
+        "status" => "running"
+      }
+
+      base_env = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-08-09T00:00:00Z",
+        "type" => "task",
+        "state" => "tool_running",
+        "ext" => %{}
+      }
+
+      cases = [
+        {Map.delete(base_payload, "task_id"), "invalid value: payload.task_id"},
+        {Map.put(base_payload, "task_id", ""), "invalid value: payload.task_id"},
+        {Map.delete(base_payload, "task_type"), "invalid value: payload.task_type"},
+        {Map.delete(base_payload, "kind"), "invalid value: payload.kind"},
+        {Map.put(base_payload, "kind", "bogus_kind"),
+         "invalid value: payload.kind/status combination"},
+        # kind=started と status=completed の不整合 (完了扱いの詐称)。
+        {Map.put(base_payload, "status", "completed"),
+         "invalid value: payload.kind/status combination"},
+        # kind=completed なのに status=running (未完了扱いを装う詐称)。
+        {%{base_payload | "kind" => "completed", "status" => "running"},
+         "invalid value: payload.kind/status combination"},
+        # M1 round-3 fix (2026-08-09, ふじ round 3): task_id に長さ上限
+        # (@max_task_id_field_bytes = 256) を追加 — snapshot wire の
+        # outer key として現れる分の会計が task_states.ex 側で入った
+        # ことに対応する ingress 側の上限。
+        {Map.put(base_payload, "task_id", String.duplicate("x", 257)),
+         "invalid value: payload.task_id"}
+      ]
+
+      for {payload, expected_reason} <- cases do
+        ref = push(socket, "envelope", Map.put(base_env, "payload", payload))
+        assert_reply ref, :error, %{reason: ^expected_reason}
+      end
+
+      assert TaskStates.snapshot() == %{}
     end
   end
 
@@ -2219,6 +2354,221 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
 
       assert AgentStates.snapshot()[agent_id]["state"] == "disconnected"
+    end
+
+    # issue #180, ADR-0048 F1: 親エージェントの切断でその task を破棄する。
+    # AgentStates.disconnect/3 の owner-check 成功に相乗りするので、この
+    # テストで「切断で消える」ことと「切断していないと消えない」ことの両方
+    # を確認する。
+    test "channel 終了で紐づく task を TaskStates から破棄する (ADR-0048 F1)" do
+      agent_id = "test.disc-task-1"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      # AgentStates.disconnect/3 の owner-check が成立するには、この
+      # channel_pid が先に AgentStates の latest slot を確立している必要
+      # がある(実際の wrapper は task_* SDK メッセージが届く頃には既に
+      # state_change を送っている — session_init が task_started より
+      # 必ず先行するため)。state_change 無しの task のみの接続は非現実的
+      # なシナリオであり、その場合は AgentStates.disconnect が :noop を
+      # 返して disconnected broadcast 自体が飛ばない(このテストの対象外)。
+      state_ref = push(socket, "envelope", envelope(agent_id, "tool_running"))
+      assert_reply state_ref, :ok
+      assert_broadcast "envelope", %{"state" => "tool_running"}
+
+      ref =
+        push(socket, "envelope", %{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+          "ts" => "2026-08-09T00:00:00Z",
+          "type" => "task",
+          "state" => "idle",
+          "payload" => %{
+            "kind" => "started",
+            "agent_id" => agent_id,
+            "task_id" => "t1",
+            "task_type" => "local_agent",
+            "status" => "running"
+          },
+          "ext" => %{}
+        })
+
+      assert_reply ref, :ok
+      # M1 fix-round: TaskStates is now keyed agent_id => %{task_id =>
+      # envelope}.
+      assert Map.has_key?(TaskStates.snapshot(), agent_id)
+
+      Process.unlink(socket.channel_pid)
+      :ok = close(socket)
+
+      # terminate/2 is asynchronous relative to close/1 returning; the
+      # disconnected broadcast (emitted AFTER TaskStates.discard_for_agent
+      # in the source, M3 fix-round — discard now precedes broadcast) is
+      # the synchronization point the sibling test above also relies on —
+      # without it this assertion can race ahead of terminate/2 actually
+      # running.
+      assert_broadcast "envelope", %{
+        "agent_id" => ^agent_id,
+        "state" => "disconnected"
+      }
+
+      refute Map.has_key?(TaskStates.snapshot(), agent_id)
+    end
+
+    # S2 round-3 fix (2026-08-09, ふじ round 3): 上のテストは discard →
+    # broadcast の両方が「いずれ」起きることは固定していたが、broadcast
+    # が discard の"後"であることそのものは、broadcast を同期点に使う
+    # 構造上、区別できていなかった(broadcast が先に発火する旧順序へ
+    # 戻しても、タイミング次第でこのテストは green のままになりうる)。
+    # agents_channel_test.exs 側にあった交差テストも手動 sequencing で
+    # terminate/2 を一切通らず、同じ理由で旧順序判別に使えなかった
+    # (こはく round3 指摘)。ふじの案どおり、TaskStates を :sys.suspend
+    # して discard_for_agent の GenServer.call を止め、その間
+    # broadcast が届かないこと・resume 後に届くことを実際の
+    # terminate/2 経由で決定的に固定する。
+    test "channel 終了時、TaskStates の discard 完了まで disconnected broadcast は届かない (S2 round-3 fix)" do
+      agent_id = "test.disc-task-order-1"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      state_ref = push(socket, "envelope", envelope(agent_id, "tool_running"))
+      assert_reply state_ref, :ok
+      assert_broadcast "envelope", %{"state" => "tool_running"}
+
+      task_ref =
+        push(socket, "envelope", %{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+          "ts" => "2026-08-09T00:00:00Z",
+          "type" => "task",
+          "state" => "idle",
+          "payload" => %{
+            "kind" => "started",
+            "agent_id" => agent_id,
+            "task_id" => "t1",
+            "task_type" => "local_agent",
+            "status" => "running"
+          },
+          "ext" => %{}
+        })
+
+      assert_reply task_ref, :ok
+      assert Map.has_key?(TaskStates.snapshot(), agent_id)
+
+      :sys.suspend(TaskStates)
+      on_exit(fn -> :sys.resume(TaskStates) end)
+
+      Process.unlink(socket.channel_pid)
+
+      # `Phoenix.Channel.Server.close/2` (what `close/1` calls) is
+      # SYNCHRONOUS: it monitors the channel pid and blocks the caller
+      # until it actually exits — i.e. until `terminate/2` has fully
+      # RUN, not merely started. Calling it inline here would block this
+      # test process too (TaskStates is suspended, so terminate/2's
+      # discard call cannot return), leaving no way to observe the
+      # intermediate "discard in flight, not yet broadcast" state from
+      # the SAME process. Run it in a separate task instead, so this
+      # test process stays free to inspect its own "agents:lobby"
+      # subscription while that task blocks.
+      close_task = Task.async(fn -> close(socket) end)
+
+      # nit (2026-08-09, ふじ round 4): wait for terminate/2 to have
+      # actually reached (and returned from) AgentStates.disconnect/3 —
+      # the call immediately BEFORE the suspended TaskStates.discard_for_agent
+      # in the source — before asserting the broadcast's absence below.
+      # Without this barrier, a slow scheduler could delay dispatching
+      # close_task long enough that the whole refute_broadcast window
+      # elapses before terminate/2 even starts running, making the
+      # refute pass for the wrong reason (nothing ran yet) instead of
+      # the intended one (discard is genuinely blocking broadcast).
+      :ok =
+        wait_until(fn ->
+          match?(%{"state" => "disconnected"}, AgentStates.snapshot()[agent_id])
+        end)
+
+      # terminate/2 is now stuck inside TaskStates.discard_for_agent's
+      # GenServer.call (TaskStates cannot reply while suspended) — under
+      # the CURRENT source order (discard before broadcast) the
+      # broadcast below has therefore not run yet either. If the source
+      # were reordered back to broadcast-before-discard, the broadcast
+      # would have already fired by now (it does not depend on
+      # TaskStates at all) and this refute would fail.
+      refute_broadcast "envelope", %{"agent_id" => ^agent_id, "state" => "disconnected"}, 300
+
+      :sys.resume(TaskStates)
+
+      assert_broadcast "envelope", %{
+        "agent_id" => ^agent_id,
+        "state" => "disconnected"
+      }
+
+      refute Map.has_key?(TaskStates.snapshot(), agent_id)
+      # Confirm the channel process itself actually finished terminating
+      # (the close task's own blocking wait completed).
+      assert :ok = Task.await(close_task)
+    end
+
+    # M3 round2 must-fix (2026-08-09, ふじ round 2): 上のテストは正常系
+    # (切断で消える) だけを固定していた。「stale terminate は新 owner の
+    # task を破棄しない」は従来 AgentStates.disconnect/3 の owner-check
+    # という構造的な議論(terminate/2 の :noop 分岐は discard_for_agent
+    # を一切呼ばない、というコード読解)にしか依拠しておらず、実際に
+    # task を seed した regression が無かった。
+    test "stale terminate (再接続で owner を失った側) は新 owner の task を破棄しない (M3 round2 fix-round)" do
+      agent_id = "test.disc-task-stale-1"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      state_ref = push(socket, "envelope", envelope(agent_id, "tool_running"))
+      assert_reply state_ref, :ok
+      assert_broadcast "envelope", %{"state" => "tool_running"}
+
+      task_envelope = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-08-09T00:00:00Z",
+        "type" => "task",
+        "state" => "idle",
+        "payload" => %{
+          "kind" => "started",
+          "agent_id" => agent_id,
+          "task_id" => "t-new-owner",
+          "task_type" => "local_agent",
+          "status" => "running"
+        },
+        "ext" => %{}
+      }
+
+      # 再接続相当: 別 pid が AgentStates の entry を持ち直す。以後この
+      # socket の terminate は AgentStates.disconnect/3 の owner-check で
+      # :noop になり (terminate/2 参照)、discard_for_agent は呼ばれない
+      # — その後、新 owner の下で started した task が「消えてはならない」
+      # 対象。
+      other_owner = spawn(fn -> Process.sleep(:infinity) end)
+      :ok = AgentStates.put(envelope(agent_id, "idle"), owner: other_owner)
+      :ok = TaskStates.put(task_envelope)
+
+      assert Map.has_key?(TaskStates.snapshot(), agent_id)
+
+      # close/1 は terminate/2 の完了と同期しない (直前のテストのコメント
+      # 参照)。このシナリオは :noop 分岐で broadcast も飛ばないため
+      # assert_broadcast を同期点に使えず、channel process の実終了を
+      # monitor で直接待つ。
+      down_ref = Process.monitor(socket.channel_pid)
+      Process.unlink(socket.channel_pid)
+      :ok = close(socket)
+      assert_receive {:DOWN, ^down_ref, :process, _pid, _reason}, 500
+
+      assert %{^agent_id => %{"t-new-owner" => ^task_envelope}} =
+               TaskStates.snapshot()
+
+      on_exit(fn ->
+        Process.exit(other_owner, :kill)
+        TaskStates.discard_for_agent(agent_id)
+      end)
     end
   end
 

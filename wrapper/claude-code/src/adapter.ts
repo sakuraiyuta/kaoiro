@@ -483,3 +483,200 @@ export function sdkMessageToSessionId(message: SDKMessage): string | null {
   const id = (message as { session_id?: unknown }).session_id;
   return typeof id === "string" && id !== "" ? id : null;
 }
+
+/** Raw fields extracted from one task_* SDK system message (issue #180,
+ *  ADR-0019 F2-F4, ADR-0047), before the host backfills `task_type` for
+ *  `updated`/`completed` from its own started-task cache — the SDK's
+ *  `task_progress` / `task_notification` messages carry no `task_type` of
+ *  their own (verified against the installed `@anthropic-ai/claude-agent-
+ *  sdk@0.3.220` type declarations; only `task_started` has it, and even
+ *  there it is optional). Kept out of adapter.ts's per-session state on
+ *  purpose — this file is pure, like every other `sdkMessageTo*` mapper
+ *  here; host.ts owns the cache and the fail-visible "unknown task_id /
+ *  missing task_type" handling.
+ *
+ *  Deliberately excludes two real SDK fields outside ADR-0047 F3's
+ *  enumerated optional-meta list: `task_started.prompt` (the subagent's
+ *  full instructions, content-bearing) and `task_notification.output_file`
+ *  (a local filesystem path). Neither is wired to the wire envelope
+ *  (こはく判断 2026-08-09, issue #180).
+ *
+ *  `task_updated` (a real SDK subtype — richer status enum
+ *  pending/running/completed/failed/killed/paused than ADR-0019 F3's
+ *  coarse lifecycle) is likewise not extracted: #180 review captured the
+ *  real SDK stream (2026-08-09, SDK 0.3.220) across natural completion,
+ *  explicit `stopTask()`, session-level `interrupt()`, and
+ *  `backgroundTasks()` — `task_notification` reliably followed every
+ *  `task_updated(status:"killed")` observation, so the 3-event model
+ *  (`task_started`/`task_progress`/`task_notification`) is sufficient
+ *  without it; `task_updated` stays out of ADR-0019's explicit scope. */
+export type TaskEvent =
+  | {
+      kind: "started";
+      task_id: string;
+      /** Present iff the SDK message had a non-empty `task_type` — see
+       *  the `task_started` case: host.ts logs and drops the event when
+       *  this is absent, since ADR-0047 F2 requires task_type on every
+       *  emitted `task` envelope and there is nothing to backfill it
+       *  from yet for a brand-new task_id. */
+      task_type?: string;
+      subagent_type?: string;
+      workflow_name?: string;
+      description?: string;
+      skip_transcript?: boolean;
+    }
+  | {
+      kind: "updated";
+      task_id: string;
+      subagent_type?: string;
+      description?: string;
+      usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+      last_tool_name?: string;
+      summary?: string;
+    }
+  | {
+      kind: "completed";
+      task_id: string;
+      /** Coarse status the caller emits (completed/failed/stopped, ADR-0019
+       *  F3). `task_notification` is inherently terminal — even when the SDK
+       *  reports a status value outside this 3-value set, `status` still
+       *  gets a value here (falls back to `"failed"`) so the caller always
+       *  closes out its active-task cache/count; the SDK's raw string is
+       *  preserved separately in {@link raw_status} for logging (M2
+       *  fix-round, 2026-08-09 — ふじ review: dropping the event entirely on
+       *  an unrecognized status left the +1 permanently un-decremented). */
+      status: "completed" | "failed" | "stopped";
+      /** Present only when `status` above is a fallback, i.e. the SDK's own
+       *  value did not match the 3 known statuses. The caller should log
+       *  this raw value rather than silently discarding it. */
+      raw_status?: string;
+      usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+      summary?: string;
+      skip_transcript?: boolean;
+    };
+
+/** Maps one SDK system message to a {@link TaskEvent}, or null for every
+ *  other message (including `task_updated` and any other `task_*`
+ *  subtype the SDK adds later — see the type's doc comment for why those
+ *  are out of scope, and why unknown subtypes must still be visible to
+ *  the host rather than silently vanishing: `message.subtype` itself is
+ *  available to a caller that wants to log an unrecognized `task_*`
+ *  subtype, since this function only returns null for it). */
+export function sdkMessageToTask(message: SDKMessage): TaskEvent | null {
+  if (message.type !== "system") return null;
+  switch (message.subtype) {
+    case "task_started": {
+      const m = message as unknown as {
+        task_id: string;
+        task_type?: string;
+        subagent_type?: string;
+        workflow_name?: string;
+        description?: string;
+        skip_transcript?: boolean;
+      };
+      const event: TaskEvent = { kind: "started", task_id: m.task_id };
+      if (typeof m.task_type === "string" && m.task_type !== "") {
+        event.task_type = m.task_type;
+      }
+      if (typeof m.subagent_type === "string") {
+        event.subagent_type = m.subagent_type;
+      }
+      if (typeof m.workflow_name === "string") {
+        event.workflow_name = m.workflow_name;
+      }
+      if (typeof m.description === "string") event.description = m.description;
+      if (typeof m.skip_transcript === "boolean") {
+        event.skip_transcript = m.skip_transcript;
+      }
+      return event;
+    }
+    case "task_progress": {
+      const m = message as unknown as {
+        task_id: string;
+        subagent_type?: string;
+        description?: string;
+        usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+        last_tool_name?: string;
+        summary?: string;
+      };
+      const event: TaskEvent = { kind: "updated", task_id: m.task_id };
+      if (typeof m.subagent_type === "string") {
+        event.subagent_type = m.subagent_type;
+      }
+      if (typeof m.description === "string") event.description = m.description;
+      if (isRecord(m.usage)) {
+        const { total_tokens, tool_uses, duration_ms } = m.usage as Record<
+          string,
+          unknown
+        >;
+        if (
+          typeof total_tokens === "number" &&
+          typeof tool_uses === "number" &&
+          typeof duration_ms === "number"
+        ) {
+          event.usage = { total_tokens, tool_uses, duration_ms };
+        }
+      }
+      if (typeof m.last_tool_name === "string") {
+        event.last_tool_name = m.last_tool_name;
+      }
+      if (typeof m.summary === "string") event.summary = m.summary;
+      return event;
+    }
+    case "task_notification": {
+      const m = message as unknown as {
+        task_id: string;
+        status?: unknown;
+        usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+        summary?: string;
+        skip_transcript?: boolean;
+      };
+      // M2 fix-round (2026-08-09, ふじ review): task_notification is
+      // ALWAYS terminal — returning null here for an unrecognized status
+      // (the pre-fix behavior) dropped the event entirely, leaving the
+      // host's active-task cache/count stuck at +1 forever (no -1 ever
+      // fires for that task_id). Fall back to "failed" rather than
+      // silently coercing to "completed" (which would misreport success),
+      // and preserve the raw value in `raw_status` so the caller can warn
+      // with it instead of swallowing it.
+      let status: "completed" | "failed" | "stopped";
+      let rawStatus: string | undefined;
+      if (
+        m.status === "completed" ||
+        m.status === "failed" ||
+        m.status === "stopped"
+      ) {
+        status = m.status;
+      } else {
+        status = "failed";
+        rawStatus = typeof m.status === "string" ? m.status : String(m.status);
+      }
+      const event: TaskEvent = {
+        kind: "completed",
+        task_id: m.task_id,
+        status,
+        ...(rawStatus !== undefined ? { raw_status: rawStatus } : {}),
+      };
+      if (isRecord(m.usage)) {
+        const { total_tokens, tool_uses, duration_ms } = m.usage as Record<
+          string,
+          unknown
+        >;
+        if (
+          typeof total_tokens === "number" &&
+          typeof tool_uses === "number" &&
+          typeof duration_ms === "number"
+        ) {
+          event.usage = { total_tokens, tool_uses, duration_ms };
+        }
+      }
+      if (typeof m.summary === "string") event.summary = m.summary;
+      if (typeof m.skip_transcript === "boolean") {
+        event.skip_transcript = m.skip_transcript;
+      }
+      return event;
+    }
+    default:
+      return null;
+  }
+}

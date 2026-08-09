@@ -69,6 +69,7 @@ export {
   makeResult,
   makeRefreshModelsResult,
   makeStateChange,
+  makeTask,
   reduceStates,
   stepState,
 } from "./state.js";
@@ -107,6 +108,8 @@ export type {
   ResumeDriftExt,
   SessionCapabilitiesExt,
   SwitchErrorExt,
+  TaskPayload,
+  TaskStatus,
   WirePersona,
   WrapperConfig,
 } from "./types.js";

@@ -66,6 +66,45 @@ export interface ResultPayload {
   error_detail?: string;
 }
 
+/** Coarse subagent/workflow lifecycle status (ADR-0019 F3). Distinct from
+ *  the wider status enum the SDK's own `task_updated` message carries
+ *  (pending/running/completed/failed/killed/paused) — #180 review (実測
+ *  2026-08-09、SDK 0.3.220) confirmed `task_notification` is reliably
+ *  emitted on every exercised termination path, so the wire-facing status
+ *  stays limited to this 4-value set; a `killed` SDK-side intermediate
+ *  always surfaces here as `stopped`. */
+export type TaskStatus = "running" | "completed" | "failed" | "stopped";
+
+/** payload of a type="task" envelope (ADR-0047 F1-F4, issue #180).
+ *  `kind` distinguishes lifecycle events sharing this one type (ADR-0047
+ *  F1); `agent_id`/`task_id`/`task_type`/`status` are required on every
+ *  kind (F2); the rest are optional progress meta present only when the
+ *  originating SDK message carried them (F3). `task_type` is an open,
+ *  extensible string (F4, initial values `subagent` | `workflow`) — the
+ *  real SDK (0.3.220) emits its OWN internal vocabulary
+ *  (`local_agent` / `local_workflow` / `local_bash` and possibly others,
+ *  not verbatim `subagent`/`workflow`), relayed through unmodified per
+ *  F4's "受信側は未知値を汎用表示へフォールバック" design — no renaming
+ *  layer exists here. Deliberately excludes two SDK fields outside this
+ *  enumerated set (host has them, does not wire them):
+ *  `task_started.prompt` (the subagent's full instructions,
+ *  content-bearing) and `task_notification.output_file` (a local
+ *  filesystem path). */
+export interface TaskPayload {
+  kind: "started" | "updated" | "completed";
+  agent_id: string;
+  task_id: string;
+  task_type: string;
+  status: TaskStatus;
+  subagent_type?: string;
+  workflow_name?: string;
+  description?: string;
+  usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+  last_tool_name?: string;
+  summary?: string;
+  skip_transcript?: boolean;
+}
+
 /** Wire-safe subset of Persona used in every network-facing type
  *  (Envelope, RunnerRegister, SpawnMessage, and any future wire shape). */
 export interface WirePersona {
@@ -504,7 +543,17 @@ export interface Envelope {
      *  payload = { request_id, ok, reason?, models_count? }. Wrapper emits
      *  after refreshCatalogFor() settles so AgentDetail can pair server
      *  ack + actual result and settle its loading spinner. */
-    | "refresh_models_result";
+    | "refresh_models_result"
+    /** subagent/workflow task lifecycle (issue #180, ADR-0019 F2 / ADR-0047
+     *  F1). payload.kind = "started" | "updated" | "completed"; payload
+     *  carries the ADR-0047 F2 required fields (agent_id/task_id/task_type/
+     *  status) plus F3's optional progress meta. `agent_id` here is the
+     *  PARENT (the wrapper's own agent_id, same as the envelope frame's own
+     *  `agent_id` — ADR-0047 F2 keeps it in payload too so the field is
+     *  self-contained for server aggregation/snapshot, which handles task
+     *  envelopes independently of the outer frame). Reserved as a
+     *  予約-status protocol row since ADR-0019; this is the first producer. */
+    | "task";
   state: KaoiroState;
   payload: Record<string, unknown>;
   ext: EnvelopeExt;

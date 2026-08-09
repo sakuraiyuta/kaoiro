@@ -16,6 +16,7 @@
     envelope,
     manifest = null,
     directoryOnly = false,
+    activeTaskCount = 0,
     spawnError = null,
     onSelect,
     onInterrupt,
@@ -32,6 +33,13 @@
      *  "offline" label overlay so the operator can tell it apart from a
      *  merely disconnected live entry. */
     directoryOnly?: boolean;
+    /** Count of subagent/workflow tasks currently active under this agent
+     *  (ADR-0019/0047/0048, issue #180). Drives the 頭上リング (overhead
+     *  ring) animation only when > 0 — the value itself is not displayed
+     *  (numeric display was explicitly out of scope for this issue).
+     *  Always 0 for a viewer session (App.svelte's task snapshot/live feed
+     *  are operator-only, ADR-0021), so the ring never renders there. */
+    activeTaskCount?: number;
     /** Latest restore/spawn failure reason for this agent — sticky icon in
      *  the tile corner until the agent comes online again or is restored
      *  successfully (ADR-0030 D8). Null clears it. */
@@ -409,17 +417,37 @@
     {#if attention}
       <span class="badge" data-state={expression.variant}>要対応</span>
     {/if}
-    {#key display.shown}
-      {#if spriteUrl}
-        <img class="sprite" src={spriteUrl} alt={expression.label} />
-      {:else}
-        <div class="face" role="img" aria-label={expression.label}>
-          <span class="eye left"></span>
-          <span class="eye right"></span>
-          <span class="mouth"></span>
-        </div>
+    <div class="sprite-slot">
+      {#key display.shown}
+        {#if spriteUrl}
+          <img class="sprite" src={spriteUrl} alt={expression.label} />
+        {:else}
+          <div class="face" role="img" aria-label={expression.label}>
+            <span class="eye left"></span>
+            <span class="eye right"></span>
+            <span class="mouth"></span>
+          </div>
+        {/if}
+      {/key}
+      {#if activeTaskCount > 0}
+        <!-- 頭上リング (issue #180, ADR-0019/0047/0048): サブエージェント/
+             workflow 稼働の唯一のインジケータ(装飾ではない、N1: クロエ
+             2026-08-09 — 数値表示は無いため、この光点だけが操作者に
+             「今何か動いている」ことを伝える。aria-hidden は付けず
+             role="img" + aria-label で読み上げ対象にする)。{#key} の外に
+             置き、state 遷移(dissolve remount)の影響を受けず単独で
+             回り続ける。数値は出さない(on/off のみ)。
+             face-orbit: face fallback(スプライト無し persona)は
+             sprite より一回り小さいため、軌道半径を専用の CSS 変数で
+             出し分ける(下記 .task-ring.face-orbit)。 -->
+        <span
+          class="task-ring"
+          class:face-orbit={!spriteUrl}
+          role="img"
+          aria-label="サブエージェント実行中"
+        ></span>
       {/if}
-    {/key}
+    </div>
     <h2>{name}</h2>
     {#key display.shown}
       <p class="state">{expression.label}</p>
@@ -575,13 +603,27 @@
     cursor: help;
   }
 
+  /* Wraps the sprite/face so the 頭上リング (issue #180) can be
+     absolutely positioned around whichever is shown, and so the ring
+     survives the {#key display.shown} remount below instead of
+     restarting its rotation on every state change. inline-block
+     shrink-wraps to the child's own size (8rem sprite / 5.4rem face), so
+     the ring's `inset` offset (below) matches either case without a
+     fixed size here; `.open`'s text-align: center centers it
+     horizontally, replacing the margin:auto the children used to carry
+     directly. */
+  .sprite-slot {
+    position: relative;
+    display: inline-block;
+    margin-bottom: 1rem;
+  }
+
   /* Persona sprite (ADR-0008): square transparent PNG, contain-fit.
      disconnected has no sprite by spec — grey out idle instead. */
   .sprite {
     display: block;
     width: 8rem;
     height: 8rem;
-    margin: 0 auto 1rem;
     object-fit: contain;
     animation: dissolve 0.35s ease-out;
   }
@@ -597,12 +639,131 @@
     position: relative;
     width: 5.4rem;
     height: 5.4rem;
-    margin: 0 auto 1rem;
     border-radius: 50%;
     background: color-mix(in srgb, var(--tone) 28%, var(--bg-card));
     border: 2px solid var(--tone);
     box-shadow: 0 0 18px color-mix(in srgb, var(--tone) 35%, transparent);
     animation: dissolve 0.35s ease-out;
+  }
+
+  /* 頭上リング (issue #180, ADR-0019/0047/0048): a single achromatic
+     light point orbiting an ellipse above the sprite/face while a
+     subagent/workflow task is active under this agent. CSS-only (no
+     image assets, per issue scoping).
+
+     Color (S2, こはく判定 2026-08-09): NOT `var(--tone)` — design.md
+     forbids using state-palette saturation for anything but the state
+     lamp/badge (彩度を state 以外に使わない). `var(--fg)` (achromatic)
+     keeps the read-off rule unambiguous: saturated = state lamp,
+     achromatic = subagent activity. Glow mirrors the state lamp's own
+     format (`.lamp { box-shadow: 0 0 6px var(--tone) }`) with `--fg`
+     substituted.
+
+     Geometry (S1, クロエ 最終版 2026-08-09 — 代案 C, 楕円軌道): a
+     CIRCULAR orbit cannot satisfy both constraints at once — the head's
+     own vertical extent is ~40% of the sprite slot, but clearing the
+     face needs a diameter of ~53%, so a circle's bottom edge always
+     dips below the chin regardless of chosen radius (not a tunable
+     parameter, a geometric contradiction). An ELLIPSE centered at
+     (50%, -2%) with the radii below keeps the dot at-or-above head
+     height through every phase of the orbit, reading as an "angel's
+     ring" seen in perspective. `offset-path` was rejected (Firefox bug
+     1840819, not `@supports`-detectable); animating a parent's
+     `scaleY` + child inverse-scale to fake an ellipse from a circular
+     orbit was also tried and did not hold up under real rendering.
+     `translate`-only, 12 discrete keyframes (4 reads as a diamond, not
+     an ellipse) stepping the parametric ellipse x=rx·cosθ, y=ry·sinθ is
+     the form that survived. θ runs from -90° (12 o'clock, directly
+     above the head) clockwise in 30° steps — CSS's Y-down coordinate
+     system makes increasing θ read as clockwise on screen without any
+     extra sign flip. `--orbit-rx`/`--orbit-ry` differ between the real
+     sprite and the smaller placeholder face (`.face-orbit` below) so
+     the ellipse always clears whichever is actually shown.
+
+     `translate`'s two components do double duty in EVERY keyframe below
+     (including the base rule and 0%/100%): `-50%` self-centers the dot
+     on the (50%, -2%) anchor point (percentages in `translate` resolve
+     against the ELEMENT'S OWN box, not the containing block), and the
+     `var(--orbit-r*)` term adds the orbit offset for that angle. The
+     base rule's own `translate` (used when the animation is not
+     running, and — critically — as the effective rest state under
+     `prefers-reduced-motion`, whose global app.css rule only shortens
+     `animation-duration`/`animation-iteration-count` and sets no
+     `animation-fill-mode`) is written to match the 0%/100% keyframes
+     EXACTLY (orbit apex, straight up) rather than left to default —
+     omitting it would resolve to `translate: none` at rest, dropping
+     the `-50%` self-centering term and leaving the dot's top-left
+     corner (not its center) planted at the anchor, half a dot-width
+     off-position (2nd 追送, クロエ 2026-08-09).
+
+     `top` (S1 最終調整, クロエ承認 2026-08-09): -2%, not the earlier
+     12% — 頭上退避(顔に光を乗せない)。12% だと 6 時相(周期の下端)で
+     光点が眼鏡フレームのグレアと視覚的に同化し、常時アニメーションの
+     一部が顔に乗ってしまう(このリングは唯一の task インジケータで
+     装飾ではないため、状態を読む顔の上に重なるのは製品目的と干渉する
+     — クロエ判断)。ellipse の縦半径(--orbit-ry)は変えていないので
+     下端は依然として頭より上に留まる。この値はボスの実物確認で
+     好みが割れれば 1 行で戻せる既定値であり、確定した幾何制約
+     (上のコメント参照)ではない。 */
+  .task-ring {
+    position: absolute;
+    left: 50%;
+    top: -2%;
+    translate: -50% calc(-50% - var(--orbit-ry));
+    width: 0.34rem;
+    height: 0.34rem;
+    border-radius: 50%;
+    background: var(--fg);
+    box-shadow: 0 0 6px var(--fg);
+    pointer-events: none;
+    --orbit-rx: 2rem;
+    --orbit-ry: 0.72rem;
+    animation: task-ring-orbit 2.4s linear infinite;
+  }
+
+  .task-ring.face-orbit {
+    --orbit-rx: 1.35rem;
+    --orbit-ry: 0.49rem;
+  }
+
+  @keyframes task-ring-orbit {
+    0%,
+    100% {
+      translate: -50% calc(-50% - var(--orbit-ry));
+    }
+    8.333% {
+      translate: calc(-50% + var(--orbit-rx) * 0.5) calc(-50% - var(--orbit-ry) * 0.866);
+    }
+    16.667% {
+      translate: calc(-50% + var(--orbit-rx) * 0.866) calc(-50% - var(--orbit-ry) * 0.5);
+    }
+    25% {
+      translate: calc(-50% + var(--orbit-rx)) -50%;
+    }
+    33.333% {
+      translate: calc(-50% + var(--orbit-rx) * 0.866) calc(-50% + var(--orbit-ry) * 0.5);
+    }
+    41.667% {
+      translate: calc(-50% + var(--orbit-rx) * 0.5) calc(-50% + var(--orbit-ry) * 0.866);
+    }
+    50% {
+      translate: -50% calc(-50% + var(--orbit-ry));
+    }
+    58.333% {
+      translate: calc(-50% - var(--orbit-rx) * 0.5) calc(-50% + var(--orbit-ry) * 0.866);
+    }
+    66.667% {
+      translate: calc(-50% - var(--orbit-rx) * 0.866) calc(-50% + var(--orbit-ry) * 0.5);
+    }
+    75% {
+      translate: calc(-50% - var(--orbit-rx)) -50%;
+    }
+    83.333% {
+      translate: calc(-50% - var(--orbit-rx) * 0.866) calc(-50% - var(--orbit-ry) * 0.5);
+    }
+    91.667% {
+      translate: calc(-50% - var(--orbit-rx) * 0.5) calc(-50% - var(--orbit-ry) * 0.866);
+    }
   }
 
   /* Dissolve-in on state change (#43): the previous face/label is replaced

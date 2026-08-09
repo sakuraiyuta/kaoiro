@@ -9,6 +9,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentsChannel
 
@@ -1603,7 +1604,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "agent_id" => agent_id,
         "ts" => "2026-06-11T00:00:00Z",
         # A hypothetical future type not yet listed in the viewer allow-list.
-        "type" => "task",
+        # issue #180: "task" WAS this placeholder until it became a real
+        # type — see the "task 型 (issue #180, ADR-0021)" describe block
+        # below for its actual, now-real allow-list behavior.
+        "type" => "hypothetical_future_type",
         "state" => "thinking",
         "payload" => %{"task_id" => "t1", "summary" => "secret-summary"}
       }
@@ -1625,7 +1629,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "version" => "0",
         "agent_id" => agent_id,
         "ts" => "2026-06-11T00:00:00Z",
-        "type" => "task",
+        "type" => "hypothetical_future_type",
         "state" => "thinking",
         "payload" => %{"task_id" => "t1"}
       }
@@ -1637,7 +1641,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       )
 
       assert_push "envelope", pushed
-      assert pushed["type"] == "task"
+      assert pushed["type"] == "hypothetical_future_type"
     end
 
     test "viewer snapshot は未知 type の agent をスキップする" do
@@ -1648,7 +1652,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "version" => "0",
           "agent_id" => agent_id,
           "ts" => "2026-06-11T00:00:00Z",
-          "type" => "task",
+          "type" => "hypothetical_future_type",
           "state" => "thinking",
           "payload" => %{}
         })
@@ -1698,6 +1702,152 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       })
 
       assert_push "agent_deleted", %{"agent_id" => ^agent_id}
+    end
+  end
+
+  # issue #180 (ADR-0019/0047/0048): task envelope の実際の role gating。
+  # sanitize_envelope_for/2 に "task" 専用の clause は追加していない —
+  # 既存の :operator 素通し句と :viewer fail-closed 句(catch-all)が
+  # そのまま正しく機能する設計(こはく決定 2026-08-09: task はoperator限定)。
+  describe "task 型の role gating (issue #180, ADR-0021)" do
+    defp task_envelope(agent_id, task_id, kind \\ "started") do
+      %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "persona" => %{"id" => "p", "name" => "P", "sprite_set" => "p"},
+        "ts" => "2026-08-09T00:00:00Z",
+        "type" => "task",
+        "state" => "idle",
+        "payload" => %{
+          "kind" => kind,
+          "agent_id" => agent_id,
+          "task_id" => task_id,
+          "task_type" => "local_agent",
+          "status" => "running",
+          "summary" => "content-bearing progress text"
+        },
+        "ext" => %{}
+      }
+    end
+
+    test "live broadcast: viewer には届かない (fail-closed catch-all)" do
+      _socket = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        task_envelope("test.task-viewer", "t1")
+      )
+
+      refute_push "envelope", %{}
+    end
+
+    test "live broadcast: operator には素通しで届く" do
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        task_envelope("test.task-operator", "t1")
+      )
+
+      assert_push "envelope", pushed
+      assert pushed["type"] == "task"
+      assert pushed["payload"]["summary"] == "content-bearing progress text"
+    end
+
+    test "snapshot: operator には tasks キーが入る (ADR-0048 F3)" do
+      on_exit(fn -> TaskStates.discard_for_agent("test.task-snap-op") end)
+      TaskStates.put(task_envelope("test.task-snap-op", "t1"))
+
+      _socket = join_as(:operator)
+
+      assert_push "snapshot", %{"tasks" => tasks}
+      # M1 fix-round: TaskStates is now keyed agent_id => %{task_id =>
+      # envelope}.
+      assert %{"test.task-snap-op" => %{"t1" => stored}} = tasks
+      assert stored["payload"]["task_id"] == "t1"
+    end
+
+    test "snapshot: viewer には tasks キーが空で届く (operator 限定、こはく決定 2026-08-09)" do
+      on_exit(fn -> TaskStates.discard_for_agent("test.task-snap-viewer") end)
+      TaskStates.put(task_envelope("test.task-snap-viewer", "t1"))
+
+      _socket = join_as(:viewer)
+
+      assert_push "snapshot", %{"tasks" => tasks}
+      assert tasks == %{}
+    end
+
+    # M3 round2 must-fix (2026-08-09, ふじ round 2): AgentStates と
+    # TaskStates は別 GenServer で、after_join の snapshot 読み取りは
+    # (AgentStates.snapshot/0, TaskStates.snapshot/0) の 2 回の独立した
+    # 呼び出し。WrapperChannel.terminate/2 の実行順 (disconnect →
+    # discard_for_agent → broadcast, M3 fix-round) のうち disconnect と
+    # discard_for_agent の間に新規 join が挟まると、snapshot は「agent は
+    # disconnected だが tasks はまだ残っている」という一時的な不整合を
+    # 返しうる。ここでは terminate/2 の内部ステップを手動で分割実行して
+    # (a) その不整合が実際に snapshot 上で観測できること、(b) 収束は
+    # 「同じ join の PubSub 購読は join/3 の時点で既に確立済みなので、
+    # 後着の disconnected broadcast を同じ client が確実に受け取る」こと
+    # に依存する、の両方を確認する。dashboard 側の収束契約そのもの
+    # (broadcast 受信 → purgeTasksForAgent) は protocol.test.ts の M3
+    # regression 側で固定済み — ここは server 側の「取りこぼされない」
+    # 半分を固定する。
+    #
+    # S2 round-3 訂正(2026-08-09、ふじ round 3、こはく指摘): この手動
+    # sequencing は terminate/2 を一切通らないため、discard→broadcast の
+    # "順序そのもの" は判別できない(旧順序 broadcast→discard へ戻して
+    # も green のまま)。その production-path 保証は
+    # wrapper_channel_test.exs の「channel 終了時、TaskStates の discard
+    # 完了まで disconnected broadcast は届かない」(:sys.suspend で実
+    # terminate/2 を止める、mutation test 済み)が別途固定している —
+    # このテストは (a)(b) の 2 点のみを担う。
+    test "join snapshot と disconnect の交差: 一時的な不整合は後着の disconnected broadcast で収束する (M3 round2 fix-round)" do
+      agent_id = "test.task-interleave-1"
+      on_exit(fn -> TaskStates.discard_for_agent(agent_id) end)
+
+      owner = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(owner, :kill) end)
+
+      :ok =
+        AgentStates.put(
+          %{
+            "version" => "0",
+            "agent_id" => agent_id,
+            "ts" => "2026-08-09T00:00:00Z",
+            "type" => "state_change",
+            "state" => "tool_running"
+          },
+          owner: owner
+        )
+
+      TaskStates.put(task_envelope(agent_id, "t1"))
+
+      # terminate/2 の前半だけを手動で再現する: AgentStates はすでに
+      # disconnected を反映しているが、TaskStates はまだ purge されて
+      # いない — この間隙で新規 client が join する状況を作る。
+      {:ok, disconnected_envelope} =
+        AgentStates.disconnect(agent_id, owner, "2026-08-09T00:00:01Z")
+
+      socket = join_as(:operator)
+
+      assert_push "snapshot", %{"agents" => agents, "tasks" => tasks}
+      assert agents[agent_id]["state"] == "disconnected"
+      # 交差の実物: disconnected な agent の task がまだ snapshot に
+      # 残っている — これが収束を broadcast 側に依存させている理由。
+      assert %{^agent_id => %{"t1" => _}} = tasks
+
+      # terminate/2 の後半 (M3 の順序どおり discard → broadcast) を
+      # 手動で完了させる。
+      TaskStates.discard_for_agent(agent_id)
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", disconnected_envelope)
+
+      # 新規 join した client も (join/3 で購読は snapshot push より前に
+      # 確立済みなので) この broadcast を確実に受け取る。
+      assert_push "envelope", %{"agent_id" => ^agent_id, "state" => "disconnected"}
+
+      _ = socket
     end
   end
 

@@ -24,6 +24,11 @@ defmodule KaoiroServer.Application do
       # In-memory peer-directory activity projection (#160). Kept separate
       # from AgentStates, whose sole ownership is latest envelopes/history.
       KaoiroServer.AgentActivity,
+      # Flat table of active subagent/workflow tasks, keyed by task_id
+      # (issue #180, ADR-0019/0047/0048 F1). Kept separate from AgentStates
+      # for the same reason as AgentActivity above — a `task` envelope is
+      # a distinct child entity's lifecycle, not the parent's state_change.
+      KaoiroServer.TaskStates,
       # Live host set + spawnable personas per host (ADR-0023, issue #67).
       KaoiroServer.HostRegistry,
       # Restart-surviving session_id pointers (ADR-0014 F1, issue #49).

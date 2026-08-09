@@ -11,7 +11,8 @@
   let {
     operator,
     pending = false,
-  }: { operator: boolean; pending?: boolean } = $props();
+    taskRing = false,
+  }: { operator: boolean; pending?: boolean; taskRing?: boolean } = $props();
 
   const agents = lobbyAgents(pending);
   const logs = lobbyLogs();
@@ -32,7 +33,12 @@
   >
     {#each sorted as envelope (envelope.agent_id)}
       <li>
-        <AgentCard {envelope} manifest={null} onSelect={() => {}} />
+        <AgentCard
+          {envelope}
+          manifest={null}
+          onSelect={() => {}}
+          activeTaskCount={taskRing ? 1 : 0}
+        />
       </li>
     {/each}
   </AgentGridShell>

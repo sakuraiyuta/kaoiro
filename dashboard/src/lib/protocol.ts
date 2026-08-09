@@ -639,6 +639,187 @@ export function resultOf(envelope: Envelope): ResultPayload | null {
   return (envelope.payload ?? {}) as ResultPayload;
 }
 
+/** ADR-0019 F3 coarse lifecycle. Client mirror of @kaoiro/protocol
+ *  TaskStatus. */
+export type TaskStatus = "running" | "completed" | "failed" | "stopped";
+
+/** payload of a type="task" envelope (ADR-0019/ADR-0047, issue #180):
+ *  subagent/workflow child-task lifecycle, parent-linked via `agent_id`.
+ *  Client mirror of @kaoiro/protocol TaskPayload, kept as a plain
+ *  interface so protocol.ts stays runtime-free. Operator-only (ADR-0021,
+ *  こはく 2026-08-09 access-control decision) — the server never sends
+ *  `type: "task"` envelopes or the snapshot's `tasks` key to a `:viewer`
+ *  role join, so this narrower is a no-op for viewer clients. */
+export interface TaskPayload {
+  kind: "started" | "updated" | "completed";
+  agent_id: string;
+  task_id: string;
+  /** SDK raw value (e.g. "local_agent" / "local_workflow" / "local_bash"),
+   *  passed through unrenamed (ADR-0047 F4 open enum). */
+  task_type: string;
+  status: TaskStatus;
+  subagent_type?: string;
+  workflow_name?: string;
+  description?: string;
+  usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+  last_tool_name?: string;
+  summary?: string;
+  skip_transcript?: boolean;
+}
+
+/** Nested active-task table (issue #180): agent_id => task_id => latest
+ *  task envelope. Composite-keyed (M1 fix-round, 2026-08-09, ふじ review)
+ *  — ADR-0047 F2 only promises `task_id` is unique WITHIN one parent
+ *  session, so a flat task_id-only map could let two different agents'
+ *  tasks collide (one agent's `completed` erasing another agent's
+ *  still-running task of the same id). Mirrors the server's `TaskStates`
+ *  internal/wire shape exactly (protocol.md `snapshot`'s `tasks` key). */
+export type TaskTable = Record<string, Record<string, Envelope>>;
+
+/** Narrows a task envelope's payload, or null for any other envelope or a
+ *  malformed payload (fail-visible: an unrecognised shape is dropped by
+ *  the caller rather than coerced into a partial task). `status` is only
+ *  checked for "is it a non-empty string", not matched against the
+ *  closed 4-value enum (running/completed/failed/stopped, ADR-0019 F3) —
+ *  deliberate forward-compat (N2, クロエ 2026-08-09): a server running a
+ *  newer wrapper build could report a `status` value this client does
+ *  not yet recognise, and dropping the WHOLE task rather than accepting
+ *  the unrecognised string (the UI can still fall back to a generic
+ *  display for an unrecognised value, same as `task_type`'s own
+ *  open-enum handling) would be a worse failure mode. */
+export function taskOf(envelope: Envelope): TaskPayload | null {
+  if (envelope.type !== "task") return null;
+  const p = envelope.payload as Partial<TaskPayload> | undefined;
+  if (
+    !p ||
+    (p.kind !== "started" && p.kind !== "updated" && p.kind !== "completed") ||
+    typeof p.agent_id !== "string" ||
+    typeof p.task_id !== "string" ||
+    typeof p.task_type !== "string" ||
+    typeof p.status !== "string"
+  ) {
+    return null;
+  }
+  return p as TaskPayload;
+}
+
+/** Applies a live `type: "task"` envelope to the nested active-task table
+ *  (agent_id => task_id => latest envelope, issue #180). kind=started/
+ *  updated upserts; kind=completed removes (pruning the agent's now-
+ *  empty inner map too, so a fully-drained agent does not leak an empty
+ *  `{}` entry) — ADR-0019 F4 concurrency: +1 / in-place refresh / -1.
+ *  Deliberately NOT folded into the `agents` latest-state map — ADR-0019
+ *  F2 forbids a task envelope from overwriting its parent's own
+ *  state_change slot, so App.svelte routes `type === "task"` here
+ *  instead of through its ordinary agents-map update. A malformed
+ *  payload (`taskOf` returns null) is a no-op — fail-visible, matching
+ *  the wrapper/server treatment of the same class of input — and returns
+ *  the SAME table reference so callers can skip a redundant state write. */
+export function applyTaskEnvelope(tasks: TaskTable, envelope: Envelope): TaskTable {
+  const task = taskOf(envelope);
+  if (!task) return tasks;
+  // Security review round 2 (issue #180, 2026-08-09): read via
+  // `hasOwnProperty`, never a bare `tasks[task.agent_id]`. `tasks` starts
+  // life as a plain `{}` (App.svelte's `$state<TaskTable>({})` initial
+  // value and its `endSession()` reset), which still has `Object.prototype`
+  // in its chain — reading a key literally `"__proto__"` (or
+  // "toString"/"constructor"/etc.) off a plain object returns the
+  // INHERITED member, a genuinely truthy value, even with ZERO prior
+  // writes to `tasks` (round-1's fix comment here previously claimed this
+  // could only happen after a prior safe upsert — that premise was wrong,
+  // caught by round-2 review + independent reproduction: `({})["__proto__"]
+  // === Object.prototype` is `true`). An own-property guard treats that
+  // phantom read as absent, matching every other unrelated agent_id and
+  // restoring this function's documented "same reference for a no-op"
+  // contract for this edge case.
+  const agentTasks = Object.prototype.hasOwnProperty.call(tasks, task.agent_id)
+    ? tasks[task.agent_id]
+    : undefined;
+  if (task.kind === "completed") {
+    // Same reasoning applies to `in`, which also walks the prototype
+    // chain — `"toString" in someMap` is true for ANY object regardless
+    // of its actual own keys.
+    if (
+      !agentTasks ||
+      !Object.prototype.hasOwnProperty.call(agentTasks, task.task_id)
+    ) {
+      return tasks;
+    }
+    const nextAgentTasks = { ...agentTasks };
+    delete nextAgentTasks[task.task_id];
+    if (Object.keys(nextAgentTasks).length === 0) {
+      // `delete` never triggers the `__proto__` accessor (unlike bracket
+      // assignment below) — safe regardless of what agent_id is.
+      const next = { ...tasks };
+      delete next[task.agent_id];
+      return next;
+    }
+    // Object-literal COMPUTED property, not a bracket ASSIGNMENT on an
+    // existing object — the pattern that IS independently exploitable in
+    // `parseTasks` below (mutation-tested: reverting parseTasks's fix
+    // reintroduces real prototype pollution reachable from wire input).
+    // Kept here too as defense-in-depth even though the hasOwnProperty
+    // guards above already ensure this line is only reached through a
+    // genuine own entry.
+    return { ...tasks, [task.agent_id]: nextAgentTasks };
+  }
+  return {
+    ...tasks,
+    [task.agent_id]: { ...agentTasks, [task.task_id]: envelope },
+  };
+}
+
+/** Removes every task belonging to one agent_id from the nested active-
+ *  task table (issue #180, M3/クロエ M1 fix-round, 2026-08-09). Client-
+ *  side counterpart of the server's `TaskStates.discard_for_agent/1`:
+ *  the server purges its own table on parent disconnect, but that alone
+ *  never reaches an already-connected client's local `tasks` state — a
+ *  new wire event was deliberately NOT invented for this (ADR-0019 F1:
+ *  task lifecycle is bound to the parent session, so the parent's own
+ *  `disconnected` state_change, already broadcast live and already
+ *  handled by every client, is the natural purge trigger). App.svelte
+ *  calls this from its `onEnvelope` handler whenever a `state_change`
+ *  reports `state === "disconnected"` for some agent_id — see that call
+ *  site for the fuller race analysis (mirrors the server-side ordering
+ *  fix in `WrapperChannel.terminate/2`). Returns the SAME table
+ *  reference when the agent_id had no tracked tasks, so callers can
+ *  skip a redundant state write. */
+export function purgeTasksForAgent(tasks: TaskTable, agentId: string): TaskTable {
+  // Security review round 2 (issue #180, 2026-08-09): `hasOwnProperty`,
+  // not `in` — `in` walks the prototype chain, so `"toString" in {}` is
+  // true for any plain object regardless of its actual own keys. Same
+  // reasoning as applyTaskEnvelope's `agentTasks` read above.
+  if (!Object.prototype.hasOwnProperty.call(tasks, agentId)) return tasks;
+  const next = { ...tasks };
+  delete next[agentId];
+  return next;
+}
+
+/** Per-agent active-task tally (ADR-0019 F4 concurrency), driving
+ *  AgentCard's 頭上リング on/off only — no numeric display (issue #180,
+ *  こはく scoping). Extracted from App.svelte's `activeTaskCountByAgent`
+ *  derived state (M2 fix-round, 2026-08-09, ふじ round 2) so it is
+ *  directly unit-testable rather than only reachable by mounting the
+ *  component. Named distinctly from that `$derived` binding to avoid a
+ *  shadowing import in App.svelte.
+ *
+ *  M2 fix: the accumulator MUST be `Object.create(null)`, not a plain
+ *  `{}` — a plain object inherits `Object.prototype`, so
+ *  `counts[agentId] = n` for agentId="__proto__" (or any other
+ *  Object.prototype member name) silently fails to create an OWN entry.
+ *  `tasks`'s own keys are already hasOwnProperty-safe (parseTasks /
+ *  applyTaskEnvelope above), but this re-keys into a FRESH object and
+ *  must not reintroduce the same class of hole at this final consumer. */
+export function computeActiveTaskCountByAgent(
+  tasks: TaskTable,
+): Record<string, number> {
+  const counts: Record<string, number> = Object.create(null);
+  for (const [agentId, agentTasks] of Object.entries(tasks)) {
+    counts[agentId] = Object.keys(agentTasks).length;
+  }
+  return counts;
+}
+
 /** Locate the user prompt (log kind="user") that produced the errored result
  *  at `resultIndex` in the transcript (issue #128 エラー再送ボタン)。
  *  Walks backwards through `entries` and returns the first user log's text,
@@ -1087,6 +1268,14 @@ export interface KaoiroHandlers {
   onJoined?: () => void;
   /** Full re-sync; replaces all known agents (last-write-wins). */
   onSnapshot: (agents: Record<string, Envelope>) => void;
+  /** Active subagent/workflow task snapshot (nested {@link TaskTable}),
+   *  pushed once alongside the AgentStates snapshot on join (ADR-0048
+   *  F3, issue #180). Operator-only: the server sends an empty map for a
+   *  `:viewer` role join — the same server-gate path as `hosts`/`log`/
+   *  `result`, not a fail-closed special case (N3, クロエ 2026-08-09) —
+   *  so this is a no-op there. Absent when the caller does not track
+   *  tasks. */
+  onTaskSnapshot?: (tasks: TaskTable) => void;
   /** Single-agent update (any envelope type; caller routes by type). */
   onEnvelope: (envelope: Envelope) => void;
   /** Reply-log history per agent (operator-only, ADR-0012); pushed once
@@ -1502,6 +1691,42 @@ export function parseDirectory(
     }
   }
   return entries;
+}
+
+/** Parses the join-time snapshot's `tasks` map (agent_id => task_id =>
+ *  envelope, ADR-0048 F3, M1 fix-round composite key) into a
+ *  {@link TaskTable}, keeping only well-formed `type: "task"` envelopes
+ *  at the leaf and dropping any agent_id whose inner map ends up empty.
+ *  A viewer join always yields `tasks: {}` server-side (the same
+ *  operator-only server-gate path as `hosts`/`log`/`result`, ADR-0021),
+ *  so this returns {} for that value regardless. */
+export function parseTasks(value: unknown): TaskTable {
+  // Security review (issue #180 fix-round, 2026-08-09): `Object.create(null)`
+  // instead of `{}` for both the outer table and each per-agent inner map.
+  // This loop accumulates via repeated bracket ASSIGNMENT (`tasks[agentId] =
+  // ...`, `agentTasks[taskId] = ...`), which is genuinely unsafe on a plain
+  // `{}` — the wire `agent_id` charset (server/lib/kaoiro_server_web/
+  // agent_id.ex, `[A-Za-z0-9._-]{1,256}`) permits the literal string
+  // "__proto__", and `task_id` has no charset restriction at all beyond
+  // non-empty. Assigning THAT key on an object whose prototype chain still
+  // includes `Object.prototype` invokes its `__proto__` accessor and swaps
+  // the object's actual `[[Prototype]]` instead of adding an entry
+  // (prototype pollution), corrupting later `in`/lookup checks. A
+  // null-prototype object has no such accessor to invoke, so the same
+  // assignment becomes an ordinary own-property write regardless of key.
+  const tasks: TaskTable = Object.create(null);
+  if (typeof value !== "object" || value === null) return tasks;
+  for (const [agentId, entry] of Object.entries(value)) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const agentTasks: Record<string, Envelope> = Object.create(null);
+    for (const [taskId, envelope] of Object.entries(entry)) {
+      if (isEnvelope(envelope) && envelope.type === "task") {
+        agentTasks[taskId] = envelope;
+      }
+    }
+    if (Object.keys(agentTasks).length > 0) tasks[agentId] = agentTasks;
+  }
+  return tasks;
 }
 
 /** Parses a `sessions` array, keeping only well-typed candidates. */
@@ -2393,12 +2618,15 @@ export function connectKaoiro(
   }
 
   function setupChannelHandlers(c: Channel): void {
-    c.on("snapshot", (payload: { agents?: unknown }) => {
+    c.on("snapshot", (payload: { agents?: unknown; tasks?: unknown }) => {
     const agents: Record<string, Envelope> = {};
     for (const value of Object.values(payload.agents ?? {})) {
       if (isEnvelope(value)) agents[value.agent_id] = value;
     }
     handlers.onSnapshot(agents);
+    // ADR-0048 F3 (issue #180): "tasks" rides this same join-time push,
+    // keyed by task_id (matches the server's flat TaskStates table).
+    handlers.onTaskSnapshot?.(parseTasks(payload.tasks));
   });
   c.on("envelope", (payload: unknown) => {
     if (!isEnvelope(payload)) return;

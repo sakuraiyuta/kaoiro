@@ -28,10 +28,17 @@ related: [protocol, agent-sdk-events]
 | 進捗 | system / task_progress | `subagent_type`, `usage{total_tokens,tool_uses,duration_ms}`, `last_tool_name`, `summary` |
 | 終了 | system / task_notification | `status`(completed/failed/stopped), `summary`, `usage` |
 
-現状 `wrapper/claude-code/src/adapter.ts` はこれらを破棄しており(2026-08-03
-時点で `task_started` / `task_progress` / `task_notification` を参照する
-コードは存在しない)、ここにパース経路を新設する。本 spec 全体が**未着手**で、
-段階1〜3 のいずれも実装されていない。
+`wrapper/claude-code/src/adapter.ts` の `sdkMessageToTask` がこれらを
+`task` envelope へ導出する(2026-08-09、issue #180 で実装)。実測で
+判明した未文書化フィールド(`task_started.prompt` /
+`task_notification.output_file`)と 4 番目の subtype `task_updated` の
+扱いは [agent-sdk-events](agent-sdk-events.md) と
+[ADR-0047](../adr/0047-task-envelope-schema.md) /
+[ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) の
+addendum を参照(いずれも意図的に非配線・対象外)。`task_notification`
+の `status` が既知 3 値以外を運んできた場合の terminal fallback +
+`raw_status` の扱いも [ADR-0047](../adr/0047-task-envelope-schema.md)
+addendum を参照。
 
 ### エンティティモデル
 
@@ -49,13 +56,29 @@ subagent / workflow は「視覚表現は独立した別の存在」「identity 
 - 必須: 親 `agent_id` / `task_id` / `task_type` / `status`。
 - optional 進捗メタ: `subagent_type` / `workflow_name` / `description` /
   `usage` / `last_tool_name` / `summary` / `skip_transcript`。
-- `task_type` は拡張可能 enum(初期 `subagent` | `workflow`。将来 tasklist
-  等を追補可。受信側は未知値を汎用表示へフォールバック)。
+- `task_type` は拡張可能 enum。SDK 実測値は `local_agent` / `local_workflow`
+  / `local_bash`(ADR-0047 F4 の例示値 `subagent`/`workflow` とは異なるが、
+  リネーム層を挟まず SDK 生値をそのまま通す — 同 ADR addendum)。将来
+  tasklist 等を追補可。受信側は未知値を汎用表示へフォールバック。
 
-[protocol](protocol.md) には予約追補(同一 `version`)として載せる。
+[protocol](protocol.md) には確定追補(同一 `version`)として載せた。
 `kind=updated` は wrapper 発行側で一定間隔 + 差分閾値により間引く
 (`started` / `completed` は即時、
-[ADR-0048](../adr/0048-task-aggregation-delivery.md) F2)。
+[ADR-0048](../adr/0048-task-aggregation-delivery.md) F2)。実装値:
+3 秒 + トークン差分 500 以上/tool 名変化のいずれか
+(`wrapper/claude-code/src/host.ts`
+`MIN_TASK_UPDATE_INTERVAL_MS` / `TASK_UPDATE_TOKEN_DELTA_THRESHOLD`)。
+ある `task_id` に対する**最初の** `updated`(直前の間引き実績が無い)は
+間隔・閾値のどちらにも関わらず常に即時発行する
+(`#shouldEmitTaskUpdate` の cold-start 分岐) —
+起動直後の進捗を operator が最初の 3 秒間待たされないため。
+
+### 配信先: operator 限定
+
+`task` envelope のライブ配信・snapshot の `tasks` キー(段階2)は
+**operator 限定**で、viewer には配信しない
+([ADR-0048](../adr/0048-task-aggregation-delivery.md) addendum、
+[ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
 
 ### 同時実行数とライフサイクル
 
@@ -67,18 +90,22 @@ subagent / workflow は「視覚表現は独立した別の存在」「identity 
 
 ### 実装段階(フィーチャ内ローカル)
 
-グローバルな `plans/` のロードマップ phase 番号とは別軸。
+グローバルな `plans/` のロードマップ phase 番号とは別軸(採番は
+[phase-32](../plans/phase-32-subagent-workflow-visibility.md))。
 
-| 段階 | 範囲 | in / out |
-|---|---|---|
-| 段階1: wrapper + protocol | 検知・配信の最小スライス | in: adapter が task_* を解釈 / 専用 envelope の発行 / 同時実行数の算出 / 親 state_change が不変 / adapter 変換の単体テスト(vitest) / protocol・agent-sdk-events 追補。out: server 集約・クライアント表示 |
-| 段階2: server 集約・中継 | 子タスクの保持と配信 | in: フラットな task テーブル + 親 `agent_id` 参照で集約([ADR-0048](../adr/0048-task-aggregation-delivery.md) F1)/ active set 維持(親離脱時に破棄)/ クライアントへ中継 / 後続接続へは既存 snapshot 枠で接続時一括送信(同 F3)。out: クライアント視覚表現 |
-| 段階3: client 受信 | 受け口のみ | in: 専用 envelope を受信し描画できる最小受け口。out: 具体的なキャラ/従者表現の意匠(クライアント責務) |
+| 段階 | 範囲 | 状態 | in / out |
+|---|---|---|---|
+| 段階1: wrapper + protocol | 検知・配信の最小スライス | 実装済み | in: adapter が task_* を解釈 / 専用 envelope の発行 / 同時実行数の算出 / 親 state_change が不変 / adapter 変換の単体テスト(vitest) / protocol・agent-sdk-events 追補。out: server 集約・クライアント表示 |
+| 段階2: server 集約・中継 | 子タスクの保持と配信 | 実装済み | in: フラットな task テーブル + 親 `agent_id` 参照で集約([ADR-0048](../adr/0048-task-aggregation-delivery.md) F1)/ active set 維持(親離脱時に破棄)/ クライアントへ中継 / 後続接続へは既存 snapshot 枠で接続時一括送信(同 F3)/ operator 限定配信(同 addendum)。out: クライアント視覚表現 |
+| 段階3: client 受信 + 頭上リング UI | AgentCard に稼働中サブエージェントを可視化 | 実装済み | in: `task` envelope の受信・`AgentGridShell`→`AgentCard` への活性タスク数の受け渡し(`App.svelte` の専用 accumulator、`agents` map へは folding しない)/ `AgentCard.svelte` の `.sprite` を包む頭上リング(CSS-only の光点周回アニメーション、画像アセット無し、`prefers-reduced-motion` は既存グローバル規則が自動でカバー)/ on-off のみで数値表示はしない。out: 数値表示(活性タスク数の表示)、`AgentDetail` への追加表示(いずれも issue #180 のスコープでは対象外。将来の別提案) |
 
-### 要検証(段階1 着手項目)
+### 要検証(未解決、#180 スコープ外)
 
 - workflow が内部で spawn する子エージェントが、同一セッションの**別 `task_started`**
   として出るか実 stream で検証する。出ない場合は workflow を単一タスクとして扱う。
+  issue #180 の実測は「終端通知の保証」(subagent kill/background/
+  interrupt の 4 経路、[agent-sdk-events](agent-sdk-events.md))に
+  絞っており、この項目は未検証のまま残る。
 
 ## Constraints
 

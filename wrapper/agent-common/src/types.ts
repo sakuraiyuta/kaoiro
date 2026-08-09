@@ -33,6 +33,8 @@ export type {
   ResumeDriftEntry,
   ResumeDriftExt,
   SwitchErrorExt,
+  TaskPayload,
+  TaskStatus,
 } from "@kaoiro/protocol";
 
 /** SDKResultMessage.subtype (agent-sdk-events.md). */

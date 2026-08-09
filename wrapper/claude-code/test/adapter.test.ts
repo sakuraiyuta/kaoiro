@@ -12,6 +12,7 @@ import {
   sdkMessageToResultMeta,
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
+  sdkMessageToTask,
   sdkMessageToTerminalReason,
 } from "../src/adapter.js";
 import { reduceStates } from "@kaoiro/agent-common";
@@ -635,5 +636,198 @@ describe("sdkMessageToSessionId", () => {
       sdkMessageToSessionId(msg({ type: "system", session_id: "" })),
     ).toBeNull();
     expect(sdkMessageToSessionId(msg({ type: "system" }))).toBeNull();
+  });
+});
+
+// issue #180 (ADR-0019 F2-F4, ADR-0047): task_started / task_progress /
+// task_notification -> TaskEvent. Field shapes verified against the
+// installed @anthropic-ai/claude-agent-sdk@0.3.220 type declarations AND a
+// real captured stream (2026-08-09) — see host.ts's #applyTaskEvent for the
+// task_type backfill / throttle logic this pure mapper deliberately does
+// NOT own.
+describe("sdkMessageToTask", () => {
+  it("task_started -> kind:started (task_type 込み)", () => {
+    expect(
+      sdkMessageToTask(
+        msg({
+          type: "system",
+          subtype: "task_started",
+          task_id: "t1",
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          description: "Summarize README",
+          skip_transcript: false,
+        }),
+      ),
+    ).toEqual({
+      kind: "started",
+      task_id: "t1",
+      task_type: "local_agent",
+      subagent_type: "general-purpose",
+      description: "Summarize README",
+      skip_transcript: false,
+    });
+  });
+
+  it("task_started で task_type 欠落/空文字は task_type フィールド自体が付かない(host 側の fail-visible ドロップの入力になる)", () => {
+    expect(
+      sdkMessageToTask(msg({ type: "system", subtype: "task_started", task_id: "t1" })),
+    ).toEqual({ kind: "started", task_id: "t1" });
+    expect(
+      sdkMessageToTask(
+        msg({ type: "system", subtype: "task_started", task_id: "t1", task_type: "" }),
+      ),
+    ).toEqual({ kind: "started", task_id: "t1" });
+  });
+
+  it("task_started は workflow_name / prompt を持ちうるが prompt は配線しない(未承認フィールド、こはく判断)", () => {
+    const event = sdkMessageToTask(
+      msg({
+        type: "system",
+        subtype: "task_started",
+        task_id: "t1",
+        task_type: "local_workflow",
+        workflow_name: "spec",
+        prompt: "full instructions to the subagent, content-bearing",
+      }),
+    );
+    expect(event).toEqual({
+      kind: "started",
+      task_id: "t1",
+      task_type: "local_workflow",
+      workflow_name: "spec",
+    });
+    expect(event).not.toHaveProperty("prompt");
+  });
+
+  it("task_progress -> kind:updated (task_type は含まない — host 側でキャッシュから backfill)", () => {
+    expect(
+      sdkMessageToTask(
+        msg({
+          type: "system",
+          subtype: "task_progress",
+          task_id: "t1",
+          subagent_type: "general-purpose",
+          description: "Running",
+          usage: { total_tokens: 100, tool_uses: 1, duration_ms: 500 },
+          last_tool_name: "Bash",
+          summary: "in progress",
+        }),
+      ),
+    ).toEqual({
+      kind: "updated",
+      task_id: "t1",
+      subagent_type: "general-purpose",
+      description: "Running",
+      usage: { total_tokens: 100, tool_uses: 1, duration_ms: 500 },
+      last_tool_name: "Bash",
+      summary: "in progress",
+    });
+    expect(
+      sdkMessageToTask(msg({ type: "system", subtype: "task_progress", task_id: "t1" })),
+    ).not.toHaveProperty("task_type");
+  });
+
+  it("task_notification -> kind:completed (status が既知の3値のいずれか)", () => {
+    for (const status of ["completed", "failed", "stopped"] as const) {
+      expect(
+        sdkMessageToTask(
+          msg({
+            type: "system",
+            subtype: "task_notification",
+            task_id: "t1",
+            status,
+            summary: "done",
+            usage: { total_tokens: 200, tool_uses: 2, duration_ms: 1000 },
+          }),
+        ),
+      ).toEqual({
+        kind: "completed",
+        task_id: "t1",
+        status,
+        summary: "done",
+        usage: { total_tokens: 200, tool_uses: 2, duration_ms: 1000 },
+      });
+    }
+  });
+
+  it("task_notification は output_file を配線しない(未承認フィールド、こはく判断)", () => {
+    const event = sdkMessageToTask(
+      msg({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "t1",
+        status: "completed",
+        summary: "done",
+        output_file: "/tmp/claude-1000/-tmp/sess/tasks/t1.output",
+      }),
+    );
+    expect(event).not.toHaveProperty("output_file");
+  });
+
+  it("task_notification で status が未知値でも terminal として completed を返す(M2 fix-round: status='failed' へフォールバックし raw_status に元値を保持)", () => {
+    expect(
+      sdkMessageToTask(
+        msg({
+          type: "system",
+          subtype: "task_notification",
+          task_id: "t1",
+          status: "killed",
+        }),
+      ),
+    ).toEqual({
+      kind: "completed",
+      task_id: "t1",
+      status: "failed",
+      raw_status: "killed",
+    });
+  });
+
+  it("task_notification で status が非文字列(未知値)でも terminal として completed を返す", () => {
+    expect(
+      sdkMessageToTask(
+        msg({
+          type: "system",
+          subtype: "task_notification",
+          task_id: "t1",
+          status: 42,
+        }),
+      ),
+    ).toEqual({
+      kind: "completed",
+      task_id: "t1",
+      status: "failed",
+      raw_status: "42",
+    });
+  });
+
+  it("task_notification で status が既知3値なら raw_status を持たない", () => {
+    const event = sdkMessageToTask(
+      msg({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "t1",
+        status: "stopped",
+      }),
+    );
+    expect(event).not.toHaveProperty("raw_status");
+  });
+
+  it("task_updated は null (ADR-0019 の明示的対象外 — #180 実測 2026-08-09 参照)", () => {
+    expect(
+      sdkMessageToTask(
+        msg({
+          type: "system",
+          subtype: "task_updated",
+          task_id: "t1",
+          patch: { status: "killed" },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("task_* 以外の system subtype、および system 以外の type は null", () => {
+    expect(sdkMessageToTask(msg({ type: "system", subtype: "init" }))).toBeNull();
+    expect(sdkMessageToTask(msg({ type: "result", subtype: "success" }))).toBeNull();
   });
 });

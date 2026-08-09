@@ -28,6 +28,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
   alias KaoiroServer.SessionStarts
+  alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentId
 
@@ -46,6 +47,24 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # must still treat all envelope strings as untrusted when rendering.
   @max_envelope_bytes 65_536
   @session_reset_modes ["new", "clear"]
+
+  # M1 round-3 fix (2026-08-09, ふじ round 3, issue #180): `task_id` on a
+  # `task` envelope had no length cap of its own — only the WHOLE
+  # envelope was bounded (`@max_envelope_bytes` above). Since task_id
+  # doubles as a JSON *map key* on the outbound `TaskStates` snapshot
+  # wire (`%{agent_id => %{task_id => envelope}}`), an individually-
+  # small-but-unbounded-length task_id let a handful of ingress-cap-
+  # compliant envelopes blow past the snapshot's own byte budget in ways
+  # the budget's per-entry accounting had not measured (ふじ's own
+  # measurement: 96 valid envelopes -> an 11.9MB actual snapshot).
+  # `payload.agent_id` needs NO analogous cap here — it must equal the
+  # topic-derived `agent_id` (the guard below), which
+  # `KaoiroServerWeb.AgentId.valid?/1` (issue #61) already bounds to
+  # 1..256 chars at JOIN time, so it inherits that bound for free.
+  # `KaoiroServer.TaskStates.@max_task_snapshot_bytes`'s margin comment
+  # cites BOTH this constant and `AgentId`'s pre-existing 256-char bound
+  # for its per-agent outer-key-overhead arithmetic.
+  @max_task_id_field_bytes 256
 
   # Upper bound on conversations notified in one disconnect (#131). Phase 1
   # caps a conversation at 2 agents and a wrapper realistically holds a
@@ -575,6 +594,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Broadcast only; do NOT store.
   defp store(%{"type" => "refresh_models_result"}), do: :ok
 
+  # Subagent/workflow task lifecycle (issue #180, ADR-0019/0047/0048). A
+  # dedicated flat table, not the per-agent_id AgentStates slot — see
+  # TaskStates' moduledoc. Broadcast (below, unchanged for every type)
+  # still fans this out to agents:lobby same as any other envelope.
+  defp store(%{"type" => "task"} = envelope), do: TaskStates.put(envelope)
+
   defp store(envelope), do: AgentStates.put(envelope, owner: self())
 
   defp directory_entry(id, envelope, activity, peers) do
@@ -935,6 +960,30 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     case AgentStates.disconnect(agent_id, self(), ts) do
       {:ok, envelope} ->
+        # ADR-0048 F1: the parent's departure discards its tasks. Piggy-
+        # backs on AgentStates.disconnect/3's own owner check succeeding
+        # (this terminate really did belong to the live connection) rather
+        # than TaskStates tracking ownership itself — a stale terminate
+        # after a reconnect never reaches this branch.
+        #
+        # M3 fix-round (2026-08-09, ふじ review): discard BEFORE the
+        # broadcast below, not after. A client joining in the window
+        # around this disconnect reads `TaskStates.snapshot()` from its
+        # OWN process at some point relative to this one; the only
+        # observable signal it has for "this agent's tasks are gone" is
+        # either (a) this `disconnected` broadcast, if it was already
+        # subscribed when this fires, or (b) its own snapshot read.
+        # Discarding first guarantees: any snapshot read that lands AFTER
+        # this broadcast is unconditionally post-purge (the same process
+        # cannot reach the broadcast call before this GenServer.call
+        # returns), so a client that missed the broadcast (joined too
+        # late to see it) can never observe stale tasks either — its
+        # later snapshot read is already clean. Discarding AFTER (the
+        # original #180 order) left exactly that combination open: a
+        # join whose snapshot read landed between broadcast and discard
+        # got stale tasks it would never be told to drop, having already
+        # missed the one broadcast for this disconnect.
+        TaskStates.discard_for_agent(agent_id)
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
         # Only on an adopted disconnect: a stale terminate that lost the
         # entry to a reconnect must not tell peers the agent is gone.
@@ -958,6 +1007,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       envelope["type"] == "inter_agent_message" ->
         validate_live_inter_agent_payload(envelope["payload"])
+
+      envelope["type"] == "task" ->
+        validate_task_payload(envelope["payload"], agent_id)
 
       true ->
         :ok
@@ -990,6 +1042,62 @@ defmodule KaoiroServerWeb.WrapperChannel do
       end
     end
   end
+
+  # code-review (issue #180, round 1): `TaskStates` indexes/attributes every
+  # task purely by `payload["agent_id"]` (self-contained per ADR-0047 F2),
+  # never cross-checking it against the envelope's own topic-validated
+  # `agent_id`. A mismatched payload.agent_id would file the task under the
+  # wrong owner, so `WrapperChannel.terminate/2`'s
+  # `TaskStates.discard_for_agent(agent_id)` (keyed by the REAL, connection-
+  # owning agent_id) could never find and remove it — an orphaned entry that
+  # grows the flat table forever. Reject at the frame boundary instead,
+  # mirroring the `inter_agent_message` special case above.
+  #
+  # S1 fix-round (2026-08-09, ふじ review): beyond the agent_id match, also
+  # validate ADR-0047 F2's other 3 required payload fields (task_id /
+  # task_type / status non-empty strings) plus F1's `kind` enum and the
+  # kind/status correspondence (started/updated carry status="running";
+  # completed carries status in completed/failed/stopped) HERE, at the
+  # frame boundary — a malformed task envelope must be rejected outright
+  # (never reach `store_and_broadcast`) rather than sail through to a live
+  # broadcast while `TaskStates.put/1`'s own defensive check quietly drops
+  # it from the table. Leaving that inconsistency in place would let
+  # operators see a task on the live wire that the snapshot never confirms
+  # existed. Deliberately NOT relaxed for "trusted" wrappers — #175's
+  # lesson (declared/self-reported values are forgeable) applies here too.
+  defp validate_task_payload(%{"agent_id" => payload_agent_id} = payload, agent_id)
+       when payload_agent_id == agent_id do
+    with :ok <- require_task_field(payload, "task_id", @max_task_id_field_bytes),
+         :ok <- require_task_field(payload, "task_type"),
+         :ok <- require_task_kind_status(payload) do
+      :ok
+    end
+  end
+
+  defp validate_task_payload(payload, _agent_id) when is_map(payload),
+    do: {:error, "payload.agent_id does not match topic"}
+
+  defp validate_task_payload(_payload, _agent_id), do: {:error, "payload must be an object"}
+
+  defp require_task_field(payload, field, max_bytes \\ nil) do
+    case Map.get(payload, field) do
+      v when is_binary(v) and v != "" and (is_nil(max_bytes) or byte_size(v) <= max_bytes) ->
+        :ok
+
+      _ ->
+        {:error, "invalid value: payload.#{field}"}
+    end
+  end
+
+  defp require_task_kind_status(%{"kind" => kind, "status" => status}) do
+    case {kind, status} do
+      {k, "running"} when k in ["started", "updated"] -> :ok
+      {"completed", s} when s in ["completed", "failed", "stopped"] -> :ok
+      _ -> {:error, "invalid value: payload.kind/status combination"}
+    end
+  end
+
+  defp require_task_kind_status(_payload), do: {:error, "invalid value: payload.kind"}
 
   defp fetch_reset_mode(%{"mode" => mode}) when mode in @session_reset_modes,
     do: {:ok, mode}

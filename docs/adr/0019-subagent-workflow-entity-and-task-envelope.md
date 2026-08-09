@@ -99,3 +99,37 @@ Accepted
   [0048](0048-task-aggregation-delivery.md)(server 集約・配信)。
 - 由来: my-idea-brief(走り書き「subagent/workflow の起動・体数・種別をクライアントへ
   通知」)。
+
+## Addendum (issue #180, 2026-08-09): `task_updated` は F3 の対象外
+
+**背景。** 段階1 実装時、実 SDK
+(`@anthropic-ai/claude-agent-sdk@0.3.220`)の型定義を読み直したところ、
+Context に記載した 3 subtype(`task_started` / `task_progress` /
+`task_notification`)に加え、未文書化の 4 番目の subtype
+`system/task_updated` が存在すると判明した。`status` は F3 の粗い 4 値
+(running/completed/failed/stopped)より広い
+(pending/running/completed/failed/killed/paused)。
+
+これは「終端通知(`task_notification`)が来る前に `task_updated` で
+`status: killed` 等の中間状態を経由した場合、同時実行数カウントが
+終端イベントを取りこぼして狂わないか」という懸念を生んだ。
+
+**決定。** マスターの指示で、型定義からの推測ではなく実 stream を
+使い捨てスクリプトで capture し実測した(手順・生データは
+[agent-sdk-events](../specs/agent-sdk-events.md)「タスク
+(subagent/workflow)メッセージ」節)。結果: 自然完了 / `stopTask()` /
+interrupt / `backgroundTasks()` 経由の停止 の 4 経路すべてで、
+`task_updated` を経由するか否かに関わらず `task_notification` が必ず
+発行される(SDK 0.3.220、2026-08-09 capture)。この実測を根拠に:
+
+- `task_updated` は v1 の対象外のまま維持する(F3 の粗い 4 値モデルを
+  拡張しない)。`wrapper/claude-code/src/adapter.ts` の
+  `sdkMessageToTask` は `task_updated` に対し `null` を返し、
+  呼び出し側(`AgentHost`)はそれを未知 subtype として
+  ログに残すのみで同時実行数カウントには一切関与させない
+  (fail-visible — 未知 shape でカウントが狂う経路を残さない)。
+- 将来 `task_updated` を取り込む場合は、この ADR か新規 ADR を
+  改訂してから行う(黙って `task_progress`/`task_notification` 相当に
+  読み替えない)。
+
+**由来**: kaoiro issue #180 実装セッション(あお、2026-08-09)。

@@ -16,6 +16,7 @@ import type {
   KaoiroState,
   LogPayload,
   ResultPayload,
+  TaskPayload,
   WrapperConfig,
 } from "./types.js";
 
@@ -264,6 +265,37 @@ export function makeResult(
     state: payload.is_error ? "error" : "done",
     payload: payload as unknown as Record<string, unknown>,
     ext,
+  };
+}
+
+/** Wraps a subagent/workflow task lifecycle notice into the common
+ *  envelope v0 (issue #180, ADR-0019 F2 / ADR-0047 F1). `state` is the
+ *  agent's CURRENT state at emit time, stamped unmodified — a task
+ *  envelope must never itself drive or imply a `KaoiroState` transition
+ *  (ADR-0019 F2's "親の state_change に子情報を相乗りさせない" applies in
+ *  both directions: task envelopes don't touch state, and state_change
+ *  doesn't carry task info). `payload.agent_id` is set here from
+ *  `config.agent_id`, matching the envelope frame's own `agent_id` (ADR-
+ *  0047 F2 — the field is duplicated into payload so it survives
+ *  independent server-side handling of `task` envelopes). */
+export function makeTask(
+  config: WrapperConfig,
+  state: KaoiroState,
+  ts: string,
+  payload: Omit<TaskPayload, "agent_id">,
+): Envelope {
+  return {
+    version: "0",
+    agent_id: config.agent_id,
+    persona: config.persona,
+    ts,
+    type: "task",
+    state,
+    payload: {
+      ...payload,
+      agent_id: config.agent_id,
+    } as unknown as Record<string, unknown>,
+    ext: {},
   };
 }
 

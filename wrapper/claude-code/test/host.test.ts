@@ -1864,6 +1864,354 @@ describe("AgentHost — query injection", () => {
   });
 });
 
+// issue #180 (ADR-0019 F2-F4, ADR-0047, ADR-0048): task_started/
+// task_progress/task_notification -> a `task` envelope via onTask, kept
+// independent of state_change/KaoiroState. Real field shapes captured
+// against @anthropic-ai/claude-agent-sdk@0.3.220 (see adapter.test.ts's
+// sdkMessageToTask suite for the pure-mapper-level coverage); this suite
+// covers host.ts's stateful task_type backfill / throttle / fail-visible
+// warn layered on top.
+describe("AgentHost — subagent/workflow task envelopes (issue #180)", () => {
+  const taskStarted = (
+    taskId: string,
+    extra: Record<string, unknown> = {},
+  ): SDKMessage =>
+    msg({
+      type: "system",
+      subtype: "task_started",
+      task_id: taskId,
+      task_type: "local_agent",
+      subagent_type: "general-purpose",
+      description: "Summarize README",
+      ...extra,
+    });
+  const taskProgress = (
+    taskId: string,
+    extra: Record<string, unknown> = {},
+  ): SDKMessage =>
+    msg({
+      type: "system",
+      subtype: "task_progress",
+      task_id: taskId,
+      usage: { total_tokens: 100, tool_uses: 1, duration_ms: 500 },
+      last_tool_name: "Bash",
+      ...extra,
+    });
+  const taskNotification = (
+    taskId: string,
+    extra: Record<string, unknown> = {},
+  ): SDKMessage =>
+    msg({
+      type: "system",
+      subtype: "task_notification",
+      task_id: taskId,
+      status: "completed",
+      summary: "done",
+      ...extra,
+    });
+
+  it("started -> updated -> completed が onTask を通り、agent_id/task_type が全 kind で揃う", async () => {
+    const tasks: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (e) => tasks.push(e),
+      queryFn: scriptedQuery([
+        taskStarted("t1"),
+        taskProgress("t1"),
+        taskNotification("t1"),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+
+    expect(tasks).toHaveLength(3);
+    expect(tasks.map((t) => t.type)).toEqual(["task", "task", "task"]);
+    for (const t of tasks) {
+      expect(t.payload).toMatchObject({
+        agent_id: "test.agent",
+        task_id: "t1",
+        task_type: "local_agent",
+      });
+    }
+    expect(tasks[0]!.payload).toMatchObject({ kind: "started", status: "running" });
+    expect(tasks[1]!.payload).toMatchObject({
+      kind: "updated",
+      status: "running",
+      usage: { total_tokens: 100, tool_uses: 1, duration_ms: 500 },
+      last_tool_name: "Bash",
+    });
+    expect(tasks[2]!.payload).toMatchObject({ kind: "completed", status: "completed" });
+  });
+
+  it("task envelope は state_change に一切影響しない (ADR-0019 F2)", async () => {
+    const states: string[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => states.push(e.state),
+      onTask: () => {},
+      queryFn: scriptedQuery([
+        assistant([{ type: "text", text: "hi" }]),
+        taskStarted("t1"),
+        taskProgress("t1"),
+        taskNotification("t1"),
+        result("success", { result: "done" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    // system/init を含めていないため "idle" 自体は emit されない
+    // (stepState の session_init ケースでのみ emit される — state.ts) —
+    // ここでの主張は task_* の3件が assistant の "thinking" と result 由来
+    // の "done"/"waiting_input" の間に一切割り込まないこと。
+    expect(states).toEqual(["thinking", "done", "waiting_input"]);
+  });
+
+  it("task_started に task_type が無ければ warn してドロップする (ADR-0047 F2、fail-visible)", async () => {
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (e) => tasks.push(e),
+      warn: (m) => warnings.push(m),
+      queryFn: scriptedQuery([
+        taskStarted("t1", { task_type: undefined }),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(tasks).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("t1");
+  });
+
+  it("task_started を経ていない task_id への task_progress/task_notification は warn してドロップする(カウントを狂わせない)", async () => {
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (e) => tasks.push(e),
+      warn: (m) => warnings.push(m),
+      queryFn: scriptedQuery([
+        taskProgress("ghost"),
+        taskNotification("ghost"),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(tasks).toHaveLength(0);
+    expect(warnings).toHaveLength(2);
+  });
+
+  it("completed 後は task_id がキャッシュから消え、再度 task_progress/task_notification が来ても warn してドロップする", async () => {
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (e) => tasks.push(e),
+      warn: (m) => warnings.push(m),
+      queryFn: scriptedQuery([
+        taskStarted("t1"),
+        taskNotification("t1"),
+        // late/duplicate notification for the same, now-completed task_id.
+        taskNotification("t1"),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(tasks).toHaveLength(2); // started, completed — NOT the duplicate
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("M2 fix-round (2026-08-09): 未知 status の task_notification でもキャッシュを閉じ、以降の task_progress はゾンビ再開しない", async () => {
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (e) => tasks.push(e),
+      warn: (m) => warnings.push(m),
+      queryFn: scriptedQuery([
+        taskStarted("t1"),
+        taskNotification("t1", { status: "killed" }),
+        // 未知 status の notification (terminal) の直後に届く late progress
+        // — 既に completed 済みの task_id を再開させてはならない。
+        taskProgress("t1"),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    // started, completed(status=failed) の 2 件のみ — 後続 progress は
+    // ドロップされ onTask を呼ばない(ゾンビ再開なし)。
+    expect(tasks).toHaveLength(2);
+    expect(tasks[1]!.payload).toMatchObject({ kind: "completed", status: "failed" });
+    // host.ts の raw_status 警告 + adapter 側で消費済みの unknown task_id
+    // 警告の 2 件。
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain("status=killed");
+    expect(warnings[1]).toContain("t1");
+  });
+
+  it("task_updated (ADR-0019 対象外) は warn するが onTask は呼ばない", async () => {
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (e) => tasks.push(e),
+      warn: (m) => warnings.push(m),
+      queryFn: scriptedQuery([
+        taskStarted("t1"),
+        msg({
+          type: "system",
+          subtype: "task_updated",
+          task_id: "t1",
+          patch: { status: "killed" },
+        }),
+        taskNotification("t1"),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(tasks).toHaveLength(2); // started, completed — task_updated skipped
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("task_updated");
+  });
+
+  it("throttle: 間隔内の task_progress は間引かれ、間隔経過後の変化ありは通る (ADR-0048 F2)", async () => {
+    let clock = 0;
+    const tasks: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (e) => tasks.push(e),
+      queryFn: scriptedQuery([
+        taskStarted("t1"),
+        taskProgress("t1", { usage: { total_tokens: 100, tool_uses: 1, duration_ms: 100 } }),
+        taskProgress("t1", { usage: { total_tokens: 150, tool_uses: 1, duration_ms: 200 } }),
+        taskProgress("t1", { usage: { total_tokens: 900, tool_uses: 1, duration_ms: 3200 } }),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+      nowMs: () => clock,
+    });
+    // scriptedQuery yields synchronously; advance the injected clock by
+    // hand between what would be message arrivals is not possible from
+    // outside run() here — instead this test pins clock=0 throughout,
+    // which exercises the "still within the interval" throttle branch:
+    // only the FIRST progress (unthrottled, no prior entry) should emit.
+    await host.run();
+    const updated = tasks.filter((t) => t.payload.kind === "updated");
+    expect(updated).toHaveLength(1);
+    expect(updated[0]!.payload).toMatchObject({
+      usage: { total_tokens: 100, tool_uses: 1, duration_ms: 100 },
+    });
+  });
+
+  it("throttle: 間隔経過後は last_tool_name の変化だけでも通る", async () => {
+    let clock = 0;
+    const tasks: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (e) => tasks.push(e),
+      queryFn: makeQueryFn(() => {
+        async function* gen(): AsyncGenerator<SDKMessage, void> {
+          yield taskStarted("t1");
+          yield taskProgress("t1", { last_tool_name: "Bash" });
+          // MIN_TASK_UPDATE_INTERVAL_MS in host.ts (not exported — private
+          // module constant); duplicated here deliberately rather than
+          // importing, matching this file's existing style for other
+          // host.ts-internal constants (e.g. PENDING_UPLOAD_TTL_MS is
+          // exported since tests need it directly; this one isn't, so a
+          // value comfortably past the 3s floor is used instead of the
+          // exact constant to avoid a magic-number coupling that silently
+          // desyncs if host.ts's threshold changes).
+          clock += 5_000;
+          yield taskProgress("t1", {
+            last_tool_name: "Read",
+            usage: { total_tokens: 100, tool_uses: 1, duration_ms: 100 }, // same tokens as before
+          });
+          yield result("success", { result: "" });
+        }
+        return asQuery(gen());
+      }),
+      now: () => "T",
+      nowMs: () => clock,
+    });
+    await host.run();
+    const updated = tasks.filter((t) => t.payload.kind === "updated");
+    expect(updated).toHaveLength(2);
+    expect(updated[1]!.payload).toMatchObject({ last_tool_name: "Read" });
+  });
+
+  it("completed は throttle の影響を受けず常に即時発行される", async () => {
+    let clock = 0;
+    const tasks: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (e) => tasks.push(e),
+      queryFn: scriptedQuery([
+        taskStarted("t1"),
+        taskProgress("t1"),
+        // clock never advances — completed must still emit despite being
+        // "immediately after" a just-emitted update, unlike a 2nd progress
+        // tick which would be throttled at the same clock value.
+        taskNotification("t1"),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+      nowMs: () => clock,
+    });
+    await host.run();
+    expect(tasks.map((t) => t.payload.kind)).toEqual(["started", "updated", "completed"]);
+  });
+
+  it("workflow_name / description / summary / skip_transcript を中継する", async () => {
+    const tasks: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (e) => tasks.push(e),
+      queryFn: scriptedQuery([
+        taskStarted("t1", {
+          task_type: "local_workflow",
+          subagent_type: undefined,
+          workflow_name: "spec",
+          skip_transcript: true,
+        }),
+        taskNotification("t1", { summary: "workflow finished" }),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(tasks[0]!.payload).toMatchObject({
+      task_type: "local_workflow",
+      workflow_name: "spec",
+      skip_transcript: true,
+    });
+    expect(tasks[0]!.payload).not.toHaveProperty("subagent_type");
+    expect(tasks[1]!.payload).toMatchObject({
+      task_type: "local_workflow",
+      workflow_name: "spec",
+      summary: "workflow finished",
+    });
+  });
+
+  it("onTask 未指定なら task envelope は静かに無視される(他の onXxx と同じ既定)", async () => {
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: scriptedQuery([
+        taskStarted("t1"),
+        taskNotification("t1"),
+        result("success", { result: "" }),
+      ]),
+      now: () => "T",
+    });
+    await expect(host.run()).resolves.toBeUndefined();
+  });
+});
+
 describe("AgentHost — permission", () => {
   it("decidePermission が waiting_permission→tool_running を駆動する(allow)", async () => {
     const states: string[] = [];

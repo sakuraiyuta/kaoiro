@@ -88,6 +88,43 @@ envelope は設けない。protocol 追加が最小で、last-write-wins の既�
 - spec: [subagent-tasks](../specs/subagent-tasks.md)(段階2)、
   [protocol](../specs/protocol.md)(snapshot の既存意味論)。
 - 関連 ADR: [0019](0019-subagent-workflow-entity-and-task-envelope.md)
-  (責務の決定元)、[0047](0047-task-envelope-schema.md)(envelope スキーマ)。
+  (責務の決定元)、[0047](0047-task-envelope-schema.md)(envelope スキーマ)、
+  [0021](0021-role-information-disclosure-policy.md)(viewer/operator
+  情報公開ポリシ — 本 addendum が適用する fail-closed 既定)。
 - 由来: open-question subagent-task-aggregation(2026-06-16 起票)を
   本 ADR へ昇格。
+
+## Addendum (issue #180, 2026-08-09): task の配信は operator 限定
+
+**決定。** `task` envelope のライブ配信、および snapshot の `tasks` キー
+(F3)は **operator 限定**とし、`viewer` ロールには一切配信しない。
+マスターとの相談を経てこはくが決定、理由は 3 つ:
+
+1. [ADR-0047](0047-task-envelope-schema.md) F3 の進捗メタ
+   (`summary` / `last_tool_name` 等)は粗いライフサイクルを超えた
+   内容ベアリング情報であり、[ADR-0021](0021-role-information-disclosure-policy.md)
+   が operator 限定としてきた `log`/`result` 相当の粒度に近い。
+2. issue #180 自体の目的が「operator が内部活動を把握する」ことで、
+   viewer 向けの要求はそもそも無い。
+3. ADR-0021 F2 の fail-closed 既定(未知 type は viewer へ配信しない)
+   が既に narrow-by-default を志向しており、あとから広げる方が
+   先に広げて漏洩を起こすより安全に倒せる。
+
+**実装。**
+
+- ライブ配信: `AgentsChannel.sanitize_envelope_for/2` に `"task"` 専用の
+  分岐は**追加しない**。`log`/`result`/`hosts` など既存の operator 限定
+  type と同じ経路 — 明示的な viewer 許可節を持たない type は
+  `:viewer, _ -> :drop` の既定分岐へ落ちる — にそのまま乗るため、
+  ゼロ行の変更で要件を満たす(N3 訂正、クロエ 2026-08-09: これは
+  「未知 type に備えた fail-closed の保険」ではなく、
+  hosts/log/result と同じ主経路そのもの — server gate に依存した
+  結果であって、防御的フォールバックではない)。
+- snapshot: `AgentsChannel.handle_info(:after_join, socket)` が
+  `role == :operator` のときのみ `TaskStates.snapshot()` を
+  `tasks` キーへ積み、viewer join には常に `tasks: %{}` を返す。
+
+将来 viewer 向けに task 可視化を広げる場合は、この addendum か新規 ADR
+の改訂を経てから行う(サニタイズ側の暗黙拡張はしない)。
+
+**由来**: kaoiro issue #180 実装セッション(あお、2026-08-09)。

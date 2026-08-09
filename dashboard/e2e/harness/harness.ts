@@ -2,7 +2,7 @@
 // scenario from query params and mounts PRODUCTION components with fixture
 // data — no Phoenix server, no WebSocket round-trips.
 //
-//   ?view=lobby&role=operator|viewer
+//   ?view=lobby&role=operator|viewer[&taskRing=1]
 //   ?view=detail[&pending=permission|question][&attention=1]
 //   ?view=overlay&overlay=dialog|drawer
 //   ?view=app        — real App.svelte behind fetch mocks (header chrome)
@@ -65,6 +65,7 @@ if (view === "app") {
     props: {
       operator: params.get("role") !== "viewer",
       pending: params.get("pending") === "1",
+      taskRing: params.get("taskRing") === "1",
     },
   });
 }

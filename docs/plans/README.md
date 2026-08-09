@@ -42,6 +42,8 @@ followup が issue へ外出しされている場合は 🟡 とする。
 | | | | 実装完了、レビュー中 (ADR-0045 / ADR-0046) |
 | 30 | [phase-30-history-restart-resilience](phase-30-history-restart-resilience.md) | ✅ | 表示履歴の再起動耐性 — hydration handshake・IA sidecar による DETS 撤廃・projection epoch 再同期、[ADR-0051](../adr/0051-history-restart-resilience.md)(accepted、rollout・dogfood 含め完了 2026-08-08) |
 | 31 | [phase-31-responsive-ui](phase-31-responsive-ui.md) | ⏳ | dashboard の 3 サイズ対等レスポンシブ化 — breakpoint とシート機構の基盤、lobby / AgentDetail / 周辺 UI、[ADR-0052](../adr/0052-responsive-three-tier-layout.md) |
+| 32 | [phase-32-subagent-workflow-visibility](phase-32-subagent-workflow-visibility.md) | 🟡 | 内部 subagent/workflow 稼働の可視化 — wrapper 検知・server 集約(operator 限定)・dashboard 頭上リング、[ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) / [ADR-0047](../adr/0047-task-envelope-schema.md) / [ADR-0048](../adr/0048-task-aggregation-delivery.md) |
+| | | | 実装完了、内部レビュー中(こはく確認・外部レビュー・commit/push 待ち) |
 
 ## Feature-local plans
 

@@ -30,6 +30,7 @@
     PersonaManifest,
     RunnerSessions,
     SpawnResult,
+    TaskTable,
     TicketRefreshResult,
   } from "./lib/protocol";
   import {
@@ -46,6 +47,9 @@
     mergeTranscriptEntries,
     applyProjectionEpoch,
     resetTranscriptHistory,
+    applyTaskEnvelope,
+    purgeTasksForAgent,
+    computeActiveTaskCountByAgent,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -55,6 +59,18 @@
   import { RELATIVE_TIME_TICK_MS } from "./lib/relativeTime";
 
   let agents = $state<Record<string, Envelope>>({});
+  // Active subagent/workflow tasks (ADR-0019/0047/0048, issue #180),
+  // nested agent_id -> task_id -> latest task envelope (M1 fix-round
+  // composite key, 2026-08-09). Operator-only, twin of `directory`'s
+  // lifecycle: seeded by the join-time snapshot, upserted (kind=started/
+  // updated) or removed (kind=completed) by the live `onEnvelope`
+  // handler below, purged per-agent on that agent's own `disconnected`
+  // state_change (M3/クロエ M1 fix-round — see the onEnvelope branch
+  // below for the race analysis), and cleared wholesale on logout in
+  // endSession(). Deliberately NOT folded into `agents` (ADR-0019 F2: a
+  // task envelope must never overwrite the parent's own state_change
+  // slot).
+  let tasks = $state<TaskTable>({});
   // Restart-surviving identity ledger (ADR-0030) — every agent_id we have
   // ever spawned, with its persona. Merged with `agents` (live) below to
   // surface offline entries in their own section with a restore button.
@@ -231,6 +247,19 @@
       .filter((envelope) => envelope.state !== "disconnected")
       .sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
   );
+  // Active-task tally per parent agent_id (ADR-0019 F4 concurrency:
+  // +1 on started, -1 on completed — `tasks`'s nested shape (M1 fix-
+  // round) makes this a plain per-agent key count, since `tasks` itself
+  // is already the authoritative "currently active" set: kind=completed
+  // removes the entry in the onEnvelope handler below, so every
+  // remaining entry IS an active task). Drives AgentCard's 頭上リング
+  // on/off only — no numeric display (issue #180, こはく scoping: 数値
+  // 表示は対象外).
+  // M2 fix-round (2026-08-09, ふじ round 2): the computation itself moved
+  // to protocol.ts's `activeTaskCountByAgent` so it is unit-testable
+  // (including the Object.create(null) fix for agent_id="__proto__") —
+  // see that function's doc comment for the full rationale.
+  const activeTaskCountByAgent = $derived.by(() => computeActiveTaskCountByAgent(tasks));
   // Everything not in the live grid: directory entries with NO AgentStates
   // envelope (server restarted, ADR-0030) AND live entries whose state is
   // `disconnected` (wrapper died, server survived). Both are restore
@@ -461,7 +490,21 @@
           );
         },
         onSnapshot: (next) => (agents = next),
+        onTaskSnapshot: (next) => (tasks = next),
         onEnvelope: (envelope) => {
+          // Subagent/workflow task lifecycle (ADR-0019/0047, issue #180):
+          // neither a transcript reply line nor a parent state_change, so
+          // it gets its own accumulator BEFORE the isReplyEnvelope branch
+          // below — falling into that branch's `else` would overwrite the
+          // parent's own `agents[agent_id]` state_change slot with the
+          // task envelope (ADR-0019 F2 forbids folding task into parent
+          // state). applyTaskEnvelope (protocol.ts) owns the upsert/
+          // remove/fail-visible-drop logic so it stays unit-testable
+          // without mounting this component.
+          if (envelope.type === "task") {
+            tasks = applyTaskEnvelope(tasks, envelope);
+            return;
+          }
           // Reply lines feed the transcript; state envelopes update the
           // latest-state map that drives the grid faces.
           if (isReplyEnvelope(envelope)) {
@@ -531,6 +574,49 @@
           } else {
             const prevState = agents[envelope.agent_id]?.state;
             agents = { ...agents, [envelope.agent_id]: envelope };
+            // M3/クロエ M1 fix-round (2026-08-09, issue #180): the parent's
+            // own `disconnected` state_change is the client-side purge
+            // trigger for its tasks — no new wire event was invented for
+            // this (ADR-0019 F1: task lifecycle is bound to the parent
+            // session, and this envelope already broadcasts live to every
+            // connected client regardless of whether it happens to be
+            // this specific state transition). This closes the gap where
+            // the server's own TaskStates.discard_for_agent (on parent
+            // disconnect) never reached an already-connected client's
+            // local `tasks` state on its own — without this, a completed-
+            // looking ring could stay lit forever after the agent it
+            // belonged to went away (クロエ: reproduces most visibly after
+            // a restore, since the offline section never threads
+            // activeTaskCount through and so hides the symptom until the
+            // agent reconnects and the stale ring reappears).
+            //
+            // M3 round2 correction (2026-08-09, ふじ round 2): the prior
+            // comment here claimed a NEW client never needs this purge
+            // at all, reasoning that its join-time snapshot is always
+            // built AFTER TaskStates.discard_for_agent. That is true of
+            // discard_for_agent relative to the BROADCAST (the M3 fix
+            // this file's server-side twin makes), but AgentStates and
+            // TaskStates are separate GenServers reached by two SEPARATE
+            // calls from AgentsChannel's after_join — not one atomic
+            // read. A new client's join can land in the real window
+            // between AgentStates.disconnect (agent_id already shows
+            // disconnected) and the LATER TaskStates.discard_for_agent
+            // (tasks not yet purged): its snapshot then arrives with a
+            // disconnected agent that still lists active tasks. This
+            // does NOT stay stale, because that same client's PubSub
+            // subscription is already live before after_join's push
+            // (see the AgentsChannel comment on `send(self(), :after_join)`),
+            // so it also receives the `disconnected` broadcast this
+            // branch handles — and purges here exactly like an already-
+            // connected client would. Convergence is via this live
+            // broadcast, not via any guarantee that the initial snapshot
+            // was already clean. This branch's purge is unconditional
+            // either way: it does not depend on whether `tasks` already
+            // held anything for this agent_id (purgeTasksForAgent is a
+            // no-op, same reference returned, when it did not).
+            if (envelope.state === "disconnected") {
+              tasks = purgeTasksForAgent(tasks, envelope.agent_id);
+            }
             // A live envelope from a previously-failed restore clears its
             // sticky error hint (ADR-0030 D8): the agent is speaking again.
             if (
@@ -907,6 +993,10 @@
     // clean; the next `directory` push repopulates for operators.
     directory = {};
     spawnErrors = {};
+    // Operator-only, twin of `directory` above: the next join's
+    // onTaskSnapshot repopulates for operators, and a viewer never had
+    // any entries to begin with (ADR-0021).
+    tasks = {};
   }
 
   // Bulk restore of every offline entry (ADR-0030 D5). Confirms once, then
@@ -1391,6 +1481,7 @@
               <AgentCard
                 {envelope}
                 {manifest}
+                activeTaskCount={activeTaskCountByAgent[envelope.agent_id] ?? 0}
                 spawnError={spawnErrors[envelope.agent_id] ?? null}
                 onSelect={(o) => {
                   origin = o ?? null;

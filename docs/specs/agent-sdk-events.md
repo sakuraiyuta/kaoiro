@@ -58,13 +58,33 @@ type SDKMessage =
 
 | subtype | 主なフィールド |
 |---|---|
-| task_started | task_id, description, subagent_type, task_type, workflow_name, tool_use_id, skip_transcript |
+| task_started | task_id, description, subagent_type, task_type, workflow_name, tool_use_id, skip_transcript, **prompt**(未文書化・非配線) |
 | task_progress | subagent_type, usage{total_tokens,tool_uses,duration_ms}, last_tool_name, summary |
-| task_notification | status(completed/failed/stopped), summary, usage |
+| task_notification | status(completed/failed/stopped), summary, usage, **output_file**(未文書化・非配線) |
+| task_updated(**未文書化、対象外**) | task_id, status(pending/running/completed/failed/killed/paused ― F3 の 4 値より広い) |
 
-これらは `KaoiroState` には**載らない**(親の状態を変えない)。専用 envelope へ別経路で
-導出する。現状 `wrapper/claude-code/src/adapter.ts` は未処理(破棄)で、
-[subagent-tasks](subagent-tasks.md) は spec ごと未着手。
+`task_started.prompt`(起動した subagent への指示全文)と
+`task_notification.output_file`(ローカルファイルパス)は SDK 実測で
+存在が判明した未文書化フィールドだが、`task` envelope へは配線しない
+(理由・出典は [ADR-0047](../adr/0047-task-envelope-schema.md) addendum)。
+`task_updated` は 4 番目の subtype で、`status` が
+[ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
+F3 の粗い 4 値ライフサイクルより広く、v1 の対象外(同 ADR addendum)。
+
+これらは `KaoiroState` には**載らない**(親の状態を変えない)。専用 envelope
+`task` へ別経路で導出する
+([subagent-tasks](subagent-tasks.md)、実装済み — 段階1(wrapper)・
+段階2(server)・段階3(dashboard 頭上リング))。
+
+**実測記録(task_notification の終端保証、issue #180)**: SDK
+`0.3.220`、2026-08-09 capture。使い捨てスクリプトで実 `query()` stream を
+capture し、以下 4 経路すべてで `task_notification` が必ず発行される
+ことを確認した — (a) subagent の自然完了、(b)
+`Query.stopTask(taskId)`(ドキュメント通り `status: "stopped"` の
+`task_notification` を発行)、(c) 親セッションの interrupt、(d)
+`Query.backgroundTasks(toolUseId?)`(バックグラウンド化後、settle 時に
+`task_notification` を発行)。`task_updated` を経由する経路でも終端では
+必ず `task_notification` に収束する。
 
 ### 権限コールバック(canUseTool)
 

@@ -237,6 +237,15 @@ async function main(): Promise<void> {
     link?.send(envelope);
   };
 
+  /** issue #180 (ADR-0019 F2 / ADR-0047 F1): relays subagent/workflow task
+   *  lifecycle envelopes to the server. No local stdout line — task
+   *  updates can arrive frequently (throttled, but still per-task) and
+   *  the CLI's printState/printLog console output is for the agent's OWN
+   *  activity, not its children's. */
+  const onTask = (envelope: Envelope): void => {
+    link?.send(envelope);
+  };
+
   /** Wrapper-authored operator line (phase-28 A1's `system` log kind). */
   const emitSystemLog = (text: string): void => {
     onLog(
@@ -606,6 +615,7 @@ async function main(): Promise<void> {
   host = new AgentHost(config, {
     onState,
     onLog,
+    onTask,
     // phase-28 BR MF2: the B1 threshold notice is an injection like any
     // other, so it queues on the one chain instead of racing it.
     enqueueInjection: enqueueInstruction,

@@ -31,6 +31,7 @@ import type {
   ResolvedSnapshotExt,
   ResultPayload,
   SwitchErrorExt,
+  TaskPayload,
   WrapperConfig,
   WhoamiSnapshot,
 } from "@kaoiro/agent-common";
@@ -50,8 +51,10 @@ import {
   makeLog,
   makeResult,
   makeStateChange,
+  makeTask,
   stepState,
 } from "@kaoiro/agent-common";
+import type { TaskEvent } from "./adapter.js";
 import {
   cwdChangedHookToCwd,
   sdkMessageToCompactNotice,
@@ -64,6 +67,7 @@ import {
   sdkMessageToResultMeta,
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
+  sdkMessageToTask,
   sdkMessageToTerminalReason,
 } from "./adapter.js";
 import {
@@ -99,6 +103,23 @@ const MAX_QUEUED_TURNS = 1000;
  *  end-of-turn retry as one further trial, so the semantics are "trial cap =
  *  3", not "init + 3 retries". Manual retry (Phase 18-5) resets this. */
 const MAX_MODEL_REFRESH_RETRIES = 3;
+
+/** Minimum gap between two emitted `task` envelopes of kind="updated" for
+ *  the SAME task_id (issue #180, ADR-0048 F2 — "一定間隔 + 差分閾値" left
+ *  to段階1 implementation). A `task_progress` SDK message that arrives
+ *  within this window of the last EMITTED update is dropped regardless of
+ *  content — this is a hard rate cap, not a debounce (the next progress
+ *  tick after the window reopens is evaluated normally, not deferred). */
+const MIN_TASK_UPDATE_INTERVAL_MS = 3_000;
+
+/** Minimum `usage.total_tokens` delta (from the last EMITTED update) that
+ *  counts as "changed enough" on its own, alongside a `last_tool_name`
+ *  change, to justify a throttled `updated` emission once
+ *  {@link MIN_TASK_UPDATE_INTERVAL_MS} has elapsed (ADR-0048 F2). Both the
+ *  interval AND a real content change are required — the interval alone
+ *  must not produce a steady heartbeat of near-identical updates for a
+ *  long-running subagent that has not meaningfully progressed. */
+const TASK_UPDATE_TOKEN_DELTA_THRESHOLD = 500;
 
 export const CLAUDE_EFFORT_LEVELS = [
   "low",
@@ -193,6 +214,12 @@ export interface AgentHostOptions {
    * Omitted = replies are not relayed.
    */
   onLog?: (envelope: Envelope) => void;
+  /** Invoked with each subagent/workflow task lifecycle envelope (issue
+   *  #180, ADR-0019 F2 / ADR-0047 F1). Separate from onLog/onState — a
+   *  dedicated envelope type per ADR-0019 F2, so it must not ride either
+   *  existing channel. Omitted = task envelopes are not emitted (unit
+   *  tests only; production always wires it). */
+  onTask?: (envelope: Envelope) => void;
   /** Invoked once per SDK turn boundary (success or error), alongside (not
    *  instead of) onLog's result envelope (issue #131). `conversationId` is
    *  the inter-agent conversation that turn's injection came from (the value
@@ -312,6 +339,14 @@ export interface AgentHostOptions {
   /** Wall-clock epoch-ms source for the pending_uploads TTL GC sweep,
    *  injectable for tests. Defaults to `Date.now`. */
   nowMs?: () => number;
+  /** Diagnostic sink for fail-visible anomalies that must not silently
+   *  vanish but also must not corrupt derived state (issue #180, こはく
+   *  指示 2026-08-09 — an unrecognized `task_*` subtype/status, or a
+   *  `task_progress`/`task_notification` for a task_id this host never
+   *  saw `task_started` for). Injectable for tests. Defaults to
+   *  `process.stderr.write`, mirroring `IaSidecar`'s `warn` option
+   *  (@kaoiro/agent-common). */
+  warn?: (message: string) => void;
 }
 
 /**
@@ -348,6 +383,31 @@ export class AgentHost implements EngineAdapter {
   /** tool_use_id -> tool_name, so a tool_result log can name its tool.
    *  Cleared each turn (every tool is settled by the result). */
   readonly #toolNames = new Map<string, string>();
+  readonly #warn: (message: string) => void;
+
+  /** task_id -> the fields only `task_started` carries (issue #180,
+   *  ADR-0047 F2) — `task_progress` / `task_notification` SDK messages
+   *  have no `task_type` of their own (verified against the installed
+   *  SDK's type declarations), so later `updated`/`completed` envelopes
+   *  backfill it from here. Entries are removed once a `completed`
+   *  envelope is emitted for that task_id (mirrors the +1/-1 concurrency
+   *  accounting of ADR-0019 F4 — this map's size IS the count) so a
+   *  long-lived session cannot grow it unbounded across many finished
+   *  tasks. A `task_progress`/`task_notification` for a task_id missing
+   *  here (never saw `task_started`, or already completed) is logged via
+   *  `#warn` and dropped — fail-visible, never silently counted. */
+  readonly #taskCache = new Map<
+    string,
+    { task_type: string; subagent_type?: string; workflow_name?: string }
+  >();
+  /** task_id -> the last EMITTED `updated` envelope's throttle inputs
+   *  (issue #180, ADR-0048 F2). Absent entry = no `updated` has been
+   *  emitted yet for this task_id (the next `task_progress` always
+   *  emits, unthrottled). Cleared alongside `#taskCache` on `completed`. */
+  readonly #taskThrottle = new Map<
+    string,
+    { emittedAtMs: number; totalTokens: number; lastToolName?: string }
+  >();
 
   /** Latest Claude Code status meta (#16), stamped into state_change ext:
    *  active model, working directory, context-window usage, and per-window
@@ -503,6 +563,8 @@ export class AgentHost implements EngineAdapter {
     this.#probeFn = options.probeFn ?? runClaudeProbe;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
+    this.#warn =
+      options.warn ?? ((message) => process.stderr.write(`${message}\n`));
     // ADR-0039 F9 追補: prefer the runner-transported catalog so fresh
     // idle wrappers (deferQueryUntilFirstInput=true, #query still null,
     // supportedModels() unreachable) already surface a rich model +
@@ -1320,6 +1382,27 @@ export class AgentHost implements EngineAdapter {
       // settled into; then relay the message's reply lines.
       for (const event of sdkMessageToEvents(message)) this.#apply(event);
       for (const entry of sdkMessageToLogs(message)) this.#emitLog(entry);
+      // Subagent/workflow task lifecycle (issue #180, ADR-0019 F2 / ADR-0047
+      // F1) — deliberately does NOT feed #apply()/state derivation above:
+      // ADR-0019 F2 requires task info to stay off the parent's own
+      // KaoiroState / state_change entirely.
+      const taskEvent = sdkMessageToTask(message);
+      if (taskEvent) {
+        this.#applyTaskEvent(taskEvent);
+      } else if (
+        message.type === "system" &&
+        typeof (message as { subtype?: unknown }).subtype === "string" &&
+        (message as { subtype: string }).subtype.startsWith("task_")
+      ) {
+        // Fail-visible (こはく指示 2026-08-09): a task_* subtype
+        // sdkMessageToTask() does not recognize (task_updated, or any
+        // future addition) — or a task_notification whose status fell
+        // outside completed/failed/stopped — must not vanish silently,
+        // and must not be allowed to skew the active-task count either.
+        this.#warn(
+          `[kaoiro] unrecognized task_* message: subtype=${(message as { subtype: string }).subtype}`,
+        );
+      }
       // Compaction / conversation-reset notices (phase-28 A1, #168). Emitted
       // as their own log line rather than folded into sdkMessageToLogs: that
       // mapper is shared with resume history reconstruction (history.ts), and
@@ -2190,6 +2273,175 @@ export class AgentHost implements EngineAdapter {
     );
     if (this.#closed || generation !== this.#contextGeneration) return;
     await this.#refreshContextUsage();
+  }
+
+  /** Routes one {@link TaskEvent} to the task cache / throttle / emission
+   *  logic (issue #180, ADR-0019/0047/0048). Never touches `#machine` or
+   *  `#apply()` — task envelopes are independent of `KaoiroState` by
+   *  design (ADR-0019 F2). */
+  #applyTaskEvent(event: TaskEvent): void {
+    switch (event.kind) {
+      case "started": {
+        if (event.task_type === undefined) {
+          // ADR-0047 F2 requires task_type on every emitted envelope, and
+          // there is nothing to backfill it from for a brand-new task_id
+          // — fail-visible rather than guessing a default.
+          this.#warn(
+            `[kaoiro] task_started for task_id=${event.task_id} carried no task_type — dropped`,
+          );
+          return;
+        }
+        this.#taskCache.set(event.task_id, {
+          task_type: event.task_type,
+          ...(event.subagent_type !== undefined
+            ? { subagent_type: event.subagent_type }
+            : {}),
+          ...(event.workflow_name !== undefined
+            ? { workflow_name: event.workflow_name }
+            : {}),
+        });
+        this.#taskThrottle.delete(event.task_id); // fresh task_id: no prior throttle state
+        const payload: Omit<TaskPayload, "agent_id"> = {
+          kind: "started",
+          task_id: event.task_id,
+          task_type: event.task_type,
+          status: "running",
+        };
+        if (event.subagent_type !== undefined) {
+          payload.subagent_type = event.subagent_type;
+        }
+        if (event.workflow_name !== undefined) {
+          payload.workflow_name = event.workflow_name;
+        }
+        if (event.description !== undefined) {
+          payload.description = event.description;
+        }
+        if (event.skip_transcript !== undefined) {
+          payload.skip_transcript = event.skip_transcript;
+        }
+        this.#emitTask(payload);
+        return;
+      }
+      case "updated": {
+        const cached = this.#taskCache.get(event.task_id);
+        if (!cached) {
+          this.#warn(
+            `[kaoiro] task_progress for unknown task_id=${event.task_id} (no prior task_started, or already completed) — dropped`,
+          );
+          return;
+        }
+        if (!this.#shouldEmitTaskUpdate(event)) return;
+        this.#taskThrottle.set(event.task_id, {
+          emittedAtMs: this.#nowMs(),
+          totalTokens: event.usage?.total_tokens ?? 0,
+          ...(event.last_tool_name !== undefined
+            ? { lastToolName: event.last_tool_name }
+            : {}),
+        });
+        const payload: Omit<TaskPayload, "agent_id"> = {
+          kind: "updated",
+          task_id: event.task_id,
+          task_type: cached.task_type,
+          status: "running",
+        };
+        if (cached.subagent_type !== undefined) {
+          payload.subagent_type = cached.subagent_type;
+        }
+        if (cached.workflow_name !== undefined) {
+          payload.workflow_name = cached.workflow_name;
+        }
+        if (event.description !== undefined) {
+          payload.description = event.description;
+        }
+        if (event.usage !== undefined) payload.usage = event.usage;
+        if (event.last_tool_name !== undefined) {
+          payload.last_tool_name = event.last_tool_name;
+        }
+        if (event.summary !== undefined) payload.summary = event.summary;
+        this.#emitTask(payload);
+        return;
+      }
+      case "completed": {
+        // M2 fix-round (2026-08-09): an unrecognized SDK status still
+        // reaches this branch (adapter.ts falls back to status="failed"
+        // rather than dropping the event) — warn with the raw value so
+        // it is not silently swallowed, but still close out the cache/
+        // count below exactly like a recognized status would.
+        if (event.raw_status !== undefined) {
+          this.#warn(
+            `[kaoiro] task_notification for task_id=${event.task_id} had unrecognized status=${event.raw_status} — treated as failed`,
+          );
+        }
+        const cached = this.#taskCache.get(event.task_id);
+        if (!cached) {
+          this.#warn(
+            `[kaoiro] task_notification for unknown task_id=${event.task_id} (no prior task_started, or already completed) — dropped`,
+          );
+          return;
+        }
+        // Remove BEFORE emitting: `completed` is always emitted (ADR-0048
+        // F2, never throttled), so there is no re-entrancy window where a
+        // caller could observe the cache still holding this task_id.
+        this.#taskCache.delete(event.task_id);
+        this.#taskThrottle.delete(event.task_id);
+        const payload: Omit<TaskPayload, "agent_id"> = {
+          kind: "completed",
+          task_id: event.task_id,
+          task_type: cached.task_type,
+          status: event.status,
+        };
+        if (cached.subagent_type !== undefined) {
+          payload.subagent_type = cached.subagent_type;
+        }
+        if (cached.workflow_name !== undefined) {
+          payload.workflow_name = cached.workflow_name;
+        }
+        if (event.usage !== undefined) payload.usage = event.usage;
+        if (event.summary !== undefined) payload.summary = event.summary;
+        if (event.skip_transcript !== undefined) {
+          payload.skip_transcript = event.skip_transcript;
+        }
+        this.#emitTask(payload);
+        return;
+      }
+    }
+  }
+
+  /** ADR-0048 F2 throttle decision for one `task_progress` (kind="updated")
+   *  event: a hard {@link MIN_TASK_UPDATE_INTERVAL_MS} rate cap, AND
+   *  (within that cap) a real content change — `last_tool_name` changed or
+   *  `usage.total_tokens` moved by at least
+   *  {@link TASK_UPDATE_TOKEN_DELTA_THRESHOLD} — so a long-running task
+   *  with nothing new to report does not produce a steady no-op heartbeat
+   *  once the interval reopens. The FIRST update for a task_id (no prior
+   *  throttle entry) always emits, unthrottled — an operator watching a
+   *  freshly-started task should see its first progress tick immediately,
+   *  not wait out the interval. */
+  #shouldEmitTaskUpdate(event: {
+    task_id: string;
+    usage?: { total_tokens: number };
+    last_tool_name?: string;
+  }): boolean {
+    const prior = this.#taskThrottle.get(event.task_id);
+    if (!prior) return true;
+    const intervalOk =
+      this.#nowMs() - prior.emittedAtMs >= MIN_TASK_UPDATE_INTERVAL_MS;
+    if (!intervalOk) return false;
+    const toolChanged =
+      event.last_tool_name !== undefined &&
+      event.last_tool_name !== prior.lastToolName;
+    const tokenDelta =
+      event.usage !== undefined
+        ? Math.abs(event.usage.total_tokens - prior.totalTokens)
+        : 0;
+    return toolChanged || tokenDelta >= TASK_UPDATE_TOKEN_DELTA_THRESHOLD;
+  }
+
+  /** Builds the task envelope and relays it via onTask (issue #180). */
+  #emitTask(payload: Omit<TaskPayload, "agent_id">): void {
+    const onTask = this.#options.onTask;
+    if (!onTask) return;
+    onTask(makeTask(this.#config, this.#machine.state, this.#now(), payload));
   }
 
   /** Builds the log payload (size-clipped) and relays it via onLog. */
