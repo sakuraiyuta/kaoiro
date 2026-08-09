@@ -162,6 +162,19 @@ function hostSelect(target: Element): HTMLSelectElement {
   return sel;
 }
 
+function modelSelect(target: Element): HTMLSelectElement {
+  const labels = [...target.querySelectorAll("label")];
+  const label = labels.find((n) => n.textContent?.includes("モデル"));
+  const sel = label?.querySelector("select");
+  if (!(sel instanceof HTMLSelectElement))
+    throw new Error("model select not found");
+  return sel;
+}
+
+function modelResolution(target: Element): HTMLElement | null {
+  return target.querySelector<HTMLElement>(".model-resolution");
+}
+
 function refreshButton(target: Element): HTMLButtonElement | null {
   const buttons = [...target.querySelectorAll("button")];
   return (
@@ -179,6 +192,13 @@ async function selectHost(
   select.value = hostId;
   select.dispatchEvent(new Event("change", { bubbles: true }));
   await tick();
+}
+
+async function selectModel(target: Element, value: string): Promise<void> {
+  const select = modelSelect(target);
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await settle();
 }
 
 describe("LaunchDialog engine-catalog refresh (Option E, ADR-0039)", () => {
@@ -259,6 +279,130 @@ describe("LaunchDialog engine-catalog refresh (Option E, ADR-0039)", () => {
     expect(refreshButton(target)).toBeNull();
     // auto refresh も発火しない (engine !== claude-code)
     expect(calls).toHaveLength(0);
+  });
+
+  it("resolved_model 欠落時は補足行を出さず、モデル選択肢は従来表示のまま", async () => {
+    const { conn } = makeConnection();
+    const target = await renderLaunch([claudeHost()], conn);
+    await selectHost(target, "host-a");
+    await selectModel(target, "default");
+
+    expect(modelResolution(target)).toBeNull();
+    expect(
+      [...modelSelect(target).options].find((option) => option.value === "default")
+        ?.textContent,
+    ).toBe("Default");
+  });
+
+  it("Codex catalog は resolved_model があっても補足行を出さない", async () => {
+    const { conn } = makeConnection();
+    const target = await renderLaunch(
+      [
+        {
+          ...codexHost(),
+          engines: [
+            {
+              id: "codex",
+              models: [
+                {
+                  value: "gpt-terra",
+                  display_name: "Terra",
+                  resolved_model: "gpt-5.6",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      conn,
+    );
+    await selectHost(target, "host-b");
+    await selectModel(target, "gpt-terra");
+
+    expect(modelResolution(target)).toBeNull();
+  });
+
+  it("catalog refresh 後の hosts rotation に canonical 表示が追随し、alias を spawn へ送る", async () => {
+    const { conn, calls } = makeConnection();
+    const target = document.createElement("div");
+    document.body.append(target);
+    const props = makeReactiveLaunchDialogProps({
+      hosts: [
+        {
+          ...claudeHost(),
+          engines: [
+            {
+              id: "claude-code",
+              models: [
+                {
+                  value: "default",
+                  display_name: "Default",
+                  resolved_model: "claude-sonnet-5",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      connection: conn,
+      sessions: null,
+      onClose: () => {},
+    });
+    const component = mount(LaunchDialog, { target, props });
+    mounted.push(component);
+    await settle();
+    await selectHost(target, "host-a");
+    await selectModel(target, "default");
+
+    expect(modelResolution(target)?.textContent).toContain("取得時点の解決先");
+    expect(modelResolution(target)?.textContent).toContain("claude-sonnet-5");
+    expect(modelResolution(target)?.textContent).toContain("起動時に変わる場合があります");
+
+    const callsBeforeRotation = calls.length;
+    expect(callsBeforeRotation).toBeGreaterThan(0);
+    calls.at(-1)!.deferred.resolve({
+      host_id: "host-a",
+      engine: "claude-code",
+      request_id: "r-canonical",
+      ok: true,
+      models_count: 1,
+    });
+    await settle();
+
+    // The hosts push is the refresh result's catalog replacement. The UI
+    // must render its new probe/cache snapshot without starting another probe.
+    props.hosts = [
+      {
+        ...claudeHost(),
+        engines: [
+          {
+            id: "claude-code",
+            models: [
+              {
+                value: "default",
+                display_name: "Default",
+                resolved_model: "claude-opus-5",
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    await settle();
+
+    expect(modelResolution(target)?.textContent).toContain("claude-opus-5");
+    expect(modelResolution(target)?.textContent).not.toContain("claude-sonnet-5");
+    expect(calls).toHaveLength(callsBeforeRotation);
+
+    target
+      .querySelector("form")!
+      .dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    await settle();
+    expect(conn.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({ engine: "claude-code", model: "default" }),
+    );
+    const spawnArg = (conn.spawn as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(spawnArg).not.toHaveProperty("resolved_model");
   });
 
   it("host 切替: 旧 host の late result は現 host の state を上書きしない", async () => {

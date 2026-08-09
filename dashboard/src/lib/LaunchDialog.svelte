@@ -109,8 +109,22 @@
   const engineModels = $derived(
     host?.engines?.find((e) => e.id === engine)?.models ?? [],
   );
+  const selectedModel = $derived(
+    engineModels.find((m) => m.value === model) ?? null,
+  );
+  // `resolved_model` is read-only probe/cache metadata, never a launch
+  // value. Restrict this hint to Claude: Codex's catalog must keep its
+  // existing presentation even if a future payload happens to carry the
+  // optional field.
+  const selectedResolvedModel = $derived(
+    engine === CLAUDE_ENGINE &&
+      typeof selectedModel?.resolved_model === "string" &&
+      selectedModel.resolved_model.length > 0
+      ? selectedModel.resolved_model
+      : null,
+  );
   const effortLevels = $derived(
-    engineModels.find((m) => m.value === model)?.effort_levels ?? [],
+    selectedModel?.effort_levels ?? [],
   );
   function chooseModel(event: Event): void {
     model = (event.currentTarget as HTMLSelectElement).value;
@@ -450,13 +464,24 @@
       {#if engineModels.length > 0}
         <label>
           モデル
-          <select value={model} onchange={chooseModel}>
+          <select
+            value={model}
+            onchange={chooseModel}
+            aria-describedby={selectedResolvedModel
+              ? "launch-model-resolution"
+              : undefined}
+          >
             <option value="">既定</option>
             {#each engineModels as m (m.value)}
               <option value={m.value}>{m.display_name}</option>
             {/each}
           </select>
         </label>
+        {#if selectedResolvedModel}
+          <p id="launch-model-resolution" class="note model-resolution">
+            取得時点の解決先: <code>{selectedResolvedModel}</code> (起動時に変わる場合があります)
+          </p>
+        {/if}
       {/if}
 
       {#if engine === CLAUDE_ENGINE}
@@ -697,6 +722,11 @@
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
+  }
+
+  .model-resolution {
+    /* Tighten form's 0.9rem gap to the label's 0.3rem-equivalent spacing. */
+    margin: -0.5rem 0 0;
   }
 
   label.row {
