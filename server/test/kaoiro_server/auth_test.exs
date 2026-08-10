@@ -204,6 +204,48 @@ defmodule KaoiroServer.AuthTest do
 
       assert {:error, :unauthorized} = Auth.client_role("tok-x")
     end
+
+    test "name 付きエントリでも role 解決は変わらない (issue #197)" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator:CI bot")
+
+      assert {:ok, :operator} = Auth.client_role("tok-op")
+    end
+  end
+
+  describe "client_token_display_name/1 (issue #197 マスター決裁 2026-08-09 #1)" do
+    test "token:role:name エントリは設定名を返す" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator:CI bot")
+
+      assert Auth.client_token_display_name("tok-op") == "CI bot"
+    end
+
+    test "name を省略した token:role エントリは nil を返す" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      assert Auth.client_token_display_name("tok-op") == nil
+    end
+
+    test "未知 token / 未設定は nil を返す" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator:CI bot")
+
+      assert Auth.client_token_display_name("unknown") == nil
+      assert Auth.client_token_display_name(nil) == nil
+    end
+  end
+
+  describe "client_token_hash/1 (issue #197)" do
+    test "同じ token は同じ hash、異なる token は別の hash" do
+      assert Auth.client_token_hash("tok-a") == Auth.client_token_hash("tok-a")
+      refute Auth.client_token_hash("tok-a") == Auth.client_token_hash("tok-b")
+    end
+
+    test "生 token を hash に含めない" do
+      refute Auth.client_token_hash("super-secret-token") =~ "super-secret-token"
+    end
+
+    test "socket_id/1 とは別の名前空間 (衝突しても混同しない)" do
+      refute Auth.client_token_hash("tok-a") == Auth.socket_id("tok-a")
+    end
   end
 
   describe "socket_id/1 (issue #47)" do

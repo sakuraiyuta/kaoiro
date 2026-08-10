@@ -43,6 +43,18 @@ config :kaoiro_server,
          "kaoiro_test_agent_directory_#{run_nonce}.dets"
        )
 
+# Per-run throwaway DETS file for the user identity ledger (issue #197,
+# ADR-0050 D1). Same run_nonce isolation as the store above — without
+# it, concurrent `mix test` invocations share the default
+# $TMPDIR/kaoiro_users.dets file and open the same DETS table from
+# multiple BEAMs (issue #187's failure mode, reproduced by もも).
+config :kaoiro_server,
+       :users_path,
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_users_#{run_nonce}.dets"
+       )
+
 config :kaoiro_server,
        :clear_watermarks_path,
        Path.join(

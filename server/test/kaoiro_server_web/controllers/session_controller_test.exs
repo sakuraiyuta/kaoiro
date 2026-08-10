@@ -62,6 +62,28 @@ defmodule KaoiroServerWeb.SessionControllerTest do
     assert conn.status == 400
   end
 
+  test "create: token login で user が解決され、繰り返しログインで同じ user になる (issue #197)",
+       %{conn: conn} do
+    token = "tok-op-#{System.unique_integer([:positive])}"
+    Application.put_env(:kaoiro_server, :client_tokens, "#{token}:operator:CI Runner")
+
+    conn = conn |> json_req() |> post("/session/new", %{token: token})
+    assert conn.status == 204
+
+    # get_or_create/4 on the same source returns the EXISTING entry
+    # (display_name unaffected by the nil passed here), so this
+    # indirectly proves the controller already created it with the
+    # configured name.
+    source = {:token, Auth.client_token_hash(token)}
+    user = KaoiroServer.Users.get_or_create(source, "user", nil)
+    assert user.display_name == "CI Runner"
+
+    conn2 = build_conn() |> json_req() |> post("/session/new", %{token: token})
+    assert conn2.status == 204
+
+    assert KaoiroServer.Users.get_or_create(source, "user", nil).id == user.id
+  end
+
   test "ticket: 有効な session から検証可能な WS チケットを発行する", %{conn: conn} do
     Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
 

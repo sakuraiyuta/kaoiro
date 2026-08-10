@@ -59,6 +59,33 @@ defmodule KaoiroServerWeb.AuthControllerTest do
       assert get_session(conn, "oauth_session_params") == nil
     end
 
+    test "許可された login で user が解決され display_name に provider 名を使う (issue #197)", %{
+      conn: conn
+    } do
+      configure_nextcloud()
+      put_allowlist("nextcloud:ao:operator")
+      stub_provider()
+
+      callback(conn)
+
+      user = KaoiroServer.Users.get_or_create({:oauth, "nextcloud", "ao"}, "user", nil)
+      assert user.display_name == "ao"
+    end
+
+    test "同じ identity での再ログインは同じ user_id になる (issue #197)", %{conn: conn} do
+      configure_nextcloud()
+      put_allowlist("nextcloud:ao:operator")
+      stub_provider()
+      callback(conn)
+      first = KaoiroServer.Users.get_or_create({:oauth, "nextcloud", "ao"}, "user", nil)
+
+      stub_provider()
+      callback(build_conn())
+      second = KaoiroServer.Users.get_or_create({:oauth, "nextcloud", "ao"}, "user", nil)
+
+      assert first.id == second.id
+    end
+
     test "provider の access token は session に残らない", %{conn: conn} do
       configure_nextcloud()
       put_allowlist("nextcloud:ao:operator")

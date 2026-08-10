@@ -67,6 +67,12 @@ defmodule KaoiroServer.Application do
       # Lets operator-driven restore work after a server restart when
       # AgentStates is empty.
       KaoiroServer.AgentDirectory,
+      # Restart-surviving user identity ledger — user_id → {kind,
+      # display_name} (issue #197, ADR-0050 D1 Phase A). Resolved from
+      # OAuth login / shared-token login before either writes its
+      # session cookie, so it must be up before Endpoint (below) starts
+      # serving those requests.
+      KaoiroServer.Users,
       # Per-conversation hard limits for inter-agent messaging
       # (protocol-inter-agent spec, phase-8 Stage B).
       KaoiroServer.ConversationStates,

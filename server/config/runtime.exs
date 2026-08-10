@@ -162,6 +162,17 @@ if path = System.get_env("KAOIRO_SESSION_STARTS_PATH") do
   config :kaoiro_server, :session_starts_path, path
 end
 
+# DETS file for the restart-surviving user identity ledger (issue #197,
+# ADR-0050 D1). Same rationale as the agent identity ledger above: unset
+# falls back to a tmp path (KaoiroServer.Users) that survives a process
+# restart but not a fresh container. A lost entry re-issues a new user_id
+# and resets display_name to its initial value on that source's next
+# login — the acceptance criterion "変更が再起動を跨いで保持される"
+# depends on this being pointed at a persistent volume in production.
+if path = System.get_env("KAOIRO_USERS_PATH") do
+  config :kaoiro_server, :users_path, path
+end
+
 if path = System.get_env("KAOIRO_INGRESS_ORDER_PATH") do
   config :kaoiro_server, :ingress_order_path, path
 end

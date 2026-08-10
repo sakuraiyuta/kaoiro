@@ -203,16 +203,26 @@ defmodule KaoiroServer.OAuth do
   Public because it is the security-relevant half of `callback/3` — in
   particular Google's `email_verified` gate — and unit-testing it
   directly is far cheaper than driving an OIDC discovery + JWKS flow.
+
+  `display_name` is best-effort (the provider's `"name"` claim, nil when
+  absent) and is used only once — to seed
+  `KaoiroServer.Users.get_or_create/4`'s initial_display_name on this
+  identity's first login (issue #197 マスター決裁 2026-08-09 #1: "OAuth
+  user は provider の表示名を初期値とし、以後は kaoiro 内で独立管理する
+  — IdP 側の名前変更には追従しない"). It is not part of the allow-list
+  identity (`provider`/`uid`) and is never persisted to the session.
   """
   @spec identity(binary(), map()) ::
-          {:ok, %{provider: binary(), uid: binary()}} | {:error, :no_identity}
+          {:ok, %{provider: binary(), uid: binary(), display_name: binary() | nil}}
+          | {:error, :no_identity}
   # Google's e-mail is only trusted when the provider says it is
   # verified: the allow-list is written against e-mail addresses, so an
   # unverified one would let anyone claim an allow-listed address.
   def identity("google", user) do
     case {user["email"], user["email_verified"]} do
       {email, true} when is_binary(email) and email != "" ->
-        {:ok, %{provider: "google", uid: String.downcase(email)}}
+        {:ok,
+         %{provider: "google", uid: String.downcase(email), display_name: display_name(user)}}
 
       _other ->
         {:error, :no_identity}
@@ -224,8 +234,22 @@ defmodule KaoiroServer.OAuth do
 
   defp uid_from(user, provider, claim) do
     case user[claim] do
-      uid when is_binary(uid) and uid != "" -> {:ok, %{provider: provider, uid: uid}}
-      _other -> {:error, :no_identity}
+      uid when is_binary(uid) and uid != "" ->
+        {:ok, %{provider: provider, uid: uid, display_name: display_name(user)}}
+
+      _other ->
+        {:error, :no_identity}
+    end
+  end
+
+  defp display_name(user) do
+    case user["name"] do
+      name when is_binary(name) ->
+        trimmed = String.trim(name)
+        if trimmed == "", do: nil, else: trimmed
+
+      _other ->
+        nil
     end
   end
 end

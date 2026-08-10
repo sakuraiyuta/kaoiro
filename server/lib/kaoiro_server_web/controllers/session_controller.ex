@@ -30,6 +30,8 @@ defmodule KaoiroServerWeb.SessionController do
 
   use KaoiroServerWeb, :controller
 
+  require Logger
+
   alias KaoiroServer.Auth
   alias KaoiroServer.OAuth
   alias KaoiroServer.OAuthAllowlist
@@ -83,6 +85,19 @@ defmodule KaoiroServerWeb.SessionController do
   defp exchange_token(conn, %{"token" => token}) when is_binary(token) and token != "" do
     case Auth.client_role(token) do
       {:ok, _role} ->
+        # Resolves (or, on first use, creates) this token's kaoiro
+        # user_id (issue #197, ADR-0050 D1). The raw token never leaves
+        # this function; only its opaque hash becomes the store's lookup
+        # key, and it is never logged.
+        user =
+          KaoiroServer.Users.get_or_create(
+            {:token, Auth.client_token_hash(token)},
+            "user",
+            Auth.client_token_display_name(token)
+          )
+
+        Logger.info("token login: user_id=#{user.id} name=#{inspect(user.display_name)}")
+
         conn
         # One credential per session, mirroring AuthController: a token
         # login supersedes any OAuth identity the same browser held.

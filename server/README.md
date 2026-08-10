@@ -95,15 +95,17 @@ mix dashboard.build   # cd ../dashboard && pnpm build → server/priv/static へ
 
 | env | 形式 | 例 |
 |---|---|---|
-| `KAOIRO_CLIENT_TOKENS` | `token:role,...`(role = `viewer` / `operator`) | `dev-op:operator,view1:viewer` |
+| `KAOIRO_CLIENT_TOKENS` | `token:role[:name],...`(role = `viewer` / `operator`。任意の 3 番目の name は kaoiro 内 user の表示名初期値、issue #197) | `dev-op:operator:Ops Bot,view1:viewer` |
 | `KAOIRO_WRAPPER_TOKENS` | `agent_id:token,...` | `lab-pc-1.claude-a:wrap-tok` |
 | `KAOIRO_RUNNER_TOKENS` | `host_id:token,...` | `lab-pc-1:runner-tok` |
 | `KAOIRO_OAUTH_{GOOGLE,GITHUB,NEXTCLOUD}_CLIENT_{ID,SECRET}` | provider ごとの OAuth クレデンシャル(Nextcloud は `KAOIRO_OAUTH_NEXTCLOUD_BASE_URL` も) | — |
 | `KAOIRO_OAUTH_ALLOWLIST_PATH` | 許可リストのパス。1 行 `provider:identifier[:role]`(role 省略 = `viewer`)。**未設定/読めない場合は全 OAuth ログインを拒否**(fail-closed) | `/etc/kaoiro/oauth-allowlist.txt` |
 
-**形式の注意**: `KAOIRO_CLIENT_TOKENS` は `<token>:<role>` の順。生成した
-シークレット(例 `openssl rand -hex 32`)は **`<token>` 側(コロンの前)** に
-置き、role(`operator` / `viewer`)を後ろに書く。例
+**形式の注意**: `KAOIRO_CLIENT_TOKENS` は `<token>:<role>[:<name>]` の順。
+生成したシークレット(例 `openssl rand -hex 32`)は **`<token>` 側(コロンの
+前)** に置き、role(`operator` / `viewer`)を後ろに書く。省略可能な
+`<name>` はこの token での初回ログイン時にだけ使われる表示名の初期値で、
+以後は kaoiro 側で独立管理される(issue #197)。例
 `KAOIRO_CLIENT_TOKENS=<hex>:operator`。`KAOIRO_WRAPPER_TOKENS` は逆順で
 `<agent_id>:<token>`。
 

@@ -150,7 +150,7 @@ defmodule KaoiroServer.Auth do
   (fail-closed, issue #28) — never granted operator.
   """
   def client_role(token) do
-    tokens = parse_pairs(Application.get_env(:kaoiro_server, :client_tokens))
+    tokens = parse_client_pairs(Application.get_env(:kaoiro_server, :client_tokens))
 
     # Fail closed: an empty token map makes role_for/2 return nil for any
     # token, so no client can authenticate. A misconfigured deployment is
@@ -162,10 +162,51 @@ defmodule KaoiroServer.Auth do
     end
   end
 
+  @doc """
+  The configured display name for a shared token (a `token:role:name`
+  entry — issue #197 マスター決裁 2026-08-09 #1), or nil when the entry
+  omits one or the token is unknown. Used only to seed
+  `KaoiroServer.Users.get_or_create/4`'s initial_display_name on a
+  token's first login; display_name is independently managed by the
+  Users store afterward, so this is never re-read once a user exists
+  for the token.
+  """
+  def client_token_display_name(token) when is_binary(token) do
+    tokens = parse_client_pairs(Application.get_env(:kaoiro_server, :client_tokens))
+
+    Enum.reduce(tokens, nil, fn {expected, %{name: name}}, acc ->
+      if matches?(expected, token), do: name, else: acc
+    end)
+  end
+
+  def client_token_display_name(_token), do: nil
+
+  @doc """
+  Opaque digest of a shared token for use ONLY as a
+  `KaoiroServer.Users` secondary-index key (issue #197). Distinct from
+  `socket_id/1` (which serves disconnect broadcasts and is itself
+  exposed as a socket address) — this digest is not returned to any
+  caller outside `KaoiroServer.Users` and MUST NOT reach a log line or
+  wire payload (director review, issue #197): sha256 cannot be reversed
+  to the token, but the digest is still an unnecessary correlation
+  handle if it leaked into an audit trail.
+
+  Deliberately no fallback clause (unlike `socket_id/1` /
+  `client_token_display_name/1`, both of which return nil for a
+  missing/blank token): every call site already holds a token that just
+  passed `client_role/1`, so a nil/blank/non-binary argument here is a
+  caller bug, not a runtime "no token" case — a `FunctionClauseError`
+  surfaces that immediately instead of silently hashing garbage into
+  the Users store's index.
+  """
+  def client_token_hash(token) when is_binary(token) and token != "" do
+    Base.url_encode64(:crypto.hash(:sha256, token), padding: false)
+  end
+
   defp role_for(tokens, token) when is_binary(token) do
     # Constant-time scan: compare against every entry so lookup timing
     # does not reveal whether a token exists.
-    Enum.reduce(tokens, nil, fn {expected, role}, acc ->
+    Enum.reduce(tokens, nil, fn {expected, %{role: role}}, acc ->
       if matches?(expected, token), do: parse_role(role), else: acc
     end)
   end
@@ -202,7 +243,7 @@ defmodule KaoiroServer.Auth do
   fail-closed the same way: no configured tokens means no match.
   """
   def client_role_by_fingerprint(fingerprint) when is_binary(fingerprint) do
-    tokens = parse_pairs(Application.get_env(:kaoiro_server, :client_tokens))
+    tokens = parse_client_pairs(Application.get_env(:kaoiro_server, :client_tokens))
 
     case role_by_fingerprint(tokens, fingerprint) do
       nil -> {:error, :unauthorized}
@@ -213,7 +254,7 @@ defmodule KaoiroServer.Auth do
   def client_role_by_fingerprint(_fingerprint), do: {:error, :unauthorized}
 
   defp role_by_fingerprint(tokens, fingerprint) do
-    Enum.reduce(tokens, nil, fn {token, role}, acc ->
+    Enum.reduce(tokens, nil, fn {token, %{role: role}}, acc ->
       if fingerprint_matches?(token, fingerprint), do: parse_role(role), else: acc
     end)
   end
@@ -249,7 +290,7 @@ defmodule KaoiroServer.Auth do
   token form when a token can actually authenticate (ADR-0042).
   """
   def token_auth_enabled? do
-    parse_pairs(Application.get_env(:kaoiro_server, :client_tokens)) != %{}
+    parse_client_pairs(Application.get_env(:kaoiro_server, :client_tokens)) != %{}
   end
 
   @doc """
@@ -271,7 +312,7 @@ defmodule KaoiroServer.Auth do
   startup call.
   """
   def warn_token_config do
-    if parse_pairs(Application.get_env(:kaoiro_server, :client_tokens)) == %{} do
+    if parse_client_pairs(Application.get_env(:kaoiro_server, :client_tokens)) == %{} do
       Logger.warning(
         "KAOIRO_CLIENT_TOKENS unset: client connections are rejected " <>
           "(no token can authenticate). Set it to grant viewer/operator " <>
@@ -344,4 +385,32 @@ defmodule KaoiroServer.Auth do
   end
 
   defp parse_pairs(_raw), do: %{}
+
+  # "token:role[:name]" -> %{token => %{role: "operator"|"viewer", name:
+  # binary | nil}}. Kept separate from parse_pairs/1 (shared by
+  # wrapper_tokens/runner_tokens, which have no name concept) so a ':'
+  # inside a configured name cannot desync those pair lists (issue #197
+  # マスター決裁 2026-08-09 #1, "共有トークン user は token の設定名を
+  # 初期値とする").
+  defp parse_client_pairs(raw) when is_binary(raw) and raw != "" do
+    raw
+    |> String.split(",", trim: true)
+    |> Enum.reduce(%{}, fn pair, acc ->
+      case String.split(pair, ":", parts: 3) do
+        [token, role] when token != "" and role != "" ->
+          Map.put(acc, String.trim(token), %{role: String.trim(role), name: nil})
+
+        [token, role, name] when token != "" and role != "" ->
+          trimmed_name = String.trim(name)
+          name = if trimmed_name == "", do: nil, else: trimmed_name
+          Map.put(acc, String.trim(token), %{role: String.trim(role), name: name})
+
+        _ ->
+          Logger.warning("ignoring malformed auth token entry")
+          acc
+      end
+    end)
+  end
+
+  defp parse_client_pairs(_raw), do: %{}
 end

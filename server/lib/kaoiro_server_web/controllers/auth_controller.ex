@@ -92,7 +92,7 @@ defmodule KaoiroServerWeb.AuthController do
     auth_error(conn, "invalid_state")
   end
 
-  defp grant(conn, %{provider: provider, uid: uid} = identity) do
+  defp grant(conn, %{provider: provider, uid: uid, display_name: display_name}) do
     case OAuthAllowlist.role_for(provider, uid) do
       nil ->
         # The uid is logged on purpose: it is the exact string the
@@ -104,11 +104,28 @@ defmodule KaoiroServerWeb.AuthController do
         auth_error(conn, "not_allowed")
 
       _role ->
+        # Resolves (or, on a first login, creates) this identity's kaoiro
+        # user_id (issue #197, ADR-0050 D1). display_name falls back to
+        # uid when the provider gave none (マスター決裁 2026-08-09 #1).
+        user =
+          KaoiroServer.Users.get_or_create(
+            {:oauth, provider, uid},
+            "user",
+            display_name || uid
+          )
+
+        Logger.info(
+          "OAuth login: user_id=#{user.id} name=#{inspect(user.display_name)} " <>
+            "provider=#{provider}"
+        )
+
         conn
         # One credential per session: an OAuth login supersedes any
-        # shared token the same browser had exchanged earlier.
+        # shared token the same browser had exchanged earlier. The
+        # session keeps only provider/uid — display_name is not
+        # re-derived from it (Users is the SoT after creation).
         |> delete_session("client_token")
-        |> put_session(@identity_key, identity)
+        |> put_session(@identity_key, %{provider: provider, uid: uid})
         |> redirect(to: "/index.html")
     end
   end
