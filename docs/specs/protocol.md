@@ -243,6 +243,11 @@ todo の変更には後で flush する token/tool signal が無いため、そ�
 いずれも親 thread の list のみを対象にする。wrapper transport は socket 再接続時に
 active `task` entity を fresh seq で再送する。これにより旧 channel の terminate が
 server の task table を purge した後も、tasklist の content dedupe に妨げられず復元される。
+再送用の wrapper cache は `5,000` entity / JSON `6,000,000` bytes を上限にする。`completed`
+を受けない crash/kill 済み child task を無限に残さないためで、超過時は最終更新が最も古い
+child entity から cache 外へ退避し、wrapper は stderr に警告する。`tasklist` は parent 自身の
+単一 snapshot なので他に退避対象がある限り保持する。これは再接続時の local memory bound であり、
+multi-wrapper をまたぐ server 側 TaskStates の ingress/byte bound に代わるものではない。
 
 ### 方向別メッセージ種別(v0 確定)
 

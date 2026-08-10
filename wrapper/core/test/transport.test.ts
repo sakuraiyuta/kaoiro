@@ -79,6 +79,8 @@ vi.mock("phoenix", () => {
 vi.stubGlobal("WebSocket", class {});
 
 import {
+  MAX_ACTIVE_TASK_CACHE_BYTES,
+  MAX_ACTIVE_TASK_CACHE_ENTRIES,
   MAX_REPLAY_IA_PUSH_BYTES,
   ServerLink,
   chunkReplayIaItems,
@@ -186,6 +188,89 @@ describe("ServerLink — reconnect active task replay (issue #188)", () => {
     mock.onOpen?.();
 
     expect(mock.pushes).toEqual([]);
+  });
+
+  it("未完了の終端 event がなくても reconnect cache を bound し、tasklist を優先して残す", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const base = {
+      version: "0", agent_id: "a.agent",
+      persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      ts: "T", type: "task", state: "thinking", ext: {},
+    };
+
+    link.send({
+      ...base,
+      payload: {
+        agent_id: "a.agent", task_id: "tasklist", task_type: "tasklist",
+        kind: "updated", status: "running", items: [{ text: "調査", status: "pending" }],
+      },
+    } as Envelope);
+    for (let index = 1; index <= MAX_ACTIVE_TASK_CACHE_ENTRIES; index += 1) {
+      link.send({
+        ...base,
+        payload: {
+          agent_id: "a.agent", task_id: `child-${index}`, task_type: "local_agent",
+          kind: "started", status: "running",
+        },
+      } as Envelope);
+    }
+
+    mock.pushes = [];
+    mock.onOpen?.();
+    const replayedIds = mock.pushes.map(
+      ({ payload }) => (payload as Envelope).payload.task_id,
+    );
+
+    expect(replayedIds).toHaveLength(MAX_ACTIVE_TASK_CACHE_ENTRIES);
+    expect(replayedIds).toContain("tasklist");
+    expect(replayedIds).not.toContain("child-1");
+    expect(replayedIds).toContain(`child-${MAX_ACTIVE_TASK_CACHE_ENTRIES}`);
+    expect(stderr).toHaveBeenCalledOnce();
+    stderr.mockRestore();
+  });
+
+  it("JSON byte ceiling も reconnect cache に適用する", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const base = {
+      version: "0", agent_id: "a.agent",
+      persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      ts: "T", type: "task", state: "thinking", ext: {},
+    };
+    const summary = "x".repeat(64_000);
+    const sample = {
+      ...base,
+      payload: {
+        agent_id: "a.agent", task_id: "large-0", task_type: "local_agent",
+        kind: "started", status: "running", summary,
+      },
+    } as Envelope;
+    const count = Math.floor(
+      MAX_ACTIVE_TASK_CACHE_BYTES / Buffer.byteLength(JSON.stringify(sample), "utf8"),
+    ) + 1;
+
+    for (let index = 0; index < count; index += 1) {
+      link.send({
+        ...base,
+        payload: {
+          agent_id: "a.agent", task_id: `large-${index}`, task_type: "local_agent",
+          kind: "started", status: "running", summary,
+        },
+      } as Envelope);
+    }
+
+    mock.pushes = [];
+    mock.onOpen?.();
+    const replayedIds = mock.pushes.map(
+      ({ payload }) => (payload as Envelope).payload.task_id,
+    );
+
+    expect(replayedIds.length).toBeLessThan(count);
+    expect(replayedIds).not.toContain("large-0");
+    expect(replayedIds).toContain(`large-${count - 1}`);
+    expect(stderr).toHaveBeenCalledOnce();
+    stderr.mockRestore();
   });
 });
 

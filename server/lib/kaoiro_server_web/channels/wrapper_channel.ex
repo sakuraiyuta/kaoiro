@@ -66,6 +66,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # for its per-agent outer-key-overhead arithmetic.
   @max_task_id_field_bytes 256
 
+  # issue #188 / ADR-0049 F4: a tasklist is a bounded whole-list snapshot,
+  # not an unbounded transcript. These ingress caps deliberately mirror the
+  # wrapper-side normalizer; the server still verifies them because wrappers
+  # are a trust boundary, and a bypass must not inflate TaskStates/snapshots.
+  @max_tasklist_items 50
+  @max_tasklist_item_text_bytes 256
+  @max_tasklist_items_json_bytes 16_384
+
   # Upper bound on conversations notified in one disconnect (#131). Phase 1
   # caps a conversation at 2 agents and a wrapper realistically holds a
   # handful; the tracker's own cap is global (max_conversations), so without
@@ -1075,7 +1083,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
        when payload_agent_id == agent_id do
     with :ok <- require_task_field(payload, "task_id", @max_task_id_field_bytes),
          :ok <- require_task_field(payload, "task_type"),
-         :ok <- require_task_kind_status(payload) do
+         :ok <- require_task_kind_status(payload),
+         :ok <- validate_tasklist_payload(payload) do
       :ok
     end
   end
@@ -1104,6 +1113,96 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp require_task_kind_status(_payload), do: {:error, "invalid value: payload.kind"}
+
+  # `tasklist` is one reserved entity per parent agent. Guard the reservation
+  # both ways: accepting only the task_type -> task_id half would let an
+  # ordinary child task deliberately use the fixed tasklist key and replace
+  # the parent's todo snapshot in TaskStates.
+  defp validate_tasklist_payload(
+         %{
+           "task_type" => "tasklist",
+           "task_id" => "tasklist",
+           "kind" => "updated",
+           "status" => "running"
+         } = payload
+       ),
+       do: validate_tasklist_contents(payload)
+
+  # A tasklist is an LWW snapshot, not a child task lifecycle. In particular,
+  # `completed` would erase this entity from TaskStates and make an empty list
+  # indistinguishable from absent state, while `started` has no semantic role.
+  defp validate_tasklist_payload(%{"task_type" => "tasklist", "task_id" => "tasklist"}),
+    do: {:error, "tasklist requires payload.kind=updated and payload.status=running"}
+
+  defp validate_tasklist_payload(%{"task_type" => "tasklist"}),
+    do: {:error, "tasklist requires payload.task_id=tasklist"}
+
+  defp validate_tasklist_payload(%{"task_id" => "tasklist"}),
+    do: {:error, "payload.task_id=tasklist requires payload.task_type=tasklist"}
+
+  defp validate_tasklist_payload(_payload), do: :ok
+
+  # An empty array is valid: it is the LWW update that says this parent has no
+  # todo items right now. `omitted`, when present, is a structured aggregate
+  # rather than a fake display item so the dashboard can retain an honest
+  # completed/total count even after wrapper-side truncation.
+  defp validate_tasklist_contents(%{"items" => items} = payload) when is_list(items) do
+    with :ok <- validate_tasklist_item_count(items),
+         :ok <- validate_tasklist_items(items),
+         :ok <- validate_tasklist_items_json_size(items),
+         :ok <- validate_tasklist_omitted(payload) do
+      :ok
+    end
+  end
+
+  defp validate_tasklist_contents(_payload), do: {:error, "invalid value: payload.items"}
+
+  defp validate_tasklist_item_count(items) when length(items) <= @max_tasklist_items, do: :ok
+
+  defp validate_tasklist_item_count(_items),
+    do: {:error, "payload.items exceeds tasklist item limit"}
+
+  defp validate_tasklist_items(items) do
+    if Enum.all?(items, &valid_tasklist_item?/1) do
+      :ok
+    else
+      {:error, "invalid value: payload.items"}
+    end
+  end
+
+  defp valid_tasklist_item?(%{"text" => text, "status" => status})
+       when is_binary(text) and byte_size(text) <= @max_tasklist_item_text_bytes and
+              status in ["pending", "in_progress", "completed"],
+       do: true
+
+  defp valid_tasklist_item?(_item), do: false
+
+  # JSON byte length, rather than raw text byte lengths, is the real wire
+  # bound: quotes/backslashes grow when Jason escapes them. `Jason.encode/1`
+  # also keeps a direct caller with an otherwise-unencodable test value from
+  # crashing the channel process.
+  defp validate_tasklist_items_json_size(items) do
+    case Jason.encode(items) do
+      {:ok, json} when byte_size(json) <= @max_tasklist_items_json_bytes -> :ok
+      {:ok, _json} -> {:error, "payload.items exceeds tasklist JSON byte limit"}
+      {:error, _reason} -> {:error, "invalid value: payload.items"}
+    end
+  end
+
+  defp validate_tasklist_omitted(%{"omitted" => omitted})
+       when is_map(omitted) do
+    case omitted do
+      %{"count" => count, "completed" => completed}
+      when is_integer(count) and count > 0 and is_integer(completed) and completed >= 0 and
+             completed <= count ->
+        :ok
+
+      _ ->
+        {:error, "invalid value: payload.omitted"}
+    end
+  end
+
+  defp validate_tasklist_omitted(_payload), do: :ok
 
   defp fetch_reset_mode(%{"mode" => mode}) when mode in @session_reset_modes,
     do: {:ok, mode}

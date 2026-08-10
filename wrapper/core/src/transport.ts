@@ -146,6 +146,26 @@ export type InterAgentAcceptance =
  * order of magnitude of headroom. */
 export const MAX_REPLAY_IA_PUSH_BYTES = 1_000_000;
 
+/**
+ * Bounds the reconnect-only cache of active task entities. The server's
+ * TaskStates table applies the same two ceilings globally; this local cache
+ * needs its own limits because a missing `completed` event (crash/kill) would
+ * otherwise retain an entity for the entire wrapper process lifetime.
+ *
+ * The byte limit measures the cached envelope's actual JSON representation,
+ * rather than estimating from a field such as `summary`. It therefore also
+ * bounds future task payload extensions. These are cache limits, not a
+ * promise that a concurrently busy multi-wrapper server will accept every
+ * re-announcement — server ingress remains authoritative for that.
+ */
+export const MAX_ACTIVE_TASK_CACHE_ENTRIES = 5_000;
+export const MAX_ACTIVE_TASK_CACHE_BYTES = 6_000_000;
+
+interface ActiveTaskCacheEntry {
+  envelope: Envelope;
+  jsonBytes: number;
+}
+
 /** Splits replay rows into pushes that stay under `maxBytes` of JSON.
  *
  *  A single row that cannot fit the budget at all is DROPPED, not sent
@@ -543,8 +563,18 @@ export class ServerLink {
   #lastEnvelope: Envelope | null = null;
   /** Active task entities by task_id. Unlike logs/results, these are current
    * state that must be re-announced after WrapperChannel purges the old
-   * connection's TaskStates entry. `kind=completed` removes its entity. */
-  readonly #activeTasks = new Map<string, Envelope>();
+   * connection's TaskStates entry. `kind=completed` removes its entity.
+   *
+   * Map insertion order is a least-recently-updated queue. A wrapper can miss
+   * a completion when a child crashes, so this cache may not grow without
+   * bound while the process lives: `#rememberActiveTask` evicts its oldest
+   * entry to the documented count/byte ceilings. `tasklist` is retained in
+   * preference to ordinary child tasks because it is the parent agent's sole
+   * current todo snapshot; an overflow writes one bounded stderr warning
+   * instead of silently claiming reconnect recovery is complete. */
+  readonly #activeTasks = new Map<string, ActiveTaskCacheEntry>();
+  #activeTaskCacheBytes = 0;
+  #activeTaskCacheOverflowWarned = false;
   /** Latest SDK session id reported by the host (ADR-0014 phase-0); stamped
    *  onto every outgoing envelope until a newer one replaces it. */
   #sessionId: string | null = null;
@@ -736,7 +766,7 @@ export class ServerLink {
     // client until the channel rejoins. send() stamps a fresh seq.
     this.#socket.onOpen(() => {
       if (this.#lastEnvelope) this.send(this.#lastEnvelope);
-      for (const task of [...this.#activeTasks.values()]) this.send(task);
+      for (const task of [...this.#activeTasks.values()]) this.send(task.envelope);
     });
 
     // Surface join failures; the client retries the join on its own, but a
@@ -841,11 +871,76 @@ export class ServerLink {
     const kind = envelope.payload.kind;
     if (typeof taskId !== "string" || taskId === "") return;
     if (kind === "completed") {
-      this.#activeTasks.delete(taskId);
+      this.#dropActiveTask(taskId);
       return;
     }
     if (kind === "started" || kind === "updated") {
-      this.#activeTasks.set(taskId, envelope);
+      const jsonBytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+
+      // Replace before checking capacity so an update can reclaim its former
+      // size. Deleting then setting also moves it to the newest end of the
+      // LRU order, which is exactly the activity signal this cache has.
+      this.#dropActiveTask(taskId);
+      if (jsonBytes > MAX_ACTIVE_TASK_CACHE_BYTES) {
+        this.#warnActiveTaskCacheOverflow();
+        return;
+      }
+
+      this.#activeTasks.set(taskId, { envelope, jsonBytes });
+      this.#activeTaskCacheBytes += jsonBytes;
+      this.#trimActiveTaskCache();
+    }
+  }
+
+  #dropActiveTask(taskId: string): void {
+    const previous = this.#activeTasks.get(taskId);
+    if (!previous) return;
+    this.#activeTasks.delete(taskId);
+    this.#activeTaskCacheBytes -= previous.jsonBytes;
+    this.#resetActiveTaskCacheWarningIfBelowCapacity();
+  }
+
+  #trimActiveTaskCache(): void {
+    let evicted = false;
+    while (
+      this.#activeTasks.size > MAX_ACTIVE_TASK_CACHE_ENTRIES ||
+      this.#activeTaskCacheBytes > MAX_ACTIVE_TASK_CACHE_BYTES
+    ) {
+      // `tasklist` is a single parent-owned snapshot, unlike the potentially
+      // stale child entries that made this cache need a lifecycle bound. Keep
+      // it when any ordinary task is available to evict; if it is the only
+      // entry it is necessarily within the per-envelope byte ceiling above.
+      let oldest: [string, ActiveTaskCacheEntry] | undefined;
+      for (const entry of this.#activeTasks.entries()) {
+        if (!oldest) oldest = entry;
+        if (entry[0] !== "tasklist") {
+          oldest = entry;
+          break;
+        }
+      }
+      if (!oldest) break;
+
+      const [taskId] = oldest;
+      this.#dropActiveTask(taskId);
+      evicted = true;
+    }
+    if (evicted) this.#warnActiveTaskCacheOverflow();
+  }
+
+  #warnActiveTaskCacheOverflow(): void {
+    if (this.#activeTaskCacheOverflowWarned) return;
+    this.#activeTaskCacheOverflowWarned = true;
+    process.stderr.write(
+      "ServerLink active-task replay cache reached its 5000-entity / 6000000-byte bound; oldest task entries were not retained for reconnect replay\n",
+    );
+  }
+
+  #resetActiveTaskCacheWarningIfBelowCapacity(): void {
+    if (
+      this.#activeTasks.size < MAX_ACTIVE_TASK_CACHE_ENTRIES &&
+      this.#activeTaskCacheBytes < MAX_ACTIVE_TASK_CACHE_BYTES
+    ) {
+      this.#activeTaskCacheOverflowWarned = false;
     }
   }
 
