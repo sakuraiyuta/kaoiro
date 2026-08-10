@@ -41,6 +41,8 @@ defmodule KaoiroServer.FooterAssetsTest do
     assert footer =~ "代替生成しない"
     assert footer =~ "役割名"
     assert footer =~ "利用可能 tool を全て列挙"
+    assert footer =~ "メッセージの行頭に `#` を置かない"
+    assert footer =~ "`issue #NNN` のように語を前置すること"
     # trim 済み (F6) — priv ファイル末尾の改行は実効値に載らない。
     refute String.ends_with?(footer, "\n")
   end
