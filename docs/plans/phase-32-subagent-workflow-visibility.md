@@ -109,11 +109,23 @@ AgentCard と同じ絶対サイズ(sprite: 2rem/0.72rem、face: 1.35rem/0.49rem)
 `TaskRing.svelte` に新規 `topOffset` prop(既定は AgentCard 既存の
 `-2%`)を追加し、AgentDetail からは `topOffset="6%"` を渡して頭上退避の
 アンカーを下(顔寄り)へシフトすることで解消した(顔に多少かかるのは
-マスター了承済み)。Playwright e2e に T11(1600px 幅広デスクトップ)を
-新設し、CSS アニメーションを Web Animations API で最遠点(0%/100%
-キーフレーム)に静止させ、box-shadow の 6px ブラー込みで `.bar`(戻る
-ボタン)に重ならないことを固定(修正前の値に戻すと実際に失敗すること
-も確認済み)。
+マスター了承済み)。Playwright e2e に T11(1600px 幅広デスクトップ、
+sprite/face 両分岐)を新設し、CSS アニメーションを Web Animations API
+で最遠点(0%/100% キーフレーム)に静止させ、box-shadow の 6px ブラー
+込みで `.bar`(戻るボタン)に重ならないことを固定(修正前の値に戻すと
+実際に失敗することも確認済み)。
+
+**狭幅側の検証 (クロエ round2 指摘、2026-08-10)**: `topOffset` の絶対
+寄与(6% × portrait 高さ)は portrait が大きいほど効く一方、
+`orbitRy` はキャップで一定(0.72rem)なので、`.portrait` が
+`max-width: 8rem` になる BottomSheet モードは理論上ワースト側になり
+うる。「広い方で安全だから比例して安全」と実測せず結論しない方針
+(クロエ自身が cqw の上限を実測せず判断したことが今回の不具合の原因、
+という自己指摘あり)で 844px sheet-open でも同じ幾何チェックを T11 へ
+追加。実測では `.bar` はページ最上部固定、`.portrait` は BottomSheet
+として画面下部にオーバーレイされ 300px 超のマージンがあり、
+8rem キャップと `.bar` 隣接は同一レイアウトで同時に起こらないことを
+確認(8rem キャップは常に BottomSheet モード側でのみ有効)。
 
 ## Related
 

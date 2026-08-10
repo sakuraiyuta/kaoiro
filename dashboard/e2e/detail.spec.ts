@@ -1,8 +1,32 @@
 // T4-T8 (phase-31 31-10): AgentDetail status sheet, scroll ownership, and
 // pending-decision reachability across the ADR-0052 breakpoints.
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const DETAIL = "/e2e/harness/index.html?view=detail";
+
+// T11 (issue #180 follow-up) 幾何回帰の共通ヘルパー。
+
+/** Web Animations API でアニメーションを 0ms (真上、最も高く伸びる点) へ
+ *  固定する — ランダムな再生位置での flaky を避ける。 */
+async function freezeRingAtApex(ring: Locator): Promise<void> {
+  await ring.evaluate((el) => {
+    const anim = (el as HTMLElement).getAnimations()[0];
+    anim.pause();
+    anim.currentTime = 0;
+  });
+}
+
+/** リングの最遠点(真上)が box-shadow の 6px ブラー込みで .bar(「グリッド
+ *  へ戻る」ボタン行)に重ならないことを確認する。呼び出し前に
+ *  freezeRingAtApex 済みであること。 */
+async function expectRingClearsBar(page: Page, ring: Locator): Promise<void> {
+  const ringBox = (await ring.boundingBox())!;
+  const barBox = (await page.locator(".bar").boundingBox())!;
+  const GLOW_BLEED_PX = 6; // box-shadow: 0 0 6px var(--fg)
+  expect(ringBox.y - GLOW_BLEED_PX).toBeGreaterThanOrEqual(
+    barBox.y + barBox.height,
+  );
+}
 
 test.describe("T4: detail status — sidebar ⇔ sheet at 1199/1198", () => {
   test("1199px: status renders as the left sidebar, no handle", async ({ page }) => {
@@ -129,14 +153,6 @@ test.describe("T11: 頭上リング (AgentDetail, issue #180 follow-up)", () => 
     await expect(page.locator("aside.status .portrait .task-ring")).toHaveCount(0);
   });
 
-  test("844px sheet open: taskRing=1 で .task-ring が描画される", async ({ page }) => {
-    await page.setViewportSize({ width: 844, height: 900 });
-    await page.goto(`${DETAIL}&taskRing=1`);
-    await page.locator(".sheet .handle .toggle").click();
-    const ring = page.locator("aside.status .portrait .task-ring");
-    await expect(ring).toBeVisible();
-  });
-
   // M1 regression (マスター実機確認, 2026-08-10): 広いデスクトップでは
   // `.status` の flex 比率で `.portrait` が 8rem を大きく超え、cqw だけの
   // 軌道半径だと肥大して .bar(「グリッドへ戻る」ボタン)まで到達して
@@ -167,19 +183,36 @@ test.describe("T11: 頭上リング (AgentDetail, issue #180 follow-up)", () => 
       await expect(ring).toHaveClass(
         expectFaceOrbit ? /face-orbit/ : /^(?!.*face-orbit).*$/,
       );
-      // Web Animations API でアニメーションを 0ms (真上、最も高く伸びる点)
-      // へ固定する — ランダムな再生位置での flaky を避ける。
-      await ring.evaluate((el) => {
-        const anim = (el as HTMLElement).getAnimations()[0];
-        anim.pause();
-        anim.currentTime = 0;
-      });
-      const ringBox = (await ring.boundingBox())!;
-      const barBox = (await page.locator(".bar").boundingBox())!;
-      const GLOW_BLEED_PX = 6; // box-shadow: 0 0 6px var(--fg)
-      expect(ringBox.y - GLOW_BLEED_PX).toBeGreaterThanOrEqual(
-        barBox.y + barBox.height,
+      await freezeRingAtApex(ring);
+      await expectRingClearsBar(page, ring);
+    });
+
+    // クロエ round2 指摘 (2026-08-10): 狭幅(.portrait が max-width: 8rem
+    // でキャップされる BottomSheet モード)側は topOffset の絶対寄与
+    // (6% × portrait 高さ)が小さく、orbitRy は同じ絶対値(0.72rem)の
+    // ままなので理論上ワースト側になりうる — 「広い方で安全だから狭い方
+    // も比例して安全」と実測せず結論しないこと(クロエ自身、cqw の上限
+    // を実測せず「比例するから大丈夫」と判断したのが今回の不具合の
+    // 原因、という自己指摘あり)。実測すると .bar はページ最上部に固定、
+    // .portrait は BottomSheet として画面下部にオーバーレイされるため
+    // 空間的に大きく離れており(実測で 300px 超のマージン)、このレイ
+    // アウトでは 8rem キャップと .bar 隣接が同時には起こらない(8rem
+    // キャップは常に BottomSheet モード側でのみ有効 — T4 の
+    // sidebar/sheet 切替と同じ条件分岐)。それでも「たぶん大丈夫」で
+    // 終わらせず、1600px と同じ幾何チェックを固定する。
+    test(`844px sheet open (${label}): 最遠点でも .bar(戻るボタン)に重ならない`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 844, height: 900 });
+      await page.goto(`${DETAIL}&taskRing=1${query}`);
+      await page.locator(".sheet .handle .toggle").click();
+      const ring = page.locator("aside.status .portrait .task-ring");
+      await expect(ring).toBeVisible();
+      await expect(ring).toHaveClass(
+        expectFaceOrbit ? /face-orbit/ : /^(?!.*face-orbit).*$/,
       );
+      await freezeRingAtApex(ring);
+      await expectRingClearsBar(page, ring);
     });
   }
 });
