@@ -341,6 +341,27 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert {:error, %{reason: "unauthorized"}} =
                join_with_token("test.unlisted", "tok-1")
     end
+
+    test "認証拒否 socket の terminate は agent_id 未assign を正常系として扱う (issue #196)" do
+      socket = %Phoenix.Socket{
+        assigns: %{wrapper_token: "wrong"},
+        channel: WrapperChannel
+      }
+
+      assert {:error, %{reason: "unauthorized"}} =
+               WrapperChannel.join(
+                 "wrapper:test.auth-1",
+                 %{"persona_id" => "default"},
+                 socket
+               )
+
+      refute Map.has_key?(socket.assigns, :agent_id)
+
+      # Phoenix.Channel.Server is the real lifecycle caller. It invokes
+      # the channel callback on the pre-join socket even after a rejected
+      # `join/3`, so this test pins the exact path that previously raised.
+      assert :ok = Phoenix.Channel.Server.terminate(:shutdown, socket)
+    end
   end
 
   describe "persona_prompt push と unknown persona reject (ADR-0029)" do

@@ -944,12 +944,16 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp record_snapshot_from_ext(_agent_id, _envelope), do: :ok
 
   @impl true
-  def terminate(_reason, socket) do
+  # Phoenix.Channel.Server invokes this callback even when `join/3` returned
+  # an error. In that normal rejection lifecycle, the original socket has
+  # never reached the successful join branch below and therefore has no
+  # `:agent_id` assign. It has never owned AgentStates, so there is no
+  # disconnect or hydration work to do.
+  def terminate(_reason, %Phoenix.Socket{assigns: %{agent_id: agent_id}}) do
     # Server-derived disconnected (specs/protocol.md). AgentStates only
     # applies it while this channel still owns the entry, so a stale
     # terminate after a reconnect cannot clobber the new state.
     ts = DateTime.utc_now() |> DateTime.to_iso8601()
-    agent_id = socket.assigns.agent_id
 
     # ADR-0051 D2: a replay abandoned mid-way (the wrapper dropped between
     # `history_reset` and the completion boundary) rolls back to
@@ -993,6 +997,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
         :ok
     end
   end
+
+  def terminate(_reason, %Phoenix.Socket{}), do: :ok
 
   defp validate(envelope, agent_id) when is_map(envelope) do
     cond do
