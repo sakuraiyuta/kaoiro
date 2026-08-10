@@ -6,6 +6,7 @@
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
   import TaskRing from "./TaskRing.svelte";
+  import TasklistFloat from "./TasklistFloat.svelte";
   import { randomUUID } from "./uuid";
   import {
     engineFrom,
@@ -36,6 +37,7 @@
     PersonaManifest,
     RunnerSessions,
     SessionResetMode,
+    TasklistSnapshot,
   } from "./protocol";
 
   let {
@@ -49,6 +51,7 @@
     origin = null,
     scrollToEntryKey = null,
     activeTaskCount = 0,
+    tasklist = null,
     onClose,
     onSelectAgent,
   }: {
@@ -81,6 +84,11 @@
      *  `tasks` entry must not leak through — クロエ 2026-08-10); this
      *  component does not re-derive that guard itself. */
     activeTaskCount?: number;
+    /** Latest parent-owned todo snapshot (issue #188). This is intentionally
+     * separate from activeTaskCount: a tasklist is current state for the
+     * conversation-log float, not a child task that may light the portrait
+     * ring. An empty list remains state but the float itself stays hidden. */
+    tasklist?: TasklistSnapshot | null;
     onClose: () => void;
     /** Switch the detail view to another agent (clicked peer link in an
      *  inter-agent message bubble). Omitted = peer name renders as static
@@ -2541,6 +2549,7 @@
     </BottomSheet>
 
     <div class="main">
+      <TasklistFloat agentId={envelope.agent_id} {tasklist} />
       <div
         class="log"
         bind:this={logEl}

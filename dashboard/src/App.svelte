@@ -51,6 +51,7 @@
     purgeTasksForAgent,
     computeActiveTaskCountByAgent,
     activeTaskCountForDetail,
+    tasklistForDetail,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -1403,6 +1404,7 @@
             selectedEnvelope,
             activeTaskCountByAgent,
           )}
+          tasklist={tasklistForDetail(selectedEnvelope, tasks)}
           onClose={() => {
             timelineScrollTarget = null;
             selected = null;
