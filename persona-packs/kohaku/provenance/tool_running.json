@@ -1,0 +1,16 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_8, safe, 1boy, solo, mature male, middle-aged man, japanese, short hair, black hair, grey streaks, salt-and-pepper hair, stubble, thin silver-framed glasses, rimless thin eyeglasses, navy collared shirt, dark blue button-up shirt, upper body, portrait, clean lineart, soft lighting, simple background, white background, sitting at desk, typing on keyboard, desktop computer, looking at monitor, focused, serious, a middle-aged engineer working at a desktop PC with focused eyes",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, logo, glowing, text, watermark, signature, cardigan, sweater, question mark, exclamation mark, speech bubble, symbols, sparkles, black-framed glasses, thick rim glasses",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 87170280435203,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": null,
+  "generated_at": "2026-08-08T18:09:53.692196+09:00",
+  "job_id": "1e4d24aa7d34446fb4c9f9733af27a6b",
+  "source_job_id": null
+}

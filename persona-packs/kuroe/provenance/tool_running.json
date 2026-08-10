@@ -1,0 +1,16 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_9, score_8_up, safe, 1girl, solo, upper body, mature female, black hair, blue hair, bob cut, short hair, monocle, black business suit, formal, white collared shirt, typing, laptop, desk, serious, looking at screen, simple background, white background, clean lineart, flat colors, a composed secretary in her late twenties with sleek blue-black bob hair, a monocle over her right eye, and a chic tailored dark suit, focused at her desk typing briskly on a plain black laptop",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, realistic, multiple views, logo, glowing, text, chibi, glasses",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 78243803967796,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": null,
+  "generated_at": "2026-06-11T14:40:46.266247+09:00",
+  "job_id": "da6c0227a24a406399d6dac12ca0aa8e",
+  "source_job_id": null
+}

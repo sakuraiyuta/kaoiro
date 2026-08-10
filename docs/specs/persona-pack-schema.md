@@ -98,6 +98,27 @@ system footer だけを concat する。結合が server 側の責務である�
 [personas](personas.md) を参照。pack として配布する時点では PNG のみが
 必要。
 
+### provenance/(作業ツリーのみ、zip 非同梱)
+
+`persona-packs/<id>/provenance/<state>.json` は `sprites/<state>.png`
+と 1:1 対応する生成 provenance(再現用パラメータ)。
+`scripts/import-anima-provenance.sh` が Anima dir(生成元 ComfyUI の
+出力ディレクトリ)から sha256 照合で state → 生成ジョブを一意に決定し、
+sanitize して取り込む(所在の背景は [personas](personas.md) 「生成
+実績」参照)。
+
+zip には含まれない。`scripts/build-persona-pack.sh` は
+`manifest.json` / `personality.md` / `sprites` の 3 エントリのみを
+明示列挙するため、`provenance/` を置いても配布物には影響しない
+(開発リポジトリの資産として扱う)。
+
+保持フィールド(allowlist 方式、fail-closed — 未知フィールドは
+取り込み時に警告して落とす): `mode` / `prompt` / `negative` /
+`model` / `architecture` / `seed` / `steps` / `width` / `height` /
+`cfg` / `denoise` / `generated_at` / `job_id` / `source_job_id`。
+`account`(メールアドレス)や `image_url`(署名付き URL、credential
+性)など個人情報・機微情報を含み得るフィールドは取り込み時に除外する。
+
 ## Constraints
 
 - **MUST**: zip の直下に `manifest.json` / `personality.md` / `sprites/`

@@ -179,6 +179,14 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 直配置は phase-10(ADR-0029)で撤去済み。配信 API の形式は
 [protocol](protocol.md) の「ペルソナアセット配信」を参照。
 
+プロンプト本文・steps 等の完全な再現用パラメータは
+`persona-packs/<id>/provenance/<state>.json` を参照
+(フィールド定義・取り込み方式は
+[persona-pack-schema](persona-pack-schema.md) 「provenance/」参照)。
+取り込み済みは ao / momo / kuroe / kohaku の 4 ペルソナ。fuji は
+Anima dir 側に生成物(json)は残るが rembg 前 PNG が `assets-work/` に
+無く、seed は 7 状態で共通のため state を決定論的に特定できず未取り込み。
+
 ### 配布と取り込み(pack ワークフロー)
 
 作成 → 配布 → 運用の全フローは
@@ -187,11 +195,15 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 
 1. **作成者**: `persona-packs/<id>/{manifest.json, personality.md,
    sprites/}` を編集
-2. **build**: `scripts/build-persona-pack.sh` で zip 化(
+2. **provenance 取り込み**(推奨): `scripts/import-anima-provenance.sh
+   <id>` で Anima dir から `persona-packs/<id>/provenance/<state>.json`
+   を生成。rembg 前 PNG が `assets-work/` に無い等で sha256 照合が
+   決定論的に成立しない場合は見送る(fuji の前例参照)。
+3. **build**: `scripts/build-persona-pack.sh` で zip 化(
    `<id>-<version>.zip`)
-3. **管理者**: zip を server の取り込みディレクトリ(env で指定)に drop
-4. **server**: auto-watch が検知して自動展開、manifest を再構築
-5. **wrapper**: 起動時 WS ハンドシェイクで人格プロンプトを server から
+4. **管理者**: zip を server の取り込みディレクトリ(env で指定)に drop
+5. **server**: auto-watch が検知して自動展開、manifest を再構築
+6. **wrapper**: 起動時 WS ハンドシェイクで人格プロンプトを server から
    受信して SDK に注入
    ([persona-personality-injection](persona-personality-injection.md))
 

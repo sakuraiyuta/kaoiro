@@ -1,0 +1,16 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_8, safe, 1boy, solo, mature male, middle-aged man, japanese, short hair, black hair, grey streaks, salt-and-pepper hair, stubble, glasses, navy collared shirt, dark blue button-up shirt, crossed arms, upper body, portrait, calm expression, looking afar, slight smile, clean lineart, soft lighting, simple background, white background, a composed middle-aged engineer with rimmed glasses and arms crossed, gazing calmly into the distance",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, logo, glowing, text, watermark, signature, cardigan, sweater",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 87170280435203,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": null,
+  "generated_at": "2026-08-08T17:37:04.481218+09:00",
+  "job_id": "d1b7e24f24774e02be7740cb6c6f058c",
+  "source_job_id": null
+}

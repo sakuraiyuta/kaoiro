@@ -1,0 +1,16 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_9, score_8_up, safe, 1girl, solo, chibi, full body, standing, blue hair, short hair, blue eyes, blue hoodie, white headphones, black shorts, blue and white sneakers, wide-eyed, surprised, open mouth, sweatdrop, simple background, white background, clean lineart, flat colors, she wears glossy white over-ear headphones with smooth plain white round ear cups and a white headband",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, realistic, multiple views, logo, glowing, text",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 188531704877709,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": null,
+  "generated_at": "2026-06-11T13:48:34.431161+09:00",
+  "job_id": "54b32660192f4c9393d116b6c6c71b04",
+  "source_job_id": null
+}

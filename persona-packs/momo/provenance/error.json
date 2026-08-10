@@ -1,0 +1,16 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_9, score_8_up, safe, 1girl, solo, chibi, full body, standing, pink hair, long hair, twintails, red hair ribbon, pink eyes, pink hoodie, white shorts, pink and white sneakers, tearing up, tears, sad, open mouth, wavy mouth, simple background, white background, clean lineart, flat colors, a cheerful chibi girl with long pink twintails tied with red ribbons, wearing a bright pink hoodie, teary-eyed and flustered",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, realistic, multiple views, logo, glowing, text",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 15180469782598,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": null,
+  "generated_at": "2026-06-11T15:32:40.323363+09:00",
+  "job_id": "a9b1b312f28341039ecd0bbfd9a9258a",
+  "source_job_id": null
+}
