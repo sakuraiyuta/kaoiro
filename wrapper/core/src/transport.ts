@@ -1,9 +1,12 @@
 // Server link — pushes envelopes to the kaoiro server over Phoenix Channels
 // (ADR-0009: Channels only, wire vsn=2.0.0, which the official client speaks).
 // The phoenix client owns reconnect/heartbeat; pushes made while disconnected
-// are buffered and flushed on rejoin. Outbound envelopes get the wrapper's
-// monotonic seq (ADR-0011: one assignment point for the whole series) and the
-// current SDK session_id (protocol.md / ADR-0014 phase-0) stamped here;
+// are buffered and flushed on rejoin. The link also re-announces its latest
+// state and active task entities after a reconnect, because WrapperChannel
+// purges the server-side task table when the old channel terminates. Outbound
+// envelopes get the wrapper's monotonic seq (ADR-0011: one assignment point
+// for the whole series) and the current SDK session_id (protocol.md /
+// ADR-0014 phase-0) stamped here;
 // inbound pushes (instruction / permission_decision, protocol.md) are
 // validated structurally and forwarded to the handlers.
 
@@ -538,6 +541,10 @@ export class ServerLink {
   readonly #channel: Channel;
   #seq = 0;
   #lastEnvelope: Envelope | null = null;
+  /** Active task entities by task_id. Unlike logs/results, these are current
+   * state that must be re-announced after WrapperChannel purges the old
+   * connection's TaskStates entry. `kind=completed` removes its entity. */
+  readonly #activeTasks = new Map<string, Envelope>();
   /** Latest SDK session id reported by the host (ADR-0014 phase-0); stamped
    *  onto every outgoing envelope until a newer one replaces it. */
   #sessionId: string | null = null;
@@ -721,14 +728,15 @@ export class ServerLink {
       options.onInterAgentMessage?.(payload as unknown as Envelope);
     });
 
-    // Re-announce the latest state after a reconnect: the server keeps
-    // agent state in memory only, so a restart (deploy) empties the
-    // snapshot, and an agent absent from it cannot receive instructions.
-    // On the first open #lastEnvelope is null (no-op); on reconnects the
-    // push is buffered by the client until the channel rejoins. send()
-    // stamps a fresh seq.
+    // Re-announce the latest state and active tasks after a reconnect: the
+    // server keeps them in memory only, and WrapperChannel discards TaskStates
+    // when the old connection terminates. A tasklist's wrapper-side exact
+    // snapshot dedupe must not prevent this restoration. On the first open
+    // both caches are empty (no-op); on reconnects pushes are buffered by the
+    // client until the channel rejoins. send() stamps a fresh seq.
     this.#socket.onOpen(() => {
       if (this.#lastEnvelope) this.send(this.#lastEnvelope);
+      for (const task of [...this.#activeTasks.values()]) this.send(task);
     });
 
     // Surface join failures; the client retries the join on its own, but a
@@ -817,6 +825,7 @@ export class ServerLink {
     ) {
       this.#lastEnvelope = envelope;
     }
+    this.#rememberActiveTask(envelope);
     this.#seq += 1;
     const wire = {
       ...envelope,
@@ -824,6 +833,20 @@ export class ServerLink {
       seq: this.#seq,
     } as Envelope;
     return { wire, push: this.#channel.push("envelope", wire) };
+  }
+
+  #rememberActiveTask(envelope: Envelope): void {
+    if (envelope.type !== "task") return;
+    const taskId = envelope.payload.task_id;
+    const kind = envelope.payload.kind;
+    if (typeof taskId !== "string" || taskId === "") return;
+    if (kind === "completed") {
+      this.#activeTasks.delete(taskId);
+      return;
+    }
+    if (kind === "started" || kind === "updated") {
+      this.#activeTasks.set(taskId, envelope);
+    }
   }
 
   /** Sidecar-records an accepted inter-agent send and returns the stamp the

@@ -60,6 +60,13 @@ ThreadItem の派生型 (`item.type`):
 - `todo_list` — items[] (text, completed)
 - `error` — message (非致命 item)
 
+`Thread.runStreamed()` はその `Thread` に結び付いた 1 回の `codex exec` の
+stdout だけを読む。SDK 0.144.1 の `ThreadEvent` union には child thread event も
+item の origin / child-thread ID も無いため、子 thread の item を親 stream へ渡す
+経路は SDK contract に存在しない。したがって 1 `CodexHost` が受ける `todo_list` は
+自身の parent thread のものとして扱う。将来 SDK が子由来 event を追加した場合は、
+provenance を明示検証してから tasklist へ配線する。
+
 **注記**: 起草時に想定した `dynamic_tool_call` item は存在しない。kaoiro の tool 呼び出しはすべて `mcp_tool_call` (server="kaoiro") として観測される ([ADR-0032](../adr/0032-codex-adapter.md) F5 の MCP bridge 経由)。
 
 ### 状態導出
@@ -79,7 +86,8 @@ Codex ThreadEvent → kaoiro 状態 ([protocol](protocol.md)) への導出は共
 | `item.started` (mcp_tool_call, server=kaoiro, tool=ask_user_question) | `waiting_question` — `question_request` envelope ([ADR-0027](../adr/0027-askuserquestion-envelope.md)) は bridge → wrapper handler 側で発行 | MCP 応答までターンがブロックするため成立 |
 | `item.started` (mcp_tool_call, server=kaoiro, tool=send_to_agent 等) | `tool_running` | inter-agent tool、共通 Tool 記述層経由 |
 | `item.started` (mcp_tool_call, 他 server) / (web_search) | `tool_running` | |
-| `item.completed` (todo_list / reasoning) | 状態影響なし | log 化は任意 (MVP では見送り) |
+| `item.started` / `item.updated` / `item.completed` (todo_list) | 状態影響なし、親 agent の `task_type=tasklist` whole-list snapshot を送出 | transcript log 化はしない。`completed: boolean` は protocol の `pending` / `completed` へ写す (issue #188, [protocol](protocol.md) の tasklist 追補) |
+| `item.completed` (reasoning) | 状態影響なし | log 化は任意 (MVP では見送り) |
 | `item.completed` (error item) | 状態影響なし・`log` 相当で記録 | 非致命 |
 | `turn.completed` | `idle` — envelope の `type=result` を発行。USD が無いため `ext.cost` は Codex では**載せない**。`ext.context` も**載せない** ([ADR-0040](../adr/0040-context-usage-capability.md) phase-21): `usage.input_tokens` は per-turn 入力のみで context 使用率にならないため。`ext.session_capabilities.supports_context_usage=false` で UI に「未対応」を advertise する | Claude の SDKResultMessage(success) 相当 |
 | `turn.failed` / `error` | `error` — `state_change(error)` を発行 | Claude の SDKResultMessage(error_*) 相当 |

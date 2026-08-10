@@ -22,7 +22,10 @@ import {
   makeLog,
   makeResult,
   makeStateChange,
+  makeTask,
+  normalizeTasklist,
   stepState,
+  TASKLIST_TASK_ID,
 } from "@kaoiro/agent-common";
 import type {
   AdapterEvent,
@@ -40,6 +43,8 @@ import type {
   InstructionRejectedPayload,
   ResolvedSnapshotExt,
   SwitchErrorExt,
+  TaskPayload,
+  TasklistSourceItem,
   ToolDescriptor,
   WhoamiSnapshot,
   WrapperConfig,
@@ -57,6 +62,7 @@ import {
   threadEventToFinalText,
   threadEventToLogs,
   threadEventToSessionId,
+  threadEventToTasklist,
 } from "./adapter.js";
 import { effortLevelsForModel, resolveCodexCatalog } from "./catalog.js";
 import { effectiveNetworkAccess } from "./network_access.js";
@@ -150,6 +156,9 @@ export interface CodexHostOptions {
   onState: (envelope: Envelope) => void;
   /** Invoked per relayable log line (assistant text / tool call / result). */
   onLog?: (envelope: Envelope) => void;
+  /** Invoked for the parent agent's whole-list todo snapshot (issue #188,
+   * ADR-0049). It is distinct from transcript logs and child-task progress. */
+  onTask?: (envelope: Envelope) => void;
   /** Invoked once per turn boundary (success or error), alongside (not
    *  instead of) onLog's result envelope (issue #131). `conversationId` is
    *  the inter-agent conversation that turn's injection came from (the value
@@ -297,6 +306,9 @@ export class CodexHost implements EngineAdapter {
   #modelResolutionGeneration = 0;
   /** tool_use_id -> tool_name for tool_result backfill (protocol.md #40). */
   readonly #toolNames = new Map<string, string>();
+  /** Exact last tasklist wire content. This de-duplicates repeated SDK
+   * snapshots without applying the child-task time/token throttle. */
+  #lastTasklistJson: string | null = null;
   /** Latest per-window rate-limit snapshot (mirrors AgentHost's #rateLimits).
    *  Populated fire-and-forget from the rollout tail after each terminal
    *  ThreadEvent — Codex has no in-stream rate_limit event, unlike Claude. */
@@ -782,6 +794,8 @@ export class CodexHost implements EngineAdapter {
         for (const entry of threadEventToLogs(event)) {
           this.#emitLog(entry);
         }
+        const tasklist = threadEventToTasklist(event);
+        if (tasklist !== null) this.#emitTasklist(tasklist);
         const last = threadEventToFinalText(event);
         if (last !== null) finalText = last;
         if (event.type === "turn.completed") {
@@ -1167,6 +1181,28 @@ export class CodexHost implements EngineAdapter {
     this.#options.onLog(
       makeLog(this.#config, this.#machine.state, this.#now(), payload),
     );
+  }
+
+  /** Sends a changed whole-list snapshot immediately. Unlike child-task
+   * progress, todo changes have no later token/tool signal that could flush a
+   * throttle-suppressed update, so only an exact content duplicate is skipped. */
+  #emitTasklist(sourceItems: readonly TasklistSourceItem[]): void {
+    const snapshot = normalizeTasklist(sourceItems);
+    const encoded = JSON.stringify(snapshot);
+    if (encoded === this.#lastTasklistJson) return;
+    this.#lastTasklistJson = encoded;
+
+    const onTask = this.#options.onTask;
+    if (onTask === undefined) return;
+    const payload: Omit<TaskPayload, "agent_id"> = {
+      kind: "updated",
+      task_id: TASKLIST_TASK_ID,
+      task_type: "tasklist",
+      status: "running",
+      items: snapshot.items,
+      ...(snapshot.omitted !== undefined ? { omitted: snapshot.omitted } : {}),
+    };
+    onTask(makeTask(this.#config, this.#machine.state, this.#now(), payload));
   }
 
   #emitResult(payload: { text?: string; is_error?: boolean }): void {

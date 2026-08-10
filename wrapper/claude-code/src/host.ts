@@ -32,6 +32,7 @@ import type {
   ResultPayload,
   SwitchErrorExt,
   TaskPayload,
+  TasklistSourceItem,
   WrapperConfig,
   WhoamiSnapshot,
 } from "@kaoiro/agent-common";
@@ -52,9 +53,11 @@ import {
   makeResult,
   makeStateChange,
   makeTask,
+  normalizeTasklist,
   stepState,
+  TASKLIST_TASK_ID,
 } from "@kaoiro/agent-common";
-import type { TaskEvent } from "./adapter.js";
+import type { TaskEvent, TasklistEvent } from "./adapter.js";
 import {
   cwdChangedHookToCwd,
   sdkMessageToCompactNotice,
@@ -68,6 +71,7 @@ import {
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
   sdkMessageToTask,
+  sdkMessageToTasklists,
   sdkMessageToTerminalReason,
 } from "./adapter.js";
 import {
@@ -408,6 +412,11 @@ export class AgentHost implements EngineAdapter {
     string,
     { emittedAtMs: number; totalTokens: number; lastToolName?: string }
   >();
+  /** JSON fingerprint of the latest tasklist emitted to the server. Whole
+   * source lists sometimes repeat on adjacent SDK messages; skip only an
+   * exact repeat, never the time/token throttle used for child-task progress.
+   */
+  #lastTasklistJson: string | null = null;
 
   /** Latest Claude Code status meta (#16), stamped into state_change ext:
    *  active model, working directory, context-window usage, and per-window
@@ -1402,6 +1411,9 @@ export class AgentHost implements EngineAdapter {
         this.#warn(
           `[kaoiro] unrecognized task_* message: subtype=${(message as { subtype: string }).subtype}`,
         );
+      }
+      for (const tasklistEvent of sdkMessageToTasklists(message)) {
+        this.#applyTasklistEvent(tasklistEvent);
       }
       // Compaction / conversation-reset notices (phase-28 A1, #168). Emitted
       // as their own log line rather than folded into sdkMessageToLogs: that
@@ -2435,6 +2447,36 @@ export class AgentHost implements EngineAdapter {
         ? Math.abs(event.usage.total_tokens - prior.totalTokens)
         : 0;
     return toolChanged || tokenDelta >= TASK_UPDATE_TOKEN_DELTA_THRESHOLD;
+  }
+
+  /** Converts one whole-list source update into task_type=tasklist. The
+   * entity deliberately never emits kind=completed: an all-completed or empty
+   * list remains inspectable until the parent session disconnects. */
+  #applyTasklistEvent(event: TasklistEvent): void {
+    if (event.kind === "invalid") {
+      this.#warn(`[kaoiro] ${event.reason} — tasklist update dropped`);
+      return;
+    }
+    this.#emitTasklist(event.items);
+  }
+
+  #emitTasklist(sourceItems: readonly TasklistSourceItem[]): void {
+    const snapshot = normalizeTasklist(sourceItems);
+    const encoded = JSON.stringify(snapshot);
+    if (encoded === this.#lastTasklistJson) return;
+    this.#lastTasklistJson = encoded;
+
+    const onTask = this.#options.onTask;
+    if (!onTask) return;
+    const payload: Omit<TaskPayload, "agent_id"> = {
+      kind: "updated",
+      task_id: TASKLIST_TASK_ID,
+      task_type: "tasklist",
+      status: "running",
+      items: snapshot.items,
+      ...(snapshot.omitted !== undefined ? { omitted: snapshot.omitted } : {}),
+    };
+    onTask(makeTask(this.#config, this.#machine.state, this.#now(), payload));
   }
 
   /** Builds the task envelope and relays it via onTask (issue #180). */

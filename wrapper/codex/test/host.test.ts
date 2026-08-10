@@ -65,6 +65,49 @@ describe("initialStatusExt", () => {
   });
 });
 
+describe("CodexHost — own tasklist envelopes (issue #188)", () => {
+  it("todo_list を tasklist envelope にし、完全重複は送らない", async () => {
+    const tasks: Envelope[] = [];
+    const todoList: ThreadEvent = {
+      type: "item.updated",
+      item: {
+        id: "todos",
+        type: "todo_list",
+        items: [
+          { text: "調査", completed: false },
+          { text: "実装", completed: true },
+        ],
+      },
+    };
+    const { client } = makeClient([[todoList, todoList, usageEvent()]]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      now: () => "T",
+    });
+
+    await runOneTurn(host, "todo");
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      type: "task",
+      payload: {
+        agent_id: "host-1.codex-a",
+        task_id: "tasklist",
+        task_type: "tasklist",
+        kind: "updated",
+        status: "running",
+        items: [
+          { text: "調査", status: "pending" },
+          { text: "実装", status: "completed" },
+        ],
+      },
+    });
+  });
+});
+
 function usageEvent(): ThreadEvent {
   return {
     type: "turn.completed",

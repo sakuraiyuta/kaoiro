@@ -1864,6 +1864,101 @@ describe("AgentHost — query injection", () => {
   });
 });
 
+describe("AgentHost — own tasklist envelopes (issue #188)", () => {
+  it("TodoWrite を tasklist の whole-list envelope にし、完全重複は送らない", async () => {
+    const tasks: Envelope[] = [];
+    const todoWrite = assistant([
+      {
+        type: "tool_use",
+        name: "TodoWrite",
+        input: {
+          todos: [
+            { content: "調査", status: "in_progress", activeForm: "調査中" },
+            { content: "実装", status: "pending", activeForm: "実装中" },
+          ],
+        },
+      },
+    ]);
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([system(), todoWrite, todoWrite, result("success")]),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      type: "task",
+      payload: {
+        agent_id: "test.agent",
+        task_id: "tasklist",
+        task_type: "tasklist",
+        kind: "updated",
+        status: "running",
+        items: [
+          { text: "調査", status: "in_progress" },
+          { text: "実装", status: "pending" },
+        ],
+      },
+    });
+  });
+
+  it("51件目以降を omitted で可視化してから送る", async () => {
+    const tasks: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([
+        assistant([
+          {
+            type: "tool_use",
+            name: "TodoWrite",
+            input: {
+              todos: Array.from({ length: 51 }, (_, index) => ({
+                content: `todo ${index + 1}`,
+                status: index === 50 ? "completed" : "pending",
+              })),
+            },
+          },
+        ]),
+        result("success"),
+      ]),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect((tasks[0]?.payload.items as unknown[] | undefined)?.length).toBe(50);
+    expect(tasks[0]?.payload.omitted).toEqual({ count: 1, completed: 1 });
+  });
+
+  it("空リストも LWW 置換として送り、entity を完了扱いにしない", async () => {
+    const tasks: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([
+        assistant([{ type: "tool_use", name: "TodoWrite", input: { todos: [] } }]),
+        result("success"),
+      ]),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.payload).toMatchObject({
+      kind: "updated",
+      task_id: "tasklist",
+      task_type: "tasklist",
+      status: "running",
+      items: [],
+    });
+  });
+});
+
 // issue #180 (ADR-0019 F2-F4, ADR-0047, ADR-0048): task_started/
 // task_progress/task_notification -> a `task` envelope via onTask, kept
 // independent of state_change/KaoiroState. Real field shapes captured

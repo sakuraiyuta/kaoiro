@@ -35,6 +35,9 @@ export type {
   SwitchErrorExt,
   TaskPayload,
   TaskStatus,
+  TasklistItem,
+  TasklistItemStatus,
+  TasklistOmitted,
 } from "@kaoiro/protocol";
 
 /** SDKResultMessage.subtype (agent-sdk-events.md). */

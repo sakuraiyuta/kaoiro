@@ -7,6 +7,7 @@ import {
   threadEventToFinalText,
   threadEventToLogs,
   threadEventToSessionId,
+  threadEventToTasklist,
 } from "../src/adapter.js";
 
 const THREAD_STARTED: ThreadEvent = {
@@ -115,6 +116,32 @@ describe("threadEventToEvents", () => {
       item: { id: "r", type: "reasoning", text: "…" },
     });
     expect(events).toEqual([{ kind: "assistant", blocks: ["thinking"] }]);
+  });
+});
+
+describe("threadEventToTasklist", () => {
+  it("todo_list の全項目を pending/completed に写す", () => {
+    expect(
+      threadEventToTasklist({
+        type: "item.updated",
+        item: {
+          id: "todos",
+          type: "todo_list",
+          items: [
+            { text: "調査", completed: false },
+            { text: "実装", completed: true },
+          ],
+        },
+      }),
+    ).toEqual([
+      { text: "調査", status: "pending" },
+      { text: "実装", status: "completed" },
+    ]);
+  });
+
+  it("todo_list 以外と item event 以外は対象にしない", () => {
+    expect(threadEventToTasklist(COMMAND_STARTED)).toBeNull();
+    expect(threadEventToTasklist({ type: "turn.started" })).toBeNull();
   });
 });
 

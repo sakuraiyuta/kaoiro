@@ -5,7 +5,11 @@
 // @kaoiro/claude-code/src/adapter.ts.
 
 import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";
-import type { AdapterEvent, LogEntry } from "@kaoiro/agent-common";
+import type {
+  AdapterEvent,
+  LogEntry,
+  TasklistSourceItem,
+} from "@kaoiro/agent-common";
 
 /** Tool-ish items: they occupy the tool_running state between item.started
  *  and item.completed. agent_message / reasoning / todo_list are not tools. */
@@ -21,8 +25,9 @@ function isToolItem(item: ThreadItem): boolean {
 /**
  * Maps one ThreadEvent to zero or more adapter events (state-machine input).
  * Events with no coarse-state effect (item.updated, todo_list, error items)
- * map to no event; the stream-fatal `error` event is handled by the host
- * (it also ends the turn on the SDK side).
+ * map to no event. todo_list is instead mapped separately to a tasklist
+ * envelope; the stream-fatal `error` event is handled by the host (it also
+ * ends the turn on the SDK side).
  */
 export function threadEventToEvents(event: ThreadEvent): AdapterEvent[] {
   switch (event.type) {
@@ -62,6 +67,30 @@ export function threadEventToEvents(event: ThreadEvent): AdapterEvent[] {
   }
 }
 
+/** Maps this CodexHost's parent-thread todo_list snapshot to ADR-0049's
+ * common item shape. `Thread.runStreamed()` reads one bound SDK Thread's
+ * `codex exec` stream; the installed ThreadEvent union has neither a child
+ * thread event nor an origin field, so child-thread items have no route into
+ * this stream. If that SDK contract gains one, add explicit provenance before
+ * mapping it here. Codex has no in-progress state, so an incomplete item is
+ * `pending`. Thread events carry the complete list, not an item-level delta. */
+export function threadEventToTasklist(
+  event: ThreadEvent,
+): TasklistSourceItem[] | null {
+  if (
+    event.type !== "item.started" &&
+    event.type !== "item.updated" &&
+    event.type !== "item.completed"
+  ) {
+    return null;
+  }
+  if (event.item.type !== "todo_list") return null;
+  return event.item.items.map((item) => ({
+    text: item.text,
+    status: item.completed ? "completed" : "pending",
+  }));
+}
+
 /** Human-readable tool name for the log stream (protocol.md log.kind).
  *  mcp tools keep the Claude-style FQN so the dashboard groups them the
  *  same way across engines. */
@@ -96,8 +125,9 @@ function mcpResultText(item: Extract<ThreadItem, { type: "mcp_tool_call" }>): st
  * Extracts relayable log entries from one ThreadEvent: assistant speech and
  * tool call / result pairs. item.started carries the tool_use line (input),
  * item.completed the tool_result line (output); agent_message text lands on
- * completion. reasoning / todo_list are not relayed (protocol.md: thinking
- * stays local), matching the Claude adapter.
+ * completion. reasoning / todo_list are not relayed as transcript logs:
+ * todo_list travels separately as a tasklist envelope, while thinking stays
+ * local, matching the Claude adapter.
  */
 export function threadEventToLogs(event: ThreadEvent): LogEntry[] {
   if (event.type === "item.started") {

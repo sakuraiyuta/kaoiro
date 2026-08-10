@@ -14,6 +14,7 @@ import type {
   LogEntry,
   ResultPayload,
   ResultSubtype,
+  TasklistSourceItem,
 } from "@kaoiro/agent-common";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -482,6 +483,61 @@ export function sdkMessageToCompactNotice(
 export function sdkMessageToSessionId(message: SDKMessage): string | null {
   const id = (message as { session_id?: unknown }).session_id;
   return typeof id === "string" && id !== "" ? id : null;
+}
+
+/** Whole-list snapshot from Claude Code's TodoWrite tool. `activeForm` is
+ * intentionally local UI wording, not part of ADR-0049's text/status wire
+ * contract. Invalid TodoWrite input is returned explicitly so host.ts can
+ * warn instead of silently presenting a stale list as current. */
+export type TasklistEvent =
+  | { kind: "updated"; items: TasklistSourceItem[] }
+  | { kind: "invalid"; reason: string };
+
+/** Extracts every TodoWrite tool_use from one assistant message. TodoWrite's
+ * input is already a whole-list replacement, so this mapper deliberately
+ * performs no item diffing. */
+export function sdkMessageToTasklists(message: SDKMessage): TasklistEvent[] {
+  if (message.type !== "assistant" || message.error) return [];
+  const content = message.message.content;
+  if (!Array.isArray(content)) return [];
+
+  const events: TasklistEvent[] = [];
+  for (const block of content) {
+    const { type, name, input } = block as {
+      type?: unknown;
+      name?: unknown;
+      input?: unknown;
+    };
+    if (type !== "tool_use" || name !== "TodoWrite") continue;
+    if (!isRecord(input) || !Array.isArray(input.todos)) {
+      events.push({ kind: "invalid", reason: "TodoWrite input.todos is missing" });
+      continue;
+    }
+
+    const items: TasklistSourceItem[] = [];
+    let invalidReason: string | null = null;
+    for (const todo of input.todos) {
+      if (!isRecord(todo) || typeof todo.content !== "string") {
+        invalidReason = "TodoWrite todo.content is invalid";
+        break;
+      }
+      if (
+        todo.status !== "pending" &&
+        todo.status !== "in_progress" &&
+        todo.status !== "completed"
+      ) {
+        invalidReason = "TodoWrite todo.status is invalid";
+        break;
+      }
+      items.push({ text: todo.content, status: todo.status });
+    }
+    events.push(
+      invalidReason === null
+        ? { kind: "updated", items }
+        : { kind: "invalid", reason: invalidReason },
+    );
+  }
+  return events;
 }
 
 /** Raw fields extracted from one task_* SDK system message (issue #180,

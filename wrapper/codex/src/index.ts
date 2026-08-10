@@ -8,6 +8,7 @@ export {
   threadEventToFinalText,
   threadEventToLogs,
   threadEventToSessionId,
+  threadEventToTasklist,
 } from "./adapter.js";
 export { CODEX_ENGINE, resolveCodexCatalog } from "./catalog.js";
 export type { ChatGptPlan, CodexAuthMode } from "./catalog.js";

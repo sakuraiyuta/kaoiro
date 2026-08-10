@@ -15,6 +15,7 @@ const mock = vi.hoisted(() => ({
   // test asserting the split cannot look at `lastPush` alone.
   pushes: [] as { event: string; payload: unknown }[],
   lastChannelParams: null as unknown,
+  onOpen: null as (() => void) | null,
   // ADR-0051 D2: the hydration verdict rides the JOIN reply, so a test has
   // to be able to fire the join push's receive("ok") the way the phoenix
   // client does on every (re)join.
@@ -65,7 +66,9 @@ vi.mock("phoenix", () => {
       mock.lastChannelParams = params;
       return new Channel();
     }
-    onOpen(): void {}
+    onOpen(cb: () => void): void {
+      mock.onOpen = cb;
+    }
     disconnect(): void {}
   }
   return { Channel, Socket };
@@ -110,6 +113,79 @@ describe("ServerLink — initial envelope sequence (#107)", () => {
       seq: 1, ext: { engine: "claude-code",
         session_capabilities: { supports_attachments: true } },
     } });
+  });
+});
+
+describe("ServerLink — reconnect active task replay (issue #188)", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.pushes = [];
+    mock.onOpen = null;
+  });
+
+  it("再接続後に active tasklist を fresh seq で再送し、server 側を復元する", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const state = {
+      version: "0", agent_id: "a.agent",
+      persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      ts: "T", type: "state_change", state: "idle", payload: {}, ext: {},
+    } as Envelope;
+    const tasklist = {
+      ...state,
+      type: "task",
+      payload: {
+        agent_id: "a.agent",
+        task_id: "tasklist",
+        task_type: "tasklist",
+        kind: "updated",
+        status: "running",
+        items: [{ text: "調査", status: "in_progress" }],
+      },
+    } as Envelope;
+
+    link.send(state);
+    link.send(tasklist);
+    // WrapperChannel.terminate/2 discards TaskStates on the old connection.
+    mock.pushes = [];
+    mock.onOpen?.();
+
+    expect(mock.pushes.map(({ payload }) => (payload as Envelope).type)).toEqual([
+      "state_change",
+      "task",
+    ]);
+    expect(mock.pushes[1]?.payload).toMatchObject({
+      seq: 4,
+      payload: { task_id: "tasklist", task_type: "tasklist" },
+    });
+  });
+
+  it("completed task は active cache から外れ、再接続時に復活させない", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const base = {
+      version: "0", agent_id: "a.agent",
+      persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      ts: "T", type: "task", state: "thinking", ext: {},
+    };
+    link.send({
+      ...base,
+      payload: {
+        agent_id: "a.agent", task_id: "child-1", task_type: "local_agent",
+        kind: "started", status: "running",
+      },
+    } as Envelope);
+    link.send({
+      ...base,
+      payload: {
+        agent_id: "a.agent", task_id: "child-1", task_type: "local_agent",
+        kind: "completed", status: "completed",
+      },
+    } as Envelope);
+
+    mock.pushes = [];
+    mock.onOpen?.();
+
+    expect(mock.pushes).toEqual([]);
   });
 });
 
