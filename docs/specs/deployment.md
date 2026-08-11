@@ -411,8 +411,11 @@ flowchart TD
 複数の DETS ファイル間で状態が混ざりうる(2026-08-12 の反映ではこの誤りが
 あった)。バックアップは唯一のロールバック手段であるため、ここは省略できない。
 
-以下、`<server-host>` / `<repo-path>` / `<backup-dir>` / `<container>` /
-`<target-sha>` / `<old-sha>` は各環境の値に読み替える。
+以下のプレースホルダは各環境の値に読み替える。
+
+`<server-host>` / `<repo-path>` / `<backup-dir>` / `<container>` /
+`<volume>` / `<target-sha>` / `<old-sha>` / `<old-remote-sha>` /
+`<old-local-sha>` / `<running-image-id>` / `<timestamp>` / `<uid>` / `<gid>`
 
 **(1) 旧構成を退避し、記録する**
 
@@ -562,8 +565,9 @@ ssh <server-host> 'docker cp <container>:/tmp/kaoiro_users.dets \
   <backup-dir>/users-migrate-<timestamp>.dets'
 ssh <server-host> 'sha256sum <backup-dir>/users-migrate-<timestamp>.dets'
 
-# 退避元の owner を numeric で控える (volume 上の既存 DETS と揃っているはず)
-ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -n /data/ | head -3'
+# 復元すべき numeric owner を、既知の既存 DETS から決定的に取得する
+ssh <server-host> 'docker run --rm -v <volume>:/data:ro \
+  alpine stat -c "%u:%g" /data/agent_directory.dets'
 
 # 3. volume 側に users.dets が既に無いことを確認する
 ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -la /data/users.dets 2>&1'
@@ -591,6 +595,29 @@ authority とする。**推測で merge しない。
 **退避元のファイルが存在しない場合、ledger は既に失われている。**その旨を
 作業記録へ明記し、operator の判断で進む。**黙って空の ledger を新規作成
 しない** —「失われた」と「もともと無かった」は区別する。
+
+**rollback しても volume を指すよう、operator の `.env` にも同じ設定を残す。**
+
+target の compose には `environment:` として入るが、**rollback 先の旧
+compose には入っていない**。旧 source へ戻して起動すると、server は
+restore した `/var/lib/kaoiro/users.dets` を読まず、**fallback path に空の
+ledger を作り直す** — 「旧 image + 対応する DETS を対で戻す」が Users だけ
+成立しなくなる。**compose 修正を適用する deploy の rollback が、修正対象の
+ledger をまた捨てる**という形になる。
+
+`env_file: - .env` は新旧どちらの compose にもあり、`.env` は git 管理外
+なので source を旧 commit へ戻しても残る。ここへ置けば**両方向で volume を
+指す**。
+
+```sh
+ssh <server-host> 'grep -q "^KAOIRO_USERS_PATH=" <repo-path>/server/.env \
+  || printf "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n" >> <repo-path>/server/.env'
+```
+
+target 側は compose の `environment:` と重複するが、**値が同じなので影響
+しない**。**この外部設定も作業記録と rollback pair に含める** — 記録から
+漏れると、次の operator が「compose を戻したのに ledger が空になる」原因を
+追えない。
 
 この migration は**次の step で取る pre-deploy archive に含まれる**ため、
 以後の deploy では通常経路に乗る。
@@ -686,10 +713,15 @@ pointer を戻す。**source checkout を release として分離する #229 ま
 
 **(1) DETS の archive または検証に失敗した**(4.3 の 5)
 
-新 server へ**進まない**。**(0) を実行**したうえで、旧 image で起動し直す。
+新 server へ**進まない**。**(0) を実行**したうえで、**同じ container を
+再開する**。
+
+**`--force-recreate` を使わない。**この時点では、初回 deploy なら authority
+である fallback path の ledger を持つ**元の container がまだ残っている**。
+recreate すると **migration 元そのものを失う**。
 
 ```sh
-ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build --force-recreate'
+ssh <server-host> 'docker start <container>'
 ```
 
 local も旧 commit へ戻し、frozen install + build してから runner を起動する
@@ -766,11 +798,18 @@ ssh <server-host> 'docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
 ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -la /data/'
 ```
 
-そのうえで **(0)** を実行し、旧 image で起動する。
+そのうえで **(0)** を実行し、旧 image で起動する。**起動の前に、旧 compose
+でも `KAOIRO_USERS_PATH` が container env へ入ることを確認する**(5-b で
+`.env` へ入れた設定が効いているか)。
 
 ```sh
+ssh <server-host> 'cd <repo-path>/server && docker compose config | grep KAOIRO_USERS_PATH'
 ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build --force-recreate'
 ```
+
+**ここで env が入っていないと、restore した `users.dets` を読まずに fallback
+path へ空の ledger を作る。**post-start rollback では**元の container が既に
+置換されている**ため、5-b で `.env` へ残した設定が唯一の経路になる。
 
 **restore する backup は、その image と対になったものでなければならない。**
 「旧 image だけ」「backup だけ」の片方では戻らない。
