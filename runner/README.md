@@ -91,6 +91,11 @@ Codex を選んだ場合はその auth mode / トークン / node の絶対パ�
 
 ホスト常駐用のサービス定義は [`deploy/`](deploy) にある(issue #141)。
 
+> **既に稼働している配備を新しいバージョンへ更新する手順**は
+> [docs/specs/deployment.md](../docs/specs/deployment.md) の「既存配備の更新」が
+> 正本。本節は初回の設置手順のみを扱う。更新は停止順序・DETS バックアップ・
+> 失敗時の復旧が絡むため、ここには書かない。
+
 | ファイル | 用途 |
 |---|---|
 | [`deploy/kaoiro-runner-launch.sh`](deploy/kaoiro-runner-launch.sh) | 起動シム。env ファイル読込・config 解決・`exec` を集約 |
