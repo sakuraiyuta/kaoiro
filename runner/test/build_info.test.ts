@@ -110,6 +110,56 @@ describe("loadBuildInfo (issue #228)", () => {
     const info = loadBuildInfo(tmpDir);
     expect(info).toEqual({ revision: "unknown", dirty: false, built_at: "unknown" });
   });
+
+  // issue #228 round 3 MF-4 (ふじ 差し戻し): built_at is diagnostic-only,
+  // but "diagnostic" does not mean "any string" — round 2 checked only
+  // typeof === "string", letting "tomorrow" or "" through as a valid
+  // built_at.
+  it("built_at が非 ISO 文字列 (\"tomorrow\") なら unknown へ fail-soft する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-info-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: false,
+        built_at: "tomorrow",
+      }),
+    );
+    const info = loadBuildInfo(tmpDir);
+    expect(info).toEqual({ revision: "unknown", dirty: false, built_at: "unknown" });
+  });
+
+  it("built_at が空文字なら unknown へ fail-soft する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-info-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: false,
+        built_at: "",
+      }),
+    );
+    const info = loadBuildInfo(tmpDir);
+    expect(info).toEqual({ revision: "unknown", dirty: false, built_at: "unknown" });
+  });
+
+  it("built_at が literal \"unknown\" なら受理する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-info-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: false,
+        built_at: "unknown",
+      }),
+    );
+    const info = loadBuildInfo(tmpDir);
+    expect(info).toEqual({
+      revision: "0123456789abcdef0123456789abcdef01234567",
+      dirty: false,
+      built_at: "unknown",
+    });
+  });
 });
 
 describe("formatBuildRevision (issue #228)", () => {

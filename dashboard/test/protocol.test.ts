@@ -1574,7 +1574,13 @@ describe("parseHosts (#22)", () => {
   // issue #228 round 2 MF-3 (ふじ 差し戻し): typeof だけでは弾けない値域外
   // 文字列 (40 桁 hex でも "unknown" でもない) — round 1 は string である
   // ことしか見ておらず、任意の文字列を revision として通していた。
-  it("build_revision が文字列でも値域外なら落とす (spoofing 防止)", () => {
+  // issue #228 round 3 MF-2 (ふじ 差し戻し): revision/dirty は一対の
+  // narrow — round 2 はここで build_dirty が「道連れで落ちずに残る」こと
+  // を意図として pin していたが、それ自体が fail-open な spoofing 経路
+  // だった(malformed revision + 有効な dirty:false が生き残ると、
+  // server の revision と一致したときに「確認済み clean」と誤読され
+  // うる)。両方とも valid のときのみ両方残し、それ以外は両方落とす。
+  it("build_revision が文字列でも値域外なら build_dirty も道連れで落とす (pair invariant)", () => {
     const [host] = parseHosts({
       "lab-pc-1": {
         personas: [mio],
@@ -1585,9 +1591,35 @@ describe("parseHosts (#22)", () => {
     });
     expect(host).toBeDefined();
     expect("build_revision" in host!).toBe(false);
-    // build_dirty is independently typed and still valid here, so it
-    // survives even though its sibling field was dropped.
-    expect(host!.build_dirty).toBe(false);
+    expect("build_dirty" in host!).toBe(false);
+  });
+
+  it("build_revision が valid でも build_dirty の型崩れがあれば build_revision も道連れで落とす (pair invariant 逆方向)", () => {
+    const [host] = parseHosts({
+      "lab-pc-1": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_revision: "0123456789abcdef0123456789abcdef01234567",
+        build_dirty: "yes",
+      },
+    });
+    expect(host).toBeDefined();
+    expect("build_revision" in host!).toBe(false);
+    expect("build_dirty" in host!).toBe(false);
+  });
+
+  it("build_revision/build_dirty が両方 valid なら両方残る", () => {
+    const [host] = parseHosts({
+      "lab-pc-1": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_revision: "0123456789abcdef0123456789abcdef01234567",
+        build_dirty: true,
+      },
+    });
+    expect(host).toBeDefined();
+    expect(host!.build_revision).toBe("0123456789abcdef0123456789abcdef01234567");
+    expect(host!.build_dirty).toBe(true);
   });
 });
 

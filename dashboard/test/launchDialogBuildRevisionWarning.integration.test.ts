@@ -68,6 +68,7 @@ function claudeHost(overrides: Partial<HostInfo> = {}): HostInfo {
 async function renderLaunch(
   hosts: HostInfo[],
   serverBuildRevision: string | null,
+  serverBuildDirty: boolean | null = false,
 ): Promise<HTMLElement> {
   const target = document.createElement("div");
   document.body.append(target);
@@ -78,6 +79,7 @@ async function renderLaunch(
       connection: makeConnection(),
       sessions: null,
       serverBuildRevision,
+      serverBuildDirty,
       onClose: vi.fn(),
     },
   });
@@ -176,14 +178,56 @@ describe("LaunchDialog build revision warning (issue #228)", () => {
   // issue #228 round 2 MF-4: dirty was computed but never surfaced by
   // round 1's derived function at all — a match on a dirty checkout looked
   // identical to a match on a clean one.
-  it("revision が一致していても host が dirty なら警告する", async () => {
+  it("revision が一致していても runner が dirty なら警告する (runner 側と明示)", async () => {
     const sha = "0123456789abcdef0123456789abcdef01234567";
     const target = await renderLaunch(
       [claudeHost({ build_revision: sha, build_dirty: true })],
       sha,
+      false,
     );
     const text = warningText(target);
     expect(text).not.toBeNull();
     expect(text).toContain("dirty");
+    expect(text).toContain("runner 側");
+  });
+
+  // issue #228 round 3 MF-1 (ふじ 差し戻し): round 2 only checked the
+  // RUNNER's build_dirty here — a dirty SERVER with a clean, matching
+  // runner silently passed as "nothing to warn about", contradicting the
+  // "only a clean match stays silent" rule this same round established.
+  it("revision が一致していても server が dirty なら警告する (server 側と明示)", async () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const target = await renderLaunch(
+      [claudeHost({ build_revision: sha, build_dirty: false })],
+      sha,
+      true,
+    );
+    const text = warningText(target);
+    expect(text).not.toBeNull();
+    expect(text).toContain("dirty");
+    expect(text).toContain("server 側");
+  });
+
+  it("runner・server の両方が dirty なら両方であることを警告する", async () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const target = await renderLaunch(
+      [claudeHost({ build_revision: sha, build_dirty: true })],
+      sha,
+      true,
+    );
+    const text = warningText(target);
+    expect(text).not.toBeNull();
+    expect(text).toContain("dirty");
+    expect(text).toContain("runner・server の両方");
+  });
+
+  it("runner・server とも clean で一致すれば警告なし (serverBuildDirty 明示指定)", async () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const target = await renderLaunch(
+      [claudeHost({ build_revision: sha, build_dirty: false })],
+      sha,
+      false,
+    );
+    expect(warningText(target)).toBeNull();
   });
 });

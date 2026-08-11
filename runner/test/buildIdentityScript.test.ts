@@ -17,6 +17,7 @@ import {
   computeBuildIdentity,
   formatIdentityString,
 } from "../../scripts/build-identity.mjs";
+import { formatBuildRevision, loadBuildInfo } from "../src/build_info.js";
 
 const scriptPath = fileURLToPath(
   new URL("../../scripts/build-identity.mjs", import.meta.url),
@@ -142,5 +143,72 @@ describe("build-identity.mjs --format <file> CLI (issue #228 round 2 MF-5)", () 
       encoding: "utf8",
     });
     expect(out.trim()).toBe("0123456789abcdef0123456789abcdef01234567-dirty");
+  });
+
+  // issue #228 round 3 MF-3 (ふじ 差し戻し): round 2's --format skipped
+  // value-domain validation entirely. Reproduces the exact bug found —
+  // `dirty` given as the STRING "false" (not the boolean) is truthy in JS,
+  // so a naive `dirty ? ... : ...` appends "-dirty" even though the value
+  // is nominally "false". Ruling: degrade to the SAME "unknown" the
+  // runner's own loadBuildInfo() would produce for this file, not
+  // fail-loud and not a literal pass-through of the malformed value.
+  it("malformed な build-info.json (revision 値域外 + dirty が文字列) は unknown へ degrade する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-cli-"));
+    const buildInfo = join(tmpDir, "build-info.json");
+    writeFileSync(
+      buildInfo,
+      JSON.stringify({ revision: "not-a-sha", dirty: "false", built_at: "tomorrow" }),
+    );
+
+    const out = execFileSync("node", [scriptPath, "--format", buildInfo], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    expect(out.trim()).toBe("unknown");
+  });
+
+  it("dirty が truthy な文字列でも malformed として degrade する (\"false\" 文字列が -dirty を誘発するバグの再現)", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-cli-"));
+    const buildInfo = join(tmpDir, "build-info.json");
+    writeFileSync(
+      buildInfo,
+      JSON.stringify({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: "false",
+      }),
+    );
+
+    const out = execFileSync("node", [scriptPath, "--format", buildInfo], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    // A round-2-shaped bug would print
+    // "0123456789abcdef0123456789abcdef01234567-dirty" here (the string
+    // "false" is truthy). The correct output is the degraded "unknown".
+    expect(out.trim()).toBe("unknown");
+  });
+
+  // Tri-way consistency pin (MF-5's original claim, now actually enforced
+  // for a WELL-FORMED fixture): --format's output must equal what the
+  // runner's own formatBuildRevision(loadBuildInfo(dir)) computes for the
+  // identical file — the two readers of the same build-info.json must
+  // never disagree.
+  it("--format の出力は formatBuildRevision(loadBuildInfo(dir)) と一致する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-cli-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: true,
+        built_at: "2026-08-12T00:00:00.000Z",
+      }),
+    );
+
+    const out = execFileSync(
+      "node",
+      [scriptPath, "--format", join(tmpDir, "build-info.json")],
+      { cwd: repoRoot, encoding: "utf8" },
+    );
+    expect(out.trim()).toBe(formatBuildRevision(loadBuildInfo(tmpDir)));
   });
 });

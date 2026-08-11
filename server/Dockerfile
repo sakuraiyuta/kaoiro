@@ -129,17 +129,21 @@ RUN chown nobody /app
 # computation runner/scripts/generate-build-info.mjs uses, so the two
 # paths cannot silently diverge — MF-2).
 #
-# Baked into an IMMUTABLE FILE inside the image, not exposed as a
-# runtime-readable ENV (round 1's mistake, MF-1): an ENV can be overridden
-# at container-RUN time (`docker run -e`, or docker-compose's
-# `env_file: .env`), letting the image's own identity claim diverge from
-# what it was actually built from — the exact "identity that can drift
-# from the running artifact" failure ADR-0053 already rejected for the
-# runner (a live `git rev-parse` at startup), just moved to env-at-runtime
-# for the server. KAOIRO_PLAIN_HTTP's ARG->ENV pattern is deliberately NOT
-# mirrored here for that reason (ADR-0053's Alternatives Considered).
-# `KaoiroServerWeb.HealthController` reads this file, never
-# System.get_env — see its own moduledoc.
+# Baked into an IMAGE-BAKED FILE (issue #228 round 3 advisory 2, ふじ 差し
+# 戻し: "image-baked", not "immutable" — /app is nobody-owned and this
+# file is chown'd nobody:root, so it carries NO tamper-resistance against
+# a compromised process inside the running container; this is not an
+# attestation mechanism). What it DOES guarantee: independence from
+# container-RUN-time env. Not exposed as a runtime-readable ENV (round 1's
+# mistake, MF-1) — an ENV can be overridden at container-RUN time (`docker
+# run -e`, or docker-compose's `env_file: .env`), letting the image's own
+# identity claim diverge from what it was actually built from — the exact
+# "identity that can drift from the running artifact" failure ADR-0053
+# already rejected for the runner (a live `git rev-parse` at startup),
+# just moved to env-at-runtime for the server. KAOIRO_PLAIN_HTTP's
+# ARG->ENV pattern is deliberately NOT mirrored here for that reason
+# (ADR-0053's Alternatives Considered). `KaoiroServerWeb.HealthController`
+# reads this file, never System.get_env — see its own moduledoc.
 ARG KAOIRO_BUILD_REVISION=unknown
 ARG KAOIRO_BUILD_DIRTY=false
 RUN printf '{"revision":"%s","dirty":%s}\n' \
@@ -147,6 +151,13 @@ RUN printf '{"revision":"%s","dirty":%s}\n' \
       > /app/build-info.json \
     && chown nobody:root /app/build-info.json
 LABEL org.opencontainers.image.revision=${KAOIRO_BUILD_REVISION}
+# org.opencontainers.image.* is the reserved OCI-standard namespace (no
+# "dirty" key exists in it), so this is a project-custom label, not an
+# OCI-defined one. Round 2 (MF-2) baked dirty into build-info.json but
+# never surfaced it here, leaving `docker inspect`-level provenance checks
+# (docs/specs/deployment.md 4.5) blind to it (issue #228 round 3 MF-1,
+# ふじ 差し戻し).
+LABEL com.kaoiro.build-dirty=${KAOIRO_BUILD_DIRTY}
 
 # Persistence dir for restart-surviving DETS ledgers (session_pointers /
 # agent_directory / permission_modes). A docker named volume mounted

@@ -1375,9 +1375,13 @@ export interface ServerHealth {
 /**
  * Fetches the server's build identity; null on any failure (including a
  * pre-#228 server with no /api/health route, or a malformed field outside
- * BuildInfo's value domain) so callers degrade to showing no mismatch
- * warning rather than a false one. `cache: "no-store"` (issue #228 round 2
- * MF-4, ふじ 差し戻し): the caller re-fetches this on every LaunchDialog
+ * BuildInfo's value domain). null does NOT mean "no warning" — LaunchDialog
+ * (issue #228 round 2 MF-4) surfaces null as its own explicit "server の
+ * build revision を取得できません" warning rather than staying silent
+ * (round 3 advisory 1, ふじ 差し戻し: this comment previously said null
+ * meant "no mismatch warning", which stopped being true once MF-4 shipped
+ * — stale documentation, not stale behavior). `cache: "no-store"` (issue
+ * #228 round 2 MF-4): the caller re-fetches this on every LaunchDialog
  * open / reconnect, and a cached response would keep reporting a
  * pre-redeploy server identity after the operator's own /api/health would
  * answer differently.
@@ -1950,11 +1954,21 @@ export function parseHosts(value: unknown): HostInfo[] {
         // declared (issue #228 round 2 MF-3, ふじ 差し戻し: typeof alone
         // let through any string, e.g. an attacker-controlled label
         // masquerading as a SHA).
-        ...(isValidBuildRevision(e.build_revision)
-          ? { build_revision: e.build_revision }
-          : {}),
-        ...(typeof e.build_dirty === "boolean"
-          ? { build_dirty: e.build_dirty }
+        //
+        // build_revision and build_dirty are narrowed as ONE PAIR, not two
+        // independent optionals (issue #228 round 3 MF-2, ふじ 差し戻し):
+        // the server's own runner_channel.ex rejects a register carrying
+        // only one of the two ("both absent or both present" — round 2
+        // MF-3), but this round-2 code independently copied each field,
+        // so a malformed revision + a well-typed `dirty: false` let the
+        // dirty flag survive alone. That is a fail-open spoofing path: an
+        // attacker-forged `build_revision` gets dropped as intended, but
+        // `build_dirty: false` then silently reads as "this host's build
+        // is confirmed clean" — the same trust-boundary invariant the
+        // server enforces was NOT enforced here. Both fields must be
+        // present and individually valid, or neither is copied.
+        ...(isValidBuildRevision(e.build_revision) && typeof e.build_dirty === "boolean"
+          ? { build_revision: e.build_revision, build_dirty: e.build_dirty }
           : {}),
       });
     }

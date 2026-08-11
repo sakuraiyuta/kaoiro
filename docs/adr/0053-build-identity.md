@@ -54,6 +54,12 @@ identity。
 だけが identity である、という本 ADR の中心的な区別そのものを体現する
 フィールドなので、比較に使えばこの ADR 自身の前提と矛盾する。
 
+**`built_at` も値域検証の対象(issue #228 round 3, ふじ 差し戻し MF-4)。**
+diagnostic 専用だからといって任意文字列を許容してよいわけではない —
+`generate-build-info.mjs` が書く `new Date().toISOString()` の canonical
+ISO-8601 形式、または `UNKNOWN_BUILD_INFO` の literal `"unknown"` のみを
+正とする。
+
 ### dirty の定義(単一箇所)
 
 `git status --porcelain` ベースで判定し、**tracked と untracked の両方**
@@ -84,6 +90,18 @@ round 2 でこの一本化を完了した)。`runner/scripts/generate-build-info
 `VERSION` を組み立てる(`--format` モード)— 二重実装によって定義が
 食い違うリスクを構造的に閉じる。
 
+**round 3 の裁定(ふじ 差し戻し、MF-3): `--format` も同じ値域検証を
+かける。** round 2 の `--format` はファイルを読んで整形するだけで
+`revision`/`dirty` の値域検証をしていなかった —
+`{"revision":"not-a-sha","dirty":"false"}` のような壊れた
+build-info.json を渡すと、JS の truthy 判定で文字列 `"false"` が
+dirty 扱いされ `not-a-sha-dirty` を平然と出力していた(runner の
+`loadBuildInfo()` は同じファイルを `unknown` へ degrade するのに、
+`--format` だけ生の値を通す非一貫)。裁定は fail-loud で止めることでは
+なく、**runner と同じ `unknown` へ degrade する**こと — 同じファイルに
+対して読み手ごとに違う振る舞いを持たせないため。degrade した理由は
+(他の degrade 経路と同じく)stderr へ出す。
+
 ### runner: build 時に `dist` へ焼き込む(起動時に git を呼ばない)
 
 runner は git 無しの tarball としても配布される
@@ -103,7 +121,7 @@ runner は git 無しの tarball としても配布される
 実行と tarball 配布のどちらでも同じ経路になる。git が使えない/リポジトリ
 外であれば `revision: "unknown"` に fail-soft する — 起動を止めない。
 
-### server: build arg 経由で image 内の immutable file へ焼き込む
+### server: build arg 経由で image 内の image-baked file へ焼き込む
 
 `.dockerignore` は `.git` を build context から除外している(「nothing in
 the build reads it」というコメントどおり)。したがって Dockerfile 内で
@@ -122,12 +140,24 @@ MF-1)。** `ENV` はコンテナ**実行時**に `docker run -e` や
 あえて踏襲しなかった理由(round 1 からの既存の判断)は正しかったが、
 「`.env` へ書かない」だけでは「書ける構造」自体は残ってしまっていた。
 
-よって final stage で `ARG` から **image 内の immutable file**
+よって final stage で `ARG` から **image 内の image-baked file**
 (`/app/build-info.json`)を生成し、OCI label もこの ARG から生成する
 (同一 ARG から生成するので両者は必ず一致する)。`GET /api/health`
 (`KaoiroServerWeb.HealthController`)は `System.get_env` ではなく
 **この file** を、Mix release が起動時に自動 export する `RELEASE_ROOT`
 環境変数(値そのものではなくファイルの所在を指すだけ)から辿って読む。
+
+**用語について(issue #228 round 3 advisory 2, ふじ 差し戻し):**
+「immutable」ではなく「image-baked」と呼ぶ。`/app` は `nobody` 所有、
+`build-info.json` は `chown nobody:root` — コンテナ内の実行中 process に
+対する改ざん耐性(tamper-resistance)は無く、attestation でもない。
+保証しているのは「container-RUN-time env からの独立」のみ。
+
+`dirty` も OCI label 化する(`com.kaoiro.build-dirty` — `dirty` は
+`org.opencontainers.image.*` の予約語彙に無いため project-custom
+label)。round 2 は `build-info.json` へ dirty を焼いたが label 化を
+忘れており、`docker inspect` 経由の provenance 確認(deployment.md 4.5)
+から dirty が見えなかった(issue #228 round 3 MF-1)。
 
 `mix phx.server` のローカル起動(Docker を介さない開発時)では
 `RELEASE_ROOT` 自体が未設定のため `"unknown"` を返す。git フォールバックは
@@ -166,6 +196,23 @@ reject は SHA の値そのものへの enforcement ではなく、構造検証)
 という #228 の目的に反していた。round 2 では absent / runner unknown /
 server 取得失敗 / server unknown / mismatch / dirty のそれぞれを個別の
 文言で表示し、**一致かつ clean のときだけ**無警告にする。
+
+**round 3 で dirty 側の穴が見つかった(ふじ 差し戻し、MF-1)。** round 2
+の dirty 判定は runner の `host.build_dirty` しか見ておらず、server 自身
+の dirty(`GET /api/health` の `build_dirty`)を dashboard へ渡していな
+かった。「server が dirty、runner が clean、revision が一致」する組合せ
+で無警告になり、「一致かつ clean のときだけ無警告」という上記の原則と
+矛盾していた。dashboard は server の `build_dirty` も受け取り、runner
+dirty と server dirty を区別できる文言で警告する。
+
+**round 3 で dashboard 側の pair invariant 崩れも見つかった(ふじ 差し
+戻し、MF-2)。** server 側は「両方省略または両方提示」以外を reject する
+一方、dashboard の `parseHosts` は `build_revision` / `build_dirty` を
+**独立に** copy していた — revision が値域外でも dirty が単独で残る
+(またはその逆)。malformed な revision と `dirty: false` の組合せは、
+server 側 revision と一致する状況では「一致かつ clean」として無警告に
+なりうる、fail-open な偽装経路だった。dashboard の trust boundary でも
+pair を一単位として narrow し、両方 valid のときのみ両方を残す。
 
 health は mount 時の 1 回だけでなく、channel の (re)join(server
 redeploy 後の再接続を含む)と LaunchDialog を開く直前にも再取得する
@@ -219,11 +266,18 @@ artifact SHA の代用にしない。
   意図的に本 issue に含めていない — 別 issue (#230) の責務として残る
   未解決事項。
 - round 2(ふじ 差し戻し)で以下を修正: server の identity を ENV から
-  image 内 immutable file へ(MF-1)、dirty 判定失敗時の degrade 範囲
+  image 内 image-baked file へ(MF-1)、dirty 判定失敗時の degrade 範囲
   (MF-2)、revision/dirty 計算の repo-level 一本化(MF-2)、value domain
   検証の 3 言語統一(MF-3)、dashboard の警告状態を 2 状態の無言サイレント
   から 6 状態の明示表示へ拡張し health を複数トリガーで再取得(MF-4)、
   launch shim の `--version` 転送順序(MF-5)。
+- round 3(ふじ 差し戻し)で以下を修正: server の dirty を OCI label
+  (`com.kaoiro.build-dirty`)化し dashboard へ到達させる(MF-1)、
+  dashboard `parseHosts` の revision/dirty pair invariant 崩れ(MF-2、
+  server の「両方省略または両方提示」規約を dashboard の trust boundary
+  でも守る)、`build-identity.mjs --format` の値域検証迂回(MF-3)、
+  `built_at` の値域検証(MF-4)、「immutable」→「image-baked」への
+  用語訂正(advisory 2)。
 
 ## Alternatives Considered
 

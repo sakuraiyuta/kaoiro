@@ -47,6 +47,14 @@ const UNKNOWN_BUILD_INFO: BuildInfo = {
  *  comment above). */
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
 
+/** Value domain for `built_at` (issue #228 round 3, ふじ 差し戻し MF-4):
+ *  the exact `new Date().toISOString()` shape generate-build-info.mjs
+ *  produces, or the literal "unknown" (`UNKNOWN_BUILD_INFO`'s own value).
+ *  Diagnostic-only does NOT mean "any string" — an arbitrary value like
+ *  "tomorrow" or "" previously passed the bare `typeof === "string"`
+ *  check. */
+const BUILT_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
 function isBuildInfoShape(value: unknown): value is BuildInfo {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -54,7 +62,8 @@ function isBuildInfoShape(value: unknown): value is BuildInfo {
     typeof v.revision === "string" &&
     (v.revision === "unknown" || BUILD_REVISION_RE.test(v.revision)) &&
     typeof v.dirty === "boolean" &&
-    typeof v.built_at === "string"
+    typeof v.built_at === "string" &&
+    (v.built_at === "unknown" || BUILT_AT_RE.test(v.built_at))
   );
 }
 

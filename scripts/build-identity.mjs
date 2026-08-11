@@ -109,6 +109,22 @@ export function formatIdentityString({ revision, dirty }) {
   return dirty ? `${revision}-dirty` : revision;
 }
 
+/** Value domain for a build-info.json-shaped object (issue #228 round 3
+ *  MF-3, ふじ 差し戻し): `revision` must be the literal "unknown" or a
+ *  lowercase 40-hex-digit SHA, `dirty` must be an actual JS boolean — NOT
+ *  merely truthy. Mirrors runner/src/build_info.ts's `isBuildInfoShape`
+ *  (`built_at` is not required here since `--format` only reads
+ *  revision/dirty). Exported for direct unit testing. */
+const REVISION_RE = /^[0-9a-f]{40}$/;
+export function isValidBuildInfoShape(value) {
+  if (typeof value !== "object" || value === null) return false;
+  return (
+    typeof value.revision === "string" &&
+    (value.revision === "unknown" || REVISION_RE.test(value.revision)) &&
+    typeof value.dirty === "boolean"
+  );
+}
+
 function main() {
   const args = process.argv.slice(2);
   if (args[0] === "--format") {
@@ -118,7 +134,22 @@ function main() {
       process.exit(64); // EX_USAGE
     }
     const parsed = JSON.parse(readFileSync(file, "utf8"));
-    process.stdout.write(`${formatIdentityString(parsed)}\n`);
+    // MF-3 ruling: degrade to the SAME "unknown" runner's loadBuildInfo()
+    // would produce for this file, rather than fail-loud OR blindly
+    // formatting a malformed value — round 2 skipped this check entirely,
+    // letting e.g. `{"revision":"not-a-sha","dirty":"false"}` (dirty as a
+    // truthy STRING, not a boolean) print "not-a-sha-dirty" verbatim,
+    // while the runner reading the identical file degraded to "unknown".
+    // The two readers of the same file must not disagree.
+    const info = isValidBuildInfoShape(parsed)
+      ? parsed
+      : (() => {
+          process.stderr.write(
+            `build-identity: --format input at ${file} is malformed, degrading to unknown\n`,
+          );
+          return { revision: "unknown", dirty: false };
+        })();
+    process.stdout.write(`${formatIdentityString(info)}\n`);
     return;
   }
   const identity = computeBuildIdentity();

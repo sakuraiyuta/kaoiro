@@ -19,3 +19,8 @@ export function formatIdentityString(identity: {
   revision: string;
   dirty: boolean;
 }): string;
+
+export function isValidBuildInfoShape(value: unknown): value is {
+  revision: string;
+  dirty: boolean;
+};

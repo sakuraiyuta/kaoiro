@@ -15,6 +15,7 @@
     connection,
     sessions,
     serverBuildRevision = null,
+    serverBuildDirty = null,
     onClose,
   }: {
     hosts: HostInfo[];
@@ -27,6 +28,15 @@
      *  ふじ 差し戻し: an operator could not tell "revisions agree" apart
      *  from "server health was unreachable" — both showed no warning). */
     serverBuildRevision?: string | null;
+    /** Server's own build_dirty (issue #228 round 3 MF-1, ふじ 差し戻し:
+     *  round 2 only surfaced the RUNNER's dirty flag — a dirty server with
+     *  a clean, matching runner showed no warning, contradicting the "only
+     *  a clean match stays silent" rule this same round established. null
+     *  mirrors serverBuildRevision's null (pre-#228 server / fetch
+     *  failure); by the time this is read below, serverBuildRevision has
+     *  already been confirmed non-null, so a null here in practice only
+     *  means "nothing to warn about on this axis". */
+    serverBuildDirty?: boolean | null;
     onClose: () => void;
   } = $props();
 
@@ -122,9 +132,25 @@
   //                                     identity to compare against)
   //   4. serverBuildRevision unknown -- server determined nothing
   //   5. revisions disagree          -- mismatch
-  //   6. revisions agree, host dirty -- match, but the runner's own
-  //                                     checkout had uncommitted changes
-  //   7. revisions agree, clean      -- silent (nothing to warn about)
+  //   6. revisions agree, BOTH dirty -- match, but neither side is clean
+  //   7. revisions agree, runner dirty only  -- match, runner's own
+  //                                             checkout had uncommitted
+  //                                             changes
+  //   8. revisions agree, server dirty only  -- match, but the running
+  //                                             server image was built
+  //                                             from a dirty checkout
+  //                                             (issue #228 round 3 MF-1,
+  //                                             ふじ 差し戻し: round 2
+  //                                             only checked the runner's
+  //                                             own dirty flag here, so a
+  //                                             dirty SERVER with a clean,
+  //                                             matching runner silently
+  //                                             passed as "nothing to warn
+  //                                             about" — contradicting
+  //                                             state 9's own "only a
+  //                                             clean match stays silent"
+  //                                             rule)
+  //   9. revisions agree, both clean -- silent (nothing to warn about)
   const buildRevisionWarning = $derived.by(() => {
     if (!host) return null;
     const runnerRevision = host.build_revision;
@@ -146,9 +172,23 @@
         `server (${serverBuildRevision.slice(0, 12)}…) と一致しません。`
       );
     }
-    if (host.build_dirty === true) {
+    const runnerDirty = host.build_dirty === true;
+    const serverDirty = serverBuildDirty === true;
+    if (runnerDirty && serverDirty) {
       return (
-        `この host の build (${runnerRevision.slice(0, 12)}…) は ` +
+        `この host の build (${runnerRevision.slice(0, 12)}…) は runner・` +
+        "server の両方でコミットされていない変更を含んでいます(dirty)。"
+      );
+    }
+    if (runnerDirty) {
+      return (
+        `この host の build (${runnerRevision.slice(0, 12)}…) は runner 側で` +
+        "コミットされていない変更を含んでいます(dirty)。"
+      );
+    }
+    if (serverDirty) {
+      return (
+        `この host の build (${runnerRevision.slice(0, 12)}…) は server 側で` +
         "コミットされていない変更を含んでいます(dirty)。"
       );
     }
