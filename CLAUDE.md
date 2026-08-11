@@ -37,9 +37,26 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
   `mix phx.server`
 - 全層まとめて開発起動: `./scripts/dev.sh`
 
+## Branch strategy
+
+issue #223 で導入。エージェントの permission gate が `main` 宛の git 操作を
+ブロックするため、統合ブランチ `develop` を挟む。
+
+| ブランチ | 役割 | 更新できる主体 |
+|---|---|---|
+| `main` | リリース / 安定ブランチ。default branch | **オペレータのみ** |
+| `develop` | 統合ブランチ。CI はここでも走る | エージェント可 |
+| `issue-NNN-*` | feature branch | エージェント可 |
+
+- feature branch は `develop` から派生し、`develop` へ **fast-forward
+  マージ**して戻す。ここまではエージェントが自動で行える
+- `develop` → `main` は区切りごとに**オペレータが手動**で行う
+- worktree の base は `develop`
+
 ## Workflow rules
 
-- コミットメッセージは日本語。git 操作はユーザ承認のもとで行う。
+- コミットメッセージは日本語。git 操作はユーザ承認のもとで行う
+  (`develop` 以下は上記 Branch strategy の範囲で自動可)。
 - docs/plans/ のタスク表・進捗を更新するときは、frontmatter の
   `status` / `last_updated` も同時に更新する(status drift の予防。
   2026-07-03 に不整合 3 例を検出した再発防止)。

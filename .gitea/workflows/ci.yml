@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # develop は統合ブランチ (issue #223)。feature branch はここへ
+    # ff マージされるので、main へ上げる前にこの段階で CI を通す。
+    branches: [main, develop]
   pull_request:
 
 jobs:
