@@ -377,16 +377,19 @@ systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
 
 ```mermaid
 flowchart TD
-  A[旧 image を retag<br/>旧 commit を記録] --> B[server image を prepare<br/>旧 container は稼働継続]
-  B -->|失敗| R0[稼働系に影響なし<br/>中止して終了]
+  A[running container の image ID から retag<br/>旧 commit を記録] --> B[server image を prepare<br/>旧 container は稼働継続]
+  B -->|失敗| R0[abort cleanup 4.4 の 0<br/>remote source を旧へ戻す]
   B -->|成功| C[runner 停止]
   C --> D[local を target へ<br/>frozen install + build]
-  D -->|失敗| R1[server は旧のまま<br/>local を旧 commit へ戻し runner 再開<br/>4.4 の 2]
+  D -->|失敗| R1[abort cleanup 4.4 の 0<br/>local も旧 commit へ<br/>4.4 の 2]
   D -->|成功| E[server graceful stop]
-  E --> F[DETS archive + 完全検証]
-  F -->|失敗| R2[新 server へ進まない<br/>旧 server / 旧 runner を再開<br/>4.4 の 1]
+  E --> S{正常停止か<br/>exit と oom を確認}
+  S -->|異常 or 判定不能| R5[旧 image で再起動し正常 open を確認<br/>graceful stop から取り直す<br/>不可なら中断]
+  S -->|正常| M[初回のみ<br/>user ledger を migrate<br/>4.3 の 5-a]
+  M --> F[DETS archive + 完全検証]
+  F -->|失敗| R2[abort cleanup 4.4 の 0<br/>旧 image で再起動<br/>4.4 の 1]
   F -->|成功| G[prepared image で server 起動]
-  G -->|失敗| R3[旧 image へ retag し戻す<br/>4.4 の 3]
+  G -->|失敗| R3[state を開いたか判定<br/>停止してから restore<br/>4.4 の 3]
   G -->|成功| H[runner 起動]
   H -->|失敗| R4[4.4 の 4]
   H -->|成功| I[疎通確認 + 適用確認<br/>4.5]
@@ -405,16 +408,31 @@ flowchart TD
 **build 前に旧 image へ別の tag を付けておかないと、rollback で指す先が
 なくなる。**
 
+**retag の元は `latest` ではなく、running container が実際に使っている
+image ID である。**`latest` は prepare 済み / 失敗後 / retry の状態では
+既に新 image を指しており、**本 runbook 自身が (2) でその状態を作る**。
+`latest` から retag すると、最悪の場合 rollback tag まで新 image になり、
+**戻す先が消える**。
+
 ```sh
-ssh <server-host> 'docker tag kaoiro-server:latest kaoiro-server:rollback-<old-sha>'
+# running container の image ID を正本として取得する
+ssh <server-host> 'docker inspect <container> --format "{{.Image}}"'
+
+# その ID に rollback tag を付ける (latest からではない)
+ssh <server-host> 'docker tag <running-image-id> kaoiro-server:rollback-<old-sha>'
+
+# tag が意図した ID を指しているか検証する
+ssh <server-host> 'docker image inspect kaoiro-server:rollback-<old-sha> --format "{{.Id}}"'
+# → <running-image-id> と一致すること
+
 ssh <server-host> 'cd <repo-path> && git rev-parse HEAD'   # 旧 remote commit
 git -C <repo-path> rev-parse HEAD                          # 旧 local commit
 ```
 
-作業記録に残すもの: **rollback tag / 旧 remote commit / 旧 local commit /
-target SHA / backup 先 / archive の SHA-256**。ロールバックは
-「**旧 image + 対応する DETS**」の**対**で行うため、これらが揃っていないと
-復旧できない。
+作業記録に残すもの: **running image ID / rollback tag / 旧 remote commit /
+旧 local commit / target SHA / backup 先 / archive の SHA-256**。
+ロールバックは「**旧 image + 対応する DETS**」の**対**で行うため、これらが
+揃っていないと復旧できない。
 
 **(2) server image を prepare(無停止)**
 
@@ -448,22 +466,81 @@ pnpm -C <repo-path>/wrapper build && pnpm -C <repo-path>/runner build
 **ここで失敗したら 4.4 の 2 へ。**server はまだ旧 container のままなので、
 local を旧 commit へ戻せば元の構成に戻る。
 
-**(5) server を停止し、DETS を archive する**
+**(5) server を停止し、停止の正常性を判定する**
 
-まず graceful stop し、**停止できたことを確認する**。
+graceful stop し、**正常に停止したことを確認する**。
 
 ```sh
 ssh <server-host> 'cd <repo-path>/server && docker compose stop -t 30'
-ssh <server-host> 'docker inspect <container> --format "{{.State.Running}}"'
+ssh <server-host> 'docker inspect <container> \
+  --format "running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}"'
 ```
 
-`false` を確認する。`true` のままなら停止に失敗している。**timeout(`-t 30`)
-を超えて SIGKILL された場合、DETS が書き込み途中で切られた可能性がある** —
-この状態で取った archive は consistent とは呼べない。強制終了された形跡が
-あるときは、backup を取ったうえで**その旨を作業記録に残し**、restore 時の
-信頼度を下げて扱う。
+**`running=false` だけでは正常停止と判定できない。**timeout(`-t 30`)を
+超えて SIGKILL された場合も `running=false` になる。`exit` と `oom` を併せて
+見る(正常終了時の終了コードは実装依存なので、**平常時の値を控えておき、
+それと異なるときは異常として扱う**)。判定に迷うときは `docker logs` の末尾で
+shutdown が完走しているかを確認する。
 
-次に volume 名を **container の mount 先から解決する**(名前を決め打ちしない)。
+**強制終了・異常終了が疑われる場合、この archive を rollback backup へ
+昇格させてはならない。**本 runbook は backup を**唯一の rollback 手段**と
+定義しており、consistent でないと分かった snapshot をその正本にするのは、
+自らの不変条件に反する。次の順でやり直す。
+
+1. forensic snapshot は取ってよい。ただし **rollback backup には昇格させない**
+2. **旧 image のまま** server を再起動し、DETS が正常に open / recovery
+   できることを確認する
+3. 改めて graceful stop する
+4. 正常停止を確認してから consistent backup を取り直す
+5. 正常に open / stop できない場合は、**deploy を中断する**
+
+**判定できないときも中断する。**「たぶん大丈夫」で先へ進まない。
+
+**(5-a) 【初回のみ】user ledger の migration**
+
+`KAOIRO_USERS_PATH` を compose へ追加した**最初の適用**では、**現在の
+ledger が volume に無い**。旧 container はこの env 無しで起動しており、
+`KaoiroServer.Users.default_path/0` の fallback(`System.tmp_dir!()` 配下の
+`kaoiro_users.dets`)を使っているためである。**このまま recreate すると、
+compose を直した当の deploy が現在の ledger を捨てる。**
+
+```sh
+# 1. running container の実効 path を確認する
+ssh <server-host> 'docker inspect <container> \
+  --format "{{range .Config.Env}}{{if eq (index (split . \"=\") 0) \"KAOIRO_USERS_PATH\"}}{{.}}{{end}}{{end}}"'
+```
+
+出力が空なら未設定 = fallback path を使っている。**設定済みならこの step は
+不要**(以後の deploy も同じ)。
+
+```sh
+# 2. 停止済みの旧 container から ledger を退避し、checksum を記録する
+ssh <server-host> 'docker cp <container>:/tmp/kaoiro_users.dets \
+  <backup-dir>/users-migrate-<timestamp>.dets'
+ssh <server-host> 'sha256sum <backup-dir>/users-migrate-<timestamp>.dets'
+
+# 3. volume 側に users.dets が既に無いことを確認する
+ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -la /data/users.dets 2>&1'
+
+# 4. volume へ配置し、runtime user が読める owner / mode にする
+ssh <server-host> 'docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
+  alpine sh -c "cp /backup/users-migrate-<timestamp>.dets /data/users.dets \
+    && chown nobody:nogroup /data/users.dets && chmod 600 /data/users.dets"'
+```
+
+**両方に存在する場合は、running container が実際に参照していた path を
+authority とする。**推測で merge しない。
+
+**退避元のファイルが存在しない場合、ledger は既に失われている。**その旨を
+作業記録へ明記し、operator の判断で進む。**黙って空の ledger を新規作成
+しない** —「失われた」と「もともと無かった」は区別する。
+
+この migration は**次の step で取る pre-deploy archive に含まれる**ため、
+以後の deploy では通常経路に乗る。
+
+**(5-b) volume を解決して archive する**
+
+volume 名を **container の mount 先から解決する**(名前を決め打ちしない)。
 
 ```sh
 ssh <server-host> 'docker inspect <container> \
@@ -515,15 +592,48 @@ systemctl --user start kaoiro-runner
 
 ### 4.4 失敗時の対応
 
-**(1) DETS の archive または検証に失敗した**(4.3 の 5)
+**(0) 中止時の共通クリーンアップ**
 
-新 server へ**進まない**。この時点で remote source は既に target へ進み、
-`kaoiro-server:latest` は新 image を指しているため、**そのまま起動すると新
-構成が立ち上がる**。旧構成へ戻すには tag と source の両方を戻す。
+どの分岐で中止する場合も、**まずこれを実行する**。
+
+process として旧 server が動き続けていても、**それだけでは「旧構成へ戻った」
+ことにならない**。prepare が成功していれば、その時点で:
+
+- remote checkout = **target**
+- `kaoiro-server:latest` = **新 image**
+- running container だけが旧 image ID
+
+という状態になっている。**放置すると、次に誰かが `docker compose up` を
+実行しただけで、未完了の deploy が本番へ切り替わる。**
+
+実行中の container には触れずに、次を戻す。
 
 ```sh
-ssh <server-host> 'docker tag kaoiro-server:rollback-<old-sha> kaoiro-server:latest'
+# 1. remote source を旧 commit へ戻す
 ssh <server-host> 'cd <repo-path> && git checkout <old-remote-sha>'
+
+# 2. latest を旧 image へ戻す (prepare が成功していた場合)
+ssh <server-host> 'docker tag <running-image-id> kaoiro-server:latest'
+
+# 3. latest と running container の image ID が一致することを確認する
+ssh <server-host> 'docker image inspect kaoiro-server:latest --format "{{.Id}}"'
+ssh <server-host> 'docker inspect <container> --format "{{.Image}}"'
+```
+
+prepared な新 image を別の tag で保持しておくのは構わない。**`latest` と
+production checkout だけは旧構成へ戻す。**
+
+**`git checkout <sha>` は detached HEAD を残す。**復旧そのものには使えるが、
+production checkout がどの branch を追っていたかという運用状態は失われる。
+**rollback 中は detached である前提で扱い、復旧後に operator が branch
+pointer を戻す。**source checkout を release として分離する #229 までは、
+この限界が残る。
+
+**(1) DETS の archive または検証に失敗した**(4.3 の 5)
+
+新 server へ**進まない**。**(0) を実行**したうえで、旧 image で起動し直す。
+
+```sh
 ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build --force-recreate'
 ```
 
@@ -533,12 +643,13 @@ local も旧 commit へ戻し、frozen install + build してから runner を�
 
 **(2) build が失敗した**(4.3 の 4)
 
-**server はまだ切り替えていない**ので、旧 container が動いたままである。
-戻すのは local 側だけでよい。
+server はまだ切り替えていないので、旧 container が動いたままである。
+**ただし (0) は必要**である — prepare が成功していれば `latest` は既に新
+image を指している。
 
-**`dist` を退避してあれば戻す、という復旧は限定的にしか使えない。**
-`pnpm install` が `node_modules` を書き換えた場合、`dist` だけ戻しても
-実行時の依存が食い違う。**dist-only restore が成立するのは lockfile と
+そのうえで local を戻す。**`dist` を退避してあれば戻す、という復旧は限定的に
+しか使えない。**`pnpm install` が `node_modules` を書き換えた場合、`dist` だけ
+戻しても実行時の依存が食い違う。**dist-only restore が成立するのは lockfile と
 `node_modules` を変更していない場合に限る。**
 
 通常の復旧の正本は、旧 commit とそのときの lockfile でやり直すことである。
@@ -559,27 +670,50 @@ systemctl --user start kaoiro-runner
 境界で分ける。
 
 - **`docker compose up -d` をまだ実行していない、または container process が
-  開始していないと証明できる**: DETS の restore は不要。tag と source を戻す
-  だけでよい((1) と同じ手順)
+  開始していないと証明できる**: DETS の restore は不要。**(0)** を実行して
+  旧 image で起動するだけでよい
 - **一度でも新 container の開始を試みた、または開始したか不明**:
   **state を開いたものとして扱う。**新コードが書いた DETS を旧コードが読める
   保証は無い(issue #219 で tuple が 3→4 要素になった前例がある)
 
-後者の手順は次のとおり。**restore は destructive なので、先に現在の state を
-forensic archive する。**
+後者の手順は次のとおり。**restore は destructive なので、順序を守る。**
 
 ```sh
-# 1. 現在 (新) の state を退避する
+# 1. failed / new container を停止し、非 running を確認する
+#    restart: unless-stopped のため、crash-loop 中の process が同じ volume へ
+#    書いている可能性がある。止めずに tar / 削除 / 展開すると両方が壊れる
+ssh <server-host> 'cd <repo-path>/server && docker compose stop -t 30'
+ssh <server-host> 'docker inspect <container> --format "{{.State.Running}}"'   # false
+
+# 2. volume 名を再解決し、operator が目視で確認する
+ssh <server-host> 'docker inspect <container> \
+  --format "{{range .Mounts}}{{if eq .Destination \"/var/lib/kaoiro\"}}{{.Name}}{{end}}{{end}}"'
+
+# 3. 現在 (新) の state を forensic archive し、完全走査 + checksum を記録する
 ssh <server-host> 'docker run --rm -v <volume>:/data:ro -v <backup-dir>:/backup \
   alpine tar czf /backup/kaoiro-dets-forensic-<timestamp>.tar.gz -C /data .'
+ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-forensic-<timestamp>.tar.gz >/dev/null \
+  && sha256sum <backup-dir>/kaoiro-dets-forensic-<timestamp>.tar.gz'
 
-# 2. pre-deploy backup を restore する
+# 4. pre-deploy archive を destructive delete の前に再検証する
+#    記録済み SHA-256 との一致と、完全走査の両方
+ssh <server-host> 'sha256sum <backup-dir>/kaoiro-dets-<timestamp>.tar.gz'
+ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz >/dev/null'
+
+# 5. volume を完全に空にして restore する
+#    rm -rf /data/* は dotfile を消さないため「完全に空」にならない。
+#    mount root 自体は残して全 entry を消す
 ssh <server-host> 'docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
-  alpine sh -c "rm -rf /data/* && tar xzf /backup/kaoiro-dets-<timestamp>.tar.gz -C /data"'
+  alpine sh -c "find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + \
+    && tar xzf /backup/kaoiro-dets-<timestamp>.tar.gz -C /data"'
 
-# 3. 旧 image / 旧 source へ戻して起動する
-ssh <server-host> 'docker tag kaoiro-server:rollback-<old-sha> kaoiro-server:latest'
-ssh <server-host> 'cd <repo-path> && git checkout <old-remote-sha>'
+# 6. restore 結果を確認する (1.2 節の 8 種の存在、owner / mode)
+ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -la /data/'
+```
+
+そのうえで **(0)** を実行し、旧 image で起動する。
+
+```sh
 ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build --force-recreate'
 ```
 
