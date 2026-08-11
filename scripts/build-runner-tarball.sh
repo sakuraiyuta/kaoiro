@@ -133,24 +133,17 @@ pnpm -C runner build >/dev/null
 # disagree (e.g. a different dirty definition), silently making this
 # archive's own VERSION file lie about what actually shipped in dist/.
 # Single source of truth for both revision AND the dirty definition
-# (director's steer, issue #228 query round 2).
+# (director's steer, issue #228 query round 2). The `<rev>[-dirty]` string
+# itself is formatted by the SAME scripts/build-identity.mjs `--format`
+# call the server build script's docs point at, so this VERSION file and
+# runner's own formatBuildRevision() cannot silently drift into two
+# different formats either (issue #228 round 2 MF-5, ふじ 差し戻し).
 build_info="$root/runner/dist/build-info.json"
 [[ -f "$build_info" ]] || {
   echo "build-runner-tarball: $build_info missing after build" >&2
   exit 70 # EX_SOFTWARE
 }
-build_revision=$(node -e "
-  process.stdout.write(
-    JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).revision,
-  );
-" "$build_info")
-build_dirty=$(node -e "
-  process.stdout.write(
-    String(JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).dirty),
-  );
-" "$build_info")
-version_string="$build_revision"
-[[ "$build_dirty" == "true" ]] && version_string="$version_string-dirty"
+version_string=$(node "$root/scripts/build-identity.mjs" --format "$build_info")
 name="kaoiro-runner-$version_string-$target"
 echo "build-runner-tarball: rev=$version_string"
 

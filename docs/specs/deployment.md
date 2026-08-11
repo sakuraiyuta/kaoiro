@@ -457,18 +457,31 @@ git -C <repo-path> rev-parse HEAD                          # 旧 local commit
 旧 container は旧 image ID を保持したまま動き続ける。ここで失敗しても
 **稼働系への影響はゼロ**である。
 
-**`KAOIRO_BUILD_REVISION` を明示的に渡す**(build identity, issue #228,
-[ADR-0053](../adr/0053-build-identity.md))。`.dockerignore` が `.git` を
-build context から除外しているため、Dockerfile 側で git を読む手段が
-無く、渡し忘れると `GET /api/health` が `build_revision: "unknown"` を
-返す(build 自体は失敗しない — observability のみへの影響に留まる)。
-`.env` へは書かない — build 実行のその場限りの環境変数として渡す
-(ADR-0053 Alternatives Considered)。
+**`KAOIRO_BUILD_REVISION` / `KAOIRO_BUILD_DIRTY` を明示的に渡す**(build
+identity, issue #228, [ADR-0053](../adr/0053-build-identity.md))。
+`.dockerignore` が `.git` を build context から除外しているため、
+Dockerfile 側で git を読む手段が無く、渡し忘れると `GET /api/health` が
+`build_revision: "unknown"` を返す(build 自体は失敗しない —
+observability のみへの影響に留まる)。両方とも `scripts/build-identity.mjs`
+(runner の `dist/build-info.json` 生成と同じ計算 — issue #228 round 2、
+dirty 定義を二重実装させない)から得る。`.env` へは書かない — build
+実行のその場限りの環境変数として渡す(ADR-0053 Alternatives Considered)。
+
+**`set -a` を忘れないこと。**`scripts/build-identity.mjs` の出力は
+`KEY=VALUE` の平文2行で、`export` は含まない。`eval` だけでは呼び出し元
+シェルの非 export 変数になるだけで、`docker compose build` は別コマンド
+(別プロセス)としてそれを継承しない — `set -a` の間に `eval` すれば以降の
+代入がすべて自動 export される(issue #228 round 2 差し戻しで実際に踏んだ
+回帰: `eval "$(...)"; docker compose build` のままだと常に既定値
+`unknown` / `false` へ fall back し、MF-2 の目的が達成されない。
+`bash -c 'eval "$(printf "X=1\\n")"; bash -c "echo [\\$X]"'` が `[]` を
+返すことで実測確認済み)。
 
 ```sh
 ssh <server-host> 'cd <repo-path> && git fetch origin \
-  && git merge --ff-only <target-sha> && cd server \
-  && KAOIRO_BUILD_REVISION=$(git rev-parse HEAD) docker compose build'
+  && git merge --ff-only <target-sha> \
+  && set -a && eval "$(node scripts/build-identity.mjs)" && set +a \
+  && cd server && docker compose build'
 ```
 
 `up -d` はまだ実行しない。
@@ -884,9 +897,10 @@ server が restart loop せずリクエストを処理できるか、runner が�
 | 項目 | 確認方法 |
 |---|---|
 | server の build_revision が target SHA と一致 | `curl <server-url>/api/health` の `build_revision` |
+| server の build_dirty が意図通り | `curl <server-url>/api/health` の `build_dirty`(target SHA での clean build なら `false`) |
 | server の OCI label が target SHA と一致 | `docker inspect kaoiro-server:latest --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'` |
 | runner の build_revision が target SHA と一致 | dashboard の host 一覧(LaunchDialog)、または runner 起動ログの `rev=<full SHA>` 行 |
-| runner --version が target SHA を返す | `<install-root>/dist/cli.js --version`(または tarball 配布の launch shim 経由) |
+| runner --version が target SHA を返す | `<install-root>/dist/cli.js --version`(または tarball 配布の launch shim `kaoiro-runner-launch.sh --version` 経由 — config 未設置でも動く) |
 
 **mtime は依然として成功根拠にならない。**`dist` ディレクトリの mtime は
 ファイルの追加・削除が無ければ更新されない。2026-08-12 の反映では、実際には

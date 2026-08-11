@@ -61,6 +61,24 @@ fi
 unset CDPATH
 deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 
+# --version (issue #228 round 2 MF-5, ふじ 差し戻し): forwarded to the
+# entry point BEFORE the config-existence check below. A first-run host
+# with no config yet (setup wizard not run) must still be able to answer
+# --version — cli.ts's own --version path never touches config or the
+# network (see cli.ts's main(), checked before loadRunnerConfig) — so
+# gating it on config existence here made docs/specs/deployment.md's
+# "confirm what a tarball deploy shipped" claim false for exactly the
+# hosts that most need it: a fresh, not-yet-configured install.
+if [ "${1:-}" = "--version" ]; then
+  node_bin="${KAOIRO_NODE:-node}"
+  command -v "$node_bin" >/dev/null 2>&1 ||
+    die_config "node not found: $node_bin (set KAOIRO_NODE in $env_file)"
+  entry="$deploy_dir/../dist/cli.js"
+  [ -f "$entry" ] ||
+    die_config "runner not built: $entry (run 'pnpm -C runner build')"
+  exec "$node_bin" "$entry" --version
+fi
+
 # A missing config is the first-run case. Point at the wizard rather than
 # launching it: this script also runs from systemd / launchd, where an
 # interactive prompt would hang with no terminal (issue #144).

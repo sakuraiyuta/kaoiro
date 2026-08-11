@@ -100,22 +100,6 @@ RUN mix release
 # the compiled release and other runtime necessities
 FROM ${RUNNER_IMAGE} AS final
 
-# Build identity (issue #228) — distinct from ADR-0015's wire protocol
-# version (message-shape compatibility, stamped "0" per-message): this is
-# the full 40-char git SHA the image was built from ("unknown" when the
-# build ran outside a git checkout — the compose/CI caller is responsible
-# for actually exporting it before `docker compose build`, see
-# docs/specs/deployment.md 4.3). Set here in the FINAL stage (not just the
-# builder) — unlike KAOIRO_PLAIN_HTTP above, this value is derived at
-# build time, not operator-chosen, so it belongs baked into the image
-# itself rather than re-supplied by docker-compose `environment:` at
-# container start. Read at runtime via System.get_env in
-# config/runtime.exs (GET /api/health) and doubles as the OCI label
-# below, so both sources are guaranteed to agree (same ARG value).
-ARG KAOIRO_BUILD_REVISION=unknown
-ENV KAOIRO_BUILD_REVISION=${KAOIRO_BUILD_REVISION}
-LABEL org.opencontainers.image.revision=${KAOIRO_BUILD_REVISION}
-
 # inotify-tools backs :file_system, which watches the persona pack dir for
 # live reloads. Without it the watcher fails to boot
 # (fs_inotify_bootstrap_error) and pack changes only apply on restart —
@@ -134,6 +118,35 @@ ENV LC_ALL=en_US.UTF-8
 
 WORKDIR "/app"
 RUN chown nobody /app
+
+# Build identity (issue #228, round 2 MF-1/MF-2 — ふじ 差し戻し), distinct
+# from ADR-0015's wire protocol version (message-shape compatibility,
+# stamped "0" per-message): the full 40-char git SHA the image was built
+# from ("unknown" when the build ran outside a git checkout) and whether
+# that checkout was dirty. The compose/CI caller is responsible for
+# actually exporting both before `docker compose build`, see
+# docs/specs/deployment.md 4.3 (uses scripts/build-identity.mjs, the SAME
+# computation runner/scripts/generate-build-info.mjs uses, so the two
+# paths cannot silently diverge — MF-2).
+#
+# Baked into an IMMUTABLE FILE inside the image, not exposed as a
+# runtime-readable ENV (round 1's mistake, MF-1): an ENV can be overridden
+# at container-RUN time (`docker run -e`, or docker-compose's
+# `env_file: .env`), letting the image's own identity claim diverge from
+# what it was actually built from — the exact "identity that can drift
+# from the running artifact" failure ADR-0053 already rejected for the
+# runner (a live `git rev-parse` at startup), just moved to env-at-runtime
+# for the server. KAOIRO_PLAIN_HTTP's ARG->ENV pattern is deliberately NOT
+# mirrored here for that reason (ADR-0053's Alternatives Considered).
+# `KaoiroServerWeb.HealthController` reads this file, never
+# System.get_env — see its own moduledoc.
+ARG KAOIRO_BUILD_REVISION=unknown
+ARG KAOIRO_BUILD_DIRTY=false
+RUN printf '{"revision":"%s","dirty":%s}\n' \
+      "$KAOIRO_BUILD_REVISION" "$KAOIRO_BUILD_DIRTY" \
+      > /app/build-info.json \
+    && chown nobody:root /app/build-info.json
+LABEL org.opencontainers.image.revision=${KAOIRO_BUILD_REVISION}
 
 # Persistence dir for restart-surviving DETS ledgers (session_pointers /
 # agent_directory / permission_modes). A docker named volume mounted

@@ -78,6 +78,38 @@ describe("loadBuildInfo (issue #228)", () => {
     const info = loadBuildInfo(tmpDir);
     expect(info).toEqual({ revision: "unknown", dirty: false, built_at: "unknown" });
   });
+
+  // issue #228 round 2 MF-3 (ふじ 差し戻し): revision は string 型だけで
+  // なく値域 (40 桁 lowercase hex または "unknown") も検証する — round 1
+  // は typeof のみで、"abc" のような短すぎる/16進以外の文字列も
+  // BuildInfo として受理していた。
+  it("revision が値域外 (40 桁 lowercase hex でも unknown でもない) 文字列も unknown へ fail-soft する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-info-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "not-a-real-sha",
+        dirty: false,
+        built_at: "2026-08-12T00:00:00.000Z",
+      }),
+    );
+    const info = loadBuildInfo(tmpDir);
+    expect(info).toEqual({ revision: "unknown", dirty: false, built_at: "unknown" });
+  });
+
+  it("revision がアッパーケース hex (ロワーケース限定の値域外) も unknown へ fail-soft する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-info-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "0123456789ABCDEF0123456789ABCDEF01234567",
+        dirty: false,
+        built_at: "2026-08-12T00:00:00.000Z",
+      }),
+    );
+    const info = loadBuildInfo(tmpDir);
+    expect(info).toEqual({ revision: "unknown", dirty: false, built_at: "unknown" });
+  });
 });
 
 describe("formatBuildRevision (issue #228)", () => {

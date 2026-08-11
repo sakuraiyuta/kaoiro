@@ -21,9 +21,11 @@
     connection: KaoiroConnection;
     sessions: RunnerSessions | null;
     /** Server's own build_revision (issue #228, GET /api/health via
-     *  fetchServerHealth) — null on a pre-#228 server or a failed fetch,
-     *  in which case the mismatch warning below never fires (nothing to
-     *  compare against, not a claim of agreement). */
+     *  fetchServerHealth) — null on a pre-#228 server or a failed fetch.
+     *  Unlike round 1, this NOW surfaces its own warning below rather than
+     *  silently matching "nothing to compare" (issue #228 round 2 MF-4,
+     *  ふじ 差し戻し: an operator could not tell "revisions agree" apart
+     *  from "server health was unreachable" — both showed no warning). */
     serverBuildRevision?: string | null;
     onClose: () => void;
   } = $props();
@@ -102,20 +104,39 @@
   const host = $derived(hosts.find((h) => h.host_id === hostId) ?? null);
 
   // Build identity mismatch warning (issue #228). Observability only —
-  // never blocks launch. Covers three distinct cases the director
-  // explicitly asked to all surface (not just a revision mismatch):
-  // the runner's own build is unknown, the server's own build is
-  // unknown, or both are known but disagree. Absent host.build_revision
-  // (a pre-#228 runner) and a null serverBuildRevision (pre-#228 server /
-  // fetch failure) both mean "nothing to compare" -- silently no warning,
-  // not a false "unknown" claim.
+  // never blocks launch (canLaunch/launch() never reference this). Round 2
+  // (ふじ MF-4 差し戻し) widened the state matrix round 1 collapsed:
+  // "absent runner" and "server health unreachable" used to silently
+  // return null, indistinguishable from an exact match — an operator could
+  // not tell "identity confirmed equal" apart from "no signal at all".
+  // Every non-match state below now surfaces its own message; only a
+  // confirmed clean, matching pair stays silent.
+  //
+  // States, in the order checked:
+  //   1. host.build_revision absent  -- pre-#228 runner, no signal at all
+  //   2. host.build_revision unknown -- runner determined nothing
+  //   3. serverBuildRevision null    -- pre-#228 server OR /api/health
+  //                                     fetch failed (fetchServerHealth
+  //                                     does not distinguish the two; both
+  //                                     mean the operator has no server
+  //                                     identity to compare against)
+  //   4. serverBuildRevision unknown -- server determined nothing
+  //   5. revisions disagree          -- mismatch
+  //   6. revisions agree, host dirty -- match, but the runner's own
+  //                                     checkout had uncommitted changes
+  //   7. revisions agree, clean      -- silent (nothing to warn about)
   const buildRevisionWarning = $derived.by(() => {
-    if (!host || host.build_revision === undefined) return null;
+    if (!host) return null;
     const runnerRevision = host.build_revision;
+    if (runnerRevision === undefined) {
+      return "この host は build revision 情報を報告していません(pre-#228 runner)。";
+    }
     if (runnerRevision === "unknown") {
       return "この host の build revision が unknown です(git 情報なしでビルドされたか、pnpm build を経ていません)。";
     }
-    if (serverBuildRevision === null) return null;
+    if (serverBuildRevision === null) {
+      return "server の build revision を取得できません(pre-#228 server、または /api/health の取得に失敗)。";
+    }
     if (serverBuildRevision === "unknown") {
       return "server 自身の build revision が unknown です。";
     }
@@ -123,6 +144,12 @@
       return (
         `この host の build revision (${runnerRevision.slice(0, 12)}…) が ` +
         `server (${serverBuildRevision.slice(0, 12)}…) と一致しません。`
+      );
+    }
+    if (host.build_dirty === true) {
+      return (
+        `この host の build (${runnerRevision.slice(0, 12)}…) は ` +
+        "コミットされていない変更を含んでいます(dirty)。"
       );
     }
     return null;

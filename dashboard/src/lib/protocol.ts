@@ -1343,32 +1343,56 @@ export async function fetchAuthMethods(
   }
 }
 
+/** Value domain for a build_revision string (issue #228 round 2, ふじ MF-3
+ *  差し戻し): either the literal "unknown" or a lowercase 40-hex-digit git
+ *  SHA. Mirrors `KaoiroServer.BuildIdentity.valid_revision?/1` (server) and
+ *  runner's own `BUILD_REVISION_RE` (build_info.ts) — kept as an
+ *  independently-authored duplicate per this file's own plain-TS,
+ *  no-workspace-dependency contract (see the module header comment); a
+ *  malformed value must be dropped here rather than displayed as if it
+ *  were a real revision (spoofing prevention, same posture as the
+ *  `typeof` guards elsewhere in this file). */
+const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
+
+function isValidBuildRevision(value: unknown): value is string {
+  return value === "unknown" || (typeof value === "string" && BUILD_REVISION_RE.test(value));
+}
+
 /** Server's own build identity (issue #228), served at GET /api/health.
  *  `protocol_version` is ADR-0015's wire compatibility stamp — a
  *  DIFFERENT concept from `build_revision` (the git SHA the running image
  *  was built from); see HostInfo.build_revision's own doc for why the two
- *  are never conflated. */
+ *  are never conflated. `built_at` is deliberately absent — it is a
+ *  runner-only diagnostic field (issue #228 round 2 advisory 2, ふじ 差し戻
+ *  し), never part of the server's own identity response. */
 export interface ServerHealth {
   status: string;
   build_revision: string;
+  build_dirty: boolean;
   protocol_version: string;
 }
 
 /**
  * Fetches the server's build identity; null on any failure (including a
- * pre-#228 server with no /api/health route) so callers degrade to
- * showing no mismatch warning rather than a false one.
+ * pre-#228 server with no /api/health route, or a malformed field outside
+ * BuildInfo's value domain) so callers degrade to showing no mismatch
+ * warning rather than a false one. `cache: "no-store"` (issue #228 round 2
+ * MF-4, ふじ 差し戻し): the caller re-fetches this on every LaunchDialog
+ * open / reconnect, and a cached response would keep reporting a
+ * pre-redeploy server identity after the operator's own /api/health would
+ * answer differently.
  */
 export async function fetchServerHealth(base = ""): Promise<ServerHealth | null> {
   try {
-    const res = await fetch(`${base}/api/health`);
+    const res = await fetch(`${base}/api/health`, { cache: "no-store" });
     if (!res.ok) return null;
     const body = (await res.json()) as unknown;
     if (
       typeof body !== "object" ||
       body === null ||
       typeof (body as ServerHealth).status !== "string" ||
-      typeof (body as ServerHealth).build_revision !== "string" ||
+      !isValidBuildRevision((body as ServerHealth).build_revision) ||
+      typeof (body as ServerHealth).build_dirty !== "boolean" ||
       typeof (body as ServerHealth).protocol_version !== "string"
     ) {
       return null;
@@ -1921,9 +1945,12 @@ export function parseHosts(value: unknown): HostInfo[] {
           : {}),
         ...(Array.isArray(e.engines) ? { engines: e.engines } : {}),
         // issue #228: absent on a pre-#228 runner — only copy over when
-        // present AND correctly typed, so a malformed/forged value cannot
-        // spoof a build_revision that was never actually declared.
-        ...(typeof e.build_revision === "string"
+        // present AND correctly typed/in-domain, so a malformed/forged
+        // value cannot spoof a build_revision that was never actually
+        // declared (issue #228 round 2 MF-3, ふじ 差し戻し: typeof alone
+        // let through any string, e.g. an attacker-controlled label
+        // masquerading as a SHA).
+        ...(isValidBuildRevision(e.build_revision)
           ? { build_revision: e.build_revision }
           : {}),
         ...(typeof e.build_dirty === "boolean"

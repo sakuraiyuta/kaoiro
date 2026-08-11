@@ -26,6 +26,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
 
   alias KaoiroServer.Auth
   alias KaoiroServer.AgentActivity
+  alias KaoiroServer.BuildIdentity
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
   alias KaoiroServerWeb.AgentId
@@ -337,33 +338,49 @@ defmodule KaoiroServerWeb.RunnerChannel do
 
   # Build identity (issue #228), distinct from ADR-0015's protocol
   # version. Both fields optional — absent means a pre-#228 runner build.
-  # Loosely shape-checked and stored as-is for the operator `hosts` push;
+  # Shape/domain-checked (KaoiroServer.BuildIdentity, issue #228 round 2
+  # MF-3 差し戻し — shares its revision format with HealthController's own
+  # build-info.json read) and stored as-is for the operator `hosts` push;
   # the dashboard compares `build_revision` against the server's own (GET
   # /api/health) to warn on mismatch — this boundary never REJECTS a
-  # register over it, only over a type breach (same posture as
-  # parse_engines above).
+  # register over the SHA's VALUE, only over a type/shape breach (same
+  # posture as parse_engines above).
+  #
+  # MF-3 also closes an asymmetry round 1 missed: a register carrying only
+  # ONE of the pair (e.g. `build_revision` present, `build_dirty` absent)
+  # is rejected rather than silently accepted as a partial identity — a
+  # well-formed runner always sends both or neither (RunnerRegister's own
+  # doc comment), so a lone field is itself a structural shape breach, not
+  # a legitimate pre-#228 compat case.
   defp parse_build_info(payload) do
-    with {:ok, revision_attrs} <- parse_build_revision(payload),
-         {:ok, dirty_attrs} <- parse_build_dirty(payload) do
-      {:ok, Map.merge(revision_attrs, dirty_attrs)}
+    has_revision = Map.has_key?(payload, "build_revision")
+    has_dirty = Map.has_key?(payload, "build_dirty")
+
+    cond do
+      not has_revision and not has_dirty ->
+        {:ok, %{}}
+
+      has_revision and has_dirty ->
+        with {:ok, revision} <- parse_build_revision(payload["build_revision"]),
+             {:ok, dirty} <- parse_build_dirty(payload["build_dirty"]) do
+          {:ok, %{build_revision: revision, build_dirty: dirty}}
+        end
+
+      true ->
+        {:error, :incomplete_build_info}
     end
   end
 
-  defp parse_build_revision(payload) do
-    case Map.get(payload, "build_revision") do
-      nil -> {:ok, %{}}
-      revision when is_binary(revision) -> {:ok, %{build_revision: revision}}
-      _ -> {:error, :invalid_build_revision}
+  defp parse_build_revision(revision) do
+    if BuildIdentity.valid_revision?(revision) do
+      {:ok, revision}
+    else
+      {:error, :invalid_build_revision}
     end
   end
 
-  defp parse_build_dirty(payload) do
-    case Map.get(payload, "build_dirty") do
-      nil -> {:ok, %{}}
-      dirty when is_boolean(dirty) -> {:ok, %{build_dirty: dirty}}
-      _ -> {:error, :invalid_build_dirty}
-    end
-  end
+  defp parse_build_dirty(dirty) when is_boolean(dirty), do: {:ok, dirty}
+  defp parse_build_dirty(_), do: {:error, :invalid_build_dirty}
 
   defp forward_to_operators(event, payload, socket) do
     with :ok <- check_size(payload),

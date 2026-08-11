@@ -37,11 +37,22 @@ const UNKNOWN_BUILD_INFO: BuildInfo = {
   built_at: "unknown",
 };
 
+/** Value domain for `revision` (issue #228 round 2, ふじ MF-3 差し戻し):
+ *  either the literal "unknown" or a lowercase 40-hex-digit git SHA.
+ *  Mirrors `KaoiroServer.BuildIdentity.valid_revision?/1` (server's own
+ *  build-info.json read and its runner_channel.ex register parse) — kept
+ *  as an independently-authored duplicate, not a shared import, since this
+ *  file ships inside the tarball's dist/ and must not reach outside its
+ *  pnpm-deploy-pruned package boundary at runtime (see the module doc
+ *  comment above). */
+const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
+
 function isBuildInfoShape(value: unknown): value is BuildInfo {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   return (
     typeof v.revision === "string" &&
+    (v.revision === "unknown" || BUILD_REVISION_RE.test(v.revision)) &&
     typeof v.dirty === "boolean" &&
     typeof v.built_at === "string"
   );
@@ -73,12 +84,16 @@ export function loadBuildInfo(
   return isBuildInfoShape(parsed) ? parsed : UNKNOWN_BUILD_INFO;
 }
 
-/** The single canonical string form of a revision — `--version` output,
- *  startup log line, and the register payload's `build_revision` all use
- *  this, so the three surfaces can never drift into three different
- *  formats. Same `$rev-dirty` suffix convention and same full-SHA format
- *  as scripts/build-runner-tarball.sh's VERSION file, since both now read
- *  the same dist/build-info.json (issue #228). */
+/** The human-facing canonical string form of a revision — `--version`
+ *  output and the startup log line both use this. The register payload
+ *  does NOT (issue #228 round 2 advisory 1, ふじ 差し戻し: this doc
+ *  previously claimed it did) — `buildRegister` (config.ts) sends
+ *  `build_revision`/`build_dirty` as two SEPARATE wire fields (the raw
+ *  revision, undecorated) so the dashboard can independently compare
+ *  revision-equality and dirty-flag, rather than parsing a combined
+ *  human-readable string back apart. Same `$rev-dirty` suffix convention
+ *  and same full-SHA format as scripts/build-runner-tarball.sh's VERSION
+ *  file, since both now read the same dist/build-info.json (issue #228). */
 export function formatBuildRevision(info: BuildInfo): string {
   return info.dirty ? `${info.revision}-dirty` : info.revision;
 }

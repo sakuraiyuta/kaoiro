@@ -205,20 +205,6 @@ if path = System.get_env("KAOIRO_TOKEN_DENYLIST_PATH") do
   config :kaoiro_server, :token_denylist_path, path
 end
 
-# Build identity (issue #228) — distinct from ADR-0015's wire protocol
-# version. Baked into the release image as an ENV by server/Dockerfile's
-# final stage (from the KAOIRO_BUILD_REVISION build arg); unset here means
-# either a bare `mix phx.server` dev run (no image at all) or an image
-# built without the arg. Left absent when unset — GET /api/health
-# (HealthController) falls back to the literal string "unknown" at read
-# time, matching the runner's own build_revision fallback convention
-# (director's steer: "unknown" in dev is expected/normal, not an error;
-# only enforcement — deliberately NOT part of this issue, see #230 — would
-# make "unknown" abnormal in production).
-if v = System.get_env("KAOIRO_BUILD_REVISION") do
-  config :kaoiro_server, :build_revision, v
-end
-
 if config_env() == :prod do
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

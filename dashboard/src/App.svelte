@@ -148,13 +148,33 @@
   let origin = $state<{ x: number; y: number } | null>(null);
   let status = $state<ConnectionStatus>("connecting");
   let manifest = $state<PersonaManifest | null>(null);
-  // issue #228: server's own build identity, fetched once so LaunchDialog
-  // can warn on a mismatch against a connected runner's build_revision
-  // (from the `hosts` push). null on a pre-#228 server / fetch failure —
-  // LaunchDialog treats that the same as "nothing to compare", never a
-  // warning of its own.
+  // issue #228: server's own build identity, so LaunchDialog can warn on a
+  // mismatch against a connected runner's build_revision (from the `hosts`
+  // push). null on a pre-#228 server / fetch failure — LaunchDialog still
+  // surfaces THAT as its own distinct warning (issue #228 round 2 MF-4,
+  // ふじ 差し戻し: round 1 silently showed nothing here, indistinguishable
+  // from an operator's point of view from "revisions match").
   let serverHealth = $state<ServerHealth | null>(null);
+  // Monotonic generation guard (MF-4): refreshServerHealth is now called
+  // from three independent triggers (mount / channel join / launch button)
+  // whose fetches can resolve out of order — without this a slow EARLIER
+  // request could resolve after a faster LATER one and clobber it with
+  // stale data.
+  let serverHealthFetchGeneration = 0;
   let connection = $state<KaoiroConnection | null>(null);
+
+  // (Re)fetches the server's own build identity (issue #228 round 2 MF-4).
+  // Called on mount, on every channel (re)join (`onJoined` below — this IS
+  // "server reconnect": a fresh join can follow a server redeploy), and
+  // right before opening LaunchDialog, so the operator never launches
+  // against a health snapshot that predates the server they are actually
+  // about to talk to.
+  function refreshServerHealth(): void {
+    const gen = ++serverHealthFetchGeneration;
+    fetchServerHealth().then((next) => {
+      if (gen === serverHealthFetchGeneration) serverHealth = next;
+    });
+  }
 
   // Launch UI (#22, operator-only). `hosts` and operator-ness both come from
   // the `hosts` push, which only operators receive — so its arrival is what
@@ -544,6 +564,10 @@
             activeTimelineReplays,
             connectionGeneration,
           );
+          // issue #228 round 2 MF-4: every (re)join can follow a server
+          // redeploy, so the health snapshot fetched at mount may already
+          // be stale by the time this fires.
+          refreshServerHealth();
         },
         onSnapshot: (next) => (agents = next),
         onTaskSnapshot: (next) => (tasks = next),
@@ -1224,7 +1248,7 @@
     // Cards render the CSS face until the manifest arrives (or on
     // fetch failure), then swap to persona sprites.
     fetchPersonaManifest().then((next) => (manifest = next));
-    fetchServerHealth().then((next) => (serverHealth = next));
+    refreshServerHealth();
 
     // Ask once so wait-state hand-offs can raise a desktop notification (#7).
     requestNotificationPermission();
@@ -1401,7 +1425,17 @@
       ⚙
     </button>
     {#if isOperator && connection}
-      <button type="button" class="launch" onclick={() => (showLaunch = true)}>
+      <button
+        type="button"
+        class="launch"
+        onclick={() => {
+          // issue #228 round 2 MF-4: refresh right before opening rather
+          // than relying on whatever onMount/onJoined last fetched — the
+          // operator must not launch against a stale health snapshot.
+          refreshServerHealth();
+          showLaunch = true;
+        }}
+      >
         + 起動
       </button>
     {/if}

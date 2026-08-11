@@ -107,8 +107,17 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       host_id = "lab-pc-bad-build-revision"
       socket = join_runner(host_id)
 
+      # build_dirty must be present too (a valid, well-typed value) so this
+      # payload exercises the TYPE-check branch, not the pair-completeness
+      # branch below (issue #228 round 2 MF-3, ふじ 差し戻し — a payload
+      # with only one of the two keys present is its own distinct
+      # incomplete_build_info rejection, tested separately).
       ref =
-        push(socket, "register", register_payload(%{"build_revision" => 12345}))
+        push(
+          socket,
+          "register",
+          register_payload(%{"build_revision" => 12345, "build_dirty" => false})
+        )
 
       assert_reply ref, :error, %{reason: "invalid_build_revision"}
     end
@@ -118,9 +127,64 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       socket = join_runner(host_id)
 
       ref =
-        push(socket, "register", register_payload(%{"build_dirty" => "yes"}))
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "build_revision" => "0123456789abcdef0123456789abcdef01234567",
+            "build_dirty" => "yes"
+          })
+        )
 
       assert_reply ref, :error, %{reason: "invalid_build_dirty"}
+    end
+
+    # issue #228 round 2 MF-3 (ふじ 差し戻し): 型は string でも値域外
+    # (40 桁 hex でも "unknown" でもない) は invalid_build_revision —
+    # round 1 は is_binary だけを見ており、空文字・短すぎ・16進以外の
+    # 文字が素通りしていた。
+    test "build_revision が string でも値域外なら invalid_build_revision" do
+      host_id = "lab-pc-bad-build-revision-domain"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "build_revision" => "not-a-real-sha",
+            "build_dirty" => false
+          })
+        )
+
+      assert_reply ref, :error, %{reason: "invalid_build_revision"}
+    end
+
+    # issue #228 round 2 MF-3: build_revision/build_dirty は「両方省略」
+    # または「両方提示」のみが正で、片方だけの提示は register 全体を
+    # reject する — round 1 は各フィールドを独立に optional 扱いしており、
+    # 非対称な半端な組み合わせを黙って受理していた。
+    test "build_revision のみ提示 (build_dirty 無し) は incomplete_build_info" do
+      host_id = "lab-pc-partial-build-info-revision"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{"build_revision" => "0123456789abcdef0123456789abcdef01234567"})
+        )
+
+      assert_reply ref, :error, %{reason: "incomplete_build_info"}
+    end
+
+    test "build_dirty のみ提示 (build_revision 無し) は incomplete_build_info" do
+      host_id = "lab-pc-partial-build-info-dirty"
+      socket = join_runner(host_id)
+
+      ref = push(socket, "register", register_payload(%{"build_dirty" => true}))
+
+      assert_reply ref, :error, %{reason: "incomplete_build_info"}
     end
 
     test "build_revision/build_dirty は hosts push (public_entry) に含まれる" do

@@ -125,10 +125,11 @@ describe("fetchAuthMethods (issue #65 / ADR-0042)", () => {
 describe("fetchServerHealth (issue #228)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("health JSON を返す", async () => {
+  it("health JSON を返す (no-store でフェッチする)", async () => {
     const health = {
       status: "ok",
       build_revision: "0123456789abcdef0123456789abcdef01234567",
+      build_dirty: false,
       protocol_version: "0",
     };
     vi.stubGlobal(
@@ -137,7 +138,10 @@ describe("fetchServerHealth (issue #228)", () => {
     );
 
     expect(await fetchServerHealth()).toEqual(health);
-    expect(fetch).toHaveBeenCalledWith("/api/health");
+    // issue #228 round 2 MF-4 (ふじ 差し戻し): LaunchDialog open / channel
+    // rejoin ごとに再取得するので、キャッシュされた古い応答を返してはい
+    // けない。
+    expect(fetch).toHaveBeenCalledWith("/api/health", { cache: "no-store" });
   });
 
   it("404 は null(#228 以前の server へのフォールバック用)", async () => {
@@ -149,6 +153,42 @@ describe("fetchServerHealth (issue #228)", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({ ok: true, json: async () => ({ status: "ok" }) })),
+    );
+    expect(await fetchServerHealth()).toBeNull();
+  });
+
+  // issue #228 round 2 MF-3 (ふじ 差し戻し): build_dirty 欠落は型崩れと
+  // 同じ扱いで null に落ちる — round 1 は build_dirty を検証していな
+  // かった。
+  it("build_dirty が欠けたレスポンスは null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          status: "ok",
+          build_revision: "0123456789abcdef0123456789abcdef01234567",
+          protocol_version: "0",
+        }),
+      })),
+    );
+    expect(await fetchServerHealth()).toBeNull();
+  });
+
+  // issue #228 round 2 MF-3: build_revision が値域外 (40 桁 hex でも
+  // "unknown" でもない) なら型が string でも null に落ちる。
+  it("build_revision が値域外の文字列なら null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          status: "ok",
+          build_revision: "not-a-real-sha",
+          build_dirty: false,
+          protocol_version: "0",
+        }),
+      })),
     );
     expect(await fetchServerHealth()).toBeNull();
   });
@@ -1529,6 +1569,25 @@ describe("parseHosts (#22)", () => {
     expect(host).toBeDefined();
     expect("build_revision" in host!).toBe(false);
     expect("build_dirty" in host!).toBe(false);
+  });
+
+  // issue #228 round 2 MF-3 (ふじ 差し戻し): typeof だけでは弾けない値域外
+  // 文字列 (40 桁 hex でも "unknown" でもない) — round 1 は string である
+  // ことしか見ておらず、任意の文字列を revision として通していた。
+  it("build_revision が文字列でも値域外なら落とす (spoofing 防止)", () => {
+    const [host] = parseHosts({
+      "lab-pc-1": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_revision: "not-a-real-sha",
+        build_dirty: false,
+      },
+    });
+    expect(host).toBeDefined();
+    expect("build_revision" in host!).toBe(false);
+    // build_dirty is independently typed and still valid here, so it
+    // survives even though its sibling field was dropped.
+    expect(host!.build_dirty).toBe(false);
   });
 });
 

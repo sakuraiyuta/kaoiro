@@ -140,15 +140,25 @@ describe("LaunchDialog build revision warning (issue #228)", () => {
     expect(text).toContain("server");
   });
 
-  it("pre-#228 runner (build_revision 無し) は比較材料が無いので警告なし", async () => {
+  // issue #228 round 2 MF-4 (ふじ 差し戻し): round 1 silently showed
+  // nothing for "no runner signal at all" — indistinguishable from a
+  // confirmed match. Round 2 surfaces this as its own message.
+  it("pre-#228 runner (build_revision 無し) はその旨を警告する", async () => {
     const target = await renderLaunch(
       [claudeHost()],
       "2222222222222222222222222222222222222222",
     );
-    expect(warningText(target)).toBeNull();
+    const text = warningText(target);
+    expect(text).not.toBeNull();
+    expect(text).toContain("報告していません");
   });
 
-  it("serverBuildRevision が null (pre-#228 server / fetch 失敗) なら警告なし", async () => {
+  // issue #228 round 2 MF-4: round 1 treated a null serverBuildRevision
+  // (pre-#228 server OR a failed /api/health fetch) the same as "nothing
+  // to compare" and stayed silent. Round 2 surfaces this too — an
+  // operator must be able to tell "confirmed matching" apart from
+  // "no server signal at all".
+  it("serverBuildRevision が null (pre-#228 server / fetch 失敗) ならその旨を警告する", async () => {
     const target = await renderLaunch(
       [
         claudeHost({
@@ -158,6 +168,22 @@ describe("LaunchDialog build revision warning (issue #228)", () => {
       ],
       null,
     );
-    expect(warningText(target)).toBeNull();
+    const text = warningText(target);
+    expect(text).not.toBeNull();
+    expect(text).toContain("取得できません");
+  });
+
+  // issue #228 round 2 MF-4: dirty was computed but never surfaced by
+  // round 1's derived function at all — a match on a dirty checkout looked
+  // identical to a match on a clean one.
+  it("revision が一致していても host が dirty なら警告する", async () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const target = await renderLaunch(
+      [claudeHost({ build_revision: sha, build_dirty: true })],
+      sha,
+    );
+    const text = warningText(target);
+    expect(text).not.toBeNull();
+    expect(text).toContain("dirty");
   });
 });
