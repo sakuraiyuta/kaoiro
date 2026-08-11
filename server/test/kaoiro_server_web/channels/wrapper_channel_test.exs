@@ -3,6 +3,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
   import KaoiroServer.OAuthAllowlistFixture
 
+  alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.ConversationStates
@@ -246,6 +247,35 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     assert owner == socket.channel_pid
     assert is_binary(started_at)
+  end
+
+  describe "persona_sync push on join (issue #197 段階3, D14 acceptance 1)" do
+    test "AgentDirectory に entry があれば join のたびに現在の name/revision を push する" do
+      agent_id = "test.persona-sync-fresh"
+      AgentDirectory.record(agent_id, %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"})
+
+      _socket = join_wrapper(agent_id)
+
+      assert_push "persona_sync", %{"name" => "あお", "revision" => 0}
+    end
+
+    test "rename 後に reconnect すると新しい name/revision が push される (再同期)" do
+      agent_id = "test.persona-sync-reconnect"
+      AgentDirectory.record(agent_id, %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"})
+      assert {:ok, %{revision: 1}} = AgentDirectory.rename(agent_id, "あお(改名)")
+
+      _socket = join_wrapper(agent_id)
+
+      assert_push "persona_sync", %{"name" => "あお(改名)", "revision" => 1}
+    end
+
+    test "AgentDirectory に entry が無ければ persona_sync は push されない" do
+      agent_id = "test.persona-sync-none"
+
+      _socket = join_wrapper(agent_id)
+
+      refute_push "persona_sync", %{}
+    end
   end
 
   test "matching duplicate early join は channel を停止し owner/prompt を奪わない" do

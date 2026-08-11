@@ -282,6 +282,15 @@ export interface ServerLinkOptions {
    *  choice. Payload is `{ mode: string }` — one of the SDK PermissionMode
    *  values; validation lives in the wrapper. */
   onSetPermissionMode?: (mode: string) => void;
+  /** The AUTHORITATIVE persona display-name state, pushed by the server on
+   *  every join (fresh AND reconnect, issue #197 段階3 D14 acceptance 1) and
+   *  on a live `rename_agent` relay. `revision` is a monotonic per-agent_id
+   *  counter (`AgentDirectory.rename/2`) — the handler MUST drop a push
+   *  whose revision is <= the last one it applied (D15: two `rename_agent`
+   *  calls racing on the server can broadcast in either order, and this is
+   *  what lets the wrapper converge on the newer one regardless of arrival
+   *  order). Payload is `{ name: string, revision: number }`. */
+  onRenamePersona?: (name: string, revision: number) => void;
   /** attach_open relayed by the server (file-upload spec / ADR-0025).
    *  Announces an upcoming upload; the wrapper registers a pending entry. */
   onAttachOpen?: (msg: AttachOpenMessage) => void;
@@ -836,6 +845,49 @@ export class ServerLink {
       if (isObject(payload) && typeof payload.mode === "string") {
         options.onSetPermissionMode?.(payload.mode);
       }
+    });
+    // protocol.md (issue #197 段階3): server -> wrapper `persona_sync`
+    // carries the authoritative current name + revision, both on join
+    // (fresh AND reconnect) and on a live `rename_agent`. `name` gets the
+    // SAME value-level narrow `userDirectoryEntryFrom` uses
+    // (`validDisplayNameOrNull` — trim / <= 64 grapheme clusters / no
+    // control chars), not just `typeof === "string"` (ふじ MF-4 レビュー
+    // 指摘: a bare string check let an empty, overlong, or control-char
+    // name flow straight into config/state_change/stdout). `revision`
+    // must be a safe integer in `AgentDirectory.rename/2`'s actual output
+    // domain (0 <= revision <= Number.MAX_SAFE_INTEGER — the server
+    // fail-closes with `revision_exhausted` rather than ever emitting
+    // past that ceiling). Two INDEPENDENT conditions reject the two
+    // ends, deliberately not one — `Number.isSafeInteger` alone accepts
+    // negative integers (its domain is symmetric,
+    // -(2^53-1)..2^53-1), so it cannot do this job by itself:
+    // `revision < 0` drops negatives (a domain check, not a poisoning
+    // defense — the producer, `AgentDirectory.rename/2`, never emits
+    // one, and `host.renamePersona`'s `revision <= #personaRevision`
+    // guard starts from a baseline of 0, so a negative value could never
+    // plant there in the first place), and `!Number.isSafeInteger(...)`
+    // drops unsafe-large values, i.e. anything past MAX_SAFE_INTEGER
+    // (ふじ MF-5 レビュー指摘: THIS is the actual poisoning risk this
+    // narrow guards against — the server can hold an authoritative
+    // revision this narrow keeps dropping, which would leave this
+    // agent's persona permanently unable to converge even across
+    // reconnects, if the server-side ceiling above did not already
+    // prevent it from being emitted at all). The stale-vs-newer
+    // comparison itself still happens in `host.renamePersona`, not
+    // here — same division of labor `set_permission_mode` has with
+    // `host.setPermissionMode`.
+    this.#channel.on("persona_sync", (payload: unknown) => {
+      if (!isObject(payload) || typeof payload.name !== "string") return;
+      const name = validDisplayNameOrNull(payload.name);
+      if (
+        name === null ||
+        typeof payload.revision !== "number" ||
+        !Number.isSafeInteger(payload.revision) ||
+        payload.revision < 0
+      ) {
+        return;
+      }
+      options.onRenamePersona?.(name, payload.revision);
     });
     // File-upload wire (file-upload spec / ADR-0025). attach_open declares an
     // upload, attach_chunk delivers a binary slice, attach_close finalises.

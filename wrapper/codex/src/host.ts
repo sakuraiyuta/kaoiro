@@ -255,6 +255,10 @@ function rateLimitsDiffer(
 
 export class CodexHost implements EngineAdapter {
   readonly #config: WrapperConfig;
+  /** Last-applied `persona_sync` revision (issue #197 段階3, D15) — see
+   *  `AgentHost`'s identical field in `@kaoiro/claude-code` for the
+   *  reasoning shared across both engines. */
+  #personaRevision = 0;
   readonly #options: CodexHostOptions;
   readonly #now: () => string;
   #machine: MachineState = initialMachineState();
@@ -603,6 +607,16 @@ export class CodexHost implements EngineAdapter {
     throw new Error(
       "codex: permission is launch-fixed; mid-session change unsupported (ADR-0033 F3)",
     );
+  }
+
+  /** See `AgentHost#renamePersona` in `@kaoiro/claude-code` — identical
+   *  contract, both engines share the same `EngineAdapter` surface
+   *  (issue #197 段階3). */
+  renamePersona(name: string, revision: number): void {
+    if (revision <= this.#personaRevision) return;
+    this.#personaRevision = revision;
+    this.#config.persona = { ...this.#config.persona, name };
+    this.#emitState(this.#machine.state);
   }
 
   setPendingPermission(pending: PendingPermissionExt | null): void {

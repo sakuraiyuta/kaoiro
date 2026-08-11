@@ -1022,6 +1022,180 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "rename_agent (issue #197 段階3, D12)" do
+    test "live agent を rename でき、AgentDirectory が更新され wrapper へ persona_sync が relay される" do
+      agent_id = "test.rename-1"
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "あお(改名)"})
+
+      assert_reply ref, :ok, %{"persona" => persona, "revision" => 1}
+      assert persona["name"] == "あお(改名)"
+      # id / sprite_set は不変 (ADR-0030 D2 改訂: 可変なのは name のみ)
+      assert persona["id"] == "ao"
+      assert persona["sprite_set"] == "ao"
+
+      assert_broadcast "persona_sync", %{"name" => "あお(改名)", "revision" => 1}
+
+      assert %{persona: %{"name" => "あお(改名)"}, revision: 1} = AgentDirectory.get(agent_id)
+    end
+
+    test "disconnected agent も rename できる (wrapper 不在でも relay broadcast 自体は行う)" do
+      agent_id = "test.rename-dc"
+      put_disconnected(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "オフライン改名"})
+
+      assert_reply ref, :ok, %{"revision" => 1}
+      assert %{persona: %{"name" => "オフライン改名"}} = AgentDirectory.get(agent_id)
+    end
+
+    test "2 回 rename すると revision が単調に進み、最新の name だけが残る" do
+      agent_id = "test.rename-twice"
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref1 = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "一回目"})
+      assert_reply ref1, :ok, %{"revision" => 1}
+
+      ref2 = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "二回目"})
+      assert_reply ref2, :ok, %{"revision" => 2}
+
+      assert %{persona: %{"name" => "二回目"}, revision: 2} = AgentDirectory.get(agent_id)
+    end
+
+    test "viewer の rename は forbidden、AgentDirectory は無変化" do
+      agent_id = "test.rename-viewer"
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+      socket = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "乗っ取り"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+      assert %{persona: %{"name" => "あお"}, revision: 0} = AgentDirectory.get(agent_id)
+    end
+
+    test "未知 agent は unknown_agent" do
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "rename_agent", %{"agent_id" => "test.rename-none", "name" => "x"})
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+
+    test "空白 / 64 grapheme 超 / 制御文字混入の name は invalid_name として拒否され AgentDirectory は無変化" do
+      agent_id = "test.rename-invalid"
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      for bad_name <- ["", "   ", String.duplicate("a", 65), "bad" <> <<0x01>> <> "name"] do
+        ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => bad_name})
+        assert_reply ref, :error, %{reason: "invalid_name"}
+      end
+
+      assert %{persona: %{"name" => "あお"}, revision: 0} = AgentDirectory.get(agent_id)
+    end
+
+    # D16: 既に join 済みの operator の directory copy が rename 後に live で
+    # 更新される。viewer には決して届かない (ADR-0030 D10)。
+    test "rename は既 join operator の directory を live 更新し、viewer には届かない" do
+      agent_id = "test.rename-directory"
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+
+      operator_socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "directory", %{"entries" => _}
+
+      viewer_socket = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(operator_socket, "rename_agent", %{"agent_id" => agent_id, "name" => "改名済み"})
+      assert_reply ref, :ok, %{}
+
+      assert_push "directory", %{"entries" => entries}
+      assert %{persona: %{"name" => "改名済み"}} = entries[agent_id]
+
+      # viewer 側の socket には "directory" が一切来ない (join 時も rename 後も)。
+      refute_push "directory", %{}
+      _ = viewer_socket
+    end
+  end
+
+  describe "rename_user (issue #197 段階3, D13)" do
+    test "operator は既存 user を rename でき、更新後の public entry を返す" do
+      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-1"}, "user", "R")
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "rename_user", %{"user_id" => user.id, "name" => "あお(user)"})
+
+      assert_reply ref, :ok, %{id: id, kind: "user", display_name: "あお(user)"}
+      assert id == user.id
+
+      assert KaoiroServer.Users.get(user.id) == %{
+               id: user.id,
+               kind: "user",
+               display_name: "あお(user)"
+             }
+    end
+
+    test "viewer の rename_user は forbidden" do
+      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-viewer"}, "user", "R")
+      socket = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "rename_user", %{"user_id" => user.id, "name" => "乗っ取り"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+      assert KaoiroServer.Users.get(user.id).display_name == "R"
+    end
+
+    test "未知 user は unknown_user" do
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "rename_user", %{"user_id" => "no-such-user", "name" => "x"})
+      assert_reply ref, :error, %{reason: "unknown_user"}
+    end
+
+    test "charset 違反の user_id は invalid_user_id" do
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "rename_user", %{"user_id" => "has space", "name" => "x"})
+      assert_reply ref, :error, %{reason: "invalid_user_id"}
+    end
+
+    test "空白 / 64 grapheme 超 / 制御文字混入の name は invalid_name" do
+      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-invalid"}, "user", "R")
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      for bad_name <- ["", String.duplicate("a", 65), "bad" <> <<0x01>> <> "name"] do
+        ref = push(socket, "rename_user", %{"user_id" => user.id, "name" => bad_name})
+        assert_reply ref, :error, %{reason: "invalid_name"}
+      end
+
+      assert KaoiroServer.Users.get(user.id).display_name == "R"
+    end
+  end
+
   describe "safe_reason allow-list (issue #62)" do
     test "既知の atom reason はそのまま文字列化される" do
       for r <- [

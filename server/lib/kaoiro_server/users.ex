@@ -102,6 +102,30 @@ defmodule KaoiroServer.Users do
   end
 
   @doc """
+  Renames `user_id`'s `display_name` (issue #197 段階3, D13). `name`
+  must already be trimmed/validated by the caller (the same 64-grapheme
+  / control-char rule `WrapperChannel.valid_display_name/1` enforces on
+  the `directory_request` wire, issue #197 段階2 MF-1) — this function
+  only rejects an unknown `user_id`, it does not re-validate `name`'s
+  shape (same division of labor `get_or_create/4` already has with its
+  caller-supplied `initial_display_name`).
+
+  Unlike `AgentDirectory.rename/3`, this store carries no revision
+  counter: `all_with_role/1` reads `display_name` fresh from this
+  GenServer's state on every `directory_request`, so there is no
+  wrapper-side cache to reconcile and therefore no out-of-order-delivery
+  race for a counter to resolve (see `all_with_role/1`'s own doc on the
+  live-join contract).
+
+  Returns `{:ok, %{id:, kind:, display_name:}}` (the updated public
+  entry, same shape `get/2` returns) or `{:error, :not_found}` for a
+  `user_id` this ledger has never created.
+  """
+  def rename(user_id, name, server \\ __MODULE__) when is_binary(name) do
+    GenServer.call(server, {:rename, user_id, name})
+  end
+
+  @doc """
   Parses `KAOIRO_EXPOSE_USERS_TO_AGENTS`'s raw env value (as read by
   `System.get_env/1`, so `nil` on unset) into the boolean
   `config/runtime.exs` stores under `:expose_users_to_agents`.
@@ -235,6 +259,19 @@ defmodule KaoiroServer.Users do
       Map.new(state.entries, fn {user_id, entry} -> {user_id, public_entry(user_id, entry)} end)
 
     {:reply, reply, state}
+  end
+
+  def handle_call({:rename, user_id, name}, _from, state) do
+    case Map.get(state.entries, user_id) do
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
+      entry ->
+        new_entry = %{entry | display_name: name}
+        :ok = :dets.insert(state.table, {user_id, new_entry})
+        state = %{state | entries: Map.put(state.entries, user_id, new_entry)}
+        {:reply, {:ok, public_entry(user_id, new_entry)}, state}
+    end
   end
 
   def handle_call({:all_with_role, oauth_roles, token_roles}, _from, state) do

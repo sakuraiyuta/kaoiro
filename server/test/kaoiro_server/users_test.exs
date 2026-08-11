@@ -118,6 +118,53 @@ defmodule KaoiroServer.UsersTest do
     GenServer.stop(name2)
   end
 
+  describe "rename/3 (issue #197 段階3)" do
+    test "display_name を書き換え、更新後の public entry を返す", %{server: server} do
+      user = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+
+      assert {:ok, renamed} = Users.rename(user.id, "あお(改名)", server)
+      assert renamed == %{id: user.id, kind: "user", display_name: "あお(改名)"}
+      assert Users.get(user.id, server) == renamed
+    end
+
+    test "rename は internal source を公開しない", %{server: server} do
+      user = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+
+      assert {:ok, renamed} = Users.rename(user.id, "あお(改名)", server)
+      refute Map.has_key?(renamed, :source)
+    end
+
+    test "未知 user_id は :not_found", %{server: server} do
+      assert Users.rename("no-such-id", "x", server) == {:error, :not_found}
+    end
+
+    test "rename 後の再起動で新しい display_name が残る", %{server: server, path: path} do
+      user = Users.get_or_create({:oauth, "github", "kuroe"}, "user", "Kuroe", server)
+      assert {:ok, _renamed} = Users.rename(user.id, "くろえ(改)", server)
+      :ok = GenServer.stop(server)
+
+      name2 = :"users_rename_restart_#{System.unique_integer([:positive])}"
+      {:ok, _pid} = Users.start_link(name: name2, path: path)
+
+      assert Users.get(user.id, name2) == %{
+               id: user.id,
+               kind: "user",
+               display_name: "くろえ(改)"
+             }
+
+      GenServer.stop(name2)
+    end
+
+    test "rename 後も all_with_role の role join は継続する", %{server: server} do
+      put_allowlist("github:dir-rename-role:operator\n")
+      user = Users.get_or_create({:oauth, "github", "dir-rename-role"}, "user", "R", server)
+      assert {:ok, _renamed} = Users.rename(user.id, "R(改)", server)
+
+      assert [%{id: id, display_name: "R(改)", role: :operator}] = Users.all_with_role(server)
+      assert id == user.id
+    end
+  end
+
   describe "all_with_role/1 (issue #197 段階2)" do
     setup do
       on_exit(fn -> Application.delete_env(:kaoiro_server, :client_tokens) end)

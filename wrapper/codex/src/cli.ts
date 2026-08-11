@@ -19,6 +19,7 @@ import {
   isIngressStamp,
   makeLog,
   makeStateChange,
+  mergePendingPersonaSync,
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
@@ -31,7 +32,10 @@ import { CodexHost } from "./host.js";
 import { readCodexHistory } from "./history.js";
 import { codexSidecarPath } from "./rollout.js";
 import { effectiveNetworkAccess } from "./network_access.js";
-import { resolveCodexSources } from "./source_resolution.js";
+import {
+  applyEnvDefaultModel,
+  resolveCodexSources,
+} from "./source_resolution.js";
 
 const COLOR: Record<KaoiroState, string> = {
   idle: "90",
@@ -84,17 +88,24 @@ async function main(): Promise<void> {
   // account default. Model source stamping to ext.model_source lands in
   // 15-4c.
   const envDefaultModel = process.env.KAOIRO_CODEX_DEFAULT_MODEL;
-  const effectiveConfig: typeof config =
-    config.model === undefined && envDefaultModel !== undefined
-      ? { ...config, model: envDefaultModel }
-      : config;
 
   // Source vocabulary for ext.model_source / ext.effort_source (ADR-0032
   // F4bc addendum, phase-15 15-4c + phase-23 P1 pair-aware apply).
   // Priority + semantics are pinned in `resolveCodexSources` unit tests
   // (source_resolution.test.ts); CLI just consumes the resolved pair.
+  // MUST run before the env-default mutation below — it reads
+  // `config.model` to decide "config" vs "env" attribution, and that
+  // distinction only exists before the mutation fills the field in.
   const { modelSource: resolvedModelSource, effortSource: resolvedEffortSource } =
     resolveCodexSources(config, envDefaultModel);
+
+  // issue #197 段階3 (ふじ MF-1 レビュー指摘): mutates `config.model` in
+  // place rather than cloning into a separate `effectiveConfig` — see
+  // `applyEnvDefaultModel`'s own doc for why the split object was a bug
+  // (two independently-diverging persona sources of truth after a
+  // rename). Every producer below now reads the same, single, mutated
+  // `config` object.
+  applyEnvDefaultModel(config, envDefaultModel);
 
   // Engine-mismatch config warns (phase-15 15-6). Claude-only fields
   // (permission_mode, allowed_tools) surface loudly instead of being
@@ -116,16 +127,16 @@ async function main(): Promise<void> {
   // when explicitly resolved. ignored-flags mark claude-only fields when
   // they were nonetheless supplied.
   {
-    const resolvedModel = effectiveConfig.model ?? "<account default>";
+    const resolvedModel = config.model ?? "<account default>";
     const resolvedModelTag =
       resolvedModelSource !== undefined
         ? `(source=${resolvedModelSource})`
         : "(source=account)";
     const effortPart =
-      effectiveConfig.effort !== undefined
-        ? ` effort=${effectiveConfig.effort}(source=${resolvedEffortSource ?? "default"})`
+      config.effort !== undefined
+        ? ` effort=${config.effort}(source=${resolvedEffortSource ?? "default"})`
         : "";
-    const sandbox = effectiveConfig.sandbox ?? "workspace-write";
+    const sandbox = config.sandbox ?? "workspace-write";
     const sandboxSource: string =
       config.sandbox !== undefined ? "config" : "default";
     // Sandbox-aware normalization (phase-22 藤 audit, ADR-0033 F3 追補):
@@ -135,7 +146,7 @@ async function main(): Promise<void> {
     // diverges from ext.effective / whoami.
     const networkAccess = effectiveNetworkAccess(
       sandbox,
-      effectiveConfig.network_access ?? false,
+      config.network_access ?? false,
     );
     const permissionModePart =
       config.permission_mode !== undefined
@@ -161,6 +172,13 @@ async function main(): Promise<void> {
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
   let instructionChain: Promise<void> = Promise.resolve();
+  // The after_join `persona_sync` push (WrapperChannel.after_join_handshake,
+  // issue #197 段階3) can arrive before `host` is constructed below —
+  // `personaPromptPromise` is awaited first (same ordering claude-code's
+  // cli.ts documents for its own pendingPermissionMode buffer). Buffer it
+  // and apply once `host` exists, rather than risk touching an
+  // undefined `host` from the handler.
+  let pendingPersonaSync: { name: string; revision: number } | undefined;
 
   const onState = (envelope: Envelope): void => {
     printState(envelope);
@@ -230,7 +248,7 @@ async function main(): Promise<void> {
     seedState: () =>
       link?.send(
         makeStateChange(
-          effectiveConfig,
+          config,
           host?.state ?? "idle",
           new Date().toISOString(),
           {},
@@ -298,6 +316,27 @@ async function main(): Promise<void> {
       process.stdout.write(
         `  set_permission_mode: ignored (codex is launch-fixed): ${mode}\n`,
       );
+    },
+    onRenamePersona: (name, revision) => {
+      // protocol.md (issue #197 段階3): authoritative name from the
+      // server — fresh-join / reconnect sync OR a live `rename_agent`
+      // relay. Structural validation already happened in transport.ts;
+      // the revision-freshness check happens inside host.renamePersona
+      // itself (D15). Buffer if `host` is not yet constructed (see
+      // pendingPersonaSync comment above).
+      process.stdout.write(`  persona_sync: ${name} (revision=${revision})\n`);
+      if (host === undefined) {
+        // D15 review follow-up: a plain overwrite here would let a
+        // lower-revision push win the pre-host race against a
+        // higher-revision one (see mergePendingPersonaSync's doc).
+        pendingPersonaSync = mergePendingPersonaSync(
+          pendingPersonaSync,
+          name,
+          revision,
+        );
+        return;
+      }
+      host.renamePersona(name, revision);
     },
     onAttachOpen: (msg) => {
       host.attachOpen(msg);
@@ -389,7 +428,7 @@ async function main(): Promise<void> {
     clearTimeout(timeoutHandle);
   }
 
-  host = new CodexHost(effectiveConfig, {
+  host = new CodexHost(config, {
     onState,
     onLog,
     onTask,
@@ -428,11 +467,18 @@ async function main(): Promise<void> {
       : {}),
     // Resume snapshot relayed by the runner on a resume launch (ADR-0014
     // F1 追補, phase-15 D8). Undefined on a fresh spawn.
-    ...(effectiveConfig.resume_snapshot !== undefined
-      ? { resumeSnapshot: effectiveConfig.resume_snapshot }
+    ...(config.resume_snapshot !== undefined
+      ? { resumeSnapshot: config.resume_snapshot }
       : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   });
+
+  // Apply the after_join persona_sync that arrived before host was
+  // constructed (issue #197 段階3), same reasoning as pendingPersonaSync
+  // above.
+  if (pendingPersonaSync !== undefined) {
+    host.renamePersona(pendingPersonaSync.name, pendingPersonaSync.revision);
+  }
 
   process.on("SIGINT", () => {
     void host
@@ -446,7 +492,7 @@ async function main(): Promise<void> {
     // appears on the dashboard before its first turn.
     if (prompt === undefined) {
       const idle = makeStateChange(
-        effectiveConfig, "idle", new Date().toISOString(), {},
+        config, "idle", new Date().toISOString(), {},
         host.statusExtSnapshot(),
       );
       printState(idle);

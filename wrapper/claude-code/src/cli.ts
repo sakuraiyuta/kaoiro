@@ -31,6 +31,7 @@ import {
   classifyInterAgentError,
   formatInboundMessage,
   isIngressStamp,
+  mergePendingPersonaSync,
 } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "./read_only_tools.js";
@@ -210,6 +211,11 @@ async function main(): Promise<void> {
   // host.run(), so host.ts's "setPermissionMode before run() sets initial
   // mode" contract still holds (host.ts #58 source order).
   let pendingPermissionMode: PermissionMode | undefined;
+  // Same race as pendingPermissionMode (issue #197 段階3): the after_join
+  // `persona_sync` push (WrapperChannel.after_join_handshake, pushed after
+  // set_permission_mode) can also arrive before `host` exists. Buffer it and
+  // apply after construction, same discipline as pendingPermissionMode above.
+  let pendingPersonaSync: { name: string; revision: number } | undefined;
   // host.send is async now (the PDF fit-to-SDK path awaits pdf-lib). Chain
   // operator instructions through one Promise so a slow render (e.g. a big
   // PDF) does not let the next instruction's queue.push run first, which
@@ -489,6 +495,27 @@ async function main(): Promise<void> {
       }
       void host.setPermissionMode(mode as PermissionMode).catch(() => {});
     },
+    onRenamePersona: (name, revision) => {
+      // protocol.md (issue #197 段階3): authoritative name from the
+      // server — fresh-join / reconnect sync OR a live `rename_agent`
+      // relay. Structural validation already happened in transport.ts;
+      // the revision-freshness check happens inside host.renamePersona
+      // itself (D15). Buffer if `host` is not yet constructed, same
+      // discipline as onSetPermissionMode above.
+      process.stdout.write(`  persona_sync: ${name} (revision=${revision})\n`);
+      if (host === undefined) {
+        // D15 review follow-up: a plain overwrite here would let a
+        // lower-revision push win the pre-host race against a
+        // higher-revision one (see mergePendingPersonaSync's doc).
+        pendingPersonaSync = mergePendingPersonaSync(
+          pendingPersonaSync,
+          name,
+          revision,
+        );
+        return;
+      }
+      host.renamePersona(name, revision);
+    },
     // File-upload wire (file-upload spec / ADR-0025). attach_* events
     // feed pending_uploads on the host; the host's validation emits
     // attach_rejected / instruction_rejected straight back to the server.
@@ -734,6 +761,13 @@ async function main(): Promise<void> {
   // yet) — restores the persisted mode as if it had been applied inline.
   if (pendingPermissionMode !== undefined) {
     void host.setPermissionMode(pendingPermissionMode).catch(() => {});
+  }
+
+  // Apply the after_join persona_sync that arrived before host was
+  // constructed (issue #197 段階3), same reasoning as pendingPermissionMode
+  // above.
+  if (pendingPersonaSync !== undefined) {
+    host.renamePersona(pendingPersonaSync.name, pendingPersonaSync.revision);
   }
 
   process.on("SIGINT", () => {

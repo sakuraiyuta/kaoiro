@@ -95,6 +95,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.SessionResets
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
+  alias KaoiroServer.Users
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.ClientSocket
 
@@ -140,7 +141,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # them the same way runner_sessions / spawn_result / hosts are gated.
     "session_reset_started",
     "session_reset_completed",
-    "session_reset_failed"
+    "session_reset_failed",
+    # Live directory refresh after a rename (issue #197 段階3, D16). The
+    # join-time push (`handle_info(:after_join, ...)` above) was the only
+    # producer of this event before rename existed, so it was never
+    # broadcast and therefore never needed interception; a rename now
+    # broadcasts it to every already-joined operator, and viewers must
+    # not receive AgentDirectory contents (ADR-0030 D10) — same
+    # operator-only gate as `history_cleared`.
+    "directory"
   ])
 
   # Error reasons cleared for verbatim return to the client (issue #62).
@@ -156,13 +165,25 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    unknown_upload invalid_engine engine_not_supported
                    agent_busy unsupported_session_reset
                    session_reset_pending reserved_session_command
-                   invalid_mode)a
+                   invalid_mode missing_user_id invalid_user_id
+                   unknown_user revision_exhausted)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
   # a path-separator or dot injection cannot ride into the wrapper's
   # `--resume` arg or the F4 same-session lock via server → runner.
   @session_id_pattern ~r/^[A-Za-z0-9-]{1,128}$/
+
+  # Display-name bound shared by `apply_custom_name/2` (spawn-time, #22)
+  # and `validate_rename_name/1` (live rename, issue #197 段階3): both
+  # enforce the SAME 64-grapheme-cluster / no-control-char rule, so the
+  # rule lives in one place rather than two independently-typed regexes
+  # that could drift. `String.length/1` counts grapheme clusters, not
+  # UTF-16 code units or code points (matches the bound this repo's other
+  # display_name validators use, e.g. `WrapperChannel.valid_display_name/1`,
+  # issue #197 段階2 MF-1).
+  @display_name_max_graphemes 64
+  @display_name_control_char_pattern ~r/[\x00-\x1f\x7f]/
 
   @impl true
   def join("agents:lobby", _params, socket) do
@@ -282,6 +303,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_out("history_cleared", payload, socket) do
     if socket.assigns[:role] == :operator do
       push(socket, "history_cleared", payload)
+    end
+
+    {:noreply, socket}
+  end
+
+  # Live directory refresh after a rename (issue #197 段階3, D16). Same
+  # operator-only gate as the join-time push this event previously only
+  # ever rode (`handle_info(:after_join, ...)` above) — a viewer must not
+  # receive AgentDirectory contents (ADR-0030 D10).
+  @impl true
+  def handle_out("directory", payload, socket) do
+    if socket.assigns[:role] == :operator do
+      push(socket, "directory", payload)
     end
 
     {:noreply, socket}
@@ -898,6 +932,99 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # Operator-only live rename of an agent's display name (issue #197
+  # 段階3, D12 — operator-only until #198 per マスター決裁 2026-08-09 #4).
+  # `fetch_restorable_agent_id/1` accepts live OR disconnected agents,
+  # same as `revoke_wrapper_token` — a disconnected agent still has a
+  # valid rename target (the wrapper simply has nothing to relay to
+  # until it reconnects, D14 acceptance 4: the ack's guarantee stops at
+  # the authoritative store commit, wrapper convergence is eventual).
+  #
+  # `AgentDirectory.rename/2` is the single authoritative write
+  # (D12/D15) — it does not depend on the relay below succeeding. The
+  # relay is best-effort, mirroring every other server → wrapper push on
+  # this topic (`set_model` et al., protocol.md #54): a disconnected
+  # wrapper simply misses it and converges later via the after-join
+  # `persona_sync` push (`wrapper_channel.ex`, D14 acceptance 1).
+  #
+  # A narrow TOCTOU exists between `fetch_restorable_agent_id/1`'s
+  # existence check and `AgentDirectory.rename/2`'s own lookup (ふじ
+  # レビュー指摘: the prior wording here was wrong about what makes an
+  # agent_id AgentStates-known — it is NOT the spawn broadcast, it is the
+  # wrapper's FIRST ACCEPTED envelope, `wrapper_channel.ex`'s
+  # `AgentStates.put`). The real window is: `AgentStates.known?/1` can
+  # already be true (the wrapper has joined and sent its first envelope)
+  # while `AgentDirectory.record/3`'s fire-and-forget cast — issued
+  # earlier, at spawn time, from a DIFFERENT process — has not yet landed
+  # in `AgentDirectory`'s mailbox. An agent renamed inside that window
+  # would see `:not_found` here even though `fetch_restorable_agent_id/1`
+  # accepted it moments earlier. Accepted as a documented, retry-safe gap
+  # rather than engineered around — the cast is same-node/same-BEAM and
+  # lands in practice long before an operator can click rename, and
+  # `delete_agent`'s `purge_agent_records` has the same class of
+  # check-then-act gap against `AgentStates`.
+  def handle_in("rename_agent", payload, socket) do
+    with :ok <- require_operator(socket),
+         {:ok, agent_id} <- fetch_restorable_agent_id(payload),
+         {:ok, name} <- validate_rename_name(payload) do
+      case AgentDirectory.rename(agent_id, name) do
+        {:ok, %{persona: persona, revision: revision}} ->
+          KaoiroServerWeb.Endpoint.broadcast(
+            "wrapper:#{agent_id}",
+            "persona_sync",
+            %{"name" => name, "revision" => revision}
+          )
+
+          # D16: the `directory` refresh for already-joined operators
+          # (join-time-only before this — see the `intercept` list
+          # comment) is broadcast by `AgentDirectory.rename/2` ITSELF,
+          # synchronously inside the same serialized call that performs
+          # the write (issue #197 段階3, ふじ MF-3 レビュー指摘) — NOT
+          # from here. Broadcasting a separately-read `AgentDirectory.all/1`
+          # snapshot from this (caller) process, after the write already
+          # completed, left a window where two concurrent renames could
+          # race each other's SNAPSHOT + BROADCAST pair independently of
+          # their (correctly serialized) writes, letting a stale snapshot
+          # win the broadcast race and revert an already-joined
+          # dashboard's directory copy.
+          {:reply, {:ok, %{"persona" => persona, "revision" => revision}}, socket}
+
+        {:error, :not_found} ->
+          {:reply, {:error, %{reason: safe_reason(:unknown_agent)}}, socket}
+
+        # Wire-domain ceiling reached (issue #197 段階3, ふじ MF-5
+        # レビュー指摘) — see `AgentDirectory.rename/3`'s own doc.
+        {:error, :revision_exhausted} ->
+          {:reply, {:error, %{reason: safe_reason(:revision_exhausted)}}, socket}
+      end
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Operator-only live rename of a user's display name (issue #197 段階3,
+  # D13 — operator-only, any existing user, no self-service distinction
+  # per director's Q1 判定). No wrapper relay and no live broadcast: the
+  # `directory_request` `users` projection reads `Users` fresh on every
+  # call (issue #197 段階2's `all_with_role/1`), and no dashboard
+  # consumer of a user list exists yet (D13 — UI is out of scope for
+  # this unit), so there is nothing today that a live push would reach.
+  def handle_in("rename_user", payload, socket) do
+    with :ok <- require_operator(socket),
+         {:ok, user_id} <- fetch_user_id(payload),
+         {:ok, name} <- validate_rename_name(payload) do
+      case Users.rename(user_id, name) do
+        {:ok, entry} ->
+          {:reply, {:ok, entry}, socket}
+
+        {:error, :not_found} ->
+          {:reply, {:error, %{reason: safe_reason(:unknown_user)}}, socket}
+      end
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
   # Removes the agent from every server-side store, in the order the
   # ふじ #72 M3 must-fix requires:
   #
@@ -1188,13 +1315,33 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
     cond do
       trimmed == "" -> {:ok, persona}
-      String.length(trimmed) > 64 -> {:error, :invalid_name}
-      String.match?(trimmed, ~r/[\x00-\x1f\x7f]/) -> {:error, :invalid_name}
+      String.length(trimmed) > @display_name_max_graphemes -> {:error, :invalid_name}
+      String.match?(trimmed, @display_name_control_char_pattern) -> {:error, :invalid_name}
       true -> {:ok, Map.put(persona, "name", trimmed)}
     end
   end
 
   defp apply_custom_name(persona, _payload), do: {:ok, persona}
+
+  # Live-rename name validation (issue #197 段階3, D12/D13; shared by
+  # `rename_agent` and `rename_user`). Unlike `apply_custom_name/2`
+  # above, a blank name has no sensible "keep the existing name" default
+  # here — a rename request IS the operator's request to change the
+  # name, so blank is rejected rather than silently ignored. The
+  # length/control-char rule itself is identical (`@display_name_max_graphemes`
+  # / `@display_name_control_char_pattern`).
+  defp validate_rename_name(%{"name" => name}) when is_binary(name) do
+    trimmed = String.trim(name)
+
+    cond do
+      trimmed == "" -> {:error, :invalid_name}
+      String.length(trimmed) > @display_name_max_graphemes -> {:error, :invalid_name}
+      String.match?(trimmed, @display_name_control_char_pattern) -> {:error, :invalid_name}
+      true -> {:ok, trimmed}
+    end
+  end
+
+  defp validate_rename_name(_payload), do: {:error, :invalid_name}
 
   # cwd must be one the host declared spawnable (T1, threat-model). The runner
   # re-checks against its own allow-list; this server-side check gives a clear
@@ -1818,6 +1965,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp restorable_agent?(agent_id) do
     AgentStates.known?(agent_id) or AgentDirectory.get(agent_id) != nil
   end
+
+  # user_id shape check for `rename_user` (issue #197 段階3, D13).
+  # `AgentId.valid?/1` is reused rather than a new pattern: ADR-0050 D1
+  # puts agent_id and user_id in the SAME id space (`[A-Za-z0-9._-]`,
+  # issue #61). Unlike `fetch_agent_id/1`, this does NOT also check
+  # existence — `Users.rename/2` already returns `{:error, :not_found}`
+  # for an unknown user_id, so a second existence read here would be
+  # redundant rather than protective.
+  defp fetch_user_id(%{"user_id" => user_id}) when is_binary(user_id) do
+    if AgentId.valid?(user_id), do: {:ok, user_id}, else: {:error, :invalid_user_id}
+  end
+
+  defp fetch_user_id(_payload), do: {:error, :missing_user_id}
 
   # host_id addresses the runner topic; enforce the protocol.md charset
   # (shared with agent_id, topic-safe) before broadcasting so a compromised

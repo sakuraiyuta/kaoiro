@@ -452,6 +452,81 @@ describe("ServerLink — set_model / set_effort 制御 (#54)", () => {
   });
 });
 
+describe("ServerLink — persona_sync (issue #197 段階3)", () => {
+  beforeEach(() => mock.handlers.clear());
+
+  it("persona_sync は name/revision を onRenamePersona へ渡す", () => {
+    const seen: Array<[string, number]> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onRenamePersona: (name, revision) => seen.push([name, revision]),
+    });
+    emit("persona_sync", { name: "あお(改名)", revision: 1 });
+    expect(seen).toEqual([["あお(改名)", 1]]);
+  });
+
+  it("非文字列 name / 非数値 revision / 誤フィールドは無視する", () => {
+    const seen: Array<[string, number]> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onRenamePersona: (name, revision) => seen.push([name, revision]),
+    });
+    emit("persona_sync", { name: 42, revision: 1 });
+    emit("persona_sync", { name: "x", revision: "1" });
+    emit("persona_sync", { name: "x", revision: 1.5 });
+    emit("persona_sync", { value: "x", revision: 1 });
+    expect(seen).toEqual([]);
+  });
+
+  // issue #197 段階3 ふじ MF-4 レビュー指摘: name は plain string
+  // チェックだけで、server と同じ trim/grapheme/制御文字 contract を
+  // 検証していなかった。`validDisplayNameOrNull` (users projection と
+  // 同じ関数) を再利用する形に直した。
+  it("空文字 / 64 grapheme 超 / 制御文字混入の name は無視する", () => {
+    const seen: Array<[string, number]> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onRenamePersona: (name, revision) => seen.push([name, revision]),
+    });
+    emit("persona_sync", { name: "", revision: 1 });
+    emit("persona_sync", { name: "   ", revision: 2 });
+    emit("persona_sync", { name: "a".repeat(65), revision: 3 });
+    emit("persona_sync", {
+      name: `bad${String.fromCharCode(0x01)}name`,
+      revision: 4,
+    });
+    expect(seen).toEqual([]);
+  });
+
+  // grapheme cluster での数え方が server (String.length/1) と一致する
+  // ことを、users projection の narrow と同じ境界値で再確認する。
+  it("結合文字/ZWJ絵文字で server の 64 grapheme 境界ちょうどの name は通す", () => {
+    const seen: Array<[string, number]> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onRenamePersona: (name, revision) => seen.push([name, revision]),
+    });
+    const boundaryName = "👨‍👩‍👧‍👦".repeat(64);
+    emit("persona_sync", { name: boundaryName, revision: 1 });
+    expect(seen).toEqual([[boundaryName, 1]]);
+  });
+
+  // AgentDirectory.rename/2 は revision を 0 始まりで単調 +1 しか発行
+  // しない — 負値は producer の domain 外という意味で定義上 malformed
+  // であり、drop する理由はそれだけ (guard poisoning 対策ではない:
+  // host.renamePersona の `revision <= #personaRevision` guard は
+  // baseline 0 から出発するため、そもそも負値が植わることはない)。
+  it("負の revision は無視する", () => {
+    const seen: Array<[string, number]> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onRenamePersona: (name, revision) => seen.push([name, revision]),
+    });
+    emit("persona_sync", { name: "x", revision: -1 });
+    expect(seen).toEqual([]);
+  });
+});
+
 describe("ServerLink — refresh_models 制御 (ADR-0037 F6, phase-18-5)", () => {
   beforeEach(() => mock.handlers.clear());
 

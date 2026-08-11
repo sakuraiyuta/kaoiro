@@ -40,3 +40,35 @@ export function resolveCodexSources(
       : undefined;
   return { modelSource, effortSource };
 }
+
+/** Applies `KAOIRO_CODEX_DEFAULT_MODEL` to `config.model` IN PLACE, when
+ *  `config.model` is unset and the env var is set (issue #197 段階3, ふじ
+ *  MF-1 レビュー指摘). Mutates rather than returning a clone deliberately:
+ *  the CLI passes this SAME `config` object to every producer
+ *  (`CodexHost`, `QuestionBroker`, `InterAgentTool`, `makeLog` /
+ *  `makeStateChange` call sites) — a `{ ...config, model: ... }` shallow
+ *  clone would still share `config.persona`'s object reference at
+ *  construction time, but `CodexHost.renamePersona` REASSIGNS
+ *  `#config.persona` (not an in-place field mutation) whenever a rename
+ *  applies, which severs that shared reference. Two config objects meant
+ *  two independently-diverging persona sources of truth: whichever
+ *  producers held the clone saw the renamed persona, and whichever held
+ *  the original did not. Mutating the ONE config object in place, before
+ *  any producer is constructed from it, makes that split structurally
+ *  impossible — there is only ever one object for any of them to close
+ *  over.
+ *
+ *  MUST be called AFTER `resolveCodexSources` reads `config.model`
+ *  (source attribution needs to see the pre-mutation state — "config" vs
+ *  "env" provenance only means something before this fills the field in).
+ *
+ *  Returns nothing; callers read `config.model` directly afterward, same
+ *  as every other resolved field on this object. */
+export function applyEnvDefaultModel(
+  config: WrapperConfig,
+  envDefaultModel: string | undefined,
+): void {
+  if (config.model === undefined && envDefaultModel !== undefined) {
+    config.model = envDefaultModel;
+  }
+}

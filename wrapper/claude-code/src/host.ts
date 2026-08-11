@@ -361,6 +361,12 @@ export interface AgentHostOptions {
  */
 export class AgentHost implements EngineAdapter {
   readonly #config: WrapperConfig;
+  /** Last-applied `persona_sync` revision (issue #197 段階3, D15). Starts
+   *  at 0 to match the baseline `AgentDirectory` gives a freshly-spawned
+   *  agent (never renamed), so the join-time sync for a never-renamed
+   *  agent is correctly a no-op (0 <= 0) rather than a spurious re-emit.
+   *  See `renamePersona` for the comparison this guards. */
+  #personaRevision = 0;
   readonly #options: AgentHostOptions;
   readonly #queryFn: typeof query;
   readonly #probeFn: () => Promise<ProbeOutcome>;
@@ -1210,6 +1216,33 @@ export class AgentHost implements EngineAdapter {
       this.#permissionMode = prev;
       throw err;
     }
+  }
+
+  /** Applies a `persona_sync` push (issue #197 段階3): the server's
+   *  authoritative current display name, sent on every join (fresh AND
+   *  reconnect, D14 acceptance 1) and on a live `rename_agent`.
+   *
+   *  `revision` is a monotonic per-agent_id counter
+   *  (`AgentDirectory.rename/2`); a push whose revision is not STRICTLY
+   *  newer than the last one applied is dropped. This is what makes the
+   *  method safe to call with pushes arriving in EITHER order — the two
+   *  cases that matter are a stale relay from an out-of-order broadcast
+   *  (D15: two `rename_agent` calls racing on the server can complete
+   *  their broadcasts in either order) and a join-time sync that simply
+   *  confirms the name this session already has (revision unchanged —
+   *  no re-emit needed).
+   *
+   *  Only `persona.name` is mutable here — `persona.id` / `sprite_set`
+   *  and the injected personality prompt stay fixed for the session's
+   *  lifetime (ADR-0030 D2 改訂, ADR-0029 F9). Re-emits `state_change`
+   *  immediately rather than waiting for the next natural turn event,
+   *  because an idle/waiting_input session can otherwise sit
+   *  indefinitely before its next envelope (D14 acceptance 2). */
+  renamePersona(name: string, revision: number): void {
+    if (revision <= this.#personaRevision) return;
+    this.#personaRevision = revision;
+    this.#config.persona = { ...this.#config.persona, name };
+    this.#emitState(this.#machine.state);
   }
 
   /** Receives the pending-permission record from the broker (ADR-0022).

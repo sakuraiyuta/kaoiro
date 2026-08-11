@@ -206,7 +206,44 @@ defmodule KaoiroServerWeb.WrapperChannel do
           :ok
       end
 
+      push_persona_sync(socket, agent_id)
+
       :ok
+    end
+  end
+
+  # issue #197 段階3 (D14 acceptance 1): pushes the AUTHORITATIVE current
+  # name + revision from `AgentDirectory` every join (fresh connect AND
+  # reconnect alike), unconditionally — not only when it differs from
+  # what the wrapper last applied. This is what closes the race a bare
+  # `join/3`-time read would leave open: reading AgentDirectory inside
+  # `join/3` itself (BEFORE this channel process's PubSub subscription to
+  # `wrapper:<agent_id>` is guaranteed live) could miss a `rename_agent`
+  # broadcast that lands in the gap between the read and the subscribe.
+  # Running from `handle_info(:after_join, ...)` — the same idiom this
+  # module already uses for the `TokenDenylist.revoked?/1` re-check above
+  # (ふじ R1-race must-fix, 2026-07-23) — guarantees the subscription is
+  # live first, so a `rename_agent` racing this push is either seen here
+  # (AgentDirectory already reflects it) or arrives moments later as its
+  # own `persona_sync` broadcast; either way nothing is lost. The
+  # wrapper's own revision check (issue #197 段階3, `AgentHost`/`CodexHost`
+  # `applyPersonaSync`) makes this push idempotent against a live relay
+  # arriving in either order (D15) — sending it unconditionally on every
+  # join is simpler and no less correct than tracking a per-connection
+  # "did I already push this revision" flag server-side.
+  defp push_persona_sync(socket, agent_id) do
+    case AgentDirectory.get(agent_id) do
+      %{persona: %{"name" => name}, revision: revision} ->
+        push(socket, "persona_sync", %{"name" => name, "revision" => revision})
+
+      nil ->
+        # No AgentDirectory entry yet — the spawn-time `record/3` cast
+        # has not landed (a narrow window right after spawn, the same
+        # class of gap `rename_agent`'s own doc comment accepts). Nothing
+        # to sync; the wrapper keeps whatever persona.name it was
+        # launched with, which is correct here since a not-yet-recorded
+        # agent has never been renamed.
+        :ok
     end
   end
 
