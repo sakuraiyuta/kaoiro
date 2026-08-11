@@ -1632,7 +1632,11 @@ export class InterAgentTool {
             // shape of this same MF-1's other half, just fixed at its
             // source instead of relied upon here). Redundant with the
             // `mutationGen` check for every currently-known race, but
-            // cheap and direct enough that both stay, per ふじ's review.
+            // cheap and direct enough that both stay — ふじ's review named
+            // the `mutationGen` bump above as the required fix and
+            // separately suggested this check as a more robust addition;
+            // making both mandatory (not just the bump) was the
+            // director's call, for the future-proofing reasoning above.
             if (
               track.mutationGen === genAtDispatch &&
               track.turnNumber === sentTurnNumber

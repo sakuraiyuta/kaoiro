@@ -72,7 +72,7 @@ function makeHost(): CodexHost {
   return new CodexHost(config, { onState: () => {}, appendSystemPrompt: "p" });
 }
 
-/** Reproduces cli.ts's onInterAgentMessage glue exactly — identical to
+/** Reproduces cli.ts's onInterAgentMessage glue — identical to
  *  claude-code's cli.ts (and to the sibling helper in
  *  claude-code/test/inter_agent_lifecycle_glue.test.ts), modulo the host
  *  type. issue #221 direction 1: `mode === "terminal"` now returns
@@ -83,15 +83,20 @@ function makeHost(): CodexHost {
  *  (it may gate briefly on a concurrently in-flight done=true send for
  *  the same conversation_id).
  *
- *  issue #222 段階2 差し戻し MF-2 (ふじ): the `!disposition.inject` branch
- *  now mirrors cli.ts's THREE-way split exactly (terminal / notice /
- *  no-notice skip), not a single early `return`. Before this, removing
- *  cli.ts's own `link?.send(disposition.notice)` wiring left every test in
- *  this file green — this helper never touched `disposition.notice` at
- *  all, so it could not have caught that regression. `notices` (when
- *  passed) collects what cli.ts would have handed to `link.send()`, so a
- *  test CAN pin "sink called / not called" the same way `sendSpy` already
- *  pins `host.send()`. */
+ *  CAVEAT (issue #222 段階2 差し戻し MF-2, ふじ; structural gap tracked as
+ *  issue #226): this function is a REIMPLEMENTATION of cli.ts's
+ *  `!disposition.inject` branching (terminal / notice / no-notice skip)
+ *  below — it does not call cli.ts's actual (inline, unexported inside
+ *  `run()`) `onInterAgentMessage` handler. The two are kept in sync BY
+ *  HAND; neither the type system nor any test enforces it. Concretely:
+ *  deleting cli.ts's own `link?.send(disposition.notice)` line does NOT
+ *  fail any test in this file today (confirmed by mutation-testing that
+ *  exact deletion against both engines' full suites — 0 failures).
+ *  `notices` (when passed) collects what THIS reproduction would hand to
+ *  `link.send()`, so a test CAN pin drift in the reproduction itself —
+ *  it CANNOT catch a regression in cli.ts's own real wiring. issue #226
+ *  tracks closing this gap structurally (exporting/restructuring the
+ *  real handler so tests can call it directly). */
 async function runOnInterAgentMessageGlue(
   interAgent: InterAgentTool,
   host: CodexHost,
@@ -393,11 +398,11 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     if (disposition.consumed) return;
     if (!disposition.inject) {
       // issue #222 段階2 差し戻し MF-2 (ふじ): mirrors cli.ts's
-      // onInterAgentMessage exactly (see `runOnInterAgentMessageGlue`'s
-      // doc above for the full three-way split) — before this, `receive()`
-      // discarded a `stale_turn` notice the same way, so removing
-      // production's `link?.send(disposition.notice)` wiring would not
-      // have failed any test using THIS harness either.
+      // onInterAgentMessage branching (see `runOnInterAgentMessageGlue`'s
+      // CAVEAT above — the same reimplementation-not-invocation gap
+      // applies here too, tracked as issue #226). Deleting production's
+      // `link?.send(disposition.notice)` wiring does NOT fail any test
+      // using THIS harness today either.
       if (disposition.mode !== "terminal" && disposition.notice) {
         notices.push(disposition.notice);
       }
