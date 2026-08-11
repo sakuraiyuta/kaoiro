@@ -268,9 +268,9 @@ export function makeResult(
   };
 }
 
-/** Wraps a subagent/workflow task lifecycle notice into the common
- *  envelope v0 (issue #180, ADR-0019 F2 / ADR-0047 F1). `state` is the
- *  agent's CURRENT state at emit time, stamped unmodified — a task
+/** Wraps a child-task lifecycle or own-tasklist update into the common
+ *  envelope v0 (issues #180/#188, ADR-0019 F2 / ADR-0047 / ADR-0049).
+ *  `state` is the agent's CURRENT state at emit time, stamped unmodified — a task
  *  envelope must never itself drive or imply a `KaoiroState` transition
  *  (ADR-0019 F2's "親の state_change に子情報を相乗りさせない" applies in
  *  both directions: task envelopes don't touch state, and state_change

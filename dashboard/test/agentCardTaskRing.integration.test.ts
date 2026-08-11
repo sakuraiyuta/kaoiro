@@ -6,6 +6,10 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import AgentCard from "../src/lib/AgentCard.svelte";
+import {
+  applyTaskEnvelope,
+  computeActiveTaskCountByAgent,
+} from "../src/lib/protocol";
 import type { Envelope, PersonaManifest } from "../src/lib/protocol";
 
 const mounted: object[] = [];
@@ -66,6 +70,30 @@ describe("AgentCard 頭上リング (issue #180)", () => {
 
   it("activeTaskCount 0 はリングを描画しない", async () => {
     const target = await render(0);
+    expect(target.querySelector(".task-ring")).toBeNull();
+  });
+
+  it("production task 集計では親自身の tasklist だけで AgentCard のリングを出さない (issue #188)", async () => {
+    const parent = envelope();
+    const tasklist = {
+      ...parent,
+      type: "task",
+      payload: {
+        agent_id: parent.agent_id,
+        task_id: "tasklist",
+        task_type: "tasklist",
+        kind: "updated",
+        status: "running",
+        items: [{ text: "調査", status: "in_progress" }],
+      },
+    } as Envelope;
+    const tasks = applyTaskEnvelope({}, tasklist);
+    const count = computeActiveTaskCountByAgent(tasks)[parent.agent_id] ?? 0;
+
+    // `activeTaskCount={0}` を手で渡すだけでなく、App.svelte が使う実際の
+    // table -> production aggregator -> AgentCard prop の経路で固定する。
+    expect(count).toBe(0);
+    const target = await render(count);
     expect(target.querySelector(".task-ring")).toBeNull();
   });
 

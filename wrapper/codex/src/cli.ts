@@ -170,6 +170,11 @@ async function main(): Promise<void> {
     printLog(envelope);
     link?.send(envelope);
   };
+  // Tasklist snapshots, like child task envelopes, are dashboard-only relay
+  // data rather than this agent's console transcript.
+  const onTask = (envelope: Envelope): void => {
+    link?.send(envelope);
+  };
 
   let resolvePersonaPrompt!: (prompt: string) => void;
   let rejectPersonaPrompt!: (reason: Error) => void;
@@ -386,6 +391,7 @@ async function main(): Promise<void> {
   host = new CodexHost(effectiveConfig, {
     onState,
     onLog,
+    onTask,
     // issue #131: resolve exactly the conversation this turn was tagged
     // with (must-fix 1 — turn-scoped, never a sweep of everything pending).
     // On error, classify what codex reported (best-effort — no structured

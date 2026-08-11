@@ -75,6 +75,26 @@ export interface ResultPayload {
  *  always surfaces here as `stopped`. */
 export type TaskStatus = "running" | "completed" | "failed" | "stopped";
 
+/** One item in an agent's own todo list (issue #188, ADR-0049). The three
+ * values mirror Claude Code's TodoWrite vocabulary. Codex has only a
+ * completed boolean; its wrapper maps false to pending and true to
+ * completed before constructing this wire value. */
+export type TasklistItemStatus = "pending" | "in_progress" | "completed";
+
+/** A single item in a tasklist's whole-list snapshot. */
+export interface TasklistItem {
+  text: string;
+  status: TasklistItemStatus;
+}
+
+/** Summary of source items omitted from a bounded tasklist snapshot. The
+ * completed count keeps the dashboard's aggregate progress truthful even
+ * when the detail view can show only the first items. */
+export interface TasklistOmitted {
+  count: number;
+  completed: number;
+}
+
 /** payload of a type="task" envelope (ADR-0047 F1-F4, issue #180).
  *  `kind` distinguishes lifecycle events sharing this one type (ADR-0047
  *  F1); `agent_id`/`task_id`/`task_type`/`status` are required on every
@@ -103,6 +123,11 @@ export interface TaskPayload {
   last_tool_name?: string;
   summary?: string;
   skip_transcript?: boolean;
+  /** Present only for task_type="tasklist". Each update replaces the whole
+   * list; an empty array is an intentional empty todo list. */
+  items?: TasklistItem[];
+  /** Present only when wrapper-side tasklist bounding omitted source items. */
+  omitted?: TasklistOmitted;
 }
 
 /** Wire-safe subset of Persona used in every network-facing type

@@ -237,11 +237,8 @@ async function main(): Promise<void> {
     link?.send(envelope);
   };
 
-  /** issue #180 (ADR-0019 F2 / ADR-0047 F1): relays subagent/workflow task
-   *  lifecycle envelopes to the server. No local stdout line — task
-   *  updates can arrive frequently (throttled, but still per-task) and
-   *  the CLI's printState/printLog console output is for the agent's OWN
-   *  activity, not its children's. */
+  /** Relays child-task lifecycle and own-tasklist envelopes to the server.
+   *  Both are aggregation data, not this agent's console transcript. */
   const onTask = (envelope: Envelope): void => {
     link?.send(envelope);
   };

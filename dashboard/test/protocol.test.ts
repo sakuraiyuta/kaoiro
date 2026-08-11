@@ -37,6 +37,8 @@ import {
   purgeTasksForAgent,
   computeActiveTaskCountByAgent,
   activeTaskCountForDetail,
+  tasklistForAgent,
+  tasklistForDetail,
   resetTranscriptHistory,
   resolveLaunchDefaultEffort,
   resumeDriftFrom,
@@ -414,11 +416,10 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
     expect(event?.status).toBe("future-status-value");
   });
 
-  it("parseTasks は agent_id => task_id => envelope の envelope 形だけを検証する (payload 絞り込みは taskOf の役目)", () => {
+  it("parseTasks は outer key と envelope/payload identity が一致する task だけを受け入れる", () => {
     const t2 = { ...base, payload: { ...validPayload, task_id: "t2" } };
-    // t3: envelope としては妥当 (agent_id/state 文字列あり) だが payload が
-    // 壊れている — parseTasks は agents スナップショット解析と同じ「envelope
-    // 形のみ検証」規約に倣うので、これは拾われる(taskOf が消費側で弾く)。
+    // t3 は payload が不正なので、snapshot 内に残して後段の consumer へ
+    // 送るのではなく parse boundary で落とす。
     const t3 = { ...base, payload: { kind: "started" } };
     expect(
       parseTasks({
@@ -436,8 +437,41 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
         "host-d.p": { t5: { ...base, type: "state_change", payload: validPayload } },
       }),
     ).toEqual({
-      "host-a.p": { t1: { ...base, payload: validPayload }, t2, t3 },
+      "host-a.p": { t1: { ...base, payload: validPayload }, t2 },
     });
+  });
+
+  it("parseTasks は snapshot outer agent/task key と envelope/payload の不一致を拒否する", () => {
+    const foreignTasklist = {
+      ...base,
+      agent_id: "host-b.p",
+      payload: {
+        ...validPayload,
+        agent_id: "host-b.p",
+        task_id: "tasklist",
+        task_type: "tasklist",
+        kind: "updated" as const,
+        items: [{ text: "別 agent の todo", status: "pending" as const }],
+      },
+    };
+    const mismatchedTaskId = {
+      ...base,
+      payload: { ...validPayload, task_id: "payload-t1" },
+    };
+    const mismatchedPayloadAgent = {
+      ...base,
+      payload: { ...validPayload, agent_id: "host-b.p" },
+    };
+
+    expect(
+      parseTasks({
+        "host-a.p": {
+          tasklist: foreignTasklist,
+          "outer-t1": mismatchedTaskId,
+          t1: mismatchedPayloadAgent,
+        },
+      }),
+    ).toEqual({});
   });
 
   it("parseTasks は非オブジェクト入力を {} に倒す", () => {
@@ -461,8 +495,16 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
   // 生の JSON テキストを JSON.parse する経路でのみ、CreateDataProperty
   // 由来の本物の own property "__proto__" を持つ値を再現できる。
   it("parseTasks は agent_id/task_id が \"__proto__\" でも prototype pollution を起こさない", () => {
-    const polluted = { ...base, payload: { ...validPayload, agent_id: "__proto__" } };
-    const t2 = { ...base, payload: { ...validPayload, task_id: "t2" } };
+    const polluted = {
+      ...base,
+      agent_id: "__proto__",
+      payload: { ...validPayload, agent_id: "__proto__", task_id: "__proto__" },
+    };
+    const t2 = {
+      ...base,
+      agent_id: "__proto__",
+      payload: { ...validPayload, agent_id: "__proto__", task_id: "t2" },
+    };
     const wire = JSON.parse(
       `{"__proto__": {"__proto__": ${JSON.stringify(polluted)}, "t2": ${JSON.stringify(t2)}}}`,
     );
@@ -498,6 +540,15 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
       };
       const afterUpdate = applyTaskEnvelope(afterStart, updated);
       expect(afterUpdate).toEqual({ "host-a.p": { t1: updated } });
+    });
+
+    it("outer agent_id と payload.agent_id が違う live task は取り込まない", () => {
+      const mismatched = {
+        ...base,
+        payload: { ...validPayload, agent_id: "host-b.p" },
+      };
+      const tasks: TaskTable = {};
+      expect(applyTaskEnvelope(tasks, mismatched)).toBe(tasks);
     });
 
     it("kind=completed は (agent_id, task_id) を除去し、空になった agent の枝も剪定する (ADR-0019 F4 -1)", () => {
@@ -685,6 +736,25 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
       expect(computeActiveTaskCountByAgent({})).toEqual({});
     });
 
+    it("親自身の tasklist は child activity に数えず、通常 task だけを数える (issue #188)", () => {
+      const child = { ...base, payload: validPayload };
+      const tasklist = {
+        ...base,
+        payload: {
+          ...validPayload,
+          task_id: "tasklist",
+          task_type: "tasklist",
+          kind: "updated" as const,
+          status: "running" as const,
+          items: [{ text: "調査", status: "in_progress" as const }],
+        },
+      };
+      let tasks = applyTaskEnvelope({}, child);
+      tasks = applyTaskEnvelope(tasks, tasklist);
+
+      expect(computeActiveTaskCountByAgent(tasks)).toEqual({ "host-a.p": 1 });
+    });
+
     // M2 の本体: agent_id="__proto__" は plain {} 上の bracket 代入
     // (counts[agentId] = n) では own property にならず、count が消える
     // (リングが点かない) — Object.create(null) でないと再発する。
@@ -701,6 +771,107 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
         true,
       );
       expect(counts["__proto__"]).toBe(1);
+    });
+  });
+
+  describe("tasklistForAgent (issue #188)", () => {
+    it("LWW tasklist を items/omitted とともに取り出す", () => {
+      const tasklist = {
+        ...base,
+        payload: {
+          ...validPayload,
+          task_id: "tasklist",
+          task_type: "tasklist",
+          kind: "updated" as const,
+          status: "running" as const,
+          items: [
+            { text: "調査", status: "in_progress" as const },
+            { text: "実装", status: "completed" as const },
+          ],
+          omitted: { count: 3, completed: 2 },
+        },
+      };
+      const tasks = applyTaskEnvelope({}, tasklist);
+
+      expect(tasklistForAgent(tasks, "host-a.p")).toEqual({
+        items: [
+          { text: "調査", status: "in_progress" },
+          { text: "実装", status: "completed" },
+        ],
+        omitted: { count: 3, completed: 2 },
+      });
+    });
+
+    it("連続 LWW 更新で non-empty から items: [] へ置換する", () => {
+      const nonEmpty = {
+        ...base,
+        payload: {
+          ...validPayload,
+          task_id: "tasklist",
+          task_type: "tasklist",
+          kind: "updated" as const,
+          items: [{ text: "完了前", status: "pending" as const }],
+        },
+      };
+      const empty = {
+        ...base,
+        payload: {
+          ...validPayload,
+          task_id: "tasklist",
+          task_type: "tasklist",
+          kind: "updated" as const,
+          items: [],
+        },
+      };
+      let tasks = applyTaskEnvelope({}, nonEmpty);
+      tasks = applyTaskEnvelope(tasks, empty);
+
+      expect(tasklistForAgent(tasks, "host-a.p")).toEqual({ items: [] });
+    });
+
+    it("片側だけの予約・不正 omitted は todo として描画しない", () => {
+      const malformedReservation = {
+        ...base,
+        payload: {
+          ...validPayload,
+          task_id: "tasklist",
+          task_type: "local_agent",
+          kind: "updated" as const,
+          items: [],
+        },
+      };
+      const malformedOmitted = {
+        ...base,
+        payload: {
+          ...validPayload,
+          task_id: "tasklist",
+          task_type: "tasklist",
+          kind: "updated" as const,
+          items: [],
+          omitted: { count: 1, completed: 2 },
+        },
+      };
+
+      expect(tasklistForAgent(applyTaskEnvelope({}, malformedReservation), "host-a.p")).toBeNull();
+      expect(tasklistForAgent(applyTaskEnvelope({}, malformedOmitted), "host-a.p")).toBeNull();
+    });
+  });
+
+  describe("tasklistForDetail", () => {
+    it("disconnected では stale tasklist table があっても float state を返さない", () => {
+      const tasklist = {
+        ...base,
+        payload: {
+          ...validPayload,
+          task_id: "tasklist",
+          task_type: "tasklist",
+          kind: "updated" as const,
+          items: [{ text: "stale", status: "pending" as const }],
+        },
+      };
+      const tasks = applyTaskEnvelope({}, tasklist);
+
+      expect(tasklistForDetail({ ...base, state: "disconnected" }, tasks)).toBeNull();
     });
   });
 

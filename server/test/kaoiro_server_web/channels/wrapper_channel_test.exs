@@ -22,6 +22,37 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     }
   end
 
+  defp task_envelope(agent_id, payload) do
+    %{
+      "version" => "0",
+      "agent_id" => agent_id,
+      "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+      "ts" => "2026-08-10T00:00:00Z",
+      "type" => "task",
+      "state" => "tool_running",
+      "payload" => payload,
+      "ext" => %{}
+    }
+  end
+
+  # 50 text fields of exactly 256 raw bytes stay below the JSON ceiling.
+  # Replacing an `a` with `"` adds exactly one escaped JSON byte, so this
+  # builds an exact boundary (or its limit+1 sibling) without relaxing the
+  # independent per-item text limit.
+  defp tasklist_items_with_quote_count(quote_count) do
+    {items, 0} =
+      Enum.map_reduce(1..50, quote_count, fn _index, remaining_quotes ->
+        quotes = min(remaining_quotes, 256)
+
+        {%{
+           "text" => String.duplicate("\"", quotes) <> String.duplicate("a", 256 - quotes),
+           "status" => "pending"
+         }, remaining_quotes - quotes}
+      end)
+
+    items
+  end
+
   defp join_wrapper(agent_id, persona_id \\ "default", params \\ %{}) do
     {_reply, socket} = join_wrapper_with_reply(agent_id, persona_id, params)
     socket
@@ -646,6 +677,124 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       end
 
       assert TaskStates.snapshot() == %{}
+    end
+
+    # issue #188 / ADR-0049 F4: tasklist は child task と同じ `task` wire を
+    # 通るが、task_id/task_type の固定された単一 entity。予約を片方向だけに
+    # すると、child が task_id=tasklist を名乗って parent の todo snapshot を
+    # 上書きできてしまうため、両方向の拒否を frame boundary で固定する。
+    test "tasklist の予約 task_id/task_type を双方向で検証する" do
+      agent_id = "test.tasklist-reserved"
+      socket = join_wrapper(agent_id)
+
+      base_payload = %{
+        "kind" => "updated",
+        "agent_id" => agent_id,
+        "task_id" => "tasklist",
+        "task_type" => "tasklist",
+        "status" => "running",
+        "items" => []
+      }
+
+      cases = [
+        {Map.put(base_payload, "task_id", "child-1"),
+         "tasklist requires payload.task_id=tasklist"},
+        {Map.put(base_payload, "task_type", "local_agent"),
+         "payload.task_id=tasklist requires payload.task_type=tasklist"},
+        {Map.put(base_payload, "kind", "started"),
+         "tasklist requires payload.kind=updated and payload.status=running"},
+        {%{base_payload | "kind" => "completed", "status" => "completed"},
+         "tasklist requires payload.kind=updated and payload.status=running"}
+      ]
+
+      for {payload, expected_reason} <- cases do
+        ref = push(socket, "envelope", task_envelope(agent_id, payload))
+        assert_reply ref, :error, %{reason: ^expected_reason}
+      end
+
+      assert TaskStates.snapshot() == %{}
+    end
+
+    # The server mirrors every wrapper-side tasklist bound. The exact cases
+    # deliberately sit beside limit+1: `>=` regressions would make a valid
+    # operator-visible snapshot disappear just as surely as a missing cap
+    # would let one consume the task snapshot budget.
+    test "tasklist の件数・text・JSON byte 境界を防御的に検証する" do
+      agent_id = "test.tasklist-bounds"
+      socket = join_wrapper(agent_id)
+
+      base_payload = %{
+        "kind" => "updated",
+        "agent_id" => agent_id,
+        "task_id" => "tasklist",
+        "task_type" => "tasklist",
+        "status" => "running"
+      }
+
+      fifty_items =
+        Enum.map(1..50, fn index ->
+          %{"text" => "todo #{index}", "status" => "pending"}
+        end)
+
+      text_at_limit = %{"text" => String.duplicate("a", 256), "status" => "pending"}
+      json_at_limit = tasklist_items_with_quote_count(2_033)
+      assert byte_size(Jason.encode!(json_at_limit)) == 16_384
+
+      # All three exact limits are accepted. Keep an omitted aggregate too:
+      # it is metadata, not a 51st fake item, and must remain structurally
+      # trustworthy for the dashboard's completed/total count.
+      accepted_payloads = [
+        Map.put(base_payload, "items", fifty_items),
+        Map.put(base_payload, "items", [text_at_limit]),
+        base_payload
+        |> Map.put("items", json_at_limit)
+        |> Map.put("omitted", %{"count" => 1, "completed" => 1})
+      ]
+
+      for payload <- accepted_payloads do
+        ref = push(socket, "envelope", task_envelope(agent_id, payload))
+        assert_reply ref, :ok
+      end
+
+      assert %{^agent_id => %{"tasklist" => stored}} = TaskStates.snapshot()
+      assert stored["payload"]["items"] == json_at_limit
+      assert stored["payload"]["omitted"] == %{"count" => 1, "completed" => 1}
+
+      json_over_limit = tasklist_items_with_quote_count(2_034)
+      assert byte_size(Jason.encode!(json_over_limit)) == 16_385
+
+      rejected_cases = [
+        {Map.put(
+           base_payload,
+           "items",
+           fifty_items ++ [%{"text" => "51", "status" => "pending"}]
+         ), "payload.items exceeds tasklist item limit"},
+        {Map.put(base_payload, "items", [
+           %{"text" => String.duplicate("a", 257), "status" => "pending"}
+         ]), "invalid value: payload.items"},
+        {Map.put(base_payload, "items", json_over_limit),
+         "payload.items exceeds tasklist JSON byte limit"},
+        {Map.put(base_payload, "items", [%{"text" => "todo", "status" => "unknown"}]),
+         "invalid value: payload.items"},
+        {base_payload
+         |> Map.put("items", [])
+         |> Map.put("omitted", %{"count" => 0, "completed" => 0}),
+         "invalid value: payload.omitted"},
+        {base_payload
+         |> Map.put("items", [])
+         |> Map.put("omitted", %{"count" => 1, "completed" => 2}),
+         "invalid value: payload.omitted"}
+      ]
+
+      for {payload, expected_reason} <- rejected_cases do
+        ref = push(socket, "envelope", task_envelope(agent_id, payload))
+        assert_reply ref, :error, %{reason: ^expected_reason}
+      end
+
+      # Every rejected update was stopped before TaskStates/broadcast. The
+      # last accepted LWW snapshot is still exactly the same.
+      assert %{^agent_id => %{"tasklist" => unchanged}} = TaskStates.snapshot()
+      assert unchanged == stored
     end
   end
 

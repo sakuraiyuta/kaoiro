@@ -13,6 +13,7 @@ import {
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
   sdkMessageToTask,
+  sdkMessageToTasklists,
   sdkMessageToTerminalReason,
 } from "../src/adapter.js";
 import { reduceStates } from "@kaoiro/agent-common";
@@ -636,6 +637,58 @@ describe("sdkMessageToSessionId", () => {
       sdkMessageToSessionId(msg({ type: "system", session_id: "" })),
     ).toBeNull();
     expect(sdkMessageToSessionId(msg({ type: "system" }))).toBeNull();
+  });
+});
+
+describe("sdkMessageToTasklists", () => {
+  it("TodoWrite の全項目を text/status の whole-list snapshot に写す", () => {
+    expect(
+      sdkMessageToTasklists(
+        assistant([
+          {
+            type: "tool_use",
+            name: "TodoWrite",
+            input: {
+              todos: [
+                { content: "調査する", status: "in_progress", activeForm: "調査中" },
+                { content: "報告する", status: "pending", activeForm: "報告を準備中" },
+              ],
+            },
+          },
+        ]),
+      ),
+    ).toEqual([
+      {
+        kind: "updated",
+        items: [
+          { text: "調査する", status: "in_progress" },
+          { text: "報告する", status: "pending" },
+        ],
+      },
+    ]);
+  });
+
+  it("不正な TodoWrite は stale な list として黙って通さず fail-visible にする", () => {
+    expect(
+      sdkMessageToTasklists(
+        assistant([
+          {
+            type: "tool_use",
+            name: "TodoWrite",
+            input: { todos: [{ content: "調査する", status: "unknown" }] },
+          },
+        ]),
+      ),
+    ).toEqual([{ kind: "invalid", reason: "TodoWrite todo.status is invalid" }]);
+  });
+
+  it("通常の tool_use と assistant error からは tasklist を作らない", () => {
+    expect(
+      sdkMessageToTasklists(assistant([{ type: "tool_use", name: "Read", input: {} }])),
+    ).toEqual([]);
+    expect(
+      sdkMessageToTasklists(assistant([{ type: "tool_use", name: "TodoWrite" }], "boom")),
+    ).toEqual([]);
   });
 });
 

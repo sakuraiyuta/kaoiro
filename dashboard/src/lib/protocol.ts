@@ -643,8 +643,35 @@ export function resultOf(envelope: Envelope): ResultPayload | null {
  *  TaskStatus. */
 export type TaskStatus = "running" | "completed" | "failed" | "stopped";
 
+/** One visible item in an agent-owned tasklist snapshot (issue #188,
+ * ADR-0049). Codex only produces pending/completed, while Claude can also
+ * report in_progress. The dashboard keeps the protocol's shared vocabulary
+ * rather than inferring state from display text. */
+export type TasklistItemStatus = "pending" | "in_progress" | "completed";
+
+export interface TasklistItem {
+  text: string;
+  status: TasklistItemStatus;
+}
+
+/** Source items that wrapper-side bounding omitted from a tasklist snapshot.
+ * Their aggregate is what keeps the collapsed completed/total display honest
+ * when the expanded float can render only the leading item texts. */
+export interface TasklistOmitted {
+  count: number;
+  completed: number;
+}
+
+export interface TasklistSnapshot {
+  items: TasklistItem[];
+  omitted?: TasklistOmitted;
+}
+
 /** payload of a type="task" envelope (ADR-0019/ADR-0047, issue #180):
- *  subagent/workflow child-task lifecycle, parent-linked via `agent_id`.
+ *  normally a subagent/workflow child-task lifecycle, parent-linked via
+ *  `agent_id`. The reserved `task_id/task_type="tasklist"` pair is the
+ *  sole exception: it carries the parent agent's own LWW todo snapshot
+ *  (ADR-0049, issue #188).
  *  Client mirror of @kaoiro/protocol TaskPayload, kept as a plain
  *  interface so protocol.ts stays runtime-free. Operator-only (ADR-0021,
  *  こはく 2026-08-09 access-control decision) — the server never sends
@@ -665,6 +692,11 @@ export interface TaskPayload {
   last_tool_name?: string;
   summary?: string;
   skip_transcript?: boolean;
+  /** Present only on the reserved tasklist entity. An empty array means the
+   * current todo list is empty; it is not a completed child task. */
+  items?: TasklistItem[];
+  /** Present only when wrapper-side tasklist bounding skipped source items. */
+  omitted?: TasklistOmitted;
 }
 
 /** Nested active-task table (issue #180): agent_id => task_id => latest
@@ -703,6 +735,101 @@ export function taskOf(envelope: Envelope): TaskPayload | null {
   return p as TaskPayload;
 }
 
+/** True only for ADR-0049's single reserved entity. Keep the two fields
+ * together even though the current server rejects mismatches: snapshots can
+ * outlive a rolling upgrade, so the client must not mistake a malformed child
+ * task for the parent's todo list (or omit it from AgentCard's activity ring).
+ */
+export function isTasklistTask(task: TaskPayload): boolean {
+  return task.task_id === "tasklist" && task.task_type === "tasklist";
+}
+
+function tasklistItemOf(value: unknown): TasklistItem | null {
+  if (typeof value !== "object" || value === null) return null;
+  const item = value as { text?: unknown; status?: unknown };
+  if (
+    typeof item.text !== "string" ||
+    (item.status !== "pending" &&
+      item.status !== "in_progress" &&
+      item.status !== "completed")
+  ) {
+    return null;
+  }
+  return { text: item.text, status: item.status };
+}
+
+function tasklistOmittedOf(value: unknown): TasklistOmitted | null {
+  if (typeof value !== "object" || value === null) return null;
+  const omitted = value as { count?: unknown; completed?: unknown };
+  if (
+    typeof omitted.count !== "number" ||
+    !Number.isSafeInteger(omitted.count) ||
+    omitted.count <= 0 ||
+    typeof omitted.completed !== "number" ||
+    !Number.isSafeInteger(omitted.completed) ||
+    omitted.completed < 0 ||
+    omitted.completed > omitted.count
+  ) {
+    return null;
+  }
+  return { count: omitted.count, completed: omitted.completed };
+}
+
+/**
+ * Extracts one parent's latest tasklist entity from the active task table.
+ * `items: []` is valid retained state but the caller may intentionally hide
+ * its float to avoid a meaningless 0/0 display. Any malformed list is
+ * dropped as a whole: rendering a partial snapshot would turn an operator
+ * view into a false claim about the agent's todo state.
+ */
+export function tasklistForAgent(
+  tasks: TaskTable,
+  agentId: string,
+): TasklistSnapshot | null {
+  const agentTasks = Object.prototype.hasOwnProperty.call(tasks, agentId)
+    ? tasks[agentId]
+    : undefined;
+  const envelope = agentTasks?.tasklist;
+  if (!envelope) return null;
+
+  const task = taskOf(envelope);
+  if (
+    !task ||
+    envelope.agent_id !== agentId ||
+    task.agent_id !== agentId ||
+    !isTasklistTask(task) ||
+    task.kind !== "updated" ||
+    task.status !== "running" ||
+    !Array.isArray(task.items)
+  ) {
+    return null;
+  }
+
+  const items: TasklistItem[] = [];
+  for (const rawItem of task.items) {
+    const item = tasklistItemOf(rawItem);
+    if (item === null) return null;
+    items.push(item);
+  }
+
+  if (task.omitted === undefined) return { items };
+  const omitted = tasklistOmittedOf(task.omitted);
+  return omitted === null ? null : { items, omitted };
+}
+
+/** The selected AgentDetail must not retain a todo float through the same
+ * disconnect race guarded for its child-task ring. A `disconnected` envelope
+ * is authoritative "no current wrapper" state even if the local task table
+ * has not observed its purge tick yet. Kept pure so App's display guard is
+ * tested without relying on a large socket mount. */
+export function tasklistForDetail(
+  envelope: Envelope,
+  tasks: TaskTable,
+): TasklistSnapshot | null {
+  if (envelope.state === "disconnected") return null;
+  return tasklistForAgent(tasks, envelope.agent_id);
+}
+
 /** Applies a live `type: "task"` envelope to the nested active-task table
  *  (agent_id => task_id => latest envelope, issue #180). kind=started/
  *  updated upserts; kind=completed removes (pruning the agent's now-
@@ -717,7 +844,12 @@ export function taskOf(envelope: Envelope): TaskPayload | null {
  *  the SAME table reference so callers can skip a redundant state write. */
 export function applyTaskEnvelope(tasks: TaskTable, envelope: Envelope): TaskTable {
   const task = taskOf(envelope);
-  if (!task) return tasks;
+  // The server validates this before live broadcast, but preserve the same
+  // ownership invariant at the browser boundary. Without it an envelope whose
+  // outer agent_id differs from payload.agent_id could put a task under one
+  // parent while every other UI read treats the envelope as another parent's
+  // state (the snapshot parser below applies the analogous three-way check).
+  if (!task || envelope.agent_id !== task.agent_id) return tasks;
   // Security review round 2 (issue #180, 2026-08-09): read via
   // `hasOwnProperty`, never a bare `tasks[task.agent_id]`. `tasks` starts
   // life as a plain `{}` (App.svelte's `$state<TaskTable>({})` initial
@@ -815,7 +947,16 @@ export function computeActiveTaskCountByAgent(
 ): Record<string, number> {
   const counts: Record<string, number> = Object.create(null);
   for (const [agentId, agentTasks] of Object.entries(tasks)) {
-    counts[agentId] = Object.keys(agentTasks).length;
+    // A tasklist is the parent agent's own todo snapshot (ADR-0049), not a
+    // running subagent/workflow. Excluding the fully-reserved entity here is
+    // what keeps AgentCard's child-activity ring dark for a parent that only
+    // has a todo list. A malformed one-sided reservation remains a child
+    // count rather than being silently hidden; the server rejects it, and the
+    // dashboard should not turn an invalid snapshot into a false negative.
+    counts[agentId] = Object.values(agentTasks).filter((envelope) => {
+      const task = taskOf(envelope);
+      return task === null || !isTasklistTask(task);
+    }).length;
   }
   return counts;
 }
@@ -1724,7 +1865,11 @@ export function parseDirectory(
 /** Parses the join-time snapshot's `tasks` map (agent_id => task_id =>
  *  envelope, ADR-0048 F3, M1 fix-round composite key) into a
  *  {@link TaskTable}, keeping only well-formed `type: "task"` envelopes
- *  at the leaf and dropping any agent_id whose inner map ends up empty.
+ *  whose OUTER agent_id/task_id keys agree with both the envelope and its
+ *  payload. A key mismatch would make one parent's tasklist appear in a
+ *  different AgentDetail (or let an attacker hide/show an AgentCard ring), so
+ *  it is rejected rather than silently re-keyed. Drop any agent_id whose
+ *  inner map ends up empty.
  *  A viewer join always yields `tasks: {}` server-side (the same
  *  operator-only server-gate path as `hosts`/`log`/`result`, ADR-0021),
  *  so this returns {} for that value regardless. */
@@ -1748,7 +1893,14 @@ export function parseTasks(value: unknown): TaskTable {
     if (typeof entry !== "object" || entry === null) continue;
     const agentTasks: Record<string, Envelope> = Object.create(null);
     for (const [taskId, envelope] of Object.entries(entry)) {
-      if (isEnvelope(envelope) && envelope.type === "task") {
+      if (!isEnvelope(envelope)) continue;
+      const task = taskOf(envelope);
+      if (
+        task &&
+        envelope.agent_id === agentId &&
+        task.agent_id === agentId &&
+        task.task_id === taskId
+      ) {
         agentTasks[taskId] = envelope;
       }
     }

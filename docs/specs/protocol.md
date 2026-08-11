@@ -211,6 +211,44 @@ resume 直後の意図しない差替えのみ drift として emit する。
 | `session_boundary` | **確定** | `{ mode: "new" \| "clear", request_id: string, ts, previous_session_id?: string, to_session_id?: string \| null }`。`/new`・`/clear` の session lifecycle 遷移マーカー。通常 `envelope` 経路で broadcast し、`/new` は既存 history 末尾に append、`/clear` は当該 agent の history を marker 1 行だけに絞る（ADR-0036 F3 復元、2026-07-24）。`history_reset` は resume replay 専用でどちらも発火しない。Codex lazy 采番時は `to_session_id: null` を初回 envelope で後追い patch。viewer payload は `{ "mode" }` のみに sanitize。 |
 | `refresh_models_result` | **確定** | `{ request_id: string, ok: boolean, reason?: string, models_count?: number }`。operator の `refresh_models` に対する wrapper 側の完了報告([ADR-0039](../adr/0039-engine-catalog-live-probe.md) F9 v2)。`agent_id` は外枠が持つので payload には**複製しない**。`reason` は失敗時のみで、closed vocab は engine catalog probe と共通(`auth_failed` / `spawn_failed` / `cli_error` / `invalid_output` / `timeout` / `unsupported_engine`。Claude 以外のアダプタは control を no-op して `unsupported_engine` を返す)。`models_count` は成功時のみのサイズ signal で、更新後の catalog 本体は**直前に emit される** `state_change.ext.models` が運ぶ。本 envelope は transient — サーバは `AgentStates` に put せず、クライアントは通常の envelope 処理より前に special-dispatch する。**operator 限定配信** |
 
+### `task_type: "tasklist"` 追補 (issue #188, ADR-0049 F4)
+
+`task` の一般規則に加え、エージェント自身の todo は常に単一 entity
+`{ agent_id, task_id: "tasklist", task_type: "tasklist" }` とする。予約語は双方向である: `task_type` が `tasklist` なら `task_id` は必ず
+`tasklist`、`task_id` が `tasklist` なら `task_type` も必ず `tasklist`。
+server はどちらの不一致も reject する。この entity に child task の ID を
+使わせず、child task に予約 ID を使わせないためである。
+
+payload は `{ kind: "updated", status: "running", items, omitted? }`。
+`items` は `{ text: string, status: "pending" | "in_progress" | "completed" }`
+の whole-list snapshot で、後着を優先して全体置換する(LWW)。全項目が完了しても
+`kind: "completed"` は送らない。`items: []` も現在の todo が空であることを表す
+有効な置換であり、entity は親 wrapper の離脱まで保持する。dashboard は空 list の
+float を表示しない(意味のない `0/0` を避ける)が、state 上の entity を消してはいけない。
+
+wrapper は source order の先頭から最大 50 items を送り、各 `text` は UTF-8 で
+256 bytes 以下、`items` JSON は 16,384 bytes 以下に正規化する。より後ろの source
+items があれば `omitted: { count, completed }` を必ず付け、operator は detail が一部
+だけであることと全体の完了数を確認できる。server は同じ上限を防御的に検証して
+reject するが、通常使用での超過は wrapper の正規化で表示可能な snapshot にする。
+
+tasklist は child task の `kind=updated` 用 3 秒/トークン/tool-name throttle の対象外。
+todo の変更には後で flush する token/tool signal が無いため、その throttle では更新を
+永続的に落としうる。wrapper は内容が完全一致する連続 snapshot だけを de-duplicate
+し、変更された snapshot は直ちに送る。Claude Code の `TodoWrite` は `content` と
+3 値 status を写す。`activeForm` は Claude のローカル UI 文言であり、ADR-0049 が
+確定した wire item は text + status のみなので送らない。将来これを表示したい場合は
+既存 field への暗黙追加ではなく protocol 拡張として決める。Codex の
+`todo_list.completed: boolean` は `false -> pending` / `true -> completed` に写す。
+いずれも親 thread の list のみを対象にする。wrapper transport は socket 再接続時に
+active `task` entity を fresh seq で再送する。これにより旧 channel の terminate が
+server の task table を purge した後も、tasklist の content dedupe に妨げられず復元される。
+再送用の wrapper cache は `5,000` entity / JSON `6,000,000` bytes を上限にする。`completed`
+を受けない crash/kill 済み child task を無限に残さないためで、超過時は最終更新が最も古い
+child entity から cache 外へ退避し、wrapper は stderr に警告する。`tasklist` は parent 自身の
+単一 snapshot なので他に退避対象がある限り保持する。これは再接続時の local memory bound であり、
+multi-wrapper をまたぐ server 側 TaskStates の ingress/byte bound に代わるものではない。
+
 ### 方向別メッセージ種別(v0 確定)
 
 Channels のチャネルイベント名と内容。トピックは
