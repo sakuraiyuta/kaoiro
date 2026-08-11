@@ -23,6 +23,7 @@ import {
   InterAgentTool,
   MAX_COALESCED_MESSAGES,
   canAddToCoalescedBatch,
+  classifyInterAgentError,
   formatInboundMessage,
   formatInboundMessages,
 } from "@kaoiro/agent-common";
@@ -201,27 +202,35 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
  *  "free" the way issue #221 段階3's coalescing trigger depends on it
  *  (`onTurnEnd` firing, not merely `host.send()`'s own promise settling —
  *  see cli.ts's `trySendNextBatch` doc for why that distinction matters).
- *  Each release lets exactly the NEXT queued turn's result through. */
+ *  Each release lets exactly the NEXT queued turn's result through, with
+ *  the given outcome ("success" by default — MF-1's regression test needs
+ *  to force a specific turn to end in error). */
 function makeControllableQueryFn(): {
   queryFn: QueryFn;
-  releaseNext: () => void;
+  releaseNext: (outcome?: "success" | "error") => void;
 } {
-  let release: (() => void) | null = null;
+  let release: ((outcome: "success" | "error") => void) | null = null;
   const queryFn = makeQueryFn((args: QueryArgs) => {
     async function* gen(): AsyncGenerator<SDKMessage, void> {
       for await (const _m of args.prompt) {
-        await new Promise<void>((resolve) => {
+        const outcome = await new Promise<"success" | "error">((resolve) => {
           release = resolve;
         });
-        yield msg({ type: "result", subtype: "success", result: "ok" });
+        yield outcome === "error"
+          ? msg({
+              type: "result",
+              subtype: "error_during_execution",
+              errors: ["boom"],
+            })
+          : msg({ type: "result", subtype: "success", result: "ok" });
       }
     }
     return asQuery(gen());
   });
   return {
     queryFn,
-    releaseNext: () => {
-      release?.();
+    releaseNext: (outcome: "success" | "error" = "success") => {
+      release?.(outcome);
       release = null;
     },
   };
@@ -243,6 +252,10 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   const inFlightPeers = new Set<string>();
   const inFlightCidPeer = new Map<string, string>();
   const sentBatches: { peer: string; cids: string[] }[] = [];
+  /** peer_error notices resolveTurnEnd() returned on a failed turn (issue
+   *  #221 段階3 MF-1's regression test reads this — the production glue's
+   *  onTurnEnd wiring forwards these straight to ServerLink#send). */
+  const notices: Envelope[] = [];
   let host!: AgentHost;
 
   function trySendNextBatch(peer: string): void {
@@ -260,6 +273,14 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
       )
       .filter((cid): cid is string => typeof cid === "string");
     for (const cid of cids) inFlightCidPeer.set(cid, peer);
+    // issue #221 段階3 MF-1 (ふじレビュー差し戻し): register at DISPATCH
+    // time — mirrors the production fix in cli.ts's trySendNextBatch. Moved
+    // out of receive() below, which used to register at receipt time and
+    // let a later batch's same-cid registration clobber an earlier,
+    // still-in-flight batch's entry.
+    for (const item of batch.items) {
+      interAgent.notePendingInjection(item.envelope);
+    }
     sentBatches.push({ peer, cids });
     void host.send(formatInboundMessages(batch.items), undefined, cids);
   }
@@ -267,9 +288,6 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   async function receive(envelope: Envelope): Promise<void> {
     const disposition = await interAgent.receiveInbound(envelope);
     if (disposition.consumed || !disposition.inject) return;
-    if (disposition.mode !== "terminal") {
-      interAgent.notePendingInjection(envelope);
-    }
     const peer = envelope.agent_id;
     const itemText = formatInboundMessage(envelope, { mode: disposition.mode });
     const itemBytes = Buffer.byteLength(itemText, "utf8");
@@ -291,7 +309,14 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     trySendNextBatch(peer);
   }
 
-  function onTurnEnd(conversationIds: readonly string[]): void {
+  function onTurnEnd(
+    conversationIds: readonly string[],
+    error?: { reason?: string; detail?: string },
+  ): void {
+    const classified = error ? classifyInterAgentError(error) : undefined;
+    for (const notice of interAgent.resolveTurnEnd(conversationIds, classified)) {
+      notices.push(notice);
+    }
     const freedPeer =
       conversationIds.length > 0
         ? inFlightCidPeer.get(conversationIds[0]!)
@@ -307,6 +332,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     receive,
     onTurnEnd,
     sentBatches,
+    notices,
     bindHost: (h: AgentHost) => {
       host = h;
     },
@@ -320,7 +346,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     const harness = makeCoalescingHarness(tool);
     const host = new AgentHost(config, {
       onState: () => {},
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds),
+      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
       queryFn,
       now: () => "T",
     });
@@ -341,7 +367,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     const harness = makeCoalescingHarness(tool);
     const host = new AgentHost(config, {
       onState: () => {},
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds),
+      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
       queryFn,
       now: () => "T",
     });
@@ -377,7 +403,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     const harness = makeCoalescingHarness(tool);
     const host = new AgentHost(config, {
       onState: () => {},
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds),
+      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
       queryFn,
       now: () => "T",
     });
@@ -404,7 +430,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     const harness = makeCoalescingHarness(tool);
     const host = new AgentHost(config, {
       onState: () => {},
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds),
+      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
       queryFn,
       now: () => "T",
     });
@@ -431,5 +457,52 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     expect(new Set(allCids).size).toBe(total);
 
     releaseNext();
+  });
+
+  it("MF-1 (ふじレビュー差し戻し): 同一cidのturn1がin-flight中にturn2が次batchへ載る → turn1成功 → turn2失敗でxへpeer_errorが1件出る", async () => {
+    const { queryFn, releaseNext } = makeControllableQueryFn();
+    const tool = new InterAgentTool({ config, getState: () => "idle", send: () => {} });
+    const harness = makeCoalescingHarness(tool);
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      queryFn,
+      now: () => "T",
+    });
+    harness.bindHost(host);
+    void host.run();
+
+    // turn 1 (cid=x, turn_number=1) starts immediately — peer was idle.
+    await harness.receive(inboundEnvelope("x", 1));
+    expect(harness.sentBatches).toEqual([{ peer: "peer.agent", cids: ["x"] }]);
+
+    // Same cid arrives again (turn_number=2) while turn 1 is still
+    // in-flight — must accumulate into the NEXT batch, not dispatch yet
+    // (AC9 turn_number monotonicity: 2 > 1, so this is accepted, not
+    // stale). Before MF-1, receipt-time notePendingInjection() here would
+    // already overwrite turn 1's still-pending map entry for "x", even
+    // though turn 1 has not completed and this second batch has not even
+    // been dispatched yet.
+    await harness.receive(inboundEnvelope("x", 2));
+    expect(harness.sentBatches).toHaveLength(1);
+
+    // turn 1 completes successfully — resolves turn 1's own pending entry
+    // (no notice expected) and flushes the accumulated batch as turn 2.
+    releaseNext("success");
+    await vi.waitFor(() => expect(harness.sentBatches).toHaveLength(2));
+    expect(harness.sentBatches[1]).toEqual({ peer: "peer.agent", cids: ["x"] });
+    expect(harness.notices).toHaveLength(0);
+
+    // turn 2 fails — resolveTurnEnd() must find x's entry (registered at
+    // turn 2's OWN dispatch under MF-1) and emit exactly 1 peer_error
+    // notice. Pre-MF-1, turn 1's success-path resolution above would
+    // already have deleted turn 2's not-yet-dispatched entry (receipt-time
+    // clobber), silently producing 0 notices here instead.
+    releaseNext("error");
+    await vi.waitFor(() => expect(harness.notices).toHaveLength(1));
+    const payload = harness.notices[0]!.payload as unknown as InterAgentMessagePayload;
+    expect(payload.to).toBe("peer.agent");
+    expect(payload.conversation_id).toBe("x");
+    expect(payload.error).toBeDefined();
   });
 });

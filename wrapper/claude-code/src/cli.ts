@@ -304,6 +304,15 @@ async function main(): Promise<void> {
       )
       .filter((cid): cid is string => typeof cid === "string");
     for (const cid of cids) inFlightCidPeer.set(cid, peer);
+    // issue #221 段階3 MF-1 (ふじレビュー差し戻し): register each item's
+    // pending injection HERE, at dispatch time — not at receipt time in
+    // onInterAgentMessage. See the comment there for why receipt-time
+    // registration was wrong. This ties every cid's map entry one-for-one
+    // to the batch actually being sent below, matching the cids passed as
+    // host.send()'s third parameter.
+    for (const item of batch.items) {
+      interAgent?.notePendingInjection(item.envelope);
+    }
     const text = formatInboundMessages(batch.items);
     void enqueueInstruction(() =>
       host.send(text, undefined, cids).catch((err: unknown) => {
@@ -677,22 +686,19 @@ async function main(): Promise<void> {
       // serialises through instructionChain so a mid-PDF render cannot
       // reorder this against an operator instruction.
       process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
-      // issue #131: this wrapper now owes a reply on the conversation. Tag
-      // the queued turn with the conversation_id (must-fix 1: turn-scoped
-      // resolution) so onTurnEnd below resolves exactly THIS turn, not
-      // whatever else happens to be pending — send() ties the tag to this
-      // specific queue slot, not to "the next turn" in general.
-      // issue #177 AC8: a terminal (both-done) message owes no reply, so it
-      // must not be tracked as a pending injection — that would make a
-      // silent (correctly unanswered) turn look like a failure to
-      // resolveTurnEnd() and produce a spurious error notice. issue #221
-      // direction 1 made this guard unreachable-by-construction (terminal
-      // now always returns `inject: false` above and returns early before
-      // reaching here) — kept as defense in depth against a future change
-      // to receiveInbound() reintroducing an injectable terminal case.
-      if (disposition.mode !== "terminal") {
-        interAgent?.notePendingInjection(envelope);
-      }
+      // issue #131: this wrapper now owes a reply on the conversation.
+      // notePendingInjection() is called from trySendNextBatch() below, NOT
+      // here — issue #221 段階3 MF-1 (ふじレビュー差し戻し) moved the call
+      // from receipt time to dispatch time. Registering it here (at
+      // receipt) let a second same-cid message, queued into a LATER batch
+      // while this peer was still busy, overwrite an EARLIER batch's
+      // still-pending map entry before that earlier turn even completed —
+      // resolveTurnEnd() then deleted the wrong (later) registration when
+      // the earlier turn ended, silently no-op'ing the later turn's own
+      // resolution on failure. issue #177 AC8's terminal-exclusion still
+      // holds under the new call site: `batch.items` below never holds a
+      // terminal-disposition envelope, since `inject: false` already
+      // returned early above.
       // issue #221 段階3: append to (or start) this peer's open batch, then
       // try to send. A NEW batch is pushed onto the peer's queue both when
       // none is open yet, and when the existing open one is already at

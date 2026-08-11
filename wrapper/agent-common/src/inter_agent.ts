@@ -1015,7 +1015,19 @@ export class InterAgentTool {
    *  turn with this conversation_id — see AgentHost#send /
    *  CodexHost#send's third parameter). If the SPECIFIC turn that injection
    *  started ends without an outbound reply clearing the entry (see
-   *  `invoke()`), `resolveTurnEnd()` resolves it (issue #131). */
+   *  `invoke()`), `resolveTurnEnd()` resolves it (issue #131).
+   *
+   *  Call-site timing matters (issue #221 段階3 MF-1, ふじレビュー差し戻し):
+   *  cli.ts calls this at DISPATCH time — inside `trySendNextBatch()`,
+   *  immediately before the actual `host.send()` — not at receipt time.
+   *  This map is keyed by conversation_id, one entry each, so registering
+   *  eagerly on arrival would let a second same-cid message queued into a
+   *  LATER coalesced batch (peer still busy on an EARLIER one) overwrite
+   *  that earlier batch's still-pending entry before its turn even
+   *  completes; the earlier turn's `resolveTurnEnd()` would then delete the
+   *  wrong (later) registration, silently breaking the later turn's own
+   *  resolution on failure. Registering per-item at dispatch time ties each
+   *  cid's entry one-for-one to the batch actually being sent. */
   notePendingInjection(envelope: Envelope): void {
     const payload = envelope.payload as Partial<InterAgentMessagePayload>;
     if (typeof payload.conversation_id !== "string") return;

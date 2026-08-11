@@ -432,6 +432,43 @@ defmodule KaoiroServer.ConversationStatesTest do
       assert %{status: :closed, reason: :open_conversation_ttl} =
                ConversationStates.get("c", name)
     end
+
+    test "callback が exit しても GenServer は生存し tombstone 遷移自体は完了し他の open entry も保持される (issue #221 段階3 MF-2, ふじレビュー差し戻し)" do
+      # `rescue` は Elixir 例外 (raise) のみを捕捉し `exit` を素通りする。
+      # on_auto_closed の典型的な実装 (IngressOrder.allocate/0,
+      # AgentStates.upsert_ia/3) は GenServer.call/2 経由なので、相手プロセス
+      # の不在/timeout は exception ではなく exit として現れる — それを
+      # exit/1 で直接模す。
+      on_auto_closed = fn _cid, _agent_ids, _reason -> exit(:delivery_down) end
+
+      {name, clock} =
+        start_tracker_with_clock(:cs_on_auto_closed_exits, [open_conversation_ttl_ms: 1],
+          on_auto_closed: on_auto_closed
+        )
+
+      pid = Process.whereis(name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+
+      # TTL に触れない別会話を、GC 実行時点の now と同時刻で追加する — 巻き
+      # 添えの範囲 ((c) の検証対象) を確かめるため、"c" の tombstone 化と
+      # 同じ GC ラウンドに同居させつつ、この会話自体は開いたまま残る。
+      advance_clock(clock, 5)
+      assert :ok = ConversationStates.record_message("other", "x", "y", "z", 1, false, name)
+
+      sync_gc(pid)
+
+      # (a) GC 後も生存
+      assert Process.alive?(pid)
+
+      # (b) 対象は tombstone 化されている
+      assert %{status: :closed, reason: :open_conversation_ttl} =
+               ConversationStates.get("c", name)
+
+      # (c) 巻き添えにならず他の open entry も保持されている (肝) —
+      # singleton が全エージェントの会話状態を持つ以上、"c" の callback が
+      # exit しても "other" の状態が失われないことが焦点。
+      assert %{status: :open} = ConversationStates.get("other", name)
+    end
   end
 
   test "claim_unreachable_targets は参加中の cid と自分以外の参加者を返す (#131)" do

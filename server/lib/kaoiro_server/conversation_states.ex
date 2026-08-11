@@ -364,6 +364,17 @@ defmodule KaoiroServer.ConversationStates do
     # `:on_auto_closed`'s doc). An exception here (a bug in the delivery
     # side, not in anything this module owns) must not crash a singleton
     # GenServer holding every OTHER agent's still-open conversations too.
+    #
+    # `rescue` alone is not enough (issue #221 段階3 MF-2, ふじレビュー差し
+    # 戻し): it only catches Elixir exceptions (`raise`), not `exit` — and
+    # the callback's typical shape (IngressOrder.allocate/0,
+    # AgentStates.upsert_ia/3) is a `GenServer.call/2` chain, where a
+    # target process being down or timing out surfaces as `exit`, not an
+    # exception. An uncaught `exit` here would propagate straight through
+    # this `handle_info(:gc)` clause, crashing this GenServer BEFORE it
+    # ever returns `{:noreply, %{state | conversations: conversations}}`
+    # below — losing every OTHER agent's still-open conversation state
+    # along with it, the exact blast radius `rescue` was meant to prevent.
     Enum.each(auto_closed, fn {cid, agent_ids, reason} ->
       try do
         state.on_auto_closed.(cid, agent_ids, reason)
@@ -372,6 +383,12 @@ defmodule KaoiroServer.ConversationStates do
           Logger.error(
             "conversation_states gc: on_auto_closed callback raised for " <>
               "#{cid}: #{Exception.format(:error, e, __STACKTRACE__)}"
+          )
+      catch
+        :exit, exit_reason ->
+          Logger.error(
+            "conversation_states gc: on_auto_closed callback exited for " <>
+              "#{cid}: #{inspect(exit_reason)}"
           )
       end
     end)
