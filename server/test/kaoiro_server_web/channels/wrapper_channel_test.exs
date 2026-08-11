@@ -249,45 +249,62 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert is_binary(started_at)
   end
 
-  describe "persona_sync push on join (issue #197 段階3, D14 acceptance 1)" do
-    test "AgentDirectory に entry があれば join のたびに現在の name/revision を push する" do
+  describe "persona_sync push on join (issue #197 段階3, D14 acceptance 1, revised issue #219 D22)" do
+    # issue #219 MF-2 acceptance pin (クロエ実測検証, wrapper 側半分):
+    # revision は @initial_revision = 1 から始まる (0 ではない) — a legacy
+    # wrapper build's own sync guard is `if (revision <= this.#personaRevision)
+    # return;` starting at `#personaRevision = 0`, so a fresh-spawn push
+    # AT revision 0 would be silently dropped by such a wrapper as "not
+    # newer". Starting at 1 guarantees the first push always compares
+    # strictly greater than that baseline.
+    test "AgentDirectory に entry があれば join のたびに現在の display_name/revision を push する (persona_sync + display_name_sync dual-emit)" do
       agent_id = "test.persona-sync-fresh"
-      AgentDirectory.record(agent_id, %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"})
+      AgentDirectory.record(agent_id, "ao", "あお")
 
       _socket = join_wrapper(agent_id)
 
-      assert_push "persona_sync", %{"name" => "あお", "revision" => 0}
+      assert_push "persona_sync", %{"name" => "あお", "revision" => 1}
+      assert_push "display_name_sync", %{"display_name" => "あお", "revision" => 1}
     end
 
-    test "rename 後に reconnect すると新しい name/revision が push される (再同期)" do
+    test "rename 後に reconnect すると新しい display_name/revision が push される (再同期)" do
       agent_id = "test.persona-sync-reconnect"
-      AgentDirectory.record(agent_id, %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"})
-      assert {:ok, %{revision: 1}} = AgentDirectory.rename(agent_id, "あお(改名)")
+      AgentDirectory.record(agent_id, "ao", "あお")
+      # baseline @initial_revision(1) + 1 = 2 (issue #219 MF-2).
+      assert {:ok, %{revision: 2}} = AgentDirectory.rename(agent_id, "あお(改名)")
 
       _socket = join_wrapper(agent_id)
 
-      assert_push "persona_sync", %{"name" => "あお(改名)", "revision" => 1}
+      assert_push "persona_sync", %{"name" => "あお(改名)", "revision" => 2}
+      assert_push "display_name_sync", %{"display_name" => "あお(改名)", "revision" => 2}
     end
 
-    test "AgentDirectory に entry が無ければ persona_sync は push されない" do
+    test "AgentDirectory に entry が無ければ persona_sync/display_name_sync は push されない" do
       agent_id = "test.persona-sync-none"
 
       _socket = join_wrapper(agent_id)
 
       refute_push "persona_sync", %{}
+      refute_push "display_name_sync", %{}
     end
 
     # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): after-join push
     # にも version stamp が要る。上の 2 テストは %{"name" => ..., "revision"
     # => ...} という部分一致で version の有無を検証できないため、ここで
-    # 直接 pin する。
-    test "push には version スタンプが乗る (ADR-0015)" do
+    # 直接 pin する。issue #219 D22: 両 event とも同じ version stamp。
+    test "push には両 event とも version スタンプが乗る (ADR-0015)" do
       agent_id = "test.persona-sync-version"
-      AgentDirectory.record(agent_id, %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"})
+      AgentDirectory.record(agent_id, "ao", "あお")
 
       _socket = join_wrapper(agent_id)
 
-      assert_push "persona_sync", %{"version" => "0", "name" => "あお", "revision" => 0}
+      assert_push "persona_sync", %{"version" => "0", "name" => "あお", "revision" => 1}
+
+      assert_push "display_name_sync", %{
+        "version" => "0",
+        "display_name" => "あお",
+        "revision" => 1
+      }
     end
   end
 
@@ -1895,15 +1912,85 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       # 自分を除外して peer のみが返る
       assert Enum.any?(agents, fn a ->
+               # issue #219 D19/D26: envelope に display_name が無ければ
+               # entry からも省略される — 他の未 stamp optional field と
+               # 同じ discipline。
                a["agent_id"] == peer_id and
                  a["persona"]["name"] == "あお" and
                  a["state"] == "thinking" and
                  not Map.has_key?(a, "engine") and
                  not Map.has_key?(a, "model") and
-                 not Map.has_key?(a, "effort")
+                 not Map.has_key?(a, "effort") and
+                 not Map.has_key?(a, "display_name")
              end)
 
       refute Enum.any?(agents, fn a -> a["agent_id"] == self_id end)
+    end
+
+    # issue #219 D19/D26 (ADR-0021 F6-3): envelope の display_name top-level
+    # field が peer directory entry へそのまま乗る。persona (canonical) は
+    # 別 field のまま — 両方が同時に開示され、どちらかがどちらかを置き換
+    # えないことを pin する。
+    test "envelope の display_name が entry に反映され、persona (canonical) とは独立して開示される" do
+      peer_id = "test.dir-display-name-peer"
+      self_id = "test.dir-display-name-self"
+
+      peer_socket = join_wrapper(peer_id)
+
+      peer_env =
+        envelope(peer_id, "idle")
+        |> Map.put("persona", %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"})
+        |> Map.put("display_name", "あお(改名)")
+
+      ref = push(peer_socket, "envelope", peer_env)
+      assert_reply ref, :ok
+
+      self_socket = join_wrapper(self_id)
+      ref = push(self_socket, "envelope", envelope(self_id, "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      assert Enum.any?(agents, fn a ->
+               a["agent_id"] == peer_id and
+                 a["persona"] == %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"} and
+                 a["display_name"] == "あお(改名)"
+             end)
+    end
+
+    # advisory (issue #219, クロエ実測検証): `directory_entry/1`'s
+    # `display_name` now applies `valid_display_name/1` (same 1-64-grapheme
+    # / no-control-char bound `user_entry/1` already applies), not a bare
+    # `is_binary/1` check. An out-of-bound value from a compromised/buggy
+    # wrapper is dropped like an absent field, not truncated or passed
+    # through to a peer.
+    test "envelope の display_name が制御文字混入/65 grapheme 超なら entry から省略される (advisory)" do
+      peer_id = "test.dir-display-name-invalid-peer"
+      self_id = "test.dir-display-name-invalid-self"
+
+      peer_socket = join_wrapper(peer_id)
+
+      for bad_name <- [String.duplicate("あ", 65), "bad" <> <<0x01>> <> "name"] do
+        peer_env =
+          envelope(peer_id, "idle")
+          |> Map.put("persona", %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"})
+          |> Map.put("display_name", bad_name)
+
+        ref = push(peer_socket, "envelope", peer_env)
+        assert_reply ref, :ok
+      end
+
+      self_socket = join_wrapper(self_id)
+      ref = push(self_socket, "envelope", envelope(self_id, "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      assert Enum.any?(agents, fn a ->
+               a["agent_id"] == peer_id and not Map.has_key?(a, "display_name")
+             end)
     end
 
     test "他 agent が居ない場合は空リストで応答" do

@@ -361,12 +361,13 @@ export interface AgentHostOptions {
  */
 export class AgentHost implements EngineAdapter {
   readonly #config: WrapperConfig;
-  /** Last-applied `persona_sync` revision (issue #197 段階3, D15). Starts
-   *  at 0 to match the baseline `AgentDirectory` gives a freshly-spawned
-   *  agent (never renamed), so the join-time sync for a never-renamed
-   *  agent is correctly a no-op (0 <= 0) rather than a spurious re-emit.
-   *  See `renamePersona` for the comparison this guards. */
-  #personaRevision = 0;
+  /** Last-applied display_name sync revision (issue #197 段階3, D15,
+   *  renamed issue #219 D19/D23). Starts at 0 to match the baseline
+   *  `AgentDirectory` gives a freshly-spawned agent (never renamed), so
+   *  the join-time sync for a never-renamed agent is correctly a no-op
+   *  (0 <= 0) rather than a spurious re-emit. See `renameDisplayName`
+   *  for the comparison this guards. */
+  #displayNameRevision = 0;
   readonly #options: AgentHostOptions;
   readonly #queryFn: typeof query;
   readonly #probeFn: () => Promise<ProbeOutcome>;
@@ -1218,30 +1219,37 @@ export class AgentHost implements EngineAdapter {
     }
   }
 
-  /** Applies a `persona_sync` push (issue #197 段階3): the server's
-   *  authoritative current display name, sent on every join (fresh AND
-   *  reconnect, D14 acceptance 1) and on a live `rename_agent`.
+  /** Applies a display_name sync push — `persona_sync` (legacy) or
+   *  `display_name_sync` (new), issue #219 D22 dual-emit; both funnel
+   *  into this one call (issue #197 段階3, renamed from `renamePersona`
+   *  in issue #219 D19/D23): the server's authoritative current display
+   *  name, sent on every join (fresh AND reconnect, D14 acceptance 1)
+   *  and on a live `rename_agent`.
    *
    *  `revision` is a monotonic per-agent_id counter
    *  (`AgentDirectory.rename/2`); a push whose revision is not STRICTLY
    *  newer than the last one applied is dropped. This is what makes the
-   *  method safe to call with pushes arriving in EITHER order — the two
+   *  method safe to call with pushes arriving in EITHER order — the
    *  cases that matter are a stale relay from an out-of-order broadcast
    *  (D15: two `rename_agent` calls racing on the server can complete
-   *  their broadcasts in either order) and a join-time sync that simply
+   *  their broadcasts in either order), a join-time sync that simply
    *  confirms the name this session already has (revision unchanged —
-   *  no re-emit needed).
+   *  no re-emit needed), and issue #219 D22's dual-emit itself (both
+   *  `persona_sync` and `display_name_sync` arrive at the same revision
+   *  — the second call here is a guaranteed no-op via this same guard).
    *
-   *  Only `persona.name` is mutable here — `persona.id` / `sprite_set`
-   *  and the injected personality prompt stay fixed for the session's
-   *  lifetime (ADR-0030 D2 改訂, ADR-0029 F9). Re-emits `state_change`
+   *  Only `display_name` is mutable here — `persona.id` / `name` /
+   *  `sprite_set` and the injected personality prompt stay fixed for the
+   *  session's lifetime (ADR-0029 F9, ADR-0030 D2 — issue #219 removed
+   *  the D2 carve-out this method used to require by moving the mutable
+   *  field OUT of `persona` entirely). Re-emits `state_change`
    *  immediately rather than waiting for the next natural turn event,
    *  because an idle/waiting_input session can otherwise sit
    *  indefinitely before its next envelope (D14 acceptance 2). */
-  renamePersona(name: string, revision: number): void {
-    if (revision <= this.#personaRevision) return;
-    this.#personaRevision = revision;
-    this.#config.persona = { ...this.#config.persona, name };
+  renameDisplayName(displayName: string, revision: number): void {
+    if (revision <= this.#displayNameRevision) return;
+    this.#displayNameRevision = revision;
+    this.#config.display_name = displayName;
     this.#emitState(this.#machine.state);
   }
 

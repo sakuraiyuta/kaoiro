@@ -12,6 +12,7 @@ import {
 const CONFIG = {
   agent_id: "lab-pc-1.claude-a",
   persona: { id: "mio", name: "澪", sprite_set: "mio" },
+  display_name: "澪",
   server_url: "ws://localhost:4000/wrapper",
 };
 
@@ -347,6 +348,7 @@ describe("makeStateChange", () => {
     const config = {
       agent_id: "lab-pc-1.claude-a",
       persona: { id: "mio", name: "澪", sprite_set: "mio" },
+      display_name: "澪",
       server_url: "ws://localhost:4000/wrapper",
     };
     const envelope = makeStateChange(
@@ -359,6 +361,7 @@ describe("makeStateChange", () => {
       version: "0",
       agent_id: "lab-pc-1.claude-a",
       persona: { id: "mio", name: "澪", sprite_set: "mio" },
+      display_name: "澪",
       ts: "2026-06-04T11:55:00Z",
       type: "state_change",
       state: "tool_running",
@@ -378,6 +381,7 @@ describe("makeLog", () => {
       version: "0",
       agent_id: "lab-pc-1.claude-a",
       persona: { id: "mio", name: "澪", sprite_set: "mio" },
+      display_name: "澪",
       ts: "2026-06-04T11:55:00Z",
       type: "log",
       state: "thinking",

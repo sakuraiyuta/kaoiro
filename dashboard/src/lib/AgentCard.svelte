@@ -86,7 +86,7 @@
   });
 
   const expression = $derived(expressionFor(display.shown));
-  const name = $derived(envelope.persona?.name ?? envelope.agent_id);
+  const name = $derived(envelope.display_name ?? envelope.agent_id);
   const spriteUrl = $derived(
     spriteUrlFor(manifest, envelope.persona?.sprite_set, display.shown),
   );

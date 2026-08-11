@@ -31,7 +31,7 @@ import {
   classifyInterAgentError,
   formatInboundMessage,
   isIngressStamp,
-  mergePendingPersonaSync,
+  mergePendingDisplayNameSync,
 } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "./read_only_tools.js";
@@ -79,10 +79,16 @@ const COLOR: Record<KaoiroState, string> = {
  *  handshake; short enough that a misconfigured server is loud. */
 const PERSONA_PROMPT_TIMEOUT_MS = 10_000;
 
+// issue #219 D25: human-facing log lines show `display_name` (the
+// mutable, operator-chosen label), never the pack's canonical
+// `persona.name` — an agent instance can be renamed without any code
+// here changing which field it reads. Correlation-critical output
+// (nowhere in this file) would additionally carry `agent_id`; these are
+// local terminal echo only, so the display label alone is enough.
 function printState(envelope: Envelope): void {
   const color = COLOR[envelope.state];
   const time = envelope.ts.slice(11, 19);
-  const name = envelope.persona.name;
+  const name = envelope.display_name;
   process.stdout.write(
     `\x1b[${color}m[${time}] ${name}: ${envelope.state}\x1b[0m\n`,
   );
@@ -93,7 +99,7 @@ function printState(envelope: Envelope): void {
 // already marks tool_running); they ride the envelope to the dashboard.
 function printLog(envelope: Envelope): void {
   const time = envelope.ts.slice(11, 19);
-  const name = envelope.persona.name;
+  const name = envelope.display_name;
   const payload = envelope.payload;
   if (envelope.type === "result") {
     const text = typeof payload.text === "string" ? payload.text : "(no text)";
@@ -211,11 +217,13 @@ async function main(): Promise<void> {
   // host.run(), so host.ts's "setPermissionMode before run() sets initial
   // mode" contract still holds (host.ts #58 source order).
   let pendingPermissionMode: PermissionMode | undefined;
-  // Same race as pendingPermissionMode (issue #197 段階3): the after_join
-  // `persona_sync` push (WrapperChannel.after_join_handshake, pushed after
-  // set_permission_mode) can also arrive before `host` exists. Buffer it and
-  // apply after construction, same discipline as pendingPermissionMode above.
-  let pendingPersonaSync: { name: string; revision: number } | undefined;
+  // Same race as pendingPermissionMode (issue #197 段階3, renamed issue
+  // #219 D19/D23): the after_join display_name sync push
+  // (WrapperChannel.after_join_handshake, pushed after
+  // set_permission_mode) can also arrive before `host` exists. Buffer it
+  // and apply after construction, same discipline as
+  // pendingPermissionMode above.
+  let pendingDisplayNameSync: { displayName: string; revision: number } | undefined;
   // host.send is async now (the PDF fit-to-SDK path awaits pdf-lib). Chain
   // operator instructions through one Promise so a slow render (e.g. a big
   // PDF) does not let the next instruction's queue.push run first, which
@@ -495,26 +503,29 @@ async function main(): Promise<void> {
       }
       void host.setPermissionMode(mode as PermissionMode).catch(() => {});
     },
-    onRenamePersona: (name, revision) => {
-      // protocol.md (issue #197 段階3): authoritative name from the
-      // server — fresh-join / reconnect sync OR a live `rename_agent`
-      // relay. Structural validation already happened in transport.ts;
-      // the revision-freshness check happens inside host.renamePersona
-      // itself (D15). Buffer if `host` is not yet constructed, same
-      // discipline as onSetPermissionMode above.
-      process.stdout.write(`  persona_sync: ${name} (revision=${revision})\n`);
+    onRenameDisplayName: (displayName, revision) => {
+      // protocol.md (issue #197 段階3, renamed issue #219 D19/D23):
+      // authoritative display_name from the server — fresh-join /
+      // reconnect sync OR a live `rename_agent` relay, delivered via
+      // EITHER `persona_sync` (legacy) or `display_name_sync` (new,
+      // D22 dual-emit). Structural validation already happened in
+      // transport.ts; the revision-freshness check happens inside
+      // host.renameDisplayName itself (D15, and makes applying both
+      // dual-emitted events idempotent). Buffer if `host` is not yet
+      // constructed, same discipline as onSetPermissionMode above.
+      process.stdout.write(`  display_name_sync: ${displayName} (revision=${revision})\n`);
       if (host === undefined) {
         // D15 review follow-up: a plain overwrite here would let a
         // lower-revision push win the pre-host race against a
-        // higher-revision one (see mergePendingPersonaSync's doc).
-        pendingPersonaSync = mergePendingPersonaSync(
-          pendingPersonaSync,
-          name,
+        // higher-revision one (see mergePendingDisplayNameSync's doc).
+        pendingDisplayNameSync = mergePendingDisplayNameSync(
+          pendingDisplayNameSync,
+          displayName,
           revision,
         );
         return;
       }
-      host.renamePersona(name, revision);
+      host.renameDisplayName(displayName, revision);
     },
     // File-upload wire (file-upload spec / ADR-0025). attach_* events
     // feed pending_uploads on the host; the host's validation emits
@@ -763,11 +774,14 @@ async function main(): Promise<void> {
     void host.setPermissionMode(pendingPermissionMode).catch(() => {});
   }
 
-  // Apply the after_join persona_sync that arrived before host was
-  // constructed (issue #197 段階3), same reasoning as pendingPermissionMode
-  // above.
-  if (pendingPersonaSync !== undefined) {
-    host.renamePersona(pendingPersonaSync.name, pendingPersonaSync.revision);
+  // Apply the after_join display_name sync that arrived before host was
+  // constructed (issue #197 段階3, renamed issue #219 D19/D23), same
+  // reasoning as pendingPermissionMode above.
+  if (pendingDisplayNameSync !== undefined) {
+    host.renameDisplayName(
+      pendingDisplayNameSync.displayName,
+      pendingDisplayNameSync.revision,
+    );
   }
 
   process.on("SIGINT", () => {

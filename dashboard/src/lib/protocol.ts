@@ -24,6 +24,13 @@ export interface Envelope {
    * wrapper reports one. Used to group/clear the transcript by session. */
   session_id?: string;
   persona?: Persona;
+  /** Mutable instance-scoped display name (ADR-0050 D1, issue #219
+   *  D19/D23). `persona.name` above is the pack's canonical name and
+   *  never changes for the session; THIS is what a rename mutates and
+   *  what the UI shows — see `AgentDetail.svelte` / `AgentCard.svelte`.
+   *  Optional for the same reason `persona` itself is: an envelope built
+   *  before this field existed (older wrapper build) simply omits it. */
+  display_name?: string;
   ts: string;
   /** Wrapper-issued monotonic sequence (ADR-0011); absent on
    * server-derived envelopes such as disconnected. */
@@ -1053,17 +1060,22 @@ export interface InterAgentMessagePayload {
   owner: { kind: "user" | "agent"; id: string };
 }
 
-/** Formats an agent for human display as `<name>(<id>)`. When the agent is
- *  not in the snapshot (e.g. just disconnected and pruned) or has no
- *  persona name, falls back to the bare id. The synthetic `server` sender
- *  used for auto-termination escalates collapses to just `server` since
- *  there is no separate id/name to disambiguate. */
+/** Formats an agent for human display as `<name>(<id>)`. Prefers the
+ *  mutable `display_name` (issue #219 D19/D23) — a renamed agent must
+ *  show its current label, not the pack's canonical name, everywhere
+ *  a human reads this label (spawn notices, IA conversation peers).
+ *  Falls back to `persona.name` only for a legacy envelope that
+ *  predates `display_name` (older wrapper build). When the agent is
+ *  not in the snapshot (e.g. just disconnected and pruned) or has
+ *  neither field, falls back to the bare id. The synthetic `server`
+ *  sender used for auto-termination escalates collapses to just
+ *  `server` since there is no separate id/name to disambiguate. */
 export function formatAgentLabel(
   agents: Record<string, Envelope>,
   id: string,
 ): string {
   if (id === "server") return "server";
-  const name = agents[id]?.persona?.name;
+  const name = agents[id]?.display_name ?? agents[id]?.persona?.name;
   if (!name || name === id) return id;
   return `${name}(${id})`;
 }
@@ -1396,13 +1408,30 @@ export interface SpawnResult {
   reason?: string;
 }
 
+/** Canonical persona joined server-side against the CURRENT PersonaAssets
+ *  manifest (issue #219 D19) — never a stored snapshot. `name` /
+ *  `sprite_set` are present when the pack still resolves; absent
+ *  ("typed unresolved", issue #219 D21) when it does not — never a
+ *  stale/guessed value. `spriteUrlFor` already treats a missing
+ *  `sprite_set` as "no sprite, fall back to the CSS face", so this
+ *  degrades through the existing rendering path with no special-casing
+ *  needed at the call site. */
+export interface DirectoryPersona {
+  id: string;
+  name?: string;
+  sprite_set?: string;
+}
+
 /** One entry in the restart-surviving identity ledger (ADR-0030). The
  *  server pushes this on operator join alongside the AgentStates
  *  snapshot; the client merges it with live envelopes to render offline
  *  agents' tiles for the restore UI. `last_seen` is memory-only on the
- *  server and resets to null on server restart. */
+ *  server and resets to null on server restart. `display_name` (issue
+ *  #219 D19) is the label to SHOW — always present, independent of
+ *  whether `persona` resolved. */
 export interface DirectoryEntry {
-  persona: Persona;
+  persona: DirectoryPersona;
+  display_name: string;
   last_seen: number | null;
 }
 
@@ -1674,19 +1703,21 @@ export interface KaoiroConnection {
    * (#58); the server also persists the pick so the wrapper restores it
    * on next start. `mode` must be a closed-enum PermissionMode value. */
   setPermissionMode: (agentId: string, mode: string) => Promise<void>;
-  /** Renames the agent's persona display name while it is running (issue
-   *  #197 段階3 unit B); rejects like sendInstruction, plus
-   *  `invalid_name` (server-side trim/64-grapheme/control-char rejection)
-   *  and `revision_exhausted` (fail-closed wire-domain ceiling,
-   *  `AgentDirectory.rename/2`). `name` is sent as-is — this client does
-   *  NOT re-validate it, matching the server-authoritative-only decision
-   *  already made for LaunchDialog's spawn-time name field. The resolved
-   *  `{ persona, revision }` reply is intentionally NOT surfaced here: the
-   *  display update itself arrives through the agent's own next envelope
-   *  (a live wrapper re-emits `state_change` immediately after applying
-   *  `persona_sync`) or, for a disconnected/directory-only agent, through
-   *  the next `directory` broadcast — this call's resolution only
-   *  confirms the server accepted the write. */
+  /** Renames the agent's `display_name` while it is running (issue #197
+   *  段階3 unit B, wire vocabulary revised issue #219 D23 — `persona`
+   *  canonical data is never touched by this call); rejects like
+   *  sendInstruction, plus `invalid_name` (server-side trim/64-grapheme/
+   *  control-char rejection) and `revision_exhausted` (fail-closed
+   *  wire-domain ceiling, `AgentDirectory.rename/2`). `name` is sent
+   *  as-is — this client does NOT re-validate it, matching the
+   *  server-authoritative-only decision already made for LaunchDialog's
+   *  spawn-time name field. The resolved `{ display_name, revision }`
+   *  reply is intentionally NOT surfaced here: the display update itself
+   *  arrives through the agent's own next envelope (a live wrapper
+   *  re-emits `state_change` immediately after applying the sync) or,
+   *  for a disconnected/directory-only agent, through the next
+   *  `directory` broadcast — this call's resolution only confirms the
+   *  server accepted the write. */
   renameAgent: (agentId: string, name: string) => Promise<void>;
   /** Purges the agent's past-session reply log (issue #48); rejects like
    * sendInstruction (forbidden / unknown_agent / no_current_session). */
@@ -1852,7 +1883,13 @@ export function parseHosts(value: unknown): HostInfo[] {
 /** Parses the `directory` map (agent_id => entry) into a
  *  Record<string, DirectoryEntry>, skipping malformed entries. `last_seen`
  *  is either an integer (unix seconds) or null (fresh after server restart,
- *  ADR-0030 A5). */
+ *  ADR-0030 A5). `persona.id` is required (the stable reference is always
+ *  present); `persona.name` / `sprite_set` are carried through AS-IS —
+ *  present or absent, never synthesized — since an absent pair is the
+ *  "typed unresolved" state issue #219 D21 defines (pack removed since).
+ *  `display_name` (issue #219 D19) is required — a malformed/missing one
+ *  drops the WHOLE entry, same fail-closed discipline the rest of this
+ *  parser already applies to `persona.id`. */
 export function parseDirectory(
   value: unknown,
 ): Record<string, DirectoryEntry> {
@@ -1864,11 +1901,19 @@ export function parseDirectory(
       entry !== null &&
       typeof (entry as DirectoryEntry).persona === "object" &&
       (entry as DirectoryEntry).persona !== null &&
-      typeof (entry as DirectoryEntry).persona.id === "string"
+      typeof (entry as DirectoryEntry).persona.id === "string" &&
+      typeof (entry as DirectoryEntry).display_name === "string"
     ) {
       const e = entry as DirectoryEntry;
       entries[agentId] = {
-        persona: e.persona,
+        persona: {
+          id: e.persona.id,
+          ...(typeof e.persona.name === "string" ? { name: e.persona.name } : {}),
+          ...(typeof e.persona.sprite_set === "string"
+            ? { sprite_set: e.persona.sprite_set }
+            : {}),
+        },
+        display_name: e.display_name,
         last_seen: typeof e.last_seen === "number" ? e.last_seen : null,
       };
     }
@@ -3451,11 +3496,15 @@ export function connectKaoiro(
     // documents only the runner-relay subset), but every client -> server
     // message needs a stamp regardless — same reasoning getLaunchDefaults
     // already applies below (issue #197 段階3, ふじ MF-1 レビュー指摘).
+    // `display_name` (issue #219 D23): the server's field-extraction
+    // helper (`extract_name_field/1`) still accepts the legacy `name` key
+    // during the compatibility window, but this client — built alongside
+    // the server that introduces the new key — sends the new one.
     renameAgent: (agentId, name) =>
       pushAsync(channel, "rename_agent", {
         version: "0",
         agent_id: agentId,
-        name,
+        display_name: name,
       }),
     clearHistory: (agentId) =>
       pushAsync(channel, "clear_history", { agent_id: agentId }),

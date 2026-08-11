@@ -53,6 +53,7 @@ function disconnectedEnvelope(agentId: string, name: string): Envelope {
     version: "0",
     agent_id: agentId,
     persona: { id: agentId, name, sprite_set: agentId },
+    display_name: name,
     ts: "2026-08-11T00:00:00Z",
     type: "state_change",
     state: "disconnected",
@@ -114,7 +115,10 @@ describe("AgentDirectory name projection onto a live-disconnected agent (issue #
     // wrapper is there to re-emit `state_change`.
     h.onDirectory?.({
       "agent-a": {
-        persona: { id: "agent-a", name: "あお(改名)", sprite_set: "agent-a" },
+        // persona (canonical) is UNCHANGED by rename (issue #219 D19) —
+        // only display_name diverges from the stale AgentStates envelope.
+        persona: { id: "agent-a", name: "あお", sprite_set: "agent-a" },
+        display_name: "あお(改名)",
         last_seen: null,
       },
     });
@@ -140,13 +144,14 @@ describe("AgentDirectory name projection onto a live-disconnected agent (issue #
     expect(detailHeading?.textContent).toBe("あお(改名)");
   });
 
-  it("directory の name が AgentStates と一致していれば projection は何もしない (no-op)", async () => {
+  it("directory の display_name が AgentStates と一致していれば projection は何もしない (no-op)", async () => {
     const h = await mountApp();
     h.onHosts?.([]);
     h.onSnapshot({ "agent-a": disconnectedEnvelope("agent-a", "あお") });
     h.onDirectory?.({
       "agent-a": {
         persona: { id: "agent-a", name: "あお", sprite_set: "agent-a" },
+        display_name: "あお",
         last_seen: null,
       },
     });

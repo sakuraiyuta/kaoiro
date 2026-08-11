@@ -31,6 +31,7 @@ import type { WrapperConfig } from "@kaoiro/agent-common";
 const config: WrapperConfig = {
   agent_id: "test.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
+  display_name: "P",
   server_url: "ws://localhost:4000/wrapper",
 };
 

@@ -24,7 +24,13 @@ Accepted
 ## Decision
 
 - `agent_id` は**設定で固定する安定 ID**(実行時生成の揮発 ID は使わない)。
-- `persona`(id / 表示名 / 立ち絵セット)はラッパー初期設定で指定。
+- `persona`(id / 固有名 / 立ち絵セット)はラッパー初期設定で指定。
+  **「表示名」という呼称は旧いもの**——ここでの `name` は pack が定義する
+  canonical な固有名で、session 中不変(のちの
+  [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) F9)。
+  稼働中に変わり得る通称は `display_name` という別 field が担う
+  ([issue #219](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/219)
+  D19)。
 - **どのホスト/プロセスのエージェントがどのペルソナを担当するかはユーザが指定**。
 - サーバ/クライアントは `agent_id`(+ `persona.id`)をキーに表示・機嫌を持続。
 

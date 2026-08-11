@@ -47,13 +47,14 @@ export function resolveCodexSources(
  *  the CLI passes this SAME `config` object to every producer
  *  (`CodexHost`, `QuestionBroker`, `InterAgentTool`, `makeLog` /
  *  `makeStateChange` call sites) — a `{ ...config, model: ... }` shallow
- *  clone would still share `config.persona`'s object reference at
- *  construction time, but `CodexHost.renamePersona` REASSIGNS
- *  `#config.persona` (not an in-place field mutation) whenever a rename
- *  applies, which severs that shared reference. Two config objects meant
- *  two independently-diverging persona sources of truth: whichever
- *  producers held the clone saw the renamed persona, and whichever held
- *  the original did not. Mutating the ONE config object in place, before
+ *  clone would still share `config`'s object reference at construction
+ *  time, but `CodexHost.renameDisplayName` REASSIGNS `#config.display_name`
+ *  (not an in-place field mutation, issue #219 D19/D23 — renamed from
+ *  `renamePersona`/`#config.persona`) whenever a rename applies, which
+ *  severs that shared reference. Two config objects meant two
+ *  independently-diverging display_name sources of truth: whichever
+ *  producers held the clone saw the renamed display_name, and whichever
+ *  held the original did not. Mutating the ONE config object in place, before
  *  any producer is constructed from it, makes that split structurally
  *  impossible — there is only ever one object for any of them to close
  *  over.

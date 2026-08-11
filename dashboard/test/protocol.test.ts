@@ -1445,41 +1445,56 @@ describe("parseHosts (#22)", () => {
   });
 });
 
-describe("parseDirectory (ADR-0030)", () => {
+describe("parseDirectory (ADR-0030, revised issue #219 D19/D21)", () => {
   const mio = { id: "mio", name: "澪", sprite_set: "mio" };
 
-  it("directory マップを DirectoryEntry の Record へ変換する", () => {
+  it("directory マップを DirectoryEntry の Record へ変換する (display_name 込み)", () => {
     expect(
       parseDirectory({
-        "lab-pc-1.rev1": { persona: mio, last_seen: 1_720_000_000 },
-        "lab-pc-1.rev2": { persona: mio, last_seen: null },
+        "lab-pc-1.rev1": { persona: mio, display_name: "澪(通称)", last_seen: 1_720_000_000 },
+        "lab-pc-1.rev2": { persona: mio, display_name: "澪", last_seen: null },
       }),
     ).toEqual({
-      "lab-pc-1.rev1": { persona: mio, last_seen: 1_720_000_000 },
-      "lab-pc-1.rev2": { persona: mio, last_seen: null },
+      "lab-pc-1.rev1": { persona: mio, display_name: "澪(通称)", last_seen: 1_720_000_000 },
+      "lab-pc-1.rev2": { persona: mio, display_name: "澪", last_seen: null },
     });
   });
 
-  it("persona 欠落 / 不正な entry は捨てる", () => {
+  it("persona 欠落 / display_name 欠落 / 不正な entry は捨てる", () => {
     expect(
       parseDirectory({
-        bad_no_persona: { last_seen: 1 },
-        bad_persona_null: { persona: null, last_seen: 1 },
-        bad_persona_no_id: { persona: { name: "x" }, last_seen: 1 },
-        ok: { persona: mio, last_seen: 1 },
+        bad_no_persona: { display_name: "x", last_seen: 1 },
+        bad_persona_null: { persona: null, display_name: "x", last_seen: 1 },
+        bad_persona_no_id: { persona: { name: "x" }, display_name: "x", last_seen: 1 },
+        bad_no_display_name: { persona: mio, last_seen: 1 },
+        ok: { persona: mio, display_name: "澪", last_seen: 1 },
       }),
     ).toEqual({
-      ok: { persona: mio, last_seen: 1 },
+      ok: { persona: mio, display_name: "澪", last_seen: 1 },
     });
   });
 
   it("last_seen が number でなければ null 化する", () => {
     expect(
       parseDirectory({
-        agent: { persona: mio, last_seen: "not-a-number" },
+        agent: { persona: mio, display_name: "澪", last_seen: "not-a-number" },
       }),
     ).toEqual({
-      agent: { persona: mio, last_seen: null },
+      agent: { persona: mio, display_name: "澪", last_seen: null },
+    });
+  });
+
+  // issue #219 D21: pack が消えた entry は persona.name / sprite_set を
+  // OMIT した "typed unresolved" として届く — sentinel 文字列ではなく、
+  // フィールド自体が無い。id だけの persona でも display_name さえあれば
+  // entry は保持される(捨てない)。
+  it("persona.name / sprite_set が無い (typed unresolved) entry は id のみの persona として保持する", () => {
+    expect(
+      parseDirectory({
+        "gone.agent": { persona: { id: "gone" }, display_name: "消えたパック", last_seen: null },
+      }),
+    ).toEqual({
+      "gone.agent": { persona: { id: "gone" }, display_name: "消えたパック", last_seen: null },
     });
   });
 
@@ -1557,7 +1572,11 @@ describe("buildChunkPayload (ファイルアップロード wire, ADR-0025)", ()
 
 describe("formatAgentLabel (name(id) helper)", () => {
   const persona = { id: "ao", name: "あお", sprite_set: "ao" };
-  function makeEnvelope(id: string, name?: string): Envelope {
+  function makeEnvelope(
+    id: string,
+    name?: string,
+    displayName?: string,
+  ): Envelope {
     return {
       version: "0",
       agent_id: id,
@@ -1565,6 +1584,7 @@ describe("formatAgentLabel (name(id) helper)", () => {
       type: "state_change",
       state: "idle",
       ...(name !== undefined ? { persona: { ...persona, name } } : {}),
+      ...(displayName !== undefined ? { display_name: displayName } : {}),
     };
   }
 
@@ -1598,6 +1618,24 @@ describe("formatAgentLabel (name(id) helper)", () => {
     const id = "lab.same";
     const agents = { [id]: makeEnvelope(id, id) };
     expect(formatAgentLabel(agents, id)).toBe(id);
+  });
+
+  // issue #219 D23 追撃 (クロエ実測検証 must-fix): canonical persona.name
+  // と display_name をわざと違う文字列にする食い違い fixture (D27 方針) —
+  // 同じ文字列を両方に送る fixture では canonical/display_name の取り違え
+  // バグを検出できない。
+  it("display_name が canonical persona.name と異なる場合は display_name を優先する", () => {
+    const agents = {
+      "lab.gamma": makeEnvelope("lab.gamma", "あお", "改名後のあお"),
+    };
+    expect(formatAgentLabel(agents, "lab.gamma")).toBe(
+      "改名後のあお(lab.gamma)",
+    );
+  });
+
+  it("display_name の無い legacy envelope は persona.name にフォールバックする", () => {
+    const agents = { "lab.delta": makeEnvelope("lab.delta", "あお") };
+    expect(formatAgentLabel(agents, "lab.delta")).toBe("あお(lab.delta)");
   });
 });
 

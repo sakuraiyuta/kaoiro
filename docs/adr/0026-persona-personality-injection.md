@@ -63,7 +63,10 @@ Superseded by [ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
   allowed_tools と同じ扱い)。
 - **Envelope 非露出**: 人格文字列を state_change / log / result envelope に
   載せない。dashboard に流れる ID は従来通り `persona.id` / `persona.name`
-  のみ。
+  のみ(pack 由来の canonical、session 中不変)。**稼働中に変わり得る
+  表示名は別の top-level `display_name` field が担う**(issue #219
+  D19/D23) — `persona.name` 自体を rename の対象にしない、という本節
+  の趣旨とも一貫する。
 
 ## Consequences
 

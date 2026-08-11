@@ -274,6 +274,37 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert Map.keys(personas) == ["ok"]
   end
 
+  # issue #219 MF-4 (クロエ実測検証): manifest.name の前後空白は silently
+  # trim せず ingest 拒否する — trim すると pack 作者が書いた値と、
+  # spawn 時に display_name へコピーされる値 (untrimmed のまま流れる、
+  # issue #219 D20) が黙って食い違い、issue #219 が消そうとしている
+  # canonical/display_name の混同そのものになる。全角空白ではなく
+  # 半角スペースであることに注意 — `string?/1` の non-empty チェックだけ
+  # では全空白 "   " も通ってしまうため、trim 一致チェックで両方を落とす。
+  test "manifest.name の前後空白 / 全空白は ingest 拒否される (MF-4)", %{tmp_dir: tmp} do
+    :ok =
+      write_pack(
+        tmp,
+        "padded-1.0.0",
+        base_manifest("padded", %{"name" => " Foo "}),
+        "body"
+      )
+
+    :ok =
+      write_pack(
+        tmp,
+        "allwhitespace-1.0.0",
+        base_manifest("allwhitespace", %{"name" => "   "}),
+        "body"
+      )
+
+    :ok = write_pack(tmp, "ok2-1.0.0", base_manifest("ok2"), "body-ok2")
+    use_ingest(tmp)
+
+    %{"personas" => personas} = PersonaAssets.manifest()
+    assert Map.keys(personas) == ["ok2"]
+  end
+
   test "sprites/ の PNG が 1 枚欠けても pack ごと skip", %{tmp_dir: tmp} do
     # Build a valid pack directory, then delete one PNG before zipping to
     # exercise the sprite check (the write_pack helper is complete by

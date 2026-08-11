@@ -22,6 +22,7 @@ import { CodexHost } from "../src/host.js";
 const config: WrapperConfig = {
   agent_id: "self.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
+  display_name: "P",
   server_url: "ws://localhost:4000/wrapper",
 };
 
@@ -36,6 +37,7 @@ function inboundEnvelope(
     version: "0",
     agent_id: "peer.agent",
     persona: PEER_PERSONA,
+    display_name: PEER_PERSONA.name,
     ts: "2026-08-08T00:00:00Z",
     type: "inter_agent_message",
     state: "tool_running",

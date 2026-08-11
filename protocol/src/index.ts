@@ -153,6 +153,12 @@ export type Persona = WirePersona;
 export interface WrapperConfig {
   agent_id: string;
   persona: Persona;
+  /** Initial `display_name` (ADR-0050 D1, issue #219 D19/D20). Set by the
+   *  server at spawn/restore time — the spawn custom name if the operator
+   *  gave one, else `persona.name`'s value at that moment (created-time
+   *  persistence: the wrapper's own copy never re-derives from `persona`
+   *  again, so a later pack rename cannot silently change it). */
+  display_name: string;
   server_url: string;
   /** Wrapper auth token, paired with agent_id on the server (ADR-0011). */
   server_token?: string;
@@ -551,6 +557,15 @@ export interface Envelope {
    *  until the SDK reports one, and on envelopes that never go to a server. */
   session_id?: string;
   persona: WirePersona;
+  /** Mutable instance-scoped display name (ADR-0050 D1 `Principal.
+   *  display_name`, issue #219 D19/D23). `persona.name` above is the
+   *  pack's canonical name and never changes for the session (ADR-0029
+   *  F9, ADR-0030 D2); THIS is what an operator rename / spawn custom
+   *  name actually mutates. Defaults to `persona.name` at spawn
+   *  (created-time persistence, D20) and stays independent of it
+   *  thereafter — a pack rename never changes an already-spawned
+   *  agent's `display_name`. */
+  display_name: string;
   ts: string;
   /** Wrapper-issued monotonic sequence (ADR-0011), stamped by ServerLink
    *  at send time; absent on envelopes that never go to a server. */
@@ -771,6 +786,14 @@ export interface SpawnMessage {
   version: "0";
   agent_id: string;
   persona: WirePersona;
+  /** Initial `display_name` (ADR-0050 D1, issue #219 D19/D20/MF-1). The
+   *  operator's spawn custom name, or `persona.name`'s value at record
+   *  time when none was given. Optional on the wire for compatibility
+   *  with a server that predates this field — the runner falls back to
+   *  `persona.name` for the one-time migration when it is absent
+   *  (`resolveWrapperConfig`); `WrapperConfig.display_name` itself stays
+   *  required. */
+  display_name?: string;
   cwd: string;
   server_url?: string;
   token?: string;

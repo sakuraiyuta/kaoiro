@@ -293,37 +293,51 @@
     ].sort((a, b) => a.id.localeCompare(b.id)),
   );
 
-  // AgentDirectory is the authoritative name SoT (issue #197 段階3, ふじ
-  // MF-3 レビュー指摘): a CONNECTED agent's own wrapper re-emits
-  // state_change immediately after applying a rename (persona_sync), so
-  // its AgentStates envelope converges on its own. A DISCONNECTED agent
-  // has no wrapper to do that — its stale AgentStates envelope would
-  // otherwise show the pre-rename name forever, even after
-  // AgentDirectory (and the operator's own rename click, via its
-  // reply + the live `directory` broadcast) has already moved on. This
-  // projects the current directory persona onto a live envelope whenever
-  // the two names diverge; id/sprite_set are unaffected by rename (ADR-
-  // 0030 D2 改訂: 可変なのは name のみ), so adopting the directory
-  // entry's full persona wholesale is safe once the names differ at all.
+  // AgentDirectory is the authoritative display_name SoT (issue #197
+  // 段階3, ふじ MF-3 レビュー指摘, wire field revised issue #219 D19):
+  // a CONNECTED agent's own wrapper re-emits state_change immediately
+  // after applying a rename (display_name sync), so its AgentStates
+  // envelope converges on its own. A DISCONNECTED agent has no wrapper
+  // to do that — its stale AgentStates envelope would otherwise show
+  // the pre-rename display_name forever, even after AgentDirectory (and
+  // the operator's own rename click, via its reply + the live
+  // `directory` broadcast) has already moved on. This projects the
+  // current directory `display_name` onto a live envelope whenever the
+  // two diverge; `persona` (canonical) is untouched — rename never
+  // mutates it (issue #219 D19, ADR-0030 D2), so the live envelope's own
+  // `persona` already has the correct, unchanging value.
   function projectDirectoryName(
     envelope: Envelope,
     dirEntry: DirectoryEntry | undefined,
   ): Envelope {
-    if (dirEntry === undefined || dirEntry.persona.name === envelope.persona?.name) {
+    if (dirEntry === undefined || dirEntry.display_name === envelope.display_name) {
       return envelope;
     }
-    return { ...envelope, persona: dirEntry.persona };
+    return { ...envelope, display_name: dirEntry.display_name };
   }
 
   // Synthesizes a minimal Envelope from a directory-only entry so AgentCard
   // can render it with the existing disconnected styling. `state=disconnected`
   // is what unlocks the restore button; live-disconnected tiles pass their
   // real envelope through instead (they carry the last session_id / ext).
+  // `persona` carries through only when BOTH `name`/`sprite_set` resolved
+  // server-side (issue #219 D21 "typed unresolved") — a partial persona is
+  // never synthesized; `spriteUrlFor` already treats an absent `persona` /
+  // `sprite_set` as "no sprite, fall back to the CSS face".
   function directoryEnvelope(id: string, entry: DirectoryEntry): Envelope {
     return {
       version: "0",
       agent_id: id,
-      persona: entry.persona,
+      ...(entry.persona.name !== undefined && entry.persona.sprite_set !== undefined
+        ? {
+            persona: {
+              id: entry.persona.id,
+              name: entry.persona.name,
+              sprite_set: entry.persona.sprite_set,
+            },
+          }
+        : {}),
+      display_name: entry.display_name,
       ts: "",
       type: "state_change",
       state: "disconnected",
@@ -463,7 +477,7 @@
   }
 
   function agentDisplayName(agentId: string): string {
-    return agents[agentId]?.persona?.name ?? agentId;
+    return agents[agentId]?.display_name ?? agentId;
   }
 
   // Opens the client socket with the given auth and starts the cookie-slide
@@ -1346,7 +1360,7 @@
           class:current={envelope.agent_id === selected}
           data-state={expr.variant}
           aria-current={envelope.agent_id === selected ? "true" : undefined}
-          title="{envelope.persona?.name ?? envelope.agent_id} — {expr.label}"
+          title="{envelope.display_name ?? envelope.agent_id} — {expr.label}"
           onclick={() => {
             origin = null;
             timelineScrollTarget = null;

@@ -73,6 +73,11 @@ type MaybePromise<T> = T | Promise<T>;
  *  servers keep working (ADR-0032 F4a). */
 export interface ParsedSpawn {
   persona: WirePersona;
+  /** Initial `display_name` from the spawn message (issue #219 MF-1).
+   *  Absent = legacy server that predates this field; `resolveWrapperConfig`
+   *  falls back to `persona.name` as the one-time migration so
+   *  `WrapperConfig.display_name` (required) always gets a value. */
+  displayName?: string;
   cwd: string;
   engine: EngineKind;
   serverUrl?: string;
@@ -311,6 +316,15 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   // treats that as a mismatch, not as the legacy absent case.
   const requestId = nonEmptyString(payload.request_id);
   if (requestId !== undefined) parsed.requestId = requestId;
+  // display_name (issue #219 MF-1): absent = legacy server, the runner
+  // falls back to persona.name at resolveWrapperConfig time. A PRESENT
+  // value must be a string — fail-loud reject (not a silent drop) so a
+  // compromised/buggy sender cannot slip non-string garbage past the
+  // guard, matching sandbox/network_access above.
+  if (payload.display_name !== undefined) {
+    if (typeof payload.display_name !== "string") return null;
+    parsed.displayName = payload.display_name;
+  }
   return parsed;
 }
 
@@ -338,6 +352,13 @@ export function resolveWrapperConfig(
   const config: WrapperConfig = {
     agent_id: agentId,
     persona: parsed.persona,
+    // One-time migration fallback (issue #219 MF-1): a legacy server that
+    // predates SpawnMessage.display_name omits it, so parsed.displayName is
+    // undefined here. Falling back to persona.name keeps a new-wrapper /
+    // old-server pairing spawnable — WrapperConfig.display_name is required,
+    // and the wrapper's own config parser (wrapper/core/src/persona.ts)
+    // fails closed on a missing value.
+    display_name: parsed.displayName ?? parsed.persona.name,
     server_url: parsed.serverUrl ?? fallbackServerUrl,
   };
   if (parsed.token !== undefined) config.server_token = parsed.token;

@@ -57,6 +57,18 @@ defmodule KaoiroServer.PersonaAssets do
   @required_states ~w(idle thinking tool_running waiting_input
                        waiting_permission done error)
 
+  # manifest["name"] seeds a NEW agent/user's `display_name` at record
+  # time (issue #219 D20/D24 — the initial value must already satisfy the
+  # SAME domain `Principal.display_name` is validated against everywhere
+  # else, or a valid pack could mint an invalid Principal). Matches
+  # `AgentsChannel`'s `@display_name_max_graphemes` /
+  # `@display_name_control_char_pattern` exactly — same 1-64 code-point
+  # bound (persona-pack-schema.md, tightened from 256 by this issue) and
+  # C0 controls + DEL rejection `WrapperChannel.valid_display_name/1`
+  # already enforces elsewhere on this repo's display-name fields.
+  @persona_name_max_graphemes 64
+  @persona_name_control_char_pattern ~r/[\x00-\x1f\x7f]/
+
   # The reserved persona (personas.md「デフォルトペルソナ」, #35). Always
   # "known" for the join-time reject check even without a pack: it exists
   # to let a wrapper spawn without any personality (footer-only prompt).
@@ -179,6 +191,25 @@ defmodule KaoiroServer.PersonaAssets do
       |> Enum.sort_by(& &1["id"])
 
     [@default_persona | packs]
+  end
+
+  @doc """
+  Single canonical persona lookup by id — `%{"id"=>, "name"=>,
+  "sprite_set"=>}`, or `nil` when unresolvable (pack removed from the
+  ingest dir since, or an id that never existed). issue #219 D19: the
+  join point every canonical-name consumer (restore payloads, directory
+  projection, wrapper spawn payloads) uses INSTEAD OF trusting a stored
+  snapshot — `AgentDirectory` only ever persists the stable `persona_id`
+  reference, never this map, so every reader resolves it fresh here. A
+  `nil` here is the "typed unresolved" state issue #219 D21 calls for:
+  callers must NOT fall back to a cached/legacy name — they propagate
+  the unresolved state onward (omit canonical fields on the wire, never
+  synthesize one).
+  """
+  def get_persona(persona_id) when is_binary(persona_id) do
+    if persona_id == @default_persona_id,
+      do: @default_persona,
+      else: Map.get(cache().personas_by_id, persona_id)
   end
 
   @doc """
@@ -2059,8 +2090,9 @@ defmodule KaoiroServer.PersonaAssets do
       not string?(manifest["sprite_set"]) or not Regex.match?(@safe_name, manifest["sprite_set"]) ->
         {:error, "manifest.sprite_set must match #{inspect(@safe_name.source)}"}
 
-      not string?(manifest["name"]) ->
-        {:error, "manifest.name must be a string"}
+      not valid_persona_name?(manifest["name"]) ->
+        {:error,
+         "manifest.name must be 1-#{@persona_name_max_graphemes} characters with no control characters"}
 
       not string?(manifest["version"]) ->
         {:error, "manifest.version must be a string"}
@@ -2081,6 +2113,30 @@ defmodule KaoiroServer.PersonaAssets do
   end
 
   defp string?(value), do: is_binary(value) and value != ""
+
+  # issue #219 D24: same 1-64 / no-control-char domain every
+  # `Principal.display_name` is validated against — see the module
+  # attributes' doc above.
+  #
+  # MF-4 (issue #219, クロエ実測検証): also rejects leading/trailing
+  # whitespace, including an all-whitespace value like `"   "` (non-empty
+  # per `string?/1` above, so it would otherwise pass). Ingest-time
+  # REJECT, not a silent trim: `agents_channel.ex`'s spawn fallback
+  # copies an untrimmed canonical name verbatim into `display_name`
+  # (issue #219 D20, created-time persistence — no trim step there), and
+  # `wrapper/core/src/persona.ts`'s `validDisplayNameOrNull` rejects a
+  # value whose `trim()` differs from itself. A pack author writing
+  # `"Foo "` into the manifest would otherwise ingest successfully and
+  # then fail every spawn for that persona — silently trimming here would
+  # let the pack's OWN written value quietly diverge from what a user
+  # ever sees displayed, exactly the kind of canonical/display_name
+  # confusion issue #219 exists to remove.
+  defp valid_persona_name?(value) do
+    string?(value) and
+      String.trim(value) == value and
+      String.length(value) <= @persona_name_max_graphemes and
+      not String.match?(value, @persona_name_control_char_pattern)
+  end
 
   # min_kaoiro_version <= server vsn; parse via Version to catch prerelease
   # / build metadata correctly. A malformed version on either side falls

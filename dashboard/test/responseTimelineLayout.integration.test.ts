@@ -122,8 +122,16 @@ describe("response-timeline layout gate (operator-only, ADR-0012)", () => {
         operator: true,
         agents: {},
         directory: {
-          "offline.sender": { persona: { id: "ao", name: "あお", sprite_set: "ao" }, last_seen: null },
-          "offline.receiver": { persona: { id: "momo", name: "もも", sprite_set: "momo" }, last_seen: null },
+          "offline.sender": {
+            persona: { id: "ao", name: "あお", sprite_set: "ao" },
+            display_name: "あお",
+            last_seen: null,
+          },
+          "offline.receiver": {
+            persona: { id: "momo", name: "もも", sprite_set: "momo" },
+            display_name: "もも",
+            last_seen: null,
+          },
         },
         logs: { "offline.sender": [ia] },
         manifest: null,

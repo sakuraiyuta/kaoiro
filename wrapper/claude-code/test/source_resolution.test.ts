@@ -6,6 +6,7 @@ import { CLAUDE_EFFORT_LEVELS } from "../src/host.js";
 const baseConfig: WrapperConfig = {
   agent_id: "test.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
+  display_name: "P",
   server_url: "ws://localhost:4000/wrapper",
 };
 

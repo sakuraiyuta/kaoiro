@@ -49,7 +49,7 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 ### envelope.type: "inter_agent_message"
 
 [protocol.md](protocol.md) の envelope 共通外枠
-(`version`/`agent_id`/`session_id?`/`persona`/`ts`/`seq`/`type`/`state`/`payload`/`ext`)
+(`version`/`agent_id`/`session_id?`/`persona`/`display_name?`/`ts`/`seq`/`type`/`state`/`payload`/`ext`)
 はそのまま継承。`agent_id` は送信側エージェント、`state` は当該 wrapper
 の現在状態(通常 `tool_running`)を据え置く。
 
@@ -468,7 +468,8 @@ issue #160 (phase-27) はこれをさらに **「peer の稼働状況を見て�
 | field | 型 | 意味 | 省略される条件 |
 |---|---|---|---|
 | `agent_id` | string | 宛先識別子 | MUST(常に存在) |
-| `persona` | `{id, name, sprite_set}` | 表示名解決用 | MUST |
+| `persona` | `{id, name, sprite_set}` | pack 由来の canonical identity。`name` は session 中不変(issue #219 D19) | MUST |
+| `display_name` | string | 稼働中に変わり得る通称。表示に使うのはこちら(issue #219 D19/D26、ADR-0021 F6-3) | envelope が旧 wrapper build で `display_name` を未報告のとき |
 | `state` | string | 現在状態 | MUST |
 | `engine` / `model` / `effort` | string | 実行特性(#102) | non-empty string でないとき |
 | `context` | `{used_tokens, max_tokens, used_percentage}` | context 使用量 | 下記 capability gate 不成立、未報告、shape 不正、切断済み |

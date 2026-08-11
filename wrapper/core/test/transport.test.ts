@@ -106,6 +106,7 @@ describe("ServerLink — initial envelope sequence (#107)", () => {
     link.send({
       version: "0", agent_id: "a.agent",
       persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      display_name: "あお",
       ts: "T", type: "state_change", state: "idle", payload: {},
       ext: { engine: "claude-code",
         session_capabilities: { supports_attachments: true } },
@@ -131,6 +132,7 @@ describe("ServerLink — reconnect active task replay (issue #188)", () => {
     const state = {
       version: "0", agent_id: "a.agent",
       persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      display_name: "あお",
       ts: "T", type: "state_change", state: "idle", payload: {}, ext: {},
     } as Envelope;
     const tasklist = {
@@ -167,6 +169,7 @@ describe("ServerLink — reconnect active task replay (issue #188)", () => {
     const base = {
       version: "0", agent_id: "a.agent",
       persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      display_name: "あお",
       ts: "T", type: "task", state: "thinking", ext: {},
     };
     link.send({
@@ -196,6 +199,7 @@ describe("ServerLink — reconnect active task replay (issue #188)", () => {
     const base = {
       version: "0", agent_id: "a.agent",
       persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      display_name: "あお",
       ts: "T", type: "task", state: "thinking", ext: {},
     };
 
@@ -236,6 +240,7 @@ describe("ServerLink — reconnect active task replay (issue #188)", () => {
     const base = {
       version: "0", agent_id: "a.agent",
       persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      display_name: "あお",
       ts: "T", type: "task", state: "thinking", ext: {},
     };
     const summary = "x".repeat(64_000);
@@ -452,14 +457,14 @@ describe("ServerLink — set_model / set_effort 制御 (#54)", () => {
   });
 });
 
-describe("ServerLink — persona_sync (issue #197 段階3)", () => {
+describe("ServerLink — persona_sync (issue #197 段階3, legacy key, revised issue #219 D22)", () => {
   beforeEach(() => mock.handlers.clear());
 
-  it("persona_sync は name/revision を onRenamePersona へ渡す", () => {
+  it("persona_sync は name/revision を onRenameDisplayName へ渡す", () => {
     const seen: Array<[string, number]> = [];
     new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
-      onRenamePersona: (name, revision) => seen.push([name, revision]),
+      onRenameDisplayName: (name, revision) => seen.push([name, revision]),
     });
     emit("persona_sync", { name: "あお(改名)", revision: 1 });
     expect(seen).toEqual([["あお(改名)", 1]]);
@@ -469,7 +474,7 @@ describe("ServerLink — persona_sync (issue #197 段階3)", () => {
     const seen: Array<[string, number]> = [];
     new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
-      onRenamePersona: (name, revision) => seen.push([name, revision]),
+      onRenameDisplayName: (name, revision) => seen.push([name, revision]),
     });
     emit("persona_sync", { name: 42, revision: 1 });
     emit("persona_sync", { name: "x", revision: "1" });
@@ -486,7 +491,7 @@ describe("ServerLink — persona_sync (issue #197 段階3)", () => {
     const seen: Array<[string, number]> = [];
     new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
-      onRenamePersona: (name, revision) => seen.push([name, revision]),
+      onRenameDisplayName: (name, revision) => seen.push([name, revision]),
     });
     emit("persona_sync", { name: "", revision: 1 });
     emit("persona_sync", { name: "   ", revision: 2 });
@@ -504,7 +509,7 @@ describe("ServerLink — persona_sync (issue #197 段階3)", () => {
     const seen: Array<[string, number]> = [];
     new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
-      onRenamePersona: (name, revision) => seen.push([name, revision]),
+      onRenameDisplayName: (name, revision) => seen.push([name, revision]),
     });
     const boundaryName = "👨‍👩‍👧‍👦".repeat(64);
     emit("persona_sync", { name: boundaryName, revision: 1 });
@@ -520,7 +525,7 @@ describe("ServerLink — persona_sync (issue #197 段階3)", () => {
     const seen: Array<[string, number]> = [];
     new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
-      onRenamePersona: (name, revision) => seen.push([name, revision]),
+      onRenameDisplayName: (name, revision) => seen.push([name, revision]),
     });
     emit("persona_sync", { name: "x", revision: -1 });
     expect(seen).toEqual([]);
@@ -536,7 +541,7 @@ describe("ServerLink — persona_sync (issue #197 段階3)", () => {
     const seen: Array<[string, number]> = [];
     new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
-      onRenamePersona: (name, revision) => seen.push([name, revision]),
+      onRenameDisplayName: (name, revision) => seen.push([name, revision]),
     });
     emit("persona_sync", { version: "0", name: "あお(改名)", revision: 1 });
     expect(seen).toEqual([["あお(改名)", 1]]);
@@ -549,7 +554,7 @@ describe("ServerLink — persona_sync (issue #197 段階3)", () => {
     const seen: Array<[string, number]> = [];
     new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
-      onRenamePersona: (name, revision) => seen.push([name, revision]),
+      onRenameDisplayName: (name, revision) => seen.push([name, revision]),
     });
     emit("persona_sync", { name: "あお(欠落)", revision: 1 });
     emit("persona_sync", { version: "1", name: "あお(不一致)", revision: 2 });
@@ -563,6 +568,59 @@ describe("ServerLink — persona_sync (issue #197 段階3)", () => {
     expect(stderr.mock.calls[1]![0]).toContain("persona_sync");
     expect(stderr.mock.calls[1]![0]).toContain('"1"');
     stderr.mockRestore();
+  });
+});
+
+// issue #219 D22: dual-emit compatibility — display_name_sync is the NEW
+// event (display_name key), fed through the SAME validate+dispatch as
+// persona_sync above. Only the happy path + the key itself are pinned
+// here; the exhaustive validation-boundary cases (malformed value/
+// revision, version stamp) are already covered by the persona_sync
+// block above and share the identical code path.
+describe("ServerLink — display_name_sync (issue #219 D22, new key)", () => {
+  beforeEach(() => mock.handlers.clear());
+
+  it("display_name_sync は display_name/revision を onRenameDisplayName へ渡す", () => {
+    const seen: Array<[string, number]> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onRenameDisplayName: (name, revision) => seen.push([name, revision]),
+    });
+    emit("display_name_sync", { display_name: "あお(改名)", revision: 1 });
+    expect(seen).toEqual([["あお(改名)", 1]]);
+  });
+
+  it("version が欠落/不一致でも警告した上で display_name/revision が valid なら受理継続する", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const seen: Array<[string, number]> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onRenameDisplayName: (name, revision) => seen.push([name, revision]),
+    });
+    emit("display_name_sync", { display_name: "あお(欠落)", revision: 1 });
+    expect(seen).toEqual([["あお(欠落)", 1]]);
+    expect(stderr).toHaveBeenCalledTimes(1);
+    expect(stderr.mock.calls[0]![0]).toContain("display_name_sync");
+    stderr.mockRestore();
+  });
+
+  // D22 の中核 — 同一 revision で dual-emit された 2 event を両方受理して
+  // も、revision guard (host 側実装) が適用するのは最初に届いた方だけに
+  // なる、という前提を wire 層で確認する。ここでは transport 層の責務
+  // (両 event とも同じ callback へ値を渡す) だけを見る — guard 自体は
+  // host.ts のテストが担う。
+  it("persona_sync と display_name_sync が同一 revision で両方届いても、両方とも onRenameDisplayName へ渡される (guard は host 側の責務)", () => {
+    const seen: Array<[string, number]> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onRenameDisplayName: (name, revision) => seen.push([name, revision]),
+    });
+    emit("persona_sync", { name: "あお(改名)", revision: 1 });
+    emit("display_name_sync", { display_name: "あお(改名)", revision: 1 });
+    expect(seen).toEqual([
+      ["あお(改名)", 1],
+      ["あお(改名)", 1],
+    ]);
   });
 });
 
@@ -1265,6 +1323,7 @@ describe("chunkReplayIaItems (ADR-0051 D3-3 / 8MB frame 対策)", () => {
         version: "0",
         agent_id: "host-1.self",
         persona: { id: "ao", name: "あお", sprite_set: "ao" },
+        display_name: "あお",
         ts: "2026-08-08T00:00:00Z",
         type: "inter_agent_message",
         state: "idle",
@@ -1335,6 +1394,7 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
       version: "0",
       agent_id: "host-1.self",
       persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      display_name: "あお",
       ts: "2026-08-08T00:00:00Z",
       type: "inter_agent_message",
       state: "idle",
@@ -1412,6 +1472,7 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
       version: "0",
       agent_id: "host-1.self",
       persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      display_name: "あお",
       ts: "2026-08-08T00:00:00Z",
       type: "log",
       state: "idle",

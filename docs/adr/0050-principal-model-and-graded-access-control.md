@@ -95,6 +95,16 @@ kaoiro の認可は 2 role (operator / viewer) 固定で、operator は実質無
 - **`kind` は id から derive しない**。store の属性として持つ。id の
   prefix に意味を持たせると、偽装がそのまま権限判定に効く
 
+**実装状況**: user 側は issue #197 段階2 で `%{id, kind, display_name,
+role}` として実装済み。agent 側は issue #197 時点では `persona.name` で
+`display_name` を代用しており(ADR-0030 D2 の暫定 carve-out)、`Principal`
+抽象が agent 側では実現していなかった。
+[issue #219](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/219)
+で agent にも `persona`(pack 由来、session 中不変)から独立した
+`display_name` フィールドが実装され、`Principal` (`id` / `kind` /
+`display_name`) が user / agent 双方で本来の形どおり成立するように
+なった。
+
 ### D2 — role は admin / operator / viewer の 3 値
 
 [ADR-0021](0021-role-information-disclosure-policy.md) F1 (2 ロール固定、

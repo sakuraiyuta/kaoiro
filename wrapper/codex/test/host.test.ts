@@ -20,6 +20,7 @@ import type {
 const CONFIG: WrapperConfig = {
   agent_id: "host-1.codex-a",
   persona: { id: "kuroe", name: "クロエ", sprite_set: "kuroe" },
+  display_name: "クロエ",
   server_url: "ws://localhost:4000/wrapper",
   codex_auth_mode: "chatgpt",
   codex_chatgpt_plan: "plus",
@@ -65,9 +66,9 @@ describe("initialStatusExt", () => {
   });
 });
 
-describe("CodexHost — persona rename (issue #197 段階3)", () => {
-  // A FRESH object per call, NOT a shared const — renamePersona
-  // reassigns #config.persona, and CodexHost holds the SAME object
+describe("CodexHost — display_name rename (issue #197 段階3, revised issue #219 D19/D23)", () => {
+  // A FRESH object per call, NOT a shared const — renameDisplayName
+  // reassigns #config.display_name, and CodexHost holds the SAME object
   // reference it was constructed with (no clone). A single const reused
   // across both `it` blocks below would let the first test's rename
   // mutate the object the second test starts from (review round1
@@ -76,11 +77,12 @@ describe("CodexHost — persona rename (issue #197 段階3)", () => {
     return {
       agent_id: "test.rename-agent",
       persona: { id: "kuroe", name: "クロエ", sprite_set: "kuroe" },
+      display_name: "クロエ",
       server_url: "ws://localhost:4000/wrapper",
     };
   }
 
-  it("revision が新しければ persona.name を更新し state_change を即時再送する", () => {
+  it("revision が新しければ display_name を更新し state_change を即時再送する。persona は不変", () => {
     const envs: Envelope[] = [];
     const host = new CodexHost(freshRenameConfig(), {
       onState: (e) => envs.push(e),
@@ -88,15 +90,14 @@ describe("CodexHost — persona rename (issue #197 段階3)", () => {
       now: () => "T",
     });
 
-    host.renamePersona("クロエ(改名)", 1);
+    host.renameDisplayName("クロエ(改名)", 1);
 
+    expect(envs.at(-1)?.display_name).toBe("クロエ(改名)");
     expect(envs.at(-1)?.persona).toEqual({
       id: "kuroe",
-      name: "クロエ(改名)",
+      name: "クロエ",
       sprite_set: "kuroe",
     });
-    expect(envs.at(-1)?.persona.id).toBe("kuroe");
-    expect(envs.at(-1)?.persona.sprite_set).toBe("kuroe");
   });
 
   it("revision が現在値以下なら無視し state_change を再送しない (D15)", () => {
@@ -107,14 +108,14 @@ describe("CodexHost — persona rename (issue #197 段階3)", () => {
       now: () => "T",
     });
 
-    host.renamePersona("先勝ち", 2);
+    host.renameDisplayName("先勝ち", 2);
     expect(envs).toHaveLength(1);
 
-    host.renamePersona("同revision再送", 2);
-    host.renamePersona("古いrevision", 1);
+    host.renameDisplayName("同revision再送", 2);
+    host.renameDisplayName("古いrevision", 1);
 
     expect(envs).toHaveLength(1);
-    expect(envs.at(-1)?.persona.name).toBe("先勝ち");
+    expect(envs.at(-1)?.display_name).toBe("先勝ち");
   });
 });
 

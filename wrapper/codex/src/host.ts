@@ -255,10 +255,11 @@ function rateLimitsDiffer(
 
 export class CodexHost implements EngineAdapter {
   readonly #config: WrapperConfig;
-  /** Last-applied `persona_sync` revision (issue #197 段階3, D15) — see
-   *  `AgentHost`'s identical field in `@kaoiro/claude-code` for the
-   *  reasoning shared across both engines. */
-  #personaRevision = 0;
+  /** Last-applied display_name sync revision (issue #197 段階3, D15,
+   *  renamed issue #219 D19/D23) — see `AgentHost`'s identical field in
+   *  `@kaoiro/claude-code` for the reasoning shared across both
+   *  engines. */
+  #displayNameRevision = 0;
   readonly #options: CodexHostOptions;
   readonly #now: () => string;
   #machine: MachineState = initialMachineState();
@@ -609,13 +610,13 @@ export class CodexHost implements EngineAdapter {
     );
   }
 
-  /** See `AgentHost#renamePersona` in `@kaoiro/claude-code` — identical
-   *  contract, both engines share the same `EngineAdapter` surface
-   *  (issue #197 段階3). */
-  renamePersona(name: string, revision: number): void {
-    if (revision <= this.#personaRevision) return;
-    this.#personaRevision = revision;
-    this.#config.persona = { ...this.#config.persona, name };
+  /** See `AgentHost#renameDisplayName` in `@kaoiro/claude-code` —
+   *  identical contract, both engines share the same `EngineAdapter`
+   *  surface (issue #197 段階3, renamed issue #219 D19/D23). */
+  renameDisplayName(displayName: string, revision: number): void {
+    if (revision <= this.#displayNameRevision) return;
+    this.#displayNameRevision = revision;
+    this.#config.display_name = displayName;
     this.#emitState(this.#machine.state);
   }
 

@@ -109,6 +109,11 @@ export function parseConfig(raw: unknown): WrapperConfig {
     sprite_set: nonEmptyString(raw.persona.sprite_set, "persona.sprite_set"),
   };
 
+  // issue #219 D19/D20: the server has already resolved this at spawn/
+  // restore time (custom name, or persona.name's value at that moment) —
+  // the wrapper just carries it, never re-derives it from `persona`.
+  const display_name = nonEmptyString(raw.display_name, "display_name");
+
   // server_url is required under the fail-closed server-集約 SoT model
   // (ADR-0029 F3 / F10): the wrapper cannot open its SDK session without
   // the server-pushed personality prompt, so a config without server_url
@@ -118,7 +123,7 @@ export function parseConfig(raw: unknown): WrapperConfig {
     throw new ConfigError("server_url must start with ws:// or wss://");
   }
 
-  const config: WrapperConfig = { agent_id, persona, server_url };
+  const config: WrapperConfig = { agent_id, persona, display_name, server_url };
 
   if (raw.server_token !== undefined) {
     config.server_token = nonEmptyString(raw.server_token, "server_token");

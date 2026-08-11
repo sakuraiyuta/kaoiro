@@ -41,6 +41,12 @@ function envelopeFor(name: string, ext?: Record<string, unknown>): Envelope {
     state: "idle",
     payload: {},
     persona: { id: "ao", name, sprite_set: "ao" },
+    // issue #219 D19: display_name is what the UI actually shows — this
+    // helper's `name` param seeds both, matching every EXISTING caller's
+    // intent ("the shown name"); a test that needs canonical/display_name
+    // to DIVERGE builds its own fixture (D27 acceptance pin) rather than
+    // through this shared helper.
+    display_name: name,
     ...(ext === undefined ? {} : { ext }),
   };
 }

@@ -351,6 +351,7 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
       directory: {
         "offline.sender": {
           persona: { id: "ao", name: "あお", sprite_set: "ao" },
+          display_name: "あお",
           last_seen: null,
         },
       },

@@ -21,6 +21,7 @@ import { buildChunkPayload } from "./helpers.js";
 const config: WrapperConfig = {
   agent_id: "test.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
+  display_name: "P",
   server_url: "ws://localhost:4000/wrapper",
 };
 
@@ -4302,12 +4303,12 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
   });
 });
 
-describe("AgentHost — persona rename (issue #197 段階3)", () => {
-  // A FRESH object per call, NOT a shared const — `renamePersona`
-  // reassigns `#config.persona`, and `AgentHost` holds the SAME object
-  // reference it was constructed with (no clone). A single const reused
-  // across both `it` blocks below would let the first test's rename
-  // mutate the object the second test starts from (review round1
+describe("AgentHost — display_name rename (issue #197 段階3, revised issue #219 D19/D23)", () => {
+  // A FRESH object per call, NOT a shared const — `renameDisplayName`
+  // reassigns `#config.display_name`, and `AgentHost` holds the SAME
+  // object reference it was constructed with (no clone). A single const
+  // reused across both `it` blocks below would let the first test's
+  // rename mutate the object the second test starts from (review round1
   // finding: the module-level `config` fixture problem this was meant to
   // avoid, reproduced one scope level down against a shared per-describe
   // const instead).
@@ -4315,11 +4316,12 @@ describe("AgentHost — persona rename (issue #197 段階3)", () => {
     return {
       agent_id: "test.rename-agent",
       persona: { id: "p", name: "P", sprite_set: "p" },
+      display_name: "P",
       server_url: "ws://localhost:4000/wrapper",
     };
   }
 
-  it("revision が新しければ persona.name を更新し state_change を即時再送する", () => {
+  it("revision が新しければ display_name を更新し state_change を即時再送する。persona は不変", () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(freshRenameConfig(), {
       onState: (e) => envs.push(e),
@@ -4330,16 +4332,12 @@ describe("AgentHost — persona rename (issue #197 段階3)", () => {
       now: () => "T",
     });
 
-    host.renamePersona("P(改名)", 1);
+    host.renameDisplayName("P(改名)", 1);
 
-    expect(envs.at(-1)?.persona).toEqual({
-      id: "p",
-      name: "P(改名)",
-      sprite_set: "p",
-    });
-    // id / sprite_set は不変 (ADR-0030 D2 改訂)
-    expect(envs.at(-1)?.persona.id).toBe("p");
-    expect(envs.at(-1)?.persona.sprite_set).toBe("p");
+    expect(envs.at(-1)?.display_name).toBe("P(改名)");
+    // persona (canonical) は issue #219 D19 のとおり rename では一切
+    // 変わらない — id / name / sprite_set すべて。
+    expect(envs.at(-1)?.persona).toEqual({ id: "p", name: "P", sprite_set: "p" });
   });
 
   it("revision が現在値以下なら無視し state_change を再送しない (D15)", () => {
@@ -4353,18 +4351,18 @@ describe("AgentHost — persona rename (issue #197 段階3)", () => {
       now: () => "T",
     });
 
-    host.renamePersona("先勝ち", 2);
+    host.renameDisplayName("先勝ち", 2);
     expect(envs).toHaveLength(1);
 
     // revision 2 が既に適用済みなので、同revisionの再送 (join直後syncと
-    // live relayが重複到達した場合など) も、より古いrevisionの遅延到着
-    // (D15: 2つのrename_agentがブロードキャスト順序を入れ替えて到着) も
-    // 両方無視される。
-    host.renamePersona("同revision再送", 2);
-    host.renamePersona("古いrevision", 1);
+    // live relayが重複到達した場合など、issue #219 D22 の dual-emit も
+    // 同型) も、より古いrevisionの遅延到着 (D15: 2つのrename_agentが
+    // ブロードキャスト順序を入れ替えて到着) も両方無視される。
+    host.renameDisplayName("同revision再送", 2);
+    host.renameDisplayName("古いrevision", 1);
 
     expect(envs).toHaveLength(1);
-    expect(envs.at(-1)?.persona.name).toBe("先勝ち");
+    expect(envs.at(-1)?.display_name).toBe("先勝ち");
   });
 });
 

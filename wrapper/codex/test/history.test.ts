@@ -14,6 +14,7 @@ import {
 const CONFIG: WrapperConfig = {
   agent_id: "host-1.codex-history",
   persona: { id: "fuji", name: "藤", sprite_set: "fuji" },
+  display_name: "藤",
   server_url: "ws://localhost:4000/wrapper",
 };
 

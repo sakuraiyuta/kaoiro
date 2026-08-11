@@ -155,10 +155,53 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     expect(config).toEqual({
       agent_id: "lab-pc-1.claude-a",
       persona: spawnMsg.persona,
+      // spawnMsg omits display_name (legacy-server fixture) — falls back
+      // to persona.name (issue #219 MF-1 migration fallback).
+      display_name: spawnMsg.persona.name,
       server_url: spawnMsg.server_url,
       server_token: "tok",
     });
     expect("allowed_tools" in config).toBe(false);
+  });
+
+  // issue #219 MF-1: display_name was dropped between server and wrapper —
+  // SpawnMessage/ParsedSpawn/parseSpawn/resolveWrapperConfig now carry it
+  // through, with a one-time migration fallback for a legacy server that
+  // predates the field.
+  describe("display_name (issue #219 MF-1)", () => {
+    it("spawn の display_name を parseSpawn / resolveWrapperConfig で貫通する", () => {
+      const parsed = parseSpawn({
+        ...spawnMsg,
+        display_name: "澪(改名後)",
+      })!;
+      expect(parsed.displayName).toBe("澪(改名後)");
+      const config = resolveWrapperConfig(
+        "lab-pc-1.claude-a",
+        parsed,
+        "ws://localhost:4000/wrapper",
+      );
+      // 意図的に canonical persona.name ("澪") と異なる値にした食い違い
+      // fixture (issue #219 D27方針) — display_name を persona.name に
+      // つぶす conflation バグを検出できる。
+      expect(config.display_name).toBe("澪(改名後)");
+      expect(config.persona.name).toBe("澪");
+    });
+
+    it("display_name 省略 (旧 server) は persona.name へフォールバックする", () => {
+      const parsed = parseSpawn(spawnMsg)!;
+      expect(parsed.displayName).toBeUndefined();
+      const config = resolveWrapperConfig(
+        "lab-pc-1.claude-a",
+        parsed,
+        "ws://localhost:4000/wrapper",
+      );
+      expect(config.display_name).toBe(spawnMsg.persona.name);
+    });
+
+    it("display_name が非 string なら parseSpawn 全体を fail-loud reject する", () => {
+      expect(parseSpawn({ ...spawnMsg, display_name: 42 })).toBeNull();
+      expect(parseSpawn({ ...spawnMsg, display_name: null })).toBeNull();
+    });
   });
   it("Codex auth contextをwrapper configへ載せる", () => {
     const parsed = parseSpawn({ ...spawnMsg, engine: "codex" })!;

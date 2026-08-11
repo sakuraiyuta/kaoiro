@@ -213,41 +213,61 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   # issue #197 段階3 (D14 acceptance 1): pushes the AUTHORITATIVE current
-  # name + revision from `AgentDirectory` every join (fresh connect AND
-  # reconnect alike), unconditionally — not only when it differs from
-  # what the wrapper last applied. This is what closes the race a bare
-  # `join/3`-time read would leave open: reading AgentDirectory inside
-  # `join/3` itself (BEFORE this channel process's PubSub subscription to
-  # `wrapper:<agent_id>` is guaranteed live) could miss a `rename_agent`
-  # broadcast that lands in the gap between the read and the subscribe.
-  # Running from `handle_info(:after_join, ...)` — the same idiom this
-  # module already uses for the `TokenDenylist.revoked?/1` re-check above
-  # (ふじ R1-race must-fix, 2026-07-23) — guarantees the subscription is
-  # live first, so a `rename_agent` racing this push is either seen here
-  # (AgentDirectory already reflects it) or arrives moments later as its
-  # own `persona_sync` broadcast; either way nothing is lost. The
-  # wrapper's own revision check (issue #197 段階3, `AgentHost`/`CodexHost`
-  # `applyPersonaSync`) makes this push idempotent against a live relay
-  # arriving in either order (D15) — sending it unconditionally on every
-  # join is simpler and no less correct than tracking a per-connection
-  # "did I already push this revision" flag server-side.
+  # display_name + revision from `AgentDirectory` every join (fresh
+  # connect AND reconnect alike), unconditionally — not only when it
+  # differs from what the wrapper last applied. This is what closes the
+  # race a bare `join/3`-time read would leave open: reading
+  # AgentDirectory inside `join/3` itself (BEFORE this channel process's
+  # PubSub subscription to `wrapper:<agent_id>` is guaranteed live) could
+  # miss a `rename_agent` broadcast that lands in the gap between the
+  # read and the subscribe. Running from `handle_info(:after_join, ...)`
+  # — the same idiom this module already uses for the
+  # `TokenDenylist.revoked?/1` re-check above (ふじ R1-race must-fix,
+  # 2026-07-23) — guarantees the subscription is live first, so a
+  # `rename_agent` racing this push is either seen here (AgentDirectory
+  # already reflects it) or arrives moments later as its own sync
+  # broadcast; either way nothing is lost. The wrapper's own revision
+  # check (issue #197 段階3, `AgentHost`/`CodexHost` `applyPersonaSync`/
+  # `applyDisplayNameSync`) makes this push idempotent against a live
+  # relay arriving in either order (D15) — sending it unconditionally on
+  # every join is simpler and no less correct than tracking a
+  # per-connection "did I already push this revision" flag server-side.
+  #
+  # issue #219 D22: DUAL-emits both `persona_sync` (legacy `name` key,
+  # old wrapper builds) and `display_name_sync` (new `display_name` key)
+  # at the SAME revision — same rationale as the live-relay dual-emit in
+  # `agents_channel.ex`'s `rename_agent` handler. `AgentDirectory.get/1`
+  # never returns canonical persona data anymore (issue #219 D19) —
+  # `display_name` is a pure instance-state field, no join against
+  # `PersonaAssets` needed here.
   defp push_persona_sync(socket, agent_id) do
     case AgentDirectory.get(agent_id) do
-      %{persona: %{"name" => name}, revision: revision} ->
+      %{display_name: display_name, revision: revision} ->
         # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): flat
-        # version stamp, matching the live-relay `persona_sync` push
-        # from `agents_channel.ex`'s `rename_agent` handler.
+        # version stamp, matching the live-relay pushes from
+        # `agents_channel.ex`'s `rename_agent` handler.
         push(socket, "persona_sync", %{
           "version" => "0",
-          "name" => name,
+          "name" => display_name,
+          "revision" => revision
+        })
+
+        push(socket, "display_name_sync", %{
+          "version" => "0",
+          "display_name" => display_name,
           "revision" => revision
         })
 
       nil ->
-        # No AgentDirectory entry yet — the spawn-time `record/3` cast
-        # has not landed (a narrow window right after spawn, the same
-        # class of gap `rename_agent`'s own doc comment accepts). Nothing
-        # to sync; the wrapper keeps whatever persona.name it was
+        # No AgentDirectory entry. For a normally-spawned agent this
+        # branch should be unreachable: `AgentDirectory.record/4` is now
+        # a synchronous `GenServer.call` that `agents_channel.ex`'s spawn
+        # handler commits strictly BEFORE broadcasting `spawn` to the
+        # runner (issue #219 D22 corollary), so by the time the runner
+        # can launch this wrapper process and it joins here, the entry
+        # already exists. Kept as a defensive no-op rather than a crash
+        # for any path this ordering guarantee does not cover. Nothing
+        # to sync; the wrapper keeps whatever display_name it was
         # launched with, which is correct here since a not-yet-recorded
         # agent has never been renamed.
         :ok
@@ -738,6 +758,40 @@ defmodule KaoiroServerWeb.WrapperChannel do
         _ -> %{}
       end
 
+    # issue #219 D19/D26 (ADR-0021 F6-3): `display_name` rides the same
+    # envelope top-level field this module's after-join persona_sync/
+    # display_name_sync pushes keep in sync (see `push_persona_sync/2`),
+    # so it is always fresh for a live agent. `persona{id,name,sprite_set}`
+    # above stays the pack canonical value — unaffected by rename
+    # (issue #219 D19) — so a peer sees BOTH the stable identity and the
+    # current, possibly-renamed, label. Absent only for a not-yet-updated
+    # legacy wrapper build; `maybe_put_directory_field/3` drops the key
+    # entirely rather than emitting an empty string.
+    #
+    # advisory (issue #219, クロエ実測検証): reuses `valid_display_name/1`
+    # — the same 1-64-grapheme / no-control-char bound `user_entry/1`
+    # already applies to a user's `display_name` — rather than a bare
+    # `is_binary/1` check. issue #219 made this field the UI label's
+    # authoritative source while D24 tightened the pack `name` field's
+    # own validation; leaving THIS projection unvalidated would have made
+    # the authoritative label source the one unvalidated field in the
+    # peer-directory contract. Not a regression (the prior `Map.take/2`
+    # era did not validate `persona.name` either), but worth aligning now
+    # that this field carries the weight D19 gave it. An out-of-bound
+    # value (from a compromised/buggy wrapper) is dropped like an absent
+    # one, not truncated or passed through.
+    display_name =
+      case envelope do
+        %{"display_name" => name} ->
+          case valid_display_name(name) do
+            {:ok, trimmed} -> trimmed
+            :error -> nil
+          end
+
+        _ ->
+          nil
+      end
+
     state =
       case envelope do
         %{"state" => s} when is_binary(s) -> s
@@ -752,6 +806,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     entry =
       %{"agent_id" => id, "persona" => persona, "state" => state}
+      |> maybe_put_directory_field("display_name", display_name)
       |> maybe_put_directory_field("engine", ext["engine"])
       |> maybe_put_directory_field("model", ext["model"])
       |> maybe_put_directory_field("effort", ext["effort"])

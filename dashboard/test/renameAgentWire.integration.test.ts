@@ -76,7 +76,8 @@ class ReplyingWebSocket {
 
   /** Answers the LATEST `rename_agent` push with an ok/error phx_reply,
    *  mirroring the server's actual reply shapes (agents_channel.ex's
-   *  `{:reply, {:ok, %{"persona" => ..., "revision" => ...}}}` /
+   *  `{:reply, {:ok, %{"display_name" => ..., "revision" => ...}}}` —
+   *  issue #219 D23, no `persona` key — /
    *  `{:reply, {:error, %{reason: ...}}}`). */
   replyToLatestRename(outcome: { ok: true } | { ok: false; reason: string }): void {
     const frame = this.parsedFrames()
@@ -92,10 +93,7 @@ class ReplyingWebSocket {
       outcome.ok
         ? {
             status: "ok",
-            response: {
-              persona: { id: "ao", name: "新名", sprite_set: "ao" },
-              revision: 1,
-            },
+            response: { display_name: "新名", revision: 1 },
           }
         : { status: "error", response: { reason: outcome.reason } },
     ]);
@@ -131,7 +129,7 @@ describe("rename_agent wire contract (issue #197 段階3 unit B, ふじ判定)",
     return { conn, ws };
   }
 
-  it("renameAgent は event=\"rename_agent\"、payload={version, agent_id, name} の exact frame を agents:lobby へ push する", async () => {
+  it("renameAgent は event=\"rename_agent\"、payload={version, agent_id, display_name} の exact frame を agents:lobby へ push する", async () => {
     const { conn, ws } = await connect();
     const pending = conn.renameAgent("host-a.ao", "あお(改名)");
 
@@ -147,11 +145,15 @@ describe("rename_agent wire contract (issue #197 段階3 unit B, ふじ判定)",
     // THIS test, not silently drift from the server's accepted shape.
     // `version` (ADR-0015, issue #197 段階3 ふじ MF-1 レビュー指摘): this
     // event never reaches the runner, but every client -> server message
-    // still needs the flat version stamp.
+    // still needs the flat version stamp. `display_name` (issue #219
+    // D23): the wire vocabulary moved off `name` alongside the
+    // canonical/display_name field split — the server still accepts the
+    // legacy `name` key during the compatibility window, but this client
+    // sends the new one.
     expect(payload).toEqual({
       version: "0",
       agent_id: "host-a.ao",
-      name: "あお(改名)",
+      display_name: "あお(改名)",
     });
 
     ws.replyToLatestRename({ ok: true });

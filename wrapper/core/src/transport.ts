@@ -79,6 +79,12 @@ export interface DirectoryConversation {
 export interface DirectoryEntry {
   agent_id: string;
   persona: { id?: string; name?: string; sprite_set?: string };
+  /** Mutable instance-scoped display name (issue #219 D19/D26, ADR-0021
+   *  F6-3) — `persona.name` above stays the pack's canonical name,
+   *  unaffected by rename; this is the current, possibly-renamed label.
+   *  Optional: an old server / not-yet-updated peer wrapper build omits
+   *  it, same discipline as every other situational field here. */
+  display_name?: string;
   state: string;
   engine?: string;
   model?: string;
@@ -314,15 +320,21 @@ export interface ServerLinkOptions {
    *  choice. Payload is `{ mode: string }` — one of the SDK PermissionMode
    *  values; validation lives in the wrapper. */
   onSetPermissionMode?: (mode: string) => void;
-  /** The AUTHORITATIVE persona display-name state, pushed by the server on
-   *  every join (fresh AND reconnect, issue #197 段階3 D14 acceptance 1) and
-   *  on a live `rename_agent` relay. `revision` is a monotonic per-agent_id
-   *  counter (`AgentDirectory.rename/2`) — the handler MUST drop a push
-   *  whose revision is <= the last one it applied (D15: two `rename_agent`
-   *  calls racing on the server can broadcast in either order, and this is
-   *  what lets the wrapper converge on the newer one regardless of arrival
-   *  order). Payload is `{ name: string, revision: number }`. */
-  onRenamePersona?: (name: string, revision: number) => void;
+  /** The AUTHORITATIVE `display_name` state (issue #219 D19/D23 — renamed
+   *  from `onRenamePersona`; `persona` canonical data is never mutated by
+   *  either event this rides on), pushed by the server on every join (fresh
+   *  AND reconnect, issue #197 段階3 D14 acceptance 1) and on a live
+   *  `rename_agent` relay. `revision` is a monotonic per-agent_id counter
+   *  (`AgentDirectory.rename/2`) — the handler MUST drop a push whose
+   *  revision is <= the last one it applied (D15: two `rename_agent` calls
+   *  racing on the server can broadcast in either order, and this is what
+   *  lets the wrapper converge on the newer one regardless of arrival
+   *  order). Fed by BOTH `persona_sync` (legacy `name` key) and
+   *  `display_name_sync` (new `display_name` key) — issue #219 D22
+   *  dual-emit compatibility window; the server sends both at the same
+   *  revision, and the revision guard above makes applying both idempotent
+   *  (whichever arrives first wins, the second is a no-op). */
+  onRenameDisplayName?: (displayName: string, revision: number) => void;
   /** attach_open relayed by the server (file-upload spec / ADR-0025).
    *  Announces an upcoming upload; the wrapper registers a pending entry. */
   onAttachOpen?: (msg: AttachOpenMessage) => void;
@@ -567,6 +579,15 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
     persona: v.persona as DirectoryEntry["persona"],
     state: v.state,
   };
+  // issue #219 D19/D26: same value-level narrow used everywhere else on
+  // this repo's display-name fields — a malformed value (overlong,
+  // control chars) is omitted rather than passed through, matching this
+  // function's own "omit what we cannot vouch for" rule for every other
+  // optional field.
+  if (typeof v.display_name === "string") {
+    const displayName = validDisplayNameOrNull(v.display_name);
+    if (displayName !== null) entry.display_name = displayName;
+  }
   for (const key of ["engine", "model", "effort"] as const) {
     const field = v[key];
     if (typeof field === "string" && field !== "") entry[key] = field;
@@ -908,22 +929,48 @@ export class ServerLink {
     // comparison itself still happens in `host.renamePersona`, not
     // here — same division of labor `set_permission_mode` has with
     // `host.setPermissionMode`.
-    this.#channel.on("persona_sync", (payload: unknown) => {
-      if (!isObject(payload) || typeof payload.name !== "string") return;
-      const name = validDisplayNameOrNull(payload.name);
+    // issue #219 D22: dual-emit compatibility window — the server sends
+    // BOTH `persona_sync` (legacy `name` key) and `display_name_sync`
+    // (new `display_name` key) at the same revision. Both funnel through
+    // this same validate+dispatch so the two events are indistinguishable
+    // to `onRenameDisplayName` beyond which key each payload happened to
+    // carry; the revision guard in host.ts makes applying both idempotent
+    // (D15 — whichever arrives first wins, the second is a no-op).
+    const applyDisplayNameSync = (
+      rawValue: unknown,
+      rawRevision: unknown,
+      version: unknown,
+      eventName: string,
+    ): void => {
+      if (typeof rawValue !== "string") return;
+      const displayName = validDisplayNameOrNull(rawValue);
       if (
-        name === null ||
-        typeof payload.revision !== "number" ||
-        !Number.isSafeInteger(payload.revision) ||
-        payload.revision < 0
+        displayName === null ||
+        typeof rawRevision !== "number" ||
+        !Number.isSafeInteger(rawRevision) ||
+        rawRevision < 0
       ) {
         return;
       }
       // ADR-0015 warn-then-accept (issue #197 段階3, ふじ MF-1 レビュー
       // 指摘): a version mismatch/absence never blocks the rename itself
       // — name/revision are already validated above — it only logs.
-      warnOnVersionMismatch("persona_sync", payload.version);
-      options.onRenamePersona?.(name, payload.revision);
+      warnOnVersionMismatch(eventName, version);
+      options.onRenameDisplayName?.(displayName, rawRevision);
+    };
+
+    this.#channel.on("persona_sync", (payload: unknown) => {
+      if (!isObject(payload)) return;
+      applyDisplayNameSync(payload.name, payload.revision, payload.version, "persona_sync");
+    });
+    this.#channel.on("display_name_sync", (payload: unknown) => {
+      if (!isObject(payload)) return;
+      applyDisplayNameSync(
+        payload.display_name,
+        payload.revision,
+        payload.version,
+        "display_name_sync",
+      );
     });
     // File-upload wire (file-upload spec / ADR-0025). attach_open declares an
     // upload, attach_chunk delivers a binary slice, attach_close finalises.

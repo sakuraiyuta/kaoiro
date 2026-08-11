@@ -280,7 +280,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       })
 
       push(socket, "hosts", %{"hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())})
-      push(socket, "directory", %{"entries" => AgentDirectory.all()})
+      push(socket, "directory", %{"entries" => join_directory_entries(AgentDirectory.all())})
     end
 
     {:noreply, socket}
@@ -312,10 +312,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # operator-only gate as the join-time push this event previously only
   # ever rode (`handle_info(:after_join, ...)` above) — a viewer must not
   # receive AgentDirectory contents (ADR-0030 D10).
+  #
+  # `payload` here is the RAW `persona_id` + `display_name` broadcast
+  # `AgentDirectory.rename/3` sends (issue #219 D19) — join against the
+  # CURRENT PersonaAssets manifest happens HERE, per subscriber, not at
+  # broadcast time (see `agent_directory.ex`'s own broadcast comment for
+  # why: this keeps `AgentDirectory` free of a PersonaAssets dependency
+  # without reordering anything, since `handle_out` processes each
+  # subscriber's mailbox in the same order the GenServer broadcast them
+  # and never re-reads `AgentDirectory`). Uses the SAME
+  # `join_directory_entries/1` the join-time push above uses, so a
+  # reconnecting client sees an identical shape on both paths.
   @impl true
-  def handle_out("directory", payload, socket) do
+  def handle_out("directory", %{"entries" => raw_entries}, socket) do
     if socket.assigns[:role] == :operator do
-      push(socket, "directory", payload)
+      push(socket, "directory", %{"entries" => join_directory_entries(raw_entries)})
     end
 
     {:noreply, socket}
@@ -661,7 +672,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, host_id} <- fetch_host_id(payload),
          {:ok, host} <- fetch_host(host_id),
          {:ok, persona} <- resolve_persona(host, payload),
-         {:ok, persona} <- apply_custom_name(persona, payload),
+         {:ok, display_name} <- resolve_spawn_display_name(persona, payload),
          {:ok, cwd} <- fetch_allowed_cwd(host, payload),
          {:ok, engine} <- fetch_allowed_engine(host, payload),
          {:ok, agent_id} <- allocate_agent_id(host_id),
@@ -670,6 +681,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
            build_spawn_payload(
              agent_id,
              persona,
+             display_name,
              cwd,
              engine,
              Map.put(payload, "request_id", request_id)
@@ -681,14 +693,24 @@ defmodule KaoiroServerWeb.AgentsChannel do
              :spawn,
              DateTime.utc_now() |> DateTime.to_iso8601()
            ) do
+      # Persist the identity so operator-driven restore keeps working after
+      # a server restart when AgentStates is empty (ADR-0030 D2 / D3).
+      # issue #219 D19: only `persona["id"]` (the stable reference) and
+      # `display_name` are persisted — canonical persona data is never
+      # stored here anymore.
+      #
+      # Ordered BEFORE the spawn broadcast (issue #219 D22):
+      # `AgentDirectory.record/4` is now a synchronous call specifically so
+      # this ordering closes the race where a wrapper joins immediately
+      # after launch and its after-join `persona_sync`/`display_name_sync`
+      # push reads a not-yet-committed entry as `nil` — see `record/4`'s
+      # own doc.
+      AgentDirectory.record(agent_id, persona["id"], display_name)
       KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
       # Seed the cwd now so restore works even if the wrapper never reports a
       # statusline cwd (#22, ADR-0014): the real session_id arrives later and
       # is preserved alongside this cwd (SessionPointers keeps non-nil fields).
       SessionPointers.record(agent_id, nil, cwd, engine || "claude-code")
-      # Persist the identity so operator-driven restore keeps working after
-      # a server restart when AgentStates is empty (ADR-0030 D2 / D3).
-      AgentDirectory.record(agent_id, persona)
       {:reply, {:ok, %{"agent_id" => agent_id}}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -760,13 +782,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          :ok <- require_disconnected(agent_id),
-         {:ok, persona} <- agent_persona(agent_id),
+         {:ok, persona, display_name} <- agent_persona(agent_id),
          {:ok, session_id, cwd, engine} <- session_pointer(agent_id),
          {:ok, host} <- fetch_host(host_id_of(agent_id)),
          {:ok, engine} <- fetch_allowed_engine(host, %{"engine" => engine}),
          request_id <- generate_transition_id(),
          {:ok, spawn_payload} <-
-           build_restore_payload(agent_id, persona, cwd, session_id, engine, request_id),
+           build_restore_payload(
+             agent_id,
+             persona,
+             display_name,
+             cwd,
+             session_id,
+             engine,
+             request_id
+           ),
          :ok <-
            AgentActivity.begin_transition(
              agent_id,
@@ -947,26 +977,28 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # wrapper simply misses it and converges later via the after-join
   # `persona_sync` push (`wrapper_channel.ex`, D14 acceptance 1).
   #
-  # A narrow TOCTOU exists between `fetch_restorable_agent_id/1`'s
-  # existence check and `AgentDirectory.rename/2`'s own lookup (ふじ
-  # レビュー指摘: the prior wording here was wrong about what makes an
-  # agent_id AgentStates-known — it is NOT the spawn broadcast, it is the
-  # wrapper's FIRST ACCEPTED envelope, `wrapper_channel.ex`'s
-  # `AgentStates.put`). The real window is: `AgentStates.known?/1` can
-  # already be true (the wrapper has joined and sent its first envelope)
-  # while `AgentDirectory.record/3`'s fire-and-forget cast — issued
-  # earlier, at spawn time, from a DIFFERENT process — has not yet landed
-  # in `AgentDirectory`'s mailbox. An agent renamed inside that window
-  # would see `:not_found` here even though `fetch_restorable_agent_id/1`
-  # accepted it moments earlier. Accepted as a documented, retry-safe gap
-  # rather than engineered around — the cast is same-node/same-BEAM and
-  # lands in practice long before an operator can click rename, and
-  # `delete_agent`'s `purge_agent_records` has the same class of
-  # check-then-act gap against `AgentStates`.
+  # The TOCTOU window formerly documented here — `fetch_restorable_agent_id/1`
+  # (via `restorable_agent?/1`'s `AgentStates.known?/1 or AgentDirectory.get/1
+  # != nil` check) accepting an agent_id while `AgentDirectory.rename/3`'s own
+  # lookup still saw `:not_found` — is now structurally closed for the
+  # ordinary spawn path (issue #219 D22 corollary, クロエ実測検証): the
+  # spawn handler's `AgentDirectory.record/4` call is a SYNCHRONOUS
+  # `GenServer.call`, committed strictly BEFORE the `spawn` broadcast to the
+  # runner. The runner only launches the wrapper process — the earliest
+  # point any envelope, and therefore any `AgentStates.known?/1` truth, could
+  # exist — in response to that broadcast. So by the time `AgentStates.known?/1`
+  # can ever become true for a freshly-spawned agent, `AgentDirectory.get/1`
+  # is already non-nil; `restorable_agent?/1` accepts such an agent_id via
+  # the `AgentDirectory` branch well before the `AgentStates` branch is even
+  # reachable, and `AgentDirectory.rename/3`'s lookup reads the SAME,
+  # already-populated ledger. `delete_agent`'s `purge_agent_records` keeps
+  # its own separate, still-real check-then-act gap against `AgentStates` —
+  # that one is unaffected by this change and is not what this comment is
+  # about.
   def handle_in("rename_agent", payload, socket) do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
-         {:ok, name} <- validate_rename_name(payload) do
+         {:ok, display_name} <- validate_rename_name(payload) do
       # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): this event
       # never reaches the runner (unlike relay_to_runner's callers) but
       # ADR-0015 draws no such exception — every client -> server message
@@ -974,26 +1006,37 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # already applies via this same "accepting" action.
       warn_on_version_mismatch(payload, "rename_agent", "accepting")
 
-      case AgentDirectory.rename(agent_id, name) do
-        {:ok, %{persona: persona, revision: revision}} ->
-          # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘/ふじ
-          # commit前訂正): every server -> wrapper message needs the
-          # flat version stamp — this is ADR-0015's own requirement,
-          # NOT something derived from what sibling messages on this
-          # topic already do. `set_model`/`set_effort`/
-          # `set_permission_mode` (relayed via `relay_to_runner/4`,
-          # which strips `agent_id` but does not add `version` on this
-          # leg) do NOT carry one — that is an existing, unrelated
-          # ADR-0015 gap this change does not touch or rely on. The
-          # stamp here matches the after-join `persona_sync` push
-          # (`wrapper_channel.ex`), which carries the same
-          # `{"version" => "0", ...}` shape, so a wrapper's handler
-          # sees an identical contract regardless of which producer
-          # sent it.
+      case AgentDirectory.rename(agent_id, display_name) do
+        {:ok, %{display_name: display_name, revision: revision}} ->
+          # issue #219 D22: DUAL-EMIT, both at the SAME revision. Old
+          # wrapper builds only understand `persona_sync` (`name` key) —
+          # they MUST keep receiving it during the compatibility window;
+          # this is not an optional legacy shim, D22 rejected dropping it
+          # outright (self-hosted/same-build deploy is not a guarantee
+          # server and every wrapper process restart atomically). New
+          # wrapper builds understand BOTH `persona_sync` and
+          # `display_name_sync` as display_name mutations and apply
+          # whichever arrives FIRST via the same revision guard (D15) —
+          # the second is then a no-op, never a rollback. Removing
+          # `persona_sync` is an explicit follow-up (D22 — not this
+          # issue).
+          #
+          # ADR-0015: every server -> wrapper message needs the flat
+          # version stamp — this is ADR-0015's own requirement, NOT
+          # derived from sibling messages on this topic. The stamp
+          # matches the after-join `persona_sync` / `display_name_sync`
+          # pushes (`wrapper_channel.ex`), same `{"version" => "0", ...}`
+          # shape regardless of producer.
           KaoiroServerWeb.Endpoint.broadcast(
             "wrapper:#{agent_id}",
             "persona_sync",
-            %{"version" => "0", "name" => name, "revision" => revision}
+            %{"version" => "0", "name" => display_name, "revision" => revision}
+          )
+
+          KaoiroServerWeb.Endpoint.broadcast(
+            "wrapper:#{agent_id}",
+            "display_name_sync",
+            %{"version" => "0", "display_name" => display_name, "revision" => revision}
           )
 
           # D16: the `directory` refresh for already-joined operators
@@ -1008,7 +1051,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
           # their (correctly serialized) writes, letting a stale snapshot
           # win the broadcast race and revert an already-joined
           # dashboard's directory copy.
-          {:reply, {:ok, %{"persona" => persona, "revision" => revision}}, socket}
+          #
+          # Reply vocabulary is `display_name` (issue #219 D23) — no
+          # `persona` key; the operator's own dashboard reads the reply
+          # directly, so there is no legacy client to keep compatible on
+          # this leg.
+          {:reply, {:ok, %{"display_name" => display_name, "revision" => revision}}, socket}
 
         {:error, :not_found} ->
           {:reply, {:error, %{reason: safe_reason(:unknown_agent)}}, socket}
@@ -1033,13 +1081,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_in("rename_user", payload, socket) do
     with :ok <- require_operator(socket),
          {:ok, user_id} <- fetch_user_id(payload),
-         {:ok, name} <- validate_rename_name(payload) do
+         {:ok, display_name} <- validate_rename_name(payload) do
       # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): same
       # "accepting" version check as rename_agent — this event never
       # reaches the runner either.
       warn_on_version_mismatch(payload, "rename_user", "accepting")
 
-      case Users.rename(user_id, name) do
+      case Users.rename(user_id, display_name) do
         {:ok, entry} ->
           {:reply, {:ok, entry}, socket}
 
@@ -1317,6 +1365,39 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # Joins each directory entry's `persona_id` against the CURRENT
+  # PersonaAssets manifest (issue #219 D19) — `AgentDirectory` itself
+  # never stores canonical data, only the stable reference, so every
+  # reader resolves fresh here instead of trusting a snapshot. Used by
+  # BOTH the join-time push (`handle_info(:after_join, ...)`) and the
+  # live `handle_out("directory", ...)` intercept, so the two paths
+  # produce the IDENTICAL wire shape — a client that reconnects mid-
+  # session must not see the payload shape change between its initial
+  # push and the next live update (issue #219 spec-gate, クロエ指摘).
+  #
+  # `persona` is `%{"id"=>, "name"=>, "sprite_set"=>}` when the pack
+  # still resolves, or just `%{"id"=>}` (canonical fields OMITTED, never
+  # a stale/guessed value) when it does not — issue #219 D21's "typed
+  # unresolved". `display_name` is always present; it is the field
+  # `AgentDirectory` actually owns and never depends on pack state.
+  defp join_directory_entries(entries) do
+    Map.new(entries, fn {agent_id, entry} -> {agent_id, join_directory_entry(entry)} end)
+  end
+
+  defp join_directory_entry(%{
+         persona_id: persona_id,
+         display_name: display_name,
+         last_seen: last_seen
+       }) do
+    persona =
+      case PersonaAssets.get_persona(persona_id) do
+        nil -> %{"id" => persona_id}
+        canonical -> canonical
+      end
+
+    %{"persona" => persona, "display_name" => display_name, "last_seen" => last_seen}
+  end
+
   # Resolve the operator-chosen persona id to the host's declared persona
   # object: the wrapper gets only what the host registered, never arbitrary
   # client-supplied persona fields (server-authoritative, 案A).
@@ -1330,44 +1411,114 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp resolve_persona(_host, _payload), do: {:error, :invalid_persona}
 
-  # Optional per-instance display name (#22): overrides persona.name for this
-  # agent only (agent_id and persona.id are untouched, so identity / sprites /
-  # mood are unaffected). Absent or blank = keep the persona name. Bounded
-  # length and no control chars so it cannot break the grid layout; the client
-  # escapes it on render. The override rides the persona into the wrapper
-  # config, so no runner/wrapper change is needed.
-  defp apply_custom_name(persona, %{"name" => name}) when is_binary(name) do
-    trimmed = String.trim(name)
+  # issue #219 D23: accepts EITHER "display_name" (new wire key) or the
+  # legacy "name" key (compatibility period — old client / wrapper
+  # builds may still send it) but REJECTS outright when both are present
+  # and disagree, rather than silently preferring one. Returns
+  # `{:ok, value}` (binary, from whichever single key was present, or
+  # both when they agree), `{:ok, nil}` (neither key present), or
+  # `{:error, :invalid_name}` (a present key is non-binary — including a
+  # JSON `null`, see MF-3 below — or both keys present and conflicting).
+  #
+  # MF-3 (issue #219, クロエ実測検証): a PRESENT key whose value is
+  # `null` must classify as "present but invalid", not "absent" — a
+  # `Map.get/2` read cannot tell the two apart (both return `nil`), which
+  # let `{"display_name" => null}` alone fall through to the `{:ok, nil}`
+  # canonical-fallback branch, and `{"display_name" => null, "name" =>
+  # "X"}` fall through to accepting the legacy `"X"` — both silently
+  # contradicting this function's own documented "present non-binary key
+  # -> invalid_name" contract above. `Map.fetch/2` classifies presence
+  # FIRST, independent of the value, so a present `null` is `{:present,
+  # nil}` and correctly fails every `is_binary` guard below regardless of
+  # the sibling key.
+  defp extract_name_field(payload) do
+    case {field_presence(payload, "display_name"), field_presence(payload, "name")} do
+      {:absent, :absent} ->
+        {:ok, nil}
 
-    cond do
-      trimmed == "" -> {:ok, persona}
-      String.length(trimmed) > @display_name_max_graphemes -> {:error, :invalid_name}
-      String.match?(trimmed, @display_name_control_char_pattern) -> {:error, :invalid_name}
-      true -> {:ok, Map.put(persona, "name", trimmed)}
+      {{:present, same}, {:present, same}} when is_binary(same) ->
+        {:ok, same}
+
+      {{:present, new}, :absent} when is_binary(new) ->
+        {:ok, new}
+
+      {:absent, {:present, old}} when is_binary(old) ->
+        {:ok, old}
+
+      _ ->
+        {:error, :invalid_name}
     end
   end
 
-  defp apply_custom_name(persona, _payload), do: {:ok, persona}
-
-  # Live-rename name validation (issue #197 段階3, D12/D13; shared by
-  # `rename_agent` and `rename_user`). Unlike `apply_custom_name/2`
-  # above, a blank name has no sensible "keep the existing name" default
-  # here — a rename request IS the operator's request to change the
-  # name, so blank is rejected rather than silently ignored. The
-  # length/control-char rule itself is identical (`@display_name_max_graphemes`
-  # / `@display_name_control_char_pattern`).
-  defp validate_rename_name(%{"name" => name}) when is_binary(name) do
-    trimmed = String.trim(name)
-
-    cond do
-      trimmed == "" -> {:error, :invalid_name}
-      String.length(trimmed) > @display_name_max_graphemes -> {:error, :invalid_name}
-      String.match?(trimmed, @display_name_control_char_pattern) -> {:error, :invalid_name}
-      true -> {:ok, trimmed}
+  # `{:present, value}` when `key` is a member of `payload` (even with a
+  # `nil`/`null` value) or `:absent` otherwise — distinguishes "key not
+  # sent" from "key sent as null", which `Map.get/2` alone cannot (MF-3).
+  defp field_presence(payload, key) do
+    case Map.fetch(payload, key) do
+      {:ok, value} -> {:present, value}
+      :error -> :absent
     end
   end
 
-  defp validate_rename_name(_payload), do: {:error, :invalid_name}
+  # Shared length / control-char validation both spawn-time custom
+  # naming and live rename apply — same rule `WrapperChannel.valid_display_name/1`
+  # and `PersonaAssets`' pack `name` field (issue #219 D24) enforce.
+  defp valid_display_name_value?(trimmed) do
+    String.length(trimmed) <= @display_name_max_graphemes and
+      not String.match?(trimmed, @display_name_control_char_pattern)
+  end
+
+  # Optional per-instance INITIAL display_name (#22, revised issue #219
+  # D19/D20/D23): seeds a newly-spawned agent's `display_name`. Absent or
+  # blank = fall back to the persona's own canonical name (created-time
+  # persistence, D20 — this is the ONLY place a blank/absent value gets a
+  # fallback). Unlike the pre-#219 `apply_custom_name/2` this REPLACES,
+  # `persona` itself is never mutated — the whole point of issue #219 is
+  # that a custom name is instance state, not a rewrite of the pack's
+  # canonical name.
+  defp resolve_spawn_display_name(persona, payload) do
+    case extract_name_field(payload) do
+      {:ok, nil} ->
+        {:ok, persona["name"]}
+
+      {:ok, name} ->
+        trimmed = String.trim(name)
+
+        cond do
+          trimmed == "" -> {:ok, persona["name"]}
+          not valid_display_name_value?(trimmed) -> {:error, :invalid_name}
+          true -> {:ok, trimmed}
+        end
+
+      {:error, :invalid_name} = error ->
+        error
+    end
+  end
+
+  # Live-rename name validation (issue #197 段階3, D12/D13, revised issue
+  # #219 D23; shared by `rename_agent` and `rename_user`). Unlike
+  # `resolve_spawn_display_name/2` above, a blank/absent name has no
+  # sensible "keep the existing name" default here — a rename request IS
+  # the operator's request to CHANGE the name, so blank is rejected
+  # rather than silently ignored.
+  defp validate_rename_name(payload) do
+    case extract_name_field(payload) do
+      {:ok, nil} ->
+        {:error, :invalid_name}
+
+      {:ok, name} ->
+        trimmed = String.trim(name)
+
+        cond do
+          trimmed == "" -> {:error, :invalid_name}
+          not valid_display_name_value?(trimmed) -> {:error, :invalid_name}
+          true -> {:ok, trimmed}
+        end
+
+      {:error, :invalid_name} = error ->
+        error
+    end
+  end
 
   # cwd must be one the host declared spawnable (T1, threat-model). The runner
   # re-checks against its own allow-list; this server-side check gives a clear
@@ -1405,12 +1556,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # initial_prompt / resume_session_id pass through only when well-typed. The
   # whole map is size-bounded so an oversized initial_prompt cannot reach the
   # runner process.
-  defp build_spawn_payload(agent_id, persona, cwd, engine, payload) do
+  #
+  # `persona` is the canonical pack data (id/name/sprite_set) — unchanged
+  # shape, ADR-0029 F9 unqualified again (issue #219 D19). `display_name`
+  # is a NEW top-level field, independent of `persona`: the wrapper seeds
+  # its own instance state from it (issue #219 D19/D23) instead of
+  # reading a custom name out of `persona["name"]`.
+  defp build_spawn_payload(agent_id, persona, display_name, cwd, engine, payload) do
     spawn_payload =
       %{
         "version" => "0",
         "agent_id" => agent_id,
         "persona" => persona,
+        "display_name" => display_name,
         "cwd" => cwd,
         "token" => Auth.mint_wrapper_token(agent_id)
       }
@@ -1543,13 +1701,27 @@ defmodule KaoiroServerWeb.AgentsChannel do
     if live_agent?(agent_id), do: {:error, :not_disconnected}, else: :ok
   end
 
-  # The agent's persona (incl. any custom name) from the restart-surviving
-  # identity ledger (ADR-0030 D3); restore re-spawns with it so the revived
-  # agent keeps its identity even after a server restart cleared AgentStates.
+  # The agent's canonical persona + display_name from the restart-
+  # surviving identity ledger (ADR-0030 D3, revised issue #219 D19/D21);
+  # restore re-spawns with both so the revived agent keeps its identity
+  # even after a server restart cleared AgentStates. The canonical
+  # persona is freshly joined against `PersonaAssets` here — NOT trusted
+  # from a stored snapshot (`AgentDirectory` only ever persists
+  # `persona_id`) — and restore fail-closes (`{:error, :unknown_persona}`)
+  # when it no longer resolves: a pack that has since been removed from
+  # the ingest dir is not spawnable (ADR-0029 F3), and issue #219 D21
+  # explicitly rejects guessing a canonical from the ledger's old
+  # evidence to route around that.
   defp agent_persona(agent_id) do
     case AgentDirectory.get(agent_id) do
-      %{persona: persona} when is_map(persona) -> {:ok, persona}
-      _ -> {:error, :unknown_agent}
+      %{persona_id: persona_id, display_name: display_name} ->
+        case PersonaAssets.get_persona(persona_id) do
+          nil -> {:error, :unknown_persona}
+          persona -> {:ok, persona, display_name}
+        end
+
+      nil ->
+        {:error, :unknown_agent}
     end
   end
 
@@ -1599,7 +1771,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # sanitizer in SessionPointers only guards commits made through
   # record_snapshot/2, not whatever a pre-#88 legacy DETS row already holds,
   # so this read-time join re-validates rather than trusting stored content.
-  defp launch_default_candidate(%{persona: %{"id" => persona_id}}, pointer)
+  defp launch_default_candidate(%{persona_id: persona_id}, pointer)
        when is_binary(persona_id) do
     effort = pointer && get_in(pointer, [:snapshot, "effort"])
 
@@ -1695,13 +1867,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp invalidate_projection_for_resume(_agent_id, _session_id), do: :ok
 
   defp resume_disconnected(agent_id, session_id, socket) do
-    with {:ok, persona} <- agent_persona(agent_id),
+    with {:ok, persona, display_name} <- agent_persona(agent_id),
          {:ok, _sid, cwd, engine} <- session_pointer(agent_id),
          {:ok, host} <- fetch_host(host_id_of(agent_id)),
          {:ok, engine} <- fetch_allowed_engine(host, %{"engine" => engine}),
          request_id <- generate_transition_id(),
          {:ok, spawn_payload} <-
-           build_restore_payload(agent_id, persona, cwd, session_id, engine, request_id),
+           build_restore_payload(
+             agent_id,
+             persona,
+             display_name,
+             cwd,
+             session_id,
+             engine,
+             request_id
+           ),
          :ok <-
            AgentActivity.begin_transition(
              agent_id,
@@ -1764,12 +1944,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # takes the fresh-spawn + snapshot re-apply branch. resume_snapshot itself
   # rides through the shared maybe_put_resume_snapshot pipe (nil-snapshot
   # pointer degrades safely to engine defaults, fail-soft).
-  defp build_restore_payload(agent_id, persona, cwd, session_id, engine, request_id) do
+  defp build_restore_payload(agent_id, persona, display_name, cwd, session_id, engine, request_id) do
     spawn_payload =
       %{
         "version" => "0",
         "agent_id" => agent_id,
         "persona" => persona,
+        "display_name" => display_name,
         "cwd" => cwd,
         "token" => Auth.mint_wrapper_token(agent_id)
       }

@@ -19,7 +19,7 @@ import {
   isIngressStamp,
   makeLog,
   makeStateChange,
-  mergePendingPersonaSync,
+  mergePendingDisplayNameSync,
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
@@ -53,17 +53,20 @@ const COLOR: Record<KaoiroState, string> = {
  *  join (ADR-0029 F3, fail-closed). Matches the Claude CLI. */
 const PERSONA_PROMPT_TIMEOUT_MS = 10_000;
 
+// issue #219 D25: human-facing log lines show `display_name` (the
+// mutable, operator-chosen label), never the pack's canonical
+// `persona.name` — see claude-code cli.ts's identical rationale.
 function printState(envelope: Envelope): void {
   const color = COLOR[envelope.state];
   const time = envelope.ts.slice(11, 19);
   process.stdout.write(
-    `\x1b[${color}m[${time}] ${envelope.persona.name}: ${envelope.state}\x1b[0m\n`,
+    `\x1b[${color}m[${time}] ${envelope.display_name}: ${envelope.state}\x1b[0m\n`,
   );
 }
 
 function printLog(envelope: Envelope): void {
   const time = envelope.ts.slice(11, 19);
-  const name = envelope.persona.name;
+  const name = envelope.display_name;
   const payload = envelope.payload;
   if (envelope.type === "result") {
     const text = typeof payload.text === "string" ? payload.text : "(no text)";
@@ -172,13 +175,14 @@ async function main(): Promise<void> {
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
   let instructionChain: Promise<void> = Promise.resolve();
-  // The after_join `persona_sync` push (WrapperChannel.after_join_handshake,
-  // issue #197 段階3) can arrive before `host` is constructed below —
+  // The after_join display_name sync push
+  // (WrapperChannel.after_join_handshake, issue #197 段階3, renamed
+  // issue #219 D19/D23) can arrive before `host` is constructed below —
   // `personaPromptPromise` is awaited first (same ordering claude-code's
   // cli.ts documents for its own pendingPermissionMode buffer). Buffer it
   // and apply once `host` exists, rather than risk touching an
   // undefined `host` from the handler.
-  let pendingPersonaSync: { name: string; revision: number } | undefined;
+  let pendingDisplayNameSync: { displayName: string; revision: number } | undefined;
 
   const onState = (envelope: Envelope): void => {
     printState(envelope);
@@ -317,26 +321,28 @@ async function main(): Promise<void> {
         `  set_permission_mode: ignored (codex is launch-fixed): ${mode}\n`,
       );
     },
-    onRenamePersona: (name, revision) => {
-      // protocol.md (issue #197 段階3): authoritative name from the
-      // server — fresh-join / reconnect sync OR a live `rename_agent`
-      // relay. Structural validation already happened in transport.ts;
-      // the revision-freshness check happens inside host.renamePersona
-      // itself (D15). Buffer if `host` is not yet constructed (see
-      // pendingPersonaSync comment above).
-      process.stdout.write(`  persona_sync: ${name} (revision=${revision})\n`);
+    onRenameDisplayName: (displayName, revision) => {
+      // protocol.md (issue #197 段階3, renamed issue #219 D19/D23):
+      // authoritative display_name from the server — fresh-join /
+      // reconnect sync OR a live `rename_agent` relay, delivered via
+      // EITHER `persona_sync` (legacy) or `display_name_sync` (new,
+      // D22 dual-emit). Structural validation already happened in
+      // transport.ts; the revision-freshness check happens inside
+      // host.renameDisplayName itself (D15). Buffer if `host` is not
+      // yet constructed (see pendingDisplayNameSync comment above).
+      process.stdout.write(`  display_name_sync: ${displayName} (revision=${revision})\n`);
       if (host === undefined) {
         // D15 review follow-up: a plain overwrite here would let a
         // lower-revision push win the pre-host race against a
-        // higher-revision one (see mergePendingPersonaSync's doc).
-        pendingPersonaSync = mergePendingPersonaSync(
-          pendingPersonaSync,
-          name,
+        // higher-revision one (see mergePendingDisplayNameSync's doc).
+        pendingDisplayNameSync = mergePendingDisplayNameSync(
+          pendingDisplayNameSync,
+          displayName,
           revision,
         );
         return;
       }
-      host.renamePersona(name, revision);
+      host.renameDisplayName(displayName, revision);
     },
     onAttachOpen: (msg) => {
       host.attachOpen(msg);
@@ -473,11 +479,14 @@ async function main(): Promise<void> {
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   });
 
-  // Apply the after_join persona_sync that arrived before host was
-  // constructed (issue #197 段階3), same reasoning as pendingPersonaSync
-  // above.
-  if (pendingPersonaSync !== undefined) {
-    host.renamePersona(pendingPersonaSync.name, pendingPersonaSync.revision);
+  // Apply the after_join display_name sync that arrived before host was
+  // constructed (issue #197 段階3, renamed issue #219 D19/D23), same
+  // reasoning as pendingDisplayNameSync above.
+  if (pendingDisplayNameSync !== undefined) {
+    host.renameDisplayName(
+      pendingDisplayNameSync.displayName,
+      pendingDisplayNameSync.revision,
+    );
   }
 
   process.on("SIGINT", () => {

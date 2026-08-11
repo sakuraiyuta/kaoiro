@@ -37,13 +37,13 @@ export interface NotificationContent {
   body: string;
 }
 
-/** Notification copy for a wait-state envelope: persona name (or agent id)
+/** Notification copy for a wait-state envelope: display_name (or agent id)
  *  as the title, the state's human label as the body. */
 export function waitNotificationContent(
   envelope: Envelope,
 ): NotificationContent {
   return {
-    title: envelope.persona?.name ?? envelope.agent_id,
+    title: envelope.display_name ?? envelope.agent_id,
     body: expressionFor(envelope.state).label,
   };
 }

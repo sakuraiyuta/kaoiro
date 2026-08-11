@@ -774,7 +774,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "operator は disconnected agent を削除し durable IA を含む全 store を purge する" do
       agent_id = "test.del-1"
       put_disconnected(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       SessionPointers.record(agent_id, "sess-del-1", "/home/user/proj")
       KaoiroServer.PermissionModes.record(agent_id, "plan")
 
@@ -823,7 +823,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # server 再起動起因のケース: 台帳と pointer だけ残っており live entry は無い。
       # 「復元できない agent」を operator が明示削除する経路。
       agent_id = "test.del-directory-only"
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       SessionPointers.record(agent_id, "sess-del-do", "/home/user/proj")
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
@@ -904,7 +904,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "delete_agent は revoke → broadcast → purge の順で走る (M3 順序 pin)" do
       agent_id = "test.del-order-1"
       put_disconnected(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       on_exit(fn -> TokenDenylist.restore(agent_id) end)
 
       # wrapper:<id> topic を subscribe して broadcast を捕捉。
@@ -938,7 +938,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # rejoin 試行は Auth.authorize_wrapper の denylist gate で unauthorized。
       agent_id = "test.del-order-2"
       put_disconnected(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       on_exit(fn -> TokenDenylist.restore(agent_id) end)
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
@@ -984,7 +984,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "disconnected agent の revoke も通る (再接続を封じる恒久対策)" do
       agent_id = "test.revoke-dc"
       put_disconnected(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       _ = AgentDirectory.get(agent_id)
       on_exit(fn -> TokenDenylist.restore(agent_id) end)
 
@@ -1026,7 +1026,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "live agent を rename でき、AgentDirectory が更新され wrapper へ persona_sync が relay される" do
       agent_id = "test.rename-1"
       put_agent(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
 
       @endpoint.subscribe("wrapper:" <> agent_id)
       socket = join_as(:operator)
@@ -1034,60 +1034,74 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "あお(改名)"})
 
-      assert_reply ref, :ok, %{"persona" => persona, "revision" => 1}
-      assert persona["name"] == "あお(改名)"
-      # id / sprite_set は不変 (ADR-0030 D2 改訂: 可変なのは name のみ)
-      assert persona["id"] == "ao"
-      assert persona["sprite_set"] == "ao"
+      # issue #219 D23: reply vocabulary is display_name, no persona key.
+      # revision 2 (not 1): AgentDirectory.record/4's baseline is
+      # @initial_revision = 1 (issue #219 MF-2), so the first rename bumps
+      # a freshly-recorded entry from 1 to 2.
+      assert_reply ref, :ok, %{"display_name" => "あお(改名)", "revision" => 2}
 
-      # version (ADR-0015, issue #197 段階3 ふじ MF-1 レビュー指摘): live
-      # relay の persona_sync にも version stamp が乗る。
-      assert_broadcast "persona_sync", %{"version" => "0", "name" => "あお(改名)", "revision" => 1}
+      # issue #219 D22: DUAL-emit at the same revision — legacy
+      # `persona_sync` (old wrapper builds) and new `display_name_sync`
+      # (new wrapper builds), both version-stamped (ADR-0015, issue #197
+      # 段階3 ふじ MF-1 レビュー指摘).
+      assert_broadcast "persona_sync", %{"version" => "0", "name" => "あお(改名)", "revision" => 2}
 
-      assert %{persona: %{"name" => "あお(改名)"}, revision: 1} = AgentDirectory.get(agent_id)
+      assert_broadcast "display_name_sync", %{
+        "version" => "0",
+        "display_name" => "あお(改名)",
+        "revision" => 2
+      }
+
+      assert %{display_name: "あお(改名)", revision: 2, persona_id: "ao"} =
+               AgentDirectory.get(agent_id)
     end
 
     test "disconnected agent も rename できる (wrapper 不在でも relay broadcast 自体は行う)" do
       agent_id = "test.rename-dc"
       put_disconnected(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
 
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
       ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "オフライン改名"})
 
-      assert_reply ref, :ok, %{"revision" => 1}
-      assert %{persona: %{"name" => "オフライン改名"}} = AgentDirectory.get(agent_id)
+      # revision 2: baseline is @initial_revision = 1 (issue #219 MF-2).
+      assert_reply ref, :ok, %{"revision" => 2}
+      assert %{display_name: "オフライン改名"} = AgentDirectory.get(agent_id)
     end
 
     test "2 回 rename すると revision が単調に進み、最新の name だけが残る" do
       agent_id = "test.rename-twice"
       put_agent(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
+      # baseline @initial_revision = 1 (issue #219 MF-2), so 2 renames land
+      # at 2 then 3, not 1 then 2.
       ref1 = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "一回目"})
-      assert_reply ref1, :ok, %{"revision" => 1}
+      assert_reply ref1, :ok, %{"revision" => 2}
 
       ref2 = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "二回目"})
-      assert_reply ref2, :ok, %{"revision" => 2}
+      assert_reply ref2, :ok, %{"revision" => 3}
 
-      assert %{persona: %{"name" => "二回目"}, revision: 2} = AgentDirectory.get(agent_id)
+      assert %{display_name: "二回目", revision: 3} = AgentDirectory.get(agent_id)
     end
 
     test "viewer の rename は forbidden、AgentDirectory は無変化" do
       agent_id = "test.rename-viewer"
       put_agent(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:viewer)
       assert_push "snapshot", %{"agents" => _}
 
       ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "乗っ取り"})
 
       assert_reply ref, :error, %{reason: "forbidden"}
-      assert %{persona: %{"name" => "あお"}, revision: 0} = AgentDirectory.get(agent_id)
+      # revision 1: fresh-record baseline @initial_revision (issue #219
+      # MF-2), unchanged since the rejected rename never mutates it.
+      assert %{display_name: "あお", revision: 1} = AgentDirectory.get(agent_id)
     end
 
     test "未知 agent は unknown_agent" do
@@ -1106,7 +1120,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "version 不一致は警告してから処理を継続する (ADR-0015)" do
       agent_id = "test.rename-version-mismatch"
       put_agent(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -1119,7 +1133,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "99"
             })
 
-          assert_reply ref, :ok, %{"revision" => 1}
+          # revision 2: baseline is @initial_revision = 1 (issue #219 MF-2).
+          assert_reply ref, :ok, %{"revision" => 2}
         end)
 
       assert log =~ "client declared protocol version"
@@ -1129,14 +1144,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "version 省略も警告した上で処理を継続する" do
       agent_id = "test.rename-version-absent"
       put_agent(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
       log =
         capture_log(fn ->
           ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "改名済み"})
-          assert_reply ref, :ok, %{"revision" => 1}
+          # revision 2: baseline is @initial_revision = 1 (issue #219 MF-2).
+          assert_reply ref, :ok, %{"revision" => 2}
         end)
 
       assert log =~ "client declared protocol version (absent)"
@@ -1145,7 +1161,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "version が \"0\" なら警告しない" do
       agent_id = "test.rename-version-match"
       put_agent(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -1158,7 +1174,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "0"
             })
 
-          assert_reply ref, :ok, %{"revision" => 1}
+          # revision 2: baseline is @initial_revision = 1 (issue #219 MF-2).
+          assert_reply ref, :ok, %{"revision" => 2}
         end)
 
       refute log =~ "client declared protocol version"
@@ -1167,7 +1184,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "空白 / 64 grapheme 超 / 制御文字混入の name は invalid_name として拒否され AgentDirectory は無変化" do
       agent_id = "test.rename-invalid"
       put_agent(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -1176,7 +1193,45 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         assert_reply ref, :error, %{reason: "invalid_name"}
       end
 
-      assert %{persona: %{"name" => "あお"}, revision: 0} = AgentDirectory.get(agent_id)
+      # revision 1: fresh-record baseline @initial_revision (issue #219
+      # MF-2), unchanged since every rename in the loop was rejected.
+      assert %{display_name: "あお", revision: 1} = AgentDirectory.get(agent_id)
+    end
+
+    # issue #219 MF-3 (クロエ実測検証, rename 経路): 単独 null / null +
+    # valid sibling の両方が invalid_name として拒否され、AgentDirectory
+    # が無変化のままであることを spawn 経路と対で pin する (spawn 側の
+    # 同種テストは spawn describe ブロックにある)。
+    test "display_name が単独で null なら invalid_name、AgentDirectory は無変化 (MF-3)" do
+      agent_id = "test.rename-null-alone"
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "display_name" => nil})
+      assert_reply ref, :error, %{reason: "invalid_name"}
+
+      assert %{display_name: "あお", revision: 1} = AgentDirectory.get(agent_id)
+    end
+
+    test "display_name が null で name が有効値でも invalid_name (legacy name を受理しない、MF-3)" do
+      agent_id = "test.rename-null-with-legacy"
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref =
+        push(socket, "rename_agent", %{
+          "agent_id" => agent_id,
+          "display_name" => nil,
+          "name" => "改名済み"
+        })
+
+      assert_reply ref, :error, %{reason: "invalid_name"}
+
+      assert %{display_name: "あお", revision: 1} = AgentDirectory.get(agent_id)
     end
 
     # D16: 既に join 済みの operator の directory copy が rename 後に live で
@@ -1184,7 +1239,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "rename は既 join operator の directory を live 更新し、viewer には届かない" do
       agent_id = "test.rename-directory"
       put_agent(agent_id)
-      AgentDirectory.record(agent_id, @ao)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
 
       operator_socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
@@ -1197,7 +1252,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :ok, %{}
 
       assert_push "directory", %{"entries" => entries}
-      assert %{persona: %{"name" => "改名済み"}} = entries[agent_id]
+      assert %{"display_name" => "改名済み"} = entries[agent_id]
 
       # viewer 側の socket には "directory" が一切来ない (join 時も rename 後も)。
       refute_push "directory", %{}
@@ -3029,6 +3084,43 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute Map.has_key?(payload, "server_url")
     end
 
+    # issue #219 D22: `AgentDirectory.record/4` は spawn broadcast より前に
+    # 同期的に完了する(record/4 自体が GenServer.call へ改訂された) —
+    # これにより、runner が spawn broadcast を受けて実際に wrapper process
+    # を起動し join してくる頃には、AgentDirectory に必ず entry が
+    # committed 済みであることを保証する。以前 (record が cast だった頃)
+    # は spawn broadcast が先に飛び、wrapper が極端に速く join した場合
+    # after_join の persona_sync/display_name_sync push が
+    # `AgentDirectory.get/1` を nil で引いて sync をスキップし得た
+    # (silently、リトライもされない)。この test は broadcast が届いた
+    # 時点で AgentDirectory の書き込みが既に観測できることを直接 pin する
+    # — broadcast 後に spawn を担当した caller プロセス自身が読んでも
+    # 見える、という形で「commit → broadcast」の順序を検証する。
+    test "operator の spawn: spawn broadcast が届く時点で AgentDirectory への record は既に commit 済み (issue #219 D22 race 対策)" do
+      host_id = "lab-pc-1-race"
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "name" => "早すぎる join"
+        })
+
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+
+      # broadcast が届いた時点で読む — record がまだ mailbox に cast の
+      # まま滞留していれば、ここで entry が見えない (旧実装の race を
+      # 再現し得るタイミング)。
+      assert_broadcast "spawn", _payload
+
+      assert %{persona_id: "ao", display_name: "早すぎる join"} =
+               AgentDirectory.get(agent_id)
+    end
+
     test "operator の spawn: cwd を SessionPointers に seed する(復帰用、#22)" do
       host_id = "lab-pc-1s"
       register_host(host_id, cwd_allowlist: ["/home/user/seed"])
@@ -3178,7 +3270,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_broadcast "spawn", %{"initial_prompt" => "最初の指示"}
     end
 
-    test "operator の spawn: 任意 name が persona.name を上書きする (#22)" do
+    test "operator の spawn: 任意 name は display_name のみに反映され persona は不変 (#22, revised issue #219 D19)" do
       host_id = "lab-pc-1c"
       register_host(host_id)
       @endpoint.subscribe("runner:" <> host_id)
@@ -3193,9 +3285,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
 
       assert_reply ref, :ok
-      # name は trim され persona.name のみ上書き; id/sprite_set は不変。
-      assert_broadcast "spawn", %{"persona" => persona}
-      assert persona == %{"id" => "ao", "name" => "レビュー担当", "sprite_set" => "ao"}
+      # name は trim され display_name (新規 top-level field) のみに反映
+      # される; persona (canonical) は issue #219 D19 のとおり不変。
+      assert_broadcast "spawn", %{"persona" => persona, "display_name" => "レビュー担当"}
+      assert persona == %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"}
     end
 
     test "operator の spawn: name 未指定/空白は persona 既定名のまま" do
@@ -3215,6 +3308,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :ok
       assert_broadcast "spawn", payload
       assert payload["persona"] == @ao
+      # 未指定/空白は persona 自身の canonical name が display_name の
+      # 既定値になる (issue #219 D20 — created-time persistence)。
+      assert payload["display_name"] == @ao["name"]
     end
 
     test "operator の spawn: 長すぎ/制御文字の name は invalid_name" do
@@ -3235,6 +3331,51 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         assert_reply ref, :error, %{reason: "invalid_name"}
       end
 
+      refute_broadcast "spawn", %{}
+    end
+
+    # issue #219 MF-3 (クロエ実測検証): a JSON `null` for `display_name`
+    # is a PRESENT key, not an absent one — `Map.get/2` alone cannot tell
+    # the two apart (both read as `nil`), which previously let a lone
+    # `{"display_name" => null}` fall through to the canonical-fallback
+    # branch as if the key were never sent, and
+    # `{"display_name" => null, "name" => "X"}` fall through to silently
+    # accepting the legacy `"X"`. Both contradicted `extract_name_field/1`'s
+    # own documented "present non-binary key -> invalid_name" contract.
+    test "operator の spawn: display_name が単独で null なら invalid_name (persona 既定名へフォールバックしない)" do
+      host_id = "lab-pc-1f"
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "display_name" => nil
+        })
+
+      assert_reply ref, :error, %{reason: "invalid_name"}
+      refute_broadcast "spawn", %{}
+    end
+
+    test "operator の spawn: display_name が null で name が有効値でも invalid_name (legacy name を受理しない)" do
+      host_id = "lab-pc-1g"
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "display_name" => nil,
+          "name" => "レビュー担当"
+        })
+
+      assert_reply ref, :error, %{reason: "invalid_name"}
       refute_broadcast "spawn", %{}
     end
 
@@ -3439,7 +3580,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # In real production the spawn path always records the identity
       # (ADR-0030 D2). Mirror that here so restore's agent_persona/1 can
       # find the persona via AgentDirectory even when AgentStates would.
-      :ok = AgentDirectory.record(agent_id, @ao)
+      :ok = AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       # Flush the async cast before the handler reads the ledger.
       _ = AgentDirectory.get(agent_id)
     end
@@ -3514,6 +3655,38 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
       assert_reply ref, :error, %{reason: "not_disconnected"}
+      refute_broadcast "spawn", %{}
+    end
+
+    # issue #219 D21 acceptance pin: restore は既存どおり unknown persona
+    # で fail-closed。persona_id が pack で解決できない agent の restore
+    # を「推測で埋めて通す」ことはしない — 消えた pack の agent_id での
+    # spawn は不可 (ADR-0029 F3) という既存規範を issue #219 後も保つ。
+    test "persona_id が pack で解決できない agent の restore は unknown_persona で拒否される" do
+      host_id = "lab-pc-pack-gone"
+      agent_id = host_id <> ".rev"
+      register_host(host_id)
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "persona" => %{"id" => "nonexistent-pack-xyz", "name" => "旧表示", "sprite_set" => "x"},
+          "ts" => "2026-06-11T00:00:00Z",
+          "type" => "state_change",
+          "state" => "disconnected",
+          "session_id" => "sess-pack-gone"
+        })
+
+      :ok = AgentDirectory.record(agent_id, "nonexistent-pack-xyz", "消えたパックの通称")
+      :ok = SessionPointers.record(agent_id, "sess-pack-gone", "/home/user/proj")
+      SessionPointers.get(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "restore", %{"agent_id" => agent_id})
+
+      assert_reply ref, :error, %{reason: "unknown_persona"}
       refute_broadcast "spawn", %{}
     end
 
@@ -3618,7 +3791,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "state" => "disconnected"
         })
 
-      :ok = AgentDirectory.record(agent_id, @ao)
+      :ok = AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       _ = AgentDirectory.get(agent_id)
       # session_id は nil、cwd/engine のみ持つ pointer。
       :ok = SessionPointers.record(agent_id, nil, "/home/user/proj", "claude-code")
@@ -3647,7 +3820,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "lab-pc-1.after-restart"
       register_host(host_id)
 
-      :ok = AgentDirectory.record(agent_id, @ao)
+      :ok = AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       # Flush the async cast so the fetch guard reads the recorded entry.
       _ = AgentDirectory.get(agent_id)
       :ok = SessionPointers.record(agent_id, "sess-after-restart", "/home/user/proj")
@@ -3736,7 +3909,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       :ok = SessionPointers.record(agent_id, "old-sess", "/home/user/proj")
       SessionPointers.get(agent_id)
-      :ok = AgentDirectory.record(agent_id, @ao)
+      :ok = AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       _ = AgentDirectory.get(agent_id)
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
@@ -3775,7 +3948,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       :ok = SessionPointers.record(agent_id, "old-sess", "/home/user/proj", "codex")
       _ = SessionPointers.get(agent_id)
-      :ok = AgentDirectory.record(agent_id, @ao)
+      :ok = AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       _ = AgentDirectory.get(agent_id)
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
@@ -3804,7 +3977,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
 
       # In real flow, spawn also seeds AgentDirectory (ADR-0030 D2).
-      :ok = AgentDirectory.record(agent_id, @ao)
+      :ok = AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       _ = AgentDirectory.get(agent_id)
 
       socket = join_as(:operator)
@@ -3979,13 +4152,43 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "join 時 operator は directory push を受ける (ADR-0030 D4)" do
       agent_id = "lab-pc-1.dir-push"
-      :ok = AgentDirectory.record(agent_id, @ao)
+      :ok = AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       _ = AgentDirectory.get(agent_id)
 
       _operator = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
       assert_push "directory", %{"entries" => entries}
-      assert %{persona: @ao} = entries[agent_id]
+      # issue #219 D19/spec-gate: wire shape is the JOINED entry —
+      # canonical `persona` (fresh-joined against PersonaAssets, not a
+      # stored snapshot) plus `display_name`, both string-keyed (the
+      # join-time push and the live `handle_out("directory", ...)`
+      # intercept produce the IDENTICAL shape).
+      assert entries[agent_id] == %{
+               "persona" => @ao,
+               "display_name" => @ao["name"],
+               "last_seen" => nil
+             }
+    end
+
+    # issue #219 D21/D27 acceptance pin: pack が消えた (persona_id が
+    # PersonaAssets で解決不能な) entry は canonical を非開示 ("typed
+    # unresolved" — `persona` は `{"id" => ...}` のみ、`name`/`sprite_set`
+    # を OMIT、sentinel 文字列は使わない) にしつつ、`display_name` は
+    # そのまま維持して開示する。canonical と display_name が食い違う
+    # (というより canonical 側が丸ごと欠ける) 状態を直接 pin する。
+    test "join 時 operator の directory push: persona_id が pack で解決できない entry は canonical を省略し display_name のみ開示する (issue #219 D21 typed unresolved)" do
+      agent_id = "lab-pc-1.dir-pack-gone"
+      :ok = AgentDirectory.record(agent_id, "nonexistent-pack-xyz", "消えたパックの通称")
+
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "directory", %{"entries" => entries}
+
+      assert entries[agent_id] == %{
+               "persona" => %{"id" => "nonexistent-pack-xyz"},
+               "display_name" => "消えたパックの通称",
+               "last_seen" => nil
+             }
     end
 
     test "viewer は join 時に directory push を受けない (operator 限定、ADR-0030 D10)" do
@@ -4797,8 +5000,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   describe "compute_launch_defaults/2 選択規則 (issue #88)" do
     test "revision が最大の候補を採用する (a)" do
       directory = %{
-        "a1" => %{persona: %{"id" => "p1"}},
-        "a2" => %{persona: %{"id" => "p1"}}
+        "a1" => %{persona_id: "p1"},
+        "a2" => %{persona_id: "p1"}
       }
 
       pointers = %{
@@ -4810,7 +5013,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
 
     test "revision なし・単独 candidate はそのまま採用する (b)" do
-      directory = %{"a1" => %{persona: %{"id" => "p2"}}}
+      directory = %{"a1" => %{persona_id: "p2"}}
       pointers = %{"a1" => %{snapshot: %{"effort" => "mid"}, effort_revision: nil}}
 
       assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{"p2" => "mid"}
@@ -4818,8 +5021,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "revision なし・複数 candidate が同値なら採用する (b)" do
       directory = %{
-        "a1" => %{persona: %{"id" => "p3"}},
-        "a2" => %{persona: %{"id" => "p3"}}
+        "a1" => %{persona_id: "p3"},
+        "a2" => %{persona_id: "p3"}
       }
 
       pointers = %{
@@ -4832,8 +5035,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "revision なし・複数 candidate が不一致なら no preference で persona 自体を除外する (b)" do
       directory = %{
-        "a1" => %{persona: %{"id" => "p4"}},
-        "a2" => %{persona: %{"id" => "p4"}}
+        "a1" => %{persona_id: "p4"},
+        "a2" => %{persona_id: "p4"}
       }
 
       pointers = %{
@@ -4846,8 +5049,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "revision ありと revision なしが混在しても revision ありが勝つ" do
       directory = %{
-        "a1" => %{persona: %{"id" => "p5"}},
-        "a2" => %{persona: %{"id" => "p5"}}
+        "a1" => %{persona_id: "p5"},
+        "a2" => %{persona_id: "p5"}
       }
 
       pointers = %{
@@ -4859,14 +5062,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
 
     test "空文字 effort は malformed として defensive に skip される" do
-      directory = %{"a1" => %{persona: %{"id" => "p6"}}}
+      directory = %{"a1" => %{persona_id: "p6"}}
       pointers = %{"a1" => %{snapshot: %{"effort" => ""}, effort_revision: nil}}
 
       assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{}
     end
 
     test "effort フィールド自体が無い snapshot は skip される (haiku 等 effort 非対応モデル)" do
-      directory = %{"a1" => %{persona: %{"id" => "p7"}}}
+      directory = %{"a1" => %{persona_id: "p7"}}
       pointers = %{"a1" => %{snapshot: %{"model" => "haiku"}, effort_revision: nil}}
 
       assert AgentsChannel.compute_launch_defaults(directory, pointers) == %{}
@@ -4874,8 +5077,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "persona に id が無い agent は skip され、他 persona には影響しない" do
       directory = %{
-        "a1" => %{persona: %{"name" => "no-id"}},
-        "a2" => %{persona: %{"id" => "p8"}}
+        "a1" => %{display_name: "no-id"},
+        "a2" => %{persona_id: "p8"}
       }
 
       pointers = %{
@@ -4887,7 +5090,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
 
     test "pointer が存在しない agent (SessionPointers 未記録) は skip される" do
-      directory = %{"a1" => %{persona: %{"id" => "p9"}}}
+      directory = %{"a1" => %{persona_id: "p9"}}
 
       assert AgentsChannel.compute_launch_defaults(directory, %{}) == %{}
     end
@@ -4919,8 +5122,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_1 = "gp.ld-rev-1"
       agent_2 = "gp.ld-rev-2"
 
-      :ok = AgentDirectory.record(agent_1, persona)
-      :ok = AgentDirectory.record(agent_2, persona)
+      :ok = AgentDirectory.record(agent_1, persona["id"], persona["name"])
+      :ok = AgentDirectory.record(agent_2, persona["id"], persona["name"])
       :ok = SessionPointers.record(agent_1, "s1", "/home/user/proj")
       :ok = SessionPointers.record(agent_2, "s2", "/home/user/proj")
 
@@ -4997,11 +5200,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = GenServer.stop(name)
       {:ok, _pid} = SessionPointers.start_link(name: name, path: path)
 
-      persona = %{"id" => "gp.ld-legacy-persona", "name" => "Legacy", "sprite_set" => "ao"}
+      persona_id = "gp.ld-legacy-persona"
 
       directory = %{
-        agent_1 => %{persona: persona, last_seen: nil},
-        agent_2 => %{persona: persona, last_seen: nil}
+        agent_1 => %{persona_id: persona_id, last_seen: nil},
+        agent_2 => %{persona_id: persona_id, last_seen: nil}
       }
 
       pointers = SessionPointers.all(name)

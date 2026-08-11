@@ -5,6 +5,7 @@ import { ConfigError, parseConfig } from "../src/persona.js";
 const valid = {
   agent_id: "lab-pc-1.claude-a",
   persona: { id: "mio", name: "澪", sprite_set: "mio" },
+  display_name: "澪",
   server_url: "ws://localhost:4000/wrapper",
 };
 

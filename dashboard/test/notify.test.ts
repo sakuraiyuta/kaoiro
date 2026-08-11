@@ -39,11 +39,12 @@ describe("isWaitTransition", () => {
 });
 
 describe("waitNotificationContent", () => {
-  it("ペルソナ名と状態ラベルを使う", () => {
+  it("display_name と状態ラベルを使う", () => {
     const content = waitNotificationContent(
       envelope({
         state: "waiting_permission",
         persona: { id: "ao", name: "蒼", sprite_set: "ao" },
+        display_name: "蒼",
       }),
     );
     expect(content.title).toBe("蒼");

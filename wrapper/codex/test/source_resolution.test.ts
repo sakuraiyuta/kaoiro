@@ -10,6 +10,7 @@ import {
 const baseConfig: WrapperConfig = {
   agent_id: "test.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
+  display_name: "P",
   server_url: "ws://localhost:4000/wrapper",
 };
 
@@ -98,28 +99,28 @@ describe("applyEnvDefaultModel (issue #197 段階3, ふじ MF-1 レビュー指�
   // makeLog 側は clone 前の元 config を使っていたため rename が
   // 一切見えなかった (env-default が効いた場合に限り分裂する、という
   // ふじ指摘のシナリオそのもの)。
-  it("rename 後、CodexHost と別の producer (makeLog) が同じ新しい persona.name を見る (MF-1 再発防止)", () => {
+  it("rename 後、CodexHost と別の producer (makeLog) が同じ新しい display_name を見る (MF-1 再発防止、issue #219 D19 で display_name へ改訂)", () => {
     const config: WrapperConfig = { ...baseConfig };
     applyEnvDefaultModel(config, "gpt-5.4-mini");
     expect(config.model).toBe("gpt-5.4-mini");
 
-    const envs: Array<{ persona: { name: string } }> = [];
+    const envs: Array<{ display_name: string }> = [];
     const host = new CodexHost(config, {
       onState: (e) => envs.push(e),
       appendSystemPrompt: "p",
       now: () => "T",
     });
 
-    host.renamePersona("P(改名)", 1);
+    host.renameDisplayName("P(改名)", 1);
 
     // producer 1: CodexHost 自身が発行した state_change。
-    expect(envs.at(-1)?.persona.name).toBe("P(改名)");
+    expect(envs.at(-1)?.display_name).toBe("P(改名)");
     // producer 2: cli.ts の onInstruction 相当、CodexHost とは独立に
     // config を直接読んで envelope を組み立てる呼び出し。
     const logEnvelope = makeLog(config, "waiting_input", "T", {
       kind: "user",
       text: "hi",
     });
-    expect(logEnvelope.persona.name).toBe("P(改名)");
+    expect(logEnvelope.display_name).toBe("P(改名)");
   });
 });

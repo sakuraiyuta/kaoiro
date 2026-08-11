@@ -44,8 +44,13 @@ zip の `personality.md`)。wrapper は WS ハンドシェイクで server か�
 ### データモデル
 
 wrapper 側の設定に人格関連フィールドは持たない。`persona.id` /
-`persona.name` / `persona.sprite_set` のみが wrapper 起動時 config に
-残る([setup-wizards](setup-wizards.md))。
+`persona.name` / `persona.sprite_set`(pack 由来の canonical、session 中
+不変)のみが wrapper 起動時 config に残る([setup-wizards](setup-wizards.md))。
+これとは別に、**稼働中に変わり得る表示名**を独立 top-level `display_name`
+field が担う(issue #219 D19/D20 — `Principal.display_name`,
+[ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D1)。
+spawn 時は operator 指定の custom name か、無指定なら `persona.name` の
+コピーを初期値として server が積む。
 
 人格プロンプト本文は server 側 persona pack の `personality.md`
 ([persona-pack-schema](persona-pack-schema.md))に置く。作成者は
@@ -144,7 +149,10 @@ pack が無い予約 persona `default` でも、以下の footer 合成結果が
 - server 側 / dashboard から人格記述を上書き / 拡張する経路は用意しない
   ([threat-model](threat-model.md) の allowed_tools と同じ扱い)。
 - Envelope (state_change / log / result) に人格文字列は載せない。
-  dashboard に流れるのは従来通り `persona.id` / `persona.name` のみ。
+  dashboard に流れるのは従来通り `persona.id` / `persona.name` のみ
+  (canonical、session 中不変)。表示名は別の top-level `display_name`
+  field(issue #219 D19)— rename は `persona.name` ではなくこちらを
+  書き換える。
 
 ## Constraints
 

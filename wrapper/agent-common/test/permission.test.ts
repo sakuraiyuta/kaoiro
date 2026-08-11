@@ -9,6 +9,7 @@ import type {
 const config: WrapperConfig = {
   agent_id: "test.perm",
   persona: { id: "ao", name: "あお", sprite_set: "ao" },
+  display_name: "あお",
   server_url: "ws://localhost:4000/wrapper",
 };
 

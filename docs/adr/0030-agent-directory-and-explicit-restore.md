@@ -46,26 +46,30 @@ goal: **server と runner が同時ダウン・再起動した後、client 側�
   `agent_id → %{persona, last_seen}` を保持する。`SessionPointers`(resume
   ポインタ、ADR-0014 F1)は据置。identity 台帳と resume ポインタは概念が別
   なので独立させる。
-- **D2(書き込みタイミング)**:
-  - **spawn 時**(`agents_channel.ex build_spawn_payload/4`)に persona を
-    fire-and-forget で `AgentDirectory.record/2` する。`SessionPointers` /
-    `PermissionModes` と同型パターン。
+- **D2(書き込みタイミング、issue #219 D19 で改訂 — canonical persona は
+  そもそも本 store に保存しない)**:
+  - **spawn 時**(`agents_channel.ex handle_in("spawn", ...)`)に `persona_id`
+    (pack への stable reference)と `display_name`(spawn custom name、
+    未指定なら record 時点の canonical name のコピー — 作成時
+    永続化)を `AgentDirectory.record/4` する。**同期呼び出し
+    (`GenServer.call`、issue #219 D22 corollary — 以前は fire-and-forget
+    な `GenServer.cast` だった)であり、runner への spawn broadcast より
+    前に完了させる。** spawn 直後に join した wrapper が
+    `wrapper_channel.ex` の after-join `push_persona_sync/2` で未コミット
+    の entry を `nil` として読み、初回 sync を静かに取りこぼす race を
+    構造的に閉じるための順序保証(`SessionPointers` / `PermissionModes`
+    の fire-and-forget パターンとは異なる)。
   - **envelope 到着時**(AgentStates.put)に `last_seen` を更新する。
-    persona の識別子(`id`)・見た目(`sprite_set`)・注入済み personality
-    prompt はセッション中不変(ADR-0029 F9)のため上書きしない。
-    **`persona.name` のみ、稼働中の明示 rename(issue #197 段階3、
-    `AgentDirectory.rename/2`)により上書きされ得る** — これは envelope
-    到着に伴う暗黙の同期ではなく operator 操作による明示的な mutation で
-    あり、ADR-0029 F9 が固定する対象(zip 更新由来の personality
-    prompt)を変更するものではない。
-
-    **この `name` の carve-out は暫定である**
-    ([issue #219](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/219))。
-    `persona.name` が「pack に記載された人格の固有名」と「インスタンスの
-    通称」を同一フィールドで担っているために必要になっているものであり、
-    両者が `persona.name` / `display_name` に分離された時点で本
-    carve-out は撤回され、本節は元の趣旨(persona は session 中不変)で
-    成立する。
+    `persona_id` は session 中不変。canonical persona(pack 由来の
+    `name` / `sprite_set`、注入済み personality prompt)はそもそも
+    本 store に保存しない — 都度 `persona_id` を現在の `PersonaAssets`
+    manifest へ join して解決する(restore / directory projection /
+    wrapper 起動 payload、いずれも共通)。**`display_name` のみ、稼働中
+    の明示 rename(issue #197 段階3、`AgentDirectory.rename/2`)により
+    上書きされ得る** — これは envelope 到着に伴う暗黙の同期ではなく
+    operator 操作による明示的な mutation であり、ADR-0029 F9 が固定
+    する対象(zip 更新由来の personality prompt)を変更するものでは
+    ない。
 - **D3(読み替え)**: `agent_persona/1` を `AgentDirectory.get(agent_id)` の
   persona 参照に切替。AgentStates 依存を除去して再起動耐性を得る。既存
   restore / resume_disconnected の wire は変更しない。
