@@ -51,7 +51,21 @@ goal: **server と runner が同時ダウン・再起動した後、client 側�
     fire-and-forget で `AgentDirectory.record/2` する。`SessionPointers` /
     `PermissionModes` と同型パターン。
   - **envelope 到着時**(AgentStates.put)に `last_seen` を更新する。
-    persona は session 中に変わらない(ADR-0029 F9)ため上書きしない。
+    persona の識別子(`id`)・見た目(`sprite_set`)・注入済み personality
+    prompt はセッション中不変(ADR-0029 F9)のため上書きしない。
+    **`persona.name` のみ、稼働中の明示 rename(issue #197 段階3、
+    `AgentDirectory.rename/2`)により上書きされ得る** — これは envelope
+    到着に伴う暗黙の同期ではなく operator 操作による明示的な mutation で
+    あり、ADR-0029 F9 が固定する対象(zip 更新由来の personality
+    prompt)を変更するものではない。
+
+    **この `name` の carve-out は暫定である**
+    ([issue #219](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/219))。
+    `persona.name` が「pack に記載された人格の固有名」と「インスタンスの
+    通称」を同一フィールドで担っているために必要になっているものであり、
+    両者が `persona.name` / `display_name` に分離された時点で本
+    carve-out は撤回され、本節は元の趣旨(persona は session 中不変)で
+    成立する。
 - **D3(読み替え)**: `agent_persona/1` を `AgentDirectory.get(agent_id)` の
   persona 参照に切替。AgentStates 依存を除去して再起動耐性を得る。既存
   restore / resume_disconnected の wire は変更しない。

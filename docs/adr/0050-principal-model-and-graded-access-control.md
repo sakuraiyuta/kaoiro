@@ -1,7 +1,7 @@
 ---
 title: principal モデル — user/agent の型分離・3 role 階層・per-pair 権限の加算モデル
-status: proposed
-date: 2026-08-05
+status: accepted
+date: 2026-08-11
 opened: 2026-08-05
 supersedes: []
 superseded_by: null
@@ -13,9 +13,11 @@ related_adrs: [7, 13, 21, 24, 28, 30, 33, 42]
 
 ## Status
 
-Proposed (2026-08-05、マスターとの `/my-idea-brief` 相談で決定)。
+Accepted (2026-08-11、マスター決裁により `proposed` から昇格。Phase A
+(identity 化)が [issue #197](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/197)
+で実装完了したことによる)。
 実装 issue は [#197](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/197)
-(identity 化) /
+(identity 化、実装完了) /
 [#198](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/198)
 (admin role) /
 [#199](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/199)
@@ -25,12 +27,11 @@ Proposed (2026-08-05、マスターとの `/my-idea-brief` 相談で決定)。
 [#201](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/201)
 (グラフ編集ツール)。
 
-`proposed` 止まりとする理由: 方針は固まっているが、実装着手前に決めるべき
-点が各 issue に残っている —— ADR-0021 を改訂するか supersede するか
-(#198)、agent→agent edge の既定 (#199、加算モデルを素朴に適用すると
-inter-agent messaging が全面停止する)、ストアを DETS で足すか SQLite を
-導入するか (#200)。これらが決着し Phase A の着手判断が済んだ時点で
-`accepted` へ昇格させる。
+Phase B 以降(#198-#201)の着手前に決めるべき論点 —— ADR-0021 を改訂
+するか supersede するか(#198)、agent→agent edge の既定(#199、加算
+モデルを素朴に適用すると inter-agent messaging が全面停止する)、スト
+アを DETS で足すか SQLite を導入するか(#200)—— は各 issue の着手時に
+個別に決着させる。
 
 ## Context
 
