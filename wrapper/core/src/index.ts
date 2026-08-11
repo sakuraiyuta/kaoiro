@@ -14,10 +14,12 @@ export type {
   AttachOpenMessage,
   DirectoryContext,
   DirectoryEntry,
+  DirectoryResult,
   HydrationVerdictMessage,
   InterAgentAcceptance,
   PermissionDecisionMessage,
   QuestionResponseMessage,
   ReplayIaItem,
   ServerLinkOptions,
+  UserDirectoryEntry,
 } from "./transport.js";

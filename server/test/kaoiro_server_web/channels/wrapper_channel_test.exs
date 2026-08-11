@@ -1,6 +1,8 @@
 defmodule KaoiroServerWeb.WrapperChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
+  import KaoiroServer.OAuthAllowlistFixture
+
   alias KaoiroServer.AgentStates
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.ConversationStates
@@ -2390,6 +2392,277 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
       assert entry["conversation"] == %{"active" => true, "peers" => [self_id]}
       refute Map.has_key?(entry["conversation"], "conversation_id")
+    end
+  end
+
+  describe "directory_request の users projection (issue #197 段階2, ADR-0021 F6-8)" do
+    setup do
+      on_exit(fn ->
+        Application.delete_env(:kaoiro_server, :expose_users_to_agents)
+        Application.delete_env(:kaoiro_server, :client_tokens)
+      end)
+
+      :ok
+    end
+
+    defp request_directory(self_id) do
+      socket = join_wrapper(self_id)
+      ref = push(socket, "envelope", envelope(self_id, "idle"))
+      assert_reply ref, :ok
+
+      ref = push(socket, "directory_request", %{})
+      assert_reply ref, :ok, reply
+      reply
+    end
+
+    test "config 明示 true なら role 解決できる user を含む" do
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
+      put_allowlist("github:dir-users-ao:operator\n")
+
+      user =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-ao"}, "user", "Ao")
+
+      %{"users" => users} = request_directory("test.dir-users-config-true")
+
+      assert Enum.any?(users, fn u ->
+               u == %{
+                 "id" => user.id,
+                 "kind" => "user",
+                 "display_name" => "Ao",
+                 "role" => "operator"
+               }
+             end)
+    end
+
+    test "display_name が 64 文字超・制御文字混入の user は entry ごと省略される (issue #197 段階2 ふじ M5 レビュー指摘)" do
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
+
+      put_allowlist(
+        "github:dir-users-overlong:operator\n" <>
+          "github:dir-users-ctrl:operator\n" <>
+          "github:dir-users-ok:operator\n"
+      )
+
+      overlong = String.duplicate("a", 65)
+      ctrl_name = "bad" <> <<0x01>> <> "name"
+
+      overlong_user =
+        KaoiroServer.Users.get_or_create(
+          {:oauth, "github", "dir-users-overlong"},
+          "user",
+          overlong
+        )
+
+      ctrl_user =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-ctrl"}, "user", ctrl_name)
+
+      ok_user =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-ok"}, "user", "Ok")
+
+      %{"users" => users} = request_directory("test.dir-users-display-name-bound")
+
+      refute Enum.any?(users, &(&1["id"] == overlong_user.id))
+      refute Enum.any?(users, &(&1["id"] == ctrl_user.id))
+      assert Enum.any?(users, &(&1["id"] == ok_user.id))
+
+      raw = Jason.encode!(users)
+      refute raw =~ overlong
+    end
+
+    test "同じ wrapper socket で OAuth role 変更後、次の request が新 role を返す" do
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
+      put_allowlist("github:dir-users-live-join:operator\n")
+
+      user =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-live-join"}, "user", "L")
+
+      self_id = "test.dir-users-live-join-self"
+      socket = join_wrapper(self_id)
+      ref = push(socket, "envelope", envelope(self_id, "idle"))
+      assert_reply ref, :ok
+
+      ref = push(socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"users" => first_users}
+      assert Enum.any?(first_users, &(&1["id"] == user.id and &1["role"] == "operator"))
+
+      put_allowlist("github:dir-users-live-join:viewer\n")
+
+      ref = push(socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"users" => second_users}
+      assert Enum.any?(second_users, &(&1["id"] == user.id and &1["role"] == "viewer"))
+    end
+
+    test "同じ wrapper socket で token role 変更後、次の request が新 role を返す" do
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
+      Application.put_env(:kaoiro_server, :client_tokens, "dir-users-live-tok:operator")
+      hash = KaoiroServer.Auth.client_token_hash("dir-users-live-tok")
+
+      user = KaoiroServer.Users.get_or_create({:token, hash}, "user", "LT")
+
+      self_id = "test.dir-users-live-tok-self"
+      socket = join_wrapper(self_id)
+      ref = push(socket, "envelope", envelope(self_id, "idle"))
+      assert_reply ref, :ok
+
+      ref = push(socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"users" => first_users}
+      assert Enum.any?(first_users, &(&1["id"] == user.id and &1["role"] == "operator"))
+
+      Application.put_env(:kaoiro_server, :client_tokens, "dir-users-live-tok:viewer")
+
+      ref = push(socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"users" => second_users}
+      assert Enum.any?(second_users, &(&1["id"] == user.id and &1["role"] == "viewer"))
+    end
+
+    test "Application config そのものが欠落 (config/runtime.exs 未実行相当) では users は空 (WrapperChannel 側 fallback)" do
+      # 通常運用ではここに来ない: config/runtime.exs は env 未設定でも
+      # 必ず true/false のどちらかを config に設定する
+      # (KaoiroServer.Users.expose_to_agents_default/1、ふじ M1 レビュー
+      # 指摘)。この Application.delete_env はその config 層が全く走って
+      # いない異常系 (例えばテストや読み込み順序の事故) をシミュレート
+      # し、WrapperChannel 側の読み取りサイト fallback (`false`) が最後の
+      # 砦として効くことを確認するテスト。
+      Application.delete_env(:kaoiro_server, :expose_users_to_agents)
+      put_allowlist("github:dir-users-unset:operator\n")
+      KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-unset"}, "user", "U")
+
+      %{"users" => users} = request_directory("test.dir-users-config-unset")
+
+      assert users == []
+    end
+
+    test "config 明示 false では users は空" do
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, false)
+      put_allowlist("github:dir-users-false:operator\n")
+      KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-false"}, "user", "U")
+
+      %{"users" => users} = request_directory("test.dir-users-config-false")
+
+      assert users == []
+    end
+
+    test "config 不正値 (真偽値ではない値) では users は空 (fail-closed)" do
+      # release override の typo 等を想定 — 文字列 "true" は boolean true では
+      # ない。plain truthy `if` だと Elixir では false/nil 以外すべて真になり
+      # 開いてしまうため、`== true` の厳密比較で閉じることを固定する。
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, "true")
+      put_allowlist("github:dir-users-bad:operator\n")
+      KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-bad"}, "user", "U")
+
+      %{"users" => users} = request_directory("test.dir-users-config-bad")
+
+      assert users == []
+    end
+
+    test "token source の user も role 込みで解決される" do
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
+      Application.put_env(:kaoiro_server, :client_tokens, "dir-users-tok:viewer")
+      hash = KaoiroServer.Auth.client_token_hash("dir-users-tok")
+
+      user = KaoiroServer.Users.get_or_create({:token, hash}, "user", "Token User")
+
+      %{"users" => users} = request_directory("test.dir-users-config-token")
+
+      assert Enum.any?(users, fn u ->
+               u == %{
+                 "id" => user.id,
+                 "kind" => "user",
+                 "display_name" => "Token User",
+                 "role" => "viewer"
+               }
+             end)
+    end
+
+    test "allow-list から外れた (revoke 済み) user は entry ごと省略される" do
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
+      put_allowlist("github:dir-users-revoked:operator\n")
+
+      user =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-revoked"}, "user", "R")
+
+      # 一旦は role 解決できることを確認してから revoke する。
+      %{"users" => before_revoke} = request_directory("test.dir-users-config-before-revoke")
+      assert Enum.any?(before_revoke, &(&1["id"] == user.id))
+
+      put_allowlist("")
+
+      %{"users" => after_revoke} = request_directory("test.dir-users-config-after-revoke")
+      refute Enum.any?(after_revoke, &(&1["id"] == user.id))
+    end
+
+    test "同一 wrapper socket のまま allow-list が unreadable/欠落 → user 省略 → 復旧後に再出現する (issue #197 段階2, ふじ 追加必須テスト)" do
+      # 既存テストは (a) 同一 socket での role 変更、(b) 別 request での
+      # revoke、(c) Users 単体の復旧を別々に確認していたが、file-read
+      # fail-closed + pull recovery を「同一 socket のまま」で一本に
+      # つなぐ E2E pin が無かった (ふじ レビュー指摘)。
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
+      entry = "github:dir-users-e2e-recovery:operator\n"
+      path = put_allowlist(entry)
+
+      user =
+        KaoiroServer.Users.get_or_create(
+          {:oauth, "github", "dir-users-e2e-recovery"},
+          "user",
+          "E2E"
+        )
+
+      self_id = "test.dir-users-e2e-recovery-self"
+      socket = join_wrapper(self_id)
+      ref = push(socket, "envelope", envelope(self_id, "idle"))
+      assert_reply ref, :ok
+
+      # 1. 通常時: role 解決できる。
+      ref = push(socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"users" => users_before}
+      assert Enum.any?(users_before, &(&1["id"] == user.id))
+
+      # 2. allow-list ファイルを削除 (File.read エラー = unreadable と
+      #    同じ経路、OAuthAllowlist.read/2 が fail-closed で %{} を返す)。
+      File.rm!(path)
+
+      ref = push(socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"users" => users_unreadable}
+      refute Enum.any?(users_unreadable, &(&1["id"] == user.id))
+
+      # 3. 復旧: 同じ内容で書き戻す (put_allowlist は on_exit の二重
+      #    削除を許容するので明示 File.write! でよい)。
+      File.write!(path, entry)
+
+      ref = push(socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"users" => users_recovered}
+      assert Enum.any?(users_recovered, &(&1["id"] == user.id))
+    end
+
+    test "auth binding (provider/uid/token fingerprint) が wire に出ない" do
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
+      Application.put_env(:kaoiro_server, :client_tokens, "dir-users-secret-token:operator")
+      put_allowlist("github:dir-users-bind-check:operator\n")
+
+      KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-bind-check"}, "user", "B")
+
+      KaoiroServer.Users.get_or_create(
+        {:token, KaoiroServer.Auth.client_token_hash("dir-users-secret-token")},
+        "user",
+        "T"
+      )
+
+      %{"users" => users} = request_directory("test.dir-users-config-bind-check")
+
+      # 2 user (oauth 由来 "B" / token 由来 "T") がどちらも role 解決できて
+      # いることをまず確認する — さもないと以下の refute 群が vacuous に
+      # 通ってしまう (issue #197 段階2 review 指摘、あお review turn-1)。
+      assert length(users) == 2
+
+      raw = Jason.encode!(users)
+      refute raw =~ "dir-users-bind-check"
+      refute raw =~ "dir-users-secret-token"
+      refute raw =~ "github"
+      refute raw =~ "source"
+
+      for u <- users do
+        assert Map.keys(u) |> Enum.sort() == ["display_name", "id", "kind", "role"]
+      end
     end
   end
 

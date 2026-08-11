@@ -12,6 +12,7 @@ import {
 import type {
   DirectoryEntry,
   InterAgentAcceptance,
+  UserDirectoryEntry,
 } from "@kaoiro/wrapper-core";
 import type {
   Envelope,
@@ -1159,15 +1160,17 @@ describe("list_agents / whoami companion tools", () => {
       config: configFor("self.agent"),
       getState: () => "tool_running",
       send: () => {},
-      requestDirectory: async () => directory,
+      requestDirectory: async () => ({ agents: directory, users: [] }),
     });
 
     const result = await tool.listAgents();
     expect(result.isError).toBeFalsy();
     const parsed = JSON.parse(result.content[0]!.text) as {
       agents: DirectoryEntry[];
+      users: unknown[];
     };
     expect(parsed.agents).toEqual(directory);
+    expect(parsed.users).toEqual([]);
   });
 
   it("list_agents は状況判断メタデータを欠落なく model へ渡す (#160)", async () => {
@@ -1199,7 +1202,7 @@ describe("list_agents / whoami companion tools", () => {
       config: configFor("self.agent"),
       getState: () => "tool_running",
       send: () => {},
-      requestDirectory: async () => directory,
+      requestDirectory: async () => ({ agents: directory, users: [] }),
     });
 
     const result = await tool.listAgents();
@@ -1250,6 +1253,51 @@ describe("list_agents / whoami companion tools", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain("list_agents failed");
     expect(result.content[0]!.text).toContain("boom");
+  });
+
+  it("list_agents は users を agents と別 key で返す (issue #197 段階2)", async () => {
+    const directory: DirectoryEntry[] = [
+      {
+        agent_id: "lab.peer-1",
+        persona: { id: "ao", name: "あお", sprite_set: "ao" },
+        state: "idle",
+      },
+    ];
+    // director D7: 同じ id / 表示名を agent 側と共有していても、user は
+    // agents 配列へ混入してはいけない — この構造そのものが保証。
+    const users: UserDirectoryEntry[] = [
+      { id: "lab.peer-1", kind: "user", display_name: "あお", role: "operator" },
+    ];
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {},
+      requestDirectory: async () => ({ agents: directory, users }),
+    });
+
+    const result = await tool.listAgents();
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      agents: DirectoryEntry[];
+      users: unknown[];
+    };
+    expect(parsed.agents).toEqual(directory);
+    expect(parsed.users).toEqual(users);
+    // agents 配列自体には user shape (kind/display_name/role) の entry が
+    // 紛れ込んでいない。
+    expect(parsed.agents.every((a) => !("kind" in a))).toBe(true);
+  });
+
+  it("list_agents の description は users が送信対象ではないことを明示する (issue #197 段階2)", () => {
+    const listAgents = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "idle",
+      send: () => {},
+    })
+      .descriptors()
+      .find((descriptor) => descriptor.name === "list_agents");
+
+    expect(listAgents?.description).toContain("NOT valid");
+    expect(listAgents?.description).toContain("send_to_agent");
   });
 
   it("whoami は getWhoami の snapshot を JSON として返す", () => {

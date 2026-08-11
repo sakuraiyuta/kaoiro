@@ -203,6 +203,39 @@ defmodule KaoiroServer.Auth do
     Base.url_encode64(:crypto.hash(:sha256, token), padding: false)
   end
 
+  @doc """
+  `token_hash => role` for every configured client token (issue #197
+  段階2, director D2/D10 判定). Built fresh from config on every call —
+  never cached in socket/process state — so a caller building a single
+  response (`KaoiroServer.Users.all_with_role/1`) can snapshot it ONCE
+  and resolve every user's role against the same map, avoiding a
+  split-brain read if config changes mid-response.
+
+  Keyed by `client_token_hash/1` specifically (NOT `socket_id/1`'s
+  `"client_socket:"`-prefixed digest, despite `client_role_by_fingerprint/1`
+  using that one) — this is the same digest `KaoiroServer.Users`
+  already stores as a `{:token, hash}` source, so a stored source joins
+  directly with no second hash algorithm to keep in sync.
+  `client_token_hash/1` and `socket_id/1` are independent APIs with no
+  conversion between them; their digests are never compared or derived
+  from one another anywhere in this codebase, and that must stay true —
+  do not add a check or a test asserting a relationship between the two
+  (director D10 改訂, issue #197 段階2: an earlier draft of this doc
+  argued digest-space separation itself as a defense, which director
+  review later withdrew as unfounded — reusing `socket_id/1` here would
+  not actually "reopen" any correlation path, since the two functions'
+  outputs are not made comparable by using one or the other). **The
+  actual defense is `KaoiroServer.Users` keeping `source` internal-only
+  (see its own moduledoc) — never returning it to a caller, a log line,
+  or a wire payload — not any property of which hash function is used
+  to build this map.**
+  """
+  def client_token_hash_role_map do
+    Application.get_env(:kaoiro_server, :client_tokens)
+    |> parse_client_pairs()
+    |> Map.new(fn {token, %{role: role}} -> {client_token_hash(token), parse_role(role)} end)
+  end
+
   defp role_for(tokens, token) when is_binary(token) do
     # Constant-time scan: compare against every entry so lookup timing
     # does not reveal whether a token exists.

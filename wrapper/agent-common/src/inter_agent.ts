@@ -23,6 +23,7 @@ import { z } from "zod";
 import type {
   DirectoryContext,
   DirectoryEntry,
+  DirectoryResult,
   InterAgentAcceptance,
 } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
@@ -313,7 +314,7 @@ const TOOL_DESCRIPTION =
   `Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass \`conversation_id\` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. Set wait_for_response=true only when the current turn needs the peer's next reply: its full envelope is returned by this same tool call; timeout returns a non-destructive reply_pending acknowledgement. If the peer became unresponsive instead of replying (rate limit, context overflow, API error, timeout, interrupt, or disconnect), the result carries \`peer_error: {code, message, from}\` instead of \`reply\` — recommended action by code: ${ERROR_CODE_GUIDANCE_SUMMARY}. The same \`peer_error\` can also arrive asynchronously as an inbound inform message when you were not waiting. The \`to\` field MUST be an exact agent_id — if you only know a peer by their display name, call \`list_agents\` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.`;
 
 const LIST_AGENTS_DESCRIPTION =
-  "List other kaoiro agents currently known to the server. Returns each peer's agent_id, persona (id/name/sprite_set), current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected), and engine/model/effort when reported. Use this to resolve a peer's display name and execution traits before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address. A proper-name collaboration request refers to an existing kaoiro peer — resolve it here first: 1 match → send_to_agent, several → ask the operator, 0 matches → report the persona is absent and never spawn a same-named internal sub-agent as a substitute.\n\nEach peer may also carry status fields for deciding WHO to delegate to: `context` ({used_tokens, max_tokens, used_percentage}) — avoid handing heavy work to a peer whose context is nearly full; `rate_limits` ({<window>: {status?, utilization?, resets_at?}}, windows `five_hour` / `seven_day`) — a peer near its limit will fail or stall, so prefer another or wait; `conversation` ({active, peers}) — a peer already in an active conversation is mid-collaboration, so avoid interrupting unless your message belongs to that work; `session_started_at` / `turns` / `last_activity_at` — a long-idle `last_activity_at` suggests the peer is stalled or done, worth reporting rather than delegating to.\n\nTwo rules when reading these: (1) `rate_limits` is a snapshot from the peer's LAST turn and is NOT refreshed while it idles — compare `resets_at` (Unix seconds) against the current time yourself, and once it has passed, treat that window as reset and stop trusting its `utilization` / `status`; use `last_activity_at` to judge how stale the snapshot is. (2) A field that is ABSENT means unknown, never zero and never fine — an omitted `turns` does not mean no turns, an omitted `context` does not mean plenty of room, and an omitted `rate_limits` does not mean unlimited. Ask the operator instead of assuming when an absent field would change your decision.";
+  "List other kaoiro agents currently known to the server. Returns each peer's agent_id, persona (id/name/sprite_set), current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected), and engine/model/effort when reported. Use this to resolve a peer's display name and execution traits before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address. A proper-name collaboration request refers to an existing kaoiro peer — resolve it here first: 1 match → send_to_agent, several → ask the operator, 0 matches → report the persona is absent and never spawn a same-named internal sub-agent as a substitute.\n\nEach peer may also carry status fields for deciding WHO to delegate to: `context` ({used_tokens, max_tokens, used_percentage}) — avoid handing heavy work to a peer whose context is nearly full; `rate_limits` ({<window>: {status?, utilization?, resets_at?}}, windows `five_hour` / `seven_day`) — a peer near its limit will fail or stall, so prefer another or wait; `conversation` ({active, peers}) — a peer already in an active conversation is mid-collaboration, so avoid interrupting unless your message belongs to that work; `session_started_at` / `turns` / `last_activity_at` — a long-idle `last_activity_at` suggests the peer is stalled or done, worth reporting rather than delegating to.\n\nTwo rules when reading these: (1) `rate_limits` is a snapshot from the peer's LAST turn and is NOT refreshed while it idles — compare `resets_at` (Unix seconds) against the current time yourself, and once it has passed, treat that window as reset and stop trusting its `utilization` / `status`; use `last_activity_at` to judge how stale the snapshot is. (2) A field that is ABSENT means unknown, never zero and never fine — an omitted `turns` does not mean no turns, an omitted `context` does not mean plenty of room, and an omitted `rate_limits` does not mean unlimited. Ask the operator instead of assuming when an absent field would change your decision.\n\nThe reply also carries `users`: the kaoiro human users (operator/viewer) currently REGISTERED and authorized, each with id/kind/display_name/role — 'kind' is always the literal \"user\" here, distinguishing them from `agents`. `users` are NOT valid `send_to_agent` destinations — that tool only ever delivers to an agent_id from the `agents` list. This is a registry, not an online-presence list: it includes every currently-authorized user whether or not they are actively connected right now, and it does NOT currently identify who issued any particular instruction or inter-agent message — that attribution is not wired yet, so do not infer it from this list. Read it only to know which users exist and what role each holds; never pass a user's id as `send_to_agent`'s `to`. This array can be empty even when users exist — the operator can opt out of this disclosure server-side (default is disclosed).";
 
 const WHOAMI_DESCRIPTION =
   "Return this agent's identity from the kaoiro server's perspective: agent_id, persona (id/name/sprite_set), current state, engine, effective model/effort and their sources, engine-neutral permission (sandbox/approval), network_access, legacy permission_mode/fast_mode when applicable, session_id, working directory, and — on engines that report it — `context` ({used_tokens, max_tokens, used_percentage}), your own context-window usage in the same shape peers see via list_agents. Fields that the SDK has not yet reported are omitted. Use this to confirm what the operator sees you as, or to self-narrate (e.g., when telling a peer who you are). `context` is a cached last successful measurement; whoami itself does not refresh it, so it can lag the current turn. Read it only when a decision actually turns on it — sizing a delegation you are about to accept, or answering the operator's question about your own headroom. It is not a meter to watch: do not check it each turn and do not bring it up unprompted. An absent `context` means unknown, not empty.";
@@ -499,8 +500,10 @@ export interface InterAgentToolOptions {
   /** Peer directory provider, normally `ServerLink#requestDirectory` bound
    *  to the wrapper's channel. Omitting it (unit tests only — production
    *  always supplies it under ADR-0029 F10) makes `list_agents` return
-   *  an error result. */
-  requestDirectory?: () => Promise<DirectoryEntry[]>;
+   *  an error result. `agents` and `users` (issue #197 段階2) are
+   *  returned as separate arrays — see `DirectoryResult`'s own doc for
+   *  why they are never merged. */
+  requestDirectory?: () => Promise<DirectoryResult>;
   /** Self-identity provider, normally `AgentHost#statusSnapshot`. Omitting
    *  it (unit tests only) makes `whoami` fall back to the wrapper config
    *  (no live SDK fields). */
@@ -1039,7 +1042,11 @@ export class InterAgentTool {
   }
 
   /** Fetches the peer directory via the configured provider. Returns the
-   *  JSON list as a tool-shaped text result so the model can read it. */
+   *  JSON list as a tool-shaped text result so the model can read it.
+   *  `agents` and `users` (issue #197 段階2) are surfaced as separate
+   *  top-level keys, matching `DirectoryResult` — `users` are never
+   *  merged into `agents` since they are not valid `send_to_agent`
+   *  destinations (director D7, see `LIST_AGENTS_DESCRIPTION`). */
   async listAgents(): Promise<InterAgentToolResult> {
     const provider = this.#options.requestDirectory;
     if (!provider) {
@@ -1048,12 +1055,12 @@ export class InterAgentTool {
       );
     }
     try {
-      const agents = await provider();
+      const { agents, users } = await provider();
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ agents }, null, 2),
+            text: JSON.stringify({ agents, users }, null, 2),
           },
         ],
       };

@@ -266,6 +266,44 @@ defmodule KaoiroServer.AuthTest do
     end
   end
 
+  describe "client_token_hash_role_map/0 (issue #197 段階2, director D10 改訂)" do
+    test "map は client_token_hash/1 の値で引ける" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator,tok-view:viewer")
+
+      map = Auth.client_token_hash_role_map()
+
+      assert Map.fetch(map, Auth.client_token_hash("tok-op")) == {:ok, :operator}
+      assert Map.fetch(map, Auth.client_token_hash("tok-view")) == {:ok, :viewer}
+      assert map_size(map) == 2
+    end
+
+    test "raw token / socket_id(token) はどちらも key に現れない" do
+      Application.put_env(:kaoiro_server, :client_tokens, "super-secret-token:operator")
+
+      map = Auth.client_token_hash_role_map()
+
+      refute Map.has_key?(map, "super-secret-token")
+      refute Map.has_key?(map, Auth.socket_id("super-secret-token"))
+      refute inspect(map) =~ "super-secret-token"
+    end
+
+    test "設定変更は次の呼び出しに反映される (キャッシュしない)" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-a:viewer")
+      assert Auth.client_token_hash_role_map() == %{Auth.client_token_hash("tok-a") => :viewer}
+
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-a:operator")
+      assert Auth.client_token_hash_role_map() == %{Auth.client_token_hash("tok-a") => :operator}
+    end
+
+    test "未設定 / 空は空 map" do
+      Application.put_env(:kaoiro_server, :client_tokens, nil)
+      assert Auth.client_token_hash_role_map() == %{}
+
+      Application.put_env(:kaoiro_server, :client_tokens, "")
+      assert Auth.client_token_hash_role_map() == %{}
+    end
+  end
+
   describe "warn_token_config/0 (issue #28)" do
     import ExUnit.CaptureLog
 

@@ -558,12 +558,85 @@ server は spawn / restore / reset のたびに遷移の相関子を発行し、
 `model_source / effort_source`、`session_capabilities`、`cost` は引き続き
 directory から除外する。除外集合の正本は ADR-0021 F6-4。
 
+##### users 開示 field 一覧 (issue #197 段階2, ADR-0021 F6-8)
+
+`directory_request` の reply は `agents` と並列で **`users`** を必ず
+返す(空配列を含む)。中身は運用者設定 `KAOIRO_EXPOSE_USERS_TO_AGENTS`
+に従う — **config の既定は `true`**(未設定 = 開示。issue #197 制約節
+「原則見える」は config の既定値として実現する)、明示 `false` で
+opt-out。`config` key そのものが読めない異常系(config/runtime.exs が
+走っていない等)でのみ実装側 fallback が閉じる方向に倒れる。`agents`
+の allow-list (F6-2/F6-3) とは独立の allow 集合で、ADR-0021 F6-8 が
+正本。
+
+| field | 型 | 意味 | 省略される条件 |
+|---|---|---|---|
+| `id` | string | user_id。agent_id と同一 charset (`[A-Za-z0-9._-]`、issue #61) — ADR-0050 D1 が id 空間を単一と定めるため | MUST(常に存在) |
+| `kind` | string | 常に literal `"user"` | MUST |
+| `display_name` | string | 表示名 (下記 contract 参照) | MUST |
+| `role` | string | `"operator"` \| `"viewer"` | MUST |
+
+**role を解決できない (allow-list から revoke 済み、config 変更で未知に
+なった等) user は、field を省略するのではなく entry ごと省略する。**
+`role` は他 3 field と同じく wire 必須 field であり、per-field の
+「不明」を表現する余地が無いため — `agents` 側の「省略 = 不明」規約
+(このセクション冒頭) とは異なる扱いになる点に注意。
+
+**`display_name` の contract (issue #197 段階2、ふじ MF-1 レビュー
+指摘):** wire に乗る値は trim 後 non-empty、**grapheme cluster 単位で
+64 以下**、制御文字 (C0: `\x00`-`\x1f`、および DEL: `\x7f`) を
+含まないことを server (`WrapperChannel.valid_display_name/1`) が
+enforce する。「grapheme cluster 単位」は Elixir `String.length/1` が
+数える単位そのものを指す — UTF-16 code unit 数(JS の素の
+`.length`)や Unicode code point 数(`[...s].length`)は結合文字・ZWJ
+絵文字を過大カウントし、server が通した有効な値を誤って弾く(実測:
+`"👨‍👩‍👧‍👦é́"` は `String.length/1` = 2、`.length` = 13、
+`[...s].length` = 9 — grapheme cluster ベースの数え方だけが一致する)。
+wrapper 側の narrow (`userDirectoryEntryFrom`, `wrapper/core/src/
+transport.ts`) も同じ contract を検証し、違反する entry だけを drop
+する。二重 projection (D7) の双方が同じ境界を守ることで、rolling
+upgrade 中や不正 payload、将来の server 側 regression のいずれでも
+挙動が揃う。
+
+##### role のライブ join の意味
+
+`role` は user の source (`{:oauth, provider, uid}` または
+`{:token, token_hash}`、server 内部限定) を、応答のたびに認可 SoT
+(`OAuthAllowlist` の allow-list テキスト、または `client_tokens` 設定)
+へ都度問い合わせて解決する。
+
+「ライブ」が保証する範囲は **同一 wrapper socket のまま
+`directory_request` を再度呼んだとき、その時点の role が見えること**
+に限る。過去に返した応答を取り消す仕組みでも、role 変更を検知した
+push invalidate でもない — `directory_request` は pull API であり、
+server から wrapper へ変更を能動的に通知する経路は存在しない。次に
+呼ぶまで、古い role を見せ続けることも新しい entry の欠落も起こり得る。
+
+1 回の応答内では、認可 SoT の種別ごと(`OAuthAllowlist.snapshot/1` /
+`client_tokens` の token_hash→role map)に **1 回だけ読み**、同じ
+種別の user 間で新旧 role が混在することはない。ただし 2 つの SoT は
+逐次 read であり、**source 種別をまたいだ atomicity は保証しない**
+(ふじ M4 レビュー指摘)— OAuth 由来の user を解決した直後に
+`client_tokens` が書き換わり、token 由来の user だけ新しい値を
+拾う、というケースはあり得る。
+
+##### users の後方互換 (issue #197 段階2)
+
+`users` キーは **段階2以降の server なら常に返る**(opt-out 時は空
+配列 `[]`)。キーが reply に **無い** のは issue #197 段階2 より前の
+server だけ — `KAOIRO_EXPOSE_USERS_TO_AGENTS` を無効化した server でも
+キー自体は返り、中身が空になるだけ(ふじ M4 レビュー指摘: 「未設定
+server」と「opt-out server」を同一視していた誤りを訂正)。wrapper 側の
+narrow はどちらも区別せず `users: []` に正規化する — 消費側
+(`list_agents` ツール) の挙動はどちらのケースでも変わらないため、
+区別する実利が無い。
+
 | event (方向) | 形 | server の振る舞い |
 |---|---|---|
 | `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | 因果順を固定([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate** — participant / ハード制限、および conversation quota の検査。quota は `ConversationStates.record_message/5` が検査と turn/token/wallclock 更新を単一呼び出しで atomic に行うため、**counter 更新もこの段で走る**(分割すると検査と更新の間に TOCTOU が開く。実装時確定、2026-08-08)。**reject が確定し得る検査はすべてここまでで終える**、(2) **ingress stamp 採番**(ingress-order domain、globally unique。wire 形は整数 2 要素配列 `[us, seq]`)、(3) per-pane projection へ sender pane + receiver pane を同一 stamp で upsert(identity = `ingress_stamp\|pane_agent_id`)、(4) `payload.to` の `wrapper:<to>` channel に **stamp を載せた envelope** を push + `agents:lobby` broadcast(operator 限定)、(5) push の **acceptance ack reply として `{ingress_stamp}`** を送信元 wrapper に返す(送信側 sidecar 記録のトリガ)。upsert 後に行う routing は peer push のみで、reject 済み IA が pane に残らないこと |
 | `envelope` 合成 (S→W) | ハード制限超過時 | 両 wrapper の `wrapper:<id>` + `agents:lobby` へ push |
 | `envelope` 合成 (S→W) | wrapper 切断時 | 当該 wrapper が参加中の各 conversation の他参加者へ `kind=inform` + `error.code=disconnected` を push(「応答不能エラーの通知」節) |
-| `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...]}}` 返却で受け取る。entry の field と省略規則は上記「peer directory の情報境界」。list_agents 用 (後述) |
+| `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...], users: [...]}}` 返却で受け取る。`agents` の field と省略規則は上記「peer directory の情報境界」、`users` は「users 開示 field 一覧」(issue #197 段階2)。list_agents 用 (後述) |
 
 未知 `to` / 自己 routing / participants 不一致 / turn_number 不正 /
 stale turn / closed な conversation への送信時のエラー(`unknown_agent` /
@@ -1022,6 +1095,19 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   allow-list は nested 階層まで適用し、canonical key だけを写した新しい
   map を組み立てる([ADR-0021](../adr/0021-role-information-disclosure-policy.md)
   F6-2、上記「`ext` からの projection」)
+- MUST(issue #197 段階2): `users` も同じ allow-list 規律に従う
+  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6-8)。
+  server 側の組み立ては literal map + 値ごとの再検証とし、キーだけを
+  絞る `Map.take/2` 相当は使わない — 値の shape を検証しないまま wire
+  へ通す経路になるため。role を解決できない user は field 省略ではなく
+  **entry ごと省略**する(上記「users 開示 field 一覧」)
+- MUST(issue #197 段階2): `users` 開示は **config の既定値**として
+  open にする — `KAOIRO_EXPOSE_USERS_TO_AGENTS` 未設定は開示、明示
+  `false` で opt-out(issue #197 制約節「原則見える」は config の
+  デフォルト値として実現する、ADR-0021 F6-8)。実装側の read-site
+  fallback (closed) は config key そのものが欠落する異常系専用であり、
+  通常運用のデフォルトにしてはならない(ふじ M1 レビュー指摘: config
+  default と実装 fallback を混同すると、通常 boot で意図せず閉じる)
 - MUST: `context` は
   `ext.session_capabilities.supports_context_usage == true` のときだけ
   投影する。capability が absent / explicit false では field ごと省略し、
@@ -1074,11 +1160,14 @@ operator が `@あお` のような名前で指示しても、 model は send_to
 - ADRs: [0010 protocol-precisification](../adr/0010-protocol-precisification.md),
   [0015 protocol-version-stamping](../adr/0015-protocol-version-stamping.md),
   [0021 role-information-disclosure-policy](../adr/0021-role-information-disclosure-policy.md)
-  (F6 = agent 間開示の allow-list),
+  (F6 = agent 間開示の allow-list、F6-8 = users 開示の allow 集合),
   [0022 pending-permission-authoritative-source](../adr/0022-pending-permission-authoritative-source.md),
   [0040 context-usage-capability](../adr/0040-context-usage-capability.md)
-  (`context` の capability gate)
+  (`context` の capability gate),
+  [0050 principal-model-and-graded-access-control](../adr/0050-principal-model-and-graded-access-control.md)
+  (D5 = identity 原則開示の方針)
 - kaoiro issue #17(本実装の起点)、#18(メッセージフィルタ)、
   #87(調査の傘 issue)、#131(応答不能エラーの通知)、
   #160(peer directory の稼働状況)、#164(rate_limits 表示不具合)、
-  #177(conversation lifecycle・tombstone・stale turn 拒否)
+  #177(conversation lifecycle・tombstone・stale turn 拒否)、
+  #197(users 開示、段階2)

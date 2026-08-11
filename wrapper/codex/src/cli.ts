@@ -199,7 +199,8 @@ async function main(): Promise<void> {
     sendInterAgent: (envelope) =>
       link?.sendInterAgent(envelope) ??
       Promise.resolve({ kind: "unknown" as const, reason: "not_connected" }),
-    requestDirectory: () => link?.requestDirectory() ?? Promise.resolve([]),
+    requestDirectory: () =>
+      link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
     getWhoami: () => host.statusSnapshot(),
   });
   // ADR-0051 D3-2 / D3-5 — same contract as the Claude wrapper, with the

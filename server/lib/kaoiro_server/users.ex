@@ -9,7 +9,10 @@ defmodule KaoiroServer.Users do
   `:client_tokens` map / OAuth allow-list text, both re-resolved live
   per ADR-0042) so this store does not become a second authorization
   source of truth (ADR-0050 D8 Phase A: "認可SoTはテキストのまま").
-  Callers join role in at read time from those existing sources.
+  `all_with_role/1` joins role in at read time from those existing
+  sources, entirely inside this module — the join needs `source`, and
+  `source` never leaves this module (see below), so a caller cannot do
+  this join itself.
 
   `source` (`{:oauth, provider, uid}` or `{:token, token_hash}`) is an
   internal-only secondary index key that resolves a repeat login back to
@@ -61,6 +64,67 @@ defmodule KaoiroServer.Users do
   def all(server \\ __MODULE__) do
     GenServer.call(server, :all)
   end
+
+  @doc """
+  Every known user with role live-joined from the auth SoT (issue #197
+  段階2). The two auth snapshots (`OAuthAllowlist.snapshot/1`,
+  `Auth.client_token_hash_role_map/0`) are taken ONCE here, before the
+  GenServer call, and passed in — so every entry resolved against the
+  SAME source (all OAuth users against one `OAuthAllowlist.snapshot/1`
+  call, all token users against one `client_token_hash_role_map/0` call)
+  sees a consistent role within that source (director D2). The two
+  snapshots are still taken as two SEQUENTIAL reads, so there is NO
+  cross-source atomicity: a `client_tokens` rewrite landing between the
+  two calls can let token-sourced users see a newer config generation
+  than OAuth-sourced users in the same reply (ふじ M4 レビュー指摘 — the
+  prior wording claimed a same-reply guarantee this does not provide;
+  the actual contract lives in protocol-inter-agent.md's "role のライブ
+  join の意味" section). Passing the snapshots IN (rather than handing
+  `source` OUT to the caller) keeps `source` from ever leaving this
+  module (director D11) — the join happens inside `handle_call/3`, and
+  only the role-bearing public shape crosses back out.
+
+  `log?: false` on the OAuth snapshot: this is called from the
+  `directory_request` auto-allow path (potentially every peer poll), not
+  a human-triggered login/refresh, so the malformed-line warnings
+  `OAuthAllowlist` normally emits on every read would repeat on every
+  poll instead of once per actual misconfiguration.
+
+  A user whose source no longer resolves to a role (revoked from the
+  allow-list / token config) is OMITTED entirely from the result — `role`
+  is a wire-required field on the caller's projection, so there is no
+  per-entry "unknown" to fall back to.
+  """
+  def all_with_role(server \\ __MODULE__) do
+    oauth_roles = KaoiroServer.OAuthAllowlist.snapshot(log?: false)
+    token_roles = KaoiroServer.Auth.client_token_hash_role_map()
+    GenServer.call(server, {:all_with_role, oauth_roles, token_roles})
+  end
+
+  @doc """
+  Parses `KAOIRO_EXPOSE_USERS_TO_AGENTS`'s raw env value (as read by
+  `System.get_env/1`, so `nil` on unset) into the boolean
+  `config/runtime.exs` stores under `:expose_users_to_agents`.
+
+  Config DEFAULT is `true` — unset takes this branch — per issue #197's
+  constraint clause: "「原則見える」は実装のデフォルト挙動ではなく設定の
+  デフォルト値として実現する". This is the config LAYER's default; it is
+  separate from `WrapperChannel`'s own read-site fallback (`false`),
+  which exists only to keep that call fail-closed if config is somehow
+  absent entirely (e.g. a test that deletes the key) — not as the
+  everyday default (ふじ M1 レビュー指摘, issue #197 段階2: the two
+  fallbacks were conflated in the first pass, closing the feature by
+  default in ordinary boot instead of only on config absence).
+
+  Only the exact string `"false"` opts out. Any other malformed value
+  (typo, `"0"`, `"no"`) stays CLOSED rather than defaulting to open on
+  unrecognised input — fail-closed still governs anything that isn't a
+  clean, deliberate `"true"`/`"false"`/unset.
+  """
+  def expose_to_agents_default(nil), do: true
+  def expose_to_agents_default("true"), do: true
+  def expose_to_agents_default("false"), do: false
+  def expose_to_agents_default(_other), do: false
 
   @impl true
   def init({name, path}) do
@@ -173,15 +237,39 @@ defmodule KaoiroServer.Users do
     {:reply, reply, state}
   end
 
+  def handle_call({:all_with_role, oauth_roles, token_roles}, _from, state) do
+    reply =
+      state.entries
+      |> Enum.map(fn {user_id, entry} ->
+        {user_id, entry, resolve_role(entry.source, oauth_roles, token_roles)}
+      end)
+      |> Enum.filter(fn {_user_id, _entry, role} -> role != nil end)
+      |> Enum.map(fn {user_id, entry, role} -> public_entry_with_role(user_id, entry, role) end)
+
+    {:reply, reply, state}
+  end
+
   @impl true
   def terminate(_reason, state) do
     :dets.close(state.table)
   end
 
+  defp resolve_role({:oauth, provider, uid}, oauth_roles, _token_roles),
+    do: Map.get(oauth_roles, {provider, uid})
+
+  defp resolve_role({:token, hash}, _oauth_roles, token_roles), do: Map.get(token_roles, hash)
+  defp resolve_role(_source, _oauth_roles, _token_roles), do: nil
+
   # Never includes `source` — see moduledoc. This is the only shape
   # get_or_create/get/all ever hand back to a caller.
   defp public_entry(user_id, entry) do
     %{id: user_id, kind: entry.kind, display_name: entry.display_name}
+  end
+
+  # Role-bearing counterpart of public_entry/2 for all_with_role/1 (issue
+  # #197 段階2). Same rule: never includes `source`.
+  defp public_entry_with_role(user_id, entry, role) do
+    %{id: user_id, kind: entry.kind, display_name: entry.display_name, role: role}
   end
 
   defp default_path do

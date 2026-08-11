@@ -100,6 +100,7 @@ mix dashboard.build   # cd ../dashboard && pnpm build → server/priv/static へ
 | `KAOIRO_RUNNER_TOKENS` | `host_id:token,...` | `lab-pc-1:runner-tok` |
 | `KAOIRO_OAUTH_{GOOGLE,GITHUB,NEXTCLOUD}_CLIENT_{ID,SECRET}` | provider ごとの OAuth クレデンシャル(Nextcloud は `KAOIRO_OAUTH_NEXTCLOUD_BASE_URL` も) | — |
 | `KAOIRO_OAUTH_ALLOWLIST_PATH` | 許可リストのパス。1 行 `provider:identifier[:role]`(role 省略 = `viewer`)。**未設定/読めない場合は全 OAuth ログインを拒否**(fail-closed) | `/etc/kaoiro/oauth-allowlist.txt` |
+| `KAOIRO_EXPOSE_USERS_TO_AGENTS` | agent へ kaoiro user 一覧(id/kind/display_name/role)を開示するか。**config の既定は `true`**(未設定 = 開示)、明示 `false` で opt-out(issue #197 段階2、制約節「原則見える」は config の既定値として実現)。`config` key そのものが欠落する異常系(config/runtime.exs 未実行相当)でのみ実装側 fallback が `false` に倒れる。`directory_request`(`mcp__kaoiro__list_agents` companion)の `users` フィールドに現れる | `false`(既定は開示なので opt-out 時のみ設定) |
 
 **形式の注意**: `KAOIRO_CLIENT_TOKENS` は `<token>:<role>[:<name>]` の順。
 生成したシークレット(例 `openssl rand -hex 32`)は **`<token>` 側(コロンの

@@ -621,8 +621,8 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
       ],
     });
 
-    const directory = await pending;
-    expect(directory).toEqual([
+    const { agents, users } = await pending;
+    expect(agents).toEqual([
       {
         agent_id: "peer.1",
         persona: { id: "ao", name: "あお", sprite_set: "ao" },
@@ -637,6 +637,9 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
         state: "thinking",
       },
     ]);
+    // users キー無しの reply は旧 server 相当 — 空配列に narrow する
+    // (issue #197 段階2 D8 back-compat)。
+    expect(users).toEqual([]);
   });
 
   /** Drives one entry through the narrow and returns what survived. */
@@ -652,7 +655,9 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
         { agent_id: "peer.1", persona: {}, state: "idle", ...entry },
       ],
     });
-    const [narrowed] = await pending;
+    const {
+      agents: [narrowed],
+    } = await pending;
     return narrowed as unknown as Record<string, unknown>;
   }
 
@@ -895,11 +900,11 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     ]);
   });
 
-  it("agents が無い reply でも空配列で resolve する", async () => {
+  it("agents/users が無い reply でも空配列で resolve する (旧 server 後方互換)", async () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     const pending = link.requestDirectory();
     mock.lastPush!.receivers.get("ok")!({});
-    expect(await pending).toEqual([]);
+    expect(await pending).toEqual({ agents: [], users: [] });
   });
 
   it("error reply は reject する", async () => {
@@ -914,6 +919,150 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     const pending = link.requestDirectory();
     mock.lastPush!.receivers.get("timeout")!(undefined);
     await expect(pending).rejects.toThrow(/directory_request timeout/);
+  });
+});
+
+describe("ServerLink — requestDirectory の users projection (issue #197 段階2)", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.pushes = [];
+  });
+
+  it("users entry を narrow する", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("ok")!({
+      agents: [],
+      users: [
+        { id: "1", kind: "user", display_name: "Ao", role: "operator" },
+      ],
+    });
+
+    const { users } = await pending;
+    expect(users).toEqual([
+      { id: "1", kind: "user", display_name: "Ao", role: "operator" },
+    ]);
+  });
+
+  it("malformed な user entry を 1 件だけ落とし他の user / agent は保持する", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("ok")!({
+      agents: [{ agent_id: "peer.1", persona: {}, state: "idle" }],
+      users: [
+        { id: "1", kind: "user", display_name: "Ao", role: "operator" },
+        // id 欠落
+        { kind: "user", display_name: "Bad", role: "viewer" },
+        // display_name が空文字
+        { id: "2", kind: "user", display_name: "", role: "viewer" },
+        // role が数値 (型違反)
+        { id: "3", kind: "user", display_name: "Bad2", role: 1 },
+        // kind が未知の値 (issue #197 段階2 M2 レビュー指摘: 型は
+        // string で一致するが allow-list 外の値)
+        { id: "5", kind: "agent", display_name: "Bad3", role: "operator" },
+        // role が未知の値 (同上、将来の admin 等の passthrough は却下)
+        { id: "6", kind: "user", display_name: "Bad4", role: "admin" },
+        // id が charset (issue #61) 違反
+        { id: "has space", kind: "user", display_name: "Bad5", role: "viewer" },
+        { id: "4", kind: "user", display_name: "Viewer", role: "viewer" },
+      ],
+    });
+
+    const { agents, users } = await pending;
+    expect(agents).toEqual([
+      { agent_id: "peer.1", persona: {}, state: "idle" },
+    ]);
+    expect(users).toEqual([
+      { id: "1", kind: "user", display_name: "Ao", role: "operator" },
+      { id: "4", kind: "user", display_name: "Viewer", role: "viewer" },
+    ]);
+  });
+
+  it("users が非配列なら空配列に narrow する", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("ok")!({ agents: [], users: { not: "array" } });
+
+    const { users } = await pending;
+    expect(users).toEqual([]);
+  });
+
+  // issue #197 段階2 ふじ MF-1 レビュー指摘: 旧実装は display_name を
+  // non-empty string としてしか検証しておらず、server 側 M5
+  // (`valid_display_name/1`: trim 後 non-empty / 64 grapheme cluster
+  // 以下 / 制御文字禁止) がこの narrow に反映されていなかった。overlong
+  // / 制御文字混入の user が個別に drop され、正当な sibling は残る
+  // ことを固定する。
+  it("display_name が 64 grapheme 超・制御文字混入の user を個別に drop する", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const pending = link.requestDirectory();
+    const overlong = "a".repeat(65);
+    const withControlChar = `bad${String.fromCharCode(0x01)}name`;
+    mock.lastPush!.receivers.get("ok")!({
+      agents: [],
+      users: [
+        { id: "1", kind: "user", display_name: overlong, role: "operator" },
+        { id: "2", kind: "user", display_name: withControlChar, role: "viewer" },
+        { id: "3", kind: "user", display_name: "OK", role: "operator" },
+      ],
+    });
+
+    const { users } = await pending;
+    expect(users).toEqual([
+      { id: "3", kind: "user", display_name: "OK", role: "operator" },
+    ]);
+  });
+
+  // grapheme cluster での数え方だけが server (`String.length/1`) と
+  // 一致する — この narrow が UTF-16 code unit 数や Unicode code point
+  // 数で数えていたら、server が「64 以下」として実際に通した ZWJ
+  // 絵文字の名前を誤って drop してしまう。境界ちょうど (64 grapheme)
+  // の値が生き残ることを pin する (実効性は mutation で確認: grapheme
+  // 判定を素の `.length` に戻すとこのテストが red になる)。
+  it("結合文字/ZWJ絵文字で server の 64 grapheme 境界ちょうどの display_name を drop しない", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const pending = link.requestDirectory();
+    // "👨‍👩‍👧‍👦" is 1 grapheme cluster but 7 code points / 11 UTF-16
+    // code units (ZWJ-joined family emoji) — 64 repeats is exactly the
+    // server's grapheme boundary while being far over 64 in either of
+    // the other two units.
+    const boundaryName = "👨‍👩‍👧‍👦".repeat(64);
+    expect([...boundaryName].length).toBeGreaterThan(64);
+    expect(boundaryName.length).toBeGreaterThan(64);
+    mock.lastPush!.receivers.get("ok")!({
+      agents: [],
+      users: [
+        { id: "1", kind: "user", display_name: boundaryName, role: "operator" },
+      ],
+    });
+
+    const { users } = await pending;
+    expect(users).toEqual([
+      { id: "1", kind: "user", display_name: boundaryName, role: "operator" },
+    ]);
+  });
+
+  // code-review round finding, issue #197 段階2 MF-1 follow-up:
+  // isValidDisplayName validated the TRIMMED name but the entry carried
+  // the untrimmed original back — a display_name that only becomes
+  // valid after trimming (leading/trailing whitespace) was accepted but
+  // forwarded with the padding still attached, diverging from the
+  // trim-then-validate contract this narrow claims to mirror.
+  it("前後に空白を含む display_name は trim 済みの値で forward される", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("ok")!({
+      agents: [],
+      users: [
+        { id: "1", kind: "user", display_name: " Ao ", role: "operator" },
+      ],
+    });
+
+    const { users } = await pending;
+    expect(users).toEqual([
+      { id: "1", kind: "user", display_name: "Ao", role: "operator" },
+    ]);
   });
 });
 

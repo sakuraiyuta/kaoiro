@@ -339,7 +339,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         directory_entry(id, env, Map.get(activities, id), Map.get(peer_index, id, []))
       end)
 
-    {:reply, {:ok, %{"agents" => agents}}, socket}
+    {:reply, {:ok, %{"agents" => agents, "users" => users_projection()}}, socket}
   end
 
   # Resume history reconstruction (ADR-0014 phase-2, issue #50): the wrapper
@@ -609,6 +609,83 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp store(%{"type" => "task"} = envelope), do: TaskStates.put(envelope)
 
   defp store(envelope), do: AgentStates.put(envelope, owner: self())
+
+  # "users" projection for directory_request (issue #197 段階2, ADR-0021
+  # F6-8). Fail-closed (director D4): the third arg to get_env/3 is the
+  # implementation default and it is `false` — only the exact `true`
+  # config value (server/config/runtime.exs, KAOIRO_EXPOSE_USERS_TO_AGENTS)
+  # opens this. "原則見える" (issue #197 制約節) is realized as a config
+  # DEFAULT, never as this implementation's own default.
+  #
+  # `== true` rather than a plain truthy `if`: Elixir treats every value
+  # but `false`/`nil` as truthy, so a plain `if` would open this for a
+  # stray non-boolean config value (e.g. the literal string `"true"`
+  # landing in config by a typo'd release override) instead of keeping
+  # it closed. Only the exact boolean `true` opens it.
+  defp users_projection do
+    if Application.get_env(:kaoiro_server, :expose_users_to_agents, false) == true do
+      KaoiroServer.Users.all_with_role()
+      |> Enum.map(&user_entry/1)
+      |> Enum.filter(&(&1 != nil))
+    else
+      []
+    end
+  end
+
+  # Peer directory "users" entry (issue #197 段階2). A LITERAL map with
+  # every value re-validated at its own type/shape — deliberately NOT
+  # Map.take/2 (director D1). Map.take only narrows which KEYS survive;
+  # it passes the VALUES through unchecked, so a future shape change on
+  # Users' side (display_name becoming a map/tuple, an unexpected role
+  # atom) would ride onto the wire untouched. A `Users.all_with_role/1`
+  # entry whose shape does not check out here is dropped entirely (the
+  # `nil` clause below) rather than partially emitted, so one malformed
+  # entry cannot corrupt the response's contract for that user.
+  #
+  # `id` reuses AgentId's charset guard: ADR-0050 D1 puts user_id and
+  # agent_id in the SAME id space (`[A-Za-z0-9._-]`, issue #61), so the
+  # existing single-source-of-truth pattern applies here too rather than
+  # duplicating the regex.
+  defp user_entry(%{id: id, kind: "user", display_name: display_name, role: role}) do
+    with true <- is_binary(id) and AgentId.valid?(id),
+         {:ok, name} <- valid_display_name(display_name),
+         role_str when is_binary(role_str) <- role_string(role) do
+      %{"id" => id, "kind" => "user", "display_name" => name, "role" => role_str}
+    else
+      _ -> nil
+    end
+  end
+
+  defp user_entry(_malformed), do: nil
+
+  # Same length/control-char bound as an agent's custom name
+  # (`AgentsChannel.apply_custom_name/2`, issue #22: <= 64 chars, no
+  # `\x00-\x1f`/`\x7f`). ふじ M5 レビュー指摘: `Users` holds
+  # arbitrary-length IdP / shared-token-config display_name text (no
+  # length bound at creation time), and this projection was only
+  # checking non-empty binary — an overlong or control-char name would
+  # have reached the wire untouched, unlike an agent's custom name which
+  # is already bounded there. The bound is duplicated rather than shared
+  # (`apply_custom_name/2` is private to a different channel/audience)
+  # because a cross-channel helper is out of this stage's scope; the
+  # VALUE of the bound must still match so a name cannot break the grid
+  # layout one path enforces and the other does not.
+  defp valid_display_name(name) when is_binary(name) do
+    trimmed = String.trim(name)
+
+    if trimmed != "" and String.length(trimmed) <= 64 and
+         not String.match?(trimmed, ~r/[\x00-\x1f\x7f]/) do
+      {:ok, trimmed}
+    else
+      :error
+    end
+  end
+
+  defp valid_display_name(_name), do: :error
+
+  defp role_string(:operator), do: "operator"
+  defp role_string(:viewer), do: "viewer"
+  defp role_string(_other), do: nil
 
   defp directory_entry(id, envelope, activity, peers) do
     persona =

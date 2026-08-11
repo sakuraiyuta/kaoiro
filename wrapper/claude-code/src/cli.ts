@@ -302,7 +302,8 @@ async function main(): Promise<void> {
     // Wired below once host + link are constructed; until then the tools
     // return error/fallback results, which is correct because the SDK
     // session has not opened yet either.
-    requestDirectory: () => link?.requestDirectory() ?? Promise.resolve([]),
+    requestDirectory: () =>
+      link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
     getWhoami: () => host.statusSnapshot(),
   });
   // ADR-0051 D3-2 / D3-5: the host-local record of this agent's

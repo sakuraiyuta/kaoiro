@@ -98,6 +98,41 @@ export interface DirectoryEntry {
   rate_limits?: Record<string, DirectoryRateLimitWindow>;
 }
 
+/** Single entry in the peer directory's "users" projection (issue #197
+ *  段階2, ADR-0021 F6-8). Server-side config default is OPEN
+ *  (`KAOIRO_EXPOSE_USERS_TO_AGENTS` unset = disclosed, explicit
+ *  `"false"` opts out — ふじ M1 レビュー指摘, protocol-inter-agent.md is
+ *  the source of truth for the full default/opt-out contract). An old
+ *  (pre-段階2) server omits the `users` key entirely; a 段階2+ server
+ *  that opted OUT still returns the key with an empty array — the two
+ *  are NOT the same wire shape, though both narrow to `[]` here (see
+ *  `userDirectoryEntryFrom`'s own doc; the distinction does not matter
+ *  to this narrow's caller either way, ふじ M4 レビュー指摘).
+ *
+ *  `kind`/`role` are the exact literal/enum values F6-8 allow-lists.
+ *  An unrecognised value on either field drops the WHOLE entry rather
+ *  than degrading to a passthrough string — forward-compat passthrough
+ *  for these two fields was proposed and explicitly rejected (director
+ *  review, issue #197 段階2 M2); issue #198 (admin role) extends both
+ *  server (`role_string/1`) and this union/narrow together. */
+export interface UserDirectoryEntry {
+  id: string;
+  kind: "user";
+  display_name: string;
+  role: "operator" | "viewer";
+}
+
+/** `requestDirectory()`'s reply shape (issue #197 段階2). `agents` and
+ *  `users` are deliberately two separate arrays, not one merged list —
+ *  `users` are NOT valid `send_to_agent` destinations, and a caller that
+ *  merged them for convenience would have to re-derive which entries are
+ *  agents at every use site instead of it being structurally impossible
+ *  to get wrong. */
+export interface DirectoryResult {
+  agents: DirectoryEntry[];
+  users: UserDirectoryEntry[];
+}
+
 /** attach_open payload (protocol.md / file-upload spec, server -> wrapper
  *  relay). chunks is the advertised total chunk count for the upload. */
 export interface AttachOpenMessage {
@@ -510,6 +545,96 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   const rateLimits = projectRateLimits(v.rate_limits);
   if (rateLimits !== undefined) entry.rate_limits = rateLimits;
   return entry;
+}
+
+// Same charset the server enforces for BOTH agent_id and user_id
+// (issue #61, ADR-0050 D1 puts the two in one id space) —
+// KaoiroServerWeb.AgentId's own single-source-of-truth regex, mirrored
+// here since the two languages cannot share one literal.
+const USER_ID_PATTERN = /^[A-Za-z0-9._-]{1,256}$/;
+
+// C0 controls + DEL — same set `WrapperChannel.valid_display_name/1`
+// rejects server-side (issue #197 段階2).
+const DISPLAY_NAME_CONTROL_CHAR_PATTERN = /[\x00-\x1f\x7f]/;
+const DISPLAY_NAME_MAX_GRAPHEMES = 64;
+// Grapheme-cluster segmentation, NOT locale-sensitive collation — the
+// `undefined` locale arg just picks the runtime default locale, which
+// does not affect where grapheme cluster boundaries fall (Unicode's
+// extended grapheme cluster algorithm is locale-independent).
+const displayNameSegmenter = new Intl.Segmenter(undefined, {
+  granularity: "grapheme",
+});
+
+/** Same display_name contract the server enforces
+ *  (`WrapperChannel.valid_display_name/1`, issue #197 段階2 ふじ MF-1
+ *  レビュー指摘): trim-then-non-empty, no C0/DEL control chars, and — the
+ *  part a plain-string check misses — **<= 64 GRAPHEME CLUSTERS**, not
+ *  UTF-16 code units (JS's plain `.length`) and not Unicode code points
+ *  (`[...s].length`). Both of those over-count a combining-character or
+ *  ZWJ-emoji name relative to Elixir `String.length/1` (the unit the
+ *  server actually bounds), which would make this narrow reject a value
+ *  the server already accepted and sent — see protocol-inter-agent.md's
+ *  contract note for the measured divergence on one such string.
+ *
+ *  Returns the TRIMMED name on success (not merely `true`) and `null` on
+ *  failure — the caller must forward the same value this validated, not
+ *  the untrimmed original, or the boundary's own contract claim
+ *  ("enforces the same trim contract the server enforces") would hold
+ *  for the accept/reject decision only, not for the value that actually
+ *  crosses it (code-review round finding, issue #197 段階2 MF-1
+ *  follow-up: a well-behaved server always sends an already-trimmed
+ *  value today, so this had no observable effect against it, but a
+ *  malicious/legacy/future-buggy source sending e.g. `" Ao "` would
+ *  otherwise pass validation while still forwarding the padding this
+ *  bound exists to strip). */
+function validDisplayNameOrNull(name: string): string | null {
+  const trimmed = name.trim();
+  if (trimmed === "" || DISPLAY_NAME_CONTROL_CHAR_PATTERN.test(trimmed)) {
+    return null;
+  }
+  let graphemeCount = 0;
+  for (const _segment of displayNameSegmenter.segment(trimmed)) {
+    graphemeCount += 1;
+    if (graphemeCount > DISPLAY_NAME_MAX_GRAPHEMES) return null;
+  }
+  return trimmed;
+}
+
+/** Structural narrow for a single `users` entry (issue #197 段階2). All
+ *  four fields are non-optional on the wire (server-side allow-list,
+ *  ADR-0021 F6-8), so unlike `directoryEntryFrom` there is no
+ *  field-by-field partial projection: any field missing, off-type, or
+ *  off-VALUE drops the WHOLE entry, matching the server's own "role is
+ *  required, no per-field unknown" stance. `kind`/`role` are checked
+ *  against the exact allow-listed literal/enum, not merely `typeof
+ *  === "string"` (ふじ M2 レビュー指摘: a plain-string check let an
+ *  unrecognised `kind`/`role` value — e.g. a future `"agent"` or
+ *  `"admin"` — pass through unnoticed). `id` is checked against the
+ *  same charset the server enforces, `display_name` against the same
+ *  trim/length/control-char contract the server enforces
+ *  (`validDisplayNameOrNull`, ふじ MF-1 レビュー指摘: this used to accept
+ *  any non-empty string, leaving the server-side M5 bound unenforced at
+ *  this boundary). The entry carries the TRIMMED name back
+ *  (`validDisplayNameOrNull`'s return, not `v.display_name`) so the
+ *  value forwarded matches the value actually validated. One malformed
+ *  entry does not affect its siblings — the caller maps this over the
+ *  array and filters nulls, so a single bad entry among many valid ones
+ *  is dropped on its own. */
+function userDirectoryEntryFrom(value: unknown): UserDirectoryEntry | null {
+  if (!isObject(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (
+    typeof v.id !== "string" ||
+    !USER_ID_PATTERN.test(v.id) ||
+    v.kind !== "user" ||
+    typeof v.display_name !== "string" ||
+    (v.role !== "operator" && v.role !== "viewer")
+  ) {
+    return null;
+  }
+  const displayName = validDisplayNameOrNull(v.display_name);
+  if (displayName === null) return null;
+  return { id: v.id, kind: v.kind, display_name: displayName, role: v.role };
 }
 
 /** Narrows the join reply's `hydration` object. Anything unexpected —
@@ -1004,27 +1129,39 @@ export class ServerLink {
   }
 
   /** Fetches the peer directory (protocol-inter-agent companion tool). The
-   *  server replies with `{agents: [...]}` containing every currently-known
-   *  agent except this wrapper. Used by the `mcp__kaoiro__list_agents` tool
-   *  to resolve persona names → agent_ids before send_to_agent. Rejects on
-   *  transport error or timeout so the tool surfaces the failure to the
-   *  model rather than hanging. */
-  requestDirectory(): Promise<DirectoryEntry[]> {
+   *  server replies with `{agents: [...], users: [...]}` — `agents` is
+   *  every currently-known agent except this wrapper, used by the
+   *  `mcp__kaoiro__list_agents` tool to resolve persona names → agent_ids
+   *  before send_to_agent. `users` is the issue #197 段階2 addition
+   *  (ADR-0021 F6-8); only a server that PREDATES it omits the `users`
+   *  key entirely — a 段階2+ server that opted the projection OUT still
+   *  returns the key, just with an empty array (ふじ M4 レビュー指摘: an
+   *  earlier draft of this comment conflated the two cases). Either way
+   *  narrows to `[]` here, not an error (protocol-inter-agent.md
+   *  back-compat note; see `UserDirectoryEntry`'s own doc above for the
+   *  same distinction). Rejects on transport error or timeout so the
+   *  tool surfaces the failure to the model rather than hanging. */
+  requestDirectory(): Promise<DirectoryResult> {
     return new Promise((resolve, reject) => {
       this.#channel
         .push("directory_request", {})
         .receive("ok", (payload: unknown) => {
-          if (
-            isObject(payload) &&
-            Array.isArray((payload as { agents?: unknown }).agents)
-          ) {
-            const agents = (payload as { agents: unknown[] }).agents
-              .map(directoryEntryFrom)
-              .filter((entry): entry is DirectoryEntry => entry !== null);
-            resolve(agents);
-          } else {
-            resolve([]);
+          if (!isObject(payload)) {
+            resolve({ agents: [], users: [] });
+            return;
           }
+          const raw = payload as { agents?: unknown; users?: unknown };
+          const agents = Array.isArray(raw.agents)
+            ? raw.agents
+                .map(directoryEntryFrom)
+                .filter((entry): entry is DirectoryEntry => entry !== null)
+            : [];
+          const users = Array.isArray(raw.users)
+            ? raw.users
+                .map(userDirectoryEntryFrom)
+                .filter((entry): entry is UserDirectoryEntry => entry !== null)
+            : [];
+          resolve({ agents, users });
         })
         .receive("error", (reason: unknown) => {
           reject(new Error(`directory_request failed: ${JSON.stringify(reason)}`));

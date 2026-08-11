@@ -80,6 +80,24 @@ if v = System.get_env("KAOIRO_CLIENT_TOKENS") do
   config :kaoiro_server, :client_tokens, v
 end
 
+# Whether the peer directory (`directory_request`) includes the "users"
+# projection (issue #197 段階2, ADR-0021 F6-8). Config DEFAULT is
+# `true` — unset takes the default branch — because "原則見える" (issue
+# #197 制約節) is realized as a config default, not an implementation
+# default. Only an explicit "false" opts out; any other malformed value
+# stays closed. `WrapperChannel`'s own read-site fallback (`false`)
+# exists only to keep that call fail-closed if this key is somehow
+# absent entirely (config not loaded), not as the everyday default —
+# see `KaoiroServer.Users.expose_to_agents_default/1`'s own doc (ふじ M1
+# レビュー指摘, issue #197 段階2: this block previously only configured
+# a value when the env was SET, so unset env left the key unconfigured
+# and WrapperChannel's fallback silently closed ordinary boot).
+config :kaoiro_server,
+       :expose_users_to_agents,
+       KaoiroServer.Users.expose_to_agents_default(
+         System.get_env("KAOIRO_EXPOSE_USERS_TO_AGENTS")
+       )
+
 # Dashboard OAuth login (ADR-0042). A provider is offered only when its
 # whole set is present, so a half-filled pair silently disables it —
 # KaoiroServer.OAuth.warn_config/0 says so at boot. Google additionally

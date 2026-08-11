@@ -149,17 +149,71 @@ dashboard と揃えるため)。
 conversation_id 機密性についてここで結論を出したわけではない。信頼
 境界そのものの再評価は F6-6 の将来項目に含める。
 
-**F6-6 — 妥当性の根拠と再評価条件。** 現状 kaoiro は単一 operator
-配下の閉じた系であり、peer は同一の人間が起動した agent に限られる。
-稼働状況の相互可視化による露出リスクは小さく、operator 介在の削減
-という便益が上回る。外部 inbound
+**F6-6 — 妥当性の根拠と再評価 (issue #197 段階2 で実施)。** 本節は
+もともと「現状 kaoiro は単一 operator 配下の閉じた系であり、peer は
+同一の人間が起動した agent に限られる」を根拠に、稼働状況の相互可視化
+による露出リスクは小さく operator 介在の削減という便益が上回ると
+結論し、「外部 inbound 導入時、または agent 間の信頼境界が operator
+単位でなくなった時点で再評価する」という条件を置いていた。
+
+[ADR-0050](0050-principal-model-and-graded-access-control.md) の
+Phase A (identity 化 + admin role、issue #197 / #198) はこの根拠の
+一部 — 「同一の人間が起動した agent」という前提 — を崩し始める。
+principal は user / agent に型分離され (D1)、user 側は viewer を含む
+複数の role を持つ。ADR-0050 の Context 自身が「本 ADR の決定はまさに
+その条件を発火させる」と明記しており、issue #197 の制約節もこれを
+引き継いでいる。したがって本節は例外を書き足す形を採らず、実際に
+再評価する。
+
+**再評価の結論。** [ADR-0050](0050-principal-model-and-graded-access-control.md)
+D5 を根拠として、agent への user 開示を **identity (id / kind /
+display_name / role) までに限定した上で明示的に受容する**(F6-8)。
+D5 が「原則見える」の範囲を identity までとし、state と活動 (何を
+しているか、誰とやり取り中か) を per-pair 権限 (D3) の対象と切り
+分けているのに対応する。
+
+**role は agent の authorization 根拠ではなく、server enforcement の
+説明 metadata である。** D5 の言葉を借りれば「agent が role を知って
+も authority は変わらない。強制するのは server 側であって agent の
+認識ではない」。この位置づけにより、開示範囲を identity に絞って
+露出面を最小化しつつ、認可判断そのものは一貫して server 側に残る —
+agent 側が role を誤読・悪用しても、実際の権限行使は server の
+allow-list / per-pair 権限が別途強制するため直接の脆弱性にはならない。
+
+state / 活動の開示は本節の対象外のまま据え置く。これは per-pair 権限
+そのものの導入ではない — 加算モデルの edge 判定・グラフ編集ツール等
+D3/D9 の設計変更は Phase B (#199) のスコープであり、本 ADR はここで
+実装に踏み込まない。ADR-0050 Phase B が導入されたら、user 側の開示も
+同じ per-pair 権限テーブルで再フィルタする。それまでは F6-8 の allow
+集合が上限。
+
+**次の再評価条件**: 外部 inbound
 ([#98](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/98))
-導入時、または agent 間の信頼境界が operator 単位でなくなった時点で
-本節を再評価する。
+導入時、または ADR-0050 Phase B (per-pair 権限、#199) の実装時。
 
 **F6-7 — 拡張手順。** peer directory に新 field を足すときは、F5 の
 viewer 判断と同様に **agent 開示の要否を明示判断** し、F6-3 / F6-4 の
 どちらかに列挙してからテストで両主体の可視性を covering する。
+
+**F6-8 — user 開示の allow 集合 (issue #197 段階2)。** agent への
+user 開示は F6-3 (agent entry の allow 集合) とは独立の allow-list
+とする。理由は F6-1 と同型 — user directory (`wrapper:<id>` 経由) と
+agent directory (同じ経路の別 payload) を同じ集合で管理すると、片方
+向けに緩めた判断がもう片方の allow-list をも緩めてしまう。
+
+現時点の allow 集合: `id` / `kind`(常に literal `"user"`) /
+`display_name` / `role`(`"operator"` \| `"viewer"`)。F6-6 の再評価
+結論が言う identity 相当の 4 field に限る。state・活動 (現在何を
+しているか、誰とやり取り中か) に相当する概念は user には無く、開示
+対象にもならない。
+
+role を解決できない (allow-list から revoke された、config が未知に
+なった等) user は entry ごと省略する。`role` は wire 必須 field で
+あり、F6-3 の agent entry と異なり per-field の「不明」を表現する
+余地が無いため。
+
+新 field を足すときの手順は F6-7 と同じ(agent 開示の要否判断 →
+F6-3 / F6-8 いずれかへ列挙 → 両主体の可視性を covering するテスト)。
 
 ## Consequences
 
