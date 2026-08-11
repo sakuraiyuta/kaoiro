@@ -142,7 +142,7 @@ describe("CodexHost — own tasklist envelopes (issue #188)", () => {
       now: () => "T",
     });
 
-    await runOneTurn(host, "todo");
+    await runOneTurn(host, "todo", client);
 
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({
@@ -176,8 +176,26 @@ function usageEvent(): ThreadEvent {
 
 /** Scripted client: each runStreamed call yields the next event batch and
  *  records the thread options / resume ids it was constructed with. */
-function makeClient(turns: ThreadEvent[][]): {
-  client: CodexClientLike;
+type ScriptedTurn = ThreadEvent[] | Error;
+
+type ScriptedClient = CodexClientLike & {
+  /** Resolves after the host has consumed every event from the given turn. */
+  waitForTurn(index: number): Promise<void>;
+};
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+function makeClient(turns: ScriptedTurn[]): {
+  client: ScriptedClient;
   calls: {
     resume: (string | null)[];
     options: (ThreadOptions | undefined)[];
@@ -185,6 +203,7 @@ function makeClient(turns: ThreadEvent[][]): {
   };
 } {
   let turn = 0;
+  const turnConsumed = turns.map(() => deferred<void>());
   const calls: {
     resume: (string | null)[];
     options: (ThreadOptions | undefined)[];
@@ -193,15 +212,28 @@ function makeClient(turns: ThreadEvent[][]): {
   const thread: CodexThreadLike = {
     async runStreamed(input) {
       calls.inputs.push(input);
-      const events = turns[turn] ?? [];
+      const turnIndex = turn;
+      const scripted = turns[turnIndex] ?? [];
       turn += 1;
+      if (scripted instanceof Error) {
+        turnConsumed[turnIndex]?.resolve();
+        throw scripted;
+      }
+      const events = scripted;
       async function* gen(): AsyncGenerator<ThreadEvent> {
-        for (const event of events) yield event;
+        try {
+          for (const event of events) yield event;
+        } finally {
+          // An async generator resumes after each yielded event is consumed.
+          // Resolving here therefore means the host observed the terminal
+          // event (or stream end), not merely that the mock started.
+          turnConsumed[turnIndex]?.resolve();
+        }
       }
       return { events: gen() };
     },
   };
-  const client: CodexClientLike = {
+  const client: ScriptedClient = {
     startThread(options) {
       calls.resume.push(null);
       calls.options.push(options);
@@ -212,15 +244,33 @@ function makeClient(turns: ThreadEvent[][]): {
       calls.options.push(options);
       return thread;
     },
+    waitForTurn(index) {
+      const consumed = turnConsumed[index];
+      if (consumed === undefined) {
+        throw new Error(`No scripted turn at index ${index}`);
+      }
+      return consumed.promise;
+    },
   };
   return { client, calls };
 }
 
 /** Runs the host for one prompt turn, closing it after the turn settles. */
-async function runOneTurn(host: CodexHost, prompt: string): Promise<void> {
+async function runOneTurn(
+  host: CodexHost,
+  prompt: string,
+  client: ScriptedClient,
+  settled?: Promise<void>,
+): Promise<void> {
   const done = host.run(prompt);
   // The run loop waits for the queue after the turn; close() wakes it.
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Await the mock's consumption signal rather than a wall-clock delay: run()
+  // reaches startThread only after non-timer async setup completes.
+  await client.waitForTurn(0);
+  // Account-default and rate-limit refreshes deliberately run after the
+  // terminal event. Tests that observe those projections provide their own
+  // event-driven completion signal here before close() can cancel the work.
+  await settled;
   host.close();
   await done;
 }
@@ -277,7 +327,7 @@ describe("CodexHost", () => {
           now: () => "T",
         },
       );
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       expect(
         (captured?.config as Record<string, unknown> | undefined)?.features,
       ).toEqual({ multi_agent: expected });
@@ -301,7 +351,7 @@ describe("CodexHost", () => {
         now: () => "T",
       },
     );
-    await runOneTurn(host, "hi");
+    await runOneTurn(host, "hi", client);
     expect(
       (captured?.config as Record<string, unknown> | undefined)?.features,
     ).toEqual({ multi_agent: true });
@@ -356,7 +406,7 @@ describe("CodexHost", () => {
       );
 
       try {
-        await runOneTurn(host, "catalog");
+        await runOneTurn(host, "catalog", client);
         const models = states.at(-1)?.ext.models as
           | { value: string }[]
           | undefined;
@@ -402,7 +452,7 @@ describe("CodexHost", () => {
         now: () => "T",
       },
     );
-    await runOneTurn(host, "hello");
+    await runOneTurn(host, "hello", client);
 
     expect(sessionIds).toEqual(["uuid-1"]);
     expect(calls.resume).toEqual([null]);
@@ -451,10 +501,10 @@ describe("CodexHost", () => {
       now: () => "T",
     });
     const done = host.run("first");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(0);
     await host.setModel("gpt-5.4-mini");
     await host.send("second");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(1);
     host.close();
     await done;
 
@@ -464,12 +514,13 @@ describe("CodexHost", () => {
 
   it("実行中のsetModelは現turnを変えず次turnへpendingする", async () => {
     const states: Envelope[] = [];
+    const firstTurnStarted = deferred<void>();
+    const turnConsumed = [deferred<void>(), deferred<void>()];
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
     const calls: (ThreadOptions | undefined)[] = [];
-    let turn = 0;
     const client: CodexClientLike = {
       startThread(options) {
         calls.push(options);
@@ -478,8 +529,12 @@ describe("CodexHost", () => {
             async function* events(): AsyncGenerator<ThreadEvent> {
               yield { type: "thread.started", thread_id: "boundary" };
               yield { type: "turn.started" };
+              // This runs only after the host consumes turn.started, keeping
+              // setModel inside the active turn rather than after it settles.
+              firstTurnStarted.resolve();
               await gate;
               yield usageEvent();
+              turnConsumed[0]!.resolve();
             }
             return { events: events() };
           },
@@ -487,7 +542,15 @@ describe("CodexHost", () => {
       },
       resumeThread(_id, options) {
         calls.push(options);
-        return makeClient([[usageEvent()]]).client.startThread(options);
+        return {
+          async runStreamed() {
+            async function* events(): AsyncGenerator<ThreadEvent> {
+              yield usageEvent();
+              turnConsumed[1]!.resolve();
+            }
+            return { events: events() };
+          },
+        };
       },
     };
     const host = new CodexHost(
@@ -501,15 +564,15 @@ describe("CodexHost", () => {
       },
     );
     const done = host.run("first");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await firstTurnStarted.promise;
     await host.setModel("gpt-5.6-sol");
     expect(calls[0]?.model).toBe("gpt-5.6-terra");
     expect(states.at(-1)?.ext.pending_model).toBe("gpt-5.6-sol");
     release();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await turnConsumed[0]!.promise;
     expect(states.at(-1)?.ext.pending_model).toBe("gpt-5.6-sol");
     await host.send("second");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await turnConsumed[1]!.promise;
     host.close();
     await done;
     expect(calls[1]?.model).toBe("gpt-5.6-sol");
@@ -541,14 +604,14 @@ describe("CodexHost", () => {
       },
     );
     const done = host.run("first");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(0);
     await host.setModel("gpt-5.6-sol");
     expect(states.at(-1)?.ext).toMatchObject({
       pending_model: "gpt-5.6-sol",
       effective: { model: "gpt-5.6-terra" },
     });
     await host.send("second");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(1);
     host.close();
     await done;
     expect(states.at(-1)?.ext.pending_model).toBeUndefined();
@@ -582,10 +645,10 @@ describe("CodexHost", () => {
         },
       );
       const done = host.run("first");
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await client.waitForTurn(0);
       await host.setModel("not-entitled");
       await host.send("second");
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await client.waitForTurn(1);
       const errors = states.filter(
         (state) => state.ext.switch_error !== undefined,
       );
@@ -601,7 +664,7 @@ describe("CodexHost", () => {
         model: "gpt-5.6-terra",
       });
       await host.send("third");
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await client.waitForTurn(2);
       host.close();
       await done;
       expect(calls.options[1]?.model).toBe("not-entitled");
@@ -632,11 +695,11 @@ describe("CodexHost", () => {
       },
     );
     const done = host.run("first");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(0);
     await host.setEffort("high");
     expect(states.at(-1)?.ext.pending_effort).toBe("high");
     await host.send("second");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(1);
     host.close();
     await done;
     expect(calls.options[1]?.modelReasoningEffort).toBe("high");
@@ -662,12 +725,12 @@ describe("CodexHost", () => {
       },
     );
     const done = host.run("first");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(0);
     await host.setModel("gpt-5.6-luna");
     expect(states.at(-1)?.ext.effort_reset).toBe(true);
     expect(states.at(-1)?.ext.pending_effort).toBeUndefined();
     await host.send("second");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(1);
     host.close();
     await done;
     expect(calls.options[1]).not.toHaveProperty("modelReasoningEffort");
@@ -677,6 +740,7 @@ describe("CodexHost", () => {
 
   it("account default の実効 model を rollout から解決して ext に載せる", async () => {
     const states: Envelope[] = [];
+    const modelStamped = deferred<void>();
     const { client } = makeClient([
       [
         { type: "thread.started", thread_id: "uuid-model" },
@@ -685,14 +749,17 @@ describe("CodexHost", () => {
       ],
     ]);
     const host = new CodexHost(CONFIG, {
-      onState: (e) => states.push(e),
+      onState: (e) => {
+        states.push(e);
+        if (e.ext.model === "gpt-5.6-sol") modelStamped.resolve();
+      },
       appendSystemPrompt: "p",
       codexFactory: () => client,
       modelResolver: async (id) => (id === "uuid-model" ? "gpt-5.6-sol" : null),
       now: () => "T",
     });
 
-    await runOneTurn(host, "hello");
+    await runOneTurn(host, "hello", client, modelStamped.promise);
 
     expect(states[0]?.ext).not.toHaveProperty("model");
     expect(states.at(-1)?.ext).toMatchObject({
@@ -707,6 +774,7 @@ describe("CodexHost", () => {
 
   it("turn.completed 後の background retry で account default を解決する", async () => {
     const states: Envelope[] = [];
+    const modelStamped = deferred<void>();
     const { client } = makeClient([
       [
         { type: "thread.started", thread_id: "uuid-delayed-model" },
@@ -717,14 +785,17 @@ describe("CodexHost", () => {
     const resolved = [null, "gpt-delayed"];
     const resolver = vi.fn(async () => resolved.shift() ?? null);
     const host = new CodexHost(CONFIG, {
-      onState: (e) => states.push(e),
+      onState: (e) => {
+        states.push(e);
+        if (e.ext.model === "gpt-delayed") modelStamped.resolve();
+      },
       appendSystemPrompt: "p",
       codexFactory: () => client,
       modelResolver: resolver,
       now: () => "T",
     });
 
-    await runOneTurn(host, "hello");
+    await runOneTurn(host, "hello", client, modelStamped.promise);
 
     expect(resolver).toHaveBeenCalledTimes(2);
     expect(
@@ -746,6 +817,7 @@ describe("CodexHost", () => {
 
   it("account default の再解決失敗時は前 turn の model を stale 保持しない", async () => {
     const states: Envelope[] = [];
+    const firstModelStamped = deferred<void>();
     const { client } = makeClient([
       [
         { type: "thread.started", thread_id: "uuid-unknown-model" },
@@ -756,7 +828,10 @@ describe("CodexHost", () => {
     ]);
     const resolved = ["gpt-first", null, null];
     const host = new CodexHost(CONFIG, {
-      onState: (e) => states.push(e),
+      onState: (e) => {
+        states.push(e);
+        if (e.ext.model === "gpt-first") firstModelStamped.resolve();
+      },
       appendSystemPrompt: "p",
       codexFactory: () => client,
       modelResolver: async () => resolved.shift() ?? null,
@@ -764,9 +839,10 @@ describe("CodexHost", () => {
     });
 
     const done = host.run("first");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(0);
+    await firstModelStamped.promise;
     await host.send("second");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(1);
     host.close();
     await done;
 
@@ -778,6 +854,8 @@ describe("CodexHost", () => {
 
   it("遅い旧 turn の model refresh は新 turn の解決値を上書きしない", async () => {
     const states: Envelope[] = [];
+    const oldRefreshStarted = deferred<void>();
+    const newModelStamped = deferred<void>();
     const { client } = makeClient([
       [
         { type: "thread.started", thread_id: "uuid-generation" },
@@ -792,24 +870,32 @@ describe("CodexHost", () => {
     });
     let calls = 0;
     const host = new CodexHost(CONFIG, {
-      onState: (e) => states.push(e),
+      onState: (e) => {
+        states.push(e);
+        if (e.ext.model === "gpt-new-turn") newModelStamped.resolve();
+      },
       appendSystemPrompt: "p",
       codexFactory: () => client,
-      modelResolver: async () => {
+      modelResolver: () => {
         calls += 1;
-        if (calls === 1) return null;
-        if (calls === 2) return oldRefresh;
-        return "gpt-new-turn";
+        if (calls === 1) return Promise.resolve(null);
+        if (calls === 2) {
+          oldRefreshStarted.resolve();
+          return oldRefresh;
+        }
+        return Promise.resolve("gpt-new-turn");
       },
       now: () => "T",
     });
 
     const done = host.run("first");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(0);
+    await oldRefreshStarted.promise;
     await host.send("second");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(1);
+    await newModelStamped.promise;
     releaseOld("gpt-old-refresh");
-    await Promise.resolve();
+    await oldRefresh;
     host.close();
     await done;
 
@@ -822,6 +908,8 @@ describe("CodexHost", () => {
 
   it("account default は pin せず turn ごとの実効 model を更新する", async () => {
     const states: Envelope[] = [];
+    const firstModelStamped = deferred<void>();
+    const secondModelStamped = deferred<void>();
     const { client, calls } = makeClient([
       [
         { type: "thread.started", thread_id: "uuid-routing" },
@@ -832,7 +920,11 @@ describe("CodexHost", () => {
     ]);
     const models = ["gpt-first", "gpt-second"];
     const host = new CodexHost(CONFIG, {
-      onState: (e) => states.push(e),
+      onState: (e) => {
+        states.push(e);
+        if (e.ext.model === "gpt-first") firstModelStamped.resolve();
+        if (e.ext.model === "gpt-second") secondModelStamped.resolve();
+      },
       appendSystemPrompt: "p",
       codexFactory: () => client,
       modelResolver: async () => models.shift() ?? null,
@@ -840,9 +932,11 @@ describe("CodexHost", () => {
     });
 
     const done = host.run("first");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(0);
+    await firstModelStamped.promise;
     await host.send("second");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(1);
+    await secondModelStamped.promise;
     host.close();
     await done;
 
@@ -862,12 +956,13 @@ describe("CodexHost", () => {
       codexFactory: () => client,
       now: () => "T",
     });
-    await runOneTurn(host, "again");
+    await runOneTurn(host, "again", client);
     expect(calls.resume).toEqual(["uuid-resume"]);
   });
 
   it("terminal event 無しの stream 終了は error → waiting_input に畳む", async () => {
     const states: Envelope[] = [];
+    const turnEnded = deferred<void>();
     const { client } = makeClient([
       [{ type: "thread.started", thread_id: "u" }, { type: "turn.started" }],
     ]);
@@ -875,9 +970,10 @@ describe("CodexHost", () => {
       onState: (e) => states.push(e),
       appendSystemPrompt: "p",
       codexFactory: () => client,
+      onTurnEnd: () => turnEnded.resolve(),
       now: () => "T",
     });
-    await runOneTurn(host, "x");
+    await runOneTurn(host, "x", client, turnEnded.promise);
     expect(states.map((e) => e.state)).toEqual([
       "sending",
       "thinking",
@@ -905,7 +1001,7 @@ describe("CodexHost", () => {
     host.attachClose("up-1");
     await host.send("with image", ["up-1"]);
     const running = host.run();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await client.waitForTurn(0);
     host.close();
     await running;
     expect(calls.inputs).toHaveLength(1);
@@ -986,7 +1082,7 @@ describe("CodexHost", () => {
       },
       now: () => "T",
     });
-    await runOneTurn(host, "hi");
+    await runOneTurn(host, "hi", client);
 
     const config = captured!.config as Record<string, unknown>;
     const mcp = config.mcp_servers as Record<string, Record<string, unknown>>;
@@ -1031,10 +1127,13 @@ describe("CodexHost", () => {
     release();
     await sending;
     const running = host.run();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Drive a known follow-up through the run loop. If the cancelled image
+    // turn were resurrected, it would run before this prompt and fail here.
+    await host.send("follow-up");
+    await client.waitForTurn(0);
     host.close();
     await running;
-    expect(calls.inputs).toEqual([]);
+    expect(calls.inputs).toEqual(["follow-up"]);
   });
 
   it("楽観 stamp: modelSource='config' + effortSource='config' で ext に stamp する (phase-15 15-4c)", async () => {
@@ -1051,7 +1150,7 @@ describe("CodexHost", () => {
         now: () => "T",
       },
     );
-    await runOneTurn(host, "hi");
+    await runOneTurn(host, "hi", client);
     // 起動直後の最初の state_change に楽観 stamp されているはず (Codex は SDK が
     // model を再報告しないため、source は起動時決定でそのまま維持される)。
     const first = states[0]!;
@@ -1072,7 +1171,7 @@ describe("CodexHost", () => {
       codexFactory: () => client,
       now: () => "T",
     });
-    await runOneTurn(host, "hi");
+    await runOneTurn(host, "hi", client);
     const first = states[0]!;
     expect(first.ext).not.toHaveProperty("model_source");
     expect(first.ext).not.toHaveProperty("effort_source");
@@ -1089,7 +1188,7 @@ describe("CodexHost", () => {
       codexFactory: () => client,
       now: () => "T",
     });
-    await runOneTurn(host, "hi");
+    await runOneTurn(host, "hi", client);
     // session_capabilities は #statusExt から unconditional に stamp されるため
     // 全 state_change に乗る (ADR-0034 F1)。Codex は毎ターン exec spawn モデル
     // のため adapter 構築時に決めた capability が turn の外 (idle) でも state_change
@@ -1131,7 +1230,7 @@ describe("CodexHost", () => {
       codexFactory: () => client,
       now: () => "T",
     });
-    await runOneTurn(host, "hi");
+    await runOneTurn(host, "hi", client);
     for (const env of states) {
       expect(env.ext).not.toHaveProperty("context");
     }
@@ -1150,7 +1249,7 @@ describe("CodexHost", () => {
         now: () => "T",
       },
     );
-    await runOneTurn(host, "hi");
+    await runOneTurn(host, "hi", client);
     expect(states[0]?.ext.session_capabilities).toMatchObject({
       supports_model_switch: true,
       supports_effort_switch: true,
@@ -1173,7 +1272,7 @@ describe("CodexHost", () => {
       codexFactory: () => client,
       now: () => "T",
     });
-    await runOneTurn(host, "hi");
+    await runOneTurn(host, "hi", client);
     expect(states[0]?.ext.session_capabilities).toMatchObject({
       supports_model_switch: true,
       supports_effort_switch: true,
@@ -1201,7 +1300,7 @@ describe("CodexHost", () => {
           now: () => "T",
         },
       );
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       expect(states[0]?.ext.session_capabilities).toMatchObject({
         supports_model_switch: false,
         supports_effort_switch: false,
@@ -1235,7 +1334,7 @@ describe("CodexHost", () => {
           now: () => "T",
         },
       );
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       // ThreadOptions は startThread の呼出時に登録される。
       expect(calls.options[0]?.sandboxMode).toBe("danger-full-access");
       // Codex SDK は workspace-write の時だけ networkAccessEnabled を許す。
@@ -1266,7 +1365,7 @@ describe("CodexHost", () => {
           now: () => "T",
         },
       );
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       expect(calls.options[0]?.sandboxMode).toBe("workspace-write");
       expect(calls.options[0]?.networkAccessEnabled).toBe(true);
     });
@@ -1291,7 +1390,7 @@ describe("CodexHost", () => {
           now: () => "T",
         },
       );
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       expect(calls.options[0]?.networkAccessEnabled).toBe(false);
       expect(host.statusSnapshot().network_access).toBe(false);
     });
@@ -1316,7 +1415,7 @@ describe("CodexHost", () => {
           now: () => "T",
         },
       );
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       expect(calls.options[0]?.networkAccessEnabled).toBeUndefined();
       expect(host.statusSnapshot().network_access).toBe(true);
     });
@@ -1345,7 +1444,7 @@ describe("CodexHost", () => {
           now: () => "T",
         },
       );
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       const last = states.at(-1);
       expect(last?.ext.resume_drift).toEqual([
         { field: "network_access", prev: false, now: true },
@@ -1379,7 +1478,7 @@ describe("CodexHost", () => {
           now: () => "T",
         },
       );
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       const last = states.at(-1);
       expect(last?.ext.resume_drift).toEqual([]);
       expect(last?.ext.resume_snapshot).toEqual({
@@ -1420,7 +1519,7 @@ describe("CodexHost", () => {
           now: () => "T",
         },
       );
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       // reset は起きないので effort_reset は stamp されない。
       expect(states.some((e) => e.ext.effort_reset === true)).toBe(false);
       // ThreadOptions に effort が渡っている。
@@ -1461,7 +1560,7 @@ describe("CodexHost", () => {
       // constructor 直後の statusExt は effort_reset=true を含む (one-shot)。
       const initial = host.statusExtSnapshot();
       expect(initial.effort_reset).toBe(true);
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       // 少なくとも 1 つの state_change が effort_reset=true を stamp した。
       expect(states.some((e) => e.ext.effort_reset === true)).toBe(true);
       // ThreadOptions は effortResetPending 経由で effort を skip する
@@ -1496,7 +1595,7 @@ describe("CodexHost", () => {
       );
       // fresh spawn では reset guard に阻まれ effort_reset one-shot が立たない。
       expect(host.statusExtSnapshot().effort_reset).toBeUndefined();
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       expect(states.some((e) => e.ext.effort_reset === true)).toBe(false);
       // effort は SDK に渡り、SDK 側 error / 既存 switch_error rollback に委任される。
       expect(calls.options[0]?.modelReasoningEffort).toBe("ultra");
@@ -1526,7 +1625,7 @@ describe("CodexHost", () => {
         },
       );
       expect(host.statusExtSnapshot().effort_reset).toBeUndefined();
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       expect(states.some((e) => e.ext.effort_reset === true)).toBe(false);
     });
   });
@@ -1594,7 +1693,7 @@ describe("CodexHost", () => {
         ),
       ).toBeFalsy();
 
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       // SDK 委任継続: source="default" は threadOptions.model /
       // modelReasoningEffort に pin されない
       expect(calls.options[0]?.model).toBeUndefined();
@@ -1635,7 +1734,7 @@ describe("CodexHost", () => {
         effort: "medium",
         effort_source: "launch",
       });
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       // explicit source は SDK に pin
       expect(calls.options[0]?.model).toBe("gpt-5.6-sol");
       expect(calls.options[0]?.modelReasoningEffort).toBe("medium");
@@ -1673,7 +1772,7 @@ describe("CodexHost", () => {
       );
       // constructor 直後 effort_reset one-shot が立つ
       expect(host.statusExtSnapshot().effort_reset).toBe(true);
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
       expect(states.some((e) => e.ext.effort_reset === true)).toBe(true);
       // effort は non-pin (source="default" gate)
       expect(calls.options[0]?.modelReasoningEffort).toBeUndefined();
@@ -1683,6 +1782,7 @@ describe("CodexHost", () => {
   describe("rate_limits (rollout tail)", () => {
     it("turn.completed 後の refresh で ext.rate_limits を stamp する", async () => {
       const states: Envelope[] = [];
+      const rateLimitsStamped = deferred<void>();
       const { client } = makeClient([
         [
           { type: "thread.started", thread_id: "uuid-rl-a" },
@@ -1693,14 +1793,17 @@ describe("CodexHost", () => {
       const snapshot: Map<CodexRateLimitWindow, CodexRateLimitSnapshot> =
         new Map([["five_hour", { utilization: 0.42, resets_at: 1785090000 }]]);
       const host = new CodexHost(CONFIG, {
-        onState: (e) => states.push(e),
+        onState: (e) => {
+          states.push(e);
+          if (e.ext.rate_limits !== undefined) rateLimitsStamped.resolve();
+        },
         appendSystemPrompt: "p",
         codexFactory: () => client,
         rateLimitResolver: async () => snapshot,
         now: () => "T",
       });
 
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client, rateLimitsStamped.promise);
 
       expect(states[0]?.ext).not.toHaveProperty("rate_limits");
       expect(states.at(-1)?.ext.rate_limits).toEqual({
@@ -1710,6 +1813,12 @@ describe("CodexHost", () => {
 
     it("同値 refresh は state_change を追加発火しない", async () => {
       const states: Envelope[] = [];
+      const firstRateLimitsStamped = deferred<void>();
+      const secondRefreshStarted = deferred<void>();
+      const secondMapCompared = deferred<void>();
+      const secondRefreshResult = deferred<
+        Map<CodexRateLimitWindow, CodexRateLimitSnapshot>
+      >();
       const { client } = makeClient([
         [
           { type: "thread.started", thread_id: "uuid-rl-b" },
@@ -1718,11 +1827,44 @@ describe("CodexHost", () => {
         ],
         [{ type: "turn.started" }, usageEvent()],
       ]);
+      const snapshot = new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>([
+        ["five_hour", { utilization: 0.1, resets_at: 1 }],
+      ]);
+      const sameSnapshot = new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>(
+        [["five_hour", { utilization: 0.1, resets_at: 1 }]],
+      );
+      const sameSnapshotIterator = sameSnapshot[Symbol.iterator].bind(sameSnapshot);
+      sameSnapshot[Symbol.iterator] = function* (): Generator<
+        [CodexRateLimitWindow, CodexRateLimitSnapshot],
+        undefined,
+        unknown
+      > {
+        try {
+          yield* sameSnapshotIterator();
+        } finally {
+          // rateLimitsDiffer consumes this iterator only after it has checked
+          // the two Maps' sizes; resolving here proves the no-op comparison
+          // itself completed, rather than merely that its resolver returned.
+          secondMapCompared.resolve();
+        }
+        return undefined;
+      };
+      let resolverCalls = 0;
       const resolver = vi.fn<
         () => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>
-      >(async () => new Map([["five_hour", { utilization: 0.1, resets_at: 1 }]]));
+      >(() => {
+        resolverCalls += 1;
+        if (resolverCalls === 2) {
+          secondRefreshStarted.resolve();
+          return secondRefreshResult.promise;
+        }
+        return Promise.resolve(snapshot);
+      });
       const host = new CodexHost(CONFIG, {
-        onState: (e) => states.push(e),
+        onState: (e) => {
+          states.push(e);
+          if (e.ext.rate_limits !== undefined) firstRateLimitsStamped.resolve();
+        },
         appendSystemPrompt: "p",
         codexFactory: () => client,
         rateLimitResolver: resolver,
@@ -1730,30 +1872,23 @@ describe("CodexHost", () => {
       });
 
       const done = host.run("hi-1");
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await client.waitForTurn(0);
+      await firstRateLimitsStamped.promise;
       const afterFirstTurn = states.length;
       await host.send("hi-2");
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await client.waitForTurn(1);
+      await secondRefreshStarted.promise;
+      const beforeNoopComparison = states.length;
+      secondRefreshResult.resolve(sameSnapshot);
+      await secondMapCompared.promise;
+      expect(states).toHaveLength(beforeNoopComparison);
       host.close();
       await done;
 
-      // Both turn.completed events fire the refresh.
       expect(resolver).toHaveBeenCalledTimes(2);
-      // The 2nd refresh returns the SAME snapshot as the 1st, so #refreshRateLimits
-      // must skip #emitState. state_change for the 2nd turn still fires from the
-      // normal run loop, but the #refreshRateLimits-driven extra emit does not.
-      // Verify by checking: the extra state_change count contributed by rate_limits
-      // refresh across turn 2 is at most equal to what turn 2's normal flow emits
-      // (i.e. no extra "post-refresh" state_change beyond the turn's own state_changes).
-      const beforeClose = states.length - 1; // -1 for the close-emitted state_change
-      const turn2Count = beforeClose - afterFirstTurn;
-      // Turn 2's run loop emits a bounded number of state_changes (thread progress
-      // + emitResult), typically 2. An extra #emitState from the refresh would push
-      // this above 4. Cap the assertion at a generous 4 to catch the regression
-      // without over-specifying internal state-machine sequencing.
-      expect(turn2Count).toBeLessThanOrEqual(4);
-      // rate_limits payload stays identical for all turn 2 state_changes.
-      for (const s of states.slice(afterFirstTurn, beforeClose + 1)) {
+      // The second turn carries the already-stamped snapshot but, as checked
+      // above, its equal refresh itself emits no additional state_change.
+      for (const s of states.slice(afterFirstTurn)) {
         if (s.ext.rate_limits !== undefined) {
           expect(s.ext.rate_limits).toEqual({
             five_hour: { utilization: 0.1, resets_at: 1 },
@@ -1764,6 +1899,7 @@ describe("CodexHost", () => {
 
     it("turn.failed でも refresh が走る (429 / max-output で rate_limits が更新される経路)", async () => {
       const states: Envelope[] = [];
+      const rateLimitsStamped = deferred<void>();
       const { client } = makeClient([
         [
           { type: "thread.started", thread_id: "uuid-rl-c" },
@@ -1777,14 +1913,17 @@ describe("CodexHost", () => {
         new Map([["seven_day", { utilization: 0.98, resets_at: 999 }]]),
       );
       const host = new CodexHost(CONFIG, {
-        onState: (e) => states.push(e),
+        onState: (e) => {
+          states.push(e);
+          if (e.ext.rate_limits !== undefined) rateLimitsStamped.resolve();
+        },
         appendSystemPrompt: "p",
         codexFactory: () => client,
         rateLimitResolver: resolver,
         now: () => "T",
       });
 
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client, rateLimitsStamped.promise);
 
       expect(resolver).toHaveBeenCalledTimes(1);
       expect(states.at(-1)?.ext.rate_limits).toEqual({
@@ -1794,6 +1933,11 @@ describe("CodexHost", () => {
 
     it("resolver が空 Map を返す間は ext.rate_limits を出さない", async () => {
       const states: Envelope[] = [];
+      const emptyRefreshStarted = deferred<void>();
+      const emptyMapCompared = deferred<void>();
+      const emptyRefreshResult = deferred<
+        Map<CodexRateLimitWindow, CodexRateLimitSnapshot>
+      >();
       const { client } = makeClient([
         [
           { type: "thread.started", thread_id: "uuid-rl-d" },
@@ -1801,15 +1945,38 @@ describe("CodexHost", () => {
           usageEvent(),
         ],
       ]);
+      const emptySnapshot = new Map<
+        CodexRateLimitWindow,
+        CodexRateLimitSnapshot
+      >();
+      Object.defineProperty(emptySnapshot, "size", {
+        get() {
+          // rateLimitsDiffer first compares the sizes; empty Maps have no
+          // iterator entries, so this is the production no-op boundary.
+          emptyMapCompared.resolve();
+          return 0;
+        },
+      });
       const host = new CodexHost(CONFIG, {
         onState: (e) => states.push(e),
         appendSystemPrompt: "p",
         codexFactory: () => client,
-        rateLimitResolver: async () => new Map(),
+        rateLimitResolver: () => {
+          emptyRefreshStarted.resolve();
+          return emptyRefreshResult.promise;
+        },
         now: () => "T",
       });
 
-      await runOneTurn(host, "hi");
+      const done = host.run("hi");
+      await client.waitForTurn(0);
+      await emptyRefreshStarted.promise;
+      const beforeNoopComparison = states.length;
+      emptyRefreshResult.resolve(emptySnapshot);
+      await emptyMapCompared.promise;
+      expect(states).toHaveLength(beforeNoopComparison);
+      host.close();
+      await done;
 
       for (const s of states) {
         expect(s.ext).not.toHaveProperty("rate_limits");
@@ -1838,7 +2005,7 @@ describe("CodexHost", () => {
         now: () => "T",
       });
 
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
 
       expect(turnEnds).toEqual([
         { conversationId: null, error: { detail: "rate limited" } },
@@ -1856,13 +2023,14 @@ describe("CodexHost", () => {
         now: () => "T",
       });
 
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client);
 
       expect(turnEnds).toEqual([{ conversationId: null }]);
     });
 
     it("終端イベント無しでストリームが終わると detail 無しの error で onTurnEnd を呼ぶ", async () => {
       const turnEnds: unknown[] = [];
+      const turnEnded = deferred<void>();
       const { client } = makeClient([
         [{ type: "thread.started", thread_id: "uuid-err-2" }],
       ]);
@@ -1870,11 +2038,14 @@ describe("CodexHost", () => {
         onState: () => {},
         appendSystemPrompt: "p",
         codexFactory: () => client,
-        onTurnEnd: (info) => turnEnds.push(info),
+        onTurnEnd: (info) => {
+          turnEnds.push(info);
+          turnEnded.resolve();
+        },
         now: () => "T",
       });
 
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client, turnEnded.promise);
 
       expect(turnEnds).toEqual([{ conversationId: null, error: {} }]);
     });
@@ -1884,24 +2055,20 @@ describe("CodexHost", () => {
         conversationId: string | null;
         error?: { reason?: string; detail?: string };
       }[] = [];
-      const thread: CodexThreadLike = {
-        async runStreamed() {
-          throw new Error("exec exited 1");
-        },
-      };
-      const client: CodexClientLike = {
-        startThread: () => thread,
-        resumeThread: () => thread,
-      };
+      const turnEnded = deferred<void>();
+      const { client } = makeClient([new Error("exec exited 1")]);
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
         codexFactory: () => client,
-        onTurnEnd: (info) => turnEnds.push(info),
+        onTurnEnd: (info) => {
+          turnEnds.push(info);
+          turnEnded.resolve();
+        },
         now: () => "T",
       });
 
-      await runOneTurn(host, "hi");
+      await runOneTurn(host, "hi", client, turnEnded.promise);
 
       expect(turnEnds).toHaveLength(1);
       expect(turnEnds[0]?.conversationId).toBeNull();
@@ -1936,9 +2103,9 @@ describe("CodexHost", () => {
       // which this host-level test doesn't exercise) conversation_id.
       await host.send("peer A injection", undefined, "cnv-a");
       const done = host.run();
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await client.waitForTurn(0);
       await host.send("peer B injection", undefined, "cnv-b");
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await client.waitForTurn(1);
       host.close();
       await done;
 
