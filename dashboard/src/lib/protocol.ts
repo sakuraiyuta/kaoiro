@@ -1674,6 +1674,20 @@ export interface KaoiroConnection {
    * (#58); the server also persists the pick so the wrapper restores it
    * on next start. `mode` must be a closed-enum PermissionMode value. */
   setPermissionMode: (agentId: string, mode: string) => Promise<void>;
+  /** Renames the agent's persona display name while it is running (issue
+   *  #197 段階3 unit B); rejects like sendInstruction, plus
+   *  `invalid_name` (server-side trim/64-grapheme/control-char rejection)
+   *  and `revision_exhausted` (fail-closed wire-domain ceiling,
+   *  `AgentDirectory.rename/2`). `name` is sent as-is — this client does
+   *  NOT re-validate it, matching the server-authoritative-only decision
+   *  already made for LaunchDialog's spawn-time name field. The resolved
+   *  `{ persona, revision }` reply is intentionally NOT surfaced here: the
+   *  display update itself arrives through the agent's own next envelope
+   *  (a live wrapper re-emits `state_change` immediately after applying
+   *  `persona_sync`) or, for a disconnected/directory-only agent, through
+   *  the next `directory` broadcast — this call's resolution only
+   *  confirms the server accepted the write. */
+  renameAgent: (agentId: string, name: string) => Promise<void>;
   /** Purges the agent's past-session reply log (issue #48); rejects like
    * sendInstruction (forbidden / unknown_agent / no_current_session). */
   clearHistory: (agentId: string) => Promise<void>;
@@ -3433,6 +3447,16 @@ export function connectKaoiro(
     },
     setPermissionMode: (agentId, mode) =>
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
+    // ADR-0015: this event never reaches the runner (RUNNER_CONTROL_VERSION
+    // documents only the runner-relay subset), but every client -> server
+    // message needs a stamp regardless — same reasoning getLaunchDefaults
+    // already applies below (issue #197 段階3, ふじ MF-1 レビュー指摘).
+    renameAgent: (agentId, name) =>
+      pushAsync(channel, "rename_agent", {
+        version: "0",
+        agent_id: agentId,
+        name,
+      }),
     clearHistory: (agentId) =>
       pushAsync(channel, "clear_history", { agent_id: agentId }),
     deleteAgent: (agentId) =>

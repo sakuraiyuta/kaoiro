@@ -285,11 +285,35 @@
         .filter((env) => env.state === "disconnected")
         .map((env): OfflineTile => ({
           id: env.agent_id,
-          envelope: env,
+          // AgentDirectory name projection (issue #197 段階3, ふじ
+          // MF-3 レビュー指摘) — see projectDirectoryName's own doc.
+          envelope: projectDirectoryName(env, directory[env.agent_id]),
           directoryOnly: false,
         })),
     ].sort((a, b) => a.id.localeCompare(b.id)),
   );
+
+  // AgentDirectory is the authoritative name SoT (issue #197 段階3, ふじ
+  // MF-3 レビュー指摘): a CONNECTED agent's own wrapper re-emits
+  // state_change immediately after applying a rename (persona_sync), so
+  // its AgentStates envelope converges on its own. A DISCONNECTED agent
+  // has no wrapper to do that — its stale AgentStates envelope would
+  // otherwise show the pre-rename name forever, even after
+  // AgentDirectory (and the operator's own rename click, via its
+  // reply + the live `directory` broadcast) has already moved on. This
+  // projects the current directory persona onto a live envelope whenever
+  // the two names diverge; id/sprite_set are unaffected by rename (ADR-
+  // 0030 D2 改訂: 可変なのは name のみ), so adopting the directory
+  // entry's full persona wholesale is safe once the names differ at all.
+  function projectDirectoryName(
+    envelope: Envelope,
+    dirEntry: DirectoryEntry | undefined,
+  ): Envelope {
+    if (dirEntry === undefined || dirEntry.persona.name === envelope.persona?.name) {
+      return envelope;
+    }
+    return { ...envelope, persona: dirEntry.persona };
+  }
 
   // Synthesizes a minimal Envelope from a directory-only entry so AgentCard
   // can render it with the existing disconnected styling. `state=disconnected`
@@ -401,8 +425,16 @@
   // before their sender has reconnected and emitted a live state envelope.
   const selectedEnvelope = $derived.by<Envelope | null>(() => {
     if (selected === null) return null;
-    return agents[selected] ??
-      (directory[selected] ? directoryEnvelope(selected, directory[selected]) : null);
+    const live = agents[selected];
+    if (live === undefined) {
+      return directory[selected] ? directoryEnvelope(selected, directory[selected]) : null;
+    }
+    // AgentDirectory name projection (issue #197 段階3, ふじ MF-3 レビ
+    // ュー指摘) — see projectDirectoryName's own doc. Applies even to a
+    // LIVE (non-disconnected) selection: this closes the same gap for
+    // the brief window between a rename reply landing and this agent's
+    // own wrapper re-emitting state_change.
+    return projectDirectoryName(live, directory[selected]);
   });
   // Detail navigation follows the live grid's displayed order. Disconnected
   // cards live in a separate collapsed section and are intentionally absent
@@ -1420,6 +1452,7 @@
               selected = id;
             }
           }}
+          onRename={isOperator && connection ? connection.renameAgent : undefined}
         />
       </div>
       {#if nextAgentId}

@@ -54,6 +54,7 @@
     tasklist = null,
     onClose,
     onSelectAgent,
+    onRename,
   }: {
     envelope: Envelope;
     logs?: Envelope[];
@@ -94,6 +95,23 @@
      *  inter-agent message bubble). Omitted = peer name renders as static
      *  text, no navigation. */
     onSelectAgent?: (agentId: string) => void;
+    /** Renames this agent's persona display name while it is running
+     *  (issue #197 段階3 unit B). Undefined hides the rename affordance
+     *  entirely — a viewer session never gets this prop (App.svelte gates
+     *  it on `isOperator`, mirroring onInterrupt/onStop/onRestore/onDelete;
+     *  `name` cannot ride the same `connection`-only implicit gate the
+     *  model/effort/permission switchers use, since unlike ext.* it is a
+     *  top-level envelope field the server sends to viewers too). Rejects
+     *  like connection.renameAgent.
+     *  Takes `agentId` as its own argument (issue #197 段階3, ふじ MF-2
+     *  レビュー指摘) rather than App.svelte closing over
+     *  `selectedEnvelope.agent_id` — this component reads
+     *  `envelope.agent_id` itself and passes it through, so
+     *  `connection.renameAgent` (same `(agentId, name)` shape) can be
+     *  handed straight through by App.svelte with no closure at all.
+     *  That structurally removes the stale-closure class of bug a test
+     *  could only catch after the fact. */
+    onRename?: ((agentId: string, name: string) => Promise<void>) | undefined;
   } = $props();
 
   // Expand the detail from the tile that opened it (#36): scale up from the
@@ -948,6 +966,15 @@
   let effortMenuOpen = $state(false);
   let permMenuOpen = $state(false);
   let selectedEffort = $state<string | null>(null);
+  // --- rename (issue #197 段階3 unit B) --------------------------------
+  // Same popover shape as the model/effort/permission switchers above
+  // (`.cc-switchbox` class, shared outside-click close). renameDraft is
+  // seeded from the current `name` on open so the operator edits rather
+  // than retypes; renaming guards against a double-submit while the
+  // server round trip is in flight.
+  let renameMenuOpen = $state(false);
+  let renameDraft = $state("");
+  let renaming = $state(false);
   // Closed enum of SDK permission modes (#58). Keep the order issue-spec
   // friendly: default (safest) first, bypass last.
   const PERMISSION_MODE_VALUES = [
@@ -1121,17 +1148,19 @@
       modelMenuOpen = false;
       effortMenuOpen = false;
       permMenuOpen = false;
+      renameMenuOpen = false;
     }
   });
   // Close all popovers on a click outside any switch box.
   $effect(() => {
-    if (!modelMenuOpen && !effortMenuOpen && !permMenuOpen) return;
+    if (!modelMenuOpen && !effortMenuOpen && !permMenuOpen && !renameMenuOpen) return;
     function onDocClick(event: MouseEvent): void {
       const target = event.target as HTMLElement | null;
       if (!target?.closest(".cc-switchbox")) {
         modelMenuOpen = false;
         effortMenuOpen = false;
         permMenuOpen = false;
+        renameMenuOpen = false;
       }
     }
     document.addEventListener("click", onDocClick);
@@ -1141,17 +1170,61 @@
   function toggleModelMenu(): void {
     effortMenuOpen = false;
     permMenuOpen = false;
+    renameMenuOpen = false;
     modelMenuOpen = !modelMenuOpen;
   }
   function toggleEffortMenu(): void {
     modelMenuOpen = false;
     permMenuOpen = false;
+    renameMenuOpen = false;
     effortMenuOpen = !effortMenuOpen;
   }
   function togglePermMenu(): void {
     modelMenuOpen = false;
     effortMenuOpen = false;
+    renameMenuOpen = false;
     permMenuOpen = !permMenuOpen;
+  }
+  function toggleRenameMenu(): void {
+    modelMenuOpen = false;
+    effortMenuOpen = false;
+    permMenuOpen = false;
+    // Seed the draft from the CURRENT name every time the popover opens
+    // (not just on first open) so a stale edit left over from an aborted
+    // previous attempt does not resurface.
+    if (!renameMenuOpen) renameDraft = name;
+    renameMenuOpen = !renameMenuOpen;
+  }
+  async function submitRename(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    if (!onRename || renaming) return;
+    const trimmed = renameDraft.trim();
+    // Unchanged: close quietly rather than round-tripping a no-op to the
+    // server (mirrors chooseModel/chooseEffort's early-return on an
+    // unchanged pick). A BLANK draft is deliberately NOT given the same
+    // treatment (issue #197 段階3, ふじ MF-4 レビュー指摘): the
+    // director's decision is server-authority-only validation (D5) — this
+    // client does no name checking beyond `trim()`, so a blank name is
+    // sent through like any other and the server's own `invalid_name`
+    // rejection surfaces via the normal actionError path below. Silently
+    // closing on blank would have been undocumented client-side
+    // validation in disguise.
+    if (trimmed === name) {
+      renameMenuOpen = false;
+      return;
+    }
+    renaming = true;
+    // Reuses the shared `run()` error path (actionError) — the director's
+    // decision (issue #197 段階3 unit B) is to surface rename failures
+    // through the SAME raw-reason display every other action error uses,
+    // not a bespoke translated message, so unknown_agent / invalid_name /
+    // forbidden / revision_exhausted all render identically to how
+    // terminate/restore/delete already do.
+    await run(() => onRename(envelope.agent_id, trimmed));
+    renaming = false;
+    // Leave the popover open on failure so the operator can see
+    // actionError and retry without reopening; close only on success.
+    if (actionError === "") renameMenuOpen = false;
   }
   let refreshingModels = $state(false);
   function refreshModels(): void {
@@ -2133,7 +2206,43 @@
           <span class="lamp" title={expression.label}></span>
         </div>
         <div class="meta">
-          <h2>{name}</h2>
+          <div class="name-row">
+            <h2>{name}</h2>
+            {#if onRename}
+              <!-- issue #197 段階3 unit B: operator-only rename affordance.
+                   `.cc-switchbox` reuses the model/effort/permission
+                   switcher's popover shell + outside-click close (the
+                   $effect above tracks renameMenuOpen alongside those
+                   three). Undefined onRename (viewer session, or no
+                   connection) drops this whole block — no DOM at all,
+                   not just a disabled button (director's D16-mirroring
+                   decision: viewer must not even see the affordance). -->
+              <div class="cc-switchbox rename-switchbox">
+                <button
+                  type="button"
+                  class="cc-switch rename-switch"
+                  aria-haspopup="true"
+                  aria-expanded={renameMenuOpen}
+                  title="表示名を変更"
+                  aria-label="{name} の表示名を変更"
+                  onclick={toggleRenameMenu}
+                >✎</button>
+                {#if renameMenuOpen}
+                  <form class="rename-form" onsubmit={submitRename}>
+                    <input
+                      type="text"
+                      bind:value={renameDraft}
+                      aria-label="{name} の新しい表示名"
+                      disabled={renaming}
+                    />
+                    <button type="submit" disabled={renaming}>
+                      {renaming ? "変更中…" : "変更"}
+                    </button>
+                  </form>
+                {/if}
+              </div>
+            {/if}
+          </div>
           {#key display.shown}
             <p class="state">{expression.label}</p>
           {/key}
@@ -3640,6 +3749,62 @@
     margin: 0;
     font-size: var(--fs-h1);
     color: var(--fg);
+  }
+
+  /* Rename affordance row (issue #197 段階3 unit B): the name plus its
+     operator-only ✎ toggle sit side by side, sharing .cc-switchbox's
+     popover positioning so the form drops directly under the button. */
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .rename-switch {
+    font-size: var(--fs-body);
+    line-height: 1;
+  }
+
+  .rename-form {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    display: flex;
+    gap: 0.3rem;
+    margin: 0.3rem 0 0;
+    padding: 0.4rem;
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    z-index: 5;
+  }
+
+  .rename-form input {
+    min-width: 12rem;
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--fs-body-sm);
+  }
+
+  .rename-form button {
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    background: var(--bg-card);
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--fs-body-sm);
+    cursor: pointer;
+  }
+
+  .rename-form button:disabled {
+    opacity: 0.5;
+    cursor: progress;
   }
 
   .state {

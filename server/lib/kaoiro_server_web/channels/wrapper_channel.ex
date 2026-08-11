@@ -234,7 +234,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp push_persona_sync(socket, agent_id) do
     case AgentDirectory.get(agent_id) do
       %{persona: %{"name" => name}, revision: revision} ->
-        push(socket, "persona_sync", %{"name" => name, "revision" => revision})
+        # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): flat
+        # version stamp, matching the live-relay `persona_sync` push
+        # from `agents_channel.ex`'s `rename_agent` handler.
+        push(socket, "persona_sync", %{
+          "version" => "0",
+          "name" => name,
+          "revision" => revision
+        })
 
       nil ->
         # No AgentDirectory entry yet — the spawn-time `record/3` cast

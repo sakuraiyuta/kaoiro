@@ -1040,7 +1040,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert persona["id"] == "ao"
       assert persona["sprite_set"] == "ao"
 
-      assert_broadcast "persona_sync", %{"name" => "あお(改名)", "revision" => 1}
+      # version (ADR-0015, issue #197 段階3 ふじ MF-1 レビュー指摘): live
+      # relay の persona_sync にも version stamp が乗る。
+      assert_broadcast "persona_sync", %{"version" => "0", "name" => "あお(改名)", "revision" => 1}
 
       assert %{persona: %{"name" => "あお(改名)"}, revision: 1} = AgentDirectory.get(agent_id)
     end
@@ -1094,6 +1096,72 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "rename_agent", %{"agent_id" => "test.rename-none", "name" => "x"})
       assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+
+    # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): rename_agent は
+    # runner へ中継されないが、client -> server のあらゆる message が
+    # version を要求される点は変わらない (`launch_defaults` と同じ
+    # "accepting" action)。一致は無音、欠落/不一致は警告した上で処理は
+    # 継続する。
+    test "version 不一致は警告してから処理を継続する (ADR-0015)" do
+      agent_id = "test.rename-version-mismatch"
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "rename_agent", %{
+              "agent_id" => agent_id,
+              "name" => "改名済み",
+              "version" => "99"
+            })
+
+          assert_reply ref, :ok, %{"revision" => 1}
+        end)
+
+      assert log =~ "client declared protocol version"
+      assert log =~ "\"99\""
+    end
+
+    test "version 省略も警告した上で処理を継続する" do
+      agent_id = "test.rename-version-absent"
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      log =
+        capture_log(fn ->
+          ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "改名済み"})
+          assert_reply ref, :ok, %{"revision" => 1}
+        end)
+
+      assert log =~ "client declared protocol version (absent)"
+    end
+
+    test "version が \"0\" なら警告しない" do
+      agent_id = "test.rename-version-match"
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "rename_agent", %{
+              "agent_id" => agent_id,
+              "name" => "改名済み",
+              "version" => "0"
+            })
+
+          assert_reply ref, :ok, %{"revision" => 1}
+        end)
+
+      refute log =~ "client declared protocol version"
     end
 
     test "空白 / 64 grapheme 超 / 制御文字混入の name は invalid_name として拒否され AgentDirectory は無変化" do
@@ -1180,6 +1248,63 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "rename_user", %{"user_id" => "has space", "name" => "x"})
       assert_reply ref, :error, %{reason: "invalid_user_id"}
+    end
+
+    # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): rename_agent と
+    # 同じ "accepting" action の version 検証。
+    test "version 不一致は警告してから処理を継続する (ADR-0015)" do
+      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vmismatch"}, "user", "R")
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "rename_user", %{
+              "user_id" => user.id,
+              "name" => "改名済み",
+              "version" => "99"
+            })
+
+          assert_reply ref, :ok, %{display_name: "改名済み"}
+        end)
+
+      assert log =~ "client declared protocol version"
+      assert log =~ "\"99\""
+    end
+
+    test "version 省略も警告した上で処理を継続する" do
+      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vabsent"}, "user", "R")
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      log =
+        capture_log(fn ->
+          ref = push(socket, "rename_user", %{"user_id" => user.id, "name" => "改名済み"})
+          assert_reply ref, :ok, %{display_name: "改名済み"}
+        end)
+
+      assert log =~ "client declared protocol version (absent)"
+    end
+
+    test "version が \"0\" なら警告しない" do
+      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vmatch"}, "user", "R")
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "rename_user", %{
+              "user_id" => user.id,
+              "name" => "改名済み",
+              "version" => "0"
+            })
+
+          assert_reply ref, :ok, %{display_name: "改名済み"}
+        end)
+
+      refute log =~ "client declared protocol version"
     end
 
     test "空白 / 64 grapheme 超 / 制御文字混入の name は invalid_name" do

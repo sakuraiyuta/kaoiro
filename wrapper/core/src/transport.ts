@@ -196,6 +196,38 @@ export const MAX_REPLAY_IA_PUSH_BYTES = 1_000_000;
 export const MAX_ACTIVE_TASK_CACHE_ENTRIES = 5_000;
 export const MAX_ACTIVE_TASK_CACHE_BYTES = 6_000_000;
 
+/** The protocol version this wrapper speaks (ADR-0015). Mirrors
+ *  `RUNNER_PROTOCOL_VERSION` in `runner/src/transport.ts` — same rule,
+ *  separate constant per party since each stamps its own outbound
+ *  messages independently. */
+const WRAPPER_PROTOCOL_VERSION = "0";
+
+/** `version` is unvalidated wire input, so it is rendered bounded — same
+ *  reason the server bounds its own inspect of the field. */
+const MAX_LOGGED_VERSION_CHARS = 64;
+
+function describeVersion(value: unknown): string {
+  if (value === undefined) return "(absent)";
+  const text = typeof value === "string" ? JSON.stringify(value) : String(value);
+  return text.length > MAX_LOGGED_VERSION_CHARS
+    ? text.slice(0, MAX_LOGGED_VERSION_CHARS) + "…"
+    : text;
+}
+
+/** ADR-0015's receiver rule: only an exact match is normal, a mismatch is
+ *  warned about, and the message is processed EITHER WAY (best-effort
+ *  accept). Mirrors `warnOnVersionMismatch` in `runner/src/transport.ts`
+ *  (issue #197 段階3, ふじ MF-1 レビュー指摘: `persona_sync` predates
+ *  this wrapper-side check entirely — the first server -> wrapper
+ *  message on this topic to carry a `version` key at all). */
+function warnOnVersionMismatch(event: string, version: unknown): void {
+  if (version === WRAPPER_PROTOCOL_VERSION) return;
+  process.stderr.write(
+    `${event}: server declared protocol version ${describeVersion(version)}; ` +
+      `accepting as ${JSON.stringify(WRAPPER_PROTOCOL_VERSION)} (ADR-0015 best-effort accept)\n`,
+  );
+}
+
 interface ActiveTaskCacheEntry {
   envelope: Envelope;
   jsonBytes: number;
@@ -887,6 +919,10 @@ export class ServerLink {
       ) {
         return;
       }
+      // ADR-0015 warn-then-accept (issue #197 段階3, ふじ MF-1 レビュー
+      // 指摘): a version mismatch/absence never blocks the rename itself
+      // — name/revision are already validated above — it only logs.
+      warnOnVersionMismatch("persona_sync", payload.version);
       options.onRenamePersona?.(name, payload.revision);
     });
     // File-upload wire (file-upload spec / ADR-0025). attach_open declares an

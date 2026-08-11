@@ -525,6 +525,45 @@ describe("ServerLink — persona_sync (issue #197 段階3)", () => {
     emit("persona_sync", { name: "x", revision: -1 });
     expect(seen).toEqual([]);
   });
+
+  // ADR-0015 warn-then-accept (issue #197 段階3, ふじ MF-1 レビュー
+  // 指摘): persona_sync は段階3 で新設された server -> wrapper message
+  // のうち、version チェックがそもそも実装されていなかった最初の1つ。
+  // 一致時は無警告、欠落/不一致時は警告しつつ name/revision が valid
+  // なら受理継続する — rename 自体を version でブロックしない。
+  it("version が一致 (\"0\") なら警告しない", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const seen: Array<[string, number]> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onRenamePersona: (name, revision) => seen.push([name, revision]),
+    });
+    emit("persona_sync", { version: "0", name: "あお(改名)", revision: 1 });
+    expect(seen).toEqual([["あお(改名)", 1]]);
+    expect(stderr).not.toHaveBeenCalled();
+    stderr.mockRestore();
+  });
+
+  it("version が欠落/不一致でも警告した上で name/revision が valid なら受理継続する", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const seen: Array<[string, number]> = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onRenamePersona: (name, revision) => seen.push([name, revision]),
+    });
+    emit("persona_sync", { name: "あお(欠落)", revision: 1 });
+    emit("persona_sync", { version: "1", name: "あお(不一致)", revision: 2 });
+    expect(seen).toEqual([
+      ["あお(欠落)", 1],
+      ["あお(不一致)", 2],
+    ]);
+    expect(stderr).toHaveBeenCalledTimes(2);
+    expect(stderr.mock.calls[0]![0]).toContain("persona_sync");
+    expect(stderr.mock.calls[0]![0]).toContain("(absent)");
+    expect(stderr.mock.calls[1]![0]).toContain("persona_sync");
+    expect(stderr.mock.calls[1]![0]).toContain('"1"');
+    stderr.mockRestore();
+  });
 });
 
 describe("ServerLink — refresh_models 制御 (ADR-0037 F6, phase-18-5)", () => {

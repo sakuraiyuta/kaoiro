@@ -967,12 +967,33 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with :ok <- require_operator(socket),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          {:ok, name} <- validate_rename_name(payload) do
+      # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): this event
+      # never reaches the runner (unlike relay_to_runner's callers) but
+      # ADR-0015 draws no such exception — every client -> server message
+      # needs a version stamp, same reasoning `launch_defaults` (#88)
+      # already applies via this same "accepting" action.
+      warn_on_version_mismatch(payload, "rename_agent", "accepting")
+
       case AgentDirectory.rename(agent_id, name) do
         {:ok, %{persona: persona, revision: revision}} ->
+          # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘/ふじ
+          # commit前訂正): every server -> wrapper message needs the
+          # flat version stamp — this is ADR-0015's own requirement,
+          # NOT something derived from what sibling messages on this
+          # topic already do. `set_model`/`set_effort`/
+          # `set_permission_mode` (relayed via `relay_to_runner/4`,
+          # which strips `agent_id` but does not add `version` on this
+          # leg) do NOT carry one — that is an existing, unrelated
+          # ADR-0015 gap this change does not touch or rely on. The
+          # stamp here matches the after-join `persona_sync` push
+          # (`wrapper_channel.ex`), which carries the same
+          # `{"version" => "0", ...}` shape, so a wrapper's handler
+          # sees an identical contract regardless of which producer
+          # sent it.
           KaoiroServerWeb.Endpoint.broadcast(
             "wrapper:#{agent_id}",
             "persona_sync",
-            %{"name" => name, "revision" => revision}
+            %{"version" => "0", "name" => name, "revision" => revision}
           )
 
           # D16: the `directory` refresh for already-joined operators
@@ -1013,6 +1034,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with :ok <- require_operator(socket),
          {:ok, user_id} <- fetch_user_id(payload),
          {:ok, name} <- validate_rename_name(payload) do
+      # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): same
+      # "accepting" version check as rename_agent — this event never
+      # reaches the runner either.
+      warn_on_version_mismatch(payload, "rename_user", "accepting")
+
       case Users.rename(user_id, name) do
         {:ok, entry} ->
           {:reply, {:ok, entry}, socket}

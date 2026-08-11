@@ -276,6 +276,19 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       refute_push "persona_sync", %{}
     end
+
+    # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): after-join push
+    # にも version stamp が要る。上の 2 テストは %{"name" => ..., "revision"
+    # => ...} という部分一致で version の有無を検証できないため、ここで
+    # 直接 pin する。
+    test "push には version スタンプが乗る (ADR-0015)" do
+      agent_id = "test.persona-sync-version"
+      AgentDirectory.record(agent_id, %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"})
+
+      _socket = join_wrapper(agent_id)
+
+      assert_push "persona_sync", %{"version" => "0", "name" => "あお", "revision" => 0}
+    end
   end
 
   test "matching duplicate early join は channel を停止し owner/prompt を奪わない" do
