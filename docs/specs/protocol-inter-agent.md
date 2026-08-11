@@ -306,6 +306,23 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
   server へ往復し、server 側 tombstone TTL(既定 24 時間)が明けた
   時点で受理されてしまい、下記「CID 再利用は契約にしない」の
   wrapper 側 24 時間 guard が骨抜きになる。
+- **turn_number は accept された送信のみが消費する**(issue #222):
+  wrapper-local な `track.turnNumber` は送受信双方が共有する 1 個の
+  カウンタで、`send_to_agent` 呼び出しの `#dispatch()` 前に暫定採番
+  する。この暫定採番は server が実際に **accept** した場合にのみ
+  確定した消費として扱う契約であり、reject された採番は消費された
+  ことにしない。旧実装はこの契約を守れておらず、reject 後も
+  `track.turnNumber` が進んだままになる欠陥があった(欠陥 1、下記)。
+- **reject 時の turnNumber ロールバック**(issue #222 欠陥1): `invoke()`
+  の reject 分岐は、`#dispatch()` 待機中に同じ conversation_id への
+  inbound 活動(`receiveInbound()` / `observeInbound()`)が割り込んで
+  いなかった場合に限り、暫定採番した `turnNumber` を 1 戻す。割り込みが
+  あった場合はその inbound 側の値が authoritative なので触らない
+  (`mutationGen` による検出、`inter_agent.ts` の該当コメント参照)。
+  `conversation_closed` reject は戻しても実害・利益ともに乏しい
+  (その cid はいずれにせよ二度と使えない) が、それ以外の reject 理由で
+  会話が継続するケースでは、戻さないと以後 peer の正当な turn が
+  下記の stale 判定に恒久的に引っかかり続ける。
 - **late / stale / duplicate turn の拒否**: 受信 `turn_number` が当該
   conversation で既知の最大値以下なら、SDK 入力へ注入しない(返信待ち
   の waiter も満たさない)。ただし server 合成 envelope(ハード制限
@@ -318,7 +335,10 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
   にしてしまう("server=open、受信側 wrapper だけ closed" という
   split-brain)。この forge は live ingress の構造検証(下記)でも
   server 側で拒否されるが、受信側 wrapper 自身も provenance を
-  検証することで二重に防ぐ。
+  検証することで二重に防ぐ。**issue #222 欠陥3 以降、この破棄は
+  完全な無言ではない** — 破棄した envelope の送信元へ `stale_turn`
+  notice を送る(例外条件と再同期の役割は「エラー種別コード」節
+  「stale_turn 通知の構造」参照)。
 - wrapper 側の closed track も TTL(24 時間)経過後に GC する(長寿命
   wrapper のメモリリーク防止)。
 - **OPEN track の idle TTL と総数上限**(issue #177 review 2巡目
@@ -929,13 +949,44 @@ enum にはしない。未知の `code` を受けた側は `api_error` と同等
 | `timeout` | peer 側処理のタイムアウト | 時間を置いて再送 |
 | `interrupted` | peer の turn が中断された | operator 都合の可能性。再送前に状況確認 |
 | `disconnected` | peer wrapper の接続断 | 復帰まで再送は無駄。エスカレート |
+| `stale_turn` | 受信側 wrapper が turn_number を既知の最大値以下(AC9)と判定し、メッセージを破棄した | 新しい conversation_id で送り直す |
 
-#### 発火元(2 系統)
+#### 発火元(3 系統)
 
 | 発火元 | 契機 | 経路 |
 |---|---|---|
 | peer 側 wrapper | SDK turn が is_error 終了し、その turn に未返信の inter-agent 注入があった | 当該 conversation の送信元へ ServerLink 直送(モデル経由でないため broker 承認なし)。通常の `inter_agent_message` として既存ルーティングに乗る |
 | server | wrapper channel の切断 (terminate) | `code=disconnected` を server が合成し、当該 wrapper が参加中の各 conversation の他参加者へ push |
+| 受信側 wrapper | AC9(stale/duplicate turn_number)判定でメッセージを破棄した(issue #222 欠陥3) | 破棄した envelope の送信元へ ServerLink 直送。ただし対象がそれ自体エラー通知の場合、または対象 conversation が既に closed の場合は送信しない — 詳細は次項 |
+
+#### stale_turn 通知の構造(issue #222 欠陥3)
+
+`stale_turn` は他の code と異なり、**通知であると同時に受信側の
+turn_number を送信側へ再同期させる副次効果を持つ**。通知の
+`turn_number` は受信側 wrapper 自身の `track.turnNumber` を新規採番
+した値であり、これを受け取った送信側の `receiveInbound()` はこの
+envelope を(stale ではない)通常の inbound として処理し、自分の
+track をその値まで前進させる。結果として送信側の次の送信は、たとえ
+同じ `conversation_id` を使っても、ずれを解消した番号で行われる —
+「通知」だけでなく「再同期」の役割を持つことは、将来この機構の
+要否を再検討する際にも踏まえること。
+
+受信側で AC9 の stale 判定が発火したときに通知を送るが、無条件では
+ない。2 つのケースでは意図的に通知を生成しない:
+
+- **対象 envelope 自体が `payload.error` を持つ場合**(= それ自体が
+  notice)。notice への返信として更に notice を返すと、turn_number が
+  ずれた 2 者間で無限に往復しうる。turn_number の前進だけではこれを
+  防げない — stale 判定は受信側自身の track との比較であり、送信側が
+  どれだけ番号を進めても受信側の判定には無関係だからである。notice を
+  notice の対象から除外することで、往復は構造的に 1 回に収まる。
+- **対象 conversation が既に `closed` の場合**。閉じた会話への遅延到着
+  は、ずれてはいるがまだ生きている会話への stale とは性質が異なる —
+  送信側は既に(または次の送信で)`conversation_closed` reject と
+  AC10 のローカル拒否を経験しているはずで、そこへ通知を重ねても
+  意味がない。再送も起きないので再同期する対象も無い。この場合も
+  破棄自体はログへ残す(無言の破棄経路を潰す issue で新しい無言
+  経路を作らないため)。
 
 engine 差は共通 classifier の中で吸収する(engine-agnostic、
 [ADR-0032](../adr/0032-codex-adapter.md) F5)。分類不能な事象は

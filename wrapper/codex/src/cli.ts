@@ -470,15 +470,36 @@ async function main(): Promise<void> {
         // above just learned `closed`, only that no reply is owed and no SDK
         // turn should be spent on it; anything else here is AC9's late /
         // stale / duplicate turn_number, which never happened at all
-        // (track untouched). Conflating them would make a future stale-drop
-        // investigation (issue #222) miscount terminal notices as drops.
+        // (track untouched).
         if (disposition.mode === "terminal") {
           process.stdout.write(
             `  inter_agent_message terminal, no reply owed: ${envelope.agent_id}\n`,
           );
-        } else {
+        } else if (disposition.notice) {
+          // issue #222 欠陥3: notify the ORIGINAL sender (and resync its
+          // track — see InterAgentTool#receiveInbound's doc) instead of
+          // dropping this silently. Same AC10-bypassing pattern as
+          // resolveTurnEnd()'s notices below — this never goes through
+          // invoke()/#dispatch() either.
+          link?.send(disposition.notice);
           process.stdout.write(
-            `  inter_agent_message stale/duplicate turn dropped: ${envelope.agent_id}\n`,
+            `  inter_agent_message stale/duplicate turn dropped, stale_turn notice sent: ${envelope.agent_id}\n`,
+          );
+        } else {
+          // No notice was built — receiveInbound() withholds it in exactly
+          // two cases (see its doc): this envelope was itself a peer_error/
+          // stale_turn notice (replying would risk a notice/notice ping-
+          // pong), or the track was already closed (a late arrival after
+          // the conversation legitimately ended, where the sender already
+          // has — or will get — its own `conversation_closed` reject). The
+          // director's steer: a skip must never be silent, even when no
+          // notice goes out over the wire, so log which case this was.
+          const stalePayload = envelope.payload as Partial<InterAgentMessagePayload>;
+          const skipReason = stalePayload.error
+            ? "envelope itself is a peer_error notice"
+            : "track already closed";
+          process.stdout.write(
+            `  inter_agent_message stale/duplicate turn dropped, no notice (${skipReason}): ${envelope.agent_id}\n`,
           );
         }
         return;

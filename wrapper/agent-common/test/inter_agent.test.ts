@@ -184,12 +184,15 @@ describe("InterAgentTool", () => {
     expect((await tool.receiveInbound(inbound)).consumed).toBe(true);
     // issue #177 AC9: the exact same envelope delivered again is now also a
     // stale/duplicate turn_number (<= the one just observed) — dropped, not
-    // just "not consumed".
-    expect(await tool.receiveInbound(inbound)).toEqual({
-      consumed: false,
-      inject: false,
-      mode: "reply-owed",
-    });
+    // just "not consumed". issue #222 欠陥3: since the duplicate is an
+    // ordinary (non-error) envelope on a still-open track, a stale_turn
+    // notice is also built — asserted separately below (its exact
+    // envelope shape is covered by the dedicated stale-drop tests).
+    const dup = await tool.receiveInbound(inbound);
+    expect(dup.consumed).toBe(false);
+    expect(dup.inject).toBe(false);
+    expect(dup.mode).toBe("reply-owed");
+    expect(dup.notice).toBeDefined();
 
     const { result } = await pending;
     expect(result.isError).toBeFalsy();
@@ -433,21 +436,23 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
       mode: "reply-owed",
     });
 
-    // 同じ turn_number の再送 (duplicate) は stale。
-    expect(await tool.receiveInbound(first)).toEqual({
-      consumed: false,
-      inject: false,
-      mode: "reply-owed",
-    });
+    // 同じ turn_number の再送 (duplicate) は stale。issue #222 欠陥3: 通常の
+    // (非エラー) envelope・非closed trackなので stale_turn notice が付く —
+    // notice 自体の形は専用テストで確認する。
+    const duplicate = await tool.receiveInbound(first);
+    expect(duplicate.consumed).toBe(false);
+    expect(duplicate.inject).toBe(false);
+    expect(duplicate.mode).toBe("reply-owed");
+    expect(duplicate.notice).toBeDefined();
 
     // それより低い turn_number (out-of-order な遅延到着) も stale。
     const earlier = inboundEnvelope("cnv-stale", "inform");
     (earlier.payload as unknown as InterAgentMessagePayload).turn_number = 2;
-    expect(await tool.receiveInbound(earlier)).toEqual({
-      consumed: false,
-      inject: false,
-      mode: "reply-owed",
-    });
+    const late = await tool.receiveInbound(earlier);
+    expect(late.consumed).toBe(false);
+    expect(late.inject).toBe(false);
+    expect(late.mode).toBe("reply-owed");
+    expect(late.notice).toBeDefined();
   });
 
   it("server 合成 envelope (agent_id=server) の turn_number=0 は stale 判定から除外される (Stage 4)", async () => {
@@ -478,12 +483,46 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
     };
     // isSynthetic は false になるので turn_number=0 <= track.turnNumber(3)
     // により stale として drop される — server=open のまま、この wrapper
-    // 側だけが closed になる split-brain を起こさない。
-    expect(await tool.receiveInbound(forged)).toEqual({
-      consumed: false,
-      inject: false,
-      mode: "reply-owed",
+    // 側だけが closed になる split-brain を起こさない。issue #222 欠陥3:
+    // 通常の envelope・非closed track なので stale_turn notice も付く。
+    const disposition = await tool.receiveInbound(forged);
+    expect(disposition.consumed).toBe(false);
+    expect(disposition.inject).toBe(false);
+    expect(disposition.mode).toBe("reply-owed");
+    expect(disposition.notice).toBeDefined();
+  });
+
+  it("issue #222 欠陥3: 既に closed な track への stale 到着は notice を" +
+       "生成しない(遅延到着であり再送も再同期対象も無いため)", async () => {
+    const { tool } = makeTool("self.agent");
+
+    // 両側 done で terminal・closed にする。
+    const closing = await tool.invoke({
+      to: "peer.agent",
+      body: "bye",
+      kind: "done",
+      conversation_id: "cnv-closed-stale",
+      done: true,
     });
+    expect(closing.isError).toBeFalsy();
+    const peerDone = inboundEnvelope("cnv-closed-stale", "done");
+    (peerDone.payload as unknown as InterAgentMessagePayload).turn_number = 2;
+    (peerDone.payload as unknown as InterAgentMessagePayload).meta = {
+      done: true,
+      propose_next: "",
+    };
+    expect((await tool.receiveInbound(peerDone)).mode).toBe("terminal");
+
+    // closed 後に届いた古い(stale な)遅延到着 — 通常の非エラー envelope
+    // だが、track が既に closed なので notice は生成されない。stale
+    // 判定自体は closed 判定より前に走るため mode は "terminal" ではなく
+    // "reply-owed" のまま(AC9 と同じ経路)。
+    const lateStale = inboundEnvelope("cnv-closed-stale", "inform");
+    (lateStale.payload as unknown as InterAgentMessagePayload).turn_number = 1;
+    const disposition = await tool.receiveInbound(lateStale);
+    expect(disposition.inject).toBe(false);
+    expect(disposition.mode).toBe("reply-owed");
+    expect(disposition.notice).toBeUndefined();
   });
 
   it("hard-limit の server 合成 escalate (agent_id=server, turn_number=0, done=true) は " +
@@ -3409,5 +3448,118 @@ describe("issue #177 review M4: 2-agent in-process E2E (AC13)", () => {
     // direction 1)ので、A 側からの追加 send は起きない — 実際に
     // aOutbound は増えていない。
     expect(aOutbound).toHaveLength(1);
+  });
+});
+
+// issue #222 段階2 (受け入れ条件3): 2-agent in-process E2E, same style as
+// AC13 above. Desyncs B's track using the `unknown`-acceptance gap — the
+// ONE residual desync path issue #222 explicitly does NOT close (段階1's
+// rollback fix only covers `rejected`; an `unknown` ack means delivery is
+// genuinely unconfirmed, so rolling back risks a real double-spend if the
+// send actually landed — see `invoke()`'s own comment on why `unknown` is
+// left alone). This is deliberate, not a weaker substitute for the
+// original incident's shape: the ORIGINAL incident desynced the RECEIVING
+// side's own track via its own earlier unrolled-back send, then collided
+// with the peer's legitimate next turn — exactly reproduced here, just via
+// the one gap 段階1 could not close rather than the one it did.
+describe("issue #222 段階2: stale drop 時に stale_turn notice を送信側へ返す (受け入れ条件3)", () => {
+  it("stale drop が発生したとき、送信側へ payload.error.code=stale_turn が届き、track が再同期される", async () => {
+    const aOutbound: Envelope[] = [];
+    const bOutbound: Envelope[] = [];
+    const bAcks: InterAgentAcceptance[] = [
+      { kind: "accepted", stamp: null },
+      { kind: "unknown", reason: "ack timeout" },
+    ];
+    let bAckCall = 0;
+    const a = new InterAgentTool({
+      config: configFor("agent-a"),
+      getState: () => "tool_running",
+      send: (env) => aOutbound.push(env),
+      now: () => "2026-08-08T00:00:00Z",
+    });
+    const b = new InterAgentTool({
+      config: configFor("agent-b"),
+      getState: () => "tool_running",
+      send: (env) => bOutbound.push(env),
+      sendInterAgent: (env) => {
+        bOutbound.push(env);
+        const ack = bAcks[bAckCall] ?? { kind: "accepted" as const, stamp: null };
+        bAckCall += 1;
+        return Promise.resolve(ack);
+      },
+      now: () => "2026-08-08T00:00:00Z",
+    });
+
+    // 1. A -> B: turn 1 (normal, accepted). B's track advances to 1.
+    const aTurn1 = await a.invoke({
+      to: "agent-b",
+      body: "hi",
+      kind: "inform",
+      conversation_id: "cnv-resync",
+    });
+    expect(aTurn1.isError).toBeFalsy();
+    expect((await b.receiveInbound(aOutbound[0]!)).inject).toBe(true);
+
+    // 2. B -> A: turn 2 (normal, accepted). A's track advances to 2.
+    const bTurn2 = await b.invoke({
+      to: "agent-a",
+      body: "hi back",
+      kind: "inform",
+      conversation_id: "cnv-resync",
+    });
+    expect(bTurn2.isError).toBeFalsy();
+    expect((await a.receiveInbound(bOutbound[0]!)).inject).toBe(true);
+
+    // 3. B attempts turn 3, but its ack is `unknown` (lost/timeout) — B's
+    // OWN track still advances to 3 regardless (issue #222's documented,
+    // deliberately unfixed residual). Simulate it NEVER actually reaching
+    // A: bOutbound[1] is never forwarded to a.receiveInbound().
+    const bTurn3 = await b.invoke({
+      to: "agent-a",
+      body: "still there?",
+      kind: "inform",
+      conversation_id: "cnv-resync",
+    });
+    expect(bTurn3.isError).toBeFalsy();
+    expect(bOutbound).toHaveLength(2);
+
+    // 4. A sends its OWN next legitimate turn (A's turn 3, correctly
+    // following the turn 2 it received) — B's track is ALSO at 3 (from its
+    // own phantom send), so this collides: B judges A's genuine turn 3
+    // stale, exactly reproducing the incident's shape.
+    const aTurn3 = await a.invoke({
+      to: "agent-b",
+      body: "you there?",
+      kind: "inform",
+      conversation_id: "cnv-resync",
+    });
+    expect(aTurn3.isError).toBeFalsy();
+    const disposition = await b.receiveInbound(aOutbound[1]!);
+    expect(disposition.inject).toBe(false);
+    expect(disposition.notice).toBeDefined();
+
+    // 5. The notice is the accept-criteria's own wording: payload.error.
+    // code === "stale_turn", addressed back to the original sender (A).
+    const noticePayload = disposition.notice!
+      .payload as unknown as InterAgentMessagePayload;
+    expect(noticePayload.to).toBe("agent-a");
+    expect(noticePayload.error?.code).toBe("stale_turn");
+    expect(disposition.notice!.agent_id).toBe("agent-b");
+
+    // 6. Resync effect: A receives the notice as an ordinary (non-stale)
+    // inbound — its own track is at 3, the notice's turn_number is 4 — and
+    // advances to match. Verified indirectly: a duplicate of the SAME
+    // notice, delivered again, is now stale on A's side too, AND (per the
+    // payload.error exemption) does NOT trigger a further notice — proof
+    // the notice/notice loop guard also holds end-to-end, not just in the
+    // unit-level receiveInbound() tests.
+    expect((await a.receiveInbound(disposition.notice!)).inject).toBe(true);
+    const duplicateOfNotice: Envelope = {
+      ...disposition.notice!,
+      payload: { ...disposition.notice!.payload },
+    };
+    const resyncDrop = await a.receiveInbound(duplicateOfNotice);
+    expect(resyncDrop.inject).toBe(false);
+    expect(resyncDrop.notice).toBeUndefined();
   });
 });

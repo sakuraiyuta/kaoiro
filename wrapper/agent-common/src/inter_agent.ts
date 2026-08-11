@@ -106,6 +106,7 @@ const ERROR_CODE_GUIDANCE: Readonly<Record<string, string>> = {
   timeout: "the peer may still be mid-turn — wait before retrying",
   interrupted: "confirm the peer's state before retrying",
   disconnected: "the peer is unreachable — do not retry, escalate to the operator",
+  stale_turn: "resend using a new conversation_id",
 };
 
 const DEFAULT_ERROR_GUIDANCE = "confirm the peer's state before retrying";
@@ -159,7 +160,10 @@ function classifyByDetailKeywords(detail: string): string | null {
  *  exception strings, SDK error text) unsafe to inject verbatim into a peer
  *  agent's LLM context. `disconnected` is documented for vocabulary parity
  *  with the server-synthesized notice even though this classifier never
- *  produces it (see classifyInterAgentError doc). */
+ *  produces it (see classifyInterAgentError doc). `stale_turn` (issue #222
+ *  欠陥3) is likewise never produced by `classifyInterAgentError` — it is
+ *  built directly in `receiveInbound()`'s stale branch, not routed through
+ *  that turn-failure classifier at all. */
 const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
   rate_limit: "the peer hit a rate limit",
   context_overflow: "the peer's context window overflowed",
@@ -167,6 +171,8 @@ const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
   timeout: "the peer's turn timed out",
   interrupted: "the peer's turn was interrupted",
   disconnected: "the peer disconnected",
+  stale_turn:
+    "the peer's local turn counter had already advanced past this message",
 };
 const DEFAULT_ERROR_MESSAGE = "the peer reported an unrecognized error";
 
@@ -522,11 +528,23 @@ function trackAge(track: ConversationTrack): number {
  *  `mode`: see {@link InboundReplyMode} — always populated, but only
  *  actionable (decides HOW to render an injected message) when `inject`
  *  is true; when `inject` is false it still tells the caller WHICH of the
- *  two `inject: false` causes above applies. */
+ *  two `inject: false` causes above applies.
+ *
+ *  `notice` (issue #222 欠陥3): present only on the AC9 stale branch, and
+ *  only when `receiveInbound()` actually built a `stale_turn` peer_error
+ *  envelope to send back to the ORIGINAL sender — see that method's own
+ *  doc for the two cases it is deliberately withheld in (the stale
+ *  envelope was itself an error notice; the track was already closed).
+ *  The caller's only job is `link.send(disposition.notice)` when present —
+ *  same AC10-bypassing pattern as `resolveTurnEnd()`'s notices, since this
+ *  never goes through `invoke()`/`#dispatch()` either. Absent (not merely
+ *  `undefined`) on every OTHER disposition shape (consumed, terminal,
+ *  inject: true) — it only ever has meaning on a stale drop. */
 export interface InboundDisposition {
   consumed: boolean;
   inject: boolean;
   mode: InboundReplyMode;
+  notice?: Envelope;
 }
 
 interface ReplyWaiter {
@@ -931,6 +949,65 @@ export class InterAgentTool {
     const stale = !isSynthetic && turnNumber <= track.turnNumber;
 
     if (stale) {
+      // issue #222 欠陥3: notify the ORIGINAL sender so a desynced
+      // turnNumber (this issue's root cause — a reject that never rolled
+      // its own bump back, issue #222 欠陥1) does not go silently
+      // unnoticed forever, the way it did in the incident that motivated
+      // this issue. Two cases are deliberately exempt from generating a
+      // notice, both to keep the notice mechanism from becoming its own
+      // new silent-loop / silent-drop hazard:
+      //  - `payload.error`: this envelope IS ITSELF a peer_error / stale_
+      //    turn notice. Replying to a notice with another notice would let
+      //    two desynced wrappers ping-pong indefinitely — advancing the
+      //    turn_number on each hop does NOT bound this on its own, since
+      //    staleness is judged against the RECEIVER's own track, not
+      //    however far the sender's number has climbed. Exempting notices
+      //    from ever triggering a further notice caps any exchange at one
+      //    round trip, structurally, not "usually".
+      //  - `track.closed`: a stale delivery on an ALREADY-closed track is a
+      //    late arrival after the conversation legitimately ended, not a
+      //    desynced-but-still-live one — the sender already has (or will
+      //    get, on its own next send attempt) the `conversation_closed`
+      //    reject and AC10's local guard; a notice here only duplicates
+      //    that, and there is nothing left to resync (no further turn is
+      //    coming on a closed cid). Skipped, but NOT silently — the caller
+      //    (cli.ts) logs the skip distinctly per the director's steer: a
+      //    skip must never be silent, even when no notice goes out over
+      //    the wire, since this whole issue is about not letting a drop go
+      //    unlogged.
+      //
+      // The notice is more than a notification — it RESYNCS the sender's
+      // track. `track.turnNumber` below is THIS wrapper's own authoritative
+      // watermark for the conversation; stamping it onto the notice's own
+      // `turn_number` means the sender's `receiveInbound()`, on ITS side,
+      // reads the notice as a fresh (non-stale) turn and advances its own
+      // track to match — so the sender's NEXT send lands past whatever
+      // number desynced it in the first place, whether or not it reuses
+      // this conversation_id (the recommended action either way).
+      if (!payload.error && !track.closed) {
+        track.turnNumber += 1;
+        const error: InterAgentErrorPayload = {
+          code: "stale_turn",
+          message: messageForCode("stale_turn"),
+        };
+        const noticePayload: InterAgentMessagePayload = {
+          to: envelope.agent_id,
+          conversation_id: conversationId,
+          turn_number: track.turnNumber,
+          kind: "inform",
+          body: `peer error (${error.code}): ${error.message}`,
+          meta: { done: false, propose_next: "" },
+          owner: { kind: "user", id: "operator" },
+          error,
+        };
+        const notice = makeInterAgentMessage(
+          this.#options.config,
+          this.#options.getState(),
+          this.#now(),
+          noticePayload,
+        );
+        return { consumed: false, inject: false, mode: "reply-owed", notice };
+      }
       return { consumed: false, inject: false, mode: "reply-owed" };
     }
 
@@ -1518,6 +1595,16 @@ export class InterAgentTool {
             // without this, the wasted turn number permanently
             // off-by-ones this side against the peer's next legitimate
             // send, which then reads as stale and is silently dropped.
+            //
+            // `acceptance.kind === "unknown"` never reaches this block at
+            // all (structurally — this is the `rejected` branch), and that
+            // exclusion is deliberate, not incidental: an `unknown` ack
+            // means whether the send actually reached the server is itself
+            // unresolved. Rolling back risks a REAL double-spend if it did
+            // land; leaving it risks the same off-by-one this fix exists to
+            // close if it did not. Both directions can be wrong, so the
+            // safer of the two — never assuming delivery failed — is to
+            // leave `unknown` alone entirely.
             if (track.mutationGen === genAtDispatch) {
               track.turnNumber -= 1;
             }
