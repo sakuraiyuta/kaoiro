@@ -235,6 +235,51 @@ export function classifyInterAgentError(
 const DEFAULT_REPLY_TIMEOUT_MS = 300_000;
 const MAX_REPLY_TIMEOUT_MS = 300_000;
 
+/** Maximum number of pending inbound envelopes coalesced into one SDK turn
+ *  (issue #221 段階3, direction 2 — coalescing unit is same-peer, クロエ
+ *  裁定 2026-08-11). Matches `MAX_ATTACHMENTS_PER_INSTRUCTION`
+ *  (claude-code/codex `upload.ts`) on the same axis: how many discrete
+ *  items get bundled into one turn's content. Not imported from there
+ *  directly — agent-common is engine-agnostic and upload.ts is
+ *  per-package — this is a separately-defined constant chosen to match
+ *  that one's order of magnitude, per クロエ's instruction not to invent an
+ *  unrelated number. A batch that would exceed this is cut here; the
+ *  excess starts a NEW batch (cli.ts's flush scheduling) rather than being
+ *  dropped — see `canAddToCoalescedBatch()`. */
+export const MAX_COALESCED_MESSAGES = 10;
+
+/** Maximum combined byte size (UTF-8, of each envelope's OWN
+ *  `formatInboundMessage()` rendering) of one coalesced batch (issue #221
+ *  段階3, direction 2). Matches the independently-chosen 16_384 already
+ *  used for `MAX_INPUT_BYTES` (permission.ts), `MAX_TASKLIST_ITEMS_JSON_BYTES`
+ *  (tasklist.ts), and `MAX_LOG_BYTES` (logpayload.ts) — three unrelated
+ *  call sites landed on the same order of magnitude for "a reasonable
+ *  bound on one agent-facing text/JSON blob", which makes it the natural
+ *  anchor here too instead of an invented number. Checked against the
+ *  FORMATTED text size, since that is what actually reaches the model's
+ *  context, not the raw envelope/payload bytes. */
+export const MAX_COALESCED_BYTES = 16_384;
+
+/** Whether one more envelope of `candidateBytes` may join a batch that
+ *  already holds `currentCount` items totalling `currentBytes` (issue #221
+ *  段階3). An EMPTY batch (`currentCount === 0`) always accepts its first
+ *  item regardless of that item's own size — a single already-oversized
+ *  inbound message must still be delivered unbatched, matching today's
+ *  uncapped single-message behaviour; only ADDITIONAL items sharing a
+ *  batch are ever refused. Pure/stateless: cli.ts's batching loop and this
+ *  module's own tests can both exercise it without constructing a live
+ *  `InterAgentTool`. */
+export function canAddToCoalescedBatch(
+  currentCount: number,
+  currentBytes: number,
+  candidateBytes: number,
+): boolean {
+  if (currentCount === 0) return true;
+  if (currentCount + 1 > MAX_COALESCED_MESSAGES) return false;
+  if (currentBytes + candidateBytes > MAX_COALESCED_BYTES) return false;
+  return true;
+}
+
 /** Zod raw shape of send_to_agent's input — the SSOT the Claude adapter
  *  hands to the SDK's `tool()` helper and from which the JSON Schema for
  *  the codex bridge is derived (z.toJSONSchema). */
@@ -980,54 +1025,68 @@ export class InterAgentTool {
   }
 
   /** Called by cli.ts once per SDK turn boundary (success or error), with the
-   *  conversation_id the CLI/host tagged that specific turn with — null for
-   *  an ordinary operator-instruction turn, or an inter-agent conversation_id
-   *  when that turn started from an injected inbound message. Turn-scoped by
-   *  design (issue #131 must-fix 1): sweeping the entire pending set on any
-   *  is_error turn misattributes failures across unrelated, concurrently
-   *  queued conversations and never resolves a conversation whose turn
-   *  quietly succeeded without a reply. A no-op when `conversationId` is null
-   *  or was already resolved (`invoke()` sent a reply during the turn — the
-   *  primary resolution path; this is the fallback for when it didn't).
+   *  conversation_id(s) the CLI/host tagged that specific turn with — an
+   *  empty array for an ordinary operator-instruction turn, one entry for an
+   *  ordinary (non-coalesced) inter-agent turn, or MULTIPLE entries when the
+   *  turn was a coalesced batch (issue #221 段階3, direction 2 — same-peer
+   *  unit). Turn-scoped by design (issue #131 must-fix 1, extended for
+   *  coalescing): sweeping the entire pending set on any is_error turn
+   *  misattributes failures across unrelated, concurrently queued
+   *  conversations and never resolves a conversation whose turn quietly
+   *  succeeded without a reply — this still holds per-cid inside the loop
+   *  below, only the CALLER now supplies a list instead of one value. Each
+   *  cid is resolved independently and exactly once; a cid with no pending
+   *  entry (already resolved by `invoke()` sending a reply during the turn —
+   *  the primary resolution path) is skipped, not an error.
    *
-   *  On success (`error` omitted) the entry is simply cleared — the model had
-   *  its turn to reply and chose not to, which is not itself an error worth
-   *  surfacing. On failure, one error-notice envelope is built and returned,
-   *  addressed back to the original sender — kind="inform" (no new enum
-   *  value), meta.done=false (ending the conversation is the sender's call),
-   *  payload.error set. Callers push the result straight through
-   *  ServerLink#send: this notice did not come from a model tool call (the
-   *  turn just failed to produce one), so it bypasses the broker entirely. */
+   *  On success (`error` omitted) each entry is simply cleared — the model
+   *  had its turn to reply and chose not to, which is not itself an error
+   *  worth surfacing. On failure, one error-notice envelope is built and
+   *  returned PER unresolved cid in the batch — issue #221 段階3 direction 2
+   *  (クロエ裁定): the wrapper does not know which ONE message in a coalesced
+   *  batch caused the turn to fail, so every peer whose message was bundled
+   *  into it gets its own peer_error notice, addressed back to ITS own
+   *  sender. This fan-out is a deliberate, documented tradeoff of coalescing
+   *  (protocol-inter-agent.md「保留メッセージの合流」) — trading fewer turns
+   *  for a wider blast radius on a single turn-level failure, not an
+   *  oversight. Each notice: kind="inform" (no new enum value), meta.done=
+   *  false (ending the conversation is the sender's call), payload.error
+   *  set. Callers push each result straight through ServerLink#send: these
+   *  notices did not come from a model tool call (the turn just failed to
+   *  produce one), so they bypass the broker entirely. */
   resolveTurnEnd(
-    conversationId: string | null,
+    conversationIds: readonly string[],
     error?: InterAgentErrorPayload,
   ): Envelope[] {
-    if (conversationId === null) return [];
-    const injection = this.#pendingInjections.get(conversationId);
-    if (!injection) return [];
-    this.#pendingInjections.delete(conversationId);
-    if (!error) return [];
+    const notices: Envelope[] = [];
+    for (const conversationId of conversationIds) {
+      const injection = this.#pendingInjections.get(conversationId);
+      if (!injection) continue;
+      this.#pendingInjections.delete(conversationId);
+      if (!error) continue;
 
-    const track = this.#getTrack(conversationId);
-    track.turnNumber += 1;
-    const payload: InterAgentMessagePayload = {
-      to: injection.from,
-      conversation_id: conversationId,
-      turn_number: track.turnNumber,
-      kind: "inform",
-      body: `peer error (${error.code}): ${error.message}`,
-      meta: { done: false, propose_next: "" },
-      owner: { kind: "user", id: "operator" },
-      error,
-    };
-    return [
-      makeInterAgentMessage(
-        this.#options.config,
-        this.#options.getState(),
-        this.#now(),
-        payload,
-      ),
-    ];
+      const track = this.#getTrack(conversationId);
+      track.turnNumber += 1;
+      const payload: InterAgentMessagePayload = {
+        to: injection.from,
+        conversation_id: conversationId,
+        turn_number: track.turnNumber,
+        kind: "inform",
+        body: `peer error (${error.code}): ${error.message}`,
+        meta: { done: false, propose_next: "" },
+        owner: { kind: "user", id: "operator" },
+        error,
+      };
+      notices.push(
+        makeInterAgentMessage(
+          this.#options.config,
+          this.#options.getState(),
+          this.#now(),
+          payload,
+        ),
+      );
+    }
+    return notices;
   }
 
   /** The engine-agnostic descriptors of the three tools (ADR-0032 F5):
@@ -1754,6 +1813,34 @@ export function formatInboundMessage(
     "",
     `(meta: done=${done}, propose_next=${proposeNext}, conversation_id=${conversationId}, turn_number=${turnNumber})`,
   ].join("\n");
+}
+
+/** Formats one or more inbound envelopes from the SAME peer into the text
+ *  injected for a single (possibly coalesced) SDK turn (issue #221 段階3,
+ *  direction 2 — coalescing unit is same-peer). A single-item batch returns
+ *  EXACTLY `formatInboundMessage()`'s own output, unchanged — the common,
+ *  idle-wrapper case (busy-trigger flush with nothing else queued) must not
+ *  see a different wire format than before this feature existed. Two or
+ *  more items get a preamble plus each item's own
+ *  `formatInboundMessage()` block (own marker line, own conversation_id),
+ *  joined in the given order — callers must already supply `items` in
+ *  receipt order (issue #221 AC: 順序は保つこと); this function does not
+ *  sort. Batching only changes how many of these blocks share one turn,
+ *  never an individual block's own content, so the model can still address
+ *  a reply to the RIGHT conversation_id from a mixed batch. */
+export function formatInboundMessages(
+  items: readonly { envelope: Envelope; mode: InboundReplyMode }[],
+): string {
+  if (items.length === 1) {
+    return formatInboundMessage(items[0]!.envelope, { mode: items[0]!.mode });
+  }
+  const preamble =
+    `[${items.length} pending inter-agent messages from the same peer, ` +
+    "in receipt order — reply to each conversation_id separately]";
+  const blocks = items.map(({ envelope, mode }) =>
+    formatInboundMessage(envelope, { mode }),
+  );
+  return [preamble, "", blocks.join("\n\n---\n\n")].join("\n");
 }
 
 function errorResult(text: string): InterAgentToolResult {

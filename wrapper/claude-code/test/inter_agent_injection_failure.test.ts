@@ -79,14 +79,14 @@ describe("inter-agent pending injection leak on host.send() failure (issue #136)
 
     // cli.ts's ORIGINAL (pre-fix) catch: log only, no cleanup.
     await expect(
-      host.send("late injection", undefined, "cnv-leak"),
+      host.send("late injection", undefined, ["cnv-leak"]),
     ).rejects.toThrow(/queue is full/);
 
-    // Nothing else in the system will ever call resolveTurnEnd("cnv-leak")
+    // Nothing else in the system will ever call resolveTurnEnd(["cnv-leak"])
     // now — the turn was never queued, so AgentHost never runs a turn for
     // it and onTurnEnd never fires. Simulate a later, unrelated probe: a
     // non-empty result proves the entry never self-cleared.
-    const leaked = tool.resolveTurnEnd("cnv-leak", {
+    const leaked = tool.resolveTurnEnd(["cnv-leak"], {
       code: "api_error",
       message: "later probe",
     });
@@ -112,10 +112,10 @@ describe("inter-agent pending injection leak on host.send() failure (issue #136)
     // codex/src/cli.ts).
     const linkSent: Envelope[] = [];
     await host
-      .send("late injection", undefined, "cnv-fixed")
+      .send("late injection", undefined, ["cnv-fixed"])
       .catch((err: unknown) => {
         const classified = classifyInterAgentError({ detail: String(err) });
-        for (const notice of tool.resolveTurnEnd("cnv-fixed", classified)) {
+        for (const notice of tool.resolveTurnEnd(["cnv-fixed"], classified)) {
           linkSent.push(notice);
         }
       });
@@ -133,7 +133,7 @@ describe("inter-agent pending injection leak on host.send() failure (issue #136)
     // The entry is gone now — a later probe must be a no-op, proving no
     // leak and no double-resolution.
     expect(
-      tool.resolveTurnEnd("cnv-fixed", { code: "api_error", message: "late" }),
+      tool.resolveTurnEnd(["cnv-fixed"], { code: "api_error", message: "late" }),
     ).toEqual([]);
   });
 });

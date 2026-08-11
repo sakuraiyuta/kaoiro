@@ -908,9 +908,9 @@ describe("AgentHost — query injection", () => {
     });
   });
 
-  it("error result は onTurnEnd に conversationId=null(未タグ) + terminal_reason/error_detail を渡す (issue #131)", async () => {
+  it("error result は onTurnEnd に conversationIds=[](未タグ) + terminal_reason/error_detail を渡す (issue #131)", async () => {
     const turnEnds: {
-      conversationId: string | null;
+      conversationIds: readonly string[];
       error?: { reason?: string; detail?: string };
     }[] = [];
     const host = new AgentHost(config, {
@@ -927,13 +927,13 @@ describe("AgentHost — query injection", () => {
     await host.run();
     expect(turnEnds).toEqual([
       {
-        conversationId: null,
+        conversationIds: [],
         error: { reason: "prompt_too_long", detail: "tool crashed: EACCES" },
       },
     ]);
   });
 
-  it("success result は onTurnEnd に conversationId のみ(error無し)で渡す (issue #131)", async () => {
+  it("success result は onTurnEnd に conversationIds のみ(error無し)で渡す (issue #131)", async () => {
     const turnEnds: unknown[] = [];
     const host = new AgentHost(config, {
       onState: () => {},
@@ -942,12 +942,12 @@ describe("AgentHost — query injection", () => {
       now: () => "T",
     });
     await host.run();
-    expect(turnEnds).toEqual([{ conversationId: null }]);
+    expect(turnEnds).toEqual([{ conversationIds: [] }]);
   });
 
-  it("並存する複数 inter-agent injection は各ターンの conversationId だけを解決する (issue #131 must-fix 1)", async () => {
+  it("並存する複数 inter-agent injection は各ターンの conversationIds だけを解決する (issue #131 must-fix 1)", async () => {
     const turnEnds: {
-      conversationId: string | null;
+      conversationIds: readonly string[];
       error?: { reason?: string; detail?: string };
     }[] = [];
     // Faithfully drains args.prompt (unlike scriptedQuery, which replays a
@@ -978,15 +978,43 @@ describe("AgentHost — query injection", () => {
       now: () => "T",
     });
     const done = host.run();
-    await host.send("peer A injection", undefined, "cnv-a");
-    await host.send("peer B injection", undefined, "cnv-b");
+    await host.send("peer A injection", undefined, ["cnv-a"]);
+    await host.send("peer B injection", undefined, ["cnv-b"]);
     host.close();
     await done;
 
     expect(turnEnds).toEqual([
-      { conversationId: "cnv-a", error: { detail: "boom" } },
-      { conversationId: "cnv-b" },
+      { conversationIds: ["cnv-a"], error: { detail: "boom" } },
+      { conversationIds: ["cnv-b"] },
     ]);
+  });
+
+  it("1回の send() に複数 cid を渡すと1ターンとして onTurnEnd に全件まとめて渡す (issue #221 段階3, 合流turn)", async () => {
+    const turnEnds: { conversationIds: readonly string[] }[] = [];
+    // scriptedQuery() ignores args.prompt entirely (see its own doc), so
+    // #input()'s per-turn tag shifting never runs under it — same reason
+    // the "並存する複数..." test above uses a prompt-draining queryFn
+    // instead.
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _m of args.prompt) {
+          yield msg({ type: "result", subtype: "success", result: "ok" });
+        }
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+    const done = host.run();
+    await host.send("coalesced batch text", undefined, ["cnv-p", "cnv-q", "cnv-r"]);
+    host.close();
+    await done;
+
+    expect(turnEnds).toEqual([{ conversationIds: ["cnv-p", "cnv-q", "cnv-r"] }]);
   });
 
   it("rate_limit_event を ext.rate_limits として state_change に付与する (#16)", async () => {

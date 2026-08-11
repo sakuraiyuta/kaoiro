@@ -25,13 +25,18 @@ export {
   INTER_AGENT_TOOL_FQN,
   InterAgentTool,
   LIST_AGENTS_TOOL_FQN,
+  MAX_COALESCED_BYTES,
+  MAX_COALESCED_MESSAGES,
   SEND_TO_AGENT_INPUT_SHAPE,
   WHOAMI_TOOL_FQN,
+  canAddToCoalescedBatch,
   classifyInterAgentError,
   formatInboundMessage,
+  formatInboundMessages,
   isFormattedInterAgentMessage,
 } from "./inter_agent.js";
 export type {
+  InboundReplyMode,
   InterAgentErrorClassifyInput,
   InterAgentToolOptions,
   WhoamiSnapshot,

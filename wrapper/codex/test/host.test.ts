@@ -1985,9 +1985,9 @@ describe("CodexHost", () => {
   });
 
   describe("onTurnEnd (issue #131)", () => {
-    it("turn.failed は onTurnEnd に conversationId=null(未タグ) + error.detail を渡す", async () => {
+    it("turn.failed は onTurnEnd に conversationIds=[](未タグ) + error.detail を渡す", async () => {
       const turnEnds: {
-        conversationId: string | null;
+        conversationIds: readonly string[];
         error?: { reason?: string; detail?: string };
       }[] = [];
       const { client } = makeClient([
@@ -2008,11 +2008,11 @@ describe("CodexHost", () => {
       await runOneTurn(host, "hi", client);
 
       expect(turnEnds).toEqual([
-        { conversationId: null, error: { detail: "rate limited" } },
+        { conversationIds: [], error: { detail: "rate limited" } },
       ]);
     });
 
-    it("成功 turn は onTurnEnd に conversationId のみ(error無し)で渡す", async () => {
+    it("成功 turn は onTurnEnd に conversationIds のみ(error無し)で渡す", async () => {
       const turnEnds: unknown[] = [];
       const { client } = makeClient([[usageEvent()]]);
       const host = new CodexHost(CONFIG, {
@@ -2025,7 +2025,7 @@ describe("CodexHost", () => {
 
       await runOneTurn(host, "hi", client);
 
-      expect(turnEnds).toEqual([{ conversationId: null }]);
+      expect(turnEnds).toEqual([{ conversationIds: [] }]);
     });
 
     it("終端イベント無しでストリームが終わると detail 無しの error で onTurnEnd を呼ぶ", async () => {
@@ -2047,12 +2047,12 @@ describe("CodexHost", () => {
 
       await runOneTurn(host, "hi", client, turnEnded.promise);
 
-      expect(turnEnds).toEqual([{ conversationId: null, error: {} }]);
+      expect(turnEnds).toEqual([{ conversationIds: [], error: {} }]);
     });
 
     it("runStreamed の reject は err を detail 文字列化して onTurnEnd に渡す (must-fix 2: raw文字列は message に出ないことは classifyInterAgentError 側で保証)", async () => {
       const turnEnds: {
-        conversationId: string | null;
+        conversationIds: readonly string[];
         error?: { reason?: string; detail?: string };
       }[] = [];
       const turnEnded = deferred<void>();
@@ -2071,13 +2071,13 @@ describe("CodexHost", () => {
       await runOneTurn(host, "hi", client, turnEnded.promise);
 
       expect(turnEnds).toHaveLength(1);
-      expect(turnEnds[0]?.conversationId).toBeNull();
+      expect(turnEnds[0]?.conversationIds).toEqual([]);
       expect(turnEnds[0]?.error?.detail).toContain("exec exited 1");
     });
 
-    it("並存する複数 inter-agent injection は各ターンの conversationId だけを解決する (must-fix 1)", async () => {
+    it("並存する複数 inter-agent injection は各ターンの conversationIds だけを解決する (must-fix 1)", async () => {
       const turnEnds: {
-        conversationId: string | null;
+        conversationIds: readonly string[];
         error?: { detail?: string };
       }[] = [];
       const { client } = makeClient([
@@ -2101,17 +2101,47 @@ describe("CodexHost", () => {
       // — verifying the SECOND turn's outcome never gets attributed to the
       // FIRST (still-registered-as-pending only via notePendingInjection,
       // which this host-level test doesn't exercise) conversation_id.
-      await host.send("peer A injection", undefined, "cnv-a");
+      await host.send("peer A injection", undefined, ["cnv-a"]);
       const done = host.run();
       await client.waitForTurn(0);
-      await host.send("peer B injection", undefined, "cnv-b");
+      await host.send("peer B injection", undefined, ["cnv-b"]);
       await client.waitForTurn(1);
       host.close();
       await done;
 
       expect(turnEnds).toEqual([
-        { conversationId: "cnv-a", error: { detail: "boom" } },
-        { conversationId: "cnv-b" },
+        { conversationIds: ["cnv-a"], error: { detail: "boom" } },
+        { conversationIds: ["cnv-b"] },
+      ]);
+    });
+
+    it("1回の send() に複数 cid を渡すと1ターンとして onTurnEnd に全件まとめて渡す (issue #221 段階3, 合流turn)", async () => {
+      const turnEnds: { conversationIds: readonly string[] }[] = [];
+      const { client } = makeClient([[usageEvent()]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      // runOneTurn() drives host.run(prompt) — the initial-prompt path,
+      // which pushes straight onto #queue without going through send()'s
+      // conversationIds tagging. Reproduce the "並存する複数..." test's own
+      // pattern instead: tag via send() before run().
+      await host.send("coalesced batch text", undefined, [
+        "cnv-p",
+        "cnv-q",
+        "cnv-r",
+      ]);
+      const done = host.run();
+      await client.waitForTurn(0);
+      host.close();
+      await done;
+
+      expect(turnEnds).toEqual([
+        { conversationIds: ["cnv-p", "cnv-q", "cnv-r"] },
       ]);
     });
   });

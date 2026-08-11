@@ -817,6 +817,49 @@ agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの�
 conversation を `done` 扱いにはしない(上記「conversation の
 ライフサイクル」参照)。
 
+#### 保留メッセージの合流(issue #221 段階3)
+
+wrapper が busy な間(SDK への注入が既に1件以上溜まっている間)に、
+**同一 peer** から複数の inbound message が到着した場合、wrapper は
+それらを個別の SDK turn に分けず、**1 回の turn へ合流させて注入する**
+(合流単位は同一 peer — 複数 conversation_id をまたいでよいが、peer
+をまたぐ合流はしない。2026-08-11 クロエ裁定)。合流の目的は turn 数
+(= モデル呼び出し回数、xhigh effort では特にコストが大きい)を削減
+することにある。
+
+- **トリガーは busy-trigger であり、時間デバウンスではない。** wrapper
+  が idle であれば単独メッセージでもそのまま即座に注入する(遅延を
+  追加しない)。既に注入待ちの turn がある間に到着した同一 peer からの
+  メッセージだけが、次の flush まで同じ batch へ追記される。
+- **順序は受信順を保つ。** batch 内の各メッセージは、それぞれ単独の
+  ときと同じ `[from <agent_id>] <kind>: <body>` ブロック(自分自身の
+  `conversation_id` を含む)を保ったまま、受信順に並べて 1 つの turn
+  テキストへ連結される — モデルはどの返信をどの `conversation_id`
+  へ送ればよいか、blockごとの記載から判断する。
+- **合流件数・合計サイズに上限がある。** 1 batch あたり最大 **10 件**
+  (wrapper の `MAX_ATTACHMENTS_PER_INSTRUCTION` と同じ桁)、かつ
+  各メッセージの整形済みテキストの合計が **16,384 バイト**(wrapper の
+  `MAX_INPUT_BYTES` / `MAX_TASKLIST_ITEMS_JSON_BYTES` / `MAX_LOG_BYTES`
+  と同じ値)を超えない。超過分は**捨てず**、次の batch(= 次の turn)
+  へ回す。単独で上限を超える巨大な1件は、それだけでも従来どおり
+  配送する(batchの先頭1件は上限に関わらず必ず入る)。
+
+**トレードオフ: 1 turn の失敗が batch 内の全 conversation へ波及する。**
+wrapper は turn を SDK へ送った後、どのメッセージが失敗の原因だったか
+を知る手段を持たない。そのため合流された turn が
+`context_overflow` / `api_error` 等で失敗した場合、`payload.error` の
+notice(下記「応答不能エラーの通知」参照)は**batch に含まれていた
+全ての conversation_id へ個別に**送られる — 実際に失敗を引き起こした
+のが1件であっても、無関係な残りの peer 全員が同じ peer_error を
+受け取る。これは turn 数を減らす代償として意図的に許容している
+挙動であり、隠さず明記する(2026-08-11 クロエ裁定)。合流の合計サイズ
+上限(上記)は、この波及の起きやすさ(= batch が大きいほど
+`context_overflow` を誘発しやすい)を抑える目的も兼ねている。
+
+`send_to_agent.wait_for_response` で待機中の waiter が受け取る返信は
+合流の対象にならない — waiter は inbound envelope 到着時点で即座に
+消費され、SDK turn への注入自体が発生しない(下記参照)。
+
 #### 同期 reply 待ち (`send_to_agent.wait_for_response`)
 
 通常の受信は上記どおり次 SDK turn への注入である。現在の SDK turn

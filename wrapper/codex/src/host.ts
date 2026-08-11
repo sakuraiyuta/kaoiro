@@ -160,23 +160,28 @@ export interface CodexHostOptions {
    * ADR-0049). It is distinct from transcript logs and child-task progress. */
   onTask?: (envelope: Envelope) => void;
   /** Invoked once per turn boundary (success or error), alongside (not
-   *  instead of) onLog's result envelope (issue #131). `conversationId` is
-   *  the inter-agent conversation that turn's injection came from (the value
-   *  passed as send()'s third argument for that queued turn), or null for an
-   *  ordinary operator-instruction turn — must-fix 1: turn-scoped, so the CLI
-   *  never resolves a conversation the current turn was not actually
-   *  answering. `error` is present only when the turn ended with
-   *  is_error=true. Codex has no structured failure taxonomy like Claude's
-   *  terminal_reason — `error.reason` is never populated here; `error.detail`
-   *  carries whatever raw message is available (ThreadError.message / the
-   *  runStreamed rejection), or is omitted when the stream simply ended
-   *  without a terminal event. The CLI feeds `error` into the shared
-   *  inter-agent error classifier, which keyword-sniffs `detail` and
-   *  otherwise degrades to "api_error", then resolves exactly this turn's
-   *  conversation via InterAgentTool#resolveTurnEnd. Omitted = no notice is
-   *  ever emitted (unit tests only — production wires it). */
+   *  instead of) onLog's result envelope (issue #131; extended issue #221
+   *  段階3 direction 2 for coalescing). `conversationIds` is the inter-agent
+   *  conversation(s) that turn's injection came from (the value passed as
+   *  send()'s third argument for that queued turn) — empty for an ordinary
+   *  operator-instruction turn, one entry for an ordinary inter-agent turn,
+   *  MULTIPLE entries when several same-peer pending messages were coalesced
+   *  into this one turn — must-fix 1: turn-scoped, so the CLI never resolves
+   *  a conversation the current turn was not actually answering. `error` is
+   *  present only when the turn ended with is_error=true. Codex has no
+   *  structured failure taxonomy like Claude's terminal_reason —
+   *  `error.reason` is never populated here; `error.detail` carries whatever
+   *  raw message is available (ThreadError.message / the runStreamed
+   *  rejection), or is omitted when the stream simply ended without a
+   *  terminal event. The CLI feeds `error` into the shared inter-agent error
+   *  classifier, which keyword-sniffs `detail` and otherwise degrades to
+   *  "api_error", then resolves exactly this turn's conversation(s) via
+   *  InterAgentTool#resolveTurnEnd — on error, EVERY conversationId in the
+   *  list gets its own peer_error notice (the wrapper cannot tell which one
+   *  message in a coalesced batch caused the failure). Omitted = no notice
+   *  is ever emitted (unit tests only — production wires it). */
   onTurnEnd?: (info: {
-    conversationId: string | null;
+    conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
   }) => void;
   /** Server-composed personality + common footer (ADR-0029 F5), injected as
@@ -287,14 +292,17 @@ export class CodexHost implements EngineAdapter {
   #pendingPermission: PendingPermissionExt | null = null;
   #pendingQuestion: PendingQuestionExt | null = null;
   /** Queued SDK input. A local_image temp directory belongs to exactly one
-   * turn and is deleted from #runTurn's finally path. `conversationId`
-   * (issue #131 must-fix 1) tags a turn injected to answer an inter-agent
-   * message; undefined for an ordinary operator instruction. Threaded
-   * through #runTurn so onTurnEnd resolves exactly this turn's conversation. */
+   * turn and is deleted from #runTurn's finally path. `conversationIds`
+   * (issue #131 must-fix 1; extended issue #221 段階3 direction 2 for
+   * coalescing) tags a turn injected to answer inter-agent message(s);
+   * undefined for an ordinary operator instruction, one entry for an
+   * ordinary inter-agent turn, multiple entries when several same-peer
+   * pending messages were coalesced into this one turn. Threaded through
+   * #runTurn so onTurnEnd resolves exactly this turn's conversation(s). */
   readonly #queue: Array<{
     input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
     tempDir?: string;
-    conversationId?: string;
+    conversationIds?: readonly string[];
   }> = [];
   readonly #pendingUploads = new Map<string, PendingUpload>();
   /** Includes dirs still being materialized, queued, or streaming. */
@@ -451,7 +459,7 @@ export class CodexHost implements EngineAdapter {
   async send(
     text: string,
     attachmentIds?: string[],
-    interAgentConversationId?: string,
+    interAgentConversationIds?: readonly string[],
   ): Promise<void> {
     if (this.#closed) return;
     if (
@@ -504,9 +512,9 @@ export class CodexHost implements EngineAdapter {
     this.#queue.push({
       input,
       ...(tempDir === undefined ? {} : { tempDir }),
-      ...(interAgentConversationId === undefined
+      ...(interAgentConversationIds === undefined
         ? {}
-        : { conversationId: interAgentConversationId }),
+        : { conversationIds: interAgentConversationIds }),
     });
     this.#wake?.();
   }
@@ -706,7 +714,7 @@ export class CodexHost implements EngineAdapter {
           codex,
           turn.input,
           turn.tempDir,
-          turn.conversationId ?? null,
+          turn.conversationIds ?? [],
         );
       }
     } finally {
@@ -764,7 +772,7 @@ export class CodexHost implements EngineAdapter {
     codex: CodexClientLike,
     input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>,
     tempDir?: string,
-    conversationId: string | null = null,
+    conversationIds: readonly string[] = [],
   ): Promise<void> {
     const resolutionGeneration = ++this.#modelResolutionGeneration;
     const attempted = {
@@ -819,7 +827,7 @@ export class CodexHost implements EngineAdapter {
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
           });
-          this.#options.onTurnEnd?.({ conversationId });
+          this.#options.onTurnEnd?.({ conversationIds });
           // Resolve only after the terminal event: at turn.started an existing
           // rollout can still expose the previous turn_context and look
           // spuriously "resolved". Keep this background so filesystem timing
@@ -837,7 +845,7 @@ export class CodexHost implements EngineAdapter {
           this.#emitResult({ is_error: true });
           const detail = threadEventToErrorDetail(event);
           this.#options.onTurnEnd?.({
-            conversationId,
+            conversationIds,
             error: detail !== null ? { detail } : {},
           });
           // Failure paths (429 / max-output / auth error) still write a
@@ -855,7 +863,7 @@ export class CodexHost implements EngineAdapter {
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
-        this.#options.onTurnEnd?.({ conversationId, error: {} });
+        this.#options.onTurnEnd?.({ conversationIds, error: {} });
       }
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
@@ -871,7 +879,7 @@ export class CodexHost implements EngineAdapter {
         // produced notice's message — the raw string itself never leaves
         // this process.
         this.#options.onTurnEnd?.({
-          conversationId,
+          conversationIds,
           error: { detail: String(err) },
         });
       }
