@@ -12,9 +12,10 @@ related: [auth-and-authz, setup-wizards, threat-model]
 デプロイ手順の正本が `server/docker-compose.yaml` のヘッダコメントと
 `server/README.md` の数行に散在し、任意ホスト公開(実運用)に必要な情報
 (nginx 設定・env 一覧・DETS パス・wss 制約)が欠落していた。本 doc が
-**手動手順の唯一の正本**。[setup-wizards](setup-wizards.md) はこの手順の
-自動化(env/config 生成)であり、DETS パスや nginx 設定など wizard が
-扱わない領域は本 doc に完全記載する。
+**手動手順の唯一の正本**。[setup-wizards](setup-wizards.md) は**初回配備**の
+env / config 生成を自動化するものであり、DETS パスや nginx 設定など wizard が
+扱わない領域は本 doc に完全記載する。**既存配備の更新(4 節)は wizard の
+対象外**で、自動化は issue #228 / #229 / #230 で進める。
 
 ## 全体構成
 
@@ -83,21 +84,30 @@ mount できる。footer を運用者が差し替える場合は、host 側の
 を設定する。cache は書き込み可能な永続領域に置き、persona pack の
 mount とは分離する。
 
-**DETS パス 7 種**(restart 跨ぎで状態を残す DETS ファイルの格納先)は
+**DETS パス 8 種**(restart 跨ぎで状態を残す DETS ファイルの格納先)は
 同梱 `docker-compose.yaml` が `environment:` + named volume `kaoiro-state`
 で設定済みのため、compose 運用では `.env` に書く必要はない。compose を
-使わずホストで直接 release を動かす場合のみ、この 7 種を書き込み可能な
+使わずホストで直接 release を動かす場合のみ、この 8 種を書き込み可能な
 永続パスへ明示する: `KAOIRO_SESSION_POINTERS_PATH` /
 `KAOIRO_AGENT_DIRECTORY_PATH` / `KAOIRO_PERMISSION_MODES_PATH` /
 `KAOIRO_CLEAR_WATERMARKS_PATH` / `KAOIRO_SESSION_STARTS_PATH` /
-`KAOIRO_INGRESS_ORDER_PATH` / `KAOIRO_TOKEN_DENYLIST_PATH`。未設定は
-コンテナの `/tmp` 相当に落ち、
+`KAOIRO_INGRESS_ORDER_PATH` / `KAOIRO_USERS_PATH` /
+`KAOIRO_TOKEN_DENYLIST_PATH`。未設定はコンテナの `/tmp` 相当に落ち、
 `docker compose down` で消える(offline agent 一覧が失われる)。
+
+**この 8 種が「永続化対象の正本」である。**更新手順(4 節)の preflight は
+この一覧を基準に、全 path が named volume 配下へ解決されることを確認する。
+一覧に載っていない DETS が増えると、**backup の対象から静かに漏れる** —
+`KAOIRO_USERS_PATH` は実際にこれを踏み、compose に無いまま container
+recreate で user ledger が失われた(issue #227)。
 
 **2026-08-08 注記:** phase 30-7 で `InterAgentHistory` DETS は撤廃し、
 `KAOIRO_INTER_AGENT_HISTORY_PATH` は server に読まれなくなった。同梱
 `docker-compose.yaml` と `scripts/dev.sh` の unused export も phase-30
-クローズ時に削除済み。本節の 7 種が実行時の正本である。
+クローズ時に削除済み。ただし**撤廃前に作られた
+`inter_agent_history.dets` は既存 volume に残骸として残っている**ことが
+あり、backup にも含まれる(2026-08-12 に約 1.9MB を確認)。実行時に
+読まれないため害は無いが、archive のサイズと listing に現れる。
 
 ### 1.3 docker compose で起動
 
@@ -344,89 +354,160 @@ systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
 
 - **target を full 40 桁 SHA で固定する。**`git pull` の結果に依存させない。
   作業記録にもその SHA を残す
+- **server と runner の両方を同じ target へ進める。**片側だけを進めると、
+  同一 SHA という postcondition が崩れ、互換の保証がない組み合わせが動く
 - **source cleanliness を tracked / untracked の両方で判定する。**
   `git diff --quiet` は untracked を見ないため、これだけでは不十分
   (`git status --porcelain` の出力が空であることを確認する)
 - **server ホストの SSH host key が `known_hosts` に登録済みであること。**
   `StrictHostKeyChecking=no` で迂回しない
-- lockfile と `node_modules` の整合を確認する。疑わしい場合は frozen install
+- **永続化対象の全 path が named volume 配下へ解決されることを確認する。**
+  正本は 1.2 節の 8 種。一覧に無い DETS が増えていると **backup から静かに
+  漏れる**(`KAOIRO_USERS_PATH` が実際にこれを踏んだ — issue #227)
 - **active な作業が無いことを確認する(人間の判断)。**runner の停止は配下の
   wrapper をすべて止める(2 節「常駐化」)。会話状態は永続化されていないため、
   進行中のやり取りは失われる
 
 ### 4.3 更新手順
 
+**prepare(無停止)と commit(停止窓)を分ける。**build は停止時間に
+含めない。特に **runner の build 成功を server の切替より前に確定させる** —
+逆順にすると、build 失敗時に「新 server × 旧 runner」という互換の保証が
+ない組み合わせが残る。
+
 ```mermaid
 flowchart TD
-  A[active work 無しを確認<br/>人間の判断] --> B[runner 停止]
-  B --> C[server graceful stop]
-  C --> D[DETS archive + 検証]
-  D -->|失敗| R1[旧 server / 旧 runner を再開<br/>4.4 の 1]
-  D -->|成功| E[server 更新 + 起動]
-  E -->|失敗| R2[旧 image で再起動<br/>4.4 の 3]
-  E -->|成功| F[runner 側 build]
-  F -->|失敗| R3[旧 artifact を復元<br/>4.4 の 2]
-  F -->|成功| G[runner 起動]
-  G --> H[適用確認 4.5]
+  A[旧 image を retag<br/>旧 commit を記録] --> B[server image を prepare<br/>旧 container は稼働継続]
+  B -->|失敗| R0[稼働系に影響なし<br/>中止して終了]
+  B -->|成功| C[runner 停止]
+  C --> D[local を target へ<br/>frozen install + build]
+  D -->|失敗| R1[server は旧のまま<br/>local を旧 commit へ戻し runner 再開<br/>4.4 の 2]
+  D -->|成功| E[server graceful stop]
+  E --> F[DETS archive + 完全検証]
+  F -->|失敗| R2[新 server へ進まない<br/>旧 server / 旧 runner を再開<br/>4.4 の 1]
+  F -->|成功| G[prepared image で server 起動]
+  G -->|失敗| R3[旧 image へ retag し戻す<br/>4.4 の 3]
+  G -->|成功| H[runner 起動]
+  H -->|失敗| R4[4.4 の 4]
+  H -->|成功| I[疎通確認 + 適用確認<br/>4.5]
 ```
 
 **backup は server を停止してから取る。**稼働中に named volume を tar すると、
 複数の DETS ファイル間で状態が混ざりうる(2026-08-12 の反映ではこの誤りが
 あった)。バックアップは唯一のロールバック手段であるため、ここは省略できない。
 
-以下、`<server-host>` / `<repo-path>` / `<backup-dir>` は各環境の値に読み替える。
+以下、`<server-host>` / `<repo-path>` / `<backup-dir>` / `<container>` /
+`<target-sha>` / `<old-sha>` は各環境の値に読み替える。
 
-**(1) runner を停止**
+**(1) 旧構成を退避し、記録する**
+
+`docker compose build` は `kaoiro-server:latest` を新 image へ付け替える。
+**build 前に旧 image へ別の tag を付けておかないと、rollback で指す先が
+なくなる。**
+
+```sh
+ssh <server-host> 'docker tag kaoiro-server:latest kaoiro-server:rollback-<old-sha>'
+ssh <server-host> 'cd <repo-path> && git rev-parse HEAD'   # 旧 remote commit
+git -C <repo-path> rev-parse HEAD                          # 旧 local commit
+```
+
+作業記録に残すもの: **rollback tag / 旧 remote commit / 旧 local commit /
+target SHA / backup 先 / archive の SHA-256**。ロールバックは
+「**旧 image + 対応する DETS**」の**対**で行うため、これらが揃っていないと
+復旧できない。
+
+**(2) server image を prepare(無停止)**
+
+旧 container は旧 image ID を保持したまま動き続ける。ここで失敗しても
+**稼働系への影響はゼロ**である。
+
+```sh
+ssh <server-host> 'cd <repo-path> && git fetch origin \
+  && git merge --ff-only <target-sha> && cd server && docker compose build'
+```
+
+`up -d` はまだ実行しない。
+
+**(3) runner を停止**
 
 ```sh
 systemctl --user stop kaoiro-runner
 ```
 
-**(2) server を停止し、DETS を archive する**
+**(4) local を target へ進め、build する**
 
-volume 名は環境ごとに異なるため、**container の mount 先から解決する**
-(名前を決め打ちしない)。
+**`--frozen-lockfile` は常に実行する。**target が依存を変えていた場合、
+stale な `node_modules` のままビルドすると実行時に落ちる。
 
 ```sh
-ssh <server-host> 'cd <repo-path>/server && docker compose stop'
+git -C <repo-path> fetch origin && git -C <repo-path> merge --ff-only <target-sha>
+pnpm -C <repo-path> install --frozen-lockfile
+pnpm -C <repo-path>/wrapper build && pnpm -C <repo-path>/runner build
+```
 
-# /var/lib/kaoiro に mount されている volume 名を取得
-ssh <server-host> 'docker inspect <container-name> \
+**ここで失敗したら 4.4 の 2 へ。**server はまだ旧 container のままなので、
+local を旧 commit へ戻せば元の構成に戻る。
+
+**(5) server を停止し、DETS を archive する**
+
+まず graceful stop し、**停止できたことを確認する**。
+
+```sh
+ssh <server-host> 'cd <repo-path>/server && docker compose stop -t 30'
+ssh <server-host> 'docker inspect <container> --format "{{.State.Running}}"'
+```
+
+`false` を確認する。`true` のままなら停止に失敗している。**timeout(`-t 30`)
+を超えて SIGKILL された場合、DETS が書き込み途中で切られた可能性がある** —
+この状態で取った archive は consistent とは呼べない。強制終了された形跡が
+あるときは、backup を取ったうえで**その旨を作業記録に残し**、restore 時の
+信頼度を下げて扱う。
+
+次に volume 名を **container の mount 先から解決する**(名前を決め打ちしない)。
+
+```sh
+ssh <server-host> 'docker inspect <container> \
   --format "{{range .Mounts}}{{if eq .Destination \"/var/lib/kaoiro\"}}{{.Name}}{{end}}{{end}}"'
+```
 
-# 停止中の volume を read-only で archive
+**出力が空でないことを確認する。**空なら mount 構成が変わっており、この先の
+archive は何も取らずに成功してしまう。
+
+```sh
 ssh <server-host> 'docker run --rm -v <volume>:/data:ro -v <backup-dir>:/backup \
   alpine tar czf /backup/kaoiro-dets-<timestamp>.tar.gz -C /data .'
 ```
 
-archive 後、**listing と SHA-256 を必ず検証する**。
+**検証は完全走査で行う。**
 
 ```sh
-ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz | head -20; \
-  sha256sum <backup-dir>/kaoiro-dets-<timestamp>.tar.gz'
+ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz >/dev/null \
+  && sha256sum <backup-dir>/kaoiro-dets-<timestamp>.tar.gz'
 ```
 
-作業記録に残すもの: **backup 先 / 旧 image ID / 旧 commit / target commit /
-archive の SHA-256**。ロールバックは「旧 image + 対応する DETS」の**対**で
-行うため、この 5 つが揃っていないと復旧できない。
+`tar tzf ... | head -20` と書いてはならない。**pipeline の終了ステータスは
+`head` 側になり、`tar` の失敗が握りつぶされる。**壊れた archive でもファイル
+自体は存在するので `sha256sum` は成功し、「検証した」ことになってしまう。
 
-**(3) server を更新して起動**
+内容の目視は、検証とは**別のコマンド**で行う。
 
 ```sh
-ssh <server-host> 'cd <repo-path> && git fetch origin && git merge --ff-only <target-sha> \
-  && cd server && docker compose build && docker compose up -d'
+ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz | head -20'
 ```
 
-**(4) runner 側をビルド**
+**1.2 節の 8 種がすべて含まれることを確認する。**含まれない DETS は
+volume の外にあり、この backup では復元できない。
+
+**(6) prepared image で server を起動**
 
 ```sh
-pnpm -C <repo-path>/wrapper build && pnpm -C <repo-path>/runner build
+ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build'
 ```
 
-**runner を停止した後に実行する。**稼働したままビルドすると 4.1 の
-in-place build 問題を踏む。
+`--no-build` を付ける。ここで再 build すると (2) で検証した image と別物に
+なりうる。
 
-**(5) runner を起動**
+**(7) runner を起動**
 
 ```sh
 systemctl --user start kaoiro-runner
@@ -434,78 +515,135 @@ systemctl --user start kaoiro-runner
 
 ### 4.4 失敗時の対応
 
-**(1) DETS の archive または検証に失敗した**
+**(1) DETS の archive または検証に失敗した**(4.3 の 5)
 
-新 server へ**進まない**。旧 server を起動し、runner も起動して元の状態へ戻す。
-バックアップが取れない状態での更新は、ロールバック手段を持たない更新になる。
+新 server へ**進まない**。この時点で remote source は既に target へ進み、
+`kaoiro-server:latest` は新 image を指しているため、**そのまま起動すると新
+構成が立ち上がる**。旧構成へ戻すには tag と source の両方を戻す。
 
-**(2) runner 停止後に install / build が失敗した**
+```sh
+ssh <server-host> 'docker tag kaoiro-server:rollback-<old-sha> kaoiro-server:latest'
+ssh <server-host> 'cd <repo-path> && git checkout <old-remote-sha>'
+ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build --force-recreate'
+```
 
-**runner が停止したまま、`dist` に途中状態が残る。**この状態で runner を
-起動すると 4.1 の問題をそのまま踏む。
+local も旧 commit へ戻し、frozen install + build してから runner を起動する
+((2) と同じ手順)。バックアップが取れない状態での更新は、**ロールバック手段を
+持たない更新**になる。
 
-復旧は次のいずれか。
+**(2) build が失敗した**(4.3 の 4)
 
-- ビルド前に `dist` を退避してあれば、それを戻して runner を起動する
-- 退避が無い場合、**旧 commit を checkout して再ビルド**し、`dist` を既知の
-  状態に戻してから起動する
+**server はまだ切り替えていない**ので、旧 container が動いたままである。
+戻すのは local 側だけでよい。
 
-いずれも取れない場合、runner は停止したままにする。**中途半端な `dist` で
+**`dist` を退避してあれば戻す、という復旧は限定的にしか使えない。**
+`pnpm install` が `node_modules` を書き換えた場合、`dist` だけ戻しても
+実行時の依存が食い違う。**dist-only restore が成立するのは lockfile と
+`node_modules` を変更していない場合に限る。**
+
+通常の復旧の正本は、旧 commit とそのときの lockfile でやり直すことである。
+
+```sh
+git -C <repo-path> checkout <old-local-sha>
+pnpm -C <repo-path> install --frozen-lockfile
+pnpm -C <repo-path>/wrapper build && pnpm -C <repo-path>/runner build
+systemctl --user start kaoiro-runner
+```
+
+これも取れない場合、runner は停止したままにする。**中途半端な `dist` で
 起動しない。**
 
-**(3) 新 server が起動しない**
+**(3) 新 server が起動しない**(4.3 の 6)
 
-旧 image ID で `docker compose up -d` し直す。**DETS を戻す必要があるかは
-別判断** — 新 server が一度でも state を開いていれば、旧コードが読める保証は
-無い(issue #219 で DETS の tuple が 3→4 要素になった前例がある)。その場合は
-(2) で取った backup から restore する。restore は destructive なので、実行前に
-現在の state を別途 archive しておく。
+**「新 server が state を開いたか」を人の判断に委ねない。**次の observable な
+境界で分ける。
 
-**(4) runner が再起動しない**
+- **`docker compose up -d` をまだ実行していない、または container process が
+  開始していないと証明できる**: DETS の restore は不要。tag と source を戻す
+  だけでよい((1) と同じ手順)
+- **一度でも新 container の開始を試みた、または開始したか不明**:
+  **state を開いたものとして扱う。**新コードが書いた DETS を旧コードが読める
+  保証は無い(issue #219 で tuple が 3→4 要素になった前例がある)
+
+後者の手順は次のとおり。**restore は destructive なので、先に現在の state を
+forensic archive する。**
+
+```sh
+# 1. 現在 (新) の state を退避する
+ssh <server-host> 'docker run --rm -v <volume>:/data:ro -v <backup-dir>:/backup \
+  alpine tar czf /backup/kaoiro-dets-forensic-<timestamp>.tar.gz -C /data .'
+
+# 2. pre-deploy backup を restore する
+ssh <server-host> 'docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
+  alpine sh -c "rm -rf /data/* && tar xzf /backup/kaoiro-dets-<timestamp>.tar.gz -C /data"'
+
+# 3. 旧 image / 旧 source へ戻して起動する
+ssh <server-host> 'docker tag kaoiro-server:rollback-<old-sha> kaoiro-server:latest'
+ssh <server-host> 'cd <repo-path> && git checkout <old-remote-sha>'
+ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build --force-recreate'
+```
+
+**restore する backup は、その image と対になったものでなければならない。**
+「旧 image だけ」「backup だけ」の片方では戻らない。
+
+**(4) runner が再起動しない**(4.3 の 7)
 
 `systemctl --user status kaoiro-runner` と journal を確認する。終了コード 78
 (`EX_CONFIG`)は設定エラーで、再起動では直らない(2 節「再起動ポリシーと
 終了コード」)。`dist` の欠落もこのコードになるため、(2) の復旧手順を先に
 確認する。
 
-**(5) 適用確認ができない**
+**(5) 適用確認が揃わない**
 
-4.5 の確認項目が揃わない場合、**更新が成功したと見なさない。**判断がつかない
-ときは、backup を保持したまま作業を中断し、状態を記録する。
+4.5 の operational success がすべて揃わない場合、**更新が成功したと見なさない。**
+判断がつかないときは、backup を保持したまま作業を中断し、状態を記録する。
 
 ### 4.5 適用確認と、その限界
 
-確認できること。
+確認は 2 層に分かれる。**成功と判定してよいのは operational success が
+すべて揃ったときだけ**であり、provenance は現時点で証明できない。
 
-| 対象 | 確認方法 |
+#### operational success(これが成功条件)
+
+| 項目 | 確認方法 |
 |---|---|
-| server の commit | `ssh <server-host> 'cd <repo-path> && git log --oneline -1'` |
-| server container | `docker ps` で起動時刻と image が更新されていること |
-| runner の source commit | ローカルの `git log --oneline -1` |
-| runner / wrapper の artifact | `dist` 内の `.js` の mtime、または内容の検査 |
+| server の source が exact target | `ssh <server-host> 'cd <repo-path> && git rev-parse HEAD'` が target SHA と一致 |
+| local の source が exact target | `git -C <repo-path> rev-parse HEAD` が同上 |
+| build が成功した | 4.3 の 2 / 4 の各コマンドが exit 0 |
+| container が stable | 一定時間(目安 60 秒)経過後も restart しておらず `docker ps` で `Up` |
+| **3 節の疎通確認が通る** | **必須で再実行する** — dashboard が開く / runner の journal で接続が継続する / host 一覧に対象 `host_id` が出る |
 
-**確認できないこと。**
+**3 節の再実行は省略しない。**`docker ps` と `git log` と `dist` の中身だけでは、
+server が restart loop せずリクエストを処理できるか、runner が認証と register に
+成功するか、dashboard と host projection が動くかを何ひとつ確認できない。
 
-「実行中の artifact がその commit 由来である」ことを暗号学的に結びつける手段は
-現時点で存在しない。上記はいずれも状況証拠にすぎない。build identity(#228)の
-導入後、full SHA を返す health endpoint と runner の register 情報へ置換する。
+#### 証明できないこと(provenance)
 
-**mtime を代用品にしないこと。**`dist` ディレクトリの mtime は、ファイルの
-追加・削除が無ければ更新されない。2026-08-12 の反映では、実際には全パッケージが
-再ビルドされていたにもかかわらず、3 パッケージのディレクトリ mtime が 10 日前を
-指しており、誤読しかけた。**中の `.js` を見ること。**
+「**実行中の JS / image が target commit 由来である**」ことを暗号学的に
+結びつける手段は、現時点で存在しない。
 
-変更が特定の識別子を含む場合、それが `dist` に入っているかを直接確認するのが
-確実である。
+**ファイルの mtime は成功根拠にならない。**`dist` ディレクトリの mtime は、
+ファイルの追加・削除が無ければ更新されない。2026-08-12 の反映では、実際には
+全パッケージが再ビルドされていたにもかかわらず、3 パッケージのディレクトリ
+mtime が 10 日前を指しており、誤読しかけた。中の `.js` の mtime も同様に、
+「いつ書かれたか」しか語らず、「どの commit 由来か」は語らない。
+
+変更が特定の識別子を含む場合、それが `dist` に入っているかを見るのは
+**補助証拠としては有効**である。ただし変更ごとにしか使えず、成功判定の
+一般条件にはならない。
 
 ```sh
 grep -rl "<変更で追加した識別子>" <repo-path>/wrapper/*/dist
 ```
 
+build identity(#228)の導入後、この節は full SHA を返す health endpoint と
+runner の register 情報による確認へ置換する。
+
 ## See Also
 
 - [auth-and-authz](auth-and-authz.md) — 3 種トークンの未設定時挙動の詳細
-- [setup-wizards](setup-wizards.md) — 本 doc の手順を自動化する対話ウィザード
+- [setup-wizards](setup-wizards.md) — **初回配備**の env / config 生成を自動化する
+  対話ウィザード。4 節の更新手順は対象外(自動化は #228 / #229 / #230)
 - [runner/README.md](../../runner/README.md) — 常駐化・tarball 配布の全文
 - [server/README.md](../../server/README.md) — ローカル開発・Docker の基本
 - [threat-model](threat-model.md) — dev fallback / token 未設定のリスク評価

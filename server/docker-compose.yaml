@@ -53,6 +53,15 @@ services:
       KAOIRO_CLEAR_WATERMARKS_PATH: /var/lib/kaoiro/clear_watermarks.dets
       KAOIRO_SESSION_STARTS_PATH: /var/lib/kaoiro/session_starts.dets
       KAOIRO_INGRESS_ORDER_PATH: /var/lib/kaoiro/ingress_order.dets
+      # User identity ledger (issue #197, ADR-0050 D1). Same rationale as
+      # the agent identity ledger above: unset falls back to a tmp path
+      # that survives a process restart but NOT a fresh container. A lost
+      # entry re-issues a new user_id and resets display_name to its
+      # initial value on that source's next login, breaking issue #197's
+      # 「変更が再起動を跨いで保持される」acceptance. Omitted until issue
+      # #227 — a container recreate silently dropped the ledger, and the
+      # deploy backup could not restore what was never on the volume.
+      KAOIRO_USERS_PATH: /var/lib/kaoiro/users.dets
       # Token denylist: authoritative store of revoked agent_ids for
       # fail-closed auth (ふじ #120 must-fix 1, 2026-07-25). Must live on
       # the named volume — a lost entry silently re-grants a revoked
