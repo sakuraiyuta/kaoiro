@@ -188,21 +188,105 @@ describe("build-identity.mjs --format <file> CLI (issue #228 round 2 MF-5)", () 
     expect(out.trim()).toBe("unknown");
   });
 
-  // Tri-way consistency pin (MF-5's original claim, now actually enforced
-  // for a WELL-FORMED fixture): --format's output must equal what the
-  // runner's own formatBuildRevision(loadBuildInfo(dir)) computes for the
-  // identical file — the two readers of the same build-info.json must
-  // never disagree.
-  it("--format の出力は formatBuildRevision(loadBuildInfo(dir)) と一致する", () => {
+  // issue #228 round 4 (ふじ 差し戻し): round 3 closed the revision/dirty
+  // validation gap in --format but left built_at unvalidated — a file with
+  // a VALID revision/dirty and a malformed built_at still passed straight
+  // through, while the runner's own loadBuildInfo() (which validates the
+  // FULL shape) degraded the identical file to unknown. Two readers of the
+  // same file disagreeing again, just on a different field.
+  it("built_at だけ malformed (revision/dirty は valid) でも unknown へ degrade する", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-cli-"));
+    const buildInfo = join(tmpDir, "build-info.json");
     writeFileSync(
-      join(tmpDir, "build-info.json"),
+      buildInfo,
       JSON.stringify({
         revision: "0123456789abcdef0123456789abcdef01234567",
-        dirty: true,
-        built_at: "2026-08-12T00:00:00.000Z",
+        dirty: false,
+        built_at: "2026-99-99T99:99:99.999Z",
       }),
     );
+
+    const out = execFileSync("node", [scriptPath, "--format", buildInfo], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    expect(out.trim()).toBe("unknown");
+  });
+
+  // issue #228 round 4: round 3 wrapped the SHAPE check but left
+  // `readFileSync`/`JSON.parse` uncaught — a missing file or corrupt JSON
+  // crashed this CLI with a raw stack trace (exit 1) instead of degrading
+  // like loadBuildInfo() does for the identical failure.
+  it("壊れた JSON は例外を投げず unknown へ degrade する (exit 0)", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-cli-"));
+    const buildInfo = join(tmpDir, "build-info.json");
+    writeFileSync(buildInfo, "{ not json");
+
+    const out = execFileSync("node", [scriptPath, "--format", buildInfo], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    expect(out.trim()).toBe("unknown");
+  });
+
+  it("ファイルが存在しなくても例外を投げず unknown へ degrade する (exit 0)", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-cli-"));
+    const missing = join(tmpDir, "does-not-exist.json");
+
+    const out = execFileSync("node", [scriptPath, "--format", missing], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    expect(out.trim()).toBe("unknown");
+  });
+
+  // Tri-way consistency pin (MF-5's original claim, now actually enforced
+  // across BOTH the well-formed path AND every failure path): --format's
+  // output must equal what the runner's own
+  // formatBuildRevision(loadBuildInfo(dir)) computes for the identical
+  // file/directory — the two readers of the same build-info.json must
+  // never disagree, whether the file is well-formed, partially malformed,
+  // corrupt, or missing (issue #228 round 4, ふじ 差し戻し: extends the
+  // round-3 well-formed-only version of this pin to the 3 failure modes
+  // she reproduced independently).
+  describe.each([
+    [
+      "well-formed",
+      { revision: "0123456789abcdef0123456789abcdef01234567", dirty: true, built_at: "2026-08-12T00:00:00.000Z" },
+    ],
+    [
+      "built_at だけ malformed",
+      { revision: "0123456789abcdef0123456789abcdef01234567", dirty: true, built_at: "2026-99-99T99:99:99.999Z" },
+    ],
+  ])("--format と formatBuildRevision(loadBuildInfo(dir)) の一致 (%s)", (_label, fixture) => {
+    it("一致する", () => {
+      tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-cli-"));
+      writeFileSync(join(tmpDir, "build-info.json"), JSON.stringify(fixture));
+
+      const out = execFileSync(
+        "node",
+        [scriptPath, "--format", join(tmpDir, "build-info.json")],
+        { cwd: repoRoot, encoding: "utf8" },
+      );
+      expect(out.trim()).toBe(formatBuildRevision(loadBuildInfo(tmpDir)));
+    });
+  });
+
+  it("--format と loadBuildInfo は壊れた JSON でも一致する (どちらも unknown)", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-cli-"));
+    writeFileSync(join(tmpDir, "build-info.json"), "{ not json");
+
+    const out = execFileSync(
+      "node",
+      [scriptPath, "--format", join(tmpDir, "build-info.json")],
+      { cwd: repoRoot, encoding: "utf8" },
+    );
+    expect(out.trim()).toBe(formatBuildRevision(loadBuildInfo(tmpDir)));
+  });
+
+  it("--format と loadBuildInfo はファイル欠落でも一致する (どちらも unknown)", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-cli-"));
+    // Deliberately no build-info.json written into tmpDir.
 
     const out = execFileSync(
       "node",

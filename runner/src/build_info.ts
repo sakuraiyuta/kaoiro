@@ -47,13 +47,21 @@ const UNKNOWN_BUILD_INFO: BuildInfo = {
  *  comment above). */
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
 
-/** Value domain for `built_at` (issue #228 round 3, ふじ 差し戻し MF-4):
- *  the exact `new Date().toISOString()` shape generate-build-info.mjs
+/** Value domain for `built_at` (issue #228 round 4, ふじ 差し戻し): the
+ *  exact `new Date().toISOString()` value generate-build-info.mjs
  *  produces, or the literal "unknown" (`UNKNOWN_BUILD_INFO`'s own value).
- *  Diagnostic-only does NOT mean "any string" — an arbitrary value like
- *  "tomorrow" or "" previously passed the bare `typeof === "string"`
- *  check. */
-const BUILT_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+ *  round 3's shape-only regex (`/^\d{4}-\d{2}-\d{2}T.../`) matched
+ *  syntactically ISO-looking but calendrically impossible strings like
+ *  "2026-99-99T99:99:99.999Z" — a regex checks DIGIT POSITIONS, not
+ *  whether the date is real. Round-tripping through `Date` (parse, check
+ *  finiteness, re-serialize, compare) is what actually pins "this is
+ *  the exact string `toISOString()` would produce", closing that gap
+ *  without re-deriving ISO-8601's calendar rules by hand. */
+function isValidBuiltAt(value: string): boolean {
+  if (value === "unknown") return true;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
+}
 
 function isBuildInfoShape(value: unknown): value is BuildInfo {
   if (typeof value !== "object" || value === null) return false;
@@ -63,7 +71,7 @@ function isBuildInfoShape(value: unknown): value is BuildInfo {
     (v.revision === "unknown" || BUILD_REVISION_RE.test(v.revision)) &&
     typeof v.dirty === "boolean" &&
     typeof v.built_at === "string" &&
-    (v.built_at === "unknown" || BUILT_AT_RE.test(v.built_at))
+    isValidBuiltAt(v.built_at)
   );
 }
 

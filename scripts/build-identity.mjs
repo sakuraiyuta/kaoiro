@@ -109,20 +109,84 @@ export function formatIdentityString({ revision, dirty }) {
   return dirty ? `${revision}-dirty` : revision;
 }
 
-/** Value domain for a build-info.json-shaped object (issue #228 round 3
- *  MF-3, ふじ 差し戻し): `revision` must be the literal "unknown" or a
- *  lowercase 40-hex-digit SHA, `dirty` must be an actual JS boolean — NOT
- *  merely truthy. Mirrors runner/src/build_info.ts's `isBuildInfoShape`
- *  (`built_at` is not required here since `--format` only reads
- *  revision/dirty). Exported for direct unit testing. */
+/** Value domain for `built_at` — identical logic to runner/src/build_info.ts's
+ *  `isValidBuiltAt` (issue #228 round 4, ふじ 差し戻し), kept as an
+ *  independently-authored duplicate for the same cross-package reason as
+ *  `REVISION_RE` below. A shape-only regex matches syntactically
+ *  ISO-looking but calendrically impossible strings like
+ *  "2026-99-99T99:99:99.999Z" — round-tripping through `Date` (parse,
+ *  finiteness check, re-serialize, compare) is what actually pins "this
+ *  is the exact string `toISOString()` would produce". */
+function isValidBuiltAt(value) {
+  if (value === "unknown") return true;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+/** Value domain for a FULL build-info.json-shaped object (revision, dirty,
+ *  AND built_at — issue #228 round 4, ふじ 差し戻し: round 3 validated
+ *  only revision/dirty, so a file with a valid revision/dirty but a
+ *  malformed built_at still passed through here while runner's own
+ *  loadBuildInfo() degraded the SAME file to unknown — the two readers
+ *  disagreed again, just on a different field than round 3's bug).
+ *  `revision` must be the literal "unknown" or a lowercase 40-hex-digit
+ *  SHA, `dirty` must be an actual JS boolean — NOT merely truthy. Mirrors
+ *  runner/src/build_info.ts's `isBuildInfoShape`. Exported for direct
+ *  unit testing. */
 const REVISION_RE = /^[0-9a-f]{40}$/;
 export function isValidBuildInfoShape(value) {
   if (typeof value !== "object" || value === null) return false;
   return (
     typeof value.revision === "string" &&
     (value.revision === "unknown" || REVISION_RE.test(value.revision)) &&
-    typeof value.dirty === "boolean"
+    typeof value.dirty === "boolean" &&
+    typeof value.built_at === "string" &&
+    isValidBuiltAt(value.built_at)
   );
+}
+
+/** Reads and validates a build-info.json-shaped file, degrading to
+ *  `{ revision: "unknown", dirty: false }` (with a reason logged to
+ *  stderr) on ANY failure — missing file, unparsable JSON, or a malformed
+ *  shape (issue #228 round 4, ふじ 差し戻し). Structurally mirrors
+ *  runner/src/build_info.ts's `loadBuildInfo` (same three try/catch
+ *  stages, same degrade target) rather than letting a read or parse
+ *  failure propagate as an uncaught exception — round 3 only handled the
+ *  shape-mismatch case; a missing file or corrupt JSON crashed this CLI
+ *  with a raw stack trace while the SAME file handed to loadBuildInfo()
+ *  degrades cleanly, another two-readers-disagree gap.
+ *
+ *  Partial trust is deliberately not offered here (e.g. keeping a valid
+ *  revision/dirty pair while only built_at is malformed) — same
+ *  reasoning as MF-2's dashboard pair-invariant: a file with ANY invalid
+ *  field was plausibly never written by generate-build-info.mjs at all,
+ *  so nothing in it is trustworthy over the whole. */
+function readBuildInfoFile(file) {
+  let raw;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch (err) {
+    process.stderr.write(
+      `build-identity: --format could not read ${file} (${err.message}), degrading to unknown\n`,
+    );
+    return { revision: "unknown", dirty: false };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    process.stderr.write(
+      `build-identity: --format input at ${file} is not valid JSON (${err.message}), degrading to unknown\n`,
+    );
+    return { revision: "unknown", dirty: false };
+  }
+  if (!isValidBuildInfoShape(parsed)) {
+    process.stderr.write(
+      `build-identity: --format input at ${file} is malformed, degrading to unknown\n`,
+    );
+    return { revision: "unknown", dirty: false };
+  }
+  return parsed;
 }
 
 function main() {
@@ -133,23 +197,7 @@ function main() {
       process.stderr.write("build-identity: --format requires a file path\n");
       process.exit(64); // EX_USAGE
     }
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    // MF-3 ruling: degrade to the SAME "unknown" runner's loadBuildInfo()
-    // would produce for this file, rather than fail-loud OR blindly
-    // formatting a malformed value — round 2 skipped this check entirely,
-    // letting e.g. `{"revision":"not-a-sha","dirty":"false"}` (dirty as a
-    // truthy STRING, not a boolean) print "not-a-sha-dirty" verbatim,
-    // while the runner reading the identical file degraded to "unknown".
-    // The two readers of the same file must not disagree.
-    const info = isValidBuildInfoShape(parsed)
-      ? parsed
-      : (() => {
-          process.stderr.write(
-            `build-identity: --format input at ${file} is malformed, degrading to unknown\n`,
-          );
-          return { revision: "unknown", dirty: false };
-        })();
-    process.stdout.write(`${formatIdentityString(info)}\n`);
+    process.stdout.write(`${formatIdentityString(readBuildInfoFile(file))}\n`);
     return;
   }
   const identity = computeBuildIdentity();

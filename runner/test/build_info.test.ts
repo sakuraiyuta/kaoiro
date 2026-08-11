@@ -160,6 +160,26 @@ describe("loadBuildInfo (issue #228)", () => {
       built_at: "unknown",
     });
   });
+
+  // issue #228 round 4 (ふじ 差し戻し): a shape-only regex checks DIGIT
+  // POSITIONS, not whether the date is calendrically real — "2026-99-99T
+  // 99:99:99.999Z" matches `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/`
+  // syntactically but is not a value `toISOString()` could ever produce.
+  // The round-trip check (parse -> finiteness -> re-serialize -> compare)
+  // is what actually catches this.
+  it("built_at が桁の形だけ整っている暦的に不正な日付 (\"2026-99-99T99:99:99.999Z\") なら unknown へ fail-soft する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-info-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: false,
+        built_at: "2026-99-99T99:99:99.999Z",
+      }),
+    );
+    const info = loadBuildInfo(tmpDir);
+    expect(info).toEqual({ revision: "unknown", dirty: false, built_at: "unknown" });
+  });
 });
 
 describe("formatBuildRevision (issue #228)", () => {
@@ -168,7 +188,7 @@ describe("formatBuildRevision (issue #228)", () => {
       formatBuildRevision({
         revision: "0123456789abcdef0123456789abcdef01234567",
         dirty: false,
-        built_at: "x",
+        built_at: "2026-08-12T00:00:00.000Z",
       }),
     ).toBe("0123456789abcdef0123456789abcdef01234567");
   });
@@ -178,14 +198,18 @@ describe("formatBuildRevision (issue #228)", () => {
       formatBuildRevision({
         revision: "0123456789abcdef0123456789abcdef01234567",
         dirty: true,
-        built_at: "x",
+        built_at: "2026-08-12T00:00:00.000Z",
       }),
     ).toBe("0123456789abcdef0123456789abcdef01234567-dirty");
   });
 
   it("unknown な revision も -dirty サフィックス規則は同じ", () => {
     expect(
-      formatBuildRevision({ revision: "unknown", dirty: true, built_at: "x" }),
+      formatBuildRevision({
+        revision: "unknown",
+        dirty: true,
+        built_at: "2026-08-12T00:00:00.000Z",
+      }),
     ).toBe("unknown-dirty");
   });
 });
