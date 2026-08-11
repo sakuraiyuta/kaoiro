@@ -20,12 +20,25 @@ config :kaoiro_server,
   # Hard limits per inter-agent conversation (protocol-inter-agent spec,
   # phase-8 Stage B). The server enforces these mechanically — quota
   # overshoot automatically terminates the conversation with a synthetic
-  # escalate-to-user broadcast.
+  # escalate-to-user broadcast. issue #221 removed the former
+  # max_wallclock_ms hard limit (it punished slow-but-legitimate
+  # conversations while never catching a fast runaway ping-pong, which
+  # max_turns already catches first) — max_turns / max_tokens /
+  # max_concurrent_agents are the only hard limits left.
+  #
+  # open_conversation_ttl_ms / tombstone_ttl_ms below are GC-only TTLs, NOT
+  # hard limits: neither rejects a message or triggers escalate-to-user.
   inter_agent: [
     max_turns: 20,
     max_tokens: 100_000,
-    max_wallclock_ms: 600_000,
-    max_concurrent_agents: 2
+    max_concurrent_agents: 2,
+    # OPEN entry memory-DoS reclaim (started_at basis) — see
+    # KaoiroServer.ConversationStates moduledoc.
+    open_conversation_ttl_ms: 86_400_000,
+    # CLOSED tombstone reclaim (closed_at basis), kept in step with the
+    # wrapper's CLOSED_TRACK_TTL_MS (24h) so a late message cannot land on
+    # a conversation_id reused before the wrapper itself has forgotten it.
+    tombstone_ttl_ms: 86_400_000
   ]
 
 # Configure the endpoint

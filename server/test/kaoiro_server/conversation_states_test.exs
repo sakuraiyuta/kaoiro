@@ -153,23 +153,23 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert %{"a" => ["c"], "c" => ["a"]} = ConversationStates.peer_index(name)
   end
 
-  test "periodic GC は期限切れ open entry を :max_wallclock tombstone へ遷移させる (#177)" do
-    {name, clock} = start_tracker_with_clock(:cs_gc_tombstone, max_wallclock_ms: 1)
+  test "periodic GC は期限切れ open entry を :open_conversation_ttl tombstone へ遷移させる (#177, #221)" do
+    {name, clock} = start_tracker_with_clock(:cs_gc_tombstone, open_conversation_ttl_ms: 1)
     assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
     advance_clock(clock, 5)
 
     pid = Process.whereis(name)
     sync_gc(pid)
 
-    assert %{status: :closed, reason: :max_wallclock} = ConversationStates.get("c", name)
+    assert %{status: :closed, reason: :open_conversation_ttl} = ConversationStates.get("c", name)
     # A tombstoned entry still refuses further sends, same as any other close
     # reason.
     assert {:error, :conversation_closed} =
              ConversationStates.record_message("c", "a", "b", "y", 2, false, name)
   end
 
-  test "tombstone は max_wallclock_ms 経過後に GC で削除され CID を再利用できる (#177)" do
-    {name, clock} = start_tracker_with_clock(:cs_gc_ttl, max_wallclock_ms: 1)
+  test "tombstone は tombstone_ttl_ms 経過後に GC で削除され CID を再利用できる (#177, #221)" do
+    {name, clock} = start_tracker_with_clock(:cs_gc_ttl, tombstone_ttl_ms: 1)
     assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, name)
     assert :both_done = ConversationStates.record_message("c", "b", "a", "y", 2, true, name)
     pid = Process.whereis(name)
@@ -246,10 +246,10 @@ defmodule KaoiroServer.ConversationStatesTest do
     end
   end
 
-  describe "hard limit 4 種 x tombstone lifecycle 全経路 (#177 review S1)" do
+  describe "hard limit 3 種 x tombstone lifecycle 全経路 (#177 review S1, #221)" do
     test "max_turns: tombstone -> conversation_closed -> TTL 後に CID 再利用" do
       {name, clock} =
-        start_tracker_with_clock(:cs_lifecycle_turns, max_turns: 1, max_wallclock_ms: 1_000)
+        start_tracker_with_clock(:cs_lifecycle_turns, max_turns: 1, tombstone_ttl_ms: 1_000)
 
       pid = Process.whereis(name)
 
@@ -272,7 +272,7 @@ defmodule KaoiroServer.ConversationStatesTest do
 
     test "max_tokens: tombstone -> conversation_closed -> TTL 後に CID 再利用" do
       {name, clock} =
-        start_tracker_with_clock(:cs_lifecycle_tokens, max_tokens: 10, max_wallclock_ms: 1_000)
+        start_tracker_with_clock(:cs_lifecycle_tokens, max_tokens: 10, tombstone_ttl_ms: 1_000)
 
       pid = Process.whereis(name)
       body = String.duplicate("x", 30)
@@ -296,7 +296,7 @@ defmodule KaoiroServer.ConversationStatesTest do
       {name, clock} =
         start_tracker_with_clock(:cs_lifecycle_agents,
           max_concurrent_agents: 1,
-          max_wallclock_ms: 1_000
+          tombstone_ttl_ms: 1_000
         )
 
       pid = Process.whereis(name)
@@ -320,21 +320,33 @@ defmodule KaoiroServer.ConversationStatesTest do
       assert {:exceeded, :max_concurrent_agents} =
                ConversationStates.record_message("c", "a", "b", "fresh", 1, false, name)
     end
+  end
 
-    test "max_wallclock: tombstone -> conversation_closed -> TTL 後に CID 再利用" do
-      {name, clock} = start_tracker_with_clock(:cs_lifecycle_wallclock, max_wallclock_ms: 100)
+  describe "open_conversation_ttl (GC-only, not a hard limit, #221)" do
+    test "GC tombstone -> conversation_closed -> tombstone TTL 後に CID 再利用" do
+      # Two independent TTLs chained end to end: open_conversation_ttl_ms
+      # transitions the stale OPEN entry to a tombstone (no :exceeded reply —
+      # this is a sweep-driven transition, not a record_message/6 result),
+      # then tombstone_ttl_ms deletes the tombstone so the id becomes fresh
+      # again — unlike the hard-limit reasons above, there is no
+      # {:exceeded, _} reply to assert on this path.
+      {name, clock} =
+        start_tracker_with_clock(:cs_lifecycle_open_ttl,
+          open_conversation_ttl_ms: 100,
+          tombstone_ttl_ms: 100
+        )
+
       pid = Process.whereis(name)
 
       assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
       advance_clock(clock, 101)
+      sync_gc(pid)
 
-      assert {:exceeded, :max_wallclock} =
-               ConversationStates.record_message("c", "b", "a", "y", 2, false, name)
-
-      assert %{status: :closed, reason: :max_wallclock} = ConversationStates.get("c", name)
+      assert %{status: :closed, reason: :open_conversation_ttl} =
+               ConversationStates.get("c", name)
 
       assert {:error, :conversation_closed} =
-               ConversationStates.record_message("c", "a", "b", "z", 3, false, name)
+               ConversationStates.record_message("c", "a", "b", "z", 2, false, name)
 
       advance_clock(clock, 101)
       sync_gc(pid)
@@ -409,8 +421,9 @@ defmodule KaoiroServer.ConversationStatesTest do
       start_tracker(:cs_envread,
         max_turns: 1,
         max_tokens: 100_000,
-        max_wallclock_ms: 600_000,
-        max_concurrent_agents: 2
+        max_concurrent_agents: 2,
+        open_conversation_ttl_ms: 86_400_000,
+        tombstone_ttl_ms: 86_400_000
       )
 
     assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)

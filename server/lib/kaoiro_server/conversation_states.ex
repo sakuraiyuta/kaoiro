@@ -21,8 +21,8 @@ defmodule KaoiroServer.ConversationStates do
       to a CLOSED tombstone (below); the caller relays the envelope but
       performs no further close.
     * `{:exceeded, reason}` — hard-limit overshoot (`:max_turns` / `:max_tokens`
-      / `:max_wallclock` / `:max_concurrent_agents`). The entry transitions to
-      a tombstone carrying that reason.
+      / `:max_concurrent_agents`). The entry transitions to a tombstone
+      carrying that reason.
     * `{:error, :conversation_closed}` — a message arrived for a
       `conversation_id` that already holds a CLOSED tombstone (issue #177):
       a delayed / duplicate / out-of-order message reaching a conversation
@@ -58,12 +58,24 @@ defmodule KaoiroServer.ConversationStates do
   conversation).
 
   A periodic sweep (`:gc` self-message) transitions OPEN entries whose
-  wallclock has expired into a `:max_wallclock` tombstone even without
-  further messages — without it, a stale entry would pin memory until the
-  next message under the same id. The same sweep deletes tombstones once
-  `max_wallclock_ms` has elapsed since `closed_at`, so a `conversation_id`
-  may be reused for a brand-new conversation after that TTL (IDs are
-  UUIDs, so this is not a permanent tombstone).
+  `started_at` is older than `open_conversation_ttl_ms` into an
+  `:open_conversation_ttl` tombstone even without further messages —
+  without it, a stale entry (issue #221: e.g. one side crashed or was
+  never going to reply) would pin memory indefinitely. This is a
+  memory-DoS defense only, distinct from the `{:exceeded, reason}` hard
+  limits above: it never synthesizes an `escalate-to-user` envelope (the
+  caller only does that for a `record_message/6` reply, and this
+  transition happens out-of-band on the sweep), so a slow-but-legitimate
+  conversation is not punished for taking a long time — see issue #221
+  for why the previous `max_wallclock` hard-limit branch here was
+  removed. The same sweep deletes tombstones once `tombstone_ttl_ms` has
+  elapsed since `closed_at`, so a `conversation_id` may be reused for a
+  brand-new conversation after that TTL (IDs are UUIDs, so this is not a
+  permanent tombstone). Keeping this a separate key from
+  `open_conversation_ttl_ms` matters for issue #177: the tombstone must
+  outlive `open_conversation_ttl_ms` by enough margin that a genuinely
+  late message cannot land on a freshly-reused `conversation_id`
+  (wrapper-side `CLOSED_TRACK_TTL_MS` uses the same 24h value).
   """
 
   use GenServer
@@ -71,8 +83,9 @@ defmodule KaoiroServer.ConversationStates do
   require Logger
 
   # Sweep frequency for the wallclock-based GC of stale entries
-  # (protocol-inter-agent memory-DoS defense). Set well below max_wallclock_ms
-  # so an expired conversation never lingers more than the sweep interval.
+  # (protocol-inter-agent memory-DoS defense). Set well below both
+  # open_conversation_ttl_ms and tombstone_ttl_ms so an expired entry never
+  # lingers more than the sweep interval.
   @gc_interval_ms 60_000
 
   @doc """
@@ -161,8 +174,13 @@ defmodule KaoiroServer.ConversationStates do
     %{
       max_turns: Keyword.get(cfg, :max_turns, 20),
       max_tokens: Keyword.get(cfg, :max_tokens, 100_000),
-      max_wallclock_ms: Keyword.get(cfg, :max_wallclock_ms, 600_000),
       max_concurrent_agents: Keyword.get(cfg, :max_concurrent_agents, 2),
+      # GC-only TTLs (issue #221) — NOT hard limits: neither one rejects a
+      # message or synthesizes an escalate-to-user envelope. Split from the
+      # former single max_wallclock_ms because the two govern different
+      # transitions on different base timestamps (see moduledoc).
+      open_conversation_ttl_ms: Keyword.get(cfg, :open_conversation_ttl_ms, 86_400_000),
+      tombstone_ttl_ms: Keyword.get(cfg, :tombstone_ttl_ms, 86_400_000),
       # Global cap (protocol-inter-agent memory-DoS defense). 10k entries at
       # ~few hundred bytes apiece bounds worst-case memory regardless of how
       # many wrappers spam fresh conversation_ids.
@@ -291,11 +309,12 @@ defmodule KaoiroServer.ConversationStates do
   def handle_info(:gc, state) do
     schedule_gc()
     now = state.clock.()
-    cap = state.limits.max_wallclock_ms
+    open_ttl = state.limits.open_conversation_ttl_ms
+    tombstone_ttl = state.limits.tombstone_ttl_ms
 
     {conversations, tombstoned, dropped} =
       Enum.reduce(state.conversations, {%{}, 0, 0}, fn {cid, entry}, {acc, tomb, drop} ->
-        case gc_disposition(entry, now, cap) do
+        case gc_disposition(entry, now, open_ttl, tombstone_ttl) do
           :keep -> {Map.put(acc, cid, entry), tomb, drop}
           {:tombstone, closed_entry} -> {Map.put(acc, cid, closed_entry), tomb + 1, drop}
           :drop -> {acc, tomb, drop + 1}
@@ -314,16 +333,18 @@ defmodule KaoiroServer.ConversationStates do
 
   # issue #177: the periodic sweep must not silently delete an open entry —
   # a delayed message reaching it afterwards would otherwise be treated as a
-  # brand-new conversation instead of a stale one. Transition to a
-  # :max_wallclock tombstone instead; a genuinely expired tombstone (its own
-  # `closed_at` TTL elapsed) is the only case still deleted outright.
-  defp gc_disposition(%{status: :closed, closed_at: closed_at}, now, cap) do
-    if now - closed_at > cap, do: :drop, else: :keep
+  # brand-new conversation instead of a stale one. Transition to an
+  # :open_conversation_ttl tombstone instead (issue #221: memory-DoS defense
+  # only, not a hard limit — see moduledoc); a genuinely expired tombstone
+  # (its own `closed_at` TTL elapsed) is the only case still deleted
+  # outright.
+  defp gc_disposition(%{status: :closed, closed_at: closed_at}, now, _open_ttl, tombstone_ttl) do
+    if now - closed_at > tombstone_ttl, do: :drop, else: :keep
   end
 
-  defp gc_disposition(%{status: :open} = entry, now, cap) do
-    if now - entry.started_at > cap do
-      {:tombstone, close_entry(entry, :max_wallclock, now)}
+  defp gc_disposition(%{status: :open} = entry, now, open_ttl, _tombstone_ttl) do
+    if now - entry.started_at > open_ttl do
+      {:tombstone, close_entry(entry, :open_conversation_ttl, now)}
     else
       :keep
     end
@@ -340,9 +361,6 @@ defmodule KaoiroServer.ConversationStates do
 
       next.tokens > limits.max_tokens ->
         {:reply, {:exceeded, :max_tokens}, close(state, cid, next, :max_tokens, now)}
-
-      now - next.started_at > limits.max_wallclock_ms ->
-        {:reply, {:exceeded, :max_wallclock}, close(state, cid, next, :max_wallclock, now)}
 
       # Spec MUST: every participating agent must have signalled done=true
       # for the conversation to complete. Close the entry only then.

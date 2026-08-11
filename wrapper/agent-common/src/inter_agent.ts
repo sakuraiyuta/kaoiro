@@ -384,13 +384,15 @@ interface ConversationTrack {
 }
 
 /** How long a CLOSED track is kept before being pruned (issue #177: "長寿命
- *  wrapper の memory leak を防ぐ"). Deliberately much longer than the
- *  server's own tombstone TTL (`max_wallclock_ms`, default 10 min) — the
- *  wrapper has no visibility into that config, and a track surviving
- *  longer than the server's costs only a few bytes of memory, while
- *  pruning too early would let `invoke()`'s local closed-CID guard (AC10)
- *  miss a conversation_id the server would still reject. 24h comfortably
- *  outlives any realistic session. */
+ *  wrapper の memory leak を防ぐ"). The wrapper has no visibility into the
+ *  server's own tombstone TTL config (`tombstone_ttl_ms`, also 24h by
+ *  default as of issue #221 — deliberately matched to this constant, see
+ *  protocol-inter-agent spec「CID 再利用は契約にしない」), so this value is
+ *  chosen independently: a track surviving longer than the server's costs
+ *  only a few bytes of memory, while pruning too early would let
+ *  `invoke()`'s local closed-CID guard (AC10) miss a conversation_id the
+ *  server would still reject. 24h comfortably outlives any realistic
+ *  session. */
 const CLOSED_TRACK_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Upper bound on CLOSED tracks kept at once (issue #177 review M3, AC6),
@@ -410,11 +412,15 @@ const DEFAULT_MAX_CLOSED_TRACKS = 10_000;
  *  #177's scope) — so a track this wrapper never learned was closed (a
  *  dropped/missed closing turn, a crashed peer, …) stays OPEN, and
  *  therefore un-prunable by `#pruneClosedTracks()`, for the life of the
- *  process. Any conversation genuinely still open this long has already
- *  vastly exceeded the server's own default hard wall-clock limit
- *  (`max_wallclock_ms`, 10 min) and was almost certainly force-closed
- *  there; evicting the local OPEN entry only discards this wrapper's now-
- *  stale bookkeeping for it (`turnNumber` / `localDone` / `remoteDone`) —
+ *  process. issue #221 removed the server's old hard wall-clock limit
+ *  (`max_wallclock`), so an OPEN entry this stale is no longer guaranteed
+ *  to have been force-closed server-side by that mechanism — but the
+ *  server's own `open_conversation_ttl_ms` GC sweep (also 24h by default)
+ *  independently reclaims a `started_at`-stale OPEN entry into a
+ *  tombstone regardless, so this local eviction still lines up with the
+ *  server's own memory-reclaim horizon; evicting the local OPEN entry
+ *  only discards this wrapper's now-stale bookkeeping for it
+ *  (`turnNumber` / `localDone` / `remoteDone`) —
  *  a deliberate trade-off. A subsequent explicit send on the same
  *  conversation_id simply starts a fresh local track and gets a fresh,
  *  authoritative answer from the server: `conversation_closed` if the

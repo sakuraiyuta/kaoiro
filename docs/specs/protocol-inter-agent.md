@@ -152,11 +152,32 @@ server は conversation 単位で以下の制限を機械的に監視し、超�
 |---|---|---|---|
 | `max_turns` | turn(=メッセージ件数) | 20 | conversation 1 件の対話ターン総数 |
 | `max_tokens` | token | 100_000 | 全 body の累積トークン(server 側で粗く近似、`length(body)/3` 切り上げ) |
-| `max_wallclock` | ms | 600_000(10 分) | conversation_id 発生から経過時間 |
 | `max_concurrent_agents` | agent 数 | 2 | 同一 conversation_id に参加可能な agent 数(Phase 1 は 2 固定、Phase 3 で 3 以上検討) |
 
 config は kaoiro server 設定で agent 単位 / global の二段。global を
 agent 単位で上書き可。
+
+**旧 `max_wallclock` は issue #221 で撤廃した。** conversation 発生から
+の経過時間そのものを打ち切り条件にする方式は、暴走した高速 ping-pong
+より先に `max_turns` へ到達し(#177 のケース同様、短いメッセージの
+往復は秒〜分単位で 20 turn に達する)、逆に xhigh effort のレビューの
+ような**低速だが正当な**対話を優先的に打ち切るという選択性の逆転が
+2026-08-11 に実測された。撤廃の詳細と根拠は issue #221 本文を参照。
+
+### メモリ回収用 TTL(config、ハード制限ではない)
+
+以下はハード制限ではなく、conversation エントリのメモリ回収のみを
+目的とする GC 専用の config。`{:exceeded, reason}` を返さず、
+`escalate-to-user` も合成しない — 対話の長さそのものを理由に
+打ち切ることは一切しない。
+
+| config キー | 単位 | 既定値 | 用途 | 基準時刻 |
+|---|---|---|---|---|
+| `open_conversation_ttl_ms` | ms | 86_400_000(24 時間) | 応答が途絶えた OPEN entry の回収(memory-DoS 防御) | `started_at` |
+| `tombstone_ttl_ms` | ms | 86_400_000(24 時間) | CLOSED tombstone の削除、`conversation_id` 再利用の解禁 | `closed_at` |
+
+`tombstone_ttl_ms` は wrapper 側の `CLOSED_TRACK_TTL_MS`(24 時間)と
+値を揃えている(下記「CID 再利用は契約にしない」参照)。
 
 ### conversation のライフサイクルと終了後の扱い (issue #177)
 
@@ -173,30 +194,41 @@ stateDiagram-v2
   half_closed --> closed: もう片側も done=true
   open --> closed: hard limit 超過
   half_closed --> closed: hard limit 超過
-  closed --> [*]: TTL(max_wallclock_ms)経過後に GC
+  open --> closed: open_conversation_ttl_ms 経過(GC、escalate なし)
+  half_closed --> closed: open_conversation_ttl_ms 経過(GC、escalate なし)
+  closed --> [*]: tombstone_ttl_ms 経過後に GC
 ```
 
-- **open**: 通常の対話中。turn / token / wallclock を計測する。
+- **open**: 通常の対話中。turn / token を計測する(issue #221 で
+  wallclock 自体の計測・打ち切りは廃止)。
 - **half-closed(one-sided done)**: 一方の owner-side が
   `meta.done=true` を送り、もう一方はまだの状態。受信側には「close
   proposal」として注入する — 一般の返信 directive ではなく、「閉じる
   なら一度だけ `done=true` で応答、続けるなら通常の応答」という専用
   文言にする(wrapper 側、下記)。
-- **closed(terminal)**: 両 owner-side の done=true が揃った、または
-  hard limit 超過。server はこの時点で entry を tombstone
-  (`status: closed`、`reason`、`closed_at`、参加 agent 集合、
-  `last_turn` を保持)へ遷移させ、削除しない。同一 `conversation_id`
-  への以後の message は relay・store・通常 broadcast せず
-  `{:error, :conversation_closed}` で拒否する。terminal 側の受信も
-  一般の返信 directive を持たない(「informational only、
-  send_to_agent を呼ぶな」という専用文言) — 追加の send_to_agent を
-  誘発しない。
-- **tombstone GC**: closed から `max_wallclock_ms` 以上経過した
+- **closed(terminal)**: 両 owner-side の done=true が揃った、hard
+  limit 超過、または `open_conversation_ttl_ms` 経過(下記)。server は
+  この時点で entry を tombstone(`status: closed`、`reason`、
+  `closed_at`、参加 agent 集合、`last_turn` を保持)へ遷移させ、削除
+  しない。同一 `conversation_id` への以後の message は relay・store・
+  通常 broadcast せず `{:error, :conversation_closed}` で拒否する。
+  terminal 側の受信も一般の返信 directive を持たない(「informational
+  only、send_to_agent を呼ぶな」という専用文言) — 追加の
+  send_to_agent を誘発しない。
+- **open_conversation_ttl による closed(issue #221)**: periodic GC は
+  OPEN entry の `started_at` から `open_conversation_ttl_ms`
+  (既定 24 時間)経過したものを、message の到着を待たず tombstone
+  (`reason: :open_conversation_ttl`)へ遷移させる。**これはハード
+  制限ではなくメモリ回収専用**であり、`escalate-to-user` は合成しない
+  — 応答が途絶えたまま長時間残る entry を回収するだけで、対話が長い
+  こと自体を理由に打ち切りはしない。旧 `max_wallclock` ハード制限
+  (10 分)がこの遷移も兼ねていたが、issue #221 で用途を分離した。
+- **tombstone GC**: closed から `tombstone_ttl_ms` 以上経過した
   tombstone は server の periodic GC が削除する。この TTL は
   **UUID 衝突時のメモリ解放**であり、`conversation_id` を意図的に
   再利用する運用パターンではない(下記「CID 再利用は契約にしない」
-  参照)。periodic GC は open entry も wallclock 超過時に即削除せず、
-  まず `max_wallclock` tombstone へ遷移させる — 削除してしまうと、
+  参照)。periodic GC は open entry も TTL 超過時に即削除せず、まず
+  `open_conversation_ttl` tombstone へ遷移させる — 削除してしまうと、
   遅延到着した message が「新規」として再受理されてしまうため。
 - **turn_number の ingress 検証と stale_turn 拒否**(issue #177 review
   M1): live ingress(通常の `envelope` push)は `payload.turn_number`
@@ -298,14 +330,14 @@ Claude Code / Codex いずれの engine アダプタも共通の `agent-common`
 
 #### CID 再利用は契約にしない(issue #177 review S2)
 
-server の tombstone TTL(`max_wallclock_ms`、既定 10 分)だけを見ると
+server の tombstone TTL(`tombstone_ttl_ms`、既定 24 時間)だけを見ると
 「TTL 経過後は `conversation_id` を再利用できる」ように読めるが、
 これは server 単体の話であって system 全体の契約ではない。
-**wrapper 側の closed track TTL は 24 時間** であり、その `send_to_agent`
+**wrapper 側の closed track TTL も 24 時間** であり、その `send_to_agent`
 / `receiveInbound` を経由する限り、閉じた `conversation_id` は
-server 側 TTL が明けた後もこの 24 時間の間ローカルで
-「closed」のまま tool error を返し続ける。同一 wrapper が生存または
-再接続していれば、server 側 TTL 経過直後の再利用は失敗する。
+server 側 TTL が明けた後もローカルで「closed」のまま tool error を
+返し続けうる。同一 wrapper が生存または再接続していれば、server 側
+TTL 経過直後の再利用は失敗する。
 
 したがって:
 
@@ -318,11 +350,14 @@ server 側 TTL が明けた後もこの 24 時間の間ローカルで
   常に `conversation_id` を省略して新規 UUID を採番させること。閉じた
   `conversation_id` を明示的に指定して再送する経路は、フォールバック
   としても正式な API 契約としても提供しない。
-- server 側 TTL が短い(既定 10 分)一方 wrapper 側が長い(24 時間)の
-  は意図的な非対称: server 側は攻撃的な conversation_id 使い回しに
-  よるメモリ枯渇を防ぐ最小限の防御、wrapper 側は「もう終わった会話」
-  の再開を実務上ほぼ確実に防ぐための guard であり、両者は異なる目的
-  を持つため揃える必要はない。
+- **server 側 `tombstone_ttl_ms` と wrapper 側 `CLOSED_TRACK_TTL_MS` は
+  issue #221 で同じ 24 時間へ揃えた**(旧 `max_wallclock_ms` は
+  10 分で、server 側だけ短い非対称構成だった)。揃えたのは、旧
+  `max_wallclock` ハード制限の撤廃で server 側が短命だったことの
+  積極的な理由(頻繁な hard-limit 打ち切りに追従した短い回収)が
+  消えたため — server が先に忘れて wrapper だけが guard を担う設計に
+  積極的な利点はなく、揃えた方が運用上のメンタルモデルが単純になる。
+  実効的な guard が wrapper 側 24 時間である点自体は変わらない。
 
 ### 観測経路(dashboard 表示)
 
@@ -1072,12 +1107,14 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   が承認を包含する)。kaoiro 側の autonomous な承認スキップ機構は
   Phase 3 まで導入しない
 - MUST: server は config のハード制限(`max_turns` / `max_tokens` /
-  `max_wallclock` / `max_concurrent_agents`)を機械的に強制する
+  `max_concurrent_agents`)を機械的に強制する(issue #221: 旧
+  `max_wallclock` はハード制限から撤廃済み)
 - MUST: `meta.done` は両 owner-side エージェントから true で
   conversation が完了。片側だけでは done としない
-- MUST(issue #177): 完了(両 owner-side done)または hard limit 超過で
-  closed になった `conversation_id` は tombstone として保持し、
-  `max_wallclock_ms` 経過まで削除しない。closed 中の同一
+- MUST(issue #177): 完了(両 owner-side done)、hard limit 超過、または
+  `open_conversation_ttl_ms` 経過(issue #221、GC 専用)で closed に
+  なった `conversation_id` は tombstone として保持し、
+  `tombstone_ttl_ms` 経過まで削除しない。closed 中の同一
   `conversation_id` への送信は relay・store・通常 broadcast せず
   `{:error, :conversation_closed}` で拒否する。counters
   (turns / tokens / started_at / done_by)は closed 遷移時に破棄し、

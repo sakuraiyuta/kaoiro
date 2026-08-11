@@ -75,7 +75,10 @@ Stage C への進行は次セッション以降で判断。
 - ハード制限 config: `max_turns` / `max_tokens` / `max_wallclock` /
   `max_concurrent_agents` per conversation。 既定値は spec 側で確定。
   超過時は server が conversation を強制終了、 dashboard に「未合意
-  打ち切り」ステータスを記録
+  打ち切り」ステータスを記録(issue #221 で `max_wallclock` はハード
+  制限から撤廃 — 現行の制限セットとメモリ回収用 TTL は
+  [protocol-inter-agent spec](../specs/protocol-inter-agent.md)
+  「ハード制限」節を正とする)
 
 ### OUT(明示的に外す、Stage C 以降または将来)
 
@@ -105,7 +108,7 @@ Stage C への進行は次セッション以降で判断。
 | 2 | server | envelope routing + observation broadcast + hard limit 監視タイマー |
 | 3 | wrapper | `send_to_agent` ツール定義、 permission_broker への接続、 受信 envelope の SDK 入力注入 |
 | 4 | dashboard | `inter_agent_message` の log 表示、 permission dialog の宛先表示 |
-| 5 | config | `max_turns` / `max_tokens` / `max_wallclock` /`max_concurrent_agents` の設定項目化 |
+| 5 | config | `max_turns` / `max_tokens` / `max_wallclock` /`max_concurrent_agents` の設定項目化(issue #221 で `max_wallclock` は撤廃、spec 参照) |
 | 6 | E2E | 2 エージェント環境で相談 → 議論 → 合意 → done の 1 ラウンドを通す |
 
 ## Stage C — Phase 2: permission gate 改善 + リファクタ
