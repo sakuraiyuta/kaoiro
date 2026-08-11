@@ -370,9 +370,18 @@ systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
 
 ### 4.3 更新手順
 
-**prepare(無停止)と commit(停止窓)を分ける。**build は停止時間に
-含めない。特に **runner の build 成功を server の切替より前に確定させる** —
-逆順にすると、build 失敗時に「新 server × 旧 runner」という互換の保証が
+**prepare(無停止)と commit(停止窓)を分ける。**
+
+**server image の build は server の停止時間に含めない。**旧 container が
+旧 image ID を保持したまま稼働を続けられるためである。
+
+**一方、runner の in-place build は runner を停止した後にしか行えない。**
+4.1 の in-place build 制約により、稼働中にビルドすると新旧の混ざった
+artifact を掴む。したがって **#229 までは、runner の build 時間はそのまま
+runner の停止時間である**。outage を見積もるときはこれを含めること。
+
+特に **runner の build 成功を server の切替より前に確定させる** — 逆順に
+すると、build 失敗時に「新 server × 旧 runner」という互換の保証が
 ない組み合わせが残る。
 
 ```mermaid
@@ -384,15 +393,18 @@ flowchart TD
   D -->|失敗| R1[abort cleanup 4.4 の 0<br/>local も旧 commit へ<br/>4.4 の 2]
   D -->|成功| E[server graceful stop]
   E --> S{正常停止か<br/>exit と oom を確認}
-  S -->|異常 or 判定不能| R5[旧 image で再起動し正常 open を確認<br/>graceful stop から取り直す<br/>不可なら中断]
-  S -->|正常| M[初回のみ<br/>user ledger を migrate<br/>4.3 の 5-a]
-  M --> F[DETS archive + 完全検証]
+  S -->|異常 or 判定不能| R5[同じ container を docker start で再開<br/>正常 open を確認し stop から取り直す<br/>不可なら中断]
+  S -->|正常| V[volume を解決し非空を確認<br/>4.3 の 5-a]
+  V --> M[初回のみ<br/>user ledger を migrate<br/>4.3 の 5-b]
+  M --> F[DETS archive + 完全検証<br/>4.3 の 5-c]
   F -->|失敗| R2[abort cleanup 4.4 の 0<br/>旧 image で再起動<br/>4.4 の 1]
   F -->|成功| G[prepared image で server 起動]
-  G -->|失敗| R3[state を開いたか判定<br/>停止してから restore<br/>4.4 の 3]
+  G -->|失敗| R3[state を開いたか判定<br/>停止してから restore し 0 を実行<br/>4.4 の 3]
   G -->|成功| H[runner 起動]
-  H -->|失敗| R4[4.4 の 4]
-  H -->|成功| I[疎通確認 + 適用確認<br/>4.5]
+  H -->|失敗| R4[修復して 4.5 再実行<br/>または post-start rollback<br/>4.4 の 4]
+  H -->|成功| I{4.5 の operational<br/>success が揃うか}
+  I -->|揃わない| R6[修復して 4.5 再実行<br/>または post-start rollback<br/>4.4 の 5]
+  I -->|揃う| Z[完了]
 ```
 
 **backup は server を停止してから取る。**稼働中に named volume を tar すると、
@@ -488,15 +500,46 @@ shutdown が完走しているかを確認する。
 自らの不変条件に反する。次の順でやり直す。
 
 1. forensic snapshot は取ってよい。ただし **rollback backup には昇格させない**
-2. **旧 image のまま** server を再起動し、DETS が正常に open / recovery
-   できることを確認する
-3. 改めて graceful stop する
+2. **停止済みの同じ container を再開する。**`docker compose up` は使わない —
+   この時点で remote source は target、`latest` は新 image を指しているため、
+   **compose 経由では新 image が起動してしまう**
+
+   ```sh
+   ssh <server-host> 'docker start <container>'
+   ssh <server-host> 'docker logs --tail 50 <container>'   # DETS の open / recovery を確認
+   ```
+
+3. 正常に open できたら、改めて graceful stop する
+
+   ```sh
+   ssh <server-host> 'docker stop -t 30 <container>'
+   ssh <server-host> 'docker inspect <container> \
+     --format "running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}"'
+   ```
+
 4. 正常停止を確認してから consistent backup を取り直す
 5. 正常に open / stop できない場合は、**deploy を中断する**
 
+**同じ container を `docker start` で再開するのには、もう一つ理由がある。**
+この分岐は (5-b) の migration より前であり、container を作り直すと
+**migration の対象そのもの(旧 container 内の ledger)が消える**。
+
 **判定できないときも中断する。**「たぶん大丈夫」で先へ進まない。
 
-**(5-a) 【初回のみ】user ledger の migration**
+**(5-a) volume を解決する**
+
+volume 名を **container の mount 先から解決する**(名前を決め打ちしない)。
+**この解決を先に行う** — 以降の migration も archive も、この値を使う。
+
+```sh
+ssh <server-host> 'docker inspect <container> \
+  --format "{{range .Mounts}}{{if eq .Destination \"/var/lib/kaoiro\"}}{{.Name}}{{end}}{{end}}"'
+```
+
+**出力が空でないことを確認する。**空なら mount 構成が変わっており、この先の
+archive は何も取らずに成功し、migration は対象を取り違える。
+
+**(5-b) 【初回のみ】user ledger の migration**
 
 `KAOIRO_USERS_PATH` を compose へ追加した**最初の適用**では、**現在の
 ledger が volume に無い**。旧 container はこの env 無しで起動しており、
@@ -514,19 +557,33 @@ ssh <server-host> 'docker inspect <container> \
 不要**(以後の deploy も同じ)。
 
 ```sh
-# 2. 停止済みの旧 container から ledger を退避し、checksum を記録する
+# 2. 停止済みの旧 container から ledger を退避し、checksum と numeric owner を記録する
 ssh <server-host> 'docker cp <container>:/tmp/kaoiro_users.dets \
   <backup-dir>/users-migrate-<timestamp>.dets'
 ssh <server-host> 'sha256sum <backup-dir>/users-migrate-<timestamp>.dets'
 
+# 退避元の owner を numeric で控える (volume 上の既存 DETS と揃っているはず)
+ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -n /data/ | head -3'
+
 # 3. volume 側に users.dets が既に無いことを確認する
 ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -la /data/users.dets 2>&1'
 
-# 4. volume へ配置し、runtime user が読める owner / mode にする
+# 4. volume へ配置する。owner は必ず numeric で指定する
+#    alpine の `nogroup` は GID 65533 だが runtime の DETS は別 GID であり、
+#    名前指定 (nobody:nogroup) では group が食い違う
 ssh <server-host> 'docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
   alpine sh -c "cp /backup/users-migrate-<timestamp>.dets /data/users.dets \
-    && chown nobody:nogroup /data/users.dets && chmod 600 /data/users.dets"'
+    && chown <uid>:<gid> /data/users.dets && chmod 600 /data/users.dets"'
+
+# 5. 配置後、退避元と bit 同一であることを確認する
+ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine sha256sum /data/users.dets'
+# → 2 で記録した SHA-256 と一致すること
+ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -n /data/users.dets'
+# → owner / group / mode が既存 DETS と揃っていること
 ```
+
+**copy が成功しただけでは、authority の bit 同一性を保証しない。**必ず
+SHA-256 で照合する。
 
 **両方に存在する場合は、running container が実際に参照していた path を
 authority とする。**推測で merge しない。
@@ -538,17 +595,7 @@ authority とする。**推測で merge しない。
 この migration は**次の step で取る pre-deploy archive に含まれる**ため、
 以後の deploy では通常経路に乗る。
 
-**(5-b) volume を解決して archive する**
-
-volume 名を **container の mount 先から解決する**(名前を決め打ちしない)。
-
-```sh
-ssh <server-host> 'docker inspect <container> \
-  --format "{{range .Mounts}}{{if eq .Destination \"/var/lib/kaoiro\"}}{{.Name}}{{end}}{{end}}"'
-```
-
-**出力が空でないことを確認する。**空なら mount 構成が変わっており、この先の
-archive は何も取らずに成功してしまう。
+**(5-c) DETS を archive し、検証する**
 
 ```sh
 ssh <server-host> 'docker run --rm -v <volume>:/data:ro -v <backup-dir>:/backup \
@@ -594,7 +641,15 @@ systemctl --user start kaoiro-runner
 
 **(0) 中止時の共通クリーンアップ**
 
-どの分岐で中止する場合も、**まずこれを実行する**。
+**実行するタイミングは、新 container を開始したかどうかで変わる。**
+
+- **新 container の開始前に中止する場合**((1) / (2)):
+  **最初に (0) を実行する**
+- **新 container の開始後、または開始したか不明な場合**((3) / (4) / (5)):
+  **(3) の restore 手順を先に実行し、その後で (0) を実行する。**
+  (0) は `latest` を旧 image へ戻したうえで **running container との
+  image ID 一致を検査する**ため、新 container が稼働したまま先に実行すると、
+  この検査が意図どおり失敗する
 
 process として旧 server が動き続けていても、**それだけでは「旧構成へ戻った」
 ことにならない**。prepare が成功していれば、その時点で:
@@ -727,10 +782,28 @@ ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build --fo
 終了コード」)。`dist` の欠落もこのコードになるため、(2) の復旧手順を先に
 確認する。
 
+**この時点で新 server は既に state を開いている。**調査だけで終わらせず、
+次のどちらかへ進む。
+
+- **target 側で修復できる**: 修復して runner を起動し、**4.5 を再実行する**
+- **修復できない、または rollback すると判断した**: runner を停止し、
+  **(3) の post-start rollback を実行する**。local も旧 commit +
+  frozen install / build へ戻し、旧 runner を起動する
+
 **(5) 適用確認が揃わない**
 
 4.5 の operational success がすべて揃わない場合、**更新が成功したと見なさない。**
-判断がつかないときは、backup を保持したまま作業を中断し、状態を記録する。
+
+**ただし「中断」は「新 server を動かし続けること」ではない。**成功条件を
+満たさない構成を本番に置いたままにするのは中断ではない。(4) と同じ 2 つの
+出口へ進む。
+
+- **修復できる**: 修復して **4.5 を再実行する**
+- **修復できない、または rollback 判断**: runner を停止し、**(3) の
+  post-start rollback を実行する**
+
+判断そのものに時間を要する場合でも、**backup を保持したまま**という条件と、
+**状態を記録する**ことは守る。
 
 ### 4.5 適用確認と、その限界
 
