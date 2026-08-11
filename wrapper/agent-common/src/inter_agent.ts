@@ -986,6 +986,20 @@ export class InterAgentTool {
       // this conversation_id (the recommended action either way).
       if (!payload.error && !track.closed) {
         track.turnNumber += 1;
+        // issue #222 段階2 差し戻し MF-1 (ふじ): this DOES change
+        // `turnNumber`, so `mutationGen`'s own doc contract on
+        // `ConversationTrack` ("bumped only when receiveInbound() /
+        // observeInbound() actually CHANGES turnNumber / remoteDone /
+        // closed") requires the bump here too — omitting it let a
+        // concurrent `invoke()` awaiting its own dispatch read
+        // `track.mutationGen === genAtDispatch` as "nothing raced in"
+        // even though this notice just consumed a turn number, so its
+        // reject-cleanup rollback (below, in `invoke()`) decremented
+        // `turnNumber` back UNDER the number this notice already put on
+        // the wire — the next real send then reused that same number and
+        // collided with the notice, reproducing the exact silent stale
+        // drop this issue exists to fix.
+        track.mutationGen += 1;
         const error: InterAgentErrorPayload = {
           code: "stale_turn",
           message: messageForCode("stale_turn"),
@@ -1605,7 +1619,24 @@ export class InterAgentTool {
             // close if it did not. Both directions can be wrong, so the
             // safer of the two — never assuming delivery failed — is to
             // leave `unknown` alone entirely.
-            if (track.mutationGen === genAtDispatch) {
+            //
+            // issue #222 段階2 差し戻し MF-1 (ふじ): `track.turnNumber ===
+            // sentTurnNumber` is ALSO required, alongside `mutationGen`.
+            // `mutationGen` only proves no MUTATING inbound raced in
+            // relative to what this call could observe; it is an indirect
+            // proxy. `sentTurnNumber === track.turnNumber` is the direct
+            // check for what this rollback actually needs to be true —
+            // "the value I provisionally allocated is still the tail of
+            // the track" — and catches any future path that advances
+            // `turnNumber` without also bumping `mutationGen` (the exact
+            // shape of this same MF-1's other half, just fixed at its
+            // source instead of relied upon here). Redundant with the
+            // `mutationGen` check for every currently-known race, but
+            // cheap and direct enough that both stay, per ふじ's review.
+            if (
+              track.mutationGen === genAtDispatch &&
+              track.turnNumber === sentTurnNumber
+            ) {
               track.turnNumber -= 1;
             }
             if (acceptance.reason === "conversation_closed") {

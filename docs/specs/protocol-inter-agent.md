@@ -313,6 +313,16 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
   確定した消費として扱う契約であり、reject された採番は消費された
   ことにしない。旧実装はこの契約を守れておらず、reject 後も
   `track.turnNumber` が進んだままになる欠陥があった(欠陥 1、下記)。
+  **例外が 2 つある**(issue #222 段階2 差し戻し advisory2、ふじ指摘):
+  この accept-gated 契約は `send_to_agent`(`invoke()`)経由の通常送信
+  にのみ適用される。`stale_turn` notice(欠陥3、下記)と既存の
+  `resolveTurnEnd()` peer_error notice(issue #131)は、どちらも
+  `#dispatch()` を経由せず `ServerLink#send()` を直接呼ぶ
+  fire-and-forget 経路で、ack を待たず accept/reject を観測しない。
+  したがって、いずれも自身の採番を server の受理と結び付けられず、
+  常に「消費した」ものとして扱う(採番した `turn_number` を無条件に
+  使用済みとして進める)。これは送信前 turn 採番という設計そのものの
+  残存する非対称であり、恒久的な限界として受け入れている。
 - **reject 時の turnNumber ロールバック**(issue #222 欠陥1): `invoke()`
   の reject 分岐は、`#dispatch()` 待機中に同じ conversation_id への
   inbound 活動(`receiveInbound()` / `observeInbound()`)が割り込んで

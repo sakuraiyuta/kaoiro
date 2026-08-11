@@ -2371,6 +2371,80 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
     },
   );
 
+  // issue #222 段階2 差し戻し MF-1 (ふじ): a stale-turn notice allocated by
+  // `receiveInbound()` WHILE this side's own send is still in flight used to
+  // escape the reject-rollback guard entirely — the notice's
+  // `track.turnNumber += 1` was not paired with a `mutationGen` bump, so the
+  // guard read `track.mutationGen === genAtDispatch` as "nothing raced in"
+  // and rolled back UNDER the number the notice had already put on the
+  // wire, reproducing the exact silent stale-drop this issue exists to fix.
+  // Deterministic via `makeMultiDeferredAckTool()`'s per-call settlers —
+  // the notice fires strictly between this call's dispatch and its
+  // (later) reject settling.
+  it(
+    "issue #222 段階2差し戻し MF-1: 送信中に発火した stale_turn notice の採番は " +
+      "reject rollback で消されない (次 outbound は turn 4)",
+    async () => {
+      const { tool, settlers, outbound } = makeMultiDeferredAckTool();
+
+      // Seed history: turn 1 accepted (track.turnNumber = 1).
+      const seed = tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-mf1-notice-collision",
+      });
+      settlers[0]!({ kind: "accepted", stamp: null });
+      expect((await seed).isError).toBeFalsy();
+
+      // This side's own turn 2 attempt — genAtDispatch snapshotted here,
+      // before the pre-dispatch bump to turnNumber=2 and before the stale
+      // notice below.
+      const second = tool.invoke({
+        to: "peer.agent",
+        body: "you there?",
+        kind: "inform",
+        conversation_id: "cnv-mf1-notice-collision",
+      });
+      await Promise.resolve();
+
+      // While that send is still unconfirmed, a late/duplicate inbound
+      // (turn_number=1, already <= the provisional track.turnNumber=2)
+      // triggers the AC9 stale branch, which builds a `stale_turn` notice
+      // consuming turnNumber=3.
+      const staleInbound = inboundEnvelope("cnv-mf1-notice-collision", "response");
+      (staleInbound.payload as unknown as InterAgentMessagePayload).turn_number = 1;
+      const staleDisposition = await tool.receiveInbound(staleInbound);
+      expect(staleDisposition.notice).toBeDefined();
+      expect(
+        (staleDisposition.notice!.payload as unknown as InterAgentMessagePayload)
+          .turn_number,
+      ).toBe(3);
+
+      // NOW the pending second send settles, rejected for an unrelated
+      // reason. Before the fix, `track.mutationGen === genAtDispatch` still
+      // read true (the notice never bumped it), so the rollback fired and
+      // decremented 3 -> 2 — UNDER the notice's already-sent turn_number=3.
+      settlers[1]!({ kind: "rejected", reason: "participants_mismatch" });
+      expect((await second).isError).toBe(true);
+
+      // The fix: neither guard condition holds (mutationGen advanced, and
+      // track.turnNumber=3 !== sentTurnNumber=2), so the rollback does not
+      // fire — track.turnNumber stays at the notice's value.
+      const third = tool.invoke({
+        to: "peer.agent",
+        body: "third",
+        kind: "inform",
+        conversation_id: "cnv-mf1-notice-collision",
+      });
+      settlers[2]!({ kind: "accepted", stamp: null });
+      expect((await third).isError).toBeFalsy();
+      const thirdPayload = outbound[outbound.length - 1]!
+        .payload as unknown as InterAgentMessagePayload;
+      expect(thirdPayload.turn_number).toBe(4);
+    },
+  );
+
   // issue #177 review round 3 must-fix: the pending-done gate was
   // registered before `await this.#dispatch(envelope)` but only released
   // from the two branches that assumed dispatch RESOLVED (accepted/
@@ -3269,8 +3343,9 @@ describe(
     );
 
     it(
-      "mutation test C5: stale/duplicate な inbound は mutationGen に触れず " +
-        "(brand-new reject cleanup は引き続き実行される)",
+      "mutation test C5: mutationGen に触れない stale/duplicate な inbound " +
+        "(通知対象外) は mutationGen に触れず (brand-new reject cleanup は " +
+        "引き続き実行される)",
       async () => {
         const { tool, settle } = makeDeferredAckTool("self.agent");
         const invokePromise = tool.invoke({
@@ -3281,6 +3356,12 @@ describe(
         });
         // invoke() 自身の楽観的な turnNumber+=1 (0→1) により、
         // turn_number=1 の inbound はこの時点で duplicate/stale 扱いになる。
+        // issue #222 段階2差し戻し MF-1 (ふじ) 後、通常の stale duplicate は
+        // stale_turn notice を採番し mutationGen を bump するようになった
+        // (その振る舞いは上の MF-1 専用テストが pin する) — この C5 テストは
+        // 「stale delivery そのものが mutationGen に触れない no-op の場合」
+        // を保つため、意図的に notice 対象外 (`payload.error` 付き = それ自体
+        // が通知) の stale duplicate を使う。
         const staleDisposition = await tool.receiveInbound({
           version: "0",
           agent_id: "peer.agent",
@@ -3297,10 +3378,12 @@ describe(
             body: "duplicate",
             meta: { done: false, propose_next: "" },
             owner: { kind: "user", id: "operator" },
+            error: { code: "stale_turn", message: "peer already sent this" },
           },
           ext: {},
         });
         expect(staleDisposition.inject).toBe(false);
+        expect(staleDisposition.notice).toBeUndefined();
 
         settle({ kind: "rejected", reason: "unknown_agent" });
         await invokePromise;

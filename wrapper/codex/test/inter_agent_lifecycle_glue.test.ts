@@ -81,15 +81,31 @@ function makeHost(): CodexHost {
  *  still learns `closed`, but no SDK turn is spent on it. Async since
  *  issue #177 review round 2 (ふじ差し戻し) made receiveInbound() async
  *  (it may gate briefly on a concurrently in-flight done=true send for
- *  the same conversation_id). */
+ *  the same conversation_id).
+ *
+ *  issue #222 段階2 差し戻し MF-2 (ふじ): the `!disposition.inject` branch
+ *  now mirrors cli.ts's THREE-way split exactly (terminal / notice /
+ *  no-notice skip), not a single early `return`. Before this, removing
+ *  cli.ts's own `link?.send(disposition.notice)` wiring left every test in
+ *  this file green — this helper never touched `disposition.notice` at
+ *  all, so it could not have caught that regression. `notices` (when
+ *  passed) collects what cli.ts would have handed to `link.send()`, so a
+ *  test CAN pin "sink called / not called" the same way `sendSpy` already
+ *  pins `host.send()`. */
 async function runOnInterAgentMessageGlue(
   interAgent: InterAgentTool,
   host: CodexHost,
   envelope: Envelope,
+  notices?: Envelope[],
 ): Promise<void> {
   const disposition = await interAgent.receiveInbound(envelope);
   if (disposition.consumed) return;
-  if (!disposition.inject) return;
+  if (!disposition.inject) {
+    if (disposition.mode !== "terminal" && disposition.notice) {
+      notices?.push(disposition.notice);
+    }
+    return;
+  }
   const payload = envelope.payload as unknown as InterAgentMessagePayload;
   const text = `[glue] ${payload.body}`;
   if (disposition.mode !== "terminal") {
@@ -101,7 +117,7 @@ async function runOnInterAgentMessageGlue(
 }
 
 describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
-  it("AC9: stale/duplicate turn は host.send() を一切呼ばない", async () => {
+  it("AC9: stale/duplicate turn は host.send() を一切呼ばない (stale_turn notice sink は毎回呼ばれる)", async () => {
     const host = makeHost();
     const sendSpy = vi.spyOn(host, "send");
     const tool = new InterAgentTool({
@@ -109,21 +125,100 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
       getState: () => "tool_running",
       send: () => {},
     });
+    const notices: Envelope[] = [];
 
-    await runOnInterAgentMessageGlue(tool, host, inboundEnvelope("cnv-stale", 2));
+    await runOnInterAgentMessageGlue(
+      tool,
+      host,
+      inboundEnvelope("cnv-stale", 2),
+      notices,
+    );
     expect(sendSpy).toHaveBeenCalledTimes(1);
     sendSpy.mockClear();
 
-    // 重複 (直前と同じ turn_number) — SDK 入力に一切触れない。
-    await runOnInterAgentMessageGlue(tool, host, inboundEnvelope("cnv-stale", 2));
+    // 重複 (直前と同じ turn_number) — SDK 入力に一切触れないが、issue #222
+    // 段階2差し戻し MF-2 (ふじ): 通常の stale delivery (payload.error なし、
+    // track も未 closed) は毎回 stale_turn notice を生成し、production の
+    // `link?.send(disposition.notice)` 配線に相当する `notices` へ積まれる
+    // — このテストは元々この notice 経路を一切見ていなかった。
+    await runOnInterAgentMessageGlue(
+      tool,
+      host,
+      inboundEnvelope("cnv-stale", 2),
+      notices,
+    );
     expect(sendSpy).not.toHaveBeenCalled();
+    expect(notices).toHaveLength(1);
+    expect(
+      (notices[0]!.payload as unknown as InterAgentMessagePayload).error?.code,
+    ).toBe("stale_turn");
 
     // 遅延到着 (既知の最大値より低い) も同様。
-    await runOnInterAgentMessageGlue(tool, host, inboundEnvelope("cnv-stale", 1));
+    await runOnInterAgentMessageGlue(
+      tool,
+      host,
+      inboundEnvelope("cnv-stale", 1),
+      notices,
+    );
     expect(sendSpy).not.toHaveBeenCalled();
+    expect(notices).toHaveLength(2);
   });
 
-  it("AC8/issue #221 direction 1: terminal な inbound は host.send() も notePendingInjection も呼ばない", async () => {
+  it(
+    "issue #222 段階2差し戻し MF-2: stale delivery が notice 対象外のとき " +
+      "(それ自体が peer_error / track が既に closed) notice sink は呼ばれない",
+    async () => {
+      const host = makeHost();
+      const tool = new InterAgentTool({
+        config,
+        getState: () => "tool_running",
+        send: () => {},
+      });
+      const notices: Envelope[] = [];
+
+      // track.turnNumber=2 まで進める。
+      await runOnInterAgentMessageGlue(tool, host, inboundEnvelope("cnv-stale-exempt", 2));
+
+      // (a) stale delivery 自体が peer_error/stale_turn 通知 — notice を
+      // 積むと通知の ping-pong になるため、production 同様スキップされる。
+      const errorEnvelope = inboundEnvelope("cnv-stale-exempt", 1);
+      (errorEnvelope.payload as unknown as InterAgentMessagePayload).error = {
+        code: "stale_turn",
+        message: "already sent",
+      };
+      await runOnInterAgentMessageGlue(tool, host, errorEnvelope, notices);
+      expect(notices).toHaveLength(0);
+
+      // (b) track が既に closed — 双方 done=true で terminal にした上で、
+      // その後の stale delivery が notice を積まないことを確認する。
+      const closeSelf = await tool.invoke({
+        to: "peer.agent",
+        body: "bye",
+        kind: "done",
+        conversation_id: "cnv-stale-exempt",
+        done: true,
+      });
+      expect(closeSelf.isError).toBeFalsy();
+      // `closeSelf` 自身の pre-dispatch bump で track.turnNumber=3 まで進んで
+      // いる (自 sink は accepted 即時解決) — mutual done の peer 側 turn は
+      // それより大きい 4 でなければ、この inbound 自体が stale 扱いになって
+      // しまう。
+      await runOnInterAgentMessageGlue(
+        tool,
+        host,
+        inboundEnvelope("cnv-stale-exempt", 4, true),
+      );
+      await runOnInterAgentMessageGlue(
+        tool,
+        host,
+        inboundEnvelope("cnv-stale-exempt", 1),
+        notices,
+      );
+      expect(notices).toHaveLength(0);
+    },
+  );
+
+  it("AC8/issue #221 direction 1: terminal な inbound は host.send() も notePendingInjection も notice sink も呼ばない", async () => {
     const host = makeHost();
     const sendSpy = vi.spyOn(host, "send");
     const tool = new InterAgentTool({
@@ -131,6 +226,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
       getState: () => "tool_running",
       send: () => {},
     });
+    const notices: Envelope[] = [];
 
     const closing = await tool.invoke({
       to: "peer.agent",
@@ -145,9 +241,11 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
       tool,
       host,
       inboundEnvelope("cnv-terminal", 2, true),
+      notices,
     );
 
     expect(sendSpy).not.toHaveBeenCalled();
+    expect(notices).toHaveLength(0);
     expect(
       tool.resolveTurnEnd(["cnv-terminal"], { code: "api_error", message: "x" }),
     ).toEqual([]);
@@ -253,9 +351,13 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   const inFlightPeers = new Set<string>();
   const inFlightCidPeer = new Map<string, string>();
   const sentBatches: { peer: string; cids: string[] }[] = [];
-  /** peer_error notices resolveTurnEnd() returned on a failed turn (issue
-   *  #221 段階3 MF-1's regression test reads this — the production glue's
-   *  onTurnEnd wiring forwards these straight to ServerLink#send). */
+  /** Envelopes production's onInterAgentMessage/onTurnEnd glue would hand
+   *  straight to `link?.send()`, never routed through invoke()/#dispatch():
+   *  `resolveTurnEnd()`'s peer_error notices on a failed turn (issue #221
+   *  段階3 MF-1's regression test reads this), AND — issue #222 段階2
+   *  差し戻し MF-2 (ふじ) — `receiveInbound()`'s AC9 `stale_turn` notices,
+   *  pushed by `receive()` below. Both kinds share this one array because
+   *  production sends both through the SAME `link?.send()` sink. */
   const notices: Envelope[] = [];
   let host!: CodexHost;
 
@@ -288,7 +390,19 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
 
   async function receive(envelope: Envelope): Promise<void> {
     const disposition = await interAgent.receiveInbound(envelope);
-    if (disposition.consumed || !disposition.inject) return;
+    if (disposition.consumed) return;
+    if (!disposition.inject) {
+      // issue #222 段階2 差し戻し MF-2 (ふじ): mirrors cli.ts's
+      // onInterAgentMessage exactly (see `runOnInterAgentMessageGlue`'s
+      // doc above for the full three-way split) — before this, `receive()`
+      // discarded a `stale_turn` notice the same way, so removing
+      // production's `link?.send(disposition.notice)` wiring would not
+      // have failed any test using THIS harness either.
+      if (disposition.mode !== "terminal" && disposition.notice) {
+        notices.push(disposition.notice);
+      }
+      return;
+    }
     const peer = envelope.agent_id;
     const itemText = formatInboundMessage(envelope, { mode: disposition.mode });
     const itemBytes = Buffer.byteLength(itemText, "utf8");
@@ -496,4 +610,38 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
     expect(payload.conversation_id).toBe("x");
     expect(payload.error).toBeDefined();
   });
+
+  it(
+    "issue #222 段階2差し戻し MF-2: stale/duplicate delivery を receive() " +
+      "経由で送っても host.send() を呼ばず、代わりに stale_turn notice が " +
+      "harness.notices へ積まれる (production の link.send() 相当)",
+    async () => {
+      const { client, releaseNext } = makeControllableClient();
+      const tool = new InterAgentTool({ config, getState: () => "idle", send: () => {} });
+      const harness = makeCoalescingHarness(tool);
+      const host = new CodexHost(config, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      });
+      harness.bindHost(host);
+      void host.run();
+
+      await harness.receive(inboundEnvelope("cnv-stale-coalesce", 2));
+      expect(harness.sentBatches).toHaveLength(1);
+
+      // 重複到着 — batch には積まれず、代わりに stale_turn notice が
+      // production の link.send() 経路相当 (harness.notices) へ積まれる。
+      await harness.receive(inboundEnvelope("cnv-stale-coalesce", 2));
+      expect(harness.sentBatches).toHaveLength(1); // 変わらず
+      expect(harness.notices).toHaveLength(1);
+      expect(
+        (harness.notices[0]!.payload as unknown as InterAgentMessagePayload)
+          .error?.code,
+      ).toBe("stale_turn");
+
+      releaseNext();
+    },
+  );
 });
