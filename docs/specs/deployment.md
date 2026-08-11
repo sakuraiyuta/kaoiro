@@ -343,10 +343,13 @@ systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
 | 限界 | 内容 | 解消する issue |
 |---|---|---|
 | **in-place build** | 稼働中の checkout の `dist` を直接上書きする。runner は wrapper を spawn するたびに on-disk の `dist` を解決する(`runner/src/spawn.ts` の `resolveWrapperLaunch()`)ため、build 中に spawn が起きると新旧の混ざった artifact を掴む。「停止中に build する」と手順で定めても、**順序を一度誤れば再発する** | #229 |
-| **artifact provenance が無い** | 「実行中の artifact がその commit 由来である」ことを確認する手段が無い。**ファイルの mtime を代用してはならない**(4.5) | #228 |
 | **自動 rollback が無い** | 失敗時の復旧はすべて手作業(4.4) | #230 |
 
-3 つすべてが解消された時点で、本節は自動化手順の記述へ置換する。
+**artifact provenance が無い(旧 #228)は解消済み**— build identity
+([ADR-0053](../adr/0053-build-identity.md))の導入により、full SHA を
+返す health endpoint と runner の register 情報で確認できる(4.5)。
+
+残り 2 つすべてが解消された時点で、本節は自動化手順の記述へ置換する。
 
 ### 4.2 事前条件
 
@@ -454,9 +457,18 @@ git -C <repo-path> rev-parse HEAD                          # 旧 local commit
 旧 container は旧 image ID を保持したまま動き続ける。ここで失敗しても
 **稼働系への影響はゼロ**である。
 
+**`KAOIRO_BUILD_REVISION` を明示的に渡す**(build identity, issue #228,
+[ADR-0053](../adr/0053-build-identity.md))。`.dockerignore` が `.git` を
+build context から除外しているため、Dockerfile 側で git を読む手段が
+無く、渡し忘れると `GET /api/health` が `build_revision: "unknown"` を
+返す(build 自体は失敗しない — observability のみへの影響に留まる)。
+`.env` へは書かない — build 実行のその場限りの環境変数として渡す
+(ADR-0053 Alternatives Considered)。
+
 ```sh
 ssh <server-host> 'cd <repo-path> && git fetch origin \
-  && git merge --ff-only <target-sha> && cd server && docker compose build'
+  && git merge --ff-only <target-sha> && cd server \
+  && KAOIRO_BUILD_REVISION=$(git rev-parse HEAD) docker compose build'
 ```
 
 `up -d` はまだ実行しない。
@@ -847,7 +859,7 @@ path へ空の ledger を作る。**post-start rollback では**元の container
 ### 4.5 適用確認と、その限界
 
 確認は 2 層に分かれる。**成功と判定してよいのは operational success が
-すべて揃ったときだけ**であり、provenance は現時点で証明できない。
+すべて揃ったときだけ**である。
 
 #### operational success(これが成功条件)
 
@@ -863,27 +875,32 @@ path へ空の ledger を作る。**post-start rollback では**元の container
 server が restart loop せずリクエストを処理できるか、runner が認証と register に
 成功するか、dashboard と host projection が動くかを何ひとつ確認できない。
 
-#### 証明できないこと(provenance)
+#### provenance の確認(build identity, issue #228, [ADR-0053](../adr/0053-build-identity.md))
 
-「**実行中の JS / image が target commit 由来である**」ことを暗号学的に
-結びつける手段は、現時点で存在しない。
+「実行中の JS / image が target commit 由来である」ことは、build identity
+導入により **full SHA を返す health endpoint と runner の register 情報**
+で確認できる。
 
-**ファイルの mtime は成功根拠にならない。**`dist` ディレクトリの mtime は、
+| 項目 | 確認方法 |
+|---|---|
+| server の build_revision が target SHA と一致 | `curl <server-url>/api/health` の `build_revision` |
+| server の OCI label が target SHA と一致 | `docker inspect kaoiro-server:latest --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'` |
+| runner の build_revision が target SHA と一致 | dashboard の host 一覧(LaunchDialog)、または runner 起動ログの `rev=<full SHA>` 行 |
+| runner --version が target SHA を返す | `<install-root>/dist/cli.js --version`(または tarball 配布の launch shim 経由) |
+
+**mtime は依然として成功根拠にならない。**`dist` ディレクトリの mtime は
 ファイルの追加・削除が無ければ更新されない。2026-08-12 の反映では、実際には
 全パッケージが再ビルドされていたにもかかわらず、3 パッケージのディレクトリ
-mtime が 10 日前を指しており、誤読しかけた。中の `.js` の mtime も同様に、
-「いつ書かれたか」しか語らず、「どの commit 由来か」は語らない。
+mtime が 10 日前を指しており、誤読しかけた。build identity 導入後も
+mtime を成功根拠に使う理由は無い。
 
-変更が特定の識別子を含む場合、それが `dist` に入っているかを見るのは
-**補助証拠としては有効**である。ただし変更ごとにしか使えず、成功判定の
-一般条件にはならない。
-
-```sh
-grep -rl "<変更で追加した識別子>" <repo-path>/wrapper/*/dist
-```
-
-build identity(#228)の導入後、この節は full SHA を返す health endpoint と
-runner の register 情報による確認へ置換する。
+**これは暗号学的な証明ではない。**`KAOIRO_BUILD_REVISION` を build する
+側が実際に build した SHA として正直に渡すことに依存しており、改ざんされた
+値を渡されればそのまま「target SHA と一致」の判定を通す。署名付き
+attestation の導入は本 issue のスコープ外。SHA の不一致自体は deploy を
+reject する条件にしない(ADR-0053)— docs-only commit / backport /
+rolling window のいずれでも正当に食い違いうるため、あくまで**この runbook
+の成功判定**としての一致確認である。
 
 ## See Also
 

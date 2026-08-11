@@ -5,10 +5,20 @@ import { parseArgs } from "node:util";
 
 export interface RunnerCliArgs {
   configPath: string;
+  /** issue #228: `--version` prints the build revision and exits, without
+   *  touching config / network. */
+  version: boolean;
 }
 
 // Positional [configPath], defaulting to runner.config.json in the cwd.
 export function parseRunnerArgs(argv: string[]): RunnerCliArgs {
-  const { positionals } = parseArgs({ args: argv, allowPositionals: true });
-  return { configPath: positionals[0] ?? "runner.config.json" };
+  const { positionals, values } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { version: { type: "boolean", default: false } },
+  });
+  return {
+    configPath: positionals[0] ?? "runner.config.json",
+    version: values.version === true,
+  };
 }

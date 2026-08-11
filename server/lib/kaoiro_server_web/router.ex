@@ -15,6 +15,7 @@ defmodule KaoiroServerWeb.Router do
     pipe_through :api
 
     get "/personas", PersonaController, :manifest
+    get "/health", HealthController, :status
   end
 
   # Sprite files referenced by the manifest (ADR-0008). Top-level (not

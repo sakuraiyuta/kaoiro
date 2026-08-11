@@ -53,6 +53,11 @@ version を持たない。(2) 不一致は黙って受理され、互換性問�
 - version は現状 `"0"` 単一。完全一致判定は単一値比較。
 - トランスポート層 version(Channels `vsn` 交渉、[ADR-0009](0009-client-transport.md))
   とは独立。
+- **build identity([ADR-0053](0053-build-identity.md)、issue #228 追記)
+  とも独立。**ここでの version は wire メッセージの形状互換性であり、
+  artifact(runner / server image)がどの git commit 由来かとは別軸 —
+  混同すると「docs-only commit で互換性エラーが出る」ような誤った設計に
+  なる。
 
 ## Alternatives Considered
 

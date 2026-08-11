@@ -9,12 +9,19 @@ import { makeRefreshEngineCatalogHandler } from "../src/engine_catalog_refresh.j
 import type { ProbeOutcome } from "@kaoiro/claude-code/probe-client";
 import type { RunnerConfig } from "../src/config.js";
 import type { CodexAuthMode } from "../src/codex-auth.js";
+import type { BuildInfo } from "../src/build_info.js";
 
 const CONFIG: RunnerConfig = {
   host_id: "lab-pc-1",
   server_url: "ws://localhost:4000/runner",
   cwd_allowlist: ["/tmp/x"],
   capabilities: ["claude-code", "codex"],
+};
+
+const BUILD_INFO: BuildInfo = {
+  revision: "unknown",
+  dirty: false,
+  built_at: "unknown",
 };
 
 const MODELS: EngineModelInfo[] = [
@@ -43,6 +50,7 @@ function makeHarness(
     getCodexAuthMode: () => codexAuthMode,
     updateRegister: (r) => registers.push(r),
     sendCatalogResult: (r) => results.push(r),
+    buildInfo: BUILD_INFO,
     probe: probeImpl,
   });
   return { handler, registers, results, cache };
@@ -192,6 +200,7 @@ describe("makeRefreshEngineCatalogHandler", () => {
       getCodexAuthMode: () => "unknown",
       updateRegister: () => {},
       sendCatalogResult: (r) => results.push(r),
+      buildInfo: BUILD_INFO,
       probe: async () => ({
         ok: true,
         models: MODELS,

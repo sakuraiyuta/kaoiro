@@ -71,6 +71,83 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert_reply ref, :error, %{reason: "invalid_engines"}
     end
 
+    test "build_revision/build_dirty (issue #228) が保持される" do
+      host_id = "lab-pc-build-info"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "build_revision" => "0123456789abcdef0123456789abcdef01234567",
+            "build_dirty" => true
+          })
+        )
+
+      assert_reply ref, :ok
+      entry = HostRegistry.get(host_id)
+      assert entry.build_revision == "0123456789abcdef0123456789abcdef01234567"
+      assert entry.build_dirty == true
+    end
+
+    test "build_revision/build_dirty 未指定なら nil のまま (pre-#228 runner との互換)" do
+      host_id = "lab-pc-no-build-info"
+      socket = join_runner(host_id)
+
+      ref = push(socket, "register", register_payload())
+
+      assert_reply ref, :ok
+      entry = HostRegistry.get(host_id)
+      assert entry.build_revision == nil
+      assert entry.build_dirty == nil
+    end
+
+    test "build_revision の型崩れは invalid_build_revision" do
+      host_id = "lab-pc-bad-build-revision"
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "register", register_payload(%{"build_revision" => 12345}))
+
+      assert_reply ref, :error, %{reason: "invalid_build_revision"}
+    end
+
+    test "build_dirty の型崩れは invalid_build_dirty" do
+      host_id = "lab-pc-bad-build-dirty"
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "register", register_payload(%{"build_dirty" => "yes"}))
+
+      assert_reply ref, :error, %{reason: "invalid_build_dirty"}
+    end
+
+    test "build_revision/build_dirty は hosts push (public_entry) に含まれる" do
+      host_id = "lab-pc-build-info-push"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "build_revision" => "0123456789abcdef0123456789abcdef01234567",
+            "build_dirty" => false
+          })
+        )
+
+      assert_reply ref, :ok
+
+      # assert_broadcast intercepts the raw Elixir term BEFORE JSON encoding
+      # (that happens later at the actual socket send), so public_entry's
+      # atom keys are still atoms here — not yet stringified.
+      assert_broadcast "hosts", %{"hosts" => hosts}
+      assert hosts[host_id][:build_revision] == "0123456789abcdef0123456789abcdef01234567"
+      assert hosts[host_id][:build_dirty] == false
+    end
+
     test "allowlist: allowed_personas が MapSet として保持される" do
       host_id = "lab-pc-allow"
       socket = join_runner(host_id)

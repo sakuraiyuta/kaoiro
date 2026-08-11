@@ -3,14 +3,17 @@
 // host's wrapper processes on operator spawn/stop/restart (ADR-0023, phases
 // 4-4a/4-4b), plus session enumeration / resume (4-5).
 //
-// Usage: node dist/cli.js [configPath]
-//   configPath defaults to runner.config.json. The auth token is read from
-//   KAOIRO_RUNNER_TOKEN. Leaving it unset only disables the server's runner
-//   auth in :dev / :test — :prod is fail-closed and rejects every runner,
-//   since runners have no server-minted signed-token path (issue #138).
+// Usage: node dist/cli.js [configPath] [--version]
+//   configPath defaults to runner.config.json. --version prints the build
+//   revision (issue #228) and exits without touching config or network.
+//   The auth token is read from KAOIRO_RUNNER_TOKEN. Leaving it unset only
+//   disables the server's runner auth in :dev / :test — :prod is
+//   fail-closed and rejects every runner, since runners have no
+//   server-minted signed-token path (issue #138).
 
 import type { EngineCatalogResult } from "@kaoiro/protocol";
 import { parseRunnerArgs } from "./args.js";
+import { formatBuildRevision, loadBuildInfo } from "./build_info.js";
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
 import { type CodexAuthMode, resolveCodexAuthMode } from "./codex-auth.js";
@@ -79,7 +82,15 @@ function isCodexEnabled(config: RunnerConfig): boolean {
 }
 
 async function main(): Promise<void> {
-  const { configPath } = parseRunnerArgs(process.argv.slice(2));
+  const { configPath, version } = parseRunnerArgs(process.argv.slice(2));
+  // issue #228: checked BEFORE loadRunnerConfig — a first-run host with no
+  // config yet (setup wizard not run) must still be able to answer
+  // --version, and it must never touch the network.
+  const buildInfo = loadBuildInfo();
+  if (version) {
+    process.stdout.write(`${formatBuildRevision(buildInfo)}\n`);
+    return;
+  }
   // KAOIRO_RUNNER_SERVER_URL outranks the file (issue #140) — applied here
   // and again on every config-watcher reload below, so the precedence
   // holds across hot-reloads too.
@@ -136,11 +147,12 @@ async function main(): Promise<void> {
     getCodexAuthMode: () => codexAuthMode,
     updateRegister: (register) => link.updateRegister(register),
     sendCatalogResult: (result) => link.sendCatalogResult(result),
+    buildInfo,
   });
 
   link = new RunnerLink(config.server_url, config.host_id, {
     ...(token === undefined || token === "" ? {} : { token }),
-    register: buildRegister(config, codexAuthMode),
+    register: buildRegister(config, codexAuthMode, undefined, buildInfo),
     heartbeatMs: HEARTBEAT_MS,
     onSpawn: (payload) => supervisor.handleSpawn(payload),
     onStop: (payload) => supervisor.handleStop(payload),
@@ -152,7 +164,8 @@ async function main(): Promise<void> {
   });
 
   process.stderr.write(
-    `runner: host=${config.host_id} connecting to ${config.server_url}\n`,
+    `runner: host=${config.host_id} rev=${formatBuildRevision(buildInfo)} ` +
+      `connecting to ${config.server_url}\n`,
   );
 
   // Persona trust policy is now judged server-side against
@@ -196,7 +209,12 @@ async function main(): Promise<void> {
     // Preserve any live-probed Claude catalog on reload so operators do not
     // silently regress to the bootstrap default entry (ADR-0039).
     const claudeOverride = claudeCatalog.getStale() ?? undefined;
-    const nextRegister = buildRegister(next, codexAuthMode, claudeOverride);
+    const nextRegister = buildRegister(
+      next,
+      codexAuthMode,
+      claudeOverride,
+      buildInfo,
+    );
     if (
       next.host_id !== config.host_id ||
       next.server_url !== config.server_url

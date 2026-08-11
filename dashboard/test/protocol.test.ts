@@ -7,6 +7,7 @@ import {
   errorSubtypeLabel,
   fetchAuthMethods,
   fetchPersonaManifest,
+  fetchServerHealth,
   fanOutInterAgentHistory,
   findPrecedingUserPrompt,
   formatAgentLabel,
@@ -118,6 +119,48 @@ describe("fetchAuthMethods (issue #65 / ADR-0042)", () => {
       }),
     );
     expect(await fetchAuthMethods()).toBeNull();
+  });
+});
+
+describe("fetchServerHealth (issue #228)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("health JSON を返す", async () => {
+    const health = {
+      status: "ok",
+      build_revision: "0123456789abcdef0123456789abcdef01234567",
+      protocol_version: "0",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => health })),
+    );
+
+    expect(await fetchServerHealth()).toEqual(health);
+    expect(fetch).toHaveBeenCalledWith("/api/health");
+  });
+
+  it("404 は null(#228 以前の server へのフォールバック用)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 404 })));
+    expect(await fetchServerHealth()).toBeNull();
+  });
+
+  it("形の壊れたレスポンスは null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({ status: "ok" }) })),
+    );
+    expect(await fetchServerHealth()).toBeNull();
+  });
+
+  it("ネットワークエラーは null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    );
+    expect(await fetchServerHealth()).toBeNull();
   });
 });
 
@@ -1442,6 +1485,50 @@ describe("parseHosts (#22)", () => {
   it("マップでない値は空配列", () => {
     expect(parseHosts(null)).toEqual([]);
     expect(parseHosts(undefined)).toEqual([]);
+  });
+
+  it("build_revision/build_dirty (issue #228) を保持する", () => {
+    expect(
+      parseHosts({
+        "lab-pc-1": {
+          personas: [mio],
+          cwd_allowlist: ["/home/user/proj"],
+          build_revision: "0123456789abcdef0123456789abcdef01234567",
+          build_dirty: true,
+        },
+      }),
+    ).toEqual([
+      {
+        host_id: "lab-pc-1",
+        personas: [mio],
+        cwd_allowlist: ["/home/user/proj"],
+        build_revision: "0123456789abcdef0123456789abcdef01234567",
+        build_dirty: true,
+      },
+    ]);
+  });
+
+  it("pre-#228 runner (build_revision/build_dirty 無し) はそのフィールド自体を持たない", () => {
+    const [host] = parseHosts({
+      "lab-pc-1": { personas: [mio], cwd_allowlist: ["/p"] },
+    });
+    expect(host).toBeDefined();
+    expect("build_revision" in host!).toBe(false);
+    expect("build_dirty" in host!).toBe(false);
+  });
+
+  it("build_revision/build_dirty の型崩れは無視して落とす (spoofing 防止)", () => {
+    const [host] = parseHosts({
+      "lab-pc-1": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_revision: 12345,
+        build_dirty: "yes",
+      },
+    });
+    expect(host).toBeDefined();
+    expect("build_revision" in host!).toBe(false);
+    expect("build_dirty" in host!).toBe(false);
   });
 });
 

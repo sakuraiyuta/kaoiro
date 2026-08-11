@@ -100,6 +100,22 @@ RUN mix release
 # the compiled release and other runtime necessities
 FROM ${RUNNER_IMAGE} AS final
 
+# Build identity (issue #228) — distinct from ADR-0015's wire protocol
+# version (message-shape compatibility, stamped "0" per-message): this is
+# the full 40-char git SHA the image was built from ("unknown" when the
+# build ran outside a git checkout — the compose/CI caller is responsible
+# for actually exporting it before `docker compose build`, see
+# docs/specs/deployment.md 4.3). Set here in the FINAL stage (not just the
+# builder) — unlike KAOIRO_PLAIN_HTTP above, this value is derived at
+# build time, not operator-chosen, so it belongs baked into the image
+# itself rather than re-supplied by docker-compose `environment:` at
+# container start. Read at runtime via System.get_env in
+# config/runtime.exs (GET /api/health) and doubles as the OCI label
+# below, so both sources are guaranteed to agree (same ARG value).
+ARG KAOIRO_BUILD_REVISION=unknown
+ENV KAOIRO_BUILD_REVISION=${KAOIRO_BUILD_REVISION}
+LABEL org.opencontainers.image.revision=${KAOIRO_BUILD_REVISION}
+
 # inotify-tools backs :file_system, which watches the persona pack dir for
 # live reloads. Without it the watcher fails to boot
 # (fs_inotify_bootstrap_error) and pack changes only apply on restart —

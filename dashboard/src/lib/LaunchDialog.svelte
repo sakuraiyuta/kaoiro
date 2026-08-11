@@ -14,11 +14,17 @@
     hosts,
     connection,
     sessions,
+    serverBuildRevision = null,
     onClose,
   }: {
     hosts: HostInfo[];
     connection: KaoiroConnection;
     sessions: RunnerSessions | null;
+    /** Server's own build_revision (issue #228, GET /api/health via
+     *  fetchServerHealth) — null on a pre-#228 server or a failed fetch,
+     *  in which case the mismatch warning below never fires (nothing to
+     *  compare against, not a claim of agreement). */
+    serverBuildRevision?: string | null;
     onClose: () => void;
   } = $props();
 
@@ -94,6 +100,33 @@
   let error = $state<string | null>(null);
 
   const host = $derived(hosts.find((h) => h.host_id === hostId) ?? null);
+
+  // Build identity mismatch warning (issue #228). Observability only —
+  // never blocks launch. Covers three distinct cases the director
+  // explicitly asked to all surface (not just a revision mismatch):
+  // the runner's own build is unknown, the server's own build is
+  // unknown, or both are known but disagree. Absent host.build_revision
+  // (a pre-#228 runner) and a null serverBuildRevision (pre-#228 server /
+  // fetch failure) both mean "nothing to compare" -- silently no warning,
+  // not a false "unknown" claim.
+  const buildRevisionWarning = $derived.by(() => {
+    if (!host || host.build_revision === undefined) return null;
+    const runnerRevision = host.build_revision;
+    if (runnerRevision === "unknown") {
+      return "この host の build revision が unknown です(git 情報なしでビルドされたか、pnpm build を経ていません)。";
+    }
+    if (serverBuildRevision === null) return null;
+    if (serverBuildRevision === "unknown") {
+      return "server 自身の build revision が unknown です。";
+    }
+    if (runnerRevision !== serverBuildRevision) {
+      return (
+        `この host の build revision (${runnerRevision.slice(0, 12)}…) が ` +
+        `server (${serverBuildRevision.slice(0, 12)}…) と一致しません。`
+      );
+    }
+    return null;
+  });
 
   // Engine cascade (ADR-0032 F4bc): engine -> model -> optional effort.
   // The select is shown only when the host declares 2+ capabilities; a
@@ -432,6 +465,12 @@
         </select>
       </label>
 
+      {#if buildRevisionWarning}
+        <p class="build-revision-warning" role="status">
+          ⚠ {buildRevisionWarning}
+        </p>
+      {/if}
+
       <label>
         ペルソナ
         <select bind:value={personaId} disabled={!host}>
@@ -722,6 +761,14 @@
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
+  }
+
+  /* issue #228: advisory, not blocking -- same warning color as
+   * AgentCard's .error-icon (no dedicated --c-warning token exists yet). */
+  .build-revision-warning {
+    margin: 0;
+    font-size: var(--fs-body-sm);
+    color: var(--c-error);
   }
 
   .model-resolution {

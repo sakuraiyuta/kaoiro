@@ -189,10 +189,12 @@ defmodule KaoiroServerWeb.RunnerChannel do
   defp parse_register(%{"cwd_allowlist" => cwd_allowlist} = payload)
        when is_list(cwd_allowlist) do
     with {:ok, policy} <- parse_policy(payload),
-         {:ok, capabilities} <- parse_capabilities(payload) do
+         {:ok, capabilities} <- parse_capabilities(payload),
+         {:ok, build_info} <- parse_build_info(payload) do
       attrs =
         %{policy: policy, cwd_allowlist: cwd_allowlist}
         |> Map.merge(capabilities)
+        |> Map.merge(build_info)
 
       {:ok, attrs}
     end
@@ -330,6 +332,36 @@ defmodule KaoiroServerWeb.RunnerChannel do
 
       _ ->
         {:error, :invalid_engines}
+    end
+  end
+
+  # Build identity (issue #228), distinct from ADR-0015's protocol
+  # version. Both fields optional — absent means a pre-#228 runner build.
+  # Loosely shape-checked and stored as-is for the operator `hosts` push;
+  # the dashboard compares `build_revision` against the server's own (GET
+  # /api/health) to warn on mismatch — this boundary never REJECTS a
+  # register over it, only over a type breach (same posture as
+  # parse_engines above).
+  defp parse_build_info(payload) do
+    with {:ok, revision_attrs} <- parse_build_revision(payload),
+         {:ok, dirty_attrs} <- parse_build_dirty(payload) do
+      {:ok, Map.merge(revision_attrs, dirty_attrs)}
+    end
+  end
+
+  defp parse_build_revision(payload) do
+    case Map.get(payload, "build_revision") do
+      nil -> {:ok, %{}}
+      revision when is_binary(revision) -> {:ok, %{build_revision: revision}}
+      _ -> {:error, :invalid_build_revision}
+    end
+  end
+
+  defp parse_build_dirty(payload) do
+    case Map.get(payload, "build_dirty") do
+      nil -> {:ok, %{}}
+      dirty when is_boolean(dirty) -> {:ok, %{build_dirty: dirty}}
+      _ -> {:error, :invalid_build_dirty}
     end
   end
 

@@ -24,6 +24,14 @@ services:
         # from .env so build and runtime always get the same value —
         # the release raises at boot when they disagree.
         KAOIRO_PLAIN_HTTP: ${KAOIRO_PLAIN_HTTP:-false}
+        # Build identity (issue #228). `.dockerignore` excludes `.git` from
+        # the build context (nothing in the Dockerfile reads it), so this
+        # MUST come from the environment of whoever runs `docker compose
+        # build` — e.g. `KAOIRO_BUILD_REVISION=$(git rev-parse HEAD)
+        # docker compose build` (docs/specs/deployment.md 4.3). Left unset
+        # -> "unknown", which GET /api/health then reports honestly rather
+        # than silently claiming a revision nobody actually built.
+        KAOIRO_BUILD_REVISION: ${KAOIRO_BUILD_REVISION:-unknown}
     image: kaoiro-server:latest
     # Loopback-only by default. Auth (issue #28): KAOIRO_CLIENT_TOKENS
     # unset REJECTS all dashboard connections (fail-closed) — set it even

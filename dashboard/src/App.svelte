@@ -29,6 +29,7 @@
     KaoiroConnection,
     PersonaManifest,
     RunnerSessions,
+    ServerHealth,
     SpawnResult,
     TaskTable,
     TicketRefreshResult,
@@ -40,6 +41,7 @@
     dispatchOnlineWake,
     fetchAuthMethods,
     fetchPersonaManifest,
+    fetchServerHealth,
     filterAfterHistoryCleared,
     filterInterAgentTargetsByWatermark,
     formatAgentLabel,
@@ -146,6 +148,12 @@
   let origin = $state<{ x: number; y: number } | null>(null);
   let status = $state<ConnectionStatus>("connecting");
   let manifest = $state<PersonaManifest | null>(null);
+  // issue #228: server's own build identity, fetched once so LaunchDialog
+  // can warn on a mismatch against a connected runner's build_revision
+  // (from the `hosts` push). null on a pre-#228 server / fetch failure —
+  // LaunchDialog treats that the same as "nothing to compare", never a
+  // warning of its own.
+  let serverHealth = $state<ServerHealth | null>(null);
   let connection = $state<KaoiroConnection | null>(null);
 
   // Launch UI (#22, operator-only). `hosts` and operator-ness both come from
@@ -1216,6 +1224,7 @@
     // Cards render the CSS face until the manifest arrives (or on
     // fetch failure), then swap to persona sprites.
     fetchPersonaManifest().then((next) => (manifest = next));
+    fetchServerHealth().then((next) => (serverHealth = next));
 
     // Ask once so wait-state hand-offs can raise a desktop notification (#7).
     requestNotificationPermission();
@@ -1412,6 +1421,7 @@
     {hosts}
     {connection}
     sessions={runnerSessions}
+    serverBuildRevision={serverHealth?.build_revision ?? null}
     onClose={() => (showLaunch = false)}
   />
 {/if}

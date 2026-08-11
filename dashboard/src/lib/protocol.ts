@@ -1343,6 +1343,42 @@ export async function fetchAuthMethods(
   }
 }
 
+/** Server's own build identity (issue #228), served at GET /api/health.
+ *  `protocol_version` is ADR-0015's wire compatibility stamp — a
+ *  DIFFERENT concept from `build_revision` (the git SHA the running image
+ *  was built from); see HostInfo.build_revision's own doc for why the two
+ *  are never conflated. */
+export interface ServerHealth {
+  status: string;
+  build_revision: string;
+  protocol_version: string;
+}
+
+/**
+ * Fetches the server's build identity; null on any failure (including a
+ * pre-#228 server with no /api/health route) so callers degrade to
+ * showing no mismatch warning rather than a false one.
+ */
+export async function fetchServerHealth(base = ""): Promise<ServerHealth | null> {
+  try {
+    const res = await fetch(`${base}/api/health`);
+    if (!res.ok) return null;
+    const body = (await res.json()) as unknown;
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      typeof (body as ServerHealth).status !== "string" ||
+      typeof (body as ServerHealth).build_revision !== "string" ||
+      typeof (body as ServerHealth).protocol_version !== "string"
+    ) {
+      return null;
+    }
+    return body as ServerHealth;
+  } catch {
+    return null;
+  }
+}
+
 /** Launch catalog of one engine (ADR-0032 F4bc), from the host's register
  *  payload. models reuses the ext.models entry shape (#54) so the launch
  *  cascade and the running-agent switcher share one renderer. */
@@ -1361,6 +1397,16 @@ export interface HostInfo {
   capabilities?: string[];
   /** Launch catalog per capability (ADR-0032 F4bc). */
   engines?: EngineCatalog[];
+  /** Build identity (issue #228) — the full 40-char git SHA the runner's
+   *  own artifact was built from ("unknown" when undeterminable), and
+   *  whether that build had uncommitted changes. Absent = a pre-#228
+   *  runner (no signal, not a claim of "unknown"). DISTINCT from ADR-0015's
+   *  wire protocol `version` — this changes on every commit regardless of
+   *  wire-shape compatibility, and is compared against the server's own
+   *  build_revision (ServerHealth, fetchServerHealth) ONLY to warn the
+   *  operator of a mismatch, never to block anything. */
+  build_revision?: string;
+  build_dirty?: boolean;
 }
 
 /** Operator launch request (案A, ADR-0024). The client sends only these; the
@@ -1874,6 +1920,15 @@ export function parseHosts(value: unknown): HostInfo[] {
           ? { capabilities: e.capabilities }
           : {}),
         ...(Array.isArray(e.engines) ? { engines: e.engines } : {}),
+        // issue #228: absent on a pre-#228 runner — only copy over when
+        // present AND correctly typed, so a malformed/forged value cannot
+        // spoof a build_revision that was never actually declared.
+        ...(typeof e.build_revision === "string"
+          ? { build_revision: e.build_revision }
+          : {}),
+        ...(typeof e.build_dirty === "boolean"
+          ? { build_dirty: e.build_dirty }
+          : {}),
       });
     }
   }
