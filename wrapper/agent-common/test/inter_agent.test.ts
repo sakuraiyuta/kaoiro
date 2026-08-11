@@ -2188,6 +2188,150 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
     },
   );
 
+  // issue #222 欠陥1: `invoke()`'s pre-dispatch `track.turnNumber += 1` was
+  // never rolled back on reject — a rejected send never reached the peer,
+  // so the number it claimed was never actually spent on the wire, but the
+  // local track kept it anyway. Fixed by decrementing once, right after
+  // entering the `rejected` branch, gated on `track.mutationGen ===
+  // genAtDispatch` (no concurrent inbound activity raced in during the
+  // `#dispatch()` await) — see that gate's own doc comment in inter_agent.ts
+  // for why the comparison is safe. Three tests below cover the three
+  // load-bearing cases; per the director's steer, weight is on the SECOND
+  // (a `conversation_closed` reject can never be retried either way, so its
+  // own rollback is "does not break anything", not "fixes the incident" —
+  // the non-`conversation_closed` case is where an ongoing conversation
+  // actually depended on this).
+  it(
+    "issue #222 欠陥1: conversation_closed reject でも rollback は無害 " +
+      "(closed 学習と AC10 のローカル拒否は変わらない)",
+    async () => {
+      const { tool, settlers } = makeMultiDeferredAckTool();
+
+      const seed = tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-closed-rollback",
+      });
+      settlers[0]!({ kind: "accepted", stamp: null });
+      expect((await seed).isError).toBeFalsy();
+
+      const second = tool.invoke({
+        to: "peer.agent",
+        body: "still here?",
+        kind: "inform",
+        conversation_id: "cnv-closed-rollback",
+      });
+      settlers[1]!({ kind: "rejected", reason: "conversation_closed" });
+      expect((await second).isError).toBe(true);
+
+      // AC10 still rejects any further send on this cid LOCALLY, without a
+      // 3rd round-trip — the rollback decrementing turnNumber alongside the
+      // `closed` learning does not undermine that guard (AC10 keys on
+      // `closed`, never on `turnNumber`).
+      const third = await tool.invoke({
+        to: "peer.agent",
+        body: "again?",
+        kind: "inform",
+        conversation_id: "cnv-closed-rollback",
+      });
+      expect(third.isError).toBe(true);
+      expect(third.content[0]!.text).toContain("already closed");
+      expect(settlers.length).toBe(2); // no 3rd dispatch
+    },
+  );
+
+  it(
+    "issue #222 欠陥1: 履歴のある track で conversation_closed 以外の " +
+      "reject 後、peer の次の正当な turn が stale drop されない (受け入れ条件1)",
+    async () => {
+      const { tool, settlers } = makeMultiDeferredAckTool();
+
+      // Seed history: turn 1 accepted (track.turnNumber = 1) — the
+      // conversation is genuinely ongoing, not a brand-new track.
+      const seed = tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-reject-rollback",
+      });
+      settlers[0]!({ kind: "accepted", stamp: null });
+      expect((await seed).isError).toBeFalsy();
+
+      // This side's own turn 2 attempt is rejected for a reason OTHER than
+      // conversation_closed, with nothing racing in — the pre-dispatch bump
+      // to turnNumber=2 must roll back to 1.
+      const second = tool.invoke({
+        to: "peer.agent",
+        body: "you there?",
+        kind: "inform",
+        conversation_id: "cnv-reject-rollback",
+      });
+      settlers[1]!({ kind: "rejected", reason: "participants_mismatch" });
+      expect((await second).isError).toBe(true);
+
+      // The peer's own next legitimate reply — their real turn 2, entirely
+      // unaffected by this side's failed send — must NOT be dropped as
+      // stale. Before this fix it would have been: turnNumber stuck at 2
+      // made `2 <= 2` read as a duplicate.
+      const peerReply = inboundEnvelope("cnv-reject-rollback", "response");
+      (peerReply.payload as unknown as InterAgentMessagePayload).turn_number = 2;
+      const disposition = await tool.receiveInbound(peerReply);
+      expect(disposition.inject).toBe(true);
+      expect(disposition.mode).toBe("reply-owed");
+    },
+  );
+
+  it(
+    "issue #222 欠陥1: reject と concurrent inbound が競合した場合、" +
+      "rollback は発動せず inbound 側の turnNumber が保持される (受け入れ条件2)",
+    async () => {
+      const { tool, settlers } = makeMultiDeferredAckTool();
+
+      const seed = tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-race-rollback",
+      });
+      settlers[0]!({ kind: "accepted", stamp: null });
+      expect((await seed).isError).toBeFalsy();
+
+      // This side's own turn 2 attempt — genAtDispatch is snapshotted here,
+      // before the pre-dispatch bump to turnNumber=2 and before the peer's
+      // race below.
+      const second = tool.invoke({
+        to: "peer.agent",
+        body: "you there?",
+        kind: "inform",
+        conversation_id: "cnv-race-rollback",
+      });
+      await Promise.resolve();
+
+      // While that send is still unconfirmed, the PEER's own message races
+      // in and legitimately advances turnNumber to 3 — mutationGen bumps,
+      // which is exactly what must stop the later rollback from firing.
+      const peerRace = inboundEnvelope("cnv-race-rollback", "response");
+      (peerRace.payload as unknown as InterAgentMessagePayload).turn_number = 3;
+      expect((await tool.receiveInbound(peerRace)).inject).toBe(true);
+
+      // NOW the pending send settles, rejected for an unrelated reason.
+      settlers[1]!({ kind: "rejected", reason: "participants_mismatch" });
+      expect((await second).isError).toBe(true);
+
+      // If the rollback had incorrectly fired here, it would decrement past
+      // the concurrent inbound's authoritative value (3 -> 2), and a
+      // turn_number=3 duplicate would then misread as NOT stale (3 <= 2 is
+      // false). It must still read as stale — proof turnNumber stayed at
+      // the peer's own value, untouched by this call's failed send.
+      const duplicate = inboundEnvelope("cnv-race-rollback", "response");
+      (duplicate.payload as unknown as InterAgentMessagePayload).turn_number = 3;
+      const disposition = await tool.receiveInbound(duplicate);
+      expect(disposition.inject).toBe(false);
+      expect(disposition.mode).toBe("reply-owed"); // AC9 stale-drop shape
+    },
+  );
+
   // issue #177 review round 3 must-fix: the pending-done gate was
   // registered before `await this.#dispatch(envelope)` but only released
   // from the two branches that assumed dispatch RESOLVED (accepted/

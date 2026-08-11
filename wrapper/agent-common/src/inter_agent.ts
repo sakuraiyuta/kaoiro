@@ -1491,6 +1491,36 @@ export class InterAgentTool {
           }
 
           if (acceptance.kind === "rejected") {
+            // issue #222 欠陥1: undo THIS call's own pre-dispatch bump
+            // (`track.turnNumber += 1` above) when nothing else touched the
+            // track while `#dispatch()` was in flight — `genAtDispatch` was
+            // snapshotted from `track.mutationGen` BEFORE that bump, and
+            // `mutationGen` only advances when `receiveInbound()` /
+            // `observeInbound()` actually mutate turnNumber/remoteDone/
+            // closed (see `ConversationTrack.mutationGen`'s doc), so an
+            // unchanged value here proves no concurrent inbound activity
+            // raced in during the await — safe to decrement. Applied ONCE,
+            // before the reason-specific branches below, so none of them
+            // needs its own copy: the `wasBlank` branch's `freshTrack()`
+            // reset harmlessly overwrites this decrement to 0 regardless,
+            // and the `conversation_closed` / `localDoneSnapshot` / no-op
+            // branches — which previously left turnNumber permanently
+            // stuck at the never-delivered value — now get it back.
+            //
+            // The `conversation_closed` branch's rollback does not, by
+            // itself, prevent the exact incident that motivated this issue
+            // (the cid is closed either way — a `conversation_closed`
+            // reject means it will never accept another send, rolled back
+            // or not; issue #221 段階1's `tombstone_ttl_ms` closing the
+            // server/wrapper TTL gap is what actually broke that chain).
+            // What this DOES fix is the more common case: any OTHER reject
+            // reason on a conversation that is still open and continues —
+            // without this, the wasted turn number permanently
+            // off-by-ones this side against the peer's next legitimate
+            // send, which then reads as stale and is silently dropped.
+            if (track.mutationGen === genAtDispatch) {
+              track.turnNumber -= 1;
+            }
             if (acceptance.reason === "conversation_closed") {
               // issue #177 review M2: the server is authoritative that
               // this CID is done — closed forever, whether or not THIS
