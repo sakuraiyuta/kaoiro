@@ -19,12 +19,15 @@ defmodule KaoiroServer.ConversationStatesTest do
   # instead of sleeping real wallclock time to make GC / TTL behaviour
   # observable. `advance_clock/2` moves it forward; `sync_gc/1` forces a
   # synchronous `:gc` round-trip (`:sys.get_state/1`) instead of a sleep.
-  defp start_tracker_with_clock(name, limits) do
+  # `extra_opts` (issue #221 direction 2) lets a test inject `:on_auto_closed`
+  # alongside the clock; existing callers passing none get identical
+  # behaviour to before (default no-op callback).
+  defp start_tracker_with_clock(name, limits, extra_opts \\ []) do
     Application.put_env(:kaoiro_server, :inter_agent, limits)
     on_exit(fn -> Application.delete_env(:kaoiro_server, :inter_agent) end)
     {:ok, clock_agent} = Agent.start_link(fn -> 0 end)
     clock = fn -> Agent.get(clock_agent, & &1) end
-    start_supervised!({ConversationStates, name: name, clock: clock})
+    start_supervised!({ConversationStates, [name: name, clock: clock] ++ extra_opts})
     {name, clock_agent}
   end
 
@@ -353,6 +356,81 @@ defmodule KaoiroServer.ConversationStatesTest do
       assert ConversationStates.get("c", name) == nil
 
       assert :ok = ConversationStates.record_message("c", "a", "b", "fresh", 1, false, name)
+    end
+  end
+
+  describe "on_auto_closed callback (issue #221 direction 2)" do
+    defp capturing_callback do
+      {:ok, notifier} = Agent.start_link(fn -> [] end)
+
+      callback = fn cid, agent_ids, reason ->
+        Agent.update(notifier, &[{cid, agent_ids, reason} | &1])
+      end
+
+      {notifier, callback}
+    end
+
+    test "open_conversation_ttl での GC 遷移で cid・参加者・reason を渡し1回だけ呼ばれる" do
+      {notifier, on_auto_closed} = capturing_callback()
+
+      {name, clock} =
+        start_tracker_with_clock(:cs_on_auto_closed, [open_conversation_ttl_ms: 1],
+          on_auto_closed: on_auto_closed
+        )
+
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+      advance_clock(clock, 5)
+      sync_gc(Process.whereis(name))
+
+      assert [{"c", agent_ids, :open_conversation_ttl}] = Agent.get(notifier, & &1)
+      assert Enum.sort(agent_ids) == ["a", "b"]
+    end
+
+    test "hard limit closure (max_turns 等) では呼ばれない (record_message の戻り値経路が別途通知する)" do
+      {notifier, on_auto_closed} = capturing_callback()
+
+      {name, _clock} =
+        start_tracker_with_clock(:cs_on_auto_closed_hardlimit, [max_turns: 1],
+          on_auto_closed: on_auto_closed
+        )
+
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+
+      assert {:exceeded, :max_turns} =
+               ConversationStates.record_message("c", "b", "a", "y", 2, false, name)
+
+      assert Agent.get(notifier, & &1) == []
+    end
+
+    test "both_done closure では呼ばれない (両側合意は既に自明で通知不要)" do
+      {notifier, on_auto_closed} = capturing_callback()
+
+      {name, _clock} =
+        start_tracker_with_clock(:cs_on_auto_closed_bothdone, [], on_auto_closed: on_auto_closed)
+
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, name)
+      assert :both_done = ConversationStates.record_message("c", "b", "a", "y", 2, true, name)
+
+      assert Agent.get(notifier, & &1) == []
+    end
+
+    test "callback が例外を投げても GenServer は生存し tombstone 遷移自体は完了する" do
+      on_auto_closed = fn _cid, _agent_ids, _reason -> raise "boom" end
+
+      {name, clock} =
+        start_tracker_with_clock(:cs_on_auto_closed_raises, [open_conversation_ttl_ms: 1],
+          on_auto_closed: on_auto_closed
+        )
+
+      pid = Process.whereis(name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+      advance_clock(clock, 5)
+      sync_gc(pid)
+
+      assert Process.alive?(pid)
+
+      assert %{status: :closed, reason: :open_conversation_ttl} =
+               ConversationStates.get("c", name)
     end
   end
 

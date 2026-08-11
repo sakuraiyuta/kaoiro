@@ -74,8 +74,12 @@ defmodule KaoiroServer.Application do
       # serving those requests.
       KaoiroServer.Users,
       # Per-conversation hard limits for inter-agent messaging
-      # (protocol-inter-agent spec, phase-8 Stage B).
-      KaoiroServer.ConversationStates,
+      # (protocol-inter-agent spec, phase-8 Stage B). `:on_auto_closed`
+      # (issue #221 direction 2) is the ONLY place this otherwise
+      # web-independent module's data crosses into KaoiroServerWeb — see
+      # ConversationStates' own moduledoc for why that boundary is kept.
+      {KaoiroServer.ConversationStates,
+       on_auto_closed: &KaoiroServerWeb.SynthEnvelope.deliver_conversation_closed/3},
       # Single owner of the common-footer snapshot + last-known-good
       # (ADR-0045). Must precede FooterWatcher, which rebuilds through it,
       # and the Endpoint, whose WrapperChannel reads the snapshot.

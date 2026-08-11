@@ -31,6 +31,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentId
+  alias KaoiroServerWeb.SynthEnvelope
 
   # Intercept the operator-initiated revoke broadcast (issue #72) so it
   # goes through `handle_out/3` (channel-local stop) instead of the
@@ -1535,12 +1536,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
     ts = DateTime.utc_now() |> DateTime.to_iso8601()
 
     for recipient <- [from, to] do
-      deliver_synth_inter_agent(recipient, synth_escalate_envelope(cid, recipient, reason, ts))
+      SynthEnvelope.deliver(recipient, synth_escalate_envelope(cid, recipient, reason, ts))
     end
   end
 
   defp synth_escalate_envelope(cid, recipient, reason, ts) do
-    synth_inter_agent_envelope(
+    SynthEnvelope.build(
       %{
         "to" => recipient,
         "conversation_id" => cid,
@@ -1576,7 +1577,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       ConversationStates.claim_unreachable_targets(agent_id, @max_unreachable_notices)
 
     for {cid, peers} <- targets, peer <- peers do
-      deliver_synth_inter_agent(peer, synth_unreachable_envelope(cid, peer, message, ts))
+      SynthEnvelope.deliver(peer, synth_unreachable_envelope(cid, peer, message, ts))
     end
 
     if unclaimed > 0 do
@@ -1594,7 +1595,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # do not read it. meta.done is false — whether to end the conversation is
   # the receiving agent's call (spec Phase 1).
   defp synth_unreachable_envelope(cid, recipient, message, ts) do
-    synth_inter_agent_envelope(
+    SynthEnvelope.build(
       %{
         "to" => recipient,
         "conversation_id" => cid,
@@ -1609,46 +1610,17 @@ defmodule KaoiroServerWeb.WrapperChannel do
     )
   end
 
-  # Server-synthesized IA (agent_id="server") reaches exactly one pane —
-  # the recipient's (ADR-0051 D3-1). There is no sender pane to mirror it
-  # into: "server" holds no transcript, and the peer named in the notice
-  # is precisely the side that could not receive it. The stamp is
-  # allocated the same way a live accept allocates one, so the notice
-  # sorts and clear-filters identically and the recipient's wrapper can
-  # record it verbatim in its sidecar.
-  defp deliver_synth_inter_agent(recipient, envelope) do
-    stamp = IngressOrder.allocate()
-    stamped = Map.put(envelope, "ingress_stamp", encode_stamp(stamp))
-    _ = AgentStates.upsert_ia(recipient, stamp, stamped)
-    KaoiroServerWeb.Endpoint.broadcast("wrapper:#{recipient}", "envelope", stamped)
-    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", stamped)
-    :ok
-  end
-
   # Ingress stamps are Elixir 2-tuples but must survive JSON, so the wire
   # form is a 2-element integer array (ADR-0051 D3-4 / protocol.md). Same
   # shape everywhere: delivered envelope, acceptance ack, sidecar row,
-  # `replay_ia` item.
+  # `replay_ia` item. (Envelope building + delivery for server-synthesized
+  # IA notices moved to `KaoiroServerWeb.SynthEnvelope` — issue #221 — but
+  # `encode_stamp/1` stays here too since the live ingress path above
+  # (`:619`) also needs it.)
   defp encode_stamp({us, seq}), do: [us, seq]
 
   defp decode_stamp([us, seq]) when is_integer(us) and is_integer(seq), do: {:ok, {us, seq}}
   defp decode_stamp(_), do: :error
-
-  defp synth_inter_agent_envelope(payload, ts) do
-    %{
-      "version" => "0",
-      "agent_id" => "server",
-      # Synthesized server-side, no real persona — include a sentinel so the
-      # envelope frame stays consistent with the Envelope contract
-      # (protocol/src/index.ts; persona is a required frame field).
-      "persona" => %{"id" => "server", "name" => "server", "sprite_set" => "server"},
-      "ts" => ts,
-      "type" => "inter_agent_message",
-      "state" => "idle",
-      "payload" => payload,
-      "ext" => %{}
-    }
-  end
 
   # One restored row. Everything about it is untrusted host-local data, so
   # each step fails CLOSED (drop the row, keep replaying the rest):

@@ -96,14 +96,29 @@ defmodule KaoiroServer.ConversationStates do
   default `&System.monotonic_time(:millisecond)/0`. Tests inject a
   deterministic clock (e.g. an `Agent` holding an integer) instead of
   sleeping real wallclock time to make GC / TTL behaviour observable.
+
+  `:on_auto_closed` (issue #221 direction 2) is a 3-arity callback invoked
+  once per conversation the periodic GC sweep auto-closes via
+  `open_conversation_ttl_ms` (never for a hard-limit closure, which the
+  caller of `record_message/6` already learns from its own return value):
+  `fun.(conversation_id, participant_agent_ids, reason)`, `reason` always
+  `:open_conversation_ttl` today. Default is a no-op — this module passes
+  only that DATA, never wire vocabulary (`kind` / `owner` / `persona` /
+  `display_name`); the real callback (wired in `KaoiroServer.Application`)
+  is `KaoiroServerWeb.SynthEnvelope.deliver_conversation_closed/3`, which
+  turns it into a broadcast envelope. Keeping this module's own
+  `KaoiroServerWeb` dependency at zero is deliberate: every test below
+  boots this GenServer alone, without the web layer.
   """
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     clock = Keyword.get(opts, :clock, &default_clock/0)
-    GenServer.start_link(__MODULE__, {name, clock}, name: name)
+    on_auto_closed = Keyword.get(opts, :on_auto_closed, &default_on_auto_closed/3)
+    GenServer.start_link(__MODULE__, {name, clock, on_auto_closed}, name: name)
   end
 
   defp default_clock, do: System.monotonic_time(:millisecond)
+  defp default_on_auto_closed(_conversation_id, _agent_ids, _reason), do: :ok
 
   @doc """
   Records a new message in `conversation_id` from `from` to `to`, weighing
@@ -163,9 +178,11 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @impl true
-  def init({_name, clock}) do
+  def init({_name, clock, on_auto_closed}) do
     schedule_gc()
-    {:ok, %{conversations: %{}, limits: load_limits(), clock: clock}}
+
+    {:ok,
+     %{conversations: %{}, limits: load_limits(), clock: clock, on_auto_closed: on_auto_closed}}
   end
 
   defp load_limits do
@@ -312,12 +329,25 @@ defmodule KaoiroServer.ConversationStates do
     open_ttl = state.limits.open_conversation_ttl_ms
     tombstone_ttl = state.limits.tombstone_ttl_ms
 
-    {conversations, tombstoned, dropped} =
-      Enum.reduce(state.conversations, {%{}, 0, 0}, fn {cid, entry}, {acc, tomb, drop} ->
+    {conversations, tombstoned, dropped, auto_closed} =
+      Enum.reduce(state.conversations, {%{}, 0, 0, []}, fn {cid, entry},
+                                                           {acc, tomb, drop, closed} ->
         case gc_disposition(entry, now, open_ttl, tombstone_ttl) do
-          :keep -> {Map.put(acc, cid, entry), tomb, drop}
-          {:tombstone, closed_entry} -> {Map.put(acc, cid, closed_entry), tomb + 1, drop}
-          :drop -> {acc, tomb, drop + 1}
+          :keep ->
+            {Map.put(acc, cid, entry), tomb, drop, closed}
+
+          {:tombstone, closed_entry} ->
+            # issue #221 direction 2: only THIS transition (open_conversation_
+            # ttl, a sweep-driven auto-close) needs peer propagation — a
+            # hard-limit closure already notifies its participants from
+            # `record_message/6`'s own return value (wrapper_channel.ex's
+            # `preflight_inter_agent`), and `gc_disposition/4` never
+            # produces any other tombstone reason.
+            closed = [{cid, MapSet.to_list(closed_entry.agents), closed_entry.reason} | closed]
+            {Map.put(acc, cid, closed_entry), tomb + 1, drop, closed}
+
+          :drop ->
+            {acc, tomb, drop, closed}
         end
       end)
 
@@ -327,6 +357,24 @@ defmodule KaoiroServer.ConversationStates do
           "dropped #{dropped} expired tombstones"
       )
     end
+
+    # Isolate the callback from this GenServer's own survival: it is the
+    # ONLY point where this otherwise web-independent module's data reaches
+    # web-layer code (issue #221 direction 2/D19 boundary — see
+    # `:on_auto_closed`'s doc). An exception here (a bug in the delivery
+    # side, not in anything this module owns) must not crash a singleton
+    # GenServer holding every OTHER agent's still-open conversations too.
+    Enum.each(auto_closed, fn {cid, agent_ids, reason} ->
+      try do
+        state.on_auto_closed.(cid, agent_ids, reason)
+      rescue
+        e ->
+          Logger.error(
+            "conversation_states gc: on_auto_closed callback raised for " <>
+              "#{cid}: #{Exception.format(:error, e, __STACKTRACE__)}"
+          )
+      end
+    end)
 
     {:noreply, %{state | conversations: conversations}}
   end

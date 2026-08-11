@@ -466,10 +466,18 @@ function trackAge(track: ConversationTrack): number {
 
 /** Disposition returned by `receiveInbound()` for one inbound envelope
  *  (issue #177). `consumed`: a `wait_for_response` waiter took it as its
- *  reply — the caller injects nothing. `inject`: false only for a late /
- *  stale / duplicate turn_number (AC9) — the caller must drop it silently,
- *  it is neither a fresh reply nor owed one. `mode`: see
- *  {@link InboundReplyMode}, meaningful only when `inject` is true. */
+ *  reply — the caller injects nothing. `inject: false` has TWO distinct
+ *  causes the caller must not conflate (issue #221 direction 1):
+ *  - a late / stale / duplicate turn_number (AC9) — never happened; the
+ *    track was never mutated, drop it silently, log nothing worth keeping.
+ *  - `mode === "terminal"` — did happen (the track just learned `closed`),
+ *    but owes no reply, so no SDK turn should be spent on it either. The
+ *    caller CAN and should still note this happened (e.g. its own log
+ *    line), just must not `host.send()` it.
+ *  `mode`: see {@link InboundReplyMode} — always populated, but only
+ *  actionable (decides HOW to render an injected message) when `inject`
+ *  is true; when `inject` is false it still tells the caller WHICH of the
+ *  two `inject: false` causes above applies. */
 export interface InboundDisposition {
   consumed: boolean;
   inject: boolean;
@@ -873,7 +881,7 @@ export class InterAgentTool {
     // the stale check) without the server ever agreeing the conversation
     // ended — a split-brain (server=open, this wrapper=closed). Server
     // envelopes are always `agent_id: "server"`
-    // (`synth_inter_agent_envelope` in wrapper_channel.ex); require both.
+    // (`KaoiroServerWeb.SynthEnvelope.build/2`, server-side); require both.
     const isSynthetic = turnNumber === 0 && envelope.agent_id === "server";
     const stale = !isSynthetic && turnNumber <= track.turnNumber;
 
@@ -933,12 +941,25 @@ export class InterAgentTool {
         : "reply-owed";
 
     const waiter = this.#replyWaiters.get(conversationId);
-    if (!waiter) return { consumed: false, inject: true, mode };
+    if (waiter) {
+      this.#replyWaiters.delete(conversationId);
+      clearTimeout(waiter.timeout);
+      waiter.resolve(envelope);
+      return { consumed: true, inject: false, mode };
+    }
 
-    this.#replyWaiters.delete(conversationId);
-    clearTimeout(waiter.timeout);
-    waiter.resolve(envelope);
-    return { consumed: true, inject: false, mode };
+    // issue #221 direction 1: a `terminal` envelope (mutual done, or a
+    // server-synthesized closure notice) owes no reply and must not wake
+    // the model — the track above already learned `closed`, which is the
+    // whole point; injecting it into the SDK just to say "nothing to do"
+    // burns a full model turn for no actionable content. Distinct from
+    // AC9's stale-drop `inject: false` above: THAT means "never happened"
+    // (track never mutated), this means "happened, track updated, but no
+    // reply is owed" — cli.ts must tell the two apart in its own logging
+    // (mode is always returned alongside, so it can).
+    if (mode === "terminal") return { consumed: false, inject: false, mode };
+
+    return { consumed: false, inject: true, mode };
   }
 
   /** Records that an inbound inter-agent message is about to be injected

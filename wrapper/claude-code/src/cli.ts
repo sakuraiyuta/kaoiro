@@ -562,12 +562,24 @@ async function main(): Promise<void> {
         process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
         return;
       }
-      // issue #177 AC9: a late/stale/duplicate turn_number is neither a
-      // fresh reply nor owed one — drop it without touching the SDK queue.
       if (!disposition.inject) {
-        process.stdout.write(
-          `  inter_agent_message stale/duplicate turn dropped: ${envelope.agent_id}\n`,
-        );
+        // issue #221 direction 1: `inject: false` has two distinct causes
+        // that must not share a log line (agent-common's `InboundDisposition`
+        // doc) — `mode === "terminal"` means this DID happen and the track
+        // above just learned `closed`, only that no reply is owed and no SDK
+        // turn should be spent on it; anything else here is AC9's late /
+        // stale / duplicate turn_number, which never happened at all
+        // (track untouched). Conflating them would make a future stale-drop
+        // investigation (issue #222) miscount terminal notices as drops.
+        if (disposition.mode === "terminal") {
+          process.stdout.write(
+            `  inter_agent_message terminal, no reply owed: ${envelope.agent_id}\n`,
+          );
+        } else {
+          process.stdout.write(
+            `  inter_agent_message stale/duplicate turn dropped: ${envelope.agent_id}\n`,
+          );
+        }
         return;
       }
       // Server routed an inter_agent_message to this wrapper (peer reply or
@@ -589,7 +601,11 @@ async function main(): Promise<void> {
       // issue #177 AC8: a terminal (both-done) message owes no reply, so it
       // must not be tracked as a pending injection — that would make a
       // silent (correctly unanswered) turn look like a failure to
-      // resolveTurnEnd() and produce a spurious error notice.
+      // resolveTurnEnd() and produce a spurious error notice. issue #221
+      // direction 1 made this guard unreachable-by-construction (terminal
+      // now always returns `inject: false` above and returns early before
+      // reaching here) — kept as defense in depth against a future change
+      // to receiveInbound() reintroducing an injectable terminal case.
       if (disposition.mode !== "terminal") {
         interAgent?.notePendingInjection(envelope);
       }

@@ -1,11 +1,11 @@
 // Adapter-level integration coverage for issue #177 review M4 (AC8/AC9/
-// AC15): proves the glue sequence cli.ts's onInterAgentMessage handler
-// runs (receiveInbound() -> disposition branch -> conditional host.send()
-// / notePendingInjection()) against the REAL AgentHost + REAL
-// InterAgentTool, not just InterAgentTool in isolation (which
-// inter_agent.test.ts already covers exhaustively). Mirrors the harness
-// style of inter_agent_injection_failure.test.ts (issue #136) — cli.ts
-// itself has no test harness (its onInterAgentMessage handler lives
+// AC15) and issue #221 direction 1: proves the glue sequence cli.ts's
+// onInterAgentMessage handler runs (receiveInbound() -> disposition branch
+// -> conditional host.send() / notePendingInjection()) against the REAL
+// AgentHost + REAL InterAgentTool, not just InterAgentTool in isolation
+// (which inter_agent.test.ts already covers exhaustively). Mirrors the
+// harness style of inter_agent_injection_failure.test.ts (issue #136) —
+// cli.ts itself has no test harness (its onInterAgentMessage handler lives
 // inline in run(), like every other ServerLink callback in that file), so
 // this reproduces the exact glue sequence directly against the two real
 // classes instead of constructing cli.ts.
@@ -61,11 +61,14 @@ function inboundEnvelope(
 /** Reproduces cli.ts's onInterAgentMessage glue exactly — both engine
  *  adapters share this sequence (claude-code/src/cli.ts,
  *  codex/src/cli.ts): consumed waiters return early, a stale/duplicate
- *  turn is dropped before formatting or host.send() (AC9), and a
- *  terminal-mode inbound is still sent (informational) but never tracked
- *  via notePendingInjection (AC8). Async since issue #177 review round 2
- *  (ふじ差し戻し) made receiveInbound() async (it may gate briefly on a
- *  concurrently in-flight done=true send for the same conversation_id). */
+ *  turn is dropped before formatting or host.send() (AC9), and — issue
+ *  #221 direction 1 — a terminal-mode inbound is now ALSO dropped before
+ *  host.send() (it owes no reply, so no SDK turn is spent on it either;
+ *  only the track above learns `closed`), never tracked via
+ *  notePendingInjection (AC8) either way. Async since issue #177 review
+ *  round 2 (ふじ差し戻し) made receiveInbound() async (it may gate briefly
+ *  on a concurrently in-flight done=true send for the same
+ *  conversation_id). */
 async function runOnInterAgentMessageGlue(
   interAgent: InterAgentTool,
   host: AgentHost,
@@ -105,7 +108,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
-  it("AC8: terminal な inbound は host.send() は呼ぶが notePendingInjection は呼ばない", async () => {
+  it("AC8/issue #221 direction 1: terminal な inbound は host.send() も notePendingInjection も呼ばない", async () => {
     const host = new AgentHost(config, { onState: () => {} });
     const sendSpy = vi.spyOn(host, "send");
     const tool = new InterAgentTool({
@@ -124,14 +127,16 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     });
     expect(closing.isError).toBeFalsy();
 
-    // peer 側も done=true → 両側揃って terminal。
+    // peer 側も done=true → 両側揃って terminal。issue #221 direction 1
+    // により receiveInbound() が inject: false を返すため、track は
+    // closed を学習するが SDK 入力への注入は一切起きない。
     await runOnInterAgentMessageGlue(
       tool,
       host,
       inboundEnvelope("cnv-terminal", 2, true),
     );
 
-    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy).not.toHaveBeenCalled();
 
     // notePendingInjection が呼ばれていなければ resolveTurnEnd は即座に
     // 空配列を返す — 何も pending になっていない証拠(呼ばれていれば

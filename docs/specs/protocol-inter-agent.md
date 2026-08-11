@@ -111,8 +111,8 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 | `propose` | 合意候補を出す | → `accept` または `reject` |
 | `accept` | propose への賛成 | `propose` ← |
 | `reject` | propose への反対(`meta.reject_reason` 必須) | `propose` ← |
-| `escalate-to-user` | 人間判断要請(tie-breaker) | → user |
-| `done` | 終了申告 | 両 owner-side で揃って完了 |
+| `escalate-to-user` | 人間判断要請(tie-breaker)。hard limit 超過時の server 合成通知にも使う | → user |
+| `done` | 終了申告 | agent 発は両 owner-side で揃って完了。`open_conversation_ttl` 到達時の server 合成通知(issue #221 direction 2)もこの kind を使うが、agent-to-agent の相互合意とは別物(単発・片方向) |
 
 カバーケース:
 
@@ -212,9 +212,12 @@ stateDiagram-v2
   `closed_at`、参加 agent 集合、`last_turn` を保持)へ遷移させ、削除
   しない。同一 `conversation_id` への以後の message は relay・store・
   通常 broadcast せず `{:error, :conversation_closed}` で拒否する。
-  terminal 側の受信も一般の返信 directive を持たない(「informational
-  only、send_to_agent を呼ぶな」という専用文言) — 追加の
-  send_to_agent を誘発しない。
+  wrapper 側の受信も terminal な inbound は **model への注入を一切
+  行わない**(issue #221 direction 1)— 旧仕様は「informational
+  only、send_to_agent を呼ぶな」という専用文言で SDK 入力へ注入して
+  いたが、返信不要な通知のために model turn を消費すること自体が
+  issue #221 の解消対象だった。track は `closed` を学習するのみで、
+  追加の send_to_agent はもとより誘発しない。
 - **open_conversation_ttl による closed(issue #221)**: periodic GC は
   OPEN entry の `started_at` から `open_conversation_ttl_ms`
   (既定 24 時間)経過したものを、message の到着を待たず tombstone
@@ -222,7 +225,14 @@ stateDiagram-v2
   制限ではなくメモリ回収専用**であり、`escalate-to-user` は合成しない
   — 応答が途絶えたまま長時間残る entry を回収するだけで、対話が長い
   こと自体を理由に打ち切りはしない。旧 `max_wallclock` ハード制限
-  (10 分)がこの遷移も兼ねていたが、issue #221 で用途を分離した。
+  (10 分)がこの遷移も兼ねていたが、issue #221 で用途を分離した。この
+  遷移は参加していた全 agent へ `kind: "done"`(`turn_number: 0`、
+  `agent_id: "server"`、`meta.done: true`)の合成 envelope を
+  broadcast する(issue #221 direction 2)— `escalate-to-user` では
+  ないので、受信側が新規 conversation を開いて継続するという無意味な
+  挙動を誘発しない。受信側 wrapper はこれを `isSynthetic` 判定
+  (下記)で server 発の closed 通知と認識し、track を `closed` に
+  更新するが、上記のとおり model へは注入しない。
 - **tombstone GC**: closed から `tombstone_ttl_ms` 以上経過した
   tombstone は server の periodic GC が削除する。この TTL は
   **UUID 衝突時のメモリ解放**であり、`conversation_id` を意図的に
@@ -246,17 +256,23 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
 (`localDone` / `remoteDone` / `closed`)を conversation_id ごとに持つ:
 
 - 自分が既に `done=true` を送り、peer の `done=true` を受けたら
-  terminal。**加えて**、server 合成のハード制限超過通知
-  (`turn_number=0`、`kind: "escalate-to-user"`、`meta.done=true`)を
-  受けた時点でも、自分側の done 送信有無に関わらず即 terminal にする —
-  server 側は Stage 1 の tombstone で既にこの conversation を閉じて
-  おり、ローカルだけ「相手からの一方的な close 提案」と誤読すると、
-  受信側 wrapper がその通知に対して再度 `send_to_agent`
-  を呼んでしまい(close-proposal の注入文言が返信を誘う)、closed な
-  conversation への送信として server に往復拒否される無駄が起きる。
-  以後同一 `conversation_id` を指定した `send_to_agent` は
-  ローカルで即 tool error にする(server 往復なしで完結する)。
-  `conversation_id` を省略すれば新規 conversation を開始できる。
+  terminal。**加えて**、server 合成の closed 通知(`turn_number=0`、
+  `agent_id: "server"`、`meta.done=true` — hard limit 超過時の
+  `kind: "escalate-to-user"`、または `open_conversation_ttl` 到達時の
+  `kind: "done"`、issue #221 direction 2)を受けた時点でも、自分側の
+  done 送信有無に関わらず即 terminal にする — server 側は既にこの
+  conversation を tombstone 化して閉じており、ローカルだけ「相手から
+  の一方的な close 提案」と誤読すると、受信側 wrapper がその通知に
+  対して再度 `send_to_agent` を呼んでしまい(close-proposal の注入
+  文言が返信を誘う)、closed な conversation への送信として server に
+  往復拒否される無駄が起きる。以後同一 `conversation_id` を指定した
+  `send_to_agent` はローカルで即 tool error にする(server 往復なしで
+  完結する)。`conversation_id` を省略すれば新規 conversation を開始
+  できる。issue #221 direction 1: いずれの経路で terminal と判定
+  された inbound も SDK 入力へは一切注入しない(旧仕様は
+  「informational only」という専用文言で注入していたが、返信不要な
+  通知のために model turn を消費すること自体が issue #221 の解消
+  対象だった)。
 - **同一 conversation_id への並行 send_to_agent の直列化**(issue #177
   review 2巡目 M1): 同じ conversation_id への `send_to_agent` 呼び出しが
   並行に(例えば同一ターン内で複数回)行われた場合、採番から
@@ -277,17 +293,17 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
   以外の理由の)generic reject のロールバックがそれを OPEN に巻き戻す
   ("server=closed、wrapper=open" split-brain、AC10 も破られる)。
   (2) 楽観的な `localDone` を見て「両側 done で terminal」と確定した
-  disposition が engine アダプタへ渡り、SDK 入力へ「informational
-  only、返信不要」と注入・`notePendingInjection` を skip した後で
-  その送信が reject されると、実際には片側提案 (close-proposal) の
-  ままなのに返信経路が失われる(取り消し不能)。
+  disposition が engine アダプタへ渡り、SDK 入力へ注入せず(issue
+  #221 direction 1、track だけ closed へ更新)`notePendingInjection`
+  も skip した後でその送信が reject されると、実際には片側提案
+  (close-proposal) のままなのに返信経路が失われる(取り消し不能)。
 - **`conversation_closed` reject の学習**(issue #177 review 2巡目
   M2): `send_to_agent` の送信が server から `conversation_closed`
   で拒否された場合、その conversation_id をこの wrapper が事前に
   一度も追跡していなかった(brand-new local track)場合でも、
   ローカル track を closed として学習する。学習せずに track を
   破棄すると、同じ `conversation_id` を指定した次回の試行が毎回
-  server へ往復し、server 側 tombstone TTL(既定 10 分)が明けた
+  server へ往復し、server 側 tombstone TTL(既定 24 時間)が明けた
   時点で受理されてしまい、下記「CID 再利用は契約にしない」の
   wrapper 側 24 時間 guard が骨抜きになる。
 - **late / stale / duplicate turn の拒否**: 受信 `turn_number` が当該
@@ -308,19 +324,26 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
 - **OPEN track の idle TTL と総数上限**(issue #177 review 2巡目
   M3、「open track の unbounded 経路」): 上記の closed track TTL は
   この wrapper 自身が CLOSED と学習した track にしか効かない。
-  server の periodic GC は自発的な tombstone 化を wrapper へ通知
-  しない(issue #209、意図的に対象外)ため、closing turn を
-  取りこぼした・peer が再接続なしにクラッシュした等で wrapper が
-  closed を学習できなかった track は OPEN のまま残り続け、
-  closed track TTL では prune されない。これを塞ぐため、OPEN
-  track にも最終アクティビティから 24 時間の idle TTL を独立に
-  適用し、さらに open + closed 合算の総数上限(既定 20,000、最も
-  古い track から evict)も設ける。idle 対象になるほど長時間 open
-  な conversation は、server 側の既定 wallclock 上限(10 分)を
-  大幅に超過しており実質的に server 側で打ち切り済みである可能性が
-  高い — evict は該当 conversation_id のローカル bookkeeping
-  (`turnNumber` / `localDone` / `remoteDone`)を破棄するだけで、
-  以後同じ conversation_id を明示指定すれば新規 track として
+  server の periodic GC が自発的に tombstone 化したことは、
+  `open_conversation_ttl` 経由の遷移に限り issue #221 direction 2 で
+  peer へ伝播するようになった(上記「open_conversation_ttl による
+  closed」参照)が、この伝播は broadcast 一発の best-effort であり
+  配送を保証しない(受信側 wrapper がその瞬間切断していた等)。
+  したがって、通知が届かなかった場合(issue #209 の残存部分)や
+  closing turn を取りこぼした・peer が再接続なしにクラッシュした
+  等の経路では、wrapper が closed を学習できなかった track は
+  OPEN のまま残り続け、closed track TTL では prune されない。
+  これを塞ぐため、OPEN track にも最終アクティビティから 24 時間の
+  idle TTL を独立に適用し、さらに open + closed 合算の総数上限
+  (既定 20,000、最も古い track から evict)も設ける。issue #221 で
+  server 側の `max_wallclock` ハード制限は撤廃されたため、idle
+  対象になるほど長時間 open な conversation が「server 側で
+  打ち切り済み」である保証はもはや無い — server 側は今や
+  `open_conversation_ttl_ms`(既定 24 時間、この idle TTL と同じ
+  order of magnitude)で独立に同じ entry を回収しているはずなので、
+  evict は該当 conversation_id のローカル bookkeeping
+  (`turnNumber` / `localDone` / `remoteDone`)を破棄するだけで実害は
+  小さい — 以後同じ conversation_id を明示指定すれば新規 track として
   再送でき、server からの正しい応答(`conversation_closed` なら
   上記 M2 の学習で再度ローカルに反映される)を得られる。
 
@@ -784,8 +807,15 @@ agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの�
 ```
 
 エージェントが返信する場合は `send_to_agent` ツールで応答する。
-返信しない場合は通常の応答(`result` envelope)を返し、conversation
-は自然消滅(server 側 wallclock タイムアウトで自動 done を付与)。
+返信しない場合は通常の応答(`result` envelope)を返せばよく、
+`done` を送る義務はない — conversation はその後も open のまま
+残り続け、双方の `done=true` が揃う、hard limit 超過、または
+`open_conversation_ttl_ms` 経過(既定 24 時間、issue #221)の
+いずれかで初めて閉じる。旧 `max_wallclock` ハード制限は server が
+タイムアウトで自動的に `done` を付与する仕組みだったが、issue #221
+で撤廃した — `open_conversation_ttl_ms` はメモリ回収専用であり
+conversation を `done` 扱いにはしない(上記「conversation の
+ライフサイクル」参照)。
 
 #### 同期 reply 待ち (`send_to_agent.wait_for_response`)
 

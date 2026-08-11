@@ -61,9 +61,13 @@ function makeHost(): CodexHost {
 /** Reproduces cli.ts's onInterAgentMessage glue exactly — identical to
  *  claude-code's cli.ts (and to the sibling helper in
  *  claude-code/test/inter_agent_lifecycle_glue.test.ts), modulo the host
- *  type. Async since issue #177 review round 2 (ふじ差し戻し) made
- *  receiveInbound() async (it may gate briefly on a concurrently in-flight
- *  done=true send for the same conversation_id). */
+ *  type. issue #221 direction 1: `mode === "terminal"` now returns
+ *  `inject: false` from `receiveInbound()` too, so it is caught by the
+ *  same early return as AC9's stale/duplicate case above — the track
+ *  still learns `closed`, but no SDK turn is spent on it. Async since
+ *  issue #177 review round 2 (ふじ差し戻し) made receiveInbound() async
+ *  (it may gate briefly on a concurrently in-flight done=true send for
+ *  the same conversation_id). */
 async function runOnInterAgentMessageGlue(
   interAgent: InterAgentTool,
   host: CodexHost,
@@ -103,7 +107,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
-  it("AC8: terminal な inbound は host.send() は呼ぶが notePendingInjection は呼ばない", async () => {
+  it("AC8/issue #221 direction 1: terminal な inbound は host.send() も notePendingInjection も呼ばない", async () => {
     const host = makeHost();
     const sendSpy = vi.spyOn(host, "send");
     const tool = new InterAgentTool({
@@ -127,7 +131,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
       inboundEnvelope("cnv-terminal", 2, true),
     );
 
-    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy).not.toHaveBeenCalled();
     expect(
       tool.resolveTurnEnd("cnv-terminal", { code: "api_error", message: "x" }),
     ).toEqual([]);

@@ -392,7 +392,10 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
     const disposition = await tool.receiveInbound(doneInbound("cnv-terminal", 2));
     expect(disposition).toEqual({
       consumed: false,
-      inject: true,
+      // issue #221 direction 1: terminal owes no reply, so it must not be
+      // injected into the SDK either — the track above already learned
+      // `closed`, which is the actionable part.
+      inject: false,
       mode: "terminal",
     });
 
@@ -493,7 +496,9 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
     const disposition = await tool.receiveInbound(escalate);
     expect(disposition).toEqual({
       consumed: false,
-      inject: true,
+      // issue #221 direction 1: terminal (including a server-synthesized
+      // hard-limit close) owes no reply, so it is not injected either.
+      inject: false,
       mode: "terminal",
     });
 
@@ -3121,22 +3126,20 @@ describe("issue #177 review M4: 2-agent in-process E2E (AC13)", () => {
 
     // B が事前に(想定外に)もう 1 ターン多く送っていた場合の遅延到着を
     // 模す — turn_number は STALE ではない(新しい)が、A はもう
-    // terminal。mode は "terminal" のまま(inject はしてよいが、cli.ts
-    // 側は notePendingInjection を呼ばないので返信は誘発されない —
+    // terminal。mode は "terminal" のまま、かつ issue #221 direction 1
+    // により inject も false(track は更新されるが model は起こさない —
     // adapter-level glue test の "AC8" ケースと同じ契約)。
     const lateFresh = inboundEnvelope("cnv-e2e-late", "inform");
     (lateFresh.payload as unknown as InterAgentMessagePayload).turn_number =
       ((bToA.payload as unknown as InterAgentMessagePayload).turn_number ?? 0) + 1;
     lateFresh.agent_id = "agent-b";
     const lateDisposition = await a.receiveInbound(lateFresh);
-    expect(lateDisposition.inject).toBe(true);
+    expect(lateDisposition.inject).toBe(false);
     expect(lateDisposition.mode).toBe("terminal");
 
-    // "terminal" は cli.ts 側で notePendingInjection をスキップする契約
-    // なので、A 側からの追加 send は起きない(この engine-agnostic
-    // 層では send 自体を呼ぶかどうかは cli.ts の役割だが、mode が
-    // terminal である限り契約上 0 件のはず — 実際に aOutbound は
-    // 増えていない)。
+    // terminal は receiveInbound() 自体が inject: false を返す(issue #221
+    // direction 1)ので、A 側からの追加 send は起きない — 実際に
+    // aOutbound は増えていない。
     expect(aOutbound).toHaveLength(1);
   });
 });
