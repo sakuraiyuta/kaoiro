@@ -27,6 +27,7 @@
 | [auth-and-authz](auth-and-authz.md) | accepted | 各ノードの認証・認可境界の現状マップ。OSS 公開前監査 (#91) の起点 |
 | [setup-wizards](setup-wizards.md) | accepted | 設定 / env 生成ウィザード(runner config・server .env) |
 | [deployment](deployment.md) | accepted | マルチホスト配備手順書(nginx・env 一覧・DETS パス・wss 制約) |
+| [agent-operations](agent-operations.md) | accepted | 複数エージェントが同一 work tree で並行作業するときの運用則(実装側 / director 側)。engine 非依存で CLAUDE.md と AGENTS.md の両方から参照 |
 | [non-goals](non-goals.md) | accepted | 非スコープ |
 | [glossary](glossary.md) | accepted | 用語集 |
 
