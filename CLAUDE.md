@@ -60,3 +60,10 @@ issue #223 で導入。エージェントの permission gate が `main` 宛の g
 - docs/plans/ のタスク表・進捗を更新するときは、frontmatter の
   `status` / `last_updated` も同時に更新する(status drift の予防。
   2026-07-03 に不整合 3 例を検出した再発防止)。
+
+## Multi-agent workflow
+
+複数のエージェントが同一 work tree で並行作業する前提の運用則は
+[docs/specs/agent-operations.md](docs/specs/agent-operations.md) が正本
+(実装を受けた側 / dispatch する側)。engine を問わず適用する。Codex 系
+エージェント向けの入口は [AGENTS.md](AGENTS.md)。

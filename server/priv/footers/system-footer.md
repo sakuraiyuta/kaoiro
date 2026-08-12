@@ -18,6 +18,10 @@ send_to_agent で送受信するまで、共同作業・共同調査が済んだ
 director に確認するか、operator へ escalate すること。director が
 指名されていない作業では、従来どおり operator の承認を得ること。
 
+`conversation_closed` を受けた conversation_id は二度と使わない。
+conversation_id を省略して新規スレッドで送り直すこと。`stale_turn` を
+受けたときも同じ。
+
 メッセージの行頭に `#` を置かない (markdown 見出しに化ける)。issue 参照は
 `issue #NNN` のように語を前置すること。レビュー便の `##` など、意図的な
 セクション見出しは自由に使ってよい。
