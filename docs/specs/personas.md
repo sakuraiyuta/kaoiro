@@ -202,6 +202,10 @@ Anima dir 側に生成物(json)は残るが rembg 前 PNG が `assets-work/` に
 3. **build**: `scripts/build-persona-pack.sh` で zip 化(
    `<id>-<version>.zip`)
 4. **管理者**: zip を server の取り込みディレクトリ(env で指定)に drop
+   し、**同じ `id` の旧 version の zip を取り除く**。取り込みは `id` 衝突
+   時に先勝ちで zip をファイル名順に読むため、旧 version を残すと新
+   version が採用されない
+   ([persona-pack-schema](persona-pack-schema.md) の unique 性 MUST)
 5. **server**: auto-watch が検知して自動展開、manifest を再構築
 6. **wrapper**: 起動時 WS ハンドシェイクで人格プロンプトを server から
    受信して SDK に注入

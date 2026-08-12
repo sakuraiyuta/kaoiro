@@ -130,7 +130,13 @@ zip には含まれない。`scripts/build-persona-pack.sh` は
   waiting_input / waiting_permission / done / error)すべての PNG が
   存在する。
 - **MUST**: `id` の unique 性(既登録との衝突がない)。衝突は取り込み
-  拒否。
+  拒否。**判定は先勝ち**で、取り込みディレクトリの zip はファイル名順に
+  読まれる。したがって同じ `id` の旧 version を残したまま新 version を
+  置くと、ファイル名順で先に来る側が採用される(`kohaku-1.0.0.zip` <
+  `kohaku-1.1.0.zip` なので**旧版が勝つ**)。version を上げるときは旧
+  zip を取り除くこと。実装は
+  `server/lib/kaoiro_server/persona_assets.ex` の `drop_duplicate_ids/1`
+  (後続を warning 付きで捨てる)。
 - **MUST**: `min_kaoiro_version` が server の runtime バージョンより
   高い場合は取り込み拒否。
 - **MUST NOT**: `personality.md` に frontmatter を付けない
