@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { resolveCodexCatalog } from "@kaoiro/codex";
 import { claudeBootstrapCatalog } from "@kaoiro/claude-code/catalog";
 import type { CodexAuthMode } from "./codex-auth.js";
+import type { BuildInfo } from "./build_info.js";
 import type {
   EngineCatalogEntry,
   EngineKind,
@@ -321,6 +322,7 @@ export function buildRegister(
   config: RunnerConfig,
   codexAuthMode: CodexAuthMode = "unknown",
   claudeCatalogOverride?: EngineCatalogEntry["models"],
+  buildInfo?: BuildInfo,
 ): RunnerRegister {
   const capabilities = effectiveCapabilities(config);
   const engines: EngineCatalogEntry[] = [];
@@ -355,6 +357,9 @@ export function buildRegister(
       : { blocked_personas: config.blocked_personas }),
     capabilities,
     engines,
+    ...(buildInfo === undefined
+      ? {}
+      : { build_revision: buildInfo.revision, build_dirty: buildInfo.dirty }),
   };
 }
 

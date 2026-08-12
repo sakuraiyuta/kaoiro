@@ -340,6 +340,39 @@ describe("buildRegister", () => {
     // codex を宣言しない host の engines に codex は載らない
     expect(register.engines?.map((e) => e.id)).toEqual(["claude-code"]);
   });
+
+  // issue #228: build_revision/build_dirty は buildInfo が渡されたときだけ
+  // 載る。渡されなければ既存呼び出し (register/reload の3箇所すべてが
+  // buildInfo を渡すよう更新済みだが、テストの後方互換のため) と同じ
+  // 形のまま — フィールド自体が現れない。
+  it("buildInfo を渡すと build_revision/build_dirty が register に載る", () => {
+    const config = parseRunnerConfig(valid);
+    const register = buildRegister(config, "unknown", undefined, {
+      revision: "abc123def456",
+      dirty: false,
+      built_at: "2026-08-12T00:00:00.000Z",
+    });
+    expect(register.build_revision).toBe("abc123def456");
+    expect(register.build_dirty).toBe(false);
+  });
+
+  it("dirty な buildInfo は build_dirty=true として載る", () => {
+    const config = parseRunnerConfig(valid);
+    const register = buildRegister(config, "unknown", undefined, {
+      revision: "abc123def456",
+      dirty: true,
+      built_at: "2026-08-12T00:00:00.000Z",
+    });
+    expect(register.build_dirty).toBe(true);
+  });
+
+  it("buildInfo を渡さなければ build_revision/build_dirty は現れない", () => {
+    const config = parseRunnerConfig(valid);
+    const register = buildRegister(config);
+    expect(register.build_revision).toBeUndefined();
+    expect(register.build_dirty).toBeUndefined();
+    expect("build_revision" in register).toBe(false);
+  });
 });
 
 describe("buildHeartbeat", () => {

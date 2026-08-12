@@ -1343,6 +1343,70 @@ export async function fetchAuthMethods(
   }
 }
 
+/** Value domain for a build_revision string (issue #228 round 2, ふじ MF-3
+ *  差し戻し): either the literal "unknown" or a lowercase 40-hex-digit git
+ *  SHA. Mirrors `KaoiroServer.BuildIdentity.valid_revision?/1` (server) and
+ *  runner's own `BUILD_REVISION_RE` (build_info.ts) — kept as an
+ *  independently-authored duplicate per this file's own plain-TS,
+ *  no-workspace-dependency contract (see the module header comment); a
+ *  malformed value must be dropped here rather than displayed as if it
+ *  were a real revision (spoofing prevention, same posture as the
+ *  `typeof` guards elsewhere in this file). */
+const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
+
+function isValidBuildRevision(value: unknown): value is string {
+  return value === "unknown" || (typeof value === "string" && BUILD_REVISION_RE.test(value));
+}
+
+/** Server's own build identity (issue #228), served at GET /api/health.
+ *  `protocol_version` is ADR-0015's wire compatibility stamp — a
+ *  DIFFERENT concept from `build_revision` (the git SHA the running image
+ *  was built from); see HostInfo.build_revision's own doc for why the two
+ *  are never conflated. `built_at` is deliberately absent — it is a
+ *  runner-only diagnostic field (issue #228 round 2 advisory 2, ふじ 差し戻
+ *  し), never part of the server's own identity response. */
+export interface ServerHealth {
+  status: string;
+  build_revision: string;
+  build_dirty: boolean;
+  protocol_version: string;
+}
+
+/**
+ * Fetches the server's build identity; null on any failure (including a
+ * pre-#228 server with no /api/health route, or a malformed field outside
+ * BuildInfo's value domain). null does NOT mean "no warning" — LaunchDialog
+ * (issue #228 round 2 MF-4) surfaces null as its own explicit "server の
+ * build revision を取得できません" warning rather than staying silent
+ * (round 3 advisory 1, ふじ 差し戻し: this comment previously said null
+ * meant "no mismatch warning", which stopped being true once MF-4 shipped
+ * — stale documentation, not stale behavior). `cache: "no-store"` (issue
+ * #228 round 2 MF-4): the caller re-fetches this on every LaunchDialog
+ * open / reconnect, and a cached response would keep reporting a
+ * pre-redeploy server identity after the operator's own /api/health would
+ * answer differently.
+ */
+export async function fetchServerHealth(base = ""): Promise<ServerHealth | null> {
+  try {
+    const res = await fetch(`${base}/api/health`, { cache: "no-store" });
+    if (!res.ok) return null;
+    const body = (await res.json()) as unknown;
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      typeof (body as ServerHealth).status !== "string" ||
+      !isValidBuildRevision((body as ServerHealth).build_revision) ||
+      typeof (body as ServerHealth).build_dirty !== "boolean" ||
+      typeof (body as ServerHealth).protocol_version !== "string"
+    ) {
+      return null;
+    }
+    return body as ServerHealth;
+  } catch {
+    return null;
+  }
+}
+
 /** Launch catalog of one engine (ADR-0032 F4bc), from the host's register
  *  payload. models reuses the ext.models entry shape (#54) so the launch
  *  cascade and the running-agent switcher share one renderer. */
@@ -1361,6 +1425,16 @@ export interface HostInfo {
   capabilities?: string[];
   /** Launch catalog per capability (ADR-0032 F4bc). */
   engines?: EngineCatalog[];
+  /** Build identity (issue #228) — the full 40-char git SHA the runner's
+   *  own artifact was built from ("unknown" when undeterminable), and
+   *  whether that build had uncommitted changes. Absent = a pre-#228
+   *  runner (no signal, not a claim of "unknown"). DISTINCT from ADR-0015's
+   *  wire protocol `version` — this changes on every commit regardless of
+   *  wire-shape compatibility, and is compared against the server's own
+   *  build_revision (ServerHealth, fetchServerHealth) ONLY to warn the
+   *  operator of a mismatch, never to block anything. */
+  build_revision?: string;
+  build_dirty?: boolean;
 }
 
 /** Operator launch request (案A, ADR-0024). The client sends only these; the
@@ -1874,6 +1948,28 @@ export function parseHosts(value: unknown): HostInfo[] {
           ? { capabilities: e.capabilities }
           : {}),
         ...(Array.isArray(e.engines) ? { engines: e.engines } : {}),
+        // issue #228: absent on a pre-#228 runner — only copy over when
+        // present AND correctly typed/in-domain, so a malformed/forged
+        // value cannot spoof a build_revision that was never actually
+        // declared (issue #228 round 2 MF-3, ふじ 差し戻し: typeof alone
+        // let through any string, e.g. an attacker-controlled label
+        // masquerading as a SHA).
+        //
+        // build_revision and build_dirty are narrowed as ONE PAIR, not two
+        // independent optionals (issue #228 round 3 MF-2, ふじ 差し戻し):
+        // the server's own runner_channel.ex rejects a register carrying
+        // only one of the two ("both absent or both present" — round 2
+        // MF-3), but this round-2 code independently copied each field,
+        // so a malformed revision + a well-typed `dirty: false` let the
+        // dirty flag survive alone. That is a fail-open spoofing path: an
+        // attacker-forged `build_revision` gets dropped as intended, but
+        // `build_dirty: false` then silently reads as "this host's build
+        // is confirmed clean" — the same trust-boundary invariant the
+        // server enforces was NOT enforced here. Both fields must be
+        // present and individually valid, or neither is copied.
+        ...(isValidBuildRevision(e.build_revision) && typeof e.build_dirty === "boolean"
+          ? { build_revision: e.build_revision, build_dirty: e.build_dirty }
+          : {}),
       });
     }
   }

@@ -15,6 +15,7 @@ import type {
   RunnerRegister,
 } from "@kaoiro/protocol";
 import { buildRegister, type RunnerConfig } from "./config.js";
+import type { BuildInfo } from "./build_info.js";
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { runClaudeProbe } from "@kaoiro/claude-code/probe-client";
 import type { ProbeOutcome } from "@kaoiro/claude-code/probe-client";
@@ -35,6 +36,10 @@ export interface RefreshEngineCatalogDeps {
   getCodexAuthMode: () => CodexAuthMode;
   updateRegister: (register: RunnerRegister) => void;
   sendCatalogResult: (result: EngineCatalogResult) => void;
+  /** issue #228: fixed for the process's whole lifetime (computed once at
+   *  startup from the built artifact, never reloaded), so — unlike the
+   *  live getters above — a plain captured value, not a getter. */
+  buildInfo: BuildInfo;
   /** Injectable for tests; defaults to the real probe. */
   probe?: () => Promise<ProbeOutcome>;
 }
@@ -108,6 +113,7 @@ async function handle(
         config,
         deps.getCodexAuthMode(),
         outcome.models,
+        deps.buildInfo,
       );
       deps.updateRegister(nextRegister);
     }

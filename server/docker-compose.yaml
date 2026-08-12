@@ -24,6 +24,19 @@ services:
         # from .env so build and runtime always get the same value —
         # the release raises at boot when they disagree.
         KAOIRO_PLAIN_HTTP: ${KAOIRO_PLAIN_HTTP:-false}
+        # Build identity (issue #228). `.dockerignore` excludes `.git` from
+        # the build context (nothing in the Dockerfile reads it), so this
+        # MUST come from the environment of whoever runs `docker compose
+        # build` — e.g. `eval "$(node scripts/build-identity.mjs)"; docker
+        # compose build` (docs/specs/deployment.md 4.3). Left unset ->
+        # "unknown"/"false", which GET /api/health then reports honestly
+        # rather than silently claiming a revision nobody actually built.
+        # KAOIRO_BUILD_DIRTY joined the single revision-only arg in round 2
+        # (ふじ MF-2 差し戻し): round 1 baked revision alone, so a dirty
+        # checkout's image could claim the same identity as a clean one at
+        # the same commit.
+        KAOIRO_BUILD_REVISION: ${KAOIRO_BUILD_REVISION:-unknown}
+        KAOIRO_BUILD_DIRTY: ${KAOIRO_BUILD_DIRTY:-false}
     image: kaoiro-server:latest
     # Loopback-only by default. Auth (issue #28): KAOIRO_CLIENT_TOKENS
     # unset REJECTS all dashboard connections (fail-closed) — set it even
@@ -53,6 +66,15 @@ services:
       KAOIRO_CLEAR_WATERMARKS_PATH: /var/lib/kaoiro/clear_watermarks.dets
       KAOIRO_SESSION_STARTS_PATH: /var/lib/kaoiro/session_starts.dets
       KAOIRO_INGRESS_ORDER_PATH: /var/lib/kaoiro/ingress_order.dets
+      # User identity ledger (issue #197, ADR-0050 D1). Same rationale as
+      # the agent identity ledger above: unset falls back to a tmp path
+      # that survives a process restart but NOT a fresh container. A lost
+      # entry re-issues a new user_id and resets display_name to its
+      # initial value on that source's next login, breaking issue #197's
+      # 「変更が再起動を跨いで保持される」acceptance. Omitted until issue
+      # #227 — a container recreate silently dropped the ledger, and the
+      # deploy backup could not restore what was never on the volume.
+      KAOIRO_USERS_PATH: /var/lib/kaoiro/users.dets
       # Token denylist: authoritative store of revoked agent_ids for
       # fail-closed auth (ふじ #120 must-fix 1, 2026-07-25). Must live on
       # the named volume — a lost entry silently re-grants a revoked

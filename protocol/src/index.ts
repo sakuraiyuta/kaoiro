@@ -765,6 +765,19 @@ export interface RunnerRegister {
    *  cascade of LaunchDialog. Sourced from each engine package's
    *  EngineCapability by the runner at register time. */
   engines?: EngineCatalogEntry[];
+  /** Build identity (issue #228) — distinct from `version` above, which is
+   *  the ADR-0015 WIRE PROTOCOL version (message-shape compatibility).
+   *  `build_revision` is the full 40-char git SHA the running runner
+   *  artifact was built from ("unknown" when undeterminable), and
+   *  `build_dirty` whether that build had uncommitted changes (tracked OR
+   *  untracked). Absent = a runner build predating issue #228. Observability
+   *  only: a mismatch against the server's own build revision is
+   *  surfaced to the operator (dashboard), never used to reject the
+   *  connection — docs-only commits, backports, and rolling deploy
+   *  windows all make a legitimate SHA mismatch, and `version` above
+   *  already carries the actual compatibility contract. */
+  build_revision?: string;
+  build_dirty?: boolean;
 }
 
 /** runner -> server liveness ping; the topic carries the host_id, but it is
