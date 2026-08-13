@@ -485,59 +485,106 @@ export function sdkMessageToSessionId(message: SDKMessage): string | null {
   return typeof id === "string" && id !== "" ? id : null;
 }
 
-/** Whole-list snapshot from Claude Code's TodoWrite tool. `activeForm` is
- * intentionally local UI wording, not part of ADR-0049's text/status wire
- * contract. Invalid TodoWrite input is returned explicitly so host.ts can
- * warn instead of silently presenting a stale list as current. */
-export type TasklistEvent =
+/** A current Task* tasklist write/list tool tells the host to read Claude
+ * Code's persisted task directory after execution. The stream no longer
+ * carries its whole list; TodoWrite remains a separate compatibility path
+ * below because its input is an atomic whole-list replacement. */
+export type TasklistTrigger =
+  | { kind: "refresh"; toolUseId: string }
   | { kind: "updated"; items: TasklistSourceItem[] }
-  | { kind: "invalid"; reason: string };
+  | { kind: "invalid"; reason: string }
+  | { kind: "unrecognized"; name: string };
 
-/** Extracts every TodoWrite tool_use from one assistant message. TodoWrite's
- * input is already a whole-list replacement, so this mapper deliberately
- * performs no item diffing. */
-export function sdkMessageToTasklists(message: SDKMessage): TasklistEvent[] {
+const TASKLIST_REFRESH_TOOLS: ReadonlySet<string> = new Set([
+  "TaskCreate",
+  "TaskUpdate",
+  "TaskList",
+]);
+
+// TaskGet is the tasklist API's read-one sibling (same camel-case taskId as
+// TaskUpdate). TaskOutput / TaskStop use snake-case task_id and the SDK types
+// define them as background-agent controls; bare Task launches a subagent.
+// None changes the persisted todo list, so none should refresh or warn.
+const KNOWN_NON_REFRESH_TASK_TOOLS: ReadonlySet<string> = new Set([
+  "Task",
+  "TaskGet",
+  "TaskOutput",
+  "TaskStop",
+]);
+
+/** TodoWrite remains in the public SDK tool union, and the
+ * CLAUDE_CODE_ENABLE_TASKS=0 compatibility path emits it. Unlike the Task*
+ * tools its input is already an atomic whole-list replacement, so the host
+ * applies it directly without waiting for tool_result or reading disk. */
+function todoWriteTrigger(input: unknown): TasklistTrigger {
+  if (!isRecord(input) || !Array.isArray(input.todos)) {
+    return { kind: "invalid", reason: "TodoWrite input.todos is missing" };
+  }
+
+  const items: TasklistSourceItem[] = [];
+  for (const todo of input.todos) {
+    if (!isRecord(todo) || typeof todo.content !== "string") {
+      return { kind: "invalid", reason: "TodoWrite todo.content is invalid" };
+    }
+    if (
+      todo.status !== "pending" &&
+      todo.status !== "in_progress" &&
+      todo.status !== "completed"
+    ) {
+      return { kind: "invalid", reason: "TodoWrite todo.status is invalid" };
+    }
+    items.push({ text: todo.content, status: todo.status });
+  }
+  return { kind: "updated", items };
+}
+
+/** Extracts tasklist events from one assistant message. A current Task* tool's
+ * source file is written after this assistant message, so host.ts records its
+ * id and refreshes only after the matching tool_result; TodoWrite returns an
+ * immediate whole-list update through the compatibility path. */
+export function sdkMessageToTasklistTriggers(message: SDKMessage): TasklistTrigger[] {
   if (message.type !== "assistant" || message.error) return [];
   const content = message.message.content;
   if (!Array.isArray(content)) return [];
 
-  const events: TasklistEvent[] = [];
+  const events: TasklistTrigger[] = [];
   for (const block of content) {
-    const { type, name, input } = block as {
+    const { type, id, name } = block as {
       type?: unknown;
+      id?: unknown;
       name?: unknown;
-      input?: unknown;
     };
-    if (type !== "tool_use" || name !== "TodoWrite") continue;
-    if (!isRecord(input) || !Array.isArray(input.todos)) {
-      events.push({ kind: "invalid", reason: "TodoWrite input.todos is missing" });
+    if (type !== "tool_use" || typeof name !== "string") continue;
+    if (name === "TodoWrite") {
+      events.push(todoWriteTrigger((block as { input?: unknown }).input));
       continue;
     }
-
-    const items: TasklistSourceItem[] = [];
-    let invalidReason: string | null = null;
-    for (const todo of input.todos) {
-      if (!isRecord(todo) || typeof todo.content !== "string") {
-        invalidReason = "TodoWrite todo.content is invalid";
-        break;
-      }
-      if (
-        todo.status !== "pending" &&
-        todo.status !== "in_progress" &&
-        todo.status !== "completed"
-      ) {
-        invalidReason = "TodoWrite todo.status is invalid";
-        break;
-      }
-      items.push({ text: todo.content, status: todo.status });
+    if (TASKLIST_REFRESH_TOOLS.has(name)) {
+      events.push(
+        typeof id === "string" && id !== ""
+          ? { kind: "refresh", toolUseId: id }
+          : { kind: "invalid", reason: `${name} tool_use id is missing` },
+      );
+      continue;
     }
-    events.push(
-      invalidReason === null
-        ? { kind: "updated", items }
-        : { kind: "invalid", reason: invalidReason },
-    );
+    if (KNOWN_NON_REFRESH_TASK_TOOLS.has(name)) continue;
+    // A newly introduced Task* may be another tasklist writer with an input
+    // shape we do not yet know. Known background/subagent siblings above keep
+    // this detector from becoming permanently noisy; every other name warns
+    // once so a future rename cannot silently disconnect the list again.
+    if (name.startsWith("Task")) {
+      events.push({ kind: "unrecognized", name });
+    }
   }
   return events;
+}
+
+/** Returns the tool_use ids settled by this user message. Kept separate from
+ * the state mapper so state reduction and post-execution tasklist refresh can
+ * use the same SDK-level join without coupling either concern to the other. */
+export function sdkMessageToToolResultIds(message: SDKMessage): string[] {
+  if (message.type !== "user") return [];
+  return toolResultIds(message.message.content).toolUseIds;
 }
 
 /** Raw fields extracted from one task_* SDK system message (issue #180,

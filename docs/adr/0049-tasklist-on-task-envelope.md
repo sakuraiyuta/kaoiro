@@ -78,6 +78,41 @@ F2)の tasklist への適用は、実装着手時に protocol の予約 `task` �
   イベント履歴は追えない。
 - engine 間で項目 status の粒度が異なる(Codex は completed の二値)。
 
+### 2026-08-14 追補: Claude の source が tool trigger + 永続ファイルへ変わった
+
+Claude Agent SDK 0.3.228 の default は旧 `TodoWrite` の whole-list payload から
+`TaskCreate` / `TaskUpdate` / `TaskList` へ変わった。Claude wrapper はこれら Task*
+の tool_use id を記録し、対応する tool_result 後を trigger として
+`~/.claude/tasks/<session_id>/*.json` を読む。`subject` と `status` から全件 snapshot
+を再構成して置換配信する。assistant の tool_use 時点では source file がまだ更新
+されていないため、実行前に読むことはしない。未解決の join は terminal result /
+conversation reset / interrupt で一度 source を reconcile して破棄し、close でも
+read なしで破棄するため、次 turn の同じ tool_use id へ引き継がない。
+
+`TodoWrite` は SDK の公開 tool union に残り、`CLAUDE_CODE_ENABLE_TASKS=0` の
+compatibility path で実測される。その input は従来どおり whole-list replacement
+なので、wrapper は永続 directory read や tool_result join を介さず assistant message
+から直接適用する。invalid input は warn して stale list を current として送らない。
+したがって Claude 側では F1 の「源イベント自身がリスト全体」という前提は
+崩れ、wrapper に source-file の列挙と schema 検証が加わる。一方 wire は従来
+どおり whole-list LWW のため、項目差分を server/dashboard に持ち込まない。
+
+この directory は SDK の公開契約ではない。directory missing を含む
+read/JSON/schema の異常は stale list を送らず warn して fail-visible にする。
+空 list は存在する session directory の JSON task file が 0 件であることだけで
+確定する。将来の未知 `Task*` は name ごとに一度 warn する。background task 用 `TaskOutput` /
+`TaskStop`、tasklist read-only の `TaskGet`、bare `Task` だけを既知の非対象と
+して明示除外し、増えた sibling は一度 warn して分類することで次の tool rename
+を無言で見逃さない。
+
+compact は session_id を変えない実測だが、fork/rebind で session_id が変わり
+既知の tasklist がある場合は、新 session directory を直ちに読み直す。同内容
+なら再配信せず、異なれば空 list を含めて置換する。source を読めない場合も旧
+session の list を空 list へ置換して warning を残すため、別 session の list が
+表示に残らない。初回 init では読まない。resume は effective settings の復元で
+あって tasklist restore の契約ではないので、resume 後に task tool_use が無い
+限り tasklist は再表示されない残差を受け入れる。
+
 ### Neutral
 
 - tasklist エンティティの寿命・掃除は他の task と同じく親離脱に従う

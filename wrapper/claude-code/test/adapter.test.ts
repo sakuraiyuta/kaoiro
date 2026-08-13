@@ -13,7 +13,8 @@ import {
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
   sdkMessageToTask,
-  sdkMessageToTasklists,
+  sdkMessageToTasklistTriggers,
+  sdkMessageToToolResultIds,
   sdkMessageToTerminalReason,
 } from "../src/adapter.js";
 import { reduceStates } from "@kaoiro/agent-common";
@@ -640,10 +641,44 @@ describe("sdkMessageToSessionId", () => {
   });
 });
 
-describe("sdkMessageToTasklists", () => {
-  it("TodoWrite の全項目を text/status の whole-list snapshot に写す", () => {
+describe("sdkMessageToTasklistTriggers", () => {
+  it("TaskCreate / TaskUpdate / TaskList の tool_use id を post-execution refresh に記録する", () => {
     expect(
-      sdkMessageToTasklists(
+      sdkMessageToTasklistTriggers(
+        assistant([
+          {
+            type: "tool_use",
+            id: "create-1",
+            name: "TaskCreate",
+            input: { subject: "調査する", description: "調べる" },
+          },
+          {
+            type: "tool_use",
+            id: "update-1",
+            name: "TaskUpdate",
+            input: { taskId: "1", status: "in_progress" },
+          },
+          { type: "tool_use", id: "list-1", name: "TaskList", input: {} },
+        ]),
+      ),
+    ).toEqual([
+      { kind: "refresh", toolUseId: "create-1" },
+      { kind: "refresh", toolUseId: "update-1" },
+      { kind: "refresh", toolUseId: "list-1" },
+    ]);
+  });
+
+  it("tasklist tool_use に id がなければ fail-visible にする", () => {
+    expect(
+      sdkMessageToTasklistTriggers(
+        assistant([{ type: "tool_use", name: "TaskList", input: {} }]),
+      ),
+    ).toEqual([{ kind: "invalid", reason: "TaskList tool_use id is missing" }]);
+  });
+
+  it("TodoWrite compatibility path は whole-list snapshot を直接返す", () => {
+    expect(
+      sdkMessageToTasklistTriggers(
         assistant([
           {
             type: "tool_use",
@@ -668,9 +703,14 @@ describe("sdkMessageToTasklists", () => {
     ]);
   });
 
-  it("不正な TodoWrite は stale な list として黙って通さず fail-visible にする", () => {
+  it("壊れた TodoWrite input は stale list にせず fail-visible にする", () => {
     expect(
-      sdkMessageToTasklists(
+      sdkMessageToTasklistTriggers(
+        assistant([{ type: "tool_use", name: "TodoWrite", input: { todos: [] } }]),
+      ),
+    ).toEqual([{ kind: "updated", items: [] }]);
+    expect(
+      sdkMessageToTasklistTriggers(
         assistant([
           {
             type: "tool_use",
@@ -682,13 +722,68 @@ describe("sdkMessageToTasklists", () => {
     ).toEqual([{ kind: "invalid", reason: "TodoWrite todo.status is invalid" }]);
   });
 
-  it("通常の tool_use と assistant error からは tasklist を作らない", () => {
+  it("TaskGet と background task 操作は refresh も warn も起こさない", () => {
     expect(
-      sdkMessageToTasklists(assistant([{ type: "tool_use", name: "Read", input: {} }])),
+      sdkMessageToTasklistTriggers(
+        assistant([
+          { type: "tool_use", name: "Task", input: { prompt: "調べる" } },
+          { type: "tool_use", name: "TaskGet", input: { taskId: "1" } },
+          {
+            type: "tool_use",
+            name: "TaskOutput",
+            input: { task_id: "bg-1", block: false, timeout: 0 },
+          },
+          { type: "tool_use", name: "TaskStop", input: { task_id: "bg-1" } },
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("未知の Task* は input 形状によらず fail-visible にする", () => {
+    expect(
+      sdkMessageToTasklistTriggers(
+        assistant([
+          {
+            type: "tool_use",
+            name: "TaskModify",
+            input: { taskId: "1", status: "completed" },
+          },
+        ]),
+      ),
+    ).toEqual([{ kind: "unrecognized", name: "TaskModify" }]);
+  });
+
+  it("通常の tool_use と assistant error は無視する", () => {
+    expect(
+      sdkMessageToTasklistTriggers(
+        assistant([{ type: "tool_use", name: "Read", input: {} }]),
+      ),
     ).toEqual([]);
     expect(
-      sdkMessageToTasklists(assistant([{ type: "tool_use", name: "TodoWrite" }], "boom")),
+      sdkMessageToTasklistTriggers(
+        assistant([{ type: "tool_use", name: "TaskFuture", input: {} }]),
+      ),
+    ).toEqual([{ kind: "unrecognized", name: "TaskFuture" }]);
+    expect(
+      sdkMessageToTasklistTriggers(
+        assistant([{ type: "tool_use", name: "TaskUpdate" }], "boom"),
+      ),
     ).toEqual([]);
+  });
+});
+
+describe("sdkMessageToToolResultIds", () => {
+  it("user tool_result の tool_use id だけを返す", () => {
+    expect(
+      sdkMessageToToolResultIds(
+        user([
+          { type: "tool_result", tool_use_id: "create-1", content: "ok" },
+          { type: "text", text: "ignore" },
+          { type: "tool_result", content: "id absent" },
+        ]),
+      ),
+    ).toEqual(["create-1"]);
+    expect(sdkMessageToToolResultIds(assistant([]))).toEqual([]);
   });
 });
 

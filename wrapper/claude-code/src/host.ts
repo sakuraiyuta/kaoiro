@@ -5,6 +5,8 @@
 // required or handled here.
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { readClaudeTasklist } from "./tasklist.js";
+import type { TasklistReadResult } from "./tasklist.js";
 import type {
   EffortLevel,
   HookInput,
@@ -13,6 +15,7 @@ import type {
   PermissionResult,
   Query,
   SDKRateLimitInfo,
+  SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -57,7 +60,7 @@ import {
   stepState,
   TASKLIST_TASK_ID,
 } from "@kaoiro/agent-common";
-import type { TaskEvent, TasklistEvent } from "./adapter.js";
+import type { TaskEvent, TasklistTrigger } from "./adapter.js";
 import {
   cwdChangedHookToCwd,
   sdkMessageToCompactNotice,
@@ -71,7 +74,8 @@ import {
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
   sdkMessageToTask,
-  sdkMessageToTasklists,
+  sdkMessageToTasklistTriggers,
+  sdkMessageToToolResultIds,
   sdkMessageToTerminalReason,
 } from "./adapter.js";
 import {
@@ -268,6 +272,9 @@ export interface AgentHostOptions {
    * server can group history by session. Omitted = the id is not reported.
    */
   onSessionId?: (sessionId: string) => void;
+  /** Reads the current whole-list source for one Claude session. Injectable
+   * for tests; production reads ~/.claude/tasks/<session_id>. */
+  readTasklist?: (sessionId: string) => Promise<TasklistReadResult>;
   /**
    * Decides a pending tool permission; its awaited duration is the
    * waiting_permission window. Defaults to deny (fail-closed) when omitted.
@@ -378,6 +385,7 @@ export class AgentHost implements EngineAdapter {
   readonly #probeFn: () => Promise<ProbeOutcome>;
   readonly #now: () => string;
   readonly #nowMs: () => number;
+  readonly #readTasklist: (sessionId: string) => Promise<TasklistReadResult>;
   /** setInterval handle for the TTL GC sweep, cleared in close(). null
    *  between construction and run() (sweep doesn't start until run). */
   #gcTimer: ReturnType<typeof setInterval> | null = null;
@@ -432,6 +440,15 @@ export class AgentHost implements EngineAdapter {
    * exact repeat, never the time/token throttle used for child-task progress.
    */
   #lastTasklistJson: string | null = null;
+  /** task tool_use id -> source session. The persisted task files are written
+   * after the assistant tool_use message, so a refresh is armed here and
+   * consumed only by the matching user tool_result or reconciled at the turn
+   * boundary. Entries never outlive their turn/context epoch. */
+  readonly #pendingTasklistRefreshes = new Map<string, string>();
+  /** Future Task* sibling warnings are deliberately once per wrapper host:
+   * enough to make a new compatibility surface visible, without drowning the
+   * operator while it awaits classification. */
+  readonly #warnedUnknownTasklistToolNames = new Set<string>();
 
   /** Latest Claude Code status meta (#16), stamped into state_change ext:
    *  active model, working directory, context-window usage, and per-window
@@ -587,6 +604,7 @@ export class AgentHost implements EngineAdapter {
     this.#probeFn = options.probeFn ?? runClaudeProbe;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
+    this.#readTasklist = options.readTasklist ?? readClaudeTasklist;
     this.#warn =
       options.warn ?? ((message) => process.stderr.write(`${message}\n`));
     // ADR-0039 F9 追補: prefer the runner-transported catalog so fresh
@@ -1025,7 +1043,11 @@ export class AgentHost implements EngineAdapter {
       });
     }
     this.#pendingUploads.clear();
-    await this.#query?.interrupt();
+    try {
+      await this.#query?.interrupt();
+    } finally {
+      await this.#reconcilePendingTasklistRefreshes("interrupt");
+    }
   }
 
   /** Switch the model for subsequent turns (#54, ADR-0020). `value` accepts
@@ -1387,8 +1409,19 @@ export class AgentHost implements EngineAdapter {
     for await (const message of session) {
       const id = sdkMessageToSessionId(message);
       if (id !== null && id !== this.#sessionId) {
+        const hadPriorSession = this.#sessionId !== null;
+        // A result from the old conversation must never refresh the new
+        // session's directory after a fork/rebind.
+        this.#pendingTasklistRefreshes.clear();
         this.#sessionId = id;
         this.#options.onSessionId?.(id);
+        // A fork/rebind must never leave the old session's list visible under
+        // the new session. Initial init deliberately does not hydrate: task
+        // restore is not a resume contract, but an already-emitted list must
+        // be reconciled immediately when its source session changes.
+        if (hadPriorSession && this.#lastTasklistJson !== null) {
+          await this.#refreshTasklist(id, { clearOnFailure: true });
+        }
       }
 
       // Capture Claude Code status meta (#16) before deriving state, so the
@@ -1431,6 +1464,7 @@ export class AgentHost implements EngineAdapter {
         this.#fastMode = resultMeta.fast_mode;
       }
       if (message.type === "result") {
+        await this.#reconcilePendingTasklistRefreshes("result");
         void this.#refreshContextUsage();
         void this.#refreshRateLimits();
         // Turn-boundary retry for supportedModels() when init-time fetch or
@@ -1464,9 +1498,10 @@ export class AgentHost implements EngineAdapter {
           `[kaoiro] unrecognized task_* message: subtype=${(message as { subtype: string }).subtype}`,
         );
       }
-      for (const tasklistEvent of sdkMessageToTasklists(message)) {
-        this.#applyTasklistEvent(tasklistEvent);
+      for (const tasklistTrigger of sdkMessageToTasklistTriggers(message)) {
+        this.#recordTasklistTrigger(tasklistTrigger);
       }
+      await this.#refreshTasklistAfterToolResults(message);
       // Compaction / conversation-reset notices (phase-28 A1, #168). Emitted
       // as their own log line rather than folded into sdkMessageToLogs: that
       // mapper is shared with resume history reconstruction (history.ts), and
@@ -1481,6 +1516,9 @@ export class AgentHost implements EngineAdapter {
           compact.kind === "compact_boundary" ||
           compact.kind === "conversation_reset"
         ) {
+          if (compact.kind === "conversation_reset") {
+            await this.#reconcilePendingTasklistRefreshes("conversation_reset");
+          }
           this.#invalidateContextEpoch(compact.tokens);
         }
       }
@@ -1507,6 +1545,10 @@ export class AgentHost implements EngineAdapter {
         this.#toolNames.clear();
       }
     }
+    // A stream can end without a result (for example when its process dies).
+    // No later turn can reuse this host's correlation ids, so discard only for
+    // memory hygiene; do not read an unavailable source during teardown.
+    this.#pendingTasklistRefreshes.clear();
   }
 
   async #canUseTool(
@@ -2504,12 +2546,81 @@ export class AgentHost implements EngineAdapter {
   /** Converts one whole-list source update into task_type=tasklist. The
    * entity deliberately never emits kind=completed: an all-completed or empty
    * list remains inspectable until the parent session disconnects. */
-  #applyTasklistEvent(event: TasklistEvent): void {
-    if (event.kind === "invalid") {
-      this.#warn(`[kaoiro] ${event.reason} — tasklist update dropped`);
+  #recordTasklistTrigger(trigger: TasklistTrigger): void {
+    if (trigger.kind === "unrecognized") {
+      if (this.#warnedUnknownTasklistToolNames.has(trigger.name)) return;
+      this.#warnedUnknownTasklistToolNames.add(trigger.name);
+      this.#warn(
+        `[kaoiro] unrecognized tasklist-like tool_use: name=${trigger.name} — tasklist may be stale`,
+      );
       return;
     }
-    this.#emitTasklist(event.items);
+    if (trigger.kind === "updated") {
+      this.#emitTasklist(trigger.items);
+      return;
+    }
+    if (trigger.kind === "invalid") {
+      this.#warn(`[kaoiro] ${trigger.reason} — tasklist update dropped`);
+      return;
+    }
+    if (this.#sessionId === null) {
+      this.#warn("[kaoiro] tasklist refresh skipped: Claude session_id is missing");
+      return;
+    }
+    this.#pendingTasklistRefreshes.set(trigger.toolUseId, this.#sessionId);
+  }
+
+  /** A result, reset, or completed interrupt ends the correlation epoch even
+   * when the SDK omitted a tool_result. Re-read once first: a tool may have
+   * committed its file before the stream ended, while an unexecuted tool just
+   * produces a deduplicated snapshot. */
+  async #reconcilePendingTasklistRefreshes(
+    boundary: "result" | "conversation_reset" | "interrupt",
+  ): Promise<void> {
+    const count = this.#pendingTasklistRefreshes.size;
+    if (count === 0) return;
+    const sessionId = this.#sessionId;
+    // Clear before awaiting I/O, so no later message can join a reused id to
+    // this completed turn even if the source read fails or is slow.
+    this.#pendingTasklistRefreshes.clear();
+    if (sessionId !== null) await this.#refreshTasklist(sessionId);
+    this.#warn(
+      `[kaoiro] ${count} pending tasklist refresh join(s) reconciled at ${boundary}`,
+    );
+  }
+
+  /** Consumes all matching tool results in this SDK message and refreshes at
+   * most once. Parallel TaskCreate/TaskUpdate calls commonly settle together;
+   * one post-execution whole-list read is enough for their LWW envelope. */
+  async #refreshTasklistAfterToolResults(message: SDKMessage): Promise<void> {
+    const completedSessions = new Set<string>();
+    for (const toolUseId of sdkMessageToToolResultIds(message)) {
+      const sessionId = this.#pendingTasklistRefreshes.get(toolUseId);
+      if (sessionId === undefined) continue;
+      this.#pendingTasklistRefreshes.delete(toolUseId);
+      completedSessions.add(sessionId);
+    }
+    if (this.#sessionId !== null && completedSessions.has(this.#sessionId)) {
+      await this.#refreshTasklist(this.#sessionId);
+    }
+  }
+
+  async #refreshTasklist(
+    sessionId: string,
+    options: { clearOnFailure?: boolean } = {},
+  ): Promise<void> {
+    try {
+      const event = await this.#readTasklist(sessionId);
+      if (event.kind === "invalid") {
+        this.#warn(`[kaoiro] ${event.reason} — tasklist update dropped`);
+        if (options.clearOnFailure) this.#emitTasklist([]);
+        return;
+      }
+      this.#emitTasklist(event.items);
+    } catch (error: unknown) {
+      this.#warn(`[kaoiro] cannot read Claude tasklist: ${String(error)}`);
+      if (options.clearOnFailure) this.#emitTasklist([]);
+    }
   }
 
   #emitTasklist(sourceItems: readonly TasklistSourceItem[]): void {
