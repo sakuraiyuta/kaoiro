@@ -13,10 +13,35 @@ defmodule KaoiroServer.AuthTest do
     Application.delete_env(:kaoiro_server, :runner_tokens)
     Application.delete_env(:kaoiro_server, :client_tokens)
 
+    # issue #198 admin tests put an allow-list file and OAuth credentials in
+    # place. `OAuthAllowlistFixture` states the CALLER clears the path, and
+    # without it a deleted tmp path (and live credentials) leak into every
+    # later module through global Application env — the fixture file is gone
+    # by then, so the leak reads as "allow-list unreadable" rather than as
+    # this module's doing (ふじ should 2, issue #198).
+    oauth_keys = [
+      :oauth_allowlist_path,
+      :oauth_google_client_id,
+      :oauth_google_client_secret,
+      :oauth_github_client_id,
+      :oauth_github_client_secret
+    ]
+
+    original_oauth = Map.new(oauth_keys, &{&1, Application.get_env(:kaoiro_server, &1)})
+    Enum.each(oauth_keys, &Application.delete_env(:kaoiro_server, &1))
+
     on_exit(fn ->
       Application.delete_env(:kaoiro_server, :wrapper_tokens)
       Application.delete_env(:kaoiro_server, :runner_tokens)
       Application.delete_env(:kaoiro_server, :client_tokens)
+
+      Enum.each(oauth_keys, fn key ->
+        case Map.fetch!(original_oauth, key) do
+          nil -> Application.delete_env(:kaoiro_server, key)
+          value -> Application.put_env(:kaoiro_server, key, value)
+        end
+      end)
+
       # issue #138 tests flip :env to :prod; restore it so later tests keep
       # exercising the ordinary :test dev-convenience path.
       Application.put_env(:kaoiro_server, :env, original_env)
@@ -200,9 +225,26 @@ defmodule KaoiroServer.AuthTest do
     end
 
     test "未知 role のエントリは拒否される" do
-      Application.put_env(:kaoiro_server, :client_tokens, "tok-x:admin")
+      # `admin` was this fixture's unknown-role word until issue #198 made
+      # it real; `root` is deliberately a word no role table defines, so
+      # the case still tests rejection rather than a stale spelling.
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-x:root")
 
       assert {:error, :unauthorized} = Auth.client_role("tok-x")
+    end
+
+    test "admin role のトークンは admin に解決する (issue #198)" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-admin:admin")
+
+      assert {:ok, :admin} = Auth.client_role("tok-admin")
+    end
+
+    test "role 語の綴り違いは viewer へ降格せず拒否される (issue #198)" do
+      # The bootstrap path is config text, so a typo must fail closed
+      # rather than silently authenticate at the weakest role.
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-typo:admn")
+
+      assert {:error, :unauthorized} = Auth.client_role("tok-typo")
     end
 
     test "name 付きエントリでも role 解決は変わらない (issue #197)" do
@@ -277,6 +319,17 @@ defmodule KaoiroServer.AuthTest do
       assert map_size(map) == 2
     end
 
+    test "admin も map に残る (issue #198)" do
+      # この map は `Users.all_with_role/1` の role join 元。admin が
+      # 落ちると token 経路の admin が user directory から消え、ADR-0050
+      # D2 の「admin は隠蔽できない」に反する (ふじ should 1)。
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-admin:admin")
+
+      map = Auth.client_token_hash_role_map()
+
+      assert Map.fetch(map, Auth.client_token_hash("tok-admin")) == {:ok, :admin}
+    end
+
     test "raw token / socket_id(token) はどちらも key に現れない" do
       Application.put_env(:kaoiro_server, :client_tokens, "super-secret-token:operator")
 
@@ -343,6 +396,76 @@ defmodule KaoiroServer.AuthTest do
       assert log =~ "fail-closed in prod"
       assert log =~ "KAOIRO_RUNNER_TOKENS unset: runner connections are rejected"
       refute log =~ "dev mode"
+    end
+  end
+
+  describe "admin 不在の起動警告 (issue #198, ADR-0050 D2)" do
+    import ExUnit.CaptureLog
+
+    test "どちらの経路にも admin が居なければ警告する" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
+      assert log =~ "no usable admin"
+    end
+
+    test "token 経路に admin が居れば警告しない" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-admin:admin")
+
+      log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
+      refute log =~ "no usable admin"
+    end
+
+    defp enable_provider("github") do
+      Application.put_env(:kaoiro_server, :oauth_github_client_id, "gh-id")
+      Application.put_env(:kaoiro_server, :oauth_github_client_secret, "gh-secret")
+    end
+
+    defp enable_provider("google") do
+      Application.put_env(:kaoiro_server, :oauth_google_client_id, "g-id")
+      Application.put_env(:kaoiro_server, :oauth_google_client_secret, "g-secret")
+    end
+
+    test "有効な provider の許可リストに admin が居れば警告しない" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+      enable_provider("github")
+      KaoiroServer.OAuthAllowlistFixture.put_allowlist("github:ao:admin\n")
+
+      log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
+      refute log =~ "no usable admin"
+    end
+
+    test "admin が無効な provider にしか居なければ警告する" do
+      # credentials の無い provider の行は誰にもログインを許さないので、
+      # admin として数えると「実際には 0 人」を取り逃す (ふじ must-fix 1)。
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+      KaoiroServer.OAuthAllowlistFixture.put_allowlist("github:ao:admin\n")
+
+      log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
+      assert log =~ "no usable admin"
+    end
+
+    test "有効 provider の operator と無効 provider の admin が混在しても警告する" do
+      # 有効 provider が存在することで、無効 provider の admin が隠れて
+      # しまう経路。ふじ が実測した組み合わせをそのまま固定する。
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+      enable_provider("google")
+
+      KaoiroServer.OAuthAllowlistFixture.put_allowlist(
+        "google:ao@example.com:operator\ngithub:ao:admin\n"
+      )
+
+      log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
+      assert log =~ "no usable admin"
+    end
+
+    test "role 語の綴り違いは admin と数えず、警告は出たままになる" do
+      # 綴り違いは認証も通らない。数えてしまうと、この警告を最も必要と
+      # する設定ミスに限って警告が消える、という逆の挙動になる。
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-x:admn")
+
+      log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
+      assert log =~ "no usable admin"
     end
   end
 end

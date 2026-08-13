@@ -750,6 +750,17 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp role_string(:operator), do: "operator"
   defp role_string(:viewer), do: "viewer"
+  # admin is a valid role, so it must not be dropped as an unknown one:
+  # the `nil` catch-all below discards the WHOLE entry (user_entry/1), and
+  # a missing clause here would silently remove every admin from the
+  # projection while operators and viewers came through.
+  #
+  # This is NOT ADR-0050 D2's non-hideability. D2 says an admin's OWN
+  # visibility cannot be restricted by the per-pair graph — nothing can be
+  # hidden from an admin. That is a different axis from whether users are
+  # projected to agents at all: `KAOIRO_EXPOSE_USERS_TO_AGENTS=false`
+  # legitimately hides every user, admins included.
+  defp role_string(:admin), do: "admin"
   defp role_string(_other), do: nil
 
   defp directory_entry(id, envelope, activity, peers) do

@@ -10,8 +10,8 @@ defmodule KaoiroServer.OAuthAllowlist do
   - `provider` — `google` | `github` | `nextcloud`
   - `identifier` — google: e-mail (compared lower-cased), github: login,
     nextcloud: user id (both compared verbatim)
-  - `role` — `viewer` | `operator`, optional, defaults to `viewer`
-    (the safe side)
+  - `role` — `viewer` | `operator` | `admin` (ADR-0050 D2), optional,
+    defaults to `viewer` (the safe side)
 
   Blank lines and lines whose first non-blank character is `#` are
   ignored. There is no trailing-comment syntax: a `#` anywhere else is
@@ -41,13 +41,18 @@ defmodule KaoiroServer.OAuthAllowlist do
 
   alias KaoiroServer.OAuth
 
-  @roles %{"viewer" => :viewer, "operator" => :operator}
+  # `admin` (ADR-0050 D2) rides the existing `provider:identifier:role`
+  # text form rather than a separate file or env, so `OAuthAllowlistWatcher`
+  # (issue #170) keeps detecting changes exactly as before and role stays
+  # on the two sources of truth it already had. A role word outside this
+  # map is a malformed line, skipped with a warning — never coerced.
+  @roles %{"viewer" => :viewer, "operator" => :operator, "admin" => :admin}
 
   @doc """
   Resolves an OAuth identity to its role, or `nil` when it is not on the
   allow-list (which is also what an unset/unreadable allow-list yields).
   """
-  @spec role_for(binary(), binary()) :: :viewer | :operator | nil
+  @spec role_for(binary(), binary()) :: :viewer | :operator | :admin | nil
   def role_for(provider, identifier)
       when is_binary(provider) and is_binary(identifier) and identifier != "" do
     Map.get(snapshot(), {provider, normalize(provider, identifier)})
@@ -78,7 +83,7 @@ defmodule KaoiroServer.OAuthAllowlist do
   from the configured one.
   """
   @spec snapshot(path: binary(), log?: boolean()) :: %{
-          {binary(), binary()} => :viewer | :operator
+          {binary(), binary()} => :viewer | :operator | :admin
         }
   def snapshot(opts \\ []) do
     log? = Keyword.get(opts, :log?, true)

@@ -1,7 +1,8 @@
 defmodule KaoiroServerWeb.ClientSocket do
   @moduledoc """
   Socket for client connections (public protocol, ADR-0009: Channels only,
-  vsn=2.0.0). Access control resolves a viewer/operator role from one of
+  vsn=2.0.0). Access control resolves an admin/operator/viewer role
+  (ADR-0050 D2) from one of
   two credentials: a shared token (ADR-0011, the ADR-0005 whitelist made
   concrete) or an OAuth identity checked against the allow-list
   (ADR-0042). Either one is resolved, in order, from: a short-lived
@@ -81,7 +82,7 @@ defmodule KaoiroServerWeb.ClientSocket do
   `{:token_fingerprint, fp}` is what an open socket carries, resolved by
   digest so the token stays out of process state.
   """
-  @spec role_for(term()) :: :viewer | :operator | nil
+  @spec role_for(term()) :: :viewer | :operator | :admin | nil
   def role_for({:token, token}), do: unwrap(Auth.client_role(token))
 
   def role_for({:token_fingerprint, fingerprint}),

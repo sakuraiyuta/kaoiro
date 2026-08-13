@@ -2564,6 +2564,30 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
              end)
     end
 
+    test "admin の user は role \"admin\" のまま届く (issue #198)" do
+      # producer 側の `role_string(:admin)` を固定する (ふじ should 1)。
+      # これが無いと catch-all の nil で entry ごと落ち、admin だけが
+      # users から消える。auth 側の hash-role map テストと wrapper/core の
+      # narrow テストは両端を別々に測っているので、この 1 本が無いと
+      # `role_string(:admin)` を削っても全部 green のままになる。
+      Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
+      put_allowlist("github:dir-users-admin:admin\n")
+
+      user =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-admin"}, "user", "Admin")
+
+      %{"users" => users} = request_directory("test.dir-users-admin")
+
+      assert Enum.any?(users, fn u ->
+               u == %{
+                 "id" => user.id,
+                 "kind" => "user",
+                 "display_name" => "Admin",
+                 "role" => "admin"
+               }
+             end)
+    end
+
     test "display_name が 64 文字超・制御文字混入の user は entry ごと省略される (issue #197 段階2 ふじ M5 レビュー指摘)" do
       Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
 

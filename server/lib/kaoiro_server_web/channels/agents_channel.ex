@@ -172,6 +172,18 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
   # a path-separator or dot injection cannot ride into the wrapper's
   # `--resume` arg or the F4 same-session lock via server → runner.
+  # Roles that hold operator capabilities (ADR-0050 D2: admin > operator >
+  # viewer). Every operator-vs-viewer gate in this module reads this list
+  # instead of comparing to `:operator`, because the gates are spread over
+  # a dozen sites — snapshot keys, six `handle_out` pushes, the inbound
+  # `require_operator/1`, the envelope allow-list, and the reset guard.
+  # Enumerating them one by one is how a new role silently loses half its
+  # visibility: adding admin to `require_operator/1` alone would have let
+  # an admin issue every operator command while receiving none of the
+  # operator-only pushes. A module attribute (not a function) so it stays
+  # usable in guards.
+  @operator_capable_roles [:operator, :admin]
+
   @session_id_pattern ~r/^[A-Za-z0-9-]{1,128}$/
 
   # Display-name bound shared by `apply_custom_name/2` (spawn-time, #22)
@@ -239,7 +251,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # `type=task` correctly for the LIVE broadcast path;
     # see handle_out("envelope", ...) below — this key mirrors the same
     # policy for the snapshot path specifically).
-    tasks = if role == :operator, do: TaskStates.snapshot(), else: %{}
+    tasks = if role in @operator_capable_roles, do: TaskStates.snapshot(), else: %{}
 
     push(socket, "snapshot", %{"agents" => agents, "tasks" => tasks})
 
@@ -248,7 +260,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # sensitive, #46) or the offline-agent directory (ADR-0030 D10). The
     # directory carries persona (+ operator-picked custom name) so the client
     # can render offline agents' tiles for the restore UI (ADR-0030 D5).
-    if role == :operator do
+    if role in @operator_capable_roles do
       # `clear_watermarks` (issue #109) rides the same push as a
       # display-only hint (agent_id => ISO ts) so a live dashboard can
       # show "cleared at ..." without a follow-up round trip. The
@@ -301,7 +313,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # (ADR-0021) instead of letting it leak the session_id pointer.
   @impl true
   def handle_out("history_cleared", payload, socket) do
-    if socket.assigns[:role] == :operator do
+    if socket.assigns[:role] in @operator_capable_roles do
       push(socket, "history_cleared", payload)
     end
 
@@ -325,7 +337,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # reconnecting client sees an identical shape on both paths.
   @impl true
   def handle_out("directory", %{"entries" => raw_entries}, socket) do
-    if socket.assigns[:role] == :operator do
+    if socket.assigns[:role] in @operator_capable_roles do
       push(socket, "directory", %{"entries" => join_directory_entries(raw_entries)})
     end
 
@@ -338,7 +350,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # (themselves operator-only) rebuild it.
   @impl true
   def handle_out("history_reset", payload, socket) do
-    if socket.assigns[:role] == :operator do
+    if socket.assigns[:role] in @operator_capable_roles do
       push(socket, "history_reset", payload)
     end
 
@@ -347,7 +359,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   @impl true
   def handle_out("history_replay_complete", payload, socket) do
-    if socket.assigns[:role] == :operator do
+    if socket.assigns[:role] in @operator_capable_roles do
       push(socket, "history_replay_complete", payload)
     end
 
@@ -362,7 +374,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # completion boundaries that bracket it.
   @impl true
   def handle_out("history_replay_envelope", payload, socket) do
-    if socket.assigns[:role] == :operator do
+    if socket.assigns[:role] in @operator_capable_roles do
       push(socket, "history_replay_envelope", payload)
     end
 
@@ -390,7 +402,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
              "session_reset_completed",
              "session_reset_failed"
            ] do
-    if socket.assigns[:role] == :operator do
+    if socket.assigns[:role] in @operator_capable_roles do
       push(socket, event, payload)
     end
 
@@ -2021,7 +2033,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # is omitted entirely (broadcast skipped, removed from snapshot); any
   # new envelope type defaults to dropped for viewers until a `:viewer`
   # clause explicitly opts it in (fail-closed).
-  defp sanitize_envelope_for(:operator, envelope), do: {:ok, envelope}
+  # admin is 全可視 and MUST NOT be hideable (ADR-0050 D2), so it passes
+  # here exactly as operator does. When per-pair permissions (issue #199)
+  # start narrowing what an OPERATOR receives, admin must be split back
+  # out of this clause rather than narrowed along with it.
+  defp sanitize_envelope_for(role, envelope) when role in @operator_capable_roles,
+    do: {:ok, envelope}
 
   # state_change is the viewer's only direct grid signal; `ext` carries
   # cwd / model / context / rate_limits / slash_commands and any future
@@ -2112,7 +2129,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp require_operator(%Phoenix.Socket{} = socket),
     do: require_operator(current_role(socket))
 
-  defp require_operator(:operator), do: :ok
+  # The name still says `operator` because it gates the operator-only
+  # inbound set (~22 types, docs/specs/auth-and-authz.md) and that set is
+  # what its call sites mean; admin passes as a superset (ADR-0050 D2).
+  # Anything not in the list stays fail-closed.
+  defp require_operator(role) when role in @operator_capable_roles, do: :ok
   defp require_operator(_role), do: {:error, :forbidden}
 
   # A resolved role that no longer matches the snapshot also invalidates
@@ -2263,8 +2284,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   #
   # A missing agent_id passes through; the normal `fetch_agent_id/1`
   # inside relay/5 surfaces the correct error.
-  defp guard_against_reset_pending(:operator, %{"agent_id" => agent_id})
-       when is_binary(agent_id),
+  # admin is guarded too, not exempted: this is a RESTRICTION rather than
+  # a capability, and an admin instruction landing mid-reset causes the
+  # same inconsistency the guard exists to prevent (ADR-0050 D2 grants
+  # admin full authority, not the right to bypass ordering guarantees).
+  defp guard_against_reset_pending(role, %{"agent_id" => agent_id})
+       when role in @operator_capable_roles and is_binary(agent_id),
        do: SessionResets.guard_instruction(agent_id)
 
   defp guard_against_reset_pending(_role, _payload), do: :ok

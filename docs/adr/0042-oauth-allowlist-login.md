@@ -102,7 +102,12 @@ ADR-0005 は本線を「OAuth + RBAC、プロトタイプは許可メールの
 
 ### Neutral
 
-- RBAC の役割粒度は operator / viewer の現行 2 値を維持。細分化
+- ~~RBAC の役割粒度は operator / viewer の現行 2 値を維持。細分化~~
+  **撤回 (2026-08-14、issue #198)。** role は admin / operator / viewer
+  の 3 値になった ([ADR-0050](0050-principal-model-and-graded-access-control.md)
+  D2)。許可リストのテキスト形式は `provider:identifier[:role]` のまま
+  で、role 語に `admin` が加わっただけなので、本 ADR の形式と issue #170
+  の watcher の前提は変わらない。以下は撤回前の記述: 細分化
   (approver 等) は将来。
 - 監査ログ・マルチテナント隔離は本 ADR のスコープ外 (auth-and-authz
   Known gaps のまま)。

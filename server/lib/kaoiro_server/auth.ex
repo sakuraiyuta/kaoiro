@@ -6,7 +6,8 @@ defmodule KaoiroServer.Auth do
 
   - `:wrapper_tokens` — `"agent_id:token,agent_id:token"`
   - `:runner_tokens` — `"host_id:token,host_id:token"` (ADR-0023)
-  - `:client_tokens` — `"token:role,..."` (role: `viewer` | `operator`)
+  - `:client_tokens` — `"token:role,..."`
+    (role: `viewer` | `operator` | `admin`, ADR-0050 D2)
 
   The unset/empty behaviour differs by socket:
 
@@ -144,7 +145,8 @@ defmodule KaoiroServer.Auth do
   end
 
   @doc """
-  Resolves a client token to its role (`:viewer` | `:operator`), or
+  Resolves a client token to its role (`:viewer` | `:operator` |
+  `:admin`), or
   `{:error, :unauthorized}` when it matches no configured token. With no
   client tokens configured at all, every connection is rejected
   (fail-closed, issue #28) — never granted operator.
@@ -348,7 +350,7 @@ defmodule KaoiroServer.Auth do
     if parse_client_pairs(Application.get_env(:kaoiro_server, :client_tokens)) == %{} do
       Logger.warning(
         "KAOIRO_CLIENT_TOKENS unset: client connections are rejected " <>
-          "(no token can authenticate). Set it to grant viewer/operator " <>
+          "(no token can authenticate). Set it to grant viewer/operator/admin " <>
           "access (specs/threat-model.md)."
       )
     end
@@ -363,7 +365,58 @@ defmodule KaoiroServer.Auth do
       Logger.warning("KAOIRO_RUNNER_TOKENS unset: " <> unset_wrapper_or_runner_message("runner"))
     end
 
+    warn_no_admin()
+
     KaoiroServer.OAuth.warn_config()
+  end
+
+  # issue #198 / ADR-0050 D2. The additive model starts with zero admins
+  # and zero edges, so config is the ONLY entry point for the first one;
+  # a deployment without an admin has no way to edit the permission graph
+  # once issue #199 lands. Surface it at boot rather than at the moment
+  # someone needs it and finds themselves locked out.
+  #
+  # The token count routes through `parse_role/1` rather than comparing
+  # the raw string. For every input reaching it today the two agree —
+  # `parse_client_pairs/1` has already trimmed, so `"admn"` fails both —
+  # so this is NOT load-bearing right now and no test distinguishes them.
+  # It is here to keep "who counts as admin" derived from the one function
+  # that decides whether a token AUTHENTICATES as admin: an alias or a
+  # normalization added there stays reflected in this count for free,
+  # instead of leaving a second spelling table to remember.
+  #
+  # Counts only. The OAuth allow-list holds personal data (identifiers)
+  # and must never reach the log — nothing derived from its ENTRIES is
+  # emitted here, only whether the count is zero.
+  defp warn_no_admin do
+    token_admins =
+      Application.get_env(:kaoiro_server, :client_tokens)
+      |> parse_client_pairs()
+      |> Enum.count(fn {_token, %{role: role}} -> parse_role(role) == :admin end)
+
+    # Gated on the provider actually being configured (ふじ must-fix 1,
+    # issue #198): an allow-list line grants nothing when its provider has
+    # no credentials, so counting it hides a genuinely admin-less
+    # deployment. The measured case: GitHub OAuth disabled, the only admin
+    # on a `github:` line, Google enabled with operators — zero admin can
+    # log in, and the warning stayed silent because the entry was counted.
+    allowlist_admins =
+      KaoiroServer.OAuthAllowlist.snapshot(log?: false)
+      |> Enum.count(fn {{provider, _identifier}, role} ->
+        role == :admin and KaoiroServer.OAuth.enabled?(provider)
+      end)
+
+    if token_admins + allowlist_admins == 0 do
+      Logger.warning(
+        "no usable admin: neither KAOIRO_CLIENT_TOKENS nor the allow-list " <>
+          "of any ENABLED OAuth provider grants the admin role (ADR-0050 " <>
+          "D2). An admin line on a provider without credentials does not " <>
+          "count — nobody can log in through it. Permission-graph editing " <>
+          "will have no entry point once per-pair permissions land."
+      )
+    end
+
+    :ok
   end
 
   defp unset_wrapper_or_runner_message(entity) do
@@ -393,6 +446,12 @@ defmodule KaoiroServer.Auth do
 
   defp parse_role("viewer"), do: :viewer
   defp parse_role("operator"), do: :operator
+  # admin is the bootstrap path ADR-0050 D2 requires: the additive
+  # permission model starts with zero admins and zero edges, so a role
+  # declared in config is the only way to create the first one. Unknown
+  # role words keep falling through to nil (fail-closed) — a typo'd
+  # "admn" must not authenticate at all rather than degrade to viewer.
+  defp parse_role("admin"), do: :admin
   defp parse_role(_), do: nil
 
   defp matches?(expected, presented) do
@@ -419,7 +478,7 @@ defmodule KaoiroServer.Auth do
 
   defp parse_pairs(_raw), do: %{}
 
-  # "token:role[:name]" -> %{token => %{role: "operator"|"viewer", name:
+  # "token:role[:name]" -> %{token => %{role: "admin"|"operator"|"viewer", name:
   # binary | nil}}. Kept separate from parse_pairs/1 (shared by
   # wrapper_tokens/runner_tokens, which have no name concept) so a ':'
   # inside a configured name cannot desync those pair lists (issue #197
