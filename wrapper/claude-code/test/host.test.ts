@@ -744,13 +744,26 @@ describe("AgentHost — query injection", () => {
       chain = queued.catch(() => {});
       return queued;
     };
-    const { queryFn, injected } = contextQueryFn(
-      [{ totalTokens: 150000, maxTokens: 200000, percentage: 75 }],
-      async function* () {
-        yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 120));
-      },
-    );
+    const injected: string[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        // Drive a terminal result for EACH input. This matters after #246:
+        // the host intentionally refuses to yield the next input before the
+        // current turn's result, so a fake stream that only consumes input
+        // without ever ending a turn would be an invalid test model.
+        for await (const turn of args.prompt) {
+          const content = turn.message.content;
+          injected.push(typeof content === "string" ? content : "");
+          yield result("success", { result: "ok" });
+          if (injected.length === 2) return;
+        }
+      }
+      return asQuery(
+        gen(),
+        async () => {},
+        async () => ({ totalTokens: 150000, maxTokens: 200000, percentage: 75 }),
+      );
+    });
     host = new AgentHost(config, {
       onState: () => {},
       queryFn,
@@ -916,6 +929,7 @@ describe("AgentHost — query injection", () => {
 
   it("error result は onTurnEnd に conversationIds=[](未タグ) + terminal_reason/error_detail を渡す (issue #131)", async () => {
     const turnEnds: {
+      turnToken?: string;
       conversationIds: readonly string[];
       error?: { reason?: string; detail?: string };
     }[] = [];
@@ -953,6 +967,7 @@ describe("AgentHost — query injection", () => {
 
   it("並存する複数 inter-agent injection は各ターンの conversationIds だけを解決する (issue #131 must-fix 1)", async () => {
     const turnEnds: {
+      turnToken?: string;
       conversationIds: readonly string[];
       error?: { reason?: string; detail?: string };
     }[] = [];
@@ -989,14 +1004,17 @@ describe("AgentHost — query injection", () => {
     host.close();
     await done;
 
-    expect(turnEnds).toEqual([
-      { conversationIds: ["cnv-a"], error: { detail: "boom" } },
-      { conversationIds: ["cnv-b"] },
+    expect(turnEnds.map((entry) => entry.conversationIds)).toEqual([
+      ["cnv-a"],
+      ["cnv-b"],
     ]);
+    expect(turnEnds[0]?.error).toEqual({ detail: "boom" });
+    expect(turnEnds.every((entry) => typeof entry.turnToken === "string")).toBe(true);
+    expect(new Set(turnEnds.map((entry) => entry.turnToken)).size).toBe(2);
   });
 
   it("1回の send() に複数 cid を渡すと1ターンとして onTurnEnd に全件まとめて渡す (issue #221 段階3, 合流turn)", async () => {
-    const turnEnds: { conversationIds: readonly string[] }[] = [];
+    const turnEnds: { turnToken?: string; conversationIds: readonly string[] }[] = [];
     // scriptedQuery() ignores args.prompt entirely (see its own doc), so
     // #input()'s per-turn tag shifting never runs under it — same reason
     // the "並存する複数..." test above uses a prompt-draining queryFn
@@ -1020,7 +1038,284 @@ describe("AgentHost — query injection", () => {
     host.close();
     await done;
 
-    expect(turnEnds).toEqual([{ conversationIds: ["cnv-p", "cnv-q", "cnv-r"] }]);
+    expect(turnEnds.map((entry) => entry.conversationIds)).toEqual([
+      ["cnv-p", "cnv-q", "cnv-r"],
+    ]);
+    expect(turnEnds[0]?.turnToken).toEqual(expect.any(String));
+  });
+
+  it("issue #246 negative control: SDK の eager pull で B を A の result 前に受け取らない", async () => {
+    const turnEnds: { turnToken?: string; conversationIds: readonly string[] }[] = [];
+    // This fake SDK deliberately asks the input generator for B before it
+    // yields A's result. Current code permits it and overwrites A's mutable
+    // CID tag with B. The target barrier must keep `second` pending until the
+    // first result has been processed, then let this generator yield B.
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = args.prompt[Symbol.asyncIterator]();
+        const first = await input.next();
+        expect(first.done).toBe(false);
+        const second = input.next();
+        let secondArrivedBeforeFirstResult = false;
+        await Promise.race([
+          second.then(() => {
+            secondArrivedBeforeFirstResult = true;
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 20)),
+        ]);
+        expect(secondArrivedBeforeFirstResult).toBe(false);
+
+        yield result("success", { result: "A done" });
+        const secondResult = await second;
+        expect(secondResult.done).toBe(false);
+        yield result("success", { result: "B done" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"]);
+    await host.send("B", undefined, ["cid-b"]);
+    host.close();
+    await done;
+
+    expect(turnEnds.map((entry) => entry.conversationIds)).toEqual([
+      ["cid-a"],
+      ["cid-b"],
+    ]);
+    expect(turnEnds.every((entry) => typeof entry.turnToken === "string")).toBe(true);
+    expect(new Set(turnEnds.map((entry) => entry.turnToken)).size).toBe(2);
+  });
+
+  it("issue #246: IA(A) → operator → IA(B) は token と CID を各 turn に正確に保つ", async () => {
+    const turnEnds: {
+      turnToken?: string;
+      conversationIds: readonly string[];
+    }[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) {
+          yield result("success", { result: "ok" });
+        }
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("IA A", undefined, ["cid-a"], "ia-a");
+    await host.send("operator", undefined, undefined, "operator");
+    await host.send("IA B", undefined, ["cid-b"], "ia-b");
+    host.close();
+    await done;
+
+    expect(turnEnds).toEqual([
+      { turnToken: "ia-a", conversationIds: ["cid-a"] },
+      { turnToken: "operator", conversationIds: [] },
+      { turnToken: "ia-b", conversationIds: ["cid-b"] },
+    ]);
+  });
+
+  it("issue #246: conversation_reset 単体は barrier を開かず後続 ResultMessage が A を終端する", async () => {
+    const turnEnds: unknown[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = args.prompt[Symbol.asyncIterator]();
+        await input.next();
+        const second = input.next();
+        yield msg({ type: "conversation_reset", new_conversation_id: "new" });
+        let bArrivedBeforeAResult = false;
+        await Promise.race([
+          second.then(() => {
+            bArrivedBeforeAResult = true;
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 20)),
+        ]);
+        expect(bArrivedBeforeAResult).toBe(false);
+        yield result("error_during_execution", { errors: ["A reset error"] });
+        expect((await second).done).toBe(false);
+        yield result("success", { result: "B done" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"], "reset-a");
+    await host.send("B", undefined, ["cid-b"], "reset-b");
+    await done;
+    expect(turnEnds).toEqual([
+      {
+        turnToken: "reset-a",
+        conversationIds: ["cid-a"],
+        error: { detail: "A reset error" },
+      },
+      { turnToken: "reset-b", conversationIds: ["cid-b"] },
+    ]);
+  });
+
+  it("issue #246: interrupt ACK 後の buffered A result まで B を yield せず token を保つ", async () => {
+    const turnEnds: unknown[] = [];
+    let armed!: () => void;
+    const armedPromise = new Promise<void>((resolve) => {
+      armed = resolve;
+    });
+    let acknowledgeInterrupt!: () => void;
+    const interruptAcknowledged = new Promise<void>((resolve) => {
+      acknowledgeInterrupt = resolve;
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = args.prompt[Symbol.asyncIterator]();
+        await input.next();
+        armed();
+        await interruptAcknowledged;
+        const second = input.next();
+        let bArrivedBeforeAResult = false;
+        await Promise.race([
+          second.then(() => {
+            bArrivedBeforeAResult = true;
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 20)),
+        ]);
+        expect(bArrivedBeforeAResult).toBe(false);
+        yield result("error_during_execution", { errors: ["interrupted A"] });
+        expect((await second).done).toBe(false);
+        yield result("success", { result: "B done" });
+      }
+      // This mimics the SDK control ACK only. The generator deliberately
+      // emits A's buffered ResultMessage after that ACK.
+      return asQuery(gen(), async () => acknowledgeInterrupt());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"], "interrupt-a");
+    await armedPromise;
+    await host.send("B", undefined, ["cid-b"], "interrupt-b");
+    await host.interrupt();
+    await done;
+    expect(turnEnds).toEqual([
+      {
+        turnToken: "interrupt-a",
+        conversationIds: ["cid-a"],
+        error: { detail: "interrupted A" },
+      },
+      { turnToken: "interrupt-b", conversationIds: ["cid-b"] },
+    ]);
+  });
+
+  it("issue #246: stream EOF は active と未 yield queue の全 token を一度ずつ終端する", async () => {
+    const turnEnds: unknown[] = [];
+    let armed!: () => void;
+    const armedPromise = new Promise<void>((resolve) => {
+      armed = resolve;
+    });
+    let endStream!: () => void;
+    const streamHeld = new Promise<void>((resolve) => {
+      endStream = resolve;
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        await args.prompt[Symbol.asyncIterator]().next();
+        armed();
+        await streamHeld;
+        // EOF: no result for A, and B/C are still in AgentHost.#queue.
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"], "eof-a");
+    await armedPromise;
+    await host.send("B", undefined, ["cid-b"], "eof-b");
+    await host.send("C", undefined, ["cid-c"], "eof-c");
+    endStream();
+    await done;
+    expect(turnEnds).toEqual([
+      {
+        turnToken: "eof-a",
+        conversationIds: ["cid-a"],
+        error: { detail: "SDK stream ended before terminal result" },
+        cancellation: { kind: "stream_eof", started: true },
+      },
+      {
+        turnToken: "eof-b",
+        conversationIds: ["cid-b"],
+        error: { detail: "SDK stream ended before terminal result" },
+        cancellation: { kind: "stream_eof", started: false },
+      },
+      {
+        turnToken: "eof-c",
+        conversationIds: ["cid-c"],
+        error: { detail: "SDK stream ended before terminal result" },
+        cancellation: { kind: "stream_eof", started: false },
+      },
+    ]);
+  });
+
+  it("issue #246: close は drain 中 turn の token を消さず late result で終端する", async () => {
+    const turnEnds: unknown[] = [];
+    let armed!: () => void;
+    const armedPromise = new Promise<void>((resolve) => {
+      armed = resolve;
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        await args.prompt[Symbol.asyncIterator]().next();
+        armed();
+        await held;
+        yield result("success", { result: "drained" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"], "close-token");
+    await armedPromise;
+    host.close();
+    release();
+    await done;
+    expect(turnEnds).toEqual([
+      { turnToken: "close-token", conversationIds: ["cid-a"] },
+    ]);
   });
 
   it("rate_limit_event を ext.rate_limits として state_change に付与する (#16)", async () => {
@@ -3361,6 +3656,7 @@ describe("AgentHost — input queue/notify/close", () => {
         for await (const m of args.prompt) {
           const content = m.message.content;
           received.push(typeof content === "string" ? content : "");
+          yield result("success", { result: "drained" });
         }
       }
       return asQuery(gen());
@@ -5503,6 +5799,42 @@ describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
       attachment_ids: ids,
       reason: "count_over",
     });
+  });
+
+  it("issue #246: attachment render 中に close された send は queue に入らず reject する", async () => {
+    let renderStarted!: () => void;
+    const rendering = new Promise<void>((resolve) => {
+      renderStarted = resolve;
+    });
+    let finishRender!: () => void;
+    const renderHeld = new Promise<void>((resolve) => {
+      finishRender = resolve;
+    });
+    setDefaultImageDownsizer({
+      fit: async (bytes, mime) => {
+        renderStarted();
+        await renderHeld;
+        return { bytes, mime };
+      },
+    });
+    const captured: SDKUserMessage[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    host.attachOpen(png(3));
+    host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2, 3])));
+    host.attachClose("u1");
+
+    const sending = host.send("rendering", ["u1"], ["cid-render"], "render-token");
+    await rendering;
+    host.close();
+    finishRender();
+
+    await expect(sending).rejects.toThrow("agent host is closed");
+    await host.run();
+    expect(captured).toEqual([]);
   });
 });
 

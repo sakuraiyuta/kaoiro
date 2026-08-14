@@ -22,17 +22,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   InterAgentTool,
   MAX_COALESCED_MESSAGES,
-  canAddToCoalescedBatch,
   classifyInterAgentError,
-  formatInboundMessage,
-  formatInboundMessages,
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
-  InboundReplyMode,
   InterAgentMessagePayload,
   WrapperConfig,
 } from "@kaoiro/agent-common";
+import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import type {
   Options,
   Query,
@@ -41,6 +38,10 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { AgentHost } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
+import {
+  InterAgentIngressGate,
+  InterAgentTurnCoordinator,
+} from "../src/inter_agent_turn_coordinator.js";
 
 // The host reads only a few SDK fields; build minimal shapes and cast (same
 // convention as host.test.ts's own local helpers, not shared across files).
@@ -313,12 +314,17 @@ function makeControllableQueryFn(): {
   releaseNext: (outcome?: "success" | "error") => void;
 } {
   let release: ((outcome: "success" | "error") => void) | null = null;
+  let queuedOutcome: "success" | "error" | null = null;
   const queryFn = makeQueryFn((args: QueryArgs) => {
     async function* gen(): AsyncGenerator<SDKMessage, void> {
       for await (const _m of args.prompt) {
-        const outcome = await new Promise<"success" | "error">((resolve) => {
-          release = resolve;
-        });
+        const outcome =
+          queuedOutcome ??
+          (await new Promise<"success" | "error">((resolve) => {
+            release = resolve;
+          }));
+        queuedOutcome = null;
+        release = null;
         yield outcome === "error"
           ? msg({
               type: "result",
@@ -333,28 +339,23 @@ function makeControllableQueryFn(): {
   return {
     queryFn,
     releaseNext: (outcome: "success" | "error" = "success") => {
-      release?.(outcome);
-      release = null;
+      if (release !== null) {
+        release(outcome);
+        release = null;
+      } else {
+        queuedOutcome = outcome;
+      }
     },
   };
 }
 
-/** Reproduces cli.ts's issue #221 段階3 batching glue exactly — same-peer
- *  FIFO queue per peer, `inFlightPeers` / `inFlightCidPeer` gating on the
- *  turn's OWN completion (`onTurnEnd`), not on `host.send()`'s promise (see
- *  `@kaoiro/claude-code/src/cli.ts`'s `trySendNextBatch` for the production
- *  version this test-only copy tracks, and its doc comment for why
- *  `instructionChain` alone is the WRONG signal — `host.send()` resolves
- *  almost the instant its text reaches the SDK's OWN queue, well before the
- *  model finishes thinking). */
+/** Adapter glue around the production turn coordinator. Batch ownership and
+ * same-peer scheduling are deliberately NOT reproduced here: issue #246
+ * extracted that state into InterAgentTurnCoordinator so these tests exercise
+ * the same implementation used by cli.ts. */
 function makeCoalescingHarness(interAgent: InterAgentTool) {
-  const pendingBatches = new Map<
-    string,
-    { items: { envelope: Envelope; mode: InboundReplyMode }[]; bytes: number }[]
-  >();
-  const inFlightPeers = new Set<string>();
-  const inFlightCidPeer = new Map<string, string>();
   const sentBatches: { peer: string; cids: string[] }[] = [];
+  const terminalIngressSkips: string[] = [];
   /** Envelopes production's onInterAgentMessage/onTurnEnd glue would hand
    *  straight to `link?.send()`, never routed through invoke()/#dispatch():
    *  `resolveTurnEnd()`'s peer_error notices on a failed turn (issue #221
@@ -364,94 +365,100 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
    *  production sends both through the SAME `link?.send()` sink. */
   const notices: Envelope[] = [];
   let host!: AgentHost;
-
-  function trySendNextBatch(peer: string): void {
-    if (inFlightPeers.has(peer)) return;
-    const queue = pendingBatches.get(peer);
-    const batch = queue?.shift();
-    if (batch === undefined) return;
-    if (queue!.length === 0) pendingBatches.delete(peer);
-    inFlightPeers.add(peer);
-    const cids = batch.items
-      .map(
-        (item) =>
-          (item.envelope.payload as Partial<InterAgentMessagePayload>)
-            .conversation_id,
-      )
-      .filter((cid): cid is string => typeof cid === "string");
-    for (const cid of cids) inFlightCidPeer.set(cid, peer);
-    // issue #221 段階3 MF-1 (ふじレビュー差し戻し): register at DISPATCH
-    // time — mirrors the production fix in cli.ts's trySendNextBatch. Moved
-    // out of receive() below, which used to register at receipt time and
-    // let a later batch's same-cid registration clobber an earlier,
-    // still-in-flight batch's entry.
-    for (const item of batch.items) {
-      interAgent.notePendingInjection(item.envelope);
-    }
-    sentBatches.push({ peer, cids });
-    void host.send(formatInboundMessages(batch.items), undefined, cids);
-  }
+  let tokenSequence = 0;
+  const ingressGate = new InterAgentIngressGate();
+  const coordinator = new InterAgentTurnCoordinator({
+    createTurnToken: () => `test-token-${++tokenSequence}`,
+    onDispatch: (batch) => {
+      for (const item of batch.items) {
+        interAgent.notePendingInjection(item.envelope);
+      }
+      sentBatches.push({ peer: batch.peer, cids: [...batch.conversationIds] });
+      void host.send(
+        batch.text,
+        undefined,
+        batch.conversationIds,
+        batch.turnToken,
+      );
+    },
+  });
 
   async function receive(envelope: Envelope): Promise<void> {
-    const disposition = await interAgent.receiveInbound(envelope);
-    if (disposition.consumed) return;
-    if (!disposition.inject) {
-      // issue #222 段階2 差し戻し MF-2 (ふじ): mirrors cli.ts's
-      // onInterAgentMessage branching (see `runOnInterAgentMessageGlue`'s
-      // CAVEAT above — the same reimplementation-not-invocation gap
-      // applies here too, tracked as issue #226). Deleting production's
-      // `link?.send(disposition.notice)` wiring does NOT fail any test
-      // using THIS harness today either.
-      if (disposition.mode !== "terminal" && disposition.notice) {
-        notices.push(disposition.notice);
+    // Match cli.ts: transport does not await this handler, so it leases the
+    // handoff before receiveInbound() can await its pending-done gate.
+    const lease = ingressGate.begin();
+    try {
+      if (ingressGate.isTerminal(lease)) {
+        terminalIngressSkips.push(`before_receive:${envelope.agent_id}`);
+        return;
       }
-      return;
+      const disposition = await interAgent.receiveInbound(envelope);
+      if (ingressGate.isTerminal(lease)) {
+        terminalIngressSkips.push(`after_receive:${envelope.agent_id}`);
+        return;
+      }
+      if (disposition.consumed) return;
+      if (!disposition.inject) {
+        // issue #222 段階2 差し戻し MF-2 (ふじ): mirrors cli.ts's
+        // onInterAgentMessage branching (see `runOnInterAgentMessageGlue`'s
+        // CAVEAT above — the same reimplementation-not-invocation gap
+        // applies here too, tracked as issue #226). Deleting production's
+        // `link?.send(disposition.notice)` wiring does NOT fail any test
+        // using THIS harness today either.
+        if (disposition.mode !== "terminal" && disposition.notice) {
+          notices.push(disposition.notice);
+        }
+        return;
+      }
+      coordinator.receive(envelope, disposition.mode);
+    } finally {
+      ingressGate.finish(lease);
     }
-    const peer = envelope.agent_id;
-    const itemText = formatInboundMessage(envelope, { mode: disposition.mode });
-    const itemBytes = Buffer.byteLength(itemText, "utf8");
-    let queue = pendingBatches.get(peer);
-    if (queue === undefined) {
-      queue = [];
-      pendingBatches.set(peer, queue);
-    }
-    let open = queue[queue.length - 1];
-    if (
-      open === undefined ||
-      !canAddToCoalescedBatch(open.items.length, open.bytes, itemBytes)
-    ) {
-      open = { items: [], bytes: 0 };
-      queue.push(open);
-    }
-    open.items.push({ envelope, mode: disposition.mode });
-    open.bytes += itemBytes;
-    trySendNextBatch(peer);
   }
 
   function onTurnEnd(
-    conversationIds: readonly string[],
+    turnToken: string | undefined,
     error?: { reason?: string; detail?: string },
+    cancellation?: { kind: "stream_eof"; started: boolean },
   ): void {
+    if (turnToken === undefined) return;
+    const settlement = coordinator.settle(turnToken);
+    if (settlement.kind !== "settled") return;
     const classified = error ? classifyInterAgentError(error) : undefined;
-    for (const notice of interAgent.resolveTurnEnd(conversationIds, classified)) {
+    for (const notice of interAgent.resolveTurnEnd(
+      settlement.batch.conversationIds,
+      classified,
+    )) {
       notices.push(notice);
     }
-    const freedPeer =
-      conversationIds.length > 0
-        ? inFlightCidPeer.get(conversationIds[0]!)
-        : undefined;
-    if (freedPeer !== undefined) {
-      for (const cid of conversationIds) inFlightCidPeer.delete(cid);
-      inFlightPeers.delete(freedPeer);
-      trySendNextBatch(freedPeer);
+    if (cancellation === undefined) {
+      coordinator.dispatchNextForPeer(settlement.batch.peer);
+    }
+  }
+
+  function onHostEnd(error: { reason?: string; detail?: string }): void {
+    ingressGate.close();
+    for (const batch of coordinator.closeAndDrain()) {
+      for (const item of batch.items) {
+        interAgent.notePendingInjection(item.envelope);
+      }
+      const classified = classifyInterAgentError(error);
+      for (const notice of interAgent.resolveTurnEnd(
+        batch.conversationIds,
+        classified,
+      )) {
+        notices.push(notice);
+      }
     }
   }
 
   return {
     receive,
     onTurnEnd,
+    onHostEnd,
     sentBatches,
     notices,
+    terminalIngressSkips,
     bindHost: (h: AgentHost) => {
       host = h;
     },
@@ -461,11 +468,15 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
 describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code glue)", () => {
   it("idle な間に届いた1件は単独 batch のまま即座に turn を起こす", async () => {
     const { queryFn, releaseNext } = makeControllableQueryFn();
-    const tool = new InterAgentTool({ config, getState: () => "idle", send: () => {} });
+    const tool = new InterAgentTool({
+      config,
+      getState: () => "idle",
+      send: () => {},
+    });
     const harness = makeCoalescingHarness(tool);
     const host = new AgentHost(config, {
       onState: () => {},
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.error),
       queryFn,
       now: () => "T",
     });
@@ -480,13 +491,151 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     releaseNext();
   });
 
+  it("issue #246: EOF は active を解決後、coordinator pending の failure notice を link close 前に enqueue する", async () => {
+    let firstInputRead!: () => void;
+    const firstInput = new Promise<void>((resolve) => {
+      firstInputRead = resolve;
+    });
+    let endStream!: () => void;
+    const streamHeld = new Promise<void>((resolve) => {
+      endStream = resolve;
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        await args.prompt[Symbol.asyncIterator]().next();
+        firstInputRead();
+        await streamHeld;
+        // EOF with no ResultMessage for the active batch.
+      }
+      return asQuery(gen());
+    });
+    const tool = new InterAgentTool({ config, getState: () => "idle", send: () => {} });
+    const harness = makeCoalescingHarness(tool);
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) =>
+        harness.onTurnEnd(info.turnToken, info.error, info.cancellation),
+      onHostEnd: (info) => harness.onHostEnd(info.error),
+      queryFn,
+      now: () => "T",
+    });
+    harness.bindHost(host);
+    const done = host.run();
+
+    await harness.receive(inboundEnvelope("cid-a", 1));
+    await firstInput;
+    // Same CID's later generation remains coordinator-owned, not host-queued,
+    // when EOF occurs. This also proves terminal draining resolves the active
+    // generation before registering/resolving its FIFO successor.
+    await harness.receive(inboundEnvelope("cid-a", 2));
+    expect(harness.sentBatches).toEqual([
+      { peer: "peer.agent", cids: ["cid-a"] },
+    ]);
+
+    endStream();
+    await done;
+
+    expect(harness.sentBatches).toEqual([
+      { peer: "peer.agent", cids: ["cid-a"] },
+    ]);
+    expect(
+      harness.notices.map(
+        (notice) =>
+          (notice.payload as unknown as InterAgentMessagePayload).conversation_id,
+      ),
+    ).toEqual(["cid-a", "cid-a"]);
+    for (const notice of harness.notices) {
+      const payload = notice.payload as unknown as InterAgentMessagePayload;
+      expect(payload.error?.code).toBeDefined();
+    }
+  });
+
+  it("issue #246: pending-done gate 中に EOF なら late ingress は coordinator へ渡さず正常終了する", async () => {
+    let resolveAcceptance!: (acceptance: InterAgentAcceptance) => void;
+    const acceptance = new Promise<InterAgentAcceptance>((resolve) => {
+      resolveAcceptance = resolve;
+    });
+    const tool = new InterAgentTool({
+      config,
+      getState: () => "idle",
+      send: () => {},
+      sendInterAgent: () => acceptance,
+    });
+    const harness = makeCoalescingHarness(tool);
+    let endStream!: () => void;
+    const streamHeld = new Promise<void>((resolve) => {
+      endStream = resolve;
+    });
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        await streamHeld;
+        // EOF while the transport's fire-and-forget handler is awaiting
+        // InterAgentTool#pendingDoneAcks for this CID.
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) =>
+        harness.onTurnEnd(info.turnToken, info.error, info.cancellation),
+      onHostEnd: (info) => harness.onHostEnd(info.error),
+      queryFn,
+      now: () => "T",
+    });
+    harness.bindHost(host);
+    const hostDone = host.run();
+
+    // The outbound done=true call creates InterAgentTool's per-CID gate.
+    // `receive()` has already taken the production ingress lease before its
+    // own first await, but remains held at receiveInbound() below.
+    const outboundDone = tool.invoke({
+      to: "peer.agent",
+      body: "bye",
+      kind: "done",
+      conversation_id: "cid-ingress-gate",
+      done: true,
+    });
+    await Promise.resolve();
+    const receiving = harness.receive(inboundEnvelope("cid-ingress-gate", 1));
+    // Production transport deliberately drops this Promise. Observe its
+    // outcome without awaiting it, so a coordinator-closed exception would
+    // surface as the unhandled-rejection failure this regression prevents.
+    let ingressSettled = false;
+    let ingressFailure: unknown;
+    void receiving.then(
+      () => {
+        ingressSettled = true;
+      },
+      (error: unknown) => {
+        ingressFailure = error;
+        ingressSettled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(harness.sentBatches).toEqual([]);
+
+    // Terminal teardown closes the ingress generation before coordinator
+    // draining and before the delayed receiveInbound() can resume.
+    endStream();
+    await hostDone;
+    resolveAcceptance({ kind: "accepted", stamp: null });
+
+    const outboundResult = await outboundDone;
+    expect(outboundResult.isError).toBeUndefined();
+    await Promise.resolve();
+    expect(ingressSettled).toBe(true);
+    expect(ingressFailure).toBeUndefined();
+    expect(harness.sentBatches).toEqual([]);
+    expect(harness.terminalIngressSkips).toEqual(["after_receive:peer.agent"]);
+  });
+
   it("turn が in-flight な間に同一peerから連続到着したメッセージは次の turn へ合流する", async () => {
     const { queryFn, releaseNext } = makeControllableQueryFn();
     const tool = new InterAgentTool({ config, getState: () => "idle", send: () => {} });
     const harness = makeCoalescingHarness(tool);
     const host = new AgentHost(config, {
       onState: () => {},
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.error),
       queryFn,
       now: () => "T",
     });
@@ -522,7 +671,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     const harness = makeCoalescingHarness(tool);
     const host = new AgentHost(config, {
       onState: () => {},
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.error),
       queryFn,
       now: () => "T",
     });
@@ -549,7 +698,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     const harness = makeCoalescingHarness(tool);
     const host = new AgentHost(config, {
       onState: () => {},
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.error),
       queryFn,
       now: () => "T",
     });
@@ -584,7 +733,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     const harness = makeCoalescingHarness(tool);
     const host = new AgentHost(config, {
       onState: () => {},
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.error),
       queryFn,
       now: () => "T",
     });
@@ -635,7 +784,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
       const harness = makeCoalescingHarness(tool);
       const host = new AgentHost(config, {
         onState: () => {},
-        onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+        onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.error),
         queryFn,
         now: () => "T",
       });
