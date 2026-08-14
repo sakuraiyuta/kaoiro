@@ -288,8 +288,8 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
   effort_levels を提示する案も却下** (ADR-0035 silent downgrade 禁止に
   反する — 現在の model にとって invalid な effort を UI に載せることに
   なる)。最終規則 (F1 で 3-tier に確定、G1 で concrete miss fail-closed
-  を追加): **wrapper 側 helper + dashboard 派生の両方で 3-tier lookup
-  - concrete miss fail-closed** を採用:
+  を追加): **wrapper 側 helper + dashboard 派生の両方で 3-tier lookup** -
+  **concrete miss fail-closed** を採用:
   (1) **concrete key exact hit** → その model の effort_levels (欠落なら
   []、fallback しない);
   (2) **exact miss / key 未報告** で real `value="default"` alias entry

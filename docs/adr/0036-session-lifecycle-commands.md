@@ -95,7 +95,7 @@ reset requestを一意`request_id`付きでrunnerへrelayする。client pushの
 ### F2 — fresh relaunchで両engineを共通化
 
 session resetは既存`resume_session`のrunner supervisor経路を拡張し、同じagent
-entryを**kill + fresh relaunch (resume_session_idなし)**する。これにより:
+entryを**kill + fresh relaunch** (resume_session_idなし)する。これにより:
 
 - Claudeは`resume` optionなしの新しい`query()`を開始する。
 - Codexは`resumeThread()`でなく`startThread()`から始める。

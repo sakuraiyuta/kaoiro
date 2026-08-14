@@ -50,7 +50,7 @@ Phoenix Channels にするか素の WebSocket(+読み取り専用 SSE 併設)に
 
 - クライアント向け接続は **Phoenix Channels に一本化**する。素の WebSocket
   エンドポイントは併設しない。
-- ワイヤ形式は **V2 serializer 固定(接続時 `vsn=2.0.0` を必須)**とし、
+- ワイヤ形式は **V2 serializer 固定**(接続時 `vsn=2.0.0` を必須)とし、
   kaoiro の公開プロトコル文書([protocol](../specs/protocol.md))には公式
   ガイドへの参照 + kaoiro 固有のトピック/イベント定義を記載する。
 - 読み取り専用 SSE は**見送り**(Elixir 側に保守されたライブラリが無く

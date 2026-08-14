@@ -106,7 +106,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 ## Followups (in-phase but unfinished)
 
 - runner: バックエンド(4-4-0〜4-5)・server 補完(4-10)・dashboard 起動 UI
-  (4-8/4-9)・**D5(二重 live join 拒否)**は完了(#22 実装済)。常駐化(4-11、
+  (4-8/4-9)・**D5**(二重 live join 拒否)は完了(#22 実装済)。常駐化(4-11、
   #141)・配布物整備(4-7、#70)も完了し、**本フェーズのタスクは全て完了**。
   Gitea release への資産アップロード自動化のみ #145 へ分離した。
 - **D5**: wrapper join 経路(`wrapper_channel`)で live owner 済み agent_id を

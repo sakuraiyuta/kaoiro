@@ -18,7 +18,7 @@ related: [architecture, plugin-model, agent-sdk-events, personas, threat-model, 
 
 ### 用語と階層
 
-**エンベロープ(envelope)**とは、kaoiro の 1 イベントを包む共通の JSON
+**エンベロープ**(envelope)とは、kaoiro の 1 イベントを包む共通の JSON
 オブジェクトのこと。封筒のメタファであり、「宛名書き」にあたる共通メタデータ
 (`agent_id`/`persona`/`ts`/`type`/`state` など)で「中身」(`payload`)を包む。
 ラッパー/サーバ/クライアントのどの区間でも同じ形で受け渡し、サーバは

@@ -95,7 +95,7 @@ mount とは分離する。
 `KAOIRO_TOKEN_DENYLIST_PATH`。未設定はコンテナの `/tmp` 相当に落ち、
 `docker compose down` で消える(offline agent 一覧が失われる)。
 
-**この 8 種が「永続化対象の正本」である。**更新手順(4 節)の preflight は
+**この 8 種が「永続化対象の正本」である**。更新手順(4 節)の preflight は
 この一覧を基準に、全 path が named volume 配下へ解決されることを確認する。
 一覧に載っていない DETS が増えると、**backup の対象から静かに漏れる** —
 `KAOIRO_USERS_PATH` は実際にこれを踏み、compose に無いまま container
@@ -357,7 +357,7 @@ systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
 
 - **target を full 40 桁 SHA で固定する。**`git pull` の結果に依存させない。
   作業記録にもその SHA を残す
-- **server と runner の両方を同じ target へ進める。**片側だけを進めると、
+- **server と runner の両方を同じ target へ進める**。片側だけを進めると、
   同一 SHA という postcondition が崩れ、互換の保証がない組み合わせが動く
 - **source cleanliness を tracked / untracked の両方で判定する。**
   `git diff --quiet` は untracked を見ないため、これだけでは不十分
@@ -367,7 +367,7 @@ systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
 - **永続化対象の全 path が named volume 配下へ解決されることを確認する。**
   正本は 1.2 節の 8 種。一覧に無い DETS が増えていると **backup から静かに
   漏れる**(`KAOIRO_USERS_PATH` が実際にこれを踏んだ — issue #227)
-- **active な作業が無いことを確認する(人間の判断)。**runner の停止は配下の
+- **active な作業が無いことを確認する**(人間の判断)。runner の停止は配下の
   wrapper をすべて止める(2 節「常駐化」)。会話状態は永続化されていないため、
   進行中のやり取りは失われる
 
@@ -375,7 +375,7 @@ systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
 
 **prepare(無停止)と commit(停止窓)を分ける。**
 
-**server image の build は server の停止時間に含めない。**旧 container が
+**server image の build は server の停止時間に含めない**。旧 container が
 旧 image ID を保持したまま稼働を続けられるためである。
 
 **一方、runner の in-place build は runner を停止した後にしか行えない。**
@@ -410,7 +410,7 @@ flowchart TD
   I -->|揃う| Z[完了]
 ```
 
-**backup は server を停止してから取る。**稼働中に named volume を tar すると、
+**backup は server を停止してから取る**。稼働中に named volume を tar すると、
 複数の DETS ファイル間で状態が混ざりうる(2026-08-12 の反映ではこの誤りが
 あった)。バックアップは唯一のロールバック手段であるため、ここは省略できない。
 
@@ -494,7 +494,7 @@ systemctl --user stop kaoiro-runner
 
 **(4) local を target へ進め、build する**
 
-**`--frozen-lockfile` は常に実行する。**target が依存を変えていた場合、
+**`--frozen-lockfile` は常に実行する**。target が依存を変えていた場合、
 stale な `node_modules` のままビルドすると実行時に落ちる。
 
 ```sh
@@ -503,7 +503,7 @@ pnpm -C <repo-path> install --frozen-lockfile
 pnpm -C <repo-path>/wrapper build && pnpm -C <repo-path>/runner build
 ```
 
-**ここで失敗したら 4.4 の 2 へ。**server はまだ旧 container のままなので、
+**ここで失敗したら 4.4 の 2 へ**。server はまだ旧 container のままなので、
 local を旧 commit へ戻せば元の構成に戻る。
 
 **(5) server を停止し、停止の正常性を判定する**
@@ -516,7 +516,7 @@ ssh <server-host> 'docker inspect <container> \
   --format "running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}"'
 ```
 
-**`running=false` だけでは正常停止と判定できない。**timeout(`-t 30`)を
+**`running=false` だけでは正常停止と判定できない**。timeout(`-t 30`)を
 超えて SIGKILL された場合も `running=false` になる。`exit` と `oom` を併せて
 見る(正常終了時の終了コードは実装依存なので、**平常時の値を控えておき、
 それと異なるときは異常として扱う**)。判定に迷うときは `docker logs` の末尾で
@@ -564,7 +564,7 @@ ssh <server-host> 'docker inspect <container> \
   --format "{{range .Mounts}}{{if eq .Destination \"/var/lib/kaoiro\"}}{{.Name}}{{end}}{{end}}"'
 ```
 
-**出力が空でないことを確認する。**空なら mount 構成が変わっており、この先の
+**出力が空でないことを確認する**。空なら mount 構成が変わっており、この先の
 archive は何も取らずに成功し、migration は対象を取り違える。
 
 **(5-b) 【初回のみ】user ledger の migration**
@@ -611,13 +611,13 @@ ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -n /data/users
 # → owner / group / mode が既存 DETS と揃っていること
 ```
 
-**copy が成功しただけでは、authority の bit 同一性を保証しない。**必ず
+**copy が成功しただけでは、authority の bit 同一性を保証しない**。必ず
 SHA-256 で照合する。
 
 **両方に存在する場合は、running container が実際に参照していた path を
-authority とする。**推測で merge しない。
+authority とする**。推測で merge しない。
 
-**退避元のファイルが存在しない場合、ledger は既に失われている。**その旨を
+**退避元のファイルが存在しない場合、ledger は既に失われている**。その旨を
 作業記録へ明記し、operator の判断で進む。**黙って空の ledger を新規作成
 しない** —「失われた」と「もともと無かった」は区別する。
 
@@ -662,7 +662,7 @@ ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz >/dev/nul
 ```
 
 `tar tzf ... | head -20` と書いてはならない。**pipeline の終了ステータスは
-`head` 側になり、`tar` の失敗が握りつぶされる。**壊れた archive でもファイル
+`head` 側になり、`tar` の失敗が握りつぶされる**。壊れた archive でもファイル
 自体は存在するので `sha256sum` は成功し、「検証した」ことになってしまう。
 
 内容の目視は、検証とは**別のコマンド**で行う。
@@ -671,7 +671,7 @@ ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz >/dev/nul
 ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz | head -20'
 ```
 
-**1.2 節の 8 種がすべて含まれることを確認する。**含まれない DETS は
+**1.2 節の 8 種がすべて含まれることを確認する**。含まれない DETS は
 volume の外にあり、この backup では復元できない。
 
 **(6) prepared image で server を起動**
@@ -730,10 +730,10 @@ ssh <server-host> 'docker inspect <container> --format "{{.Image}}"'
 prepared な新 image を別の tag で保持しておくのは構わない。**`latest` と
 production checkout だけは旧構成へ戻す。**
 
-**`git checkout <sha>` は detached HEAD を残す。**復旧そのものには使えるが、
+**`git checkout <sha>` は detached HEAD を残す**。復旧そのものには使えるが、
 production checkout がどの branch を追っていたかという運用状態は失われる。
 **rollback 中は detached である前提で扱い、復旧後に operator が branch
-pointer を戻す。**source checkout を release として分離する #229 までは、
+pointer を戻す**。source checkout を release として分離する #229 までは、
 この限界が残る。
 
 **(1) DETS の archive または検証に失敗した**(4.3 の 5)
@@ -778,14 +778,14 @@ systemctl --user start kaoiro-runner
 
 **(3) 新 server が起動しない**(4.3 の 6)
 
-**「新 server が state を開いたか」を人の判断に委ねない。**次の observable な
+**「新 server が state を開いたか」を人の判断に委ねない**。次の observable な
 境界で分ける。
 
 - **`docker compose up -d` をまだ実行していない、または container process が
   開始していないと証明できる**: DETS の restore は不要。**(0)** を実行して
   旧 image で起動するだけでよい
 - **一度でも新 container の開始を試みた、または開始したか不明**:
-  **state を開いたものとして扱う。**新コードが書いた DETS を旧コードが読める
+  **state を開いたものとして扱う**。新コードが書いた DETS を旧コードが読める
   保証は無い(issue #219 で tuple が 3→4 要素になった前例がある)
 
 後者の手順は次のとおり。**restore は destructive なので、順序を守る。**
@@ -846,7 +846,7 @@ path へ空の ledger を作る。**post-start rollback では**元の container
 終了コード」)。`dist` の欠落もこのコードになるため、(2) の復旧手順を先に
 確認する。
 
-**この時点で新 server は既に state を開いている。**調査だけで終わらせず、
+**この時点で新 server は既に state を開いている**。調査だけで終わらせず、
 次のどちらかへ進む。
 
 - **target 側で修復できる**: 修復して runner を起動し、**4.5 を再実行する**
@@ -858,7 +858,7 @@ path へ空の ledger を作る。**post-start rollback では**元の container
 
 4.5 の operational success がすべて揃わない場合、**更新が成功したと見なさない。**
 
-**ただし「中断」は「新 server を動かし続けること」ではない。**成功条件を
+**ただし「中断」は「新 server を動かし続けること」ではない**。成功条件を
 満たさない構成を本番に置いたままにするのは中断ではない。(4) と同じ 2 つの
 出口へ進む。
 

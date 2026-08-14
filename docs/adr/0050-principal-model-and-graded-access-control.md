@@ -55,8 +55,8 @@ kaoiro の認可は 2 role (operator / viewer) 固定で、operator は実質無
 
 さらに ADR-0021 F6-6 は peer directory の妥当性根拠を「現状 kaoiro は
 単一 operator 配下の閉じた系であり、peer は同一の人間が起動した agent に
-限られる」と置き、**「agent 間の信頼境界が operator 単位でなくなった
-時点で本節を再評価する」**という条件を明記している。本 ADR の決定は
+限られる」と置き、「**agent 間の信頼境界が operator 単位でなくなった
+時点で本節を再評価する**」という条件を明記している。本 ADR の決定は
 まさにその条件を発火させる。
 
 本 ADR は、これら 4 つ (identity / role 階層 / per-pair 権限 / 永続化) を

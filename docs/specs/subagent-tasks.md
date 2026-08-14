@@ -48,7 +48,7 @@ subagent / workflow は「視覚表現は独立した別の存在」「identity 
 
 ### 専用 envelope type `task`
 
-タスクのライフサイクルは**専用 envelope type `task`**で流す(ADR-0019 F2)。
+タスクのライフサイクルは**専用 envelope type** `task`で流す(ADR-0019 F2)。
 親の `state_change` は親自身の `KaoiroState` のまま不変。スキーマは
 [ADR-0047](../adr/0047-task-envelope-schema.md) で確定:
 
