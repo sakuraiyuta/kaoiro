@@ -25,7 +25,7 @@ Accepted
 ## Decision
 
 ラッパーは各エージェントと同居して**ローカル動作**。複数ホスト/プロセスが
-**Phoenix Channels(WebSocket)**で中央サーバ(Elixir)へ接続する。サーバは
+**Phoenix Channels**(WebSocket)で中央サーバ(Elixir)へ接続する。サーバは
 1接続=1 GenServer で最新状態を保持・配信する。
 
 > **追補([ADR-0023](0023-host-runner-architecture.md))**: 本トポロジ(wrapper の

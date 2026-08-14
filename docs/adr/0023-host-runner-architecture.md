@@ -35,7 +35,7 @@ wrapper をどこで動かしどう繋ぐか(トポロジ)だけを決めてお�
 
 - spawn / stop / restart は**未実装**(server の client→wrapper 制御は instruction /
   permission_decision / interrupt / clear_history / delete_agent のみ)。
-- サーバ側に**「ホスト」概念が無い**(管理は agent_id 単位、SessionPointers も
+- サーバ側に「**ホスト**」**概念が無い**(管理は agent_id 単位、SessionPointers も
   `agent_id => {session_id, cwd}` のみで host を捨象)。
 - **多重起動防止は不完全**(owner フェンシングは re-join 時のみ、別プロセスの同
   agent_id 接続は last-write-wins で上書き → runner ローカルロックが本体、

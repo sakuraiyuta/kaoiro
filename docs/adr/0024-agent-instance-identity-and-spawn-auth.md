@@ -88,8 +88,8 @@ per-agent token を spawn payload に注入してから runner へ中継**する
 
 ### D5 — 二重 live join を明示拒否
 
-現行のサイレント last-write-wins を、**「すでに live owner がいる agent_id の join は
-拒否」**へ変更する(防御的)。ランダム suffix(D3)で衝突は実質ゼロだが、偶発二重
+現行のサイレント last-write-wins を、「**すでに live owner がいる agent_id の join は
+拒否**」へ変更する(防御的)。ランダム suffix(D3)で衝突は実質ゼロだが、偶発二重
 起動を不可視のまま上書きさせず、明示エラーで可視化する。
 
 ### 棚上げ / 却下した代替案
@@ -110,7 +110,7 @@ per-agent token を spawn payload に注入してから runner へ中継**する
   自然失効)か、server 保持のレジストリ(stateful・明示 revoke 可)か。runner の
   supervised restart はサーバへ戻らず子を再起動するため、token が restart をまたいで
   有効である必要がある(寿命設定、または runner が制御チャネル経由で再取得する等の
-  再発行機構)。本 ADR は **「server が発行し runner が配送する」**ところまでを決定
+  再発行機構)。本 ADR は 「**server が発行し runner が配送する**」ところまでを決定
   し、機構詳細は phase-4 の #22 再配線で詰める。
 
 ## D4 追補 — per-agent_id revoke 経路 (2026-07-23、[#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))

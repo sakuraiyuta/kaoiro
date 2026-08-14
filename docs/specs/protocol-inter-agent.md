@@ -542,8 +542,8 @@ inter_agent_message 本体は既存 `envelope` イベント上で運ばれるが
 phase-8 では宛先名の解決だけを目的に directory entry を
 `agent_id / persona / state` へ絞っていた。phase-15 で engine 間の state
 envelope schema が確定したため、#102 ではこの最小性判断を
-**「名前解決に加え、peer の実行特性を見て委譲先を選べる read-only
-directory」**へ引き直し、`engine / model / effort` を公開した。
+「**名前解決に加え、peer の実行特性を見て委譲先を選べる read-only
+directory**」へ引き直し、`engine / model / effort` を公開した。
 
 issue #160 (phase-27) はこれをさらに **「peer の稼働状況を見て委譲の
 可否まで判断できる directory」** へ広げる。エージェントが operator の介在なしに
