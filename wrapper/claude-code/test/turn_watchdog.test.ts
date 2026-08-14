@@ -45,6 +45,28 @@ class FakeTimers {
 }
 
 describe("TurnWatchdog (issue #248)", () => {
+  it("issue #249: production 既定の monotonic clock で最初の turn を開始できる", () => {
+    const watchdog = new TurnWatchdog({
+      settings: {
+        inactivityMs: DEFAULT_TURN_WATCHDOG_INACTIVITY_MS,
+        abortGraceMs: DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS,
+      },
+      onWarning: () => {},
+      requestInterrupt: () => true,
+      failStop: () => true,
+      failStopUnattributed: () => {},
+    });
+
+    // Deliberately inject none of nowMs / setTimer / clearTimer. This must
+    // exercise the complete production default surface; the prior tests
+    // replaced that premise with FakeTimers and missed issue #249. dispose()
+    // clears the real 30-minute timer synchronously, so the test never waits.
+    expect(() => {
+      watchdog.start("production-clock-turn");
+      watchdog.dispose();
+    }).not.toThrow();
+  });
+
   it("既定は30分 inactivity・60秒 abort grace、短い指定は #221 の経緯を warning する", () => {
     const warnings: string[] = [];
     expect(readTurnWatchdogSettings({}, (warning) => warnings.push(warning))).toEqual({
