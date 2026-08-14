@@ -145,7 +145,10 @@ export class TurnWatchdog {
     this.#requestInterrupt = options.requestInterrupt;
     this.#failStop = options.failStop;
     this.#failStopUnattributed = options.failStopUnattributed;
-    this.#nowMs = options.nowMs ?? performance.now;
+    // Performance#now validates its receiver in Node. Keeping the bare
+    // method here made the first production start() throw ERR_INVALID_THIS;
+    // retain the Performance receiver inside a closure (issue #249).
+    this.#nowMs = options.nowMs ?? (() => performance.now());
     this.#setTimer =
       options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.#clearTimer = options.clearTimer ?? ((timer) => clearTimeout(timer as never));
