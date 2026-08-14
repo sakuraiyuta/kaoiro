@@ -1700,42 +1700,6 @@
     border-bottom: 1px solid var(--line);
   }
 
-  /* Smartphone header (responsive-reachability.md app chrome): the title
-     drops its "— 顔色" suffix, the connection badge shrinks to its dot,
-     logout moves into SettingsDrawer, and the agent strip scrolls
-     horizontally instead of wrapping the header taller. */
-  @media (max-width: 939px) {
-    header {
-      align-items: center;
-      gap: 0.6rem;
-      padding-inline: max(0.8rem, env(safe-area-inset-left));
-      padding-inline-end: max(0.8rem, env(safe-area-inset-right));
-    }
-
-    h1::after {
-      content: none;
-    }
-
-    .conn .conn-label {
-      display: none;
-    }
-
-    .conn .conn-dot {
-      margin-right: 0;
-    }
-
-    header .logout {
-      display: none;
-    }
-
-    .agent-strip {
-      flex-wrap: nowrap;
-      justify-content: flex-start;
-      overflow-x: auto;
-      min-width: 0;
-    }
-  }
-
   /* short (max-height 500px): 縦圧縮 override — header の縦 padding のみ。
      横方向のレイアウトは幅トークンが決めるので触らない (ADR-0052 F8). */
   @media (max-height: 500px) {
@@ -1798,14 +1762,78 @@
     min-width: 0;
   }
 
+  /* Smartphone header (responsive-reachability.md app chrome): the title
+     drops its "— 顔色" suffix, the connection badge shrinks to its dot,
+     logout moves into SettingsDrawer, and the agent strip scrolls
+     horizontally instead of wrapping the header taller.
+     Positioned AFTER the base `header`/`h1::after`/`.agent-strip` rules
+     (pre-#240 bug, found while implementing #240, not caused by it): this
+     block used to sit BEFORE those base rules, so the properties they both
+     set at equal specificity (`.agent-strip`'s flex-wrap/justify-content,
+     `h1::after`'s content) lost to the later base rule regardless of the
+     media condition — the smartphone nowrap/scroll and title-suffix
+     removal never actually took effect. Matches the base-then-override
+     ordering `.detail-navigation.with-switchers` already uses below. */
+  @media (max-width: 939px) {
+    header {
+      align-items: center;
+      gap: 0.6rem;
+      padding-inline: max(0.8rem, env(safe-area-inset-left));
+      padding-inline-end: max(0.8rem, env(safe-area-inset-right));
+    }
+
+    h1::after {
+      content: none;
+    }
+
+    .conn .conn-label {
+      display: none;
+    }
+
+    .conn .conn-dot {
+      margin-right: 0;
+    }
+
+    header .logout {
+      display: none;
+    }
+
+    .agent-strip {
+      flex-wrap: nowrap;
+      justify-content: flex-start;
+      overflow-x: auto;
+      min-width: 0;
+    }
+  }
+
   /* Each agent now reads as a miniature grid tile: the persona sprite shrunk
-     into a small cell with its state lamp overlaid on the top-right corner. */
+     into a small cell with its state lamp overlaid on the top-right corner.
+     Sized via clamp(dvh) rather than a fixed rem (issue #240): header has no
+     fixed height to take a literal percentage of (it's `flex: 0 0 auto`, and
+     this chip is itself one of the things that decides that height), so dvh
+     stands in as a non-circular proxy for "available header room".
+     flex-shrink: 0 (ふじ must-fix, 2026-08-14): without it, a wide
+     agent-strip shrinks .chip's WIDTH under space pressure while height
+     stays at the clamp value, squashing the square instead of the strip
+     actually overflowing (measured pre-fix: 57.59px -> 39.61px at a 180px
+     strip / 4 agents).
+     The floor is 3rem, not the pre-#240 2.4rem (ふじ must-fix): 8dvh falls
+     under any floor at `short` (max-height: 500px) and below, so the floor
+     alone decides the short/landscape-smartphone size, and the issue's
+     acceptance criteria does not exempt that case — it must read as
+     clearly bigger than before too (verified worst case 844x390 -> 48px,
+     +25% over the pre-#240 38.4px). Floor-to-curve crossover is 600px
+     (3rem / 0.08); curve-to-cap is 720px; a representative portrait phone
+     (iPhone SE class, ~667px, inside the curve) grows ~39%. */
   .chip {
     --tone: var(--c-idle);
     position: relative;
     display: inline-flex;
-    width: 2.4rem;
-    height: 2.4rem;
+    flex-shrink: 0;
+    width: clamp(3rem, 8vh, 3.6rem);
+    height: clamp(3rem, 8vh, 3.6rem);
+    width: clamp(3rem, 8dvh, 3.6rem);
+    height: clamp(3rem, 8dvh, 3.6rem);
     padding: 0.15rem;
     border: 1px solid transparent;
     border-radius: 0.4rem;

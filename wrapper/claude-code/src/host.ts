@@ -229,6 +229,18 @@ export interface AgentHostOptions {
    *  existing channel. Omitted = task envelopes are not emitted (unit
    *  tests only; production always wires it). */
   onTask?: (envelope: Envelope) => void;
+  /** Invoked immediately before #input() yields an accepted wrapper turn to
+   * the SDK. This is the actual SDK-turn start: a turn waiting in #queue has
+   * not started and must not consume watchdog budget (issue #248). */
+  onTurnStart?: (info: {
+    turnToken: string;
+    conversationIds: readonly string[];
+  }) => void;
+  /** Invoked for each real SDK stream frame while a wrapper-fed turn is
+   * active. It deliberately excludes server instructions and wrapper-local
+   * timers: only SDK output is evidence that the blocked SDK turn progressed
+   * (issue #248). */
+  onTurnProgress?: (info: { turnToken: string }) => void;
   /** Invoked for an SDK ResultMessage, alongside (not instead of) onLog's
    *  result envelope (issue #131; extended issue #221 段階3 direction 2 for
    *  coalescing), OR for a stream-end cancellation of an accepted wrapper
@@ -259,7 +271,18 @@ export interface AgentHostOptions {
     turnToken?: string;
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
-    cancellation?: { kind: "stream_eof"; started: boolean };
+    cancellation?: { kind: "stream_eof" | "watchdog_fail_stop"; started: boolean };
+  }) => void;
+  /** Invoked when the inactivity watchdog's abort grace expires, or when the
+   * watchdog detects a token-attribution invariant failure. The host stops
+   * admitting future turns, cancels every never-started queue entry, but
+   * intentionally retains the current active token: without a
+   * ResultMessage/EOF its terminal outcome is not attributable. */
+  onWatchdogFailStop?: (info: {
+    /** Present when AgentHost still knows the current active token. */
+    turnToken?: string;
+    conversationIds: readonly string[];
+    attribution: "exact" | "unattributed";
   }) => void;
   /** Invoked exactly once after the host has terminally settled every turn it
    *  accepted (including queued cancellations). It runs before the CLI closes
@@ -431,6 +454,10 @@ export class AgentHost implements EngineAdapter {
   #turnBoundaryNotify: (() => void) | null = null;
   #notify: (() => void) | null = null;
   #closed = false;
+  /** A watchdog fail-stop is stricter than close(): it blocks all future
+   * admission, while preserving the unknown active token until a real SDK
+   * terminal boundary arrives. */
+  #watchdogFailStopped = false;
   #hostEnded = false;
   #query: Query | null = null;
   #machine: MachineState = initialMachineState();
@@ -1091,6 +1118,87 @@ export class AgentHost implements EngineAdapter {
     }
   }
 
+  /** Requests an interrupt only when this exact watchdog token still owns the
+   * SDK input barrier. The control ACK is deliberately not a terminal event:
+   * a buffered ResultMessage must still settle this token before another turn
+   * can begin (issue #246 / #248). */
+  requestInterruptForTurn(turnToken: string): boolean {
+    if (this.#activeTurn?.turnToken !== turnToken || this.#watchdogFailStopped) {
+      return false;
+    }
+    void this.interrupt().catch((err: unknown) => {
+      this.#warn(`[kaoiro] watchdog interrupt request failed: ${String(err)}`);
+    });
+    return true;
+  }
+
+  /** Closes admission after an exact active token survived both the
+   * inactivity limit and interrupt grace. Never settle #activeTurn here: in
+   * the absence of a ResultMessage/EOF, attributing an outcome to it would be
+   * a correctness bug. The CLI receives a distinct callback to stop its
+   * unstarted coordinator work and escalate to the operator (issue #248). */
+  failStopTurnForWatchdog(turnToken: string): boolean {
+    const activeTurn = this.#activeTurn;
+    if (
+      activeTurn?.turnToken !== turnToken ||
+      this.#watchdogFailStopped ||
+      this.#hostEnded
+    ) {
+      return false;
+    }
+    return this.#failStopForWatchdog(activeTurn, "exact");
+  }
+
+  /** Fallback for a watchdog correlation invariant failure. It must not
+   * guess that the stale watched token is still active; use the host's
+   * current token if there is one, otherwise freeze all admission without an
+   * ownership claim (issue #248 must-fix 1). */
+  failStopForWatchdogAttributionUnknown(): boolean {
+    if (this.#watchdogFailStopped || this.#hostEnded) return false;
+    return this.#failStopForWatchdog(this.#activeTurn, "unattributed");
+  }
+
+  #failStopForWatchdog(
+    activeTurn: QueuedTurn | null,
+    attribution: "exact" | "unattributed",
+  ): boolean {
+    this.#watchdogFailStopped = true;
+    this.#closed = true;
+    if (this.#gcTimer !== null) {
+      clearInterval(this.#gcTimer);
+      this.#gcTimer = null;
+    }
+    this.#machine = initialMachineState("error");
+    this.#emitState("error");
+
+    // These turns have not reached #input(), so exact cancellation is safe.
+    // The active token remains held until the SDK gives a real terminal
+    // boundary; it must never be confused with a later generation.
+    const queuedTurns = this.#queue.splice(0);
+    const error = {
+      detail:
+        attribution === "exact"
+          ? "turn watchdog interrupt grace expired; host admission stopped pending operator recovery"
+          : "turn watchdog token attribution unavailable; host admission stopped pending operator recovery",
+    };
+    for (const turn of queuedTurns) {
+      this.#options.onTurnEnd?.({
+        turnToken: turn.turnToken,
+        conversationIds: turn.conversationIds,
+        error,
+        cancellation: { kind: "watchdog_fail_stop", started: false },
+      });
+    }
+    this.#options.onWatchdogFailStop?.({
+      ...(activeTurn === null ? {} : { turnToken: activeTurn.turnToken }),
+      conversationIds: activeTurn?.conversationIds ?? [],
+      attribution,
+    });
+    this.#wakeTurnBoundary();
+    this.#wake();
+    return true;
+  }
+
   /** Switch the model for subsequent turns (#54, ADR-0020). `value` accepts
    *  either a supportedModels alias (e.g. "opus[1m]", "sonnet", "default")
    *  or its resolved canonical ID. Input representation is preserved: the
@@ -1452,6 +1560,13 @@ export class AgentHost implements EngineAdapter {
       // state so the envelopes this message produces already carry it. Forward
       // only on change — the id is stable within a conversation (ADR-0014).
       for await (const message of session) {
+        // A received SDK frame is the watchdog's only progress signal. Do
+        // not feed server instructions, permission callbacks, or local timer
+        // activity here: those can continue while the SDK turn is wedged.
+        const activeTurn = this.#activeTurn;
+        if (activeTurn !== null) {
+          this.#options.onTurnProgress?.({ turnToken: activeTurn.turnToken });
+        }
         const id = sdkMessageToSessionId(message);
         if (id !== null && id !== this.#sessionId) {
           const hadPriorSession = this.#sessionId !== null;
@@ -1696,6 +1811,11 @@ export class AgentHost implements EngineAdapter {
   }
 
   #apply(event: AdapterEvent): void {
+    // The SDK stream still has to be consumed after a watchdog fail-stop so a
+    // late ResultMessage/EOF can settle its exact token. Its ordinary state
+    // transitions must not overwrite the operator-visible sticky error,
+    // including permission/question finally callbacks that also use #apply.
+    if (this.#watchdogFailStopped) return;
     const { next, emitted } = stepState(this.#machine, event);
     this.#machine = next;
     for (const state of emitted) {
@@ -2741,6 +2861,13 @@ export class AgentHost implements EngineAdapter {
       while (this.#queue.length > 0) {
         const turn = this.#queue.shift() as QueuedTurn;
         this.#activeTurn = turn;
+        // This is the watchdog's only start point. In particular, dispatch
+        // and queue insertion are not starts: an earlier SDK turn can keep a
+        // later input waiting here indefinitely without consuming its budget.
+        this.#options.onTurnStart?.({
+          turnToken: turn.turnToken,
+          conversationIds: turn.conversationIds,
+        });
         yield turn.message;
         // The SDK may immediately pull again before it emits this turn's
         // result. Do not let that eager pull replace a turn's correlation
@@ -2798,7 +2925,10 @@ export class AgentHost implements EngineAdapter {
   #completeActiveTurn(
     error: { reason?: string; detail?: string } | undefined,
     notifyWhenAbsent: boolean,
-    cancellation?: { kind: "stream_eof"; started: boolean },
+    cancellation?: {
+      kind: "stream_eof" | "watchdog_fail_stop";
+      started: boolean;
+    },
   ): void {
     const turn = this.#activeTurn;
     this.#activeTurn = null;

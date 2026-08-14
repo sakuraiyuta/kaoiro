@@ -127,4 +127,67 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
       "inter-agent turn coordinator is closed",
     );
   });
+
+  it("issue #248: watchdog fail-stop は started token を未確定のまま残し、未開始の coordinator work だけを凍結する", () => {
+    const dispatched: string[] = [];
+    let sequence = 0;
+    const coordinator = new InterAgentTurnCoordinator({
+      createTurnToken: () => `token-${++sequence}`,
+      onDispatch: (batch) => dispatched.push(batch.turnToken),
+    });
+    // Different peers may both be dispatched, but AgentHost's input barrier
+    // has only yielded token-1. The same peer's successor stays pending.
+    coordinator.receive(inbound("peer-a", "cid-a1", 1), "reply-owed");
+    coordinator.receive(inbound("peer-a", "cid-a2", 2), "reply-owed");
+    coordinator.receive(inbound("peer-b", "cid-b1", 1), "reply-owed");
+    expect(dispatched).toEqual(["token-1", "token-2"]);
+
+    expect(coordinator.freezeForWatchdogFailStop("token-1")).toEqual({
+      droppedDispatched: 1,
+      droppedPending: 1,
+    });
+    // The terminal result can still settle the exact started generation, but
+    // no peer becomes dispatchable and no successor is created afterwards.
+    expect(coordinator.settle("token-1")).toMatchObject({
+      kind: "settled",
+      batch: { conversationIds: ["cid-a1"] },
+    });
+    expect(coordinator.settle("token-2")).toEqual({
+      kind: "stale",
+      turnToken: "token-2",
+    });
+    coordinator.dispatchNextForPeer("peer-a");
+    expect(dispatched).toEqual(["token-1", "token-2"]);
+    expect(() => coordinator.receive(inbound("peer-c", "cid-c1", 1), "reply-owed")).toThrow(
+      "inter-agent turn coordinator is closed",
+    );
+  });
+
+  it("issue #248: active token が不明なら dispatched / pending を全凍結し、古い token は全て stale になる", () => {
+    const dispatched: string[] = [];
+    let sequence = 0;
+    const coordinator = new InterAgentTurnCoordinator({
+      createTurnToken: () => `token-${++sequence}`,
+      onDispatch: (batch) => dispatched.push(batch.turnToken),
+    });
+    coordinator.receive(inbound("peer-a", "a1", 1), "reply-owed");
+    coordinator.receive(inbound("peer-a", "a2", 2), "reply-owed");
+    coordinator.receive(inbound("peer-b", "b1", 1), "reply-owed");
+    coordinator.receive(inbound("peer-b", "b2", 2), "reply-owed");
+    expect(dispatched).toEqual(["token-1", "token-2"]);
+
+    expect(coordinator.freezeForWatchdogFailStop()).toEqual({
+      droppedDispatched: 2,
+      droppedPending: 2,
+    });
+    for (const token of ["token-1", "token-2"]) {
+      expect(coordinator.settle(token)).toEqual({ kind: "stale", turnToken: token });
+    }
+    coordinator.dispatchNextForPeer("peer-a");
+    coordinator.dispatchNextForPeer("peer-b");
+    expect(dispatched).toEqual(["token-1", "token-2"]);
+    expect(() => coordinator.receive(inbound("peer-c", "c1", 1), "reply-owed")).toThrow(
+      "inter-agent turn coordinator is closed",
+    );
+  });
 });

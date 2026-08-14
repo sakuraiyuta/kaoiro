@@ -58,6 +58,11 @@ import {
 } from "@kaoiro/agent-common";
 import { ServerLink } from "@kaoiro/wrapper-core";
 import { resolveClaudeSources } from "./source_resolution.js";
+import {
+  TurnWatchdog,
+  readTurnWatchdogSettings,
+  type TurnWatchdogWarning,
+} from "./turn_watchdog.js";
 import type {
   Envelope,
   InterAgentMessagePayload,
@@ -117,6 +122,12 @@ async function main(): Promise<void> {
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseCliArgs(process.argv.slice(2));
   const config = loadConfig(configPath);
+  // Operational safety valve, deliberately wrapper-local rather than a
+  // dashboard/server/runner configuration surface (issue #248).
+  const turnWatchdogSettings = readTurnWatchdogSettings(
+    process.env,
+    (message) => process.stderr.write(message),
+  );
 
   // Engine-split default-model env (ADR-0032 F4bc addendum, phase-15 D1).
   // TODO(#103): drop the legacy KAOIRO_WRAPPER_DEFAULT_MODEL read and its
@@ -252,6 +263,10 @@ async function main(): Promise<void> {
    * copied into a CLI-only harness.
    */
   let interAgentTurns!: InterAgentTurnCoordinator;
+  // Set only after the watchdog exhausted its interrupt grace. Once true the
+  // current SDK token's outcome is unknown, so no later callback may reopen
+  // dispatch on this host generation (issue #248).
+  let watchdogFailStopped = false;
   // Transport deliberately does not await onInterAgentMessage. Register a
   // lease before receiveInbound() can await InterAgentTool's pending-done
   // gate, so host terminal teardown can stop a late handler before it enters
@@ -308,6 +323,11 @@ async function main(): Promise<void> {
           )
           .catch((err: unknown) => {
             process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
+            // failStop already terminally froze unstarted coordinator work;
+            // an instructionChain task that resumes afterwards is a retired
+            // no-op, not a fresh error to settle against the unknown active
+            // generation.
+            if (watchdogFailStopped) return;
             // A rejected input never reaches the SDK, so it has no terminal
             // callback. Settle this exact token and let the coordinator, not
             // a CID lookup, decide whether its peer may advance.
@@ -345,6 +365,53 @@ async function main(): Promise<void> {
       }),
     );
   };
+
+  const describeTurnWatchdogWarning = (warning: TurnWatchdogWarning): string => {
+    switch (warning.kind) {
+      case "inactivity_timeout":
+        return (
+          `[kaoiro] turn watchdog inactivity timeout: token=${warning.turnToken} ` +
+          `idle=${warning.idleMs}ms threshold=${warning.inactivityMs}ms; ` +
+          "requesting SDK interrupt"
+        );
+      case "abort_grace_expired":
+        return (
+          `[kaoiro] turn watchdog interrupt grace expired: token=${warning.turnToken} ` +
+          `grace=${warning.abortGraceMs}ms; stopping host admission and requiring operator recovery`
+        );
+      case "interrupt_unavailable":
+        return (
+          `[kaoiro] turn watchdog interrupt unavailable: token=${warning.turnToken}; ` +
+          "closing host admission through unattributed fail-stop"
+        );
+      case "fail_stop_unavailable":
+        return (
+          `[kaoiro] turn watchdog exact fail-stop unavailable: token=${warning.turnToken}; ` +
+          "closing host admission through unattributed fail-stop"
+        );
+      case "start_conflict":
+        return (
+          `[kaoiro] turn watchdog start attribution conflict: watched=${warning.watchedTurnToken} ` +
+          `started=${warning.startedTurnToken}; closing host admission through unattributed fail-stop`
+        );
+    }
+  };
+
+  // The watchdog begins only from AgentHost#onTurnStart below. Its callbacks
+  // close over `host`, but no timer can fire before construction completes.
+  const turnWatchdog = new TurnWatchdog({
+    settings: turnWatchdogSettings,
+    onWarning: (warning) => {
+      const text = describeTurnWatchdogWarning(warning);
+      process.stderr.write(`${text}\n`);
+      emitSystemLog(text);
+    },
+    requestInterrupt: (turnToken) => host.requestInterruptForTurn(turnToken),
+    failStop: (turnToken) => host.failStopTurnForWatchdog(turnToken),
+    failStopUnattributed: () => {
+      host.failStopForWatchdogAttributionUnknown();
+    },
+  });
 
   // phase-28 C2: holds an operator-approved reset until the turn boundary,
   // then asks the server. Failures are loud — one retry, then the agent is
@@ -756,10 +823,19 @@ async function main(): Promise<void> {
     // phase-28 BR MF2: the B1 threshold notice is an injection like any
     // other, so it queues on the one chain instead of racing it.
     enqueueInjection: enqueueInstruction,
+    onTurnStart: ({ turnToken }) => {
+      // Dispatch may have happened long before this point; only this host
+      // input-yield boundary is an actual SDK turn start (issue #248).
+      turnWatchdog.start(turnToken);
+    },
+    onTurnProgress: ({ turnToken }) => {
+      turnWatchdog.progress(turnToken);
+    },
     // issue #246: settle by the immutable opaque generation token. CIDs are
     // intentionally ignored for ownership: they remain only the payload sent
     // to resolveTurnEnd once that exact token has been found.
     onTurnEnd: ({ turnToken, error, cancellation }) => {
+      turnWatchdog.end(turnToken);
       if (turnToken !== undefined) {
         const settlement = interAgentTurns.settle(turnToken);
         // EOF cancellation must settle the exact token but must not free its
@@ -767,17 +843,30 @@ async function main(): Promise<void> {
         // the coordinator's remaining batches and enqueues their notices
         // before link.close (transport acceptance is not awaited).
         resolveInterAgentTurn(settlement, error, {
-          dispatchNext: cancellation === undefined,
+          dispatchNext: cancellation === undefined && !watchdogFailStopped,
         });
       }
-      if (cancellation === undefined) {
+      if (cancellation === undefined && !watchdogFailStopped) {
         // phase-28 C2 / ADR-0043 D3: a real ResultMessage is the wrapper's
         // turn boundary. A never-started queue cancellation is settlement,
         // not permission to relaunch a session.
         sessionReset.onTurnEnd();
       }
     },
+    onWatchdogFailStop: ({ turnToken, attribution }) => {
+      watchdogFailStopped = true;
+      const pendingIngress = interAgentIngress.close();
+      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken);
+      process.stderr.write(
+        `[kaoiro] turn watchdog fail-stop: token=${turnToken ?? "<unknown>"} ` +
+          `attribution=${attribution}; ` +
+          `closed ingress=${pendingIngress}, discarded unstarted ` +
+          `dispatched=${frozen.droppedDispatched}, pending=${frozen.droppedPending}. ` +
+          "Do not reuse this host; operator-controlled restore is required.\n",
+      );
+    },
     onHostEnd: ({ error }) => {
+      turnWatchdog.dispose();
       const pendingIngress = interAgentIngress.close();
       if (pendingIngress > 0) {
         process.stdout.write(
