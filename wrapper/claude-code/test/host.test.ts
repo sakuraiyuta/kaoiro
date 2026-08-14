@@ -1318,6 +1318,128 @@ describe("AgentHost — query injection", () => {
     ]);
   });
 
+  it("issue #248: watchdog は queue 追加ではなく SDK input yield で開始し、実 SDK frame だけを progress として渡す", async () => {
+    const starts: string[] = [];
+    const progress: string[] = [];
+    let allowInputPull!: () => void;
+    const inputPullGate = new Promise<void>((resolve) => {
+      allowInputPull = resolve;
+    });
+    let firstInputRead!: () => void;
+    const firstInputReadPromise = new Promise<void>((resolve) => {
+      firstInputRead = resolve;
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        await inputPullGate;
+        await args.prompt[Symbol.asyncIterator]().next();
+        firstInputRead();
+        // These frames are emitted by the SDK. The host must report them as
+        // progress while the token is active; local send()/timer activity is
+        // intentionally absent from this list.
+        yield system();
+        yield assistant([{ type: "text", text: "working" }]);
+        yield result("success", { result: "done" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+      onTurnProgress: ({ turnToken }) => progress.push(turnToken),
+      queryFn,
+      now: () => "T",
+    });
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"], "watch-a");
+    // Dispatched/queued is not started until the SDK actually asks #input.
+    expect(starts).toEqual([]);
+    expect(progress).toEqual([]);
+
+    allowInputPull();
+    await firstInputReadPromise;
+    host.close();
+    await done;
+
+    expect(starts).toEqual(["watch-a"]);
+    expect(progress).toEqual(["watch-a", "watch-a", "watch-a"]);
+  });
+
+  it("issue #248: watchdog fail-stop は active token を未確定のまま保持し、未開始 queue だけを exact cancellation する", async () => {
+    const turnEnds: unknown[] = [];
+    const failStops: unknown[] = [];
+    const states: string[] = [];
+    let firstInputRead!: () => void;
+    const firstInputReadPromise = new Promise<void>((resolve) => {
+      firstInputRead = resolve;
+    });
+    let releaseActive!: () => void;
+    const activeHeld = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        await args.prompt[Symbol.asyncIterator]().next();
+        firstInputRead();
+        await activeHeld;
+        // A late frame must still be consumed for token attribution, but it
+        // may not make the operator-facing state look recovered after the
+        // watchdog has made error sticky.
+        yield assistant([{ type: "text", text: "late after fail-stop" }]);
+        yield result("success", { result: "late A terminal" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: (envelope) => states.push(envelope.state),
+      onTurnEnd: (info) => turnEnds.push(info),
+      onWatchdogFailStop: (info) => failStops.push(info),
+      queryFn,
+      now: () => "T",
+    });
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"], "watch-a");
+    await firstInputReadPromise;
+    await host.send("B", undefined, ["cid-b"], "watch-b");
+
+    expect(host.failStopTurnForWatchdog("wrong")).toBe(false);
+    // This is the watchdog's token-mismatch fallback: it must close the
+    // current host without pretending the stale watched token is attributable.
+    expect(host.failStopForWatchdogAttributionUnknown()).toBe(true);
+    await expect(host.send("C")).rejects.toThrow("agent host is closed");
+    // B is known never to have reached the SDK, while A stays unreported
+    // until its actual terminal ResultMessage arrives.
+    expect(turnEnds).toEqual([
+      {
+        turnToken: "watch-b",
+        conversationIds: ["cid-b"],
+        error: {
+          detail:
+            "turn watchdog token attribution unavailable; host admission stopped pending operator recovery",
+        },
+        cancellation: { kind: "watchdog_fail_stop", started: false },
+      },
+    ]);
+    expect(failStops).toEqual([
+      {
+        turnToken: "watch-a",
+        conversationIds: ["cid-a"],
+        attribution: "unattributed",
+      },
+    ]);
+    expect(states).toContain("error");
+
+    releaseActive();
+    await done;
+    expect(turnEnds).toEqual([
+      expect.objectContaining({ turnToken: "watch-b" }),
+      { turnToken: "watch-a", conversationIds: ["cid-a"] },
+    ]);
+    const errorIndex = states.lastIndexOf("error");
+    expect(errorIndex).toBeGreaterThanOrEqual(0);
+    expect(states.slice(errorIndex + 1)).toEqual([]);
+  });
+
   it("rate_limit_event を ext.rate_limits として state_change に付与する (#16)", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {

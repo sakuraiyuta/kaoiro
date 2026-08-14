@@ -190,6 +190,38 @@ export class InterAgentTurnCoordinator {
     this.#dispatchNext(peer);
   }
 
+  /** Stops future dispatch after a watchdog fail-stop while retaining the
+   * exact SDK-active generation. Its outcome remains unknown until a real
+   * ResultMessage/EOF, so resolving it (or a same-CID successor) here would
+   * violate generation ordering. Unstarted batches are discarded from local
+   * ownership and reported through the caller's controlled-recovery warning;
+   * server disconnect remains the peer-visible fallback on operator restore.
+   */
+  freezeForWatchdogFailStop(activeTurnToken?: string): {
+    droppedDispatched: number;
+    droppedPending: number;
+  } {
+    if (this.#closed) return { droppedDispatched: 0, droppedPending: 0 };
+    this.#closed = true;
+    let droppedDispatched = 0;
+    let droppedPending = 0;
+
+    for (const [turnToken, batch] of this.#batchByTurnToken) {
+      if (activeTurnToken !== undefined && turnToken === activeTurnToken) continue;
+      this.#batchByTurnToken.delete(turnToken);
+      this.#retire(turnToken);
+      if (this.#activeTokenByPeer.get(batch.peer) === turnToken) {
+        this.#activeTokenByPeer.delete(batch.peer);
+      }
+      droppedDispatched += 1;
+    }
+    for (const batches of this.#pendingBatches.values()) {
+      droppedPending += batches.length;
+    }
+    this.#pendingBatches.clear();
+    return { droppedDispatched, droppedPending };
+  }
+
   /**
    * Stops dispatch permanently and returns every batch that remains owned by
    * the coordinator. Callers first settle host-owned turns, then register and

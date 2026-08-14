@@ -366,6 +366,8 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   const notices: Envelope[] = [];
   let host!: AgentHost;
   let tokenSequence = 0;
+  let watchdogFailStopped = false;
+  let sessionResetCalls = 0;
   const ingressGate = new InterAgentIngressGate();
   const coordinator = new InterAgentTurnCoordinator({
     createTurnToken: () => `test-token-${++tokenSequence}`,
@@ -419,7 +421,10 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   function onTurnEnd(
     turnToken: string | undefined,
     error?: { reason?: string; detail?: string },
-    cancellation?: { kind: "stream_eof"; started: boolean },
+    cancellation?: {
+      kind: "stream_eof" | "watchdog_fail_stop";
+      started: boolean;
+    },
   ): void {
     if (turnToken === undefined) return;
     const settlement = coordinator.settle(turnToken);
@@ -431,9 +436,16 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     )) {
       notices.push(notice);
     }
-    if (cancellation === undefined) {
+    if (cancellation === undefined && !watchdogFailStopped) {
       coordinator.dispatchNextForPeer(settlement.batch.peer);
+      sessionResetCalls += 1;
     }
+  }
+
+  function onWatchdogFailStop(turnToken: string | undefined): void {
+    watchdogFailStopped = true;
+    ingressGate.close();
+    coordinator.freezeForWatchdogFailStop(turnToken);
   }
 
   function onHostEnd(error: { reason?: string; detail?: string }): void {
@@ -458,7 +470,11 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     onHostEnd,
     sentBatches,
     notices,
+    get sessionResetCalls(): number {
+      return sessionResetCalls;
+    },
     terminalIngressSkips,
+    onWatchdogFailStop,
     bindHost: (h: AgentHost) => {
       host = h;
     },
@@ -772,6 +788,60 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     expect(payload.to).toBe("peer.agent");
     expect(payload.conversation_id).toBe("x");
     expect(payload.error).toBeDefined();
+  });
+
+  it("issue #248: fail-stop は active A・host queue B・same-peer pending C を凍結し、late A 終端で successor / reset / CID 二重resolve を起こさない", async () => {
+    const { queryFn, releaseNext } = makeControllableQueryFn();
+    const tool = new InterAgentTool({ config, getState: () => "idle", send: () => {} });
+    const harness = makeCoalescingHarness(tool);
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnStart: () => started(),
+      onTurnEnd: (info) =>
+        harness.onTurnEnd(info.turnToken, info.error, info.cancellation),
+      onWatchdogFailStop: (info) => harness.onWatchdogFailStop(info.turnToken),
+      onHostEnd: (info) => harness.onHostEnd(info.error),
+      queryFn,
+      now: () => "T",
+    });
+    harness.bindHost(host);
+    const done = host.run();
+
+    // A is active. Different-peer B can already be coordinator-dispatched
+    // and host-queued, while same-peer C remains coordinator-pending.
+    await harness.receive(inboundEnvelope("cid-a", 1));
+    await startedPromise;
+    await harness.receive({ ...inboundEnvelope("cid-b", 1), agent_id: "peer-b" });
+    await harness.receive(inboundEnvelope("cid-a", 2));
+    expect(harness.sentBatches).toEqual([
+      { peer: "peer.agent", cids: ["cid-a"] },
+      { peer: "peer-b", cids: ["cid-b"] },
+    ]);
+
+    expect(host.failStopTurnForWatchdog("test-token-1")).toBe(true);
+    // B was never yielded, so it receives one exact failure notice. C never
+    // becomes dispatchable: because A's cid is still unresolved, C must not
+    // overwrite/resolve A's pending injection speculatively.
+    expect(harness.notices).toHaveLength(1);
+    expect(
+      (harness.notices[0]!.payload as unknown as InterAgentMessagePayload)
+        .conversation_id,
+    ).toBe("cid-b");
+
+    releaseNext("success");
+    await done;
+    expect(harness.sentBatches).toHaveLength(2);
+    expect(harness.notices).toHaveLength(1);
+    expect(harness.sessionResetCalls).toBe(0);
+    // A's success cleared only A. C was never registered behind the unknown
+    // active cid, so no delayed second resolve can manufacture a duplicate.
+    expect(
+      tool.resolveTurnEnd(["cid-a"], { code: "api_error", message: "late" }),
+    ).toEqual([]);
   });
 
   it(
