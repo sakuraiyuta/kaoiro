@@ -156,10 +156,67 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
         ])
 
       assert body =~ "# One entry per line: provider:identifier[:role]"
-      assert body =~ "# role: viewer | operator (optional; defaults to viewer)"
+      assert body =~ "# role: viewer | operator | admin (optional; defaults to viewer)"
+      # bootstrap surface なので、admin を宣言せよという注意と、
+      # zero-admin からの復旧経路まで出す (issue #198、ふじ must-fix 2)。
+      assert body =~ "Declare at least one."
+      assert body =~ "only recovery"
       assert body =~ "google:master@example.com:operator"
       assert body =~ "github:ao"
       assert String.ends_with?(body, "\n")
+    end
+  end
+
+  describe "interactive client token setup" do
+    setup do
+      original_shell = Mix.shell()
+      Mix.shell(Mix.Shell.Process)
+
+      on_exit(fn -> Mix.shell(original_shell) end)
+
+      :ok
+    end
+
+    # issue #198 / ふじ must-fix 2。admin は config からしか付与できない
+    # ので、この wizard が admin を出さなければ生成される .env は必ず
+    # admin 不在になる。private helper を公開せず、Env.run/1 越しに
+    # 「admin を選べて実際に書き出される」ことを end-to-end で測る。
+    test "admin を選ぶと KAOIRO_CLIENT_TOKENS に admin として書き出す" do
+      dir = Path.join(System.tmp_dir!(), "kaoiro_env_test_#{System.unique_integer([:positive])}")
+      env_path = Path.join(dir, ".env")
+      File.mkdir_p!(dir)
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      [
+        # SECRET_KEY_BASE を自動生成
+        "",
+        "kaoiro.example.com",
+        # port / bind IP は既定
+        "",
+        "",
+        # Add client tokens?
+        "y",
+        # generate the client #1 token? -> no、自分で指定する
+        "n",
+        "admin-token",
+        # admin?
+        "y",
+        # Add another client token?
+        "n",
+        # wrapper / runner tokens
+        "n",
+        "n",
+        # persona dir
+        "",
+        # Configure OAuth login?
+        "n"
+      ]
+      |> Enum.each(&send(self(), {:mix_shell_input, :prompt, &1}))
+
+      Env.run(["--path", env_path])
+
+      assert File.read!(env_path) =~ "KAOIRO_CLIENT_TOKENS=admin-token:admin"
     end
   end
 
@@ -196,7 +253,10 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
         "github-id",
         "github-secret",
         "n",
-        "github:ao",
+        # admin を含む行を通す (issue #198、ふじ must-fix 2)。private な
+        # normalize_allowlist_entry/1 を公開せず、Env.run/1 越しに
+        # 「admin 行が受理されて実際に生成される」ことを end-to-end で測る。
+        "github:ao:admin",
         "n"
       ]
       |> Enum.each(&send(self(), {:mix_shell_input, :prompt, &1}))
@@ -211,7 +271,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       assert env =~ "KAOIRO_OAUTH_GITHUB_CLIENT_SECRET=github-secret"
       assert env =~ "KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt"
       refute env =~ "KAOIRO_OAUTH_GOOGLE_CLIENT_ID="
-      assert allowlist =~ "github:ao"
+      assert allowlist =~ "github:ao:admin"
       assert Bitwise.band(File.stat!(env_path).mode, 0o777) == 0o600
       assert Bitwise.band(File.stat!(allowlist_path).mode, 0o777) == 0o600
       assert output =~ "Keep #{allowlist_path} out of git"

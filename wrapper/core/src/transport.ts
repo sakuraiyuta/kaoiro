@@ -121,11 +121,21 @@ export interface DirectoryEntry {
  *  for these two fields was proposed and explicitly rejected (director
  *  review, issue #197 段階2 M2); issue #198 (admin role) extends both
  *  server (`role_string/1`) and this union/narrow together. */
+/** Single source for the role allow-list: the TYPE below and the runtime
+ *  narrow in `userDirectoryEntryFrom` are both derived from this array,
+ *  so they cannot drift apart. They previously could — the comment above
+ *  had to instruct a future reader to extend "both together", and that is
+ *  exactly the kind of paired edit issue #198 found half-done elsewhere.
+ *  Adding a role is a one-line change here and nowhere else. */
+const USER_ROLES = ["operator", "viewer", "admin"] as const;
+
+export type UserRole = (typeof USER_ROLES)[number];
+
 export interface UserDirectoryEntry {
   id: string;
   kind: "user";
   display_name: string;
-  role: "operator" | "viewer";
+  role: UserRole;
 }
 
 /** `requestDirectory()`'s reply shape (issue #197 段階2). `agents` and
@@ -670,8 +680,9 @@ function validDisplayNameOrNull(name: string): string | null {
  *  required, no per-field unknown" stance. `kind`/`role` are checked
  *  against the exact allow-listed literal/enum, not merely `typeof
  *  === "string"` (ふじ M2 レビュー指摘: a plain-string check let an
- *  unrecognised `kind`/`role` value — e.g. a future `"agent"` or
- *  `"admin"` — pass through unnoticed). `id` is checked against the
+ *  unrecognised `kind`/`role` value — e.g. a future `"agent"`, or
+ *  `"admin"` back when issue #198 had not yet added it — pass through
+ *  unnoticed). `id` is checked against the
  *  same charset the server enforces, `display_name` against the same
  *  trim/length/control-char contract the server enforces
  *  (`validDisplayNameOrNull`, ふじ MF-1 レビュー指摘: this used to accept
@@ -682,6 +693,13 @@ function validDisplayNameOrNull(name: string): string | null {
  *  entry does not affect its siblings — the caller maps this over the
  *  array and filters nulls, so a single bad entry among many valid ones
  *  is dropped on its own. */
+/** Runtime half of `USER_ROLES`. Widening to `readonly unknown[]` is the
+ *  only way `includes` accepts an `unknown`; it widens the ARGUMENT type,
+ *  never the set being matched, so the check stays exact. */
+function isUserRole(value: unknown): value is UserRole {
+  return (USER_ROLES as readonly unknown[]).includes(value);
+}
+
 function userDirectoryEntryFrom(value: unknown): UserDirectoryEntry | null {
   if (!isObject(value)) return null;
   const v = value as Record<string, unknown>;
@@ -690,7 +708,7 @@ function userDirectoryEntryFrom(value: unknown): UserDirectoryEntry | null {
     !USER_ID_PATTERN.test(v.id) ||
     v.kind !== "user" ||
     typeof v.display_name !== "string" ||
-    (v.role !== "operator" && v.role !== "viewer")
+    !isUserRole(v.role)
   ) {
     return null;
   }

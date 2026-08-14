@@ -22,7 +22,11 @@ import {
   conversationEntryKey,
   type ConversationEntry,
 } from "../src/lib/conversationTimeline";
-import type { DirectoryEntry, Envelope } from "../src/lib/protocol";
+import type {
+  DirectoryEntry,
+  Envelope,
+  PersonaManifest,
+} from "../src/lib/protocol";
 
 const mounted: object[] = [];
 
@@ -44,6 +48,21 @@ function stateEnv(agentId: string, name: string): Envelope {
     ts: "2026-07-23T14:59:00Z",
     type: "state_change",
     state: "idle",
+  };
+}
+
+// issue #244: デフォルト(未割り当て)ペルソナ envelope。sprite_set: "default"
+// は予約値で PersonaAssets manifest に登録されない (personas.md) ので
+// spriteUrlFor は常に null を返す — フォールバック表示の分岐だけを
+// 確認したいテスト用に state を差し替え可能にしてある。
+function defaultPersonaEnv(agentId: string, state: string): Envelope {
+  return {
+    version: "0",
+    agent_id: agentId,
+    persona: { id: "default", name: "デフォルト", sprite_set: "default" },
+    ts: "2026-07-23T14:59:00Z",
+    type: "state_change",
+    state,
   };
 }
 
@@ -95,6 +114,7 @@ async function renderTimeline(options: {
   agents: Record<string, Envelope>;
   directory?: Record<string, DirectoryEntry>;
   logs: Record<string, Envelope[]>;
+  manifest?: PersonaManifest | null;
   now?: number;
   readTimelineEntryKeys?: ReadonlySet<string>;
   newTimelineEntryKeys?: ReadonlySet<string>;
@@ -110,7 +130,7 @@ async function renderTimeline(options: {
       agents: options.agents,
       ...(options.directory ? { directory: options.directory } : {}),
       logs: options.logs,
-      manifest: null,
+      manifest: options.manifest ?? null,
       now: options.now ?? NOW,
       ...(options.readTimelineEntryKeys
         ? { readTimelineEntryKeys: options.readTimelineEntryKeys }
@@ -420,5 +440,94 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     expect(target.querySelector(".summary")?.textContent?.trim()).toBe(
       "(空メッセージ)",
     );
+  });
+
+  // issue #244 ふじ must-1: 実際の再現条件は (a) manifest は利用可能
+  // だが予約 sprite_set "default" だけ未登録 (personas.md) — manifest:
+  // null では default も ao も等しく null になり、この点を測れない —
+  // (b) live envelope の persona (default, concrete object) が `??`
+  // の左辺で勝ち、directory 側の (登録済み) sprite へ誤って落ちない、
+  // の2点。同じ agent_id の directory に sprite 登録済みの ao persona
+  // を同居させ、両方を一度に固定する。
+  //
+  // 「見た目の完全一致」ではなく「sprite の有無・CSS-face fallback」
+  // という表示契約の一致だけが対象 (ふじ should-2)。tone・eye/mouth
+  // 形状・アニメーションは 4 箇所で既に差異があり、ここでは揃えない。
+  // agent-strip は eye/mouth 形状を state 非依存に保っており
+  // (App.svelte の `.chip .face` コメント参照)、`.chip` と AgentDetail
+  // の `.detail` には `waiting_question` の tone rule が無い。統一は
+  // issue #245 の仕事。
+  //
+  // agent-strip / AgentCard / AgentDetail は sprite 無しを state 依存
+  // CSS 顔 (.face + .eye + .mouth) で表示するのに対し、ResponseTimeline
+  // だけが state 非依存の固定絵文字だった不一致の回帰テスト。この行を
+  // revert すると再び落ちる (negative control 済み)。
+  function buildManifest(): PersonaManifest {
+    return {
+      version: "1",
+      personas: {
+        // "default" は予約 sprite_set (personas.md) — manifest に
+        // pack を置かないため意図的に未登録のまま。
+        ao: {
+          states: {
+            idle: { url: "/personas/ao/idle.png", hash: "sha256:idle" },
+            thinking: {
+              url: "/personas/ao/thinking.png",
+              hash: "sha256:thinking",
+            },
+            error: { url: "/personas/ao/error.png", hash: "sha256:error" },
+          },
+        },
+      },
+    };
+  }
+
+  const AO_DIRECTORY_FOR = (agentId: string): Record<string, DirectoryEntry> => ({
+    [agentId]: {
+      persona: { id: "ao", name: "あお", sprite_set: "ao" },
+      display_name: "あお",
+      last_seen: null,
+    },
+  });
+
+  it("persona 未割り当て (sprite_set: default、manifest 未登録) は directory の ao sprite ではなく CSS 顔を表示する (issue #244, ふじ must-1)", async () => {
+    const target = await renderTimeline({
+      agents: { "lab-pc.a": defaultPersonaEnv("lab-pc.a", "thinking") },
+      directory: AO_DIRECTORY_FOR("lab-pc.a"),
+      logs: {
+        "lab-pc.a": [assistant("lab-pc.a", secAgo(10), "hi")],
+      },
+      manifest: buildManifest(),
+    });
+    const portrait = target.querySelector(".portrait");
+    expect(portrait?.querySelector("img")).toBeNull();
+    expect(portrait?.getAttribute("data-state")).toBe("thinking");
+    expect(portrait?.querySelector(".face")).not.toBeNull();
+    expect(portrait?.querySelectorAll(".eye").length).toBe(2);
+    expect(portrait?.querySelector(".mouth")).not.toBeNull();
+  });
+
+  it("agent の state が変わると未割り当てペルソナの CSS 顔の data-state も追随する (idle と error で見た目が変わる、issue #244)", async () => {
+    const idleTarget = await renderTimeline({
+      agents: { "lab-pc.a": defaultPersonaEnv("lab-pc.a", "idle") },
+      directory: AO_DIRECTORY_FOR("lab-pc.a"),
+      logs: { "lab-pc.a": [assistant("lab-pc.a", secAgo(10), "hi")] },
+      manifest: buildManifest(),
+    });
+    expect(idleTarget.querySelector(".portrait img")).toBeNull();
+    expect(
+      idleTarget.querySelector(".portrait")?.getAttribute("data-state"),
+    ).toBe("idle");
+
+    const errorTarget = await renderTimeline({
+      agents: { "lab-pc.a": defaultPersonaEnv("lab-pc.a", "error") },
+      directory: AO_DIRECTORY_FOR("lab-pc.a"),
+      logs: { "lab-pc.a": [assistant("lab-pc.a", secAgo(10), "hi")] },
+      manifest: buildManifest(),
+    });
+    expect(errorTarget.querySelector(".portrait img")).toBeNull();
+    expect(
+      errorTarget.querySelector(".portrait")?.getAttribute("data-state"),
+    ).toBe("error");
   });
 });

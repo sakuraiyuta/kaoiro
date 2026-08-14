@@ -51,7 +51,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     Application.put_env(
       :kaoiro_server,
       :client_tokens,
-      "tok-operator:operator,tok-viewer:viewer"
+      "tok-operator:operator,tok-viewer:viewer,tok-admin:admin"
     )
 
     on_exit(fn -> Application.delete_env(:kaoiro_server, :client_tokens) end)
@@ -1670,6 +1670,64 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                     }
                   }
     end
+  end
+
+  # admin は operator の上位 (ADR-0050 D2)。inbound だけ通して outbound を
+  # 落とすと「全コマンドを実行できるが何も見えない admin」になり、実装中に
+  # 実際にその一歩手前まで行った (`require_operator/1` に admin を足しても、
+  # `role == :operator` の直接比較が別に 8 箇所残っていた)。inbound 側と
+  # outbound 側の両方を、同じ describe で並べて pin する。
+  describe "admin は operator 経路を inbound / outbound とも通る (issue #198)" do
+    test "operator 限定 inbound を admin が通せる" do
+      agent_id = "test.admin-inbound"
+      put_agent(agent_id)
+      socket = join_as(:admin)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
+
+      assert_reply ref, :ok, _
+    end
+
+    test "operator 限定 outbound (history_reset) を admin が受け取る" do
+      agent_id = "test.admin-outbound"
+      _socket = join_as(:admin)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_reset", %{
+        "agent_id" => agent_id
+      })
+
+      assert_push "history_reset", %{"agent_id" => ^agent_id}
+    end
+
+    test "viewer が落とす envelope allow-list を admin は通過する" do
+      envelope = inter_agent_envelope("test.iam-adm-from", "test.iam-adm-to")
+      _socket = join_as(:admin)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
+
+      assert_push "envelope", %{"type" => "inter_agent_message"}
+    end
+
+    test "join 時の snapshot に admin でも tasks キーが入る" do
+      # snapshot の tasks は handle_out ではなく join 経路の別ゲート
+      # (ふじ should 1)。集約したうちの 1 箇所だけ直接比較へ戻る回帰は
+      # 上の 3 本では拾えない。
+      on_exit(fn -> TaskStates.discard_for_agent("test.task-snap-admin") end)
+      TaskStates.put(task_envelope("test.task-snap-admin", "t1"))
+
+      _socket = join_as(:admin)
+
+      assert_push "snapshot", %{"tasks" => tasks}
+      assert %{"test.task-snap-admin" => %{"t1" => stored}} = tasks
+      assert stored["payload"]["task_id"] == "t1"
+    end
+
+    # 未知 role の fail-closed はここでは測れない: `parse_role/1` が 3 語
+    # 以外を nil にするため、未知の role atom が `require_operator/1` へ
+    # 到達する経路が無い。assigns へ直接入れると #158 の role 再解決の
+    # 不一致経路を測ることになり、意図と別のものが通ってしまう。綴り違い
+    # の fail-closed は auth_test 側で pin してある。
   end
 
   describe "history_reset の operator 限定配信 (issue #50, ADR-0021)" do
@@ -4862,6 +4920,22 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_broadcast "instruction", _
 
       # cleanup for next test
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "pending 中は admin の instruction も reject される (issue #198)" do
+      # admin は operator の上位だが、この guard は権限ではなく順序の
+      # 不変条件なので免除しない。免除すると race が戻る (ふじ should 1)。
+      agent_id = "gp.instr-admin"
+      acquire_reset_lock(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:admin)
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "hi"})
+
+      assert_reply ref, :error, %{reason: "session_reset_pending"}
+      refute_broadcast "instruction", _
+
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
 

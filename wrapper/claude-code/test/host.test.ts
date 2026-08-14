@@ -10,7 +10,11 @@ import type {
 import { AgentHost, initialStatusExt } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
 import { INTER_AGENT_TOOL_FQN, makeStateChange } from "@kaoiro/agent-common";
-import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import type {
+  Envelope,
+  TasklistSourceItem,
+  WrapperConfig,
+} from "@kaoiro/agent-common";
 import {
   PENDING_UPLOAD_TTL_MS,
   SharpImageDownsizer,
@@ -112,6 +116,8 @@ const assistant = (content: unknown): SDKMessage =>
   msg({ type: "assistant", message: { content } });
 const user = (content: unknown): SDKMessage =>
   msg({ type: "user", message: { content } });
+const taskToolResult = (toolUseId: string): SDKMessage =>
+  user([{ type: "tool_result", tool_use_id: toolUseId, content: "ok" }]);
 const result = (
   subtype: string,
   extra: Record<string, unknown> = {},
@@ -738,13 +744,26 @@ describe("AgentHost — query injection", () => {
       chain = queued.catch(() => {});
       return queued;
     };
-    const { queryFn, injected } = contextQueryFn(
-      [{ totalTokens: 150000, maxTokens: 200000, percentage: 75 }],
-      async function* () {
-        yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 120));
-      },
-    );
+    const injected: string[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        // Drive a terminal result for EACH input. This matters after #246:
+        // the host intentionally refuses to yield the next input before the
+        // current turn's result, so a fake stream that only consumes input
+        // without ever ending a turn would be an invalid test model.
+        for await (const turn of args.prompt) {
+          const content = turn.message.content;
+          injected.push(typeof content === "string" ? content : "");
+          yield result("success", { result: "ok" });
+          if (injected.length === 2) return;
+        }
+      }
+      return asQuery(
+        gen(),
+        async () => {},
+        async () => ({ totalTokens: 150000, maxTokens: 200000, percentage: 75 }),
+      );
+    });
     host = new AgentHost(config, {
       onState: () => {},
       queryFn,
@@ -910,6 +929,7 @@ describe("AgentHost — query injection", () => {
 
   it("error result は onTurnEnd に conversationIds=[](未タグ) + terminal_reason/error_detail を渡す (issue #131)", async () => {
     const turnEnds: {
+      turnToken?: string;
       conversationIds: readonly string[];
       error?: { reason?: string; detail?: string };
     }[] = [];
@@ -947,6 +967,7 @@ describe("AgentHost — query injection", () => {
 
   it("並存する複数 inter-agent injection は各ターンの conversationIds だけを解決する (issue #131 must-fix 1)", async () => {
     const turnEnds: {
+      turnToken?: string;
       conversationIds: readonly string[];
       error?: { reason?: string; detail?: string };
     }[] = [];
@@ -983,14 +1004,17 @@ describe("AgentHost — query injection", () => {
     host.close();
     await done;
 
-    expect(turnEnds).toEqual([
-      { conversationIds: ["cnv-a"], error: { detail: "boom" } },
-      { conversationIds: ["cnv-b"] },
+    expect(turnEnds.map((entry) => entry.conversationIds)).toEqual([
+      ["cnv-a"],
+      ["cnv-b"],
     ]);
+    expect(turnEnds[0]?.error).toEqual({ detail: "boom" });
+    expect(turnEnds.every((entry) => typeof entry.turnToken === "string")).toBe(true);
+    expect(new Set(turnEnds.map((entry) => entry.turnToken)).size).toBe(2);
   });
 
   it("1回の send() に複数 cid を渡すと1ターンとして onTurnEnd に全件まとめて渡す (issue #221 段階3, 合流turn)", async () => {
-    const turnEnds: { conversationIds: readonly string[] }[] = [];
+    const turnEnds: { turnToken?: string; conversationIds: readonly string[] }[] = [];
     // scriptedQuery() ignores args.prompt entirely (see its own doc), so
     // #input()'s per-turn tag shifting never runs under it — same reason
     // the "並存する複数..." test above uses a prompt-draining queryFn
@@ -1014,7 +1038,284 @@ describe("AgentHost — query injection", () => {
     host.close();
     await done;
 
-    expect(turnEnds).toEqual([{ conversationIds: ["cnv-p", "cnv-q", "cnv-r"] }]);
+    expect(turnEnds.map((entry) => entry.conversationIds)).toEqual([
+      ["cnv-p", "cnv-q", "cnv-r"],
+    ]);
+    expect(turnEnds[0]?.turnToken).toEqual(expect.any(String));
+  });
+
+  it("issue #246 negative control: SDK の eager pull で B を A の result 前に受け取らない", async () => {
+    const turnEnds: { turnToken?: string; conversationIds: readonly string[] }[] = [];
+    // This fake SDK deliberately asks the input generator for B before it
+    // yields A's result. Current code permits it and overwrites A's mutable
+    // CID tag with B. The target barrier must keep `second` pending until the
+    // first result has been processed, then let this generator yield B.
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = args.prompt[Symbol.asyncIterator]();
+        const first = await input.next();
+        expect(first.done).toBe(false);
+        const second = input.next();
+        let secondArrivedBeforeFirstResult = false;
+        await Promise.race([
+          second.then(() => {
+            secondArrivedBeforeFirstResult = true;
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 20)),
+        ]);
+        expect(secondArrivedBeforeFirstResult).toBe(false);
+
+        yield result("success", { result: "A done" });
+        const secondResult = await second;
+        expect(secondResult.done).toBe(false);
+        yield result("success", { result: "B done" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"]);
+    await host.send("B", undefined, ["cid-b"]);
+    host.close();
+    await done;
+
+    expect(turnEnds.map((entry) => entry.conversationIds)).toEqual([
+      ["cid-a"],
+      ["cid-b"],
+    ]);
+    expect(turnEnds.every((entry) => typeof entry.turnToken === "string")).toBe(true);
+    expect(new Set(turnEnds.map((entry) => entry.turnToken)).size).toBe(2);
+  });
+
+  it("issue #246: IA(A) → operator → IA(B) は token と CID を各 turn に正確に保つ", async () => {
+    const turnEnds: {
+      turnToken?: string;
+      conversationIds: readonly string[];
+    }[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        for await (const _ of args.prompt) {
+          yield result("success", { result: "ok" });
+        }
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("IA A", undefined, ["cid-a"], "ia-a");
+    await host.send("operator", undefined, undefined, "operator");
+    await host.send("IA B", undefined, ["cid-b"], "ia-b");
+    host.close();
+    await done;
+
+    expect(turnEnds).toEqual([
+      { turnToken: "ia-a", conversationIds: ["cid-a"] },
+      { turnToken: "operator", conversationIds: [] },
+      { turnToken: "ia-b", conversationIds: ["cid-b"] },
+    ]);
+  });
+
+  it("issue #246: conversation_reset 単体は barrier を開かず後続 ResultMessage が A を終端する", async () => {
+    const turnEnds: unknown[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = args.prompt[Symbol.asyncIterator]();
+        await input.next();
+        const second = input.next();
+        yield msg({ type: "conversation_reset", new_conversation_id: "new" });
+        let bArrivedBeforeAResult = false;
+        await Promise.race([
+          second.then(() => {
+            bArrivedBeforeAResult = true;
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 20)),
+        ]);
+        expect(bArrivedBeforeAResult).toBe(false);
+        yield result("error_during_execution", { errors: ["A reset error"] });
+        expect((await second).done).toBe(false);
+        yield result("success", { result: "B done" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"], "reset-a");
+    await host.send("B", undefined, ["cid-b"], "reset-b");
+    await done;
+    expect(turnEnds).toEqual([
+      {
+        turnToken: "reset-a",
+        conversationIds: ["cid-a"],
+        error: { detail: "A reset error" },
+      },
+      { turnToken: "reset-b", conversationIds: ["cid-b"] },
+    ]);
+  });
+
+  it("issue #246: interrupt ACK 後の buffered A result まで B を yield せず token を保つ", async () => {
+    const turnEnds: unknown[] = [];
+    let armed!: () => void;
+    const armedPromise = new Promise<void>((resolve) => {
+      armed = resolve;
+    });
+    let acknowledgeInterrupt!: () => void;
+    const interruptAcknowledged = new Promise<void>((resolve) => {
+      acknowledgeInterrupt = resolve;
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = args.prompt[Symbol.asyncIterator]();
+        await input.next();
+        armed();
+        await interruptAcknowledged;
+        const second = input.next();
+        let bArrivedBeforeAResult = false;
+        await Promise.race([
+          second.then(() => {
+            bArrivedBeforeAResult = true;
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 20)),
+        ]);
+        expect(bArrivedBeforeAResult).toBe(false);
+        yield result("error_during_execution", { errors: ["interrupted A"] });
+        expect((await second).done).toBe(false);
+        yield result("success", { result: "B done" });
+      }
+      // This mimics the SDK control ACK only. The generator deliberately
+      // emits A's buffered ResultMessage after that ACK.
+      return asQuery(gen(), async () => acknowledgeInterrupt());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"], "interrupt-a");
+    await armedPromise;
+    await host.send("B", undefined, ["cid-b"], "interrupt-b");
+    await host.interrupt();
+    await done;
+    expect(turnEnds).toEqual([
+      {
+        turnToken: "interrupt-a",
+        conversationIds: ["cid-a"],
+        error: { detail: "interrupted A" },
+      },
+      { turnToken: "interrupt-b", conversationIds: ["cid-b"] },
+    ]);
+  });
+
+  it("issue #246: stream EOF は active と未 yield queue の全 token を一度ずつ終端する", async () => {
+    const turnEnds: unknown[] = [];
+    let armed!: () => void;
+    const armedPromise = new Promise<void>((resolve) => {
+      armed = resolve;
+    });
+    let endStream!: () => void;
+    const streamHeld = new Promise<void>((resolve) => {
+      endStream = resolve;
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        await args.prompt[Symbol.asyncIterator]().next();
+        armed();
+        await streamHeld;
+        // EOF: no result for A, and B/C are still in AgentHost.#queue.
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"], "eof-a");
+    await armedPromise;
+    await host.send("B", undefined, ["cid-b"], "eof-b");
+    await host.send("C", undefined, ["cid-c"], "eof-c");
+    endStream();
+    await done;
+    expect(turnEnds).toEqual([
+      {
+        turnToken: "eof-a",
+        conversationIds: ["cid-a"],
+        error: { detail: "SDK stream ended before terminal result" },
+        cancellation: { kind: "stream_eof", started: true },
+      },
+      {
+        turnToken: "eof-b",
+        conversationIds: ["cid-b"],
+        error: { detail: "SDK stream ended before terminal result" },
+        cancellation: { kind: "stream_eof", started: false },
+      },
+      {
+        turnToken: "eof-c",
+        conversationIds: ["cid-c"],
+        error: { detail: "SDK stream ended before terminal result" },
+        cancellation: { kind: "stream_eof", started: false },
+      },
+    ]);
+  });
+
+  it("issue #246: close は drain 中 turn の token を消さず late result で終端する", async () => {
+    const turnEnds: unknown[] = [];
+    let armed!: () => void;
+    const armedPromise = new Promise<void>((resolve) => {
+      armed = resolve;
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        await args.prompt[Symbol.asyncIterator]().next();
+        armed();
+        await held;
+        yield result("success", { result: "drained" });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: (info) => turnEnds.push(info),
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await host.send("A", undefined, ["cid-a"], "close-token");
+    await armedPromise;
+    host.close();
+    release();
+    await done;
+    expect(turnEnds).toEqual([
+      { turnToken: "close-token", conversationIds: ["cid-a"] },
+    ]);
   });
 
   it("rate_limit_event を ext.rate_limits として state_change に付与する (#16)", async () => {
@@ -1894,30 +2195,60 @@ describe("AgentHost — query injection", () => {
 });
 
 describe("AgentHost — own tasklist envelopes (issue #188)", () => {
-  it("TodoWrite を tasklist の whole-list envelope にし、完全重複は送らない", async () => {
+  it("TaskCreate は対応する tool_result 後にだけ persisted snapshot を読み、完全重複は送らない", async () => {
     const tasks: Envelope[] = [];
-    const todoWrite = assistant([
-      {
-        type: "tool_use",
-        name: "TodoWrite",
-        input: {
-          todos: [
-            { content: "調査", status: "in_progress", activeForm: "調査中" },
-            { content: "実装", status: "pending", activeForm: "実装中" },
-          ],
-        },
-      },
-    ]);
+    const reads: string[] = [];
+    let persisted: TasklistSourceItem[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", session_id: "session-1" });
+        yield assistant([
+          {
+            type: "tool_use",
+            id: "create-1",
+            name: "TaskCreate",
+            input: { subject: "調査", description: "調べる" },
+          },
+        ]);
+        // AssistantMessage は tool 実行より先に届く。ここではまだ読まない。
+        expect(reads).toEqual([]);
+        expect(tasks).toEqual([]);
+
+        persisted = [
+          { text: "調査", status: "in_progress" },
+          { text: "実装", status: "pending" },
+        ];
+        yield taskToolResult("create-1");
+        expect(reads).toEqual(["session-1"]);
+        expect(tasks).toHaveLength(1);
+
+        yield assistant([
+          { type: "tool_use", id: "list-1", name: "TaskList", input: {} },
+        ]);
+        expect(reads).toEqual(["session-1"]);
+        yield taskToolResult("list-1");
+        // 同一 whole-list snapshot は LWW の再送をしない。
+        expect(reads).toEqual(["session-1", "session-1"]);
+        expect(tasks).toHaveLength(1);
+        yield result("success");
+      }
+      return asQuery(gen());
+    });
     const host = new AgentHost(config, {
       onState: () => {},
       onTask: (envelope) => tasks.push(envelope),
-      queryFn: scriptedQuery([system(), todoWrite, todoWrite, result("success")]),
+      queryFn,
+      readTasklist: async (sessionId) => {
+        reads.push(sessionId);
+        return { kind: "updated", items: persisted };
+      },
       now: () => "T",
     });
 
     await host.run();
 
     expect(tasks).toHaveLength(1);
+    expect(reads).toEqual(["session-1", "session-1"]);
     expect(tasks[0]).toMatchObject({
       type: "task",
       payload: {
@@ -1934,26 +2265,466 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
     });
   });
 
+  it("TodoWrite compatibility path は assistant message の whole-list を直接配信する", async () => {
+    const tasks: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-1" }),
+        assistant([
+          {
+            type: "tool_use",
+            name: "TodoWrite",
+            input: {
+              todos: [{ content: "compatibility", status: "pending", activeForm: "準備中" }],
+            },
+          },
+        ]),
+        result("success"),
+      ]),
+      readTasklist: async () => {
+        throw new Error("TodoWrite must not read persisted tasklist");
+      },
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.payload).toMatchObject({
+      task_type: "tasklist",
+      items: [{ text: "compatibility", status: "pending" }],
+    });
+  });
+
+  it("壊れた TodoWrite は warn し、既存 snapshot を更新しない", async () => {
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-1" }),
+        assistant([
+          {
+            type: "tool_use",
+            name: "TodoWrite",
+            input: { todos: [{ content: "compatibility", status: "unknown" }] },
+          },
+        ]),
+        result("success"),
+      ]),
+      warn: (message) => warnings.push(message),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(tasks).toEqual([]);
+    expect(warnings).toEqual([
+      "[kaoiro] TodoWrite todo.status is invalid — tasklist update dropped",
+    ]);
+  });
+
+  it("session_id が変われば、既知 tasklist だけを即時に新 session の snapshot へ置換する", async () => {
+    const tasks: Envelope[] = [];
+    const reads: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-old" }),
+        assistant([
+          {
+            type: "tool_use",
+            id: "old-create",
+            name: "TaskCreate",
+            input: { subject: "旧 session task", description: "old" },
+          },
+        ]),
+        taskToolResult("old-create"),
+        msg({ type: "system", subtype: "status", session_id: "session-new" }),
+        result("success"),
+      ]),
+      readTasklist: async (sessionId) => {
+        reads.push(sessionId);
+        return sessionId === "session-old"
+          ? { kind: "updated", items: [{ text: "旧 session task", status: "pending" }] }
+          : { kind: "updated", items: [] };
+      },
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(reads).toEqual(["session-old", "session-new"]);
+    expect(tasks).toHaveLength(2);
+    expect(tasks.at(1)?.payload).toMatchObject({ items: [] });
+  });
+
+  it("terminal result は未解決の TaskCreate を一度 reconcile し、次 turn の再利用 id と join しない", async () => {
+    const reads: string[] = [];
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-1" }),
+        assistant([
+          { type: "tool_use", id: "reused-id", name: "TaskCreate", input: {} },
+        ]),
+        // tool_result を落としたまま turn が終了する。
+        result("success"),
+        // 次 turn の非 task tool_result が同じ id を使っても旧 join にはならない。
+        assistant([{ type: "tool_use", id: "reused-id", name: "Read", input: {} }]),
+        taskToolResult("reused-id"),
+        result("success"),
+      ]),
+      readTasklist: async (sessionId) => {
+        reads.push(sessionId);
+        return { kind: "updated", items: [{ text: "reconciled", status: "pending" }] };
+      },
+      warn: (message) => warnings.push(message),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(reads).toEqual(["session-1"]);
+    expect(tasks).toHaveLength(1);
+    expect(warnings).toEqual([
+      "[kaoiro] 1 pending tasklist refresh join(s) reconciled at result",
+    ]);
+  });
+
+  it("conversation_reset は未解決 join を reconcile して以後の id 再利用を切り離す", async () => {
+    const reads: string[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-1" }),
+        assistant([{ type: "tool_use", id: "reused-id", name: "TaskCreate", input: {} }]),
+        msg({ type: "conversation_reset", new_conversation_id: "reset-1" }),
+        assistant([{ type: "tool_use", id: "reused-id", name: "Read", input: {} }]),
+        taskToolResult("reused-id"),
+        result("success"),
+      ]),
+      readTasklist: async (sessionId) => {
+        reads.push(sessionId);
+        return { kind: "updated", items: [] };
+      },
+      warn: (message) => warnings.push(message),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(reads).toEqual(["session-1"]);
+    expect(warnings).toEqual([
+      "[kaoiro] 1 pending tasklist refresh join(s) reconciled at conversation_reset",
+    ]);
+  });
+
+  it("interrupt 完了後は未解決 join を reconcile して以後の id 再利用を切り離す", async () => {
+    const reads: string[] = [];
+    const warnings: string[] = [];
+    let armed: () => void;
+    const pendingArmed = new Promise<void>((resolve) => {
+      armed = resolve;
+    });
+    let release: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", session_id: "session-1" });
+        yield assistant([{ type: "tool_use", id: "reused-id", name: "TaskCreate", input: {} }]);
+        armed!();
+        await hold;
+        yield assistant([{ type: "tool_use", id: "reused-id", name: "Read", input: {} }]);
+        yield taskToolResult("reused-id");
+        yield result("success");
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      readTasklist: async (sessionId) => {
+        reads.push(sessionId);
+        return { kind: "updated", items: [] };
+      },
+      warn: (message) => warnings.push(message),
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await pendingArmed;
+    await host.interrupt();
+    release!();
+    await done;
+
+    expect(reads).toEqual(["session-1"]);
+    expect(warnings).toEqual([
+      "[kaoiro] 1 pending tasklist refresh join(s) reconciled at interrupt",
+    ]);
+  });
+
+  it("close 後も drain 中の TaskCreate の matching tool_result を tasklist に反映する", async () => {
+    const reads: string[] = [];
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    let armed: () => void;
+    const pendingArmed = new Promise<void>((resolve) => {
+      armed = resolve;
+    });
+    let release: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", session_id: "session-1" });
+        yield assistant([{ type: "tool_use", id: "create-1", name: "TaskCreate", input: {} }]);
+        armed!();
+        await hold;
+        // close() は input を閉じるだけで、実行中 turn は drain される。
+        yield taskToolResult("create-1");
+        yield result("success");
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn,
+      readTasklist: async (sessionId) => {
+        reads.push(sessionId);
+        return { kind: "updated", items: [{ text: "drained", status: "pending" }] };
+      },
+      warn: (message) => warnings.push(message),
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await pendingArmed;
+    host.close();
+    release!();
+    await done;
+
+    expect(reads).toEqual(["session-1"]);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.payload).toMatchObject({
+      task_type: "tasklist",
+      items: [{ text: "drained", status: "pending" }],
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it("初回 session_id は tasklist を勝手に hydrate せず、session 変更で同じ表示なら再配信しない", async () => {
+    const tasks: Envelope[] = [];
+    const reads: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-old" }),
+        assistant([
+          {
+            type: "tool_use",
+            id: "old-list",
+            name: "TaskList",
+            input: {},
+          },
+        ]),
+        taskToolResult("old-list"),
+        msg({ type: "system", subtype: "status", session_id: "session-new" }),
+        result("success"),
+      ]),
+      readTasklist: async (sessionId) => {
+        reads.push(sessionId);
+        return { kind: "updated", items: [{ text: "同じ task", status: "pending" }] };
+      },
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(reads).toEqual(["session-old", "session-new"]);
+    expect(tasks).toHaveLength(1);
+  });
+
+  it("session 切替先が invalid なら旧 list を空 snapshot で消して warn する", async () => {
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-old" }),
+        assistant([{ type: "tool_use", id: "old-list", name: "TaskList", input: {} }]),
+        taskToolResult("old-list"),
+        msg({ type: "system", subtype: "status", session_id: "session-new" }),
+        result("success"),
+      ]),
+      readTasklist: async (sessionId) =>
+        sessionId === "session-old"
+          ? { kind: "updated", items: [{ text: "旧 session task", status: "pending" }] }
+          : { kind: "invalid", reason: "Claude task directory is missing" },
+      warn: (message) => warnings.push(message),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(tasks).toHaveLength(2);
+    expect(tasks.at(-1)?.payload).toMatchObject({ items: [] });
+    expect(warnings).toEqual([
+      "[kaoiro] Claude task directory is missing — tasklist update dropped",
+    ]);
+  });
+
+  it("session 切替先の read が throw しても旧 list を空 snapshot で消す", async () => {
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-old" }),
+        assistant([{ type: "tool_use", id: "old-list", name: "TaskList", input: {} }]),
+        taskToolResult("old-list"),
+        msg({ type: "system", subtype: "status", session_id: "session-new" }),
+        result("success"),
+      ]),
+      readTasklist: async (sessionId) => {
+        if (sessionId === "session-old") {
+          return { kind: "updated", items: [{ text: "旧 session task", status: "pending" }] };
+        }
+        throw new Error("new session source unavailable");
+      },
+      warn: (message) => warnings.push(message),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(tasks).toHaveLength(2);
+    expect(tasks.at(-1)?.payload).toMatchObject({ items: [] });
+    expect(warnings).toEqual([
+      "[kaoiro] cannot read Claude tasklist: Error: new session source unavailable",
+    ]);
+  });
+
+  it("未知の tasklist 更新形 tool_use は warn し、snapshot を読まない", async () => {
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-1" }),
+        assistant([
+          {
+            type: "tool_use",
+            name: "TaskModify",
+            input: { taskId: "1", status: "completed" },
+          },
+        ]),
+        result("success"),
+      ]),
+      readTasklist: async () => {
+        throw new Error("must not read");
+      },
+      warn: (message) => warnings.push(message),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(warnings).toEqual([
+      "[kaoiro] unrecognized tasklist-like tool_use: name=TaskModify — tasklist may be stale",
+    ]);
+  });
+
+  it("未知 Task* の warning は name ごとに host lifetime で一度だけ出す", async () => {
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: scriptedQuery([
+        assistant([{ type: "tool_use", name: "TaskModify", input: {} }]),
+        assistant([{ type: "tool_use", name: "TaskModify", input: {} }]),
+        assistant([{ type: "tool_use", name: "TaskFuture", input: {} }]),
+        assistant([{ type: "tool_use", name: "TaskFuture", input: {} }]),
+        result("success"),
+      ]),
+      warn: (message) => warnings.push(message),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(warnings).toEqual([
+      "[kaoiro] unrecognized tasklist-like tool_use: name=TaskModify — tasklist may be stale",
+      "[kaoiro] unrecognized tasklist-like tool_use: name=TaskFuture — tasklist may be stale",
+    ]);
+  });
+
+  it("persisted task schema の破断は warn し、古い list を current として送らない", async () => {
+    const tasks: Envelope[] = [];
+    const warnings: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTask: (envelope) => tasks.push(envelope),
+      queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-1" }),
+        assistant([{ type: "tool_use", id: "list-1", name: "TaskList", input: {} }]),
+        taskToolResult("list-1"),
+        result("success"),
+      ]),
+      readTasklist: async () => ({
+        kind: "invalid",
+        reason: "Claude task file 1.json status is invalid",
+      }),
+      warn: (message) => warnings.push(message),
+      now: () => "T",
+    });
+
+    await host.run();
+
+    expect(tasks).toEqual([]);
+    expect(warnings).toEqual([
+      "[kaoiro] Claude task file 1.json status is invalid — tasklist update dropped",
+    ]);
+  });
+
   it("51件目以降を omitted で可視化してから送る", async () => {
     const tasks: Envelope[] = [];
     const host = new AgentHost(config, {
       onState: () => {},
       onTask: (envelope) => tasks.push(envelope),
       queryFn: scriptedQuery([
+        msg({ type: "system", subtype: "init", session_id: "session-1" }),
         assistant([
           {
             type: "tool_use",
-            name: "TodoWrite",
-            input: {
-              todos: Array.from({ length: 51 }, (_, index) => ({
-                content: `todo ${index + 1}`,
-                status: index === 50 ? "completed" : "pending",
-              })),
-            },
+            id: "list-1",
+            name: "TaskList",
+            input: {},
           },
         ]),
+        taskToolResult("list-1"),
         result("success"),
       ]),
+      readTasklist: async () => ({
+        kind: "updated",
+        items: Array.from({ length: 51 }, (_, index) => ({
+          text: `todo ${index + 1}`,
+          status: index === 50 ? "completed" : "pending",
+        })),
+      }),
       now: () => "T",
     });
 
@@ -1969,9 +2740,12 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
       onState: () => {},
       onTask: (envelope) => tasks.push(envelope),
       queryFn: scriptedQuery([
-        assistant([{ type: "tool_use", name: "TodoWrite", input: { todos: [] } }]),
+        msg({ type: "system", subtype: "init", session_id: "session-1" }),
+        assistant([{ type: "tool_use", id: "list-1", name: "TaskList", input: {} }]),
+        taskToolResult("list-1"),
         result("success"),
       ]),
+      readTasklist: async () => ({ kind: "updated", items: [] }),
       now: () => "T",
     });
 
@@ -2882,6 +3656,7 @@ describe("AgentHost — input queue/notify/close", () => {
         for await (const m of args.prompt) {
           const content = m.message.content;
           received.push(typeof content === "string" ? content : "");
+          yield result("success", { result: "drained" });
         }
       }
       return asQuery(gen());
@@ -5024,6 +5799,42 @@ describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
       attachment_ids: ids,
       reason: "count_over",
     });
+  });
+
+  it("issue #246: attachment render 中に close された send は queue に入らず reject する", async () => {
+    let renderStarted!: () => void;
+    const rendering = new Promise<void>((resolve) => {
+      renderStarted = resolve;
+    });
+    let finishRender!: () => void;
+    const renderHeld = new Promise<void>((resolve) => {
+      finishRender = resolve;
+    });
+    setDefaultImageDownsizer({
+      fit: async (bytes, mime) => {
+        renderStarted();
+        await renderHeld;
+        return { bytes, mime };
+      },
+    });
+    const captured: SDKUserMessage[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: captureQueryFn(captured),
+      now: () => "T",
+    });
+    host.attachOpen(png(3));
+    host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2, 3])));
+    host.attachClose("u1");
+
+    const sending = host.send("rendering", ["u1"], ["cid-render"], "render-token");
+    await rendering;
+    host.close();
+    finishRender();
+
+    await expect(sending).rejects.toThrow("agent host is closed");
+    await host.run();
+    expect(captured).toEqual([]);
   });
 });
 

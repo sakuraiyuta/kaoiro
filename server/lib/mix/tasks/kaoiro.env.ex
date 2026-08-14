@@ -133,7 +133,12 @@ defmodule Mix.Tasks.Kaoiro.Env do
       "# One entry per line: provider:identifier[:role]",
       "# provider: google | github | nextcloud",
       "# identifier: google=email (case-insensitive); github=login; nextcloud=user id",
-      "# role: viewer | operator (optional; defaults to viewer)",
+      "# role: viewer | operator | admin (optional; defaults to viewer)",
+      "# admin (ADR-0050 D2): full authority over the permission graph.",
+      "# Grantable only from config — no in-app tool can mint the first one,",
+      "# so editing this file (applies on the next connect/refresh) or",
+      "# KAOIRO_CLIENT_TOKENS (needs a restart) is also the only recovery",
+      "# route from a zero-admin deployment. Declare at least one.",
       "# Blank lines and lines starting with # are ignored.",
       "",
       entries
@@ -288,7 +293,10 @@ defmodule Mix.Tasks.Kaoiro.Env do
         entry
 
       :error ->
-        Mix.shell().error("  expected provider:identifier[:role] (role: viewer or operator)")
+        Mix.shell().error(
+          "  expected provider:identifier[:role] (role: viewer, operator or admin)"
+        )
+
         ask_allowlist_entry(index)
     end
   end
@@ -299,9 +307,14 @@ defmodule Mix.Tasks.Kaoiro.Env do
       when provider in ["google", "github", "nextcloud"] and identifier != "" ->
         {:ok, "#{provider}:#{identifier}"}
 
+      # `admin` accepted since issue #198. This generator is the standard
+      # bootstrap surface, and admin is declarable ONLY through config
+      # (ADR-0050 D2), so rejecting it here meant every generated .env
+      # produced an admin-less deployment that could never be fixed except
+      # by hand-editing (ふじ must-fix 2).
       [provider, identifier, role]
       when provider in ["google", "github", "nextcloud"] and identifier != "" and
-             role in ["viewer", "operator"] ->
+             role in ["viewer", "operator", "admin"] ->
         {:ok, "#{provider}:#{identifier}:#{role}"}
 
       _ ->
@@ -310,15 +323,20 @@ defmodule Mix.Tasks.Kaoiro.Env do
   end
 
   # `token:role` entries. Roles are a closed set server-side, so only those
-  # two are offered.
+  # three are offered. admin is asked FIRST and separately (issue #198):
+  # it is the only role that can be granted nowhere but config, so a
+  # generator that never offers it hands back a zero-admin config that
+  # requires manual recovery (ふじ must-fix 2).
   defp ask_client_tokens do
     collect("client", fn index ->
       token = ask_token("client ##{index}")
 
       role =
-        if confirm("  operator? (no = viewer)"),
-          do: "operator",
-          else: "viewer"
+        cond do
+          confirm("  admin? (full authority, unrestricted visibility — ADR-0050 D2)") -> "admin"
+          confirm("  operator? (no = viewer)") -> "operator"
+          true -> "viewer"
+        end
 
       "#{token}:#{role}"
     end)

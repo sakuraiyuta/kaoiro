@@ -107,13 +107,21 @@ defmodule KaoiroServer.OAuthAllowlistTest do
       assert OAuthAllowlist.role_for("google", "ao@example.com") == :viewer
     end
 
+    test "admin は既存のテキスト形式のまま解決する (issue #198)" do
+      # ADR-0050 D2's bootstrap path. Kept on `provider:identifier:role`
+      # so OAuthAllowlistWatcher (issue #170) needs no change.
+      put_allowlist("github:ao:admin")
+
+      assert OAuthAllowlist.role_for("github", "ao") == :admin
+    end
+
     test "不正な行は warn + skip し、他の行は生かす" do
       log =
         capture_log(fn ->
           put_allowlist("""
           broken
           gogle:ao:operator
-          github:ao:admin
+          github:ao:root
           github::operator
           github:ao:operator
           """)

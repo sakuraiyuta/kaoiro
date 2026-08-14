@@ -4,7 +4,10 @@
 // Authentication is inherited from the local Claude Code runtime; no API key is
 // required or handled here.
 
+import { randomUUID } from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { readClaudeTasklist } from "./tasklist.js";
+import type { TasklistReadResult } from "./tasklist.js";
 import type {
   EffortLevel,
   HookInput,
@@ -13,6 +16,7 @@ import type {
   PermissionResult,
   Query,
   SDKRateLimitInfo,
+  SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -57,7 +61,7 @@ import {
   stepState,
   TASKLIST_TASK_ID,
 } from "@kaoiro/agent-common";
-import type { TaskEvent, TasklistEvent } from "./adapter.js";
+import type { TaskEvent, TasklistTrigger } from "./adapter.js";
 import {
   cwdChangedHookToCwd,
   sdkMessageToCompactNotice,
@@ -71,7 +75,8 @@ import {
   sdkMessageToSessionId,
   sdkMessageToStatusMeta,
   sdkMessageToTask,
-  sdkMessageToTasklists,
+  sdkMessageToTasklistTriggers,
+  sdkMessageToToolResultIds,
   sdkMessageToTerminalReason,
 } from "./adapter.js";
 import {
@@ -224,10 +229,11 @@ export interface AgentHostOptions {
    *  existing channel. Omitted = task envelopes are not emitted (unit
    *  tests only; production always wires it). */
   onTask?: (envelope: Envelope) => void;
-  /** Invoked once per SDK turn boundary (success or error), alongside (not
-   *  instead of) onLog's result envelope (issue #131; extended issue #221
-   *  段階3 direction 2 for coalescing). `conversationIds` is the inter-agent
-   *  conversation(s) that turn's injection came from (the value passed as
+  /** Invoked for an SDK ResultMessage, alongside (not instead of) onLog's
+   *  result envelope (issue #131; extended issue #221 段階3 direction 2 for
+   *  coalescing), OR for a stream-end cancellation of an accepted wrapper
+   *  turn that never reached such a ResultMessage. `conversationIds` is the
+   *  inter-agent conversation(s) that turn's injection came from (the value passed as
    *  send()'s third argument for that turn) — empty for an ordinary
    *  operator-instruction turn, one entry for an ordinary inter-agent turn,
    *  MULTIPLE entries when several same-peer pending messages were coalesced
@@ -240,10 +246,31 @@ export interface AgentHostOptions {
    *  InterAgentTool#resolveTurnEnd — on error, EVERY conversationId in the
    *  list gets its own peer_error notice (the wrapper cannot tell which one
    *  message in a coalesced batch caused the failure). Omitted = no notice
-   *  is ever emitted (unit tests only — production always wires it). */
+   *  is ever emitted (unit tests only — production always wires it).
+   *
+   *  `cancellation` is present only for the latter case. `started=false`
+   *  means the token was still in the host queue; it is a settlement notice,
+   *  not an SDK turn boundary. Consumers which require a real SDK boundary
+   *  (for example session-reset coordination) must act only when it is
+   *  absent. */
   onTurnEnd?: (info: {
+    /** Opaque generation identity for the exact queued SDK turn. Omitted
+     * only for an SDK result that arrived without a wrapper-fed input. */
+    turnToken?: string;
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
+    cancellation?: { kind: "stream_eof"; started: boolean };
+  }) => void;
+  /** Invoked exactly once after the host has terminally settled every turn it
+   *  accepted (including queued cancellations). It runs before the CLI closes
+   *  its ServerLink, so ownership layers outside AgentHost can synchronously
+   *  settle work that was accepted but had not reached the host queue yet and
+   *  enqueue its terminal notices (issue #246). This callback does not await
+   *  transport delivery; link shutdown may instead leave the server's
+   *  disconnected notice as the recipient-visible fallback. */
+  onHostEnd?: (info: {
+    kind: "stream_eof" | "closed_before_query";
+    error: { reason?: string; detail?: string };
   }) => void;
   /** Serialises a wrapper-initiated injection behind everything already
    *  queued (phase-28 BR MF2). cli.ts owns one promise chain for operator
@@ -268,6 +295,9 @@ export interface AgentHostOptions {
    * server can group history by session. Omitted = the id is not reported.
    */
   onSessionId?: (sessionId: string) => void;
+  /** Reads the current whole-list source for one Claude session. Injectable
+   * for tests; production reads ~/.claude/tasks/<session_id>. */
+  readTasklist?: (sessionId: string) => Promise<TasklistReadResult>;
   /**
    * Decides a pending tool permission; its awaited duration is the
    * waiting_permission window. Defaults to deny (fail-closed) when omitted.
@@ -358,6 +388,16 @@ export interface AgentHostOptions {
   warn?: (message: string) => void;
 }
 
+/** One queued SDK input together with its immutable correlation metadata.
+ * Keeping this as one record — rather than parallel queues plus a mutable
+ * "current" tag — prevents an eager SDK input pull from retagging an earlier
+ * turn before its result is observed (issue #246). */
+interface QueuedTurn {
+  message: SDKUserMessage;
+  turnToken: string;
+  conversationIds: readonly string[];
+}
+
 /**
  * Hosts a single agent session. `run` drives the message loop until the input
  * stream is closed; `send` feeds follow-up turns, `interrupt` stops the current
@@ -378,25 +418,20 @@ export class AgentHost implements EngineAdapter {
   readonly #probeFn: () => Promise<ProbeOutcome>;
   readonly #now: () => string;
   readonly #nowMs: () => number;
+  readonly #readTasklist: (sessionId: string) => Promise<TasklistReadResult>;
   /** setInterval handle for the TTL GC sweep, cleared in close(). null
    *  between construction and run() (sweep doesn't start until run). */
   #gcTimer: ReturnType<typeof setInterval> | null = null;
 
-  readonly #queue: SDKUserMessage[] = [];
-  /** Parallel FIFO to #queue (issue #131 must-fix 1; extended issue #221
-   *  段階3 direction 2 for coalescing): the inter-agent conversation_id(s)
-   *  (if any) that each queued turn's injection came from — empty for an
-   *  ordinary operator instruction, one entry for an ordinary inter-agent
-   *  turn, MULTIPLE entries when cli.ts coalesced several same-peer pending
-   *  messages into one turn. Shifted in lockstep with #queue in #input() so
-   *  #currentTurnConversationIds always names exactly the turn in flight —
-   *  never a stale or unrelated conversation. */
-  readonly #turnConversationIds: (readonly string[])[] = [];
-  /** conversation_id(s) of the turn currently being processed by the SDK
-   *  session loop, set by #input() when it dequeues that turn's message. */
-  #currentTurnConversationIds: readonly string[] = [];
+  readonly #queue: QueuedTurn[] = [];
+  /** The one SDK input currently awaiting its terminal result or explicit
+   * abort. #input() will not yield another queued input until this becomes
+   * null, applying wrapper-side backpressure to the SDK's eager pull. */
+  #activeTurn: QueuedTurn | null = null;
+  #turnBoundaryNotify: (() => void) | null = null;
   #notify: (() => void) | null = null;
   #closed = false;
+  #hostEnded = false;
   #query: Query | null = null;
   #machine: MachineState = initialMachineState();
   /** tool_use_id -> tool_name, so a tool_result log can name its tool.
@@ -432,6 +467,15 @@ export class AgentHost implements EngineAdapter {
    * exact repeat, never the time/token throttle used for child-task progress.
    */
   #lastTasklistJson: string | null = null;
+  /** task tool_use id -> source session. The persisted task files are written
+   * after the assistant tool_use message, so a refresh is armed here and
+   * consumed only by the matching user tool_result or reconciled at the turn
+   * boundary. Entries never outlive their turn/context epoch. */
+  readonly #pendingTasklistRefreshes = new Map<string, string>();
+  /** Future Task* sibling warnings are deliberately once per wrapper host:
+   * enough to make a new compatibility surface visible, without drowning the
+   * operator while it awaits classification. */
+  readonly #warnedUnknownTasklistToolNames = new Set<string>();
 
   /** Latest Claude Code status meta (#16), stamped into state_change ext:
    *  active model, working directory, context-window usage, and per-window
@@ -587,6 +631,7 @@ export class AgentHost implements EngineAdapter {
     this.#probeFn = options.probeFn ?? runClaudeProbe;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
+    this.#readTasklist = options.readTasklist ?? readClaudeTasklist;
     this.#warn =
       options.warn ?? ((message) => process.stderr.write(`${message}\n`));
     // ADR-0039 F9 追補: prefer the runner-transported catalog so fresh
@@ -725,19 +770,17 @@ export class AgentHost implements EngineAdapter {
    *  the inter-agent injection path, never for an ordinary operator
    *  instruction. A single-entry array is the ordinary (non-coalesced) case;
    *  multiple entries mean cli.ts bundled several same-peer pending messages
-   *  into this one turn. Threaded through #turnConversationIds in lockstep
-   *  with #queue so onTurnEnd resolves exactly this turn's conversation(s),
-   *  not whatever else happens to be pending. */
+   *  into this one turn. `turnToken` is the opaque generation identity that
+   *  owns that correlation in the CLI; ordinary callers omit it and the host
+   *  creates one. Queue entry, token, and CIDs stay indivisible through the
+   *  result barrier (issue #246). */
   async send(
     text: string,
     attachmentIds?: string[],
     interAgentConversationIds?: readonly string[],
+    turnToken: string = randomUUID(),
   ): Promise<void> {
-    if (this.#closed) throw new Error("agent host is closed");
-    // Fail fast instead of growing without bound when nothing drains.
-    if (this.#queue.length >= MAX_QUEUED_TURNS) {
-      throw new Error("agent host input queue is full");
-    }
+    this.#assertCanQueue();
 
     let content: string | ContentBlock[] = text;
     if (attachmentIds && attachmentIds.length > 0) {
@@ -803,23 +846,30 @@ export class AgentHost implements EngineAdapter {
         return;
       }
       content = blocks;
+      // renderAttachmentBlock() awaits. EOF/close or another sender can
+      // change the host state while it is suspended; do not consume uploads
+      // or append a turn after that terminal boundary (issue #246).
+      this.#assertCanQueue();
       // Consume — uploads are one-shot per instruction.
       for (const id of attachmentIds) this.#pendingUploads.delete(id);
     }
 
     this.#queue.push({
-      type: "user",
-      // Empty by design (ADR-0014 phase-0): in streaming-input mode the SDK
-      // owns the conversation and issues the session id itself. We capture the
-      // real id from init/result (sdkMessageToSessionId) and report it on
-      // envelopes; resume targets a session via options.resume, not here.
-      session_id: "",
-      parent_tool_use_id: null,
-      // The SDK's MessageParam accepts string | content blocks; the cast
-      // narrows our local ContentBlock union to the SDK's wider shape.
-      message: { role: "user", content: content as never },
+      message: {
+        type: "user",
+        // Empty by design (ADR-0014 phase-0): in streaming-input mode the SDK
+        // owns the conversation and issues the session id itself. We capture the
+        // real id from init/result (sdkMessageToSessionId) and report it on
+        // envelopes; resume targets a session via options.resume, not here.
+        session_id: "",
+        parent_tool_use_id: null,
+        // The SDK's MessageParam accepts string | content blocks; the cast
+        // narrows our local ContentBlock union to the SDK's wider shape.
+        message: { role: "user", content: content as never },
+      },
+      turnToken,
+      conversationIds: interAgentConversationIds ?? [],
     });
-    this.#turnConversationIds.push(interAgentConversationIds ?? []);
     // Optimistic `sending` state (#32): raised here, where the host knows the
     // instruction was accepted, rather than waiting for an SDK message that
     // may not land until the model's first token.
@@ -987,6 +1037,10 @@ export class AgentHost implements EngineAdapter {
       clearInterval(this.#gcTimer);
       this.#gcTimer = null;
     }
+    // If no later queued turn exists, the input iterator may close even while
+    // the current SDK turn is still draining. Do not clear #activeTurn: a
+    // late tool_result/result for that same turn must retain its token.
+    if (this.#queue.length === 0) this.#wakeTurnBoundary();
     this.#wake();
   }
 
@@ -1025,7 +1079,16 @@ export class AgentHost implements EngineAdapter {
       });
     }
     this.#pendingUploads.clear();
-    await this.#query?.interrupt();
+    try {
+      await this.#query?.interrupt();
+    } finally {
+      // `Query.interrupt()` resolves when its control request is acknowledged,
+      // not when the current output stream has drained. Keep the active token
+      // and input barrier intact until that turn's actual ResultMessage (or
+      // stream EOF): otherwise a buffered result for A could settle B after
+      // B was yielded (issue #246 review must-fix 1).
+      await this.#reconcilePendingTasklistRefreshes("interrupt");
+    }
   }
 
   /** Switch the model for subsequent turns (#54, ADR-0020). `value` accepts
@@ -1313,7 +1376,10 @@ export class AgentHost implements EngineAdapter {
       this.#options.deferQueryUntilFirstInput === true
     ) {
       await this.#waitForFirstInput();
-      if (this.#closed) return;
+      if (this.#closed) {
+        this.#finishHost("closed_before_query");
+        return;
+      }
     }
     // Merge CwdChanged into any user-supplied hooks instead of overwriting,
     // so #64's cwd refresh composes with the consumer's own hooks. CwdChanged
@@ -1379,133 +1445,158 @@ export class AgentHost implements EngineAdapter {
       // waiting_permission.
       canUseTool: (toolName, input) => this.#canUseTool(toolName, input),
     };
-    const session = this.#queryFn({ prompt: this.#input(), options });
-    this.#query = session;
-    // The SDK stamps a session_id on every message; report it before deriving
-    // state so the envelopes this message produces already carry it. Forward
-    // only on change — the id is stable within a conversation (ADR-0014).
-    for await (const message of session) {
-      const id = sdkMessageToSessionId(message);
-      if (id !== null && id !== this.#sessionId) {
-        this.#sessionId = id;
-        this.#options.onSessionId?.(id);
-      }
+    try {
+      const session = this.#queryFn({ prompt: this.#input(), options });
+      this.#query = session;
+      // The SDK stamps a session_id on every message; report it before deriving
+      // state so the envelopes this message produces already carry it. Forward
+      // only on change — the id is stable within a conversation (ADR-0014).
+      for await (const message of session) {
+        const id = sdkMessageToSessionId(message);
+        if (id !== null && id !== this.#sessionId) {
+          const hadPriorSession = this.#sessionId !== null;
+          // A result from the old conversation must never refresh the new
+          // session's directory after a fork/rebind.
+          this.#pendingTasklistRefreshes.clear();
+          this.#sessionId = id;
+          this.#options.onSessionId?.(id);
+          // A fork/rebind must never leave the old session's list visible under
+          // the new session. Initial init deliberately does not hydrate: task
+          // restore is not a resume contract, but an already-emitted list must
+          // be reconciled immediately when its source session changes.
+          if (hadPriorSession && this.#lastTasklistJson !== null) {
+            await this.#refreshTasklist(id, { clearOnFailure: true });
+          }
+        }
 
-      // Capture Claude Code status meta (#16) before deriving state, so the
-      // next state_change envelope carries the latest. Rate-limit events
-      // arrive inline; context usage is pulled fire-and-forget so the control
-      // round-trip never blocks (or stalls) the message loop.
-      const initMeta = sdkMessageToInitMeta(message);
-      if (initMeta) {
-        this.#applyInitMeta(initMeta);
-        // The session is initialized once init meta lands, so the
-        // supportedModels control request can resolve; fetch it once (#54).
-        void this.#refreshSupportedModels();
-        // Context usage is also reachable once init lands (ADR-0040 phase-21).
-        // Use the init-time bounded-retry helper so a transient control-request
-        // race gets one more shot before we fall back to result-time refresh
-        // — otherwise the "ctx" meter would spin until the first turn ends.
-        void this.#refreshContextUsageForInit();
-        // rate_limit_event is only a sparse notification: for an allowed
-        // account it currently omits utilization and may omit seven_day
-        // altogether. The SDK's /usage control request carries the complete
-        // subscription snapshot, including both windows.
-        void this.#refreshRateLimits();
-      }
-      const rateLimit = sdkMessageToRateLimit(message);
-      if (rateLimit) {
-        this.#applyRateLimit(rateLimit);
-        // SDK 0.3.220's rate_limit_event may omit both utilization and the
-        // seven_day window even though its /usage control response has them.
-        // Refresh on an event as well as the normal init/result opportunities
-        // so a sparse push cannot leave the dashboard stuck at a zero-width
-        // meter until a later turn.
-        void this.#refreshRateLimits();
-      }
-      const statusMeta = sdkMessageToStatusMeta(message);
-      if (statusMeta?.permission_mode !== undefined) {
-        this.#permissionMode = statusMeta.permission_mode;
-      }
-      const resultMeta = sdkMessageToResultMeta(message);
-      if (resultMeta?.fast_mode !== undefined) {
-        this.#fastMode = resultMeta.fast_mode;
-      }
-      if (message.type === "result") {
-        void this.#refreshContextUsage();
-        void this.#refreshRateLimits();
-        // Turn-boundary retry for supportedModels() when init-time fetch or
-        // an earlier retry failed. Guarded internally against overrun of
-        // MAX_MODEL_REFRESH_RETRIES and post-success no-ops.
-        void this.#refreshSupportedModels();
-      }
+        // Capture Claude Code status meta (#16) before deriving state, so the
+        // next state_change envelope carries the latest. Rate-limit events
+        // arrive inline; context usage is pulled fire-and-forget so the control
+        // round-trip never blocks (or stalls) the message loop.
+        const initMeta = sdkMessageToInitMeta(message);
+        if (initMeta) {
+          this.#applyInitMeta(initMeta);
+          // The session is initialized once init meta lands, so the
+          // supportedModels control request can resolve; fetch it once (#54).
+          void this.#refreshSupportedModels();
+          // Context usage is also reachable once init lands (ADR-0040 phase-21).
+          // Use the init-time bounded-retry helper so a transient control-request
+          // race gets one more shot before we fall back to result-time refresh
+          // — otherwise the "ctx" meter would spin until the first turn ends.
+          void this.#refreshContextUsageForInit();
+          // rate_limit_event is only a sparse notification: for an allowed
+          // account it currently omits utilization and may omit seven_day
+          // altogether. The SDK's /usage control request carries the complete
+          // subscription snapshot, including both windows.
+          void this.#refreshRateLimits();
+        }
+        const rateLimit = sdkMessageToRateLimit(message);
+        if (rateLimit) {
+          this.#applyRateLimit(rateLimit);
+          // SDK 0.3.220's rate_limit_event may omit both utilization and the
+          // seven_day window even though its /usage control response has them.
+          // Refresh on an event as well as the normal init/result opportunities
+          // so a sparse push cannot leave the dashboard stuck at a zero-width
+          // meter until a later turn.
+          void this.#refreshRateLimits();
+        }
+        const statusMeta = sdkMessageToStatusMeta(message);
+        if (statusMeta?.permission_mode !== undefined) {
+          this.#permissionMode = statusMeta.permission_mode;
+        }
+        const resultMeta = sdkMessageToResultMeta(message);
+        if (resultMeta?.fast_mode !== undefined) {
+          this.#fastMode = resultMeta.fast_mode;
+        }
+        if (message.type === "result") {
+          await this.#reconcilePendingTasklistRefreshes("result");
+          void this.#refreshContextUsage();
+          void this.#refreshRateLimits();
+          // Turn-boundary retry for supportedModels() when init-time fetch or
+          // an earlier retry failed. Guarded internally against overrun of
+          // MAX_MODEL_REFRESH_RETRIES and post-success no-ops.
+          void this.#refreshSupportedModels();
+        }
 
-      // State first, so a log envelope carries the state this message
-      // settled into; then relay the message's reply lines.
-      for (const event of sdkMessageToEvents(message)) this.#apply(event);
-      for (const entry of sdkMessageToLogs(message)) this.#emitLog(entry);
-      // Subagent/workflow task lifecycle (issue #180, ADR-0019 F2 / ADR-0047
-      // F1) — deliberately does NOT feed #apply()/state derivation above:
-      // ADR-0019 F2 requires task info to stay off the parent's own
-      // KaoiroState / state_change entirely.
-      const taskEvent = sdkMessageToTask(message);
-      if (taskEvent) {
-        this.#applyTaskEvent(taskEvent);
-      } else if (
-        message.type === "system" &&
-        typeof (message as { subtype?: unknown }).subtype === "string" &&
-        (message as { subtype: string }).subtype.startsWith("task_")
-      ) {
-        // Fail-visible (こはく指示 2026-08-09): a task_* subtype
-        // sdkMessageToTask() does not recognize (task_updated, or any
-        // future addition) — or a task_notification whose status fell
-        // outside completed/failed/stopped — must not vanish silently,
-        // and must not be allowed to skew the active-task count either.
-        this.#warn(
-          `[kaoiro] unrecognized task_* message: subtype=${(message as { subtype: string }).subtype}`,
-        );
-      }
-      for (const tasklistEvent of sdkMessageToTasklists(message)) {
-        this.#applyTasklistEvent(tasklistEvent);
-      }
-      // Compaction / conversation-reset notices (phase-28 A1, #168). Emitted
-      // as their own log line rather than folded into sdkMessageToLogs: that
-      // mapper is shared with resume history reconstruction (history.ts), and
-      // these are live-session observations, not transcript content.
-      const compact = sdkMessageToCompactNotice(message);
-      if (compact) {
-        this.#emitLog({ kind: "system", text: compact.text });
-        // A boundary or a reset ENDS the context epoch the current reading
-        // belongs to; `compacting` / a failed `compact_result` do not (nothing
-        // was discarded yet). 藤 review MF1.
-        if (
-          compact.kind === "compact_boundary" ||
-          compact.kind === "conversation_reset"
+        // State first, so a log envelope carries the state this message
+        // settled into; then relay the message's reply lines.
+        for (const event of sdkMessageToEvents(message)) this.#apply(event);
+        for (const entry of sdkMessageToLogs(message)) this.#emitLog(entry);
+        // Subagent/workflow task lifecycle (issue #180, ADR-0019 F2 / ADR-0047
+        // F1) — deliberately does NOT feed #apply()/state derivation above:
+        // ADR-0019 F2 requires task info to stay off the parent's own
+        // KaoiroState / state_change entirely.
+        const taskEvent = sdkMessageToTask(message);
+        if (taskEvent) {
+          this.#applyTaskEvent(taskEvent);
+        } else if (
+          message.type === "system" &&
+          typeof (message as { subtype?: unknown }).subtype === "string" &&
+          (message as { subtype: string }).subtype.startsWith("task_")
         ) {
-          this.#invalidateContextEpoch(compact.tokens);
+          // Fail-visible (こはく指示 2026-08-09): a task_* subtype
+          // sdkMessageToTask() does not recognize (task_updated, or any
+          // future addition) — or a task_notification whose status fell
+          // outside completed/failed/stopped — must not vanish silently,
+          // and must not be allowed to skew the active-task count either.
+          this.#warn(
+            `[kaoiro] unrecognized task_* message: subtype=${(message as { subtype: string }).subtype}`,
+          );
+        }
+        for (const tasklistTrigger of sdkMessageToTasklistTriggers(message)) {
+          this.#recordTasklistTrigger(tasklistTrigger);
+        }
+        await this.#refreshTasklistAfterToolResults(message);
+        // Compaction / conversation-reset notices (phase-28 A1, #168). Emitted
+        // as their own log line rather than folded into sdkMessageToLogs: that
+        // mapper is shared with resume history reconstruction (history.ts), and
+        // these are live-session observations, not transcript content.
+        const compact = sdkMessageToCompactNotice(message);
+        if (compact) {
+          this.#emitLog({ kind: "system", text: compact.text });
+          // A boundary or a reset ENDS the context epoch the current reading
+          // belongs to; `compacting` / a failed `compact_result` do not (nothing
+          // was discarded yet). 藤 review MF1.
+          if (
+            compact.kind === "compact_boundary" ||
+            compact.kind === "conversation_reset"
+          ) {
+            if (compact.kind === "conversation_reset") {
+              // The public SDK contract does not establish conversation_reset
+              // as a no-ResultMessage terminal boundary. Until that is measured,
+              // conservatively retain the active correlation: only the actual
+              // ResultMessage or stream EOF opens the input barrier. This avoids
+              // letting a buffered A result settle a newly-yielded B (#246).
+              await this.#reconcilePendingTasklistRefreshes("conversation_reset");
+            }
+            this.#invalidateContextEpoch(compact.tokens);
+          }
+        }
+        const result = sdkMessageToResult(message);
+        if (result) {
+          this.#emitResult(result, sdkMessageToCost(message));
+          if (result.is_error) {
+            const terminalReason = sdkMessageToTerminalReason(message);
+            this.#completeActiveTurn(
+              {
+                ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
+                ...(result.error_detail !== undefined
+                  ? { detail: result.error_detail }
+                  : {}),
+              },
+              true,
+            );
+          } else {
+            this.#completeActiveTurn(undefined, true);
+          }
+          this.#toolNames.clear();
         }
       }
-      const result = sdkMessageToResult(message);
-      if (result) {
-        this.#emitResult(result, sdkMessageToCost(message));
-        // issue #131 must-fix 1: resolve exactly the conversation(s) #input()
-        // tagged this turn with — never sweep whatever else is pending.
-        const conversationIds = this.#currentTurnConversationIds;
-        if (result.is_error) {
-          const terminalReason = sdkMessageToTerminalReason(message);
-          this.#options.onTurnEnd?.({
-            conversationIds,
-            error: {
-              ...(terminalReason !== undefined ? { reason: terminalReason } : {}),
-              ...(result.error_detail !== undefined
-                ? { detail: result.error_detail }
-                : {}),
-            },
-          });
-        } else {
-          this.#options.onTurnEnd?.({ conversationIds });
-        }
-        this.#toolNames.clear();
-      }
+    } finally {
+      // A stream can end without a result (for example when its process dies),
+      // and query construction/iteration can throw before a ResultMessage.
+      // Both are hard terminal boundaries for every accepted turn.
+      this.#finishHost("stream_eof");
     }
   }
 
@@ -2504,12 +2595,81 @@ export class AgentHost implements EngineAdapter {
   /** Converts one whole-list source update into task_type=tasklist. The
    * entity deliberately never emits kind=completed: an all-completed or empty
    * list remains inspectable until the parent session disconnects. */
-  #applyTasklistEvent(event: TasklistEvent): void {
-    if (event.kind === "invalid") {
-      this.#warn(`[kaoiro] ${event.reason} — tasklist update dropped`);
+  #recordTasklistTrigger(trigger: TasklistTrigger): void {
+    if (trigger.kind === "unrecognized") {
+      if (this.#warnedUnknownTasklistToolNames.has(trigger.name)) return;
+      this.#warnedUnknownTasklistToolNames.add(trigger.name);
+      this.#warn(
+        `[kaoiro] unrecognized tasklist-like tool_use: name=${trigger.name} — tasklist may be stale`,
+      );
       return;
     }
-    this.#emitTasklist(event.items);
+    if (trigger.kind === "updated") {
+      this.#emitTasklist(trigger.items);
+      return;
+    }
+    if (trigger.kind === "invalid") {
+      this.#warn(`[kaoiro] ${trigger.reason} — tasklist update dropped`);
+      return;
+    }
+    if (this.#sessionId === null) {
+      this.#warn("[kaoiro] tasklist refresh skipped: Claude session_id is missing");
+      return;
+    }
+    this.#pendingTasklistRefreshes.set(trigger.toolUseId, this.#sessionId);
+  }
+
+  /** A result, reset, or completed interrupt ends the correlation epoch even
+   * when the SDK omitted a tool_result. Re-read once first: a tool may have
+   * committed its file before the stream ended, while an unexecuted tool just
+   * produces a deduplicated snapshot. */
+  async #reconcilePendingTasklistRefreshes(
+    boundary: "result" | "conversation_reset" | "interrupt",
+  ): Promise<void> {
+    const count = this.#pendingTasklistRefreshes.size;
+    if (count === 0) return;
+    const sessionId = this.#sessionId;
+    // Clear before awaiting I/O, so no later message can join a reused id to
+    // this completed turn even if the source read fails or is slow.
+    this.#pendingTasklistRefreshes.clear();
+    if (sessionId !== null) await this.#refreshTasklist(sessionId);
+    this.#warn(
+      `[kaoiro] ${count} pending tasklist refresh join(s) reconciled at ${boundary}`,
+    );
+  }
+
+  /** Consumes all matching tool results in this SDK message and refreshes at
+   * most once. Parallel TaskCreate/TaskUpdate calls commonly settle together;
+   * one post-execution whole-list read is enough for their LWW envelope. */
+  async #refreshTasklistAfterToolResults(message: SDKMessage): Promise<void> {
+    const completedSessions = new Set<string>();
+    for (const toolUseId of sdkMessageToToolResultIds(message)) {
+      const sessionId = this.#pendingTasklistRefreshes.get(toolUseId);
+      if (sessionId === undefined) continue;
+      this.#pendingTasklistRefreshes.delete(toolUseId);
+      completedSessions.add(sessionId);
+    }
+    if (this.#sessionId !== null && completedSessions.has(this.#sessionId)) {
+      await this.#refreshTasklist(this.#sessionId);
+    }
+  }
+
+  async #refreshTasklist(
+    sessionId: string,
+    options: { clearOnFailure?: boolean } = {},
+  ): Promise<void> {
+    try {
+      const event = await this.#readTasklist(sessionId);
+      if (event.kind === "invalid") {
+        this.#warn(`[kaoiro] ${event.reason} — tasklist update dropped`);
+        if (options.clearOnFailure) this.#emitTasklist([]);
+        return;
+      }
+      this.#emitTasklist(event.items);
+    } catch (error: unknown) {
+      this.#warn(`[kaoiro] cannot read Claude tasklist: ${String(error)}`);
+      if (options.clearOnFailure) this.#emitTasklist([]);
+    }
   }
 
   #emitTasklist(sourceItems: readonly TasklistSourceItem[]): void {
@@ -2579,10 +2739,13 @@ export class AgentHost implements EngineAdapter {
   async *#input(): AsyncGenerator<SDKUserMessage> {
     while (true) {
       while (this.#queue.length > 0) {
-        // Shift in lockstep with #queue (issue #131 must-fix 1) so the tag
-        // always names the turn about to be fed to the SDK, not a stale one.
-        this.#currentTurnConversationIds = this.#turnConversationIds.shift() ?? [];
-        yield this.#queue.shift() as SDKUserMessage;
+        const turn = this.#queue.shift() as QueuedTurn;
+        this.#activeTurn = turn;
+        yield turn.message;
+        // The SDK may immediately pull again before it emits this turn's
+        // result. Do not let that eager pull replace a turn's correlation
+        // identity: the terminal result or an explicit abort opens this gate.
+        await this.#waitForTurnBoundary(turn.turnToken);
       }
       if (this.#closed) return;
       await new Promise<void>((resolve) => {
@@ -2604,6 +2767,118 @@ export class AgentHost implements EngineAdapter {
   #wake(): void {
     const notify = this.#notify;
     this.#notify = null;
+    notify?.();
+  }
+
+  async #waitForTurnBoundary(turnToken: string): Promise<void> {
+    while (this.#activeTurn?.turnToken === turnToken) {
+      // close() ends the input stream after the current turn drains. A fake
+      // SDK used by tests may model that drain by merely consuming input and
+      // returning (without a result); allow that iterator to finish, while
+      // retaining the active token for a real late result. If later queued
+      // inputs exist, keep the barrier closed until this turn really ends.
+      if (this.#closed && this.#queue.length === 0) return;
+      await new Promise<void>((resolve) => {
+        // A result or close can arrive between the loop check and installing
+        // the waiter. Re-check in the same turn so no wake is missed.
+        if (
+          this.#activeTurn?.turnToken !== turnToken ||
+          (this.#closed && this.#queue.length === 0)
+        ) {
+          resolve();
+          return;
+        }
+        this.#turnBoundaryNotify = resolve;
+      });
+    }
+  }
+
+  /** Completes the current token and opens the next-input barrier. Result
+   * messages with no wrapper-fed input preserve the legacy empty callback. */
+  #completeActiveTurn(
+    error: { reason?: string; detail?: string } | undefined,
+    notifyWhenAbsent: boolean,
+    cancellation?: { kind: "stream_eof"; started: boolean },
+  ): void {
+    const turn = this.#activeTurn;
+    this.#activeTurn = null;
+    if (turn !== null) {
+      this.#options.onTurnEnd?.({
+        turnToken: turn.turnToken,
+        conversationIds: turn.conversationIds,
+        ...(error === undefined ? {} : { error }),
+        ...(cancellation === undefined ? {} : { cancellation }),
+      });
+    } else if (notifyWhenAbsent) {
+      this.#options.onTurnEnd?.({
+        conversationIds: [],
+        ...(error === undefined ? {} : { error }),
+      });
+    }
+    const notify = this.#turnBoundaryNotify;
+    this.#turnBoundaryNotify = null;
+    notify?.();
+  }
+
+  /** An abnormal terminal boundary only matters if this host had an active
+   * wrapper-fed turn; unlike a result, it has no untracked legacy callback. */
+  #abortActiveTurn(error: { reason?: string; detail?: string }): void {
+    if (this.#activeTurn === null) return;
+    this.#completeActiveTurn(error, false, { kind: "stream_eof", started: true });
+  }
+
+  #assertCanQueue(): void {
+    if (this.#closed) throw new Error("agent host is closed");
+    // Fail fast instead of growing without bound when nothing drains.
+    if (this.#queue.length >= MAX_QUEUED_TURNS) {
+      throw new Error("agent host input queue is full");
+    }
+  }
+
+  /** EOF is terminal for the host, not merely its current SDK input. Mark
+   * closed before notifying callbacks so any next batch the CLI attempts to
+   * dispatch fails visibly instead of being appended behind a dead stream. */
+  #abortAllTurnsAtStreamEnd(error: { reason?: string; detail?: string }): void {
+    this.#closed = true;
+    this.#abortActiveTurn(error);
+    const queuedTurns = this.#queue.splice(0);
+    for (const turn of queuedTurns) {
+      this.#options.onTurnEnd?.({
+        turnToken: turn.turnToken,
+        conversationIds: turn.conversationIds,
+        error,
+        cancellation: { kind: "stream_eof", started: false },
+      });
+    }
+    this.#wakeTurnBoundary();
+    this.#wake();
+  }
+
+  /** Runs the one host-lifetime terminal pathway. This intentionally sits
+   * outside the SDK stream loop so query construction and iteration errors,
+   * and a close while waiting for the first input, cannot strand an accepted
+   * inter-agent batch outside #queue (issue #246). */
+  #finishHost(kind: "stream_eof" | "closed_before_query"): void {
+    if (this.#hostEnded) return;
+    this.#hostEnded = true;
+    const error = {
+      detail:
+        kind === "stream_eof"
+          ? "SDK stream ended before terminal result"
+          : "agent host closed before SDK query started",
+    };
+    this.#abortAllTurnsAtStreamEnd(error);
+    this.#pendingTasklistRefreshes.clear();
+    if (this.#gcTimer !== null) {
+      clearInterval(this.#gcTimer);
+      this.#gcTimer = null;
+    }
+    this.#options.onHostEnd?.({ kind, error });
+  }
+
+  #wakeTurnBoundary(): void {
+    const notify = this.#turnBoundaryNotify;
+    this.#turnBoundaryNotify = null;
     notify?.();
   }
 }

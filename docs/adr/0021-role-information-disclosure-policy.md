@@ -6,7 +6,7 @@ opened: 2026-06-22
 supersedes: []
 superseded_by: null
 related_specs: [protocol, threat-model, protocol-inter-agent]
-related_adrs: [11, 12, 13, 22, 25, 27, 28, 30, 40, 41, 42, 43, 44]
+related_adrs: [11, 12, 13, 22, 25, 27, 28, 30, 40, 41, 42, 43, 44, 50]
 ---
 
 # ADR-0021 — viewer / operator ロールの情報公開ポリシ
@@ -45,10 +45,30 @@ issue #46 はそもそも「viewer ロールの権限・情報公開範囲を **
 
 ## Decision
 
-### F1: 2 ロール固定(operator / viewer)
+### F1: 2 ロール固定(operator / viewer) — 撤回済み
 
-中間ロール(admin 等)は YAGNI。`operator` = 管理者として全権、`viewer` =
-閲覧専用。3 ロール化は別 ADR を要する。
+> **改訂 (2026-08-14、issue #198)。** F1 は
+> [ADR-0050](0050-principal-model-and-graded-access-control.md) D2 が覆した。
+> role は **admin / operator / viewer の 3 値**である。F1 自身が「3 ロール
+> 化は別 ADR を要する」と定めており、ADR-0050 がその別 ADR にあたる。
+>
+> 本 ADR を supersede しないのは、覆ったのが F1 だけだからである。F2 以降
+> の allow-list 方式と envelope 別マトリクスは現役で、3 値化後も次の 1 点を
+> 加えるだけで成立する:
+>
+> - **本 ADR が「operator 限定」と書く配信は、すべて admin にも届く。**
+>   admin は operator の上位で 全可視 であり、ADR-0050 D2 の MUST により
+>   隠蔽の対象にならない。実装は `AgentsChannel` の
+>   `@operator_capable_roles` 1 箇所が判定する
+> - viewer の可視性 (F3 以降) は変更しない。ADR-0050 D2 が「viewer の元々
+>   の意図と一致しているため変更しない」と明示している
+>
+> per-pair 権限 ([issue #199](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/199))
+> が operator の受信範囲を絞り始めた時点で、admin をその判定から切り離す
+> 必要がある。まとめて絞られると上記 MUST が壊れる。
+
+当初の記述: 中間ロール(admin 等)は YAGNI。`operator` = 管理者として全権、
+`viewer` = 閲覧専用。3 ロール化は別 ADR を要する。
 
 ### F2: viewer 配信は allow-list 方式(operator 限定がデフォルト)
 
@@ -207,7 +227,11 @@ agent directory (同じ経路の別 payload) を同じ集合で管理すると�
 向けに緩めた判断がもう片方の allow-list をも緩めてしまう。
 
 現時点の allow 集合: `id` / `kind`(常に literal `"user"`) /
-`display_name` / `role`(`"operator"` \| `"viewer"`)。F6-6 の再評価
+`display_name` / `role`(`"admin"` \| `"operator"` \| `"viewer"` —
+issue #198 で 3 値化。wire contract の正本は本 ADR と
+[protocol-inter-agent](../specs/protocol-inter-agent.md) であり、
+`wrapper/core/src/transport.ts` の `USER_ROLES` はその実装側で型と実行時
+narrow を 1 箇所から導出するための手段にすぎない)。F6-6 の再評価
 結論が言う identity 相当の 4 field に限る。state・活動 (現在何を
 しているか、誰とやり取り中か) に相当する概念は user には無く、開示
 対象にもならない。
@@ -255,7 +279,7 @@ F6-3 / F6-8 いずれかへ列挙 → 両主体の可視性を covering する�
 | 現状の catch-all 素通し(deny-list 継ぎ足し)を維持 | 新 type 追加時に viewer 漏洩が継続。事故が起きるまで気づけない構造的問題が残る |
 | `permission_request` envelope を viewer にも素通しで `input` だけ落とす(現状)| `tool_name` / `request_id` から operator の作業状況が推測でき、Defense-in-depth として不十分 |
 | viewer から `permission_request` を **完全に** 除去(snapshot からも外す)| 最新が `permission_request` のとき viewer の grid から agent が消える。合成 `state_change` への置換で grid 整合を保つ方を採用 |
-| 3 ロール化(admin / operator / viewer)| YAGNI。現状の機能では 2 ロールで足りる。必要になった時点で別 ADR |
+| 3 ロール化(admin / operator / viewer)| ~~YAGNI。現状の機能では 2 ロールで足りる。必要になった時点で別 ADR~~ **却下を撤回 (2026-08-14、issue #198)。** その「必要になった時点」が来て、[ADR-0050](0050-principal-model-and-graded-access-control.md) D2 が 3 値化を決めた。上記 F1 の改訂を参照 |
 
 ## Related
 

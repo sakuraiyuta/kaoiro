@@ -26,7 +26,9 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       end
 
       assert personas["kohaku"]["name"] == "こはく"
-      assert personas["kohaku"]["pack_version"] == "1.0.0"
+      # Bumped to 1.1.0 by commit ab66725 (2026-08-12); this expectation
+      # was not updated with it and has been failing on develop since.
+      assert personas["kohaku"]["pack_version"] == "1.1.0"
     end
   end
 

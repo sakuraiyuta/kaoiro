@@ -31,7 +31,7 @@ flowchart LR
   WS --> SRV[Phoenix Server]
   RS --> SRV
   CS --> SRV
-  SRV -->|"envelope (operator/viewer)"| CS
+  SRV -->|"envelope (admin/operator/viewer)"| CS
 ```
 
 ### Socket 認証 (`server/lib/kaoiro_server/auth.ex`)
@@ -40,7 +40,7 @@ flowchart LR
 |---|---|---|---|---|
 | Wrapper | `wrapper:<agent_id>` | `agent_id:token` ペア / 又は server-minted signed token (ADR-0024) | `KAOIRO_WRAPPER_TOKENS` | `:dev`/`:test` = **dev 緩和** (誰でも join 可、warn ログ) / `:prod` = ペア auth 無効、**signed token は受理**・それ以外 fail-closed (issue #138、2026-08-02 改訂: runner-only 配備で spawn が全拒否される回帰を解消) |
 | Runner | `runner:<host_id>` | `host_id:token` ペア | `KAOIRO_RUNNER_TOKENS` | `:dev`/`:test` = **dev 緩和** / `:prod` = **fail-closed** 全拒否 (signed token 分岐は無い、issue #138) |
-| Client (token) | `agents:lobby` | `token → role` (operator/viewer) | `KAOIRO_CLIENT_TOKENS` | **fail-closed** — 全 env で全 client 拒否 |
+| Client (token) | `agents:lobby` | `token → role` (admin/operator/viewer) | `KAOIRO_CLIENT_TOKENS` | **fail-closed** — 全 env で全 client 拒否 |
 | Client (OAuth) | `agents:lobby` | `identity (provider+uid) → role` (許可リスト、[ADR-0042](../adr/0042-oauth-allowlist-login.md)) | `KAOIRO_OAUTH_*` + `KAOIRO_OAUTH_ALLOWLIST_PATH` | **fail-closed** — provider 未設定/許可リスト未設定・欠落・不一致は全拒否 |
 
 トークン比較は 3 種とも `Plug.Crypto.secure_compare/2` で定数時間。
@@ -66,6 +66,25 @@ release を token 未設定のまま起動すると全 wrapper/runner 接続が�
 - Client: `agents_channel.ex` は `agents:lobby` のみ。socket assigns に role
 - charset は `[A-Za-z0-9._-]` ([#61](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/61))。
   topic 文字列インジェクションを構造的に防止
+
+### Role の 3 値 ([ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D2)
+
+`admin` > `operator` > `viewer`。issue #198 で導入。
+
+- 宣言経路は既存の 2 つのみ。`KAOIRO_CLIENT_TOKENS` の `token:admin[:name]`
+  と、OAuth 許可リストの `provider:identifier:admin`。専用ファイルや専用
+  env は作らない (許可リストのテキスト形式が変わらないので、issue #170 の
+  `OAuthAllowlistWatcher` の前提も変わらない)
+- 綴り違いは fail-closed。`parse_role/1` / `@roles` のどちらも、3 語以外は
+  `nil` にして認証ごと拒否する。viewer へ降格させない
+- 既存 operator の自動昇格はしない (マスター決裁 2026-08-14)。admin が 0
+  人の配備では起動時に警告を出す (`Auth.warn_token_config/0`)
+- **本ページで「operator 限定」と書く gate は、inbound / outbound とも
+  admin を通す。** 判定は `AgentsChannel` の `@operator_capable_roles` の
+  1 箇所に集約してある。`role == :operator` の直接比較を各所に書かない
+  こと — inbound だけ通って outbound が落ちる、という非対称な穴になる
+- 例外は `guard_against_reset_pending/2`。これは権限ではなく制限なので
+  admin も同じく guard 対象に含める
 
 ### Role-based 出力 gate ([ADR-0021](../adr/0021-role-information-disclosure-policy.md))
 
@@ -223,7 +242,7 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。role は snapsh
 |---|---|---|---|
 | **エージェント間 ACL** | A→B 送信のサーバ側許可リストなし | broker dialog (operator 都度承認) が唯一の人間ゲート | [#17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17) Phase 1 意図的選択 |
 | **メッセージ内容検査** | server は payload を解釈しない (size cap のみ) | なし — prompt injection 攻撃は素通り | [#18](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/18) Phase 2 |
-| **operator role 細分** | operator は全権 (spawn / interrupt / approve / clear など)。[#65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65) の OAuth 個人認証は実装済だが role は operator / viewer の 2 値のまま | なし — 単一テナント前提 | [ADR-0042](../adr/0042-oauth-allowlist-login.md) Out of scope (approver 等の細分は将来) |
+| **operator role 細分** | issue #198 で role は admin / operator / viewer の 3 値になったが、operator は依然として全権 (spawn / interrupt / approve / clear など)。降格の実体は per-pair 権限側で、それは未実装 | なし — 単一テナント前提 | [issue #199](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/199) (per-pair 権限、[ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D3) |
 | **トークン即時失効** | **稼働中 WS の強制切断 実装済 ([#47](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/47))**: logout (`DELETE /session`) と失効 credential の refresh 401 で `disconnect_sockets/1` が socket_id topic へ disconnect broadcast → 全接続 drop。即時 push ではなく検知契機の到来時に着弾する | 検知契機は次の operator 操作 ([#158](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/158) の gate 再解決) / OAuth 許可リストの change-driven disconnect ([#170](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/170)、未操作 passive socket もカバー済み) / 12h 周期の refresh / reconnect / 明示 logout。共有トークン (`KAOIRO_CLIENT_TOKENS`) の値変更自体は env 再読込がなく再起動が必要(この経路は #170 のスコープ外のまま) | 実装完 |
 | **signed token revoke** | **per-agent_id denylist 実装済 (2026-07-23、[#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))**: TokenDenylist DETS + Auth.authorize_wrapper 照合 + delete_agent 連動 auto-revoke + operator 明示 revoke handler + revoked broadcast による live disconnect | key rotation はいまも fleet 全体一括失効の重量オプションとして残る | 実装完 |
 | **マルチテナント隔離** | 全 operator が全エージェントを操作可能 (OAuth で個人は識別できるが、エージェントの所有者境界は無い) | なし — single tenant 前提 | [ADR-0042](../adr/0042-oauth-allowlist-login.md) Out of scope |
@@ -282,7 +301,7 @@ OSS 公開前監査 ([#91](https://gitea.example.invalid/sakurai.yuta/kaoiro/iss
 - ADRs: [0011](../adr/0011-phase3-reliability-and-auth.md) (wrapper token),
   [0012](../adr/0012-response-display-and-dashboard-scope.md) (log/result 配信),
   [0013](../adr/0013-user-token-cookie-persistence.md) (cookie / ticket),
-  [0021](../adr/0021-role-information-disclosure-policy.md) (operator/viewer allow-list),
+  [0021](../adr/0021-role-information-disclosure-policy.md) (role 別 allow-list),
   [0022](../adr/0022-pending-permission-authoritative-source.md) (pending permission),
   [0023](../adr/0023-host-runner-architecture.md) (runner),
   [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) (spawn auth),

@@ -663,7 +663,7 @@ opt-out。`config` key そのものが読めない異常系(config/runtime.exs �
 | `id` | string | user_id。agent_id と同一 charset (`[A-Za-z0-9._-]`、issue #61) — ADR-0050 D1 が id 空間を単一と定めるため | MUST(常に存在) |
 | `kind` | string | 常に literal `"user"` | MUST |
 | `display_name` | string | 表示名 (下記 contract 参照) | MUST |
-| `role` | string | `"operator"` \| `"viewer"` | MUST |
+| `role` | string | `"admin"` \| `"operator"` \| `"viewer"` | MUST |
 
 **role を解決できない (allow-list から revoke 済み、config 変更で未知に
 なった等) user は、field を省略するのではなく entry ごと省略する。**

@@ -1133,8 +1133,10 @@ describe("ServerLink — requestDirectory の users projection (issue #197 段�
         // kind が未知の値 (issue #197 段階2 M2 レビュー指摘: 型は
         // string で一致するが allow-list 外の値)
         { id: "5", kind: "agent", display_name: "Bad3", role: "operator" },
-        // role が未知の値 (同上、将来の admin 等の passthrough は却下)
-        { id: "6", kind: "user", display_name: "Bad4", role: "admin" },
+        // role が未知の値 (同上、passthrough は却下)。`admin` はこの
+        // ケースの題材だったが issue #198 で実在の role になったため、
+        // どの role 表にも無い綴りへ差し替えた
+        { id: "6", kind: "user", display_name: "Bad4", role: "root" },
         // id が charset (issue #61) 違反
         { id: "has space", kind: "user", display_name: "Bad5", role: "viewer" },
         { id: "4", kind: "user", display_name: "Viewer", role: "viewer" },
@@ -1148,6 +1150,29 @@ describe("ServerLink — requestDirectory の users projection (issue #197 段�
     expect(users).toEqual([
       { id: "1", kind: "user", display_name: "Ao", role: "operator" },
       { id: "4", kind: "user", display_name: "Viewer", role: "viewer" },
+    ]);
+  });
+
+  // admin は valid role なので、unknown role として落としてはならない。
+  // ここで落ちると、サーバが送っていても admin だけ users から消え、
+  // operator / viewer は通るという非対称な欠落になる (issue #198)。
+  // 「users を agent へ出すかどうか」自体は別軸で、
+  // KAOIRO_EXPOSE_USERS_TO_AGENTS=false なら admin 含め全員出ない。
+  it("admin role の user entry を落とさない", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("ok")!({
+      agents: [],
+      users: [
+        { id: "1", kind: "user", display_name: "Admin", role: "admin" },
+        { id: "2", kind: "user", display_name: "Op", role: "operator" },
+      ],
+    });
+
+    const { users } = await pending;
+    expect(users).toEqual([
+      { id: "1", kind: "user", display_name: "Admin", role: "admin" },
+      { id: "2", kind: "user", display_name: "Op", role: "operator" },
     ]);
   });
 

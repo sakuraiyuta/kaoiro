@@ -25,17 +25,18 @@ import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory, sessionSidecarPath } from "./history.js";
 import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
 import {
+  InterAgentIngressGate,
+  InterAgentTurnCoordinator,
+  type InterAgentTurnSettlement,
+} from "./inter_agent_turn_coordinator.js";
+import {
   HistoryReplayer,
   IaSidecar,
   InterAgentTool,
-  canAddToCoalescedBatch,
   classifyInterAgentError,
-  formatInboundMessage,
-  formatInboundMessages,
   isIngressStamp,
   mergePendingDisplayNameSync,
 } from "@kaoiro/agent-common";
-import type { InboundReplyMode } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "./read_only_tools.js";
 import {
@@ -244,98 +245,80 @@ async function main(): Promise<void> {
     return queued;
   };
 
-  /** One coalesced batch of pending inbound envelopes from the SAME peer
-   *  (issue #221 段階3, direction 2 — coalescing unit is same-peer, クロエ
-   *  裁定 2026-08-11). `bytes` tracks the SUM of each item's own
-   *  `formatInboundMessage()` size, checked against
-   *  `canAddToCoalescedBatch()` so a batch never exceeds the shared
-   *  count/size caps. */
-  interface PendingBatch {
-    items: { envelope: Envelope; mode: InboundReplyMode }[];
-    bytes: number;
-  }
-  /** peer agent_id -> FIFO of batches queued to send for that peer, oldest
-   *  first (issue #221 段階3). The LAST entry is the one still open for new
-   *  items to append to (subject to `canAddToCoalescedBatch()`); any
-   *  earlier entry is already closed and just waiting its turn. Normally
-   *  length 0 or 1 — a second entry only appears when the cap closes the
-   *  open batch again while the peer is STILL busy (see `inFlightPeers`
-   *  below). Absent key = nothing queued for that peer. */
-  const pendingBatches = new Map<string, PendingBatch[]>();
-  /** peer agent_id -> present while a turn for that peer is currently in
-   *  flight (sent via host.send(), `onTurnEnd` not yet observed for it) —
-   *  issue #221 段階3, direction 2. This, NOT `instructionChain`'s own
-   *  idle/busy state, is the real busy-trigger signal (クロエ裁定 3):
-   *  `host.send()` itself resolves almost the instant its text is pushed
-   *  onto the SDK's OWN internal queue — long before the model actually
-   *  finishes that turn (`#input()` / `#queue` in host.ts) — so gating on
-   *  `enqueueInstruction`'s chain alone would read "idle" again within a
-   *  microtask of every send, even while the SDK spends the next several
-   *  seconds thinking. That multi-second window is exactly where a busy
-   *  peer's next few messages need to accumulate, so "busy" here means the
-   *  turn itself hasn't completed, tracked via `onTurnEnd` below — not
-   *  merely "the push completed". */
-  const inFlightPeers = new Set<string>();
-  /** conversation_id -> peer, for cids belonging to the CURRENTLY in-flight
-   *  turn ONLY (issue #221 段階3). Populated when a batch is sent, drained
-   *  by `onTurnEnd` below to learn which peer just freed up — every cid in
-   *  one batch always maps to the same peer by construction (same-peer
-   *  coalescing unit), so any single entry identifies it. */
-  const inFlightCidPeer = new Map<string, string>();
+  /**
+   * issue #246: a CID is payload for peer_error fan-out, never the identity
+   * of an SDK turn. The coordinator owns same-peer batching by opaque token;
+   * its production implementation is unit-tested directly rather than being
+   * copied into a CLI-only harness.
+   */
+  let interAgentTurns!: InterAgentTurnCoordinator;
+  // Transport deliberately does not await onInterAgentMessage. Register a
+  // lease before receiveInbound() can await InterAgentTool's pending-done
+  // gate, so host terminal teardown can stop a late handler before it enters
+  // turn ownership (issue #246).
+  const interAgentIngress = new InterAgentIngressGate();
 
-  /** Sends the OLDEST queued batch for `peer`, if the peer is free
-   *  (`!inFlightPeers.has(peer)`) and a batch is actually waiting (issue
-   *  #221 段階3). No-ops otherwise. Called speculatively — both from a new
-   *  arrival (the peer MIGHT already be free) and from `onTurnEnd` (a busy
-   *  peer just became free) — so it must be safe to call whether or not
-   *  either condition currently holds. */
-  function trySendNextBatch(peer: string): void {
-    if (inFlightPeers.has(peer)) return;
-    const queue = pendingBatches.get(peer);
-    const batch = queue?.shift();
-    if (batch === undefined) return;
-    if (queue!.length === 0) pendingBatches.delete(peer);
-    inFlightPeers.add(peer);
-    const cids = batch.items
-      .map(
-        (item) =>
-          (item.envelope.payload as Partial<InterAgentMessagePayload>)
-            .conversation_id,
-      )
-      .filter((cid): cid is string => typeof cid === "string");
-    for (const cid of cids) inFlightCidPeer.set(cid, peer);
-    // issue #221 段階3 MF-1 (ふじレビュー差し戻し): register each item's
-    // pending injection HERE, at dispatch time — not at receipt time in
-    // onInterAgentMessage. See the comment there for why receipt-time
-    // registration was wrong. This ties every cid's map entry one-for-one
-    // to the batch actually being sent below, matching the cids passed as
-    // host.send()'s third parameter.
-    for (const item of batch.items) {
-      interAgent?.notePendingInjection(item.envelope);
+  const resolveInterAgentConversationIds = (
+    conversationIds: readonly string[],
+    error?: { reason?: string; detail?: string },
+  ): void => {
+    const classified = error ? classifyInterAgentError(error) : undefined;
+    for (const envelope of interAgent?.resolveTurnEnd(
+      conversationIds,
+      classified,
+    ) ?? []) {
+      link?.send(envelope);
     }
-    const text = formatInboundMessages(batch.items);
-    void enqueueInstruction(() =>
-      host.send(text, undefined, cids).catch((err: unknown) => {
-        process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
-        // issue #136 / #221 段階3: host.send() rejecting here (e.g.
-        // MAX_QUEUED_TURNS overflow) means this batch never reached the
-        // SDK queue, so no turn will ever run for it and onTurnEnd never
-        // fires either — without this cleanup the peer would stay marked
-        // in-flight forever and never send whatever queued up behind it.
-        // Free it up the same way onTurnEnd's own handler does below,
-        // resolve every one of this batch's cids so each bundled peer gets
-        // a peer_error notice instead of silence (クロエ裁定 — 全件波及),
-        // then try the peer's next queued batch (if any).
-        for (const cid of cids) inFlightCidPeer.delete(cid);
-        inFlightPeers.delete(peer);
-        const classified = classifyInterAgentError({ detail: String(err) });
-        for (const notice of interAgent?.resolveTurnEnd(cids, classified) ?? []) {
-          link?.send(notice);
-        }
-        trySendNextBatch(peer);
-      }),
-    );
-  }
+  };
+
+  const resolveInterAgentTurn = (
+    settlement: InterAgentTurnSettlement,
+    error?: { reason?: string; detail?: string },
+    options: { dispatchNext?: boolean } = {},
+  ): void => {
+    if (settlement.kind === "untracked") return;
+    if (settlement.kind === "stale") {
+      process.stderr.write(
+        `[kaoiro] stale inter-agent turn settlement ignored: token=${settlement.turnToken}\n`,
+      );
+      return;
+    }
+    resolveInterAgentConversationIds(settlement.batch.conversationIds, error);
+    // Resolve the old generation before starting a same-CID successor:
+    // InterAgentTool's pending map is intentionally one record per CID.
+    if (options.dispatchNext !== false) {
+      interAgentTurns.dispatchNextForPeer(settlement.batch.peer);
+    }
+  };
+
+  interAgentTurns = new InterAgentTurnCoordinator({
+    onDispatch: (batch) => {
+      // Register at dispatch time, not receipt time: a same-CID next
+      // generation cannot overwrite this record while this token is active.
+      for (const item of batch.items) {
+        interAgent?.notePendingInjection(item.envelope);
+      }
+      void enqueueInstruction(() =>
+        host
+          .send(
+            batch.text,
+            undefined,
+            batch.conversationIds,
+            batch.turnToken,
+          )
+          .catch((err: unknown) => {
+            process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
+            // A rejected input never reaches the SDK, so it has no terminal
+            // callback. Settle this exact token and let the coordinator, not
+            // a CID lookup, decide whether its peer may advance.
+            resolveInterAgentTurn(
+              interAgentTurns.settle(batch.turnToken),
+              { detail: String(err) },
+            );
+          }),
+      );
+    },
+  });
 
   const onState = (envelope: Envelope): void => {
     printState(envelope);
@@ -645,113 +628,92 @@ async function main(): Promise<void> {
     // handler here is still fire-and-forget from its perspective, exactly
     // as the previous synchronous one was.
     onInterAgentMessage: async (envelope) => {
+      // This happens before the handler's first await. The lease is distinct
+      // from turn ownership: it only prevents an ingress that was awaiting
+      // InterAgentTool from entering the coordinator after host termination.
+      const ingressLease = interAgentIngress.begin();
       // Record BEFORE anything consumes the envelope (ADR-0051 D3-2): the
       // sidecar documents what the server delivered, so a later injection
       // failure leaving only the record is the correct outcome, not a bug.
       recordInboundIa(envelope);
-      const disposition = (await interAgent?.receiveInbound(envelope)) ?? {
-        consumed: false,
-        inject: true,
-        mode: "reply-owed" as const,
-      };
-      if (disposition.consumed) {
-        process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
-        return;
-      }
-      if (!disposition.inject) {
-        // issue #221 direction 1: `inject: false` has two distinct causes
-        // that must not share a log line (agent-common's `InboundDisposition`
-        // doc) — `mode === "terminal"` means this DID happen and the track
-        // above just learned `closed`, only that no reply is owed and no SDK
-        // turn should be spent on it; anything else here is AC9's late /
-        // stale / duplicate turn_number, which never happened at all
-        // (track untouched).
-        if (disposition.mode === "terminal") {
+      try {
+        if (interAgentIngress.isTerminal(ingressLease)) {
           process.stdout.write(
-            `  inter_agent_message terminal, no reply owed: ${envelope.agent_id}\n`,
+            `  inter_agent_message terminal ingress skipped before receive: ${envelope.agent_id}\n`,
           );
-        } else if (disposition.notice) {
-          // issue #222 欠陥3: notify the ORIGINAL sender (and resync its
-          // track — see InterAgentTool#receiveInbound's doc) instead of
-          // dropping this silently. Same AC10-bypassing pattern as
-          // resolveTurnEnd()'s notices below — this never goes through
-          // invoke()/#dispatch() either.
-          link?.send(disposition.notice);
-          process.stdout.write(
-            `  inter_agent_message stale/duplicate turn dropped, stale_turn notice sent: ${envelope.agent_id}\n`,
-          );
-        } else {
-          // No notice was built — receiveInbound() withholds it in exactly
-          // two cases (see its doc): this envelope was itself a peer_error/
-          // stale_turn notice (replying would risk a notice/notice ping-
-          // pong), or the track was already closed (a late arrival after
-          // the conversation legitimately ended, where the sender already
-          // has — or will get — its own `conversation_closed` reject). The
-          // director's steer: a skip must never be silent, even when no
-          // notice goes out over the wire, so log which case this was.
-          const stalePayload = envelope.payload as Partial<InterAgentMessagePayload>;
-          const skipReason = stalePayload.error
-            ? "envelope itself is a peer_error notice"
-            : "track already closed";
-          process.stdout.write(
-            `  inter_agent_message stale/duplicate turn dropped, no notice (${skipReason}): ${envelope.agent_id}\n`,
-          );
+          return;
         }
-        return;
+        const disposition = (await interAgent?.receiveInbound(envelope)) ?? {
+          consumed: false,
+          inject: true,
+          mode: "reply-owed" as const,
+        };
+        if (interAgentIngress.isTerminal(ingressLease)) {
+          process.stdout.write(
+            `  inter_agent_message terminal ingress skipped after receive: ${envelope.agent_id}\n`,
+          );
+          return;
+        }
+        if (disposition.consumed) {
+          process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
+          return;
+        }
+        if (!disposition.inject) {
+          // issue #221 direction 1: `inject: false` has two distinct causes
+          // that must not share a log line (agent-common's `InboundDisposition`
+          // doc) — `mode === "terminal"` means this DID happen and the track
+          // above just learned `closed`, only that no reply is owed and no SDK
+          // turn should be spent on it; anything else here is AC9's late /
+          // stale / duplicate turn_number, which never happened at all
+          // (track untouched).
+          if (disposition.mode === "terminal") {
+            process.stdout.write(
+              `  inter_agent_message terminal, no reply owed: ${envelope.agent_id}\n`,
+            );
+          } else if (disposition.notice) {
+            // issue #222 欠陥3: notify the ORIGINAL sender (and resync its
+            // track — see InterAgentTool#receiveInbound's doc) instead of
+            // dropping this silently. Same AC10-bypassing pattern as
+            // resolveTurnEnd()'s notices below — this never goes through
+            // invoke()/#dispatch() either.
+            link?.send(disposition.notice);
+            process.stdout.write(
+              `  inter_agent_message stale/duplicate turn dropped, stale_turn notice sent: ${envelope.agent_id}\n`,
+            );
+          } else {
+            // No notice was built — receiveInbound() withholds it in exactly
+            // two cases (see its doc): this envelope was itself a peer_error/
+            // stale_turn notice (replying would risk a notice/notice ping-
+            // pong), or the track was already closed (a late arrival after
+            // the conversation legitimately ended, where the sender already
+            // has — or will get — its own `conversation_closed` reject). The
+            // director's steer: a skip must never be silent, even when no
+            // notice goes out over the wire, so log which case this was.
+            const stalePayload = envelope.payload as Partial<InterAgentMessagePayload>;
+            const skipReason = stalePayload.error
+              ? "envelope itself is a peer_error notice"
+              : "track already closed";
+            process.stdout.write(
+              `  inter_agent_message stale/duplicate turn dropped, no notice (${skipReason}): ${envelope.agent_id}\n`,
+            );
+          }
+          return;
+        }
+        // Server routed an inter_agent_message to this wrapper (peer reply or
+        // synthesized escalate-to-user). Track the inbound turn_number so our
+        // next outbound send_to_agent stays monotonic, then queue it for
+        // delivery — possibly coalesced with other pending same-peer messages
+        // into one SDK turn (issue #221 段階3, direction 2). The host
+        // serialises through instructionChain so a mid-PDF render cannot
+        // reorder this against an operator instruction.
+        process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
+        // issue #246: receipt only appends to the production coordinator. It
+        // registers the pending injection when (and only when) an exact opaque
+        // token is dispatched, preserving issue #221's same-CID safety.
+        interAgentTurns.receive(envelope, disposition.mode);
+      } finally {
+        interAgentIngress.finish(ingressLease);
       }
-      // Server routed an inter_agent_message to this wrapper (peer reply or
-      // synthesized escalate-to-user). Track the inbound turn_number so our
-      // next outbound send_to_agent stays monotonic, then queue it for
-      // delivery — possibly coalesced with other pending same-peer messages
-      // into one SDK turn (issue #221 段階3, direction 2). The host
-      // serialises through instructionChain so a mid-PDF render cannot
-      // reorder this against an operator instruction.
-      process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
-      // issue #131: this wrapper now owes a reply on the conversation.
-      // notePendingInjection() is called from trySendNextBatch() below, NOT
-      // here — issue #221 段階3 MF-1 (ふじレビュー差し戻し) moved the call
-      // from receipt time to dispatch time. Registering it here (at
-      // receipt) let a second same-cid message, queued into a LATER batch
-      // while this peer was still busy, overwrite an EARLIER batch's
-      // still-pending map entry before that earlier turn even completed —
-      // resolveTurnEnd() then deleted the wrong (later) registration when
-      // the earlier turn ended, silently no-op'ing the later turn's own
-      // resolution on failure. issue #177 AC8's terminal-exclusion still
-      // holds under the new call site: `batch.items` below never holds a
-      // terminal-disposition envelope, since `inject: false` already
-      // returned early above.
-      // issue #221 段階3: append to (or start) this peer's open batch, then
-      // try to send. A NEW batch is pushed onto the peer's queue both when
-      // none is open yet, and when the existing open one is already at
-      // either coalescing cap: `canAddToCoalescedBatch()` guards this so an
-      // open batch never exceeds the shared count/size limits, and the
-      // excess item starts the NEXT batch (its own eventual turn) rather
-      // than being dropped (クロエ裁定 2 — 捨てない).
-      // `trySendNextBatch()` itself decides whether this can go out now
-      // (peer free) or must wait (peer already busy on an earlier turn) —
-      // see that function's doc for why "busy" is `onTurnEnd`-driven, not
-      // `instructionChain`-driven.
-      const peer = envelope.agent_id;
-      const itemText = formatInboundMessage(envelope, {
-        mode: disposition.mode,
-      });
-      const itemBytes = Buffer.byteLength(itemText, "utf8");
-      let queue = pendingBatches.get(peer);
-      if (queue === undefined) {
-        queue = [];
-        pendingBatches.set(peer, queue);
-      }
-      let open = queue[queue.length - 1];
-      if (
-        open === undefined ||
-        !canAddToCoalescedBatch(open.items.length, open.bytes, itemBytes)
-      ) {
-        open = { items: [], bytes: 0 };
-        queue.push(open);
-      }
-      open.items.push({ envelope, mode: disposition.mode });
-      open.bytes += itemBytes;
-      trySendNextBatch(peer);
     },
   });
 
@@ -794,40 +756,48 @@ async function main(): Promise<void> {
     // phase-28 BR MF2: the B1 threshold notice is an injection like any
     // other, so it queues on the one chain instead of racing it.
     enqueueInjection: enqueueInstruction,
-    // issue #131: resolve exactly the conversation(s) this turn was tagged
-    // with (must-fix 1 — turn-scoped, never a sweep of everything pending;
-    // extended issue #221 段階3 for a coalesced turn's multiple cids). On
-    // error, classify what the SDK reported and push the resulting notice
-    // envelope(s) straight through ServerLink — this bypasses the
-    // model/tool path entirely since the model just failed to produce a
-    // turn at all, so no broker approval applies.
-    onTurnEnd: ({ conversationIds, error }) => {
-      const classified = error ? classifyInterAgentError(error) : undefined;
-      for (const envelope of interAgent?.resolveTurnEnd(
-        conversationIds,
-        classified,
-      ) ?? []) {
-        link?.send(envelope);
+    // issue #246: settle by the immutable opaque generation token. CIDs are
+    // intentionally ignored for ownership: they remain only the payload sent
+    // to resolveTurnEnd once that exact token has been found.
+    onTurnEnd: ({ turnToken, error, cancellation }) => {
+      if (turnToken !== undefined) {
+        const settlement = interAgentTurns.settle(turnToken);
+        // EOF cancellation must settle the exact token but must not free its
+        // peer to dispatch a successor into a terminal host. onHostEnd drains
+        // the coordinator's remaining batches and enqueues their notices
+        // before link.close (transport acceptance is not awaited).
+        resolveInterAgentTurn(settlement, error, {
+          dispatchNext: cancellation === undefined,
+        });
       }
-      // issue #221 段階3: this turn's conversationIds — if any — belong to
-      // exactly one peer (same-peer coalescing unit), so any single entry
-      // identifies which peer's turn just completed. Free it and try
-      // sending whatever queued up for it while it was busy — the actual
-      // busy-trigger signal (see `inFlightPeers`'s doc above `trySendNextBatch`).
-      const freedPeer =
-        conversationIds.length > 0
-          ? inFlightCidPeer.get(conversationIds[0]!)
-          : undefined;
-      if (freedPeer !== undefined) {
-        for (const cid of conversationIds) inFlightCidPeer.delete(cid);
-        inFlightPeers.delete(freedPeer);
-        trySendNextBatch(freedPeer);
+      if (cancellation === undefined) {
+        // phase-28 C2 / ADR-0043 D3: a real ResultMessage is the wrapper's
+        // turn boundary. A never-started queue cancellation is settlement,
+        // not permission to relaunch a session.
+        sessionReset.onTurnEnd();
       }
-      // phase-28 C2 / ADR-0043 D3: this is the wrapper's own turn boundary —
-      // the result has been processed and nothing is mid-flight. An approved
-      // session reset fires here and nowhere else, so a relaunch can never
-      // cut a turn in half.
-      sessionReset.onTurnEnd();
+    },
+    onHostEnd: ({ error }) => {
+      const pendingIngress = interAgentIngress.close();
+      if (pendingIngress > 0) {
+        process.stdout.write(
+          `  inter_agent_message terminal ingress gate closed: pending=${pendingIngress}\n`,
+        );
+      }
+      // Host-owned turns have already settled through onTurnEnd. What remains
+      // here is outside AgentHost's queue: an instructionChain/send await or
+      // a peer's not-yet-dispatched pending batch. Do not await the evolving
+      // instruction chain; drain the coordinator's authoritative ownership
+      // synchronously while the ServerLink is still open. ServerLink#send()
+      // only enqueues the notice; it does not await Phoenix acceptance. If
+      // the link closes before delivery, the server's disconnected notice is
+      // the fail-visible fallback (issue #246).
+      for (const batch of interAgentTurns.closeAndDrain()) {
+        for (const item of batch.items) {
+          interAgent?.notePendingInjection(item.envelope);
+        }
+        resolveInterAgentConversationIds(batch.conversationIds, error);
+      }
     },
     appendSystemPrompt,
     // Keep Query unconstructed during fresh idle so AgentDetail model /
