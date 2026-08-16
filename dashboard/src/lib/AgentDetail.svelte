@@ -735,12 +735,90 @@
   // reads that as "the operator scrolled back to the bottom" and collapses
   // this very freeze it is trying to set up. `suppressBottomRevert` masks
   // that ONE spurious reading until a GENUINE post-anchoring departure
-  // from the bottom is observed (handleLogScroll), with a bounded timeout
-  // as a fallback in case no such departure is ever observed (e.g. the
-  // target sits just outside the default window, so the scroll barely
-  // moves).
+  // from the bottom is observed (handleLogScroll), with a bounded failsafe
+  // in case no such departure is ever observed (e.g. the target sits just
+  // outside the default window, so the scroll barely moves).
+  //
+  // ふじ review round 1 must-fix 1+2: two callers share `ensureIndexVisible`
+  // (this jump, #122, and the tool_use/tool_result partner jump, #40), and
+  // a jump can be re-armed (a second click) or superseded (an agent
+  // switch) before the first one settles. A single boolean + a single
+  // unconditional `setTimeout` cannot express "this particular arming
+  // still owns the suppression" — an older arm's failsafe firing after a
+  // newer arm started would clear the NEW arm's protection, and starting
+  // the countdown at expansion time races the caller's own unbounded
+  // pre-scroll async work (`tick()` + `renderMermaidIn`, which has no
+  // upper bound), so the failsafe could fire before the scroll is even
+  // issued. The fix: a generation token per arming, an explicit cancel of
+  // any previous failsafe on re-arm, and the failsafe itself does not
+  // start counting until the CALLER has finished that async work and is
+  // about to (or just did) issue its own scroll — see `armSuppressFailsafe`
+  // call sites in `scrollToTimelineEntry` and `jumpToTool`, not here.
   let suppressBottomRevert = false;
-  function ensureIndexVisible(absoluteIndex: number): void {
+  let suppressGeneration = 0;
+  let suppressFailsafeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelSuppressFailsafe(): void {
+    if (suppressFailsafeTimer !== null) {
+      clearTimeout(suppressFailsafeTimer);
+      suppressFailsafeTimer = null;
+    }
+  }
+
+  /** Arms suppression for a new jump attempt. Returns the generation token
+   *  the caller must thread through to `armSuppressFailsafe` so a LATER,
+   *  unrelated arm cannot be cleared by THIS one's failsafe (must-fix 1).
+   *  Cancels any previously scheduled failsafe — it belonged to a now-
+   *  superseded arm. */
+  function armSuppressBottomRevert(): number {
+    cancelSuppressFailsafe();
+    suppressGeneration += 1;
+    suppressBottomRevert = true;
+    return suppressGeneration;
+  }
+
+  /** Starts the failsafe countdown for `generation`. Call this ONLY after
+   *  the jump's own pre-scroll async work has resolved and the scroll is
+   *  about to (or just did) fire — never at arm time (must-fix 2). A
+   *  stale/superseded generation is a no-op — including the CALL itself,
+   *  not just its eventual setTimeout callback (ふじ review round 2
+   *  must-fix): two overlapping jumps' async continuations (unbounded
+   *  renderMermaidIn waits, so completion order is not dispatch order)
+   *  can each reach this function; without checking staleness up front, an
+   *  OLDER jump finishing AFTER a NEWER one would cancel the newer jump's
+   *  already-armed, CURRENT timer and replace it with one keyed to a
+   *  generation that can never match again — leaving nothing to ever fire
+   *  the failsafe for the surviving (current) arm. */
+  function armSuppressFailsafe(generation: number): void {
+    if (generation !== suppressGeneration) return;
+    cancelSuppressFailsafe();
+    suppressFailsafeTimer = setTimeout(() => {
+      suppressFailsafeTimer = null;
+      if (generation === suppressGeneration) {
+        suppressBottomRevert = false;
+      }
+    }, 1000);
+  }
+
+  /** Clears suppression for a genuine reason (a real post-jump departure
+   *  from the bottom, or an agent switch making the outgoing agent's
+   *  arming irrelevant) rather than a timer. Bumps the generation too, so
+   *  an already-scheduled failsafe for the current arm becomes moot even
+   *  if it raced `cancelSuppressFailsafe`. */
+  function clearSuppressBottomRevert(): void {
+    cancelSuppressFailsafe();
+    suppressGeneration += 1;
+    suppressBottomRevert = false;
+  }
+
+  // Belt-and-braces: an unmount should not leave a failsafe timer pending
+  // (ふじ review: "component destroy の cleanup も同じ helper へ").
+  // Harmless either way (the timer only touches plain closure state, not
+  // the DOM), but matches the disposal pattern this file already uses
+  // elsewhere (e.g. `display.dispose()` above).
+  $effect(() => () => cancelSuppressFailsafe());
+
+  function ensureIndexVisible(absoluteIndex: number): number | null {
     const start = untrack(() => effectiveWindowStart);
     if (absoluteIndex >= 0 && absoluteIndex < start) {
       frozenWindow = {
@@ -748,11 +826,9 @@
         mode: "reading-frozen",
         anchorLength: logs.length,
       };
-      suppressBottomRevert = true;
-      setTimeout(() => {
-        suppressBottomRevert = false;
-      }, 1000);
+      return armSuppressBottomRevert();
     }
+    return null;
   }
 
   // Reveal the remaining (earlier) history at once (fixed start=0, stable
@@ -1390,8 +1466,25 @@
     logEl?.style.setProperty("--timeline-scroll-tail", "0px");
   }
 
-  async function scrollToTimelineEntry(targetKey: string): Promise<boolean> {
-    if (!logEl) return false;
+  // `suppressGenerationForThisJump`: the token `ensureIndexVisible` (called
+  // by this jump's caller) returned, or null if that call was a no-op
+  // (target already within the render window, nothing to protect). Every
+  // exit path routes through `finish()` so the failsafe is armed exactly
+  // once, at the point this function is actually done with its (already
+  // fully synchronous, by this point) pre-scroll work — see the
+  // `armSuppressFailsafe` doc comment for why this must not happen any
+  // earlier (issue #237 must-fix 2).
+  async function scrollToTimelineEntry(
+    targetKey: string,
+    suppressGenerationForThisJump: number | null,
+  ): Promise<boolean> {
+    const finish = (ok: boolean): boolean => {
+      if (suppressGenerationForThisJump !== null) {
+        armSuppressFailsafe(suppressGenerationForThisJump);
+      }
+      return ok;
+    };
+    if (!logEl) return finish(false);
     const findEntry = (): HTMLElement | undefined =>
       [...logEl!.querySelectorAll<HTMLElement>("[data-envelope-key]")].find(
         (candidate) => candidate.dataset.envelopeKey === targetKey,
@@ -1401,7 +1494,7 @@
       // clear/reset can remove a previously selected target. Do not leave
       // its temporary scroll room behind on the next ordinary transcript.
       resetTimelineScrollTail();
-      return false;
+      return finish(false);
     }
 
     // Start from natural content height. A previous near-tail target may have
@@ -1422,7 +1515,7 @@
     // では同じ値が維持される。
     logEl.style.setProperty("--timeline-scroll-tail", `${tailPx}px`);
     const settledEntry = findEntry();
-    if (!settledEntry) return false;
+    if (!settledEntry) return finish(false);
     const top = Math.max(
       0,
       settledEntry.getBoundingClientRect().top - logEl.getBoundingClientRect().top +
@@ -1432,7 +1525,7 @@
     logEl.scrollTo({ top, behavior: "smooth" });
     stickToBottom = false;
     scrollMemory.set(envelope.agent_id, { top, stick: false, frozenWindow });
-    return true;
+    return finish(true);
   }
 
   // Pin-to-bottom intent: true while the operator is reading the tail of
@@ -1491,7 +1584,7 @@
     } else {
       // A genuine (post-anchoring) departure from the bottom — the jump's
       // own scroll-anchoring race window, if any, has passed.
-      suppressBottomRevert = false;
+      clearSuppressBottomRevert();
       if (frozenWindow === null) {
         // ふじ round-1 must-fix M2 (2nd half): once the operator scrolls away
         // from the tail to read older entries, freeze the window at its
@@ -1560,9 +1653,12 @@
       // scrollMemory — unlike every other transient flag this component
       // resets/restores on a switch (frozenWindow/stickToBottom above,
       // resumePickerAgentId, lastCcPerm). Left set across a switch, a
-      // jump on the outgoing agent could mask a genuine reading-freeze
-      // revert on the incoming one for up to the 1000ms failsafe window.
-      suppressBottomRevert = false;
+      // jump on the outgoing agent (and its now-irrelevant failsafe timer)
+      // could mask a genuine reading-freeze revert on the incoming one.
+      // `clearSuppressBottomRevert` also bumps the generation and cancels
+      // the timer, so the outgoing arm's failsafe cannot fire later and
+      // clobber whatever the incoming agent goes on to arm for itself.
+      clearSuppressBottomRevert();
     } else if (shrinkInvalidated) {
       // ふじ round-4 must-fix M1: a shrink invalidates the WINDOW, but a
       // reading-freeze also carries a logical "not at the bottom" pin
@@ -1611,6 +1707,12 @@
       timelineTarget !== null &&
       timelineTargetPresent &&
       timelineTarget !== handledTimelineScrollTarget;
+    // Captured here (possibly null — a no-op ensureIndexVisible, e.g. the
+    // target is already within the render window) and threaded into
+    // scrollToTimelineEntry below, so its failsafe only ever protects
+    // (or clears) THIS jump's own arming, never an older or newer one
+    // (issue #237 must-fix 1).
+    let timelineJumpSuppressGeneration: number | null = null;
     if (shouldScrollTimelineTarget) {
       // #184: the target row must be in the rendered window before
       // scrollToTimelineEntry can find it via data-envelope-key. Expand
@@ -1619,7 +1721,7 @@
       const targetIndex = logs.findIndex(
         (entry) => conversationEntryKey(entry) === timelineTarget,
       );
-      ensureIndexVisible(targetIndex);
+      timelineJumpSuppressGeneration = ensureIndexVisible(targetIndex);
     }
     // Snapshot synchronously BEFORE the new logs commit: once Svelte renders
     // the new envelopes, scrollHeight grows and a fresh "at the bottom"
@@ -1660,7 +1762,10 @@
       if (
         shouldScrollTimelineTarget &&
         timelineTarget !== null &&
-        (await scrollToTimelineEntry(timelineTarget))
+        (await scrollToTimelineEntry(
+          timelineTarget,
+          timelineJumpSuppressGeneration,
+        ))
       ) {
         handledTimelineScrollTarget = timelineTarget;
         return;
@@ -2011,8 +2116,16 @@
       const log = logOf(entry);
       return log?.tool_use_id === id && log?.kind === toKind;
     });
-    ensureIndexVisible(targetIndex);
+    const suppressGenerationForThisJump = ensureIndexVisible(targetIndex);
     await tick();
+    // issue #237 must-fix 2: arm the failsafe only now, after the
+    // (bounded, here — just one tick) pre-scroll async wait, not at
+    // ensureIndexVisible's expansion time. Once, regardless of whether the
+    // partner is actually found below — either way this jump attempt is
+    // done with its own async work.
+    if (suppressGenerationForThisJump !== null) {
+      armSuppressFailsafe(suppressGenerationForThisJump);
+    }
     if (!logEl) return;
     const target = logEl.querySelector<HTMLElement>(
       `[data-tuid="${CSS.escape(id)}"][data-kind="${toKind}"]`,
