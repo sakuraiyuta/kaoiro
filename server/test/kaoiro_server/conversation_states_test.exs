@@ -281,6 +281,25 @@ defmodule KaoiroServer.ConversationStatesTest do
       assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, false, name)
       assert %{turns: 2} = ConversationStates.get("c", name)
     end
+
+    test "new_conversation? が bool でなければ FunctionClauseError で即クラッシュする " <>
+           "(レビュー、クロエ再測定 — is_boolean/1 ガードの pin)" do
+      # #262 delta 2巡目で `new_conversation?` を server \\ __MODULE__ の
+      # 前の第 7 引数へ移した — 変更前の /7 は (..., done?, server) だった
+      # ので、移行漏れがあっても record_message/7 自体は存在し続け、
+      # existing != nil の分岐では `and` の短絡で not new_conversation? が
+      # 評価されず無言で素通りしうる (クロエ M1 の指摘)。moduledoc は
+      # is_boolean/1 ガードを「恒久的な保護」と書いたが、クロエの再測定
+      # (同一環境での対照付き mutation) で、ガードを外しても既存 1108
+      # 件は 1 件も落ちないことが判明した — 恒久保護という記述を
+      # 支えるテストが無かった。この test がその欠落を埋める:
+      # bool 以外の第 7 引数は必ず raise することを直接 pin する。
+      name = start_tracker(:cs_nonboolean_guard)
+
+      assert_raise FunctionClauseError, fn ->
+        ConversationStates.record_message("c", "a", "b", "x", 1, false, name, name)
+      end
+    end
   end
 
   describe "turn_number バリデーション (#177 review M1)" do
