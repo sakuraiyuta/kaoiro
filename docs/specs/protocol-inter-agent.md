@@ -103,7 +103,8 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
   "owner": {
     "kind": "user",
     "id": "operator"
-  }
+  },
+  "new_conversation": false
 }
 ```
 
@@ -111,6 +112,7 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 |---|---|---|
 | `to` | MUST | 宛先 `agent_id`。`[A-Za-z0-9._-]` 制約は protocol 全体と同じ |
 | `conversation_id` | MUST | 同一対話を紐付ける識別子。発起側 wrapper が採番(セッション内一意、UUIDv4 ベース) |
+| `new_conversation` | MUST | bool。送信元エージェントが `conversation_id` を省略し、この wrapper が新規採番した送信でのみ true(issue #262)。それ以外(明示指定・返信・通知)は false。server はこれを見て、未知の `conversation_id` が「省略による新規」か「明示指定の誤り」かを判定する — 詳細は下記「明示指定された conversation_id が未知のとき」 |
 | `turn_number` | MUST | 1 起点の正整数。同一 conversation 内で送信ごとに +1。`(conversation_id, turn_number)` で全順序 |
 | `kind` | MUST | 下記 9 種 enum |
 | `body` | MUST | メッセージ本文(自由テキスト)。意味論はエージェントに任せる |
@@ -438,6 +440,47 @@ TTL 経過直後の再利用は失敗する。
   積極的な利点はなく、揃えた方が運用上のメンタルモデルが単純になる。
   実効的な guard が wrapper 側 24 時間である点自体は変わらない。
 
+### 明示指定された conversation_id が未知のとき (issue #262)
+
+新規 conversation を開始する正規経路は `conversation_id` の省略のみ
+(上記)だが、issue #262 以前の server はこの区別を持たず、**明示指定
+された未知の `conversation_id` も同じく新規 conversation として無言で
+受理**していた。director の conversation_id 誤転記が 2026-08-16〜17 に
+3 回、エラーにならず紛れ込みスレッドとして成立した実害があり、これを
+fail fast and visible にする。
+
+- **区別の伝達は `payload.new_conversation` (MUST) が担う**: 発起側
+  wrapper (`send_to_agent` の呼び出し元が `conversation_id` を省略し、
+  この wrapper が新規採番した)送信でのみ true。返信・通知
+  (peer_error / stale_turn)・エージェントが明示指定した送信は false。
+  server は cid そのものからは「省略による新規」と「明示指定の誤り」
+  を区別できない(採番も UUID の一意性もすべて wrapper 側の責務であり、
+  server はその結果の文字列しか見ない)ため、この bool が唯一の判断
+  材料になる。
+- **server の判定**(`ConversationStates.record_message/8`):
+  `conversation_id` に対応する entry が存在せず(open でも tombstone
+  でもない)、かつ `new_conversation? == false` のときに限り
+  `{:error, :unknown_conversation_id}` で拒否する。entry が存在する
+  場合(open・closed いずれも)はこのフラグを一切見ない —
+  `conversation_closed` / `participants_mismatch` / `stale_turn` は
+  従来どおり優先される。`new_conversation? == true` の cid が未知
+  なのは正常系そのものなので、このチェックには到達しない。
+- **送信側 wrapper の tool result**: 生の reason
+  (`unknown_conversation_id`)をそのまま返すのではなく、「正しい id
+  での再送か省略での新規開始を促す」専用文言を返す
+  (`send_to_agent failed: conversation_id=<id> is unknown to the
+  server — retry with the correct conversation_id, or omit it to
+  start a new conversation.`)。ローカル track 側の特別扱いは不要 —
+  明示指定した未知 cid のローカル track は `wasBlank` 判定
+  (「実質的な履歴が無い」)に自然に該当し、既存の reject-cleanup が
+  そのままリセットする。
+- **既知の反例**(意図的に許容する残余): `new_conversation? == false`
+  の送信が「既存 entry への正当な返信・継続」であるケースは、この
+  チェックが `existing != nil` で素通しするため一切影響を受けない —
+  対話の 2 通目以降は常にこの経路である。影響するのは「タイポ・古い
+  session のコピペ由来で、どの entry にも一致しない cid を明示指定
+  した」場合のみ。
+
 ### 観測経路(dashboard 表示)
 
 server は inter_agent_message envelope を `agents:lobby` にも
@@ -490,8 +533,11 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
     記録トリガは ack のままだが、`send_to_agent` の **tool result も
     同じ ack で決まる**。accepted = 従来どおり `sent ...`、server の
     明示 reject(`unknown_agent` / `self_routing` /
-    `participants_mismatch` / `conversation_closed`(issue #177)等)は
-    **error result に reason を載せる**、timeout / ack 喪失は
+    `participants_mismatch` / `conversation_closed`(issue #177)/
+    `unknown_conversation_id`(issue #262)等)は
+    **error result に reason を載せる**(`unknown_conversation_id` のみ、
+    正しい id での再送か省略での新規開始を促す専用文言 — 下記参照)、
+    timeout / ack 喪失は
     「配送不明」— 再送が重複配送になり得るため error にはせず、その旨を
     result 本文に明記する。reject / 配送不明では `wait_for_response`
     の待ちも即座に解除する(誰も応答しない会話を timeout まで待たない)。

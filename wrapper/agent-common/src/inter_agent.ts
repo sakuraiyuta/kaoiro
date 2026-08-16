@@ -1101,6 +1101,9 @@ export class InterAgentTool {
           body: `peer error (${error.code}): ${error.message}`,
           meta: { done: false, propose_next: "" },
           owner: { kind: "user", id: "operator" },
+          // A stale_turn notice always replies within a conversation this
+          // wrapper just observed an inbound turn on — never a fresh id.
+          new_conversation: false,
           error,
         };
         const notice = makeInterAgentMessage(
@@ -1282,6 +1285,9 @@ export class InterAgentTool {
         body: `peer error (${error.code}): ${error.message}`,
         meta: { done: false, propose_next: "" },
         owner: { kind: "user", id: "operator" },
+        // A turn-failure notice always replies within a conversation this
+        // wrapper already holds a pending injection for — never a fresh id.
+        new_conversation: false,
         error,
       };
       notices.push(
@@ -1408,6 +1414,11 @@ export class InterAgentTool {
       );
     }
 
+    // issue #262: captured BEFORE the `??` below discards the distinction —
+    // true only when the CALLER omitted conversation_id, so this wrapper (not
+    // the caller) allocated a fresh one. The server rejects an explicit-but-
+    // unknown id instead of silently opening a new, context-less thread.
+    const isNewConversation = args.conversation_id === undefined;
     const conversationId = args.conversation_id ?? this.#newId();
     const waitForResponse = args.wait_for_response === true;
 
@@ -1565,6 +1576,7 @@ export class InterAgentTool {
           body: args.body,
           meta,
           owner: { kind: "user", id: "operator" },
+          new_conversation: isNewConversation,
         };
 
         const envelope = makeInterAgentMessage(
@@ -1847,10 +1859,16 @@ export class InterAgentTool {
             // conversation because of this call: release the waiter
             // instead of parking the tool for the full reply timeout.
             this.#cancelReplyWait(conversationId);
-            return {
-              kind: "rejected",
-              message: `send_to_agent failed: server rejected the message (${acceptance.reason})`,
-            };
+            // issue #262: an actionable hint over the generic reason string —
+            // this is the one reject the CALLER can usually fix by re-typing
+            // the id or omitting it, not by waiting or escalating.
+            const message =
+              acceptance.reason === "unknown_conversation_id"
+                ? `send_to_agent failed: conversation_id=${conversationId} is ` +
+                  "unknown to the server — retry with the correct " +
+                  "conversation_id, or omit it to start a new conversation."
+                : `send_to_agent failed: server rejected the message (${acceptance.reason})`;
+            return { kind: "rejected", message };
           }
 
           return {

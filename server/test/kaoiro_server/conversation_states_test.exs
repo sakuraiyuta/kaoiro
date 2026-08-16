@@ -220,6 +220,71 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert :ok = ConversationStates.record_message("c1", "a", "b", "y", 2, false, name)
   end
 
+  describe "unknown_conversation_id (issue #262)" do
+    test "new_conversation?=false かつ未知の cid は unknown_conversation_id で拒否され、" <>
+           "エントリを作らない" do
+      name = start_tracker(:cs_unknown_cid)
+
+      assert {:error, :unknown_conversation_id} =
+               ConversationStates.record_message("c", "a", "b", "typo", 1, false, name, false)
+
+      # 拒否された cid はエントリを一切残さない — max_conversations 消費も無い
+      # ことの直接的な証拠。
+      assert ConversationStates.get("c", name) == nil
+    end
+
+    test "new_conversation? の既定値は true (旧呼び出しは影響を受けない)" do
+      name = start_tracker(:cs_unknown_cid_default)
+      # 8 引数目 (new_conversation?) を省略 — #262 以前の全呼び出しと同じ形。
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+      assert %{turns: 1} = ConversationStates.get("c", name)
+    end
+
+    test "closed な conversation への明示 id 送信は unknown_conversation_id ではなく " <>
+           "conversation_closed のまま (#177 との整合)" do
+      name = start_tracker(:cs_unknown_cid_vs_closed)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, name, true)
+
+      assert :both_done =
+               ConversationStates.record_message("c", "b", "a", "y", 2, true, name, true)
+
+      # tombstone は existing != nil なので #262 の新チェックに触れる前に
+      # :conversation_closed で弾かれる — new_conversation?: false でも同じ。
+      assert {:error, :conversation_closed} =
+               ConversationStates.record_message("c", "a", "b", "z", 3, false, name, false)
+    end
+
+    test "第三者の再利用は new_conversation?=false でも unknown_conversation_id ではなく " <>
+           "participants_mismatch のまま" do
+      name = start_tracker(:cs_unknown_cid_vs_pollution)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name, true)
+
+      assert {:error, :participants_mismatch} =
+               ConversationStates.record_message("c", "z", "b", "evil", 2, false, name, false)
+    end
+
+    test "stale_turn は new_conversation?=false でも unknown_conversation_id ではなく " <>
+           "stale_turn のまま" do
+      name = start_tracker(:cs_unknown_cid_vs_stale)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name, true)
+      assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, name, false)
+
+      assert {:error, :stale_turn} =
+               ConversationStates.record_message("c", "a", "b", "z", 2, false, name, false)
+    end
+
+    test "既知の cid への明示送信 (new_conversation?=false) は通常どおり継続できる" do
+      name = start_tracker(:cs_unknown_cid_reply)
+      # 発起側: conversation_id 省略相当 (wrapper 採番) -> new_conversation?=true
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name, true)
+
+      # 応答側: 相手から受け取った id を明示指定 -> new_conversation?=false だが
+      # 既に存在するので #262 のチェックには一切触れず、通常どおり :ok。
+      assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, name, false)
+      assert %{turns: 2} = ConversationStates.get("c", name)
+    end
+  end
+
   describe "turn_number バリデーション (#177 review M1)" do
     test "既知の max_turn_number 以下 (重複・遅延) は :stale_turn で拒否し counters を進めない" do
       name = start_tracker(:cs_stale_turn)

@@ -1328,11 +1328,27 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # calls the unrestricted `validate_inter_agent_payload/1` directly — a
   # wrapper's own IA sidecar legitimately holds historical turn_number=0
   # rows from real server-synthesized notices it received.
+  #
+  # `payload.new_conversation` (issue #262) is validated HERE, not in the
+  # shared `validate_inter_agent_payload/1`, for the same reason: a stored
+  # sidecar row from before this field existed must still replay. Only a
+  # freshly wrapper-sent envelope is required to carry it — `preflight_
+  # inter_agent/2` reads it to tell ConversationStates.record_message/8
+  # apart a genuinely-new id from an explicitly-named unknown one.
   defp validate_live_inter_agent_payload(payload) do
     with :ok <- validate_inter_agent_payload(payload) do
-      case payload["turn_number"] do
-        n when is_integer(n) and n > 0 -> :ok
-        _ -> {:error, "invalid value: payload.turn_number"}
+      cond do
+        not (is_integer(payload["turn_number"]) and payload["turn_number"] > 0) ->
+          {:error, "invalid value: payload.turn_number"}
+
+        not Map.has_key?(payload, "new_conversation") ->
+          {:error, "missing key: payload.new_conversation"}
+
+        not is_boolean(payload["new_conversation"]) ->
+          {:error, "invalid value: payload.new_conversation"}
+
+        true ->
+          :ok
       end
     end
   end
@@ -1592,6 +1608,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
     body = payload["body"] || ""
     turn_number = payload["turn_number"]
     done? = get_in(payload, ["meta", "done"]) == true
+    # issue #262: true only when the SENDING wrapper's own conversation_id
+    # was omitted by its caller and freshly allocated — see record_message/8.
+    new_conversation? = payload["new_conversation"] == true
 
     cond do
       to == from ->
@@ -1601,7 +1620,20 @@ defmodule KaoiroServerWeb.WrapperChannel do
         {:error, :unknown_agent}
 
       true ->
-        case ConversationStates.record_message(cid, from, to, body, turn_number, done?) do
+        # `ConversationStates` (not the `server` default) is spelled out
+        # explicitly here only because Elixir cannot skip a positional arg —
+        # this passes the exact same value `record_message/6`'s own default
+        # would have, purely to reach `new_conversation?` after it.
+        case ConversationStates.record_message(
+               cid,
+               from,
+               to,
+               body,
+               turn_number,
+               done?,
+               ConversationStates,
+               new_conversation?
+             ) do
           # Within limits. `:both_done` means every participating agent has
           # now signalled done; the tracker has already closed the entry
           # into a tombstone atomically (issue #177; spec MUST: 両
@@ -1612,11 +1644,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
           {:exceeded, reason} ->
             {:ok, {:accept, to, {cid, from, to, reason}}}
 
-          # Cross-conversation pollution attempt or global cap reached:
-          # reject the envelope at the routing boundary so a third party
-          # cannot wipe the legitimate participants' counters by reusing
-          # their conversation_id, and so a malicious flood of fresh cids
-          # cannot grow the tracker without bound.
+          # Cross-conversation pollution attempt, global cap reached, or an
+          # explicitly-named conversation_id with no entry at all (issue
+          # #262): reject the envelope at the routing boundary so a third
+          # party cannot wipe the legitimate participants' counters by
+          # reusing their conversation_id, a malicious flood of fresh cids
+          # cannot grow the tracker without bound, and a mistyped id does
+          # not silently open a fresh, context-less thread.
           {:error, reason} ->
             {:error, reason}
         end

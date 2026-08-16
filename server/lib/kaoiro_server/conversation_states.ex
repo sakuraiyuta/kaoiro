@@ -43,6 +43,16 @@ defmodule KaoiroServer.ConversationStates do
     * `{:error, :too_many_conversations}` — the global `max_conversations` cap
       blocked a brand-new conversation; existing entries (open or
       tombstoned) are unaffected.
+    * `{:error, :unknown_conversation_id}` — `new_conversation?` is false (the
+      sender explicitly named this `conversation_id` rather than omitting
+      it) and no entry exists for it, open or tombstoned (issue #262). A
+      wrapper only omits the id when the CALLER omitted it too, so an
+      explicit-but-unknown id here is a transcription error (a peer's id
+      copied wrong, or a stale one from a prior session) — until this
+      check, that typo silently opened a fresh, context-less conversation
+      instead of surfacing the mistake. Never checked for
+      `new_conversation? == true`: a freshly wrapper-allocated UUID is by
+      construction absent from `state.conversations`, and always creates.
 
   A CLOSED tombstone (`status: :closed`) replaces the open entry in place
   under the same key: `reason` (why it closed), `closed_at` (monotonic ms,
@@ -136,9 +146,37 @@ defmodule KaoiroServer.ConversationStates do
   message for an already-CLOSED `conversation_id` is rejected outright
   (`{:error, :conversation_closed}`, issue #177) — see the moduledoc for
   the tombstone lifecycle.
+
+  `new_conversation?` (issue #262) is true only when the CALLING agent
+  omitted `conversation_id` and the wrapper allocated a fresh one — the
+  one case where an unknown id is legitimate. When it is false (the
+  agent supplied this id explicitly) and no entry exists for it, the
+  send is rejected as `{:error, :unknown_conversation_id}` instead of
+  silently opening a new, context-less thread under a mistyped or
+  stale id; see the moduledoc. Defaults to `true` so every pre-#262
+  caller — every test in this suite included — keeps its original
+  "unknown id always starts fresh" behaviour unless it opts in.
+  `server` sits before this default (not after): both are optional
+  trailing positional args, and Elixir resolves a partial positional
+  call left-to-right, so appending `new_conversation?` after `server`
+  is what lets every existing call — 6-arg default-server callers and
+  7-arg custom-server test callers alike — keep resolving exactly as it
+  did before this param existed.
   """
-  def record_message(conversation_id, from, to, body, turn_number, done?, server \\ __MODULE__) do
-    GenServer.call(server, {:record, conversation_id, from, to, body, turn_number, done?})
+  def record_message(
+        conversation_id,
+        from,
+        to,
+        body,
+        turn_number,
+        done?,
+        server \\ __MODULE__,
+        new_conversation? \\ true
+      ) do
+    GenServer.call(
+      server,
+      {:record, conversation_id, from, to, body, turn_number, done?, new_conversation?}
+    )
   end
 
   @doc "Returns the current entry for inspection (test helper)."
@@ -206,7 +244,11 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @impl true
-  def handle_call({:record, cid, from, to, body, turn_number, done?}, _from, state) do
+  def handle_call(
+        {:record, cid, from, to, body, turn_number, done?, new_conversation?},
+        _from,
+        state
+      ) do
     now = state.clock.()
     limits = state.limits
     existing = Map.get(state.conversations, cid)
@@ -235,6 +277,17 @@ defmodule KaoiroServer.ConversationStates do
       # (existing is never nil here).
       existing != nil and turn_number <= existing.max_turn_number ->
         {:reply, {:error, :stale_turn}, state}
+
+      # issue #262: an explicitly-named id (new_conversation? == false) with
+      # no entry at all — open or tombstoned — is a transcription error, not
+      # a new thread. Checked before the capacity cap below: a mistyped id
+      # never should have consumed quota to begin with, so its rejection
+      # reason must not depend on how full the tracker happens to be right
+      # now. Never true for new_conversation? == true: a wrapper-allocated
+      # fresh UUID is by construction unknown to this map, and that is the
+      # ONE case where "unknown" is the expected, legitimate state.
+      existing == nil and not new_conversation? ->
+        {:reply, {:error, :unknown_conversation_id}, state}
 
       existing == nil and map_size(state.conversations) >= limits.max_conversations ->
         # Bound total in-flight conversations so a malicious wrapper streaming

@@ -1766,6 +1766,54 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
     }
   });
 
+  it("issue #262: conversation_id 省略時は payload.new_conversation=true を送る", async () => {
+    const { tool, sent } = makeAckTool({ kind: "accepted", stamp: [1, 0] });
+
+    await tool.invoke({ to: "peer.agent", body: "hi", kind: "inform" });
+
+    expect(sent).toHaveLength(1);
+    const payload = sent[0]!.payload as Partial<InterAgentMessagePayload>;
+    expect(payload.new_conversation).toBe(true);
+  });
+
+  it(
+    "issue #262: conversation_id を明示指定した送信は " +
+      "payload.new_conversation=false を送る",
+    async () => {
+      const { tool, sent } = makeAckTool({ kind: "accepted", stamp: [1, 0] });
+
+      await tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-explicit",
+      });
+
+      expect(sent).toHaveLength(1);
+      const payload = sent[0]!.payload as Partial<InterAgentMessagePayload>;
+      expect(payload.new_conversation).toBe(false);
+    },
+  );
+
+  it("issue #262: unknown_conversation_id は再送/省略を促す専用メッセージになる", async () => {
+    const { tool } = makeAckTool({
+      kind: "rejected",
+      reason: "unknown_conversation_id",
+    });
+
+    const result = await tool.invoke({
+      to: "peer.agent",
+      body: "hi",
+      kind: "inform",
+      conversation_id: "cnv-typo",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("cnv-typo");
+    expect(result.content[0]!.text).toContain("unknown to the server");
+    expect(result.content[0]!.text).toContain("omit it to start a new conversation");
+  });
+
   it("ack 喪失 / timeout は「配送不明」— 失敗とも成功とも言わない", async () => {
     const { tool } = makeAckTool({ kind: "unknown", reason: "timeout" });
 

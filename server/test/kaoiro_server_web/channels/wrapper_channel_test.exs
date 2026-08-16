@@ -1217,7 +1217,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "kind" => "inform",
           "body" => "hello",
           "meta" => %{"done" => false, "propose_next" => "reply"},
-          "owner" => %{"kind" => "agent", "id" => agent_id}
+          "owner" => %{"kind" => "agent", "id" => agent_id},
+          "new_conversation" => true
         },
         "ext" => %{}
       }
@@ -1422,7 +1423,15 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         "kind" => opts[:kind] || "inform",
         "body" => opts[:body] || "hi",
         "meta" => meta,
-        "owner" => opts[:owner] || %{"kind" => "user", "id" => "operator"}
+        "owner" => opts[:owner] || %{"kind" => "user", "id" => "operator"},
+        # issue #262. Defaults true (matches ConversationStates.record_
+        # message/8's own default): this describe block's cids are either
+        # freshly minted here or a 2nd+ call reusing one this SAME helper
+        # already created, so `existing` is never nil on a false-flagged
+        # send by construction and the flag is moot for every pre-#262
+        # test. Tests written FOR #262 pass `new_conversation: false`
+        # explicitly to exercise the reject path.
+        "new_conversation" => Keyword.get(opts, :new_conversation, true)
       }
 
       # 応答不能エラー通知 (#131) は optional。指定時のみ payload に載せる。
@@ -1656,6 +1665,84 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       end
 
       assert_panes_empty([from_id, to_id])
+    end
+
+    test "payload.new_conversation 欠落は live ingress で構造的に拒否する (issue #262)" do
+      from_id = "test.iam-newconv-missing-from"
+      to_id = "test.iam-newconv-missing-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env = inter_envelope(from_id, to_id)
+      env = update_in(env, ["payload"], &Map.delete(&1, "new_conversation"))
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "missing key: payload.new_conversation"}
+      assert_panes_empty([from_id, to_id])
+    end
+
+    test "payload.new_conversation が bool でなければ拒否する (issue #262)" do
+      from_id = "test.iam-newconv-badtype-from"
+      to_id = "test.iam-newconv-badtype-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env = inter_envelope(from_id, to_id)
+      env = put_in(env, ["payload", "new_conversation"], "true")
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "invalid value: payload.new_conversation"}
+      assert_panes_empty([from_id, to_id])
+    end
+
+    test "明示指定された未知の conversation_id は unknown_conversation_id で拒否し " <>
+           "relay も store もしない (issue #262)" do
+      from_id = "test.iam-unkcid-from"
+      to_id = "test.iam-unkcid-to"
+      to_socket = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env =
+        inter_envelope(from_id, to_id,
+          cid: "cnv-typo-#{System.unique_integer([:positive])}",
+          new_conversation: false
+        )
+
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "unknown_conversation_id"}
+      assert_panes_empty([from_id, to_id])
+
+      # 受信側 socket は生きたまま (未知 cid の拒否が他の状態を壊さない)。
+      ref2 = push(to_socket, "envelope", inter_envelope(to_id, from_id))
+      assert_reply ref2, :ok
+    end
+
+    test "既存 conversation への明示応答 (new_conversation: false) は通常どおり通す " <>
+           "(issue #262)" do
+      from_id = "test.iam-newconv-reply-from"
+      to_id = "test.iam-newconv-reply-to"
+      cid = "cnv-newconv-reply-#{System.unique_integer([:positive])}"
+      to_socket = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      # 発起側: conversation_id 省略相当 -> new_conversation: true
+      ref =
+        push(
+          from_socket,
+          "envelope",
+          inter_envelope(from_id, to_id, cid: cid, turn: 1, new_conversation: true)
+        )
+
+      assert_reply ref, :ok
+
+      # 応答側: 相手から受け取った id を明示指定 -> new_conversation: false
+      # だが既存なので #262 のチェックには触れず通常どおり通る。
+      ref2 =
+        push(
+          to_socket,
+          "envelope",
+          inter_envelope(to_id, from_id, cid: cid, turn: 2, new_conversation: false)
+        )
+
+      assert_reply ref2, :ok
     end
 
     test "既知の max_turn_number 以下の再送は stale_turn で拒否し relay も store もしない " <>
@@ -3652,7 +3739,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
             "kind" => "inform",
             "body" => "hi #{turn}",
             "meta" => %{"done" => false, "propose_next" => ""},
-            "owner" => %{"kind" => "user", "id" => "operator"}
+            "owner" => %{"kind" => "user", "id" => "operator"},
+            "new_conversation" => true
           },
           "ext" => %{}
         }
