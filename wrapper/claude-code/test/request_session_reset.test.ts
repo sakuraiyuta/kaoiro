@@ -12,7 +12,10 @@ import {
   SessionResetCoordinator,
   requestSessionResetDescriptor,
 } from "../src/request_session_reset.js";
-import type { SessionResetMode } from "../src/request_session_reset.js";
+import type {
+  SessionResetAccepted,
+  SessionResetMode,
+} from "../src/request_session_reset.js";
 
 function collector() {
   const reserved: { mode: SessionResetMode; reason?: string }[] = [];
@@ -75,7 +78,7 @@ interface Harness {
   slept: number[];
 }
 
-function harness(outcomes: (string | null)[]): Harness {
+function harness(outcomes: (string | SessionResetAccepted)[]): Harness {
   const requests: { mode: SessionResetMode; reason?: string }[] = [];
   const notices: string[] = [];
   const logs: string[] = [];
@@ -84,8 +87,12 @@ function harness(outcomes: (string | null)[]): Harness {
   const coordinator = new SessionResetCoordinator({
     request: async (mode, reason) => {
       requests.push({ mode, ...(reason !== undefined ? { reason } : {}) });
-      const outcome = outcomes[Math.min(attempt++, outcomes.length - 1)];
-      if (outcome !== null) throw new Error(outcome);
+      const outcome =
+        outcomes[Math.min(attempt++, outcomes.length - 1)] ?? {
+          requestId: "rs-default",
+        };
+      if (typeof outcome === "string") throw new Error(outcome);
+      return outcome;
     },
     notify: async (text) => {
       notices.push(text);
@@ -123,7 +130,7 @@ function expectNoAssertion(notice: string | undefined): void {
 
 describe("SessionResetCoordinator", () => {
   it("turn 境界まで送らず、境界で 1 度だけ送る (ADR-0043 D3)", async () => {
-    const h = harness([null]);
+    const h = harness([{ requestId: "rs-1" }]);
     h.coordinator.reserve("new", "理由");
     expect(h.requests).toEqual([]);
     expect(h.coordinator.pending).toBe(true);
@@ -140,7 +147,7 @@ describe("SessionResetCoordinator", () => {
   });
 
   it("予約が無い境界では何もしない", async () => {
-    const h = harness([null]);
+    const h = harness([{ requestId: "rs-1" }]);
     h.coordinator.onTurnEnd();
     await settle();
     expect(h.requests).toEqual([]);
@@ -148,7 +155,7 @@ describe("SessionResetCoordinator", () => {
   });
 
   it("境界前の 2 度目の予約は最新の意図で置き換える", async () => {
-    const h = harness([null]);
+    const h = harness([{ requestId: "rs-1" }]);
     h.coordinator.reserve("new");
     h.coordinator.reserve("clear", "やはり表示ごと消したい");
     h.coordinator.onTurnEnd();
@@ -159,7 +166,7 @@ describe("SessionResetCoordinator", () => {
   });
 
   it("拒否されたら 1 回だけ再試行する", async () => {
-    const h = harness(["agent_busy", null]);
+    const h = harness(["agent_busy", { requestId: "rs-1" }]);
     h.coordinator.reserve("new");
     h.coordinator.onTurnEnd();
     await settle();
@@ -224,6 +231,59 @@ describe("SessionResetCoordinator", () => {
     expect(h.requests).toHaveLength(2);
     expect(h.notices[0]).toContain("could not be confirmed");
     expectNoAssertion(h.notices[0]);
+  });
+
+  it("受理後の terminal failure は request_id を照合して確定 failure として通知する (#258)", async () => {
+    const h = harness([{ requestId: "rs-live" }]);
+    h.coordinator.reserve("new");
+    h.coordinator.onTurnEnd();
+    await settle();
+
+    h.coordinator.onResetFailed("rs-live", "timeout");
+    await settle();
+
+    expect(h.notices).toHaveLength(1);
+    expect(h.notices[0]).toContain("was not carried out");
+    expect(h.notices[0]).toContain("timeout");
+    expect(h.notices[0]).not.toContain("could not be confirmed");
+  });
+
+  it("別 request_id の lifecycle failure はこの wrapper へ注入しない (#258)", async () => {
+    const h = harness([{ requestId: "rs-live" }]);
+    h.coordinator.reserve("clear");
+    h.coordinator.onTurnEnd();
+    await settle();
+
+    h.coordinator.onResetFailed("rs-stale", "timeout");
+    await settle();
+
+    expect(h.notices).toEqual([]);
+    expect(h.logs).toEqual([]);
+  });
+
+  it("request ok より先着した terminal failure も request_id 照合後に通知する (#258)", async () => {
+    let accept!: (value: SessionResetAccepted) => void;
+    const requested = new Promise<SessionResetAccepted>((resolve) => {
+      accept = resolve;
+    });
+    const notices: string[] = [];
+    const coordinator = new SessionResetCoordinator({
+      request: () => requested,
+      notify: async (text) => {
+        notices.push(text);
+      },
+      log: () => {},
+    });
+    coordinator.reserve("new");
+    coordinator.onTurnEnd();
+    await settle();
+
+    coordinator.onResetFailed("rs-race", "timeout");
+    accept({ requestId: "rs-race" });
+    await settle();
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("was not carried out");
   });
 
   // CR-MF2-R: 未確認のまま何をすべきかは伝える。「再要求しない」と

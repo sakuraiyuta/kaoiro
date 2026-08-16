@@ -2859,7 +2859,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "reason" => "context を外部化済み"
         })
 
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{request_id: reply_request_id}
 
       assert_broadcast "session_reset_started",
                        %{
@@ -2870,6 +2870,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                          "previous_session_id" => "sess-prev",
                          "request_id" => request_id
                        }
+
+      assert reply_request_id == request_id
 
       assert_broadcast "reset_session",
                        %{

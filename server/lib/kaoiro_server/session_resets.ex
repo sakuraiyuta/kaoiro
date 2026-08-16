@@ -689,6 +689,18 @@ defmodule KaoiroServer.SessionResets do
       "session_reset_failed",
       payload
     )
+
+    # The dashboard lifecycle broadcast above is operator-only. The wrapper
+    # that asked for a self-reset normally dies on success, but it remains
+    # alive on a runner failure (notably a child that did not terminate).
+    # Send that process the same closed-vocabulary terminal result so it can
+    # stop working under the false assumption that its context was replaced.
+    # Other/new wrapper connections ignore the request_id they never reserved.
+    KaoiroServerWeb.Endpoint.broadcast(
+      "wrapper:#{agent_id}",
+      "session_reset_failed",
+      %{"request_id" => lock.request_id, "reason" => reason}
+    )
   end
 
   # Best-effort detach: DETS I/O failure must not leak into

@@ -38,8 +38,9 @@ class FakeChild {
   on(event: "exit" | "error", listener: () => void): void {
     (event === "exit" ? this.#exit : this.#error).push(listener);
   }
-  kill(): void {
+  kill(): boolean {
     this.kills += 1;
+    return true;
   }
   emitExit(): void {
     for (const listener of [...this.#exit]) listener();

@@ -149,9 +149,13 @@ export function requestSessionResetDescriptor(
 
 export interface SessionResetCoordinatorOptions {
   /** Pushes `session_reset_request` and settles with the server's reply,
-   *  normally `ServerLink#requestSessionReset`. Rejects with the server's
-   *  closed-vocabulary reason (ADR-0036 F7). */
-  request: (mode: SessionResetMode, reason?: string) => Promise<void>;
+   *  normally `ServerLink#requestSessionReset`. Its requestId proves only
+   *  that the server reserved the reset; it correlates any terminal failure
+   *  pushed back while this old wrapper is still alive (#258). */
+  request: (
+    mode: SessionResetMode,
+    reason?: string,
+  ) => Promise<SessionResetAccepted>;
   /** Queues a turn telling the agent the reset did not happen. Should ride
    *  the same serialization every other injection uses (cli.ts's instruction
    *  chain), so it cannot overtake a turn queued before it. */
@@ -162,6 +166,10 @@ export interface SessionResetCoordinatorOptions {
   retryDelayMs?: number;
   /** Overridable for tests; defaults to a real timer. */
   sleep?: (ms: number) => Promise<void>;
+}
+
+export interface SessionResetAccepted {
+  requestId: string;
 }
 
 /** Holds an approved reset until the wrapper's own turn boundary, then sends
@@ -179,6 +187,14 @@ export class SessionResetCoordinator {
    *  so the flag mostly guards the failure path from re-entering on the
    *  turn the failure notice itself creates. */
   #dispatching = false;
+  /** The accepted reset this old process is waiting to be replaced by. A
+   *  successful reset kills this process, so only a terminal failure should
+   *  consume this state and create a notice. */
+  #accepted: { requestId: string; mode: SessionResetMode } | null = null;
+  /** A fast runner failure may race ahead of the request's Phoenix `ok`
+   *  callback. There can be at most one local dispatch, so retain one event
+   *  until its request_id can be compared rather than losing it. */
+  #earlyFailure: { requestId: string; reason: string } | null = null;
 
   constructor(options: SessionResetCoordinatorOptions) {
     this.#options = options;
@@ -197,6 +213,23 @@ export class SessionResetCoordinator {
     return this.#reserved !== null;
   }
 
+  /** Receives the server's terminal lifecycle failure. This must be called
+   *  only with transport-narrowed values. A different request id belongs to a
+   *  stale/other wrapper and is ignored, so it cannot manufacture a notice in
+   *  this session. */
+  onResetFailed(requestId: string, reason: string): void {
+    const accepted = this.#accepted;
+    if (accepted !== null) {
+      if (accepted.requestId !== requestId) return;
+      this.#accepted = null;
+      void this.#report(accepted.mode, reason, "lifecycle");
+      return;
+    }
+    if (this.#dispatching && this.#earlyFailure === null) {
+      this.#earlyFailure = { requestId, reason };
+    }
+  }
+
   /** Call once per turn boundary, AFTER the turn's result has been handled.
    *  Returns immediately; the request runs in the background so a slow or
    *  retrying server never stalls the host's run loop. */
@@ -204,6 +237,7 @@ export class SessionResetCoordinator {
     const reservation = this.#reserved;
     if (reservation === null || this.#dispatching) return;
     this.#reserved = null;
+    this.#earlyFailure = null;
     this.#dispatching = true;
     void this.#dispatch(reservation).finally(() => {
       this.#dispatching = false;
@@ -214,8 +248,12 @@ export class SessionResetCoordinator {
     mode: SessionResetMode;
     reason?: string;
   }): Promise<void> {
-    let reason = await this.#attempt(reservation);
-    if (reason === null) return;
+    const first = await this.#attempt(reservation);
+    if (typeof first !== "string") {
+      this.#acceptOrReportEarlyFailure(reservation.mode, first);
+      return;
+    }
+    let reason = first;
     // Retry ONLY a refusal that establishes nothing happened AND is worth
     // re-sending (CR-MF2). Re-sending after a timeout could hand the server
     // a second reset for a request it already accepted.
@@ -228,7 +266,10 @@ export class SessionResetCoordinator {
         ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
       await sleep(this.#options.retryDelayMs ?? SESSION_RESET_RETRY_DELAY_MS);
       const second = await this.#attempt(reservation);
-      if (second === null) return;
+      if (typeof second !== "string") {
+        this.#acceptOrReportEarlyFailure(reservation.mode, second);
+        return;
+      }
       reason = second;
     }
     await this.#report(reservation.mode, reason);
@@ -237,8 +278,28 @@ export class SessionResetCoordinator {
   /** Tells the agent — and the operator — what is known. A refusal that was
    *  retried and refused again IS determined, so only a genuinely unknown
    *  outcome gets the hedged wording. */
-  async #report(mode: SessionResetMode, reason: string): Promise<void> {
-    const unconfirmed = classifyRefusal(reason) === "unconfirmed";
+  #acceptOrReportEarlyFailure(
+    mode: SessionResetMode,
+    accepted: SessionResetAccepted,
+  ): void {
+    this.#accepted = { requestId: accepted.requestId, mode };
+    const early = this.#earlyFailure;
+    this.#earlyFailure = null;
+    if (early === null || early.requestId !== accepted.requestId) return;
+    this.#accepted = null;
+    void this.#report(mode, early.reason, "lifecycle");
+  }
+
+  async #report(
+    mode: SessionResetMode,
+    reason: string,
+    source: "request" | "lifecycle" = "request",
+  ): Promise<void> {
+    // A request-push timeout is ambiguous, but a terminal lifecycle failure
+    // comes from the server's resolved SessionResets transaction. In the
+    // latter case even `timeout` is a confirmed non-reset, not a guess.
+    const unconfirmed =
+      source === "request" && classifyRefusal(reason) === "unconfirmed";
     this.#options.log(
       unconfirmed
         ? `セッションリセット (${mode}) の結果を確認できませんでした: ${reason}`
@@ -268,14 +329,13 @@ export class SessionResetCoordinator {
     });
   }
 
-  /** Returns null when the server accepted, otherwise the refusal reason. */
+  /** Returns the accepted request id, otherwise the refusal reason. */
   async #attempt(reservation: {
     mode: SessionResetMode;
     reason?: string;
-  }): Promise<string | null> {
+  }): Promise<SessionResetAccepted | string> {
     try {
-      await this.#options.request(reservation.mode, reservation.reason);
-      return null;
+      return await this.#options.request(reservation.mode, reservation.reason);
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }

@@ -556,7 +556,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
         |> maybe_put_resume_snapshot(agent_id)
       )
 
-      {:reply, :ok, socket}
+      # Acceptance reserves a server-side reset transaction but is not its
+      # completion. Return its correlation id so this old wrapper can match a
+      # later terminal failure if the runner cannot actually replace it (#258).
+      {:reply, {:ok, %{request_id: request_id}}, socket}
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: reset_request_reason(reason)}}, socket}
