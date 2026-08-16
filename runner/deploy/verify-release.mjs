@@ -197,10 +197,24 @@ const ENTRY_PACKAGES = ["@kaoiro/claude-code", "@kaoiro/codex"];
  *  Each literal becomes an opaque marker, so `const x = 'import "./y.js"'`
  *  cannot match: the words are inside the marker, not beside `from`.
  *  A literal carrying an escape or a `${}` substitution is recorded as
- *  unusable rather than guessed at — and a regex literal is lexed as a
- *  string, which over-blanks. Both err toward noticing FEWER specifiers,
- *  which is the safe direction: missing one narrows this check, inventing
- *  one rejects a healthy release and blocks every deploy. */
+ *  unusable rather than guessed at.
+ *
+ *  EVERY `/` THAT IS NOT `//` OR `/*` IS TREATED AS A REGEX LITERAL and
+ *  blanked to the next unescaped `/` on the same line (character classes
+ *  honoured), or to end of line if there is none. Division is therefore
+ *  sometimes blanked too, and that is the point: telling regex from
+ *  division needs the preceding token, and guessing wrong in the other
+ *  direction is what breaks. A quote inside an unlexed regex opens a
+ *  phantom string and inverts code/literal parity for the REST OF THE FILE
+ *  — which both hides real specifiers and exposes literal text to the scan.
+ *  `runner/dist/transport.js` already ships such a regex
+ *  (`/(token=)[^&\s"]+/gi`), so this is not hypothetical; it was benign only
+ *  because that file's imports sit above it (レビューサイクル round 2).
+ *
+ *  All three degradations — unusable literals, blanked division, an
+ *  unterminated regex eating its line — err toward noticing FEWER
+ *  specifiers. That is the safe direction: missing one narrows this check,
+ *  inventing one rejects a healthy release and blocks every deploy. */
 function lexModule(source) {
   const values = [];
   let out = "";
@@ -218,6 +232,25 @@ function lexModule(source) {
       const end = stop === -1 ? source.length : stop + 2;
       out += blank(source.slice(i, end));
       i = end;
+    } else if (source[i] === "/") {
+      // Regex literal (see the note above on why division is included).
+      let j = i + 1;
+      let inClass = false;
+      while (j < source.length && source[j] !== "\n") {
+        if (source[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (source[j] === "[") inClass = true;
+        else if (source[j] === "]") inClass = false;
+        else if (source[j] === "/" && !inClass) {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      out += blank(source.slice(i, j));
+      i = j;
     } else if (source[i] === '"' || source[i] === "'" || source[i] === "`") {
       const quote = source[i];
       let j = i + 1;

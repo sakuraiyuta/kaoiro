@@ -200,6 +200,39 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     expect(install(archive).status).toBe(0);
   });
 
+  it("回帰: 引用符を含む正規表現リテラルが後続の走査を壊さない", () => {
+    // Without a regex branch the quote inside `/"/` opens a phantom string
+    // and inverts code/literal parity for the REST of the file: real
+    // specifiers vanish and literal text reaches the scan, which invented
+    // `.concat(` and rejected a complete release. runner/dist/transport.js
+    // already ships such a regex (レビューサイクル round 2).
+    const revision = revisionOf("regex-literal");
+    const stage = join(work, "re-stage");
+    const name = `kaoiro-runner-${revision}-linux-x64`;
+    const tree = join(stage, name);
+    writeReleaseTree(tree, revision);
+    const cli = join(tree, "dist", "cli.js");
+    writeFileSync(
+      cli,
+      `const redact = (s) => s.replace(/(token=)[^&\\s"]+/gi, "$1<R>");\nconst tail = "prefix from ".concat("x");\n${readFileSync(cli, "utf8")}`,
+    );
+    execFileSync(process.execPath, [
+      fileURLToPath(new URL("../../scripts/build-release-manifest.mjs", import.meta.url)),
+      tree,
+    ], { stdio: ["ignore", "ignore", "ignore"] });
+    const archive = join(work, `${name}.tar.gz`);
+    execFileSync("tar", ["czf", archive, "-C", stage, name]);
+
+    // Accepted (no invented specifier) AND stub_dep.js is still seen: the
+    // require below the regex must not have been swallowed.
+    expect(install(archive).status).toBe(0);
+    const broken = makeReleaseTarball(work, revisionOf("regex-literal-neg"), {
+      omit: ["dist/stub_dep.js"],
+      dropManifestEntries: ["dist/stub_dep.js"],
+    });
+    expect(install(broken).status).toBe(70);
+  });
+
   it("new URL(..., import.meta.url) の runtime edge も閉包に含める", () => {
     // bridge.js is reachable only through that URL construction. Removing it
     // together with its manifest entry left a self-consistent, undersized
