@@ -1,16 +1,14 @@
 // Adapter-level integration coverage for issue #177 review M4 (AC8/AC9/
-// AC15): proves the glue sequence cli.ts's onInterAgentMessage handler
-// runs (receiveInbound() -> disposition branch -> conditional host.send()
-// / notePendingInjection()) against the REAL CodexHost + REAL
+// AC15): executes the production inbound handler (receiveInbound() ->
+// disposition branch -> conditional injection) against the REAL CodexHost + REAL
 // InterAgentTool, not just InterAgentTool in isolation (which
 // inter_agent.test.ts already covers exhaustively). Mirrors
 // claude-code/test/inter_agent_lifecycle_glue.test.ts — same glue, same
 // assertions, CodexHost in place of AgentHost — to demonstrate AC15
 // (both engine adapters share identical lifecycle behaviour) is not just
 // a claim about the shared agent-common code but is observably true
-// through each engine's own host too. codex/src/cli.ts has no test
-// harness of its own (like claude-code's cli.ts), so this reproduces its
-// exact glue directly. CodexHost.send() only needs to reach its internal
+// through each engine's own host too. The production handler is imported
+// directly. CodexHost.send() only needs to reach its internal
 // queue (#queue.push + #wake?.(), host.ts) — no live thread / run() is
 // required, the same reason the claude-code AgentHost variant does not
 // call run() either.
@@ -18,20 +16,18 @@ import { describe, expect, it, vi } from "vitest";
 import {
   InterAgentTool,
   MAX_COALESCED_MESSAGES,
-  canAddToCoalescedBatch,
   classifyInterAgentError,
-  formatInboundMessage,
-  formatInboundMessages,
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
-  InboundReplyMode,
   InterAgentMessagePayload,
   WrapperConfig,
 } from "@kaoiro/agent-common";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { CodexHost } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
+import { handleInterAgentMessage } from "../src/inter_agent_message_handler.js";
+import { CodexInterAgentTurnCoordinator } from "../src/inter_agent_turn_coordinator.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -72,53 +68,32 @@ function makeHost(): CodexHost {
   return new CodexHost(config, { onState: () => {}, appendSystemPrompt: "p" });
 }
 
-/** Reproduces cli.ts's onInterAgentMessage glue — identical to
- *  claude-code's cli.ts (and to the sibling helper in
- *  claude-code/test/inter_agent_lifecycle_glue.test.ts), modulo the host
- *  type. issue #221 direction 1: `mode === "terminal"` now returns
- *  `inject: false` from `receiveInbound()` too, so it is caught by the
- *  same early return as AC9's stale/duplicate case above — the track
- *  still learns `closed`, but no SDK turn is spent on it. Async since
- *  issue #177 review round 2 (ふじ差し戻し) made receiveInbound() async
- *  (it may gate briefly on a concurrently in-flight done=true send for
- *  the same conversation_id).
- *
- *  CAVEAT (issue #222 段階2 差し戻し MF-2, ふじ; structural gap tracked as
- *  issue #226): this function is a REIMPLEMENTATION of cli.ts's
- *  `!disposition.inject` branching (terminal / notice / no-notice skip)
- *  below — it does not call cli.ts's actual (inline, unexported inside
- *  `run()`) `onInterAgentMessage` handler. The two are kept in sync BY
- *  HAND; neither the type system nor any test enforces it. Concretely:
- *  deleting cli.ts's own `link?.send(disposition.notice)` line does NOT
- *  fail any test in this file today (confirmed by mutation-testing that
- *  exact deletion against both engines' full suites — 0 failures).
- *  `notices` (when passed) collects what THIS reproduction would hand to
- *  `link.send()`, so a test CAN pin drift in the reproduction itself —
- *  it CANNOT catch a regression in cli.ts's own real wiring. issue #226
- *  tracks closing this gap structurally (exporting/restructuring the
- *  real handler so tests can call it directly). */
+/** Calls the production Codex inbound handler. The callback context supplies
+ * only host/transport edges, so its disposition branches cannot drift from
+ * the CLI implementation. */
 async function runOnInterAgentMessageGlue(
   interAgent: InterAgentTool,
   host: CodexHost,
   envelope: Envelope,
   notices?: Envelope[],
+  logs?: string[],
 ): Promise<void> {
-  const disposition = await interAgent.receiveInbound(envelope);
-  if (disposition.consumed) return;
-  if (!disposition.inject) {
-    if (disposition.mode !== "terminal" && disposition.notice) {
-      notices?.push(disposition.notice);
-    }
-    return;
-  }
-  const payload = envelope.payload as unknown as InterAgentMessagePayload;
-  const text = `[glue] ${payload.body}`;
-  if (disposition.mode !== "terminal") {
-    interAgent.notePendingInjection(envelope);
-  }
-  const cids =
-    typeof payload.conversation_id === "string" ? [payload.conversation_id] : [];
-  void host.send(text, undefined, cids).catch(() => {});
+  await handleInterAgentMessage(
+    {
+      interAgent,
+      recordInboundIa: () => {},
+      send: (notice) => notices?.push(notice),
+      inject: (inbound) => {
+        const payload = inbound.payload as unknown as InterAgentMessagePayload;
+        const cids =
+          typeof payload.conversation_id === "string" ? [payload.conversation_id] : [];
+        interAgent.notePendingInjection(inbound);
+        void host.send(`[glue] ${payload.body}`, undefined, cids).catch(() => {});
+      },
+      log: (line) => logs?.push(line),
+    },
+    envelope,
+  );
 }
 
 describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
@@ -191,8 +166,16 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
         code: "stale_turn",
         message: "already sent",
       };
-      await runOnInterAgentMessageGlue(tool, host, errorEnvelope, notices);
+      expect((await tool.receiveInbound(errorEnvelope)).noticeSkipReason).toBe(
+        "envelope itself is a peer_error notice",
+      );
+      const errorLogs: string[] = [];
+      await runOnInterAgentMessageGlue(tool, host, errorEnvelope, notices, errorLogs);
       expect(notices).toHaveLength(0);
+      expect(errorLogs).toEqual([
+        "  inter_agent_message stale/duplicate turn dropped, no notice " +
+          "(envelope itself is a peer_error notice): peer.agent\n",
+      ]);
 
       // (b) track が既に closed — 双方 done=true で terminal にした上で、
       // その後の stale delivery が notice を積まないことを確認する。
@@ -213,13 +196,17 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
         host,
         inboundEnvelope("cnv-stale-exempt", 4, true),
       );
-      await runOnInterAgentMessageGlue(
-        tool,
-        host,
-        inboundEnvelope("cnv-stale-exempt", 1),
-        notices,
+      const closedStale = inboundEnvelope("cnv-stale-exempt", 1);
+      expect((await tool.receiveInbound(closedStale)).noticeSkipReason).toBe(
+        "track already closed",
       );
+      const closedLogs: string[] = [];
+      await runOnInterAgentMessageGlue(tool, host, closedStale, notices, closedLogs);
       expect(notices).toHaveLength(0);
+      expect(closedLogs).toEqual([
+        "  inter_agent_message stale/duplicate turn dropped, no notice " +
+          "(track already closed): peer.agent\n",
+      ]);
     },
   );
 
@@ -271,6 +258,56 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
     expect(
       tool.resolveTurnEnd(["cnv-normal"], { code: "api_error", message: "x" }),
     ).toHaveLength(1);
+  });
+
+  it("issue #226: production handler は consumed reply を transport に流さない", async () => {
+    const sent: Envelope[] = [];
+    const injected = vi.fn();
+    const logs: string[] = [];
+    await handleInterAgentMessage(
+      {
+        interAgent: {
+          receiveInbound: async () => ({
+            consumed: true,
+            inject: false,
+            mode: "reply-owed",
+          }),
+        },
+        recordInboundIa: () => {},
+        send: (notice) => sent.push(notice),
+        inject: injected,
+        log: (line) => logs.push(line),
+      },
+      inboundEnvelope("cnv-consumed", 1),
+    );
+
+    expect(injected).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    expect(logs).toEqual(["  inter_agent_message reply consumed: peer.agent\n"]);
+  });
+
+  it("issue #226: production handler は terminal inbound を明示して注入しない", async () => {
+    const injected = vi.fn();
+    const logs: string[] = [];
+    await handleInterAgentMessage(
+      {
+        interAgent: {
+          receiveInbound: async () => ({
+            consumed: false,
+            inject: false,
+            mode: "terminal",
+          }),
+        },
+        recordInboundIa: () => {},
+        send: () => {},
+        inject: injected,
+        log: (line) => logs.push(line),
+      },
+      inboundEnvelope("cnv-terminal-branch", 1),
+    );
+
+    expect(injected).not.toHaveBeenCalled();
+    expect(logs).toEqual(["  inter_agent_message terminal, no reply owed: peer.agent\n"]);
   });
 });
 
@@ -342,19 +379,8 @@ function makeControllableClient(): {
   };
 }
 
-/** Reproduces cli.ts's issue #221 段階3 batching glue exactly — same-peer
- *  FIFO queue per peer, `inFlightPeers` / `inFlightCidPeer` gating on the
- *  turn's OWN completion (`onTurnEnd`), not on `instructionChain`'s promise
- *  (see `@kaoiro/codex/src/cli.ts`'s `trySendNextBatch` for the production
- *  version this test-only copy tracks, and the identical rationale in
- *  claude-code's sibling test file). */
+/** Adapter harness around the production Codex batching coordinator. */
 function makeCoalescingHarness(interAgent: InterAgentTool) {
-  const pendingBatches = new Map<
-    string,
-    { items: { envelope: Envelope; mode: InboundReplyMode }[]; bytes: number }[]
-  >();
-  const inFlightPeers = new Set<string>();
-  const inFlightCidPeer = new Map<string, string>();
   const sentBatches: { peer: string; cids: string[] }[] = [];
   /** Envelopes production's onInterAgentMessage/onTurnEnd glue would hand
    *  straight to `link?.send()`, never routed through invoke()/#dispatch():
@@ -365,68 +391,27 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
    *  production sends both through the SAME `link?.send()` sink. */
   const notices: Envelope[] = [];
   let host!: CodexHost;
-
-  function trySendNextBatch(peer: string): void {
-    if (inFlightPeers.has(peer)) return;
-    const queue = pendingBatches.get(peer);
-    const batch = queue?.shift();
-    if (batch === undefined) return;
-    if (queue!.length === 0) pendingBatches.delete(peer);
-    inFlightPeers.add(peer);
-    const cids = batch.items
-      .map(
-        (item) =>
-          (item.envelope.payload as Partial<InterAgentMessagePayload>)
-            .conversation_id,
-      )
-      .filter((cid): cid is string => typeof cid === "string");
-    for (const cid of cids) inFlightCidPeer.set(cid, peer);
-    // issue #221 段階3 MF-1 (ふじレビュー差し戻し): register at DISPATCH
-    // time — mirrors the production fix in cli.ts's trySendNextBatch. Moved
-    // out of receive() below, which used to register at receipt time and
-    // let a later batch's same-cid registration clobber an earlier,
-    // still-in-flight batch's entry.
-    for (const item of batch.items) {
-      interAgent.notePendingInjection(item.envelope);
-    }
-    sentBatches.push({ peer, cids });
-    void host.send(formatInboundMessages(batch.items), undefined, cids);
-  }
+  const coordinator = new CodexInterAgentTurnCoordinator({
+    onDispatch: (batch) => {
+      for (const item of batch.items) {
+        interAgent.notePendingInjection(item.envelope);
+      }
+      sentBatches.push({ peer: batch.peer, cids: [...batch.conversationIds] });
+      void host.send(batch.text, undefined, batch.conversationIds);
+    },
+  });
 
   async function receive(envelope: Envelope): Promise<void> {
-    const disposition = await interAgent.receiveInbound(envelope);
-    if (disposition.consumed) return;
-    if (!disposition.inject) {
-      // issue #222 段階2 差し戻し MF-2 (ふじ): mirrors cli.ts's
-      // onInterAgentMessage branching (see `runOnInterAgentMessageGlue`'s
-      // CAVEAT above — the same reimplementation-not-invocation gap
-      // applies here too, tracked as issue #226). Deleting production's
-      // `link?.send(disposition.notice)` wiring does NOT fail any test
-      // using THIS harness today either.
-      if (disposition.mode !== "terminal" && disposition.notice) {
-        notices.push(disposition.notice);
-      }
-      return;
-    }
-    const peer = envelope.agent_id;
-    const itemText = formatInboundMessage(envelope, { mode: disposition.mode });
-    const itemBytes = Buffer.byteLength(itemText, "utf8");
-    let queue = pendingBatches.get(peer);
-    if (queue === undefined) {
-      queue = [];
-      pendingBatches.set(peer, queue);
-    }
-    let open = queue[queue.length - 1];
-    if (
-      open === undefined ||
-      !canAddToCoalescedBatch(open.items.length, open.bytes, itemBytes)
-    ) {
-      open = { items: [], bytes: 0 };
-      queue.push(open);
-    }
-    open.items.push({ envelope, mode: disposition.mode });
-    open.bytes += itemBytes;
-    trySendNextBatch(peer);
+    await handleInterAgentMessage(
+      {
+        interAgent,
+        recordInboundIa: () => {},
+        send: (notice) => notices.push(notice),
+        inject: (inbound, mode) => coordinator.receive(inbound, mode),
+        log: () => {},
+      },
+      envelope,
+    );
   }
 
   function onTurnEnd(
@@ -437,14 +422,9 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     for (const notice of interAgent.resolveTurnEnd(conversationIds, classified)) {
       notices.push(notice);
     }
-    const freedPeer =
-      conversationIds.length > 0
-        ? inFlightCidPeer.get(conversationIds[0]!)
-        : undefined;
-    if (freedPeer !== undefined) {
-      for (const cid of conversationIds) inFlightCidPeer.delete(cid);
-      inFlightPeers.delete(freedPeer);
-      trySendNextBatch(freedPeer);
+    const settled = coordinator.settle(conversationIds);
+    if (settled !== undefined) {
+      coordinator.dispatchNextForPeer(settled.peer);
     }
   }
 

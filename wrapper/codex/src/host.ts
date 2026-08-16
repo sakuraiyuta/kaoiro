@@ -323,7 +323,7 @@ export class CodexHost implements EngineAdapter {
    * snapshots without applying the child-task time/token throttle. */
   #lastTasklistJson: string | null = null;
   /** Latest per-window rate-limit snapshot (mirrors AgentHost's #rateLimits).
-   *  Populated fire-and-forget from the rollout tail after each terminal
+   *  Populated when a session id becomes known and after each terminal
    *  ThreadEvent — Codex has no in-stream rate_limit event, unlike Claude. */
   readonly #rateLimits = new Map<
     CodexRateLimitWindow,
@@ -332,6 +332,11 @@ export class CodexHost implements EngineAdapter {
   /** In-flight guard for #refreshRateLimits(): coalesces multiple concurrent
    *  refresh triggers so a slow rollout tail cannot pile up work. */
   #rateLimitsInflight = false;
+  /** Session whose startup rollout snapshot was already attempted. The CLI
+   *  initializes resumed sessions before its first state, while run() also
+   *  invokes the same method as a safety net; this keeps that startup read
+   *  exactly once per session. */
+  #rateLimitsInitializedSessionId: string | null = null;
 
   constructor(config: WrapperConfig, options: CodexHostOptions) {
     this.#config = config;
@@ -430,6 +435,23 @@ export class CodexHost implements EngineAdapter {
     out.cwd = this.#cwd;
     if (this.#sessionId !== null) out.session_id = this.#sessionId;
     return out;
+  }
+
+  /**
+   * Loads an already-written rollout snapshot before the CLI emits its
+   * startup state. A fresh spawn has no session id yet, so this is a no-op
+   * until thread.started establishes one in #runTurn.
+   */
+  async initializeRateLimits(): Promise<void> {
+    const sessionId = this.#sessionId;
+    if (
+      sessionId === null ||
+      this.#rateLimitsInitializedSessionId === sessionId
+    ) {
+      return;
+    }
+    this.#rateLimitsInitializedSessionId = sessionId;
+    await this.#refreshRateLimits();
   }
 
   /** Single engine-neutral SoT for both state_change.ext and whoami (#113). */
@@ -646,6 +668,10 @@ export class CodexHost implements EngineAdapter {
   }
 
   async run(initialPrompt?: string): Promise<void> {
+    // The CLI normally has already done this before its initial idle/sending
+    // state. Keep the host self-sufficient for non-CLI callers; the per-
+    // session guard makes the second call a no-op (issue #251).
+    await this.initializeRateLimits();
     const descriptors = this.#options.toolDescriptors ?? [];
     const toolHost =
       descriptors.length > 0 ? await ToolHost.listen(descriptors) : null;
@@ -813,6 +839,11 @@ export class CodexHost implements EngineAdapter {
         if (sessionId !== null && sessionId !== this.#sessionId) {
           this.#sessionId = sessionId;
           this.#options.onSessionId?.(sessionId);
+          // A fresh thread's first token_count can be absent, but a resumed
+          // or reused rollout may already have a snapshot. Await its initial
+          // read before the following SDK event emits state, so that state
+          // carries ext.rate_limits when the rollout has data (issue #251).
+          await this.initializeRateLimits();
         }
         for (const entry of threadEventToLogs(event)) {
           this.#emitLog(entry);
@@ -1067,7 +1098,8 @@ export class CodexHost implements EngineAdapter {
     this.#emitState(this.#machine.state);
   }
 
-  /** Refreshes #rateLimits from the rollout tail after a terminal ThreadEvent.
+  /** Refreshes #rateLimits from the rollout tail after a session becomes known
+   *  and after a terminal ThreadEvent.
    *  Codex has no in-stream rate_limit event (unlike Claude's SDKRateLimitEvent),
    *  so this reads the JSONL the SDK's own `codex exec` subprocess writes.
    *  Fire-and-forget from the run loop; coalesces concurrent refreshes so a

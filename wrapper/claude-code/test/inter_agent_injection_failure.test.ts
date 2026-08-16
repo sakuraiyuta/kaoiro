@@ -8,12 +8,11 @@
 //
 // Uses the REAL AgentHost so the queue-full condition is genuine, not
 // mocked, and the REAL InterAgentTool so resolveTurnEnd's behavior is
-// exercised end to end. cli.ts itself has no test harness (its
-// onInterAgentMessage handler lives inline in run(), like every other
-// ServerLink callback in that file — none of them are unit tested), so
-// this reproduces the exact glue sequence cli.ts runs
-// (notePendingInjection -> host.send() -> .catch()) directly against the
-// two real classes instead.
+// exercised end to end. The production `handleInterAgentMessage()` is now
+// called directly by inter_agent_lifecycle_glue.test.ts; this narrower test
+// starts at its injection-dispatch edge so the queue-full failure and its
+// cleanup sequence (notePendingInjection -> host.send() -> .catch()) still
+// run against the two real classes instead of a mocked queue.
 import { describe, expect, it } from "vitest";
 import {
   InterAgentTool,

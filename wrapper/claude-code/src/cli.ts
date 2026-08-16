@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto";
 import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory, sessionSidecarPath } from "./history.js";
 import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
+import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import {
   InterAgentIngressGate,
   InterAgentTurnCoordinator,
@@ -687,101 +688,18 @@ async function main(): Promise<void> {
       process.stdout.write(`  attach_close: ${uploadId}\n`);
       host.attachClose(uploadId);
     },
-    // issue #177 review round 2 (ふじ差し戻し): async — receiveInbound() may
-    // gate briefly on a concurrently in-flight done=true send_to_agent for
-    // the same conversation_id, so it must be awaited before this handler
-    // acts on the disposition (host.send / notePendingInjection). The
-    // caller (transport.ts) does not await onInterAgentMessage — an async
-    // handler here is still fire-and-forget from its perspective, exactly
-    // as the previous synchronous one was.
-    onInterAgentMessage: async (envelope) => {
-      // This happens before the handler's first await. The lease is distinct
-      // from turn ownership: it only prevents an ingress that was awaiting
-      // InterAgentTool from entering the coordinator after host termination.
-      const ingressLease = interAgentIngress.begin();
-      // Record BEFORE anything consumes the envelope (ADR-0051 D3-2): the
-      // sidecar documents what the server delivered, so a later injection
-      // failure leaving only the record is the correct outcome, not a bug.
-      recordInboundIa(envelope);
-      try {
-        if (interAgentIngress.isTerminal(ingressLease)) {
-          process.stdout.write(
-            `  inter_agent_message terminal ingress skipped before receive: ${envelope.agent_id}\n`,
-          );
-          return;
-        }
-        const disposition = (await interAgent?.receiveInbound(envelope)) ?? {
-          consumed: false,
-          inject: true,
-          mode: "reply-owed" as const,
-        };
-        if (interAgentIngress.isTerminal(ingressLease)) {
-          process.stdout.write(
-            `  inter_agent_message terminal ingress skipped after receive: ${envelope.agent_id}\n`,
-          );
-          return;
-        }
-        if (disposition.consumed) {
-          process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
-          return;
-        }
-        if (!disposition.inject) {
-          // issue #221 direction 1: `inject: false` has two distinct causes
-          // that must not share a log line (agent-common's `InboundDisposition`
-          // doc) — `mode === "terminal"` means this DID happen and the track
-          // above just learned `closed`, only that no reply is owed and no SDK
-          // turn should be spent on it; anything else here is AC9's late /
-          // stale / duplicate turn_number, which never happened at all
-          // (track untouched).
-          if (disposition.mode === "terminal") {
-            process.stdout.write(
-              `  inter_agent_message terminal, no reply owed: ${envelope.agent_id}\n`,
-            );
-          } else if (disposition.notice) {
-            // issue #222 欠陥3: notify the ORIGINAL sender (and resync its
-            // track — see InterAgentTool#receiveInbound's doc) instead of
-            // dropping this silently. Same AC10-bypassing pattern as
-            // resolveTurnEnd()'s notices below — this never goes through
-            // invoke()/#dispatch() either.
-            link?.send(disposition.notice);
-            process.stdout.write(
-              `  inter_agent_message stale/duplicate turn dropped, stale_turn notice sent: ${envelope.agent_id}\n`,
-            );
-          } else {
-            // No notice was built — receiveInbound() withholds it in exactly
-            // two cases (see its doc): this envelope was itself a peer_error/
-            // stale_turn notice (replying would risk a notice/notice ping-
-            // pong), or the track was already closed (a late arrival after
-            // the conversation legitimately ended, where the sender already
-            // has — or will get — its own `conversation_closed` reject). The
-            // director's steer: a skip must never be silent, even when no
-            // notice goes out over the wire, so log which case this was.
-            const stalePayload = envelope.payload as Partial<InterAgentMessagePayload>;
-            const skipReason = stalePayload.error
-              ? "envelope itself is a peer_error notice"
-              : "track already closed";
-            process.stdout.write(
-              `  inter_agent_message stale/duplicate turn dropped, no notice (${skipReason}): ${envelope.agent_id}\n`,
-            );
-          }
-          return;
-        }
-        // Server routed an inter_agent_message to this wrapper (peer reply or
-        // synthesized escalate-to-user). Track the inbound turn_number so our
-        // next outbound send_to_agent stays monotonic, then queue it for
-        // delivery — possibly coalesced with other pending same-peer messages
-        // into one SDK turn (issue #221 段階3, direction 2). The host
-        // serialises through instructionChain so a mid-PDF render cannot
-        // reorder this against an operator instruction.
-        process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
-        // issue #246: receipt only appends to the production coordinator. It
-        // registers the pending injection when (and only when) an exact opaque
-        // token is dispatched, preserving issue #221's same-CID safety.
-        interAgentTurns.receive(envelope, disposition.mode);
-      } finally {
-        interAgentIngress.finish(ingressLease);
-      }
-    },
+    onInterAgentMessage: (envelope) =>
+      handleInterAgentMessage(
+        {
+          interAgent,
+          ingress: interAgentIngress,
+          recordInboundIa,
+          send: (notice) => link?.send(notice),
+          inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
+          log: (line) => process.stdout.write(line),
+        },
+        envelope,
+      ),
   });
 
   // fail-closed: the wrapper cannot open its SDK session without the
