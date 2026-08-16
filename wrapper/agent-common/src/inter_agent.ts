@@ -599,12 +599,20 @@ interface ReplyWaiter {
 interface PendingInjection {
   /** agent_id of the envelope that was injected — the notice's addressee. */
   from: string;
+  /** Opaque identity of the exact SDK turn that accepted this inbound.
+   * Conversation IDs may be re-used by a later inbound generation; only this
+   * lease may clear or turn a pending entry into a peer_error notice. */
+  turnToken: string;
 }
 
 export interface InterAgentToolOptions {
   config: WrapperConfig;
   /** Current wrapper state — stamped onto the outer envelope frame. */
   getState: () => KaoiroState;
+  /** Opaque identity of the SDK turn currently executing. Production hosts
+   * supply this so a reply from a different turn cannot clear an older
+   * pending inbound that happens to reuse the same conversation_id. */
+  getActiveInterAgentTurnToken?: () => string | null;
   /** Outbound envelope sink, normally ServerLink#send. */
   send: (envelope: Envelope) => void;
   /** Inter-agent sink that resolves with the server's acceptance outcome
@@ -1154,8 +1162,8 @@ export class InterAgentTool {
    *  branch — i.e. `receiveInbound` did NOT consume it as a waiter reply),
    *  so this wrapper now owes a reply on the conversation. Called by cli.ts
    *  right before it queues the injection (the same call also tags the queued
-   *  turn with this conversation_id — see AgentHost#send /
-   *  CodexHost#send's third parameter). If the SPECIFIC turn that injection
+   *  turn with this conversation_id and immutable `turnToken` — see
+   *  AgentHost#send / CodexHost#send). If the SPECIFIC turn that injection
    *  started ends without an outbound reply clearing the entry (see
    *  `invoke()`), `resolveTurnEnd()` resolves it (issue #131).
    *
@@ -1170,16 +1178,18 @@ export class InterAgentTool {
    *  wrong (later) registration, silently breaking the later turn's own
    *  resolution on failure. Registering per-item at dispatch time ties each
    *  cid's entry one-for-one to the batch actually being sent. */
-  notePendingInjection(envelope: Envelope): void {
+  notePendingInjection(envelope: Envelope, turnToken: string): void {
     const payload = envelope.payload as Partial<InterAgentMessagePayload>;
     if (typeof payload.conversation_id !== "string") return;
     this.#pendingInjections.set(payload.conversation_id, {
       from: envelope.agent_id,
+      turnToken,
     });
   }
 
   /** Called by cli.ts once per SDK turn boundary (success or error), with the
-   *  conversation_id(s) the CLI/host tagged that specific turn with — an
+   *  immutable turn token and conversation_id(s) the CLI/host tagged that
+   *  specific turn with — an
    *  empty array for an ordinary operator-instruction turn, one entry for an
    *  ordinary (non-coalesced) inter-agent turn, or MULTIPLE entries when the
    *  turn was a coalesced batch (issue #221 段階3, direction 2 — same-peer
@@ -1188,7 +1198,10 @@ export class InterAgentTool {
    *  misattributes failures across unrelated, concurrently queued
    *  conversations and never resolves a conversation whose turn quietly
    *  succeeded without a reply — this still holds per-cid inside the loop
-   *  below, only the CALLER now supplies a list instead of one value. Each
+   *  below, only the CALLER now supplies a list instead of one value. The
+   *  token is also checked before an entry is touched: CID is protocol data
+   *  and can recur in a later generation, while the token is this turn's
+   *  ownership lease. Each
    *  cid is resolved independently and exactly once; a cid with no pending
    *  entry (already resolved by `invoke()` sending a reply during the turn —
    *  the primary resolution path) is skipped, not an error.
@@ -1209,6 +1222,7 @@ export class InterAgentTool {
    *  notices did not come from a model tool call (the turn just failed to
    *  produce one), so they bypass the broker entirely. */
   resolveTurnEnd(
+    turnToken: string,
     conversationIds: readonly string[],
     error?: InterAgentErrorPayload,
   ): Envelope[] {
@@ -1216,6 +1230,10 @@ export class InterAgentTool {
     for (const conversationId of conversationIds) {
       const injection = this.#pendingInjections.get(conversationId);
       if (!injection) continue;
+      // Do not let a late callback from another SDK turn consume this lease.
+      // A matching conversation ID alone is deliberately insufficient: it is
+      // reusable protocol data, not a turn ownership capability.
+      if (injection.turnToken !== turnToken) continue;
       this.#pendingInjections.delete(conversationId);
       if (!error) continue;
 
@@ -1612,7 +1630,14 @@ export class InterAgentTool {
           // still clears it: the message may well have been delivered,
           // and layering an error notice on top of a delivered reply
           // would read to the peer as two contradictory answers.
-          if (acceptance.kind !== "rejected") {
+          const activeTurnToken =
+            this.#options.getActiveInterAgentTurnToken?.() ?? null;
+          const pending = this.#pendingInjections.get(conversationId);
+          if (
+            acceptance.kind !== "rejected" &&
+            activeTurnToken !== null &&
+            pending?.turnToken === activeTurnToken
+          ) {
             this.#pendingInjections.delete(conversationId);
           }
 

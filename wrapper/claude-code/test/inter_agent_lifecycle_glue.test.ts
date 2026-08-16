@@ -107,8 +107,8 @@ async function runOnInterAgentMessageGlue(
         const payload = inbound.payload as unknown as InterAgentMessagePayload;
         const cids =
           typeof payload.conversation_id === "string" ? [payload.conversation_id] : [];
-        interAgent.notePendingInjection(inbound);
-        void host.send(`[glue] ${payload.body}`, undefined, cids).catch(() => {});
+        interAgent.notePendingInjection(inbound, "glue-turn");
+        void host.send(`[glue] ${payload.body}`, undefined, cids, "glue-turn").catch(() => {});
       },
       log: (line) => logs?.push(line),
     },
@@ -267,7 +267,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     // 空配列を返す — 何も pending になっていない証拠(呼ばれていれば
     // エラー通知が 1 件返るはず)。
     expect(
-      tool.resolveTurnEnd(["cnv-terminal"], { code: "api_error", message: "x" }),
+      tool.resolveTurnEnd("glue-turn", ["cnv-terminal"], { code: "api_error", message: "x" }),
     ).toEqual([]);
   });
 
@@ -284,7 +284,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
 
     expect(sendSpy).toHaveBeenCalledTimes(1);
     expect(
-      tool.resolveTurnEnd(["cnv-normal"], { code: "api_error", message: "x" }),
+      tool.resolveTurnEnd("glue-turn", ["cnv-normal"], { code: "api_error", message: "x" }),
     ).toHaveLength(1);
   });
 
@@ -449,7 +449,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     createTurnToken: () => `test-token-${++tokenSequence}`,
     onDispatch: (batch) => {
       for (const item of batch.items) {
-        interAgent.notePendingInjection(item.envelope);
+        interAgent.notePendingInjection(item.envelope, batch.turnToken);
       }
       sentBatches.push({ peer: batch.peer, cids: [...batch.conversationIds] });
       void host.send(
@@ -488,6 +488,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     if (settlement.kind !== "settled") return;
     const classified = error ? classifyInterAgentError(error) : undefined;
     for (const notice of interAgent.resolveTurnEnd(
+      settlement.batch.turnToken,
       settlement.batch.conversationIds,
       classified,
     )) {
@@ -509,10 +510,11 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     ingressGate.close();
     for (const batch of coordinator.closeAndDrain()) {
       for (const item of batch.items) {
-        interAgent.notePendingInjection(item.envelope);
+        interAgent.notePendingInjection(item.envelope, batch.turnToken);
       }
       const classified = classifyInterAgentError(error);
       for (const notice of interAgent.resolveTurnEnd(
+        batch.turnToken,
         batch.conversationIds,
         classified,
       )) {
@@ -899,7 +901,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     // A's success cleared only A. C was never registered behind the unknown
     // active cid, so no delayed second resolve can manufacture a duplicate.
     expect(
-      tool.resolveTurnEnd(["cid-a"], { code: "api_error", message: "late" }),
+      tool.resolveTurnEnd("test-token-1", ["cid-a"], { code: "api_error", message: "late" }),
     ).toEqual([]);
   });
 

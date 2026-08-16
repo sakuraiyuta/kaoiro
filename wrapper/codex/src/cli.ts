@@ -192,14 +192,20 @@ async function main(): Promise<void> {
       // Register exactly the batch entering the host queue, never a later
       // accepted arrival waiting behind it (issue #221 MF-1).
       for (const item of batch.items) {
-        interAgent?.notePendingInjection(item.envelope);
+        interAgent?.notePendingInjection(item.envelope, batch.turnToken);
       }
       instructionChain = instructionChain.then(() =>
-        host.send(batch.text, undefined, batch.conversationIds).catch((err: unknown) => {
+        host.send(
+          batch.text,
+          undefined,
+          batch.conversationIds,
+          batch.turnToken,
+        ).catch((err: unknown) => {
           process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
-          const settled = interAgentTurns.settle(batch.conversationIds);
+          const settled = interAgentTurns.settle(batch.turnToken);
           const classified = classifyInterAgentError({ detail: String(err) });
           for (const notice of interAgent?.resolveTurnEnd(
+            batch.turnToken,
             batch.conversationIds,
             classified,
           ) ?? []) {
@@ -244,6 +250,8 @@ async function main(): Promise<void> {
   interAgent = new InterAgentTool({
     config,
     getState: () => host.state,
+    getActiveInterAgentTurnToken: () =>
+      host?.activeInterAgentTurnToken() ?? null,
     send: (envelope) => link?.send(envelope),
     // ADR-0051 D3-2: `send_to_agent`'s result is the server's acceptance
     // ack, not the local push. No link yet means no server took it.
@@ -423,9 +431,10 @@ async function main(): Promise<void> {
     // resulting notice envelope(s) straight through ServerLink — this
     // bypasses the model/tool path entirely since the turn just failed to
     // produce one, so no broker approval applies.
-    onTurnEnd: ({ conversationIds, error }) => {
+    onTurnEnd: ({ turnToken, conversationIds, error }) => {
       const classified = error ? classifyInterAgentError(error) : undefined;
       for (const envelope of interAgent?.resolveTurnEnd(
+        turnToken,
         conversationIds,
         classified,
       ) ?? []) {
@@ -434,7 +443,7 @@ async function main(): Promise<void> {
       // The coordinator releases its exact production batch only after the
       // pending CIDs above have resolved; a later same-CID batch can then be
       // dispatched without overwriting its predecessor's pending record.
-      const settled = interAgentTurns.settle(conversationIds);
+      const settled = interAgentTurns.settle(turnToken);
       if (settled !== undefined) {
         interAgentTurns.dispatchNextForPeer(settled.peer);
       }

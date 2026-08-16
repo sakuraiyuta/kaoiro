@@ -737,6 +737,12 @@ export class AgentHost implements EngineAdapter {
     return this.#machine.state;
   }
 
+  /** Opaque identity of the SDK turn currently executing, if any. The common
+   * inter-agent tool uses this as a lease when a model sends a reply. */
+  activeInterAgentTurnToken(): string | null {
+    return this.#activeTurn?.turnToken ?? null;
+  }
+
   /** Snapshot of the calling agent's identity and current status (used by the
    *  `mcp__kaoiro__whoami` tool, protocol-inter-agent companion). Reads only
    *  local state — no server round-trip, since the wrapper holds the freshest

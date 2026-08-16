@@ -74,7 +74,7 @@ describe("inter-agent pending injection leak on host.send() failure (issue #136)
       send: () => {},
     });
 
-    tool.notePendingInjection(inboundEnvelope("cnv-leak"));
+    tool.notePendingInjection(inboundEnvelope("cnv-leak"), "test-turn");
 
     // cli.ts's ORIGINAL (pre-fix) catch: log only, no cleanup.
     await expect(
@@ -85,7 +85,7 @@ describe("inter-agent pending injection leak on host.send() failure (issue #136)
     // now — the turn was never queued, so AgentHost never runs a turn for
     // it and onTurnEnd never fires. Simulate a later, unrelated probe: a
     // non-empty result proves the entry never self-cleared.
-    const leaked = tool.resolveTurnEnd(["cnv-leak"], {
+    const leaked = tool.resolveTurnEnd("test-turn", ["cnv-leak"], {
       code: "api_error",
       message: "later probe",
     });
@@ -104,7 +104,7 @@ describe("inter-agent pending injection leak on host.send() failure (issue #136)
       send: () => {},
     });
 
-    tool.notePendingInjection(inboundEnvelope("cnv-fixed"));
+    tool.notePendingInjection(inboundEnvelope("cnv-fixed"), "test-turn");
 
     // The issue #136 fix wiring, exactly as applied in both cli.ts files'
     // onInterAgentMessage .catch() block (see claude-code/src/cli.ts and
@@ -114,7 +114,7 @@ describe("inter-agent pending injection leak on host.send() failure (issue #136)
       .send("late injection", undefined, ["cnv-fixed"])
       .catch((err: unknown) => {
         const classified = classifyInterAgentError({ detail: String(err) });
-        for (const notice of tool.resolveTurnEnd(["cnv-fixed"], classified)) {
+        for (const notice of tool.resolveTurnEnd("test-turn", ["cnv-fixed"], classified)) {
           linkSent.push(notice);
         }
       });
@@ -132,7 +132,7 @@ describe("inter-agent pending injection leak on host.send() failure (issue #136)
     // The entry is gone now — a later probe must be a no-op, proving no
     // leak and no double-resolution.
     expect(
-      tool.resolveTurnEnd(["cnv-fixed"], { code: "api_error", message: "late" }),
+      tool.resolveTurnEnd("test-turn", ["cnv-fixed"], { code: "api_error", message: "late" }),
     ).toEqual([]);
   });
 });

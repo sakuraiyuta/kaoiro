@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, readdir, readFile, stat, utimes } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   CodexOptions,
@@ -12,6 +15,10 @@ import type {
 import { makeStateChange } from "@kaoiro/agent-common";
 import { CodexHost, initialStatusExt } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
+import {
+  CodexTurnDiagnostics,
+  codexTurnTraceCaptureDir,
+} from "../src/turn_diagnostics.js";
 import type {
   CodexRateLimitSnapshot,
   CodexRateLimitWindow,
@@ -2106,6 +2113,7 @@ describe("CodexHost", () => {
   describe("onTurnEnd (issue #131)", () => {
     it("turn.failed は onTurnEnd に conversationIds=[](未タグ) + error.detail を渡す", async () => {
       const turnEnds: {
+        turnToken: string;
         conversationIds: readonly string[];
         error?: { reason?: string; detail?: string };
       }[] = [];
@@ -2126,9 +2134,12 @@ describe("CodexHost", () => {
 
       await runOneTurn(host, "hi", client);
 
-      expect(turnEnds).toEqual([
-        { conversationIds: [], error: { detail: "rate limited" } },
-      ]);
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({
+        conversationIds: [],
+        error: { detail: "rate limited" },
+      });
+      expect(turnEnds[0]?.turnToken).toEqual(expect.any(String));
     });
 
     it("成功 turn は onTurnEnd に conversationIds のみ(error無し)で渡す", async () => {
@@ -2144,7 +2155,9 @@ describe("CodexHost", () => {
 
       await runOneTurn(host, "hi", client);
 
-      expect(turnEnds).toEqual([{ conversationIds: [] }]);
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({ conversationIds: [] });
+      expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
     });
 
     it("終端イベント無しでストリームが終わると detail 無しの error で onTurnEnd を呼ぶ", async () => {
@@ -2166,11 +2179,196 @@ describe("CodexHost", () => {
 
       await runOneTurn(host, "hi", client, turnEnded.promise);
 
-      expect(turnEnds).toEqual([{ conversationIds: [], error: {} }]);
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({ conversationIds: [], error: {} });
+      expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
+    });
+
+    it("stream-level error は record-only で、後続 turn.completed を失敗扱いにしない", async () => {
+      const turnEnds: unknown[] = [];
+      const { client } = makeClient([[
+        { type: "thread.started", thread_id: "uuid-record-only" },
+        { type: "error", message: "bridge socket transient /private/path" },
+        usageEvent(),
+      ]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi", client);
+
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({ conversationIds: [] });
+      expect(turnEnds[0]).not.toHaveProperty("error");
+    });
+
+    it("malformed item.completed のあと turn.completed が来れば成功のまま終え、peer error を作らない", async () => {
+      const turnEnds: {
+        conversationIds: readonly string[];
+        error?: { detail?: string };
+      }[] = [];
+      const { client } = makeClient([[
+        { type: "item.completed", item: null } as unknown as ThreadEvent,
+        usageEvent(),
+      ]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({ conversationIds: [] });
+      expect(turnEnds[0]).not.toHaveProperty("error");
+    });
+
+    it("failure trace の永続化失敗は SDK failure の onTurnEnd と host.run を置き換えない", async () => {
+      const turnEnds: {
+        conversationIds: readonly string[];
+        error?: { detail?: string };
+      }[] = [];
+      const persist = vi
+        .spyOn(CodexTurnDiagnostics.prototype, "writeFailure")
+        .mockRejectedValueOnce(new Error("trace disk full"));
+      const { client } = makeClient([new Error("Codex Exec exited with code 1")]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      expect(persist).toHaveBeenCalledOnce();
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({
+        conversationIds: [],
+        error: { detail: "Error: Codex Exec exited with code 1" },
+      });
+    });
+
+    it("host 起動時に agent の古い trace capture dir を20件までへ GC する", async () => {
+      const traceDir = await mkdtemp(join(tmpdir(), "kaoiro-trace-gc-test-"));
+      const captures = await Promise.all(
+        Array.from({ length: 21 }, async (_, index) => {
+          const capture = codexTurnTraceCaptureDir(
+            traceDir,
+            CONFIG.agent_id,
+            `former-${String(index).padStart(2, "0")}`,
+          );
+          await mkdir(capture, { recursive: true });
+          await utimes(capture, index + 1, index + 1);
+          return capture;
+        }),
+      );
+      const { client } = makeClient([[usageEvent()]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        turnTraceDir: traceDir,
+      });
+
+      await runOneTurn(host, "gc", client);
+
+      const agentDir = dirname(captures[0]!);
+      const remaining = await readdir(agentDir);
+      expect(remaining).toHaveLength(21); // 20 retained former captures + this host.
+      expect(remaining).not.toContain("former-00");
+    });
+
+    it("診断 capture dir が壊れていても SDK turn は開始・完了する (fail-soft)", async () => {
+      const { client } = makeClient([[usageEvent()]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        turnTraceDir: "/dev/null/kaoiro-trace",
+      });
+
+      await runOneTurn(host, "hi", client);
+      await client.waitForTurn(0);
+    });
+
+    it("壊れた診断 dir でも injection 無しの既定 Codex factory を構築して host.run を継続する", async () => {
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        turnTraceDir: "/dev/null/kaoiro-trace",
+      });
+
+      const running = host.run();
+      // run() executes the default `new Codex(...)` before its first await.
+      // Closing immediately keeps this composition test offline: no SDK turn
+      // or child process is started, but an eager trace mkdir would reject.
+      host.close();
+      await expect(running).resolves.toBeUndefined();
+    });
+
+    it("終端なしの production host 経路は 0600 failure trace を一件だけ残す", async () => {
+      const traceDir = await mkdtemp(join(tmpdir(), "kaoiro-host-trace-test-"));
+      const { client } = makeClient([[
+        { type: "thread.started", thread_id: "uuid-trace" },
+        { type: "error", message: "bridge disconnected /private/path" },
+      ]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        turnTraceDir: traceDir,
+        now: () => "T",
+      });
+
+      await host.send("coalesced inbound", undefined, ["cid-a", "cid-b"]);
+      const done = host.run();
+      await client.waitForTurn(0);
+      host.close();
+      await done;
+
+      const agentDirs = await readdir(join(traceDir, "agents"));
+      expect(agentDirs).toHaveLength(1);
+      const captureDir = join(
+        traceDir,
+        "agents",
+        agentDirs[0]!,
+        (await readdir(join(traceDir, "agents", agentDirs[0]!)))[0]!,
+      );
+      const traces = (await readdir(captureDir)).filter((name) => name.endsWith(".jsonl"));
+      expect(traces).toHaveLength(1);
+      const tracePath = join(captureDir, traces[0]!);
+      expect((await stat(tracePath)).mode & 0o777).toBe(0o600);
+      const trace = JSON.parse(await readFile(tracePath, "utf8")) as {
+        outcome: string;
+        conversation_ids: string[];
+        captured_at: string;
+        stdout_jsonl_tail: Record<string, unknown>[];
+        wrapper_classification: { message: string };
+      };
+      expect(trace.outcome).toBe("stream_ended_without_terminal");
+      expect(trace.conversation_ids).toEqual(["cid-a", "cid-b"]);
+      expect(trace.captured_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(trace.stdout_jsonl_tail).toEqual([
+        { type: "thread.started" },
+        { type: "error", error_code: "api_error" },
+      ]);
+      expect(trace.wrapper_classification.message).toBe(
+        "the peer reported an unspecified error",
+      );
     });
 
     it("runStreamed の reject は err を detail 文字列化して onTurnEnd に渡す (must-fix 2: raw文字列は message に出ないことは classifyInterAgentError 側で保証)", async () => {
       const turnEnds: {
+        turnToken: string;
         conversationIds: readonly string[];
         error?: { reason?: string; detail?: string };
       }[] = [];
@@ -2196,6 +2394,7 @@ describe("CodexHost", () => {
 
     it("並存する複数 inter-agent injection は各ターンの conversationIds だけを解決する (must-fix 1)", async () => {
       const turnEnds: {
+        turnToken: string;
         conversationIds: readonly string[];
         error?: { detail?: string };
       }[] = [];
@@ -2228,14 +2427,17 @@ describe("CodexHost", () => {
       host.close();
       await done;
 
-      expect(turnEnds).toEqual([
-        { conversationIds: ["cnv-a"], error: { detail: "boom" } },
-        { conversationIds: ["cnv-b"] },
-      ]);
+      expect(turnEnds).toHaveLength(2);
+      expect(turnEnds[0]).toMatchObject({
+        conversationIds: ["cnv-a"],
+        error: { detail: "boom" },
+      });
+      expect(turnEnds[1]).toMatchObject({ conversationIds: ["cnv-b"] });
+      expect(turnEnds.every((info) => typeof info.turnToken === "string")).toBe(true);
     });
 
     it("1回の send() に複数 cid を渡すと1ターンとして onTurnEnd に全件まとめて渡す (issue #221 段階3, 合流turn)", async () => {
-      const turnEnds: { conversationIds: readonly string[] }[] = [];
+      const turnEnds: { turnToken: string; conversationIds: readonly string[] }[] = [];
       const { client } = makeClient([[usageEvent()]]);
       const host = new CodexHost(CONFIG, {
         onState: () => {},
@@ -2259,9 +2461,11 @@ describe("CodexHost", () => {
       host.close();
       await done;
 
-      expect(turnEnds).toEqual([
-        { conversationIds: ["cnv-p", "cnv-q", "cnv-r"] },
-      ]);
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({
+        conversationIds: ["cnv-p", "cnv-q", "cnv-r"],
+      });
+      expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
     });
   });
 });
