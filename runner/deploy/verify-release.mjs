@@ -423,23 +423,33 @@ function checkBuildOutputLeaf(pkgRoot, realRoot, leafRel, label) {
  *  build-fixable by a simple command — that class was already closed in
  *  round 2 and is unchanged here.
  *
- *  ANCESTORS OF THE LINK ITSELF GET THE SAME TREATMENT (issue #259, ふじ
- *  review round 4). `node_modules` or `node_modules/@kaoiro` can itself be
- *  a dangling symlink — not merely absent — and the ONE `lstat` this
- *  function used to run on the full 3-segment `linkRel` follows every
- *  intermediate component, so that shape collapsed to a bare ENOENT
- *  indistinguishable from "install has not run", and was misclassified as
- *  the SAME install shortage an ordinary missing ancestor is. Measured
- *  directly (ふじ round 4): running the suggested `pnpm install` against
- *  that dangling ancestor exits 254 and leaves the symlink untouched, so a
- *  subsequent launch hits the identical exit-78 fault — the remedy did not
- *  fix the tree, the same "moved, not fixed" shape as the leaf findings
- *  above. `walkAncestors` (shared with `checkBuildOutputLeaf`) checks
- *  `node_modules` and `node_modules/@kaoiro` each on their own terms
- *  first: a symlink or file standing in for either is reported generically
- *  (no remedy suggested — installing will not repair it), while a
- *  genuinely ABSENT ancestor still means the ordinary "install has not
- *  run" case and keeps suggesting `pnpm install`, unchanged.
+ *  ANCESTORS OF THE LINK ITSELF GET THE SAME ATTENTION, NOT THE SAME
+ *  VERDICT (issue #259, ふじ review round 4 then round 5). `node_modules`
+ *  or `node_modules/@kaoiro` can itself be a dangling symlink — not
+ *  merely absent — and the ONE `lstat` this function used to run on the
+ *  full 3-segment `linkRel` follows every intermediate component, so that
+ *  shape collapsed to a bare ENOENT indistinguishable from "install has
+ *  not run", and was misclassified as the SAME install shortage an
+ *  ordinary missing ancestor is. Measured directly (ふじ round 4): running
+ *  the suggested `pnpm install` against that dangling ancestor exits 254
+ *  and leaves the symlink untouched, so a subsequent launch hits the
+ *  identical exit-78 fault — the remedy did not fix the tree, the same
+ *  "moved, not fixed" shape as the leaf findings above. `walkAncestors`
+ *  (shared with `checkBuildOutputLeaf`) checks `node_modules` and
+ *  `node_modules/@kaoiro` each on their own terms first, called here with
+ *  `resolveSymlinks=true` (its OWN policy, NOT `checkBuildOutputLeaf`'s
+ *  container one — see `walkAncestors`'s doc comment): a symlink ancestor
+ *  is RESOLVED and accepted when it stays inside the release and points
+ *  at an ordinary directory — unlike a build-output container such as
+ *  `dist`, `node_modules`/`node_modules/@kaoiro` CAN legitimately be a
+ *  healthy symlink, and an earlier version of this ancestor check
+ *  rejected ANY symlink unconditionally (mirroring the container's own
+ *  policy), which regressed exactly that legitimate shape — caught by
+ *  ふじ's production-path matrix (round 5). A DANGLING, out-of-bounds, or
+ *  non-directory ancestor resolution is still reported generically (no
+ *  remedy suggested — installing will not repair it), while a genuinely
+ *  ABSENT ancestor still means the ordinary "install has not run" case
+ *  and keeps suggesting `pnpm install`, unchanged.
  *
  *  Only once the link itself resolves cleanly and stays inside the
  *  boundary does a missing leaf beneath it become a genuine build
