@@ -32,6 +32,7 @@ import type {
 } from "@kaoiro/agent-common";
 import { ServerLink, loadConfig, parseCliArgs } from "@kaoiro/wrapper-core";
 import { CodexHost } from "./host.js";
+import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import { readCodexHistory } from "./history.js";
 import { codexSidecarPath } from "./rollout.js";
 import { effectiveNetworkAccess } from "./network_access.js";
@@ -279,6 +280,31 @@ async function main(): Promise<void> {
     );
   }
 
+  /** Queues an accepted inbound for the Codex engine's production batching
+   * state. Disposition branching lives in handleInterAgentMessage(); this
+   * function only owns the engine-specific queue and dispatch mechanics. */
+  function injectInterAgentMessage(envelope: Envelope, mode: InboundReplyMode): void {
+    const peer = envelope.agent_id;
+    const itemText = formatInboundMessage(envelope, { mode });
+    const itemBytes = Buffer.byteLength(itemText, "utf8");
+    let queue = pendingBatches.get(peer);
+    if (queue === undefined) {
+      queue = [];
+      pendingBatches.set(peer, queue);
+    }
+    let open = queue[queue.length - 1];
+    if (
+      open === undefined ||
+      !canAddToCoalescedBatch(open.items.length, open.bytes, itemBytes)
+    ) {
+      open = { items: [], bytes: 0 };
+      queue.push(open);
+    }
+    open.items.push({ envelope, mode });
+    open.bytes += itemBytes;
+    trySendNextBatch(peer);
+  }
+
   const onState = (envelope: Envelope): void => {
     printState(envelope);
     link?.send(envelope);
@@ -444,105 +470,17 @@ async function main(): Promise<void> {
     },
     onAttachChunk: (payload) => host.attachChunk(payload),
     onAttachClose: (uploadId) => host.attachClose(uploadId),
-    // issue #177 review round 2 (ふじ差し戻し): async — receiveInbound() may
-    // gate briefly on a concurrently in-flight done=true send_to_agent for
-    // the same conversation_id, so it must be awaited before this handler
-    // acts on the disposition (host.send / notePendingInjection). The
-    // caller (transport.ts) does not await onInterAgentMessage — an async
-    // handler here is still fire-and-forget from its perspective, exactly
-    // as the previous synchronous one was.
-    onInterAgentMessage: async (envelope) => {
-      // Recorded before anything consumes it (ADR-0051 D3-2 receive side).
-      recordInboundIa(envelope);
-      const disposition = (await interAgent?.receiveInbound(envelope)) ?? {
-        consumed: false,
-        inject: true,
-        mode: "reply-owed" as const,
-      };
-      if (disposition.consumed) {
-        process.stdout.write(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
-        return;
-      }
-      if (!disposition.inject) {
-        // issue #221 direction 1: `inject: false` has two distinct causes
-        // that must not share a log line (agent-common's `InboundDisposition`
-        // doc) — `mode === "terminal"` means this DID happen and the track
-        // above just learned `closed`, only that no reply is owed and no SDK
-        // turn should be spent on it; anything else here is AC9's late /
-        // stale / duplicate turn_number, which never happened at all
-        // (track untouched).
-        if (disposition.mode === "terminal") {
-          process.stdout.write(
-            `  inter_agent_message terminal, no reply owed: ${envelope.agent_id}\n`,
-          );
-        } else if (disposition.notice) {
-          // issue #222 欠陥3: notify the ORIGINAL sender (and resync its
-          // track — see InterAgentTool#receiveInbound's doc) instead of
-          // dropping this silently. Same AC10-bypassing pattern as
-          // resolveTurnEnd()'s notices below — this never goes through
-          // invoke()/#dispatch() either.
-          link?.send(disposition.notice);
-          process.stdout.write(
-            `  inter_agent_message stale/duplicate turn dropped, stale_turn notice sent: ${envelope.agent_id}\n`,
-          );
-        } else {
-          // `receiveInbound()` decided this stale no-notice exemption and
-          // supplied its display-ready reason. Keep that decision in
-          // agent-common: a later exemption must either provide a reason
-          // there or fail typecheck before this adapter can misreport it.
-          process.stdout.write(
-            `  inter_agent_message stale/duplicate turn dropped, no notice (${disposition.noticeSkipReason}): ${envelope.agent_id}\n`,
-          );
-        }
-        return;
-      }
-      process.stdout.write(`  inter_agent_message: ${envelope.agent_id}\n`);
-      // issue #131: this wrapper now owes a reply on the conversation.
-      // notePendingInjection() is called from trySendNextBatch() below, NOT
-      // here — issue #221 段階3 MF-1 (ふじレビュー差し戻し) moved the call
-      // from receipt time to dispatch time. Registering it here (at
-      // receipt) let a second same-cid message, queued into a LATER batch
-      // while this peer was still busy, overwrite an EARLIER batch's
-      // still-pending map entry before that earlier turn even completed —
-      // resolveTurnEnd() then deleted the wrong (later) registration when
-      // the earlier turn ended, silently no-op'ing the later turn's own
-      // resolution on failure. issue #177 AC8's terminal-exclusion still
-      // holds under the new call site: `batch.items` below never holds a
-      // terminal-disposition envelope, since `inject: false` already
-      // returned early above.
-      // issue #221 段階3: append to (or start) this peer's open batch, then
-      // try to send. A NEW batch is pushed onto the peer's queue both when
-      // none is open yet, and when the existing open one is already at
-      // either coalescing cap: `canAddToCoalescedBatch()` guards this so an
-      // open batch never exceeds the shared count/size limits, and the
-      // excess item starts the NEXT batch (its own eventual turn) rather
-      // than being dropped (クロエ裁定 2 — 捨てない).
-      // `trySendNextBatch()` itself decides whether this can go out now
-      // (peer free) or must wait (peer already busy on an earlier turn) —
-      // see that function's doc for why "busy" is `onTurnEnd`-driven, not
-      // `instructionChain`-driven.
-      const peer = envelope.agent_id;
-      const itemText = formatInboundMessage(envelope, {
-        mode: disposition.mode,
-      });
-      const itemBytes = Buffer.byteLength(itemText, "utf8");
-      let queue = pendingBatches.get(peer);
-      if (queue === undefined) {
-        queue = [];
-        pendingBatches.set(peer, queue);
-      }
-      let open = queue[queue.length - 1];
-      if (
-        open === undefined ||
-        !canAddToCoalescedBatch(open.items.length, open.bytes, itemBytes)
-      ) {
-        open = { items: [], bytes: 0 };
-        queue.push(open);
-      }
-      open.items.push({ envelope, mode: disposition.mode });
-      open.bytes += itemBytes;
-      trySendNextBatch(peer);
-    },
+    onInterAgentMessage: (envelope) =>
+      handleInterAgentMessage(
+        {
+          interAgent,
+          recordInboundIa,
+          send: (notice) => link?.send(notice),
+          inject: injectInterAgentMessage,
+          log: (line) => process.stdout.write(line),
+        },
+        envelope,
+      ),
   });
 
   const timeoutHandle = setTimeout(() => {

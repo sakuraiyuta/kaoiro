@@ -1,14 +1,11 @@
 // Adapter-level integration coverage for issue #177 review M4 (AC8/AC9/
-// AC15) and issue #221 direction 1: proves the glue sequence cli.ts's
-// onInterAgentMessage handler runs (receiveInbound() -> disposition branch
-// -> conditional host.send() / notePendingInjection()) against the REAL
+// AC15) and issue #221 direction 1: executes the production inbound handler
+// (receiveInbound() -> disposition branch -> conditional injection) against the REAL
 // AgentHost + REAL InterAgentTool, not just InterAgentTool in isolation
 // (which inter_agent.test.ts already covers exhaustively). Mirrors the
-// harness style of inter_agent_injection_failure.test.ts (issue #136) —
-// cli.ts itself has no test harness (its onInterAgentMessage handler lives
-// inline in run(), like every other ServerLink callback in that file), so
-// this reproduces the exact glue sequence directly against the two real
-// classes instead of constructing cli.ts.
+// harness style of inter_agent_injection_failure.test.ts (issue #136). The
+// handler is a production module with explicit transport/coordinator edges,
+// so this test imports and invokes it directly.
 //
 // A full 2-agent E2E (two live wrapper processes exchanging real network
 // traffic through a real server) would need new test infrastructure this
@@ -38,6 +35,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { AgentHost } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
+import { handleInterAgentMessage } from "../src/inter_agent_message_handler.js";
 import {
   InterAgentIngressGate,
   InterAgentTurnCoordinator,
@@ -90,54 +88,31 @@ function inboundEnvelope(
   };
 }
 
-/** Reproduces cli.ts's onInterAgentMessage glue — both engine
- *  adapters share this sequence (claude-code/src/cli.ts,
- *  codex/src/cli.ts): consumed waiters return early, a stale/duplicate
- *  turn is dropped before formatting or host.send() (AC9), and — issue
- *  #221 direction 1 — a terminal-mode inbound is now ALSO dropped before
- *  host.send() (it owes no reply, so no SDK turn is spent on it either;
- *  only the track above learns `closed`), never tracked via
- *  notePendingInjection (AC8) either way. Async since issue #177 review
- *  round 2 (ふじ差し戻し) made receiveInbound() async (it may gate briefly
- *  on a concurrently in-flight done=true send for the same
- *  conversation_id).
- *
- *  CAVEAT (issue #222 段階2 差し戻し MF-2, ふじ; structural gap tracked as
- *  issue #226): this function is a REIMPLEMENTATION of cli.ts's
- *  `!disposition.inject` branching (terminal / notice / no-notice skip)
- *  below — it does not call cli.ts's actual (inline, unexported inside
- *  `run()`) `onInterAgentMessage` handler. The two are kept in sync BY
- *  HAND; neither the type system nor any test enforces it. Concretely:
- *  deleting cli.ts's own `link?.send(disposition.notice)` line does NOT
- *  fail any test in this file today (confirmed by mutation-testing that
- *  exact deletion against both engines' full suites — 0 failures).
- *  `notices` (when passed) collects what THIS reproduction would hand to
- *  `link.send()`, so a test CAN pin drift in the reproduction itself —
- *  it CANNOT catch a regression in cli.ts's own real wiring. issue #226
- *  tracks closing this gap structurally (exporting/restructuring the
- *  real handler so tests can call it directly). */
+/** Calls the production Claude inbound handler. The test controls only its
+ * transport and injection edges; every disposition branch is production code. */
 async function runOnInterAgentMessageGlue(
   interAgent: InterAgentTool,
   host: AgentHost,
   envelope: Envelope,
   notices?: Envelope[],
 ): Promise<void> {
-  const disposition = await interAgent.receiveInbound(envelope);
-  if (disposition.consumed) return;
-  if (!disposition.inject) {
-    if (disposition.mode !== "terminal" && disposition.notice) {
-      notices?.push(disposition.notice);
-    }
-    return;
-  }
-  const payload = envelope.payload as unknown as InterAgentMessagePayload;
-  const text = `[glue] ${payload.body}`;
-  if (disposition.mode !== "terminal") {
-    interAgent.notePendingInjection(envelope);
-  }
-  const cids =
-    typeof payload.conversation_id === "string" ? [payload.conversation_id] : [];
-  void host.send(text, undefined, cids).catch(() => {});
+  await handleInterAgentMessage(
+    {
+      interAgent,
+      ingress: new InterAgentIngressGate(),
+      recordInboundIa: () => {},
+      send: (notice) => notices?.push(notice),
+      inject: (inbound) => {
+        const payload = inbound.payload as unknown as InterAgentMessagePayload;
+        const cids =
+          typeof payload.conversation_id === "string" ? [payload.conversation_id] : [];
+        interAgent.notePendingInjection(inbound);
+        void host.send(`[glue] ${payload.body}`, undefined, cids).catch(() => {});
+      },
+      log: () => {},
+    },
+    envelope,
+  );
 }
 
 describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () => {
@@ -301,6 +276,58 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
       tool.resolveTurnEnd(["cnv-normal"], { code: "api_error", message: "x" }),
     ).toHaveLength(1);
   });
+
+  it("issue #226: production handler は consumed reply を transport に流さない", async () => {
+    const sent: Envelope[] = [];
+    const injected = vi.fn();
+    const logs: string[] = [];
+    await handleInterAgentMessage(
+      {
+        interAgent: {
+          receiveInbound: async () => ({
+            consumed: true,
+            inject: false,
+            mode: "reply-owed",
+          }),
+        },
+        ingress: new InterAgentIngressGate(),
+        recordInboundIa: () => {},
+        send: (notice) => sent.push(notice),
+        inject: injected,
+        log: (line) => logs.push(line),
+      },
+      inboundEnvelope("cnv-consumed", 1),
+    );
+
+    expect(injected).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    expect(logs).toEqual(["  inter_agent_message reply consumed: peer.agent\n"]);
+  });
+
+  it("issue #226: production handler は terminal inbound を明示して注入しない", async () => {
+    const injected = vi.fn();
+    const logs: string[] = [];
+    await handleInterAgentMessage(
+      {
+        interAgent: {
+          receiveInbound: async () => ({
+            consumed: false,
+            inject: false,
+            mode: "terminal",
+          }),
+        },
+        ingress: new InterAgentIngressGate(),
+        recordInboundIa: () => {},
+        send: () => {},
+        inject: injected,
+        log: (line) => logs.push(line),
+      },
+      inboundEnvelope("cnv-terminal-branch", 1),
+    );
+
+    expect(injected).not.toHaveBeenCalled();
+    expect(logs).toEqual(["  inter_agent_message terminal, no reply owed: peer.agent\n"]);
+  });
 });
 
 /** Holds the CURRENT turn's SDK "thinking" open until the test calls
@@ -388,36 +415,17 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   });
 
   async function receive(envelope: Envelope): Promise<void> {
-    // Match cli.ts: transport does not await this handler, so it leases the
-    // handoff before receiveInbound() can await its pending-done gate.
-    const lease = ingressGate.begin();
-    try {
-      if (ingressGate.isTerminal(lease)) {
-        terminalIngressSkips.push(`before_receive:${envelope.agent_id}`);
-        return;
-      }
-      const disposition = await interAgent.receiveInbound(envelope);
-      if (ingressGate.isTerminal(lease)) {
-        terminalIngressSkips.push(`after_receive:${envelope.agent_id}`);
-        return;
-      }
-      if (disposition.consumed) return;
-      if (!disposition.inject) {
-        // issue #222 段階2 差し戻し MF-2 (ふじ): mirrors cli.ts's
-        // onInterAgentMessage branching (see `runOnInterAgentMessageGlue`'s
-        // CAVEAT above — the same reimplementation-not-invocation gap
-        // applies here too, tracked as issue #226). Deleting production's
-        // `link?.send(disposition.notice)` wiring does NOT fail any test
-        // using THIS harness today either.
-        if (disposition.mode !== "terminal" && disposition.notice) {
-          notices.push(disposition.notice);
-        }
-        return;
-      }
-      coordinator.receive(envelope, disposition.mode);
-    } finally {
-      ingressGate.finish(lease);
-    }
+    await handleInterAgentMessage(
+      {
+        interAgent,
+        ingress: ingressGate,
+        recordInboundIa: () => {},
+        send: (notice) => notices.push(notice),
+        inject: (inbound, mode) => coordinator.receive(inbound, mode),
+        log: (line) => terminalIngressSkips.push(line),
+      },
+      envelope,
+    );
   }
 
   function onTurnEnd(
@@ -644,7 +652,9 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     expect(ingressSettled).toBe(true);
     expect(ingressFailure).toBeUndefined();
     expect(harness.sentBatches).toEqual([]);
-    expect(harness.terminalIngressSkips).toEqual(["after_receive:peer.agent"]);
+    expect(harness.terminalIngressSkips).toEqual([
+      "  inter_agent_message terminal ingress skipped after receive: peer.agent\n",
+    ]);
   });
 
   it("turn が in-flight な間に同一peerから連続到着したメッセージは次の turn へ合流する", async () => {
