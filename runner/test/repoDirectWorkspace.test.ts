@@ -245,6 +245,122 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     expect(result.stdout).toContain("stub cli.js started");
   });
 
+  it("runner 自身の build output leaf が directory なら build shortage ではなく分類される (ふじ round4 must-fix 1)", () => {
+    // ふじ round4 must-fix 1: checkBuildOutputLeaf は containment (realpath
+    // が release 内へ resolve するか) しか検査しておらず、resolve 先が
+    // ORDINARY FILE かどうかは一度も見ていなかった。ディレクトリも
+    // containment check をそのまま通過する。実測(修正前の HEAD 3666b5e に
+    // 対して自分で再現): dist/cli.js をディレクトリに置き換えると
+    // verify-release.mjs は exit 0 で成功と判定し、shim はそのまま
+    // `node dist/cli.js` を実行して Node 自身の生の MODULE_NOT_FOUND
+    // スタックトレースで exit 1 になった — 78 ではないので systemd の
+    // RestartPreventExitStatus=78 は効かず、しかも診断は classified
+    // VerifyError ではなく生の Node crash だった。
+    const leaf = join(runner, "dist", "cli.js");
+    rmSync(leaf, { force: true });
+    mkdirSync(leaf);
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    // 生の Node crash ではなく、分類された VerifyError の診断であること。
+    expect(result.stderr).not.toContain("MODULE_NOT_FOUND");
+    expect(result.stderr).not.toContain("Node.js v");
+    expect(result.stderr).toContain("is not an ordinary file");
+    // directory を置き換えているのは「未 build」ではなく破損なので、
+    // build を提案してはならない。
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).toContain("NOT a missing build");
+  });
+
+  it("workspace 越しの build output leaf が directory なら launch が黙って成功しない (ふじ round4 must-fix 1)", () => {
+    // ふじ round4 must-fix 1 のもう一方: wrapper 側 (node_modules/@kaoiro/
+    // <pkg>/dist/cli.js) が directory でも、runner 自身の dist/cli.js は
+    // 健全なままなので launch 自体は起動シーケンスを最後まで完走してしまう
+    // (wrapper の cli.js はセッション spawn 時にしか実行されないため)。
+    // 実測(修正前の HEAD 3666b5e に対して自分で再現): このケースは exit 0
+    // で "stub cli.js started" まで出力していた — 起動検証が本来検出
+    // すべき壊れた engine を見逃していた。
+    const leaf = join(runner, "node_modules", "@kaoiro", "claude-code", "dist", "cli.js");
+    rmSync(leaf, { force: true });
+    mkdirSync(leaf);
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("is not an ordinary file");
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).toContain("NOT a missing build");
+  });
+
+  it("workspace 越しの build output leaf が symlink-to-directory でも同様に見逃されない (ふじ round4 must-fix 1)", () => {
+    // 上のテストの symlink 版。leaf 自体は「dangling symlink」ではなく
+    // 「healthy に resolve するが、resolve 先が directory」なので、round4
+    // で追加済みの dangling-leaf 判定 (lstatType による ENOENT 事前捕捉)
+    // では捕まらない — 別経路の同クラス欠陥であることの pin。
+    const leaf = join(runner, "node_modules", "@kaoiro", "claude-code", "dist", "cli.js");
+    const leafDir = join(runner, "node_modules", "@kaoiro", "claude-code", "dist");
+    rmSync(leaf, { force: true });
+    symlinkSync(".", leaf); // resolves to leafDir itself — a directory
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("is not an ordinary file");
+    // sanity: the symlink really does resolve to the directory, not dangle.
+    expect(realpathSync(leaf)).toBe(realpathSync(leafDir));
+  });
+
+  it("node_modules/@kaoiro が dangling symlink なら install shortage と誤分類されない (ふじ round4 must-fix 2)", () => {
+    // ふじ round4 must-fix 2: checkWorkspaceLinkedSentinel は
+    // node_modules/@kaoiro/<pkg> という3セグメントのフルパスを一度に
+    // lstat していたため、途中の node_modules/@kaoiro 自体が dangling
+    // symlink の場合でも lstat は ENOENT を返し(lstat は最終要素以外の
+    // 中間要素を必ずたどるため)、「final link が単に missing」なケース
+    // と区別できず install shortage (exit 72) に誤分類していた。
+    // 実測(ふじ、issue コメント3332): 案内どおり pnpm install を実行
+    // しても exit 254 で失敗し、dangling symlink はそのまま残ったまま
+    // 再度 shim を起動すると再び exit 78 になる — 提案された remedy は
+    // tree を修復しなかった。自分でも再現した: 修正前の HEAD 3666b5e に
+    // 対してこのケースを起こすと exit 72 相当のメッセージ
+    // (「workspace dependency link... pnpm install」) が出ていた。
+    const scopeDir = join(runner, "node_modules", "@kaoiro");
+    rmSync(scopeDir, { recursive: true, force: true });
+    symlinkSync("missing-target-anywhere", scopeDir);
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("is not an ordinary directory");
+    // install は正しい remedy ではない (dangling symlink はそのまま残る
+    // ため) -- 提案してはならない。
+    expect(result.stderr).not.toContain("pnpm install");
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).toContain("NOT a missing build");
+  });
+
+  it("node_modules 自体が dangling symlink でも同様に誤分類されない (ふじ round4 must-fix 2、より浅い祖先)", () => {
+    // 上のテストより一段浅い祖先 (node_modules 自体) が dangling symlink
+    // のケース。walkAncestors は node_modules と node_modules/@kaoiro の
+    // 両方を個別に検査するため、どちらの深さで壊れていても同じ扱いになる
+    // ことの pin。
+    const nmDir = join(runner, "node_modules");
+    rmSync(nmDir, { recursive: true, force: true });
+    symlinkSync("missing-target-anywhere", nmDir);
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("is not an ordinary directory");
+    expect(result.stderr).not.toContain("pnpm install");
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+  });
+
   it("workspace link が plain file なら未捕捉例外にならず分類される (内部レビュー指摘)", () => {
     // 内部review (redesign後の round1 assessment) must-fix:
     // checkWorkspaceLinkedSentinel は lstatType(linkPath)==="missing" しか
