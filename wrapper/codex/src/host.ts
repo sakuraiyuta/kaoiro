@@ -275,7 +275,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** The SDK types describe well-formed JSONL, but a malformed external event
- * must be traceable without entering the production adapter path. */
+ * must be traceable without entering the production adapter path.
+ *
+ * `runStreamed()` yields the Codex CLI's JSONL through `JSON.parse`. That
+ * boundary creates data-only objects, so the property reads below cannot
+ * invoke accessors or proxies. If this input ever gains another producer
+ * (especially hand-constructed objects), wrap this gate before relying on
+ * the same fail-soft guarantee. */
 function isUsableThreadEvent(event: unknown): event is ThreadEvent {
   if (!isRecord(event) || typeof event.type !== "string") return false;
   switch (event.type) {
