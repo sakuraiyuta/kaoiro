@@ -4,6 +4,7 @@
 //
 //   ?view=lobby&role=operator|viewer[&taskRing=1]
 //   ?view=detail[&pending=permission|question][&attention=1]
+//     [&mountDelay=ms][&expandOrigin=1]
 //   ?view=overlay&overlay=dialog|drawer
 //   ?view=app        — real App.svelte behind fetch mocks (header chrome)
 import { mount } from "svelte";
@@ -61,6 +62,9 @@ if (view === "app") {
   if (scrollTarget !== null) scenario.scrollTargetIndex = Number(scrollTarget);
   const scrollDelay = params.get("scrollDelay");
   if (scrollDelay !== null) scenario.scrollTargetDelayMs = Number(scrollDelay);
+  const mountDelay = params.get("mountDelay");
+  if (mountDelay !== null) scenario.mountDetailAfterMs = Number(mountDelay);
+  if (params.get("expandOrigin") === "1") scenario.expandFromOrigin = true;
   const agentSwitchTarget = params.get("agentSwitchTarget");
   if (agentSwitchTarget !== null) {
     scenario.agentSwitchTargetIndex = Number(agentSwitchTarget);

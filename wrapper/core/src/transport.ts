@@ -373,11 +373,29 @@ export interface ServerLinkOptions {
    *  never fires this — that message is not restorable, which D7 (e)
    *  accepts. */
   onInterAgentAck?: (envelope: Envelope, stamp: [number, number]) => void;
+  /** Terminal reset failure for this wrapper topic. The requesting process
+   *  normally exits on success, so this is intentionally only the failure
+   *  leg: it lets an old wrapper that could not be terminated tell its agent
+   *  that the accepted reservation did not become a reset (#258). */
+  onSessionResetFailed?: (failure: SessionResetFailure) => void;
   /** Hydration verdict from the join reply (ADR-0051 D2). Called on EVERY
    *  (re)join, with `null` when the reply carried no `hydration` key — a
    *  legacy server, where the wrapper keeps its old startup-replay
    *  behaviour. */
   onHydration?: (verdict: HydrationVerdictMessage | null) => void;
+}
+
+/** Server acknowledgement of a self-initiated reset reservation. Acceptance
+ *  is not completion: retain this id to correlate a later failure push. */
+export interface SessionResetAccepted {
+  requestId: string;
+}
+
+/** Narrowed server -> wrapper terminal failure. `reason` is a lifecycle
+ *  vocabulary value, never free server text because it reaches a model turn. */
+export interface SessionResetFailure {
+  requestId: string;
+  reason: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -402,6 +420,16 @@ const SESSION_RESET_ERROR_REASONS: ReadonlySet<string> = new Set([
   "runner_unavailable",
 ]);
 
+/** Lifecycle results use the broader closed vocabulary. They are delivered
+ *  only as server-authored pushes on wrapper:<agent>, but still narrow them
+ *  before they reach the reset coordinator and its model-facing notice. */
+const SESSION_RESET_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  ...SESSION_RESET_ERROR_REASONS,
+  "spawn_failed",
+  "rollback_failed",
+  "timeout",
+]);
+
 /** Collapses to this when the reply carries no recognised reason. */
 export const SESSION_RESET_UNKNOWN_REASON = "unknown_error";
 
@@ -419,6 +447,28 @@ function sessionResetErrorReason(payload: unknown): string {
     }
   }
   return SESSION_RESET_UNKNOWN_REASON;
+}
+
+function sessionResetAcceptedFrom(
+  payload: unknown,
+): SessionResetAccepted | null {
+  if (!isObject(payload) || typeof payload.request_id !== "string") return null;
+  return payload.request_id === "" ? null : { requestId: payload.request_id };
+}
+
+function sessionResetFailureFrom(payload: unknown): SessionResetFailure | null {
+  if (!isObject(payload)) return null;
+  const requestId = payload.request_id;
+  const reason = payload.reason;
+  if (
+    typeof requestId !== "string" ||
+    requestId === "" ||
+    typeof reason !== "string" ||
+    !SESSION_RESET_FAILURE_REASONS.has(reason)
+  ) {
+    return null;
+  }
+  return { requestId, reason };
 }
 
 /** `isObject` answers true for arrays (`typeof [] === "object"`), which the
@@ -1035,6 +1085,14 @@ export class ServerLink {
       if (!isObject(payload) || payload.type !== "inter_agent_message") return;
       options.onInterAgentMessage?.(payload as unknown as Envelope);
     });
+    // #258: a self-reset's request reply proves only that the server acquired
+    // its lock. If the runner later cannot terminate this old wrapper, the
+    // server sends the terminal failure back to this topic. Correlation stays
+    // in SessionResetCoordinator; a fresh wrapper ignores an old request id.
+    this.#channel.on("session_reset_failed", (payload: unknown) => {
+      const failure = sessionResetFailureFrom(payload);
+      if (failure !== null) options.onSessionResetFailed?.(failure);
+    });
 
     // Re-announce the latest state and active tasks after a reconnect: the
     // server keeps them in memory only, and WrapperChannel discards TaskStates
@@ -1332,22 +1390,34 @@ export class ServerLink {
    *  ever reset itself. `reason` travels solely in this payload; the server
    *  copies it to the operator-facing lifecycle broadcast and nowhere else.
    *
-   *  Resolves when the server accepted the request (the reset itself then
-   *  runs through the ordinary runner path and this process is replaced).
+   *  Resolves when the server accepted the request, including its opaque
+   *  request_id. That is a reservation acknowledgement, not reset completion:
+   *  a later `session_reset_failed` push is correlated through this id if the
+   *  old wrapper survives the runner's termination attempt (#258).
    *  Rejects with the reply's closed-vocabulary reason — `agent_busy`,
    *  `session_reset_pending`, `unsupported_session_reset` or
    *  `runner_unavailable` (protocol.md `session_reset_request`) — or with
    *  `timeout` when the push itself never got a reply, or `unknown_error`
    *  for anything outside that contract. The caller must distinguish these:
    *  a rejection is NOT proof that no reset started. */
-  requestSessionReset(mode: "new" | "clear", reason?: string): Promise<void> {
+  requestSessionReset(
+    mode: "new" | "clear",
+    reason?: string,
+  ): Promise<SessionResetAccepted> {
     return new Promise((resolve, reject) => {
       this.#channel
         .push("session_reset_request", {
           mode,
           ...(reason !== undefined ? { reason } : {}),
         })
-        .receive("ok", () => resolve())
+        .receive("ok", (payload: unknown) => {
+          const accepted = sessionResetAcceptedFrom(payload);
+          if (accepted === null) {
+            reject(new Error(SESSION_RESET_UNKNOWN_REASON));
+            return;
+          }
+          resolve(accepted);
+        })
         .receive("error", (payload: unknown) => {
           reject(new Error(sessionResetErrorReason(payload)));
         })

@@ -115,20 +115,23 @@
   } = $props();
 
   // Expand the detail from the tile that opened it (#36): scale up from the
-  // tile's viewport centre. Honours prefers-reduced-motion by skipping motion.
+  // tile's viewport centre. Timeline rows have no originating tile geometry;
+  // App.svelte deliberately passes origin=null for that route, so it must
+  // enter at its final layout instead of briefly applying a scale transform.
+  // That keeps a pending timeline jump out of the transition coordinate space.
+  // Honours prefers-reduced-motion by skipping motion as well.
   function expandFrom(
     node: HTMLElement,
     params: { origin: { x: number; y: number } | null },
   ) {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (params.origin) {
-      const rect = node.getBoundingClientRect();
-      node.style.transformOrigin = `${params.origin.x - rect.left}px ${
-        params.origin.y - rect.top
-      }px`;
-    }
+    if (!params.origin || reduce) return { duration: 0 };
+    const rect = node.getBoundingClientRect();
+    node.style.transformOrigin = `${params.origin.x - rect.left}px ${
+      params.origin.y - rect.top
+    }px`;
     return {
-      duration: reduce ? 0 : 240,
+      duration: 240,
       css: (t: number) => `opacity: ${t}; transform: scale(${0.6 + 0.4 * t});`,
     };
   }
@@ -1503,10 +1506,15 @@
       return ok;
     };
     if (!logEl) return finish(false);
-    const findEntry = (): HTMLElement | undefined =>
-      [...logEl!.querySelectorAll<HTMLElement>("[data-envelope-key]")].find(
+    const findEntry = (): HTMLElement | undefined => {
+      const envelope = [...logEl!.querySelectorAll<HTMLElement>("[data-envelope-key]")].find(
         (candidate) => candidate.dataset.envelopeKey === targetKey,
       );
+      // An envelope wrapper can start with a date divider when #184 expands
+      // the render window. Land on the visible message body, not that wrapper:
+      // the operator's timeline selection denotes the message itself.
+      return envelope?.querySelector<HTMLElement>(".msg") ?? envelope;
+    };
     const entry = findEntry();
     if (!entry) {
       // clear/reset can remove a previously selected target. Do not leave
@@ -1519,9 +1527,11 @@
     // left temporary padding in place; including it would under/over-estimate
     // the next target's needed tail.
     resetTimelineScrollTail();
-    const entryTop =
-      entry.getBoundingClientRect().top - logEl.getBoundingClientRect().top +
-      logEl.scrollTop;
+    // `.log` is the offset parent (see its `position: relative` rule). Unlike
+    // a bounding rect delta, offsetTop is in the scroll container's unscaled
+    // layout coordinate space, so expandFrom's temporary scale cannot distort
+    // the requested scroll position.
+    const entryTop = entry.offsetTop;
     const desiredTop = Math.max(0, entryTop - TIMELINE_SCROLL_TOP_GAP_PX);
     const naturalMaxTop = Math.max(0, logEl.scrollHeight - logEl.clientHeight);
     // Existing content below the row already supplies some scroll range;
@@ -1536,9 +1546,7 @@
     if (!settledEntry) return finish(false);
     const top = Math.max(
       0,
-      settledEntry.getBoundingClientRect().top - logEl.getBoundingClientRect().top +
-        logEl.scrollTop -
-        TIMELINE_SCROLL_TOP_GAP_PX,
+      settledEntry.offsetTop - TIMELINE_SCROLL_TOP_GAP_PX,
     );
     logEl.scrollTo({ top, behavior: "smooth" });
     stickToBottom = false;
@@ -4276,6 +4284,10 @@
   }
 
   .log {
+    /* Timeline navigation reads child offsetTop. Establish this stable,
+       untransformed offset parent instead of mixing viewport rects with
+       scroll coordinates. */
+    position: relative;
     flex: 1;
     min-height: 0;
     display: flex;

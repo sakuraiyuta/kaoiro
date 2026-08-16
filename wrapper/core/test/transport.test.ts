@@ -689,7 +689,7 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
     mock.pushes = [];
   });
 
-  function push(): { link: ServerLink; pending: Promise<void> } {
+  function push(): { link: ServerLink; pending: Promise<{ requestId: string }> } {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
     });
@@ -701,8 +701,8 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
     const { pending } = push();
     expect(mock.lastPush?.event).toBe("session_reset_request");
     expect(mock.lastPush?.payload).toEqual({ mode: "new", reason: "理由" });
-    mock.lastPush!.receivers.get("ok")!({});
-    await expect(pending).resolves.toBeUndefined();
+    mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+    await expect(pending).resolves.toEqual({ requestId: "rs-1" });
   });
 
   it("reason 省略時は field ごと送らない", () => {
@@ -711,6 +711,27 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
     });
     void link.requestSessionReset("clear").catch(() => {});
     expect(mock.lastPush?.payload).toEqual({ mode: "clear" });
+  });
+
+  it("request_id の無い ok は受理完了と扱わず unknown_error にする (#258)", async () => {
+    const { pending } = push();
+    mock.lastPush!.receivers.get("ok")!({});
+    await expect(pending).rejects.toThrow("unknown_error");
+  });
+
+  it("terminal failure は request_id と closed vocabulary を narrow して relay する (#258)", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onSessionResetFailed: (failure) => seen.push(failure),
+    });
+    emit("session_reset_failed", { request_id: "rs-1", reason: "timeout" });
+    emit("session_reset_failed", {
+      request_id: "rs-2",
+      reason: "free text must not reach the model",
+    });
+    emit("session_reset_failed", { request_id: "", reason: "timeout" });
+    expect(seen).toEqual([{ requestId: "rs-1", reason: "timeout" }]);
   });
 
   it.each([

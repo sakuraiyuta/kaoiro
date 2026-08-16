@@ -541,6 +541,13 @@ async function main(): Promise<void> {
     onHydration: (verdict) => replayer.onVerdict(verdict),
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
+    // #258: acceptance of request_session_reset only means the server took
+    // the lock. If this old wrapper survives the runner's termination path,
+    // correlate the terminal failure and inject the fixed failure notice into
+    // the still-live SDK session rather than leaving the agent believing it
+    // was reset.
+    onSessionResetFailed: ({ requestId, reason }) =>
+      sessionReset.onResetFailed(requestId, reason),
     onInstruction: (text, attachmentIds) => {
       const tag = attachmentIds && attachmentIds.length > 0
         ? `instruction(+${attachmentIds.length})`

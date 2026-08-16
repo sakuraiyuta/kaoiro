@@ -21,7 +21,7 @@
   const connection = stubConnection();
   let closed = $state(false);
 
-  // issue #237: ResponseTimeline クリック(#122)を3通りの経路で再現する。
+  // issue #237/#260: ResponseTimeline クリック(#122)を3通りの経路で再現する。
   // 1. scrollTargetDelayMs 未指定(immediate) — マウント時点で
   //    scrollToEntryKey が既に確定している経路。
   // 2. scrollTargetDelayMs 指定 — 既に開いている同一 agent の detail で
@@ -66,6 +66,15 @@
       ? conversationEntryKey(logs[scenario.scrollTargetIndex])
       : null;
   let scrollToEntryKey = $state<string | null>(immediateTargetKey);
+  // #260: A timeline click sets the target before App conditionally mounts
+  // AgentDetail. Keep that ordering in the harness; initial Svelte rendering
+  // alone would not run the component's intro transition.
+  let detailMounted = $state(scenario.mountDetailAfterMs === undefined);
+  if (scenario.mountDetailAfterMs !== undefined) {
+    setTimeout(() => {
+      detailMounted = true;
+    }, scenario.mountDetailAfterMs);
+  }
   if (scenario.scrollTargetIndex !== undefined && scenario.scrollTargetDelayMs !== undefined) {
     const targetIndex = scenario.scrollTargetIndex;
     setTimeout(() => {
@@ -99,16 +108,21 @@
   </main>
 {:else}
   <main class="harness-main">
-    <AgentDetail
-      {envelope}
-      {logs}
-      {agents}
-      {connection}
-      {manifest}
-      {scrollToEntryKey}
-      activeTaskCount={scenario.taskRing ? 1 : 0}
-      onClose={() => (closed = true)}
-    />
+    {#if detailMounted}
+      <AgentDetail
+        {envelope}
+        {logs}
+        {agents}
+        {connection}
+        {manifest}
+        origin={scenario.expandFromOrigin ? { x: 120, y: 120 } : null}
+        {scrollToEntryKey}
+        activeTaskCount={scenario.taskRing ? 1 : 0}
+        onClose={() => (closed = true)}
+      />
+    {:else}
+      <p data-testid="detail-pending-mount">detail を開いています…</p>
+    {/if}
   </main>
 {/if}
 

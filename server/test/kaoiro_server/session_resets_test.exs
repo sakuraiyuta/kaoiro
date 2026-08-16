@@ -376,6 +376,7 @@ defmodule KaoiroServer.SessionResetsTest do
       on_exit(fn -> stop_quietly(pid) end)
       agent_id = "a.timeout-waiter-#{System.unique_integer([:positive])}"
       KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
+      KaoiroServerWeb.Endpoint.subscribe("wrapper:#{agent_id}")
 
       assert {:ok, request_id, _} =
                SessionResets.check_and_acquire(agent_id, "new", "idle", "old", sr)
@@ -390,6 +391,14 @@ defmodule KaoiroServer.SessionResetsTest do
         event: "session_reset_failed",
         payload: %{"agent_id" => ^agent_id, "request_id" => ^request_id, "reason" => "timeout"}
       }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: topic,
+        event: "session_reset_failed",
+        payload: %{"request_id" => ^request_id, "reason" => "timeout"}
+      }
+
+      assert topic == "wrapper:" <> agent_id
     end
 
     test "ok=true は :awaiting_connect に移行 (broadcast はまだ、lock は保持)",
