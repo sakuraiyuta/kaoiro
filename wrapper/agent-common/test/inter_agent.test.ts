@@ -1660,9 +1660,17 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     expect(
       descriptors.find((d) => d.name === "list_agents")?.description,
     ).toContain("engine/model/effort when reported");
-    expect(descriptors.find((d) => d.name === "whoami")?.description).toContain(
-      "engine-neutral permission",
-    );
+    const whoamiDescription = descriptors.find(
+      (d) => d.name === "whoami",
+    )?.description;
+    expect(whoamiDescription).toContain("engine-neutral permission");
+    // issue #254: this is a user-facing protocol contract, not incidental
+    // prose. Keep the rate-limit shape, cached-time semantics, reset hint,
+    // and absent=unknown rule visible to the calling agent.
+    expect(whoamiDescription).toContain("`rate_limits`");
+    expect(whoamiDescription).toContain("LAST turn");
+    expect(whoamiDescription).toContain("`resets_at`");
+    expect(whoamiDescription).toContain("ABSENT `rate_limits` means unknown");
     expect(
       descriptors.find((d) => d.name === "list_agents")?.description,
     ).toContain("never spawn a same-named internal sub-agent");

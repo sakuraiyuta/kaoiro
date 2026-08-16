@@ -141,6 +141,12 @@ function snapshotFromSlot(slot: unknown): {
   if (typeof s.resets_at === "number" && Number.isFinite(s.resets_at)) {
     snapshot.resets_at = s.resets_at;
   }
+  // A window name alone is not an observed limit. Keeping this out of the
+  // map preserves the protocol's absent = unknown contract for whoami and
+  // state_change.ext when Codex emits an incomplete token_count slot.
+  if (snapshot.utilization === undefined && snapshot.resets_at === undefined) {
+    return null;
+  }
   return { window, snapshot };
 }
 

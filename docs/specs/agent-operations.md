@@ -52,12 +52,13 @@ kaoiro のバックログは、複数のエージェントが同一 work tree �
   文面へ列挙する — diff の自己レビュー、該当範囲の typecheck / test、
   bugfix なら mutation または negative control による修正の実効性の証明、
   外部レビュー。
-- 自セッションの rate limit 使用率は自分では見えない(`whoami` は context の
-  み)。`list_agents` の peer envelope に載る `rate_limits` を読む。他 peer の
+- 自セッションの rate limit 使用率は `whoami` の `rate_limits` を読む
+  ([#254](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/254))。
+  `list_agents` は呼び出し元を除外するので、自己観測はここだけである。peer の
   値を自分の代用にできるのは quota pool の共有が確認できている場合だけで、
   engine 名が同じことは共有の証拠にならない。フィールドの読み方(absent は
-  unknown、snapshot は peer の最終 turn 時点、`resets_at` 通過後は stale)は
-  `list_agents` の tool description が正本。
+  unknown、snapshot は最終 turn 時点、`resets_at` 通過後は stale)は
+  `list_agents` の tool description が正本で、`whoami` 側も同じ規則。
 - 委任指示に自分の技術的前提を含めるときは「実測して判断し、判断と根拠を
   報告に含めること」を明示する。断定形だけで渡すと、前提が誤っていても
   そのまま実装される。

@@ -1075,14 +1075,16 @@ wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allow
 | Tool (full name) | 用途 | 経路 |
 |---|---|---|
 | `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧を取得。宛先解決 (id / persona name / state) に加え、委譲先選定のための実行特性 (engine / model / effort) と稼働状況 (context / session_started_at / turns / last_activity_at / conversation / rate_limits) を返す | wrapper → server の `directory_request` を呼び、reply の `agents` を narrow して返す |
-| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd / `context` を返す | wrapper のローカル `EffectiveStatusSnapshot` と host の context キャッシュを読むのみ。server round-trip なし |
+| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd / `context` / `rate_limits` と、利用可能な場合は `inter_agent_delivery` を返す | identity / 実効設定 / `context` / `rate_limits` は wrapper のローカル `EffectiveStatusSnapshot` と host cache から読む。配送 status 照会が配線された `whoami` は wrapper → server の `delivery_status_request` で recipient ledger を読むため server round-trip を行い、応答が得られた場合だけ `inter_agent_delivery` を載せる |
 
-`whoami` の実効設定は state envelope と別に組み立てず、各 host が持つ共通
-`EffectiveStatusSnapshot` から投影する。`model` / `effort` / source と
-`network_access` は既知の場合だけ返す。`permission` は engine-neutral な
-`{sandbox, approval}`、`permission_mode` / `fast_mode` は Claude 互換 field
+`whoami` の local field は state envelope と別に組み立てず、各 host が持つ共通
+`EffectiveStatusSnapshot` と host cache から投影する。`model` / `effort` /
+source と `network_access` は既知の場合だけ返す。`permission` は engine-neutral
+な `{sandbox, approval}`、`permission_mode` / `fast_mode` は Claude 互換 field
 として取得済みの場合だけ併記する。SDK / rollout がまだ値を報告していない field
-は stale 値や推測値で埋めず、key 自体を省略する。
+は stale 値や推測値で埋めず、key 自体を省略する。これら local field と異なり、
+`inter_agent_delivery` は下記の server ledger 観測であり、同じ `whoami` の呼び出し
+でも常に返ることを約束しない。
 
 `context` は phase-28 A2 ([#168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168))
 の追補で、自分の context window 使用量 `{used_tokens, max_tokens,
@@ -1104,6 +1106,41 @@ used_percentage}` を返す。peer が `list_agents` で読む `context` と
   「直前の値がもう有効でない」も意味する
 - tool 説明では「必要なときに見る」に留め、常時参照を促さない
   (context anxiety 回避。#168 comment-2287 の決定 P3)
+
+`inter_agent_delivery` は issue #247 の追補で、server が持つ recipient-local な
+配送確認 ledger `{issued_seq, acked_seq, pending_since?}` を返す。これは local
+snapshot ではない。wrapper は `delivery_status_request` を server へ送り、その
+応答が得られた場合だけ field を載せる。旧 server / capability 未対応、切断、または
+照会失敗では key ごと省略し、**absent = unknown** とする。これは「SDK turn 開始
+まで未確認の配送」を観測する ledger であって、配送保証・再送 queue・失敗の推測では
+ない。
+
+`rate_limits` は [#254](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/254)
+の追補で、自分の rate limit window を `{<window>: {status?, utilization?,
+resets_at?}}` で返す。peer が `list_agents` で読む `rate_limits` と
+**shape も semantics も同一** (`DirectoryRateLimitWindow`)。
+
+- **これは表示の穴ではなく自己監視の穴だった**。`list_agents` は呼び出し元を
+  除外するため、「7-day 使用率 N% で新規作業を止めよ」と指示された agent が
+  その数値を観測する手段が無かった。2026-08-16 の運用で 3 名が当たり、いずれも
+  director の `list_agents` 転記で代替している。`whoami` はこの唯一の
+  自己観測点になる
+- 値は **host 自身の最新スナップショット**から読む。server のコピーではない —
+  これらの値を生産しているのは wrapper 側なので、host の map は directory が
+  返しうる何よりも新しいか同じである。したがって peer が見る値と食い違うのは
+  配送差の一時的なずれだけで、実装として二経路にはしない
+  (テストで **同値**を固定している。同形では検出できない)
+- **`rate_limits` の取得自体は server round-trip を起こさない**。`whoami` が
+  `rate_limits` を返すだけなら host cache を読むだけである。ただし同じ tool call が
+  `inter_agent_delivery` も観測するときは、前節どおり独立した
+  `delivery_status_request` が server へ送られる。「whoami は常に round-trip なし」
+  という契約ではない
+- **snapshot は最終 turn 時点**で、idle 中は更新されない。`resets_at`
+  (Unix 秒) を現在時刻と突き合わせ、通過後は `utilization` / `status` を
+  信用しない。読み方の正本は `list_agents` の tool description と揃える
+- engine が一度も報告していない間は key ごと省略する。**absent = unknown**
+  であり「無制限」ではない (claude: 初回 usage refresh 前、codex: rollout
+  tail が存在しない spawn 直後)
 
 #### セッション操作ツール — `request_compact` (phase-28 B2)
 

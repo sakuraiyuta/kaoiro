@@ -761,6 +761,17 @@ export class AgentHost implements EngineAdapter {
     // peers already read via list_agents. Null (never fetched, or dropped by
     // a model switch) omits the key so absent keeps meaning unknown.
     if (this.#context !== null) out.context = this.#context;
+    // issue #254: the agent's own rate limits, read from the SAME map that
+    // feeds ext.rate_limits, so the two agree at the moment this host stamps
+    // them. That is the whole claim — a peer's copy travels through the
+    // directory projection (core's projectRateLimits, which drops malformed
+    // windows and trims to a cap), so peer-visible values can still differ.
+    // An empty map omits the key, keeping absent = unknown rather than "no
+    // limit". list_agents excludes the caller, so this is the only place an
+    // agent can read its own utilisation.
+    if (this.#rateLimits.size > 0) {
+      out.rate_limits = Object.fromEntries(this.#rateLimits);
+    }
     return out;
   }
 
