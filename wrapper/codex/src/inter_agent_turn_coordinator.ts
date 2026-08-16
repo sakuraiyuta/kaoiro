@@ -103,6 +103,20 @@ export class CodexInterAgentTurnCoordinator {
     return batch;
   }
 
+  /** Delivery sequences owned by the exact SDK turn.  Queueing is not an
+   * acknowledgement: callers invoke this only from the host's turn-start
+   * hook, after the SDK turn has actually begun (#247). */
+  deliverySequencesForTurn(turnToken: string): readonly number[] {
+    const batch = this.#batchByTurnToken.get(turnToken);
+    if (batch === undefined) return [];
+    return batch.items
+      .map((item) => (item.envelope as { delivery_seq?: unknown }).delivery_seq)
+      .filter(
+        (seq): seq is number =>
+          typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0,
+      );
+  }
+
   /** Dispatch the oldest batch that was waiting behind a settled peer turn. */
   dispatchNextForPeer(peer: string): void {
     this.#dispatchNext(peer);

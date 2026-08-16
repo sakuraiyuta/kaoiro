@@ -105,6 +105,30 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     assert agents[agent_id] == envelope
   end
 
+  test "delivery_status の live 診断は operator にだけ届く" do
+    _operator_socket = join_as(:operator)
+    assert_push "snapshot", %{"agents" => _}
+
+    _viewer_socket = join_as(:viewer)
+    assert_push "snapshot", %{"agents" => _}
+
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "delivery_status", %{
+      "agent_id" => "test.delivery-operator-only",
+      "delivery" => %{
+        "issued_seq" => 3,
+        "acked_seq" => 2,
+        "pending_since" => "2026-08-17T00:00:00Z"
+      }
+    })
+
+    assert_push "delivery_status", %{
+      "agent_id" => "test.delivery-operator-only",
+      "delivery" => %{"issued_seq" => 3}
+    }
+
+    refute_push "delivery_status", %{}
+  end
+
   # connect 時の role は snapshot にすぎない (#158)。許可リスト/トークン
   # 側の降格が、接続しっぱなしの socket に効くことを pin する。
   describe "operator gate の role 再解決 (#158)" do

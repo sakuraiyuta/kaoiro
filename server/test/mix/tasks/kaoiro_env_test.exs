@@ -83,6 +83,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       body = Env.render(@answers)
 
       assert body =~ "#KAOIRO_SESSION_POINTERS_PATH="
+      assert body =~ "#KAOIRO_DELIVERY_STATES_PATH="
       assert body =~ "#KAOIRO_TOKEN_DENYLIST_PATH="
       refute body =~ ~r/^KAOIRO_[A-Z_]*_PATH=/m
     end

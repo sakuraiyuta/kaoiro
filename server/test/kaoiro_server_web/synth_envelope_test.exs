@@ -43,6 +43,39 @@ defmodule KaoiroServerWeb.SynthEnvelopeTest do
   end
 
   describe "deliver_conversation_closed/3" do
+    test "ack-capable recipient receives a delivery_seq while the dashboard projection does not" do
+      recipient = "test.synth-delivery"
+      cid = "cnv-synth-delivery-#{System.unique_integer([:positive])}"
+      on_exit(fn -> KaoiroServer.DeliveryStates.delete(recipient) end)
+      KaoiroServer.DeliveryStates.bind(recipient, "process-a")
+
+      @endpoint.subscribe("wrapper:" <> recipient)
+      @endpoint.subscribe("agents:lobby")
+
+      assert :ok =
+               SynthEnvelope.deliver_conversation_closed(
+                 cid,
+                 [recipient],
+                 :open_conversation_ttl
+               )
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^recipient,
+        event: "envelope",
+        payload: routed
+      }
+
+      assert routed["delivery_seq"] == 1
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "agents:lobby",
+        event: "envelope",
+        payload: observed
+      }
+
+      refute Map.has_key?(observed, "delivery_seq")
+    end
+
     test "broadcasts a kind:done, turn_number:0, agent_id:server envelope to every participant" do
       a = "test.synth-closed-a"
       b = "test.synth-closed-b"

@@ -15,6 +15,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   InterAgentTool,
+  createDeliveryAcknowledgementWiring,
   MAX_COALESCED_MESSAGES,
   classifyInterAgentError,
 } from "@kaoiro/agent-common";
@@ -42,6 +43,7 @@ function inboundEnvelope(
   conversationId: string,
   turnNumber: number,
   done = false,
+  deliverySeq?: number,
 ): Envelope {
   return {
     version: "0",
@@ -61,7 +63,8 @@ function inboundEnvelope(
       owner: { kind: "user", id: "operator" },
     },
     ext: {},
-  };
+    ...(deliverySeq === undefined ? {} : { delivery_seq: deliverySeq }),
+  } as Envelope;
 }
 
 function makeHost(): CodexHost {
@@ -264,6 +267,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
     const sent: Envelope[] = [];
     const injected = vi.fn();
     const logs: string[] = [];
+    const acknowledgeDelivery = vi.fn();
     await handleInterAgentMessage(
       {
         interAgent: {
@@ -275,6 +279,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
         },
         recordInboundIa: () => {},
         send: (notice) => sent.push(notice),
+        acknowledgeDelivery,
         inject: injected,
         log: (line) => logs.push(line),
       },
@@ -283,12 +288,14 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
 
     expect(injected).not.toHaveBeenCalled();
     expect(sent).toEqual([]);
+    expect(acknowledgeDelivery).toHaveBeenCalledWith(expect.any(Object));
     expect(logs).toEqual(["  inter_agent_message reply consumed: peer.agent\n"]);
   });
 
   it("issue #226: production handler は terminal inbound を明示して注入しない", async () => {
     const injected = vi.fn();
     const logs: string[] = [];
+    const acknowledgeDelivery = vi.fn();
     await handleInterAgentMessage(
       {
         interAgent: {
@@ -300,6 +307,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
         },
         recordInboundIa: () => {},
         send: () => {},
+        acknowledgeDelivery,
         inject: injected,
         log: (line) => logs.push(line),
       },
@@ -307,6 +315,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
     );
 
     expect(injected).not.toHaveBeenCalled();
+    expect(acknowledgeDelivery).toHaveBeenCalledWith(expect.any(Object));
     expect(logs).toEqual(["  inter_agent_message terminal, no reply owed: peer.agent\n"]);
   });
 });
@@ -390,6 +399,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
    *  pushed by `receive()` below. Both kinds share this one array because
    *  production sends both through the SAME `link?.send()` sink. */
   const notices: Envelope[] = [];
+  const deliveryAcks: number[] = [];
   let host!: CodexHost;
   const coordinator = new CodexInterAgentTurnCoordinator({
     onDispatch: (batch) => {
@@ -400,6 +410,11 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
       void host.send(batch.text, undefined, batch.conversationIds, batch.turnToken);
     },
   });
+  const deliveryAcknowledgementWiring = createDeliveryAcknowledgementWiring(
+    (seq) => deliveryAcks.push(seq),
+    coordinator,
+  );
+  deliveryAcknowledgementWiring.onInterAgentDeliveryStatus({ acked_seq: 0 });
 
   async function receive(envelope: Envelope): Promise<void> {
     await handleInterAgentMessage(
@@ -407,11 +422,16 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
         interAgent,
         recordInboundIa: () => {},
         send: (notice) => notices.push(notice),
+        acknowledgeDelivery: deliveryAcknowledgementWiring.acknowledgeDelivery,
         inject: (inbound, mode) => coordinator.receive(inbound, mode),
         log: () => {},
       },
       envelope,
     );
+  }
+
+  function onTurnStart(turnToken: string): void {
+    deliveryAcknowledgementWiring.onTurnStart(turnToken);
   }
 
   function onTurnEnd(
@@ -434,6 +454,8 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     onTurnEnd,
     sentBatches,
     notices,
+    deliveryAcks,
+    onTurnStart,
     bindHost: (h: CodexHost) => {
       host = h;
     },
@@ -459,6 +481,27 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
       { peer: "peer.agent", cids: ["cnv-solo"] },
     ]);
 
+    releaseNext();
+  });
+
+  it("issue #247: inject は coordinator 受理時でなく実 SDK turn start で ack する", async () => {
+    const { client, releaseNext } = makeControllableClient();
+    const tool = new InterAgentTool({ config, getState: () => "idle", send: () => {} });
+    const harness = makeCoalescingHarness(tool);
+    const host = new CodexHost(config, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      onTurnStart: ({ turnToken }) => harness.onTurnStart(turnToken),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
+    });
+    harness.bindHost(host);
+
+    await harness.receive(inboundEnvelope("cnv-delivery-start", 1, false, 1));
+    expect(harness.deliveryAcks).toEqual([]);
+
+    void host.run();
+    await vi.waitFor(() => expect(harness.deliveryAcks).toEqual([1]));
     releaseNext();
   });
 

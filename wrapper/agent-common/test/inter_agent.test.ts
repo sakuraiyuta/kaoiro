@@ -1560,7 +1560,7 @@ describe("list_agents / whoami companion tools", () => {
     expect(listAgents?.description).toContain("send_to_agent");
   });
 
-  it("whoami は getWhoami の snapshot を JSON として返す", () => {
+  it("whoami は getWhoami の snapshot を JSON として返す", async () => {
     const snapshot: WhoamiSnapshot = {
       agent_id: "self.agent",
       persona: { id: "mio", name: "澪", sprite_set: "mio" },
@@ -1581,24 +1581,47 @@ describe("list_agents / whoami companion tools", () => {
       send: () => {},
       getWhoami: () => snapshot,
     });
-    const result = tool.whoami();
+    const result = await tool.whoami();
     expect(result.isError).toBeFalsy();
     expect(JSON.parse(result.content[0]!.text)).toEqual(snapshot);
   });
 
-  it("whoami は getWhoami 未配線で wrapper config からのフォールバックを返す", () => {
+  it("whoami は getWhoami 未配線で wrapper config からのフォールバックを返す", async () => {
     const tool = new InterAgentTool({
       config: configFor("self.agent"),
       getState: () => "idle",
       send: () => {},
     });
-    const result = tool.whoami();
+    const result = await tool.whoami();
     const parsed = JSON.parse(result.content[0]!.text) as WhoamiSnapshot;
     expect(parsed.agent_id).toBe("self.agent");
     expect(parsed.persona).toEqual(PERSONA);
     expect(parsed.state).toBe("idle");
     // SDK 由来のフィールドは存在しないので omit される
     expect(parsed.model).toBeUndefined();
+  });
+
+  it("whoami は server の dispatch-confirmation ledger を合成し、未接続時に zero を捏造しない", async () => {
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "idle",
+      send: () => {},
+      requestInterAgentDeliveryStatus: async () => ({
+        issued_seq: 8,
+        acked_seq: 6,
+        pending_since: "2026-08-17T00:00:00Z",
+      }),
+    });
+    const result = await tool.whoami();
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({
+      inter_agent_delivery: { issued_seq: 8, acked_seq: 6 },
+    });
+
+    const unknown = new InterAgentTool({
+      config: configFor("self.agent"), getState: () => "idle", send: () => {},
+      requestInterAgentDeliveryStatus: async () => null,
+    });
+    expect(JSON.parse((await unknown.whoami()).content[0]!.text).inter_agent_delivery).toBeUndefined();
   });
 });
 

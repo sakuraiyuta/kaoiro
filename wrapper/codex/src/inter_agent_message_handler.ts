@@ -8,6 +8,9 @@ export interface InterAgentMessageHandlerContext {
   interAgent: Pick<InterAgentTool, "receiveInbound"> | null;
   recordInboundIa: (envelope: Envelope) => void;
   send: (envelope: Envelope) => void;
+  /** Completes intentional non-injection paths only. Injected messages wait
+   * for the host's actual SDK turn-start boundary. */
+  acknowledgeDelivery?: (envelope: Envelope) => void;
   inject: (envelope: Envelope, mode: InboundReplyMode) => void;
   log: (line: string) => void;
 }
@@ -28,10 +31,12 @@ export async function handleInterAgentMessage(
     mode: "reply-owed" as const,
   };
   if (disposition.consumed) {
+    context.acknowledgeDelivery?.(envelope);
     context.log(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
     return;
   }
   if (!disposition.inject) {
+    context.acknowledgeDelivery?.(envelope);
     if (disposition.mode === "terminal") {
       context.log(`  inter_agent_message terminal, no reply owed: ${envelope.agent_id}\n`);
     } else if (disposition.notice) {

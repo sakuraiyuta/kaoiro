@@ -14,6 +14,9 @@ export interface InterAgentMessageHandlerContext {
   >;
   recordInboundIa: (envelope: Envelope) => void;
   send: (envelope: Envelope) => void;
+  /** Completes intentional non-injection paths only. Injected messages are
+   * confirmed by the host's actual SDK turn-start callback. */
+  acknowledgeDelivery?: (envelope: Envelope) => void;
   inject: (envelope: Envelope, mode: InboundReplyMode) => void;
   log: (line: string) => void;
 }
@@ -31,6 +34,10 @@ export async function handleInterAgentMessage(
   context.recordInboundIa(envelope);
   try {
     if (context.ingress.isTerminal(ingressLease)) {
+      // The handler deliberately declined this inbound before the SDK-facing
+      // classifier. It cannot ever reach a turn in a host that has already
+      // become terminal, so leave no false delivery gap behind.
+      context.acknowledgeDelivery?.(envelope);
       context.log(
         `  inter_agent_message terminal ingress skipped before receive: ${envelope.agent_id}\n`,
       );
@@ -42,16 +49,22 @@ export async function handleInterAgentMessage(
       mode: "reply-owed" as const,
     };
     if (context.ingress.isTerminal(ingressLease)) {
+      // `receiveInbound()` may have yielded while the host closed. This is
+      // likewise an intentional non-injection, not an unacknowledged SDK
+      // dispatch.
+      context.acknowledgeDelivery?.(envelope);
       context.log(
         `  inter_agent_message terminal ingress skipped after receive: ${envelope.agent_id}\n`,
       );
       return;
     }
     if (disposition.consumed) {
+      context.acknowledgeDelivery?.(envelope);
       context.log(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
       return;
     }
     if (!disposition.inject) {
+      context.acknowledgeDelivery?.(envelope);
       if (disposition.mode === "terminal") {
         context.log(`  inter_agent_message terminal, no reply owed: ${envelope.agent_id}\n`);
       } else if (disposition.notice) {

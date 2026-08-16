@@ -11,6 +11,7 @@
 // validated structurally and forwarded to the handlers.
 
 import { Channel, Socket, type Push } from "phoenix";
+import { randomUUID } from "node:crypto";
 import type { Envelope } from "@kaoiro/protocol";
 
 /** A client's permission decision relayed by the server (protocol.md).
@@ -66,6 +67,15 @@ export interface DirectoryConversation {
   peers: string[];
 }
 
+/** Recipient-local dispatch confirmation watermark (issue #247).  It is an
+ * observation ledger, not a retransmission guarantee.  An absent field is
+ * deliberately `unknown` (legacy/disarmed capability), never zero. */
+export interface InterAgentDeliveryStatus {
+  issued_seq: number;
+  acked_seq: number;
+  pending_since?: string;
+}
+
 /** Single entry returned from `directory_request` (protocol-inter-agent
  * companion tool). Runtime traits are optional because an old/not-yet-init
  * wrapper may not have stamped them. Operator-grade cwd / permission /
@@ -102,6 +112,7 @@ export interface DirectoryEntry {
   /** Keyed by window: `five_hour` / `seven_day` plus any engine-specific
    *  ones. */
   rate_limits?: Record<string, DirectoryRateLimitWindow>;
+  inter_agent_delivery?: InterAgentDeliveryStatus;
 }
 
 /** Single entry in the peer directory's "users" projection (issue #197
@@ -359,6 +370,10 @@ export interface ServerLinkOptions {
    *  ones (e.g. escalate-to-user on quota overshoot) to the receiving
    *  wrapper's topic — both flow through here. */
   onInterAgentMessage?: (envelope: Envelope) => void;
+  /** Join/rejoin's recipient-local acknowledgement ledger. `null` means an
+   * older server did not negotiate the capability, so callers must report it
+   * as unknown rather than as an empty queue. */
+  onInterAgentDeliveryStatus?: (status: InterAgentDeliveryStatus | null) => void;
   /** Acceptance ack for an OUTBOUND inter_agent_message (ADR-0051 D3-2).
    *  Fires when the server replies to the `envelope` push with the ingress
    *  stamp it allocated — the point at which the message is known to be
@@ -516,6 +531,21 @@ function nonNegativeInteger(value: unknown): number | undefined {
     : undefined;
 }
 
+function deliveryStatusFrom(value: unknown): InterAgentDeliveryStatus | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const issued = nonNegativeInteger(value.issued_seq);
+  const acked = nonNegativeInteger(value.acked_seq);
+  if (issued === undefined || acked === undefined || acked > issued) return undefined;
+  if (value.pending_since !== undefined && typeof value.pending_since !== "string") return undefined;
+  if (issued === acked && value.pending_since !== undefined) return undefined;
+  if (issued > acked && typeof value.pending_since !== "string") return undefined;
+  return {
+    issued_seq: issued,
+    acked_seq: acked,
+    ...(typeof value.pending_since === "string" ? { pending_since: value.pending_since } : {}),
+  };
+}
+
 function nonEmptyText(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
@@ -639,6 +669,8 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
     persona: v.persona as DirectoryEntry["persona"],
     state: v.state,
   };
+  const delivery = deliveryStatusFrom(v.inter_agent_delivery);
+  if (delivery !== undefined) entry.inter_agent_delivery = delivery;
   // issue #219 D19/D26: same value-level narrow used everywhere else on
   // this repo's display-name fields — a malformed value (overlong,
   // control chars) is omitted rather than passed through, matching this
@@ -862,6 +894,8 @@ export class ServerLink {
     // than as the legacy absent case.
     this.#channel = this.#socket.channel(`wrapper:${agentId}`, {
       persona_id: options.personaId,
+      inter_agent_delivery_ack: "dispatch-v1",
+      delivery_generation: randomUUID(),
       ...(options.transitionId !== undefined && options.transitionId !== ""
         ? { transition_id: options.transitionId }
         : {}),
@@ -1085,6 +1119,9 @@ export class ServerLink {
       if (!isObject(payload) || payload.type !== "inter_agent_message") return;
       options.onInterAgentMessage?.(payload as unknown as Envelope);
     });
+    this.#channel.on("delivery_status", (payload: unknown) => {
+      options.onInterAgentDeliveryStatus?.(deliveryStatusFrom(payload) ?? null);
+    });
     // #258: a self-reset's request reply proves only that the server acquired
     // its lock. If the runner later cannot terminate this old wrapper, the
     // server sends the terminal failure back to this topic. Correlation stays
@@ -1115,6 +1152,9 @@ export class ServerLink {
       .join()
       .receive("ok", (reply: unknown) => {
         options.onHydration?.(hydrationVerdictFrom(reply));
+        options.onInterAgentDeliveryStatus?.(
+          isObject(reply) ? deliveryStatusFrom(reply.delivery) ?? null : null,
+        );
       })
       .receive("error", (reason: unknown) => {
         process.stderr.write(
@@ -1138,6 +1178,25 @@ export class ServerLink {
    *  no id replays empty). */
   currentSessionId(): string | null {
     return this.#sessionId;
+  }
+
+  /** Records contiguous SDK-dispatch completion.  The server treats a stale,
+   * future, or duplicate watermark as a harmless no-op. */
+  acknowledgeInterAgentDelivery(deliverySeq: number): void {
+    if (!Number.isSafeInteger(deliverySeq) || deliverySeq <= 0) return;
+    this.#channel.push("delivery_ack", { delivery_seq: deliverySeq });
+  }
+
+  /** Reads this wrapper's ledger independently of directory peers. */
+  requestInterAgentDeliveryStatus(): Promise<InterAgentDeliveryStatus | null> {
+    return new Promise((resolve) => {
+      this.#channel.push("delivery_status_request", {})
+        .receive("ok", (payload: unknown) =>
+          resolve(isObject(payload) ? deliveryStatusFrom(payload.delivery) ?? null : null),
+        )
+        .receive("error", () => resolve(null))
+        .receive("timeout", () => resolve(null));
+    });
   }
 
   /** Pushes one envelope with the next seq; buffered while disconnected. */

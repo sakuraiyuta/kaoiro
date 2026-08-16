@@ -60,6 +60,7 @@ export KAOIRO_PERMISSION_MODES_PATH="${KAOIRO_PERMISSION_MODES_PATH:-$data_dir/p
 export KAOIRO_CLEAR_WATERMARKS_PATH="${KAOIRO_CLEAR_WATERMARKS_PATH:-$data_dir/clear_watermarks.dets}"
 export KAOIRO_SESSION_STARTS_PATH="${KAOIRO_SESSION_STARTS_PATH:-$data_dir/session_starts.dets}"
 export KAOIRO_INGRESS_ORDER_PATH="${KAOIRO_INGRESS_ORDER_PATH:-$data_dir/ingress_order.dets}"
+export KAOIRO_DELIVERY_STATES_PATH="${KAOIRO_DELIVERY_STATES_PATH:-$data_dir/delivery_states.dets}"
 export KAOIRO_TOKEN_DENYLIST_PATH="${KAOIRO_TOKEN_DENYLIST_PATH:-$data_dir/token_denylist.dets}"
 
 pids=()

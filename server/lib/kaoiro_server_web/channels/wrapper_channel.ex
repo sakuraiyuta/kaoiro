@@ -23,6 +23,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.Auth
   alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.ConversationStates
+  alias KaoiroServer.DeliveryStates
   alias KaoiroServer.IngressOrder
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
@@ -99,6 +100,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
          {:ok, persona_id} <- fetch_persona_id(params),
          :ok <- authorize_persona(persona_id),
          :ok <- reject_if_connected(agent_id) do
+      delivery = bind_delivery(agent_id, params)
       # Drop the raw token once verified so it cannot leak via crash
       # logs / socket inspection.
       send(self(), :after_join)
@@ -109,7 +111,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
       # (rather than in :after_join) keeps it inside the same message the
       # wrapper is already waiting on, so the wrapper never has to guess
       # whether a verdict is still coming.
-      {:ok, %{"hydration" => hydration_verdict(agent_id)},
+      reply =
+        %{"hydration" => hydration_verdict(agent_id)}
+        |> maybe_put_optional_field("delivery", delivery)
+
+      {:ok, reply,
        socket
        |> assign(:agent_id, agent_id)
        |> assign(:persona_id, persona_id)
@@ -118,6 +124,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
     else
       {:error, reason} -> {:error, %{reason: to_string(reason)}}
     end
+  end
+
+  # `transition_id` identifies a session transition, not a wrapper process:
+  # runner crash relaunch intentionally reuses it.  The random generation is
+  # therefore the only lifetime identity for #247's dispatch observation.
+  defp bind_delivery(agent_id, %{
+         "inter_agent_delivery_ack" => "dispatch-v1",
+         "delivery_generation" => generation
+       })
+       when is_binary(generation) and byte_size(generation) in 1..128 do
+    DeliveryStates.bind(agent_id, generation)
+  end
+
+  defp bind_delivery(agent_id, _params) do
+    :ok = DeliveryStates.disarm(agent_id)
+    nil
   end
 
   # Push the initial handshake state once the join completes:
@@ -208,6 +230,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       end
 
       push_persona_sync(socket, agent_id)
+      broadcast_delivery_status(agent_id)
 
       :ok
     end
@@ -396,16 +419,42 @@ defmodule KaoiroServerWeb.WrapperChannel do
     self_id = socket.assigns.agent_id
     activities = AgentActivity.snapshot()
     peer_index = ConversationStates.peer_index()
+    deliveries = DeliveryStates.all()
 
     agents =
       AgentStates.snapshot()
       |> Enum.reject(fn {id, _} -> id == self_id end)
       |> Enum.map(fn {id, env} ->
-        directory_entry(id, env, Map.get(activities, id), Map.get(peer_index, id, []))
+        directory_entry(
+          id,
+          env,
+          Map.get(activities, id),
+          Map.get(peer_index, id, []),
+          Map.get(deliveries, id)
+        )
       end)
 
     {:reply, {:ok, %{"agents" => agents, "users" => users_projection()}}, socket}
   end
+
+  @impl true
+  def handle_in("delivery_status_request", _payload, socket) do
+    reply =
+      %{}
+      |> maybe_put_optional_field("delivery", DeliveryStates.get(socket.assigns.agent_id))
+
+    {:reply, {:ok, reply}, socket}
+  end
+
+  @impl true
+  def handle_in("delivery_ack", %{"delivery_seq" => seq}, socket)
+      when is_integer(seq) and seq > 0 do
+    status = DeliveryStates.ack(socket.assigns.agent_id, seq)
+    broadcast_delivery_status(socket.assigns.agent_id)
+    {:reply, {:ok, %{"delivery" => status}}, socket}
+  end
+
+  def handle_in("delivery_ack", _payload, socket), do: {:reply, :ok, socket}
 
   # Resume history reconstruction (ADR-0014 phase-2, issue #50): the wrapper
   # is about to replay its JSONL-derived transcript as `log` envelopes, so it
@@ -624,9 +673,17 @@ defmodule KaoiroServerWeb.WrapperChannel do
     stamped = Map.put(envelope, "ingress_stamp", wire_stamp)
 
     retained = AgentStates.upsert_ia(from, stamp, stamped)
-    _ = AgentStates.upsert_ia(to, stamp, stamped)
 
-    push_to_wrapper(to, stamped)
+    {recipient_envelope, delivery_changed?} =
+      case DeliveryStates.issue(to) do
+        seq when is_integer(seq) -> {Map.put(stamped, "delivery_seq", seq), true}
+        nil -> {stamped, false}
+      end
+
+    _ = AgentStates.upsert_ia(to, stamp, recipient_envelope)
+
+    push_to_wrapper(to, recipient_envelope)
+    if delivery_changed?, do: broadcast_delivery_status(to)
     if escalate != nil, do: broadcast_escalate(escalate)
 
     # Same "no snapshot entry to anchor it" rule store_and_broadcast
@@ -766,7 +823,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp role_string(:admin), do: "admin"
   defp role_string(_other), do: nil
 
-  defp directory_entry(id, envelope, activity, peers) do
+  defp directory_entry(id, envelope, activity, peers, delivery) do
     persona =
       case envelope do
         %{"persona" => %{} = p} -> Map.take(p, ["id", "name", "sprite_set"])
@@ -829,7 +886,33 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     entry = maybe_put_context(entry, ext)
     entry = maybe_put_rate_limits(entry, ext, id)
-    put_activity_fields(entry, id, envelope, activity)
+
+    entry
+    |> put_activity_fields(id, envelope, activity)
+    |> maybe_put_optional_field("inter_agent_delivery", delivery)
+  end
+
+  defp broadcast_delivery_status(agent_id) do
+    case DeliveryStates.get(agent_id) do
+      nil ->
+        # No capability / legacy process means unknown, not healthy 0/0.
+        # The dashboard still receives a deletion event so it cannot retain
+        # a prior generation's watermark after the ledger is disarmed.
+        KaoiroServerWeb.Endpoint.broadcast(
+          "agents:lobby",
+          "delivery_status",
+          %{"agent_id" => agent_id}
+        )
+
+      status ->
+        KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "delivery_status", status)
+
+        KaoiroServerWeb.Endpoint.broadcast(
+          "agents:lobby",
+          "delivery_status",
+          %{"agent_id" => agent_id, "delivery" => status}
+        )
+    end
   end
 
   # `context` is capability-gated rather than presence-gated. In particular,
@@ -1015,6 +1098,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
        do: Map.put(entry, key, value)
 
   defp maybe_put_directory_field(entry, _key, _value), do: entry
+
+  # Unlike the directory's optional display fields, delivery is a structured
+  # status map. Keep `nil` absent (legacy wrapper means unknown), while
+  # preserving the map verbatim for capability-aware clients.
+  defp maybe_put_optional_field(entry, _key, nil), do: entry
+  defp maybe_put_optional_field(entry, key, value), do: Map.put(entry, key, value)
 
   # Persist the agent's latest SDK session_id as a restart-surviving
   # pointer (ADR-0014 F1, issue #49). Only fires once the wrapper has

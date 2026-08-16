@@ -77,7 +77,7 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
 
 - トークン 3 種は「追加するか」「もう 1 件追加するか」を繰り返し聞いて複数
   エントリを組み立てる。prod では 3 種すべて必須(未設定は接続拒否、issue #138)。
-- **DETS パス 8 種は聞かない**。同梱 `docker-compose.yaml` が `environment:` で
+- **DETS パス 9 種は聞かない**。同梱 `docker-compose.yaml` が `environment:` で
   設定済みで、compose 外運用のときだけ必要になる。生成ファイルにはコメントとして
   残し、意味と一覧は配備手順書(#142)に委ねる。
 - `KAOIRO_FOOTER_DIR` / `KAOIRO_PERSONA_CACHE_DIR` も質問項目を増やさない。
