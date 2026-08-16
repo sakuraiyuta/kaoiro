@@ -66,6 +66,20 @@ export interface DetailScenario {
    *  sprite for the "ao" persona so DetailHarness's spriteUrl is
    *  non-null. */
   sprite?: boolean;
+  /** issue #237 一次調査: `detailLogs()` の index を指定すると、mount 後
+   *  少し遅れて AgentDetail の `scrollToEntryKey` を該当 entry のキーへ
+   *  切り替える(=ResponseTimeline クリックで同一 agent の別行へ飛ぶ、を
+   *  実ブラウザで再現)。 */
+  scrollTargetIndex?: number;
+  /** scrollTargetIndex を反映する遅延(ms)。既定 0。 */
+  scrollTargetDelayMs?: number;
+  /** issue #237 一次調査: 500ms 後に別 agent (host.b2, 30 件ログ) へ
+   *  切り替えつつ、その agent の index 件目へ scrollToEntryKey を同時に
+   *  セットする(App.svelte onSelectAgent の実運用経路の再現)。 */
+  agentSwitchTargetIndex?: number;
+  /** ログ件数(既定 30)。#184 の LOG_WINDOW_SIZE(200)を超える値を
+   *  指定すると window 拡張(ensureIndexVisible)込みの経路になる。 */
+  logCount?: number;
 }
 
 /** Manifest with a resolved sprite for the "ao" persona, covering every

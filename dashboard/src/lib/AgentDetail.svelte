@@ -724,6 +724,22 @@
   // effect and double-run its renderMermaidIn/scroll continuation before
   // `handledTimelineScrollTarget` had a chance to settle. untrack here for
   // the same reason the effect's own shrink-guard read is untracked.
+  //
+  // issue #237: expanding this window PREPENDS rows above the operator's
+  // current scroll position (they were previously pinned to the tail, per
+  // the doc comment above). The browser's default CSS scroll anchoring
+  // then relocates `scrollTop` to the bottom of the now much taller
+  // content so the previously-visible rows stay put — which fires a
+  // `scroll` event reporting "still at the bottom" BEFORE the caller's own
+  // smooth-scroll to the jump target has moved anywhere. handleLogScroll
+  // reads that as "the operator scrolled back to the bottom" and collapses
+  // this very freeze it is trying to set up. `suppressBottomRevert` masks
+  // that ONE spurious reading until a GENUINE post-anchoring departure
+  // from the bottom is observed (handleLogScroll), with a bounded timeout
+  // as a fallback in case no such departure is ever observed (e.g. the
+  // target sits just outside the default window, so the scroll barely
+  // moves).
+  let suppressBottomRevert = false;
   function ensureIndexVisible(absoluteIndex: number): void {
     const start = untrack(() => effectiveWindowStart);
     if (absoluteIndex >= 0 && absoluteIndex < start) {
@@ -732,6 +748,10 @@
         mode: "reading-frozen",
         anchorLength: logs.length,
       };
+      suppressBottomRevert = true;
+      setTimeout(() => {
+        suppressBottomRevert = false;
+      }, 1000);
     }
   }
 
@@ -1458,21 +1478,33 @@
       // operator scrolled away to read, or jumped to a target) reverts to
       // the tail once they return to the bottom. An explicit "show all" is
       // a deliberate request and must not silently collapse back.
-      if (frozenWindow?.mode === "reading-frozen") {
+      //
+      // issue #237: `suppressBottomRevert` masks the ONE spurious
+      // "at the bottom" reading that CSS scroll anchoring produces right
+      // after ensureIndexVisible expands the window for a pending jump
+      // (see its doc comment) — without this, that reading collapses the
+      // freeze before the jump's own smooth-scroll ever moves away from
+      // the tail, evicting the target row mid-flight.
+      if (frozenWindow?.mode === "reading-frozen" && !suppressBottomRevert) {
         frozenWindow = null;
       }
-    } else if (frozenWindow === null) {
-      // ふじ round-1 must-fix M2 (2nd half): once the operator scrolls away
-      // from the tail to read older entries, freeze the window at its
-      // current boundary. Left dynamic, a streaming append would keep
-      // advancing `effectiveWindowStart` and silently evict the very rows
-      // they are reading, with no scroll compensation (unlike the explicit
-      // showEarlierLogs expand, which does compensate).
-      frozenWindow = {
-        start: effectiveWindowStart,
-        mode: "reading-frozen",
-        anchorLength: logs.length,
-      };
+    } else {
+      // A genuine (post-anchoring) departure from the bottom — the jump's
+      // own scroll-anchoring race window, if any, has passed.
+      suppressBottomRevert = false;
+      if (frozenWindow === null) {
+        // ふじ round-1 must-fix M2 (2nd half): once the operator scrolls away
+        // from the tail to read older entries, freeze the window at its
+        // current boundary. Left dynamic, a streaming append would keep
+        // advancing `effectiveWindowStart` and silently evict the very rows
+        // they are reading, with no scroll compensation (unlike the explicit
+        // showEarlierLogs expand, which does compensate).
+        frozenWindow = {
+          start: effectiveWindowStart,
+          mode: "reading-frozen",
+          anchorLength: logs.length,
+        };
+      }
     }
     scrollMemory.set(envelope.agent_id, {
       top: logEl.scrollTop,
@@ -1523,6 +1555,14 @@
       // here so a LATER switch back cannot reuse the same stale data.
       if (shrinkInvalidated) scrollMemory.delete(agentId);
       frozenWindow = shrinkInvalidated ? null : candidateFrozenWindow;
+      // issue #237 review: `suppressBottomRevert` is armed per-jump (see
+      // ensureIndexVisible), not per-agent, and is never persisted into
+      // scrollMemory — unlike every other transient flag this component
+      // resets/restores on a switch (frozenWindow/stickToBottom above,
+      // resumePickerAgentId, lastCcPerm). Left set across a switch, a
+      // jump on the outgoing agent could mask a genuine reading-freeze
+      // revert on the incoming one for up to the 1000ms failsafe window.
+      suppressBottomRevert = false;
     } else if (shrinkInvalidated) {
       // ふじ round-4 must-fix M1: a shrink invalidates the WINDOW, but a
       // reading-freeze also carries a logical "not at the bottom" pin
