@@ -1667,7 +1667,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_panes_empty([from_id, to_id])
     end
 
-    test "payload.new_conversation 欠落は live ingress で構造的に拒否する (issue #262)" do
+    test "payload.new_conversation 欠落 (issue #262 より前の wrapper 相当) は拒否せず " <>
+           "true とみなして新規 conversation として通す (レビュー、クロエ M1)" do
+      # ADR-0015 のベストエフォート受理と同じ理由: Phoenix client は
+      # reconnect/heartbeat を自前で持つため、server だけ再デプロイしても
+      # 旧 wrapper プロセスは再起動なしで送信を続けうる。key を必須に
+      # すると、そうした旧 wrapper の live send を全部弾いてしまう。
       from_id = "test.iam-newconv-missing-from"
       to_id = "test.iam-newconv-missing-to"
       _ = seed_known(to_id)
@@ -1676,8 +1681,25 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       env = inter_envelope(from_id, to_id)
       env = update_in(env, ["payload"], &Map.delete(&1, "new_conversation"))
       ref = push(from_socket, "envelope", env)
-      assert_reply ref, :error, %{reason: "missing key: payload.new_conversation"}
-      assert_panes_empty([from_id, to_id])
+      assert_reply ref, :ok
+    end
+
+    test "payload.new_conversation 欠落かつ明示指定の未知 cid (旧 wrapper 相当) は " <>
+           "移行期間中 unknown_conversation_id にならず新規として受理される " <>
+           "(意図的な残余、issue #262 delta)" do
+      from_id = "test.iam-newconv-missing-unk-from"
+      to_id = "test.iam-newconv-missing-unk-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env =
+        inter_envelope(from_id, to_id,
+          cid: "cnv-typo-old-wrapper-#{System.unique_integer([:positive])}"
+        )
+
+      env = update_in(env, ["payload"], &Map.delete(&1, "new_conversation"))
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :ok
     end
 
     test "payload.new_conversation が bool でなければ拒否する (issue #262)" do

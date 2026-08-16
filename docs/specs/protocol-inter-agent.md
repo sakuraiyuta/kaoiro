@@ -112,7 +112,7 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 |---|---|---|
 | `to` | MUST | 宛先 `agent_id`。`[A-Za-z0-9._-]` 制約は protocol 全体と同じ |
 | `conversation_id` | MUST | 同一対話を紐付ける識別子。発起側 wrapper が採番(セッション内一意、UUIDv4 ベース) |
-| `new_conversation` | MUST | bool。送信元エージェントが `conversation_id` を省略し、この wrapper が新規採番した送信でのみ true(issue #262)。それ以外(明示指定・返信・通知)は false。server はこれを見て、未知の `conversation_id` が「省略による新規」か「明示指定の誤り」かを判定する — 詳細は下記「明示指定された conversation_id が未知のとき」 |
+| `new_conversation` | MUST(準拠 wrapper)。省略時は server が `true` とみなす(下記) | bool。送信元エージェントが `conversation_id` を省略し、この wrapper が新規採番した送信でのみ true(issue #262)。それ以外(明示指定・返信・通知)は false。server はこれを見て、未知の `conversation_id` が「省略による新規」か「明示指定の誤り」かを判定する — 詳細は下記「明示指定された conversation_id が未知のとき」 |
 | `turn_number` | MUST | 1 起点の正整数。同一 conversation 内で送信ごとに +1。`(conversation_id, turn_number)` で全順序 |
 | `kind` | MUST | 下記 9 種 enum |
 | `body` | MUST | メッセージ本文(自由テキスト)。意味論はエージェントに任せる |
@@ -480,6 +480,24 @@ fail fast and visible にする。
   対話の 2 通目以降は常にこの経路である。影響するのは「タイポ・古い
   session のコピペ由来で、どの entry にも一致しない cid を明示指定
   した」場合のみ。
+- **`payload.new_conversation` の欠落は拒否せず true 扱いにする**
+  (レビュー、issue #262 delta): `validate_live_inter_agent_payload/1`
+  は key の存在を要求しない — bool 以外の値のときだけ拒否する。
+  issue #262 より前の wrapper はこの field を送らないが、Phoenix
+  client は reconnect/heartbeat を自前で持つため
+  (`wrapper/core/src/transport.ts`)、server だけ再デプロイしても旧
+  wrapper プロセスは再起動なしで生き残り送信を続ける。key を必須に
+  すると、そうした旧 wrapper の live send を全部
+  `missing key: payload.new_conversation` で弾いてしまい、
+  [ADR-0015](../adr/0015-protocol-version-stamping.md) が確立した
+  「version 不一致でも ACK して処理は継続する」というベストエフォート
+  受理の方針と矛盾する。`preflight_inter_agent/2` は欠落を `true`
+  として読む(`payload["new_conversation"] != false`)—
+  `ConversationStates.record_message/8` 自身の既定値と同じ許容側。
+  代償として、旧 wrapper からの明示指定・未知 cid はこの移行期間中
+  `unknown_conversation_id` で拒否されず無言で新規 conversation を
+  開くが、これは新 wrapper へ更新されるまでの一時的な後退であり、
+  恒久的な抜け道ではない。
 
 ### 観測経路(dashboard 表示)
 

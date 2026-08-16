@@ -1331,20 +1331,28 @@ defmodule KaoiroServerWeb.WrapperChannel do
   #
   # `payload.new_conversation` (issue #262) is validated HERE, not in the
   # shared `validate_inter_agent_payload/1`, for the same reason: a stored
-  # sidecar row from before this field existed must still replay. Only a
-  # freshly wrapper-sent envelope is required to carry it — `preflight_
-  # inter_agent/2` reads it to tell ConversationStates.record_message/8
-  # apart a genuinely-new id from an explicitly-named unknown one.
+  # sidecar row from before this field existed must still replay.
+  #
+  # ABSENCE is allowed (review, クロエ M1) — only a present-but-non-boolean
+  # value is rejected. Requiring the key would hard-reject every live send
+  # from a wrapper that predates issue #262, and that population is not
+  # hypothetical: the Phoenix client owns reconnect/heartbeat
+  # (wrapper/core/src/transport.ts), so an old wrapper survives a server
+  # deploy and keeps pushing without ever restarting. ADR-0015 already
+  # covers exactly this shape of client/server skew (`version` field) with
+  # best-effort accept, not a hard block — the same instance the codebase
+  # already exercises live (`refresh_engine_catalog: client declared
+  # protocol version (absent); relaying as "0"`). `preflight_inter_agent/2`
+  # treats an absent value as `true`, the same permissive default
+  # `ConversationStates.record_message/8` itself uses.
   defp validate_live_inter_agent_payload(payload) do
     with :ok <- validate_inter_agent_payload(payload) do
       cond do
         not (is_integer(payload["turn_number"]) and payload["turn_number"] > 0) ->
           {:error, "invalid value: payload.turn_number"}
 
-        not Map.has_key?(payload, "new_conversation") ->
-          {:error, "missing key: payload.new_conversation"}
-
-        not is_boolean(payload["new_conversation"]) ->
+        Map.has_key?(payload, "new_conversation") and
+            not is_boolean(payload["new_conversation"]) ->
           {:error, "invalid value: payload.new_conversation"}
 
         true ->
@@ -1608,9 +1616,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
     body = payload["body"] || ""
     turn_number = payload["turn_number"]
     done? = get_in(payload, ["meta", "done"]) == true
-    # issue #262: true only when the SENDING wrapper's own conversation_id
-    # was omitted by its caller and freshly allocated — see record_message/8.
-    new_conversation? = payload["new_conversation"] == true
+    # issue #262: true when the SENDING wrapper's own conversation_id was
+    # omitted by its caller and freshly allocated (see record_message/8) —
+    # OR the field is simply absent (review, クロエ M1: a pre-#262 wrapper,
+    # ADR-0015 best-effort accept; validate_live_inter_agent_payload/1
+    # already rejects a present-but-non-boolean value). Only an EXPLICIT
+    # `false` narrows this to "confirm the id already exists".
+    new_conversation? = payload["new_conversation"] != false
 
     cond do
       to == from ->
