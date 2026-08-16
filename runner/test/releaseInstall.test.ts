@@ -175,6 +175,47 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     expect(result.stdout.trim()).toBe(revision);
   });
 
+  it.each([
+    ["コメント", '// used to come from "./gone-a.js"'],
+    ["文字列リテラル", `const probe = 'import "./gone-b.js"';`],
+    ["template literal", "const probe2 = `import \"./gone-c.js\"`;"],
+  ])("回帰: %s 内の specifier で健全 release を拒否しない", (_label, line) => {
+    // Three negative controls, one mechanism. Blanking comments alone left
+    // the string and template forms rejecting a complete tree at exit 70 —
+    // the same false positive one context over (もも review, issue #229).
+    const revision = revisionOf(`non-code-${_label}`);
+    const stage = join(work, `nc-${_label}`);
+    const name = `kaoiro-runner-${revision}-linux-x64`;
+    const tree = join(stage, name);
+    writeReleaseTree(tree, revision);
+    const cli = join(tree, "dist", "cli.js");
+    writeFileSync(cli, `${line}\n${readFileSync(cli, "utf8")}`);
+    execFileSync(process.execPath, [
+      fileURLToPath(new URL("../../scripts/build-release-manifest.mjs", import.meta.url)),
+      tree,
+    ], { stdio: ["ignore", "ignore", "ignore"] });
+    const archive = join(work, `${name}.tar.gz`);
+    execFileSync("tar", ["czf", archive, "-C", stage, name]);
+
+    expect(install(archive).status).toBe(0);
+  });
+
+  it("new URL(..., import.meta.url) の runtime edge も閉包に含める", () => {
+    // bridge.js is reachable only through that URL construction. Removing it
+    // together with its manifest entry left a self-consistent, undersized
+    // manifest that strict verify accepted at exit 0 (もも review).
+    const revision = revisionOf("runtime-url-edge");
+    const archive = makeReleaseTarball(work, revision, {
+      omit: ["node_modules/@kaoiro/codex/dist/bridge.js"],
+      dropManifestEntries: ["node_modules/@kaoiro/codex/dist/bridge.js"],
+    });
+
+    const result = install(archive);
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("bridge.js");
+  });
+
   it("回帰: ディレクトリ指定の import を index.js へ解決する", () => {
     // realpathSync succeeds on a DIRECTORY, so without an isFile() test the
     // bare candidate wins and a directory lands in the reachable set — where

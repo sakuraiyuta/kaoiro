@@ -188,11 +188,20 @@ export function writeReleaseTree(
     // expected closure by following the specifiers written inside each
     // module, so a wrapper stub that imported nothing would leave that walk
     // with nothing to walk (issue #229, もも review must-fix 2).
+    // The codex wrapper locates its bridge through `new URL(...,
+    // import.meta.url)` — a real runtime module edge no import statement
+    // expresses. The closure walk missed it entirely until もも removed
+    // bridge.js with its manifest entry and strict verify still exited 0.
+    const bridgeEdge =
+      wrapper === "codex"
+        ? 'const b = new URL("../dist/bridge.js", import.meta.url);\n'
+        : "";
     put(
       `node_modules/@kaoiro/${wrapper}/dist/cli.js`,
-      'require("@kaoiro/wrapper-core");\n',
+      `require("@kaoiro/wrapper-core");\n${bridgeEdge}`,
     );
   }
+  put("node_modules/@kaoiro/codex/dist/bridge.js", "// stub bridge\n");
   put(
     "node_modules/@kaoiro/wrapper-core/package.json",
     JSON.stringify({

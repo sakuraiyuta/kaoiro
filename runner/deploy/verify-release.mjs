@@ -183,15 +183,82 @@ function parseManifest(raw) {
  *  point of deriving the set twice). */
 const ENTRY_PACKAGES = ["@kaoiro/claude-code", "@kaoiro/codex"];
 
-/** Module specifiers a module body references. Emitted first-party code is
- *  machine-generated (tsc), so its import forms are regular; the CJS
- *  `require` form is here because the deterministic tests' stub entry points
- *  use it. */
+/** Splits a module body into code text and its string literals, so a
+ *  specifier can only be recognised in SPECIFIER POSITION.
+ *
+ *  A LEXER, NOT A LIST OF CASES. The previous revision blanked comments, and
+ *  a string literal holding the same words was then read as a dependency;
+ *  a template literal did it again (もも review, issue #229). Enumerating
+ *  non-code contexts one defect at a time is the exact failure this issue
+ *  keeps reproducing — the third instance of it. Tracking lexical state
+ *  covers comments, strings and templates together, including whatever
+ *  nobody has hit yet.
+ *
+ *  Each literal becomes an opaque marker, so `const x = 'import "./y.js"'`
+ *  cannot match: the words are inside the marker, not beside `from`.
+ *  A literal carrying an escape or a `${}` substitution is recorded as
+ *  unusable rather than guessed at — and a regex literal is lexed as a
+ *  string, which over-blanks. Both err toward noticing FEWER specifiers,
+ *  which is the safe direction: missing one narrows this check, inventing
+ *  one rejects a healthy release and blocks every deploy. */
+function lexModule(source) {
+  const values = [];
+  let out = "";
+  let i = 0;
+  const blank = (text) => text.replace(/[^\n]/g, " ");
+  while (i < source.length) {
+    const two = source.slice(i, i + 2);
+    if (two === "//") {
+      const stop = source.indexOf("\n", i);
+      const end = stop === -1 ? source.length : stop;
+      out += blank(source.slice(i, end));
+      i = end;
+    } else if (two === "/*") {
+      const stop = source.indexOf("*/", i + 2);
+      const end = stop === -1 ? source.length : stop + 2;
+      out += blank(source.slice(i, end));
+      i = end;
+    } else if (source[i] === '"' || source[i] === "'" || source[i] === "`") {
+      const quote = source[i];
+      let j = i + 1;
+      let usable = true;
+      while (j < source.length && source[j] !== quote) {
+        if (source[j] === "\\") {
+          usable = false;
+          j += 2;
+          continue;
+        }
+        if (quote === "`" && source.slice(j, j + 2) === "${") usable = false;
+        j += 1;
+      }
+      const raw = source.slice(i + 1, Math.min(j, source.length));
+      values.push(usable ? raw : null);
+      out += `\u0000${values.length - 1}\u0000`;
+      out += blank(raw).replace(/[^\n]/g, "");
+      i = Math.min(j + 1, source.length);
+    } else {
+      out += source[i];
+      i += 1;
+    }
+  }
+  return { code: out, values };
+}
+
+/** Specifier positions, matched against the lexed code with each string
+ *  literal reduced to its marker.
+ *
+ *  `new URL(..., import.meta.url)` is here because it is how the codex
+ *  wrapper locates its own bridge script at runtime — a real first-party
+ *  module edge that no `import` statement expresses, so the closure missed
+ *  it entirely (もも review, issue #229). THIS ONE IS AN ENUMERATION and is
+ *  worth naming as such: any OTHER way of composing a path at runtime stays
+ *  invisible to this check. */
 const SPECIFIER_RES = [
-  /\bfrom\s*["']([^"']+)["']/g, // import … from "x" / export … from "x"
-  /\bimport\s+["']([^"']+)["']/g, // bare side-effect import
-  /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g, // dynamic import("x")
-  /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g, // CJS
+  /\bfrom\s*\u0000(\d+)\u0000/g,
+  /\bimport\s+\u0000(\d+)\u0000/g,
+  /\bimport\s*\(\s*\u0000(\d+)\u0000\s*\)/g,
+  /\brequire\s*\(\s*\u0000(\d+)\u0000\s*\)/g,
+  /\bnew\s+URL\s*\(\s*\u0000(\d+)\u0000\s*,\s*import\.meta\.url\s*\)/g,
 ];
 
 /** Locates `<name>`'s directory by the ordinary node_modules walk from
@@ -258,27 +325,6 @@ function resolveFile(base) {
   return null;
 }
 
-/** Blanks out comments so a specifier that appears only in PROSE is never
- *  mistaken for a dependency.
- *
- *  THIS IS THE DIRECTION THAT MATTERS. Failing to notice a real specifier
- *  only narrows what the closure check can detect; inventing one REJECTS A
- *  HEALTHY RELEASE, and install and switch both map that to exit 70 — every
- *  deploy blocked. This project's own comment style writes specifiers in
- *  prose (`wrapper/agent-common/src/types.ts` says "keep importing from
- *  './types.js'", and tsc preserves it into dist/), so it is a matter of
- *  time, not of bad luck. Reproduced during review: one doc comment naming a
- *  since-renamed sibling turned a complete tree into exit 70.
- *
- *  The stripper is deliberately crude — a `//` inside a string literal (a
- *  URL, say) blanks the rest of that line. That errs toward noticing FEWER
- *  specifiers, which is the safe direction by the same argument. */
-function stripComments(source) {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/\/\/[^\n]*/g, " ");
-}
-
 /** THE FILES THIS RELEASE MUST CARRY, DERIVED WITHOUT READING THE MANIFEST.
  *
  *  This walks the actual module graph — it opens each reachable file and
@@ -293,9 +339,10 @@ function stripComments(source) {
  *  SCOPE: first-party only. `@kaoiro/*` bare specifiers are followed across
  *  packages; `node:` builtins and third-party packages are not, matching the
  *  manifest's own documented scope (the ~920 MB of engine CLI payloads stays
- *  out of both). Comments are blanked first (see stripComments) because the
- *  asymmetry only holds in one direction: missing a specifier narrows
- *  detection, while inventing one rejects a healthy release. */
+ *  out of both). The body is lexed first (see lexModule) so a specifier is
+ *  recognised only in specifier position: the asymmetry holds in one
+ *  direction only — missing a specifier narrows detection, inventing one
+ *  rejects a healthy release. */
 function expectedClosure(root) {
   const reachable = new Set();
   const queue = [];
@@ -325,10 +372,13 @@ function expectedClosure(root) {
       fail(`${file} is unreadable: ${err.message}`);
     }
     const specifiers = new Set();
-    const scanned = stripComments(source);
+    const { code, values } = lexModule(source);
     for (const re of SPECIFIER_RES) {
       re.lastIndex = 0;
-      for (const match of scanned.matchAll(re)) specifiers.add(match[1]);
+      for (const match of code.matchAll(re)) {
+        const value = values[Number(match[1])];
+        if (value !== null && value !== undefined) specifiers.add(value);
+      }
     }
     for (const specifier of specifiers) {
       if (specifier.startsWith(".")) {
