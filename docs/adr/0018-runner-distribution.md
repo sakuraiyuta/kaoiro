@@ -146,9 +146,15 @@ data / config を分けないため。entry 名は衝突しない。
 - **起動シムは build せず verify のみ行う**。検査対象は builder が生成する
   `MANIFEST.json` — runner 自身の `dist/` と、wrapper 2 種から依存宣言を
   たどって到達する `@kaoiro/*` パッケージ全部の `dist/` — の存在検査。
-  `MANIFEST.json` を持たない repo-direct な checkout でのみ、sentinel
+  `VERSION` を持たない repo-direct な checkout でのみ、sentinel
   4 本(`dist/cli.js` / `dist/build-info.json` / wrapper 2 種の
-  `dist/cli.js`)へ縮退する
+  `dist/cli.js`)へ縮退する。判別子は `VERSION` の有無であり、manifest の
+  可読性ではない
+- **install / switch は module graph を独立に再導出し、manifest の取りこぼしを
+  拒否する**(issue #229 もも レビュー)。manifest は自分自身の証人になれない
+  ため。**再導出の入力は同一 tree 内の `package.json` なので、これは改ざん
+  耐性ではない** — 閉じるのは builder のバグと配布後の部分的な破損で、tree
+  全体を書き換えられる主体への防御ではない。署名 / tree 外 digest は別途
 - **更新は `systemd-run --user --no-block` の transient *service* unit で
   実行する**。runner 配下のエージェントが更新スクリプトを直接叩くと、runner
   を停止した瞬間に自分が消えて後続が走らない

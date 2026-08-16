@@ -232,6 +232,26 @@ describe("kaoiro-runner-update.sh (issue #229)", () => {
       expect(result.stderr).not.toMatch(/\b(done|success|succeeded|completed)\b/i);
     });
 
+    it("queue に失敗したら ENQUEUED を出さずに落ちる", () => {
+      // もも review must-fix 3: `--no-block` means this command returns
+      // before the update has even STARTED, so "ENQUEUED" is the only thing
+      // it can honestly claim — and it may claim it only once systemd-run
+      // has actually accepted the job. Printing first and `exec`ing second
+      // reported a queued update when nothing had been queued. Rolling that
+      // ordering back left the suite green, so the ordering itself needs a
+      // failing seam to be pinned at all.
+      const archive = makeReleaseTarball(work, B);
+
+      const result = runUpdate(["--tarball", archive, "--detach"], {
+        KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+        KAOIRO_SYSTEMD_RUN: "/bin/false",
+      });
+
+      expect(result.status).toBe(70);
+      expect(result.stderr).not.toContain("ENQUEUED");
+      expect(result.stderr).toContain("nothing was started");
+    });
+
     it("--allow-dirty は worker 側へ転送される", () => {
       const log = join(dir, "systemd-run-argv");
       const archive = makeReleaseTarball(work, B);

@@ -37,7 +37,7 @@
 // import.
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /** Artifacts a release must carry even when it has no MANIFEST.json — a
  *  repo-direct dev checkout, which the builder never touched. In a real
@@ -131,13 +131,25 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function readManifest(root) {
-  let raw;
+/** Reads a file that a release MAY legitimately lack, distinguishing absence
+ *  from unreadability.
+ *
+ *  ENOENT is the only code that means "this file is genuinely not here".
+ *  EACCES, EISDIR, ELOOP and friends mean it IS here and something is wrong,
+ *  which is never a reason to take the more permissive branch. Folding both
+ *  into one bare `catch` is precisely how a release whose MANIFEST.json could
+ *  not be read degraded to the four-sentinel repo-direct path and started at
+ *  exit 0 (もも review, issue #229 — measured on a real tarball). */
+function readOptionalFile(root, name) {
   try {
-    raw = readFileSync(join(root, "MANIFEST.json"), "utf8");
-  } catch {
-    return null;
+    return readFileSync(join(root, name), "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    fail(`${name} is present but unreadable: ${err.message}`);
   }
+}
+
+function parseManifest(raw) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -161,6 +173,174 @@ function readManifest(root) {
     }
   }
   return entries;
+}
+
+/** The wrapper packages the runner resolves from disk at spawn time. Kept
+ *  identical to scripts/build-release-manifest.mjs's list on purpose — this
+ *  is the ADR-0053 arrangement again: an independently authored duplicate,
+ *  pinned equal by a test that feeds the real builder's own output through
+ *  this verifier, rather than by a shared import (which would defeat the
+ *  point of deriving the set twice). */
+const ENTRY_PACKAGES = ["@kaoiro/claude-code", "@kaoiro/codex"];
+
+/** Module specifiers a module body references. Emitted first-party code is
+ *  machine-generated (tsc), so its import forms are regular; the CJS
+ *  `require` form is here because the deterministic tests' stub entry points
+ *  use it. */
+const SPECIFIER_RES = [
+  /\bfrom\s*["']([^"']+)["']/g, // import … from "x" / export … from "x"
+  /\bimport\s+["']([^"']+)["']/g, // bare side-effect import
+  /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g, // dynamic import("x")
+  /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g, // CJS
+];
+
+/** Locates `<name>`'s directory by the ordinary node_modules walk from
+ *  `fromFile`. `createRequire(...).resolve()` cannot stand in here: these
+ *  packages publish `exports` with only an `import` condition, and CJS
+ *  resolution refuses such a subpath outright ("Package subpath './catalog'
+ *  is not defined by exports") even though the runtime, which loads them as
+ *  ESM, resolves it fine. Measured against the real release, 2026-08-16. */
+function packageDirOf(fromFile, name) {
+  let dir = dirname(fromFile);
+  for (;;) {
+    const candidate = join(dir, "node_modules", name);
+    try {
+      if (lstatSync(join(candidate, "package.json")).isFile()) return candidate;
+    } catch {
+      // keep walking up
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/** Maps a bare `@kaoiro/...` specifier to a file, following the package's own
+ *  `exports` under the `import` condition (what the runtime uses), falling
+ *  back to `main` and then to the conventional file spellings.
+ *
+ *  Returns null when the mapping cannot be determined at all — deliberately
+ *  NOT a failure. An unmapped specifier only narrows what this check can
+ *  detect, whereas guessing wrong would reject a healthy release. */
+function bareTarget(pkgDir, pkg, subpath) {
+  const entry = pkg.exports?.[subpath];
+  const mapped =
+    typeof entry === "string"
+      ? entry
+      : typeof entry === "object" && entry !== null
+        ? (entry.import ?? entry.node ?? entry.default)
+        : undefined;
+  if (typeof mapped === "string") return join(pkgDir, mapped);
+  if (subpath === ".") {
+    const main = pkg.module ?? pkg.main;
+    return typeof main === "string" ? join(pkgDir, main) : null;
+  }
+  return join(pkgDir, subpath);
+}
+
+/** The file `base` names, trying the spellings node would: as written, with
+ *  `.js` appended, and as a directory index. Null when none exist. */
+function resolveFile(base) {
+  for (const candidate of [base, `${base}.js`, join(base, "index.js")]) {
+    try {
+      return realpathSync(candidate);
+    } catch {
+      // try the next spelling
+    }
+  }
+  return null;
+}
+
+/** THE FILES THIS RELEASE MUST CARRY, DERIVED WITHOUT READING THE MANIFEST.
+ *
+ *  This walks the actual module graph — it opens each reachable file and
+ *  follows the specifiers written INSIDE it — rather than listing whatever
+ *  happens to be on disk. That distinction is the whole point: a directory
+ *  listing cannot notice a deletion, because a deleted file is simply absent
+ *  from the listing too. `dist/cli.js` still says `from "./args.js"` after
+ *  args.js is removed, so the dangling reference is what makes the removal
+ *  detectable (もも review, issue #229: removing the file AND its manifest
+ *  entry together passed --require-manifest --hash at exit 0).
+ *
+ *  SCOPE: first-party only. `@kaoiro/*` bare specifiers are followed across
+ *  packages; `node:` builtins and third-party packages are not, matching the
+ *  manifest's own documented scope (the ~920 MB of engine CLI payloads stays
+ *  out of both). A specifier this parser fails to notice merely narrows
+ *  detection — it cannot cause a false rejection, which is the failure mode
+ *  worth being asymmetric about here. */
+function expectedClosure(root) {
+  const reachable = new Set();
+  const queue = [];
+  const push = (file) => {
+    if (file !== null && !reachable.has(file)) {
+      reachable.add(file);
+      queue.push(file);
+    }
+  };
+  const entry = (path) => {
+    try {
+      push(realpathSync(path));
+    } catch (err) {
+      fail(`release is missing its entry point ${path}: ${err.message}`);
+    }
+  };
+  entry(join(root, "dist", "cli.js"));
+  for (const name of ENTRY_PACKAGES) {
+    entry(join(root, "node_modules", name, "dist", "cli.js"));
+  }
+  while (queue.length > 0) {
+    const file = queue.pop();
+    let source;
+    try {
+      source = readFileSync(file, "utf8");
+    } catch (err) {
+      fail(`${file} is unreadable: ${err.message}`);
+    }
+    const specifiers = new Set();
+    for (const re of SPECIFIER_RES) {
+      re.lastIndex = 0;
+      for (const match of source.matchAll(re)) specifiers.add(match[1]);
+    }
+    for (const specifier of specifiers) {
+      if (specifier.startsWith(".")) {
+        const resolved = resolveFile(join(dirname(file), specifier));
+        if (resolved === null) {
+          fail(
+            `${relative(root, file)} imports ${specifier}, which this release does not contain`,
+          );
+        }
+        push(resolved);
+      } else if (specifier.startsWith("@kaoiro/")) {
+        const parts = specifier.split("/");
+        const name = parts.slice(0, 2).join("/");
+        const subpath = parts.length > 2 ? `./${parts.slice(2).join("/")}` : ".";
+        const pkgDir = packageDirOf(file, name);
+        if (pkgDir === null) {
+          fail(
+            `${relative(root, file)} imports ${specifier}, which this release does not contain`,
+          );
+        }
+        let pkg;
+        try {
+          pkg = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
+        } catch (err) {
+          fail(`${name}'s package.json is unreadable or malformed: ${err.message}`);
+        }
+        const target = bareTarget(pkgDir, pkg, subpath);
+        if (target !== null) {
+          const resolved = resolveFile(target);
+          if (resolved === null) {
+            fail(
+              `${relative(root, file)} imports ${specifier}, whose target ${relative(root, target)} this release does not contain`,
+            );
+          }
+          push(resolved);
+        }
+      }
+      // node: builtins and third-party packages are deliberately not followed.
+    }
+  }
+  return reachable;
 }
 
 /**
@@ -193,32 +373,70 @@ export function verifyRelease(root, opts = {}) {
   // disagree is not merely untidy: the directory is NAMED after VERSION, so a
   // mismatch means `current -> releases/<id>` points at something whose own
   // build-info says it is a different build.
-  let version = null;
-  try {
-    version = readFileSync(join(root, "VERSION"), "utf8").trim();
-  } catch {
-    // Absent only in a repo-direct dev checkout — the builder always writes
-    // one. Nothing to cross-check there.
-  }
+  // Absent only in a repo-direct dev checkout — the builder always writes
+  // one. An unreadable VERSION is NOT absence; see readOptionalFile.
+  const versionRaw = readOptionalFile(root, "VERSION");
+  const version = versionRaw === null ? null : versionRaw.trim();
   if (version !== null && version !== identity) {
     fail(
       `VERSION (${version}) disagrees with dist/build-info.json (${identity})`,
     );
   }
 
-  const manifest = readManifest(root);
-  if (manifest === null) {
+  const manifestRaw = readOptionalFile(root, "MANIFEST.json");
+  if (manifestRaw === null) {
     if (opts.requireManifest === true) {
       fail("MANIFEST.json is missing (not a release built by the builder)");
+    }
+    // WHAT MAKES A TREE repo-direct IS THE ABSENCE OF A VERSION FILE, NOT AN
+    // ABSENT MANIFEST. Only scripts/build-runner-tarball.sh writes VERSION,
+    // and it writes MANIFEST.json in the same run — so a tree WITH a VERSION
+    // and WITHOUT a manifest is a release that LOST a file, never a dev
+    // checkout. Degrading it to the sentinel list re-opened the very
+    // enumeration this file exists to close: a real release with its
+    // MANIFEST.json removed passed start-up verification and reached the
+    // final exec at exit 0 (もも review, issue #229).
+    if (version !== null) {
+      fail(
+        "MANIFEST.json is missing from a built release (VERSION is present) — reinstall it; only a repo-direct checkout, which has no VERSION either, may start without one",
+      );
     }
     for (const rel of SENTINELS) containedRealPath(root, realRoot, rel);
     return { identity, checked: SENTINELS.length, manifest: false };
   }
 
+  const manifest = parseManifest(manifestRaw);
+  const listed = new Set();
   for (const [rel, digest] of manifest) {
     const real = containedRealPath(root, realRoot, rel);
+    listed.add(real);
     if (opts.hash === true && sha256(real) !== digest) {
       fail(`${rel} does not match its MANIFEST.json sha256`);
+    }
+  }
+
+  // A manifest cannot be its own witness. Everything above proves the tree
+  // matches what the manifest CLAIMS; it cannot notice a claim that was made
+  // smaller. Removing dist/args.js together with its entry left a
+  // self-consistent, undersized manifest that passed --require-manifest
+  // --hash at exit 0 (もも review, issue #229). So the strict callers derive
+  // the expected closure a second time, from the package graph, and reject a
+  // release that is missing anything it should carry.
+  //
+  // THE TRUST BOUNDARY, STATED PLAINLY. The re-derivation reads package.json
+  // files from the SAME tree, so a party able to rewrite MANIFEST.json can
+  // usually rewrite a `dependencies` map too, and both sides would then
+  // shrink together. THIS IS NOT TAMPER RESISTANCE. What it closes is a
+  // builder bug and a partial or naive post-distribution corruption. A
+  // guarantee above that threshold needs a signature or a digest kept
+  // outside the tree, which is deliberately a separate decision.
+  if (opts.requireManifest === true) {
+    for (const real of expectedClosure(root)) {
+      if (!listed.has(real)) {
+        fail(
+          `MANIFEST.json omits ${relative(realRoot, real)}, which the package graph says this release must carry`,
+        );
+      }
     }
   }
   return { identity, checked: manifest.length, manifest: true };

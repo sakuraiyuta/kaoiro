@@ -9,7 +9,9 @@
 // still lands inside the release it was started from (2026-08-16). That is
 // what makes "prepare while running" safe, and also why replacing the files
 // under a live release is refused below.
+import { execFileSync } from "node:child_process";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -119,6 +121,69 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     expect(second.status).toBe(0);
     expect(second.stdout.trim()).toBe(revision);
     expect(existsSync(marker)).toBe(true);
+  });
+
+  it("自己整合な過小 manifest を、package graph の再導出で拒否する", () => {
+    // もも review must-fix 2: removing a module AND its own manifest entry
+    // leaves a manifest that describes the tree perfectly — hash and all —
+    // while describing less than the release needs. A manifest cannot be its
+    // own witness, so the strict path derives the closure a second time by
+    // following the imports written inside each module. dist/cli.js still
+    // says require("./stub_dep.js") after stub_dep.js is gone, and that
+    // dangling reference is what makes the removal detectable.
+    const revision = revisionOf("undersized-manifest");
+    const archive = makeReleaseTarball(work, revision, {
+      omit: ["dist/stub_dep.js"],
+      dropManifestEntries: ["dist/stub_dep.js"],
+    });
+
+    const result = install(archive);
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("stub_dep.js");
+    expect(existsSync(join(root, "releases", revision))).toBe(false);
+  });
+
+  it("release 内の artifact が tree 外への symlink なら拒否する", () => {
+    // もも review must-fix 3: `-f` and realpath-less checks cannot tell a
+    // file IN the release from a link pointing at an identical file
+    // somewhere else, so the containment check has to be measured with a
+    // link whose bytes match — otherwise a digest comparison alone would
+    // explain the rejection.
+    const revision = revisionOf("outside-symlink");
+    const stage = join(work, "sym-stage");
+    const name = `kaoiro-runner-${revision}-linux-x64`;
+    const tree = join(stage, name);
+    writeReleaseTree(tree, revision);
+    const outside = join(dir, "outside-stub_dep.js");
+    copyFileSync(join(tree, "dist", "stub_dep.js"), outside);
+    rmSync(join(tree, "dist", "stub_dep.js"));
+    symlinkSync(outside, join(tree, "dist", "stub_dep.js"));
+    const archive = join(work, `${name}.tar.gz`);
+    execFileSync("tar", ["czf", archive, "-C", stage, name]);
+
+    const result = install(archive);
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("outside the release");
+    expect(existsSync(join(root, "releases", revision))).toBe(false);
+  });
+
+  it("既存 clean target が壊れていれば、no-op で済ませず拒否する", () => {
+    // もも review must-fix 3: the one path that touches an ALREADY INSTALLED
+    // release used to skip straight to exit 0. A release whose module had
+    // been deleted was reported as "already installed" and left broken, and
+    // the update that followed activated it.
+    const revision = revisionOf("broken-existing");
+    const archive = makeReleaseTarball(work, revision);
+    expect(install(archive).status).toBe(0);
+    rmSync(join(root, "releases", revision, "dist", "stub_dep.js"));
+
+    const result = install(archive);
+
+    expect(result.status).toBe(70);
+    expect(result.stdout).not.toContain(revision);
+    expect(result.stderr).not.toContain("already installed and verified");
   });
 
   it("clean な release は --allow-dirty を付けても置き換えられない", () => {

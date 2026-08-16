@@ -121,6 +121,12 @@ export interface ReleaseTreeOptions {
   /** Skip MANIFEST.json generation — for the "release built by an older
    *  installer" / dev-checkout cases. */
   manifest?: false;
+  /** Tree-relative paths to delete from the GENERATED manifest, leaving it
+   *  internally consistent but describing less than the release needs. Pair
+   *  with `omit` to stage the tampering もも measured: a module and its own
+   *  entry removed together passed --require-manifest --hash at exit 0,
+   *  because a manifest cannot witness a claim that was made smaller. */
+  dropManifestEntries?: string[];
   /** Unix seconds to stamp on the archive's top-level directory. tar
    *  preserves it, so this is how a test produces a release whose tree
    *  carries a BUILD time rather than an install time. */
@@ -178,11 +184,22 @@ export function writeReleaseTree(
         dependencies: { "@kaoiro/wrapper-core": "workspace:*" },
       }),
     );
-    put(`node_modules/@kaoiro/${wrapper}/dist/cli.js`, "// stub wrapper\n");
+    // A REAL cross-package import edge. verify-release.mjs derives the
+    // expected closure by following the specifiers written inside each
+    // module, so a wrapper stub that imported nothing would leave that walk
+    // with nothing to walk (issue #229, もも review must-fix 2).
+    put(
+      `node_modules/@kaoiro/${wrapper}/dist/cli.js`,
+      'require("@kaoiro/wrapper-core");\n',
+    );
   }
   put(
     "node_modules/@kaoiro/wrapper-core/package.json",
-    JSON.stringify({ name: "@kaoiro/wrapper-core", version: "0.0.0" }),
+    JSON.stringify({
+      name: "@kaoiro/wrapper-core",
+      version: "0.0.0",
+      main: "dist/index.js",
+    }),
   );
   put(
     "node_modules/@kaoiro/wrapper-core/dist/index.js",
@@ -209,6 +226,16 @@ export function writeReleaseTree(
       ],
       { stdio: ["ignore", "ignore", "ignore"] },
     );
+  }
+
+  const dropped = options.dropManifestEntries ?? [];
+  if (dropped.length > 0) {
+    const path = join(tree, "MANIFEST.json");
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      files: Record<string, string>;
+    };
+    for (const rel of dropped) delete parsed.files[rel];
+    writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
   }
 
   for (const rel of omit) rmSync(join(tree, rel), { force: true });

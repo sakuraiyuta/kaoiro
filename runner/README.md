@@ -242,8 +242,23 @@ launchctl bootstrap gui/"$(id -u)" \
   落としており、`wrapper-core` から 1 ファイル消しても検証を通過して
   agent spawn 時に落ちた(実 tarball で実測、2026-08-16)。起動時は存在検査のみで、
   sha256 の照合は install / switch 時に行う(起動 latency を守るため)。
-  `MANIFEST.json` が無い木(repo-direct な開発 checkout)では、従来の 4
-  artifact の検査へ縮退する。systemd は `RestartPreventExitStatus=78` で
+  **縮退の判別子は `VERSION` の有無であって、manifest が読めたかどうかでは
+  ない。**`VERSION` を書くのは builder だけで、同じ実行で `MANIFEST.json` も
+  書く。したがって `VERSION` があって manifest が無い木は「release が
+  ファイルを失った」であり、repo-direct checkout ではない — この場合は
+  exit 78 で拒否する。縮退するのは `VERSION` も無いときだけ。`ENOENT` 以外の
+  read error は「不在」ではなく「読めない」として扱う。
+- **install / switch は manifest を単独の証拠として扱わない。**module graph を
+  独立に再導出し(各 module に書かれた import を実際に辿る)、manifest が
+  取りこぼした module を拒否する。ディレクトリ列挙では削除を検出できない —
+  削除されたファイルは列挙からも消えるため。`dist/cli.js` は `args.js` を
+  消しても `./args.js` を import したままなので、その宙吊りの参照が検出の
+  手がかりになる。
+  **信頼境界: 再導出の入力は同一 tree 内の `package.json` である。**
+  `MANIFEST.json` を書き換えられる主体は依存宣言も書き換えられるので、
+  **これは改ざん耐性ではない。**閉じるのは builder 自身のバグと、配布後の
+  部分的・素朴な破損である。その閾値を超える保証が要るなら、署名または
+  tree 外の digest を別途検討すること。systemd は `RestartPreventExitStatus=78` で
   再起動せず failed のまま止まる — 原因は `systemctl --user status` に出る。
   launchd に同等の設定はないため `ThrottleInterval=30` で間隔を空けるだけで、
   原因はログファイルを見る

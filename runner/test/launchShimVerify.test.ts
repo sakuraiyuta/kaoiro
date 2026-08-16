@@ -104,6 +104,63 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
     expect(launch().status).toBe(0);
   });
 
+  it("MANIFEST.json を失った release (VERSION あり) は exit 78 で起動しない", () => {
+    // もも review (issue #229): readManifest() folded EVERY read error into
+    // "no manifest", and the shim treated that as the repo-direct checkout
+    // case. A real release with its MANIFEST.json removed therefore fell back
+    // to the four sentinels and reached the final exec at exit 0 — the same
+    // enumeration this file exists to close, re-entered through the degrade
+    // path instead of the check itself.
+    unlinkSync(join(tree, "MANIFEST.json"));
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("MANIFEST.json is missing from a built release");
+    expect(result.stdout).not.toContain("stub cli.js started");
+  });
+
+  it("VERSION も MANIFEST も無ければ repo-direct として起動する", () => {
+    // The discriminator is VERSION, not the manifest: only the builder writes
+    // one, so its absence is what actually identifies a dev checkout.
+    unlinkSync(join(tree, "MANIFEST.json"));
+    unlinkSync(join(tree, "VERSION"));
+
+    const result = launch();
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("stub cli.js started");
+  });
+
+  it("MANIFEST.json が読めない (存在するが不正) なら縮退せず落ちる", () => {
+    // ENOENT is the ONLY code that means absence. A directory in its place
+    // makes readFileSync throw EISDIR, and folding that into "no manifest"
+    // is the same degrade by another route.
+    unlinkSync(join(tree, "MANIFEST.json"));
+    mkdirSync(join(tree, "MANIFEST.json"));
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("present but unreadable");
+  });
+
+  it("build-info.json の shape が不正なら exit 78 で起動しない", () => {
+    // もも review must-fix 3: VALID JSON with a malformed field, which is
+    // what actually exercises the shape guard. A syntactically broken file
+    // would stop at JSON.parse instead and leave the guard unmeasured —
+    // rolling the guard back then keeps the suite green (measured: it did).
+    writeFileSync(
+      join(tree, "dist", "build-info.json"),
+      JSON.stringify({ revision: REVISION, dirty: false, built_at: "not-a-date" }),
+    );
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+  });
+
   it("build ツールを一切起動しない", () => {
     const binDir = join(dir, "stub-bin");
     const marker = join(dir, "build-was-invoked");
