@@ -14,6 +14,7 @@ export type {
   AttachOpenMessage,
   DirectoryContext,
   DirectoryEntry,
+  DirectoryRateLimitWindow,
   DirectoryResult,
   HydrationVerdictMessage,
   InterAgentDeliveryStatus,

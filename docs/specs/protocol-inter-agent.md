@@ -1075,7 +1075,7 @@ wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allow
 | Tool (full name) | 用途 | 経路 |
 |---|---|---|
 | `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧を取得。宛先解決 (id / persona name / state) に加え、委譲先選定のための実行特性 (engine / model / effort) と稼働状況 (context / session_started_at / turns / last_activity_at / conversation / rate_limits) を返す | wrapper → server の `directory_request` を呼び、reply の `agents` を narrow して返す |
-| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd / `context` を返す | wrapper のローカル `EffectiveStatusSnapshot` と host の context キャッシュを読むのみ。server round-trip なし |
+| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd / `context` / `rate_limits` を返す | wrapper のローカル `EffectiveStatusSnapshot` と host の context / rate limit キャッシュを読むのみ。server round-trip なし |
 
 `whoami` の実効設定は state envelope と別に組み立てず、各 host が持つ共通
 `EffectiveStatusSnapshot` から投影する。`model` / `effort` / source と
@@ -1104,6 +1104,28 @@ used_percentage}` を返す。peer が `list_agents` で読む `context` と
   「直前の値がもう有効でない」も意味する
 - tool 説明では「必要なときに見る」に留め、常時参照を促さない
   (context anxiety 回避。#168 comment-2287 の決定 P3)
+
+`rate_limits` は [#254](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/254)
+の追補で、自分の rate limit window を `{<window>: {status?, utilization?,
+resets_at?}}` で返す。peer が `list_agents` で読む `rate_limits` と
+**shape も semantics も同一** (`DirectoryRateLimitWindow`)。
+
+- **これは表示の穴ではなく自己監視の穴だった**。`list_agents` は呼び出し元を
+  除外するため、「7-day 使用率 N% で新規作業を止めよ」と指示された agent が
+  その数値を観測する手段が無かった。2026-08-16 の運用で 3 名が当たり、いずれも
+  director の `list_agents` 転記で代替している。`whoami` はこの唯一の
+  自己観測点になる
+- 値は **host 自身の最新スナップショット**から読む。server のコピーではない —
+  これらの値を生産しているのは wrapper 側なので、host の map は directory が
+  返しうる何よりも新しいか同じである。したがって peer が見る値と食い違うのは
+  配送差の一時的なずれだけで、実装として二経路にはしない
+  (テストで **同値**を固定している。同形では検出できない)
+- **snapshot は最終 turn 時点**で、idle 中は更新されない。`resets_at`
+  (Unix 秒) を現在時刻と突き合わせ、通過後は `utilization` / `status` を
+  信用しない。読み方の正本は `list_agents` の tool description と揃える
+- engine が一度も報告していない間は key ごと省略する。**absent = unknown**
+  であり「無制限」ではない (claude: 初回 usage refresh 前、codex: rollout
+  tail が存在しない spawn 直後)
 
 #### セッション操作ツール — `request_compact` (phase-28 B2)
 

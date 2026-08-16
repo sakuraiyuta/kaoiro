@@ -1940,6 +1940,53 @@ describe("CodexHost", () => {
       });
     });
 
+    // issue #254: 自分の rate limit を自分で観測できるようにする。list_agents
+    // は呼び出し元を除外するので、ここが唯一の自己観測点になる。
+    it("rollout snapshot が無い間は whoami から key ごと省略する", () => {
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+      });
+      expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
+    });
+
+    it("whoami の rate_limits は host が stamp する ext.rate_limits と同一値になる", async () => {
+      // 「同形」ではなく「同値」を固定する。両者が別経路で組み立てられるように
+      // なった瞬間に、自己観測と peer 観測が食い違っても誰も気づかなくなる。
+      const states: Envelope[] = [];
+      const rateLimitsStamped = deferred<void>();
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "uuid-rl-whoami" },
+          { type: "turn.started" },
+          usageEvent(),
+        ],
+      ]);
+      const snapshot: Map<CodexRateLimitWindow, CodexRateLimitSnapshot> =
+        new Map([["seven_day", { utilization: 0.17, resets_at: 1787456530 }]]);
+      const host = new CodexHost(CONFIG, {
+        onState: (e) => {
+          states.push(e);
+          if (e.ext.rate_limits !== undefined) rateLimitsStamped.resolve();
+        },
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rateLimitResolver: async () => snapshot,
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi", client, rateLimitsStamped.promise);
+
+      expect(host.statusSnapshot().rate_limits).toEqual(
+        states.at(-1)?.ext.rate_limits,
+      );
+      expect(host.statusSnapshot()).toMatchObject({
+        rate_limits: {
+          seven_day: { utilization: 0.17, resets_at: 1787456530 },
+        },
+      });
+    });
+
     it("初期取得済みと同値の terminal refresh は state_change を追加発火しない", async () => {
       const states: Envelope[] = [];
       const terminalRefreshStarted = deferred<void>();
