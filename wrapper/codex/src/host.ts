@@ -9,6 +9,7 @@
 // the approval axis is pinned to "never" — codex exec cannot deliver
 // approval requests to the caller, so waiting_permission never occurs here.
 
+import { randomUUID } from "node:crypto";
 import { Codex } from "@openai/codex-sdk";
 import type {
   CodexOptions,
@@ -73,6 +74,12 @@ import {
   type CodexRateLimitSnapshot,
   type CodexRateLimitWindow,
 } from "./rollout.js";
+import {
+  CodexTurnDiagnostics,
+  codexTurnTraceCaptureDir,
+  defaultCodexTurnTraceDir,
+  pruneCodexTurnTraceCaptureDirs,
+} from "./turn_diagnostics.js";
 import { ToolHost } from "./toolhost.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
@@ -181,6 +188,8 @@ export interface CodexHostOptions {
    *  message in a coalesced batch caused the failure). Omitted = no notice
    *  is ever emitted (unit tests only — production wires it). */
   onTurnEnd?: (info: {
+    /** Immutable identity of this exact host turn. */
+    turnToken: string;
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
   }) => void;
@@ -233,6 +242,9 @@ export interface CodexHostOptions {
     uploads: PendingUpload[],
     lifecycle: MaterializeLifecycle,
   ) => Promise<{ dir: string; paths: string[] }>;
+  /** Local directory for failure-only Codex turn traces. Production defaults
+   * to ~/.kaoiro/codex-turn-traces; tests inject a temporary directory. */
+  turnTraceDir?: string;
 }
 
 /** Bridge entry point, resolved against the built package layout. Works from
@@ -256,6 +268,95 @@ function rateLimitsDiffer(
     }
   }
   return false;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** The SDK types describe well-formed JSONL, but a malformed external event
+ * must be traceable without entering the production adapter path.
+ *
+ * `runStreamed()` yields the Codex CLI's JSONL through `JSON.parse`. That
+ * boundary creates data-only objects, so the property reads below cannot
+ * invoke accessors or proxies. If this input ever gains another producer
+ * (especially hand-constructed objects), wrap this gate before relying on
+ * the same fail-soft guarantee. */
+function isUsableThreadEvent(event: unknown): event is ThreadEvent {
+  if (!isRecord(event) || typeof event.type !== "string") return false;
+  switch (event.type) {
+    case "thread.started":
+      return typeof event.thread_id === "string";
+    case "turn.started":
+    case "turn.completed":
+      return true;
+    case "turn.failed":
+      return isRecord(event.error) && typeof event.error.message === "string";
+    case "error":
+      return typeof event.message === "string";
+    case "item.started":
+    case "item.updated":
+    case "item.completed":
+      return isUsableThreadItem(event.item);
+    default:
+      return false;
+  }
+}
+
+function isUsableThreadItem(item: unknown): boolean {
+  if (!isRecord(item) || typeof item.id !== "string" || typeof item.type !== "string") {
+    return false;
+  }
+  switch (item.type) {
+    case "agent_message":
+    case "reasoning":
+      return typeof item.text === "string";
+    case "command_execution":
+      return (
+        typeof item.command === "string" &&
+        typeof item.aggregated_output === "string" &&
+        typeof item.status === "string" &&
+        (item.exit_code === undefined || typeof item.exit_code === "number")
+      );
+    case "file_change":
+      return (
+        typeof item.status === "string" &&
+        Array.isArray(item.changes) &&
+        item.changes.every(
+          (change) =>
+            isRecord(change) &&
+            typeof change.path === "string" &&
+            typeof change.kind === "string",
+        )
+      );
+    case "mcp_tool_call":
+      return (
+        typeof item.server === "string" &&
+        typeof item.tool === "string" &&
+        typeof item.status === "string" &&
+        (item.error === undefined ||
+          (isRecord(item.error) && typeof item.error.message === "string")) &&
+        (item.result === undefined ||
+          item.result === null ||
+          (isRecord(item.result) && Array.isArray(item.result.content)))
+      );
+    case "web_search":
+      return typeof item.query === "string";
+    case "todo_list":
+      return (
+        Array.isArray(item.items) &&
+        item.items.every(
+          (entry) =>
+            isRecord(entry) &&
+            typeof entry.text === "string" &&
+            typeof entry.completed === "boolean",
+        )
+      );
+    case "error":
+      return typeof item.message === "string";
+    default:
+      return false;
+  }
 }
 
 export class CodexHost implements EngineAdapter {
@@ -303,6 +404,7 @@ export class CodexHost implements EngineAdapter {
     input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
     tempDir?: string;
     conversationIds?: readonly string[];
+    turnToken?: string;
   }> = [];
   readonly #pendingUploads = new Map<string, PendingUpload>();
   /** Includes dirs still being materialized, queued, or streaming. */
@@ -314,6 +416,8 @@ export class CodexHost implements EngineAdapter {
   #gcTimer: ReturnType<typeof setInterval> | null = null;
   #wake: (() => void) | null = null;
   #abort: AbortController | null = null;
+  /** Present only while the SDK is executing one host turn. */
+  #activeTurnToken: string | null = null;
   #closed = false;
   /** Invalidates an older turn's asynchronous account-default refresh. */
   #modelResolutionGeneration = 0;
@@ -323,7 +427,7 @@ export class CodexHost implements EngineAdapter {
    * snapshots without applying the child-task time/token throttle. */
   #lastTasklistJson: string | null = null;
   /** Latest per-window rate-limit snapshot (mirrors AgentHost's #rateLimits).
-   *  Populated fire-and-forget from the rollout tail after each terminal
+   *  Populated when a session id becomes known and after each terminal
    *  ThreadEvent — Codex has no in-stream rate_limit event, unlike Claude. */
   readonly #rateLimits = new Map<
     CodexRateLimitWindow,
@@ -332,10 +436,26 @@ export class CodexHost implements EngineAdapter {
   /** In-flight guard for #refreshRateLimits(): coalesces multiple concurrent
    *  refresh triggers so a slow rollout tail cannot pile up work. */
   #rateLimitsInflight = false;
+  /** Session whose startup rollout snapshot was already attempted. The CLI
+   *  initializes resumed sessions before its first state, while run() also
+   *  invokes the same method as a safety net; this keeps that startup read
+   *  exactly once per session. */
+  #rateLimitsInitializedSessionId: string | null = null;
+  /** This process's private trace capture directory. It is derived without
+   * filesystem I/O so a broken diagnostic path cannot prevent host startup. */
+  readonly #turnTraceCaptureDir: string;
+  readonly #turnTraceBaseDir: string;
 
   constructor(config: WrapperConfig, options: CodexHostOptions) {
     this.#config = config;
     this.#options = options;
+    this.#turnTraceBaseDir =
+      options.turnTraceDir ?? defaultCodexTurnTraceDir();
+    this.#turnTraceCaptureDir = codexTurnTraceCaptureDir(
+      this.#turnTraceBaseDir,
+      config.agent_id,
+      randomUUID(),
+    );
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
     this.#model = config.model ?? null;
@@ -432,6 +552,23 @@ export class CodexHost implements EngineAdapter {
     return out;
   }
 
+  /**
+   * Loads an already-written rollout snapshot before the CLI emits its
+   * startup state. A fresh spawn has no session id yet, so this is a no-op
+   * until thread.started establishes one in #runTurn.
+   */
+  async initializeRateLimits(): Promise<void> {
+    const sessionId = this.#sessionId;
+    if (
+      sessionId === null ||
+      this.#rateLimitsInitializedSessionId === sessionId
+    ) {
+      return;
+    }
+    this.#rateLimitsInitializedSessionId = sessionId;
+    await this.#refreshRateLimits();
+  }
+
   /** Single engine-neutral SoT for both state_change.ext and whoami (#113). */
   #effectiveStatusSnapshot(): EffectiveStatusSnapshot {
     const permission = { sandbox: this.#sandbox, approval: "never" } as const;
@@ -460,6 +597,7 @@ export class CodexHost implements EngineAdapter {
     text: string,
     attachmentIds?: string[],
     interAgentConversationIds?: readonly string[],
+    interAgentTurnToken?: string,
   ): Promise<void> {
     if (this.#closed) return;
     if (
@@ -515,8 +653,18 @@ export class CodexHost implements EngineAdapter {
       ...(interAgentConversationIds === undefined
         ? {}
         : { conversationIds: interAgentConversationIds }),
+      ...(interAgentTurnToken === undefined
+        ? {}
+        : { turnToken: interAgentTurnToken }),
     });
     this.#wake?.();
+  }
+
+  /** Turn ownership capability consumed by InterAgentTool. It is intentionally
+   * null outside SDK execution so a late tool result cannot clear another
+   * turn's pending inbound lease. */
+  activeInterAgentTurnToken(): string | null {
+    return this.#activeTurnToken;
   }
 
   async interrupt(): Promise<void> {
@@ -646,6 +794,20 @@ export class CodexHost implements EngineAdapter {
   }
 
   async run(initialPrompt?: string): Promise<void> {
+    // The CLI normally has already done this before its initial idle/sending
+    // state. Keep the host self-sufficient for non-CLI callers; the per-
+    // session guard makes the second call a no-op (issue #251).
+    await this.initializeRateLimits();
+    try {
+      await pruneCodexTurnTraceCaptureDirs(
+        this.#turnTraceBaseDir,
+        this.#config.agent_id,
+      );
+    } catch (error) {
+      // Retention is diagnostic-only; an unreadable trace root must not
+      // prevent a real SDK turn or a default Codex factory from starting.
+      process.stderr.write(`codex turn trace failed: ${String(error)}\n`);
+    }
     const descriptors = this.#options.toolDescriptors ?? [];
     const toolHost =
       descriptors.length > 0 ? await ToolHost.listen(descriptors) : null;
@@ -667,7 +829,14 @@ export class CodexHost implements EngineAdapter {
         kaoiro: {
           command: process.execPath,
           args: [BRIDGE_SCRIPT],
-          env: { KAOIRO_BRIDGE_SOCKET: toolHost.socketPath },
+          env: {
+            KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
+            // The bridge appends only its own stderr to this private local
+            // file. Each failure trace snapshots its tail; neither is sent
+            // to a peer or interpolated into the notice template.
+            KAOIRO_BRIDGE_STDERR_PATH:
+              `${this.#turnTraceCaptureDir}/bridge.stderr.log`,
+          },
           // `codex exec` forces approval_policy=never, which otherwise
           // auto-cancels every MCP tool call ("user cancelled MCP tool
           // call"). "approve" auto-approves the kaoiro tools so they run
@@ -715,6 +884,7 @@ export class CodexHost implements EngineAdapter {
           turn.input,
           turn.tempDir,
           turn.conversationIds ?? [],
+          turn.turnToken ?? randomUUID(),
         );
       }
     } finally {
@@ -773,7 +943,27 @@ export class CodexHost implements EngineAdapter {
     input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>,
     tempDir?: string,
     conversationIds: readonly string[] = [],
+    turnToken: string = randomUUID(),
   ): Promise<void> {
+    this.#activeTurnToken = turnToken;
+    const diagnostics = new CodexTurnDiagnostics(this.#turnTraceCaptureDir);
+    const persistFailure = async (
+      input: Parameters<CodexTurnDiagnostics["writeFailure"]>[0],
+    ): Promise<void> => {
+      try {
+        await diagnostics.writeFailure(input);
+      } catch (error) {
+        // A local diagnostic filesystem failure must never replace the SDK
+        // turn's original outcome or suppress its fixed peer-error notice.
+        process.stderr.write(`codex turn trace failed: ${String(error)}\n`);
+      }
+    };
+    try {
+      await diagnostics.begin();
+    } catch (error) {
+      // Match persistFailure's non-interference rule for the capture window.
+      process.stderr.write(`codex turn trace failed: ${String(error)}\n`);
+    }
     const resolutionGeneration = ++this.#modelResolutionGeneration;
     const attempted = {
       model: this.#modelPending,
@@ -803,16 +993,28 @@ export class CodexHost implements EngineAdapter {
           );
     this.#abort = new AbortController();
     let finalText: string | null = null;
+    // A stream-level `error` is evidence, not a terminal boundary. Some SDK
+    // versions may still follow it with turn.completed; retain it only so a
+    // later terminal-less EOF has the best available local classification.
+    let recordedThreadError: string | null = null;
     let sawResult = false;
     try {
       const { events } = await thread.runStreamed(input, {
         signal: this.#abort.signal,
       });
       for await (const event of events) {
+        diagnostics.recordEvent(event);
+        if (!isUsableThreadEvent(event)) continue;
+        if (event.type === "error") recordedThreadError = event.message;
         const sessionId = threadEventToSessionId(event);
         if (sessionId !== null && sessionId !== this.#sessionId) {
           this.#sessionId = sessionId;
           this.#options.onSessionId?.(sessionId);
+          // A fresh thread's first token_count can be absent, but a resumed
+          // or reused rollout may already have a snapshot. Await its initial
+          // read before the following SDK event emits state, so that state
+          // carries ext.rate_limits when the rollout has data (issue #251).
+          await this.initializeRateLimits();
         }
         for (const entry of threadEventToLogs(event)) {
           this.#emitLog(entry);
@@ -827,7 +1029,7 @@ export class CodexHost implements EngineAdapter {
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
           });
-          this.#options.onTurnEnd?.({ conversationIds });
+          this.#options.onTurnEnd?.({ turnToken, conversationIds });
           // Resolve only after the terminal event: at turn.started an existing
           // rollout can still expose the previous turn_context and look
           // spuriously "resolved". Keep this background so filesystem timing
@@ -844,7 +1046,15 @@ export class CodexHost implements EngineAdapter {
           this.#finishTurn(false, attempted);
           this.#emitResult({ is_error: true });
           const detail = threadEventToErrorDetail(event);
+          await persistFailure({
+            sessionId: this.#sessionId,
+            turnToken,
+            conversationIds,
+            ...(detail === null ? {} : { detail }),
+            outcome: "turn_failed",
+          });
           this.#options.onTurnEnd?.({
+            turnToken,
             conversationIds,
             error: detail !== null ? { detail } : {},
           });
@@ -863,7 +1073,21 @@ export class CodexHost implements EngineAdapter {
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
-        this.#options.onTurnEnd?.({ conversationIds, error: {} });
+        await persistFailure({
+          sessionId: this.#sessionId,
+          turnToken,
+          conversationIds,
+          ...(recordedThreadError === null
+            ? {}
+            : { detail: recordedThreadError }),
+          outcome: "stream_ended_without_terminal",
+        });
+        this.#options.onTurnEnd?.({
+          turnToken,
+          conversationIds,
+          error:
+            recordedThreadError === null ? {} : { detail: recordedThreadError },
+        });
       }
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
@@ -871,6 +1095,13 @@ export class CodexHost implements EngineAdapter {
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
+        await persistFailure({
+          sessionId: this.#sessionId,
+          turnToken,
+          conversationIds,
+          detail: String(err),
+          outcome: "run_streamed_rejected",
+        });
         // issue #131 must-fix 2: String(err) is unstructured, untrusted text
         // (subprocess/exception message, possibly containing paths or other
         // detail unsafe to inject verbatim into a peer's LLM context). Safe
@@ -879,6 +1110,7 @@ export class CodexHost implements EngineAdapter {
         // produced notice's message — the raw string itself never leaves
         // this process.
         this.#options.onTurnEnd?.({
+          turnToken,
           conversationIds,
           error: { detail: String(err) },
         });
@@ -888,6 +1120,7 @@ export class CodexHost implements EngineAdapter {
       }
     } finally {
       this.#abort = null;
+      this.#activeTurnToken = null;
       if (tempDir !== undefined) await this.#cleanupTempDir(tempDir);
     }
   }
@@ -923,6 +1156,8 @@ export class CodexHost implements EngineAdapter {
     const retained: Array<{
       input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
       tempDir?: string;
+      conversationIds?: readonly string[];
+      turnToken?: string;
     }> = [];
     for (const turn of this.#queue) {
       if (turn.tempDir === undefined) {
@@ -1067,7 +1302,8 @@ export class CodexHost implements EngineAdapter {
     this.#emitState(this.#machine.state);
   }
 
-  /** Refreshes #rateLimits from the rollout tail after a terminal ThreadEvent.
+  /** Refreshes #rateLimits from the rollout tail after a session becomes known
+   *  and after a terminal ThreadEvent.
    *  Codex has no in-stream rate_limit event (unlike Claude's SDKRateLimitEvent),
    *  so this reads the JSONL the SDK's own `codex exec` subprocess writes.
    *  Fire-and-forget from the run loop; coalesces concurrent refreshes so a

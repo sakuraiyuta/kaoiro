@@ -275,11 +275,13 @@ async function main(): Promise<void> {
   const interAgentIngress = new InterAgentIngressGate();
 
   const resolveInterAgentConversationIds = (
+    turnToken: string,
     conversationIds: readonly string[],
     error?: { reason?: string; detail?: string },
   ): void => {
     const classified = error ? classifyInterAgentError(error) : undefined;
     for (const envelope of interAgent?.resolveTurnEnd(
+      turnToken,
       conversationIds,
       classified,
     ) ?? []) {
@@ -299,7 +301,11 @@ async function main(): Promise<void> {
       );
       return;
     }
-    resolveInterAgentConversationIds(settlement.batch.conversationIds, error);
+    resolveInterAgentConversationIds(
+      settlement.batch.turnToken,
+      settlement.batch.conversationIds,
+      error,
+    );
     // Resolve the old generation before starting a same-CID successor:
     // InterAgentTool's pending map is intentionally one record per CID.
     if (options.dispatchNext !== false) {
@@ -312,7 +318,7 @@ async function main(): Promise<void> {
       // Register at dispatch time, not receipt time: a same-CID next
       // generation cannot overwrite this record while this token is active.
       for (const item of batch.items) {
-        interAgent?.notePendingInjection(item.envelope);
+        interAgent?.notePendingInjection(item.envelope, batch.turnToken);
       }
       void enqueueInstruction(() =>
         host
@@ -454,6 +460,8 @@ async function main(): Promise<void> {
   interAgent = new InterAgentTool({
     config,
     getState: () => host.state,
+    getActiveInterAgentTurnToken: () =>
+      host?.activeInterAgentTurnToken() ?? null,
     send: (envelope) => link?.send(envelope),
     // ADR-0051 D3-2: `send_to_agent`'s result is the server's acceptance
     // ack, not the local push. No link yet means no server took it.
@@ -801,9 +809,13 @@ async function main(): Promise<void> {
       // the fail-visible fallback (issue #246).
       for (const batch of interAgentTurns.closeAndDrain()) {
         for (const item of batch.items) {
-          interAgent?.notePendingInjection(item.envelope);
+          interAgent?.notePendingInjection(item.envelope, batch.turnToken);
         }
-        resolveInterAgentConversationIds(batch.conversationIds, error);
+        resolveInterAgentConversationIds(
+          batch.turnToken,
+          batch.conversationIds,
+          error,
+        );
       }
     },
     appendSystemPrompt,

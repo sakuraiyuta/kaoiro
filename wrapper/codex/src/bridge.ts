@@ -6,6 +6,7 @@
 // request pending, which blocks the codex turn — that is what makes
 // waiting_question hold on codex (ADR-0032 F6).
 
+import { appendFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -19,6 +20,20 @@ interface BridgeResponse {
   tools?: unknown[];
   result?: { content: unknown[]; isError?: boolean };
   error?: string;
+}
+
+/** Keep bridge-side startup/socket failures with the local host trace. This
+ * does not alter MCP stdout; it only mirrors wrapper-owned stderr locally. */
+function reportStderr(text: string): void {
+  const path = process.env.KAOIRO_BRIDGE_STDERR_PATH;
+  if (path !== undefined) {
+    try {
+      appendFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+    } catch {
+      // Diagnostics must never make the bridge unusable.
+    }
+  }
+  process.stderr.write(text);
 }
 
 /** Line-buffered request/response client over the wrapper's unix socket. */
@@ -95,7 +110,7 @@ class ToolHostClient {
 async function main(): Promise<void> {
   const socketPath = process.env.KAOIRO_BRIDGE_SOCKET;
   if (!socketPath) {
-    process.stderr.write("KAOIRO_BRIDGE_SOCKET is not set\n");
+    reportStderr("KAOIRO_BRIDGE_SOCKET is not set\n");
     process.exitCode = 1;
     return;
   }
@@ -123,6 +138,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  process.stderr.write(`${String(error)}\n`);
+  reportStderr(`${String(error)}\n`);
   process.exitCode = 1;
 });

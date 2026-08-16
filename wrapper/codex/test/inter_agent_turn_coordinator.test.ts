@@ -1,0 +1,53 @@
+import { describe, expect, it } from "vitest";
+import type { Envelope } from "@kaoiro/agent-common";
+import {
+  CodexInterAgentTurnCoordinator,
+  type DispatchedCodexInterAgentBatch,
+} from "../src/inter_agent_turn_coordinator.js";
+
+function inbound(cid: string): Envelope {
+  return {
+    version: "0",
+    agent_id: "peer.agent",
+    persona: { id: "peer", name: "Peer", sprite_set: "peer" },
+    display_name: "Peer",
+    ts: "T",
+    type: "inter_agent_message",
+    state: "idle",
+    payload: {
+      to: "self.agent",
+      conversation_id: cid,
+      turn_number: 1,
+      kind: "inform",
+      body: cid,
+      meta: { done: false, propose_next: "" },
+      owner: { kind: "user", id: "operator" },
+    },
+    ext: {},
+  };
+}
+
+describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
+  it("same CID の stale token は active batch を settle できず後続を dispatch しない", () => {
+    const dispatched: DispatchedCodexInterAgentBatch[] = [];
+    const tokens = ["turn-1", "turn-2"];
+    const coordinator = new CodexInterAgentTurnCoordinator({
+      createTurnToken: () => tokens.shift()!,
+      onDispatch: (batch) => dispatched.push(batch),
+    });
+
+    coordinator.receive(inbound("shared"), "reply-owed");
+    coordinator.receive(inbound("shared"), "reply-owed");
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]?.turnToken).toBe("turn-1");
+
+    expect(coordinator.settle("stale-turn")).toBeUndefined();
+    coordinator.dispatchNextForPeer("peer.agent");
+    expect(dispatched).toHaveLength(1);
+
+    expect(coordinator.settle("turn-1")?.turnToken).toBe("turn-1");
+    coordinator.dispatchNextForPeer("peer.agent");
+    expect(dispatched).toHaveLength(2);
+    expect(dispatched[1]?.turnToken).toBe("turn-2");
+  });
+});

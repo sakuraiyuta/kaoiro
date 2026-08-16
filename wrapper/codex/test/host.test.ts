@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, readdir, readFile, stat, utimes } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   CodexOptions,
@@ -12,6 +15,10 @@ import type {
 import { makeStateChange } from "@kaoiro/agent-common";
 import { CodexHost, initialStatusExt } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
+import {
+  CodexTurnDiagnostics,
+  codexTurnTraceCaptureDir,
+} from "../src/turn_diagnostics.js";
 import type {
   CodexRateLimitSnapshot,
   CodexRateLimitWindow,
@@ -1780,6 +1787,128 @@ describe("CodexHost", () => {
   });
 
   describe("rate_limits (rollout tail)", () => {
+    it("resume host.run の fallback も初回 SDK turn 前に snapshot を取得する", async () => {
+      const states: Envelope[] = [];
+      const turnStarted = deferred<void>();
+      const releaseTerminal = deferred<void>();
+      const turnFinished = deferred<void>();
+      const resolver = vi.fn(async () =>
+        new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>([
+          ["seven_day", { utilization: 0.29, resets_at: 1787371202 }],
+        ]),
+      );
+      const client: CodexClientLike = {
+        startThread: () => {
+          throw new Error("resume session must not start a new thread");
+        },
+        resumeThread: () => ({
+          async runStreamed() {
+            async function* events(): AsyncGenerator<ThreadEvent> {
+              yield { type: "turn.started" };
+              turnStarted.resolve();
+              await releaseTerminal.promise;
+              yield usageEvent();
+              turnFinished.resolve();
+            }
+            return { events: events() };
+          },
+        }),
+      };
+      const host = new CodexHost(CONFIG, {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        resumeSessionId: "uuid-resume-host-run",
+        codexFactory: () => client,
+        rateLimitResolver: resolver,
+        now: () => "T",
+      });
+
+      const done = host.run("resume");
+      try {
+        await turnStarted.promise;
+
+        expect(resolver).toHaveBeenCalledTimes(1);
+        expect(resolver).toHaveBeenCalledWith("uuid-resume-host-run");
+        expect(states[0]).toMatchObject({
+          state: "idle",
+          ext: {
+            rate_limits: {
+              seven_day: { utilization: 0.29, resets_at: 1787371202 },
+            },
+          },
+        });
+      } finally {
+        releaseTerminal.resolve();
+        await turnFinished.promise;
+        host.close();
+        await done;
+      }
+    });
+
+    it("fresh thread.started でも terminal event 前に既存 snapshot を読む", async () => {
+      const states: Envelope[] = [];
+      const turnStarted = deferred<void>();
+      const releaseTerminal = deferred<void>();
+      const turnFinished = deferred<void>();
+      const resolver = vi.fn(async () =>
+        new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>([
+          ["seven_day", { utilization: 0.31, resets_at: 1787371201 }],
+        ]),
+      );
+      const client: CodexClientLike = {
+        startThread: () => ({
+          async runStreamed() {
+            async function* events(): AsyncGenerator<ThreadEvent> {
+              yield { type: "thread.started", thread_id: "uuid-fresh-rate-limits" };
+              yield { type: "turn.started" };
+              // This defensive case covers a rollout that already has a
+              // token_count at thread.started. Current observed rollouts
+              // usually write it later, after session metadata; the terminal
+              // refresh below remains the ordinary path for those sessions.
+              turnStarted.resolve();
+              await releaseTerminal.promise;
+              yield usageEvent();
+              turnFinished.resolve();
+            }
+            return { events: events() };
+          },
+        }),
+        resumeThread: () => {
+          throw new Error("fresh session must not resume");
+        },
+      };
+      const host = new CodexHost(CONFIG, {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rateLimitResolver: resolver,
+        now: () => "T",
+      });
+
+      const done = host.run("first");
+      await turnStarted.promise;
+
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(resolver).toHaveBeenCalledWith("uuid-fresh-rate-limits");
+      expect(
+        states.find((event) => event.ext.rate_limits !== undefined),
+      ).toMatchObject({
+        // turn.started has not been allowed to complete until this point;
+        // this is the pre-turn state emitted by the initial lookup.
+        state: "sending",
+        ext: {
+          rate_limits: {
+            seven_day: { utilization: 0.31, resets_at: 1787371201 },
+          },
+        },
+      });
+
+      releaseTerminal.resolve();
+      await turnFinished.promise;
+      host.close();
+      await done;
+    });
+
     it("turn.completed 後の refresh で ext.rate_limits を stamp する", async () => {
       const states: Envelope[] = [];
       const rateLimitsStamped = deferred<void>();
@@ -1811,12 +1940,11 @@ describe("CodexHost", () => {
       });
     });
 
-    it("同値 refresh は state_change を追加発火しない", async () => {
+    it("初期取得済みと同値の terminal refresh は state_change を追加発火しない", async () => {
       const states: Envelope[] = [];
-      const firstRateLimitsStamped = deferred<void>();
-      const secondRefreshStarted = deferred<void>();
-      const secondMapCompared = deferred<void>();
-      const secondRefreshResult = deferred<
+      const terminalRefreshStarted = deferred<void>();
+      const terminalMapCompared = deferred<void>();
+      const terminalRefreshResult = deferred<
         Map<CodexRateLimitWindow, CodexRateLimitSnapshot>
       >();
       const { client } = makeClient([
@@ -1825,7 +1953,6 @@ describe("CodexHost", () => {
           { type: "turn.started" },
           usageEvent(),
         ],
-        [{ type: "turn.started" }, usageEvent()],
       ]);
       const snapshot = new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>([
         ["five_hour", { utilization: 0.1, resets_at: 1 }],
@@ -1845,7 +1972,7 @@ describe("CodexHost", () => {
           // rateLimitsDiffer consumes this iterator only after it has checked
           // the two Maps' sizes; resolving here proves the no-op comparison
           // itself completed, rather than merely that its resolver returned.
-          secondMapCompared.resolve();
+          terminalMapCompared.resolve();
         }
         return undefined;
       };
@@ -1854,47 +1981,33 @@ describe("CodexHost", () => {
         () => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>
       >(() => {
         resolverCalls += 1;
+        if (resolverCalls === 1) return Promise.resolve(snapshot);
         if (resolverCalls === 2) {
-          secondRefreshStarted.resolve();
-          return secondRefreshResult.promise;
+          terminalRefreshStarted.resolve();
+          return terminalRefreshResult.promise;
         }
-        return Promise.resolve(snapshot);
+        throw new Error("unexpected extra rate-limit refresh");
       });
       const host = new CodexHost(CONFIG, {
-        onState: (e) => {
-          states.push(e);
-          if (e.ext.rate_limits !== undefined) firstRateLimitsStamped.resolve();
-        },
+        onState: (e) => states.push(e),
         appendSystemPrompt: "p",
         codexFactory: () => client,
         rateLimitResolver: resolver,
         now: () => "T",
       });
 
-      const done = host.run("hi-1");
+      const done = host.run("hi");
       await client.waitForTurn(0);
-      await firstRateLimitsStamped.promise;
-      const afterFirstTurn = states.length;
-      await host.send("hi-2");
-      await client.waitForTurn(1);
-      await secondRefreshStarted.promise;
+      await terminalRefreshStarted.promise;
       const beforeNoopComparison = states.length;
-      secondRefreshResult.resolve(sameSnapshot);
-      await secondMapCompared.promise;
+      terminalRefreshResult.resolve(sameSnapshot);
+      await terminalMapCompared.promise;
       expect(states).toHaveLength(beforeNoopComparison);
       host.close();
       await done;
 
       expect(resolver).toHaveBeenCalledTimes(2);
-      // The second turn carries the already-stamped snapshot but, as checked
-      // above, its equal refresh itself emits no additional state_change.
-      for (const s of states.slice(afterFirstTurn)) {
-        if (s.ext.rate_limits !== undefined) {
-          expect(s.ext.rate_limits).toEqual({
-            five_hour: { utilization: 0.1, resets_at: 1 },
-          });
-        }
-      }
+      expect(states.some((s) => s.ext.rate_limits !== undefined)).toBe(true);
     });
 
     it("turn.failed でも refresh が走る (429 / max-output で rate_limits が更新される経路)", async () => {
@@ -1925,7 +2038,7 @@ describe("CodexHost", () => {
 
       await runOneTurn(host, "hi", client, rateLimitsStamped.promise);
 
-      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(resolver).toHaveBeenCalledTimes(2);
       expect(states.at(-1)?.ext.rate_limits).toEqual({
         seven_day: { utilization: 0.98, resets_at: 999 },
       });
@@ -1945,11 +2058,15 @@ describe("CodexHost", () => {
           usageEvent(),
         ],
       ]);
-      const emptySnapshot = new Map<
+      const initialEmptySnapshot = new Map<
         CodexRateLimitWindow,
         CodexRateLimitSnapshot
       >();
-      Object.defineProperty(emptySnapshot, "size", {
+      const terminalEmptySnapshot = new Map<
+        CodexRateLimitWindow,
+        CodexRateLimitSnapshot
+      >();
+      Object.defineProperty(terminalEmptySnapshot, "size", {
         get() {
           // rateLimitsDiffer first compares the sizes; empty Maps have no
           // iterator entries, so this is the production no-op boundary.
@@ -1957,13 +2074,21 @@ describe("CodexHost", () => {
           return 0;
         },
       });
+      let resolverCalls = 0;
       const host = new CodexHost(CONFIG, {
         onState: (e) => states.push(e),
         appendSystemPrompt: "p",
         codexFactory: () => client,
         rateLimitResolver: () => {
-          emptyRefreshStarted.resolve();
-          return emptyRefreshResult.promise;
+          resolverCalls += 1;
+          if (resolverCalls === 1) {
+            return Promise.resolve(initialEmptySnapshot);
+          }
+          if (resolverCalls === 2) {
+            emptyRefreshStarted.resolve();
+            return emptyRefreshResult.promise;
+          }
+          throw new Error("unexpected extra rate-limit refresh");
         },
         now: () => "T",
       });
@@ -1972,7 +2097,7 @@ describe("CodexHost", () => {
       await client.waitForTurn(0);
       await emptyRefreshStarted.promise;
       const beforeNoopComparison = states.length;
-      emptyRefreshResult.resolve(emptySnapshot);
+      emptyRefreshResult.resolve(terminalEmptySnapshot);
       await emptyMapCompared.promise;
       expect(states).toHaveLength(beforeNoopComparison);
       host.close();
@@ -1981,12 +2106,14 @@ describe("CodexHost", () => {
       for (const s of states) {
         expect(s.ext).not.toHaveProperty("rate_limits");
       }
+      expect(resolverCalls).toBe(2);
     });
   });
 
   describe("onTurnEnd (issue #131)", () => {
     it("turn.failed は onTurnEnd に conversationIds=[](未タグ) + error.detail を渡す", async () => {
       const turnEnds: {
+        turnToken: string;
         conversationIds: readonly string[];
         error?: { reason?: string; detail?: string };
       }[] = [];
@@ -2007,9 +2134,12 @@ describe("CodexHost", () => {
 
       await runOneTurn(host, "hi", client);
 
-      expect(turnEnds).toEqual([
-        { conversationIds: [], error: { detail: "rate limited" } },
-      ]);
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({
+        conversationIds: [],
+        error: { detail: "rate limited" },
+      });
+      expect(turnEnds[0]?.turnToken).toEqual(expect.any(String));
     });
 
     it("成功 turn は onTurnEnd に conversationIds のみ(error無し)で渡す", async () => {
@@ -2025,7 +2155,9 @@ describe("CodexHost", () => {
 
       await runOneTurn(host, "hi", client);
 
-      expect(turnEnds).toEqual([{ conversationIds: [] }]);
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({ conversationIds: [] });
+      expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
     });
 
     it("終端イベント無しでストリームが終わると detail 無しの error で onTurnEnd を呼ぶ", async () => {
@@ -2047,11 +2179,196 @@ describe("CodexHost", () => {
 
       await runOneTurn(host, "hi", client, turnEnded.promise);
 
-      expect(turnEnds).toEqual([{ conversationIds: [], error: {} }]);
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({ conversationIds: [], error: {} });
+      expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
+    });
+
+    it("stream-level error は record-only で、後続 turn.completed を失敗扱いにしない", async () => {
+      const turnEnds: unknown[] = [];
+      const { client } = makeClient([[
+        { type: "thread.started", thread_id: "uuid-record-only" },
+        { type: "error", message: "bridge socket transient /private/path" },
+        usageEvent(),
+      ]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi", client);
+
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({ conversationIds: [] });
+      expect(turnEnds[0]).not.toHaveProperty("error");
+    });
+
+    it("malformed item.completed のあと turn.completed が来れば成功のまま終え、peer error を作らない", async () => {
+      const turnEnds: {
+        conversationIds: readonly string[];
+        error?: { detail?: string };
+      }[] = [];
+      const { client } = makeClient([[
+        { type: "item.completed", item: null } as unknown as ThreadEvent,
+        usageEvent(),
+      ]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({ conversationIds: [] });
+      expect(turnEnds[0]).not.toHaveProperty("error");
+    });
+
+    it("failure trace の永続化失敗は SDK failure の onTurnEnd と host.run を置き換えない", async () => {
+      const turnEnds: {
+        conversationIds: readonly string[];
+        error?: { detail?: string };
+      }[] = [];
+      const persist = vi
+        .spyOn(CodexTurnDiagnostics.prototype, "writeFailure")
+        .mockRejectedValueOnce(new Error("trace disk full"));
+      const { client } = makeClient([new Error("Codex Exec exited with code 1")]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      expect(persist).toHaveBeenCalledOnce();
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({
+        conversationIds: [],
+        error: { detail: "Error: Codex Exec exited with code 1" },
+      });
+    });
+
+    it("host 起動時に agent の古い trace capture dir を20件までへ GC する", async () => {
+      const traceDir = await mkdtemp(join(tmpdir(), "kaoiro-trace-gc-test-"));
+      const captures = await Promise.all(
+        Array.from({ length: 21 }, async (_, index) => {
+          const capture = codexTurnTraceCaptureDir(
+            traceDir,
+            CONFIG.agent_id,
+            `former-${String(index).padStart(2, "0")}`,
+          );
+          await mkdir(capture, { recursive: true });
+          await utimes(capture, index + 1, index + 1);
+          return capture;
+        }),
+      );
+      const { client } = makeClient([[usageEvent()]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        turnTraceDir: traceDir,
+      });
+
+      await runOneTurn(host, "gc", client);
+
+      const agentDir = dirname(captures[0]!);
+      const remaining = await readdir(agentDir);
+      expect(remaining).toHaveLength(21); // 20 retained former captures + this host.
+      expect(remaining).not.toContain("former-00");
+    });
+
+    it("診断 capture dir が壊れていても SDK turn は開始・完了する (fail-soft)", async () => {
+      const { client } = makeClient([[usageEvent()]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        turnTraceDir: "/dev/null/kaoiro-trace",
+      });
+
+      await runOneTurn(host, "hi", client);
+      await client.waitForTurn(0);
+    });
+
+    it("壊れた診断 dir でも injection 無しの既定 Codex factory を構築して host.run を継続する", async () => {
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        turnTraceDir: "/dev/null/kaoiro-trace",
+      });
+
+      const running = host.run();
+      // run() executes the default `new Codex(...)` before its first await.
+      // Closing immediately keeps this composition test offline: no SDK turn
+      // or child process is started, but an eager trace mkdir would reject.
+      host.close();
+      await expect(running).resolves.toBeUndefined();
+    });
+
+    it("終端なしの production host 経路は 0600 failure trace を一件だけ残す", async () => {
+      const traceDir = await mkdtemp(join(tmpdir(), "kaoiro-host-trace-test-"));
+      const { client } = makeClient([[
+        { type: "thread.started", thread_id: "uuid-trace" },
+        { type: "error", message: "bridge disconnected /private/path" },
+      ]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        turnTraceDir: traceDir,
+        now: () => "T",
+      });
+
+      await host.send("coalesced inbound", undefined, ["cid-a", "cid-b"]);
+      const done = host.run();
+      await client.waitForTurn(0);
+      host.close();
+      await done;
+
+      const agentDirs = await readdir(join(traceDir, "agents"));
+      expect(agentDirs).toHaveLength(1);
+      const captureDir = join(
+        traceDir,
+        "agents",
+        agentDirs[0]!,
+        (await readdir(join(traceDir, "agents", agentDirs[0]!)))[0]!,
+      );
+      const traces = (await readdir(captureDir)).filter((name) => name.endsWith(".jsonl"));
+      expect(traces).toHaveLength(1);
+      const tracePath = join(captureDir, traces[0]!);
+      expect((await stat(tracePath)).mode & 0o777).toBe(0o600);
+      const trace = JSON.parse(await readFile(tracePath, "utf8")) as {
+        outcome: string;
+        conversation_ids: string[];
+        captured_at: string;
+        stdout_jsonl_tail: Record<string, unknown>[];
+        wrapper_classification: { message: string };
+      };
+      expect(trace.outcome).toBe("stream_ended_without_terminal");
+      expect(trace.conversation_ids).toEqual(["cid-a", "cid-b"]);
+      expect(trace.captured_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(trace.stdout_jsonl_tail).toEqual([
+        { type: "thread.started" },
+        { type: "error", error_code: "api_error" },
+      ]);
+      expect(trace.wrapper_classification.message).toBe(
+        "the peer reported an unspecified error",
+      );
     });
 
     it("runStreamed の reject は err を detail 文字列化して onTurnEnd に渡す (must-fix 2: raw文字列は message に出ないことは classifyInterAgentError 側で保証)", async () => {
       const turnEnds: {
+        turnToken: string;
         conversationIds: readonly string[];
         error?: { reason?: string; detail?: string };
       }[] = [];
@@ -2077,6 +2394,7 @@ describe("CodexHost", () => {
 
     it("並存する複数 inter-agent injection は各ターンの conversationIds だけを解決する (must-fix 1)", async () => {
       const turnEnds: {
+        turnToken: string;
         conversationIds: readonly string[];
         error?: { detail?: string };
       }[] = [];
@@ -2109,14 +2427,17 @@ describe("CodexHost", () => {
       host.close();
       await done;
 
-      expect(turnEnds).toEqual([
-        { conversationIds: ["cnv-a"], error: { detail: "boom" } },
-        { conversationIds: ["cnv-b"] },
-      ]);
+      expect(turnEnds).toHaveLength(2);
+      expect(turnEnds[0]).toMatchObject({
+        conversationIds: ["cnv-a"],
+        error: { detail: "boom" },
+      });
+      expect(turnEnds[1]).toMatchObject({ conversationIds: ["cnv-b"] });
+      expect(turnEnds.every((info) => typeof info.turnToken === "string")).toBe(true);
     });
 
     it("1回の send() に複数 cid を渡すと1ターンとして onTurnEnd に全件まとめて渡す (issue #221 段階3, 合流turn)", async () => {
-      const turnEnds: { conversationIds: readonly string[] }[] = [];
+      const turnEnds: { turnToken: string; conversationIds: readonly string[] }[] = [];
       const { client } = makeClient([[usageEvent()]]);
       const host = new CodexHost(CONFIG, {
         onState: () => {},
@@ -2140,9 +2461,11 @@ describe("CodexHost", () => {
       host.close();
       await done;
 
-      expect(turnEnds).toEqual([
-        { conversationIds: ["cnv-p", "cnv-q", "cnv-r"] },
-      ]);
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({
+        conversationIds: ["cnv-p", "cnv-q", "cnv-r"],
+      });
+      expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
     });
   });
 });
