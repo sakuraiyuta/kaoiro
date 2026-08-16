@@ -8,6 +8,8 @@
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   HistoryReplayer,
   createDeliveryAcknowledgementWiring,
@@ -55,6 +57,25 @@ const COLOR: Record<KaoiroState, string> = {
  *  join (ADR-0029 F3, fail-closed). Matches the Claude CLI. */
 const PERSONA_PROMPT_TIMEOUT_MS = 10_000;
 
+type CreateServerLink = (
+  ...args: ConstructorParameters<typeof ServerLink>
+) => ServerLink;
+type CreateCodexHost = (
+  ...args: ConstructorParameters<typeof CodexHost>
+) => CodexHost;
+
+/** Injectable construction seam for the composition root. It is deliberately
+ * narrow: production uses the concrete constructors, while the regression
+ * test captures exactly the options/context that this CLI hands to them. */
+export interface CodexCliDependencies {
+  parseCliArgs?: typeof parseCliArgs;
+  loadConfig?: typeof loadConfig;
+  createServerLink?: CreateServerLink;
+  createHost?: CreateCodexHost;
+  prepareStartup?: typeof prepareCodexStartup;
+  handleInterAgentMessage?: typeof handleInterAgentMessage;
+}
+
 // issue #219 D25: human-facing log lines show `display_name` (the
 // mutable, operator-chosen label), never the pack's canonical
 // `persona.name` — see claude-code cli.ts's identical rationale.
@@ -78,12 +99,21 @@ function printLog(envelope: Envelope): void {
   }
 }
 
-async function main(): Promise<void> {
+export async function runCodexCli(dependencies: CodexCliDependencies = {}): Promise<void> {
+  const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
+  const readConfig = dependencies.loadConfig ?? loadConfig;
+  const createServerLink =
+    dependencies.createServerLink ?? ((...args) => new ServerLink(...args));
+  const createHost =
+    dependencies.createHost ?? ((...args) => new CodexHost(...args));
+  const prepareStartup = dependencies.prepareStartup ?? prepareCodexStartup;
+  const receiveInterAgentMessage =
+    dependencies.handleInterAgentMessage ?? handleInterAgentMessage;
   let link: ServerLink | null = null;
-  const { configPath, prompt, resume: resumeSessionId } = parseCliArgs(
+  const { configPath, prompt, resume: resumeSessionId } = parseArgs(
     process.argv.slice(2),
   );
-  const config = loadConfig(configPath);
+  const config = readConfig(configPath);
 
   // Codex CLI env source (ADR-0032 F4bc addendum, phase-15 15-3):
   // KAOIRO_CODEX_DEFAULT_MODEL is the env-tier default, applied when
@@ -317,7 +347,7 @@ async function main(): Promise<void> {
     interAgentTurns,
   );
 
-  link = new ServerLink(config.server_url, config.agent_id, {
+  link = createServerLink(config.server_url, config.agent_id, {
     personaId: config.persona.id,
     ...(config.transition_id === undefined
       ? {}
@@ -396,7 +426,7 @@ async function main(): Promise<void> {
     onAttachChunk: (payload) => host.attachChunk(payload),
     onAttachClose: (uploadId) => host.attachClose(uploadId),
     onInterAgentMessage: (envelope) =>
-      handleInterAgentMessage(
+      receiveInterAgentMessage(
         {
           interAgent,
           recordInboundIa,
@@ -429,7 +459,7 @@ async function main(): Promise<void> {
     clearTimeout(timeoutHandle);
   }
 
-  host = new CodexHost(config, {
+  host = createHost(config, {
     onState,
     onLog,
     onTask,
@@ -504,7 +534,7 @@ async function main(): Promise<void> {
   });
 
   try {
-    await prepareCodexStartup({
+    await prepareStartup({
       config,
       prompt,
       resumeSessionId,
@@ -525,7 +555,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`${String(error)}\n`);
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  runCodexCli().catch((error: unknown) => {
+    process.stderr.write(`${String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

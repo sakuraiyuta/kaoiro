@@ -21,6 +21,8 @@
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory, sessionSidecarPath } from "./history.js";
 import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
@@ -90,6 +92,24 @@ const COLOR: Record<KaoiroState, string> = {
  *  handshake; short enough that a misconfigured server is loud. */
 const PERSONA_PROMPT_TIMEOUT_MS = 10_000;
 
+type CreateServerLink = (
+  ...args: ConstructorParameters<typeof ServerLink>
+) => ServerLink;
+type CreateAgentHost = (
+  ...args: ConstructorParameters<typeof AgentHost>
+) => AgentHost;
+
+/** Injectable construction seam for the composition root. Production keeps
+ * the concrete constructors; the regression captures the exact options and
+ * handler context this CLI gives to those components. */
+export interface ClaudeCliDependencies {
+  parseCliArgs?: typeof parseCliArgs;
+  loadConfig?: typeof loadConfig;
+  createServerLink?: CreateServerLink;
+  createHost?: CreateAgentHost;
+  handleInterAgentMessage?: typeof handleInterAgentMessage;
+}
+
 // issue #219 D25: human-facing log lines show `display_name` (the
 // mutable, operator-chosen label), never the pack's canonical
 // `persona.name` — an agent instance can be renamed without any code
@@ -120,11 +140,19 @@ function printLog(envelope: Envelope): void {
   }
 }
 
-async function main(): Promise<void> {
+export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Promise<void> {
+  const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
+  const readConfig = dependencies.loadConfig ?? loadConfig;
+  const createServerLink =
+    dependencies.createServerLink ?? ((...args) => new ServerLink(...args));
+  const createHost =
+    dependencies.createHost ?? ((...args) => new AgentHost(...args));
+  const receiveInterAgentMessage =
+    dependencies.handleInterAgentMessage ?? handleInterAgentMessage;
   let link: ServerLink | null = null;
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
-    parseCliArgs(process.argv.slice(2));
-  const config = loadConfig(configPath);
+    parseArgs(process.argv.slice(2));
+  const config = readConfig(configPath);
   // Operational safety valve, deliberately wrapper-local rather than a
   // dashboard/server/runner configuration surface (issue #248).
   const turnWatchdogSettings = readTurnWatchdogSettings(
@@ -537,7 +565,7 @@ async function main(): Promise<void> {
     interAgentTurns,
   );
 
-  link = new ServerLink(config.server_url, config.agent_id, {
+  link = createServerLink(config.server_url, config.agent_id, {
     personaId: config.persona.id,
     ...(config.transition_id === undefined
       ? {}
@@ -713,7 +741,7 @@ async function main(): Promise<void> {
       host.attachClose(uploadId);
     },
     onInterAgentMessage: (envelope) =>
-      handleInterAgentMessage(
+      receiveInterAgentMessage(
         {
           interAgent,
           ingress: interAgentIngress,
@@ -759,7 +787,7 @@ async function main(): Promise<void> {
     clearTimeout(timeoutHandle);
   }
 
-  host = new AgentHost(config, {
+  host = createHost(config, {
     onState,
     onLog,
     onTask,
@@ -986,7 +1014,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`${String(error)}\n`);
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  runClaudeCli().catch((error: unknown) => {
+    process.stderr.write(`${String(error)}\n`);
+    process.exitCode = 1;
+  });
+}
