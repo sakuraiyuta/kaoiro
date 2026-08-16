@@ -102,13 +102,14 @@ type ServerLinkOptions = ConstructorParameters<typeof ServerLink>[2];
 type AgentHostOptions = ConstructorParameters<typeof AgentHost>[1];
 
 /** Injectable construction seam for the composition root. Production keeps
- * the concrete constructors; the regression captures the exact options and
- * handler context this CLI gives to those components. */
+ * the concrete constructors; regressions capture the actual delivery and
+ * whoami composition that this CLI supplies (#247, #254). */
 export interface ClaudeCliDependencies {
   parseCliArgs?: typeof parseCliArgs;
   loadConfig?: typeof loadConfig;
   createServerLink?: CreateServerLink;
   createHost?: CreateAgentHost;
+  buildMcpServer?: typeof buildKaoiroMcpServer;
 }
 
 // issue #219 D25: human-facing log lines show `display_name` (the
@@ -149,6 +150,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const createHost =
     dependencies.createHost ?? ((...args) => new AgentHost(...args));
   let link: ServerLink | null = null;
+  const buildMcpServer = dependencies.buildMcpServer ?? buildKaoiroMcpServer;
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
@@ -927,7 +929,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       // ことで canUseTool 経路に乗せる — mode 従属の gate を効かせる
       // ため、これらを READ_ONLY_TOOLS に足してはいけない。
       mcpServers: {
-        kaoiro: buildKaoiroMcpServer(interAgent!, [
+        kaoiro: buildMcpServer(interAgent!, [
           {
             descriptor: requestCompactDescriptor({
               // Ride the same chain operator instructions use, so an approved

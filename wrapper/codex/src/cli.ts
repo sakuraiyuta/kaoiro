@@ -66,9 +66,9 @@ type CreateCodexHost = (
 type ServerLinkOptions = ConstructorParameters<typeof ServerLink>[2];
 type CodexHostOptions = ConstructorParameters<typeof CodexHost>[1];
 
-/** Injectable construction seam for the composition root. It is deliberately
- * narrow: production uses the concrete constructors, while the regression
- * test captures exactly the options/context that this CLI hands to them. */
+/** Injectable construction seam for the composition root. Production keeps
+ * the concrete constructors; regressions capture the exact options and live
+ * whoami provider the CLI gives those components (#247, #254). */
 export interface CodexCliDependencies {
   parseCliArgs?: typeof parseCliArgs;
   loadConfig?: typeof loadConfig;

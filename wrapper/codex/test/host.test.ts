@@ -1,4 +1,12 @@
-import { mkdir, mkdtemp, readdir, readFile, stat, utimes } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -19,9 +27,10 @@ import {
   CodexTurnDiagnostics,
   codexTurnTraceCaptureDir,
 } from "../src/turn_diagnostics.js";
-import type {
-  CodexRateLimitSnapshot,
-  CodexRateLimitWindow,
+import {
+  codexRateLimitsFromRolloutIn,
+  type CodexRateLimitSnapshot,
+  type CodexRateLimitWindow,
 } from "../src/rollout.js";
 
 const CONFIG: WrapperConfig = {
@@ -1948,6 +1957,51 @@ describe("CodexHost", () => {
         appendSystemPrompt: "p",
       });
       expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
+    });
+
+    it("不完全な production rollout は parser から whoami まで absent=unknown に保つ", async () => {
+      const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-rl-empty-"));
+      const sessionId = "uuid-rate-limit-window-only";
+      await writeFile(
+        join(root, `rollout-${sessionId}.jsonl`),
+        `${JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            rate_limits: {
+              // Actual rollout shape observed in production: the window can
+              // arrive before either measurable field. A name alone is not
+              // evidence of a usable limit snapshot.
+              primary: { window_minutes: 300 },
+              secondary: null,
+            },
+          },
+        })}\n`,
+      );
+      const states: Envelope[] = [];
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: sessionId },
+          { type: "turn.started" },
+          usageEvent(),
+        ],
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        // Keep the filesystem source deterministic, but call the production
+        // parser rather than hand-writing an empty Map in this fixture.
+        rateLimitResolver: async (id) => codexRateLimitsFromRolloutIn(root, id),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "hi", client);
+
+      expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
+      expect(states.every((event) => event.ext.rate_limits === undefined)).toBe(
+        true,
+      );
     });
 
     it("whoami の rate_limits は host が stamp する ext.rate_limits と同一値になる", async () => {
