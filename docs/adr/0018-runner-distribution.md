@@ -143,8 +143,12 @@ data / config を分けないため。entry 名は衝突しない。
   (`--keep`)。ただし `current` / `previous` が指す release は世代数に
   関わらず削除しない — 上記の lazy な wrapper 解決のため、稼働中 release は
   起動後ずっと読まれ続ける
-- **起動シムは build せず verify のみ行う**。`dist/cli.js` /
-  `dist/build-info.json` / wrapper 2 種の `dist/cli.js` の存在を検査する
+- **起動シムは build せず verify のみ行う**。検査対象は builder が生成する
+  `MANIFEST.json` — runner 自身の `dist/` と、wrapper 2 種から依存宣言を
+  たどって到達する `@kaoiro/*` パッケージ全部の `dist/` — の存在検査。
+  `MANIFEST.json` を持たない repo-direct な checkout でのみ、sentinel
+  4 本(`dist/cli.js` / `dist/build-info.json` / wrapper 2 種の
+  `dist/cli.js`)へ縮退する
 - **更新は `systemd-run --user --no-block` の transient *service* unit で
   実行する**。runner 配下のエージェントが更新スクリプトを直接叩くと、runner
   を停止した瞬間に自分が消えて後続が走らない
