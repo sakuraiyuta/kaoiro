@@ -197,7 +197,13 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
       const result = install(archive);
 
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("unusable release id");
+      // The rejection now comes from the identity check, which fires BEFORE
+      // the id ever reaches the filesystem: a VERSION outside the domain can
+      // never equal the tree's own build-info identity. The id value-domain
+      // guard itself is consequently unreachable through install — a
+      // strengthening, not a gap — and is exercised directly through
+      // kaoiro-runner-switch.sh's argument instead (releaseSwitch.test.ts).
+      expect(result.stderr).toContain("disagrees with dist/build-info.json");
       // Nothing anywhere under the fixture root, not merely nothing under
       // releases/ — the whole point of a traversal is that it lands
       // elsewhere.

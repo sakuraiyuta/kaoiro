@@ -103,7 +103,7 @@ describe("kaoiro-runner-switch.sh (issue #229)", () => {
     const result = run(B);
 
     expect(result.status).toBe(70);
-    expect(result.stderr).toContain("release tree is incomplete");
+    expect(result.stderr).toContain("failed verification");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
   });
 

@@ -551,10 +551,15 @@ describe("kaoiro-runner-update.sh (issue #229)", () => {
   });
 
   it("起動後の identity が食い違えば rollback 手順を出して失敗する", () => {
-    // VERSION and dist/build-info.json disagree, so the id the install
-    // recorded is not what `current` reports back. Exit 0 from systemctl is
-    // not the postcondition; what the release answers is.
-    const archive = makeReleaseTarball(work, B, { version: revisionOf("other") });
+    // Staged through the stub cli's --version, not through VERSION or
+    // build-info.json. Those two can no longer disagree in an installed tree
+    // — install rejects it, before the service is stopped — so the only
+    // remaining way to reach this branch is an artifact that RUNS as
+    // something other than what its release directory says. Exit 0 from
+    // systemctl is not the postcondition; what `current` answers is.
+    const archive = makeReleaseTarball(work, B, {
+      cliVersionOverride: revisionOf("something-else"),
+    });
 
     const result = runUpdate(["--tarball", archive], {
       KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),

@@ -970,7 +970,16 @@ macOS `~/Library/Application Support/kaoiro`。`KAOIRO_RUNNER_INSTALL_DIR`
 `.lock.*`(排他 lock)と `.staging.*`(展開・build の作業領域)も
 install root 直下に作られる。SIGKILL などで EXIT trap に到達しなかった run
 の staging は、**次の run が lock を取った直後に GC する**ため放置しても
-積み上がらない。GC の対象は `.staging.*` だけで、lock は巻き込まない。
+積み上がらない。
+
+**GC は prefix 単位で、各スクリプトが自分の作った分だけを対象にする** —
+install は `.staging.install.*`、update は `.staging.build.*` のみ。削除を
+正当化するのは「このスクリプトの他の run が走っていない」ことで、それは
+自分の lock が保証する範囲に限られる。install と update は別の lock を持ち、
+しかも update は install を呼ぶため、両方にまたがる glob では **nested install
+が update の使用中の build ディレクトリを消していた** (`--from-repo` が
+全滅していた。issue #229 レビュー round 2)。lock ディレクトリは `.lock.*` と
+接頭辞を分けてあり、どちらの glob にも掛からない。
 
 #### activation の契約(何が `current` になれるか)
 

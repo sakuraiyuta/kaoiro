@@ -85,7 +85,7 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
       const result = launch();
 
       expect(result.status).toBe(78);
-      expect(result.stderr).toContain("incomplete install");
+      expect(result.stderr).toContain("release verification failed");
       expect(result.stderr).toContain(artifact);
       expect(result.stdout).not.toContain("stub cli.js started");
     },

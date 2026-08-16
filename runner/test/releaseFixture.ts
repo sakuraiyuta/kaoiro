@@ -53,11 +53,17 @@ const path = require("node:path");
 // this exits non-zero on its own.
 const dep = require("./stub_dep.js");
 if (process.argv.includes("--version")) {
+  // VERSION_OVERRIDE lets a test make the RUNNING artifact disagree with the
+  // tree it sits in. Overriding VERSION or build-info.json cannot do that any
+  // more: install now rejects a tree whose two identities disagree, which is
+  // the point — the disagreement is caught before the service is stopped.
+  const override = "@@VERSION_OVERRIDE@@";
   const info = JSON.parse(
     fs.readFileSync(path.join(__dirname, "build-info.json"), "utf8"),
   );
   process.stdout.write(
-    (info.dirty ? \`\${info.revision}-dirty\` : info.revision) + "\\n",
+    (override || (info.dirty ? \`\${info.revision}-dirty\` : info.revision)) +
+      "\\n",
   );
   process.exit(0);
 }
@@ -108,6 +114,10 @@ export interface ReleaseTreeOptions {
    *  cases, where VERSION must NOT match the revision. */
   version?: string;
   dirty?: boolean;
+  /** Makes the stub cli's `--version` report this instead of the tree's own
+   *  identity — the only way left to stage a running artifact that disagrees
+   *  with its release directory. */
+  cliVersionOverride?: string;
   /** Skip MANIFEST.json generation — for the "release built by an older
    *  installer" / dev-checkout cases. */
   manifest?: false;
@@ -139,7 +149,10 @@ export function writeReleaseTree(
   // the manifest after the removal would produce a self-consistent tree that
   // no check could object to.
   put("VERSION", `${options.version ?? (dirty ? `${revision}-dirty` : revision)}\n`);
-  put("dist/cli.js", STUB_CLI);
+  put(
+    "dist/cli.js",
+    STUB_CLI.replace("@@VERSION_OVERRIDE@@", options.cliVersionOverride ?? ""),
+  );
   put("dist/stub_dep.js", STUB_DEP);
   put(
     "dist/build-info.json",

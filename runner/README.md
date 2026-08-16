@@ -170,11 +170,13 @@ release には一切触れない。
 
 ### Linux(systemd user unit)
 
-以下は checkout 直挿し(開発)の設置例。release profile では
-`$PWD/runner/deploy` を `<install-root>/current/deploy` に読み替える。
+**以下は release profile(本番)の設置例**。checkout 直挿しで開発時に手起動
+したい場合だけ、`$install_root/current/deploy` を `$PWD/runner/deploy` に
+読み替える。
 
 ```sh
-sed "s|@@DEPLOY_DIR@@|$PWD/runner/deploy|" \
+install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
+sed "s|@@DEPLOY_DIR@@|$install_root/current/deploy|" \
   runner/deploy/kaoiro-runner.service \
   > ~/.config/systemd/user/kaoiro-runner.service
 systemctl --user daemon-reload
@@ -196,9 +198,15 @@ sudo loginctl enable-linger "$USER"   # ログインなしで boot 起動させ�
 
 ### macOS(launchd LaunchAgent)
 
+macOS の orchestration は未検証(後続 issue
+[#252](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/252))。
+release layout と install / switch は OS 共通に動くが、`@@DEPLOY_DIR@@` を
+`current/deploy` へ向けた運用の実機確認は済んでいない。
+
 ```sh
 mkdir -p ~/Library/Logs/kaoiro
-sed -e "s|@@DEPLOY_DIR@@|$PWD/runner/deploy|" -e "s|@@HOME@@|$HOME|" \
+install_root="$HOME/Library/Application Support/kaoiro"
+sed -e "s|@@DEPLOY_DIR@@|$install_root/current/deploy|" -e "s|@@HOME@@|$HOME|" \
   runner/deploy/com.kaoiro.runner.plist \
   > ~/Library/LaunchAgents/com.kaoiro.runner.plist
 launchctl bootstrap gui/"$(id -u)" \
@@ -218,12 +226,20 @@ launchctl bootstrap gui/"$(id -u)" \
 - SIGTERM で runner は配下の wrapper を停止してから **exit 0** で終わる。
   systemd は `Restart=on-failure`、launchd は `KeepAlive.SuccessfulExit=false`
   なので、正常停止は再起動されない
-- 起動シムは設定不備(config が無い / node が見つからない / 必須 artifact が
-  欠けている)で **exit 78**(`EX_CONFIG`)を返す。artifact 検査の対象は
-  `dist/cli.js` / `dist/build-info.json` / wrapper 2 種の `dist/cli.js` で、
-  **シムは build しない**(issue #229)。wrapper の dist だけが欠けた木は、
-  runner 単体としては起動できてしまい、最初の agent spawn まで壊れているこ
-  とが分からない — その手遅れを起動時の失敗に変えるための検査である。systemd は `RestartPreventExitStatus=78` で
+- 起動シムは設定不備(config が無い / node が見つからない / release 検証に
+  失敗)で **exit 78**(`EX_CONFIG`)を返す。検証は
+  [`deploy/verify-release.mjs`](deploy/verify-release.mjs) が行い、**シムは
+  build しない**(issue #229)。
+- **どんな検証失敗も 78 へ写す**のが要点。sentinel を数個並べる方式では、
+  実 dist から module を 1 つ削っただけで検査を通過し、import 時に node の
+  exit 1 で落ちた — `RestartPreventExitStatus=78` が一致せず **restart loop**
+  になる。78 にすることで failed のまま止まり、`systemctl --user status` に
+  原因が出る。
+- 検証対象は builder が生成する `MANIFEST.json`(runner 自身の `dist/` と
+  wrapper 2 種の `dist/` の module closure)。起動時は存在検査のみで、
+  sha256 の照合は install / switch 時に行う(起動 latency を守るため)。
+  `MANIFEST.json` が無い木(repo-direct な開発 checkout)では、従来の 4
+  artifact の検査へ縮退する。systemd は `RestartPreventExitStatus=78` で
   再起動せず failed のまま止まる — 原因は `systemctl --user status` に出る。
   launchd に同等の設定はないため `ThrottleInterval=30` で間隔を空けるだけで、
   原因はログファイルを見る
