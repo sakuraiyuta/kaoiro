@@ -1769,6 +1769,13 @@
     const myScrollEffectGeneration = ++scrollEffectGeneration;
     void tick().then(async () => {
       if (!logEl) return;
+      // クロエ review N-b: this is the FIRST of the continuation's three
+      // async resume points (after tick(), after renderMermaidIn, after the
+      // double rAF below); the other two already re-check the generation.
+      // Without this check, a run already superseded before tick() even
+      // resolves still calls renderMermaidIn for nothing — harmless (the
+      // two later guards still block any DOM mutation) but pure waste.
+      if (myScrollEffectGeneration !== scrollEffectGeneration) return;
       try {
         await renderMermaidIn(logEl);
       } catch (error) {

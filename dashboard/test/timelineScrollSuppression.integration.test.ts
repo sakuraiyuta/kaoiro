@@ -257,6 +257,38 @@ function installControllableMermaid(): {
   };
 }
 
+/** Queue-based requestAnimationFrame control (same resolver-queue idea as
+ *  installControllableMermaid): each rAF call gets its own held-back
+ *  callback, resolvable individually and in either order. Needed only where
+ *  a test must interleave TWO overlapping continuations' rAF waits — plain
+ *  fake timers do not drive rAF (see the M1 probe 2 comment above), and the
+ *  "resolve immediately" stub used there collapses both rAF awaits into one
+ *  microtask flush, leaving no room to inject a newer run in between. */
+function installControllableRaf(): {
+  pending: Array<() => void>;
+  resolveOldest(): void;
+  resolveNewest(): void;
+} {
+  const pending: Array<() => void> = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    pending.push(() => callback(0));
+    return pending.length;
+  });
+  return {
+    pending,
+    resolveOldest() {
+      const fn = pending.shift();
+      if (!fn) throw new Error("no pending rAF callback to resolve (oldest)");
+      fn();
+    },
+    resolveNewest() {
+      const fn = pending.pop();
+      if (!fn) throw new Error("no pending rAF callback to resolve (newest)");
+      fn();
+    },
+  };
+}
+
 describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () => {
   it("must-fix 1: 先行 jump の failsafe が後続 jump(同一 agent 内)の保護を解除しない", async () => {
     stubScrollTo();
@@ -733,5 +765,110 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     await vi.advanceTimersByTimeAsync(0);
 
     expect(logEl.scrollTop).toBe(scrollTopAfterB);
+  });
+
+  it("N-a: 2連 rAF 後の 3 番目の ownership guard がないと、OLD の遅延 continuation が NEW の着地を上書きする (pin)", async () => {
+    // クロエ review N-a: the M1 probes above pin the FIRST two async resume
+    // points -- but in BOTH probes, OLD's own generation already mismatches
+    // by the time its renderMermaidIn resolves, so it returns at that
+    // EARLIER check and never even reaches the double-rAF wait. This test
+    // instead lets OLD pass that earlier check (it is still the latest
+    // generation when its renderMermaidIn resolves), then supersedes it
+    // with NEW only WHILE OLD is mid-rAF-wait -- the one case only the
+    // third guard (right before the final `logEl.scrollTop = ...` write)
+    // can catch. Per クロエ's own measurement, removing just this guard
+    // leaves all 564 pre-existing tests green; this is its dedicated
+    // negative control. Uses the switch-restore path (a fixed, synchronously
+    // captured `restoreTop` per run) rather than stick-to-bottom, so OLD's
+    // and NEW's would-be write targets are two distinct, known values
+    // instead of both collapsing to the same live `scrollHeight`.
+    stubScrollTo(); // isolate the direct `logEl.scrollTop = ...` write
+    installScrollGeometry();
+    const mermaid = installControllableMermaid();
+    const raf = installControllableRaf();
+    const logsA = buildLogs("agent-a", 300);
+    const logsB = buildLogs("agent-b", 300);
+
+    const { target, props } = await renderReactive({
+      envelope: state("agent-a"),
+      logs: logsA,
+      agents: {},
+      scrollToEntryKey: null,
+      onClose: vi.fn(),
+    });
+    // Drain the mount's own continuation (unseen agent -> stick defaults
+    // true -> also runs the renderMermaidIn + double-rAF + write path).
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+    raf.resolveOldest();
+    await vi.advanceTimersByTimeAsync(0);
+    raf.resolveOldest();
+    await vi.advanceTimersByTimeAsync(0);
+    const logEl = target.querySelector(".log") as HTMLElement;
+
+    // Depart from the bottom on agent-a and memorize a non-stick position
+    // (top=100) via the ordinary scroll-event path.
+    scrollLogTo(logEl, 100);
+    await tick();
+
+    // Switch to agent-b (unseen -> defaults to bottom); drain fully.
+    props.envelope = state("agent-b");
+    props.logs = logsB;
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+    raf.resolveOldest();
+    await vi.advanceTimersByTimeAsync(0);
+    raf.resolveOldest();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Depart from the bottom on agent-b and memorize a DIFFERENT non-stick
+    // position (top=200).
+    scrollLogTo(logEl, 200);
+    await tick();
+
+    // OLD: switch back to agent-a -> restores its memorized top=100,
+    // captured synchronously into THIS run's `restoreTop`. Its
+    // renderMermaidIn resolves PROMPTLY, while OLD is still the latest run
+    // -> passes the post-render generation check -> enters the double-rAF
+    // wait (held).
+    props.envelope = state("agent-a");
+    props.logs = logsA;
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(raf.pending.length).toBe(1); // OLD awaiting its first rAF
+
+    // NEW: switch to agent-b again BEFORE OLD's rAFs resolve -> restores
+    // its OWN memorized top=200, superseding OLD (bumps
+    // scrollEffectGeneration) while OLD is parked mid-wait.
+    props.envelope = state("agent-b");
+    props.logs = logsB;
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(raf.pending.length).toBe(2); // OLD's still-pending rAF + NEW's first
+
+    // Let NEW run to completion first (its own two rAFs), landing at its
+    // memorized 200.
+    raf.resolveNewest();
+    await vi.advanceTimersByTimeAsync(0);
+    raf.resolveNewest();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(logEl.scrollTop).toBe(200);
+
+    // Only now release OLD's own two rAFs -- its continuation resumes with
+    // a generation that no longer matches.
+    raf.resolveOldest();
+    await vi.advanceTimersByTimeAsync(0);
+    raf.resolveOldest();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The pin: OLD's stale restore (100) must not have overwritten NEW's
+    // landing (200).
+    expect(logEl.scrollTop).toBe(200);
   });
 });
