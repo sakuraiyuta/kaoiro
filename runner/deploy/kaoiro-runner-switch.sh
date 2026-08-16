@@ -108,6 +108,32 @@ trap cleanup EXIT INT TERM
 switch_to() {
   _id=$1
   _target="$root/releases/$_id"
+
+  # .lock.links (issue #253 round 2, もも review must-fix) from HERE —
+  # before even checking `$_target` exists — through the writes below.
+  # An earlier version took this lock only around the read of `current`,
+  # AFTER verifying `$_target`, on the theory that verification is
+  # read-only against the release and does not touch current/previous. That
+  # missed a narrower race: kaoiro-runner-install.sh's own --allow-dirty
+  # replace path takes this SAME lock only around ITS check-then-delete of
+  # `$target`, so between switch's (then-unlocked) verify succeeding and
+  # switch's (later) lock-acquire, a concurrent install could delete
+  # `$_target` out from under an ALREADY-VERIFIED release — activating a
+  # name that no longer resolves to anything. もも reproduced this directly:
+  # switch exited 0 with `current` left as a dangling symlink at the
+  # deleted target. Verified independently (issue #253 worktree, HEAD
+  # 5c2cb50): a fake `mkdir` shimmed onto PATH deletes the target release
+  # the instant it is asked to create `.lock.links` (standing in for a
+  # concurrent install's delete landing in that exact pre-fix gap) —
+  # reproduced the identical outcome, exit 0 / current pointing at a
+  # deleted directory. Holding the lock from before the FIRST read of
+  # `$_target` closes it: install's own delete needs the same lock, so it
+  # cannot run while switch holds it, and if install already deleted
+  # `$_target` before switch's turn, switch's own verify (now correctly
+  # inside the lock) fails cleanly instead of activating nothing.
+  kaoiro_lock_acquire "$links_lock"
+  links_held=yes
+
   [ -d "$_target" ] || kaoiro_die "no such release: $_id (looked in $root/releases)" 78
   kaoiro_verify_release_tree "$_target"
   # The directory name is what `current` will point at; the tree's own
@@ -116,14 +142,6 @@ switch_to() {
   # or built by an older installer that did not enforce this.
   [ "$KAOIRO_VERIFIED_IDENTITY" = "$_id" ] ||
     kaoiro_die "release directory $_id carries identity $KAOIRO_VERIFIED_IDENTITY — refusing to activate a name that does not match its contents" 70
-
-  # .lock.links from here through the writes below — verification above is
-  # read-only against the RELEASE (not current/previous) and does not need
-  # it, but the read of `current` a few lines down does: an install or
-  # update reading a stale current/previous between our read and our write
-  # is exactly the race issue #253 closes.
-  kaoiro_lock_acquire "$links_lock"
-  links_held=yes
 
   _old=""
   if [ -L "$root/current" ]; then
