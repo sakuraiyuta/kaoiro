@@ -23,6 +23,19 @@
 // can resolve AFTER a NEWER one already armed its own correct timer. Only
 // resolving jumps strictly in dispatch order (as the must-fix-1 tests
 // above do) cannot exercise this — see the dedicated out-of-order test.
+// must-fix round 3 (M1, request/effect ownership — ふじ probes 1+2): the
+// round-2 fix protected the SUPPRESSION TIMER from a stale generation, but
+// nothing protected the actual scroll/DOM mutation itself. The main scroll
+// $effect's `tick().then(async () => {...})` continuation only re-checked
+// `logEl` after its `renderMermaidIn` await, never whether a NEWER effect
+// run (a second rapid jump, or an agent switch) had since superseded it.
+// So an OLDER, now-irrelevant continuation could still call
+// `scrollToTimelineEntry`'s own `logEl.scrollTo(...)` (or the rAF-based
+// restore path) AFTER a newer, correct one already landed — silently
+// overwriting the correct final position with a stale one. Fixed via a
+// plain incrementing `scrollEffectGeneration`, captured once per effect
+// run, checked at both async resume points (right after the mermaid await,
+// and right after the double-rAF restore wait) before any DOM mutation.
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentDetail from "../src/lib/AgentDetail.svelte";
@@ -43,6 +56,7 @@ let component: object | null = null;
 let originalClientHeight: PropertyDescriptor | undefined;
 let originalScrollHeight: PropertyDescriptor | undefined;
 let originalScrollTopDescriptor: PropertyDescriptor | undefined;
+let originalGetBoundingClientRect: PropertyDescriptor | undefined;
 let scrollTopStore: WeakMap<Element, number> | null = null;
 
 beforeEach(() => {
@@ -68,6 +82,7 @@ afterEach(async () => {
     ["clientHeight", originalClientHeight],
     ["scrollHeight", originalScrollHeight],
     ["scrollTop", originalScrollTopDescriptor],
+    ["getBoundingClientRect", originalGetBoundingClientRect],
   ] as const) {
     if (orig) {
       Object.defineProperty(HTMLElement.prototype, prop, orig);
@@ -78,6 +93,7 @@ afterEach(async () => {
   originalClientHeight = undefined;
   originalScrollHeight = undefined;
   originalScrollTopDescriptor = undefined;
+  originalGetBoundingClientRect = undefined;
   scrollTopStore = null;
 });
 
@@ -118,11 +134,13 @@ function buildLogs(agentId: string, count: number): Envelope[] {
   return Array.from({ length: count }, (_, seq) => assistantLog(agentId, seq));
 }
 
-function stubScrollTo(): void {
+function stubScrollTo() {
+  const spy = vi.fn();
   Object.defineProperty(HTMLElement.prototype, "scrollTo", {
     configurable: true,
-    value: vi.fn(),
+    value: spy,
   });
+  return spy;
 }
 
 // Real scroll geometry (same convention as logWindow.integration.test.ts):
@@ -159,6 +177,41 @@ function installScrollGeometry(): void {
     set(this: HTMLElement, value: number) {
       const max = Math.max(0, this.scrollHeight - this.clientHeight);
       store.set(this, Math.max(0, Math.min(value, max)));
+    },
+  });
+}
+
+// jsdom's default getBoundingClientRect() returns all-zero rects, which
+// makes scrollToTimelineEntry's own position formula (rect diff + scrollTop)
+// collapse to "just the current scrollTop" regardless of WHICH row is being
+// measured — fine for tests that only assert window/entry-count, but unable
+// to distinguish "landed on the wrong (stale) target" from "landed on the
+// right one" (must-fix round 3 M1's own point). This mocks each
+// `.transcript-entry`'s rect.top from its live DOM order (matching the
+// installScrollGeometry ROW_PX convention), so the real formula produces a
+// different, meaningful `top` per row.
+function installRowGeometry(): void {
+  originalGetBoundingClientRect = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "getBoundingClientRect",
+  );
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value(this: HTMLElement) {
+      const empty = {
+        top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0,
+        toJSON() { return {}; },
+      };
+      if (this.classList.contains("log")) return { ...empty, bottom: 400, height: 400 };
+      if (this.classList.contains("transcript-entry")) {
+        const logEl = this.closest(".log") as HTMLElement | null;
+        if (!logEl) return empty;
+        const rows = [...logEl.querySelectorAll(".transcript-entry")];
+        const idx = rows.indexOf(this);
+        const top = idx * ROW_PX - logEl.scrollTop;
+        return { ...empty, top, bottom: top + ROW_PX, y: top, height: ROW_PX };
+      }
+      return empty;
     },
   });
 }
@@ -490,5 +543,195 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     scrollLogTo(logEl, naturalBottom(logEl));
     await tick();
     expect(target.querySelectorAll(".transcript-entry").length).toBe(200);
+  });
+
+  it("N1: cancel-on-rearm と callback 内 generation guard は defense-in-depth (delayed schedule)", async () => {
+    // ふじ review round 3 N1: 二層防御(armSuppressBottomRevert の
+    // cancel-on-rearm、armSuppressFailsafe のコールバック内 generation
+    // guard)は個別に無効化しても他方が単独で守り切れるため、
+    // must-fix-1 系テストのタイミング(NEW が自分の失敗も即座に
+    // renderMermaidIn を解決する)では red にならない。両方を同時に
+    // 無効化し、かつ NEW の render を OLD の ORIGINAL deadline を
+    // 越えるまで pending にした場合(NEW 自身がまだ自分の failsafe を
+    // 一度も arm していない時点で OLD の stale timer が発火する)だけが
+    // red になる、という判定を pin する。
+    stubScrollTo();
+    installScrollGeometry();
+    const mermaid = installControllableMermaid();
+    const logs = buildLogs("agent-a", 1000);
+    const targetOld = conversationEntryKey(logs[10]);
+    const targetNew = conversationEntryKey(logs[5]);
+
+    const { target, props } = await renderReactive({
+      envelope: state("agent-a"),
+      logs,
+      agents: {},
+      scrollToEntryKey: null,
+      onClose: vi.fn(),
+    });
+    mermaid.resolveNext(); // mount
+    await vi.advanceTimersByTimeAsync(0);
+    const logEl = target.querySelector(".log") as HTMLElement;
+
+    // OLD resolves immediately: arms failsafe at t=0, due t=1000.
+    props.scrollToEntryKey = targetOld;
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // At t=50, NEW is dispatched: ensureIndexVisible expands the window
+    // further and re-arms SYNCHRONOUSLY (this is what cancel-on-rearm
+    // protects against OLD's still-pending timer) — but its OWN
+    // renderMermaidIn is held pending well past t=1000, so NEW never gets
+    // a chance to arm its OWN failsafe before OLD's original deadline.
+    await vi.advanceTimersByTimeAsync(50);
+    props.scrollToEntryKey = targetNew;
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+
+    // Advance to t=1050 (past OLD's t=1000 deadline) WITHOUT resolving
+    // NEW's render, then apply the same spurious "still at the bottom"
+    // event a window expansion produces.
+    await vi.advanceTimersByTimeAsync(950);
+    scrollLogTo(logEl, naturalBottom(logEl));
+    await tick();
+
+    // With both guards intact, OLD's timer cannot have fired (cancelled at
+    // t=50) so this event must not revert the freeze.
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+
+    // NEW's render finally resolves and must still find its target.
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+  });
+
+  it("must-fix round 3 (M1) probe 1: 完了順が逆転しても、最終着地は NEW のまま (OLD に上書きされない)", async () => {
+    const scrollToSpy = stubScrollTo();
+    installScrollGeometry();
+    installRowGeometry();
+    const mermaid = installControllableMermaid();
+    const logs = buildLogs("agent-a", 1000);
+    const targetOld = conversationEntryKey(logs[10]);
+    const targetNew = conversationEntryKey(logs[5]);
+
+    const { target, props } = await renderReactive({
+      envelope: state("agent-a"),
+      logs,
+      agents: {},
+      scrollToEntryKey: null,
+      onClose: vi.fn(),
+    });
+    mermaid.resolveNext(); // mount
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Dispatch OLD (expands to [10,1000)); its renderMermaidIn is held
+    // pending (e.g. a diagram-heavy message taking longer to render).
+    props.scrollToEntryKey = targetOld;
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(990);
+
+    // Dispatch NEW before OLD resolves (expands further to [5,1000)); its
+    // own renderMermaidIn is also held pending.
+    props.scrollToEntryKey = targetNew;
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+    expect(mermaid.resolvers.length).toBe(2);
+    const [resolveOld, resolveNew] = mermaid.resolvers;
+
+    // NEW resolves first -> lands correctly: NEW is now the first rendered
+    // row (window starts at its own index), so entryTop=0 -> top=0.
+    resolveNew();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(scrollToSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(scrollToSpy.mock.calls.at(-1)?.[0]).toMatchObject({ top: 0 });
+
+    // OLD resolves 300ms later. At the CURRENT (unchanged since NEW's
+    // expansion) window, OLD sits 5 rows below NEW (150px) -> its own
+    // (stale) computed top would be 126. A pre-fix continuation would call
+    // scrollTo(126) here, silently overwriting NEW's correct landing.
+    await vi.advanceTimersByTimeAsync(300);
+    resolveOld();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(scrollToSpy.mock.calls.at(-1)?.[0]).toMatchObject({ top: 0 });
+  });
+
+  it("must-fix round 3 (M1) probe 2: agent 切替後、切替前 agent の遅延 continuation が incoming agent の scrollTop を上書きしない", async () => {
+    stubScrollTo(); // no-op: isolates the DIRECT logEl.scrollTop write the stale fallback path makes, from any legitimate scrollTo() call
+    // The stale-fallback path this probes waits two requestAnimationFrame
+    // ticks before writing scrollTop; make them resolve immediately
+    // (same pattern as logWindow.integration.test.ts) rather than relying
+    // on fake-timer time advancement, which does not drive rAF.
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    installScrollGeometry();
+    installRowGeometry();
+    const mermaid = installControllableMermaid();
+    const logsA = buildLogs("agent-a", 1000);
+    const targetA = conversationEntryKey(logsA[10]);
+
+    const { target, props } = await renderReactive({
+      envelope: state("agent-a"),
+      logs: logsA,
+      agents: {},
+      scrollToEntryKey: null,
+      onClose: vi.fn(),
+    });
+    mermaid.resolveNext();
+    await vi.advanceTimersByTimeAsync(0);
+    const logEl = target.querySelector(".log") as HTMLElement;
+
+    // Jump on agent A (stickToBottom defaults true — the operator was
+    // pinned to the tail, the common starting state per issue #237's own
+    // root-cause analysis). renderMermaidIn held pending.
+    props.scrollToEntryKey = targetA;
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(990);
+
+    // Switch to agent B (300 logs) with its OWN deep jump (index 5,
+    // outside B's default [100,300) window) before A's render resolves —
+    // the realistic App.svelte onSelectAgent path (envelope + target
+    // change together).
+    const logsB = buildLogs("agent-b", 300);
+    const targetB = conversationEntryKey(logsB[5]);
+    props.envelope = state("agent-b");
+    props.logs = logsB;
+    props.scrollToEntryKey = targetB;
+    await tick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(295);
+    expect(mermaid.resolvers.length).toBe(2);
+    const [resolveA, resolveB] = mermaid.resolvers;
+
+    // B's render resolves and lands correctly (B's target is the first
+    // rendered row of its own window -> top=0). scrollTo is stubbed, so
+    // this does not itself move logEl.scrollTop — only the buggy fallback
+    // (a DIRECT `logEl.scrollTop = ...` assignment) would.
+    resolveB();
+    await vi.advanceTimersByTimeAsync(0);
+    const scrollTopAfterB = logEl.scrollTop;
+
+    // A's render FINALLY resolves, 300ms later. Its target is no longer in
+    // the DOM (agent B's logs are showing), so scrollToTimelineEntry fails
+    // to find it — but a pre-fix continuation falls through to the
+    // stick-to-bottom restore path (A's OWN captured shouldStick=true,
+    // restoreTop=null) and directly assigns
+    // `logEl.scrollTop = logEl.scrollHeight` against B's CURRENT (now
+    // reused) DOM — silently discarding B's landing.
+    await vi.advanceTimersByTimeAsync(300);
+    resolveA();
+    await vi.advanceTimersByTimeAsync(0);
+    // Two rAF frames the stale fallback path awaits before writing.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(logEl.scrollTop).toBe(scrollTopAfterB);
   });
 });

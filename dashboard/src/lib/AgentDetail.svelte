@@ -1460,27 +1460,45 @@
   // below the top edge. This is reset for ordinary detail navigation.
   let timelineScrollTailPx = $state(0);
   let handledTimelineScrollTarget: string | null = null;
+  // ふじ review round 3 must-fix 1: the main scroll $effect's
+  // `tick().then(async () => {...})` continuation only re-checked whether
+  // `logEl` still existed after its `renderMermaidIn` await — never
+  // whether a NEWER effect run (a second rapid jump, or an agent switch)
+  // had since superseded it. renderMermaidIn's duration is content-
+  // dependent, so an OLDER continuation can resolve AFTER a newer one
+  // already landed correctly, and its own (stale) scrollTo / stick-restore
+  // call would silently overwrite the correct position. Bumped once per
+  // effect run (plain, non-reactive — like `scrollAgent` — so reading/
+  // writing it never adds a tracked dependency); each continuation
+  // captures its own value and compares against the live one before any
+  // DOM mutation, at both of its async resume points.
+  let scrollEffectGeneration = 0;
 
   function resetTimelineScrollTail(): void {
     timelineScrollTailPx = 0;
     logEl?.style.setProperty("--timeline-scroll-tail", "0px");
   }
 
-  // `suppressGenerationForThisJump`: the token `ensureIndexVisible` (called
-  // by this jump's caller) returned, or null if that call was a no-op
-  // (target already within the render window, nothing to protect). Every
-  // exit path routes through `finish()` so the failsafe is armed exactly
-  // once, at the point this function is actually done with its (already
-  // fully synchronous, by this point) pre-scroll work — see the
+  // Every exit path routes through `finish()` so the failsafe is armed
+  // exactly once, at the point this function is actually done with its
+  // (already fully synchronous, by this point) pre-scroll work — see the
   // `armSuppressFailsafe` doc comment for why this must not happen any
-  // earlier (issue #237 must-fix 2).
-  async function scrollToTimelineEntry(
-    targetKey: string,
-    suppressGenerationForThisJump: number | null,
-  ): Promise<boolean> {
+  // earlier (issue #237 must-fix 2). `finish()` reads the LIVE suppression
+  // state rather than a token captured at this call's own start (ふじ
+  // review round 3 must-fix 1, ownership-transfer half): the caller
+  // (the main scroll $effect) now guarantees only the CURRENT, non-stale
+  // continuation ever reaches this function at all — but that continuation
+  // may not be the one whose OWN `ensureIndexVisible` call armed the
+  // active suppression (e.g. a rapid second jump whose target already sits
+  // in the window the FIRST jump expanded, so ITS `ensureIndexVisible` was
+  // a no-op). Arming whatever is live keeps that suppression's failsafe
+  // running under whichever jump actually lands, instead of leaving it
+  // orphaned because the jump that originally armed it got superseded
+  // before reaching this point.
+  async function scrollToTimelineEntry(targetKey: string): Promise<boolean> {
     const finish = (ok: boolean): boolean => {
-      if (suppressGenerationForThisJump !== null) {
-        armSuppressFailsafe(suppressGenerationForThisJump);
+      if (suppressBottomRevert) {
+        armSuppressFailsafe(suppressGeneration);
       }
       return ok;
     };
@@ -1707,21 +1725,18 @@
       timelineTarget !== null &&
       timelineTargetPresent &&
       timelineTarget !== handledTimelineScrollTarget;
-    // Captured here (possibly null — a no-op ensureIndexVisible, e.g. the
-    // target is already within the render window) and threaded into
-    // scrollToTimelineEntry below, so its failsafe only ever protects
-    // (or clears) THIS jump's own arming, never an older or newer one
-    // (issue #237 must-fix 1).
-    let timelineJumpSuppressGeneration: number | null = null;
     if (shouldScrollTimelineTarget) {
       // #184: the target row must be in the rendered window before
       // scrollToTimelineEntry can find it via data-envelope-key. Expand
       // synchronously so Svelte flushes the wider window before the tick()
-      // below queries the DOM.
+      // below queries the DOM. The return value (a suppression generation,
+      // or null for a no-op) no longer needs threading through — `finish()`
+      // inside scrollToTimelineEntry now arms whatever is live (see its own
+      // doc comment).
       const targetIndex = logs.findIndex(
         (entry) => conversationEntryKey(entry) === timelineTarget,
       );
-      timelineJumpSuppressGeneration = ensureIndexVisible(targetIndex);
+      ensureIndexVisible(targetIndex);
     }
     // Snapshot synchronously BEFORE the new logs commit: once Svelte renders
     // the new envelopes, scrollHeight grows and a fresh "at the bottom"
@@ -1745,6 +1760,13 @@
       stickToBottom = shouldStick;
       restoreTop = effectiveMem && !effectiveMem.stick ? effectiveMem.top : null;
     }
+    // ふじ review round 3 must-fix 1: this specific effect run's identity.
+    // Captured synchronously (before the async continuation below), so a
+    // LATER effect run (a second rapid jump, or an agent switch) can bump
+    // `scrollEffectGeneration` and make this continuation detect it is no
+    // longer the latest — at both of its async resume points, before any
+    // DOM mutation.
+    const myScrollEffectGeneration = ++scrollEffectGeneration;
     void tick().then(async () => {
       if (!logEl) return;
       try {
@@ -1754,6 +1776,12 @@
       }
       // The component may have unmounted during the await; re-check logEl.
       if (!logEl) return;
+      // A newer effect run has since superseded this one — its own
+      // continuation (or none, if nothing is pending) owns whatever
+      // scroll/window state is now current. Touching anything here would
+      // silently overwrite a possibly-already-correct, newer landing with
+      // stale data (ふじ probes 1+2).
+      if (myScrollEffectGeneration !== scrollEffectGeneration) return;
       // #122: timeline click has an explicit reading target. Do this before
       // the ordinary pin/restore path so its smooth scroll cannot be
       // overwritten by the default "latest message" position. If history has
@@ -1762,10 +1790,7 @@
       if (
         shouldScrollTimelineTarget &&
         timelineTarget !== null &&
-        (await scrollToTimelineEntry(
-          timelineTarget,
-          timelineJumpSuppressGeneration,
-        ))
+        (await scrollToTimelineEntry(timelineTarget))
       ) {
         handledTimelineScrollTarget = timelineTarget;
         return;
@@ -1780,6 +1805,9 @@
       await new Promise((r) => requestAnimationFrame(r));
       await new Promise((r) => requestAnimationFrame(r));
       if (!logEl) return;
+      // Re-check: another effect run (and its own restore) could have
+      // started during these two frames.
+      if (myScrollEffectGeneration !== scrollEffectGeneration) return;
       logEl.scrollTop = restoreTop !== null ? restoreTop : logEl.scrollHeight;
     });
   });
