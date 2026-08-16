@@ -26,6 +26,11 @@
   "bin": {
     "kaoiro-claude-probe": "./dist/probe.js"
   },
+  "kaoiro": {
+    "runtimeAssets": [
+      "dist/probe.js"
+    ]
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",

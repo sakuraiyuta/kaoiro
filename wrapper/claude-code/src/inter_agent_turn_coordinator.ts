@@ -32,10 +32,11 @@ export interface DispatchedInterAgentBatch {
 }
 
 /** A batch that never received (or never completed) an SDK turn before the
- * host terminated. It deliberately has no new turn token: terminal draining
- * reports the already-accepted inbound CIDs, it does not start another model
- * turn. */
+ * host terminated. Its token is a local terminal-resolution lease, not an
+ * SDK turn: it only lets the shared pending map resolve this exact batch
+ * without confusing it with a later same-CID generation. */
 export interface DrainedInterAgentBatch {
+  turnToken: string;
   peer: string;
   items: readonly InterAgentBatchItem[];
   conversationIds: readonly string[];
@@ -308,7 +309,12 @@ export class InterAgentTurnCoordinator {
             .conversation_id,
       )
       .filter((cid): cid is string => typeof cid === "string");
-    return { peer, items: pending.items, conversationIds };
+    return {
+      turnToken: this.#createTurnToken(),
+      peer,
+      items: pending.items,
+      conversationIds,
+    };
   }
 
   #retire(turnToken: string): void {

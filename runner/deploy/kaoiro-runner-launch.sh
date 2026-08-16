@@ -58,8 +58,16 @@ fi
 # Resolve our own directory before the config check: it is needed both for the
 # entry point and for naming the setup wizard when the config is missing.
 # (unset CDPATH so a stray value in the env file cannot redirect the cd)
+#
+# PHYSICAL, like kaoiro-runner-update.sh: the unit starts
+# <install-root>/current/deploy/kaoiro-runner-launch.sh, so a logical `pwd`
+# would make the release root below `<install-root>/current` — a SYMLINK,
+# which the verifier rejects outright (an archive whose top-level entry was a
+# link out of the install root is must-fix 1). Resolving once here pins the
+# whole start to the release `current` names right now, which is also what
+# keeps a switch landing mid-start from splitting one run across two releases.
 unset CDPATH
-deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+deploy_dir=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 
 # --version (issue #228 round 2 MF-5, ふじ 差し戻し): forwarded to the
 # entry point BEFORE the config-existence check below. A first-run host
@@ -96,10 +104,49 @@ node_bin="${KAOIRO_NODE:-node}"
 command -v "$node_bin" >/dev/null 2>&1 ||
   die_config "node not found: $node_bin (set KAOIRO_NODE in $env_file)"
 
+# Verify, never build (issue #229). Making the service definition build would
+# tie crash restart and boot to a compiler, node_modules and pnpm all
+# succeeding, keep the host down for the whole build, and leave a partial
+# `dist` behind on failure. So this checks that the artifacts a start needs
+# are all present, and says which one is not.
+#
+# The set matters, not just cli.js. The runner resolves each wrapper package
+# from disk at spawn time — the codex one lazily, on the first codex spawn —
+# so a tree with a runner build and a missing wrapper build starts happily
+# and fails much later, on an agent launch. Checking the whole set at start
+# turns that into a service that refuses to come up.
+#
+# `-f` follows symlinks by design: pnpm links node_modules/@kaoiro/<pkg>
+# into .pnpm/ in a deployed release, and into the workspace in a repo-direct
+# checkout (measured on both, 2026-08-16).
+#
+# VERSION is deliberately NOT checked here. A release's completeness is
+# verified by kaoiro-runner-install.sh before the tree is ever renamed into
+# releases/, which is where a truncated extraction is still fixable; and a
+# repo-direct checkout has no VERSION at all, since only
+# scripts/build-runner-tarball.sh writes one. `dist/build-info.json` — which
+# IS checked — is the identity both profiles carry (ADR-0053).
+#
 # <install>/runner/deploy/<this script> -> <install>/runner/dist/cli.js
 entry="$deploy_dir/../dist/cli.js"
-[ -f "$entry" ] ||
-  die_config "runner not built: $entry (run 'pnpm -C runner build')"
+
+# EVERY verification failure becomes exit 78, and that mapping is the point.
+# A tree that passes a hand-written sentinel list but is missing one module
+# fails at import instead, with node's own exit 1 — which
+# RestartPreventExitStatus=78 does not match, so the unit restart-loops on a
+# fault no restart can fix. Deleting dist/args.js from a real dist reproduced
+# exactly that (2026-08-16). Turning the fault into 78 BEFORE exec is what
+# leaves it visible in `systemctl --user status` instead.
+#
+# Existence-only (no --hash, no --require-manifest): this runs on every boot
+# and every restart, and hashing a release is not a cost to pay there. The
+# strict pass — manifest required, digests compared — already ran at install
+# and at activation, where the tree could still be rejected.
+verify="$deploy_dir/verify-release.mjs"
+[ -f "$verify" ] ||
+  die_config "incomplete install: $verify is missing (release: reinstall it)"
+"$node_bin" "$verify" "$deploy_dir/.." >/dev/null ||
+  die_config "release verification failed (see the line above); repo checkout: run 'pnpm -C wrapper build && pnpm -C runner build', release: reinstall it"
 
 # Single-binary migration (issue #70): replace the line below with
 #   exec "$deploy_dir/../bin/kaoiro-runner" "$config"

@@ -57,6 +57,16 @@ if (view === "app") {
   if (params.get("attention") === "1") scenario.attention = true;
   if (params.get("taskRing") === "1") scenario.taskRing = true;
   if (params.get("sprite") === "1") scenario.sprite = true;
+  const scrollTarget = params.get("scrollTarget");
+  if (scrollTarget !== null) scenario.scrollTargetIndex = Number(scrollTarget);
+  const scrollDelay = params.get("scrollDelay");
+  if (scrollDelay !== null) scenario.scrollTargetDelayMs = Number(scrollDelay);
+  const agentSwitchTarget = params.get("agentSwitchTarget");
+  if (agentSwitchTarget !== null) {
+    scenario.agentSwitchTargetIndex = Number(agentSwitchTarget);
+  }
+  const logCount = params.get("logCount");
+  if (logCount !== null) scenario.logCount = Number(logCount);
   mount(DetailHarness, { target, props: { scenario } });
 } else if (view === "overlay") {
   const overlay = params.get("overlay") === "drawer" ? "drawer" : "dialog";

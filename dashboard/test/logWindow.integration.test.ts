@@ -401,9 +401,19 @@ describe("AgentDetail log render window (#184)", () => {
         ts: tsFor(1000 + i),
       })),
     ];
-    await tick();
-    await new Promise((r) => requestAnimationFrame(r));
-    await new Promise((r) => requestAnimationFrame(r));
+    // Several rounds of tick+rAF (same pattern and rationale as the
+    // sibling "同一 agent を表示したままの shrink" test below, and as issue
+    // #237 round 3's ownership-generation check added to the scroll
+    // $effect's continuation): this test has ALSO triggered four effect
+    // runs in quick succession (mount, switch to B, switch back to
+    // shrunk A, append) by this point, and their tick()->mermaid->
+    // double-rAF tails settle out of order relative to a single round of
+    // awaits here — drain generously so every pending tail (not just this
+    // last one) has resolved before asserting the final settled state.
+    for (let i = 0; i < 5; i++) {
+      await tick();
+      await new Promise((r) => requestAnimationFrame(r));
+    }
 
     expect(target.querySelectorAll(".transcript-entry").length).toBe(80);
     expect(logEl.scrollTop).toBe(80 * ROW_PX - 400);

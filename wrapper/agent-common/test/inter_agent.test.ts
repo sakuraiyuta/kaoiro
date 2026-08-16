@@ -26,6 +26,7 @@ import type {
 } from "../src/types.js";
 
 const PERSONA = { id: "mio", name: "澪", sprite_set: "mio" };
+const TEST_TURN_TOKEN = "test-turn";
 
 function configFor(agentId: string): WrapperConfig {
   return {
@@ -57,11 +58,25 @@ function makeTool(agentId: string): { tool: InterAgentTool; capture: Capture } {
   const tool = new InterAgentTool({
     config: configFor(agentId),
     getState: capture.state,
+    getActiveInterAgentTurnToken: () => TEST_TURN_TOKEN,
     send: (env) => capture.envelopes.push(env),
     now: () => "2026-06-29T12:34:56Z",
     newId: capture.newId,
   });
   return { tool, capture };
+}
+
+function notePending(tool: InterAgentTool, envelope: Envelope, turnToken = TEST_TURN_TOKEN): void {
+  tool.notePendingInjection(envelope, turnToken);
+}
+
+function resolveTurn(
+  tool: InterAgentTool,
+  conversationIds: readonly string[],
+  error?: InterAgentErrorPayload,
+  turnToken = TEST_TURN_TOKEN,
+): Envelope[] {
+  return tool.resolveTurnEnd(turnToken, conversationIds, error);
 }
 
 function inboundEnvelope(
@@ -455,6 +470,27 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
     expect(late.notice).toBeDefined();
   });
 
+  it("issue #225: error notice の stale drop は agent-common が skip 理由を返す", async () => {
+    const { tool } = makeTool("self.agent");
+    const first = inboundEnvelope("cnv-stale-error-notice", "inform");
+    (first.payload as unknown as InterAgentMessagePayload).turn_number = 2;
+    await tool.receiveInbound(first);
+
+    const staleError = inboundEnvelope("cnv-stale-error-notice", "inform");
+    (staleError.payload as unknown as InterAgentMessagePayload).turn_number = 1;
+    (staleError.payload as unknown as InterAgentMessagePayload).error = {
+      code: "stale_turn",
+      message: "already sent",
+    };
+
+    expect(await tool.receiveInbound(staleError)).toEqual({
+      consumed: false,
+      inject: false,
+      mode: "reply-owed",
+      noticeSkipReason: "envelope itself is a peer_error notice",
+    });
+  });
+
   it("server 合成 envelope (agent_id=server) の turn_number=0 は stale 判定から除外される (Stage 4)", async () => {
     const { tool } = makeTool("self.agent");
     const first = inboundEnvelope("cnv-synth", "inform");
@@ -523,6 +559,7 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
     expect(disposition.inject).toBe(false);
     expect(disposition.mode).toBe("reply-owed");
     expect(disposition.notice).toBeUndefined();
+    expect(disposition.noticeSkipReason).toBe("track already closed");
   });
 
   it("hard-limit の server 合成 escalate (agent_id=server, turn_number=0, done=true) は " +
@@ -879,9 +916,9 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
 describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEnd)", () => {
   it("resolveTurnEnd は notePendingInjection 済みの conversation を送信元宛の envelope にして返す", () => {
     const { tool, capture } = makeTool("self.agent");
-    tool.notePendingInjection(inboundEnvelope("cnv-pending"));
+    notePending(tool, inboundEnvelope("cnv-pending"));
 
-    const notices = tool.resolveTurnEnd(["cnv-pending"], {
+    const notices = resolveTurn(tool, ["cnv-pending"], {
       code: "context_overflow",
       message: "prompt too long",
     });
@@ -902,33 +939,83 @@ describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEn
 
   it("conversationIds が空配列なら常に空配列 (操作者ターンのタグ無し)", () => {
     const { tool } = makeTool("self.agent");
-    tool.notePendingInjection(inboundEnvelope("cnv-untouched"));
+    notePending(tool, inboundEnvelope("cnv-untouched"));
     expect(
-      tool.resolveTurnEnd([], { code: "api_error", message: "x" }),
+      resolveTurn(tool, [], { code: "api_error", message: "x" }),
     ).toEqual([]);
     // untouched entry survives an empty-tagged turn resolution
     expect(
-      tool.resolveTurnEnd(["cnv-untouched"], { code: "api_error", message: "y" }),
+      resolveTurn(tool, ["cnv-untouched"], { code: "api_error", message: "y" }),
     ).toHaveLength(1);
   });
 
   it("成功ターン (error省略) は通知を出さず pending を消費するだけ", () => {
     const { tool } = makeTool("self.agent");
-    tool.notePendingInjection(inboundEnvelope("cnv-quiet-success"));
+    notePending(tool, inboundEnvelope("cnv-quiet-success"));
 
-    expect(tool.resolveTurnEnd(["cnv-quiet-success"])).toEqual([]);
+    expect(resolveTurn(tool, ["cnv-quiet-success"])).toEqual([]);
     // already cleared — a LATER, unrelated turn's error must not resurrect it
     expect(
-      tool.resolveTurnEnd(["cnv-quiet-success"], {
+      resolveTurn(tool, ["cnv-quiet-success"], {
         code: "api_error",
         message: "unrelated later failure",
       }),
     ).toEqual([]);
   });
 
+  it("異なる turn token の stale resolve は同じ CID を消費も通知もしない", () => {
+    const { tool } = makeTool("self.agent");
+    notePending(tool, inboundEnvelope("cnv-leased"), "turn-owned");
+
+    expect(
+      resolveTurn(
+        tool,
+        ["cnv-leased"],
+        { code: "api_error", message: "stale callback" },
+        "turn-stale",
+      ),
+    ).toEqual([]);
+    // The exact lease still owns the entry. Removing the token comparison
+    // would make the first resolve emit a peer_error and this one empty.
+    expect(
+      resolveTurn(
+        tool,
+        ["cnv-leased"],
+        { code: "api_error", message: "owned callback" },
+        "turn-owned",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("別 turn からの accepted reply は先行 inbound の lease を消さない", async () => {
+    let activeToken = "turn-other";
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      getActiveInterAgentTurnToken: () => activeToken,
+      send: () => {},
+      sendInterAgent: async () => ({ kind: "accepted", stamp: [1, 0] }),
+    });
+    tool.notePendingInjection(inboundEnvelope("cnv-reply-lease"), "turn-owned");
+
+    await tool.invoke({
+      to: "peer.agent",
+      body: "unrelated reply",
+      kind: "response",
+      conversation_id: "cnv-reply-lease",
+    });
+    activeToken = "turn-owned";
+    expect(
+      tool.resolveTurnEnd("turn-owned", ["cnv-reply-lease"], {
+        code: "api_error",
+        message: "the owned turn failed",
+      }),
+    ).toHaveLength(1);
+  });
+
   it("invoke() で同じ conversation に返信すると pending が解消し resolveTurnEnd は何も返さない", async () => {
     const { tool } = makeTool("self.agent");
-    tool.notePendingInjection(inboundEnvelope("cnv-replied"));
+    notePending(tool, inboundEnvelope("cnv-replied"));
     await tool.invoke({
       to: "peer.agent",
       body: "実は返信できた",
@@ -937,23 +1024,23 @@ describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEn
     });
 
     expect(
-      tool.resolveTurnEnd(["cnv-replied"], { code: "api_error", message: "x" }),
+      resolveTurn(tool, ["cnv-replied"], { code: "api_error", message: "x" }),
     ).toEqual([]);
   });
 
   it("同じ conversationId を2回 resolve しても2回目は空配列 (二重通知防止)", () => {
     const { tool } = makeTool("self.agent");
     expect(
-      tool.resolveTurnEnd(["cnv-none"], { code: "api_error", message: "x" }),
+      resolveTurn(tool, ["cnv-none"], { code: "api_error", message: "x" }),
     ).toEqual([]);
 
-    tool.notePendingInjection(inboundEnvelope("cnv-once"));
-    const first = tool.resolveTurnEnd(["cnv-once"], {
+    notePending(tool, inboundEnvelope("cnv-once"));
+    const first = resolveTurn(tool, ["cnv-once"], {
       code: "api_error",
       message: "first",
     });
     expect(first).toHaveLength(1);
-    const second = tool.resolveTurnEnd(["cnv-once"], {
+    const second = resolveTurn(tool, ["cnv-once"], {
       code: "api_error",
       message: "second",
     });
@@ -965,11 +1052,11 @@ describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEn
     // Two inbound injections queued before either turn completes — the bug
     // this regression test targets: resolving turn A's outcome must not
     // touch conversation B's still-pending entry, and vice versa.
-    tool.notePendingInjection(inboundEnvelope("cnv-a"));
-    tool.notePendingInjection(inboundEnvelope("cnv-b"));
+    notePending(tool, inboundEnvelope("cnv-a"));
+    notePending(tool, inboundEnvelope("cnv-b"));
 
     // Turn for cnv-a fails: only cnv-a gets a notice, cnv-b stays pending.
-    const noticesA = tool.resolveTurnEnd(["cnv-a"], {
+    const noticesA = resolveTurn(tool, ["cnv-a"], {
       code: "timeout",
       message: "no response",
     });
@@ -981,23 +1068,23 @@ describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEn
 
     // cnv-b's turn later succeeds quietly: cleared, no notice, no leftover
     // that a further-later unrelated failure could misattribute.
-    expect(tool.resolveTurnEnd(["cnv-b"])).toEqual([]);
+    expect(resolveTurn(tool, ["cnv-b"])).toEqual([]);
     expect(
-      tool.resolveTurnEnd(["cnv-b"], { code: "api_error", message: "late" }),
+      resolveTurn(tool, ["cnv-b"], { code: "api_error", message: "late" }),
     ).toEqual([]);
   });
 
   it("複数 cid を1回で resolve すると成功時は全件が黙って消費される (issue #221 段階3, 合流turn)", () => {
     const { tool } = makeTool("self.agent");
-    tool.notePendingInjection(inboundEnvelope("cnv-x"));
-    tool.notePendingInjection(inboundEnvelope("cnv-y"));
-    tool.notePendingInjection(inboundEnvelope("cnv-z"));
+    notePending(tool, inboundEnvelope("cnv-x"));
+    notePending(tool, inboundEnvelope("cnv-y"));
+    notePending(tool, inboundEnvelope("cnv-z"));
 
-    expect(tool.resolveTurnEnd(["cnv-x", "cnv-y", "cnv-z"])).toEqual([]);
+    expect(resolveTurn(tool, ["cnv-x", "cnv-y", "cnv-z"])).toEqual([]);
     // already cleared — a later failed resolve of the same batch's cids
     // must not resurrect any of them.
     expect(
-      tool.resolveTurnEnd(["cnv-x", "cnv-y", "cnv-z"], {
+      resolveTurn(tool, ["cnv-x", "cnv-y", "cnv-z"], {
         code: "api_error",
         message: "late",
       }),
@@ -1006,10 +1093,10 @@ describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEn
 
   it("複数 cid を1回で resolve し失敗すると cid ごとに個別の notice が出る (クロエ裁定: peer_error 全件波及)", () => {
     const { tool } = makeTool("self.agent");
-    tool.notePendingInjection(inboundEnvelope("cnv-p", "response", undefined, "peer.p"));
-    tool.notePendingInjection(inboundEnvelope("cnv-q", "response", undefined, "peer.q"));
+    notePending(tool, inboundEnvelope("cnv-p", "response", undefined, "peer.p"));
+    notePending(tool, inboundEnvelope("cnv-q", "response", undefined, "peer.q"));
 
-    const notices = tool.resolveTurnEnd(["cnv-p", "cnv-q"], {
+    const notices = resolveTurn(tool, ["cnv-p", "cnv-q"], {
       code: "context_overflow",
       message: "batch too large",
     });
@@ -1045,10 +1132,10 @@ describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEn
 
   it("一部だけ未 resolve な cid を混在させても resolve 済みの cid には触れない", () => {
     const { tool } = makeTool("self.agent");
-    tool.notePendingInjection(inboundEnvelope("cnv-live"));
+    notePending(tool, inboundEnvelope("cnv-live"));
     // cnv-already-gone has no pending entry at all (e.g. invoke() already
     // sent a reply on it during the same coalesced turn).
-    const notices = tool.resolveTurnEnd(["cnv-live", "cnv-already-gone"], {
+    const notices = resolveTurn(tool, ["cnv-live", "cnv-already-gone"], {
       code: "api_error",
       message: "x",
     });
@@ -1720,6 +1807,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
     const tool = new InterAgentTool({
       config: configFor("self.agent"),
       getState: () => "tool_running",
+      getActiveInterAgentTurnToken: () => TEST_TURN_TOKEN,
       send: (env) => outbound.push(env),
       sendInterAgent: (env) => {
         outbound.push(env);
@@ -1735,7 +1823,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
   // #131 のエラー通知が出なくなり、相手は無応答のまま待ち続ける。
   it("R2: reject では pending injection を残し、turn 終了で error notice が出る", async () => {
     const { tool, settle } = makeDeferredAckTool();
-    tool.notePendingInjection(inboundEnvelope("cnv-deferred", "request"));
+    notePending(tool, inboundEnvelope("cnv-deferred", "request"));
 
     const pending = tool.invoke({
       to: "peer.agent",
@@ -1746,7 +1834,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
     settle({ kind: "rejected", reason: "unknown_agent" });
     expect((await pending).isError).toBe(true);
 
-    const notices = tool.resolveTurnEnd(["cnv-deferred"], {
+    const notices = resolveTurn(tool, ["cnv-deferred"], {
       code: "api_error",
       message: "turn failed",
     });
@@ -1756,7 +1844,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
 
   it("R2: accepted では pending injection を消す (通知を重ねない)", async () => {
     const { tool, settle } = makeDeferredAckTool();
-    tool.notePendingInjection(inboundEnvelope("cnv-deferred", "request"));
+    notePending(tool, inboundEnvelope("cnv-deferred", "request"));
 
     const pending = tool.invoke({
       to: "peer.agent",
@@ -1768,7 +1856,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
     await pending;
 
     expect(
-      tool.resolveTurnEnd(["cnv-deferred"], {
+      resolveTurn(tool, ["cnv-deferred"], {
         code: "api_error",
         message: "turn failed",
       }),
@@ -1777,7 +1865,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
 
   it("R2: 配送不明でも pending injection は消す (二重返信を作らない)", async () => {
     const { tool, settle } = makeDeferredAckTool();
-    tool.notePendingInjection(inboundEnvelope("cnv-deferred", "request"));
+    notePending(tool, inboundEnvelope("cnv-deferred", "request"));
 
     const pending = tool.invoke({
       to: "peer.agent",
@@ -1789,7 +1877,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
     await pending;
 
     expect(
-      tool.resolveTurnEnd(["cnv-deferred"], {
+      resolveTurn(tool, ["cnv-deferred"], {
         code: "api_error",
         message: "turn failed",
       }),

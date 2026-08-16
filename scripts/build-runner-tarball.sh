@@ -180,6 +180,13 @@ pnpm --filter=@kaoiro/runner --prod deploy "$stage_rel/$name" --legacy >/dev/nul
 }
 printf '%s\n' "$version_string" >"$stage/$name/VERSION"
 
+# MANIFEST.json — the runtime module closure, so a release with ONE missing
+# module is rejected before it starts (issue #229 round 2, ふじ 差し戻し
+# must-fix 3). See scripts/build-release-manifest.mjs for what it covers and
+# what it deliberately leaves out.
+echo "build-runner-tarball: writing MANIFEST.json"
+node "$root/scripts/build-release-manifest.mjs" "$stage/$name"
+
 echo "build-runner-tarball: archiving"
 # COPYFILE_DISABLE=1 stops macOS bsdtar from embedding its copyfile
 # metadata (resource forks / ACLs) as AppleDouble `._*` files, which a

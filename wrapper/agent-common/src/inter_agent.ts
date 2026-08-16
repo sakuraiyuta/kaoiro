@@ -539,13 +539,54 @@ function trackAge(track: ConversationTrack): number {
  *  same AC10-bypassing pattern as `resolveTurnEnd()`'s notices, since this
  *  never goes through `invoke()`/`#dispatch()` either. Absent (not merely
  *  `undefined`) on every OTHER disposition shape (consumed, terminal,
- *  inject: true) — it only ever has meaning on a stale drop. */
-export interface InboundDisposition {
-  consumed: boolean;
-  inject: boolean;
-  mode: InboundReplyMode;
-  notice?: Envelope;
-}
+ *  inject: true) — it only ever has meaning on a stale drop.
+ *
+ *  `noticeSkipReason` (issue #225) is present exactly when that stale drop
+ *  deliberately withholds a notice. Its display-ready value is decided here,
+ *  where the exemption is decided; adapters must only render it. The
+ *  discriminated union makes a new no-notice exemption provide its reason at
+ *  this source, or fail typecheck, before either CLI can log a wrong fallback.
+ */
+export type InboundNoticeSkipReason =
+  | "envelope itself is a peer_error notice"
+  | "track already closed";
+
+export type InboundDisposition =
+  | {
+      consumed: true;
+      inject: false;
+      mode: InboundReplyMode;
+      notice?: never;
+      noticeSkipReason?: never;
+    }
+  | {
+      consumed: false;
+      inject: true;
+      mode: InboundReplyMode;
+      notice?: never;
+      noticeSkipReason?: never;
+    }
+  | {
+      consumed: false;
+      inject: false;
+      mode: "terminal";
+      notice?: never;
+      noticeSkipReason?: never;
+    }
+  | {
+      consumed: false;
+      inject: false;
+      mode: "reply-owed";
+      notice: Envelope;
+      noticeSkipReason?: never;
+    }
+  | {
+      consumed: false;
+      inject: false;
+      mode: "reply-owed";
+      notice?: never;
+      noticeSkipReason: InboundNoticeSkipReason;
+    };
 
 interface ReplyWaiter {
   resolve: (envelope: Envelope | undefined) => void;
@@ -558,12 +599,20 @@ interface ReplyWaiter {
 interface PendingInjection {
   /** agent_id of the envelope that was injected — the notice's addressee. */
   from: string;
+  /** Opaque identity of the exact SDK turn that accepted this inbound.
+   * Conversation IDs may be re-used by a later inbound generation; only this
+   * lease may clear or turn a pending entry into a peer_error notice. */
+  turnToken: string;
 }
 
 export interface InterAgentToolOptions {
   config: WrapperConfig;
   /** Current wrapper state — stamped onto the outer envelope frame. */
   getState: () => KaoiroState;
+  /** Opaque identity of the SDK turn currently executing. Production hosts
+   * supply this so a reply from a different turn cannot clear an older
+   * pending inbound that happens to reuse the same conversation_id. */
+  getActiveInterAgentTurnToken?: () => string | null;
   /** Outbound envelope sink, normally ServerLink#send. */
   send: (envelope: Envelope) => void;
   /** Inter-agent sink that resolves with the server's acceptance outcome
@@ -984,7 +1033,12 @@ export class InterAgentTool {
       // track to match — so the sender's NEXT send lands past whatever
       // number desynced it in the first place, whether or not it reuses
       // this conversation_id (the recommended action either way).
-      if (!payload.error && !track.closed) {
+      const noticeSkipReason: InboundNoticeSkipReason | undefined = payload.error
+        ? "envelope itself is a peer_error notice"
+        : track.closed
+          ? "track already closed"
+          : undefined;
+      if (!noticeSkipReason) {
         track.turnNumber += 1;
         // issue #222 段階2 差し戻し MF-1 (ふじ): this DOES change
         // `turnNumber`, so `mutationGen`'s own doc contract on
@@ -1022,7 +1076,12 @@ export class InterAgentTool {
         );
         return { consumed: false, inject: false, mode: "reply-owed", notice };
       }
-      return { consumed: false, inject: false, mode: "reply-owed" };
+      return {
+        consumed: false,
+        inject: false,
+        mode: "reply-owed",
+        noticeSkipReason,
+      };
     }
 
     // issue #175 review round 4 (ふじ 条件 C, #211 comment 2719):
@@ -1103,8 +1162,8 @@ export class InterAgentTool {
    *  branch — i.e. `receiveInbound` did NOT consume it as a waiter reply),
    *  so this wrapper now owes a reply on the conversation. Called by cli.ts
    *  right before it queues the injection (the same call also tags the queued
-   *  turn with this conversation_id — see AgentHost#send /
-   *  CodexHost#send's third parameter). If the SPECIFIC turn that injection
+   *  turn with this conversation_id and immutable `turnToken` — see
+   *  AgentHost#send / CodexHost#send). If the SPECIFIC turn that injection
    *  started ends without an outbound reply clearing the entry (see
    *  `invoke()`), `resolveTurnEnd()` resolves it (issue #131).
    *
@@ -1119,16 +1178,18 @@ export class InterAgentTool {
    *  wrong (later) registration, silently breaking the later turn's own
    *  resolution on failure. Registering per-item at dispatch time ties each
    *  cid's entry one-for-one to the batch actually being sent. */
-  notePendingInjection(envelope: Envelope): void {
+  notePendingInjection(envelope: Envelope, turnToken: string): void {
     const payload = envelope.payload as Partial<InterAgentMessagePayload>;
     if (typeof payload.conversation_id !== "string") return;
     this.#pendingInjections.set(payload.conversation_id, {
       from: envelope.agent_id,
+      turnToken,
     });
   }
 
   /** Called by cli.ts once per SDK turn boundary (success or error), with the
-   *  conversation_id(s) the CLI/host tagged that specific turn with — an
+   *  immutable turn token and conversation_id(s) the CLI/host tagged that
+   *  specific turn with — an
    *  empty array for an ordinary operator-instruction turn, one entry for an
    *  ordinary (non-coalesced) inter-agent turn, or MULTIPLE entries when the
    *  turn was a coalesced batch (issue #221 段階3, direction 2 — same-peer
@@ -1137,7 +1198,10 @@ export class InterAgentTool {
    *  misattributes failures across unrelated, concurrently queued
    *  conversations and never resolves a conversation whose turn quietly
    *  succeeded without a reply — this still holds per-cid inside the loop
-   *  below, only the CALLER now supplies a list instead of one value. Each
+   *  below, only the CALLER now supplies a list instead of one value. The
+   *  token is also checked before an entry is touched: CID is protocol data
+   *  and can recur in a later generation, while the token is this turn's
+   *  ownership lease. Each
    *  cid is resolved independently and exactly once; a cid with no pending
    *  entry (already resolved by `invoke()` sending a reply during the turn —
    *  the primary resolution path) is skipped, not an error.
@@ -1158,6 +1222,7 @@ export class InterAgentTool {
    *  notices did not come from a model tool call (the turn just failed to
    *  produce one), so they bypass the broker entirely. */
   resolveTurnEnd(
+    turnToken: string,
     conversationIds: readonly string[],
     error?: InterAgentErrorPayload,
   ): Envelope[] {
@@ -1165,6 +1230,10 @@ export class InterAgentTool {
     for (const conversationId of conversationIds) {
       const injection = this.#pendingInjections.get(conversationId);
       if (!injection) continue;
+      // Do not let a late callback from another SDK turn consume this lease.
+      // A matching conversation ID alone is deliberately insufficient: it is
+      // reusable protocol data, not a turn ownership capability.
+      if (injection.turnToken !== turnToken) continue;
       this.#pendingInjections.delete(conversationId);
       if (!error) continue;
 
@@ -1561,7 +1630,14 @@ export class InterAgentTool {
           // still clears it: the message may well have been delivered,
           // and layering an error notice on top of a delivered reply
           // would read to the peer as two contradictory answers.
-          if (acceptance.kind !== "rejected") {
+          const activeTurnToken =
+            this.#options.getActiveInterAgentTurnToken?.() ?? null;
+          const pending = this.#pendingInjections.get(conversationId);
+          if (
+            acceptance.kind !== "rejected" &&
+            activeTurnToken !== null &&
+            pending?.turnToken === activeTurnToken
+          ) {
             this.#pendingInjections.delete(conversationId);
           }
 

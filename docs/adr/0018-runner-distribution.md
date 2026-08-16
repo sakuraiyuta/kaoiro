@@ -82,11 +82,270 @@ canvas・両 CLI がすべて platform 別 optional dependency であるため�
 linux 版は musl 変種も同梱されるため大きい代わりに glibc / musl 両対応になる
 (`supportedArchitectures.libc` では musl 変種を除外できなかった)。
 
+### 改訂(2026-08-16)— 設置形態を immutable release + atomic switch に統一する
+
+[issue #229](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/229)。
+本 ADR はここまで tarball の**生成**だけを決めており、**設置後の形**を
+決めていなかった。その空白に、文書上どこにも書かれていない運用形態が
+入り込んでいた — **リポジトリの checkout を live path にしたまま常駐させ、
+更新のたびに稼働中の `dist` を上書きする**形態である(本番ホストが実際に
+この形で動いていた)。
+
+これが危険なのは、**runner が wrapper を spawn するたびに on-disk の
+artifact を解決する**ため。`runner/src/spawn.ts` の
+`resolveWrapperLaunch()` は `require.resolve()` でパスを引き、しかも
+engine ごとに lazy である(codex は初回 codex spawn まで解決しない)。
+稼働中の checkout を build し直すと、旧 runner が新 wrapper を掴む、
+あるいはパッケージ間で新旧の混ざった module graph を掴む。
+[issue #219](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/219)
+で観測された `ConfigError` はその一例にすぎず、**version check を足しても
+partial module graph は救えない**。「停止 → build → 起動」の順序を人間が
+守ることで回避していたが、順序を一度誤れば再発する。
+
+#### 決定
+
+**設置先は immutable な release ディレクトリとし、live path は symlink
+1 本(`current`)だけにする。**
+
+```text
+<install-root>/
+  releases/<revision>[-dirty]/   # tarball を展開したもの。以後不変
+  current  -> releases/<revision>
+  previous -> releases/<revision>
+```
+
+`<install-root>` は Linux `${XDG_DATA_HOME:-~/.local/share}/kaoiro`、
+macOS `~/Library/Application Support/kaoiro`(`KAOIRO_RUNNER_INSTALL_DIR`
+で上書き可)。macOS では config dir と同一ディレクトリになる — Apple は
+data / config を分けないため。entry 名は衝突しない。
+
+**source origin と activation layout は別軸である**。混同すると
+「repo で動かす形態」という、もう存在しない選択肢を文書が生かし続けることに
+なる。
+
+| 軸 | 取りうる値 |
+|---|---|
+| **source origin** | Gitea release の tarball / ローカル repo の build |
+| **activation layout** | **どちらも** `releases/<id>/` + `current` の 1 通りのみ |
+
+- したがって従来「repo-direct」と呼んでいた形態は
+  **local-build release profile** と呼ぶ。repo は **build 元**であって
+  live path ではない。tarball 配布ホストと**同一の設置形態・同一の
+  スクリプト**に収束するため、実行経路は 1 本しかない
+- **repo checkout を `ExecStart` に直接指す形態は、profile として認めない**
+  (開発時に手で起動する分には従来どおり使える)
+- **切替は停止後に、一時 symlink + `rename(2)` で atomic に行う**。`mv` は
+  使えない — 宛先が directory への symlink のとき `mv` はそれを**追従して
+  中へ**移動する(GNU coreutils 9.4 で実測: `current` は旧 release を指した
+  まま、旧 release の中に一時 symlink が残った)。GNU の `mv -T` は正しいが
+  BSD / macOS に無いため、`rename(2)` を node 経由で呼ぶ
+- **直前の release を `previous` として保持する**。保持世代数の既定は 3
+  (`--keep`)。ただし `current` / `previous` が指す release は世代数に
+  関わらず削除しない — 上記の lazy な wrapper 解決のため、稼働中 release は
+  起動後ずっと読まれ続ける
+- **起動シムは build せず verify のみ行う**。検査対象は builder が生成する
+  `MANIFEST.json` — runner 自身の `dist/` と、wrapper 2 種から依存宣言を
+  たどって到達する `@kaoiro/*` パッケージ全部の `dist/` — の存在検査。
+  `VERSION` を持たない repo-direct な checkout でのみ、sentinel
+  4 本(`dist/cli.js` / `dist/build-info.json` / wrapper 2 種の
+  `dist/cli.js`)へ縮退する。判別子は `VERSION` の有無であり、manifest の
+  可読性ではない
+- **install / switch は module graph を独立に再導出し、manifest の取りこぼしを
+  拒否する**(issue #229 もも レビュー)。manifest は自分自身の証人になれない
+  ため。**再導出の入力は同一 tree 内の `package.json` なので、これは改ざん
+  耐性ではない** — 閉じるのは builder のバグと配布後の部分的な破損で、tree
+  全体を書き換えられる主体への防御ではない。署名 / tree 外 digest は別途
+- **更新は `systemd-run --user --no-block` の transient *service* unit で
+  実行する**。runner 配下のエージェントが更新スクリプトを直接叩くと、runner
+  を停止した瞬間に自分が消えて後続が走らない
+
+#### 効いているのは cgroup であって process group ではない
+
+`systemd.kill(5)` の既定は `KillMode=control-group` — 「all remaining
+processes in the control group of this unit will be killed on unit stop」。
+**呼び出し元の process group から抜けても、runner service の cgroup に残って
+いれば道連れで死ぬ**。逃れられるのは transient *service* unit になることで、
+`systemd-run(1)` は「will run in a clean and detached execution environment,
+with the service manager as its parent process」と述べている。
+
+したがって起動引数には次の 3 つが必須で、いずれも欠落は致命的:
+
+- **`--scope` を使わない。** transient scope は systemd-run 自身が実行し
+  「will thus inherit the execution environment of the caller」、しかも
+  同期実行になる。停止対象の unit の中へ更新を戻すことになり、`--no-block`
+  とも併用できない
+- **`PartOf` / `BindsTo` を付けない。** runner の停止が別経路で伝播する
+- **`--no-block` を付ける。** 最初の仕事が呼び出し元の停止である unit の
+  起動完了を待たせない
+
+排他 lock を併用する。
+
+#### `--detach` は成功を報告しない
+
+`--no-block` は start request が「only verified and enqueued」された時点で
+返る (`systemd-run(1)`)。**更新は開始すらしていない**ので、`--detach` の
+終了ステータスは結果について何も語らない。出力は「enqueue した」ことと
+unit 名、および journal / status の確認コマンドに限る。最終確認はオペレータ
+が行う。
+
+#### 中断した staging の GC
+
+install / build の staging ディレクトリは 1 本あたり 1 GB を超える。EXIT
+trap に到達せず死んだ run (SIGKILL、電源断) の残骸は、死んだ pid を名前に
+持つだけで誰も再訪しない。**排他 lock を取得した直後、自分の staging を作る
+前に GC する** — lock が「まだ在るものは放棄されたもの」を真にする。lock
+ディレクトリ (`.lock.*`) と staging (`.staging.*`) は接頭辞を分け、GC の
+glob が自分の lock を巻き込まないようにする
+
+**`ExecStartPre=pnpm build` は採用しない。** crash restart や OS 起動を
+コンパイラ / node_modules / pnpm の成否に結びつけ、build 中ずっと停止し、
+失敗時に中途半端な `dist` を残しうる。「`dist` が HEAD より古い」判定も
+lockfile / tsconfig / dependency / 削除済みファイル / dirty tree を
+表現できない。
+
+#### release identity の契約
+
+[ADR-0053](0053-build-identity.md) の identity は `revision` + `dirty` で
+あり、**`dirty` は「この SHA では中身が決まらない」と言っている**。つまり
+同一 commit の別 dirty build は **id が衝突しながら内容が異なる**。
+`current` はホストが何を動かしているかを決める名前なので、これを許すと
+「実際は何が動いているのか」という問いが一段上に戻ってくるだけである。
+
+| 対象 | 契約 |
+|---|---|
+| **activation** (`current` になれる id) | **clean な 40 桁 hex のみ**。`-dirty` / `unknown` は `--allow-dirty` を明示した dev ホストに限る |
+| **clean release の再 install** | **置き換え不可**。content-addressed なので再 install は no-op。置き換えるフラグは用意しない |
+| **dirty / unknown release の再 install** | 既定で拒否。`--allow-dirty` で置換可。ただし `current` / `previous` が指す間は不可 |
+| **rollback** | gate をかけない。`previous` は一度 activate 済みであり、拒否は壊れた release にホストを縛りつけるだけ |
+
+clean release を置き換える手段を用意しないことが、`releases/<clean-id>/` を
+「慣習として不変」でなく**実際に不変**にしている。破損を疑うなら手で消す —
+痕跡が残る。黙って上書きする経路は残さない。
+
+**id は path component になるため、値域検証は security boundary である。**
+`grep -q '^…$'` は行単位に錨を打ち、どれか 1 行が一致すれば成功するため、
+**複数行の値を検証できない**。実測 (2026-08-16): VERSION が
+`../../pwned-marker\n<40 hex>` の tarball は検証を通り、install root の
+2 階層上に release tree を書いて exit 0 で終わった。`$(cat FILE)` は末尾の
+改行しか落とさず、改行は path separator でもないため traversal を妨げない。
+検証は shell の `case` glob で id の文字集合外 (改行・`/`・`.` を含む) を
+落としてから行う。
+
+#### 前提の実測(2026-08-16)
+
+この設計は「稼働中 runner は `current` の切替に影響されない」ことに依存する。
+Node は既定で module path を realpath 化するため成立するが、断定せず実測した:
+`current/deploy/` 経由で起動したプロセスの `import.meta.url` は
+`releases/<id>/dist/cli.js` に解決され、**`current` を別 release へ切り替えた
+後の lazy な `require.resolve` も元の release の中を指した**。
+
+裏返しが上記の保持ルールである — **稼働中 release を prune すると、まだ
+起こっていない codex spawn の解決が壊れる**。
+
+#### 適用範囲(2026-08-16 時点)
+
+**「atomic switch は Linux 限定」は誤り**なので、層で切り分ける。
+
+| 層 | 適用範囲 |
+|---|---|
+| release layout (`releases/<id>/` + `current` / `previous`) | **OS 共通** |
+| install / switch スクリプトと、symlink + `rename(2)` の atomicity | **OS 共通の契約**。Linux で実測。**macOS は未実測** |
+| service-manager orchestration (stop → pointer swap → start、self-stop-safe updater) | **Linux / systemd のみ** |
+
+`rename(2)` の atomicity は POSIX の要求であって Linux 固有ではない。
+`mv` を避けたのも移植性のため — GNU の `mv -T` は BSD / macOS に無い。
+したがって switch script は移植可能な設計だが、**macOS 上では
+operationally unverified** である。launchd には `systemd-run` 相当が無く
+(`launchctl submit` / 別 LaunchAgent + `kickstart` で代替する必要がある)、
+実機がないため acceptance を満たせない。macOS 版の orchestration は後続
+issue に切り出す。
+
+#### release verifier が持ち込む Node 依存(2026-08-16)
+
+strict 検証(install / switch)の closure 再導出は、V8 のパーサを
+`vm.SourceTextModule` 経由で使う。手書きの字句解析が同型の欠陥を 4 回
+出したため、パーサを持たずに JS を読むこと自体をやめた判断による
+(issue #229)。配布先ホストの Node に結合が 2 つ増える。
+
+| 結合 | 内容 |
+|---|---|
+| experimental API | `vm.SourceTextModule` は `--experimental-vm-modules` を要する。フラグ無しでは `undefined`(node v24.3.0 で実測)。Node 側で予告なく変わりうる |
+| 版数 | 併用する `--disable-warning` は Node >= 20.11 / 21.3 で追加。`engines.node >= 22` の範囲では常に成立するが、それより古い node ではフラグ解釈の時点で落ちる |
+
+フラグを渡すのは `kaoiro-runner-common.sh` の
+`kaoiro_verify_release_tree` 1 箇所だけである。起動シムは素の `node` の
+ままで、存在確認のみ(`--require-manifest` 無し)なのでこのコードに到達
+しない。フラグが無いまま strict 経路に入った場合、verifier は再導出を
+飛ばさず exit 70 で落ちる — 縮退させれば「過小な MANIFEST.json を
+exit 0 で通す」既知の fail-open に戻るため。
+
+`vm.SourceTextModule` が stable 化 / 変更されたときの追随先は、この 1
+箇所と `runner/deploy/verify-release.mjs` の `expectedClosure` である。
+
+#### 実行時参照は宣言する — 検出しない(2026-08-16)
+
+closure が拾う edge は 2 系統だけで、どちらも推測を含まない。
+
+| 系統 | 出どころ |
+|---|---|
+| 静的 import グラフ | V8 の `dependencySpecifiers` |
+| 実行時に組み立てられるパス | 各パッケージの `package.json` の `kaoiro.runtimeAssets` |
+
+後者を call の文字列形から検出する実装は一度書かれ、撤回された。正規表現は
+binding を解決できないため、`foo.require("./x.js")`(無関係なメソッド呼び出し)
+と、モジュール内に自前の `class URL` を定義して呼ぶコードを、いずれも本物の
+edge と読んで健全な release を exit 70 で拒否した。同一クラスの誤検出 3 例目
+で機構ごと撤去している。V8 は scope 情報を公開せず、それが分かる parser を
+入れるには依存が要るため、推測を精密化するのではなく推測をやめた。
+
+宣言の例(`wrapper/codex/package.json`):
+
+```json
+"kaoiro": { "runtimeAssets": ["dist/bridge.js"] }
+```
+
+実在する実行時参照は 2 件(2026-08-16 時点)。
+
+| パッケージ | 参照の書かれ方 | 宣言 |
+|---|---|---|
+| `@kaoiro/codex` | `new URL("../dist/bridge.js", import.meta.url)` | `dist/bridge.js` |
+| `@kaoiro/claude-code` | `createRequire(import.meta.url).resolve("./probe.js")` | `dist/probe.js` |
+
+**境界**: 宣言の無い実行時参照は verifier から見えない。実行時参照を足す
+変更は、宣言を足すところまでが 1 つの変更である。リテラル引数の動的
+`import()` / `require()` も同じ扱い。
+
+置き忘れは `runner/test/runtimeAssetDeclarations.test.ts` が CI で落とす。
+このテストは verifier が捨てたのと同じ textual heuristic を使う — 意図的で
+ある。誤検出のコストが、テスト側では赤 1 本と人間の判断で済むのに対し、
+verifier 側では健全な release の deploy 全停止になるからだ。
+
+**この heuristic 自身が一度取りこぼしている**。当初は `new URL(` /
+`import(` / `require(` の 3 形しか見ておらず、`createRequire(...).resolve(...)`
+は呼び出しの文字列に `require(` を含まないため素通しした。その結果
+「実行時参照は 1 件のみ」という実測が出て、そのまま信じられた。実際には
+`dist/probe.js` が未宣言で、実 release で `probe.js` と manifest entry を
+同時に削除すると strict 検証が exit 0 で通った(レビュー round 2 で検出)。
+現在は `createRequire` の束縛名をファイルから読み取って `.resolve(` を
+走査し、`${...}` を含むテンプレート引数は「自動判定できない」として根拠つき
+例外に列挙する(例外は件数込みで固定してあるので、同じファイルに 1 件増えれば
+テストが落ちる)。教訓は 1 行で言える — **自分の走査パターンで数えた件数は、
+そのパターンの外側については何も言っていない**。
+
+信頼境界は `dependencies` map と同じで、それ以上ではない。MANIFEST.json を
+書き換えられる者はこのフィールドも書き換えられる。閉じるのは builder のバグ
+と部分的な破損であって、改ざんではない。
+
 ## Consequences
 
 ### Positive
 
-- Node 無しでクロス OS 導入が滑らか。ヘッドレス運用に適合。
+- クロス OS 導入が滑らか。ヘッドレス運用に適合。
+  **「Node 無しで」は 2026-07-25 改訂で失効している** — 単一バイナリ化を延期し
+  Node 前提 tarball を先行させた時点で、配布先に Node (>= 22) が必要になった
+  (下記 Negative の 3 点目が正本)。2026-08-16 改訂の release verifier
+  (`verify-release.mjs`) も node で動く。単一バイナリ化が再開されるまで、
+  この前提は残る
 - 自己ホスト(Gitea)で配布が完結する。
 
 ### Negative
@@ -95,6 +354,9 @@ linux 版は musl 変種も同梱されるため大きい代わりに glibc / mu
 - tarball(2026-07-25 改訂)はエンジン CLI 実体を含むため 1 arch あたり
   256〜368 MB(tar.gz)。自己ホスト Gitea の release 資産としては許容と判断。
 - 配布先に Node(>= 22)が必要。単一バイナリ化までこの前提は残る。
+- install / switch の strict 検証が experimental API
+  (`vm.SourceTextModule` + `--experimental-vm-modules`)に依存する。
+  詳細と追随先は上記「release verifier が持ち込む Node 依存」。
 
 ### Neutral
 

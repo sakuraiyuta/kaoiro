@@ -6,6 +6,11 @@
   "description": "kaoiro Codex アダプタ — @openai/codex-sdk をホストし状態を導出する (ADR-0032)",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "kaoiro": {
+    "runtimeAssets": [
+      "dist/bridge.js"
+    ]
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
