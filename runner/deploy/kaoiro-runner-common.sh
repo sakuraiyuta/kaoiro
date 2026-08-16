@@ -177,8 +177,21 @@ kaoiro_verify_release_tree() {
   # ALWAYS our own copy of the verifier, never "$_tree/deploy/". install runs
   # this against a tree that was just unpacked from an archive, and an
   # archive that supplies the program judging it certifies itself.
+  # --experimental-vm-modules IS LOAD-BEARING, NOT TIDINESS. The strict mode
+  # re-derives the expected file set with V8's own parser
+  # (vm.SourceTextModule), which node exposes only behind that flag — without
+  # it the constructor is `undefined` and the verifier refuses to run rather
+  # than skipping the re-derivation (measured on node v24.3.0; the runner
+  # requires node >= 22, where the flag has the same meaning). THIS IS THE
+  # ONLY CALLER THAT NEEDS IT: kaoiro-runner-launch.sh verifies existence
+  # only, without --require-manifest, and never reaches that code.
+  # --disable-warning silences just the "VM Modules is an experimental
+  # feature" banner, which would otherwise print on every install and read
+  # like the VERIFICATION is experimental.
   KAOIRO_VERIFIED_IDENTITY=$(
-    "$(kaoiro_node)" "$deploy_dir/verify-release.mjs" \
+    "$(kaoiro_node)" \
+      --experimental-vm-modules --disable-warning=ExperimentalWarning \
+      "$deploy_dir/verify-release.mjs" \
       "$_tree" --require-manifest --hash
   ) || kaoiro_die "release tree failed verification: $_tree" 70
   [ -x "$_tree/deploy/kaoiro-runner-launch.sh" ] ||

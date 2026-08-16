@@ -41,17 +41,24 @@ const DEPLOY_SCRIPTS = [
 /** Mimics ONLY the `--version` contract cli.ts implements (read the sibling
  *  build-info.json, print the canonical `<rev>[-dirty]` form, exit 0). The
  *  real cli.ts behaviour is pinned separately by args.test.ts /
- *  build_info.test.ts. */
+ *  build_info.test.ts.
+ *
+ *  ESM, LIKE THE RELEASE IT STANDS IN FOR. Every first-party package ships
+ *  `"type": "module"` and every dist file is an ES module (measured on the
+ *  real tarball, 2026-08-16), and the closure walk reads the STATIC import
+ *  graph — so a CommonJS stub would have measured a shape the release does
+ *  not have, and after the runtime-edge inference was removed it would have
+ *  had no dependency edges at all. */
 const STUB_CLI = `
-const fs = require("node:fs");
-const path = require("node:path");
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 // A REAL module dependency, not decoration. The previous stub imported
 // nothing, so removing a module from the tree left it running perfectly and
 // the "one missing module is caught before exec" property could not be
-// measured at all (issue #229 round 2, ふじ 差し戻し must-fix 3). Requiring a
+// measured at all (issue #229 round 2, ふじ 差し戻し must-fix 3). Importing a
 // sibling makes the negative control possible: delete dist/stub_dep.js and
 // this exits non-zero on its own.
-const dep = require("./stub_dep.js");
+import dep from "./stub_dep.js";
 if (process.argv.includes("--version")) {
   // VERSION_OVERRIDE lets a test make the RUNNING artifact disagree with the
   // tree it sits in. Overriding VERSION or build-info.json cannot do that any
@@ -59,7 +66,7 @@ if (process.argv.includes("--version")) {
   // the point — the disagreement is caught before the service is stopped.
   const override = "@@VERSION_OVERRIDE@@";
   const info = JSON.parse(
-    fs.readFileSync(path.join(__dirname, "build-info.json"), "utf8"),
+    readFileSync(join(import.meta.dirname, "build-info.json"), "utf8"),
   );
   process.stdout.write(
     (override || (info.dirty ? \`\${info.revision}-dirty\` : info.revision)) +
@@ -71,7 +78,7 @@ process.stdout.write("stub cli.js started " + dep.marker + "\\n");
 process.exit(0);
 `;
 
-const STUB_DEP = 'module.exports = { marker: "dep-loaded" };\n';
+const STUB_DEP = 'export default { marker: "dep-loaded" };\n';
 
 export interface RunResult {
   status: number | null;
@@ -131,6 +138,18 @@ export interface ReleaseTreeOptions {
    *  preserves it, so this is how a test produces a release whose tree
    *  carries a BUILD time rather than an install time. */
   treeMtime?: number;
+  /** Text prepended to dist/cli.js, before the manifest is generated. Lets a
+   *  test stage the exact SOURCE SHAPE a scanner defect turned on — a
+   *  specifier sharing its line with a division, say — instead of asserting
+   *  about the shape from outside. */
+  cliPrelude?: string;
+  /** Extra tree-relative files, written last but still before the manifest is
+   *  generated, so the builder lists them like any other AND a test can
+   *  OVERRIDE a standard-tree file. Pairs with `cliPrelude` when the staged
+   *  shape needs a dependency the standard tree has no reason to carry;
+   *  `omit` + `dropManifestEntries` then remove it again for the negative
+   *  control, on the SAME tree that carries the shape. */
+  extraFiles?: Record<string, string>;
 }
 
 /** Writes a complete, startable release tree at `tree` and returns it. */
@@ -155,9 +174,17 @@ export function writeReleaseTree(
   // the manifest after the removal would produce a self-consistent tree that
   // no check could object to.
   put("VERSION", `${options.version ?? (dirty ? `${revision}-dirty` : revision)}\n`);
+  // The release root IS a package, and `"type": "module"` is what makes its
+  // dist/*.js files ES modules — for node at run time and for the verifier's
+  // parse alike. The real tarball ships exactly this (measured 2026-08-16).
+  put(
+    "package.json",
+    JSON.stringify({ name: "@kaoiro/runner", version: "0.0.0", type: "module" }),
+  );
   put(
     "dist/cli.js",
-    STUB_CLI.replace("@@VERSION_OVERRIDE@@", options.cliVersionOverride ?? ""),
+    (options.cliPrelude ?? "") +
+      STUB_CLI.replace("@@VERSION_OVERRIDE@@", options.cliVersionOverride ?? ""),
   );
   put("dist/stub_dep.js", STUB_DEP);
   put(
@@ -176,37 +203,52 @@ export function writeReleaseTree(
   // failed at import, on a real tarball (issue #229, 2026-08-16). A fixture
   // with no dependency edges could not measure the difference.
   for (const wrapper of ["claude-code", "codex"]) {
+    // The codex wrapper locates its bridge through `new URL(...,
+    // import.meta.url)` — a real runtime module edge no import statement
+    // expresses. The closure walk missed it entirely until もも removed
+    // bridge.js with its manifest entry and strict verify still exited 0.
+    // Reading it out of the call's TEXT was tried and withdrawn (a regex
+    // cannot tell the global `URL` from a module-local one), so the package
+    // DECLARES it and the verifier enforces the declaration.
+    // BOTH wrappers carry one, because the real ones do: codex composes
+    // ../dist/bridge.js with `new URL`, claude-code resolves ./probe.js
+    // through createRequire. A fixture that modelled only the first let a
+    // real undeclared asset (probe.js) survive review (review round 2).
+    const asset = wrapper === "codex" ? "dist/bridge.js" : "dist/probe.js";
+    const runtime = { kaoiro: { runtimeAssets: [asset] } };
     put(
       `node_modules/@kaoiro/${wrapper}/package.json`,
       JSON.stringify({
         name: `@kaoiro/${wrapper}`,
         version: "0.0.0",
+        type: "module",
         dependencies: { "@kaoiro/wrapper-core": "workspace:*" },
+        ...runtime,
       }),
     );
     // A REAL cross-package import edge. verify-release.mjs derives the
     // expected closure by following the specifiers written inside each
     // module, so a wrapper stub that imported nothing would leave that walk
     // with nothing to walk (issue #229, もも review must-fix 2).
-    // The codex wrapper locates its bridge through `new URL(...,
-    // import.meta.url)` — a real runtime module edge no import statement
-    // expresses. The closure walk missed it entirely until もも removed
-    // bridge.js with its manifest entry and strict verify still exited 0.
+    // The `new URL` line below stays because the REAL wrapper has it: it is
+    // what proves the verifier no longer reads edges out of call text.
     const bridgeEdge =
       wrapper === "codex"
         ? 'const b = new URL("../dist/bridge.js", import.meta.url);\n'
         : "";
     put(
       `node_modules/@kaoiro/${wrapper}/dist/cli.js`,
-      `require("@kaoiro/wrapper-core");\n${bridgeEdge}`,
+      `import "@kaoiro/wrapper-core";\n${bridgeEdge}`,
     );
   }
   put("node_modules/@kaoiro/codex/dist/bridge.js", "// stub bridge\n");
+  put("node_modules/@kaoiro/claude-code/dist/probe.js", "// stub probe\n");
   put(
     "node_modules/@kaoiro/wrapper-core/package.json",
     JSON.stringify({
       name: "@kaoiro/wrapper-core",
       version: "0.0.0",
+      type: "module",
       main: "dist/index.js",
     }),
   );
@@ -214,6 +256,11 @@ export function writeReleaseTree(
     "node_modules/@kaoiro/wrapper-core/dist/index.js",
     "// stub shared wrapper package\n",
   );
+
+  // LAST, so a test can override a standard-tree file and not merely add one.
+  for (const [rel, content] of Object.entries(options.extraFiles ?? {})) {
+    put(rel, content);
+  }
 
   mkdirSync(join(tree, "deploy"), { recursive: true });
   for (const script of DEPLOY_SCRIPTS) {

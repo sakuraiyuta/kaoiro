@@ -130,8 +130,8 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     // while describing less than the release needs. A manifest cannot be its
     // own witness, so the strict path derives the closure a second time by
     // following the imports written inside each module. dist/cli.js still
-    // says require("./stub_dep.js") after stub_dep.js is gone, and that
-    // dangling reference is what makes the removal detectable.
+    // says `import dep from "./stub_dep.js"` after stub_dep.js is gone, and
+    // that dangling reference is what makes the removal detectable.
     const revision = revisionOf("undersized-manifest");
     const archive = makeReleaseTarball(work, revision, {
       omit: ["dist/stub_dep.js"],
@@ -233,43 +233,201 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     expect(install(broken).status).toBe(70);
   });
 
-  it("new URL(..., import.meta.url) の runtime edge も閉包に含める", () => {
-    // bridge.js is reachable only through that URL construction. Removing it
-    // together with its manifest entry left a self-consistent, undersized
-    // manifest that strict verify accepted at exit 0 (もも review).
-    const revision = revisionOf("runtime-url-edge");
+  it("回帰: 除算と同じ行に置かれた specifier を見落とさない", () => {
+    // The FOURTH instance of one defect, and the one that ended the approach
+    // (もも division probe, issue #229). The hand-written lexer this scanner
+    // replaced treated every `/` that was not `//` or `/*` as the start of a
+    // regex literal and blanked to end of line, so a real specifier sharing
+    // its line with a division simply vanished. That is a FALSE NEGATIVE —
+    // the direction that lets an undersized manifest through — and it is why
+    // the positive case alone proves nothing here: a release whose closure
+    // came out too small installs at exit 0 looking perfectly healthy. The
+    // negative control runs on the SAME staged shape, so it fails only if the
+    // specifier below the division was actually seen.
+    const cliPrelude =
+      'const ratio = process.argv.length / 2;' +
+      ' import extra from "./stub_extra.js";\n' +
+      '// and a comment after a division: 1 / 2, from "./gone-div.js"\n';
+    const extraFiles = {
+      "dist/stub_extra.js": `export default { ratio: 1 };\n`,
+    };
+
+    const complete = makeReleaseTarball(work, revisionOf("division"), {
+      cliPrelude,
+      extraFiles,
+    });
+    // Accepted: the comment on the second line must NOT have become a
+    // dependency, or a complete release is rejected at exit 70.
+    expect(install(complete).status).toBe(0);
+
+    const undersized = makeReleaseTarball(work, revisionOf("division-neg"), {
+      cliPrelude,
+      extraFiles,
+      omit: ["dist/stub_extra.js"],
+      dropManifestEntries: ["dist/stub_extra.js"],
+    });
+
+    const result = install(undersized);
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("stub_extra.js");
+  });
+
+  it("回帰: sloppy mode でしか通らない CommonJS を壊れた JS と混同しない", () => {
+    // vm.SourceTextModule always parses as an ES module, which is implicitly
+    // strict, so ordinary CommonJS — an octal literal here — is a SyntaxError
+    // there while being perfectly loadable JS. Treating that as "the file will
+    // not parse" would reject a release that is entirely healthy, which is the
+    // direction this verifier must never fail in (review round 1).
+    const archive = makeReleaseTarball(work, revisionOf("sloppy-cjs"), {
+      cliPrelude: 'import sloppy from "./stub_sloppy.js";\n',
+      extraFiles: { "dist/stub_sloppy.js": "var mode = 0755;\nmodule.exports = { mode };\n" },
+    });
+
+    const result = install(archive);
+
+    expect(result.status).toBe(0);
+  });
+
+  it("回帰: call の文字列形から module edge を推測しない", () => {
+    // THREE HEALTHY RELEASES, ONE CLASS. A pattern match cannot resolve a
+    // BINDING, so it read a method named `require` on an unrelated object, and
+    // a module that defines its OWN `class URL` calling it with
+    // `import.meta.url`, as real module edges — and rejected complete releases
+    // at exit 70 (もも, issue #229; the URL case passes `node --check` and a
+    // real `--version` run). The inference is gone: runtime edges are declared
+    // now, so every line below is inert to the verifier.
+    const archive = makeReleaseTarball(work, revisionOf("no-text-inference"), {
+      cliPrelude:
+        'const shim = { require: (p) => p, import: (p) => p };\n' +
+        'shim.require("./gone-member.js");\n' +
+        'shim.import("./gone-member-2.js");\n' +
+        'class URL { constructor(p, b) { this.p = p; this.b = b; } }\n' +
+        'const u = new URL("./not-a-module.js", import.meta.url);\n',
+    });
+
+    const result = install(archive);
+
+    expect(result.status).toBe(0);
+  });
+
+  it("JS でない依存は素通しし、壊れた .js は拒否する", () => {
+    // The closure walk now parses every file it reaches, which puts two
+    // opposite mistakes one line apart. A resolved dependency that is not
+    // JavaScript has no module edges of its own — a JSON import is
+    // the case that occurs — so rejecting it would block a deploy over a file
+    // that is exactly what it should be. A `.js` that will not parse is the
+    // other way round: its edges cannot be derived, and passing over it
+    // quietly is the fail-open this verifier exists to remove.
+    const json = makeReleaseTarball(work, revisionOf("json-dep"), {
+      cliPrelude: 'import conf from "./stub_conf.json" with { type: "json" };\n',
+      extraFiles: { "dist/stub_conf.json": '{ "enabled": true }\n' },
+    });
+    expect(install(json).status).toBe(0);
+
+    const broken = makeReleaseTarball(work, revisionOf("unparseable-dep"), {
+      cliPrelude: 'import bad from "./stub_broken.js";\n',
+      extraFiles: { "dist/stub_broken.js": "function ( {\n" },
+    });
+
+    const result = install(broken);
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("stub_broken.js");
+  });
+
+  it.each([
+    ["codex", "node_modules/@kaoiro/codex/dist/bridge.js"],
+    ["claude-code", "node_modules/@kaoiro/claude-code/dist/probe.js"],
+  ])("%s の宣言された runtime asset の欠落を拒否する", (_pkg, asset) => {
+    // These files are reachable only at runtime, through a path the wrapper
+    // composes itself. Removing one together with its manifest entry left a
+    // self-consistent, undersized manifest that strict verify accepted at exit
+    // 0 (もも review). The package DECLARES it in kaoiro.runtimeAssets and the
+    // verifier enforces that declaration — no longer read out of call text.
+    // BOTH packages are covered because a version of this suite that covered
+    // only codex passed while claude-code's real probe.js sat undeclared.
+    const revision = revisionOf(`runtime-asset-${_pkg}`);
     const archive = makeReleaseTarball(work, revision, {
-      omit: ["node_modules/@kaoiro/codex/dist/bridge.js"],
-      dropManifestEntries: ["node_modules/@kaoiro/codex/dist/bridge.js"],
+      omit: [asset],
+      dropManifestEntries: [asset],
     });
 
     const result = install(archive);
 
     expect(result.status).toBe(70);
-    expect(result.stderr).toContain("bridge.js");
+    expect(result.stderr).toContain(asset.split("/").pop() as string);
   });
 
-  it("回帰: ディレクトリ指定の import を index.js へ解決する", () => {
+  it("package.json を落として宣言ごと消す経路を拒否する", () => {
+    // The builder's manifest covers dist/ only, so a package.json is NOT a
+    // manifest entry — deleting one changes nothing the hash pass can see. If
+    // a missing package.json meant "not a package", that one unhashed file
+    // would silently disable every declaration it carried (review round 2).
+    const revision = revisionOf("package-json-gone");
+    const archive = makeReleaseTarball(work, revision, {
+      omit: ["node_modules/@kaoiro/codex/package.json"],
+    });
+
+    const result = install(archive);
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("package.json");
+  });
+
+  it.each([
+    // Enough `..` to reach the filesystem root from anywhere the staging dir
+    // sits, so the target really EXISTS and the containment check is what
+    // rejects it — not a plain ENOENT one level short.
+    ["release 外へ脱出する宣言", "../".repeat(24) + "etc/hostname", "outside the release"],
+    ["絶対パスの宣言", "/etc/hostname", "absolute path"],
+    ["通常ファイルでない宣言", "dist", "not a regular file"],
+  ])("%s を拒否する", (_label, declared, expected) => {
+    // A declaration travels inside the tree under inspection, so it is an
+    // INPUT. Left unchecked it pulls an out-of-tree file into the closure —
+    // where the walk reads it and a parse error puts part of its content on
+    // stderr — or names a FIFO whose first read never returns while install
+    // holds the lock (review round 2).
+    const revision = revisionOf(`bad-declaration-${_label}`);
+    const archive = makeReleaseTarball(work, revision, {
+      extraFiles: {
+        "node_modules/@kaoiro/codex/package.json": JSON.stringify({
+          name: "@kaoiro/codex",
+          version: "0.0.0",
+          type: "module",
+          dependencies: { "@kaoiro/wrapper-core": "workspace:*" },
+          kaoiro: { runtimeAssets: [declared] },
+        }),
+      },
+    });
+
+    const result = install(archive);
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain(expected);
+  });
+
+  it("回帰: main がディレクトリの package を index.js へ解決する", () => {
     // realpathSync succeeds on a DIRECTORY, so without an isFile() test the
     // bare candidate wins and a directory lands in the reachable set — where
     // the next readFileSync throws EISDIR and rejects a complete tree. The
     // index.js spelling would also be unreachable (issue #229 レビュー
-    // サイクル round 1).
-    const revision = revisionOf("directory-import");
-    const stage = join(work, "dir-stage");
-    const name = `kaoiro-runner-${revision}-linux-x64`;
-    const tree = join(stage, name);
-    writeReleaseTree(tree, revision);
-    mkdirSync(join(tree, "dist", "sub"), { recursive: true });
-    writeFileSync(join(tree, "dist", "sub", "index.js"), "module.exports = {};\n");
-    const cli = join(tree, "dist", "cli.js");
-    writeFileSync(cli, `require("./sub");\n${readFileSync(cli, "utf8")}`);
-    execFileSync(process.execPath, [
-      fileURLToPath(new URL("../../scripts/build-release-manifest.mjs", import.meta.url)),
-      tree,
-    ], { stdio: ["ignore", "ignore", "ignore"] });
-    const archive = join(work, `${name}.tar.gz`);
-    execFileSync("tar", ["czf", archive, "-C", stage, name]);
+    // サイクル round 1). A package whose `main` names a directory is the shape
+    // that still reaches that code once specifiers come from the ES import
+    // graph, which has no directory resolution of its own.
+    const revision = revisionOf("directory-main");
+    const archive = makeReleaseTarball(work, revision, {
+      // The shared package a wrapper already imports, with its `main` pointed
+      // at the DIRECTORY instead of the file inside it.
+      extraFiles: {
+        "node_modules/@kaoiro/wrapper-core/package.json": JSON.stringify({
+          name: "@kaoiro/wrapper-core",
+          version: "0.0.0",
+          type: "module",
+          main: "dist",
+        }),
+      },
+    });
 
     const result = install(archive);
 

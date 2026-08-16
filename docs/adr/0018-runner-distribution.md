@@ -260,6 +260,82 @@ operationally unverified** である。launchd には `systemd-run` 相当が無
 実機がないため acceptance を満たせない。macOS 版の orchestration は後続
 issue に切り出す。
 
+#### release verifier が持ち込む Node 依存(2026-08-16)
+
+strict 検証(install / switch)の closure 再導出は、V8 のパーサを
+`vm.SourceTextModule` 経由で使う。手書きの字句解析が同型の欠陥を 4 回
+出したため、パーサを持たずに JS を読むこと自体をやめた判断による
+(issue #229)。配布先ホストの Node に結合が 2 つ増える。
+
+| 結合 | 内容 |
+|---|---|
+| experimental API | `vm.SourceTextModule` は `--experimental-vm-modules` を要する。フラグ無しでは `undefined`(node v24.3.0 で実測)。Node 側で予告なく変わりうる |
+| 版数 | 併用する `--disable-warning` は Node >= 20.11 / 21.3 で追加。`engines.node >= 22` の範囲では常に成立するが、それより古い node ではフラグ解釈の時点で落ちる |
+
+フラグを渡すのは `kaoiro-runner-common.sh` の
+`kaoiro_verify_release_tree` 1 箇所だけである。起動シムは素の `node` の
+ままで、存在確認のみ(`--require-manifest` 無し)なのでこのコードに到達
+しない。フラグが無いまま strict 経路に入った場合、verifier は再導出を
+飛ばさず exit 70 で落ちる — 縮退させれば「過小な MANIFEST.json を
+exit 0 で通す」既知の fail-open に戻るため。
+
+`vm.SourceTextModule` が stable 化 / 変更されたときの追随先は、この 1
+箇所と `runner/deploy/verify-release.mjs` の `expectedClosure` である。
+
+#### 実行時参照は宣言する — 検出しない(2026-08-16)
+
+closure が拾う edge は 2 系統だけで、どちらも推測を含まない。
+
+| 系統 | 出どころ |
+|---|---|
+| 静的 import グラフ | V8 の `dependencySpecifiers` |
+| 実行時に組み立てられるパス | 各パッケージの `package.json` の `kaoiro.runtimeAssets` |
+
+後者を call の文字列形から検出する実装は一度書かれ、撤回された。正規表現は
+binding を解決できないため、`foo.require("./x.js")`(無関係なメソッド呼び出し)
+と、モジュール内に自前の `class URL` を定義して呼ぶコードを、いずれも本物の
+edge と読んで健全な release を exit 70 で拒否した。同一クラスの誤検出 3 例目
+で機構ごと撤去している。V8 は scope 情報を公開せず、それが分かる parser を
+入れるには依存が要るため、推測を精密化するのではなく推測をやめた。
+
+宣言の例(`wrapper/codex/package.json`):
+
+```json
+"kaoiro": { "runtimeAssets": ["dist/bridge.js"] }
+```
+
+実在する実行時参照は 2 件(2026-08-16 時点)。
+
+| パッケージ | 参照の書かれ方 | 宣言 |
+|---|---|---|
+| `@kaoiro/codex` | `new URL("../dist/bridge.js", import.meta.url)` | `dist/bridge.js` |
+| `@kaoiro/claude-code` | `createRequire(import.meta.url).resolve("./probe.js")` | `dist/probe.js` |
+
+**境界**: 宣言の無い実行時参照は verifier から見えない。実行時参照を足す
+変更は、宣言を足すところまでが 1 つの変更である。リテラル引数の動的
+`import()` / `require()` も同じ扱い。
+
+置き忘れは `runner/test/runtimeAssetDeclarations.test.ts` が CI で落とす。
+このテストは verifier が捨てたのと同じ textual heuristic を使う — 意図的で
+ある。誤検出のコストが、テスト側では赤 1 本と人間の判断で済むのに対し、
+verifier 側では健全な release の deploy 全停止になるからだ。
+
+**この heuristic 自身が一度取りこぼしている**。当初は `new URL(` /
+`import(` / `require(` の 3 形しか見ておらず、`createRequire(...).resolve(...)`
+は呼び出しの文字列に `require(` を含まないため素通しした。その結果
+「実行時参照は 1 件のみ」という実測が出て、そのまま信じられた。実際には
+`dist/probe.js` が未宣言で、実 release で `probe.js` と manifest entry を
+同時に削除すると strict 検証が exit 0 で通った(レビュー round 2 で検出)。
+現在は `createRequire` の束縛名をファイルから読み取って `.resolve(` を
+走査し、`${...}` を含むテンプレート引数は「自動判定できない」として根拠つき
+例外に列挙する(例外は件数込みで固定してあるので、同じファイルに 1 件増えれば
+テストが落ちる)。教訓は 1 行で言える — **自分の走査パターンで数えた件数は、
+そのパターンの外側については何も言っていない**。
+
+信頼境界は `dependencies` map と同じで、それ以上ではない。MANIFEST.json を
+書き換えられる者はこのフィールドも書き換えられる。閉じるのは builder のバグ
+と部分的な破損であって、改ざんではない。
+
 ## Consequences
 
 ### Positive
@@ -278,6 +354,9 @@ issue に切り出す。
 - tarball(2026-07-25 改訂)はエンジン CLI 実体を含むため 1 arch あたり
   256〜368 MB(tar.gz)。自己ホスト Gitea の release 資産としては許容と判断。
 - 配布先に Node(>= 22)が必要。単一バイナリ化までこの前提は残る。
+- install / switch の strict 検証が experimental API
+  (`vm.SourceTextModule` + `--experimental-vm-modules`)に依存する。
+  詳細と追随先は上記「release verifier が持ち込む Node 依存」。
 
 ### Neutral
 

@@ -38,6 +38,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import vm from "node:vm";
 
 /** Artifacts a release must carry even when it has no MANIFEST.json — a
  *  repo-direct dev checkout, which the builder never touched. In a real
@@ -183,116 +184,143 @@ function parseManifest(raw) {
  *  point of deriving the set twice). */
 const ENTRY_PACKAGES = ["@kaoiro/claude-code", "@kaoiro/codex"];
 
-/** Splits a module body into code text and its string literals, so a
- *  specifier can only be recognised in SPECIFIER POSITION.
- *
- *  A LEXER, NOT A LIST OF CASES. The previous revision blanked comments, and
- *  a string literal holding the same words was then read as a dependency;
- *  a template literal did it again (もも review, issue #229). Enumerating
- *  non-code contexts one defect at a time is the exact failure this issue
- *  keeps reproducing — the third instance of it. Tracking lexical state
- *  covers comments, strings and templates together, including whatever
- *  nobody has hit yet.
- *
- *  Each literal becomes an opaque marker, so `const x = 'import "./y.js"'`
- *  cannot match: the words are inside the marker, not beside `from`.
- *  A literal carrying an escape or a `${}` substitution is recorded as
- *  unusable rather than guessed at.
- *
- *  EVERY `/` THAT IS NOT `//` OR `/*` IS TREATED AS A REGEX LITERAL and
- *  blanked to the next unescaped `/` on the same line (character classes
- *  honoured), or to end of line if there is none. Division is therefore
- *  sometimes blanked too, and that is the point: telling regex from
- *  division needs the preceding token, and guessing wrong in the other
- *  direction is what breaks. A quote inside an unlexed regex opens a
- *  phantom string and inverts code/literal parity for the REST OF THE FILE
- *  — which both hides real specifiers and exposes literal text to the scan.
- *  `runner/dist/transport.js` already ships such a regex
- *  (`/(token=)[^&\s"]+/gi`), so this is not hypothetical; it was benign only
- *  because that file's imports sit above it (レビューサイクル round 2).
- *
- *  All three degradations — unusable literals, blanked division, an
- *  unterminated regex eating its line — err toward noticing FEWER
- *  specifiers. That is the safe direction: missing one narrows this check,
- *  inventing one rejects a healthy release and blocks every deploy. */
-function lexModule(source) {
-  const values = [];
-  let out = "";
-  let i = 0;
-  const blank = (text) => text.replace(/[^\n]/g, " ");
-  while (i < source.length) {
-    const two = source.slice(i, i + 2);
-    if (two === "//") {
-      const stop = source.indexOf("\n", i);
-      const end = stop === -1 ? source.length : stop;
-      out += blank(source.slice(i, end));
-      i = end;
-    } else if (two === "/*") {
-      const stop = source.indexOf("*/", i + 2);
-      const end = stop === -1 ? source.length : stop + 2;
-      out += blank(source.slice(i, end));
-      i = end;
-    } else if (source[i] === "/") {
-      // Regex literal (see the note above on why division is included).
-      let j = i + 1;
-      let inClass = false;
-      while (j < source.length && source[j] !== "\n") {
-        if (source[j] === "\\") {
-          j += 2;
-          continue;
-        }
-        if (source[j] === "[") inClass = true;
-        else if (source[j] === "]") inClass = false;
-        else if (source[j] === "/" && !inClass) {
-          j += 1;
-          break;
-        }
-        j += 1;
-      }
-      out += blank(source.slice(i, j));
-      i = j;
-    } else if (source[i] === '"' || source[i] === "'" || source[i] === "`") {
-      const quote = source[i];
-      let j = i + 1;
-      let usable = true;
-      while (j < source.length && source[j] !== quote) {
-        if (source[j] === "\\") {
-          usable = false;
-          j += 2;
-          continue;
-        }
-        if (quote === "`" && source.slice(j, j + 2) === "${") usable = false;
-        j += 1;
-      }
-      const raw = source.slice(i + 1, Math.min(j, source.length));
-      values.push(usable ? raw : null);
-      out += `\u0000${values.length - 1}\u0000`;
-      out += blank(raw).replace(/[^\n]/g, "");
-      i = Math.min(j + 1, source.length);
-    } else {
-      out += source[i];
-      i += 1;
-    }
-  }
-  return { code: out, values };
+/** Specifiers this verifier follows at all. `node:` builtins and third-party
+ *  packages are outside the manifest's own documented scope. */
+function isFirstParty(specifier) {
+  return specifier.startsWith(".") || specifier.startsWith("@kaoiro/");
 }
 
-/** Specifier positions, matched against the lexed code with each string
- *  literal reduced to its marker.
+/** V8's parse of a module body: ES-module goal first, sloppy script goal
+ *  second. Returns `{ specifiers }`, or `{ error }` when neither goal accepts
+ *  the source.
  *
- *  `new URL(..., import.meta.url)` is here because it is how the codex
- *  wrapper locates its own bridge script at runtime — a real first-party
- *  module edge that no `import` statement expresses, so the closure missed
- *  it entirely (もも review, issue #229). THIS ONE IS AN ENUMERATION and is
- *  worth naming as such: any OTHER way of composing a path at runtime stays
- *  invisible to this check. */
-const SPECIFIER_RES = [
-  /\bfrom\s*\u0000(\d+)\u0000/g,
-  /\bimport\s+\u0000(\d+)\u0000/g,
-  /\bimport\s*\(\s*\u0000(\d+)\u0000\s*\)/g,
-  /\brequire\s*\(\s*\u0000(\d+)\u0000\s*\)/g,
-  /\bnew\s+URL\s*\(\s*\u0000(\d+)\u0000\s*,\s*import\.meta\.url\s*\)/g,
-];
+ *  WHY TWO GOALS. `vm.SourceTextModule` always parses as an ES module, which
+ *  is implicitly STRICT, so ordinary CommonJS is a SyntaxError there while
+ *  being perfectly loadable JS — `with (x) {}`, an octal literal like `0755`,
+ *  a duplicate parameter name (measured on node v24.3.0). Rejecting such a
+ *  file would block a deploy over a release that is entirely healthy, the
+ *  wrong direction. Sloppy code cannot carry a static `import` at all, so
+ *  falling back loses no specifier; and a file BOTH goals refuse really is
+ *  broken, which is what the caller's fail() is for. */
+function parseSource(source) {
+  try {
+    const record = new vm.SourceTextModule(source);
+    return { specifiers: record.dependencySpecifiers };
+  } catch (moduleErr) {
+    try {
+      new vm.Script(source);
+      return { specifiers: [] };
+    } catch {
+      return { error: moduleErr };
+    }
+  }
+}
+
+/** Files a package loads at RUNTIME through a path it composes itself,
+ *  DECLARED BY THE PACKAGE rather than inferred from its source text.
+ *
+ *  WHY DECLARED, NOT DETECTED. The codex wrapper reaches its bridge script
+ *  through `new URL("../dist/bridge.js", import.meta.url)` — a real
+ *  first-party edge no `import` statement expresses, and one the closure once
+ *  missed entirely (もも review, issue #229). Recognising it by matching the
+ *  TEXT of that call was tried and then abandoned: a regex cannot resolve a
+ *  BINDING. `foo.require("./x.js")` is a method call on an unrelated object,
+ *  and a module that defines its own `class URL {}` is not calling the global
+ *  one; both read as real edges to a pattern match, and both REJECT A HEALTHY
+ *  RELEASE — three instances of one class, the third found by もも on a module
+ *  that `node --check` and a real `--version` run both accept. V8 exposes no
+ *  scope information to settle it, and a parser that does would be a
+ *  dependency this file is required not to have. Declaring the edge removes
+ *  the inference instead of refining it (director 裁定, 2026-08-16).
+ *
+ *  THE BOUNDARY, STATED PLAINLY: a runtime reference with NO declaration is
+ *  invisible to this verifier. Adding such a reference is half the change and
+ *  adding its declaration is the other half; runtimeAssetDeclarations.test.ts
+ *  is what makes a forgotten one fail in CI instead of in a release. Dynamic
+ *  `import()` and `require()` of a computed or non-literal path fall in the
+ *  same gap, and always did.
+ *
+ *  TRUST STANDING is the `dependencies` map's, no better: a party who can
+ *  rewrite MANIFEST.json can rewrite this field too. See the trust-boundary
+ *  note in verifyRelease — what this closes is a builder bug and a partial
+ *  corruption, not tampering. */
+function declaredRuntimeAssets(pkgDir, pkg, root, realRoot) {
+  const declared = pkg.kaoiro?.runtimeAssets;
+  if (declared === undefined) return [];
+  const name = typeof pkg.name === "string" ? pkg.name : relative(root, pkgDir);
+  if (
+    !Array.isArray(declared) ||
+    declared.some((rel) => typeof rel !== "string")
+  ) {
+    fail(`${name} has a malformed kaoiro.runtimeAssets (expected an array of strings)`);
+  }
+  // A DECLARATION IS AN INPUT, NOT A PROMISE. It travels in the tree under
+  // inspection, so it gets the same three questions every other path in this
+  // file gets — is it inside the release, does it exist, is it a regular
+  // file. Skipping them would let `../../../etc/passwd` pull an out-of-tree
+  // file into the closure (the walk then READS it, and a parse error puts
+  // part of its content on stderr), and would let a declared FIFO block the
+  // first readFileSync forever while install holds the lock.
+  return declared.map((rel) => {
+    if (isAbsolute(rel)) {
+      fail(`${name} declares the runtime asset ${rel} as an absolute path`);
+    }
+    let real;
+    try {
+      real = realpathSync(join(pkgDir, rel));
+    } catch (err) {
+      fail(
+        `${name} declares the runtime asset ${rel}, which this release does not contain: ${err.message}`,
+      );
+    }
+    const within = relative(realRoot, real);
+    if (within === "" || within.startsWith("..") || isAbsolute(within)) {
+      fail(
+        `${name} declares the runtime asset ${rel}, which resolves outside the release: ${real}`,
+      );
+    }
+    if (!statSync(real).isFile()) {
+      fail(`${name} declares the runtime asset ${rel}, which is not a regular file`);
+    }
+    return real;
+  });
+}
+
+/** The first-party specifiers `source` STATES. `label` is the
+ *  release-relative path, used in diagnostics and to decide whether an
+ *  unparseable file is a defect.
+ *
+ *  THIS IS V8's ANSWER, NOT A LEXER'S. Four defects in a row came from
+ *  reading JS without a parser: a specifier inside a comment, then one
+ *  inside a string, then one inside a template, then a REAL specifier LOST
+ *  because the `/` of a division opened what the lexer read as a regex
+ *  literal and blanked the rest of the line. Each fix enumerated one more
+ *  non-code context and the class stayed open; the fourth instance is what
+ *  ended the approach (もも division probe, issue #229). `vm.SourceTextModule`
+ *  compiles the body with V8 and hands back `dependencySpecifiers`. It never
+ *  EVALUATES, so no code from the tree under inspection runs in the verifier.
+ *
+ *  STATED, NOT COMPOSED. `dependencySpecifiers` holds the static import graph
+ *  and nothing else. A path a module builds at runtime is not read out of its
+ *  text at all — see declaredRuntimeAssets for why that inference was removed
+ *  and what carries those edges now.
+ *
+ *  A NON-JS DEPENDENCY IS NOT A DEFECT. `import data from "./x.json"`
+ *  resolves to a file with no module edges of its own, and feeding it to a JS
+ *  parser would reject a release for being exactly what it should be. A `.js`
+ *  that NO goal will parse (see parseSource) IS one: its edges cannot be
+ *  derived, and passing over it silently is the fail-open this file exists to
+ *  remove. */
+function specifiersOf(source, label) {
+  const parsed = parseSource(source);
+  if (parsed.error !== undefined) {
+    if (/\.[cm]?js$/.test(label)) {
+      fail(`${label} does not parse as JavaScript: ${parsed.error.message}`);
+    }
+    return new Set();
+  }
+  return new Set(parsed.specifiers.filter(isFirstParty));
+}
 
 /** Locates `<name>`'s directory by the ordinary node_modules walk from
  *  `fromFile`. `createRequire(...).resolve()` cannot stand in here: these
@@ -372,11 +400,33 @@ function resolveFile(base) {
  *  SCOPE: first-party only. `@kaoiro/*` bare specifiers are followed across
  *  packages; `node:` builtins and third-party packages are not, matching the
  *  manifest's own documented scope (the ~920 MB of engine CLI payloads stays
- *  out of both). The body is lexed first (see lexModule) so a specifier is
- *  recognised only in specifier position: the asymmetry holds in one
+ *  out of both). Each body goes through V8 (see specifiersOf) so a specifier
+ *  is recognised only in specifier position: the asymmetry holds in one
  *  direction only — missing a specifier narrows detection, inventing one
- *  rejects a healthy release. */
+ *  rejects a healthy release.
+ *
+ *  TWO SOURCES OF EDGES, AND ONLY TWO. The static import graph, from V8; and
+ *  each package's own `kaoiro.runtimeAssets` declaration, for the files it
+ *  loads through a path it composes itself. Nothing is inferred from the text
+ *  of a call any more — see declaredRuntimeAssets for the three healthy
+ *  releases that inference rejected.
+ *
+ *  NEEDS `node --experimental-vm-modules`, AND SAYS SO RATHER THAN COPING.
+ *  Without the flag `vm.SourceTextModule` is simply `undefined` (measured on
+ *  node v24.3.0; the runner requires node >= 22), so a verifier launched
+ *  without it cannot derive this closure at all. Degrading to "then skip the
+ *  re-derivation" would restore, in one line, the exact fail-open もも
+ *  measured — an undersized manifest accepted at exit 0. Only the strict
+ *  callers reach this code, and kaoiro_verify_release_tree in
+ *  kaoiro-runner-common.sh is the single place that passes the flag; the
+ *  launch shim runs plain `node` without --require-manifest and never gets
+ *  here. */
 function expectedClosure(root) {
+  if (typeof vm.SourceTextModule !== "function") {
+    fail(
+      "closure re-derivation needs `node --experimental-vm-modules` (vm.SourceTextModule is unavailable) — the verifier was launched without it",
+    );
+  }
   const reachable = new Set();
   const queue = [];
   const push = (file) => {
@@ -392,9 +442,34 @@ function expectedClosure(root) {
       fail(`release is missing its entry point ${path}: ${err.message}`);
     }
   };
+  /** Adds `pkgDir`'s declared runtime assets.
+   *
+   *  AN ABSENT package.json IS A DEFECT HERE, NOT A "not a package" SHRUG.
+   *  The builder's manifest covers dist/ only, so no package.json is a
+   *  manifest entry — and this code runs only under --require-manifest, on a
+   *  tree the builder produced, where every one of these directories is a
+   *  package by construction. Returning quietly on ENOENT would mean deleting
+   *  one unhashed file silently disables every declaration it carried, which
+   *  is the fail-open the declarations exist to close. */
+  const runtimeAssets = (pkgDir) => {
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
+    } catch (err) {
+      fail(
+        `${relative(root, pkgDir) || "."}/package.json is missing, unreadable or malformed: ${err.message}`,
+      );
+    }
+    for (const real of declaredRuntimeAssets(pkgDir, pkg, root, realRoot)) {
+      push(real);
+    }
+  };
+  const realRoot = realpathSync(root);
   entry(join(root, "dist", "cli.js"));
+  runtimeAssets(root);
   for (const name of ENTRY_PACKAGES) {
     entry(join(root, "node_modules", name, "dist", "cli.js"));
+    runtimeAssets(join(root, "node_modules", name));
   }
   while (queue.length > 0) {
     const file = queue.pop();
@@ -404,15 +479,7 @@ function expectedClosure(root) {
     } catch (err) {
       fail(`${file} is unreadable: ${err.message}`);
     }
-    const specifiers = new Set();
-    const { code, values } = lexModule(source);
-    for (const re of SPECIFIER_RES) {
-      re.lastIndex = 0;
-      for (const match of code.matchAll(re)) {
-        const value = values[Number(match[1])];
-        if (value !== null && value !== undefined) specifiers.add(value);
-      }
-    }
+    const specifiers = specifiersOf(source, relative(root, file));
     for (const specifier of specifiers) {
       if (specifier.startsWith(".")) {
         const resolved = resolveFile(join(dirname(file), specifier));
@@ -438,6 +505,9 @@ function expectedClosure(root) {
         } catch (err) {
           fail(`${name}'s package.json is unreadable or malformed: ${err.message}`);
         }
+        for (const real of declaredRuntimeAssets(pkgDir, pkg, root, realRoot)) {
+          push(real);
+        }
         const target = bareTarget(pkgDir, pkg, subpath);
         if (target !== null) {
           const resolved = resolveFile(target);
@@ -449,7 +519,8 @@ function expectedClosure(root) {
           push(resolved);
         }
       }
-      // node: builtins and third-party packages are deliberately not followed.
+      // Nothing else can arrive: specifiersOf keeps first-party specifiers
+      // only, so node: builtins and third-party packages never get here.
     }
   }
   return reachable;
