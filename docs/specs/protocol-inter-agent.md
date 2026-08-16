@@ -800,11 +800,11 @@ narrow はどちらも区別せず `users: []` に正規化する — 消費側
 | `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...], users: [...]}}` 返却で受け取る。`agents` の field と省略規則は上記「peer directory の情報境界」、`users` は「users 開示 field 一覧」(issue #197 段階2)。list_agents 用 (後述) |
 
 未知 `to` / 自己 routing / participants 不一致 / turn_number 不正 /
-stale turn / closed な conversation への送信時のエラー(`unknown_agent` /
-`self_routing` / `participants_mismatch` /
-`invalid value: payload.turn_number` / `stale_turn` /
-`conversation_closed`、後 3 者は issue #177)は `envelope` の reply で
-返す。
+stale turn / closed な conversation / 明示指定の未知 conversation_id
+への送信時のエラー(`unknown_agent` / `self_routing` /
+`participants_mismatch` / `invalid value: payload.turn_number` /
+`stale_turn` / `conversation_closed`(後 3 者は issue #177)/
+`unknown_conversation_id`(issue #262))は `envelope` の reply で返す。
 
 ### 承認フロー(permission_broker 統合)
 
