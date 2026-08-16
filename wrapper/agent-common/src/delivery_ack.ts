@@ -79,3 +79,29 @@ export class DeliveryAcknowledgement {
     if (ack !== null) this.#send(ack);
   }
 }
+
+/** The three adapter edges that form the real CLI composition. Keeping this
+ * object together prevents a glue test from independently recreating one
+ * edge while silently omitting another (issue #247). */
+export interface DeliveryAcknowledgementWiring {
+  onInterAgentDeliveryStatus(status: { acked_seq: number } | null): void;
+  acknowledgeDelivery(envelope: Envelope): void;
+  onTurnStart(turnToken: string): void;
+}
+
+/** Builds the exact delivery-ack wiring handed to `ServerLink`, the inbound
+ * handler, and the host in each production CLI. Tests call this factory too;
+ * the three callbacks are intentionally not reimplemented in a harness. */
+export function createDeliveryAcknowledgementWiring(
+  send: (deliverySeq: number) => void,
+  turns: DeliveryTurnSource,
+): DeliveryAcknowledgementWiring {
+  const acknowledgement = new DeliveryAcknowledgement(send);
+
+  return {
+    onInterAgentDeliveryStatus: (status) => acknowledgement.observe(status),
+    acknowledgeDelivery: acknowledgement.acknowledgeEnvelope,
+    onTurnStart: (turnToken) =>
+      acknowledgement.acknowledgeTurnStart(turnToken, turns),
+  };
+}

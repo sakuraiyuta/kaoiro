@@ -7,8 +7,15 @@ export { askUserQuestionDescriptor } from "./ask_user_question.js";
 export type { EngineAdapter } from "./engine.js";
 export { mergePendingDisplayNameSync } from "./engine.js";
 export { HistoryReplayer } from "./history_replay.js";
-export { DeliveryAcknowledgement, DeliveryAcknowledger } from "./delivery_ack.js";
-export type { DeliveryTurnSource } from "./delivery_ack.js";
+export {
+  createDeliveryAcknowledgementWiring,
+  DeliveryAcknowledgement,
+  DeliveryAcknowledger,
+} from "./delivery_ack.js";
+export type {
+  DeliveryAcknowledgementWiring,
+  DeliveryTurnSource,
+} from "./delivery_ack.js";
 export type {
   HistoryReplayerOptions,
   HydrationVerdict,

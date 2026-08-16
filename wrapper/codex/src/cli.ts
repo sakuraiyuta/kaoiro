@@ -10,7 +10,7 @@
 import { randomUUID } from "node:crypto";
 import {
   HistoryReplayer,
-  DeliveryAcknowledgement,
+  createDeliveryAcknowledgementWiring,
   IaSidecar,
   InterAgentTool,
   QuestionBroker,
@@ -80,9 +80,6 @@ function printLog(envelope: Envelope): void {
 
 async function main(): Promise<void> {
   let link: ServerLink | null = null;
-  const deliveryAcknowledgement = new DeliveryAcknowledgement((deliverySeq) =>
-    link?.acknowledgeInterAgentDelivery(deliverySeq),
-  );
   const { configPath, prompt, resume: resumeSessionId } = parseCliArgs(
     process.argv.slice(2),
   );
@@ -315,6 +312,11 @@ async function main(): Promise<void> {
       : {}),
   });
 
+  const deliveryAcknowledgementWiring = createDeliveryAcknowledgementWiring(
+    (deliverySeq) => link?.acknowledgeInterAgentDelivery(deliverySeq),
+    interAgentTurns,
+  );
+
   link = new ServerLink(config.server_url, config.agent_id, {
     personaId: config.persona.id,
     ...(config.transition_id === undefined
@@ -325,9 +327,7 @@ async function main(): Promise<void> {
       : { token: config.server_token }),
     onPersonaPrompt: (received) => resolvePersonaPrompt(received),
     onHydration: (verdict) => replayer.onVerdict(verdict),
-    onInterAgentDeliveryStatus: (status) => {
-      deliveryAcknowledgement.observe(status);
-    },
+    onInterAgentDeliveryStatus: deliveryAcknowledgementWiring.onInterAgentDeliveryStatus,
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
     onInstruction: (text, attachmentIds) => {
@@ -402,7 +402,7 @@ async function main(): Promise<void> {
           recordInboundIa,
           send: (notice) => link?.send(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
-          acknowledgeDelivery: deliveryAcknowledgement.acknowledgeEnvelope,
+          acknowledgeDelivery: deliveryAcknowledgementWiring.acknowledgeDelivery,
           log: (line) => process.stdout.write(line),
         },
         envelope,
@@ -434,7 +434,7 @@ async function main(): Promise<void> {
     onLog,
     onTask,
     onTurnStart: ({ turnToken }) => {
-      deliveryAcknowledgement.acknowledgeTurnStart(turnToken, interAgentTurns);
+      deliveryAcknowledgementWiring.onTurnStart(turnToken);
     },
     // issue #131: resolve exactly the conversation(s) this turn was tagged
     // with (must-fix 1 — turn-scoped, never a sweep of everything pending;

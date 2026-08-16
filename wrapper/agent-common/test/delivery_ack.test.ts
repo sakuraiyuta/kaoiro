@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  DeliveryAcknowledgement,
   DeliveryAcknowledger,
+  createDeliveryAcknowledgementWiring,
 } from "../src/delivery_ack.js";
 import type { Envelope } from "../src/types.js";
 
@@ -22,19 +22,36 @@ describe("DeliveryAcknowledger (issue #247)", () => {
     expect(ledger.complete(2)).toBeNull();
   });
 
-  it("production composition confirms non-injection and real turn-start through one object", () => {
+  function productionWiring(sequences: Record<string, readonly number[]>) {
     const sent: number[] = [];
-    const acknowledgement = new DeliveryAcknowledgement((seq) => sent.push(seq));
-    acknowledgement.observe({ acked_seq: 0 });
+    const wiring = createDeliveryAcknowledgementWiring(
+      (seq) => sent.push(seq),
+      { deliverySequencesForTurn: (turnToken) => sequences[turnToken] ?? [] },
+    );
+    return { sent, wiring };
+  }
 
-    acknowledgement.acknowledgeEnvelope({ delivery_seq: 1 } as unknown as Envelope);
+  it("production wiring takes the ServerLink delivery-status edge", () => {
+    const { sent, wiring } = productionWiring({ "sdk-turn": [2] });
+
+    wiring.onInterAgentDeliveryStatus({ acked_seq: 1 });
+    wiring.onTurnStart("sdk-turn");
+    expect(sent).toEqual([2]);
+  });
+
+  it("production wiring takes the non-injection handler edge", () => {
+    const { sent, wiring } = productionWiring({});
+
+    wiring.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    wiring.acknowledgeDelivery({ delivery_seq: 1 } as unknown as Envelope);
     expect(sent).toEqual([1]);
+  });
 
-    const turns = {
-      deliverySequencesForTurn: (turnToken: string) =>
-        turnToken === "sdk-turn" ? [3, 2] : [],
-    };
-    acknowledgement.acknowledgeTurnStart("sdk-turn", turns);
-    expect(sent).toEqual([1, 3]);
+  it("production wiring takes the actual host turn-start edge", () => {
+    const { sent, wiring } = productionWiring({ "sdk-turn": [1] });
+
+    wiring.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    wiring.onTurnStart("sdk-turn");
+    expect(sent).toEqual([1]);
   });
 });
