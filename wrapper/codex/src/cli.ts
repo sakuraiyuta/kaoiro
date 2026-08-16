@@ -481,6 +481,17 @@ async function main(): Promise<void> {
   });
 
   try {
+    // resumeThread continues only future turns; the display transcript is
+    // rebuilt from the rollout by the replay below (#106). Bind first so an
+    // initial rate-limit state emitted below is associated with this session.
+    if (resumeSessionId !== undefined) {
+      link.setSessionId(resumeSessionId);
+      sidecar.bind(resumeSessionId);
+    }
+    // A resumed rollout may already contain token_count.rate_limits. Load it
+    // before idle/sending is announced; fresh starts have no thread id yet
+    // and the host performs the same read at thread.started (issue #251).
+    await host.initializeRateLimits();
     // Idle-wait start, matching the Claude CLI: announce idle so the agent
     // appears on the dashboard before its first turn.
     if (prompt === undefined) {
@@ -490,12 +501,6 @@ async function main(): Promise<void> {
       );
       printState(idle);
       link?.send(idle);
-    }
-    // resumeThread continues only future turns; the display transcript is
-    // rebuilt from the rollout by the replay below (#106).
-    if (resumeSessionId !== undefined) {
-      link.setSessionId(resumeSessionId);
-      sidecar.bind(resumeSessionId);
     }
     // ADR-0051 D2: the server's join verdict decides whether a replay runs,
     // on startup and on every later reconnect. See the Claude CLI for the

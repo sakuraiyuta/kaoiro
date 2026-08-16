@@ -1780,6 +1780,127 @@ describe("CodexHost", () => {
   });
 
   describe("rate_limits (rollout tail)", () => {
+    it("resume は初回 turn 前に既存 rollout の rate_limits を state_change へ載せる", async () => {
+      const states: Envelope[] = [];
+      const snapshot = new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>([
+        ["seven_day", { utilization: 0.28, resets_at: 1787371200 }],
+      ]);
+      const resolver = vi.fn(async () => snapshot);
+      const { client } = makeClient([]);
+      const host = new CodexHost(CONFIG, {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        resumeSessionId: "uuid-resume-rate-limits",
+        codexFactory: () => client,
+        rateLimitResolver: resolver,
+        now: () => "T",
+      });
+
+      // cli.ts calls this before it announces idle/sending and before
+      // host.run() can begin the first resumed turn.
+      await host.initializeRateLimits();
+      // CodexHost#run() makes the same guarded call for non-CLI callers;
+      // composing both paths must not tail the rollout twice at startup.
+      await host.initializeRateLimits();
+
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(resolver).toHaveBeenCalledWith("uuid-resume-rate-limits");
+      expect(states).toHaveLength(1);
+      expect(states[0]).toMatchObject({
+        state: "idle",
+        ext: {
+          rate_limits: {
+            seven_day: { utilization: 0.28, resets_at: 1787371200 },
+          },
+        },
+      });
+    });
+
+    it("fresh thread.started でも terminal event 前に既存 snapshot を読む", async () => {
+      const states: Envelope[] = [];
+      const turnStarted = deferred<void>();
+      const releaseTerminal = deferred<void>();
+      const turnFinished = deferred<void>();
+      const resolver = vi.fn(async () =>
+        new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>([
+          ["seven_day", { utilization: 0.31, resets_at: 1787371201 }],
+        ]),
+      );
+      const client: CodexClientLike = {
+        startThread: () => ({
+          async runStreamed() {
+            async function* events(): AsyncGenerator<ThreadEvent> {
+              yield { type: "thread.started", thread_id: "uuid-fresh-rate-limits" };
+              yield { type: "turn.started" };
+              // This runs only after the host has consumed turn.started. The
+              // terminal event remains blocked, proving the initial lookup
+              // did not wait for a completed turn.
+              turnStarted.resolve();
+              await releaseTerminal.promise;
+              yield usageEvent();
+              turnFinished.resolve();
+            }
+            return { events: events() };
+          },
+        }),
+        resumeThread: () => {
+          throw new Error("fresh session must not resume");
+        },
+      };
+      const host = new CodexHost(CONFIG, {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rateLimitResolver: resolver,
+        now: () => "T",
+      });
+
+      const done = host.run("first");
+      await turnStarted.promise;
+
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(resolver).toHaveBeenCalledWith("uuid-fresh-rate-limits");
+      expect(
+        states.find((event) => event.ext.rate_limits !== undefined),
+      ).toMatchObject({
+        // turn.started has not been allowed to complete until this point;
+        // this is the pre-turn state emitted by the initial lookup.
+        state: "sending",
+        ext: {
+          rate_limits: {
+            seven_day: { utilization: 0.31, resets_at: 1787371201 },
+          },
+        },
+      });
+
+      releaseTerminal.resolve();
+      await turnFinished.promise;
+      host.close();
+      await done;
+    });
+
+    it("resume の rollout に snapshot が無ければ initial state を増やさない", async () => {
+      const states: Envelope[] = [];
+      const resolver = vi.fn(async () =>
+        new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>(),
+      );
+      const { client } = makeClient([]);
+      const host = new CodexHost(CONFIG, {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        resumeSessionId: "uuid-resume-empty-rate-limits",
+        codexFactory: () => client,
+        rateLimitResolver: resolver,
+        now: () => "T",
+      });
+
+      await host.initializeRateLimits();
+
+      expect(resolver).toHaveBeenCalledWith("uuid-resume-empty-rate-limits");
+      expect(states).toEqual([]);
+      expect(host.statusExtSnapshot()).not.toHaveProperty("rate_limits");
+    });
+
     it("turn.completed 後の refresh で ext.rate_limits を stamp する", async () => {
       const states: Envelope[] = [];
       const rateLimitsStamped = deferred<void>();
@@ -1811,12 +1932,11 @@ describe("CodexHost", () => {
       });
     });
 
-    it("同値 refresh は state_change を追加発火しない", async () => {
+    it("初期取得済みと同値の terminal refresh は state_change を追加発火しない", async () => {
       const states: Envelope[] = [];
-      const firstRateLimitsStamped = deferred<void>();
-      const secondRefreshStarted = deferred<void>();
-      const secondMapCompared = deferred<void>();
-      const secondRefreshResult = deferred<
+      const terminalRefreshStarted = deferred<void>();
+      const terminalMapCompared = deferred<void>();
+      const terminalRefreshResult = deferred<
         Map<CodexRateLimitWindow, CodexRateLimitSnapshot>
       >();
       const { client } = makeClient([
@@ -1825,7 +1945,6 @@ describe("CodexHost", () => {
           { type: "turn.started" },
           usageEvent(),
         ],
-        [{ type: "turn.started" }, usageEvent()],
       ]);
       const snapshot = new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>([
         ["five_hour", { utilization: 0.1, resets_at: 1 }],
@@ -1845,7 +1964,7 @@ describe("CodexHost", () => {
           // rateLimitsDiffer consumes this iterator only after it has checked
           // the two Maps' sizes; resolving here proves the no-op comparison
           // itself completed, rather than merely that its resolver returned.
-          secondMapCompared.resolve();
+          terminalMapCompared.resolve();
         }
         return undefined;
       };
@@ -1854,47 +1973,33 @@ describe("CodexHost", () => {
         () => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>
       >(() => {
         resolverCalls += 1;
+        if (resolverCalls === 1) return Promise.resolve(snapshot);
         if (resolverCalls === 2) {
-          secondRefreshStarted.resolve();
-          return secondRefreshResult.promise;
+          terminalRefreshStarted.resolve();
+          return terminalRefreshResult.promise;
         }
-        return Promise.resolve(snapshot);
+        throw new Error("unexpected extra rate-limit refresh");
       });
       const host = new CodexHost(CONFIG, {
-        onState: (e) => {
-          states.push(e);
-          if (e.ext.rate_limits !== undefined) firstRateLimitsStamped.resolve();
-        },
+        onState: (e) => states.push(e),
         appendSystemPrompt: "p",
         codexFactory: () => client,
         rateLimitResolver: resolver,
         now: () => "T",
       });
 
-      const done = host.run("hi-1");
+      const done = host.run("hi");
       await client.waitForTurn(0);
-      await firstRateLimitsStamped.promise;
-      const afterFirstTurn = states.length;
-      await host.send("hi-2");
-      await client.waitForTurn(1);
-      await secondRefreshStarted.promise;
+      await terminalRefreshStarted.promise;
       const beforeNoopComparison = states.length;
-      secondRefreshResult.resolve(sameSnapshot);
-      await secondMapCompared.promise;
+      terminalRefreshResult.resolve(sameSnapshot);
+      await terminalMapCompared.promise;
       expect(states).toHaveLength(beforeNoopComparison);
       host.close();
       await done;
 
       expect(resolver).toHaveBeenCalledTimes(2);
-      // The second turn carries the already-stamped snapshot but, as checked
-      // above, its equal refresh itself emits no additional state_change.
-      for (const s of states.slice(afterFirstTurn)) {
-        if (s.ext.rate_limits !== undefined) {
-          expect(s.ext.rate_limits).toEqual({
-            five_hour: { utilization: 0.1, resets_at: 1 },
-          });
-        }
-      }
+      expect(states.some((s) => s.ext.rate_limits !== undefined)).toBe(true);
     });
 
     it("turn.failed でも refresh が走る (429 / max-output で rate_limits が更新される経路)", async () => {
@@ -1925,7 +2030,7 @@ describe("CodexHost", () => {
 
       await runOneTurn(host, "hi", client, rateLimitsStamped.promise);
 
-      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(resolver).toHaveBeenCalledTimes(2);
       expect(states.at(-1)?.ext.rate_limits).toEqual({
         seven_day: { utilization: 0.98, resets_at: 999 },
       });
@@ -1945,11 +2050,15 @@ describe("CodexHost", () => {
           usageEvent(),
         ],
       ]);
-      const emptySnapshot = new Map<
+      const initialEmptySnapshot = new Map<
         CodexRateLimitWindow,
         CodexRateLimitSnapshot
       >();
-      Object.defineProperty(emptySnapshot, "size", {
+      const terminalEmptySnapshot = new Map<
+        CodexRateLimitWindow,
+        CodexRateLimitSnapshot
+      >();
+      Object.defineProperty(terminalEmptySnapshot, "size", {
         get() {
           // rateLimitsDiffer first compares the sizes; empty Maps have no
           // iterator entries, so this is the production no-op boundary.
@@ -1957,13 +2066,21 @@ describe("CodexHost", () => {
           return 0;
         },
       });
+      let resolverCalls = 0;
       const host = new CodexHost(CONFIG, {
         onState: (e) => states.push(e),
         appendSystemPrompt: "p",
         codexFactory: () => client,
         rateLimitResolver: () => {
-          emptyRefreshStarted.resolve();
-          return emptyRefreshResult.promise;
+          resolverCalls += 1;
+          if (resolverCalls === 1) {
+            return Promise.resolve(initialEmptySnapshot);
+          }
+          if (resolverCalls === 2) {
+            emptyRefreshStarted.resolve();
+            return emptyRefreshResult.promise;
+          }
+          throw new Error("unexpected extra rate-limit refresh");
         },
         now: () => "T",
       });
@@ -1972,7 +2089,7 @@ describe("CodexHost", () => {
       await client.waitForTurn(0);
       await emptyRefreshStarted.promise;
       const beforeNoopComparison = states.length;
-      emptyRefreshResult.resolve(emptySnapshot);
+      emptyRefreshResult.resolve(terminalEmptySnapshot);
       await emptyMapCompared.promise;
       expect(states).toHaveLength(beforeNoopComparison);
       host.close();
@@ -1981,6 +2098,7 @@ describe("CodexHost", () => {
       for (const s of states) {
         expect(s.ext).not.toHaveProperty("rate_limits");
       }
+      expect(resolverCalls).toBe(2);
     });
   });
 
