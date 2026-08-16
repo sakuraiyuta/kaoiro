@@ -44,7 +44,7 @@ defmodule KaoiroServer.ConversationStatesTest do
     name = start_tracker(:cs_basic)
 
     assert :ok =
-             ConversationStates.record_message("c1", "a", "b", "hello", 1, false, name)
+             ConversationStates.record_message("c1", "a", "b", "hello", 1, false, true, name)
 
     assert %{turns: 1, tokens: tokens, agents: agents, done_by: done_by} =
              ConversationStates.get("c1", name)
@@ -56,8 +56,8 @@ defmodule KaoiroServer.ConversationStatesTest do
 
   test "peer_index は会話ごとの副作用なし batch snapshot を重複排除してソートする" do
     name = start_tracker(:cs_peer_index)
-    assert :ok = ConversationStates.record_message("c1", "b", "a", "x", 1, false, name)
-    assert :ok = ConversationStates.record_message("c2", "a", "c", "x", 1, false, name)
+    assert :ok = ConversationStates.record_message("c1", "b", "a", "x", 1, false, true, name)
+    assert :ok = ConversationStates.record_message("c2", "a", "c", "x", 1, false, true, name)
 
     assert %{"a" => ["b", "c"], "b" => ["a"], "c" => ["a"]} =
              ConversationStates.peer_index(name)
@@ -68,11 +68,11 @@ defmodule KaoiroServer.ConversationStatesTest do
 
   test "max_turns を超えると :exceeded :max_turns で tombstone 化する (#177)" do
     name = start_tracker(:cs_turns, max_turns: 2)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
-    assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+    assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, true, name)
 
     assert {:exceeded, :max_turns} =
-             ConversationStates.record_message("c", "a", "b", "z", 3, false, name)
+             ConversationStates.record_message("c", "a", "b", "z", 3, false, true, name)
 
     assert %{status: :closed, reason: :max_turns} = ConversationStates.get("c", name)
   end
@@ -83,7 +83,7 @@ defmodule KaoiroServer.ConversationStatesTest do
     body = String.duplicate("x", 30)
 
     assert {:exceeded, :max_tokens} =
-             ConversationStates.record_message("c", "a", "b", body, 1, false, name)
+             ConversationStates.record_message("c", "a", "b", body, 1, false, true, name)
 
     assert %{status: :closed, reason: :max_tokens} = ConversationStates.get("c", name)
   end
@@ -97,32 +97,32 @@ defmodule KaoiroServer.ConversationStatesTest do
     name = start_tracker(:cs_agents, max_concurrent_agents: 1)
 
     assert {:exceeded, :max_concurrent_agents} =
-             ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+             ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
   end
 
   test "両 owner-side が done=true を出すと :both_done を返し tombstone 化する (#177)" do
     name = start_tracker(:cs_done)
     # 1 メッセージ目: a→b done=false (a だけが参加。done_by 空)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
     # 2 メッセージ目: a→b done=true (a が done に入る。b はまだ。:ok)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "y", 2, true, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "y", 2, true, true, name)
     assert %{done_by: done_by} = ConversationStates.get("c", name)
     assert MapSet.equal?(done_by, MapSet.new(["a"]))
 
     # 3 メッセージ目: b→a done=true (b も done。両側揃って :both_done で tombstone 化)
     assert :both_done =
-             ConversationStates.record_message("c", "b", "a", "z", 3, true, name)
+             ConversationStates.record_message("c", "b", "a", "z", 3, true, true, name)
 
     assert %{status: :closed, reason: :both_done} = ConversationStates.get("c", name)
   end
 
   test "closed な conversation への同一 cid 送信は :conversation_closed で拒否する (#177)" do
     name = start_tracker(:cs_closed_reject)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, name)
-    assert :both_done = ConversationStates.record_message("c", "b", "a", "y", 2, true, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)
+    assert :both_done = ConversationStates.record_message("c", "b", "a", "y", 2, true, true, name)
 
     assert {:error, :conversation_closed} =
-             ConversationStates.record_message("c", "a", "b", "z", 3, false, name)
+             ConversationStates.record_message("c", "a", "b", "z", 3, false, true, name)
 
     # 拒否された送信は tombstone を書き換えない。
     assert %{status: :closed, reason: :both_done} = ConversationStates.get("c", name)
@@ -131,34 +131,39 @@ defmodule KaoiroServer.ConversationStatesTest do
   test "closed な conversation は第三者の送信にも participants_mismatch でなく " <>
          "conversation_closed を返す (#177)" do
     name = start_tracker(:cs_closed_third_party)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, name)
-    assert :both_done = ConversationStates.record_message("c", "b", "a", "y", 2, true, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)
+    assert :both_done = ConversationStates.record_message("c", "b", "a", "y", 2, true, true, name)
 
     assert {:error, :conversation_closed} =
-             ConversationStates.record_message("c", "z", "b", "evil", 1, false, name)
+             ConversationStates.record_message("c", "z", "b", "evil", 1, false, true, name)
   end
 
   test "closed な tombstone も max_conversations の上限に数える (#177)" do
     name = start_tracker(:cs_cap_tombstone, max_conversations: 1)
-    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, true, name)
-    assert :both_done = ConversationStates.record_message("c1", "b", "a", "y", 2, true, name)
+    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, true, true, name)
+
+    assert :both_done =
+             ConversationStates.record_message("c1", "b", "a", "y", 2, true, true, name)
 
     assert {:error, :too_many_conversations} =
-             ConversationStates.record_message("c2", "a", "b", "z", 1, false, name)
+             ConversationStates.record_message("c2", "a", "b", "z", 1, false, true, name)
   end
 
   test "peer_index は closed な conversation を除外する (#177)" do
     name = start_tracker(:cs_peer_index_closed)
-    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, true, name)
-    assert :both_done = ConversationStates.record_message("c1", "b", "a", "y", 2, true, name)
-    assert :ok = ConversationStates.record_message("c2", "a", "c", "z", 1, false, name)
+    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, true, true, name)
+
+    assert :both_done =
+             ConversationStates.record_message("c1", "b", "a", "y", 2, true, true, name)
+
+    assert :ok = ConversationStates.record_message("c2", "a", "c", "z", 1, false, true, name)
 
     assert %{"a" => ["c"], "c" => ["a"]} = ConversationStates.peer_index(name)
   end
 
   test "periodic GC は期限切れ open entry を :open_conversation_ttl tombstone へ遷移させる (#177, #221)" do
     {name, clock} = start_tracker_with_clock(:cs_gc_tombstone, open_conversation_ttl_ms: 1)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
     advance_clock(clock, 5)
 
     pid = Process.whereis(name)
@@ -168,13 +173,13 @@ defmodule KaoiroServer.ConversationStatesTest do
     # A tombstoned entry still refuses further sends, same as any other close
     # reason.
     assert {:error, :conversation_closed} =
-             ConversationStates.record_message("c", "a", "b", "y", 2, false, name)
+             ConversationStates.record_message("c", "a", "b", "y", 2, false, true, name)
   end
 
   test "tombstone は tombstone_ttl_ms 経過後に GC で削除され CID を再利用できる (#177, #221)" do
     {name, clock} = start_tracker_with_clock(:cs_gc_ttl, tombstone_ttl_ms: 1)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, name)
-    assert :both_done = ConversationStates.record_message("c", "b", "a", "y", 2, true, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)
+    assert :both_done = ConversationStates.record_message("c", "b", "a", "y", 2, true, true, name)
     pid = Process.whereis(name)
 
     assert %{status: :closed} = ConversationStates.get("c", name)
@@ -185,12 +190,12 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert ConversationStates.get("c", name) == nil
 
     # CID 再利用: closed_at からの TTL が過ぎれば新規会話として受理される。
-    assert :ok = ConversationStates.record_message("c", "a", "b", "z", 1, false, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "z", 1, false, true, name)
   end
 
   test "片側だけ done では :ok のまま (両 owner-side 同意で初めて完了)" do
     name = start_tracker(:cs_one_done)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)
     # a が done=true、ただし b はまだ。:ok 継続。エントリ生存。
     assert %{done_by: done_by} = ConversationStates.get("c", name)
     assert MapSet.equal?(done_by, MapSet.new(["a"]))
@@ -198,11 +203,11 @@ defmodule KaoiroServer.ConversationStatesTest do
 
   test "既存 conversation_id を第三者が再利用しようとすると participants_mismatch" do
     name = start_tracker(:cs_pollution)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
     # 攻撃者 c が同じ cid を流用。既存 entry.agents={a,b} に c は含まれない。
     assert {:error, :participants_mismatch} =
-             ConversationStates.record_message("c", "c", "b", "evil", 2, false, name)
+             ConversationStates.record_message("c", "c", "b", "evil", 2, false, true, name)
 
     # 正規参加者の entry は無傷。
     assert %{turns: 1} = ConversationStates.get("c", name)
@@ -210,14 +215,14 @@ defmodule KaoiroServer.ConversationStatesTest do
 
   test "max_conversations を超える新規 cid は :too_many_conversations で拒否" do
     name = start_tracker(:cs_cap, max_conversations: 2)
-    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, false, name)
-    assert :ok = ConversationStates.record_message("c2", "a", "b", "x", 1, false, name)
+    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, false, true, name)
+    assert :ok = ConversationStates.record_message("c2", "a", "b", "x", 1, false, true, name)
 
     assert {:error, :too_many_conversations} =
-             ConversationStates.record_message("c3", "a", "b", "x", 1, false, name)
+             ConversationStates.record_message("c3", "a", "b", "x", 1, false, true, name)
 
     # 既存エントリへの追加メッセージは通る (cap は新規のみ)
-    assert :ok = ConversationStates.record_message("c1", "a", "b", "y", 2, false, name)
+    assert :ok = ConversationStates.record_message("c1", "a", "b", "y", 2, false, true, name)
   end
 
   describe "unknown_conversation_id (issue #262)" do
@@ -226,61 +231,54 @@ defmodule KaoiroServer.ConversationStatesTest do
       name = start_tracker(:cs_unknown_cid)
 
       assert {:error, :unknown_conversation_id} =
-               ConversationStates.record_message("c", "a", "b", "typo", 1, false, name, false)
+               ConversationStates.record_message("c", "a", "b", "typo", 1, false, false, name)
 
       # 拒否された cid はエントリを一切残さない — max_conversations 消費も無い
       # ことの直接的な証拠。
       assert ConversationStates.get("c", name) == nil
     end
 
-    test "new_conversation? の既定値は true (旧呼び出しは影響を受けない)" do
-      name = start_tracker(:cs_unknown_cid_default)
-      # 8 引数目 (new_conversation?) を省略 — #262 以前の全呼び出しと同じ形。
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
-      assert %{turns: 1} = ConversationStates.get("c", name)
-    end
-
     test "closed な conversation への明示 id 送信は unknown_conversation_id ではなく " <>
            "conversation_closed のまま (#177 との整合)" do
       name = start_tracker(:cs_unknown_cid_vs_closed)
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, name, true)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)
 
       assert :both_done =
-               ConversationStates.record_message("c", "b", "a", "y", 2, true, name, true)
+               ConversationStates.record_message("c", "b", "a", "y", 2, true, true, name)
 
       # tombstone は existing != nil なので #262 の新チェックに触れる前に
       # :conversation_closed で弾かれる — new_conversation?: false でも同じ。
       assert {:error, :conversation_closed} =
-               ConversationStates.record_message("c", "a", "b", "z", 3, false, name, false)
+               ConversationStates.record_message("c", "a", "b", "z", 3, false, false, name)
     end
 
     test "第三者の再利用は new_conversation?=false でも unknown_conversation_id ではなく " <>
            "participants_mismatch のまま" do
       name = start_tracker(:cs_unknown_cid_vs_pollution)
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name, true)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
       assert {:error, :participants_mismatch} =
-               ConversationStates.record_message("c", "z", "b", "evil", 2, false, name, false)
+               ConversationStates.record_message("c", "z", "b", "evil", 2, false, false, name)
     end
 
     test "stale_turn は new_conversation?=false でも unknown_conversation_id ではなく " <>
            "stale_turn のまま" do
       name = start_tracker(:cs_unknown_cid_vs_stale)
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name, true)
-      assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, name, false)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+      assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, false, name)
 
       assert {:error, :stale_turn} =
-               ConversationStates.record_message("c", "a", "b", "z", 2, false, name, false)
+               ConversationStates.record_message("c", "a", "b", "z", 2, false, false, name)
     end
 
     test "既知の cid への明示送信 (new_conversation?=false) は通常どおり継続できる" do
       name = start_tracker(:cs_unknown_cid_reply)
       # 発起側: conversation_id 省略相当 (wrapper 採番) -> new_conversation?=true
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name, true)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
       # 応答側: 相手から受け取った id を明示指定 -> new_conversation?=false だが
       # 既に存在するので #262 のチェックには一切触れず、通常どおり :ok。
-      assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, name, false)
+      assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, false, name)
       assert %{turns: 2} = ConversationStates.get("c", name)
     end
   end
@@ -288,28 +286,28 @@ defmodule KaoiroServer.ConversationStatesTest do
   describe "turn_number バリデーション (#177 review M1)" do
     test "既知の max_turn_number 以下 (重複・遅延) は :stale_turn で拒否し counters を進めない" do
       name = start_tracker(:cs_stale_turn)
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
-      assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+      assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, true, name)
 
       # 重複 (直前と同じ turn_number)。
       assert {:error, :stale_turn} =
-               ConversationStates.record_message("c", "a", "b", "dup", 2, false, name)
+               ConversationStates.record_message("c", "a", "b", "dup", 2, false, true, name)
 
       # 遅延到着 (既知の最大値より低い)。
       assert {:error, :stale_turn} =
-               ConversationStates.record_message("c", "b", "a", "late", 1, false, name)
+               ConversationStates.record_message("c", "b", "a", "late", 1, false, true, name)
 
       # 拒否は turns / max_turn_number を進めない。
       assert %{turns: 2, max_turn_number: 2} = ConversationStates.get("c", name)
 
       # 新しい turn_number は通常どおり受理される。
-      assert :ok = ConversationStates.record_message("c", "a", "b", "z", 3, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "z", 3, false, true, name)
       assert %{turns: 3, max_turn_number: 3} = ConversationStates.get("c", name)
     end
 
     test "brand-new conversation の初回は max_turn_number の制約を受けない" do
       name = start_tracker(:cs_stale_turn_fresh)
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 5, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 5, false, true, name)
       assert %{max_turn_number: 5} = ConversationStates.get("c", name)
     end
   end
@@ -321,21 +319,21 @@ defmodule KaoiroServer.ConversationStatesTest do
 
       pid = Process.whereis(name)
 
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
       assert {:exceeded, :max_turns} =
-               ConversationStates.record_message("c", "b", "a", "y", 2, false, name)
+               ConversationStates.record_message("c", "b", "a", "y", 2, false, true, name)
 
       assert %{status: :closed, reason: :max_turns} = ConversationStates.get("c", name)
 
       assert {:error, :conversation_closed} =
-               ConversationStates.record_message("c", "a", "b", "z", 3, false, name)
+               ConversationStates.record_message("c", "a", "b", "z", 3, false, true, name)
 
       advance_clock(clock, 1_001)
       sync_gc(pid)
       assert ConversationStates.get("c", name) == nil
 
-      assert :ok = ConversationStates.record_message("c", "a", "b", "fresh", 1, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "fresh", 1, false, true, name)
     end
 
     test "max_tokens: tombstone -> conversation_closed -> TTL 後に CID 再利用" do
@@ -346,18 +344,18 @@ defmodule KaoiroServer.ConversationStatesTest do
       body = String.duplicate("x", 30)
 
       assert {:exceeded, :max_tokens} =
-               ConversationStates.record_message("c", "a", "b", body, 1, false, name)
+               ConversationStates.record_message("c", "a", "b", body, 1, false, true, name)
 
       assert %{status: :closed, reason: :max_tokens} = ConversationStates.get("c", name)
 
       assert {:error, :conversation_closed} =
-               ConversationStates.record_message("c", "a", "b", "z", 2, false, name)
+               ConversationStates.record_message("c", "a", "b", "z", 2, false, true, name)
 
       advance_clock(clock, 1_001)
       sync_gc(pid)
       assert ConversationStates.get("c", name) == nil
 
-      assert :ok = ConversationStates.record_message("c", "a", "b", "fresh", 1, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "fresh", 1, false, true, name)
     end
 
     test "max_concurrent_agents: tombstone -> conversation_closed -> TTL 後に CID 再利用" do
@@ -370,13 +368,13 @@ defmodule KaoiroServer.ConversationStatesTest do
       pid = Process.whereis(name)
 
       assert {:exceeded, :max_concurrent_agents} =
-               ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+               ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
       assert %{status: :closed, reason: :max_concurrent_agents} =
                ConversationStates.get("c", name)
 
       assert {:error, :conversation_closed} =
-               ConversationStates.record_message("c", "a", "b", "z", 2, false, name)
+               ConversationStates.record_message("c", "a", "b", "z", 2, false, true, name)
 
       advance_clock(clock, 1_001)
       sync_gc(pid)
@@ -386,7 +384,7 @@ defmodule KaoiroServer.ConversationStatesTest do
       # 受理された上でまた同じ理由で tombstone 化する (拒否ではなく新規受理
       # であることの確認が目的で、以後の挙動は limit 次第)。
       assert {:exceeded, :max_concurrent_agents} =
-               ConversationStates.record_message("c", "a", "b", "fresh", 1, false, name)
+               ConversationStates.record_message("c", "a", "b", "fresh", 1, false, true, name)
     end
   end
 
@@ -406,7 +404,7 @@ defmodule KaoiroServer.ConversationStatesTest do
 
       pid = Process.whereis(name)
 
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
       advance_clock(clock, 101)
       sync_gc(pid)
 
@@ -414,13 +412,13 @@ defmodule KaoiroServer.ConversationStatesTest do
                ConversationStates.get("c", name)
 
       assert {:error, :conversation_closed} =
-               ConversationStates.record_message("c", "a", "b", "z", 2, false, name)
+               ConversationStates.record_message("c", "a", "b", "z", 2, false, true, name)
 
       advance_clock(clock, 101)
       sync_gc(pid)
       assert ConversationStates.get("c", name) == nil
 
-      assert :ok = ConversationStates.record_message("c", "a", "b", "fresh", 1, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "fresh", 1, false, true, name)
     end
   end
 
@@ -443,7 +441,7 @@ defmodule KaoiroServer.ConversationStatesTest do
           on_auto_closed: on_auto_closed
         )
 
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
       advance_clock(clock, 5)
       sync_gc(Process.whereis(name))
 
@@ -459,10 +457,10 @@ defmodule KaoiroServer.ConversationStatesTest do
           on_auto_closed: on_auto_closed
         )
 
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
       assert {:exceeded, :max_turns} =
-               ConversationStates.record_message("c", "b", "a", "y", 2, false, name)
+               ConversationStates.record_message("c", "b", "a", "y", 2, false, true, name)
 
       assert Agent.get(notifier, & &1) == []
     end
@@ -473,8 +471,10 @@ defmodule KaoiroServer.ConversationStatesTest do
       {name, _clock} =
         start_tracker_with_clock(:cs_on_auto_closed_bothdone, [], on_auto_closed: on_auto_closed)
 
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, name)
-      assert :both_done = ConversationStates.record_message("c", "b", "a", "y", 2, true, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)
+
+      assert :both_done =
+               ConversationStates.record_message("c", "b", "a", "y", 2, true, true, name)
 
       assert Agent.get(notifier, & &1) == []
     end
@@ -488,7 +488,7 @@ defmodule KaoiroServer.ConversationStatesTest do
         )
 
       pid = Process.whereis(name)
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
       advance_clock(clock, 5)
       sync_gc(pid)
 
@@ -512,13 +512,13 @@ defmodule KaoiroServer.ConversationStatesTest do
         )
 
       pid = Process.whereis(name)
-      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
       # TTL に触れない別会話を、GC 実行時点の now と同時刻で追加する — 巻き
       # 添えの範囲 ((c) の検証対象) を確かめるため、"c" の tombstone 化と
       # 同じ GC ラウンドに同居させつつ、この会話自体は開いたまま残る。
       advance_clock(clock, 5)
-      assert :ok = ConversationStates.record_message("other", "x", "y", "z", 1, false, name)
+      assert :ok = ConversationStates.record_message("other", "x", "y", "z", 1, false, true, name)
 
       sync_gc(pid)
 
@@ -538,8 +538,8 @@ defmodule KaoiroServer.ConversationStatesTest do
 
   test "claim_unreachable_targets は参加中の cid と自分以外の参加者を返す (#131)" do
     name = start_tracker(:cs_participants)
-    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, false, name)
-    assert :ok = ConversationStates.record_message("c2", "b", "c", "y", 1, false, name)
+    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, false, true, name)
+    assert :ok = ConversationStates.record_message("c2", "b", "c", "y", 1, false, true, name)
 
     assert {[{"c1", ["b"]}], 0} =
              ConversationStates.claim_unreachable_targets("a", 50, name)
@@ -552,17 +552,17 @@ defmodule KaoiroServer.ConversationStatesTest do
 
   test "閉じた conversation は claim 対象にならない (#131)" do
     name = start_tracker(:cs_participants_closed)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)
 
     assert :both_done =
-             ConversationStates.record_message("c", "b", "a", "y", 2, true, name)
+             ConversationStates.record_message("c", "b", "a", "y", 2, true, true, name)
 
     assert {[], 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
   end
 
   test "同じ conversation を二重に claim しない (フラッピング抑止, #131)" do
     name = start_tracker(:cs_claim_once)
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
     assert {[{"c", ["b"]}], 0} =
              ConversationStates.claim_unreachable_targets("a", 50, name)
@@ -571,11 +571,11 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert {[], 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
 
     # 相手の発言だけでは解除しない (a はまだ戻ってきていない)。
-    assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, name)
+    assert :ok = ConversationStates.record_message("c", "b", "a", "y", 2, false, true, name)
     assert {[], 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
 
     # a 自身が同じ conversation で再び発言したら再武装する。
-    assert :ok = ConversationStates.record_message("c", "a", "b", "z", 3, false, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "z", 3, false, true, name)
 
     assert {[{"c", ["b"]}], 0} =
              ConversationStates.claim_unreachable_targets("a", 50, name)
@@ -585,7 +585,7 @@ defmodule KaoiroServer.ConversationStatesTest do
     name = start_tracker(:cs_claim_limit)
 
     for n <- 1..3 do
-      assert :ok = ConversationStates.record_message("c#{n}", "a", "b", "x", 1, false, name)
+      assert :ok = ConversationStates.record_message("c#{n}", "a", "b", "x", 1, false, true, name)
     end
 
     assert {claimed, 2} = ConversationStates.claim_unreachable_targets("a", 1, name)
@@ -606,9 +606,9 @@ defmodule KaoiroServer.ConversationStatesTest do
         tombstone_ttl_ms: 86_400_000
       )
 
-    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, name)
+    assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
     assert {:exceeded, :max_turns} =
-             ConversationStates.record_message("c", "a", "b", "y", 2, false, name)
+             ConversationStates.record_message("c", "a", "b", "y", 2, false, true, name)
   end
 end

@@ -1343,8 +1343,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # best-effort accept, not a hard block — the same instance the codebase
   # already exercises live (`refresh_engine_catalog: client declared
   # protocol version (absent); relaying as "0"`). `preflight_inter_agent/2`
-  # treats an absent value as `true`, the same permissive default
-  # `ConversationStates.record_message/8` itself uses.
+  # treats an absent value as `true` (with a one-time-per-message
+  # `Logger.warning`, see `warn_legacy_new_conversation_absent/0`) — this
+  # is now the ONLY place that permissive default is allowed to live.
+  # `ConversationStates.record_message/8` deliberately does NOT default
+  # `new_conversation?` (director ruling, issue #262 delta 2巡目): every
+  # caller of that internal API, this one included, must state the value
+  # explicitly, so a future caller cannot silently reproduce this same
+  # bug through the internal API instead of the wire.
   defp validate_live_inter_agent_payload(payload) do
     with :ok <- validate_inter_agent_payload(payload) do
       cond do
@@ -1618,11 +1624,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
     done? = get_in(payload, ["meta", "done"]) == true
     # issue #262: true when the SENDING wrapper's own conversation_id was
     # omitted by its caller and freshly allocated (see record_message/8) —
-    # OR the field is simply absent (review, クロエ M1: a pre-#262 wrapper,
-    # ADR-0015 best-effort accept; validate_live_inter_agent_payload/1
-    # already rejects a present-but-non-boolean value). Only an EXPLICIT
-    # `false` narrows this to "confirm the id already exists".
-    new_conversation? = payload["new_conversation"] != false
+    # OR the field is simply absent, which this branch treats as a pre-#262
+    # wrapper rather than a validation failure (review, クロエ M1). Only an
+    # EXPLICIT `false` narrows this to "confirm the id already exists";
+    # `validate_live_inter_agent_payload/1` already rejects a
+    # present-but-non-boolean value, so the only two shapes reaching here
+    # are absent, `true`, or `false`.
+    new_conversation? =
+      case payload do
+        %{"new_conversation" => false} -> false
+        %{"new_conversation" => true} -> true
+        _ -> warn_legacy_new_conversation_absent()
+      end
 
     cond do
       to == from ->
@@ -1632,10 +1645,6 @@ defmodule KaoiroServerWeb.WrapperChannel do
         {:error, :unknown_agent}
 
       true ->
-        # `ConversationStates` (not the `server` default) is spelled out
-        # explicitly here only because Elixir cannot skip a positional arg —
-        # this passes the exact same value `record_message/6`'s own default
-        # would have, purely to reach `new_conversation?` after it.
         case ConversationStates.record_message(
                cid,
                from,
@@ -1643,7 +1652,6 @@ defmodule KaoiroServerWeb.WrapperChannel do
                body,
                turn_number,
                done?,
-               ConversationStates,
                new_conversation?
              ) do
           # Within limits. `:both_done` means every participating agent has
@@ -1670,6 +1678,24 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp preflight_inter_agent(_envelope, _from), do: {:ok, :not_inter_agent}
+
+  # Mirrors warn_relayed_version/3 in agents_channel.ex (ADR-0015 best-effort
+  # accept) for the same shape of client/server skew: a wrapper that predates
+  # issue #262 never learned to send `new_conversation`, and the Phoenix
+  # client owns reconnect/heartbeat (wrapper/core/src/transport.ts), so such
+  # a wrapper survives a server redeploy without restarting and keeps
+  # pushing without the field. Not a hard limit on how long this is
+  # honoured -- once every connected wrapper is confirmed to be issue-#262-
+  # or-later, `validate_live_inter_agent_payload/1` can go back to requiring
+  # the key (see protocol-inter-agent.md).
+  defp warn_legacy_new_conversation_absent do
+    Logger.warning(
+      "inter_agent_message: client declared new_conversation (absent); " <>
+        "accepting as true (issue #262 legacy best-effort accept)"
+    )
+
+    true
+  end
 
   defp push_to_wrapper(to, envelope) do
     KaoiroServerWeb.Endpoint.broadcast("wrapper:#{to}", "envelope", envelope)

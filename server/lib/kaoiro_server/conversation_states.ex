@@ -153,15 +153,36 @@ defmodule KaoiroServer.ConversationStates do
   agent supplied this id explicitly) and no entry exists for it, the
   send is rejected as `{:error, :unknown_conversation_id}` instead of
   silently opening a new, context-less thread under a mistyped or
-  stale id; see the moduledoc. Defaults to `true` so every pre-#262
-  caller — every test in this suite included — keeps its original
-  "unknown id always starts fresh" behaviour unless it opts in.
-  `server` sits before this default (not after): both are optional
-  trailing positional args, and Elixir resolves a partial positional
-  call left-to-right, so appending `new_conversation?` after `server`
-  is what lets every existing call — 6-arg default-server callers and
-  7-arg custom-server test callers alike — keep resolving exactly as it
-  did before this param existed.
+  stale id; see the moduledoc.
+
+  Deliberately NO default (review, issue #262 delta): an earlier version
+  defaulted this to `true` so ~90 pre-#262 test call sites would not need
+  editing. That convenience is exactly the shape of bug this whole issue
+  exists to close, just moved one layer down — a FUTURE caller of this
+  function (not only the channel) that forgets the argument would
+  silently get the permissive answer, the same way an old wrapper's
+  missing wire field used to. The channel boundary is where "absent means
+  legacy, accept it" is a legitimate, EXPLICIT decision (see
+  `preflight_inter_agent/2` in wrapper_channel.ex); this function has no
+  business making that call implicitly for whoever forgets to pass it.
+  Every caller, including every test below, now states its intent.
+
+  `when is_boolean(new_conversation?)` (review, クロエ): this arg landed at
+  position 7, the SAME position `server` occupied before this delta
+  removed the default in front of it. A leftover pre-delta call — one a
+  bulk migration missed — would pass its `server` value (a pid/atom/name,
+  never a boolean) here instead, and nothing about that is a compile
+  error: `record_message/7` still exists, just with a different 7th
+  argument's meaning. Worse, the resulting bug is CONDITIONAL — the
+  guard clauses inside `handle_call/3` only evaluate `not new_conversation?`
+  on the `existing == nil` branch, so a wrong-typed call silently
+  succeeds (against the WRONG server, since `server \\ __MODULE__` then
+  defaults) whenever the conversation already exists, and only raises
+  when it doesn't. The `is_boolean/1` guard turns every such call into
+  an immediate `FunctionClauseError` regardless of which branch it would
+  have hit, which is both the structural verification that no call site
+  was missed (every test call still had to pass this guard) and a
+  permanent guard against the next one.
   """
   def record_message(
         conversation_id,
@@ -170,9 +191,10 @@ defmodule KaoiroServer.ConversationStates do
         body,
         turn_number,
         done?,
-        server \\ __MODULE__,
-        new_conversation? \\ true
-      ) do
+        new_conversation?,
+        server \\ __MODULE__
+      )
+      when is_boolean(new_conversation?) do
     GenServer.call(
       server,
       {:record, conversation_id, from, to, body, turn_number, done?, new_conversation?}

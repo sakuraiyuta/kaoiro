@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   import KaoiroServer.OAuthAllowlistFixture
+  import ExUnit.CaptureLog
 
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
@@ -1680,13 +1681,30 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       env = inter_envelope(from_id, to_id)
       env = update_in(env, ["payload"], &Map.delete(&1, "new_conversation"))
-      ref = push(from_socket, "envelope", env)
-      assert_reply ref, :ok
+
+      log =
+        capture_log(fn ->
+          ref = push(from_socket, "envelope", env)
+          assert_reply ref, :ok
+        end)
+
+      # こはくの裁定 (issue #262): 「欠落は警告ログ付きで従来どおり受理」の
+      # ログ側を検証する。accept 判定だけでは無言の legacy 受理と警告付き
+      # legacy 受理を区別できない。
+      assert log =~ "inter_agent_message: client declared new_conversation (absent)"
+      assert log =~ "issue #262 legacy best-effort accept"
     end
 
     test "payload.new_conversation 欠落かつ明示指定の未知 cid (旧 wrapper 相当) は " <>
            "移行期間中 unknown_conversation_id にならず新規として受理される " <>
            "(意図的な残余、issue #262 delta)" do
+      # trivial-review advisory: server の視点では上の「欠落は true とみなす」
+      # テストとコード経路は同一 — 「省略による新規」と「タイポによる未知」を
+      # 区別する情報は payload 上に無く (new_conversation が唯一の判断材料で、
+      # ここも同じく欠落)、両者とも existing==nil / new_conversation?=true の
+      # 同じ分岐を通る。それでも別テストとして残すのは、この特定シナリオ
+      # (意図的な残余の存在) に固有の名前を付け、意図が変わったときに
+      # 明示的に赤くする対象を残すため。
       from_id = "test.iam-newconv-missing-unk-from"
       to_id = "test.iam-newconv-missing-unk-to"
       _ = seed_known(to_id)
@@ -1816,7 +1834,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
             to_id,
             "msg-#{n}",
             n,
-            false
+            false,
+            true
           )
       end
 
@@ -2599,7 +2618,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                  owner: peer_socket.channel_pid
                )
 
-      assert :ok = ConversationStates.record_message("dir-g2", peer_id, self_id, "x", 1, false)
+      assert :ok =
+               ConversationStates.record_message("dir-g2", peer_id, self_id, "x", 1, false, true)
 
       self_socket = join_wrapper(self_id)
       ref = push(self_socket, "envelope", envelope(self_id, "idle"))
@@ -2642,7 +2662,15 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert %{session_start_observed: false} = AgentActivity.get(peer_id)
 
       assert :ok =
-               ConversationStates.record_message("dir-fallback", peer_id, self_id, "x", 1, false)
+               ConversationStates.record_message(
+                 "dir-fallback",
+                 peer_id,
+                 self_id,
+                 "x",
+                 1,
+                 false,
+                 true
+               )
 
       self_socket = join_wrapper(self_id)
       ref = push(self_socket, "envelope", envelope(self_id, "idle"))
@@ -2684,7 +2712,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                  self_id,
                  "x",
                  1,
-                 false
+                 false,
+                 true
                )
 
       ref = push(self_socket, "directory_request", %{})

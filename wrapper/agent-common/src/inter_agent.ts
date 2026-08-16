@@ -1861,12 +1861,20 @@ export class InterAgentTool {
             this.#cancelReplyWait(conversationId);
             // issue #262: an actionable hint over the generic reason string —
             // this is the one reject the CALLER can usually fix by re-typing
-            // the id or omitting it, not by waiting or escalating.
+            // the id or omitting it, not by waiting or escalating. Names the
+            // OTHER cause too (review, クロエ): ConversationStates has no
+            // persistence, so a server restart drops every open
+            // conversation, and every explicit-id reply after that reads as
+            // this same reject — without the alternative spelled out, the
+            // caller reads it as its own typo and burns a turn concluding
+            // that alone.
             const message =
               acceptance.reason === "unknown_conversation_id"
                 ? `send_to_agent failed: conversation_id=${conversationId} is ` +
                   "unknown to the server — retry with the correct " +
-                  "conversation_id, or omit it to start a new conversation."
+                  "conversation_id, or omit it to start a new conversation " +
+                  "(this can also mean the server restarted since this " +
+                  "conversation began, which drops all of its state)."
                 : `send_to_agent failed: server rejected the message (${acceptance.reason})`;
             return { kind: "rejected", message };
           }

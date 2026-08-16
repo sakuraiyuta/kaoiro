@@ -470,10 +470,16 @@ fail fast and visible にする。
   での再送か省略での新規開始を促す」専用文言を返す
   (`send_to_agent failed: conversation_id=<id> is unknown to the
   server — retry with the correct conversation_id, or omit it to
-  start a new conversation.`)。ローカル track 側の特別扱いは不要 —
-  明示指定した未知 cid のローカル track は `wasBlank` 判定
-  (「実質的な履歴が無い」)に自然に該当し、既存の reject-cleanup が
-  そのままリセットする。
+  start a new conversation (this can also mean the server restarted
+  since this conversation began, which drops all of its state).`)。
+  後半の「server 再起動」の言及はレビュー (クロエ) 指摘: `ConversationStates`
+  は永続化を持たないため、server 再起動で進行中の全 conversation が
+  消え、以後その cid への明示送信は全て `unknown_conversation_id` に
+  なる。文言に候補を挙げないと、送信側エージェントは「自分の転記
+  ミス」とだけ解釈して 1 ターン浪費しかねない。ローカル track 側の
+  特別扱いは不要 — 明示指定した未知 cid のローカル track は
+  `wasBlank` 判定(「実質的な履歴が無い」)に自然に該当し、既存の
+  reject-cleanup がそのままリセットする。
 - **既知の反例**(意図的に許容する残余): `new_conversation? == false`
   の送信が「既存 entry への正当な返信・継続」であるケースは、この
   チェックが `existing != nil` で素通しするため一切影響を受けない —
@@ -481,7 +487,7 @@ fail fast and visible にする。
   session のコピペ由来で、どの entry にも一致しない cid を明示指定
   した」場合のみ。
 - **`payload.new_conversation` の欠落は拒否せず true 扱いにする**
-  (レビュー、issue #262 delta): `validate_live_inter_agent_payload/1`
+  (レビュー、issue #262 delta、クロエ M1): `validate_live_inter_agent_payload/1`
   は key の存在を要求しない — bool 以外の値のときだけ拒否する。
   issue #262 より前の wrapper はこの field を送らないが、Phoenix
   client は reconnect/heartbeat を自前で持つため
@@ -492,12 +498,38 @@ fail fast and visible にする。
   [ADR-0015](../adr/0015-protocol-version-stamping.md) が確立した
   「version 不一致でも ACK して処理は継続する」というベストエフォート
   受理の方針と矛盾する。`preflight_inter_agent/2` は欠落を `true`
-  として読む(`payload["new_conversation"] != false`)—
-  `ConversationStates.record_message/8` 自身の既定値と同じ許容側。
-  代償として、旧 wrapper からの明示指定・未知 cid はこの移行期間中
-  `unknown_conversation_id` で拒否されず無言で新規 conversation を
-  開くが、これは新 wrapper へ更新されるまでの一時的な後退であり、
-  恒久的な抜け道ではない。
+  として読み(`case payload do %{"new_conversation" => false} -> false;
+  %{"new_conversation" => true} -> true; _ -> ... end`)、欠落側では
+  `agents_channel.ex` の protocol version 警告と同型式の
+  `Logger.warning` をメッセージ 1 通ごとに出す(`inter_agent_message:
+  client declared new_conversation (absent); accepting as true (issue
+  #262 legacy best-effort accept)`)。代償として、旧 wrapper からの
+  明示指定・未知 cid はこの移行期間中 `unknown_conversation_id` で
+  拒否されず無言で新規 conversation を開くが、これは新 wrapper へ
+  更新されるまでの一時的な後退であり、恒久的な抜け道ではない。
+  - **warning が旧 wrapper からの送信ごとに出続けることは意図的**
+    (レビュー、クロエ): `refresh_engine_catalog` 等の既存 ADR-0015
+    警告は接続・カタログ更新時のみで頻度が低いが、この警告は旧
+    wrapper が更新されるまで**全 inter-agent 送信**で出る。頻度が
+    高いこと自体を「異常」と読まれるのを避けるため、この段落を
+    正本として残す — 移行期間が長引くほど log に占める割合が増える
+    のは設計どおりで、対処すべき異常ではない。
+  - **`ConversationStates.record_message/8` 自身は既定値を持たない**
+    (director 裁定、issue #262 delta 2巡目): 当初は `new_conversation?`
+    にも `\\ true` の既定値を与え、この channel 側の分岐を単に呼び出す
+    だけで済ませていたが、それは「渡し忘れたら黙って許可」という
+    #262 が閉じようとした欠陥そのものを、wire 層から内部 API 層へ
+    移しただけだった。既定値を廃し必須引数にしたことで、
+    `record_message/8` の将来の呼び出し元は全員この判断を明示しなけ
+    ればならず、`preflight_inter_agent/2` の上記 absent 分岐が
+    「合法的に許容側へ倒す唯一の場所」になる。コストは既存呼び出し
+    (主にテスト、約 90 箇所) への機械的な引数追加
+  - **廃止の目安**: この absent 分岐は永続の契約ではない。稼働中の
+    全 wrapper が issue #262 以降のビルドであると確認できた時点で、
+    `validate_live_inter_agent_payload/1` を key 必須に戻し、
+    `warn_legacy_new_conversation_absent/0` ごと削除してよい
+    (`CLOSED_TRACK_TTL_MS` のような固定 TTL ではなく、運用側が
+    「もう旧 wrapper はいない」と判断した時点が基準)
 
 ### 観測経路(dashboard 表示)
 
