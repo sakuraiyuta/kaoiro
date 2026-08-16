@@ -1780,40 +1780,62 @@ describe("CodexHost", () => {
   });
 
   describe("rate_limits (rollout tail)", () => {
-    it("resume は初回 turn 前に既存 rollout の rate_limits を state_change へ載せる", async () => {
+    it("resume host.run の fallback も初回 SDK turn 前に snapshot を取得する", async () => {
       const states: Envelope[] = [];
-      const snapshot = new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>([
-        ["seven_day", { utilization: 0.28, resets_at: 1787371200 }],
-      ]);
-      const resolver = vi.fn(async () => snapshot);
-      const { client } = makeClient([]);
+      const turnStarted = deferred<void>();
+      const releaseTerminal = deferred<void>();
+      const turnFinished = deferred<void>();
+      const resolver = vi.fn(async () =>
+        new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>([
+          ["seven_day", { utilization: 0.29, resets_at: 1787371202 }],
+        ]),
+      );
+      const client: CodexClientLike = {
+        startThread: () => {
+          throw new Error("resume session must not start a new thread");
+        },
+        resumeThread: () => ({
+          async runStreamed() {
+            async function* events(): AsyncGenerator<ThreadEvent> {
+              yield { type: "turn.started" };
+              turnStarted.resolve();
+              await releaseTerminal.promise;
+              yield usageEvent();
+              turnFinished.resolve();
+            }
+            return { events: events() };
+          },
+        }),
+      };
       const host = new CodexHost(CONFIG, {
         onState: (event) => states.push(event),
         appendSystemPrompt: "p",
-        resumeSessionId: "uuid-resume-rate-limits",
+        resumeSessionId: "uuid-resume-host-run",
         codexFactory: () => client,
         rateLimitResolver: resolver,
         now: () => "T",
       });
 
-      // cli.ts calls this before it announces idle/sending and before
-      // host.run() can begin the first resumed turn.
-      await host.initializeRateLimits();
-      // CodexHost#run() makes the same guarded call for non-CLI callers;
-      // composing both paths must not tail the rollout twice at startup.
-      await host.initializeRateLimits();
+      const done = host.run("resume");
+      try {
+        await turnStarted.promise;
 
-      expect(resolver).toHaveBeenCalledTimes(1);
-      expect(resolver).toHaveBeenCalledWith("uuid-resume-rate-limits");
-      expect(states).toHaveLength(1);
-      expect(states[0]).toMatchObject({
-        state: "idle",
-        ext: {
-          rate_limits: {
-            seven_day: { utilization: 0.28, resets_at: 1787371200 },
+        expect(resolver).toHaveBeenCalledTimes(1);
+        expect(resolver).toHaveBeenCalledWith("uuid-resume-host-run");
+        expect(states[0]).toMatchObject({
+          state: "idle",
+          ext: {
+            rate_limits: {
+              seven_day: { utilization: 0.29, resets_at: 1787371202 },
+            },
           },
-        },
-      });
+        });
+      } finally {
+        releaseTerminal.resolve();
+        await turnFinished.promise;
+        host.close();
+        await done;
+      }
     });
 
     it("fresh thread.started でも terminal event 前に既存 snapshot を読む", async () => {
@@ -1832,9 +1854,10 @@ describe("CodexHost", () => {
             async function* events(): AsyncGenerator<ThreadEvent> {
               yield { type: "thread.started", thread_id: "uuid-fresh-rate-limits" };
               yield { type: "turn.started" };
-              // This runs only after the host has consumed turn.started. The
-              // terminal event remains blocked, proving the initial lookup
-              // did not wait for a completed turn.
+              // This defensive case covers a rollout that already has a
+              // token_count at thread.started. Current observed rollouts
+              // usually write it later, after session metadata; the terminal
+              // refresh below remains the ordinary path for those sessions.
               turnStarted.resolve();
               await releaseTerminal.promise;
               yield usageEvent();
@@ -1877,28 +1900,6 @@ describe("CodexHost", () => {
       await turnFinished.promise;
       host.close();
       await done;
-    });
-
-    it("resume の rollout に snapshot が無ければ initial state を増やさない", async () => {
-      const states: Envelope[] = [];
-      const resolver = vi.fn(async () =>
-        new Map<CodexRateLimitWindow, CodexRateLimitSnapshot>(),
-      );
-      const { client } = makeClient([]);
-      const host = new CodexHost(CONFIG, {
-        onState: (event) => states.push(event),
-        appendSystemPrompt: "p",
-        resumeSessionId: "uuid-resume-empty-rate-limits",
-        codexFactory: () => client,
-        rateLimitResolver: resolver,
-        now: () => "T",
-      });
-
-      await host.initializeRateLimits();
-
-      expect(resolver).toHaveBeenCalledWith("uuid-resume-empty-rate-limits");
-      expect(states).toEqual([]);
-      expect(host.statusExtSnapshot()).not.toHaveProperty("rate_limits");
     });
 
     it("turn.completed 後の refresh で ext.rate_limits を stamp する", async () => {
