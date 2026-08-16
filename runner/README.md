@@ -235,8 +235,12 @@ launchctl bootstrap gui/"$(id -u)" \
   exit 1 で落ちた — `RestartPreventExitStatus=78` が一致せず **restart loop**
   になる。78 にすることで failed のまま止まり、`systemctl --user status` に
   原因が出る。
-- 検証対象は builder が生成する `MANIFEST.json`(runner 自身の `dist/` と
-  wrapper 2 種の `dist/` の module closure)。起動時は存在検査のみで、
+- 検証対象は builder が生成する `MANIFEST.json`。中身は runner 自身の
+  `dist/` と、runner が spawn する wrapper 2 種から **依存宣言をたどって
+  到達する `@kaoiro/*` パッケージ全部**の `dist/`(`@kaoiro/wrapper-core` /
+  `@kaoiro/agent-common` を含む)。dist を 3 本列挙する初版はこの推移層を
+  落としており、`wrapper-core` から 1 ファイル消しても検証を通過して
+  agent spawn 時に落ちた(実 tarball で実測、2026-08-16)。起動時は存在検査のみで、
   sha256 の照合は install / switch 時に行う(起動 latency を守るため)。
   `MANIFEST.json` が無い木(repo-direct な開発 checkout)では、従来の 4
   artifact の検査へ縮退する。systemd は `RestartPreventExitStatus=78` で

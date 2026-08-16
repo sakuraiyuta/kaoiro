@@ -63,6 +63,31 @@ describe("kaoiro-runner-switch.sh (issue #229)", () => {
     expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
   });
 
+  it("回帰: current/deploy 越しに起動しても verifier が働く", () => {
+    // A manual switch or rollback is run from the path the host advertises,
+    // <install-root>/current/deploy/ — and reaching verify-release.mjs
+    // through that symlink used to skip it altogether: node resolves an ESM
+    // module's own URL through realpath while leaving process.argv[1] as
+    // typed, so the verifier's entry-point guard was false, main() never ran,
+    // and it exited 0 having printed nothing. The identity read back from
+    // that stdout was the empty string, so this script then refused a release
+    // that was in perfect shape — "carries identity " (measured against a
+    // real tarball install, 2026-08-16). Every other case here invokes the
+    // script by its physical path, where the guard happens to hold.
+    seed(A);
+    seed(B);
+    symlinkSync(`releases/${A}`, join(root, "current"));
+
+    const result = runScript(
+      join(root, "current", "deploy", "kaoiro-runner-switch.sh"),
+      [B, "--install-dir", root],
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(B);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+  });
+
   it("回帰: 切替が旧 release の中に一時 symlink を残さない", () => {
     // `mv <tmplink> current` FOLLOWS `current` when it points at a directory
     // and moves the new link INSIDE the old release — measured on GNU

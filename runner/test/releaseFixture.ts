@@ -162,8 +162,32 @@ export function writeReleaseTree(
       built_at: "2026-08-16T00:00:00.000Z",
     }),
   );
-  put("node_modules/@kaoiro/claude-code/dist/cli.js", "// stub wrapper\n");
-  put("node_modules/@kaoiro/codex/dist/cli.js", "// stub wrapper\n");
+  // The wrappers are real PACKAGES here, not two lone files, and a shared
+  // first-party package sits behind both — the shape @kaoiro/wrapper-core and
+  // @kaoiro/agent-common have in a real release. That transitive layer is
+  // what the manifest generator's hand-written list of three dist directories
+  // used to miss entirely: removing a file from it verified clean and then
+  // failed at import, on a real tarball (issue #229, 2026-08-16). A fixture
+  // with no dependency edges could not measure the difference.
+  for (const wrapper of ["claude-code", "codex"]) {
+    put(
+      `node_modules/@kaoiro/${wrapper}/package.json`,
+      JSON.stringify({
+        name: `@kaoiro/${wrapper}`,
+        version: "0.0.0",
+        dependencies: { "@kaoiro/wrapper-core": "workspace:*" },
+      }),
+    );
+    put(`node_modules/@kaoiro/${wrapper}/dist/cli.js`, "// stub wrapper\n");
+  }
+  put(
+    "node_modules/@kaoiro/wrapper-core/package.json",
+    JSON.stringify({ name: "@kaoiro/wrapper-core", version: "0.0.0" }),
+  );
+  put(
+    "node_modules/@kaoiro/wrapper-core/dist/index.js",
+    "// stub shared wrapper package\n",
+  );
 
   mkdirSync(join(tree, "deploy"), { recursive: true });
   for (const script of DEPLOY_SCRIPTS) {

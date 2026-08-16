@@ -58,8 +58,16 @@ fi
 # Resolve our own directory before the config check: it is needed both for the
 # entry point and for naming the setup wizard when the config is missing.
 # (unset CDPATH so a stray value in the env file cannot redirect the cd)
+#
+# PHYSICAL, like kaoiro-runner-update.sh: the unit starts
+# <install-root>/current/deploy/kaoiro-runner-launch.sh, so a logical `pwd`
+# would make the release root below `<install-root>/current` — a SYMLINK,
+# which the verifier rejects outright (an archive whose top-level entry was a
+# link out of the install root is must-fix 1). Resolving once here pins the
+# whole start to the release `current` names right now, which is also what
+# keeps a switch landing mid-start from splitting one run across two releases.
 unset CDPATH
-deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+deploy_dir=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 
 # --version (issue #228 round 2 MF-5, ふじ 差し戻し): forwarded to the
 # entry point BEFORE the config-existence check below. A first-run host

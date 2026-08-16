@@ -257,6 +257,31 @@ function main(argv) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+/** Was this file run as the entry point, rather than imported by a test?
+ *
+ * BOTH SIDES ARE REALPATH'D, AND THAT IS THE WHOLE POINT. Node resolves an
+ * ESM module's own URL through realpath while leaving process.argv[1] exactly
+ * as typed, so the obvious `import.meta.url === \`file://${process.argv[1]}\``
+ * is false for every invocation that reached this file through a symlink —
+ * which is precisely how PRODUCTION reaches it, since the launch shim runs
+ * <install-root>/current/deploy/verify-release.mjs. main() then never ran and
+ * the process exited 0, so the whole start-time check was a silent no-op: a
+ * release with dist/args.js removed started anyway and died at import with
+ * node's exit 1, restart-looping on the exact fault exit 78 exists to stop.
+ * Measured on a real tarball install, 2026-08-16 (the fixtures missed it
+ * because they invoke the shim by its physical path). The comparison also
+ * stops depending on `file://` + a raw path being a well-formed URL, which it
+ * is not once a path contains a space. */
+function isEntryPoint() {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(import.meta.filename);
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   main(process.argv.slice(2));
 }

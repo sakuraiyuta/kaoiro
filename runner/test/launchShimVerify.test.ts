@@ -18,6 +18,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -31,12 +32,18 @@ const REVISION = revisionOf("shim-verify");
 
 /** Every artifact the shim requires at start time. VERSION is absent on
  *  purpose — see the shim's own comment for why release completeness is
- *  install-time business. */
+ *  install-time business.
+ *
+ *  The last entry is a package NEITHER the runner nor the shim names: it is
+ *  reached only as a dependency of both wrappers. It is listed here because
+ *  the manifest missing it is not a smaller failure than missing cli.js —
+ *  the runner starts, and the first agent spawn dies at import instead. */
 const REQUIRED_ARTIFACTS = [
   "dist/cli.js",
   "dist/build-info.json",
   "node_modules/@kaoiro/claude-code/dist/cli.js",
   "node_modules/@kaoiro/codex/dist/cli.js",
+  "node_modules/@kaoiro/wrapper-core/dist/index.js",
 ];
 
 /** Tools that must never run from the shim. `node` is excluded: the shim is
@@ -139,6 +146,50 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
     expect(result.status).toBe(78);
     expect(existsSync(marker)).toBe(false);
     expect(existsSync(join(tree, "dist", "cli.js"))).toBe(false);
+  });
+
+  // PRODUCTION NEVER STARTS THE SHIM BY ITS PHYSICAL PATH, AND EVERY CASE
+  // ABOVE DOES. systemd runs <install-root>/current/deploy/kaoiro-runner-
+  // launch.sh, and reaching the verifier through that symlink used to skip it
+  // entirely: node resolves an ESM module's own URL through realpath but
+  // leaves process.argv[1] as typed, so verify-release.mjs's entry-point
+  // guard was false, main() never ran, and the process exited 0 without
+  // reading anything. A release missing dist/args.js then started and died at
+  // import with node's exit 1 — restart-looping on the exact fault 78 exists
+  // to stop (measured on a real tarball install, 2026-08-16). Running the
+  // whole matrix through a `current` link is what keeps a fixture path from
+  // standing in for the only path that ships.
+  describe("current symlink 越しの起動 (本番と同じ経路)", () => {
+    let viaCurrent: string;
+
+    beforeEach(() => {
+      symlinkSync("release", join(dir, "current"));
+      viaCurrent = join(dir, "current", "deploy", "kaoiro-runner-launch.sh");
+    });
+
+    const launchViaCurrent = () =>
+      runScript(viaCurrent, [], { KAOIRO_RUNNER_DIR: confDir });
+
+    it("artifact が揃っていれば entry point を exec する", () => {
+      const result = launchViaCurrent();
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("stub cli.js started");
+    });
+
+    it.each(REQUIRED_ARTIFACTS)(
+      "%s が欠けていれば exit 78 で起動しない",
+      (artifact) => {
+        unlinkSync(join(tree, artifact));
+
+        const result = launchViaCurrent();
+
+        expect(result.status).toBe(78);
+        expect(result.stderr).toContain("release verification failed");
+        expect(result.stderr).toContain(artifact);
+        expect(result.stdout).not.toContain("stub cli.js started");
+      },
+    );
   });
 
   // The `--version` shortcut still runs BEFORE any of this, so a first-run

@@ -11,21 +11,34 @@
 // RestartPreventExitStatus=78 does not match, so the unit restart-looped on
 // a fault no restart can fix (reproduced 2026-08-16).
 //
-// SCOPE IS THE JS THE RUNNER IMPORTS: its own dist/ and the two wrapper
-// dist/ trees. Deliberately NOT the engine CLI payloads, which are ~920 MB
-// of the archive — they are not resolved through the module graph the launch
-// shim protects, and hashing them would make install-time verification cost
-// minutes for no added coverage. That residual is stated in
-// runner/deploy/verify-release.mjs too, where the checking happens.
+// SCOPE IS THE FIRST-PARTY JS: the runner's own dist/, plus the dist/ of
+// every @kaoiro package reachable from the two wrappers it spawns.
+// Deliberately NOT the engine CLI payloads, which are ~920 MB of the archive
+// — they are not resolved through the module graph the launch shim protects,
+// and hashing them would make install-time verification cost minutes for no
+// added coverage. That residual is stated in runner/deploy/verify-release.mjs
+// too, where the checking happens.
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import {
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, relative, sep } from "node:path";
 
-const MODULE_ROOTS = [
-  "dist",
-  "node_modules/@kaoiro/claude-code/dist",
-  "node_modules/@kaoiro/codex/dist",
-];
+/** The wrapper packages the runner resolves from disk at spawn time. Their
+ *  first-party dependencies are FOLLOWED from here, never listed: the
+ *  hand-written list this replaced named three dist directories and missed
+ *  @kaoiro/wrapper-core and @kaoiro/agent-common, which both wrappers import
+ *  at runtime. Deleting one file from either passed the manifest check and
+ *  then failed at import with node's exit 1 — the same restart loop as the
+ *  sentinel list before it (measured on a real tarball, 2026-08-16). The
+ *  defect this manifest exists to close IS enumeration; a shorter enumeration
+ *  is not a fix for it. */
+const ENTRY_PACKAGES = ["@kaoiro/claude-code", "@kaoiro/codex"];
 
 const CODE_FILE_RE = /\.(js|mjs|cjs|json)$/;
 
@@ -45,6 +58,42 @@ function collect(root, dir, files) {
   }
 }
 
+/** Release-relative dist/ directories of every first-party package reachable
+ *  from ENTRY_PACKAGES through @kaoiro/* dependency declarations.
+ *
+ *  Each package is recorded under the path its DEPENDENT resolves it by, so
+ *  the two entry points stay listed as node_modules/@kaoiro/<pkg>/dist —
+ *  which is the path the runner's own require.resolve() goes through, and so
+ *  the link that has to be intact as well. Dependencies are resolved from a
+ *  package's REAL location because node walks up from there, and pnpm keeps a
+ *  package's dependencies beside it under .pnpm/ rather than in the
+ *  node_modules/@kaoiro/ link farm; going through the link instead reports
+ *  MODULE_NOT_FOUND for a package that is present (measured 2026-08-16).
+ *  Deduplication is by real path, so the diamond — both wrappers depend on
+ *  both shared packages — contributes one copy of each.
+ *
+ *  A declared @kaoiro dependency that will not resolve THROWS: an incomplete
+ *  deploy tree has to fail the build, not silently narrow the manifest. */
+function firstPartyDists(root) {
+  const dists = [];
+  const seen = new Set();
+  const visit = (pkgDir) => {
+    const real = realpathSync(pkgDir);
+    if (seen.has(real)) return;
+    seen.add(real);
+    dists.push(relative(root, join(pkgDir, "dist")).split(sep).join("/"));
+    const manifestPath = join(real, "package.json");
+    const pkg = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const dependent = createRequire(manifestPath);
+    for (const dep of Object.keys(pkg.dependencies ?? {})) {
+      if (!dep.startsWith("@kaoiro/")) continue;
+      visit(dirname(dependent.resolve(`${dep}/package.json`)));
+    }
+  };
+  for (const name of ENTRY_PACKAGES) visit(join(root, "node_modules", name));
+  return dists;
+}
+
 function main(argv) {
   const root = argv[0];
   if (root === undefined || argv.length > 1) {
@@ -54,7 +103,7 @@ function main(argv) {
     process.exit(64); // EX_USAGE
   }
   const files = {};
-  for (const rel of MODULE_ROOTS) {
+  for (const rel of ["dist", ...firstPartyDists(root)]) {
     const dir = join(root, rel);
     // The wrapper roots are pnpm links; statSync follows them on purpose.
     // A missing one is a broken deploy tree, not an empty section.
