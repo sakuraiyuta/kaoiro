@@ -159,38 +159,60 @@ function readBuildInfoStrict(root, realRoot) {
 }
 
 /** Walks every ancestor segment of `relParts` (all but the last) under
- *  `base`, each via its own guarded `lstatType` call. A symlink or plain
- *  file standing in for an ancestor is rejected UNCONDITIONALLY, via
- *  `onAnomaly(message)` — regardless of where a symlink points, because
- *  none of the topologies this file supports ever puts one there (see
- *  `checkBuildOutputLeaf`'s and `checkWorkspaceLinkedSentinel`'s own doc
- *  comments for the two concrete shapes this closes: `dist` in a
- *  build-output leaf's own path, and `node_modules` /
- *  `node_modules/@kaoiro` in a workspace link's path). Stops and returns
- *  `false` as soon as a genuinely MISSING ancestor is found — nothing
- *  below an absent ancestor can exist either, so a deeper check buys
- *  nothing once the shallowest missing segment is found, and stopping
- *  there also cannot misreport a symlink further down as merely
- *  "missing". Returns `true` when every ancestor is confirmed an
- *  ordinary directory (including when there are none to check).
+ *  `base`, each via its own guarded `lstatType` call, via `onAnomaly(message)`
+ *  for anything not an ordinary directory. Stops and returns `false` as
+ *  soon as a genuinely MISSING ancestor is found — nothing below an absent
+ *  ancestor can exist either, so a deeper check buys nothing once the
+ *  shallowest missing segment is found, and stopping there also cannot
+ *  misreport a symlink further down as merely "missing". Returns `true`
+ *  when every ancestor is confirmed sound (including when there are none
+ *  to check).
  *
  *  `onAnomaly` is expected to throw (`fail()` or a subclass); this
  *  function never returns normally after calling it.
  *
- *  WHY THIS IS A SHARED HELPER, NOT TWO BESPOKE LOOPS. The identical
- *  ancestor-collapse bug surfaced at two different path depths across two
- *  review rounds — a `dist/sub` intermediate in a build-output leaf's own
- *  path (internal review), and `node_modules` / `node_modules/@kaoiro` in
- *  a workspace link's path (ふじ review round 4, issue #259: measured
- *  directly — a dangling `node_modules/@kaoiro` symlink made the whole
- *  3-segment `lstat` collapse to a bare ENOENT, misreported as "install
- *  has not run"; running the suggested `pnpm install` against it exits
- *  254 and leaves the dangling symlink untouched, so a subsequent launch
- *  hits the identical exit-78 fault again). Enumerating a third bespoke
- *  loop the next time this shape recurs is exactly what
- *  my-carefully-coding calls "enumerating a class instead of closing
- *  it" — one walk, reused by both callers. */
-function walkAncestors(base, relParts, label, onAnomaly) {
+ *  A PLAIN FILE ancestor is always anomalous — nothing in this file's
+ *  topologies puts a file where a directory belongs. A SYMLINK ancestor's
+ *  treatment is NOT the same everywhere, and is the caller's choice via
+ *  `resolveSymlinks`:
+ *
+ *  - `false` — rejected UNCONDITIONALLY, regardless of where it points.
+ *    This is `checkBuildOutputLeaf`'s own container invariant: `dist/`
+ *    (and any intermediate ancestor of a nested leaf beneath it) is never
+ *    a link in any topology this file supports, so a symlink there is
+ *    anomalous on sight — confirmed by ふじ's production-path matrix
+ *    (issue #259 round 5): "runner container / healthy in-bound symlink"
+ *    and "linked package container / healthy in-bound symlink" both
+ *    expect `anomaly`, not `ok`.
+ *  - `true` — RESOLVED via `realpathSync` and accepted when it stays
+ *    inside `realRoot` and resolves to a directory, exactly like the
+ *    final workspace link component (`checkWorkspaceLinkedSentinel`)
+ *    already treats itself. This is `checkWorkspaceLinkedSentinel`'s own
+ *    ancestor invariant: `node_modules` and `node_modules/@kaoiro` CAN
+ *    legitimately be a healthy symlink (unlike a build-output container).
+ *    A dangling, out-of-bounds, or non-directory resolution is still
+ *    rejected.
+ *
+ *  Discovered via ふじ's own matrix (issue #259 round 5): an earlier
+ *  version of this walk rejected ANY symlink ancestor unconditionally —
+ *  correct for the build-output container, but it also regressed
+ *  "workspace ancestor @kaoiro / healthy in-bound symlink" (expected
+ *  `ok`) to exit 78. The two ancestor kinds are not the same invariant,
+ *  so a single unconditional policy could not serve both; caught by
+ *  running ふじ's own data-driven matrix against this file post-fix,
+ *  before re-requesting review (round 5).
+ *
+ *  WHY THIS IS STILL ONE SHARED WALK, NOT TWO BESPOKE LOOPS. The
+ *  identical ancestor-collapse bug (an intermediate component silently
+ *  absorbed into a single aggregate `lstat`/ENOENT) surfaced at two
+ *  different path depths across two review rounds — `dist/sub` in a
+ *  build-output leaf's own path (internal review), and `node_modules` /
+ *  `node_modules/@kaoiro` in a workspace link's path (ふじ round 4).
+ *  Enumerating a third bespoke loop the next time this shape recurs is
+ *  exactly what my-carefully-coding calls "enumerating a class instead of
+ *  closing it" — one walk, parameterized by the one policy question that
+ *  actually differs between the two call sites. */
+function walkAncestors(base, realRoot, relParts, label, onAnomaly, resolveSymlinks) {
   let ancestorPath = base;
   for (let i = 0; i < relParts.length - 1; i++) {
     ancestorPath = join(ancestorPath, relParts[i]);
@@ -200,10 +222,45 @@ function walkAncestors(base, relParts, label, onAnomaly) {
     } catch (err) {
       onAnomaly(`${label} is unreachable: ${err.message}`);
     }
-    if (ancestorType === "symlink" || ancestorType === "file") {
+    if (ancestorType === "file") {
       onAnomaly(
         `${label} is unreachable: its containing directory exists but is not an ordinary directory`,
       );
+    }
+    if (ancestorType === "symlink") {
+      if (!resolveSymlinks) {
+        onAnomaly(
+          `${label} is unreachable: its containing directory exists but is not an ordinary directory`,
+        );
+      }
+      let ancestorReal;
+      try {
+        ancestorReal = realpathSync(ancestorPath);
+      } catch (err) {
+        onAnomaly(`${label} is unreachable: ${err.message}`);
+      }
+      const ancestorWithin = relative(realRoot, ancestorReal);
+      if (
+        ancestorWithin === "" ||
+        ancestorWithin.startsWith("..") ||
+        isAbsolute(ancestorWithin)
+      ) {
+        onAnomaly(
+          `${label} is unreachable: its containing directory resolves outside the release`,
+        );
+      }
+      let ancestorStat;
+      try {
+        ancestorStat = statSync(ancestorReal);
+      } catch (err) {
+        onAnomaly(`${label} is unreachable: ${err.message}`);
+      }
+      if (!ancestorStat.isDirectory()) {
+        onAnomaly(
+          `${label} is unreachable: its containing directory exists but is not an ordinary directory`,
+        );
+      }
+      continue;
     }
     if (ancestorType === "missing") return false;
   }
@@ -292,7 +349,11 @@ function walkAncestors(base, relParts, label, onAnomaly) {
  *  reason. */
 function checkBuildOutputLeaf(pkgRoot, realRoot, leafRel, label) {
   const segments = leafRel.split("/");
-  walkAncestors(pkgRoot, segments, label, (message) => fail(message));
+  // resolveSymlinks=false: a build-output container (`dist`, or any
+  // intermediate ancestor of a nested leaf beneath it) is never
+  // legitimately a symlink in any topology this file supports (see
+  // walkAncestors's own doc comment).
+  walkAncestors(pkgRoot, realRoot, segments, label, (message) => fail(message), false);
   const target = join(pkgRoot, leafRel);
   // Captured BEFORE resolving: distinguishes "the leaf itself is simply
   // absent" (build-fixable) from "the leaf is an EXISTING symlink whose
@@ -393,8 +454,16 @@ function checkWorkspaceLinkedSentinel(root, realRoot, rel) {
   const linkRel = linkParts.join("/");
   const leafRel = parts.slice(3).join("/");
   const linkPath = join(root, linkRel);
-  const ancestorsPresent = walkAncestors(root, linkParts, linkRel, (message) =>
-    fail(message),
+  // resolveSymlinks=true: unlike a build-output container, node_modules
+  // and node_modules/@kaoiro CAN legitimately be a healthy symlink (see
+  // walkAncestors's own doc comment — ふじ's matrix, issue #259 round 5).
+  const ancestorsPresent = walkAncestors(
+    root,
+    realRoot,
+    linkParts,
+    linkRel,
+    (message) => fail(message),
+    true,
   );
   if (!ancestorsPresent) {
     failMissingWorkspaceLink(

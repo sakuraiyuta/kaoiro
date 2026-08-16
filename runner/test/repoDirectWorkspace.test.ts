@@ -335,7 +335,11 @@ describe("repo-direct な workspace checkout の起動検証", () => {
 
     expect(result.status).toBe(78);
     expect(result.stdout).not.toContain("stub cli.js started");
-    expect(result.stderr).toContain("is not an ordinary directory");
+    // ふじ round5 の matrix (issue #259) 発見: workspace 祖先の symlink は
+    // dist container と違い RESOLVE される(健全な in-bound symlink は
+    // ok — 別テスト参照)。dangling はその resolve 自体が失敗するので、
+    // メッセージは「型が違う」ではなく「到達不能」になる。
+    expect(result.stderr).toContain("is unreachable");
     // install は正しい remedy ではない (dangling symlink はそのまま残る
     // ため) -- 提案してはならない。
     expect(result.stderr).not.toContain("pnpm install");
@@ -351,6 +355,62 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     const nmDir = join(runner, "node_modules");
     rmSync(nmDir, { recursive: true, force: true });
     symlinkSync("missing-target-anywhere", nmDir);
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("is unreachable");
+    expect(result.stderr).not.toContain("pnpm install");
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+  });
+
+  it("workspace ancestor (node_modules/@kaoiro) が release 内を指す健全な symlink なら通常どおり起動する (ふじ round5 matrix、positive control)", () => {
+    // ふじ round5 の matrix (issue #259) が発見した回帰: 上の dangling
+    // ケース向けに追加した walkAncestors の祖先チェックが、最初の実装で
+    // ANY symlink (健全含む) を無条件拒否していたため、この健全なケース
+    // まで exit 78 に倒していた。dist などの build-output container とは
+    // 異なり、node_modules/@kaoiro のような workspace 祖先は正当に
+    // symlink でありうる — 実際に resolve して containment + directory
+    // 判定に通せば起動できることの pin。
+    const scopeDir = join(runner, "node_modules", "@kaoiro");
+    const scopeReal = join(runner, "node_modules", "@kaoiro-real");
+    renameSync(scopeDir, scopeReal);
+    symlinkSync("@kaoiro-real", scopeDir);
+
+    const result = launch();
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("stub cli.js started");
+  });
+
+  it("workspace ancestor が release 外を指す symlink なら resolve できても拒否される", () => {
+    // resolveSymlinks=true の分岐に新設した containment check 自体の pin
+    // (ふじの30セルmatrixには「祖先が release 外を指す」ケースは無かった
+    // — walkAncestors の新分岐で resolve までは成功するが、release の
+    // 外という別の理由で拒否される経路に、専用テストが無いままだった)。
+    const outside = join(dir, "outside-kaoiro-scope");
+    renameSync(join(runner, "node_modules", "@kaoiro"), outside);
+    symlinkSync(outside, join(runner, "node_modules", "@kaoiro"));
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("resolves outside the release");
+    expect(result.stderr).not.toContain("pnpm install");
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+  });
+
+  it("workspace ancestor が release 内の plain file を指す symlink なら拒否される", () => {
+    // 同じく resolveSymlinks=true の分岐に新設した isDirectory check 自体
+    // の pin。祖先 symlink は resolve でき、containment も通るが、解決先
+    // が directory ではない(plain file)ケース。
+    const target = join(ws, "not-a-directory");
+    writeFileSync(target, "");
+    const scopeDir = join(runner, "node_modules", "@kaoiro");
+    rmSync(scopeDir, { recursive: true, force: true });
+    symlinkSync(target, scopeDir);
 
     const result = launch();
 
