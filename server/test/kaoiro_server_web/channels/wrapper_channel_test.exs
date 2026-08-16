@@ -1548,6 +1548,29 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
     end
 
+    test "legacy rejoin disarms an old capability ledger and reports unknown, not 0/0" do
+      agent_id = "test.delivery-legacy-rejoin"
+      on_exit(fn -> KaoiroServer.DeliveryStates.delete(agent_id) end)
+
+      capable =
+        join_wrapper(agent_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => "process-a"
+        })
+
+      assert 1 = KaoiroServer.DeliveryStates.issue(agent_id)
+      assert %{issued_seq: 1, acked_seq: 0} = KaoiroServer.DeliveryStates.get(agent_id)
+      Process.unlink(capable.channel_pid)
+      :ok = close(capable)
+
+      {reply, legacy} = join_wrapper_with_reply(agent_id)
+      refute Map.has_key?(reply, "delivery")
+      assert nil == KaoiroServer.DeliveryStates.get(agent_id)
+
+      status_ref = push(legacy, "delivery_status_request", %{})
+      assert_reply status_ref, :ok, %{}
+    end
+
     test "自己ルーティングは :self_routing で拒否する" do
       from_id = "test.iam-self"
       from_socket = seed_known(from_id)

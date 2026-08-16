@@ -18,7 +18,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   InterAgentTool,
-  DeliveryAcknowledger,
+  DeliveryAcknowledgement,
   MAX_COALESCED_MESSAGES,
   classifyInterAgentError,
 } from "@kaoiro/agent-common";
@@ -453,8 +453,8 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
    *  production sends both through the SAME `link?.send()` sink. */
   const notices: Envelope[] = [];
   const deliveryAcks: number[] = [];
-  const deliveryAcknowledger = new DeliveryAcknowledger();
-  deliveryAcknowledger.bind(0);
+  const deliveryAcknowledgement = new DeliveryAcknowledgement((seq) => deliveryAcks.push(seq));
+  deliveryAcknowledgement.observe({ acked_seq: 0 });
   let host!: AgentHost;
   let tokenSequence = 0;
   let watchdogFailStopped = false;
@@ -483,11 +483,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
         ingress: ingressGate,
         recordInboundIa: () => {},
         send: (notice) => notices.push(notice),
-        acknowledgeDelivery: (inbound) => {
-          const seq = (inbound as Envelope & { delivery_seq?: unknown }).delivery_seq;
-          const ack = deliveryAcknowledger.complete(seq);
-          if (ack !== null) deliveryAcks.push(ack);
-        },
+        acknowledgeDelivery: deliveryAcknowledgement.acknowledgeEnvelope,
         inject: (inbound, mode) => coordinator.receive(inbound, mode),
         log: (line) => terminalIngressSkips.push(line),
       },
@@ -496,10 +492,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   }
 
   function onTurnStart(turnToken: string): void {
-    for (const seq of coordinator.deliverySequencesForTurn(turnToken)) {
-      const ack = deliveryAcknowledger.complete(seq);
-      if (ack !== null) deliveryAcks.push(ack);
-    }
+    deliveryAcknowledgement.acknowledgeTurnStart(turnToken, coordinator);
   }
 
   function onTurnEnd(

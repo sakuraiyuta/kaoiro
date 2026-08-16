@@ -2046,7 +2046,9 @@ export function parseDeliveryStatus(value: unknown): InterAgentDeliveryStatus | 
 
 export function parseDeliverySnapshot(value: unknown): Record<string, InterAgentDeliveryStatus> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
-  const entries: Record<string, InterAgentDeliveryStatus> = {};
+  // AgentId permits "__proto__". A plain object assignment would invoke its
+  // legacy prototype setter instead of retaining an own snapshot entry.
+  const entries: Record<string, InterAgentDeliveryStatus> = Object.create(null);
   for (const [agentId, candidate] of Object.entries(value)) {
     const status = parseDeliveryStatus(candidate);
     if (status !== null) entries[agentId] = status;

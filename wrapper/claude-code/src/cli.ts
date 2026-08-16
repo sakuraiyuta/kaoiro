@@ -32,7 +32,7 @@ import {
 } from "./inter_agent_turn_coordinator.js";
 import {
   HistoryReplayer,
-  DeliveryAcknowledger,
+  DeliveryAcknowledgement,
   IaSidecar,
   InterAgentTool,
   classifyInterAgentError,
@@ -121,7 +121,10 @@ function printLog(envelope: Envelope): void {
 }
 
 async function main(): Promise<void> {
-  const deliveryAcknowledger = new DeliveryAcknowledger();
+  let link: ServerLink | null = null;
+  const deliveryAcknowledgement = new DeliveryAcknowledgement((deliverySeq) =>
+    link?.acknowledgeInterAgentDelivery(deliverySeq),
+  );
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseCliArgs(process.argv.slice(2));
   const config = loadConfig(configPath);
@@ -222,7 +225,6 @@ async function main(): Promise<void> {
   const prompt = promptArg;
 
   let host: AgentHost;
-  let link: ServerLink | null = null;
   let broker: PermissionBroker | null = null;
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
@@ -544,9 +546,7 @@ async function main(): Promise<void> {
     onPersonaPrompt: (received) => resolvePersonaPrompt(received),
     onHydration: (verdict) => replayer.onVerdict(verdict),
     onInterAgentDeliveryStatus: (status) => {
-      if (status === null) return;
-      const ack = deliveryAcknowledger.bind(status.acked_seq);
-      if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
+      deliveryAcknowledgement.observe(status);
     },
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
@@ -720,10 +720,7 @@ async function main(): Promise<void> {
           recordInboundIa,
           send: (notice) => link?.send(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
-          acknowledgeDelivery: (inbound) => {
-            const ack = deliveryAcknowledger.complete((inbound as { delivery_seq?: unknown }).delivery_seq);
-            if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
-          },
+          acknowledgeDelivery: deliveryAcknowledgement.acknowledgeEnvelope,
           log: (line) => process.stdout.write(line),
         },
         envelope,
@@ -770,10 +767,7 @@ async function main(): Promise<void> {
     // other, so it queues on the one chain instead of racing it.
     enqueueInjection: enqueueInstruction,
     onTurnStart: ({ turnToken }) => {
-      for (const seq of interAgentTurns.deliverySequencesForTurn(turnToken)) {
-        const ack = deliveryAcknowledger.complete(seq);
-        if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
-      }
+      deliveryAcknowledgement.acknowledgeTurnStart(turnToken, interAgentTurns);
       // Dispatch may have happened long before this point; only this host
       // input-yield boundary is an actual SDK turn start (issue #248).
       turnWatchdog.start(turnToken);

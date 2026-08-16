@@ -111,7 +111,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
       # (rather than in :after_join) keeps it inside the same message the
       # wrapper is already waiting on, so the wrapper never has to guess
       # whether a verdict is still coming.
-      {:ok, %{"hydration" => hydration_verdict(agent_id), "delivery" => delivery},
+      reply =
+        %{"hydration" => hydration_verdict(agent_id)}
+        |> maybe_put_optional_field("delivery", delivery)
+
+      {:ok, reply,
        socket
        |> assign(:agent_id, agent_id)
        |> assign(:persona_id, persona_id)
@@ -435,7 +439,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   @impl true
   def handle_in("delivery_status_request", _payload, socket) do
-    {:reply, {:ok, %{"delivery" => DeliveryStates.get(socket.assigns.agent_id)}}, socket}
+    reply =
+      %{}
+      |> maybe_put_optional_field("delivery", DeliveryStates.get(socket.assigns.agent_id))
+
+    {:reply, {:ok, reply}, socket}
   end
 
   @impl true
@@ -881,14 +889,30 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     entry
     |> put_activity_fields(id, envelope, activity)
-    |> maybe_put_directory_field("inter_agent_delivery", delivery)
+    |> maybe_put_optional_field("inter_agent_delivery", delivery)
   end
 
   defp broadcast_delivery_status(agent_id) do
-    status = DeliveryStates.get(agent_id)
-    payload = %{"agent_id" => agent_id, "delivery" => status}
-    KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "delivery_status", status || %{})
-    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "delivery_status", payload)
+    case DeliveryStates.get(agent_id) do
+      nil ->
+        # No capability / legacy process means unknown, not healthy 0/0.
+        # The dashboard still receives a deletion event so it cannot retain
+        # a prior generation's watermark after the ledger is disarmed.
+        KaoiroServerWeb.Endpoint.broadcast(
+          "agents:lobby",
+          "delivery_status",
+          %{"agent_id" => agent_id}
+        )
+
+      status ->
+        KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "delivery_status", status)
+
+        KaoiroServerWeb.Endpoint.broadcast(
+          "agents:lobby",
+          "delivery_status",
+          %{"agent_id" => agent_id, "delivery" => status}
+        )
+    end
   end
 
   # `context` is capability-gated rather than presence-gated. In particular,
@@ -1074,6 +1098,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
        do: Map.put(entry, key, value)
 
   defp maybe_put_directory_field(entry, _key, _value), do: entry
+
+  # Unlike the directory's optional display fields, delivery is a structured
+  # status map. Keep `nil` absent (legacy wrapper means unknown), while
+  # preserving the map verbatim for capability-aware clients.
+  defp maybe_put_optional_field(entry, _key, nil), do: entry
+  defp maybe_put_optional_field(entry, key, value), do: Map.put(entry, key, value)
 
   # Persist the agent's latest SDK session_id as a restart-surviving
   # pointer (ADR-0014 F1, issue #49). Only fires once the wrapper has

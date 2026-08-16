@@ -115,7 +115,9 @@ defmodule Mix.Tasks.Kaoiro.Env do
       "#KAOIRO_CLEAR_WATERMARKS_PATH=/var/lib/kaoiro/clear_watermarks.dets",
       "#KAOIRO_SESSION_STARTS_PATH=/var/lib/kaoiro/session_starts.dets",
       "#KAOIRO_INGRESS_ORDER_PATH=/var/lib/kaoiro/ingress_order.dets",
-      "#KAOIRO_TOKEN_DENYLIST_PATH=/var/lib/kaoiro/token_denylist.dets"
+      "#KAOIRO_DELIVERY_STATES_PATH=/var/lib/kaoiro/delivery_states.dets",
+      "#KAOIRO_TOKEN_DENYLIST_PATH=/var/lib/kaoiro/token_denylist.dets",
+      "#KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"
     ]
     |> List.flatten()
     |> Enum.join("\n")

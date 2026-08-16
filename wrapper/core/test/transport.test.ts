@@ -324,6 +324,24 @@ describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
     }));
   });
 
+  it("同じ transitionId でも wrapper process ごとの delivery_generation は異なる", () => {
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      transitionId: "runner-reuses-this",
+    });
+    const first = mock.lastChannelParams as { delivery_generation: string };
+
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      transitionId: "runner-reuses-this",
+    });
+    const second = mock.lastChannelParams as { delivery_generation: string };
+
+    expect(first.delivery_generation).not.toBe("runner-reuses-this");
+    expect(second.delivery_generation).not.toBe("runner-reuses-this");
+    expect(second.delivery_generation).not.toBe(first.delivery_generation);
+  });
+
   it("dispatch-v1 join status と連続 ack push を wire に載せる", async () => {
     const statuses: unknown[] = [];
     const link = new ServerLink("ws://x/wrapper", "a.agent", {

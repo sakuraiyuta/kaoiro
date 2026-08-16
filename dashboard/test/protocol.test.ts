@@ -81,6 +81,16 @@ describe("parseDeliveryStatus (issue #247)", () => {
       }),
     ).toEqual({ momo: { issued_seq: 2, acked_seq: 2 } });
   });
+
+  it("valid agent_id __proto__ を own entry として保持し、prototype を汚染しない", () => {
+    const parsed = parseDeliverySnapshot(JSON.parse(
+      '{"__proto__":{"issued_seq":1,"acked_seq":1}}',
+    ));
+
+    expect(Object.getPrototypeOf(parsed)).toBeNull();
+    expect(Object.hasOwn(parsed, "__proto__")).toBe(true);
+    expect(parsed.__proto__).toEqual({ issued_seq: 1, acked_seq: 1 });
+  });
 });
 
 describe("fetchPersonaManifest", () => {

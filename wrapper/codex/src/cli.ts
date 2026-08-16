@@ -10,7 +10,7 @@
 import { randomUUID } from "node:crypto";
 import {
   HistoryReplayer,
-  DeliveryAcknowledger,
+  DeliveryAcknowledgement,
   IaSidecar,
   InterAgentTool,
   QuestionBroker,
@@ -79,7 +79,10 @@ function printLog(envelope: Envelope): void {
 }
 
 async function main(): Promise<void> {
-  const deliveryAcknowledger = new DeliveryAcknowledger();
+  let link: ServerLink | null = null;
+  const deliveryAcknowledgement = new DeliveryAcknowledgement((deliverySeq) =>
+    link?.acknowledgeInterAgentDelivery(deliverySeq),
+  );
   const { configPath, prompt, resume: resumeSessionId } = parseCliArgs(
     process.argv.slice(2),
   );
@@ -174,7 +177,6 @@ async function main(): Promise<void> {
   }
 
   let host: CodexHost;
-  let link: ServerLink | null = null;
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
   let instructionChain: Promise<void> = Promise.resolve();
@@ -324,9 +326,7 @@ async function main(): Promise<void> {
     onPersonaPrompt: (received) => resolvePersonaPrompt(received),
     onHydration: (verdict) => replayer.onVerdict(verdict),
     onInterAgentDeliveryStatus: (status) => {
-      if (status === null) return;
-      const ack = deliveryAcknowledger.bind(status.acked_seq);
-      if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
+      deliveryAcknowledgement.observe(status);
     },
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
@@ -402,10 +402,7 @@ async function main(): Promise<void> {
           recordInboundIa,
           send: (notice) => link?.send(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
-          acknowledgeDelivery: (inbound) => {
-            const ack = deliveryAcknowledger.complete((inbound as { delivery_seq?: unknown }).delivery_seq);
-            if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
-          },
+          acknowledgeDelivery: deliveryAcknowledgement.acknowledgeEnvelope,
           log: (line) => process.stdout.write(line),
         },
         envelope,
@@ -437,10 +434,7 @@ async function main(): Promise<void> {
     onLog,
     onTask,
     onTurnStart: ({ turnToken }) => {
-      for (const seq of interAgentTurns.deliverySequencesForTurn(turnToken)) {
-        const ack = deliveryAcknowledger.complete(seq);
-        if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
-      }
+      deliveryAcknowledgement.acknowledgeTurnStart(turnToken, interAgentTurns);
     },
     // issue #131: resolve exactly the conversation(s) this turn was tagged
     // with (must-fix 1 — turn-scoped, never a sweep of everything pending;
