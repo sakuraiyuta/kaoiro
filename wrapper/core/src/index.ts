@@ -16,6 +16,7 @@ export type {
   DirectoryEntry,
   DirectoryResult,
   HydrationVerdictMessage,
+  InterAgentDeliveryStatus,
   InterAgentAcceptance,
   PermissionDecisionMessage,
   QuestionResponseMessage,

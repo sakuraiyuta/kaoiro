@@ -291,16 +291,22 @@ describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
       transitionId: "tr-1",
     });
 
-    expect(mock.lastChannelParams).toEqual({
+    expect(mock.lastChannelParams).toEqual(expect.objectContaining({
       persona_id: "ao",
       transition_id: "tr-1",
-    });
+      inter_agent_delivery_ack: "dispatch-v1",
+      delivery_generation: expect.any(String),
+    }));
   });
 
   it("transitionId 未指定なら key ごと省略する", () => {
     new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
 
-    expect(mock.lastChannelParams).toEqual({ persona_id: "ao" });
+    expect(mock.lastChannelParams).toEqual(expect.objectContaining({
+      persona_id: "ao",
+      inter_agent_delivery_ack: "dispatch-v1",
+      delivery_generation: expect.any(String),
+    }));
   });
 
   it("空文字の transitionId も key ごと省略する", () => {
@@ -311,7 +317,31 @@ describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
       transitionId: "",
     });
 
-    expect(mock.lastChannelParams).toEqual({ persona_id: "ao" });
+    expect(mock.lastChannelParams).toEqual(expect.objectContaining({
+      persona_id: "ao",
+      inter_agent_delivery_ack: "dispatch-v1",
+      delivery_generation: expect.any(String),
+    }));
+  });
+
+  it("dispatch-v1 join status と連続 ack push を wire に載せる", async () => {
+    const statuses: unknown[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onInterAgentDeliveryStatus: (status) => statuses.push(status),
+    });
+    mock.joinReceivers.get("ok")?.({
+      delivery: { issued_seq: 4, acked_seq: 2, pending_since: "T" },
+    });
+    expect(statuses).toEqual([{ issued_seq: 4, acked_seq: 2, pending_since: "T" }]);
+
+    link.acknowledgeInterAgentDelivery(3);
+    expect(mock.lastPush).toMatchObject({
+      event: "delivery_ack", payload: { delivery_seq: 3 },
+    });
+    const pending = link.requestInterAgentDeliveryStatus();
+    mock.lastPush?.receivers.get("ok")?.({ delivery: { issued_seq: 4, acked_seq: 3, pending_since: "T" } });
+    await expect(pending).resolves.toEqual({ issued_seq: 4, acked_seq: 3, pending_since: "T" });
   });
 });
 

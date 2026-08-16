@@ -191,6 +191,19 @@ export class InterAgentTurnCoordinator {
     this.#dispatchNext(peer);
   }
 
+  /** The queue has accepted these items, but only the host turn-start boundary
+   * is allowed to confirm their dispatch to the server (#247). */
+  deliverySequencesForTurn(turnToken: string): readonly number[] {
+    const batch = this.#batchByTurnToken.get(turnToken);
+    if (batch === undefined) return [];
+    return batch.items
+      .map((item) => (item.envelope as { delivery_seq?: unknown }).delivery_seq)
+      .filter(
+        (seq): seq is number =>
+          typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0,
+      );
+  }
+
   /** Stops future dispatch after a watchdog fail-stop while retaining the
    * exact SDK-active generation. Its outcome remains unknown until a real
    * ResultMessage/EOF, so resolving it (or a same-CID successor) here would

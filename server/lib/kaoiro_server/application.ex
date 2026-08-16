@@ -42,6 +42,9 @@ defmodule KaoiroServer.Application do
       # Session-transition start records are intentionally independent from
       # visibility: only clear_history adopts one into ClearWatermarks (#109).
       KaoiroServer.SessionStarts,
+      # Recipient-local dispatch-confirmation watermarks (#247).  This is
+      # observational state only: no payloads and no retransmission queue.
+      KaoiroServer.DeliveryStates,
       # Single serialized allocator for the server-side ingress ordering
       # domain (ふじ R5 must-fix, 2026-07-23). The live IA ingress stamp
       # (`WrapperChannel`), the `SessionStarts` transition record and the

@@ -38,6 +38,7 @@
     RunnerSessions,
     SessionResetMode,
     TasklistSnapshot,
+    InterAgentDeliveryStatus,
   } from "./protocol";
 
   let {
@@ -52,6 +53,7 @@
     scrollToEntryKey = null,
     activeTaskCount = 0,
     tasklist = null,
+    deliveryStatus = null,
     onClose,
     onSelectAgent,
     onRename,
@@ -90,6 +92,7 @@
      * conversation-log float, not a child task that may light the portrait
      * ring. An empty list remains state but the float itself stays hidden. */
     tasklist?: TasklistSnapshot | null;
+    deliveryStatus?: InterAgentDeliveryStatus | null;
     onClose: () => void;
     /** Switch the detail view to another agent (clicked peer link in an
      *  inter-agent message bubble). Omitted = peer name renders as static
@@ -2728,6 +2731,20 @@
           <!-- undefined (absent field/caps): 旧 wrapper の rolling upgrade。
                ctx 行そのものを非表示にする — absent を「未対応」扱いにすると
                capability を知らない旧 wrapper で誤誘導になる (M-B) -->
+
+          {#if deliveryStatus}
+            <div class="cc-row" data-testid="inter-agent-delivery-status">
+              <dt>IA 配送</dt>
+              <dd>
+                {deliveryStatus.acked_seq}/{deliveryStatus.issued_seq}
+                {#if deliveryStatus.issued_seq > deliveryStatus.acked_seq}
+                  <span class="cc-pending" title={deliveryStatus.pending_since}>
+                    未 dispatch
+                  </span>
+                {/if}
+              </dd>
+            </div>
+          {/if}
 
           {#each ccRateRows as r (r.key)}
             <div class="cc-row">

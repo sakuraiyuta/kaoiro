@@ -20,6 +20,8 @@ import {
   modelSwitchStateFrom,
   switchErrorFrom,
   parseDirectory,
+  parseDeliverySnapshot,
+  parseDeliveryStatus,
   parseHosts,
   parseSessions,
   parseTasks,
@@ -53,6 +55,33 @@ import {
   userInputDialogAvailability,
 } from "../src/lib/protocol";
 import type { Envelope, SessionCapabilities, TaskTable } from "../src/lib/protocol";
+
+describe("parseDeliveryStatus (issue #247)", () => {
+  it("confirmed watermark と pending gap だけを受理する", () => {
+    expect(
+      parseDeliveryStatus({
+        issued_seq: 4,
+        acked_seq: 3,
+        pending_since: "2026-08-17T00:00:00Z",
+      }),
+    ).toEqual({
+      issued_seq: 4,
+      acked_seq: 3,
+      pending_since: "2026-08-17T00:00:00Z",
+    });
+    expect(parseDeliveryStatus({ issued_seq: 4, acked_seq: 3 })).toBeNull();
+    expect(parseDeliveryStatus({ issued_seq: 3, acked_seq: 4 })).toBeNull();
+  });
+
+  it("snapshot では malformed agent entry だけを落とす", () => {
+    expect(
+      parseDeliverySnapshot({
+        momo: { issued_seq: 2, acked_seq: 2 },
+        malformed: { issued_seq: 1, acked_seq: 0 },
+      }),
+    ).toEqual({ momo: { issued_seq: 2, acked_seq: 2 } });
+  });
+});
 
 describe("fetchPersonaManifest", () => {
   afterEach(() => vi.unstubAllGlobals());

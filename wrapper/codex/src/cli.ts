@@ -10,6 +10,7 @@
 import { randomUUID } from "node:crypto";
 import {
   HistoryReplayer,
+  DeliveryAcknowledger,
   IaSidecar,
   InterAgentTool,
   QuestionBroker,
@@ -78,6 +79,7 @@ function printLog(envelope: Envelope): void {
 }
 
 async function main(): Promise<void> {
+  const deliveryAcknowledger = new DeliveryAcknowledger();
   const { configPath, prompt, resume: resumeSessionId } = parseCliArgs(
     process.argv.slice(2),
   );
@@ -260,6 +262,8 @@ async function main(): Promise<void> {
       Promise.resolve({ kind: "unknown" as const, reason: "not_connected" }),
     requestDirectory: () =>
       link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
+    requestInterAgentDeliveryStatus: () =>
+      link?.requestInterAgentDeliveryStatus() ?? Promise.resolve(null),
     getWhoami: () => host.statusSnapshot(),
   });
   // ADR-0051 D3-2 / D3-5 — same contract as the Claude wrapper, with the
@@ -319,6 +323,11 @@ async function main(): Promise<void> {
       : { token: config.server_token }),
     onPersonaPrompt: (received) => resolvePersonaPrompt(received),
     onHydration: (verdict) => replayer.onVerdict(verdict),
+    onInterAgentDeliveryStatus: (status) => {
+      if (status === null) return;
+      const ack = deliveryAcknowledger.bind(status.acked_seq);
+      if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
+    },
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
     onInstruction: (text, attachmentIds) => {
@@ -393,6 +402,10 @@ async function main(): Promise<void> {
           recordInboundIa,
           send: (notice) => link?.send(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
+          acknowledgeDelivery: (inbound) => {
+            const ack = deliveryAcknowledger.complete((inbound as { delivery_seq?: unknown }).delivery_seq);
+            if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
+          },
           log: (line) => process.stdout.write(line),
         },
         envelope,
@@ -423,6 +436,12 @@ async function main(): Promise<void> {
     onState,
     onLog,
     onTask,
+    onTurnStart: ({ turnToken }) => {
+      for (const seq of interAgentTurns.deliverySequencesForTurn(turnToken)) {
+        const ack = deliveryAcknowledger.complete(seq);
+        if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
+      }
+    },
     // issue #131: resolve exactly the conversation(s) this turn was tagged
     // with (must-fix 1 — turn-scoped, never a sweep of everything pending;
     // extended issue #221 段階3 for a coalesced turn's multiple cids). On

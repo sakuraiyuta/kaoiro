@@ -89,6 +89,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.ClearWatermarks
+  alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
@@ -142,6 +143,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
     "session_reset_started",
     "session_reset_completed",
     "session_reset_failed",
+    # Recipient dispatch watermarks are an operator diagnostic (issue #247).
+    # Keep live updates behind the same role gate as their join-time snapshot.
+    "delivery_status",
     # Live directory refresh after a rename (issue #197 段階3, D16). The
     # join-time push (`handle_info(:after_join, ...)` above) was the only
     # producer of this event before rename existed, so it was never
@@ -253,7 +257,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # policy for the snapshot path specifically).
     tasks = if role in @operator_capable_roles, do: TaskStates.snapshot(), else: %{}
 
-    push(socket, "snapshot", %{"agents" => agents, "tasks" => tasks})
+    deliveries = if role in @operator_capable_roles, do: DeliveryStates.all(), else: %{}
+    push(socket, "snapshot", %{"agents" => agents, "tasks" => tasks, "deliveries" => deliveries})
 
     # Reply-log history, host set, and the identity ledger are operator-only;
     # viewers stay at the grid and never see host info (cwd allow-lists are
@@ -400,7 +405,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
              # runner_sessions et al.
              "session_reset_started",
              "session_reset_completed",
-             "session_reset_failed"
+             "session_reset_failed",
+             "delivery_status"
            ] do
     if socket.assigns[:role] in @operator_capable_roles do
       push(socket, event, payload)
@@ -1192,6 +1198,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # filter from a prior operator).
       ClearWatermarks.delete(agent_id)
       KaoiroServer.SessionStarts.delete(agent_id)
+      KaoiroServer.DeliveryStates.delete(agent_id)
       :ok
     end
   end

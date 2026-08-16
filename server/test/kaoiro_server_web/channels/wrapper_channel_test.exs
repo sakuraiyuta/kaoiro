@@ -1509,6 +1509,45 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert [{^stamp, ^stamped}] = projection[to_id]
     end
 
+    test "dispatch-v1 recipient gets delivery_seq only after route and ack closes the same server ledger" do
+      from_id = "test.delivery-from"
+      to_id = "test.delivery-to"
+      on_exit(fn -> KaoiroServer.DeliveryStates.delete(to_id) end)
+
+      to_socket =
+        join_wrapper(to_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => "process-a"
+        })
+
+      assert_reply push(to_socket, "envelope", envelope(to_id, "idle")), :ok
+      from_socket = seed_known(from_id)
+
+      @endpoint.subscribe("wrapper:" <> to_id)
+      ref = push(from_socket, "envelope", inter_envelope(from_id, to_id))
+      assert_reply ref, :ok
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^to_id,
+        event: "envelope",
+        payload: %{"delivery_seq" => 1}
+      }
+
+      status_ref = push(to_socket, "delivery_status_request", %{})
+
+      assert_reply status_ref, :ok, %{
+        "delivery" => %{issued_seq: 1, acked_seq: 0, pending_since: pending}
+      }
+
+      assert is_binary(pending)
+
+      ack_ref = push(to_socket, "delivery_ack", %{"delivery_seq" => 1})
+
+      assert_reply ack_ref, :ok, %{
+        "delivery" => %{issued_seq: 1, acked_seq: 1, pending_since: nil}
+      }
+    end
+
     test "自己ルーティングは :self_routing で拒否する" do
       from_id = "test.iam-self"
       from_socket = seed_known(from_id)

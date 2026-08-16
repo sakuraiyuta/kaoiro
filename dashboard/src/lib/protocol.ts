@@ -1509,6 +1509,13 @@ export interface DirectoryEntry {
   last_seen: number | null;
 }
 
+/** Server-owned recipient-local dispatch watermark (issue #247). */
+export interface InterAgentDeliveryStatus {
+  issued_seq: number;
+  acked_seq: number;
+  pending_since?: string;
+}
+
 /** A resume candidate under a cwd (ADR-0014 F2; minimal metadata, T2). */
 export interface RunnerSession {
   session_id: string;
@@ -1548,6 +1555,8 @@ export interface KaoiroHandlers {
    *  so this is a no-op there. Absent when the caller does not track
    *  tasks. */
   onTaskSnapshot?: (tasks: TaskTable) => void;
+  onDeliverySnapshot?: (deliveries: Record<string, InterAgentDeliveryStatus>) => void;
+  onDeliveryStatus?: (agentId: string, status: InterAgentDeliveryStatus | null) => void;
   /** Single-agent update (any envelope type; caller routes by type). */
   onEnvelope: (envelope: Envelope) => void;
   /** Reply-log history per agent (operator-only, ADR-0012); pushed once
@@ -2013,6 +2022,34 @@ export function parseDirectory(
         last_seen: typeof e.last_seen === "number" ? e.last_seen : null,
       };
     }
+  }
+  return entries;
+}
+
+export function parseDeliveryStatus(value: unknown): InterAgentDeliveryStatus | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const issued = raw.issued_seq;
+  const acked = raw.acked_seq;
+  if (
+    typeof issued !== "number" || !Number.isSafeInteger(issued) || issued < 0 ||
+    typeof acked !== "number" || !Number.isSafeInteger(acked) || acked < 0 || acked > issued ||
+    (raw.pending_since !== undefined && typeof raw.pending_since !== "string") ||
+    (issued > acked && typeof raw.pending_since !== "string")
+  ) return null;
+  return {
+    issued_seq: issued,
+    acked_seq: acked,
+    ...(typeof raw.pending_since === "string" ? { pending_since: raw.pending_since } : {}),
+  };
+}
+
+export function parseDeliverySnapshot(value: unknown): Record<string, InterAgentDeliveryStatus> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const entries: Record<string, InterAgentDeliveryStatus> = {};
+  for (const [agentId, candidate] of Object.entries(value)) {
+    const status = parseDeliveryStatus(candidate);
+    if (status !== null) entries[agentId] = status;
   }
   return entries;
 }
@@ -2953,7 +2990,7 @@ export function connectKaoiro(
   }
 
   function setupChannelHandlers(c: Channel): void {
-    c.on("snapshot", (payload: { agents?: unknown; tasks?: unknown }) => {
+    c.on("snapshot", (payload: { agents?: unknown; tasks?: unknown; deliveries?: unknown }) => {
     const agents: Record<string, Envelope> = {};
     for (const value of Object.values(payload.agents ?? {})) {
       if (isEnvelope(value)) agents[value.agent_id] = value;
@@ -2962,6 +2999,13 @@ export function connectKaoiro(
     // ADR-0048 F3 (issue #180): "tasks" rides this same join-time push,
     // keyed by task_id (matches the server's flat TaskStates table).
     handlers.onTaskSnapshot?.(parseTasks(payload.tasks));
+    handlers.onDeliverySnapshot?.(parseDeliverySnapshot(payload.deliveries));
+  });
+  c.on("delivery_status", (payload: unknown) => {
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;
+    const raw = payload as Record<string, unknown>;
+    if (typeof raw.agent_id !== "string") return;
+    handlers.onDeliveryStatus?.(raw.agent_id, parseDeliveryStatus(raw.delivery));
   });
   c.on("envelope", (payload: unknown) => {
     if (!isEnvelope(payload)) return;

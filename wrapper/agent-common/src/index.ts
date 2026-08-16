@@ -7,6 +7,7 @@ export { askUserQuestionDescriptor } from "./ask_user_question.js";
 export type { EngineAdapter } from "./engine.js";
 export { mergePendingDisplayNameSync } from "./engine.js";
 export { HistoryReplayer } from "./history_replay.js";
+export { DeliveryAcknowledger } from "./delivery_ack.js";
 export type {
   HistoryReplayerOptions,
   HydrationVerdict,
@@ -39,6 +40,7 @@ export type {
   InboundReplyMode,
   InterAgentErrorClassifyInput,
   InterAgentToolOptions,
+  InterAgentDeliverySnapshot,
   WhoamiSnapshot,
 } from "./inter_agent.js";
 export { MAX_LOG_BYTES, clipText, logEntryToPayload } from "./logpayload.js";

@@ -19,6 +19,32 @@ related: [protocol, subagent-tasks, plugin-model, threat-model]
 [protocol](protocol.md) の予約追補(同一 `version`)として envelope
 `type: "inter_agent_message"` を新設する([ADR-0010](../adr/0010-protocol-precisification.md))。
 
+## Dispatch-confirmation ledger (issue #247)
+
+`ingress_stamp` は server acceptance であって、受信 wrapper が SDK turn として
+読んだ確認ではない。recipient ごとの `inter_agent_delivery = {issued_seq,
+acked_seq, pending_since?}` は後段の **dispatch confirmation** を観測するだけの
+ledger であり、payload 保存・再送保証・配送保証はしない。
+
+- `inter_agent_delivery_ack: "dispatch-v1"` capability を join した wrapper
+  宛の live/synthetic message には、server が outer envelope に recipient-local
+  正整数 `delivery_seq` を付けて `issued_seq` を進める。
+- wrapper は queue 追加や `receiveInbound` 到達では ack しない。inject は実 SDK
+  turn start、consumed/terminal/stale の意図的 non-injection は分類完了で、連続
+  prefix を `delivery_ack {delivery_seq}` として確認する。従ってその間の停滞は
+  `issued_seq > acked_seq` として残る。`pending_since` は最初の乖離時刻である。
+- `whoami`、`list_agents` entry、operator dashboard の `snapshot.deliveries` と
+  `delivery_status` は同じ server ledger を読む。field absent は **unknown**
+  （legacy/disarmed）であり、zero ではない。
+
+`transition_id` は session transition 相関用であり、runner crash relaunch が同値を
+再利用し得るので process identity に使えない。ack-capable `ServerLink` は process
+ごとの random `delivery_generation` を join する。同 generation の websocket
+reconnect は gap を保持する。異 generation（reset/crash/explicit restart）は旧
+process の memory を失った境界なので server が `acked_seq := issued_seq` として
+旧 gap を atomically abandon する。sequence は単調に続くが、新 process への再送は
+しない。
+
 ## Definition
 
 ### 全体像

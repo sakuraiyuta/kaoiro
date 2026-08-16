@@ -32,6 +32,7 @@ import {
 } from "./inter_agent_turn_coordinator.js";
 import {
   HistoryReplayer,
+  DeliveryAcknowledger,
   IaSidecar,
   InterAgentTool,
   classifyInterAgentError,
@@ -120,6 +121,7 @@ function printLog(envelope: Envelope): void {
 }
 
 async function main(): Promise<void> {
+  const deliveryAcknowledger = new DeliveryAcknowledger();
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseCliArgs(process.argv.slice(2));
   const config = loadConfig(configPath);
@@ -473,6 +475,8 @@ async function main(): Promise<void> {
     // session has not opened yet either.
     requestDirectory: () =>
       link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
+    requestInterAgentDeliveryStatus: () =>
+      link?.requestInterAgentDeliveryStatus() ?? Promise.resolve(null),
     getWhoami: () => host.statusSnapshot(),
   });
   // ADR-0051 D3-2 / D3-5: the host-local record of this agent's
@@ -539,6 +543,11 @@ async function main(): Promise<void> {
       : { token: config.server_token }),
     onPersonaPrompt: (received) => resolvePersonaPrompt(received),
     onHydration: (verdict) => replayer.onVerdict(verdict),
+    onInterAgentDeliveryStatus: (status) => {
+      if (status === null) return;
+      const ack = deliveryAcknowledger.bind(status.acked_seq);
+      if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
+    },
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
     // #258: acceptance of request_session_reset only means the server took
@@ -711,6 +720,10 @@ async function main(): Promise<void> {
           recordInboundIa,
           send: (notice) => link?.send(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
+          acknowledgeDelivery: (inbound) => {
+            const ack = deliveryAcknowledger.complete((inbound as { delivery_seq?: unknown }).delivery_seq);
+            if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
+          },
           log: (line) => process.stdout.write(line),
         },
         envelope,
@@ -757,6 +770,10 @@ async function main(): Promise<void> {
     // other, so it queues on the one chain instead of racing it.
     enqueueInjection: enqueueInstruction,
     onTurnStart: ({ turnToken }) => {
+      for (const seq of interAgentTurns.deliverySequencesForTurn(turnToken)) {
+        const ack = deliveryAcknowledger.complete(seq);
+        if (ack !== null) link?.acknowledgeInterAgentDelivery(ack);
+      }
       // Dispatch may have happened long before this point; only this host
       // input-yield boundary is an actual SDK turn start (issue #248).
       turnWatchdog.start(turnToken);

@@ -193,6 +193,9 @@ export interface CodexHostOptions {
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
   }) => void;
+  /** The exact boundary at which an already-queued input begins an SDK turn.
+   * Queue insertion intentionally does not count as dispatch (#247). */
+  onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
   /** Server-composed personality + common footer (ADR-0029 F5), injected as
    *  a developer-role message via config.developer_instructions (ADR-0032
    *  F3, verified 2026-07-10). */
@@ -991,6 +994,10 @@ export class CodexHost implements EngineAdapter {
               attempted.effortReset,
             ),
           );
+    // Creating/resuming the SDK thread is the last synchronous boundary
+    // before `runStreamed()` hands the input to Codex. Confirm #247 delivery
+    // here, never when its coordinator merely accepted the queue item.
+    this.#options.onTurnStart?.({ turnToken, conversationIds });
     this.#abort = new AbortController();
     let finalText: string | null = null;
     // A stream-level `error` is evidence, not a terminal boundary. Some SDK

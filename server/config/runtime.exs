@@ -180,6 +180,14 @@ if path = System.get_env("KAOIRO_SESSION_STARTS_PATH") do
   config :kaoiro_server, :session_starts_path, path
 end
 
+# #247's ledger contains only recipient-local dispatch watermarks (no
+# messages), but it must survive a server restart or a real pending gap would
+# be silently forgotten. Point production at the same persistent volume as
+# the other DETS ledgers; unset keeps the module's local-development default.
+if path = System.get_env("KAOIRO_DELIVERY_STATES_PATH") do
+  config :kaoiro_server, :delivery_states_path, path
+end
+
 # DETS file for the restart-surviving user identity ledger (issue #197,
 # ADR-0050 D1). Same rationale as the agent identity ledger above: unset
 # falls back to a tmp path (KaoiroServer.Users) that survives a process
