@@ -96,10 +96,39 @@ node_bin="${KAOIRO_NODE:-node}"
 command -v "$node_bin" >/dev/null 2>&1 ||
   die_config "node not found: $node_bin (set KAOIRO_NODE in $env_file)"
 
+# Verify, never build (issue #229). Making the service definition build would
+# tie crash restart and boot to a compiler, node_modules and pnpm all
+# succeeding, keep the host down for the whole build, and leave a partial
+# `dist` behind on failure. So this checks that the artifacts a start needs
+# are all present, and says which one is not.
+#
+# The set matters, not just cli.js. The runner resolves each wrapper package
+# from disk at spawn time — the codex one lazily, on the first codex spawn —
+# so a tree with a runner build and a missing wrapper build starts happily
+# and fails much later, on an agent launch. Checking the whole set at start
+# turns that into a service that refuses to come up.
+#
+# `-f` follows symlinks by design: pnpm links node_modules/@kaoiro/<pkg>
+# into .pnpm/ in a deployed release, and into the workspace in a repo-direct
+# checkout (measured on both, 2026-08-16).
+#
+# VERSION is deliberately NOT checked here. A release's completeness is
+# verified by kaoiro-runner-install.sh before the tree is ever renamed into
+# releases/, which is where a truncated extraction is still fixable; and a
+# repo-direct checkout has no VERSION at all, since only
+# scripts/build-runner-tarball.sh writes one. `dist/build-info.json` — which
+# IS checked — is the identity both profiles carry (ADR-0053).
+#
 # <install>/runner/deploy/<this script> -> <install>/runner/dist/cli.js
 entry="$deploy_dir/../dist/cli.js"
-[ -f "$entry" ] ||
-  die_config "runner not built: $entry (run 'pnpm -C runner build')"
+for artifact in \
+  "$entry" \
+  "$deploy_dir/../dist/build-info.json" \
+  "$deploy_dir/../node_modules/@kaoiro/claude-code/dist/cli.js" \
+  "$deploy_dir/../node_modules/@kaoiro/codex/dist/cli.js"; do
+  [ -f "$artifact" ] ||
+    die_config "incomplete install: $artifact is missing (repo checkout: run 'pnpm -C wrapper build && pnpm -C runner build'; release: reinstall it)"
+done
 
 # Single-binary migration (issue #70): replace the line below with
 #   exec "$deploy_dir/../bin/kaoiro-runner" "$config"

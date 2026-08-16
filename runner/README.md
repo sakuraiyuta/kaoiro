@@ -6,8 +6,8 @@
 
 ## 現状
 
-- runner config(JSON)を読み、サーバへ接続して**ホスト登録(register)**と
-  **生存通知(heartbeat)**を行う(4-4a)。config はホットリロードに対応
+- runner config(JSON)を読み、サーバへ接続して**ホスト登録**(register)と
+  **生存通知**(heartbeat)を行う(4-4a)。config はホットリロードに対応
   (`config-watcher.ts`)。
 - operator 指示で wrapper を **spawn / stop / restart** する監督ループ(4-4b)、
   当該 cwd 配下の **session 列挙 + resume**(4-5、T3 実在検証 + F4 ローカルロック)、
@@ -102,6 +102,10 @@ Codex を選んだ場合はその auth mode / トークン / node の絶対パ�
 | [`deploy/kaoiro-runner.service`](deploy/kaoiro-runner.service) | systemd **user** unit(Linux) |
 | [`deploy/com.kaoiro.runner.plist`](deploy/com.kaoiro.runner.plist) | launchd **LaunchAgent**(macOS) |
 | [`deploy/runner.env.example`](deploy/runner.env.example) | `KAOIRO_RUNNER_TOKEN` 等を置く env ファイルの雛形 |
+| [`deploy/kaoiro-runner-install.sh`](deploy/kaoiro-runner-install.sh) | tarball を `releases/<rev>/` へ install する(稼働中の release には触れない) |
+| [`deploy/kaoiro-runner-switch.sh`](deploy/kaoiro-runner-switch.sh) | `current` を atomic に切り替える / `--rollback` |
+| [`deploy/kaoiro-runner-update.sh`](deploy/kaoiro-runner-update.sh) | build → install → 停止 → 切替 → 起動 → 確認 → prune を一括で行う。`--detach` で自滅を避ける |
+| [`deploy/kaoiro-runner-common.sh`](deploy/kaoiro-runner-common.sh) | 上記 3 本が source する共通処理(install root 解決・lock・symlink swap) |
 
 **user サービスとして動かす**(root の system service にはしない)。runner は
 ホストユーザの `~/.claude` / `~/.codex` の認証情報を読み、そのユーザのリポジトリ
@@ -142,7 +146,32 @@ chmod 600 "$conf/runner.env"
 `KAOIRO_RUNNER_SERVER_URL` を書いて上書きできる(env が優先 — 冒頭の説明を
 参照。issue #140)。
 
+### 設置形態(issue #229、[ADR-0018](../docs/adr/0018-runner-distribution.md))
+
+**source origin(どこから持ってくるか)と activation layout(どう置いて
+起動するか)は別の軸である**。後者は release profile なら 1 通りしかなく、
+`@@DEPLOY_DIR@@` に何を入れるかで決まる。
+
+| 形態 | `@@DEPLOY_DIR@@` | 用途 |
+|---|---|---|
+| **checkout 直挿し** | `<repo>/runner/deploy` | 開発時の手起動のみ。checkout がそのまま live path |
+| **local-build release** | `<install-root>/current/deploy` | **本番**。repo で tarball を作り、release として install する |
+| **Gitea release** | `<install-root>/current/deploy` | **本番**。配布 tarball を release として install する |
+
+**本番ホストは release profile にする**。checkout を直挿ししたまま常駐させると、
+更新のたびに稼働中の `dist` を上書きすることになり、runner が新旧の混ざった
+wrapper を掴みうる(runner は wrapper を spawn するたびに on-disk の
+artifact を解決し、codex は初回 spawn まで lazy に解決する)。release
+profile では build も展開も `releases/<rev>/` の中で完結し、稼働中の
+release には一切触れない。
+
+移行手順・更新手順・rollback は
+[docs/specs/deployment.md](../docs/specs/deployment.md) の 4.6 が正本。
+
 ### Linux(systemd user unit)
+
+以下は checkout 直挿し(開発)の設置例。release profile では
+`$PWD/runner/deploy` を `<install-root>/current/deploy` に読み替える。
 
 ```sh
 sed "s|@@DEPLOY_DIR@@|$PWD/runner/deploy|" \
@@ -189,8 +218,12 @@ launchctl bootstrap gui/"$(id -u)" \
 - SIGTERM で runner は配下の wrapper を停止してから **exit 0** で終わる。
   systemd は `Restart=on-failure`、launchd は `KeepAlive.SuccessfulExit=false`
   なので、正常停止は再起動されない
-- 起動シムは設定不備(config が無い / node が見つからない / dist 未ビルド)で
-  **exit 78**(`EX_CONFIG`)を返す。systemd は `RestartPreventExitStatus=78` で
+- 起動シムは設定不備(config が無い / node が見つからない / 必須 artifact が
+  欠けている)で **exit 78**(`EX_CONFIG`)を返す。artifact 検査の対象は
+  `dist/cli.js` / `dist/build-info.json` / wrapper 2 種の `dist/cli.js` で、
+  **シムは build しない**(issue #229)。wrapper の dist だけが欠けた木は、
+  runner 単体としては起動できてしまい、最初の agent spawn まで壊れているこ
+  とが分からない — その手遅れを起動時の失敗に変えるための検査である。systemd は `RestartPreventExitStatus=78` で
   再起動せず failed のまま止まる — 原因は `systemctl --user status` に出る。
   launchd に同等の設定はないため `ThrottleInterval=30` で間隔を空けるだけで、
   原因はログファイルを見る

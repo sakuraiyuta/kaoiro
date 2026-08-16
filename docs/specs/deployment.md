@@ -285,10 +285,17 @@ refresh(最長 12h)で反映。**operator→viewer の「降格」は稼働中 s
 ./scripts/build-runner-tarball.sh --target linux-x64
 ./scripts/build-runner-tarball.sh --target darwin-arm64
 
-# 各エージェントホストへ転送・展開
-tar xzf kaoiro-runner-<rev>-linux-x64.tar.gz
-cd kaoiro-runner-<rev>-linux-x64
+# 各エージェントホストへ転送し、release として install する
+# (展開先は <install-root>/releases/<rev>/、ADR-0018 2026-08-16 改訂)
+./kaoiro-runner-install.sh kaoiro-runner-<rev>-linux-x64.tar.gz
+./kaoiro-runner-switch.sh <rev>
 ```
+
+install / switch スクリプトは配布物の `deploy/` に入っている。初回だけは
+アーカイブを一度展開してそこから実行する(`tar xzf ... && cd ... &&
+./deploy/kaoiro-runner-install.sh ../<archive>`)。以後は
+`<install-root>/current/deploy/` のものを使う。レイアウト・更新・rollback は
+4.6 が正本。
 
 ### `runner.config.json` の実例(`wss://` 必須)
 
@@ -318,6 +325,8 @@ nginx 越しの prod 配備では `server_url` は必ず `wss://` にする(1.4 
 systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
 `runner/deploy/` に同梱。設置手順・終了コード・トラブルシュートは
 [runner/README.md](../../runner/README.md)の「常駐化」節を参照。
+release profile では `@@DEPLOY_DIR@@` に `<install-root>/current/deploy` を
+入れる — unit が symlink 越しに起動することが、切替を切替たらしめている。
 **runner の再起動(サービス再起動含む)は配下の wrapper を
 全停止させる**(SIGTERM 時の `supervisor.stopAll()`)— 稼働中エージェントがいる状態での
 `systemctl --user restart` / `launchctl kickstart -k` は、対象ホストの
@@ -342,14 +351,19 @@ systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
 
 | 限界 | 内容 | 解消する issue |
 |---|---|---|
-| **in-place build** | 稼働中の checkout の `dist` を直接上書きする。runner は wrapper を spawn するたびに on-disk の `dist` を解決する(`runner/src/spawn.ts` の `resolveWrapperLaunch()`)ため、build 中に spawn が起きると新旧の混ざった artifact を掴む。「停止中に build する」と手順で定めても、**順序を一度誤れば再発する** | #229 |
+| **in-place build**(checkout 直挿しのホストのみ) | 稼働中の checkout の `dist` を直接上書きする。runner は wrapper を spawn するたびに on-disk の `dist` を解決する(`runner/src/spawn.ts` の `resolveWrapperLaunch()`)ため、build 中に spawn が起きると新旧の混ざった artifact を掴む。「停止中に build する」と手順で定めても、**順序を一度誤れば再発する** | #229(実装済み。**ホストを release profile へ移行するまで残る** — 4.6) |
 | **自動 rollback が無い** | 失敗時の復旧はすべて手作業(4.4) | #230 |
 
 **artifact provenance が無い(旧 #228)は解消済み**— build identity
 ([ADR-0053](../adr/0053-build-identity.md))の導入により、full SHA を
 返す health endpoint と runner の register 情報で確認できる(4.5)。
 
-残り 2 つすべてが解消された時点で、本節は自動化手順の記述へ置換する。
+**in-place build は release profile では解消済み**([ADR-0018](../adr/0018-runner-distribution.md)
+2026-08-16 改訂)。release は `releases/<revision>/` へ展開され、live path は
+`current` symlink 1 本になるため、**build も展開も稼働中の runner に触れない**。
+ただしこれは**ホストごとの設置形態の問題**であり、コードがマージされただけでは
+解消しない — repo checkout を直接 `ExecStart` に指しているホストは、4.6 の移行を
+済ませるまで上記の限界を抱えたままである。
 
 ### 4.2 事前条件
 
@@ -378,10 +392,15 @@ systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
 **server image の build は server の停止時間に含めない**。旧 container が
 旧 image ID を保持したまま稼働を続けられるためである。
 
-**一方、runner の in-place build は runner を停止した後にしか行えない。**
-4.1 の in-place build 制約により、稼働中にビルドすると新旧の混ざった
-artifact を掴む。したがって **#229 までは、runner の build 時間はそのまま
-runner の停止時間である**。outage を見積もるときはこれを含めること。
+**runner の build 時間が停止時間になるかは、ホストの設置形態で決まる。**
+
+- **release profile**(4.6 移行済み): build も展開も `releases/<revision>/`
+  の中だけで完結するため、**停止時間は `current` の切替と再起動だけ**。
+  build 時間は outage に入らない。手順は 4.6 の更新コマンドが一括で行う
+- **checkout 直挿し**(未移行): 4.1 の in-place build 制約により、
+  稼働中にビルドすると新旧の混ざった artifact を掴む。したがって
+  **runner の build 時間はそのまま runner の停止時間である**。outage を
+  見積もるときはこれを含めること。以下の (3) / (4) はこの形態の手順
 
 特に **runner の build 成功を server の切替より前に確定させる** — 逆順に
 すると、build 失敗時に「新 server × 旧 runner」という互換の保証が
@@ -409,6 +428,10 @@ flowchart TD
   I -->|揃わない| R6[修復して 4.5 再実行<br/>または post-start rollback<br/>4.4 の 5]
   I -->|揃う| Z[完了]
 ```
+
+**上図の C / D(runner 停止 → build)は checkout 直挿しホストの順序である。**
+release profile のホストでは build が B と並行して行え、runner の停止は
+`current` の切替の直前だけになる(4.6)。
 
 **backup は server を停止してから取る**。稼働中に named volume を tar すると、
 複数の DETS ファイル間で状態が混ざりうる(2026-08-12 の反映ではこの誤りが
@@ -487,6 +510,11 @@ ssh <server-host> 'cd <repo-path> && git fetch origin \
 `up -d` はまだ実行しない。
 
 **(3) runner を停止**
+
+> **release profile のホストでは (3) と (4) を手で行わない。** 代わりに
+> 4.6 の `kaoiro-runner-update.sh` を 1 回実行する — build・展開・停止・
+> 切替・起動・確認までを、稼働中の release に触れない順序で行う。停止する
+> のは切替の直前だけになる。以下は checkout 直挿しのホスト向け。
 
 ```sh
 systemctl --user stop kaoiro-runner
@@ -900,7 +928,7 @@ server が restart loop せずリクエストを処理できるか、runner が�
 | server の build_dirty が意図通り | `curl <server-url>/api/health` の `build_dirty`(target SHA での clean build なら `false`) |
 | server の OCI label が target SHA と一致 | `docker inspect kaoiro-server:latest --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'` |
 | runner の build_revision が target SHA と一致 | dashboard の host 一覧(LaunchDialog)、または runner 起動ログの `rev=<full SHA>` 行 |
-| runner --version が target SHA を返す | `<install-root>/dist/cli.js --version`(または tarball 配布の launch shim `kaoiro-runner-launch.sh --version` 経由 — config 未設置でも動く) |
+| runner --version が target SHA を返す | release profile: `<install-root>/current/deploy/kaoiro-runner-launch.sh --version`(unit が起動に使うのと同じ path を通るため、`current` の切替漏れもここに出る)。checkout 直挿し: `<repo-path>/runner/dist/cli.js --version`。いずれも config 未設置でも動く |
 
 **mtime は依然として成功根拠にならない。**`dist` ディレクトリの mtime は
 ファイルの追加・削除が無ければ更新されない。2026-08-12 の反映では、実際には
@@ -915,6 +943,224 @@ attestation の導入は本 issue のスコープ外。SHA の不一致自体は
 reject する条件にしない(ADR-0053)— docs-only commit / backport /
 rolling window のいずれでも正当に食い違いうるため、あくまで**この runbook
 の成功判定**としての一致確認である。
+
+### 4.6 release profile への移行と、以後の更新(issue #229)
+
+[ADR-0018](../adr/0018-runner-distribution.md)(2026-08-16 改訂)の
+immutable release + atomic switch。**4.1 の in-place build 制約を解消するのは
+コードのマージではなく、ホストごとのこの移行である。**
+
+#### レイアウト
+
+```text
+<install-root>/
+  releases/<revision>[-dirty]/   # tarball の展開先。以後不変
+  current  -> releases/<revision>   # unit の ExecStart はここを通る
+  previous -> releases/<revision>   # rollback 先
+```
+
+`<install-root>` の既定は Linux `${XDG_DATA_HOME:-~/.local/share}/kaoiro`、
+macOS `~/Library/Application Support/kaoiro`。`KAOIRO_RUNNER_INSTALL_DIR`
+または各スクリプトの `--install-dir` で上書きできる。
+
+**ディスクを見積もること**。展開後の release は **1 本あたり約 1.2 GB**
+(2026-08-16、linux-x64 を実測)。engine CLI の実体が約 920 MB を占める。
+既定の保持世代数は 3(`--keep`)なので、定常状態で 3〜4 GB を使う。
+
+`.lock.*`(排他 lock)と `.staging.*`(展開・build の作業領域)も
+install root 直下に作られる。SIGKILL などで EXIT trap に到達しなかった run
+の staging は、**次の run が lock を取った直後に GC する**ため放置しても
+積み上がらない。GC の対象は `.staging.*` だけで、lock は巻き込まない。
+
+#### activation の契約(何が `current` になれるか)
+
+| 対象 | 契約 |
+|---|---|
+| `current` になれる id | **clean な 40 桁 hex のみ**。`-dirty` / `unknown` は `--allow-dirty` を明示した dev ホストに限る |
+| clean release の再 install | **置き換え不可**(content-addressed なので再 install は no-op)。フラグも用意していない |
+| dirty / unknown の再 install | 既定で拒否。`--allow-dirty` で置換可。`current` / `previous` が指す間は不可 |
+| rollback | gate なし。`previous` は一度 activate 済みのため |
+
+**本番更新の前に `git status --porcelain` が空であることを確認する。**
+dirty な tree から build すると id が `-dirty` になり、更新は
+**runner を停止する前に**拒否される([ADR-0018](../adr/0018-runner-distribution.md)
+の release identity の契約)。`--allow-dirty` は開発ホスト向けであり、
+本番で使うと `current` が「中身の決まらない名前」になる。
+
+#### 4.6.1 checkout 直挿しからの移行(オペレータ作業、ホストごとに 1 回)
+
+**稼働中の runner に触れるのは (6) だけである**。エージェントが切断されるのも
+(6) の再起動のときだけ(2 節「常駐化」の注意がそのまま当てはまる)。
+
+```sh
+# 1. 現在の稼働状態を記録する。移行後に比較する基準になる
+systemctl --user show -p ExecStart --value kaoiro-runner
+<repo-path>/runner/dist/cli.js --version
+
+# 2. repo から tarball を作る。runner は稼働したまま
+cd <repo-path>
+git status --porcelain   # 空であること (dirty だと id に -dirty が付く)
+./scripts/build-runner-tarball.sh --target linux-x64
+
+# 3. release として install する。稼働中の dist には触れない
+./runner/deploy/kaoiro-runner-install.sh \
+  dist-tarball/kaoiro-runner-<rev>-linux-x64.tar.gz
+
+# 4. current を作る。unit はまだ旧 path を指しているので無影響
+./runner/deploy/kaoiro-runner-switch.sh <rev>
+
+# 5. unit の ExecStart を current 経由へ張り替える
+install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
+sed "s|@@DEPLOY_DIR@@|$install_root/current/deploy|" \
+  runner/deploy/kaoiro-runner.service \
+  > ~/.config/systemd/user/kaoiro-runner.service
+systemctl --user daemon-reload
+
+# 6. ここで初めて停止が起きる。配下のエージェントは全て切断される
+systemctl --user restart kaoiro-runner
+
+# 7. 確認する
+systemctl --user status kaoiro-runner
+"$install_root/current/deploy/kaoiro-runner-launch.sh" --version
+```
+
+(7) の `--version` が (1) で記録した値と一致し、`status` が `active
+(running)` であること。3 節の疎通確認も再実行する。
+
+**移行後、repo の `dist` はもう live path ではない**。repo は build 元に
+なる。`pnpm -C runner build` を打っても稼働中の runner は影響を受けない。
+
+#### 4.6.2 以後の更新
+
+repo を target SHA へ進めてから、**1 コマンド**で行う。
+
+```sh
+install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
+git -C <repo-path> fetch origin
+git -C <repo-path> merge --ff-only <target-sha>
+git -C <repo-path> status --porcelain   # 空であること
+
+"$install_root/current/deploy/kaoiro-runner-update.sh" \
+  --from-repo <repo-path> --detach
+```
+
+順に build → install → 停止 → 切替 → 起動 → identity 照合 → prune を行う。
+**停止するのは切替の直前だけ**で、build と展開は稼働中の release に触れない。
+build か展開に失敗した場合は**停止に到達せず**、旧 runner がそのまま動き続ける。
+
+`--detach` は、この更新を `systemd-run --user --no-block` の transient
+**service** unit へ queue する。**runner 配下のエージェントから実行するとき
+は必ず付けること** — 付けないと、停止した瞬間に実行者自身が消えて後続が
+走らない。
+
+**効いているのは cgroup であって process group ではない。**
+`systemd.kill(5)` の既定は `KillMode=control-group` で、unit の停止時に
+その cgroup の全プロセスを殺す。逃れられるのは transient service unit が
+**service manager を親とする独立した cgroup** になるためで、`--scope` を
+付けるとこの性質が失われる(caller の実行環境を継承し、同期実行になる)。
+
+**`--detach` は成功を報告しない。**`--no-block` は start request が
+「only verified and enqueued」された時点で返る(`systemd-run(1)`)ため、
+このコマンドが返った時点で更新は**開始すらしていない**。出力は enqueue した
+unit 名と確認コマンドだけで、終了ステータスは結果について何も語らない。
+**最終確認はオペレータが行う**。
+
+```sh
+journalctl --user -u kaoiro-runner-update.service -f
+systemctl --user status kaoiro-runner-update.service
+"$install_root/current/deploy/kaoiro-runner-launch.sh" --version
+```
+
+主なオプション:
+
+| オプション | 既定 | 意味 |
+|---|---|---|
+| `--from-repo <path>` | — | repo から tarball を作って install する |
+| `--tarball <path>` | — | 既にある tarball を install する(配布ホスト向け) |
+| `--service <name>` | `kaoiro-runner` | 対象の systemd user unit |
+| `--keep <n>` | `3` | 保持世代数。`current` / `previous` は対象外 |
+| `--install-dir <dir>` | 上記の既定 | install root |
+| `--allow-dirty` | — | `-dirty` / `unknown` の activation を許す。**開発ホスト専用** |
+
+`current` / `previous` が指す release は `--keep` に関わらず削除しない。
+runner は codex wrapper を**初回 codex spawn まで解決しない**ため、稼働中の
+release は起動後もずっと読まれ続ける — 消すと、まだ起きていない spawn が壊れる。
+
+#### 4.6.3 rollback
+
+切替後に問題が出た場合、直前の release へ戻す。
+
+```sh
+install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
+systemctl --user stop kaoiro-runner
+"$install_root/previous/deploy/kaoiro-runner-switch.sh" --rollback
+systemctl --user start kaoiro-runner
+```
+
+**スクリプトは `previous` 側から実行する。**`current` 側の release が壊れて
+いるからこそ戻すのであり、その中のスクリプトが動く保証はない。
+
+更新中に切替そのものが失敗した場合、`kaoiro-runner-update.sh` は
+`current` を動かさないまま service を起動し直して非ゼロで終了する。この場合
+rollback は不要 — 既に旧 release で動いている。
+
+#### 4.6.4 テストが担保しないこと(実機で 1 回確認する)
+
+決定論的なテストが pin しているのは、更新スクリプトが `systemd-run` へ渡す
+引数(`--user` / `--no-block` / 専用 unit 名 / **`--scope` を付けない** /
+`PartOf` を付けない / updater を絶対パスで渡す)と、worker 側の順序
+(stop → 切替 → start、および停止前に決着できる拒否は停止前に行う)である。
+
+**pin していないのは「`systemd-run --user --no-block` が実際に caller と
+別の cgroup で unit を起こす」という systemd 側の挙動である。**これをテスト
+で確かめるにはホストの user systemd インスタンスを共有する必要があり、
+そこには稼働中の runner がいる。したがって**実機で 1 回、オペレータが確認
+する** — ただし**本番の runner は使わない**。使い捨ての probe unit で足りる。
+
+```sh
+# 1. caller unit を作り、その中から updater と同じ形で worker を queue する
+rm -f "$HOME/kaoiro-selftest.sentinel"
+systemd-run --user --unit=kaoiro-selftest-caller \
+  --description='kaoiro #229 self-stop probe (caller)' \
+  /bin/sh -c 'systemd-run --user --no-block \
+      --unit=kaoiro-selftest-worker \
+      -- /bin/sh -c "sleep 20; date > $HOME/kaoiro-selftest.sentinel"; \
+    sleep 300'
+
+# 2. 2 つの unit の cgroup が別であることを確認する (ここが本題)
+systemctl --user show -p ControlGroup --value kaoiro-selftest-caller.service
+systemctl --user show -p ControlGroup --value kaoiro-selftest-worker.service
+# → 異なる値であること。同一なら caller の停止で worker も死ぬ
+
+# 3. caller を停止する (KillMode=control-group が caller の cgroup を皆殺しに
+#    する。本番 runner の停止と同じ機構)
+systemctl --user stop kaoiro-selftest-caller.service
+
+# 4. worker が完走することを確認する
+sleep 25
+cat "$HOME/kaoiro-selftest.sentinel"          # 時刻が書かれていること
+systemctl --user show -p Result --value kaoiro-selftest-worker.service
+# → success
+
+# 5. 後片付け
+systemctl --user reset-failed kaoiro-selftest-caller.service \
+  kaoiro-selftest-worker.service 2>/dev/null || true
+rm -f "$HOME/kaoiro-selftest.sentinel"
+```
+
+(2) が「別 cgroup」、(4) が「caller の停止後も完走」を示す。この 2 つが
+`kaoiro-runner-update.sh --detach` の前提であり、上記の argv 契約テストが
+「同じ形で起動していること」を保証する。**本番の runner service にも
+`kaoiro-runner-update` unit にも触れない**ので、いつ実行してもよい。
+
+**実測記録(2026-08-16、linux-host / Linux 6.8.0-137-generic、systemd user
+instance)**: caller は
+`/user.slice/user-1000.slice/user@1000.service/app.slice/kaoiro-selftest-caller.service`、
+worker は同 `app.slice/kaoiro-selftest-worker.service` と**別 cgroup** に
+入り、caller を `systemctl --user stop` した後も worker は sentinel を書いて
+`Result=success` で終了した。稼働中の `kaoiro-runner` は `active` のまま
+影響を受けていない。**ホストが変われば再実測すること** — これはこの 1 台で
+観測した事実であって、systemd の全構成についての保証ではない。
 
 ## See Also
 
