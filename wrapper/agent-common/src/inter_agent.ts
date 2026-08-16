@@ -539,13 +539,54 @@ function trackAge(track: ConversationTrack): number {
  *  same AC10-bypassing pattern as `resolveTurnEnd()`'s notices, since this
  *  never goes through `invoke()`/`#dispatch()` either. Absent (not merely
  *  `undefined`) on every OTHER disposition shape (consumed, terminal,
- *  inject: true) — it only ever has meaning on a stale drop. */
-export interface InboundDisposition {
-  consumed: boolean;
-  inject: boolean;
-  mode: InboundReplyMode;
-  notice?: Envelope;
-}
+ *  inject: true) — it only ever has meaning on a stale drop.
+ *
+ *  `noticeSkipReason` (issue #225) is present exactly when that stale drop
+ *  deliberately withholds a notice. Its display-ready value is decided here,
+ *  where the exemption is decided; adapters must only render it. The
+ *  discriminated union makes a new no-notice exemption provide its reason at
+ *  this source, or fail typecheck, before either CLI can log a wrong fallback.
+ */
+export type InboundNoticeSkipReason =
+  | "envelope itself is a peer_error notice"
+  | "track already closed";
+
+export type InboundDisposition =
+  | {
+      consumed: true;
+      inject: false;
+      mode: InboundReplyMode;
+      notice?: never;
+      noticeSkipReason?: never;
+    }
+  | {
+      consumed: false;
+      inject: true;
+      mode: InboundReplyMode;
+      notice?: never;
+      noticeSkipReason?: never;
+    }
+  | {
+      consumed: false;
+      inject: false;
+      mode: "terminal";
+      notice?: never;
+      noticeSkipReason?: never;
+    }
+  | {
+      consumed: false;
+      inject: false;
+      mode: "reply-owed";
+      notice: Envelope;
+      noticeSkipReason?: never;
+    }
+  | {
+      consumed: false;
+      inject: false;
+      mode: "reply-owed";
+      notice?: never;
+      noticeSkipReason: InboundNoticeSkipReason;
+    };
 
 interface ReplyWaiter {
   resolve: (envelope: Envelope | undefined) => void;
@@ -984,7 +1025,12 @@ export class InterAgentTool {
       // track to match — so the sender's NEXT send lands past whatever
       // number desynced it in the first place, whether or not it reuses
       // this conversation_id (the recommended action either way).
-      if (!payload.error && !track.closed) {
+      const noticeSkipReason: InboundNoticeSkipReason | undefined = payload.error
+        ? "envelope itself is a peer_error notice"
+        : track.closed
+          ? "track already closed"
+          : undefined;
+      if (!noticeSkipReason) {
         track.turnNumber += 1;
         // issue #222 段階2 差し戻し MF-1 (ふじ): this DOES change
         // `turnNumber`, so `mutationGen`'s own doc contract on
@@ -1022,7 +1068,12 @@ export class InterAgentTool {
         );
         return { consumed: false, inject: false, mode: "reply-owed", notice };
       }
-      return { consumed: false, inject: false, mode: "reply-owed" };
+      return {
+        consumed: false,
+        inject: false,
+        mode: "reply-owed",
+        noticeSkipReason,
+      };
     }
 
     // issue #175 review round 4 (ふじ 条件 C, #211 comment 2719):

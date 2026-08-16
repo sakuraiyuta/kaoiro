@@ -748,20 +748,12 @@ async function main(): Promise<void> {
               `  inter_agent_message stale/duplicate turn dropped, stale_turn notice sent: ${envelope.agent_id}\n`,
             );
           } else {
-            // No notice was built — receiveInbound() withholds it in exactly
-            // two cases (see its doc): this envelope was itself a peer_error/
-            // stale_turn notice (replying would risk a notice/notice ping-
-            // pong), or the track was already closed (a late arrival after
-            // the conversation legitimately ended, where the sender already
-            // has — or will get — its own `conversation_closed` reject). The
-            // director's steer: a skip must never be silent, even when no
-            // notice goes out over the wire, so log which case this was.
-            const stalePayload = envelope.payload as Partial<InterAgentMessagePayload>;
-            const skipReason = stalePayload.error
-              ? "envelope itself is a peer_error notice"
-              : "track already closed";
+            // `receiveInbound()` decided this stale no-notice exemption and
+            // supplied its display-ready reason. Keep that decision in
+            // agent-common: a later exemption must either provide a reason
+            // there or fail typecheck before this adapter can misreport it.
             process.stdout.write(
-              `  inter_agent_message stale/duplicate turn dropped, no notice (${skipReason}): ${envelope.agent_id}\n`,
+              `  inter_agent_message stale/duplicate turn dropped, no notice (${disposition.noticeSkipReason}): ${envelope.agent_id}\n`,
             );
           }
           return;

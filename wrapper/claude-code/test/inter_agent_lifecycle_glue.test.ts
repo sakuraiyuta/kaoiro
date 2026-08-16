@@ -210,6 +210,9 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
         code: "stale_turn",
         message: "already sent",
       };
+      expect((await tool.receiveInbound(errorEnvelope)).noticeSkipReason).toBe(
+        "envelope itself is a peer_error notice",
+      );
       await runOnInterAgentMessageGlue(tool, host, errorEnvelope, notices);
       expect(notices).toHaveLength(0);
 
@@ -232,12 +235,11 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
         host,
         inboundEnvelope("cnv-stale-exempt", 4, true),
       );
-      await runOnInterAgentMessageGlue(
-        tool,
-        host,
-        inboundEnvelope("cnv-stale-exempt", 1),
-        notices,
+      const closedStale = inboundEnvelope("cnv-stale-exempt", 1);
+      expect((await tool.receiveInbound(closedStale)).noticeSkipReason).toBe(
+        "track already closed",
       );
+      await runOnInterAgentMessageGlue(tool, host, closedStale, notices);
       expect(notices).toHaveLength(0);
     },
   );

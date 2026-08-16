@@ -455,6 +455,27 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
     expect(late.notice).toBeDefined();
   });
 
+  it("issue #225: error notice の stale drop は agent-common が skip 理由を返す", async () => {
+    const { tool } = makeTool("self.agent");
+    const first = inboundEnvelope("cnv-stale-error-notice", "inform");
+    (first.payload as unknown as InterAgentMessagePayload).turn_number = 2;
+    await tool.receiveInbound(first);
+
+    const staleError = inboundEnvelope("cnv-stale-error-notice", "inform");
+    (staleError.payload as unknown as InterAgentMessagePayload).turn_number = 1;
+    (staleError.payload as unknown as InterAgentMessagePayload).error = {
+      code: "stale_turn",
+      message: "already sent",
+    };
+
+    expect(await tool.receiveInbound(staleError)).toEqual({
+      consumed: false,
+      inject: false,
+      mode: "reply-owed",
+      noticeSkipReason: "envelope itself is a peer_error notice",
+    });
+  });
+
   it("server 合成 envelope (agent_id=server) の turn_number=0 は stale 判定から除外される (Stage 4)", async () => {
     const { tool } = makeTool("self.agent");
     const first = inboundEnvelope("cnv-synth", "inform");
@@ -523,6 +544,7 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
     expect(disposition.inject).toBe(false);
     expect(disposition.mode).toBe("reply-owed");
     expect(disposition.notice).toBeUndefined();
+    expect(disposition.noticeSkipReason).toBe("track already closed");
   });
 
   it("hard-limit の server 合成 escalate (agent_id=server, turn_number=0, done=true) は " +
