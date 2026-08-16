@@ -13,6 +13,7 @@ import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
+  readFileSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -142,6 +143,64 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     expect(result.status).toBe(70);
     expect(result.stderr).toContain("stub_dep.js");
     expect(existsSync(join(root, "releases", revision))).toBe(false);
+  });
+
+  it("回帰: コメント内の specifier を依存と誤認して健全な release を拒否しない", () => {
+    // The closure walk follows the specifiers written inside each module, and
+    // tsc preserves comments into dist/. A doc comment naming a since-renamed
+    // sibling would otherwise become a mandatory module and reject a complete
+    // tree at exit 70 — install AND switch both. Inventing a dependency is
+    // strictly worse than missing one, so the parser must err the other way
+    // (issue #229 レビューサイクル round 1).
+    const revision = revisionOf("prose-specifier");
+    const stage = join(work, "prose-stage");
+    const name = `kaoiro-runner-${revision}-linux-x64`;
+    const tree = join(stage, name);
+    writeReleaseTree(tree, revision);
+    const cli = join(tree, "dist", "cli.js");
+    writeFileSync(
+      cli,
+      `// helper() used to be exported from "./legacy-helper.js" before #229.\n/* and a block comment mentioning require("./gone.js") too */\n${readFileSync(cli, "utf8")}`,
+    );
+    execFileSync(process.execPath, [
+      fileURLToPath(new URL("../../scripts/build-release-manifest.mjs", import.meta.url)),
+      tree,
+    ], { stdio: ["ignore", "ignore", "ignore"] });
+    const archive = join(work, `${name}.tar.gz`);
+    execFileSync("tar", ["czf", archive, "-C", stage, name]);
+
+    const result = install(archive);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(revision);
+  });
+
+  it("回帰: ディレクトリ指定の import を index.js へ解決する", () => {
+    // realpathSync succeeds on a DIRECTORY, so without an isFile() test the
+    // bare candidate wins and a directory lands in the reachable set — where
+    // the next readFileSync throws EISDIR and rejects a complete tree. The
+    // index.js spelling would also be unreachable (issue #229 レビュー
+    // サイクル round 1).
+    const revision = revisionOf("directory-import");
+    const stage = join(work, "dir-stage");
+    const name = `kaoiro-runner-${revision}-linux-x64`;
+    const tree = join(stage, name);
+    writeReleaseTree(tree, revision);
+    mkdirSync(join(tree, "dist", "sub"), { recursive: true });
+    writeFileSync(join(tree, "dist", "sub", "index.js"), "module.exports = {};\n");
+    const cli = join(tree, "dist", "cli.js");
+    writeFileSync(cli, `require("./sub");\n${readFileSync(cli, "utf8")}`);
+    execFileSync(process.execPath, [
+      fileURLToPath(new URL("../../scripts/build-release-manifest.mjs", import.meta.url)),
+      tree,
+    ], { stdio: ["ignore", "ignore", "ignore"] });
+    const archive = join(work, `${name}.tar.gz`);
+    execFileSync("tar", ["czf", archive, "-C", stage, name]);
+
+    const result = install(archive);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(revision);
   });
 
   it("release 内の artifact が tree 外への symlink なら拒否する", () => {

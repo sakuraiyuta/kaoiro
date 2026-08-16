@@ -36,7 +36,7 @@
 // boundary; the three are pinned equal by tests rather than by a shared
 // import.
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /** Artifacts a release must carry even when it has no MANIFEST.json — a
@@ -238,17 +238,45 @@ function bareTarget(pkgDir, pkg, subpath) {
   return join(pkgDir, subpath);
 }
 
-/** The file `base` names, trying the spellings node would: as written, with
- *  `.js` appended, and as a directory index. Null when none exist. */
+/** The FILE `base` names, trying the spellings node would: as written, with
+ *  `.js` appended, and as a directory index. Null when none is a file.
+ *
+ *  The `isFile()` test is load-bearing, not defensive: `realpathSync`
+ *  succeeds on a DIRECTORY, so without it the bare candidate would win
+ *  whenever `base` is a directory — making the `index.js` spelling
+ *  unreachable and pushing a directory into the reachable set, where the
+ *  next `readFileSync` throws EISDIR and rejects a healthy release. */
 function resolveFile(base) {
   for (const candidate of [base, `${base}.js`, join(base, "index.js")]) {
     try {
-      return realpathSync(candidate);
+      const real = realpathSync(candidate);
+      if (statSync(real).isFile()) return real;
     } catch {
       // try the next spelling
     }
   }
   return null;
+}
+
+/** Blanks out comments so a specifier that appears only in PROSE is never
+ *  mistaken for a dependency.
+ *
+ *  THIS IS THE DIRECTION THAT MATTERS. Failing to notice a real specifier
+ *  only narrows what the closure check can detect; inventing one REJECTS A
+ *  HEALTHY RELEASE, and install and switch both map that to exit 70 — every
+ *  deploy blocked. This project's own comment style writes specifiers in
+ *  prose (`wrapper/agent-common/src/types.ts` says "keep importing from
+ *  './types.js'", and tsc preserves it into dist/), so it is a matter of
+ *  time, not of bad luck. Reproduced during review: one doc comment naming a
+ *  since-renamed sibling turned a complete tree into exit 70.
+ *
+ *  The stripper is deliberately crude — a `//` inside a string literal (a
+ *  URL, say) blanks the rest of that line. That errs toward noticing FEWER
+ *  specifiers, which is the safe direction by the same argument. */
+function stripComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ");
 }
 
 /** THE FILES THIS RELEASE MUST CARRY, DERIVED WITHOUT READING THE MANIFEST.
@@ -265,9 +293,9 @@ function resolveFile(base) {
  *  SCOPE: first-party only. `@kaoiro/*` bare specifiers are followed across
  *  packages; `node:` builtins and third-party packages are not, matching the
  *  manifest's own documented scope (the ~920 MB of engine CLI payloads stays
- *  out of both). A specifier this parser fails to notice merely narrows
- *  detection — it cannot cause a false rejection, which is the failure mode
- *  worth being asymmetric about here. */
+ *  out of both). Comments are blanked first (see stripComments) because the
+ *  asymmetry only holds in one direction: missing a specifier narrows
+ *  detection, while inventing one rejects a healthy release. */
 function expectedClosure(root) {
   const reachable = new Set();
   const queue = [];
@@ -297,9 +325,10 @@ function expectedClosure(root) {
       fail(`${file} is unreadable: ${err.message}`);
     }
     const specifiers = new Set();
+    const scanned = stripComments(source);
     for (const re of SPECIFIER_RES) {
       re.lastIndex = 0;
-      for (const match of source.matchAll(re)) specifiers.add(match[1]);
+      for (const match of scanned.matchAll(re)) specifiers.add(match[1]);
     }
     for (const specifier of specifiers) {
       if (specifier.startsWith(".")) {
