@@ -111,6 +111,16 @@ function readBuildInfoStrict(root) {
     // the one case where telling the operator to build is actually correct.
     // Any other code (EACCES, EISDIR, ...) means the file IS there and
     // something else is wrong, which a rebuild does not fix.
+    //
+    // UNLIKE containedRealPath, no dangling-symlink ambiguity applies here:
+    // readFileSync's ENOENT always reports syscall "open" regardless of
+    // WHICH path component failed (measured directly), so there is no
+    // signal here to split on even if one were needed. None is needed in
+    // practice — `dist/` is never itself a workspace link in either
+    // topology this file supports (only node_modules/@kaoiro/<pkg> is;
+    // dist/ is always written as a real directory by writeReleaseTree /
+    // the real builder), so an ENOENT reaching this readFileSync can only
+    // mean the file itself is absent.
     if (err.code === "ENOENT") {
       failMissingArtifact(`dist/build-info.json is unreadable: ${err.message}`);
     }
@@ -139,10 +149,35 @@ function containedRealPath(root, realRoot, rel) {
   try {
     real = realpathSync(target);
   } catch (err) {
-    // Same ENOENT-vs-everything-else split as readBuildInfoStrict: a plain
-    // absence is a build shortage (issue #259), anything else (a broken
-    // symlink, ELOOP, ...) is not.
-    if (err.code === "ENOENT") {
+    // ENOENT alone does not mean "this artifact was never built" (ふじ
+    // review, issue #259). realpathSync walks `target` component by
+    // component, and Node reports a DIFFERENT syscall depending on which
+    // component failed:
+    //   - a component SIMPLY DOES NOT EXIST — as a file, directory, or
+    //     symlink, in ANY form: `lstat` on that component. Genuinely never
+    //     built, whether the missing component is the leaf itself
+    //     (`node_modules/@kaoiro/claude-code/dist/cli.js` absent,
+    //     `err.path === target`) or an entire ancestor
+    //     (`node_modules/@kaoiro/claude-code` never created at all,
+    //     `err.path` shorter than `target`) — a rebuild fixes both. An
+    //     internal review round caught an earlier version of this guard
+    //     that also required `err.path === target`, which wrongly excluded
+    //     the whole-ancestor-missing shape (measured: `err.path` is the
+    //     first missing component's OWN path there, not the full target,
+    //     even though the syscall is still `lstat`) — the reachable
+    //     `syscall` values are exactly two, and the split is complete
+    //     between them; there is no third `err.path`-based case to gate on.
+    //   - a component EXISTS as a symlink whose own resolution target is
+    //     missing (a dangling workspace link, or the symlink itself being
+    //     `target` with nothing beyond it): `stat`, following the link.
+    //     This is an install/checkout topology problem, not a build
+    //     shortage — a rebuild does not repair a broken symlink and must
+    //     not be suggested for it.
+    //   `ELOOP` (a symlink cycle) and `ENOTDIR` (a path component that is a
+    //   plain file, not a directory) are different error CODES entirely,
+    //   never `ENOENT`, so they never reach this branch at all — probed
+    //   directly, alongside both ENOENT shapes above, before writing this.
+    if (err.code === "ENOENT" && err.syscall === "lstat") {
       failMissingArtifact(`${rel} is missing or unresolvable: ${err.message}`);
     }
     fail(`${rel} is missing or unresolvable: ${err.message}`);

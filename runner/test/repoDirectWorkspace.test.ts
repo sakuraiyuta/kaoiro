@@ -118,6 +118,66 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     expect(result.stderr).toContain("NOT a missing build");
   });
 
+  it("dangling な workspace symlink は build shortage と誤分類されない", () => {
+    // ふじ review must-fix 1: containedRealPath の realpathSync ENOENT 分岐が
+    // err.code==="ENOENT" のみで MissingArtifactError (build 提案あり) に
+    // していたため、「途中の workspace symlink 自体が dangling」なケース
+    // (leaf ではなく symlink の解決先が無い) でも build 不足と誤分類していた
+    // — workspace リンクの修復は build ではなく checkout topology の問題。
+    // healthy な既存リンクを外し、存在しない sibling を指す dangling
+    // symlink に置き換える(ふじの probe と同一手順)。
+    const link = join(runner, "node_modules", "@kaoiro", "claude-code");
+    unlinkSync(link);
+    symlinkSync("../../../wrapper/missing-claude-code", link);
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("is missing or unresolvable");
+    expect(result.stdout).not.toContain("stub cli.js started");
+    // The pin: this must land in the SAME "not a missing build" bucket a
+    // containment violation does, not the "a build artifact is missing"
+    // bucket a genuinely never-built leaf does.
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).toContain("NOT a missing build");
+  });
+
+  it("workspace リンクの祖先ディレクトリごと欠けていれば build shortage のまま (内部レビュー指摘)", () => {
+    // 内部review round 2 must-fix: must-fix 1 の修正が
+    // `err.path === target` まで要求していたため、leaf 1 個だけでなく
+    // node_modules/@kaoiro 自体が丸ごと存在しない場合 (pnpm install を
+    // 一度も実行していない、など — leaf 単体欠落より現実的なケース) まで
+    // 「missing build ではない」に誤分類する退行を生んでいた。
+    // realpathSync は祖先ディレクトリが丸ごと無い場合も lstat で ENOENT を
+    // 返す(dangling symlink の stat とは異なる)ため、syscall だけで
+    // 判定すれば両方とも正しく build shortage に分類できる。
+    rmSync(join(runner, "node_modules", "@kaoiro"), { recursive: true, force: true });
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    // これは正真正銘の build shortage — 従来どおり build を提案する。
+    expect(result.stderr).toContain("a build artifact is missing");
+    expect(result.stderr).toContain("pnpm -C wrapper build && pnpm -C runner build");
+  });
+
+  it("生成した fixture のリンクは実チェックアウトの premise と結線されている (fixture-premise wiring)", () => {
+    // ふじ review must-fix 2: writeWorkspaceCheckout の symlink target と
+    // このファイル自身の linkTarget 前提チェックは、互いに独立した
+    // ハードコード文字列でしかなく、GENERATED な fixture を LIVE な
+    // checkout と直接比較する assertion が一つも無かった。そのため
+    // fixture 側を(例えば絶対 symlink へ)mutate しても、実チェックアウト
+    // だけを測る premise テストは green のまま気づけなかった
+    // (measured: 6/6 green のまま)。ここで両者を一つの assertion で結ぶ。
+    for (const wrapper of ["claude-code", "codex"]) {
+      const fixtureLink = join(runner, "node_modules", "@kaoiro", wrapper);
+      const liveLink = join(REPO_ROOT, "runner", "node_modules", "@kaoiro", wrapper);
+      expect(lstatSync(fixtureLink).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(fixtureLink)).toBe(readlinkSync(liveLink));
+    }
+  });
+
   it("workspace marker が無ければ release root 境界へ戻る", () => {
     // The wider boundary is bought by the marker and by nothing else. Without
     // one, the tree is its own boundary again — the stricter of the two — so

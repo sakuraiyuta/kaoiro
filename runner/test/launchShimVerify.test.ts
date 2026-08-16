@@ -15,6 +15,7 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -153,6 +154,16 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
     const ws = join(dir, "workspace");
     mkdirSync(ws, { recursive: true });
     const runner = writeWorkspaceCheckout(ws, revisionOf("shim-repo-direct"));
+
+    // ふじ review must-fix 2: "少なくとも該当 launch case は、自身が
+    // built-release directory ではなく workspace symlink 上で走っている
+    // ことを pin する必要がある" — without this, reverting this test back
+    // to the old built-release fixture still passed 19/19 (measured), since
+    // "starts successfully" is satisfied by EITHER shape. Pin the shape
+    // itself before running the shim.
+    expect(
+      lstatSync(join(runner, "node_modules", "@kaoiro", "claude-code")).isSymbolicLink(),
+    ).toBe(true);
 
     const result = runScript(join(runner, "deploy", "kaoiro-runner-launch.sh"), [], {
       KAOIRO_RUNNER_DIR: confDir,
