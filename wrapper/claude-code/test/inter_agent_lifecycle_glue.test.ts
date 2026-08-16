@@ -95,6 +95,7 @@ async function runOnInterAgentMessageGlue(
   host: AgentHost,
   envelope: Envelope,
   notices?: Envelope[],
+  logs?: string[],
 ): Promise<void> {
   await handleInterAgentMessage(
     {
@@ -109,7 +110,7 @@ async function runOnInterAgentMessageGlue(
         interAgent.notePendingInjection(inbound);
         void host.send(`[glue] ${payload.body}`, undefined, cids).catch(() => {});
       },
-      log: () => {},
+      log: (line) => logs?.push(line),
     },
     envelope,
   );
@@ -188,8 +189,13 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
       expect((await tool.receiveInbound(errorEnvelope)).noticeSkipReason).toBe(
         "envelope itself is a peer_error notice",
       );
-      await runOnInterAgentMessageGlue(tool, host, errorEnvelope, notices);
+      const errorLogs: string[] = [];
+      await runOnInterAgentMessageGlue(tool, host, errorEnvelope, notices, errorLogs);
       expect(notices).toHaveLength(0);
+      expect(errorLogs).toEqual([
+        "  inter_agent_message stale/duplicate turn dropped, no notice " +
+          "(envelope itself is a peer_error notice): peer.agent\n",
+      ]);
 
       // (b) track が既に closed — 双方 done=true で terminal にした上で、
       // その後の stale delivery が notice を積まないことを確認する。
@@ -214,8 +220,13 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
       expect((await tool.receiveInbound(closedStale)).noticeSkipReason).toBe(
         "track already closed",
       );
-      await runOnInterAgentMessageGlue(tool, host, closedStale, notices);
+      const closedLogs: string[] = [];
+      await runOnInterAgentMessageGlue(tool, host, closedStale, notices, closedLogs);
       expect(notices).toHaveLength(0);
+      expect(closedLogs).toEqual([
+        "  inter_agent_message stale/duplicate turn dropped, no notice " +
+          "(track already closed): peer.agent\n",
+      ]);
     },
   );
 
@@ -327,6 +338,42 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
 
     expect(injected).not.toHaveBeenCalled();
     expect(logs).toEqual(["  inter_agent_message terminal, no reply owed: peer.agent\n"]);
+  });
+
+  it("issue #226: close 済み ingress は receive 前に handler が止まり lease を完了する", async () => {
+    const ingress = new InterAgentIngressGate();
+    ingress.close();
+    const receiveInbound = vi.fn(async () => ({
+      consumed: false as const,
+      inject: true as const,
+      mode: "reply-owed" as const,
+    }));
+    const recordInboundIa = vi.fn();
+    const send = vi.fn();
+    const inject = vi.fn();
+    const logs: string[] = [];
+    const finish = vi.spyOn(ingress, "finish");
+
+    await handleInterAgentMessage(
+      {
+        interAgent: { receiveInbound },
+        ingress,
+        recordInboundIa,
+        send,
+        inject,
+        log: (line) => logs.push(line),
+      },
+      inboundEnvelope("cnv-pre-await-terminal", 1),
+    );
+
+    expect(recordInboundIa).toHaveBeenCalledTimes(1);
+    expect(receiveInbound).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(inject).not.toHaveBeenCalled();
+    expect(logs).toEqual([
+      "  inter_agent_message terminal ingress skipped before receive: peer.agent\n",
+    ]);
+    expect(finish).toHaveBeenCalledTimes(1);
   });
 });
 

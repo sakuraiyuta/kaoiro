@@ -16,14 +16,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   InterAgentTool,
   MAX_COALESCED_MESSAGES,
-  canAddToCoalescedBatch,
   classifyInterAgentError,
-  formatInboundMessage,
-  formatInboundMessages,
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
-  InboundReplyMode,
   InterAgentMessagePayload,
   WrapperConfig,
 } from "@kaoiro/agent-common";
@@ -31,6 +27,7 @@ import type { ThreadEvent } from "@openai/codex-sdk";
 import { CodexHost } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
 import { handleInterAgentMessage } from "../src/inter_agent_message_handler.js";
+import { CodexInterAgentTurnCoordinator } from "../src/inter_agent_turn_coordinator.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -79,6 +76,7 @@ async function runOnInterAgentMessageGlue(
   host: CodexHost,
   envelope: Envelope,
   notices?: Envelope[],
+  logs?: string[],
 ): Promise<void> {
   await handleInterAgentMessage(
     {
@@ -92,7 +90,7 @@ async function runOnInterAgentMessageGlue(
         interAgent.notePendingInjection(inbound);
         void host.send(`[glue] ${payload.body}`, undefined, cids).catch(() => {});
       },
-      log: () => {},
+      log: (line) => logs?.push(line),
     },
     envelope,
   );
@@ -171,8 +169,13 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
       expect((await tool.receiveInbound(errorEnvelope)).noticeSkipReason).toBe(
         "envelope itself is a peer_error notice",
       );
-      await runOnInterAgentMessageGlue(tool, host, errorEnvelope, notices);
+      const errorLogs: string[] = [];
+      await runOnInterAgentMessageGlue(tool, host, errorEnvelope, notices, errorLogs);
       expect(notices).toHaveLength(0);
+      expect(errorLogs).toEqual([
+        "  inter_agent_message stale/duplicate turn dropped, no notice " +
+          "(envelope itself is a peer_error notice): peer.agent\n",
+      ]);
 
       // (b) track が既に closed — 双方 done=true で terminal にした上で、
       // その後の stale delivery が notice を積まないことを確認する。
@@ -197,8 +200,13 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
       expect((await tool.receiveInbound(closedStale)).noticeSkipReason).toBe(
         "track already closed",
       );
-      await runOnInterAgentMessageGlue(tool, host, closedStale, notices);
+      const closedLogs: string[] = [];
+      await runOnInterAgentMessageGlue(tool, host, closedStale, notices, closedLogs);
       expect(notices).toHaveLength(0);
+      expect(closedLogs).toEqual([
+        "  inter_agent_message stale/duplicate turn dropped, no notice " +
+          "(track already closed): peer.agent\n",
+      ]);
     },
   );
 
@@ -371,16 +379,8 @@ function makeControllableClient(): {
   };
 }
 
-/** Test-local Codex batching harness. `receive()` invokes the production
- * handler; this harness supplies the engine queue edge and observes its
- * host/transport effects. */
+/** Adapter harness around the production Codex batching coordinator. */
 function makeCoalescingHarness(interAgent: InterAgentTool) {
-  const pendingBatches = new Map<
-    string,
-    { items: { envelope: Envelope; mode: InboundReplyMode }[]; bytes: number }[]
-  >();
-  const inFlightPeers = new Set<string>();
-  const inFlightCidPeer = new Map<string, string>();
   const sentBatches: { peer: string; cids: string[] }[] = [];
   /** Envelopes production's onInterAgentMessage/onTurnEnd glue would hand
    *  straight to `link?.send()`, never routed through invoke()/#dispatch():
@@ -391,55 +391,15 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
    *  production sends both through the SAME `link?.send()` sink. */
   const notices: Envelope[] = [];
   let host!: CodexHost;
-
-  function trySendNextBatch(peer: string): void {
-    if (inFlightPeers.has(peer)) return;
-    const queue = pendingBatches.get(peer);
-    const batch = queue?.shift();
-    if (batch === undefined) return;
-    if (queue!.length === 0) pendingBatches.delete(peer);
-    inFlightPeers.add(peer);
-    const cids = batch.items
-      .map(
-        (item) =>
-          (item.envelope.payload as Partial<InterAgentMessagePayload>)
-            .conversation_id,
-      )
-      .filter((cid): cid is string => typeof cid === "string");
-    for (const cid of cids) inFlightCidPeer.set(cid, peer);
-    // issue #221 段階3 MF-1 (ふじレビュー差し戻し): register at DISPATCH
-    // time — mirrors the production fix in cli.ts's trySendNextBatch. Moved
-    // out of receive() below, which used to register at receipt time and
-    // let a later batch's same-cid registration clobber an earlier,
-    // still-in-flight batch's entry.
-    for (const item of batch.items) {
-      interAgent.notePendingInjection(item.envelope);
-    }
-    sentBatches.push({ peer, cids });
-    void host.send(formatInboundMessages(batch.items), undefined, cids);
-  }
-
-  function inject(envelope: Envelope, mode: InboundReplyMode): void {
-    const peer = envelope.agent_id;
-    const itemText = formatInboundMessage(envelope, { mode });
-    const itemBytes = Buffer.byteLength(itemText, "utf8");
-    let queue = pendingBatches.get(peer);
-    if (queue === undefined) {
-      queue = [];
-      pendingBatches.set(peer, queue);
-    }
-    let open = queue[queue.length - 1];
-    if (
-      open === undefined ||
-      !canAddToCoalescedBatch(open.items.length, open.bytes, itemBytes)
-    ) {
-      open = { items: [], bytes: 0 };
-      queue.push(open);
-    }
-    open.items.push({ envelope, mode });
-    open.bytes += itemBytes;
-    trySendNextBatch(peer);
-  }
+  const coordinator = new CodexInterAgentTurnCoordinator({
+    onDispatch: (batch) => {
+      for (const item of batch.items) {
+        interAgent.notePendingInjection(item.envelope);
+      }
+      sentBatches.push({ peer: batch.peer, cids: [...batch.conversationIds] });
+      void host.send(batch.text, undefined, batch.conversationIds);
+    },
+  });
 
   async function receive(envelope: Envelope): Promise<void> {
     await handleInterAgentMessage(
@@ -447,7 +407,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
         interAgent,
         recordInboundIa: () => {},
         send: (notice) => notices.push(notice),
-        inject,
+        inject: (inbound, mode) => coordinator.receive(inbound, mode),
         log: () => {},
       },
       envelope,
@@ -462,14 +422,9 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     for (const notice of interAgent.resolveTurnEnd(conversationIds, classified)) {
       notices.push(notice);
     }
-    const freedPeer =
-      conversationIds.length > 0
-        ? inFlightCidPeer.get(conversationIds[0]!)
-        : undefined;
-    if (freedPeer !== undefined) {
-      for (const cid of conversationIds) inFlightCidPeer.delete(cid);
-      inFlightPeers.delete(freedPeer);
-      trySendNextBatch(freedPeer);
+    const settled = coordinator.settle(conversationIds);
+    if (settled !== undefined) {
+      coordinator.dispatchNextForPeer(settled.peer);
     }
   }
 
