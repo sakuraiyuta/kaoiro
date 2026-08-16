@@ -210,6 +210,58 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
     expect(result.stderr).not.toContain("pnpm -C wrapper build");
   });
 
+  it("nested な build output の中間ディレクトリが dangling symlink なら build shortage ではない (内部レビュー指摘)", () => {
+    // 内部review: checkBuildOutputLeaf は leafRel の先頭segment (dist) と
+    // 最終leafしか型検査しておらず、3段以上ネストした manifest entry
+    // (dist/sub/foo.js など) の中間segment (dist/sub) が dangling symlink
+    // の場合、lstat 自体が中間 symlink を辿って ENOENT を返すため
+    // "missing" と区別できず、build shortage に誤分類していた。現状の
+    // dist/ tree は全て flat なので未到達だが、
+    // scripts/build-release-manifest.mjs の collect() は subdirectory を
+    // 再帰するため、将来到達しうる latent gap だった(実測: manifest には
+    // "dist/sub/foo.js" が実際に含まれることを確認済み)。built-release
+    // shape (MANIFEST あり) の launch shim 検証は MANIFEST loop を通る
+    // ため、この形は repo-direct の SENTINELS では再現できず、専用の
+    // built-release tree が必要。
+    const nestedTree = join(dir, "nested-release");
+    writeReleaseTree(nestedTree, revisionOf("nested-dangling"), {
+      extraFiles: { "dist/sub/foo.js": "export default {};\n" },
+    });
+    rmSync(join(nestedTree, "dist", "sub"), { recursive: true, force: true });
+    symlinkSync(join(dir, "missing-target"), join(nestedTree, "dist", "sub"));
+
+    const result = runScript(join(nestedTree, "deploy", "kaoiro-runner-launch.sh"), [], {
+      KAOIRO_RUNNER_DIR: confDir,
+    });
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("not an ordinary directory");
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).not.toContain("pnpm install");
+  });
+
+  it("dist が検索不可(EACCES)でも生の stack trace ではなく分類された診断で落ちる (内部レビュー指摘)", () => {
+    // 内部review (security, Medium): checkBuildOutputLeaf 内の
+    // lstatType(target) 呼び出しが try/catch で保護されておらず、
+    // containerType チェック(dist 自身の型)が通った後でも、その leaf
+    // 自身の lstat が EACCES で失敗しうる (検索権限だけが後から失われる
+    // など) 場合に、生の Node 例外が main() まで伝播していた。
+    // 非root ユーザとして dist を 0600 (search bit なし) にすることで
+    // 直接再現できることを確認した。
+    chmodSync(join(tree, "dist"), 0o600);
+
+    const result = launch();
+
+    chmodSync(join(tree, "dist"), 0o700); // afterEach の rmSync が辿れるよう復元
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).not.toContain("at lstatSync");
+    expect(result.stderr).not.toContain("Node.js v");
+    expect(result.stderr).toContain("is unreachable");
+  });
+
   it("build ツールを一切起動しない", () => {
     const binDir = join(dir, "stub-bin");
     const marker = join(dir, "build-was-invoked");

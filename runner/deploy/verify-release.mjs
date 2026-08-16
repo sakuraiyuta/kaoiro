@@ -165,17 +165,33 @@ function readBuildInfoStrict(root, realRoot) {
  *  `checkWorkspaceLinkedSentinel`).
  *
  *  A missing leaf is classified as a genuine BUILD SHORTAGE (issue #259)
- *  ONLY when `leafRel`'s own containing directory (its first path
- *  segment — `dist`) is either genuinely absent (an ordinary `pnpm build`
- *  creates it from scratch) or an ordinary directory (an ordinary build
- *  fills in the missing file within it). Anything ELSE standing in for
- *  that directory — a symlink (healthy or dangling), or a plain file — is
- *  NOT build-fixable, because an ordinary build neither knows nor cares
- *  that its output directory is anomalous; it just writes through
- *  whatever is there. Measured directly (ふじ review round 3, issue #259):
- *  running the suggested build against a `dist -> missing-dist` dangling
- *  symlink fails with tsc's own ENOENT writing through it, and does not
- *  remove the dangling link.
+ *  ONLY when BOTH `leafRel`'s own containing directory (its first path
+ *  segment — `dist`) AND the leaf itself are genuinely ABSENT (an ordinary
+ *  `pnpm build` creates a missing `dist/` and fills in a missing file,
+ *  both from scratch). A symlink (healthy or dangling) or a plain file
+ *  standing in for the CONTAINER is rejected outright, unconditionally —
+ *  `dist/` is never a link in any topology this file supports, so any
+ *  symlink there is anomalous regardless of where it points. A LEAF that
+ *  is an EXISTING symlink is treated differently: if it resolves
+ *  successfully it falls through to the ordinary containment check below
+ *  like any other resolved path (unchanged — a built release CAN
+ *  legitimately carry a manifest entry whose containment must be checked
+ *  by resolution, not rejected on sight; releaseInstall.test.ts's
+ *  pre-existing "outside-the-release symlink" negative control, issue
+ *  #229, depends on reaching that exact check). Only a leaf symlink that
+ *  does NOT resolve (dangling) is excluded from the build-fixable bucket —
+ *  that shape is a broken reference, not "never built", and a build does
+ *  not repair it. Measured directly, twice, across two review rounds:
+ *  (round 3, the CONTAINER) running the suggested build against a `dist ->
+ *  missing-dist` dangling symlink fails with tsc's own ENOENT writing
+ *  through it, and does not remove the dangling link; (round 4, the LEAF
+ *  itself) running the suggested build against a `dist/cli.js` symlink
+ *  pointing OUTSIDE the release (dangling at check time) SUCCEEDS — tsc
+ *  writes a new file at the symlink's external target — but the symlink
+ *  itself is untouched, so a subsequent verify hits a containment
+ *  violation instead of passing. The suggested remedy did not fix the
+ *  tree in either case; it just moved the failure (round 4) or repeated
+ *  it (round 3).
  *
  *  This is checked with EXPLICIT `lstat` calls on named path segments
  *  (`lstatType`), not by inspecting `realpathSync`'s internal
@@ -184,22 +200,71 @@ function readBuildInfoStrict(root, realRoot) {
  *  https://nodejs.org/api/errors.html#errorcode — "error.code is the most
  *  stable way to identify an error"; `error.syscall` is described only as
  *  "a string describing the syscall that failed", no stability claim). A
- *  syscall-shape guard here missed TWO sibling shapes across two review
- *  rounds (a whole ancestor missing, and this dist-as-symlink case) before
- *  being replaced by this explicit walk. */
+ *  syscall-shape guard here missed sibling shapes across THREE review
+ *  rounds (a whole ancestor missing, dist-as-symlink, and a dangling leaf
+ *  symlink) before being replaced by this explicit, named-component walk.
+ *
+ *  EVERY named ancestor segment gets its own `lstatType` check, not just
+ *  the immediate container (`leafRel`'s first segment) — internal review
+ *  found that checking only the first segment missed a dangling symlink at
+ *  a DEEPER intermediate component (e.g. `dist/sub` in a hypothetical
+ *  `dist/sub/foo.js`, once a package's output ever gains a subdirectory):
+ *  `lstat` on the full leaf path FOLLOWS every intermediate component (only
+ *  the FINAL one is left unresolved), so a dangling intermediate symlink
+ *  makes even a plain `lstatSync` on the leaf fail ENOENT — reporting
+ *  "missing", indistinguishable from a genuinely absent path, unless each
+ *  ancestor segment is checked in isolation on its OWN terms first. Every
+ *  `lstatType` call here is wrapped so an unexpected errno (EACCES on an
+ *  ancestor, say) becomes a classified `fail()` rather than an uncaught
+ *  exception (internal review, issue #259: `checkWorkspaceLinkedSentinel`
+ *  already guarded its own `statSync` for the same reason; the two bare
+ *  `lstatType` calls here had been missed). */
 function checkBuildOutputLeaf(pkgRoot, realRoot, leafRel, label) {
-  const containerType = lstatType(join(pkgRoot, leafRel.split("/")[0]));
-  if (containerType === "symlink" || containerType === "file") {
-    fail(
-      `${label} is unreachable: its containing directory exists but is not an ordinary directory`,
-    );
+  const segments = leafRel.split("/");
+  let ancestorPath = pkgRoot;
+  for (let i = 0; i < segments.length - 1; i++) {
+    ancestorPath = join(ancestorPath, segments[i]);
+    let ancestorType;
+    try {
+      ancestorType = lstatType(ancestorPath);
+    } catch (err) {
+      fail(`${label} is unreachable: ${err.message}`);
+    }
+    if (ancestorType === "symlink" || ancestorType === "file") {
+      fail(
+        `${label} is unreachable: its containing directory exists but is not an ordinary directory`,
+      );
+    }
+    // A genuinely missing ancestor needs no further walking — the leaf-level
+    // realpathSync below will also see ENOENT there and classify it as a
+    // build shortage (an ordinary build creates the whole missing chain).
+    if (ancestorType === "missing") break;
   }
   const target = join(pkgRoot, leafRel);
+  // Captured BEFORE resolving: distinguishes "the leaf itself is simply
+  // absent" (build-fixable) from "the leaf is an EXISTING symlink whose
+  // resolution failed" (a dangling reference, not build-fixable) at the
+  // one point that still needs it. A symlink leaf that DOES resolve is NOT
+  // rejected here regardless of health — it falls through to the ordinary
+  // containment check below like any other resolved path, unchanged from
+  // before this guard existed. That matters: releaseInstall.test.ts's own
+  // pre-existing containment negative control (issue #229, もも review)
+  // stages an in-MANIFEST file replaced by a symlink to an
+  // identical-content file OUTSIDE the release specifically to prove the
+  // CONTAINMENT check (not a digest mismatch) is what catches it — a leaf
+  // symlink is only special-cased here for the one shape that check cannot
+  // reach: one whose target does not exist at all.
+  let targetType;
+  try {
+    targetType = lstatType(target);
+  } catch (err) {
+    fail(`${label} is unreachable: ${err.message}`);
+  }
   let real;
   try {
     real = realpathSync(target);
   } catch (err) {
-    if (err.code === "ENOENT") {
+    if (err.code === "ENOENT" && targetType === "missing") {
       failMissingArtifact(`${label} is missing or unresolvable: ${err.message}`);
     }
     fail(`${label} is missing or unresolvable: ${err.message}`);
@@ -243,7 +308,16 @@ function checkWorkspaceLinkedSentinel(root, realRoot, rel) {
   const linkRel = parts.slice(0, 3).join("/");
   const leafRel = parts.slice(3).join("/");
   const linkPath = join(root, linkRel);
-  if (lstatType(linkPath) === "missing") {
+  // Guarded like every other lstatType call in this file (internal review,
+  // issue #259): an unexpected errno here (EACCES, say) must become a
+  // classified fail(), not an uncaught exception.
+  let linkPathType;
+  try {
+    linkPathType = lstatType(linkPath);
+  } catch (err) {
+    fail(`${linkRel} is unreachable: ${err.message}`);
+  }
+  if (linkPathType === "missing") {
     failMissingWorkspaceLink(
       `${linkRel} is missing — the workspace dependency link was never created (pnpm install has not run)`,
     );

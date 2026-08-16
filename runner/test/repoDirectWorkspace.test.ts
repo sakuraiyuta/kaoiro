@@ -193,6 +193,58 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     expect(result.stderr).toContain("NOT a missing build");
   });
 
+  it("build output leaf 自身が release 外を指す dangling symlink なら build shortage ではない (ふじ round4 must-fix)", () => {
+    // ふじ round4: checkBuildOutputLeaf は containing directory (dist)
+    // の型しか検査しておらず、leaf 自身 (dist/cli.js) が release 外の
+    // 欠落先を指す symlink の場合、realpathSync の ENOENT を無条件に
+    // build shortage (exit 71) にしていた。ふじの実測(disposable な実
+    // checkout): 案内どおり build を実行すると exit 0 で成功するが、
+    // symlink の外部 target に新しいファイルを生成するだけで symlink
+    // 自体はそのまま残り、再度 verifier を実行すると今度は containment
+    // 違反 (dist/cli.js resolves outside the release, exit 70) になる —
+    // 提案された remedy は tree を修復せず、失敗を移動させただけだった。
+    // leaf 自体の型を realpathSync 前に lstatType で捕捉しておき、ENOENT
+    // (dangling) の場合だけ build-fixable 分類から除外する — resolve に
+    // 成功する symlink leaf (健全、container の外を指す場合も含む) は
+    // 従来どおり通常の containment check へフォールスルーする
+    // (releaseInstall.test.ts の「outside-the-release symlink は
+    // containment で拒否する」既存 negative control が、まさにこの
+    // フォールスルー経路に依存しているため — leaf を無条件拒否すると
+    // その既存テストの "outside the release" という診断に到達できなく
+    // なる。実際に一度無条件拒否で実装し、既存テストが red になることを
+    // 確認してからこの形へ直した)。
+    const leaf = join(runner, "dist", "cli.js");
+    unlinkSync(leaf);
+    symlinkSync(join(dir, "outside-cli.js"), leaf);
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("is missing or unresolvable");
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).not.toContain("pnpm install");
+    expect(result.stderr).toContain("NOT a missing build");
+  });
+
+  it("build output leaf が release 内を指す健全な symlink なら通常どおり起動する (positive control)", () => {
+    // 上のテストの反対側: resolve に成功する leaf symlink まで無条件拒否
+    // しないことのpin。dist/cli.js の内容を同じ dist/ 内の別名ファイルへ
+    // 複製し、cli.js をそこへの relative symlink に置き換える(exec 自体
+    // も実際に成功することまで見るため、実 cli.js と同一内容にする)。
+    // containment check は通り、起動は成功する。
+    const leaf = join(runner, "dist", "cli.js");
+    const content = readFileSync(leaf, "utf8");
+    writeFileSync(join(runner, "dist", "cli-real.js"), content);
+    unlinkSync(leaf);
+    symlinkSync("cli-real.js", leaf);
+
+    const result = launch();
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("stub cli.js started");
+  });
+
   it("workspace link が plain file なら未捕捉例外にならず分類される (内部レビュー指摘)", () => {
     // 内部review (redesign後の round1 assessment) must-fix:
     // checkWorkspaceLinkedSentinel は lstatType(linkPath)==="missing" しか
