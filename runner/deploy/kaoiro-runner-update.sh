@@ -190,16 +190,25 @@ if [ "$detach" = yes ]; then
     ${KAOIRO_NODE:+"--setenv=KAOIRO_NODE=$KAOIRO_NODE"} \
     -- "$self" "$@"
 
+  # Queue FIRST, report second. The report used to be printed and then
+  # `exec` replaced this process, so a systemd-run that failed outright
+  # (KAOIRO_SYSTEMD_RUN=/bin/false reproduces it) still printed "ENQUEUED"
+  # before exiting non-zero — telling the operator the update was queued when
+  # nothing had been. `exec` is gone for the same reason: it cannot be
+  # followed by a check.
+  "$systemd_run_bin" "$@" ||
+    kaoiro_die "failed to queue $UPDATE_UNIT.service — nothing was started, and nothing has changed" 70
+
   # Deliberately not phrased as an outcome. --no-block returns once the start
-  # request is verified and enqueued, so at this point the update has not
-  # started; a "done" here would be a claim this script cannot make.
+  # request is verified and enqueued, so even now the update has not started;
+  # a "done" here would be a claim this script cannot make.
   printf '%s: ENQUEUED (not started, not finished): %s.service\n' \
     "$prog" "$UPDATE_UNIT" >&2
   printf '%s: this command reports nothing about the outcome — check:\n' \
     "$prog" >&2
   printf '  journalctl --user -u %s.service -f\n' "$UPDATE_UNIT" >&2
   printf '  systemctl --user status %s.service\n' "$UPDATE_UNIT" >&2
-  exec "$systemd_run_bin" "$@"
+  exit 0
 fi
 
 # ---------------------------------------------------------------- worker ---

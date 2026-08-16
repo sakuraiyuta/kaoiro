@@ -14,6 +14,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  rmSync,
   statSync,
   utimesSync,
   writeFileSync,
@@ -29,6 +30,7 @@ const deploySrc = fileURLToPath(new URL("../deploy", import.meta.url));
  *  release that lacks them is still startable, so including them would blur
  *  what the artifact checks actually require. */
 const DEPLOY_SCRIPTS = [
+  "verify-release.mjs",
   "kaoiro-runner-common.sh",
   "kaoiro-runner-launch.sh",
   "kaoiro-runner-install.sh",
@@ -43,6 +45,13 @@ const DEPLOY_SCRIPTS = [
 const STUB_CLI = `
 const fs = require("node:fs");
 const path = require("node:path");
+// A REAL module dependency, not decoration. The previous stub imported
+// nothing, so removing a module from the tree left it running perfectly and
+// the "one missing module is caught before exec" property could not be
+// measured at all (issue #229 round 2, ふじ 差し戻し must-fix 3). Requiring a
+// sibling makes the negative control possible: delete dist/stub_dep.js and
+// this exits non-zero on its own.
+const dep = require("./stub_dep.js");
 if (process.argv.includes("--version")) {
   const info = JSON.parse(
     fs.readFileSync(path.join(__dirname, "build-info.json"), "utf8"),
@@ -52,9 +61,11 @@ if (process.argv.includes("--version")) {
   );
   process.exit(0);
 }
-process.stdout.write("stub cli.js started\\n");
+process.stdout.write("stub cli.js started " + dep.marker + "\\n");
 process.exit(0);
 `;
+
+const STUB_DEP = 'module.exports = { marker: "dep-loaded" };\n';
 
 export interface RunResult {
   status: number | null;
@@ -97,6 +108,9 @@ export interface ReleaseTreeOptions {
    *  cases, where VERSION must NOT match the revision. */
   version?: string;
   dirty?: boolean;
+  /** Skip MANIFEST.json generation — for the "release built by an older
+   *  installer" / dev-checkout cases. */
+  manifest?: false;
   /** Unix seconds to stamp on the archive's top-level directory. tar
    *  preserves it, so this is how a test produces a release whose tree
    *  carries a BUILD time rather than an install time. */
@@ -112,16 +126,21 @@ export function writeReleaseTree(
   const omit = new Set(options.omit ?? []);
   const dirty = options.dirty ?? false;
 
-  const put = (rel: string, content: string, mode?: number): void => {
-    if (omit.has(rel)) return;
+  const put = (rel: string, content: string): void => {
     const path = join(tree, rel);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content);
-    if (mode !== undefined) chmodSync(path, mode);
   };
 
+  // The COMPLETE tree is written first, and `omit` is applied at the very
+  // end. That ordering is what makes an omission test meaningful: the
+  // manifest still LISTS the file that was removed, which is exactly the
+  // state a truncated extraction or a half-deleted release is in. Generating
+  // the manifest after the removal would produce a self-consistent tree that
+  // no check could object to.
   put("VERSION", `${options.version ?? (dirty ? `${revision}-dirty` : revision)}\n`);
   put("dist/cli.js", STUB_CLI);
+  put("dist/stub_dep.js", STUB_DEP);
   put(
     "dist/build-info.json",
     JSON.stringify({
@@ -135,11 +154,27 @@ export function writeReleaseTree(
 
   mkdirSync(join(tree, "deploy"), { recursive: true });
   for (const script of DEPLOY_SCRIPTS) {
-    if (omit.has(`deploy/${script}`)) continue;
     const dest = join(tree, "deploy", script);
     copyFileSync(join(deploySrc, script), dest);
     chmodSync(dest, script === "kaoiro-runner-common.sh" ? 0o644 : 0o755);
   }
+
+  // Built by the REAL generator the builder runs, so the fixture cannot
+  // drift into describing a manifest format nothing produces.
+  if (options.manifest !== false) {
+    execFileSync(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL("../../scripts/build-release-manifest.mjs", import.meta.url),
+        ),
+        tree,
+      ],
+      { stdio: ["ignore", "ignore", "ignore"] },
+    );
+  }
+
+  for (const rel of omit) rmSync(join(tree, rel), { force: true });
   return tree;
 }
 

@@ -126,13 +126,22 @@ for entry in "$staging"/*; do
   [ -z "$tree" ] || kaoiro_die "archive has more than one top-level entry: $tarball" 70
   tree=$entry
 done
+# -L BEFORE -d: `[ -d ]` follows symlinks, so an archive whose only
+# top-level entry is a link to a directory elsewhere passed this check and
+# was then `mv`d into place — making releases/<id> itself a link out of the
+# install root, at exit 0 (reproduced 2026-08-16).
+[ ! -L "$tree" ] ||
+  kaoiro_die "archive's top-level entry is a symlink, not a directory: $tarball" 70
 [ -d "$tree" ] || kaoiro_die "archive's top-level entry is not a directory: $tarball" 70
 
+# Sets KAOIRO_VERIFIED_IDENTITY, having already proved VERSION and
+# dist/build-info.json agree. Taking the id from anywhere else — a second
+# `cat VERSION`, or the archive's filename — is what let a tarball name its
+# directory after one build while carrying another.
 kaoiro_verify_release_tree "$tree"
-
-id=$(cat "$tree/VERSION")
+id=$KAOIRO_VERIFIED_IDENTITY
 kaoiro_valid_release_id "$id" ||
-  kaoiro_die "VERSION holds an unusable release id: $id" 70
+  kaoiro_die "release carries an unusable identity: $id" 70
 
 target="$root/releases/$id"
 
@@ -142,7 +151,21 @@ if [ -e "$target" ]; then
     # installed one IS the requested one, so this is a no-op — which is also
     # what keeps a retried update idempotent. There is deliberately no flag
     # to replace it; see the header.
-    printf '%s: release %s is already installed, keeping it\n' "$prog" "$id" >&2
+    #
+    # BUT VERIFY WHAT IS ALREADY THERE FIRST. Skipping straight to exit 0
+    # meant the one path that touches an EXISTING release never looked at
+    # it: a release whose dist/cli.js had been deleted was reported as
+    # "already installed" and left broken, and the update that followed
+    # went on to activate it (reproduced 2026-08-16).
+    kaoiro_verify_release_tree "$target"
+    if [ "$KAOIRO_VERIFIED_IDENTITY" != "$id" ]; then
+      # Same directory name, different build inside. Replacing it silently
+      # would destroy whatever the running host may still be using, and
+      # keeping it would activate a build nobody asked for. Neither is ours
+      # to choose.
+      kaoiro_die "release $id is already installed but carries identity $KAOIRO_VERIFIED_IDENTITY — refusing to guess; remove it by hand after checking what uses it" 70
+    fi
+    printf '%s: release %s is already installed and verified, keeping it\n' "$prog" "$id" >&2
     printf '%s\n' "$id"
     exit 0
   fi

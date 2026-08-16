@@ -156,31 +156,31 @@ kaoiro_gc_staging() {
   done
 }
 
-# Artifact set a release must carry to be startable. Kept in sync with
-# kaoiro-runner-launch.sh's start-time check, with one addition: VERSION,
-# which the shim does not check.
+# Full verification of a release tree, delegated to verify-release.mjs (see
+# that file for what it checks and why the checks live in one place).
 #
-# The split is deliberate. This function runs where a truncated extraction is
-# actually detectable (before the tree is renamed into releases/), so it
-# checks the whole tree including the operator-facing VERSION file. The shim
-# checks only what the process needs to run, and stays usable in a
-# repo-direct dev checkout, which has no VERSION.
-#
-# `-f` follows symlinks, which is what the wrapper entries need: pnpm deploy
-# links node_modules/@kaoiro/<pkg> into node_modules/.pnpm/<hash>/ rather
-# than copying the package (measured against a real linux-x64 tarball,
-# 2026-08-16).
+# Install-time and activation-time verification is the STRICT mode: a
+# manifest is required and every entry's sha256 is compared. Neither caller
+# is latency-sensitive, and both decide whether a tree may become `current` —
+# the point at which a defect stops being recoverable cheaply. The service
+# start path deliberately runs the same verifier in existence-only mode
+# instead; see kaoiro-runner-launch.sh.
+# Sets KAOIRO_VERIFIED_IDENTITY to the identity the tree proved it has —
+# taken from the verifier's stdout, not from a second read of VERSION. The
+# caller naming a directory after an id it read separately is exactly how the
+# directory name and the tree's own build-info came to disagree.
+# shellcheck disable=SC2034,SC2154 # KAOIRO_VERIFIED_IDENTITY is read by the
+# sourcing script, and `deploy_dir` is assigned by it before this file is
+# sourced — neither crosses shellcheck's single-file view.
 kaoiro_verify_release_tree() {
   _tree=$1
-  for _f in \
-    VERSION \
-    dist/cli.js \
-    dist/build-info.json \
-    node_modules/@kaoiro/claude-code/dist/cli.js \
-    node_modules/@kaoiro/codex/dist/cli.js; do
-    [ -f "$_tree/$_f" ] ||
-      kaoiro_die "release tree is incomplete: missing $_f in $_tree" 70
-  done
+  # ALWAYS our own copy of the verifier, never "$_tree/deploy/". install runs
+  # this against a tree that was just unpacked from an archive, and an
+  # archive that supplies the program judging it certifies itself.
+  KAOIRO_VERIFIED_IDENTITY=$(
+    "$(kaoiro_node)" "$deploy_dir/verify-release.mjs" \
+      "$_tree" --require-manifest --hash
+  ) || kaoiro_die "release tree failed verification: $_tree" 70
   [ -x "$_tree/deploy/kaoiro-runner-launch.sh" ] ||
     kaoiro_die "release tree is incomplete: deploy/kaoiro-runner-launch.sh missing or not executable in $_tree" 70
 }

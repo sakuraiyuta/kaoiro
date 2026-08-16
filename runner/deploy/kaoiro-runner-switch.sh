@@ -84,6 +84,12 @@ switch_to() {
   _target="$root/releases/$_id"
   [ -d "$_target" ] || kaoiro_die "no such release: $_id (looked in $root/releases)" 78
   kaoiro_verify_release_tree "$_target"
+  # The directory name is what `current` will point at; the tree's own
+  # build-info is what actually runs. Re-checked here and not only at install
+  # time, because a release directory can be renamed, restored from a backup,
+  # or built by an older installer that did not enforce this.
+  [ "$KAOIRO_VERIFIED_IDENTITY" = "$_id" ] ||
+    kaoiro_die "release directory $_id carries identity $KAOIRO_VERIFIED_IDENTITY — refusing to activate a name that does not match its contents" 70
 
   _old=""
   if [ -L "$root/current" ]; then
@@ -120,6 +126,8 @@ if [ "$rollback" = yes ]; then
   prev_target="$root/releases/$prev_id"
   [ -d "$prev_target" ] || kaoiro_die "previous release is gone: $prev_target" 78
   kaoiro_verify_release_tree "$prev_target"
+  [ "$KAOIRO_VERIFIED_IDENTITY" = "$prev_id" ] ||
+    kaoiro_die "previous release directory $prev_id carries identity $KAOIRO_VERIFIED_IDENTITY — refusing to roll back onto a name that does not match its contents" 70
 
   cur=""
   if [ -L "$root/current" ]; then

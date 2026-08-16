@@ -121,14 +121,24 @@ command -v "$node_bin" >/dev/null 2>&1 ||
 #
 # <install>/runner/deploy/<this script> -> <install>/runner/dist/cli.js
 entry="$deploy_dir/../dist/cli.js"
-for artifact in \
-  "$entry" \
-  "$deploy_dir/../dist/build-info.json" \
-  "$deploy_dir/../node_modules/@kaoiro/claude-code/dist/cli.js" \
-  "$deploy_dir/../node_modules/@kaoiro/codex/dist/cli.js"; do
-  [ -f "$artifact" ] ||
-    die_config "incomplete install: $artifact is missing (repo checkout: run 'pnpm -C wrapper build && pnpm -C runner build'; release: reinstall it)"
-done
+
+# EVERY verification failure becomes exit 78, and that mapping is the point.
+# A tree that passes a hand-written sentinel list but is missing one module
+# fails at import instead, with node's own exit 1 — which
+# RestartPreventExitStatus=78 does not match, so the unit restart-loops on a
+# fault no restart can fix. Deleting dist/args.js from a real dist reproduced
+# exactly that (2026-08-16). Turning the fault into 78 BEFORE exec is what
+# leaves it visible in `systemctl --user status` instead.
+#
+# Existence-only (no --hash, no --require-manifest): this runs on every boot
+# and every restart, and hashing a release is not a cost to pay there. The
+# strict pass — manifest required, digests compared — already ran at install
+# and at activation, where the tree could still be rejected.
+verify="$deploy_dir/verify-release.mjs"
+[ -f "$verify" ] ||
+  die_config "incomplete install: $verify is missing (release: reinstall it)"
+"$node_bin" "$verify" "$deploy_dir/.." >/dev/null ||
+  die_config "release verification failed (see the line above); repo checkout: run 'pnpm -C wrapper build && pnpm -C runner build', release: reinstall it"
 
 # Single-binary migration (issue #70): replace the line below with
 #   exec "$deploy_dir/../bin/kaoiro-runner" "$config"
