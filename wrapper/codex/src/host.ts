@@ -78,6 +78,7 @@ import {
   CodexTurnDiagnostics,
   codexTurnTraceCaptureDir,
   defaultCodexTurnTraceDir,
+  pruneCodexTurnTraceCaptureDirs,
 } from "./turn_diagnostics.js";
 import { ToolHost } from "./toolhost.js";
 import {
@@ -269,6 +270,89 @@ function rateLimitsDiffer(
   return false;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** The SDK types describe well-formed JSONL, but a malformed external event
+ * must be traceable without entering the production adapter path. */
+function isUsableThreadEvent(event: unknown): event is ThreadEvent {
+  if (!isRecord(event) || typeof event.type !== "string") return false;
+  switch (event.type) {
+    case "thread.started":
+      return typeof event.thread_id === "string";
+    case "turn.started":
+    case "turn.completed":
+      return true;
+    case "turn.failed":
+      return isRecord(event.error) && typeof event.error.message === "string";
+    case "error":
+      return typeof event.message === "string";
+    case "item.started":
+    case "item.updated":
+    case "item.completed":
+      return isUsableThreadItem(event.item);
+    default:
+      return false;
+  }
+}
+
+function isUsableThreadItem(item: unknown): boolean {
+  if (!isRecord(item) || typeof item.id !== "string" || typeof item.type !== "string") {
+    return false;
+  }
+  switch (item.type) {
+    case "agent_message":
+    case "reasoning":
+      return typeof item.text === "string";
+    case "command_execution":
+      return (
+        typeof item.command === "string" &&
+        typeof item.aggregated_output === "string" &&
+        typeof item.status === "string" &&
+        (item.exit_code === undefined || typeof item.exit_code === "number")
+      );
+    case "file_change":
+      return (
+        typeof item.status === "string" &&
+        Array.isArray(item.changes) &&
+        item.changes.every(
+          (change) =>
+            isRecord(change) &&
+            typeof change.path === "string" &&
+            typeof change.kind === "string",
+        )
+      );
+    case "mcp_tool_call":
+      return (
+        typeof item.server === "string" &&
+        typeof item.tool === "string" &&
+        typeof item.status === "string" &&
+        (item.error === undefined ||
+          (isRecord(item.error) && typeof item.error.message === "string")) &&
+        (item.result === undefined ||
+          item.result === null ||
+          (isRecord(item.result) && Array.isArray(item.result.content)))
+      );
+    case "web_search":
+      return typeof item.query === "string";
+    case "todo_list":
+      return (
+        Array.isArray(item.items) &&
+        item.items.every(
+          (entry) =>
+            isRecord(entry) &&
+            typeof entry.text === "string" &&
+            typeof entry.completed === "boolean",
+        )
+      );
+    case "error":
+      return typeof item.message === "string";
+    default:
+      return false;
+  }
+}
+
 export class CodexHost implements EngineAdapter {
   readonly #config: WrapperConfig;
   /** Last-applied display_name sync revision (issue #197 段階3, D15,
@@ -354,12 +438,15 @@ export class CodexHost implements EngineAdapter {
   /** This process's private trace capture directory. It is derived without
    * filesystem I/O so a broken diagnostic path cannot prevent host startup. */
   readonly #turnTraceCaptureDir: string;
+  readonly #turnTraceBaseDir: string;
 
   constructor(config: WrapperConfig, options: CodexHostOptions) {
     this.#config = config;
     this.#options = options;
+    this.#turnTraceBaseDir =
+      options.turnTraceDir ?? defaultCodexTurnTraceDir();
     this.#turnTraceCaptureDir = codexTurnTraceCaptureDir(
-      options.turnTraceDir ?? defaultCodexTurnTraceDir(),
+      this.#turnTraceBaseDir,
       config.agent_id,
       randomUUID(),
     );
@@ -705,6 +792,16 @@ export class CodexHost implements EngineAdapter {
     // state. Keep the host self-sufficient for non-CLI callers; the per-
     // session guard makes the second call a no-op (issue #251).
     await this.initializeRateLimits();
+    try {
+      await pruneCodexTurnTraceCaptureDirs(
+        this.#turnTraceBaseDir,
+        this.#config.agent_id,
+      );
+    } catch (error) {
+      // Retention is diagnostic-only; an unreadable trace root must not
+      // prevent a real SDK turn or a default Codex factory from starting.
+      process.stderr.write(`codex turn trace failed: ${String(error)}\n`);
+    }
     const descriptors = this.#options.toolDescriptors ?? [];
     const toolHost =
       descriptors.length > 0 ? await ToolHost.listen(descriptors) : null;
@@ -901,6 +998,7 @@ export class CodexHost implements EngineAdapter {
       });
       for await (const event of events) {
         diagnostics.recordEvent(event);
+        if (!isUsableThreadEvent(event)) continue;
         if (event.type === "error") recordedThreadError = event.message;
         const sessionId = threadEventToSessionId(event);
         if (sessionId !== null && sessionId !== this.#sessionId) {

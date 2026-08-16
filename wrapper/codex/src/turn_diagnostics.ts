@@ -8,6 +8,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rm,
   stat,
   unlink,
   writeFile,
@@ -15,11 +16,11 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyInterAgentError } from "@kaoiro/agent-common";
-import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";
 
 const MAX_EVENTS = 24;
 const MAX_STDERR_BYTES = 8192;
 const MAX_TRACE_FILES = 20;
+const MAX_CAPTURE_DIRECTORIES = 20;
 
 export function defaultCodexTurnTraceDir(): string {
   if (process.env.KAOIRO_CODEX_TURN_TRACE_DIR !== undefined) {
@@ -39,10 +40,45 @@ export function defaultCodexTurnTraceDir(): string {
 export function codexTurnTraceCaptureDir(
   baseDirectory: string,
   agentId: string,
-  hostId: string,
+  captureId: string,
 ): string {
   const agentKey = createHash("sha256").update(agentId).digest("hex").slice(0, 16);
-  return join(baseDirectory, "agents", agentKey, hostId);
+  return join(baseDirectory, "agents", agentKey, captureId);
+}
+
+/** Retains a bounded number of former host-private capture directories for
+ * one agent. The current host has a new capture id, so startup may prune its
+ * predecessors before this host first writes diagnostics. */
+export async function pruneCodexTurnTraceCaptureDirs(
+  baseDirectory: string,
+  agentId: string,
+): Promise<void> {
+  const agentKey = createHash("sha256").update(agentId).digest("hex").slice(0, 16);
+  const agentDirectory = join(baseDirectory, "agents", agentKey);
+  let entries: Array<{ name: string; isDirectory(): boolean }>;
+  try {
+    entries = await readdir(agentDirectory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const captures = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map(async (entry) => {
+        const path = join(agentDirectory, entry.name);
+        try {
+          return { path, mtimeMs: (await stat(path)).mtimeMs };
+        } catch {
+          return null;
+        }
+      }),
+  );
+  const stale = captures
+    .filter((entry): entry is { path: string; mtimeMs: number } => entry !== null)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(MAX_CAPTURE_DIRECTORIES);
+  await Promise.all(stale.map(({ path }) => rm(path, { recursive: true, force: true })));
 }
 
 /** Creates or repairs the exact private capture directory. `mkdir`'s mode is
@@ -59,30 +95,55 @@ function clipTail(value: string, maxBytes: number): string {
     : bytes.subarray(bytes.length - maxBytes).toString("utf8");
 }
 
-function semanticItem(item: ThreadItem): Record<string, unknown> {
-  const base = { item_type: item.type, item_id: item.id };
-  switch (item.type) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function errorCode(detail: unknown): string | null {
+  if (typeof detail !== "string") return null;
+  try {
+    return classifyInterAgentError({ detail }).code;
+  } catch {
+    return null;
+  }
+}
+
+function semanticItem(item: unknown): Record<string, unknown> {
+  if (!isRecord(item)) return { item_type: "malformed" };
+  const itemType = stringOrNull(item.type) ?? "malformed";
+  const base = { item_type: itemType, item_id: stringOrNull(item.id) };
+  switch (itemType) {
     case "command_execution":
-      return { ...base, status: item.status, exit_code: item.exit_code ?? null };
+      return {
+        ...base,
+        status: stringOrNull(item.status),
+        exit_code: typeof item.exit_code === "number" ? item.exit_code : null,
+      };
     case "file_change":
-      return { ...base, status: item.status };
+      return { ...base, status: stringOrNull(item.status) };
     case "mcp_tool_call":
       return {
         ...base,
-        status: item.status,
-        server: item.server,
-        tool: item.tool,
-        error_code:
-          item.error === undefined
-            ? null
-            : classifyInterAgentError({ detail: item.error.message }).code,
+        status: stringOrNull(item.status),
+        server: stringOrNull(item.server),
+        tool: stringOrNull(item.tool),
+        error_code: errorCode(
+          isRecord(item.error) ? item.error.message : undefined,
+        ),
       };
     case "todo_list":
-      return { ...base, item_count: item.items.length };
+      return {
+        ...base,
+        item_count: Array.isArray(item.items) ? item.items.length : null,
+      };
     case "error":
       return {
         ...base,
-        error_code: classifyInterAgentError({ detail: item.message }).code,
+        error_code: errorCode(item.message),
       };
     default:
       // agent_message/reasoning deliberately omit text; web_search omits its
@@ -94,17 +155,22 @@ function semanticItem(item: ThreadItem): Record<string, unknown> {
 /** A deliberately minimized view of stdout JSONL. It has event/item kind and
  * status useful for failure ordering, but never command/query/text/arguments,
  * MCP result, error message, path, or token-bearing payload. */
-function semanticEvent(event: ThreadEvent): Record<string, unknown> {
+function semanticEvent(event: unknown): Record<string, unknown> {
+  if (!isRecord(event) || typeof event.type !== "string") {
+    return { type: "malformed_event" };
+  }
   switch (event.type) {
     case "turn.failed":
       return {
         type: event.type,
-        error_code: classifyInterAgentError({ detail: event.error.message }).code,
+        error_code: errorCode(
+          isRecord(event.error) ? event.error.message : undefined,
+        ),
       };
     case "error":
       return {
         type: event.type,
-        error_code: classifyInterAgentError({ detail: event.message }).code,
+        error_code: errorCode(event.message),
       };
     case "item.started":
     case "item.updated":
@@ -170,8 +236,15 @@ export class CodexTurnDiagnostics {
     return this.#bridgeStderrPath;
   }
 
-  recordEvent(event: ThreadEvent): void {
-    this.#events.push(semanticEvent(event));
+  recordEvent(event: unknown): void {
+    let semantic: Record<string, unknown> = { type: "malformed_event" };
+    try {
+      semantic = semanticEvent(event);
+    } catch {
+      // Diagnostic capture must never turn an SDK shape regression into a
+      // wrapper failure. The fallback has no untrusted event payload.
+    }
+    this.#events.push(semantic);
     if (this.#events.length > MAX_EVENTS) this.#events.shift();
   }
 

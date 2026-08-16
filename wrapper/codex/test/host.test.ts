@@ -1,6 +1,6 @@
-import { mkdtemp, readdir, readFile, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, stat, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   CodexOptions,
@@ -15,6 +15,10 @@ import type {
 import { makeStateChange } from "@kaoiro/agent-common";
 import { CodexHost, initialStatusExt } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
+import {
+  CodexTurnDiagnostics,
+  codexTurnTraceCaptureDir,
+} from "../src/turn_diagnostics.js";
 import type {
   CodexRateLimitSnapshot,
   CodexRateLimitWindow,
@@ -2200,6 +2204,87 @@ describe("CodexHost", () => {
       expect(turnEnds).toHaveLength(1);
       expect(turnEnds[0]).toMatchObject({ conversationIds: [] });
       expect(turnEnds[0]).not.toHaveProperty("error");
+    });
+
+    it("malformed item.completed のあと turn.completed が来れば成功のまま終え、peer error を作らない", async () => {
+      const turnEnds: {
+        conversationIds: readonly string[];
+        error?: { detail?: string };
+      }[] = [];
+      const { client } = makeClient([[
+        { type: "item.completed", item: null } as unknown as ThreadEvent,
+        usageEvent(),
+      ]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({ conversationIds: [] });
+      expect(turnEnds[0]).not.toHaveProperty("error");
+    });
+
+    it("failure trace の永続化失敗は SDK failure の onTurnEnd と host.run を置き換えない", async () => {
+      const turnEnds: {
+        conversationIds: readonly string[];
+        error?: { detail?: string };
+      }[] = [];
+      const persist = vi
+        .spyOn(CodexTurnDiagnostics.prototype, "writeFailure")
+        .mockRejectedValueOnce(new Error("trace disk full"));
+      const { client } = makeClient([new Error("Codex Exec exited with code 1")]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnEnd: (info) => turnEnds.push(info),
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      expect(persist).toHaveBeenCalledOnce();
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]).toMatchObject({
+        conversationIds: [],
+        error: { detail: "Error: Codex Exec exited with code 1" },
+      });
+    });
+
+    it("host 起動時に agent の古い trace capture dir を20件までへ GC する", async () => {
+      const traceDir = await mkdtemp(join(tmpdir(), "kaoiro-trace-gc-test-"));
+      const captures = await Promise.all(
+        Array.from({ length: 21 }, async (_, index) => {
+          const capture = codexTurnTraceCaptureDir(
+            traceDir,
+            CONFIG.agent_id,
+            `former-${String(index).padStart(2, "0")}`,
+          );
+          await mkdir(capture, { recursive: true });
+          await utimes(capture, index + 1, index + 1);
+          return capture;
+        }),
+      );
+      const { client } = makeClient([[usageEvent()]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        turnTraceDir: traceDir,
+      });
+
+      await runOneTurn(host, "gc", client);
+
+      const agentDir = dirname(captures[0]!);
+      const remaining = await readdir(agentDir);
+      expect(remaining).toHaveLength(21); // 20 retained former captures + this host.
+      expect(remaining).not.toContain("former-00");
     });
 
     it("診断 capture dir が壊れていても SDK turn は開始・完了する (fail-soft)", async () => {

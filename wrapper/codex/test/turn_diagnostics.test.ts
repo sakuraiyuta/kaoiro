@@ -153,4 +153,60 @@ describe("CodexTurnDiagnostics (issue #255)", () => {
     }
     expect((await readdir(directory)).filter((name) => name.endsWith(".jsonl"))).toHaveLength(20);
   });
+
+  it("壊れた SDK event 形状を記録しても throw せず、安全な形だけを残す", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kaoiro-trace-malformed-test-"));
+    const trace = new CodexTurnDiagnostics(directory);
+    const malformed = [
+      { type: "turn.failed", error: null },
+      { type: "turn.failed" },
+      { type: "item.completed", item: { id: "todos", type: "todo_list" } },
+      { type: "item.completed", item: { id: "mcp", type: "mcp_tool_call", error: null } },
+      { type: "item.completed", item: null },
+      { type: "item.updated", item: { id: "error", type: "error", message: null } },
+      { type: "item.started", item: undefined },
+    ];
+
+    for (const event of malformed) {
+      expect(() => trace.recordEvent(event as unknown as ThreadEvent)).not.toThrow();
+    }
+
+    const path = await trace.writeFailure({
+      sessionId: null,
+      turnToken: "turn-malformed",
+      conversationIds: [],
+      outcome: "stream_ended_without_terminal",
+    });
+    const record = JSON.parse(await readFile(path, "utf8")) as {
+      stdout_jsonl_tail: Record<string, unknown>[];
+    };
+    expect(record.stdout_jsonl_tail).toEqual([
+      { type: "turn.failed", error_code: null },
+      { type: "turn.failed", error_code: null },
+      {
+        type: "item.completed",
+        item_type: "todo_list",
+        item_id: "todos",
+        item_count: null,
+      },
+      {
+        type: "item.completed",
+        item_type: "mcp_tool_call",
+        item_id: "mcp",
+        status: null,
+        server: null,
+        tool: null,
+        error_code: null,
+      },
+      { type: "item.completed", item_type: "malformed" },
+      {
+        type: "item.updated",
+        item_type: "error",
+        item_id: "error",
+        error_code: null,
+      },
+      { type: "item.started", item_type: "malformed" },
+    ]);
+    expect(JSON.stringify(record.stdout_jsonl_tail)).not.toContain("undefined");
+  });
 });
