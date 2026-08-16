@@ -87,7 +87,19 @@ function firstPartyDists(root) {
     const dependent = createRequire(manifestPath);
     for (const dep of Object.keys(pkg.dependencies ?? {})) {
       if (!dep.startsWith("@kaoiro/")) continue;
-      visit(dirname(dependent.resolve(`${dep}/package.json`)));
+      let resolved;
+      try {
+        resolved = dependent.resolve(`${dep}/package.json`);
+      } catch (err) {
+        // Fail closed, but in this file's own voice: an uncaught
+        // MODULE_NOT_FOUND aborts the build too, and tells the operator
+        // nothing about which package declared what.
+        process.stderr.write(
+          `build-release-manifest: ${pkg.name} declares ${dep}, which does not resolve from ${real}: ${err.message}\n`,
+        );
+        process.exit(70); // EX_SOFTWARE
+      }
+      visit(dirname(resolved));
     }
   };
   for (const name of ENTRY_PACKAGES) visit(join(root, "node_modules", name));

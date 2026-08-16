@@ -271,15 +271,19 @@ function main(argv) {
  * Measured on a real tarball install, 2026-08-16 (the fixtures missed it
  * because they invoke the shim by its physical path). The comparison also
  * stops depending on `file://` + a raw path being a well-formed URL, which it
- * is not once a path contains a space. */
+ * is not once a path contains a space.
+ *
+ * NOTHING HERE CATCHES. A `catch { return false }` would read as defensive
+ * and mean "not the entry point", so main() would be skipped and the process
+ * would exit 0 having verified nothing — the launch shim only reacts to a
+ * NON-zero exit, so that silent pass is indistinguishable from a good
+ * release. It is the same fail-open this function was just rewritten to
+ * remove. An exception instead propagates, node exits non-zero, and the shim
+ * maps it to 78 like every other verification failure. */
 function isEntryPoint() {
   const entry = process.argv[1];
   if (entry === undefined) return false;
-  try {
-    return realpathSync(entry) === realpathSync(import.meta.filename);
-  } catch {
-    return false;
-  }
+  return realpathSync(entry) === realpathSync(import.meta.filename);
 }
 
 if (isEntryPoint()) {
