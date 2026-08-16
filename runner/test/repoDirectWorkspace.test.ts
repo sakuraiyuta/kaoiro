@@ -38,14 +38,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { revisionOf, runScript, writeReleaseTree } from "./releaseFixture.js";
+import { revisionOf, runScript, writeWorkspaceCheckout } from "./releaseFixture.js";
 
 const REVISION = revisionOf("repo-direct-workspace");
 
 /** The checkout this file's fixture stands in for: runner/test/ -> repo root. */
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-
-const WRAPPERS = ["claude-code", "codex"];
 
 /** pnpm's own spelling, relative to the link's own directory
  *  (`<ws>/runner/node_modules/@kaoiro/`). Copied from the live checkout rather
@@ -58,33 +56,17 @@ describe("repo-direct な workspace checkout の起動検証", () => {
   let runner: string;
   let confDir: string;
 
-  /** A checkout shaped like the real workspace: the runner tree in `runner/`,
-   *  the wrapper packages in sibling members, and runner/node_modules/@kaoiro
-   *  reaching them by relative links out of the runner tree. */
-  const writeWorkspaceCheckout = (): void => {
-    runner = join(ws, "runner");
-    // No VERSION and no MANIFEST.json — the two absences that make a tree
-    // repo-direct rather than a release (verify-release.mjs states why VERSION
-    // is the discriminator).
-    writeReleaseTree(runner, REVISION, { manifest: false, omit: ["VERSION"] });
-    writeFileSync(
-      join(ws, "pnpm-workspace.yaml"),
-      "packages:\n  - runner\n  - wrapper/claude-code\n  - wrapper/codex\n",
-    );
-    for (const wrapper of WRAPPERS) {
-      const link = join(runner, "node_modules", "@kaoiro", wrapper);
-      const member = join(ws, "wrapper", wrapper);
-      mkdirSync(dirname(member), { recursive: true });
-      renameSync(link, member);
-      symlinkSync(linkTarget(wrapper), link);
-    }
-  };
-
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "kaoiro-repo-direct-"));
     ws = join(dir, "workspace");
     mkdirSync(ws, { recursive: true });
-    writeWorkspaceCheckout();
+    // writeWorkspaceCheckout (issue #259) stages the REAL pnpm workspace link
+    // topology this file's tests actually need — the runner tree in
+    // `runner/`, wrapper packages as sibling members, and
+    // runner/node_modules/@kaoiro reaching them by relative links out of the
+    // runner tree — rather than the built-release shape writeReleaseTree
+    // alone produces.
+    runner = writeWorkspaceCheckout(ws, REVISION);
 
     confDir = join(dir, "config");
     mkdirSync(confDir, { recursive: true });
@@ -127,6 +109,13 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     expect(result.status).toBe(78);
     expect(result.stderr).toContain("resolves outside the release");
     expect(result.stdout).not.toContain("stub cli.js started");
+    // issue #259: this exact failure class (a containment-boundary
+    // violation) is the incident the launch shim's OLD unconditional "run
+    // pnpm build" guidance misled an operator with — the artifacts were all
+    // present and current, a rebuild changed nothing, and the same failure
+    // recurred 15 seconds later. The guidance must not repeat that mistake.
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).toContain("NOT a missing build");
   });
 
   it("workspace marker が無ければ release root 境界へ戻る", () => {
@@ -141,6 +130,8 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     expect(result.status).toBe(78);
     expect(result.stderr).toContain("resolves outside the release");
     expect(result.stdout).not.toContain("stub cli.js started");
+    // issue #259: same failure class as the previous test — not build-fixable.
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
   });
 
   it("実チェックアウトのリンクは runner/ の外・workspace の内を指す (前提の pin)", () => {

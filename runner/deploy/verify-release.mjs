@@ -54,8 +54,21 @@ const REVISION_RE = /^[0-9a-f]{40}$/;
 
 class VerifyError extends Error {}
 
+/** A VerifyError whose cause is a plain ENOENT on an artifact this release
+ *  should carry — i.e. the file was simply never built, distinguished from
+ *  every other failure class (containment, malformed content, identity
+ *  mismatch) that a rebuild cannot fix. Callers that need to tell the
+ *  operator whether "run the build" is even a plausible remedy (issue #259)
+ *  branch on this; every other verification failure stays a plain
+ *  VerifyError so a rebuild is never suggested for something it cannot fix. */
+class MissingArtifactError extends VerifyError {}
+
 function fail(message) {
   throw new VerifyError(message);
+}
+
+function failMissingArtifact(message) {
+  throw new MissingArtifactError(message);
 }
 
 function isValidBuiltAt(value) {
@@ -94,6 +107,13 @@ function readBuildInfoStrict(root) {
   try {
     raw = readFileSync(path, "utf8");
   } catch (err) {
+    // ENOENT here means dist/ was simply never built — issue #259: this is
+    // the one case where telling the operator to build is actually correct.
+    // Any other code (EACCES, EISDIR, ...) means the file IS there and
+    // something else is wrong, which a rebuild does not fix.
+    if (err.code === "ENOENT") {
+      failMissingArtifact(`dist/build-info.json is unreadable: ${err.message}`);
+    }
     fail(`dist/build-info.json is unreadable: ${err.message}`);
   }
   let parsed;
@@ -119,6 +139,12 @@ function containedRealPath(root, realRoot, rel) {
   try {
     real = realpathSync(target);
   } catch (err) {
+    // Same ENOENT-vs-everything-else split as readBuildInfoStrict: a plain
+    // absence is a build shortage (issue #259), anything else (a broken
+    // symlink, ELOOP, ...) is not.
+    if (err.code === "ENOENT") {
+      failMissingArtifact(`${rel} is missing or unresolvable: ${err.message}`);
+    }
     fail(`${rel} is missing or unresolvable: ${err.message}`);
   }
   const within = relative(realRoot, real);
@@ -698,7 +724,16 @@ function main(argv) {
   } catch (err) {
     if (err instanceof VerifyError) {
       process.stderr.write(`verify-release: ${root}: ${err.message}\n`);
-      process.exit(70); // EX_SOFTWARE
+      // issue #259: exit 71 marks a MissingArtifactError specifically so a
+      // caller (kaoiro-runner-launch.sh) can tell "build shortage" apart
+      // from every other verification failure and stop recommending a build
+      // for a failure a build cannot fix. Every other caller (install /
+      // switch, kaoiro-runner-common.sh's kaoiro_verify_release_tree) only
+      // ever checked zero-vs-nonzero, so this is additive, not a breaking
+      // change to the exit-code contract.
+      // 70 = EX_SOFTWARE (generic verification failure); 71 = build shortage
+      // specifically (a MissingArtifactError).
+      process.exit(err instanceof MissingArtifactError ? 71 : 70);
     }
     throw err;
   }

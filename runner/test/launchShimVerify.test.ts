@@ -26,7 +26,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { revisionOf, runScript, writeReleaseTree } from "./releaseFixture.js";
+import {
+  revisionOf,
+  runScript,
+  writeReleaseTree,
+  writeWorkspaceCheckout,
+} from "./releaseFixture.js";
 
 const REVISION = revisionOf("shim-verify");
 
@@ -95,6 +100,11 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
       expect(result.stderr).toContain("release verification failed");
       expect(result.stderr).toContain(artifact);
       expect(result.stdout).not.toContain("stub cli.js started");
+      // issue #259: a genuinely MISSING artifact (verify-release.mjs exit 71)
+      // is the one case where "run the build" is a real remedy, so this
+      // branch of the guidance is the one place it still appears.
+      expect(result.stderr).toContain("a build artifact is missing");
+      expect(result.stderr).toContain("pnpm -C wrapper build && pnpm -C runner build");
     },
   );
 
@@ -118,15 +128,35 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
     expect(result.status).toBe(78);
     expect(result.stderr).toContain("MANIFEST.json is missing from a built release");
     expect(result.stdout).not.toContain("stub cli.js started");
+    // issue #259: a released install that lost its MANIFEST.json cannot be
+    // fixed by building in place — a rebuild does not restore it. This is
+    // NOT verify-release.mjs's build-shortage exit (71); the shim's guidance
+    // must not suggest building.
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).toContain("NOT a missing build");
   });
 
   it("VERSION も MANIFEST も無ければ repo-direct として起動する", () => {
-    // The discriminator is VERSION, not the manifest: only the builder writes
-    // one, so its absence is what actually identifies a dev checkout.
-    unlinkSync(join(tree, "MANIFEST.json"));
-    unlinkSync(join(tree, "VERSION"));
+    // issue #259: this test used to just delete MANIFEST.json/VERSION from
+    // the `tree` shared beforeEach fixture builds — the BUILT-RELEASE shape,
+    // where node_modules/@kaoiro/* are real directories inside the release
+    // root. That shape is the one thing a repo-direct checkout is NOT: pnpm
+    // links a workspace member into its dependents by a path that leaves the
+    // dependent (runner/node_modules/@kaoiro/<pkg> ->
+    // ../../../wrapper/<pkg>), so a tree built this way could never surface
+    // the containment-boundary regression the fix (b79bd97) exists for — the
+    // test was measuring the fixture's own shape, not the one it claimed to
+    // (fixture-supplies-premise). writeWorkspaceCheckout stages the real
+    // pnpm link topology instead (also exercised in depth, including the
+    // containment-violation and workspace-marker edge cases, by
+    // repoDirectWorkspace.test.ts).
+    const ws = join(dir, "workspace");
+    mkdirSync(ws, { recursive: true });
+    const runner = writeWorkspaceCheckout(ws, revisionOf("shim-repo-direct"));
 
-    const result = launch();
+    const result = runScript(join(runner, "deploy", "kaoiro-runner-launch.sh"), [], {
+      KAOIRO_RUNNER_DIR: confDir,
+    });
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("stub cli.js started");
@@ -143,6 +173,10 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
 
     expect(result.status).toBe(78);
     expect(result.stderr).toContain("present but unreadable");
+    // issue #259: a directory sitting where MANIFEST.json belongs is not a
+    // missing build (the file IS there, in the wrong shape) — a rebuild
+    // would not remove it.
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
   });
 
   it("build-info.json の shape が不正なら exit 78 で起動しない", () => {
@@ -159,6 +193,10 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
 
     expect(result.status).toBe(78);
     expect(result.stdout).not.toContain("stub cli.js started");
+    // issue #259: a malformed (but present) build-info.json is not simply
+    // absent — a rebuild MIGHT happen to fix it, but so might tampering or a
+    // half-written file, so the shim does not stake a build claim on it.
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
   });
 
   it("build ツールを一切起動しない", () => {

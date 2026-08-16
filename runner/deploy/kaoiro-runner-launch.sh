@@ -145,8 +145,25 @@ entry="$deploy_dir/../dist/cli.js"
 verify="$deploy_dir/verify-release.mjs"
 [ -f "$verify" ] ||
   die_config "incomplete install: $verify is missing (release: reinstall it)"
-"$node_bin" "$verify" "$deploy_dir/.." >/dev/null ||
-  die_config "release verification failed (see the line above); repo checkout: run 'pnpm -C wrapper build && pnpm -C runner build', release: reinstall it"
+# issue #259: an operator who hit a containment-boundary failure here (#229
+# round 2) followed this message's build suggestion and rebuilt anyway — the
+# failure was never a build shortage, and the same failure recurred 15
+# seconds later. verify-release.mjs now exits 71 specifically for a missing
+# build artifact (a genuine build shortage) and 70 for every other failure
+# (containment, malformed content, identity mismatch — none of which a
+# rebuild fixes), so the guidance below only ever suggests a build for the
+# one case where it can help. `if` (not `||`) so `set -e` does not exit
+# before `$?` is captured.
+if "$node_bin" "$verify" "$deploy_dir/.." >/dev/null; then
+  verify_status=0
+else
+  verify_status=$?
+fi
+if [ "$verify_status" -eq 71 ]; then
+  die_config "release verification failed: a build artifact is missing (see the line above); repo checkout: run 'pnpm -C wrapper build && pnpm -C runner build', release: reinstall it"
+elif [ "$verify_status" -ne 0 ]; then
+  die_config "release verification failed (see the line above for why — this is NOT a missing build, so building will not fix it); release: reinstall it"
+fi
 
 # Single-binary migration (issue #70): replace the line below with
 #   exec "$deploy_dir/../bin/kaoiro-runner" "$config"
