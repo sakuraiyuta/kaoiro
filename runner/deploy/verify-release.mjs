@@ -128,6 +128,46 @@ function containedRealPath(root, realRoot, rel) {
   return real;
 }
 
+/** The pnpm workspace root at or above `dir`, or null when there is none.
+ *
+ *  A REPO-DIRECT CHECKOUT'S BOUNDARY IS THE WORKSPACE, NOT runner/. pnpm links
+ *  a workspace member into its dependents by a relative path that leaves the
+ *  dependent — `runner/node_modules/@kaoiro/claude-code ->
+ *  ../../../wrapper/claude-code` (measured on the repo checkout, 2026-08-16)
+ *  — so EVERY sentinel resolves outside runner/, and the repo-direct profile
+ *  this file explicitly supports could not start at all. It did not: the
+ *  service failed with exit 78 on the first restart after the check reached
+ *  production, on a tree whose builds were current. The fixtures missed it
+ *  because they write node_modules/@kaoiro/* as real directories INSIDE the
+ *  release root — a shape only a built release has, so the fixture supplied
+ *  the very premise the test claimed to measure.
+ *
+ *  A built release carries its dependencies inside itself, so its boundary
+ *  stays the release root and this walk never runs there.
+ *
+ *  WHAT THE MARKER IS TRUSTED FOR, STATED PLAINLY. It says "a checkout starts
+ *  here" and nothing more: this walk does not read the file, does not check
+ *  that the tree below is one of the members it lists, and does not stop at an
+ *  ownership boundary. A party who can drop an empty pnpm-workspace.yaml into
+ *  an ancestor directory can therefore widen the boundary — but only for a
+ *  tree carrying NEITHER a VERSION NOR a manifest, never for an installed
+ *  release, whose paths stay pinned to the release root. That is the same
+ *  trust standing the manifest's own `dependencies` map has (see
+ *  verifyRelease): it closes a builder bug and a naive corruption, not
+ *  tampering. `lstat`, so a symlink cannot stand in for the marker. */
+function workspaceRootOf(dir) {
+  for (let cur = dir; ; ) {
+    try {
+      if (lstatSync(join(cur, "pnpm-workspace.yaml")).isFile()) return cur;
+    } catch {
+      // keep walking up
+    }
+    const parent = dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+}
+
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -584,7 +624,13 @@ export function verifyRelease(root, opts = {}) {
         "MANIFEST.json is missing from a built release (VERSION is present) — reinstall it; only a repo-direct checkout, which has no VERSION either, may start without one",
       );
     }
-    for (const rel of SENTINELS) containedRealPath(root, realRoot, rel);
+    // NO WORKSPACE ABOVE IT MEANS THE TREE IS ITS OWN BOUNDARY, and that
+    // fallback is the STRICTER of the two, not a degrade: it is the release
+    // root this branch checked before, so a self-contained tree carrying
+    // neither VERSION nor a manifest goes on being accepted exactly as it was.
+    // The wider boundary is what the workspace marker BUYS, and only there.
+    const boundary = workspaceRootOf(realRoot) ?? realRoot;
+    for (const rel of SENTINELS) containedRealPath(root, boundary, rel);
     return { identity, checked: SENTINELS.length, manifest: false };
   }
 
