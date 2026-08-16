@@ -49,7 +49,7 @@ describe("Claude CLI whoami composition (issue #254)", () => {
       },
     });
 
-    const result = interAgent.whoami();
+    const result = await interAgent.whoami();
     expect(JSON.parse(result.content[0]!.text)).toMatchObject({
       rate_limits: {
         seven_day: { utilization: 0.25, resets_at: 1787371200 },
