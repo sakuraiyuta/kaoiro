@@ -29,14 +29,15 @@
 # release breaks a spawn that has not happened yet.
 #
 # THAT CHECK IS A SNAPSHOT, AND ITS SCOPE IS WORTH STATING PLAINLY.
-# `.lock.install` excludes other installs and nothing else;
-# kaoiro-runner-switch.sh takes no lock at all, so a switch landing between
-# the check below and the `rm -rf` would leave `current` pointing at the tree
-# being replaced. Running a switch concurrently with an install is therefore
-# OUT OF CONTRACT, not defended against. The window needs --allow-dirty plus
-# a concurrent operator action, i.e. a development host; giving all three
-# scripts one shared lock over the links is the real fix and is deliberately
-# not attempted here (issue #229 review round 3, ARCH).
+# `.lock.install` excludes other installs and nothing else. The check below
+# and the `rm -rf` that follows it are additionally guarded by `.lock.links`
+# (issue #253) — the SAME lock kaoiro-runner-switch.sh takes around its own
+# current/previous swap, and kaoiro-runner-update.sh around its own prune.
+# Held only for that narrow window, not this whole script: a switch can
+# still run before or after an install, just never with its current/previous
+# read interleaved with this check-then-delete. The window still needs
+# --allow-dirty plus a concurrent operator action to reach at all, i.e. a
+# development host (issue #229 review round 3, ARCH; closed in #253).
 #
 # Prints the installed release id on stdout; everything else goes to stderr,
 # so a caller can use `id=$(kaoiro-runner-install.sh ...)`.
@@ -94,6 +95,15 @@ mkdir -p "$root/releases"
 lock="$root/.lock.install"
 kaoiro_lock_acquire "$lock"
 
+# Shared with kaoiro-runner-switch.sh and kaoiro-runner-update.sh (issue
+# #253) — the current/previous read-then-delete a few lines below is the
+# only place this script needs it, so links_held tracks whether THIS run
+# actually acquired it and cleanup() releases it only then. Unconditionally
+# releasing a lock this script never took would delete another run's live
+# lock dir out from under it.
+links_lock="$root/.lock.links"
+links_held=no
+
 # Under the lock, and before this run makes its own. ONLY this script's own
 # prefix: an update in progress keeps its build dir under the same root and
 # holds a different lock, so it is not ours to judge abandoned.
@@ -107,6 +117,7 @@ staging="$root/.staging.install.$$"
 
 cleanup() {
   rm -rf "$staging"
+  [ "$links_held" = no ] || kaoiro_lock_release "$links_lock"
   kaoiro_lock_release "$lock"
 }
 trap cleanup EXIT INT TERM
@@ -182,6 +193,14 @@ if [ -e "$target" ]; then
   # `previous`: the runner resolves the codex wrapper lazily, so replacing
   # the files under a running release breaks a spawn that has not happened
   # yet, and replacing the rollback target destroys the only way back.
+  #
+  # .lock.links (issue #253) held from here through the `rm -rf` below: this
+  # check is a snapshot of current/previous, and without the lock a switch
+  # landing between the snapshot and the delete could activate the very
+  # release this run is about to remove. Nothing else this script does needs
+  # the lock, so it is released again immediately after.
+  kaoiro_lock_acquire "$links_lock"
+  links_held=yes
   for link in current previous; do
     if [ -L "$root/$link" ] && [ "$(readlink "$root/$link")" = "releases/$id" ]; then
       kaoiro_die "refusing to replace release $id: $link points at it" 78
@@ -190,6 +209,8 @@ if [ -e "$target" ]; then
 
   printf '%s: replacing installed release %s\n' "$prog" "$id" >&2
   rm -rf "$target"
+  kaoiro_lock_release "$links_lock"
+  links_held=no
 fi
 
 mv "$tree" "$target"

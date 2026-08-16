@@ -24,10 +24,19 @@
 # moves the pointer, which keeps it usable for a manual rollback on a host
 # whose service manager is in an unknown state.
 #
+# THIS SCRIPT IS THE ONLY WRITER OF current / previous, BUT USED TO TAKE NO
+# LOCK AT ALL (issue #229 review round 3, ARCH; closed in #253). Both
+# kaoiro-runner-install.sh (replacing a `--allow-dirty` release) and
+# kaoiro-runner-update.sh (pruning old releases) read current/previous and
+# then act on what they saw — a switch landing in that gap could leave
+# either one operating on a stale snapshot. All three scripts now take the
+# same `.lock.links`, each only around its own narrow read-then-act window,
+# so their current/previous reads and writes never interleave.
+#
 # Prints the release id `current` ends up pointing at, on stdout.
 #
 # Exit 78 (EX_CONFIG) marks a misconfiguration, 70 (EX_SOFTWARE) an
-# incomplete release tree.
+# incomplete release tree, 75 (EX_TEMPFAIL) a lock held by another run.
 set -eu
 
 prog=kaoiro-runner-switch
@@ -76,6 +85,23 @@ done
 [ -n "$root" ] || root=$(kaoiro_install_root)
 [ -d "$root/releases" ] || kaoiro_die "no releases installed under $root" 78
 
+# Shared with kaoiro-runner-install.sh and kaoiro-runner-update.sh (issue
+# #253) — see this file's header. links_held tracks whether THIS run
+# actually acquired it, same reasoning as the other two scripts' copy of
+# this comment: unconditionally releasing a lock this run never took would
+# delete another run's live lock dir out from under it. switch_to() and the
+# --rollback block below are this script's only two writers of
+# current/previous, and each acquires the lock itself around its own
+# read-then-write — release() and exit here happen close enough together
+# (both fall straight through to this script's own exit) that a single
+# EXIT/INT/TERM trap is enough; neither path does anything else afterward.
+links_lock="$root/.lock.links"
+links_held=no
+cleanup() {
+  [ "$links_held" = no ] || kaoiro_lock_release "$links_lock"
+}
+trap cleanup EXIT INT TERM
+
 # `previous` is written BEFORE `current` on a forward switch: if the run dies
 # between the two, both point at the old release — consistent, and a rollback
 # is a no-op rather than a jump two generations back.
@@ -90,6 +116,14 @@ switch_to() {
   # or built by an older installer that did not enforce this.
   [ "$KAOIRO_VERIFIED_IDENTITY" = "$_id" ] ||
     kaoiro_die "release directory $_id carries identity $KAOIRO_VERIFIED_IDENTITY — refusing to activate a name that does not match its contents" 70
+
+  # .lock.links from here through the writes below — verification above is
+  # read-only against the RELEASE (not current/previous) and does not need
+  # it, but the read of `current` a few lines down does: an install or
+  # update reading a stale current/previous between our read and our write
+  # is exactly the race issue #253 closes.
+  kaoiro_lock_acquire "$links_lock"
+  links_held=yes
 
   _old=""
   if [ -L "$root/current" ]; then
@@ -114,6 +148,16 @@ switch_to() {
 
 if [ "$rollback" = yes ]; then
   [ -z "$id" ] || kaoiro_die "--rollback takes no release id" 64
+
+  # .lock.links (issue #253) from here through the writes below. Unlike
+  # switch_to(), where the release to activate comes from argv and only the
+  # read of `current` needs the lock, --rollback's target comes from
+  # `previous` itself — so the read that DECIDES what to verify and write
+  # has to be inside the same critical section as the write, or an install
+  # or update could still race between deciding and acting.
+  kaoiro_lock_acquire "$links_lock"
+  links_held=yes
+
   [ -L "$root/previous" ] || kaoiro_die "no previous release recorded under $root" 78
 
   prev=$(readlink "$root/previous")

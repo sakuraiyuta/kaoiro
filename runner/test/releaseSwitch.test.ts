@@ -259,4 +259,38 @@ describe("kaoiro-runner-switch.sh (issue #229)", () => {
     expect(result.stdout.trim()).toBe(A);
     expect(existsSync(join(root, "previous"))).toBe(false);
   });
+
+  it(".lock.links (issue #253) が他所で保持されていれば switch は current を変えない", () => {
+    // The SAME lock kaoiro-runner-install.sh takes around its own
+    // current/previous check-then-delete, and kaoiro-runner-update.sh
+    // around its own prune loop. Pre-holding it here stands in for either
+    // one being mid-flight; a switch landing on top of it is exactly the
+    // race issue #253 closes.
+    seed(A);
+    seed(B);
+    symlinkSync(`releases/${A}`, join(root, "current"));
+    mkdirSync(join(root, ".lock.links"));
+
+    const result = run(B);
+
+    expect(result.status).toBe(75);
+    expect(result.stderr).toContain("another run holds");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+    expect(existsSync(join(root, "previous"))).toBe(false);
+  });
+
+  it(".lock.links が他所で保持されていれば --rollback も current/previous を変えない", () => {
+    seed(A);
+    seed(B);
+    symlinkSync(`releases/${A}`, join(root, "current"));
+    expect(run(B).status).toBe(0);
+
+    mkdirSync(join(root, ".lock.links"));
+    const result = run("--rollback");
+
+    expect(result.status).toBe(75);
+    expect(result.stderr).toContain("another run holds");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+    expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
+  });
 });

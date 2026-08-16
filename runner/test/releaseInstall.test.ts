@@ -523,6 +523,35 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     expect(existsSync(join(root, "releases", id, "dist", "cli.js"))).toBe(true);
   });
 
+  it("--allow-dirty の置き換えは .lock.links (issue #253) で switch と直列化される", () => {
+    // The current/previous check above and the rm -rf that follows it
+    // (verified NOT to point at the target, so this is a DIFFERENT dirty
+    // release than the one above) are the exact window kaoiro-runner-switch.sh
+    // could otherwise land in: switch takes the SAME .lock.links around its
+    // own current/previous swap, so pre-holding it here simulates a switch
+    // that is mid-flight right now. If this install proceeded anyway, the
+    // check-then-delete race issue #253 exists to close would still be open.
+    const revision = revisionOf("locked-replace");
+    const archive = makeReleaseTarball(work, revision, { dirty: true });
+    expect(install(archive).status).toBe(0);
+    const id = `${revision}-dirty`;
+    const marker = join(root, "releases", id, "marker");
+    writeFileSync(marker, "still here");
+
+    mkdirSync(join(root, ".lock.links"));
+    const forced = install(archive, "--allow-dirty");
+
+    expect(forced.status).toBe(75);
+    expect(forced.stderr).toContain("another run holds");
+    // Not merely "install failed" -- the release was never touched, which is
+    // the actual property issue #253 requires.
+    expect(existsSync(marker)).toBe(true);
+    // .lock.install (this run's own lock) is released even though
+    // .lock.links (pre-held by the test, standing in for a live switch) is
+    // correctly left alone -- this run never held it.
+    expect(existsSync(join(root, ".lock.install"))).toBe(false);
+  });
+
   // The id becomes a path component, so its value domain is a security
   // boundary, not a formatting nicety. Each shape below is a DIFFERENT way
   // to reach it — a single well-formed case proves nothing about the others,
