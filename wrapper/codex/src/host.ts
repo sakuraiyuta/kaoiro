@@ -9,6 +9,7 @@
 // the approval axis is pinned to "never" — codex exec cannot deliver
 // approval requests to the caller, so waiting_permission never occurs here.
 
+import { randomUUID } from "node:crypto";
 import { Codex } from "@openai/codex-sdk";
 import type {
   CodexOptions,
@@ -73,6 +74,11 @@ import {
   type CodexRateLimitSnapshot,
   type CodexRateLimitWindow,
 } from "./rollout.js";
+import {
+  CodexTurnDiagnostics,
+  defaultCodexTurnTraceDir,
+  ensureCodexTurnTraceDir,
+} from "./turn_diagnostics.js";
 import { ToolHost } from "./toolhost.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
@@ -181,6 +187,8 @@ export interface CodexHostOptions {
    *  message in a coalesced batch caused the failure). Omitted = no notice
    *  is ever emitted (unit tests only — production wires it). */
   onTurnEnd?: (info: {
+    /** Immutable identity of this exact host turn. */
+    turnToken: string;
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
   }) => void;
@@ -233,6 +241,9 @@ export interface CodexHostOptions {
     uploads: PendingUpload[],
     lifecycle: MaterializeLifecycle,
   ) => Promise<{ dir: string; paths: string[] }>;
+  /** Local directory for failure-only Codex turn traces. Production defaults
+   * to ~/.kaoiro/codex-turn-traces; tests inject a temporary directory. */
+  turnTraceDir?: string;
 }
 
 /** Bridge entry point, resolved against the built package layout. Works from
@@ -303,6 +314,7 @@ export class CodexHost implements EngineAdapter {
     input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
     tempDir?: string;
     conversationIds?: readonly string[];
+    turnToken?: string;
   }> = [];
   readonly #pendingUploads = new Map<string, PendingUpload>();
   /** Includes dirs still being materialized, queued, or streaming. */
@@ -314,6 +326,8 @@ export class CodexHost implements EngineAdapter {
   #gcTimer: ReturnType<typeof setInterval> | null = null;
   #wake: (() => void) | null = null;
   #abort: AbortController | null = null;
+  /** Present only while the SDK is executing one host turn. */
+  #activeTurnToken: string | null = null;
   #closed = false;
   /** Invalidates an older turn's asynchronous account-default refresh. */
   #modelResolutionGeneration = 0;
@@ -482,6 +496,7 @@ export class CodexHost implements EngineAdapter {
     text: string,
     attachmentIds?: string[],
     interAgentConversationIds?: readonly string[],
+    interAgentTurnToken?: string,
   ): Promise<void> {
     if (this.#closed) return;
     if (
@@ -537,8 +552,18 @@ export class CodexHost implements EngineAdapter {
       ...(interAgentConversationIds === undefined
         ? {}
         : { conversationIds: interAgentConversationIds }),
+      ...(interAgentTurnToken === undefined
+        ? {}
+        : { turnToken: interAgentTurnToken }),
     });
     this.#wake?.();
+  }
+
+  /** Turn ownership capability consumed by InterAgentTool. It is intentionally
+   * null outside SDK execution so a late tool result cannot clear another
+   * turn's pending inbound lease. */
+  activeInterAgentTurnToken(): string | null {
+    return this.#activeTurnToken;
   }
 
   async interrupt(): Promise<void> {
@@ -675,6 +700,8 @@ export class CodexHost implements EngineAdapter {
     const descriptors = this.#options.toolDescriptors ?? [];
     const toolHost =
       descriptors.length > 0 ? await ToolHost.listen(descriptors) : null;
+    const turnTraceDir = this.#options.turnTraceDir ?? defaultCodexTurnTraceDir();
+    await ensureCodexTurnTraceDir(turnTraceDir);
     const factory =
       this.#options.codexFactory ??
       ((options: CodexOptions) => new Codex(options) as CodexClientLike);
@@ -693,7 +720,13 @@ export class CodexHost implements EngineAdapter {
         kaoiro: {
           command: process.execPath,
           args: [BRIDGE_SCRIPT],
-          env: { KAOIRO_BRIDGE_SOCKET: toolHost.socketPath },
+          env: {
+            KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
+            // The bridge appends only its own stderr to this private local
+            // file. Each failure trace snapshots its tail; neither is sent
+            // to a peer or interpolated into the notice template.
+            KAOIRO_BRIDGE_STDERR_PATH: `${turnTraceDir}/bridge.stderr.log`,
+          },
           // `codex exec` forces approval_policy=never, which otherwise
           // auto-cancels every MCP tool call ("user cancelled MCP tool
           // call"). "approve" auto-approves the kaoiro tools so they run
@@ -741,6 +774,8 @@ export class CodexHost implements EngineAdapter {
           turn.input,
           turn.tempDir,
           turn.conversationIds ?? [],
+          turn.turnToken ?? randomUUID(),
+          turnTraceDir,
         );
       }
     } finally {
@@ -799,7 +834,28 @@ export class CodexHost implements EngineAdapter {
     input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>,
     tempDir?: string,
     conversationIds: readonly string[] = [],
+    turnToken: string = randomUUID(),
+    turnTraceDir = defaultCodexTurnTraceDir(),
   ): Promise<void> {
+    this.#activeTurnToken = turnToken;
+    const diagnostics = new CodexTurnDiagnostics(turnTraceDir);
+    const persistFailure = async (
+      input: Parameters<CodexTurnDiagnostics["writeFailure"]>[0],
+    ): Promise<void> => {
+      try {
+        await diagnostics.writeFailure(input);
+      } catch (error) {
+        // A local diagnostic filesystem failure must never replace the SDK
+        // turn's original outcome or suppress its fixed peer-error notice.
+        process.stderr.write(`codex turn trace failed: ${String(error)}\n`);
+      }
+    };
+    try {
+      await diagnostics.begin();
+    } catch (error) {
+      // Match persistFailure's non-interference rule for the capture window.
+      process.stderr.write(`codex turn trace failed: ${String(error)}\n`);
+    }
     const resolutionGeneration = ++this.#modelResolutionGeneration;
     const attempted = {
       model: this.#modelPending,
@@ -829,12 +885,18 @@ export class CodexHost implements EngineAdapter {
           );
     this.#abort = new AbortController();
     let finalText: string | null = null;
+    // A stream-level `error` is evidence, not a terminal boundary. Some SDK
+    // versions may still follow it with turn.completed; retain it only so a
+    // later terminal-less EOF has the best available local classification.
+    let recordedThreadError: string | null = null;
     let sawResult = false;
     try {
       const { events } = await thread.runStreamed(input, {
         signal: this.#abort.signal,
       });
       for await (const event of events) {
+        diagnostics.recordEvent(event);
+        if (event.type === "error") recordedThreadError = event.message;
         const sessionId = threadEventToSessionId(event);
         if (sessionId !== null && sessionId !== this.#sessionId) {
           this.#sessionId = sessionId;
@@ -858,7 +920,7 @@ export class CodexHost implements EngineAdapter {
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
           });
-          this.#options.onTurnEnd?.({ conversationIds });
+          this.#options.onTurnEnd?.({ turnToken, conversationIds });
           // Resolve only after the terminal event: at turn.started an existing
           // rollout can still expose the previous turn_context and look
           // spuriously "resolved". Keep this background so filesystem timing
@@ -875,7 +937,14 @@ export class CodexHost implements EngineAdapter {
           this.#finishTurn(false, attempted);
           this.#emitResult({ is_error: true });
           const detail = threadEventToErrorDetail(event);
+          await persistFailure({
+            sessionId: this.#sessionId,
+            turnToken,
+            ...(detail === null ? {} : { detail }),
+            outcome: "turn_failed",
+          });
           this.#options.onTurnEnd?.({
+            turnToken,
             conversationIds,
             error: detail !== null ? { detail } : {},
           });
@@ -894,7 +963,20 @@ export class CodexHost implements EngineAdapter {
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
-        this.#options.onTurnEnd?.({ conversationIds, error: {} });
+        await persistFailure({
+          sessionId: this.#sessionId,
+          turnToken,
+          ...(recordedThreadError === null
+            ? {}
+            : { detail: recordedThreadError }),
+          outcome: "stream_ended_without_terminal",
+        });
+        this.#options.onTurnEnd?.({
+          turnToken,
+          conversationIds,
+          error:
+            recordedThreadError === null ? {} : { detail: recordedThreadError },
+        });
       }
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
@@ -902,6 +984,12 @@ export class CodexHost implements EngineAdapter {
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
+        await persistFailure({
+          sessionId: this.#sessionId,
+          turnToken,
+          detail: String(err),
+          outcome: "run_streamed_rejected",
+        });
         // issue #131 must-fix 2: String(err) is unstructured, untrusted text
         // (subprocess/exception message, possibly containing paths or other
         // detail unsafe to inject verbatim into a peer's LLM context). Safe
@@ -910,6 +998,7 @@ export class CodexHost implements EngineAdapter {
         // produced notice's message — the raw string itself never leaves
         // this process.
         this.#options.onTurnEnd?.({
+          turnToken,
           conversationIds,
           error: { detail: String(err) },
         });
@@ -919,6 +1008,7 @@ export class CodexHost implements EngineAdapter {
       }
     } finally {
       this.#abort = null;
+      this.#activeTurnToken = null;
       if (tempDir !== undefined) await this.#cleanupTempDir(tempDir);
     }
   }
@@ -954,6 +1044,8 @@ export class CodexHost implements EngineAdapter {
     const retained: Array<{
       input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
       tempDir?: string;
+      conversationIds?: readonly string[];
+      turnToken?: string;
     }> = [];
     for (const turn of this.#queue) {
       if (turn.tempDir === undefined) {

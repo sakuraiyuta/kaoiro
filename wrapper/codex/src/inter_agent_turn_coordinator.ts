@@ -3,6 +3,8 @@
 // object owns every queue transition so lifecycle tests cannot reimplement
 // it separately (issue #226).
 
+import { randomUUID } from "node:crypto";
+
 import {
   canAddToCoalescedBatch,
   formatInboundMessage,
@@ -21,6 +23,8 @@ export interface CodexInterAgentBatchItem {
 
 /** One batch accepted by the coordinator and assigned to a Codex turn. */
 export interface DispatchedCodexInterAgentBatch {
+  /** Immutable ownership capability for this exact queued SDK turn. */
+  turnToken: string;
   peer: string;
   items: readonly CodexInterAgentBatchItem[];
   conversationIds: readonly string[];
@@ -35,6 +39,8 @@ interface PendingBatch {
 export interface CodexInterAgentTurnCoordinatorOptions {
   /** Runs synchronously once a free peer receives its oldest queued batch. */
   onDispatch: (batch: DispatchedCodexInterAgentBatch) => void;
+  /** Injectable only for deterministic tests. Production uses UUIDs. */
+  createTurnToken?: () => string;
 }
 
 /**
@@ -45,12 +51,14 @@ export interface CodexInterAgentTurnCoordinatorOptions {
  */
 export class CodexInterAgentTurnCoordinator {
   readonly #pendingBatches = new Map<string, PendingBatch[]>();
-  readonly #inFlightBatchByPeer = new Map<string, DispatchedCodexInterAgentBatch>();
-  readonly #inFlightCidPeer = new Map<string, string>();
+  readonly #batchByTurnToken = new Map<string, DispatchedCodexInterAgentBatch>();
+  readonly #activeTokenByPeer = new Map<string, string>();
   readonly #onDispatch: (batch: DispatchedCodexInterAgentBatch) => void;
+  readonly #createTurnToken: () => string;
 
   constructor(options: CodexInterAgentTurnCoordinatorOptions) {
     this.#onDispatch = options.onDispatch;
+    this.#createTurnToken = options.createTurnToken ?? randomUUID;
   }
 
   /** Queue an accepted inbound and dispatch immediately if its peer is free. */
@@ -80,22 +88,18 @@ export class CodexInterAgentTurnCoordinator {
   }
 
   /**
-   * Release the in-flight batch identified by the host's conversation IDs.
-   * Unrelated host turns return undefined and leave this coordinator untouched.
+   * Release the in-flight batch identified by the host's immutable turn
+   * token. Conversation IDs deliberately do not identify ownership: a later
+   * same-CID batch is valid protocol traffic and must not be settled by a
+   * stale callback from the earlier turn.
    */
-  settle(
-    conversationIds: readonly string[],
-  ): DispatchedCodexInterAgentBatch | undefined {
-    const peer =
-      conversationIds.length > 0
-        ? this.#inFlightCidPeer.get(conversationIds[0]!)
-        : undefined;
-    if (peer === undefined) return undefined;
-    const batch = this.#inFlightBatchByPeer.get(peer);
+  settle(turnToken: string): DispatchedCodexInterAgentBatch | undefined {
+    const batch = this.#batchByTurnToken.get(turnToken);
     if (batch === undefined) return undefined;
-
-    for (const cid of batch.conversationIds) this.#inFlightCidPeer.delete(cid);
-    this.#inFlightBatchByPeer.delete(peer);
+    this.#batchByTurnToken.delete(turnToken);
+    if (this.#activeTokenByPeer.get(batch.peer) === turnToken) {
+      this.#activeTokenByPeer.delete(batch.peer);
+    }
     return batch;
   }
 
@@ -105,7 +109,7 @@ export class CodexInterAgentTurnCoordinator {
   }
 
   #dispatchNext(peer: string): void {
-    if (this.#inFlightBatchByPeer.has(peer)) return;
+    if (this.#activeTokenByPeer.has(peer)) return;
     const queue = this.#pendingBatches.get(peer);
     const pending = queue?.shift();
     if (pending === undefined) return;
@@ -119,13 +123,14 @@ export class CodexInterAgentTurnCoordinator {
       )
       .filter((cid): cid is string => typeof cid === "string");
     const batch: DispatchedCodexInterAgentBatch = {
+      turnToken: this.#createTurnToken(),
       peer,
       items: pending.items,
       conversationIds,
       text: formatInboundMessages(pending.items),
     };
-    this.#inFlightBatchByPeer.set(peer, batch);
-    for (const cid of conversationIds) this.#inFlightCidPeer.set(cid, peer);
+    this.#batchByTurnToken.set(batch.turnToken, batch);
+    this.#activeTokenByPeer.set(peer, batch.turnToken);
     this.#onDispatch(batch);
   }
 }

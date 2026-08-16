@@ -87,8 +87,8 @@ async function runOnInterAgentMessageGlue(
         const payload = inbound.payload as unknown as InterAgentMessagePayload;
         const cids =
           typeof payload.conversation_id === "string" ? [payload.conversation_id] : [];
-        interAgent.notePendingInjection(inbound);
-        void host.send(`[glue] ${payload.body}`, undefined, cids).catch(() => {});
+        interAgent.notePendingInjection(inbound, "glue-turn");
+        void host.send(`[glue] ${payload.body}`, undefined, cids, "glue-turn").catch(() => {});
       },
       log: (line) => logs?.push(line),
     },
@@ -239,7 +239,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
     expect(sendSpy).not.toHaveBeenCalled();
     expect(notices).toHaveLength(0);
     expect(
-      tool.resolveTurnEnd(["cnv-terminal"], { code: "api_error", message: "x" }),
+      tool.resolveTurnEnd("glue-turn", ["cnv-terminal"], { code: "api_error", message: "x" }),
     ).toEqual([]);
   });
 
@@ -256,7 +256,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
 
     expect(sendSpy).toHaveBeenCalledTimes(1);
     expect(
-      tool.resolveTurnEnd(["cnv-normal"], { code: "api_error", message: "x" }),
+      tool.resolveTurnEnd("glue-turn", ["cnv-normal"], { code: "api_error", message: "x" }),
     ).toHaveLength(1);
   });
 
@@ -394,10 +394,10 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   const coordinator = new CodexInterAgentTurnCoordinator({
     onDispatch: (batch) => {
       for (const item of batch.items) {
-        interAgent.notePendingInjection(item.envelope);
+        interAgent.notePendingInjection(item.envelope, batch.turnToken);
       }
       sentBatches.push({ peer: batch.peer, cids: [...batch.conversationIds] });
-      void host.send(batch.text, undefined, batch.conversationIds);
+      void host.send(batch.text, undefined, batch.conversationIds, batch.turnToken);
     },
   });
 
@@ -415,14 +415,15 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   }
 
   function onTurnEnd(
+    turnToken: string,
     conversationIds: readonly string[],
     error?: { reason?: string; detail?: string },
   ): void {
     const classified = error ? classifyInterAgentError(error) : undefined;
-    for (const notice of interAgent.resolveTurnEnd(conversationIds, classified)) {
+    for (const notice of interAgent.resolveTurnEnd(turnToken, conversationIds, classified)) {
       notices.push(notice);
     }
-    const settled = coordinator.settle(conversationIds);
+    const settled = coordinator.settle(turnToken);
     if (settled !== undefined) {
       coordinator.dispatchNextForPeer(settled.peer);
     }
@@ -448,7 +449,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
       onState: () => {},
       appendSystemPrompt: "p",
       codexFactory: () => client,
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
     harness.bindHost(host);
     void host.run();
@@ -469,7 +470,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
       onState: () => {},
       appendSystemPrompt: "p",
       codexFactory: () => client,
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
     harness.bindHost(host);
     void host.run();
@@ -499,7 +500,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
       onState: () => {},
       appendSystemPrompt: "p",
       codexFactory: () => client,
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
     harness.bindHost(host);
     void host.run();
@@ -524,7 +525,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
       onState: () => {},
       appendSystemPrompt: "p",
       codexFactory: () => client,
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
     harness.bindHost(host);
     void host.run();
@@ -557,7 +558,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
       onState: () => {},
       appendSystemPrompt: "p",
       codexFactory: () => client,
-      onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
     harness.bindHost(host);
     void host.run();
@@ -608,7 +609,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
         onState: () => {},
         appendSystemPrompt: "p",
         codexFactory: () => client,
-        onTurnEnd: (info) => harness.onTurnEnd(info.conversationIds, info.error),
+        onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
       });
       harness.bindHost(host);
       void host.run();
