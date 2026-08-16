@@ -76,8 +76,8 @@ import {
 } from "./rollout.js";
 import {
   CodexTurnDiagnostics,
+  codexTurnTraceCaptureDir,
   defaultCodexTurnTraceDir,
-  ensureCodexTurnTraceDir,
 } from "./turn_diagnostics.js";
 import { ToolHost } from "./toolhost.js";
 import {
@@ -351,10 +351,18 @@ export class CodexHost implements EngineAdapter {
    *  invokes the same method as a safety net; this keeps that startup read
    *  exactly once per session. */
   #rateLimitsInitializedSessionId: string | null = null;
+  /** This process's private trace capture directory. It is derived without
+   * filesystem I/O so a broken diagnostic path cannot prevent host startup. */
+  readonly #turnTraceCaptureDir: string;
 
   constructor(config: WrapperConfig, options: CodexHostOptions) {
     this.#config = config;
     this.#options = options;
+    this.#turnTraceCaptureDir = codexTurnTraceCaptureDir(
+      options.turnTraceDir ?? defaultCodexTurnTraceDir(),
+      config.agent_id,
+      randomUUID(),
+    );
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
     this.#model = config.model ?? null;
@@ -700,8 +708,6 @@ export class CodexHost implements EngineAdapter {
     const descriptors = this.#options.toolDescriptors ?? [];
     const toolHost =
       descriptors.length > 0 ? await ToolHost.listen(descriptors) : null;
-    const turnTraceDir = this.#options.turnTraceDir ?? defaultCodexTurnTraceDir();
-    await ensureCodexTurnTraceDir(turnTraceDir);
     const factory =
       this.#options.codexFactory ??
       ((options: CodexOptions) => new Codex(options) as CodexClientLike);
@@ -725,7 +731,8 @@ export class CodexHost implements EngineAdapter {
             // The bridge appends only its own stderr to this private local
             // file. Each failure trace snapshots its tail; neither is sent
             // to a peer or interpolated into the notice template.
-            KAOIRO_BRIDGE_STDERR_PATH: `${turnTraceDir}/bridge.stderr.log`,
+            KAOIRO_BRIDGE_STDERR_PATH:
+              `${this.#turnTraceCaptureDir}/bridge.stderr.log`,
           },
           // `codex exec` forces approval_policy=never, which otherwise
           // auto-cancels every MCP tool call ("user cancelled MCP tool
@@ -775,7 +782,6 @@ export class CodexHost implements EngineAdapter {
           turn.tempDir,
           turn.conversationIds ?? [],
           turn.turnToken ?? randomUUID(),
-          turnTraceDir,
         );
       }
     } finally {
@@ -835,10 +841,9 @@ export class CodexHost implements EngineAdapter {
     tempDir?: string,
     conversationIds: readonly string[] = [],
     turnToken: string = randomUUID(),
-    turnTraceDir = defaultCodexTurnTraceDir(),
   ): Promise<void> {
     this.#activeTurnToken = turnToken;
-    const diagnostics = new CodexTurnDiagnostics(turnTraceDir);
+    const diagnostics = new CodexTurnDiagnostics(this.#turnTraceCaptureDir);
     const persistFailure = async (
       input: Parameters<CodexTurnDiagnostics["writeFailure"]>[0],
     ): Promise<void> => {
@@ -940,6 +945,7 @@ export class CodexHost implements EngineAdapter {
           await persistFailure({
             sessionId: this.#sessionId,
             turnToken,
+            conversationIds,
             ...(detail === null ? {} : { detail }),
             outcome: "turn_failed",
           });
@@ -966,6 +972,7 @@ export class CodexHost implements EngineAdapter {
         await persistFailure({
           sessionId: this.#sessionId,
           turnToken,
+          conversationIds,
           ...(recordedThreadError === null
             ? {}
             : { detail: recordedThreadError }),
@@ -987,6 +994,7 @@ export class CodexHost implements EngineAdapter {
         await persistFailure({
           sessionId: this.#sessionId,
           turnToken,
+          conversationIds,
           detail: String(err),
           outcome: "run_streamed_rejected",
         });

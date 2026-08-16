@@ -1,18 +1,25 @@
 // Failure-only, local diagnostics for Codex turn termination. This is not a
-// transcript or a peer-facing error channel: it retains enough evidence to
-// diagnose an absent turn.completed without letting raw subprocess/bridge
-// text enter the fixed inter-agent peer_error template (issue #255).
+// transcript or a peer-facing error channel: it preserves a bounded, safe
+// event shape without letting subprocess/bridge text enter peer notices.
 
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyInterAgentError } from "@kaoiro/agent-common";
-import type { ThreadEvent } from "@openai/codex-sdk";
+import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";
 
 const MAX_EVENTS = 24;
-const MAX_EVENT_BYTES = 4096;
 const MAX_STDERR_BYTES = 8192;
+const MAX_TRACE_FILES = 20;
 
 export function defaultCodexTurnTraceDir(): string {
   if (process.env.KAOIRO_CODEX_TURN_TRACE_DIR !== undefined) {
@@ -27,8 +34,22 @@ export function defaultCodexTurnTraceDir(): string {
   return join(homedir(), ".kaoiro", "codex-turn-traces");
 }
 
+/** A host-private directory. The stable hashed agent segment helps operators
+ * group traces without placing an arbitrary agent_id in a filesystem path. */
+export function codexTurnTraceCaptureDir(
+  baseDirectory: string,
+  agentId: string,
+  hostId: string,
+): string {
+  const agentKey = createHash("sha256").update(agentId).digest("hex").slice(0, 16);
+  return join(baseDirectory, "agents", agentKey, hostId);
+}
+
+/** Creates or repairs the exact private capture directory. `mkdir`'s mode is
+ * ignored for an existing inode, so chmod is deliberately unconditional. */
 export async function ensureCodexTurnTraceDir(directory: string): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
 }
 
 function clipTail(value: string, maxBytes: number): string {
@@ -38,8 +59,60 @@ function clipTail(value: string, maxBytes: number): string {
     : bytes.subarray(bytes.length - maxBytes).toString("utf8");
 }
 
-function semanticEvent(event: ThreadEvent): string {
-  return clipTail(JSON.stringify(event), MAX_EVENT_BYTES);
+function semanticItem(item: ThreadItem): Record<string, unknown> {
+  const base = { item_type: item.type, item_id: item.id };
+  switch (item.type) {
+    case "command_execution":
+      return { ...base, status: item.status, exit_code: item.exit_code ?? null };
+    case "file_change":
+      return { ...base, status: item.status };
+    case "mcp_tool_call":
+      return {
+        ...base,
+        status: item.status,
+        server: item.server,
+        tool: item.tool,
+        error_code:
+          item.error === undefined
+            ? null
+            : classifyInterAgentError({ detail: item.error.message }).code,
+      };
+    case "todo_list":
+      return { ...base, item_count: item.items.length };
+    case "error":
+      return {
+        ...base,
+        error_code: classifyInterAgentError({ detail: item.message }).code,
+      };
+    default:
+      // agent_message/reasoning deliberately omit text; web_search omits its
+      // query; no semantic trace may retain model or tool input/output.
+      return base;
+  }
+}
+
+/** A deliberately minimized view of stdout JSONL. It has event/item kind and
+ * status useful for failure ordering, but never command/query/text/arguments,
+ * MCP result, error message, path, or token-bearing payload. */
+function semanticEvent(event: ThreadEvent): Record<string, unknown> {
+  switch (event.type) {
+    case "turn.failed":
+      return {
+        type: event.type,
+        error_code: classifyInterAgentError({ detail: event.error.message }).code,
+      };
+    case "error":
+      return {
+        type: event.type,
+        error_code: classifyInterAgentError({ detail: event.message }).code,
+      };
+    case "item.started":
+    case "item.updated":
+    case "item.completed":
+      return { type: event.type, ...semanticItem(event.item) };
+    default:
+      return { type: event.type };
+  }
 }
 
 function childStatus(detail: string | undefined):
@@ -55,14 +128,34 @@ function childStatus(detail: string | undefined):
   };
 }
 
+async function pruneTraceFiles(directory: string): Promise<void> {
+  const candidates = await Promise.all(
+    (await readdir(directory))
+      .filter((name) => name.endsWith(".jsonl"))
+      .map(async (name) => {
+        const path = join(directory, name);
+        try {
+          return { path, mtimeMs: (await stat(path)).mtimeMs };
+        } catch {
+          return null;
+        }
+      }),
+  );
+  const stale = candidates
+    .filter((entry): entry is { path: string; mtimeMs: number } => entry !== null)
+    .sort((a, b) => a.mtimeMs - b.mtimeMs)
+    .slice(0, Math.max(0, candidates.length - (MAX_TRACE_FILES - 1)));
+  await Promise.all(stale.map(({ path }) => unlink(path).catch(() => {})));
+}
+
 /** One trace is created per host turn, but it writes only when that turn
- * ends abnormally. `traceId` is retained in the local JSON for correlation
- * with the bridge stderr tail; no raw trace content goes to the peer. */
+ * ends abnormally. The directory must already be host-private; `traceId` is
+ * retained for correlation with the bridge's per-host stderr capture. */
 export class CodexTurnDiagnostics {
   readonly traceId = randomUUID();
   readonly #directory: string;
   readonly #bridgeStderrPath: string;
-  readonly #events: string[] = [];
+  readonly #events: Record<string, unknown>[] = [];
 
   constructor(directory = defaultCodexTurnTraceDir()) {
     this.#directory = directory;
@@ -83,8 +176,7 @@ export class CodexTurnDiagnostics {
   }
 
   /** Starts a fresh bridge-stderr capture window for this serial host turn.
-   * The bridge receives the fixed path from the host config, so a marker
-   * carries this turn's correlation ID without exposing it to the model. */
+   * The bridge receives this host-private path from the host config. */
   async begin(): Promise<void> {
     await ensureCodexTurnTraceDir(this.#directory);
     await writeFile(
@@ -92,15 +184,19 @@ export class CodexTurnDiagnostics {
       `[kaoiro trace_id=${this.traceId}]\n`,
       { encoding: "utf8", mode: 0o600 },
     );
+    // writeFile does not change mode when it truncates an existing inode.
+    await chmod(this.#bridgeStderrPath, 0o600);
   }
 
   async writeFailure(input: {
     sessionId: string | null;
     turnToken: string;
+    conversationIds: readonly string[];
     detail?: string;
     outcome: "turn_failed" | "stream_ended_without_terminal" | "run_streamed_rejected";
   }): Promise<string> {
     await ensureCodexTurnTraceDir(this.#directory);
+    await pruneTraceFiles(this.#directory);
     let bridgeStderr = "";
     try {
       bridgeStderr = clipTail(
@@ -116,8 +212,10 @@ export class CodexTurnDiagnostics {
     const path = join(this.#directory, `${this.traceId}.jsonl`);
     const line = JSON.stringify({
       trace_id: this.traceId,
+      captured_at: new Date().toISOString(),
       session_id: input.sessionId,
       turn_token: input.turnToken,
+      conversation_ids: input.conversationIds,
       outcome: input.outcome,
       stdout_jsonl_tail: this.#events,
       child: childStatus(input.detail),

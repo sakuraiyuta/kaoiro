@@ -2202,6 +2202,34 @@ describe("CodexHost", () => {
       expect(turnEnds[0]).not.toHaveProperty("error");
     });
 
+    it("診断 capture dir が壊れていても SDK turn は開始・完了する (fail-soft)", async () => {
+      const { client } = makeClient([[usageEvent()]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        turnTraceDir: "/dev/null/kaoiro-trace",
+      });
+
+      await runOneTurn(host, "hi", client);
+      await client.waitForTurn(0);
+    });
+
+    it("壊れた診断 dir でも injection 無しの既定 Codex factory を構築して host.run を継続する", async () => {
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        turnTraceDir: "/dev/null/kaoiro-trace",
+      });
+
+      const running = host.run();
+      // run() executes the default `new Codex(...)` before its first await.
+      // Closing immediately keeps this composition test offline: no SDK turn
+      // or child process is started, but an eager trace mkdir would reject.
+      host.close();
+      await expect(running).resolves.toBeUndefined();
+    });
+
     it("終端なしの production host 経路は 0600 failure trace を一件だけ残す", async () => {
       const traceDir = await mkdtemp(join(tmpdir(), "kaoiro-host-trace-test-"));
       const { client } = makeClient([[
@@ -2216,17 +2244,38 @@ describe("CodexHost", () => {
         now: () => "T",
       });
 
-      await runOneTurn(host, "hi", client);
+      await host.send("coalesced inbound", undefined, ["cid-a", "cid-b"]);
+      const done = host.run();
+      await client.waitForTurn(0);
+      host.close();
+      await done;
 
-      const traces = (await readdir(traceDir)).filter((name) => name.endsWith(".jsonl"));
+      const agentDirs = await readdir(join(traceDir, "agents"));
+      expect(agentDirs).toHaveLength(1);
+      const captureDir = join(
+        traceDir,
+        "agents",
+        agentDirs[0]!,
+        (await readdir(join(traceDir, "agents", agentDirs[0]!)))[0]!,
+      );
+      const traces = (await readdir(captureDir)).filter((name) => name.endsWith(".jsonl"));
       expect(traces).toHaveLength(1);
-      const tracePath = join(traceDir, traces[0]!);
+      const tracePath = join(captureDir, traces[0]!);
       expect((await stat(tracePath)).mode & 0o777).toBe(0o600);
       const trace = JSON.parse(await readFile(tracePath, "utf8")) as {
         outcome: string;
+        conversation_ids: string[];
+        captured_at: string;
+        stdout_jsonl_tail: Record<string, unknown>[];
         wrapper_classification: { message: string };
       };
       expect(trace.outcome).toBe("stream_ended_without_terminal");
+      expect(trace.conversation_ids).toEqual(["cid-a", "cid-b"]);
+      expect(trace.captured_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(trace.stdout_jsonl_tail).toEqual([
+        { type: "thread.started" },
+        { type: "error", error_code: "api_error" },
+      ]);
       expect(trace.wrapper_classification.message).toBe(
         "the peer reported an unspecified error",
       );
