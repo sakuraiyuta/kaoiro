@@ -26,6 +26,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readlinkSync,
   realpathSync,
   renameSync,
@@ -133,33 +134,117 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     const result = launch();
 
     expect(result.status).toBe(78);
-    expect(result.stderr).toContain("is missing or unresolvable");
+    expect(result.stderr).toContain("is a broken symlink");
     expect(result.stdout).not.toContain("stub cli.js started");
     // The pin: this must land in the SAME "not a missing build" bucket a
     // containment violation does, not the "a build artifact is missing"
-    // bucket a genuinely never-built leaf does.
+    // bucket a genuinely never-built leaf does, and NOT the "workspace
+    // link missing" bucket either -- the link is present, just broken.
     expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).not.toContain("pnpm install");
     expect(result.stderr).toContain("NOT a missing build");
   });
 
-  it("workspace リンクの祖先ディレクトリごと欠けていれば build shortage のまま (内部レビュー指摘)", () => {
-    // 内部review round 2 must-fix: must-fix 1 の修正が
-    // `err.path === target` まで要求していたため、leaf 1 個だけでなく
-    // node_modules/@kaoiro 自体が丸ごと存在しない場合 (pnpm install を
-    // 一度も実行していない、など — leaf 単体欠落より現実的なケース) まで
-    // 「missing build ではない」に誤分類する退行を生んでいた。
-    // realpathSync は祖先ディレクトリが丸ごと無い場合も lstat で ENOENT を
-    // 返す(dangling symlink の stat とは異なる)ため、syscall だけで
-    // 判定すれば両方とも正しく build shortage に分類できる。
+  it("workspace リンクの祖先ディレクトリごと欠けていれば install shortage (ふじ round3 must-fix 1)", () => {
+    // ふじ round 3: node_modules/@kaoiro が丸ごと存在しないのは build
+    // output 不足ではなく pnpm install が作る workspace dependency
+    // topology 不足であり、build shortage (exit 71) に分類するのは誤り
+    // だった (内部review round2で通した旧テストは、まさにこの誤った
+    // 期待値を pin していた)。ふじの実測: 案内どおり
+    // `pnpm -C wrapper build && pnpm -C runner build` を実行しても
+    // runner build は exit 2 (TS2307 cannot find module)、
+    // node_modules/@kaoiro は再生成されない。checkWorkspaceLinkedSentinel
+    // は link component 自体の欠落を明示的に lstat で判定し、
+    // MissingWorkspaceLinkError (exit 72、pnpm install を案内) に分類する。
     rmSync(join(runner, "node_modules", "@kaoiro"), { recursive: true, force: true });
 
     const result = launch();
 
     expect(result.status).toBe(78);
     expect(result.stdout).not.toContain("stub cli.js started");
-    // これは正真正銘の build shortage — 従来どおり build を提案する。
-    expect(result.stderr).toContain("a build artifact is missing");
-    expect(result.stderr).toContain("pnpm -C wrapper build && pnpm -C runner build");
+    expect(result.stderr).toContain("workspace dependency link");
+    expect(result.stderr).toContain("pnpm install");
+    // build は正しい remedy ではない -- 提案してはならない。
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+  });
+
+  it("dist が dangling symlink なら build shortage ではない (ふじ round3 must-fix 2)", () => {
+    // ふじ round 3: readBuildInfoStrict の bare err.code==="ENOENT" は
+    // dist 自体が dangling symlink な場合も無条件に build shortage
+    // (exit 71) にしていた。「dist は常に real directory」という前提コメ
+    // ントは健全な生成直後の topology しか述べておらず、破損した tree を
+    // 拒否・診断するはずの verifier がその前提に依存してはいけない。
+    // ふじの実測: 案内どおり build しても runner build は exit 2
+    // (TS5033、dangling dist へ書き込めない)、dangling symlink は
+    // 修復されない。checkBuildOutputLeaf は dist 自身の型を明示的に
+    // lstat で確認し、symlink (健全・dangling を問わず) や file なら
+    // build-fixable と分類しない。
+    const distReal = join(runner, "dist-elsewhere");
+    renameSync(join(runner, "dist"), distReal);
+    symlinkSync("missing-dist", join(runner, "dist"));
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("not an ordinary directory");
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).not.toContain("pnpm install");
+    expect(result.stderr).toContain("NOT a missing build");
+  });
+
+  it("workspace link が plain file なら未捕捉例外にならず分類される (内部レビュー指摘)", () => {
+    // 内部review (redesign後の round1 assessment) must-fix:
+    // checkWorkspaceLinkedSentinel は lstatType(linkPath)==="missing" しか
+    // 見ておらず、node_modules/@kaoiro/<pkg> が symlink でも directory
+    // でもない plain file の場合、realpathSync はファイルに対しても素直に
+    // 成功するため missing-link 判定も containment 判定もすり抜け、
+    // checkBuildOutputLeaf(linkReal, ...) に処理が渡る。そこで
+    // lstatType がファイルの「中」(dist/) を lstat しようとして ENOTDIR
+    // を投げるが、lstatType は ENOENT しか catch しないため未捕捉のまま
+    // main() まで伝播し、生の Node stack trace で crash する (exit 78
+    // 自体は shim の catch-all で維持されるが、診断メッセージが本来の
+    // classified VerifyError ではなくなる)。実際に再現して確認した:
+    // status 78 は出るが stderr に "ENOTDIR" のスタックトレースが出る。
+    const link = join(runner, "node_modules", "@kaoiro", "claude-code");
+    unlinkSync(link);
+    writeFileSync(link, "");
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    // 生の Node crash ではなく、分類された VerifyError の診断であること。
+    expect(result.stderr).not.toContain("at lstatSync");
+    expect(result.stderr).not.toContain("Node.js v");
+    expect(result.stderr).toContain("is not a directory");
+    expect(result.stderr).not.toContain("pnpm -C wrapper build");
+    expect(result.stderr).not.toContain("pnpm install");
+  });
+
+  it("intact topology + leaf 欠落のみ (真の build shortage) は、build 完了後に verifier を通す (positive control)", () => {
+    // ふじ round3: 「exit 71 の positive case は、案内した build を実行
+    // した後に verifier が通ることまで負の control としてください」。
+    // 実際に pnpm build を fixture 上で走らせることはできない(stub の
+    // ため実ソースが無い)ので、build が成功裏に生成するはずの状態
+    // (leaf ファイルの復元) を直接再現し、その後 verifier が通ることを
+    // 確認する — 「build shortage の分類が正しい」ことの反対側、
+    // 「remedy を適用すれば実際に直る」ことを pin する。
+    const leaf = join(runner, "node_modules", "@kaoiro", "claude-code", "dist", "cli.js");
+    const original = readFileSync(leaf, "utf8");
+    unlinkSync(leaf);
+
+    const before = launch();
+    expect(before.status).toBe(78);
+    expect(before.stderr).toContain("a build artifact is missing");
+    expect(before.stderr).toContain("pnpm -C wrapper build && pnpm -C runner build");
+
+    // build が正常完了した状態を直接再現する。
+    writeFileSync(leaf, original);
+
+    const after = launch();
+    expect(after.status).toBe(0);
+    expect(after.stdout).toContain("stub cli.js started");
   });
 
   it("生成した fixture のリンクは実チェックアウトの premise と結線されている (fixture-premise wiring)", () => {

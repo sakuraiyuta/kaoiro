@@ -148,12 +148,17 @@ verify="$deploy_dir/verify-release.mjs"
 # issue #259: an operator who hit a containment-boundary failure here (#229
 # round 2) followed this message's build suggestion and rebuilt anyway — the
 # failure was never a build shortage, and the same failure recurred 15
-# seconds later. verify-release.mjs now exits 71 specifically for a missing
-# build artifact (a genuine build shortage) and 70 for every other failure
-# (containment, malformed content, identity mismatch — none of which a
-# rebuild fixes), so the guidance below only ever suggests a build for the
-# one case where it can help. `if` (not `||`) so `set -e` does not exit
-# before `$?` is captured.
+# seconds later. verify-release.mjs now exits 71 for a missing build
+# artifact (a genuine build shortage — `pnpm build` fixes it), 72 for a
+# missing pnpm WORKSPACE LINK (a DIFFERENT shortage — `pnpm install`
+# fixes it, `pnpm build` does not: round 3 measured a build against a
+# missing node_modules/@kaoiro link fail with tsc's own "cannot find
+# module" and never recreate the link), and 70 for every other failure
+# (containment, malformed content, identity mismatch, a `dist` that is
+# itself a broken symlink — none of which either command fixes), so the
+# guidance below only ever suggests the ONE command that can actually help,
+# and never claims a fix that measurably does not work. `if` (not `||`) so
+# `set -e` does not exit before `$?` is captured.
 if "$node_bin" "$verify" "$deploy_dir/.." >/dev/null; then
   verify_status=0
 else
@@ -161,6 +166,8 @@ else
 fi
 if [ "$verify_status" -eq 71 ]; then
   die_config "release verification failed: a build artifact is missing (see the line above); repo checkout: run 'pnpm -C wrapper build && pnpm -C runner build', release: reinstall it"
+elif [ "$verify_status" -eq 72 ]; then
+  die_config "release verification failed: a workspace dependency link is missing (see the line above); repo checkout: run 'pnpm install' at the repository root (this is NOT a build — building will not recreate it), release: reinstall it"
 elif [ "$verify_status" -ne 0 ]; then
   die_config "release verification failed (see the line above for why — this is NOT a missing build, so building will not fix it); release: reinstall it"
 fi
