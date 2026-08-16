@@ -9,7 +9,7 @@ const config: WrapperConfig = {
   server_url: "ws://localhost:4000/wrapper",
 };
 
-function inboundEnvelope(deliverySeq: number): Envelope {
+function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
   return {
     version: "0",
     agent_id: "peer.agent",
@@ -21,7 +21,7 @@ function inboundEnvelope(deliverySeq: number): Envelope {
     payload: {
       to: config.agent_id,
       conversation_id: `c-${deliverySeq}`,
-      turn_number: 1,
+      turn_number: turnNumber,
       kind: "inform",
       body: "hello",
     },
@@ -70,12 +70,6 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         return host as never;
       },
       prepareStartup: async () => {},
-      handleInterAgentMessage: async (context, envelope) => {
-        // Non-injection acknowledges after classification; the injected item
-        // below must wait for the real host `onTurnStart` callback.
-        context.acknowledgeDelivery!(inboundEnvelope(2));
-        context.inject(envelope, "reply-owed");
-      },
     });
 
     expect(linkOptions.onInterAgentDeliveryStatus).toBeTypeOf("function");
@@ -85,6 +79,11 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     (linkOptions.onInterAgentDeliveryStatus as (status: { acked_seq: number }) => void)({
       acked_seq: 1,
     });
+    // The actual production handler drops the stale turn before injection,
+    // then injects the next fresh turn through the production coordinator.
+    await (linkOptions.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(
+      inboundEnvelope(2, 0),
+    );
     await (linkOptions.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(
       inboundEnvelope(3),
     );

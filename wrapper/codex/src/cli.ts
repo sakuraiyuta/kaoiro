@@ -12,7 +12,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   HistoryReplayer,
-  createDeliveryAcknowledgementWiring,
+  createDeliveryAcknowledgementRuntime,
   IaSidecar,
   InterAgentTool,
   QuestionBroker,
@@ -63,6 +63,8 @@ type CreateServerLink = (
 type CreateCodexHost = (
   ...args: ConstructorParameters<typeof CodexHost>
 ) => CodexHost;
+type ServerLinkOptions = ConstructorParameters<typeof ServerLink>[2];
+type CodexHostOptions = ConstructorParameters<typeof CodexHost>[1];
 
 /** Injectable construction seam for the composition root. It is deliberately
  * narrow: production uses the concrete constructors, while the regression
@@ -73,7 +75,6 @@ export interface CodexCliDependencies {
   createServerLink?: CreateServerLink;
   createHost?: CreateCodexHost;
   prepareStartup?: typeof prepareCodexStartup;
-  handleInterAgentMessage?: typeof handleInterAgentMessage;
 }
 
 // issue #219 D25: human-facing log lines show `display_name` (the
@@ -107,8 +108,6 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const createHost =
     dependencies.createHost ?? ((...args) => new CodexHost(...args));
   const prepareStartup = dependencies.prepareStartup ?? prepareCodexStartup;
-  const receiveInterAgentMessage =
-    dependencies.handleInterAgentMessage ?? handleInterAgentMessage;
   let link: ServerLink | null = null;
   const { configPath, prompt, resume: resumeSessionId } = parseArgs(
     process.argv.slice(2),
@@ -342,12 +341,14 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       : {}),
   });
 
-  const deliveryAcknowledgementWiring = createDeliveryAcknowledgementWiring(
+  const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
     (deliverySeq) => link?.acknowledgeInterAgentDelivery(deliverySeq),
     interAgentTurns,
   );
 
-  link = createServerLink(config.server_url, config.agent_id, {
+  const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
+    Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
+  >({
     personaId: config.persona.id,
     ...(config.transition_id === undefined
       ? {}
@@ -357,7 +358,6 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       : { token: config.server_token }),
     onPersonaPrompt: (received) => resolvePersonaPrompt(received),
     onHydration: (verdict) => replayer.onVerdict(verdict),
-    onInterAgentDeliveryStatus: deliveryAcknowledgementWiring.onInterAgentDeliveryStatus,
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
     onInstruction: (text, attachmentIds) => {
@@ -426,18 +426,18 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onAttachChunk: (payload) => host.attachChunk(payload),
     onAttachClose: (uploadId) => host.attachClose(uploadId),
     onInterAgentMessage: (envelope) =>
-      receiveInterAgentMessage(
-        {
+      handleInterAgentMessage(
+        deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
           recordInboundIa,
           send: (notice) => link?.send(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
-          acknowledgeDelivery: deliveryAcknowledgementWiring.acknowledgeDelivery,
           log: (line) => process.stdout.write(line),
-        },
+        }),
         envelope,
       ),
   });
+  link = createServerLink(config.server_url, config.agent_id, serverLinkOptions);
 
   const timeoutHandle = setTimeout(() => {
     rejectPersonaPrompt(
@@ -459,13 +459,12 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     clearTimeout(timeoutHandle);
   }
 
-  host = createHost(config, {
+  const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
+    Omit<CodexHostOptions, "onTurnStart">
+  >({
     onState,
     onLog,
     onTask,
-    onTurnStart: ({ turnToken }) => {
-      deliveryAcknowledgementWiring.onTurnStart(turnToken);
-    },
     // issue #131: resolve exactly the conversation(s) this turn was tagged
     // with (must-fix 1 — turn-scoped, never a sweep of everything pending;
     // extended issue #221 段階3 for a coalesced turn's multiple cids). On
@@ -515,6 +514,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   });
+  host = createHost(config, hostOptions);
 
   // Apply the after_join display_name sync that arrived before host was
   // constructed (issue #197 段階3, renamed issue #219 D19/D23), same

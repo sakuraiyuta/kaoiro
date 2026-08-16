@@ -8,11 +8,13 @@ export type { EngineAdapter } from "./engine.js";
 export { mergePendingDisplayNameSync } from "./engine.js";
 export { HistoryReplayer } from "./history_replay.js";
 export {
+  createDeliveryAcknowledgementRuntime,
   createDeliveryAcknowledgementWiring,
   DeliveryAcknowledgement,
   DeliveryAcknowledger,
 } from "./delivery_ack.js";
 export type {
+  DeliveryAcknowledgementRuntime,
   DeliveryAcknowledgementWiring,
   DeliveryTurnSource,
 } from "./delivery_ack.js";

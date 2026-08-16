@@ -34,7 +34,7 @@ import {
 } from "./inter_agent_turn_coordinator.js";
 import {
   HistoryReplayer,
-  createDeliveryAcknowledgementWiring,
+  createDeliveryAcknowledgementRuntime,
   IaSidecar,
   InterAgentTool,
   classifyInterAgentError,
@@ -98,6 +98,8 @@ type CreateServerLink = (
 type CreateAgentHost = (
   ...args: ConstructorParameters<typeof AgentHost>
 ) => AgentHost;
+type ServerLinkOptions = ConstructorParameters<typeof ServerLink>[2];
+type AgentHostOptions = ConstructorParameters<typeof AgentHost>[1];
 
 /** Injectable construction seam for the composition root. Production keeps
  * the concrete constructors; the regression captures the exact options and
@@ -107,7 +109,6 @@ export interface ClaudeCliDependencies {
   loadConfig?: typeof loadConfig;
   createServerLink?: CreateServerLink;
   createHost?: CreateAgentHost;
-  handleInterAgentMessage?: typeof handleInterAgentMessage;
 }
 
 // issue #219 D25: human-facing log lines show `display_name` (the
@@ -147,8 +148,6 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     dependencies.createServerLink ?? ((...args) => new ServerLink(...args));
   const createHost =
     dependencies.createHost ?? ((...args) => new AgentHost(...args));
-  const receiveInterAgentMessage =
-    dependencies.handleInterAgentMessage ?? handleInterAgentMessage;
   let link: ServerLink | null = null;
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
@@ -560,12 +559,14 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       : {}),
   });
 
-  const deliveryAcknowledgementWiring = createDeliveryAcknowledgementWiring(
+  const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
     (deliverySeq) => link?.acknowledgeInterAgentDelivery(deliverySeq),
     interAgentTurns,
   );
 
-  link = createServerLink(config.server_url, config.agent_id, {
+  const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
+    Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
+  >({
     personaId: config.persona.id,
     ...(config.transition_id === undefined
       ? {}
@@ -575,7 +576,6 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       : { token: config.server_token }),
     onPersonaPrompt: (received) => resolvePersonaPrompt(received),
     onHydration: (verdict) => replayer.onVerdict(verdict),
-    onInterAgentDeliveryStatus: deliveryAcknowledgementWiring.onInterAgentDeliveryStatus,
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
     // #258: acceptance of request_session_reset only means the server took
@@ -741,19 +741,19 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       host.attachClose(uploadId);
     },
     onInterAgentMessage: (envelope) =>
-      receiveInterAgentMessage(
-        {
+      handleInterAgentMessage(
+        deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
           ingress: interAgentIngress,
           recordInboundIa,
           send: (notice) => link?.send(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
-          acknowledgeDelivery: deliveryAcknowledgementWiring.acknowledgeDelivery,
           log: (line) => process.stdout.write(line),
-        },
+        }),
         envelope,
       ),
   });
+  link = createServerLink(config.server_url, config.agent_id, serverLinkOptions);
 
   // fail-closed: the wrapper cannot open its SDK session without the
   // server-pushed personality prompt. A timeout here is loud on purpose so
@@ -787,19 +787,15 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     clearTimeout(timeoutHandle);
   }
 
-  host = createHost(config, {
+  const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
+    Omit<AgentHostOptions, "onTurnStart">
+  >({
     onState,
     onLog,
     onTask,
     // phase-28 BR MF2: the B1 threshold notice is an injection like any
     // other, so it queues on the one chain instead of racing it.
     enqueueInjection: enqueueInstruction,
-    onTurnStart: ({ turnToken }) => {
-      deliveryAcknowledgementWiring.onTurnStart(turnToken);
-      // Dispatch may have happened long before this point; only this host
-      // input-yield boundary is an actual SDK turn start (issue #248).
-      turnWatchdog.start(turnToken);
-    },
     onTurnProgress: ({ turnToken }) => {
       turnWatchdog.progress(turnToken);
     },
@@ -953,7 +949,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       },
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
+  }, (turnToken) => {
+    // Dispatch may have happened long before this point; only this host
+    // input-yield boundary is an actual SDK turn start (issue #248).
+    turnWatchdog.start(turnToken);
   });
+  host = createHost(config, hostOptions);
 
   // Apply the after_join set_permission_mode that arrived before host was
   // constructed. host.ts (#58) uses `#permissionMode` set before run() as

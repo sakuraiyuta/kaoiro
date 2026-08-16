@@ -43,10 +43,9 @@ export interface DeliveryTurnSource {
   deliverySequencesForTurn(turnToken: string): readonly number[];
 }
 
-/** Production acknowledgement composition for issue #247.  Both CLI
- * adapters hand this same object to their inbound handler and their actual
- * host `onTurnStart` hook; adapter tests import it rather than restating the
- * watermark loop in a fixture. */
+/** Delivery-acknowledgement semantics for issue #247. The runtime builder
+ * below applies this object to each production component connection; focused
+ * tests can exercise the watermark loop without duplicating it in a fixture. */
 export class DeliveryAcknowledgement {
   readonly #ledger = new DeliveryAcknowledger();
   readonly #send: (deliverySeq: number) => void;
@@ -80,18 +79,16 @@ export class DeliveryAcknowledgement {
   }
 }
 
-/** The three adapter edges that form the real CLI composition. Keeping this
- * object together prevents a glue test from independently recreating one
- * edge while silently omitting another (issue #247). */
+/** The three acknowledgement callbacks used by focused semantic tests. The
+ * runtime builder below, not an adapter fixture, owns their production
+ * connection to ServerLink, the inbound handler, and the host. */
 export interface DeliveryAcknowledgementWiring {
   onInterAgentDeliveryStatus(status: { acked_seq: number } | null): void;
   acknowledgeDelivery(envelope: Envelope): void;
   onTurnStart(turnToken: string): void;
 }
 
-/** Builds the exact delivery-ack wiring handed to `ServerLink`, the inbound
- * handler, and the host in each production CLI. Tests call this factory too;
- * the three callbacks are intentionally not reimplemented in a harness. */
+/** Builds focused delivery-ack callbacks for tests and internal callers. */
 export function createDeliveryAcknowledgementWiring(
   send: (deliverySeq: number) => void,
   turns: DeliveryTurnSource,
@@ -103,5 +100,57 @@ export function createDeliveryAcknowledgementWiring(
     acknowledgeDelivery: acknowledgement.acknowledgeEnvelope,
     onTurnStart: (turnToken) =>
       acknowledgement.acknowledgeTurnStart(turnToken, turns),
+  };
+}
+
+/** The production composition boundary for delivery acknowledgements.  A
+ * CLI gives this builder the options/context for its concrete ServerLink,
+ * inbound handler, and host; the builder adds the three acknowledgement
+ * connections as one unit.  This deliberately owns the connections rather
+ * than returning callbacks for an adapter fixture to wire independently. */
+export interface DeliveryAcknowledgementRuntime {
+  withServerLinkOptions<TOptions extends object>(
+    options: TOptions,
+  ): TOptions & {
+    onInterAgentDeliveryStatus(status: { acked_seq: number } | null): void;
+  };
+  withInboundContext<TContext extends object>(context: TContext): TContext & {
+    acknowledgeDelivery(envelope: Envelope): void;
+  };
+  withHostOptions<TOptions extends object>(
+    options: TOptions,
+    afterTurnStart?: (turnToken: string) => void,
+  ): TOptions & {
+    onTurnStart(info: { turnToken: string }): void;
+  };
+}
+
+/** Builds the actual three-way runtime connection for issue #247.  The
+ * generic option/context wrappers keep agent-common independent of either
+ * adapter's ServerLink and Host classes while ensuring their connection is
+ * owned by production code in one place. */
+export function createDeliveryAcknowledgementRuntime(
+  send: (deliverySeq: number) => void,
+  turns: DeliveryTurnSource,
+): DeliveryAcknowledgementRuntime {
+  const acknowledgement = new DeliveryAcknowledgement(send);
+
+  return {
+    withServerLinkOptions: (options) => ({
+      ...options,
+      onInterAgentDeliveryStatus: (status: { acked_seq: number } | null) =>
+        acknowledgement.observe(status),
+    }),
+    withInboundContext: (context) => ({
+      ...context,
+      acknowledgeDelivery: acknowledgement.acknowledgeEnvelope,
+    }),
+    withHostOptions: (options, afterTurnStart) => ({
+      ...options,
+      onTurnStart: ({ turnToken }: { turnToken: string }) => {
+        acknowledgement.acknowledgeTurnStart(turnToken, turns);
+        afterTurnStart?.(turnToken);
+      },
+    }),
   };
 }
