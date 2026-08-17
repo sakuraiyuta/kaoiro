@@ -66,13 +66,21 @@ export interface DetailScenario {
    *  sprite for the "ao" persona so DetailHarness's spriteUrl is
    *  non-null. */
   sprite?: boolean;
-  /** issue #237 一次調査: `detailLogs()` の index を指定すると、mount 後
+  /** issue #237/#260: `detailLogs()` の index を指定すると、mount 後
    *  少し遅れて AgentDetail の `scrollToEntryKey` を該当 entry のキーへ
    *  切り替える(=ResponseTimeline クリックで同一 agent の別行へ飛ぶ、を
    *  実ブラウザで再現)。 */
   scrollTargetIndex?: number;
   /** scrollTargetIndex を反映する遅延(ms)。既定 0。 */
   scrollTargetDelayMs?: number;
+  /** issue #260: AgentDetail itself is mounted after this delay. A target
+   * already present at that time reproduces a ResponseTimeline click that
+   * conditionally opens the detail pane. */
+  mountDetailAfterMs?: number;
+  /** Give the conditional mount a tile origin. `false`/omitted mirrors a
+   * timeline route (origin=null); true keeps expandFrom active so the e2e
+   * can prove scroll geometry is transform-independent. */
+  expandFromOrigin?: boolean;
   /** issue #237 一次調査: 500ms 後に別 agent (host.b2, 30 件ログ) へ
    *  切り替えつつ、その agent の index 件目へ scrollToEntryKey を同時に
    *  セットする(App.svelte onSelectAgent の実運用経路の再現)。 */

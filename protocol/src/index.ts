@@ -690,7 +690,16 @@ export interface InterAgentErrorPayload {
  *  enum value, so older receivers degrade gracefully) and `body` repeats the
  *  human-readable reason for clients that only render `body`. `meta.done` is
  *  always `false` on an error notice — ending the conversation is left to
- *  the receiving agent's judgement. */
+ *  the receiving agent's judgement.
+ *  `new_conversation` (issue #262) is true only when the CALLING agent's
+ *  `send_to_agent` omitted `conversation_id` and this wrapper allocated a
+ *  fresh one — the one case where the server has never seen this id and
+ *  that is expected. Every other envelope this wrapper builds (a reply
+ *  within a conversation it already knows, a peer-error / stale_turn
+ *  notice) carries an id the server already tracks, so those set it
+ *  false. The server rejects an explicit-but-unknown id (`false` and no
+ *  entry exists) as `unknown_conversation_id` instead of silently opening
+ *  a fresh, context-less thread under a mistyped or stale id. */
 export interface InterAgentMessagePayload {
   to: string;
   conversation_id: string;
@@ -708,6 +717,7 @@ export interface InterAgentMessagePayload {
     id: string;
   };
   error?: InterAgentErrorPayload;
+  new_conversation: boolean;
 }
 
 // Runner control messages (protocol.md "runner 制御メッセージ", #66 / ADR-0023).

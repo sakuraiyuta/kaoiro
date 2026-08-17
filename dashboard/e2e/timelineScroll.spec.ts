@@ -1,6 +1,6 @@
-// issue #237: ResponseTimeline クリックで AgentDetail へジャンプした際、
-// クリックしたメッセージが常に GAP(TIMELINE_SCROLL_TOP_GAP_PX)ぶんの
-// 余白込みで正確に着地することを固定する。
+// issue #237/#260: ResponseTimeline クリックで AgentDetail へジャンプした
+// 際、クリックしたメッセージ本文が常に GAP(TIMELINE_SCROLL_TOP_GAP_PX)
+// ぶんの余白込みで正確に着地することを固定する。
 //
 // window(#184, LOG_WINDOW_SIZE=200)を超える深い過去のメッセージへ飛ぶ
 // 経路(ensureIndexVisible による window 拡張)でのみ再現する不具合
@@ -35,12 +35,13 @@ async function readScrollTop(
 }
 
 /** Wait for the smooth-scroll animation to settle (scrollTop unchanged
- *  across two consecutive checks), then return the target row's gap from
- *  the `.log` top edge in px. Looks the row up by its `seq` (embedded in
- *  `data-envelope-key`) rather than by array index — once #184's window
- *  expands, `visibleLogs` no longer starts at absolute index 0, so a
- *  plain `.transcript-entry` array index would silently point at a
- *  DIFFERENT row than the one actually clicked. */
+ *  across two consecutive checks), then return the target message body's gap
+ *  from the `.log` top edge in px. Looks the envelope row up by its `seq`
+ *  (embedded in `data-envelope-key`) and then measures its actual `.msg`
+ *  body. Once #184's window expands, `visibleLogs` no longer starts at
+ *  absolute index 0, and that first wrapper includes a date divider;
+ *  measuring the wrapper would silently accept a landing one divider short
+ *  of the selected message. */
 async function waitForSettledGap(
   page: import("@playwright/test").Page,
   seq: number,
@@ -55,29 +56,76 @@ async function waitForSettledGap(
   }
   return page.evaluate((targetSeq) => {
     const logEl = document.querySelector(".log") as HTMLElement;
-    const target = logEl.querySelector<HTMLElement>(
+    const envelope = logEl.querySelector<HTMLElement>(
       `[data-envelope-key*="|${targetSeq}|log|"]`,
     );
-    if (!target) throw new Error(`target row seq=${targetSeq} not rendered`);
+    const target = envelope?.querySelector<HTMLElement>(".msg");
+    if (!target) throw new Error(`target message seq=${targetSeq} not rendered`);
     return target.getBoundingClientRect().top - logEl.getBoundingClientRect().top;
   }, seq);
 }
 
-test.describe("issue #237: timeline jump lands at the GAP offset for deep history", () => {
-  test("同一 agent を表示中に別行(window 外)をクリックする経路", async ({
+async function installTransformAtScrollProbe(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  await page.addInitScript(() => {
+    const nativeScrollTo = HTMLElement.prototype.scrollTo;
+    const transforms: string[] = [];
+    HTMLElement.prototype.scrollTo = function (...args: Parameters<HTMLElement["scrollTo"]>) {
+      if (this.classList.contains("log")) {
+        const detail = document.querySelector<HTMLElement>(".detail");
+        transforms.push(detail ? getComputedStyle(detail).transform : "missing-detail");
+      }
+      return nativeScrollTo.apply(this, args);
+    };
+    Object.defineProperty(window, "__timelineTransformsAtScroll", {
+      value: transforms,
+      configurable: true,
+    });
+  });
+}
+
+async function transformsAtScroll(
+  page: import("@playwright/test").Page,
+): Promise<string[]> {
+  return page.evaluate(() =>
+    (window as Window & { __timelineTransformsAtScroll?: string[] })
+      .__timelineTransformsAtScroll ?? [],
+  );
+}
+
+test.describe("issue #260: timeline jump lands at the message-body GAP", () => {
+  test("後付け mount 中の scale でも深い target を本文 GAP へ着地させる", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1200, height: 900 });
+    await installTransformAtScrollProbe(page);
+    const deepTargetIndex = 150;
     await page.goto(
-      `${DETAIL}&scrollTarget=${TARGET_INDEX}&scrollDelay=500&logCount=${LOG_COUNT}`,
+      `${DETAIL}&scrollTarget=${deepTargetIndex}&mountDelay=50&expandOrigin=1&logCount=${LOG_COUNT}`,
     );
     await expect(page.locator(".log")).toBeVisible();
-    // scrollDelay(500ms)経過後にジャンプが発火する。
-    await page.waitForTimeout(600);
+    const gapPx = await waitForSettledGap(page, deepTargetIndex + 1);
+    expect(Math.abs(gapPx - GAP)).toBeLessThan(2);
+    // This is deliberately an active expandFrom transition. A transformed
+    // rect mixed with an unscaled scrollTop drifts proportionally here.
+    expect((await transformsAtScroll(page)).some((value) => value !== "none")).toBe(true);
+  });
+
+  test("window 外 target は origin=null のまま divider でなく本文へ着地する", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await installTransformAtScrollProbe(page);
+    await page.goto(
+      `${DETAIL}&scrollTarget=${TARGET_INDEX}&mountDelay=50&logCount=${LOG_COUNT}`,
+    );
+    await expect(page.locator(".log")).toBeVisible();
     const gapPx = await waitForSettledGap(page, TARGET_SEQ);
     expect(Math.abs(gapPx - GAP)).toBeLessThan(2);
-    // #184: 対象を含むよう window が拡張されたままであること(巻き戻って
-    // いない)も併せて固定する。
+    // Timeline has no tile origin. It must not begin the scale intro while its
+    // pending target is measured; a 0ms transition with scale CSS is not enough.
+    expect(await transformsAtScroll(page)).toEqual(["none"]);
     const entryCount = await page.evaluate(
       () => document.querySelectorAll(".transcript-entry").length,
     );

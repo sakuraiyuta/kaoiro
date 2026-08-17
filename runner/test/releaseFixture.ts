@@ -14,8 +14,10 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -296,6 +298,50 @@ export function writeReleaseTree(
 
   for (const rel of omit) rmSync(join(tree, rel), { force: true });
   return tree;
+}
+
+/** Writes a checkout shaped like the REAL pnpm workspace this repo builds
+ *  from (issue #259) — not the built-release shape `writeReleaseTree` alone
+ *  produces. The runner tree lands at `<ws>/runner`; the wrapper packages
+ *  are SIBLING workspace members at `<ws>/wrapper/<name>`; and
+ *  `<ws>/runner/node_modules/@kaoiro/<name>` reaches them through the same
+ *  RELATIVE link pnpm itself writes (`../../../wrapper/<name>`, leaving
+ *  runner/ entirely) — never as real directories inside the release root,
+ *  which is what only a BUILT release looks like.
+ *
+ *  `repoDirectWorkspace.test.ts`'s own premise tests pin this
+ *  `../../../wrapper/<name>` target, and the nearest `pnpm-workspace.yaml`
+ *  landing at the workspace root, against the real checkout — so a fixture
+ *  that drifts from what pnpm actually writes fails there, not silently.
+ *
+ *  Always repo-direct: VERSION is forced absent and the manifest is never
+ *  generated, regardless of `options` — only the builder writes either, and
+ *  a real checkout never carries this link topology together with them.
+ *
+ *  Returns the runner tree path (the release root). */
+export function writeWorkspaceCheckout(
+  ws: string,
+  revision: string,
+  options: ReleaseTreeOptions = {},
+): string {
+  const runner = join(ws, "runner");
+  writeReleaseTree(runner, revision, {
+    ...options,
+    manifest: false,
+    omit: [...(options.omit ?? []), "VERSION"],
+  });
+  writeFileSync(
+    join(ws, "pnpm-workspace.yaml"),
+    "packages:\n  - runner\n  - wrapper/claude-code\n  - wrapper/codex\n",
+  );
+  for (const wrapper of ["claude-code", "codex"]) {
+    const link = join(runner, "node_modules", "@kaoiro", wrapper);
+    const member = join(ws, "wrapper", wrapper);
+    mkdirSync(dirname(member), { recursive: true });
+    renameSync(link, member);
+    symlinkSync(`../../../wrapper/${wrapper}`, link);
+  }
+  return runner;
 }
 
 /** Builds `<dir>/kaoiro-runner-<id>-linux-x64.tar.gz` the way

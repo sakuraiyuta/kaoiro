@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   import KaoiroServer.OAuthAllowlistFixture
+  import ExUnit.CaptureLog
 
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
@@ -1217,7 +1218,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "kind" => "inform",
           "body" => "hello",
           "meta" => %{"done" => false, "propose_next" => "reply"},
-          "owner" => %{"kind" => "agent", "id" => agent_id}
+          "owner" => %{"kind" => "agent", "id" => agent_id},
+          "new_conversation" => true
         },
         "ext" => %{}
       }
@@ -1422,7 +1424,15 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         "kind" => opts[:kind] || "inform",
         "body" => opts[:body] || "hi",
         "meta" => meta,
-        "owner" => opts[:owner] || %{"kind" => "user", "id" => "operator"}
+        "owner" => opts[:owner] || %{"kind" => "user", "id" => "operator"},
+        # issue #262. Defaults true (matches ConversationStates.record_
+        # message/8's own default): this describe block's cids are either
+        # freshly minted here or a 2nd+ call reusing one this SAME helper
+        # already created, so `existing` is never nil on a false-flagged
+        # send by construction and the flag is moot for every pre-#262
+        # test. Tests written FOR #262 pass `new_conversation: false`
+        # explicitly to exercise the reject path.
+        "new_conversation" => Keyword.get(opts, :new_conversation, true)
       }
 
       # 応答不能エラー通知 (#131) は optional。指定時のみ payload に載せる。
@@ -1507,6 +1517,68 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       projection = AgentStates.ia_projection()
       assert [{^stamp, ^stamped}] = projection[from_id]
       assert [{^stamp, ^stamped}] = projection[to_id]
+    end
+
+    test "dispatch-v1 recipient gets delivery_seq only after route and ack closes the same server ledger" do
+      from_id = "test.delivery-from"
+      to_id = "test.delivery-to"
+      on_exit(fn -> KaoiroServer.DeliveryStates.delete(to_id) end)
+
+      to_socket =
+        join_wrapper(to_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => "process-a"
+        })
+
+      assert_reply push(to_socket, "envelope", envelope(to_id, "idle")), :ok
+      from_socket = seed_known(from_id)
+
+      @endpoint.subscribe("wrapper:" <> to_id)
+      ref = push(from_socket, "envelope", inter_envelope(from_id, to_id))
+      assert_reply ref, :ok
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^to_id,
+        event: "envelope",
+        payload: %{"delivery_seq" => 1}
+      }
+
+      status_ref = push(to_socket, "delivery_status_request", %{})
+
+      assert_reply status_ref, :ok, %{
+        "delivery" => %{issued_seq: 1, acked_seq: 0, pending_since: pending}
+      }
+
+      assert is_binary(pending)
+
+      ack_ref = push(to_socket, "delivery_ack", %{"delivery_seq" => 1})
+
+      assert_reply ack_ref, :ok, %{
+        "delivery" => %{issued_seq: 1, acked_seq: 1, pending_since: nil}
+      }
+    end
+
+    test "legacy rejoin disarms an old capability ledger and reports unknown, not 0/0" do
+      agent_id = "test.delivery-legacy-rejoin"
+      on_exit(fn -> KaoiroServer.DeliveryStates.delete(agent_id) end)
+
+      capable =
+        join_wrapper(agent_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => "process-a"
+        })
+
+      assert 1 = KaoiroServer.DeliveryStates.issue(agent_id)
+      assert %{issued_seq: 1, acked_seq: 0} = KaoiroServer.DeliveryStates.get(agent_id)
+      Process.unlink(capable.channel_pid)
+      :ok = close(capable)
+
+      {reply, legacy} = join_wrapper_with_reply(agent_id)
+      refute Map.has_key?(reply, "delivery")
+      assert nil == KaoiroServer.DeliveryStates.get(agent_id)
+
+      status_ref = push(legacy, "delivery_status_request", %{})
+      assert_reply status_ref, :ok, %{}
     end
 
     test "自己ルーティングは :self_routing で拒否する" do
@@ -1596,6 +1668,123 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_panes_empty([from_id, to_id])
     end
 
+    test "payload.new_conversation 欠落 (issue #262 より前の wrapper 相当) は拒否せず " <>
+           "true とみなして新規 conversation として通す (レビュー、クロエ M1)" do
+      # ADR-0015 のベストエフォート受理と同じ理由: Phoenix client は
+      # reconnect/heartbeat を自前で持つため、server だけ再デプロイしても
+      # 旧 wrapper プロセスは再起動なしで送信を続けうる。key を必須に
+      # すると、そうした旧 wrapper の live send を全部弾いてしまう。
+      from_id = "test.iam-newconv-missing-from"
+      to_id = "test.iam-newconv-missing-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env = inter_envelope(from_id, to_id)
+      env = update_in(env, ["payload"], &Map.delete(&1, "new_conversation"))
+
+      log =
+        capture_log(fn ->
+          ref = push(from_socket, "envelope", env)
+          assert_reply ref, :ok
+        end)
+
+      # こはくの裁定 (issue #262): 「欠落は警告ログ付きで従来どおり受理」の
+      # ログ側を検証する。accept 判定だけでは無言の legacy 受理と警告付き
+      # legacy 受理を区別できない。
+      assert log =~ "inter_agent_message: client declared new_conversation (absent)"
+      assert log =~ "issue #262 legacy best-effort accept"
+    end
+
+    test "payload.new_conversation 欠落かつ明示指定の未知 cid (旧 wrapper 相当) は " <>
+           "移行期間中 unknown_conversation_id にならず新規として受理される " <>
+           "(意図的な残余、issue #262 delta)" do
+      # trivial-review advisory: server の視点では上の「欠落は true とみなす」
+      # テストとコード経路は同一 — 「省略による新規」と「タイポによる未知」を
+      # 区別する情報は payload 上に無く (new_conversation が唯一の判断材料で、
+      # ここも同じく欠落)、両者とも existing==nil / new_conversation?=true の
+      # 同じ分岐を通る。それでも別テストとして残すのは、この特定シナリオ
+      # (意図的な残余の存在) に固有の名前を付け、意図が変わったときに
+      # 明示的に赤くする対象を残すため。
+      from_id = "test.iam-newconv-missing-unk-from"
+      to_id = "test.iam-newconv-missing-unk-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env =
+        inter_envelope(from_id, to_id,
+          cid: "cnv-typo-old-wrapper-#{System.unique_integer([:positive])}"
+        )
+
+      env = update_in(env, ["payload"], &Map.delete(&1, "new_conversation"))
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :ok
+    end
+
+    test "payload.new_conversation が bool でなければ拒否する (issue #262)" do
+      from_id = "test.iam-newconv-badtype-from"
+      to_id = "test.iam-newconv-badtype-to"
+      _ = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env = inter_envelope(from_id, to_id)
+      env = put_in(env, ["payload", "new_conversation"], "true")
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "invalid value: payload.new_conversation"}
+      assert_panes_empty([from_id, to_id])
+    end
+
+    test "明示指定された未知の conversation_id は unknown_conversation_id で拒否し " <>
+           "relay も store もしない (issue #262)" do
+      from_id = "test.iam-unkcid-from"
+      to_id = "test.iam-unkcid-to"
+      to_socket = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      env =
+        inter_envelope(from_id, to_id,
+          cid: "cnv-typo-#{System.unique_integer([:positive])}",
+          new_conversation: false
+        )
+
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "unknown_conversation_id"}
+      assert_panes_empty([from_id, to_id])
+
+      # 受信側 socket は生きたまま (未知 cid の拒否が他の状態を壊さない)。
+      ref2 = push(to_socket, "envelope", inter_envelope(to_id, from_id))
+      assert_reply ref2, :ok
+    end
+
+    test "既存 conversation への明示応答 (new_conversation: false) は通常どおり通す " <>
+           "(issue #262)" do
+      from_id = "test.iam-newconv-reply-from"
+      to_id = "test.iam-newconv-reply-to"
+      cid = "cnv-newconv-reply-#{System.unique_integer([:positive])}"
+      to_socket = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      # 発起側: conversation_id 省略相当 -> new_conversation: true
+      ref =
+        push(
+          from_socket,
+          "envelope",
+          inter_envelope(from_id, to_id, cid: cid, turn: 1, new_conversation: true)
+        )
+
+      assert_reply ref, :ok
+
+      # 応答側: 相手から受け取った id を明示指定 -> new_conversation: false
+      # だが既存なので #262 のチェックには触れず通常どおり通る。
+      ref2 =
+        push(
+          to_socket,
+          "envelope",
+          inter_envelope(to_id, from_id, cid: cid, turn: 2, new_conversation: false)
+        )
+
+      assert_reply ref2, :ok
+    end
+
     test "既知の max_turn_number 以下の再送は stale_turn で拒否し relay も store もしない " <>
            "(#177 review M1)" do
       from_id = "test.iam-staleturn-from"
@@ -1645,7 +1834,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
             to_id,
             "msg-#{n}",
             n,
-            false
+            false,
+            true
           )
       end
 
@@ -2428,7 +2618,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                  owner: peer_socket.channel_pid
                )
 
-      assert :ok = ConversationStates.record_message("dir-g2", peer_id, self_id, "x", 1, false)
+      assert :ok =
+               ConversationStates.record_message("dir-g2", peer_id, self_id, "x", 1, false, true)
 
       self_socket = join_wrapper(self_id)
       ref = push(self_socket, "envelope", envelope(self_id, "idle"))
@@ -2471,7 +2662,15 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert %{session_start_observed: false} = AgentActivity.get(peer_id)
 
       assert :ok =
-               ConversationStates.record_message("dir-fallback", peer_id, self_id, "x", 1, false)
+               ConversationStates.record_message(
+                 "dir-fallback",
+                 peer_id,
+                 self_id,
+                 "x",
+                 1,
+                 false,
+                 true
+               )
 
       self_socket = join_wrapper(self_id)
       ref = push(self_socket, "envelope", envelope(self_id, "idle"))
@@ -2513,7 +2712,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                  self_id,
                  "x",
                  1,
-                 false
+                 false,
+                 true
                )
 
       ref = push(self_socket, "directory_request", %{})
@@ -2859,7 +3059,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "reason" => "context を外部化済み"
         })
 
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{request_id: reply_request_id}
 
       assert_broadcast "session_reset_started",
                        %{
@@ -2870,6 +3070,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                          "previous_session_id" => "sess-prev",
                          "request_id" => request_id
                        }
+
+      assert reply_request_id == request_id
 
       assert_broadcast "reset_session",
                        %{
@@ -3588,7 +3790,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
             "kind" => "inform",
             "body" => "hi #{turn}",
             "meta" => %{"done" => false, "propose_next" => ""},
-            "owner" => %{"kind" => "user", "id" => "operator"}
+            "owner" => %{"kind" => "user", "id" => "operator"},
+            "new_conversation" => true
           },
           "ext" => %{}
         }

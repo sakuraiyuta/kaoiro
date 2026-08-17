@@ -71,6 +71,8 @@ interface SystemctlStubOptions {
   execStart: string;
   /** Shell fragment run when the stub is called with `stop`. */
   onStop?: string;
+  /** Shell fragment run when the stub is called with `start`. */
+  onStart?: string;
 }
 
 describe("kaoiro-runner-update.sh (issue #229)", () => {
@@ -109,6 +111,9 @@ describe("kaoiro-runner-update.sh (issue #229)", () => {
         `    ;;`,
         `  *" stop "*)`,
         `    ${options.onStop ?? ":"}`,
+        `    ;;`,
+        `  *" start "*)`,
+        `    ${options.onStart ?? ":"}`,
         `    ;;`,
         `esac`,
         `exit 0`,
@@ -619,6 +624,40 @@ describe("kaoiro-runner-update.sh (issue #229)", () => {
     expect(remaining).toContain(A);
     expect(remaining).not.toContain(old1);
     expect(remaining).not.toContain(old2);
+  });
+
+  it(".lock.links (issue #253) が保持されていれば prune を止め、活性化済みの current はそのまま残す", () => {
+    // The prune snapshot-and-delete below takes the SAME .lock.links
+    // kaoiro-runner-switch.sh takes around its own current/previous swap.
+    // `onStart` fires after stop/switch/start have all already succeeded --
+    // simulating an external switch or install grabbing the lock in the
+    // instant this run turns from activating a release to pruning old
+    // ones, which is exactly the window issue #253 closes. update.sh's own
+    // NESTED install call (earlier in this same run) never contends here:
+    // it acquires and releases this same lock around its own narrow
+    // window, and that call has long since returned by the time `start`
+    // runs.
+    const old1 = revisionOf("locked-prune-old");
+    seedRelease(old1);
+    const archive = makeReleaseTarball(work, B);
+
+    const result = runUpdate(["--tarball", archive, "--keep", "1"], {
+      KAOIRO_SYSTEMCTL: systemctlStub({
+        execStart: goodExecStart(),
+        onStart: `mkdir ${JSON.stringify(join(root, ".lock.links"))}`,
+      }),
+    });
+
+    expect(result.status).toBe(75);
+    expect(result.stderr).toContain("another run holds");
+    // The activation itself is NOT undone -- stop/switch/start already
+    // completed before the lock contention was ever hit, so the host is
+    // correctly running the release this update requested.
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+    expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
+    // Pruning did not run at all: old1 survives even though --keep 1 would
+    // otherwise have removed it.
+    expect(readdirSync(join(root, "releases"))).toContain(old1);
   });
 
   // Titled for what it measures: argument validation, which happens long

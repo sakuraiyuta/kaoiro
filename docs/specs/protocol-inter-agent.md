@@ -19,6 +19,32 @@ related: [protocol, subagent-tasks, plugin-model, threat-model]
 [protocol](protocol.md) の予約追補(同一 `version`)として envelope
 `type: "inter_agent_message"` を新設する([ADR-0010](../adr/0010-protocol-precisification.md))。
 
+## Dispatch-confirmation ledger (issue #247)
+
+`ingress_stamp` は server acceptance であって、受信 wrapper が SDK turn として
+読んだ確認ではない。recipient ごとの `inter_agent_delivery = {issued_seq,
+acked_seq, pending_since?}` は後段の **dispatch confirmation** を観測するだけの
+ledger であり、payload 保存・再送保証・配送保証はしない。
+
+- `inter_agent_delivery_ack: "dispatch-v1"` capability を join した wrapper
+  宛の live/synthetic message には、server が outer envelope に recipient-local
+  正整数 `delivery_seq` を付けて `issued_seq` を進める。
+- wrapper は queue 追加や `receiveInbound` 到達では ack しない。inject は実 SDK
+  turn start、consumed/terminal/stale の意図的 non-injection は分類完了で、連続
+  prefix を `delivery_ack {delivery_seq}` として確認する。従ってその間の停滞は
+  `issued_seq > acked_seq` として残る。`pending_since` は最初の乖離時刻である。
+- `whoami`、`list_agents` entry、operator dashboard の `snapshot.deliveries` と
+  `delivery_status` は同じ server ledger を読む。field absent は **unknown**
+  （legacy/disarmed）であり、zero ではない。
+
+`transition_id` は session transition 相関用であり、runner crash relaunch が同値を
+再利用し得るので process identity に使えない。ack-capable `ServerLink` は process
+ごとの random `delivery_generation` を join する。同 generation の websocket
+reconnect は gap を保持する。異 generation（reset/crash/explicit restart）は旧
+process の memory を失った境界なので server が `acked_seq := issued_seq` として
+旧 gap を atomically abandon する。sequence は単調に続くが、新 process への再送は
+しない。
+
 ## Definition
 
 ### 全体像
@@ -77,7 +103,8 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
   "owner": {
     "kind": "user",
     "id": "operator"
-  }
+  },
+  "new_conversation": false
 }
 ```
 
@@ -85,6 +112,7 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 |---|---|---|
 | `to` | MUST | 宛先 `agent_id`。`[A-Za-z0-9._-]` 制約は protocol 全体と同じ |
 | `conversation_id` | MUST | 同一対話を紐付ける識別子。発起側 wrapper が採番(セッション内一意、UUIDv4 ベース) |
+| `new_conversation` | MUST(準拠 wrapper)。省略時は server が `true` とみなす(下記) | bool。送信元エージェントが `conversation_id` を省略し、この wrapper が新規採番した送信でのみ true(issue #262)。それ以外(明示指定・返信・通知)は false。server はこれを見て、未知の `conversation_id` が「省略による新規」か「明示指定の誤り」かを判定する — 詳細は下記「明示指定された conversation_id が未知のとき」 |
 | `turn_number` | MUST | 1 起点の正整数。同一 conversation 内で送信ごとに +1。`(conversation_id, turn_number)` で全順序 |
 | `kind` | MUST | 下記 9 種 enum |
 | `body` | MUST | メッセージ本文(自由テキスト)。意味論はエージェントに任せる |
@@ -412,6 +440,97 @@ TTL 経過直後の再利用は失敗する。
   積極的な利点はなく、揃えた方が運用上のメンタルモデルが単純になる。
   実効的な guard が wrapper 側 24 時間である点自体は変わらない。
 
+### 明示指定された conversation_id が未知のとき (issue #262)
+
+新規 conversation を開始する正規経路は `conversation_id` の省略のみ
+(上記)だが、issue #262 以前の server はこの区別を持たず、**明示指定
+された未知の `conversation_id` も同じく新規 conversation として無言で
+受理**していた。director の conversation_id 誤転記が 2026-08-16〜17 に
+3 回、エラーにならず紛れ込みスレッドとして成立した実害があり、これを
+fail fast and visible にする。
+
+- **区別の伝達は `payload.new_conversation` (MUST) が担う**: 発起側
+  wrapper (`send_to_agent` の呼び出し元が `conversation_id` を省略し、
+  この wrapper が新規採番した)送信でのみ true。返信・通知
+  (peer_error / stale_turn)・エージェントが明示指定した送信は false。
+  server は cid そのものからは「省略による新規」と「明示指定の誤り」
+  を区別できない(採番も UUID の一意性もすべて wrapper 側の責務であり、
+  server はその結果の文字列しか見ない)ため、この bool が唯一の判断
+  材料になる。
+- **server の判定**(`ConversationStates.record_message/8`):
+  `conversation_id` に対応する entry が存在せず(open でも tombstone
+  でもない)、かつ `new_conversation? == false` のときに限り
+  `{:error, :unknown_conversation_id}` で拒否する。entry が存在する
+  場合(open・closed いずれも)はこのフラグを一切見ない —
+  `conversation_closed` / `participants_mismatch` / `stale_turn` は
+  従来どおり優先される。`new_conversation? == true` の cid が未知
+  なのは正常系そのものなので、このチェックには到達しない。
+- **送信側 wrapper の tool result**: 生の reason
+  (`unknown_conversation_id`)をそのまま返すのではなく、「正しい id
+  での再送か省略での新規開始を促す」専用文言を返す
+  (`send_to_agent failed: conversation_id=<id> is unknown to the
+  server — retry with the correct conversation_id, or omit it to
+  start a new conversation (this can also mean the server restarted
+  since this conversation began, which drops all of its state).`)。
+  後半の「server 再起動」の言及はレビュー (クロエ) 指摘: `ConversationStates`
+  は永続化を持たないため、server 再起動で進行中の全 conversation が
+  消え、以後その cid への明示送信は全て `unknown_conversation_id` に
+  なる。文言に候補を挙げないと、送信側エージェントは「自分の転記
+  ミス」とだけ解釈して 1 ターン浪費しかねない。ローカル track 側の
+  特別扱いは不要 — 明示指定した未知 cid のローカル track は
+  `wasBlank` 判定(「実質的な履歴が無い」)に自然に該当し、既存の
+  reject-cleanup がそのままリセットする。
+- **既知の反例**(意図的に許容する残余): `new_conversation? == false`
+  の送信が「既存 entry への正当な返信・継続」であるケースは、この
+  チェックが `existing != nil` で素通しするため一切影響を受けない —
+  対話の 2 通目以降は常にこの経路である。影響するのは「タイポ・古い
+  session のコピペ由来で、どの entry にも一致しない cid を明示指定
+  した」場合のみ。
+- **`payload.new_conversation` の欠落は拒否せず true 扱いにする**
+  (レビュー、issue #262 delta、クロエ M1): `validate_live_inter_agent_payload/1`
+  は key の存在を要求しない — bool 以外の値のときだけ拒否する。
+  issue #262 より前の wrapper はこの field を送らないが、Phoenix
+  client は reconnect/heartbeat を自前で持つため
+  (`wrapper/core/src/transport.ts`)、server だけ再デプロイしても旧
+  wrapper プロセスは再起動なしで生き残り送信を続ける。key を必須に
+  すると、そうした旧 wrapper の live send を全部
+  `missing key: payload.new_conversation` で弾いてしまい、
+  [ADR-0015](../adr/0015-protocol-version-stamping.md) が確立した
+  「version 不一致でも ACK して処理は継続する」というベストエフォート
+  受理の方針と矛盾する。`preflight_inter_agent/2` は欠落を `true`
+  として読み(`case payload do %{"new_conversation" => false} -> false;
+  %{"new_conversation" => true} -> true; _ -> ... end`)、欠落側では
+  `agents_channel.ex` の protocol version 警告と同型式の
+  `Logger.warning` をメッセージ 1 通ごとに出す(`inter_agent_message:
+  client declared new_conversation (absent); accepting as true (issue
+  #262 legacy best-effort accept)`)。代償として、旧 wrapper からの
+  明示指定・未知 cid はこの移行期間中 `unknown_conversation_id` で
+  拒否されず無言で新規 conversation を開くが、これは新 wrapper へ
+  更新されるまでの一時的な後退であり、恒久的な抜け道ではない。
+  - **warning が旧 wrapper からの送信ごとに出続けることは意図的**
+    (レビュー、クロエ): `refresh_engine_catalog` 等の既存 ADR-0015
+    警告は接続・カタログ更新時のみで頻度が低いが、この警告は旧
+    wrapper が更新されるまで**全 inter-agent 送信**で出る。頻度が
+    高いこと自体を「異常」と読まれるのを避けるため、この段落を
+    正本として残す — 移行期間が長引くほど log に占める割合が増える
+    のは設計どおりで、対処すべき異常ではない。
+  - **`ConversationStates.record_message/8` 自身は既定値を持たない**
+    (director 裁定、issue #262 delta 2巡目): 当初は `new_conversation?`
+    にも `\\ true` の既定値を与え、この channel 側の分岐を単に呼び出す
+    だけで済ませていたが、それは「渡し忘れたら黙って許可」という
+    #262 が閉じようとした欠陥そのものを、wire 層から内部 API 層へ
+    移しただけだった。既定値を廃し必須引数にしたことで、
+    `record_message/8` の将来の呼び出し元は全員この判断を明示しなけ
+    ればならず、`preflight_inter_agent/2` の上記 absent 分岐が
+    「合法的に許容側へ倒す唯一の場所」になる。コストは既存呼び出し
+    (主にテスト、約 90 箇所) への機械的な引数追加
+  - **廃止の目安**: この absent 分岐は永続の契約ではない。稼働中の
+    全 wrapper が issue #262 以降のビルドであると確認できた時点で、
+    `validate_live_inter_agent_payload/1` を key 必須に戻し、
+    `warn_legacy_new_conversation_absent/0` ごと削除してよい
+    (`CLOSED_TRACK_TTL_MS` のような固定 TTL ではなく、運用側が
+    「もう旧 wrapper はいない」と判断した時点が基準)
+
 ### 観測経路(dashboard 表示)
 
 server は inter_agent_message envelope を `agents:lobby` にも
@@ -464,8 +583,11 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
     記録トリガは ack のままだが、`send_to_agent` の **tool result も
     同じ ack で決まる**。accepted = 従来どおり `sent ...`、server の
     明示 reject(`unknown_agent` / `self_routing` /
-    `participants_mismatch` / `conversation_closed`(issue #177)等)は
-    **error result に reason を載せる**、timeout / ack 喪失は
+    `participants_mismatch` / `conversation_closed`(issue #177)/
+    `unknown_conversation_id`(issue #262)等)は
+    **error result に reason を載せる**(`unknown_conversation_id` のみ、
+    正しい id での再送か省略での新規開始を促す専用文言 — 下記参照)、
+    timeout / ack 喪失は
     「配送不明」— 再送が重複配送になり得るため error にはせず、その旨を
     result 本文に明記する。reject / 配送不明では `wait_for_response`
     の待ちも即座に解除する(誰も応答しない会話を timeout まで待たない)。
@@ -728,11 +850,11 @@ narrow はどちらも区別せず `users: []` に正規化する — 消費側
 | `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...], users: [...]}}` 返却で受け取る。`agents` の field と省略規則は上記「peer directory の情報境界」、`users` は「users 開示 field 一覧」(issue #197 段階2)。list_agents 用 (後述) |
 
 未知 `to` / 自己 routing / participants 不一致 / turn_number 不正 /
-stale turn / closed な conversation への送信時のエラー(`unknown_agent` /
-`self_routing` / `participants_mismatch` /
-`invalid value: payload.turn_number` / `stale_turn` /
-`conversation_closed`、後 3 者は issue #177)は `envelope` の reply で
-返す。
+stale turn / closed な conversation / 明示指定の未知 conversation_id
+への送信時のエラー(`unknown_agent` / `self_routing` /
+`participants_mismatch` / `invalid value: payload.turn_number` /
+`stale_turn` / `conversation_closed`(後 3 者は issue #177)/
+`unknown_conversation_id`(issue #262))は `envelope` の reply で返す。
 
 ### 承認フロー(permission_broker 統合)
 
@@ -1049,14 +1171,16 @@ wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allow
 | Tool (full name) | 用途 | 経路 |
 |---|---|---|
 | `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧を取得。宛先解決 (id / persona name / state) に加え、委譲先選定のための実行特性 (engine / model / effort) と稼働状況 (context / session_started_at / turns / last_activity_at / conversation / rate_limits) を返す | wrapper → server の `directory_request` を呼び、reply の `agents` を narrow して返す |
-| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd / `context` を返す | wrapper のローカル `EffectiveStatusSnapshot` と host の context キャッシュを読むのみ。server round-trip なし |
+| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd / `context` / `rate_limits` と、利用可能な場合は `inter_agent_delivery` を返す | identity / 実効設定 / `context` / `rate_limits` は wrapper のローカル `EffectiveStatusSnapshot` と host cache から読む。配送 status 照会が配線された `whoami` は wrapper → server の `delivery_status_request` で recipient ledger を読むため server round-trip を行い、応答が得られた場合だけ `inter_agent_delivery` を載せる |
 
-`whoami` の実効設定は state envelope と別に組み立てず、各 host が持つ共通
-`EffectiveStatusSnapshot` から投影する。`model` / `effort` / source と
-`network_access` は既知の場合だけ返す。`permission` は engine-neutral な
-`{sandbox, approval}`、`permission_mode` / `fast_mode` は Claude 互換 field
+`whoami` の local field は state envelope と別に組み立てず、各 host が持つ共通
+`EffectiveStatusSnapshot` と host cache から投影する。`model` / `effort` /
+source と `network_access` は既知の場合だけ返す。`permission` は engine-neutral
+な `{sandbox, approval}`、`permission_mode` / `fast_mode` は Claude 互換 field
 として取得済みの場合だけ併記する。SDK / rollout がまだ値を報告していない field
-は stale 値や推測値で埋めず、key 自体を省略する。
+は stale 値や推測値で埋めず、key 自体を省略する。これら local field と異なり、
+`inter_agent_delivery` は下記の server ledger 観測であり、同じ `whoami` の呼び出し
+でも常に返ることを約束しない。
 
 `context` は phase-28 A2 ([#168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168))
 の追補で、自分の context window 使用量 `{used_tokens, max_tokens,
@@ -1078,6 +1202,41 @@ used_percentage}` を返す。peer が `list_agents` で読む `context` と
   「直前の値がもう有効でない」も意味する
 - tool 説明では「必要なときに見る」に留め、常時参照を促さない
   (context anxiety 回避。#168 comment-2287 の決定 P3)
+
+`inter_agent_delivery` は issue #247 の追補で、server が持つ recipient-local な
+配送確認 ledger `{issued_seq, acked_seq, pending_since?}` を返す。これは local
+snapshot ではない。wrapper は `delivery_status_request` を server へ送り、その
+応答が得られた場合だけ field を載せる。旧 server / capability 未対応、切断、または
+照会失敗では key ごと省略し、**absent = unknown** とする。これは「SDK turn 開始
+まで未確認の配送」を観測する ledger であって、配送保証・再送 queue・失敗の推測では
+ない。
+
+`rate_limits` は [#254](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/254)
+の追補で、自分の rate limit window を `{<window>: {status?, utilization?,
+resets_at?}}` で返す。peer が `list_agents` で読む `rate_limits` と
+**shape も semantics も同一** (`DirectoryRateLimitWindow`)。
+
+- **これは表示の穴ではなく自己監視の穴だった**。`list_agents` は呼び出し元を
+  除外するため、「7-day 使用率 N% で新規作業を止めよ」と指示された agent が
+  その数値を観測する手段が無かった。2026-08-16 の運用で 3 名が当たり、いずれも
+  director の `list_agents` 転記で代替している。`whoami` はこの唯一の
+  自己観測点になる
+- 値は **host 自身の最新スナップショット**から読む。server のコピーではない —
+  これらの値を生産しているのは wrapper 側なので、host の map は directory が
+  返しうる何よりも新しいか同じである。したがって peer が見る値と食い違うのは
+  配送差の一時的なずれだけで、実装として二経路にはしない
+  (テストで **同値**を固定している。同形では検出できない)
+- **`rate_limits` の取得自体は server round-trip を起こさない**。`whoami` が
+  `rate_limits` を返すだけなら host cache を読むだけである。ただし同じ tool call が
+  `inter_agent_delivery` も観測するときは、前節どおり独立した
+  `delivery_status_request` が server へ送られる。「whoami は常に round-trip なし」
+  という契約ではない
+- **snapshot は最終 turn 時点**で、idle 中は更新されない。`resets_at`
+  (Unix 秒) を現在時刻と突き合わせ、通過後は `utilization` / `status` を
+  信用しない。読み方の正本は `list_agents` の tool description と揃える
+- engine が一度も報告していない間は key ごと省略する。**absent = unknown**
+  であり「無制限」ではない (claude: 初回 usage refresh 前、codex: rollout
+  tail が存在しない spawn 直後)
 
 #### セッション操作ツール — `request_compact` (phase-28 B2)
 

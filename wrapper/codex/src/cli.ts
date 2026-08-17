@@ -8,8 +8,11 @@
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   HistoryReplayer,
+  createDeliveryAcknowledgementRuntime,
   IaSidecar,
   InterAgentTool,
   QuestionBroker,
@@ -54,6 +57,26 @@ const COLOR: Record<KaoiroState, string> = {
  *  join (ADR-0029 F3, fail-closed). Matches the Claude CLI. */
 const PERSONA_PROMPT_TIMEOUT_MS = 10_000;
 
+type CreateServerLink = (
+  ...args: ConstructorParameters<typeof ServerLink>
+) => ServerLink;
+type CreateCodexHost = (
+  ...args: ConstructorParameters<typeof CodexHost>
+) => CodexHost;
+type ServerLinkOptions = ConstructorParameters<typeof ServerLink>[2];
+type CodexHostOptions = ConstructorParameters<typeof CodexHost>[1];
+
+/** Injectable construction seam for the composition root. Production keeps
+ * the concrete constructors; regressions capture the exact options and live
+ * whoami provider the CLI gives those components (#247, #254). */
+export interface CodexCliDependencies {
+  parseCliArgs?: typeof parseCliArgs;
+  loadConfig?: typeof loadConfig;
+  createServerLink?: CreateServerLink;
+  createHost?: CreateCodexHost;
+  prepareStartup?: typeof prepareCodexStartup;
+}
+
 // issue #219 D25: human-facing log lines show `display_name` (the
 // mutable, operator-chosen label), never the pack's canonical
 // `persona.name` — see claude-code cli.ts's identical rationale.
@@ -77,11 +100,19 @@ function printLog(envelope: Envelope): void {
   }
 }
 
-async function main(): Promise<void> {
-  const { configPath, prompt, resume: resumeSessionId } = parseCliArgs(
+export async function runCodexCli(dependencies: CodexCliDependencies = {}): Promise<void> {
+  const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
+  const readConfig = dependencies.loadConfig ?? loadConfig;
+  const createServerLink =
+    dependencies.createServerLink ?? ((...args) => new ServerLink(...args));
+  const createHost =
+    dependencies.createHost ?? ((...args) => new CodexHost(...args));
+  const prepareStartup = dependencies.prepareStartup ?? prepareCodexStartup;
+  let link: ServerLink | null = null;
+  const { configPath, prompt, resume: resumeSessionId } = parseArgs(
     process.argv.slice(2),
   );
-  const config = loadConfig(configPath);
+  const config = readConfig(configPath);
 
   // Codex CLI env source (ADR-0032 F4bc addendum, phase-15 15-3):
   // KAOIRO_CODEX_DEFAULT_MODEL is the env-tier default, applied when
@@ -172,7 +203,6 @@ async function main(): Promise<void> {
   }
 
   let host: CodexHost;
-  let link: ServerLink | null = null;
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
   let instructionChain: Promise<void> = Promise.resolve();
@@ -260,6 +290,8 @@ async function main(): Promise<void> {
       Promise.resolve({ kind: "unknown" as const, reason: "not_connected" }),
     requestDirectory: () =>
       link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
+    requestInterAgentDeliveryStatus: () =>
+      link?.requestInterAgentDeliveryStatus() ?? Promise.resolve(null),
     getWhoami: () => host.statusSnapshot(),
   });
   // ADR-0051 D3-2 / D3-5 — same contract as the Claude wrapper, with the
@@ -309,7 +341,14 @@ async function main(): Promise<void> {
       : {}),
   });
 
-  link = new ServerLink(config.server_url, config.agent_id, {
+  const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
+    (deliverySeq) => link?.acknowledgeInterAgentDelivery(deliverySeq),
+    interAgentTurns,
+  );
+
+  const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
+    Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
+  >({
     personaId: config.persona.id,
     ...(config.transition_id === undefined
       ? {}
@@ -388,16 +427,17 @@ async function main(): Promise<void> {
     onAttachClose: (uploadId) => host.attachClose(uploadId),
     onInterAgentMessage: (envelope) =>
       handleInterAgentMessage(
-        {
+        deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
           recordInboundIa,
           send: (notice) => link?.send(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
           log: (line) => process.stdout.write(line),
-        },
+        }),
         envelope,
       ),
   });
+  link = createServerLink(config.server_url, config.agent_id, serverLinkOptions);
 
   const timeoutHandle = setTimeout(() => {
     rejectPersonaPrompt(
@@ -419,7 +459,9 @@ async function main(): Promise<void> {
     clearTimeout(timeoutHandle);
   }
 
-  host = new CodexHost(config, {
+  const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
+    Omit<CodexHostOptions, "onTurnStart">
+  >({
     onState,
     onLog,
     onTask,
@@ -472,6 +514,7 @@ async function main(): Promise<void> {
       : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   });
+  host = createHost(config, hostOptions);
 
   // Apply the after_join display_name sync that arrived before host was
   // constructed (issue #197 段階3, renamed issue #219 D19/D23), same
@@ -491,7 +534,7 @@ async function main(): Promise<void> {
   });
 
   try {
-    await prepareCodexStartup({
+    await prepareStartup({
       config,
       prompt,
       resumeSessionId,
@@ -512,7 +555,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`${String(error)}\n`);
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  runCodexCli().catch((error: unknown) => {
+    process.stderr.write(`${String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

@@ -1560,7 +1560,7 @@ describe("list_agents / whoami companion tools", () => {
     expect(listAgents?.description).toContain("send_to_agent");
   });
 
-  it("whoami は getWhoami の snapshot を JSON として返す", () => {
+  it("whoami は getWhoami の snapshot を JSON として返す", async () => {
     const snapshot: WhoamiSnapshot = {
       agent_id: "self.agent",
       persona: { id: "mio", name: "澪", sprite_set: "mio" },
@@ -1581,24 +1581,47 @@ describe("list_agents / whoami companion tools", () => {
       send: () => {},
       getWhoami: () => snapshot,
     });
-    const result = tool.whoami();
+    const result = await tool.whoami();
     expect(result.isError).toBeFalsy();
     expect(JSON.parse(result.content[0]!.text)).toEqual(snapshot);
   });
 
-  it("whoami は getWhoami 未配線で wrapper config からのフォールバックを返す", () => {
+  it("whoami は getWhoami 未配線で wrapper config からのフォールバックを返す", async () => {
     const tool = new InterAgentTool({
       config: configFor("self.agent"),
       getState: () => "idle",
       send: () => {},
     });
-    const result = tool.whoami();
+    const result = await tool.whoami();
     const parsed = JSON.parse(result.content[0]!.text) as WhoamiSnapshot;
     expect(parsed.agent_id).toBe("self.agent");
     expect(parsed.persona).toEqual(PERSONA);
     expect(parsed.state).toBe("idle");
     // SDK 由来のフィールドは存在しないので omit される
     expect(parsed.model).toBeUndefined();
+  });
+
+  it("whoami は server の dispatch-confirmation ledger を合成し、未接続時に zero を捏造しない", async () => {
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "idle",
+      send: () => {},
+      requestInterAgentDeliveryStatus: async () => ({
+        issued_seq: 8,
+        acked_seq: 6,
+        pending_since: "2026-08-17T00:00:00Z",
+      }),
+    });
+    const result = await tool.whoami();
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({
+      inter_agent_delivery: { issued_seq: 8, acked_seq: 6 },
+    });
+
+    const unknown = new InterAgentTool({
+      config: configFor("self.agent"), getState: () => "idle", send: () => {},
+      requestInterAgentDeliveryStatus: async () => null,
+    });
+    expect(JSON.parse((await unknown.whoami()).content[0]!.text).inter_agent_delivery).toBeUndefined();
   });
 });
 
@@ -1637,9 +1660,17 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     expect(
       descriptors.find((d) => d.name === "list_agents")?.description,
     ).toContain("engine/model/effort when reported");
-    expect(descriptors.find((d) => d.name === "whoami")?.description).toContain(
-      "engine-neutral permission",
-    );
+    const whoamiDescription = descriptors.find(
+      (d) => d.name === "whoami",
+    )?.description;
+    expect(whoamiDescription).toContain("engine-neutral permission");
+    // issue #254: this is a user-facing protocol contract, not incidental
+    // prose. Keep the rate-limit shape, cached-time semantics, reset hint,
+    // and absent=unknown rule visible to the calling agent.
+    expect(whoamiDescription).toContain("`rate_limits`");
+    expect(whoamiDescription).toContain("LAST turn");
+    expect(whoamiDescription).toContain("`resets_at`");
+    expect(whoamiDescription).toContain("ABSENT `rate_limits` means unknown");
     expect(
       descriptors.find((d) => d.name === "list_agents")?.description,
     ).toContain("never spawn a same-named internal sub-agent");
@@ -1733,6 +1764,54 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
       expect(result.isError).toBe(true);
       expect(result.content[0]!.text).toContain(reason);
     }
+  });
+
+  it("issue #262: conversation_id 省略時は payload.new_conversation=true を送る", async () => {
+    const { tool, sent } = makeAckTool({ kind: "accepted", stamp: [1, 0] });
+
+    await tool.invoke({ to: "peer.agent", body: "hi", kind: "inform" });
+
+    expect(sent).toHaveLength(1);
+    const payload = sent[0]!.payload as Partial<InterAgentMessagePayload>;
+    expect(payload.new_conversation).toBe(true);
+  });
+
+  it(
+    "issue #262: conversation_id を明示指定した送信は " +
+      "payload.new_conversation=false を送る",
+    async () => {
+      const { tool, sent } = makeAckTool({ kind: "accepted", stamp: [1, 0] });
+
+      await tool.invoke({
+        to: "peer.agent",
+        body: "hi",
+        kind: "inform",
+        conversation_id: "cnv-explicit",
+      });
+
+      expect(sent).toHaveLength(1);
+      const payload = sent[0]!.payload as Partial<InterAgentMessagePayload>;
+      expect(payload.new_conversation).toBe(false);
+    },
+  );
+
+  it("issue #262: unknown_conversation_id は再送/省略を促す専用メッセージになる", async () => {
+    const { tool } = makeAckTool({
+      kind: "rejected",
+      reason: "unknown_conversation_id",
+    });
+
+    const result = await tool.invoke({
+      to: "peer.agent",
+      body: "hi",
+      kind: "inform",
+      conversation_id: "cnv-typo",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("cnv-typo");
+    expect(result.content[0]!.text).toContain("unknown to the server");
+    expect(result.content[0]!.text).toContain("omit it to start a new conversation");
   });
 
   it("ack 喪失 / timeout は「配送不明」— 失敗とも成功とも言わない", async () => {

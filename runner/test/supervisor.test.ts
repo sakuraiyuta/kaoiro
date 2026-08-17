@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   RunnerSessions,
   SessionMeta,
@@ -46,11 +46,15 @@ function deferred<T>(): {
 class FakeChild implements ManagedChild {
   readonly #listeners: Array<() => void> = [];
   kills = 0;
+  readonly signals: NodeJS.Signals[] = [];
+  onKill: ((signal: NodeJS.Signals | undefined) => boolean) | undefined;
   on(_event: "exit", listener: () => void): void {
     this.#listeners.push(listener);
   }
-  kill(): void {
+  kill(signal?: NodeJS.Signals): boolean {
     this.kills += 1;
+    if (signal !== undefined) this.signals.push(signal);
+    return this.onKill?.(signal) ?? true;
   }
   exit(): void {
     for (const listener of [...this.#listeners]) listener();
@@ -64,6 +68,7 @@ function harness(
     exists?: boolean | Promise<boolean>;
     wrapperServerUrl?: string;
     now?: () => number;
+    resetTerminationGraceMs?: number;
     launchThrowsOnCall?: number;
     getClaudeEngineCatalog?: () =>
       | WrapperConfig["claude_engine_catalog"]
@@ -104,6 +109,9 @@ function harness(
       ? {}
       : { getClaudeEngineCatalog: opts.getClaudeEngineCatalog }),
     ...(opts.now === undefined ? {} : { now: opts.now }),
+    ...(opts.resetTerminationGraceMs === undefined
+      ? {}
+      : { resetTerminationGraceMs: opts.resetTerminationGraceMs }),
   });
   return {
     sup,
@@ -841,6 +849,10 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     previous_session_id: "sess-old-xyz",
   };
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("正常 fresh relaunch: kill + fresh child spawn (resume なし) + ok=true / to_session_id=null 報告", () => {
     const h = harness();
     h.sup.handleSpawn(spawnMsg);
@@ -865,6 +877,78 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
       ok: true,
       to_session_id: null,
     });
+  });
+
+  it("SIGTERM に応答しない旧 wrapper は SIGKILL 後の exit だけで fresh を 1 回起動する (#258)", () => {
+    vi.useFakeTimers();
+    const h = harness({ resetTerminationGraceMs: 25 });
+    h.sup.handleSpawn(spawnMsg);
+    h.children[0]!.onKill = (signal) => {
+      if (signal === "SIGKILL") h.children[0]!.exit();
+      return true;
+    };
+
+    h.sup.handleResetSession(resetMsg);
+    expect(h.children).toHaveLength(1);
+    expect(h.children[0]!.signals).toEqual(["SIGTERM"]);
+
+    vi.advanceTimersByTime(25);
+    expect(h.children[0]!.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(h.children).toHaveLength(2);
+    expect(h.resetResults).toEqual([
+      expect.objectContaining({ ok: true, request_id: "rs_test123" }),
+    ]);
+  });
+
+  it("kill=false で exit callback を失った child は microtask で fresh 経路へ進める (#258)", async () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    h.children[0]!.onKill = () => false;
+
+    h.sup.handleResetSession(resetMsg);
+    await Promise.resolve();
+
+    expect(h.children).toHaveLength(2);
+    expect(h.children[0]!.signals).toEqual(["SIGTERM"]);
+    expect(h.resetResults).toEqual([
+      expect.objectContaining({ ok: true, request_id: "rs_test123" }),
+    ]);
+  });
+
+  it("SIGKILL 後も exit が来なければ fresh を二重起動せず timeout を返す (#258)", () => {
+    vi.useFakeTimers();
+    const h = harness({ resetTerminationGraceMs: 25 });
+    h.sup.handleSpawn(spawnMsg);
+
+    h.sup.handleResetSession(resetMsg);
+    vi.advanceTimersByTime(50);
+
+    expect(h.children).toHaveLength(1);
+    expect(h.children[0]!.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(h.resetResults).toEqual([
+      expect.objectContaining({
+        ok: false,
+        reason: "timeout",
+        request_id: "rs_test123",
+      }),
+    ]);
+  });
+
+  it("termination timeout 後の遅い旧 child exit は reset 前の resume を保って通常再起動する (#258)", () => {
+    vi.useFakeTimers();
+    const h = harness({ exists: true, resetTerminationGraceMs: 25 });
+    h.sup.handleSpawn({ ...spawnMsg, resume_session_id: "sess-old-xyz" });
+
+    h.sup.handleResetSession(resetMsg);
+    vi.advanceTimersByTime(50);
+    expect(h.resetResults[0]).toMatchObject({ ok: false, reason: "timeout" });
+
+    // The old process finally exits after the reset transaction is failed.
+    // It is now an ordinary crash, so its pre-reset resume target—not the
+    // attempted fresh launch—must own the relaunch.
+    h.children[0]!.exit();
+    expect(h.children).toHaveLength(2);
+    expect(h.resumes[1]).toBe("sess-old-xyz");
   });
 
   it("fresh 経路は resumeSnapshot を保持して wrapper config へ passthrough する", () => {

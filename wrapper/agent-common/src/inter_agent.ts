@@ -23,6 +23,7 @@ import { z } from "zod";
 import type {
   DirectoryContext,
   DirectoryEntry,
+  DirectoryRateLimitWindow,
   DirectoryResult,
   InterAgentAcceptance,
 } from "@kaoiro/wrapper-core";
@@ -67,6 +68,37 @@ export interface WhoamiSnapshot {
    *  estimated — when the engine has not reported it (codex:
    *  `supports_context_usage: false`), so absent keeps meaning unknown. */
   context?: DirectoryContext;
+  /** Server-observed dispatch confirmation watermark (issue #247). Omitted
+   * when the server/capability cannot vouch for it. */
+  inter_agent_delivery?: InterAgentDeliverySnapshot;
+  /** Own rate-limit windows (issue #254), in the same shape and keyed the
+   *  same way a peer reads via `list_agents` (`DirectoryRateLimitWindow`).
+   *
+   *  THIS CLOSED A SELF-MONITORING HOLE, NOT A DISPLAY GAP. `list_agents`
+   *  excludes the caller, so before this an agent asked to govern itself by
+   *  its own 7-day utilisation could not observe that number at all — three
+   *  agents hit it in one day of director-led operation and each cost a round
+   *  trip through someone else's `list_agents` (issue #254; the slice of
+   *  #232 that unblocks self-governance).
+   *
+   *  Read from the host's OWN latest snapshot, not from the server's copy —
+   *  the wrapper is where these values are produced, so its map is at least
+   *  as fresh as anything the directory could return. Same staleness caveat
+   *  as the peer-facing copy: it is the last turn's reading and does not
+   *  refresh while idle, so compare `resets_at` against the current time
+   *  rather than trusting `utilization` past it.
+   *
+   *  Omitted while the engine has reported nothing (claude before its first
+   *  usage refresh; codex before a rollout tail exists), so absent keeps
+   *  meaning unknown rather than "no limit". */
+  rate_limits?: Record<string, DirectoryRateLimitWindow>;
+}
+
+/** Wire-neutral shape so the common tool layer does not depend on transport. */
+export interface InterAgentDeliverySnapshot {
+  issued_seq: number;
+  acked_seq: number;
+  pending_since?: string;
 }
 
 /** The common ToolResult shape (tooling.ts); alias kept so the existing
@@ -368,7 +400,7 @@ const LIST_AGENTS_DESCRIPTION =
   "List other kaoiro agents currently known to the server. Returns each peer's agent_id, persona (id/name/sprite_set), current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected), and engine/model/effort when reported. Use this to resolve a peer's display name and execution traits before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address. A proper-name collaboration request refers to an existing kaoiro peer — resolve it here first: 1 match → send_to_agent, several → ask the operator, 0 matches → report the persona is absent and never spawn a same-named internal sub-agent as a substitute.\n\nEach peer may also carry status fields for deciding WHO to delegate to: `context` ({used_tokens, max_tokens, used_percentage}) — avoid handing heavy work to a peer whose context is nearly full; `rate_limits` ({<window>: {status?, utilization?, resets_at?}}, windows `five_hour` / `seven_day`) — a peer near its limit will fail or stall, so prefer another or wait; `conversation` ({active, peers}) — a peer already in an active conversation is mid-collaboration, so avoid interrupting unless your message belongs to that work; `session_started_at` / `turns` / `last_activity_at` — a long-idle `last_activity_at` suggests the peer is stalled or done, worth reporting rather than delegating to.\n\nTwo rules when reading these: (1) `rate_limits` is a snapshot from the peer's LAST turn and is NOT refreshed while it idles — compare `resets_at` (Unix seconds) against the current time yourself, and once it has passed, treat that window as reset and stop trusting its `utilization` / `status`; use `last_activity_at` to judge how stale the snapshot is. (2) A field that is ABSENT means unknown, never zero and never fine — an omitted `turns` does not mean no turns, an omitted `context` does not mean plenty of room, and an omitted `rate_limits` does not mean unlimited. Ask the operator instead of assuming when an absent field would change your decision.\n\nThe reply also carries `users`: the kaoiro human users (operator/viewer) currently REGISTERED and authorized, each with id/kind/display_name/role — 'kind' is always the literal \"user\" here, distinguishing them from `agents`. `users` are NOT valid `send_to_agent` destinations — that tool only ever delivers to an agent_id from the `agents` list. This is a registry, not an online-presence list: it includes every currently-authorized user whether or not they are actively connected right now, and it does NOT currently identify who issued any particular instruction or inter-agent message — that attribution is not wired yet, so do not infer it from this list. Read it only to know which users exist and what role each holds; never pass a user's id as `send_to_agent`'s `to`. This array can be empty even when users exist — the operator can opt out of this disclosure server-side (default is disclosed).";
 
 const WHOAMI_DESCRIPTION =
-  "Return this agent's identity from the kaoiro server's perspective: agent_id, persona (id/name/sprite_set), current state, engine, effective model/effort and their sources, engine-neutral permission (sandbox/approval), network_access, legacy permission_mode/fast_mode when applicable, session_id, working directory, and — on engines that report it — `context` ({used_tokens, max_tokens, used_percentage}), your own context-window usage in the same shape peers see via list_agents. Fields that the SDK has not yet reported are omitted. Use this to confirm what the operator sees you as, or to self-narrate (e.g., when telling a peer who you are). `context` is a cached last successful measurement; whoami itself does not refresh it, so it can lag the current turn. Read it only when a decision actually turns on it — sizing a delegation you are about to accept, or answering the operator's question about your own headroom. It is not a meter to watch: do not check it each turn and do not bring it up unprompted. An absent `context` means unknown, not empty.";
+  "Return this agent's identity from the kaoiro server's perspective: agent_id, persona (id/name/sprite_set), current state, engine, effective model/effort and their sources, engine-neutral permission (sandbox/approval), network_access, legacy permission_mode/fast_mode when applicable, session_id, working directory, and — on engines that report it — `context` ({used_tokens, max_tokens, used_percentage}), your own context-window usage in the same shape peers see via list_agents. When delivery confirmation is negotiated, it also includes `inter_agent_delivery` ({issued_seq, acked_seq, pending_since?}): a recipient-local observation ledger showing inter-agent messages whose SDK turn has not yet started; it is not a delivery guarantee or a resend queue. Fields that the SDK has not yet reported are omitted. Use this to confirm what the operator sees you as, or to self-narrate (e.g., when telling a peer who you are). `context` is a cached last successful measurement; whoami itself does not refresh it, so it can lag the current turn. Read it only when a decision actually turns on it — sizing a delegation you are about to accept, or answering the operator's question about your own headroom. It is not a meter to watch: do not check it each turn and do not bring it up unprompted. An absent `context` means unknown, not empty.\n\nAlso returns `rate_limits` ({<window>: {status?, utilization?, resets_at?}}, windows `five_hour` / `seven_day`) — YOUR OWN limits, in the same shape peers read about you via list_agents, which excludes you and therefore cannot answer this question. This is what to read when you are asked to govern yourself by a utilisation threshold; you no longer need a peer or the operator to look it up for you. Same two rules as the peer-facing copy: (1) it is a snapshot from your LAST turn and does not refresh while you idle, so compare `resets_at` (Unix seconds) against the current time yourself and stop trusting `utilization` / `status` once it has passed; (2) an ABSENT `rate_limits` means unknown, never unlimited — the engine has simply not reported one yet.";
 
 /** issue #177: how a `formatInboundMessage()`-injected inbound should read
  *  to the model. `reply-owed` is the ordinary case (unchanged wording).
@@ -634,6 +666,9 @@ export interface InterAgentToolOptions {
    *  it (unit tests only) makes `whoami` fall back to the wrapper config
    *  (no live SDK fields). */
   getWhoami?: () => WhoamiSnapshot;
+  /** Dispatch-confirmation ledger read from the server. Absence/error is
+   * unknown for compatibility, not an empty queue. */
+  requestInterAgentDeliveryStatus?: () => Promise<InterAgentDeliverySnapshot | null>;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
   /** conversation_id source for new conversations; injectable for tests. */
@@ -1066,6 +1101,9 @@ export class InterAgentTool {
           body: `peer error (${error.code}): ${error.message}`,
           meta: { done: false, propose_next: "" },
           owner: { kind: "user", id: "operator" },
+          // A stale_turn notice always replies within a conversation this
+          // wrapper just observed an inbound turn on — never a fresh id.
+          new_conversation: false,
           error,
         };
         const notice = makeInterAgentMessage(
@@ -1247,6 +1285,9 @@ export class InterAgentTool {
         body: `peer error (${error.code}): ${error.message}`,
         meta: { done: false, propose_next: "" },
         owner: { kind: "user", id: "operator" },
+        // A turn-failure notice always replies within a conversation this
+        // wrapper already holds a pending injection for — never a fresh id.
+        new_conversation: false,
         error,
       };
       notices.push(
@@ -1330,14 +1371,24 @@ export class InterAgentTool {
   /** Returns this wrapper's identity snapshot. Falls back to the wrapper
    *  config when no live host status provider is wired (e.g. early in
    *  startup, before the SDK session opens). */
-  whoami(): InterAgentToolResult {
+  async whoami(): Promise<InterAgentToolResult> {
     const snapshot = this.#options.getWhoami?.() ?? {
       agent_id: this.#options.config.agent_id,
       persona: this.#options.config.persona,
       state: this.#options.getState(),
     };
+    let delivery: InterAgentDeliverySnapshot | null = null;
+    try {
+      delivery = await this.#options.requestInterAgentDeliveryStatus?.() ?? null;
+    } catch {
+      // The host identity is still useful when talking to an older/disconnected
+      // server. Do not invent a zero watermark from a failed observation.
+    }
+    const observed = delivery === null
+      ? snapshot
+      : { ...snapshot, inter_agent_delivery: delivery };
     return {
-      content: [{ type: "text", text: JSON.stringify(snapshot, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(observed, null, 2) }],
     };
   }
 
@@ -1363,6 +1414,11 @@ export class InterAgentTool {
       );
     }
 
+    // issue #262: captured BEFORE the `??` below discards the distinction —
+    // true only when the CALLER omitted conversation_id, so this wrapper (not
+    // the caller) allocated a fresh one. The server rejects an explicit-but-
+    // unknown id instead of silently opening a new, context-less thread.
+    const isNewConversation = args.conversation_id === undefined;
     const conversationId = args.conversation_id ?? this.#newId();
     const waitForResponse = args.wait_for_response === true;
 
@@ -1520,6 +1576,7 @@ export class InterAgentTool {
           body: args.body,
           meta,
           owner: { kind: "user", id: "operator" },
+          new_conversation: isNewConversation,
         };
 
         const envelope = makeInterAgentMessage(
@@ -1802,10 +1859,24 @@ export class InterAgentTool {
             // conversation because of this call: release the waiter
             // instead of parking the tool for the full reply timeout.
             this.#cancelReplyWait(conversationId);
-            return {
-              kind: "rejected",
-              message: `send_to_agent failed: server rejected the message (${acceptance.reason})`,
-            };
+            // issue #262: an actionable hint over the generic reason string —
+            // this is the one reject the CALLER can usually fix by re-typing
+            // the id or omitting it, not by waiting or escalating. Names the
+            // OTHER cause too (review, クロエ): ConversationStates has no
+            // persistence, so a server restart drops every open
+            // conversation, and every explicit-id reply after that reads as
+            // this same reject — without the alternative spelled out, the
+            // caller reads it as its own typo and burns a turn concluding
+            // that alone.
+            const message =
+              acceptance.reason === "unknown_conversation_id"
+                ? `send_to_agent failed: conversation_id=${conversationId} is ` +
+                  "unknown to the server — retry with the correct " +
+                  "conversation_id, or omit it to start a new conversation " +
+                  "(this can also mean the server restarted since this " +
+                  "conversation began, which drops all of its state)."
+                : `send_to_agent failed: server rejected the message (${acceptance.reason})`;
+            return { kind: "rejected", message };
           }
 
           return {

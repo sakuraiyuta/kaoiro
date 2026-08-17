@@ -11,6 +11,7 @@
 // validated structurally and forwarded to the handlers.
 
 import { Channel, Socket, type Push } from "phoenix";
+import { randomUUID } from "node:crypto";
 import type { Envelope } from "@kaoiro/protocol";
 
 /** A client's permission decision relayed by the server (protocol.md).
@@ -66,6 +67,15 @@ export interface DirectoryConversation {
   peers: string[];
 }
 
+/** Recipient-local dispatch confirmation watermark (issue #247).  It is an
+ * observation ledger, not a retransmission guarantee.  An absent field is
+ * deliberately `unknown` (legacy/disarmed capability), never zero. */
+export interface InterAgentDeliveryStatus {
+  issued_seq: number;
+  acked_seq: number;
+  pending_since?: string;
+}
+
 /** Single entry returned from `directory_request` (protocol-inter-agent
  * companion tool). Runtime traits are optional because an old/not-yet-init
  * wrapper may not have stamped them. Operator-grade cwd / permission /
@@ -102,6 +112,7 @@ export interface DirectoryEntry {
   /** Keyed by window: `five_hour` / `seven_day` plus any engine-specific
    *  ones. */
   rate_limits?: Record<string, DirectoryRateLimitWindow>;
+  inter_agent_delivery?: InterAgentDeliveryStatus;
 }
 
 /** Single entry in the peer directory's "users" projection (issue #197
@@ -359,6 +370,10 @@ export interface ServerLinkOptions {
    *  ones (e.g. escalate-to-user on quota overshoot) to the receiving
    *  wrapper's topic — both flow through here. */
   onInterAgentMessage?: (envelope: Envelope) => void;
+  /** Join/rejoin's recipient-local acknowledgement ledger. `null` means an
+   * older server did not negotiate the capability, so callers must report it
+   * as unknown rather than as an empty queue. */
+  onInterAgentDeliveryStatus?: (status: InterAgentDeliveryStatus | null) => void;
   /** Acceptance ack for an OUTBOUND inter_agent_message (ADR-0051 D3-2).
    *  Fires when the server replies to the `envelope` push with the ingress
    *  stamp it allocated — the point at which the message is known to be
@@ -373,11 +388,29 @@ export interface ServerLinkOptions {
    *  never fires this — that message is not restorable, which D7 (e)
    *  accepts. */
   onInterAgentAck?: (envelope: Envelope, stamp: [number, number]) => void;
+  /** Terminal reset failure for this wrapper topic. The requesting process
+   *  normally exits on success, so this is intentionally only the failure
+   *  leg: it lets an old wrapper that could not be terminated tell its agent
+   *  that the accepted reservation did not become a reset (#258). */
+  onSessionResetFailed?: (failure: SessionResetFailure) => void;
   /** Hydration verdict from the join reply (ADR-0051 D2). Called on EVERY
    *  (re)join, with `null` when the reply carried no `hydration` key — a
    *  legacy server, where the wrapper keeps its old startup-replay
    *  behaviour. */
   onHydration?: (verdict: HydrationVerdictMessage | null) => void;
+}
+
+/** Server acknowledgement of a self-initiated reset reservation. Acceptance
+ *  is not completion: retain this id to correlate a later failure push. */
+export interface SessionResetAccepted {
+  requestId: string;
+}
+
+/** Narrowed server -> wrapper terminal failure. `reason` is a lifecycle
+ *  vocabulary value, never free server text because it reaches a model turn. */
+export interface SessionResetFailure {
+  requestId: string;
+  reason: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -402,6 +435,16 @@ const SESSION_RESET_ERROR_REASONS: ReadonlySet<string> = new Set([
   "runner_unavailable",
 ]);
 
+/** Lifecycle results use the broader closed vocabulary. They are delivered
+ *  only as server-authored pushes on wrapper:<agent>, but still narrow them
+ *  before they reach the reset coordinator and its model-facing notice. */
+const SESSION_RESET_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  ...SESSION_RESET_ERROR_REASONS,
+  "spawn_failed",
+  "rollback_failed",
+  "timeout",
+]);
+
 /** Collapses to this when the reply carries no recognised reason. */
 export const SESSION_RESET_UNKNOWN_REASON = "unknown_error";
 
@@ -419,6 +462,28 @@ function sessionResetErrorReason(payload: unknown): string {
     }
   }
   return SESSION_RESET_UNKNOWN_REASON;
+}
+
+function sessionResetAcceptedFrom(
+  payload: unknown,
+): SessionResetAccepted | null {
+  if (!isObject(payload) || typeof payload.request_id !== "string") return null;
+  return payload.request_id === "" ? null : { requestId: payload.request_id };
+}
+
+function sessionResetFailureFrom(payload: unknown): SessionResetFailure | null {
+  if (!isObject(payload)) return null;
+  const requestId = payload.request_id;
+  const reason = payload.reason;
+  if (
+    typeof requestId !== "string" ||
+    requestId === "" ||
+    typeof reason !== "string" ||
+    !SESSION_RESET_FAILURE_REASONS.has(reason)
+  ) {
+    return null;
+  }
+  return { requestId, reason };
 }
 
 /** `isObject` answers true for arrays (`typeof [] === "object"`), which the
@@ -464,6 +529,21 @@ function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : undefined;
+}
+
+function deliveryStatusFrom(value: unknown): InterAgentDeliveryStatus | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const issued = nonNegativeInteger(value.issued_seq);
+  const acked = nonNegativeInteger(value.acked_seq);
+  if (issued === undefined || acked === undefined || acked > issued) return undefined;
+  if (value.pending_since !== undefined && typeof value.pending_since !== "string") return undefined;
+  if (issued === acked && value.pending_since !== undefined) return undefined;
+  if (issued > acked && typeof value.pending_since !== "string") return undefined;
+  return {
+    issued_seq: issued,
+    acked_seq: acked,
+    ...(typeof value.pending_since === "string" ? { pending_since: value.pending_since } : {}),
+  };
 }
 
 function nonEmptyText(value: unknown): string | undefined {
@@ -589,6 +669,8 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
     persona: v.persona as DirectoryEntry["persona"],
     state: v.state,
   };
+  const delivery = deliveryStatusFrom(v.inter_agent_delivery);
+  if (delivery !== undefined) entry.inter_agent_delivery = delivery;
   // issue #219 D19/D26: same value-level narrow used everywhere else on
   // this repo's display-name fields — a malformed value (overlong,
   // control chars) is omitted rather than passed through, matching this
@@ -812,6 +894,8 @@ export class ServerLink {
     // than as the legacy absent case.
     this.#channel = this.#socket.channel(`wrapper:${agentId}`, {
       persona_id: options.personaId,
+      inter_agent_delivery_ack: "dispatch-v1",
+      delivery_generation: randomUUID(),
       ...(options.transitionId !== undefined && options.transitionId !== ""
         ? { transition_id: options.transitionId }
         : {}),
@@ -1035,6 +1119,17 @@ export class ServerLink {
       if (!isObject(payload) || payload.type !== "inter_agent_message") return;
       options.onInterAgentMessage?.(payload as unknown as Envelope);
     });
+    this.#channel.on("delivery_status", (payload: unknown) => {
+      options.onInterAgentDeliveryStatus?.(deliveryStatusFrom(payload) ?? null);
+    });
+    // #258: a self-reset's request reply proves only that the server acquired
+    // its lock. If the runner later cannot terminate this old wrapper, the
+    // server sends the terminal failure back to this topic. Correlation stays
+    // in SessionResetCoordinator; a fresh wrapper ignores an old request id.
+    this.#channel.on("session_reset_failed", (payload: unknown) => {
+      const failure = sessionResetFailureFrom(payload);
+      if (failure !== null) options.onSessionResetFailed?.(failure);
+    });
 
     // Re-announce the latest state and active tasks after a reconnect: the
     // server keeps them in memory only, and WrapperChannel discards TaskStates
@@ -1057,6 +1152,9 @@ export class ServerLink {
       .join()
       .receive("ok", (reply: unknown) => {
         options.onHydration?.(hydrationVerdictFrom(reply));
+        options.onInterAgentDeliveryStatus?.(
+          isObject(reply) ? deliveryStatusFrom(reply.delivery) ?? null : null,
+        );
       })
       .receive("error", (reason: unknown) => {
         process.stderr.write(
@@ -1080,6 +1178,25 @@ export class ServerLink {
    *  no id replays empty). */
   currentSessionId(): string | null {
     return this.#sessionId;
+  }
+
+  /** Records contiguous SDK-dispatch completion.  The server treats a stale,
+   * future, or duplicate watermark as a harmless no-op. */
+  acknowledgeInterAgentDelivery(deliverySeq: number): void {
+    if (!Number.isSafeInteger(deliverySeq) || deliverySeq <= 0) return;
+    this.#channel.push("delivery_ack", { delivery_seq: deliverySeq });
+  }
+
+  /** Reads this wrapper's ledger independently of directory peers. */
+  requestInterAgentDeliveryStatus(): Promise<InterAgentDeliveryStatus | null> {
+    return new Promise((resolve) => {
+      this.#channel.push("delivery_status_request", {})
+        .receive("ok", (payload: unknown) =>
+          resolve(isObject(payload) ? deliveryStatusFrom(payload.delivery) ?? null : null),
+        )
+        .receive("error", () => resolve(null))
+        .receive("timeout", () => resolve(null));
+    });
   }
 
   /** Pushes one envelope with the next seq; buffered while disconnected. */
@@ -1332,22 +1449,34 @@ export class ServerLink {
    *  ever reset itself. `reason` travels solely in this payload; the server
    *  copies it to the operator-facing lifecycle broadcast and nowhere else.
    *
-   *  Resolves when the server accepted the request (the reset itself then
-   *  runs through the ordinary runner path and this process is replaced).
+   *  Resolves when the server accepted the request, including its opaque
+   *  request_id. That is a reservation acknowledgement, not reset completion:
+   *  a later `session_reset_failed` push is correlated through this id if the
+   *  old wrapper survives the runner's termination attempt (#258).
    *  Rejects with the reply's closed-vocabulary reason — `agent_busy`,
    *  `session_reset_pending`, `unsupported_session_reset` or
    *  `runner_unavailable` (protocol.md `session_reset_request`) — or with
    *  `timeout` when the push itself never got a reply, or `unknown_error`
    *  for anything outside that contract. The caller must distinguish these:
    *  a rejection is NOT proof that no reset started. */
-  requestSessionReset(mode: "new" | "clear", reason?: string): Promise<void> {
+  requestSessionReset(
+    mode: "new" | "clear",
+    reason?: string,
+  ): Promise<SessionResetAccepted> {
     return new Promise((resolve, reject) => {
       this.#channel
         .push("session_reset_request", {
           mode,
           ...(reason !== undefined ? { reason } : {}),
         })
-        .receive("ok", () => resolve())
+        .receive("ok", (payload: unknown) => {
+          const accepted = sessionResetAcceptedFrom(payload);
+          if (accepted === null) {
+            reject(new Error(SESSION_RESET_UNKNOWN_REASON));
+            return;
+          }
+          resolve(accepted);
+        })
         .receive("error", (payload: unknown) => {
           reject(new Error(sessionResetErrorReason(payload)));
         })

@@ -291,16 +291,22 @@ describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
       transitionId: "tr-1",
     });
 
-    expect(mock.lastChannelParams).toEqual({
+    expect(mock.lastChannelParams).toEqual(expect.objectContaining({
       persona_id: "ao",
       transition_id: "tr-1",
-    });
+      inter_agent_delivery_ack: "dispatch-v1",
+      delivery_generation: expect.any(String),
+    }));
   });
 
   it("transitionId 未指定なら key ごと省略する", () => {
     new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
 
-    expect(mock.lastChannelParams).toEqual({ persona_id: "ao" });
+    expect(mock.lastChannelParams).toEqual(expect.objectContaining({
+      persona_id: "ao",
+      inter_agent_delivery_ack: "dispatch-v1",
+      delivery_generation: expect.any(String),
+    }));
   });
 
   it("空文字の transitionId も key ごと省略する", () => {
@@ -311,7 +317,49 @@ describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
       transitionId: "",
     });
 
-    expect(mock.lastChannelParams).toEqual({ persona_id: "ao" });
+    expect(mock.lastChannelParams).toEqual(expect.objectContaining({
+      persona_id: "ao",
+      inter_agent_delivery_ack: "dispatch-v1",
+      delivery_generation: expect.any(String),
+    }));
+  });
+
+  it("同じ transitionId でも wrapper process ごとの delivery_generation は異なる", () => {
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      transitionId: "runner-reuses-this",
+    });
+    const first = mock.lastChannelParams as { delivery_generation: string };
+
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      transitionId: "runner-reuses-this",
+    });
+    const second = mock.lastChannelParams as { delivery_generation: string };
+
+    expect(first.delivery_generation).not.toBe("runner-reuses-this");
+    expect(second.delivery_generation).not.toBe("runner-reuses-this");
+    expect(second.delivery_generation).not.toBe(first.delivery_generation);
+  });
+
+  it("dispatch-v1 join status と連続 ack push を wire に載せる", async () => {
+    const statuses: unknown[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onInterAgentDeliveryStatus: (status) => statuses.push(status),
+    });
+    mock.joinReceivers.get("ok")?.({
+      delivery: { issued_seq: 4, acked_seq: 2, pending_since: "T" },
+    });
+    expect(statuses).toEqual([{ issued_seq: 4, acked_seq: 2, pending_since: "T" }]);
+
+    link.acknowledgeInterAgentDelivery(3);
+    expect(mock.lastPush).toMatchObject({
+      event: "delivery_ack", payload: { delivery_seq: 3 },
+    });
+    const pending = link.requestInterAgentDeliveryStatus();
+    mock.lastPush?.receivers.get("ok")?.({ delivery: { issued_seq: 4, acked_seq: 3, pending_since: "T" } });
+    await expect(pending).resolves.toEqual({ issued_seq: 4, acked_seq: 3, pending_since: "T" });
   });
 });
 
@@ -689,7 +737,7 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
     mock.pushes = [];
   });
 
-  function push(): { link: ServerLink; pending: Promise<void> } {
+  function push(): { link: ServerLink; pending: Promise<{ requestId: string }> } {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
     });
@@ -701,8 +749,8 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
     const { pending } = push();
     expect(mock.lastPush?.event).toBe("session_reset_request");
     expect(mock.lastPush?.payload).toEqual({ mode: "new", reason: "理由" });
-    mock.lastPush!.receivers.get("ok")!({});
-    await expect(pending).resolves.toBeUndefined();
+    mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+    await expect(pending).resolves.toEqual({ requestId: "rs-1" });
   });
 
   it("reason 省略時は field ごと送らない", () => {
@@ -711,6 +759,27 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
     });
     void link.requestSessionReset("clear").catch(() => {});
     expect(mock.lastPush?.payload).toEqual({ mode: "clear" });
+  });
+
+  it("request_id の無い ok は受理完了と扱わず unknown_error にする (#258)", async () => {
+    const { pending } = push();
+    mock.lastPush!.receivers.get("ok")!({});
+    await expect(pending).rejects.toThrow("unknown_error");
+  });
+
+  it("terminal failure は request_id と closed vocabulary を narrow して relay する (#258)", () => {
+    const seen: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onSessionResetFailed: (failure) => seen.push(failure),
+    });
+    emit("session_reset_failed", { request_id: "rs-1", reason: "timeout" });
+    emit("session_reset_failed", {
+      request_id: "rs-2",
+      reason: "free text must not reach the model",
+    });
+    emit("session_reset_failed", { request_id: "", reason: "timeout" });
+    expect(seen).toEqual([{ requestId: "rs-1", reason: "timeout" }]);
   });
 
   it.each([

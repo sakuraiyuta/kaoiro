@@ -57,6 +57,7 @@ let originalClientHeight: PropertyDescriptor | undefined;
 let originalScrollHeight: PropertyDescriptor | undefined;
 let originalScrollTopDescriptor: PropertyDescriptor | undefined;
 let originalGetBoundingClientRect: PropertyDescriptor | undefined;
+let originalOffsetTop: PropertyDescriptor | undefined;
 let scrollTopStore: WeakMap<Element, number> | null = null;
 
 beforeEach(() => {
@@ -83,6 +84,7 @@ afterEach(async () => {
     ["scrollHeight", originalScrollHeight],
     ["scrollTop", originalScrollTopDescriptor],
     ["getBoundingClientRect", originalGetBoundingClientRect],
+    ["offsetTop", originalOffsetTop],
   ] as const) {
     if (orig) {
       Object.defineProperty(HTMLElement.prototype, prop, orig);
@@ -94,6 +96,7 @@ afterEach(async () => {
   originalScrollHeight = undefined;
   originalScrollTopDescriptor = undefined;
   originalGetBoundingClientRect = undefined;
+  originalOffsetTop = undefined;
   scrollTopStore = null;
 });
 
@@ -181,15 +184,11 @@ function installScrollGeometry(): void {
   });
 }
 
-// jsdom's default getBoundingClientRect() returns all-zero rects, which
-// makes scrollToTimelineEntry's own position formula (rect diff + scrollTop)
-// collapse to "just the current scrollTop" regardless of WHICH row is being
-// measured — fine for tests that only assert window/entry-count, but unable
-// to distinguish "landed on the wrong (stale) target" from "landed on the
-// right one" (must-fix round 3 M1's own point). This mocks each
-// `.transcript-entry`'s rect.top from its live DOM order (matching the
-// installScrollGeometry ROW_PX convention), so the real formula produces a
-// different, meaningful `top` per row.
+// jsdom's default offsetTop is zero, which makes scrollToTimelineEntry's
+// layout-coordinate formula collapse to the same position for every row.
+// This gives each message body a meaningful top from live DOM order, matching
+// installScrollGeometry's ROW_PX convention, so stale-target tests retain a
+// real coordinate distinction without recreating viewport transforms.
 function installRowGeometry(): void {
   originalGetBoundingClientRect = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
@@ -212,6 +211,18 @@ function installRowGeometry(): void {
         return { ...empty, top, bottom: top + ROW_PX, y: top, height: ROW_PX };
       }
       return empty;
+    },
+  });
+  originalOffsetTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop");
+  Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+    configurable: true,
+    get(this: HTMLElement) {
+      const entry = this.classList.contains("transcript-entry")
+        ? this
+        : this.closest<HTMLElement>(".transcript-entry");
+      const logEl = entry?.closest(".log") as HTMLElement | null;
+      if (!entry || !logEl) return 0;
+      return [...logEl.querySelectorAll(".transcript-entry")].indexOf(entry) * ROW_PX;
     },
   });
 }

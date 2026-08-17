@@ -54,8 +54,53 @@ const REVISION_RE = /^[0-9a-f]{40}$/;
 
 class VerifyError extends Error {}
 
+/** A VerifyError whose cause is specifically a missing BUILD OUTPUT — a
+ *  compiled file this release's own `pnpm build` step produces, absent
+ *  from an otherwise-intact tree. Callers that need to tell the operator
+ *  whether "run the build" is a plausible remedy (issue #259) branch on
+ *  this. */
+class MissingArtifactError extends VerifyError {}
+
+/** A VerifyError whose cause is specifically a missing pnpm WORKSPACE LINK
+ *  — the `node_modules/@kaoiro/<pkg>` dependency-linking topology `pnpm
+ *  install` creates, never touched by `pnpm build`. Distinguished from
+ *  `MissingArtifactError` because the two need DIFFERENT remedies and a
+ *  build does not fix this one (ふじ review round 3, issue #259: measured
+ *  directly — running the suggested build against a checkout missing this
+ *  link fails with tsc's own TS2307 "cannot find module", and does not
+ *  recreate the link). */
+class MissingWorkspaceLinkError extends VerifyError {}
+
 function fail(message) {
   throw new VerifyError(message);
+}
+
+function failMissingArtifact(message) {
+  throw new MissingArtifactError(message);
+}
+
+function failMissingWorkspaceLink(message) {
+  throw new MissingWorkspaceLinkError(message);
+}
+
+/** lstat's `path` (never following the final component — a symlink
+ *  standing in for something is a DIFFERENT case from that something
+ *  existing outright), returning `"missing"` | `"symlink"` | `"dir"` |
+ *  `"file"`. Rethrows any non-ENOENT lstat failure: an unusual errno here
+ *  (EACCES, ELOOP on an ancestor, ...) is not something the remedy logic
+ *  below has an opinion about — the caller's own `fail()` reports it via
+ *  whatever operation actually hits it next. */
+function lstatType(path) {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch (err) {
+    if (err.code === "ENOENT") return "missing";
+    throw err;
+  }
+  if (st.isSymbolicLink()) return "symlink";
+  if (st.isDirectory()) return "dir";
+  return "file";
 }
 
 function isValidBuiltAt(value) {
@@ -88,11 +133,16 @@ export function formatIdentity(info) {
  *  be installed: `unknown` would then mean "this release is fine and simply
  *  cannot name itself", which is how a build-info.json holding the literal
  *  text `not json at all` passed start-up verification. */
-function readBuildInfoStrict(root) {
-  const path = join(root, "dist", "build-info.json");
+function readBuildInfoStrict(root, realRoot) {
+  const real = checkBuildOutputLeaf(
+    root,
+    realRoot,
+    "dist/build-info.json",
+    "dist/build-info.json",
+  );
   let raw;
   try {
-    raw = readFileSync(path, "utf8");
+    raw = readFileSync(real, "utf8");
   } catch (err) {
     fail(`dist/build-info.json is unreadable: ${err.message}`);
   }
@@ -108,24 +158,398 @@ function readBuildInfoStrict(root) {
   return parsed;
 }
 
-/** Resolves `rel` inside `root` and rejects anything whose REAL path leaves
- *  the tree. `-f` in shell follows symlinks, so an artifact check alone
- *  cannot tell a file in the release from a link pointing at one somewhere
- *  else entirely. pnpm's own links (node_modules/@kaoiro/<pkg> ->
- *  ../.pnpm/...) stay inside and pass. */
-function containedRealPath(root, realRoot, rel) {
-  const target = join(root, rel);
+/** Walks every ancestor segment of `relParts` (all but the last) under
+ *  `base`, each via its own guarded `lstatType` call, via `onAnomaly(message)`
+ *  for anything not an ordinary directory. Stops and returns `false` as
+ *  soon as a genuinely MISSING ancestor is found — nothing below an absent
+ *  ancestor can exist either, so a deeper check buys nothing once the
+ *  shallowest missing segment is found, and stopping there also cannot
+ *  misreport a symlink further down as merely "missing". Returns `true`
+ *  when every ancestor is confirmed sound (including when there are none
+ *  to check).
+ *
+ *  `onAnomaly` is expected to throw (`fail()` or a subclass); this
+ *  function never returns normally after calling it.
+ *
+ *  A PLAIN FILE ancestor is always anomalous — nothing in this file's
+ *  topologies puts a file where a directory belongs. A SYMLINK ancestor's
+ *  treatment is NOT the same everywhere, and is the caller's choice via
+ *  `resolveSymlinks`:
+ *
+ *  - `false` — rejected UNCONDITIONALLY, regardless of where it points.
+ *    This is `checkBuildOutputLeaf`'s own container invariant: `dist/`
+ *    (and any intermediate ancestor of a nested leaf beneath it) is never
+ *    a link in any topology this file supports, so a symlink there is
+ *    anomalous on sight — confirmed by ふじ's production-path matrix
+ *    (issue #259 round 5): "runner container / healthy in-bound symlink"
+ *    and "linked package container / healthy in-bound symlink" both
+ *    expect `anomaly`, not `ok`.
+ *  - `true` — RESOLVED via `realpathSync` and accepted when it stays
+ *    inside `realRoot` and resolves to a directory, exactly like the
+ *    final workspace link component (`checkWorkspaceLinkedSentinel`)
+ *    already treats itself. This is `checkWorkspaceLinkedSentinel`'s own
+ *    ancestor invariant: `node_modules` and `node_modules/@kaoiro` CAN
+ *    legitimately be a healthy symlink (unlike a build-output container).
+ *    A dangling, out-of-bounds, or non-directory resolution is still
+ *    rejected.
+ *
+ *  Discovered via ふじ's own matrix (issue #259 round 5): an earlier
+ *  version of this walk rejected ANY symlink ancestor unconditionally —
+ *  correct for the build-output container, but it also regressed
+ *  "workspace ancestor @kaoiro / healthy in-bound symlink" (expected
+ *  `ok`) to exit 78. The two ancestor kinds are not the same invariant,
+ *  so a single unconditional policy could not serve both; caught by
+ *  running ふじ's own data-driven matrix against this file post-fix,
+ *  before re-requesting review (round 5).
+ *
+ *  WHY THIS IS STILL ONE SHARED WALK, NOT TWO BESPOKE LOOPS. The
+ *  identical ancestor-collapse bug (an intermediate component silently
+ *  absorbed into a single aggregate `lstat`/ENOENT) surfaced at two
+ *  different path depths across two review rounds — `dist/sub` in a
+ *  build-output leaf's own path (internal review), and `node_modules` /
+ *  `node_modules/@kaoiro` in a workspace link's path (ふじ round 4).
+ *  Enumerating a third bespoke loop the next time this shape recurs is
+ *  exactly what my-carefully-coding calls "enumerating a class instead of
+ *  closing it" — one walk, parameterized by the one policy question that
+ *  actually differs between the two call sites. */
+function walkAncestors(base, realRoot, relParts, label, onAnomaly, resolveSymlinks) {
+  let ancestorPath = base;
+  for (let i = 0; i < relParts.length - 1; i++) {
+    ancestorPath = join(ancestorPath, relParts[i]);
+    let ancestorType;
+    try {
+      ancestorType = lstatType(ancestorPath);
+    } catch (err) {
+      onAnomaly(`${label} is unreachable: ${err.message}`);
+    }
+    if (ancestorType === "file") {
+      onAnomaly(
+        `${label} is unreachable: its containing directory exists but is not an ordinary directory`,
+      );
+    }
+    if (ancestorType === "symlink") {
+      if (!resolveSymlinks) {
+        onAnomaly(
+          `${label} is unreachable: its containing directory exists but is not an ordinary directory`,
+        );
+      }
+      let ancestorReal;
+      try {
+        ancestorReal = realpathSync(ancestorPath);
+      } catch (err) {
+        onAnomaly(`${label} is unreachable: ${err.message}`);
+      }
+      const ancestorWithin = relative(realRoot, ancestorReal);
+      if (
+        ancestorWithin === "" ||
+        ancestorWithin.startsWith("..") ||
+        isAbsolute(ancestorWithin)
+      ) {
+        onAnomaly(
+          `${label} is unreachable: its containing directory resolves outside the release`,
+        );
+      }
+      let ancestorStat;
+      try {
+        ancestorStat = statSync(ancestorReal);
+      } catch (err) {
+        onAnomaly(`${label} is unreachable: ${err.message}`);
+      }
+      if (!ancestorStat.isDirectory()) {
+        onAnomaly(
+          `${label} is unreachable: its containing directory exists but is not an ordinary directory`,
+        );
+      }
+      continue;
+    }
+    if (ancestorType === "missing") return false;
+  }
+  return true;
+}
+
+/** Resolves `pkgRoot/leafRel` (a build-output path such as `dist/cli.js` or
+ *  `dist/build-info.json`) and rejects anything whose REAL path leaves the
+ *  tree — `pkgRoot` is already confirmed to sit inside `realRoot` (the
+ *  release root itself, or an already-resolved workspace-link target from
+ *  `checkWorkspaceLinkedSentinel`).
+ *
+ *  A missing leaf is classified as a genuine BUILD SHORTAGE (issue #259)
+ *  ONLY when BOTH `leafRel`'s own containing directory (its first path
+ *  segment — `dist`) AND the leaf itself are genuinely ABSENT (an ordinary
+ *  `pnpm build` creates a missing `dist/` and fills in a missing file,
+ *  both from scratch). A symlink (healthy or dangling) or a plain file
+ *  standing in for the CONTAINER is rejected outright, unconditionally —
+ *  `dist/` is never a link in any topology this file supports, so any
+ *  symlink there is anomalous regardless of where it points. A LEAF that
+ *  is an EXISTING symlink is treated differently: if it resolves
+ *  successfully it falls through to the ordinary containment check below
+ *  like any other resolved path (unchanged — a built release CAN
+ *  legitimately carry a manifest entry whose containment must be checked
+ *  by resolution, not rejected on sight; releaseInstall.test.ts's
+ *  pre-existing "outside-the-release symlink" negative control, issue
+ *  #229, depends on reaching that exact check). Only a leaf symlink that
+ *  does NOT resolve (dangling) is excluded from the build-fixable bucket —
+ *  that shape is a broken reference, not "never built", and a build does
+ *  not repair it. Measured directly, twice, across two review rounds:
+ *  (round 3, the CONTAINER) running the suggested build against a `dist ->
+ *  missing-dist` dangling symlink fails with tsc's own ENOENT writing
+ *  through it, and does not remove the dangling link; (round 4, the LEAF
+ *  itself) running the suggested build against a `dist/cli.js` symlink
+ *  pointing OUTSIDE the release (dangling at check time) SUCCEEDS — tsc
+ *  writes a new file at the symlink's external target — but the symlink
+ *  itself is untouched, so a subsequent verify hits a containment
+ *  violation instead of passing. The suggested remedy did not fix the
+ *  tree in either case; it just moved the failure (round 4) or repeated
+ *  it (round 3).
+ *
+ *  This is checked with EXPLICIT `lstat` calls on named path segments
+ *  (`lstatType`), not by inspecting `realpathSync`'s internal
+ *  `err.syscall` — `error.code` is Node's only documented-stable error
+ *  identifier; `error.syscall` carries no such contract (Node docs:
+ *  https://nodejs.org/api/errors.html#errorcode — "error.code is the most
+ *  stable way to identify an error"; `error.syscall` is described only as
+ *  "a string describing the syscall that failed", no stability claim). A
+ *  syscall-shape guard here missed sibling shapes across THREE review
+ *  rounds (a whole ancestor missing, dist-as-symlink, and a dangling leaf
+ *  symlink) before being replaced by this explicit, named-component walk.
+ *
+ *  EVERY named ancestor segment gets its own `lstatType` check, not just
+ *  the immediate container (`leafRel`'s first segment) — internal review
+ *  found that checking only the first segment missed a dangling symlink at
+ *  a DEEPER intermediate component (e.g. `dist/sub` in a hypothetical
+ *  `dist/sub/foo.js`, once a package's output ever gains a subdirectory):
+ *  `lstat` on the full leaf path FOLLOWS every intermediate component (only
+ *  the FINAL one is left unresolved), so a dangling intermediate symlink
+ *  makes even a plain `lstatSync` on the leaf fail ENOENT — reporting
+ *  "missing", indistinguishable from a genuinely absent path, unless each
+ *  ancestor segment is checked in isolation on its OWN terms first. Every
+ *  `lstatType` call here is wrapped so an unexpected errno (EACCES on an
+ *  ancestor, say) becomes a classified `fail()` rather than an uncaught
+ *  exception (internal review, issue #259: `checkWorkspaceLinkedSentinel`
+ *  already guarded its own `statSync` for the same reason; the two bare
+ *  `lstatType` calls here had been missed).
+ *
+ *  THE RESOLVED LEAF MUST ALSO BE AN ORDINARY FILE, CHECKED EXPLICITLY
+ *  (issue #259, ふじ review round 4). Everything above only proves `real`
+ *  resolves and stays inside the tree — a DIRECTORY standing in for
+ *  `dist/cli.js` resolves and stays inside just as cleanly, so it passed
+ *  silently and the launch shim then spawned `node` on it. Measured
+ *  directly: the runner's OWN `dist/cli.js` as a directory passes
+ *  verification and crashes at `node`'s own module resolution with a raw,
+ *  uncaught `MODULE_NOT_FOUND` stack trace (exit 1, not the classified
+ *  exit 78 this file exists to guarantee); a WRAPPER leaf
+ *  (`node_modules/@kaoiro/<pkg>/dist/cli.js`) as a directory, or a
+ *  symlink to one, passes verification too, and since the wrapper's own
+ *  cli.js is only ever spawned later at session time, the launch itself
+ *  reports success (exit 0) on a runner that cannot actually start that
+ *  engine. A directory is reported with a generic `fail()`, not
+ *  `failMissingArtifact` — a directory already occupying the leaf's path
+ *  is not "never built"; the same isFile idiom is already used by
+ *  `declaredRuntimeAssets` a few functions below, for the identical
+ *  reason. */
+function checkBuildOutputLeaf(pkgRoot, realRoot, leafRel, label) {
+  const segments = leafRel.split("/");
+  // resolveSymlinks=false: a build-output container (`dist`, or any
+  // intermediate ancestor of a nested leaf beneath it) is never
+  // legitimately a symlink in any topology this file supports (see
+  // walkAncestors's own doc comment).
+  walkAncestors(pkgRoot, realRoot, segments, label, (message) => fail(message), false);
+  const target = join(pkgRoot, leafRel);
+  // Captured BEFORE resolving: distinguishes "the leaf itself is simply
+  // absent" (build-fixable) from "the leaf is an EXISTING symlink whose
+  // resolution failed" (a dangling reference, not build-fixable) at the
+  // one point that still needs it. A symlink leaf that DOES resolve is NOT
+  // rejected here regardless of health — it falls through to the ordinary
+  // containment check below like any other resolved path, unchanged from
+  // before this guard existed. That matters: releaseInstall.test.ts's own
+  // pre-existing containment negative control (issue #229, もも review)
+  // stages an in-MANIFEST file replaced by a symlink to an
+  // identical-content file OUTSIDE the release specifically to prove the
+  // CONTAINMENT check (not a digest mismatch) is what catches it — a leaf
+  // symlink is only special-cased here for the one shape that check cannot
+  // reach: one whose target does not exist at all.
+  let targetType;
+  try {
+    targetType = lstatType(target);
+  } catch (err) {
+    fail(`${label} is unreachable: ${err.message}`);
+  }
   let real;
   try {
     real = realpathSync(target);
   } catch (err) {
-    fail(`${rel} is missing or unresolvable: ${err.message}`);
+    if (err.code === "ENOENT" && targetType === "missing") {
+      failMissingArtifact(`${label} is missing or unresolvable: ${err.message}`);
+    }
+    fail(`${label} is missing or unresolvable: ${err.message}`);
   }
   const within = relative(realRoot, real);
   if (within === "" || within.startsWith("..") || isAbsolute(within)) {
-    fail(`${rel} resolves outside the release: ${real}`);
+    fail(`${label} resolves outside the release: ${real}`);
+  }
+  // See the doc comment above: a directory (or anything else that is not
+  // an ordinary file) resolving cleanly inside the tree must still be
+  // rejected — containment alone does not prove this is executable
+  // build output.
+  let realStat;
+  try {
+    realStat = statSync(real);
+  } catch (err) {
+    fail(`${label} is unreachable: ${err.message}`);
+  }
+  if (!realStat.isFile()) {
+    fail(`${label} is not an ordinary file: ${real}`);
   }
   return real;
+}
+
+/** Resolves a workspace-link-mediated sentinel
+ *  (`node_modules/@kaoiro/<pkg>/...`) by checking the LINK component and
+ *  the build-output leaf reached through it as two SEPARATE, explicitly
+ *  typed questions — rather than inferring both from one opaque
+ *  `realpathSync` failure (the class `checkBuildOutputLeaf`'s doc comment
+ *  describes).
+ *
+ *  A MISSING link (`node_modules/@kaoiro/<pkg>` does not exist in any
+ *  form) is a pnpm INSTALL shortage — the workspace dependency topology
+ *  was never materialized — never a build shortage: `pnpm build` compiles
+ *  source reached THROUGH node_modules, it does not create node_modules
+ *  itself. Measured directly (ふじ review round 3, issue #259): running the
+ *  suggested build against a checkout missing this link fails with tsc's
+ *  own TS2307 "cannot find module ...", and node_modules/@kaoiro remains
+ *  absent afterward.
+ *
+ *  A DANGLING link (exists, resolves nowhere) is neither install- nor
+ *  build-fixable by a simple command — that class was already closed in
+ *  round 2 and is unchanged here.
+ *
+ *  ANCESTORS OF THE LINK ITSELF GET THE SAME ATTENTION, NOT THE SAME
+ *  VERDICT (issue #259, ふじ review round 4 then round 5). `node_modules`
+ *  or `node_modules/@kaoiro` can itself be a dangling symlink — not
+ *  merely absent — and the ONE `lstat` this function used to run on the
+ *  full 3-segment `linkRel` follows every intermediate component, so that
+ *  shape collapsed to a bare ENOENT indistinguishable from "install has
+ *  not run", and was misclassified as the SAME install shortage an
+ *  ordinary missing ancestor is. Measured directly (ふじ round 4): running
+ *  the suggested `pnpm install` against that dangling ancestor exits 254
+ *  and leaves the symlink untouched, so a subsequent launch hits the
+ *  identical exit-78 fault — the remedy did not fix the tree, the same
+ *  "moved, not fixed" shape as the leaf findings above. `walkAncestors`
+ *  (shared with `checkBuildOutputLeaf`) checks `node_modules` and
+ *  `node_modules/@kaoiro` each on their own terms first, called here with
+ *  `resolveSymlinks=true` (its OWN policy, NOT `checkBuildOutputLeaf`'s
+ *  container one — see `walkAncestors`'s doc comment): a symlink ancestor
+ *  is RESOLVED and accepted when it stays inside the release and points
+ *  at an ordinary directory — unlike a build-output container such as
+ *  `dist`, `node_modules`/`node_modules/@kaoiro` CAN legitimately be a
+ *  healthy symlink, and an earlier version of this ancestor check
+ *  rejected ANY symlink unconditionally (mirroring the container's own
+ *  policy), which regressed exactly that legitimate shape — caught by
+ *  ふじ's production-path matrix (round 5). A DANGLING, out-of-bounds, or
+ *  non-directory ancestor resolution is still reported generically (no
+ *  remedy suggested — installing will not repair it), while a genuinely
+ *  ABSENT ancestor still means the ordinary "install has not run" case
+ *  and keeps suggesting `pnpm install`, unchanged.
+ *
+ *  Only once the link itself resolves cleanly and stays inside the
+ *  boundary does a missing leaf beneath it become a genuine build
+ *  shortage (delegated to `checkBuildOutputLeaf`). This gracefully covers
+ *  the BUILT-RELEASE profile too, where `node_modules/@kaoiro/<pkg>` is a
+ *  real vendored directory rather than a link: `lstatType` reports
+ *  `"dir"`, not `"missing"`, so the install-shortage branch never fires
+ *  there, and `realpathSync` on an ordinary directory trivially succeeds. */
+function checkWorkspaceLinkedSentinel(root, realRoot, rel) {
+  const parts = rel.split("/"); // ["node_modules", "@kaoiro", pkg, ...rest]
+  const linkParts = parts.slice(0, 3); // ["node_modules", "@kaoiro", pkg]
+  const linkRel = linkParts.join("/");
+  const leafRel = parts.slice(3).join("/");
+  const linkPath = join(root, linkRel);
+  // resolveSymlinks=true: unlike a build-output container, node_modules
+  // and node_modules/@kaoiro CAN legitimately be a healthy symlink (see
+  // walkAncestors's own doc comment — ふじ's matrix, issue #259 round 5).
+  const ancestorsPresent = walkAncestors(
+    root,
+    realRoot,
+    linkParts,
+    linkRel,
+    (message) => fail(message),
+    true,
+  );
+  if (!ancestorsPresent) {
+    failMissingWorkspaceLink(
+      `${linkRel} is missing — the workspace dependency link was never created (pnpm install has not run)`,
+    );
+  }
+  // Guarded like every other lstatType call in this file (internal review,
+  // issue #259): an unexpected errno here (EACCES, say) must become a
+  // classified fail(), not an uncaught exception.
+  let linkPathType;
+  try {
+    linkPathType = lstatType(linkPath);
+  } catch (err) {
+    fail(`${linkRel} is unreachable: ${err.message}`);
+  }
+  if (linkPathType === "missing") {
+    failMissingWorkspaceLink(
+      `${linkRel} is missing — the workspace dependency link was never created (pnpm install has not run)`,
+    );
+  }
+  let linkReal;
+  try {
+    linkReal = realpathSync(linkPath);
+  } catch (err) {
+    fail(`${linkRel} is a broken symlink: ${err.message}`);
+  }
+  const linkWithin = relative(realRoot, linkReal);
+  if (linkWithin === "" || linkWithin.startsWith("..") || isAbsolute(linkWithin)) {
+    fail(`${linkRel} resolves outside the release: ${linkReal}`);
+  }
+  // The link must resolve to a DIRECTORY (a package), or checkBuildOutputLeaf
+  // below would itself throw an uncaught ENOTDIR trying to lstat a path
+  // INSIDE what turns out to be a file (internal review round, issue #259:
+  // measured live — a plain-file `node_modules/@kaoiro/<pkg>` crashed the
+  // process with a raw Node stack trace instead of a classified VerifyError).
+  // Checked on `linkReal`, the already-resolved REAL path, so this also
+  // catches a symlink pointing AT a plain file, not only a direct one.
+  //
+  // try/catch here too (advisory, internal review round 2): every OTHER fs
+  // call in this function already fails() rather than throwing raw, and
+  // leaving this one bare would reopen the exact uncaught-exception class
+  // the guard above exists to close — linkReal could vanish or become
+  // unreadable between the realpathSync() above and this statSync() (an
+  // install/switch racing a launch, say).
+  let linkStat;
+  try {
+    linkStat = statSync(linkReal);
+  } catch (err) {
+    fail(`${linkRel} is unreadable: ${err.message}`);
+  }
+  if (!linkStat.isDirectory()) {
+    fail(`${linkRel} is not a directory: ${linkReal}`);
+  }
+  return checkBuildOutputLeaf(linkReal, realRoot, leafRel, rel);
+}
+
+/** Resolves `rel` inside `root` and rejects anything whose REAL path leaves
+ *  the tree. `-f` in shell follows symlinks, so an artifact check alone
+ *  cannot tell a file in the release from a link pointing at one somewhere
+ *  else entirely. pnpm's own links (node_modules/@kaoiro/<pkg> ->
+ *  ../.pnpm/...) stay inside and pass.
+ *
+ *  Dispatches to `checkWorkspaceLinkedSentinel` for a path reached through
+ *  a workspace link, or `checkBuildOutputLeaf` for the runner's own
+ *  output — the two need different remedy classification (see their own
+ *  doc comments). An arbitrary MANIFEST.json entry that happens to start
+ *  with `node_modules/@kaoiro/` (a built release vendors these as real
+ *  directories, never links) still dispatches to
+ *  `checkWorkspaceLinkedSentinel` safely: it degrades to an ordinary
+ *  containment + build-output check, as that function's own doc comment
+ *  states. */
+function containedRealPath(root, realRoot, rel) {
+  if (rel.startsWith("node_modules/@kaoiro/")) {
+    return checkWorkspaceLinkedSentinel(root, realRoot, rel);
+  }
+  return checkBuildOutputLeaf(root, realRoot, rel, rel);
 }
 
 /** The pnpm workspace root at or above `dir`, or null when there is none.
@@ -589,7 +1013,7 @@ export function verifyRelease(root, opts = {}) {
   if (!rootStat.isDirectory()) fail("release root is not a directory");
   const realRoot = realpathSync(root);
 
-  const info = readBuildInfoStrict(root);
+  const info = readBuildInfoStrict(root, realRoot);
   const identity = formatIdentity(info);
 
   // VERSION is the operator-facing copy of the identity. A tree where the two
@@ -698,7 +1122,25 @@ function main(argv) {
   } catch (err) {
     if (err instanceof VerifyError) {
       process.stderr.write(`verify-release: ${root}: ${err.message}\n`);
-      process.exit(70); // EX_SOFTWARE
+      // issue #259: exit 71/72 mark the two remediable shortages
+      // specifically so a caller (kaoiro-runner-launch.sh) can tell them
+      // apart from every other verification failure and from EACH OTHER —
+      // "run the build" and "run pnpm install" are different commands, and
+      // suggesting the wrong one is the same mistake this mechanism exists
+      // to prevent. Every other caller (install / switch,
+      // kaoiro-runner-common.sh's kaoiro_verify_release_tree) only ever
+      // checked zero-vs-nonzero, so this is additive, not a breaking change
+      // to the exit-code contract.
+      // 70 = EX_SOFTWARE (generic verification failure, no specific remedy
+      // suggested); 71 = build shortage (MissingArtifactError); 72 =
+      // workspace-install shortage (MissingWorkspaceLinkError).
+      process.exit(
+        err instanceof MissingArtifactError
+          ? 71
+          : err instanceof MissingWorkspaceLinkError
+            ? 72
+            : 70,
+      );
     }
     throw err;
   }

@@ -32,6 +32,18 @@ function inbound(peer: string, conversationId: string, turnNumber: number): Enve
 }
 
 describe("InterAgentTurnCoordinator (issue #246)", () => {
+  it("delivery sequence belongs to the exact dispatched turn", () => {
+    const coordinator = new InterAgentTurnCoordinator({
+      createTurnToken: () => "turn-1",
+      onDispatch: () => {},
+    });
+    const message = inbound("peer", "dispatch", 1);
+    (message as Envelope & { delivery_seq: number }).delivery_seq = 9;
+    coordinator.receive(message, "reply-owed");
+    expect(coordinator.deliverySequencesForTurn("not-started")).toEqual([]);
+    expect(coordinator.deliverySequencesForTurn("turn-1")).toEqual([9]);
+  });
+
   it("same-CID successor は先行 token の CID resolve 後まで dispatch しない", () => {
     const dispatched: { token: string; cids: readonly string[] }[] = [];
     let sequence = 0;

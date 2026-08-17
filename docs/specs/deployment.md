@@ -84,18 +84,18 @@ mount できる。footer を運用者が差し替える場合は、host 側の
 を設定する。cache は書き込み可能な永続領域に置き、persona pack の
 mount とは分離する。
 
-**DETS パス 8 種**(restart 跨ぎで状態を残す DETS ファイルの格納先)は
+**DETS パス 9 種**(restart 跨ぎで状態を残す DETS ファイルの格納先)は
 同梱 `docker-compose.yaml` が `environment:` + named volume `kaoiro-state`
 で設定済みのため、compose 運用では `.env` に書く必要はない。compose を
-使わずホストで直接 release を動かす場合のみ、この 8 種を書き込み可能な
+使わずホストで直接 release を動かす場合のみ、この 9 種を書き込み可能な
 永続パスへ明示する: `KAOIRO_SESSION_POINTERS_PATH` /
 `KAOIRO_AGENT_DIRECTORY_PATH` / `KAOIRO_PERMISSION_MODES_PATH` /
 `KAOIRO_CLEAR_WATERMARKS_PATH` / `KAOIRO_SESSION_STARTS_PATH` /
 `KAOIRO_INGRESS_ORDER_PATH` / `KAOIRO_USERS_PATH` /
-`KAOIRO_TOKEN_DENYLIST_PATH`。未設定はコンテナの `/tmp` 相当に落ち、
+`KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH`。未設定はコンテナの `/tmp` 相当に落ち、
 `docker compose down` で消える(offline agent 一覧が失われる)。
 
-**この 8 種が「永続化対象の正本」である**。更新手順(4 節)の preflight は
+**この 9 種が「永続化対象の正本」である**。更新手順(4 節)の preflight は
 この一覧を基準に、全 path が named volume 配下へ解決されることを確認する。
 一覧に載っていない DETS が増えると、**backup の対象から静かに漏れる** —
 `KAOIRO_USERS_PATH` は実際にこれを踏み、compose に無いまま container
@@ -379,7 +379,7 @@ release profile では `@@DEPLOY_DIR@@` に `<install-root>/current/deploy` を
 - **server ホストの SSH host key が `known_hosts` に登録済みであること。**
   `StrictHostKeyChecking=no` で迂回しない
 - **永続化対象の全 path が named volume 配下へ解決されることを確認する。**
-  正本は 1.2 節の 8 種。一覧に無い DETS が増えていると **backup から静かに
+  正本は 1.2 節の 9 種。一覧に無い DETS が増えていると **backup から静かに
   漏れる**(`KAOIRO_USERS_PATH` が実際にこれを踏んだ — issue #227)
 - **active な作業が無いことを確認する**(人間の判断)。runner の停止は配下の
   wrapper をすべて止める(2 節「常駐化」)。会話状態は永続化されていないため、
@@ -699,7 +699,7 @@ ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz >/dev/nul
 ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz | head -20'
 ```
 
-**1.2 節の 8 種がすべて含まれることを確認する**。含まれない DETS は
+**1.2 節の 9 種がすべて含まれることを確認する**。含まれない DETS は
 volume の外にあり、この backup では復元できない。
 
 **(6) prepared image で server を起動**
@@ -847,7 +847,7 @@ ssh <server-host> 'docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
   alpine sh -c "find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + \
     && tar xzf /backup/kaoiro-dets-<timestamp>.tar.gz -C /data"'
 
-# 6. restore 結果を確認する (1.2 節の 8 種の存在、owner / mode)
+# 6. restore 結果を確認する (1.2 節の 9 種の存在、owner / mode)
 ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -la /data/'
 ```
 

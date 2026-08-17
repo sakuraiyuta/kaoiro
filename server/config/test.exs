@@ -69,6 +69,13 @@ config :kaoiro_server,
          "kaoiro_test_session_starts_#{run_nonce}.dets"
        )
 
+config :kaoiro_server,
+       :delivery_states_path,
+       Path.join(
+         System.tmp_dir!(),
+         "kaoiro_test_delivery_states_#{run_nonce}.dets"
+       )
+
 # Per-run throwaway DETS file for the IngressOrder allocator (ふじ
 # R5 must-fix, 2026-07-23) and its A4 advisory (2026-07-23, 3rd
 # review): without this, the app-started singleton wrote the shared

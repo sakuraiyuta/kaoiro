@@ -25,6 +25,7 @@
     ConnectionStatus,
     DirectoryEntry,
     Envelope,
+    InterAgentDeliveryStatus,
     HostInfo,
     KaoiroConnection,
     PersonaManifest,
@@ -75,6 +76,7 @@
   // task envelope must never overwrite the parent's own state_change
   // slot).
   let tasks = $state<TaskTable>({});
+  let deliveries = $state<Record<string, InterAgentDeliveryStatus>>({});
   // Restart-surviving identity ledger (ADR-0030) — every agent_id we have
   // ever spawned, with its persona. Merged with `agents` (live) below to
   // surface offline entries in their own section with a restore button.
@@ -571,6 +573,15 @@
         },
         onSnapshot: (next) => (agents = next),
         onTaskSnapshot: (next) => (tasks = next),
+        onDeliverySnapshot: (next) => (deliveries = next),
+        onDeliveryStatus: (agentId, delivery) => {
+          if (delivery === null) {
+            const { [agentId]: _removed, ...remaining } = deliveries;
+            deliveries = remaining;
+          } else {
+            deliveries = { ...deliveries, [agentId]: delivery };
+          }
+        },
         onEnvelope: (envelope) => {
           // Subagent/workflow task lifecycle (ADR-0019/0047, issue #180):
           // neither a transcript reply line nor a parent state_change, so
@@ -869,6 +880,10 @@
               Object.entries(directory).filter(([id]) => id !== agentId),
             );
           }
+          if (agentId in deliveries) {
+            const { [agentId]: _drop, ...remaining } = deliveries;
+            deliveries = remaining;
+          }
           if (logs[agentId]) {
             logs = Object.fromEntries(
               Object.entries(logs).filter(([id]) => id !== agentId),
@@ -1069,6 +1084,7 @@
     isOperator = false;
     showLaunch = false;
     runnerSessions = null;
+    deliveries = {};
     // Clear the identity ledger overlay so a re-connect / login starts
     // clean; the next `directory` push repopulates for operators.
     directory = {};
@@ -1496,6 +1512,7 @@
             activeTaskCountByAgent,
           )}
           tasklist={tasklistForDetail(selectedEnvelope, tasks)}
+          deliveryStatus={deliveries[selectedEnvelope.agent_id] ?? null}
           onClose={() => {
             timelineScrollTarget = null;
             selected = null;

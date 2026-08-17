@@ -13,7 +13,7 @@ import type { LaunchFn, ManagedChild } from "./supervisor.js";
 /** The child-process surface toManagedChild needs; ChildProcess satisfies it. */
 interface ExitErrorChild {
   on(event: "exit" | "error", listener: () => void): void;
-  kill(): void;
+  kill(signal?: NodeJS.Signals): boolean;
 }
 
 /**
@@ -36,8 +36,8 @@ export function toManagedChild(child: ExitErrorChild): ManagedChild {
       child.on("exit", fire);
       child.on("error", fire);
     },
-    kill: (): void => {
-      child.kill();
+    kill: (signal?: NodeJS.Signals): boolean => {
+      return child.kill(signal);
     },
   };
 }

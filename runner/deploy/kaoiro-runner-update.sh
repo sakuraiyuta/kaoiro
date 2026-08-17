@@ -216,6 +216,14 @@ fi
 lock="$root/.lock.update"
 kaoiro_lock_acquire "$lock"
 
+# Shared with kaoiro-runner-switch.sh and kaoiro-runner-install.sh (issue
+# #253) — this script's own prune loop below is the only place it needs it,
+# so links_held tracks whether THIS run actually acquired it and cleanup()
+# releases it only then, same reasoning as install.sh's own copy of this
+# comment.
+links_lock="$root/.lock.links"
+links_held=no
+
 # Under the lock, and before this run makes its own staging dir: a build that
 # died on SIGKILL leaves ~1.2 GB behind that nothing else ever revisits. ONLY
 # this script's own prefix — a standalone install may be running under its
@@ -225,6 +233,7 @@ kaoiro_gc_staging "$root" ".staging.build"
 build_dir=
 cleanup() {
   [ -z "$build_dir" ] || rm -rf "$build_dir"
+  [ "$links_held" = no ] || kaoiro_lock_release "$links_lock"
   kaoiro_lock_release "$lock"
 }
 trap cleanup EXIT INT TERM
@@ -329,10 +338,21 @@ fi
 # --- resolves the codex wrapper lazily, on the first codex spawn, so a
 # --- release still reachable as current is loaded from long after startup.
 
-# Snapshot, with the same scope caveat as install.sh's header: a manual
-# kaoiro-runner-switch.sh run takes no lock, so one landing between this read
-# and the deletions below could make the snapshot stale and prune what just
-# became `current`. Concurrent switch is out of contract here too.
+# Snapshot, held under .lock.links (issue #253) — the SAME lock
+# kaoiro-runner-switch.sh takes around its own current/previous swap, and
+# kaoiro-runner-install.sh around its own replace check. Without it, a
+# manual switch landing between this read and the deletions below could
+# make the snapshot stale and prune what just became `current`. Acquired
+# only for this narrow window: the nested install call earlier in this
+# script has already returned by the time this runs, so there is no
+# reentrancy risk (see kaoiro-runner-install.sh's own .lock.links comment).
+# A lock that cannot be acquired here means SOME other run is touching the
+# links right now, so this run stops rather than guess at a stale snapshot
+# — the host is left running the release it just switched to, just not
+# pruned this time; a later update retries the prune.
+kaoiro_lock_acquire "$links_lock"
+links_held=yes
+
 protected=
 for link in current previous; do
   if [ -L "$root/$link" ]; then
@@ -354,6 +374,9 @@ for release in $(ls -1t "$root/releases" 2>/dev/null); do
   printf '%s: pruning release %s\n' "$prog" "$release" >&2
   rm -rf "$root/releases/$release"
 done
+
+kaoiro_lock_release "$links_lock"
+links_held=no
 
 printf '%s: %s is running release %s\n' "$prog" "$service" "$id" >&2
 printf '%s\n' "$id"

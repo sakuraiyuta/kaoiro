@@ -6,14 +6,18 @@
 // below: a failed switch must leave `current` exactly where it was, and a
 // completed switch must leave the release it replaced reachable as
 // `previous`.
+import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readlinkSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -258,5 +262,109 @@ describe("kaoiro-runner-switch.sh (issue #229)", () => {
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(A);
     expect(existsSync(join(root, "previous"))).toBe(false);
+  });
+
+  it(".lock.links (issue #253) が他所で保持されていれば switch は current を変えない", () => {
+    // The SAME lock kaoiro-runner-install.sh takes around its own
+    // current/previous check-then-delete, and kaoiro-runner-update.sh
+    // around its own prune loop. Pre-holding it here stands in for either
+    // one being mid-flight; a switch landing on top of it is exactly the
+    // race issue #253 closes.
+    seed(A);
+    seed(B);
+    symlinkSync(`releases/${A}`, join(root, "current"));
+    mkdirSync(join(root, ".lock.links"));
+
+    const result = run(B);
+
+    expect(result.status).toBe(75);
+    expect(result.stderr).toContain("another run holds");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+    expect(existsSync(join(root, "previous"))).toBe(false);
+  });
+
+  it(".lock.links が他所で保持されていれば --rollback も current/previous を変えない", () => {
+    seed(A);
+    seed(B);
+    symlinkSync(`releases/${A}`, join(root, "current"));
+    expect(run(B).status).toBe(0);
+
+    mkdirSync(join(root, ".lock.links"));
+    const result = run("--rollback");
+
+    expect(result.status).toBe(75);
+    expect(result.stderr).toContain("another run holds");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+    expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
+  });
+
+  it("verify と .lock.links の間で target が消えても current は dangling にならない (issue #253 round2、もも review must-fix)", () => {
+    // もも round1 review: switch_to() は当初、target の verify を
+    // .lock.links 取得より前に行っていた。verify は release の中身だけを
+    // 読む read-only 操作なので lock は要らない、という判断だったが、
+    // kaoiro-runner-install.sh の --allow-dirty 置き換え経路は SAME
+    // target を .lock.links の下で check-then-delete する。verify が
+    // lock の外にある限り、その verify が成功した直後・.lock.links を
+    // 取る前の一瞬に install の delete が割り込めば、switch は既に
+    // 削除された target をそのまま current へ書き込んでしまう —
+    // ももが実 concurrency で再現し、exit 0 かつ current が dangling
+    // symlink になることを確認した。
+    //
+    // ここでは real concurrency ではなく、mkdir を PATH 上でシムして
+    // 決定論的に再現する: kaoiro_lock_acquire が呼ぶ `mkdir .lock.links`
+    // そのものを捕まえ、実際の mkdir を実行する直前に target を
+    // rm -rf する — install の delete が「switch が .lock.links を
+    // 取ろうとした、まさにその瞬間」に割り込んだ場合を模している。
+    // 修正後は lock 取得が verify より前に来るため、この rm -rf は
+    // switch 自身の (今度は lock 保護下の) 存在チェック/verify を
+    // 直撃し、current は書き換わらずに済むはずである。
+    seed(A);
+    const X = revisionOf("switch-toctou-target");
+    seed(X);
+    symlinkSync(`releases/${A}`, join(root, "current"));
+
+    const targetPath = join(root, "releases", X);
+    const linksLock = join(root, ".lock.links");
+    const fakeBin = join(root, "fake-bin");
+    mkdirSync(fakeBin, { recursive: true });
+    const fakeMkdir = join(fakeBin, "mkdir");
+    // Resolved from the REAL PATH, before fake-bin is prepended below --
+    // a hardcoded /usr/bin/mkdir works on this Linux box and on ubuntu-latest
+    // CI (whose /bin is a symlink into /usr/bin), but the project targets
+    // macOS too (kaoiro-runner-common.sh branches on `uname -s = Darwin`),
+    // where core utilities live only under /bin. The shim falls through to
+    // the real mkdir for every OTHER call, so a wrong path here breaks this
+    // test everywhere, not just for the one call it means to intercept.
+    const realMkdir = execFileSync("/bin/sh", ["-c", "command -v mkdir"], {
+      encoding: "utf8",
+    }).trim();
+    writeFileSync(
+      fakeMkdir,
+      [
+        "#!/bin/sh",
+        `if [ "$#" -eq 1 ] && [ "$1" = ${JSON.stringify(linksLock)} ]; then`,
+        `  rm -rf ${JSON.stringify(targetPath)}`,
+        "fi",
+        `exec ${JSON.stringify(realMkdir)} "$@"`,
+      ].join("\n"),
+    );
+    chmodSync(fakeMkdir, 0o755);
+
+    const result = runScript(switchScript, [X, "--install-dir", root], {
+      PATH: `${fakeBin}:${process.env.PATH}`,
+    });
+
+    // The target is genuinely gone by the time switch's own (now
+    // lock-protected) checks run, so this must fail cleanly -- not
+    // silently activate a name that resolves to nothing.
+    expect(result.status).not.toBe(0);
+    expect(existsSync(targetPath)).toBe(false);
+    expect(lstatSync(join(root, "current")).isSymbolicLink()).toBe(true);
+    // The load-bearing assertion: current must still RESOLVE (not be a
+    // dangling symlink at the deleted target). existsSync follows
+    // symlinks, so this fails exactly the way the pre-fix code did if the
+    // regression comes back.
+    expect(existsSync(join(root, "current"))).toBe(true);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
   });
 });

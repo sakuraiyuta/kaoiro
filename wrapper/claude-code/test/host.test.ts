@@ -107,6 +107,52 @@ describe("AgentHost whoami effective projection (#113)", () => {
       context: { used_tokens: 42000, max_tokens: 200000, used_percentage: 21 },
     });
   });
+
+  // issue #254: 自分の rate limit を自分で観測できるようにする。list_agents
+  // は呼び出し元を除外するので、ここが唯一の自己観測点になる。
+  it("rate_limits 未報告なら key ごと省略する (absent = unknown)", () => {
+    const host = new AgentHost(config, { onState: () => {} });
+    expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
+  });
+
+  it("whoami の rate_limits は host が stamp する ext.rate_limits と同一値になる", () => {
+    // 「同形」ではなく「同値」を固定する。両者が別経路で組み立てられるように
+    // なった瞬間に、自己観測と peer 観測が食い違っても誰も気づかなくなる。
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: scriptedQuery([
+        msg({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed",
+            rateLimitType: "seven_day",
+            utilization: 0.17,
+            resetsAt: 1787456530,
+          },
+        }),
+        assistant([{ type: "text", text: "hi" }]),
+      ]),
+      now: () => "T",
+    });
+
+    return host.run().then(() => {
+      const stamped = envs.find((e) => e.ext.rate_limits !== undefined);
+      expect(stamped).toBeDefined();
+      expect(host.statusSnapshot().rate_limits).toEqual(
+        stamped?.ext.rate_limits,
+      );
+      expect(host.statusSnapshot()).toMatchObject({
+        rate_limits: {
+          seven_day: {
+            status: "allowed",
+            utilization: 0.17,
+            resets_at: 1787456530,
+          },
+        },
+      });
+    });
+  });
 });
 
 // The host reads only a few SDK fields; build minimal shapes and cast.

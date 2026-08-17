@@ -28,6 +28,18 @@ function inbound(cid: string): Envelope {
 }
 
 describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
+  it("delivery sequence belongs to the exact dispatched turn", () => {
+    const coordinator = new CodexInterAgentTurnCoordinator({
+      createTurnToken: () => "turn-1",
+      onDispatch: () => {},
+    });
+    const message = inbound("dispatch");
+    (message as Envelope & { delivery_seq: number }).delivery_seq = 9;
+    coordinator.receive(message, "reply-owed");
+    expect(coordinator.deliverySequencesForTurn("not-started")).toEqual([]);
+    expect(coordinator.deliverySequencesForTurn("turn-1")).toEqual([9]);
+  });
+
   it("same CID の stale token は active batch を settle できず後続を dispatch しない", () => {
     const dispatched: DispatchedCodexInterAgentBatch[] = [];
     const tokens = ["turn-1", "turn-2"];

@@ -21,6 +21,8 @@
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory, sessionSidecarPath } from "./history.js";
 import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
@@ -32,6 +34,7 @@ import {
 } from "./inter_agent_turn_coordinator.js";
 import {
   HistoryReplayer,
+  createDeliveryAcknowledgementRuntime,
   IaSidecar,
   InterAgentTool,
   classifyInterAgentError,
@@ -89,6 +92,26 @@ const COLOR: Record<KaoiroState, string> = {
  *  handshake; short enough that a misconfigured server is loud. */
 const PERSONA_PROMPT_TIMEOUT_MS = 10_000;
 
+type CreateServerLink = (
+  ...args: ConstructorParameters<typeof ServerLink>
+) => ServerLink;
+type CreateAgentHost = (
+  ...args: ConstructorParameters<typeof AgentHost>
+) => AgentHost;
+type ServerLinkOptions = ConstructorParameters<typeof ServerLink>[2];
+type AgentHostOptions = ConstructorParameters<typeof AgentHost>[1];
+
+/** Injectable construction seam for the composition root. Production keeps
+ * the concrete constructors; regressions capture the actual delivery and
+ * whoami composition that this CLI supplies (#247, #254). */
+export interface ClaudeCliDependencies {
+  parseCliArgs?: typeof parseCliArgs;
+  loadConfig?: typeof loadConfig;
+  createServerLink?: CreateServerLink;
+  createHost?: CreateAgentHost;
+  buildMcpServer?: typeof buildKaoiroMcpServer;
+}
+
 // issue #219 D25: human-facing log lines show `display_name` (the
 // mutable, operator-chosen label), never the pack's canonical
 // `persona.name` — an agent instance can be renamed without any code
@@ -119,10 +142,18 @@ function printLog(envelope: Envelope): void {
   }
 }
 
-async function main(): Promise<void> {
+export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Promise<void> {
+  const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
+  const readConfig = dependencies.loadConfig ?? loadConfig;
+  const createServerLink =
+    dependencies.createServerLink ?? ((...args) => new ServerLink(...args));
+  const createHost =
+    dependencies.createHost ?? ((...args) => new AgentHost(...args));
+  let link: ServerLink | null = null;
+  const buildMcpServer = dependencies.buildMcpServer ?? buildKaoiroMcpServer;
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
-    parseCliArgs(process.argv.slice(2));
-  const config = loadConfig(configPath);
+    parseArgs(process.argv.slice(2));
+  const config = readConfig(configPath);
   // Operational safety valve, deliberately wrapper-local rather than a
   // dashboard/server/runner configuration surface (issue #248).
   const turnWatchdogSettings = readTurnWatchdogSettings(
@@ -220,7 +251,6 @@ async function main(): Promise<void> {
   const prompt = promptArg;
 
   let host: AgentHost;
-  let link: ServerLink | null = null;
   let broker: PermissionBroker | null = null;
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
@@ -473,6 +503,8 @@ async function main(): Promise<void> {
     // session has not opened yet either.
     requestDirectory: () =>
       link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
+    requestInterAgentDeliveryStatus: () =>
+      link?.requestInterAgentDeliveryStatus() ?? Promise.resolve(null),
     getWhoami: () => host.statusSnapshot(),
   });
   // ADR-0051 D3-2 / D3-5: the host-local record of this agent's
@@ -529,7 +561,14 @@ async function main(): Promise<void> {
       : {}),
   });
 
-  link = new ServerLink(config.server_url, config.agent_id, {
+  const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
+    (deliverySeq) => link?.acknowledgeInterAgentDelivery(deliverySeq),
+    interAgentTurns,
+  );
+
+  const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
+    Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
+  >({
     personaId: config.persona.id,
     ...(config.transition_id === undefined
       ? {}
@@ -541,6 +580,13 @@ async function main(): Promise<void> {
     onHydration: (verdict) => replayer.onVerdict(verdict),
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
+    // #258: acceptance of request_session_reset only means the server took
+    // the lock. If this old wrapper survives the runner's termination path,
+    // correlate the terminal failure and inject the fixed failure notice into
+    // the still-live SDK session rather than leaving the agent believing it
+    // was reset.
+    onSessionResetFailed: ({ requestId, reason }) =>
+      sessionReset.onResetFailed(requestId, reason),
     onInstruction: (text, attachmentIds) => {
       const tag = attachmentIds && attachmentIds.length > 0
         ? `instruction(+${attachmentIds.length})`
@@ -698,17 +744,18 @@ async function main(): Promise<void> {
     },
     onInterAgentMessage: (envelope) =>
       handleInterAgentMessage(
-        {
+        deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
           ingress: interAgentIngress,
           recordInboundIa,
           send: (notice) => link?.send(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
           log: (line) => process.stdout.write(line),
-        },
+        }),
         envelope,
       ),
   });
+  link = createServerLink(config.server_url, config.agent_id, serverLinkOptions);
 
   // fail-closed: the wrapper cannot open its SDK session without the
   // server-pushed personality prompt. A timeout here is loud on purpose so
@@ -742,18 +789,15 @@ async function main(): Promise<void> {
     clearTimeout(timeoutHandle);
   }
 
-  host = new AgentHost(config, {
+  const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
+    Omit<AgentHostOptions, "onTurnStart">
+  >({
     onState,
     onLog,
     onTask,
     // phase-28 BR MF2: the B1 threshold notice is an injection like any
     // other, so it queues on the one chain instead of racing it.
     enqueueInjection: enqueueInstruction,
-    onTurnStart: ({ turnToken }) => {
-      // Dispatch may have happened long before this point; only this host
-      // input-yield boundary is an actual SDK turn start (issue #248).
-      turnWatchdog.start(turnToken);
-    },
     onTurnProgress: ({ turnToken }) => {
       turnWatchdog.progress(turnToken);
     },
@@ -885,7 +929,7 @@ async function main(): Promise<void> {
       // ことで canUseTool 経路に乗せる — mode 従属の gate を効かせる
       // ため、これらを READ_ONLY_TOOLS に足してはいけない。
       mcpServers: {
-        kaoiro: buildKaoiroMcpServer(interAgent!, [
+        kaoiro: buildMcpServer(interAgent!, [
           {
             descriptor: requestCompactDescriptor({
               // Ride the same chain operator instructions use, so an approved
@@ -907,7 +951,12 @@ async function main(): Promise<void> {
       },
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
+  }, (turnToken) => {
+    // Dispatch may have happened long before this point; only this host
+    // input-yield boundary is an actual SDK turn start (issue #248).
+    turnWatchdog.start(turnToken);
   });
+  host = createHost(config, hostOptions);
 
   // Apply the after_join set_permission_mode that arrived before host was
   // constructed. host.ts (#58) uses `#permissionMode` set before run() as
@@ -968,7 +1017,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`${String(error)}\n`);
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  runClaudeCli().catch((error: unknown) => {
+    process.stderr.write(`${String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

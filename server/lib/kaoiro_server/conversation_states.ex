@@ -43,6 +43,16 @@ defmodule KaoiroServer.ConversationStates do
     * `{:error, :too_many_conversations}` — the global `max_conversations` cap
       blocked a brand-new conversation; existing entries (open or
       tombstoned) are unaffected.
+    * `{:error, :unknown_conversation_id}` — `new_conversation?` is false (the
+      sender explicitly named this `conversation_id` rather than omitting
+      it) and no entry exists for it, open or tombstoned (issue #262). A
+      wrapper only omits the id when the CALLER omitted it too, so an
+      explicit-but-unknown id here is a transcription error (a peer's id
+      copied wrong, or a stale one from a prior session) — until this
+      check, that typo silently opened a fresh, context-less conversation
+      instead of surfacing the mistake. Never checked for
+      `new_conversation? == true`: a freshly wrapper-allocated UUID is by
+      construction absent from `state.conversations`, and always creates.
 
   A CLOSED tombstone (`status: :closed`) replaces the open entry in place
   under the same key: `reason` (why it closed), `closed_at` (monotonic ms,
@@ -136,9 +146,59 @@ defmodule KaoiroServer.ConversationStates do
   message for an already-CLOSED `conversation_id` is rejected outright
   (`{:error, :conversation_closed}`, issue #177) — see the moduledoc for
   the tombstone lifecycle.
+
+  `new_conversation?` (issue #262) is true only when the CALLING agent
+  omitted `conversation_id` and the wrapper allocated a fresh one — the
+  one case where an unknown id is legitimate. When it is false (the
+  agent supplied this id explicitly) and no entry exists for it, the
+  send is rejected as `{:error, :unknown_conversation_id}` instead of
+  silently opening a new, context-less thread under a mistyped or
+  stale id; see the moduledoc.
+
+  Deliberately NO default (review, issue #262 delta): an earlier version
+  defaulted this to `true` so ~90 pre-#262 test call sites would not need
+  editing. That convenience is exactly the shape of bug this whole issue
+  exists to close, just moved one layer down — a FUTURE caller of this
+  function (not only the channel) that forgets the argument would
+  silently get the permissive answer, the same way an old wrapper's
+  missing wire field used to. The channel boundary is where "absent means
+  legacy, accept it" is a legitimate, EXPLICIT decision (see
+  `preflight_inter_agent/2` in wrapper_channel.ex); this function has no
+  business making that call implicitly for whoever forgets to pass it.
+  Every caller, including every test below, now states its intent.
+
+  `when is_boolean(new_conversation?)` (review, クロエ): this arg landed at
+  position 7, the SAME position `server` occupied before this delta
+  removed the default in front of it. A leftover pre-delta call — one a
+  bulk migration missed — would pass its `server` value (a pid/atom/name,
+  never a boolean) here instead, and nothing about that is a compile
+  error: `record_message/7` still exists, just with a different 7th
+  argument's meaning. Worse, the resulting bug is CONDITIONAL — the
+  guard clauses inside `handle_call/3` only evaluate `not new_conversation?`
+  on the `existing == nil` branch, so a wrong-typed call silently
+  succeeds (against the WRONG server, since `server \\ __MODULE__` then
+  defaults) whenever the conversation already exists, and only raises
+  when it doesn't. The `is_boolean/1` guard turns every such call into
+  an immediate `FunctionClauseError` regardless of which branch it would
+  have hit, which is both the structural verification that no call site
+  was missed (every test call still had to pass this guard) and a
+  permanent guard against the next one.
   """
-  def record_message(conversation_id, from, to, body, turn_number, done?, server \\ __MODULE__) do
-    GenServer.call(server, {:record, conversation_id, from, to, body, turn_number, done?})
+  def record_message(
+        conversation_id,
+        from,
+        to,
+        body,
+        turn_number,
+        done?,
+        new_conversation?,
+        server \\ __MODULE__
+      )
+      when is_boolean(new_conversation?) do
+    GenServer.call(
+      server,
+      {:record, conversation_id, from, to, body, turn_number, done?, new_conversation?}
+    )
   end
 
   @doc "Returns the current entry for inspection (test helper)."
@@ -206,7 +266,11 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @impl true
-  def handle_call({:record, cid, from, to, body, turn_number, done?}, _from, state) do
+  def handle_call(
+        {:record, cid, from, to, body, turn_number, done?, new_conversation?},
+        _from,
+        state
+      ) do
     now = state.clock.()
     limits = state.limits
     existing = Map.get(state.conversations, cid)
@@ -235,6 +299,17 @@ defmodule KaoiroServer.ConversationStates do
       # (existing is never nil here).
       existing != nil and turn_number <= existing.max_turn_number ->
         {:reply, {:error, :stale_turn}, state}
+
+      # issue #262: an explicitly-named id (new_conversation? == false) with
+      # no entry at all — open or tombstoned — is a transcription error, not
+      # a new thread. Checked before the capacity cap below: a mistyped id
+      # never should have consumed quota to begin with, so its rejection
+      # reason must not depend on how full the tracker happens to be right
+      # now. Never true for new_conversation? == true: a wrapper-allocated
+      # fresh UUID is by construction unknown to this map, and that is the
+      # ONE case where "unknown" is the expected, legitimate state.
+      existing == nil and not new_conversation? ->
+        {:reply, {:error, :unknown_conversation_id}, state}
 
       existing == nil and map_size(state.conversations) >= limits.max_conversations ->
         # Bound total in-flight conversations so a malicious wrapper streaming

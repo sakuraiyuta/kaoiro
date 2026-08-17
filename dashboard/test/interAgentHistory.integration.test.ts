@@ -10,6 +10,7 @@ let component: object | null = null;
 let originalClientHeight: PropertyDescriptor | undefined;
 let originalScrollHeight: PropertyDescriptor | undefined;
 let originalScrollTo: PropertyDescriptor | undefined;
+let originalOffsetTop: PropertyDescriptor | undefined;
 
 beforeEach(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -43,9 +44,15 @@ afterEach(async () => {
   } else {
     delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
   }
+  if (originalOffsetTop) {
+    Object.defineProperty(HTMLElement.prototype, "offsetTop", originalOffsetTop);
+  } else {
+    delete (HTMLElement.prototype as { offsetTop?: number }).offsetTop;
+  }
   originalClientHeight = undefined;
   originalScrollHeight = undefined;
   originalScrollTo = undefined;
+  originalOffsetTop = undefined;
 });
 
 function state(agentId: string, name: string): Envelope {
@@ -106,7 +113,7 @@ describe("inter-agent restored history rendering (#105)", () => {
     expect(bubble?.textContent).toContain("復元されたメッセージ");
   });
 
-  it("timeline target の envelope anchor へ 24px 余白つきで smooth scroll する", async () => {
+  it("timeline target の message body anchor へ 24px 余白つきで smooth scroll する", async () => {
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
       callback(0);
       return 1;
@@ -120,6 +127,7 @@ describe("inter-agent restored history rendering (#105)", () => {
       "scrollHeight",
     );
     originalScrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
+    originalOffsetTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop");
     const scrollTo = vi.fn();
     Object.defineProperty(HTMLElement.prototype, "clientHeight", {
       configurable: true,
@@ -137,10 +145,11 @@ describe("inter-agent restored history rendering (#105)", () => {
       configurable: true,
       value: scrollTo,
     });
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      if (this.classList.contains("log")) return { top: 100 } as DOMRect;
-      if (this.dataset.envelopeKey) return { top: 620, height: 80 } as DOMRect;
-      return { top: 0, height: 0 } as DOMRect;
+    Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("msg") ? 520 : 0;
+      },
     });
     const target = document.createElement("div");
     document.body.append(target);
@@ -158,11 +167,13 @@ describe("inter-agent restored history rendering (#105)", () => {
 
     const log = target.querySelector<HTMLDivElement>(".log")!;
     const entry = target.querySelector<HTMLElement>("[data-envelope-key]")!;
+    const messageBody = entry.querySelector<HTMLElement>(".msg");
     await tick();
     await Promise.resolve();
     await tick();
 
     expect(entry.dataset.envelopeKey).toBe(conversationEntryKey(message));
+    expect(messageBody).not.toBeNull();
     expect(scrollTo).toHaveBeenCalledWith({ top: 496, behavior: "smooth" });
     expect(log.style.getPropertyValue("--timeline-scroll-tail")).toBe("296px");
 

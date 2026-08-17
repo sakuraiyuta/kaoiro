@@ -22,6 +22,7 @@ defmodule KaoiroServerWeb.SynthEnvelope do
   """
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.DeliveryStates
   alias KaoiroServer.IngressOrder
 
   @doc """
@@ -60,9 +61,28 @@ defmodule KaoiroServerWeb.SynthEnvelope do
   def deliver(recipient, envelope) do
     {us, seq} = stamp = IngressOrder.allocate()
     stamped = Map.put(envelope, "ingress_stamp", [us, seq])
-    _ = AgentStates.upsert_ia(recipient, stamp, stamped)
-    KaoiroServerWeb.Endpoint.broadcast("wrapper:#{recipient}", "envelope", stamped)
+
+    routed =
+      case DeliveryStates.issue(recipient) do
+        delivery_seq when is_integer(delivery_seq) ->
+          Map.put(stamped, "delivery_seq", delivery_seq)
+
+        nil ->
+          stamped
+      end
+
+    _ = AgentStates.upsert_ia(recipient, stamp, routed)
+    KaoiroServerWeb.Endpoint.broadcast("wrapper:#{recipient}", "envelope", routed)
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", stamped)
+    status = DeliveryStates.get(recipient)
+    KaoiroServerWeb.Endpoint.broadcast("wrapper:#{recipient}", "delivery_status", status || %{})
+
+    KaoiroServerWeb.Endpoint.broadcast(
+      "agents:lobby",
+      "delivery_status",
+      %{"agent_id" => recipient, "delivery" => status}
+    )
+
     :ok
   end
 

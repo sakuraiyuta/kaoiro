@@ -23,6 +23,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.Auth
   alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.ConversationStates
+  alias KaoiroServer.DeliveryStates
   alias KaoiroServer.IngressOrder
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.SessionPointers
@@ -99,6 +100,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
          {:ok, persona_id} <- fetch_persona_id(params),
          :ok <- authorize_persona(persona_id),
          :ok <- reject_if_connected(agent_id) do
+      delivery = bind_delivery(agent_id, params)
       # Drop the raw token once verified so it cannot leak via crash
       # logs / socket inspection.
       send(self(), :after_join)
@@ -109,7 +111,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
       # (rather than in :after_join) keeps it inside the same message the
       # wrapper is already waiting on, so the wrapper never has to guess
       # whether a verdict is still coming.
-      {:ok, %{"hydration" => hydration_verdict(agent_id)},
+      reply =
+        %{"hydration" => hydration_verdict(agent_id)}
+        |> maybe_put_optional_field("delivery", delivery)
+
+      {:ok, reply,
        socket
        |> assign(:agent_id, agent_id)
        |> assign(:persona_id, persona_id)
@@ -118,6 +124,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
     else
       {:error, reason} -> {:error, %{reason: to_string(reason)}}
     end
+  end
+
+  # `transition_id` identifies a session transition, not a wrapper process:
+  # runner crash relaunch intentionally reuses it.  The random generation is
+  # therefore the only lifetime identity for #247's dispatch observation.
+  defp bind_delivery(agent_id, %{
+         "inter_agent_delivery_ack" => "dispatch-v1",
+         "delivery_generation" => generation
+       })
+       when is_binary(generation) and byte_size(generation) in 1..128 do
+    DeliveryStates.bind(agent_id, generation)
+  end
+
+  defp bind_delivery(agent_id, _params) do
+    :ok = DeliveryStates.disarm(agent_id)
+    nil
   end
 
   # Push the initial handshake state once the join completes:
@@ -208,6 +230,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       end
 
       push_persona_sync(socket, agent_id)
+      broadcast_delivery_status(agent_id)
 
       :ok
     end
@@ -396,16 +419,42 @@ defmodule KaoiroServerWeb.WrapperChannel do
     self_id = socket.assigns.agent_id
     activities = AgentActivity.snapshot()
     peer_index = ConversationStates.peer_index()
+    deliveries = DeliveryStates.all()
 
     agents =
       AgentStates.snapshot()
       |> Enum.reject(fn {id, _} -> id == self_id end)
       |> Enum.map(fn {id, env} ->
-        directory_entry(id, env, Map.get(activities, id), Map.get(peer_index, id, []))
+        directory_entry(
+          id,
+          env,
+          Map.get(activities, id),
+          Map.get(peer_index, id, []),
+          Map.get(deliveries, id)
+        )
       end)
 
     {:reply, {:ok, %{"agents" => agents, "users" => users_projection()}}, socket}
   end
+
+  @impl true
+  def handle_in("delivery_status_request", _payload, socket) do
+    reply =
+      %{}
+      |> maybe_put_optional_field("delivery", DeliveryStates.get(socket.assigns.agent_id))
+
+    {:reply, {:ok, reply}, socket}
+  end
+
+  @impl true
+  def handle_in("delivery_ack", %{"delivery_seq" => seq}, socket)
+      when is_integer(seq) and seq > 0 do
+    status = DeliveryStates.ack(socket.assigns.agent_id, seq)
+    broadcast_delivery_status(socket.assigns.agent_id)
+    {:reply, {:ok, %{"delivery" => status}}, socket}
+  end
+
+  def handle_in("delivery_ack", _payload, socket), do: {:reply, :ok, socket}
 
   # Resume history reconstruction (ADR-0014 phase-2, issue #50): the wrapper
   # is about to replay its JSONL-derived transcript as `log` envelopes, so it
@@ -556,7 +605,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
         |> maybe_put_resume_snapshot(agent_id)
       )
 
-      {:reply, :ok, socket}
+      # Acceptance reserves a server-side reset transaction but is not its
+      # completion. Return its correlation id so this old wrapper can match a
+      # later terminal failure if the runner cannot actually replace it (#258).
+      {:reply, {:ok, %{request_id: request_id}}, socket}
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: reset_request_reason(reason)}}, socket}
@@ -621,9 +673,17 @@ defmodule KaoiroServerWeb.WrapperChannel do
     stamped = Map.put(envelope, "ingress_stamp", wire_stamp)
 
     retained = AgentStates.upsert_ia(from, stamp, stamped)
-    _ = AgentStates.upsert_ia(to, stamp, stamped)
 
-    push_to_wrapper(to, stamped)
+    {recipient_envelope, delivery_changed?} =
+      case DeliveryStates.issue(to) do
+        seq when is_integer(seq) -> {Map.put(stamped, "delivery_seq", seq), true}
+        nil -> {stamped, false}
+      end
+
+    _ = AgentStates.upsert_ia(to, stamp, recipient_envelope)
+
+    push_to_wrapper(to, recipient_envelope)
+    if delivery_changed?, do: broadcast_delivery_status(to)
     if escalate != nil, do: broadcast_escalate(escalate)
 
     # Same "no snapshot entry to anchor it" rule store_and_broadcast
@@ -763,7 +823,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp role_string(:admin), do: "admin"
   defp role_string(_other), do: nil
 
-  defp directory_entry(id, envelope, activity, peers) do
+  defp directory_entry(id, envelope, activity, peers, delivery) do
     persona =
       case envelope do
         %{"persona" => %{} = p} -> Map.take(p, ["id", "name", "sprite_set"])
@@ -826,7 +886,33 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     entry = maybe_put_context(entry, ext)
     entry = maybe_put_rate_limits(entry, ext, id)
-    put_activity_fields(entry, id, envelope, activity)
+
+    entry
+    |> put_activity_fields(id, envelope, activity)
+    |> maybe_put_optional_field("inter_agent_delivery", delivery)
+  end
+
+  defp broadcast_delivery_status(agent_id) do
+    case DeliveryStates.get(agent_id) do
+      nil ->
+        # No capability / legacy process means unknown, not healthy 0/0.
+        # The dashboard still receives a deletion event so it cannot retain
+        # a prior generation's watermark after the ledger is disarmed.
+        KaoiroServerWeb.Endpoint.broadcast(
+          "agents:lobby",
+          "delivery_status",
+          %{"agent_id" => agent_id}
+        )
+
+      status ->
+        KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "delivery_status", status)
+
+        KaoiroServerWeb.Endpoint.broadcast(
+          "agents:lobby",
+          "delivery_status",
+          %{"agent_id" => agent_id, "delivery" => status}
+        )
+    end
   end
 
   # `context` is capability-gated rather than presence-gated. In particular,
@@ -1012,6 +1098,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
        do: Map.put(entry, key, value)
 
   defp maybe_put_directory_field(entry, _key, _value), do: entry
+
+  # Unlike the directory's optional display fields, delivery is a structured
+  # status map. Keep `nil` absent (legacy wrapper means unknown), while
+  # preserving the map verbatim for capability-aware clients.
+  defp maybe_put_optional_field(entry, _key, nil), do: entry
+  defp maybe_put_optional_field(entry, key, value), do: Map.put(entry, key, value)
 
   # Persist the agent's latest SDK session_id as a restart-surviving
   # pointer (ADR-0014 F1, issue #49). Only fires once the wrapper has
@@ -1236,11 +1328,41 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # calls the unrestricted `validate_inter_agent_payload/1` directly — a
   # wrapper's own IA sidecar legitimately holds historical turn_number=0
   # rows from real server-synthesized notices it received.
+  #
+  # `payload.new_conversation` (issue #262) is validated HERE, not in the
+  # shared `validate_inter_agent_payload/1`, for the same reason: a stored
+  # sidecar row from before this field existed must still replay.
+  #
+  # ABSENCE is allowed (review, クロエ M1) — only a present-but-non-boolean
+  # value is rejected. Requiring the key would hard-reject every live send
+  # from a wrapper that predates issue #262, and that population is not
+  # hypothetical: the Phoenix client owns reconnect/heartbeat
+  # (wrapper/core/src/transport.ts), so an old wrapper survives a server
+  # deploy and keeps pushing without ever restarting. ADR-0015 already
+  # covers exactly this shape of client/server skew (`version` field) with
+  # best-effort accept, not a hard block — the same instance the codebase
+  # already exercises live (`refresh_engine_catalog: client declared
+  # protocol version (absent); relaying as "0"`). `preflight_inter_agent/2`
+  # treats an absent value as `true` (with a one-time-per-message
+  # `Logger.warning`, see `warn_legacy_new_conversation_absent/0`) — this
+  # is now the ONLY place that permissive default is allowed to live.
+  # `ConversationStates.record_message/8` deliberately does NOT default
+  # `new_conversation?` (director ruling, issue #262 delta 2巡目): every
+  # caller of that internal API, this one included, must state the value
+  # explicitly, so a future caller cannot silently reproduce this same
+  # bug through the internal API instead of the wire.
   defp validate_live_inter_agent_payload(payload) do
     with :ok <- validate_inter_agent_payload(payload) do
-      case payload["turn_number"] do
-        n when is_integer(n) and n > 0 -> :ok
-        _ -> {:error, "invalid value: payload.turn_number"}
+      cond do
+        not (is_integer(payload["turn_number"]) and payload["turn_number"] > 0) ->
+          {:error, "invalid value: payload.turn_number"}
+
+        Map.has_key?(payload, "new_conversation") and
+            not is_boolean(payload["new_conversation"]) ->
+          {:error, "invalid value: payload.new_conversation"}
+
+        true ->
+          :ok
       end
     end
   end
@@ -1500,6 +1622,20 @@ defmodule KaoiroServerWeb.WrapperChannel do
     body = payload["body"] || ""
     turn_number = payload["turn_number"]
     done? = get_in(payload, ["meta", "done"]) == true
+    # issue #262: true when the SENDING wrapper's own conversation_id was
+    # omitted by its caller and freshly allocated (see record_message/8) —
+    # OR the field is simply absent, which this branch treats as a pre-#262
+    # wrapper rather than a validation failure (review, クロエ M1). Only an
+    # EXPLICIT `false` narrows this to "confirm the id already exists";
+    # `validate_live_inter_agent_payload/1` already rejects a
+    # present-but-non-boolean value, so the only two shapes reaching here
+    # are absent, `true`, or `false`.
+    new_conversation? =
+      case payload do
+        %{"new_conversation" => false} -> false
+        %{"new_conversation" => true} -> true
+        _ -> warn_legacy_new_conversation_absent()
+      end
 
     cond do
       to == from ->
@@ -1509,7 +1645,15 @@ defmodule KaoiroServerWeb.WrapperChannel do
         {:error, :unknown_agent}
 
       true ->
-        case ConversationStates.record_message(cid, from, to, body, turn_number, done?) do
+        case ConversationStates.record_message(
+               cid,
+               from,
+               to,
+               body,
+               turn_number,
+               done?,
+               new_conversation?
+             ) do
           # Within limits. `:both_done` means every participating agent has
           # now signalled done; the tracker has already closed the entry
           # into a tombstone atomically (issue #177; spec MUST: 両
@@ -1520,11 +1664,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
           {:exceeded, reason} ->
             {:ok, {:accept, to, {cid, from, to, reason}}}
 
-          # Cross-conversation pollution attempt or global cap reached:
-          # reject the envelope at the routing boundary so a third party
-          # cannot wipe the legitimate participants' counters by reusing
-          # their conversation_id, and so a malicious flood of fresh cids
-          # cannot grow the tracker without bound.
+          # Cross-conversation pollution attempt, global cap reached, or an
+          # explicitly-named conversation_id with no entry at all (issue
+          # #262): reject the envelope at the routing boundary so a third
+          # party cannot wipe the legitimate participants' counters by
+          # reusing their conversation_id, a malicious flood of fresh cids
+          # cannot grow the tracker without bound, and a mistyped id does
+          # not silently open a fresh, context-less thread.
           {:error, reason} ->
             {:error, reason}
         end
@@ -1532,6 +1678,24 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp preflight_inter_agent(_envelope, _from), do: {:ok, :not_inter_agent}
+
+  # Mirrors warn_relayed_version/3 in agents_channel.ex (ADR-0015 best-effort
+  # accept) for the same shape of client/server skew: a wrapper that predates
+  # issue #262 never learned to send `new_conversation`, and the Phoenix
+  # client owns reconnect/heartbeat (wrapper/core/src/transport.ts), so such
+  # a wrapper survives a server redeploy without restarting and keeps
+  # pushing without the field. Not a hard limit on how long this is
+  # honoured -- once every connected wrapper is confirmed to be issue-#262-
+  # or-later, `validate_live_inter_agent_payload/1` can go back to requiring
+  # the key (see protocol-inter-agent.md).
+  defp warn_legacy_new_conversation_absent do
+    Logger.warning(
+      "inter_agent_message: client declared new_conversation (absent); " <>
+        "accepting as true (issue #262 legacy best-effort accept)"
+    )
+
+    true
+  end
 
   defp push_to_wrapper(to, envelope) do
     KaoiroServerWeb.Endpoint.broadcast("wrapper:#{to}", "envelope", envelope)

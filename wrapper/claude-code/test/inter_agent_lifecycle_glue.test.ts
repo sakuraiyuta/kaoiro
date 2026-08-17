@@ -18,6 +18,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   InterAgentTool,
+  createDeliveryAcknowledgementWiring,
   MAX_COALESCED_MESSAGES,
   classifyInterAgentError,
 } from "@kaoiro/agent-common";
@@ -66,6 +67,7 @@ function inboundEnvelope(
   conversationId: string,
   turnNumber: number,
   done = false,
+  deliverySeq?: number,
 ): Envelope {
   return {
     version: "0",
@@ -85,7 +87,8 @@ function inboundEnvelope(
       owner: { kind: "user", id: "operator" },
     },
     ext: {},
-  };
+    ...(deliverySeq === undefined ? {} : { delivery_seq: deliverySeq }),
+  } as Envelope;
 }
 
 /** Calls the production Claude inbound handler. The test controls only its
@@ -292,6 +295,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     const sent: Envelope[] = [];
     const injected = vi.fn();
     const logs: string[] = [];
+    const acknowledgeDelivery = vi.fn();
     await handleInterAgentMessage(
       {
         interAgent: {
@@ -304,6 +308,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
         ingress: new InterAgentIngressGate(),
         recordInboundIa: () => {},
         send: (notice) => sent.push(notice),
+        acknowledgeDelivery,
         inject: injected,
         log: (line) => logs.push(line),
       },
@@ -312,12 +317,14 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
 
     expect(injected).not.toHaveBeenCalled();
     expect(sent).toEqual([]);
+    expect(acknowledgeDelivery).toHaveBeenCalledWith(expect.any(Object));
     expect(logs).toEqual(["  inter_agent_message reply consumed: peer.agent\n"]);
   });
 
   it("issue #226: production handler は terminal inbound を明示して注入しない", async () => {
     const injected = vi.fn();
     const logs: string[] = [];
+    const acknowledgeDelivery = vi.fn();
     await handleInterAgentMessage(
       {
         interAgent: {
@@ -330,6 +337,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
         ingress: new InterAgentIngressGate(),
         recordInboundIa: () => {},
         send: () => {},
+        acknowledgeDelivery,
         inject: injected,
         log: (line) => logs.push(line),
       },
@@ -337,6 +345,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     );
 
     expect(injected).not.toHaveBeenCalled();
+    expect(acknowledgeDelivery).toHaveBeenCalledWith(expect.any(Object));
     expect(logs).toEqual(["  inter_agent_message terminal, no reply owed: peer.agent\n"]);
   });
 
@@ -351,6 +360,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     const recordInboundIa = vi.fn();
     const send = vi.fn();
     const inject = vi.fn();
+    const acknowledgeDelivery = vi.fn();
     const logs: string[] = [];
     const finish = vi.spyOn(ingress, "finish");
 
@@ -360,6 +370,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
         ingress,
         recordInboundIa,
         send,
+        acknowledgeDelivery,
         inject,
         log: (line) => logs.push(line),
       },
@@ -370,6 +381,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     expect(receiveInbound).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
     expect(inject).not.toHaveBeenCalled();
+    expect(acknowledgeDelivery).toHaveBeenCalledWith(expect.any(Object));
     expect(logs).toEqual([
       "  inter_agent_message terminal ingress skipped before receive: peer.agent\n",
     ]);
@@ -440,6 +452,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
    *  pushed by `receive()` below. Both kinds share this one array because
    *  production sends both through the SAME `link?.send()` sink. */
   const notices: Envelope[] = [];
+  const deliveryAcks: number[] = [];
   let host!: AgentHost;
   let tokenSequence = 0;
   let watchdogFailStopped = false;
@@ -460,6 +473,11 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
       );
     },
   });
+  const deliveryAcknowledgementWiring = createDeliveryAcknowledgementWiring(
+    (seq) => deliveryAcks.push(seq),
+    coordinator,
+  );
+  deliveryAcknowledgementWiring.onInterAgentDeliveryStatus({ acked_seq: 0 });
 
   async function receive(envelope: Envelope): Promise<void> {
     await handleInterAgentMessage(
@@ -468,11 +486,16 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
         ingress: ingressGate,
         recordInboundIa: () => {},
         send: (notice) => notices.push(notice),
+        acknowledgeDelivery: deliveryAcknowledgementWiring.acknowledgeDelivery,
         inject: (inbound, mode) => coordinator.receive(inbound, mode),
         log: (line) => terminalIngressSkips.push(line),
       },
       envelope,
     );
+  }
+
+  function onTurnStart(turnToken: string): void {
+    deliveryAcknowledgementWiring.onTurnStart(turnToken);
   }
 
   function onTurnEnd(
@@ -529,6 +552,8 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     onHostEnd,
     sentBatches,
     notices,
+    deliveryAcks,
+    onTurnStart,
     get sessionResetCalls(): number {
       return sessionResetCalls;
     },
@@ -563,6 +588,27 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
       { peer: "peer.agent", cids: ["cnv-solo"] },
     ]);
 
+    releaseNext();
+  });
+
+  it("issue #247: inject は coordinator 受理時でなく実 SDK turn start で ack する", async () => {
+    const { queryFn, releaseNext } = makeControllableQueryFn();
+    const tool = new InterAgentTool({ config, getState: () => "idle", send: () => {} });
+    const harness = makeCoalescingHarness(tool);
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnStart: ({ turnToken }) => harness.onTurnStart(turnToken),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.error),
+      queryFn,
+      now: () => "T",
+    });
+    harness.bindHost(host);
+
+    await harness.receive(inboundEnvelope("cnv-delivery-start", 1, false, 1));
+    expect(harness.deliveryAcks).toEqual([]);
+
+    void host.run();
+    await vi.waitFor(() => expect(harness.deliveryAcks).toEqual([1]));
     releaseNext();
   });
 
@@ -671,7 +717,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
       done: true,
     });
     await Promise.resolve();
-    const receiving = harness.receive(inboundEnvelope("cid-ingress-gate", 1));
+    const receiving = harness.receive(inboundEnvelope("cid-ingress-gate", 1, false, 1));
     // Production transport deliberately drops this Promise. Observe its
     // outcome without awaiting it, so a coordinator-closed exception would
     // surface as the unhandled-rejection failure this regression prevents.
@@ -704,6 +750,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     expect(harness.terminalIngressSkips).toEqual([
       "  inter_agent_message terminal ingress skipped after receive: peer.agent\n",
     ]);
+    expect(harness.deliveryAcks).toEqual([1]);
   });
 
   it("turn が in-flight な間に同一peerから連続到着したメッセージは次の turn へ合流する", async () => {

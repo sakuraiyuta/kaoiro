@@ -42,6 +42,12 @@ export const MAX_RESTARTS = 5;
  *  crash-loop but not a few crashes spread across a long-running agent (#73). */
 export const RESTART_WINDOW_MS = 60_000;
 
+/** A reset must not wait forever for the wrapper it is replacing. Give the
+ *  wrapper one normal-termination grace period before escalating to SIGKILL;
+ *  a second missed exit is reported as a reset failure rather than silently
+ *  leaving the old process and a pending server lock behind (#258). */
+export const RESET_TERMINATION_GRACE_MS = 5_000;
+
 /** agent_id rides a temp config filename and the spawn_result, so its charset
  *  is restricted exactly like the server's AgentId guard (no path separators). */
 const AGENT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -49,7 +55,10 @@ const AGENT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 /** The minimal child handle the supervisor needs; ChildProcess satisfies it. */
 export interface ManagedChild {
   on(event: "exit", listener: () => void): void;
-  kill(): void;
+  /** Mirrors ChildProcess.kill: false means there was no live child to
+   *  signal. The supervisor uses that outcome instead of waiting forever for
+   *  an exit event that will never arrive. */
+  kill(signal?: NodeJS.Signals): boolean;
 }
 
 /** Launches one wrapper child. resumeSessionId, when set, continues an existing
@@ -164,6 +173,8 @@ export interface SupervisorOptions {
   /** Clock in ms for the restart window; injectable for tests. Defaults to
    *  Date.now. */
   now?: () => number;
+  /** Grace before escalating a reset's old wrapper from SIGTERM to SIGKILL. */
+  resetTerminationGraceMs?: number;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -447,6 +458,11 @@ interface PendingReset {
    *  `#activeSessions` forever, blocking any future spawn / switch onto
    *  it (F4 same-session lock never released — review finding). */
   oldResumeSessionId?: string;
+  /** The still-running old wrapper owns this launch configuration until it
+   *  actually exits. Restore it if both termination signals time out: a later
+   *  ordinary crash must resume the old session, not inherit the attempted
+   *  fresh-reset configuration (#258). */
+  previousParsed: ParsedSpawn;
 }
 
 interface ChildEntry {
@@ -461,6 +477,11 @@ interface ChildEntry {
   /** Session-reset in flight (phase-17 17-5). When set, `#onExit` routes
    *  into `#relaunchForReset` instead of the ordinary restart path. */
   pendingReset?: PendingReset;
+  /** One reset-specific termination timer at a time. It is cancelled on the
+   *  real exit path before the fresh relaunch takes ownership of this entry. */
+  resetTerminationTimer?: ReturnType<typeof setTimeout>;
+  /** SIGTERM has already been escalated to SIGKILL for this reset. */
+  resetTerminationEscalated?: boolean;
 }
 
 /** Fields the runner's config watcher can hot-swap while the supervisor
@@ -501,6 +522,7 @@ export class Supervisor {
     engine: EngineKind,
   ) => MaybePromise<boolean>;
   readonly #now: () => number;
+  readonly #resetTerminationGraceMs: number;
   #wrapperServerUrl: string;
   #codexAuthMode: CodexAuthMode | undefined;
   #codexChatgptPlan: ChatGptPlan | undefined;
@@ -534,6 +556,8 @@ export class Supervisor {
     this.#listSessions = options.listSessions ?? defaultListSessions;
     this.#sessionExists = options.sessionExists ?? defaultSessionExists;
     this.#now = options.now ?? (() => Date.now());
+    this.#resetTerminationGraceMs =
+      options.resetTerminationGraceMs ?? RESET_TERMINATION_GRACE_MS;
     this.#wrapperServerUrl = options.wrapperServerUrl;
     this.#codexAuthMode = options.codexAuthMode;
     this.#codexChatgptPlan = options.codexChatgptPlan;
@@ -868,7 +892,8 @@ export class Supervisor {
     // #relaunchForReset releases it on success and #rollback transfers
     // it to rollbackSid if the two differ (mirrors handleSwitchSession
     // add/delete lock transfer, which the reset diff must not break).
-    const oldResumeSessionId = entry.parsed.resumeSessionId;
+    const previousParsed = entry.parsed;
+    const oldResumeSessionId = previousParsed.resumeSessionId;
     // Stash the pending reset BEFORE mutating entry.parsed, so a
     // rollback triggered by an early kill/exit still has the id.
     entry.pendingReset = {
@@ -876,6 +901,7 @@ export class Supervisor {
       mode: mode as SessionResetMode,
       ...(previousSessionId !== undefined ? { previousSessionId } : {}),
       ...(oldResumeSessionId !== undefined ? { oldResumeSessionId } : {}),
+      previousParsed,
     };
     // ADR-0014 F1 追補 (phase-22 藤 D1/D2/R2): reset_session carries the
     // current SessionPointers snapshot from the server. Validate + apply
@@ -937,7 +963,8 @@ export class Supervisor {
     entry.restarting = true;
     entry.restarts = 0;
     entry.windowStart = this.#now();
-    entry.child.kill();
+    entry.resetTerminationEscalated = false;
+    this.#terminateForReset(agentId, entry, "SIGTERM");
   }
 
   /** Handles a server `enumerate_sessions`: lists resume candidates under cwd
@@ -1114,9 +1141,91 @@ export class Supervisor {
     child.on("exit", () => this.#onExit(agentId));
   }
 
+  /** Drives the old reset target to a definitive outcome. The old process is
+   *  never replaced until its own exit callback runs: spawning a fresh wrapper
+   *  while the old one is still connected would create two owners for one
+   *  agent. A child that reports `kill() === false` is already gone, so its
+   *  missing exit is advanced through the normal exit branch on a microtask. */
+  #terminateForReset(
+    agentId: string,
+    entry: ChildEntry,
+    signal: NodeJS.Signals,
+  ): void {
+    const signalled = entry.child.kill(signal);
+    if (!signalled) {
+      queueMicrotask(() => {
+        if (
+          this.#children.get(agentId) === entry &&
+          entry.pendingReset !== undefined
+        ) {
+          this.#onExit(agentId);
+        }
+      });
+      return;
+    }
+    // ChildProcess emits exit asynchronously, but test doubles and alternate
+    // launchers may synchronously invoke the listener from kill(). Do not arm
+    // a stale timer after that listener already relaunches the entry.
+    if (
+      this.#children.get(agentId) !== entry ||
+      entry.pendingReset === undefined
+    ) {
+      return;
+    }
+    entry.resetTerminationTimer = setTimeout(() => {
+      delete entry.resetTerminationTimer;
+      if (
+        this.#children.get(agentId) !== entry ||
+        entry.pendingReset === undefined
+      ) {
+        return;
+      }
+      if (!entry.resetTerminationEscalated) {
+        entry.resetTerminationEscalated = true;
+        this.#terminateForReset(agentId, entry, "SIGKILL");
+        return;
+      }
+      this.#failResetTermination(agentId, entry);
+    }, this.#resetTerminationGraceMs);
+  }
+
+  #clearResetTerminationTimer(entry: ChildEntry): void {
+    if (entry.resetTerminationTimer !== undefined) {
+      clearTimeout(entry.resetTerminationTimer);
+      delete entry.resetTerminationTimer;
+    }
+    delete entry.resetTerminationEscalated;
+  }
+
+  /** Both SIGTERM and SIGKILL were acknowledged but no exit arrived. Keep the
+   *  child mapped (it may still exit later) and restore its old launch state;
+   *  reporting `timeout` unlocks the server transaction and reaches the
+   *  requesting wrapper, instead of making a non-reset look successful. */
+  #failResetTermination(agentId: string, entry: ChildEntry): void {
+    const pending = entry.pendingReset;
+    if (pending === undefined) return;
+    process.stderr.write(
+      `runner: reset termination timed out for ${agentId}; old wrapper remains supervised\n`,
+    );
+    entry.parsed = pending.previousParsed;
+    entry.restarting = false;
+    delete entry.pendingReset;
+    this.#sendResetResult({
+      version: "0",
+      host_id: this.#hostId,
+      agent_id: agentId,
+      mode: pending.mode,
+      request_id: pending.requestId,
+      ok: false,
+      reason: "timeout",
+    });
+  }
+
   #onExit(agentId: string): void {
     const entry = this.#children.get(agentId);
     if (entry === undefined) return;
+
+    this.#clearResetTerminationTimer(entry);
 
     if (entry.stopping) {
       this.#remove(agentId, entry);
@@ -1160,6 +1269,7 @@ export class Supervisor {
   /** Drops an entry and releases its resume lock; the lock is held across
    *  restarts and freed only when the agent is finally gone. */
   #remove(agentId: string, entry: ChildEntry): void {
+    this.#clearResetTerminationTimer(entry);
     this.#pendingSwitches.delete(agentId);
     this.#children.delete(agentId);
     const resume = entry.parsed.resumeSessionId;

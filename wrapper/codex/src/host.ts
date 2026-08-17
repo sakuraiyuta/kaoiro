@@ -193,6 +193,9 @@ export interface CodexHostOptions {
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
   }) => void;
+  /** The exact boundary at which an already-queued input begins an SDK turn.
+   * Queue insertion intentionally does not count as dispatch (#247). */
+  onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
   /** Server-composed personality + common footer (ADR-0029 F5), injected as
    *  a developer-role message via config.developer_instructions (ADR-0032
    *  F3, verified 2026-07-10). */
@@ -549,6 +552,17 @@ export class CodexHost implements EngineAdapter {
     };
     out.cwd = this.#cwd;
     if (this.#sessionId !== null) out.session_id = this.#sessionId;
+    // issue #254: the agent's own rate limits, read from the SAME map that
+    // feeds ext.rate_limits, so the two agree at the moment this host stamps
+    // them. That is the whole claim — a peer's copy travels through the
+    // directory projection (core's projectRateLimits, which drops malformed
+    // windows and trims to a cap), so peer-visible values can still differ.
+    // An empty map omits the key, keeping absent = unknown rather than "no
+    // limit". list_agents excludes the caller, so this is the only place an
+    // agent can read its own utilisation.
+    if (this.#rateLimits.size > 0) {
+      out.rate_limits = Object.fromEntries(this.#rateLimits);
+    }
     return out;
   }
 
@@ -991,6 +1005,10 @@ export class CodexHost implements EngineAdapter {
               attempted.effortReset,
             ),
           );
+    // Creating/resuming the SDK thread is the last synchronous boundary
+    // before `runStreamed()` hands the input to Codex. Confirm #247 delivery
+    // here, never when its coordinator merely accepted the queue item.
+    this.#options.onTurnStart?.({ turnToken, conversationIds });
     this.#abort = new AbortController();
     let finalText: string | null = null;
     // A stream-level `error` is evidence, not a terminal boundary. Some SDK

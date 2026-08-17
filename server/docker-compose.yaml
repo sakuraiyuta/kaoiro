@@ -66,6 +66,10 @@ services:
       KAOIRO_CLEAR_WATERMARKS_PATH: /var/lib/kaoiro/clear_watermarks.dets
       KAOIRO_SESSION_STARTS_PATH: /var/lib/kaoiro/session_starts.dets
       KAOIRO_INGRESS_ORDER_PATH: /var/lib/kaoiro/ingress_order.dets
+      # Recipient-local dispatch-confirmation ledger (issue #247). This is
+      # diagnostic state, but must survive a container recreate so a pending
+      # gap remains observable until the recipient process re-joins.
+      KAOIRO_DELIVERY_STATES_PATH: /var/lib/kaoiro/delivery_states.dets
       # User identity ledger (issue #197, ADR-0050 D1). Same rationale as
       # the agent identity ledger above: unset falls back to a tmp path
       # that survives a process restart but NOT a fresh container. A lost
