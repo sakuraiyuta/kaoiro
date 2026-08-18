@@ -238,19 +238,20 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @doc """
-  Atomically marks planned-transition `required_targets` and claims up to
-  `limit` additional ordinary targets.
+  Atomically marks planned-transition `required_targets` as having received a
+  terminal unreachable notice.
 
   The required targets are delivered by the caller even when an older
   ordinary disconnect already set their `notified_unreachable` mark, or when
   a preflight bounce happened before the conversation entry existed. This
-  call only owns ConversationStates' mark update and the additional ordinary
-  claim; it deliberately leaves `claim_unreachable_targets/3` unchanged for
-  unexpected disconnects.
+  call only owns ConversationStates' mark update; it deliberately neither
+  claims nor returns additional targets, so the planned intent remains the
+  sole bounded delivery set and `claim_unreachable_targets/3` stays unchanged
+  for unexpected disconnects.
   """
-  def claim_terminal_targets(agent_id, required_targets, limit, server \\ __MODULE__)
+  def mark_terminal_targets(agent_id, required_targets, server \\ __MODULE__)
       when is_list(required_targets) do
-    GenServer.call(server, {:claim_terminal, agent_id, required_targets, limit})
+    GenServer.call(server, {:mark_terminal, agent_id, required_targets})
   end
 
   @doc """
@@ -419,21 +420,12 @@ defmodule KaoiroServer.ConversationStates do
     {:reply, {claimed, length(unclaimed)}, %{state | conversations: conversations}}
   end
 
-  def handle_call({:claim_terminal, agent_id, required_targets, limit}, _from, state) do
+  def handle_call({:mark_terminal, agent_id, required_targets}, _from, state) do
     required_cids =
       for {cid, _peers} <- required_targets, is_binary(cid), into: MapSet.new(), do: cid
 
-    {claimed, unclaimed} =
-      state.conversations
-      |> unreachable_pending(agent_id)
-      |> Enum.reject(fn {cid, _peers} -> MapSet.member?(required_cids, cid) end)
-      |> Enum.split(limit)
-
-    marked_cids =
-      Enum.reduce(claimed, required_cids, fn {cid, _peers}, acc -> MapSet.put(acc, cid) end)
-
     conversations =
-      Enum.reduce(marked_cids, state.conversations, fn cid, acc ->
+      Enum.reduce(required_cids, state.conversations, fn cid, acc ->
         case Map.get(acc, cid) do
           %{status: :open, agents: agents} = entry ->
             if MapSet.member?(agents, agent_id) do
@@ -450,7 +442,7 @@ defmodule KaoiroServer.ConversationStates do
         end
       end)
 
-    {:reply, {claimed, length(unclaimed)}, %{state | conversations: conversations}}
+    {:reply, :ok, %{state | conversations: conversations}}
   end
 
   def handle_call({:unreachable_targets, agent_id, limit}, _from, state) do

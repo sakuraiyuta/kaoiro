@@ -596,7 +596,7 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert {[{"c1", ["b"]}], 0} = ConversationStates.unreachable_targets("a", 50, name)
   end
 
-  test "claim_terminal_targets は required を既通知でも再武装せず採用し additional だけを claim する (#266)" do
+  test "mark_terminal_targets は required だけを mark し additional を消費しない (#266)" do
     name = start_tracker(:cs_planned_terminal_targets)
 
     assert :ok =
@@ -626,11 +626,13 @@ defmodule KaoiroServer.ConversationStatesTest do
       {"bounce-only", ["d"]}
     ]
 
-    assert {[{"additional", ["c"]}], 0} =
-             ConversationStates.claim_terminal_targets("a", required, 50, name)
+    assert :ok = ConversationStates.mark_terminal_targets("a", required, name)
 
-    # required の既存 entry と additional は同じ atomic call で mark 済み。
-    # ConversationStates に存在しない bounce-only target は state を作らない。
+    # required の既存 entry だけが mark 済み。additional は planned intent の
+    # bounded union に無いため消費せず、次の ordinary disconnect に残す。
+    assert {[{"additional", ["c"]}], 0} =
+             ConversationStates.claim_unreachable_targets("a", 50, name)
+
     assert {[], 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
     assert ConversationStates.get("bounce-only", name) == nil
   end

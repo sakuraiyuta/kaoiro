@@ -844,7 +844,7 @@ narrow はどちらも区別せず `users: []` に正規化する — 消費側
 
 | event (方向) | 形 | server の振る舞い |
 |---|---|---|
-| `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | 因果順を固定([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate / preflight** — participant / ハード制限、planned intent (`peer_reconnecting`)、および conversation quota の検査。quota は `ConversationStates.record_message/5` が検査と turn/token/wallclock 更新を単一呼び出しで atomic に行うため、**counter 更新もこの段で走る**(分割すると検査と更新の間に TOCTOU が開く。実装時確定、2026-08-08)。**reject が確定し得る検査はすべてここまでで終える**。`peer_reconnecting` は ConversationStates / pane / delivery ledger の全てより前に返す、(2) **ingress stamp 採番**(ingress-order domain、globally unique。wire 形は整数 2 要素配列 `[us, seq]`)、(3) per-pane projection へ sender pane + receiver pane を同一 stamp で upsert(identity = `ingress_stamp\|pane_agent_id`)、(4) `payload.to` の `wrapper:<to>` channel に **stamp を載せた envelope** を push + `agents:lobby` broadcast(operator 限定)、(5) push の **acceptance ack reply として `{ingress_stamp}`** を送信元 wrapper に返す(送信側 sidecar 記録のトリガ)。upsert 後に行う routing は peer push のみで、reject 済み IA が pane に残らないこと |
+| `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | 因果順を固定([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate / preflight** — participant / ハード制限、planned intent (`peer_reconnecting` / `peer_reconnecting_capacity`)、および conversation quota の検査。quota は `ConversationStates.record_message/5` が検査と turn/token/wallclock 更新を単一呼び出しで atomic に行うため、**counter 更新もこの段で走る**(分割すると検査と更新の間に TOCTOU が開く。実装時確定、2026-08-08)。**reject が確定し得る検査はすべてここまでで終える**。planned reject は ConversationStates / pane / delivery ledger の全てより前に返す、(2) **ingress stamp 採番**(ingress-order domain、globally unique。wire 形は整数 2 要素配列 `[us, seq]`)、(3) per-pane projection へ sender pane + receiver pane を同一 stamp で upsert(identity = `ingress_stamp\|pane_agent_id`)、(4) `payload.to` の `wrapper:<to>` channel に **stamp を載せた envelope** を push + `agents:lobby` broadcast(operator 限定)、(5) push の **acceptance ack reply として `{ingress_stamp}`** を送信元 wrapper に返す(送信側 sidecar 記録のトリガ)。upsert 後に行う routing は peer push のみで、reject 済み IA が pane に残らないこと |
 | `envelope` 合成 (S→W) | ハード制限超過時 | 両 wrapper の `wrapper:<id>` + `agents:lobby` へ push |
 | `envelope` 合成 (S→W) | wrapper 切断 / matching 復帰時 | 当該 wrapper が参加中の各 conversation の他参加者へ、planned 切断なら `kind=inform` + `error.code=reconnecting`、予告なし切断なら `error.code=disconnected`、exact-token 復帰なら error なしの `kind=inform` (`reconnected`) を push(「応答不能エラーの通知」節) |
 | `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...], users: [...]}}` 返却で受け取る。`agents` の field と省略規則は上記「peer directory の情報境界」、`users` は「users 開示 field 一覧」(issue #197 段階2)。list_agents 用 (後述) |
@@ -854,10 +854,13 @@ stale turn / closed な conversation / 明示指定の未知 conversation_id
 への送信時のエラー(`unknown_agent` / `self_routing` /
 `participants_mismatch` / `invalid value: payload.turn_number` /
 `stale_turn` / `conversation_closed`(後 3 者は issue #177)/
-`unknown_conversation_id`(issue #262) / `peer_reconnecting`(issue #266))は
-`envelope` の reply で返す。`peer_reconnecting` だけは wrapper が
+`unknown_conversation_id`(issue #262) / `peer_reconnecting` /
+`peer_reconnecting_capacity`(issue #266))は `envelope` の reply で返す。
+`peer_reconnecting` だけは wrapper が
 structured `peer_error.code=reconnecting` へ正規化し、一般の tool error と
-機械的に区別する。
+機械的に区別する。`peer_reconnecting_capacity` は message が未受理で close
+notice も予約されていない terminal tool error とし、同じ conversation_id で
+時間を置いて再送するよう固定文で案内する。
 
 ### 承認フロー(permission_broker 統合)
 
@@ -1137,8 +1140,10 @@ peer の LLM コンテキストへ露出させない。秘匿情報マスクの 
 - 合成 envelope の `agent_id` は `"server"`、`turn_number` は 0、`owner`
   は `{kind: "user", id: "system"}`。ハード制限超過時の合成 envelope と
   同形(recipient ごとに `payload.to` をその受信者にする)
-- 宛先は当該 wrapper が参加中の各 conversation の **他参加者全員**
-  (Phase 1 は `max_concurrent_agents` = 2 なので実質は送信元のみ)
+- 候補宛先は当該 wrapper が参加中の各 conversation の **他参加者全員**。
+  planned cycle では後述の target-pair cap までを採用する
+  (Phase 1 は `max_concurrent_agents` = 2 なので 1 conversation あたり実質は
+  送信元 1 件)
 - `wrapper:<recipient>` と `agents:lobby` の双方へ push する(合成
   escalate と同じ観測経路)
 - 合成 notice は turn / token カウントに **加算しない**。server 由来の
@@ -1157,12 +1162,17 @@ peer の LLM コンテキストへ露出させない。秘匿情報マスクの 
   read-only snapshot して `reconnecting` を配る。intent はこの snapshot と、
   planned window 中に `peer_reconnecting` で bounce した
   `{conversation_id, sender}` の deduplicated union を通知先 SoT として持つ。
+  cap の単位は実際の synth envelope 1 件に対応する `{conversation_id, peer}`
+  pair で、union 全体を 50 件に制限する。tracked bounce を優先し、snapshot は
+  残り slot だけを埋める。採用しなかった snapshot pair は件数と対象を warning
+  log に残す。
   通常の unreachable
   通知済み mark は参照も消費もしない(過去に terminal 通知済みの
   peer も、後続の `reconnected` を受ける必要があるため)。これにより、
   復帰後に一度も IA
   を交わさず再度異常切断した場合も `disconnected` を通知できる
-- 後続 join が同じ non-empty `transition_id` を提示したときだけ
+- phase が `announced` / `disconnected` のどちらでも、後続 join が同じ
+  non-empty `transition_id` を提示したときだけ
   intent を閉じ、target union 全体へ通常の
   `kind=inform` (`payload.error` なし、protocol outcome は `reconnected`)を
   配る。固定本文は物理的な再接続を断定せず「peer は到達可能、必要なら
@@ -1185,14 +1195,16 @@ peer の LLM コンテキストへ露出させない。秘匿情報マスクの 
   bypass する。entry は切断で消えず turn/token にも加算しないため、ordinary
   path にこの抑止がないと crash loop / フラッピングする wrapper が peer の
   ターンを消費し続ける
-- 1 回の切断で通知する conversation 数には上限を設ける(実装既定 50)。
+- ordinary disconnect は 1 回に通知する conversation 数、planned cycle は
+  target pair 数に上限を設ける(どちらも実装既定 50)。
   通知 1 件につき `wrapper:<peer>` と `agents:lobby` の 2 broadcast が
   走るため、多数の conversation を抱えた wrapper の切断が fan-out を
   増幅させないようにする。打ち切った分は warning ログに残す(黙って
   落とさない)。この値は `PlannedDisconnects.max_unreachable_notices/0` が
   単一ソースで、ordinary claim と planned snapshot が共有する。すでに
   `peer_reconnecting` を返した bounce target は close notice を保証するため、
-  snapshot cap で後から捨てない
+  snapshot cap で後から捨てない。planned terminal はこの bounded union だけを
+  mark / deliver し、追加の ordinary target を claim しない
 
 planned intent が active な宛先への新規 IA は、server の
 preflight で `peer_reconnecting` として reject する。この reject は
@@ -1200,6 +1212,11 @@ preflight で `peer_reconnecting` として reject する。この reject は
 active 判定と target union への追加は同じ `PlannedDisconnects.track_bounce`
 call で atomic に行う。close が先に勝って `:noop` なら通常 preflight を続け、
 target を記録できなかった message に `peer_reconnecting` を返さない。
+50 slot を使い切った後の未登録 pair は `peer_reconnecting_capacity` で reject
+し、state へ追加しない。この sender は `reconnecting` を受けず、後続 close
+notice を待つ契約も結ばない。未知 reason として受ける旧 wrapper も既存の
+generic `isError=true` reject へ縮退するため、誤って wait 契約を結ぶことは
+ない(新 wrapper の固定 retry guidance だけが欠ける)。
 wrapper は tool result を `{peer_error: {code: "reconnecting", message, from}}`
 に正規化し、送信先の `reconnected` notice まで再送も operator
 への escalate も行わない。planned window 外の瞬間的な delivery gap は

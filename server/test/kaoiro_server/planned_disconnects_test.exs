@@ -104,6 +104,84 @@ defmodule KaoiroServer.PlannedDisconnectsTest do
     refute PlannedDisconnects.active?("agent.restart", name)
   end
 
+  test "target admission caps synth-envelope pairs and preserves accepted close promises" do
+    provider = fn _agent_id, _limit ->
+      {[{"cid-overlap", ["peer.one"]}, {"cid-drop", ["peer.three"]}], 4}
+    end
+
+    name =
+      start_tracker(:pd_target_capacity,
+        target_provider: provider,
+        max_targets: 2
+      )
+
+    assert :ok = PlannedDisconnects.begin("agent.cap", "tr-cap", :restart, name)
+
+    assert {:tracked, %{targets: [{"cid-overlap", ["peer.one"]}]}} =
+             PlannedDisconnects.track_bounce(
+               "agent.cap",
+               "cid-overlap",
+               "peer.one",
+               name
+             )
+
+    # The same promise is idempotent and consumes no second slot.
+    assert {:tracked, %{targets: [{"cid-overlap", ["peer.one"]}]}} =
+             PlannedDisconnects.track_bounce(
+               "agent.cap",
+               "cid-overlap",
+               "peer.one",
+               name
+             )
+
+    # Same cid but a different peer means a distinct synth envelope.
+    assert {:tracked, %{targets: [{"cid-overlap", ["peer.one", "peer.two"]}]}} =
+             PlannedDisconnects.track_bounce(
+               "agent.cap",
+               "cid-overlap",
+               "peer.two",
+               name
+             )
+
+    assert {:capacity, %{targets: [{"cid-overlap", ["peer.one", "peer.two"]}]}} =
+             PlannedDisconnects.track_bounce(
+               "agent.cap",
+               "cid-overflow",
+               "peer.overflow",
+               name
+             )
+
+    assert {:planned,
+            %{
+              targets: [{"cid-overlap", ["peer.one", "peer.two"]}],
+              notice_targets: [],
+              dropped_targets: [{"cid-drop", ["peer.three"]}],
+              unclaimed: 4
+            }} = PlannedDisconnects.disconnect("agent.cap", name)
+  end
+
+  test "announced phase also accepts an exact non-empty join and consumes once" do
+    name = start_tracker(:pd_announced_join)
+    assert :ok = PlannedDisconnects.begin("agent.order", "tr-order", :restart, name)
+
+    assert {:tracked, _} =
+             PlannedDisconnects.track_bounce(
+               "agent.order",
+               "cid-order",
+               "peer.order",
+               name
+             )
+
+    assert :mismatch =
+             PlannedDisconnects.confirm_connection("agent.order", "stale-order", name)
+
+    assert {:reconnected, %{phase: :announced, targets: [{"cid-order", ["peer.order"]}]}} =
+             PlannedDisconnects.confirm_connection("agent.order", "tr-order", name)
+
+    refute PlannedDisconnects.active?("agent.order", name)
+    assert :noop = PlannedDisconnects.confirm_connection("agent.order", "tr-order", name)
+  end
+
   test "timeout consumes once and a matching join cancels its callback" do
     owner = self()
 

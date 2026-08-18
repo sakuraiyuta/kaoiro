@@ -316,16 +316,19 @@ server は operator / agent-self `session_reset`、live `resume_session`
 runner へ送る直前に in-memory `PlannedDisconnects` intent を確保する。
 形は agent ごとに 1 件の `{transition_id, kind, phase, timer,
 targets}` で、`targets` は disconnect 時 snapshot と planned window 中に
-`peer_reconnecting` で bounce した送信元の union を持つ。競合する lifecycle
-操作は `agent_busy` で拒否する。
+`peer_reconnecting` で bounce した送信元の union を持つ。1 target は synth
+envelope 1 件に対応する `{conversation_id, peer_id}` pair で、union 全体を 50
+件に制限する。競合する lifecycle 操作は `agent_busy` で拒否する。
 intent 確保から runner 送信までに失敗した reset は、matching
 `SessionResets` lock も無通知で cancel する。
 
 owner-checked wrapper terminate で phase を `announced → disconnected` に進め、
 その時点の open conversation peer を read-only snapshot して IA
-`error.code=reconnecting` を配る。後続 join の non-empty
-`transition_id` が exact match したときだけ intent を閉じ、同じ target
-union へ error なし `reconnected` inform を配る。本文は物理的な再接続を
+`error.code=reconnecting` を配る。tracked bounce を優先し、snapshot は残り
+slot だけを採用する。採用しなかった snapshot pair は件数と
+対象を warning log に残す。phase が `announced` / `disconnected` のどちらでも、
+後続 join の non-empty `transition_id` が exact match したときだけ intent を閉じ、
+同じ target union へ error なし `reconnected` inform を配る。本文は物理的な再接続を
 断定せず「peer は到達可能」とする。不一致 token は復帰と見なさない。
 intent の timeout / terminal failure は、AgentStates がまだ
 `disconnected` なら、過去の ordinary 通知済み mark にかかわらず target
@@ -340,9 +343,19 @@ planned intent が active な宛先への IA は、ConversationStates、pane、
 delivery ledger より前の preflight で `peer_reconnecting` として bounce
 する。active 判定と `{conversation_id, sender}` の target union への追加は
 同じ GenServer call で atomic に行い、target 記録前には bounce を返さない。
-wrapper 共通層はこれを structured
+既登録 pair は slot を再消費しない。50 slot 到達後の新規 pair は state を
+変えず `peer_reconnecting_capacity` で reject し、close notice を待つ契約を
+結ばない。wrapper はこれを `isError=true` の terminal tool failure として
+「message は未受理、当該 attempt に close notice は来ない、同じ
+conversation_id で時間を置いて再送」と固定案内する。
+wrapper 共通層は収容済み `peer_reconnecting` だけを structured
 `peer_error.code=reconnecting` に写し、operator へ escalate せず
 `reconnected` を待たせる。planned window 外の delivery gap は issue #267
+の範囲である。
+
+planned terminal は bounded target union だけを mark / deliver し、後から
+ordinary target を追加 claim しない。unexpected disconnect の ordinary claim
+は従来どおり 50 conversation cap であり、planned-window 外の競合は issue #267
 の範囲である。
 
 operator `stop` は planned cycle を開始せず、active intent にも

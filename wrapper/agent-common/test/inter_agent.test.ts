@@ -1690,6 +1690,8 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     expect(description).toContain("api_error = retry at most once");
     expect(description).toContain("reconnecting = planned restart in progress");
     expect(description).toContain("disconnected = the peer is unreachable");
+    expect(description).toContain("peer_reconnecting_capacity");
+    expect(description).toContain("no reconnected notice will follow");
   });
 });
 
@@ -1796,6 +1798,34 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
     expect(second.isError).toBeUndefined();
     expect((sent[0]!.payload as unknown as InterAgentMessagePayload).turn_number).toBe(1);
     expect((sent[1]!.payload as unknown as InterAgentMessagePayload).turn_number).toBe(1);
+  });
+
+  it("peer_reconnecting_capacity は待機契約を結ばない terminal tool error にする", async () => {
+    const { tool, sent } = makeAckTool({
+      kind: "rejected",
+      reason: "peer_reconnecting_capacity",
+    });
+
+    const result = await tool.invoke({
+      to: "peer.agent",
+      conversation_id: "cnv-capacity",
+      body: "hi",
+      kind: "inform",
+      wait_for_response: true,
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("peer_reconnecting_capacity");
+    expect(result.content[0]!.text).toContain("not accepted");
+    expect(result.content[0]!.text).toContain(
+      "no reconnected notice will follow",
+    );
+    expect(result.content[0]!.text).toContain(
+      "retry later with the same conversation_id",
+    );
+    expect(result.content[0]!.text).toContain("conversation_id=cnv-capacity");
+    expect(result.content[0]!.text).not.toContain("sent to ");
   });
 
   it("participants_mismatch などの他の reject も同じ経路で error になる", async () => {

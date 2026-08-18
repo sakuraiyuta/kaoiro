@@ -1365,8 +1365,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
     :ok
   end
 
-  defp reserve_lifecycle_intent(_payload, :stop), do: :ok
-
   defp reserve_lifecycle_intent(
          %{"agent_id" => agent_id},
          {:restart, transition_id}
@@ -1386,8 +1384,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
         :ok
     end
   end
-
-  defp reserve_lifecycle_intent(_payload, {:restart, _transition_id}), do: :ok
 
   defp fetch_lifecycle_agent_id(%{"agent_id" => agent_id}) when is_binary(agent_id) do
     if AgentId.valid?(agent_id), do: {:ok, agent_id}, else: {:error, :invalid_agent_id}

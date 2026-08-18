@@ -119,7 +119,7 @@ defmodule KaoiroServerWeb.PeerConnectivity do
   defp deliver_reconnecting(agent_id, intent, ts) do
     message = "peer #{agent_id} is temporarily unavailable: planned restart in progress"
 
-    for {cid, peers} <- Map.get(intent, :notice_targets, intent.targets), peer <- peers do
+    for {cid, peers} <- intent.notice_targets, peer <- peers do
       payload = %{
         "to" => peer,
         "conversation_id" => cid,
@@ -134,7 +134,7 @@ defmodule KaoiroServerWeb.PeerConnectivity do
       SynthEnvelope.deliver(peer, SynthEnvelope.build(payload, ts))
     end
 
-    warn_on_cap("planned reconnecting", agent_id, intent.unclaimed)
+    warn_on_snapshot_overflow(agent_id, intent.dropped_targets, intent.unclaimed)
     :ok
   end
 
@@ -161,7 +161,7 @@ defmodule KaoiroServerWeb.PeerConnectivity do
   defp deliver_disconnected(agent_id, ts, required_targets \\ []) do
     message = "peer #{agent_id} is unreachable: wrapper disconnected"
 
-    {additional_targets, unclaimed} =
+    {targets, unclaimed} =
       if required_targets == [] do
         # Preserve the ordinary unexpected-disconnect path exactly.
         ConversationStates.claim_unreachable_targets(
@@ -169,14 +169,9 @@ defmodule KaoiroServerWeb.PeerConnectivity do
           PlannedDisconnects.max_unreachable_notices()
         )
       else
-        ConversationStates.claim_terminal_targets(
-          agent_id,
-          required_targets,
-          PlannedDisconnects.max_unreachable_notices()
-        )
+        :ok = ConversationStates.mark_terminal_targets(agent_id, required_targets)
+        {required_targets, 0}
       end
-
-    targets = merge_targets(required_targets, additional_targets)
 
     for {cid, peers} <- targets, peer <- peers do
       payload = %{
@@ -206,6 +201,21 @@ defmodule KaoiroServerWeb.PeerConnectivity do
     )
   end
 
+  defp warn_on_snapshot_overflow(_agent_id, [], 0), do: :ok
+
+  defp warn_on_snapshot_overflow(agent_id, dropped_targets, provider_unclaimed) do
+    dropped_count =
+      Enum.reduce(dropped_targets, 0, fn {_conversation_id, peers}, count ->
+        count + length(peers)
+      end)
+
+    Logger.warning(
+      "planned reconnecting snapshot cap hit for #{agent_id}: " <>
+        "dropped_count=#{dropped_count} dropped_targets=#{inspect(dropped_targets)} " <>
+        "provider_unclaimed=#{provider_unclaimed}"
+    )
+  end
+
   defp normalize_reason(reason) when is_binary(reason) do
     case reason do
       "spawn_failed" -> :spawn_failed
@@ -214,17 +224,6 @@ defmodule KaoiroServerWeb.PeerConnectivity do
   end
 
   defp normalize_reason(reason), do: reason
-
-  defp merge_targets(left, right) do
-    (left ++ right)
-    |> Enum.reduce(%{}, fn {conversation_id, peers}, acc ->
-      Map.update(acc, conversation_id, MapSet.new(peers), &MapSet.union(&1, MapSet.new(peers)))
-    end)
-    |> Enum.map(fn {conversation_id, peers} ->
-      {conversation_id, peers |> MapSet.to_list() |> Enum.sort()}
-    end)
-    |> Enum.sort_by(&elem(&1, 0))
-  end
 
   defp now, do: DateTime.utc_now() |> DateTime.to_iso8601()
 end

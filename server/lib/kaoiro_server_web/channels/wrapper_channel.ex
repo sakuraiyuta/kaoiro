@@ -1669,6 +1669,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
           {:tracked, _intent} ->
             {:error, :peer_reconnecting}
 
+          {:capacity, _intent} ->
+            # No target slot means no later close notice can be promised.
+            # Keep this distinct from peer_reconnecting so the sender gets a
+            # terminal tool rejection rather than waiting for a notice that
+            # will deliberately never be emitted for this attempt.
+            {:error, :peer_reconnecting_capacity}
+
           :noop ->
             case ConversationStates.record_message(
                    cid,
