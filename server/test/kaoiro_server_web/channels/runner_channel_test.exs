@@ -643,6 +643,8 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       host_id = "lab-pc-reset-fail"
       agent_id = "lab-pc-reset-fail.a"
       request_id = acquire_reset_lock(agent_id, "sess-old-fail")
+      :ok = KaoiroServer.PlannedDisconnects.begin(agent_id, request_id, :reset)
+      {:planned, _} = KaoiroServer.PlannedDisconnects.disconnect(agent_id)
 
       @endpoint.subscribe("agents:lobby")
       socket = join_runner(host_id)
@@ -666,7 +668,39 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       }
 
       refute KaoiroServer.SessionResets.pending?(agent_id)
+      # spawn_failed means the rollback wrapper DID launch. The reset failure
+      # is terminal, but peer connectivity stays pending until that wrapper
+      # proves the same request_id on join (issue #258).
+      assert %{
+               transition_id: ^request_id,
+               kind: :reset,
+               phase: :disconnected
+             } = KaoiroServer.PlannedDisconnects.get(agent_id)
+
       _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "rollback_failed は matching planned intent を閉じる" do
+      host_id = "lab-pc-reset-rollback-fail"
+      agent_id = host_id <> ".a"
+      request_id = acquire_reset_lock(agent_id, "sess-old-fail")
+      :ok = KaoiroServer.PlannedDisconnects.begin(agent_id, request_id, :reset)
+      {:planned, _} = KaoiroServer.PlannedDisconnects.disconnect(agent_id)
+
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => agent_id,
+          "request_id" => request_id,
+          "mode" => "new",
+          "ok" => false,
+          "reason" => "rollback_failed"
+        })
+
+      assert_reply ref, :ok
+      _ = :sys.get_state(KaoiroServer.SessionResets)
+      refute KaoiroServer.PlannedDisconnects.active?(agent_id)
     end
 
     test "unknown vocab reason は invalid_reason" do

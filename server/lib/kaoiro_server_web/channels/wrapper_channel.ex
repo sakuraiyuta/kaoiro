@@ -8,7 +8,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
   Validation covers only the envelope v0 frame keys; per ADR-0010 the
   payload stays opaque to the server (agent-agnostic relay). Joins are
   gated by the per-agent_id token list (ADR-0011); on terminate the
-  server derives a `disconnected` envelope (specs/protocol.md). Server →
+  server derives a planned `reconnecting` or unexpected `disconnected`
+  envelope (specs/protocol.md). An exact-token join after a planned cycle
+  derives the ordinary `reconnected` inform. Server →
   wrapper pushes (`instruction` / `permission_decision`) arrive via
   Endpoint.broadcast on this topic and need no handler here.
   """
@@ -26,12 +28,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.IngressOrder
   alias KaoiroServer.PersonaAssets
+  alias KaoiroServer.PlannedDisconnects
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
   alias KaoiroServer.SessionStarts
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
   alias KaoiroServerWeb.AgentId
+  alias KaoiroServerWeb.PeerConnectivity
   alias KaoiroServerWeb.SynthEnvelope
 
   # Intercept the operator-initiated revoke broadcast (issue #72) so it
@@ -75,12 +79,6 @@ defmodule KaoiroServerWeb.WrapperChannel do
   @max_tasklist_items 50
   @max_tasklist_item_text_bytes 256
   @max_tasklist_items_json_bytes 16_384
-
-  # Upper bound on conversations notified in one disconnect (#131). Phase 1
-  # caps a conversation at 2 agents and a wrapper realistically holds a
-  # handful; the tracker's own cap is global (max_conversations), so without
-  # this a single wrapper's disconnect could fan out thousands of broadcasts.
-  @max_unreachable_notices 50
 
   # Bound on one `replay_ia` push (ADR-0051 D3-3). The final projection is
   # capped at 200 anyway (D6), so a larger batch could only ever be
@@ -231,6 +229,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       push_persona_sync(socket, agent_id)
       broadcast_delivery_status(agent_id)
+      _ = PeerConnectivity.confirm_connection(agent_id, transition_id)
 
       :ok
     end
@@ -585,7 +584,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
              Map.get(envelope, "session_id"),
              :agent_self,
              SessionResets
-           ) do
+           ),
+         :ok <- begin_planned_reset(agent_id, request_id) do
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",
         "session_reset_started",
@@ -1279,7 +1279,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
         # Only on an adopted disconnect: a stale terminate that lost the
         # entry to a reconnect must not tell peers the agent is gone.
-        broadcast_peer_unreachable(agent_id, ts)
+        _ = PeerConnectivity.disconnect(agent_id, ts)
 
       :noop ->
         :ok
@@ -1544,6 +1544,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp reset_request_reason(_reason), do: "unsupported_session_reset"
 
+  defp begin_planned_reset(agent_id, request_id) do
+    case PlannedDisconnects.begin(agent_id, request_id, :reset) do
+      :ok ->
+        :ok
+
+      {:error, :agent_busy} = error ->
+        # SessionResets allocates the request id and lock atomically with its
+        # state/cooldown checks, so the planned-intent CAS necessarily comes
+        # second. If another lifecycle command won that race, release exactly
+        # this unrelayed reset before returning the established lifecycle
+        # vocabulary to the requesting wrapper.
+        _ = SessionResets.cancel(agent_id, request_id)
+        error
+    end
+  end
+
   defp fetch_reset_envelope(agent_id) do
     case AgentStates.snapshot()[agent_id] do
       envelope when is_map(envelope) -> {:ok, envelope}
@@ -1644,6 +1660,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
       not AgentStates.known?(to) ->
         {:error, :unknown_agent}
 
+      PlannedDisconnects.active?(to) ->
+        {:error, :peer_reconnecting}
+
       true ->
         case ConversationStates.record_message(
                cid,
@@ -1724,61 +1743,6 @@ defmodule KaoiroServerWeb.WrapperChannel do
         "kind" => "escalate-to-user",
         "body" => "conversation auto-terminated: #{reason}",
         "meta" => %{"done" => true, "propose_next" => ""},
-        "owner" => %{"kind" => "user", "id" => "system"}
-      },
-      ts
-    )
-  end
-
-  # Tells the peers still in an open conversation with the leaving wrapper
-  # that this agent became unreachable, so the sender agent can tell a real
-  # failure from a plain reply_pending timeout (protocol-inter-agent
-  # 「応答不能エラーの通知」, issue #131). The notice is server-derived: it
-  # is NOT recorded against the conversation's turn/token budget, and the
-  # entry stays so a reconnecting wrapper can resume the same
-  # conversation_id (stale entries fall to the existing wallclock GC).
-  #
-  # The tracker hands out each conversation ONCE per disconnect and only
-  # re-arms it when the agent speaks there again, so a crash-looping
-  # wrapper cannot re-inject the same notice into its peers' turns every
-  # few seconds. `@max_unreachable_notices` additionally bounds the burst:
-  # every notice costs two Endpoint broadcasts (one of them fanned out to
-  # every dashboard), and a wrapper may hold far more open conversations
-  # than it has live peers.
-  defp broadcast_peer_unreachable(agent_id, ts) do
-    message = "peer #{agent_id} is unreachable: wrapper disconnected"
-
-    {targets, unclaimed} =
-      ConversationStates.claim_unreachable_targets(agent_id, @max_unreachable_notices)
-
-    for {cid, peers} <- targets, peer <- peers do
-      SynthEnvelope.deliver(peer, synth_unreachable_envelope(cid, peer, message, ts))
-    end
-
-    if unclaimed > 0 do
-      Logger.warning(
-        "disconnect notice cap hit for #{agent_id}: " <>
-          "#{unclaimed} conversation(s) left unnotified"
-      )
-    end
-
-    :ok
-  end
-
-  # kind stays within the 9-value enum ("inform"); `payload.error` is the
-  # discriminator and `body` repeats the reason for older receivers that
-  # do not read it. meta.done is false — whether to end the conversation is
-  # the receiving agent's call (spec Phase 1).
-  defp synth_unreachable_envelope(cid, recipient, message, ts) do
-    SynthEnvelope.build(
-      %{
-        "to" => recipient,
-        "conversation_id" => cid,
-        "turn_number" => 0,
-        "kind" => "inform",
-        "body" => message,
-        "error" => %{"code" => "disconnected", "message" => message},
-        "meta" => %{"done" => false, "propose_next" => ""},
         "owner" => %{"kind" => "user", "id" => "system"}
       },
       ts

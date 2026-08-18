@@ -2123,6 +2123,25 @@ describe("Supervisor — session transition 相関子 (#160)", () => {
     expect(h.configs[1]).toMatchObject({ transition_id: "tr-switch-1" });
   });
 
+  it("restart の relaunch は restart 自身の id に置き換える", () => {
+    const h = harness();
+    h.sup.handleSpawn({ ...spawnMsg, request_id: "tr-spawn-1" });
+    h.sup.handleRestart({
+      agent_id: spawnMsg.agent_id,
+      request_id: "tr-restart-1",
+    });
+    h.last().exit();
+    expect(h.configs[1]).toMatchObject({ transition_id: "tr-restart-1" });
+  });
+
+  it("legacy server の request_id なし restart は従来の config を変えない", () => {
+    const h = harness();
+    h.sup.handleSpawn({ ...spawnMsg, request_id: "tr-spawn-1" });
+    h.sup.handleRestart({ agent_id: spawnMsg.agent_id });
+    h.last().exit();
+    expect(h.configs[1]).toMatchObject({ transition_id: "tr-spawn-1" });
+  });
+
   it("legacy switch は前回 spawn の stale な id を持ち込まない", () => {
     const h = harness({ exists: true });
     h.sup.handleSpawn({

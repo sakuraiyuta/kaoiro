@@ -137,6 +137,8 @@ const ERROR_CODE_GUIDANCE: Readonly<Record<string, string>> = {
   api_error: "retry at most once",
   timeout: "the peer may still be mid-turn — wait before retrying",
   interrupted: "confirm the peer's state before retrying",
+  reconnecting:
+    "planned restart in progress — do not escalate; wait for the reconnected notice before retrying",
   disconnected: "the peer is unreachable — do not retry, escalate to the operator",
   stale_turn: "resend using a new conversation_id",
 };
@@ -202,6 +204,7 @@ const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
   api_error: "the peer reported an unspecified error",
   timeout: "the peer's turn timed out",
   interrupted: "the peer's turn was interrupted",
+  reconnecting: "the peer is temporarily unavailable for a planned restart",
   disconnected: "the peer disconnected",
   stale_turn:
     "the peer's local turn counter had already advanced past this message",
@@ -232,7 +235,8 @@ function messageForCode(code: string): string {
 
 /** Maps adapter-reported engine error info to the open error-code vocabulary
  *  (issue #131: rate_limit / context_overflow / api_error / timeout /
- *  interrupted / disconnected). Unrecognized input degrades to "api_error"
+ *  interrupted / reconnecting / disconnected). Unrecognized input degrades
+ *  to "api_error"
  *  per the design decision — "disconnected" is intentionally never produced
  *  here since only the server can observe a wrapper disconnect. The returned
  *  `message` is always one of the fixed ERROR_CODE_MESSAGE templates, never
@@ -696,6 +700,7 @@ export interface InterAgentToolOptions {
 type InvokeLockOutcome =
   | { kind: "local-reject"; message: string }
   | { kind: "rejected"; message: string }
+  | { kind: "peer-error"; result: InterAgentToolResult }
   | {
       kind: "dispatched";
       acceptance: InterAgentAcceptance;
@@ -1859,6 +1864,12 @@ export class InterAgentTool {
             // conversation because of this call: release the waiter
             // instead of parking the tool for the full reply timeout.
             this.#cancelReplyWait(conversationId);
+            if (acceptance.reason === "peer_reconnecting") {
+              return {
+                kind: "peer-error",
+                result: peerErrorResult(args.to, "reconnecting"),
+              };
+            }
             // issue #262: an actionable hint over the generic reason string —
             // this is the one reject the CALLER can usually fix by re-typing
             // the id or omitting it, not by waiting or escalating. Names the
@@ -1899,6 +1910,9 @@ export class InterAgentTool {
       },
     );
 
+    if (outcome.kind === "peer-error") {
+      return outcome.result;
+    }
     if (outcome.kind !== "dispatched") {
       return errorResult(outcome.message);
     }
@@ -2158,5 +2172,26 @@ function errorResult(text: string): InterAgentToolResult {
   return {
     content: [{ type: "text", text }],
     isError: true,
+  };
+}
+
+function peerErrorResult(from: string, code: string): InterAgentToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            peer_error: {
+              code,
+              message: messageForCode(code),
+              from,
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ],
   };
 }

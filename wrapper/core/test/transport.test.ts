@@ -1661,6 +1661,23 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
     });
   });
 
+  it("sendInterAgent は peer_reconnecting を sidecar に記録せず機械識別可能に返す", async () => {
+    const acks: unknown[] = [];
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      onInterAgentAck: () => acks.push("recorded"),
+    });
+
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("error")?.({ reason: "peer_reconnecting" });
+
+    await expect(pending).resolves.toEqual({
+      kind: "rejected",
+      reason: "peer_reconnecting",
+    });
+    expect(acks).toEqual([]);
+  });
+
   it("sendInterAgent は timeout を unknown として返す (配送されたかは不明)", async () => {
     const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
       personaId: "ao",

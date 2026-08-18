@@ -569,6 +569,33 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert [{"c1", ["a"]}, {"c2", ["c"]}] = Enum.sort(claimed)
   end
 
+  test "unreachable_targets は read-only で planned notice 後の terminal claim を汚さない (#266)" do
+    name = start_tracker(:cs_planned_targets)
+    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, false, true, name)
+    assert :ok = ConversationStates.record_message("c2", "a", "c", "y", 1, false, true, name)
+
+    assert {targets, 1} = ConversationStates.unreachable_targets("a", 1, name)
+    assert length(targets) == 1
+
+    # Read-only listing does not consume either the returned row or the capped
+    # remainder. A later terminal disconnect can still claim both.
+    assert {claimed, 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
+    assert Enum.sort(claimed) == [{"c1", ["b"]}, {"c2", ["c"]}]
+  end
+
+  test "unreachable_targets は過去の terminal 通知済み peer も planned 復帰対象に戻す (#266)" do
+    name = start_tracker(:cs_planned_after_terminal)
+    assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, false, true, name)
+
+    assert {[{"c1", ["b"]}], 0} =
+             ConversationStates.claim_unreachable_targets("a", 50, name)
+
+    # Ordinary crash suppression stays armed, while a later planned cycle
+    # can still announce both its downtime and its matching recovery.
+    assert {[], 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
+    assert {[{"c1", ["b"]}], 0} = ConversationStates.unreachable_targets("a", 50, name)
+  end
+
   test "閉じた conversation は claim 対象にならない (#131)" do
     name = start_tracker(:cs_participants_closed)
     assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)

@@ -12,6 +12,10 @@
 - operator 指示で wrapper を **spawn / stop / restart** する監督ループ(4-4b)、
   当該 cwd 配下の **session 列挙 + resume**(4-5、T3 実在検証 + F4 ローカルロック)、
   稼働中 agent の resume 先差し替え(`switch_session`)。
+- 予告済み wrapper cycle の相関(issue #266)。`restart` の
+  server-issued `request_id` を relaunch 後 wrapper config の
+  `transition_id` に置き換え、server が planned 復帰を exact match で
+  確定できるようにする。`request_id` 省略(旧 server) は従来動作。
 - spawn は dashboard からの案A 経路に対応([ADR-0024](../docs/adr/0024-agent-instance-identity-and-spawn-auth.md)):
   agent_id 採番・per-agent token 発行はサーバが行い、runner は `server_url` を
   自 config から補完する。

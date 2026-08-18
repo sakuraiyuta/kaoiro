@@ -237,6 +237,22 @@ defmodule KaoiroServer.ConversationStates do
     GenServer.call(server, {:claim_unreachable, agent_id, limit})
   end
 
+  @doc """
+  Lists every bounded open-conversation target without reading or setting
+  `notified_unreachable`.
+
+  Planned disconnects use this read-only snapshot for temporary
+  `reconnecting` / `reconnected` notices. A successful planned cycle must
+  not suppress the next real crash, and a planned timeout must still be able
+  to claim the terminal `disconnected` notice. A peer that received an older
+  terminal notice is still included: the matching `reconnected` notice is
+  what can make that prior outage obsolete even if no IA was exchanged in
+  between.
+  """
+  def unreachable_targets(agent_id, limit, server \\ __MODULE__) do
+    GenServer.call(server, {:unreachable_targets, agent_id, limit})
+  end
+
   @impl true
   def init({_name, clock, on_auto_closed}) do
     schedule_gc()
@@ -373,17 +389,7 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   def handle_call({:claim_unreachable, agent_id, limit}, _from, state) do
-    pending =
-      for {cid, entry} <- state.conversations,
-          # issue #177: a CLOSED tombstone has no `notified_unreachable` set
-          # (dropped at close) and is not active — exclude it before the
-          # field accesses below, and checked first so the comprehension's
-          # short-circuit protects them.
-          entry.status == :open,
-          MapSet.member?(entry.agents, agent_id),
-          not MapSet.member?(entry.notified_unreachable, agent_id) do
-        {cid, entry.agents |> MapSet.delete(agent_id) |> MapSet.to_list()}
-      end
+    pending = unreachable_pending(state.conversations, agent_id)
 
     {claimed, unclaimed} = Enum.split(pending, limit)
 
@@ -395,6 +401,15 @@ defmodule KaoiroServer.ConversationStates do
       end)
 
     {:reply, {claimed, length(unclaimed)}, %{state | conversations: conversations}}
+  end
+
+  def handle_call({:unreachable_targets, agent_id, limit}, _from, state) do
+    {targets, unclaimed} =
+      state.conversations
+      |> unreachable_pending(agent_id, true)
+      |> Enum.split(limit)
+
+    {:reply, {targets, length(unclaimed)}, state}
   end
 
   @impl true
@@ -532,6 +547,19 @@ defmodule KaoiroServer.ConversationStates do
 
   defp schedule_gc do
     Process.send_after(self(), :gc, @gc_interval_ms)
+  end
+
+  defp unreachable_pending(conversations, agent_id, include_notified? \\ false) do
+    for {cid, entry} <- conversations,
+        # issue #177: a CLOSED tombstone has no `notified_unreachable` set
+        # (dropped at close) and is not active — exclude it before the field
+        # accesses below, and checked first so the comprehension's
+        # short-circuit protects them.
+        entry.status == :open,
+        MapSet.member?(entry.agents, agent_id),
+        include_notified? or not MapSet.member?(entry.notified_unreachable, agent_id) do
+      {cid, entry.agents |> MapSet.delete(agent_id) |> MapSet.to_list()}
+    end
   end
 
   # Coarse token estimate — divide body bytes by 3 (protocol-inter-agent

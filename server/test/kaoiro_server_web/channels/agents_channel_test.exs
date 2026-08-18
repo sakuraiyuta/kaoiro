@@ -8,6 +8,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.HostRegistry
+  alias KaoiroServer.PlannedDisconnects
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
@@ -3480,6 +3481,34 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end
     end
 
+    test "live agent の restart は server-issued request_id を runner と planned intent に共有する" do
+      host_id = "lab-pc-restart-planned"
+      agent_id = host_id <> ".a"
+      register_host(host_id)
+      put_agent(agent_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "restart", %{"host_id" => host_id, "agent_id" => agent_id})
+      assert_reply ref, :ok
+      assert_broadcast "restart", %{"agent_id" => ^agent_id, "request_id" => request_id}
+      assert is_binary(request_id) and request_id != ""
+
+      assert %{
+               transition_id: ^request_id,
+               kind: :restart,
+               phase: :announced
+             } = PlannedDisconnects.get(agent_id)
+
+      duplicate = push(socket, "restart", %{"host_id" => host_id, "agent_id" => agent_id})
+      assert_reply duplicate, :error, %{reason: "agent_busy"}
+      refute_broadcast "restart", _
+
+      stop = push(socket, "stop", %{"host_id" => host_id, "agent_id" => agent_id})
+      assert_reply stop, :error, %{reason: "agent_busy"}
+      refute_broadcast "stop", _
+    end
+
     test "version 不一致は警告してから v0 へ normalize する (ADR-0015)" do
       host_id = "lab-pc-2v"
       register_host(host_id)
@@ -3943,6 +3972,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_broadcast "switch_session", payload
       assert payload["agent_id"] == agent_id
       assert payload["resume_session_id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+      assert %{
+               transition_id: transition_id,
+               kind: :switch_session,
+               phase: :announced
+             } = PlannedDisconnects.get(agent_id)
+
+      assert payload["request_id"] == transition_id
       refute_broadcast "spawn", %{}
     end
 
@@ -4579,6 +4616,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                        }
 
       assert %{origin: :operator} = :sys.get_state(KaoiroServer.SessionResets).pending[agent_id]
+
+      assert %{transition_id: ^request_id, kind: :reset, phase: :announced} =
+               PlannedDisconnects.get(agent_id)
     end
 
     test "envelope に session_id が無ければ reset_session payload に previous_session_id を載せない" do
@@ -4732,6 +4772,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref2 = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "clear"})
       assert_reply ref2, :error, %{reason: "session_reset_pending"}
+    end
+
+    test "別 lifecycle の planned intent と競合した reset は取得済み lock を cancel する" do
+      agent_id = "sess-reset.planned-conflict"
+      put_agent_with_caps(agent_id)
+      assert :ok = PlannedDisconnects.begin(agent_id, "restart-won", :restart)
+      @endpoint.subscribe("runner:sess-reset")
+      socket = join_as(:operator)
+
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref, :error, %{reason: "agent_busy"}
+      refute KaoiroServer.SessionResets.pending?(agent_id)
+      refute_broadcast "reset_session", _
+      assert %{transition_id: "restart-won"} = PlannedDisconnects.get(agent_id)
     end
 
     test "viewer には session_reset_started が push されない (ADR-0021 fail-closed)" do

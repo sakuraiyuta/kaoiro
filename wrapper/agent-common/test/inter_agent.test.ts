@@ -1688,6 +1688,7 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     expect(description).toContain("rate_limit = wait before retrying");
     expect(description).toContain("context_overflow = retrying is pointless");
     expect(description).toContain("api_error = retry at most once");
+    expect(description).toContain("reconnecting = planned restart in progress");
     expect(description).toContain("disconnected = the peer is unreachable");
   });
 });
@@ -1745,6 +1746,56 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
     expect(result.content[0]!.text).toContain("unknown_agent");
     // 「送れた」と読める文言を混ぜない。
     expect(result.content[0]!.text).not.toMatch(/^sent to /);
+  });
+
+  it("peer_reconnecting は escalate 不要の structured peer_error にし turn を rollback する", async () => {
+    const sent: Envelope[] = [];
+    let attempt = 0;
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {
+        throw new Error("acceptance-aware sink must be used");
+      },
+      sendInterAgent: (envelope) => {
+        sent.push(envelope);
+        attempt += 1;
+        return Promise.resolve(
+          attempt === 1
+            ? { kind: "rejected", reason: "peer_reconnecting" }
+            : { kind: "accepted", stamp: [1, 0] },
+        );
+      },
+      now: () => "2026-08-18T00:00:00Z",
+      newId: () => "cnv-unused",
+    });
+
+    const first = await tool.invoke({
+      to: "peer.agent",
+      conversation_id: "cnv-planned",
+      body: "hi",
+      kind: "inform",
+    });
+
+    expect(first.isError).toBeUndefined();
+    expect(JSON.parse(first.content[0]!.text)).toEqual({
+      peer_error: {
+        code: "reconnecting",
+        message: "the peer is temporarily unavailable for a planned restart",
+        from: "peer.agent",
+      },
+    });
+
+    const second = await tool.invoke({
+      to: "peer.agent",
+      conversation_id: "cnv-planned",
+      body: "retry after reconnected",
+      kind: "inform",
+    });
+
+    expect(second.isError).toBeUndefined();
+    expect((sent[0]!.payload as unknown as InterAgentMessagePayload).turn_number).toBe(1);
+    expect((sent[1]!.payload as unknown as InterAgentMessagePayload).turn_number).toBe(1);
   });
 
   it("participants_mismatch などの他の reject も同じ経路で error になる", async () => {

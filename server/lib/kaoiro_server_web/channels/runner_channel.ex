@@ -30,6 +30,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
   alias KaoiroServerWeb.AgentId
+  alias KaoiroServerWeb.PeerConnectivity
 
   # Resource bound on a runner control message; generous for a register's
   # persona/cwd lists, far below an envelope. Bounds the whole map so an
@@ -92,10 +93,11 @@ defmodule KaoiroServerWeb.RunnerChannel do
     host_id = socket.assigns.host_id
 
     with :ok <- check_size(payload),
-         {:ok, agent_id, ok?, request_id, _reason} <- parse_spawn_result(payload),
+         {:ok, agent_id, ok?, request_id, reason} <- parse_spawn_result(payload),
          :ok <- require_host_owns_agent(host_id, agent_id) do
       if not ok? do
         _ = AgentActivity.resolve_transition(agent_id, request_id, false)
+        _ = PeerConnectivity.fail(agent_id, request_id, reason)
       end
 
       KaoiroServerWeb.Endpoint.broadcast(

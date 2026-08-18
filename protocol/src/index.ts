@@ -895,6 +895,11 @@ export interface RestartMessage {
    *  fires today. */
   version: "0";
   agent_id: string;
+  /** Planned-disconnect correlation id (issue #266). New servers allocate
+   *  it for each restart; new runners replace the entry's prior request id
+   *  before relaunch so the wrapper echoes it as join `transition_id`.
+   *  Optional for runner-first rolling deployment against an old server. */
+  request_id?: string;
 }
 
 /** server -> runner, operator-only: switch a running agent to a different
