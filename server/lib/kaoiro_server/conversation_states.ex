@@ -238,6 +238,22 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @doc """
+  Atomically marks planned-transition `required_targets` and claims up to
+  `limit` additional ordinary targets.
+
+  The required targets are delivered by the caller even when an older
+  ordinary disconnect already set their `notified_unreachable` mark, or when
+  a preflight bounce happened before the conversation entry existed. This
+  call only owns ConversationStates' mark update and the additional ordinary
+  claim; it deliberately leaves `claim_unreachable_targets/3` unchanged for
+  unexpected disconnects.
+  """
+  def claim_terminal_targets(agent_id, required_targets, limit, server \\ __MODULE__)
+      when is_list(required_targets) do
+    GenServer.call(server, {:claim_terminal, agent_id, required_targets, limit})
+  end
+
+  @doc """
   Lists every bounded open-conversation target without reading or setting
   `notified_unreachable`.
 
@@ -398,6 +414,40 @@ defmodule KaoiroServer.ConversationStates do
         Map.update!(acc, cid, fn entry ->
           %{entry | notified_unreachable: MapSet.put(entry.notified_unreachable, agent_id)}
         end)
+      end)
+
+    {:reply, {claimed, length(unclaimed)}, %{state | conversations: conversations}}
+  end
+
+  def handle_call({:claim_terminal, agent_id, required_targets, limit}, _from, state) do
+    required_cids =
+      for {cid, _peers} <- required_targets, is_binary(cid), into: MapSet.new(), do: cid
+
+    {claimed, unclaimed} =
+      state.conversations
+      |> unreachable_pending(agent_id)
+      |> Enum.reject(fn {cid, _peers} -> MapSet.member?(required_cids, cid) end)
+      |> Enum.split(limit)
+
+    marked_cids =
+      Enum.reduce(claimed, required_cids, fn {cid, _peers}, acc -> MapSet.put(acc, cid) end)
+
+    conversations =
+      Enum.reduce(marked_cids, state.conversations, fn cid, acc ->
+        case Map.get(acc, cid) do
+          %{status: :open, agents: agents} = entry ->
+            if MapSet.member?(agents, agent_id) do
+              Map.put(acc, cid, %{
+                entry
+                | notified_unreachable: MapSet.put(entry.notified_unreachable, agent_id)
+              })
+            else
+              acc
+            end
+
+          _ ->
+            acc
+        end
       end)
 
     {:reply, {claimed, length(unclaimed)}, %{state | conversations: conversations}}

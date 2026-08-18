@@ -1150,43 +1150,67 @@ peer の LLM コンテキストへ露出させない。秘匿情報マスクの 
   runner へ送る前に agent ごとの intent を 1 件だけ確保し、
   server-issued `request_id` を runner → wrapper の `transition_id` まで運ぶ。
   direct kill、SIGKILL、runner / service の自律再起動、operator `stop`
-  は予告のない切断として `disconnected` になる
+  は planned cycle を開始しない。stop が active intent と競合した場合は
+  `agent_busy` にせず intent を cancel し、既通知 target を terminal
+  `disconnected` で閉じる
 - planned disconnect 時は、その時点の open conversation peer を
-  read-only snapshot して `reconnecting` を配る。通常の unreachable
+  read-only snapshot して `reconnecting` を配る。intent はこの snapshot と、
+  planned window 中に `peer_reconnecting` で bounce した
+  `{conversation_id, sender}` の deduplicated union を通知先 SoT として持つ。
+  通常の unreachable
   通知済み mark は参照も消費もしない(過去に terminal 通知済みの
   peer も、後続の `reconnected` を受ける必要があるため)。これにより、
   復帰後に一度も IA
   を交わさず再度異常切断した場合も `disconnected` を通知できる
 - 後続 join が同じ non-empty `transition_id` を提示したときだけ
-  intent を閉じ、snapshot した peer へ通常の
-  `kind=inform` (本文に `reconnected` を含み `payload.error` なし) を
-  配る。不一致・空・欠落 token は intent を閉じない
+  intent を閉じ、target union 全体へ通常の
+  `kind=inform` (`payload.error` なし、protocol outcome は `reconnected`)を
+  配る。固定本文は物理的な再接続を断定せず「peer は到達可能、必要なら
+  同じ conversation_id で再送可」とする。不一致・空・欠落 token は intent
+  を閉じない
 - planned intent の timeout / terminal failure 時は、`AgentStates` の
-  authoritative state がまだ `disconnected` な場合に限り通常の
-  `disconnected` へ昇格する。旧 wrapper または rollback wrapper が
-  live なら intent を閉じるだけで通知しない。reset の
+  authoritative state がまだ `disconnected` なら、ordinary の
+  `notified_unreachable` mark に関係なく target union 全体へ terminal
+  `disconnected` を配る。旧 wrapper または rollback wrapper が live なら、
+  既に bounce された sender を無言で待たせず同じ union へ `reconnected`
+  outcome を配って window を閉じる。reset の
   `spawn_failed` は rollback 起動成功を意味するため例外的に
   matching join または timeout まで intent を保持し、
   `rollback_failed` は terminal failure として閉じる(issue #258)
 - 再接続後に遅れて走った stale な terminate では合成しない(server が
   `disconnected` 状態を実際に採用した場合のみ発火する)
-- 同一 conversation への通知は 1 回きり。当該 agent がその conversation で
-  再び発言するまで再通知しない。entry は切断で消えず turn/token にも
-  加算しないため、この抑止がないと crash loop / フラッピングする wrapper が
-  peer のターンを消費し続ける
+- unexpected disconnect の ordinary `disconnected` は、同一 conversation へ
+  1 回きり。当該 agent がその conversation で再び発言するまで再通知しない。
+  planned cycle の target union を閉じる terminal `disconnected` はこの mark を
+  bypass する。entry は切断で消えず turn/token にも加算しないため、ordinary
+  path にこの抑止がないと crash loop / フラッピングする wrapper が peer の
+  ターンを消費し続ける
 - 1 回の切断で通知する conversation 数には上限を設ける(実装既定 50)。
   通知 1 件につき `wrapper:<peer>` と `agents:lobby` の 2 broadcast が
   走るため、多数の conversation を抱えた wrapper の切断が fan-out を
   増幅させないようにする。打ち切った分は warning ログに残す(黙って
-  落とさない)
+  落とさない)。この値は `PlannedDisconnects.max_unreachable_notices/0` が
+  単一ソースで、ordinary claim と planned snapshot が共有する。すでに
+  `peer_reconnecting` を返した bounce target は close notice を保証するため、
+  snapshot cap で後から捨てない
 
 planned intent が active な宛先への新規 IA は、server の
 preflight で `peer_reconnecting` として reject する。この reject は
 `ConversationStates`、送受信 pane、recipient delivery ledger を一切更新しない。
+active 判定と target union への追加は同じ `PlannedDisconnects.track_bounce`
+call で atomic に行う。close が先に勝って `:noop` なら通常 preflight を続け、
+target を記録できなかった message に `peer_reconnecting` を返さない。
 wrapper は tool result を `{peer_error: {code: "reconnecting", message, from}}`
 に正規化し、送信先の `reconnected` notice まで再送も operator
 への escalate も行わない。planned window 外の瞬間的な delivery gap は
 issue #267 の範囲である。
+
+state-machine の消費経路(matching join / fail / timeout / operator stop /
+disconnected agent purge / runner relay 前の setup failure)は、いずれも同じ
+target union を `reconnected` または terminal `disconnected` のどちらかへ
+必ず渡す。unexpected disconnect の ordinary claim と「再発話まで同一
+conversation を再通知しない」規則は従来どおりであり、planned-window 外の
+delivery gap は扱わない。
 
 #### 受信側の扱い
 

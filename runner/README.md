@@ -227,6 +227,14 @@ launchctl bootstrap gui/"$(id -u)" \
 
 ### 再起動ポリシーと終了コード
 
+issue #266 を含む release の rollout は **runner / wrapper を先行し、server を
+後行**する。新 server は operator restart の `request_id` を wrapper の
+`transition_id` まで運べる runner と、`peer_reconnecting` / `reconnected` を
+解釈できる wrapper が配備済みであることを前提に planned window を開始する。
+逆順(server 先行)では旧 runner が token を relaunch へ運べず、当該 agent 宛 IA
+が最大 60 秒 bounce し、旧 wrapper は close notice を解釈できないため
+reconnecting 状態も解消されない。
+
 - SIGTERM で runner は配下の wrapper を停止してから **exit 0** で終わる。
   systemd は `Restart=on-failure`、launchd は `KeepAlive.SuccessfulExit=false`
   なので、正常停止は再起動されない

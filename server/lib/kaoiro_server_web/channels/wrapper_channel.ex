@@ -1660,38 +1660,41 @@ defmodule KaoiroServerWeb.WrapperChannel do
       not AgentStates.known?(to) ->
         {:error, :unknown_agent}
 
-      PlannedDisconnects.active?(to) ->
-        {:error, :peer_reconnecting}
-
       true ->
-        case ConversationStates.record_message(
-               cid,
-               from,
-               to,
-               body,
-               turn_number,
-               done?,
-               new_conversation?
-             ) do
-          # Within limits. `:both_done` means every participating agent has
-          # now signalled done; the tracker has already closed the entry
-          # into a tombstone atomically (issue #177; spec MUST: 両
-          # owner-side done で対話完了). No extra close needed.
-          ok when ok in [:ok, :both_done] ->
-            {:ok, {:accept, to, nil}}
+        # Active detection and target registration are one state-machine
+        # call. A concurrent close that wins makes this return :noop and the
+        # message continues normally; peer_reconnecting is never returned
+        # before its eventual close-notice target has been adopted.
+        case KaoiroServerWeb.PeerConnectivity.track_bounce(to, cid, from) do
+          {:tracked, _intent} ->
+            {:error, :peer_reconnecting}
 
-          {:exceeded, reason} ->
-            {:ok, {:accept, to, {cid, from, to, reason}}}
+          :noop ->
+            case ConversationStates.record_message(
+                   cid,
+                   from,
+                   to,
+                   body,
+                   turn_number,
+                   done?,
+                   new_conversation?
+                 ) do
+              # Within limits. `:both_done` means every participating agent
+              # has now signalled done; the tracker has already closed the
+              # entry into a tombstone atomically (issue #177; spec MUST: 両
+              # owner-side done で対話完了). No extra close needed.
+              ok when ok in [:ok, :both_done] ->
+                {:ok, {:accept, to, nil}}
 
-          # Cross-conversation pollution attempt, global cap reached, or an
-          # explicitly-named conversation_id with no entry at all (issue
-          # #262): reject the envelope at the routing boundary so a third
-          # party cannot wipe the legitimate participants' counters by
-          # reusing their conversation_id, a malicious flood of fresh cids
-          # cannot grow the tracker without bound, and a mistyped id does
-          # not silently open a fresh, context-less thread.
-          {:error, reason} ->
-            {:error, reason}
+              {:exceeded, reason} ->
+                {:ok, {:accept, to, {cid, from, to, reason}}}
+
+              # Cross-conversation pollution attempt, global cap reached,
+              # or an explicitly-named conversation_id with no entry at all
+              # (issue #262): reject at the routing boundary.
+              {:error, reason} ->
+                {:error, reason}
+            end
         end
     end
   end

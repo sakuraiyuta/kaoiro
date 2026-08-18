@@ -1560,7 +1560,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       new_socket = join_wrapper(agent_id, "default", %{"transition_id" => "transition-266"})
 
       reconnected_body =
-        "peer #{agent_id} reconnected; resend with the same conversation_id if needed"
+        "peer #{agent_id} is reachable; resend with the same conversation_id if needed"
 
       assert_received %Phoenix.Socket.Broadcast{
         topic: "wrapper:" <> ^peer_id,
@@ -1619,11 +1619,203 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert DeliveryStates.get(to_id) == before_ledger
     end
 
+    test "first-send bounce は ConversationStates 未作成でも matching join の reachable notice 対象になる" do
+      agent_id = "test.planned-bounce-close"
+      old_peer_id = "test.planned-bounce-close-old"
+      bounced_peer_id = "test.planned-bounce-close-new"
+      old_cid = "cnv-planned-bounce-close-old"
+      bounced_cid = "cnv-planned-bounce-close-new"
+      old_agent_socket = seed_known(agent_id)
+      _old_peer_socket = seed_known(old_peer_id)
+      bounced_peer_socket = seed_known(bounced_peer_id)
+
+      assert :ok =
+               ConversationStates.record_message(
+                 old_cid,
+                 agent_id,
+                 old_peer_id,
+                 "before",
+                 1,
+                 false,
+                 true
+               )
+
+      @endpoint.subscribe("wrapper:" <> old_peer_id)
+      @endpoint.subscribe("wrapper:" <> bounced_peer_id)
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-bounce-close", :restart)
+
+      Process.unlink(old_agent_socket.channel_pid)
+      :ok = close(old_agent_socket)
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^old_peer_id,
+        event: "envelope",
+        payload: %{
+          "payload" => %{
+            "conversation_id" => ^old_cid,
+            "error" => %{"code" => "reconnecting"}
+          }
+        }
+      }
+
+      ref =
+        push(
+          bounced_peer_socket,
+          "envelope",
+          inter_envelope(bounced_peer_id, agent_id, cid: bounced_cid)
+        )
+
+      assert_reply ref, :error, %{reason: "peer_reconnecting"}
+      assert ConversationStates.get(bounced_cid) == nil
+
+      _new_agent_socket =
+        join_wrapper(agent_id, "default", %{"transition_id" => "transition-bounce-close"})
+
+      reachable_body =
+        "peer #{agent_id} is reachable; resend with the same conversation_id if needed"
+
+      for {peer_id, cid} <- [{old_peer_id, old_cid}, {bounced_peer_id, bounced_cid}] do
+        assert_received %Phoenix.Socket.Broadcast{
+          topic: "wrapper:" <> ^peer_id,
+          event: "envelope",
+          payload: %{
+            "payload" => %{
+              "conversation_id" => ^cid,
+              "kind" => "inform",
+              "body" => ^reachable_body
+            }
+          }
+        }
+      end
+
+      refute PlannedDisconnects.active?(agent_id)
+    end
+
+    test "terminal failure は過去の ordinary mark に関係なく reconnecting 済み union 全体へ届く" do
+      agent_id = "test.planned-terminal-marked"
+      marked_peer_id = "test.planned-terminal-marked-old"
+      control_peer_id = "test.planned-terminal-marked-control"
+      marked_cid = "cnv-planned-terminal-marked-old"
+      control_cid = "cnv-planned-terminal-marked-control"
+      _marked_peer_socket = seed_known(marked_peer_id)
+      _control_peer_socket = seed_known(control_peer_id)
+      agent_socket = seed_known(agent_id)
+      @endpoint.subscribe("wrapper:" <> marked_peer_id)
+      @endpoint.subscribe("wrapper:" <> control_peer_id)
+
+      assert :ok =
+               ConversationStates.record_message(
+                 marked_cid,
+                 agent_id,
+                 marked_peer_id,
+                 "old crash",
+                 1,
+                 false,
+                 true
+               )
+
+      # Prior ordinary crash notification sets notified_unreachable.
+      assert :unexpected =
+               KaoiroServerWeb.PeerConnectivity.disconnect(
+                 agent_id,
+                 "2026-08-18T00:00:00Z"
+               )
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^marked_peer_id,
+        payload: %{"payload" => %{"error" => %{"code" => "disconnected"}}}
+      }
+
+      # Negative control: this conversation has no prior mark.
+      assert :ok =
+               ConversationStates.record_message(
+                 control_cid,
+                 agent_id,
+                 control_peer_id,
+                 "control",
+                 1,
+                 false,
+                 true
+               )
+
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-terminal-marked", :restart)
+      Process.unlink(agent_socket.channel_pid)
+      :ok = close(agent_socket)
+
+      for {peer_id, cid} <- [{marked_peer_id, marked_cid}, {control_peer_id, control_cid}] do
+        assert_received %Phoenix.Socket.Broadcast{
+          topic: "wrapper:" <> ^peer_id,
+          payload: %{
+            "payload" => %{
+              "conversation_id" => ^cid,
+              "error" => %{"code" => "reconnecting"}
+            }
+          }
+        }
+      end
+
+      assert :disconnected =
+               KaoiroServerWeb.PeerConnectivity.fail(
+                 agent_id,
+                 "transition-terminal-marked",
+                 "rollback_failed"
+               )
+
+      for {peer_id, cid} <- [{marked_peer_id, marked_cid}, {control_peer_id, control_cid}] do
+        assert_received %Phoenix.Socket.Broadcast{
+          topic: "wrapper:" <> ^peer_id,
+          payload: %{
+            "payload" => %{
+              "conversation_id" => ^cid,
+              "error" => %{"code" => "disconnected"}
+            }
+          }
+        }
+      end
+
+      assert {[], 0} = ConversationStates.claim_unreachable_targets(agent_id, 50)
+    end
+
+    test "setup abort は exact token だけを消費し bounce target を reachable で閉じる" do
+      agent_id = "test.planned-setup-abort"
+      peer_id = "test.planned-setup-abort-peer"
+      cid = "cnv-planned-setup-abort"
+      @endpoint.subscribe("wrapper:" <> peer_id)
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-setup-abort", :switch_session)
+      assert {:tracked, _} = PlannedDisconnects.track_bounce(agent_id, cid, peer_id)
+
+      assert :noop =
+               KaoiroServerWeb.PeerConnectivity.abort_setup(agent_id, "stale-transition")
+
+      assert PlannedDisconnects.active?(agent_id)
+      refute_received %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^peer_id}
+
+      assert :connected =
+               KaoiroServerWeb.PeerConnectivity.abort_setup(
+                 agent_id,
+                 "transition-setup-abort"
+               )
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^peer_id,
+        payload: %{
+          "payload" => %{
+            "conversation_id" => ^cid,
+            "kind" => "inform",
+            "body" => body
+          }
+        }
+      }
+
+      assert body =~ "is reachable"
+      refute PlannedDisconnects.active?(agent_id)
+    end
+
     test "planned terminal failure は authoritative state が disconnected のときだけ昇格する" do
       agent_id = "test.planned-terminal"
       peer_id = "test.planned-terminal-peer"
       cid = "cnv-planned-terminal"
-      _peer_socket = seed_known(peer_id)
+      peer_socket = seed_known(peer_id)
       agent_socket = seed_known(agent_id)
 
       assert :ok =
@@ -1632,8 +1824,22 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       @endpoint.subscribe("wrapper:" <> peer_id)
 
       # Runner rejected before the live old wrapper went away: clear the
-      # planned window, but do not lie to peers that connectivity was lost.
+      # planned window. A sender already bounced in that window must receive
+      # the neutral reachable outcome even though no physical reconnect was
+      # needed.
       assert :ok = PlannedDisconnects.begin(agent_id, "transition-live", :switch_session)
+
+      live_bounce_cid = "cnv-planned-terminal-live-bounce"
+
+      ref =
+        push(
+          peer_socket,
+          "envelope",
+          inter_envelope(peer_id, agent_id, cid: live_bounce_cid)
+        )
+
+      assert_reply ref, :error, %{reason: "peer_reconnecting"}
+      assert ConversationStates.get(live_bounce_cid) == nil
 
       assert :connected =
                KaoiroServerWeb.PeerConnectivity.fail(agent_id, "transition-live", "error")
@@ -1645,6 +1851,20 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         event: "envelope",
         payload: %{"payload" => %{"error" => %{"code" => "disconnected"}}}
       }
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^peer_id,
+        event: "envelope",
+        payload: %{
+          "payload" => %{
+            "conversation_id" => ^live_bounce_cid,
+            "kind" => "inform",
+            "body" => reachable_body
+          }
+        }
+      }
+
+      assert reachable_body =~ "is reachable"
 
       # Once the owner-checked terminate has adopted disconnected, the same
       # terminal failure consumes the intent and emits the ordinary loud leg.

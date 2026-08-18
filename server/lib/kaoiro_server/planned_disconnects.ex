@@ -3,11 +3,14 @@ defmodule KaoiroServer.PlannedDisconnects do
   In-memory intent tracker for server-authorized wrapper cycles.
 
   A lifecycle command registers one opaque transition id before it reaches
-  the runner.  The incumbent wrapper's owner-checked disconnect moves that
-  intent from `:announced` to `:disconnected` and snapshots the open
-  conversation peers without mutating `ConversationStates`' ordinary
-  unreachable-notification marks.  Only a later join carrying the exact same
-  transition id can consume the intent successfully.
+  the runner.  The intent is the source of truth for every peer that either
+  receives a synthetic `reconnecting` notice or gets a `peer_reconnecting`
+  preflight bounce.  The incumbent wrapper's owner-checked disconnect moves
+  the intent from `:announced` to `:disconnected` and merges the open
+  conversation peers into that set without mutating `ConversationStates`'
+  ordinary unreachable-notification marks.  Every consuming transition
+  returns the same target union so the web boundary can close it with either
+  `reconnected` or terminal `disconnected`.
 
   The store is deliberately separate from `SessionResets`: reset success and
   peer reachability are different facts, while restart and switch-session do
@@ -25,6 +28,9 @@ defmodule KaoiroServer.PlannedDisconnects do
   @max_unreachable_notices 50
   @kinds [:reset, :switch_session, :restart]
 
+  @doc "Maximum number of ordinary conversation notices claimed per disconnect."
+  def max_unreachable_notices, do: @max_unreachable_notices
+
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
 
@@ -34,13 +40,13 @@ defmodule KaoiroServer.PlannedDisconnects do
         timeout_ms: Keyword.get(opts, :timeout_ms, @default_timeout_ms),
         target_provider:
           Keyword.get(opts, :target_provider, &ConversationStates.unreachable_targets/2),
-        on_timeout: Keyword.get(opts, :on_timeout, &default_on_timeout/2)
+        on_timeout: Keyword.get(opts, :on_timeout, &default_on_timeout/3)
       },
       name: name
     )
   end
 
-  defp default_on_timeout(_agent_id, _transition_id), do: :ok
+  defp default_on_timeout(_agent_id, _transition_id, _intent), do: :ok
 
   @doc """
   Registers one planned lifecycle transition for `agent_id`.
@@ -59,18 +65,31 @@ defmodule KaoiroServer.PlannedDisconnects do
   Adopts the incumbent wrapper's owner-checked disconnect.
 
   Returns `{:planned, intent}` only for the first disconnect of an announced
-  intent. `intent.targets` is the bounded read-only conversation snapshot to
-  receive `reconnecting` and, on matching success, `reconnected`.
+  intent. `intent.notice_targets` is the bounded read-only conversation
+  snapshot that has not already received a preflight bounce;
+  `intent.targets` is the full terminal-notice union.
   """
   def disconnect(agent_id, server \\ __MODULE__) when is_binary(agent_id) do
     GenServer.call(server, {:disconnect, agent_id})
   end
 
   @doc """
+  Atomically checks for an active planned window and records one bounced peer.
+
+  The caller may return `peer_reconnecting` only after this returns
+  `{:tracked, intent}`. A concurrent close wins by making this return `:noop`,
+  in which case normal delivery may continue.
+  """
+  def track_bounce(agent_id, conversation_id, peer_id, server \\ __MODULE__)
+      when is_binary(agent_id) and is_binary(conversation_id) and is_binary(peer_id) do
+    GenServer.call(server, {:track_bounce, agent_id, conversation_id, peer_id})
+  end
+
+  @doc """
   Completes a disconnected intent only when `transition_id` matches exactly.
 
-  A stale or malformed join cannot consume the state. The returned intent is
-  the same snapshot captured at disconnect time.
+  A stale or malformed join cannot consume the state. The returned intent
+  carries every snapshot or bounce target accumulated before the join won.
   """
   def confirm_connection(agent_id, transition_id, server \\ __MODULE__)
       when is_binary(agent_id) do
@@ -83,12 +102,23 @@ defmodule KaoiroServer.PlannedDisconnects do
   `:spawn_failed` is special for session reset: the runner emits it only after
   successfully launching the rollback wrapper, so connectivity remains
   pending until that wrapper's matching join (or this store's own timeout).
-  Other reasons close the intent immediately; the caller decides whether the
-  agent is still authoritatively disconnected and needs a terminal notice.
+  Other reasons close the intent immediately; the caller uses authoritative
+  reachability to choose `disconnected` or the neutral `reconnected` outcome.
   """
   def fail(agent_id, transition_id, reason, server \\ __MODULE__)
       when is_binary(agent_id) do
     GenServer.call(server, {:fail, agent_id, transition_id, reason})
+  end
+
+  @doc "Consumes any active intent, returning its target union. Used by stop/purge."
+  def cancel(agent_id, server \\ __MODULE__) when is_binary(agent_id) do
+    GenServer.call(server, {:cancel, agent_id})
+  end
+
+  @doc "Consumes only the exact transition. Used to roll back setup failures."
+  def cancel_transition(agent_id, transition_id, server \\ __MODULE__)
+      when is_binary(agent_id) and is_binary(transition_id) do
+    GenServer.call(server, {:cancel_transition, agent_id, transition_id})
   end
 
   @doc "Returns true while any planned intent is active for the agent."
@@ -99,11 +129,6 @@ defmodule KaoiroServer.PlannedDisconnects do
   @doc "Returns the public intent state for diagnostics/tests, or nil."
   def get(agent_id, server \\ __MODULE__) when is_binary(agent_id) do
     GenServer.call(server, {:get, agent_id})
-  end
-
-  @doc "Purges an intent without producing a peer notification."
-  def delete(agent_id, server \\ __MODULE__) when is_binary(agent_id) do
-    GenServer.call(server, {:delete, agent_id})
   end
 
   @impl true
@@ -134,14 +159,37 @@ defmodule KaoiroServer.PlannedDisconnects do
   def handle_call({:disconnect, agent_id}, _from, state) do
     case Map.get(state.pending, agent_id) do
       %{phase: :announced} = intent ->
-        {targets, unclaimed} = safe_targets(state.target_provider, agent_id)
-        disconnected = %{intent | phase: :disconnected, targets: targets, unclaimed: unclaimed}
+        {snapshot_targets, unclaimed} = safe_targets(state.target_provider, agent_id)
+        notice_targets = subtract_targets(snapshot_targets, intent.targets)
 
-        {:reply, {:planned, public_intent(disconnected)},
-         put_intent(state, agent_id, disconnected)}
+        disconnected = %{
+          intent
+          | phase: :disconnected,
+            targets: merge_targets(intent.targets, snapshot_targets),
+            unclaimed: unclaimed
+        }
+
+        public = disconnected |> public_intent() |> Map.put(:notice_targets, notice_targets)
+
+        {:reply, {:planned, public}, put_intent(state, agent_id, disconnected)}
 
       _ ->
         {:reply, :noop, state}
+    end
+  end
+
+  def handle_call({:track_bounce, agent_id, conversation_id, peer_id}, _from, state) do
+    case Map.get(state.pending, agent_id) do
+      nil ->
+        {:reply, :noop, state}
+
+      intent ->
+        tracked = %{
+          intent
+          | targets: merge_targets(intent.targets, [{conversation_id, [peer_id]}])
+        }
+
+        {:reply, {:tracked, public_intent(tracked)}, put_intent(state, agent_id, tracked)}
     end
   end
 
@@ -181,19 +229,35 @@ defmodule KaoiroServer.PlannedDisconnects do
     {:reply, intent, state}
   end
 
-  def handle_call({:delete, agent_id}, _from, state) do
-    {:reply, :ok, discard_intent(state, agent_id)}
+  def handle_call({:cancel, agent_id}, _from, state) do
+    case Map.get(state.pending, agent_id) do
+      nil ->
+        {:reply, :noop, state}
+
+      intent ->
+        {:reply, {:cancelled, public_intent(intent)}, discard_intent(state, agent_id)}
+    end
+  end
+
+  def handle_call({:cancel_transition, agent_id, transition_id}, _from, state) do
+    case Map.get(state.pending, agent_id) do
+      %{transition_id: ^transition_id} = intent ->
+        {:reply, {:cancelled, public_intent(intent)}, discard_intent(state, agent_id)}
+
+      _ ->
+        {:reply, :noop, state}
+    end
   end
 
   @impl true
   def handle_info({:timeout, agent_id, transition_id}, state) do
     case Map.get(state.pending, agent_id) do
-      %{transition_id: ^transition_id} ->
+      %{transition_id: ^transition_id} = intent ->
         # Run the terminal callback while this GenServer still serializes the
         # transition: a same-token join is either processed before this
         # timeout and cancels it, or after it and is stale. There is no window
         # in which both success and timeout can consume the intent.
-        safe_timeout(state.on_timeout, agent_id, transition_id)
+        safe_timeout(state.on_timeout, agent_id, transition_id, public_intent(intent))
         {:noreply, %{state | pending: Map.delete(state.pending, agent_id)}}
 
       _ ->
@@ -231,8 +295,8 @@ defmodule KaoiroServer.PlannedDisconnects do
       {[], 0}
   end
 
-  defp safe_timeout(callback, agent_id, transition_id) do
-    callback.(agent_id, transition_id)
+  defp safe_timeout(callback, agent_id, transition_id, intent) do
+    callback.(agent_id, transition_id, intent)
   rescue
     error ->
       Logger.warning(
@@ -264,4 +328,30 @@ defmodule KaoiroServer.PlannedDisconnects do
   defp maybe_public_intent(intent), do: public_intent(intent)
 
   defp public_intent(intent), do: Map.delete(intent, :timer_ref)
+
+  defp merge_targets(left, right) do
+    (left ++ right)
+    |> Enum.reduce(%{}, fn {conversation_id, peers}, acc ->
+      Map.update(acc, conversation_id, MapSet.new(peers), &MapSet.union(&1, MapSet.new(peers)))
+    end)
+    |> Enum.map(fn {conversation_id, peers} ->
+      {conversation_id, peers |> MapSet.to_list() |> Enum.sort()}
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp subtract_targets(targets, excluded) do
+    excluded_pairs =
+      for {conversation_id, peers} <- excluded,
+          peer <- peers,
+          into: MapSet.new(),
+          do: {conversation_id, peer}
+
+    targets
+    |> Enum.flat_map(fn {conversation_id, peers} ->
+      remaining = Enum.reject(peers, &MapSet.member?(excluded_pairs, {conversation_id, &1}))
+      if remaining == [], do: [], else: [{conversation_id, remaining}]
+    end)
+    |> merge_targets([])
+  end
 end

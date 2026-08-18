@@ -85,9 +85,9 @@ defmodule KaoiroServer.Application do
        on_auto_closed: &KaoiroServerWeb.SynthEnvelope.deliver_conversation_closed/3},
       # One-token-per-agent planned wrapper-cycle state (issue #266).
       # ConversationStates supplies a read-only peer snapshot at disconnect;
-      # timeout returns through the web boundary so only an agent still
-      # authoritatively disconnected receives the terminal peer notice.
-      {KaoiroServer.PlannedDisconnects, on_timeout: &KaoiroServerWeb.PeerConnectivity.timeout/2},
+      # timeout returns through the web boundary so authoritative reachability
+      # selects terminal disconnected or neutral reconnected for its targets.
+      {KaoiroServer.PlannedDisconnects, on_timeout: &KaoiroServerWeb.PeerConnectivity.timeout/3},
       # Single owner of the common-footer snapshot + last-known-good
       # (ADR-0045). Must precede FooterWatcher, which rebuilds through it,
       # and the Endpoint, whose WrapperChannel reads the snapshot.

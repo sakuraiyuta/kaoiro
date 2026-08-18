@@ -100,6 +100,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.Users
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.ClientSocket
+  alias KaoiroServerWeb.PeerConnectivity
 
   # Resource bound for an operator instruction; generous for prose,
   # far below the wrapper-side envelope cap.
@@ -168,7 +169,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    cwd_not_allowed invalid_cwd invalid_name no_session
                    missing_session_id invalid_session_id
                    unknown_upload invalid_engine engine_not_supported
-                   agent_busy unsupported_session_reset
+                   agent_busy agent_not_owned unsupported_session_reset
                    session_reset_pending reserved_session_command
                    invalid_mode missing_user_id invalid_user_id
                    unknown_user revision_exhausted)a
@@ -868,16 +869,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
           }
           |> maybe_put_resume_snapshot(agent_id)
 
-        case PlannedDisconnects.begin(agent_id, request_id, :switch_session) do
+        case begin_planned_switch(agent_id, request_id) do
           :ok ->
-            :ok =
-              AgentActivity.begin_transition(
-                agent_id,
-                request_id,
-                :restore,
-                DateTime.utc_now() |> DateTime.to_iso8601()
-              )
-
             invalidate_projection_for_resume(agent_id, session_id)
 
             KaoiroServerWeb.Endpoint.broadcast(
@@ -1200,7 +1193,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # phase-17 17-4: clear any dangling reset lock + dispatch cooldown
       # so a respawn under the same agent_id does not inherit stale state.
       SessionResets.delete(agent_id)
-      PlannedDisconnects.delete(agent_id)
+      _ = PeerConnectivity.delete(agent_id)
       AgentActivity.delete(agent_id)
       # issue #109: purge the clear watermark too, so an agent respawned
       # under the same agent_id starts fresh (no lingering hide-past
@@ -1326,7 +1319,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # broadcast, so a rejected command never opens a planned-send window.
   defp relay_lifecycle_to_runner(socket, payload, event) when event in ["stop", "restart"] do
     with :ok <- require_operator(socket),
-         {:ok, host_id} <- fetch_host_id(payload) do
+         {:ok, host_id} <- fetch_host_id(payload),
+         {:ok, agent_id} <- fetch_lifecycle_agent_id(payload),
+         :ok <- require_host_owns_agent(host_id, agent_id) do
       warn_on_version_mismatch(payload, event)
 
       {relayed, transition} = lifecycle_relay_payload(payload, event)
@@ -1366,7 +1361,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp reserve_lifecycle_intent(%{"agent_id" => agent_id}, :stop)
        when is_binary(agent_id) do
-    if PlannedDisconnects.active?(agent_id), do: {:error, :agent_busy}, else: :ok
+    _ = PeerConnectivity.stop(agent_id)
+    :ok
   end
 
   defp reserve_lifecycle_intent(_payload, :stop), do: :ok
@@ -1392,6 +1388,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   defp reserve_lifecycle_intent(_payload, {:restart, _transition_id}), do: :ok
+
+  defp fetch_lifecycle_agent_id(%{"agent_id" => agent_id}) when is_binary(agent_id) do
+    if AgentId.valid?(agent_id), do: {:ok, agent_id}, else: {:error, :invalid_agent_id}
+  end
+
+  defp fetch_lifecycle_agent_id(_payload), do: {:error, :missing_agent_id}
+
+  defp require_host_owns_agent(host_id, agent_id) do
+    if AgentId.host_id_from(agent_id) == host_id, do: :ok, else: {:error, :agent_not_owned}
+  end
 
   # Relays `payload` (minus host_id, which only addresses the runner topic)
   # to `runner:<host_id>` without interpreting the contents (ADR-0023,
@@ -2401,6 +2407,32 @@ defmodule KaoiroServerWeb.AgentsChannel do
         # cancel exactly its lock before returning the established
         # `agent_busy` lifecycle vocabulary.
         _ = SessionResets.cancel(agent_id, request_id)
+        error
+    end
+  end
+
+  defp begin_planned_switch(agent_id, request_id) do
+    case PlannedDisconnects.begin(agent_id, request_id, :switch_session) do
+      :ok ->
+        try do
+          :ok =
+            AgentActivity.begin_transition(
+              agent_id,
+              request_id,
+              :restore,
+              DateTime.utc_now() |> DateTime.to_iso8601()
+            )
+        rescue
+          exception ->
+            _ = PeerConnectivity.abort_setup(agent_id, request_id)
+            reraise exception, __STACKTRACE__
+        catch
+          kind, reason ->
+            _ = PeerConnectivity.abort_setup(agent_id, request_id)
+            :erlang.raise(kind, reason, __STACKTRACE__)
+        end
+
+      {:error, _reason} = error ->
         error
     end
   end

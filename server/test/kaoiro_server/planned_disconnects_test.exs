@@ -32,6 +32,13 @@ defmodule KaoiroServer.PlannedDisconnectsTest do
 
     assert :ok = PlannedDisconnects.begin("agent.a", "tr-1", :switch_session, name)
 
+    assert {:tracked, %{targets: [{"cid-bounce", ["peer.b"]}]}} =
+             PlannedDisconnects.track_bounce("agent.a", "cid-bounce", "peer.b", name)
+
+    # Repeated bounces are deduplicated before any close notice is emitted.
+    assert {:tracked, %{targets: [{"cid-bounce", ["peer.b"]}]}} =
+             PlannedDisconnects.track_bounce("agent.a", "cid-bounce", "peer.b", name)
+
     assert {:error, :agent_busy} =
              PlannedDisconnects.begin("agent.a", "tr-2", :restart, name)
 
@@ -40,7 +47,8 @@ defmodule KaoiroServer.PlannedDisconnectsTest do
               phase: :disconnected,
               transition_id: "tr-1",
               kind: :switch_session,
-              targets: [{"cid-1", ["peer.a"]}],
+              targets: [{"cid-1", ["peer.a"]}, {"cid-bounce", ["peer.b"]}],
+              notice_targets: [{"cid-1", ["peer.a"]}],
               unclaimed: 2
             }} = PlannedDisconnects.disconnect("agent.a", name)
 
@@ -49,7 +57,7 @@ defmodule KaoiroServer.PlannedDisconnectsTest do
     assert :mismatch = PlannedDisconnects.confirm_connection("agent.a", "stale", name)
     assert PlannedDisconnects.active?("agent.a", name)
 
-    assert {:reconnected, %{targets: [{"cid-1", ["peer.a"]}]}} =
+    assert {:reconnected, %{targets: [{"cid-1", ["peer.a"]}, {"cid-bounce", ["peer.b"]}]}} =
              PlannedDisconnects.confirm_connection("agent.a", "tr-1", name)
 
     refute PlannedDisconnects.active?("agent.a", name)
@@ -74,7 +82,14 @@ defmodule KaoiroServer.PlannedDisconnectsTest do
 
     assert :ok = PlannedDisconnects.begin("agent.a", "reset-2", :reset, name)
 
-    assert {:failed, %{transition_id: "reset-2"}} =
+    assert {:tracked, _} =
+             PlannedDisconnects.track_bounce("agent.a", "cid-failed", "peer.failed", name)
+
+    assert {:failed,
+            %{
+              transition_id: "reset-2",
+              targets: [{"cid-failed", ["peer.failed"]}]
+            }} =
              PlannedDisconnects.fail("agent.a", "reset-2", :rollback_failed, name)
 
     refute PlannedDisconnects.active?("agent.a", name)
@@ -91,11 +106,27 @@ defmodule KaoiroServer.PlannedDisconnectsTest do
 
   test "timeout consumes once and a matching join cancels its callback" do
     owner = self()
-    callback = fn agent_id, transition_id -> send(owner, {:timeout, agent_id, transition_id}) end
+
+    callback = fn agent_id, transition_id, intent ->
+      send(owner, {:timeout, agent_id, transition_id, intent})
+    end
+
     name = start_tracker(:pd_timeout, timeout_ms: 20, on_timeout: callback)
 
     assert :ok = PlannedDisconnects.begin("agent.timeout", "tr-timeout", :restart, name)
-    assert_receive {:timeout, "agent.timeout", "tr-timeout"}, 100
+
+    assert {:tracked, _} =
+             PlannedDisconnects.track_bounce(
+               "agent.timeout",
+               "cid-timeout",
+               "peer.timeout",
+               name
+             )
+
+    assert_receive {:timeout, "agent.timeout", "tr-timeout",
+                    %{targets: [{"cid-timeout", ["peer.timeout"]}]}},
+                   100
+
     refute PlannedDisconnects.active?("agent.timeout", name)
 
     assert :ok = PlannedDisconnects.begin("agent.success", "tr-success", :restart, name)
@@ -104,6 +135,37 @@ defmodule KaoiroServer.PlannedDisconnectsTest do
     assert {:reconnected, _} =
              PlannedDisconnects.confirm_connection("agent.success", "tr-success", name)
 
-    refute_receive {:timeout, "agent.success", "tr-success"}, 50
+    refute_receive {:timeout, "agent.success", "tr-success", _intent}, 50
+  end
+
+  test "every explicit cancel returns the same tracked target union and exact cancel is CAS" do
+    name = start_tracker(:pd_cancel)
+
+    assert :noop = PlannedDisconnects.track_bounce("agent.none", "cid", "peer", name)
+    assert :ok = PlannedDisconnects.begin("agent.cancel", "tr-cancel", :restart, name)
+
+    assert {:tracked, _} =
+             PlannedDisconnects.track_bounce(
+               "agent.cancel",
+               "cid-cancel",
+               "peer.cancel",
+               name
+             )
+
+    assert :noop =
+             PlannedDisconnects.cancel_transition("agent.cancel", "stale-transition", name)
+
+    assert {:cancelled, %{targets: [{"cid-cancel", ["peer.cancel"]}]}} =
+             PlannedDisconnects.cancel_transition("agent.cancel", "tr-cancel", name)
+
+    assert :ok = PlannedDisconnects.begin("agent.stop", "tr-stop", :restart, name)
+
+    assert {:tracked, _} =
+             PlannedDisconnects.track_bounce("agent.stop", "cid-stop", "peer.stop", name)
+
+    assert {:cancelled, %{targets: [{"cid-stop", ["peer.stop"]}]}} =
+             PlannedDisconnects.cancel("agent.stop", name)
+
+    assert :noop = PlannedDisconnects.cancel("agent.stop", name)
   end
 end

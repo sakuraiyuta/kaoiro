@@ -596,6 +596,45 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert {[{"c1", ["b"]}], 0} = ConversationStates.unreachable_targets("a", 50, name)
   end
 
+  test "claim_terminal_targets は required を既通知でも再武装せず採用し additional だけを claim する (#266)" do
+    name = start_tracker(:cs_planned_terminal_targets)
+
+    assert :ok =
+             ConversationStates.record_message("required", "a", "b", "x", 1, false, true, name)
+
+    assert {[{"required", ["b"]}], 0} =
+             ConversationStates.claim_unreachable_targets("a", 50, name)
+
+    assert :ok =
+             ConversationStates.record_message("additional", "a", "c", "y", 1, false, true, name)
+
+    assert :ok =
+             ConversationStates.record_message(
+               "required-fresh",
+               "a",
+               "e",
+               "z",
+               1,
+               false,
+               true,
+               name
+             )
+
+    required = [
+      {"required", ["b"]},
+      {"required-fresh", ["e"]},
+      {"bounce-only", ["d"]}
+    ]
+
+    assert {[{"additional", ["c"]}], 0} =
+             ConversationStates.claim_terminal_targets("a", required, 50, name)
+
+    # required の既存 entry と additional は同じ atomic call で mark 済み。
+    # ConversationStates に存在しない bounce-only target は state を作らない。
+    assert {[], 0} = ConversationStates.claim_unreachable_targets("a", 50, name)
+    assert ConversationStates.get("bounce-only", name) == nil
+  end
+
   test "閉じた conversation は claim 対象にならない (#131)" do
     name = start_tracker(:cs_participants_closed)
     assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)
