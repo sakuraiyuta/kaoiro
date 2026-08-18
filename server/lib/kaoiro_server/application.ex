@@ -65,7 +65,7 @@ defmodule KaoiroServer.Application do
       KaoiroServer.TokenDenylist,
       # Session-reset pending lock (ADR-0036 F6/F7, phase-17 17-4).
       # In-memory only; a reset in flight when the server dies is a wash.
-      KaoiroServer.SessionResets,
+      {KaoiroServer.SessionResets, on_failure: &KaoiroServerWeb.PeerConnectivity.fail/3},
       # Restart-surviving identity ledger — agent_id → persona (ADR-0030).
       # Lets operator-driven restore work after a server restart when
       # AgentStates is empty.
@@ -83,6 +83,11 @@ defmodule KaoiroServer.Application do
       # ConversationStates' own moduledoc for why that boundary is kept.
       {KaoiroServer.ConversationStates,
        on_auto_closed: &KaoiroServerWeb.SynthEnvelope.deliver_conversation_closed/3},
+      # One-token-per-agent planned wrapper-cycle state (issue #266).
+      # ConversationStates supplies a read-only peer snapshot at disconnect;
+      # timeout returns through the web boundary so authoritative reachability
+      # selects terminal disconnected or neutral reconnected for its targets.
+      {KaoiroServer.PlannedDisconnects, on_timeout: &KaoiroServerWeb.PeerConnectivity.timeout/3},
       # Single owner of the common-footer snapshot + last-known-good
       # (ADR-0045). Must precede FooterWatcher, which rebuilds through it,
       # and the Endpoint, whose WrapperChannel reads the snapshot.

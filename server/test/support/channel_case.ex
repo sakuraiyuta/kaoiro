@@ -31,6 +31,8 @@ defmodule KaoiroServerWeb.ChannelCase do
       Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.HostRegistry)
       Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.TaskStates)
       Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.TaskStates)
+      Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.PlannedDisconnects)
+      Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.PlannedDisconnects)
     end)
 
     :ok

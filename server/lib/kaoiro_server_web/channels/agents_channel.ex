@@ -92,6 +92,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
+  alias KaoiroServer.PlannedDisconnects
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
   alias KaoiroServer.TaskStates
@@ -99,6 +100,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.Users
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.ClientSocket
+  alias KaoiroServerWeb.PeerConnectivity
 
   # Resource bound for an operator instruction; generous for prose,
   # far below the wrapper-side envelope cap.
@@ -167,7 +169,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    cwd_not_allowed invalid_cwd invalid_name no_session
                    missing_session_id invalid_session_id
                    unknown_upload invalid_engine engine_not_supported
-                   agent_busy unsupported_session_reset
+                   agent_busy agent_not_owned unsupported_session_reset
                    session_reset_pending reserved_session_command
                    invalid_mode missing_user_id invalid_user_id
                    unknown_user revision_exhausted)a
@@ -568,7 +570,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
              mode,
              state,
              Map.get(envelope, "session_id")
-           ) do
+           ),
+         :ok <- begin_planned_reset(agent_id, request_id) do
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",
         "session_reset_started",
@@ -736,11 +739,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   def handle_in("stop", payload, socket) do
-    relay_to_runner_guarded(socket, payload, "stop")
+    relay_lifecycle_to_runner(socket, payload, "stop")
   end
 
   def handle_in("restart", payload, socket) do
-    relay_to_runner_guarded(socket, payload, "restart")
+    relay_lifecycle_to_runner(socket, payload, "restart")
   end
 
   def handle_in("enumerate_sessions", payload, socket) do
@@ -866,23 +869,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
           }
           |> maybe_put_resume_snapshot(agent_id)
 
-        :ok =
-          AgentActivity.begin_transition(
-            agent_id,
-            request_id,
-            :restore,
-            DateTime.utc_now() |> DateTime.to_iso8601()
-          )
+        case begin_planned_switch(agent_id, request_id) do
+          :ok ->
+            invalidate_projection_for_resume(agent_id, session_id)
 
-        invalidate_projection_for_resume(agent_id, session_id)
+            KaoiroServerWeb.Endpoint.broadcast(
+              "runner:#{host_id_of(agent_id)}",
+              "switch_session",
+              switch_payload
+            )
 
-        KaoiroServerWeb.Endpoint.broadcast(
-          "runner:#{host_id_of(agent_id)}",
-          "switch_session",
-          switch_payload
-        )
+            {:reply, :ok, socket}
 
-        {:reply, :ok, socket}
+          {:error, reason} ->
+            {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+        end
       else
         resume_disconnected(agent_id, session_id, socket)
       end
@@ -1192,6 +1193,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # phase-17 17-4: clear any dangling reset lock + dispatch cooldown
       # so a respawn under the same agent_id does not inherit stale state.
       SessionResets.delete(agent_id)
+      _ = PeerConnectivity.delete(agent_id)
       AgentActivity.delete(agent_id)
       # issue #109: purge the clear watermark too, so an agent respawned
       # under the same agent_id starts fresh (no lingering hide-past
@@ -1308,6 +1310,89 @@ defmodule KaoiroServerWeb.AgentsChannel do
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
+  end
+
+  # Planned lifecycle controls need the same opaque relay compatibility as
+  # the generic helper above, but restart additionally receives a server-
+  # allocated correlation id before the runner sees it. The intent CAS runs
+  # only after role/host/size guards have passed and immediately before the
+  # broadcast, so a rejected command never opens a planned-send window.
+  defp relay_lifecycle_to_runner(socket, payload, event) when event in ["stop", "restart"] do
+    with :ok <- require_operator(socket),
+         {:ok, host_id} <- fetch_host_id(payload),
+         {:ok, agent_id} <- fetch_lifecycle_agent_id(payload),
+         :ok <- require_host_owns_agent(host_id, agent_id) do
+      warn_on_version_mismatch(payload, event)
+
+      {relayed, transition} = lifecycle_relay_payload(payload, event)
+
+      with :ok <- check_relay_size(relayed),
+           :ok <- reserve_lifecycle_intent(relayed, transition) do
+        KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", event, relayed)
+        {:reply, :ok, socket}
+      else
+        {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+      end
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  defp lifecycle_relay_payload(payload, "restart") do
+    transition_id = generate_transition_id()
+
+    relayed =
+      payload
+      |> Map.delete("host_id")
+      |> Map.put("version", "0")
+      |> Map.put("request_id", transition_id)
+
+    {relayed, {:restart, transition_id}}
+  end
+
+  defp lifecycle_relay_payload(payload, "stop") do
+    relayed =
+      payload
+      |> Map.delete("host_id")
+      |> Map.put("version", "0")
+
+    {relayed, :stop}
+  end
+
+  defp reserve_lifecycle_intent(%{"agent_id" => agent_id}, :stop)
+       when is_binary(agent_id) do
+    _ = PeerConnectivity.stop(agent_id)
+    :ok
+  end
+
+  defp reserve_lifecycle_intent(
+         %{"agent_id" => agent_id},
+         {:restart, transition_id}
+       )
+       when is_binary(agent_id) do
+    cond do
+      PlannedDisconnects.active?(agent_id) ->
+        {:error, :agent_busy}
+
+      live_agent?(agent_id) ->
+        PlannedDisconnects.begin(agent_id, transition_id, :restart)
+
+      true ->
+        # Preserve the pre-#266 opaque relay for unknown/already-disconnected
+        # entries. There is no outgoing live wrapper to classify, so opening
+        # a planned downtime window would only bounce messages needlessly.
+        :ok
+    end
+  end
+
+  defp fetch_lifecycle_agent_id(%{"agent_id" => agent_id}) when is_binary(agent_id) do
+    if AgentId.valid?(agent_id), do: {:ok, agent_id}, else: {:error, :invalid_agent_id}
+  end
+
+  defp fetch_lifecycle_agent_id(_payload), do: {:error, :missing_agent_id}
+
+  defp require_host_owns_agent(host_id, agent_id) do
+    if AgentId.host_id_from(agent_id) == host_id, do: :ok, else: {:error, :agent_not_owned}
   end
 
   # Relays `payload` (minus host_id, which only addresses the runner topic)
@@ -2305,6 +2390,48 @@ defmodule KaoiroServerWeb.AgentsChannel do
     do: {:ok, mode}
 
   defp fetch_reset_mode(_payload), do: {:error, :invalid_mode}
+
+  defp begin_planned_reset(agent_id, request_id) do
+    case PlannedDisconnects.begin(agent_id, request_id, :reset) do
+      :ok ->
+        :ok
+
+      {:error, :agent_busy} = error ->
+        # The reset lock owns request-id allocation, so its atomic acquire
+        # necessarily precedes the cross-lifecycle intent CAS. A competing
+        # command that won the latter race means this reset was never relayed;
+        # cancel exactly its lock before returning the established
+        # `agent_busy` lifecycle vocabulary.
+        _ = SessionResets.cancel(agent_id, request_id)
+        error
+    end
+  end
+
+  defp begin_planned_switch(agent_id, request_id) do
+    case PlannedDisconnects.begin(agent_id, request_id, :switch_session) do
+      :ok ->
+        try do
+          :ok =
+            AgentActivity.begin_transition(
+              agent_id,
+              request_id,
+              :restore,
+              DateTime.utc_now() |> DateTime.to_iso8601()
+            )
+        rescue
+          exception ->
+            _ = PeerConnectivity.abort_setup(agent_id, request_id)
+            reraise exception, __STACKTRACE__
+        catch
+          kind, reason ->
+            _ = PeerConnectivity.abort_setup(agent_id, request_id)
+            :erlang.raise(kind, reason, __STACKTRACE__)
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
 
   # Latest envelope for the agent; the caller has already run
   # `fetch_agent_id/1` (known? check), so a missing entry is a race with

@@ -137,6 +137,8 @@ const ERROR_CODE_GUIDANCE: Readonly<Record<string, string>> = {
   api_error: "retry at most once",
   timeout: "the peer may still be mid-turn — wait before retrying",
   interrupted: "confirm the peer's state before retrying",
+  reconnecting:
+    "planned restart in progress — do not escalate; wait for the reconnected notice before retrying",
   disconnected: "the peer is unreachable — do not retry, escalate to the operator",
   stale_turn: "resend using a new conversation_id",
 };
@@ -202,6 +204,7 @@ const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
   api_error: "the peer reported an unspecified error",
   timeout: "the peer's turn timed out",
   interrupted: "the peer's turn was interrupted",
+  reconnecting: "the peer is temporarily unavailable for a planned restart",
   disconnected: "the peer disconnected",
   stale_turn:
     "the peer's local turn counter had already advanced past this message",
@@ -232,7 +235,8 @@ function messageForCode(code: string): string {
 
 /** Maps adapter-reported engine error info to the open error-code vocabulary
  *  (issue #131: rate_limit / context_overflow / api_error / timeout /
- *  interrupted / disconnected). Unrecognized input degrades to "api_error"
+ *  interrupted / reconnecting / disconnected). Unrecognized input degrades
+ *  to "api_error"
  *  per the design decision — "disconnected" is intentionally never produced
  *  here since only the server can observe a wrapper disconnect. The returned
  *  `message` is always one of the fixed ERROR_CODE_MESSAGE templates, never
@@ -394,7 +398,7 @@ const EMPTY_OBJECT_SCHEMA: Record<string, unknown> = {
 };
 
 const TOOL_DESCRIPTION =
-  `Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass \`conversation_id\` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. Set wait_for_response=true only when the current turn needs the peer's next reply: its full envelope is returned by this same tool call; timeout returns a non-destructive reply_pending acknowledgement. If the peer became unresponsive instead of replying (rate limit, context overflow, API error, timeout, interrupt, or disconnect), the result carries \`peer_error: {code, message, from}\` instead of \`reply\` — recommended action by code: ${ERROR_CODE_GUIDANCE_SUMMARY}. The same \`peer_error\` can also arrive asynchronously as an inbound inform message when you were not waiting. The \`to\` field MUST be an exact agent_id — if you only know a peer by their display name, call \`list_agents\` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.`;
+  `Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass \`conversation_id\` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. Set wait_for_response=true only when the current turn needs the peer's next reply: its full envelope is returned by this same tool call; timeout returns a non-destructive reply_pending acknowledgement. If the peer became unresponsive instead of replying (rate limit, context overflow, API error, timeout, interrupt, or disconnect), the result carries \`peer_error: {code, message, from}\` instead of \`reply\` — recommended action by code: ${ERROR_CODE_GUIDANCE_SUMMARY}. The same \`peer_error\` can also arrive asynchronously as an inbound inform message when you were not waiting. A \`peer_reconnecting_capacity\` server rejection is different: the message was not accepted, no reconnected notice will follow for that attempt, and the result tells you to retry later with the same conversation_id. The \`to\` field MUST be an exact agent_id — if you only know a peer by their display name, call \`list_agents\` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.`;
 
 const LIST_AGENTS_DESCRIPTION =
   "List other kaoiro agents currently known to the server. Returns each peer's agent_id, persona (id/name/sprite_set), current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected), and engine/model/effort when reported. Use this to resolve a peer's display name and execution traits before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address. A proper-name collaboration request refers to an existing kaoiro peer — resolve it here first: 1 match → send_to_agent, several → ask the operator, 0 matches → report the persona is absent and never spawn a same-named internal sub-agent as a substitute.\n\nEach peer may also carry status fields for deciding WHO to delegate to: `context` ({used_tokens, max_tokens, used_percentage}) — avoid handing heavy work to a peer whose context is nearly full; `rate_limits` ({<window>: {status?, utilization?, resets_at?}}, windows `five_hour` / `seven_day`) — a peer near its limit will fail or stall, so prefer another or wait; `conversation` ({active, peers}) — a peer already in an active conversation is mid-collaboration, so avoid interrupting unless your message belongs to that work; `session_started_at` / `turns` / `last_activity_at` — a long-idle `last_activity_at` suggests the peer is stalled or done, worth reporting rather than delegating to.\n\nTwo rules when reading these: (1) `rate_limits` is a snapshot from the peer's LAST turn and is NOT refreshed while it idles — compare `resets_at` (Unix seconds) against the current time yourself, and once it has passed, treat that window as reset and stop trusting its `utilization` / `status`; use `last_activity_at` to judge how stale the snapshot is. (2) A field that is ABSENT means unknown, never zero and never fine — an omitted `turns` does not mean no turns, an omitted `context` does not mean plenty of room, and an omitted `rate_limits` does not mean unlimited. Ask the operator instead of assuming when an absent field would change your decision.\n\nThe reply also carries `users`: the kaoiro human users (operator/viewer) currently REGISTERED and authorized, each with id/kind/display_name/role — 'kind' is always the literal \"user\" here, distinguishing them from `agents`. `users` are NOT valid `send_to_agent` destinations — that tool only ever delivers to an agent_id from the `agents` list. This is a registry, not an online-presence list: it includes every currently-authorized user whether or not they are actively connected right now, and it does NOT currently identify who issued any particular instruction or inter-agent message — that attribution is not wired yet, so do not infer it from this list. Read it only to know which users exist and what role each holds; never pass a user's id as `send_to_agent`'s `to`. This array can be empty even when users exist — the operator can opt out of this disclosure server-side (default is disclosed).";
@@ -696,6 +700,7 @@ export interface InterAgentToolOptions {
 type InvokeLockOutcome =
   | { kind: "local-reject"; message: string }
   | { kind: "rejected"; message: string }
+  | { kind: "peer-error"; result: InterAgentToolResult }
   | {
       kind: "dispatched";
       acceptance: InterAgentAcceptance;
@@ -1859,6 +1864,12 @@ export class InterAgentTool {
             // conversation because of this call: release the waiter
             // instead of parking the tool for the full reply timeout.
             this.#cancelReplyWait(conversationId);
+            if (acceptance.reason === "peer_reconnecting") {
+              return {
+                kind: "peer-error",
+                result: peerErrorResult(args.to, "reconnecting"),
+              };
+            }
             // issue #262: an actionable hint over the generic reason string —
             // this is the one reject the CALLER can usually fix by re-typing
             // the id or omitting it, not by waiting or escalating. Names the
@@ -1869,7 +1880,14 @@ export class InterAgentTool {
             // caller reads it as its own typo and burns a turn concluding
             // that alone.
             const message =
-              acceptance.reason === "unknown_conversation_id"
+              acceptance.reason === "peer_reconnecting_capacity"
+                ? "send_to_agent failed: the peer is in a planned restart " +
+                  "and its close-notice capacity is full; this message was " +
+                  "not accepted and no reconnected notice will follow for " +
+                  "this attempt — retry later with the same " +
+                  `conversation_id=${conversationId} ` +
+                  "(peer_reconnecting_capacity)."
+                : acceptance.reason === "unknown_conversation_id"
                 ? `send_to_agent failed: conversation_id=${conversationId} is ` +
                   "unknown to the server — retry with the correct " +
                   "conversation_id, or omit it to start a new conversation " +
@@ -1899,6 +1917,9 @@ export class InterAgentTool {
       },
     );
 
+    if (outcome.kind === "peer-error") {
+      return outcome.result;
+    }
     if (outcome.kind !== "dispatched") {
       return errorResult(outcome.message);
     }
@@ -2158,5 +2179,26 @@ function errorResult(text: string): InterAgentToolResult {
   return {
     content: [{ type: "text", text }],
     isError: true,
+  };
+}
+
+function peerErrorResult(from: string, code: string): InterAgentToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            peer_error: {
+              code,
+              message: messageForCode(code),
+              from,
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ],
   };
 }

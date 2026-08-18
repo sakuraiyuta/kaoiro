@@ -109,6 +109,17 @@ defmodule KaoiroServer.SessionResetsTest do
         SessionResets.check_and_acquire("a.5", "reset", "idle", "sess", sr)
       end
     end
+
+    test "cancel は matching request_id の未relay lock だけを解除する", %{resets: sr} do
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire("a.cancel", "new", "idle", "sess", sr)
+
+      assert :noop = SessionResets.cancel("a.cancel", "stale", sr)
+      assert SessionResets.pending?("a.cancel", sr)
+      assert :ok = SessionResets.cancel("a.cancel", request_id, sr)
+      refute SessionResets.pending?("a.cancel", sr)
+      assert :noop = SessionResets.cancel("a.cancel", request_id, sr)
+    end
   end
 
   describe "guard_instruction/1" do
@@ -130,6 +141,29 @@ defmodule KaoiroServer.SessionResetsTest do
   end
 
   describe "resolve/6" do
+    test "failure callback は matching runner failure と store timeout を request_id 付きで通知する" do
+      owner = self()
+
+      callback = fn agent_id, request_id, reason ->
+        send(owner, {:reset_failure, agent_id, request_id, reason})
+      end
+
+      name = :"sr_callback_#{System.unique_integer([:positive])}"
+
+      start_supervised!({SessionResets, name: name, timeout_ms: 20, on_failure: callback})
+
+      assert {:ok, failed_id, _} =
+               SessionResets.check_and_acquire("a.failed", "new", "idle", nil, name)
+
+      :ok = SessionResets.resolve("a.failed", failed_id, false, "rollback_failed", nil, name)
+      assert_receive {:reset_failure, "a.failed", ^failed_id, "rollback_failed"}
+
+      assert {:ok, timeout_id, _} =
+               SessionResets.check_and_acquire("a.timeout", "new", "idle", nil, name)
+
+      assert_receive {:reset_failure, "a.timeout", ^timeout_id, "timeout"}, 100
+    end
+
     test "join transition_id は matched / mismatch / legacy_absent / noop を区別する", %{resets: sr} do
       assert {:ok, request_id, _} =
                SessionResets.check_and_acquire("a.cas", "new", "idle", "old", sr)

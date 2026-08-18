@@ -110,10 +110,17 @@ defmodule KaoiroServer.SessionResets do
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
 
-    GenServer.start_link(__MODULE__, %{timeout_ms: Keyword.get(opts, :timeout_ms, @timeout_ms)},
+    GenServer.start_link(
+      __MODULE__,
+      %{
+        timeout_ms: Keyword.get(opts, :timeout_ms, @timeout_ms),
+        on_failure: Keyword.get(opts, :on_failure, &default_on_failure/3)
+      },
       name: name
     )
   end
+
+  defp default_on_failure(_agent_id, _request_id, _reason), do: :ok
 
   @doc """
   Atomically checks the lock, the KaoiroState precondition, and the
@@ -255,9 +262,27 @@ defmodule KaoiroServer.SessionResets do
     GenServer.call(server, {:delete, agent_id})
   end
 
+  @doc """
+  Releases exactly the matching lock without a lifecycle broadcast.
+
+  Used when the connectivity-intent reservation loses a concurrent lifecycle
+  race after this reset lock was acquired but before anything reached the
+  runner. A stale id is a no-op.
+  """
+  def cancel(agent_id, request_id, server \\ __MODULE__) do
+    GenServer.call(server, {:cancel, agent_id, request_id})
+  end
+
   @impl true
-  def init(%{timeout_ms: timeout_ms}),
-    do: {:ok, %{pending: %{}, last_dispatch: %{}, timeout_ms: timeout_ms}}
+  def init(%{timeout_ms: timeout_ms, on_failure: on_failure}),
+    do:
+      {:ok,
+       %{
+         pending: %{},
+         last_dispatch: %{},
+         timeout_ms: timeout_ms,
+         on_failure: on_failure
+       }}
 
   @impl true
   def handle_call(
@@ -355,6 +380,18 @@ defmodule KaoiroServer.SessionResets do
        | pending: Map.delete(s.pending, agent_id),
          last_dispatch: Map.delete(s.last_dispatch, agent_id)
      }}
+  end
+
+  def handle_call({:cancel, agent_id, request_id}, _from, s) do
+    case Map.get(s.pending, agent_id) do
+      %{request_id: ^request_id, timer_ref: ref} = lock ->
+        _ = Process.cancel_timer(ref)
+        reply_early(lock, :noop)
+        {:reply, :ok, %{s | pending: Map.delete(s.pending, agent_id)}}
+
+      _ ->
+        {:reply, :noop, s}
+    end
   end
 
   def handle_call({:confirm_connection, agent_id, joined_session_id, transition_id}, from, s) do
@@ -472,6 +509,7 @@ defmodule KaoiroServer.SessionResets do
             reply_early(lock, :noop)
             _ = Process.cancel_timer(lock.timer_ref)
             broadcast_failed(agent_id, lock, reason)
+            notify_failure(s.on_failure, agent_id, request_id, reason)
             {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
           end
         end
@@ -510,6 +548,7 @@ defmodule KaoiroServer.SessionResets do
         # wrapper never joins.
         reply_early(lock, :noop)
         broadcast_failed(agent_id, lock, "timeout")
+        notify_failure(s.on_failure, agent_id, request_id, "timeout")
 
         {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
 
@@ -701,6 +740,19 @@ defmodule KaoiroServer.SessionResets do
       "session_reset_failed",
       %{"request_id" => lock.request_id, "reason" => reason}
     )
+  end
+
+  defp notify_failure(callback, agent_id, request_id, reason) do
+    callback.(agent_id, request_id, reason)
+  rescue
+    error ->
+      Logger.warning(
+        "SessionResets failure callback raised for #{agent_id}: " <>
+          Exception.message(error)
+      )
+  catch
+    kind, caught ->
+      Logger.warning("SessionResets failure callback #{kind} for #{agent_id}: #{inspect(caught)}")
   end
 
   # Best-effort detach: DETS I/O failure must not leak into

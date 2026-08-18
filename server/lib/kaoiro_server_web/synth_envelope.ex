@@ -2,8 +2,8 @@ defmodule KaoiroServerWeb.SynthEnvelope do
   @moduledoc """
   Builds and delivers server-synthesized `inter_agent_message` envelopes
   (`agent_id: "server"`, protocol-inter-agent spec's server-derived
-  notices: hard-limit escalation, peer-unreachable, and — issue #221 — TTL
-  auto-close propagation).
+  notices: hard-limit escalation, planned reconnect lifecycle,
+  peer-unreachable, and — issue #221 — TTL auto-close propagation).
 
   Centralizing the envelope SHAPE here (rather than each call site building
   its own) is what keeps the Envelope contract's required fields

@@ -12,6 +12,10 @@
 - operator 指示で wrapper を **spawn / stop / restart** する監督ループ(4-4b)、
   当該 cwd 配下の **session 列挙 + resume**(4-5、T3 実在検証 + F4 ローカルロック)、
   稼働中 agent の resume 先差し替え(`switch_session`)。
+- 予告済み wrapper cycle の相関(issue #266)。`restart` の
+  server-issued `request_id` を relaunch 後 wrapper config の
+  `transition_id` に置き換え、server が planned 復帰を exact match で
+  確定できるようにする。`request_id` 省略(旧 server) は従来動作。
 - spawn は dashboard からの案A 経路に対応([ADR-0024](../docs/adr/0024-agent-instance-identity-and-spawn-auth.md)):
   agent_id 採番・per-agent token 発行はサーバが行い、runner は `server_url` を
   自 config から補完する。
@@ -222,6 +226,14 @@ launchctl bootstrap gui/"$(id -u)" \
   設定を追加するか、定期的に切り詰める
 
 ### 再起動ポリシーと終了コード
+
+issue #266 を含む release の rollout は **runner / wrapper を先行し、server を
+後行**する。新 server は operator restart の `request_id` を wrapper の
+`transition_id` まで運べる runner と、`peer_reconnecting` / `reconnected` を
+解釈できる wrapper が配備済みであることを前提に planned window を開始する。
+逆順(server 先行)では旧 runner が token を relaunch へ運べず、当該 agent 宛 IA
+が最大 60 秒 bounce し、旧 wrapper は close notice を解釈できないため
+reconnecting 状態も解消されない。
 
 - SIGTERM で runner は配下の wrapper を停止してから **exit 0** で終わる。
   systemd は `Restart=on-failure`、launchd は `KeepAlive.SuccessfulExit=false`
