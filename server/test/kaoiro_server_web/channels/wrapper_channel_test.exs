@@ -144,6 +144,18 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   describe "ADR-0015 stage 2 wrapper inbound funnel (issue #270)" do
+    # T2-3 は「version 一致なら警告ゼロ」を log == "" で検証するが、7 種の
+    # push には directory_request が含まれ、その directory-only 射影は
+    # suite 共有の AgentDirectory (グローバル GenServer) が 32 件を超えて
+    # いると cap warn を出す (issue #269 S6)。他 describe (T10 等) が蓄積
+    # した entry が実行順序次第で流れ込み seed 依存で flake するため、
+    # issue #269 の T10 describe と同じ隔離 setup で汚染を断つ。setup は
+    # describe スコープに閉じ、suite は async: false の直列実行。
+    setup do
+      for {id, _entry} <- AgentDirectory.all(), do: AgentDirectory.delete(id)
+      :ok
+    end
+
     @versioned_wrapper_events ~w(
       delivery_ack
       delivery_status_request
