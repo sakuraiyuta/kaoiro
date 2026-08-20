@@ -5503,4 +5503,159 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       GenServer.stop(name)
     end
   end
+
+  # ADR-0015 の受信側規則を server -> wrapper 経路で pin する (issue #218)。
+  #
+  # runner 経路 (relay_to_runner/4) は #182 で閉じていたが、wrapper 経路は
+  # 「client が付けていないので届かない」状態のまま残っていた。#218 で
+  # relay/5 が version を stamp するようになり、受信側の warn は
+  # require_operator/4 に溶接された。ここで pin するのはその 2 点。
+  describe "server -> wrapper の version stamp と受信側検査 (issue #218, ADR-0015)" do
+    # relay/5 経路の代表として set_model を使う。instruction / interrupt /
+    # permission_decision / question_response / set_effort / refresh_models /
+    # set_permission_mode は同じ relay/5 を通るので helper 単位で 1 本。
+    test "client が version を送らなくても wrapper には v0 が届き、欠落は警告される" do
+      agent_id = "test.v218-absent"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      log =
+        capture_log(fn ->
+          ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "opus"})
+          assert_reply ref, :ok
+        end)
+
+      assert log =~ "set_model: client declared protocol version (absent)"
+      assert_broadcast "set_model", payload
+      assert payload["version"] == "0"
+      assert payload["model"] == "opus"
+    end
+
+    test "version 不一致は警告した上で v0 へ normalize して relay する" do
+      agent_id = "test.v218-mismatch"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "set_model", %{
+              "agent_id" => agent_id,
+              "model" => "opus",
+              "version" => "99"
+            })
+
+          assert_reply ref, :ok
+        end)
+
+      assert log =~ "client declared protocol version"
+      assert log =~ "\"99\""
+      # ベストエフォート受理: 不一致でも relay は止まらない。
+      assert_broadcast "set_model", payload
+      assert payload["version"] == "0"
+    end
+
+    # 一致が無音であることを pin しないと、「常時 warn する」実装でも上の
+    # 2 件は通ってしまう。
+    test "version が \"0\" なら警告しない" do
+      agent_id = "test.v218-match"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "set_model", %{
+              "agent_id" => agent_id,
+              "model" => "opus",
+              "version" => "0"
+            })
+
+          assert_reply ref, :ok
+        end)
+
+      refute log =~ "client declared protocol version"
+      assert_broadcast "set_model", payload
+      assert payload["version"] == "0"
+    end
+
+    # relay されない (server が直接応答する) event でも同じ検査が走ること。
+    # #88 / #197 段階3 で二度 must-fix になった誤読 —「runner に中継され
+    # ないから version 不要」— が再発しない側の pin。
+    test "relay されない event (clear_history) でも version を検査する" do
+      agent_id = "test.v218-direct"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+
+      log =
+        capture_log(fn ->
+          ref = push(socket, "clear_history", %{"agent_id" => agent_id, "version" => "99"})
+          # 検査は受理可否に影響しない (この agent には current session が
+          # 無いので no_current_session で返る) — warn されることが主題。
+          assert_reply ref, :error, _
+        end)
+
+      assert log =~ "clear_history: client declared protocol version"
+      assert log =~ "\"99\""
+    end
+
+    # 検査を role gate の AFTER に置いている理由の pin。viewer が version を
+    # 詐称して warn ログを焚けると、認証前のログ書き込み手段になる。
+    test "viewer の不正 version は warn を出さない (role gate が先)" do
+      agent_id = "test.v218-viewer"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "set_model", %{
+              "agent_id" => agent_id,
+              "model" => "opus",
+              "version" => "99"
+            })
+
+          assert_reply ref, :error, %{reason: "forbidden"}
+        end)
+
+      refute log =~ "client declared protocol version"
+    end
+
+    # サイズ上限は stamp 後の map に掛かること (こはく D2 の付帯要請)。
+    # stamp 前の map を測っていると、上限ぴったりの payload が stamp 分だけ
+    # 超過したまま wrapper へ届く。
+    test "relay サイズ上限は version stamp 込みで判定される (境界)" do
+      agent_id = "test.v218-size"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      # AgentsChannel の @max_relay_bytes と同値。
+      max_bytes = 131_072
+
+      probe = fn len ->
+        :erlang.external_size(%{"model" => "m", "blob" => :binary.copy("a", len)})
+      end
+
+      # external_size はバイナリ長に対して傾き 1 なので 1 回の補正で一致する。
+      exact_len = 130_000 + (max_bytes - probe.(130_000))
+
+      # 前提そのものを assert する: 以下の判定は「stamp 前がちょうど上限」に
+      # 依存しており、ここがズレるとテストが測る対象も変わる。
+      assert probe.(exact_len) == max_bytes
+
+      ref =
+        push(socket, "set_model", %{
+          "agent_id" => agent_id,
+          "model" => "m",
+          "blob" => :binary.copy("a", exact_len)
+        })
+
+      assert_reply ref, :error, %{reason: "payload_too_large"}
+      refute_broadcast "set_model", %{}
+    end
+  end
 end

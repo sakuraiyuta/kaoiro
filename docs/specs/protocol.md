@@ -254,6 +254,13 @@ multi-wrapper をまたぐ server 側 TaskStates の ingress/byte bound に代�
 Channels のチャネルイベント名と内容。トピックは
 ラッパー側 `wrapper:<agent_id>`、クライアント側 `agents:lobby`。
 
+**`version` は下表の全行に共通のフラット外枠キーであり、各行の payload 欄には
+再掲しない**([ADR-0015](../adr/0015-protocol-version-stamping.md)。エンベロープ
+の外枠キーを個々の `type` 行に再掲しないのと同じ扱い)。行の payload 欄に
+`version` が明示されているのは、その値の producer や domain に固有の注記がある
+場合だけで、明示が無いことは非付与を意味しない。経路ごとの充足状況と唯一の
+恒久例外(`attach_chunk`)は下記「version 棚卸し」が正本。
+
 | 方向 | イベント | 内容 |
 |---|---|---|
 | ラッパー → サーバ | `envelope` | エンベロープ全体。 `type=inter_agent_message` を受理したときだけ reply が `{ ingress_stamp: [us, seq] }` を返す (acceptance ack、[ADR-0051](../adr/0051-history-restart-resilience.md) D3-2。送信側 wrapper の sidecar 記録トリガ)。他の type は従来どおり空 reply。因果順は [protocol-inter-agent](protocol-inter-agent.md) が正本 |
@@ -272,7 +279,7 @@ Channels のチャネルイベント名と内容。トピックは
 | サーバ → クライアント | `history_replay_envelope` | `{ pane_agent_id, envelope }`。`replay_ia` で受理された復元 IA 行 1 件を、**それが属する pane を明示して** 配信する([ADR-0051](../adr/0051-history-restart-resilience.md) D3-3 追補、ふじ 30-10 must-fix M2)。client は指定 pane にだけ入れ、通常の `envelope` のように `agent_id ∪ payload.to` へ広げてはならない — 広げると offline peer の pane に、reload 後には現れない行が残る。`pane_agent_id` は server が replay 中 wrapper の channel assign から決める。**operator 限定配信** |
 | サーバ → クライアント | `agent_deleted` | `{ agent_id }`。`delete_agent` 成功後に broadcast。クライアントは当該 agent をグリッドと表示用ログから除去(#14)。viewer にも配信(grid 整合のため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 | クライアント → サーバ | `attach_open` | `{ agent_id, upload_id, filename, mime, size, chunks }`。**operator のみ**。ファイル添付の予告。upload_id は client 採番(セッション内一意)。該当ラッパーへ relay、未知 agent_id は `{:error, unknown_agent}`。詳細は下記「ファイルアップロード wire」 |
-| クライアント → サーバ | `attach_chunk` | **binary frame**(`<u32 upload_id_len><upload_id utf8><u32 chunk_index><chunk_bytes>`)。**operator のみ**。該当ラッパーへ透過 relay。詳細は下記「ファイルアップロード wire」 |
+| クライアント → サーバ | `attach_chunk` | **binary frame**(`<u32 upload_id_len><upload_id utf8><u32 chunk_index><chunk_bytes>`)。**operator のみ**。該当ラッパーへ透過 relay。詳細は下記「ファイルアップロード wire」。**`version` の唯一の恒久例外** — binary frame にキーを置く JSON オブジェクトが無いため(下記「version 棚卸し」) |
 | クライアント → サーバ | `attach_close` | `{ agent_id, upload_id }`。**operator のみ**。1 upload の完了通知(任意 = chunks 完走 ack)。詳細は下記「ファイルアップロード wire」 |
 | クライアント → サーバ | `instruction` | `{ agent_id, text, attachment_ids? }`。**operator のみ**。サーバは text / attachment_ids を解釈せず該当ラッパーへ relay。未知 agent_id は `{:error, unknown_agent}`。`attachment_ids` 指定時は wrapper が attach_close 完走済の upload を SDK content blocks へ render([file-upload](file-upload.md)、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)) |
 | クライアント → サーバ | `permission_decision` | `{ agent_id, request_id, allow, message? }`。**operator のみ**。該当ラッパーへ relay |
@@ -288,7 +295,7 @@ Channels のチャネルイベント名と内容。トピックは
 | クライアント → サーバ | `rename_agent` | `{ version, agent_id, display_name }`(issue #219 D23 でキーを `name` から改名 — 互換期間中は旧 `name` キーも受理するが、両キーが同時かつ不一致で来たら `invalid_name` で reject し、どちらか一方を黙って優先しない)。runner へは中継されないが ADR-0015 は「3 者すべてのメッセージ」を対象とし例外を設けないため、`version` は必須(issue #197 段階3 ふじ MF-1 レビュー指摘、`launch_defaults` と同じ扱い)。**operator のみ**(issue #197 段階3、#198 まで固定)。`display_name` は trim 後 non-empty / 64 grapheme cluster 以下 / 制御文字 (C0+DEL) 禁止 — spawn 時の `name?` (上記) と同じ規則。live / disconnected どちらの agent でも受理。`AgentDirectory.rename/2` が唯一の authoritative write (revision を単調 +1、canonical persona は一切変更しない — issue #219 D19)、成功で `{ display_name, revision }` を reply しつつ (a) `wrapper:<id>` topic へ `persona_sync` **と** `display_name_sync` を同一 revision で dual-emit relay (下記、issue #219 D22、fire-and-forget) と (b) 既 join operator 全員の `directory` push を live 更新 (`entries` フルスナップショット、`persona_id` を現在の PersonaAssets へ join した canonical + `display_name` の形、viewer には届かない)。未知 agent は `unknown_agent`、name 違反は `invalid_name`、対象 agent の revision が safe-integer 上限 (下記) に既に達している場合は `revision_exhausted`(fail-closed、書き込み・relay とも一切行わない、issue #197 段階3 ふじ MF-5 レビュー指摘) |
 | クライアント → サーバ | `rename_user` | `{ version, user_id, display_name }`(issue #219 D23、`rename_agent` と同じ `name`/`display_name` 互換規則)。`version` は `rename_agent` と同じ理由で必須(issue #197 段階3 ふじ MF-1 レビュー指摘)。**operator のみ、任意の既存 user が対象**(issue #197 段階3)。`display_name` の contract は `rename_agent` と同じ。`Users.rename/2` を synchronous に呼び、成功で更新後の `{ id, kind, display_name }` を reply。`directory_request` の `users` 投影 (issue #197 段階2) は毎回 live 読みのため、これ以外の broadcast は無い。未知 user は `unknown_user`、name 違反は `invalid_name`、user_id の charset 違反 (issue #61) は `invalid_user_id` |
 | サーバ → ラッパー | `attach_open` | `{ upload_id, filename, mime, size, chunks }`(relay)。wrapper は `pending_uploads[upload_id]` を作成、5 分 TTL で GC |
-| サーバ → ラッパー | `attach_chunk` | **binary**(relay)。wrapper は header(`<u32 upload_id_len><upload_id utf8><u32 chunk_index>`)をパースし当該 upload の chunk バッファに追加 |
+| サーバ → ラッパー | `attach_chunk` | **binary**(relay)。wrapper は header(`<u32 upload_id_len><upload_id utf8><u32 chunk_index>`)をパースし当該 upload の chunk バッファに追加。**`version` の唯一の恒久例外**(下記「version 棚卸し」) |
 | サーバ → ラッパー | `attach_close` | `{ upload_id }`(relay)。wrapper は MIME / 個別サイズ(128 MB 上限)/ 点数(in-flight 20)を検査、不適は `attach_rejected` を発火 |
 | サーバ → ラッパー | `instruction` | `{ text, attachment_ids? }`(relay)。ラッパーは入力キューへ投入、`attachment_ids` 指定時は pending_uploads の bytes を SDK content blocks(image / document / text、Office は markitdown → text)へ render([file-upload](file-upload.md)、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md))。instruction 全体の拒否は `instruction_rejected` |
 | サーバ → ラッパー | `permission_decision` | `{ request_id, allow, message? }`(relay。`request_id` で保留中の承認と突合) |
@@ -611,15 +618,15 @@ session_id を指定して **resume** する単一機構で行う
 `session_reset_result` / `catalog_result`)は組み立て時に載せる。
 クライアント発の payload をサーバが `host_id` だけ剥がして**素通し**する
 経路 — `enumerate_sessions` / `refresh_engine_catalog` / `stop` /
-`restart` — のうち、dashboard は `stop` / `enumerate_sessions` /
-`refresh_engine_catalog` に `version: "0"` を載せる(実装済み)。runner は
-受信した `version` を検査し、不一致(省略を含む)を warn したうえで
-ベストエフォートに受理する(ADR-0015)。
+`restart` — では、`relay_to_runner/4` が client の申告値を warn したうえで
+`version` を `"0"` へ normalize する。dashboard 側も全 push に `version` を
+載せる(issue #218 以降は単一送出点 `pushVersioned` が行うので、event ごとの
+差は無い)。runner は受信した `version` を検査し、不一致(省略を含む)を warn
+したうえでベストエフォートに受理する(ADR-0015)。
 
-これにより client → server の `version` 付与と runner 受信側の不一致検査の
-gap は解消済みである。`restart` は dashboard に push 呼び出し producer が
-未実装の既知 gap として残る。restart UI を実装する際は `version: "0"` を
-付与する。
+`restart` は dashboard に push 呼び出し producer が未実装のまま残るが、実装時は
+上記の送出点を通るので version 付与は自動的に満たされる。経路全体の充足状況は
+下記「version 棚卸し」を参照。
 
 **安全性**(spawn = 実質リモートコード実行): spawn / resume / resume_session /
 stop / restart の受理は **operator 限定**。resume 対象 session_id は当該 agent
@@ -640,15 +647,18 @@ dashboard(operator)が起動 UI から出す要求。サーバは `runner:<host_
 インスタンス**であり、「同じ性質を複数 spawn」は同一 persona × 別 agent_id で
 表現する(D1)。
 
+`version` の扱いは上記「方向別メッセージ種別」と同じ — 全行に共通の外枠キーで、
+payload 欄への明示は producer 固有の注記がある行だけ。
+
 | 方向 | イベント | payload |
 |---|---|---|
 | クライアント → サーバ | `spawn` | `{ host_id, persona, cwd, name?, initial_prompt?, resume_session_id?, engine?, model?, effort?, permission_mode?, sandbox?, network_access? }`。**operator 限定**。`model` / `effort` / `permission_mode` / `sandbox` / `network_access` は LaunchDialog の選択値で、サーバ経由でそのまま `spawn`(runner 向け)へ渡る(engine 別の適用範囲は上記 runner 制御メッセージの `spawn` 行を参照)。`persona` は id 文字列で、サーバが host 申告の persona へ解決する。サーバが `agent_id` を採番して per-agent `token` を発行する(案A、D3/D4)。`server_url` はサーバが載せず runner が自 config から補う。`name?` は per-instance 表示名で persona.name を上書き(agent_id/persona.id は不変、64 文字上限・制御文字不可)。`resume_session_id` 指定で resume 起動。サーバは復帰用に cwd を SessionPointers へ seed する。`engine?` は LaunchDialog の engine セレクト値(host の `capabilities` に含まれる値)で、server は照合して runner へ転送する ([ADR-0032](../adr/0032-codex-adapter.md) F1、[phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)) |
-| クライアント → サーバ | `launch_defaults` | `{ version }`。**operator 限定**([issue #88](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/88))。LaunchDialog がペルソナ単位の「前回 effort」を起動デフォルトとして提示するための要求。dashboard は `version: "0"` を付与する — **runner には一切中継されない**(`spawn` の agent_id 採番と同様、サーバが同期的に計算して直接 reply する)イベントだが、ADR-0015 は「ラッパー/サーバ/クライアントの全メッセージ」に version を要求しており runner-relay かどうかで例外にはならない(`restore` 等の既存イベントが version を持たないのは ADR-0015 未達の既存 gap であって、新規イベントの規範ではない)。サーバは `warn_on_version_mismatch/3`(action="accepting")で不一致 / 欠落を warn した上でベストエフォート受理する。reply の Phoenix status は `ok`、response body は `{ defaults: { "<persona_id>": "<effort>" } }`(`{"ok": true, ...}` という形でワイヤに乗るわけではない — status と body は別枠)。サーバは新規 store を持たず、`AgentDirectory`(agent_id → persona)と `SessionPointers`(agent_id → snapshot + `effort_revision`)を read-time join して算出する — 2026-07-23 の scope 縮小決定により、起票時想定の `EffortLevels` 新設ストアは採用しない。ペルソナごとの選択規則: (1) `effort_revision` を持つ候補が1件以上あれば最大 revision の effort、(2) 無ければ候補が1件のみならそれ、(3) 複数だが全て同値ならその値、(4) 複数かつ不一致なら該当ペルソナを結果から除外(no preference)。`effort_revision` は `SessionPointers.record_snapshot/2` が sanitize 済み `{effort, effort_source}` pair が valid な新値へ変わったときのみ進める単調 counter(model/permission だけの変更や effort-less モデルへの切替では進まない — 進めない理由は「矛盾回避」ではなく、revision を「最後に有効な effort を選んだ地点」という意味に保つため。effort が一時的に消える遷移は read 側の defensive skip が拾うので、bump してもしなくても選択結果自体は変わらない)。クライアント側 parse は fail-closed — persona_id / effort が非空文字列でない entry は個別に drop し、他の entry は活かす。LaunchDialog は取得失敗時も既存の `default_effort` へ静かに縮退し、起動をブロックしない |
-| クライアント → サーバ | `stop` / `restart` | `{ version, host_id, agent_id }`。**operator 限定**。server は `AgentId.host_id_from(agent_id) == host_id` を exact match で検証し、不一致は `agent_not_owned`。`stop` は dashboard の「終了」ボタン由来(host_id は agent_id から導出)。dashboard は stop に `version: "0"` を付与。restart の producer は未実装で、実装時に同じ値を付与 |
+| クライアント → サーバ | `launch_defaults` | `{ version }`。**operator 限定**([issue #88](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/88))。LaunchDialog がペルソナ単位の「前回 effort」を起動デフォルトとして提示するための要求。**runner には一切中継されない**(`spawn` の agent_id 採番と同様、サーバが同期的に計算して直接 reply する)イベントだが、ADR-0015 は「ラッパー/サーバ/クライアントの全メッセージ」に version を要求しており runner-relay かどうかで例外にはならない(この行が根拠として挙げていた「`restore` 等の既存イベントが version を持たない」既存 gap は issue #218 で解消済み — 上記「version 棚卸し」)。サーバは `warn_on_version_mismatch/3`(action="accepting")で不一致 / 欠落を warn した上でベストエフォート受理する。reply の Phoenix status は `ok`、response body は `{ defaults: { "<persona_id>": "<effort>" } }`(`{"ok": true, ...}` という形でワイヤに乗るわけではない — status と body は別枠)。サーバは新規 store を持たず、`AgentDirectory`(agent_id → persona)と `SessionPointers`(agent_id → snapshot + `effort_revision`)を read-time join して算出する — 2026-07-23 の scope 縮小決定により、起票時想定の `EffortLevels` 新設ストアは採用しない。ペルソナごとの選択規則: (1) `effort_revision` を持つ候補が1件以上あれば最大 revision の effort、(2) 無ければ候補が1件のみならそれ、(3) 複数だが全て同値ならその値、(4) 複数かつ不一致なら該当ペルソナを結果から除外(no preference)。`effort_revision` は `SessionPointers.record_snapshot/2` が sanitize 済み `{effort, effort_source}` pair が valid な新値へ変わったときのみ進める単調 counter(model/permission だけの変更や effort-less モデルへの切替では進まない — 進めない理由は「矛盾回避」ではなく、revision を「最後に有効な effort を選んだ地点」という意味に保つため。effort が一時的に消える遷移は read 側の defensive skip が拾うので、bump してもしなくても選択結果自体は変わらない)。クライアント側 parse は fail-closed — persona_id / effort が非空文字列でない entry は個別に drop し、他の entry は活かす。LaunchDialog は取得失敗時も既存の `default_effort` へ静かに縮退し、起動をブロックしない |
+| クライアント → サーバ | `stop` / `restart` | `{ version, host_id, agent_id }`。**operator 限定**。server は `AgentId.host_id_from(agent_id) == host_id` を exact match で検証し、不一致は `agent_not_owned`。`stop` は dashboard の「終了」ボタン由来(host_id は agent_id から導出)。restart の producer は未実装だが、実装時は dashboard 側の単一送出点 `pushVersioned` を通るため `version` は自動的に付く(issue #218) |
 | クライアント → サーバ | `restore` | `{ agent_id }`。**operator 限定**。切断済みエージェントを**同一 agent_id で resume 再 spawn**して復帰させる(ADR-0014 復帰)。サーバが SessionPointers の `{session_id, cwd}` と最後の persona を引いて runner へ `spawn` を中継。稼働中は `not_disconnected`、session pointer 無し(cwd 含む)は `no_session` |
 | クライアント → サーバ | `resume_session` | `{ agent_id, session_id }`。**operator 限定**。**同一 agent_id / cwd** のまま、resume 先を operator が選んだ `session_id` に切り替える(ADR-0014 resume-swap)。稼働中は `runner:<host_id>` へ `switch_session` を中継(kill→relaunch)、切断済みは `restore` と同経路で `spawn`(cwd は SessionPointers、`session_id` は payload)。`session_id` charset は `[A-Za-z0-9-]{1,128}`(欠落 `missing_session_id` / 不正 `invalid_session_id`)。切断済みで cwd 未記録なら `no_session` |
-| クライアント → サーバ | `enumerate_sessions` | `{ version, host_id, cwd }` または `{ version, host_id, agent_id }`。**operator 限定**。dashboard は `version: "0"` を付与する。resume 候補の列挙要求。`cwd` 省略時は `agent_id` を SessionPointers に引き当てて server が cwd を補完(詳細画面から wrapper の ext.cwd を待たずに列挙できるようにするため)。`cwd` も `agent_id` も無ければ `invalid_cwd`、`agent_id` はあるが SessionPointers に cwd 記録が無ければ `no_session` |
-| クライアント → サーバ | `refresh_engine_catalog` | `{ version, host_id, engine, request_id, force? }`。**operator 限定**。dashboard は `version: "0"` を付与する。LaunchDialog の「モデル一覧を再取得」。サーバが見るのは operator role・`host_id`・payload サイズだけで、`host_id` を剥がした残りは**中身を解釈せず** `runner:<host_id>` へ relay する。`engine` / `request_id` / `force` の妥当性検証は runner 側([ADR-0039](../adr/0039-engine-catalog-live-probe.md)) |
+| クライアント → サーバ | `enumerate_sessions` | `{ version, host_id, cwd }` または `{ version, host_id, agent_id }`。**operator 限定**。resume 候補の列挙要求。`cwd` 省略時は `agent_id` を SessionPointers に引き当てて server が cwd を補完(詳細画面から wrapper の ext.cwd を待たずに列挙できるようにするため)。`cwd` も `agent_id` も無ければ `invalid_cwd`、`agent_id` はあるが SessionPointers に cwd 記録が無ければ `no_session` |
+| クライアント → サーバ | `refresh_engine_catalog` | `{ version, host_id, engine, request_id, force? }`。**operator 限定**。LaunchDialog の「モデル一覧を再取得」。サーバが見るのは operator role・`host_id`・payload サイズだけで、`host_id` を剥がした残りは**中身を解釈せず** `runner:<host_id>` へ relay する。`engine` / `request_id` / `force` の妥当性検証は runner 側([ADR-0039](../adr/0039-engine-catalog-live-probe.md)) |
 | サーバ → クライアント | `hosts` | `{ hosts: { "<host_id>": { personas, cwd_allowlist, capabilities?, engines?, build_revision?, build_dirty?, registered_at } } }`。**host_id をキーとする map**(配列ではない)。host 登録の変化と join 直後に push。`personas` は host の trust policy([ADR-0031](../adr/0031-runner-persona-trust-mode.md))を server SoT の persona プールに適用した結果で、runner が申告した生の id 列ではない。`build_revision` / `build_dirty` は runner の `register` payload をそのまま転送(issue #228、[ADR-0053](../adr/0053-build-identity.md))— dashboard が GET `/api/health` の server 自身の `build_revision` と比較し、不一致または片方 `"unknown"` のとき LaunchDialog で operator へ警告する(observability のみ、接続や起動は一切阻害しない)。**operator 限定**(cwd 許可リスト等は機微、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
 | サーバ → クライアント | `runner_sessions` | `enumerate_sessions` 応答(runner の `sessions`)の転送。**operator 限定** |
 | サーバ → クライアント | `spawn_result` | `{ host_id, agent_id, ok, reason?, request_id? }` の転送。**operator 限定** |
@@ -677,6 +687,98 @@ wrapper` 直結(runner-less)の本格対応は [#71](https://gitea.example.inval
 - `ext` はフィルタの名前空間であり、コアは解釈しない。
 - トランスポート層のバージョンは Channels の `vsn` 交渉
   ([ADR-0009](../adr/0009-client-transport.md))が担い、本節とは独立。
+
+### version 棚卸し(issue #218)
+
+ADR-0015 の「3 者すべてのメッセージ」要請に対する全経路の充足状況。基準は
+`develop` の `74a545c`(2026-08-20 時点)。issue [#88](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/88)
+と [#197](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/197) 段階3 で
+**同じ誤読 —「この message は runner に中継されないから version 不要」— が二度
+must-fix になった**。ADR-0015 は経路で例外を設けていないので、以下の表が判断の
+正本であり、「隣の message が持っていない」ことは前例にならない。
+
+**付与主体**は経路ごとに決まっている。producer が payload を組み立てる経路では
+組み立て時に、client 発の payload をサーバが素通しする経路ではサーバが
+**normalize**(`relay/5` / `relay_to_runner/4` が `version` を `"0"` で上書き)
+する。後者は client の申告を認証しているのではなく、送信元 build に依存せず
+受信側の保証を成立させるための正規化である。申告値そのものは normalize の前に
+warn される。
+
+#### クライアント → サーバ(#218 で全件充足)
+
+| 状況 | message |
+|---|---|
+| 付与済み | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `refresh_engine_catalog` / `set_permission_mode` / `rename_agent` / `clear_history` / `delete_agent` / `stop` / `restore` / `resume_session` / `session_reset` / `spawn` / `launch_defaults` / `enumerate_sessions` / `attach_open` / `attach_close` |
+| 恒久 carve-out | `attach_chunk`(下記) |
+| producer 未実装 | `restart`(dashboard に push 呼び出しが無い。実装時は `pushVersioned` を通るので自動的に付与される) |
+
+付与は dashboard の `pushVersioned`(`dashboard/src/lib/protocol.ts`)が単一の
+送出点として行う。call site ごとの規律ではなく funnel 化してあるのは、上記の
+誤読が再発する余地を構造的に消すため。producer 未実装だった
+`revoke_wrapper_token` / `rename_user` はサーバ受信側の検査のみ持つ。
+
+#### サーバ → ラッパー(#218 で全件充足)
+
+| 状況 | message |
+|---|---|
+| サーバが normalize(`relay/5`) | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `set_permission_mode` |
+| サーバが組み立て時に付与 | `attach_open` / `attach_close` / `revoked` / `session_reset_failed` / `delivery_status` / `persona_prompt` / `set_permission_mode`(join 後 push)/ `persona_sync` / `display_name_sync` |
+| エンベロープ由来 | `envelope`(IA 中継。frame key の `version` を持つ。合成分も `SynthEnvelope` が付与) |
+| 恒久 carve-out | `attach_chunk`(下記) |
+
+#### サーバ → runner(issue #181 / #182 で充足済み)
+
+`spawn` / `reset_session` / `switch_session` はサーバが組み立て時に付与。
+`stop` / `restart` / `enumerate_sessions` / `refresh_engine_catalog` は
+`relay_to_runner/4` が normalize する。
+
+#### runner → サーバ(充足済み、#218 のスコープ外)
+
+`register` / `heartbeat` / `sessions` / `spawn_result` / `catalog_result` /
+`session_reset_result` はいずれも runner が組み立て時に `version: "0"` を
+載せる。
+
+#### ラッパー → サーバ(未充足、follow-up)
+
+`envelope` のみ充足(frame key)。`delivery_ack` / `delivery_status_request` /
+`history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` /
+`session_reset_request` は version を持たない。#218 のスコープは
+client → server / server → wrapper / server → runner の 3 経路であり、本経路は
+対象外として残した。
+
+#### サーバ → クライアント(一部未充足、follow-up)
+
+`envelope` / `history_replay_envelope` はエンベロープ由来で充足。
+`spawn_result` / `runner_sessions` / `catalog_result` は runner が付けた
+`version` を素通しするため結果的に充足。`snapshot` / `history` / `hosts` /
+`directory` / `history_cleared` / `history_reset` / `history_replay_complete` /
+`agent_deleted` / `delivery_status` / `session_reset_started` /
+`session_reset_completed` / `session_reset_failed` は未充足で、dashboard 側にも
+受信時の version 検査が無い。#218 のスコープ外として残した。
+
+#### 恒久 carve-out — `attach_chunk`
+
+`attach_chunk` は V2 binary frame(固定長ヘッダ + 生バイト列、
+[file-upload](file-upload.md))であり、`version` キーを載せる JSON オブジェクト
+そのものが存在しない。付与には wire 変更(= protocol version の bump)が要り、
+それは #218 のスコープ外。**恒久的な対象外**として、送信側
+(`dashboard/src/lib/protocol.ts` の `attachChunk`)、サーバ受信側
+(`agents_channel.ex` の `handle_in("attach_chunk", {:binary, data}, ...)` —
+唯一 `require_operator_role/1` を直接呼ぶ経路)、ラッパー受信側
+(`transport.ts` の `SERVER_EVENT_VERSION_POLICY` で `binaryFrame`)の 3 箇所に
+同じ理由が記録されている。
+
+#### 受信側の検査
+
+ADR-0015 の warn-then-accept(一致は無警告 / 欠落・不一致は警告しつつ処理継続)
+は 3 者すべてで実装済み。いずれも個別ハンドラの規律ではなく、検査を飛ばせない
+構造に置いてある。
+
+| 受信側 | 実装 | 構造 |
+|---|---|---|
+| サーバ | `warn_on_version_mismatch/3` | operator gate `require_operator/4` に溶接。role gate を通らずに検査だけ省くことができない(検査は role check の**後**に走るので、viewer が version を詐称してログを焚くこともできない) |
+| ラッパー | `warnOnVersionMismatch` | `#bindServerEvent` が唯一の `channel.on` 呼び出し点。`event` の型が `SERVER_EVENT_VERSION_POLICY` のキーなので、表に載せずに bind できない |
+| runner | `warnOnVersionMismatch` | `bindControlEvents` が event 表をループして bind する |
 
 ### 同一性とペルソナ(マスト)
 

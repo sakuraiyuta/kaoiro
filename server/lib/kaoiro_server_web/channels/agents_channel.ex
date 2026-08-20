@@ -557,7 +557,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # closes the loop by re-entering `SessionResets.resolve/6`.
   @session_reset_modes ["new", "clear"]
   def handle_in("session_reset", payload, socket) do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, "session_reset"),
          :ok <- check_relay_size(payload),
          {:ok, agent_id} <- fetch_agent_id(payload),
          {:ok, mode} <- fetch_reset_mode(payload),
@@ -610,8 +610,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # attach_close clears the route. Routes live in socket.assigns and die with
   # the operator session — the wrapper's TTL reclaims any orphan bytes.
   def handle_in("attach_open", payload, socket) do
-    with :ok <- require_operator(socket),
-         :ok <- check_relay_size(payload),
+    relayed = wrapper_relay_payload(payload)
+
+    with :ok <- require_operator(socket, payload, "attach_open", "relaying"),
+         :ok <- check_relay_size(relayed),
          {:ok, agent_id} <- fetch_agent_id(payload),
          :ok <-
            check_keys(payload, [
@@ -621,7 +623,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
              {"size", &is_integer/1},
              {"chunks", &is_integer/1}
            ]) do
-      relayed = Map.delete(payload, "agent_id")
       KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "attach_open", relayed)
       {:reply, :ok, register_upload_route(socket, payload["upload_id"], agent_id)}
     else
@@ -634,8 +635,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # data}` (Phoenix.Socket.V2.JSONSerializer.decode_binary/1). Drop silently
   # on any failure — binary frames have no JSON reply path, and a chunk
   # without a prior open is a client bug not worth surfacing.
+  #
+  # ADR-0015 carve-out (issue #218): the ONLY inbound client event that
+  # gates on `require_operator_role/1` instead of the version-welded
+  # `require_operator/4`. `payload` here is `{:binary, data}` — a fixed
+  # length-prefixed header plus raw bytes, with no JSON object to hold a
+  # `version` key. Stamping one would need a wire change (a protocol
+  # version bump), which #218 rules out of scope; running the check anyway
+  # would warn "(absent)" on every chunk of every upload. Recorded as a
+  # permanent exception in `docs/specs/protocol.md`.
   def handle_in("attach_chunk", {:binary, data}, socket) when is_binary(data) do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator_role(socket),
          {:ok, upload_id} <- parse_chunk_upload_id(data),
          {:ok, agent_id} <- lookup_upload_route(socket, upload_id) do
       KaoiroServerWeb.Endpoint.broadcast(
@@ -651,8 +661,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   def handle_in("attach_close", payload, socket) do
-    with :ok <- require_operator(socket),
-         :ok <- check_relay_size(payload),
+    relayed = wrapper_relay_payload(payload)
+
+    with :ok <- require_operator(socket, payload, "attach_close", "relaying"),
+         :ok <- check_relay_size(relayed),
          {:ok, _payload_agent_id} <- fetch_agent_id(payload),
          :ok <- check_keys(payload, [{"upload_id", &is_binary/1}]),
          {:ok, routed_agent_id} <-
@@ -662,8 +674,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # symmetric with attach_chunk (whose binary header carries no agent_id).
       # A mismatched payload agent_id is ignored at routing time; the
       # fetch_agent_id check still gates structural validity / known-agent.
-      relayed = Map.delete(payload, "agent_id")
-
       KaoiroServerWeb.Endpoint.broadcast(
         "wrapper:#{routed_agent_id}",
         "attach_close",
@@ -689,7 +699,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # supplied by the runner. The allocated agent_id is returned so the UI can
   # correlate the eventual spawn_result.
   def handle_in("spawn", payload, socket) do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, "spawn"),
          {:ok, host_id} <- fetch_host_id(payload),
          {:ok, host} <- fetch_host(host_id),
          {:ok, persona} <- resolve_persona(host, payload),
@@ -751,7 +761,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # view: the wrapper may not yet have reported ext.cwd, but the server
     # holds a SessionPointer seeded at spawn time). Resolve it here so the
     # runner still receives the `{host_id, cwd}` shape it expects.
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, "enumerate_sessions", "relaying"),
          {:ok, host_id} <- fetch_host_id(payload),
          {:ok, host} <- fetch_host(host_id),
          {:ok, _engine} <- fetch_allowed_engine(host, payload),
@@ -771,8 +781,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # the selection order and `SessionPointers.record_snapshot/2` for how
   # effort_revision advances.
   def handle_in("launch_defaults", payload, socket) do
-    with :ok <- require_operator(socket) do
-      warn_on_version_mismatch(payload, "launch_defaults", "accepting")
+    with :ok <- require_operator(socket, payload, "launch_defaults") do
       {:reply, {:ok, %{"defaults" => launch_defaults()}}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -800,7 +809,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   #   設定の fresh session を立ち上げる (T3 / F4 対象外 — session file を
   #   読まないし session id lock も存在しない)。
   def handle_in("restore", payload, socket) do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, "restore"),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          :ok <- require_disconnected(agent_id),
          {:ok, persona, display_name} <- agent_persona(agent_id),
@@ -848,7 +857,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_in("resume_session", payload, socket) do
     role = current_role(socket)
 
-    with :ok <- require_operator(role),
+    with :ok <- require_operator(role, payload, "resume_session"),
          :ok <- guard_against_reset_pending(role, payload),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          {:ok, session_id} <- fetch_resume_session_id(payload) do
@@ -903,7 +912,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Missing starts intentionally leave IA visibility unchanged rather than
   # using a clear-time fallback that could hide current-session IA.
   def handle_in("clear_history", payload, socket) do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, "clear_history"),
          {:ok, agent_id} <- fetch_agent_id(payload),
          {:ok, session_id} <- AgentStates.current_session_id(agent_id),
          {:ok, ^session_id} <- AgentStates.clear_other_sessions(agent_id, session_id, []),
@@ -931,7 +940,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # it from the grid; the persistent stores are also purged so a subsequent
   # server restart does not resurrect the entry.
   def handle_in("delete_agent", payload, socket) do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, "delete_agent"),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          # ふじ R1 must-fix (2026-07-23): require disconnected BEFORE any
          # mutation. The previous ordering ran TokenDenylist.revoke + the
@@ -964,7 +973,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # same anti-probe check as `restore` (charset + directory/AgentStates
   # existence).
   def handle_in("revoke_wrapper_token", payload, socket) do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, "revoke_wrapper_token"),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload) do
       revoked_at = DateTime.utc_now() |> DateTime.to_iso8601()
       TokenDenylist.revoke(agent_id, revoked_at)
@@ -972,7 +981,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       KaoiroServerWeb.Endpoint.broadcast(
         "wrapper:#{agent_id}",
         "revoked",
-        %{"reason" => "operator_revoke", "revoked_at" => revoked_at}
+        %{"version" => "0", "reason" => "operator_revoke", "revoked_at" => revoked_at}
       )
 
       {:reply, {:ok, %{"revoked_at" => revoked_at}}, socket}
@@ -1015,16 +1024,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # that one is unaffected by this change and is not what this comment is
   # about.
   def handle_in("rename_agent", payload, socket) do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, "rename_agent"),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
          {:ok, display_name} <- validate_rename_name(payload) do
-      # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): this event
-      # never reaches the runner (unlike relay_to_runner's callers) but
-      # ADR-0015 draws no such exception — every client -> server message
-      # needs a version stamp, same reasoning `launch_defaults` (#88)
-      # already applies via this same "accepting" action.
-      warn_on_version_mismatch(payload, "rename_agent", "accepting")
-
       case AgentDirectory.rename(agent_id, display_name) do
         {:ok, %{display_name: display_name, revision: revision}} ->
           # issue #219 D22: DUAL-EMIT, both at the SAME revision. Old
@@ -1098,14 +1100,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # consumer of a user list exists yet (D13 — UI is out of scope for
   # this unit), so there is nothing today that a live push would reach.
   def handle_in("rename_user", payload, socket) do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, "rename_user"),
          {:ok, user_id} <- fetch_user_id(payload),
          {:ok, display_name} <- validate_rename_name(payload) do
-      # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): same
-      # "accepting" version check as rename_agent — this event never
-      # reaches the runner either.
-      warn_on_version_mismatch(payload, "rename_user", "accepting")
-
       case Users.rename(user_id, display_name) do
         {:ok, entry} ->
           {:reply, {:ok, entry}, socket}
@@ -1175,7 +1172,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     KaoiroServerWeb.Endpoint.broadcast(
       "wrapper:#{agent_id}",
       "revoked",
-      %{"reason" => "agent_deleted", "revoked_at" => revoked_at}
+      %{"version" => "0", "reason" => "agent_deleted", "revoked_at" => revoked_at}
     )
 
     # Step 4: purge every other store (order among them is unimportant —
@@ -1286,10 +1283,33 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp relay(socket, payload, event, key_checks),
     do: relay(socket, payload, event, key_checks, current_role(socket))
 
-  defp relay(socket, payload, event, key_checks, role) do
-    relayed = Map.delete(payload, "agent_id")
+  # The wrapper-bound shape of an inbound client payload (issue #218).
+  #
+  # `agent_id` only addresses the `wrapper:<id>` topic, so it is dropped on
+  # the way through — the wrapper already knows which agent it is.
+  #
+  # `version` is STAMPED here rather than passed through from the client,
+  # mirroring `relay_to_runner/4` (issue #182) on the other outbound leg.
+  # The stamp normalizes the hop; it does not authenticate the client,
+  # whose declared value was already warned about at the operator gate
+  # (`require_operator/4`). Stamping server-side is what makes the
+  # wrapper's ADR-0015 guarantee independent of which dashboard build the
+  # operator happens to be running — an old client that omits the field
+  # still produces a versioned server -> wrapper message.
+  #
+  # Callers run `check_relay_size/1` on the RESULT, never on the inbound
+  # payload, so the cap bounds what actually reaches the wrapper process
+  # (issue #26) including this stamp.
+  defp wrapper_relay_payload(payload) do
+    payload
+    |> Map.delete("agent_id")
+    |> Map.put("version", "0")
+  end
 
-    with :ok <- require_operator(role),
+  defp relay(socket, payload, event, key_checks, role) do
+    relayed = wrapper_relay_payload(payload)
+
+    with :ok <- require_operator(role, payload, event, "relaying"),
          :ok <- check_relay_size(relayed),
          {:ok, agent_id} <- fetch_agent_id(payload),
          :ok <- check_keys(payload, key_checks) do
@@ -1304,7 +1324,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # The shared operator + host_id + size guards for stop / restart /
   # enumerate_sessions (spawn adds its own dedup, so it does not use this).
   defp relay_to_runner_guarded(socket, payload, event) do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, event, "relaying"),
          {:ok, host_id} <- fetch_host_id(payload) do
       relay_to_runner(socket, payload, host_id, event)
     else
@@ -1318,12 +1338,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # only after role/host/size guards have passed and immediately before the
   # broadcast, so a rejected command never opens a planned-send window.
   defp relay_lifecycle_to_runner(socket, payload, event) when event in ["stop", "restart"] do
-    with :ok <- require_operator(socket),
+    with :ok <- require_operator(socket, payload, event, "relaying"),
          {:ok, host_id} <- fetch_host_id(payload),
          {:ok, agent_id} <- fetch_lifecycle_agent_id(payload),
          :ok <- require_host_owns_agent(host_id, agent_id) do
-      warn_on_version_mismatch(payload, event)
-
       {relayed, transition} = lifecycle_relay_payload(payload, event)
 
       with :ok <- check_relay_size(relayed),
@@ -1413,9 +1431,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # dashboard now stamps these payloads, so a missing version means an
   # unversioned client, which is exactly what ADR-0015 asks to surface. The
   # runner runs the same check on delivery (#181), so both hops now agree.
+  #
+  # The WARN half of the check no longer lives here (issue #218): it is
+  # welded to the operator gate in `require_operator/4`, which every caller
+  # of this helper has already passed. This function keeps the NORMALIZE
+  # half, which has no equivalent on the inbound side.
   defp relay_to_runner(socket, payload, host_id, event) do
-    warn_on_version_mismatch(payload, event)
-
     relayed =
       payload
       |> Map.delete("host_id")
@@ -1431,12 +1452,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # ADR-0015's receiver rule for the client -> server hop: only an exact
+  # match is normal, anything else (including an ABSENT field) warns, and
+  # the message is processed either way. The sole caller is
+  # `require_operator/4`, which welds this to the operator gate — see its
+  # own doc for why the two are bound together (issue #218).
+  #
   # `action` names what happens to the request AFTER acceptance, so the log
-  # line reads correctly for both a pass-through (`relay_to_runner`, default
-  # "relaying") and a directly-answered request like `launch_defaults`
-  # (issue #88, "accepting" — nothing is relayed anywhere).
-  defp warn_on_version_mismatch(payload, event, action \\ "relaying")
-
+  # line reads correctly for both a pass-through (`relay/5`,
+  # `relay_to_runner/4` — "relaying") and a directly-answered request like
+  # `launch_defaults` (issue #88, "accepting" — nothing is relayed anywhere).
   defp warn_on_version_mismatch(%{"version" => "0"}, _event, _action), do: :ok
 
   # The inspect is bounded because `version` is unvalidated client input and
@@ -2218,15 +2243,41 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # once and both decisions come from the same authority (ふじ must-fix B
   # on issue #158). Resolving per call would let a role change land
   # between the two and fire a second disconnect broadcast.
-  defp require_operator(%Phoenix.Socket{} = socket),
-    do: require_operator(current_role(socket))
+  defp require_operator_role(%Phoenix.Socket{} = socket),
+    do: require_operator_role(current_role(socket))
 
   # The name still says `operator` because it gates the operator-only
   # inbound set (~22 types, docs/specs/auth-and-authz.md) and that set is
   # what its call sites mean; admin passes as a superset (ADR-0050 D2).
   # Anything not in the list stays fail-closed.
-  defp require_operator(role) when role in @operator_capable_roles, do: :ok
-  defp require_operator(_role), do: {:error, :forbidden}
+  defp require_operator_role(role) when role in @operator_capable_roles, do: :ok
+  defp require_operator_role(_role), do: {:error, :forbidden}
+
+  # The operator gate with ADR-0015's receiver check WELDED to it (issue
+  # #218). Every inbound client message passes this, so binding the two
+  # together is what keeps the version gap from reopening: a new handler
+  # cannot gate on operator role without also running the version check.
+  #
+  # That arrangement is the point. Before #218 the check was an INDEPENDENT
+  # line each handler had to remember, and the same omission became a
+  # must-fix twice (`launch_defaults` in #88, `rename_agent` / `rename_user`
+  # in #197 段階3) under the same wrong premise — "this message is not
+  # relayed to the runner, so it needs no version". ADR-0015 covers all
+  # three parties and draws no such exception.
+  #
+  # Ordering is deliberate: the version check runs only AFTER the role check
+  # passes, so a viewer cannot drive log output by pushing a bogus version.
+  # The handlers that already carried the check placed it the same way.
+  #
+  # `action` names what happens to the request after acceptance, matching
+  # `warn_on_version_mismatch/3`'s own vocabulary — "relaying" for the
+  # pass-through helpers, the default "accepting" for a request the server
+  # answers itself.
+  defp require_operator(socket_or_role, payload, event, action \\ "accepting") do
+    with :ok <- require_operator_role(socket_or_role) do
+      warn_on_version_mismatch(payload, event, action)
+    end
+  end
 
   # A resolved role that no longer matches the snapshot also invalidates
   # everything else this socket derives from the snapshot — above all the

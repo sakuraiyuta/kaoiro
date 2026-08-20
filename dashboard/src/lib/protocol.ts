@@ -2707,13 +2707,38 @@ export function resolveLaunchDefaultEffort(opts: {
   return undefined;
 }
 
-/** Runner-bound protocol version (ADR-0015, protocol.md 「version」節).
- *  Stamped on the client -> server hop for the messages the server passes
- *  through opaquely to the runner (`stop` / `enumerate_sessions` /
- *  `refresh_engine_catalog` — `relay_to_runner/4`), so the server's
- *  version-mismatch warning has a value to compare instead of silently
- *  normalizing an absent one. Single fixed value per ADR-0015. */
-const RUNNER_CONTROL_VERSION = "0";
+/** The protocol version this client speaks (ADR-0015, protocol.md
+ *  「version」節). Mirrors `WRAPPER_PROTOCOL_VERSION` / `RUNNER_PROTOCOL_VERSION`
+ *  in the other parties — same rule, separate constant per party since each
+ *  stamps its own outbound messages independently. Single fixed value.
+ *
+ *  Formerly `RUNNER_CONTROL_VERSION`, scoped to the runner-relay subset
+ *  (`stop` / `enumerate_sessions` / `refresh_engine_catalog`). That name was
+ *  itself part of the gap issue #218 closes: ADR-0015 covers EVERY client ->
+ *  server message and draws no runner-relay exception, but a constant named
+ *  for the subset invited exactly the "this one is not relayed, so it needs
+ *  no version" misreading that became a must-fix twice (#88, #197 段階3). */
+const CLIENT_PROTOCOL_VERSION = "0";
+
+/** The single client -> server JSON send point (issue #218).
+ *
+ *  ADR-0015 requires a flat `version` frame key on every message between the
+ *  three parties. Stamping it HERE rather than at each call site makes an
+ *  omission structurally impossible instead of a per-call-site discipline —
+ *  the same reasoning behind `bindControlEvents` on the runner's receive
+ *  side. `version` is spread LAST so a caller cannot override or drop it.
+ *
+ *  One carve-out: `attach_chunk` is a V2 BINARY frame (a length-prefixed
+ *  header plus raw bytes, not JSON), so it has nowhere to put a `version`
+ *  key without a wire change. It pushes directly and is documented as a
+ *  permanent exception in `docs/specs/protocol.md`. */
+function pushVersioned(
+  channel: Channel,
+  event: string,
+  payload: Record<string, unknown>,
+) {
+  return channel.push(event, { ...payload, version: CLIENT_PROTOCOL_VERSION });
+}
 
 function pushAsync(
   channel: Channel,
@@ -2721,8 +2746,7 @@ function pushAsync(
   payload: Record<string, unknown>,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    channel
-      .push(event, payload)
+    pushVersioned(channel, event, payload)
       .receive("ok", () => resolve())
       .receive("error", (reason: { reason?: string } | undefined) =>
         reject(new Error(reason?.reason ?? "error")),
@@ -3613,7 +3637,6 @@ export function connectKaoiro(
       const promise = catalogPending.register(request_id);
       try {
         await pushAsync(channel, "refresh_engine_catalog", {
-          version: RUNNER_CONTROL_VERSION,
           host_id: hostId,
           engine,
           request_id,
@@ -3634,17 +3657,12 @@ export function connectKaoiro(
     },
     setPermissionMode: (agentId, mode) =>
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
-    // ADR-0015: this event never reaches the runner (RUNNER_CONTROL_VERSION
-    // documents only the runner-relay subset), but every client -> server
-    // message needs a stamp regardless — same reasoning getLaunchDefaults
-    // already applies below (issue #197 段階3, ふじ MF-1 レビュー指摘).
     // `display_name` (issue #219 D23): the server's field-extraction
     // helper (`extract_name_field/1`) still accepts the legacy `name` key
     // during the compatibility window, but this client — built alongside
     // the server that introduces the new key — sends the new one.
     renameAgent: (agentId, name) =>
       pushAsync(channel, "rename_agent", {
-        version: "0",
         agent_id: agentId,
         display_name: name,
       }),
@@ -3654,7 +3672,6 @@ export function connectKaoiro(
       pushAsync(channel, "delete_agent", { agent_id: agentId }),
     stop: (agentId) =>
       pushAsync(channel, "stop", {
-        version: RUNNER_CONTROL_VERSION,
         host_id: hostIdFromAgentId(agentId),
         agent_id: agentId,
       }),
@@ -3672,8 +3689,7 @@ export function connectKaoiro(
       }),
     spawn: (request) =>
       new Promise((resolve, reject) => {
-        channel
-          .push("spawn", { ...request })
+        pushVersioned(channel, "spawn", { ...request })
           .receive("ok", (resp: { agent_id?: unknown }) =>
             typeof resp?.agent_id === "string"
               ? resolve({ agentId: resp.agent_id })
@@ -3686,14 +3702,7 @@ export function connectKaoiro(
       }),
     getLaunchDefaults: () =>
       new Promise((resolve, reject) => {
-        // ADR-0015 stamps `version` on ALL three-party messages, not only
-        // the runner-relay subset RUNNER_CONTROL_VERSION documents — this
-        // event never reaches the runner, but it is still a client ->
-        // server message and the ADR draws no such exception (reviewed
-        // 2026-08-05; an earlier revision of this code wrongly scoped the
-        // ADR to the runner-relay set and omitted `version` here).
-        channel
-          .push("launch_defaults", { version: "0" })
+        pushVersioned(channel, "launch_defaults", {})
           .receive("ok", (resp: { defaults?: unknown }) =>
             resolve(parseLaunchDefaults(resp?.defaults)),
           )
@@ -3704,14 +3713,12 @@ export function connectKaoiro(
       }),
     enumerateSessions: (hostId, cwd, engine) =>
       pushAsync(channel, "enumerate_sessions", {
-        version: RUNNER_CONTROL_VERSION,
         host_id: hostId,
         cwd,
         ...(engine === undefined ? {} : { engine }),
       }),
     enumerateAgentSessions: (agentId) =>
       pushAsync(channel, "enumerate_sessions", {
-        version: RUNNER_CONTROL_VERSION,
         host_id: hostIdFromAgentId(agentId),
         agent_id: agentId,
       }),
@@ -3721,6 +3728,13 @@ export function connectKaoiro(
       // Fire-and-forget binary frame: phoenix.js automatically encodes
       // ArrayBuffer payloads as a V2 binary frame. The server's handler
       // returns :noreply so awaiting a reply would only ever time out.
+      //
+      // ADR-0015 carve-out (issue #218): the only client -> server message
+      // that bypasses `pushVersioned`. A binary frame carries a fixed
+      // length-prefixed header plus raw bytes — there is no JSON object to
+      // put a `version` key in, so stamping one would need a wire change
+      // (i.e. a protocol version bump), which #218 rules out of scope.
+      // Recorded as a permanent exception in `docs/specs/protocol.md`.
       channel.push("attach_chunk", data);
     },
     attachClose: (agentId, uploadId) =>
@@ -3745,6 +3759,7 @@ export function connectKaoiro(
         const start = i * ATTACH_CHUNK_SIZE;
         const end = Math.min(start + ATTACH_CHUNK_SIZE, size);
         const chunkBytes = new Uint8Array(buffer.slice(start, end));
+        // Same ADR-0015 binary-frame carve-out as `attachChunk` above.
         channel.push("attach_chunk", buildChunkPayload(upload_id, i, chunkBytes));
         onProgress?.(i + 1, chunks);
       }

@@ -82,6 +82,7 @@ import {
   MAX_ACTIVE_TASK_CACHE_BYTES,
   MAX_ACTIVE_TASK_CACHE_ENTRIES,
   MAX_REPLAY_IA_PUSH_BYTES,
+  SERVER_EVENT_VERSION_POLICY,
   ServerLink,
   chunkReplayIaItems,
   hydrationVerdictFrom,
@@ -1773,5 +1774,78 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
     expect(link.currentSessionId()).toBeNull();
     link.setSessionId("sess-1");
     expect(link.currentSessionId()).toBe("sess-1");
+  });
+});
+
+// ADR-0015 receiver check, structurally (issue #218). The per-event
+// warn-then-accept behaviour was previously pinned for `persona_sync` /
+// `display_name_sync` only — the two events that happened to carry the
+// check. #218 moved the check into `#bindServerEvent`, so what needs
+// pinning now is the STRUCTURE: every event this transport binds either
+// runs the check or is a declared carve-out. A raw `channel.on` added
+// later fails the first test here rather than going quietly unchecked.
+describe("ServerLink — server -> wrapper version check の構造 (issue #218)", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.pushes = [];
+  });
+
+  /** Every event name actually registered on the channel by a fresh link. */
+  function registeredEvents(): string[] {
+    mock.handlers.clear();
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    return [...mock.handlers.keys()].sort();
+  }
+
+  it("登録済み event はすべて policy 表に載っている (checked か carve-out)", () => {
+    const declared = Object.keys(SERVER_EVENT_VERSION_POLICY).sort();
+    expect(registeredEvents()).toEqual(declared);
+  });
+
+  it("checked な event は version 不一致で警告し、処理は継続する", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const checked = Object.entries(SERVER_EVENT_VERSION_POLICY)
+      .filter(([, policy]) => policy === "checked")
+      .map(([event]) => event);
+    // Guard against the table silently emptying out — an all-carve-out
+    // table would make this test vacuously green.
+    expect(checked.length).toBeGreaterThan(10);
+
+    for (const event of checked) {
+      mock.handlers.clear();
+      new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+      stderr.mockClear();
+      emit(event, { version: "9" });
+      expect(stderr, `${event} は不一致を警告する`).toHaveBeenCalledTimes(1);
+      expect(stderr.mock.calls[0]![0]).toContain(event);
+      expect(stderr.mock.calls[0]![0]).toContain('"9"');
+
+      stderr.mockClear();
+      emit(event, {});
+      expect(stderr, `${event} は欠落を警告する`).toHaveBeenCalledTimes(1);
+      expect(stderr.mock.calls[0]![0]).toContain("(absent)");
+
+      stderr.mockClear();
+      emit(event, { version: "0" });
+      expect(stderr, `${event} は一致なら無警告`).not.toHaveBeenCalled();
+    }
+    stderr.mockRestore();
+  });
+
+  it("binaryFrame の carve-out は version を検査しない", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const carveOuts = Object.entries(SERVER_EVENT_VERSION_POLICY)
+      .filter(([, policy]) => policy === "binaryFrame")
+      .map(([event]) => event);
+    expect(carveOuts).toEqual(["attach_chunk"]);
+
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    for (const event of carveOuts) {
+      stderr.mockClear();
+      emit(event, new Uint8Array([1, 2, 3]).buffer);
+      expect(stderr, `${event} は binary frame なので検査しない`).not.toHaveBeenCalled();
+    }
+    stderr.mockRestore();
   });
 });

@@ -209,7 +209,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       case PersonaAssets.prompt(socket.assigns.persona_id) do
         prompt when is_binary(prompt) ->
-          push(socket, "persona_prompt", %{prompt: prompt})
+          # ADR-0015 (issue #218): flat `version` frame key, like the
+          # `persona_sync` / `display_name_sync` pushes below.
+          push(socket, "persona_prompt", %{version: "0", prompt: prompt})
 
         nil ->
           # The join gate accepted this persona_id, but the pack has since
@@ -221,7 +223,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       case KaoiroServer.PermissionModes.get(socket.assigns.agent_id) do
         mode when is_binary(mode) ->
-          push(socket, "set_permission_mode", %{mode: mode})
+          # ADR-0015 (issue #218): flat `version` frame key. The live relay
+          # of this same event (`agents_channel.ex`'s `relay/5`) stamps it
+          # server-side too, so the wrapper sees the same shape from both
+          # producers.
+          push(socket, "set_permission_mode", %{version: "0", mode: mode})
 
         _ ->
           :ok
@@ -905,7 +911,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
         )
 
       status ->
-        KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "delivery_status", status)
+        # ADR-0015 (issue #218): flat `version` frame key on the
+        # wrapper-bound copy, same as `SynthEnvelope.deliver/2`'s.
+        KaoiroServerWeb.Endpoint.broadcast(
+          "wrapper:#{agent_id}",
+          "delivery_status",
+          Map.put(status, :version, "0")
+        )
 
         KaoiroServerWeb.Endpoint.broadcast(
           "agents:lobby",
