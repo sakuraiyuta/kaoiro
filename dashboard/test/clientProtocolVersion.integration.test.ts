@@ -16,7 +16,11 @@
 // (Phoenix buffers pushes made before join completes, then flushes them).
 // This asserts what actually leaves the socket, not a stubbed connection.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectKaoiro, type KaoiroConnection } from "../src/lib/protocol";
+import {
+  CLIENT_EVENT_VERSION_POLICY,
+  connectKaoiro,
+  type KaoiroConnection,
+} from "../src/lib/protocol";
 
 type WireFrame = {
   joinRef: string | null;
@@ -104,8 +108,16 @@ async function settleSocket(): Promise<void> {
 async function connectAndJoin(): Promise<{
   conn: KaoiroConnection;
   ws: AckingWebSocket;
+}>;
+async function connectAndJoin(handlers: ReturnType<typeof makeHandlers>): Promise<{
+  conn: KaoiroConnection;
+  ws: AckingWebSocket;
+}>;
+async function connectAndJoin(handlers = makeHandlers()): Promise<{
+  conn: KaoiroConnection;
+  ws: AckingWebSocket;
 }> {
-  const conn = connectKaoiro("ws://test/client", makeHandlers(), {
+  const conn = connectKaoiro("ws://test/client", handlers, {
     transport: AckingWebSocket,
     heartbeatIntervalMs: 1000,
   });
@@ -123,6 +135,35 @@ const TRANSPORT_EVENTS = new Set(["phx_join", "phx_leave", "heartbeat"]);
 function appFrames(ws: AckingWebSocket): WireFrame[] {
   return ws.sent.filter((f) => !TRANSPORT_EVENTS.has(f.event));
 }
+
+function injectServerPush(ws: AckingWebSocket, event: string, payload: unknown): void {
+  ws.onmessage?.({
+    data: JSON.stringify([null, null, "agents:lobby", event, payload]),
+  });
+}
+
+const SERVER_EVENT_PAYLOADS: Record<keyof typeof CLIENT_EVENT_VERSION_POLICY, Record<string, unknown>> = {
+  snapshot: { agents: {} },
+  history: { agents: {} },
+  hosts: { hosts: {} },
+  directory: { entries: {} },
+  history_cleared: { agent_id: "a", session_id: "s" },
+  history_reset: { agent_id: "a" },
+  history_replay_complete: { agent_id: "a", replay_id: "r" },
+  history_replay_envelope: {
+    pane_agent_id: "a",
+    envelope: { version: "0", agent_id: "a", ts: "t", type: "log", state: "idle" },
+  },
+  agent_deleted: { agent_id: "a" },
+  delivery_status: { agent_id: "a", delivery: { issued_seq: 1, acked_seq: 1 } },
+  session_reset_started: { request_id: "r", agent_id: "a", mode: "new" },
+  session_reset_completed: { request_id: "r", agent_id: "a", mode: "new", to_session_id: null },
+  session_reset_failed: { request_id: "r", agent_id: "a", mode: "new", reason: "timeout" },
+  envelope: { version: "0", agent_id: "a", ts: "t", type: "log", state: "idle" },
+  spawn_result: { host_id: "h", agent_id: "a", ok: true },
+  runner_sessions: { host_id: "h", cwd: "/workspace", sessions: [] },
+  catalog_result: { host_id: "h", engine: "codex", request_id: "r", ok: true },
+};
 
 const AGENT_ID = "hostA.abc123";
 
@@ -287,6 +328,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("client -> server messages carry version (issue #218, ADR-0015)", () => {
@@ -343,5 +385,68 @@ describe("client -> server messages carry version (issue #218, ADR-0015)", () =>
       .sort();
     const covered = [...new Set(PUSH_CASES.map((c) => c.method as string))].sort();
     expect(covered).toEqual(pushMethods);
+  });
+});
+
+describe("server -> dashboard event bindings carry version checks (issue #270)", () => {
+  const events = (): Array<keyof typeof CLIENT_EVENT_VERSION_POLICY> =>
+    Object.keys(CLIENT_EVENT_VERSION_POLICY).sort() as Array<keyof typeof CLIENT_EVENT_VERSION_POLICY>;
+
+  it("T3-1: policy の17種すべてで欠落をwarnし、受信を継続する", async () => {
+    const { ws } = await connectAndJoin();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(Object.keys(SERVER_EVENT_PAYLOADS).sort()).toEqual(events());
+    for (const event of events()) {
+      const { version: _version, ...withoutVersion } = SERVER_EVENT_PAYLOADS[event];
+      injectServerPush(ws, event, withoutVersion);
+    }
+
+    expect(warn).toHaveBeenCalledTimes(17);
+    for (const event of events()) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${event}: server declared protocol version (absent)`));
+    }
+    warn.mockRestore();
+  });
+
+  it("T3-2: policy の17種すべてで一致versionは無警告", async () => {
+    const { ws } = await connectAndJoin();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    for (const event of events()) {
+      injectServerPush(ws, event, { ...SERVER_EVENT_PAYLOADS[event], version: "0" });
+    }
+
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("T3-3: policy の17種すべてで不一致versionをwarnし、受信を継続する", async () => {
+    const { ws } = await connectAndJoin();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    for (const event of events()) {
+      injectServerPush(ws, event, { ...SERVER_EVENT_PAYLOADS[event], version: "9" });
+    }
+
+    expect(warn).toHaveBeenCalledTimes(17);
+    for (const event of events()) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${event}: server declared protocol version "9"`));
+    }
+    warn.mockRestore();
+  });
+
+  it("T3-4: snapshot は一回だけ bind され、handler も一回だけ呼ばれる", async () => {
+    const handlers = makeHandlers();
+    const { ws } = await connectAndJoin(handlers);
+
+    injectServerPush(ws, "snapshot", { agents: {}, version: "0" });
+
+    expect(handlers.onSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("T3-5: protocol.ts の raw channel.on は bindServerEvent 内の1箇所だけ", async () => {
+    const source = (await import("../src/lib/protocol.ts?raw")).default;
+    expect((source.match(/\.on\(/g) ?? [])).toHaveLength(1);
   });
 });

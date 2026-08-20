@@ -2745,6 +2745,47 @@ export function warnOnServerVersionMismatch(event: string, payload: unknown): vo
   );
 }
 
+/** Every server -> dashboard event is checked at the binding boundary.
+ * `history_replay_envelope` is an ordinary JSON frame and is therefore
+ * checked too: the server stamps its flat version when it leaves the final
+ * egress funnel (issue #270). */
+export const CLIENT_EVENT_VERSION_POLICY = {
+  snapshot: "checked",
+  history: "checked",
+  hosts: "checked",
+  directory: "checked",
+  history_cleared: "checked",
+  history_reset: "checked",
+  history_replay_complete: "checked",
+  history_replay_envelope: "checked",
+  agent_deleted: "checked",
+  delivery_status: "checked",
+  session_reset_started: "checked",
+  session_reset_completed: "checked",
+  session_reset_failed: "checked",
+  envelope: "checked",
+  spawn_result: "checked",
+  runner_sessions: "checked",
+  catalog_result: "checked",
+} as const satisfies Record<string, "checked">;
+
+export type ClientEventName = keyof typeof CLIENT_EVENT_VERSION_POLICY;
+
+/** The only server-event registration point: all handlers receive the
+ * best-effort version check before their event-specific parser runs. */
+function bindServerEvent<T>(
+  channel: Channel,
+  event: ClientEventName,
+  handler: (payload: T) => void,
+): void {
+  channel.on(event, (payload: unknown) => {
+    if (CLIENT_EVENT_VERSION_POLICY[event] === "checked") {
+      warnOnServerVersionMismatch(event, payload);
+    }
+    handler(payload as T);
+  });
+}
+
 /** The single client -> server JSON send point (issue #218).
  *
  *  ADR-0015 requires a flat `version` frame key on every message between the
@@ -3041,14 +3082,7 @@ export function connectKaoiro(
   }
 
   function setupChannelHandlers(c: Channel): void {
-    const onVersioned = <T,>(event: string, handler: (payload: T) => void) => {
-      c.on(event, (payload: unknown) => {
-        warnOnServerVersionMismatch(event, payload);
-        handler(payload as T);
-      });
-    };
-
-    onVersioned("snapshot", (payload: { agents?: unknown; tasks?: unknown; deliveries?: unknown }) => {
+    bindServerEvent(c, "snapshot", (payload: { agents?: unknown; tasks?: unknown; deliveries?: unknown }) => {
     const agents: Record<string, Envelope> = {};
     for (const value of Object.values(payload.agents ?? {})) {
       if (isEnvelope(value)) agents[value.agent_id] = value;
@@ -3059,13 +3093,13 @@ export function connectKaoiro(
     handlers.onTaskSnapshot?.(parseTasks(payload.tasks));
     handlers.onDeliverySnapshot?.(parseDeliverySnapshot(payload.deliveries));
   });
-  onVersioned("delivery_status", (payload: unknown) => {
+  bindServerEvent(c, "delivery_status", (payload: unknown) => {
     if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;
     const raw = payload as Record<string, unknown>;
     if (typeof raw.agent_id !== "string") return;
     handlers.onDeliveryStatus?.(raw.agent_id, parseDeliveryStatus(raw.delivery));
   });
-  c.on("envelope", (payload: unknown) => {
+  bindServerEvent(c, "envelope", (payload: unknown) => {
     if (!isEnvelope(payload)) return;
     // ADR-0039 F9 v2 = 藤 review turn-10 must-fix 1: refresh_models_result
     // is a transient completion envelope, NOT a state. Special-dispatch it
@@ -3125,7 +3159,7 @@ export function connectKaoiro(
       }
     }
   });
-  onVersioned("history", (payload: unknown) => {
+  bindServerEvent(c, "history", (payload: unknown) => {
     const parsed = parseHistoryPayload(payload);
     handlers.onHistory?.(
       parsed.histories,
@@ -3134,7 +3168,8 @@ export function connectKaoiro(
       parsed.projectionEpoch,
     );
   });
-  onVersioned(
+  bindServerEvent(
+    c,
     "history_cleared",
     (payload: {
       agent_id?: unknown;
@@ -3161,7 +3196,7 @@ export function connectKaoiro(
       }
     },
   );
-  onVersioned("history_reset", (payload: unknown) => {
+  bindServerEvent(c, "history_reset", (payload: unknown) => {
     const reset = parseHistoryReset(payload);
     if (reset !== null) {
       handlers.onHistoryReset?.(
@@ -3171,7 +3206,7 @@ export function connectKaoiro(
       );
     }
   });
-  onVersioned("history_replay_complete", (payload: unknown) => {
+  bindServerEvent(c, "history_replay_complete", (payload: unknown) => {
     const complete = parseHistoryReplayComplete(payload);
     if (complete !== null) {
       handlers.onHistoryReplayComplete?.(
@@ -3180,24 +3215,24 @@ export function connectKaoiro(
       );
     }
   });
-  c.on("history_replay_envelope", (payload: unknown) => {
+  bindServerEvent(c, "history_replay_envelope", (payload: unknown) => {
     const restored = parseHistoryReplayEnvelope(payload);
     if (restored !== null) {
       handlers.onHistoryReplayEnvelope?.(restored.paneAgentId, restored.envelope);
     }
   });
-  onVersioned("agent_deleted", (payload: { agent_id?: unknown }) => {
+  bindServerEvent(c, "agent_deleted", (payload: { agent_id?: unknown }) => {
     if (typeof payload.agent_id === "string") {
       handlers.onAgentDeleted?.(payload.agent_id);
     }
   });
-  onVersioned("hosts", (payload: { hosts?: unknown }) => {
+  bindServerEvent(c, "hosts", (payload: { hosts?: unknown }) => {
     handlers.onHosts?.(parseHosts(payload.hosts));
   });
-  onVersioned("directory", (payload: { entries?: unknown }) => {
+  bindServerEvent(c, "directory", (payload: { entries?: unknown }) => {
     handlers.onDirectory?.(parseDirectory(payload.entries));
   });
-  c.on("spawn_result", (payload: unknown) => {
+  bindServerEvent(c, "spawn_result", (payload: unknown) => {
     const p = payload as Partial<SpawnResult>;
     if (
       typeof p.host_id === "string" &&
@@ -3212,7 +3247,7 @@ export function connectKaoiro(
       });
     }
   });
-  c.on("runner_sessions", (payload: unknown) => {
+  bindServerEvent(c, "runner_sessions", (payload: unknown) => {
     const p = payload as Partial<RunnerSessions>;
     if (typeof p.host_id === "string" && typeof p.cwd === "string") {
       handlers.onSessions?.({
@@ -3225,19 +3260,19 @@ export function connectKaoiro(
   // Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17 17-9).
   // Payload is validated defensively; malformed drops so the UI never
   // fires on an ill-formed event.
-  onVersioned("session_reset_started", (payload: unknown) => {
+  bindServerEvent(c, "session_reset_started", (payload: unknown) => {
     const parsed = parseSessionResetStarted(payload);
     if (parsed !== null) handlers.onSessionResetStarted?.(parsed);
   });
-  onVersioned("session_reset_completed", (payload: unknown) => {
+  bindServerEvent(c, "session_reset_completed", (payload: unknown) => {
     const parsed = parseSessionResetCompleted(payload);
     if (parsed !== null) handlers.onSessionResetCompleted?.(parsed);
   });
-  onVersioned("session_reset_failed", (payload: unknown) => {
+  bindServerEvent(c, "session_reset_failed", (payload: unknown) => {
     const parsed = parseSessionResetFailed(payload);
     if (parsed !== null) handlers.onSessionResetFailed?.(parsed);
   });
-  c.on("catalog_result", (payload: unknown) => {
+  bindServerEvent(c, "catalog_result", (payload: unknown) => {
     const parsed = parseCatalogResult(payload);
     if (parsed === null) return;
     // Route to any pending refreshEngineCatalog() caller first so its
