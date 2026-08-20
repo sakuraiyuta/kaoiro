@@ -57,6 +57,12 @@ defmodule KaoiroServer.PersonaAssets do
   @required_states ~w(idle thinking tool_running waiting_input
                        waiting_permission done error)
 
+  # Optional sprite states a pack MAY provide (persona-pack-schema.md,
+  # issue #172 A). `fatigued` is an orthogonal client-side modifier, not a
+  # protocol state value. Keep this allowlist narrow so optional does not
+  # silently admit arbitrary sprite ids.
+  @optional_states ~w(fatigued)
+
   # manifest["name"] seeds a NEW agent/user's `display_name` at record
   # time (issue #219 D20/D24 — the initial value must already satisfy the
   # SAME domain `Principal.display_name` is validated against everywhere
@@ -483,7 +489,7 @@ defmodule KaoiroServer.PersonaAssets do
          :ok <- validate_manifest(manifest, zip_path),
          :ok <- validate_min_version(manifest, zip_path),
          {:ok, personality} <- read_personality(extracted_dir),
-         {:ok, sprites} <- collect_sprites(extracted_dir, manifest["sprite_set"]) do
+         {:ok, sprites} <- collect_sprites(extracted_dir, manifest) do
       %{
         cache_key: hash,
         manifest: manifest,
@@ -685,7 +691,21 @@ defmodule KaoiroServer.PersonaAssets do
 
   defp consumed_paths(dir) do
     [Path.join(dir, "manifest.json"), Path.join(dir, "personality.md")] ++
-      Enum.map(@required_states, &Path.join([dir, "sprites", "#{&1}.png"]))
+      Enum.map(extracted_states(dir), &Path.join([dir, "sprites", "#{&1}.png"]))
+  end
+
+  # This runs before `read_manifest/1`, while deciding whether an extracted
+  # cache slot may be reused. A malformed cached manifest is stale and will
+  # be re-extracted; retain the required-only fallback so that decision never
+  # raises and the later ingest validation remains the authoritative reject.
+  defp extracted_states(dir) do
+    with {:ok, bin} <- File.read(Path.join(dir, "manifest.json")),
+         {:ok, %{"states" => states}} <- decode_manifest(bin),
+         true <- is_list(states) do
+      declared_states(states)
+    else
+      _ -> @required_states
+    end
   end
 
   defp reuse_extracted(extracted_dir) do
@@ -2060,7 +2080,7 @@ defmodule KaoiroServer.PersonaAssets do
     path = Path.join(dir, "manifest.json")
 
     with {:ok, bin} <- File.read(path),
-         {:ok, parsed} <- Jason.decode(bin) do
+         {:ok, parsed} <- decode_manifest(bin) do
       {:ok, parsed}
     else
       {:error, %Jason.DecodeError{} = e} ->
@@ -2103,14 +2123,30 @@ defmodule KaoiroServer.PersonaAssets do
       not string?(manifest["min_kaoiro_version"]) ->
         {:error, "manifest.min_kaoiro_version must be a string"}
 
-      not (is_list(manifest["states"]) and
-               MapSet.new(manifest["states"]) == MapSet.new(@required_states)) ->
-        {:error, "manifest.states must be exactly #{inspect(@required_states)}"}
+      not valid_states?(manifest["states"]) ->
+        {:error,
+         "manifest.states must contain exactly #{inspect(@required_states)} plus zero or more of #{inspect(@optional_states)}"}
 
       true ->
         :ok
     end
   end
+
+  defp decode_manifest(bin), do: Jason.decode(bin)
+
+  # Every required state must appear, while optional remains an allowlist
+  # rather than an open-ended extension point. MapSet intentionally retains
+  # the prior duplicate-id behaviour: duplicates neither add nor remove a
+  # declared state.
+  defp valid_states?(states) when is_list(states) do
+    set = MapSet.new(states)
+
+    Enum.all?(states, &is_binary/1) and
+      MapSet.subset?(MapSet.new(@required_states), set) and
+      MapSet.subset?(set, MapSet.new(@required_states ++ @optional_states))
+  end
+
+  defp valid_states?(_states), do: false
 
   defp string?(value), do: is_binary(value) and value != ""
 
@@ -2175,22 +2211,25 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  # sprites/ MUST contain the 7 states as `<state>.png` (persona-pack-
-  # schema.md). Each PNG's hash rides into the manifest for cache-busting.
-  defp collect_sprites(dir, sprite_set) do
+  # sprites/ MUST contain every state declared by the manifest. The seven
+  # required states are always present; optional states are collected only
+  # when declared, so undeclared files cannot leak into the manifest.
+  defp collect_sprites(dir, manifest) do
     sprites_dir = Path.join(dir, "sprites")
+    sprite_set = manifest["sprite_set"]
+    states = declared_states(manifest["states"])
 
     case File.ls(sprites_dir) do
       {:ok, _names} ->
         entries =
-          for state <- @required_states, into: %{} do
+          for state <- states, into: %{} do
             file = "#{state}.png"
             path = Path.join(sprites_dir, file)
             {state, %{file: file, path: path}}
           end
 
         missing =
-          Enum.find(@required_states, fn state ->
+          Enum.find(states, fn state ->
             not File.regular?(entries[state].path)
           end)
 
@@ -2217,6 +2256,10 @@ defmodule KaoiroServer.PersonaAssets do
       {:error, reason} ->
         classify_cache_read("sprites/", sprites_dir, reason)
     end
+  end
+
+  defp declared_states(states) do
+    Enum.uniq(@required_states ++ Enum.filter(states, &(&1 in @optional_states)))
   end
 
   # First-writer-wins on duplicate manifest.id (persona-pack-schema.md

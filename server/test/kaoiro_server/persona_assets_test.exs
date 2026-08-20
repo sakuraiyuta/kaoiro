@@ -70,19 +70,23 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # top-level entries are `manifest.json`, `personality.md`, `sprites/
   # <state>.png × 7` per persona-pack-schema.md.
   defp write_pack(dir, name, manifest, personality) do
+    write_pack(dir, name, manifest, personality, @states)
+  end
+
+  defp write_pack(dir, name, manifest, personality, sprite_states) do
     src = Path.join(dir, "_stage_" <> name)
     File.mkdir_p!(Path.join(src, "sprites"))
     File.write!(Path.join(src, "manifest.json"), Jason.encode!(manifest))
     File.write!(Path.join(src, "personality.md"), personality)
 
-    for state <- @states do
+    for state <- sprite_states do
       File.write!(Path.join([src, "sprites", "#{state}.png"]), "png-#{name}-#{state}")
     end
 
     zip_path = String.to_charlist(Path.join(dir, "#{name}.zip"))
 
     files =
-      ["manifest.json", "personality.md" | Enum.map(@states, &"sprites/#{&1}.png")]
+      ["manifest.json", "personality.md" | Enum.map(sprite_states, &"sprites/#{&1}.png")]
       |> Enum.map(&String.to_charlist/1)
 
     {:ok, _} = :zip.create(zip_path, files, cwd: String.to_charlist(src))
@@ -205,11 +209,135 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert entry["pack_version"] == "1.0.0"
     assert entry["description"] == "d-ao"
     assert Map.keys(entry["states"]) |> Enum.sort() == Enum.sort(@states)
+    refute Map.has_key?(entry["states"], "fatigued")
 
     assert PersonaAssets.known_persona?("ao")
 
     assert PersonaAssets.prompt("ao") ==
              "body-ao\n\n" <> FooterAssets.built_in_system_footer()
+  end
+
+  test "fatigued を宣言した pack は sprite manifest に収集される", %{tmp_dir: tmp} do
+    states = @states ++ ["fatigued"]
+
+    :ok =
+      write_pack(
+        tmp,
+        "fat-1.0.0",
+        base_manifest("fat", %{"states" => states}),
+        "body-fat",
+        states
+      )
+
+    use_ingest(tmp)
+
+    fatigued = PersonaAssets.manifest()["personas"]["fat"]["states"]["fatigued"]
+    assert fatigued["url"] =~ "/personas/fat/fatigued.png?v="
+    assert fatigued["hash"] =~ ~r/^sha256:[0-9a-f]{64}$/
+  end
+
+  test "未知 sprite state を宣言した pack は reject される", %{tmp_dir: tmp} do
+    states = @states ++ ["sleepy"]
+
+    :ok =
+      write_pack(
+        tmp,
+        "unknown-1.0.0",
+        base_manifest("unknown", %{"states" => states}),
+        "body",
+        states
+      )
+
+    capture_log(fn -> use_ingest(tmp) end)
+    refute PersonaAssets.known_persona?("unknown")
+  end
+
+  test "必須 state が欠けた manifest は reject される", %{tmp_dir: tmp} do
+    states = List.delete(@states, "error")
+
+    :ok =
+      write_pack(
+        tmp,
+        "missing-1.0.0",
+        base_manifest("missing", %{"states" => states}),
+        "body",
+        states
+      )
+
+    capture_log(fn -> use_ingest(tmp) end)
+    refute PersonaAssets.known_persona?("missing")
+  end
+
+  test "宣言済み fatigued sprite が欠けた pack は reject される", %{tmp_dir: tmp} do
+    states = @states ++ ["fatigued"]
+
+    :ok =
+      write_pack(
+        tmp,
+        "declared-1.0.0",
+        base_manifest("declared", %{"states" => states}),
+        "body",
+        @states
+      )
+
+    capture_log(fn -> use_ingest(tmp) end)
+    refute PersonaAssets.known_persona?("declared")
+  end
+
+  test "未宣言 fatigued sprite は manifest に収集されない", %{tmp_dir: tmp} do
+    :ok = write_pack(tmp, "extra-1.0.0", base_manifest("extra"), "body", @states ++ ["fatigued"])
+    use_ingest(tmp)
+
+    refute Map.has_key?(PersonaAssets.manifest()["personas"]["extra"]["states"], "fatigued")
+  end
+
+  test "fatigued sprite が欠けた cache は skip せず作り直す", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    states = @states ++ ["fatigued"]
+    File.mkdir_p!(ingest)
+
+    :ok =
+      write_pack(
+        ingest,
+        "fat-cache-1.0.0",
+        base_manifest("fat-cache", %{"states" => states}),
+        "body",
+        states
+      )
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    use_ingest(ingest)
+    assert PersonaAssets.known_persona?("fat-cache")
+
+    slot = cache |> Path.join("*") |> Path.wildcard() |> Enum.find(&File.dir?/1)
+    missing = Path.join([slot, "sprites", "fatigued.png"])
+    File.rm!(missing)
+
+    capture_log(fn -> assert :ok = PersonaAssets.rebuild() end)
+
+    assert PersonaAssets.known_persona?("fat-cache")
+    assert {:ok, %File.Stat{type: :regular}} = File.lstat(missing)
+  end
+
+  test "壊れた cache manifest は必須 sprite で完全性を判定して再抽出する", %{tmp_dir: tmp} do
+    ingest = Path.join(tmp, "packs")
+    cache = Path.join(tmp, "cache")
+    File.mkdir_p!(ingest)
+    :ok = write_pack(ingest, "corrupt-1.0.0", base_manifest("corrupt"), "body")
+
+    Application.put_env(:kaoiro_server, :persona_cache_dir, cache)
+    use_ingest(ingest)
+
+    slot = cache |> Path.join("*") |> Path.wildcard() |> Enum.find(&File.dir?/1)
+    File.write!(Path.join(slot, "manifest.json"), "{not json")
+    missing = Path.join([slot, "sprites", "idle.png"])
+    File.rm!(missing)
+
+    capture_log(fn -> assert :ok = PersonaAssets.rebuild() end)
+
+    assert PersonaAssets.known_persona?("corrupt")
+    assert {:ok, %File.Stat{type: :regular}} = File.lstat(missing)
   end
 
   test "reserved default は pack 不要で known / footer のみが prompt", %{tmp_dir: tmp} do
