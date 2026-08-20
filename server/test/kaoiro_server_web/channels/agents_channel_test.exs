@@ -5658,4 +5658,143 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_broadcast "set_model", %{}
     end
   end
+
+  # ふじ #218 レビュー MF-1: scalar payload での crash regression。
+  #
+  # 親 74a545c では `Map.delete/2` が全 shape check の後に走っていたが、
+  # #218 で normalize を `with` の手前へ hoist した結果、raw websocket から
+  # の非 map payload が role 解決前に BadMapError で落ちるようになった。
+  # relay/5 経路も同じ helper を通るので、attach_* だけの問題ではない。
+  describe "非 map payload の防御 (issue #218 ふじ MF-1)" do
+    @non_map_events ["attach_open", "attach_close", "instruction", "set_model"]
+
+    test "operator の scalar payload は crash せず missing_agent_id を返す" do
+      socket = join_as(:operator)
+
+      for event <- @non_map_events do
+        ref = push(socket, event, "not-a-map")
+        assert_reply ref, :error, %{reason: reason}, 1000
+        assert reason == "missing_agent_id", "#{event}: got #{inspect(reason)}"
+      end
+    end
+
+    # shape gate は role 解決より前に走るので、viewer にも `forbidden` では
+    # なく shape 判定が返る。これは意図した優先順位で、role を gate 内で
+    # 解決すると #158 が閉じた「1 メッセージ 1 回だけ解決する」性質が壊れる
+    # (2 回目の解決の間に role 変更が挟まると disconnect broadcast が二重に
+    # 出る)。malformed payload への shape 判定は viewer 自身の入力について
+    # の verdict でしかなく、サーバ側の状態を一切開示しない。
+    test "viewer の scalar payload も crash せず fail-closed に返る" do
+      socket = join_as(:viewer)
+
+      for event <- @non_map_events do
+        ref = push(socket, event, "not-a-map")
+        assert_reply ref, :error, %{reason: "missing_agent_id"}, 1000
+      end
+    end
+
+    # 上の優先順位が「role gate が死んだ」ことを意味しないことの pin。
+    # well-formed payload では従来どおり viewer は forbidden で弾かれる。
+    test "well-formed payload では viewer は従来どおり forbidden" do
+      agent_id = "test.mf1-role"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "opus"})
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    # list / 数値も map ではない。binary だけを弾く実装に縮退していないこと。
+    test "list / 数値 payload も同様に扱う" do
+      socket = join_as(:operator)
+
+      for payload <- [["a"], 42, nil] do
+        ref = push(socket, "attach_open", payload)
+        assert_reply ref, :error, %{reason: "missing_agent_id"}, 1000
+      end
+    end
+  end
+
+  # ふじ #218 レビュー MF-3: 「全 inbound handler が version 検査付き gate を
+  # 通る」という protocol.md の主張が構造として pin されていなかった。
+  # `delete_agent` の `require_operator/4` を `require_operator_role/1` へ
+  # 差し替えても全 1147 件が green のままだった (実測)。
+  #
+  # 対象一覧をテスト側に手書きすると一覧外の追加を拾えないので、**モジュール
+  # 自身の AST から event 名を列挙**する。新しい `handle_in` 節を足せば、その
+  # event は自動でこの検査の対象に入る。
+  #
+  # 検査は構文ではなく**挙動**で行う: operator として不正 version を push し、
+  # gate の warn が出ることを確かめる。role gate だけ残して version 検査を
+  # 外す (= ふじの mutation) と warn が消えるので red になる。
+  describe "inbound gate の網羅性 (issue #218 ふじ MF-3)" do
+    @channel_source "lib/kaoiro_server_web/channels/agents_channel.ex"
+
+    # ADR-0015 の恒久 carve-out。binary frame は version キーを置く JSON
+    # オブジェクトを持たないため、この event だけ gate を通さない
+    # (protocol.md 「version 棚卸し」)。ここに足さない限り、検査を外した
+    # event は下のテストで落ちる。
+    @version_gate_exempt ["attach_chunk"]
+
+    # `def handle_in(...)` の第 1 引数がリテラル文字列の節だけを拾う。
+    # 非 map payload の shape gate は `handle_in(event, payload, socket)` と
+    # 変数で受けるので、ここでは自然に除外される。
+    defp inbound_events do
+      @channel_source
+      |> File.read!()
+      |> Code.string_to_quoted!()
+      |> Macro.prewalk([], fn
+        {:def, _, [{:when, _, [{:handle_in, _, [event | _]}, _guard]} | _]} = node, acc ->
+          {node, [event | acc]}
+
+        {:def, _, [{:handle_in, _, [event | _]} | _]} = node, acc ->
+          {node, [event | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+      |> elem(1)
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+    end
+
+    test "AST 列挙が実際に機能している (vacuous green の防止)" do
+      events = inbound_events()
+
+      # 列挙が壊れて空/極小になったら、下の網羅テストは無条件 green になる。
+      assert length(events) >= 20, "列挙できた event は #{length(events)} 件"
+      # 既知の代表を含むこと。パーサ節の取りこぼしはここで出る。
+      for known <- ~w(instruction spawn delete_agent rename_user attach_chunk) do
+        assert known in events, "#{known} が AST 列挙から漏れている"
+      end
+    end
+
+    test "carve-out は attach_chunk ただ 1 件であること" do
+      assert @version_gate_exempt == ["attach_chunk"]
+    end
+
+    test "carve-out 以外の全 inbound event が version 検査付き gate を通る" do
+      socket = join_as(:operator)
+
+      for event <- inbound_events(), event not in @version_gate_exempt do
+        log =
+          capture_log(fn ->
+            # 存在しない agent_id を使うので、gate 通過後の検証は必ず失敗して
+            # 終わる = 副作用ゼロ。見たいのは gate を通ったかどうかだけ。
+            push(socket, event, %{
+              "agent_id" => "test.gate-probe-absent",
+              "version" => "99"
+            })
+
+            # push は非同期なので、channel プロセスが処理し終えるまで同期する。
+            _ = :sys.get_state(socket.channel_pid)
+          end)
+
+        assert log =~ "#{event}: client declared protocol version",
+               "#{event} が version 検査付き gate を通っていない " <>
+                 "(require_operator/4 を迂回している可能性)"
+      end
+    end
+  end
 end

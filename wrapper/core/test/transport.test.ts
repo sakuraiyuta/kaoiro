@@ -8,8 +8,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type PushReceivers = Map<string, (payload: unknown) => void>;
 // `lastChannelParams` exposes the join params the channel was opened with,
 // so a test can assert what rides the handshake (persona_id / transition_id).
+// `handlers` maps an event to EVERY callback registered for it, not just the
+// last one. Phoenix 1.8.9's Channel.on appends and its trigger invokes all of
+// them; a Map<string, callback> silently collapsed duplicates, which hid a
+// raw `channel.on` added on top of an already-bound event (ふじ #218 レビュー
+// MF-4 — the structural meta-test below could not see it).
 const mock = vi.hoisted(() => ({
-  handlers: new Map<string, (payload: unknown) => void>(),
+  handlers: new Map<string, ((payload: unknown) => void)[]>(),
   lastPush: null as { event: string; payload: unknown; receivers: Map<string, (payload: unknown) => void> } | null,
   // Every push in order — `replay_ia` is chunked into several (M4), so a
   // test asserting the split cannot look at `lastPush` alone.
@@ -25,7 +30,9 @@ const mock = vi.hoisted(() => ({
 vi.mock("phoenix", () => {
   class Channel {
     on(event: string, cb: (payload: unknown) => void): void {
-      mock.handlers.set(event, cb);
+      const bound = mock.handlers.get(event);
+      if (bound === undefined) mock.handlers.set(event, [cb]);
+      else bound.push(cb);
     }
     join(): {
       receive: (
@@ -90,9 +97,12 @@ import {
 import type { Envelope } from "@kaoiro/protocol";
 
 function emit(event: string, payload: unknown): void {
-  const handler = mock.handlers.get(event);
-  if (!handler) throw new Error(`no handler registered for ${event}`);
-  handler(payload);
+  const bound = mock.handlers.get(event);
+  if (bound === undefined || bound.length === 0) {
+    throw new Error(`no handler registered for ${event}`);
+  }
+  // Every registered callback, matching Phoenix's own trigger (ふじ MF-4).
+  for (const handler of bound) handler(payload);
 }
 
 describe("ServerLink — initial envelope sequence (#107)", () => {
@@ -1801,6 +1811,23 @@ describe("ServerLink — server -> wrapper version check の構造 (issue #218)"
   it("登録済み event はすべて policy 表に載っている (checked か carve-out)", () => {
     const declared = Object.keys(SERVER_EVENT_VERSION_POLICY).sort();
     expect(registeredEvents()).toEqual(declared);
+  });
+
+  // 表に無い event を足す迂回は上のテストが拾うが、**既存 event の上に**
+  // 素の channel.on を重ねる迂回は event 名の集合を変えないので拾えない
+  // (ふじ #218 レビュー MF-4)。Phoenix は同一 event の全 callback を呼ぶ
+  // ので、その handler は check を通らずに payload を受け取る。登録数を
+  // 直接 assert してその経路を塞ぐ。
+  it("各 declared event はちょうど 1 回だけ bind される", () => {
+    mock.handlers.clear();
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+
+    const counts = [...mock.handlers.entries()].map(
+      ([event, bound]) => [event, bound.length] as const,
+    );
+    expect(counts.filter(([, n]) => n !== 1)).toEqual([]);
+    // 表が空になって vacuously green になっていないことの担保。
+    expect(counts.length).toBe(Object.keys(SERVER_EVENT_VERSION_POLICY).length);
   });
 
   it("checked な event は version 不一致で警告し、処理は継続する", () => {

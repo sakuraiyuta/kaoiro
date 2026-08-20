@@ -417,7 +417,30 @@ defmodule KaoiroServerWeb.AgentsChannel do
     {:noreply, socket}
   end
 
+  # Fail-closed SHAPE gate for every inbound JSON event (ふじ #218 レビュー
+  # MF-1). `payload` is raw wire input: a client speaking the Phoenix
+  # protocol directly can put any JSON term where the handlers all assume a
+  # map, and map operations raise `BadMapError` / `FunctionClauseError` on a
+  # scalar — crashing the channel process BEFORE any role gate runs.
+  #
+  # This is a CLASS, not one site: `Map.delete/2` in the relay normalize,
+  # `payload["text"]` in `reject_reserved_session_command/1`, `Map.has_key?/2`
+  # in `check_keys/2` all have it, and each is reached through a different
+  # handler prologue. Rejecting the shape once, ahead of every clause, is
+  # what closes it — patching the individual call sites leaves whichever
+  # prologue the next handler happens to add.
+  #
+  # `missing_agent_id` keeps the closed reason vocabulary unchanged: it is
+  # what `fetch_agent_id/1` already returns for this exact input, and what
+  # the pre-#218 ordering replied. `attach_chunk` is excluded because its
+  # payload is legitimately NOT a map (a `{:binary, data}` V2 frame); its
+  # own clause below handles the valid shape and drops anything else.
   @impl true
+  def handle_in(event, payload, socket)
+      when event != "attach_chunk" and not is_map(payload) do
+    {:reply, {:error, %{reason: safe_reason(:missing_agent_id)}}, socket}
+  end
+
   def handle_in("instruction", payload, socket) do
     # One live resolution per handler, shared by the guard and the relay
     # (ふじ must-fix B on issue #158).
@@ -610,9 +633,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # attach_close clears the route. Routes live in socket.assigns and die with
   # the operator session — the wrapper's TTL reclaims any orphan bytes.
   def handle_in("attach_open", payload, socket) do
-    relayed = wrapper_relay_payload(payload)
-
     with :ok <- require_operator(socket, payload, "attach_open", "relaying"),
+         relayed = wrapper_relay_payload(payload),
          :ok <- check_relay_size(relayed),
          {:ok, agent_id} <- fetch_agent_id(payload),
          :ok <-
@@ -660,10 +682,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  def handle_in("attach_close", payload, socket) do
-    relayed = wrapper_relay_payload(payload)
+  # The shape gate above deliberately skips `attach_chunk` (its payload is a
+  # `{:binary, data}` tuple, not a map), so this clause closes the same class
+  # for it: anything that is not the valid binary frame is dropped rather
+  # than left to raise `FunctionClauseError` with no clause to match. Silent
+  # like the branch above — a binary frame has no JSON reply path.
+  def handle_in("attach_chunk", _payload, socket), do: {:noreply, socket}
 
+  def handle_in("attach_close", payload, socket) do
     with :ok <- require_operator(socket, payload, "attach_close", "relaying"),
+         relayed = wrapper_relay_payload(payload),
          :ok <- check_relay_size(relayed),
          {:ok, _payload_agent_id} <- fetch_agent_id(payload),
          :ok <- check_keys(payload, [{"upload_id", &is_binary/1}]),
@@ -1300,6 +1328,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Callers run `check_relay_size/1` on the RESULT, never on the inbound
   # payload, so the cap bounds what actually reaches the wrapper process
   # (issue #26) including this stamp.
+  #
+  # `payload` is guaranteed to be a map here: the shape gate at the top of
+  # `handle_in/3` rejects every non-map inbound payload before any clause
+  # runs (ふじ #218 レビュー MF-1). Kept inside each caller's `with`, after
+  # the role gate, so the ordering reads the same as the pre-#218 code.
   defp wrapper_relay_payload(payload) do
     payload
     |> Map.delete("agent_id")
@@ -1307,9 +1340,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   defp relay(socket, payload, event, key_checks, role) do
-    relayed = wrapper_relay_payload(payload)
-
     with :ok <- require_operator(role, payload, event, "relaying"),
+         relayed = wrapper_relay_payload(payload),
          :ok <- check_relay_size(relayed),
          {:ok, agent_id} <- fetch_agent_id(payload),
          :ok <- check_keys(payload, key_checks) do

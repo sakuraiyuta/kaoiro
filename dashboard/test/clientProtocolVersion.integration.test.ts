@@ -115,10 +115,13 @@ async function connectAndJoin(): Promise<{
   return { conn, ws };
 }
 
-function payloadOf(ws: AckingWebSocket, event: string): Record<string, unknown> {
-  const frame = ws.sent.find((f) => f.event === event);
-  if (frame === undefined) throw new Error(`no "${event}" frame was sent`);
-  return frame.payload as Record<string, unknown>;
+/** Phoenix's own transport frames. They are not application messages and
+ *  carry no ADR-0015 version, so they are excluded from the sweep. */
+const TRANSPORT_EVENTS = new Set(["phx_join", "phx_leave", "heartbeat"]);
+
+/** Every APPLICATION frame that left the socket, in send order. */
+function appFrames(ws: AckingWebSocket): WireFrame[] {
+  return ws.sent.filter((f) => !TRANSPORT_EVENTS.has(f.event));
 }
 
 const AGENT_ID = "hostA.abc123";
@@ -298,7 +301,21 @@ describe("client -> server messages carry version (issue #218, ADR-0015)", () =>
       const pending = fire(conn);
       await settleSocket();
       await pending;
-      expect(payloadOf(ws, event as string).version).toBe("0");
+
+      const frames = appFrames(ws);
+      // The named event actually left the socket (a call that silently sends
+      // nothing must not read as compliant).
+      expect(frames.map((f) => f.event)).toContain(event);
+      // EVERY frame the call produced carries the stamp — not merely the
+      // first one matching `event` (ふじ #218 レビュー MF-2). `uploadFile`
+      // is why: it is a three-leg composite (attach_open -> attach_chunk ->
+      // attach_close), and asserting only the open leg let the close leg
+      // lose its stamp with the suite still green. Reported as event names
+      // so a failure says WHICH leg regressed.
+      const unstamped = frames.filter(
+        (f) => (f.payload as Record<string, unknown> | null)?.version !== "0",
+      );
+      expect(unstamped.map((f) => f.event)).toEqual([]);
     },
   );
 

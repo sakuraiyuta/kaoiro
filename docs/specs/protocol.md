@@ -771,14 +771,32 @@ client → server / server → wrapper / server → runner の 3 経路であり
 #### 受信側の検査
 
 ADR-0015 の warn-then-accept(一致は無警告 / 欠落・不一致は警告しつつ処理継続)
-は 3 者すべてで実装済み。いずれも個別ハンドラの規律ではなく、検査を飛ばせない
-構造に置いてある。
+は 3 者すべてで実装済み。個別ハンドラの規律に頼らず、**検査を通す機構**と
+**迂回を検出するテスト**の 2 段で担保する。
 
-| 受信側 | 実装 | 構造 |
+機構だけでは足りない — 検査を助長する形にはできても、別経路を書くこと自体は
+言語が禁じてくれない。だから各層に、迂回すると red になるテストを置く
+(ふじ #218 レビュー MF-3 / MF-4 の指摘)。
+
+| 受信側 | 機構 | 迂回検出 |
 |---|---|---|
-| サーバ | `warn_on_version_mismatch/3` | operator gate `require_operator/4` に溶接。role gate を通らずに検査だけ省くことができない(検査は role check の**後**に走るので、viewer が version を詐称してログを焚くこともできない) |
-| ラッパー | `warnOnVersionMismatch` | `#bindServerEvent` が唯一の `channel.on` 呼び出し点。`event` の型が `SERVER_EVENT_VERSION_POLICY` のキーなので、表に載せずに bind できない |
-| runner | `warnOnVersionMismatch` | `bindControlEvents` が event 表をループして bind する |
+| サーバ | operator gate `require_operator/4` に `warn_on_version_mismatch/3` を溶接。検査は role check の**後**に走る(viewer が version を詐称してログを焚けない) | モジュール自身の AST から `handle_in` の event 名を列挙し、各 event へ不正 version を push して warn を確認する。テスト側に一覧を持たないので、新しい `handle_in` 節は自動で対象に入る |
+| ラッパー | `#bindServerEvent` が唯一の `channel.on` 呼び出し点。`event` の型が `SERVER_EVENT_VERSION_POLICY` のキーなので、表に載せずには bind できない | 実際に登録された event 集合が policy 表と一致すること、かつ**各 event の登録がちょうど 1 件**であることを assert する。Phoenix は同一 event の全 callback を呼ぶため、既存 event に素の `channel.on` を重ねる迂回は件数でしか見えない |
+| runner | `bindControlEvents` が event 表をループして bind する | — |
+
+#### 非 map payload の扱い
+
+Phoenix のプロトコルを直接話すクライアントは、payload に任意の JSON 項を
+置ける。全ハンドラは map を前提にしているため、`AgentsChannel` は
+`handle_in/3` の先頭で **map でない payload を `missing_agent_id` で
+fail-closed に返す**(`attach_chunk` の binary frame は対象外 — payload が
+`{:binary, data}` で、そもそも map ではないのが正しい形)。
+
+この shape gate は role 解決より前に走るので、viewer にも `forbidden` では
+なく shape 判定が返る。意図した優先順位で、role を gate 内で解決すると
+「1 メッセージにつき role 解決は 1 回」(issue #158)の性質が壊れるため。
+malformed payload への shape 判定は送信者自身の入力についての verdict で
+あり、サーバ側の状態を開示しない。
 
 ### 同一性とペルソナ(マスト)
 
