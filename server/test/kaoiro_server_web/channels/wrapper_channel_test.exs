@@ -103,6 +103,33 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  # issue #271 (ふじ #269 レビュー should-fix): tie (同着) fixture の決定
+  # 論化。`AgentDirectory.touch/1` は `System.system_time(:second)` を使う
+  # ため、グループ内の touch が秒境界をちょうど跨ぐと last_seen が割れ、
+  # tie-break (agent_id 昇順) を検証するテストが極低確率で flake し得た。
+  # グループ全 id の last_seen が同一値に揃うまで touch をやり直すことで、
+  # 実行タイミングに依存しない決定論的な tie を作る。
+  defp touch_until_tied(ids, attempts \\ 20)
+
+  defp touch_until_tied(ids, attempts) when attempts > 0 do
+    for id <- ids, do: AgentDirectory.touch(id)
+    # touch/1 は cast。直後の同期 call (get/1) が同じ GenServer メール
+    # ボックスを FIFO で通過するので、これで touch の適用を待ってから
+    # last_seen を読める。
+    last_seens = for id <- ids, do: AgentDirectory.get(id).last_seen
+
+    case Enum.uniq(last_seens) do
+      [_single] -> :ok
+      _diverged -> touch_until_tied(ids, attempts - 1)
+    end
+  end
+
+  defp touch_until_tied(ids, 0) do
+    flunk(
+      "touch_until_tied: last_seen did not converge to a single value for #{inspect(ids)} after 20 attempts"
+    )
+  end
+
   test "envelope を受けて agents:lobby へ中継し最新状態を保持する" do
     agent_id = "test.relay-1"
     @endpoint.subscribe("agents:lobby")
@@ -3664,13 +3691,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       # older を先に touch し、1 秒空けて newest を touch する —
       # last_seen は unix 秒精度なので、2 グループ間の順序を確実に
-      # 分けるにはこの間隔が要る。同一グループ内の 2 件は同一秒で
-      # タイになり、agent_id 昇順の tie-break を pin する。
-      for id <- older_ids, do: AgentDirectory.touch(id)
-      _ = AgentDirectory.get(List.last(older_ids))
+      # 分けるにはこの間隔が要る。同一グループ内の 2 件は
+      # touch_until_tied で同一秒に揃え (issue #271)、agent_id 昇順の
+      # tie-break を決定論的に pin する。
+      touch_until_tied(older_ids)
       Process.sleep(1100)
-      for id <- newest_ids, do: AgentDirectory.touch(id)
-      _ = AgentDirectory.get(List.last(newest_ids))
+      touch_until_tied(newest_ids)
 
       self_socket = join_wrapper("test.dir-only-order-self")
       ref = push(self_socket, "envelope", envelope("test.dir-only-order-self", "idle"))
