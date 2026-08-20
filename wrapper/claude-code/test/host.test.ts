@@ -477,7 +477,7 @@ describe("AgentHost — query injection", () => {
     return { queryFn, injected };
   }
 
-  it("閾値超過で通知を 1 回だけ注入する (B1)", async () => {
+  it("閾値超過で raw 窓比と作業予算比を 1 回だけ注入する (B1/#264)", async () => {
     const { queryFn, injected } = contextQueryFn(
       [
         { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
@@ -490,16 +490,24 @@ describe("AgentHost — query injection", () => {
         await new Promise((resolve) => setTimeout(resolve, 20));
       },
     );
-    const host = new AgentHost(config, {
-      onState: () => {},
-      queryFn,
-      now: () => "T",
-    });
+    const host = new AgentHost(
+      { ...config, context_work_budget_percent: 50 },
+      {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+      },
+    );
     await host.run();
     // 2 回目の refresh (80%) では再送しない — epoch あたり 1 回。
     const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain("75%");
+    expect(notices[0]).toContain(
+      "raw context window: 75% (150000/200000 tokens)",
+    );
+    expect(notices[0]).toContain(
+      "work budget: 150% (150000/100000 tokens)",
+    );
     expect(notices[0]).toContain("request_compact");
     // 切迫を煽らない文言であること (P3)。
     expect(notices[0]).toContain("There is no need to act now");
@@ -1815,7 +1823,7 @@ describe("AgentHost — query injection", () => {
     expect(e?.ext?.slash_commands).toEqual(["model", "review", "clear"]);
   });
 
-  it("getContextUsage を ext.context / ext.model として付与する (#16)", async () => {
+  it("getContextUsage を version 付き ext.context / context_budget / ext.model として付与する (#16/#264)", async () => {
     const envs: Envelope[] = [];
     const usage = {
       totalTokens: 50,
@@ -1847,7 +1855,44 @@ describe("AgentHost — query injection", () => {
     expect(withCtx?.ext).toMatchObject({
       model: "claude-test",
       context: { used_tokens: 50, max_tokens: 100, used_percentage: 50 },
+      // 設定未指定時は 60% の作業予算。生窓 100 token の場合は
+      // 60 token 分母なので、50 token 使用は 83%（丸め）になる。
+      context_budget: {
+        work_budget_tokens: 60,
+        work_budget_percentage: 83,
+      },
     });
+    // context_budget は独立メッセージではなく、ADR-0015 準拠の
+    // state_change envelope に追加される open-schema field。
+    expect(withCtx?.version).toBe("0");
+  });
+
+  it("設定した作業予算率で context_budget の分母を切替える (#264)", async () => {
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([{ type: "text", text: "hi" }]);
+        yield result("success", { result: "ok" });
+        yield assistant([{ type: "text", text: "more" }]);
+      }
+      return asQuery(
+        gen(),
+        async () => {},
+        async () => ({ totalTokens: 50, maxTokens: 100, percentage: 50 }),
+      );
+    });
+    const host = new AgentHost(
+      { ...config, context_work_budget_percent: 80 },
+      { onState: (e) => envs.push(e), queryFn, now: () => "T" },
+    );
+    await host.run();
+    expect(envs.filter((e) => e.state === "thinking").at(-1)?.ext)
+      .toMatchObject({
+        context_budget: {
+          work_budget_tokens: 80,
+          work_budget_percentage: 63,
+        },
+      });
   });
 
   it("init 直後にも getContextUsage が発火し ext.context が付く (ADR-0040)", async () => {

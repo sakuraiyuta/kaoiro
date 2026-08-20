@@ -84,7 +84,10 @@ import {
   computeResumeDrift,
   logEntryToPayload,
 } from "@kaoiro/agent-common";
-import type { RefreshModelsFailReason } from "@kaoiro/protocol";
+import type {
+  ContextBudgetExt,
+  RefreshModelsFailReason,
+} from "@kaoiro/protocol";
 import { PERMISSION_MODE_AXES } from "./permission_axes.js";
 import { claudeBootstrapCatalog, type SupportedModel } from "./catalog.js";
 import { runClaudeProbe, type ProbeOutcome } from "./probe-client.js";
@@ -175,6 +178,12 @@ export const CONTEXT_INIT_RETRY_DELAY_MS = 100;
  *  the number itself is a guess pending dogfood data. */
 export const CONTEXT_NOTICE_THRESHOLD_PERCENT = 70;
 
+/** Default soft work budget, as a share of the SDK-reported context window
+ * (issue #264). The runner can override it through
+ * `context_work_budget_percent`; deriving the token denominator from the live
+ * model window makes 1M- and 200k-token models comparable. */
+export const CONTEXT_WORK_BUDGET_DEFAULT_PERCENT = 60;
+
 /** How many context readings a freshly-opened epoch may take before the
  *  threshold notice is re-enabled regardless of the numbers (phase-28 BR
  *  MF1-R). This is the liveness half of the settling gate: the magnitude
@@ -193,10 +202,39 @@ export const CONTEXT_EPOCH_SETTLE_READINGS = 3;
  *  the one action available, explicitly removes urgency, and promises not to
  *  repeat — an agent told "you are running out" every turn starts optimizing
  *  for the meter instead of the work. */
-function contextNoticeText(usedPercentage: number): string {
+function contextBudgetFor(
+  usedTokens: number,
+  maxTokens: number,
+  configuredPercent: number | undefined,
+): ContextBudgetExt {
+  const budgetPercent =
+    configuredPercent ?? CONTEXT_WORK_BUDGET_DEFAULT_PERCENT;
+  // A token denominator must remain positive even for an anomalously tiny
+  // SDK window plus a valid fractional config (e.g. max=1, budget=1%).
+  const work_budget_tokens = Math.max(
+    1,
+    Math.round((maxTokens * budgetPercent) / 100),
+  );
+  return {
+    work_budget_tokens,
+    work_budget_percentage: Math.round(
+      (usedTokens / work_budget_tokens) * 100,
+    ),
+  };
+}
+
+function contextNoticeText(
+  usedTokens: number,
+  maxTokens: number,
+  usedPercentage: number,
+  contextBudget: ContextBudgetExt,
+): string {
   return (
-    `[kaoiro] Context usage for this session has reached ` +
-    `${usedPercentage}%. If you judge that headroom is starting to limit ` +
+    `[kaoiro] Context usage: ${usedTokens} tokens — raw context window: ` +
+    `${usedPercentage}% (${usedTokens}/${maxTokens} tokens); work budget: ` +
+    `${contextBudget.work_budget_percentage}% ` +
+    `(${usedTokens}/${contextBudget.work_budget_tokens} tokens). If you ` +
+    "judge that headroom is starting to limit " +
     "the work, you can call request_compact to ask the operator to approve " +
     "compacting it. There is no need to act now — finish what you are " +
     "doing and decide at a natural break, or ignore this if the remaining " +
@@ -1925,7 +1963,14 @@ export class AgentHost implements EngineAdapter {
     ) {
       ext.models_error = true;
     }
-    if (this.#context !== null) ext.context = this.#context;
+    if (this.#context !== null) {
+      ext.context = this.#context;
+      ext.context_budget = contextBudgetFor(
+        this.#context.used_tokens,
+        this.#context.max_tokens,
+        this.#config.context_work_budget_percent,
+      );
+    }
     if (this.#rateLimits.size > 0) {
       ext.rate_limits = Object.fromEntries(this.#rateLimits);
     }
@@ -2483,6 +2528,7 @@ export class AgentHost implements EngineAdapter {
    *  injected mid-turn (ADR-0036 F6 stays intact). */
   #maybeNotifyContextThreshold(reading: {
     used_tokens: number;
+    max_tokens: number;
     used_percentage: number;
   }): void {
     if (!this.#settleContextEpoch(reading.used_tokens)) return;
@@ -2492,7 +2538,16 @@ export class AgentHost implements EngineAdapter {
     // the same tick cannot both queue a notice.
     this.#contextNoticeSent = true;
     const generation = this.#contextGeneration;
-    const text = contextNoticeText(reading.used_percentage);
+    const text = contextNoticeText(
+      reading.used_tokens,
+      reading.max_tokens,
+      reading.used_percentage,
+      contextBudgetFor(
+        reading.used_tokens,
+        reading.max_tokens,
+        this.#config.context_work_budget_percent,
+      ),
+    );
     void this.#enqueueInjection(async () => {
       // The chain may have held us across a compaction the agent already
       // acted on. Injecting now would deliver the old epoch's warning into

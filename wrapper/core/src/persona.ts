@@ -160,6 +160,24 @@ export function parseConfig(raw: unknown): WrapperConfig {
     }
   }
 
+  // issue #264: a soft work budget is a positive share of the SDK-reported
+  // context window. It must not exceed that window: an over-100 setting
+  // would name an unreachable denominator as a normal stopping point.
+  if (raw.context_work_budget_percent !== undefined) {
+    const percent = raw.context_work_budget_percent;
+    if (
+      typeof percent !== "number" ||
+      !Number.isFinite(percent) ||
+      percent <= 0 ||
+      percent > 100
+    ) {
+      throw new ConfigError(
+        "context_work_budget_percent must be a finite number greater than 0 and at most 100",
+      );
+    }
+    config.context_work_budget_percent = percent;
+  }
+
   if (raw.permission_mode !== undefined) {
     if (
       typeof raw.permission_mode !== "string" ||

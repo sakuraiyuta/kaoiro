@@ -74,6 +74,7 @@ function harness(
       | WrapperConfig["claude_engine_catalog"]
       | null
       | undefined;
+    contextWorkBudgetPercent?: number;
   } = {},
 ) {
   const children: FakeChild[] = [];
@@ -108,6 +109,9 @@ function harness(
     ...(opts.getClaudeEngineCatalog === undefined
       ? {}
       : { getClaudeEngineCatalog: opts.getClaudeEngineCatalog }),
+    ...(opts.contextWorkBudgetPercent === undefined
+      ? {}
+      : { contextWorkBudgetPercent: opts.contextWorkBudgetPercent }),
     ...(opts.now === undefined ? {} : { now: opts.now }),
     ...(opts.resetTerminationGraceMs === undefined
       ? {}
@@ -170,6 +174,22 @@ describe("parseSpawn / resolveWrapperConfig", () => {
       server_token: "tok",
     });
     expect("allowed_tools" in config).toBe(false);
+  });
+
+  it("context_work_budget_percent を runner から wrapper config へ透過する", () => {
+    const parsed = parseSpawn(spawnMsg)!;
+    expect(
+      resolveWrapperConfig(
+        "lab-pc-1.claude-a",
+        parsed,
+        "ws://localhost:4000/wrapper",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        60,
+      ),
+    ).toMatchObject({ context_work_budget_percent: 60 });
   });
 
   // issue #219 MF-1: display_name was dropped between server and wrapper —
@@ -1694,6 +1714,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/old/path" });
@@ -1723,6 +1744,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
     // server_url を spawn 側で欠落させると fallback が使われる
@@ -1730,6 +1752,21 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
     void _drop;
     h.sup.handleSpawn({ ...withoutUrl, cwd: "/cwd" });
     expect(h.configs.at(-1)?.server_url).toBe("ws://new:5000/wrapper");
+  });
+
+  it("作業予算の更新は以降の spawn だけへ relay する", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: undefined,
+      codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined,
+      contextWorkBudgetPercent: 75,
+      getClaudeEngineCatalog: undefined,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd" });
+    expect(h.configs.at(-1)?.context_work_budget_percent).toBe(75);
   });
 
   it("codexChatgptPlan を差替え、以降の codex spawn の WrapperConfig に載る", () => {
@@ -1740,6 +1777,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
+      contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
@@ -1755,6 +1793,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
+      contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
     h.sup.updateRuntimeConfig({
@@ -1763,6 +1802,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
@@ -1779,6 +1819,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
     expect(running.kills).toBe(0);
@@ -1798,6 +1839,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: undefined,
       codexInternalSubagents: false,
+      contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
@@ -1812,6 +1854,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: undefined,
       codexInternalSubagents: true,
+      contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });

@@ -46,6 +46,10 @@ export interface RunnerConfig {
   allowed_personas?: string[];
   blocked_personas?: string[];
   cwd_allowlist: string[];
+  /** Soft work-budget denominator as a percentage of every active model's
+   * SDK-reported context window (issue #264). Omitted lets the wrapper apply
+   * its 60% default. */
+  context_work_budget_percent?: number;
   capabilities?: string[];
   codex?: CodexConfig;
 }
@@ -165,6 +169,21 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
   }
 
   const config: RunnerConfig = { host_id, server_url, cwd_allowlist };
+
+  if (raw.context_work_budget_percent !== undefined) {
+    const percent = raw.context_work_budget_percent;
+    if (
+      typeof percent !== "number" ||
+      !Number.isFinite(percent) ||
+      percent <= 0 ||
+      percent > 100
+    ) {
+      throw new ConfigError(
+        "context_work_budget_percent must be a finite number greater than 0 and at most 100",
+      );
+    }
+    config.context_work_budget_percent = percent;
+  }
 
   const hasLegacy = raw.personas !== undefined;
   const hasAllow = raw.allowed_personas !== undefined;

@@ -143,6 +143,9 @@ export interface SupervisorOptions {
   codexAuthMode?: CodexAuthMode;
   codexChatgptPlan?: ChatGptPlan;
   codexInternalSubagents?: boolean;
+  /** Global soft context-work budget from runner.config.json. The wrapper
+   * derives a per-model token denominator at measurement time (issue #264). */
+  contextWorkBudgetPercent?: number;
   /** ADR-0039 F9 追補: reads the current Claude engine-catalog from the
    *  runner's live probe cache so every spawn/restart/relaunch relays the
    *  latest known models to the wrapper's initial #models. Getter (not a
@@ -359,6 +362,7 @@ export function resolveWrapperConfig(
   codexChatgptPlan?: ChatGptPlan,
   codexInternalSubagents?: boolean,
   claudeEngineCatalog?: WrapperConfig["claude_engine_catalog"] | null,
+  contextWorkBudgetPercent?: number,
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
@@ -373,6 +377,9 @@ export function resolveWrapperConfig(
     server_url: parsed.serverUrl ?? fallbackServerUrl,
   };
   if (parsed.token !== undefined) config.server_token = parsed.token;
+  if (contextWorkBudgetPercent !== undefined) {
+    config.context_work_budget_percent = contextWorkBudgetPercent;
+  }
   // Session-transition correlation id (phase-27, #160): the wrapper echoes
   // it in its channel join params so the server can recognise the
   // connection this transition produced.
@@ -497,6 +504,7 @@ export interface SupervisorRuntimeUpdate {
   codexAuthMode: CodexAuthMode | undefined;
   codexChatgptPlan: ChatGptPlan | undefined;
   codexInternalSubagents: boolean | undefined;
+  contextWorkBudgetPercent: number | undefined;
   /** Live getter for the runner's Claude engine-catalog cache (ADR-0039
    *  F9 追補). Preserved on hot-reload so a config file change does not
    *  disconnect an existing probe result from future spawns. */
@@ -527,6 +535,7 @@ export class Supervisor {
   #codexAuthMode: CodexAuthMode | undefined;
   #codexChatgptPlan: ChatGptPlan | undefined;
   #codexInternalSubagents: boolean | undefined;
+  #contextWorkBudgetPercent: number | undefined;
   #getClaudeEngineCatalog:
     | (() => WrapperConfig["claude_engine_catalog"] | null | undefined)
     | undefined;
@@ -562,6 +571,7 @@ export class Supervisor {
     this.#codexAuthMode = options.codexAuthMode;
     this.#codexChatgptPlan = options.codexChatgptPlan;
     this.#codexInternalSubagents = options.codexInternalSubagents;
+    this.#contextWorkBudgetPercent = options.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = options.getClaudeEngineCatalog;
   }
 
@@ -578,6 +588,7 @@ export class Supervisor {
     this.#codexAuthMode = update.codexAuthMode;
     this.#codexChatgptPlan = update.codexChatgptPlan;
     this.#codexInternalSubagents = update.codexInternalSubagents;
+    this.#contextWorkBudgetPercent = update.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = update.getClaudeEngineCatalog;
   }
 
@@ -1134,6 +1145,7 @@ export class Supervisor {
         this.#codexChatgptPlan,
         this.#codexInternalSubagents,
         this.#getClaudeEngineCatalog?.() ?? null,
+        this.#contextWorkBudgetPercent,
       ),
       parsed.cwd,
       parsed.resumeSessionId,
@@ -1303,6 +1315,7 @@ export class Supervisor {
           this.#codexChatgptPlan,
           this.#codexInternalSubagents,
           this.#getClaudeEngineCatalog?.() ?? null,
+          this.#contextWorkBudgetPercent,
         ),
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
@@ -1349,6 +1362,7 @@ export class Supervisor {
           this.#codexChatgptPlan,
           this.#codexInternalSubagents,
           this.#getClaudeEngineCatalog?.() ?? null,
+          this.#contextWorkBudgetPercent,
         ),
         entry.parsed.cwd,
         undefined, // fresh: no --resume
@@ -1445,6 +1459,7 @@ export class Supervisor {
           this.#codexChatgptPlan,
           this.#codexInternalSubagents,
           this.#getClaudeEngineCatalog?.() ?? null,
+          this.#contextWorkBudgetPercent,
         ),
         entry.parsed.cwd,
         rollbackSid,

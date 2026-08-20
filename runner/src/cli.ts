@@ -61,6 +61,7 @@ function changedFields(prev: RunnerConfig, next: RunnerConfig): string[] {
     "host_id",
     "server_url",
     "cwd_allowlist",
+    "context_work_budget_percent",
     "capabilities",
     "personas",
     "allowed_personas",
@@ -123,6 +124,9 @@ async function main(): Promise<void> {
     ...(config.codex?.internal_subagents === undefined
       ? {}
       : { codexInternalSubagents: config.codex.internal_subagents }),
+    ...(config.context_work_budget_percent === undefined
+      ? {}
+      : { contextWorkBudgetPercent: config.context_work_budget_percent }),
     // ADR-0039 F9 追補: a live getter (not a snapshot) so a probe that
     // finishes between spawns reaches the next child. Empty / null falls
     // back to the bootstrap floor server-side (resolveWrapperConfig).
@@ -203,6 +207,7 @@ async function main(): Promise<void> {
       codexAuthMode,
       codexChatgptPlan: next.codex?.chatgpt_plan,
       codexInternalSubagents: next.codex?.internal_subagents,
+      contextWorkBudgetPercent: next.context_work_budget_percent,
       // Preserve the live probe getter across reloads (ADR-0039 F9 追補).
       getClaudeEngineCatalog: () => claudeCatalog.getStale(),
     });

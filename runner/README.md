@@ -51,6 +51,13 @@ wrapper のようなサーバ署名トークン経路が無いため、issue #13
 `runner.config.json` の `server_url` を書き換えても実際の接続先は変わらない
 (host_id 等の他フィールド変更によるホットリロード自体は通常どおり効く)。
 
+`context_work_budget_percent` は Claude の context window に対する soft な
+作業予算の割合で、既定は `60`。wrapper は SDK が返した各 model の `maxTokens`
+から token 分母を導出するため、1M window では 600k、200k window では 120k が
+作業予算になる。`0 < 値 <= 100` の有限数だけを受け付け、変更は hot reload 後の
+次回 spawn から反映される。生窓の使用率とこの作業予算比は、dashboard と wrapper
+の context 通知で分母付きに併記される(issue #264)。
+
 runner の Phoenix wire log は、定期 heartbeat の push と対応する reply を既定で
 省略する。他の transport / reconnect / error / 制御メッセージは従来どおり出力される。
 接続レベルの調査で従来の全量出力が必要な場合だけ、`runner.env` に
@@ -73,8 +80,8 @@ node dist/setup-cli.js            # 直接叩く場合 (runner/ から)
 
 聞かれるのは host_id / server URL / 起動許可 cwd / engine(capabilities)/
 Codex を選んだ場合はその auth mode / トークン / node の絶対パス。
-`codex.chatgpt_plan` と `codex.internal_subagents` はウィザードでは聞かず、
-必要なら生成後の `runner.config.json` に手で足す。出力先は OS 別ユーザ設定ディレクトリ(Linux
+`codex.chatgpt_plan` / `codex.internal_subagents` / `context_work_budget_percent` は
+ウィザードでは聞かず、必要なら生成後の `runner.config.json` に手で足す。出力先は OS 別ユーザ設定ディレクトリ(Linux
 `${XDG_CONFIG_HOME:-~/.config}/kaoiro`、macOS
 `~/Library/Application Support/kaoiro`。`KAOIRO_RUNNER_DIR` で上書き可)で、
 起動シムが読む場所と同じ。
