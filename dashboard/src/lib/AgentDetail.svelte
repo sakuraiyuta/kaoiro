@@ -274,6 +274,16 @@
     return Math.max(0, Math.min(100, Math.round(value)));
   }
 
+  /** A non-negative percentage that may exceed 100. The soft work-budget
+   * denominator is intentionally below the raw context window, so clamping
+   * its use rate would hide the very threshold this display must expose
+   * (issue #264). */
+  function pctUnbounded(value: unknown): number | null {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.round(value)
+      : null;
+  }
+
   /** A finite, non-negative number, or null — for raw token counts (#55). */
   function numOrNull(value: unknown): number | null {
     return typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -468,6 +478,21 @@
   // how much room is left. Both come from the same SDK usage object.
   const ctxUsed = $derived(numOrNull(ccContext?.used_tokens));
   const ctxMax = $derived(numOrNull(ccContext?.max_tokens));
+  // A new wrapper stamps the soft budget separately so the old 3-field
+  // ext.context shape remains untouched. Do not derive a default here: an
+  // older wrapper's configured denominator is unknown to the dashboard.
+  const ccContextBudget = $derived(
+    envelope.ext?.context_budget as Record<string, unknown> | undefined,
+  );
+  const ctxBudgetTokens = $derived(
+    (() => {
+      const value = numOrNull(ccContextBudget?.work_budget_tokens);
+      return value !== null && value > 0 ? value : null;
+    })(),
+  );
+  const ctxBudgetPct = $derived(
+    pctUnbounded(ccContextBudget?.work_budget_percentage),
+  );
   // Capability gating for the ctx row (ADR-0040 phase-21). Tri-state, in
   // strict fail-closed order — a null/malformed caps envelope, or a wrapper
   // that predates supports_context_usage, MUST NOT render "未対応" (that
@@ -2710,10 +2735,19 @@
                     <div class="meter-fill" style:width="{ctxPct}%"></div>
                   </div>
                   <span class="meter-val">
-                    {ctxPct}%
-                    {#if ctxUsed !== null && ctxMax !== null}
-                      <span class="meter-abs"
-                        >({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})</span>
+                    <span class="ctx-meter-line">
+                      生窓 {ctxPct}%
+                      {#if ctxUsed !== null && ctxMax !== null}
+                        <span class="meter-abs"
+                          >({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})</span>
+                      {/if}
+                    </span>
+                    {#if ctxUsed !== null && ctxBudgetPct !== null && ctxBudgetTokens !== null}
+                      <span class="ctx-meter-line">
+                        作業予算 {ctxBudgetPct}%
+                        <span class="meter-abs"
+                          >({fmtTokens(ctxUsed)}/{fmtTokens(ctxBudgetTokens)})</span>
+                      </span>
                     {/if}
                   </span>
                 {/if}
@@ -4147,6 +4181,10 @@
     margin-left: 0.3em;
     font-size: 0.85em; /* em-relative to parent meter; do not tokenize */
     opacity: 0.8;
+  }
+
+  .ctx-meter-line {
+    display: block;
   }
 
   .log {

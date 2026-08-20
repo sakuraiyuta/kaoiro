@@ -129,6 +129,26 @@
     return Math.max(0, Math.min(100, Math.round(value)));
   }
 
+  /** Work-budget use can legitimately exceed 100%, unlike a raw-window
+   * percentage. Keep that signal visible instead of clamping it away. */
+  function pctUnbounded(value: unknown): number | null {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.round(value)
+      : null;
+  }
+
+  function numOrNull(value: unknown): number | null {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? value
+      : null;
+  }
+
+  function fmtTokens(n: number): string {
+    if (n < 1000) return String(n);
+    if (n < 1_000_000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+  }
+
   /** A finite epoch ms, or null for anything that would render as an
    *  Invalid Date (out of JS's representable range despite being a finite
    *  number — ふじ round-2 S2). Centralised here so every consumer (the
@@ -180,6 +200,20 @@
     envelope.ext?.context as Record<string, unknown> | undefined,
   );
   const ctxPct = $derived(pctClamp(ccContext?.used_percentage));
+  const ctxUsed = $derived(numOrNull(ccContext?.used_tokens));
+  const ctxMax = $derived(numOrNull(ccContext?.max_tokens));
+  const ccContextBudget = $derived(
+    envelope.ext?.context_budget as Record<string, unknown> | undefined,
+  );
+  const ctxBudgetTokens = $derived(
+    (() => {
+      const value = numOrNull(ccContextBudget?.work_budget_tokens);
+      return value !== null && value > 0 ? value : null;
+    })(),
+  );
+  const ctxBudgetPct = $derived(
+    pctUnbounded(ccContextBudget?.work_budget_percentage),
+  );
   const ccRateLimits = $derived(
     envelope.ext?.rate_limits as Record<string, unknown> | undefined,
   );
@@ -450,11 +484,31 @@
         {/if}
         {#if ctxPct !== null}
           <div class="stat-row">
-            <span class="stat-label">ctx</span>
+            <span class="stat-label">生窓</span>
             <div class="meter">
               <div class="meter-fill" style:width="{ctxPct}%"></div>
             </div>
-            <span class="meter-val">{ctxPct}%</span>
+            <span class="meter-val">
+              {ctxPct}%
+              {#if ctxUsed !== null && ctxMax !== null}
+                ({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})
+              {/if}
+            </span>
+          </div>
+        {/if}
+        {#if ctxPct !== null && ctxUsed !== null && ctxBudgetPct !== null && ctxBudgetTokens !== null}
+          <div class="stat-row">
+            <span class="stat-label">作業予算</span>
+            <div class="meter">
+              <div
+                class="meter-fill"
+                style:width="{Math.min(ctxBudgetPct, 100)}%"
+              ></div>
+            </div>
+            <span class="meter-val">
+              {ctxBudgetPct}%
+              ({fmtTokens(ctxUsed)}/{fmtTokens(ctxBudgetTokens)})
+            </span>
           </div>
         {/if}
         {#if fiveHourBar !== null}
@@ -665,7 +719,7 @@
 
   .stat-row {
     display: grid;
-    grid-template-columns: 2.4rem 1fr auto;
+    grid-template-columns: 3.7rem 1fr auto;
     align-items: center;
     gap: 0.35rem;
   }

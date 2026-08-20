@@ -94,7 +94,7 @@ describe("AgentDetail ctx row (ADR-0040 phase-21)", () => {
     expect(dd?.querySelector(".meter")).toBeNull();
   });
 
-  it("supports_context_usage=true + 値あり → meter を出す", async () => {
+  it("旧 wrapper の context 3-field だけでも生窓比を分母名付きで出す", async () => {
     const target = await render({
       session_capabilities: {
         supports_attachments: true,
@@ -111,10 +111,61 @@ describe("AgentDetail ctx row (ADR-0040 phase-21)", () => {
     const fill = dd?.querySelector(".meter-fill") as HTMLElement | null;
     expect(fill).not.toBeNull();
     expect(fill?.style.width).toBe("3%");
-    expect(dd?.textContent).toContain("3%");
+    expect(dd?.textContent).toContain("生窓 3%");
+    // context_budget を知らない旧 wrapper の作業予算を UI で推測しない。
+    expect(dd?.textContent).not.toContain("作業予算");
     // 取得中 / 未対応 の placeholder は出ない
     expect(dd?.textContent).not.toContain("取得中");
     expect(dd?.textContent).not.toContain("未対応");
+  });
+
+  it("作業予算があれば token 分母と 100%超の予算比を併記する (#264)", async () => {
+    const target = await render({
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
+      context: {
+        used_tokens: 150000,
+        max_tokens: 200000,
+        used_percentage: 75,
+      },
+      context_budget: {
+        work_budget_tokens: 100000,
+        work_budget_percentage: 150,
+      },
+    });
+    const dd = ctxRow(target);
+    expect(dd?.querySelector(".meter-fill")?.getAttribute("style")).toContain(
+      "width: 75%",
+    );
+    expect(dd?.textContent).toContain("生窓 75%");
+    expect(dd?.textContent).toContain("(150k/200k)");
+    expect(dd?.textContent).toContain("作業予算 150%");
+    expect(dd?.textContent).toContain("(150k/100k)");
+  });
+
+  it("不正な作業予算分母は隠し、生窓表示を壊さない (#264)", async () => {
+    const target = await render({
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
+      context: {
+        used_tokens: 5000,
+        max_tokens: 200000,
+        used_percentage: 3,
+      },
+      context_budget: {
+        work_budget_tokens: 0,
+        work_budget_percentage: 5,
+      },
+    });
+    const dd = ctxRow(target);
+    expect(dd?.textContent).toContain("生窓 3%");
+    expect(dd?.textContent).not.toContain("作業予算");
   });
 
   it("supports_context_usage=false → 「未対応」を出す (Codex 相当)", async () => {
