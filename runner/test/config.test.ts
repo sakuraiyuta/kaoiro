@@ -29,11 +29,14 @@ describe("parseRunnerConfig", () => {
     expect(parseRunnerConfig(withCaps).capabilities).toEqual(["claude"]);
   });
 
-  it("context_work_budget_percent を有限な (0, 100] の値として受け入れる", () => {
-    expect(
-      parseRunnerConfig({ ...valid, context_work_budget_percent: 60.5 }),
-    ).toMatchObject({ context_work_budget_percent: 60.5 });
-  });
+  it.each([60.5, 100])(
+    "context_work_budget_percent の有限な (0, 100] の値 %p を受け入れる",
+    (percent) => {
+      expect(
+        parseRunnerConfig({ ...valid, context_work_budget_percent: percent }),
+      ).toMatchObject({ context_work_budget_percent: percent });
+    },
+  );
 
   it.each([0, -1, 100.1, Infinity, NaN, "60"])(
     "不正な context_work_budget_percent %p は fail-fast で弾く",

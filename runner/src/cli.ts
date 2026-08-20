@@ -24,6 +24,7 @@ import {
   type RunnerConfig,
   wrapperUrlFrom,
 } from "./config.js";
+import { changedFields } from "./config-diff.js";
 import { watchRunnerConfig } from "./config-watcher.js";
 import { makeLauncher } from "./spawn.js";
 import { Supervisor } from "./supervisor.js";
@@ -49,33 +50,6 @@ process.on("uncaughtException", (error) => {
   );
   process.exit(1);
 });
-
-/** Config-reload diff: which top-level fields differ. `codex` is a whole-object
- *  compare so any change inside the codex block — `auth_mode` (Phase-24),
- *  `chatgpt_plan`, `internal_subagents` — surfaces as one entry ("codex")
- *  and drives one reload. Uses JSON.stringify equality — parseRunnerConfig
- *  builds fields in a stable order so a byte-identical config produces
- *  byte-identical JSON. */
-function changedFields(prev: RunnerConfig, next: RunnerConfig): string[] {
-  const fields: (keyof RunnerConfig)[] = [
-    "host_id",
-    "server_url",
-    "cwd_allowlist",
-    "context_work_budget_percent",
-    "capabilities",
-    "personas",
-    "allowed_personas",
-    "blocked_personas",
-    "codex",
-  ];
-  const changed: string[] = [];
-  for (const field of fields) {
-    if (JSON.stringify(prev[field]) !== JSON.stringify(next[field])) {
-      changed.push(field);
-    }
-  }
-  return changed;
-}
 
 function isCodexEnabled(config: RunnerConfig): boolean {
   // Absent = bundled default (["claude-code", "codex"]), so codex ON.

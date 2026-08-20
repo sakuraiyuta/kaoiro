@@ -132,6 +132,39 @@ describe("AgentCard stats (issue #193)", () => {
     );
   });
 
+  it("作業予算 0% を欠落扱いせず token 分母付きで表示する (#264)", async () => {
+    const target = await render({
+      context: {
+        used_tokens: 0,
+        max_tokens: 200000,
+        used_percentage: 0,
+      },
+      context_budget: {
+        work_budget_tokens: 120000,
+        work_budget_percentage: 0,
+      },
+    });
+    const budget = statRow(target, "作業予算");
+    expect(budget?.querySelector(".meter-val")?.textContent).toMatch(
+      /0%\s+\(0\/120k\)/,
+    );
+    expect(budget?.querySelector(".meter-fill")?.getAttribute("style")).toContain(
+      "width: 0%",
+    );
+  });
+
+  it("旧 wrapper の生窓だけを表示し、作業予算を推測しない (#264)", async () => {
+    const target = await render({
+      context: {
+        used_tokens: 5000,
+        max_tokens: 200000,
+        used_percentage: 3,
+      },
+    });
+    expect(statRow(target, "生窓")?.textContent).toContain("3%");
+    expect(statRow(target, "作業予算")).toBeNull();
+  });
+
   it("不正な作業予算分母は card でも隠し、生窓を残す (#264)", async () => {
     const target = await render({
       context: {

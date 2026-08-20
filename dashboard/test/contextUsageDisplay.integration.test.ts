@@ -146,6 +146,28 @@ describe("AgentDetail ctx row (ADR-0040 phase-21)", () => {
     expect(dd?.textContent).toContain("(150k/100k)");
   });
 
+  it("作業予算 0% を欠落扱いせず token 分母付きで表示する (#264)", async () => {
+    const target = await render({
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
+      context: {
+        used_tokens: 0,
+        max_tokens: 200000,
+        used_percentage: 0,
+      },
+      context_budget: {
+        work_budget_tokens: 120000,
+        work_budget_percentage: 0,
+      },
+    });
+    const dd = ctxRow(target);
+    expect(dd?.textContent).toContain("作業予算 0%");
+    expect(dd?.textContent).toContain("(0/120k)");
+  });
+
   it("不正な作業予算分母は隠し、生窓表示を壊さない (#264)", async () => {
     const target = await render({
       session_capabilities: {

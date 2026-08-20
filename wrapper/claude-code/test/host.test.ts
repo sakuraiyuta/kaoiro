@@ -4644,8 +4644,41 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       used_tokens: 500,
       max_tokens: 1000000,
     });
+    expect(lastCtx?.ext.context_budget).toMatchObject({
+      work_budget_tokens: 600000,
+    });
     host.close();
     await done;
+  });
+
+  it("SDK が maxTokens=0 を返しても context_budget の分母を 1 token に保つ (#264)", async () => {
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([{ type: "text", text: "hi" }]);
+        yield result("success", { result: "ok" });
+        yield assistant([{ type: "text", text: "more" }]);
+      }
+      return asQuery(
+        gen(),
+        async () => {},
+        async () => ({ totalTokens: 0, maxTokens: 0, percentage: 0 }),
+      );
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(envs.filter((e) => e.state === "thinking").at(-1)?.ext)
+      .toMatchObject({
+        context: { used_tokens: 0, max_tokens: 0, used_percentage: 0 },
+        context_budget: {
+          work_budget_tokens: 1,
+          work_budget_percentage: 0,
+        },
+      });
   });
 
   it("setModel 成功後の effort reset 失敗でも旧 context は残らない (藤 review turn-5 R1)", async () => {
