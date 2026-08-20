@@ -4,7 +4,7 @@ description: エージェントが自身の context 使用量を認識し、/com
 status: done
 phase: 28
 depends_on: [21, 27]
-last_updated: 2026-07-28
+last_updated: 2026-08-21
 ---
 
 # Phase 28 — コンテキスト疲労の自己認識と自発 session 操作
@@ -253,8 +253,9 @@ fast path を潰すと post_tokens テストが落ちる。
 
 ### B1 — 閾値通知
 
-- 判定点: `#context` が更新される箇所 (refresh 成功時)。既定閾値 70%
-  (`used_percentage >= 70`)。設定で上書き可能なら configurable に、
+- 判定点: `#context` が更新される箇所 (refresh 成功時)。既定閾値 60%
+  (`used_percentage >= 60`)。issue #172 P4 のマスター決裁 (2026-07-29) により
+  Phase B の 70% 指定は撤回された。設定で上書き可能なら configurable に、
   config 配線が重ければ定数 + TODO で可。
 - 注入は **epoch 毎に 1 回** (dedup。`#invalidateContextEpoch` で解除)。
   毎 turn の再注入や常時表示は禁止 (P3: context anxiety 回避)。

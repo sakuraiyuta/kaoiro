@@ -170,18 +170,23 @@ export const CONTEXT_INIT_RETRY_DELAY_MS = 100;
 
 /** Context-usage share (percent) at or above which the wrapper tells the
  *  agent ONCE per context epoch that recovery is available (phase-28 B1,
- *  #168 決定 P3). The hybrid split: the wrapper does the machine judgement,
- *  the agent decides whether to act. Deliberately a constant — a config
- *  field would have to travel through WrapperConfig in @kaoiro/protocol, and
- *  Phase B is scoped to close inside the wrapper. TODO(#168 Phase C or a
- *  follow-up): make configurable once operators want per-agent thresholds;
- *  the number itself is a guess pending dogfood data. */
-export const CONTEXT_NOTICE_THRESHOLD_PERCENT = 70;
+ *  #168 決定 P3; threshold revised 70 -> 60 by issue #172 P4). The hybrid
+ *  split: the wrapper does the machine judgement, the agent decides whether
+ *  to act. Deliberately a constant — a config field would have to travel
+ *  through WrapperConfig in @kaoiro/protocol, and Phase B is scoped to close
+ *  inside the wrapper. TODO(#168 Phase C or a follow-up): make configurable
+ *  once operators want per-agent thresholds. */
+export const CONTEXT_NOTICE_THRESHOLD_PERCENT = 60;
 
 /** Default soft work budget, as a share of the SDK-reported context window
  * (issue #264). The runner can override it through
  * `context_work_budget_percent`; deriving the token denominator from the live
- * model window makes 1M- and 200k-token models comparable. */
+ * model window makes 1M- and 200k-token models comparable.
+ *
+ * NOTE (issue #172 Q2): this currently has the same numeric value as
+ * CONTEXT_NOTICE_THRESHOLD_PERCENT, but they are distinct concepts. The
+ * notice threshold decides when to offer recovery; this value chooses a soft
+ * work-budget denominator. Never derive either constant from the other. */
 export const CONTEXT_WORK_BUDGET_DEFAULT_PERCENT = 60;
 
 /** How many context readings a freshly-opened epoch may take before the

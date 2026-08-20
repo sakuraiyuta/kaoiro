@@ -7,7 +7,12 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { AgentHost, initialStatusExt } from "../src/host.js";
+import {
+  AgentHost,
+  CONTEXT_NOTICE_THRESHOLD_PERCENT,
+  CONTEXT_WORK_BUDGET_DEFAULT_PERCENT,
+  initialStatusExt,
+} from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
 import { INTER_AGENT_TOOL_FQN, makeStateChange } from "@kaoiro/agent-common";
 import type {
@@ -530,6 +535,53 @@ describe("AgentHost — query injection", () => {
     expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toEqual(
       [],
     );
+  });
+
+  it("TC-1: used_percentage=60 で context notice を1回送る", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [{ totalTokens: 120000, maxTokens: 200000, percentage: 60 }],
+      async function* () {
+        yield result("success", { result: "ok" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    );
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+
+    await host.run();
+
+    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toHaveLength(1);
+  });
+
+  it("TC-2: used_percentage=59 では context notice を送らない", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [{ totalTokens: 118000, maxTokens: 200000, percentage: 59 }],
+      async function* () {
+        yield result("success", { result: "ok" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    );
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+
+    await host.run();
+
+    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toEqual([]);
+  });
+
+  it("TC-3: 定数参照の閾値で通知し、work budget と導出せず同値を保つ", async () => {
+    const threshold = CONTEXT_NOTICE_THRESHOLD_PERCENT;
+    const { queryFn, injected } = contextQueryFn(
+      [{ totalTokens: threshold, maxTokens: threshold, percentage: threshold }],
+      async function* () {
+        yield result("success", { result: "ok" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    );
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+
+    await host.run();
+
+    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toHaveLength(1);
+    expect(CONTEXT_NOTICE_THRESHOLD_PERCENT).toBe(CONTEXT_WORK_BUDGET_DEFAULT_PERCENT);
   });
 
   // BR MF1 (a): 境界直後の `getContextUsage()` は圧縮前の総量を返し得る
