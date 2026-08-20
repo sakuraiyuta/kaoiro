@@ -453,11 +453,20 @@ defmodule KaoiroServerWeb.WrapperChannel do
         directory_only_entry(id, entry, Map.get(peer_index, id, []))
       end)
       |> Enum.reject(&is_nil/1)
-      |> bound_directory_only(self_id)
 
     # issue #269 仕様5 / S9: requester 除外は合流後にここ 1 箇所だけ
     # (live / directory_only の両方をこの 1 箇所でカバーする)。
-    agents = Enum.reject(live ++ directory_only, &(&1["agent_id"] == self_id))
+    #
+    # ふじ MF-1: この除外を N=32 の cap より前に置く。requester 自身が
+    # AgentDirectory にのみ存在する窓 (AgentStates 未登録、例えば spawn
+    # 直後に自分の初回 envelope をまだ送っていない状態) では、cap を
+    # 先にかけると self が枠を 1 つ消費してから落ち、真の eligible peer
+    # 数より少なく返る事故になる (33 件 eligible のとき 31 件しか返らない
+    # など)。self reject → directory_only 印付きのみを 32 件で cap、の
+    # 順にすることでこれを閉じる。
+    merged = Enum.reject(live ++ directory_only, &(&1["agent_id"] == self_id))
+    {directory_only_kept, live_kept} = Enum.split_with(merged, &(&1["directory_only"] == true))
+    agents = live_kept ++ bound_directory_only(directory_only_kept, self_id)
 
     {:reply, {:ok, %{"agents" => agents, "users" => users_projection()}}, socket}
   end

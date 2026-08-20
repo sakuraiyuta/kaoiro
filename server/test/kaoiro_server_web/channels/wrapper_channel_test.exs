@@ -3387,18 +3387,32 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     # issue #269 T5 (仕様5): requester 除外は合流後の1箇所で、directory-only
     # 側の self にも効く。
-    test "requester 自身が AgentDirectory にいても返らない" do
+    #
+    # ふじ MF-1/MF-2: self が AgentStates 未登録(envelope 未 push)で
+    # AgentDirectory にのみ存在する窓を実際に作る — join だけでは
+    # AgentStates に entry は載らないので、これで self は directory_only
+    # 側の候補に混入する (MF-1 の defect が再現される経路)。eligible な
+    # directory-only peer を N=32 の cap をちょうどまたぐ 33 件用意し、
+    # self が cap の枠を消費していないこと(返る件数が 32 件であること)
+    # まで検証する。旧版は self に envelope を push していたため self は
+    # 最初から live 側に載り、この窓を作れていなかった。
+    test "requester 自身が AgentDirectory にいても返らない (self が cap 枠を消費しない、ふじ MF-1)" do
       self_id = "test.dir-only-self-exclude"
       AgentDirectory.record(self_id, "ao", "あお")
 
+      eligible_ids = for i <- 1..33, do: "test.dir-only-self-exclude-peer-#{i}"
+      for id <- eligible_ids, do: AgentDirectory.record(id, "ao", "あお")
+
       self_socket = join_wrapper(self_id)
-      ref = push(self_socket, "envelope", envelope(self_id, "idle"))
-      assert_reply ref, :ok
 
       ref = push(self_socket, "directory_request", %{})
       assert_reply ref, :ok, %{"agents" => agents}
 
       refute Enum.any?(agents, &(&1["agent_id"] == self_id))
+      # eligible peer は 33 件、N=32 の cap で 1 件だけ drop されるのが
+      # 正しい挙動。self が cap の枠を先に消費していれば 31 件になる
+      # (MF-1 の defect)。
+      assert length(agents) == 32
     end
 
     # issue #269 T6 (仕様3): last_seen は touch 済みのみ ISO8601 UTC で載り、
@@ -3487,25 +3501,41 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Enum.any?(agents, &(&1["agent_id"] == bad_id))
     end
 
-    # issue #269 T10 (S6): directory-only 分は N=32 に切り、超過時は
+    # issue #269 T10 (S6): directory-only 分は N=32 に切り、last_seen 降順
+    # (unknown は最後尾、同着は agent_id 昇順) で残す。超過時は
     # agent/request 単位で 1 行 warn する。
-    test "上限超過分が drop され、件数が上限どおり" do
-      ids = for i <- 1..33, do: "test.dir-only-bound-#{i}"
+    #
+    # ふじ MF-2: 旧版は 33 件を同一秒 touch していたため last_seen が
+    # ほぼ同値になり、件数 (32) だけしか pin できていなかった —
+    # ソートロジックを丸ごと外して単純 take(32) にすり替えても green の
+    # ままだった。ここでは known 時刻差 2 グループ (newest / older) と
+    # unknown 30 件・同着 tie を含む fixture で「残る ID の並び順」と
+    # 「warn が 1 行だけ・drop 件数が正確」であることまで厳密に assert する。
+    test "上限超過分は last_seen 降順で残し、unknown は最後尾・同着は agent_id 昇順で切る" do
+      newest_ids = ["test.dir-only-order-newest-1", "test.dir-only-order-newest-2"]
+      older_ids = ["test.dir-only-order-older-1", "test.dir-only-order-older-2"]
 
-      for id <- ids do
+      unknown_ids =
+        for i <- 1..30 do
+          "test.dir-only-order-unknown-#{String.pad_leading(Integer.to_string(i), 2, "0")}"
+        end
+
+      for id <- older_ids ++ newest_ids ++ unknown_ids do
         AgentDirectory.record(id, "ao", "あお")
-        AgentDirectory.touch(id)
       end
 
-      # 直近で touch した 33 件を、この request の直前に (テストスイート
-      # 全体で共有される AgentDirectory 内のどの既存 entry よりも新しい
-      # last_seen として) 確定させる。touch/2 は cast なので、直後の同期
-      # call (get/1) で mailbox の FIFO 順を使って適用を待つ — これで
-      # last_seen 降順ソートの先頭 32 件が必ず自分の entry になる。
-      _ = AgentDirectory.get(List.last(ids))
+      # older を先に touch し、1 秒空けて newest を touch する —
+      # last_seen は unix 秒精度なので、2 グループ間の順序を確実に
+      # 分けるにはこの間隔が要る。同一グループ内の 2 件は同一秒で
+      # タイになり、agent_id 昇順の tie-break を pin する。
+      for id <- older_ids, do: AgentDirectory.touch(id)
+      _ = AgentDirectory.get(List.last(older_ids))
+      Process.sleep(1100)
+      for id <- newest_ids, do: AgentDirectory.touch(id)
+      _ = AgentDirectory.get(List.last(newest_ids))
 
-      self_socket = join_wrapper("test.dir-only-bound-self")
-      ref = push(self_socket, "envelope", envelope("test.dir-only-bound-self", "idle"))
+      self_socket = join_wrapper("test.dir-only-order-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-only-order-self", "idle"))
       assert_reply ref, :ok
 
       log =
@@ -3513,11 +3543,26 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           ref = push(self_socket, "directory_request", %{})
           assert_reply ref, :ok, %{"agents" => agents}
 
-          hits = Enum.count(agents, &(&1["agent_id"] in ids))
-          assert hits == 32
+          relevant_ids =
+            agents
+            |> Enum.map(& &1["agent_id"])
+            |> Enum.filter(&(&1 in (newest_ids ++ older_ids ++ unknown_ids)))
+
+          # known 4 件 (newest 2 → older 2、グループ内 tie は agent_id
+          # 昇順) は必ず残る。続く unknown 30 件のうち N=32 の枠に収まる
+          # のは agent_id 昇順の先頭 28 件だけ (4 + 30 = 34 件、2 件 drop)。
+          expected_unknown_kept = Enum.take(unknown_ids, 28)
+          assert relevant_ids == newest_ids ++ older_ids ++ expected_unknown_kept
+          assert length(relevant_ids) == 32
         end)
 
-      assert log =~ "capped at 32"
+      warn_lines =
+        log
+        |> String.split("\n")
+        |> Enum.filter(&String.contains?(&1, "directory-only projection capped at"))
+
+      assert length(warn_lines) == 1
+      assert hd(warn_lines) =~ "capped at 32; dropped 2 entr(ies)"
     end
   end
 
