@@ -5798,14 +5798,102 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  test "issue #270 の server -> client 12種は version stamp 経路に宣言される" do
-    source = File.read!("lib/kaoiro_server_web/channels/agents_channel.ex")
+  describe "ADR-0015 stage 2 server -> client egress funnel (issue #270)" do
+    test "T4-1: join-time の4種は version を stamp する" do
+      _socket = join_as(:operator)
 
-    for event <- ~w(snapshot history hosts directory history_cleared history_reset history_replay_complete agent_deleted delivery_status session_reset_started session_reset_completed session_reset_failed) do
-      assert source =~ "\"#{event}\"", "#{event} が送出経路から漏れている"
+      for event <- ~w(snapshot history hosts directory) do
+        assert_push ^event, %{"version" => "0"}
+      end
     end
 
-    assert source =~ "Map.put(payload, \"version\", \"0\")"
-    assert source =~ "\"version\" => \"0\""
+    test "T4-2: 個別 handle_out 4種は version を stamp する" do
+      _socket = join_as(:operator)
+
+      for {event, payload} <- [
+            {"history_cleared", %{"agent_id" => "t4.clear"}},
+            {"directory", %{"entries" => []}},
+            {"history_reset", %{"agent_id" => "t4.reset"}},
+            {"history_replay_complete", %{"agent_id" => "t4.complete"}}
+          ] do
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, payload)
+        assert_push ^event, %{"version" => "0"}
+      end
+    end
+
+    test "T4-3: catch-all 8種は version を stamp する" do
+      _socket = join_as(:operator)
+
+      for event <- ~w(
+            runner_sessions spawn_result hosts catalog_result
+            session_reset_started session_reset_completed session_reset_failed delivery_status
+          ) do
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"request_id" => "t4"})
+        assert_push ^event, %{"version" => "0"}
+      end
+    end
+
+    test "T4-4: agent_deleted は viewer 配信を保ち version を stamp する" do
+      _socket = join_as(:viewer)
+      assert_push "snapshot", %{"version" => "0"}
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "agent_deleted", %{
+        "agent_id" => "t4.deleted"
+      })
+
+      assert_push "agent_deleted", %{"agent_id" => "t4.deleted", "version" => "0"}
+    end
+
+    test "T4-5: history_replay_envelope は flat version を stamp する" do
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_envelope", %{
+        "pane_agent_id" => "t4.pane",
+        "envelope" => %{"agent_id" => "t4.peer"}
+      })
+
+      assert_push "history_replay_envelope", %{"version" => "0"}
+    end
+
+    test "T4-6: envelope は frame version を server が確定する" do
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", %{
+        "version" => "9",
+        "agent_id" => "t4.envelope",
+        "ts" => "2026-08-21T00:00:00Z",
+        "type" => "state_change",
+        "state" => "idle"
+      })
+
+      assert_push "envelope", %{"version" => "0", "agent_id" => "t4.envelope"}
+    end
+
+    test "T4-7: policy は17種のみを許可し、未宣言 event は funnel で拒否する" do
+      policy = AgentsChannel.client_event_policy()
+
+      assert MapSet.size(policy) == 17
+      refute MapSet.member?(policy, "not_declared")
+
+      source = File.read!("lib/kaoiro_server_web/channels/agents_channel.ex")
+      assert source =~ "is not declared in @client_event_policy"
+    end
+
+    test "T4-8: raw push は push_versioned の本体の1箇所だけ" do
+      {:ok, ast} =
+        "lib/kaoiro_server_web/channels/agents_channel.ex"
+        |> File.read!()
+        |> Code.string_to_quoted()
+
+      raw_pushes =
+        ast
+        |> Macro.prewalker()
+        |> Enum.filter(fn
+          {:push, _, [{:socket, _, _}, _event, _payload]} -> true
+          _ -> false
+        end)
+
+      assert length(raw_pushes) == 1
+    end
   end
 end

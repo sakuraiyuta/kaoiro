@@ -551,8 +551,6 @@ defmodule KaoiroServerWeb.WrapperChannel do
             reset_payload
           end
 
-        reset_payload = Map.put(reset_payload, "version", "0")
-
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_reset", reset_payload)
 
         {:reply, :ok, socket}
@@ -571,8 +569,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_complete", %{
       "agent_id" => agent_id,
-      "replay_id" => replay_id,
-      "version" => "0"
+      "replay_id" => replay_id
     })
 
     # ADR-0051 D2: CAS. Only the attempt still recorded for THIS
@@ -656,7 +653,6 @@ defmodule KaoiroServerWeb.WrapperChannel do
         "agents:lobby",
         "session_reset_started",
         started_reset_payload(agent_id, mode, request_id, prev_sid, reason)
-        |> Map.put("version", "0")
       )
 
       KaoiroServerWeb.Endpoint.broadcast(

@@ -116,12 +116,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # transcript + IA projection, so the two sources cannot add up past it.
   @max_projection 200
 
-  # All viewer-gated events go through handle_out. `agent_deleted` is the
-  # only fan-out event that always reaches both roles, so it stays out of
-  # the intercept list to skip the per-socket round trip. The runner →
+  # All viewer-gated events go through handle_out. `agent_deleted` also
+  # intercepts so its client frame is stamped by the same sole egress point
+  # while preserving its existing delivery to both roles. The runner →
   # operator events (`runner_sessions` / `spawn_result` / `hosts`) carry
   # host/session info and are operator-only (ADR-0023, ADR-0021).
   intercept([
+    "agent_deleted",
     "envelope",
     "history_cleared",
     "history_reset",
@@ -157,6 +158,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # operator-only gate as `history_cleared`.
     "directory"
   ])
+
+  # Every server -> client event must leave through `push_versioned/3`.
+  # Internal PubSub broadcasts deliberately do not carry a wire version:
+  # that keeps the stamp's source of truth at the client boundary.
+  @client_event_policy MapSet.new(~w(
+    snapshot history hosts directory
+    history_cleared history_reset history_replay_complete
+    history_replay_envelope agent_deleted delivery_status
+    session_reset_started session_reset_completed session_reset_failed
+    envelope spawn_result runner_sessions catalog_result
+  ))
+
+  def client_event_policy, do: @client_event_policy
 
   # Error reasons cleared for verbatim return to the client (issue #62).
   # Anything outside this set is a bug or a future internal value (a
@@ -261,11 +275,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
     deliveries = if role in @operator_capable_roles, do: DeliveryStates.all(), else: %{}
 
-    push(socket, "snapshot", %{
+    push_versioned(socket, "snapshot", %{
       "agents" => agents,
       "tasks" => tasks,
-      "deliveries" => deliveries,
-      "version" => "0"
+      "deliveries" => deliveries
     })
 
     # Reply-log history, host set, and the identity ledger are operator-only;
@@ -297,22 +310,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # different value and discards the baseline it would otherwise
       # merge into — the ghost-log fix. Absent on a legacy server, where
       # the client keeps its old merge behaviour.
-      push(socket, "history", %{
+      push_versioned(socket, "history", %{
         "agents" => merged_histories(),
         "clear_watermarks" => ClearWatermarks.all_displays(),
         "history_projection" => "per-pane-v1",
-        "projection_epoch" => AgentStates.projection_epoch(),
-        "version" => "0"
+        "projection_epoch" => AgentStates.projection_epoch()
       })
 
-      push(socket, "hosts", %{
-        "hosts" => HostRegistry.snapshot(PersonaAssets.all_personas()),
-        "version" => "0"
+      push_versioned(socket, "hosts", %{
+        "hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())
       })
 
-      push(socket, "directory", %{
-        "entries" => join_directory_entries(AgentDirectory.all()),
-        "version" => "0"
+      push_versioned(socket, "directory", %{
+        "entries" => join_directory_entries(AgentDirectory.all())
       })
     end
 
@@ -323,7 +333,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_out("envelope", envelope, socket) do
     case sanitize_envelope_for(socket.assigns[:role], envelope) do
       :drop -> :ok
-      {:ok, sanitized} -> push(socket, "envelope", sanitized)
+      {:ok, sanitized} -> push_versioned(socket, "envelope", sanitized)
     end
 
     {:noreply, socket}
@@ -335,7 +345,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("history_cleared", payload, socket) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, "history_cleared", Map.put(payload, "version", "0"))
+      push_versioned(socket, "history_cleared", payload)
     end
 
     {:noreply, socket}
@@ -359,9 +369,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("directory", %{"entries" => raw_entries}, socket) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, "directory", %{
-        "entries" => join_directory_entries(raw_entries),
-        "version" => "0"
+      push_versioned(socket, "directory", %{
+        "entries" => join_directory_entries(raw_entries)
       })
     end
 
@@ -375,7 +384,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("history_reset", payload, socket) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, "history_reset", Map.put(payload, "version", "0"))
+      push_versioned(socket, "history_reset", payload)
     end
 
     {:noreply, socket}
@@ -384,7 +393,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("history_replay_complete", payload, socket) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, "history_replay_complete", Map.put(payload, "version", "0"))
+      push_versioned(socket, "history_replay_complete", payload)
     end
 
     {:noreply, socket}
@@ -399,9 +408,18 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("history_replay_envelope", payload, socket) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, "history_replay_envelope", payload)
+      push_versioned(socket, "history_replay_envelope", payload)
     end
 
+    {:noreply, socket}
+  end
+
+  # This event intentionally has no role gate. Before it was intercepted it
+  # reached viewers by Phoenix's default relay; preserving that behaviour is
+  # outside this issue's policy scope, while the funnel owns its wire stamp.
+  @impl true
+  def handle_out("agent_deleted", payload, socket) do
+    push_versioned(socket, "agent_deleted", payload)
     {:noreply, socket}
   end
 
@@ -428,10 +446,20 @@ defmodule KaoiroServerWeb.AgentsChannel do
              "delivery_status"
            ] do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, event, Map.put(payload, "version", "0"))
+      push_versioned(socket, event, payload)
     end
 
     {:noreply, socket}
+  end
+
+  # ADR-0015 stage 2's only client-facing egress point (issue #270 MF-4).
+  defp push_versioned(socket, event, payload) when is_map(payload) do
+    unless MapSet.member?(@client_event_policy, event) do
+      raise ArgumentError,
+            "#{event} is not declared in @client_event_policy (ADR-0015 stage 2)"
+    end
+
+    push(socket, event, Map.put(payload, "version", "0"))
   end
 
   # Fail-closed SHAPE gate for every inbound JSON event (ふじ #218 レビュー
@@ -997,8 +1025,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          :ok <- require_disconnected(agent_id),
          :ok <- purge_agent_records(agent_id) do
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "agent_deleted", %{
-        "agent_id" => agent_id,
-        "version" => "0"
+        "agent_id" => agent_id
       })
 
       {:reply, :ok, socket}
