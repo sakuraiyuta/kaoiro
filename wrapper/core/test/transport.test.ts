@@ -1172,6 +1172,61 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     mock.lastPush!.receivers.get("timeout")!(undefined);
     await expect(pending).rejects.toThrow(/directory_request timeout/);
   });
+
+  // issue #269 W1 (S2 の本体): directory-only 形状の生 payload が narrow を
+  // 通って agents に残ることを pin する。完了条件1の wrapper 側。
+  it("directory-only 形状 (persona あり / directory_only: true / last_seen あり / engine 等なし) の payload が agents に残る", async () => {
+    const narrowed = await narrowOne({
+      persona: { id: "no-such-pack" },
+      state: "disconnected",
+      directory_only: true,
+      last_seen: "2026-08-21T00:00:00Z",
+    });
+
+    expect(narrowed).toEqual({
+      agent_id: "peer.1",
+      persona: { id: "no-such-pack" },
+      state: "disconnected",
+      directory_only: true,
+      last_seen: "2026-08-21T00:00:00Z",
+    });
+  });
+
+  // issue #269 W1 (S1 再発防止): persona キーが無い payload は narrow が
+  // entry ごと落とす — この挙動が変わると directory-only entry は
+  // wrapper に届かず、ログも残らず消える (S1 が言っていた defect そのもの)。
+  it("persona キーが無い payload は entry ごと落ちる", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("ok")!({
+      agents: [
+        { agent_id: "peer.gone", state: "disconnected", directory_only: true },
+      ],
+    });
+    const { agents } = await pending;
+    expect(agents).toEqual([]);
+  });
+
+  // issue #269 W2: narrow の閉じ方 — server は true のときだけ載せる規約
+  // (F6-2 fail-closed) なので、それ以外の値は field だけ落として entry は
+  // 残す。
+  it("directory_only が false / 文字列 / 数値なら field が落ちる (entry は残る)", async () => {
+    for (const value of [false, "true", 1]) {
+      const narrowed = await narrowOne({ directory_only: value });
+      expect(narrowed.directory_only).toBeUndefined();
+      expect(narrowed.agent_id).toBe("peer.1");
+    }
+  });
+
+  // issue #269 W3: last_seen も他の optional text field と同じ
+  // nonEmptyText narrow — domain 外なら field だけ落として entry は残す。
+  it("last_seen が domain 外なら field が落ちる (entry は残る)", async () => {
+    for (const value of ["", 123, null]) {
+      const narrowed = await narrowOne({ last_seen: value });
+      expect(narrowed.last_seen).toBeUndefined();
+      expect(narrowed.agent_id).toBe("peer.1");
+    }
+  });
 });
 
 describe("ServerLink — requestDirectory の users projection (issue #197 段階2)", () => {

@@ -113,6 +113,18 @@ export interface DirectoryEntry {
    *  ones. */
   rate_limits?: Record<string, DirectoryRateLimitWindow>;
   inter_agent_delivery?: InterAgentDeliveryStatus;
+  /** issue #269: この entry は AgentDirectory (永続 ledger) にしか存在せず、
+   *  AgentStates に live envelope が無いことを示す。**この field は他の
+   *  optional field と absent の意味が違う** — absent は unknown ではなく
+   *  「live directory 由来」。server は true のときだけ載せる (F6-2
+   *  fail-closed)。send_to_agent の宛先にはできない。 */
+  directory_only?: true;
+  /** issue #269: server が最後に envelope を受理した時刻。directory-only
+   *  entry でのみ載る (live entry は last_activity_at を持つ)。
+   *  AgentDirectory の memory-only hint 由来なので、server 再起動後は
+   *  絶対に取れない — absent は「unknown」であって「一度も動いていない」
+   *  ではない。 */
+  last_seen?: string;
 }
 
 /** Single entry in the peer directory's "users" projection (issue #197
@@ -742,6 +754,12 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   if (conversation !== undefined) entry.conversation = conversation;
   const rateLimits = projectRateLimits(v.rate_limits);
   if (rateLimits !== undefined) entry.rate_limits = rateLimits;
+  // issue #269: server は true のときだけ載せる。それ以外の値 (false /
+  // 文字列 / 数値) は「server が閉じたものを client が開け直さない」規約
+  // に従って落とす。
+  if (v.directory_only === true) entry.directory_only = true;
+  const lastSeen = nonEmptyText(v.last_seen);
+  if (lastSeen !== undefined) entry.last_seen = lastSeen;
   return entry;
 }
 
