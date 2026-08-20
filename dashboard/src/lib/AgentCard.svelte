@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { expressionFor, spriteUrlFor } from "./expression";
+  import PersonaFace from "./PersonaFace.svelte";
   import { StatusQueue } from "./statusDisplay.svelte";
   import TaskRing from "./TaskRing.svelte";
   import {
@@ -420,15 +421,14 @@
     {/if}
     <div class="sprite-slot">
       {#key display.shown}
-        {#if spriteUrl}
-          <img class="sprite" src={spriteUrl} alt={expression.label} />
-        {:else}
-          <div class="face" role="img" aria-label={expression.label}>
-            <span class="eye left"></span>
-            <span class="eye right"></span>
-            <span class="mouth"></span>
-          </div>
-        {/if}
+        <PersonaFace
+          sprite={spriteUrl}
+          variant={expression.variant}
+          label={expression.label}
+          size="card"
+          imgAltLabelled={true}
+          faceLabelled={true}
+        />
       {/key}
       {#if activeTaskCount > 0}
         <!-- 頭上リング (issue #180, ADR-0019/0047/0048)。実装は
@@ -608,169 +608,16 @@
     margin-bottom: 1rem;
   }
 
-  /* Persona sprite (ADR-0008): square transparent PNG, contain-fit.
-     disconnected has no sprite by spec — grey out idle instead. */
-  .sprite {
-    display: block;
-    width: 8rem;
-    height: 8rem;
-    object-fit: contain;
-    animation: dissolve 0.35s ease-out;
-  }
+  /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte
+     (issue #245, size="card") — this file only sizes the wrapper slot.
+     `dissolve` stays here: `.state` below still uses it independently
+     of the sprite/face. */
 
-  [data-state="disconnected"] .sprite {
-    filter: grayscale(1);
-    opacity: 0.45;
-  }
-
-  /* The placeholder face: 顔色 = the state color itself. Fallback when
-     the manifest has no sprite for the persona. */
-  .face {
-    position: relative;
-    width: 5.4rem;
-    height: 5.4rem;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--tone) 28%, var(--bg-card));
-    border: 2px solid var(--tone);
-    box-shadow: 0 0 18px color-mix(in srgb, var(--tone) 35%, transparent);
-    animation: dissolve 0.35s ease-out;
-  }
-
-  /* Dissolve-in on state change (#43): the previous face/label is replaced
-     via {#key}, so the new one fades up from transparent. prefers-reduced-
-     motion shortens this to ~instant via the global rule in app.css. */
+  /* Dissolve-in on state change (#43): the previous state label fades up
+     from transparent. prefers-reduced-motion shortens this to ~instant
+     via the global rule in app.css. */
   @keyframes dissolve {
     from { opacity: 0; }
-  }
-
-  .eye {
-    position: absolute;
-    top: 38%;
-    width: 0.55rem;
-    height: 0.55rem;
-    border-radius: 50%;
-    background: var(--fg);
-  }
-
-  .eye.left { left: 28%; }
-  .eye.right { right: 28%; }
-
-  .mouth {
-    position: absolute;
-    bottom: 24%;
-    left: 50%;
-    translate: -50% 0;
-    width: 1.4rem;
-    height: 0.65rem;
-    border-bottom: 2px solid var(--fg);
-    border-radius: 0 0 50% 50% / 0 0 100% 100%;
-  }
-
-  /* --- per-state expressions ----------------------------------------- */
-
-  [data-state="idle"] .mouth {
-    width: 0.9rem;
-    height: 0;
-    border-radius: 0;
-  }
-
-  [data-state="thinking"] .eye {
-    top: 30%;
-    height: 0.3rem;
-    border-radius: 50% 50% 0 0;
-  }
-
-  [data-state="thinking"] .mouth {
-    width: 0.5rem;
-    height: 0.5rem;
-    border: 2px solid var(--fg);
-    border-radius: 50%;
-  }
-
-  [data-state="thinking"] .face {
-    animation: dissolve 0.35s ease-out, sway 2.4s ease-in-out infinite;
-  }
-
-  @keyframes sway {
-    50% { rotate: 4deg; }
-  }
-
-  [data-state="tool_running"] .eye {
-    height: 0.32rem;
-    border-radius: 0.16rem;
-  }
-
-  [data-state="tool_running"] .mouth {
-    width: 1.1rem;
-    height: 0;
-    border-radius: 0;
-  }
-
-  [data-state="waiting_permission"] .eye {
-    width: 0.75rem;
-    height: 0.75rem;
-    box-shadow: inset 0 0 0 2px var(--tone);
-  }
-
-  [data-state="waiting_permission"] .mouth {
-    width: 0.45rem;
-    height: 0.55rem;
-    border: 2px solid var(--fg);
-    border-radius: 50%;
-  }
-
-  [data-state="waiting_permission"] .face {
-    animation: dissolve 0.35s ease-out, hop 1.1s ease-in-out infinite;
-  }
-
-  @keyframes hop {
-    20% { translate: 0 -0.25rem; }
-    40% { translate: 0 0; }
-  }
-
-  [data-state="waiting_input"] .mouth {
-    width: 1.6rem;
-  }
-
-  [data-state="done"] .eye {
-    height: 0.34rem;
-    border-radius: 0 0 50% 50%;
-    background: transparent;
-    border-bottom: 2.5px solid var(--fg);
-  }
-
-  [data-state="done"] .mouth {
-    width: 1.8rem;
-    height: 0.8rem;
-  }
-
-  [data-state="error"] .eye {
-    border-radius: 0;
-    background:
-      linear-gradient(45deg, transparent 42%, var(--fg) 42% 58%, transparent 58%),
-      linear-gradient(-45deg, transparent 42%, var(--fg) 42% 58%, transparent 58%);
-  }
-
-  [data-state="error"] .mouth {
-    border-bottom: none;
-    border-top: 2px solid var(--fg);
-    border-radius: 50% 50% 0 0 / 100% 100% 0 0;
-  }
-
-  [data-state="disconnected"] .face {
-    opacity: 0.45;
-    box-shadow: none;
-  }
-
-  [data-state="disconnected"] .eye {
-    height: 0.12rem;
-    border-radius: 0;
-  }
-
-  [data-state="disconnected"] .mouth {
-    width: 0.9rem;
-    height: 0;
-    border-radius: 0;
   }
 
   /* --- text ----------------------------------------------------------- */

@@ -5,6 +5,7 @@
   import { expressionFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
+  import PersonaFace from "./PersonaFace.svelte";
   import TaskRing from "./TaskRing.svelte";
   import TasklistFloat from "./TasklistFloat.svelte";
   import { randomUUID } from "./uuid";
@@ -2343,15 +2344,14 @@
       <header class="head">
         <div class="portrait">
           {#key display.shown}
-            {#if spriteUrl}
-              <img class="sprite" src={spriteUrl} alt={expression.label} />
-            {:else}
-              <div class="face" role="img" aria-label={expression.label}>
-                <span class="eye left"></span>
-                <span class="eye right"></span>
-                <span class="mouth"></span>
-              </div>
-            {/if}
+            <PersonaFace
+              sprite={spriteUrl}
+              variant={expression.variant}
+              label={expression.label}
+              size="detail"
+              imgAltLabelled={true}
+              faceLabelled={true}
+            />
           {/key}
           {#if activeTaskCount > 0}
             <!-- 頭上リング (issue #180 follow-up, 2026-08-10 — マスター
@@ -3780,169 +3780,16 @@
       var(--bg-card);
   }
 
-  .sprite {
-    width: 100%;
-    height: auto;
-    aspect-ratio: 1 / 1;
-    object-fit: contain;
-    animation: dissolve 0.35s ease-out;
-  }
+  /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte
+     (issue #245, size="detail") — this file only sizes the portrait
+     wrapper. `dissolve` stays here: `.state` below still uses it
+     independently of the sprite/face. */
 
-  /* Dissolve-in on state change (#43): the previous face/label is replaced
-     via {#key}, so the new one fades up from transparent. prefers-reduced-
-     motion shortens this to ~instant via the global rule in app.css. */
+  /* Dissolve-in on state change (#43): the previous state label fades up
+     from transparent. prefers-reduced-motion shortens this to ~instant
+     via the global rule in app.css. */
   @keyframes dissolve {
     from { opacity: 0; }
-  }
-
-  [data-state="disconnected"] .sprite {
-    filter: grayscale(1);
-    opacity: 0.45;
-  }
-
-  .face {
-    position: relative;
-    width: 70%;
-    aspect-ratio: 1 / 1;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--tone) 28%, var(--bg-card));
-    border: 2px solid var(--tone);
-    box-shadow: 0 0 18px color-mix(in srgb, var(--tone) 35%, transparent);
-    animation: dissolve 0.35s ease-out;
-  }
-
-  /* CSS face features for sprite-less personas (#35). Sized in % of the
-     face so they scale with the responsive portrait, not as fixed rem
-     (the rem values that work on the AgentCard tile look like specks on
-     this larger detail circle). Per-state rules mirror AgentCard.svelte
-     so the lobby tile and the detail view never drift on what each state
-     looks like; keep the two in sync when a state expression changes. */
-  .eye {
-    position: absolute;
-    top: 38%;
-    width: 10%;
-    height: 10%;
-    border-radius: 50%;
-    background: var(--fg);
-  }
-
-  .eye.left { left: 28%; }
-  .eye.right { right: 28%; }
-
-  .mouth {
-    position: absolute;
-    bottom: 24%;
-    left: 50%;
-    translate: -50% 0;
-    width: 26%;
-    height: 12%;
-    border-bottom: 3px solid var(--fg);
-    border-radius: 0 0 50% 50% / 0 0 100% 100%;
-  }
-
-  [data-state="idle"] .mouth {
-    width: 17%;
-    height: 0;
-    border-radius: 0;
-  }
-
-  [data-state="thinking"] .eye {
-    top: 30%;
-    height: 5%;
-    border-radius: 50% 50% 0 0;
-  }
-
-  [data-state="thinking"] .mouth {
-    width: 9%;
-    height: 9%;
-    border: 3px solid var(--fg);
-    border-radius: 50%;
-  }
-
-  [data-state="thinking"] .face {
-    animation: dissolve 0.35s ease-out, sway 2.4s ease-in-out infinite;
-  }
-
-  @keyframes sway {
-    50% { rotate: 4deg; }
-  }
-
-  [data-state="tool_running"] .eye {
-    height: 6%;
-    border-radius: 6%;
-  }
-
-  [data-state="tool_running"] .mouth {
-    width: 20%;
-    height: 0;
-    border-radius: 0;
-  }
-
-  [data-state="waiting_permission"] .eye {
-    width: 14%;
-    height: 14%;
-    box-shadow: inset 0 0 0 3px var(--tone);
-  }
-
-  [data-state="waiting_permission"] .mouth {
-    width: 8%;
-    height: 10%;
-    border: 3px solid var(--fg);
-    border-radius: 50%;
-  }
-
-  [data-state="waiting_permission"] .face {
-    animation: dissolve 0.35s ease-out, hop 1.1s ease-in-out infinite;
-  }
-
-  @keyframes hop {
-    20% { translate: 0 -4%; }
-    40% { translate: 0 0; }
-  }
-
-  [data-state="waiting_input"] .mouth {
-    width: 30%;
-  }
-
-  [data-state="done"] .eye {
-    height: 6%;
-    border-radius: 0 0 50% 50%;
-    background: transparent;
-    border-bottom: 3px solid var(--fg);
-  }
-
-  [data-state="done"] .mouth {
-    width: 33%;
-    height: 15%;
-  }
-
-  [data-state="error"] .eye {
-    border-radius: 0;
-    background:
-      linear-gradient(45deg, transparent 42%, var(--fg) 42% 58%, transparent 58%),
-      linear-gradient(-45deg, transparent 42%, var(--fg) 42% 58%, transparent 58%);
-  }
-
-  [data-state="error"] .mouth {
-    border-bottom: none;
-    border-top: 3px solid var(--fg);
-    border-radius: 50% 50% 0 0 / 100% 100% 0 0;
-  }
-
-  [data-state="disconnected"] .face {
-    opacity: 0.45;
-    box-shadow: none;
-  }
-
-  [data-state="disconnected"] .eye {
-    height: 2%;
-    border-radius: 0;
-  }
-
-  [data-state="disconnected"] .mouth {
-    width: 17%;
-    height: 0;
-    border-radius: 0;
   }
 
   /* State lamp on the portrait (#16): same shape/size as the connection

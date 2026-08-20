@@ -4,6 +4,7 @@
   import AgentDetail from "./lib/AgentDetail.svelte";
   import AgentGridShell from "./lib/AgentGridShell.svelte";
   import LaunchDialog from "./lib/LaunchDialog.svelte";
+  import PersonaFace from "./lib/PersonaFace.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import { adjacentAgentId } from "./lib/agentNavigation";
   import {
@@ -1416,15 +1417,14 @@
             selected = envelope.agent_id;
           }}
         >
-          {#if sprite}
-            <img class="thumb" src={sprite} alt="" />
-          {:else}
-            <div class="face" aria-hidden="true">
-              <span class="eye left"></span>
-              <span class="eye right"></span>
-              <span class="mouth"></span>
-            </div>
-          {/if}
+          <PersonaFace
+            {sprite}
+            variant={expr.variant}
+            label={expr.label}
+            size="chip"
+            imgAltLabelled={false}
+            faceLabelled={false}
+          />
           <span class="lamp"></span>
         </button>
       {/each}
@@ -1868,55 +1868,8 @@
     border-color: var(--tone);
   }
 
-  /* Shrunk persona sprite filling the cell; disconnected greys out like the
-     grid cards (personas.md). */
-  .chip .thumb {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-  }
-
-  .chip[data-state="disconnected"] .thumb {
-    filter: grayscale(1);
-    opacity: 0.45;
-  }
-
-  /* Fallback when the manifest has no sprite (#35 default ペルソナ等):
-     state-coloured disc with simplified eyes/mouth so it reads as a face,
-     not a bare dot next to sprite-bearing neighbours. State is already on
-     the .lamp corner dot, so per-state eye/mouth expressions are skipped
-     here -- the chip is 2.4rem and per-state nuance would not be legible. */
-  .chip .face {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--tone) 28%, var(--bg-card));
-    border: 1px solid var(--tone);
-  }
-
-  .chip .face .eye {
-    position: absolute;
-    top: 38%;
-    width: 12%;
-    height: 12%;
-    border-radius: 50%;
-    background: var(--fg);
-  }
-
-  .chip .face .eye.left { left: 28%; }
-  .chip .face .eye.right { right: 28%; }
-
-  .chip .face .mouth {
-    position: absolute;
-    bottom: 26%;
-    left: 50%;
-    translate: -50% 0;
-    width: 30%;
-    height: 12%;
-    border-bottom: 1.5px solid var(--fg);
-    border-radius: 0 0 50% 50% / 0 0 100% 100%;
-  }
+  /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte
+     (issue #245, size="chip") — this file only sizes the chip wrapper. */
 
   .chip .lamp {
     position: absolute;
