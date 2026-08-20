@@ -1,4 +1,10 @@
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,6 +14,7 @@ import {
   resolveCodexModel,
   codexSidecarPath,
   isRolloutCorruptionDetail,
+  verifyRolloutCorruption,
 } from "../src/rollout.js";
 
 describe("codexModelFromRolloutIn", () => {
@@ -309,6 +316,9 @@ describe("issue #263: rollout 破損パターンの実データ再現", () => {
     const raw = readFileSync(join(root, `rollout-${id}.jsonl`));
     const decoder = new TextDecoder("utf-8", { fatal: true });
     expect(() => decoder.decode(raw)).toThrow();
+
+    // ふじ should-fix 3: mkdtemp fixture の後始末。
+    rmSync(root, { recursive: true, force: true });
   });
 
   it("JSON 構造が閉じる前に途切れた rollout でも tailRollout 系は黙ってスキップし、直前の有効行を使う", () => {
@@ -332,6 +342,9 @@ describe("issue #263: rollout 破損パターンの実データ再現", () => {
     const raw = readFileSync(join(root, `rollout-${id}.jsonl`), "utf8");
     const lastLine = raw.split("\n").at(-1)!;
     expect(() => JSON.parse(lastLine)).toThrow();
+
+    // ふじ should-fix 3: mkdtemp fixture の後始末。
+    rmSync(root, { recursive: true, force: true });
   });
 });
 
@@ -358,5 +371,81 @@ describe("isRolloutCorruptionDetail (issue #263)", () => {
     expect(isRolloutCorruptionDetail("authentication failed")).toBe(false);
     expect(isRolloutCorruptionDetail("rate limit exceeded")).toBe(false);
     expect(isRolloutCorruptionDetail("")).toBe(false);
+  });
+});
+
+// issue #263 code-review round 2 advisory: verifyRolloutCorruption の2つの
+// 独立した失敗経路 (fatal UTF-8 decode / JSON.parse) のうち、host.test.ts
+// の統合テストは fatal decode 経路しか踏んでいなかった (corrupted 判定は
+// ファイル全体を1回でデコードしてから行単位の JSON.parse に進むため、
+// 不正 UTF-8 バイトが1つでもあると decode 側で先に corrupted 確定し、
+// JSON.parse 分岐に到達しない)。ここで両分岐と clean/unknown を関数単体で
+// 直接 pin する。
+describe("verifyRolloutCorruption (issue #263, ふじ MF-1)", () => {
+  it("fatal UTF-8 decode 失敗で corrupted と確定する", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-verify-utf8-"));
+    const id = "uuid-verify-utf8-truncated";
+    const validLine = JSON.stringify({ type: "turn_context", payload: {} });
+    // "あ" (E3 81 82) の最終バイトを欠いたまま行が終わる。
+    const corruptLine = Buffer.concat([
+      Buffer.from('{"type":"event_msg","payload":{"message":"', "utf8"),
+      Buffer.from([0xe3, 0x81]),
+    ]);
+    writeFileSync(
+      join(root, `rollout-${id}.jsonl`),
+      Buffer.concat([Buffer.from(`${validLine}\n`, "utf8"), corruptLine]),
+    );
+
+    expect(verifyRolloutCorruption(id, root)).toBe("corrupted");
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("UTF-8 としては有効だが JSON 構造が不完全な行で corrupted と確定する (JSON.parse 分岐)", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-verify-json-"));
+    const id = "uuid-verify-json-truncated";
+    const validLine = JSON.stringify({ type: "turn_context", payload: {} });
+    // 全て ASCII で有効な UTF-8 だが、JSON としては構造が閉じる前に
+    // 切れている — fatal decode は通り、JSON.parse だけが落ちる経路。
+    const corruptLine =
+      '{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":42.5,"window_minutes":300,"resets_at":178509';
+    writeFileSync(
+      join(root, `rollout-${id}.jsonl`),
+      `${validLine}\n${corruptLine}`,
+    );
+
+    // fixture 自体が JSON.parse 分岐を狙い撃ちしていること (fatal decode
+    // では落ちないこと) の確認。
+    const raw = readFileSync(join(root, `rollout-${id}.jsonl`));
+    expect(() =>
+      new TextDecoder("utf-8", { fatal: true }).decode(raw),
+    ).not.toThrow();
+
+    expect(verifyRolloutCorruption(id, root)).toBe("corrupted");
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("全行が有効な rollout は clean と判定する", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-verify-clean-"));
+    const id = "uuid-verify-clean";
+    writeFileSync(
+      join(root, `rollout-${id}.jsonl`),
+      `${JSON.stringify({ type: "turn_context", payload: {} })}\n`,
+    );
+
+    expect(verifyRolloutCorruption(id, root)).toBe("clean");
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("session id に対応する rollout が無ければ unknown と判定する (呼び出し側は clean と同様 fallback する)", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-verify-unknown-"));
+
+    expect(verifyRolloutCorruption("uuid-no-such-session", root)).toBe(
+      "unknown",
+    );
+
+    rmSync(root, { recursive: true, force: true });
   });
 });

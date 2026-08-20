@@ -603,10 +603,16 @@ export interface ResultPayload {
   text?: string;
   is_error?: boolean;
   /** SDK error termination subtype relayed from the wrapper (issue #127).
-   *  Present on error results only, absent on success. Values mirror
-   *  wrapper's ResultSubtype (`error_max_turns` / `error_during_execution`
-   *  / `error_max_budget_usd` / `error_max_structured_output_retries`);
-   *  the UI treats unknown strings as fallback wording. */
+   *  Present on error results only, absent on success. The Claude Code
+   *  adapter's values mirror its ResultSubtype (`error_max_turns` /
+   *  `error_during_execution` / `error_max_budget_usd` /
+   *  `error_max_structured_output_retries`). The Codex adapter has no
+   *  SDK-native subtype of its own but sets one independent value,
+   *  `error_rollout_corrupted` (issue #263), when a resume failure is
+   *  confirmed as permanent rollout corruption (candidate stderr pattern
+   *  AND the rollout file itself verified corrupted — a text match alone
+   *  never sets it). The UI treats any other unknown string as fallback
+   *  wording. */
   error_subtype?: string;
   /** SDK error termination detail text (issue #127) — the wrapper forwards
    *  what the SDK returned alongside is_error (e.g. tool error message).

@@ -72,8 +72,10 @@ import {
   codexRolloutsRoot,
   isRolloutCorruptionDetail,
   resolveCodexModel,
+  verifyRolloutCorruption,
   type CodexRateLimitSnapshot,
   type CodexRateLimitWindow,
+  type RolloutCorruptionVerdict,
 } from "./rollout.js";
 import {
   CodexTurnDiagnostics,
@@ -236,6 +238,14 @@ export interface CodexHostOptions {
   rateLimitResolver?: (
     sessionId: string,
   ) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
+  /** Confirms whether a resume-failure CANDIDATE is real rollout corruption
+   *  (issue #263, ふじ MF-1/MF-2). Injectable so tests can point the real
+   *  `verifyRolloutCorruption` at a fixture rollout root instead of
+   *  `~/.codex/sessions` — the default wraps `verifyRolloutCorruption`
+   *  itself (real fatal-UTF-8-decode + per-line JSON.parse), never a stub,
+   *  so an injected variant only changes WHERE it reads, not what
+   *  "corrupted" means. */
+  rolloutCorruptionVerifier?: (sessionId: string) => RolloutCorruptionVerdict;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
   /** Epoch clock for deterministic upload TTL tests. */
@@ -374,16 +384,23 @@ export class CodexHost implements EngineAdapter {
   readonly #now: () => string;
   #machine: MachineState = initialMachineState();
   #sessionId: string | null = null;
-  /** issue #263: session id whose rollout has been classified as
-   *  permanently corrupted (a resume failure whose detail matched
-   *  `isRolloutCorruptionDetail`). Once set, `#runTurn` skips the doomed
-   *  `resumeThread()` call for THIS session id and returns the same
-   *  classified error immediately instead of re-spawning `codex exec`
-   *  every turn only to hit the identical failure — the silent exit-1
-   *  retry loop this issue exists to close. Cleared implicitly whenever
-   *  `#sessionId` moves to a different value (a fresh thread has a fresh,
-   *  presumably intact, rollout); this host never resets it pre-emptively. */
+  /** issue #263: session id whose rollout has been CONFIRMED permanently
+   *  corrupted — a resume failure whose detail matched the candidate
+   *  pattern (`isRolloutCorruptionDetail`) AND whose rollout file itself
+   *  verified as corrupted (`verifyRolloutCorruption`, ふじ MF-1). Once
+   *  set, `#runTurn` skips the doomed `resumeThread()` call for THIS
+   *  session id and returns the same classified error immediately instead
+   *  of re-spawning `codex exec` every turn only to hit the identical
+   *  failure — the silent exit-1 retry loop this issue exists to close.
+   *  Cleared implicitly whenever `#sessionId` moves to a different value
+   *  (a fresh thread has a fresh, presumably intact, rollout); this host
+   *  never resets it pre-emptively. */
   #corruptedRolloutSessionId: string | null = null;
+  /** issue #263 (ふじ should-fix 1): the root-cause error detail from the
+   *  FIRST turn that confirmed `#corruptedRolloutSessionId`. Later turns'
+   *  synthetic "resume skipped" error would otherwise replace it and lose
+   *  the original diagnostic text an operator needs. */
+  #corruptedRolloutDetail: string | null = null;
   #model: string | null;
   #modelPending: string | null = null;
   #modelLastGood: string | null = null;
@@ -999,29 +1016,38 @@ export class CodexHost implements EngineAdapter {
         (this.#model === null || this.#modelSource === "default"),
       resolutionGeneration,
     };
-    // issue #263: a resume already classified as permanently corrupted for
-    // THIS session id is skipped — re-spawning `codex exec` would just
-    // re-read the same broken rollout and fail identically, the silent
-    // exit-1 retry loop this issue exists to close. Substitute an
-    // already-failing thread so the ordinary catch(err) branch below
-    // handles it through the exact same classification/emit/trace path
-    // (isRolloutCorruptionDetail also re-matches this synthetic detail via
-    // the corruptedRolloutSessionId short-circuit there, so a second
-    // detection is not required).
+    // issue #263 (ふじ 必須pin): capture whether THIS turn is a resume
+    // attempt, and which session id it targets, BEFORE anything in the
+    // stream below can move `#sessionId`. Only a resume has a pre-existing
+    // rollout that could be corrupted — a fresh startThread's mid-stream
+    // failure must never be classified as permanent even if its text
+    // happens to match a candidate pattern, since there is no pre-existing
+    // rollout for that classification to mean anything about.
+    const resumeSessionId = this.#sessionId;
+    const isResumeAttempt = resumeSessionId !== null;
+    // A resume already CONFIRMED permanently corrupted for THIS session id
+    // is skipped — re-spawning `codex exec` would just re-read the same
+    // broken rollout and fail identically, the silent exit-1 retry loop
+    // this issue exists to close. Substitute an already-failing thread so
+    // the ordinary catch(err) branch below handles it through the exact
+    // same emit/trace path; carrying the ORIGINAL detail forward (ふじ
+    // should-fix 1) keeps every subsequent turn's diagnostic text pointing
+    // at the real root cause, not a generic "skipped" placeholder.
     const thread =
-      this.#sessionId !== null &&
-      this.#sessionId === this.#corruptedRolloutSessionId
+      resumeSessionId !== null &&
+      resumeSessionId === this.#corruptedRolloutSessionId
         ? {
             runStreamed: () =>
               Promise.reject(
                 new Error(
-                  `resume skipped: rollout for session ${this.#sessionId} already classified as permanently corrupted (issue #263)`,
+                  this.#corruptedRolloutDetail ??
+                    `resume skipped: rollout for session ${resumeSessionId} already classified as permanently corrupted (issue #263)`,
                 ),
               ),
           }
-        : this.#sessionId !== null
+        : isResumeAttempt
           ? codex.resumeThread(
-              this.#sessionId,
+              resumeSessionId,
               this.#threadOptions(
                 attempted.model,
                 attempted.effort,
@@ -1141,23 +1167,55 @@ export class CodexHost implements EngineAdapter {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
       if (!sawResult) {
         this.#finishTurn(false, attempted);
-        const detail = String(err);
-        // issue #263: classify a resume failure whose detail matches a
-        // known rollout-corruption pattern. The `sessionId === corrupted…`
-        // half of the OR is what makes the guard above's synthetic
-        // "resume skipped" detail (which does not itself match the text
-        // patterns) still land here as corrupted on every subsequent turn.
-        // Only a resume can hit this (a fresh startThread has no rollout to
-        // be corrupted), hence `this.#sessionId !== null`.
-        const rolloutCorrupted =
-          this.#sessionId !== null &&
-          (this.#sessionId === this.#corruptedRolloutSessionId ||
-            isRolloutCorruptionDetail(detail));
-        if (rolloutCorrupted) {
-          // Remember it: #runTurn's guard at the top skips the doomed
-          // resumeThread() call for this session id on the next turn —
-          // closing the silent exit-1 retry loop issue #263 exists for.
-          this.#corruptedRolloutSessionId = this.#sessionId;
+        const alreadyConfirmedCorrupted =
+          resumeSessionId !== null &&
+          resumeSessionId === this.#corruptedRolloutSessionId;
+        // issue #263 (ふじ should-fix 1): once a session is confirmed
+        // corrupted, every later turn's `err` is this file's OWN synthetic
+        // "resume skipped" Error, built from `#corruptedRolloutDetail`.
+        // Re-stringifying it here would double-wrap that Error's own
+        // "Error: " toString prefix onto an already-stringified detail —
+        // use the remembered root-cause text verbatim instead.
+        const detail = alreadyConfirmedCorrupted
+          ? (this.#corruptedRolloutDetail ?? String(err))
+          : String(err);
+        // issue #263 (ふじ MF-1 / 必須pin): a stderr keyword match alone
+        // is only a CANDIDATE — several unrelated dependencies emit the
+        // same generic wording (ふじ measured this directly against
+        // codex-sdk 0.144.1's actual runStreamed stderr; neither pattern
+        // in isRolloutCorruptionDetail is unique to the rollout reader).
+        // Committing to the permanent classification requires confirming
+        // against the ACTUAL rollout file via rolloutCorruptionVerifier /
+        // verifyRolloutCorruption — "clean" or "unknown" (unreadable /
+        // unresolvable) both fall back to the ordinary failure path rather
+        // than risk permanently refusing to resume a session that failed
+        // for an unrelated, self-recoverable reason. `isResumeAttempt`
+        // (bound before the stream ran) is what keeps a fresh
+        // startThread's mid-stream failure from ever reaching this branch,
+        // even when its text happens to match a candidate pattern — there
+        // is no pre-existing rollout for such a failure to have corrupted.
+        let rolloutCorrupted = false;
+        if (alreadyConfirmedCorrupted) {
+          // Already confirmed on an earlier turn for this exact session —
+          // no need to re-read the file every retry.
+          rolloutCorrupted = true;
+        } else if (isResumeAttempt && isRolloutCorruptionDetail(detail)) {
+          const verify =
+            this.#options.rolloutCorruptionVerifier ??
+            ((id: string) => verifyRolloutCorruption(id));
+          const verdict: RolloutCorruptionVerdict = verify(resumeSessionId);
+          rolloutCorrupted = verdict === "corrupted";
+        }
+        if (rolloutCorrupted && resumeSessionId !== null) {
+          // Remember both the session id AND this confirming turn's own
+          // detail (ふじ should-fix 1) — #runTurn's guard at the top skips
+          // the doomed resumeThread() call for this session id on every
+          // later turn, and each of THOSE turns' synthetic "resume
+          // skipped" detail would otherwise overwrite the real root cause.
+          if (this.#corruptedRolloutSessionId !== resumeSessionId) {
+            this.#corruptedRolloutDetail = detail;
+          }
+          this.#corruptedRolloutSessionId = resumeSessionId;
         }
         this.#emitResult(
           rolloutCorrupted
@@ -1196,9 +1254,13 @@ export class CodexHost implements EngineAdapter {
         // supervisor's own crash-loop diagnosis) can grep for without
         // reaching into the envelope stream.
         process.stderr.write(
-          this.#sessionId !== null &&
-            this.#sessionId === this.#corruptedRolloutSessionId
-            ? `codex turn failed: rollout permanently corrupted for session ${this.#sessionId} (issue #263): ${String(err)}\n`
+          resumeSessionId !== null &&
+            resumeSessionId === this.#corruptedRolloutSessionId
+            ? // Same double-wrap concern as the `detail` computation above:
+              // on a later turn `err` is this file's own synthetic
+              // "resume skipped" Error, so use the remembered root cause
+              // verbatim rather than re-stringifying it.
+              `codex turn failed: rollout permanently corrupted for session ${resumeSessionId} (issue #263): ${this.#corruptedRolloutDetail ?? String(err)}\n`
             : `codex turn failed: ${String(err)}\n`,
         );
       }

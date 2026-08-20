@@ -3,6 +3,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  rm,
   stat,
   utimes,
   writeFile,
@@ -29,6 +30,7 @@ import {
 } from "../src/turn_diagnostics.js";
 import {
   codexRateLimitsFromRolloutIn,
+  verifyRolloutCorruption,
   type CodexRateLimitSnapshot,
   type CodexRateLimitWindow,
 } from "../src/rollout.js";
@@ -2571,13 +2573,52 @@ describe("CodexHost", () => {
   });
 });
 
-describe("issue #263: rollout 破損の恒久失敗分類", () => {
-  it("resume 失敗が rollout 破損パターンにマッチすると error_subtype で分類し、以降のターンは resumeThread を試みず即座に同じ分類を返す", async () => {
+describe("issue #263: rollout 破損の恒久失敗分類 (ふじ MF-1/MF-2: candidate は実ファイル検査で確定)", () => {
+  // "あ" (U+3042、UTF-8 で E3 81 82 の3バイト) の最終バイトを欠いたまま
+  // 行が終わる — issue #263 の実インシデントと同じ壊れ方 (ENOSPC が
+  // マルチバイト文字の書き込み途中でディスクを使い切った形)。
+  const UTF8_TRUNCATED_TAIL = Buffer.concat([
+    Buffer.from(
+      '{"type":"event_msg","payload":{"type":"agent_message","message":"',
+      "utf8",
+    ),
+    Buffer.from([0xe3, 0x81]),
+  ]);
+
+  function corruptedRolloutContent(): Buffer {
+    const validLine = JSON.stringify({ type: "turn_context", payload: {} });
+    return Buffer.concat([
+      Buffer.from(`${validLine}\n`, "utf8"),
+      UTF8_TRUNCATED_TAIL,
+    ]);
+  }
+
+  function cleanRolloutContent(): Buffer {
+    return Buffer.from(
+      `${JSON.stringify({ type: "turn_context", payload: {} })}\n`,
+      "utf8",
+    );
+  }
+
+  async function writeFixtureRollout(
+    root: string,
+    sessionId: string,
+    content: Buffer,
+  ): Promise<void> {
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, `rollout-${sessionId}.jsonl`), content);
+  }
+
+  it("candidate 文言 + 実 rollout 破損の一致で恒久分類し、以降のターンは resumeThread をスキップして根本 detail を保持する (貫通: fixture → verifyRolloutCorruption → 分類 → skip)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-corrupt-e2e-"));
+    const sessionId = "corrupt-session-e2e";
+    await writeFixtureRollout(root, sessionId, corruptedRolloutContent());
+
     const logs: Envelope[] = [];
-    const turnEnds: { error?: { detail?: string } }[] = [];
+    const turnEnds: unknown[] = [];
     const turnSettled = [deferred<void>(), deferred<void>(), deferred<void>()];
     const { client, calls } = makeClient([
-      [{ type: "thread.started", thread_id: "corrupt-session" }, usageEvent()],
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
       new Error(
         "Codex Exec exited with code 1: stream did not contain valid UTF-8 (code -32603)",
       ),
@@ -2590,6 +2631,9 @@ describe("issue #263: rollout 破損の恒久失敗分類", () => {
       onLog: (e) => logs.push(e),
       appendSystemPrompt: "p",
       codexFactory: () => client,
+      // 本物の verifyRolloutCorruption を fixture root へ向けるだけ — 検証
+      // ロジック自体はモックしない (MF-2 の貫通要件)。
+      rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
       onTurnEnd: (info) => {
         turnEnds.push(info);
         turnSettled[turnEnds.length - 1]?.resolve();
@@ -2606,10 +2650,8 @@ describe("issue #263: rollout 破損の恒久失敗分類", () => {
     host.close();
     await done;
 
-    // resumeThread は turn 2 の1回だけ呼ばれ、turn 3 では skip される
-    // (startThread の null と resumeThread の "corrupt-session" の2件のみ、
-    // 3件目は増えない)。
-    expect(calls.resume).toEqual([null, "corrupt-session"]);
+    // resumeThread は turn 2 の1回だけ呼ばれ、turn 3 では skip される。
+    expect(calls.resume).toEqual([null, sessionId]);
 
     const results = logs.filter((e) => e.type === "result");
     expect(results).toHaveLength(3);
@@ -2621,15 +2663,173 @@ describe("issue #263: rollout 破損の恒久失敗分類", () => {
     expect(
       (results[1]!.payload as { error_detail?: string }).error_detail,
     ).toContain("stream did not contain valid UTF-8");
-    // turn 3: resumeThread 自体を試みず、同じ分類の結果を即座に返す
-    // (「無言の exit-1 ループ」根絶の本体)。
+    // turn 3: resumeThread 自体を試みず、同じ分類・同じ根本 detail
+    // (ふじ should-fix 1) を即座に返す(「無言の exit-1 ループ」根絶の本体)。
     expect(results[2]?.payload).toMatchObject({
       is_error: true,
       error_subtype: "error_rollout_corrupted",
     });
+    expect(
+      (results[2]!.payload as { error_detail?: string }).error_detail,
+    ).toContain("stream did not contain valid UTF-8");
+
+    await rm(root, { recursive: true, force: true });
   });
 
-  it("未知の resume 失敗は従来どおり分類せず、次のターンでも resumeThread を再試行する (fall back)", async () => {
+  it("candidate 文言にマッチしても rollout ファイルが正常なら恒久分類しない (negative control: 他依存関係の同文 stderr による false positive を防ぐ)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-clean-e2e-"));
+    const sessionId = "clean-session-e2e";
+    await writeFixtureRollout(root, sessionId, cleanRolloutContent());
+
+    const logs: Envelope[] = [];
+    const turnEnds: unknown[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>(), deferred<void>()];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      // candidate 文言にマッチするが、実際の rollout は無事 — 別の
+      // 依存関係が同じ汎用文言を吐いた偽陽性シナリオ (ふじ MF-1 の核心)。
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        turnSettled[turnEnds.length - 1]?.resolve();
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await turnSettled[0]!.promise;
+    await host.send("continue 1");
+    await turnSettled[1]!.promise;
+    await host.send("continue 2");
+    await turnSettled[2]!.promise;
+    host.close();
+    await done;
+
+    // rollout は無事なので、candidate 文言だけでは恒久分類されず、
+    // turn 3 でも resumeThread が再試行される。
+    expect(calls.resume).toEqual([null, sessionId, sessionId]);
+
+    const results = logs.filter((e) => e.type === "result");
+    expect(results[1]?.payload).toMatchObject({ is_error: true });
+    expect(
+      (results[1]!.payload as { error_subtype?: string }).error_subtype,
+    ).toBeUndefined();
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("candidate 文言にマッチしても対応する rollout が見つからなければ恒久分類しない (negative control: lookup 不能は unknown 扱い)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-nolookup-e2e-"));
+    // root ディレクトリは作るが、このセッション用の rollout ファイルは
+    // 一切置かない — verifyRolloutCorruption が "unknown" を返す経路。
+    const sessionId = "no-rollout-session-e2e";
+
+    const logs: Envelope[] = [];
+    const turnEnds: unknown[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>(), deferred<void>()];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        turnSettled[turnEnds.length - 1]?.resolve();
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await turnSettled[0]!.promise;
+    await host.send("continue 1");
+    await turnSettled[1]!.promise;
+    await host.send("continue 2");
+    await turnSettled[2]!.promise;
+    host.close();
+    await done;
+
+    expect(calls.resume).toEqual([null, sessionId, sessionId]);
+    const results = logs.filter((e) => e.type === "result");
+    expect(
+      (results[1]!.payload as { error_subtype?: string }).error_subtype,
+    ).toBeUndefined();
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("fresh startThread の mid-stream 失敗は candidate 文言・実破損 rollout があっても恒久分類しない (必須pin: resume failure に限定)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-fresh-e2e-"));
+    const sessionId = "fresh-session-e2e";
+    // わざと「本当に破損している」rollout を置いても、fresh start の
+    // 失敗には適用されないことを確認する — このセッションはまだ resume
+    // 対象ではなく、その rollout が壊れていることに意味がない。
+    await writeFixtureRollout(root, sessionId, corruptedRolloutContent());
+
+    const freshMidStreamClient: CodexClientLike = {
+      startThread: () => ({
+        async runStreamed() {
+          async function* gen(): AsyncGenerator<ThreadEvent> {
+            // thread_id イベントで #sessionId が確立された「後」に
+            // ストリームが中断する — ふじが指摘した mid-stream 失敗。
+            yield { type: "thread.started", thread_id: sessionId };
+            throw new Error(
+              "stream did not contain valid UTF-8 (code -32603)",
+            );
+          }
+          return { events: gen() };
+        },
+      }),
+      resumeThread: () => {
+        throw new Error("fresh session must not resume");
+      },
+    };
+
+    const logs: Envelope[] = [];
+    const turnEnds: unknown[] = [];
+    const turnEnded = deferred<void>();
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => freshMidStreamClient,
+      rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        turnEnded.resolve();
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await turnEnded.promise;
+    host.close();
+    await done;
+
+    const results = logs.filter((e) => e.type === "result");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.payload).toMatchObject({ is_error: true });
+    expect(
+      (results[0]!.payload as { error_subtype?: string }).error_subtype,
+    ).toBeUndefined();
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("未知の resume 失敗は従来どおり分類せず、次のターンでも resumeThread を再試行する (fall back、rollout 検査自体が走らない)", async () => {
     const logs: Envelope[] = [];
     const turnEnds: unknown[] = [];
     const turnSettled = [deferred<void>(), deferred<void>(), deferred<void>()];
