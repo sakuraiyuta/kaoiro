@@ -146,13 +146,20 @@ canonical key だけを写した新しい map を組み立て、未知の nested
 **F6-3 — 現時点の allow 集合**: `agent_id` /
 `persona{id, name, sprite_set}` / `display_name` / `state` / `engine` /
 `model` / `effort` / `context` / `session_started_at` / `turns` /
-`last_activity_at` / `conversation` / `rate_limits`。
+`last_activity_at` / `conversation` / `rate_limits` / `directory_only` /
+`last_seen`。
 `persona{...}` から後ろ 6 field(`context`〜`rate_limits`)は
 [#160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160)
 (phase-27)で追加。`display_name`(issue #219 D19)は `persona.name` と
 独立した mutable な通称 — `persona.name` は pack 由来の canonical
 name として rename の影響を受けず不変のまま、`display_name` のみが
-稼働中の rename を反映する。
+稼働中の rename を反映する。`directory_only` / `last_seen`
+([#269](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/269))
+は `AgentStates` に live envelope を持たない `AgentDirectory` 由来
+entry にのみ付き、identity + `last_seen` を超える開示は追加しない
+(F6-4 の deny 集合はそのまま — `directory_only` entry も `cwd` 等の
+operator-grade field を持たない)。テストによる covering は F6-7 の
+拡張手順どおり(server/wrapper 両側、issue #269 T7/W1-W3)。
 
 **F6-4 — 明示 deny(継続除外)**: `cwd`、`permission`(`sandbox` /
 `approval`)、`permission_mode` / `fast_mode`、`session_id`、
