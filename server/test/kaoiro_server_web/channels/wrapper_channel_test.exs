@@ -116,6 +116,144 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert AgentStates.snapshot()[agent_id] == envelope
   end
 
+  describe "ADR-0015 stage 2 wrapper inbound funnel (issue #270)" do
+    @versioned_wrapper_events ~w(
+      delivery_ack
+      delivery_status_request
+      directory_request
+      history_reset
+      history_replay_complete
+      replay_ia
+      session_reset_request
+    )
+
+    defp control_payload(_event), do: %{}
+
+    defp assert_control_reply(ref, event) do
+      case event do
+        "replay_ia" ->
+          assert_reply ref, :error, %{reason: "invalid value: replay_ia"}
+
+        "session_reset_request" ->
+          assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+
+        _ ->
+          assert_reply ref, :ok
+      end
+    end
+
+    defp push_control(socket, event, payload) do
+      ref = push(socket, event, payload)
+      assert_control_reply(ref, event)
+    end
+
+    test "T2-1: 7種の version 欠落は警告し、既存の返信を継続する" do
+      socket = join_wrapper("test.stage2-inbound-absent")
+
+      log =
+        capture_log(fn ->
+          for event <- @versioned_wrapper_events do
+            push_control(socket, event, control_payload(event))
+          end
+        end)
+
+      for event <- @versioned_wrapper_events do
+        assert log =~ "#{event}: wrapper declared protocol version (absent)"
+      end
+    end
+
+    test "T2-2: 7種の version 不一致は警告し、既存の返信を継続する" do
+      socket = join_wrapper("test.stage2-inbound-mismatch")
+
+      log =
+        capture_log(fn ->
+          for event <- @versioned_wrapper_events do
+            push_control(socket, event, Map.put(control_payload(event), "version", "9"))
+          end
+        end)
+
+      for event <- @versioned_wrapper_events do
+        assert log =~ "#{event}: wrapper declared protocol version \"9\""
+      end
+    end
+
+    test "T2-3: 7種の version 一致は警告しない" do
+      socket = join_wrapper("test.stage2-inbound-matched")
+
+      log =
+        capture_log(fn ->
+          for event <- @versioned_wrapper_events do
+            push_control(socket, event, Map.put(control_payload(event), "version", "0"))
+          end
+        end)
+
+      assert log == ""
+    end
+
+    test "T2-4: envelope の version 不一致は警告し、受理する" do
+      agent_id = "test.stage2-envelope-mismatch"
+      socket = join_wrapper(agent_id)
+
+      log =
+        capture_log(fn ->
+          assert_reply push(
+                         socket,
+                         "envelope",
+                         Map.put(envelope(agent_id, "idle"), "version", "9")
+                       ),
+                       :ok
+        end)
+
+      assert log =~ "envelope: wrapper declared protocol version \"9\""
+    end
+
+    test "T2-5: envelope の version 欠落は reject し、警告しない" do
+      agent_id = "test.stage2-envelope-absent"
+      socket = join_wrapper(agent_id)
+
+      log =
+        capture_log(fn ->
+          assert_reply push(
+                         socket,
+                         "envelope",
+                         Map.delete(envelope(agent_id, "idle"), "version")
+                       ),
+                       :error,
+                       %{reason: "missing key: version"}
+        end)
+
+      assert log == ""
+    end
+
+    test "T2-6: wrapper inbound は単一 funnel を通る" do
+      {:ok, ast} =
+        "lib/kaoiro_server_web/channels/wrapper_channel.ex"
+        |> File.read!()
+        |> Code.string_to_quoted()
+
+      handle_in_clauses =
+        ast
+        |> Macro.prewalker()
+        |> Enum.filter(fn
+          {:def, _, [{:handle_in, _, args} | _]} when is_list(args) -> length(args) == 3
+          _ -> false
+        end)
+
+      assert length(handle_in_clauses) == 1
+
+      literals =
+        ast
+        |> Macro.prewalker()
+        |> Enum.flat_map(fn
+          {:defp, _, [{:handle_wrapper_in, _, [event | _]} | _]} when is_binary(event) -> [event]
+          _ -> []
+        end)
+        |> MapSet.new()
+
+      assert literals == MapSet.new(Map.keys(WrapperChannel.wrapper_event_policy()))
+    end
+  end
+
   test "稼働中 agent_id への二重 join を already_connected で拒否する (ADR-0024 D5)" do
     agent_id = "test.d5-dup"
     socket = join_wrapper(agent_id)
