@@ -742,24 +742,23 @@ warn される。
 `session_reset_result` はいずれも runner が組み立て時に `version: "0"` を
 載せる。
 
-#### ラッパー → サーバ(段階2、未充足)
+#### ラッパー → サーバ(段階2、issue #270 で充足)
 
 `envelope` のみ充足(frame key)。`delivery_ack` / `delivery_status_request` /
 `history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` /
-`session_reset_request` は version を持たない。#218 のスコープは
-client → server / server → wrapper / server → runner の 3 経路であり、本経路は
-段階2として残した。段階2の完了条件と follow-up は issue [#270](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/270) を正本とする。
+`session_reset_request` は wrapper の単一送出点が flat `version` を付与し、server は
+欠落・不一致を warn した上でベストエフォート受理する。
 
-#### サーバ → クライアント(段階2、一部未充足)
+#### サーバ → クライアント(段階2、issue #270 で充足)
 
 `envelope` / `history_replay_envelope` はエンベロープ由来で充足。
 `spawn_result` / `runner_sessions` / `catalog_result` は runner が付けた
 `version` を素通しするため結果的に充足。`snapshot` / `history` / `hosts` /
 `directory` / `history_cleared` / `history_reset` / `history_replay_complete` /
 `agent_deleted` / `delivery_status` / `session_reset_started` /
-`session_reset_completed` / `session_reset_failed` は未充足で、dashboard 側にも
-受信時の version 検査が無い。#218 のスコープ外として段階2へ残した。段階2の
-完了条件と follow-up は issue [#270](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/270) を正本とする。
+`session_reset_completed` / `session_reset_failed` も server が組み立て時に flat
+`version` を付与し、dashboard は欠落・不一致を warn した上でベストエフォートで
+受理する。
 
 #### 恒久 carve-out — `attach_chunk`
 
@@ -776,9 +775,8 @@ client → server / server → wrapper / server → runner の 3 経路であり
 #### 受信側の検査
 
 ADR-0015 の warn-then-accept(一致は無警告 / 欠落・不一致は警告しつつ処理継続)
-は段階1の 3 受信経路(server / wrapper / runner)で実装済み。client receiver の
-検査は段階2 — issue [#270](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/270)
-を正本とする。個別ハンドラの規律に頼らず、**検査を通す機構**と
+は全受信経路(server / wrapper / runner / dashboard)で実装済み。個別ハンドラの
+規律に頼らず、**検査を通す機構**と
 **迂回を検出するテスト**の 2 段で担保する。
 
 機構だけでは足りない — 検査を助長する形にはできても、別経路を書くこと自体は

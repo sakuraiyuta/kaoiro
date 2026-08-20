@@ -2731,6 +2731,20 @@ export function resolveLaunchDefaultEffort(opts: {
  *  no version" misreading that became a must-fix twice (#88, #197 段階3). */
 const CLIENT_PROTOCOL_VERSION = "0";
 
+/** ADR-0015 receiver rule for server -> client JSON pushes. */
+function warnOnServerVersionMismatch(event: string, payload: unknown): void {
+  const version =
+    typeof payload === "object" && payload !== null && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>).version
+      : undefined;
+  if (version === CLIENT_PROTOCOL_VERSION) return;
+  const declared = version === undefined ? "(absent)" : JSON.stringify(version);
+  console.warn(
+    `${event}: server declared protocol version ${declared}; ` +
+      `accepting as ${JSON.stringify(CLIENT_PROTOCOL_VERSION)} (ADR-0015 best-effort accept)`,
+  );
+}
+
 /** The single client -> server JSON send point (issue #218).
  *
  *  ADR-0015 requires a flat `version` frame key on every message between the
@@ -3027,7 +3041,14 @@ export function connectKaoiro(
   }
 
   function setupChannelHandlers(c: Channel): void {
-    c.on("snapshot", (payload: { agents?: unknown; tasks?: unknown; deliveries?: unknown }) => {
+    const onVersioned = <T,>(event: string, handler: (payload: T) => void) => {
+      c.on(event, (payload: unknown) => {
+        warnOnServerVersionMismatch(event, payload);
+        handler(payload as T);
+      });
+    };
+
+    onVersioned("snapshot", (payload: { agents?: unknown; tasks?: unknown; deliveries?: unknown }) => {
     const agents: Record<string, Envelope> = {};
     for (const value of Object.values(payload.agents ?? {})) {
       if (isEnvelope(value)) agents[value.agent_id] = value;
@@ -3038,7 +3059,7 @@ export function connectKaoiro(
     handlers.onTaskSnapshot?.(parseTasks(payload.tasks));
     handlers.onDeliverySnapshot?.(parseDeliverySnapshot(payload.deliveries));
   });
-  c.on("delivery_status", (payload: unknown) => {
+  onVersioned("delivery_status", (payload: unknown) => {
     if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;
     const raw = payload as Record<string, unknown>;
     if (typeof raw.agent_id !== "string") return;
@@ -3104,7 +3125,7 @@ export function connectKaoiro(
       }
     }
   });
-  c.on("history", (payload: unknown) => {
+  onVersioned("history", (payload: unknown) => {
     const parsed = parseHistoryPayload(payload);
     handlers.onHistory?.(
       parsed.histories,
@@ -3113,7 +3134,7 @@ export function connectKaoiro(
       parsed.projectionEpoch,
     );
   });
-  c.on(
+  onVersioned(
     "history_cleared",
     (payload: {
       agent_id?: unknown;
@@ -3140,7 +3161,7 @@ export function connectKaoiro(
       }
     },
   );
-  c.on("history_reset", (payload: unknown) => {
+  onVersioned("history_reset", (payload: unknown) => {
     const reset = parseHistoryReset(payload);
     if (reset !== null) {
       handlers.onHistoryReset?.(
@@ -3150,7 +3171,7 @@ export function connectKaoiro(
       );
     }
   });
-  c.on("history_replay_complete", (payload: unknown) => {
+  onVersioned("history_replay_complete", (payload: unknown) => {
     const complete = parseHistoryReplayComplete(payload);
     if (complete !== null) {
       handlers.onHistoryReplayComplete?.(
@@ -3165,15 +3186,15 @@ export function connectKaoiro(
       handlers.onHistoryReplayEnvelope?.(restored.paneAgentId, restored.envelope);
     }
   });
-  c.on("agent_deleted", (payload: { agent_id?: unknown }) => {
+  onVersioned("agent_deleted", (payload: { agent_id?: unknown }) => {
     if (typeof payload.agent_id === "string") {
       handlers.onAgentDeleted?.(payload.agent_id);
     }
   });
-  c.on("hosts", (payload: { hosts?: unknown }) => {
+  onVersioned("hosts", (payload: { hosts?: unknown }) => {
     handlers.onHosts?.(parseHosts(payload.hosts));
   });
-  c.on("directory", (payload: { entries?: unknown }) => {
+  onVersioned("directory", (payload: { entries?: unknown }) => {
     handlers.onDirectory?.(parseDirectory(payload.entries));
   });
   c.on("spawn_result", (payload: unknown) => {
@@ -3204,15 +3225,15 @@ export function connectKaoiro(
   // Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17 17-9).
   // Payload is validated defensively; malformed drops so the UI never
   // fires on an ill-formed event.
-  c.on("session_reset_started", (payload: unknown) => {
+  onVersioned("session_reset_started", (payload: unknown) => {
     const parsed = parseSessionResetStarted(payload);
     if (parsed !== null) handlers.onSessionResetStarted?.(parsed);
   });
-  c.on("session_reset_completed", (payload: unknown) => {
+  onVersioned("session_reset_completed", (payload: unknown) => {
     const parsed = parseSessionResetCompleted(payload);
     if (parsed !== null) handlers.onSessionResetCompleted?.(parsed);
   });
-  c.on("session_reset_failed", (payload: unknown) => {
+  onVersioned("session_reset_failed", (payload: unknown) => {
     const parsed = parseSessionResetFailed(payload);
     if (parsed !== null) handlers.onSessionResetFailed?.(parsed);
   });

@@ -759,7 +759,7 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
   it("mode と reason を session_reset_request として送る", async () => {
     const { pending } = push();
     expect(mock.lastPush?.event).toBe("session_reset_request");
-    expect(mock.lastPush?.payload).toEqual({ mode: "new", reason: "理由" });
+    expect(mock.lastPush?.payload).toEqual({ mode: "new", reason: "理由", version: "0" });
     mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
     await expect(pending).resolves.toEqual({ requestId: "rs-1" });
   });
@@ -769,7 +769,7 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
       personaId: "ao",
     });
     void link.requestSessionReset("clear").catch(() => {});
-    expect(mock.lastPush?.payload).toEqual({ mode: "clear" });
+    expect(mock.lastPush?.payload).toEqual({ mode: "clear", version: "0" });
   });
 
   it("request_id の無い ok は受理完了と扱わず unknown_error にする (#258)", async () => {
@@ -847,7 +847,7 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     const pending = link.requestDirectory();
 
     expect(mock.lastPush?.event).toBe("directory_request");
-    expect(mock.lastPush?.payload).toEqual({});
+    expect(mock.lastPush?.payload).toEqual({ version: "0" });
 
     mock.lastPush!.receivers.get("ok")!({
       agents: [

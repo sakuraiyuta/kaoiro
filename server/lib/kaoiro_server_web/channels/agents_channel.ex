@@ -260,7 +260,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
     tasks = if role in @operator_capable_roles, do: TaskStates.snapshot(), else: %{}
 
     deliveries = if role in @operator_capable_roles, do: DeliveryStates.all(), else: %{}
-    push(socket, "snapshot", %{"agents" => agents, "tasks" => tasks, "deliveries" => deliveries})
+
+    push(socket, "snapshot", %{
+      "agents" => agents,
+      "tasks" => tasks,
+      "deliveries" => deliveries,
+      "version" => "0"
+    })
 
     # Reply-log history, host set, and the identity ledger are operator-only;
     # viewers stay at the grid and never see host info (cwd allow-lists are
@@ -295,11 +301,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
         "agents" => merged_histories(),
         "clear_watermarks" => ClearWatermarks.all_displays(),
         "history_projection" => "per-pane-v1",
-        "projection_epoch" => AgentStates.projection_epoch()
+        "projection_epoch" => AgentStates.projection_epoch(),
+        "version" => "0"
       })
 
-      push(socket, "hosts", %{"hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())})
-      push(socket, "directory", %{"entries" => join_directory_entries(AgentDirectory.all())})
+      push(socket, "hosts", %{
+        "hosts" => HostRegistry.snapshot(PersonaAssets.all_personas()),
+        "version" => "0"
+      })
+
+      push(socket, "directory", %{
+        "entries" => join_directory_entries(AgentDirectory.all()),
+        "version" => "0"
+      })
     end
 
     {:noreply, socket}
@@ -321,7 +335,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("history_cleared", payload, socket) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, "history_cleared", payload)
+      push(socket, "history_cleared", Map.put(payload, "version", "0"))
     end
 
     {:noreply, socket}
@@ -345,7 +359,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("directory", %{"entries" => raw_entries}, socket) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, "directory", %{"entries" => join_directory_entries(raw_entries)})
+      push(socket, "directory", %{
+        "entries" => join_directory_entries(raw_entries),
+        "version" => "0"
+      })
     end
 
     {:noreply, socket}
@@ -358,7 +375,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("history_reset", payload, socket) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, "history_reset", payload)
+      push(socket, "history_reset", Map.put(payload, "version", "0"))
     end
 
     {:noreply, socket}
@@ -367,7 +384,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("history_replay_complete", payload, socket) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, "history_replay_complete", payload)
+      push(socket, "history_replay_complete", Map.put(payload, "version", "0"))
     end
 
     {:noreply, socket}
@@ -411,7 +428,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
              "delivery_status"
            ] do
     if socket.assigns[:role] in @operator_capable_roles do
-      push(socket, event, payload)
+      push(socket, event, Map.put(payload, "version", "0"))
     end
 
     {:noreply, socket}
@@ -980,7 +997,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
          :ok <- require_disconnected(agent_id),
          :ok <- purge_agent_records(agent_id) do
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "agent_deleted", %{
-        "agent_id" => agent_id
+        "agent_id" => agent_id,
+        "version" => "0"
       })
 
       {:reply, :ok, socket}

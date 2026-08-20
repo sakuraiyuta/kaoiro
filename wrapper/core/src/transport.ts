@@ -1269,13 +1269,13 @@ export class ServerLink {
    * future, or duplicate watermark as a harmless no-op. */
   acknowledgeInterAgentDelivery(deliverySeq: number): void {
     if (!Number.isSafeInteger(deliverySeq) || deliverySeq <= 0) return;
-    this.#channel.push("delivery_ack", { delivery_seq: deliverySeq });
+    this.#pushVersioned("delivery_ack", { delivery_seq: deliverySeq });
   }
 
   /** Reads this wrapper's ledger independently of directory peers. */
   requestInterAgentDeliveryStatus(): Promise<InterAgentDeliveryStatus | null> {
     return new Promise((resolve) => {
-      this.#channel.push("delivery_status_request", {})
+      this.#pushVersioned("delivery_status_request", {})
         .receive("ok", (payload: unknown) =>
           resolve(isObject(payload) ? deliveryStatusFrom(payload.delivery) ?? null : null),
         )
@@ -1343,6 +1343,14 @@ export class ServerLink {
       seq: this.#seq,
     } as Envelope;
     return { wire, push: this.#channel.push("envelope", wire) };
+  }
+
+  /** Stamps wrapper -> server control messages (ADR-0015 stage 2). */
+  #pushVersioned(event: string, payload: Record<string, unknown>): Push {
+    return this.#channel.push(event, {
+      ...payload,
+      version: WRAPPER_PROTOCOL_VERSION,
+    });
   }
 
   #rememberActiveTask(envelope: Envelope): void {
@@ -1452,7 +1460,7 @@ export class ServerLink {
     const id =
       replayId ??
       `resume-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    this.#channel.push("history_reset", { replay_id: id });
+    this.#pushVersioned("history_reset", { replay_id: id });
     return id;
   }
 
@@ -1474,13 +1482,13 @@ export class ServerLink {
       );
     }
     for (const chunk of chunks) {
-      this.#channel.push("replay_ia", { replay_id: replayId, items: chunk });
+      this.#pushVersioned("replay_ia", { replay_id: replayId, items: chunk });
     }
   }
 
   /** Pushes the explicit end boundary after the final replayed row. */
   sendHistoryReplayComplete(replayId: string): void {
-    this.#channel.push("history_replay_complete", { replay_id: replayId });
+    this.#pushVersioned("history_replay_complete", { replay_id: replayId });
   }
 
   /** Fetches the peer directory (protocol-inter-agent companion tool). The
@@ -1499,7 +1507,7 @@ export class ServerLink {
   requestDirectory(): Promise<DirectoryResult> {
     return new Promise((resolve, reject) => {
       this.#channel
-        .push("directory_request", {})
+        .push("directory_request", { version: WRAPPER_PROTOCOL_VERSION })
         .receive("ok", (payload: unknown) => {
           if (!isObject(payload)) {
             resolve({ agents: [], users: [] });
@@ -1553,6 +1561,7 @@ export class ServerLink {
         .push("session_reset_request", {
           mode,
           ...(reason !== undefined ? { reason } : {}),
+          version: WRAPPER_PROTOCOL_VERSION,
         })
         .receive("ok", (payload: unknown) => {
           const accepted = sessionResetAcceptedFrom(payload);

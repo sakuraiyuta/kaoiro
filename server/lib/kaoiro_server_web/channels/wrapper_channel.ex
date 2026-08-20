@@ -427,7 +427,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # one flow for send_to_agent. AgentStates wins on a duplicate agent_id
   # (S9); requester self-exclusion applies once, after the merge.
   @impl true
-  def handle_in("directory_request", _payload, socket) do
+  def handle_in("directory_request", payload, socket) do
+    warn_on_wrapper_version_mismatch(payload, "directory_request")
     self_id = socket.assigns.agent_id
     activities = AgentActivity.snapshot()
     peer_index = ConversationStates.peer_index()
@@ -472,7 +473,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   @impl true
-  def handle_in("delivery_status_request", _payload, socket) do
+  def handle_in("delivery_status_request", payload, socket) do
+    warn_on_wrapper_version_mismatch(payload, "delivery_status_request")
+
     reply =
       %{}
       |> maybe_put_optional_field("delivery", DeliveryStates.get(socket.assigns.agent_id))
@@ -481,14 +484,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   @impl true
-  def handle_in("delivery_ack", %{"delivery_seq" => seq}, socket)
+  def handle_in("delivery_ack", payload = %{"delivery_seq" => seq}, socket)
       when is_integer(seq) and seq > 0 do
+    warn_on_wrapper_version_mismatch(payload, "delivery_ack")
     status = DeliveryStates.ack(socket.assigns.agent_id, seq)
     broadcast_delivery_status(socket.assigns.agent_id)
     {:reply, {:ok, %{"delivery" => status}}, socket}
   end
 
-  def handle_in("delivery_ack", _payload, socket), do: {:reply, :ok, socket}
+  def handle_in("delivery_ack", payload, socket) do
+    warn_on_wrapper_version_mismatch(payload, "delivery_ack")
+    {:reply, :ok, socket}
+  end
 
   # Resume history reconstruction (ADR-0014 phase-2, issue #50): the wrapper
   # is about to replay its JSONL-derived transcript as `log` envelopes, so it
@@ -502,6 +509,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # the wrapper did nothing wrong.
   @impl true
   def handle_in("history_reset", payload, socket) do
+    warn_on_wrapper_version_mismatch(payload, "history_reset")
     agent_id = socket.assigns.agent_id
     replay_id = if is_map(payload), do: Map.get(payload, "replay_id"), else: nil
 
@@ -526,6 +534,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
             reset_payload
           end
 
+        reset_payload = Map.put(reset_payload, "version", "0")
+
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_reset", reset_payload)
 
         {:reply, :ok, socket}
@@ -539,13 +549,15 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # the ordinary `envelope` route, so this marker is the only deterministic
   # distinction available to a dashboard before the next live assistant line.
   @impl true
-  def handle_in("history_replay_complete", %{"replay_id" => replay_id}, socket)
+  def handle_in("history_replay_complete", payload = %{"replay_id" => replay_id}, socket)
       when is_binary(replay_id) and replay_id != "" do
+    warn_on_wrapper_version_mismatch(payload, "history_replay_complete")
     agent_id = socket.assigns.agent_id
 
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_complete", %{
       "agent_id" => agent_id,
-      "replay_id" => replay_id
+      "replay_id" => replay_id,
+      "version" => "0"
     })
 
     # ADR-0051 D2: CAS. Only the attempt still recorded for THIS
@@ -559,7 +571,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {:reply, :ok, socket}
   end
 
-  def handle_in("history_replay_complete", _payload, socket), do: {:reply, :ok, socket}
+  def handle_in("history_replay_complete", payload, socket) do
+    warn_on_wrapper_version_mismatch(payload, "history_replay_complete")
+    {:reply, :ok, socket}
+  end
 
   # Display-replay-only IA ingress (ADR-0051 D3-3). Deliberately NOT the
   # ordinary `envelope` route: that one runs `route_inter_agent`, which
@@ -571,8 +586,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # The pane is bound to the channel topic, so a wrapper can only ever
   # restore its own pane — the payload cannot name another agent's.
   @impl true
-  def handle_in("replay_ia", %{"replay_id" => replay_id, "items" => items}, socket)
+  def handle_in("replay_ia", payload = %{"replay_id" => replay_id, "items" => items}, socket)
       when is_binary(replay_id) and replay_id != "" and is_list(items) do
+    warn_on_wrapper_version_mismatch(payload, "replay_ia")
     agent_id = socket.assigns.agent_id
 
     if AgentStates.hydration_in_flight?(agent_id, replay_id, self()) do
@@ -594,7 +610,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  def handle_in("replay_ia", _payload, socket) do
+  def handle_in("replay_ia", payload, socket) do
+    warn_on_wrapper_version_mismatch(payload, "replay_ia")
     {:reply, {:error, %{reason: "invalid value: replay_ia"}}, socket}
   end
 
@@ -604,6 +621,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # joins the exact SessionResets gate used by operator `session_reset`.
   @impl true
   def handle_in("session_reset_request", payload, socket) do
+    warn_on_wrapper_version_mismatch(payload, "session_reset_request")
     agent_id = socket.assigns.agent_id
 
     with {:ok, mode} <- fetch_reset_mode(payload),
@@ -625,6 +643,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         "agents:lobby",
         "session_reset_started",
         started_reset_payload(agent_id, mode, request_id, prev_sid, reason)
+        |> Map.put("version", "0")
       )
 
       KaoiroServerWeb.Endpoint.broadcast(
@@ -1866,6 +1885,26 @@ defmodule KaoiroServerWeb.WrapperChannel do
     )
 
     true
+  end
+
+  # ADR-0015 stage 2 receiver rule for wrapper -> server control messages.
+  # A wrapper already authenticated for this topic may be an older build, so
+  # absence and mismatch warn but never block its existing control flow.
+  defp warn_on_wrapper_version_mismatch(%{"version" => "0"}, _event), do: :ok
+
+  defp warn_on_wrapper_version_mismatch(%{"version" => version}, event) do
+    Logger.warning(
+      "#{event}: wrapper declared protocol version " <>
+        inspect(version, printable_limit: 64, limit: 8) <>
+        "; accepting as \"0\" (ADR-0015 best-effort accept)"
+    )
+  end
+
+  defp warn_on_wrapper_version_mismatch(_payload, event) do
+    Logger.warning(
+      "#{event}: wrapper declared protocol version (absent); " <>
+        "accepting as \"0\" (ADR-0015 best-effort accept)"
+    )
   end
 
   defp push_to_wrapper(to, envelope) do
