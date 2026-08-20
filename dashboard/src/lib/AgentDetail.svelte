@@ -2370,8 +2370,10 @@
                  (AgentDetail の face 比率)に掛けて導出、ふじ round1
                  N1)。`cqw` は query container の CONTENT box 基準
                  (W3C css-contain-3 仕様 + 実 Chromium で実測検証済み、
-                 2026-08-10)なので、`.sprite`(width: 100%、同じく
-                 content box 基準)と同じ基準で揃っており、上記比率換算
+                 2026-08-10)なので、PersonaFace.svelte の
+                 `.portrait-sprite[data-size="detail"]`(width: 100%、
+                 同じく content box 基準。issue #245 でこのファイルから
+                 移設)と同じ基準で揃っており、上記比率換算
                  に border-box(padding 込み)とのズレは無い(クロエ
                  round2 で懸念提起 → 検証の結果、対応不要と判明)。
 
