@@ -2570,3 +2570,113 @@ describe("CodexHost", () => {
     });
   });
 });
+
+describe("issue #263: rollout 破損の恒久失敗分類", () => {
+  it("resume 失敗が rollout 破損パターンにマッチすると error_subtype で分類し、以降のターンは resumeThread を試みず即座に同じ分類を返す", async () => {
+    const logs: Envelope[] = [];
+    const turnEnds: { error?: { detail?: string } }[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>(), deferred<void>()];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: "corrupt-session" }, usageEvent()],
+      new Error(
+        "Codex Exec exited with code 1: stream did not contain valid UTF-8 (code -32603)",
+      ),
+      // turn 3 は resumeThread 自体スキップされる想定なので、このスクリプト
+      // が消費されないこと自体が期待挙動 (calls.resume の長さで確認する)。
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        turnSettled[turnEnds.length - 1]?.resolve();
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await turnSettled[0]!.promise;
+    await host.send("continue 1");
+    await turnSettled[1]!.promise;
+    await host.send("continue 2");
+    await turnSettled[2]!.promise;
+    host.close();
+    await done;
+
+    // resumeThread は turn 2 の1回だけ呼ばれ、turn 3 では skip される
+    // (startThread の null と resumeThread の "corrupt-session" の2件のみ、
+    // 3件目は増えない)。
+    expect(calls.resume).toEqual([null, "corrupt-session"]);
+
+    const results = logs.filter((e) => e.type === "result");
+    expect(results).toHaveLength(3);
+    expect(results[0]?.payload).not.toMatchObject({ is_error: true });
+    expect(results[1]?.payload).toMatchObject({
+      is_error: true,
+      error_subtype: "error_rollout_corrupted",
+    });
+    expect(
+      (results[1]!.payload as { error_detail?: string }).error_detail,
+    ).toContain("stream did not contain valid UTF-8");
+    // turn 3: resumeThread 自体を試みず、同じ分類の結果を即座に返す
+    // (「無言の exit-1 ループ」根絶の本体)。
+    expect(results[2]?.payload).toMatchObject({
+      is_error: true,
+      error_subtype: "error_rollout_corrupted",
+    });
+  });
+
+  it("未知の resume 失敗は従来どおり分類せず、次のターンでも resumeThread を再試行する (fall back)", async () => {
+    const logs: Envelope[] = [];
+    const turnEnds: unknown[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>(), deferred<void>()];
+    const { client, calls } = makeClient([
+      [
+        { type: "thread.started", thread_id: "unknown-fail-session" },
+        usageEvent(),
+      ],
+      new Error("network timeout"),
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        turnSettled[turnEnds.length - 1]?.resolve();
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await turnSettled[0]!.promise;
+    await host.send("continue 1");
+    await turnSettled[1]!.promise;
+    await host.send("continue 2");
+    await turnSettled[2]!.promise;
+    host.close();
+    await done;
+
+    // 未知のエラーでは resumeThread を毎ターン再試行する — issue #263
+    // 導入前と変わらない従来挙動 (未知の失敗は分類せず fall back)。
+    expect(calls.resume).toEqual([
+      null,
+      "unknown-fail-session",
+      "unknown-fail-session",
+    ]);
+
+    const results = logs.filter((e) => e.type === "result");
+    expect(results).toHaveLength(3);
+    expect(results[1]?.payload).toMatchObject({ is_error: true });
+    expect(
+      (results[1]!.payload as { error_subtype?: string }).error_subtype,
+    ).toBeUndefined();
+    // turn 3 は resume が再試行され、正常完了する。
+    expect(results[2]?.payload).not.toMatchObject({ is_error: true });
+  });
+});

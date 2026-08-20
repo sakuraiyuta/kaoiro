@@ -2816,6 +2816,12 @@ describe("errorSubtypeLabel (issue #127)", () => {
     );
   });
 
+  it("Codex アダプタ独自の rollout 破損 subtype を日本語ラベルに変換 (issue #263)", () => {
+    expect(errorSubtypeLabel("error_rollout_corrupted")).toBe(
+      "セッション破損 (再開不可)",
+    );
+  });
+
   it("未知 / 空 / undefined は null (caller 側で omit または fallback)", () => {
     expect(errorSubtypeLabel(undefined)).toBeNull();
     expect(errorSubtypeLabel("")).toBeNull();

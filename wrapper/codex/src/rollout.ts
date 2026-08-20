@@ -10,6 +10,35 @@ export function codexRolloutsRoot(): string {
   return join(homedir(), ".codex", "sessions");
 }
 
+/** Substrings a resume failure's free-form error detail carries when the
+ *  underlying rollout JSONL is corrupted mid-write (issue #263 — ENOSPC or
+ *  a host crash truncated a line while codex was appending to it; resume
+ *  re-reads the whole file and fails every time thereafter).
+ *
+ *  - `did not contain valid utf-?8` is MEASURED (issue #255 comment 3338,
+ *    2026-08-17 incident: "stream did not contain valid UTF-8 (code
+ *    -32603)", captured directly from a `run_streamed_rejected` detail).
+ *  - `EOF while parsing` is UNVERIFIED — it is Rust `serde_json`'s
+ *    documented wording for input that ends before a JSON value closes
+ *    (`EOF while parsing a string` / `an object` / `a value`), and
+ *    codex-rs's rollout reader is Rust, but no real truncated-JSON trace
+ *    has confirmed this exact string in this environment. Callers must
+ *    still fall back to ordinary handling on a non-match — this list is a
+ *    moving target across codex-sdk versions, not a closed contract. */
+const ROLLOUT_CORRUPTION_PATTERNS = [
+  /did not contain valid utf-?8/i,
+  /eof while parsing/i,
+] as const;
+
+/** True when a resume/run failure's error detail matches a known rollout-
+ *  corruption pattern (issue #263). A `false` here means "not recognized as
+ *  corruption" — it does NOT mean the rollout is fine, since the pattern
+ *  list is inherently incomplete; callers must treat it as "fall back to
+ *  the ordinary failure path", never as an all-clear. */
+export function isRolloutCorruptionDetail(detail: string): boolean {
+  return ROLLOUT_CORRUPTION_PATTERNS.some((pattern) => pattern.test(detail));
+}
+
 /** Finds one rollout by its validated opaque thread id. Shared by the tail
  * model resolver and full resume-history projection (#106). */
 export function rolloutPathIn(root: string, sessionId: string): string | null {

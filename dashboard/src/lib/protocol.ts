@@ -625,6 +625,11 @@ const ERROR_SUBTYPE_LABELS: Record<string, string> = {
   error_during_execution: "実行中エラー",
   error_max_budget_usd: "予算上限到達",
   error_max_structured_output_retries: "構造化出力リトライ上限",
+  // issue #263: Codex アダプタが resume 失敗の detail から rollout 破損
+  // (行途中の UTF-8 切断 / JSON 途切れ) を検知したときだけ独自に載せる
+  // 値。他の4値と違い SDK 由来の subtype ではない — wrapper 側の判定
+  // (isRolloutCorruptionDetail) が付与する。
+  error_rollout_corrupted: "セッション破損 (再開不可)",
 };
 
 export function errorSubtypeLabel(subtype: string | undefined): string | null {
