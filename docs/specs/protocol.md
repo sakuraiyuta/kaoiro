@@ -254,12 +254,13 @@ multi-wrapper をまたぐ server 側 TaskStates の ingress/byte bound に代�
 Channels のチャネルイベント名と内容。トピックは
 ラッパー側 `wrapper:<agent_id>`、クライアント側 `agents:lobby`。
 
-**`version` は下表の全行に共通のフラット外枠キーであり、各行の payload 欄には
-再掲しない**([ADR-0015](../adr/0015-protocol-version-stamping.md)。エンベロープ
-の外枠キーを個々の `type` 行に再掲しないのと同じ扱い)。行の payload 欄に
-`version` が明示されているのは、その値の producer や domain に固有の注記がある
-場合だけで、明示が無いことは非付与を意味しない。経路ごとの充足状況と唯一の
-恒久例外(`attach_chunk`)は下記「version 棚卸し」が正本。
+**段階1として充足したクライアント → サーバ / サーバ → ラッパー / サーバ →
+runner の各該当行では、`version` は共通のフラット外枠キーであり、各行の
+payload 欄には再掲しない**([ADR-0015](../adr/0015-protocol-version-stamping.md)。
+エンベロープの外枠キーを個々の `type` 行に再掲しないのと同じ扱い)。行の payload
+欄に `version` が明示されているのは、その値の producer や domain に固有の注記が
+ある場合だけで、明示が無いことは非付与を意味しない。段階2へ残した経路を含む
+充足状況と恒久例外(`attach_chunk`)は下記「version 棚卸し」が正本。
 
 | 方向 | イベント | 内容 |
 |---|---|---|
@@ -647,8 +648,9 @@ dashboard(operator)が起動 UI から出す要求。サーバは `runner:<host_
 インスタンス**であり、「同じ性質を複数 spawn」は同一 persona × 別 agent_id で
 表現する(D1)。
 
-`version` の扱いは上記「方向別メッセージ種別」と同じ — 全行に共通の外枠キーで、
-payload 欄への明示は producer 固有の注記がある行だけ。
+`version` の扱いは上記「方向別メッセージ種別」と同じ — 段階1として充足した
+クライアント → サーバ行では共通の外枠キーで、payload 欄への明示は producer
+固有の注記がある行だけ。全経路の充足状況は下記「version 棚卸し」が正本。
 
 | 方向 | イベント | payload |
 |---|---|---|
@@ -675,10 +677,10 @@ wrapper` 直結(runner-less)の本格対応は [#71](https://gitea.example.inval
 ### バージョニング方針
 
 - 受信側は**未知キーを無視**する(前方互換)。
-- version は**ラッパー/サーバ/クライアントの全メッセージ**にフラットな外枠
-  キーとして付与する(エンベロープ以外の `instruction` / `permission_decision`
-  / `snapshot` 等にも乗せる)。将来 `ts` 等の共通メタも同じ枠で追加可
-  ([ADR-0015](../adr/0015-protocol-version-stamping.md))。
+- ADR-0015 は version を**ラッパー/サーバ/クライアントの全メッセージ**へ
+  フラットな外枠キーとして付与する方針を定める。実装は段階化しており、段階1で
+  クライアント → サーバ / サーバ → ラッパー / サーバ → runner を充足した。
+  段階2へ残した経路を含む実装状況は下記「version 棚卸し」を正本とする。
 - 受信側は自分の version と**完全一致のみ正常**とみなし、不一致なら
   **警告ログ**を出す。ただし**ベストエフォートで受理して処理は継続**する
   (不一致でも止めない、[ADR-0015](../adr/0015-protocol-version-stamping.md))。
@@ -690,8 +692,9 @@ wrapper` 直結(runner-less)の本格対応は [#71](https://gitea.example.inval
 
 ### version 棚卸し(issue #218)
 
-ADR-0015 の「3 者すべてのメッセージ」要請に対する全経路の充足状況。基準は
-`develop` の `74a545c`(2026-08-20 時点)。issue [#88](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/88)
+ADR-0015 の「3 者すべてのメッセージ」要請に対する段階別の充足状況。段階1は
+クライアント → サーバ / サーバ → ラッパー / サーバ → runner を対象とし、
+issue #218 で充足した。基準は `develop` の `45d3ea9`(2026-08-21 時点)。issue [#88](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/88)
 と [#197](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/197) 段階3 で
 **同じ誤読 —「この message は runner に中継されないから version 不要」— が二度
 must-fix になった**。ADR-0015 は経路で例外を設けていないので、以下の表が判断の
@@ -704,7 +707,7 @@ must-fix になった**。ADR-0015 は経路で例外を設けていないので
 受信側の保証を成立させるための正規化である。申告値そのものは normalize の前に
 warn される。
 
-#### クライアント → サーバ(#218 で全件充足)
+#### クライアント → サーバ(段階1、#218 で充足)
 
 | 状況 | message |
 |---|---|
@@ -717,7 +720,7 @@ warn される。
 誤読が再発する余地を構造的に消すため。producer 未実装だった
 `revoke_wrapper_token` / `rename_user` はサーバ受信側の検査のみ持つ。
 
-#### サーバ → ラッパー(#218 で全件充足)
+#### サーバ → ラッパー(段階1、#218 で充足)
 
 | 状況 | message |
 |---|---|
@@ -726,7 +729,7 @@ warn される。
 | エンベロープ由来 | `envelope`(IA 中継。frame key の `version` を持つ。合成分も `SynthEnvelope` が付与) |
 | 恒久 carve-out | `attach_chunk`(下記) |
 
-#### サーバ → runner(issue #181 / #182 で充足済み)
+#### サーバ → runner(段階1、issue #181 / #182 で充足)
 
 `spawn` / `reset_session` / `switch_session` はサーバが組み立て時に付与。
 `stop` / `restart` / `enumerate_sessions` / `refresh_engine_catalog` は
@@ -738,15 +741,15 @@ warn される。
 `session_reset_result` はいずれも runner が組み立て時に `version: "0"` を
 載せる。
 
-#### ラッパー → サーバ(未充足、follow-up)
+#### ラッパー → サーバ(段階2、未充足)
 
 `envelope` のみ充足(frame key)。`delivery_ack` / `delivery_status_request` /
 `history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` /
 `session_reset_request` は version を持たない。#218 のスコープは
 client → server / server → wrapper / server → runner の 3 経路であり、本経路は
-対象外として残した。
+段階2として残した。段階2の完了条件と follow-up は issue [#270](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/270) を正本とする。
 
-#### サーバ → クライアント(一部未充足、follow-up)
+#### サーバ → クライアント(段階2、一部未充足)
 
 `envelope` / `history_replay_envelope` はエンベロープ由来で充足。
 `spawn_result` / `runner_sessions` / `catalog_result` は runner が付けた
@@ -754,7 +757,8 @@ client → server / server → wrapper / server → runner の 3 経路であり
 `directory` / `history_cleared` / `history_reset` / `history_replay_complete` /
 `agent_deleted` / `delivery_status` / `session_reset_started` /
 `session_reset_completed` / `session_reset_failed` は未充足で、dashboard 側にも
-受信時の version 検査が無い。#218 のスコープ外として残した。
+受信時の version 検査が無い。#218 のスコープ外として段階2へ残した。段階2の
+完了条件と follow-up は issue [#270](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/270) を正本とする。
 
 #### 恒久 carve-out — `attach_chunk`
 

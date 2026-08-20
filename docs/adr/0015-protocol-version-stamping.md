@@ -29,6 +29,10 @@ version を持たない。(2) 不一致は黙って受理され、互換性問�
 - version を **3者すべてのメッセージにフラットな外枠キーとして付与**する
   (案A)。非エンベロープ payload にも `version` を足す。エンベロープが既に
   `version` / `ts` / `seq` をフラットな外枠キーとして持つ既存設計に揃える。
+- ただし `attach_chunk` は JSON オブジェクトではない binary transport frame の
+  ため、フラットなキーを置けない。**恒久 carve-out**として version 付与・検査の
+  対象外とする。binary header へ version を追加するには破壊的な wire 変更と
+  protocol version の bump が必要であり、得られる効果に見合わない。
 - 受信側は自分の version と **完全一致のみ正常**とみなし、不一致なら
   **警告ログ**を出す。
 - ただし **ベストエフォートで受理して処理は継続**する(不一致でも止めない)。
@@ -73,3 +77,18 @@ version を持たない。(2) 不一致は黙って受理され、互換性問�
 - 関連 ADR: [0010](0010-protocol-precisification.md)、
   [0014](0014-session-resume-and-restore.md)。
 - 由来: my-idea-brief(走り書き「通信プロトコルのバージョン情報付与」)。
+
+## Addendum (issue #218 ふじレビュー MF-1, 2026-08-21): `attach_chunk` の恒久 carve-out
+
+**決定。** `attach_chunk` は固定長ヘッダと生バイト列からなる binary transport
+frame であり、JSON のフラット外枠キーを持てないため、version 付与・検査の
+恒久的な対象外とする。これは既存の Decision に明文化した carve-out であり、
+ADR の status は Accepted のまま維持する。
+
+binary header へ version を追加する案は、既存 frame の破壊的変更と protocol
+version の bump を要する。JSON frame と同じキーを載せられない実装制約に対しては
+費用対効果が見合わないため採用しない。適用箇所と wire 形は
+[protocol](../specs/protocol.md) の「version 棚卸し」が正本である。
+
+**由来。** issue #218 のふじレビュー must-fix 1。下位 spec だけが例外を
+宣言していた不整合を、この ADR の Decision へ改訂して解消した。
