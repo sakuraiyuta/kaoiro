@@ -2,7 +2,7 @@
   import { tick, untrack } from "svelte";
   import BottomSheet from "./BottomSheet.svelte";
   import { conversationEntryKey } from "./conversationTimeline";
-  import { expressionFor, spriteUrlFor } from "./expression";
+  import { expressionFor, isFatigued, spriteStateFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
   import PersonaFace from "./PersonaFace.svelte";
@@ -162,8 +162,13 @@
 
   const expression = $derived(expressionFor(display.shown));
   const name = $derived(envelope.display_name ?? envelope.agent_id);
+  const fatigued = $derived(isFatigued(envelope));
   const spriteUrl = $derived(
-    spriteUrlFor(manifest, envelope.persona?.sprite_set, display.shown),
+    spriteUrlFor(
+      manifest,
+      envelope.persona?.sprite_set,
+      spriteStateFor(display.shown, fatigued),
+    ),
   );
   // Read from state_change.ext.pending_permission, the ADR-0022
   // authoritative source. Survives any other state_change arriving while
@@ -2373,6 +2378,7 @@
               sprite={spriteUrl}
               variant={expression.variant}
               label={expression.label}
+              fatigued={fatigued}
               size="detail"
               imgAltLabelled={true}
               faceLabelled={true}

@@ -17,6 +17,8 @@
     sprite: string | null;
     /** State variant, drives the `data-state` CSS hook. */
     variant: KnownState;
+    /** Orthogonal fatigue modifier (issue #172), never a protocol state. */
+    fatigued?: boolean;
     /** Human label (expression.label) for alt/aria-label. */
     label: string;
     /** Per-site visual preset — selects which of the 4 copied CSS
@@ -31,7 +33,7 @@
     faceLabelled: boolean;
   }
 
-  const { sprite, variant, label, size, imgAltLabelled, faceLabelled }:
+  const { sprite, variant, label, size, imgAltLabelled, faceLabelled, fatigued = false }:
     Props = $props();
 </script>
 
@@ -48,6 +50,7 @@
     class="face"
     data-size={size}
     data-state={variant}
+    data-fatigued={fatigued ? "true" : undefined}
     role="img"
     aria-label={label}
   >
@@ -56,7 +59,13 @@
     <span class="mouth"></span>
   </div>
 {:else}
-  <div class="face" data-size={size} data-state={variant} aria-hidden="true">
+  <div
+    class="face"
+    data-size={size}
+    data-state={variant}
+    data-fatigued={fatigued ? "true" : undefined}
+    aria-hidden="true"
+  >
     <span class="eye left"></span>
     <span class="eye right"></span>
     <span class="mouth"></span>
@@ -544,6 +553,36 @@
     width: 20%;
     height: 0;
     border-radius: 0;
+  }
+
+  /* Fatigue is a modifier rather than a state: preserve the state-specific
+     visual rules above, then make only card/detail fallback faces half-lidded
+     with a downturned mouth. Sprite portraits already carry fatigued art and
+     intentionally receive no data-fatigued attribute. */
+  .face[data-fatigued="true"][data-size="card"] .eye {
+    height: 0.22rem;
+    border-radius: 0.11rem;
+  }
+
+  .face[data-fatigued="true"][data-size="card"] .mouth {
+    width: 0.9rem;
+    height: 0.35rem;
+    border-bottom: none;
+    border-top: 2px solid var(--fg);
+    border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  }
+
+  .face[data-fatigued="true"][data-size="detail"] .eye {
+    height: 4%;
+    border-radius: 50% 50% 0 0;
+  }
+
+  .face[data-fatigued="true"][data-size="detail"] .mouth {
+    width: 17%;
+    height: 8%;
+    border-bottom: none;
+    border-top: 3px solid var(--fg);
+    border-radius: 50% 50% 0 0 / 100% 100% 0 0;
   }
 
   /* ==================================================================

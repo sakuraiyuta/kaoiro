@@ -26,6 +26,7 @@ function render(props: {
   size: "chip" | "card" | "detail" | "timeline";
   imgAltLabelled: boolean;
   faceLabelled: boolean;
+  fatigued?: boolean;
 }) {
   const target = document.createElement("div");
   document.body.append(target);
@@ -122,6 +123,30 @@ describe("PersonaFace", () => {
     expect(face?.getAttribute("role")).toBe("img");
     expect(face?.getAttribute("aria-label")).toBe("idle");
     expect(face?.hasAttribute("aria-hidden")).toBe(false);
+  });
+
+  it("TB-10: fatigued は CSS face にだけ data-fatigued を付ける", () => {
+    const faceTarget = render({
+      sprite: null,
+      variant: "idle",
+      label: "idle",
+      size: "card",
+      imgAltLabelled: true,
+      faceLabelled: true,
+      fatigued: true,
+    });
+    expect(faceTarget.querySelector(".face")?.getAttribute("data-fatigued")).toBe("true");
+
+    const spriteTarget = render({
+      sprite: "/sprites/ao/fatigued.png",
+      variant: "idle",
+      label: "idle",
+      size: "card",
+      imgAltLabelled: true,
+      faceLabelled: true,
+      fatigued: true,
+    });
+    expect(spriteTarget.querySelector("img")?.hasAttribute("data-fatigued")).toBe(false);
   });
 
   it.each(["chip", "card", "detail", "timeline"] as const)(

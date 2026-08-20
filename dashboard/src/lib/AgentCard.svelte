@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { expressionFor, spriteUrlFor } from "./expression";
+  import { expressionFor, isFatigued, spriteStateFor, spriteUrlFor } from "./expression";
   import PersonaFace from "./PersonaFace.svelte";
   import { StatusQueue } from "./statusDisplay.svelte";
   import TaskRing from "./TaskRing.svelte";
@@ -88,8 +88,13 @@
 
   const expression = $derived(expressionFor(display.shown));
   const name = $derived(envelope.display_name ?? envelope.agent_id);
+  const fatigued = $derived(isFatigued(envelope));
   const spriteUrl = $derived(
-    spriteUrlFor(manifest, envelope.persona?.sprite_set, display.shown),
+    spriteUrlFor(
+      manifest,
+      envelope.persona?.sprite_set,
+      spriteStateFor(display.shown, fatigued),
+    ),
   );
   // Needs-attention badge (ADR-0012 F6): approval/error draw the eye on the
   // grid; the actual allow/deny happens in the detail view.
@@ -459,6 +464,7 @@
           sprite={spriteUrl}
           variant={expression.variant}
           label={expression.label}
+          fatigued={fatigued}
           size="card"
           imgAltLabelled={true}
           faceLabelled={true}
