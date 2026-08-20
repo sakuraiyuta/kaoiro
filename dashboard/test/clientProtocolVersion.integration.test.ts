@@ -439,10 +439,13 @@ describe("server -> dashboard event bindings carry version checks (issue #270)",
   it("T3-4: snapshot は一回だけ bind され、handler も一回だけ呼ばれる", async () => {
     const handlers = makeHandlers();
     const { ws } = await connectAndJoin(handlers);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    injectServerPush(ws, "snapshot", { agents: {}, version: "0" });
+    injectServerPush(ws, "snapshot", { agents: {}, version: "9" });
 
     expect(handlers.onSnapshot).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 
   it("T3-5: protocol.ts の raw channel.on は bindServerEvent 内の1箇所だけ", async () => {
