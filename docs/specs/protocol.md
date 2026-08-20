@@ -697,8 +697,9 @@ ADR-0015 の「3 者すべてのメッセージ」要請に対する段階別の
 issue #218 で充足した。基準は `develop` の `45d3ea9`(2026-08-21 時点)。issue [#88](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/88)
 と [#197](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/197) 段階3 で
 **同じ誤読 —「この message は runner に中継されないから version 不要」— が二度
-must-fix になった**。ADR-0015 は経路で例外を設けていないので、以下の表が判断の
-正本であり、「隣の message が持っていない」ことは前例にならない。
+must-fix になった**。ADR-0015 は `attach_chunk` の明示 carve-out(ADR-0015
+Decision)を除き、message 経路による暗黙の例外を設けていないので、以下の表が
+判断の正本であり、「隣の message が持っていない」ことは前例にならない。
 
 **付与主体**は経路ごとに決まっている。producer が payload を組み立てる経路では
 組み立て時に、client 発の payload をサーバが素通しする経路ではサーバが
@@ -775,7 +776,9 @@ client → server / server → wrapper / server → runner の 3 経路であり
 #### 受信側の検査
 
 ADR-0015 の warn-then-accept(一致は無警告 / 欠落・不一致は警告しつつ処理継続)
-は 3 者すべてで実装済み。個別ハンドラの規律に頼らず、**検査を通す機構**と
+は段階1の 3 受信経路(server / wrapper / runner)で実装済み。client receiver の
+検査は段階2 — issue [#270](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/270)
+を正本とする。個別ハンドラの規律に頼らず、**検査を通す機構**と
 **迂回を検出するテスト**の 2 段で担保する。
 
 機構だけでは足りない — 検査を助長する形にはできても、別経路を書くこと自体は
@@ -787,6 +790,7 @@ ADR-0015 の warn-then-accept(一致は無警告 / 欠落・不一致は警告�
 | サーバ | operator gate `require_operator/4` に `warn_on_version_mismatch/3` を溶接。検査は role check の**後**に走る(viewer が version を詐称してログを焚けない) | モジュール自身の AST から `handle_in` の event 名を列挙し、各 event へ不正 version を push して warn を確認する。テスト側に一覧を持たないので、新しい `handle_in` 節は自動で対象に入る |
 | ラッパー | `#bindServerEvent` が唯一の `channel.on` 呼び出し点。`event` の型が `SERVER_EVENT_VERSION_POLICY` のキーなので、表に載せずには bind できない | 実際に登録された event 集合が policy 表と一致すること、かつ**各 event の登録がちょうど 1 件**であることを assert する。Phoenix は同一 event の全 callback を呼ぶため、既存 event に素の `channel.on` を重ねる迂回は件数でしか見えない |
 | runner | `bindControlEvents` が event 表をループして bind する | — |
+| クライアント | 段階2(issue [#270](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/270))— 受信時 version 検査は未実装 | — |
 
 #### 非 map payload の扱い
 
