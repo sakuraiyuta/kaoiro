@@ -10,7 +10,6 @@ import type {
 import {
   AgentHost,
   CONTEXT_NOTICE_THRESHOLD_PERCENT,
-  CONTEXT_WORK_BUDGET_DEFAULT_PERCENT,
   initialStatusExt,
 } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
@@ -567,7 +566,7 @@ describe("AgentHost — query injection", () => {
     expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toEqual([]);
   });
 
-  it("TC-3: 定数参照の閾値で通知し、work budget と導出せず同値を保つ", async () => {
+  it("TC-3: notice threshold 定数参照の値で通知する", async () => {
     const threshold = CONTEXT_NOTICE_THRESHOLD_PERCENT;
     const { queryFn, injected } = contextQueryFn(
       [{ totalTokens: threshold, maxTokens: threshold, percentage: threshold }],
@@ -581,7 +580,6 @@ describe("AgentHost — query injection", () => {
     await host.run();
 
     expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toHaveLength(1);
-    expect(CONTEXT_NOTICE_THRESHOLD_PERCENT).toBe(CONTEXT_WORK_BUDGET_DEFAULT_PERCENT);
   });
 
   // BR MF1 (a): 境界直後の `getContextUsage()` は圧縮前の総量を返し得る

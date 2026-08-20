@@ -175,7 +175,12 @@ export const CONTEXT_INIT_RETRY_DELAY_MS = 100;
  *  to act. Deliberately a constant — a config field would have to travel
  *  through WrapperConfig in @kaoiro/protocol, and Phase B is scoped to close
  *  inside the wrapper. TODO(#168 Phase C or a follow-up): make configurable
- *  once operators want per-agent thresholds. */
+ *  once operators want per-agent thresholds.
+ *
+ *  NOTE (issue #172 Q2): this currently has the same numeric value as
+ *  CONTEXT_WORK_BUDGET_DEFAULT_PERCENT, but they are distinct concepts. This
+ *  threshold decides when to offer recovery; the work-budget constant chooses
+ *  a soft token denominator. Never derive either constant from the other. */
 export const CONTEXT_NOTICE_THRESHOLD_PERCENT = 60;
 
 /** Default soft work budget, as a share of the SDK-reported context window
