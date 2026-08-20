@@ -167,6 +167,13 @@ export interface WrapperConfig {
    *  operator decides, matching the SDK's canUseTool behaviour). A
    *  finite value opts into fail-closed deny after that many ms. */
   permission_timeout_ms?: number;
+  /** Optional soft work-budget denominator as a percentage of the SDK's
+   * authoritative context window. The Claude adapter defaults this to 60
+   * when absent, then derives the actual token denominator from each
+   * `getContextUsage().maxTokens` reading. Keeping the configured value as a
+   * ratio, rather than a fixed token count, gives 1M- and 200k-token models
+   * the same "natural break" semantics (issue #264). */
+  context_work_budget_percent?: number;
   /** Initial SDK permission mode (#58). Omitted = `default`. The server may
    *  override this on join by pushing the last operator-persisted choice for
    *  this agent_id. `bypassPermissions` requires explicit config opt-in:
@@ -516,10 +523,22 @@ export interface SwitchErrorExt {
   rolled_back_to?: string;
 }
 
+/** Work-budget projection paired with the authoritative SDK context reading
+ * in `ext.context` (issue #264). `work_budget_tokens` is the soft,
+ * model-window-relative denominator; `work_budget_percentage` is the current
+ * used-token share of that denominator and may exceed 100 after the soft
+ * budget has been crossed. This is an extension of an already versioned
+ * {@link Envelope}, never a standalone unversioned message (ADR-0015). */
+export interface ContextBudgetExt {
+  work_budget_tokens: number;
+  work_budget_percentage: number;
+}
+
 /** Typed state_change extension fields. The index signature preserves v0's
  *  forward-compatible extension space while making established wire fields
  *  first-class to producers and consumers. */
 export interface EnvelopeExt extends Record<string, unknown> {
+  context_budget?: ContextBudgetExt;
   pending_model?: string;
   pending_effort?: string;
   effort_reset?: boolean;
