@@ -1229,6 +1229,30 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
   });
 });
 
+describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.pushes = [];
+  });
+
+  it("7種の control message すべてに flat version を付与する", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    link.acknowledgeInterAgentDelivery(1);
+    void link.requestInterAgentDeliveryStatus();
+    link.sendHistoryReset("r");
+    link.sendHistoryReplayComplete("r");
+    void link.requestDirectory();
+    void link.requestSessionReset("new");
+
+    const events = mock.pushes.filter((push) =>
+      ["delivery_ack", "delivery_status_request", "history_reset", "history_replay_complete", "directory_request", "session_reset_request"].includes(push.event),
+    );
+    expect(events).toHaveLength(6);
+    for (const push of events) expect(push.payload).toMatchObject({ version: "0" });
+  });
+});
+
 describe("ServerLink — requestDirectory の users projection (issue #197 段階2)", () => {
   beforeEach(() => {
     mock.handlers.clear();

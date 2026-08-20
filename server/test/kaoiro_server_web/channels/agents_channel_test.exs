@@ -5797,4 +5797,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end
     end
   end
+
+  test "issue #270 の server -> client 12種は version stamp 経路に宣言される" do
+    source = File.read!("lib/kaoiro_server_web/channels/agents_channel.ex")
+
+    for event <- ~w(snapshot history hosts directory history_cleared history_reset history_replay_complete agent_deleted delivery_status session_reset_started session_reset_completed session_reset_failed) do
+      assert source =~ "\"#{event}\"", "#{event} が送出経路から漏れている"
+    end
+
+    assert source =~ "Map.put(payload, \"version\", \"0\")"
+    assert source =~ "\"version\" => \"0\""
+  end
 end

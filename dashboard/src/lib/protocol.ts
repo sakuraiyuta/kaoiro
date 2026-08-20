@@ -2732,7 +2732,7 @@ export function resolveLaunchDefaultEffort(opts: {
 const CLIENT_PROTOCOL_VERSION = "0";
 
 /** ADR-0015 receiver rule for server -> client JSON pushes. */
-function warnOnServerVersionMismatch(event: string, payload: unknown): void {
+export function warnOnServerVersionMismatch(event: string, payload: unknown): void {
   const version =
     typeof payload === "object" && payload !== null && !Array.isArray(payload)
       ? (payload as Record<string, unknown>).version
