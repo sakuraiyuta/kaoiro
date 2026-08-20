@@ -419,17 +419,23 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # minimum was deliberately widened by #102: engine / model / effort are
   # peer-visible execution traits for delegation. Other operator-grade ext
   # (cwd / permission / session / context / capabilities / source) stays out.
+  #
+  # issue #269: also merges AgentDirectory (DETS-persisted, ADR-0030)
+  # entries that have no live AgentStates envelope — the "落ちた peer"
+  # case a server restart or AgentStates cleanup (issue #14) leaves behind.
+  # Merged in-line (not a separate array) so persona-name resolution stays
+  # one flow for send_to_agent. AgentStates wins on a duplicate agent_id
+  # (S9); requester self-exclusion applies once, after the merge.
   @impl true
   def handle_in("directory_request", _payload, socket) do
     self_id = socket.assigns.agent_id
     activities = AgentActivity.snapshot()
     peer_index = ConversationStates.peer_index()
     deliveries = DeliveryStates.all()
+    states = AgentStates.snapshot()
 
-    agents =
-      AgentStates.snapshot()
-      |> Enum.reject(fn {id, _} -> id == self_id end)
-      |> Enum.map(fn {id, env} ->
+    live =
+      Enum.map(states, fn {id, env} ->
         directory_entry(
           id,
           env,
@@ -438,6 +444,20 @@ defmodule KaoiroServerWeb.WrapperChannel do
           Map.get(deliveries, id)
         )
       end)
+
+    # issue #269 仕様5: AgentStates 側を優先。同一 agent_id を重複させない。
+    directory_only =
+      AgentDirectory.all()
+      |> Map.drop(Map.keys(states))
+      |> Enum.map(fn {id, entry} ->
+        directory_only_entry(id, entry, Map.get(peer_index, id, []))
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> bound_directory_only(self_id)
+
+    # issue #269 仕様5 / S9: requester 除外は合流後にここ 1 箇所だけ
+    # (live / directory_only の両方をこの 1 箇所でカバーする)。
+    agents = Enum.reject(live ++ directory_only, &(&1["agent_id"] == self_id))
 
     {:reply, {:ok, %{"agents" => agents, "users" => users_projection()}}, socket}
   end
@@ -1047,6 +1067,107 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp is_finite_number(_), do: false
+
+  # directory-only entry (issue #269)。AgentStates に envelope を持たない
+  # AgentDirectory エントリの射影。identity + last_seen + conversation だけを
+  # 出し、engine / model / effort / context / rate_limits / session 系は
+  # 載せない — 値が存在しないのであって「0」でも「健全」でもない
+  # (absent = unknown の既存規約)。
+  #
+  # agent_id は AgentId.valid?/1 を通す (issue #269 S7): AgentDirectory の
+  # DETS ロードは is_binary しか見ておらず、この経路が DETS 由来の id を
+  # agent へ出す最初の経路になるため、user_entry/1 と同じ discipline を
+  # ここで適用する。落ちたエントリは丸ごと drop。
+  defp directory_only_entry(id, %{persona_id: persona_id} = entry, peers)
+       when is_binary(id) do
+    if AgentId.valid?(id) do
+      display_name =
+        case valid_display_name(Map.get(entry, :display_name)) do
+          {:ok, trimmed} -> trimmed
+          :error -> nil
+        end
+
+      %{
+        "agent_id" => id,
+        "persona" => directory_persona(persona_id),
+        "state" => "disconnected",
+        "directory_only" => true
+      }
+      |> maybe_put_directory_field("display_name", display_name)
+      |> Map.put("conversation", %{"active" => peers != [], "peers" => peers})
+      |> maybe_put_last_seen(Map.get(entry, :last_seen))
+    else
+      nil
+    end
+  end
+
+  defp directory_only_entry(_id, _entry, _peers), do: nil
+
+  # persona の typed unresolved (issue #219 D21)。
+  # agents_channel.ex の join_directory_entry/1 と同じ規則 —
+  # pack が解決すれば canonical、しなければ %{"id" => persona_id} を返し、
+  # persona キー自体は必ず present にする (issue #269 S1)。
+  # Map.take は F6-2 の nested allow-list 規律 (canonical map を素通しにしない)。
+  defp directory_persona(persona_id) when is_binary(persona_id) do
+    case PersonaAssets.get_persona(persona_id) do
+      nil -> %{"id" => persona_id}
+      canonical -> Map.take(canonical, ["id", "name", "sprite_set"])
+    end
+  end
+
+  defp directory_persona(_persona_id), do: %{}
+
+  # last_seen は memory-only hint (AgentDirectory 由来の unix 秒)。ISO8601
+  # UTC に変換して既存の directory 時刻 field (session_started_at /
+  # last_activity_at) と表現を揃える (issue #269 S5)。nil (server 再起動後
+  # / 未 touch) や domain 外の値は field ごと省略する。
+  defp maybe_put_last_seen(entry, ts)
+       when is_integer(ts) and ts >= 0 and ts <= @max_safe_integer do
+    case DateTime.from_unix(ts) do
+      {:ok, dt} -> Map.put(entry, "last_seen", DateTime.to_iso8601(dt))
+      {:error, _} -> entry
+    end
+  end
+
+  defp maybe_put_last_seen(entry, _ts), do: entry
+
+  # directory-only 分の件数上限 (issue #269 S6)。AgentDirectory は operator
+  # が明示 delete するまで消えず、agent_id は spawn ごとに新規採番される
+  # ため無制限に増える。過去の全 agent が毎回 model の context を食う構造を
+  # 避けるため N=32 に切り、last_seen 降順 (unknown は最後尾、同着は
+  # agent_id 昇順) で残す。切った件数は agent/request 単位で 1 行 warn
+  # (既存の rate_limits drop 集約と同じ方針)。
+  @directory_only_limit 32
+
+  defp bound_directory_only(entries, agent_id) do
+    sorted =
+      Enum.sort_by(entries, fn e ->
+        {-last_seen_sort_key(e), e["agent_id"]}
+      end)
+
+    {kept, dropped} = Enum.split(sorted, @directory_only_limit)
+
+    if dropped != [] do
+      Logger.warning(
+        "directory-only projection capped at #{@directory_only_limit}; " <>
+          "dropped #{length(dropped)} entr(ies) for #{agent_id}"
+      )
+    end
+
+    kept
+  end
+
+  # sort key for bound_directory_only/2: unix seconds when `last_seen` is
+  # present (larger = more recent), or -1 when absent so unknown entries
+  # always sort after every known one (last_seen is always >= 0).
+  defp last_seen_sort_key(%{"last_seen" => iso}) when is_binary(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, dt, _offset} -> DateTime.to_unix(dt)
+      {:error, _} -> -1
+    end
+  end
+
+  defp last_seen_sort_key(_entry), do: -1
 
   defp put_activity_fields(entry, id, envelope, activity) do
     entry =
