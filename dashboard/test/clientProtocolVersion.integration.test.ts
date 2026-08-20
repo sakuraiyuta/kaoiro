@@ -16,6 +16,7 @@
 // (Phoenix buffers pushes made before join completes, then flushes them).
 // This asserts what actually leaves the socket, not a stubbed connection.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Channel } from "phoenix";
 import {
   CLIENT_EVENT_VERSION_POLICY,
   connectKaoiro,
@@ -436,16 +437,22 @@ describe("server -> dashboard event bindings carry version checks (issue #270)",
     warn.mockRestore();
   });
 
-  it("T3-4: snapshot は一回だけ bind され、handler も一回だけ呼ばれる", async () => {
-    const handlers = makeHandlers();
-    const { ws } = await connectAndJoin(handlers);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("T3-4: policy の17種すべてを一回ずつだけ bind する", async () => {
+    const on = vi.spyOn(Channel.prototype, "on");
+    const { conn } = await connectAndJoin();
+    const registrations = on.mock.calls
+      .map(([event]) => event)
+      .filter((event): event is keyof typeof CLIENT_EVENT_VERSION_POLICY =>
+        typeof event === "string" && Object.hasOwn(CLIENT_EVENT_VERSION_POLICY, event),
+      );
 
-    injectServerPush(ws, "snapshot", { agents: {}, version: "9" });
+    expect([...registrations].sort()).toEqual(events());
+    for (const event of events()) {
+      expect(registrations.filter((registered) => registered === event)).toHaveLength(1);
+    }
 
-    expect(handlers.onSnapshot).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledTimes(1);
-    warn.mockRestore();
+    conn.disconnect();
+    on.mockRestore();
   });
 
   it("T3-5: protocol.ts の raw channel.on は bindServerEvent 内の1箇所だけ", async () => {
