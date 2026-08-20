@@ -259,8 +259,8 @@ runner の各該当行では、`version` は共通のフラット外枠キーで
 payload 欄には再掲しない**([ADR-0015](../adr/0015-protocol-version-stamping.md)。
 エンベロープの外枠キーを個々の `type` 行に再掲しないのと同じ扱い)。行の payload
 欄に `version` が明示されているのは、その値の producer や domain に固有の注記が
-ある場合だけで、明示が無いことは非付与を意味しない。段階2へ残した経路を含む
-充足状況と恒久例外(`attach_chunk`)は下記「version 棚卸し」が正本。
+ある場合だけで、明示が無いことは非付与を意味しない。全経路の充足状況と
+恒久例外(`attach_chunk`)は下記「version 棚卸し」が正本。
 
 | 方向 | イベント | 内容 |
 |---|---|---|
@@ -680,7 +680,7 @@ wrapper` 直結(runner-less)の本格対応は [#71](https://gitea.example.inval
 - ADR-0015 は version を**ラッパー/サーバ/クライアントの全メッセージ**へ
   フラットな外枠キーとして付与する方針を定める。実装は段階化しており、段階1で
   クライアント → サーバ / サーバ → ラッパー / サーバ → runner を充足した。
-  段階2へ残した経路を含む実装状況は下記「version 棚卸し」を正本とする。
+  段階2を含む全経路の実装状況は下記「version 棚卸し」を正本とする。
 - 受信側は自分の version と**完全一致のみ正常**とみなし、不一致なら
   **警告ログ**を出す。ただし**ベストエフォートで受理して処理は継続**する
   (不一致でも止めない、[ADR-0015](../adr/0015-protocol-version-stamping.md))。
@@ -694,7 +694,7 @@ wrapper` 直結(runner-less)の本格対応は [#71](https://gitea.example.inval
 
 ADR-0015 の「3 者すべてのメッセージ」要請に対する段階別の充足状況。段階1は
 クライアント → サーバ / サーバ → ラッパー / サーバ → runner を対象とし、
-issue #218 で充足した。基準は `develop` の `45d3ea9`(2026-08-21 時点)。issue [#88](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/88)
+issue #218 で充足した。棚卸し基準は `develop` の `8b1d287`(2026-08-21 時点)。issue [#88](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/88)
 と [#197](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/197) 段階3 で
 **同じ誤読 —「この message は runner に中継されないから version 不要」— が二度
 must-fix になった**。ADR-0015 は `attach_chunk` の明示 carve-out(ADR-0015
@@ -744,21 +744,25 @@ warn される。
 
 #### ラッパー → サーバ(段階2、issue #270 で充足)
 
-`envelope` のみ充足(frame key)。`delivery_ack` / `delivery_status_request` /
-`history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` /
-`session_reset_request` は wrapper の単一送出点が flat `version` を付与し、server は
-欠落・不一致を warn した上でベストエフォート受理する。
+`envelope` は frame key で充足する。`delivery_ack` /
+`delivery_status_request` / `history_reset` / `replay_ia` /
+`history_replay_complete` / `directory_request` / `session_reset_request` は
+`WRAPPER_CONTROL_EVENT_POLICY` に宣言され、wrapper の唯一の送出点
+`#pushVersioned` が flat `version` を付与する。server は
+`@wrapper_event_policy` と `handle_in/3` の単一 funnel で、欠落・不一致を
+warn した上でベストエフォート受理する。
 
 #### サーバ → クライアント(段階2、issue #270 で充足)
 
-`envelope` / `history_replay_envelope` はエンベロープ由来で充足。
-`spawn_result` / `runner_sessions` / `catalog_result` は runner が付けた
-`version` を素通しするため結果的に充足。`snapshot` / `history` / `hosts` /
-`directory` / `history_cleared` / `history_reset` / `history_replay_complete` /
-`agent_deleted` / `delivery_status` / `session_reset_started` /
-`session_reset_completed` / `session_reset_failed` も server が組み立て時に flat
-`version` を付与し、dashboard は欠落・不一致を warn した上でベストエフォートで
-受理する。
+`envelope` は frame key で充足する。残りの16種(`history_replay_envelope` /
+`snapshot` / `history` / `hosts` / `directory` / `history_cleared` /
+`history_reset` / `history_replay_complete` / `agent_deleted` /
+`delivery_status` / `session_reset_started` / `session_reset_completed` /
+`session_reset_failed` / `spawn_result` / `runner_sessions` / `catalog_result`)は、
+server の唯一の client 向け送出点 `push_versioned/3` が flat `version` を
+付与する。内部 PubSub broadcast と runner の申告値は wire の version SoT ではない。
+dashboard は `CLIENT_EVENT_VERSION_POLICY` と `bindServerEvent` の単一 funnel を通し、
+欠落・不一致を warn した上でベストエフォート受理する。
 
 #### 恒久 carve-out — `attach_chunk`
 
@@ -788,7 +792,7 @@ ADR-0015 の warn-then-accept(一致は無警告 / 欠落・不一致は警告�
 | サーバ | operator gate `require_operator/4` に `warn_on_version_mismatch/3` を溶接。検査は role check の**後**に走る(viewer が version を詐称してログを焚けない) | モジュール自身の AST から `handle_in` の event 名を列挙し、各 event へ不正 version を push して warn を確認する。テスト側に一覧を持たないので、新しい `handle_in` 節は自動で対象に入る |
 | ラッパー | `#bindServerEvent` が唯一の `channel.on` 呼び出し点。`event` の型が `SERVER_EVENT_VERSION_POLICY` のキーなので、表に載せずには bind できない | 実際に登録された event 集合が policy 表と一致すること、かつ**各 event の登録がちょうど 1 件**であることを assert する。Phoenix は同一 event の全 callback を呼ぶため、既存 event に素の `channel.on` を重ねる迂回は件数でしか見えない |
 | runner | `bindControlEvents` が event 表をループして bind する | — |
-| クライアント | 段階2(issue [#270](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/270))— 受信時 version 検査は未実装 | — |
+| クライアント | `CLIENT_EVENT_VERSION_POLICY` と `bindServerEvent` が server → client の17種を受信時に検査する | integration test が policy 全件の欠落 / 一致 / 不一致と継続受理を通し、`c.on(` が bind 関数内の1箇所だけであることを検査する |
 
 #### 非 map payload の扱い
 
