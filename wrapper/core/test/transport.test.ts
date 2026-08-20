@@ -90,11 +90,13 @@ import {
   MAX_ACTIVE_TASK_CACHE_ENTRIES,
   MAX_REPLAY_IA_PUSH_BYTES,
   SERVER_EVENT_VERSION_POLICY,
+  WRAPPER_CONTROL_EVENT_POLICY,
   ServerLink,
   chunkReplayIaItems,
   hydrationVerdictFrom,
 } from "../src/transport.js";
 import type { Envelope } from "@kaoiro/protocol";
+import type { VersionedWrapperEvent } from "../src/transport.js";
 
 function emit(event: string, payload: unknown): void {
   const bound = mock.handlers.get(event);
@@ -1236,20 +1238,60 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     mock.pushes = [];
   });
 
-  it("7種の control message すべてに flat version を付与する", () => {
-    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
-    link.acknowledgeInterAgentDelivery(1);
-    void link.requestInterAgentDeliveryStatus();
-    link.sendHistoryReset("r");
-    link.sendHistoryReplayComplete("r");
-    void link.requestDirectory();
-    void link.requestSessionReset("new");
+  const versioned = () =>
+    Object.entries(WRAPPER_CONTROL_EVENT_POLICY)
+      .filter(([, policy]) => policy === "versioned")
+      .map(([event]) => event)
+      .sort();
 
-    const events = mock.pushes.filter((push) =>
-      ["delivery_ack", "delivery_status_request", "history_reset", "history_replay_complete", "directory_request", "session_reset_request"].includes(push.event),
-    );
-    expect(events).toHaveLength(6);
-    for (const push of events) expect(push.payload).toMatchObject({ version: "0" });
+  const replayEnvelope = (): Envelope => ({
+    version: "0",
+    agent_id: "a.agent",
+    persona: { id: "ao", name: "あお", sprite_set: "ao" },
+    display_name: "あお",
+    ts: "2026-08-08T00:00:00Z",
+    type: "inter_agent_message",
+    state: "idle",
+    payload: {
+      to: "b.agent",
+      conversation_id: "cid-1",
+      turn_number: 1,
+      kind: "inform",
+      body: "hi",
+      meta: { done: false, propose_next: "" },
+    },
+    ext: {},
+  } as unknown as Envelope);
+
+  const fire: Record<VersionedWrapperEvent, (link: ServerLink) => void> = {
+    delivery_ack: (link) => link.acknowledgeInterAgentDelivery(1),
+    delivery_status_request: (link) => void link.requestInterAgentDeliveryStatus(),
+    history_reset: (link) => link.sendHistoryReset("r"),
+    replay_ia: (link) => link.sendReplayIa("r", [{ ingress_stamp: [1, 1], envelope: replayEnvelope() }]),
+    history_replay_complete: (link) => link.sendHistoryReplayComplete("r"),
+    directory_request: (link) => void link.requestDirectory(),
+    session_reset_request: (link) => void link.requestSessionReset("new").catch(() => {}),
+  };
+
+  it("T1-1: fire 表は production policy の versioned 集合と完全一致する", () => {
+    expect(Object.keys(fire).sort()).toEqual(versioned());
+  });
+
+  it("T1-2: 7種すべてを実際に送る", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    for (const trigger of Object.values(fire)) trigger(link);
+    expect(mock.pushes.map((push) => push.event).sort()).toEqual(versioned());
+  });
+
+  it("T1-3: 7種すべての payload に flat version を stamp する", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    for (const trigger of Object.values(fire)) trigger(link);
+    for (const push of mock.pushes) expect(push.payload).toMatchObject({ version: "0" });
+  });
+
+  it("T1-4: control call site は funnel を迂回しない", async () => {
+    const source = await import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/transport.ts", import.meta.url), "utf8"));
+    expect((source.match(/this\.\#channel\.push\(/g) ?? [])).toHaveLength(2);
   });
 });
 
