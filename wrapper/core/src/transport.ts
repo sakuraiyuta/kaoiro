@@ -311,6 +311,24 @@ export const SERVER_EVENT_VERSION_POLICY = {
 
 export type ServerEventName = keyof typeof SERVER_EVENT_VERSION_POLICY;
 
+export const WRAPPER_CONTROL_EVENT_POLICY = {
+  delivery_ack: "versioned",
+  delivery_status_request: "versioned",
+  history_reset: "versioned",
+  replay_ia: "versioned",
+  history_replay_complete: "versioned",
+  directory_request: "versioned",
+  session_reset_request: "versioned",
+  envelope: "envelopeFrame",
+} as const satisfies Record<string, "versioned" | "envelopeFrame">;
+
+export type WrapperControlEvent = keyof typeof WRAPPER_CONTROL_EVENT_POLICY;
+export type VersionedWrapperEvent = {
+  [K in WrapperControlEvent]: typeof WRAPPER_CONTROL_EVENT_POLICY[K] extends "versioned"
+    ? K
+    : never;
+}[WrapperControlEvent];
+
 interface ActiveTaskCacheEntry {
   envelope: Envelope;
   jsonBytes: number;
@@ -1346,7 +1364,7 @@ export class ServerLink {
   }
 
   /** Stamps wrapper -> server control messages (ADR-0015 stage 2). */
-  #pushVersioned(event: string, payload: Record<string, unknown>): Push {
+  #pushVersioned(event: VersionedWrapperEvent, payload: Record<string, unknown>): Push {
     return this.#channel.push(event, {
       ...payload,
       version: WRAPPER_PROTOCOL_VERSION,
@@ -1506,8 +1524,7 @@ export class ServerLink {
    *  tool surfaces the failure to the model rather than hanging. */
   requestDirectory(): Promise<DirectoryResult> {
     return new Promise((resolve, reject) => {
-      this.#channel
-        .push("directory_request", { version: WRAPPER_PROTOCOL_VERSION })
+      this.#pushVersioned("directory_request", {})
         .receive("ok", (payload: unknown) => {
           if (!isObject(payload)) {
             resolve({ agents: [], users: [] });
@@ -1557,11 +1574,9 @@ export class ServerLink {
     reason?: string,
   ): Promise<SessionResetAccepted> {
     return new Promise((resolve, reject) => {
-      this.#channel
-        .push("session_reset_request", {
+      this.#pushVersioned("session_reset_request", {
           mode,
           ...(reason !== undefined ? { reason } : {}),
-          version: WRAPPER_PROTOCOL_VERSION,
         })
         .receive("ok", (payload: unknown) => {
           const accepted = sessionResetAcceptedFrom(payload);
