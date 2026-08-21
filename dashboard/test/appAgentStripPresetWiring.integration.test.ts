@@ -21,6 +21,7 @@ const manifestWithSprite: PersonaManifest = {
     p: {
       states: {
         idle: { url: "/sprites/p/idle.png", hash: "sha256:idle" },
+        fatigued: { url: "/sprites/p/fatigued.png", hash: "sha256:fatigued" },
       },
     },
   },
@@ -155,5 +156,42 @@ describe("App.svelte agent-strip -> PersonaFace preset wiring", () => {
     const img = document.querySelector(".agent-strip .chip img.portrait-sprite");
     expect(img?.getAttribute("data-size")).toBe("chip");
     expect(img?.getAttribute("alt")).toBe("");
+  });
+
+  // issue #276 実機確認: chip は #172 設計時に scope 外とされたが、こはく
+  // 裁定で撤回され配線された。閾値以上 + capability 宣言ありの agent の
+  // chip が fatigued sprite を指すことと、閾値未満は通常 sprite のままで
+  // あることを両方向で pin する (片方向だけだと配線を外しても green)。
+  it("疲労条件を満たす agent の chip は fatigued sprite を指す", async () => {
+    captured.manifest = manifestWithSprite;
+    const h = await mountApp();
+    h.onHosts?.([]);
+    const fatigued = onlineEnvelope("host-a.p", "あお");
+    (fatigued as { ext?: unknown }).ext = {
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
+      context: { used_tokens: 770_000, max_tokens: 1_000_000, used_percentage: 77 },
+    };
+    const fresh = onlineEnvelope("host-b.p", "もも");
+    (fresh as { ext?: unknown }).ext = {
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
+      context: { used_tokens: 100_000, max_tokens: 1_000_000, used_percentage: 10 },
+    };
+    h.onSnapshot({ "host-a.p": fatigued, "host-b.p": fresh });
+    await tick();
+    await openDetailFromGrid();
+
+    const srcs = Array.from(
+      document.querySelectorAll(".agent-strip .chip img.portrait-sprite"),
+    ).map((img) => img.getAttribute("src"));
+    expect(srcs).toContain("/sprites/p/fatigued.png");
+    expect(srcs).toContain("/sprites/p/idle.png");
   });
 });

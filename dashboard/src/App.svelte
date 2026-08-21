@@ -20,7 +20,12 @@
     retainTimelineReplaysOfGeneration,
     type ActiveTimelineReplays,
   } from "./lib/timelineArrival";
-  import { expressionFor, spriteUrlFor } from "./lib/expression";
+  import {
+    expressionFor,
+    isFatigued,
+    spriteStateFor,
+    spriteUrlFor,
+  } from "./lib/expression";
   import type {
     AuthMethods,
     ConnectionStatus,
@@ -1399,10 +1404,11 @@
     <nav class="agent-strip" aria-label="エージェント一覧">
       {#each sorted as envelope (envelope.agent_id)}
         {@const expr = expressionFor(envelope.state)}
+        {@const chipFatigued = isFatigued(envelope)}
         {@const sprite = spriteUrlFor(
           manifest,
           envelope.persona?.sprite_set,
-          envelope.state,
+          spriteStateFor(envelope.state, chipFatigued),
         )}
         <button
           type="button"
@@ -1422,6 +1428,7 @@
             variant={expr.variant}
             label={expr.label}
             size="chip"
+            fatigued={chipFatigued}
             imgAltLabelled={false}
             faceLabelled={false}
           />
