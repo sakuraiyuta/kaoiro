@@ -125,9 +125,15 @@ zip には含まれない。`scripts/build-persona-pack.sh` は
 (開発リポジトリの資産として扱う)。
 
 保持フィールド(allowlist 方式、fail-closed — 未知フィールドは
-取り込み時に警告して落とす): `mode` / `prompt` / `negative` /
+取り込み時に reject): `mode` / `prompt` / `negative` /
 `model` / `architecture` / `seed` / `steps` / `width` / `height` /
-`cfg` / `denoise` / `generated_at` / `job_id` / `source_job_id`。
+`cfg` / `denoise` / `generated_at` / `job_id` / `source_job_id` /
+`tool` / `source_refs` / `postprocess` / `sha256`。後ろの 4 項目は生成系に
+依存しない任意フィールドであり、`tool` は生成 surface の識別子、
+`source_refs` は参照素材の相対 path 配列、`postprocess` は後処理の要約、
+`sha256` は成果物 PNG の SHA-256 を表す。既存 Anima 用フィールドは不変で、
+許容集合をこの 4 項目だけ明示拡張する。fail-closed の原則は維持し、ここに
+ない未知フィールドは引き続き reject する。
 `account`(メールアドレス)や `image_url`(署名付き URL、credential
 性)など個人情報・機微情報を含み得るフィールドは取り込み時に除外する。
 
