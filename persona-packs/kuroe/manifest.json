@@ -2,11 +2,11 @@
   "id": "kuroe",
   "name": "クロエ",
   "sprite_set": "kuroe",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "license": "CC0-1.0",
   "min_kaoiro_version": "0.1.0",
   "states": ["idle", "thinking", "tool_running", "waiting_input",
-             "waiting_permission", "done", "error"],
+             "waiting_permission", "done", "error", "fatigued"],
   "description": "マスター呼びの秘書型ペルソナ",
   "author": "sakurai.yuta@gmail.com"
 }

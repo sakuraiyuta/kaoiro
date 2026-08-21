@@ -1,0 +1,7 @@
+{
+  "tool": "Codex built-in image_gen",
+  "source_refs": ["sprites/idle.png", "sprites/thinking.png", "sprites/tool_running.png", "sprites/waiting_input.png", "sprites/waiting_permission.png", "sprites/done.png", "sprites/error.png"],
+  "postprocess": "chroma-key removal; normalized to 512x512",
+  "sha256": "4172ed08b3200407a83c9bc9384778df87e118c702c815f7924e22a709071686",
+  "generated_at": "2026-08-21"
+}

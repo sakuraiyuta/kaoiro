@@ -2,11 +2,11 @@
   "id": "kohaku",
   "name": "こはく",
   "sprite_set": "kohaku",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "license": "CC0-1.0",
   "min_kaoiro_version": "0.1.0",
   "states": ["idle", "thinking", "tool_running", "waiting_input",
-             "waiting_permission", "done", "error"],
+             "waiting_permission", "done", "error", "fatigued"],
   "description": "ボス呼びの CTO 型ペルソナ",
   "author": "sakurai.yuta@gmail.com"
 }
