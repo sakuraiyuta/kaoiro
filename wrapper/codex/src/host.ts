@@ -70,9 +70,12 @@ import { effectiveNetworkAccess } from "./network_access.js";
 import {
   codexRateLimitsFromRolloutIn,
   codexRolloutsRoot,
+  isRolloutCorruptionDetail,
   resolveCodexModel,
+  verifyRolloutCorruption,
   type CodexRateLimitSnapshot,
   type CodexRateLimitWindow,
+  type RolloutCorruptionVerdict,
 } from "./rollout.js";
 import {
   CodexTurnDiagnostics,
@@ -235,6 +238,14 @@ export interface CodexHostOptions {
   rateLimitResolver?: (
     sessionId: string,
   ) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
+  /** Confirms whether a resume-failure CANDIDATE is real rollout corruption
+   *  (issue #263, ふじ MF-1/MF-2). Injectable so tests can point the real
+   *  `verifyRolloutCorruption` at a fixture rollout root instead of
+   *  `~/.codex/sessions` — the default wraps `verifyRolloutCorruption`
+   *  itself (real fatal-UTF-8-decode + per-line JSON.parse), never a stub,
+   *  so an injected variant only changes WHERE it reads, not what
+   *  "corrupted" means. */
+  rolloutCorruptionVerifier?: (sessionId: string) => RolloutCorruptionVerdict;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
   /** Epoch clock for deterministic upload TTL tests. */
@@ -373,6 +384,23 @@ export class CodexHost implements EngineAdapter {
   readonly #now: () => string;
   #machine: MachineState = initialMachineState();
   #sessionId: string | null = null;
+  /** issue #263: session id whose rollout has been CONFIRMED permanently
+   *  corrupted — a resume failure whose detail matched the candidate
+   *  pattern (`isRolloutCorruptionDetail`) AND whose rollout file itself
+   *  verified as corrupted (`verifyRolloutCorruption`, ふじ MF-1). Once
+   *  set, `#runTurn` skips the doomed `resumeThread()` call for THIS
+   *  session id and returns the same classified error immediately instead
+   *  of re-spawning `codex exec` every turn only to hit the identical
+   *  failure — the silent exit-1 retry loop this issue exists to close.
+   *  Cleared implicitly whenever `#sessionId` moves to a different value
+   *  (a fresh thread has a fresh, presumably intact, rollout); this host
+   *  never resets it pre-emptively. */
+  #corruptedRolloutSessionId: string | null = null;
+  /** issue #263 (ふじ should-fix 1): the root-cause error detail from the
+   *  FIRST turn that confirmed `#corruptedRolloutSessionId`. Later turns'
+   *  synthetic "resume skipped" error would otherwise replace it and lose
+   *  the original diagnostic text an operator needs. */
+  #corruptedRolloutDetail: string | null = null;
   #model: string | null;
   #modelPending: string | null = null;
   #modelLastGood: string | null = null;
@@ -988,23 +1016,51 @@ export class CodexHost implements EngineAdapter {
         (this.#model === null || this.#modelSource === "default"),
       resolutionGeneration,
     };
+    // issue #263 (ふじ 必須pin): capture whether THIS turn is a resume
+    // attempt, and which session id it targets, BEFORE anything in the
+    // stream below can move `#sessionId`. Only a resume has a pre-existing
+    // rollout that could be corrupted — a fresh startThread's mid-stream
+    // failure must never be classified as permanent even if its text
+    // happens to match a candidate pattern, since there is no pre-existing
+    // rollout for that classification to mean anything about.
+    const resumeSessionId = this.#sessionId;
+    const isResumeAttempt = resumeSessionId !== null;
+    // A resume already CONFIRMED permanently corrupted for THIS session id
+    // is skipped — re-spawning `codex exec` would just re-read the same
+    // broken rollout and fail identically, the silent exit-1 retry loop
+    // this issue exists to close. Substitute an already-failing thread so
+    // the ordinary catch(err) branch below handles it through the exact
+    // same emit/trace path; carrying the ORIGINAL detail forward (ふじ
+    // should-fix 1) keeps every subsequent turn's diagnostic text pointing
+    // at the real root cause, not a generic "skipped" placeholder.
     const thread =
-      this.#sessionId !== null
-        ? codex.resumeThread(
-            this.#sessionId,
-            this.#threadOptions(
-              attempted.model,
-              attempted.effort,
-              attempted.effortReset,
-            ),
-          )
-        : codex.startThread(
-            this.#threadOptions(
-              attempted.model,
-              attempted.effort,
-              attempted.effortReset,
-            ),
-          );
+      resumeSessionId !== null &&
+      resumeSessionId === this.#corruptedRolloutSessionId
+        ? {
+            runStreamed: () =>
+              Promise.reject(
+                new Error(
+                  this.#corruptedRolloutDetail ??
+                    `resume skipped: rollout for session ${resumeSessionId} already classified as permanently corrupted (issue #263)`,
+                ),
+              ),
+          }
+        : isResumeAttempt
+          ? codex.resumeThread(
+              resumeSessionId,
+              this.#threadOptions(
+                attempted.model,
+                attempted.effort,
+                attempted.effortReset,
+              ),
+            )
+          : codex.startThread(
+              this.#threadOptions(
+                attempted.model,
+                attempted.effort,
+                attempted.effortReset,
+              ),
+            );
     // Creating/resuming the SDK thread is the last synchronous boundary
     // before `runStreamed()` hands the input to Codex. Confirm #247 delivery
     // here, never when its coordinator merely accepted the queue item.
@@ -1111,13 +1167,71 @@ export class CodexHost implements EngineAdapter {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
       if (!sawResult) {
         this.#finishTurn(false, attempted);
-        this.#emitResult({ is_error: true });
+        const alreadyConfirmedCorrupted =
+          resumeSessionId !== null &&
+          resumeSessionId === this.#corruptedRolloutSessionId;
+        // issue #263 (ふじ should-fix 1): once a session is confirmed
+        // corrupted, every later turn's `err` is this file's OWN synthetic
+        // "resume skipped" Error, built from `#corruptedRolloutDetail`.
+        // Re-stringifying it here would double-wrap that Error's own
+        // "Error: " toString prefix onto an already-stringified detail —
+        // use the remembered root-cause text verbatim instead.
+        const detail = alreadyConfirmedCorrupted
+          ? (this.#corruptedRolloutDetail ?? String(err))
+          : String(err);
+        // issue #263 (ふじ MF-1 / 必須pin): a stderr keyword match alone
+        // is only a CANDIDATE — several unrelated dependencies emit the
+        // same generic wording (ふじ measured this directly against
+        // codex-sdk 0.144.1's actual runStreamed stderr; neither pattern
+        // in isRolloutCorruptionDetail is unique to the rollout reader).
+        // Committing to the permanent classification requires confirming
+        // against the ACTUAL rollout file via rolloutCorruptionVerifier /
+        // verifyRolloutCorruption — "clean" or "unknown" (unreadable /
+        // unresolvable) both fall back to the ordinary failure path rather
+        // than risk permanently refusing to resume a session that failed
+        // for an unrelated, self-recoverable reason. `isResumeAttempt`
+        // (bound before the stream ran) is what keeps a fresh
+        // startThread's mid-stream failure from ever reaching this branch,
+        // even when its text happens to match a candidate pattern — there
+        // is no pre-existing rollout for such a failure to have corrupted.
+        let rolloutCorrupted = false;
+        if (alreadyConfirmedCorrupted) {
+          // Already confirmed on an earlier turn for this exact session —
+          // no need to re-read the file every retry.
+          rolloutCorrupted = true;
+        } else if (isResumeAttempt && isRolloutCorruptionDetail(detail)) {
+          const verify =
+            this.#options.rolloutCorruptionVerifier ??
+            ((id: string) => verifyRolloutCorruption(id));
+          const verdict: RolloutCorruptionVerdict = verify(resumeSessionId);
+          rolloutCorrupted = verdict === "corrupted";
+        }
+        if (rolloutCorrupted && resumeSessionId !== null) {
+          // Remember both the session id AND this confirming turn's own
+          // detail (ふじ should-fix 1) — #runTurn's guard at the top skips
+          // the doomed resumeThread() call for this session id on every
+          // later turn, and each of THOSE turns' synthetic "resume
+          // skipped" detail would otherwise overwrite the real root cause.
+          if (this.#corruptedRolloutSessionId !== resumeSessionId) {
+            this.#corruptedRolloutDetail = detail;
+          }
+          this.#corruptedRolloutSessionId = resumeSessionId;
+        }
+        this.#emitResult(
+          rolloutCorrupted
+            ? {
+                is_error: true,
+                error_subtype: "error_rollout_corrupted",
+                error_detail: detail,
+              }
+            : { is_error: true },
+        );
         this.#apply({ kind: "result", subtype: "error_during_execution" });
         await persistFailure({
           sessionId: this.#sessionId,
           turnToken,
           conversationIds,
-          detail: String(err),
+          detail,
           outcome: "run_streamed_rejected",
         });
         // issue #131 must-fix 2: String(err) is unstructured, untrusted text
@@ -1130,11 +1244,25 @@ export class CodexHost implements EngineAdapter {
         this.#options.onTurnEnd?.({
           turnToken,
           conversationIds,
-          error: { detail: String(err) },
+          error: { detail },
         });
       }
       if (!this.#closed) {
-        process.stderr.write(`codex turn failed: ${String(err)}\n`);
+        // issue #263: operator/runner-log visibility for the permanent
+        // classification — dashboard sees it via error_subtype above, but
+        // this stderr line is what a runner-side log tail (or the
+        // supervisor's own crash-loop diagnosis) can grep for without
+        // reaching into the envelope stream.
+        process.stderr.write(
+          resumeSessionId !== null &&
+            resumeSessionId === this.#corruptedRolloutSessionId
+            ? // Same double-wrap concern as the `detail` computation above:
+              // on a later turn `err` is this file's own synthetic
+              // "resume skipped" Error, so use the remembered root cause
+              // verbatim rather than re-stringifying it.
+              `codex turn failed: rollout permanently corrupted for session ${resumeSessionId} (issue #263): ${this.#corruptedRolloutDetail ?? String(err)}\n`
+            : `codex turn failed: ${String(err)}\n`,
+        );
       }
     } finally {
       this.#abort = null;
@@ -1482,8 +1610,22 @@ export class CodexHost implements EngineAdapter {
     onTask(makeTask(this.#config, this.#machine.state, this.#now(), payload));
   }
 
-  #emitResult(payload: { text?: string; is_error?: boolean }): void {
-    const clipped: { text?: string; is_error?: boolean } = { ...payload };
+  #emitResult(payload: {
+    text?: string;
+    is_error?: boolean;
+    // issue #263: SDK-agnostic result fields (ResultPayload, issue #127) —
+    // Claude's adapter fills these from the SDK's own subtype/errors; Codex
+    // has no SDK-native equivalent, so this host sets error_subtype only for
+    // its own rollout-corruption classification (see #runTurn's catch(err)).
+    error_subtype?: string;
+    error_detail?: string;
+  }): void {
+    const clipped: {
+      text?: string;
+      is_error?: boolean;
+      error_subtype?: string;
+      error_detail?: string;
+    } = { ...payload };
     if (clipped.text !== undefined) {
       const { text, truncated } = clipText(clipped.text);
       clipped.text = text;
@@ -1491,6 +1633,12 @@ export class CodexHost implements EngineAdapter {
         // Match the log-payload truncation convention: clip, no marker field
         // on result (protocol.md result payload has no truncated flag).
       }
+    }
+    if (clipped.error_detail !== undefined) {
+      // Same envelope-size discipline claude-code's #emitResult applies to
+      // this field (host.ts:2870 there) — untrusted, unbounded subprocess
+      // text must not ride the wire raw.
+      clipped.error_detail = clipText(clipped.error_detail).text;
     }
     this.#options.onLog?.(
       makeResult(this.#config, this.#now(), clipped, this.#statusExt()),

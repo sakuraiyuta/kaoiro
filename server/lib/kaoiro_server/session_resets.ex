@@ -738,7 +738,7 @@ defmodule KaoiroServer.SessionResets do
     KaoiroServerWeb.Endpoint.broadcast(
       "wrapper:#{agent_id}",
       "session_reset_failed",
-      %{"request_id" => lock.request_id, "reason" => reason}
+      %{"version" => "0", "request_id" => lock.request_id, "reason" => reason}
     )
   end
 

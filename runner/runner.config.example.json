@@ -4,6 +4,7 @@
   "cwd_allowlist": [
     "/home/user/git/kaoiro"
   ],
+  "context_work_budget_percent": 60,
   "capabilities": [
     "claude-code",
     "codex"

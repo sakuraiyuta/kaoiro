@@ -10,7 +10,7 @@
 # matched Anima json through a fixed allowlist and writes the result.
 #
 # Matching is fail-loud by design: zero or multiple sha256 matches, or
-# an unknown json field, abort instead of silently skipping.
+# an unknown json field, warn and drop it rather than silently skipping.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,15 +37,19 @@ for cmd in jq sha256sum; do
 done
 
 # Provenance fields kept in the sanitized output (reproduction + lineage).
-# Order here also fixes the output key order.
+# The generator-agnostic fields are optional, but accepted so provenance made
+# outside Anima can retain its tool, source references, post-processing, and
+# output digest under the schema's same fail-closed allowlist. Order here also
+# fixes the output key order.
 allow_fields=(mode prompt negative model architecture seed steps width
-              height cfg denoise generated_at job_id source_job_id)
+              height cfg denoise generated_at job_id source_job_id tool
+              source_refs postprocess sha256)
 # Fields intentionally dropped. silent_deny_fields carry PII/credential
 # material (account is an email, image_url is a signed URL) and must
-# never surface even in a warn line. warn_deny_fields are ordinary
-# metadata with no such risk, so known_json below deliberately omits
-# them: their drop still goes through the same unknown-field warning
-# path as a genuinely new field, keeping the audit trail complete.
+# never surface even in a warn line. warn_deny_fields are ordinary metadata
+# with no such risk, so known_json below deliberately omits them: their drop
+# still goes through the same unknown-field warning path as a genuinely new
+# field, keeping the audit trail complete.
 silent_deny_fields=(account image_url)
 # shellcheck disable=SC2034  # documentation only: listed so a reader can
 # see which fields fall through to the warn path below by not being in

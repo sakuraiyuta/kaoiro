@@ -29,6 +29,26 @@ describe("parseRunnerConfig", () => {
     expect(parseRunnerConfig(withCaps).capabilities).toEqual(["claude"]);
   });
 
+  it.each([60.5, 100])(
+    "context_work_budget_percent の有限な (0, 100] の値 %p を受け入れる",
+    (percent) => {
+      expect(
+        parseRunnerConfig({ ...valid, context_work_budget_percent: percent }),
+      ).toMatchObject({ context_work_budget_percent: percent });
+    },
+  );
+
+  it.each([0, -1, 100.1, Infinity, NaN, "60"])(
+    "不正な context_work_budget_percent %p は fail-fast で弾く",
+    (invalid) => {
+      expect(() =>
+        parseRunnerConfig({ ...valid, context_work_budget_percent: invalid }),
+      ).toThrowError(
+        "context_work_budget_percent must be a finite number greater than 0 and at most 100",
+      );
+    },
+  );
+
   it("buildRegister は claudeCatalogOverride を claude-code entry に反映する (ADR-0039)", () => {
     const cfg = parseRunnerConfig({
       ...valid,

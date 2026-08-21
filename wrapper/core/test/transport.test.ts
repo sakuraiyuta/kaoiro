@@ -8,8 +8,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type PushReceivers = Map<string, (payload: unknown) => void>;
 // `lastChannelParams` exposes the join params the channel was opened with,
 // so a test can assert what rides the handshake (persona_id / transition_id).
+// `handlers` maps an event to EVERY callback registered for it, not just the
+// last one. Phoenix 1.8.9's Channel.on appends and its trigger invokes all of
+// them; a Map<string, callback> silently collapsed duplicates, which hid a
+// raw `channel.on` added on top of an already-bound event (ふじ #218 レビュー
+// MF-4 — the structural meta-test below could not see it).
 const mock = vi.hoisted(() => ({
-  handlers: new Map<string, (payload: unknown) => void>(),
+  handlers: new Map<string, ((payload: unknown) => void)[]>(),
   lastPush: null as { event: string; payload: unknown; receivers: Map<string, (payload: unknown) => void> } | null,
   // Every push in order — `replay_ia` is chunked into several (M4), so a
   // test asserting the split cannot look at `lastPush` alone.
@@ -25,7 +30,9 @@ const mock = vi.hoisted(() => ({
 vi.mock("phoenix", () => {
   class Channel {
     on(event: string, cb: (payload: unknown) => void): void {
-      mock.handlers.set(event, cb);
+      const bound = mock.handlers.get(event);
+      if (bound === undefined) mock.handlers.set(event, [cb]);
+      else bound.push(cb);
     }
     join(): {
       receive: (
@@ -82,16 +89,22 @@ import {
   MAX_ACTIVE_TASK_CACHE_BYTES,
   MAX_ACTIVE_TASK_CACHE_ENTRIES,
   MAX_REPLAY_IA_PUSH_BYTES,
+  SERVER_EVENT_VERSION_POLICY,
+  WRAPPER_CONTROL_EVENT_POLICY,
   ServerLink,
   chunkReplayIaItems,
   hydrationVerdictFrom,
 } from "../src/transport.js";
 import type { Envelope } from "@kaoiro/protocol";
+import type { VersionedWrapperEvent } from "../src/transport.js";
 
 function emit(event: string, payload: unknown): void {
-  const handler = mock.handlers.get(event);
-  if (!handler) throw new Error(`no handler registered for ${event}`);
-  handler(payload);
+  const bound = mock.handlers.get(event);
+  if (bound === undefined || bound.length === 0) {
+    throw new Error(`no handler registered for ${event}`);
+  }
+  // Every registered callback, matching Phoenix's own trigger (ふじ MF-4).
+  for (const handler of bound) handler(payload);
 }
 
 describe("ServerLink — initial envelope sequence (#107)", () => {
@@ -748,7 +761,7 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
   it("mode と reason を session_reset_request として送る", async () => {
     const { pending } = push();
     expect(mock.lastPush?.event).toBe("session_reset_request");
-    expect(mock.lastPush?.payload).toEqual({ mode: "new", reason: "理由" });
+    expect(mock.lastPush?.payload).toEqual({ mode: "new", reason: "理由", version: "0" });
     mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
     await expect(pending).resolves.toEqual({ requestId: "rs-1" });
   });
@@ -758,7 +771,7 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
       personaId: "ao",
     });
     void link.requestSessionReset("clear").catch(() => {});
-    expect(mock.lastPush?.payload).toEqual({ mode: "clear" });
+    expect(mock.lastPush?.payload).toEqual({ mode: "clear", version: "0" });
   });
 
   it("request_id の無い ok は受理完了と扱わず unknown_error にする (#258)", async () => {
@@ -836,7 +849,7 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     const pending = link.requestDirectory();
 
     expect(mock.lastPush?.event).toBe("directory_request");
-    expect(mock.lastPush?.payload).toEqual({});
+    expect(mock.lastPush?.payload).toEqual({ version: "0" });
 
     mock.lastPush!.receivers.get("ok")!({
       agents: [
@@ -1160,6 +1173,125 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     const pending = link.requestDirectory();
     mock.lastPush!.receivers.get("timeout")!(undefined);
     await expect(pending).rejects.toThrow(/directory_request timeout/);
+  });
+
+  // issue #269 W1 (S2 の本体): directory-only 形状の生 payload が narrow を
+  // 通って agents に残ることを pin する。完了条件1の wrapper 側。
+  it("directory-only 形状 (persona あり / directory_only: true / last_seen あり / engine 等なし) の payload が agents に残る", async () => {
+    const narrowed = await narrowOne({
+      persona: { id: "no-such-pack" },
+      state: "disconnected",
+      directory_only: true,
+      last_seen: "2026-08-21T00:00:00Z",
+    });
+
+    expect(narrowed).toEqual({
+      agent_id: "peer.1",
+      persona: { id: "no-such-pack" },
+      state: "disconnected",
+      directory_only: true,
+      last_seen: "2026-08-21T00:00:00Z",
+    });
+  });
+
+  // issue #269 W1 (S1 再発防止): persona キーが無い payload は narrow が
+  // entry ごと落とす — この挙動が変わると directory-only entry は
+  // wrapper に届かず、ログも残らず消える (S1 が言っていた defect そのもの)。
+  it("persona キーが無い payload は entry ごと落ちる", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("ok")!({
+      agents: [
+        { agent_id: "peer.gone", state: "disconnected", directory_only: true },
+      ],
+    });
+    const { agents } = await pending;
+    expect(agents).toEqual([]);
+  });
+
+  // issue #269 W2: narrow の閉じ方 — server は true のときだけ載せる規約
+  // (F6-2 fail-closed) なので、それ以外の値は field だけ落として entry は
+  // 残す。
+  it("directory_only が false / 文字列 / 数値なら field が落ちる (entry は残る)", async () => {
+    for (const value of [false, "true", 1]) {
+      const narrowed = await narrowOne({ directory_only: value });
+      expect(narrowed.directory_only).toBeUndefined();
+      expect(narrowed.agent_id).toBe("peer.1");
+    }
+  });
+
+  // issue #269 W3: last_seen も他の optional text field と同じ
+  // nonEmptyText narrow — domain 外なら field だけ落として entry は残す。
+  it("last_seen が domain 外なら field が落ちる (entry は残る)", async () => {
+    for (const value of ["", 123, null]) {
+      const narrowed = await narrowOne({ last_seen: value });
+      expect(narrowed.last_seen).toBeUndefined();
+      expect(narrowed.agent_id).toBe("peer.1");
+    }
+  });
+});
+
+describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.pushes = [];
+  });
+
+  const versioned = () =>
+    Object.entries(WRAPPER_CONTROL_EVENT_POLICY)
+      .filter(([, policy]) => policy === "versioned")
+      .map(([event]) => event)
+      .sort();
+
+  const replayEnvelope = (): Envelope => ({
+    version: "0",
+    agent_id: "a.agent",
+    persona: { id: "ao", name: "あお", sprite_set: "ao" },
+    display_name: "あお",
+    ts: "2026-08-08T00:00:00Z",
+    type: "inter_agent_message",
+    state: "idle",
+    payload: {
+      to: "b.agent",
+      conversation_id: "cid-1",
+      turn_number: 1,
+      kind: "inform",
+      body: "hi",
+      meta: { done: false, propose_next: "" },
+    },
+    ext: {},
+  } as unknown as Envelope);
+
+  const fire: Record<VersionedWrapperEvent, (link: ServerLink) => void> = {
+    delivery_ack: (link) => link.acknowledgeInterAgentDelivery(1),
+    delivery_status_request: (link) => void link.requestInterAgentDeliveryStatus(),
+    history_reset: (link) => link.sendHistoryReset("r"),
+    replay_ia: (link) => link.sendReplayIa("r", [{ ingress_stamp: [1, 1], envelope: replayEnvelope() }]),
+    history_replay_complete: (link) => link.sendHistoryReplayComplete("r"),
+    directory_request: (link) => void link.requestDirectory(),
+    session_reset_request: (link) => void link.requestSessionReset("new").catch(() => {}),
+  };
+
+  it("T1-1: fire 表は production policy の versioned 集合と完全一致する", () => {
+    expect(Object.keys(fire).sort()).toEqual(versioned());
+  });
+
+  it("T1-2: 7種すべてを実際に送る", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    for (const trigger of Object.values(fire)) trigger(link);
+    expect(mock.pushes.map((push) => push.event).sort()).toEqual(versioned());
+  });
+
+  it("T1-3: 7種すべての payload に flat version を stamp する", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    for (const trigger of Object.values(fire)) trigger(link);
+    for (const push of mock.pushes) expect(push.payload).toMatchObject({ version: "0" });
+  });
+
+  it("T1-4: control call site は funnel を迂回しない", async () => {
+    const source = await import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/transport.ts", import.meta.url), "utf8"));
+    expect((source.match(/this\.\#channel\.push\(/g) ?? [])).toHaveLength(2);
   });
 });
 
@@ -1773,5 +1905,95 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
     expect(link.currentSessionId()).toBeNull();
     link.setSessionId("sess-1");
     expect(link.currentSessionId()).toBe("sess-1");
+  });
+});
+
+// ADR-0015 receiver check, structurally (issue #218). The per-event
+// warn-then-accept behaviour was previously pinned for `persona_sync` /
+// `display_name_sync` only — the two events that happened to carry the
+// check. #218 moved the check into `#bindServerEvent`, so what needs
+// pinning now is the STRUCTURE: every event this transport binds either
+// runs the check or is a declared carve-out. A raw `channel.on` added
+// later fails the first test here rather than going quietly unchecked.
+describe("ServerLink — server -> wrapper version check の構造 (issue #218)", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.pushes = [];
+  });
+
+  /** Every event name actually registered on the channel by a fresh link. */
+  function registeredEvents(): string[] {
+    mock.handlers.clear();
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    return [...mock.handlers.keys()].sort();
+  }
+
+  it("登録済み event はすべて policy 表に載っている (checked か carve-out)", () => {
+    const declared = Object.keys(SERVER_EVENT_VERSION_POLICY).sort();
+    expect(registeredEvents()).toEqual(declared);
+  });
+
+  // 表に無い event を足す迂回は上のテストが拾うが、**既存 event の上に**
+  // 素の channel.on を重ねる迂回は event 名の集合を変えないので拾えない
+  // (ふじ #218 レビュー MF-4)。Phoenix は同一 event の全 callback を呼ぶ
+  // ので、その handler は check を通らずに payload を受け取る。登録数を
+  // 直接 assert してその経路を塞ぐ。
+  it("各 declared event はちょうど 1 回だけ bind される", () => {
+    mock.handlers.clear();
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+
+    const counts = [...mock.handlers.entries()].map(
+      ([event, bound]) => [event, bound.length] as const,
+    );
+    expect(counts.filter(([, n]) => n !== 1)).toEqual([]);
+    // 表が空になって vacuously green になっていないことの担保。
+    expect(counts.length).toBe(Object.keys(SERVER_EVENT_VERSION_POLICY).length);
+  });
+
+  it("checked な event は version 不一致で警告し、処理は継続する", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const checked = Object.entries(SERVER_EVENT_VERSION_POLICY)
+      .filter(([, policy]) => policy === "checked")
+      .map(([event]) => event);
+    // Guard against the table silently emptying out — an all-carve-out
+    // table would make this test vacuously green.
+    expect(checked.length).toBeGreaterThan(10);
+
+    for (const event of checked) {
+      mock.handlers.clear();
+      new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+      stderr.mockClear();
+      emit(event, { version: "9" });
+      expect(stderr, `${event} は不一致を警告する`).toHaveBeenCalledTimes(1);
+      expect(stderr.mock.calls[0]![0]).toContain(event);
+      expect(stderr.mock.calls[0]![0]).toContain('"9"');
+
+      stderr.mockClear();
+      emit(event, {});
+      expect(stderr, `${event} は欠落を警告する`).toHaveBeenCalledTimes(1);
+      expect(stderr.mock.calls[0]![0]).toContain("(absent)");
+
+      stderr.mockClear();
+      emit(event, { version: "0" });
+      expect(stderr, `${event} は一致なら無警告`).not.toHaveBeenCalled();
+    }
+    stderr.mockRestore();
+  });
+
+  it("binaryFrame の carve-out は version を検査しない", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const carveOuts = Object.entries(SERVER_EVENT_VERSION_POLICY)
+      .filter(([, policy]) => policy === "binaryFrame")
+      .map(([event]) => event);
+    expect(carveOuts).toEqual(["attach_chunk"]);
+
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    for (const event of carveOuts) {
+      stderr.mockClear();
+      emit(event, new Uint8Array([1, 2, 3]).buffer);
+      expect(stderr, `${event} は binary frame なので検査しない`).not.toHaveBeenCalled();
+    }
+    stderr.mockRestore();
   });
 });

@@ -603,10 +603,16 @@ export interface ResultPayload {
   text?: string;
   is_error?: boolean;
   /** SDK error termination subtype relayed from the wrapper (issue #127).
-   *  Present on error results only, absent on success. Values mirror
-   *  wrapper's ResultSubtype (`error_max_turns` / `error_during_execution`
-   *  / `error_max_budget_usd` / `error_max_structured_output_retries`);
-   *  the UI treats unknown strings as fallback wording. */
+   *  Present on error results only, absent on success. The Claude Code
+   *  adapter's values mirror its ResultSubtype (`error_max_turns` /
+   *  `error_during_execution` / `error_max_budget_usd` /
+   *  `error_max_structured_output_retries`). The Codex adapter has no
+   *  SDK-native subtype of its own but sets one independent value,
+   *  `error_rollout_corrupted` (issue #263), when a resume failure is
+   *  confirmed as permanent rollout corruption (candidate stderr pattern
+   *  AND the rollout file itself verified corrupted — a text match alone
+   *  never sets it). The UI treats any other unknown string as fallback
+   *  wording. */
   error_subtype?: string;
   /** SDK error termination detail text (issue #127) — the wrapper forwards
    *  what the SDK returned alongside is_error (e.g. tool error message).
@@ -625,6 +631,11 @@ const ERROR_SUBTYPE_LABELS: Record<string, string> = {
   error_during_execution: "実行中エラー",
   error_max_budget_usd: "予算上限到達",
   error_max_structured_output_retries: "構造化出力リトライ上限",
+  // issue #263: Codex アダプタが resume 失敗の detail から rollout 破損
+  // (行途中の UTF-8 切断 / JSON 途切れ) を検知したときだけ独自に載せる
+  // 値。他の4値と違い SDK 由来の subtype ではない — wrapper 側の判定
+  // (isRolloutCorruptionDetail) が付与する。
+  error_rollout_corrupted: "セッション破損 (再開不可)",
 };
 
 export function errorSubtypeLabel(subtype: string | undefined): string | null {
@@ -2707,13 +2718,93 @@ export function resolveLaunchDefaultEffort(opts: {
   return undefined;
 }
 
-/** Runner-bound protocol version (ADR-0015, protocol.md 「version」節).
- *  Stamped on the client -> server hop for the messages the server passes
- *  through opaquely to the runner (`stop` / `enumerate_sessions` /
- *  `refresh_engine_catalog` — `relay_to_runner/4`), so the server's
- *  version-mismatch warning has a value to compare instead of silently
- *  normalizing an absent one. Single fixed value per ADR-0015. */
-const RUNNER_CONTROL_VERSION = "0";
+/** The protocol version this client speaks (ADR-0015, protocol.md
+ *  「version」節). Mirrors `WRAPPER_PROTOCOL_VERSION` / `RUNNER_PROTOCOL_VERSION`
+ *  in the other parties — same rule, separate constant per party since each
+ *  stamps its own outbound messages independently. Single fixed value.
+ *
+ *  Formerly `RUNNER_CONTROL_VERSION`, scoped to the runner-relay subset
+ *  (`stop` / `enumerate_sessions` / `refresh_engine_catalog`). That name was
+ *  itself part of the gap issue #218 closes: ADR-0015 covers EVERY client ->
+ *  server message and draws no runner-relay exception, but a constant named
+ *  for the subset invited exactly the "this one is not relayed, so it needs
+ *  no version" misreading that became a must-fix twice (#88, #197 段階3). */
+const CLIENT_PROTOCOL_VERSION = "0";
+
+/** ADR-0015 receiver rule for server -> client JSON pushes. */
+export function warnOnServerVersionMismatch(event: string, payload: unknown): void {
+  const version =
+    typeof payload === "object" && payload !== null && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>).version
+      : undefined;
+  if (version === CLIENT_PROTOCOL_VERSION) return;
+  const declared = version === undefined ? "(absent)" : JSON.stringify(version);
+  console.warn(
+    `${event}: server declared protocol version ${declared}; ` +
+      `accepting as ${JSON.stringify(CLIENT_PROTOCOL_VERSION)} (ADR-0015 best-effort accept)`,
+  );
+}
+
+/** Every server -> dashboard event is checked at the binding boundary.
+ * `history_replay_envelope` is an ordinary JSON frame and is therefore
+ * checked too: the server stamps its flat version when it leaves the final
+ * egress funnel (issue #270). */
+export const CLIENT_EVENT_VERSION_POLICY = {
+  snapshot: "checked",
+  history: "checked",
+  hosts: "checked",
+  directory: "checked",
+  history_cleared: "checked",
+  history_reset: "checked",
+  history_replay_complete: "checked",
+  history_replay_envelope: "checked",
+  agent_deleted: "checked",
+  delivery_status: "checked",
+  session_reset_started: "checked",
+  session_reset_completed: "checked",
+  session_reset_failed: "checked",
+  envelope: "checked",
+  spawn_result: "checked",
+  runner_sessions: "checked",
+  catalog_result: "checked",
+} as const satisfies Record<string, "checked">;
+
+export type ClientEventName = keyof typeof CLIENT_EVENT_VERSION_POLICY;
+
+/** The only server-event registration point: all handlers receive the
+ * best-effort version check before their event-specific parser runs. */
+function bindServerEvent<T>(
+  channel: Channel,
+  event: ClientEventName,
+  handler: (payload: T) => void,
+): void {
+  channel.on(event, (payload: unknown) => {
+    if (CLIENT_EVENT_VERSION_POLICY[event] === "checked") {
+      warnOnServerVersionMismatch(event, payload);
+    }
+    handler(payload as T);
+  });
+}
+
+/** The single client -> server JSON send point (issue #218).
+ *
+ *  ADR-0015 requires a flat `version` frame key on every message between the
+ *  three parties. Stamping it HERE rather than at each call site makes an
+ *  omission structurally impossible instead of a per-call-site discipline —
+ *  the same reasoning behind `bindControlEvents` on the runner's receive
+ *  side. `version` is spread LAST so a caller cannot override or drop it.
+ *
+ *  One carve-out: `attach_chunk` is a V2 BINARY frame (a length-prefixed
+ *  header plus raw bytes, not JSON), so it has nowhere to put a `version`
+ *  key without a wire change. It pushes directly and is documented as a
+ *  permanent exception in `docs/specs/protocol.md`. */
+function pushVersioned(
+  channel: Channel,
+  event: string,
+  payload: Record<string, unknown>,
+) {
+  return channel.push(event, { ...payload, version: CLIENT_PROTOCOL_VERSION });
+}
 
 function pushAsync(
   channel: Channel,
@@ -2721,8 +2812,7 @@ function pushAsync(
   payload: Record<string, unknown>,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    channel
-      .push(event, payload)
+    pushVersioned(channel, event, payload)
       .receive("ok", () => resolve())
       .receive("error", (reason: { reason?: string } | undefined) =>
         reject(new Error(reason?.reason ?? "error")),
@@ -2992,7 +3082,7 @@ export function connectKaoiro(
   }
 
   function setupChannelHandlers(c: Channel): void {
-    c.on("snapshot", (payload: { agents?: unknown; tasks?: unknown; deliveries?: unknown }) => {
+    bindServerEvent(c, "snapshot", (payload: { agents?: unknown; tasks?: unknown; deliveries?: unknown }) => {
     const agents: Record<string, Envelope> = {};
     for (const value of Object.values(payload.agents ?? {})) {
       if (isEnvelope(value)) agents[value.agent_id] = value;
@@ -3003,13 +3093,13 @@ export function connectKaoiro(
     handlers.onTaskSnapshot?.(parseTasks(payload.tasks));
     handlers.onDeliverySnapshot?.(parseDeliverySnapshot(payload.deliveries));
   });
-  c.on("delivery_status", (payload: unknown) => {
+  bindServerEvent(c, "delivery_status", (payload: unknown) => {
     if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;
     const raw = payload as Record<string, unknown>;
     if (typeof raw.agent_id !== "string") return;
     handlers.onDeliveryStatus?.(raw.agent_id, parseDeliveryStatus(raw.delivery));
   });
-  c.on("envelope", (payload: unknown) => {
+  bindServerEvent(c, "envelope", (payload: unknown) => {
     if (!isEnvelope(payload)) return;
     // ADR-0039 F9 v2 = 藤 review turn-10 must-fix 1: refresh_models_result
     // is a transient completion envelope, NOT a state. Special-dispatch it
@@ -3069,7 +3159,7 @@ export function connectKaoiro(
       }
     }
   });
-  c.on("history", (payload: unknown) => {
+  bindServerEvent(c, "history", (payload: unknown) => {
     const parsed = parseHistoryPayload(payload);
     handlers.onHistory?.(
       parsed.histories,
@@ -3078,7 +3168,8 @@ export function connectKaoiro(
       parsed.projectionEpoch,
     );
   });
-  c.on(
+  bindServerEvent(
+    c,
     "history_cleared",
     (payload: {
       agent_id?: unknown;
@@ -3105,7 +3196,7 @@ export function connectKaoiro(
       }
     },
   );
-  c.on("history_reset", (payload: unknown) => {
+  bindServerEvent(c, "history_reset", (payload: unknown) => {
     const reset = parseHistoryReset(payload);
     if (reset !== null) {
       handlers.onHistoryReset?.(
@@ -3115,7 +3206,7 @@ export function connectKaoiro(
       );
     }
   });
-  c.on("history_replay_complete", (payload: unknown) => {
+  bindServerEvent(c, "history_replay_complete", (payload: unknown) => {
     const complete = parseHistoryReplayComplete(payload);
     if (complete !== null) {
       handlers.onHistoryReplayComplete?.(
@@ -3124,24 +3215,24 @@ export function connectKaoiro(
       );
     }
   });
-  c.on("history_replay_envelope", (payload: unknown) => {
+  bindServerEvent(c, "history_replay_envelope", (payload: unknown) => {
     const restored = parseHistoryReplayEnvelope(payload);
     if (restored !== null) {
       handlers.onHistoryReplayEnvelope?.(restored.paneAgentId, restored.envelope);
     }
   });
-  c.on("agent_deleted", (payload: { agent_id?: unknown }) => {
+  bindServerEvent(c, "agent_deleted", (payload: { agent_id?: unknown }) => {
     if (typeof payload.agent_id === "string") {
       handlers.onAgentDeleted?.(payload.agent_id);
     }
   });
-  c.on("hosts", (payload: { hosts?: unknown }) => {
+  bindServerEvent(c, "hosts", (payload: { hosts?: unknown }) => {
     handlers.onHosts?.(parseHosts(payload.hosts));
   });
-  c.on("directory", (payload: { entries?: unknown }) => {
+  bindServerEvent(c, "directory", (payload: { entries?: unknown }) => {
     handlers.onDirectory?.(parseDirectory(payload.entries));
   });
-  c.on("spawn_result", (payload: unknown) => {
+  bindServerEvent(c, "spawn_result", (payload: unknown) => {
     const p = payload as Partial<SpawnResult>;
     if (
       typeof p.host_id === "string" &&
@@ -3156,7 +3247,7 @@ export function connectKaoiro(
       });
     }
   });
-  c.on("runner_sessions", (payload: unknown) => {
+  bindServerEvent(c, "runner_sessions", (payload: unknown) => {
     const p = payload as Partial<RunnerSessions>;
     if (typeof p.host_id === "string" && typeof p.cwd === "string") {
       handlers.onSessions?.({
@@ -3169,19 +3260,19 @@ export function connectKaoiro(
   // Session-reset lifecycle broadcasts (ADR-0036 F7, phase-17 17-9).
   // Payload is validated defensively; malformed drops so the UI never
   // fires on an ill-formed event.
-  c.on("session_reset_started", (payload: unknown) => {
+  bindServerEvent(c, "session_reset_started", (payload: unknown) => {
     const parsed = parseSessionResetStarted(payload);
     if (parsed !== null) handlers.onSessionResetStarted?.(parsed);
   });
-  c.on("session_reset_completed", (payload: unknown) => {
+  bindServerEvent(c, "session_reset_completed", (payload: unknown) => {
     const parsed = parseSessionResetCompleted(payload);
     if (parsed !== null) handlers.onSessionResetCompleted?.(parsed);
   });
-  c.on("session_reset_failed", (payload: unknown) => {
+  bindServerEvent(c, "session_reset_failed", (payload: unknown) => {
     const parsed = parseSessionResetFailed(payload);
     if (parsed !== null) handlers.onSessionResetFailed?.(parsed);
   });
-  c.on("catalog_result", (payload: unknown) => {
+  bindServerEvent(c, "catalog_result", (payload: unknown) => {
     const parsed = parseCatalogResult(payload);
     if (parsed === null) return;
     // Route to any pending refreshEngineCatalog() caller first so its
@@ -3613,7 +3704,6 @@ export function connectKaoiro(
       const promise = catalogPending.register(request_id);
       try {
         await pushAsync(channel, "refresh_engine_catalog", {
-          version: RUNNER_CONTROL_VERSION,
           host_id: hostId,
           engine,
           request_id,
@@ -3634,17 +3724,12 @@ export function connectKaoiro(
     },
     setPermissionMode: (agentId, mode) =>
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
-    // ADR-0015: this event never reaches the runner (RUNNER_CONTROL_VERSION
-    // documents only the runner-relay subset), but every client -> server
-    // message needs a stamp regardless — same reasoning getLaunchDefaults
-    // already applies below (issue #197 段階3, ふじ MF-1 レビュー指摘).
     // `display_name` (issue #219 D23): the server's field-extraction
     // helper (`extract_name_field/1`) still accepts the legacy `name` key
     // during the compatibility window, but this client — built alongside
     // the server that introduces the new key — sends the new one.
     renameAgent: (agentId, name) =>
       pushAsync(channel, "rename_agent", {
-        version: "0",
         agent_id: agentId,
         display_name: name,
       }),
@@ -3654,7 +3739,6 @@ export function connectKaoiro(
       pushAsync(channel, "delete_agent", { agent_id: agentId }),
     stop: (agentId) =>
       pushAsync(channel, "stop", {
-        version: RUNNER_CONTROL_VERSION,
         host_id: hostIdFromAgentId(agentId),
         agent_id: agentId,
       }),
@@ -3672,8 +3756,7 @@ export function connectKaoiro(
       }),
     spawn: (request) =>
       new Promise((resolve, reject) => {
-        channel
-          .push("spawn", { ...request })
+        pushVersioned(channel, "spawn", { ...request })
           .receive("ok", (resp: { agent_id?: unknown }) =>
             typeof resp?.agent_id === "string"
               ? resolve({ agentId: resp.agent_id })
@@ -3686,14 +3769,7 @@ export function connectKaoiro(
       }),
     getLaunchDefaults: () =>
       new Promise((resolve, reject) => {
-        // ADR-0015 stamps `version` on ALL three-party messages, not only
-        // the runner-relay subset RUNNER_CONTROL_VERSION documents — this
-        // event never reaches the runner, but it is still a client ->
-        // server message and the ADR draws no such exception (reviewed
-        // 2026-08-05; an earlier revision of this code wrongly scoped the
-        // ADR to the runner-relay set and omitted `version` here).
-        channel
-          .push("launch_defaults", { version: "0" })
+        pushVersioned(channel, "launch_defaults", {})
           .receive("ok", (resp: { defaults?: unknown }) =>
             resolve(parseLaunchDefaults(resp?.defaults)),
           )
@@ -3704,14 +3780,12 @@ export function connectKaoiro(
       }),
     enumerateSessions: (hostId, cwd, engine) =>
       pushAsync(channel, "enumerate_sessions", {
-        version: RUNNER_CONTROL_VERSION,
         host_id: hostId,
         cwd,
         ...(engine === undefined ? {} : { engine }),
       }),
     enumerateAgentSessions: (agentId) =>
       pushAsync(channel, "enumerate_sessions", {
-        version: RUNNER_CONTROL_VERSION,
         host_id: hostIdFromAgentId(agentId),
         agent_id: agentId,
       }),
@@ -3721,6 +3795,13 @@ export function connectKaoiro(
       // Fire-and-forget binary frame: phoenix.js automatically encodes
       // ArrayBuffer payloads as a V2 binary frame. The server's handler
       // returns :noreply so awaiting a reply would only ever time out.
+      //
+      // ADR-0015 carve-out (issue #218): the only client -> server message
+      // that bypasses `pushVersioned`. A binary frame carries a fixed
+      // length-prefixed header plus raw bytes — there is no JSON object to
+      // put a `version` key in, so stamping one would need a wire change
+      // (i.e. a protocol version bump), which #218 rules out of scope.
+      // Recorded as a permanent exception in `docs/specs/protocol.md`.
       channel.push("attach_chunk", data);
     },
     attachClose: (agentId, uploadId) =>
@@ -3745,6 +3826,7 @@ export function connectKaoiro(
         const start = i * ATTACH_CHUNK_SIZE;
         const end = Math.min(start + ATTACH_CHUNK_SIZE, size);
         const chunkBytes = new Uint8Array(buffer.slice(start, end));
+        // Same ADR-0015 binary-frame carve-out as `attachChunk` above.
         channel.push("attach_chunk", buildChunkPayload(upload_id, i, chunkBytes));
         onProgress?.(i + 1, chunks);
       }

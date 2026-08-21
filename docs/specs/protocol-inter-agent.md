@@ -688,10 +688,50 @@ issue #160 (phase-27) はこれをさらに **「peer の稼働状況を見て�
 | `last_activity_at` | ISO8601 (UTC) | server が envelope を最後に受理した時刻 | まだ 1 通も受理していないとき |
 | `conversation` | `{active, peers[]}` | active な IA 会話の有無と相手 | **省略しない**(下記) |
 | `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | 最終 turn 時点の利用上限 snapshot | 未報告、全 window が projection で drop、切断済み |
+| `directory_only` | boolean(`true` 固定、issue #269) | この entry が `AgentStates` に live envelope を持たず、`AgentDirectory`(永続 ledger、[ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md))のみに由来することを示す | live entry(AgentStates 側)では省略。**この field は他と absent の意味が違う** — absent は unknown ではなく「live directory 由来」(下記) |
+| `last_seen` | ISO8601 (UTC)、issue #269 | `AgentDirectory` が最後に envelope を受理した時刻の memory-only hint | server 再起動後 / 未 touch のとき、または live entry(live entry は `last_activity_at` を持つ) |
 
 `session_started_at` / `last_activity_at` は **server 側の時刻** である。
 wrapper が実測した値ではなく、envelope の `ts`(wrapper ホストの時計)
 とも別軸。ホスト跨ぎの時計ズレを判断材料に混ぜないための規約。
+
+##### directory-only entry (issue #269)
+
+`directory_request` の応答 `agents` 配列は、`AgentStates`(in-memory
+live snapshot)から作る live entry に加え、`AgentStates` に envelope を
+持たない `AgentDirectory` エントリを **同じ配列に合流** する。別配列に
+しないのは、persona 名解決 → `send_to_agent` の既存フローを live/
+directory-only の両方で一貫させるため。合流の規則:
+
+- **重複排除**: 同一 `agent_id` が両方に存在する場合は `AgentStates`
+  (live)側を優先し、`directory_only` エントリは作らない
+- **合流後の entry**: `agent_id`、`state: "disconnected"` 固定、
+  `directory_only: true`、`persona`(typed unresolved を含め常に
+  present。下記)、解決できれば `display_name`、`conversation`
+  (`{active, peers[]}`。live entry と同じく常時付与)、取得できれば
+  `last_seen`
+- **省略する field**: `engine` / `model` / `effort` / `context` /
+  `rate_limits` / `session_started_at` / `turns` / `last_activity_at` は
+  `AgentDirectory` に情報が無いため常に省略(absent = unknown の通常
+  規約どおり)
+- **persona の typed unresolved**([#219](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/219)
+  D21 と同じ規則): `persona_id` が `PersonaAssets` に解決すれば
+  canonical `{id, name, sprite_set}`、解決しなければ `{id: persona_id}`
+  のみを返す。**`persona` キー自体は必ず present** — 省略すると
+  wrapper 側の narrow(`persona` を必須 field として扱う)が entry を
+  丸ごと drop してしまう
+- **件数上限**: `AgentDirectory` は operator が明示 delete するまで
+  消えず無制限に増えるため、directory-only 分は `last_seen` 降順
+  (unknown は最後尾、同着は `agent_id` 昇順)で **N=32** に切る。切った
+  件数は agent/request 単位で 1 行 warn する(rate_limits の window
+  drop ログと同じ集約方針)
+- **charset / display_name 検証**: `AgentId.valid?/1` に落ちる
+  `agent_id` は entry ごと drop(この経路が `AgentDirectory` の
+  DETS ロード由来 id を agent へ出す最初の関門になるため)。
+  `display_name` の検証落ちは field のみ省略し、entry は残す(live
+  entry と同じ discipline)
+- **requester 自身の除外**: live/directory-only を合流した後、1 箇所で
+  requester 自身を除外する
 
 ##### `context` の capability gate
 

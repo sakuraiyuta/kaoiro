@@ -3,7 +3,11 @@
 // `spriteUrlFor` resolves a state to a persona sprite from the ADR-0008
 // manifest. Cards prefer the sprite and fall back to the CSS face.
 
-import type { PersonaManifest } from "./protocol";
+import {
+  sessionCapabilitiesFrom,
+  type Envelope,
+  type PersonaManifest,
+} from "./protocol";
 
 /** State set v0 (protocol.md) plus the wrapper-raised `sending` (#32) and
  *  the server-derived `disconnected`. */
@@ -52,6 +56,41 @@ function isKnownState(state: string): state is KnownState {
 /** Unknown states (forward compat) fall back to the idle face. */
 export function expressionFor(state: string): Expression {
   return isKnownState(state) ? EXPRESSIONS[state] : EXPRESSIONS.idle;
+}
+
+/** Context usage at or above which the dashboard renders the fatigue
+ * modifier (issue #172 P4). This is intentionally an independent constant
+ * from the wrapper's notification threshold: both happen to be 60, but they
+ * live in separate hosts and serve separate decisions. */
+const FATIGUE_THRESHOLD_PERCENT = 60;
+
+/** The sole fatigue predicate (issue #172 P1/P2). Keeping the envelope input
+ * and its signal lookup here means a future switch to context_budget changes
+ * this function and its tests only. Unknown capability or malformed context
+ * fails closed: do not infer fatigue from an unsupported session. */
+export function isFatigued(envelope: Envelope): boolean {
+  if (sessionCapabilitiesFrom(envelope)?.supports_context_usage !== true) {
+    return false;
+  }
+  const context = envelope.ext?.context as Record<string, unknown> | undefined;
+  const percentage = context?.used_percentage;
+  if (typeof percentage !== "number" || !Number.isFinite(percentage)) {
+    return false;
+  }
+  return percentage >= FATIGUE_THRESHOLD_PERCENT;
+}
+
+// `disconnected` is deliberately absent: this allowlist is the one and only
+// priority mechanism. The former early return duplicated that property and
+// was removed by こはく裁定 after its deletion mutation remained green.
+const FATIGUE_ELIGIBLE_STATES = new Set<string>(["idle", "waiting_input"]);
+
+/** Resolve the sprite state without adding fatigue to the protocol state
+ * vocabulary. `disconnected` remains visibly offline because it is not in
+ * the fatigue allowlist. */
+export function spriteStateFor(state: string, fatigued: boolean): string {
+  if (fatigued && FATIGUE_ELIGIBLE_STATES.has(state)) return "fatigued";
+  return state;
 }
 
 /**

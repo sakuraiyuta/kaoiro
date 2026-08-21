@@ -86,6 +86,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # from costing an unbounded scan.
   @max_replay_ia_items 200
 
+  # ADR-0015 stage 2: every wrapper -> server event is classified here
+  # before its individual handler runs. A new handler cannot opt out of the
+  # receiver rule by simply omitting a local warning call.
+  @wrapper_event_policy %{
+    "delivery_ack" => :versioned,
+    "delivery_status_request" => :versioned,
+    "directory_request" => :versioned,
+    "history_reset" => :versioned,
+    "history_replay_complete" => :versioned,
+    "replay_ia" => :versioned,
+    "session_reset_request" => :versioned,
+    "envelope" => :envelope_frame
+  }
+
+  def wrapper_event_policy, do: @wrapper_event_policy
+
   @impl true
   def join("wrapper:" <> agent_id, params, socket) do
     transition_id =
@@ -209,7 +225,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       case PersonaAssets.prompt(socket.assigns.persona_id) do
         prompt when is_binary(prompt) ->
-          push(socket, "persona_prompt", %{prompt: prompt})
+          # ADR-0015 (issue #218): flat `version` frame key, like the
+          # `persona_sync` / `display_name_sync` pushes below.
+          push(socket, "persona_prompt", %{version: "0", prompt: prompt})
 
         nil ->
           # The join gate accepted this persona_id, but the pack has since
@@ -221,7 +239,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       case KaoiroServer.PermissionModes.get(socket.assigns.agent_id) do
         mode when is_binary(mode) ->
-          push(socket, "set_permission_mode", %{mode: mode})
+          # ADR-0015 (issue #218): flat `version` frame key. The live relay
+          # of this same event (`agents_channel.ex`'s `relay/5`) stamps it
+          # server-side too, so the wrapper sees the same shape from both
+          # producers.
+          push(socket, "set_permission_mode", %{version: "0", mode: mode})
 
         _ ->
           :ok
@@ -364,8 +386,19 @@ defmodule KaoiroServerWeb.WrapperChannel do
     if AgentId.valid?(agent_id), do: :ok, else: {:error, :invalid_agent_id}
   end
 
+  # ADR-0015 stage 2's only inbound funnel (issue #270 MF-2).
   @impl true
-  def handle_in("envelope", envelope, socket) do
+  def handle_in(event, payload, socket) do
+    case Map.get(@wrapper_event_policy, event, :unknown) do
+      :versioned -> warn_on_wrapper_version_mismatch(payload, event)
+      :envelope_frame -> warn_on_envelope_version_mismatch(payload, event)
+      :unknown -> :ok
+    end
+
+    handle_wrapper_in(event, payload, socket)
+  end
+
+  defp handle_wrapper_in("envelope", envelope, socket) do
     agent_id = socket.assigns.agent_id
 
     with :ok <- validate(envelope, agent_id),
@@ -413,17 +446,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # minimum was deliberately widened by #102: engine / model / effort are
   # peer-visible execution traits for delegation. Other operator-grade ext
   # (cwd / permission / session / context / capabilities / source) stays out.
-  @impl true
-  def handle_in("directory_request", _payload, socket) do
+  #
+  # issue #269: also merges AgentDirectory (DETS-persisted, ADR-0030)
+  # entries that have no live AgentStates envelope — the "落ちた peer"
+  # case a server restart or AgentStates cleanup (issue #14) leaves behind.
+  # Merged in-line (not a separate array) so persona-name resolution stays
+  # one flow for send_to_agent. AgentStates wins on a duplicate agent_id
+  # (S9); requester self-exclusion applies once, after the merge.
+  defp handle_wrapper_in("directory_request", _payload, socket) do
     self_id = socket.assigns.agent_id
     activities = AgentActivity.snapshot()
     peer_index = ConversationStates.peer_index()
     deliveries = DeliveryStates.all()
+    states = AgentStates.snapshot()
 
-    agents =
-      AgentStates.snapshot()
-      |> Enum.reject(fn {id, _} -> id == self_id end)
-      |> Enum.map(fn {id, env} ->
+    live =
+      Enum.map(states, fn {id, env} ->
         directory_entry(
           id,
           env,
@@ -433,11 +471,33 @@ defmodule KaoiroServerWeb.WrapperChannel do
         )
       end)
 
+    # issue #269 仕様5: AgentStates 側を優先。同一 agent_id を重複させない。
+    directory_only =
+      AgentDirectory.all()
+      |> Map.drop(Map.keys(states))
+      |> Enum.map(fn {id, entry} ->
+        directory_only_entry(id, entry, Map.get(peer_index, id, []))
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    # issue #269 仕様5 / S9: requester 除外は合流後にここ 1 箇所だけ
+    # (live / directory_only の両方をこの 1 箇所でカバーする)。
+    #
+    # ふじ MF-1: この除外を N=32 の cap より前に置く。requester 自身が
+    # AgentDirectory にのみ存在する窓 (AgentStates 未登録、例えば spawn
+    # 直後に自分の初回 envelope をまだ送っていない状態) では、cap を
+    # 先にかけると self が枠を 1 つ消費してから落ち、真の eligible peer
+    # 数より少なく返る事故になる (33 件 eligible のとき 31 件しか返らない
+    # など)。self reject → directory_only 印付きのみを 32 件で cap、の
+    # 順にすることでこれを閉じる。
+    merged = Enum.reject(live ++ directory_only, &(&1["agent_id"] == self_id))
+    {directory_only_kept, live_kept} = Enum.split_with(merged, &(&1["directory_only"] == true))
+    agents = live_kept ++ bound_directory_only(directory_only_kept, self_id)
+
     {:reply, {:ok, %{"agents" => agents, "users" => users_projection()}}, socket}
   end
 
-  @impl true
-  def handle_in("delivery_status_request", _payload, socket) do
+  defp handle_wrapper_in("delivery_status_request", _payload, socket) do
     reply =
       %{}
       |> maybe_put_optional_field("delivery", DeliveryStates.get(socket.assigns.agent_id))
@@ -445,15 +505,16 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {:reply, {:ok, reply}, socket}
   end
 
-  @impl true
-  def handle_in("delivery_ack", %{"delivery_seq" => seq}, socket)
-      when is_integer(seq) and seq > 0 do
+  defp handle_wrapper_in("delivery_ack", %{"delivery_seq" => seq}, socket)
+       when is_integer(seq) and seq > 0 do
     status = DeliveryStates.ack(socket.assigns.agent_id, seq)
     broadcast_delivery_status(socket.assigns.agent_id)
     {:reply, {:ok, %{"delivery" => status}}, socket}
   end
 
-  def handle_in("delivery_ack", _payload, socket), do: {:reply, :ok, socket}
+  defp handle_wrapper_in("delivery_ack", _payload, socket) do
+    {:reply, :ok, socket}
+  end
 
   # Resume history reconstruction (ADR-0014 phase-2, issue #50): the wrapper
   # is about to replay its JSONL-derived transcript as `log` envelopes, so it
@@ -465,8 +526,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # `history_replay_complete`, the deterministic boundary after the final
   # reconstructed JSONL row. `:noop` (no state entry yet) is still acked —
   # the wrapper did nothing wrong.
-  @impl true
-  def handle_in("history_reset", payload, socket) do
+  defp handle_wrapper_in("history_reset", payload, socket) do
     agent_id = socket.assigns.agent_id
     replay_id = if is_map(payload), do: Map.get(payload, "replay_id"), else: nil
 
@@ -503,9 +563,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Explicitly closes a reset/replay window. Reconstructed log envelopes use
   # the ordinary `envelope` route, so this marker is the only deterministic
   # distinction available to a dashboard before the next live assistant line.
-  @impl true
-  def handle_in("history_replay_complete", %{"replay_id" => replay_id}, socket)
-      when is_binary(replay_id) and replay_id != "" do
+  defp handle_wrapper_in("history_replay_complete", %{"replay_id" => replay_id}, socket)
+       when is_binary(replay_id) and replay_id != "" do
     agent_id = socket.assigns.agent_id
 
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_complete", %{
@@ -524,7 +583,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {:reply, :ok, socket}
   end
 
-  def handle_in("history_replay_complete", _payload, socket), do: {:reply, :ok, socket}
+  defp handle_wrapper_in("history_replay_complete", _payload, socket) do
+    {:reply, :ok, socket}
+  end
 
   # Display-replay-only IA ingress (ADR-0051 D3-3). Deliberately NOT the
   # ordinary `envelope` route: that one runs `route_inter_agent`, which
@@ -535,9 +596,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
   #
   # The pane is bound to the channel topic, so a wrapper can only ever
   # restore its own pane — the payload cannot name another agent's.
-  @impl true
-  def handle_in("replay_ia", %{"replay_id" => replay_id, "items" => items}, socket)
-      when is_binary(replay_id) and replay_id != "" and is_list(items) do
+  defp handle_wrapper_in(
+         "replay_ia",
+         %{"replay_id" => replay_id, "items" => items},
+         socket
+       )
+       when is_binary(replay_id) and replay_id != "" and is_list(items) do
     agent_id = socket.assigns.agent_id
 
     if AgentStates.hydration_in_flight?(agent_id, replay_id, self()) do
@@ -559,7 +623,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  def handle_in("replay_ia", _payload, socket) do
+  defp handle_wrapper_in("replay_ia", _payload, socket) do
     {:reply, {:error, %{reason: "invalid value: replay_ia"}}, socket}
   end
 
@@ -567,8 +631,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # after its MCP tool has been broker-approved and after the wrapper has
   # reached its turn boundary. The request does not re-parse model text and
   # joins the exact SessionResets gate used by operator `session_reset`.
-  @impl true
-  def handle_in("session_reset_request", payload, socket) do
+  defp handle_wrapper_in("session_reset_request", payload, socket) do
     agent_id = socket.assigns.agent_id
 
     with {:ok, mode} <- fetch_reset_mode(payload),
@@ -905,7 +968,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
         )
 
       status ->
-        KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "delivery_status", status)
+        # ADR-0015 (issue #218): flat `version` frame key on the
+        # wrapper-bound copy, same as `SynthEnvelope.deliver/2`'s.
+        KaoiroServerWeb.Endpoint.broadcast(
+          "wrapper:#{agent_id}",
+          "delivery_status",
+          Map.put(status, :version, "0")
+        )
 
         KaoiroServerWeb.Endpoint.broadcast(
           "agents:lobby",
@@ -1035,6 +1104,107 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp is_finite_number(_), do: false
+
+  # directory-only entry (issue #269)。AgentStates に envelope を持たない
+  # AgentDirectory エントリの射影。identity + last_seen + conversation だけを
+  # 出し、engine / model / effort / context / rate_limits / session 系は
+  # 載せない — 値が存在しないのであって「0」でも「健全」でもない
+  # (absent = unknown の既存規約)。
+  #
+  # agent_id は AgentId.valid?/1 を通す (issue #269 S7): AgentDirectory の
+  # DETS ロードは is_binary しか見ておらず、この経路が DETS 由来の id を
+  # agent へ出す最初の経路になるため、user_entry/1 と同じ discipline を
+  # ここで適用する。落ちたエントリは丸ごと drop。
+  defp directory_only_entry(id, %{persona_id: persona_id} = entry, peers)
+       when is_binary(id) do
+    if AgentId.valid?(id) do
+      display_name =
+        case valid_display_name(Map.get(entry, :display_name)) do
+          {:ok, trimmed} -> trimmed
+          :error -> nil
+        end
+
+      %{
+        "agent_id" => id,
+        "persona" => directory_persona(persona_id),
+        "state" => "disconnected",
+        "directory_only" => true
+      }
+      |> maybe_put_directory_field("display_name", display_name)
+      |> Map.put("conversation", %{"active" => peers != [], "peers" => peers})
+      |> maybe_put_last_seen(Map.get(entry, :last_seen))
+    else
+      nil
+    end
+  end
+
+  defp directory_only_entry(_id, _entry, _peers), do: nil
+
+  # persona の typed unresolved (issue #219 D21)。
+  # agents_channel.ex の join_directory_entry/1 と同じ規則 —
+  # pack が解決すれば canonical、しなければ %{"id" => persona_id} を返し、
+  # persona キー自体は必ず present にする (issue #269 S1)。
+  # Map.take は F6-2 の nested allow-list 規律 (canonical map を素通しにしない)。
+  defp directory_persona(persona_id) when is_binary(persona_id) do
+    case PersonaAssets.get_persona(persona_id) do
+      nil -> %{"id" => persona_id}
+      canonical -> Map.take(canonical, ["id", "name", "sprite_set"])
+    end
+  end
+
+  defp directory_persona(_persona_id), do: %{}
+
+  # last_seen は memory-only hint (AgentDirectory 由来の unix 秒)。ISO8601
+  # UTC に変換して既存の directory 時刻 field (session_started_at /
+  # last_activity_at) と表現を揃える (issue #269 S5)。nil (server 再起動後
+  # / 未 touch) や domain 外の値は field ごと省略する。
+  defp maybe_put_last_seen(entry, ts)
+       when is_integer(ts) and ts >= 0 and ts <= @max_safe_integer do
+    case DateTime.from_unix(ts) do
+      {:ok, dt} -> Map.put(entry, "last_seen", DateTime.to_iso8601(dt))
+      {:error, _} -> entry
+    end
+  end
+
+  defp maybe_put_last_seen(entry, _ts), do: entry
+
+  # directory-only 分の件数上限 (issue #269 S6)。AgentDirectory は operator
+  # が明示 delete するまで消えず、agent_id は spawn ごとに新規採番される
+  # ため無制限に増える。過去の全 agent が毎回 model の context を食う構造を
+  # 避けるため N=32 に切り、last_seen 降順 (unknown は最後尾、同着は
+  # agent_id 昇順) で残す。切った件数は agent/request 単位で 1 行 warn
+  # (既存の rate_limits drop 集約と同じ方針)。
+  @directory_only_limit 32
+
+  defp bound_directory_only(entries, agent_id) do
+    sorted =
+      Enum.sort_by(entries, fn e ->
+        {-last_seen_sort_key(e), e["agent_id"]}
+      end)
+
+    {kept, dropped} = Enum.split(sorted, @directory_only_limit)
+
+    if dropped != [] do
+      Logger.warning(
+        "directory-only projection capped at #{@directory_only_limit}; " <>
+          "dropped #{length(dropped)} entr(ies) for #{agent_id}"
+      )
+    end
+
+    kept
+  end
+
+  # sort key for bound_directory_only/2: unix seconds when `last_seen` is
+  # present (larger = more recent), or -1 when absent so unknown entries
+  # always sort after every known one (last_seen is always >= 0).
+  defp last_seen_sort_key(%{"last_seen" => iso}) when is_binary(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, dt, _offset} -> DateTime.to_unix(dt)
+      {:error, _} -> -1
+    end
+  end
+
+  defp last_seen_sort_key(_entry), do: -1
 
   defp put_activity_fields(entry, id, envelope, activity) do
     entry =
@@ -1725,6 +1895,41 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     true
   end
+
+  # ADR-0015 stage 2 receiver rule for wrapper -> server control messages.
+  # A wrapper already authenticated for this topic may be an older build, so
+  # absence and mismatch warn but never block its existing control flow.
+  defp warn_on_wrapper_version_mismatch(%{"version" => "0"}, _event), do: :ok
+
+  defp warn_on_wrapper_version_mismatch(%{"version" => version}, event) do
+    Logger.warning(
+      "#{event}: wrapper declared protocol version " <>
+        inspect(version, printable_limit: 64, limit: 8) <>
+        "; accepting as \"0\" (ADR-0015 best-effort accept)"
+    )
+  end
+
+  defp warn_on_wrapper_version_mismatch(_payload, event) do
+    Logger.warning(
+      "#{event}: wrapper declared protocol version (absent); " <>
+        "accepting as \"0\" (ADR-0015 best-effort accept)"
+    )
+  end
+
+  # Envelope validation rejects a missing frame key before the payload can be
+  # accepted. This only reports a present-but-skewed value, so malformed
+  # envelopes do not produce a second, misleading best-effort warning.
+  defp warn_on_envelope_version_mismatch(%{"version" => "0"}, _event), do: :ok
+
+  defp warn_on_envelope_version_mismatch(%{"version" => version}, event) do
+    Logger.warning(
+      "#{event}: wrapper declared protocol version " <>
+        inspect(version, printable_limit: 64, limit: 8) <>
+        "; accepting as \"0\" (ADR-0015 best-effort accept)"
+    )
+  end
+
+  defp warn_on_envelope_version_mismatch(_payload, _event), do: :ok
 
   defp push_to_wrapper(to, envelope) do
     KaoiroServerWeb.Endpoint.broadcast("wrapper:#{to}", "envelope", envelope)

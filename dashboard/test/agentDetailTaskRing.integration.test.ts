@@ -110,7 +110,7 @@ describe("AgentDetail 頭上リング (issue #180 follow-up)", () => {
 
   it("sprite 有りは sprite 比率の cqw を AgentCard 絶対値でキャップする", async () => {
     const target = await render(1, manifestWithSprite);
-    expect(target.querySelector("img.sprite")).not.toBeNull();
+    expect(target.querySelector("img.portrait-sprite")).not.toBeNull();
     const ring = target.querySelector(".task-ring") as HTMLElement | null;
     expect(ring).not.toBeNull();
     expect(ring?.classList.contains("face-orbit")).toBe(false);

@@ -1,4 +1,11 @@
-import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
+import {
+  closeSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -8,6 +15,102 @@ const rolloutPathCache = new Map<string, string>();
 
 export function codexRolloutsRoot(): string {
   return join(homedir(), ".codex", "sessions");
+}
+
+/** Substrings a resume failure's free-form error detail carries when the
+ *  underlying rollout JSONL is corrupted mid-write (issue #263 — ENOSPC or
+ *  a host crash truncated a line while codex was appending to it; resume
+ *  re-reads the whole file and fails every time thereafter).
+ *
+ *  - `did not contain valid utf-?8` is MEASURED (issue #255 comment 3338,
+ *    2026-08-17 incident: "stream did not contain valid UTF-8 (code
+ *    -32603)", captured directly from a `run_streamed_rejected` detail).
+ *  - `EOF while parsing` is UNVERIFIED — it is Rust `serde_json`'s
+ *    documented wording for input that ends before a JSON value closes
+ *    (`EOF while parsing a string` / `an object` / `a value`), and
+ *    codex-rs's rollout reader is Rust, but no real truncated-JSON trace
+ *    has confirmed this exact string in this environment. Callers must
+ *    still fall back to ordinary handling on a non-match — this list is a
+ *    moving target across codex-sdk versions, not a closed contract. */
+const ROLLOUT_CORRUPTION_PATTERNS = [
+  /did not contain valid utf-?8/i,
+  /eof while parsing/i,
+] as const;
+
+/** True when a resume/run failure's error detail matches a known rollout-
+ *  corruption CANDIDATE pattern (issue #263). This is a hint, not a
+ *  verdict — see `verifyRolloutCorruption`'s own doc for why a text match
+ *  alone must never drive the permanent classification (ふじ MF-1: the
+ *  codex-sdk 0.144.1 stderr this matches against is generic free-form text
+ *  several unrelated dependencies can also emit). A `false` here means
+ *  "not recognized as a candidate" — it does NOT mean the rollout is fine;
+ *  callers must treat it as "fall back to the ordinary failure path",
+ *  never as an all-clear. */
+export function isRolloutCorruptionDetail(detail: string): boolean {
+  return ROLLOUT_CORRUPTION_PATTERNS.some((pattern) => pattern.test(detail));
+}
+
+/** Verdict from actually inspecting a session's rollout file (issue #263,
+ *  ふじ MF-1). `"unknown"` means "cannot confirm either way" — callers MUST
+ *  treat it the same as `"clean"` for classification purposes (fall back
+ *  to the ordinary, non-permanent failure path), never as `"corrupted"`. */
+export type RolloutCorruptionVerdict = "corrupted" | "clean" | "unknown";
+
+/** The actual verdict a resume-failure candidate (`isRolloutCorruptionDetail`)
+ *  must be confirmed against before a session is ever classified as
+ *  permanently corrupted. A stderr keyword match alone is not enough: the
+ *  matched wording is generic free-form text (ふじ's review measured
+ *  `@openai/codex-sdk` 0.144.1's `runStreamed` stderr directly — neither
+ *  "stream did not contain valid UTF-8" nor "EOF while parsing" is unique
+ *  to the rollout reader), so acting on text alone would permanently stop
+ *  resuming a session that failed for an unrelated, self-recoverable
+ *  reason (network blip, a dependency's own transient UTF-8 hiccup, …).
+ *
+ *  Reads the WHOLE file (unlike `tailRollout`'s bounded tail read — a
+ *  corrupted line anywhere in the file, not just near the end, is grounds
+ *  for the classification) and checks two things per non-empty line: it
+ *  must fatally UTF-8-decode, and it must `JSON.parse`. Either failure on
+ *  ANY line is enough to confirm real corruption.
+ *
+ *  `"unknown"` (session id has no resolvable rollout, or the file could
+ *  not be opened/read) is deliberately its own outcome, distinct from
+ *  `"clean"` — an unreadable file proves nothing about whether it is
+ *  corrupted, so the caller must fall back to the ordinary failure path
+ *  exactly as it would for `"clean"`, never escalate an I/O failure into a
+ *  false-positive permanent classification.
+ *
+ *  Synchronous, like every other reader in this module — this check only
+ *  ever runs on the rare resume-failure-with-candidate-wording path, not
+ *  on the hot per-turn path, so the one-time full-file read cost is
+ *  accepted rather than adding a second (async) I/O style to this file. */
+export function verifyRolloutCorruption(
+  sessionId: string,
+  root = codexRolloutsRoot(),
+): RolloutCorruptionVerdict {
+  const path = rolloutPathIn(root, sessionId);
+  if (path === null) return "unknown";
+  let raw: Buffer;
+  try {
+    raw = readFileSync(path);
+  } catch {
+    return "unknown";
+  }
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let text: string;
+  try {
+    text = decoder.decode(raw);
+  } catch {
+    return "corrupted";
+  }
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      JSON.parse(line);
+    } catch {
+      return "corrupted";
+    }
+  }
+  return "clean";
 }
 
 /** Finds one rollout by its validated opaque thread id. Shared by the tail

@@ -53,8 +53,26 @@ import {
   shouldInterceptAsSessionReset,
   transcriptEntryKey,
   userInputDialogAvailability,
+  warnOnServerVersionMismatch,
 } from "../src/lib/protocol";
 import type { Envelope, SessionCapabilities, TaskTable } from "../src/lib/protocol";
+
+describe("ADR-0015 stage 2 server -> client version check", () => {
+  it("欠落・不一致は warn し、一致は無警告で後続処理を妨げない", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const continueAfterCheck = (payload: unknown) => {
+      warnOnServerVersionMismatch("snapshot", payload);
+      return "continued";
+    };
+    expect(continueAfterCheck({})).toBe("continued");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(continueAfterCheck({ version: "9" })).toBe("continued");
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(continueAfterCheck({ version: "0" })).toBe("continued");
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+});
 
 describe("parseDeliveryStatus (issue #247)", () => {
   it("confirmed watermark と pending gap だけを受理する", () => {
@@ -2813,6 +2831,12 @@ describe("errorSubtypeLabel (issue #127)", () => {
     expect(errorSubtypeLabel("error_max_budget_usd")).toBe("予算上限到達");
     expect(errorSubtypeLabel("error_max_structured_output_retries")).toBe(
       "構造化出力リトライ上限",
+    );
+  });
+
+  it("Codex アダプタ独自の rollout 破損 subtype を日本語ラベルに変換 (issue #263)", () => {
+    expect(errorSubtypeLabel("error_rollout_corrupted")).toBe(
+      "セッション破損 (再開不可)",
     );
   });
 

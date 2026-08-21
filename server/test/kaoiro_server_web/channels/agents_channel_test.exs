@@ -5503,4 +5503,397 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       GenServer.stop(name)
     end
   end
+
+  # ADR-0015 の受信側規則を server -> wrapper 経路で pin する (issue #218)。
+  #
+  # runner 経路 (relay_to_runner/4) は #182 で閉じていたが、wrapper 経路は
+  # 「client が付けていないので届かない」状態のまま残っていた。#218 で
+  # relay/5 が version を stamp するようになり、受信側の warn は
+  # require_operator/4 に溶接された。ここで pin するのはその 2 点。
+  describe "server -> wrapper の version stamp と受信側検査 (issue #218, ADR-0015)" do
+    # relay/5 経路の代表として set_model を使う。instruction / interrupt /
+    # permission_decision / question_response / set_effort / refresh_models /
+    # set_permission_mode は同じ relay/5 を通るので helper 単位で 1 本。
+    test "client が version を送らなくても wrapper には v0 が届き、欠落は警告される" do
+      agent_id = "test.v218-absent"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      log =
+        capture_log(fn ->
+          ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "opus"})
+          assert_reply ref, :ok
+        end)
+
+      assert log =~ "set_model: client declared protocol version (absent)"
+      assert_broadcast "set_model", payload
+      assert payload["version"] == "0"
+      assert payload["model"] == "opus"
+    end
+
+    test "version 不一致は警告した上で v0 へ normalize して relay する" do
+      agent_id = "test.v218-mismatch"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "set_model", %{
+              "agent_id" => agent_id,
+              "model" => "opus",
+              "version" => "99"
+            })
+
+          assert_reply ref, :ok
+        end)
+
+      assert log =~ "client declared protocol version"
+      assert log =~ "\"99\""
+      # ベストエフォート受理: 不一致でも relay は止まらない。
+      assert_broadcast "set_model", payload
+      assert payload["version"] == "0"
+    end
+
+    # 一致が無音であることを pin しないと、「常時 warn する」実装でも上の
+    # 2 件は通ってしまう。
+    test "version が \"0\" なら警告しない" do
+      agent_id = "test.v218-match"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "set_model", %{
+              "agent_id" => agent_id,
+              "model" => "opus",
+              "version" => "0"
+            })
+
+          assert_reply ref, :ok
+        end)
+
+      refute log =~ "client declared protocol version"
+      assert_broadcast "set_model", payload
+      assert payload["version"] == "0"
+    end
+
+    # relay されない (server が直接応答する) event でも同じ検査が走ること。
+    # #88 / #197 段階3 で二度 must-fix になった誤読 —「runner に中継され
+    # ないから version 不要」— が再発しない側の pin。
+    test "relay されない event (clear_history) でも version を検査する" do
+      agent_id = "test.v218-direct"
+      put_agent(agent_id)
+      socket = join_as(:operator)
+
+      log =
+        capture_log(fn ->
+          ref = push(socket, "clear_history", %{"agent_id" => agent_id, "version" => "99"})
+          # 検査は受理可否に影響しない (この agent には current session が
+          # 無いので no_current_session で返る) — warn されることが主題。
+          assert_reply ref, :error, _
+        end)
+
+      assert log =~ "clear_history: client declared protocol version"
+      assert log =~ "\"99\""
+    end
+
+    # 検査を role gate の AFTER に置いている理由の pin。viewer が version を
+    # 詐称して warn ログを焚けると、認証前のログ書き込み手段になる。
+    test "viewer の不正 version は warn を出さない (role gate が先)" do
+      agent_id = "test.v218-viewer"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "set_model", %{
+              "agent_id" => agent_id,
+              "model" => "opus",
+              "version" => "99"
+            })
+
+          assert_reply ref, :error, %{reason: "forbidden"}
+        end)
+
+      refute log =~ "client declared protocol version"
+    end
+
+    # サイズ上限は stamp 後の map に掛かること (こはく D2 の付帯要請)。
+    # stamp 前の map を測っていると、上限ぴったりの payload が stamp 分だけ
+    # 超過したまま wrapper へ届く。
+    test "relay サイズ上限は version stamp 込みで判定される (境界)" do
+      agent_id = "test.v218-size"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      # AgentsChannel の @max_relay_bytes と同値。
+      max_bytes = 131_072
+
+      probe = fn len ->
+        :erlang.external_size(%{"model" => "m", "blob" => :binary.copy("a", len)})
+      end
+
+      # external_size はバイナリ長に対して傾き 1 なので 1 回の補正で一致する。
+      exact_len = 130_000 + (max_bytes - probe.(130_000))
+
+      # 前提そのものを assert する: 以下の判定は「stamp 前がちょうど上限」に
+      # 依存しており、ここがズレるとテストが測る対象も変わる。
+      assert probe.(exact_len) == max_bytes
+
+      ref =
+        push(socket, "set_model", %{
+          "agent_id" => agent_id,
+          "model" => "m",
+          "blob" => :binary.copy("a", exact_len)
+        })
+
+      assert_reply ref, :error, %{reason: "payload_too_large"}
+      refute_broadcast "set_model", %{}
+    end
+  end
+
+  # ふじ #218 レビュー MF-1: scalar payload での crash regression。
+  #
+  # 親 74a545c では `Map.delete/2` が全 shape check の後に走っていたが、
+  # #218 で normalize を `with` の手前へ hoist した結果、raw websocket から
+  # の非 map payload が role 解決前に BadMapError で落ちるようになった。
+  # relay/5 経路も同じ helper を通るので、attach_* だけの問題ではない。
+  describe "非 map payload の防御 (issue #218 ふじ MF-1)" do
+    @non_map_events ["attach_open", "attach_close", "instruction", "set_model"]
+
+    test "operator の scalar payload は crash せず missing_agent_id を返す" do
+      socket = join_as(:operator)
+
+      for event <- @non_map_events do
+        ref = push(socket, event, "not-a-map")
+        assert_reply ref, :error, %{reason: reason}, 1000
+        assert reason == "missing_agent_id", "#{event}: got #{inspect(reason)}"
+      end
+    end
+
+    # shape gate は role 解決より前に走るので、viewer にも `forbidden` では
+    # なく shape 判定が返る。これは意図した優先順位で、role を gate 内で
+    # 解決すると #158 が閉じた「1 メッセージ 1 回だけ解決する」性質が壊れる
+    # (2 回目の解決の間に role 変更が挟まると disconnect broadcast が二重に
+    # 出る)。malformed payload への shape 判定は viewer 自身の入力について
+    # の verdict でしかなく、サーバ側の状態を一切開示しない。
+    test "viewer の scalar payload も crash せず fail-closed に返る" do
+      socket = join_as(:viewer)
+
+      for event <- @non_map_events do
+        ref = push(socket, event, "not-a-map")
+        assert_reply ref, :error, %{reason: "missing_agent_id"}, 1000
+      end
+    end
+
+    # 上の優先順位が「role gate が死んだ」ことを意味しないことの pin。
+    # well-formed payload では従来どおり viewer は forbidden で弾かれる。
+    test "well-formed payload では viewer は従来どおり forbidden" do
+      agent_id = "test.mf1-role"
+      put_agent(agent_id)
+      socket = join_as(:viewer)
+
+      ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "opus"})
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    # list / 数値も map ではない。binary だけを弾く実装に縮退していないこと。
+    test "list / 数値 payload も同様に扱う" do
+      socket = join_as(:operator)
+
+      for payload <- [["a"], 42, nil] do
+        ref = push(socket, "attach_open", payload)
+        assert_reply ref, :error, %{reason: "missing_agent_id"}, 1000
+      end
+    end
+  end
+
+  # ふじ #218 レビュー MF-3: 「全 inbound handler が version 検査付き gate を
+  # 通る」という protocol.md の主張が構造として pin されていなかった。
+  # `delete_agent` の `require_operator/4` を `require_operator_role/1` へ
+  # 差し替えても全 1147 件が green のままだった (実測)。
+  #
+  # 対象一覧をテスト側に手書きすると一覧外の追加を拾えないので、**モジュール
+  # 自身の AST から event 名を列挙**する。新しい `handle_in` 節を足せば、その
+  # event は自動でこの検査の対象に入る。
+  #
+  # 検査は構文ではなく**挙動**で行う: operator として不正 version を push し、
+  # gate の warn が出ることを確かめる。role gate だけ残して version 検査を
+  # 外す (= ふじの mutation) と warn が消えるので red になる。
+  describe "inbound gate の網羅性 (issue #218 ふじ MF-3)" do
+    @channel_source "lib/kaoiro_server_web/channels/agents_channel.ex"
+
+    # ADR-0015 の恒久 carve-out。binary frame は version キーを置く JSON
+    # オブジェクトを持たないため、この event だけ gate を通さない
+    # (protocol.md 「version 棚卸し」)。ここに足さない限り、検査を外した
+    # event は下のテストで落ちる。
+    @version_gate_exempt ["attach_chunk"]
+
+    # `def handle_in(...)` の第 1 引数がリテラル文字列の節だけを拾う。
+    # 非 map payload の shape gate は `handle_in(event, payload, socket)` と
+    # 変数で受けるので、ここでは自然に除外される。
+    defp inbound_events do
+      @channel_source
+      |> File.read!()
+      |> Code.string_to_quoted!()
+      |> Macro.prewalk([], fn
+        {:def, _, [{:when, _, [{:handle_in, _, [event | _]}, _guard]} | _]} = node, acc ->
+          {node, [event | acc]}
+
+        {:def, _, [{:handle_in, _, [event | _]} | _]} = node, acc ->
+          {node, [event | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+      |> elem(1)
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+    end
+
+    test "AST 列挙が実際に機能している (vacuous green の防止)" do
+      events = inbound_events()
+
+      # 列挙が壊れて空/極小になったら、下の網羅テストは無条件 green になる。
+      assert length(events) >= 20, "列挙できた event は #{length(events)} 件"
+      # 既知の代表を含むこと。パーサ節の取りこぼしはここで出る。
+      for known <- ~w(instruction spawn delete_agent rename_user attach_chunk) do
+        assert known in events, "#{known} が AST 列挙から漏れている"
+      end
+    end
+
+    test "carve-out は attach_chunk ただ 1 件であること" do
+      assert @version_gate_exempt == ["attach_chunk"]
+    end
+
+    test "carve-out 以外の全 inbound event が version 検査付き gate を通る" do
+      socket = join_as(:operator)
+
+      for event <- inbound_events(), event not in @version_gate_exempt do
+        log =
+          capture_log(fn ->
+            # 存在しない agent_id を使うので、gate 通過後の検証は必ず失敗して
+            # 終わる = 副作用ゼロ。見たいのは gate を通ったかどうかだけ。
+            push(socket, event, %{
+              "agent_id" => "test.gate-probe-absent",
+              "version" => "99"
+            })
+
+            # push は非同期なので、channel プロセスが処理し終えるまで同期する。
+            _ = :sys.get_state(socket.channel_pid)
+          end)
+
+        assert log =~ "#{event}: client declared protocol version",
+               "#{event} が version 検査付き gate を通っていない " <>
+                 "(require_operator/4 を迂回している可能性)"
+      end
+    end
+  end
+
+  describe "ADR-0015 stage 2 server -> client egress funnel (issue #270)" do
+    test "T4-1: join-time の4種は version を stamp する" do
+      _socket = join_as(:operator)
+
+      for event <- ~w(snapshot history hosts directory) do
+        assert_push ^event, %{"version" => "0"}
+      end
+    end
+
+    test "T4-2: 個別 handle_out 4種は version を stamp する" do
+      _socket = join_as(:operator)
+
+      for {event, payload} <- [
+            {"history_cleared", %{"agent_id" => "t4.clear"}},
+            {"directory", %{"entries" => []}},
+            {"history_reset", %{"agent_id" => "t4.reset"}},
+            {"history_replay_complete", %{"agent_id" => "t4.complete"}}
+          ] do
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, payload)
+        assert_push ^event, %{"version" => "0"}
+      end
+    end
+
+    test "T4-3: catch-all 8種は version を stamp する" do
+      _socket = join_as(:operator)
+
+      for event <- ~w(
+            runner_sessions spawn_result hosts catalog_result
+            session_reset_started session_reset_completed session_reset_failed delivery_status
+          ) do
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"request_id" => "t4"})
+        assert_push ^event, %{"version" => "0"}
+      end
+    end
+
+    test "T4-4: agent_deleted は viewer 配信を保ち version を stamp する" do
+      _socket = join_as(:viewer)
+      assert_push "snapshot", %{"version" => "0"}
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "agent_deleted", %{
+        "agent_id" => "t4.deleted"
+      })
+
+      assert_push "agent_deleted", %{"agent_id" => "t4.deleted", "version" => "0"}
+    end
+
+    test "T4-5: history_replay_envelope は flat version を stamp する" do
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_replay_envelope", %{
+        "pane_agent_id" => "t4.pane",
+        "envelope" => %{"agent_id" => "t4.peer"}
+      })
+
+      assert_push "history_replay_envelope", %{"version" => "0"}
+    end
+
+    test "T4-6: envelope は frame version を server が確定する" do
+      _socket = join_as(:operator)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", %{
+        "version" => "9",
+        "agent_id" => "t4.envelope",
+        "ts" => "2026-08-21T00:00:00Z",
+        "type" => "state_change",
+        "state" => "idle"
+      })
+
+      assert_push "envelope", %{"version" => "0", "agent_id" => "t4.envelope"}
+    end
+
+    test "T4-7: policy は17種のみを許可し、未宣言 event は funnel で拒否する" do
+      policy = AgentsChannel.client_event_policy()
+
+      assert MapSet.size(policy) == 17
+      refute MapSet.member?(policy, "not_declared")
+
+      source = File.read!("lib/kaoiro_server_web/channels/agents_channel.ex")
+      assert source =~ "is not declared in @client_event_policy"
+    end
+
+    test "T4-8: raw push は push_versioned の本体の1箇所だけ" do
+      {:ok, ast} =
+        "lib/kaoiro_server_web/channels/agents_channel.ex"
+        |> File.read!()
+        |> Code.string_to_quoted()
+
+      raw_pushes =
+        ast
+        |> Macro.prewalker()
+        |> Enum.filter(fn
+          {:push, _, [{:socket, _, _}, _event, _payload]} -> true
+          _ -> false
+        end)
+
+      assert length(raw_pushes) == 1
+    end
+  end
 end

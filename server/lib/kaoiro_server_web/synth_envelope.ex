@@ -75,7 +75,17 @@ defmodule KaoiroServerWeb.SynthEnvelope do
     KaoiroServerWeb.Endpoint.broadcast("wrapper:#{recipient}", "envelope", routed)
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", stamped)
     status = DeliveryStates.get(recipient)
-    KaoiroServerWeb.Endpoint.broadcast("wrapper:#{recipient}", "delivery_status", status || %{})
+
+    # ADR-0015 (issue #218): the wrapper-bound copy carries the flat
+    # `version` frame key like every other server -> wrapper message. The
+    # `agents:lobby` copy below is server -> client and keeps its own shape
+    # (`agent_id` + nested `delivery`) — that leg is a documented #218
+    # follow-up, not part of this issue's scope.
+    KaoiroServerWeb.Endpoint.broadcast(
+      "wrapper:#{recipient}",
+      "delivery_status",
+      Map.put(status || %{}, :version, "0")
+    )
 
     KaoiroServerWeb.Endpoint.broadcast(
       "agents:lobby",

@@ -2,9 +2,10 @@
   import { tick, untrack } from "svelte";
   import BottomSheet from "./BottomSheet.svelte";
   import { conversationEntryKey } from "./conversationTimeline";
-  import { expressionFor, spriteUrlFor } from "./expression";
+  import { expressionFor, isFatigued, spriteStateFor, spriteUrlFor } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
+  import PersonaFace from "./PersonaFace.svelte";
   import TaskRing from "./TaskRing.svelte";
   import TasklistFloat from "./TasklistFloat.svelte";
   import { randomUUID } from "./uuid";
@@ -161,8 +162,13 @@
 
   const expression = $derived(expressionFor(display.shown));
   const name = $derived(envelope.display_name ?? envelope.agent_id);
+  const fatigued = $derived(isFatigued(envelope));
   const spriteUrl = $derived(
-    spriteUrlFor(manifest, envelope.persona?.sprite_set, display.shown),
+    spriteUrlFor(
+      manifest,
+      envelope.persona?.sprite_set,
+      spriteStateFor(display.shown, fatigued),
+    ),
   );
   // Read from state_change.ext.pending_permission, the ADR-0022
   // authoritative source. Survives any other state_change arriving while
@@ -271,6 +277,16 @@
   function pctClamp(value: unknown): number | null {
     if (typeof value !== "number" || !Number.isFinite(value)) return null;
     return Math.max(0, Math.min(100, Math.round(value)));
+  }
+
+  /** A non-negative percentage that may exceed 100. The soft work-budget
+   * denominator is intentionally below the raw context window, so clamping
+   * its use rate would hide the very threshold this display must expose
+   * (issue #264). */
+  function pctUnbounded(value: unknown): number | null {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.round(value)
+      : null;
   }
 
   /** A finite, non-negative number, or null — for raw token counts (#55). */
@@ -467,6 +483,21 @@
   // how much room is left. Both come from the same SDK usage object.
   const ctxUsed = $derived(numOrNull(ccContext?.used_tokens));
   const ctxMax = $derived(numOrNull(ccContext?.max_tokens));
+  // A new wrapper stamps the soft budget separately so the old 3-field
+  // ext.context shape remains untouched. Do not derive a default here: an
+  // older wrapper's configured denominator is unknown to the dashboard.
+  const ccContextBudget = $derived(
+    envelope.ext?.context_budget as Record<string, unknown> | undefined,
+  );
+  const ctxBudgetTokens = $derived(
+    (() => {
+      const value = numOrNull(ccContextBudget?.work_budget_tokens);
+      return value !== null && value > 0 ? value : null;
+    })(),
+  );
+  const ctxBudgetPct = $derived(
+    pctUnbounded(ccContextBudget?.work_budget_percentage),
+  );
   // Capability gating for the ctx row (ADR-0040 phase-21). Tri-state, in
   // strict fail-closed order — a null/malformed caps envelope, or a wrapper
   // that predates supports_context_usage, MUST NOT render "未対応" (that
@@ -2343,15 +2374,15 @@
       <header class="head">
         <div class="portrait">
           {#key display.shown}
-            {#if spriteUrl}
-              <img class="sprite" src={spriteUrl} alt={expression.label} />
-            {:else}
-              <div class="face" role="img" aria-label={expression.label}>
-                <span class="eye left"></span>
-                <span class="eye right"></span>
-                <span class="mouth"></span>
-              </div>
-            {/if}
+            <PersonaFace
+              sprite={spriteUrl}
+              variant={expression.variant}
+              label={expression.label}
+              fatigued={fatigued}
+              size="detail"
+              imgAltLabelled={true}
+              faceLabelled={true}
+            />
           {/key}
           {#if activeTaskCount > 0}
             <!-- 頭上リング (issue #180 follow-up, 2026-08-10 — マスター
@@ -2370,8 +2401,10 @@
                  (AgentDetail の face 比率)に掛けて導出、ふじ round1
                  N1)。`cqw` は query container の CONTENT box 基準
                  (W3C css-contain-3 仕様 + 実 Chromium で実測検証済み、
-                 2026-08-10)なので、`.sprite`(width: 100%、同じく
-                 content box 基準)と同じ基準で揃っており、上記比率換算
+                 2026-08-10)なので、PersonaFace.svelte の
+                 `.portrait-sprite[data-size="detail"]`(width: 100%、
+                 同じく content box 基準。issue #245 でこのファイルから
+                 移設)と同じ基準で揃っており、上記比率換算
                  に border-box(padding 込み)とのズレは無い(クロエ
                  round2 で懸念提起 → 検証の結果、対応不要と判明)。
 
@@ -2708,10 +2741,19 @@
                     <div class="meter-fill" style:width="{ctxPct}%"></div>
                   </div>
                   <span class="meter-val">
-                    {ctxPct}%
-                    {#if ctxUsed !== null && ctxMax !== null}
-                      <span class="meter-abs"
-                        >({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})</span>
+                    <span class="ctx-meter-line">
+                      生窓 {ctxPct}%
+                      {#if ctxUsed !== null && ctxMax !== null}
+                        <span class="meter-abs"
+                          >({fmtTokens(ctxUsed)}/{fmtTokens(ctxMax)})</span>
+                      {/if}
+                    </span>
+                    {#if ctxUsed !== null && ctxBudgetPct !== null && ctxBudgetTokens !== null}
+                      <span class="ctx-meter-line">
+                        作業予算 {ctxBudgetPct}%
+                        <span class="meter-abs"
+                          >({fmtTokens(ctxUsed)}/{fmtTokens(ctxBudgetTokens)})</span>
+                      </span>
                     {/if}
                   </span>
                 {/if}
@@ -3780,169 +3822,16 @@
       var(--bg-card);
   }
 
-  .sprite {
-    width: 100%;
-    height: auto;
-    aspect-ratio: 1 / 1;
-    object-fit: contain;
-    animation: dissolve 0.35s ease-out;
-  }
+  /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte
+     (issue #245, size="detail") — this file only sizes the portrait
+     wrapper. `dissolve` stays here: `.state` below still uses it
+     independently of the sprite/face. */
 
-  /* Dissolve-in on state change (#43): the previous face/label is replaced
-     via {#key}, so the new one fades up from transparent. prefers-reduced-
-     motion shortens this to ~instant via the global rule in app.css. */
+  /* Dissolve-in on state change (#43): the previous state label fades up
+     from transparent. prefers-reduced-motion shortens this to ~instant
+     via the global rule in app.css. */
   @keyframes dissolve {
     from { opacity: 0; }
-  }
-
-  [data-state="disconnected"] .sprite {
-    filter: grayscale(1);
-    opacity: 0.45;
-  }
-
-  .face {
-    position: relative;
-    width: 70%;
-    aspect-ratio: 1 / 1;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--tone) 28%, var(--bg-card));
-    border: 2px solid var(--tone);
-    box-shadow: 0 0 18px color-mix(in srgb, var(--tone) 35%, transparent);
-    animation: dissolve 0.35s ease-out;
-  }
-
-  /* CSS face features for sprite-less personas (#35). Sized in % of the
-     face so they scale with the responsive portrait, not as fixed rem
-     (the rem values that work on the AgentCard tile look like specks on
-     this larger detail circle). Per-state rules mirror AgentCard.svelte
-     so the lobby tile and the detail view never drift on what each state
-     looks like; keep the two in sync when a state expression changes. */
-  .eye {
-    position: absolute;
-    top: 38%;
-    width: 10%;
-    height: 10%;
-    border-radius: 50%;
-    background: var(--fg);
-  }
-
-  .eye.left { left: 28%; }
-  .eye.right { right: 28%; }
-
-  .mouth {
-    position: absolute;
-    bottom: 24%;
-    left: 50%;
-    translate: -50% 0;
-    width: 26%;
-    height: 12%;
-    border-bottom: 3px solid var(--fg);
-    border-radius: 0 0 50% 50% / 0 0 100% 100%;
-  }
-
-  [data-state="idle"] .mouth {
-    width: 17%;
-    height: 0;
-    border-radius: 0;
-  }
-
-  [data-state="thinking"] .eye {
-    top: 30%;
-    height: 5%;
-    border-radius: 50% 50% 0 0;
-  }
-
-  [data-state="thinking"] .mouth {
-    width: 9%;
-    height: 9%;
-    border: 3px solid var(--fg);
-    border-radius: 50%;
-  }
-
-  [data-state="thinking"] .face {
-    animation: dissolve 0.35s ease-out, sway 2.4s ease-in-out infinite;
-  }
-
-  @keyframes sway {
-    50% { rotate: 4deg; }
-  }
-
-  [data-state="tool_running"] .eye {
-    height: 6%;
-    border-radius: 6%;
-  }
-
-  [data-state="tool_running"] .mouth {
-    width: 20%;
-    height: 0;
-    border-radius: 0;
-  }
-
-  [data-state="waiting_permission"] .eye {
-    width: 14%;
-    height: 14%;
-    box-shadow: inset 0 0 0 3px var(--tone);
-  }
-
-  [data-state="waiting_permission"] .mouth {
-    width: 8%;
-    height: 10%;
-    border: 3px solid var(--fg);
-    border-radius: 50%;
-  }
-
-  [data-state="waiting_permission"] .face {
-    animation: dissolve 0.35s ease-out, hop 1.1s ease-in-out infinite;
-  }
-
-  @keyframes hop {
-    20% { translate: 0 -4%; }
-    40% { translate: 0 0; }
-  }
-
-  [data-state="waiting_input"] .mouth {
-    width: 30%;
-  }
-
-  [data-state="done"] .eye {
-    height: 6%;
-    border-radius: 0 0 50% 50%;
-    background: transparent;
-    border-bottom: 3px solid var(--fg);
-  }
-
-  [data-state="done"] .mouth {
-    width: 33%;
-    height: 15%;
-  }
-
-  [data-state="error"] .eye {
-    border-radius: 0;
-    background:
-      linear-gradient(45deg, transparent 42%, var(--fg) 42% 58%, transparent 58%),
-      linear-gradient(-45deg, transparent 42%, var(--fg) 42% 58%, transparent 58%);
-  }
-
-  [data-state="error"] .mouth {
-    border-bottom: none;
-    border-top: 3px solid var(--fg);
-    border-radius: 50% 50% 0 0 / 100% 100% 0 0;
-  }
-
-  [data-state="disconnected"] .face {
-    opacity: 0.45;
-    box-shadow: none;
-  }
-
-  [data-state="disconnected"] .eye {
-    height: 2%;
-    border-radius: 0;
-  }
-
-  [data-state="disconnected"] .mouth {
-    width: 17%;
-    height: 0;
-    border-radius: 0;
   }
 
   /* State lamp on the portrait (#16): same shape/size as the connection
@@ -4298,6 +4187,10 @@
     margin-left: 0.3em;
     font-size: 0.85em; /* em-relative to parent meter; do not tokenize */
     opacity: 0.8;
+  }
+
+  .ctx-meter-line {
+    display: block;
   }
 
   .log {

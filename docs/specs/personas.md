@@ -108,10 +108,12 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 
 ### 表情セット(状態 → 演技)
 
-生成対象は 7 状態。`disconnected` は生成せず、クライアント側で idle の
+生成対象は必須 7 状態。`disconnected` は生成せず、クライアント側で idle の
 グレースケール化(CSS filter)により表現する(状態セットの定義は
 [protocol](protocol.md)、マッピング実装はリファレンスダッシュボードの
-`expression.ts`)。
+`expression.ts`)。`fatigued` は protocol state ではなく context 使用率から
+導出する optional sprite modifier で、対応画像の生成は issue #173 で行う
+([ADR-0054](../adr/0054-fatigue-as-orthogonal-persona-modifier.md))。
 
 | 状態 | ao(控えめ) | momo(大) | kuroe(冷静) | fuji(余裕あるマウント) | kohaku(泰然) |
 |---|---|---|---|---|---|
@@ -122,6 +124,7 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 | waiting_input | ちらっとこちらを見る | 身を乗り出して手を振る | メモを構えて静かに視線 | こちらへ向き直り、期待の微笑と少し首を傾げる | 身を乗り出して表情を覗き込む |
 | done | 小さなドヤ顔 | 満面の笑み+ガッツポーズ | 控えめな微笑と軽い会釈 | 目を閉じた誇らしげな微笑、小さく頷く | 20 度振りの構図でキリッと薄笑み |
 | error | 目を見開いて動揺 | 涙目 | 申し訳なさそうな表情 | 頬に手を当て、目を逸らして困り微笑 | 額に手を当て表情を隠す |
+| fatigued (optional modifier) | 半眼で少し肩を落とす | しょんぼりしつつも元気を保つ | 半眼で口角を下げ、静かに消耗を示す | 伏し目で口元を緩めず、疲れを隠しきれない | 目を細め、姿勢を少し緩めて疲労を示す |
 
 ### 画像規格
 
@@ -241,8 +244,9 @@ deprecation 警告を出す。
 
 ## Constraints
 
-- 各ペルソナは 7 状態すべての表情画像を MUST で揃える(`default`
-  ペルソナは除く — 立ち絵を持たず CSS 顔で表示する)。
+- 各ペルソナは必須 7 状態すべての表情画像を MUST で揃える(`default`
+  ペルソナは除く — 立ち絵を持たず CSS 顔で表示する)。`fatigued` は optional
+  で、pack が宣言した場合は対応画像を MUST で揃える。
 - `disconnected` の画像は生成しない(MUST NOT)。クライアント側の
   グレースケール表現に統一する。
 - `persona.id` は安定 ID であり変更しない

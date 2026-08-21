@@ -1560,6 +1560,27 @@ describe("list_agents / whoami companion tools", () => {
     expect(listAgents?.description).toContain("send_to_agent");
   });
 
+  // issue #269 W4 (仕様6): directory_only entry の意味・送信不可・
+  // escalate 先・absent の例外 (S8) を description が明示する。
+  it("list_agents の description は directory_only の意味・送信不可・escalate 先・absent の例外を明示する (issue #269)", () => {
+    const listAgents = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "idle",
+      send: () => {},
+    })
+      .descriptors()
+      .find((descriptor) => descriptor.name === "list_agents");
+
+    expect(listAgents?.description).toContain(
+      "directory_only: true` is an agent that EXISTED",
+    );
+    expect(listAgents?.description).toContain("cannot deliver to it");
+    expect(listAgents?.description).toContain("escalate to the operator");
+    expect(listAgents?.description).toContain(
+      "its absence means the entry came from the live directory",
+    );
+  });
+
   it("whoami は getWhoami の snapshot を JSON として返す", async () => {
     const snapshot: WhoamiSnapshot = {
       agent_id: "self.agent",

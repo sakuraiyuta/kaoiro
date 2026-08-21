@@ -7,7 +7,11 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { AgentHost, initialStatusExt } from "../src/host.js";
+import {
+  AgentHost,
+  CONTEXT_NOTICE_THRESHOLD_PERCENT,
+  initialStatusExt,
+} from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
 import { INTER_AGENT_TOOL_FQN, makeStateChange } from "@kaoiro/agent-common";
 import type {
@@ -477,7 +481,7 @@ describe("AgentHost — query injection", () => {
     return { queryFn, injected };
   }
 
-  it("閾値超過で通知を 1 回だけ注入する (B1)", async () => {
+  it("閾値超過で raw 窓比と作業予算比を 1 回だけ注入する (B1/#264)", async () => {
     const { queryFn, injected } = contextQueryFn(
       [
         { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
@@ -490,16 +494,24 @@ describe("AgentHost — query injection", () => {
         await new Promise((resolve) => setTimeout(resolve, 20));
       },
     );
-    const host = new AgentHost(config, {
-      onState: () => {},
-      queryFn,
-      now: () => "T",
-    });
+    const host = new AgentHost(
+      { ...config, context_work_budget_percent: 50 },
+      {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+      },
+    );
     await host.run();
     // 2 回目の refresh (80%) では再送しない — epoch あたり 1 回。
     const notices = injected.filter((t) => t.startsWith("[kaoiro] Context"));
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain("75%");
+    expect(notices[0]).toContain(
+      "raw context window: 75% (150000/200000 tokens)",
+    );
+    expect(notices[0]).toContain(
+      "work budget: 150% (150000/100000 tokens)",
+    );
     expect(notices[0]).toContain("request_compact");
     // 切迫を煽らない文言であること (P3)。
     expect(notices[0]).toContain("There is no need to act now");
@@ -522,6 +534,52 @@ describe("AgentHost — query injection", () => {
     expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toEqual(
       [],
     );
+  });
+
+  it("TC-1: used_percentage=60 で context notice を1回送る", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [{ totalTokens: 120000, maxTokens: 200000, percentage: 60 }],
+      async function* () {
+        yield result("success", { result: "ok" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    );
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+
+    await host.run();
+
+    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toHaveLength(1);
+  });
+
+  it("TC-2: used_percentage=59 では context notice を送らない", async () => {
+    const { queryFn, injected } = contextQueryFn(
+      [{ totalTokens: 118000, maxTokens: 200000, percentage: 59 }],
+      async function* () {
+        yield result("success", { result: "ok" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    );
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+
+    await host.run();
+
+    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toEqual([]);
+  });
+
+  it("TC-3: notice threshold 定数参照の値で通知する", async () => {
+    const threshold = CONTEXT_NOTICE_THRESHOLD_PERCENT;
+    const { queryFn, injected } = contextQueryFn(
+      [{ totalTokens: threshold, maxTokens: threshold, percentage: threshold }],
+      async function* () {
+        yield result("success", { result: "ok" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+    );
+    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+
+    await host.run();
+
+    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toHaveLength(1);
   });
 
   // BR MF1 (a): 境界直後の `getContextUsage()` は圧縮前の総量を返し得る
@@ -1815,7 +1873,7 @@ describe("AgentHost — query injection", () => {
     expect(e?.ext?.slash_commands).toEqual(["model", "review", "clear"]);
   });
 
-  it("getContextUsage を ext.context / ext.model として付与する (#16)", async () => {
+  it("getContextUsage を version 付き ext.context / context_budget / ext.model として付与する (#16/#264)", async () => {
     const envs: Envelope[] = [];
     const usage = {
       totalTokens: 50,
@@ -1847,7 +1905,44 @@ describe("AgentHost — query injection", () => {
     expect(withCtx?.ext).toMatchObject({
       model: "claude-test",
       context: { used_tokens: 50, max_tokens: 100, used_percentage: 50 },
+      // 設定未指定時は 60% の作業予算。生窓 100 token の場合は
+      // 60 token 分母なので、50 token 使用は 83%（丸め）になる。
+      context_budget: {
+        work_budget_tokens: 60,
+        work_budget_percentage: 83,
+      },
     });
+    // context_budget は独立メッセージではなく、ADR-0015 準拠の
+    // state_change envelope に追加される open-schema field。
+    expect(withCtx?.version).toBe("0");
+  });
+
+  it("設定した作業予算率で context_budget の分母を切替える (#264)", async () => {
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([{ type: "text", text: "hi" }]);
+        yield result("success", { result: "ok" });
+        yield assistant([{ type: "text", text: "more" }]);
+      }
+      return asQuery(
+        gen(),
+        async () => {},
+        async () => ({ totalTokens: 50, maxTokens: 100, percentage: 50 }),
+      );
+    });
+    const host = new AgentHost(
+      { ...config, context_work_budget_percent: 80 },
+      { onState: (e) => envs.push(e), queryFn, now: () => "T" },
+    );
+    await host.run();
+    expect(envs.filter((e) => e.state === "thinking").at(-1)?.ext)
+      .toMatchObject({
+        context_budget: {
+          work_budget_tokens: 80,
+          work_budget_percentage: 63,
+        },
+      });
   });
 
   it("init 直後にも getContextUsage が発火し ext.context が付く (ADR-0040)", async () => {
@@ -4599,8 +4694,41 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       used_tokens: 500,
       max_tokens: 1000000,
     });
+    expect(lastCtx?.ext.context_budget).toMatchObject({
+      work_budget_tokens: 600000,
+    });
     host.close();
     await done;
+  });
+
+  it("SDK が maxTokens=0 を返しても context_budget の分母を 1 token に保つ (#264)", async () => {
+    const envs: Envelope[] = [];
+    const queryFn = makeQueryFn(() => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield assistant([{ type: "text", text: "hi" }]);
+        yield result("success", { result: "ok" });
+        yield assistant([{ type: "text", text: "more" }]);
+      }
+      return asQuery(
+        gen(),
+        async () => {},
+        async () => ({ totalTokens: 0, maxTokens: 0, percentage: 0 }),
+      );
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+    expect(envs.filter((e) => e.state === "thinking").at(-1)?.ext)
+      .toMatchObject({
+        context: { used_tokens: 0, max_tokens: 0, used_percentage: 0 },
+        context_budget: {
+          work_budget_tokens: 1,
+          work_budget_percentage: 0,
+        },
+      });
   });
 
   it("setModel 成功後の effort reset 失敗でも旧 context は残らない (藤 review turn-5 R1)", async () => {

@@ -29,6 +29,7 @@ const ROUND_TRIP_CASES: {
 } = {
   server_token: { value: "tok-1" },
   permission_timeout_ms: { value: 5000 },
+  context_work_budget_percent: { value: 60 },
   permission_mode: { value: "acceptEdits" },
   allowed_tools: { value: ["Read", "Edit"] },
   model: { value: "sonnet" },
@@ -60,6 +61,24 @@ describe("parseConfig", () => {
 
   it("正しい設定をそのまま受け入れる", () => {
     expect(parseConfig(valid)).toEqual(valid);
+  });
+
+  it.each([60.5, 100])(
+    "context_work_budget_percent の有限な (0, 100] の値 %p を受け入れる",
+    (percent) => {
+      expect(
+        parseConfig({ ...valid, context_work_budget_percent: percent }),
+      ).toMatchObject({ context_work_budget_percent: percent });
+    },
+  );
+  it("context_work_budget_percent は不正な値を弾く", () => {
+    for (const invalid of [0, -1, 100.1, Infinity, NaN, "60"]) {
+      expect(() =>
+        parseConfig({ ...valid, context_work_budget_percent: invalid }),
+      ).toThrowError(
+        "context_work_budget_percent must be a finite number greater than 0 and at most 100",
+      );
+    }
   });
 
   it("agent_id 欠落を弾く", () => {

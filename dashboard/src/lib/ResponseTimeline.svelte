@@ -18,6 +18,7 @@
     conversationEntryKey,
     type ConversationEntry,
   } from "./conversationTimeline";
+  import PersonaFace from "./PersonaFace.svelte";
   import { formatRelativeJa } from "./relativeTime";
   import type { DirectoryEntry, Envelope, PersonaManifest } from "./protocol";
 
@@ -176,33 +177,28 @@
           >
             <!-- issue #244: sprite-less fallback mirrors agent-strip
                  (App.svelte) / AgentCard.svelte / AgentDetail.svelte's
-                 CSS face (.face/.eye/.mouth) instead of a static emoji,
-                 so the views never disagree again on an unassigned-
-                 persona agent. This is NOT byte-identical to the other
-                 3: the only contract all 4 share is
-                 "sprite-or-CSS-face". Tone, eye/mouth shape and
-                 animation already differ per site and are NOT unified
-                 here — agent-strip keeps eye/mouth fixed at its 2.4rem
-                 size (see App.svelte's `.chip .face` comment), and
-                 neither `.chip` nor AgentDetail's `.detail` carries a
-                 `waiting_question` tone rule while `.card` and this
-                 `.portrait` do (pre-existing drift, ふじ 2026-08-14).
-                 Unifying those is issue #245's job. This is a 4th manual
-                 copy of that markup/CSS (the other three already note
-                 they must be kept in sync by hand) — a shared component
-                 was scoped out of this bugfix.
-                 Follow-up: issue #245 (extract a shared PersonaFace.svelte
-                 and replace all 4 copies). -->
+                 CSS face instead of a static emoji, so the views never
+                 disagree again on an unassigned-persona agent.
+                 issue #245 extracted the shared render into
+                 PersonaFace.svelte (size="timeline"), but the look is
+                 NOT byte-identical to the other 3 sites — the only
+                 contract all 4 share is "sprite-or-CSS-face". Tone,
+                 eye/mouth shape and animation differ per site and are
+                 intentionally NOT unified (こはく裁定 2026-08-20, see
+                 issue #245 comment for the full drift matrix); agent-strip
+                 keeps eye/mouth fixed at its size, and neither `.chip`
+                 nor AgentDetail's `.detail` carries a `waiting_question`
+                 tone rule while `.card` and this `.portrait` do
+                 (pre-existing drift, ふじ 2026-08-14). -->
             <span class="portrait" data-state={expr.variant} aria-hidden="true">
-              {#if sprite}
-                <img src={sprite} alt="" />
-              {:else}
-                <div class="face" role="img" aria-label={expr.label}>
-                  <span class="eye left"></span>
-                  <span class="eye right"></span>
-                  <span class="mouth"></span>
-                </div>
-              {/if}
+              <PersonaFace
+                {sprite}
+                variant={expr.variant}
+                label={expr.label}
+                size="timeline"
+                imgAltLabelled={false}
+                faceLabelled={true}
+              />
             </span>
             <span class="meta">
               <span class="row-head">
@@ -358,26 +354,14 @@
     --tone: var(--c-idle);
   }
 
-  .portrait img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  /* issue #244: state-tone + CSS face fallback. The contract shared by
-     all 4 fallback sites (agent-strip / AgentCard / AgentDetail / here)
-     is sprite-or-CSS-face, and nothing beyond it — the tone rules below
-     are NOT uniform across the four (`.chip` and `.detail` have no
-     `waiting_question` entry; issue #245 unifies this). The
-     per-state eye/mouth SHAPE rules below additionally mirror only
-     AgentCard.svelte / AgentDetail.svelte's `.face`/`.eye`/`.mouth`
-     (agent-strip keeps its eye/mouth fixed at 2.4rem — see the
-     template comment above). Sized in % of `.portrait` (2.25rem) since
-     that circle is far smaller than AgentCard's (5.4rem) /
-     AgentDetail's (responsive) — percentages scale correctly where the
-     siblings' rem values would not; border/shadow weights are thinned
-     to match. Keep these three (this file, AgentCard, AgentDetail) in
-     sync when a state expression changes. */
+  /* issue #244: state-tone. The contract shared by all 4 fallback sites
+     (agent-strip / AgentCard / AgentDetail / here) is sprite-or-CSS-face,
+     and nothing beyond it — the tone rules below are NOT uniform across
+     the four (`.chip` and `.detail` have no `waiting_question` entry;
+     issue #245 kept this drift on purpose, see its comment for the full
+     matrix). Sprite/CSS-face rendering itself lives in
+     PersonaFace.svelte (size="timeline"); this file only defines
+     `--tone` per state for its `.portrait` wrapper. */
   .portrait[data-state="sending"] { --tone: var(--c-sending); }
   .portrait[data-state="thinking"] { --tone: var(--c-thinking); }
   .portrait[data-state="tool_running"] { --tone: var(--c-tool_running); }
@@ -391,130 +375,6 @@
   .portrait[data-state="done"] { --tone: var(--c-done); }
   .portrait[data-state="error"] { --tone: var(--c-error); }
   .portrait[data-state="disconnected"] { --tone: var(--c-disconnected); }
-
-  .face {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--tone) 28%, var(--bg-card));
-    border: 1px solid var(--tone);
-    animation: face-dissolve 0.35s ease-out;
-  }
-
-  @keyframes face-dissolve {
-    from { opacity: 0; }
-  }
-
-  .eye {
-    position: absolute;
-    top: 38%;
-    width: 14%;
-    height: 14%;
-    border-radius: 50%;
-    background: var(--fg);
-  }
-
-  .eye.left { left: 26%; }
-  .eye.right { right: 26%; }
-
-  .mouth {
-    position: absolute;
-    bottom: 22%;
-    left: 50%;
-    translate: -50% 0;
-    width: 30%;
-    height: 14%;
-    border-bottom: 1.5px solid var(--fg);
-    border-radius: 0 0 50% 50% / 0 0 100% 100%;
-  }
-
-  [data-state="idle"] .mouth {
-    width: 20%;
-    height: 0;
-    border-radius: 0;
-  }
-
-  [data-state="thinking"] .eye {
-    top: 30%;
-    height: 6%;
-    border-radius: 50% 50% 0 0;
-  }
-
-  [data-state="thinking"] .mouth {
-    width: 12%;
-    height: 12%;
-    border: 1.5px solid var(--fg);
-    border-radius: 50%;
-  }
-
-  [data-state="tool_running"] .eye {
-    height: 8%;
-    border-radius: 8%;
-  }
-
-  [data-state="tool_running"] .mouth {
-    width: 24%;
-    height: 0;
-    border-radius: 0;
-  }
-
-  [data-state="waiting_permission"] .eye {
-    width: 18%;
-    height: 18%;
-    box-shadow: inset 0 0 0 1.5px var(--tone);
-  }
-
-  [data-state="waiting_permission"] .mouth {
-    width: 10%;
-    height: 12%;
-    border: 1.5px solid var(--fg);
-    border-radius: 50%;
-  }
-
-  [data-state="waiting_input"] .mouth {
-    width: 36%;
-  }
-
-  [data-state="done"] .eye {
-    height: 8%;
-    border-radius: 0 0 50% 50%;
-    background: transparent;
-    border-bottom: 1.5px solid var(--fg);
-  }
-
-  [data-state="done"] .mouth {
-    width: 40%;
-    height: 18%;
-  }
-
-  [data-state="error"] .eye {
-    border-radius: 0;
-    background:
-      linear-gradient(45deg, transparent 42%, var(--fg) 42% 58%, transparent 58%),
-      linear-gradient(-45deg, transparent 42%, var(--fg) 42% 58%, transparent 58%);
-  }
-
-  [data-state="error"] .mouth {
-    border-bottom: none;
-    border-top: 1.5px solid var(--fg);
-    border-radius: 50% 50% 0 0 / 100% 100% 0 0;
-  }
-
-  [data-state="disconnected"] .face {
-    opacity: 0.45;
-  }
-
-  [data-state="disconnected"] .eye {
-    height: 3%;
-    border-radius: 0;
-  }
-
-  [data-state="disconnected"] .mouth {
-    width: 20%;
-    height: 0;
-    border-radius: 0;
-  }
 
   .meta {
     display: flex;

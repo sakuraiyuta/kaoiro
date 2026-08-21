@@ -113,6 +113,18 @@ export interface DirectoryEntry {
    *  ones. */
   rate_limits?: Record<string, DirectoryRateLimitWindow>;
   inter_agent_delivery?: InterAgentDeliveryStatus;
+  /** issue #269: この entry は AgentDirectory (永続 ledger) にしか存在せず、
+   *  AgentStates に live envelope が無いことを示す。**この field は他の
+   *  optional field と absent の意味が違う** — absent は unknown ではなく
+   *  「live directory 由来」。server は true のときだけ載せる (F6-2
+   *  fail-closed)。send_to_agent の宛先にはできない。 */
+  directory_only?: true;
+  /** issue #269: server が最後に envelope を受理した時刻。directory-only
+   *  entry でのみ載る (live entry は last_activity_at を持つ)。
+   *  AgentDirectory の memory-only hint 由来なので、server 再起動後は
+   *  絶対に取れない — absent は「unknown」であって「一度も動いていない」
+   *  ではない。 */
+  last_seen?: string;
 }
 
 /** Single entry in the peer directory's "users" projection (issue #197
@@ -254,6 +266,68 @@ function warnOnVersionMismatch(event: string, version: unknown): void {
       `accepting as ${JSON.stringify(WRAPPER_PROTOCOL_VERSION)} (ADR-0015 best-effort accept)\n`,
   );
 }
+
+/** Every server -> wrapper event `ServerLink` binds, mapped to how
+ *  ADR-0015's receiver check applies to it (issue #218).
+ *
+ *  - `"checked"` — a JSON payload with a flat `version` frame key.
+ *    `warnOnVersionMismatch` runs in front of the handler: exact match is
+ *    silent, absent or differing warns and the message is processed either
+ *    way (best-effort accept).
+ *  - `"binaryFrame"` — a V2 binary frame: a fixed length-prefixed header
+ *    plus raw bytes, with no JSON object to hold a `version` key. Stamping
+ *    one would need a wire change (a protocol version bump), which #218
+ *    rules out of scope, and running the check anyway would warn
+ *    "(absent)" on every chunk of every upload. Recorded as a permanent
+ *    exception in `docs/specs/protocol.md`.
+ *
+ *  Bindings go through `#bindServerEvent`, whose `event` parameter is typed
+ *  as a key of this table — a new event cannot be bound without first
+ *  declaring which side of the line it falls on. That is the whole point:
+ *  before #218 the check was an independent line each handler had to
+ *  remember, and the same omission became a must-fix twice (#88, #197
+ *  段階3). `bindControlEvents` gives the runner the same guarantee with a
+ *  loop; the wrapper needs a table because these handlers' payload shapes
+ *  differ too much to share one callback signature. */
+export const SERVER_EVENT_VERSION_POLICY = {
+  persona_prompt: "checked",
+  instruction: "checked",
+  permission_decision: "checked",
+  question_response: "checked",
+  interrupt: "checked",
+  set_model: "checked",
+  set_effort: "checked",
+  refresh_models: "checked",
+  set_permission_mode: "checked",
+  persona_sync: "checked",
+  display_name_sync: "checked",
+  attach_open: "checked",
+  attach_chunk: "binaryFrame",
+  attach_close: "checked",
+  envelope: "checked",
+  delivery_status: "checked",
+  session_reset_failed: "checked",
+} as const satisfies Record<string, "checked" | "binaryFrame">;
+
+export type ServerEventName = keyof typeof SERVER_EVENT_VERSION_POLICY;
+
+export const WRAPPER_CONTROL_EVENT_POLICY = {
+  delivery_ack: "versioned",
+  delivery_status_request: "versioned",
+  history_reset: "versioned",
+  replay_ia: "versioned",
+  history_replay_complete: "versioned",
+  directory_request: "versioned",
+  session_reset_request: "versioned",
+  envelope: "envelopeFrame",
+} as const satisfies Record<string, "versioned" | "envelopeFrame">;
+
+export type WrapperControlEvent = keyof typeof WRAPPER_CONTROL_EVENT_POLICY;
+export type VersionedWrapperEvent = {
+  [K in WrapperControlEvent]: typeof WRAPPER_CONTROL_EVENT_POLICY[K] extends "versioned"
+    ? K
+    : never;
+}[WrapperControlEvent];
 
 interface ActiveTaskCacheEntry {
   envelope: Envelope;
@@ -698,6 +772,12 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   if (conversation !== undefined) entry.conversation = conversation;
   const rateLimits = projectRateLimits(v.rate_limits);
   if (rateLimits !== undefined) entry.rate_limits = rateLimits;
+  // issue #269: server は true のときだけ載せる。それ以外の値 (false /
+  // 文字列 / 数値) は「server が閉じたものを client が開け直さない」規約
+  // に従って落とす。
+  if (v.directory_only === true) entry.directory_only = true;
+  const lastSeen = nonEmptyText(v.last_seen);
+  if (lastSeen !== undefined) entry.last_seen = lastSeen;
   return entry;
 }
 
@@ -904,13 +984,13 @@ export class ServerLink {
     // ADR-0029 F5: the server pushes the ready-to-inject prompt (persona
     // personality + common footer) once after join. cli.ts's promise
     // resolves on this and starts the SDK session.
-    this.#channel.on("persona_prompt", (payload: unknown) => {
+    this.#bindServerEvent("persona_prompt", (payload: unknown) => {
       if (isObject(payload) && typeof payload.prompt === "string") {
         options.onPersonaPrompt?.(payload.prompt);
       }
     });
 
-    this.#channel.on("instruction", (payload: unknown) => {
+    this.#bindServerEvent("instruction", (payload: unknown) => {
       if (isObject(payload) && typeof payload.text === "string") {
         // attachment_ids is optional (file-upload spec); validate it as an
         // array of strings or drop it silently so a malformed list does
@@ -926,7 +1006,7 @@ export class ServerLink {
         );
       }
     });
-    this.#channel.on("permission_decision", (payload: unknown) => {
+    this.#bindServerEvent("permission_decision", (payload: unknown) => {
       if (
         isObject(payload) &&
         typeof payload.request_id === "string" &&
@@ -945,7 +1025,7 @@ export class ServerLink {
     // ADR-0027: server -> wrapper `question_response` carries the operator's
     // AskUserQuestion answers (or a cancel). `answers` is a string map keyed
     // by question text; malformed pushes are dropped.
-    this.#channel.on("question_response", (payload: unknown) => {
+    this.#bindServerEvent("question_response", (payload: unknown) => {
       if (isObject(payload) && typeof payload.request_id === "string") {
         const response: QuestionResponseMessage = {
           request_id: payload.request_id,
@@ -960,18 +1040,18 @@ export class ServerLink {
     // protocol.md (#51): server -> wrapper `interrupt` carries an empty
     // payload; the topic already addresses the agent. Fire the handler
     // unconditionally — extra keys are ignored for forward compat.
-    this.#channel.on("interrupt", (_payload: unknown) => {
+    this.#bindServerEvent("interrupt", (_payload: unknown) => {
       options.onInterrupt?.();
     });
     // protocol.md (#54): server -> wrapper `set_model` / `set_effort` carry
     // the operator's choice; the topic addresses the agent. Validate the one
     // string field structurally and forward; malformed pushes are dropped.
-    this.#channel.on("set_model", (payload: unknown) => {
+    this.#bindServerEvent("set_model", (payload: unknown) => {
       if (isObject(payload) && typeof payload.model === "string") {
         options.onSetModel?.(payload.model);
       }
     });
-    this.#channel.on("set_effort", (payload: unknown) => {
+    this.#bindServerEvent("set_effort", (payload: unknown) => {
       if (isObject(payload) && typeof payload.effort === "string") {
         options.onSetEffort?.(payload.effort);
       }
@@ -979,7 +1059,7 @@ export class ServerLink {
     // protocol.md (ADR-0037 F6, phase-18-5): server -> wrapper `refresh_models`
     // has no payload fields; the topic already addresses the agent. Fire the
     // handler unconditionally — extra keys are ignored for forward compat.
-    this.#channel.on("refresh_models", (payload: unknown) => {
+    this.#bindServerEvent("refresh_models", (payload: unknown) => {
       // ADR-0039 F9 v2 = 藤 review D2a: payload now carries request_id so
       // the wrapper's refresh_models_result envelope can correlate. Older
       // servers may still push a bare {} — pass through as undefined.
@@ -996,7 +1076,7 @@ export class ServerLink {
     // protocol.md (#58): server -> wrapper `set_permission_mode` carries the
     // operator's mode pick AND the server's after-join push of the persisted
     // last choice. Mode-value validation lives in host.setPermissionMode.
-    this.#channel.on("set_permission_mode", (payload: unknown) => {
+    this.#bindServerEvent("set_permission_mode", (payload: unknown) => {
       if (isObject(payload) && typeof payload.mode === "string") {
         options.onSetPermissionMode?.(payload.mode);
       }
@@ -1038,11 +1118,15 @@ export class ServerLink {
     // to `onRenameDisplayName` beyond which key each payload happened to
     // carry; the revision guard in host.ts makes applying both idempotent
     // (D15 — whichever arrives first wins, the second is a no-op).
+    //
+    // ADR-0015 warn-then-accept (issue #197 段階3, ふじ MF-1 レビュー指摘):
+    // a version mismatch/absence never blocks the rename itself, it only
+    // logs. The check no longer lives in this closure — `#bindServerEvent`
+    // runs it for every event (issue #218), which also means a push this
+    // function drops as malformed still surfaces its version mismatch.
     const applyDisplayNameSync = (
       rawValue: unknown,
       rawRevision: unknown,
-      version: unknown,
-      eventName: string,
     ): void => {
       if (typeof rawValue !== "string") return;
       const displayName = validDisplayNameOrNull(rawValue);
@@ -1054,31 +1138,22 @@ export class ServerLink {
       ) {
         return;
       }
-      // ADR-0015 warn-then-accept (issue #197 段階3, ふじ MF-1 レビュー
-      // 指摘): a version mismatch/absence never blocks the rename itself
-      // — name/revision are already validated above — it only logs.
-      warnOnVersionMismatch(eventName, version);
       options.onRenameDisplayName?.(displayName, rawRevision);
     };
 
-    this.#channel.on("persona_sync", (payload: unknown) => {
+    this.#bindServerEvent("persona_sync", (payload: unknown) => {
       if (!isObject(payload)) return;
-      applyDisplayNameSync(payload.name, payload.revision, payload.version, "persona_sync");
+      applyDisplayNameSync(payload.name, payload.revision);
     });
-    this.#channel.on("display_name_sync", (payload: unknown) => {
+    this.#bindServerEvent("display_name_sync", (payload: unknown) => {
       if (!isObject(payload)) return;
-      applyDisplayNameSync(
-        payload.display_name,
-        payload.revision,
-        payload.version,
-        "display_name_sync",
-      );
+      applyDisplayNameSync(payload.display_name, payload.revision);
     });
     // File-upload wire (file-upload spec / ADR-0025). attach_open declares an
     // upload, attach_chunk delivers a binary slice, attach_close finalises.
     // Malformed payloads are dropped — the wire is operator-only and the
     // server already vets shapes; a defensive drop is enough.
-    this.#channel.on("attach_open", (payload: unknown) => {
+    this.#bindServerEvent("attach_open", (payload: unknown) => {
       if (
         isObject(payload) &&
         typeof payload.upload_id === "string" &&
@@ -1096,14 +1171,14 @@ export class ServerLink {
         });
       }
     });
-    this.#channel.on("attach_chunk", (payload: unknown) => {
+    this.#bindServerEvent("attach_chunk", (payload: unknown) => {
       // V2 binary frame: payload is an ArrayBuffer (browser) or a
       // Buffer/Uint8Array (Node ws). Anything else is malformed.
       if (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
         options.onAttachChunk?.(payload as ArrayBuffer | ArrayBufferView);
       }
     });
-    this.#channel.on("attach_close", (payload: unknown) => {
+    this.#bindServerEvent("attach_close", (payload: unknown) => {
       if (isObject(payload) && typeof payload.upload_id === "string") {
         options.onAttachClose?.(payload.upload_id);
       }
@@ -1115,18 +1190,18 @@ export class ServerLink {
     // payload.to is informational here, not a filter. Drop anything but
     // inter_agent_message defensively (the server never pushes other types
     // to wrapper:<self>, but a future broker should not see them).
-    this.#channel.on("envelope", (payload: unknown) => {
+    this.#bindServerEvent("envelope", (payload: unknown) => {
       if (!isObject(payload) || payload.type !== "inter_agent_message") return;
       options.onInterAgentMessage?.(payload as unknown as Envelope);
     });
-    this.#channel.on("delivery_status", (payload: unknown) => {
+    this.#bindServerEvent("delivery_status", (payload: unknown) => {
       options.onInterAgentDeliveryStatus?.(deliveryStatusFrom(payload) ?? null);
     });
     // #258: a self-reset's request reply proves only that the server acquired
     // its lock. If the runner later cannot terminate this old wrapper, the
     // server sends the terminal failure back to this topic. Correlation stays
     // in SessionResetCoordinator; a fresh wrapper ignores an old request id.
-    this.#channel.on("session_reset_failed", (payload: unknown) => {
+    this.#bindServerEvent("session_reset_failed", (payload: unknown) => {
       const failure = sessionResetFailureFrom(payload);
       if (failure !== null) options.onSessionResetFailed?.(failure);
     });
@@ -1166,6 +1241,34 @@ export class ServerLink {
       });
   }
 
+  /** Binds one server -> wrapper event with ADR-0015's receiver check in
+   *  front of the handler (issue #218). The single `channel.on` call site
+   *  in this class — `SERVER_EVENT_VERSION_POLICY` decides whether the
+   *  check runs, and typing `event` as a key of that table means a new
+   *  event has to be declared there before it can be bound at all.
+   *
+   *  The check runs BEFORE the handler's own payload validation, so a push
+   *  the handler goes on to drop as malformed still surfaces its version
+   *  mismatch. That is the receiver rule as ADR-0015 states it — the
+   *  receiver observed a version it does not speak — and it keeps every
+   *  event's logging behaviour identical regardless of how much shape
+   *  validation the individual handler happens to do. */
+  #bindServerEvent(
+    event: ServerEventName,
+    handler: (payload: unknown) => void,
+  ): void {
+    const checked = SERVER_EVENT_VERSION_POLICY[event] === "checked";
+    this.#channel.on(event, (payload: unknown) => {
+      if (checked) {
+        warnOnVersionMismatch(
+          event,
+          isObject(payload) ? payload.version : undefined,
+        );
+      }
+      handler(payload);
+    });
+  }
+
   /** Records the SDK session id the host just captured (ADR-0014 phase-0).
    *  Subsequent sends carry it; re-announced envelopes pick up the current
    *  one too, which is correct since it only ever moves forward. */
@@ -1184,13 +1287,13 @@ export class ServerLink {
    * future, or duplicate watermark as a harmless no-op. */
   acknowledgeInterAgentDelivery(deliverySeq: number): void {
     if (!Number.isSafeInteger(deliverySeq) || deliverySeq <= 0) return;
-    this.#channel.push("delivery_ack", { delivery_seq: deliverySeq });
+    this.#pushVersioned("delivery_ack", { delivery_seq: deliverySeq });
   }
 
   /** Reads this wrapper's ledger independently of directory peers. */
   requestInterAgentDeliveryStatus(): Promise<InterAgentDeliveryStatus | null> {
     return new Promise((resolve) => {
-      this.#channel.push("delivery_status_request", {})
+      this.#pushVersioned("delivery_status_request", {})
         .receive("ok", (payload: unknown) =>
           resolve(isObject(payload) ? deliveryStatusFrom(payload.delivery) ?? null : null),
         )
@@ -1258,6 +1361,14 @@ export class ServerLink {
       seq: this.#seq,
     } as Envelope;
     return { wire, push: this.#channel.push("envelope", wire) };
+  }
+
+  /** Stamps wrapper -> server control messages (ADR-0015 stage 2). */
+  #pushVersioned(event: VersionedWrapperEvent, payload: Record<string, unknown>): Push {
+    return this.#channel.push(event, {
+      ...payload,
+      version: WRAPPER_PROTOCOL_VERSION,
+    });
   }
 
   #rememberActiveTask(envelope: Envelope): void {
@@ -1367,7 +1478,7 @@ export class ServerLink {
     const id =
       replayId ??
       `resume-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    this.#channel.push("history_reset", { replay_id: id });
+    this.#pushVersioned("history_reset", { replay_id: id });
     return id;
   }
 
@@ -1389,13 +1500,13 @@ export class ServerLink {
       );
     }
     for (const chunk of chunks) {
-      this.#channel.push("replay_ia", { replay_id: replayId, items: chunk });
+      this.#pushVersioned("replay_ia", { replay_id: replayId, items: chunk });
     }
   }
 
   /** Pushes the explicit end boundary after the final replayed row. */
   sendHistoryReplayComplete(replayId: string): void {
-    this.#channel.push("history_replay_complete", { replay_id: replayId });
+    this.#pushVersioned("history_replay_complete", { replay_id: replayId });
   }
 
   /** Fetches the peer directory (protocol-inter-agent companion tool). The
@@ -1413,8 +1524,7 @@ export class ServerLink {
    *  tool surfaces the failure to the model rather than hanging. */
   requestDirectory(): Promise<DirectoryResult> {
     return new Promise((resolve, reject) => {
-      this.#channel
-        .push("directory_request", {})
+      this.#pushVersioned("directory_request", {})
         .receive("ok", (payload: unknown) => {
           if (!isObject(payload)) {
             resolve({ agents: [], users: [] });
@@ -1464,8 +1574,7 @@ export class ServerLink {
     reason?: string,
   ): Promise<SessionResetAccepted> {
     return new Promise((resolve, reject) => {
-      this.#channel
-        .push("session_reset_request", {
+      this.#pushVersioned("session_reset_request", {
           mode,
           ...(reason !== undefined ? { reason } : {}),
         })

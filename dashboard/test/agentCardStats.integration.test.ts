@@ -63,7 +63,7 @@ describe("AgentCard stats (issue #193)", () => {
     expect(target.querySelector(".meta-line")).toBeNull();
   });
 
-  it("engine/model/effort/ctx/5h/7day が揃っていれば全て描画する", async () => {
+  it("engine/model/effort/生窓/5h/7day が揃っていれば全て描画する", async () => {
     const target = await render({
       engine: "claude-code",
       model: "claude-opus-5",
@@ -87,7 +87,7 @@ describe("AgentCard stats (issue #193)", () => {
       "claude-code / claude-opus-5 / high",
     );
 
-    const ctx = statRow(target, "ctx");
+    const ctx = statRow(target, "生窓");
     expect(ctx?.querySelector(".meter-fill")?.getAttribute("style")).toContain("width: 42%");
     expect(ctx?.querySelector(".meter-val")?.textContent?.trim()).toBe("42%");
 
@@ -104,6 +104,81 @@ describe("AgentCard stats (issue #193)", () => {
     // M/D, no zero-padding, no time-of-day.
     expect(sevenDayVal).toMatch(/\d{1,2}\/\d{1,2}/);
     expect(sevenDayVal).not.toMatch(/:/);
+  });
+
+  it("context_budget があれば raw 生窓と作業予算を token 分母付きで並べる (#264)", async () => {
+    const target = await render({
+      context: {
+        used_tokens: 150000,
+        max_tokens: 200000,
+        used_percentage: 75,
+      },
+      context_budget: {
+        work_budget_tokens: 100000,
+        work_budget_percentage: 150,
+      },
+    });
+    const raw = statRow(target, "生窓");
+    expect(raw?.querySelector(".meter-val")?.textContent).toMatch(
+      /75%\s+\(150k\/200k\)/,
+    );
+    const budget = statRow(target, "作業予算");
+    expect(budget?.querySelector(".meter-val")?.textContent).toMatch(
+      /150%\s+\(150k\/100k\)/,
+    );
+    // 100%超を数値で残しつつ、bar は描画可能な幅に留める。
+    expect(budget?.querySelector(".meter-fill")?.getAttribute("style")).toContain(
+      "width: 100%",
+    );
+  });
+
+  it("作業予算 0% を欠落扱いせず token 分母付きで表示する (#264)", async () => {
+    const target = await render({
+      context: {
+        used_tokens: 0,
+        max_tokens: 200000,
+        used_percentage: 0,
+      },
+      context_budget: {
+        work_budget_tokens: 120000,
+        work_budget_percentage: 0,
+      },
+    });
+    const budget = statRow(target, "作業予算");
+    expect(budget?.querySelector(".meter-val")?.textContent).toMatch(
+      /0%\s+\(0\/120k\)/,
+    );
+    expect(budget?.querySelector(".meter-fill")?.getAttribute("style")).toContain(
+      "width: 0%",
+    );
+  });
+
+  it("旧 wrapper の生窓だけを表示し、作業予算を推測しない (#264)", async () => {
+    const target = await render({
+      context: {
+        used_tokens: 5000,
+        max_tokens: 200000,
+        used_percentage: 3,
+      },
+    });
+    expect(statRow(target, "生窓")?.textContent).toContain("3%");
+    expect(statRow(target, "作業予算")).toBeNull();
+  });
+
+  it("不正な作業予算分母は card でも隠し、生窓を残す (#264)", async () => {
+    const target = await render({
+      context: {
+        used_tokens: 5000,
+        max_tokens: 200000,
+        used_percentage: 3,
+      },
+      context_budget: {
+        work_budget_tokens: 0,
+        work_budget_percentage: 5,
+      },
+    });
+    expect(statRow(target, "生窓")).not.toBeNull();
+    expect(statRow(target, "作業予算")).toBeNull();
   });
 
   it("一部の値だけ欠落しても行/バー単位で非表示にしレイアウトを崩さない (engine 欠落)", async () => {

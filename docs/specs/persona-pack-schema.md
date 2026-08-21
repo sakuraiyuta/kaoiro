@@ -48,7 +48,7 @@ zip ファイル名は任意(推奨: `<id>-<version>.zip`。例:
 | `version` | string | 必須 | semver(例 `1.0.0`)。作成者が pack を更新するたびに bump する |
 | `license` | string | 必須 | ライセンス識別子(SPDX 準拠推奨。例 `CC0-1.0`, `CC-BY-4.0`, `MIT`, `proprietary`)。AI 生成物には著作権が発生しない場合があるため、ライセンス表示が実態と矛盾しないか確認する。使用モデルの条件は Outputs に及ぶ範囲を別途確認する |
 | `min_kaoiro_version` | string | 必須 | 動作に必要な server バージョンの下限 semver。server が下回れば取り込み拒否 |
-| `states` | string[] | 必須 | sprites/ に含まれる状態 id の列挙。順序不問、7 状態必須 |
+| `states` | string[] | 必須 | sprites/ に含まれる状態 id の列挙。順序不問、必須 7 状態と optional 予約 id |
 | `description` | string | 任意 | pack の 1 行説明。表示 UI に流す |
 | `author` | string | 任意 | 作成者名 |
 | `homepage` | string | 任意 | 作成元プロジェクト URL |
@@ -59,6 +59,10 @@ zip ファイル名は任意(推奨: `<id>-<version>.zip`。例:
 ["idle", "thinking", "tool_running", "waiting_input",
  "waiting_permission", "done", "error"]
 ```
+
+optional 予約 id は `fatigued` のみ。これは protocol の `state` 語彙ではなく、
+クライアントが context 使用率から導出する直交 modifier 用の sprite である。
+optional は任意だが、列挙するなら対応する PNG が必要。未知 id は reject される。
 
 例(fuji ペルソナ):
 
@@ -77,6 +81,13 @@ zip ファイル名は任意(推奨: `<id>-<version>.zip`。例:
 }
 ```
 
+疲労 sprite を含む pack は、必須 7 状態に `"fatigued"` を追加して宣言する:
+
+```json
+"states": ["idle", "thinking", "tool_running", "waiting_input",
+           "waiting_permission", "done", "error", "fatigued"]
+```
+
 ### personality.md
 
 **プレーンな markdown 本文**。frontmatter は付けない(メタデータは
@@ -92,7 +103,8 @@ system footer だけを concat する。結合が server 側の責務である�
 ### sprites/
 
 各状態の PNG。**512x512 透過 PNG** を推奨する(既存 4 体の実装ライン)。
-`manifest.states[]` に列挙された 7 状態すべてが揃っている MUST。
+`manifest.states[]` に列挙された**すべての**状態が揃っている MUST。必須 7 状態は
+manifest の列挙有無にかかわらず必要である。
 
 生成レシピ(ComfyUI モデル / seed / rembg 手順)は
 [personas](personas.md) を参照。pack として配布する時点では PNG のみが
@@ -115,7 +127,13 @@ zip には含まれない。`scripts/build-persona-pack.sh` は
 保持フィールド(allowlist 方式、fail-closed — 未知フィールドは
 取り込み時に警告して落とす): `mode` / `prompt` / `negative` /
 `model` / `architecture` / `seed` / `steps` / `width` / `height` /
-`cfg` / `denoise` / `generated_at` / `job_id` / `source_job_id`。
+`cfg` / `denoise` / `generated_at` / `job_id` / `source_job_id` /
+`tool` / `source_refs` / `postprocess` / `sha256`。後ろの 4 項目は生成系に
+依存しない任意フィールドであり、`tool` は生成 surface の識別子、
+`source_refs` は参照素材の相対 path 配列、`postprocess` は後処理の要約、
+`sha256` は成果物 PNG の SHA-256 を表す。既存 Anima 用フィールドは不変で、
+許容集合をこの 4 項目だけ明示拡張する。fail-closed の原則は維持し、ここに
+ない未知フィールドは引き続き警告して出力から落とす。
 `account`(メールアドレス)や `image_url`(署名付き URL、credential
 性)など個人情報・機微情報を含み得るフィールドは取り込み時に除外する。
 

@@ -103,6 +103,33 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  # issue #271 (ふじ #269 レビュー should-fix): tie (同着) fixture の決定
+  # 論化。`AgentDirectory.touch/1` は `System.system_time(:second)` を使う
+  # ため、グループ内の touch が秒境界をちょうど跨ぐと last_seen が割れ、
+  # tie-break (agent_id 昇順) を検証するテストが極低確率で flake し得た。
+  # グループ全 id の last_seen が同一値に揃うまで touch をやり直すことで、
+  # 実行タイミングに依存しない決定論的な tie を作る。
+  defp touch_until_tied(ids, attempts \\ 20)
+
+  defp touch_until_tied(ids, attempts) when attempts > 0 do
+    for id <- ids, do: AgentDirectory.touch(id)
+    # touch/1 は cast。直後の同期 call (get/1) が同じ GenServer メール
+    # ボックスを FIFO で通過するので、これで touch の適用を待ってから
+    # last_seen を読める。
+    last_seens = for id <- ids, do: AgentDirectory.get(id).last_seen
+
+    case Enum.uniq(last_seens) do
+      [_single] -> :ok
+      _diverged -> touch_until_tied(ids, attempts - 1)
+    end
+  end
+
+  defp touch_until_tied(ids, 0) do
+    flunk(
+      "touch_until_tied: last_seen did not converge to a single value for #{inspect(ids)} after 20 attempts"
+    )
+  end
+
   test "envelope を受けて agents:lobby へ中継し最新状態を保持する" do
     agent_id = "test.relay-1"
     @endpoint.subscribe("agents:lobby")
@@ -114,6 +141,156 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert_reply ref, :ok
     assert_broadcast "envelope", ^envelope
     assert AgentStates.snapshot()[agent_id] == envelope
+  end
+
+  describe "ADR-0015 stage 2 wrapper inbound funnel (issue #270)" do
+    # T2-3 は「version 一致なら警告ゼロ」を log == "" で検証するが、7 種の
+    # push には directory_request が含まれ、その directory-only 射影は
+    # suite 共有の AgentDirectory (グローバル GenServer) が 32 件を超えて
+    # いると cap warn を出す (issue #269 S6)。他 describe (T10 等) が蓄積
+    # した entry が実行順序次第で流れ込み seed 依存で flake するため、
+    # issue #269 の T10 describe と同じ隔離 setup で汚染を断つ。setup は
+    # describe スコープに閉じ、suite は async: false の直列実行。
+    setup do
+      for {id, _entry} <- AgentDirectory.all(), do: AgentDirectory.delete(id)
+      :ok
+    end
+
+    @versioned_wrapper_events ~w(
+      delivery_ack
+      delivery_status_request
+      directory_request
+      history_reset
+      history_replay_complete
+      replay_ia
+      session_reset_request
+    )
+
+    defp control_payload(_event), do: %{}
+
+    defp assert_control_reply(ref, event) do
+      case event do
+        "replay_ia" ->
+          assert_reply ref, :error, %{reason: "invalid value: replay_ia"}
+
+        "session_reset_request" ->
+          assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+
+        _ ->
+          assert_reply ref, :ok
+      end
+    end
+
+    defp push_control(socket, event, payload) do
+      ref = push(socket, event, payload)
+      assert_control_reply(ref, event)
+    end
+
+    test "T2-1: 7種の version 欠落は警告し、既存の返信を継続する" do
+      socket = join_wrapper("test.stage2-inbound-absent")
+
+      log =
+        capture_log(fn ->
+          for event <- @versioned_wrapper_events do
+            push_control(socket, event, control_payload(event))
+          end
+        end)
+
+      for event <- @versioned_wrapper_events do
+        assert log =~ "#{event}: wrapper declared protocol version (absent)"
+      end
+    end
+
+    test "T2-2: 7種の version 不一致は警告し、既存の返信を継続する" do
+      socket = join_wrapper("test.stage2-inbound-mismatch")
+
+      log =
+        capture_log(fn ->
+          for event <- @versioned_wrapper_events do
+            push_control(socket, event, Map.put(control_payload(event), "version", "9"))
+          end
+        end)
+
+      for event <- @versioned_wrapper_events do
+        assert log =~ "#{event}: wrapper declared protocol version \"9\""
+      end
+    end
+
+    test "T2-3: 7種の version 一致は警告しない" do
+      socket = join_wrapper("test.stage2-inbound-matched")
+
+      log =
+        capture_log(fn ->
+          for event <- @versioned_wrapper_events do
+            push_control(socket, event, Map.put(control_payload(event), "version", "0"))
+          end
+        end)
+
+      assert log == ""
+    end
+
+    test "T2-4: envelope の version 不一致は警告し、受理する" do
+      agent_id = "test.stage2-envelope-mismatch"
+      socket = join_wrapper(agent_id)
+
+      log =
+        capture_log(fn ->
+          assert_reply push(
+                         socket,
+                         "envelope",
+                         Map.put(envelope(agent_id, "idle"), "version", "9")
+                       ),
+                       :ok
+        end)
+
+      assert log =~ "envelope: wrapper declared protocol version \"9\""
+    end
+
+    test "T2-5: envelope の version 欠落は reject し、警告しない" do
+      agent_id = "test.stage2-envelope-absent"
+      socket = join_wrapper(agent_id)
+
+      log =
+        capture_log(fn ->
+          assert_reply push(
+                         socket,
+                         "envelope",
+                         Map.delete(envelope(agent_id, "idle"), "version")
+                       ),
+                       :error,
+                       %{reason: "missing key: version"}
+        end)
+
+      assert log == ""
+    end
+
+    test "T2-6: wrapper inbound は単一 funnel を通る" do
+      {:ok, ast} =
+        "lib/kaoiro_server_web/channels/wrapper_channel.ex"
+        |> File.read!()
+        |> Code.string_to_quoted()
+
+      handle_in_clauses =
+        ast
+        |> Macro.prewalker()
+        |> Enum.filter(fn
+          {:def, _, [{:handle_in, _, args} | _]} when is_list(args) -> length(args) == 3
+          _ -> false
+        end)
+
+      assert length(handle_in_clauses) == 1
+
+      literals =
+        ast
+        |> Macro.prewalker()
+        |> Enum.flat_map(fn
+          {:defp, _, [{:handle_wrapper_in, _, [event | _]} | _]} when is_binary(event) -> [event]
+          _ -> []
+        end)
+        |> MapSet.new()
+
+      assert literals == MapSet.new(Map.keys(WrapperChannel.wrapper_event_policy()))
+    end
   end
 
   test "稼働中 agent_id への二重 join を already_connected で拒否する (ADR-0024 D5)" do
@@ -3293,6 +3470,275 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
       assert entry["conversation"] == %{"active" => true, "peers" => [self_id]}
       refute Map.has_key?(entry["conversation"], "conversation_id")
+    end
+  end
+
+  describe "directory_request の directory-only 合流 (issue #269)" do
+    # T10 (S6) は AgentDirectory 全体の件数に依存する bound (N=32) を検証
+    # する。AgentDirectory はテストスイート全体で共有される単一 GenServer
+    # (グローバル名) で、他のテストが record した entry がそのまま蓄積
+    # され続けるため、掃除しないと bound テストが実行順序次第で不安定に
+    # なる。setup は describe スコープに閉じるので、このブロックの外の
+    # 既存テストには一切影響しない — 直前に完了したテストのデータを消す
+    # だけで、実行中の他テストと衝突することもない (async: false で直列)。
+    setup do
+      for {id, _entry} <- AgentDirectory.all(), do: AgentDirectory.delete(id)
+      :ok
+    end
+
+    # issue #269 T1: 完了条件1の server 側 — AgentStates に envelope を
+    # 持たない AgentDirectory エントリが disconnected + directory_only=true
+    # で合流する。
+    test "AgentStates に無く AgentDirectory にのみある agent が state=disconnected + directory_only=true で返る" do
+      peer_id = "test.dir-only-basic"
+      AgentDirectory.record(peer_id, "ao", "あお")
+
+      self_socket = join_wrapper("test.dir-only-basic-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-only-basic-self", "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      assert entry["state"] == "disconnected"
+      assert entry["directory_only"] == true
+    end
+
+    # issue #269 T2 (仕様5): AgentStates 側を優先し、同一 agent_id を
+    # 重複させない。
+    test "同一 agent_id が AgentStates と AgentDirectory の両方にある場合、entry は 1 件だけで directory_only を持たない" do
+      peer_id = "test.dir-only-dup"
+      AgentDirectory.record(peer_id, "ao", "あお")
+      peer_socket = join_wrapper(peer_id)
+      ref = push(peer_socket, "envelope", envelope(peer_id, "idle"))
+      assert_reply ref, :ok
+
+      self_socket = join_wrapper("test.dir-only-dup-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-only-dup-self", "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      matches = Enum.filter(agents, &(&1["agent_id"] == peer_id))
+      assert length(matches) == 1
+      refute Map.has_key?(hd(matches), "directory_only")
+    end
+
+    # issue #269 T3: persona_id が PersonaAssets に解決する場合の canonical join。
+    test "persona_id が PersonaAssets に解決する場合 persona に id/name/sprite_set が載る" do
+      peer_id = "test.dir-only-persona-known"
+      AgentDirectory.record(peer_id, "ao", "あお")
+
+      self_socket = join_wrapper("test.dir-only-persona-known-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-only-persona-known-self", "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      assert entry["persona"] == %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"}
+    end
+
+    # issue #269 T4 (S1 の再発防止): persona は未解決でも typed unresolved
+    # として persona キー自体は必ず present。ここが緩むと wrapper 側の
+    # narrow (persona を必須 field として扱う) で entry が丸ごと消える。
+    test "persona_id が未解決の場合 persona は %{id => persona_id} で、persona キー自体は present" do
+      peer_id = "test.dir-only-persona-unknown"
+      AgentDirectory.record(peer_id, "no-such-pack-zzz", "誰か")
+
+      self_socket = join_wrapper("test.dir-only-persona-unknown-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-only-persona-unknown-self", "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      assert Map.has_key?(entry, "persona")
+      refute Map.has_key?(entry["persona"], "name")
+      assert entry["persona"]["id"] == "no-such-pack-zzz"
+    end
+
+    # issue #269 T5 (仕様5): requester 除外は合流後の1箇所で、directory-only
+    # 側の self にも効く。
+    #
+    # ふじ MF-1/MF-2: self が AgentStates 未登録(envelope 未 push)で
+    # AgentDirectory にのみ存在する窓を実際に作る — join だけでは
+    # AgentStates に entry は載らないので、これで self は directory_only
+    # 側の候補に混入する (MF-1 の defect が再現される経路)。eligible な
+    # directory-only peer を N=32 の cap をちょうどまたぐ 33 件用意し、
+    # self が cap の枠を消費していないこと(返る件数が 32 件であること)
+    # まで検証する。旧版は self に envelope を push していたため self は
+    # 最初から live 側に載り、この窓を作れていなかった。
+    test "requester 自身が AgentDirectory にいても返らない (self が cap 枠を消費しない、ふじ MF-1)" do
+      self_id = "test.dir-only-self-exclude"
+      AgentDirectory.record(self_id, "ao", "あお")
+
+      eligible_ids = for i <- 1..33, do: "test.dir-only-self-exclude-peer-#{i}"
+      for id <- eligible_ids, do: AgentDirectory.record(id, "ao", "あお")
+
+      self_socket = join_wrapper(self_id)
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      refute Enum.any?(agents, &(&1["agent_id"] == self_id))
+      # eligible peer は 33 件、N=32 の cap で 1 件だけ drop されるのが
+      # 正しい挙動。self が cap の枠を先に消費していれば 31 件になる
+      # (MF-1 の defect)。
+      assert length(agents) == 32
+    end
+
+    # issue #269 T6 (仕様3): last_seen は touch 済みのみ ISO8601 UTC で載り、
+    # 未 touch (memory-only hint 未取得) は field ごと省略する。
+    test "touch 済みなら last_seen が ISO8601 で載り、未 touch なら field ごと省略" do
+      touched_id = "test.dir-only-touched"
+      untouched_id = "test.dir-only-untouched"
+
+      AgentDirectory.record(touched_id, "ao", "あお")
+      AgentDirectory.touch(touched_id)
+      # touch/2 は cast。直後の同期 call (get/1) が同じ GenServer メール
+      # ボックスを FIFO で通過するので、これで touch の適用を待てる。
+      _ = AgentDirectory.get(touched_id)
+
+      AgentDirectory.record(untouched_id, "ao", "あお")
+
+      self_socket = join_wrapper("test.dir-only-touch-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-only-touch-self", "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      touched_entry = Enum.find(agents, &(&1["agent_id"] == touched_id))
+      untouched_entry = Enum.find(agents, &(&1["agent_id"] == untouched_id))
+
+      assert {:ok, _, _} = DateTime.from_iso8601(touched_entry["last_seen"])
+      refute Map.has_key?(untouched_entry, "last_seen")
+    end
+
+    # issue #269 T7 (仕様4 / 開示境界。ADR-0021 F6-7 の covering): directory-
+    # only entry には live 専用 field が一切載らない。absent = unknown。
+    test "directory-only entry には engine/model/effort/context/rate_limits/session_started_at/turns/last_activity_at が無い" do
+      peer_id = "test.dir-only-absent-fields"
+      AgentDirectory.record(peer_id, "ao", "あお")
+
+      self_socket = join_wrapper("test.dir-only-absent-fields-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-only-absent-fields-self", "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+
+      for key <-
+            ~w(engine model effort context rate_limits session_started_at turns last_activity_at) do
+        refute Map.has_key?(entry, key)
+      end
+    end
+
+    # issue #269 T8 (S10): display_name が検証に落ちても entry ごとは
+    # 落とさず、display_name field だけ省略する (live entry と同じ discipline)。
+    test "display_name が検証に落ちる値でも entry は残り display_name だけ省略される" do
+      peer_id = "test.dir-only-bad-display-name"
+      AgentDirectory.record(peer_id, "ao", String.duplicate("あ", 65))
+
+      self_socket = join_wrapper("test.dir-only-bad-display-name-self")
+
+      ref =
+        push(self_socket, "envelope", envelope("test.dir-only-bad-display-name-self", "idle"))
+
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+      assert entry != nil
+      refute Map.has_key?(entry, "display_name")
+    end
+
+    # issue #269 T9 (S7): AgentDirectory の DETS ロードは is_binary(agent_id)
+    # しか見ていないため、この経路が AgentId.valid?/1 を通す最初の関門になる。
+    test "charset 不正な agent_id の directory エントリは entry ごと drop される" do
+      bad_id = "bad id with spaces!"
+      AgentDirectory.record(bad_id, "ao", "あお")
+
+      self_socket = join_wrapper("test.dir-only-charset-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-only-charset-self", "idle"))
+      assert_reply ref, :ok
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      refute Enum.any?(agents, &(&1["agent_id"] == bad_id))
+    end
+
+    # issue #269 T10 (S6): directory-only 分は N=32 に切り、last_seen 降順
+    # (unknown は最後尾、同着は agent_id 昇順) で残す。超過時は
+    # agent/request 単位で 1 行 warn する。
+    #
+    # ふじ MF-2: 旧版は 33 件を同一秒 touch していたため last_seen が
+    # ほぼ同値になり、件数 (32) だけしか pin できていなかった —
+    # ソートロジックを丸ごと外して単純 take(32) にすり替えても green の
+    # ままだった。ここでは known 時刻差 2 グループ (newest / older) と
+    # unknown 30 件・同着 tie を含む fixture で「残る ID の並び順」と
+    # 「warn が 1 行だけ・drop 件数が正確」であることまで厳密に assert する。
+    test "上限超過分は last_seen 降順で残し、unknown は最後尾・同着は agent_id 昇順で切る" do
+      newest_ids = ["test.dir-only-order-newest-1", "test.dir-only-order-newest-2"]
+      older_ids = ["test.dir-only-order-older-1", "test.dir-only-order-older-2"]
+
+      unknown_ids =
+        for i <- 1..30 do
+          "test.dir-only-order-unknown-#{String.pad_leading(Integer.to_string(i), 2, "0")}"
+        end
+
+      for id <- older_ids ++ newest_ids ++ unknown_ids do
+        AgentDirectory.record(id, "ao", "あお")
+      end
+
+      # older を先に touch し、1 秒空けて newest を touch する —
+      # last_seen は unix 秒精度なので、2 グループ間の順序を確実に
+      # 分けるにはこの間隔が要る。同一グループ内の 2 件は
+      # touch_until_tied で同一秒に揃え (issue #271)、agent_id 昇順の
+      # tie-break を決定論的に pin する。
+      touch_until_tied(older_ids)
+      Process.sleep(1100)
+      touch_until_tied(newest_ids)
+
+      self_socket = join_wrapper("test.dir-only-order-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-only-order-self", "idle"))
+      assert_reply ref, :ok
+
+      log =
+        capture_log(fn ->
+          ref = push(self_socket, "directory_request", %{})
+          assert_reply ref, :ok, %{"agents" => agents}
+
+          relevant_ids =
+            agents
+            |> Enum.map(& &1["agent_id"])
+            |> Enum.filter(&(&1 in (newest_ids ++ older_ids ++ unknown_ids)))
+
+          # known 4 件 (newest 2 → older 2、グループ内 tie は agent_id
+          # 昇順) は必ず残る。続く unknown 30 件のうち N=32 の枠に収まる
+          # のは agent_id 昇順の先頭 28 件だけ (4 + 30 = 34 件、2 件 drop)。
+          expected_unknown_kept = Enum.take(unknown_ids, 28)
+          assert relevant_ids == newest_ids ++ older_ids ++ expected_unknown_kept
+          assert length(relevant_ids) == 32
+        end)
+
+      warn_lines =
+        log
+        |> String.split("\n")
+        |> Enum.filter(&String.contains?(&1, "directory-only projection capped at"))
+
+      assert length(warn_lines) == 1
+      assert hd(warn_lines) =~ "capped at 32; dropped 2 entr(ies)"
     end
   end
 

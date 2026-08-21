@@ -124,7 +124,7 @@ describe("AgentCard 頭上リング (issue #180)", () => {
 
   it("sprite 有りは .task-ring に face-orbit を付与しない", async () => {
     const target = await render(1, manifestWithSprite);
-    expect(target.querySelector("img.sprite")).not.toBeNull();
+    expect(target.querySelector("img.portrait-sprite")).not.toBeNull();
     const ring = target.querySelector(".task-ring");
     expect(ring).not.toBeNull();
     expect(ring?.classList.contains("face-orbit")).toBe(false);
