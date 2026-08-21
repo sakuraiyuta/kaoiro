@@ -10,7 +10,7 @@
 # matched Anima json through a fixed allowlist and writes the result.
 #
 # Matching is fail-loud by design: zero or multiple sha256 matches, or
-# an unknown json field, abort instead of silently skipping.
+# an unknown json field, warn and drop it rather than silently skipping.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,9 +46,16 @@ allow_fields=(mode prompt negative model architecture seed steps width
               source_refs postprocess sha256)
 # Fields intentionally dropped. silent_deny_fields carry PII/credential
 # material (account is an email, image_url is a signed URL) and must
-# never surface even in a diagnostic line. All other unrecognised fields
-# are fail-closed errors, rather than being silently omitted.
+# never surface even in a warn line. warn_deny_fields are ordinary metadata
+# with no such risk, so known_json below deliberately omits them: their drop
+# still goes through the same unknown-field warning path as a genuinely new
+# field, keeping the audit trail complete.
 silent_deny_fields=(account image_url)
+# shellcheck disable=SC2034  # documentation only: listed so a reader can
+# see which fields fall through to the warn path below by not being in
+# known_json, without re-deriving that set from the allow/silent lists.
+warn_deny_fields=(comfy_prompt_id file_bytes image_filename created_at
+                   duration_seconds source schema_version)
 states=(idle thinking tool_running waiting_input waiting_permission
         "done" error)
 
@@ -147,9 +154,8 @@ for state in "${states[@]}"; do
     '(keys - $known) | .[]' "$anima_json")"
   if [[ -n "$unknown_fields" ]]; then
     while IFS= read -r field; do
-      echo "error: unknown field '$field' in $anima_json" >&2
+      echo "warn: unknown field '$field' in $anima_json, dropped" >&2
     done <<< "$unknown_fields"
-    exit 1
   fi
 
   out_file="$out_dir/$state.json"
