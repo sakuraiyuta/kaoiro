@@ -55,3 +55,10 @@ test('canary subset distinguishes future migration from an excluded issue', () =
     assert.match(state.issues[100].body, /private Gitea issue 9 \(not migrated\)/);
   } finally { rmSync(x.dir, { recursive: true, force: true }); }
 });
+test('canary list outside the approved migration list fails before GitHub calls', () => {
+  const x = setup(); try {
+    const result = run(importer, [...x.base, '--canary-list', join(fixtures, 'invalid-canary-list.json')], x.env);
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /outside --issue-list/);
+    assert.deepEqual(JSON.parse(readFileSync(x.state)).issues, {});
+  } finally { rmSync(x.dir, { recursive: true, force: true }); }
+});
