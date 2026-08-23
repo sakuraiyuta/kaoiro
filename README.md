@@ -1,16 +1,17 @@
 # kaoiro (kao-iro, 'complexion' or 'how someone looks')
 
 > **Status**: research prototype. It is developed mainly for the author's
-> daily use (and that of their laboratory), and it does not guarantee
-> maintenance or responses. Issues are welcome, but the time available to
-> address them is limited. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+> daily use by the author and their laboratory, and it makes no guarantees
+> about maintenance or responses to issues. Issues are welcome, but the time
+> available to address them is limited. See [CONTRIBUTING.md](CONTRIBUTING.md)
+> for details.
 
 A system that **monitors the state and progress of multiple CLI AI agents**
 (such as Claude Code and Codex) and visualizes them as characters. Text-based
 CLI agents make it hard to tell what they are doing and who is waiting, and
-they can be difficult to relate to. kaoiro shows agents through their demeanor
-so that people can see what is happening and grow attached to them
-while running several agents at once.
+they can be difficult to relate to. kaoiro represents each agent as a character
+with changing expressions so that people can see what is happening and grow
+attached to them while running several agents at once.
 
 ## Install & Quick start
 
@@ -122,18 +123,18 @@ published).
 ## Rationale
 
 I should admit that this section was added afterward. While making kaoiro, the
-motivation was simply that it was fun to watch AI agents turn my ideas into
-form at a speed no human could match. But giving agents faces and names,
-letting their identities continue across sessions, and building a path for
-them to ask people questions makes "it was fun" feel incomplete as an
+motivation was simply that it was fun to watch AI agents give shape to my ideas
+at a speed no human could match. But giving agents faces and names, letting
+their identities continue across sessions, and giving them a way to ask people
+questions makes "it was fun" feel incomplete as an
 explanation.
 
 kaoiro is an **experiment in treating AI agents as first-class citizens**.
-Rather than calling them as disposable tools, I call them by name, read their
+Rather than treating them as disposable tools, I call them by name, read their
 expression, give them work, and answer when they ask for permission. Faces,
 names, and persistent personae
 ([ADR-0003](docs/adr/0003-persona-identity-persistence.md)) are not
-decoration. They are the mechanism for it.
+decoration. They are what make this experiment possible.
 
 To avoid misunderstanding: citizenship belongs to personae, not processes. I
 am attached to the agents, but I end a stuck session without hesitation. That
@@ -142,10 +143,10 @@ They come back to work the next morning with the same faces.
 
 The other half of the motivation is straightforward curiosity. I wanted to
 experience, in my own environment, what it means for people and AI agents to
-work at the same eye level. I am also using myself as the first subject to
+work on equal footing. I am also using myself as the first subject to
 observe what happens if this way of working spreads. I may report the results
 somewhere eventually.
 
-Finally, `iro` in kaoiro means color. The name has a spoonful of another hope
-mixed into it: that a work landscape that can easily become bleak might get a
-little color.
+Finally, `iro` in kaoiro means color. I also mixed a spoonful of hope into the
+name: that kaoiro might add a little color to work that can so easily feel
+bleak.

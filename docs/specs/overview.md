@@ -12,8 +12,8 @@ related: [architecture, non-goals, glossary]
 CLI-based AI agents such as Claude Code and Codex make their state and progress
 hard to understand. When several are in use, it is hard to follow who is doing
 what, and they can be difficult to relate to. kaoiro is a wrapper and
-visualization system that shows agents through their demeanor (character
-+ expression), aiming both for situational awareness and attachment.
+visualization system that represents each agent as a character with changing
+expressions, aiming both for situational awareness and attachment.
 
 ## Definition
 
@@ -57,7 +57,7 @@ See [non-goals](non-goals.md) for work outside the scope.
 ## Constraints
 
 - SHOULD: The wrapper uses TypeScript + an engine SDK, the server uses
-  Elixir/Phoenix, and the client uses Web (TS). See
+  Elixir/Phoenix, and the client is a web front end written in TypeScript. See
   [architecture](architecture.md) for details.
 
 ## Open Questions
