@@ -35,6 +35,13 @@ kaoiro のバックログは、複数のエージェントが同一 work tree �
 - git: push 済み commit を amend しない。`git add -A` を使わず自分の変更
   ファイルだけを明示 add する。peer の git 操作が pending の間は同一 branch
   へ commit を差し込まない。
+- peer の作業 clone / worktree は共有 work tree と同じ扱い。読み取りだけの
+  git 操作(`show` / `log` / `diff` / `cat-file` / `for-each-ref`)に留め、
+  `checkout` / `fetch` / `branch` / `stash` など状態を変える操作は所有者
+  だけが行う。所有者の HEAD を動かすと未 merge の commit が detached HEAD
+  へ取り残され、所有者は reflog を辿るまで失ったことに気づけない。未
+  commit の変更の有無は所有者に確認する — `status` は index に stat 情報を
+  書き戻すので、外から打つ操作ではない。
 - 会話は双方が `done=true` を送って初めて終わる。相手が先に送っていても
   自分からも返す。
 - flaky test は再実行の前に出力を保存する。テスト名・stack trace・seed は
