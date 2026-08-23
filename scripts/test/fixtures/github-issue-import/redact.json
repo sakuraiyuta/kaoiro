@@ -1,0 +1,4 @@
+[
+  {"kind": "literal", "pattern": "SECRET", "replacement": "REDACTED"},
+  {"kind": "literal", "pattern": "attachment omitted", "replacement": "should-not-touch-placeholder"}
+]
