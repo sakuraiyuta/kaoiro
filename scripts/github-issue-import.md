@@ -54,3 +54,9 @@ node scripts/check-github-issue-import.mjs \
 
 It exits nonzero unless GitHub's migrated issue count, comment count, and
 attachment-placeholder count all exactly match the frozen source inputs.
+
+For the production import, use the full approved list (not a canary subset)
+and add `--require-no-pending`. This makes a remaining `migration pending`
+reference a nonzero conservation failure. Do not use that flag for a subset
+canary: references to approved issues outside the subset are intentionally
+marked pending.

@@ -33,7 +33,9 @@ test('imports, rewrites, closes, resumes, and conserves exact counts', () => {
     result = run(importer, x.base, x.env); assert.equal(result.status, 0, result.stderr);
     state = JSON.parse(readFileSync(x.state)); assert.equal(Object.keys(state.issues).length, 2); assert.equal(state.comments[100].length + state.comments[101].length, 2);
     const checkArgs = ['--repo', 'acme/target', '--issues-glob', join(fixtures, 'issues-*.json'), '--comments-glob', join(fixtures, 'comments-*.json'), '--issue-list', join(fixtures, 'issues.json'), '--map', join(x.dir, 'state/old-to-new.json'), '--attachments', join(x.dir, 'attachments.json')];
-    result = run(checker, checkArgs, x.env); assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /"attachment_placeholders": 2/);
+    result = run(checker, [...checkArgs, '--require-no-pending'], x.env); assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /"attachment_placeholders": 2/);
+    state = JSON.parse(readFileSync(x.state)); state.issues[100].body += ' migration pending'; writeFileSync(x.state, JSON.stringify(state));
+    result = run(checker, [...checkArgs, '--require-no-pending'], x.env); assert.notEqual(result.status, 0); assert.match(result.stdout, /"migration_pending_references": 1/);
     writeFileSync(join(x.dir, 'attachments.json'), '[]\n');
     result = run(checker, checkArgs, x.env); assert.notEqual(result.status, 0); assert.match(result.stderr, /manifest count differs/);
   } finally { rmSync(x.dir, { recursive: true, force: true }); }

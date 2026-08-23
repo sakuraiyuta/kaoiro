@@ -7,8 +7,8 @@ import { spawnSync } from 'node:child_process';
 const PLACEHOLDER = '[attachment omitted; see migration attachments manifest]';
 const ATTACHMENT_PATTERN = /https?:\/\/[^\s)\]"']*\/attachments\/[^\s)\]"']*/g;
 function fail(message) { throw new Error(message); }
-function usage() { console.error('Usage: check-github-issue-import.mjs --repo OWNER/REPO --issues-glob GLOB --comments-glob GLOB --issue-list FILE --map FILE --attachments FILE'); process.exit(2); }
-function args(argv) { const out = {}; for (let i = 0; i < argv.length; i++) { const key = argv[i]; if (!key.startsWith('--')) usage(); const value = argv[++i]; if (!value || value.startsWith('--')) usage(); out[key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value; } for (const key of ['repo', 'issuesGlob', 'commentsGlob', 'issueList', 'map', 'attachments']) if (!out[key]) usage(); return out; }
+function usage() { console.error('Usage: check-github-issue-import.mjs --repo OWNER/REPO --issues-glob GLOB --comments-glob GLOB --issue-list FILE --map FILE --attachments FILE [--require-no-pending]'); process.exit(2); }
+function args(argv) { const out = {}; for (let i = 0; i < argv.length; i++) { const key = argv[i]; if (!key.startsWith('--')) usage(); const name = key.slice(2); if (name === 'require-no-pending') { out.requireNoPending = true; continue; } const value = argv[++i]; if (!value || value.startsWith('--')) usage(); out[name.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value; } for (const key of ['repo', 'issuesGlob', 'commentsGlob', 'issueList', 'map', 'attachments']) if (!out[key]) usage(); return out; }
 function glob(pattern) { const dir = dirname(pattern); const base = basename(pattern); const rx = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replaceAll('\\*', '.*')}$`); const files = existsSync(dir) ? readdirSync(dir).filter((x) => rx.test(x)).sort().map((x) => `${dir}/${x}`) : []; if (!files.length) fail(`glob matched no files: ${pattern}`); return files; }
 function json(path) { try { return JSON.parse(readFileSync(path, 'utf8')); } catch (e) { fail(`invalid JSON in ${path}: ${e.message}`); } }
 function bundle(pattern) { return glob(pattern).flatMap((path) => { const v = json(path); if (!Array.isArray(v)) fail(`bundle is not an array: ${path}`); return v; }); }
@@ -30,17 +30,19 @@ function main() {
     + sourceComments.reduce((count, comment) => count + countAttachments(comment.body), 0);
   const attachmentManifest = json(o.attachments); if (!Array.isArray(attachmentManifest)) fail(`attachments must be an array: ${o.attachments}`);
   if (attachmentManifest.length !== expectedAttachmentRefs) fail('attachment manifest count differs from source bundle attachment reference count');
-  const r = repo(o.repo); let actualComments = 0; let actualPlaceholders = 0; const missing = [];
+  const r = repo(o.repo); let actualComments = 0; let actualPlaceholders = 0; let pendingReferences = 0; const missing = [];
   for (const old of wanted) {
     const target = map[String(old)]; const issueValues = gh([`repos/${r}/issues/${target}`]); const targetIssue = issueValues[0];
     if (!targetIssue || !String(targetIssue.body ?? '').includes(`Migrated from private Gitea issue ${old}`)) { missing.push({ old, target, reason: 'missing migration footer' }); continue; }
-    actualPlaceholders += String(targetIssue.body ?? '').split(PLACEHOLDER).length - 1;
+    const targetBody = String(targetIssue.body ?? '');
+    actualPlaceholders += targetBody.split(PLACEHOLDER).length - 1;
+    pendingReferences += targetBody.split('migration pending').length - 1;
     const comments = gh(['--paginate', `repos/${r}/issues/${target}/comments?per_page=100`]); actualComments += comments.length;
-    for (const comment of comments) actualPlaceholders += String(comment.body ?? '').split(PLACEHOLDER).length - 1;
+    for (const comment of comments) { const body = String(comment.body ?? ''); actualPlaceholders += body.split(PLACEHOLDER).length - 1; pendingReferences += body.split('migration pending').length - 1; }
   }
   const actualIssues = wanted.length - missing.length;
-  const result = { expected: { issues: wanted.length, comments: expectedComments, attachment_references: expectedAttachmentRefs }, actual: { issues: actualIssues, comments: actualComments, attachment_placeholders: actualPlaceholders }, missing };
+  const result = { expected: { issues: wanted.length, comments: expectedComments, attachment_references: expectedAttachmentRefs }, actual: { issues: actualIssues, comments: actualComments, attachment_placeholders: actualPlaceholders, migration_pending_references: pendingReferences }, missing };
   console.log(JSON.stringify(result, null, 2));
-  if (missing.length || actualIssues !== wanted.length || actualComments !== expectedComments || actualPlaceholders !== expectedAttachmentRefs) process.exitCode = 1;
+  if (missing.length || actualIssues !== wanted.length || actualComments !== expectedComments || actualPlaceholders !== expectedAttachmentRefs || (o.requireNoPending && pendingReferences !== 0)) process.exitCode = 1;
 }
 main();
