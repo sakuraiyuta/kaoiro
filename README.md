@@ -70,8 +70,9 @@ data flow.
     control, and permission approval.
 - **Server: Elixir / OTP + Phoenix**
   - Aggregates wrappers through WebSocket (Phoenix Channels).
-  - Keeps the latest state in one GenServer per connection (agent), supervised
-    under a Supervisor.
+  - Keeps the latest state in one shared, supervised `AgentStates`
+    GenServer, keyed by `agent_id`; each wrapper connection is its own
+    Phoenix Channel process that writes into it.
   - Fans out through PubSub and sends updates to clients in real time.
 - **Client: Web front end (TypeScript)** (static image variants for rendering)
   - The reference dashboard (Svelte 5 + Vite) is in `dashboard/`. It is an
