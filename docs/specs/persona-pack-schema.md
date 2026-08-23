@@ -43,7 +43,7 @@ zip ファイル名は任意(推奨: `<id>-<version>.zip`。例:
 | フィールド | 型 | 必須 | 意味 |
 |---|---|---|---|
 | `id` | string | 必須 | persona 一意識別子。`^[A-Za-z0-9._-]+$` / 1-256 文字。[ADR-0003](../adr/0003-persona-identity-persistence.md)。ファイルシステム上のディレクトリ名にもなる |
-| `name` | string | 必須 | pack が定義する persona の固有名(日本語可、canonical — issue #219 D19)。1-64 文字、制御文字禁止(`Principal.display_name` と同一ドメイン、D24) |
+| `name` | string | 必須 | pack が定義する persona の固有名(日本語可、canonical — issue #209 D19)。1-64 文字、制御文字禁止(`Principal.display_name` と同一ドメイン、D24) |
 | `sprite_set` | string | 必須 | スプライトセット識別子。通常は `id` と同一。1-256 文字 |
 | `version` | string | 必須 | semver(例 `1.0.0`)。作成者が pack を更新するたびに bump する |
 | `license` | string | 必須 | ライセンス識別子(SPDX 準拠推奨。例 `CC0-1.0`, `CC-BY-4.0`, `MIT`, `proprietary`)。AI 生成物には著作権が発生しない場合があるため、ライセンス表示が実態と矛盾しないか確認する。使用モデルの条件は Outputs に及ぶ範囲を別途確認する |

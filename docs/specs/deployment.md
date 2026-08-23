@@ -15,7 +15,7 @@ related: [auth-and-authz, setup-wizards, threat-model]
 **手動手順の唯一の正本**。[setup-wizards](setup-wizards.md) は**初回配備**の
 env / config 生成を自動化するものであり、DETS パスや nginx 設定など wizard が
 扱わない領域は本 doc に完全記載する。**既存配備の更新(4 節)は wizard の
-対象外**で、自動化は issue #228 / #229 / #230 で進める。
+対象外**で、自動化は issue #218 / #219 / #220 で進める。
 
 ## 全体構成
 
@@ -55,9 +55,9 @@ cd server && cp .env.example .env
 | env | 必須 | 意味 |
 |---|---|---|
 | `SECRET_KEY_BASE` | 必須 | `mix phx.gen.secret` で生成(64 文字)。`openssl rand -hex 32` では短い |
-| `PHX_HOST` | 必須 | 公開ホスト名。未設定は起動時 raise(fail-fast、issue #139) |
+| `PHX_HOST` | 必須 | 公開ホスト名。未設定は起動時 raise(fail-fast、issue #134) |
 | `PORT` | 任意 | 既定 4000 |
-| `KAOIRO_BIND_IP` | 任意 | :prod のみ有効。既定は全 IF。通常は既定のままで良い(issue #139) |
+| `KAOIRO_BIND_IP` | 任意 | :prod のみ有効。既定は全 IF。通常は既定のままで良い(issue #134) |
 | `KAOIRO_CLIENT_TOKENS` | 必須 | `<token>:<role>,...`(role = `operator`/`viewer`)。未設定は全 client 拒否 |
 | `KAOIRO_WRAPPER_TOKENS` | 任意 | `<agent_id>:<token>,...`(client と順序が逆)。spawn 経由のみの runner 配備では不要 — server-minted signed token で認証 (ADR-0024、2026-08-02 改訂)。固定 wrapper を pre-register する場合のみ設定 |
 | `KAOIRO_RUNNER_TOKENS` | 必須 | `<host_id>:<token>,...`。1.1 で発行した token を runner 側 `runner.env` の `KAOIRO_RUNNER_TOKEN` と対にする |
@@ -69,7 +69,7 @@ cd server && cp .env.example .env
 
 3 種いずれも未設定時の挙動は env ごとに異なる(client = fail-closed、
 runner = :prod で fail-closed・dev/test のみ緩和、wrapper = :prod では
-signed token のみ受理・dev/test は緩和、issue #138 / 2026-08-02 改訂)。
+signed token のみ受理・dev/test は緩和、issue #133 / 2026-08-02 改訂)。
 
 persona pack 取り込みは [ADR-0046](../adr/0046-persona-cache-relocation.md)
 により extraction cache と分離済みであり、`KAOIRO_PERSONA_DIR` は `:ro`
@@ -99,7 +99,7 @@ mount とは分離する。
 この一覧を基準に、全 path が named volume 配下へ解決されることを確認する。
 一覧に載っていない DETS が増えると、**backup の対象から静かに漏れる** —
 `KAOIRO_USERS_PATH` は実際にこれを踏み、compose に無いまま container
-recreate で user ledger が失われた(issue #227)。
+recreate で user ledger が失われた(issue #217)。
 
 **2026-08-08 注記:** phase 30-7 で `InterAgentHistory` DETS は撤廃し、
 `KAOIRO_INTER_AGENT_HISTORY_PATH` は server に読まれなくなった。同梱
@@ -174,7 +174,7 @@ server {
 | `KAOIRO_PUBLISH_IP` | ホストの VPN 側 IF の IP | compose の公開先(既定 `127.0.0.1`)。全 IF 公開ではなく VPN 側 IP に限定する |
 
 `check_origin` は `http://PHX_HOST:PORT` と loopback の 2 つだけを許可する
-(#154 M1 — 既定の host のみ比較では同一ホストの別ポートから operator
+(private Gitea issue 154 M1 — 既定の host のみ比較では同一ホストの別ポートから operator
 socket を奪える)。**それ以外の名前や IP 直打ちでダッシュボードを開くと
 画面は出るが client socket が 403 になる** ので、必ず `PHX_HOST` と同じ
 名前でアクセスする。
@@ -187,7 +187,7 @@ socket を奪える)。**それ以外の名前や IP 直打ちでダッシュボ
 
 nginx が担うはずのセキュリティヘッダ(CSP / `nosniff` /
 `X-Frame-Options` / `Referrer-Policy`)は、この構成では付与主体が居なく
-なるためサーバ自身が全レスポンスに付ける(#155、
+なるためサーバ自身が全レスポンスに付ける(#145、
 `KaoiroServerWeb.SecurityHeaders`。狙いと内訳は
 [threat-model](threat-model.md) 緩和策)。CSP の `connect-src` は
 **そのレスポンスを返しているオリジンと一致する `check_origin` エントリ
@@ -268,7 +268,7 @@ curl http://<PHX_HOST>:<PORT>/session/auth-methods
 ログイン画面に有効 provider のボタンが並び、許可リスト外のアカウントは
 `auth_error=not_allowed` で拒否される。許可リストの行削除は次回接続 /
 refresh(最長 12h)で反映。**operator→viewer の「降格」は稼働中 socket
-に反映されない既知の穴がある(issue #158)**。拒否時の warn ログには
+に反映されない既知の穴がある(issue #148)**。拒否時の warn ログには
 `provider:uid` がそのまま出るため、許可リストへ写す識別子はログから
 確認できる。
 
@@ -317,7 +317,7 @@ nginx 越しの prod 配備では `server_url` は必ず `wss://` にする(1.4 
 `runner.env` に `KAOIRO_RUNNER_TOKEN=<1.1 で発行した token>` を設定し
 (サーバ側 `KAOIRO_RUNNER_TOKENS` の `<host_id>:<token>` と対にする)、
 `chmod 600` する。`server_url` は `runner.env` の
-`KAOIRO_RUNNER_SERVER_URL`(issue #140、env が config ファイルより優先)
+`KAOIRO_RUNNER_SERVER_URL`(issue #135、env が config ファイルより優先)
 でも上書きできる。
 
 ### 常駐化
@@ -345,16 +345,16 @@ release profile では `@@DEPLOY_DIR@@` に `<install-root>/current/deploy` を
 
 > **本節は暫定手順(manual interim procedure)である。**自動化が入るまでの
 > 橋渡しとして書いており、完成形ではない。**「手順書があるから安全」ではない**
-> — 4.1 の限界は手順を守っても残る。経緯と置換条件は issue #227。
+> — 4.1 の限界は手順を守っても残る。経緯と置換条件は issue #217。
 
 ### 4.1 既知の限界
 
 | 限界 | 内容 | 解消する issue |
 |---|---|---|
-| **in-place build**(checkout 直挿しのホストのみ) | 稼働中の checkout の `dist` を直接上書きする。runner は wrapper を spawn するたびに on-disk の `dist` を解決する(`runner/src/spawn.ts` の `resolveWrapperLaunch()`)ため、build 中に spawn が起きると新旧の混ざった artifact を掴む。「停止中に build する」と手順で定めても、**順序を一度誤れば再発する** | #229(実装済み。**ホストを release profile へ移行するまで残る** — 4.6) |
-| **自動 rollback が無い** | 失敗時の復旧はすべて手作業(4.4) | #230 |
+| **in-place build**(checkout 直挿しのホストのみ) | 稼働中の checkout の `dist` を直接上書きする。runner は wrapper を spawn するたびに on-disk の `dist` を解決する(`runner/src/spawn.ts` の `resolveWrapperLaunch()`)ため、build 中に spawn が起きると新旧の混ざった artifact を掴む。「停止中に build する」と手順で定めても、**順序を一度誤れば再発する** | #219(実装済み。**ホストを release profile へ移行するまで残る** — 4.6) |
+| **自動 rollback が無い** | 失敗時の復旧はすべて手作業(4.4) | #220 |
 
-**artifact provenance が無い(旧 #228)は解消済み**— build identity
+**artifact provenance が無い(旧 #218)は解消済み**— build identity
 ([ADR-0053](../adr/0053-build-identity.md))の導入により、full SHA を
 返す health endpoint と runner の register 情報で確認できる(4.5)。
 
@@ -380,7 +380,7 @@ release profile では `@@DEPLOY_DIR@@` に `<install-root>/current/deploy` を
   `StrictHostKeyChecking=no` で迂回しない
 - **永続化対象の全 path が named volume 配下へ解決されることを確認する。**
   正本は 1.2 節の 9 種。一覧に無い DETS が増えていると **backup から静かに
-  漏れる**(`KAOIRO_USERS_PATH` が実際にこれを踏んだ — issue #227)
+  漏れる**(`KAOIRO_USERS_PATH` が実際にこれを踏んだ — issue #217)
 - **active な作業が無いことを確認する**(人間の判断)。runner の停止は配下の
   wrapper をすべて止める(2 節「常駐化」)。会話状態は永続化されていないため、
   進行中のやり取りは失われる
@@ -481,12 +481,12 @@ git -C <repo-path> rev-parse HEAD                          # 旧 local commit
 **稼働系への影響はゼロ**である。
 
 **`KAOIRO_BUILD_REVISION` / `KAOIRO_BUILD_DIRTY` を明示的に渡す**(build
-identity, issue #228, [ADR-0053](../adr/0053-build-identity.md))。
+identity, issue #218, [ADR-0053](../adr/0053-build-identity.md))。
 `.dockerignore` が `.git` を build context から除外しているため、
 Dockerfile 側で git を読む手段が無く、渡し忘れると `GET /api/health` が
 `build_revision: "unknown"` を返す(build 自体は失敗しない —
 observability のみへの影響に留まる)。両方とも `scripts/build-identity.mjs`
-(runner の `dist/build-info.json` 生成と同じ計算 — issue #228 round 2、
+(runner の `dist/build-info.json` 生成と同じ計算 — issue #218 round 2、
 dirty 定義を二重実装させない)から得る。`.env` へは書かない — build
 実行のその場限りの環境変数として渡す(ADR-0053 Alternatives Considered)。
 
@@ -494,7 +494,7 @@ dirty 定義を二重実装させない)から得る。`.env` へは書かない
 `KEY=VALUE` の平文2行で、`export` は含まない。`eval` だけでは呼び出し元
 シェルの非 export 変数になるだけで、`docker compose build` は別コマンド
 (別プロセス)としてそれを継承しない — `set -a` の間に `eval` すれば以降の
-代入がすべて自動 export される(issue #228 round 2 差し戻しで実際に踏んだ
+代入がすべて自動 export される(issue #218 round 2 差し戻しで実際に踏んだ
 回帰: `eval "$(...)"; docker compose build` のままだと常に既定値
 `unknown` / `false` へ fall back し、MF-2 の目的が達成されない。
 `bash -c 'eval "$(printf "X=1\\n")"; bash -c "echo [\\$X]"'` が `[]` を
@@ -761,7 +761,7 @@ production checkout だけは旧構成へ戻す。**
 **`git checkout <sha>` は detached HEAD を残す**。復旧そのものには使えるが、
 production checkout がどの branch を追っていたかという運用状態は失われる。
 **rollback 中は detached である前提で扱い、復旧後に operator が branch
-pointer を戻す**。source checkout を release として分離する #229 までは、
+pointer を戻す**。source checkout を release として分離する #219 までは、
 この限界が残る。
 
 **(1) DETS の archive または検証に失敗した**(4.3 の 5)
@@ -814,7 +814,7 @@ systemctl --user start kaoiro-runner
   旧 image で起動するだけでよい
 - **一度でも新 container の開始を試みた、または開始したか不明**:
   **state を開いたものとして扱う**。新コードが書いた DETS を旧コードが読める
-  保証は無い(issue #219 で tuple が 3→4 要素になった前例がある)
+  保証は無い(issue #209 で tuple が 3→4 要素になった前例がある)
 
 後者の手順は次のとおり。**restore は destructive なので、順序を守る。**
 
@@ -916,7 +916,7 @@ path へ空の ledger を作る。**post-start rollback では**元の container
 server が restart loop せずリクエストを処理できるか、runner が認証と register に
 成功するか、dashboard と host projection が動くかを何ひとつ確認できない。
 
-#### provenance の確認(build identity, issue #228, [ADR-0053](../adr/0053-build-identity.md))
+#### provenance の確認(build identity, issue #218, [ADR-0053](../adr/0053-build-identity.md))
 
 「実行中の JS / image が target commit 由来である」ことは、build identity
 導入により **full SHA を返す health endpoint と runner の register 情報**
@@ -944,7 +944,7 @@ reject する条件にしない(ADR-0053)— docs-only commit / backport /
 rolling window のいずれでも正当に食い違いうるため、あくまで**この runbook
 の成功判定**としての一致確認である。
 
-### 4.6 release profile への移行と、以後の更新(issue #229)
+### 4.6 release profile への移行と、以後の更新(issue #219)
 
 [ADR-0018](../adr/0018-runner-distribution.md)(2026-08-16 改訂)の
 immutable release + atomic switch。**4.1 の in-place build 制約を解消するのは
@@ -978,7 +978,7 @@ install は `.staging.install.*`、update は `.staging.build.*` のみ。削除
 自分の lock が保証する範囲に限られる。install と update は別の lock を持ち、
 しかも update は install を呼ぶため、両方にまたがる glob では **nested install
 が update の使用中の build ディレクトリを消していた** (`--from-repo` が
-全滅していた。issue #229 レビュー round 2)。lock ディレクトリは `.lock.*` と
+全滅していた。issue #219 レビュー round 2)。lock ディレクトリは `.lock.*` と
 接頭辞を分けてあり、どちらの glob にも掛からない。
 
 #### activation の契約(何が `current` になれるか)
@@ -1175,7 +1175,7 @@ worker は同 `app.slice/kaoiro-selftest-worker.service` と**別 cgroup** に
 
 - [auth-and-authz](auth-and-authz.md) — 3 種トークンの未設定時挙動の詳細
 - [setup-wizards](setup-wizards.md) — **初回配備**の env / config 生成を自動化する
-  対話ウィザード。4 節の更新手順は対象外(自動化は #228 / #229 / #230)
+  対話ウィザード。4 節の更新手順は対象外(自動化は #218 / #219 / #220)
 - [runner/README.md](../../runner/README.md) — 常駐化・tarball 配布の全文
 - [server/README.md](../../server/README.md) — ローカル開発・Docker の基本
 - [threat-model](threat-model.md) — dev fallback / token 未設定のリスク評価

@@ -19,7 +19,7 @@ cache 記述を部分改訂する。
 
 ## Context
 
-kaoiro issue #183。`PersonaAssets.build/0` は
+kaoiro issue #173。`PersonaAssets.build/0` は
 `<KAOIRO_PERSONA_DIR>/.cache` へ `mkdir_p!`・zip 展開・stale 削除を行う。
 これは compose の `:ro` overlay 例と矛盾しており、`:ro` の persona
 dir では cold start が壊れる。問題は ADR-0045 のレビュー中に発見された。
@@ -47,7 +47,7 @@ dir では cold start が壊れる。問題は ADR-0045 のレビュー中に発
 reclaim は 16 hex の cache-key 形式に一致する entry だけを削除する。誤って
 指定した root 配下の無関係なディレクトリを保護する。
 
-**追補 (issue #195 must-fix 2, 2026-08-05):** staging 領域の孤児 reclaim
+**追補 (issue #185 must-fix 2, 2026-08-05):** staging 領域の孤児 reclaim
 (`reclaim_stage_orphans/1`, F9 参照)も同じ原則に従う。対象は F9 が生成
 する `.stage-` に続く 22 文字の random suffix(charset `A-Za-z0-9_-`)まで
 **厳密に一致**する entry だけであり、正規表現は
@@ -172,7 +172,7 @@ central directory の申告値であり、攻撃者が自由に書ける。`:zip
 単一の巨大 entry でもメモリは一定である。上限到達時点で即中断するので、展開時間
 攻撃も同時に緩和される。
 
-この決定は issue #189 の当初案 (「`:zip.list_dir/1` が展開後サイズを返すので
+この決定は issue #179 の当初案 (「`:zip.list_dir/1` が展開後サイズを返すので
 それを検査する」) を実測により棄却したものである。将来「list_dir で足りるのでは」
 と戻されないよう、棄却の根拠をここに固定する。
 
@@ -280,7 +280,7 @@ local header 整合 (F7) → inflate 実測。名前だけで reject できる t
 zip bomb に、最大 1 GiB 分の inflate CPU を払わせないためである。F7 と本検査は
 いずれも書き込みを一切行わない層であり、この不変条件は順序の変更に依らず維持する。
 
-### F9: preflight と展開の TOCTOU を staging で閉じる (issue #195, ふじ 2026-08-05 spec)
+### F9: preflight と展開の TOCTOU を staging で閉じる (issue #185, ふじ 2026-08-05 spec)
 
 F7 / F8 の preflight (`verify_archive/1`) と `:zip.unzip/2` は、当初どちらも
 ingest writer が制御できる `zip_path` を独立に開いていた — 検査本体だけでも
@@ -344,7 +344,7 @@ error exception)だけを対象に cleanup 後 `reraise` する — `try`/`after
 
 VM crash 等で削除処理自体が走らなかった場合に備え、`.stage-*` の
 random suffix まで厳密に一致する命名パターンの孤児を reclaim する
-(issue #195 ふじ round-2 レビュー, 2026-08-05)。当初は 10 分の
+(issue #185 ふじ round-2 レビュー, 2026-08-05)。当初は 10 分の
 age-gate で保護していたが、それは `rebuild/0` に global lock が無く、
 他の並行 rebuild がまだ使用中の staging 領域を誤って掃除しないための
 ものだった。**must-fix 1** で `rebuild/0` 本体を
@@ -394,7 +394,7 @@ directory から数えることは、展開側の挙動と一致する。
 - **EOCD の探索窓は予算の外側にある。** 倍化ループは最大約 131 KB を読む。
   OTP 自身が同じ上限で読むため攻撃者にスケールさせられないが、「列挙前に読む
   バイト数はすべて 4 MiB 以内」という言い方は正確ではない。
-- ~~preflight と展開の間に TOCTOU がある。~~ **解決済み (F9, issue #195,
+- ~~preflight と展開の間に TOCTOU がある。~~ **解決済み (F9, issue #185,
   2026-08-05)。** 検査対象を trusted cache root 配下の staging artifact に
   一本化し、staged full digest と識別用 full digest の照合で ingest 側の
   差し替えを race として検出・skip する。保証は trust boundary の内側
@@ -407,7 +407,7 @@ directory から数えることは、展開側の挙動と一致する。
   再起動まで自動復帰しない。
 - F8 の上限値 (1 GiB / 4096 件 / `@max_central_dir_bytes` 4 MiB) はいずれも
   module attribute の定数であり、環境変数では変更できない。運用上の変更が
-  必要になった時点で別 issue とする (issue #189 で決定)。1 GiB と 4096 件は
+  必要になった時点で別 issue とする (issue #179 で決定)。1 GiB と 4096 件は
   マスター決定 (2026-08-04) であるのに対し、4 MiB は製品判断が絡まない内部
   マージンとしてクロエ決定 (2026-08-04) である。
 

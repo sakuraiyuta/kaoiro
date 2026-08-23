@@ -13,15 +13,15 @@ related_adrs: [47]
 
 ## Status
 
-Accepted (2026-08-04、マスターとの相談で決定。kaoiro issue #188)。
+Accepted (2026-08-04、マスターとの相談で決定。kaoiro issue #178)。
 [ADR-0047](0047-task-envelope-schema.md) F4 が予定した `task_type` 拡張の
 最初の適用。
 
 ## Context
 
-kaoiro issue #188。エージェント自身が管理する todo リスト(Claude Code の
+kaoiro issue #178。エージェント自身が管理する todo リスト(Claude Code の
 Tasklist、Codex の `todo_list`)の内容と進捗を operator が dashboard で
-見られるようにしたい。#180(subagent/workflow の稼働可視化)とは別軸で、
+見られるようにしたい。#170(subagent/workflow の稼働可視化)とは別軸で、
 「子タスクが走っているか」ではなく「エージェント自身の todo 項目の内訳」を
 見せる。
 
@@ -60,13 +60,13 @@ Codex は ThreadItem `todo_list` の破棄をやめて同じ envelope へ変換�
 `updated` 中心)、間引き([ADR-0048](0048-task-aggregation-delivery.md)
 F2)の tasklist への適用は、実装着手時に protocol の予約 `task` 行へ
 追補して確定する(`version` 据え置き)。UI 表現(表示位置・折りたたみ)は
-クライアント責務で、issue #188 に記録する。
+クライアント責務で、issue #178 に記録する。
 
 ## Consequences
 
 ### Positive
 
-- type を増やさず、#180 と同じ envelope・同じ server 集約
+- type を増やさず、#170 と同じ envelope・同じ server 集約
   ([ADR-0048](0048-task-aggregation-delivery.md) のフラット task テーブル /
   snapshot 枠)に乗る。
 - 両 engine の源イベント(リスト全体更新)と wire の形が一致し、wrapper に
@@ -74,7 +74,7 @@ F2)の tasklist への適用は、実装着手時に protocol の予約 `task` �
 
 ### Negative
 
-- 項目単位の粒度(#180 の子タスク表示との対称性)は失う。項目ごとの
+- 項目単位の粒度(#170 の子タスク表示との対称性)は失う。項目ごとの
   イベント履歴は追えない。
 - engine 間で項目 status の粒度が異なる(Codex は completed の二値)。
 
@@ -133,5 +133,5 @@ session の list を空 list へ置換して warning を残すため、別 sessi
   [codex-sdk-events](../specs/codex-sdk-events.md)(`todo_list` 源イベント)。
 - 関連 ADR: [0047](0047-task-envelope-schema.md)(task envelope スキーマ、
   `task_type` 拡張枠)。
-- 由来: kaoiro issue #188 の HITL 論点をマスター相談で決着(表示先などの
+- 由来: kaoiro issue #178 の HITL 論点をマスター相談で決着(表示先などの
   UI 決定は issue 側に記録)。

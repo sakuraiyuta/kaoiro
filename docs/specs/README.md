@@ -24,7 +24,7 @@
 | [persona-pack-schema](persona-pack-schema.md) | accepted | persona pack (zip) の内部スキーマ・manifest.json フィールド定義 |
 | [persona-personality-injection](persona-personality-injection.md) | provisional | 口調・一人称等の人格プロンプトを Claude Agent SDK に注入する仕組み |
 | [threat-model](threat-model.md) | accepted | 双方向ルーティングの脅威と緩和策 |
-| [auth-and-authz](auth-and-authz.md) | accepted | 各ノードの認証・認可境界の現状マップ。OSS 公開前監査 (#91) の起点 |
+| [auth-and-authz](auth-and-authz.md) | accepted | 各ノードの認証・認可境界の現状マップ。OSS 公開前監査 (private Gitea issue 91) の起点 |
 | [setup-wizards](setup-wizards.md) | accepted | 設定 / env 生成ウィザード(runner config・server .env) |
 | [deployment](deployment.md) | accepted | マルチホスト配備手順書(nginx・env 一覧・DETS パス・wss 制約) |
 | [agent-operations](agent-operations.md) | accepted | 複数エージェントが同一 work tree で並行作業するときの運用則(実装側 / director 側)。engine 非依存で CLAUDE.md と AGENTS.md の両方から参照 |

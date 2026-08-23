@@ -107,6 +107,6 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   [0014](../adr/0014-session-resume-and-restore.md)、
   [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)
 - 関連 issue:
-  [#41](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/41)、
-  [#24](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/24)
+  [#41](https://github.com/sakuraiyuta/kaoiro/issues/41)、
+  [#24](https://github.com/sakuraiyuta/kaoiro/issues/24)
 - Previous: [phase-4-host-runner](phase-4-host-runner.md)

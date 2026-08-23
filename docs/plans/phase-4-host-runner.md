@@ -15,10 +15,10 @@ last_updated: 2026-07-25
 エージェント群のライフサイクル**を担わせる。wrapper の直結トポロジは維持しつつ、
 UI からの起動・再起動・取りまとめの主体を導入する(supervisor 専任、
 [ADR-0023](../adr/0023-host-runner-architecture.md))。これは UI からのリモート
-spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
+spawn([#22](https://github.com/sakuraiyuta/kaoiro/issues/22))と
 セッション復帰([ADR-0014](../adr/0014-session-resume-and-restore.md))の前提層。
 
-なお [#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22) 自体は本層の
+なお [#22](https://github.com/sakuraiyuta/kaoiro/issues/22) 自体は本層の
 上に載る **起動指示 UI + client→server 要求**(spawn/resume)へ範囲を限定し、ホスト
 概念・spawn 中継・schema・runner 実行は本フェーズのタスク(4-1〜4-6)が担う。
 
@@ -36,7 +36,7 @@ spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
 - [x] operator が起動 UI から (host / persona / 登録済み cwd / 初期プロンプト) を
       指定して新規 spawn でき、同 UI から既存セッションの resume もできる(範囲=中。
       任意 cwd / 任意 repo clone は初版外、
-      [#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))。
+      [#22](https://github.com/sakuraiyuta/kaoiro/issues/22))。
 
 ## Tasks
 
@@ -49,11 +49,11 @@ spawn([#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22))と
 | 4-4 | runner: プロセス監督ループ + config 解決 + spawn/stop/restart | ✅ | #68。TS/Node。4-4a(接続+register/heartbeat)+ 4-4b(spawn/stop/restart 監督・config 解決・crash 再起動・cwd allow-list T1)。ライブ verify=実 wrapper spawn→server 接続 |
 | 4-5 | runner: session JSONL 列挙 + resume 起動 | ✅ | #68。当該 cwd 配下を列挙、T3 実在検証([ADR-0014](../adr/0014-session-resume-and-restore.md) F2/F6)+ in-memory ローカルロック(F4) |
 | 4-6 | wrapper: resume flag(`--resume <session_id>` 等)追加 | ✅ | #69(d073b4e)。args.ts/cli.ts に実装 |
-| 4-7 | `kaoiro-runner` の配布物整備 | ✅ | #70。単一バイナリ(bun compile)は 2026-07-25 に撤回・延期し、Node 前提の自己完結 tarball へ([ADR-0018](../adr/0018-runner-distribution.md) 改訂)。生成は `scripts/build-runner-tarball.sh`、対象は darwin-arm64 / linux-x64。release への資産アップロード自動化は #145 |
+| 4-7 | `kaoiro-runner` の配布物整備 | ✅ | #70。単一バイナリ(bun compile)は 2026-07-25 に撤回・延期し、Node 前提の自己完結 tarball へ([ADR-0018](../adr/0018-runner-distribution.md) 改訂)。生成は `scripts/build-runner-tarball.sh`、対象は darwin-arm64 / linux-x64。release への資産アップロード自動化は #140 |
 | 4-8 | dashboard: 起動指示 UI(host/persona/登録済み cwd/初期プロンプト)+ client→server spawn 要求 | ✅ | #22 phase-0(0db7234 系)。範囲=中。案A=サーバ補完([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))。`LaunchDialog.svelte` + protocol.ts(spawn/hosts/spawn_result)。operator 判定は `hosts` push で |
 | 4-9 | dashboard: 起動 UI に resume(runner 列挙の session_id 候補選択)追加 | ✅ | #22 phase-1。新規/再開タブ + enumerate_sessions → `runner_sessions` で候補表示。resume は fresh agent_id + `resume_session_id`(D1 と整合、runner が T3/F4)|
-| 4-10 | server: spawn 補完(`agent_id` 採番 + per-agent token 注入)+ 署名トークン認証 | ✅ | #22 の前提([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4)。`server_url` は runner 供給に変更。token = Phoenix.Token 署名・無期限(失効=鍵ローテーション、個別 denylist は [#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))。D5 二重 live join 拒否は未実装(下記)|
-| 4-11 | 常駐化: systemd user unit / launchd LaunchAgent + 導入手順 | ✅ | #141。`runner/deploy/` に起動シム + unit + plist + env 雛形。token は 0600 env ファイル(ユニットに平文を載せない)。user サービス限定([ADR-0023](../adr/0023-host-runner-architecture.md) の資格情報アクセス前提)。単一バイナリ移行はシムの `exec` 行 1 行(4-7)|
+| 4-10 | server: spawn 補完(`agent_id` 採番 + per-agent token 注入)+ 署名トークン認証 | ✅ | #22 の前提([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4)。`server_url` は runner 供給に変更。token = Phoenix.Token 署名・無期限(失効=鍵ローテーション、個別 denylist は [#72](https://github.com/sakuraiyuta/kaoiro/issues/72))。D5 二重 live join 拒否は未実装(下記)|
+| 4-11 | 常駐化: systemd user unit / launchd LaunchAgent + 導入手順 | ✅ | #136。`runner/deploy/` に起動シム + unit + plist + env 雛形。token は 0600 env ファイル(ユニットに平文を載せない)。user サービス限定([ADR-0023](../adr/0023-host-runner-architecture.md) の資格情報アクセス前提)。単一バイナリ移行はシムの `exec` 行 1 行(4-7)|
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
@@ -107,15 +107,15 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 - runner: バックエンド(4-4-0〜4-5)・server 補完(4-10)・dashboard 起動 UI
   (4-8/4-9)・**D5**(二重 live join 拒否)は完了(#22 実装済)。常駐化(4-11、
-  #141)・配布物整備(4-7、#70)も完了し、**本フェーズのタスクは全て完了**。
-  Gitea release への資産アップロード自動化のみ #145 へ分離した。
+  #136)・配布物整備(4-7、#70)も完了し、**本フェーズのタスクは全て完了**。
+  Gitea release への資産アップロード自動化のみ #140 へ分離した。
 - **D5**: wrapper join 経路(`wrapper_channel`)で live owner 済み agent_id を
   **reject-newcomer** で拒否([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5、
   `AgentStates.connected?/2`)。既存を蹴る案はトークン保持者による敵対的 eviction を
   招くため不採用。異常切断後の正規再接続は socket timeout 窓(既定 ~60s)だけ遅延し、
   その間 client がリトライして通る。join〜初回 envelope の極短窓は未カバー(完全に
   閉じるには Phoenix.Presence 導入=アーキ決定が必要、優先度低)。
-  [#74](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/74) へ分離。
+  [#74](https://github.com/sakuraiyuta/kaoiro/issues/74) へ分離。
 - `SessionMeta.summary` を充填(#73、実装済)。runner が各 session JSONL の先頭を
   バウンド読みして `ai-title` 優先・先頭 user 指示フォールバックで最小露出
   (T2 維持)の summary を返し、再開ダイアログの候補表示に使う。
@@ -123,14 +123,14 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   より長い無事故期間で budget をリセットし、散発クラッシュでは cap を使い切らない
   (tight な crash-loop のみ down のまま)。
 - 上記の低優先ポリッシュは集約していた
-  [#73](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/73) で追跡。
+  [#73](https://github.com/sakuraiyuta/kaoiro/issues/73) で追跡。
   `SessionMeta.summary` / 再起動 cap 時間窓は実装済、D5 短窓は #74 へ分離。
 
 ## Open Questions Blocking This Phase
 
 なし。4-10 の per-agent token 方式は **Phoenix.Token 署名・無期限**(失効=鍵
 ローテーション)に決定(2026-06-24、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)
-従属点を解消)。個別 revoke の denylist は [#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72)。
+従属点を解消)。個別 revoke の denylist は [#72](https://github.com/sakuraiyuta/kaoiro/issues/72)。
 
 ## See Also
 
@@ -142,7 +142,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 - Specs: [architecture](../specs/architecture.md),
   [protocol](../specs/protocol.md), [threat-model](../specs/threat-model.md)。
 - 関連 issue:
-  [#23](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/23)(本フェーズ)、
-  [#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22)(起動指示 UI +
+  [#23](https://github.com/sakuraiyuta/kaoiro/issues/23)(本フェーズ)、
+  [#22](https://github.com/sakuraiyuta/kaoiro/issues/22)(起動指示 UI +
   要求層。範囲=中、resume 含む)。
 - Previous: [phase-3-server-multiagent](phase-3-server-multiagent.md)

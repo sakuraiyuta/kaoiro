@@ -76,7 +76,7 @@ F3 の粗い 4 値ライフサイクルより広く、v1 の対象外(同 ADR ad
 ([subagent-tasks](subagent-tasks.md)、実装済み — 段階1(wrapper)・
 段階2(server)・段階3(dashboard 頭上リング))。
 
-**実測記録(task_notification の終端保証、issue #180)**: SDK
+**実測記録(task_notification の終端保証、issue #170)**: SDK
 `0.3.220`、2026-08-09 capture。使い捨てスクリプトで実 `query()` stream を
 capture し、以下 4 経路すべてで `task_notification` が必ず発行される
 ことを確認した — (a) subagent の自然完了、(b)
@@ -186,7 +186,7 @@ effort を切り替えられる。ヘッドレス実走行で確定した境界:
   `slash_commands`(#34)。bare `/model`・`/effort` は SDK 制御として
   surface されず単なる入力テキスト扱いなので、選択 UI はダッシュボードが
   これら一覧から構成する。
-- **初回 turn 前の選択 (#110)**: `supportedModels()` は Query initialization を
+- **初回 turn 前の選択 (#107)**: `supportedModels()` は Query initialization を
   待つため、idle-wait の spawn 前 catalog には使えない。runner register と
   wrapper の初回 idle `ext.models` は SDK 0.3.187 の実測 snapshot を optimistic
   bootstrap として広告し、LaunchDialog / AgentDetail から first turn の model /

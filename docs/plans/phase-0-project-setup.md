@@ -26,7 +26,7 @@ last_updated: 2026-06-11
 |---|------|--------|-------|
 | 0-1 | コンセプト・構成・プロトコルの起草 | ✅ | |
 | 0-2 | docs 構造化(本タスク) | ✅ | my-docs-restructure |
-| 0-3 | 初回コミット / gitea.example.invalid へ push | ✅ | sakurai.yuta/kaoiro |
+| 0-3 | 初回コミット / private Gitea へ push | ✅ | sakurai.yuta/kaoiro |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 

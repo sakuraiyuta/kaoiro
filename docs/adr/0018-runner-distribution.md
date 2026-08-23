@@ -31,7 +31,7 @@ wrapper/runner を各ホスト(Linux/macOS/Windows、ヘッドレス含む)へ�
   自動起動**、(ii) 設定を **OS 別ユーザ設定ディレクトリ**(Linux `~/.config`、
   macOS `~/Library/Application Support`、Windows `%APPDATA%`)に置く。
   **(i) は撤回済み** — [setup-wizards](../specs/setup-wizards.md)(2026-07-25
-  accepted、issue #144)で「自動起動はせず、起動シムは exit 78 で止まって
+  accepted、issue #139)で「自動起動はせず、起動シムは exit 78 で止まって
   ウィザードのコマンドを案内する」に上書きした。systemd / launchd から起動
   された非対話セッションで対話プロンプトが立ち上がると、TTY が無いまま無応答
   で止まるため。(ii) はそのまま有効。
@@ -70,10 +70,10 @@ canvas・両 CLI がすべて platform 別 optional dependency であるため�
   (darwin ホスト 1 台から両方生成できることを実測で確認)
 - 設置は「解凍 → 設定ファイル編集 → ワンコマンド実行」以内。配布先で
   `pnpm install` / build / workspace 解決を要求しない
-- 常駐化(#141)の起動シム・unit・plist は **無改造で配布物に載る**(シムは
+- 常駐化(#136)の起動シム・unit・plist は **無改造で配布物に載る**(シムは
   自分の位置から `../dist/cli.js` を解決し、`deploy/` と `dist/` が成果物直下で
   兄弟になる)
-- Gitea release への資産アップロード自動化は範囲外(#145)
+- Gitea release への資産アップロード自動化は範囲外(#140)
 - **`bun compile` は Rust 版の安定後(目安 2027-01)に再評価**する。SDK 側に
   Bun single-file executable 向けの `extractFromBunfs` ヘルパが用意されている
   ため、sharp 側の解決が前提条件
@@ -84,7 +84,7 @@ linux 版は musl 変種も同梱されるため大きい代わりに glibc / mu
 
 ### 改訂(2026-08-16)— 設置形態を immutable release + atomic switch に統一する
 
-[issue #229](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/229)。
+[issue #219](https://github.com/sakuraiyuta/kaoiro/issues/219)。
 本 ADR はここまで tarball の**生成**だけを決めており、**設置後の形**を
 決めていなかった。その空白に、文書上どこにも書かれていない運用形態が
 入り込んでいた — **リポジトリの checkout を live path にしたまま常駐させ、
@@ -97,7 +97,7 @@ artifact を解決する**ため。`runner/src/spawn.ts` の
 engine ごとに lazy である(codex は初回 codex spawn まで解決しない)。
 稼働中の checkout を build し直すと、旧 runner が新 wrapper を掴む、
 あるいはパッケージ間で新旧の混ざった module graph を掴む。
-[issue #219](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/219)
+[issue #209](https://github.com/sakuraiyuta/kaoiro/issues/209)
 で観測された `ConfigError` はその一例にすぎず、**version check を足しても
 partial module graph は救えない**。「停止 → build → 起動」の順序を人間が
 守ることで回避していたが、順序を一度誤れば再発する。
@@ -151,7 +151,7 @@ data / config を分けないため。entry 名は衝突しない。
   `dist/cli.js`)へ縮退する。判別子は `VERSION` の有無であり、manifest の
   可読性ではない
 - **install / switch は module graph を独立に再導出し、manifest の取りこぼしを
-  拒否する**(issue #229 もも レビュー)。manifest は自分自身の証人になれない
+  拒否する**(issue #219 もも レビュー)。manifest は自分自身の証人になれない
   ため。**再導出の入力は同一 tree 内の `package.json` なので、これは改ざん
   耐性ではない** — 閉じるのは builder のバグと配布後の部分的な破損で、tree
   全体を書き換えられる主体への防御ではない。署名 / tree 外 digest は別途
@@ -265,7 +265,7 @@ issue に切り出す。
 strict 検証(install / switch)の closure 再導出は、V8 のパーサを
 `vm.SourceTextModule` 経由で使う。手書きの字句解析が同型の欠陥を 4 回
 出したため、パーサを持たずに JS を読むこと自体をやめた判断による
-(issue #229)。配布先ホストの Node に結合が 2 つ増える。
+(issue #219)。配布先ホストの Node に結合が 2 つ増える。
 
 | 結合 | 内容 |
 |---|---|

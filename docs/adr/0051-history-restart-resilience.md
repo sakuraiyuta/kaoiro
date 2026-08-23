@@ -43,7 +43,7 @@ server の docker container 再起動後、operator 端末間で表示が不一�
 現行仕様([ADR-0014](0014-session-resume-and-restore.md) A4)は
 「server 稼働中」はこの要件をほぼ満たすが、再起動耐性がスコープ外
 だった。全履歴の server 永続化
-([#24](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/24))は
+([#24](https://github.com/sakuraiyuta/kaoiro/issues/24))は
 不採用のまま維持する(本 ADR でも変えない)。
 
 ### 記述 drift の訂正
@@ -51,7 +51,7 @@ server の docker container 再起動後、operator 端末間で表示が不一�
 ADR-0014 は「`inter_agent_message` は SDK へ注入された整形済み user
 text から routing metadata を逆算できず、JSONL から再構築できない」
 とし、これを根拠に server の DETS-backed `InterAgentHistory` を正本に
-した(issue #105)。現行実装では受信側注入 framing に
+した(issue #102)。現行実装では受信側注入 framing に
 `conversation_id` / `turn_number` / kind / sender / body が全て含まれ
 ており(`formatInboundMessage`)、「逆算不能」は実装と drift した
 記述である。ただし表示・モデル向けテキストのパースを復元手段に
@@ -291,7 +291,7 @@ order を振ると clear 済み IA が復活するため:
   ごとに時系列 merge・dedup・filter した**最終投影**で newest 200
   envelope」に統一する。供給源が transcript 200 + sidecar 200 でも
   合算 400 にはしない。receiver pane にも同じ cap を適用する。IA の
-  cap 免除(issue #105)は廃止する。
+  cap 免除(issue #102)は廃止する。
 - **rollout**: 変更は server / wrapper / client の 3 層に跨り
   (組合せは 8 通り)、**deploy 順は任意ではない**。混在時の主な
   劣化: 新 wrapper + 旧 server は ack に stamp が無く sidecar に
@@ -347,7 +347,7 @@ protocol 追加・変更は次の 5 点:
 既存文書の amendment sweep 対象:
 
 - [ADR-0014](0014-session-resume-and-restore.md) A4 の IA「逆算
-  不能」記述と issue #105 追補(本 ADR への参照を追記)
+  不能」記述と issue #102 追補(本 ADR への参照を追記)
 - [ADR-0036](0036-session-lifecycle-commands.md) F3(IA visibility
   cutoff の DETS ledger 前提 → sidecar + stamp 方式へ)
 - [protocol](../specs/protocol.md) の `preserve_inter_agent` /
@@ -410,13 +410,13 @@ protocol 追加・変更は次の 5 点:
 - 改訂対象 specs / ADR: D8 参照。
 - 実装計画: [phase-30](../plans/phase-30-history-restart-resilience.md)。
 - 関連 issue:
-  [#24](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/24)
+  [#24](https://github.com/sakuraiyuta/kaoiro/issues/24)
   (不採用継続)、
-  [#41](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/41)
+  [#41](https://github.com/sakuraiyuta/kaoiro/issues/41)
   (明示復元、不変)、
-  [#50](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/50)
+  [#50](https://github.com/sakuraiyuta/kaoiro/issues/50)
   (replay 経路)、
-  [#105](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/105)
+  [#102](https://github.com/sakuraiyuta/kaoiro/issues/102)
   (IA DETS、本 ADR で撤廃)。
 - 仕様レビュー: ふじ 1 巡目・2 巡目 2026-08-08(conversation
   0b5c31a4)。

@@ -94,7 +94,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 - `runner/test/config-watcher.test.ts` の debounce 系 2 テストは 18-1 baseline
   で既存 flake / macOS 決定論的赤として確認済み。Phase 18 とは無関係な既存
   問題として Gitea
-  [issue #116](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/116)
+  [issue #112](https://github.com/sakuraiyuta/kaoiro/issues/112)
   に外部化済み (2026-07-14)。修正案: 固定 `settle` 待ちをやめ、`onReload`
   を promise 化して条件成立を上限付き polling wait に置き換える
 - Phase 18-2 の Q1 実測で SDK 側 `ModelInfo` に拡張 5 field (`resolvedModel`
@@ -113,9 +113,9 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   `supportsAutoMode`) は未着手で、projection 是非は未判断のまま
 - Phase 18-5 の Elixir baseline 検証で `wrapper_channel_test.exs`
   の inter_agent_message ルーティング test の決定論的赤を確認済み。
-  **SDK / phase-18 と完全直交**、config-watcher #116 とは別種の
+  **SDK / phase-18 と完全直交**、config-watcher #112 とは別種の
   test-isolation 欠陥。既に Gitea
-  [issue #115](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/115)
+  [issue #111](https://github.com/sakuraiyuta/kaoiro/issues/111)
   として起票済み (2026-07-14 02:30 起票、私の 18-5 セッション開始前に
   #15 persona relay 回帰確認中に検出済みだった)。Phase 18-5 の baseline
   検証はこれを再検出しただけで、Phase 18 の regression ではない

@@ -12,7 +12,7 @@
 - operator 指示で wrapper を **spawn / stop / restart** する監督ループ(4-4b)、
   当該 cwd 配下の **session 列挙 + resume**(4-5、T3 実在検証 + F4 ローカルロック)、
   稼働中 agent の resume 先差し替え(`switch_session`)。
-- 予告済み wrapper cycle の相関(issue #266)。`restart` の
+- 予告済み wrapper cycle の相関(issue #256)。`restart` の
   server-issued `request_id` を relaunch 後 wrapper config の
   `transition_id` に置き換え、server が planned 復帰を exact match で
   確定できるようにする。`request_id` 省略(旧 server) は従来動作。
@@ -39,11 +39,11 @@ node dist/cli.js [configPath]   # configPath 既定 = runner.config.json
 認証トークンは設定ファイルに置かず、環境変数 `KAOIRO_RUNNER_TOKEN` から渡す。
 サーバ側 `KAOIRO_RUNNER_TOKENS` が未設定のとき、runner 認証が無効になるのは
 `:dev` / `:test` のみで、**`:prod` では全 runner が拒否される**(runner には
-wrapper のようなサーバ署名トークン経路が無いため、issue #138)。設定例は
+wrapper のようなサーバ署名トークン経路が無いため、issue #133)。設定例は
 [runner.config.example.json](runner.config.example.json) を参照。
 
 接続先 `server_url` は環境変数 `KAOIRO_RUNNER_SERVER_URL` で上書きできる
-(**env が config ファイルより優先**、issue #140)。配布バイナリ/サービス運用
+(**env が config ファイルより優先**、issue #135)。配布バイナリ/サービス運用
 (systemd/launchd ユニット、`env_file` 等)で `runner.config.json` を編集せず
 接続先を切り替えたい場合に使う。`ws://` または `wss://` で始まる必要があり、
 不正な形式は起動時 / config reload 時に fail-fast する。ホットリロード
@@ -56,7 +56,7 @@ wrapper のようなサーバ署名トークン経路が無いため、issue #13
 から token 分母を導出するため、1M window では 600k、200k window では 120k が
 作業予算になる。`0 < 値 <= 100` の有限数だけを受け付け、変更は hot reload 後の
 次回 spawn から反映される。生窓の使用率とこの作業予算比は、dashboard と wrapper
-の context 通知で分母付きに併記される(issue #264)。
+の context 通知で分母付きに併記される(issue #254)。
 
 runner の Phoenix wire log は、定期 heartbeat の push と対応する reply を既定で
 省略する。他の transport / reconnect / error / 制御メッセージは従来どおり出力される。
@@ -69,7 +69,7 @@ runner の Phoenix wire log は、定期 heartbeat の push と対応する repl
 
 ## 設定ウィザード
 
-`runner.config.json` と `runner.env` を対話生成する(issue #144、
+`runner.config.json` と `runner.env` を対話生成する(issue #139、
 [setup-wizards](../docs/specs/setup-wizards.md))。手で書くより取り違えが
 少ないので、初回はこちらを使う。
 
@@ -93,14 +93,14 @@ Codex を選んだ場合はその auth mode / トークン / node の絶対パ�
 - 既存ファイルは上書き前に確認する(断ればそのファイルは保持される)
 - **対話専用**。TTY が無い環境では exit 78 で止まる(systemd / launchd から
   呼ばれたときに無応答で固まるのを防ぐため)。無人配備向けのフラグ指定は
-  [#146](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/146)
+  [#141](https://github.com/sakuraiyuta/kaoiro/issues/141)
 - server 側の `.env` は別ウィザード(`mix kaoiro.env`、
   [server/README.md](../server/README.md))。トークンは自動連携しないので、
   表示された値を server 側の `KAOIRO_RUNNER_TOKENS` に貼る
 
 ## 常駐化(systemd / launchd)
 
-ホスト常駐用のサービス定義は [`deploy/`](deploy) にある(issue #141)。
+ホスト常駐用のサービス定義は [`deploy/`](deploy) にある(issue #136)。
 
 > **既に稼働している配備を新しいバージョンへ更新する手順**は
 > [docs/specs/deployment.md](../docs/specs/deployment.md) の「既存配備の更新」が
@@ -155,9 +155,9 @@ chmod 600 "$conf/runner.env"
 
 `server_url` は `runner.config.json` から読むほか、`runner.env` に
 `KAOIRO_RUNNER_SERVER_URL` を書いて上書きできる(env が優先 — 冒頭の説明を
-参照。issue #140)。
+参照。issue #135)。
 
-### 設置形態(issue #229、[ADR-0018](../docs/adr/0018-runner-distribution.md))
+### 設置形態(issue #219、[ADR-0018](../docs/adr/0018-runner-distribution.md))
 
 **source origin(どこから持ってくるか)と activation layout(どう置いて
 起動するか)は別の軸である**。後者は release profile なら 1 通りしかなく、
@@ -199,7 +199,7 @@ sudo loginctl enable-linger "$USER"   # ログインなしで boot 起動させ�
 - ログ: `journalctl --user -u kaoiro-runner -f`
 - `enable-linger` を忘れると boot 時に起動しない(ログイン時のみ起動)。
   さらに **SSH セッションのたびに user systemd インスタンス自体が再起動され、
-  enabled unit も道連れで再起動される**(issue #148 実機検証で確認、2026-07-26)。
+  enabled unit も道連れで再起動される**(issue #142 実機検証で確認、2026-07-26)。
   再起動ポリシー(`Restart=on-failure` / `RestartPreventExitStatus=78`)自体は
   1 つの user systemd インスタンス内では正しく機能するが、`enable-linger` なし
   のホストを SSH 越しに検証すると、接続のたびに unit が再起動しているように
@@ -210,7 +210,7 @@ sudo loginctl enable-linger "$USER"   # ログインなしで boot 起動させ�
 ### macOS(launchd LaunchAgent)
 
 macOS の orchestration は未検証(後続 issue
-[#252](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/252))。
+[#242](https://github.com/sakuraiyuta/kaoiro/issues/242))。
 release layout と install / switch は OS 共通に動くが、`@@DEPLOY_DIR@@` を
 `current/deploy` へ向けた運用の実機確認は済んでいない。
 
@@ -234,7 +234,7 @@ launchctl bootstrap gui/"$(id -u)" \
 
 ### 再起動ポリシーと終了コード
 
-issue #266 を含む release の rollout は **runner / wrapper を先行し、server を
+issue #256 を含む release の rollout は **runner / wrapper を先行し、server を
 後行**する。新 server は operator restart の `request_id` を wrapper の
 `transition_id` まで運べる runner と、`peer_reconnecting` / `reconnected` を
 解釈できる wrapper が配備済みであることを前提に planned window を開始する。
@@ -248,7 +248,7 @@ reconnecting 状態も解消されない。
 - 起動シムは設定不備(config が無い / node が見つからない / release 検証に
   失敗)で **exit 78**(`EX_CONFIG`)を返す。検証は
   [`deploy/verify-release.mjs`](deploy/verify-release.mjs) が行い、**シムは
-  build しない**(issue #229)。
+  build しない**(issue #219)。
 - **どんな検証失敗も 78 へ写す**のが要点。sentinel を数個並べる方式では、
   実 dist から module を 1 つ削っただけで検査を通過し、import 時に node の
   exit 1 で落ちた — `RestartPreventExitStatus=78` が一致せず **restart loop**
@@ -384,7 +384,7 @@ cd kaoiro-runner-<rev>-linux-x64
 シムは無改造でそのまま使える**。
 
 Gitea release への資産アップロードは
-[#145](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/145) で扱う。
+[#140](https://github.com/sakuraiyuta/kaoiro/issues/140) で扱う。
 
 ## Codex 設定
 

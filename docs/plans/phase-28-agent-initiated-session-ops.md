@@ -1,5 +1,5 @@
 ---
-title: Phase 28 — コンテキスト疲労の自己認識と自発 session 操作 (issue #168)
+title: Phase 28 — コンテキスト疲労の自己認識と自発 session 操作 (issue #158)
 description: エージェントが自身の context 使用量を認識し、/compact・/new・/clear 相当の回復操作を自発できるようにする。本 plan は Phase A (可視化) と spike を実装粒度に落とす。Phase B (自発 compact) / C (自発 new・clear) は spike と Phase A の結果を受けて追補する。
 status: done
 phase: 28
@@ -11,9 +11,9 @@ last_updated: 2026-08-21
 
 ## Goal
 
-[issue #168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168)
+[issue #158](https://github.com/sakuraiyuta/kaoiro/issues/158)
 を実装する。設計判断はマスター決裁済み
-([#168 issuecomment-2287](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168#issuecomment-2287))。
+([#158 issuecomment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227))。
 本 plan はその決定を実装可能な粒度に落としたもので、決定そのものは
 変更しない。
 
@@ -21,7 +21,7 @@ last_updated: 2026-08-21
 
 | # | 決定 | 出典 |
 |---|---|---|
-| P1 | SDK に `compact()` control API は無い。発動は prompt 文字列 `/compact` (slash command 解釈)。完了検知は `SDKCompactBoundaryMessage` | #168 comment-2287 (1) |
+| P1 | SDK に `compact()` control API は無い。発動は prompt 文字列 `/compact` (slash command 解釈)。完了検知は `SDKCompactBoundaryMessage` | #158 comment-5384365227 (1) |
 | P2 | permission は二軸写像を採らず、初期形は「compact = 軽 / new・clear = 重、全て permission_broker 都度承認」 | 同 (2) |
 | P3 | 疲労判定はハイブリッド (wrapper 機械判定で閾値超過時のみ通知 → agent 判断)。常時 context 表示は不採用 (context anxiety)。閾値は Phase A 後の実測で決定 | 同 (3) |
 | P4 | 自発 new/clear は deferred reset (turn 境界発火)。ADR-0036 F6 の自動 interrupt / queue 却下は維持 | 同 (4) |
@@ -134,7 +134,7 @@ fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
 
 ## Track R — レビュー (ふじ)
 
-- 前段: 本 plan と #168 comment-2287 の決定記録を読み、設計上の穴
+- 前段: 本 plan と #158 comment-5384365227 の決定記録を読み、設計上の穴
   (特に P3 の anxiety 回避と A2 の開示範囲、A1 の log 粒度) を指摘。
 - 後段: A1+A2 の diff レビュー (小径。must-fix / suggestion を区別して
   クロエへ報告)。
@@ -254,7 +254,7 @@ fast path を潰すと post_tokens テストが落ちる。
 ### B1 — 閾値通知
 
 - 判定点: `#context` が更新される箇所 (refresh 成功時)。既定閾値 60%
-  (`used_percentage >= 60`)。issue #172 P4 のマスター決裁 (2026-07-29) により
+  (`used_percentage >= 60`)。issue #162 P4 のマスター決裁 (2026-07-29) により
   Phase B の 70% 指定は撤回された。設定で上書き可能なら configurable に、
   config 配線が重ければ定数 + TODO で可。
 - 注入は **epoch 毎に 1 回** (dedup。`#invalidateContextEpoch` で解除)。

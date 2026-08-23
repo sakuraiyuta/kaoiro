@@ -81,13 +81,13 @@ timeline を横並びに置くときだけで、それ以外は `auto-fill` が�
 | composer | 常 | 常時 (ボトム固定) | 常時 | 常時 |
 | 添付 / slash menu | composer から | composer 上 | 同左 | 同左 |
 | permission-dock / question-dock | pending 時 | ログと composer の間 | 同左 | 同左 |
-| Tasklist float | [#188](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/188) 実装後 | ログ右上 | 同左 | 同左 |
+| Tasklist float | [#178](https://github.com/sakuraiyuta/kaoiro/issues/178) 実装後 | ログ右上 | 同左 | 同左 |
 
 `interrupt` / `delete` と 2 種の dock は、実装上 `.main` 内でログと composer の
 間に置かれた **in-flow 要素**であり、浮遊層ではない。シートはこれらより前面に
 来るため、シート展開中は覆われる。
 
-Tasklist float は #188 が未実装のため、本表の行は同 issue 実装後に適用される
+Tasklist float は #178 が未実装のため、本表の行は同 issue 実装後に適用される
 条件付きの target であり、phase-31 の検収対象ではない。
 
 ### 盲点インジケータの扱い

@@ -439,13 +439,13 @@ passthrough されるだけで、privilege 軸は spawn payload の top-level �
 再構築・上書きする手段は **案 B(runner/wrapper が JSONL を直読して投影)** に
 確定(Q-A4、2026-06-23 実検証)。SDK の resume は過去履歴を query() ストリームへ
 再 yield しないため、案 A(SDK 再 stream を拾う)は不成立。検証詳細は
-[#50](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/50)。
+[#50](https://github.com/sakuraiyuta/kaoiro/issues/50)。
 
 例外として、`inter_agent_message` はSDKへ注入された整形済みuser textから
 元のrouting metadata (`to` / `kind` / `conversation_id` / `turn_number`)を
 逆算できず、JSONLからstructured envelopeを再構築できない。この型だけは
 serverのDETS-backed `InterAgentHistory`を正本とし、senderごと最新500件を
-dogfood/container再起動を跨いで保持する (#105)。operatorへのhistory push時は
+dogfood/container再起動を跨いで保持する (#102)。operatorへのhistory push時は
 volatile `AgentStates` のIAを除いてdurable IAをmergeし、既存dashboard fan-outで
 receiver側にも投影する。agent削除時はsender/receiver関連recordを同期purgeする。
 
@@ -516,7 +516,7 @@ runner 実装が前提。
     **履歴供給形は案 B に確定** — resume は過去履歴を query() ストリームへ再 yield
     しない(入力なしでは hook ライフサイクルのみで init すら出ない)。表示履歴の
     再構築は runner/wrapper が JSONL を直読する経路でのみ成立。検証詳細は
-    [#50](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/50)。
+    [#50](https://github.com/sakuraiyuta/kaoiro/issues/50)。
 - **phase-1(#22/#23 runner 前提)**: 復帰本体。
   - #22 spawn の resume モード拡張、runner の候補列挙(F2)、F4 の二重防止、
     T3 検証、クライアント復帰 UI(operator 限定、T2)。
@@ -537,14 +537,14 @@ runner 実装が前提。
     サーバは `reset_history` + broadcast の受け口に留めた(architecture の agent
     非依存方針)。`history_reset` の配信は operator 限定(ADR-0021)。履歴は最新
     200 envelopeを基底capとし、それより古い`inter_agent_message`はSDK
-    transcriptから再構築不能なため#105でcap免除とした。詳細は
+    transcriptから再構築不能なため#102でcap免除とした。詳細は
     [protocol](../specs/protocol.md)。
-  - **IA 復元の正本(#105)**: 構造化 `inter_agent_message` envelope を表示の
+  - **IA 復元の正本(#102)**: 構造化 `inter_agent_message` envelope を表示の
     authoritative source とする。SDK JSONL にも受信時に inject した IA framing
     text が `user` turn として残るが、resume reconstruction ではこれを
     `kind=user` log へ再投影しない。そうしないと durable IA envelope の bubble
     と同じ内容が operator instruction として二重表示される。
-  - **2026-08-08 訂正(#105):** `InterAgentHistory` を正本・cap 免除とする
+  - **2026-08-08 訂正(#102):** `InterAgentHistory` を正本・cap 免除とする
     この追補は [ADR-0051](0051-history-restart-resilience.md) D3 により
     supersede された。IA は wrapper ホストの sidecar から ingress stamp 付きで
     replay し、server は揮発 per-pane projection のみを保持する。
@@ -555,10 +555,10 @@ runner 実装が前提。
   `resume-history-projection`(Q-A4、2026-06-23 実検証で案 B 確定 → 本 ADR
   phase-2 / 上記 phase-0 実装状況へ統合)。
 - 依存 issue:
-  [#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22)
+  [#22](https://github.com/sakuraiyuta/kaoiro/issues/22)
   (サーバ経由起動)、
-  [#23](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/23)(runner)、
-  [#24](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/24)(履歴永続)。
+  [#23](https://github.com/sakuraiyuta/kaoiro/issues/23)(runner)、
+  [#24](https://github.com/sakuraiyuta/kaoiro/issues/24)(履歴永続)。
 - 関連 specs: [protocol](../specs/protocol.md)、
   [threat-model](../specs/threat-model.md)。
 - 関連 ADR: [0001](0001-agent-sdk-integration.md)、

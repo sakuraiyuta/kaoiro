@@ -60,7 +60,7 @@ kaoiro のバックログは、複数のエージェントが同一 work tree �
   bugfix なら mutation または negative control による修正の実効性の証明、
   外部レビュー。
 - 自セッションの rate limit 使用率は `whoami` の `rate_limits` を読む
-  ([#254](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/254))。
+  ([#244](https://github.com/sakuraiyuta/kaoiro/issues/244))。
   `list_agents` は呼び出し元を除外するので、自己観測はここだけである。peer の
   値を自分の代用にできるのは quota pool の共有が確認できている場合だけで、
   engine 名が同じことは共有の証拠にならない。フィールドの読み方(absent は

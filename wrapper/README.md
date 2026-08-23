@@ -75,7 +75,7 @@ config は gitignore 済み)。スキーマと読み込みは `core/src/persona.
 | `server_url` | ✓ | サーバの wrapper ソケット(例 `ws://localhost:4000/wrapper`)。ADR-0029 F3 で必須(server 集約 SoT + fail-closed) |
 | `server_token` | | wrapper 認証トークン。サーバで `KAOIRO_WRAPPER_TOKENS` を設定した時に必要(下記) |
 | `permission_timeout_ms` | | ツール許可の無応答 deny までの時間(ms)。**省略時はタイムアウトなし**で operator の決定まで待つ(SDK の `canUseTool` と同じ挙動、[ADR-0022](../docs/adr/0022-pending-permission-authoritative-source.md) F6)。正の整数を与えたときだけ fail-closed deny になる |
-| `context_work_budget_percent` | | Claude の SDK context window に対する soft 作業予算の割合。`0 < 値 <= 100` の有限数、既定 `60`。wrapper は各 reading の `maxTokens` から token 分母を導出し、`ext.context_budget` と context 通知へ生窓比と併記する(issue #264)。runner 経由では `runner.config.json` の同名 top-level field から渡る |
+| `context_work_budget_percent` | | Claude の SDK context window に対する soft 作業予算の割合。`0 < 値 <= 100` の有限数、既定 `60`。wrapper は各 reading の `maxTokens` から token 分母を導出し、`ext.context_budget` と context 通知へ生窓比と併記する(issue #254)。runner 経由では `runner.config.json` の同名 top-level field から渡る |
 
 ### engine × config field 対応
 
@@ -103,7 +103,7 @@ env 経由で流れるのは model のみ。
 |---|---|---|---|
 | `KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` | ✓ | 無視 | Claude CLI の起動時既定 model |
 | `KAOIRO_CODEX_DEFAULT_MODEL` | 無視 | ✓ | Codex CLI の起動時既定 model |
-| `KAOIRO_WRAPPER_DEFAULT_MODEL` | ✓(deprecation warn) | 完全無視 | 旧 env。次リリース窓で撤去([issue #103](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/103)) |
+| `KAOIRO_WRAPPER_DEFAULT_MODEL` | ✓(deprecation warn) | 完全無視 | 旧 env。次リリース窓で撤去([issue #100](https://github.com/sakuraiyuta/kaoiro/issues/100)) |
 | `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | ✓ | ✓ | 共通:ツール許可 timeout の override |
 
 ## 手動起動
@@ -130,7 +130,7 @@ wrapper は常駐モードで動作する。起動後、server の join に成�
   `agent_id:token` と一致させる。サーバ側未設定時の挙動は `MIX_ENV` 依存で、
   `:dev` / `:test` はラッパー認証が無効(トークン不要)、**`:prod` は
   fail-closed**(ただし runner の spawn 経路が注入するサーバ署名トークンは
-  通るため、runner 一本化の配備ならペア登録は不要 — issue #138)。
+  通るため、runner 一本化の配備ならペア登録は不要 — issue #133)。
 - **ダッシュボード(クライアント)**: `KAOIRO_CLIENT_TOKENS` 未設定だと
   トークン認証は成立しない(fail-closed、issue #28)。トークンを設定する
   場合は `http://localhost:4000/?token=<token>` で開く。トークンを使わない

@@ -112,7 +112,7 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 グレースケール化(CSS filter)により表現する(状態セットの定義は
 [protocol](protocol.md)、マッピング実装はリファレンスダッシュボードの
 `expression.ts`)。`fatigued` は protocol state ではなく context 使用率から
-導出する optional sprite modifier で、対応画像の生成は issue #173 で行う
+導出する optional sprite modifier で、対応画像の生成は issue #163 で行う
 ([ADR-0054](../adr/0054-fatigue-as-orthogonal-persona-modifier.md))。
 
 | 状態 | ao(控えめ) | momo(大) | kuroe(冷静) | fuji(余裕あるマウント) | kohaku(泰然) |

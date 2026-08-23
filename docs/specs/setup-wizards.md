@@ -14,7 +14,7 @@ related: [protocol, threat-model]
 一問一答の対話ウィザードで妥当な設定ファイルを生成し、手間と書き間違い(特に
 fail-closed なクライアント認証の設定漏れ)を減らす。
 
-配備手順書([#142](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/142))が
+配備手順書([#137](https://github.com/sakuraiyuta/kaoiro/issues/137))が
 **手動手順の正本**で、ウィザードは**その自動化**という関係にする。ウィザードは
 手順書の内容を再説明せず、生成した設定と「次にやること」だけを出力する。
 
@@ -48,7 +48,7 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
   呼ばれた場合に TTY が無いまま無応答で止まる事故を防ぐため、runner 側は
   `process.stdin.isTTY` を検査して exit 78、server 側は stdin が閉じていれば
   `Mix.raise` で中断する。無人配備向けのフラグ指定は
-  [#146](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/146) で扱う。
+  [#141](https://github.com/sakuraiyuta/kaoiro/issues/141) で扱う。
 - **初回起動での自動起動はしない**。設定が無いときの起動シムは exit 78
   (`EX_CONFIG`)で止まり、**ウィザードのコマンドを案内する**に留める(上記の
   非対話事故を避けるため。[ADR-0018](../adr/0018-runner-distribution.md) の
@@ -64,9 +64,9 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
 | 項目 | env | 必須 | 備考 |
 |---|---|---|---|
 | シークレットキー | `SECRET_KEY_BASE` | 本番必須 | 64 文字 base64。`mix phx.gen.secret` と同じ生成(32 バイト hex では短い) |
-| ホスト名 | `PHX_HOST` | 本番必須 | 未設定は起動時 raise(fail-fast、issue #139) |
+| ホスト名 | `PHX_HOST` | 本番必須 | 未設定は起動時 raise(fail-fast、issue #134) |
 | ポート | `PORT` | 任意 | 既定 4000 |
-| bind IP | `KAOIRO_BIND_IP` | 任意 | `:prod`(release)限定。既定 = 全 IF。dev は常に loopback 固定(issue #139) |
+| bind IP | `KAOIRO_BIND_IP` | 任意 | `:prod`(release)限定。既定 = 全 IF。dev は常に loopback 固定(issue #134) |
 | クライアント認証 | `KAOIRO_CLIENT_TOKENS` | 実質必須 | `token:role` の複数。role = `operator` / `viewer`。未設定で全クライアント拒否(fail-closed) |
 | wrapper 認証 | `KAOIRO_WRAPPER_TOKENS` | 公開時必須 | `agent_id:token` の複数(client と順序が逆) |
 | runner 認証 | `KAOIRO_RUNNER_TOKENS` | 公開時必須 | `host_id:token` の複数([ADR-0023](../adr/0023-host-runner-architecture.md)) |
@@ -76,10 +76,10 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
 | persona cache dir | `KAOIRO_PERSONA_CACHE_DIR` | 任意 | comment hint を出す |
 
 - トークン 3 種は「追加するか」「もう 1 件追加するか」を繰り返し聞いて複数
-  エントリを組み立てる。prod では 3 種すべて必須(未設定は接続拒否、issue #138)。
+  エントリを組み立てる。prod では 3 種すべて必須(未設定は接続拒否、issue #133)。
 - **DETS パス 9 種は聞かない**。同梱 `docker-compose.yaml` が `environment:` で
   設定済みで、compose 外運用のときだけ必要になる。生成ファイルにはコメントとして
-  残し、意味と一覧は配備手順書(#142)に委ねる。
+  残し、意味と一覧は配備手順書(#137)に委ねる。
 - `KAOIRO_FOOTER_DIR` / `KAOIRO_PERSONA_CACHE_DIR` も質問項目を増やさない。
   `mix kaoiro.env` は未設定時の挙動と compose の設定例を comment hint として
   render する。質問なしで既定の設定を保ちつつ、必要な運用導線を示す。
@@ -127,10 +127,10 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
   `KAOIRO_RUNNER_DIR` で上書き可。解決順は起動シム
   (`deploy/kaoiro-runner-launch.sh`)と一致させる — ずれるとウィザードが
   サービスの見ない場所へ書いてしまう。
-- **`runner.env` は 0600 で生成**する(トークンを持つため。issue #141)。この
+- **`runner.env` は 0600 で生成**する(トークンを持つため。issue #136)。この
   ファイルは起動シムに `source` されるので、値はクォートして書き出す。
 - `server_url` は `runner.config.json` を正本とする。env 上書き
-  (`KAOIRO_RUNNER_SERVER_URL`、[#140](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/140))
+  (`KAOIRO_RUNNER_SERVER_URL`、[#135](https://github.com/sakuraiyuta/kaoiro/issues/135))
   が入り次第、`runner.env` 側にコメント例を追記する。
 - wrapper の設定は runner が spawn 時に生成する
   ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))ため、
@@ -145,12 +145,12 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
   (`wrapper/kaoiro.config.claude-code.example.json` ほか)がある。**dev 向け・
   優先度低**として保留する。
 - **非対話モード**(フラグ一括指定)—
-  [#146](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/146)。
+  [#141](https://github.com/sakuraiyuta/kaoiro/issues/141)。
 - **2 本の間でのトークン自動受け渡し** — 独立運用
   ([ADR-0011](../adr/0011-phase3-reliability-and-auth.md) のトークン体系を前提に
   人手で揃える)。
 - **Gitea release への配布物アップロード** —
-  [#145](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/145)。
+  [#140](https://github.com/sakuraiyuta/kaoiro/issues/140)。
 
 ## See Also
 
@@ -160,4 +160,4 @@ task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-d
   [0023](../adr/0023-host-runner-architecture.md) — runner 常駐、
   [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) — spawn 時の
   agent_id / token 採番
-- 手順書: 配備手順書(#142)が手動手順の正本
+- 手順書: 配備手順書(#137)が手動手順の正本

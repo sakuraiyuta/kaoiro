@@ -15,7 +15,7 @@ dashboard に個人を識別するログイン (OAuth: Google / GitHub /
 Nextcloud + 許可リスト認可) を導入する。共有トークン認証は
 `KAOIRO_CLIENT_TOKENS` 設定時のみ併存し、未設定時は OAuth のみ。
 設計決定は [ADR-0042](../adr/0042-oauth-allowlist-login.md)、
-issue は [#65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65)。
+issue は [#65](https://github.com/sakuraiyuta/kaoiro/issues/65)。
 
 ## 担当
 
@@ -73,7 +73,7 @@ issue は [#65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65)。
 
 - role 細分化 (approver 等)、監査ログ、マルチテナント隔離
 - 案A (token ログインフォーム) の廃止 — 併存のまま
-- kaoiro.env ウィザード (#144) への OAuth 質問追加 (followup 候補)
+- kaoiro.env ウィザード (#139) への OAuth 質問追加 (followup 候補)
 
 ## 進捗ログ
 
@@ -89,11 +89,11 @@ issue は [#65](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/65)。
   Nextcloud は PKCE 未対応 (state のみ)、assent 0.3.1 Req adapter の
   ヘッダ混入バグ回避 (例外は型名のみログ)。followup: 許可リスト role
   降格が稼働中 socket に効かない件は issue 化 (共有トークン経路にも
-  同穴、AgentsChannel 側の修正が本筋) → #158
+  同穴、AgentsChannel 側の修正が本筋) → #148
 - 引き継ぎメモ: AuthController.log_failure/3 が例外の型名しか出さない
   制約は assent 0.3.1 Req adapter のヘッダ混入バグ (upstream 修正済・
   未リリース) が根拠。assent 更新時に緩和可否を再判断。Nextcloud が
   PKCE 対応したら strategy に code_verifier: true を追加可
 - 2026-07-26: 全コミット完了・push 済 (5887df0 dashboard / 8f75e92
   docs / 7f57a4c server)。残: マスターによる provider 登録 + 実機 E2E
-  (手順はクロエがチャットで提示済)、role 降格は #158
+  (手順はクロエがチャットで提示済)、role 降格は #148

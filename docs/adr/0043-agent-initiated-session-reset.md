@@ -13,8 +13,8 @@ related_adrs: [21, 22, 33, 36, 44]
 
 ## Status
 
-Accepted (2026-07-28、[#168 comment-2287](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168#issuecomment-2287)
-の決定記録および [#168 comment-2293](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168#issuecomment-2293)
+Accepted (2026-07-28、[#158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
+の決定記録および [#158 comment-5384365348](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365348)
 の Phase B 実機受け入れを根拠とする)。実装は
 [phase-28-agent-initiated-session-ops の Phase C](../plans/phase-28-agent-initiated-session-ops.md#phase-c--自発-newclear-詳細化-2026-07-28クロエ裁定)
 で行う。
@@ -138,8 +138,8 @@ agent は `request_session_reset` を呼ぶ前に、必要な引き継ぎを WOR
 
 ## References
 
-- 決定記録: [issue #168 comment-2287](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168#issuecomment-2287)
-- Phase B 実機受け入れ: [issue #168 comment-2293](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168#issuecomment-2293)
+- 決定記録: [issue #158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
+- Phase B 実機受け入れ: [issue #158 comment-5384365348](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365348)
 - 実装計画: [phase-28 Phase C](../plans/phase-28-agent-initiated-session-ops.md#phase-c--自発-newclear-詳細化-2026-07-28クロエ裁定)
 - 改訂元: [ADR-0036](0036-session-lifecycle-commands.md) F1, F2, F6
 - permission の先例: ADR-0022, ADR-0033

@@ -19,7 +19,7 @@ Accepted (2026-07-28 起草、2026-07-29 マスター再決裁で F2 を改訂)�
 
 起草時の F2 は**永続的な** director 役を前提としており、その約 2 時間後
 に下された
-[#168 comment-2287](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168#issuecomment-2287)
+[#158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
 の P5「永続 director 役は定義しない。都度 operator 指示 +
 permission_broker 都度承認」と矛盾していた。2026-07-29 のマスター再決裁
 により F2 を「operator が都度指名する director のもとで各エージェントに
@@ -62,7 +62,7 @@ auto-allow を「Phase 2 以降」と保留)。運用ルール上も「作業配
 
 **永続的な director 役は定義しない。** operator が作業単位ごとに
 director を都度指名する
-([ADR-0043](0043-agent-initiated-session-reset.md) D2 および #168 P5 と
+([ADR-0043](0043-agent-initiated-session-reset.md) D2 および #158 P5 と
 同じ形)。指名された director は配下エージェントへ役割 (責務範囲) を
 割り当て、各エージェントはその責務の範囲内では operator 承認なしに
 `send_to_agent` で協調 (作業分担の合意・調整・事後報告) してよい。
@@ -87,7 +87,7 @@ permission broker 都度承認を維持する。director が配下の reset を�
 状況を確認して行う**受動型**とする。idle エージェントが定期的に
 peer を監視して支援を申し出る能動監視 (polling 常駐) はスコープ外。
 
-### 追補 (2026-08-09、issue #175 — 残 open-question の決着)
+### 追補 (2026-08-09、issue #165 — 残 open-question の決着)
 
 2026-08-08 マスター決裁により、F1/F2 が前提としていた残り 2 件の
 open-question を決着した。
@@ -98,9 +98,9 @@ open-question を決着した。
   以降の `send_to_agent` を自動許可する — canUseTool の承認を経ただけ
   (server がまだ受理していない、または reject/unknown) では組合せは
   成立しない (`to` も束縛するのは外部レビューでの指摘、
-  [#211](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/211)
+  [#201](https://github.com/sakuraiyuta/kaoiro/issues/201)
   参照 — conversation_id 単独では reject 後の宛先差し替えが dialog を
-  飛ばしてしまう)。暴走ガード (#177 で一部対応) がまだ弱い現状では、
+  飛ばしてしまう)。暴走ガード (#167 で一部対応) がまだ弱い現状では、
   狭い範囲の自動許可が安全という判断。詳細な実装挙動 (dispatch 待機中
   の受信レースへの耐性を含む) は
   [protocol-inter-agent](../specs/protocol-inter-agent.md) 「自動承認」
@@ -111,7 +111,7 @@ open-question を決着した。
   [ADR-0045](0045-footer-file-externalization.md) F5 で別途決着済み。
 
 両 open-question は decided 反映のうえ close (削除) した。実装は本
-issue ([#175](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/175))
+issue ([#165](https://github.com/sakuraiyuta/kaoiro/issues/165))
 で行う ([protocol-inter-agent](../specs/protocol-inter-agent.md)
 「承認フロー」節、server 側 `priv/footers/system-footer.md`)。
 
@@ -130,9 +130,9 @@ issue ([#175](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/175))
   対話・重複作業のリスクが増す (#87 の「終わり方設計」「観測可能性」
   論点、および
   [work-division-conflict-guard](../open-questions/work-division-conflict-guard.md)
-  で追う)。**追補 (2026-08-09、issue #177)**: 「終わり方」の一部 —
+  で追う)。**追補 (2026-08-09、issue #167)**: 「終わり方」の一部 —
   完了済み conversation が再開して done / escalate の ping-pong が
-  止まらなくなる不具合 — は #177 が server 側 tombstone
+  止まらなくなる不具合 — は #167 が server 側 tombstone
   (`conversation_closed` での再開拒否) と wrapper 側 lifecycle
   (`localDone` / `remoteDone` / `closed`、stale/duplicate turn の
   拒否) で機械的に閉じた
@@ -159,6 +159,6 @@ issue ([#175](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/175))
 | Claude Code skill (SKILL.md) 配布 | engine 依存の仕組みになる |
 | フッター + skill の併用 | SoT 管理の複雑化 |
 | 完全自律 + 事後報告 (director なし) | 暴走・重複作業のリスク |
-| 永続 director 役を定義し指名を持続させる | 役割が固定され operator の統制点が失われる。#168 P5 / ADR-0043 D2 で不採用 |
+| 永続 director 役を定義し指名を持続させる | 役割が固定され operator の統制点が失われる。#158 P5 / ADR-0043 D2 で不採用 |
 | 分担確定は operator 承認 (現状維持) | 自律性の向上が限定的 |
 | 能動監視 (polling 常駐) | token コストと雑音 |

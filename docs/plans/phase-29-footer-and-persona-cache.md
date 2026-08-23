@@ -13,14 +13,14 @@ last_updated: 2026-08-03
 
 [ADR-0045](../adr/0045-footer-file-externalization.md) の footer 外部化を
 実装し、[ADR-0046](../adr/0046-persona-cache-relocation.md) と kaoiro
-issue #183 による persona cache の `:ro` 対応を完了する。
+issue #173 による persona cache の `:ro` 対応を完了する。
 
 ## Tasks
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
 | 29-1 | footer 機構実装 | あお | ✅ 完了 | ADR-0045 |
-| 29-2 | cache 外出し | あお | ✅ 完了 | ADR-0046 / #183 |
+| 29-2 | cache 外出し | あお | ✅ 完了 | ADR-0046 / #173 |
 | 29-3 | docs 整合 sweep | もも | ✅ 完了 | 第 1・第 2 弾 |
 | 29-4 | レビュー | ふじ | ✅ 完了 | 3 巡 (must-fix 計 3) → approve |
 

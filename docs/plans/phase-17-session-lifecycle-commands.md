@@ -67,13 +67,13 @@ phase-15完了時の状況を見てマスターが決める。相互depends_on�
 | 17-4 | serverにvalidation、pending lock、reserved instruction reject、result処理を追加 | ✅ | lifecycle orchestrationのSSOT。SessionResets 新規 GenServer で TOCTOU 芯 (単一 handle_call) と async state-report lag 保護 (2s cooldown + viewer 除外)、intercept + handle_out で session_reset_* を operator-only gate、runner の agent_id host binding は exact match (nested-prefix spoof 防止) |
 | 17-5 | runner supervisorにsame-agent fresh relaunchと旧session rollbackを追加 | ✅ | resume IDなしで試行、失敗時だけ旧IDを明示resume。phase-15 D8の最後のeffective snapshotを再適用。director must 2 点織り込み: (1) rollback previous_session_id は server 由来 (payload)、runner の spawn 時値に依存しない。(2) F2 「接続確認」文言準拠で server 側 two-phase (SessionResets の `:spawning` → `:awaiting_connect` → `confirm_connection/2` at wrapper join)。ChildEntry.pendingReset に oldResumeSessionId を含め、handleSwitchSession と同じ atomic delete + add で F4 lock を transfer (review round 1 finding 対応) |
 | 17-6 | Claude/Codexでfresh session開始をintegration test | ✅ | Claude query resumeなし / Codex startThread。両 adapter の supports_session_reset を `false → true + ["new","clear"]` に flip。両 test の toEqual assertion 反映。ID確定時点・同process連続生成・event隔離の実測項目は integration 手動確認 (Codex thread ID lazy 採番は to_session_id=null で許容、fresh session の初回 envelope で SessionPointers.record 経由で pointer が確定)。dashboard Composer intercept は δ (17-8) で追加、γ では adapter flip は dark-launch 維持 (UI 発火経路が無い) |
-| 17-7 | AgentStatesに session boundary append を追加 | ✅ | #109 確定仕様で両 mode は既存 history 末尾へ marker を append。表示 reset / IA purge は行わない。 |
+| 17-7 | AgentStatesに session boundary append を追加 | ✅ | #106 確定仕様で両 mode は既存 history 末尾へ marker を append。表示 reset / IA purge は行わない。 |
 | 17-8 | Composer exact command interceptとlocal slash completion mergeを実装 | ✅ | capability/modes判定、attachment時はresetしない。`shouldInterceptAsSessionReset` helper を protocol.ts に抽出 (exact `/new`・`/clear` + attachment 空 + capability=on 判定、fail-closed)、AgentDetail の send 経路で intercept。slash completion pool に capability=on 時のみ kaoiro-local `/new`・`/clear` を merge (エンジン報告 slash と de-dupe、engine が同名 command を報告しても kaoiro-local が先で intercept 優先) |
 | 17-9 | started/completed/failed/boundary UIとbusy errorを実装 | ✅ | reset中composer操作をdisable。「新しいsessionを開始中」を表示。App.svelte に 3 handler bind + `sessionResets` state (agent_id → mode)、AgentDetail に resetMode prop 伝搬。resetMode !== null で textarea + submit disable + placeholder swap + reset-progress banner、failed は showNotice で loud (closed vocab reason 明示)。transcript 内で env.type === "session_boundary" 分岐、operator は request_id 短縮 + tooltip で ID 群、viewer は mode のみで divider 表示 |
 | 17-10 | old session picker/resumeのregression testを追加 | ✅ | pointer stackなし、host files SSOT。detach_session が session_id=nil + cwd/engine/snapshot 保持 (γ 17-3)、fresh session の初回 envelope で record 経由で新 pointer に上書き、既存 resume_session (ADR-0014 F2/F3/A4 継続) で旧 session に戻れる。session_pointers_test に detach + reattach の DETS 越し永続確認、agents_channel_test に resume_session の SessionPointer 一致確認 |
 | 17-11 | race/failure testを追加 | ✅ | instruction競合、double reset、旧event、spawn failure、rollback成功/失敗、timeout。**15-8 Finding 1/2 同型穴の phase-17 版**を追加: wrapper_channel_test に「pending stash 有り envelope で patch fire、無し envelope は noop」の 2 case (order independence)、agents_channel_test に「reset pending 中の resume_session は session_reset_pending で reject」(ADR-0036 F2 の列挙漏れを追補で塞ぐ)。既存 test で double reset / instruction / model / effort / permission_mode / timeout / spawn_failed → rollback / rollback_failed は既に cover 済み |
 | 17-12 | specs/運用docsを更新し全regression testを実行 | ✅ | protocol/architecture/threat-model 更新。protocol.md の type table に `session_boundary` 追加、方向別 table に `session_reset` / `session_reset_started/completed/failed` / `reset_session` / `session_reset_result` を追加。architecture.md に `SessionResets` GenServer + `confirm_connection` two-phase + `AgentStates.pending_boundary_patch` を明記。threat-model.md に **session_reset 防御 6 レイヤ** (operator-only / capability advertise / host binding exact match / reserved_session_command reject / SessionResets pending lock / viewer 情報境界) を新設。ADR-0036 F2 に resume_session 追補。両engine実機の検収はマスター + director で phase-17 完走後に実施予定 |
-| 17-13 | `/clear` の IA 表示仕様を更新 | ✅ | #109 確定仕様で `/clear` は IA を含む表示を維持。過去 IA を隠すのは operator `clear_history` のみ。 |
+| 17-13 | `/clear` の IA 表示仕様を更新 | ✅ | #106 確定仕様で `/clear` は IA を含む表示を維持。過去 IA を隠すのは operator `clear_history` のみ。 |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blocked.
 
@@ -110,7 +110,7 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blo
 
 ## Followup: /clear の F3 復元 (2026-07-24、マスター指示)
 
-- **背景**: 7/23 の #109 修正ラウンド (commit f6ef0b0) で ADR-0036 F3 が
+- **背景**: 7/23 の #106 修正ラウンド (commit f6ef0b0) で ADR-0036 F3 が
   「/new・/clear とも表示維持」に書き換えられ、/clear が何も消さない
   コマンドになった。仕様の取り違えで、元の F3 (「/new は表示維持、/clear
   は当該 agent の表示 projection を reset」) が正。マスターと 2026-07-24 に
@@ -123,7 +123,7 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blo
   で mode="clear" 時に pane を marker 1 行だけに絞り、watermark map を更新。
 - **依然として真**: operator `clear_history` (#48) は現状 API 維持 (現行
   session の他 session ログ purge)。engine 側 session file (JSONL/rollout)
-  も削除しない。/clear の IA の相手 pane は #109 の per-pane ClearWatermarks
+  も削除しない。/clear の IA の相手 pane は #106 の per-pane ClearWatermarks
   で hide されるので、durable ledger (InterAgentHistory DETS) は削除しない。
 - **2026-08-08 訂正:** 前項の durable ledger 前提は
   [ADR-0051](../adr/0051-history-restart-resilience.md) D3-4 により
@@ -141,7 +141,7 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done, ⛔ blo
 - **検収中の finding**: live-agent の左ペイン「別のセッションから再開…」が
   runner の T3 再検証 (`supervisor.ts:457` `#sessionExists`) で失敗
   (Codex で再現、起動 UI の restore 経路は正常) →
-  [#104](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/104)
+  [#101](https://github.com/sakuraiyuta/kaoiro/issues/101)
   (bug / priority-medium) として起票、本 phase の外で対応。
 - **拒否経路 / viewer 境界の実操作検収**: 実稼働で問題が出た時に対応と
   マスター判断 (unit test では全経路カバー済み)。

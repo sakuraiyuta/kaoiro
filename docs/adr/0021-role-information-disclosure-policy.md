@@ -47,7 +47,7 @@ issue #46 はそもそも「viewer ロールの権限・情報公開範囲を **
 
 ### F1: 2 ロール固定(operator / viewer) — 撤回済み
 
-> **改訂 (2026-08-14、issue #198)。** F1 は
+> **改訂 (2026-08-14、issue #188)。** F1 は
 > [ADR-0050](0050-principal-model-and-graded-access-control.md) D2 が覆した。
 > role は **admin / operator / viewer の 3 値**である。F1 自身が「3 ロール
 > 化は別 ADR を要する」と定めており、ADR-0050 がその別 ADR にあたる。
@@ -63,7 +63,7 @@ issue #46 はそもそも「viewer ロールの権限・情報公開範囲を **
 > - viewer の可視性 (F3 以降) は変更しない。ADR-0050 D2 が「viewer の元々
 >   の意図と一致しているため変更しない」と明示している
 >
-> per-pair 権限 ([issue #199](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/199))
+> per-pair 権限 ([issue #189](https://github.com/sakuraiyuta/kaoiro/issues/189))
 > が operator の受信範囲を絞り始めた時点で、admin をその判定から切り離す
 > 必要がある。まとめて絞られると上記 MUST が壊れる。
 
@@ -125,7 +125,7 @@ viewer が当該 agent を見失わないよう合成置換が必要。
 ### F6: agent 間開示 (peer directory)
 
 F1〜F5 は client (dashboard) 向けの `agents:lobby` 配信を対象とする。
-[issue #160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160)
+[issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150)
 で agent が peer の稼働状況を読んで委任判断を行う要求が生じたため、
 **第 3 の開示主体として `agent` を定義する**(2026-07-28 追記、
 [phase-27](../plans/phase-27-list-agents-metadata.md))。
@@ -149,17 +149,17 @@ canonical key だけを写した新しい map を組み立て、未知の nested
 `last_activity_at` / `conversation` / `rate_limits` / `directory_only` /
 `last_seen`。
 `persona{...}` から後ろ 6 field(`context`〜`rate_limits`)は
-[#160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160)
-(phase-27)で追加。`display_name`(issue #219 D19)は `persona.name` と
+[#150](https://github.com/sakuraiyuta/kaoiro/issues/150)
+(phase-27)で追加。`display_name`(issue #209 D19)は `persona.name` と
 独立した mutable な通称 — `persona.name` は pack 由来の canonical
 name として rename の影響を受けず不変のまま、`display_name` のみが
 稼働中の rename を反映する。`directory_only` / `last_seen`
-([#269](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/269))
+([#259](https://github.com/sakuraiyuta/kaoiro/issues/259))
 は `AgentStates` に live envelope を持たない `AgentDirectory` 由来
 entry にのみ付き、identity + `last_seen` を超える開示は追加しない
 (F6-4 の deny 集合はそのまま — `directory_only` entry も `cwd` 等の
 operator-grade field を持たない)。テストによる covering は F6-7 の
-拡張手順どおり(server/wrapper 両側、issue #269 T7/W1-W3)。
+拡張手順どおり(server/wrapper 両側、issue #259 T7/W1-W3)。
 
 **F6-4 — 明示 deny(継続除外)**: `cwd`、`permission`(`sandbox` /
 `approval`)、`permission_mode` / `fast_mode`、`session_id`、
@@ -175,13 +175,13 @@ dashboard と揃えるため)。
 
 **F6-5 — `conversation` は相手 `agent_id` までを開示し、
 `conversation_id` は開示しない。** 開示範囲として決定されたのが
-「active な会話の有無 + 相手 agent_id 一覧」(#160 決定 4)であり、
+「active な会話の有無 + 相手 agent_id 一覧」(#150 決定 4)であり、
 識別子はその範囲を超えるため。範囲外だから出さないという判断であって、
-[#17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17) の
+[#17](https://github.com/sakuraiyuta/kaoiro/issues/17) の
 conversation_id 機密性についてここで結論を出したわけではない。信頼
 境界そのものの再評価は F6-6 の将来項目に含める。
 
-**F6-6 — 妥当性の根拠と再評価 (issue #197 段階2 で実施)。** 本節は
+**F6-6 — 妥当性の根拠と再評価 (issue #187 段階2 で実施)。** 本節は
 もともと「現状 kaoiro は単一 operator 配下の閉じた系であり、peer は
 同一の人間が起動した agent に限られる」を根拠に、稼働状況の相互可視化
 による露出リスクは小さく operator 介在の削減という便益が上回ると
@@ -189,11 +189,11 @@ conversation_id 機密性についてここで結論を出したわけではな�
 単位でなくなった時点で再評価する」という条件を置いていた。
 
 [ADR-0050](0050-principal-model-and-graded-access-control.md) の
-Phase A (identity 化 + admin role、issue #197 / #198) はこの根拠の
+Phase A (identity 化 + admin role、issue #187 / #188) はこの根拠の
 一部 — 「同一の人間が起動した agent」という前提 — を崩し始める。
 principal は user / agent に型分離され (D1)、user 側は viewer を含む
 複数の role を持つ。ADR-0050 の Context 自身が「本 ADR の決定はまさに
-その条件を発火させる」と明記しており、issue #197 の制約節もこれを
+その条件を発火させる」と明記しており、issue #187 の制約節もこれを
 引き継いでいる。したがって本節は例外を書き足す形を採らず、実際に
 再評価する。
 
@@ -214,20 +214,20 @@ allow-list / per-pair 権限が別途強制するため直接の脆弱性には�
 
 state / 活動の開示は本節の対象外のまま据え置く。これは per-pair 権限
 そのものの導入ではない — 加算モデルの edge 判定・グラフ編集ツール等
-D3/D9 の設計変更は Phase B (#199) のスコープであり、本 ADR はここで
+D3/D9 の設計変更は Phase B (#189) のスコープであり、本 ADR はここで
 実装に踏み込まない。ADR-0050 Phase B が導入されたら、user 側の開示も
 同じ per-pair 権限テーブルで再フィルタする。それまでは F6-8 の allow
 集合が上限。
 
 **次の再評価条件**: 外部 inbound
-([#98](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/98))
-導入時、または ADR-0050 Phase B (per-pair 権限、#199) の実装時。
+([#95](https://github.com/sakuraiyuta/kaoiro/issues/95))
+導入時、または ADR-0050 Phase B (per-pair 権限、#189) の実装時。
 
 **F6-7 — 拡張手順。** peer directory に新 field を足すときは、F5 の
 viewer 判断と同様に **agent 開示の要否を明示判断** し、F6-3 / F6-4 の
 どちらかに列挙してからテストで両主体の可視性を covering する。
 
-**F6-8 — user 開示の allow 集合 (issue #197 段階2)。** agent への
+**F6-8 — user 開示の allow 集合 (issue #187 段階2)。** agent への
 user 開示は F6-3 (agent entry の allow 集合) とは独立の allow-list
 とする。理由は F6-1 と同型 — user directory (`wrapper:<id>` 経由) と
 agent directory (同じ経路の別 payload) を同じ集合で管理すると、片方
@@ -235,7 +235,7 @@ agent directory (同じ経路の別 payload) を同じ集合で管理すると�
 
 現時点の allow 集合: `id` / `kind`(常に literal `"user"`) /
 `display_name` / `role`(`"admin"` \| `"operator"` \| `"viewer"` —
-issue #198 で 3 値化。wire contract の正本は本 ADR と
+issue #188 で 3 値化。wire contract の正本は本 ADR と
 [protocol-inter-agent](../specs/protocol-inter-agent.md) であり、
 `wrapper/core/src/transport.ts` の `USER_ROLES` はその実装側で型と実行時
 narrow を 1 箇所から導出するための手段にすぎない)。F6-6 の再評価
@@ -262,7 +262,7 @@ F6-3 / F6-8 いずれかへ列挙 → 両主体の可視性を covering する�
 - viewer ロールの仕様が一覧表で読める(threat-model.md / protocol.md
   にも反映)。
 - F6 で agent 間開示も同じ allow-list 規律に載り、peer directory へ
-  field を足すときの判断手順が viewer と揃った(#160)。
+  field を足すときの判断手順が viewer と揃った(#150)。
 
 ### Negative
 
@@ -286,7 +286,7 @@ F6-3 / F6-8 いずれかへ列挙 → 両主体の可視性を covering する�
 | 現状の catch-all 素通し(deny-list 継ぎ足し)を維持 | 新 type 追加時に viewer 漏洩が継続。事故が起きるまで気づけない構造的問題が残る |
 | `permission_request` envelope を viewer にも素通しで `input` だけ落とす(現状)| `tool_name` / `request_id` から operator の作業状況が推測でき、Defense-in-depth として不十分 |
 | viewer から `permission_request` を **完全に** 除去(snapshot からも外す)| 最新が `permission_request` のとき viewer の grid から agent が消える。合成 `state_change` への置換で grid 整合を保つ方を採用 |
-| 3 ロール化(admin / operator / viewer)| ~~YAGNI。現状の機能では 2 ロールで足りる。必要になった時点で別 ADR~~ **却下を撤回 (2026-08-14、issue #198)。** その「必要になった時点」が来て、[ADR-0050](0050-principal-model-and-graded-access-control.md) D2 が 3 値化を決めた。上記 F1 の改訂を参照 |
+| 3 ロール化(admin / operator / viewer)| ~~YAGNI。現状の機能では 2 ロールで足りる。必要になった時点で別 ADR~~ **却下を撤回 (2026-08-14、issue #188)。** その「必要になった時点」が来て、[ADR-0050](0050-principal-model-and-graded-access-control.md) D2 が 3 値化を決めた。上記 F1 の改訂を参照 |
 
 ## Related
 
@@ -296,8 +296,8 @@ F6-3 / F6-8 いずれかへ列挙 → 両主体の可視性を covering する�
   土台)、[0012](0012-response-display-and-dashboard-scope.md)(log/result の
   operator 限定の出発点)、[0013](0013-user-token-cookie-persistence.md)
   (token 保管)。
-- F6 の由来: [issue #160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160)、
+- F6 の由来: [issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150)、
   実装は [phase-27](../plans/phase-27-list-agents-metadata.md)。開示 field の
   wire は [protocol-inter-agent](../specs/protocol-inter-agent.md)
   「peer directory の情報境界」が正本。
-- 由来: [issue #46](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/46)。
+- 由来: [issue #46](https://github.com/sakuraiyuta/kaoiro/issues/46)。

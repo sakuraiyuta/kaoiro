@@ -45,11 +45,11 @@ Codex 個人設定の tracked 管理(`dotfiles/codex`)は settings repo 側。
 - [x] settings repo: `dotfiles/codex` tracked source + `install.codex.sh` +
       `install.dotfiles.sh` 除外 + README/.gitignore/ADR-0013(settings 側)。
 - [x] 変更関連の typecheck / test / format が pass(commit は藤レビュー後)。
-      full server suite は既知 #115(InterAgentHistory の DETS 固定 path 非分離)
+      full server suite は既知 #111(InterAgentHistory の DETS 固定 path 非分離)
       の 1 件のみ fail で、本変更とは非回帰(server 変更は persona_assets の
       footer のみ)。
 
-**2026-08-08 注記:** この #115 は phase-19 完了時点の検証記録である。
+**2026-08-08 注記:** この #111 は phase-19 完了時点の検証記録である。
 `InterAgentHistory` DETS は [ADR-0051](../adr/0051-history-restart-resilience.md)
 に基づく phase 30-7 で撤廃済みであり、現在の durability 設計を示すものではない。
 
@@ -77,7 +77,7 @@ Codex 個人設定の tracked 管理(`dotfiles/codex`)は settings repo 側。
   git diff --check clean。server は persona_assets 12/12(footer contract test
   含む)、full mix test 405/406 — 唯一の fail は wrapper_channel_test:523 の
   `InterAgentHistory.list_for`(DETS 固定 path `System.tmp_dir()/…dets` 非分離 =
-  既知 #115)で、本変更と無関係の非回帰。review cycle は round1 medium /
+  既知 #111)で、本変更と無関係の非回帰。review cycle は round1 medium /
   round2 small とも findings 0。
 
 **2026-08-08 注記:** 上記は当時の試験結果であり、`InterAgentHistory` の

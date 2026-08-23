@@ -29,7 +29,7 @@ Accepted
   canonical な固有名で、session 中不変(のちの
   [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) F9)。
   稼働中に変わり得る通称は `display_name` という別 field が担う
-  ([issue #219](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/219)
+  ([issue #209](https://github.com/sakuraiyuta/kaoiro/issues/209)
   D19)。
 - **どのホスト/プロセスのエージェントがどのペルソナを担当するかはユーザが指定**。
 - サーバ/クライアントは `agent_id`(+ `persona.id`)をキーに表示・機嫌を持続。

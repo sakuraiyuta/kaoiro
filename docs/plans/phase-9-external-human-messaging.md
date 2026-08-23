@@ -103,5 +103,5 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   [protocol](../specs/protocol.md), [plugin-model](../specs/plugin-model.md)
 - ADR: [0028](../adr/0028-external-human-messaging.md)
 - Previous phase: [phase-8-inter-agent-messaging](phase-8-inter-agent-messaging.md)
-- kaoiro issue #98(実装)、#96(Tier B red-team spike)、#97(email/Slack 将来)、
+- kaoiro issue #95(実装)、#93(Tier B red-team spike)、#94(email/Slack 将来)、
   #18(メッセージフィルタ)

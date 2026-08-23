@@ -24,7 +24,7 @@ dashboard を PC / tablet / smartphone のどの画面サイズでも実用に�
 ## Acceptance Criteria
 
 - [ ] responsive-reachability.md の全要素が、表示条件成立時に 3 サイズから
-      到達可能 (Tasklist float の行は #188 実装後に適用のため対象外)
+      到達可能 (Tasklist float の行は #178 実装後に適用のため対象外)
 - [ ] 「常時」と記された要素が、表示条件成立中はスクロール位置によらず視界にある
 - [ ] lobby grid の列が role と timeline 配置に従う (viewer と offline は
       常に `auto-fill`、固定列は timeline 横並び時の operator のみ)
@@ -84,7 +84,7 @@ responsive-reachability.md の表と一致する / 低背で dialog・drawer・d
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 31-9 | 実機確認 (iOS/iPadOS Safari + Android Chrome) | | ⏳ | Android は Pixel 6a。ソフトウェアキーボード表示中の composer 到達を必ず確認する。[#208](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/208) |
+| 31-9 | 実機確認 (iOS/iPadOS Safari + Android Chrome) | | ⏳ | Android は Pixel 6a。ソフトウェアキーボード表示中の composer 到達を必ず確認する。[#198](https://github.com/sakuraiyuta/kaoiro/issues/198) |
 | 31-10 | Playwright による viewport 回帰の固定 | こはく | ✅ | 下記シナリオ。`dashboard/e2e/` (fixture ハーネス + `pnpm exec playwright test`、Phoenix 不要)。T1-T10 + landscape 到達回帰の 26 テスト green |
 
 **テストシナリオ** (31-10)。軸の直積ではなく、成立する組のみを列挙する。
@@ -107,7 +107,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 ## Followups (in-phase but unfinished)
 
 - Tasklist float の狭幅挙動は当面 desktop と同一 (ADR-0052 F4 の暫定決定)。
-  [#188](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/188) が
+  [#178](https://github.com/sakuraiyuta/kaoiro/issues/178) が
   未実装のため本フェーズの検収対象外。実装後に実挙動を見て見直す
 - timeline track を `22rem` 固定にしたことで広い画面の表示密度が下がる。
   実運用で不足を感じた場合、desktop 帯の上端でのみ上限を戻す案を検討する
@@ -124,8 +124,8 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   [responsive-reachability](../specs/responsive-reachability.md),
   [design](../specs/design.md)
 - ADR: [0052-responsive-three-tier-layout](../adr/0052-responsive-three-tier-layout.md)
-- 実装 issue: [#207](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/207)
+- 実装 issue: [#197](https://github.com/sakuraiyuta/kaoiro/issues/197)
   (Stage A-C + 31-10 Playwright)
-- 実機検証 issue: [#208](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/208)
+- 実機検証 issue: [#198](https://github.com/sakuraiyuta/kaoiro/issues/198)
   (Stage D 31-9、運用者作業)
 - Previous phase: [phase-30-history-restart-resilience](phase-30-history-restart-resilience.md)

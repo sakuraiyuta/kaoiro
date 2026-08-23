@@ -37,7 +37,7 @@ rate limit / resume) を持ち `.status-scroll` で内部スクロールする�
 二重になり会話ログへ到達できない。
 
 さらに dashboard を明示的な PWA として定義する作業
-([#206](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/206)) により、
+([#196](https://github.com/sakuraiyuta/kaoiro/issues/196)) により、
 ホーム画面から起動した実用的なアプリとして 3 サイズで成立させたいという要求が
 生じた。「狭幅は first-class ではない」という前提そのものを見直す必要がある。
 

@@ -13,7 +13,7 @@ related_adrs: [10, 15, 19, 48, 49]
 
 ## Status
 
-Accepted (2026-08-04、マスターとの相談で決定。kaoiro issue #180)。
+Accepted (2026-08-04、マスターとの相談で決定。kaoiro issue #170)。
 [ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md) F2 の
 「専用 envelope type」の名称とスキーマを確定する追補。
 
@@ -28,7 +28,7 @@ type で通知する方針(transport=(i))は決定済み。残っていた論点
 判断材料: 既存 type(state_change / log / permission_request / result)は
 いずれも単一 type 設計で、subtype 分岐の前例は薄い。protocol のバージョニング
 方針は「予約 type の追補は同一 version」。将来、Claude Code の Tasklist
-(todo)可視化(kaoiro issue #188)を同じ枠に載せたい。
+(todo)可視化(kaoiro issue #178)を同じ枠に載せたい。
 
 ## Decision
 
@@ -76,7 +76,7 @@ protocol で予約済みの名称 `task` をそのまま正式名称とする。
 - protocol の「type と payload」表へ正式行を追補でき、段階1
   (wrapper + protocol)の実装に着手できる。
 - 単一 type のため受信側の分岐が薄く、既存 type 群の設計と揃う。
-- `task_type` の拡張余地により #188(Tasklist)を同じ envelope に載せられる。
+- `task_type` の拡張余地により #178(Tasklist)を同じ envelope に載せられる。
 
 ### Negative
 
@@ -110,7 +110,7 @@ protocol で予約済みの名称 `task` をそのまま正式名称とする。
 - 由来: open-question subagent-task-envelope-schema(2026-06-16 起票)を
   本 ADR へ昇格。
 
-## Addendum (issue #180, 2026-08-09): F4 の実測値 + prompt/output_file の非配線
+## Addendum (issue #170, 2026-08-09): F4 の実測値 + prompt/output_file の非配線
 
 **F4 実測値。** 段階1 実装時、実 SDK
 (`@anthropic-ai/claude-agent-sdk@0.3.220`)を実測したところ、
@@ -132,9 +132,9 @@ protocol で予約済みの名称 `task` をそのまま正式名称とする。
 ローカルファイルシステムパスで wrapper ホスト固有の情報を露出する。
 将来これらを配線する場合は本 ADR の改訂が要る。
 
-**由来**: kaoiro issue #180 実装セッション(あお、2026-08-09)。
+**由来**: kaoiro issue #170 実装セッション(あお、2026-08-09)。
 
-## Addendum (issue #180, 2026-08-09): `task_notification` の未知 status は terminal fallback
+## Addendum (issue #170, 2026-08-09): `task_notification` の未知 status は terminal fallback
 
 **背景。** F2 の `status` は `running` / `completed` / `failed` /
 `stopped` の粗い 4 値だが、`task_notification` が実際に運ぶ SDK 生の
@@ -164,5 +164,5 @@ task)。これは同 ADR 冒頭 F2 の「`task_notification` は終端」とい�
 のまま)には引き続き当てはまるが、`task_notification` の未知 status
 には当てはまらない(plan 側も本 addendum に合わせて訂正済み)。
 
-**由来**: kaoiro issue #180 外部レビュー対応(あお、2026-08-09、
+**由来**: kaoiro issue #170 外部レビュー対応(あお、2026-08-09、
 ふじ round1 M2)。

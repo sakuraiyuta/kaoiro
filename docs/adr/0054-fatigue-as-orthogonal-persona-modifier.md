@@ -17,7 +17,7 @@ Accepted
 
 ## Context
 
-issue #172 は context 使用率が高いエージェントを、既存の稼働 state を
+issue #162 は context 使用率が高いエージェントを、既存の稼働 state を
 読み替えずに疲労表情で示したい。`fatigued` を protocol の `state` 語彙へ
 追加すると、wrapper・server・dashboard の状態遷移、既存の表情網羅性、rolling
 upgrade の互換性までを巻き込む。一方で疲労は `thinking` や `done` と排他的な
@@ -28,7 +28,7 @@ persona pack の sprite は従来の必須 7 状態だけだった。疲労用�
 を許容しない必要がある。
 
 疲労信号は先行決定 P2/P4 に従い `ext.context.used_percentage >= 60` とする。
-issue #264 は後から `ext.context_budget.work_budget_percentage` を wire に
+issue #254 は後から `ext.context_budget.work_budget_percentage` を wire に
 追加したが、これは soft 作業予算の比率であり、当初の疲労信号とは別物である。
 将来どちらを採るかが変わっても、呼び出し側へ判断を散らしてはならない。
 
@@ -50,7 +50,7 @@ sprite 自体には CSS modifier を重ねない。
 疲労 sprite への差し替え対象は `idle` と `waiting_input` だけとする。
 `disconnected`、作業中、完了、error は元 state を保つ。`disconnected` 優先を
 別の early return で重ねず、`FATIGUE_ELIGIBLE_STATES` allowlist を唯一の判定
-機構にする。issue #172 実装中の mutation で early return の削除が green の
+機構にする。issue #162 実装中の mutation で early return の削除が green の
 ままだったため、こはく裁定で冗長な early return を削除し、allowlist へ
 `disconnected` を混入する mutation が TB-7 を red にすることを確認した。
 
@@ -60,7 +60,7 @@ persona pack は必須 7 state に加え、allowlist 済み optional sprite id
 SoT とし、宣言済みの `fatigued.png` 欠落は pack を不完全として再展開/拒否し、
 未宣言の余分な PNG は manifest に公開しない。未知 id は reject する。
 
-実ペルソナの `fatigued.png` 生成と provenance は issue #173 の責務であり、
+実ペルソナの `fatigued.png` 生成と provenance は issue #163 の責務であり、
 本決定は schema・受け入れ・表示経路だけを定義する。
 
 ## Consequences

@@ -100,7 +100,7 @@ Accepted
 - 由来: my-idea-brief(走り書き「subagent/workflow の起動・体数・種別をクライアントへ
   通知」)。
 
-## Addendum (issue #180, 2026-08-09): `task_updated` は F3 の対象外
+## Addendum (issue #170, 2026-08-09): `task_updated` は F3 の対象外
 
 **背景。** 段階1 実装時、実 SDK
 (`@anthropic-ai/claude-agent-sdk@0.3.220`)の型定義を読み直したところ、
@@ -132,4 +132,4 @@ interrupt / `backgroundTasks()` 経由の停止 の 4 経路すべてで、
   改訂してから行う(黙って `task_progress`/`task_notification` 相当に
   読み替えない)。
 
-**由来**: kaoiro issue #180 実装セッション(あお、2026-08-09)。
+**由来**: kaoiro issue #170 実装セッション(あお、2026-08-09)。

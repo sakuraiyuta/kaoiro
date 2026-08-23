@@ -28,7 +28,7 @@ wrapper をどこで動かしどう繋ぐか(トポロジ)だけを決めてお�
 
 各ホストに常駐プログラム(runner)を 1 つ置き、サーバと wrapper の間でホスト内
 エージェント群のライフサイクルを担わせる。issue
-[#23](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/23) で複数案を比較し、
+[#23](https://github.com/sakuraiyuta/kaoiro/issues/23) で複数案を比較し、
 本 ADR の決定(D1-D4)に収束した。
 
 ### 現行コードの実態(地盤、2026-06-23 調査)
@@ -95,7 +95,7 @@ UI からのリモート spawn は実質リモートコード実行(issue #22)�
 
 ### 制御メッセージスキーマ(#66、2026-06-24 追補)
 
-[#66](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/66) で runner ↔ server
+[#66](https://github.com/sakuraiyuta/kaoiro/issues/66) で runner ↔ server
 制御メッセージを確定(schema 本体は [protocol](../specs/protocol.md)「runner 制御
 メッセージ」、本 ADR は決定の記録)。
 
@@ -134,7 +134,7 @@ D3 の「wrapper と型を共有」を、**複数 wrapper を前提**に具体�
 - **適用範囲は Node 側に限定**。dashboard(`dashboard/`)は別ビルド系のため
   本作業では据え置き(独自 `protocol.ts` 継続、整合は将来別件)。
 - 単一バイナリ([ADR-0018](0018-runner-distribution.md))への複数 wrapper バンドル
-  方式は隣接論点として配布フェーズ([#70](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/70))で詰める。本決定は型 / パッケージ構造のみ。
+  方式は隣接論点として配布フェーズ([#70](https://github.com/sakuraiyuta/kaoiro/issues/70))で詰める。本決定は型 / パッケージ構造のみ。
 
 ## Consequences
 
@@ -182,4 +182,4 @@ D3 の「wrapper と型を共有」を、**複数 wrapper を前提**に具体�
 - 制御スキーマ: #66 で確定(上記「制御メッセージスキーマ」、
   [protocol](../specs/protocol.md)「runner 制御メッセージ」)。
 - 実装: Phase 4([phase-4-host-runner](../plans/phase-4-host-runner.md))。
-- 由来: issue [#23](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/23)。
+- 由来: issue [#23](https://github.com/sakuraiyuta/kaoiro/issues/23)。
