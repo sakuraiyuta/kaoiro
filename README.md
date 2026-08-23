@@ -72,7 +72,7 @@ data flow.
   - Keeps the latest state in one GenServer per connection (agent), supervised
     under a Supervisor.
   - Fans out through PubSub and sends updates to clients in real time.
-- **Client: Web front end (TypeScript)** (static variations for rendering)
+- **Client: Web front end (TypeScript)** (static image variants for rendering)
   - The reference dashboard (Svelte 5 + Vite) is in `dashboard/`. It is an
     independent root and lockfile, not a pnpm workspace member.
 - **Runner: TypeScript / Node** (`@kaoiro/runner`, distributed as a
@@ -146,6 +146,6 @@ work at the same eye level. I am also using myself as the first subject to
 observe what happens if this way of working spreads. I may report the results
 somewhere eventually.
 
-Finally, `iro` in kaoiro means color. A spoonful of the hope to add a little
-color to a work landscape that can easily become bleak is mixed into the name
-as well.
+Finally, `iro` in kaoiro means color. The name has a spoonful of another hope
+mixed into it: that a work landscape that can easily become bleak might get a
+little color.
