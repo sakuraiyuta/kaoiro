@@ -42,33 +42,33 @@ host's `capabilities` has two or more types.
 
 ```mermaid
 flowchart LR
-  subgraph Agents[AI エージェント群]
+  subgraph Agents[AI Agents]
     CC1[Claude Code #1]
     CX[Codex #2]
   end
-  subgraph Host["ホスト(runner 常駐)"]
-    RUN[runner<br/>spawn/監督/ホスト登録]
-    subgraph Wrappers[ラッパー層 TS + engine SDK / ローカル]
+  subgraph Host["Host (runner resident)"]
+    RUN[runner<br/>spawn / supervision / host registration]
+    subgraph Wrappers["Wrapper layer (TS + engine SDK / local)"]
       W1[Wrapper #1<br/>Adapter+Filters]
       W2[Wrapper #2]
     end
   end
-  subgraph Server[サーバ層 Elixir/Phoenix]
-    REG[AgentStates<br/>単一 GenServer<br/>agent_id→最新エンベロープ]
+  subgraph Server[Server layer: Elixir/Phoenix]
+    REG[AgentStates<br/>single GenServer<br/>agent_id → latest envelope]
     PS[(PubSub)]
   end
-  subgraph Clients[クライアント層 外部プロジェクト + 同梱ダッシュボード]
-    UI[キャラ可視化 UI / 承認 UI]
+  subgraph Clients["Client layer (external project + bundled dashboard)"]
+    UI[Character visualization UI / approval UI]
   end
   CC1 <-->|Agent SDK| W1
   CX  <-->|Adapter| W2
-  RUN -.->|spawn/stop/restart 監督| W1
-  RUN -.->|監督| W2
-  W1 -->|"WebSocket / 共通イベント(直結)"| REG
+  RUN -.->|spawn/stop/restart supervision| W1
+  RUN -.->|supervision| W2
+  W1 -->|"WebSocket / common events (direct)"| REG
   W2 -- WebSocket --> REG
-  RUN -- WebSocket / ホスト登録・制御 --> REG
+  RUN -- WebSocket / host registration and control --> REG
   REG --> PS --> UI
-  UI -- 指示 / 承認 --> REG --> W1
+  UI -- instructions / approval --> REG --> W1
 ```
 
 ### Integration approach: hosting engine SDKs
@@ -108,7 +108,7 @@ than engine names
   pipeline; translation of instructions and approvals into SDK calls; and
   retention of persona and stable ID.
 - **server (Elixir/Phoenix)**: WebSocket aggregation (1 connection = 1 channel
-  process); one `AgentStates` GenServer holds the `agent_id → 最新エンベロープ`
+  process); one `AgentStates` GenServer holds the `agent_id → latest envelope`
   map; PubSub delivery; and instruction and approval routing. The wrapper
   **derives** state and the server **retains** it (agent-independent). The
   server is the SoT that aggregates persona-pack ingestion, `/api/personas`
@@ -151,7 +151,7 @@ authentication is enabled only when `KAOIRO_CLIENT_TOKENS` is configured. See
 | Concept | OTP/Phoenix implementation |
 |---|---|
 | Isolation per connection | One channel process per connection (managed by Phoenix) |
-| Agent-state retention | One `AgentStates` GenServer (an `agent_id → 最新エンベロープ` map; owner pid prevents reconnection races). phase-17 17-7 added history append for `session_boundary` marker envelopes and a `pending_boundary_patch` stash for Codex lazy ID allocation. |
+| Agent-state retention | One `AgentStates` GenServer (an `agent_id → latest envelope` map; owner pid prevents reconnection races). phase-17 17-7 added history append for `session_boundary` marker envelopes and a `pending_boundary_patch` stash for Codex lazy ID allocation. |
 | session-reset lifecycle | One in-memory `SessionResets` GenServer. `check_and_acquire/5` atomically verifies lock + KaoiroState + dispatch cooldown in one handle_call (the ADR-0036 F6 TOCTOU core); `resolve/6` moves the runner's spawn result from `:spawning → :awaiting_connect`; `confirm_connection/2`, triggered by the fresh wrapper's `WrapperChannel.after_join`, broadcasts `session_reset_completed` and runs `SessionPointers.detach_session/1` (the F2 two-phase completion: "only after confirming the connection"). |
 | Persistence across restarts | DETS-based GenServer groups: `AgentDirectory` (identity ledger, [ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md)), `SessionPointers` (latest session_id + last effective configuration snapshot), `PermissionModes`, `IngressOrder`, `SessionStarts` / `ClearWatermarks`, `TokenDenylist`, and `DeliveryStates` (recipient-local delivery-confirmation watermark, not a delivery queue, issue #247). Their locations can be replaced with `KAOIRO_*_PATH`. [ADR-0051](../adr/0051-history-restart-resilience.md) removed `InterAgentHistory` (the IA SoT is a sidecar on the wrapper host; display is rebuilt through per-pane projection + hydration handshake). |
 | Restart resilience of display history | Display history remains a volatile projection within `AgentStates`. After a restart, it is rebuilt automatically from the transcript / IA sidecar through a hydration handshake with the wrapper (join-response verdict + server-allocated replay_id). The client discards a stale baseline using the projection epoch in a `history` push, then merges only live envelopes arriving between the join and the first `history` push for each connection generation ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
