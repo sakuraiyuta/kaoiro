@@ -198,10 +198,11 @@ Anima dir 側に生成物(json)は残るが rembg 前 PNG が `assets-work/` に
 
 1. **作成者**: `persona-packs/<id>/{manifest.json, personality.md,
    sprites/}` を編集
-2. **provenance 取り込み**(推奨): `scripts/import-anima-provenance.sh
-   <id>` で Anima dir から `persona-packs/<id>/provenance/<state>.json`
-   を生成。rembg 前 PNG が `assets-work/` に無い等で sha256 照合が
-   決定論的に成立しない場合は見送る(fuji の前例参照)。
+2. **provenance 取り込み**(推奨): 生成元 ComfyUI の出力ディレクトリと
+   rembg 前 PNG を sha256 照合し、`persona-packs/<id>/provenance/`
+   以下へ `<state>.json` を生成。rembg 前 PNG が `assets-work/` に
+   無い等で sha256 照合が決定論的に成立しない場合は見送る(fuji の
+   前例参照)。
 3. **build**: `scripts/build-persona-pack.sh` で zip 化(
    `<id>-<version>.zip`)
 4. **管理者**: zip を server の取り込みディレクトリ(env で指定)に drop

@@ -127,8 +127,7 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 
 ### kind enum(9 種)
 
-意味論の出典・採否判断は kaoiro リポジトリ #17 issuecomment-1359
-および vault `(private vault note)`。
+意味論の出典・採否判断は kaoiro リポジトリ #17 issuecomment-1359。
 
 | kind | 役割 | 典型ペア |
 |---|---|---|

@@ -114,10 +114,9 @@ manifest の列挙有無にかかわらず必要である。
 
 `persona-packs/<id>/provenance/<state>.json` は `sprites/<state>.png`
 と 1:1 対応する生成 provenance(再現用パラメータ)。
-`scripts/import-anima-provenance.sh` が Anima dir(生成元 ComfyUI の
-出力ディレクトリ)から sha256 照合で state → 生成ジョブを一意に決定し、
-sanitize して取り込む(所在の背景は [personas](personas.md) 「生成
-実績」参照)。
+生成元 ComfyUI の出力ディレクトリから sha256 照合で state → 生成ジョブを
+一意に決定し、sanitize して取り込む(所在の背景は
+[personas](personas.md) 「生成実績」参照)。
 
 zip には含まれない。`scripts/build-persona-pack.sh` は
 `manifest.json` / `personality.md` / `sprites` の 3 エントリのみを
