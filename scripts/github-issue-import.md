@@ -28,11 +28,17 @@ array of `{kind, pattern, replacement}` objects, where `kind` is `literal` or
 regexes stop the import before any GitHub API request.
 
 For a live import, omit `--dry-run`. The importer appends a durable journal in
-`--state-dir` before and after each create request and writes `old-to-new.json`.
+`--state-dir` before and after each create request and writes `old-to-new.json`
+and `old-to-new-comments.json`.
 If an interrupted run has a pending create record, it stops rather than risk a
 duplicate. A missing journal entry uses the migration footer as a secondary
 search check; multiple hits stop the run. Keep this state directory until the
 post-import check succeeds.
+
+Both map files are JSON objects. Their keys are source IDs serialized as JSON
+strings; their values are GitHub numeric IDs. `old-to-new.json` maps source
+issue numbers to GitHub issue numbers, while `old-to-new-comments.json` maps
+source Gitea comment IDs to GitHub comment IDs.
 
 The first pass creates issues and comments in source timestamp order. The
 second pass rewrites references to selected source issue numbers and source

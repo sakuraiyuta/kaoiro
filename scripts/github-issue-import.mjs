@@ -93,6 +93,16 @@ function journal(path) {
 }
 function latest(events, predicate) { return events.filter(predicate).at(-1); }
 function writeJson(path, value) { mkdirSync(dirname(resolve(path)), { recursive: true }); writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`); }
+function commentMap(events) {
+  const map = {};
+  for (const event of events.filter((x) => x.kind === 'comment_created')) {
+    if (!Number.isInteger(event.source_comment_id) || !Number.isInteger(event.github_comment_id)) fail('comment_created journal record has invalid IDs');
+    const oldId = String(event.source_comment_id);
+    if (map[oldId] !== undefined && map[oldId] !== event.github_comment_id) fail(`journal maps source comment ${oldId} to multiple GitHub comments`);
+    map[oldId] = event.github_comment_id;
+  }
+  return map;
+}
 function gh(args, input) {
   const result = spawnSync(process.env.GH_BIN || 'gh', ['api', ...args], { input: input === undefined ? undefined : JSON.stringify(input), encoding: 'utf8' });
   if (result.error) fail(`could not run gh: ${result.error.message}`);
@@ -202,8 +212,8 @@ function findMigratedComment(repo, newNumber, sourceCommentId) {
 function main() {
   const options = args(process.argv.slice(2));
   const data = sourceData(options); const rules = redactRules(options.redactMap);
-  const stateDir = resolve(options.stateDir); const journalPath = join(stateDir, 'journal.jsonl'); const mapPath = options.mapOutput ?? join(stateDir, 'old-to-new.json');
-  const attachments = []; const report = { repo: options.repo, dry_run: Boolean(options.dryRun), selected_old_numbers: data.numbers, metadata_warnings: [], created: [], reused: [], planned: [], attachments_output: resolve(options.attachmentsOutput) };
+  const stateDir = resolve(options.stateDir); const journalPath = join(stateDir, 'journal.jsonl'); const mapPath = options.mapOutput ?? join(stateDir, 'old-to-new.json'); const commentMapPath = join(stateDir, 'old-to-new-comments.json');
+  const attachments = []; const report = { repo: options.repo, dry_run: Boolean(options.dryRun), selected_old_numbers: data.numbers, metadata_warnings: [], created: [], reused: [], planned: [], attachments_output: resolve(options.attachmentsOutput), comments_map_output: commentMapPath };
   const preparedIssues = new Map(data.issues.map((issue) => [issue.number, { title: redact(issue.title, rules), body: prepareText(issue.body, attachments, issue.number) }]));
   const preparedComments = new Map(data.numbers.map((n) => [n, data.comments.get(n).map((comment) => ({ source: comment, body: prepareText(comment.body, attachments, n, comment.id) }))]));
   writeJson(options.attachmentsOutput, attachments);
@@ -243,6 +253,7 @@ function main() {
       appendJournal(journalPath, { kind: 'comment_created', old_issue: old, source_comment_id: id, github_comment_id: createdComment.id, at: new Date().toISOString() });
     }
   }
+  writeJson(commentMapPath, commentMap(journal(journalPath)));
   for (const issue of data.issues) {
     const target = map[String(issue.number)]; const body = `${sanitizeText(localReferenceRewrite(preparedIssues.get(issue.number).body, data.sourceIssues, data.allMigratedNumbers, map, options.repo), rules)}${migrationFooter(issue)}`;
     ghJson(['-X', 'PATCH', `repos/${encodedRepo(options.repo)}/issues/${target}`, '--input', '-'], { body });
@@ -254,7 +265,7 @@ function main() {
     if (issue.state === 'closed') ghJson(['-X', 'PATCH', `repos/${encodedRepo(options.repo)}/issues/${target}`, '--input', '-'], { state: 'closed' });
   }
   writeJson(join(stateDir, 'import-report.json'), report);
-  console.log(`imported/reused ${data.numbers.length} issues; map: ${mapPath}; attachments: ${options.attachmentsOutput}`);
+  console.log(`imported/reused ${data.numbers.length} issues; map: ${mapPath}; comments map: ${commentMapPath}; attachments: ${options.attachmentsOutput}`);
 }
 
 main();
