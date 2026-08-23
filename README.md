@@ -112,7 +112,7 @@ not GitHub's. GitHub auto-links a `(#N)` in a commit message to its own
 issue N, which is usually a different, unrelated issue, so read these
 numbers as historical rather than as working links. Each issue carried
 over to GitHub includes a line noting its original number: "Migrated
-from private Gitea issue #N".
+from private Gitea issue N".
 
 ## License
 
