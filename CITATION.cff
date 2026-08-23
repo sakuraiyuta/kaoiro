@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "kaoiro"
+abstract: >-
+  A system that visualizes the state and progress of multiple CLI AI
+  agents (e.g. Claude Code, Codex) as characters, so operators running
+  several agents at once can see at a glance who is working, who is
+  waiting, and who needs attention.
+authors:
+  - family-names: Sakurai
+    given-names: Yuuta
+repository-code: "https://github.com/sakuraiyuta/kaoiro"
+url: "https://github.com/sakuraiyuta/kaoiro"
+license: MIT
