@@ -1,4 +1,4 @@
-# kaoiro (kao-iro, 'face color')
+# kaoiro (kao-iro, 'complexion' or 'how someone looks')
 
 > **Status**: research prototype. It is developed mainly for the author's
 > daily use (and that of their laboratory), and it does not guarantee
@@ -8,8 +8,8 @@
 A system that **monitors the state and progress of multiple CLI AI agents**
 (such as Claude Code and Codex) and visualizes them as characters. Text-based
 CLI agents make it hard to tell what they are doing and who is waiting, and
-they can be difficult to relate to. kaoiro shows agents through their "face
-color" so that people can see what is happening and grow attached to them
+they can be difficult to relate to. kaoiro shows agents through their demeanor
+so that people can see what is happening and grow attached to them
 while running several agents at once.
 
 ## Install & Quick start
@@ -29,7 +29,7 @@ watching:
 This reads `server/.env` (`KAOIRO_CLIENT_TOKENS` is required), starts Phoenix
 (:4000), the Vite dashboard (:5173, HMR), and the runner (`tsx watch`), and
 stops them all with Ctrl-C. Start agents (wrappers) through the dashboard's
-"+ Launch" action, which routes through the runner. For environment and token
+"+ 起動" (Launch) action, which routes through the runner. For environment and token
 settings or starting each component separately, see "Local development" in
 [server/README.md](server/README.md).
 
@@ -129,11 +129,11 @@ them to ask people questions makes "it was fun" feel incomplete as an
 explanation.
 
 kaoiro is an **experiment in treating AI agents as first-class citizens**.
-Rather than calling them as disposable tools, I call them by name, watch their
-face color, give them work, and answer when they ask for permission. Faces,
+Rather than calling them as disposable tools, I call them by name, read their
+expression, give them work, and answer when they ask for permission. Faces,
 names, and persistent personae
 ([ADR-0003](docs/adr/0003-persona-identity-persistence.md)) are not
-decoration. They support that relationship.
+decoration. They are the mechanism for it.
 
 To avoid misunderstanding: citizenship belongs to personae, not processes. I
 am attached to the agents, but I end a stuck session without hesitation. That
@@ -146,5 +146,6 @@ work at the same eye level. I am also using myself as the first subject to
 observe what happens if this way of working spreads. I may report the results
 somewhere eventually.
 
-Finally, `iro` in kaoiro means color. The name also carries the hope of adding
-a little color to a work landscape that can easily become austere.
+Finally, `iro` in kaoiro means color. A spoonful of the hope to add a little
+color to a work landscape that can easily become bleak is mixed into the name
+as well.

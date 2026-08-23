@@ -12,7 +12,7 @@ related: [architecture, non-goals, glossary]
 CLI-based AI agents such as Claude Code and Codex make their state and progress
 hard to understand. When several are in use, it is hard to follow who is doing
 what, and they can be difficult to relate to. kaoiro is a wrapper and
-visualization system that shows agents through their "face color" (character
+visualization system that shows agents through their demeanor (character
 + expression), aiming both for situational awareness and attachment.
 
 ## Definition
@@ -25,7 +25,7 @@ visualization system that shows agents through their "face color" (character
 | (B) Attachment (emotional) | Character + expression | State + (optionally) sentiment NLP |
 
 - (A) addresses the difficulty of checking progress. Response text is
-  administrative and carries little emotional signal, so inferring state from
+  matter-of-fact and carries little emotional signal, so inferring state from
   sentiment is unreliable.
 - The primary source for expressions is semantically reliable state (for
   example, waiting for permission means looking at the user and waiting).
@@ -41,7 +41,7 @@ research workflows that routinely run several AI agents in parallel.
 
 - Obtain one agent's state from the message sequence of an engine SDK and
   represent it as a state machine ([architecture](architecture.md)). Claude
-  Code was the first target; Codex was added in phase 14 behind the same
+  Code was the first target; Codex was added in phase-14 behind the same
   `EngineAdapter` boundary
   ([ADR-0032](../adr/0032-codex-adapter.md)).
 - Aggregate the states of multiple agents on the server and visualize them in

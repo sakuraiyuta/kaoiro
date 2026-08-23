@@ -121,7 +121,7 @@ than engine names
   project includes a simple reference dashboard (Svelte) served by Phoenix
   (static-only delivery can be disabled in configuration; it dogfoods the
   public API, [ADR-0007](../adr/0007-client-separation-reference-dashboard.md)).
-  Rendering uses static variations by persona (animation/3D in the future,
+  Rendering uses static image variants by persona (animation/3D in the future,
   [ADR-0004](../adr/0004-client-rendering-staged.md)).
 
 ### Transport and network
@@ -140,7 +140,7 @@ a separate path from the data path
 
 User authentication between client and server uses OAuth + RBAC
 ([ADR-0005](../adr/0005-access-control-oauth-stub.md)). The prototype started
-with a shared-token + role stub. Phase 26 implemented individual OAuth
+with a shared-token + role stub. phase-26 implemented individual OAuth
 authentication with Google / GitHub / Nextcloud and a text allowlist
 ([ADR-0042](../adr/0042-oauth-allowlist-login.md)). The two coexist: token
 authentication is enabled only when `KAOIRO_CLIENT_TOKENS` is configured. See
@@ -151,7 +151,7 @@ authentication is enabled only when `KAOIRO_CLIENT_TOKENS` is configured. See
 | Concept | OTP/Phoenix implementation |
 |---|---|
 | Isolation per connection | One channel process per connection (managed by Phoenix) |
-| Agent-state retention | One `AgentStates` GenServer (an `agent_id → 最新エンベロープ` map; owner pid prevents reconnection races). Phase 17 17-7 added history append for `session_boundary` marker envelopes and a `pending_boundary_patch` stash for Codex lazy ID allocation. |
+| Agent-state retention | One `AgentStates` GenServer (an `agent_id → 最新エンベロープ` map; owner pid prevents reconnection races). phase-17 17-7 added history append for `session_boundary` marker envelopes and a `pending_boundary_patch` stash for Codex lazy ID allocation. |
 | session-reset lifecycle | One in-memory `SessionResets` GenServer. `check_and_acquire/5` atomically verifies lock + KaoiroState + dispatch cooldown in one handle_call (the ADR-0036 F6 TOCTOU core); `resolve/6` moves the runner's spawn result from `:spawning → :awaiting_connect`; `confirm_connection/2`, triggered by the fresh wrapper's `WrapperChannel.after_join`, broadcasts `session_reset_completed` and runs `SessionPointers.detach_session/1` (the F2 two-phase completion: "only after confirming the connection"). |
 | Persistence across restarts | DETS-based GenServer groups: `AgentDirectory` (identity ledger, [ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md)), `SessionPointers` (latest session_id + last effective configuration snapshot), `PermissionModes`, `IngressOrder`, `SessionStarts` / `ClearWatermarks`, `TokenDenylist`, and `DeliveryStates` (recipient-local delivery-confirmation watermark, not a delivery queue, issue #247). Their locations can be replaced with `KAOIRO_*_PATH`. [ADR-0051](../adr/0051-history-restart-resilience.md) removed `InterAgentHistory` (the IA SoT is a sidecar on the wrapper host; display is rebuilt through per-pane projection + hydration handshake). |
 | Restart resilience of display history | Display history remains a volatile projection within `AgentStates`. After a restart, it is rebuilt automatically from the transcript / IA sidecar through a hydration handshake with the wrapper (join-response verdict + server-allocated replay_id). The client discards a stale baseline using the projection epoch in a `history` push, then merges only live envelopes arriving between the join and the first `history` push for each connection generation ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
