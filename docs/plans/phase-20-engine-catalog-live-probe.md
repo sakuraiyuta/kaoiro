@@ -110,7 +110,7 @@ fallback 描画。
   build ok (probe.js 生成)、client 176 pass (integration test 15: LaunchDialog
   7 + pending store 6 + unmount async no-crash 1 + in-place hosts refresh
   no-refire 1)、client svelte-check 337 files/0 errors、server mix test 409/410
-  (唯一 fail は既知 #115 DETS 非分離、本変更と非回帰)。
+  (唯一 fail は既知 #111 DETS 非分離、本変更と非回帰)。
 - 藤 (kaoiro peer) の独立 real probe 実行 (redact 済み記録): PASS / exit 0 /
   elapsed ~1.59s / 6 models / `~/.claude/projects` ファイル数差分 0 / 個人情報
   出力なし / probe 残留プロセスなし。ADR-0039 F4 の副作用最小 Options 構成が

@@ -14,12 +14,12 @@ related: [protocol, subagent-tasks, plugin-model, threat-model]
 できるようにするための protocol surface を定める。kaoiro issue #17
 本実装の機械的仕様であり、段階的実装計画は
 [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)、
-設計判断の背景は kaoiro issue #87 と #17 issuecomment-1359 を参照。
+設計判断の背景は kaoiro issue #87 と #17 issuecomment-5384349594 を参照。
 
 [protocol](protocol.md) の予約追補(同一 `version`)として envelope
 `type: "inter_agent_message"` を新設する([ADR-0010](../adr/0010-protocol-precisification.md))。
 
-## Dispatch-confirmation ledger (issue #247)
+## Dispatch-confirmation ledger (issue #237)
 
 `ingress_stamp` は server acceptance であって、受信 wrapper が SDK turn として
 読んだ確認ではない。recipient ごとの `inter_agent_delivery = {issued_seq,
@@ -112,7 +112,7 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 |---|---|---|
 | `to` | MUST | 宛先 `agent_id`。`[A-Za-z0-9._-]` 制約は protocol 全体と同じ |
 | `conversation_id` | MUST | 同一対話を紐付ける識別子。発起側 wrapper が採番(セッション内一意、UUIDv4 ベース) |
-| `new_conversation` | MUST(準拠 wrapper)。省略時は server が `true` とみなす(下記) | bool。送信元エージェントが `conversation_id` を省略し、この wrapper が新規採番した送信でのみ true(issue #262)。それ以外(明示指定・返信・通知)は false。server はこれを見て、未知の `conversation_id` が「省略による新規」か「明示指定の誤り」かを判定する — 詳細は下記「明示指定された conversation_id が未知のとき」 |
+| `new_conversation` | MUST(準拠 wrapper)。省略時は server が `true` とみなす(下記) | bool。送信元エージェントが `conversation_id` を省略し、この wrapper が新規採番した送信でのみ true(issue #252)。それ以外(明示指定・返信・通知)は false。server はこれを見て、未知の `conversation_id` が「省略による新規」か「明示指定の誤り」かを判定する — 詳細は下記「明示指定された conversation_id が未知のとき」 |
 | `turn_number` | MUST | 1 起点の正整数。同一 conversation 内で送信ごとに +1。`(conversation_id, turn_number)` で全順序 |
 | `kind` | MUST | 下記 9 種 enum |
 | `body` | MUST | メッセージ本文(自由テキスト)。意味論はエージェントに任せる |
@@ -127,8 +127,7 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 
 ### kind enum(9 種)
 
-意味論の出典・採否判断は kaoiro リポジトリ #17 issuecomment-1359
-および vault `(private vault note)`。
+意味論の出典・採否判断は kaoiro リポジトリ #17 issuecomment-5384349594。
 
 | kind | 役割 | 典型ペア |
 |---|---|---|
@@ -140,7 +139,7 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 | `accept` | propose への賛成 | `propose` ← |
 | `reject` | propose への反対(`meta.reject_reason` 必須) | `propose` ← |
 | `escalate-to-user` | 人間判断要請(tie-breaker)。hard limit 超過時の server 合成通知にも使う | → user |
-| `done` | 終了申告 | agent 発は両 owner-side で揃って完了。`open_conversation_ttl` 到達時の server 合成通知(issue #221 direction 2)もこの kind を使うが、agent-to-agent の相互合意とは別物(単発・片方向) |
+| `done` | 終了申告 | agent 発は両 owner-side で揃って完了。`open_conversation_ttl` 到達時の server 合成通知(issue #211 direction 2)もこの kind を使うが、agent-to-agent の相互合意とは別物(単発・片方向) |
 
 カバーケース:
 
@@ -185,12 +184,12 @@ server は conversation 単位で以下の制限を機械的に監視し、超�
 config は kaoiro server 設定で agent 単位 / global の二段。global を
 agent 単位で上書き可。
 
-**旧 `max_wallclock` は issue #221 で撤廃した。** conversation 発生から
+**旧 `max_wallclock` は issue #211 で撤廃した。** conversation 発生から
 の経過時間そのものを打ち切り条件にする方式は、暴走した高速 ping-pong
-より先に `max_turns` へ到達し(#177 のケース同様、短いメッセージの
+より先に `max_turns` へ到達し(#167 のケース同様、短いメッセージの
 往復は秒〜分単位で 20 turn に達する)、逆に xhigh effort のレビューの
 ような**低速だが正当な**対話を優先的に打ち切るという選択性の逆転が
-2026-08-11 に実測された。撤廃の詳細と根拠は issue #221 本文を参照。
+2026-08-11 に実測された。撤廃の詳細と根拠は issue #211 本文を参照。
 
 ### メモリ回収用 TTL(config、ハード制限ではない)
 
@@ -207,12 +206,12 @@ agent 単位で上書き可。
 `tombstone_ttl_ms` は wrapper 側の `CLOSED_TRACK_TTL_MS`(24 時間)と
 値を揃えている(下記「CID 再利用は契約にしない」参照)。
 
-### conversation のライフサイクルと終了後の扱い (issue #177)
+### conversation のライフサイクルと終了後の扱い (issue #167)
 
 完了・打ち切り後の conversation は unknown/new と区別される状態
 (tombstone) として保持する。同じ `conversation_id` への遅延・重複・
 out-of-order message が新規 conversation として再受理され、done /
-escalate の ping-pong が止まらなくなる不具合(issue #177、2026-07-31
+escalate の ping-pong が止まらなくなる不具合(issue #167、2026-07-31
 observed)の再発防止。
 
 ```mermaid
@@ -227,7 +226,7 @@ stateDiagram-v2
   closed --> [*]: tombstone_ttl_ms 経過後に GC
 ```
 
-- **open**: 通常の対話中。turn / token を計測する(issue #221 で
+- **open**: 通常の対話中。turn / token を計測する(issue #211 で
   wallclock 自体の計測・打ち切りは廃止)。
 - **half-closed(one-sided done)**: 一方の owner-side が
   `meta.done=true` を送り、もう一方はまだの状態。受信側には「close
@@ -241,22 +240,22 @@ stateDiagram-v2
   しない。同一 `conversation_id` への以後の message は relay・store・
   通常 broadcast せず `{:error, :conversation_closed}` で拒否する。
   wrapper 側の受信も terminal な inbound は **model への注入を一切
-  行わない**(issue #221 direction 1)— 旧仕様は「informational
+  行わない**(issue #211 direction 1)— 旧仕様は「informational
   only、send_to_agent を呼ぶな」という専用文言で SDK 入力へ注入して
   いたが、返信不要な通知のために model turn を消費すること自体が
-  issue #221 の解消対象だった。track は `closed` を学習するのみで、
+  issue #211 の解消対象だった。track は `closed` を学習するのみで、
   追加の send_to_agent はもとより誘発しない。
-- **open_conversation_ttl による closed(issue #221)**: periodic GC は
+- **open_conversation_ttl による closed(issue #211)**: periodic GC は
   OPEN entry の `started_at` から `open_conversation_ttl_ms`
   (既定 24 時間)経過したものを、message の到着を待たず tombstone
   (`reason: :open_conversation_ttl`)へ遷移させる。**これはハード
   制限ではなくメモリ回収専用**であり、`escalate-to-user` は合成しない
   — 応答が途絶えたまま長時間残る entry を回収するだけで、対話が長い
   こと自体を理由に打ち切りはしない。旧 `max_wallclock` ハード制限
-  (10 分)がこの遷移も兼ねていたが、issue #221 で用途を分離した。この
+  (10 分)がこの遷移も兼ねていたが、issue #211 で用途を分離した。この
   遷移は参加していた全 agent へ `kind: "done"`(`turn_number: 0`、
   `agent_id: "server"`、`meta.done: true`)の合成 envelope を
-  broadcast する(issue #221 direction 2)— `escalate-to-user` では
+  broadcast する(issue #211 direction 2)— `escalate-to-user` では
   ないので、受信側が新規 conversation を開いて継続するという無意味な
   挙動を誘発しない。受信側 wrapper はこれを `isSynthetic` 判定
   (下記)で server 発の closed 通知と認識し、track を `closed` に
@@ -268,7 +267,7 @@ stateDiagram-v2
   参照)。periodic GC は open entry も TTL 超過時に即削除せず、まず
   `open_conversation_ttl` tombstone へ遷移させる — 削除してしまうと、
   遅延到着した message が「新規」として再受理されてしまうため。
-- **turn_number の ingress 検証と stale_turn 拒否**(issue #177 review
+- **turn_number の ingress 検証と stale_turn 拒否**(issue #167 review
   M1): live ingress(通常の `envelope` push)は `payload.turn_number`
   を正の整数のみ受理する — `0` は server 合成通知専用の予約値であり、
   wrapper がこの経路で自称することはできない(server はこの経路を
@@ -287,7 +286,7 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
   terminal。**加えて**、server 合成の closed 通知(`turn_number=0`、
   `agent_id: "server"`、`meta.done=true` — hard limit 超過時の
   `kind: "escalate-to-user"`、または `open_conversation_ttl` 到達時の
-  `kind: "done"`、issue #221 direction 2)を受けた時点でも、自分側の
+  `kind: "done"`、issue #211 direction 2)を受けた時点でも、自分側の
   done 送信有無に関わらず即 terminal にする — server 側は既にこの
   conversation を tombstone 化して閉じており、ローカルだけ「相手から
   の一方的な close 提案」と誤読すると、受信側 wrapper がその通知に
@@ -296,12 +295,12 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
   往復拒否される無駄が起きる。以後同一 `conversation_id` を指定した
   `send_to_agent` はローカルで即 tool error にする(server 往復なしで
   完結する)。`conversation_id` を省略すれば新規 conversation を開始
-  できる。issue #221 direction 1: いずれの経路で terminal と判定
+  できる。issue #211 direction 1: いずれの経路で terminal と判定
   された inbound も SDK 入力へは一切注入しない(旧仕様は
   「informational only」という専用文言で注入していたが、返信不要な
-  通知のために model turn を消費すること自体が issue #221 の解消
+  通知のために model turn を消費すること自体が issue #211 の解消
   対象だった)。
-- **同一 conversation_id への並行 send_to_agent の直列化**(issue #177
+- **同一 conversation_id への並行 send_to_agent の直列化**(issue #167
   review 2巡目 M1): 同じ conversation_id への `send_to_agent` 呼び出しが
   並行に(例えば同一ターン内で複数回)行われた場合、採番から
   server 応答の反映までを conversation_id 単位で直列化する
@@ -309,7 +308,7 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
   塞いでしまうため)。直列化がないと、片方が reject された際の
   ロールバックが、その間に accept されたもう片方の状態
   (`localDone` / `closed`)を巻き戻してしまう競合が起きる。
-- **pending-done 中の受信分類の遅延**(issue #177 review 2巡目、ふじ
+- **pending-done 中の受信分類の遅延**(issue #167 review 2巡目、ふじ
   差し戻し): `done=true` の `send_to_agent` がまだ acceptance 未確定
   (楽観的な `localDone` 反映のみ)の間に、同じ conversation_id への
   inbound(peer 自身の done、または server 合成のハード制限通知)が
@@ -322,10 +321,10 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
   ("server=closed、wrapper=open" split-brain、AC10 も破られる)。
   (2) 楽観的な `localDone` を見て「両側 done で terminal」と確定した
   disposition が engine アダプタへ渡り、SDK 入力へ注入せず(issue
-  #221 direction 1、track だけ closed へ更新)`notePendingInjection`
+  #211 direction 1、track だけ closed へ更新)`notePendingInjection`
   も skip した後でその送信が reject されると、実際には片側提案
   (close-proposal) のままなのに返信経路が失われる(取り消し不能)。
-- **`conversation_closed` reject の学習**(issue #177 review 2巡目
+- **`conversation_closed` reject の学習**(issue #167 review 2巡目
   M2): `send_to_agent` の送信が server から `conversation_closed`
   で拒否された場合、その conversation_id をこの wrapper が事前に
   一度も追跡していなかった(brand-new local track)場合でも、
@@ -334,24 +333,24 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
   server へ往復し、server 側 tombstone TTL(既定 24 時間)が明けた
   時点で受理されてしまい、下記「CID 再利用は契約にしない」の
   wrapper 側 24 時間 guard が骨抜きになる。
-- **turn_number は accept された送信のみが消費する**(issue #222):
+- **turn_number は accept された送信のみが消費する**(issue #212):
   wrapper-local な `track.turnNumber` は送受信双方が共有する 1 個の
   カウンタで、`send_to_agent` 呼び出しの `#dispatch()` 前に暫定採番
   する。この暫定採番は server が実際に **accept** した場合にのみ
   確定した消費として扱う契約であり、reject された採番は消費された
   ことにしない。旧実装はこの契約を守れておらず、reject 後も
   `track.turnNumber` が進んだままになる欠陥があった(欠陥 1、下記)。
-  **例外が 2 つある**(issue #222 段階2 差し戻し advisory2、ふじ指摘):
+  **例外が 2 つある**(issue #212 段階2 差し戻し advisory2、ふじ指摘):
   この accept-gated 契約は `send_to_agent`(`invoke()`)経由の通常送信
   にのみ適用される。`stale_turn` notice(欠陥3、下記)と既存の
-  `resolveTurnEnd()` peer_error notice(issue #131)は、どちらも
+  `resolveTurnEnd()` peer_error notice(issue #127)は、どちらも
   `#dispatch()` を経由せず `ServerLink#send()` を直接呼ぶ
   fire-and-forget 経路で、ack を待たず accept/reject を観測しない。
   したがって、いずれも自身の採番を server の受理と結び付けられず、
   常に「消費した」ものとして扱う(採番した `turn_number` を無条件に
   使用済みとして進める)。これは送信前 turn 採番という設計そのものの
   残存する非対称であり、恒久的な限界として受け入れている。
-- **reject 時の turnNumber ロールバック**(issue #222 欠陥1): `invoke()`
+- **reject 時の turnNumber ロールバック**(issue #212 欠陥1): `invoke()`
   の reject 分岐は、`#dispatch()` 待機中に同じ conversation_id への
   inbound 活動(`receiveInbound()` / `observeInbound()`)が割り込んで
   いなかった場合に限り、暫定採番した `turnNumber` を 1 戻す。割り込みが
@@ -366,34 +365,34 @@ wrapper 側(`agent-common`)も上記と対になるローカル状態
   の waiter も満たさない)。ただし server 合成 envelope(ハード制限
   超過・応答不能通知)の `turn_number=0` は wrapper-origin の turn 系列
   と別経路であり、この判定から除外する。**判定条件は `turn_number=0`
-  に加えて `agent_id === "server"` も必須**(issue #177 review M1)—
+  に加えて `agent_id === "server"` も必須**(issue #167 review M1)—
   `turn_number` の値だけを見ると、peer wrapper 自身が(バグまたは
   悪意で)`turn_number=0` を自称した message を送れてしまい、受信側が
   それを server 合成通知と誤認して即座に自 track を closed
   にしてしまう("server=open、受信側 wrapper だけ closed" という
   split-brain)。この forge は live ingress の構造検証(下記)でも
   server 側で拒否されるが、受信側 wrapper 自身も provenance を
-  検証することで二重に防ぐ。**issue #222 欠陥3 以降、この破棄は
+  検証することで二重に防ぐ。**issue #212 欠陥3 以降、この破棄は
   完全な無言ではない** — 破棄した envelope の送信元へ `stale_turn`
   notice を送る(例外条件と再同期の役割は「エラー種別コード」節
   「stale_turn 通知の構造」参照)。
 - wrapper 側の closed track も TTL(24 時間)経過後に GC する(長寿命
   wrapper のメモリリーク防止)。
-- **OPEN track の idle TTL と総数上限**(issue #177 review 2巡目
+- **OPEN track の idle TTL と総数上限**(issue #167 review 2巡目
   M3、「open track の unbounded 経路」): 上記の closed track TTL は
   この wrapper 自身が CLOSED と学習した track にしか効かない。
   server の periodic GC が自発的に tombstone 化したことは、
-  `open_conversation_ttl` 経由の遷移に限り issue #221 direction 2 で
+  `open_conversation_ttl` 経由の遷移に限り issue #211 direction 2 で
   peer へ伝播するようになった(上記「open_conversation_ttl による
   closed」参照)が、この伝播は broadcast 一発の best-effort であり
   配送を保証しない(受信側 wrapper がその瞬間切断していた等)。
-  したがって、通知が届かなかった場合(issue #209 の残存部分)や
+  したがって、通知が届かなかった場合(issue #199 の残存部分)や
   closing turn を取りこぼした・peer が再接続なしにクラッシュした
   等の経路では、wrapper が closed を学習できなかった track は
   OPEN のまま残り続け、closed track TTL では prune されない。
   これを塞ぐため、OPEN track にも最終アクティビティから 24 時間の
   idle TTL を独立に適用し、さらに open + closed 合算の総数上限
-  (既定 20,000、最も古い track から evict)も設ける。issue #221 で
+  (既定 20,000、最も古い track から evict)も設ける。issue #211 で
   server 側の `max_wallclock` ハード制限は撤廃されたため、idle
   対象になるほど長時間 open な conversation が「server 側で
   打ち切り済み」である保証はもはや無い — server 側は今や
@@ -409,7 +408,7 @@ Claude Code / Codex いずれの engine アダプタも共通の `agent-common`
 判定(`InterAgentTool#receiveInbound` / `#invoke`)を経由するため、
 上記の状態機械はエンジンに依存しない。
 
-#### CID 再利用は契約にしない(issue #177 review S2)
+#### CID 再利用は契約にしない(issue #167 review S2)
 
 server の tombstone TTL(`tombstone_ttl_ms`、既定 24 時間)だけを見ると
 「TTL 経過後は `conversation_id` を再利用できる」ように読めるが、
@@ -432,7 +431,7 @@ TTL 経過直後の再利用は失敗する。
   `conversation_id` を明示的に指定して再送する経路は、フォールバック
   としても正式な API 契約としても提供しない。
 - **server 側 `tombstone_ttl_ms` と wrapper 側 `CLOSED_TRACK_TTL_MS` は
-  issue #221 で同じ 24 時間へ揃えた**(旧 `max_wallclock_ms` は
+  issue #211 で同じ 24 時間へ揃えた**(旧 `max_wallclock_ms` は
   10 分で、server 側だけ短い非対称構成だった)。揃えたのは、旧
   `max_wallclock` ハード制限の撤廃で server 側が短命だったことの
   積極的な理由(頻繁な hard-limit 打ち切りに追従した短い回収)が
@@ -440,10 +439,10 @@ TTL 経過直後の再利用は失敗する。
   積極的な利点はなく、揃えた方が運用上のメンタルモデルが単純になる。
   実効的な guard が wrapper 側 24 時間である点自体は変わらない。
 
-### 明示指定された conversation_id が未知のとき (issue #262)
+### 明示指定された conversation_id が未知のとき (issue #252)
 
 新規 conversation を開始する正規経路は `conversation_id` の省略のみ
-(上記)だが、issue #262 以前の server はこの区別を持たず、**明示指定
+(上記)だが、issue #252 以前の server はこの区別を持たず、**明示指定
 された未知の `conversation_id` も同じく新規 conversation として無言で
 受理**していた。director の conversation_id 誤転記が 2026-08-16〜17 に
 3 回、エラーにならず紛れ込みスレッドとして成立した実害があり、これを
@@ -487,9 +486,9 @@ fail fast and visible にする。
   session のコピペ由来で、どの entry にも一致しない cid を明示指定
   した」場合のみ。
 - **`payload.new_conversation` の欠落は拒否せず true 扱いにする**
-  (レビュー、issue #262 delta、クロエ M1): `validate_live_inter_agent_payload/1`
+  (レビュー、issue #252 delta、クロエ M1): `validate_live_inter_agent_payload/1`
   は key の存在を要求しない — bool 以外の値のときだけ拒否する。
-  issue #262 より前の wrapper はこの field を送らないが、Phoenix
+  issue #252 より前の wrapper はこの field を送らないが、Phoenix
   client は reconnect/heartbeat を自前で持つため
   (`wrapper/core/src/transport.ts`)、server だけ再デプロイしても旧
   wrapper プロセスは再起動なしで生き残り送信を続ける。key を必須に
@@ -515,17 +514,17 @@ fail fast and visible にする。
     正本として残す — 移行期間が長引くほど log に占める割合が増える
     のは設計どおりで、対処すべき異常ではない。
   - **`ConversationStates.record_message/8` 自身は既定値を持たない**
-    (director 裁定、issue #262 delta 2巡目): 当初は `new_conversation?`
+    (director 裁定、issue #252 delta 2巡目): 当初は `new_conversation?`
     にも `\\ true` の既定値を与え、この channel 側の分岐を単に呼び出す
     だけで済ませていたが、それは「渡し忘れたら黙って許可」という
-    #262 が閉じようとした欠陥そのものを、wire 層から内部 API 層へ
+    #252 が閉じようとした欠陥そのものを、wire 層から内部 API 層へ
     移しただけだった。既定値を廃し必須引数にしたことで、
     `record_message/8` の将来の呼び出し元は全員この判断を明示しなけ
     ればならず、`preflight_inter_agent/2` の上記 absent 分岐が
     「合法的に許容側へ倒す唯一の場所」になる。コストは既存呼び出し
     (主にテスト、約 90 箇所) への機械的な引数追加
   - **廃止の目安**: この absent 分岐は永続の契約ではない。稼働中の
-    全 wrapper が issue #262 以降のビルドであると確認できた時点で、
+    全 wrapper が issue #252 以降のビルドであると確認できた時点で、
     `validate_live_inter_agent_payload/1` を key 必須に戻し、
     `warn_legacy_new_conversation_absent/0` ごと削除してよい
     (`CLOSED_TRACK_TTL_MS` のような固定 TTL ではなく、運用側が
@@ -576,15 +575,15 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
     ため)。reject / timeout / ack 喪失時は記録しない(loss 受容、
     stderr warn)。
   - **ack と tool result の関係**(ふじ 30-10 must-fix M5、2026-08-08。
-    issue #177 の Stage 3 が要求する「ack 経路の追加・reject の tool
+    issue #167 の Stage 3 が要求する「ack 経路の追加・reject の tool
     error 化」はこの ADR-0051 実装で先行して満たされていた —
-    #177 は新規実装ではなく、`conversation_closed` を下記の reject
+    #167 は新規実装ではなく、`conversation_closed` を下記の reject
     reason 一覧へ追加しただけ):
     記録トリガは ack のままだが、`send_to_agent` の **tool result も
     同じ ack で決まる**。accepted = 従来どおり `sent ...`、server の
     明示 reject(`unknown_agent` / `self_routing` /
-    `participants_mismatch` / `conversation_closed`(issue #177)/
-    `unknown_conversation_id`(issue #262)等)は
+    `participants_mismatch` / `conversation_closed`(issue #167)/
+    `unknown_conversation_id`(issue #252)等)は
     **error result に reason を載せる**(`unknown_conversation_id` のみ、
     正しい id での再送か省略での新規開始を促す専用文言 — 下記参照)、
     timeout / ack 喪失は
@@ -594,7 +593,7 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
     ただし **ack 喪失時に peer reply が既に着いていれば配送成功**として
     扱い、通常の `sent + reply` を返す(reply の到着自体が配送の証拠。
     ふじ 30-10 2 巡目 R3、2026-08-08)。
-  - **応答不能通知(#131)との関係**(ふじ 30-10 2 巡目 R2、2026-08-08):
+  - **応答不能通知(#127)との関係**(ふじ 30-10 2 巡目 R2、2026-08-08):
     注入された inbound に対する「返信済み」判定も acceptance で決まる。
     accepted / 配送不明では pending injection を解消し、**reject では
     解消しない** — 送信が成立していない以上、turn 終了時のエラー通知は
@@ -659,15 +658,15 @@ transcript 行と IA を pane ごとに時系列 merge した**最終投影で n
 inter_agent_message 本体は既存 `envelope` イベント上で運ばれるが、
 コンパニオン機能のため **`directory_request`** を追補する。
 
-#### peer directory の情報境界 (#102 / #160)
+#### peer directory の情報境界 (#99 / #150)
 
 phase-8 では宛先名の解決だけを目的に directory entry を
 `agent_id / persona / state` へ絞っていた。phase-15 で engine 間の state
-envelope schema が確定したため、#102 ではこの最小性判断を
+envelope schema が確定したため、#99 ではこの最小性判断を
 「**名前解決に加え、peer の実行特性を見て委譲先を選べる read-only
 directory**」へ引き直し、`engine / model / effort` を公開した。
 
-issue #160 (phase-27) はこれをさらに **「peer の稼働状況を見て委譲の
+issue #150 (phase-27) はこれをさらに **「peer の稼働状況を見て委譲の
 可否まで判断できる directory」** へ広げる。エージェントが operator の介在なしに
 「context が逼迫した peer に重い委任をしない」「利用上限に張り付いた peer
 を避ける」「対話中の peer に割り込まない」「長時間無活動の peer を報告
@@ -678,24 +677,24 @@ issue #160 (phase-27) はこれをさらに **「peer の稼働状況を見て�
 | field | 型 | 意味 | 省略される条件 |
 |---|---|---|---|
 | `agent_id` | string | 宛先識別子 | MUST(常に存在) |
-| `persona` | `{id, name, sprite_set}` | pack 由来の canonical identity。`name` は session 中不変(issue #219 D19) | MUST |
-| `display_name` | string | 稼働中に変わり得る通称。表示に使うのはこちら(issue #219 D19/D26、ADR-0021 F6-3) | envelope が旧 wrapper build で `display_name` を未報告のとき |
+| `persona` | `{id, name, sprite_set}` | pack 由来の canonical identity。`name` は session 中不変(issue #209 D19) | MUST |
+| `display_name` | string | 稼働中に変わり得る通称。表示に使うのはこちら(issue #209 D19/D26、ADR-0021 F6-3) | envelope が旧 wrapper build で `display_name` を未報告のとき |
 | `state` | string | 現在状態 | MUST |
-| `engine` / `model` / `effort` | string | 実行特性(#102) | non-empty string でないとき |
+| `engine` / `model` / `effort` | string | 実行特性(#99) | non-empty string でないとき |
 | `context` | `{used_tokens, max_tokens, used_percentage}` | context 使用量 | 下記 capability gate 不成立、未報告、shape 不正、切断済み |
 | `session_started_at` | ISO8601 (UTC) | **server が観測した**現セッション開始時刻 | server が開始を観測しておらず `SessionStarts` からも復元できないとき。**相関できない join を受けた connection では、`SessionStarts` から復元できる場合でも省略する**(下記) |
 | `turns` | 非負整数 | 現セッションの応答往復数 | server が当該セッションの開始を観測していないとき(fallback で開始時刻だけ復元した場合も省略)。上と同じく、相関できない join を受けた connection でも省略 |
 | `last_activity_at` | ISO8601 (UTC) | server が envelope を最後に受理した時刻 | まだ 1 通も受理していないとき |
 | `conversation` | `{active, peers[]}` | active な IA 会話の有無と相手 | **省略しない**(下記) |
 | `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | 最終 turn 時点の利用上限 snapshot | 未報告、全 window が projection で drop、切断済み |
-| `directory_only` | boolean(`true` 固定、issue #269) | この entry が `AgentStates` に live envelope を持たず、`AgentDirectory`(永続 ledger、[ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md))のみに由来することを示す | live entry(AgentStates 側)では省略。**この field は他と absent の意味が違う** — absent は unknown ではなく「live directory 由来」(下記) |
-| `last_seen` | ISO8601 (UTC)、issue #269 | `AgentDirectory` が最後に envelope を受理した時刻の memory-only hint | server 再起動後 / 未 touch のとき、または live entry(live entry は `last_activity_at` を持つ) |
+| `directory_only` | boolean(`true` 固定、issue #259) | この entry が `AgentStates` に live envelope を持たず、`AgentDirectory`(永続 ledger、[ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md))のみに由来することを示す | live entry(AgentStates 側)では省略。**この field は他と absent の意味が違う** — absent は unknown ではなく「live directory 由来」(下記) |
+| `last_seen` | ISO8601 (UTC)、issue #259 | `AgentDirectory` が最後に envelope を受理した時刻の memory-only hint | server 再起動後 / 未 touch のとき、または live entry(live entry は `last_activity_at` を持つ) |
 
 `session_started_at` / `last_activity_at` は **server 側の時刻** である。
 wrapper が実測した値ではなく、envelope の `ts`(wrapper ホストの時計)
 とも別軸。ホスト跨ぎの時計ズレを判断材料に混ぜないための規約。
 
-##### directory-only entry (issue #269)
+##### directory-only entry (issue #259)
 
 `directory_request` の応答 `agents` 配列は、`AgentStates`(in-memory
 live snapshot)から作る live entry に加え、`AgentStates` に envelope を
@@ -714,7 +713,7 @@ directory-only の両方で一貫させるため。合流の規則:
   `rate_limits` / `session_started_at` / `turns` / `last_activity_at` は
   `AgentDirectory` に情報が無いため常に省略(absent = unknown の通常
   規約どおり)
-- **persona の typed unresolved**([#219](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/219)
+- **persona の typed unresolved**([#209](https://github.com/sakuraiyuta/kaoiro/issues/209)
   D21 と同じ規則): `persona_id` が `PersonaAssets` に解決すれば
   canonical `{id, name, sprite_set}`、解決しなければ `{id: persona_id}`
   のみを返す。**`persona` キー自体は必ず present** — 省略すると
@@ -769,7 +768,7 @@ allow-list を nested 階層まで適用)。
   残す(`context` が壊れていても `rate_limits` は載る)。
 - 数値は換算しない。projection は「写す key を絞る」操作であって値の
   加工ではない。`utilization` の 0..1 range 検査は入れない
-  ([#164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164) の
+  ([#154](https://github.com/sakuraiyuta/kaoiro/issues/154) の
   実データ確認後に判断)。
 - drop のログは window 単位で無制限に warn せず、agent / request 単位で
   集約する(`list_agents` は auto-allow 経路であり、log amplification を
@@ -809,11 +808,11 @@ server は spawn / restore / reset のたびに遷移の相関子を発行し、
 `model_source / effort_source`、`session_capabilities`、`cost` は引き続き
 directory から除外する。除外集合の正本は ADR-0021 F6-4。
 
-##### users 開示 field 一覧 (issue #197 段階2, ADR-0021 F6-8)
+##### users 開示 field 一覧 (issue #187 段階2, ADR-0021 F6-8)
 
 `directory_request` の reply は `agents` と並列で **`users`** を必ず
 返す(空配列を含む)。中身は運用者設定 `KAOIRO_EXPOSE_USERS_TO_AGENTS`
-に従う — **config の既定は `true`**(未設定 = 開示。issue #197 制約節
+に従う — **config の既定は `true`**(未設定 = 開示。issue #187 制約節
 「原則見える」は config の既定値として実現する)、明示 `false` で
 opt-out。`config` key そのものが読めない異常系(config/runtime.exs が
 走っていない等)でのみ実装側 fallback が閉じる方向に倒れる。`agents`
@@ -833,7 +832,7 @@ opt-out。`config` key そのものが読めない異常系(config/runtime.exs �
 「不明」を表現する余地が無いため — `agents` 側の「省略 = 不明」規約
 (このセクション冒頭) とは異なる扱いになる点に注意。
 
-**`display_name` の contract (issue #197 段階2、ふじ MF-1 レビュー
+**`display_name` の contract (issue #187 段階2、ふじ MF-1 レビュー
 指摘):** wire に乗る値は trim 後 non-empty、**grapheme cluster 単位で
 64 以下**、制御文字 (C0: `\x00`-`\x1f`、および DEL: `\x7f`) を
 含まないことを server (`WrapperChannel.valid_display_name/1`) が
@@ -871,10 +870,10 @@ server から wrapper へ変更を能動的に通知する経路は存在しな�
 `client_tokens` が書き換わり、token 由来の user だけ新しい値を
 拾う、というケースはあり得る。
 
-##### users の後方互換 (issue #197 段階2)
+##### users の後方互換 (issue #187 段階2)
 
 `users` キーは **段階2以降の server なら常に返る**(opt-out 時は空
-配列 `[]`)。キーが reply に **無い** のは issue #197 段階2 より前の
+配列 `[]`)。キーが reply に **無い** のは issue #187 段階2 より前の
 server だけ — `KAOIRO_EXPOSE_USERS_TO_AGENTS` を無効化した server でも
 キー自体は返り、中身が空になるだけ(ふじ M4 レビュー指摘: 「未設定
 server」と「opt-out server」を同一視していた誤りを訂正)。wrapper 側の
@@ -887,15 +886,15 @@ narrow はどちらも区別せず `users: []` に正規化する — 消費側
 | `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | 因果順を固定([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate / preflight** — participant / ハード制限、planned intent (`peer_reconnecting` / `peer_reconnecting_capacity`)、および conversation quota の検査。quota は `ConversationStates.record_message/5` が検査と turn/token/wallclock 更新を単一呼び出しで atomic に行うため、**counter 更新もこの段で走る**(分割すると検査と更新の間に TOCTOU が開く。実装時確定、2026-08-08)。**reject が確定し得る検査はすべてここまでで終える**。planned reject は ConversationStates / pane / delivery ledger の全てより前に返す、(2) **ingress stamp 採番**(ingress-order domain、globally unique。wire 形は整数 2 要素配列 `[us, seq]`)、(3) per-pane projection へ sender pane + receiver pane を同一 stamp で upsert(identity = `ingress_stamp\|pane_agent_id`)、(4) `payload.to` の `wrapper:<to>` channel に **stamp を載せた envelope** を push + `agents:lobby` broadcast(operator 限定)、(5) push の **acceptance ack reply として `{ingress_stamp}`** を送信元 wrapper に返す(送信側 sidecar 記録のトリガ)。upsert 後に行う routing は peer push のみで、reject 済み IA が pane に残らないこと |
 | `envelope` 合成 (S→W) | ハード制限超過時 | 両 wrapper の `wrapper:<id>` + `agents:lobby` へ push |
 | `envelope` 合成 (S→W) | wrapper 切断 / matching 復帰時 | 当該 wrapper が参加中の各 conversation の他参加者へ、planned 切断なら `kind=inform` + `error.code=reconnecting`、予告なし切断なら `error.code=disconnected`、exact-token 復帰なら error なしの `kind=inform` (`reconnected`) を push(「応答不能エラーの通知」節) |
-| `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...], users: [...]}}` 返却で受け取る。`agents` の field と省略規則は上記「peer directory の情報境界」、`users` は「users 開示 field 一覧」(issue #197 段階2)。list_agents 用 (後述) |
+| `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...], users: [...]}}` 返却で受け取る。`agents` の field と省略規則は上記「peer directory の情報境界」、`users` は「users 開示 field 一覧」(issue #187 段階2)。list_agents 用 (後述) |
 
 未知 `to` / 自己 routing / participants 不一致 / turn_number 不正 /
 stale turn / closed な conversation / 明示指定の未知 conversation_id
 への送信時のエラー(`unknown_agent` / `self_routing` /
 `participants_mismatch` / `invalid value: payload.turn_number` /
-`stale_turn` / `conversation_closed`(後 3 者は issue #177)/
-`unknown_conversation_id`(issue #262) / `peer_reconnecting` /
-`peer_reconnecting_capacity`(issue #266))は `envelope` の reply で返す。
+`stale_turn` / `conversation_closed`(後 3 者は issue #167)/
+`unknown_conversation_id`(issue #252) / `peer_reconnecting` /
+`peer_reconnecting_capacity`(issue #256))は `envelope` の reply で返す。
 `peer_reconnecting` だけは wrapper が
 structured `peer_error.code=reconnecting` へ正規化し、一般の tool error と
 機械的に区別する。`peer_reconnecting_capacity` は message が未受理で close
@@ -923,10 +922,10 @@ wrapper-A が `send_to_agent` ツールを呼ぶ際、wrapper は既存の
 canUseTool を経由せず自動許可する(operator ダイアログは出ない)。
 
 - whitelist は **wrapper プロセスのメモリ内のみ**(conversation の
-  lifecycle track に載る field(`autoAllowedPeer`)、issue #177 の
+  lifecycle track に載る field(`autoAllowedPeer`)、issue #167 の
   `ConversationTrack` 拡張)。`conversation_id` と、承認時点の `to` の
   **両方**に束縛される
-  (issue #175 review round 3、ふじ M2 — `conversation_id` 単独では、
+  (issue #165 review round 3、ふじ M2 — `conversation_id` 単独では、
   `unknown_agent` reject 後に同一 `conversation_id` のまま別 `to` へ
   差し替える送信も自動許可してしまう)。server 側の永続化はしない。
   **wrapper プロセスの再起動 (再 launch を含む)**、または track 自体の
@@ -944,9 +943,9 @@ canUseTool を経由せず自動許可する(operator ダイアログは出な�
   (この時点では `conversation_id` が確定していないため whitelist に
   何も無い)。
 - **whitelist を確立するのは「最初に operator-approved かつ
-  server-accepted な送信」のみ**(issue #175 review round 4、ふじ
-  design-review approve、条件 A — gitea issue #211
-  [comment 2719](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/211#issuecomment-2719))。
+  server-accepted な送信」のみ**(issue #165 review round 4、ふじ
+  design-review approve、条件 A — gitea issue #201
+  [comment 5384486838](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486838))。
   canUseTool の承認(operator dialog、または既存の auto-allow)は
   「送信を試みてよいか」を決めるだけで、それ自体は whitelist を
   書き込まない。実装は `#dispatch()` が server から
@@ -961,16 +960,16 @@ canUseTool を経由せず自動許可する(operator ダイアログは出な�
   `unknown` を whitelist 化した場合の代償は「配送されたか分からない
   peer への送信が以後無承認で行われる」という permission bypass 方向の
   リスクである)。
-  旧実装(issue #175 review round 1-3)は「canUseTool 通過時点で
+  旧実装(issue #165 review round 1-3)は「canUseTool 通過時点で
   楽観的に登録し、reject 時にケースごとに保護/巻き戻す」設計を採って
   おり、3 巡の内部レビューで新規欠陥を出し続けた末に破棄した — 失敗
   履歴は
-  [#211 comment 2715](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/211#issuecomment-2715)、
+  [#201 comment 5384486746](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486746)、
   設計判定は
-  [#211 comment 2719](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/211#issuecomment-2719)
+  [#201 comment 5384486838](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486838)
   を参照。
 - **非 `done` 送信の dispatch 待機中に届いた inbound とのレース
-  (issue #175 review round 3、ふじ M3、gitea issue #211)**:
+  (issue #165 review round 3、ふじ M3、gitea issue #201)**:
   `#dispatch()` の応答を待っている間に、同じ `conversation_id` へ
   正当な inbound (server 合成の hard-limit 強制終了通知を含む) が
   届くケースでは、whitelist 登録が上記のとおり accepted 時のみに
@@ -978,7 +977,7 @@ canUseTool を経由せず自動許可する(operator ダイアログは出な�
   不正に確立することは構造的にない。track の `closed` / `turnNumber`
   状態については、reject 時のクリーンアップが inbound の書き込み
   (`closed=true` 等) を上書きしないよう `mutationGen`(実際に値が
-  変化した時のみ加算するカウンタ、issue #175 review round 4、ふじ
+  変化した時のみ加算するカウンタ、issue #165 review round 4、ふじ
   条件 C)で保護している — 詳細は
   `wrapper/agent-common/src/inter_agent.ts` の `invoke()` /
   `receiveInbound()` のコードコメントを正とする。
@@ -1008,14 +1007,14 @@ agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの�
 返信しない場合は通常の応答(`result` envelope)を返せばよく、
 `done` を送る義務はない — conversation はその後も open のまま
 残り続け、双方の `done=true` が揃う、hard limit 超過、または
-`open_conversation_ttl_ms` 経過(既定 24 時間、issue #221)の
+`open_conversation_ttl_ms` 経過(既定 24 時間、issue #211)の
 いずれかで初めて閉じる。旧 `max_wallclock` ハード制限は server が
-タイムアウトで自動的に `done` を付与する仕組みだったが、issue #221
+タイムアウトで自動的に `done` を付与する仕組みだったが、issue #211
 で撤廃した — `open_conversation_ttl_ms` はメモリ回収専用であり
 conversation を `done` 扱いにはしない(上記「conversation の
 ライフサイクル」参照)。
 
-#### 保留メッセージの合流(issue #221 段階3)
+#### 保留メッセージの合流(issue #211 段階3)
 
 wrapper が busy な間(SDK への注入が既に1件以上溜まっている間)に、
 **同一 peer** から複数の inbound message が到着した場合、wrapper は
@@ -1082,7 +1081,7 @@ notice(下記「応答不能エラーの通知」参照)は**batch に含まれ�
 
 相手エージェントが利用制限・コンテキスト超過・接続断などで応答不能に
 なったとき、その事実を **送信元エージェント自身** に返す
-([issue #131](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/131))。
+([issue #127](https://github.com/sakuraiyuta/kaoiro/issues/127))。
 送信元が「再送しても無駄か / 時間を置くべきか / operator に
 エスカレートすべきか」を自ら判断できることが要件であり、単なる無応答
 タイムアウト (`reply_pending`) と区別できなければならない。
@@ -1136,9 +1135,9 @@ enum にはしない。未知の `code` を受けた側は `api_error` と同等
 |---|---|---|
 | peer 側 wrapper | SDK turn が is_error 終了し、その turn に未返信の inter-agent 注入があった | 当該 conversation の送信元へ ServerLink 直送(モデル経由でないため broker 承認なし)。通常の `inter_agent_message` として既存ルーティングに乗る |
 | server | wrapper channel の切断 (terminate) | 予告済みの planned cycle は `code=reconnecting`、それ以外は `code=disconnected` を合成し、当該 wrapper が参加中の各 conversation の他参加者へ push |
-| 受信側 wrapper | AC9(stale/duplicate turn_number)判定でメッセージを破棄した(issue #222 欠陥3) | 破棄した envelope の送信元へ ServerLink 直送。ただし対象がそれ自体エラー通知の場合、または対象 conversation が既に closed の場合は送信しない — 詳細は次項 |
+| 受信側 wrapper | AC9(stale/duplicate turn_number)判定でメッセージを破棄した(issue #212 欠陥3) | 破棄した envelope の送信元へ ServerLink 直送。ただし対象がそれ自体エラー通知の場合、または対象 conversation が既に closed の場合は送信しない — 詳細は次項 |
 
-#### stale_turn 通知の構造(issue #222 欠陥3)
+#### stale_turn 通知の構造(issue #212 欠陥3)
 
 `stale_turn` は他の code と異なり、**通知であると同時に受信側の
 turn_number を送信側へ再同期させる副次効果を持つ**。通知の
@@ -1226,7 +1225,7 @@ peer の LLM コンテキストへ露出させない。秘匿情報マスクの 
   outcome を配って window を閉じる。reset の
   `spawn_failed` は rollback 起動成功を意味するため例外的に
   matching join または timeout まで intent を保持し、
-  `rollback_failed` は terminal failure として閉じる(issue #258)
+  `rollback_failed` は terminal failure として閉じる(issue #248)
 - 再接続後に遅れて走った stale な terminate では合成しない(server が
   `disconnected` 状態を実際に採用した場合のみ発火する)
 - unexpected disconnect の ordinary `disconnected` は、同一 conversation へ
@@ -1260,7 +1259,7 @@ generic `isError=true` reject へ縮退するため、誤って wait 契約を�
 wrapper は tool result を `{peer_error: {code: "reconnecting", message, from}}`
 に正規化し、送信先の `reconnected` notice まで再送も operator
 への escalate も行わない。planned window 外の瞬間的な delivery gap は
-issue #267 の範囲である。
+issue #257 の範囲である。
 
 state-machine の消費経路(matching join / fail / timeout / operator stop /
 disconnected agent purge / runner relay 前の setup failure)は、いずれも同じ
@@ -1298,7 +1297,7 @@ source と `network_access` は既知の場合だけ返す。`permission` は en
 `inter_agent_delivery` は下記の server ledger 観測であり、同じ `whoami` の呼び出し
 でも常に返ることを約束しない。
 
-`context` は phase-28 A2 ([#168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168))
+`context` は phase-28 A2 ([#158](https://github.com/sakuraiyuta/kaoiro/issues/158))
 の追補で、自分の context window 使用量 `{used_tokens, max_tokens,
 used_percentage}` を返す。peer が `list_agents` で読む `context` と
 **shape も semantics も同一** (`DirectoryContext`) なので、自己認識と
@@ -1317,9 +1316,9 @@ used_percentage}` を返す。peer が `list_agents` で読む `context` と
   その時点で撤回されるので、absent は「一度も測っていない」だけでなく
   「直前の値がもう有効でない」も意味する
 - tool 説明では「必要なときに見る」に留め、常時参照を促さない
-  (context anxiety 回避。#168 comment-2287 の決定 P3)
+  (context anxiety 回避。#158 comment-5384365227 の決定 P3)
 
-`inter_agent_delivery` は issue #247 の追補で、server が持つ recipient-local な
+`inter_agent_delivery` は issue #237 の追補で、server が持つ recipient-local な
 配送確認 ledger `{issued_seq, acked_seq, pending_since?}` を返す。これは local
 snapshot ではない。wrapper は `delivery_status_request` を server へ送り、その
 応答が得られた場合だけ field を載せる。旧 server / capability 未対応、切断、または
@@ -1327,7 +1326,7 @@ snapshot ではない。wrapper は `delivery_status_request` を server へ送�
 まで未確認の配送」を観測する ledger であって、配送保証・再送 queue・失敗の推測では
 ない。
 
-`rate_limits` は [#254](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/254)
+`rate_limits` は [#244](https://github.com/sakuraiyuta/kaoiro/issues/244)
 の追補で、自分の rate limit window を `{<window>: {status?, utilization?,
 resets_at?}}` で返す。peer が `list_agents` で読む `rate_limits` と
 **shape も semantics も同一** (`DirectoryRateLimitWindow`)。
@@ -1359,7 +1358,7 @@ resets_at?}}` で返す。peer が `list_agents` で読む `rate_limits` と
 `mcp__kaoiro__request_compact` は上の 2 つと違い **auto-allow しない**。
 `send_to_agent` と同じく既定 allowedTools に含めないことで canUseTool が
 発火し、`permission_broker` が operator に都度承認を求める
-([#168](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/168)
+([#158](https://github.com/sakuraiyuta/kaoiro/issues/158)
 決定 P2、[ADR-0028](../adr/0028-external-human-messaging.md) D4 と同じ形)。
 
 **承認の実効性は agent の permission mode に従属する**
@@ -1413,7 +1412,7 @@ compact 境界 / 会話リセットで解除される。
   同じ直列化経路に乗せる。queue 待ちの間に epoch が変わった通知は破棄し、
   旧 epoch の通知を新 epoch へ持ち越さない
 
-常時表示や毎 turn の再注入はしない (#168 決定 P3: context anxiety の回避)。
+常時表示や毎 turn の再注入はしない (#158 決定 P3: context anxiety の回避)。
 文言も「切迫」ではなく「回復手段があること」と「今すぐ動く必要はないこと」を
 述べるに留める。閾値は現状 wrapper 内の定数
 (`CONTEXT_NOTICE_THRESHOLD_PERCENT`)。config 配線は dogfood 後に判断する。
@@ -1499,7 +1498,7 @@ operator が `@あお` のような名前で指示しても、 model は send_to
 
 - MUST: server は payload の意味論(kind / body / meta)を解釈しない。
   `to` フィールドのみをルーティング目的で参照する
-  - carve-out (issue #131): `payload.error` については **構造のみ**
+  - carve-out (issue #127): `payload.error` については **構造のみ**
     検証する(`code` は非空 string、`message` は string)。code の値や
     message の内容は解釈しない。加えて wrapper 切断時に server が
     `code=reconnecting` または `code=disconnected` の envelope を合成し、
@@ -1518,19 +1517,19 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   が承認を包含する)。kaoiro 側の autonomous な承認スキップ機構は
   Phase 3 まで導入しない
 - MUST: server は config のハード制限(`max_turns` / `max_tokens` /
-  `max_concurrent_agents`)を機械的に強制する(issue #221: 旧
+  `max_concurrent_agents`)を機械的に強制する(issue #211: 旧
   `max_wallclock` はハード制限から撤廃済み)
 - MUST: `meta.done` は両 owner-side エージェントから true で
   conversation が完了。片側だけでは done としない
-- MUST(issue #177): 完了(両 owner-side done)、hard limit 超過、または
-  `open_conversation_ttl_ms` 経過(issue #221、GC 専用)で closed に
+- MUST(issue #167): 完了(両 owner-side done)、hard limit 超過、または
+  `open_conversation_ttl_ms` 経過(issue #211、GC 専用)で closed に
   なった `conversation_id` は tombstone として保持し、
   `tombstone_ttl_ms` 経過まで削除しない。closed 中の同一
   `conversation_id` への送信は relay・store・通常 broadcast せず
   `{:error, :conversation_closed}` で拒否する。counters
   (turns / tokens / started_at / done_by)は closed 遷移時に破棄し、
   再送によるリセットを許さない
-- MUST(issue #177): closed な conversation は `peer_index` /
+- MUST(issue #167): closed な conversation は `peer_index` /
   disconnect 時の unreachable 通知("応答不能エラーの通知"節)で
   active 扱いしない
 - MUST: `payload.to == agent_id` の自己ルーティングは server が拒否
@@ -1544,15 +1543,15 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   allow-list は nested 階層まで適用し、canonical key だけを写した新しい
   map を組み立てる([ADR-0021](../adr/0021-role-information-disclosure-policy.md)
   F6-2、上記「`ext` からの projection」)
-- MUST(issue #197 段階2): `users` も同じ allow-list 規律に従う
+- MUST(issue #187 段階2): `users` も同じ allow-list 規律に従う
   ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6-8)。
   server 側の組み立ては literal map + 値ごとの再検証とし、キーだけを
   絞る `Map.take/2` 相当は使わない — 値の shape を検証しないまま wire
   へ通す経路になるため。role を解決できない user は field 省略ではなく
   **entry ごと省略**する(上記「users 開示 field 一覧」)
-- MUST(issue #197 段階2): `users` 開示は **config の既定値**として
+- MUST(issue #187 段階2): `users` 開示は **config の既定値**として
   open にする — `KAOIRO_EXPOSE_USERS_TO_AGENTS` 未設定は開示、明示
-  `false` で opt-out(issue #197 制約節「原則見える」は config の
+  `false` で opt-out(issue #187 制約節「原則見える」は config の
   デフォルト値として実現する、ADR-0021 F6-8)。実装側の read-site
   fallback (closed) は config key そのものが欠落する異常系専用であり、
   通常運用のデフォルトにしてはならない(ふじ M1 レビュー指摘: config
@@ -1578,7 +1577,7 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   ただしこれは **deterministic に強制される仕組みではない** — server も
   wrapper も判定を代行せず、model の解釈に委ねる best-effort な規約で
   ある。dashboard 側の同等対応は
-  [#164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164) の
+  [#154](https://github.com/sakuraiyuta/kaoiro/issues/154) の
   scope
 - MUST: 省略された field は **「不明」であって 0 でも「問題なし」でも
   ない**。`turns` の省略は 0 往復ではなく、`context` の省略は余裕が
@@ -1616,7 +1615,7 @@ operator が `@あお` のような名前で指示しても、 model は send_to
   [0050 principal-model-and-graded-access-control](../adr/0050-principal-model-and-graded-access-control.md)
   (D5 = identity 原則開示の方針)
 - kaoiro issue #17(本実装の起点)、#18(メッセージフィルタ)、
-  #87(調査の傘 issue)、#131(応答不能エラーの通知)、
-  #160(peer directory の稼働状況)、#164(rate_limits 表示不具合)、
-  #177(conversation lifecycle・tombstone・stale turn 拒否)、
-  #197(users 開示、段階2)
+  #87(調査の傘 issue)、#127(応答不能エラーの通知)、
+  #150(peer directory の稼働状況)、#154(rate_limits 表示不具合)、
+  #167(conversation lifecycle・tombstone・stale turn 拒否)、
+  #187(users 開示、段階2)

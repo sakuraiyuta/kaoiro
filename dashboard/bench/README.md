@@ -1,8 +1,8 @@
-# #184 input-latency bench
+# #174 input-latency bench
 
 Measures composer input latency in a real Chromium (Playwright), comparing
-`src/lib/AgentDetail.svelte` (after the #184 render-window fix) against a
-pinned pre-#184 baseline (commit `37e89a3640a02fbd4524a0f36630d8e8e0db0c38`,
+`src/lib/AgentDetail.svelte` (after the #174 render-window fix) against a
+pinned pre-#174 baseline (commit `37e89a3640a02fbd4524a0f36630d8e8e0db0c38`,
 the commit immediately before the fix landed). `runBench.mjs` materialises
 that baseline on the fly as `src/lib/.AgentDetail.before.bench.svelte` via
 `git show <SHA>:...` right before starting the dev server, and deletes it
@@ -22,7 +22,7 @@ PATH="$HOME/.asdf/shims:$PATH" pnpm exec playwright install chromium
 `harness.ts` mounts one of the two component variants (`?variant=before|after`)
 with `count` synthetic assistant log entries (`?count=`), each carrying a
 short markdown paragraph so the transcript DOM is non-trivial per entry (this
-was never about mermaid specifically — the #184 report's mechanism is the
+was never about mermaid specifically — the #174 report's mechanism is the
 per-entry markdown HTML, mermaid is just one contributor). A listener on the
 composer `<textarea>`'s `input` event records `performance.now()` and resolves
 the sample on the next `requestAnimationFrame` — i.e. "time from keystroke to

@@ -65,7 +65,7 @@ session_init 相当のイベント (Claude の `SDKSystemMessage(init)`、Codex 
 | `supports_user_input_dialog` | `boolean` | `ask_user_question` (MCP tool / SDK 特別分岐 いずれでも) が使えるか。false のとき AgentDetail の質問 UI 系は「未対応」表示 |
 | `user_input_modes` | `string[]` (optional) | dialog が使える権限 mode / sandbox の条件集合 (例: `["plan"]` = plan mode でのみ dialog が発火する)。空/未指定 = 無条件 |
 
-追加 field の `supports_model_switch` / `supports_effort_switch` は [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F4 とphase-16で Codex に実装済みで、`supports_effort_switch` は #108 で Claude にも実装した。`supports_session_reset` / `session_reset_modes` は [ADR-0036](0036-session-lifecycle-commands.md) F5とphase-17で実装済み。将来の field (例: `supports_cwd_tracking`) も本 ADR の枠内で envelope schema + agent-common 型を追補して追加できる。
+追加 field の `supports_model_switch` / `supports_effort_switch` は [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F4 とphase-16で Codex に実装済みで、`supports_effort_switch` は #105 で Claude にも実装した。`supports_session_reset` / `session_reset_modes` は [ADR-0036](0036-session-lifecycle-commands.md) F5とphase-17で実装済み。将来の field (例: `supports_cwd_tracking`) も本 ADR の枠内で envelope schema + agent-common 型を追補して追加できる。
 
 ### F3 — UI 判定原則
 
@@ -89,7 +89,7 @@ UI は engine 名 (`ext.engine`) では機能可用性を判定しない。以�
 
 engine 名判定はレビュー時に禁止し、既存コードで engine 名分岐しているものは phase-15 実装時に本 ADR の判定へ置換する。envelope 上 `ext.session_capabilities` の未 stamp 期間はない (phase-15 の同一 PR で両 adapter の advertise を実装するため、UI 側の fail-closed default が実効果を持つのは開発中の中間状態のみ)。
 
-### F6 — #112 attachment type addendum (2026-07-23)
+### F6 — #108 attachment type addendum (2026-07-23)
 
 `attachment_types` は engine 名分岐を増やさず、session が受け入れる添付の種類を UI と wrapper に伝える。初期 closed vocabulary は `"image"` のみで、将来 `"text"` / `"pdf"` 等を追加する場合も protocol vocabulary を先に拡張する。field absent を unrestricted とすることで、既存 Claude wrapper と rolling upgrade の互換性を保つ。
 
@@ -165,4 +165,4 @@ open-question としては追跡せず、必要になった時点で F6 の追�
 - 実装: [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md)。
 - 関連 ADR: [ADR-0022](0022-pending-permission-authoritative-source.md) (authoritative source パターン踏襲)、[ADR-0032](0032-codex-adapter.md) (Codex adapter の engine 追加起点)、[ADR-0033](0033-permission-model-dual-axis.md) (ext による engine 中立化パターンの先行例)。
 - 関連 specs: [protocol](../specs/protocol.md) (`ext.session_capabilities` 追補)、[plugin-model](../specs/plugin-model.md) (EngineAdapter との関係)。
-- 関連 issue: [#102](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/102) — list_agents の peer 情報充実 (engine / model / effort 等)。phase-8 の「directory は名前解決の最小限」判断の見直し。着手は phase-15 の envelope schema 確定後、本 ADR の session capability advertise パターンと親和的なので同じ原則 (state stamp = SoT) を継承する見込み。
+- 関連 issue: [#99](https://github.com/sakuraiyuta/kaoiro/issues/99) — list_agents の peer 情報充実 (engine / model / effort 等)。phase-8 の「directory は名前解決の最小限」判断の見直し。着手は phase-15 の envelope schema 確定後、本 ADR の session capability advertise パターンと親和的なので同じ原則 (state stamp = SoT) を継承する見込み。

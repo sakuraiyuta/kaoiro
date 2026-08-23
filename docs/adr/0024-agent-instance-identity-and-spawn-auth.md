@@ -19,7 +19,7 @@ Accepted
 
 「同じ性質のエージェントを複数 spawn したい」(例: 同一 persona の作業者を 2 体
 並走)という需要を満たそうとすると、現行の認証モデルが壁になる。issue
-[#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22) の決定1
+[#22](https://github.com/sakuraiyuta/kaoiro/issues/22) の決定1
 (spawn 要求でサーバが補完する範囲)の議論(2026-06-24)で論点が顕在化した。
 
 ### 現行モデルの実態(地盤)
@@ -98,7 +98,7 @@ per-agent token を spawn payload に注入してから runner へ中継**する
   直結を救えるが、漏洩時の被害が「1 agent」から「スコープ内全 agent」(`*.*` なら
   全 wrapper なりすまし相当)へ拡大し、セキュリティ最優先方針に反する。**今回不採用**。
   runner-less 直結の需要が顕在化したときの検討項目として
-  [#71](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/71) に棚上げ。
+  [#71](https://github.com/sakuraiyuta/kaoiro/issues/71) に棚上げ。
 - **allocate ハンドシェイク**(wrapper が `POST /agent/allocate` で id+短命 token を
   取得して接続): 分離は最強だが、runner 経路(D2)が内部で同等を実現するため機構が
   重複する。runner-less を本気でやる場合の参考案として #71 にメモ。
@@ -113,7 +113,7 @@ per-agent token を spawn payload に注入してから runner へ中継**する
   再発行機構)。本 ADR は 「**server が発行し runner が配送する**」ところまでを決定
   し、機構詳細は phase-4 の #22 再配線で詰める。
 
-## D4 追補 — per-agent_id revoke 経路 (2026-07-23、[#72](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/72))
+## D4 追補 — per-agent_id revoke 経路 (2026-07-23、[#72](https://github.com/sakuraiyuta/kaoiro/issues/72))
 
 D4 が採用した `Phoenix.Token` 署名方式は stateless で secret_key_base
 ローテーションが唯一の revoke 手段だった (fleet 全体一括失効の重量
@@ -131,7 +131,7 @@ compromise 対応で必要 ── ため、以下を **署名方式は不変の�
   revoke ack と `agent_deleted` / `revoked` broadcast は永続確定後に
   発火する ── crash が revoke と disk 書き込みの間に落ちても revocation
   が消えない (ふじ #72 M2 review advisory)。`ClearWatermarks` も同じ
-  synchronous+fsync 方針を採用済み (ふじ #109 M7-a must-fix、2026-07-23);
+  synchronous+fsync 方針を採用済み (ふじ #106 M7-a must-fix、2026-07-23);
   `PermissionModes` は現状 lazy sync のまま (operator 選好の記録で、
   fsync 前 crash なら「未反映で復帰」と semantics 上等価)。
 - **store corruption 時は fail-closed** (ふじ #72 M2 must-fix、
@@ -208,7 +208,7 @@ compromise 対応で必要 ── ため、以下を **署名方式は不変の�
 - 関連 specs: [protocol](../specs/protocol.md)(spawn payload への server 注入・
   制御メッセージ)、[threat-model](../specs/threat-model.md)(spawn = RCE 面、
   operator 限定)、[architecture](../specs/architecture.md)。
-- 棚上げ / 参考: [#71](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/71)
+- 棚上げ / 参考: [#71](https://github.com/sakuraiyuta/kaoiro/issues/71)
   (ワイルドカードトークン / allocate)。
 - 実装: Phase 4([phase-4-host-runner](../plans/phase-4-host-runner.md))の #22 再配線。
-- 由来: issue [#22](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/22) 決定1 の議論(2026-06-24)。
+- 由来: issue [#22](https://github.com/sakuraiyuta/kaoiro/issues/22) 決定1 の議論(2026-06-24)。

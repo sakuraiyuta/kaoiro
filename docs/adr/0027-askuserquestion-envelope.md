@@ -182,4 +182,4 @@ server の operator-only allow-list に `question_request` / `question_response`
 - ADR: [0021](0021-role-information-disclosure-policy.md)(operator 限定配信の
   allow-list 基盤)、[0022](0022-pending-permission-authoritative-source.md)
   (ext = pending の真実、という同型パターンの原型)。
-- 由来: [issue #78](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/78)。
+- 由来: [issue #78](https://github.com/sakuraiyuta/kaoiro/issues/78)。

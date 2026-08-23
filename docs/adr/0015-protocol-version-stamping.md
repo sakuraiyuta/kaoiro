@@ -57,7 +57,7 @@ version を持たない。(2) 不一致は黙って受理され、互換性問�
 - version は現状 `"0"` 単一。完全一致判定は単一値比較。
 - トランスポート層 version(Channels `vsn` 交渉、[ADR-0009](0009-client-transport.md))
   とは独立。
-- **build identity**([ADR-0053](0053-build-identity.md)、issue #228 追記)
+- **build identity**([ADR-0053](0053-build-identity.md)、issue #218 追記)
   **とも独立**。ここでの version は wire メッセージの形状互換性であり、
   artifact(runner / server image)がどの git commit 由来かとは別軸 —
   混同すると「docs-only commit で互換性エラーが出る」ような誤った設計に
@@ -78,7 +78,7 @@ version を持たない。(2) 不一致は黙って受理され、互換性問�
   [0014](0014-session-resume-and-restore.md)。
 - 由来: my-idea-brief(走り書き「通信プロトコルのバージョン情報付与」)。
 
-## Addendum (issue #218 ふじレビュー MF-1, 2026-08-21): `attach_chunk` の恒久 carve-out
+## Addendum (issue #208 ふじレビュー MF-1, 2026-08-21): `attach_chunk` の恒久 carve-out
 
 **決定。** `attach_chunk` は固定長ヘッダと生バイト列からなる binary transport
 frame であり、JSON のフラット外枠キーを持てないため、version 付与・検査の
@@ -90,5 +90,5 @@ version の bump を要する。JSON frame と同じキーを載せられない�
 費用対効果が見合わないため採用しない。適用箇所と wire 形は
 [protocol](../specs/protocol.md) の「version 棚卸し」が正本である。
 
-**由来。** issue #218 のふじレビュー must-fix 1。下位 spec だけが例外を
+**由来。** issue #208 のふじレビュー must-fix 1。下位 spec だけが例外を
 宣言していた不整合を、この ADR の Decision へ改訂して解消した。

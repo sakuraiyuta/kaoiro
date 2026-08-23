@@ -33,12 +33,12 @@ Accepted(実装完了 2026-07-06 — phase-11 phase-0..2、手動 dogfooding 検
   再起動直後は AgentStates が空 = エージェント 0 台の表示。runner/wrapper が
   自発再接続してくるまで、operator が復元操作する対象すら見えない。
 - [ADR-0014 A4](0014-session-resume-and-restore.md)「JSONL 正本」により
-  返答ログの永続化([#24](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/24))は不要と確定。永続すべきは identity(persona)と存在事実のみ。
+  返答ログの永続化([#24](https://github.com/sakuraiyuta/kaoiro/issues/24))は不要と確定。永続すべきは identity(persona)と存在事実のみ。
 
 goal: **server と runner が同時ダウン・再起動した後、client 側の「前回の
 状態を復元」ボタン操作(一括 / 個別)によって、直前まで動いていた各エージェ
 ントを最後の session_id で resume-spawn できる**。復元は operator 明示のみ、
-自動は行わない([#41](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/41))。
+自動は行わない([#41](https://github.com/sakuraiyuta/kaoiro/issues/41))。
 
 ## Decision
 
@@ -46,13 +46,13 @@ goal: **server と runner が同時ダウン・再起動した後、client 側�
   `agent_id → %{persona, last_seen}` を保持する。`SessionPointers`(resume
   ポインタ、ADR-0014 F1)は据置。identity 台帳と resume ポインタは概念が別
   なので独立させる。
-- **D2(書き込みタイミング、issue #219 D19 で改訂 — canonical persona は
+- **D2(書き込みタイミング、issue #209 D19 で改訂 — canonical persona は
   そもそも本 store に保存しない)**:
   - **spawn 時**(`agents_channel.ex handle_in("spawn", ...)`)に `persona_id`
     (pack への stable reference)と `display_name`(spawn custom name、
     未指定なら record 時点の canonical name のコピー — 作成時
     永続化)を `AgentDirectory.record/4` する。**同期呼び出し
-    (`GenServer.call`、issue #219 D22 corollary — 以前は fire-and-forget
+    (`GenServer.call`、issue #209 D22 corollary — 以前は fire-and-forget
     な `GenServer.cast` だった)であり、runner への spawn broadcast より
     前に完了させる。** spawn 直後に join した wrapper が
     `wrapper_channel.ex` の after-join `push_persona_sync/2` で未コミット
@@ -65,7 +65,7 @@ goal: **server と runner が同時ダウン・再起動した後、client 側�
     本 store に保存しない — 都度 `persona_id` を現在の `PersonaAssets`
     manifest へ join して解決する(restore / directory projection /
     wrapper 起動 payload、いずれも共通)。**`display_name` のみ、稼働中
-    の明示 rename(issue #197 段階3、`AgentDirectory.rename/2`)により
+    の明示 rename(issue #187 段階3、`AgentDirectory.rename/2`)により
     上書きされ得る** — これは envelope 到着に伴う暗黙の同期ではなく
     operator 操作による明示的な mutation であり、ADR-0029 F9 が固定
     する対象(zip 更新由来の personality prompt)を変更するものでは
@@ -204,11 +204,11 @@ goal: **server と runner が同時ダウン・再起動した後、client 側�
   role gate)、[0023](0023-host-runner-architecture.md)(runner が spawn
   実行主体)
 - 関連 issue:
-  [#41](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/41)(本 ADR
+  [#41](https://github.com/sakuraiyuta/kaoiro/issues/41)(本 ADR
   で解消)、
-  [#24](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/24)(諦め
+  [#24](https://github.com/sakuraiyuta/kaoiro/issues/24)(諦め
   方針)、
-  [#88](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/88)(将来の
+  [#88](https://github.com/sakuraiyuta/kaoiro/issues/88)(将来の
   per-persona 設定永続化と同型パターン)
 - 関連 specs: [protocol](../specs/protocol.md)(spawn / resume 経路)、
   [architecture](../specs/architecture.md)

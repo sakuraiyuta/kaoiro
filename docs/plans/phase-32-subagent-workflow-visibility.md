@@ -11,7 +11,7 @@ last_updated: 2026-08-10
 
 ## Goal
 
-[issue #180](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/180)
+[issue #170](https://github.com/sakuraiyuta/kaoiro/issues/170)
 を実装する。エージェントが Task ツールで起動する subagent / ローカル
 workflow の活動を、wrapper が SDK メッセージから検知し、専用 envelope
 `task` で server 集約・operator 限定配信を経て、dashboard の
@@ -33,7 +33,7 @@ workflow の活動を、wrapper が SDK メッセージから検知し、専用 
 | 32-5 | follow-up: `AgentDetail` への頭上リング追加(マスター指摘、取りこぼし修正) | あお | 🔄 | 詳細は下記「Follow-up」節。指揮 クロエ、レビュー ふじ、実装 あお。レビュー中 |
 
 **未完了(status を `done` に上げない理由)**: 32-1〜32-4 の実装・単体テストは
-完了しているが、issue #180 全体としてはこはくへの完了報告・外部レビュー
+完了しているが、issue #170 全体としてはこはくへの完了報告・外部レビュー
 (ふじ = wrapper/server、クロエ = UI の要否はこはく判断)・commit 承認・
 push が未了。
 
@@ -56,7 +56,7 @@ push が未了。
    実測済み(SDK 0.3.220、2026-08-09 capture、
    [agent-sdk-events](../specs/agent-sdk-events.md))。
 
-## Non-Goals(#180 スコープ外、こはく判断)
+## Non-Goals(#170 スコープ外、こはく判断)
 
 - Codex エンジンでの同等対応: 実測(`@openai/codex-sdk@0.144.1` の型
   定義に subagent/task lifecycle 相当のイベントが存在しないことを確認)
@@ -74,8 +74,8 @@ push が未了。
 `AgentCard`(グリッド表示)には 32-3 で頭上リングを実装したが、
 `AgentDetail`(ペルソナ画像の詳細パネル)には実装されず、上記 Non-Goals
 に「将来の別提案」として記載されていた。しかしこの除外はマスターの承認
-を得たものではなかった: issue #180 の
-[2026-08-04 コメント](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/180#issuecomment-2459)
+を得たものではなかった: issue #170 の
+[2026-08-04 コメント](https://github.com/sakuraiyuta/kaoiro/issues/170#issuecomment-5384483995)
 でマスター自身が「AgentDetail にも出すか」を優先検討事項として明記して
 いたが、同日 ADR へ昇格した open question 2 件(ADR-0047/0048)には
 含まれず、2026-08-09 の実装(32-1〜32-4)にも取り込まれないまま

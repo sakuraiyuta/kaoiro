@@ -18,7 +18,7 @@ Accepted(2026-08-02 起草、2026-08-03 マスター決裁)。
 の F5 / D5 を部分改訂する(supersede はしない)。
 
 起草時は
-[#175](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/175)
+[#165](https://github.com/sakuraiyuta/kaoiro/issues/165)
 ([ADR-0044](0044-coordination-injection-hitl.md) の実装)が詰める
 フッター**文面**との突き合わせを accept 条件としていたが、文面試行
 こそが本 ADR の機構を必要とする相互待ちだったため、決裁で機構と
@@ -36,7 +36,7 @@ Accepted(2026-08-02 起草、2026-08-03 マスター決裁)。
 が必要だった。
 
 これが実務問題として顕在化しているのが ADR-0044 F1 の文面確定
-(起草時点では未決着だった coordination-footer-scope、後に #175 で
+(起草時点では未決着だった coordination-footer-scope、後に #165 で
 案 A 確定)である。「短い行動原則を試作して不足分を計測する」という
 自然な進め方が、1 回の試行ごとにビルドを要求されるため回らない。
 
@@ -127,7 +127,7 @@ warn で出す(silent failure にしない)。長さの warn 閾値は設けな�
 3 層合成の配送文字列の追跡(下記 Negative)は文字数 + hash で担保し、
 長さ担保の論点はこれで決着する
 (文面の論点は起草時点で coordination-footer-scope として残っていたが、
-後に #175 で案 A に確定した)。
+後に #165 で案 A に確定した)。
 
 ### F6: 読み取りの意味論
 
@@ -150,7 +150,7 @@ warn で出す(silent failure にしない)。長さの warn 閾値は設けな�
 ### Positive
 
 - フッター文面の試行が再ビルド不要になり、ADR-0044 F1 の文面確定を
-  「案 A から始めて計測する」進め方で回せた (#175)。
+  「案 A から始めて計測する」進め方で回せた (#165)。
 - kaoiro 既定 (`system-footer.md`) と運用ルール (`user-footer.md`) が
   分離され、既定の更新を取り込みつつ独自指示を保てる。
 - footer root は読み取り専用アクセスのみで、`:ro` mount 構成でも

@@ -141,7 +141,7 @@ sandbox/network、MCP configを通常のspawn経路から再適用する。値�
 - `/new` — 表示 projection を維持する。`session_boundary` marker を既存 history の
   末尾に append し、以降の SDK 出力が続く。旧 log と structured IA はそのまま。
 - `/clear` — 当該 agent の pane 表示を **空にする**。通常 log も IA バブルも区別せず
-  全て drop し、`session_boundary` marker 1 行だけを残す。IA の相手 pane は #109 の
+  全て drop し、`session_boundary` marker 1 行だけを残す。IA の相手 pane は #106 の
   per-pane `ClearWatermarks` で hide するので、durable ledger
   (`InterAgentHistory` DETS) は削除しない (相手 agent の pane では IA が残る)。
   engine 側 session file (JSONL/rollout) は削除せず、旧 session は picker から

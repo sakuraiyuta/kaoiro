@@ -1,0 +1,5 @@
+[
+  {"kind": "literal", "pattern": "SECRET", "replacement": "REDACTED"},
+  {"kind": "literal", "pattern": "private.example", "replacement": "gitea.example.invalid"},
+  {"kind": "literal", "pattern": "attachment omitted", "replacement": "should-not-touch-placeholder"}
+]

@@ -69,7 +69,7 @@ rejected:
 rejected: spill-to-temp-FS / 常時 temp FS — MVP 不要、 ディスク到達原則違反。
 OQ5 で将来余地。
 
-#### #112 追補 (2026-07-23、マスター承認): Codex `local_image` 限定例外
+#### #108 追補 (2026-07-23、マスター承認): Codex `local_image` 限定例外
 
 Codex SDK 0.144.1 の画像入力は bytes / base64 ではなく path を受け取る
 `local_image` block だけである。このため Codex wrapper に限り、**画像のみ**を

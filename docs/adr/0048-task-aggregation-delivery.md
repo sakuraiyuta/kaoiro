@@ -13,7 +13,7 @@ related_adrs: [19, 47]
 
 ## Status
 
-Accepted (2026-08-04、マスターとの相談で決定。kaoiro issue #180)。
+Accepted (2026-08-04、マスターとの相談で決定。kaoiro issue #170)。
 [ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md) が server に
 課した「子タスクの active set 維持・配信」の具体
 ([subagent-tasks](../specs/subagent-tasks.md) 段階2 の前提)を確定する。
@@ -27,7 +27,7 @@ ADR-0019 で subagent / workflow を親付き子エンティティとして通�
 判断材料: 既存の再接続再同期は `snapshot`(join 直後 push、`agent_id` ごと
 last-write-wins、[protocol](../specs/protocol.md))。server はメモリ保持のみ
 (永続なし)で、再起動で消える前提は既存と同じ。また AgentDetail のログ肥大で
-dashboard 入力が重くなった実績(kaoiro issue #184)があり、envelope 量の
+dashboard 入力が重くなった実績(kaoiro issue #174)があり、envelope 量の
 無制御な増加は避けたい。
 
 ## Decision
@@ -45,7 +45,7 @@ server は子タスクを親 agent エンティティ配下のコレクション
 
 進捗更新(`kind=updated`)は wrapper の発行側で一定間隔 + 差分閾値により
 間引く。`started` / `completed` は間引かず常に即時発行する。`usage` の
-頻繁更新による envelope 増と dashboard 負荷(#184 の教訓)を発生源で抑える。
+頻繁更新による envelope 増と dashboard 負荷(#174 の教訓)を発生源で抑える。
 具体の間隔・閾値は段階1 実装時に定める。
 
 ### F3: 後続接続へは既存 snapshot 枠で接続時一括送信
@@ -80,7 +80,7 @@ envelope は設けない。protocol 追加が最小で、last-write-wins の既�
 | Option | Why rejected |
 |--------|--------------|
 | 親 agent エンティティ配下の子コレクション | 親の再接続・削除処理と子の寿命管理が結合する。異なる `task_type` の同居も難しい |
-| `task_progress` を毎回そのまま流す | usage の頻繁更新で envelope が膨らみ、dashboard 負荷(#184)を再現しうる |
+| `task_progress` を毎回そのまま流す | usage の頻繁更新で envelope が膨らみ、dashboard 負荷(#174)を再現しうる |
 | 定期スナップショット envelope | 定常トラフィックが増える。既存の join 時 push + last-write-wins で足りる |
 
 ## Related
@@ -94,7 +94,7 @@ envelope は設けない。protocol 追加が最小で、last-write-wins の既�
 - 由来: open-question subagent-task-aggregation(2026-06-16 起票)を
   本 ADR へ昇格。
 
-## Addendum (issue #180, 2026-08-09): task の配信は operator 限定
+## Addendum (issue #170, 2026-08-09): task の配信は operator 限定
 
 **決定。** `task` envelope のライブ配信、および snapshot の `tasks` キー
 (F3)は **operator 限定**とし、`viewer` ロールには一切配信しない。
@@ -104,7 +104,7 @@ envelope は設けない。protocol 追加が最小で、last-write-wins の既�
    (`summary` / `last_tool_name` 等)は粗いライフサイクルを超えた
    内容ベアリング情報であり、[ADR-0021](0021-role-information-disclosure-policy.md)
    が operator 限定としてきた `log`/`result` 相当の粒度に近い。
-2. issue #180 自体の目的が「operator が内部活動を把握する」ことで、
+2. issue #170 自体の目的が「operator が内部活動を把握する」ことで、
    viewer 向けの要求はそもそも無い。
 3. ADR-0021 F2 の fail-closed 既定(未知 type は viewer へ配信しない)
    が既に narrow-by-default を志向しており、あとから広げる方が
@@ -127,4 +127,4 @@ envelope は設けない。protocol 追加が最小で、last-write-wins の既�
 将来 viewer 向けに task 可視化を広げる場合は、この addendum か新規 ADR
 の改訂を経てから行う(サニタイズ側の暗黙拡張はしない)。
 
-**由来**: kaoiro issue #180 実装セッション(あお、2026-08-09)。
+**由来**: kaoiro issue #170 実装セッション(あお、2026-08-09)。

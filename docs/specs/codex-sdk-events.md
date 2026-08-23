@@ -86,7 +86,7 @@ Codex ThreadEvent → kaoiro 状態 ([protocol](protocol.md)) への導出は共
 | `item.started` (mcp_tool_call, server=kaoiro, tool=ask_user_question) | `waiting_question` — `question_request` envelope ([ADR-0027](../adr/0027-askuserquestion-envelope.md)) は bridge → wrapper handler 側で発行 | MCP 応答までターンがブロックするため成立 |
 | `item.started` (mcp_tool_call, server=kaoiro, tool=send_to_agent 等) | `tool_running` | inter-agent tool、共通 Tool 記述層経由 |
 | `item.started` (mcp_tool_call, 他 server) / (web_search) | `tool_running` | |
-| `item.started` / `item.updated` / `item.completed` (todo_list) | 状態影響なし、親 agent の `task_type=tasklist` whole-list snapshot を送出 | transcript log 化はしない。`completed: boolean` は protocol の `pending` / `completed` へ写す (issue #188, [protocol](protocol.md) の tasklist 追補) |
+| `item.started` / `item.updated` / `item.completed` (todo_list) | 状態影響なし、親 agent の `task_type=tasklist` whole-list snapshot を送出 | transcript log 化はしない。`completed: boolean` は protocol の `pending` / `completed` へ写す (issue #178, [protocol](protocol.md) の tasklist 追補) |
 | `item.completed` (reasoning) | 状態影響なし | log 化は任意 (MVP では見送り) |
 | `item.completed` (error item) | 状態影響なし・`log` 相当で記録 | 非致命 |
 | `turn.completed` | `idle` — envelope の `type=result` を発行。USD が無いため `ext.cost` は Codex では**載せない**。`ext.context` も**載せない** ([ADR-0040](../adr/0040-context-usage-capability.md) phase-21): `usage.input_tokens` は per-turn 入力のみで context 使用率にならないため。`ext.session_capabilities.supports_context_usage=false` で UI に「未対応」を advertise する | Claude の SDKResultMessage(success) 相当 |
@@ -115,8 +115,8 @@ dashboard の「確認待ち」と `whoami` の field omit を同じ unknown 状
 
 - 保管: 初回 `thread.started` で得た `thread_id` (UUIDv7) を kaoiro の `session_id` として保持し、`AgentStates` / `SessionPointers` ([ADR-0014](../adr/0014-session-resume-and-restore.md)) に書き込む。
 - 復帰: 復元指示時に `codex.resumeThread(thread_id)` で再開。
-- 列挙: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を固定深度の日付 tree として新しい順に async 走査し、先頭行 `session_meta` の `cwd` フィールドで照合する (実ファイルで確認済み)。存在確認は一致時点で早期 return し、spawn / resume / `switch_session` の hot path で runner event loop を block しない (#100)。`~/.codex/state_5.sqlite` の index は internal のため依存しない。
-- 履歴 replay (#106): SDK の `resumeThread()` は過去 event を再 emit しないため、
+- 列挙: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を固定深度の日付 tree として新しい順に async 走査し、先頭行 `session_meta` の `cwd` フィールドで照合する (実ファイルで確認済み)。存在確認は一致時点で早期 return し、spawn / resume / `switch_session` の hot path で runner event loop を block しない (#97)。`~/.codex/state_5.sqlite` の index は internal のため依存しない。
+- 履歴 replay (#103): SDK の `resumeThread()` は過去 event を再 emit しないため、
   wrapper が rollout の `response_item` を user / assistant / tool_use /
   tool_result log へ投影する。Codex 0.144.1 の code-mode tool は実 tool 種別に
   かかわらず `custom_tool_call{name:"exec"}` として永続され、実名は

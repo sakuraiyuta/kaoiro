@@ -123,7 +123,7 @@ host実機検証でcurated trioのexplicit指定成功が確認されたため�
 phase-14 完了後の実運用検証で、resolved model / source が UI / ログに見えず operator が現在状態を誤認するケース、および共有 env が engine 間で漏れて事故になるケースが顕在化した。model 解決の優先度・source 表示・env 分離を本 F4bc の追補として明文化する。実装は [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) D1/D7 で行う。
 
 - **解決優先度** (両 engine 共通): `launch (SpawnMessage.model / CLI 位置引数)` > `env` > `config.model (kaoiro.config.json)` > engine account / SDK default。上位が指定されていれば下位は無視。
-- **source 語彙**: envelope の `ext.model_source: "launch" | "env" | "config" | "default"` を stamp する。UI (AgentDetail) の「アカウント既定」ラベル判定は engine 名分岐 ([e89fa98](https://gitea.example.invalid/sakurai.yuta/kaoiro/commit/e89fa98) の Codex 特例) から `ext.model_source === "default"` 判定へ置換し、engine 分岐を撤去する。
+- **source 語彙**: envelope の `ext.model_source: "launch" | "env" | "config" | "default"` を stamp する。UI (AgentDetail) の「アカウント既定」ラベル判定は engine 名分岐 (e89fa98 (private Gitea history) の Codex 特例) から `ext.model_source === "default"` 判定へ置換し、engine 分岐を撤去する。
 - **起動時 stderr 1 行**: `[wrapper resolved] engine=... model=<name>(source=...) ...` を CLI 起動時に出力する。runner の tee 経路で operator log にも露出する。
 - **env 分離**: 単一共有 env `KAOIRO_WRAPPER_DEFAULT_MODEL` は engine 別に分離する:
   - `KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` — Claude CLI のみ読む
@@ -168,13 +168,13 @@ session_id は engine-opaque な文字列として server 側の `SessionPointer
 runner の cwd 配下 session 列挙 ([ADR-0014](0014-session-resume-and-restore.md) F6) も engine 別実装:
 
 - Claude adapter — 既存 `~/.claude/projects/` JSONL 列挙
-- Codex adapter — `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を走査し、先頭行 `session_meta` の `cwd` で照合する (2026-07-10 確定: レイアウトと `session_meta.cwd` の存在を実ファイルで確認。`state_5.sqlite` の index は internal 扱いのため依存しない)。走査は固定深度の日付 tree を新しい順に async filesystem API で辿り、存在確認は一致時点で早期 return、列挙も event loop を block しない (#100)。
+- Codex adapter — `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を走査し、先頭行 `session_meta` の `cwd` で照合する (2026-07-10 確定: レイアウトと `session_meta.cwd` の存在を実ファイルで確認。`state_5.sqlite` の index は internal 扱いのため依存しない)。走査は固定深度の日付 tree を新しい順に async filesystem API で辿り、存在確認は一致時点で早期 return、列挙も event loop を block しない (#97)。
 
 ### F9 — cwd 通知契約
 
 `wrapper/agent-common` の `EngineAdapter` interface に `onCwdChanged(newCwd)` 相当の hook 契約を持たせる。実装は engine 側都合:
 
-- Claude adapter — 既存 CwdChanged hook 継続 ([issue #95](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/95) の SDK バグ待ちで実動不安定)。
+- Claude adapter — 既存 CwdChanged hook 継続 ([issue #92](https://github.com/sakuraiyuta/kaoiro/issues/92) の SDK バグ待ちで実動不安定)。
 - Codex adapter — MVP では未実装、暫定的に起動 cwd 固定表示。抽出方式候補は [open-questions/codex-cwd-extraction](../open-questions/codex-cwd-extraction.md) で追跡。
 
 ### F10 — 2 phase 分割

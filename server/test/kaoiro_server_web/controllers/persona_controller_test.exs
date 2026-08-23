@@ -22,13 +22,14 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert personas["ao"]["name"] == "あお"
 
       for id <- ~w(ao fuji kuroe momo) do
-        assert personas[id]["pack_version"] == "1.0.1"
+        assert personas[id]["pack_version"] == "1.0.2"
       end
 
       assert personas["kohaku"]["name"] == "こはく"
-      # Bumped to 1.1.0 by commit ab66725 (2026-08-12); this expectation
-      # was not updated with it and has been failing on develop since.
-      assert personas["kohaku"]["pack_version"] == "1.1.0"
+      # Bumped to 1.1.1 by commit ada4357 (#276, 2026-08-21, persona pack
+      # zip re-generation); this expectation was not updated with it and
+      # has been failing on develop since.
+      assert personas["kohaku"]["pack_version"] == "1.1.1"
     end
   end
 

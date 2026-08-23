@@ -156,7 +156,7 @@ test の作り直し (M1/M3 の「前提を手渡ししていた」型への対�
 
 S3 (既知の制約、対応不要): sidecar は replay のたびに全量を同期 read する。
 長期 session では read コストが線形に伸びる。将来課題として
-[#202](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/202) に
+[#192](https://github.com/sakuraiyuta/kaoiro/issues/192) に
 起票済み (2026-08-08、priority/low)。
 
 ### 2 巡目 must-fix 対応 (あお、2026-08-08)
@@ -166,7 +166,7 @@ S3 (既知の制約、対応不要): sidecar は replay のたびに全量を同
 | 項目 | 修正の要 |
 |---|---|
 | R1 | `onSessionResetCompleted(mode="clear")` の「この reset の `request_id` を持つ session_boundary 1 行だけ残す」変換を helper 化し、`logs` と `mirrorIntoLiveBuffer` の双方へ適用。mirror 経路は clear を含む 4 経路になった |
-| R2 | `#pendingInjections.delete` を acceptance 確定後に移し、**rejected では消さない**。accepted / unknown は消す (配送済みだった場合に #131 通知を重ねると相手に矛盾する 2 通が届く) |
+| R2 | `#pendingInjections.delete` を acceptance 確定後に移し、**rejected では消さない**。accepted / unknown は消す (配送済みだった場合に #127 通知を重ねると相手に矛盾する 2 通が届く) |
 | R3 | acceptance が unknown でも、waiter が既に settle していれば `await` して reply を取り出し、reply があれば通常の `sent + reply` を返す。reply の到着自体が配送の証拠。waiter がまだ active な unknown は従来どおり即解除 + 配送不明 |
 | should | `chunkReplayIaItems` は単独で budget に収まらない行を **落とす** (対応した)。送れば frame reject → complete 未達 → 再 join の loop に戻るだけで、D3-2 の破損行 policy と同じ fail-closed。guard 1 行 + `sendReplayIa` の warn + test 2 本で収まったため今回入れた |
 

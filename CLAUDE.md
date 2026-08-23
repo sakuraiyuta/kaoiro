@@ -39,7 +39,7 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 
 ## Branch strategy
 
-issue #223 で導入。エージェントの permission gate が `main` 宛の git 操作を
+issue #213 で導入。エージェントの permission gate が `main` 宛の git 操作を
 ブロックするため、統合ブランチ `develop` を挟む。
 
 | ブランチ | 役割 | 更新できる主体 |

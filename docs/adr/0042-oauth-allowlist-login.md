@@ -85,7 +85,7 @@ ADR-0005 は本線を「OAuth + RBAC、プロトタイプは許可メールの
 
 - 個人単位の認証と role 付与ができ、許可リストの行削除が次の
   connect/refresh (最長 12h) + 明示 revoke で失効に落ちる。稼働中 socket
-  への反映は #158(操作のたび再解決)に加え #170(変更を一度も操作しない
+  への反映は #148(操作のたび再解決)に加え #160(変更を一度も操作しない
   passive socket にも change-driven に効く)で強化済み — 詳細は本 ADR
   末尾の Addendum。
 - ADR-0013 の cookie/ticket/logout 配管を identity 差し替えのみで
@@ -103,10 +103,10 @@ ADR-0005 は本線を「OAuth + RBAC、プロトタイプは許可メールの
 ### Neutral
 
 - ~~RBAC の役割粒度は operator / viewer の現行 2 値を維持。細分化~~
-  **撤回 (2026-08-14、issue #198)。** role は admin / operator / viewer
+  **撤回 (2026-08-14、issue #188)。** role は admin / operator / viewer
   の 3 値になった ([ADR-0050](0050-principal-model-and-graded-access-control.md)
   D2)。許可リストのテキスト形式は `provider:identifier[:role]` のまま
-  で、role 語に `admin` が加わっただけなので、本 ADR の形式と issue #170
+  で、role 語に `admin` が加わっただけなので、本 ADR の形式と issue #160
   の watcher の前提は変わらない。以下は撤回前の記述: 細分化
   (approver 等) は将来。
 - 監査ログ・マルチテナント隔離は本 ADR のスコープ外 (auth-and-authz
@@ -123,13 +123,13 @@ ADR-0005 は本線を「OAuth + RBAC、プロトタイプは許可メールの
 | session に role を格納 | 失効が cookie 期限まで効かない。ADR-0013 と同じ理由で毎回再解決 |
 | provider token の保持 | Nextcloud token がフルアクセスで漏洩コスト過大。identity 取得後に破棄 |
 
-## Addendum (issue #170, 2026-08-05): passive socket への change-driven disconnect
+## Addendum (issue #160, 2026-08-05): passive socket への change-driven disconnect
 
-**背景。** #158 は「operator 操作のたびに role を再解決し、不一致なら
+**背景。** #148 は「operator 操作のたびに role を再解決し、不一致なら
 disconnect」という方式で稼働中 socket への降格反映を実現したが、これは
 「操作した瞬間に切る」方式であり、降格後に一度も operator 操作をしない
 socket は `AgentsChannel.handle_out` の operator 限定配信(tool input
-等)を受け続けていた。#158 実装時点でこれは fan-out のホットパスで毎
+等)を受け続けていた。#148 実装時点でこれは fan-out のホットパスで毎
 envelope × 毎 subscriber に許可リストを読み直すコストを理由に意図的に
 見送られていた(あお判断)。
 
@@ -141,7 +141,7 @@ envelope × 毎 subscriber に許可リストを読み直すコストを理由�
 - 検知のたびに許可リストの **snapshot 差分**(`{provider, identifier}
   => role` の追加・削除・role 変更)だけを計算し、変更があった identity
   にだけ `Endpoint.broadcast(oauth_socket_id, "disconnect", %{})` を撃つ
-  (#47/#158 と同じ機構の再利用、新しい broadcast 経路は増やさない)。
+  (#47/#148 と同じ機構の再利用、新しい broadcast 経路は増やさない)。
   稼働中 socket の列挙は一切行わない(そのための機構はこのコードベース
   に存在しないことを実測済み)。
 - 差分計算の checkpoint は `:persistent_term` に保持する。認可判断の
@@ -187,5 +187,5 @@ envelope × 毎 subscriber に許可リストを読み直すコストを理由�
   atomic rename での編集を推奨するが、これは確率を下げるだけで保証で
   はない。
 
-詳細な設計判断(ふじレビュー、あお承認)は issue #170 のコメント履歴、
+詳細な設計判断(ふじレビュー、あお承認)は issue #160 のコメント履歴、
 実装は `KaoiroServer.OAuthAllowlistWatcher` のモジュール doc を参照。

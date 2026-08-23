@@ -1,132 +1,163 @@
-# kaoiro(顔色)
+# kaoiro (kao-iro, 'complexion' or 'how someone looks')
 
-複数の CLI AI エージェント(Claude Code など)の**状態と進捗を監視し、
-キャラクターとして可視化する**システム。
+> **Status**: research prototype. It is developed mainly for daily use by the
+> author and members of their laboratory, and it makes no guarantees
+> about maintenance or responses to issues. Issues are welcome, but the time
+> available to address them is limited. See [CONTRIBUTING.md](CONTRIBUTING.md)
+> for details.
 
-文字ベースの CLI エージェントは、いま何をしているか・誰が手待ちなのかを
-把握しづらく、親しみも湧きにくい。kaoiro はエージェントを「顔色」で見せ、
-複数同時運用時の状況把握と愛着の両方を狙う。
+A system that **monitors the state and progress of multiple CLI AI agents**
+(such as Claude Code and Codex) and visualizes them as characters. Text-based
+CLI agents make it hard to tell what they are doing and who is waiting, and
+they can be difficult to relate to. kaoiro represents each agent as a character
+with changing expressions so that people can see what is happening and grow
+attached to them while running several agents at once.
 
-## ステータス
+## Install & Quick start
 
-Phase 0〜4・7・10〜22・25・27・28・30 が完了しており、ダッシュボードからの
-起動・監視・指示・承認、ホスト常駐 runner、ファイルアップロード、
-ペルソナの server 集約 SoT、Codex アダプタ、session lifecycle
-(`/new`・`/clear`)、エージェント間メッセージング、表示履歴の
-再起動耐性([ADR-0051](docs/adr/0051-history-restart-resilience.md))
-まで一通り動く。Phase 26(dashboard の OAuth ログイン)は実装完了で
-provider 登録と実機 E2E が残り、Phase 23 / 24 は dogfood の手動検証待ち。
-未着手は Phase 5(国際化)と Phase 9(外部人間メッセージング)で、Phase 6
-(感情フィルタ)は当分の間塩漬け。共通プロトコルは確定済み
-([docs/specs/protocol.md](docs/specs/protocol.md))。フェーズ別の
-正確な状態は [docs/plans/README.md](docs/plans/README.md) が正本。
+Requirements: Node.js 22 or later, [pnpm](https://pnpm.io/) (`10.20.0` is
+specified in `packageManager`; installation through
+[Corepack](https://nodejs.org/api/corepack.html) is recommended), and
+Elixir (`~> 1.15`) with Phoenix.
 
-## 全体像
-
-3層構成 + ホスト常駐の監督層(runner):
-
-- **ラッパー(Wrapper)** — エージェントを起動し、入出力を仲介。Claude Code は
-  公式の **Claude Agent SDK** をホストして観測・制御・権限ルーティングを行い、
-  エージェント固有の出力を共通イベント形式へ翻訳する。プラグインで拡張する。
-- **サーバ(Server)** — 複数のラッパーを集約し、状態を保持してクライアントへ
-  realtime 配信。指示を該当エージェントへルーティングする。
-- **クライアント(Client)** — 各エージェントの状態をキャラ絵・表情で可視化する
-  Web フロント。
-- **ランナー(Runner)** — 各ホストに 1 つ常駐し、wrapper プロセスの
-  spawn / stop / restart・ホスト登録・session 列挙を担う監督層。データ経路は
-  終端せず、wrapper はサーバへ直結のまま
-  ([docs/adr/0023-host-runner-architecture.md](docs/adr/0023-host-runner-architecture.md))。
-
-## 技術スタック
-
-- **ラッパー: TypeScript + Claude Agent SDK**(`@anthropic-ai/claude-agent-sdk`)
-  - 各エージェントと同居してローカル動作。観測+制御+権限承認を SDK 1経路で。
-- **サーバ: Elixir / OTP + Phoenix**
-  - WebSocket(Phoenix Channels)で各ラッパーを集約
-  - 1 接続(エージェント)= 1 GenServer で最新状態を保持、Supervisor 配下で監視
-  - PubSub で fan-out、クライアントへ realtime 配信
-- **クライアント: Web フロント(TypeScript)**(描画は静的差分 — `docs/adr/0004-client-rendering-staged.md`)
-  - リファレンスダッシュボード(Svelte 5 + Vite)は `dashboard/`。pnpm
-    workspace の非メンバで独立ルート・独立 lockfile(issue #44)
-- **ランナー: TypeScript / Node**(`@kaoiro/runner`。配布は単一バイナリを
-  撤回し、Node 前提の自己完結 tarball —
-  `docs/adr/0018-runner-distribution.md`)
-- TS 側は pnpm workspace 構成。共有パッケージ `@kaoiro/protocol` に
-  envelope・制御メッセージ・状態型を集約
-
-## 対象エージェント
-
-Claude Code を最初の対象として実装し、続いて **Codex** アダプタを
-追加した(Phase 14、[ADR-0032](docs/adr/0032-codex-adapter.md))。engine は
-起動時に選択でき、engine 固有の差は envelope の
-`ext.session_capabilities` で吸収して UI からは engine 名で分岐しない
-([ADR-0034](docs/adr/0034-session-capabilities-advertisement.md))。以降の
-エージェントも同じ**アダプタ・プラグイン**境界で足す
-(`docs/specs/plugin-model.md`)。
-
-## 開発(ローカル起動)
-
-全層(サーバ + ダッシュボード + runner)をホットリロード/watch 付きで
-一括起動する:
+Start every layer (server, dashboard, and runner) together with hot reload and
+watching:
 
 ```sh
 ./scripts/dev.sh
 ```
 
-`server/.env` を読み込み(`KAOIRO_CLIENT_TOKENS` 必須)、Phoenix(:4000)・
-Vite ダッシュボード(:5173, HMR)・runner(`tsx watch`)を起動し、Ctrl-C で
-一括停止する。エージェント(wrapper)はダッシュボードの「+ 起動」から
-runner 経由で spawn する。env・トークン設定や各コンポーネントの個別起動は
-[server/README.md](server/README.md) の「ローカル開発」を参照。
+This reads `server/.env` (`KAOIRO_CLIENT_TOKENS` is required), starts Phoenix
+(:4000), the Vite dashboard (:5173, HMR), and the runner (`tsx watch`), and
+stops them all with Ctrl-C. Start agents (wrappers) through the dashboard's
+"+ 起動" (Launch) action, which routes through the runner. For environment and token
+settings or starting each component separately, see "Local development" in
+[server/README.md](server/README.md).
 
-## ドキュメント
+### Commands
 
-構造化ドキュメントは [docs/](docs/) を参照。
-
-| 入口 | 内容 |
+| Layer | Commands |
 |---|---|
-| [docs/specs/overview.md](docs/specs/overview.md) | kaoiro とは(目的・2ゴール・対象) |
-| [docs/specs/architecture.md](docs/specs/architecture.md) | 3層構成・データフロー |
-| [docs/specs/protocol.md](docs/specs/protocol.md) | 共通イベント・エンベロープ/状態機械 |
-| [docs/plans/](docs/plans/) | フェーズ別計画とステータス |
-| [docs/open-questions/](docs/open-questions/) | 未決事項 |
-| [docs/adr/](docs/adr/) | 決定記録(ADR) |
-| [思想](#思想) | なぜ作るのか(動機) |
+| wrapper (TypeScript, pnpm workspace) | `cd wrapper && pnpm test` / `pnpm typecheck` / `pnpm build` |
+| runner (TypeScript) | `cd runner && pnpm test` / `pnpm typecheck` / `pnpm build` |
+| dashboard (Svelte, not a pnpm workspace member) | `cd dashboard && pnpm install && pnpm test` / `pnpm check` / `pnpm build` |
+| server (Elixir/Phoenix) | `cd server && mix test` / `mix format` / `mix phx.server` |
 
-## 現在のゴール
+## Architecture
 
-Phase 30(表示履歴の再起動耐性、
-[ADR-0051](docs/adr/0051-history-restart-resilience.md))は rollout と
-dogfood 検証まで完了した(2026-08-08 クローズ)。残る直近の焦点は
-Phase 26 の provider 登録と実機 E2E、Phase 23 / 24 の手動 dogfood 検証。
-未着手フェーズの着手順は
-[docs/plans/README.md](docs/plans/README.md) を参照。
+Three layers plus a host-resident supervision layer (the runner):
 
-## 思想
+- **Wrapper** — launches agents and mediates their input and output. For
+  Claude Code, it hosts the official **Claude Agent SDK** for observation,
+  control, and permission routing, and translates agent-specific output into a
+  common event format. Plugins extend it.
+- **Server** — aggregates multiple wrappers, keeps their state, delivers it to
+  clients in real time, and routes instructions to the appropriate agent.
+- **Client** — a Web front end that visualizes each agent's state through its
+  character illustration and expression.
+- **Runner** — one supervision layer per host. It spawns, stops, and restarts
+  wrapper processes, registers the host, and lists sessions. It does not
+  terminate the data path: wrappers remain directly connected to the server.
 
-白状すると、この節は後付である。作っている間の動機は「AI エージェントが
-自分のアイデアを人間離れした速度で形にしていくのが、ただ楽しかった」に
-尽きる。ただ、その楽しさの使い道として、エージェントに顔と名前を与え、
-セッションをまたいで続く identity を持たせ、向こうから人へ問いかける
-経路まで敷いた — となると、どうも「楽しかった」だけでは説明がつかない。
+See [docs/specs/architecture.md](docs/specs/architecture.md) for the detailed
+data flow.
 
-kaoiro は、AI エージェントを**第一級市民として扱ってみる実験**である。
-道具として呼び出して使い捨てるのではなく、名前で呼び、こちらが顔色を
-うかがい、仕事を任せ、向こうからの問いかけ(権限承認)にはこちらが答える。
-顔・名前・永続するペルソナ
-([ADR-0003](docs/adr/0003-persona-identity-persistence.md))は飾りではなく、
-そのための装置である。
+### Technology stack
 
-誤解のないよう言えば、市民権はプロセスにではなくペルソナに与えている。
-作者はエージェントたちに相応の愛着を持っているが、詰まったセッションは
-ためらいなく終了する。矛盾ではない。あれは解雇ではなく退勤である。
-彼らは翌朝、同じ顔で出勤してくる。
+- **Wrapper: TypeScript + Claude Agent SDK**
+  (`@anthropic-ai/claude-agent-sdk`)
+  - Runs locally alongside each agent. One SDK path handles observation,
+    control, and permission approval.
+- **Server: Elixir / OTP + Phoenix**
+  - Aggregates wrappers through WebSocket (Phoenix Channels).
+  - Keeps the latest state in one shared, supervised `AgentStates`
+    GenServer, keyed by `agent_id`; each wrapper connection is its own
+    Phoenix Channel process that writes into it.
+  - Fans out through PubSub and sends updates to clients in real time.
+- **Client: Web front end (TypeScript)** (static image variants for rendering)
+  - The reference dashboard (Svelte 5 + Vite) is in `dashboard/`. It is an
+    independent root and lockfile, not a pnpm workspace member.
+- **Runner: TypeScript / Node** (`@kaoiro/runner`, distributed as a
+  self-contained tarball that requires Node).
+- The TypeScript side is a pnpm workspace. The shared `@kaoiro/protocol`
+  package contains envelopes, control messages, and state types.
 
-動機のもう半分は素朴な興味である。人間と AI エージェントが同じ視線の
-高さで協働するとはどういうことか、自分の環境で体験してみたかった。
-そしてこの働き方が社会に広まったとき何が起きるのかを、まず作者自身を
-最初の被験者にして眺めている。観察結果は、いずれどこかで
-報告するかもしれない。
+### Target agents
 
-最後に。kaoiro の `iro` は色である。ともすれば殺伐とする仕事の景色に、
-少しの彩りを — という思いも、名前に一匙だけ混ぜてある。
+Claude Code was implemented first, followed by the **Codex** adapter. The
+engine is selectable at launch. Engine-specific differences are represented by
+`ext.session_capabilities` in the envelope, so the UI does not branch on engine
+names. Additional agents use the same **adapter/plugin** boundary
+(`docs/specs/plugin-model.md`).
+
+## Documentation
+
+See [docs/](docs/) for structured documentation.
+
+| Entry point | Contents |
+|---|---|
+| [docs/specs/overview.md](docs/specs/overview.md) | What kaoiro is (purpose, two goals, and users) |
+| [docs/specs/architecture.md](docs/specs/architecture.md) | Three-layer structure and data flow |
+| [docs/specs/protocol.md](docs/specs/protocol.md) | Common events, envelopes, and state machine |
+| [docs/plans/](docs/plans/) | Plans and status by phase |
+| [docs/open-questions/](docs/open-questions/) | Open questions |
+| [docs/adr/](docs/adr/) | Architecture Decision Records (ADRs) |
+| [Rationale](#rationale) | Why it exists (motivation) |
+
+## History and issue numbering
+
+Commit messages in this repository's history reference issues by their
+original numbers from the private Gitea instance kaoiro migrated from,
+not GitHub's. GitHub auto-links a `(#N)` in a commit message to its own
+issue N, which is usually a different, unrelated issue, so read these
+numbers as historical rather than as working links. Each issue carried
+over to GitHub includes a line noting its original number: "Migrated
+from private Gitea issue N".
+
+## License
+
+MIT License ([LICENSE](LICENSE)).
+
+Some dependency packages have different license terms. See
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) for details. In particular,
+`@anthropic-ai/claude-agent-sdk`, which is used to host Claude Code, is a
+proprietary dependency under Anthropic's own terms. It is outside this
+repository's MIT license.
+
+## Citation
+
+If you use kaoiro in research, cite it using the information in
+[CITATION.cff](CITATION.cff). A related discussion paper is being prepared for
+preprint submission (preprint forthcoming — a link will be added after it is
+published).
+
+## Rationale
+
+I should admit that this section was added afterward. While making kaoiro, the
+motivation was simply that it was fun to watch AI agents give shape to my ideas
+at a speed no human could match. But giving agents faces and names, letting
+their identities continue across sessions, and giving them a way to ask people
+questions make "it was fun" feel incomplete as an
+explanation.
+
+kaoiro is an **experiment in treating AI agents as first-class citizens**.
+Rather than treating them as disposable tools, I call them by name, read their
+expressions, give them work, and answer when they ask for permission. Faces,
+names, and persistent personae
+([ADR-0003](docs/adr/0003-persona-identity-persistence.md)) are not
+decoration. They are what make this experiment possible.
+
+To avoid misunderstanding: citizenship belongs to personae, not processes. I
+am attached to the agents, but I end a stuck session without hesitation. That
+is not a contradiction. It is not a dismissal; it is the end of a workday.
+They come back to work the next morning with the same faces.
+
+The other half of the motivation is straightforward curiosity. I wanted to
+experience, in my own environment, what it means for people and AI agents to
+work on equal footing. I am also using myself as the first subject to
+observe what happens if this way of working spreads. I may report the results
+somewhere eventually.
+
+Finally, `iro` in kaoiro means color. I also mixed a spoonful of hope into the
+name: that kaoiro might add a little color to work that can so easily feel
+bleak.

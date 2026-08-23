@@ -47,7 +47,7 @@ wrapper 側の設定に人格関連フィールドは持たない。`persona.id`
 `persona.name` / `persona.sprite_set`(pack 由来の canonical、session 中
 不変)のみが wrapper 起動時 config に残る([setup-wizards](setup-wizards.md))。
 これとは別に、**稼働中に変わり得る表示名**を独立 top-level `display_name`
-field が担う(issue #219 D19/D20 — `Principal.display_name`,
+field が担う(issue #209 D19/D20 — `Principal.display_name`,
 [ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D1)。
 spawn 時は operator 指定の custom name か、無指定なら `persona.name` の
 コピーを初期値として server が積む。
@@ -132,7 +132,7 @@ pack が無い予約 persona `default` でも、以下の footer 合成結果が
   `send_to_agent` で分担する原則) は `system-footer.md` 内蔵デフォルト
   の一部として全ペルソナへ載る。文面は案 A (短い原則のみ、手順詳細は
   含めない) で確定した ([ADR-0044](../adr/0044-coordination-injection-hitl.md)
-  F1 追補、issue #175)。運用者が `KAOIRO_FOOTER_DIR` の
+  F1 追補、issue #165)。運用者が `KAOIRO_FOOTER_DIR` の
   `system-footer.md` で内蔵デフォルトを置き換えた場合、この指針も
   含めて置き換わる (persona 固有ではなく全ペルソナ共通の指針である
   ため)。
@@ -151,7 +151,7 @@ pack が無い予約 persona `default` でも、以下の footer 合成結果が
 - Envelope (state_change / log / result) に人格文字列は載せない。
   dashboard に流れるのは従来通り `persona.id` / `persona.name` のみ
   (canonical、session 中不変)。表示名は別の top-level `display_name`
-  field(issue #219 D19)— rename は `persona.name` ではなくこちらを
+  field(issue #209 D19)— rename は `persona.name` ではなくこちらを
   書き換える。
 
 ## Constraints

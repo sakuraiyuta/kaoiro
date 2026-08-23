@@ -328,7 +328,7 @@ UI では表示しない**。cache が持つ「最後に成功した probe 時�
 行は account 推奨に追随して表示値と起動結果がズレるため。透過を止めない理由は、経路ごとに row の形が変わると consumer 側が
 「absent = unknown」以外の分岐を持たされるから。表示是非は独立した UX 判断と
 して Gitea
-[issue #176](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/176)
+[issue #166](https://github.com/sakuraiyuta/kaoiro/issues/166)
 へ外部化した (理由の詳細は
 [plugin-model](../specs/plugin-model.md) の該当節)。
 

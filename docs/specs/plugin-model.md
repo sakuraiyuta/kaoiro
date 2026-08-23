@@ -261,7 +261,7 @@ catalog 突合は effort domain の決定と未知モデル判定にのみ使い
 `AgentDetail` のみ**とし、一致がちょうど 1 件のときだけ alias を主・canonical
 を副に出す (多重一致時の扱いは上表のとおり)。`LaunchDialog`
 での表示は行わない (Gitea
-[issue #176](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/176)
+[issue #166](https://github.com/sakuraiyuta/kaoiro/issues/166)
 へ外部化)。register 経路の `resolved_model` は runner の last-known-good cache
 が持つ「最後に成功した probe 時点」の解決結果で、TTL 超過後も据え置かれる
 ため、init 後実測の `ext.models` とは精度が異なる。特に `default` 行は

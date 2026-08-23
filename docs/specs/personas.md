@@ -112,7 +112,7 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 グレースケール化(CSS filter)により表現する(状態セットの定義は
 [protocol](protocol.md)、マッピング実装はリファレンスダッシュボードの
 `expression.ts`)。`fatigued` は protocol state ではなく context 使用率から
-導出する optional sprite modifier で、対応画像の生成は issue #173 で行う
+導出する optional sprite modifier で、対応画像の生成は issue #163 で行う
 ([ADR-0054](../adr/0054-fatigue-as-orthogonal-persona-modifier.md))。
 
 | 状態 | ao(控えめ) | momo(大) | kuroe(冷静) | fuji(余裕あるマウント) | kohaku(泰然) |
@@ -198,10 +198,11 @@ Anima dir 側に生成物(json)は残るが rembg 前 PNG が `assets-work/` に
 
 1. **作成者**: `persona-packs/<id>/{manifest.json, personality.md,
    sprites/}` を編集
-2. **provenance 取り込み**(推奨): `scripts/import-anima-provenance.sh
-   <id>` で Anima dir から `persona-packs/<id>/provenance/<state>.json`
-   を生成。rembg 前 PNG が `assets-work/` に無い等で sha256 照合が
-   決定論的に成立しない場合は見送る(fuji の前例参照)。
+2. **provenance 取り込み**(推奨): 生成元 ComfyUI の出力ディレクトリと
+   rembg 前 PNG を sha256 照合し、`persona-packs/<id>/provenance/`
+   以下へ `<state>.json` を生成。rembg 前 PNG が `assets-work/` に
+   無い等で sha256 照合が決定論的に成立しない場合は見送る(fuji の
+   前例参照)。
 3. **build**: `scripts/build-persona-pack.sh` で zip 化(
    `<id>-<version>.zip`)
 4. **管理者**: zip を server の取り込みディレクトリ(env で指定)に drop

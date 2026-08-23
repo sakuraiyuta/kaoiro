@@ -18,7 +18,7 @@ Accepted
 ## Context
 
 稼働中の artifact がどの commit 由来かを言う手段が無かった
-([issue #228](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/228))。
+([issue #218](https://github.com/sakuraiyuta/kaoiro/issues/218))。
 server の router に health / version endpoint が無い、`runner` に
 `--version` が無い、`server/Dockerfile` に OCI label が無い、runner の
 register payload に build revision が無い — いずれも欠けていた。
@@ -26,7 +26,7 @@ register payload に build revision が無い — いずれも欠けていた。
 ファイルの mtime を代用に使いかけたが、これは成立しない。`dist`
 ディレクトリの mtime はファイルの追加/削除が無ければ更新されず、実際に
 「3 パッケージが 10 日前のまま」と誤読しかけた事例が
-[issue #227](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/227)
+[issue #217](https://github.com/sakuraiyuta/kaoiro/issues/217)
 の runbook に記録されている(4.5 節)。
 
 既存資産として `scripts/build-runner-tarball.sh` は git short SHA と
@@ -45,7 +45,7 @@ runner のみ追加で `built_at`)を導入する。`revision` と `dirty` が
 identity。
 
 **`built_at` は runner 側のみの診断専用フィールドで、server 側には
-持たせない**(issue #228 round 2 advisory 2, ふじ 差し戻し — 「BuildInfo
+持たせない**(issue #218 round 2 advisory 2, ふじ 差し戻し — 「BuildInfo
 共通 shape」という書き方は runner の `BuildInfo`(TS 型、
 `runner/src/build_info.ts`)を指し、server 側の identity(revision/dirty
 の 2 フィールドのみ)とは別物であることを明記する。混同すると、後続
@@ -54,7 +54,7 @@ identity。
 だけが identity である、という本 ADR の中心的な区別そのものを体現する
 フィールドなので、比較に使えばこの ADR 自身の前提と矛盾する。
 
-**`built_at` も値域検証の対象(issue #228 round 3, ふじ 差し戻し MF-4)。**
+**`built_at` も値域検証の対象(issue #218 round 3, ふじ 差し戻し MF-4)。**
 diagnostic 専用だからといって任意文字列を許容してよいわけではない —
 `generate-build-info.mjs` が書く `new Date().toISOString()` の canonical
 ISO-8601 形式、または `UNKNOWN_BUILD_INFO` の literal `"unknown"` のみを
@@ -64,7 +64,7 @@ ISO-8601 形式、または `UNKNOWN_BUILD_INFO` の literal `"unknown"` のみ�
 
 `git status --porcelain` ベースで判定し、**tracked と untracked の両方**
 を dirty とみなす。`git diff --quiet` は untracked を見ないため、
-issue #227 の実際の作業で untracked ファイルが既存の dirty 判定を
+issue #217 の実際の作業で untracked ファイルが既存の dirty 判定を
 すり抜けた実例がある。
 
 **round 2 の裁定(ふじ 差し戻し、MF-2):** `git status --porcelain`
@@ -75,7 +75,7 @@ degrade する」は「分からないのに大丈夫だと言う」ことにな
 と言う」(unknown への degrade)とは違う。tri-state 化(dirty を
 unknown/true/false の3値にする)は採らない — 状態が
 absent/unknown/dirty-unknown/dirty/clean-mismatch/clean-match まで増え、
-issue #230 の enforcement 設計を複雑にするだけで得るものが無いため。
+issue #220 の enforcement 設計を複雑にするだけで得るものが無いため。
 degrade した理由は診断のためログへ残す(無言で unknown にしない)。
 
 この計算は **repo-level の `scripts/build-identity.mjs` 一箇所だけ**が
@@ -109,9 +109,9 @@ runner は git 無しの tarball としても配布される
 `git rev-parse` を実行できない。加えて repo-direct 運用でも、
 `dist` が古い commit のまま `HEAD` だけ進んでいる状態は普通に起きる —
 起動時に `git rev-parse HEAD` を報告すると、**実際に動いている artifact
-とは無関係な値**を build revision として名乗ってしまう。これは issue #227
+とは無関係な値**を build revision として名乗ってしまう。これは issue #217
 の runbook が指摘した「mtime は成功根拠にならない」と同じ構図で、
-「いつ書かれたか」ではなく「どの commit 由来か」を問う #228 で同じ穴を
+「いつ書かれたか」ではなく「どの commit 由来か」を問う #218 で同じ穴を
 再現してはならない。
 
 よって revision は **build 時**(`pnpm -C runner build` の一部として
@@ -147,7 +147,7 @@ MF-1)。** `ENV` はコンテナ**実行時**に `docker run -e` や
 **この file** を、Mix release が起動時に自動 export する `RELEASE_ROOT`
 環境変数(値そのものではなくファイルの所在を指すだけ)から辿って読む。
 
-**用語について(issue #228 round 3 advisory 2, ふじ 差し戻し):**
+**用語について(issue #218 round 3 advisory 2, ふじ 差し戻し):**
 「immutable」ではなく「image-baked」と呼ぶ。`/app` は `nobody` 所有、
 `build-info.json` は `chown nobody:root` — コンテナ内の実行中 process に
 対する改ざん耐性(tamper-resistance)は無く、attestation でもない。
@@ -157,7 +157,7 @@ MF-1)。** `ENV` はコンテナ**実行時**に `docker run -e` や
 `org.opencontainers.image.*` の予約語彙に無いため project-custom
 label)。round 2 は `build-info.json` へ dirty を焼いたが label 化を
 忘れており、`docker inspect` 経由の provenance 確認(deployment.md 4.5)
-から dirty が見えなかった(issue #228 round 3 MF-1)。
+から dirty が見えなかった(issue #218 round 3 MF-1)。
 
 `mix phx.server` のローカル起動(Docker を介さない開発時)では
 `RELEASE_ROOT` 自体が未設定のため `"unknown"` を返す。git フォールバックは
@@ -176,7 +176,7 @@ git SHA」のみを正とする値域とし、`KaoiroServer.BuildIdentity` に�
 (`build_info.ts`)は言語境界をまたぐため同じ正規表現を独立に複製するが、
 「同じ値域」という取り決め自体は 3 言語で統一する。
 
-`register` の `build_revision` / `build_dirty` は「両方省略」(pre-#228
+`register` の `build_revision` / `build_dirty` は「両方省略」(pre-#218
 runner との互換)または「両方提示」のいずれかのみを正とし、片方だけの
 提示は register 全体を reject する(型崩れ・値域外と同じ扱い — この
 reject は SHA の値そのものへの enforcement ではなく、構造検証)。
@@ -193,7 +193,7 @@ reject は SHA の値そのものへの enforcement ではなく、構造検証)
 「runner の `build_revision` が absent」と「server 側の health 取得に
 失敗」の2状態を**無言で警告なし**にしていた — これは「一致している」と
 見分けが付かず、「signal が無い」こと自体を operator へ正直に見せる
-という #228 の目的に反していた。round 2 では absent / runner unknown /
+という #218 の目的に反していた。round 2 では absent / runner unknown /
 server 取得失敗 / server unknown / mismatch / dirty のそれぞれを個別の
 文言で表示し、**一致かつ clean のときだけ**無警告にする。
 
@@ -244,15 +244,15 @@ postcondition として扱う(既に接続済みの runner と server が異な�
 capabilities を別に持つ。ADR-0015 の `version=0` warn-and-accept を
 artifact SHA の代用にしない。
 
-`"unknown"` / dirty を拒否する enforcement は本 ADR / #228 のスコープに
+`"unknown"` / dirty を拒否する enforcement は本 ADR / #218 のスコープに
 含めない — identity の導入と、それを使った enforcement は分ける
-([issue #230](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/230)
-のスコープ)。#228 に enforcement を混ぜると、dev 環境で server が
+([issue #220](https://github.com/sakuraiyuta/kaoiro/issues/220)
+のスコープ)。#218 に enforcement を混ぜると、dev 環境で server が
 起動しなくなるリスクを抱える。
 
 ## Consequences
 
-- runbook (issue #227, `docs/specs/deployment.md` 4.5) の「証明できない
+- runbook (issue #217, `docs/specs/deployment.md` 4.5) の「証明できない
   こと」節は、full SHA を返す health endpoint と runner の register 情報
   による確認へ置換された。
 - `scripts/build-runner-tarball.sh` の VERSION ファイルは full SHA 化され、
@@ -263,7 +263,7 @@ artifact SHA の代用にしない。
   `"unknown"` / `false` として observable になるだけで、build 自体は
   失敗しない。
 - `unknown` / dirty の enforcement(production build の拒否ロジック)は
-  意図的に本 issue に含めていない — 別 issue (#230) の責務として残る
+  意図的に本 issue に含めていない — 別 issue (#220) の責務として残る
   未解決事項。
 - round 2(ふじ 差し戻し)で以下を修正: server の identity を ENV から
   image 内 image-baked file へ(MF-1)、dirty 判定失敗時の degrade 範囲

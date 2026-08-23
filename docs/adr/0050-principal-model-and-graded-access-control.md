@@ -14,23 +14,23 @@ related_adrs: [7, 13, 21, 24, 28, 30, 33, 42]
 ## Status
 
 Accepted (2026-08-11、マスター決裁により `proposed` から昇格。Phase A
-(identity 化)が [issue #197](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/197)
+(identity 化)が [issue #187](https://github.com/sakuraiyuta/kaoiro/issues/187)
 で実装完了したことによる)。
-実装 issue は [#197](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/197)
+実装 issue は [#187](https://github.com/sakuraiyuta/kaoiro/issues/187)
 (identity 化、実装完了) /
-[#198](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/198)
+[#188](https://github.com/sakuraiyuta/kaoiro/issues/188)
 (admin role) /
-[#199](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/199)
+[#189](https://github.com/sakuraiyuta/kaoiro/issues/189)
 (per-pair 権限) /
-[#200](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/200)
+[#190](https://github.com/sakuraiyuta/kaoiro/issues/190)
 (永続化基盤) /
-[#201](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/201)
+[#191](https://github.com/sakuraiyuta/kaoiro/issues/191)
 (グラフ編集ツール)。
 
-Phase B 以降(#198-#201)の着手前に決めるべき論点 —— ADR-0021 を改訂
-するか supersede するか(#198)、agent→agent edge の既定(#199、加算
+Phase B 以降(#188-#191)の着手前に決めるべき論点 —— ADR-0021 を改訂
+するか supersede するか(#188)、agent→agent edge の既定(#189、加算
 モデルを素朴に適用すると inter-agent messaging が全面停止する)、スト
-アを DETS で足すか SQLite を導入するか(#200)—— は各 issue の着手時に
+アを DETS で足すか SQLite を導入するか(#190)—— は各 issue の着手時に
 個別に決着させる。
 
 ## Context
@@ -91,15 +91,15 @@ kaoiro の認可は 2 role (operator / viewer) 固定で、operator は実質無
 - `kind` は wire 上の必須フィールドとする。agent が peer の人間 / AI を
   判別できないと、受信メッセージに authority があるかを判定できない
 - id 空間は単一。既存 charset `[A-Za-z0-9._-]`
-  ([#61](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/61)) を守る
+  ([#61](https://github.com/sakuraiyuta/kaoiro/issues/61)) を守る
 - **`kind` は id から derive しない**。store の属性として持つ。id の
   prefix に意味を持たせると、偽装がそのまま権限判定に効く
 
-**実装状況**: user 側は issue #197 段階2 で `%{id, kind, display_name,
-role}` として実装済み。agent 側は issue #197 時点では `persona.name` で
+**実装状況**: user 側は issue #187 段階2 で `%{id, kind, display_name,
+role}` として実装済み。agent 側は issue #187 時点では `persona.name` で
 `display_name` を代用しており(ADR-0030 D2 の暫定 carve-out)、`Principal`
 抽象が agent 側では実現していなかった。
-[issue #219](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/219)
+[issue #209](https://github.com/sakuraiyuta/kaoiro/issues/209)
 で agent にも `persona`(pack 由来、session 中不変)から独立した
 `display_name` フィールドが実装され、`Principal` (`id` / `kind` /
 `display_name`) が user / agent 双方で本来の形どおり成立するように
@@ -218,10 +218,10 @@ per-pair 権限は **両経路が同じ権限テーブルを引く**構造とす
 
 | Phase | 内容 | 対応 issue |
 |---|---|---|
-| A | identity 化 + admin role。認可 SoT はテキストのまま | #197 / #198 |
-| B-1 | ストア + per-pair 権限の**振る舞いを同時に投入** | #199 / #200 |
-| B-2 | ブートストラップ経路で edge を手書き投入し、振る舞いを検証 | #199 |
-| C | グラフ編集ツール | #201 |
+| A | identity 化 + admin role。認可 SoT はテキストのまま | #187 / #188 |
+| B-1 | ストア + per-pair 権限の**振る舞いを同時に投入** | #189 / #190 |
+| B-2 | ブートストラップ経路で edge を手書き投入し、振る舞いを検証 | #189 |
+| C | グラフ編集ツール | #191 |
 
 **振る舞いを B-1 でストアと同時に入れる**のが要点。編集ツールを先に
 作って振る舞いを後回しにすると、編集ツールが何を編集しているのかを
@@ -234,7 +234,7 @@ enforce のない設定 UI は「設定したつもりで効いていない」�
 実運用価値が既に得られる。
 
 **Phase B では OAuthAllowlistWatcher の watcher 機構を移行する。**
-[#170](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/170) は
+[#160](https://github.com/sakuraiyuta/kaoiro/issues/160) は
 2026-08-05 に完了済み (commit `2d64000` / `8ef15fc`) で、許可リストの
 テキストファイルを認可 SoT として file_system イベント + periodic
 reconcile で watch する。構造化ストアへ移すとこの前提が変わるため、
@@ -262,8 +262,8 @@ spawn 時には edge も自動で増えるため)。
 「誰がいつ誰に何の edge を引いたか」を監査証跡として永続化する。加算
 モデルで権限を厳密にしても、権限変更そのものが追跡できなければ意味が
 ない。auth-and-authz.md の Known gaps にある監査ログ
-([#156](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/156)) と
-合流する領域であり、統合するか分担するかは #200 で決める。
+([#146](https://github.com/sakuraiyuta/kaoiro/issues/146)) と
+合流する領域であり、統合するか分担するかは #190 で決める。
 
 ## Future work (本 ADR では決めない)
 
@@ -292,13 +292,13 @@ spawn 時には edge も自動で増えるため)。
 ### Negative
 
 - **ADR-0021 F1 を覆す。** 同 ADR の改訂または supersede が必要 (どちらに
-  するかは #198 で決定)。F3 / F4 / F6 も広範な書き換えが要る
+  するかは #188 で決定)。F3 / F4 / F6 も広範な書き換えが要る
 - 実装コストが大きい。特に per-pair 判定への移行 (`require_operator/1` を
   通る operator-only inbound 約 22 種の分類)、`sanitize_envelope_for/2` の
   fan-out hot path 変更、独立クライアントの新規開発
 - 加算モデルは agent の動的生成と相性が悪く、D4 の所有者概念で補わないと
-  運用が成立しない。agent→agent edge の既定は未解決 (#199)
-- 実装済みの OAuthAllowlistWatcher (#170) が前提とする「テキストファイルが
+  運用が成立しない。agent→agent edge の既定は未解決 (#189)
+- 実装済みの OAuthAllowlistWatcher (#160) が前提とする「テキストファイルが
   認可 SoT」が Phase B で変わり、watcher 機構の移行が要る
 
 ### Neutral
@@ -333,11 +333,11 @@ spawn 時には edge も自動で増えるため)。
   [0028](0028-external-human-messaging.md) (一方向 authority、経路分離の
   前例 → D1 / D5)、
   [0030](0030-agent-directory-and-explicit-restore.md) (AgentDirectory、
-  永続対象の決定 → #200 の未解決事項)、
+  永続対象の決定 → #190 の未解決事項)、
   [0033](0033-permission-model-dual-axis.md) (dual-axis → D3 の合成規則)、
   [0042](0042-oauth-allowlist-login.md) (**Out of scope 記述を撤回**)
-- 関連 issue: #197 / #198 / #199 / #200 / #201 (実装)、
-  [#156](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/156)
+- 関連 issue: #187 / #188 / #189 / #190 / #191 (実装)、
+  [#146](https://github.com/sakuraiyuta/kaoiro/issues/146)
   (監査ログ)、
-  [#170](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/170)
+  [#160](https://github.com/sakuraiyuta/kaoiro/issues/160)
   (認可 SoT の watcher、実装済み・Phase B で移行対象)

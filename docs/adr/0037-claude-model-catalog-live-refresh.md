@@ -203,7 +203,7 @@ canonical ID が pre-init `Options.model` と live `Query.setModel()` の双方�
 [agent-sdk-events](../specs/agent-sdk-events.md)。LaunchDialog への canonical
 表示は精度差 (register 経路は last-known-good cache が持つ最後に成功した
 probe 時点値で、TTL 超過後も据え置かれうる) を理由に対象外とし、Gitea
-[issue #176](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/176)
+[issue #166](https://github.com/sakuraiyuta/kaoiro/issues/166)
 へ外部化した。
 
 ## Consequences

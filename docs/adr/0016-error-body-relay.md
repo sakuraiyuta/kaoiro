@@ -43,7 +43,7 @@ catch せず、落ちると `cli.ts` の catch が stderr に出すだけ。`res
 **decision が指定した field 形はそのまま実装されなかった**。
 
 - `error_message` という field はコードベースに存在したことがない。実装は
-  issue #127 で `result` payload に `error_subtype` と `error_detail` の
+  issue #123 で `result` payload に `error_subtype` と `error_detail` の
   2 field を追加する形になった。UI がエラー種別で分岐できるよう、SDK の
   終了 subtype (`error_max_turns` / `error_during_execution` /
   `error_max_budget_usd` / `error_max_structured_output_retries`) を

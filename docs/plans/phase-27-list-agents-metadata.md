@@ -1,5 +1,5 @@
 ---
-title: Phase 27 — list_agents に状況判断メタデータを追加 (issue #160)
+title: Phase 27 — list_agents に状況判断メタデータを追加 (issue #150)
 description: MCP list_agents (directory_request) の peer entry に 6 field (残コンテキスト / セッション開始日時 / turn 数 / 最終活動時刻 / IA 対話状況 / rate_limits) を追加し、agent が委任先選定・割り込み回避・停滞検知を自律判断できるようにする。取得は server が envelope から蓄積した snapshot で完結し、初版は in-memory (session 開始日時のみ SessionStarts DETS を fallback 参照)。
 status: done
 phase: 27
@@ -11,7 +11,7 @@ last_updated: 2026-07-28
 
 ## Goal
 
-[issue #160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160)
+[issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150)
 を実装する。`mcp__kaoiro__list_agents` が返す peer entry に稼働状況
 6 field を追加し、エージェントが operator の介在なしに
 
@@ -21,20 +21,20 @@ last_updated: 2026-07-28
 - 対話中の peer への割り込みを控える
 
 を判断できるようにする。設計判断はマスター決裁済み
-(#160 issuecomment-2211 / -2213)。本 plan はその決定を実装可能な粒度に
+(#150 issuecomment-5384364147 / -5384364216)。本 plan はその決定を実装可能な粒度に
 落としたもので、決定そのものは変更しない。
 
 ## 確定済み前提 (変更禁止)
 
 | # | 決定 | 出典 |
 |---|---|---|
-| P1 | 取得方式は server が envelope から蓄積した snapshot。wrapper への都度照会はしない | #160 comment-2211 (1) |
+| P1 | 取得方式は server が envelope から蓄積した snapshot。wrapper への都度照会はしない | #150 comment-5384364147 (1) |
 | P2 | turn 数 (応答往復数) も server 側で envelope から導出 | 同 (2) |
 | P3 | 初版は永続化なし (in-memory、server 再起動でリセット許容)。セッション開始日時のみ既存 `session_starts` DETS の流用可否を調査 | 同 (3) |
 | P4 | IA 対話状況は「active な会話の有無 + 相手 agent_id 一覧」まで agent 間に開示。ADR-0021 に agent 間開示の節を追記 | 同 (4) |
-| P5 | 追加 field は 6 つ (残コンテキスト / セッション開始日時 / turn 数 / 最終活動時刻 / IA 対話状況 / rate_limits) | #160 本文 + comment-2213 |
+| P5 | 追加 field は 6 つ (残コンテキスト / セッション開始日時 / turn 数 / 最終活動時刻 / IA 対話状況 / rate_limits) | #150 本文 + comment-5384364216 |
 
-## 現行実装経路の調査結果 (#160 明記事項 e)
+## 現行実装経路の調査結果 (#150 明記事項 e)
 
 `list_agents` は wrapper のローカル MCP tool で、実体は server への
 `directory_request` 1 往復である。
@@ -92,7 +92,7 @@ primary source にはしない」**。
 |---|---|---|
 | カバー率 | `advance_transition/2` は `prior != nil and prior != new_sid` のときだけ発火 (`wrapper_channel.ex maybe_advance_session_boundary/2`) と、`SessionResets` の /clear・/new 経路のみ | **初回 spawn の agent には record が無い**。primary にすると新規 agent で常に欠損 |
 | 意味 | `display` は「server が遷移を認識した時刻」。resume で同一 sid なら advance しないため、現セッションの開始時刻として整合的 | 意味論は流用可能 |
-| 副作用 | record は `IngressOrder` を消費し、#109 clear watermark / #105 IA filtering の boundary order に効く | **書き込みを増やす改修は禁止**。read-only 参照に留める |
+| 副作用 | record は `IngressOrder` を消費し、#106 clear watermark / #102 IA filtering の boundary order に効く | **書き込みを増やす改修は禁止**。read-only 参照に留める |
 | 永続性 | DETS なので server 再起動を跨いで残る | in-memory tracker が失う情報を埋められる |
 
 よって設計は hybrid とする (下記 D3)。in-memory tracker が
@@ -145,7 +145,7 @@ primary source にはしない」**。
 | `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | 最終 turn 時点の利用上限 snapshot。window は `five_hour` / `seven_day` ほか engine 固有 | 未報告 engine / セッション、shape 不正、切断済みでは省略 |
 
 `context` / `rate_limits` の **数値は換算しない**。残量や残り時間へ変換
-すると dashboard 表示と値がずれ、#160 受け入れ基準「dashboard 側の表示と
+すると dashboard 表示と値がずれ、#150 受け入れ基準「dashboard 側の表示と
 矛盾しない」を破る。残量の解釈 (100 − `used_percentage`) は model に
 委ねる。
 
@@ -358,7 +358,7 @@ field が省略されたら黙って機能を落とす、という本 phase 全�
   発火しない) ため、L1 が無いと新規 agent の `session_started_at` /
   `turns` が永久に省略される。
 - L3 が必要な理由: 通常の restore は **同一 SDK session_id を resume**
-  するため、L4 (sid 変化) も L2 (SessionResets) も発火しない。#160 本文
+  するため、L4 (sid 変化) も L2 (SessionResets) も発火しない。#150 本文
   の「restore でリセット」を満たすには、server がコマンドを出した時点で
   pending を作る必要がある。
 
@@ -687,13 +687,13 @@ latest envelope から `context` / `rate_limits` が消え、両 field が省略
 presence-driven にできない理由: rolling upgrade 中の **旧 Claude
 wrapper** は `ext.context` を stamp するが capability field を持たない。
 dashboard は ADR-0040 D1 に従い capability absent で ctx 行を
-**隠す** ため、presence-driven だと list_agents だけが値を公開し、#160
+**隠す** ため、presence-driven だと list_agents だけが値を公開し、#150
 受け入れ基準「dashboard 側の表示と矛盾しない」を破る。3-state
 (absent / false / true) の解釈を dashboard と揃える。
 
 capability field 自体は peer に開示しない (F6-4 の deny 集合に
 `session_capabilities` を残す)。gate の入力に使うだけである。`null` や
-推定値を代入しないことは従来どおり (ADR-0040 D1/D3 踏襲、#160 明記事項
+推定値を代入しないことは従来どおり (ADR-0040 D1/D3 踏襲、#150 明記事項
 b)。
 
 #### projection / validation (MUST)
@@ -740,7 +740,7 @@ window key だけを peer に見せない)。
 
 - 数値の **換算はしない** (D1)。projection は「写す key を絞る」操作
   であって値の加工ではない。`utilization` を 0..1 に強制するかは
-  [#164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164) で
+  [#154](https://github.com/sakuraiyuta/kaoiro/issues/154) で
   実データを確認してから判断する (現状は range 検査を **入れない**)。
 - **malformed は top-level field 単位で drop し、valid な sibling は
   残す**。例: `context` が壊れていても `rate_limits` は載る。
@@ -756,7 +756,7 @@ window key だけを peer に見せない)。
   rate-limit する。黙って落とさないことと、ログを溢れさせないことを
   両立させる。
 
-#### `resets_at` 経過時の解釈規約 (#160 明記事項 c)
+#### `resets_at` 経過時の解釈規約 (#150 明記事項 c)
 
 `rate_limits` は **当該 peer の最終 turn 時点の snapshot** であり、
 idle 中は更新されない。したがって:
@@ -774,8 +774,8 @@ idle 中は更新されない。したがって:
   時計と engine 側の窓境界がずれた場合に「上限に達しているのに空に
   見える」という危険側の誤りを生むため。
 - **dashboard 側の同等対応は本 phase の scope 外。**
-  [#164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164) へ
-  委譲する (クロエが #164 に scope 追記)。本 plan と spec は dashboard が
+  [#154](https://github.com/sakuraiyuta/kaoiro/issues/154) へ
+  委譲する (クロエが #154 に scope 追記)。本 plan と spec は dashboard が
   既に実装済みであるかのように書かない。
 - SHOULD: `last_activity_at` が古い peer の `rate_limits` は、その分だけ
   古い情報であると解釈する。両 field を並べて返すのはこのため。
@@ -821,7 +821,7 @@ def peer_index(server \\ __MODULE__)
   「省略 = 不明」とする理由がない。旧 server では field ごと absent に
   なるので、消費側は absent と `active: false` を区別できる。
 
-### D6. 後方互換 (#160 明記事項 a)
+### D6. 後方互換 (#150 明記事項 a)
 
 - 既存 field は一切変更しない。追加のみ。`version` 据え置き
   (ADR-0010 / ADR-0015 の未知キー追加規約)。
@@ -836,7 +836,7 @@ def peer_index(server \\ __MODULE__)
 ### D7. `DirectoryEntry` 型の置き場所
 
 現在 `DirectoryEntry` は `@kaoiro/wrapper-core`
-(`wrapper/core/src/transport.ts`) にある。#160 本文の「共有型は
+(`wrapper/core/src/transport.ts`) にある。#150 本文の「共有型は
 `@kaoiro/protocol` に追加する」は、この現状を踏まえると
 **移動を伴う**。本 phase では移動しない:
 
@@ -857,8 +857,8 @@ def peer_index(server \\ __MODULE__)
 
 | doc | 差分方針 |
 |---|---|
-| `docs/specs/protocol-inter-agent.md` | 主戦場。「peer directory の情報境界 (#102)」節を 6 field 追加に合わせて書き直し、除外リストから `context` / `rate_limit` を外す。`directory_request` 行の entry shape を更新。コンパニオンツール表の `list_agents` 用途説明を更新。`conversation` の常時同梱 (D5) を Constraints に MUST として追加。`resets_at` 解釈規約 (D4) は **消費側 agent の MUST** として書き、deterministic に強制される仕組みではない旨も併記する (dashboard が実装済みと読める書き方をしない、#164 へ委譲)。`ext` からの projection 規約 (canonical key のみ、未知 nested key 非開示) を情報境界節に明記。`session_started_at` / `last_activity_at` は「**server が観測した時刻**」であり wrapper 実測値ではないと定義を明記する (裁定 O3) |
-| `docs/specs/protocol.md` | `directory_request` 行にあった #102 (`engine`/`model`/`effort`) の drift は **設計時 (a9688bd) に修正済み**。本 phase では同じ行を 6 field 込みの shape へ更新し、詳細は protocol-inter-agent へのポインタに寄せる (重複記述を作らない) |
+| `docs/specs/protocol-inter-agent.md` | 主戦場。「peer directory の情報境界 (#99)」節を 6 field 追加に合わせて書き直し、除外リストから `context` / `rate_limit` を外す。`directory_request` 行の entry shape を更新。コンパニオンツール表の `list_agents` 用途説明を更新。`conversation` の常時同梱 (D5) を Constraints に MUST として追加。`resets_at` 解釈規約 (D4) は **消費側 agent の MUST** として書き、deterministic に強制される仕組みではない旨も併記する (dashboard が実装済みと読める書き方をしない、#154 へ委譲)。`ext` からの projection 規約 (canonical key のみ、未知 nested key 非開示) を情報境界節に明記。`session_started_at` / `last_activity_at` は「**server が観測した時刻**」であり wrapper 実測値ではないと定義を明記する (裁定 O3) |
+| `docs/specs/protocol.md` | `directory_request` 行にあった #99 (`engine`/`model`/`effort`) の drift は **設計時 (a9688bd) に修正済み**。本 phase では同じ行を 6 field 込みの shape へ更新し、詳細は protocol-inter-agent へのポインタに寄せる (重複記述を作らない) |
 | `docs/specs/threat-model.md` | 緩和策表と Constraints は viewer/operator 軸のまま。agent 間開示という第 3 の軸が入ったことを 1 行追記し、ADR-0021 の新節を参照させる |
 | `docs/adr/0021-role-information-disclosure-policy.md` | F6「agent 間開示 (peer directory)」を追記。詳細は下記 |
 
@@ -877,7 +877,7 @@ accepted ADR に先行して載せると status が drift するため。
 > ### F6: agent 間開示 (peer directory)
 >
 > F1〜F5 は client (dashboard) 向けの `agents:lobby` 配信を対象とする。
-> [issue #160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160)
+> [issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150)
 > で agent が peer の稼働状況を読んで委任判断を行う要求が生じたため、
 > **第 3 の開示主体として `agent` を定義する**。
 >
@@ -898,7 +898,7 @@ accepted ADR に先行して載せると status が drift するため。
 > `persona{id, name, sprite_set}` / `state` / `engine` / `model` /
 > `effort` / `context` / `session_started_at` / `turns` /
 > `last_activity_at` / `conversation` / `rate_limits`。
-> 後半 6 field は #160 (phase-27) で追加。
+> 後半 6 field は #150 (phase-27) で追加。
 >
 > **F6-4 — 明示 deny (継続除外)**: `cwd`、`permission` (`sandbox` /
 > `approval`)、`permission_mode` / `fast_mode`、`session_id`、
@@ -912,9 +912,9 @@ accepted ADR に先行して載せると status が drift するため。
 >
 > **F6-5 — `conversation` は相手 `agent_id` までを開示し、
 > `conversation_id` は開示しない。** 開示範囲として決定されたのが
-> 「active な会話の有無 + 相手 agent_id 一覧」(#160 決定 4) であり、
+> 「active な会話の有無 + 相手 agent_id 一覧」(#150 決定 4) であり、
 > 識別子はその範囲を超えるため。範囲外だから出さないという判断であって、
-> [#17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17) の
+> [#17](https://github.com/sakuraiyuta/kaoiro/issues/17) の
 > conversation_id 機密性についてここで結論を出したわけではない。信頼
 > 境界そのものの再評価は F6-6 の将来項目に含める。
 >
@@ -922,7 +922,7 @@ accepted ADR に先行して載せると status が drift するため。
 > 配下の閉じた系であり、peer は同一の人間が起動した agent に限られる。
 > 稼働状況の相互可視化による露出リスクは小さく、operator 介在の削減
 > という便益が上回る。外部 inbound
-> ([#98](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/98))
+> ([#95](https://github.com/sakuraiyuta/kaoiro/issues/95))
 > 導入時、または agent 間の信頼境界が operator 単位でなくなった時点で
 > 本節を再評価する。
 >
@@ -962,7 +962,7 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 | Task | 内容 | 主な path |
 |---|---|---|
 | 27-B1 | `DirectoryEntry` に 6 field を optional 追加 (D1/D7)。JSDoc に欠損規約 (省略 = 不明、`null` は出さない、`turns` 省略を 0 と読まない) を明記 | `wrapper/core/src/transport.ts` |
-| 27-B2 | `directoryEntryFrom` の narrow 拡張。**server と同じ projection 規約・同じ上限値を適用する** (D4): canonical key のみ採用、未知 nested key は写さない、malformed は top-level field 単位で drop して valid な sibling は残す。数値は **有限かつ `Math.abs(x) <= Number.MAX_SAFE_INTEGER`**、`resets_at` は非負の safe integer (`Number.isSafeInteger` + `>= 0`)、`status` は **UTF-8 64 bytes 以下**、window key は長さ ≤ 32 / charset、window 数 ≤ 8 (canonical 優先 + lexical)、empty window は drop。`conversation` は `{active: boolean, peers: string[]}`。`utilization` の 0..1 range 検査は **入れない** (#164 の実データ確認後に判断、と JSDoc に注記) | `wrapper/core/src/transport.ts` |
+| 27-B2 | `directoryEntryFrom` の narrow 拡張。**server と同じ projection 規約・同じ上限値を適用する** (D4): canonical key のみ採用、未知 nested key は写さない、malformed は top-level field 単位で drop して valid な sibling は残す。数値は **有限かつ `Math.abs(x) <= Number.MAX_SAFE_INTEGER`**、`resets_at` は非負の safe integer (`Number.isSafeInteger` + `>= 0`)、`status` は **UTF-8 64 bytes 以下**、window key は長さ ≤ 32 / charset、window 数 ≤ 8 (canonical 優先 + lexical)、empty window は drop。`conversation` は `{active: boolean, peers: string[]}`。`utilization` の 0..1 range 検査は **入れない** (#154 の実データ確認後に判断、と JSDoc に注記) | `wrapper/core/src/transport.ts` |
 | 27-B3 | `LIST_AGENTS_DESCRIPTION` を更新。追加 field の意味と、model が取るべき判断を記述: 残 context 逼迫 peer に重い委任をしない / **`resets_at` (Unix 秒) を現在時刻と比較し、過去なら `utilization`・`status` を信用しない** (D4 の MUST、owner は agent 側) / `conversation.active` な peer への割り込みを控える / `last_activity_at` が古い peer は停滞を疑う。**省略された field を「0」や「問題なし」と読まない** ことも明記 | `wrapper/agent-common/src/inter_agent.ts` |
 | 27-B4 | テスト: `transport.test.ts` に narrow の正常系・malformed top-level のみ drop・valid sibling 保持・未知 nested key 非開示・`status` 64 bytes 超過 drop・window 数超過時の canonical 優先 + lexical、`inter_agent.test.ts` に list_agents 結果が新 field を欠落なく model へ渡すことの検査 | `wrapper/core/test/**`, `wrapper/agent-common/test/**` |
 | 27-B5 | **MF-C1 の相関子 (additive)**。`protocol/src/index.ts` の `SpawnMessage` / `SwitchSessionMessage` に `request_id?`、`SpawnResult` に `request_id?`、`WrapperConfig` に相関子 field を追加 (すべて optional、JSDoc に「absent なら server 側は activate せず degrade する」と明記)。runner は受け取った相関子を wrapper config へ伝播し、`spawn_result` に verbatim echo する。wrapper は join params に `transition_id` として載せる。旧 runner / 旧 wrapper との後方互換 (absent) を test で固定 | `protocol/src/index.ts`, `runner/**`, `wrapper/core/src/transport.ts` |
@@ -1002,7 +1002,7 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 | 27-B5 | ✅ | MF-C1 相関子 (protocol additive + runner 伝播 + join params) |
 | 27-C1 | ✅ | ADR-0021 F6 追記 |
 | 27-C2 | ✅ | `protocol-inter-agent.md` 更新 |
-| 27-C3 | ✅ | `protocol.md` の entry shape を 6 field 込みへ更新 (#102 drift は設計時に先行修正済み)、`threat-model.md` に agent 間開示軸を緩和策表 + Constraints へ追記 |
+| 27-C3 | ✅ | `protocol.md` の entry shape を 6 field 込みへ更新 (#99 drift は設計時に先行修正済み)、`threat-model.md` に agent 間開示軸を緩和策表 + Constraints へ追記 |
 | 27-C4 | ✅ | Progress 表・README・frontmatter を最終化 (ふじ approve / close 後) |
 
 ## Acceptance Criteria
@@ -1181,7 +1181,7 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 - [ ] 旧 wrapper (narrow 未更新) が新 server に `directory_request` を
       投げても entry が壊れず、既存 field で従来どおり動作する
 - [ ] `context` / `rate_limits` の数値が dashboard の ctx meter /
-      rate 行と一致する (#160 受け入れ基準)
+      rate 行と一致する (#150 受け入れ基準)
 - [ ] `list_agents` 1 回あたり `ConversationStates` への call が 1 回
       (peer 数に比例しない、A1)
 - [ ] ADR-0021 に F6 が追記され、明示 deny 集合が列挙されている
@@ -1200,14 +1200,14 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 - dashboard 側の表示追加。本 phase は agent 間 wire のみ。
 - **dashboard 側の `resets_at` 経過判定**。D4 の MUST は peer-directory
   の消費側 (agent) に限定し、dashboard の同等対応は
-  [#164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164) へ
+  [#154](https://github.com/sakuraiyuta/kaoiro/issues/154) へ
   委譲する。
 
 ## Risks / 注意
 
 | 項目 | 内容 |
 |---|---|
-| #164 との依存 | [#164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164) (claude 5h が常に 0% / claude 7day 未表示 / codex 7day 非表示) は **同一データ源**。#164 未修正のまま本 phase を検収すると `rate_limits` の受け入れ検証ができない。#164 の修正完了を検収の前提とする |
+| #154 との依存 | [#154](https://github.com/sakuraiyuta/kaoiro/issues/154) (claude 5h が常に 0% / claude 7day 未表示 / codex 7day 非表示) は **同一データ源**。#154 未修正のまま本 phase を検収すると `rate_limits` の受け入れ検証ができない。#154 の修正完了を検収の前提とする |
 | 計測の hot path | `record_envelope/3` は全 envelope 受理で走る。GenServer call を毎回張ると ingest がボトルネックになりうる。`AgentDirectory.touch/1` と同じく **cast** で実装し、read 側 (`directory_request`) と lifecycle hook だけ call にする (G3)。cast による staleness は G2 の session 一致検査で一時欠損に閉じ込める |
 | auto-allow 経路の負荷 | `list_agents` は broker 承認を経ない auto-allow tool なので model が自由に叩ける。`ConversationStates` への問い合わせを peer 数に比例させると、routing 用 GenServer を塞いで inter-agent messaging 全体を止めうる。**directory 1 回につき call 1 回** の batch API に固定する (D5) |
 | tracker の上限 | `AgentStates` と同じく agent 数上限を持たせる。未認証 wrapper が捏造 agent_id で map を膨らませる経路を塞ぐ |
@@ -1221,7 +1221,7 @@ server (Elixir) と wrapper/protocol (TS) で path が重ならないよう分�
 
 | # | 論点 | 裁定 |
 |---|---|---|
-| O1 | #160 本文の「共有型は `@kaoiro/protocol` に追加」と現状 (`DirectoryEntry` は `wrapper-core` 在) の食い違い | **本 phase は `wrapper-core` 拡張に留める** (D7 のとおり)。`@kaoiro/protocol` への移設は別 issue 化 (クロエが起票)。Track B の工数は現行見積のまま |
+| O1 | #150 本文の「共有型は `@kaoiro/protocol` に追加」と現状 (`DirectoryEntry` は `wrapper-core` 在) の食い違い | **本 phase は `wrapper-core` 拡張に留める** (D7 のとおり)。`@kaoiro/protocol` への移設は別 issue 化 (クロエが起票)。Track B の工数は現行見積のまま |
 | O2 | `turns` の省略条件 (D3)。再起動後は `last_activity_at` だけ出て `turns` が無い状態が発生する | **observed するまで省略**。「0」と偽るより欠落が正しい。数値の連続性より正確さを優先 |
 | O3 | `session_started_at` の fallback (`SessionStarts.display`) は wrapper のセッション開始時刻と厳密には一致しない | **許容**。ただし spec (27-C2) に「**server が遷移を観測した時刻**」と定義を明記すること。実測値ではないと読み手が判別できる形にする |
 
@@ -1261,7 +1261,7 @@ advisory 4 件を反映した。
 | MF-A | `awaiting_sid` 方式では旧 connection の envelope 混入を排除できない (live resume の kill 待ち窓、same-sid resume での永久残留、遅延 cast による巻き戻し) | D3「owner generation による connection 束縛」新設、lifecycle を pending / activate 方式へ全面改訂 (L0 追加、L1〜L3 は pending 作成に変更)、「遷移の失敗 / 未達」表を新設、G4 を追加、AC「owner 束縛と遷移 transaction」、27-A1 / 27-A3 / 27-A5 |
 | MF-B | `rate_limits` の値側 bound 不足 (`status` unbounded による response amplification)、window 数超過時の非決定性、log amplification | D4「projection / validation」の表と規約を改訂 (`status` ≤ 64 bytes、canonical 優先 + lexical、empty window drop、ログ集約)、AC「projection / validation」、27-B2 |
 | Ad1 | `permission_request` / `question_request` は `ext` を持たないため waiting 中に `context` / `rate_limits` が消える (**裁定: 初版は許容 + 明記**) | D4 冒頭「既知の一時欠損」、AC「欠損規約 / 並行性」 |
-| Ad2 | TS narrow の数値検査を pin (`Number.isFinite` / 非負 safe integer)。`utilization` の range 強制は #164 の実データ確認後 | D4 の projection 表、27-B2 |
+| Ad2 | TS narrow の数値検査を pin (`Number.isFinite` / 非負 safe integer)。`utilization` の range 強制は #154 の実データ確認後 | D4 の projection 表、27-B2 |
 | Ad3 | References の #17 説明を P4 開示範囲外の整理に合わせる | References |
 | Ad4 | D7 末尾の「→ Open items O1」と影響範囲表の「既に drift している」を現状へ | D7、影響範囲表 |
 
@@ -1379,11 +1379,11 @@ join params を再送する正当な reconnect まで計測を失う。実装方
 
 ## References
 
-- [issue #160](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/160)
-  — 本 phase の起点。決定は comment-2211 / -2213
-- [issue #164](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/164)
+- [issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150)
+  — 本 phase の起点。決定は comment-5384364147 / -5384364216
+- [issue #154](https://github.com/sakuraiyuta/kaoiro/issues/154)
   — rate_limits 表示不具合 (同一データ源、検収の前提)
-- [issue #17](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/17)
+- [issue #17](https://github.com/sakuraiyuta/kaoiro/issues/17)
   — inter-agent messaging の起点。`conversation_id` は P4 が定めた開示
   範囲を超えるため本 phase では非開示 (機密性そのものの判断は行わない)
 - [ADR-0040](../adr/0040-context-usage-capability.md) — capability driven
@@ -1394,6 +1394,6 @@ join params を再送する正当な reconnect まで計測を失う。実装方
   [ADR-0015](../adr/0015-protocol-version-stamping.md) — 未知キー追加と
   version 据え置きの規約
 - [protocol-inter-agent](../specs/protocol-inter-agent.md) — peer
-  directory の情報境界 (#102)
+  directory の情報境界 (#99)
 - [phase-8-inter-agent-messaging](phase-8-inter-agent-messaging.md) —
   directory_request の初出

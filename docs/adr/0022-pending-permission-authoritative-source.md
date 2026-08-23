@@ -174,6 +174,6 @@ helper は `pendingPermissionFrom` へ役割を移し、AgentDetail.svelte 等�
   本 ADR で更新)、[0012](0012-response-display-and-dashboard-scope.md)
   (protocol = 真実の単一ソース原則)、[0021](0021-role-information-disclosure-policy.md)
   (viewer 漏洩を allow-list で守る基盤)。
-- 由来: [issue #59](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/59)。
-  関連 follow-up: [#60](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/60)
+- 由来: [issue #59](https://github.com/sakuraiyuta/kaoiro/issues/59)。
+  関連 follow-up: [#60](https://github.com/sakuraiyuta/kaoiro/issues/60)
   (broker timeout の設定項目化、低優先)。

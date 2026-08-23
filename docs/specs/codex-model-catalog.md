@@ -161,7 +161,7 @@ kaoiro 側は `codex doctor --json` を parse すれば auth mode 判別まで�
 
 ## kaoiro 側への含意
 
-- **旧実装 (ADR-0032 F4bc、2026-07-11 [e89fa98](https://gitea.example.invalid/sakurai.yuta/kaoiro/commit/e89fa98)、phase-16 で ADR-0035 に上書き)**:
+- **旧実装 (ADR-0032 F4bc、2026-07-11 e89fa98 (private Gitea history)、phase-16 で ADR-0035 に上書き)**:
   LaunchDialog に model select を出さず、wrapper は `model` を送らず、
   `codex exec` は `~/.codex/config.toml` → プラン既定の順で解決していた。
   AgentDetail は「アカウント既定 (選択不可)」を表示。

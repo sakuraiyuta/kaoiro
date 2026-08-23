@@ -10,7 +10,7 @@ decided: null
 
 ## 背景
 
-[#52 issue 本文](https://gitea.example.invalid/sakurai.yuta/kaoiro/issues/52)
+[#52 issue 本文](https://github.com/sakuraiyuta/kaoiro/issues/52)
 は 「まず (1) 内容をプロンプト展開して SDK メッセージに添付。 問題が出たら
 (2) wrapper ホスト FS にファイルを置き Read させる方式へ再実装を検討」と
 規定している。 [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)
