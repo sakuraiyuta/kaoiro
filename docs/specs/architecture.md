@@ -18,7 +18,7 @@ flow. See [plugin-model](plugin-model.md) for the plugin extension model and
 
 ### Wrapper package structure (added 2026-07-10, [ADR-0032](../adr/0032-codex-adapter.md) F1)
 
-The wrapper is a four-package pnpm workspace. It implements
+The wrapper is a four-package pnpm workspace. This structure implements
 [ADR-0017](../adr/0017-wrapper-multientity-packages.md) and was completed in
 [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md):
 
@@ -36,7 +36,7 @@ The wrapper is a four-package pnpm workspace. It implements
 The runner resolves engine selection through `SpawnMessage.engine` (values:
 `claude-code` / `codex`; the runner control message in
 [protocol](protocol.md)). LaunchDialog shows an engine selector only when the
-host's `capabilities` contains at least two engine types.
+host's `capabilities` field lists at least two engine types.
 
 ### Three-layer structure
 
@@ -152,13 +152,13 @@ authentication is enabled only when `KAOIRO_CLIENT_TOKENS` is configured. See
 | Concept | OTP/Phoenix implementation |
 |---|---|
 | Isolation per connection | One channel process per connection (managed by Phoenix) |
-| Agent-state retention | One `AgentStates` GenServer (an `agent_id → latest envelope` map; owner pid prevents reconnection races). phase-17 task 17-7 added appending `session_boundary` marker envelopes to history and a `pending_boundary_patch` stash for Codex lazy ID allocation. |
-| session-reset lifecycle | One in-memory `SessionResets` GenServer. `check_and_acquire/5` atomically verifies lock + KaoiroState + dispatch cooldown in one handle_call (the ADR-0036 F6 TOCTOU core); `resolve/6` moves the runner's spawn result from `:spawning → :awaiting_connect`; `confirm_connection/2`, triggered by the fresh wrapper's `WrapperChannel.after_join`, broadcasts `session_reset_completed` and runs `SessionPointers.detach_session/1` (the F2 two-phase completion: "only after confirming the connection"). |
+| Agent-state retention | One `AgentStates` GenServer (an `agent_id → latest envelope` map; owner pid prevents reconnection races). phase-17 task 17-7 added support for appending `session_boundary` marker envelopes to history, along with a `pending_boundary_patch` stash for lazy Codex ID allocation. |
+| session-reset lifecycle | One in-memory `SessionResets` GenServer. `check_and_acquire/5` atomically verifies lock + KaoiroState + dispatch cooldown in one handle_call (the ADR-0036 F6 TOCTOU core); `resolve/6` moves the runner's spawn result from `:spawning → :awaiting_connect`; `confirm_connection/2`, triggered by the fresh wrapper's `WrapperChannel.after_join`, broadcasts `session_reset_completed` and runs `SessionPointers.detach_session/1` (the F2 two-phase rule: completion occurs only after connection confirmation). |
 | Persistence across restarts | GenServers backed by DETS: `AgentDirectory` (identity ledger, [ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md)), `SessionPointers` (latest session_id + last effective configuration snapshot), `PermissionModes`, `IngressOrder`, `SessionStarts` / `ClearWatermarks`, `TokenDenylist`, and `DeliveryStates` (recipient-local delivery-confirmation watermark, not a delivery queue, issue #247). Their storage paths can be overridden with `KAOIRO_*_PATH`. [ADR-0051](../adr/0051-history-restart-resilience.md) removed `InterAgentHistory` (the IA SoT is a sidecar on the wrapper host; display is rebuilt through per-pane projection + hydration handshake). |
 | Restart resilience of display history | Display history remains a volatile projection within `AgentStates`. After a restart, it is rebuilt automatically from the transcript / IA sidecar through a hydration handshake with the wrapper (join-response verdict + server-allocated replay_id). The client discards a stale baseline using the projection epoch in a `history` push, then merges only live envelopes arriving between the join and the first `history` push for each connection generation ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
 | Failure isolation and restart | Placed under a Supervisor |
 | State fan-out | Phoenix.PubSub |
-| Client real-time delivery | Consolidated in Phoenix Channels ([ADR-0009](../adr/0009-client-transport.md)); it does not additionally provide LiveView, plain WebSocket, or SSE |
+| Client real-time delivery | Uses Phoenix Channels only ([ADR-0009](../adr/0009-client-transport.md)); it provides no parallel LiveView, plain WebSocket, or SSE |
 | Wrapper connection | Phoenix Channels (WebSocket) + token authentication |
 
 ### Data flow
@@ -168,9 +168,10 @@ authentication is enabled only when `KAOIRO_CLIENT_TOKENS` is configured. See
 2. The adapter translates SDK messages into common envelopes and derives
    state.
 3. The filter pipeline adds properties.
-4. The wrapper sends the result to the server over WebSocket → the Registry updates
-   state.
-5. The server delivers it to clients through PubSub → expressions update.
+4. The wrapper sends the result to the server over WebSocket → the Registry
+   updates state.
+5. The server delivers it to clients through PubSub → the displayed expressions
+   update.
 6. Client instructions and approvals take the reverse route to the wrapper
    (SDK calls).
 

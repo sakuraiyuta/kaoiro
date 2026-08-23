@@ -1,7 +1,7 @@
 # kaoiro (kao-iro, 'complexion' or 'how someone looks')
 
-> **Status**: research prototype. It is developed mainly for the author's
-> daily use by the author and their laboratory, and it makes no guarantees
+> **Status**: research prototype. It is developed mainly for daily use by the
+> author and members of their laboratory, and it makes no guarantees
 > about maintenance or responses to issues. Issues are welcome, but the time
 > available to address them is limited. See [CONTRIBUTING.md](CONTRIBUTING.md)
 > for details.
@@ -126,12 +126,12 @@ I should admit that this section was added afterward. While making kaoiro, the
 motivation was simply that it was fun to watch AI agents give shape to my ideas
 at a speed no human could match. But giving agents faces and names, letting
 their identities continue across sessions, and giving them a way to ask people
-questions makes "it was fun" feel incomplete as an
+questions make "it was fun" feel incomplete as an
 explanation.
 
 kaoiro is an **experiment in treating AI agents as first-class citizens**.
 Rather than treating them as disposable tools, I call them by name, read their
-expression, give them work, and answer when they ask for permission. Faces,
+expressions, give them work, and answer when they ask for permission. Faces,
 names, and persistent personae
 ([ADR-0003](docs/adr/0003-persona-identity-persistence.md)) are not
 decoration. They are what make this experiment possible.
