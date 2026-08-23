@@ -29,7 +29,7 @@ test('imports, rewrites, closes, resumes, and conserves exact counts', () => {
   const x = setup(); try {
     let result = run(importer, x.base, x.env); assert.equal(result.status, 0, result.stderr);
     let state = JSON.parse(readFileSync(x.state)); assert.equal(Object.keys(state.issues).length, 2); assert.equal(state.comments[100].length + state.comments[101].length, 2);
-    assert.match(state.issues[100].body, /#101/); assert.match(state.issues[101].body, /#100/); assert.equal(state.issues[100].state, 'closed'); assert.doesNotMatch(state.issues[100].body, /SECRET/);
+    assert.match(state.issues[100].body, /#101/); assert.match(state.issues[101].body, /#100/); assert.match(state.issues[100].body, /private Gitea issue 9 \(not migrated\)/); assert.equal(state.issues[100].state, 'closed'); assert.doesNotMatch(state.issues[100].body, /SECRET|private\.example|gitea\.example\.invalid/);
     result = run(importer, x.base, x.env); assert.equal(result.status, 0, result.stderr);
     state = JSON.parse(readFileSync(x.state)); assert.equal(Object.keys(state.issues).length, 2); assert.equal(state.comments[100].length + state.comments[101].length, 2);
     const checkArgs = ['--repo', 'acme/target', '--issues-glob', join(fixtures, 'issues-*.json'), '--comments-glob', join(fixtures, 'comments-*.json'), '--issue-list', join(fixtures, 'issues.json'), '--map', join(x.dir, 'state/old-to-new.json'), '--attachments', join(x.dir, 'attachments.json')];

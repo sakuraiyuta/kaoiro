@@ -68,16 +68,15 @@ function redact(text, rules) {
     : result.replace(new RegExp(r.pattern, r.flags?.includes('g') ? r.flags : `${r.flags ?? ''}g`), r.replacement), String(text ?? ''));
 }
 function attachmentUrls(text) { return String(text ?? '').match(ATTACHMENT_PATTERN) ?? []; }
-function prepareText(text, rules, attachmentRows, oldNumber, commentId = null) {
+function prepareText(text, attachmentRows, oldNumber, commentId = null) {
   const raw = String(text ?? '');
   const urls = attachmentUrls(raw);
   for (const url of urls) attachmentRows.push({ old_issue: oldNumber, source_comment_id: commentId, url });
   let index = 0;
   const shielded = raw.replace(ATTACHMENT_PATTERN, () => `\u0000KAOIRO_ATTACHMENT_${index++}\u0000`);
-  let output = redact(shielded, rules);
-  for (let i = 0; i < urls.length; i++) output = output.split(`\u0000KAOIRO_ATTACHMENT_${i}\u0000`).join(PLACEHOLDER);
-  return output;
+  return shielded;
 }
+function sanitizeText(text, rules) { return redact(text, rules).replace(/\u0000KAOIRO_ATTACHMENT_\d+\u0000/g, PLACEHOLDER); }
 function issueNumberFromComment(comment) {
   const match = String(comment.issue_url ?? '').match(/\/issues\/(\d+)(?:$|[?#])/);
   if (!match) fail(`comment ${comment.id ?? '(unknown)'} has no parseable issue_url`);
@@ -117,7 +116,8 @@ function encodedRepo(repo) { if (!/^[^/]+\/[^/]+$/.test(repo)) fail('--repo must
 function sourceData(options) {
   const numbers = selectedNumbers(options.issueList, options.canary);
   const byNumber = new Map();
-  for (const issue of arrayBundle(options.issuesGlob, 'issues')) {
+  const sourceIssues = arrayBundle(options.issuesGlob, 'issues');
+  for (const issue of sourceIssues) {
     if (!Number.isInteger(issue.number)) fail('issue bundle contains an issue without an integer number');
     if (byNumber.has(issue.number)) fail(`issue bundle duplicates issue ${issue.number}`);
     byNumber.set(issue.number, issue);
@@ -129,17 +129,22 @@ function sourceData(options) {
     if (chosen.has(n)) comments.get(n).push(comment);
   }
   for (const [n, values] of comments) values.sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || Number(a.id) - Number(b.id));
-  return { numbers, issues, comments };
+  return { numbers, issues, comments, sourceIssues };
 }
 function migrationFooter(issue) { return `\n\nMigrated from private Gitea issue ${issue.number} (originally created at ${issue.created_at})`; }
 function commentFooter(issue, comment) { return `\n\nMigrated comment from private Gitea issue ${issue.number} (originally created at ${comment.created_at})\n<!-- kaoiro-gitea-comment:${comment.id} -->`; }
 function localReferenceRewrite(text, sourceIssues, map, repo) {
   let output = text;
   for (const issue of sourceIssues) {
-    const target = map[String(issue.number)]; if (!target) continue;
-    for (const url of [issue.html_url, issue.url].filter(Boolean)) output = output.split(String(url)).join(`https://github.com/${repo}/issues/${target}`);
+    const target = map[String(issue.number)];
+    const replacement = target ? `https://github.com/${repo}/issues/${target}` : `private Gitea issue ${issue.number} (not migrated)`;
+    for (const url of [issue.html_url, issue.url].filter(Boolean)) output = output.split(String(url)).join(replacement);
   }
-  return output.replace(/(^|[^\w])#(\d+)\b/g, (all, before, n) => map[n] ? `${before}#${map[n]}` : all);
+  const sourceNumbers = new Set(sourceIssues.map((issue) => String(issue.number)));
+  return output.replace(/(^|[^\w])#(\d+)\b/g, (all, before, n) => {
+    if (map[n]) return `${before}#${map[n]}`;
+    return sourceNumbers.has(n) ? `${before}private Gitea issue ${n} (not migrated)` : all;
+  });
 }
 function ensureMetadata(repo, issues, report) {
   const r = encodedRepo(repo);
@@ -192,8 +197,8 @@ function main() {
   const data = sourceData(options); const rules = redactRules(options.redactMap);
   const stateDir = resolve(options.stateDir); const journalPath = join(stateDir, 'journal.jsonl'); const mapPath = options.mapOutput ?? join(stateDir, 'old-to-new.json');
   const attachments = []; const report = { repo: options.repo, dry_run: Boolean(options.dryRun), selected_old_numbers: data.numbers, metadata_warnings: [], created: [], reused: [], planned: [], attachments_output: resolve(options.attachmentsOutput) };
-  const preparedIssues = new Map(data.issues.map((issue) => [issue.number, { title: redact(issue.title, rules), body: prepareText(issue.body, rules, attachments, issue.number) }]));
-  const preparedComments = new Map(data.numbers.map((n) => [n, data.comments.get(n).map((comment) => ({ source: comment, body: prepareText(comment.body, rules, attachments, n, comment.id) }))]));
+  const preparedIssues = new Map(data.issues.map((issue) => [issue.number, { title: redact(issue.title, rules), body: prepareText(issue.body, attachments, issue.number) }]));
+  const preparedComments = new Map(data.numbers.map((n) => [n, data.comments.get(n).map((comment) => ({ source: comment, body: prepareText(comment.body, attachments, n, comment.id) }))]));
   writeJson(options.attachmentsOutput, attachments);
   if (options.dryRun) {
     report.planned = data.numbers.map((n) => ({ old_number: n, title: preparedIssues.get(n).title, comments: preparedComments.get(n).length }));
@@ -211,7 +216,7 @@ function main() {
     const found = findMigratedIssue(options.repo, old);
     if (found) { appendJournal(journalPath, { kind: 'issue_created', old_number: old, new_number: found.number, source: 'search', at: new Date().toISOString() }); map[String(old)] = found.number; report.reused.push({ old_number: old, new_number: found.number, source: 'search' }); continue; }
     appendJournal(journalPath, { kind: 'issue_creating', old_number: old, at: new Date().toISOString() });
-    const item = preparedIssues.get(old); const payload = { title: item.title, body: `${item.body}${migrationFooter(issue)}`, labels: (issue.labels ?? []).map((x) => x.name) };
+    const item = preparedIssues.get(old); const payload = { title: item.title, body: `${sanitizeText(item.body, rules)}${migrationFooter(issue)}`, labels: (issue.labels ?? []).map((x) => x.name) };
     if (issue.milestone) payload.milestone = milestones.get(issue.milestone.title).number;
     const created = ghJson(['-X', 'POST', `repos/${encodedRepo(options.repo)}/issues`, '--input', '-'], payload);
     if (!Number.isInteger(created.number)) fail(`GitHub create issue response had no number for source issue ${old}`);
@@ -227,16 +232,16 @@ function main() {
       const found = findMigratedComment(options.repo, target, id);
       if (found) { appendJournal(journalPath, { kind: 'comment_created', old_issue: old, source_comment_id: id, github_comment_id: found.id, at: new Date().toISOString() }); continue; }
       appendJournal(journalPath, { kind: 'comment_creating', old_issue: old, source_comment_id: id, at: new Date().toISOString() });
-      const createdComment = ghJson(['-X', 'POST', `repos/${encodedRepo(options.repo)}/issues/${target}/comments`, '--input', '-'], { body: `${comment.body}${commentFooter(issue, comment.source)}` });
+      const createdComment = ghJson(['-X', 'POST', `repos/${encodedRepo(options.repo)}/issues/${target}/comments`, '--input', '-'], { body: `${sanitizeText(comment.body, rules)}${commentFooter(issue, comment.source)}` });
       appendJournal(journalPath, { kind: 'comment_created', old_issue: old, source_comment_id: id, github_comment_id: createdComment.id, at: new Date().toISOString() });
     }
   }
   for (const issue of data.issues) {
-    const target = map[String(issue.number)]; const body = `${localReferenceRewrite(preparedIssues.get(issue.number).body, data.issues, map, options.repo)}${migrationFooter(issue)}`;
+    const target = map[String(issue.number)]; const body = `${sanitizeText(localReferenceRewrite(preparedIssues.get(issue.number).body, data.sourceIssues, map, options.repo), rules)}${migrationFooter(issue)}`;
     ghJson(['-X', 'PATCH', `repos/${encodedRepo(options.repo)}/issues/${target}`, '--input', '-'], { body });
     for (const comment of preparedComments.get(issue.number)) {
       const created = latest(journal(journalPath), (x) => x.kind === 'comment_created' && x.old_issue === issue.number && x.source_comment_id === comment.source.id);
-      const commentBody = `${localReferenceRewrite(comment.body, data.issues, map, options.repo)}${commentFooter(issue, comment.source)}`;
+      const commentBody = `${sanitizeText(localReferenceRewrite(comment.body, data.sourceIssues, map, options.repo), rules)}${commentFooter(issue, comment.source)}`;
       ghJson(['-X', 'PATCH', `repos/${encodedRepo(options.repo)}/issues/comments/${created.github_comment_id}`, '--input', '-'], { body: commentBody });
     }
     if (issue.state === 'closed') ghJson(['-X', 'PATCH', `repos/${encodedRepo(options.repo)}/issues/${target}`, '--input', '-'], { state: 'closed' });

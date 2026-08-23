@@ -4,7 +4,7 @@
     "url": "https://private.example/api/v1/repos/acme/project/issues/7",
     "html_url": "https://private.example/acme/project/issues/7",
     "title": "First SECRET issue",
-    "body": "References #8 and https://private.example/acme/project/issues/8. Download https://private.example/attachments/a.bin",
+    "body": "References #8, #9, https://private.example/acme/project/issues/8, and https://private.example/acme/project/issues/9. Download https://private.example/attachments/a.bin",
     "labels": [{"name": "bug", "color": "ff0000", "description": "A bug"}],
     "milestone": {"title": "v1", "description": "First release", "due_on": null},
     "state": "closed",
@@ -20,5 +20,16 @@
     "milestone": {"title": "v1", "description": "First release", "due_on": null},
     "state": "open",
     "created_at": "2026-01-02T10:00:00+09:00"
+  },
+  {
+    "number": 9,
+    "url": "https://private.example/api/v1/repos/acme/project/issues/9",
+    "html_url": "https://private.example/acme/project/issues/9",
+    "title": "Excluded issue",
+    "body": "Not migrated",
+    "labels": [],
+    "milestone": null,
+    "state": "closed",
+    "created_at": "2026-01-03T10:00:00+09:00"
   }
 ]
