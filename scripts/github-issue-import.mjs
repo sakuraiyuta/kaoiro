@@ -14,7 +14,7 @@ const PLACEHOLDER = '[attachment omitted; see migration attachments manifest]';
 
 function fail(message) { throw new Error(message); }
 function usage() {
-  console.error(`Usage: github-issue-import.mjs --repo OWNER/REPO --issues-glob GLOB --comments-glob GLOB --issue-list FILE --redact-map FILE --state-dir DIR --attachments-output FILE [--map-output FILE] [--canary N] [--dry-run]\n\nInput JSON:\n  issue list: [12, 34]\n  redact map: [{"kind":"literal","pattern":"old","replacement":"new"}, {"kind":"regex","pattern":"...","replacement":"...","flags":"gi"}]`);
+  console.error(`Usage: github-issue-import.mjs --repo OWNER/REPO --issues-glob GLOB --comments-glob GLOB --issue-list FILE --redact-map FILE --state-dir DIR --attachments-output FILE [--canary-list FILE] [--map-output FILE] [--canary N] [--dry-run]\n\nInput JSON:\n  issue list: [12, 34]\n  redact map: [{"kind":"literal","pattern":"old","replacement":"new"}, {"kind":"regex","pattern":"...","replacement":"...","flags":"gi"}]`);
   process.exit(2);
 }
 function args(argv) {
@@ -114,7 +114,14 @@ function ghList(endpoint) { return parseValues(gh(['--paginate', endpoint])); }
 function encodedRepo(repo) { if (!/^[^/]+\/[^/]+$/.test(repo)) fail('--repo must be OWNER/REPO'); return repo.split('/').map(encodeURIComponent).join('/'); }
 
 function sourceData(options) {
-  const numbers = selectedNumbers(options.issueList, options.canary);
+  const allMigrated = selectedNumbers(options.issueList);
+  let numbers = allMigrated;
+  if (options.canaryList) {
+    numbers = selectedNumbers(options.canaryList);
+    const allSet = new Set(allMigrated);
+    if (!numbers.every((n) => allSet.has(n))) fail('--canary-list contains a number outside --issue-list');
+  }
+  if (options.canary) numbers = numbers.slice(0, Number(options.canary));
   const byNumber = new Map();
   const sourceIssues = arrayBundle(options.issuesGlob, 'issues');
   for (const issue of sourceIssues) {
@@ -129,21 +136,21 @@ function sourceData(options) {
     if (chosen.has(n)) comments.get(n).push(comment);
   }
   for (const [n, values] of comments) values.sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || Number(a.id) - Number(b.id));
-  return { numbers, issues, comments, sourceIssues };
+  return { numbers, issues, comments, sourceIssues, allMigratedNumbers: new Set(allMigrated) };
 }
 function migrationFooter(issue) { return `\n\nMigrated from private Gitea issue ${issue.number} (originally created at ${issue.created_at})`; }
 function commentFooter(issue, comment) { return `\n\nMigrated comment from private Gitea issue ${issue.number} (originally created at ${comment.created_at})\n<!-- kaoiro-gitea-comment:${comment.id} -->`; }
-function localReferenceRewrite(text, sourceIssues, map, repo) {
+function localReferenceRewrite(text, sourceIssues, allMigratedNumbers, map, repo) {
   let output = text;
   for (const issue of sourceIssues) {
     const target = map[String(issue.number)];
-    const replacement = target ? `https://github.com/${repo}/issues/${target}` : `private Gitea issue ${issue.number} (not migrated)`;
+    const replacement = target ? `https://github.com/${repo}/issues/${target}` : `private Gitea issue ${issue.number} (${allMigratedNumbers.has(issue.number) ? 'migration pending' : 'not migrated'})`;
     for (const url of [issue.html_url, issue.url].filter(Boolean)) output = output.split(String(url)).join(replacement);
   }
   const sourceNumbers = new Set(sourceIssues.map((issue) => String(issue.number)));
   return output.replace(/(^|[^\w])#(\d+)\b/g, (all, before, n) => {
     if (map[n]) return `${before}#${map[n]}`;
-    return sourceNumbers.has(n) ? `${before}private Gitea issue ${n} (not migrated)` : all;
+    return sourceNumbers.has(n) ? `${before}private Gitea issue ${n} (${allMigratedNumbers.has(Number(n)) ? 'migration pending' : 'not migrated'})` : all;
   });
 }
 function ensureMetadata(repo, issues, report) {
@@ -237,11 +244,11 @@ function main() {
     }
   }
   for (const issue of data.issues) {
-    const target = map[String(issue.number)]; const body = `${sanitizeText(localReferenceRewrite(preparedIssues.get(issue.number).body, data.sourceIssues, map, options.repo), rules)}${migrationFooter(issue)}`;
+    const target = map[String(issue.number)]; const body = `${sanitizeText(localReferenceRewrite(preparedIssues.get(issue.number).body, data.sourceIssues, data.allMigratedNumbers, map, options.repo), rules)}${migrationFooter(issue)}`;
     ghJson(['-X', 'PATCH', `repos/${encodedRepo(options.repo)}/issues/${target}`, '--input', '-'], { body });
     for (const comment of preparedComments.get(issue.number)) {
       const created = latest(journal(journalPath), (x) => x.kind === 'comment_created' && x.old_issue === issue.number && x.source_comment_id === comment.source.id);
-      const commentBody = `${sanitizeText(localReferenceRewrite(comment.body, data.sourceIssues, map, options.repo), rules)}${commentFooter(issue, comment.source)}`;
+      const commentBody = `${sanitizeText(localReferenceRewrite(comment.body, data.sourceIssues, data.allMigratedNumbers, map, options.repo), rules)}${commentFooter(issue, comment.source)}`;
       ghJson(['-X', 'PATCH', `repos/${encodedRepo(options.repo)}/issues/comments/${created.github_comment_id}`, '--input', '-'], { body: commentBody });
     }
     if (issue.state === 'closed') ghJson(['-X', 'PATCH', `repos/${encodedRepo(options.repo)}/issues/${target}`, '--input', '-'], { state: 'closed' });

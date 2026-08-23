@@ -19,7 +19,10 @@ node scripts/github-issue-import.mjs \
   --dry-run
 ```
 
-The issue list is a JSON array of Gitea issue numbers. The redact map is a JSON
+The issue list is the complete approved JSON array of Gitea issue numbers. For
+a deliberately chosen canary subset, pass `--canary-list` with a JSON array
+that is wholly contained in that full list; `--canary N` then limits that
+selection. The redact map is a JSON
 array of `{kind, pattern, replacement}` objects, where `kind` is `literal` or
 `regex`; regex entries may also have JavaScript regex `flags`. Invalid input or
 regexes stop the import before any GitHub API request.

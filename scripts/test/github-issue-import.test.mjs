@@ -46,3 +46,12 @@ test('a pending creation journal fails before creating a duplicate', () => {
     const state = JSON.parse(readFileSync(x.state)); assert.deepEqual(state.issues, {});
   } finally { rmSync(x.dir, { recursive: true, force: true }); }
 });
+test('canary subset distinguishes future migration from an excluded issue', () => {
+  const x = setup(); try {
+    const result = run(importer, [...x.base, '--canary-list', join(fixtures, 'canary-list.json')], x.env);
+    assert.equal(result.status, 0, result.stderr);
+    const state = JSON.parse(readFileSync(x.state));
+    assert.match(state.issues[100].body, /private Gitea issue 8 \(migration pending\)/);
+    assert.match(state.issues[100].body, /private Gitea issue 9 \(not migrated\)/);
+  } finally { rmSync(x.dir, { recursive: true, force: true }); }
+});
