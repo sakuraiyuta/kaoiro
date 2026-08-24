@@ -69,3 +69,36 @@ kaoiro のバックログは、複数のエージェントが同一 work tree �
 - 委任指示に自分の技術的前提を含めるときは「実測して判断し、判断と根拠を
   報告に含めること」を明示する。断定形だけで渡すと、前提が誤っていても
   そのまま実装される。
+- 委任は deliverable を**成果の単位**(「N 件 merge され checker green」)で
+  名指し、review round 予算を明記する。予算超過が生むのは追加 round では
+  なく報告義務である。
+- director は活動量でなく deliverable の前進を観測する。メッセージ数が
+  増えながら成果の単位が進まないことが、レビュー泥沼の最良の検知信号で
+  ある。
+
+## レビュー往復の統治(round budget)
+
+reviewer と implementer が peer 同士で回すレビューに適用する。深さ自体は
+正しい場面では価値がある — ここで縛るのは深さの配分と往復の上限で、
+判定は**数えるだけでできるもの**に限る。
+
+| トリガ | 閾値 | 発火時の義務 |
+|---|---|---|
+| 同一 artifact への must-fix round | 3 round 超 | reviewer / implementer 双方が director へ報告して停止 |
+| 指摘が「タスク中に作った道具の障害モード」のみ | 2 round 連続 | 停止し、道具の存否を director が裁定 |
+| review round 中の対象 / verifier の変更 | 0(freeze) | 変更は round 境界でのみ。破った round の evidence は無効 |
+| 1 会話のラリー | 20 往復 | 会話を閉じ、要約を添えて director へ判断を上げる |
+
+- 閾値到達は設計上の弁であって、誰の失点でもない。escalation は敗北では
+  なく義務である。permit・hash 束縛のような round 内の精緻な手続きが
+  整っていても、報告義務の代わりにならない — 手続きが整うほど、ループの
+  中に留まることが正当に見えるからだ。
+- 検証深度の配分(使い捨て道具を adversarial review の対象にしない)は
+  各エージェントのグローバル規則が正本(Claude: rules/verification.md
+  「Depth is set by blast radius」、Codex: AGENTS.md 検証節)。ここでは
+  重複させない。
+
+Why: 2026-08-24、issue #91 の翻訳 wave で、使い捨て merge script への
+must-fix が M18 まで達した(数十往復・deliverable 前進ゼロ・escalation
+なし)。各 round は局所的には規律に忠実で、外から観測できた異常は round
+数と成果の停滞だけだった。
