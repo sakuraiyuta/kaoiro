@@ -84,11 +84,17 @@ reviewer と implementer が peer 同士で回すレビューに適用する。�
 
 | トリガ | 閾値 | 発火時の義務 |
 |---|---|---|
-| 同一 artifact への must-fix round | 3 round 超 | reviewer / implementer 双方が director へ報告して停止 |
+| 同一 deliverable への must-fix round 通算 | 3 round 超 | reviewer / implementer 双方が director へ報告して停止 |
 | 指摘が「タスク中に作った道具の障害モード」のみ | 2 round 連続 | 停止し、道具の存否を director が裁定 |
 | review round 中の対象 / verifier の変更 | 0(freeze) | 変更は round 境界でのみ。破った round の evidence は無効 |
-| 1 会話のラリー | 20 往復 | 会話を閉じ、要約を添えて director へ判断を上げる |
+| 同一 deliverable に関する会話のラリー通算 | 20 往復 | 会話を閉じ、要約を添えて director へ判断を上げる |
 
+- カウンタの母集団は deliverable であり、**当事者が再設定できない**。
+  artifact の差し替え・verifier の移動・conversation の張り直しでは 0 に
+  戻らない(round 境界での差し替えは正当な変更だが、カウントは引き継ぐ)。
+  通算は director が保持し、dispatch と round 開始時に現在値を明示する。
+  artifact 単位で数えると、verifier が 3 回移動した M18 の泥沼でも通算は
+  1 のままだった — 母集団が動くカウンタは弁にならない。
 - 閾値到達は設計上の弁であって、誰の失点でもない。escalation は敗北では
   なく義務である。permit・hash 束縛のような round 内の精緻な手続きが
   整っていても、報告義務の代わりにならない — 手続きが整うほど、ループの
