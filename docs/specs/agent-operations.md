@@ -93,6 +93,8 @@ reviewer と implementer が peer 同士で回すレビューに適用する。�
   artifact の差し替え・verifier の移動・conversation の張り直しでは 0 に
   戻らない(round 境界での差し替えは正当な変更だが、カウントは引き継ぐ)。
   通算は director が保持し、dispatch と round 開始時に現在値を明示する。
+  **review round の dispatch は台帳保持者 (director) 自身が行う** — 台帳と
+  dispatch が別の手に分かれると、通算の正確性が会話の突合に依存する。
   artifact 単位で数えると、verifier が 3 回移動した M18 の泥沼でも通算は
   1 のままだった — 母集団が動くカウンタは弁にならない。
 - 閾値到達は設計上の弁であって、誰の失点でもない。escalation は敗北では
