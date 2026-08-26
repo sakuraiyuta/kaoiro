@@ -6,6 +6,10 @@
 > available to address them is limited. See [CONTRIBUTING.md](CONTRIBUTING.md)
 > for details.
 
+> **Security**: an operator credential lets its holder run commands on
+> every machine where agents run. Treat it like an SSH key to those
+> hosts, and read [SECURITY.md](SECURITY.md) before deploying.
+
 A system that **monitors the state and progress of multiple CLI AI agents**
 (such as Claude Code and Codex) and visualizes them as characters. Text-based
 CLI agents make it hard to tell what they are doing and who is waiting, and
