@@ -9,7 +9,7 @@
 // pins the actual props each one hands PersonaFace, via the resulting DOM
 // (`data-size` attribute + alt/role/aria-label matrix). Expected values
 // are the drift matrix recorded on issue #245
-// (gitea.example.invalid/sakurai.yuta/kaoiro issue 245, comment 3475).
+// (https://github.com/sakuraiyuta/kaoiro/issues/235#issuecomment-5384491233).
 // App.svelte's agent-strip (size="chip") is covered separately in
 // appAgentStripPresetWiring.integration.test.ts (needs the connectKaoiro
 // mock harness, which would leak into this file's module scope).
