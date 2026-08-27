@@ -17,19 +17,18 @@ dashboard を PC / tablet / smartphone のどの画面サイズでも実用に�
 要素ごとの表示条件・到達経路・スクロール所有者の網羅表は
 [responsive-reachability.md](responsive-reachability.md) が持つ。
 
-従来 design.md は「モバイル/狭幅は first-class ではないが、破綻はしない」
-と定めていた。この方針は
-[ADR-0052](../adr/0052-responsive-three-tier-layout.md) により撤回され、
-3 サイズ対等へ転換した。転換の経緯と却下した代替案は同 ADR が canonical。
+dashboard は PC / tablet / smartphone の 3 サイズを対等に扱う
+([ADR-0052](../adr/0052-responsive-three-tier-layout.md))。経緯と
+却下した代替案は同 ADR が canonical。
 
 ## Definition
 
-### 前提となる CSS 変更
+### 前提となる CSS 値
 
-現行の response timeline track は `minmax(22rem, 26rem)` で、余白があれば
-上限 416px で配置される。この上限があると 3 列が成立する viewport 下限が
-1263px まで押し上がるため、**track を `22rem` (352px) 固定へ変更する**
-(ADR-0052 F5)。以降の境界値はこの変更を前提とする。
+response timeline track は `22rem` (352px) 固定である(ADR-0052 F5)。
+可変幅(`minmax`)では余白次第で上限まで伸び、3 列が成立する viewport
+下限を押し上げてしまうため、固定値を採る。以降の境界値はこの値を
+前提とする。
 
 ### Breakpoint トークン
 
@@ -42,7 +41,7 @@ dashboard を PC / tablet / smartphone のどの画面サイズでも実用に�
 | grid tile | 240px | `minmax(15rem, 1fr)` の下限 |
 | tile 間 gap | 19.2px / 本 | `.agents { gap: 1.2rem }` |
 | shell gap (grid ↔ timeline) | 24px | `.grid-with-timeline { gap: 1.5rem }` |
-| response timeline | 352px | 変更後の `22rem` 固定 |
+| response timeline | 352px | `22rem` 固定(ADR-0052 F5) |
 
 | トークン | 条件 | 導出 |
 |---|---|---|

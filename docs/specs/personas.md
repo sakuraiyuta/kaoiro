@@ -135,13 +135,10 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 - 配置: persona pack zip 内の `sprites/<state>.png` 構造で配布
   ([persona-pack-schema](persona-pack-schema.md))。`sprite_set` は
   慣習として `persona.id` と同名。
-- 配置方式(2026-07-05 更新、
-  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)):
+- 配置方式([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)):
   作成者は persona pack zip として配布し、server 管理者は zip を
   **取り込みディレクトリ**(env で指定)に drop する。server は auto-
-  watch で自動展開し `/api/personas` manifest を再構築する。旧来の
-  bundled `server/priv/personas/` + overlay 併存モデル(ADR-0008)は
-  取り込みディレクトリへ統合された。
+  watch で自動展開し `/api/personas` manifest を再構築する。
 
 ### 生成ワークフロー(ComfyUI、ao 試作で実証済み)
 
@@ -178,8 +175,7 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 の正本は persona pack zip
 ([persona-pack-schema](persona-pack-schema.md))として `persona-packs/
 <id>/` に管理し、`scripts/build-persona-pack.sh` で zip 化して server
-の取り込みディレクトリに置く。旧来の bundled `server/priv/personas/`
-直配置は phase-10(ADR-0029)で撤去済み。配信 API の形式は
+の取り込みディレクトリに置く。配信 API の形式は
 [protocol](protocol.md) の「ペルソナアセット配信」を参照。
 
 プロンプト本文・steps 等の完全な再現用パラメータは
