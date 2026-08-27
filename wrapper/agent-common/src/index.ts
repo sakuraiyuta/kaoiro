@@ -85,6 +85,19 @@ export type {
   QuestionResponseMessage,
 } from "./question.js";
 export {
+  REQUEST_SESSION_RESET_INPUT_SHAPE,
+  REQUEST_SESSION_RESET_TOOL_FQN,
+  SESSION_RESET_RETRY_DELAY_MS,
+  SessionResetCoordinator,
+  requestSessionResetDescriptor,
+} from "./session_reset.js";
+export type {
+  RequestSessionResetOptions,
+  SessionResetAccepted,
+  SessionResetCoordinatorOptions,
+  SessionResetMode,
+} from "./session_reset.js";
+export {
   initialMachineState,
   makeAttachRejected,
   makeInstructionRejected,

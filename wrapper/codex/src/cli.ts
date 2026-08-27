@@ -16,12 +16,14 @@ import {
   IaSidecar,
   InterAgentTool,
   QuestionBroker,
+  SessionResetCoordinator,
   askUserQuestionDescriptor,
   classifyInterAgentError,
   isIngressStamp,
   makeLog,
   makeStateChange,
   mergePendingDisplayNameSync,
+  requestSessionResetDescriptor,
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
@@ -263,6 +265,22 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     link?.send(envelope);
   };
 
+  const sessionReset = new SessionResetCoordinator({
+    request: (mode, reason) => {
+      if (!link) return Promise.reject(new Error("server link unavailable"));
+      return link.requestSessionReset(mode, reason);
+    },
+    notify: (text) => {
+      const queued = instructionChain.then(() => host.send(text));
+      instructionChain = queued.catch(() => {});
+      return queued;
+    },
+    log: (text) => onLog(makeLog(config, host.state, new Date().toISOString(), {
+      kind: "system",
+      text,
+    })),
+  });
+
   let resolvePersonaPrompt!: (prompt: string) => void;
   let rejectPersonaPrompt!: (reason: Error) => void;
   const personaPromptPromise = new Promise<string>((resolve, reject) => {
@@ -360,6 +378,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onHydration: (verdict) => replayer.onVerdict(verdict),
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
+    onSessionResetFailed: ({ requestId, reason }) =>
+      sessionReset.onResetFailed(requestId, reason),
     onInstruction: (text, attachmentIds) => {
       const tag = attachmentIds && attachmentIds.length > 0
         ? `instruction(+${attachmentIds.length})`
@@ -489,6 +509,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       if (settled !== undefined) {
         interAgentTurns.dispatchNextForPeer(settled.peer);
       }
+      sessionReset.onTurnEnd();
     },
     appendSystemPrompt,
     onInstructionRejected: (envelope) => link?.send(envelope),
@@ -500,6 +521,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     toolDescriptors: [
       ...interAgent.descriptors(),
       askUserQuestionDescriptor((questions) => questionBroker!.decide(questions)),
+      requestSessionResetDescriptor({
+        reserve: (mode, reason) => sessionReset.reserve(mode, reason),
+      }),
     ],
     ...(resolvedModelSource !== undefined
       ? { modelSource: resolvedModelSource }

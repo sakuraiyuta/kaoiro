@@ -18,7 +18,7 @@ import {
   REQUEST_SESSION_RESET_INPUT_SHAPE,
   REQUEST_SESSION_RESET_TOOL_FQN,
   requestSessionResetDescriptor,
-} from "../src/request_session_reset.js";
+} from "@kaoiro/agent-common";
 import { kaoiroToolDescriptors } from "../src/inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "../src/read_only_tools.js";
 import {
@@ -128,9 +128,9 @@ describe("kaoiro MCP server registration", () => {
     expect(READ_ONLY_TOOLS.has(LIST_AGENTS_TOOL_FQN)).toBe(true);
   });
 
-  it("渡さなければ従来の 3 tool のまま (codex 側は出さない前提)", () => {
-    // codex は InterAgentTool#descriptors() を直接使うため、request_compact
-    // がそこに載っていないこと自体が「codex に出さない」の担保になる。
+  it("渡さなければ共通 inter-agent tool だけを返す", () => {
+    // request_compact は Claude 固有。session reset は Codex 側の
+    // composition root が別途加えるため、共通 descriptor には載せない。
     const names = interAgent()
       .descriptors()
       .map((d) => d.name);

@@ -11,11 +11,11 @@ import { describe, expect, it } from "vitest";
 import {
   SessionResetCoordinator,
   requestSessionResetDescriptor,
-} from "../src/request_session_reset.js";
+} from "@kaoiro/agent-common";
 import type {
   SessionResetAccepted,
   SessionResetMode,
-} from "../src/request_session_reset.js";
+} from "@kaoiro/agent-common";
 
 function collector() {
   const reserved: { mode: SessionResetMode; reason?: string }[] = [];
