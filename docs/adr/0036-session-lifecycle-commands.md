@@ -40,7 +40,7 @@ session IDをnull化して次turnを`startThread()`にする経路も未実測�
 
 ### 追補 (2026-07-28 — Claude Agent SDK `/compact` 実測)
 
-2026-07-28 に実施した [phase-28 の Track S 実測結果](../plans/phase-28-agent-initiated-session-ops.md#track-s-実測結果)では、Claude Agent SDK 0.3.220 は streaming input mode でも文字列 `/compact` を CLI native slash command として解釈し、manual compact を実行した。したがって、上記の「Claude/CodexともCLI native slash command parserを経由しない」という断定は、Codex 側の実測に限る。Claude 側にはこの断定を適用しない。
+2026-07-28 に実施した [phase-28 の Track S 実測結果](../plans/phase-28-agent-initiated-session-ops.md#track-s-実測結果-もも2026-07-28)では、Claude Agent SDK 0.3.220 は streaming input mode でも文字列 `/compact` を CLI native slash command として解釈し、manual compact を実行した。したがって、上記の「Claude/CodexともCLI native slash command parserを経由しない」という断定は、Codex 側の実測に限る。Claude 側にはこの断定を適用しない。
 
 同日の [phase-28 実機受け入れ](../plans/phase-28-agent-initiated-session-ops.md#実機受け入れ結果-あお2026-07-28)で、agent 発の `request_compact` 経由の manual compact も本番 session で成立した。追加で判明した 2 点を記録する。
 
