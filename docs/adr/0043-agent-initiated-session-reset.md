@@ -124,6 +124,10 @@ agent は `request_session_reset` を呼ぶ前に、必要な引き継ぎを WOR
 
 - Codex には `request_session_reset` を露出しない。対象は Claude wrapper の
   MCP tool 経路である。
+- 2026-08-28 追補: issue #246 の実測により上記の非公開を維持する。`codex exec` は
+  approval axis が `never` 固定で per-request 承認経路を持たず
+  (`wrapper/codex/src/host.ts`)、露出すれば operator 承認なしの self-reset が成立する。
+  Codex に承認経路が整った時点で再検討する。
 - viewer への情報境界は ADR-0021 のままであり、origin / reason を viewer へ
   開示しない。
 
