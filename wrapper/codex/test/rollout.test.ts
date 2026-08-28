@@ -3,6 +3,7 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +15,7 @@ import {
   resolveCodexModel,
   codexSidecarPath,
   isRolloutCorruptionDetail,
+  repairRolloutCorruption,
   verifyRolloutCorruption,
 } from "../src/rollout.js";
 
@@ -374,13 +376,6 @@ describe("isRolloutCorruptionDetail (issue #263)", () => {
   });
 });
 
-// issue #263 code-review round 2 advisory: verifyRolloutCorruption の2つの
-// 独立した失敗経路 (fatal UTF-8 decode / JSON.parse) のうち、host.test.ts
-// の統合テストは fatal decode 経路しか踏んでいなかった (corrupted 判定は
-// ファイル全体を1回でデコードしてから行単位の JSON.parse に進むため、
-// 不正 UTF-8 バイトが1つでもあると decode 側で先に corrupted 確定し、
-// JSON.parse 分岐に到達しない)。ここで両分岐と clean/unknown を関数単体で
-// 直接 pin する。
 describe("verifyRolloutCorruption (issue #263, ふじ MF-1)", () => {
   it("fatal UTF-8 decode 失敗で corrupted と確定する", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-verify-utf8-"));
@@ -439,12 +434,90 @@ describe("verifyRolloutCorruption (issue #263, ふじ MF-1)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("空の rollout は corrupted と判定する", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-verify-empty-"));
+    const id = "uuid-verify-empty";
+    writeFileSync(join(root, `rollout-${id}.jsonl`), "");
+
+    expect(verifyRolloutCorruption(id, root)).toBe("corrupted");
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("空白だけの rollout は corrupted と判定する", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-verify-blank-"));
+    const id = "uuid-verify-blank";
+    writeFileSync(join(root, `rollout-${id}.jsonl`), " \n\t\r\n");
+
+    expect(verifyRolloutCorruption(id, root)).toBe("corrupted");
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("session id に対応する rollout が無ければ unknown と判定する (呼び出し側は clean と同様 fallback する)", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-verify-unknown-"));
 
     expect(verifyRolloutCorruption("uuid-no-such-session", root)).toBe(
       "unknown",
     );
+
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("repairRolloutCorruption (issue #262)", () => {
+  it("UTF-8 行中切断と truncated JSON だけを除去し、原本 backup と全行 verify を経て置換する", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-repair-"));
+    const id = "uuid-repair-real-patterns";
+    const path = join(root, `rollout-${id}.jsonl`);
+    const first = Buffer.from(
+      `${JSON.stringify({ type: "turn_context", payload: {} })}\n\n`,
+      "utf8",
+    );
+    const utf8Truncated = Buffer.concat([
+      Buffer.from('{"type":"event_msg","payload":{"message":"', "utf8"),
+      Buffer.from([0xe3, 0x81]),
+      Buffer.from("\n", "utf8"),
+    ]);
+    const second = Buffer.from(
+      `${JSON.stringify({ type: "response_item", payload: {} })}\n`,
+      "utf8",
+    );
+    const jsonTruncated = Buffer.from(
+      '{"type":"event_msg","payload":{"type":"token_count"',
+      "utf8",
+    );
+    const original = Buffer.concat([
+      first,
+      utf8Truncated,
+      second,
+      jsonTruncated,
+    ]);
+    writeFileSync(path, original);
+
+    expect(verifyRolloutCorruption(id, root)).toBe("corrupted");
+    const result = repairRolloutCorruption(id, root);
+
+    expect(result.repaired).toBe(true);
+    if (!result.repaired) throw new Error("repair unexpectedly failed");
+    expect(readFileSync(result.backupPath)).toEqual(original);
+    expect(readFileSync(path)).toEqual(Buffer.concat([first, second]));
+    expect(verifyRolloutCorruption(id, root)).toBe("clean");
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("有効行が 0 件なら原本を置換せず、手動 fallback 用の backup を残す", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-repair-empty-"));
+    const id = "uuid-repair-empty";
+    const path = join(root, `rollout-${id}.jsonl`);
+    const original = Buffer.from(" \n\t\n", "utf8");
+    writeFileSync(path, original);
+
+    expect(repairRolloutCorruption(id, root)).toEqual({ repaired: false });
+    expect(readFileSync(path)).toEqual(original);
+    expect(verifyRolloutCorruption(id, root)).toBe("corrupted");
+    expect(readdirSync(root).some((name) => name.includes(".bak-"))).toBe(true);
 
     rmSync(root, { recursive: true, force: true });
   });

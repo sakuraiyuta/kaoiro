@@ -71,11 +71,13 @@ import {
   codexRateLimitsFromRolloutIn,
   codexRolloutsRoot,
   isRolloutCorruptionDetail,
+  repairRolloutCorruption,
   resolveCodexModel,
   verifyRolloutCorruption,
   type CodexRateLimitSnapshot,
   type CodexRateLimitWindow,
   type RolloutCorruptionVerdict,
+  type RolloutRepairResult,
 } from "./rollout.js";
 import {
   CodexTurnDiagnostics,
@@ -246,6 +248,10 @@ export interface CodexHostOptions {
    *  so an injected variant only changes WHERE it reads, not what
    *  "corrupted" means. */
   rolloutCorruptionVerifier?: (sessionId: string) => RolloutCorruptionVerdict;
+  /** Repairs a confirmed corrupt rollout. Injectable so tests can direct the
+   * real repairer at a fixture root; a failed repair remains on #253's
+   * permanent error/manual-fallback path. */
+  rolloutCorruptionRepairer?: (sessionId: string) => RolloutRepairResult;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
   /** Epoch clock for deterministic upload TTL tests. */
@@ -986,6 +992,7 @@ export class CodexHost implements EngineAdapter {
     tempDir?: string,
     conversationIds: readonly string[] = [],
     turnToken: string = randomUUID(),
+    retryAfterRepair = false,
   ): Promise<void> {
     this.#activeTurnToken = turnToken;
     const diagnostics = new CodexTurnDiagnostics(this.#turnTraceCaptureDir);
@@ -1064,7 +1071,9 @@ export class CodexHost implements EngineAdapter {
     // Creating/resuming the SDK thread is the last synchronous boundary
     // before `runStreamed()` hands the input to Codex. Confirm #247 delivery
     // here, never when its coordinator merely accepted the queue item.
-    this.#options.onTurnStart?.({ turnToken, conversationIds });
+    if (!retryAfterRepair) {
+      this.#options.onTurnStart?.({ turnToken, conversationIds });
+    }
     this.#abort = new AbortController();
     let finalText: string | null = null;
     // A stream-level `error` is evidence, not a terminal boundary. Some SDK
@@ -1166,7 +1175,6 @@ export class CodexHost implements EngineAdapter {
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
       if (!sawResult) {
-        this.#finishTurn(false, attempted);
         const alreadyConfirmedCorrupted =
           resumeSessionId !== null &&
           resumeSessionId === this.#corruptedRolloutSessionId;
@@ -1204,8 +1212,33 @@ export class CodexHost implements EngineAdapter {
             this.#options.rolloutCorruptionVerifier ??
             ((id: string) => verifyRolloutCorruption(id));
           const verdict: RolloutCorruptionVerdict = verify(resumeSessionId);
-          rolloutCorrupted = verdict === "corrupted";
+          if (verdict === "corrupted") {
+            let repaired = false;
+            if (!retryAfterRepair) {
+              try {
+                const repair =
+                  this.#options.rolloutCorruptionRepairer ??
+                  ((id: string) => repairRolloutCorruption(id));
+                repaired = repair(resumeSessionId).repaired;
+              } catch {
+                repaired = false;
+              }
+            }
+            if (repaired) {
+              await this.#runTurn(
+                codex,
+                input,
+                undefined,
+                conversationIds,
+                turnToken,
+                true,
+              );
+              return;
+            }
+            rolloutCorrupted = true;
+          }
         }
+        this.#finishTurn(false, attempted);
         if (rolloutCorrupted && resumeSessionId !== null) {
           // Remember both the session id AND this confirming turn's own
           // detail (ふじ should-fix 1) — #runTurn's guard at the top skips
