@@ -52,6 +52,8 @@ ALLOW_FIELDS = (
 )
 SILENT_DENY_FIELDS = {"account", "image_url"}
 EROSION_RADIUS = 3
+# issue #205 observed correct MAE 0.0022-0.0066 (limit 0.05) and
+# nearest-wrong separation 7,349x (limit 1,000x).
 MAX_CORRECT_MAE = 0.05
 MIN_WRONG_PAIR_MAE = 1.0
 MIN_WRONG_PAIR_MARGIN = 1000.0
@@ -89,7 +91,13 @@ def png_files(directory: Path) -> list[Path]:
     return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix == ".png")
 
 
-def source_directory(persona_id: str, requested: str | None) -> Path:
+def supports_match_mode(directory: Path, match_mode: str) -> bool:
+    if match_mode == "sha256":
+        return all((directory / f"{state}.png").is_file() for state in REQUIRED_STATES)
+    return len(png_files(directory)) == len(REQUIRED_STATES)
+
+
+def source_directory(persona_id: str, requested: str | None, match_mode: str) -> Path:
     if requested is not None:
         return Path(requested).resolve()
 
@@ -99,14 +107,18 @@ def source_directory(persona_id: str, requested: str | None) -> Path:
         root / "assets-work" / persona_id,
         root / "assets-work" / "dist" / persona_id / "raw",
     )
-    available = [candidate for candidate in candidates if candidate.is_dir()]
-    if len(available) != 1:
+    eligible = [
+        candidate
+        for candidate in candidates
+        if candidate.is_dir() and supports_match_mode(candidate, match_mode)
+    ]
+    if len(eligible) != 1:
         formatted = ", ".join(str(candidate) for candidate in candidates)
         raise VerificationError(
-            "source directory is ambiguous or missing; pass --source-dir explicitly "
+            f"source directory is ambiguous or missing for {match_mode}; pass --source-dir explicitly "
             f"(checked: {formatted})"
         )
-    return available[0]
+    return eligible[0]
 
 
 def pack_directory(persona_id: str, requested: str | None) -> Path:
@@ -232,19 +244,48 @@ def anima_match(source: Path, indexed_anima: dict[str, list[Path]]) -> tuple[Pat
     anima_json = anima_png.with_suffix(".json")
     if not anima_json.is_file():
         raise VerificationError(f"matched Anima PNG has no sibling JSON: {anima_png}")
+    actual_job_id = job_id_from_json(anima_json, "Anima JSON")
+    if actual_job_id != anima_png.stem:
+        raise VerificationError(
+            "Anima JSON job_id does not match sibling PNG stem: "
+            f"{anima_json} says {actual_job_id}, expected {anima_png.stem}"
+        )
     return anima_png, anima_json
 
 
-def load_sanitized_provenance(path: Path) -> dict[str, object]:
+def json_object(path: Path, description: str) -> dict[str, object]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
-        raise VerificationError(f"invalid JSON: {path}: {error.msg}") from error
+        raise VerificationError(f"invalid {description}: {path}: {error.msg}") from error
     if not isinstance(payload, dict):
-        raise VerificationError(f"Anima JSON must be an object: {path}")
+        raise VerificationError(f"{description} must be an object: {path}")
+    return payload
+
+
+def job_id_from_json(path: Path, description: str) -> str:
+    payload = json_object(path, description)
     job_id = payload.get("job_id")
     if not isinstance(job_id, str) or not job_id:
-        raise VerificationError(f"Anima JSON has no usable job_id: {path}")
+        raise VerificationError(f"{description} has no usable job_id: {path}")
+    return job_id
+
+
+def verify_legacy_job_record(persona_id: str, state: str, matched_job_id: str) -> None:
+    record = repository_root() / "assets-work" / "dist" / persona_id / f"{state}.png.job.json"
+    if not record.is_file():
+        return
+    recorded_job_id = job_id_from_json(record, "legacy job record")
+    if recorded_job_id != matched_job_id:
+        raise VerificationError(
+            f"legacy job record disagrees with Anima match for {persona_id}/{state}: "
+            f"{record} says {recorded_job_id}, matched {matched_job_id}"
+        )
+
+
+def load_sanitized_provenance(path: Path) -> dict[str, object]:
+    payload = json_object(path, "Anima JSON")
+    job_id_from_json(path, "Anima JSON")
 
     for field in payload:
         if field not in ALLOW_FIELDS and field not in SILENT_DENY_FIELDS:
@@ -253,7 +294,7 @@ def load_sanitized_provenance(path: Path) -> dict[str, object]:
 
 
 def verified_matches(
-    source_dir: Path, anima_dir: Path, pack_dir: Path, match_mode: str
+    persona_id: str, source_dir: Path, anima_dir: Path, pack_dir: Path, match_mode: str
 ) -> list[Match]:
     indexed_anima = index_anima_pngs(anima_dir)
     matches: list[Match] = []
@@ -261,11 +302,13 @@ def verified_matches(
     if match_mode == "sha256":
         for state, source in source_paths_for_sha(source_dir).items():
             anima_png, anima_json = anima_match(source, indexed_anima)
+            verify_legacy_job_record(persona_id, state, anima_png.stem)
             matches.append(Match(state, source, anima_png, anima_json, 0.0, 1.0))
         return matches
 
     for state, (source, mae, exact_ratio) in verify_rgb_invariant(source_dir, pack_dir).items():
         anima_png, anima_json = anima_match(source, indexed_anima)
+        verify_legacy_job_record(persona_id, state, anima_png.stem)
         matches.append(Match(state, source, anima_png, anima_json, mae, exact_ratio))
     return matches
 
@@ -309,10 +352,12 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> int:
     arguments = parse_arguments()
     try:
-        source_dir = source_directory(arguments.id, arguments.source_dir)
+        source_dir = source_directory(arguments.id, arguments.source_dir, arguments.match_mode)
         anima_dir = Path(arguments.anima_dir).resolve()
         pack_dir = pack_directory(arguments.id, arguments.pack_dir)
-        matches = verified_matches(source_dir, anima_dir, pack_dir, arguments.match_mode)
+        matches = verified_matches(
+            arguments.id, source_dir, anima_dir, pack_dir, arguments.match_mode
+        )
         payloads = [(match.state, load_sanitized_provenance(match.anima_json)) for match in matches]
         if not arguments.verify_only:
             write_provenance(pack_dir / "provenance", payloads)
