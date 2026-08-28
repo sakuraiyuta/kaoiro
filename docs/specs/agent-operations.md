@@ -51,6 +51,26 @@ kaoiro のバックログは、複数のエージェントが同一 work tree �
   対し反映先が複数(コード / ADR / issue 本文 / 起案文面)あるとき、1 つで
   確認して残りを推定しない。
 
+## 実装者の worktree 分離
+
+- 実装 (ファイル編集を伴う担当) は共有 work tree 上で直接行わず、
+  `<repo>/worktrees/<persona>/` に作る専用 git worktree で行う。
+  作成例: `git worktree add worktrees/momo -b issue-NNN-topic develop`。
+  `/worktrees/` は gitignore 済み。
+- repo 内に置くのは、エージェントの sandbox が session cwd 配下にしか
+  書き込めないため。外部 path や別 clone は権限で詰む。
+- branch は CLAUDE.md の branch strategy どおり `issue-NNN-*` を develop
+  から切り、完了後に develop へ fast-forward で戻す。git は同一 branch の
+  二重 checkout を拒否するので、worktree 分離は branch 分離を伴う。
+- 共有 work tree (repo root) は統合・レビュー・director の読み取り面と
+  し、実装の未 commit hunk を持ち込まない。
+- worktree 初回作成後は各自 `pnpm install` / `mix deps.get` を実行する
+  (依存はコピーされない)。不要になった worktree は
+  `git worktree remove` で片付ける。
+- Why: 同一ファイルに複数 writer の未 commit hunk が同居した状態での
+  file 単位 stage が、他者の hunk を 2 度 commit へ巻き込んだ
+  (2026-08-28、issue #232 / #203 の App.svelte)。
+
 ## dispatch する側 (director)
 
 - peer の engine で利用できない仕組みを完了条件に課さない。Claude Code の
