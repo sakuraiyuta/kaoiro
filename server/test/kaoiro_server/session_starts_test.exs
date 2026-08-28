@@ -7,7 +7,7 @@ defmodule KaoiroServer.SessionStartsTest do
 
   setup do
     name = :"session_starts_#{System.unique_integer([:positive])}"
-    path = Path.join(System.tmp_dir!(), "#{name}.dets")
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
     File.rm(path)
     {:ok, _pid} = SessionStarts.start_link(name: name, path: path)
 

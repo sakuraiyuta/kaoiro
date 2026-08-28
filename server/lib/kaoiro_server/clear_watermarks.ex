@@ -222,11 +222,8 @@ defmodule KaoiroServer.ClearWatermarks do
 
   @impl true
   def init({name, path}) do
-    path |> Path.dirname() |> File.mkdir_p!()
+    KaoiroServer.DetsStorePath.prepare_parent!(path)
     table = open_table(name, path)
-    # Watermarks are not personally sensitive on their own, but the file
-    # sits alongside the other agent DETS stores; keep the chmod symmetric
-    # so a shared /tmp cannot become the weak link.
     _ = File.chmod(path, 0o600)
     {:ok, %{table: table, watermarks: load_watermarks(table)}}
   end
@@ -404,6 +401,6 @@ defmodule KaoiroServer.ClearWatermarks do
 
   defp default_path do
     Application.get_env(:kaoiro_server, :clear_watermarks_path) ||
-      Path.join(System.tmp_dir!(), "kaoiro_clear_watermarks.dets")
+      KaoiroServer.DetsStorePath.default_path("clear_watermarks.dets")
   end
 end

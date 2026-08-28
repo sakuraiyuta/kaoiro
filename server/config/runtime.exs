@@ -207,7 +207,7 @@ end
 # the authoritative store of revoked agent_ids for fail-closed auth: a lost
 # entry silently re-grants a revoked identity. Point at a persistent volume
 # in production; unset falls back to KaoiroServer.TokenDenylist.default_path/0
-# (a shared `$TMPDIR/kaoiro_token_denylist.dets`) which does NOT survive a
+# (`$TMPDIR/kaoiro-dets/token_denylist.dets`) which does NOT survive a
 # container recreation.
 if path = System.get_env("KAOIRO_TOKEN_DENYLIST_PATH") do
   config :kaoiro_server, :token_denylist_path, path

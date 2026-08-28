@@ -113,11 +113,9 @@ defmodule KaoiroServer.SessionPointers do
 
   @impl true
   def init({name, path}) do
-    path |> Path.dirname() |> File.mkdir_p!()
+    KaoiroServer.DetsStorePath.prepare_parent!(path)
     table = open_table(name, path)
-    # Records carry cwd, which is sensitive (#46); keep the file owner-only
-    # so the default /tmp location is not world-readable on a shared host.
-    # Best-effort — chmod can fail on non-POSIX filesystems, not fatal.
+    # The owner-only parent protects the post-open chmod window from foreign OS users.
     _ = File.chmod(path, 0o600)
     pointers = load_pointers(table)
     {:ok, %{table: table, pointers: pointers, next_effort_revision: next_revision_seed(pointers)}}
@@ -348,7 +346,7 @@ defmodule KaoiroServer.SessionPointers do
 
   defp default_path do
     Application.get_env(:kaoiro_server, :session_pointers_path) ||
-      Path.join(System.tmp_dir!(), "kaoiro_session_pointers.dets")
+      KaoiroServer.DetsStorePath.default_path("session_pointers.dets")
   end
 
   # effort_revision bump rule (issue #88, ふじ 2026-08-05 spec). Advances

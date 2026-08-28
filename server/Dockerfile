@@ -165,7 +165,7 @@ LABEL com.kaoiro.build-dirty=${KAOIRO_BUILD_DIRTY}
 # without it the volume would land as root:root and the runtime user
 # would fail to open the DETS file. See server/docker-compose.yaml
 # `volumes:` and KAOIRO_*_PATH in config/runtime.exs.
-RUN mkdir /var/lib/kaoiro && chown nobody /var/lib/kaoiro
+RUN mkdir /var/lib/kaoiro && chown nobody /var/lib/kaoiro && chmod 700 /var/lib/kaoiro
 
 # set runner ENV
 ENV MIX_ENV="prod"

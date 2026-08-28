@@ -7,7 +7,7 @@ defmodule KaoiroServer.TokenDenylistTest do
 
   setup do
     name = :"td_#{System.unique_integer([:positive])}"
-    path = Path.join(System.tmp_dir!(), "#{name}.dets")
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
     File.rm(path)
     {:ok, pid} = TokenDenylist.start_link(name: name, path: path)
 
@@ -96,7 +96,7 @@ defmodule KaoiroServer.TokenDenylistTest do
   # and the DETS file must remain on disk for forensic inspection.
   test "corrupt file は fail-closed で start_link error 、file は forensic 用に保持" do
     name = :"td_corrupt_#{System.unique_integer([:positive])}"
-    path = Path.join(System.tmp_dir!(), "#{name}.dets")
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
     # Write non-DETS bytes so :dets.open_file rejects it.
     File.write!(path, "not a dets file")
     on_exit(fn -> File.rm(path) end)
@@ -113,7 +113,7 @@ defmodule KaoiroServer.TokenDenylistTest do
 
   test "malformed row は fail-closed で load error に落ちる (silent drop 禁止)" do
     name = :"td_malformed_#{System.unique_integer([:positive])}"
-    path = Path.join(System.tmp_dir!(), "#{name}.dets")
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
     File.rm(path)
 
     # まず正常な DETS ファイルを作る (empty)。

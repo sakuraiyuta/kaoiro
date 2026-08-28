@@ -200,11 +200,9 @@ defmodule KaoiroServer.AgentDirectory do
 
   @impl true
   def init({name, path}) do
-    path |> Path.dirname() |> File.mkdir_p!()
+    KaoiroServer.DetsStorePath.prepare_parent!(path)
     table = open_table(name, path)
-    # Records may carry a custom name the operator picked. Keep the file
-    # owner-only so the default /tmp location is not world-readable on a
-    # shared host — matches SessionPointers' chmod discipline.
+    # The owner-only parent protects the post-open chmod window from foreign OS users.
     _ = File.chmod(path, 0o600)
     {:ok, %{table: table, entries: load_entries(table)}}
   end
@@ -502,6 +500,6 @@ defmodule KaoiroServer.AgentDirectory do
 
   defp default_path do
     Application.get_env(:kaoiro_server, :agent_directory_path) ||
-      Path.join(System.tmp_dir!(), "kaoiro_agent_directory.dets")
+      KaoiroServer.DetsStorePath.default_path("agent_directory.dets")
   end
 end

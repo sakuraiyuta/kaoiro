@@ -5780,7 +5780,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   describe "migration 統合: legacy 5-tuple -> compute_launch_defaults (issue #88, should-fix 1)" do
     test "異 effort の legacy 2 agent は no preference、片方が正常 commit すると revisioned candidate が勝つ" do
       name = :"sp_migration_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
       File.rm(path)
       {:ok, _pid} = SessionPointers.start_link(name: name, path: path)
 

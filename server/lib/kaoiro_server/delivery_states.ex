@@ -114,7 +114,7 @@ defmodule KaoiroServer.DeliveryStates do
 
   @impl true
   def init({name, path}) do
-    path |> Path.dirname() |> File.mkdir_p!()
+    KaoiroServer.DetsStorePath.prepare_parent!(path)
     table = open_table(name, path)
     _ = File.chmod(path, 0o600)
     {:ok, %{table: table, entries: load_entries(table)}}
@@ -262,6 +262,6 @@ defmodule KaoiroServer.DeliveryStates do
 
   defp default_path do
     Application.get_env(:kaoiro_server, :delivery_states_path) ||
-      Path.join(System.tmp_dir!(), "kaoiro_delivery_states.dets")
+      KaoiroServer.DetsStorePath.default_path("delivery_states.dets")
   end
 end

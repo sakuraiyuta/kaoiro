@@ -28,7 +28,7 @@ defmodule KaoiroServer.SessionPointersTest do
     beam_nonce =
       "#{System.pid()}_" <> Base.url_encode64(:crypto.strong_rand_bytes(4), padding: false)
 
-    path = Path.join(System.tmp_dir!(), "#{name}_#{beam_nonce}.dets")
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}_#{beam_nonce}.dets"])
     File.rm(path)
     {:ok, pid} = SessionPointers.start_link(name: name, path: path)
 

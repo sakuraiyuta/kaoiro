@@ -152,11 +152,8 @@ defmodule KaoiroServer.Users do
 
   @impl true
   def init({name, path}) do
-    path |> Path.dirname() |> File.mkdir_p!()
+    KaoiroServer.DetsStorePath.prepare_parent!(path)
     table = open_table(name, path)
-    # The store is keyed by numeric user_id and may carry a display_name
-    # an operator or IdP chose; keep the file owner-only, matching
-    # AgentDirectory / SessionPointers' chmod discipline.
     _ = File.chmod(path, 0o600)
     entries = load_entries(table)
 
@@ -311,6 +308,6 @@ defmodule KaoiroServer.Users do
 
   defp default_path do
     Application.get_env(:kaoiro_server, :users_path) ||
-      Path.join(System.tmp_dir!(), "kaoiro_users.dets")
+      KaoiroServer.DetsStorePath.default_path("users.dets")
   end
 end

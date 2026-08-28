@@ -69,7 +69,7 @@ defmodule KaoiroServer.IngressOrder do
 
   @impl true
   def init({name, path, clock, seed_from}) do
-    path |> Path.dirname() |> File.mkdir_p!()
+    KaoiroServer.DetsStorePath.prepare_parent!(path)
     table = open_table(name, path)
     _ = File.chmod(path, 0o600)
     persisted = load_persisted(table)
@@ -181,6 +181,6 @@ defmodule KaoiroServer.IngressOrder do
 
   defp default_path do
     Application.get_env(:kaoiro_server, :ingress_order_path) ||
-      Path.join(System.tmp_dir!(), "kaoiro_ingress_order.dets")
+      KaoiroServer.DetsStorePath.default_path("ingress_order.dets")
   end
 end

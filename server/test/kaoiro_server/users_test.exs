@@ -12,7 +12,7 @@ defmodule KaoiroServer.UsersTest do
     # Isolated DETS file + table name per test so cases don't share state
     # (mirrors AgentDirectoryTest).
     name = :"users_#{System.unique_integer([:positive])}"
-    path = Path.join(System.tmp_dir!(), "#{name}.dets")
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
     File.rm(path)
     {:ok, pid} = Users.start_link(name: name, path: path)
 

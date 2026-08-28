@@ -22,7 +22,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
   setup do
     # Isolated DETS file + table name per test so cases don't share state.
     name = :"ad_#{System.unique_integer([:positive])}"
-    path = Path.join(System.tmp_dir!(), "#{name}.dets")
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
     File.rm(path)
     {:ok, pid} = AgentDirectory.start_link(name: name, path: path)
 
@@ -304,7 +304,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
     # state を作る (MF-4 の後方互換テストと同じ手法)。
     test "revision が上限 (@max_safe_revision) の entry は rename が :revision_exhausted で拒否され、entry は不変のまま" do
       table_name = :"ad_max_rev_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
@@ -328,7 +328,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
     # なら通常どおり成功し、revision が上限ちょうどへ到達する。
     test "revision が上限-1 の entry は rename が成功し revision が上限ちょうどになる" do
       table_name = :"ad_near_max_rev_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
@@ -358,7 +358,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
       # (setup 側の AgentDirectory が同じ path を既に開いているため、
       # 使い回すと :dets.open_file が競合する)。
       table_name = :"ad_legacy_raw_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       # record/3 を経由せず、段階3以前のコードが書いていた生の 2-tuple
@@ -389,7 +389,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
 
     test "3-tuple (revision 付き): persona_id/display_name へ無条件migrationされ、revision も引き継がれる" do
       table_name = :"ad_legacy3_raw_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
@@ -420,7 +420,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
     test "revision が破損している (負数/非整数/上限超過) 3-tuple は revision: @initial_revision へフォールバックする" do
       for bad_revision <- [-1, "1", 1.5, nil, @max_safe_revision + 1] do
         table_name = :"ad_legacy_bad_rev_#{System.unique_integer([:positive])}"
-        path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+        path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
         File.rm(path)
 
         {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
@@ -449,7 +449,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
     # dropped by that guard on the first post-restart rename push.
     test "既に revision: 0 で永続化された 4-tuple entry (pre-MF-2 baseline) は load 時に @initial_revision へ持ち上げられる" do
       table_name = :"ad_pre_mf2_raw_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
@@ -479,7 +479,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
     # catch-all, and is skipped with a warning rather than migrated.
     test "\"name\" が欠落/非binary な legacy persona map は persona_id を display_name として発明せず catch-all でスキップされる" do
       table_name = :"ad_legacy_no_name_raw_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
@@ -528,7 +528,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
   describe "認識できない DETS レコードからの読み込み (catch-all fail-soft)" do
     test "guard に一致しない record はスキップされ、他の正常なレコードは読み込まれる" do
       table_name = :"ad_unknown_raw_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
@@ -580,7 +580,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
   describe "agent_id が non-binary な DETS レコード (issue #219 MF-6)" do
     test "current 4-tuple: 破損行は skip され、正常な隣接行は読み込まれる" do
       table_name = :"ad_badid4_raw_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
@@ -607,7 +607,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
 
     test "legacy 3-tuple: 破損行は skip され、正常な隣接行は読み込まれる" do
       table_name = :"ad_badid3_raw_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
@@ -638,7 +638,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
     # guard がそれより先に catch-all へ落とすことを pin する。
     test "legacy 2-tuple (補間 crash の再現ケース): 破損行は skip され、正常な隣接行は読み込まれる" do
       table_name = :"ad_badid2_raw_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
@@ -672,7 +672,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
   describe "新形式 DETS (issue #219, persona_id 参照のみ) からの読み込み" do
     test "4-tuple はそのまま復元される" do
       table_name = :"ad_new_raw_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{table_name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
       File.rm(path)
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))

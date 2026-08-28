@@ -94,7 +94,7 @@ defmodule KaoiroServer.TokenDenylist do
 
   @impl true
   def init({name, path}) do
-    path |> Path.dirname() |> File.mkdir_p!()
+    KaoiroServer.DetsStorePath.prepare_parent!(path)
 
     case open_table(name, path) do
       {:ok, table} ->
@@ -207,6 +207,6 @@ defmodule KaoiroServer.TokenDenylist do
 
   defp default_path do
     Application.get_env(:kaoiro_server, :token_denylist_path) ||
-      Path.join(System.tmp_dir!(), "kaoiro_token_denylist.dets")
+      KaoiroServer.DetsStorePath.default_path("token_denylist.dets")
   end
 end

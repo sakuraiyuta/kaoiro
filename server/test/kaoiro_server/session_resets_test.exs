@@ -14,7 +14,7 @@ defmodule KaoiroServer.SessionResetsTest do
     # cannot bleed between tests.
     resets_name = :"sr_#{System.unique_integer([:positive])}"
     pointers_name = :"sp_for_sr_#{System.unique_integer([:positive])}"
-    pointers_path = Path.join(System.tmp_dir!(), "#{pointers_name}.dets")
+    pointers_path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{pointers_name}.dets"])
     File.rm(pointers_path)
 
     {:ok, sp_pid} =

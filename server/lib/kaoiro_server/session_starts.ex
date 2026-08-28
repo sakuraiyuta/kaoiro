@@ -46,7 +46,7 @@ defmodule KaoiroServer.SessionStarts do
 
   @impl true
   def init({name, path}) do
-    path |> Path.dirname() |> File.mkdir_p!()
+    KaoiroServer.DetsStorePath.prepare_parent!(path)
     table = open_table(name, path)
     _ = File.chmod(path, 0o600)
     {:ok, %{table: table, starts: load_starts(table)}}
@@ -160,6 +160,6 @@ defmodule KaoiroServer.SessionStarts do
 
   defp default_path do
     Application.get_env(:kaoiro_server, :session_starts_path) ||
-      Path.join(System.tmp_dir!(), "kaoiro_session_starts.dets")
+      KaoiroServer.DetsStorePath.default_path("session_starts.dets")
   end
 end

@@ -56,7 +56,7 @@ defmodule KaoiroServer.PermissionModes do
 
   @impl true
   def init({name, path}) do
-    path |> Path.dirname() |> File.mkdir_p!()
+    KaoiroServer.DetsStorePath.prepare_parent!(path)
     table = open_table(name, path)
     # mode is not personally sensitive, but the file lives next to the
     # session-pointer DETS — keep the chmod symmetric with SessionPointers.
@@ -123,6 +123,6 @@ defmodule KaoiroServer.PermissionModes do
 
   defp default_path do
     Application.get_env(:kaoiro_server, :permission_modes_path) ||
-      Path.join(System.tmp_dir!(), "kaoiro_permission_modes.dets")
+      KaoiroServer.DetsStorePath.default_path("permission_modes.dets")
   end
 end
