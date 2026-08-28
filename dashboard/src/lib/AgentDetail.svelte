@@ -777,21 +777,43 @@
   const LOG_WINDOW_SIZE = 200;
   let frozenWindow = $state<
     | {
-        // issue #228: an index into `displayableLogs`, NOT raw `logs[]` —
-        // the window counts displayable (post-hide) rows so the setting
-        // above cannot make it evict readable rows (see displayableLogs'
-        // own doc comment). `anchorLength` below stays a raw `logs.length`
-        // on purpose (shrink/history-reset detection tracks the real
-        // transcript, independent of the hide setting).
+        // issue #228 R2 must-fix (ふじ round-2): a RAW `logs[]` absolute
+        // index, NOT a position in `displayableLogs`. It was a
+        // displayableLogs position through round 1, but that population
+        // can change SIZE when the hide setting toggles while frozen —
+        // ふじ's probe: freeze at displayableLogs position 800 (800
+        // tool_use entries hidden ahead of 200 assistant ones), then
+        // toggle hide on; displayableLogs shrinks to the 200 assistant
+        // entries alone, and the stale "800" — now read as a position in
+        // the NEW 200-entry population — clamped past its end and wiped
+        // the entire render. A raw `logs[]` index is stable across a
+        // toggle (the toggle does not change `logs` itself), so
+        // `effectiveWindowStart` below re-maps it into whatever
+        // `displayableLogs` currently is on every read instead of reusing
+        // a stale position. `anchorLength` stays a raw `logs.length` for
+        // the same reason it always has (shrink/history-reset detection
+        // tracks the real transcript, independent of the hide setting).
         start: number;
         mode: "reading-frozen" | "explicit-expanded";
         anchorLength: number;
       }
     | null
   >(null);
+  // Re-derived on every read (issue #228 R2): maps a raw `logs[]` boundary
+  // to its position in the CURRENT `displayableLogs`, rather than trusting
+  // a position captured under a possibly-different (pre-toggle)
+  // population. Falls forward to the nearest LATER displayable entry when
+  // the exact boundary index itself is hidden by the current setting
+  // (never collapses to "show nothing" — the failure mode this fixes).
+  function mapAbsoluteBoundaryToDisplayIndex(absoluteBoundary: number): number {
+    const index = displayableLogs.findIndex(
+      (d) => d.absoluteIndex >= absoluteBoundary,
+    );
+    return index === -1 ? displayableLogs.length : index;
+  }
   const effectiveWindowStart = $derived(
     frozenWindow !== null
-      ? Math.min(frozenWindow.start, displayableLogs.length)
+      ? mapAbsoluteBoundaryToDisplayIndex(frozenWindow.start)
       : Math.max(0, displayableLogs.length - LOG_WINDOW_SIZE),
   );
   const visibleLogs = $derived(displayableLogs.slice(effectiveWindowStart));
@@ -909,10 +931,13 @@
   // `absoluteIndex` is a raw `logs[]` index (both callers — the timeline
   // jump and the tool_use/tool_result partner jump — find it via
   // `logs.findIndex`). issue #228: the window now counts displayable rows,
-  // so this translates it to its position in `displayableLogs` first. A
-  // target the hide setting has filtered out (e.g. a jump computed just
-  // before the operator flipped the toggle) has no such position — no-op
-  // rather than mis-expanding the window to an unrelated row.
+  // so whether it is CURRENTLY hidden is checked via its position in
+  // `displayableLogs` — a target the hide setting has filtered out (e.g. a
+  // jump computed just before the operator flipped the toggle) has no such
+  // position, so this no-ops rather than mis-expanding the window to an
+  // unrelated row. issue #228 R2: `frozenWindow.start` itself stores the
+  // raw `absoluteIndex`, not the displayIndex — see its own doc comment
+  // for why a displayIndex position does not survive a later hide toggle.
   function ensureIndexVisible(absoluteIndex: number): number | null {
     const start = untrack(() => effectiveWindowStart);
     const displayIndex = untrack(() =>
@@ -921,7 +946,7 @@
     if (displayIndex === -1) return null;
     if (displayIndex >= 0 && displayIndex < start) {
       frozenWindow = {
-        start: displayIndex,
+        start: absoluteIndex,
         mode: "reading-frozen",
         anchorLength: logs.length,
       };
@@ -1714,8 +1739,17 @@
         // advancing `effectiveWindowStart` and silently evict the very rows
         // they are reading, with no scroll compensation (unlike the explicit
         // showEarlierLogs expand, which does compensate).
+        //
+        // issue #228 R2: `frozenWindow.start` stores the raw `logs[]`
+        // index, not the displayableLogs position `effectiveWindowStart`
+        // itself is — translate via the entry actually sitting at that
+        // position. `displayableLogs.length` (nothing displayable is at
+        // or past the boundary) falls back to `logs.length`, an absolute
+        // boundary past every entry — consistent with `hiddenLogCount`
+        // reading 0 in that state (nothing is currently hidden by the
+        // window boundary either).
         frozenWindow = {
-          start: effectiveWindowStart,
+          start: displayableLogs[effectiveWindowStart]?.absoluteIndex ?? logs.length,
           mode: "reading-frozen",
           anchorLength: logs.length,
         };

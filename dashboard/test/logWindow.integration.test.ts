@@ -12,6 +12,7 @@ import AgentDetail from "../src/lib/AgentDetail.svelte";
 import { conversationEntryKey } from "../src/lib/conversationTimeline";
 import { renderMermaidIn } from "../src/lib/markdown";
 import type { Envelope } from "../src/lib/protocol";
+import { updateSettings } from "../src/lib/settings.svelte";
 import { makeReactiveTimelineDetailProps } from "./reactiveProps.svelte";
 
 // vi.mock calls are hoisted above every import in this file (including
@@ -58,6 +59,7 @@ afterEach(async () => {
   if (component) await unmount(component);
   component = null;
   document.body.innerHTML = "";
+  updateSettings({ hideNonMessageLogEntries: false });
   vi.clearAllMocks();
   vi.unstubAllGlobals();
   // clearAllMocks resets call history but not a custom mockImplementation
@@ -322,6 +324,86 @@ describe("AgentDetail log render window (#184)", () => {
     scrollLogTo(logEl, 7100);
     await tick();
     expect(target.querySelectorAll(".transcript-entry").length).toBe(200);
+  });
+
+  // issue #228 round-2 must-fix (ふじ probe): freezing at a displayableLogs
+  // POSITION (round-1's shape) broke the moment the hide setting toggled
+  // and displayableLogs itself changed size — 800 tool_use + 200 assistant,
+  // freeze at position 800, toggle hide on -> displayableLogs shrinks to
+  // the 200 assistant entries alone, and the stale "800" (now past the end
+  // of a 200-entry array) sliced to an empty render. frozenWindow.start now
+  // holds the raw logs[] index instead, re-mapped against whichever
+  // displayableLogs currently is.
+  it("reading-frozen 中に hide 設定を live toggle しても assistant 行が消えない (round-2 must-fix)", async () => {
+    installScrollGeometry();
+    const logs = [
+      ...Array.from({ length: 800 }, (_, i) => toolUse("agent-a", i, `tuid-${i}`)),
+      ...Array.from({ length: 200 }, (_, i) => assistantLog("agent-a", 800 + i)),
+    ];
+    const { target } = await renderReactive({
+      envelope: state("agent-a"),
+      logs,
+      agents: {},
+      scrollToEntryKey: null,
+      onClose: vi.fn(),
+    });
+    const logEl = target.querySelector(".log") as HTMLElement;
+    // Default window (hide off): tail 200 rows = all 200 assistant entries.
+    expect(target.querySelectorAll(".msg.assistant").length).toBe(200);
+
+    // Freeze at the current boundary (absolute index 800 — the raw logs[]
+    // boundary between the tool_use run and the assistant run).
+    scrollLogTo(logEl, 0);
+    await tick();
+
+    updateSettings({ hideNonMessageLogEntries: true });
+    await tick();
+
+    // The 800 tool_use rows vanish, but the 200 assistant rows — the ones
+    // this setting must never hide — must still all be there.
+    expect(target.querySelectorAll(".msg.assistant").length).toBe(200);
+    expect(target.querySelector(".empty")).toBeNull();
+  });
+
+  // Same defect, reached via scrollMemory instead of a live toggle while
+  // agent-a is the active view: agent-a freezes, the operator switches away
+  // (persisting frozenWindow into scrollMemory), the setting toggles while
+  // agent-a is in the BACKGROUND, then the operator switches back. The
+  // remembered raw boundary must still re-map against the now-filtered
+  // displayableLogs on restore.
+  it("背景 agent の scrollMemory 経由でも hide toggle 後に frozen boundary が正しく再写像される (round-2 must-fix)", async () => {
+    installScrollGeometry();
+    const logsA = [
+      ...Array.from({ length: 800 }, (_, i) => toolUse("agent-a", i, `tuid-${i}`)),
+      ...Array.from({ length: 200 }, (_, i) => assistantLog("agent-a", 800 + i)),
+    ];
+    const { target, props } = await renderReactive({
+      envelope: state("agent-a"),
+      logs: logsA,
+      agents: {},
+      scrollToEntryKey: null,
+      onClose: vi.fn(),
+    });
+    const logEl = target.querySelector(".log") as HTMLElement;
+    scrollLogTo(logEl, 0);
+    await tick();
+
+    props.envelope = state("agent-b");
+    props.logs = buildLogs("agent-b", 3);
+    await tick();
+
+    // Toggle while agent-a is NOT the active view — its scrollMemory entry
+    // (raw boundary 800) is untouched by this; only the live render (now
+    // agent-b's) reacts.
+    updateSettings({ hideNonMessageLogEntries: true });
+    await tick();
+
+    props.envelope = state("agent-a");
+    props.logs = logsA;
+    await tick();
+
+    expect(target.querySelectorAll(".msg.assistant").length).toBe(200);
+    expect(target.querySelector(".empty")).toBeNull();
   });
 
   it("履歴 clear/reset で logs が縮んでも残存ログが表示される (round-2 M2)", async () => {
