@@ -33,9 +33,35 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
     end
   end
 
-  describe "GET /api/personas/:id" do
-    test "pack の全メタデータと personality.md 全文を返す (issue #232)", %{conn: conn} do
-      conn = get(conn, "/api/personas/fuji")
+  # issue #232 MF-1: personality.md is a system prompt that may carry
+  # proprietary operating instructions for a custom pack (director
+  # decision) — operator/admin only, viewer disclosure deferred to a
+  # separate future decision (ADR-0021 fail-closed default). The 4 auth
+  # paths below (anonymous / viewer / operator+admin / revoked) pin that
+  # boundary directly; ふじ's round-1 negative probe demonstrated the
+  # pre-fix endpoint returning 200 to an anonymous request.
+  describe "GET /api/personas/:id (issue #232, operator/admin 限定)" do
+    setup do
+      original = Application.get_env(:kaoiro_server, :client_tokens)
+
+      on_exit(fn ->
+        if original do
+          Application.put_env(:kaoiro_server, :client_tokens, original)
+        else
+          Application.delete_env(:kaoiro_server, :client_tokens)
+        end
+      end)
+
+      :ok
+    end
+
+    test "operator は pack の全メタデータと personality.md 全文を得る", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-op"})
+        |> get("/api/personas/fuji")
 
       assert %{
                "id" => "fuji",
@@ -54,13 +80,66 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert is_binary(personality) and personality != ""
     end
 
-    test "未知の id は 404", %{conn: conn} do
-      conn = get(conn, "/api/personas/nope")
+    test "admin は 200 を得る", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-admin:admin")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-admin"})
+        |> get("/api/personas/fuji")
+
+      assert conn.status == 200
+    end
+
+    test "viewer は 403", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-view:viewer")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-view"})
+        |> get("/api/personas/fuji")
+
+      assert json_response(conn, 403) == %{"error" => "forbidden"}
+    end
+
+    test "匿名 (session に credential 無し) は 401", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      conn = conn |> init_test_session(%{}) |> get("/api/personas/fuji")
+
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "失効した (client_tokens から外れた) token は 401", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "revoked-token"})
+        |> get("/api/personas/fuji")
+
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "未知の id は operator でも 404", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-op"})
+        |> get("/api/personas/nope")
+
       assert json_response(conn, 404) == %{"error" => "not_found"}
     end
 
-    test "予約済み default は pack を持たないため 404", %{conn: conn} do
-      conn = get(conn, "/api/personas/default")
+    test "予約済み default は pack を持たないため operator でも 404", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-op"})
+        |> get("/api/personas/default")
+
       assert json_response(conn, 404) == %{"error" => "not_found"}
     end
   end

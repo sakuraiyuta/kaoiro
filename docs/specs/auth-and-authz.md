@@ -119,6 +119,19 @@ viewer からの同 event は `{:error, :forbidden}` で拒否。role は snapsh
 ではなく操作のたび `ClientSocket.role_for/1` で解決し直す(下記 OAuth 節
 の #148)。
 
+### Operator 限定 HTTP endpoint (issue #232)
+
+WS の `handle_in` gate とは別に、operator/admin 限定の HTTP endpoint が
+ある。`KaoiroServerWeb.RequireOperatorPlug` が `:fetch_session` の後段で
+gate する: session cookie の credential を
+`KaoiroServerWeb.SessionCredential.resolve/1` で取り出し、
+`ClientSocket.role_for/1`(WS 側と同じ関数)で role を毎リクエスト live
+再解決する。credential 無し/失効は 401、viewer は 403。
+
+| endpoint | 理由 |
+|---|---|
+| `GET /api/personas/:id` | persona pack の manifest.json 全メタデータ + personality.md 全文を返す。custom pack の personality.md は system prompt であり、proprietary な運用指示を含み得るため ADR-0021 F7 の fail-closed 既定 (新規出力面は operator 限定、viewer 開示は明示判断) に従う |
+
 ### ツール認可 — canUseTool / PermissionBroker
 
 - wrapper の `Options.allowedTools` (config の `allowed_tools`) が SDK
@@ -277,6 +290,8 @@ OSS 公開前監査 (private Gitea issue 91) では
   (sanitize_envelope_for 網羅性 + テスト coverage)
 - [ ] operator-only inbound の `require_operator/1` 抜けなし
   (grep + テスト)
+- [ ] operator 限定 HTTP endpoint (`RequireOperatorPlug`) が匿名 401 /
+  viewer 403 / operator・admin 200 をテストで担保している (issue #232)
 - [ ] dev fallback の risk 評価 ( `:prod` は token 未設定で fail-closed に
   なることをテストで担保、issue #133)
 - [ ] secret 系の log 出力なし

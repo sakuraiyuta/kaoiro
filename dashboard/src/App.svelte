@@ -71,6 +71,7 @@
   import { RELATIVE_TIME_TICK_MS } from "./lib/relativeTime";
 
   let agents = $state<Record<string, Envelope>>({});
+  let snapshotIncomplete = $state(false);
   // Active subagent/workflow tasks (ADR-0019/0047/0048, issue #180),
   // nested agent_id -> task_id -> latest task envelope (M1 fix-round
   // composite key, 2026-08-09). Operator-only, twin of `directory`'s
@@ -571,6 +572,7 @@
           // its own handshake per connection). Both go now, before the first
           // envelope of the new window arrives.
           connectionGeneration += 1;
+          snapshotIncomplete = false;
           awaitingHistory = true;
           liveSinceJoin = {};
           activeTimelineReplays = retainTimelineReplaysOfGeneration(
@@ -583,6 +585,7 @@
           refreshServerHealth();
         },
         onSnapshot: (next) => (agents = next),
+        onSnapshotIncomplete: (incomplete) => (snapshotIncomplete = incomplete),
         onTaskSnapshot: (next) => (tasks = next),
         onDeliverySnapshot: (next) => (deliveries = next),
         onDeliveryStatus: (agentId, delivery) => {
@@ -1478,6 +1481,12 @@
   <p class="spawn-notice" role="status">{spawnNoticeText}</p>
 {/if}
 
+{#if snapshotIncomplete}
+  <p class="snapshot-notice" role="status">
+    一部のエージェントは snapshot の上限により表示されていません。
+  </p>
+{/if}
+
 {#if showLaunch && connection}
   <LaunchDialog
     {hosts}
@@ -1548,7 +1557,7 @@
             }
           }}
           onRename={isOperator && connection ? connection.renameAgent : undefined}
-          onOpenPersonaDetail={(id) => (personaDetailId = id)}
+          onOpenPersonaDetail={isOperator ? (id) => (personaDetailId = id) : undefined}
         />
       </div>
       {#if nextAgentId}
@@ -1642,7 +1651,7 @@
                 onDelete={connection
                   ? () => connection!.deleteAgent(envelope.agent_id)
                   : undefined}
-                onOpenPersonaDetail={(id) => (personaDetailId = id)}
+                onOpenPersonaDetail={isOperator ? (id) => (personaDetailId = id) : undefined}
               />
             </li>
           {/each}
@@ -1709,7 +1718,7 @@
                   onDelete={connection
                     ? () => connection!.deleteAgent(tile.id)
                     : undefined}
-                  onOpenPersonaDetail={(id) => (personaDetailId = id)}
+                  onOpenPersonaDetail={isOperator ? (id) => (personaDetailId = id) : undefined}
                 />
               </li>
             {/each}
@@ -2210,6 +2219,17 @@
       max(2rem, env(safe-area-inset-left));
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .snapshot-notice {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0.4rem max(2rem, env(safe-area-inset-right)) 0.4rem
+      max(2rem, env(safe-area-inset-left));
+    font-size: var(--fs-body-sm);
+    color: var(--c-error);
     background: var(--bg-card);
     border-bottom: 1px solid var(--line);
   }

@@ -34,7 +34,7 @@ defmodule KaoiroServerWeb.SessionController do
 
   alias KaoiroServer.Auth
   alias KaoiroServer.OAuth
-  alias KaoiroServer.OAuthAllowlist
+  alias KaoiroServerWeb.SessionCredential
 
   # Matches ClientSocket's ticket salt.
   @ws_ticket_salt "client_ws"
@@ -164,24 +164,18 @@ defmodule KaoiroServerWeb.SessionController do
   end
 
   # Re-validates whatever the session holds and returns the value that
-  # should ride the WS ticket / be re-written to the cookie. The OAuth
-  # identity is checked first: `create` and the callback each clear the
-  # other key, so at most one of them is ever set.
+  # should ride the WS ticket / be re-written to the cookie. Delegates the
+  # actual "is this still valid" check to SessionCredential (issue #232)
+  # so RequireOperatorPlug's HTTP operator gate cannot drift from this
+  # definition; unwraps its tagged-tuple shape back to this controller's
+  # existing bare token / identity-map return.
   defp credential(conn) do
-    identity = get_session(conn, "oauth_identity")
-    token = get_session(conn, "client_token")
-
-    cond do
-      allowed_identity?(identity) -> {:ok, identity}
-      token && match?({:ok, _role}, Auth.client_role(token)) -> {:ok, token}
-      true -> :error
+    case SessionCredential.resolve(conn) do
+      {:oauth, identity} -> {:ok, identity}
+      {:token, token} -> {:ok, token}
+      nil -> :error
     end
   end
-
-  defp allowed_identity?(%{provider: provider, uid: uid}),
-    do: OAuthAllowlist.role_for(provider, uid) != nil
-
-  defp allowed_identity?(_identity), do: false
 
   defp put_credential(conn, %{provider: _provider, uid: _uid} = identity),
     do: put_session(conn, "oauth_identity", identity)

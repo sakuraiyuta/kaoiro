@@ -251,6 +251,34 @@ role を解決できない (allow-list から revoke された、config が未�
 新 field を足すときの手順は F6-7 と同じ(agent 開示の要否判断 →
 F6-3 / F6-8 いずれかへ列挙 → 両主体の可視性を covering するテスト)。
 
+### F7: HTTP endpoint の role gate(issue #232、2026-08-28 追記)
+
+F1〜F6 は `agents:lobby`(WS envelope 配信)と peer directory を対象と
+する。**HTTP endpoint も同じ fail-closed 原則に従う**: 新規 endpoint が
+機微情報を返し得る場合、operator/admin 限定をデフォルトとし、viewer
+開示は別途明示判断する(F2 の「新規出力面は operator 限定がデフォルト」
+という考え方を WS envelope 以外の出力面にも一般化したもの)。
+
+現時点の対象: `GET /api/personas/:id`(persona pack の manifest.json
+全メタデータ + personality.md 全文)。custom pack の personality.md は
+system prompt であり、proprietary な運用指示を含み得るため
+operator/admin 限定とした(director 決裁、2026-08-28)。viewer への
+開示を将来検討する際は、personality.md の byte 上限 (S-232-1 として
+見送り) も合わせて決裁する必要がある(issue #232 クローズコメント
+参照)。
+
+実装は `KaoiroServerWeb.RequireOperatorPlug`(WS 側の
+`ClientSocket.role_for/1` をそのまま再利用し、session cookie の
+credential を毎リクエスト live revalidate — F1 の 3 ロール改訂と同じ
+判定で admin も通す)。詳細は
+[auth-and-authz](../specs/auth-and-authz.md)「Operator 限定 HTTP
+endpoint」節。
+
+新規 HTTP endpoint を追加するときの手順は F5 と同型: viewer 開示の
+要否を明示判断し、operator 限定がデフォルト、viewer 開示は
+`RequireOperatorPlug` を通さない選択として明示し、テストで
+匿名/viewer/operator・admin の可視性を covering する。
+
 ## Consequences
 
 ### Positive

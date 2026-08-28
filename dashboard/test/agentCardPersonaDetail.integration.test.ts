@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-// AgentCard のペルソナ画像クリック (issue #232): `.sprite-slot` のクリックは
-// onOpenPersonaDetail を呼び、カード全体をクリックしたときの onSelect とは
-// 別の宛先になる。`.open` ボタン (button) の中に `.sprite-slot` をネストした
-// まま (button 内 button は HTML 仕様違反のため独立ボタン化できない) なので、
-// クリック先の分岐がここでの唯一の contract — 直接テストする。
+// AgentCard のペルソナ画像クリック (issue #232 MF-2, ふじ round-1
+// must-fix): `.persona-open` は `.open` の SIBLING <button> — 画像を
+// `.open` の外に出したことで、画像アクションだけを Tab で個別に到達
+// できる (旧・pointer 座標分岐実装は keyboard から到達不能だった)。
+// keyboard activation (native <button> の click イベントとして観測)、
+// 画像/非画像 pointer の宛先分離、callback 無し/persona id 無しの
+// disabled fallback をそれぞれ pin する。
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import AgentCard from "../src/lib/AgentCard.svelte";
@@ -16,7 +18,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-function envelope(): Envelope {
+function envelope(personaId: string | undefined): Envelope {
   return {
     version: "0",
     agent_id: "host-a.p",
@@ -24,11 +26,14 @@ function envelope(): Envelope {
     type: "state_change",
     state: "tool_running",
     payload: {},
-    persona: { id: "p", name: "P", sprite_set: "p" },
+    ...(personaId === undefined
+      ? {}
+      : { persona: { id: personaId, name: "P", sprite_set: "p" } }),
   };
 }
 
 async function render(props: {
+  envelope?: Envelope;
   onSelect?: (origin?: { x: number; y: number }) => void;
   onOpenPersonaDetail?: (personaId: string) => void;
 }) {
@@ -36,7 +41,11 @@ async function render(props: {
   document.body.append(target);
   const component = mount(AgentCard, {
     target,
-    props: { envelope: envelope(), manifest: null, ...props },
+    props: {
+      envelope: envelope("p"),
+      manifest: null,
+      ...props,
+    },
   });
   mounted.push(component);
   await tick();
@@ -44,21 +53,36 @@ async function render(props: {
 }
 
 describe("AgentCard ペルソナ詳細モーダル (issue #232)", () => {
-  it("`.sprite-slot` のクリックは onOpenPersonaDetail をペルソナ id で呼ぶ", async () => {
+  it("`.persona-open` のクリックは onOpenPersonaDetail をペルソナ id で呼ぶ", async () => {
     const onSelect = vi.fn();
     const onOpenPersonaDetail = vi.fn();
     const target = await render({ onSelect, onOpenPersonaDetail });
 
-    target
-      .querySelector(".sprite-slot")!
-      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const button = target.querySelector<HTMLButtonElement>(".persona-open")!;
+    expect(button.disabled).toBe(false);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await tick();
 
     expect(onOpenPersonaDetail).toHaveBeenCalledWith("p");
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("`.sprite-slot` 以外のクリックは従来どおり onSelect を呼ぶ", async () => {
+  // native <button> の click() は Enter/Space 押下でブラウザが発火する
+  // のと同じイベントであり、jsdom でも同一の観測点 — 座標分岐だった旧
+  // 実装ではここが到達不能だった(ふじ実測: onSelect=1/onOpenPersonaDetail=0)。
+  it("`.persona-open` は keyboard activation (Enter/Space 相当) でも同じハンドラを呼ぶ", async () => {
+    const onOpenPersonaDetail = vi.fn();
+    const target = await render({ onOpenPersonaDetail });
+
+    const button = target.querySelector<HTMLButtonElement>(".persona-open")!;
+    button.focus();
+    button.click();
+    await tick();
+
+    expect(onOpenPersonaDetail).toHaveBeenCalledWith("p");
+  });
+
+  it("`.open` (画像以外) のクリックは onSelect を呼び、onOpenPersonaDetail は呼ばない", async () => {
     const onSelect = vi.fn();
     const onOpenPersonaDetail = vi.fn();
     const target = await render({ onSelect, onOpenPersonaDetail });
@@ -72,15 +96,22 @@ describe("AgentCard ペルソナ詳細モーダル (issue #232)", () => {
     expect(onOpenPersonaDetail).not.toHaveBeenCalled();
   });
 
-  it("onOpenPersonaDetail 未指定なら画像クリックも onSelect にフォールバックする", async () => {
+  it("onOpenPersonaDetail 未指定なら `.persona-open` が disabled になる (onSelect へのフォールバックは無い)", async () => {
     const onSelect = vi.fn();
     const target = await render({ onSelect });
 
-    target
-      .querySelector(".sprite-slot")!
-      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await tick();
+    const button = target.querySelector<HTMLButtonElement>(".persona-open")!;
+    expect(button.disabled).toBe(true);
+  });
 
-    expect(onSelect).toHaveBeenCalledTimes(1);
+  it("persona id 不在なら `.persona-open` が disabled になる", async () => {
+    const onOpenPersonaDetail = vi.fn();
+    const target = await render({
+      envelope: envelope(undefined),
+      onOpenPersonaDetail,
+    });
+
+    const button = target.querySelector<HTMLButtonElement>(".persona-open")!;
+    expect(button.disabled).toBe(true);
   });
 });

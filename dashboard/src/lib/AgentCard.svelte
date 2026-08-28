@@ -75,21 +75,17 @@
     onSelect?.({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
   }
 
-  // issue #232: the persona image's click opens the persona pack detail
-  // modal instead of the agent detail view. `.sprite-slot` cannot be its
-  // own <button> nested inside `.open` (HTML forbids interactive content
-  // inside a <button>, and it would also move `.lamp`/`.error-icon`/etc.'s
-  // `.open`-relative absolute positioning below the image) — so `.open`'s
-  // own click handler dispatches on where the click landed instead.
+  // issue #232 MF-2 (ふじ round-1 must-fix): the persona image's click
+  // opens the persona pack detail modal, as a SIBLING <button> to `.open`
+  // rather than nested inside it or reached by dispatching on click
+  // coordinates from `.open`'s own handler (the earlier pointer-only
+  // design — a keyboard user tabbing into `.open` and pressing
+  // Enter/Space had no way to land on the persona action; ふじ measured
+  // onSelect fired, onOpenPersonaDetail never did). `.card-media` (below)
+  // is the new position:relative wrapper carrying `.lamp`/`.error-icon`/
+  // etc.'s absolute positioning, unchanged in effect from when `.open`
+  // carried it.
   const personaId = $derived(envelope.persona?.id);
-  function handleOpenClick(event: MouseEvent): void {
-    const target = event.target as HTMLElement;
-    if (personaId && onOpenPersonaDetail && target.closest(".sprite-slot")) {
-      onOpenPersonaDetail(personaId);
-      return;
-    }
-    selectFrom(event);
-  }
 
   // Displayed state lags the live state for min readability + crossfade (#43);
   // the needs-attention badge below still tracks the live state for immediacy.
@@ -460,15 +456,11 @@
 </script>
 
 <article class="card" data-state={expression.variant} class:directory-only={directoryOnly}>
-  <button
-    type="button"
-    class="open"
-    onclick={directoryOnly ? undefined : handleOpenClick}
-    aria-label={directoryOnly
-      ? `${name} (オフライン)`
-      : `${name} の詳細を開く`}
-    disabled={directoryOnly}
-  >
+  <!-- issue #232 MF-2: position:relative wrapper for `.lamp`/
+       `.offline-label`/`.error-icon`/`.badge` — carries the same
+       absolute-positioning basis `.open` used to, now that `.open` no
+       longer wraps the image. -->
+  <div class="card-media">
     <span class="lamp" title={expression.label}></span>
     {#if directoryOnly}
       <span class="offline-label" aria-label="オフライン">offline</span>
@@ -479,21 +471,33 @@
     {#if attention}
       <span class="badge" data-state={expression.variant}>要対応</span>
     {/if}
-    <div
-      class="sprite-slot"
-      title={personaId && onOpenPersonaDetail ? "ペルソナ詳細を表示" : undefined}
-    >
-      {#key display.shown}
-        <PersonaFace
-          sprite={spriteUrl}
-          variant={expression.variant}
-          label={expression.label}
-          fatigued={fatigued}
-          size="card"
-          imgAltLabelled={true}
-          faceLabelled={true}
-        />
-      {/key}
+    <div class="sprite-slot">
+      <!-- issue #232 MF-2: own <button>, sibling to `.open` below — a
+           keyboard user can now Tab to this action directly instead of
+           it being unreachable except by mouse. disabled when there is
+           nothing to open (directoryOnly / no resolved persona id / no
+           handler), mirroring AgentDetail's `.portrait-open`. -->
+      <button
+        type="button"
+        class="persona-open"
+        onclick={personaId && onOpenPersonaDetail
+          ? () => onOpenPersonaDetail(personaId)
+          : undefined}
+        disabled={directoryOnly || !personaId || !onOpenPersonaDetail}
+        aria-label="{name} のペルソナ詳細を表示"
+      >
+        {#key display.shown}
+          <PersonaFace
+            sprite={spriteUrl}
+            variant={expression.variant}
+            label={expression.label}
+            fatigued={fatigued}
+            size="card"
+            imgAltLabelled={true}
+            faceLabelled={true}
+          />
+        {/key}
+      </button>
       {#if activeTaskCount > 0}
         <!-- 頭上リング (issue #180, ADR-0019/0047/0048)。実装は
              TaskRing.svelte(AgentDetail と共有、issue #180 follow-up
@@ -502,6 +506,16 @@
         <TaskRing faceOrbit={!spriteUrl} />
       {/if}
     </div>
+  </div>
+  <button
+    type="button"
+    class="open"
+    onclick={directoryOnly ? undefined : selectFrom}
+    aria-label={directoryOnly
+      ? `${name} (オフライン)`
+      : `${name} の詳細を開く`}
+    disabled={directoryOnly}
+  >
     <h2>{name}</h2>
     {#key display.shown}
       <p class="state">{expression.label}</p>
@@ -683,13 +697,43 @@
      restarting its rotation on every state change. inline-block
      shrink-wraps to the child's own size (8rem sprite / 5.4rem face), so
      the ring's `inset` offset (below) matches either case without a
-     fixed size here; `.open`'s text-align: center centers it
-     horizontally, replacing the margin:auto the children used to carry
+     fixed size here; `.card`'s own text-align: center centers it
+     horizontally (issue #232 MF-2: moved out of `.open`, which no longer
+     wraps this), replacing the margin:auto the children used to carry
      directly. */
   .sprite-slot {
     position: relative;
     display: inline-block;
     margin-bottom: 1rem;
+  }
+
+  /* issue #232 MF-2: the click target for the persona detail modal, a
+     plain reset so it does not visibly alter `.sprite-slot`'s existing
+     size/position — sized entirely by its PersonaFace child, same as
+     when the image sat unwrapped. Mirrors AgentDetail's
+     `.portrait-open`. */
+  .persona-open {
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .persona-open:disabled {
+    cursor: default;
+  }
+
+  /* issue #232 MF-2: position:relative wrapper for `.lamp`/
+     `.offline-label`/`.error-icon`/`.badge`, taking over the role `.open`
+     used to carry now that `.open` no longer wraps the image — same
+     block-level, full-width footprint at the same position in `.card`'s
+     flow, so their absolute coordinates are unchanged. */
+  .card-media {
+    position: relative;
+    width: 100%;
   }
 
   /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte

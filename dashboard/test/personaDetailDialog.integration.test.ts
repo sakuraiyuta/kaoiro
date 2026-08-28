@@ -14,6 +14,27 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
   return { ...actual, fetchPersonaPackDetail: vi.fn() };
 });
 
+// jsdom does not implement HTMLDialogElement.showModal/close (measured
+// 2026-08-28, jsdom 29.1.1: `dialog.showModal is not a function`) —
+// Modal.svelte (issue #232 MF-3) calls showModal() on mount, so every
+// test here needs this or mounting throws. Toggling `open` + firing
+// `close` is enough for THESE tests (they check onClose wiring, not
+// visual state); the browser's own focus-trap / initial-focus / Escape-
+// cancel behaviour this polyfill cannot simulate is covered by e2e
+// instead (modal.spec.ts).
+if (
+  typeof HTMLDialogElement !== "undefined" &&
+  typeof HTMLDialogElement.prototype.showModal !== "function"
+) {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+    this.removeAttribute("open");
+    this.dispatchEvent(new Event("close"));
+  };
+}
+
 const mounted: object[] = [];
 
 afterEach(async () => {
@@ -135,6 +156,36 @@ describe("PersonaDetailDialog", () => {
     );
   });
 
+  // issue #232 S-2 (ふじ round-1 should-fix): a prefix regex would accept
+  // "https://" (no host) as a match; new URL() rejects it outright
+  // (Invalid URL — measured), which is the more accurate check since a
+  // browser could never navigate there either.
+  it("homepage が https:// (host 無し) ならリンク化しない", async () => {
+    vi.mocked(fetchPersonaPackDetail).mockResolvedValue(
+      detail({ homepage: "https://" }),
+    );
+    const { target } = await render();
+    await vi.waitFor(() => {
+      expect(target.querySelector(".note")).toBeNull();
+    });
+
+    expect(target.querySelector(".meta a")).toBeNull();
+    expect(target.querySelector(".meta")?.textContent).toContain("https://");
+  });
+
+  it("homepage がパース不能な文字列ならリンク化しない", async () => {
+    vi.mocked(fetchPersonaPackDetail).mockResolvedValue(
+      detail({ homepage: "not a url" }),
+    );
+    const { target } = await render();
+    await vi.waitFor(() => {
+      expect(target.querySelector(".note")).toBeNull();
+    });
+
+    expect(target.querySelector(".meta a")).toBeNull();
+    expect(target.querySelector(".meta")?.textContent).toContain("not a url");
+  });
+
   it("取得失敗時はエラーメッセージを表示する", async () => {
     vi.mocked(fetchPersonaPackDetail).mockResolvedValue(null);
     const { target } = await render();
@@ -159,7 +210,11 @@ describe("PersonaDetailDialog", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("backdrop クリックで onClose を呼ぶ", async () => {
+  // issue #232 MF-3: a native <dialog> has no separate backdrop element
+  // (`::backdrop` is a pseudo-element) — Modal.svelte instead treats a
+  // click whose target IS the <dialog> box itself (not bubbled up from
+  // `.modal-content` inside it) as an outside click.
+  it("dialog 自身のクリック (背景相当) で onClose を呼ぶ", async () => {
     vi.mocked(fetchPersonaPackDetail).mockResolvedValue(detail());
     const { target, onClose } = await render();
     await vi.waitFor(() => {
@@ -167,9 +222,56 @@ describe("PersonaDetailDialog", () => {
     });
 
     target
-      .querySelector<HTMLElement>(".backdrop")!
+      .querySelector<HTMLElement>("dialog")!
       .dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("`.modal-content` 内のクリックは onClose を呼ばない", async () => {
+    vi.mocked(fetchPersonaPackDetail).mockResolvedValue(detail());
+    const { target, onClose } = await render();
+    await vi.waitFor(() => {
+      expect(target.querySelector(".note")).toBeNull();
+    });
+
+    target
+      .querySelector<HTMLElement>("h2")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // issue #232 MF-3 (ふじ round-1 must-fix): Escape did nothing pre-fix.
+  // A native <dialog> fires `cancel` on Escape; Modal.svelte's handler
+  // must preventDefault (so the dialog does not close itself out of sync
+  // with the caller's own open/closed state) AND route through onClose.
+  it("cancel イベント (Escape 相当) で onClose を呼び、既定動作を防ぐ", async () => {
+    vi.mocked(fetchPersonaPackDetail).mockResolvedValue(detail());
+    const { target, onClose } = await render();
+    await vi.waitFor(() => {
+      expect(target.querySelector(".note")).toBeNull();
+    });
+
+    const cancelEvent = new Event("cancel", { cancelable: true });
+    target.querySelector<HTMLDialogElement>("dialog")!.dispatchEvent(cancelEvent);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(cancelEvent.defaultPrevented).toBe(true);
+  });
+
+  // issue #232 MF-3: showModal()'s spec-defined initial focus goes to the
+  // first autofocus descendant — this pins that the close button (a
+  // sensible, always-present initial focus target) carries it.
+  it("close ボタンに autofocus が設定されている (dialog の初期フォーカス対象)", async () => {
+    vi.mocked(fetchPersonaPackDetail).mockResolvedValue(detail());
+    const { target } = await render();
+    await vi.waitFor(() => {
+      expect(target.querySelector(".note")).toBeNull();
+    });
+
+    expect(
+      target.querySelector<HTMLButtonElement>("button.close")!.hasAttribute("autofocus"),
+    ).toBe(true);
   });
 });

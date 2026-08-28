@@ -5,7 +5,7 @@
 //   ?view=lobby&role=operator|viewer[&taskRing=1]
 //   ?view=detail[&pending=permission|question][&attention=1]
 //     [&mountDelay=ms][&expandOrigin=1]
-//   ?view=overlay&overlay=dialog|drawer
+//   ?view=overlay&overlay=dialog|drawer|persona
 //   ?view=app        — real App.svelte behind fetch mocks (header chrome)
 import { mount } from "svelte";
 import "../../src/app.css";
@@ -73,7 +73,39 @@ if (view === "app") {
   if (logCount !== null) scenario.logCount = Number(logCount);
   mount(DetailHarness, { target, props: { scenario } });
 } else if (view === "overlay") {
-  const overlay = params.get("overlay") === "drawer" ? "drawer" : "dialog";
+  const overlayParam = params.get("overlay");
+  const overlay =
+    overlayParam === "drawer" ? "drawer" : overlayParam === "persona" ? "persona" : "dialog";
+  if (overlay === "persona") {
+    // issue #232 MF-3 a11y spec: PersonaDetailDialog fetches its detail
+    // over GET /api/personas/:id — stub it so the modal actually renders
+    // content (an initial-focus/Tab-trap spec needs SOME focusable
+    // elements inside besides the close button).
+    window.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      if (url.includes("/api/personas/")) {
+        return json({
+          id: "fuji",
+          name: "ふじ",
+          sprite_set: "fuji",
+          version: "1.0.0",
+          license: "CC0-1.0",
+          min_kaoiro_version: "0.1.0",
+          states: ["idle"],
+          description: "e2e fixture persona",
+          author: "e2e",
+          homepage: "https://example.test/fuji",
+          personality: "e2e fixture personality body",
+        });
+      }
+      return new Response("", { status: 404 });
+    };
+  }
   mount(OverlayHarness, { target, props: { overlay } });
 } else {
   mount(LobbyHarness, {
