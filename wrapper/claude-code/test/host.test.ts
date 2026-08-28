@@ -95,11 +95,15 @@ describe("AgentHost whoami effective projection (#113)", () => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield result("success", { result: "ok" });
       }
-      return asQuery(gen(), async () => {}, async () => ({
-        totalTokens: 42000,
-        maxTokens: 200000,
-        percentage: 21,
-      }));
+      return asQuery(
+        gen(),
+        async () => {},
+        async () => ({
+          totalTokens: 42000,
+          maxTokens: 200000,
+          percentage: 21,
+        }),
+      );
     });
     const host = new AgentHost(config, {
       onState: () => {},
@@ -194,6 +198,47 @@ function asQuery(
  *  (the local QueryArgs shape does not exactly match the SDK signature). */
 function makeQueryFn(fn: (args: QueryArgs) => Query): QueryFn {
   return fn as unknown as QueryFn;
+}
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+function signalQueue(): { wait: () => Promise<void>; signal: () => void } {
+  const waiters: Array<() => void> = [];
+  let available = 0;
+  return {
+    wait: () => {
+      if (available > 0) {
+        available -= 1;
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => waiters.push(resolve));
+    },
+    signal: () => {
+      const waiter = waiters.shift();
+      if (waiter) waiter();
+      else available += 1;
+    },
+  };
+}
+
+async function expectPendingAfterMicrotask(
+  promise: Promise<unknown>,
+): Promise<void> {
+  let resolved = false;
+  void promise.then(() => {
+    resolved = true;
+  });
+  await Promise.resolve();
+  expect(resolved).toBe(false);
 }
 
 /** queryFn that yields a fixed message list, ignoring the input prompt. */
@@ -301,7 +346,9 @@ describe("AgentHost — query injection", () => {
 
     // compact_result=success は boundary と重複するので中継しない。
     expect(
-      logs.filter((l) => l.payload.kind === "system").map((l) => l.payload.text),
+      logs
+        .filter((l) => l.payload.kind === "system")
+        .map((l) => l.payload.text),
     ).toEqual([
       "コンテキストを圧縮しています…",
       "自動コンテキスト圧縮が完了しました (前 180000 tokens → 後 9000 tokens)",
@@ -341,6 +388,7 @@ describe("AgentHost — query injection", () => {
   // 残る。setModel と同じ invalidate を踏むことを pin する。
   it("compact_boundary は取得済み context を retract する (MF1)", async () => {
     const envs: Envelope[] = [];
+    const prePublished = deferred<void>();
     const pre = { totalTokens: 180000, maxTokens: 200000, percentage: 90 };
     let call = 0;
     // 境界後の refresh は決着させない — 「次の計測が成功するまで absent」を
@@ -354,8 +402,7 @@ describe("AgentHost — query injection", () => {
     const queryFn = makeQueryFn(() => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield result("success", { result: "ok" });
-        // 圧縮前の値が #context に載るまで待つ。
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await prePublished.promise;
         yield msg({
           type: "system",
           subtype: "compact_boundary",
@@ -365,7 +412,15 @@ describe("AgentHost — query injection", () => {
       return asQuery(gen(), async () => {}, getContextUsage);
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e),
+      onState: (e) => {
+        envs.push(e);
+        if (
+          (e.ext as { context?: { used_tokens?: number } }).context
+            ?.used_tokens === 180000
+        ) {
+          prePublished.resolve();
+        }
+      },
       queryFn,
       now: () => "T",
     });
@@ -379,53 +434,67 @@ describe("AgentHost — query injection", () => {
 
   it("境界前 inflight の応答は epoch 不一致で採用しない (MF1)", async () => {
     const stale = { totalTokens: 180000, maxTokens: 200000, percentage: 90 };
+    const fresh = { totalTokens: 500, maxTokens: 200000, percentage: 0 };
+    const preRefreshStarted = deferred<void>();
+    const freshPublished = deferred<void>();
+    const envs: Envelope[] = [];
     let releaseStale: () => void = () => {};
     const stalePending = new Promise<void>((resolve) => {
       releaseStale = resolve;
     });
     let call = 0;
-    // 境界後の refresh は決着させない。こうすると #context に入りうる値は
-    // 境界前 inflight の stale だけになり、「捨てられた」ことを直接観測できる
-    // (境界後に fresh を返させると、fix の有無に関わらず最終値が fresh に
-    // なってしまい MF1 を差別化できない)。
     const getContextUsage = vi.fn(async () => {
       call += 1;
       if (call === 1) {
         // 境界前に発火した refresh。境界を跨いでから resolve させる。
+        preRefreshStarted.resolve();
         await stalePending;
         return stale;
       }
-      await new Promise(() => {});
-      return stale;
+      return fresh;
     });
     const queryFn = makeQueryFn(() => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield result("success", { result: "ok" });
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await preRefreshStarted.promise;
         yield msg({
           type: "system",
           subtype: "compact_boundary",
           compact_metadata: { trigger: "manual", pre_tokens: 180000 },
         });
         releaseStale();
-        // stale が resolve して landing しうる猶予を与える。
-        await new Promise((resolve) => setTimeout(resolve, 30));
+        await freshPublished.promise;
       }
       return asQuery(gen(), async () => {}, getContextUsage);
     });
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: (e) => {
+        envs.push(e);
+        if (
+          (e.ext as { context?: { used_tokens?: number } }).context
+            ?.used_tokens === 500
+        ) {
+          freshPublished.resolve();
+        }
+      },
       queryFn,
       now: () => "T",
     });
     await host.run();
     expect(getContextUsage.mock.calls.length).toBeGreaterThanOrEqual(2);
     // 圧縮前の epoch で測った値は、境界後に届いても採用されない。
-    expect(host.statusSnapshot()).not.toHaveProperty("context");
+    expect(
+      envs.some(
+        (e) =>
+          (e.ext as { context?: { used_tokens?: number } }).context
+            ?.used_tokens === 180000,
+      ),
+    ).toBe(false);
   });
 
   it("conversation_reset も context epoch を切る (MF1)", async () => {
     const envs: Envelope[] = [];
+    const prePublished = deferred<void>();
     const pre = { totalTokens: 50000, maxTokens: 200000, percentage: 25 };
     let call = 0;
     const getContextUsage = vi.fn(async () => {
@@ -437,13 +506,21 @@ describe("AgentHost — query injection", () => {
     const queryFn = makeQueryFn(() => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield result("success", { result: "ok" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await prePublished.promise;
         yield msg({ type: "conversation_reset", new_conversation_id: "c-3" });
       }
       return asQuery(gen(), async () => {}, getContextUsage);
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e),
+      onState: (e) => {
+        envs.push(e);
+        if (
+          (e.ext as { context?: { used_tokens?: number } }).context
+            ?.used_tokens === 50000
+        ) {
+          prePublished.resolve();
+        }
+      },
       queryFn,
       now: () => "T",
     });
@@ -459,9 +536,16 @@ describe("AgentHost — query injection", () => {
   // 注入は instruction queue 経由なので、SDK には user turn として現れる。
   function contextQueryFn(
     usages: { totalTokens: number; maxTokens: number; percentage: number }[],
-    script: () => AsyncGenerator<SDKMessage, void>,
+    script: (sync: {
+      refresh: () => Promise<void>;
+      injection: () => Promise<void>;
+    }) => AsyncGenerator<SDKMessage, void>,
+    beforeUsage?: () => Promise<void>,
+    beforeInjection?: () => Promise<void>,
   ): { queryFn: QueryFn; injected: string[] } {
     const injected: string[] = [];
+    const refreshes = signalQueue();
+    const injections = signalQueue();
     let call = 0;
     const queryFn = makeQueryFn((args: QueryArgs) => {
       // Drain the input stream so queued turns (the B1 notice among them)
@@ -469,17 +553,104 @@ describe("AgentHost — query injection", () => {
       void (async () => {
         for await (const turn of args.prompt) {
           const content = turn.message.content;
-          if (typeof content === "string") injected.push(content);
+          if (typeof content === "string") {
+            if (content.startsWith("[kaoiro] Context")) {
+              await beforeInjection?.();
+            }
+            injected.push(content);
+            if (content.startsWith("[kaoiro] Context")) injections.signal();
+          }
         }
       })();
       return asQuery(
-        script(),
+        script({ refresh: refreshes.wait, injection: injections.wait }),
         async () => {},
-        async () => usages[Math.min(call++, usages.length - 1)],
+        async () => {
+          await beforeUsage?.();
+          const usage = usages[Math.min(call++, usages.length - 1)];
+          return new Promise((resolve) => {
+            queueMicrotask(() => {
+              resolve(usage);
+              // `await` resumes the host before this second microtask, so the
+              // signal represents the completed refresh, not getter entry.
+              queueMicrotask(refreshes.signal);
+            });
+          });
+        },
       );
     });
     return { queryFn, injected };
   }
+
+  it("context refresh の latch は getter の settle 前に開かない (#210)", async () => {
+    const getterMaySettle = deferred<void>();
+    const refreshWaiterReady = deferred<void>();
+    const mayAwaitLatch = deferred<void>();
+    const observedAfterLatch = deferred<void>();
+    const { queryFn } = contextQueryFn(
+      [{ totalTokens: 120000, maxTokens: 200000, percentage: 60 }],
+      async function* (sync) {
+        yield result("success", { result: "ok" });
+        refreshWaiterReady.resolve();
+        await mayAwaitLatch.promise;
+        await sync.refresh();
+        observedAfterLatch.resolve();
+      },
+      () => getterMaySettle.promise,
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await refreshWaiterReady.promise;
+    mayAwaitLatch.resolve();
+    for (let checkpoint = 0; checkpoint < 4; checkpoint += 1) {
+      await expectPendingAfterMicrotask(observedAfterLatch.promise);
+    }
+    getterMaySettle.resolve();
+    await done;
+
+    await observedAfterLatch.promise;
+  });
+
+  it("context injection の latch は prompt への記録前に開かない (#210)", async () => {
+    const injectionMaySettle = deferred<void>();
+    const injectionWaiterReady = deferred<void>();
+    const mayAwaitLatch = deferred<void>();
+    const observedAfterLatch = deferred<void>();
+    const { queryFn } = contextQueryFn(
+      [{ totalTokens: 120000, maxTokens: 200000, percentage: 60 }],
+      async function* (sync) {
+        yield result("success", { result: "ok" });
+        await sync.refresh();
+        injectionWaiterReady.resolve();
+        await mayAwaitLatch.promise;
+        await sync.injection();
+        observedAfterLatch.resolve();
+      },
+      undefined,
+      () => injectionMaySettle.promise,
+    );
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
+
+    const done = host.run();
+    await injectionWaiterReady.promise;
+    mayAwaitLatch.resolve();
+    for (let checkpoint = 0; checkpoint < 4; checkpoint += 1) {
+      await expectPendingAfterMicrotask(observedAfterLatch.promise);
+    }
+    injectionMaySettle.resolve();
+    await done;
+
+    await observedAfterLatch.promise;
+  });
 
   it("閾値超過で raw 窓比と作業予算比を 1 回だけ注入する (B1/#264)", async () => {
     const { queryFn, injected } = contextQueryFn(
@@ -487,11 +658,12 @@ describe("AgentHost — query injection", () => {
         { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
         { totalTokens: 160000, maxTokens: 200000, percentage: 80 },
       ],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
+        await sync.injection();
         yield result("success", { result: "2" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
       },
     );
     const host = new AgentHost(
@@ -509,9 +681,7 @@ describe("AgentHost — query injection", () => {
     expect(notices[0]).toContain(
       "raw context window: 75% (150000/200000 tokens)",
     );
-    expect(notices[0]).toContain(
-      "work budget: 150% (150000/100000 tokens)",
-    );
+    expect(notices[0]).toContain("work budget: 150% (150000/100000 tokens)");
     expect(notices[0]).toContain("request_compact");
     // 切迫を煽らない文言であること (P3)。
     expect(notices[0]).toContain("There is no need to act now");
@@ -520,9 +690,9 @@ describe("AgentHost — query injection", () => {
   it("閾値未満では注入しない (B1)", async () => {
     const { queryFn, injected } = contextQueryFn(
       [{ totalTokens: 100000, maxTokens: 200000, percentage: 50 }],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
       },
     );
     const host = new AgentHost(config, {
@@ -539,47 +709,67 @@ describe("AgentHost — query injection", () => {
   it("TC-1: used_percentage=60 で context notice を1回送る", async () => {
     const { queryFn, injected } = contextQueryFn(
       [{ totalTokens: 120000, maxTokens: 200000, percentage: 60 }],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "ok" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
+        await sync.injection();
       },
     );
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
 
     await host.run();
 
-    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toHaveLength(1);
+    expect(
+      injected.filter((t) => t.startsWith("[kaoiro] Context")),
+    ).toHaveLength(1);
   });
 
   it("TC-2: used_percentage=59 では context notice を送らない", async () => {
     const { queryFn, injected } = contextQueryFn(
       [{ totalTokens: 118000, maxTokens: 200000, percentage: 59 }],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "ok" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
       },
     );
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
 
     await host.run();
 
-    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toEqual([]);
+    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toEqual(
+      [],
+    );
   });
 
   it("TC-3: notice threshold 定数参照の値で通知する", async () => {
     const threshold = CONTEXT_NOTICE_THRESHOLD_PERCENT;
     const { queryFn, injected } = contextQueryFn(
       [{ totalTokens: threshold, maxTokens: threshold, percentage: threshold }],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "ok" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
+        await sync.injection();
       },
     );
-    const host = new AgentHost(config, { onState: () => {}, queryFn, now: () => "T" });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn,
+      now: () => "T",
+    });
 
     await host.run();
 
-    expect(injected.filter((t) => t.startsWith("[kaoiro] Context"))).toHaveLength(1);
+    expect(
+      injected.filter((t) => t.startsWith("[kaoiro] Context")),
+    ).toHaveLength(1);
   });
 
   // BR MF1 (a): 境界直後の `getContextUsage()` は圧縮前の総量を返し得る
@@ -595,15 +785,16 @@ describe("AgentHost — query injection", () => {
         // 新 epoch の実態を表していないので通知の根拠にならない。
         { totalTokens: 155000, maxTokens: 200000, percentage: 78 },
       ],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
+        await sync.injection();
         yield msg({
           type: "system",
           subtype: "compact_boundary",
           compact_metadata: { trigger: "manual", pre_tokens: 150000 },
         });
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await sync.refresh();
       },
     );
     const host = new AgentHost(config, {
@@ -625,14 +816,14 @@ describe("AgentHost — query injection", () => {
     const { queryFn, injected } = contextQueryFn(
       // この epoch で取れる唯一の reading。閾値超えだが圧縮前の値。
       [{ totalTokens: 155000, maxTokens: 200000, percentage: 78 }],
-      async function* () {
+      async function* (sync) {
         // result より先に境界が来る = 直前 epoch の cached reading が無い。
         yield msg({
           type: "system",
           subtype: "compact_boundary",
           compact_metadata: { trigger: "manual", pre_tokens: 150000 },
         });
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await sync.refresh();
       },
     );
     const host = new AgentHost(config, {
@@ -659,19 +850,21 @@ describe("AgentHost — query injection", () => {
         { totalTokens: 158000, maxTokens: 200000, percentage: 79 },
         { totalTokens: 160000, maxTokens: 200000, percentage: 80 },
       ],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
+        await sync.injection();
         yield msg({
           type: "system",
           subtype: "compact_boundary",
           compact_metadata: { trigger: "manual", pre_tokens: 150000 },
         });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield result("success", { result: "2" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield result("success", { result: "3" });
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await sync.refresh();
+        await sync.injection();
       },
     );
     const host = new AgentHost(config, {
@@ -697,17 +890,18 @@ describe("AgentHost — query injection", () => {
         // 境界後、まったく同じ high 値が 3 回返る。
         { totalTokens: 155000, maxTokens: 200000, percentage: 78 },
       ],
-      async function* () {
+      async function* (sync) {
         yield msg({
           type: "system",
           subtype: "compact_boundary",
           compact_metadata: { trigger: "manual", pre_tokens: 150000 },
         });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield result("success", { result: "2" });
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await sync.refresh();
+        await sync.injection();
       },
     );
     const host = new AgentHost(config, {
@@ -732,9 +926,10 @@ describe("AgentHost — query injection", () => {
         { totalTokens: 9000, maxTokens: 200000, percentage: 5 },
         { totalTokens: 145000, maxTokens: 200000, percentage: 72 },
       ],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
+        await sync.injection();
         yield msg({
           type: "system",
           subtype: "compact_boundary",
@@ -744,9 +939,10 @@ describe("AgentHost — query injection", () => {
             post_tokens: 9000,
           },
         });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield result("success", { result: "2" });
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await sync.refresh();
+        await sync.injection();
       },
     );
     const host = new AgentHost(config, {
@@ -770,19 +966,21 @@ describe("AgentHost — query injection", () => {
         { totalTokens: 20000, maxTokens: 200000, percentage: 10 }, // 圧縮確認
         { totalTokens: 146000, maxTokens: 200000, percentage: 73 }, // 再超過
       ],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
+        await sync.injection();
         yield msg({
           type: "system",
           subtype: "compact_boundary",
           compact_metadata: { trigger: "manual", pre_tokens: 150000 },
         });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield result("success", { result: "2" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield result("success", { result: "3" });
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await sync.refresh();
+        await sync.injection();
       },
     );
     const host = new AgentHost(config, {
@@ -801,6 +999,7 @@ describe("AgentHost — query injection", () => {
   // 順番待ちしている間に無効になる。後追いで注入してはいけない。
   it("epoch が変わった後の通知は queue から破棄する (MF1-c / MF2)", async () => {
     let releaseGate!: () => void;
+    const queueSettled = deferred<void>();
     const gate = new Promise<void>((resolve) => {
       releaseGate = resolve;
     });
@@ -809,18 +1008,18 @@ describe("AgentHost — query injection", () => {
         { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
         { totalTokens: 20000, maxTokens: 200000, percentage: 10 },
       ],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield msg({
           type: "system",
           subtype: "compact_boundary",
           compact_metadata: { trigger: "manual", pre_tokens: 150000 },
         });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         // 境界が確定してから初めて queue を流す。
         releaseGate();
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await queueSettled.promise;
       },
     );
     const host = new AgentHost(config, {
@@ -829,7 +1028,11 @@ describe("AgentHost — query injection", () => {
       now: () => "T",
       enqueueInjection: async (task) => {
         await gate;
-        await task();
+        try {
+          await task();
+        } finally {
+          queueSettled.resolve();
+        }
       },
     });
     await host.run();
@@ -842,6 +1045,8 @@ describe("AgentHost — query injection", () => {
   // 遅い send を追い越して SDK 入力ストリームへ出てはいけない。
   it("先行する遅い send を追い越さない (MF2)", async () => {
     let host!: AgentHost;
+    const priorStarted = deferred<void>();
+    const releasePrior = deferred<void>();
     let chain: Promise<void> = Promise.resolve();
     const enqueueInjection = (task: () => Promise<void>): Promise<void> => {
       const queued = chain.then(task);
@@ -865,7 +1070,11 @@ describe("AgentHost — query injection", () => {
       return asQuery(
         gen(),
         async () => {},
-        async () => ({ totalTokens: 150000, maxTokens: 200000, percentage: 75 }),
+        async () => ({
+          totalTokens: 150000,
+          maxTokens: 200000,
+          percentage: 75,
+        }),
       );
     });
     host = new AgentHost(config, {
@@ -876,10 +1085,14 @@ describe("AgentHost — query injection", () => {
     });
     // 大きな添付のレンダリングなどで詰まった先行 instruction を模す。
     void enqueueInjection(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      priorStarted.resolve();
+      await releasePrior.promise;
       await host.send("prior instruction");
     });
-    await host.run();
+    const done = host.run();
+    await priorStarted.promise;
+    releasePrior.resolve();
+    await done;
     const noticeAt = injected.findIndex((t) =>
       t.startsWith("[kaoiro] Context"),
     );
@@ -891,16 +1104,19 @@ describe("AgentHost — query injection", () => {
   // 届かなかった send に食わせない。
   it("同 epoch の queue 失敗は次の変化した reading で再送する (MF2)", async () => {
     let call = 0;
+    const firstReject = deferred<void>();
     const { queryFn, injected } = contextQueryFn(
       [
         { totalTokens: 150000, maxTokens: 200000, percentage: 75 },
         { totalTokens: 160000, maxTokens: 200000, percentage: 80 },
       ],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
+        await firstReject.promise;
         yield result("success", { result: "2" });
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await sync.refresh();
+        await sync.injection();
       },
     );
     const host = new AgentHost(config, {
@@ -909,9 +1125,10 @@ describe("AgentHost — query injection", () => {
       now: () => "T",
       enqueueInjection: (task) => {
         call += 1;
-        return call === 1
-          ? Promise.reject(new Error("queue full"))
-          : task();
+        if (call !== 1) return task();
+        return Promise.reject(new Error("queue full")).finally(() => {
+          queueMicrotask(firstReject.resolve);
+        });
       },
     });
     await host.run();
@@ -932,19 +1149,20 @@ describe("AgentHost — query injection", () => {
         { totalTokens: 150000, maxTokens: 200000, percentage: 75 }, // 再超過
         { totalTokens: 160000, maxTokens: 200000, percentage: 80 },
       ],
-      async function* () {
+      async function* (sync) {
         yield result("success", { result: "1" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield msg({
           type: "system",
           subtype: "compact_boundary",
           compact_metadata: { trigger: "manual", pre_tokens: 150000 },
         });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield result("success", { result: "2" });
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await sync.refresh();
         yield result("success", { result: "3" });
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await sync.refresh();
+        await sync.injection();
       },
     );
     const host = new AgentHost(config, {
@@ -1113,12 +1331,17 @@ describe("AgentHost — query injection", () => {
       ["cnv-b"],
     ]);
     expect(turnEnds[0]?.error).toEqual({ detail: "boom" });
-    expect(turnEnds.every((entry) => typeof entry.turnToken === "string")).toBe(true);
+    expect(turnEnds.every((entry) => typeof entry.turnToken === "string")).toBe(
+      true,
+    );
     expect(new Set(turnEnds.map((entry) => entry.turnToken)).size).toBe(2);
   });
 
   it("1回の send() に複数 cid を渡すと1ターンとして onTurnEnd に全件まとめて渡す (issue #221 段階3, 合流turn)", async () => {
-    const turnEnds: { turnToken?: string; conversationIds: readonly string[] }[] = [];
+    const turnEnds: {
+      turnToken?: string;
+      conversationIds: readonly string[];
+    }[] = [];
     // scriptedQuery() ignores args.prompt entirely (see its own doc), so
     // #input()'s per-turn tag shifting never runs under it — same reason
     // the "並存する複数..." test above uses a prompt-draining queryFn
@@ -1138,7 +1361,11 @@ describe("AgentHost — query injection", () => {
       now: () => "T",
     });
     const done = host.run();
-    await host.send("coalesced batch text", undefined, ["cnv-p", "cnv-q", "cnv-r"]);
+    await host.send("coalesced batch text", undefined, [
+      "cnv-p",
+      "cnv-q",
+      "cnv-r",
+    ]);
     host.close();
     await done;
 
@@ -1149,7 +1376,10 @@ describe("AgentHost — query injection", () => {
   });
 
   it("issue #246 negative control: SDK の eager pull で B を A の result 前に受け取らない", async () => {
-    const turnEnds: { turnToken?: string; conversationIds: readonly string[] }[] = [];
+    const turnEnds: {
+      turnToken?: string;
+      conversationIds: readonly string[];
+    }[] = [];
     // This fake SDK deliberately asks the input generator for B before it
     // yields A's result. Current code permits it and overwrites A's mutable
     // CID tag with B. The target barrier must keep `second` pending until the
@@ -1160,14 +1390,7 @@ describe("AgentHost — query injection", () => {
         const first = await input.next();
         expect(first.done).toBe(false);
         const second = input.next();
-        let secondArrivedBeforeFirstResult = false;
-        await Promise.race([
-          second.then(() => {
-            secondArrivedBeforeFirstResult = true;
-          }),
-          new Promise<void>((resolve) => setTimeout(resolve, 20)),
-        ]);
-        expect(secondArrivedBeforeFirstResult).toBe(false);
+        await expectPendingAfterMicrotask(second);
 
         yield result("success", { result: "A done" });
         const secondResult = await second;
@@ -1193,7 +1416,9 @@ describe("AgentHost — query injection", () => {
       ["cid-a"],
       ["cid-b"],
     ]);
-    expect(turnEnds.every((entry) => typeof entry.turnToken === "string")).toBe(true);
+    expect(turnEnds.every((entry) => typeof entry.turnToken === "string")).toBe(
+      true,
+    );
     expect(new Set(turnEnds.map((entry) => entry.turnToken)).size).toBe(2);
   });
 
@@ -1239,14 +1464,7 @@ describe("AgentHost — query injection", () => {
         await input.next();
         const second = input.next();
         yield msg({ type: "conversation_reset", new_conversation_id: "new" });
-        let bArrivedBeforeAResult = false;
-        await Promise.race([
-          second.then(() => {
-            bArrivedBeforeAResult = true;
-          }),
-          new Promise<void>((resolve) => setTimeout(resolve, 20)),
-        ]);
-        expect(bArrivedBeforeAResult).toBe(false);
+        await expectPendingAfterMicrotask(second);
         yield result("error_during_execution", { errors: ["A reset error"] });
         expect((await second).done).toBe(false);
         yield result("success", { result: "B done" });
@@ -1291,14 +1509,7 @@ describe("AgentHost — query injection", () => {
         armed();
         await interruptAcknowledged;
         const second = input.next();
-        let bArrivedBeforeAResult = false;
-        await Promise.race([
-          second.then(() => {
-            bArrivedBeforeAResult = true;
-          }),
-          new Promise<void>((resolve) => setTimeout(resolve, 20)),
-        ]);
-        expect(bArrivedBeforeAResult).toBe(false);
+        await expectPendingAfterMicrotask(second);
         yield result("error_during_execution", { errors: ["interrupted A"] });
         expect((await second).done).toBe(false);
         yield result("success", { result: "B done" });
@@ -1624,8 +1835,10 @@ describe("AgentHost — query injection", () => {
     const sameWindow = envs.find(
       (e) =>
         e.state === "thinking" &&
-        (e.ext.rate_limits as Record<string, { resets_at?: number }> | undefined)
-          ?.five_hour?.resets_at === 1781480000,
+        (
+          e.ext.rate_limits as
+            Record<string, { resets_at?: number }> | undefined
+        )?.five_hour?.resets_at === 1781480000,
     );
     expect(sameWindow?.ext).toMatchObject({
       rate_limits: {
@@ -1639,8 +1852,10 @@ describe("AgentHost — query injection", () => {
     const newWindow = envs.find(
       (e) =>
         e.state === "thinking" &&
-        (e.ext.rate_limits as Record<string, { resets_at?: number }> | undefined)
-          ?.five_hour?.resets_at === 1781490000,
+        (
+          e.ext.rate_limits as
+            Record<string, { resets_at?: number }> | undefined
+        )?.five_hour?.resets_at === 1781490000,
     );
     expect(newWindow?.ext).toMatchObject({
       rate_limits: {
@@ -1656,13 +1871,16 @@ describe("AgentHost — query injection", () => {
       },
     });
     expect(
-      (newWindow?.ext.rate_limits as Record<string, Record<string, unknown>> | undefined)
-        ?.five_hour,
+      (
+        newWindow?.ext.rate_limits as
+          Record<string, Record<string, unknown>> | undefined
+      )?.five_hour,
     ).not.toHaveProperty("utilization");
   });
 
   it("sparse な rate_limit_event を /usage の5h・7day利用率で補完する (#164)", async () => {
     const envs: Envelope[] = [];
+    const ratesPublished = deferred<void>();
     const queryFn = makeQueryFn(() => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         // SDK 0.3.220 の実測形: allowed 中の stream event は 5h の
@@ -1678,35 +1896,43 @@ describe("AgentHost — query injection", () => {
         yield assistant([{ type: "text", text: "hi" }]);
       }
       return asQuery(gen(), async () => {}, undefined, {
-        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({
-          rate_limits_available: true,
-          rate_limits: {
-            five_hour: {
-              utilization: 3,
-              resets_at: "2026-08-02T04:20:00.307635+00:00",
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET:
+          async () => ({
+            rate_limits_available: true,
+            rate_limits: {
+              five_hour: {
+                utilization: 3,
+                resets_at: "2026-08-02T04:20:00.307635+00:00",
+              },
+              seven_day: {
+                utilization: 2,
+                resets_at: "2026-08-08T04:00:00.307656+00:00",
+              },
             },
-            seven_day: {
-              utilization: 2,
-              resets_at: "2026-08-08T04:00:00.307656+00:00",
-            },
-          },
-        }),
+          }),
       });
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e),
+      onState: (e) => {
+        envs.push(e);
+        const limits = e.ext.rate_limits as
+          Record<string, { utilization?: number }> | undefined;
+        if (
+          limits?.five_hour?.utilization === 0.03 &&
+          limits.seven_day?.utilization === 0.02
+        ) {
+          ratesPublished.resolve();
+        }
+      },
       queryFn,
       now: () => "T",
     });
 
     await host.run();
-    // The control request is deliberately fire-and-forget from the SDK
-    // message loop; let its immediate response publish the deduped re-emit.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await ratesPublished.promise;
 
     const limits = envs.at(-1)?.ext.rate_limits as
-      | Record<string, Record<string, unknown>>
-      | undefined;
+      Record<string, Record<string, unknown>> | undefined;
     expect(limits).toMatchObject({
       five_hour: {
         status: "allowed",
@@ -1936,13 +2162,14 @@ describe("AgentHost — query injection", () => {
       { onState: (e) => envs.push(e), queryFn, now: () => "T" },
     );
     await host.run();
-    expect(envs.filter((e) => e.state === "thinking").at(-1)?.ext)
-      .toMatchObject({
-        context_budget: {
-          work_budget_tokens: 80,
-          work_budget_percentage: 63,
-        },
-      });
+    expect(
+      envs.filter((e) => e.state === "thinking").at(-1)?.ext,
+    ).toMatchObject({
+      context_budget: {
+        work_budget_tokens: 80,
+        work_budget_percentage: 63,
+      },
+    });
   });
 
   it("init 直後にも getContextUsage が発火し ext.context が付く (ADR-0040)", async () => {
@@ -1951,6 +2178,7 @@ describe("AgentHost — query injection", () => {
     // で system_prompt / tools / MCP / memory_files 分の usage が
     // 最初の assistant state_change 時点で ext に載る。
     const envs: Envelope[] = [];
+    const initPublished = deferred<void>();
     const usage = {
       totalTokens: 5000,
       maxTokens: 200000,
@@ -1966,16 +2194,22 @@ describe("AgentHost — query injection", () => {
           model: "claude-init",
           cwd: "/repo",
         });
-        // init 直後の refresh が settle するのを待ってから状態遷移を進める。
-        // 実装は fire-and-forget なので tick を回す。
-        await new Promise((resolve) => setTimeout(resolve, 30));
+        await initPublished.promise;
         yield assistant([{ type: "text", text: "hi" }]);
         yield result("success", { result: "ok" });
       }
       return asQuery(gen(), async () => {}, getContextUsage);
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e),
+      onState: (e) => {
+        envs.push(e);
+        if (
+          (e.ext as { context?: { used_tokens?: number } }).context
+            ?.used_tokens === 5000
+        ) {
+          initPublished.resolve();
+        }
+      },
       queryFn,
       now: () => "T",
     });
@@ -1998,6 +2232,7 @@ describe("AgentHost — query injection", () => {
     // #refreshContextUsage は内部で try/catch 済のため throw は握り潰され、
     // #context は null のまま → for-init helper の bounded retry へ進む。
     const envs: Envelope[] = [];
+    const retryPublished = deferred<void>();
     let call = 0;
     const usage = {
       totalTokens: 1200,
@@ -2018,16 +2253,22 @@ describe("AgentHost — query injection", () => {
           model: "claude-retry",
           cwd: "/repo",
         });
-        // 2 回目の refresh (初期 backoff = 100ms) が settle する前に result
-        // で状態が進むと retry 効果が観測できないため、余裕を持って待つ。
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await retryPublished.promise;
         yield assistant([{ type: "text", text: "hi" }]);
         yield result("success", { result: "ok" });
       }
       return asQuery(gen(), async () => {}, getContextUsage);
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e),
+      onState: (e) => {
+        envs.push(e);
+        if (
+          (e.ext as { context?: { used_tokens?: number } }).context
+            ?.used_tokens === 1200
+        ) {
+          retryPublished.resolve();
+        }
+      },
       queryFn,
       now: () => "T",
     });
@@ -2052,6 +2293,7 @@ describe("AgentHost — query injection", () => {
       getContextUsage: () => Promise<unknown>,
     ): Promise<Envelope[]> {
       const envs: Envelope[] = [];
+      const refreshes = signalQueue();
       const queryFn = makeQueryFn(() => {
         async function* gen(): AsyncGenerator<SDKMessage, void> {
           yield msg({
@@ -2060,16 +2302,31 @@ describe("AgentHost — query injection", () => {
             model: "claude-dedup",
             cwd: "/repo",
           });
-          // init 由来 refresh が settle するのを待つ (両 branch 共通の baseline)。
-          await new Promise((resolve) => setTimeout(resolve, 200));
+          await refreshes.wait();
           yield result("success", { result: "1" });
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await refreshes.wait();
           yield result("success", { result: "2" });
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await refreshes.wait();
           yield result("success", { result: "3" });
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await refreshes.wait();
         }
-        return asQuery(gen(), async () => {}, getContextUsage);
+        return asQuery(
+          gen(),
+          async () => {},
+          () =>
+            new Promise((resolve, reject) => {
+              void getContextUsage().then(
+                (usage) => {
+                  resolve(usage);
+                  queueMicrotask(refreshes.signal);
+                },
+                (error: unknown) => {
+                  reject(error);
+                  queueMicrotask(refreshes.signal);
+                },
+              );
+            }),
+        );
       });
       const host = new AgentHost(config, {
         onState: (e) => envs.push(e),
@@ -2540,7 +2797,13 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
             type: "tool_use",
             name: "TodoWrite",
             input: {
-              todos: [{ content: "compatibility", status: "pending", activeForm: "準備中" }],
+              todos: [
+                {
+                  content: "compatibility",
+                  status: "pending",
+                  activeForm: "準備中",
+                },
+              ],
             },
           },
         ]),
@@ -2613,7 +2876,10 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
       readTasklist: async (sessionId) => {
         reads.push(sessionId);
         return sessionId === "session-old"
-          ? { kind: "updated", items: [{ text: "旧 session task", status: "pending" }] }
+          ? {
+              kind: "updated",
+              items: [{ text: "旧 session task", status: "pending" }],
+            }
           : { kind: "updated", items: [] };
       },
       now: () => "T",
@@ -2641,13 +2907,18 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
         // tool_result を落としたまま turn が終了する。
         result("success"),
         // 次 turn の非 task tool_result が同じ id を使っても旧 join にはならない。
-        assistant([{ type: "tool_use", id: "reused-id", name: "Read", input: {} }]),
+        assistant([
+          { type: "tool_use", id: "reused-id", name: "Read", input: {} },
+        ]),
         taskToolResult("reused-id"),
         result("success"),
       ]),
       readTasklist: async (sessionId) => {
         reads.push(sessionId);
-        return { kind: "updated", items: [{ text: "reconciled", status: "pending" }] };
+        return {
+          kind: "updated",
+          items: [{ text: "reconciled", status: "pending" }],
+        };
       },
       warn: (message) => warnings.push(message),
       now: () => "T",
@@ -2669,9 +2940,13 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
       onState: () => {},
       queryFn: scriptedQuery([
         msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([{ type: "tool_use", id: "reused-id", name: "TaskCreate", input: {} }]),
+        assistant([
+          { type: "tool_use", id: "reused-id", name: "TaskCreate", input: {} },
+        ]),
         msg({ type: "conversation_reset", new_conversation_id: "reset-1" }),
-        assistant([{ type: "tool_use", id: "reused-id", name: "Read", input: {} }]),
+        assistant([
+          { type: "tool_use", id: "reused-id", name: "Read", input: {} },
+        ]),
         taskToolResult("reused-id"),
         result("success"),
       ]),
@@ -2705,10 +2980,14 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
     const queryFn = makeQueryFn(() => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield msg({ type: "system", subtype: "init", session_id: "session-1" });
-        yield assistant([{ type: "tool_use", id: "reused-id", name: "TaskCreate", input: {} }]);
+        yield assistant([
+          { type: "tool_use", id: "reused-id", name: "TaskCreate", input: {} },
+        ]);
         armed!();
         await hold;
-        yield assistant([{ type: "tool_use", id: "reused-id", name: "Read", input: {} }]);
+        yield assistant([
+          { type: "tool_use", id: "reused-id", name: "Read", input: {} },
+        ]);
         yield taskToolResult("reused-id");
         yield result("success");
       }
@@ -2752,7 +3031,9 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
     const queryFn = makeQueryFn(() => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield msg({ type: "system", subtype: "init", session_id: "session-1" });
-        yield assistant([{ type: "tool_use", id: "create-1", name: "TaskCreate", input: {} }]);
+        yield assistant([
+          { type: "tool_use", id: "create-1", name: "TaskCreate", input: {} },
+        ]);
         armed!();
         await hold;
         // close() は input を閉じるだけで、実行中 turn は drain される。
@@ -2767,7 +3048,10 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
       queryFn,
       readTasklist: async (sessionId) => {
         reads.push(sessionId);
-        return { kind: "updated", items: [{ text: "drained", status: "pending" }] };
+        return {
+          kind: "updated",
+          items: [{ text: "drained", status: "pending" }],
+        };
       },
       warn: (message) => warnings.push(message),
       now: () => "T",
@@ -2810,7 +3094,10 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
       ]),
       readTasklist: async (sessionId) => {
         reads.push(sessionId);
-        return { kind: "updated", items: [{ text: "同じ task", status: "pending" }] };
+        return {
+          kind: "updated",
+          items: [{ text: "同じ task", status: "pending" }],
+        };
       },
       now: () => "T",
     });
@@ -2829,14 +3116,19 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
       onTask: (envelope) => tasks.push(envelope),
       queryFn: scriptedQuery([
         msg({ type: "system", subtype: "init", session_id: "session-old" }),
-        assistant([{ type: "tool_use", id: "old-list", name: "TaskList", input: {} }]),
+        assistant([
+          { type: "tool_use", id: "old-list", name: "TaskList", input: {} },
+        ]),
         taskToolResult("old-list"),
         msg({ type: "system", subtype: "status", session_id: "session-new" }),
         result("success"),
       ]),
       readTasklist: async (sessionId) =>
         sessionId === "session-old"
-          ? { kind: "updated", items: [{ text: "旧 session task", status: "pending" }] }
+          ? {
+              kind: "updated",
+              items: [{ text: "旧 session task", status: "pending" }],
+            }
           : { kind: "invalid", reason: "Claude task directory is missing" },
       warn: (message) => warnings.push(message),
       now: () => "T",
@@ -2859,14 +3151,19 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
       onTask: (envelope) => tasks.push(envelope),
       queryFn: scriptedQuery([
         msg({ type: "system", subtype: "init", session_id: "session-old" }),
-        assistant([{ type: "tool_use", id: "old-list", name: "TaskList", input: {} }]),
+        assistant([
+          { type: "tool_use", id: "old-list", name: "TaskList", input: {} },
+        ]),
         taskToolResult("old-list"),
         msg({ type: "system", subtype: "status", session_id: "session-new" }),
         result("success"),
       ]),
       readTasklist: async (sessionId) => {
         if (sessionId === "session-old") {
-          return { kind: "updated", items: [{ text: "旧 session task", status: "pending" }] };
+          return {
+            kind: "updated",
+            items: [{ text: "旧 session task", status: "pending" }],
+          };
         }
         throw new Error("new session source unavailable");
       },
@@ -2943,7 +3240,9 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
       onTask: (envelope) => tasks.push(envelope),
       queryFn: scriptedQuery([
         msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([{ type: "tool_use", id: "list-1", name: "TaskList", input: {} }]),
+        assistant([
+          { type: "tool_use", id: "list-1", name: "TaskList", input: {} },
+        ]),
         taskToolResult("list-1"),
         result("success"),
       ]),
@@ -3004,7 +3303,9 @@ describe("AgentHost — own tasklist envelopes (issue #188)", () => {
       onTask: (envelope) => tasks.push(envelope),
       queryFn: scriptedQuery([
         msg({ type: "system", subtype: "init", session_id: "session-1" }),
-        assistant([{ type: "tool_use", id: "list-1", name: "TaskList", input: {} }]),
+        assistant([
+          { type: "tool_use", id: "list-1", name: "TaskList", input: {} },
+        ]),
         taskToolResult("list-1"),
         result("success"),
       ]),
@@ -3095,14 +3396,20 @@ describe("AgentHost — subagent/workflow task envelopes (issue #180)", () => {
         task_type: "local_agent",
       });
     }
-    expect(tasks[0]!.payload).toMatchObject({ kind: "started", status: "running" });
+    expect(tasks[0]!.payload).toMatchObject({
+      kind: "started",
+      status: "running",
+    });
     expect(tasks[1]!.payload).toMatchObject({
       kind: "updated",
       status: "running",
       usage: { total_tokens: 100, tool_uses: 1, duration_ms: 500 },
       last_tool_name: "Bash",
     });
-    expect(tasks[2]!.payload).toMatchObject({ kind: "completed", status: "completed" });
+    expect(tasks[2]!.payload).toMatchObject({
+      kind: "completed",
+      status: "completed",
+    });
   });
 
   it("task envelope は state_change に一切影響しない (ADR-0019 F2)", async () => {
@@ -3207,7 +3514,10 @@ describe("AgentHost — subagent/workflow task envelopes (issue #180)", () => {
     // started, completed(status=failed) の 2 件のみ — 後続 progress は
     // ドロップされ onTask を呼ばない(ゾンビ再開なし)。
     expect(tasks).toHaveLength(2);
-    expect(tasks[1]!.payload).toMatchObject({ kind: "completed", status: "failed" });
+    expect(tasks[1]!.payload).toMatchObject({
+      kind: "completed",
+      status: "failed",
+    });
     // host.ts の raw_status 警告 + adapter 側で消費済みの unknown task_id
     // 警告の 2 件。
     expect(warnings).toHaveLength(2);
@@ -3249,9 +3559,15 @@ describe("AgentHost — subagent/workflow task envelopes (issue #180)", () => {
       onTask: (e) => tasks.push(e),
       queryFn: scriptedQuery([
         taskStarted("t1"),
-        taskProgress("t1", { usage: { total_tokens: 100, tool_uses: 1, duration_ms: 100 } }),
-        taskProgress("t1", { usage: { total_tokens: 150, tool_uses: 1, duration_ms: 200 } }),
-        taskProgress("t1", { usage: { total_tokens: 900, tool_uses: 1, duration_ms: 3200 } }),
+        taskProgress("t1", {
+          usage: { total_tokens: 100, tool_uses: 1, duration_ms: 100 },
+        }),
+        taskProgress("t1", {
+          usage: { total_tokens: 150, tool_uses: 1, duration_ms: 200 },
+        }),
+        taskProgress("t1", {
+          usage: { total_tokens: 900, tool_uses: 1, duration_ms: 3200 },
+        }),
         result("success", { result: "" }),
       ]),
       now: () => "T",
@@ -3325,7 +3641,11 @@ describe("AgentHost — subagent/workflow task envelopes (issue #180)", () => {
       nowMs: () => clock,
     });
     await host.run();
-    expect(tasks.map((t) => t.payload.kind)).toEqual(["started", "updated", "completed"]);
+    expect(tasks.map((t) => t.payload.kind)).toEqual([
+      "started",
+      "updated",
+      "completed",
+    ]);
   });
 
   it("workflow_name / description / summary / skip_transcript を中継する", async () => {
@@ -4597,7 +4917,9 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       },
     );
 
-    expect(missingLevels.statusExtSnapshot().session_capabilities).toMatchObject({
+    expect(
+      missingLevels.statusExtSnapshot().session_capabilities,
+    ).toMatchObject({
       supports_effort_switch: false,
     });
     await expect(missingLevels.setEffort("high")).rejects.toThrow(
@@ -4635,6 +4957,8 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     // inflight guard で drop、finally の re-kick で新 generation の refresh が
     // 動く。旧 usage は generation guard で捨てられる。
     const envs: Envelope[] = [];
+    const firstRefreshStarted = deferred<void>();
+    const freshPublished = deferred<void>();
     let releaseFirst!: (value: unknown) => void;
     const firstGate = new Promise((resolve) => {
       releaseFirst = resolve;
@@ -4657,6 +4981,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     const getContextUsage = vi.fn(async () => {
       call += 1;
       if (call === 1) {
+        firstRefreshStarted.resolve();
         await firstGate;
         return staleUsage;
       }
@@ -4674,18 +4999,24 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       });
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e),
+      onState: (e) => {
+        envs.push(e);
+        if (
+          (e.ext as { context?: { used_tokens?: number } }).context
+            ?.used_tokens === 500
+        ) {
+          freshPublished.resolve();
+        }
+      },
       queryFn,
       now: () => "T",
     });
     const done = host.run();
-    // init が流れて #refreshContextUsageForInit が inflight に入るのを待つ
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await firstRefreshStarted.promise;
     await host.setModel("default");
     // 旧 refresh を release。generation guard により結果は破棄される。
     releaseFirst(undefined);
-    // finally の re-kick により fresh generation の refresh が完了するのを待つ
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await freshPublished.promise;
     // 最後の envelope に載る context は fresh (staleUsage ではなく freshUsage)
     const lastCtx = envs
       .filter((e) => (e.ext as { context?: unknown }).context !== undefined)
@@ -4721,14 +5052,15 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       now: () => "T",
     });
     await host.run();
-    expect(envs.filter((e) => e.state === "thinking").at(-1)?.ext)
-      .toMatchObject({
-        context: { used_tokens: 0, max_tokens: 0, used_percentage: 0 },
-        context_budget: {
-          work_budget_tokens: 1,
-          work_budget_percentage: 0,
-        },
-      });
+    expect(
+      envs.filter((e) => e.state === "thinking").at(-1)?.ext,
+    ).toMatchObject({
+      context: { used_tokens: 0, max_tokens: 0, used_percentage: 0 },
+      context_budget: {
+        work_budget_tokens: 1,
+        work_budget_percentage: 0,
+      },
+    });
   });
 
   it("setModel 成功後の effort reset 失敗でも旧 context は残らない (藤 review turn-5 R1)", async () => {
@@ -4737,6 +5069,8 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     // model apply 成功を境に generation bump + #context=null を実行し、
     // catch path でも新 model 用 refresh を kick する。
     const envs: Envelope[] = [];
+    const stalePublished = deferred<void>();
+    const freshPublished = deferred<void>();
     const staleContextUsage = {
       totalTokens: 8000,
       maxTokens: 200000,
@@ -4772,31 +5106,36 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       });
     });
     const host = new AgentHost(config, {
-      onState: (e) => envs.push(e),
+      onState: (e) => {
+        envs.push(e);
+        const used = (e.ext as { context?: { used_tokens?: number } }).context
+          ?.used_tokens;
+        if (used === 8000) stalePublished.resolve();
+        if (used === 100) freshPublished.resolve();
+      },
       queryFn,
       now: () => "T",
       effortSource: "config",
       queryOptions: { effort: "high" },
     });
     const done = host.run();
-    // init/init-retry の refresh が着地し stale context が authoritative に
-    // 乗るのを待つ (baseline)。
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await stalePublished.promise;
     const beforeSwitch = envs.at(-1);
     expect(beforeSwitch?.ext.context).toMatchObject({
       used_tokens: 8000,
       max_tokens: 200000,
     });
     // haiku (無 effort) へ切替 → applyFlagSettings reject で throw
-    await expect(host.setModel("haiku")).rejects.toThrow("effort reset rejected");
+    await expect(host.setModel("haiku")).rejects.toThrow(
+      "effort reset rejected",
+    );
     // 直後 (switch_error を運ぶ envelope): 旧 context が「絶対に」乗っていない
     const switchErrEnv = envs
       .filter((e) => e.ext.switch_error !== undefined)
       .at(-1);
     expect(switchErrEnv?.ext.context).toBeUndefined();
     expect(switchErrEnv?.ext.model).toBe("haiku");
-    // catch path の refresh kick が完了するのを待つ
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await freshPublished.promise;
     // 以降の envelope に fresh context (新 model 用) が乗っている
     const lastCtx = envs
       .filter((e) => (e.ext as { context?: unknown }).context !== undefined)
@@ -4873,11 +5212,13 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
 
   it("新modelで無効なeffortをnull clearし effort_reset を明示する", async () => {
     const envs: Envelope[] = [];
+    const initConsumed = deferred<void>();
     const setModel = vi.fn(async () => {});
     const applyFlagSettings = vi.fn(async () => {});
     const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield msg({ type: "system", subtype: "init", model: "default" });
+        initConsumed.resolve();
         for await (const _ of args.prompt) void _;
       }
       return asQuery(gen(), async () => {}, undefined, {
@@ -4894,7 +5235,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       queryOptions: { effort: "high" },
     });
     const done = host.run();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await initConsumed.promise;
     await host.setModel("haiku");
     expect(setModel).toHaveBeenCalledWith("haiku");
     expect(applyFlagSettings).toHaveBeenCalledWith({ effortLevel: null });
@@ -4909,12 +5250,14 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
 
   it("effort reset reject は half-state を残して loud failure を出す", async () => {
     const envs: Envelope[] = [];
+    const initConsumed = deferred<void>();
     const applyFlagSettings = vi.fn(async () => {
       throw new Error("clear rejected");
     });
     const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield msg({ type: "system", subtype: "init", model: "default" });
+        initConsumed.resolve();
         for await (const _ of args.prompt) void _;
       }
       return asQuery(gen(), async () => {}, undefined, {
@@ -4931,7 +5274,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       queryOptions: { effort: "high" },
     });
     const done = host.run();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await initConsumed.promise;
     await expect(host.setModel("haiku")).rejects.toThrow("clear rejected");
     expect(envs.at(-1)?.ext).toMatchObject({
       model: "haiku",
@@ -5101,15 +5444,26 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     // arrives, the second trigger must observe #modelsInflight and skip.
     // The slow mock forces the ordering deterministically.
     let callCount = 0;
+    const modelsStarted = deferred<void>();
+    const releaseModels = deferred<void>();
+    const resultConsumed = deferred<void>();
+    const mayReleaseModels = deferred<void>();
+    const catalogSettled = deferred<void>();
     const queryFn = makeQueryFn(() => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield msg({ type: "system", subtype: "init", model: "claude-x" });
+        await modelsStarted.promise;
         yield result("success", { result: "ok" });
+        resultConsumed.resolve();
+        await mayReleaseModels.promise;
+        releaseModels.resolve();
       }
       return asQuery(gen(), async () => {}, undefined, {
         supportedModels: async () => {
           callCount += 1;
-          await new Promise((r) => setTimeout(r, 20));
+          modelsStarted.resolve();
+          await releaseModels.promise;
+          catalogSettled.resolve();
           return modelInfos;
         },
       });
@@ -5119,7 +5473,14 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       queryFn,
       now: () => "T",
     });
-    await host.run();
+    const done = host.run();
+    await resultConsumed.promise;
+    for (let checkpoint = 0; checkpoint < 4; checkpoint += 1) {
+      await expectPendingAfterMicrotask(catalogSettled.promise);
+    }
+    mayReleaseModels.resolve();
+    await done;
+    await catalogSettled.promise;
     expect(callCount).toBe(1);
   });
 
@@ -5349,8 +5710,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     // ext.models must eventually reflect the SDK's real catalog, not the
     // floor default. The final envelope must carry the modelInfos shape.
     const finalModels = envs.at(-1)?.ext?.models as
-      | { value: string }[]
-      | undefined;
+      { value: string }[] | undefined;
     expect(finalModels?.map((m) => m.value)).toEqual(
       modelInfos.map((m) => m.value),
     );
@@ -5384,14 +5744,11 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     });
     await host.run();
     // First observable envelope carries the BOOTSTRAP floor (default only).
-    const firstModels = envs[0]?.ext?.models as
-      | { value: string }[]
-      | undefined;
+    const firstModels = envs[0]?.ext?.models as { value: string }[] | undefined;
     expect(firstModels?.map((m) => m.value)).toEqual(["default"]);
     // Final envelope carries the SDK-measured catalog after refresh success.
     const finalModels = envs.at(-1)?.ext?.models as
-      | { value: string }[]
-      | undefined;
+      { value: string }[] | undefined;
     expect(finalModels?.map((m) => m.value)).toEqual(
       modelInfos.map((m) => m.value),
     );
@@ -5436,7 +5793,11 @@ describe("AgentHost — display_name rename (issue #197 段階3, revised issue #
     expect(envs.at(-1)?.display_name).toBe("P(改名)");
     // persona (canonical) は issue #219 D19 のとおり rename では一切
     // 変わらない — id / name / sprite_set すべて。
-    expect(envs.at(-1)?.persona).toEqual({ id: "p", name: "P", sprite_set: "p" });
+    expect(envs.at(-1)?.persona).toEqual({
+      id: "p",
+      name: "P",
+      sprite_set: "p",
+    });
   });
 
   it("revision が現在値以下なら無視し state_change を再送しない (D15)", () => {
@@ -6123,7 +6484,12 @@ describe("AgentHost — ファイルアップロード (ADR-0025)", () => {
     host.attachChunk(buildChunkPayload("u1", 0, new Uint8Array([1, 2, 3])));
     host.attachClose("u1");
 
-    const sending = host.send("rendering", ["u1"], ["cid-render"], "render-token");
+    const sending = host.send(
+      "rendering",
+      ["u1"],
+      ["cid-render"],
+      "render-token",
+    );
     await rendering;
     host.close();
     finishRender();
@@ -6180,9 +6546,7 @@ describe("resume privilege restoration (P0 pin)", () => {
     await host.run();
     const last = states.at(-1);
     // permission_mode field は drift entry に載らない (同値)。
-    const drift = last?.ext.resume_drift as
-      | { field: string }[]
-      | undefined;
+    const drift = last?.ext.resume_drift as { field: string }[] | undefined;
     expect(
       drift?.some((entry) => entry.field === "permission_mode"),
     ).toBeFalsy();
@@ -6381,14 +6745,29 @@ describe("resume Case 2 display hint fallback (P1 dogfood 回帰対策)", () => 
   // effortLevels=[] になるケース。bootstrap 依存 test では再現できない。
   it("現実的 catalog (default 無し) + default hint 復元 → supports_effort_switch=true (R6) & persist_alias_unknown 非発火 (R4)", async () => {
     const envs: Envelope[] = [];
-    const supportedModels = vi.fn(async () => [
-      // SDK 側 measured catalog も default alias 無し。opus[1m] のみ。
-      {
-        value: "opus[1m]",
-        display_name: "Opus 1M",
-        effort_levels: ["low", "medium", "high", "xhigh", "max"] as EffortLevel[],
-      },
-    ]);
+    const catalogSettled = deferred<void>();
+    const supportedModels = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          queueMicrotask(() => {
+            resolve([
+              // SDK 側 measured catalog も default alias 無し。opus[1m] のみ。
+              {
+                value: "opus[1m]",
+                display_name: "Opus 1M",
+                effort_levels: [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max",
+                ] as EffortLevel[],
+              },
+            ]);
+            queueMicrotask(catalogSettled.resolve);
+          });
+        }),
+    );
     const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield msg({ type: "system", subtype: "init", model: "opus[1m]" });
@@ -6451,8 +6830,7 @@ describe("resume Case 2 display hint fallback (P1 dogfood 回帰対策)", () => 
     // #persistedModel に載っていないため validation は早期 return し、
     // switch_error(persist_alias_unknown) は発火しない。
     const done = host.run();
-    // init の yield と supportedModels の resolve を待つ。
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await catalogSettled.promise;
     const persistUnknownErrors = envs
       .map((e) => e.ext.switch_error)
       .filter(
