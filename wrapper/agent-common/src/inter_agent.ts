@@ -179,6 +179,8 @@ const INTERRUPTED_REASONS = new Set([
   "interrupted",
   "stop_hook_prevented",
   "hook_stopped",
+  "max_turns",
+  "budget_exhausted",
 ]);
 const TIMEOUT_REASONS = new Set(["timeout"]);
 

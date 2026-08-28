@@ -7,6 +7,7 @@ import type {
   SDKMessage,
   SDKRateLimitInfo,
   SDKResultMessage,
+  TerminalReason,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AdapterEvent,
@@ -16,6 +17,14 @@ import type {
   ResultSubtype,
   TasklistSourceItem,
 } from "@kaoiro/agent-common";
+
+type Assert<T extends true> = T;
+type _InterruptionTerminalReasonVocabularyPin = Assert<
+  | ("stop_hook_prevented" extends TerminalReason ? true : false)
+  | ("hook_stopped" extends TerminalReason ? true : false)
+  | ("max_turns" extends TerminalReason ? true : false)
+  | ("budget_exhausted" extends TerminalReason ? true : false)
+>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

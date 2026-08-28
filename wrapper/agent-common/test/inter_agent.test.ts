@@ -1213,14 +1213,19 @@ describe("classifyInterAgentError (issue #131)", () => {
     );
   });
 
-  it("Stop hook による意図的な終了は interrupted へ写像し、API 障害は api_error のままにする", () => {
-    for (const reason of ["stop_hook_prevented", "hook_stopped"]) {
-      expect(classifyInterAgentError({ reason })).toEqual({
-        code: "interrupted",
-        message: "the peer's turn was interrupted",
-      });
-    }
+  it.each([
+    "stop_hook_prevented",
+    "hook_stopped",
+    "max_turns",
+    "budget_exhausted",
+  ])("再試行を案内できない terminal_reason %s は interrupted へ写像する", (reason) => {
+    expect(classifyInterAgentError({ reason })).toEqual({
+      code: "interrupted",
+      message: "the peer's turn was interrupted",
+    });
+  });
 
+  it("API 障害は api_error のままにする", () => {
     expect(classifyInterAgentError({ reason: "api_error" })).toEqual({
       code: "api_error",
       message: "the peer reported an unspecified error",
