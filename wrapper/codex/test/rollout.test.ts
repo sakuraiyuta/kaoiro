@@ -466,6 +466,8 @@ describe("verifyRolloutCorruption (issue #263, ふじ MF-1)", () => {
 });
 
 describe("repairRolloutCorruption (issue #262)", () => {
+  // Host 経路だけでは replacement の全行 verify gate を壊しても見逃すため、
+  // repair の成功・失敗を関数単体でも pin する。
   it("UTF-8 行中切断と truncated JSON だけを除去し、原本 backup と全行 verify を経て置換する", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-repair-"));
     const id = "uuid-repair-real-patterns";
@@ -507,7 +509,26 @@ describe("repairRolloutCorruption (issue #262)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("有効行が 0 件なら原本を置換せず、手動 fallback 用の backup を残す", () => {
+  it("replacement の全行 verify が失敗したら原本を置換せず backup も残さない", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-repair-verify-"));
+    const id = "uuid-repair-verify";
+    const path = join(root, `rollout-${id}.jsonl`);
+    const original = Buffer.from(
+      `${JSON.stringify({ type: "turn_context", payload: {} })}\n{"type":"event_msg"`,
+      "utf8",
+    );
+    writeFileSync(path, original);
+
+    expect(repairRolloutCorruption(id, root, () => "corrupted")).toEqual({
+      repaired: false,
+    });
+    expect(readFileSync(path)).toEqual(original);
+    expect(readdirSync(root).some((name) => name.includes(".bak-"))).toBe(false);
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("有効行が 0 件なら原本を置換せず、手動 fallback 用の backup を残さない", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-repair-empty-"));
     const id = "uuid-repair-empty";
     const path = join(root, `rollout-${id}.jsonl`);
@@ -517,7 +538,7 @@ describe("repairRolloutCorruption (issue #262)", () => {
     expect(repairRolloutCorruption(id, root)).toEqual({ repaired: false });
     expect(readFileSync(path)).toEqual(original);
     expect(verifyRolloutCorruption(id, root)).toBe("corrupted");
-    expect(readdirSync(root).some((name) => name.includes(".bak-"))).toBe(true);
+    expect(readdirSync(root).some((name) => name.includes(".bak-"))).toBe(false);
 
     rmSync(root, { recursive: true, force: true });
   });

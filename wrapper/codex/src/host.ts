@@ -1174,6 +1174,7 @@ export class CodexHost implements EngineAdapter {
       }
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
+      let terminalError: unknown = err;
       if (!sawResult) {
         const alreadyConfirmedCorrupted =
           resumeSessionId !== null &&
@@ -1184,7 +1185,7 @@ export class CodexHost implements EngineAdapter {
         // Re-stringifying it here would double-wrap that Error's own
         // "Error: " toString prefix onto an already-stringified detail —
         // use the remembered root-cause text verbatim instead.
-        const detail = alreadyConfirmedCorrupted
+        let detail = alreadyConfirmedCorrupted
           ? (this.#corruptedRolloutDetail ?? String(err))
           : String(err);
         // issue #263 (ふじ MF-1 / 必須pin): a stderr keyword match alone
@@ -1211,7 +1212,12 @@ export class CodexHost implements EngineAdapter {
           const verify =
             this.#options.rolloutCorruptionVerifier ??
             ((id: string) => verifyRolloutCorruption(id));
-          const verdict: RolloutCorruptionVerdict = verify(resumeSessionId);
+          let verdict: RolloutCorruptionVerdict;
+          try {
+            verdict = verify(resumeSessionId);
+          } catch {
+            verdict = "unknown";
+          }
           if (verdict === "corrupted") {
             let repaired = false;
             if (!retryAfterRepair) {
@@ -1219,23 +1225,37 @@ export class CodexHost implements EngineAdapter {
                 const repair =
                   this.#options.rolloutCorruptionRepairer ??
                   ((id: string) => repairRolloutCorruption(id));
-                repaired = repair(resumeSessionId).repaired;
+                const repairResult = repair(resumeSessionId);
+                repaired = repairResult.repaired;
+                if (repairResult.repaired) {
+                  process.stderr.write(
+                    `codex rollout repaired for session ${resumeSessionId}; backup: ${repairResult.backupPath}\n`,
+                  );
+                }
               } catch {
                 repaired = false;
               }
             }
             if (repaired) {
-              await this.#runTurn(
-                codex,
-                input,
-                undefined,
-                conversationIds,
-                turnToken,
-                true,
-              );
-              return;
+              try {
+                await this.#runTurn(
+                  codex,
+                  input,
+                  undefined,
+                  conversationIds,
+                  turnToken,
+                  true,
+                );
+                return;
+              } catch (retryError) {
+                // The retry has not reached a terminal event, so settle the
+                // original turn once through the ordinary failure path.
+                detail = String(retryError);
+                terminalError = retryError;
+              }
+            } else {
+              rolloutCorrupted = true;
             }
-            rolloutCorrupted = true;
           }
         }
         this.#finishTurn(false, attempted);
@@ -1293,8 +1313,8 @@ export class CodexHost implements EngineAdapter {
               // on a later turn `err` is this file's own synthetic
               // "resume skipped" Error, so use the remembered root cause
               // verbatim rather than re-stringifying it.
-              `codex turn failed: rollout permanently corrupted for session ${resumeSessionId} (issue #263): ${this.#corruptedRolloutDetail ?? String(err)}\n`
-            : `codex turn failed: ${String(err)}\n`,
+              `codex turn failed: rollout permanently corrupted for session ${resumeSessionId} (issue #263): ${this.#corruptedRolloutDetail ?? String(terminalError)}\n`
+            : `codex turn failed: ${String(terminalError)}\n`,
         );
       }
     } finally {

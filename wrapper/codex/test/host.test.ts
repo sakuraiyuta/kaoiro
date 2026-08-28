@@ -2707,13 +2707,130 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     expect(results[1]?.payload).toMatchObject({
       is_error: true,
       error_subtype: "error_rollout_corrupted",
+      error_detail: "Error: stream did not contain valid UTF-8 (code -32603)",
     });
     expect(results[2]?.payload).toMatchObject({
       is_error: true,
       error_subtype: "error_rollout_corrupted",
+      error_detail: "Error: stream did not contain valid UTF-8 (code -32603)",
     });
 
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("修復後 retry の同期 throw でも onTurnEnd を一度だけ発火し、backup を stderr に出す", async () => {
+    const sessionId = "repair-retry-throws";
+    const turnEnds: {
+      conversationIds: readonly string[];
+      error?: { detail?: string };
+    }[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>()];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+    ]);
+    const resumeThread = client.resumeThread.bind(client);
+    let resumeAttempts = 0;
+    client.resumeThread = ((id, options) => {
+      resumeAttempts += 1;
+      if (id === sessionId && resumeAttempts === 2) {
+        throw new Error("retry resume construction failed");
+      }
+      return resumeThread(id, options);
+    }) as typeof client.resumeThread;
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rolloutCorruptionVerifier: () => "corrupted",
+        rolloutCorruptionRepairer: () => ({
+          repaired: true,
+          backupPath: "/tmp/rollout-repair.bak",
+        }),
+        onTurnEnd: (info) => {
+          turnEnds.push(info);
+          turnSettled[turnEnds.length - 1]?.resolve();
+        },
+        now: () => "T",
+      });
+
+      const done = host.run("hi");
+      await turnSettled[0]!.promise;
+      await host.send("continue", undefined, ["cnv-repair"]);
+      await turnSettled[1]!.promise;
+      host.close();
+      await done;
+
+      expect(calls.resume).toEqual([null, sessionId]);
+      expect(resumeAttempts).toBe(2);
+      expect(turnEnds).toEqual([
+        expect.objectContaining({ conversationIds: [] }),
+        expect.objectContaining({
+          conversationIds: ["cnv-repair"],
+          error: { detail: "Error: retry resume construction failed" },
+        }),
+      ]);
+      expect(stderr).toHaveBeenCalledWith(
+        `codex rollout repaired for session ${sessionId}; backup: /tmp/rollout-repair.bak\n`,
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("rollout verifier の throw は通常失敗へ fallback して turn を完結する", async () => {
+    const sessionId = "repair-verifier-throws";
+    const logs: Envelope[] = [];
+    const turnEnds: {
+      conversationIds: readonly string[];
+      error?: { detail?: string };
+    }[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>()];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (entry) => logs.push(entry),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      rolloutCorruptionVerifier: () => {
+        throw new Error("rollout inspection unavailable");
+      },
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        turnSettled[turnEnds.length - 1]?.resolve();
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await turnSettled[0]!.promise;
+    await host.send("continue", undefined, ["cnv-verifier"]);
+    await turnSettled[1]!.promise;
+    host.close();
+    await done;
+
+    expect(calls.resume).toEqual([null, sessionId]);
+    expect(turnEnds).toEqual([
+      expect.objectContaining({ conversationIds: [] }),
+      expect.objectContaining({
+        conversationIds: ["cnv-verifier"],
+        error: {
+          detail: "Error: stream did not contain valid UTF-8 (code -32603)",
+        },
+      }),
+    ]);
+    const results = logs.filter((entry) => entry.type === "result");
+    expect(results[1]?.payload).toMatchObject({ is_error: true });
+    expect(
+      (results[1]?.payload as { error_subtype?: string }).error_subtype,
+    ).toBeUndefined();
   });
 
   it("candidate 文言にマッチしても rollout ファイルが正常なら恒久分類しない (negative control: 他依存関係の同文 stderr による false positive を防ぐ)", async () => {

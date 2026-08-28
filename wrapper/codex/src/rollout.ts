@@ -121,6 +121,8 @@ export type RolloutRepairResult =
 export function repairRolloutCorruption(
   sessionId: string,
   root = codexRolloutsRoot(),
+  verifyReplacementPath: (path: string) => RolloutCorruptionVerdict =
+    verifyRolloutPath,
 ): RolloutRepairResult {
   const path = rolloutPathIn(root, sessionId);
   if (path === null) return { repaired: false };
@@ -143,19 +145,23 @@ export function repairRolloutCorruption(
   }
 
   const tempPath = `${path}.repair-${randomUUID()}.tmp`;
+  let replaced = false;
   try {
     const backup = readFileSync(backupPath);
     const repaired = removeCorruptedRolloutLines(backup);
     if (repaired === null) return { repaired: false };
     const mode = statSync(path).mode & 0o777;
     writeFileSync(tempPath, repaired, { flag: "wx", mode });
-    if (verifyRolloutPath(tempPath) !== "clean") {
+    if (verifyReplacementPath(tempPath) !== "clean") {
       return { repaired: false };
     }
+    // Repair follows this host's failed resume, so another live writer is
+    // not expected; accept the remaining check-to-rename TOCTOU window.
     if (!readFileSync(path).equals(backup)) {
       return { repaired: false };
     }
     renameSync(tempPath, path);
+    replaced = true;
     return { repaired: true, backupPath };
   } catch {
     return { repaired: false };
@@ -163,7 +169,14 @@ export function repairRolloutCorruption(
     try {
       rmSync(tempPath, { force: true });
     } catch {
-      // The original and its backup remain intact when temporary cleanup fails.
+      // Temporary cleanup cannot make an untouched original unsafe.
+    }
+    if (!replaced) {
+      try {
+        rmSync(backupPath, { force: true });
+      } catch {
+        // The untouched original remains authoritative if backup cleanup fails.
+      }
     }
   }
 }
