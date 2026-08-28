@@ -173,12 +173,13 @@ defmodule KaoiroServerWeb.PeerConnectivity do
           )
 
         fill_remaining ->
+          # Purge removes the agent before a later terminal transition can reclaim ordinary conversations.
           :ok = ConversationStates.mark_terminal_targets(agent_id, required_targets)
 
           {ordinary_targets, unclaimed} =
             ConversationStates.claim_unreachable_targets(
               agent_id,
-              PlannedDisconnects.max_unreachable_notices() - target_count(required_targets)
+              PlannedDisconnects.max_unreachable_notices() - length(required_targets)
             )
 
           {required_targets ++ ordinary_targets, unclaimed}
@@ -205,12 +206,6 @@ defmodule KaoiroServerWeb.PeerConnectivity do
 
     warn_on_cap("disconnect", agent_id, unclaimed)
     :ok
-  end
-
-  defp target_count(targets) do
-    Enum.reduce(targets, 0, fn {_conversation_id, peers}, count ->
-      count + length(peers)
-    end)
   end
 
   defp warn_on_cap(_label, _agent_id, 0), do: :ok

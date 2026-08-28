@@ -1164,6 +1164,38 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert length(remaining) == 2
     end
 
+    test "delete_agent の残 cap は peer 数でなく tracked conversation 数から引く" do
+      agent_id = "test.del-planned-cap-three-party"
+      first_peer_id = "test.del-planned-cap-three-party-first"
+      second_peer_id = "test.del-planned-cap-three-party-second"
+      tracked_cid = "cnv-del-planned-cap-three-party-tracked"
+
+      assert :ok =
+               PlannedDisconnects.begin(agent_id, "transition-delete-cap-three-party", :restart)
+
+      for peer_id <- [first_peer_id, second_peer_id] do
+        assert {:tracked, _} = PlannedDisconnects.track_bounce(agent_id, tracked_cid, peer_id)
+      end
+
+      for n <- 1..50 do
+        assert :ok =
+                 ConversationStates.record_message(
+                   "cnv-del-planned-cap-three-party-ordinary-#{n}",
+                   agent_id,
+                   "test.del-planned-cap-three-party-ordinary-#{n}",
+                   "ordinary",
+                   1,
+                   false,
+                   true
+                 )
+      end
+
+      assert :disconnected = PeerConnectivity.delete(agent_id)
+
+      assert {remaining, 0} = ConversationStates.claim_unreachable_targets(agent_id, 50)
+      assert length(remaining) == 1
+    end
+
     test "delete_agent は intent 無しなら terminal notice を出さない" do
       agent_id = "test.del-without-intent"
       peer_id = "test.del-without-intent-peer"
