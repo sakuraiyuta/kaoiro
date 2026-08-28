@@ -25,6 +25,7 @@ import type {
   DirectoryEntry,
   DirectoryRateLimitWindow,
   DirectoryResult,
+  InterAgentDeliveryStatus,
 } from "@kaoiro/protocol";
 import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
@@ -94,12 +95,8 @@ export interface WhoamiSnapshot {
   rate_limits?: Record<string, DirectoryRateLimitWindow>;
 }
 
-/** Wire-neutral shape so the common tool layer does not depend on transport. */
-export interface InterAgentDeliverySnapshot {
-  issued_seq: number;
-  acked_seq: number;
-  pending_since?: string;
-}
+/** Backward-compatible name for the protocol-owned delivery ledger shape. */
+export type InterAgentDeliverySnapshot = InterAgentDeliveryStatus;
 
 /** The common ToolResult shape (tooling.ts); alias kept so the existing
  *  method signatures and tests read unchanged. */

@@ -44,7 +44,16 @@ export interface QuestionResponseMessage {
   cancelled?: boolean;
 }
 
-const USER_ROLES: readonly UserRole[] = ["operator", "viewer", "admin"];
+const USER_ROLES = [
+  "operator",
+  "viewer",
+  "admin",
+] as const satisfies readonly UserRole[];
+
+type Assert<T extends true> = T;
+type _UserRolesCoverProtocol = Assert<
+  Exclude<UserRole, (typeof USER_ROLES)[number]> extends never ? true : false
+>;
 
 /** attach_open payload (protocol.md / file-upload spec, server -> wrapper
  *  relay). chunks is the advertised total chunk count for the upload. */
