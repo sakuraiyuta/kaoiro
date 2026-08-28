@@ -2,6 +2,7 @@ defmodule KaoiroServer.AgentStatesTest do
   use ExUnit.Case, async: true
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.TransportLimits
 
   defp envelope(agent_id, extra \\ %{}) do
     Map.merge(%{"agent_id" => agent_id, "state" => "idle"}, extra)
@@ -68,6 +69,42 @@ defmodule KaoiroServer.AgentStatesTest do
     refute Map.has_key?(projection["agent-large"], "payload")
   end
 
+  test "wire projection は pending 付き oversized envelope を丸ごと省略する" do
+    pending_oversized =
+      envelope("agent-pending-large", %{
+        "payload" => %{"text" => String.duplicate("x", 8_000_000)},
+        "ext" => %{"pending_question" => %{"request_id" => "q-1", "questions" => []}}
+      })
+
+    {projection, incomplete?} =
+      AgentStates.wire_projection(%{"agent-pending-large" => pending_oversized})
+
+    assert incomplete?
+    assert projection == %{}
+  end
+
+  test "wire projection は entry bytes 台帳で巨大 pending の一部を残して frame に収める" do
+    pending = fn n ->
+      envelope("agent-pending-#{n}", %{
+        "payload" => %{"text" => String.duplicate("x", 50_000)},
+        "ext" => %{"pending_question" => %{"request_id" => "q-#{n}", "questions" => []}}
+      })
+    end
+
+    envelopes = Map.new(1..200, fn n -> {"agent-pending-#{n}", pending.(n)} end)
+
+    {projection, incomplete?} = AgentStates.wire_projection(envelopes)
+
+    assert incomplete?
+    assert map_size(projection) > 0
+    assert map_size(projection) < map_size(envelopes)
+
+    assert TransportLimits.snapshot_frame_fits?("snapshot", %{
+             "agents" => projection,
+             "snapshot_incomplete" => true
+           })
+  end
+
   test "known?/2 はマップを複製せずに存在を判定する" do
     store = start_supervised!({AgentStates, name: :agent_states_known_test})
 
@@ -85,6 +122,13 @@ defmodule KaoiroServer.AgentStatesTest do
     test "生きた owner を持つ agent は connected?", %{store: store} do
       :ok = AgentStates.put(envelope("c.live"), owner: self(), server: store)
       assert AgentStates.connected?("c.live", server: store)
+    end
+
+    test "connected_ids は live owner だけを返す", %{store: store} do
+      :ok = AgentStates.put(envelope("c.live"), owner: self(), server: store)
+      :ok = AgentStates.put(envelope("c.unowned"), server: store)
+
+      assert AgentStates.connected_ids(server: store) == MapSet.new(["c.live"])
     end
 
     test "未知 agent は connected? false", %{store: store} do

@@ -74,11 +74,34 @@ defmodule KaoiroServer.DeliveryStatesTest do
       assert %{issued_seq: 0} = DeliveryStates.bind(id, "generation-#{n}", name)
     end
 
-    projection = DeliveryStates.wire_projection(name)
+    {projection, incomplete?} = DeliveryStates.wire_projection(name)
 
     assert map_size(DeliveryStates.all(name)) == 201
+    assert incomplete?
     assert map_size(projection) == 200
     assert Map.has_key?(projection, "agent-001")
     refute Map.has_key?(projection, "agent-201")
+  end
+
+  test "wire projection は接続中または未確認 gap の delivery を優先し、省略を明示する" do
+    historical =
+      Map.new(1..200, fn n ->
+        id = "agent-#{String.pad_leading(Integer.to_string(n), 3, "0")}"
+        {id, %{issued_seq: 4, acked_seq: 4, pending_since: nil}}
+      end)
+
+    deliveries =
+      historical
+      |> Map.put("z-live", %{issued_seq: 2, acked_seq: 2, pending_since: nil})
+      |> Map.put("z-gap", %{issued_seq: 3, acked_seq: 2, pending_since: "2026-08-28T00:00:00Z"})
+
+    {projection, incomplete?} =
+      DeliveryStates.wire_projection(deliveries, MapSet.new(["z-live"]))
+
+    assert incomplete?
+    assert map_size(projection) == 200
+    assert Map.has_key?(projection, "z-live")
+    assert Map.has_key?(projection, "z-gap")
+    refute Map.has_key?(projection, "agent-200")
   end
 end

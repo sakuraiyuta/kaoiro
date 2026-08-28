@@ -28,7 +28,20 @@ defmodule KaoiroServer.TransportLimits do
   measurement and the transport write.
   """
   def snapshot_payload_budget(event, key) when is_binary(event) and is_binary(key) do
-    @max_frame_bytes - @frame_safety_margin_bytes - frame_bytes(event, %{key => %{}}) + 2
+    snapshot_payload_budget(event, key, %{})
+  end
+
+  @doc """
+  Bytes available to `key` when the frame also contains `static_payload`.
+
+  A projection that may need an incomplete marker must reserve that marker
+  before admitting entries; otherwise an entry ledger can pass while the
+  final transport frame does not.
+  """
+  def snapshot_payload_budget(event, key, static_payload)
+      when is_binary(event) and is_binary(key) and is_map(static_payload) do
+    payload = Map.put(static_payload, key, %{})
+    @max_frame_bytes - @frame_safety_margin_bytes - frame_bytes(event, payload) + 2
   end
 
   @doc "Whether the production JSON serializer keeps this snapshot frame in budget."

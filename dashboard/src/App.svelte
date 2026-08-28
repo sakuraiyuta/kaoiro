@@ -72,6 +72,7 @@
 
   let agents = $state<Record<string, Envelope>>({});
   let snapshotIncomplete = $state(false);
+  let deliverySnapshotIncomplete = $state(false);
   // Active subagent/workflow tasks (ADR-0019/0047/0048, issue #180),
   // nested agent_id -> task_id -> latest task envelope (M1 fix-round
   // composite key, 2026-08-09). Operator-only, twin of `directory`'s
@@ -197,8 +198,13 @@
   // touches localStorage, no server round-trip).
   let showSettings = $state(false);
   // Persona pack detail modal (issue #232): the persona id whose detail
-  // is open, or null. Static pack information (GET /api/personas/:id),
-  // so operator- and viewer-visible alike — no connection/isOperator gate.
+  // is open, or null. issue #232 MF-1 (director decision): the server
+  // endpoint (GET /api/personas/:id) is operator/admin only — a custom
+  // pack's personality.md is a system prompt that may carry proprietary
+  // operating instructions. The 3 `onOpenPersonaDetail` wiring sites
+  // below gate on `isOperator` so a viewer session never even shows the
+  // click affordance; viewer disclosure is a separate future decision
+  // (ADR-0021 F7).
   let personaDetailId = $state<string | null>(null);
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -569,10 +575,15 @@
           // A fresh connection: everything the previous one buffered belongs
           // to a projection this connection has not been told about yet, and
           // its replay markers can never be completed (the wrapper restarts
-          // its own handshake per connection). Both go now, before the first
-          // envelope of the new window arrives.
+          // its own handshake per connection). The three independently pushed
+          // snapshot projections go with them, before the first new frame
+          // arrives, so a partial rejoin is absent rather than mixed-generation.
           connectionGeneration += 1;
+          agents = {};
+          tasks = {};
+          deliveries = {};
           snapshotIncomplete = false;
+          deliverySnapshotIncomplete = false;
           awaitingHistory = true;
           liveSinceJoin = {};
           activeTimelineReplays = retainTimelineReplaysOfGeneration(
@@ -588,6 +599,7 @@
         onSnapshotIncomplete: (incomplete) => (snapshotIncomplete = incomplete),
         onTaskSnapshot: (next) => (tasks = next),
         onDeliverySnapshot: (next) => (deliveries = next),
+        onDeliverySnapshotIncomplete: (incomplete) => (deliverySnapshotIncomplete = incomplete),
         onDeliveryStatus: (agentId, delivery) => {
           if (delivery === null) {
             const { [agentId]: _removed, ...remaining } = deliveries;
@@ -1481,9 +1493,14 @@
   <p class="spawn-notice" role="status">{spawnNoticeText}</p>
 {/if}
 
-{#if snapshotIncomplete}
+{#if snapshotIncomplete || deliverySnapshotIncomplete}
   <p class="snapshot-notice" role="status">
-    一部のエージェントは snapshot の上限により表示されていません。
+    {#if snapshotIncomplete}
+      一部のエージェントは snapshot の上限により表示されていません。
+    {/if}
+    {#if deliverySnapshotIncomplete}
+      一部の inter-agent 配送確認は snapshot の上限により表示されていません。
+    {/if}
   </p>
 {/if}
 

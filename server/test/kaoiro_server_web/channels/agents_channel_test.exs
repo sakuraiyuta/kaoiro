@@ -150,49 +150,72 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     assert map_size(agents) == 200
   end
 
-  test "join の3 snapshot frame は production serializer 経由で transport bound 内に収まる" do
-    agent_id = "test.snapshot-frame-bound"
+  test "join の3 snapshot frame は各 store を上限まで満たしても production serializer の bound 内に収まる" do
     owner = self()
 
-    on_exit(fn ->
-      TaskStates.discard_for_agent(agent_id)
-      DeliveryStates.delete(agent_id)
-
-      case AgentStates.disconnect(agent_id, owner, "2026-08-28T00:00:00Z") do
-        {:ok, _} -> AgentStates.delete(agent_id)
-        :noop -> :ok
+    agent_ids =
+      for n <- 1..TransportLimits.wire_projection_agents() do
+        "test.snapshot-frame-#{String.pad_leading(Integer.to_string(n), 3, "0")}"
       end
+
+    task_agent_id = hd(agent_ids)
+
+    on_exit(fn ->
+      Enum.each(agent_ids, fn agent_id ->
+        TaskStates.discard_for_agent(agent_id)
+        DeliveryStates.delete(agent_id)
+
+        case AgentStates.disconnect(agent_id, owner, "2026-08-28T00:00:00Z") do
+          {:ok, _} -> AgentStates.delete(agent_id)
+          :noop -> :ok
+        end
+      end)
     end)
 
-    :ok =
-      AgentStates.put(
-        %{
-          "version" => "0",
-          "agent_id" => agent_id,
-          "ts" => "2026-08-28T00:00:00Z",
-          "type" => "state_change",
-          "state" => "waiting_input"
-        },
-        owner: owner
+    for agent_id <- agent_ids do
+      assert :ok =
+               AgentStates.put(
+                 %{
+                   "version" => "0",
+                   "agent_id" => agent_id,
+                   "ts" => "2026-08-28T00:00:00Z",
+                   "type" => "state_change",
+                   "state" => "waiting_input",
+                   "payload" => %{"text" => String.duplicate("a", 4_000)}
+                 },
+                 owner: owner
+               )
+
+      assert %{issued_seq: 0} =
+               DeliveryStates.bind(agent_id, "snapshot-bound-generation-#{agent_id}")
+    end
+
+    task_base = %{
+      "version" => "0",
+      "agent_id" => task_agent_id,
+      "ts" => "2026-08-28T00:00:00Z",
+      "type" => "task",
+      "state" => "idle",
+      "payload" => %{
+        "kind" => "started",
+        "agent_id" => task_agent_id,
+        "task_id" => "near-frame-bound",
+        "task_type" => "local_agent",
+        "status" => "running",
+        "summary" => ""
+      }
+    }
+
+    task_target_bytes = TaskStates.snapshot_byte_budget() - 4_096
+
+    task =
+      put_in(
+        task_base,
+        ["payload", "summary"],
+        String.duplicate("t", task_target_bytes - byte_size(Jason.encode!(task_base)))
       )
 
-    :ok =
-      TaskStates.put(%{
-        "version" => "0",
-        "agent_id" => agent_id,
-        "ts" => "2026-08-28T00:00:00Z",
-        "type" => "task",
-        "state" => "idle",
-        "payload" => %{
-          "kind" => "started",
-          "agent_id" => agent_id,
-          "task_id" => "t1",
-          "task_type" => "local_agent",
-          "status" => "running"
-        }
-      })
-
-    assert %{issued_seq: 0} = DeliveryStates.bind(agent_id, "snapshot-bound-generation")
+    assert :ok = TaskStates.put(task)
 
     _socket = join_as(:operator)
 
@@ -200,6 +223,29 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_receive %Phoenix.Socket.Message{event: ^event} = message
       assert encoded_frame_bytes(message) <= TransportLimits.max_frame_bytes()
     end
+  end
+
+  test "delivery snapshot の省略は incomplete marker で観測できる" do
+    agent_ids =
+      for n <- 1..(TransportLimits.wire_projection_agents() + 1) do
+        "test.delivery-snapshot-incomplete-#{String.pad_leading(Integer.to_string(n), 3, "0")}"
+      end
+
+    on_exit(fn -> Enum.each(agent_ids, &DeliveryStates.delete/1) end)
+
+    for agent_id <- agent_ids do
+      assert %{issued_seq: 0} =
+               DeliveryStates.bind(agent_id, "delivery-snapshot-generation-#{agent_id}")
+    end
+
+    _socket = join_as(:operator)
+
+    assert_push "delivery_snapshot", %{
+      "deliveries" => deliveries,
+      "snapshot_incomplete" => true
+    }
+
+    assert map_size(deliveries) == TransportLimits.wire_projection_agents()
   end
 
   test "delivery_status の live 診断は operator にだけ届く" do
@@ -2338,6 +2384,17 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_push "task_snapshot", %{"tasks" => tasks}
       assert tasks == %{}
+    end
+
+    test "delivery_snapshot: viewer には deliveries キーが空で届く" do
+      agent_id = "test.delivery-snap-viewer"
+      on_exit(fn -> DeliveryStates.delete(agent_id) end)
+      assert %{issued_seq: 0} = DeliveryStates.bind(agent_id, "delivery-snap-viewer-generation")
+
+      _socket = join_as(:viewer)
+
+      assert_push "delivery_snapshot", %{"deliveries" => deliveries}
+      assert deliveries == %{}
     end
 
     # M3 round2 must-fix (2026-08-09, ふじ round 2): AgentStates と

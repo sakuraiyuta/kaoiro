@@ -296,8 +296,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # policy for the snapshot path specifically).
     tasks = if role in @operator_capable_roles, do: TaskStates.snapshot(), else: %{}
 
-    deliveries =
-      if role in @operator_capable_roles, do: DeliveryStates.wire_projection(), else: %{}
+    {deliveries, delivery_snapshot_incomplete?} =
+      if role in @operator_capable_roles,
+        do: DeliveryStates.wire_projection(),
+        else: {%{}, false}
 
     agent_snapshot = %{"agents" => agents}
 
@@ -306,10 +308,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
         do: Map.put(agent_snapshot, "snapshot_incomplete", true),
         else: agent_snapshot
 
+    delivery_snapshot = %{"deliveries" => deliveries}
+
+    delivery_snapshot =
+      if delivery_snapshot_incomplete?,
+        do: Map.put(delivery_snapshot, "snapshot_incomplete", true),
+        else: delivery_snapshot
+
     snapshot_frames = %{
       "snapshot" => agent_snapshot,
       "task_snapshot" => %{"tasks" => tasks},
-      "delivery_snapshot" => %{"deliveries" => deliveries}
+      "delivery_snapshot" => delivery_snapshot
     }
 
     :ok = validate_join_snapshot_frames(snapshot_frames)

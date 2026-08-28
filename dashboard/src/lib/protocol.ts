@@ -1607,6 +1607,8 @@ export interface KaoiroHandlers {
    *  tasks. */
   onTaskSnapshot?: (tasks: TaskTable) => void;
   onDeliverySnapshot?: (deliveries: Record<string, InterAgentDeliveryStatus>) => void;
+  /** Whether the bounded delivery projection omitted watermarks on this join. */
+  onDeliverySnapshotIncomplete?: (incomplete: boolean) => void;
   onDeliveryStatus?: (agentId: string, status: InterAgentDeliveryStatus | null) => void;
   /** Single-agent update (any envelope type; caller routes by type). */
   onEnvelope: (envelope: Envelope) => void;
@@ -3135,8 +3137,12 @@ export function connectKaoiro(
     bindServerEvent(c, "task_snapshot", (payload: { tasks?: unknown }) => {
       handlers.onTaskSnapshot?.(parseTasks(payload.tasks));
     });
-    bindServerEvent(c, "delivery_snapshot", (payload: { deliveries?: unknown }) => {
+    bindServerEvent(c, "delivery_snapshot", (payload: {
+      deliveries?: unknown;
+      snapshot_incomplete?: unknown;
+    }) => {
       handlers.onDeliverySnapshot?.(parseDeliverySnapshot(payload.deliveries));
+      handlers.onDeliverySnapshotIncomplete?.(payload.snapshot_incomplete === true);
     });
     bindServerEvent(c, "delivery_status", (payload: unknown) => {
     if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;

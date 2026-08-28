@@ -82,6 +82,12 @@ defmodule KaoiroServer.AgentStates do
   # single pane's map from growing without bound between merges.
   @max_ia 200
 
+  @wire_projection_bytes TransportLimits.snapshot_payload_budget(
+                           "snapshot",
+                           "agents",
+                           %{"snapshot_incomplete" => true}
+                         )
+
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, %{}, name: name)
@@ -245,34 +251,44 @@ defmodule KaoiroServer.AgentStates do
   def wire_projection, do: snapshot() |> wire_projection()
 
   def wire_projection(envelopes) when is_map(envelopes) do
-    {agents, incomplete?} =
+    {agents, incomplete?, _bytes} =
       envelopes
       |> Enum.sort_by(fn {agent_id, envelope} ->
         {if(pending_envelope?(envelope), do: 0, else: 1), agent_id}
       end)
-      |> Enum.reduce({%{}, false}, fn {agent_id, envelope}, {agents, incomplete?} ->
-        candidate = Map.put(agents, agent_id, envelope)
+      |> Enum.reduce({%{}, false, 0}, fn {agent_id, envelope}, {agents, incomplete?, bytes} ->
+        entry_bytes = wire_entry_bytes(agent_id, envelope)
 
         cond do
           map_size(agents) >= TransportLimits.wire_projection_agents() ->
-            {agents, true}
+            {agents, true, bytes}
 
-          TransportLimits.snapshot_frame_fits?("snapshot", incomplete_payload(candidate)) ->
-            {candidate, incomplete?}
+          bytes + entry_bytes + 1 <= @wire_projection_bytes ->
+            {Map.put(agents, agent_id, envelope), incomplete?, bytes + entry_bytes}
 
           pending_envelope?(envelope) ->
-            {agents, true}
-
-          TransportLimits.snapshot_frame_fits?(
-            "snapshot",
-            incomplete_payload(Map.put(agents, agent_id, compact_envelope(envelope)))
-          ) ->
-            {Map.put(agents, agent_id, compact_envelope(envelope)), true}
+            {agents, true, bytes}
 
           true ->
-            {agents, true}
+            compacted = compact_envelope(envelope)
+            compacted_bytes = wire_entry_bytes(agent_id, compacted)
+
+            if bytes + compacted_bytes + 1 <= @wire_projection_bytes do
+              {Map.put(agents, agent_id, compacted), true, bytes + compacted_bytes}
+            else
+              {agents, true, bytes}
+            end
         end
       end)
+
+    payload = if incomplete?, do: incomplete_payload(agents), else: %{"agents" => agents}
+
+    {agents, incomplete?} =
+      if TransportLimits.snapshot_frame_fits?("snapshot", payload) do
+        {agents, incomplete?}
+      else
+        {%{}, true}
+      end
 
     if incomplete? do
       Logger.warning("AgentStates: join snapshot is incomplete after wire projection")
@@ -391,6 +407,12 @@ defmodule KaoiroServer.AgentStates do
   def connected?(agent_id, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.call(server, {:connected?, agent_id})
+  end
+
+  @doc "Returns the currently connected agent ids without exposing envelopes."
+  def connected_ids(opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, :connected_ids)
   end
 
   @impl true
@@ -658,7 +680,28 @@ defmodule KaoiroServer.AgentStates do
     {:reply, connected, state}
   end
 
+  def handle_call(:connected_ids, _from, state) do
+    ids =
+      state.agents
+      |> Enum.flat_map(fn
+        {agent_id, %{owner: owner}} ->
+          if is_pid(owner) and Process.alive?(owner), do: [agent_id], else: []
+
+        _ ->
+          []
+      end)
+      |> MapSet.new()
+
+    {:reply, ids, state}
+  end
+
   defp incomplete_payload(agents), do: %{"agents" => agents, "snapshot_incomplete" => true}
+
+  # The comma is charged for every member, including the final one, so the
+  # ledger never underestimates the JSON object that the final serializer sees.
+  defp wire_entry_bytes(agent_id, envelope) do
+    byte_size(Jason.encode!(agent_id)) + 1 + byte_size(Jason.encode!(envelope)) + 1
+  end
 
   defp pending_envelope?(%{"ext" => ext}) when is_map(ext),
     do: Map.has_key?(ext, "pending_permission") or Map.has_key?(ext, "pending_question")

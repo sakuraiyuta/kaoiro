@@ -96,6 +96,7 @@ function handlers() {
     onSnapshotIncomplete: vi.fn(),
     onTaskSnapshot: vi.fn(),
     onDeliverySnapshot: vi.fn(),
+    onDeliverySnapshotIncomplete: vi.fn(),
     onEnvelope: vi.fn(),
   } satisfies KaoiroHandlers;
 }
@@ -144,6 +145,7 @@ describe("join snapshot frames (issue #203 V-2)", () => {
           pending_since: "2026-08-28T00:00:00Z",
         },
       },
+      snapshot_incomplete: true,
     });
 
     expect(captured.onSnapshot).toHaveBeenCalledWith({ "agent-a": agent });
@@ -158,5 +160,6 @@ describe("join snapshot frames (issue #203 V-2)", () => {
         pending_since: "2026-08-28T00:00:00Z",
       },
     });
+    expect(captured.onDeliverySnapshotIncomplete).toHaveBeenCalledWith(true);
   });
 });

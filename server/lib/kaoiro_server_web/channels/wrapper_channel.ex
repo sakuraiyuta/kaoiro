@@ -457,7 +457,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     self_id = socket.assigns.agent_id
     activities = AgentActivity.snapshot()
     peer_index = ConversationStates.peer_index()
-    deliveries = DeliveryStates.wire_projection()
+    {deliveries, _incomplete?} = DeliveryStates.wire_projection()
     states = AgentStates.snapshot()
 
     live =

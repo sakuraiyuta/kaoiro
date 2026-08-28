@@ -4,6 +4,7 @@ defmodule KaoiroServer.TaskStatesTest do
   import ExUnit.CaptureLog
 
   alias KaoiroServer.TaskStates
+  alias KaoiroServer.TransportLimits
 
   @max_task_snapshot_bytes TaskStates.snapshot_byte_budget()
 
@@ -426,7 +427,7 @@ defmodule KaoiroServer.TaskStatesTest do
       end
 
       encoded = TaskStates.snapshot(store) |> Jason.encode!() |> byte_size()
-      assert encoded < 8_000_000
+      assert encoded < TransportLimits.max_frame_bytes()
       # Explicit margin, not just barely under the hard wire limit.
       assert encoded < 7_000_000
     end
