@@ -74,3 +74,33 @@ test.describe("T3: viewer lobby — always auto-fill, no timeline, no handle", (
     });
   }
 });
+
+// T12 (issue #231, ふじ round-1 should-fix S1): the AgentCard side of the
+// 8px orbit-drop was only verified by geometry review, not measured in a
+// real browser — svelte-check/vitest cannot resolve `calc(-2% + 8px)`
+// against `.sprite-slot`'s actual rendered height (jsdom has no layout
+// engine). AgentDetail's own topOffset="calc(6% + 8px)" is a plain inline
+// style value that agentDetailTaskRing.integration.test.ts already pins
+// directly; AgentCard has no such inline style (TaskRing's base CSS rule
+// supplies it), so only a real layout engine can resolve the containing
+// block's height this asserts against.
+test.describe("T12: 頭上リング (AgentCard, issue #231)", () => {
+  test("1920x1080: TaskRing の top が .sprite-slot 高さ * -0.02 + 8px に解決される", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto(`${OPERATOR}&taskRing=1`);
+    const slot = page.locator(".sprite-slot").first();
+    const ring = page.locator(".task-ring").first();
+    await expect(ring).toBeVisible();
+
+    const slotBox = (await slot.boundingBox())!;
+    const topPx = await ring.evaluate((el) =>
+      parseFloat(getComputedStyle(el).top),
+    );
+
+    // Sub-pixel rounding (ふじ実測: 差 7.98px/8px) — 1px tolerance.
+    const expectedTop = slotBox.height * -0.02 + 8;
+    expect(Math.abs(topPx - expectedTop)).toBeLessThan(1);
+  });
+});

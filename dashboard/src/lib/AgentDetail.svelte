@@ -687,14 +687,50 @@
     });
   }
 
-  // Date-divider label per log index, recomputed only when logs changes (#38):
-  // a line gets a label when its calendar day differs from the previous line
-  // (and for the first line). Precomputing here avoids reconstructing the
-  // previous entry's Date on every render.
+  // issue #228: whether a log entry is hidden by the "非メッセージエントリ
+  // 非表示" setting. Only tool_use/tool_result are ever hidden — system,
+  // turn boundaries (`res`), session boundaries, and assistant/user text
+  // pass through regardless (this component's rendering below never
+  // consults the setting for those kinds; this is the single place that
+  // decides visibility for the ones that DO consult it).
+  function shouldHideLogEntry(env: Envelope, hide: boolean): boolean {
+    if (!hide) return false;
+    const kind = logOf(env)?.kind;
+    return kind === "tool_use" || kind === "tool_result";
+  }
+
+  // issue #228 round-1 must-fix (ふじ M1): hiding must happen BEFORE the
+  // window slice below, not by leaving a hidden row's outer
+  // `.transcript-entry` in the DOM and skipping only its inner content —
+  // that left (1) an empty flex-gap box per hidden row, (2) a tool-only
+  // day's date divider still rendered, and, critically, (3) a hidden row
+  // still consuming one of the LOG_WINDOW_SIZE slots the window below
+  // hands out: with the setting on, 201 consecutive tool entries could
+  // evict every readable assistant/user row from the render window even
+  // though none of them changed. Filtering the raw `logs[]` down to
+  // displayable rows first, then windowing THAT, keeps the window's
+  // capacity meaningful in message terms. Each entry keeps its original
+  // `logs[]` index (`absoluteIndex`) alongside it — `findPrecedingUserPrompt`
+  // and `ensureIndexVisible`'s callers (`scrollToTimelineEntry`/
+  // `jumpToTool`) key off positions in the ORIGINAL `logs[]`, not the
+  // filtered view, so that index must survive filtering intact.
+  const displayableLogs = $derived(
+    logs
+      .map((env, absoluteIndex) => ({ env, absoluteIndex }))
+      .filter(
+        ({ env }) => !shouldHideLogEntry(env, settings.hideNonMessageLogEntries),
+      ),
+  );
+
+  // Date-divider label per DISPLAYABLE-log index (#38, issue #228): a line
+  // gets a label when its calendar day differs from the previous VISIBLE
+  // line (and for the first visible line) — keyed against
+  // `displayableLogs`, not raw `logs[]`, so a tool-only day hidden by the
+  // setting above does not leave an orphaned divider with nothing under it.
   const dayDividers = $derived.by(() => {
     const labels = new Map<number, string>();
     let prev: string | null = null;
-    logs.forEach((env, i) => {
+    displayableLogs.forEach(({ env }, i) => {
       const dk = dayKey(env.ts);
       if (dk !== null && dk !== prev) labels.set(i, formatDate(env.ts));
       prev = dk;
@@ -741,6 +777,12 @@
   const LOG_WINDOW_SIZE = 200;
   let frozenWindow = $state<
     | {
+        // issue #228: an index into `displayableLogs`, NOT raw `logs[]` —
+        // the window counts displayable (post-hide) rows so the setting
+        // above cannot make it evict readable rows (see displayableLogs'
+        // own doc comment). `anchorLength` below stays a raw `logs.length`
+        // on purpose (shrink/history-reset detection tracks the real
+        // transcript, independent of the hide setting).
         start: number;
         mode: "reading-frozen" | "explicit-expanded";
         anchorLength: number;
@@ -749,10 +791,10 @@
   >(null);
   const effectiveWindowStart = $derived(
     frozenWindow !== null
-      ? Math.min(frozenWindow.start, logs.length)
-      : Math.max(0, logs.length - LOG_WINDOW_SIZE),
+      ? Math.min(frozenWindow.start, displayableLogs.length)
+      : Math.max(0, displayableLogs.length - LOG_WINDOW_SIZE),
   );
-  const visibleLogs = $derived(logs.slice(effectiveWindowStart));
+  const visibleLogs = $derived(displayableLogs.slice(effectiveWindowStart));
   const hiddenLogCount = $derived(effectiveWindowStart);
 
   // Expand the window to include `absoluteIndex` (a `logs[]` index) if it is
@@ -864,11 +906,22 @@
   // elsewhere (e.g. `display.dispose()` above).
   $effect(() => () => cancelSuppressFailsafe());
 
+  // `absoluteIndex` is a raw `logs[]` index (both callers — the timeline
+  // jump and the tool_use/tool_result partner jump — find it via
+  // `logs.findIndex`). issue #228: the window now counts displayable rows,
+  // so this translates it to its position in `displayableLogs` first. A
+  // target the hide setting has filtered out (e.g. a jump computed just
+  // before the operator flipped the toggle) has no such position — no-op
+  // rather than mis-expanding the window to an unrelated row.
   function ensureIndexVisible(absoluteIndex: number): number | null {
     const start = untrack(() => effectiveWindowStart);
-    if (absoluteIndex >= 0 && absoluteIndex < start) {
+    const displayIndex = untrack(() =>
+      displayableLogs.findIndex((d) => d.absoluteIndex === absoluteIndex),
+    );
+    if (displayIndex === -1) return null;
+    if (displayIndex >= 0 && displayIndex < start) {
       frozenWindow = {
-        start: absoluteIndex,
+        start: displayIndex,
         mode: "reading-frozen",
         anchorLength: logs.length,
       };
@@ -2960,13 +3013,18 @@
             以前のログを表示 ({hiddenLogCount} 件)
           </button>
         {/if}
-        {#each visibleLogs as env, i (env.ts + ":" + (env.seq ?? (effectiveWindowStart + i)))}
-          {@const absoluteIndex = effectiveWindowStart + i}
+        {#each visibleLogs as { env, absoluteIndex }, i (env.ts + ":" + (env.seq ?? absoluteIndex))}
+          <!-- issue #228: `absoluteIndex` (raw `logs[]` position, used by
+               findPrecedingUserPrompt below) now comes from displayableLogs
+               itself. `displayIndex` (this row's position within
+               displayableLogs) is the separate key dayDividers is built
+               against — see displayableLogs/dayDividers' own comments. -->
+          {@const displayIndex = effectiveWindowStart + i}
           {@const log = logOf(env)}
           {@const res = resultOf(env)}
           {@const iam = interAgentMessageOf(env)}
           {@const time = formatTime(env.ts)}
-          {@const dateLabel = i === 0 ? formatDate(env.ts) : dayDividers.get(absoluteIndex)}
+          {@const dateLabel = i === 0 ? formatDate(env.ts) : dayDividers.get(displayIndex)}
           <div
             class="transcript-entry"
             data-envelope-key={conversationEntryKey(env)}
@@ -3066,7 +3124,7 @@
               {log.text ?? ""}
               <time class="ts" datetime={env.ts}>{time}</time>
             </p>
-          {:else if log?.kind === "tool_use" && !settings.hideNonMessageLogEntries}
+          {:else if log?.kind === "tool_use"}
             {@const tuid = log.tool_use_id}
             <details
               class="tool"
@@ -3091,7 +3149,7 @@
                   ? "\n…(入力が大きいため省略)"
                   : ""}</pre>
             </details>
-          {:else if log?.kind === "tool_result" && !settings.hideNonMessageLogEntries}
+          {:else if log?.kind === "tool_result"}
             {@const tuid = log.tool_use_id}
             <details
               class="tool"

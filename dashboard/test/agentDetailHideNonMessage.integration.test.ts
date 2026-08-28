@@ -155,4 +155,88 @@ describe("AgentDetail hideNonMessageLogEntries (issue #228)", () => {
     expect(target.querySelector('[data-kind="tool_use"]')).not.toBeNull();
     expect(target.querySelector('[data-kind="tool_result"]')).not.toBeNull();
   });
+
+  // ふじ round-1 must-fix M1 (issue #228): row 内側の分岐だけでは hidden
+  // entry の外枠 `.transcript-entry` が DOM に残り flex gap の空白になる。
+  // 6 件の logs() のうち tool_use/tool_result の 2 件を除いた 4 件分だけが
+  // 外枠ごと残ることを固定する。
+  it("on にすると tool_use/tool_result は外枠 (.transcript-entry) ごと消える (M1a)", async () => {
+    updateSettings({ hideNonMessageLogEntries: true });
+    const target = await render();
+
+    const entries = target.querySelectorAll(".transcript-entry");
+    expect(entries.length).toBe(4);
+    for (const entry of entries) {
+      expect(entry.querySelector('[data-kind="tool_use"]')).toBeNull();
+      expect(entry.querySelector('[data-kind="tool_result"]')).toBeNull();
+    }
+  });
+
+  // ふじ round-1 must-fix M1 (3, 最重要): hidden entry が LOG_WINDOW_SIZE=200
+  // の window を消費していたため、直近 201 件が tool なら読みたい
+  // assistant/user message が window 外へ押し出されていた。on のとき
+  // window は「表示対象の行」だけを数えるべき — assistant 1 件 + tool_use
+  // 201 件でも assistant が window 内に残ることを固定する。
+  it("assistant 1 件 + tool_use 201 件でも on なら assistant が表示される (M1b)", async () => {
+    const agent_id = "host-a.p";
+    const toolLogs: Envelope[] = Array.from({ length: 201 }, (_, i) => ({
+      version: "0",
+      agent_id,
+      ts: `2026-08-28T00:01:${String(i % 60).padStart(2, "0")}Z`,
+      seq: i + 1,
+      type: "log",
+      state: "tool_running",
+      payload: {
+        kind: "tool_use",
+        tool_name: "Bash",
+        tool_use_id: `tuid-${i}`,
+        input: {},
+      },
+    }));
+    const allLogs: Envelope[] = [
+      {
+        version: "0",
+        agent_id,
+        ts: "2026-08-28T00:00:00Z",
+        seq: 0,
+        type: "log",
+        state: "thinking",
+        payload: { kind: "assistant", text: "important assistant reply" },
+      },
+      ...toolLogs,
+    ];
+
+    updateSettings({ hideNonMessageLogEntries: true });
+    const target = document.createElement("div");
+    document.body.append(target);
+    const component = mount(AgentDetail, {
+      target,
+      props: {
+        envelope: stateEnvelope(),
+        logs: allLogs,
+        agents: {},
+        onClose: vi.fn(),
+      },
+    });
+    mounted.push(component);
+    await tick();
+
+    expect(target.querySelector(".msg.assistant")).not.toBeNull();
+  });
+
+  // ふじ round-1 must-fix M1 (c): 設定は $derived 経由でログ描画に効くため、
+  // 既に mount 済みの画面でトグルを切り替えても再 mount 不要で即座に
+  // 反映されることを固定する。
+  it("mount 後の on/off 切替が即座に DOM へ反映される (M1c)", async () => {
+    const target = await render();
+    expect(target.querySelector('[data-kind="tool_use"]')).not.toBeNull();
+
+    updateSettings({ hideNonMessageLogEntries: true });
+    await tick();
+    expect(target.querySelector('[data-kind="tool_use"]')).toBeNull();
+
+    updateSettings({ hideNonMessageLogEntries: false });
+    await tick();
+    expect(target.querySelector('[data-kind="tool_use"]')).not.toBeNull();
+  });
 });
