@@ -8,6 +8,7 @@
   import PersonaFace from "./PersonaFace.svelte";
   import TaskRing from "./TaskRing.svelte";
   import TasklistFloat from "./TasklistFloat.svelte";
+  import { settings } from "./settings.svelte";
   import { randomUUID } from "./uuid";
   import {
     engineFrom,
@@ -3041,7 +3042,7 @@
               {log.text ?? ""}
               <time class="ts" datetime={env.ts}>{time}</time>
             </p>
-          {:else if log?.kind === "tool_use"}
+          {:else if log?.kind === "tool_use" && !settings.hideNonMessageLogEntries}
             {@const tuid = log.tool_use_id}
             <details
               class="tool"
@@ -3066,7 +3067,7 @@
                   ? "\n…(入力が大きいため省略)"
                   : ""}</pre>
             </details>
-          {:else if log?.kind === "tool_result"}
+          {:else if log?.kind === "tool_result" && !settings.hideNonMessageLogEntries}
             {@const tuid = log.tool_use_id}
             <details
               class="tool"

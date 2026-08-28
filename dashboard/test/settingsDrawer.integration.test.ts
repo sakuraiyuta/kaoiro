@@ -67,6 +67,21 @@ describe("SettingsDrawer", () => {
     expect(stored.notificationSoundVolume).toBe(0.4);
   });
 
+  it("非メッセージ非表示トグルを切り替えると即座に永続化する (issue #228)", async () => {
+    const { target } = await renderDrawer();
+    const checkboxes = target.querySelectorAll<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
+    const checkbox = checkboxes[checkboxes.length - 1]!;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+
+    expect(settings.hideNonMessageLogEntries).toBe(true);
+    const stored = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY)!);
+    expect(stored.hideNonMessageLogEntries).toBe(true);
+  });
+
   it("閉じるボタンで onClose を呼ぶ", async () => {
     const onClose = vi.fn();
     const { target } = await renderDrawer(onClose);

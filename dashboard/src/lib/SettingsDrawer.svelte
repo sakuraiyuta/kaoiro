@@ -75,6 +75,18 @@
     カードに engine・model・effort と ctx・5h・7day を表示
   </label>
 
+  <label class="row">
+    <input
+      type="checkbox"
+      checked={settings.hideNonMessageLogEntries}
+      onchange={(e) =>
+        updateSettings({
+          hideNonMessageLogEntries: e.currentTarget.checked,
+        })}
+    />
+    エージェント詳細のログでツール呼び出しなどを非表示
+  </label>
+
   {#if onLogout}
     <button
       type="button"
