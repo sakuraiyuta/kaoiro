@@ -993,6 +993,7 @@ export class CodexHost implements EngineAdapter {
     conversationIds: readonly string[] = [],
     turnToken: string = randomUUID(),
     retryAfterRepair = false,
+    settled: { value: boolean } = { value: false },
   ): Promise<void> {
     this.#activeTurnToken = turnToken;
     const diagnostics = new CodexTurnDiagnostics(this.#turnTraceCaptureDir);
@@ -1108,6 +1109,7 @@ export class CodexHost implements EngineAdapter {
         if (last !== null) finalText = last;
         if (event.type === "turn.completed") {
           sawResult = true;
+          settled.value = true;
           this.#finishTurn(true, attempted);
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
@@ -1126,6 +1128,7 @@ export class CodexHost implements EngineAdapter {
           void this.#refreshRateLimits();
         } else if (event.type === "turn.failed") {
           sawResult = true;
+          settled.value = true;
           this.#finishTurn(false, attempted);
           this.#emitResult({ is_error: true });
           const detail = threadEventToErrorDetail(event);
@@ -1153,6 +1156,7 @@ export class CodexHost implements EngineAdapter {
         // Stream ended without a terminal turn event (abort, stream error
         // event, or process death): fold into the error path so the agent
         // never wedges in thinking/tool_running.
+        settled.value = true;
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
@@ -1176,6 +1180,10 @@ export class CodexHost implements EngineAdapter {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
       let terminalError: unknown = err;
       if (!sawResult) {
+        // A repair retry shares this marker with its original turn. Once the
+        // retry began terminal delivery, its callback failure must not make
+        // the original turn send a second result or peer-error notice.
+        if (settled.value) return;
         const alreadyConfirmedCorrupted =
           resumeSessionId !== null &&
           resumeSessionId === this.#corruptedRolloutSessionId;
@@ -1220,6 +1228,7 @@ export class CodexHost implements EngineAdapter {
           }
           if (verdict === "corrupted") {
             let repaired = false;
+            let repairedBackupPath: string | null = null;
             if (!retryAfterRepair) {
               try {
                 const repair =
@@ -1228,12 +1237,19 @@ export class CodexHost implements EngineAdapter {
                 const repairResult = repair(resumeSessionId);
                 repaired = repairResult.repaired;
                 if (repairResult.repaired) {
-                  process.stderr.write(
-                    `codex rollout repaired for session ${resumeSessionId}; backup: ${repairResult.backupPath}\n`,
-                  );
+                  repairedBackupPath = repairResult.backupPath;
                 }
               } catch {
                 repaired = false;
+              }
+            }
+            if (repaired && repairedBackupPath !== null) {
+              try {
+                process.stderr.write(
+                  `codex rollout repaired for session ${resumeSessionId}; backup: ${repairedBackupPath}\n`,
+                );
+              } catch {
+                // Diagnostics must not downgrade an already atomic repair.
               }
             }
             if (repaired) {
@@ -1245,9 +1261,11 @@ export class CodexHost implements EngineAdapter {
                   conversationIds,
                   turnToken,
                   true,
+                  settled,
                 );
                 return;
               } catch (retryError) {
+                if (settled.value) return;
                 // The retry has not reached a terminal event, so settle the
                 // original turn once through the ordinary failure path.
                 detail = String(retryError);
@@ -1258,6 +1276,7 @@ export class CodexHost implements EngineAdapter {
             }
           }
         }
+        settled.value = true;
         this.#finishTurn(false, attempted);
         if (rolloutCorrupted && resumeSessionId !== null) {
           // Remember both the session id AND this confirming turn's own

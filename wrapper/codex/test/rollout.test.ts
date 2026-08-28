@@ -377,6 +377,8 @@ describe("isRolloutCorruptionDetail (issue #263)", () => {
 });
 
 describe("verifyRolloutCorruption (issue #263, ふじ MF-1)", () => {
+  // UTF-8 decode と JSON.parse は別の gate なので、repair fixture から
+  // 独立した関数単体 test で各 failure mode を pin する。
   it("fatal UTF-8 decode 失敗で corrupted と確定する", () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-verify-utf8-"));
     const id = "uuid-verify-utf8-truncated";

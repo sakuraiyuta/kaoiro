@@ -2782,6 +2782,103 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     }
   });
 
+  it("修復成功の stderr 診断が throw しても retry を続けて通常成功する", async () => {
+    const sessionId = "repair-stderr-throws";
+    const logs: Envelope[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>()];
+    let resultCount = 0;
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+      [usageEvent()],
+    ]);
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((message) => {
+        if (String(message).startsWith("codex rollout repaired")) {
+          throw new Error("broken stderr");
+        }
+        return true;
+      });
+    try {
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        onLog: (entry) => {
+          logs.push(entry);
+          if (entry.type === "result") resultCount += 1;
+        },
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rolloutCorruptionVerifier: () => "corrupted",
+        rolloutCorruptionRepairer: () => ({
+          repaired: true,
+          backupPath: "/tmp/rollout-repair.bak",
+        }),
+        onTurnEnd: () => {
+          turnSettled[resultCount - 1]?.resolve();
+        },
+        now: () => "T",
+      });
+
+      const done = host.run("hi");
+      await turnSettled[0]!.promise;
+      await host.send("continue");
+      await turnSettled[1]!.promise;
+      host.close();
+      await done;
+
+      expect(calls.resume).toEqual([null, sessionId, sessionId]);
+      const results = logs.filter((entry) => entry.type === "result");
+      expect(results).toHaveLength(2);
+      expect(results[1]?.payload).not.toMatchObject({ is_error: true });
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("修復 retry の終結 callback が throw しても元 turn の result と peer 通知を重ねない", async () => {
+    const sessionId = "repair-settle-callback-throws";
+    const logs: Envelope[] = [];
+    const turnEnds: unknown[] = [];
+    const firstTurnSettled = deferred<void>();
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+      new Error("retry stream connection failed"),
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (entry) => logs.push(entry),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      rolloutCorruptionVerifier: () => "corrupted",
+      rolloutCorruptionRepairer: () => ({
+        repaired: true,
+        backupPath: "/tmp/rollout-repair.bak",
+      }),
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        if (turnEnds.length === 1) firstTurnSettled.resolve();
+        if (turnEnds.length === 2) throw new Error("peer callback failed");
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await firstTurnSettled.promise;
+    await host.send("continue", undefined, ["cnv-settle"]);
+    await client.waitForTurn(2);
+    host.close();
+    await done;
+
+    expect(calls.resume).toEqual([null, sessionId, sessionId]);
+    expect(turnEnds).toHaveLength(2);
+    expect(turnEnds[1]).toEqual(
+      expect.objectContaining({ conversationIds: ["cnv-settle"] }),
+    );
+    expect(logs.filter((entry) => entry.type === "result")).toHaveLength(2);
+  });
+
   it("rollout verifier の throw は通常失敗へ fallback して turn を完結する", async () => {
     const sessionId = "repair-verifier-throws";
     const logs: Envelope[] = [];
