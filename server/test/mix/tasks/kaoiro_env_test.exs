@@ -117,7 +117,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
 
     test "OAuth を設定しない場合は golden fixture と一致する" do
       without_oauth =
-        Path.expand("../../fixtures/kaoiro_env/no_oauth.env", __DIR__)
+        Path.expand("../../fixtures/kaoiro_env/no_oauth.env.golden", __DIR__)
         |> File.read!()
 
       no_provider_enabled = Env.render(Map.put(@answers, :oauth, nil))
@@ -290,7 +290,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       assert Bitwise.band(File.stat!(env_path).mode, 0o777) == 0o600
       assert Bitwise.band(File.stat!(allowlist_path).mode, 0o777) == 0o600
       assert output =~ "Keep #{allowlist_path} out of git"
-      assert output =~ "the repository only ignores server/oauth-allowlist.txt"
+      assert output =~ "If --path is outside server/"
       assert output =~ "github: https://kaoiro.example.com/auth/github/callback"
       assert output =~ "- #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro"
       assert output =~ "docs/specs/deployment.md section 1.6"
@@ -378,7 +378,9 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
         assert shell_output() =~ """
                Next:
                  1. Review .env (tokens and OAuth secrets are in plain text — keep it out of git).
-                 2. Keep ./oauth-allowlist.txt out of git (the repository only ignores server/oauth-allowlist.txt; if you used --path outside server/, add this file to that directory's .gitignore), then add this read-only mount under
+                 2. Keep ./oauth-allowlist.txt out of git.
+                    If --path is outside server/, add it to that directory's
+                    .gitignore. Add this read-only mount under
                     docker-compose.yaml's service `volumes:`:
                       - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
                  3. Register each provider's redirect URI in its console:
@@ -440,7 +442,9 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       assert output =~ """
              Next:
                1. Review #{env_path} (tokens and OAuth secrets are in plain text — keep it out of git).
-               2. Keep #{allowlist_path} out of git (the repository only ignores server/oauth-allowlist.txt; if you used --path outside server/, add this file to that directory's .gitignore), then add this read-only mount under
+               2. Keep #{allowlist_path} out of git.
+                  If --path is outside server/, add it to that directory's
+                  .gitignore. Add this read-only mount under
                   docker-compose.yaml's service `volumes:`:
                     - #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro
                3. Register each provider's redirect URI in its console:
@@ -453,6 +457,42 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
                   KAOIRO_RUNNER_TOKENS entry above.
              Deployment details live in the runbook (issue #142).
              """
+    end
+
+    test "plain-HTTP の PORT=80 は Endpoint.url と同じく redirect URI から省略する" do
+      dir = Path.join(System.tmp_dir!(), "kaoiro_env_test_#{System.unique_integer([:positive])}")
+      env_path = Path.join(dir, ".env")
+      File.mkdir_p!(dir)
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      [
+        "",
+        "kaoiro.example.com",
+        "80",
+        "y",
+        "",
+        "n",
+        "n",
+        "n",
+        "",
+        "y",
+        "y",
+        "google-id",
+        "google-secret",
+        "n",
+        "n",
+        "google:master@example.com:operator",
+        "n",
+        "n"
+      ]
+      |> Enum.each(&send(self(), {:mix_shell_input, :prompt, &1}))
+
+      Env.run(["--path", env_path])
+
+      output = shell_output()
+      assert output =~ "google: http://kaoiro.example.com/auth/google/callback"
+      refute output =~ "google: http://kaoiro.example.com:80/auth/google/callback"
     end
 
     test "OAuth をスキップすると従来の生成物と次の手順を保つ" do

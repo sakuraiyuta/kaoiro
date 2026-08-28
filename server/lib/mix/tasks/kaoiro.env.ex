@@ -459,6 +459,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
 
   defp write_private(path, content) do
     File.open!(path, [:write], fn file ->
+      # An attacker can grab the empty fd at open(2); accepted because secrets follow chmod to 0600 in an operator-owned config directory.
       File.chmod!(path, 0o600)
       IO.binwrite(file, content)
     end)
@@ -472,7 +473,9 @@ defmodule Mix.Tasks.Kaoiro.Env do
     steps =
       [
         "1. Review #{path} (tokens and OAuth secrets are in plain text — keep it out of git).",
-        "2. Keep #{allowlist_path} out of git (the repository only ignores server/oauth-allowlist.txt; if you used --path outside server/, add this file to that directory's .gitignore), then add this read-only mount under\n" <>
+        "2. Keep #{allowlist_path} out of git.\n" <>
+          "     If --path is outside server/, add it to that directory's\n" <>
+          "     .gitignore. Add this read-only mount under\n" <>
           "     docker-compose.yaml's service `volumes:`:\n" <>
           "       - #{mount_source}:/etc/kaoiro/oauth-allowlist.txt:ro",
         "3. Register each provider's redirect URI in its console:\n" <>
@@ -517,8 +520,14 @@ defmodule Mix.Tasks.Kaoiro.Env do
     host = answers.phx_host
 
     if answers[:plain_http] do
-      port = if answers[:port] in [nil, ""], do: "4000", else: answers.port
-      "http://#{host}:#{port}/auth/#{provider}/callback"
+      port =
+        case answers[:port] do
+          value when value in [nil, ""] -> ":4000"
+          "80" -> ""
+          value -> ":#{value}"
+        end
+
+      "http://#{host}#{port}/auth/#{provider}/callback"
     else
       "https://#{host}/auth/#{provider}/callback"
     end
