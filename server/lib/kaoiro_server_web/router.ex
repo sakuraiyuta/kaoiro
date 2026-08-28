@@ -15,6 +15,7 @@ defmodule KaoiroServerWeb.Router do
     pipe_through :api
 
     get "/personas", PersonaController, :manifest
+    get "/personas/:id", PersonaController, :detail
     get "/health", HealthController, :status
   end
 

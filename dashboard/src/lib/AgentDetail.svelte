@@ -59,6 +59,7 @@
     onClose,
     onSelectAgent,
     onRename,
+    onOpenPersonaDetail,
   }: {
     envelope: Envelope;
     logs?: Envelope[];
@@ -117,6 +118,10 @@
      *  That structurally removes the stale-closure class of bug a test
      *  could only catch after the fact. */
     onRename?: ((agentId: string, name: string) => Promise<void>) | undefined;
+    /** Opens the persona pack detail modal (issue #232) for this agent's
+     *  persona; pass undefined to disable the portrait's click affordance
+     *  (e.g. no resolved persona id). */
+    onOpenPersonaDetail?: ((personaId: string) => void) | undefined;
   } = $props();
 
   // Expand the detail from the tile that opened it (#36): scale up from the
@@ -163,6 +168,9 @@
 
   const expression = $derived(expressionFor(display.shown));
   const name = $derived(envelope.display_name ?? envelope.agent_id);
+  // issue #232: the persona image's click opens the persona pack detail
+  // modal (manifest.json + personality.md for this envelope's persona).
+  const personaId = $derived(envelope.persona?.id);
   const fatigued = $derived(isFatigued(envelope));
   const spriteUrl = $derived(
     spriteUrlFor(
@@ -2374,17 +2382,33 @@
     <aside class="status">
       <header class="head">
         <div class="portrait">
-          {#key display.shown}
-            <PersonaFace
-              sprite={spriteUrl}
-              variant={expression.variant}
-              label={expression.label}
-              fatigued={fatigued}
-              size="detail"
-              imgAltLabelled={true}
-              faceLabelled={true}
-            />
-          {/key}
+          <!-- issue #232: wraps only the image, not `.lamp` beside it,
+               mirroring AgentCard's separate persona-detail affordance.
+               Unlike AgentCard, `.portrait` sits in plain flow (not
+               inside another <button>), so this can be its own <button>
+               directly instead of needing AgentCard's click-target
+               dispatch workaround. -->
+          <button
+            type="button"
+            class="portrait-open"
+            onclick={personaId && onOpenPersonaDetail
+              ? () => onOpenPersonaDetail(personaId)
+              : undefined}
+            disabled={!personaId || !onOpenPersonaDetail}
+            aria-label="{name} のペルソナ詳細を表示"
+          >
+            {#key display.shown}
+              <PersonaFace
+                sprite={spriteUrl}
+                variant={expression.variant}
+                label={expression.label}
+                fatigued={fatigued}
+                size="detail"
+                imgAltLabelled={true}
+                faceLabelled={true}
+              />
+            {/key}
+          </button>
           {#if activeTaskCount > 0}
             <!-- 頭上リング (issue #180 follow-up, 2026-08-10 — マスター
                  指摘: AgentCard にはあるが AgentDetail には無かった。
@@ -3827,6 +3851,24 @@
         transparent 70%
       ),
       var(--bg-card);
+  }
+
+  /* issue #232: plain reset so the click target for the persona detail
+     modal does not visibly alter `.portrait`'s existing layout — the
+     button is a block wrapper around the image only, sized by its
+     PersonaFace child exactly as the unwrapped image was. */
+  .portrait-open {
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .portrait-open:disabled {
+    cursor: default;
   }
 
   /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte

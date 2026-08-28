@@ -33,6 +33,38 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
     end
   end
 
+  describe "GET /api/personas/:id" do
+    test "pack の全メタデータと personality.md 全文を返す (issue #232)", %{conn: conn} do
+      conn = get(conn, "/api/personas/fuji")
+
+      assert %{
+               "id" => "fuji",
+               "name" => "ふじ",
+               "sprite_set" => "fuji",
+               "version" => "1.0.2",
+               "license" => "CC0-1.0",
+               "min_kaoiro_version" => "0.1.0",
+               "states" => states,
+               "description" => _,
+               "author" => _,
+               "personality" => personality
+             } = json_response(conn, 200)
+
+      assert is_list(states)
+      assert is_binary(personality) and personality != ""
+    end
+
+    test "未知の id は 404", %{conn: conn} do
+      conn = get(conn, "/api/personas/nope")
+      assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+
+    test "予約済み default は pack を持たないため 404", %{conn: conn} do
+      conn = get(conn, "/api/personas/default")
+      assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+  end
+
   describe "GET /personas/:sprite_set/:file" do
     test "マニフェスト掲載のスプライトを PNG で返す", %{conn: conn} do
       conn = get(conn, "/personas/ao/idle.png")

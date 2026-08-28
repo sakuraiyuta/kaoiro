@@ -25,6 +25,7 @@
     onStop,
     onRestore,
     onDelete,
+    onOpenPersonaDetail,
   }: {
     envelope: Envelope;
     manifest?: PersonaManifest | null;
@@ -62,12 +63,32 @@
     /** Remove a disconnected agent (#14); pass undefined to hide the
      *  button (e.g. no connection / viewer). */
     onDelete?: (() => Promise<void>) | undefined;
+    /** Opens the persona pack detail modal (issue #232) for this agent's
+     *  persona; pass undefined to disable the image's click affordance
+     *  (e.g. no resolved persona id). */
+    onOpenPersonaDetail?: ((personaId: string) => void) | undefined;
   } = $props();
 
   // Hand the detail the tile's viewport centre so it grows from this tile.
   function selectFrom(event: MouseEvent): void {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     onSelect?.({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+  }
+
+  // issue #232: the persona image's click opens the persona pack detail
+  // modal instead of the agent detail view. `.sprite-slot` cannot be its
+  // own <button> nested inside `.open` (HTML forbids interactive content
+  // inside a <button>, and it would also move `.lamp`/`.error-icon`/etc.'s
+  // `.open`-relative absolute positioning below the image) — so `.open`'s
+  // own click handler dispatches on where the click landed instead.
+  const personaId = $derived(envelope.persona?.id);
+  function handleOpenClick(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+    if (personaId && onOpenPersonaDetail && target.closest(".sprite-slot")) {
+      onOpenPersonaDetail(personaId);
+      return;
+    }
+    selectFrom(event);
   }
 
   // Displayed state lags the live state for min readability + crossfade (#43);
@@ -442,7 +463,7 @@
   <button
     type="button"
     class="open"
-    onclick={directoryOnly ? undefined : selectFrom}
+    onclick={directoryOnly ? undefined : handleOpenClick}
     aria-label={directoryOnly
       ? `${name} (オフライン)`
       : `${name} の詳細を開く`}
@@ -458,7 +479,10 @@
     {#if attention}
       <span class="badge" data-state={expression.variant}>要対応</span>
     {/if}
-    <div class="sprite-slot">
+    <div
+      class="sprite-slot"
+      title={personaId && onOpenPersonaDetail ? "ペルソナ詳細を表示" : undefined}
+    >
       {#key display.shown}
         <PersonaFace
           sprite={spriteUrl}

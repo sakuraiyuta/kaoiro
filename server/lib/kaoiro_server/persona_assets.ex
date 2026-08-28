@@ -219,6 +219,19 @@ defmodule KaoiroServer.PersonaAssets do
   end
 
   @doc """
+  Full persona pack detail for `GET /api/personas/:id` (issue #232): every
+  manifest.json field the schema defines (persona-pack-schema.md allowlist)
+  plus the full `personality.md` body. Static per-pack information, not an
+  individual agent's state. `nil` for the reserved `default` persona (no
+  pack backs it) or any id the current manifest does not know.
+  """
+  def get_pack_detail(persona_id) when is_binary(persona_id) do
+    Map.get(cache().pack_details, persona_id)
+  end
+
+  def get_pack_detail(_), do: nil
+
+  @doc """
   Final prompt string for `persona_id` — the ready-to-inject `append`
   the wrapper hands to Claude Agent SDK's systemPrompt. Composes
   `personality.md` body + system footer + user footer (ADR-0029 F5,
@@ -451,12 +464,15 @@ defmodule KaoiroServer.PersonaAssets do
          }}
       end)
 
+    pack_details = Map.new(packs, fn p -> {p.manifest["id"], build_pack_detail(p)} end)
+
     %{
       manifest: build_manifest(packs, files),
       files: files,
       personalities: personalities,
       known_ids: known_ids,
-      personas_by_id: personas_by_id
+      personas_by_id: personas_by_id,
+      pack_details: pack_details
     }
   end
 
@@ -2367,6 +2383,27 @@ defmodule KaoiroServer.PersonaAssets do
     do: Map.put(map, key, value)
 
   defp maybe_put(map, _key, _value), do: map
+
+  # Every manifest.json field persona-pack-schema.md defines (issue #232),
+  # for GET /api/personas/:id. An explicit allowlist rather than the raw
+  # manifest map: `validate_manifest/2` only checks the required fields'
+  # presence/shape, and the schema's own "MAY add unknown keys, forward-
+  # compatible" stance means an unvalidated field could carry anything a
+  # future schema version defines — this endpoint serves only what today's
+  # schema actually names. `Map.take/2` omits a key entirely when the
+  # manifest does not have it, matching `maybe_put/3` above for the three
+  # optional fields (description/author/homepage) without needing the same
+  # is_binary/non-empty guard here — the ingest-time validation already
+  # requires the optional fields to be strings when present, and an absent
+  # key is exactly "no such metadata" for the client.
+  @pack_detail_fields ~w(id name sprite_set version license min_kaoiro_version
+                         states description author homepage)
+
+  defp build_pack_detail(pack) do
+    pack.manifest
+    |> Map.take(@pack_detail_fields)
+    |> Map.put("personality", pack.personality)
+  end
 
   # Content-derived manifest version: clients re-fetch sprite URLs only
   # when this changes (ADR-0008 incremental sync, ADR-0029 auto-watch).

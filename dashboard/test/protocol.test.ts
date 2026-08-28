@@ -7,6 +7,7 @@ import {
   errorSubtypeLabel,
   fetchAuthMethods,
   fetchPersonaManifest,
+  fetchPersonaPackDetail,
   fetchServerHealth,
   fanOutInterAgentHistory,
   findPrecedingUserPrompt,
@@ -138,6 +139,55 @@ describe("fetchPersonaManifest", () => {
       }),
     );
     expect(await fetchPersonaManifest()).toBeNull();
+  });
+});
+
+describe("fetchPersonaPackDetail (issue #232)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("pack detail JSON を id で GET して返す", async () => {
+    const detail = {
+      id: "fuji",
+      name: "ふじ",
+      sprite_set: "fuji",
+      version: "1.0.2",
+      license: "CC0-1.0",
+      min_kaoiro_version: "0.1.0",
+      states: ["idle"],
+      personality: "body",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => detail })),
+    );
+
+    expect(await fetchPersonaPackDetail("fuji")).toEqual(detail);
+    expect(fetch).toHaveBeenCalledWith("/api/personas/fuji");
+  });
+
+  it("id を URL エンコードする", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({}) })),
+    );
+
+    await fetchPersonaPackDetail("a/b");
+    expect(fetch).toHaveBeenCalledWith("/api/personas/a%2Fb");
+  });
+
+  it("404 は null(未知 id へのフォールバック用)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 404 })));
+    expect(await fetchPersonaPackDetail("nope")).toBeNull();
+  });
+
+  it("ネットワークエラーは null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    );
+    expect(await fetchPersonaPackDetail("fuji")).toBeNull();
   });
 });
 

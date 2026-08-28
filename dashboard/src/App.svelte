@@ -4,6 +4,7 @@
   import AgentDetail from "./lib/AgentDetail.svelte";
   import AgentGridShell from "./lib/AgentGridShell.svelte";
   import LaunchDialog from "./lib/LaunchDialog.svelte";
+  import PersonaDetailDialog from "./lib/PersonaDetailDialog.svelte";
   import PersonaFace from "./lib/PersonaFace.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import { adjacentAgentId } from "./lib/agentNavigation";
@@ -194,6 +195,10 @@
   // Client-side settings drawer (#85, operator- and viewer-visible: it only
   // touches localStorage, no server round-trip).
   let showSettings = $state(false);
+  // Persona pack detail modal (issue #232): the persona id whose detail
+  // is open, or null. Static pack information (GET /api/personas/:id),
+  // so operator- and viewer-visible alike — no connection/isOperator gate.
+  let personaDetailId = $state<string | null>(null);
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   // spawn の immediate reply は新 agent が state_change を出す前に届くため、
@@ -1488,6 +1493,13 @@
   <SettingsDrawer onClose={() => (showSettings = false)} onLogout={logout} />
 {/if}
 
+{#if personaDetailId !== null}
+  <PersonaDetailDialog
+    personaId={personaDetailId}
+    onClose={() => (personaDetailId = null)}
+  />
+{/if}
+
 <main>
   {#if selectedEnvelope}
     <div
@@ -1536,6 +1548,7 @@
             }
           }}
           onRename={isOperator && connection ? connection.renameAgent : undefined}
+          onOpenPersonaDetail={(id) => (personaDetailId = id)}
         />
       </div>
       {#if nextAgentId}
@@ -1629,6 +1642,7 @@
                 onDelete={connection
                   ? () => connection!.deleteAgent(envelope.agent_id)
                   : undefined}
+                onOpenPersonaDetail={(id) => (personaDetailId = id)}
               />
             </li>
           {/each}
@@ -1695,6 +1709,7 @@
                   onDelete={connection
                     ? () => connection!.deleteAgent(tile.id)
                     : undefined}
+                  onOpenPersonaDetail={(id) => (personaDetailId = id)}
                 />
               </li>
             {/each}

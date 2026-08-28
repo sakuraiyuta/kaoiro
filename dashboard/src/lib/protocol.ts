@@ -1320,6 +1320,43 @@ export async function fetchPersonaManifest(
   }
 }
 
+/** Full persona pack detail served at GET /api/personas/:id (issue #232):
+ *  every manifest.json field the schema defines, plus the full
+ *  personality.md body. Static per-pack information, not an individual
+ *  agent's state. Optional fields are simply absent, not null, when the
+ *  pack's manifest.json omits them. */
+export interface PersonaPackDetail {
+  id: string;
+  name: string;
+  sprite_set: string;
+  version: string;
+  license: string;
+  min_kaoiro_version: string;
+  states: string[];
+  description?: string;
+  author?: string;
+  homepage?: string;
+  personality: string;
+}
+
+/** Fetches one persona pack's detail; null on any failure (unknown id,
+ *  network error) so callers can show a fallback message. On-demand only —
+ *  called when the operator opens the detail modal, not polled. */
+export async function fetchPersonaPackDetail(
+  personaId: string,
+  base = "",
+): Promise<PersonaPackDetail | null> {
+  try {
+    const res = await fetch(
+      `${base}/api/personas/${encodeURIComponent(personaId)}`,
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as PersonaPackDetail;
+  } catch {
+    return null;
+  }
+}
+
 /** Which login paths the login screen should offer (issue #65 / ADR-0042). */
 export interface AuthMethods {
   token: boolean;
