@@ -2427,12 +2427,18 @@
                  -2% より下げ、リング全体を少し下(顔寄り)へシフトした
                  (顔に多少かかるのは許容、マスター了承済み)。1600px 幅の
                  実測(e2e T11)で .bar から box-shadow の 6px ブラー込みで
-                 余裕を確認済み。 -->
+                 余裕を確認済み。
+
+                 issue #231: 頂点がグリッド/カード上端に接して見えるため
+                 1920x1080 で頂点を約 8px 下げる。TaskRing.svelte 側と
+                 同じ理由で `%` 単独では .portrait の可変高さに応じて
+                 px 換算が変わるため、`calc(6% + 8px)` の px 加算項で
+                 6% の位置から一律 8px 下方向へシフトする。 -->
             <TaskRing
               faceOrbit={!spriteUrl}
               orbitRx={spriteUrl ? "min(25cqw, 2rem)" : "min(17.5cqw, 1.35rem)"}
               orbitRy={spriteUrl ? "min(9cqw, 0.72rem)" : "min(6.3cqw, 0.49rem)"}
-              topOffset="6%"
+              topOffset="calc(6% + 8px)"
             />
           {/if}
           <span class="lamp" title={expression.label}></span>
