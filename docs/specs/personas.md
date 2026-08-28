@@ -182,9 +182,10 @@ CSS 顔フォールバック(状態別の簡易表情、`expression.ts` / `Agent
 `persona-packs/<id>/provenance/<state>.json` を参照
 (フィールド定義・取り込み方式は
 [persona-pack-schema](persona-pack-schema.md) 「provenance/」参照)。
-取り込み済みは ao / momo / kuroe / kohaku の 4 ペルソナ。fuji は
-Anima dir 側に生成物(json)は残るが rembg 前 PNG が `assets-work/` に
-無く、seed は 7 状態で共通のため state を決定論的に特定できず未取り込み。
+取り込み済みは ao / momo / kuroe / kohaku / fuji の 5 ペルソナ。fuji の
+基本 7 状態は、退避済み raw PNG と final sprite の不透明内部 RGB invariant
+で state を一意に照合している。`fatigued` は Codex が生成した派生状態であり、
+その provenance は生成 provenance と分けて保持する。
 
 ### 配布と取り込み(pack ワークフロー)
 
@@ -194,11 +195,12 @@ Anima dir 側に生成物(json)は残るが rembg 前 PNG が `assets-work/` に
 
 1. **作成者**: `persona-packs/<id>/{manifest.json, personality.md,
    sprites/}` を編集
-2. **provenance 取り込み**(推奨): 生成元 ComfyUI の出力ディレクトリと
-   rembg 前 PNG を sha256 照合し、`persona-packs/<id>/provenance/`
-   以下へ `<state>.json` を生成。rembg 前 PNG が `assets-work/` に
-   無い等で sha256 照合が決定論的に成立しない場合は見送る(fuji の
-   前例参照)。
+2. **provenance 取り込み**(推奨):
+   `scripts/import-anima-provenance.sh <id> --anima-dir <dir>` で生成元
+   ComfyUI の出力と source PNG を照合し、`persona-packs/<id>/provenance/`
+   以下へ `<state>.json` を生成。通常は sha256 を使う。rembg 後も raw PNG の
+   RGB を保つ pipeline では `--match-mode rgb-invariant` で不透明内部の全 7×7
+   組を照合できる。どちらも決定論的に一意にならなければ取り込まない。
 3. **build**: `scripts/build-persona-pack.sh` で zip 化(
    `<id>-<version>.zip`)
 4. **管理者**: zip を server の取り込みディレクトリ(env で指定)に drop

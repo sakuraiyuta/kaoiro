@@ -114,9 +114,10 @@ manifest の列挙有無にかかわらず必要である。
 
 `persona-packs/<id>/provenance/<state>.json` は `sprites/<state>.png`
 と 1:1 対応する生成 provenance(再現用パラメータ)。
-生成元 ComfyUI の出力ディレクトリから sha256 照合で state → 生成ジョブを
-一意に決定し、sanitize して取り込む(所在の背景は
-[personas](personas.md) 「生成実績」参照)。
+生成元 ComfyUI の出力ディレクトリから、raw PNG との sha256 一致、または
+final sprite の不透明内部 RGB invariant によって state → 生成ジョブを一意に
+決定し、sanitize して取り込む。後者は rembg 後に raw PNG の RGB を保つ
+pipeline にだけ使う(所在の背景は [personas](personas.md) 「生成実績」参照)。
 
 zip には含まれない。`scripts/build-persona-pack.sh` は
 `manifest.json` / `personality.md` / `sprites` の 3 エントリのみを
@@ -135,6 +136,12 @@ zip には含まれない。`scripts/build-persona-pack.sh` は
 ない未知フィールドは引き続き警告して出力から落とす。
 `account`(メールアドレス)や `image_url`(署名付き URL、credential
 性)など個人情報・機微情報を含み得るフィールドは取り込み時に除外する。
+
+取り込みには `scripts/import-anima-provenance.sh <id> --anima-dir <dir>` を
+使う。`--anima-dir` は明示指定 MUST であり、環境固有の既定 path は持たない。
+RGB invariant を使う場合は `--match-mode rgb-invariant` を渡し、7 状態の
+全 7×7 組を照合する。各正対は MAE 上限内、すべての誤対は十分に離れ、写像は
+一対一でなければならない。
 
 ## Constraints
 
