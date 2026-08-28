@@ -230,16 +230,28 @@ function signalQueue(): { wait: () => Promise<void>; signal: () => void } {
   };
 }
 
-async function expectPendingAfterMicrotask(
+async function expectPendingThroughReadyMicrotasks(
   promise: Promise<unknown>,
 ): Promise<void> {
   let resolved = false;
   void promise.then(() => {
     resolved = true;
   });
-  await Promise.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   expect(resolved).toBe(false);
 }
+
+describe("host test synchronization helpers", () => {
+  it("ready microtask chain の早過ぎる解放を検出する", async () => {
+    const resolvesAfterTwoMicrotasks = new Promise<void>((resolve) => {
+      queueMicrotask(() => queueMicrotask(resolve));
+    });
+
+    await expect(
+      expectPendingThroughReadyMicrotasks(resolvesAfterTwoMicrotasks),
+    ).rejects.toThrow();
+  });
+});
 
 /** queryFn that yields a fixed message list, ignoring the input prompt. */
 function scriptedQuery(messages: SDKMessage[]): QueryFn {
@@ -490,6 +502,13 @@ describe("AgentHost — query injection", () => {
             ?.used_tokens === 180000,
       ),
     ).toBe(false);
+    expect(
+      envs.some(
+        (e) =>
+          (e.ext as { context?: { used_tokens?: number } }).context
+            ?.used_tokens === 500,
+      ),
+    ).toBe(true);
   });
 
   it("conversation_reset も context epoch を切る (MF1)", async () => {
@@ -608,7 +627,7 @@ describe("AgentHost — query injection", () => {
     await refreshWaiterReady.promise;
     mayAwaitLatch.resolve();
     for (let checkpoint = 0; checkpoint < 4; checkpoint += 1) {
-      await expectPendingAfterMicrotask(observedAfterLatch.promise);
+      await expectPendingThroughReadyMicrotasks(observedAfterLatch.promise);
     }
     getterMaySettle.resolve();
     await done;
@@ -644,7 +663,7 @@ describe("AgentHost — query injection", () => {
     await injectionWaiterReady.promise;
     mayAwaitLatch.resolve();
     for (let checkpoint = 0; checkpoint < 4; checkpoint += 1) {
-      await expectPendingAfterMicrotask(observedAfterLatch.promise);
+      await expectPendingThroughReadyMicrotasks(observedAfterLatch.promise);
     }
     injectionMaySettle.resolve();
     await done;
@@ -1390,7 +1409,7 @@ describe("AgentHost — query injection", () => {
         const first = await input.next();
         expect(first.done).toBe(false);
         const second = input.next();
-        await expectPendingAfterMicrotask(second);
+        await expectPendingThroughReadyMicrotasks(second);
 
         yield result("success", { result: "A done" });
         const secondResult = await second;
@@ -1464,7 +1483,7 @@ describe("AgentHost — query injection", () => {
         await input.next();
         const second = input.next();
         yield msg({ type: "conversation_reset", new_conversation_id: "new" });
-        await expectPendingAfterMicrotask(second);
+        await expectPendingThroughReadyMicrotasks(second);
         yield result("error_during_execution", { errors: ["A reset error"] });
         expect((await second).done).toBe(false);
         yield result("success", { result: "B done" });
@@ -1509,7 +1528,7 @@ describe("AgentHost — query injection", () => {
         armed();
         await interruptAcknowledged;
         const second = input.next();
-        await expectPendingAfterMicrotask(second);
+        await expectPendingThroughReadyMicrotasks(second);
         yield result("error_during_execution", { errors: ["interrupted A"] });
         expect((await second).done).toBe(false);
         yield result("success", { result: "B done" });
@@ -5476,7 +5495,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     const done = host.run();
     await resultConsumed.promise;
     for (let checkpoint = 0; checkpoint < 4; checkpoint += 1) {
-      await expectPendingAfterMicrotask(catalogSettled.promise);
+      await expectPendingThroughReadyMicrotasks(catalogSettled.promise);
     }
     mayReleaseModels.resolve();
     await done;
@@ -6746,24 +6765,25 @@ describe("resume Case 2 display hint fallback (P1 dogfood 回帰対策)", () => 
   it("現実的 catalog (default 無し) + default hint 復元 → supports_effort_switch=true (R6) & persist_alias_unknown 非発火 (R4)", async () => {
     const envs: Envelope[] = [];
     const catalogSettled = deferred<void>();
+    const sdkCatalog: ModelInfo[] = [
+      {
+        value: "opus[1m]",
+        displayName: "Opus 1M",
+        description: "SDK-measured Opus 1M",
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      },
+      {
+        value: "sdk-catalog-only",
+        displayName: "SDK Catalog Only",
+        description: "Absent from the runner catalog",
+        supportedEffortLevels: ["low"],
+      },
+    ];
     const supportedModels = vi.fn(
       () =>
         new Promise((resolve) => {
           queueMicrotask(() => {
-            resolve([
-              // SDK 側 measured catalog も default alias 無し。opus[1m] のみ。
-              {
-                value: "opus[1m]",
-                display_name: "Opus 1M",
-                effort_levels: [
-                  "low",
-                  "medium",
-                  "high",
-                  "xhigh",
-                  "max",
-                ] as EffortLevel[],
-              },
-            ]);
+            resolve(sdkCatalog);
             queueMicrotask(catalogSettled.resolve);
           });
         }),
@@ -6831,6 +6851,11 @@ describe("resume Case 2 display hint fallback (P1 dogfood 回帰対策)", () => 
     // switch_error(persist_alias_unknown) は発火しない。
     const done = host.run();
     await catalogSettled.promise;
+    expect(host.statusExtSnapshot().models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "sdk-catalog-only" }),
+      ]),
+    );
     const persistUnknownErrors = envs
       .map((e) => e.ext.switch_error)
       .filter(
