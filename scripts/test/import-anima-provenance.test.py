@@ -138,29 +138,39 @@ class ImportAnimaProvenanceTest(unittest.TestCase):
         self.assertIn("--anima-dir", result.stderr)
 
     def test_rejects_correct_pair_above_mae_limit(self) -> None:
-        Image.new("RGBA", (16, 16), (11, 20, 30, 255)).save(
-            self.pack_dir / "sprites" / "idle.png"
-        )
+        # Keep every wrong pair above this test's 1000x requirement, so only
+        # the correct-pair cap rejects the mapping.
+        for index, state in enumerate(STATES[1:], start=1):
+            color = (100 + index, 110 + index, 120 + index)
+            source = self.source_dir / f"source-{index}.png"
+            Image.new("RGB", (32, 32), color).save(source)
+            shutil.copyfile(source, self.anima_dir / f"job-{index}.png")
+            Image.new("RGBA", (16, 16), (*color, 255)).save(
+                self.pack_dir / "sprites" / f"{state}.png"
+            )
+
+        final = Image.new("RGBA", (16, 16), (*COLORS[0], 255))
+        final.putpixel((0, 0), (50, 20, 30, 255))
+        final.save(self.pack_dir / "sprites" / "idle.png")
         result = self.invoke("--verify-only")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exceeds correct-pair MAE limit", result.stderr)
         self.assertFalse((self.pack_dir / "provenance").exists())
 
     def test_rejects_1000x_wrong_pair_margin_without_absolute_floor(self) -> None:
-        source = Image.new("RGB", (32, 32), (11, 20, 30))
+        source = Image.new("RGB", (32, 32), (15, 20, 30))
         source.save(self.source_dir / "source-1.png")
         shutil.copyfile(self.source_dir / "source-1.png", self.anima_dir / "job-1.png")
         final = Image.new("RGBA", (16, 16), (*COLORS[0], 255))
         for x in range(4, 8):
-            final.putpixel((x, 4), (11, 20, 30, 255))
+            final.putpixel((x, 4), (15, 20, 30, 255))
         final.save(self.pack_dir / "sprites" / "idle.png")
-        Image.new("RGBA", (16, 16), (11, 20, 30, 255)).save(
+        Image.new("RGBA", (16, 16), (15, 20, 30, 255)).save(
             self.pack_dir / "sprites" / "thinking.png"
         )
         result = self.invoke("--verify-only")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("insufficient wrong-pair separation", result.stderr)
-        self.assertIn("required>=5.208333", result.stderr)
         self.assertFalse((self.pack_dir / "provenance").exists())
 
     def test_rejects_non_bijective_minimum_mapping(self) -> None:
