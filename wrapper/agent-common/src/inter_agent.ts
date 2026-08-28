@@ -25,8 +25,8 @@ import type {
   DirectoryEntry,
   DirectoryRateLimitWindow,
   DirectoryResult,
-  InterAgentAcceptance,
-} from "@kaoiro/wrapper-core";
+} from "@kaoiro/protocol";
+import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import type {

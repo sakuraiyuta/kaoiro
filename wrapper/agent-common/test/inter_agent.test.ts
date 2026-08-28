@@ -14,10 +14,13 @@ import {
   type WhoamiSnapshot,
 } from "../src/inter_agent.js";
 import type {
-  DirectoryEntry,
+  DirectoryEntry as LegacyDirectoryEntry,
   InterAgentAcceptance,
-  UserDirectoryEntry,
 } from "@kaoiro/wrapper-core";
+import type {
+  DirectoryEntry,
+  UserDirectoryEntry,
+} from "@kaoiro/protocol";
 import type {
   Envelope,
   InterAgentErrorPayload,
@@ -1435,11 +1438,14 @@ describe("list_agents / whoami companion tools", () => {
         state: "thinking",
       },
     ];
+    // The former wrapper-core import remains source-compatible while the
+    // canonical directory wire type now lives in @kaoiro/protocol.
+    const legacyDirectory: LegacyDirectoryEntry[] = directory;
     const tool = new InterAgentTool({
       config: configFor("self.agent"),
       getState: () => "tool_running",
       send: () => {},
-      requestDirectory: async () => ({ agents: directory, users: [] }),
+      requestDirectory: async () => ({ agents: legacyDirectory, users: [] }),
     });
 
     const result = await tool.listAgents();

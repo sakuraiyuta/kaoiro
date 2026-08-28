@@ -12,16 +12,22 @@ export {
 } from "./transport.js";
 export type {
   AttachOpenMessage,
-  DirectoryContext,
-  DirectoryEntry,
-  DirectoryRateLimitWindow,
-  DirectoryResult,
   HydrationVerdictMessage,
-  InterAgentDeliveryStatus,
   InterAgentAcceptance,
   PermissionDecisionMessage,
   QuestionResponseMessage,
   ReplayIaItem,
   ServerLinkOptions,
-  UserDirectoryEntry,
 } from "./transport.js";
+/** Backward-compatible type exports. New consumers should import these
+ * directory wire shapes from `@kaoiro/protocol`. */
+export type {
+  DirectoryContext,
+  DirectoryConversation,
+  DirectoryEntry,
+  DirectoryRateLimitWindow,
+  DirectoryResult,
+  InterAgentDeliveryStatus,
+  UserDirectoryEntry,
+  UserRole,
+} from "@kaoiro/protocol";
