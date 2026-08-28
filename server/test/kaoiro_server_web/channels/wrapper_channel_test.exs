@@ -1812,14 +1812,19 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       overflow_cid = "cnv-planned-cap-51"
 
-      ref =
-        push(
-          from_socket,
-          "envelope",
-          inter_envelope(from_id, to_id, cid: overflow_cid)
-        )
+      log =
+        capture_log(fn ->
+          ref =
+            push(
+              from_socket,
+              "envelope",
+              inter_envelope(from_id, to_id, cid: overflow_cid)
+            )
 
-      assert_reply ref, :error, %{reason: "peer_reconnecting_capacity"}
+          assert_reply ref, :error, %{reason: "peer_reconnecting_capacity"}
+        end)
+
+      assert log =~ "planned reconnecting target cap hit for #{to_id}"
       assert ConversationStates.get(overflow_cid) == nil
       assert_panes_empty([from_id, to_id])
 

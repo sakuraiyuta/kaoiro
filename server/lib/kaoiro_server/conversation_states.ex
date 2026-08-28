@@ -245,9 +245,8 @@ defmodule KaoiroServer.ConversationStates do
   ordinary disconnect already set their `notified_unreachable` mark, or when
   a preflight bounce happened before the conversation entry existed. This
   call only owns ConversationStates' mark update; it deliberately neither
-  claims nor returns additional targets, so the planned intent remains the
-  sole bounded delivery set and `claim_unreachable_targets/3` stays unchanged
-  for unexpected disconnects.
+  claims nor returns additional targets. A caller that fills a planned
+  terminal notice's remaining cap does so with a subsequent claim.
   """
   def mark_terminal_targets(agent_id, required_targets, server \\ __MODULE__)
       when is_list(required_targets) do

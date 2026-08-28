@@ -1844,6 +1844,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
             # Keep this distinct from peer_reconnecting so the sender gets a
             # terminal tool rejection rather than waiting for a notice that
             # will deliberately never be emitted for this attempt.
+            Logger.warning(
+              "planned reconnecting target cap hit for #{to}: " <>
+                "rejecting preflight bounce; " <>
+                "max_targets=#{PlannedDisconnects.max_unreachable_notices()}"
+            )
+
             {:error, :peer_reconnecting_capacity}
 
           :noop ->

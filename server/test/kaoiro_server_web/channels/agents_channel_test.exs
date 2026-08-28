@@ -7,6 +7,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.ClearWatermarks
+  alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PlannedDisconnects
@@ -15,6 +16,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.TokenDenylist
   alias KaoiroServer.TransportLimits
   alias KaoiroServerWeb.AgentsChannel
+  alias KaoiroServerWeb.PeerConnectivity
 
   defp put_agent(agent_id) do
     :ok =
@@ -1029,6 +1031,165 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
       refute PlannedDisconnects.active?(agent_id)
+    end
+
+    test "delete_agent は planned bounce と ordinary conversation を各一度 terminal 通知する" do
+      agent_id = "test.del-planned-union"
+      bounce_peer_id = "test.del-planned-union-bounce"
+      ordinary_peer_id = "test.del-planned-union-ordinary"
+      bounce_cid = "cnv-del-planned-union-bounce"
+      ordinary_cid = "cnv-del-planned-union-ordinary"
+
+      assert :ok =
+               ConversationStates.record_message(
+                 bounce_cid,
+                 agent_id,
+                 bounce_peer_id,
+                 "bounce",
+                 1,
+                 false,
+                 true
+               )
+
+      assert :ok =
+               ConversationStates.record_message(
+                 ordinary_cid,
+                 agent_id,
+                 ordinary_peer_id,
+                 "ordinary",
+                 1,
+                 false,
+                 true
+               )
+
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-delete-union", :restart)
+
+      assert {:tracked, _} =
+               PlannedDisconnects.track_bounce(agent_id, bounce_cid, bounce_peer_id)
+
+      @endpoint.subscribe("wrapper:" <> bounce_peer_id)
+      @endpoint.subscribe("wrapper:" <> ordinary_peer_id)
+      assert :disconnected = PeerConnectivity.delete(agent_id)
+
+      for {peer_id, cid} <-
+            [{bounce_peer_id, bounce_cid}, {ordinary_peer_id, ordinary_cid}] do
+        assert_received %Phoenix.Socket.Broadcast{
+          topic: "wrapper:" <> ^peer_id,
+          payload: %{
+            "payload" => %{
+              "conversation_id" => ^cid,
+              "error" => %{"code" => "disconnected"}
+            }
+          }
+        }
+
+        refute_received %Phoenix.Socket.Broadcast{
+          topic: "wrapper:" <> ^peer_id,
+          payload: %{"payload" => %{"conversation_id" => ^cid}}
+        }
+      end
+
+      assert {[], 0} = ConversationStates.claim_unreachable_targets(agent_id, 50)
+    end
+
+    test "delete_agent の tracked 50 件は ordinary terminal claim の枠を残さない" do
+      agent_id = "test.del-planned-cap-full"
+      ordinary_peer_id = "test.del-planned-cap-full-ordinary"
+      ordinary_cid = "cnv-del-planned-cap-full-ordinary"
+
+      assert :ok =
+               ConversationStates.record_message(
+                 ordinary_cid,
+                 agent_id,
+                 ordinary_peer_id,
+                 "ordinary",
+                 1,
+                 false,
+                 true
+               )
+
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-delete-cap-full", :restart)
+
+      for n <- 1..50 do
+        assert {:tracked, _} =
+                 PlannedDisconnects.track_bounce(
+                   agent_id,
+                   "cnv-del-planned-cap-full-bounce-#{n}",
+                   "test.del-planned-cap-full-bounce-#{n}"
+                 )
+      end
+
+      @endpoint.subscribe("wrapper:" <> ordinary_peer_id)
+      assert :disconnected = PeerConnectivity.delete(agent_id)
+
+      refute_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^ordinary_peer_id,
+        payload: %{"payload" => %{"conversation_id" => ^ordinary_cid}}
+      }
+
+      assert {[{^ordinary_cid, [^ordinary_peer_id]}], 0} =
+               ConversationStates.claim_unreachable_targets(agent_id, 50)
+    end
+
+    test "delete_agent の tracked n 件は ordinary 50-n 件だけ claim する" do
+      agent_id = "test.del-planned-cap-remainder"
+
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-delete-cap-remainder", :restart)
+
+      for n <- 1..2 do
+        assert {:tracked, _} =
+                 PlannedDisconnects.track_bounce(
+                   agent_id,
+                   "cnv-del-planned-cap-remainder-bounce-#{n}",
+                   "test.del-planned-cap-remainder-bounce-#{n}"
+                 )
+      end
+
+      for n <- 1..50 do
+        assert :ok =
+                 ConversationStates.record_message(
+                   "cnv-del-planned-cap-remainder-ordinary-#{n}",
+                   agent_id,
+                   "test.del-planned-cap-remainder-ordinary-#{n}",
+                   "ordinary",
+                   1,
+                   false,
+                   true
+                 )
+      end
+
+      assert :disconnected = PeerConnectivity.delete(agent_id)
+
+      assert {remaining, 0} = ConversationStates.claim_unreachable_targets(agent_id, 50)
+      assert length(remaining) == 2
+    end
+
+    test "delete_agent は intent 無しなら terminal notice を出さない" do
+      agent_id = "test.del-without-intent"
+      peer_id = "test.del-without-intent-peer"
+      cid = "cnv-del-without-intent"
+
+      assert :ok =
+               ConversationStates.record_message(
+                 cid,
+                 agent_id,
+                 peer_id,
+                 "ordinary",
+                 1,
+                 false,
+                 true
+               )
+
+      @endpoint.subscribe("wrapper:" <> peer_id)
+      assert :noop = PeerConnectivity.delete(agent_id)
+
+      refute_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^peer_id,
+        payload: %{"payload" => %{"conversation_id" => ^cid}}
+      }
+
+      assert {[{^cid, [^peer_id]}], 0} =
+               ConversationStates.claim_unreachable_targets(agent_id, 50)
     end
 
     test "稼働中 agent の削除は not_disconnected で拒否" do
