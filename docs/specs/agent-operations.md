@@ -54,9 +54,11 @@ kaoiro のバックログは、複数のエージェントが同一 work tree �
 ## 実装者の worktree 分離
 
 - 実装 (ファイル編集を伴う担当) は共有 work tree 上で直接行わず、
-  `<repo>/worktrees/<persona>/` に作る専用 git worktree で行う。
-  作成例: `git worktree add worktrees/momo -b issue-NNN-topic develop`。
-  `/worktrees/` は gitignore 済み。
+  `<repo>/worktrees/<persona>[-<issue>]/` に作る専用 git worktree で行う。
+  作成例: `git worktree add worktrees/momo-210 -b issue-210-topic develop`。
+  並行案件はこの `-<issue>` 付き path で worktree を案件単位に増やし、
+  閉じたら `git worktree remove` で片付ける。`/worktrees/` は
+  gitignore 済み。
 - repo 内に置くのは、エージェントの sandbox が session cwd 配下にしか
   書き込めないため。外部 path や別 clone は権限で詰む。
 - branch は CLAUDE.md の branch strategy どおり `issue-NNN-*` を develop
