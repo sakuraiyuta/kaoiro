@@ -7,11 +7,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.ClearWatermarks
+  alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PlannedDisconnects
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
+  alias KaoiroServer.TransportLimits
   alias KaoiroServerWeb.AgentsChannel
 
   defp put_agent(agent_id) do
@@ -67,6 +69,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     socket
   end
 
+  defp encoded_frame_bytes(message) do
+    {:socket_push, :text, encoded} = Phoenix.Socket.V2.JSONSerializer.encode!(message)
+    IO.iodata_length(encoded)
+  end
+
   defp client_assigns(role) do
     token = "tok-#{role}"
     fingerprint = KaoiroServer.Auth.socket_id(token)
@@ -104,6 +111,95 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     assert_push "snapshot", %{"agents" => agents}
     assert agents[agent_id] == envelope
+  end
+
+  test "wire projection の省略は join snapshot で snapshot_incomplete として観測できる" do
+    owner = self()
+
+    agent_ids =
+      for n <- 1..201 do
+        "test.snapshot-incomplete-#{String.pad_leading(Integer.to_string(n), 3, "0")}"
+      end
+
+    on_exit(fn ->
+      Enum.each(agent_ids, fn agent_id ->
+        case AgentStates.disconnect(agent_id, owner, "2026-08-28T00:00:00Z") do
+          {:ok, _} -> AgentStates.delete(agent_id)
+          :noop -> :ok
+        end
+      end)
+    end)
+
+    for agent_id <- agent_ids do
+      :ok =
+        AgentStates.put(
+          %{
+            "version" => "0",
+            "agent_id" => agent_id,
+            "ts" => "2026-08-28T00:00:00Z",
+            "type" => "state_change",
+            "state" => "waiting_input"
+          },
+          owner: owner
+        )
+    end
+
+    _socket = join_as(:operator)
+
+    assert_push "snapshot", %{"agents" => agents, "snapshot_incomplete" => true}
+    assert map_size(agents) == 200
+  end
+
+  test "join の3 snapshot frame は production serializer 経由で transport bound 内に収まる" do
+    agent_id = "test.snapshot-frame-bound"
+    owner = self()
+
+    on_exit(fn ->
+      TaskStates.discard_for_agent(agent_id)
+      DeliveryStates.delete(agent_id)
+
+      case AgentStates.disconnect(agent_id, owner, "2026-08-28T00:00:00Z") do
+        {:ok, _} -> AgentStates.delete(agent_id)
+        :noop -> :ok
+      end
+    end)
+
+    :ok =
+      AgentStates.put(
+        %{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-08-28T00:00:00Z",
+          "type" => "state_change",
+          "state" => "waiting_input"
+        },
+        owner: owner
+      )
+
+    :ok =
+      TaskStates.put(%{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-08-28T00:00:00Z",
+        "type" => "task",
+        "state" => "idle",
+        "payload" => %{
+          "kind" => "started",
+          "agent_id" => agent_id,
+          "task_id" => "t1",
+          "task_type" => "local_agent",
+          "status" => "running"
+        }
+      })
+
+    assert %{issued_seq: 0} = DeliveryStates.bind(agent_id, "snapshot-bound-generation")
+
+    _socket = join_as(:operator)
+
+    for event <- ~w(snapshot task_snapshot delivery_snapshot) do
+      assert_receive %Phoenix.Socket.Message{event: ^event} = message
+      assert encoded_frame_bytes(message) <= TransportLimits.max_frame_bytes()
+    end
   end
 
   test "delivery_status の live 診断は operator にだけ届く" do
@@ -1762,7 +1858,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "envelope", %{"type" => "inter_agent_message"}
     end
 
-    test "join 時の snapshot に admin でも tasks キーが入る" do
+    test "join 時の task_snapshot に admin でも tasks キーが入る" do
       # snapshot の tasks は handle_out ではなく join 経路の別ゲート
       # (ふじ should 1)。集約したうちの 1 箇所だけ直接比較へ戻る回帰は
       # 上の 3 本では拾えない。
@@ -1771,7 +1867,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       _socket = join_as(:admin)
 
-      assert_push "snapshot", %{"tasks" => tasks}
+      assert_push "task_snapshot", %{"tasks" => tasks}
       assert %{"test.task-snap-admin" => %{"t1" => stored}} = tasks
       assert stored["payload"]["task_id"] == "t1"
     end
@@ -2221,26 +2317,26 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert pushed["payload"]["summary"] == "content-bearing progress text"
     end
 
-    test "snapshot: operator には tasks キーが入る (ADR-0048 F3)" do
+    test "task_snapshot: operator には tasks キーが入る (ADR-0048 F3)" do
       on_exit(fn -> TaskStates.discard_for_agent("test.task-snap-op") end)
       TaskStates.put(task_envelope("test.task-snap-op", "t1"))
 
       _socket = join_as(:operator)
 
-      assert_push "snapshot", %{"tasks" => tasks}
+      assert_push "task_snapshot", %{"tasks" => tasks}
       # M1 fix-round: TaskStates is now keyed agent_id => %{task_id =>
       # envelope}.
       assert %{"test.task-snap-op" => %{"t1" => stored}} = tasks
       assert stored["payload"]["task_id"] == "t1"
     end
 
-    test "snapshot: viewer には tasks キーが空で届く (operator 限定、こはく決定 2026-08-09)" do
+    test "task_snapshot: viewer には tasks キーが空で届く (operator 限定、こはく決定 2026-08-09)" do
       on_exit(fn -> TaskStates.discard_for_agent("test.task-snap-viewer") end)
       TaskStates.put(task_envelope("test.task-snap-viewer", "t1"))
 
       _socket = join_as(:viewer)
 
-      assert_push "snapshot", %{"tasks" => tasks}
+      assert_push "task_snapshot", %{"tasks" => tasks}
       assert tasks == %{}
     end
 
@@ -2297,7 +2393,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       socket = join_as(:operator)
 
-      assert_push "snapshot", %{"agents" => agents, "tasks" => tasks}
+      assert_push "snapshot", %{"agents" => agents}
+      assert_push "task_snapshot", %{"tasks" => tasks}
       assert agents[agent_id]["state"] == "disconnected"
       # 交差の実物: disconnected な agent の task がまだ snapshot に
       # 残っている — これが収束を broadcast 側に依存させている理由。
@@ -5799,10 +5896,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   end
 
   describe "ADR-0015 stage 2 server -> client egress funnel (issue #270)" do
-    test "T4-1: join-time の4種は version を stamp する" do
+    test "T4-1: join-time の6種は version を stamp する" do
       _socket = join_as(:operator)
 
-      for event <- ~w(snapshot history hosts directory) do
+      for event <- ~w(snapshot task_snapshot delivery_snapshot history hosts directory) do
         assert_push ^event, %{"version" => "0"}
       end
     end
@@ -5869,14 +5966,35 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "envelope", %{"version" => "0", "agent_id" => "t4.envelope"}
     end
 
-    test "T4-7: policy は17種のみを許可し、未宣言 event は funnel で拒否する" do
+    test "T4-7: policy は19種のみを許可し、未宣言 event は funnel で拒否する" do
       policy = AgentsChannel.client_event_policy()
 
-      assert MapSet.size(policy) == 17
+      assert MapSet.size(policy) == 19
       refute MapSet.member?(policy, "not_declared")
 
       source = File.read!("lib/kaoiro_server_web/channels/agents_channel.ex")
       assert source =~ "is not declared in @client_event_policy"
+    end
+
+    test "join snapshot frame の event/key 対応は不足も取り違えも拒否する" do
+      frames = %{
+        "snapshot" => %{"agents" => %{}},
+        "task_snapshot" => %{"tasks" => %{}},
+        "delivery_snapshot" => %{"deliveries" => %{}}
+      }
+
+      assert :ok = AgentsChannel.validate_join_snapshot_frames(frames)
+
+      assert {:error, :snapshot_frame_key_mismatch} =
+               AgentsChannel.validate_join_snapshot_frames(
+                 Map.delete(frames, "delivery_snapshot")
+               )
+
+      assert {:error, :snapshot_frame_key_mismatch} =
+               AgentsChannel.validate_join_snapshot_frames(%{
+                 frames
+                 | "task_snapshot" => %{"deliveries" => %{}}
+               })
     end
 
     test "T4-8: raw push は push_versioned の本体の1箇所だけ" do

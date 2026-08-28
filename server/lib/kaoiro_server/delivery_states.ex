@@ -14,6 +14,8 @@ defmodule KaoiroServer.DeliveryStates do
   """
   use GenServer
 
+  alias KaoiroServer.TransportLimits
+
   @type status :: %{
           issued_seq: non_neg_integer(),
           acked_seq: non_neg_integer(),
@@ -53,6 +55,23 @@ defmodule KaoiroServer.DeliveryStates do
     do: GenServer.call(server, {:get, agent_id})
 
   def all(server \\ __MODULE__), do: GenServer.call(server, :all)
+
+  @doc "A bounded join-time projection; the DETS-backed observation store is unchanged."
+  def wire_projection(server \\ __MODULE__) do
+    server
+    |> all()
+    |> Enum.sort_by(fn {agent_id, _status} -> agent_id end)
+    |> Enum.reduce(%{}, fn {agent_id, status}, deliveries ->
+      candidate = Map.put(deliveries, agent_id, status)
+
+      if map_size(deliveries) < TransportLimits.wire_projection_agents() and
+           TransportLimits.snapshot_frame_fits?("delivery_snapshot", %{"deliveries" => candidate}) do
+        candidate
+      else
+        deliveries
+      end
+    end)
+  end
 
   def delete(agent_id, server \\ __MODULE__) when is_binary(agent_id),
     do: GenServer.call(server, {:delete, agent_id})

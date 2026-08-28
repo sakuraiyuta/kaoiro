@@ -64,6 +64,8 @@ defmodule KaoiroServer.AgentStates do
 
   require Logger
 
+  alias KaoiroServer.TransportLimits
+
   # Wrapper connections may be unauthenticated (dev mode), so cap the map
   # to keep fabricated agent_ids from growing memory without bound.
   @max_agents 1000
@@ -234,6 +236,49 @@ defmodule KaoiroServer.AgentStates do
   @doc "Returns the agent_id => latest envelope map."
   def snapshot(server \\ __MODULE__) do
     GenServer.call(server, :snapshot)
+  end
+
+  @doc """
+  Returns the bounded join-time wire projection without changing the
+  control-plane snapshot used by session-reset checks.
+  """
+  def wire_projection, do: snapshot() |> wire_projection()
+
+  def wire_projection(envelopes) when is_map(envelopes) do
+    {agents, incomplete?} =
+      envelopes
+      |> Enum.sort_by(fn {agent_id, envelope} ->
+        {if(pending_envelope?(envelope), do: 0, else: 1), agent_id}
+      end)
+      |> Enum.reduce({%{}, false}, fn {agent_id, envelope}, {agents, incomplete?} ->
+        candidate = Map.put(agents, agent_id, envelope)
+
+        cond do
+          map_size(agents) >= TransportLimits.wire_projection_agents() ->
+            {agents, true}
+
+          TransportLimits.snapshot_frame_fits?("snapshot", incomplete_payload(candidate)) ->
+            {candidate, incomplete?}
+
+          pending_envelope?(envelope) ->
+            {agents, true}
+
+          TransportLimits.snapshot_frame_fits?(
+            "snapshot",
+            incomplete_payload(Map.put(agents, agent_id, compact_envelope(envelope)))
+          ) ->
+            {Map.put(agents, agent_id, compact_envelope(envelope)), true}
+
+          true ->
+            {agents, true}
+        end
+      end)
+
+    if incomplete? do
+      Logger.warning("AgentStates: join snapshot is incomplete after wire projection")
+    end
+
+    {agents, incomplete?}
   end
 
   @doc """
@@ -611,6 +656,22 @@ defmodule KaoiroServer.AgentStates do
       end
 
     {:reply, connected, state}
+  end
+
+  defp incomplete_payload(agents), do: %{"agents" => agents, "snapshot_incomplete" => true}
+
+  defp pending_envelope?(%{"ext" => ext}) when is_map(ext),
+    do: Map.has_key?(ext, "pending_permission") or Map.has_key?(ext, "pending_question")
+
+  defp pending_envelope?(_envelope), do: false
+
+  # The stored envelope remains authoritative for server control-plane reads.
+  # This join-only fallback keeps pending data intact and removes only display
+  # content when no pending interaction is active.
+  defp compact_envelope(envelope) do
+    envelope
+    |> Map.delete("payload")
+    |> Map.update("ext", %{}, fn _ext -> %{} end)
   end
 
   defp put_agent(state, agent_id, entry) do

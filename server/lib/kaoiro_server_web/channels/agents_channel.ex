@@ -163,14 +163,36 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Internal PubSub broadcasts deliberately do not carry a wire version:
   # that keeps the stamp's source of truth at the client boundary.
   @client_event_policy MapSet.new(~w(
-    snapshot history hosts directory
+    snapshot task_snapshot delivery_snapshot history hosts directory
     history_cleared history_reset history_replay_complete
     history_replay_envelope agent_deleted delivery_status
     session_reset_started session_reset_completed session_reset_failed
     envelope spawn_result runner_sessions catalog_result
   ))
 
+  @join_snapshot_events [
+    {"snapshot", "agents"},
+    {"task_snapshot", "tasks"},
+    {"delivery_snapshot", "deliveries"}
+  ]
+
   def client_event_policy, do: @client_event_policy
+
+  def join_snapshot_events, do: Map.new(@join_snapshot_events)
+
+  def validate_join_snapshot_frames(frames) when is_map(frames) do
+    expected_events = MapSet.new(Enum.map(@join_snapshot_events, &elem(&1, 0)))
+    actual_events = MapSet.new(Map.keys(frames))
+
+    if MapSet.equal?(expected_events, actual_events) and
+         Enum.all?(@join_snapshot_events, fn {event, key} ->
+           is_map(frames[event]) and Map.has_key?(frames[event], key)
+         end) do
+      :ok
+    else
+      {:error, :snapshot_frame_key_mismatch}
+    end
+  end
 
   # Error reasons cleared for verbatim return to the client (issue #62).
   # Anything outside this set is a bug or a future internal value (a
@@ -259,9 +281,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
       end)
       |> Map.new()
 
-    # issue #180 (ADR-0048 F3): the active task set rides the SAME
-    # join-time snapshot push, not a dedicated envelope — additive key,
-    # no protocol version bump. Operator-only (こはく決定 2026-08-09):
+    {agents, snapshot_incomplete?} = AgentStates.wire_projection(agents)
+
+    # issue #180 (ADR-0048 F3): the active task set rides the dedicated
+    # join-time task_snapshot frame. Operator-only (こはく決定 2026-08-09):
     # F5's progress meta (summary/last_tool_name) is content-bearing, the
     # issue's own goal is operator-facing, and ADR-0021 F2's fail-closed
     # default is "narrow unless asked" — an empty map for viewer, exactly
@@ -273,13 +296,27 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # policy for the snapshot path specifically).
     tasks = if role in @operator_capable_roles, do: TaskStates.snapshot(), else: %{}
 
-    deliveries = if role in @operator_capable_roles, do: DeliveryStates.all(), else: %{}
+    deliveries =
+      if role in @operator_capable_roles, do: DeliveryStates.wire_projection(), else: %{}
 
-    push_versioned(socket, "snapshot", %{
-      "agents" => agents,
-      "tasks" => tasks,
-      "deliveries" => deliveries
-    })
+    agent_snapshot = %{"agents" => agents}
+
+    agent_snapshot =
+      if snapshot_incomplete?,
+        do: Map.put(agent_snapshot, "snapshot_incomplete", true),
+        else: agent_snapshot
+
+    snapshot_frames = %{
+      "snapshot" => agent_snapshot,
+      "task_snapshot" => %{"tasks" => tasks},
+      "delivery_snapshot" => %{"deliveries" => deliveries}
+    }
+
+    :ok = validate_join_snapshot_frames(snapshot_frames)
+
+    Enum.each(@join_snapshot_events, fn {event, _key} ->
+      push_versioned(socket, event, Map.fetch!(snapshot_frames, event))
+    end)
 
     # Reply-log history, host set, and the identity ledger are operator-only;
     # viewers stay at the grid and never see host info (cwd allow-lists are

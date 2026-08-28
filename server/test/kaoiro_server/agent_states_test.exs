@@ -36,6 +36,38 @@ defmodule KaoiroServer.AgentStatesTest do
     assert map_size(AgentStates.snapshot(store)) == 1000
   end
 
+  test "wire projection は実運用上限で切り、pending を通常 entry より優先する" do
+    ordinary =
+      Map.new(1..200, fn n ->
+        id = "agent-#{String.pad_leading(Integer.to_string(n), 3, "0")}"
+        {id, envelope(id)}
+      end)
+
+    pending =
+      envelope("z-pending", %{
+        "ext" => %{"pending_question" => %{"request_id" => "q-1", "questions" => []}}
+      })
+
+    {projection, incomplete?} =
+      AgentStates.wire_projection(Map.put(ordinary, "z-pending", pending))
+
+    assert incomplete?
+    assert map_size(projection) == 200
+    assert projection["z-pending"] == pending
+    refute Map.has_key?(projection, "agent-200")
+  end
+
+  test "wire projection は oversized display payload を落として frame を維持する" do
+    oversized =
+      envelope("agent-large", %{"payload" => %{"text" => String.duplicate("x", 8_000_000)}})
+
+    {projection, incomplete?} = AgentStates.wire_projection(%{"agent-large" => oversized})
+
+    assert incomplete?
+    assert projection["agent-large"]["agent_id"] == "agent-large"
+    refute Map.has_key?(projection["agent-large"], "payload")
+  end
+
   test "known?/2 はマップを複製せずに存在を判定する" do
     store = start_supervised!({AgentStates, name: :agent_states_known_test})
 

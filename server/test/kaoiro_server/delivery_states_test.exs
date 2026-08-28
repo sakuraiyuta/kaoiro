@@ -67,4 +67,18 @@ defmodule KaoiroServer.DeliveryStatesTest do
     assert %{issued_seq: 1, acked_seq: 0, pending_since: ^pending} =
              DeliveryStates.get("momo", name)
   end
+
+  test "wire projection は store を変えずに実運用上限へ収める", %{name: name} do
+    for n <- 1..201 do
+      id = "agent-#{String.pad_leading(Integer.to_string(n), 3, "0")}"
+      assert %{issued_seq: 0} = DeliveryStates.bind(id, "generation-#{n}", name)
+    end
+
+    projection = DeliveryStates.wire_projection(name)
+
+    assert map_size(DeliveryStates.all(name)) == 201
+    assert map_size(projection) == 200
+    assert Map.has_key?(projection, "agent-001")
+    refute Map.has_key?(projection, "agent-201")
+  end
 end

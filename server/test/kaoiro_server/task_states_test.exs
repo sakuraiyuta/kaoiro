@@ -5,11 +5,7 @@ defmodule KaoiroServer.TaskStatesTest do
 
   alias KaoiroServer.TaskStates
 
-  # Mirrors TaskStates' own @max_task_snapshot_bytes (M1 fix-round,
-  # 2026-08-09, ふじ round 2). Kept in sync by hand, same convention this
-  # file already uses for @max_tasks (hardcoded as the literal 5000 in
-  # the "cap (S2 fix-round)" describe block below).
-  @max_task_snapshot_bytes 6_000_000
+  @max_task_snapshot_bytes TaskStates.snapshot_byte_budget()
 
   setup do
     name = String.to_atom("task_states_#{System.unique_integer([:positive])}")
@@ -67,6 +63,11 @@ defmodule KaoiroServer.TaskStatesTest do
     leaf_target = max(target_wire_bytes - key_overhead, 0)
     padded_task_envelope(task_id, kind, agent_id, leaf_target)
   end
+
+  defp entry_wire_size(task_id, envelope),
+    do: byte_size(Jason.encode!(task_id)) + 2 + byte_size(Jason.encode!(envelope))
+
+  defp agent_outer_wire_size(agent_id), do: byte_size(Jason.encode!(agent_id)) + 4
 
   test "started は snapshot に agent_id => %{task_id => envelope} で現れる", %{store: store} do
     assert :ok = TaskStates.put(task_envelope("t1", "started"), server: store)
@@ -242,17 +243,17 @@ defmodule KaoiroServer.TaskStatesTest do
       store: store
     } do
       small = task_envelope("small1", "started", "agent-a")
-      small_size = small |> Jason.encode!() |> byte_size()
+      small_wire_size = entry_wire_size("small1", small)
 
       # Fill to within (small_size - 1) bytes of the ceiling, so `small`
       # alone pushes the total 1 byte past budget — deterministic
       # regardless of the exact baseline envelope size.
       big =
-        padded_task_envelope(
+        padded_task_envelope_for_wire_size(
           "big1",
           "started",
           "agent-a",
-          @max_task_snapshot_bytes - small_size + 1
+          @max_task_snapshot_bytes - agent_outer_wire_size("agent-a") - small_wire_size + 1
         )
 
       assert :ok = TaskStates.put(big, server: store)
@@ -268,7 +269,7 @@ defmodule KaoiroServer.TaskStatesTest do
       assert :ok = TaskStates.put(task_envelope("t1", "started", "agent-a"), server: store)
 
       oversized_update =
-        padded_task_envelope("t1", "updated", "agent-a", @max_task_snapshot_bytes + 1)
+        padded_task_envelope_for_wire_size("t1", "updated", "agent-a", @max_task_snapshot_bytes)
 
       assert {:error, :task_snapshot_too_large} =
                TaskStates.put(oversized_update, server: store)
@@ -291,8 +292,7 @@ defmodule KaoiroServer.TaskStatesTest do
 
       small = task_envelope("s", "started", "agent-a")
 
-      small_wire_size =
-        byte_size(Jason.encode!("s")) + 1 + (small |> Jason.encode!() |> byte_size()) + 1
+      small_wire_size = entry_wire_size("s", small)
 
       # Fill so exactly (small_wire_size - 1) bytes of margin remain, AS
       # MEASURED BY entry_wire_size (leaf + long_task_id's own key
@@ -305,11 +305,47 @@ defmodule KaoiroServer.TaskStatesTest do
           long_task_id,
           "started",
           "agent-a",
-          @max_task_snapshot_bytes - small_wire_size + 1
+          @max_task_snapshot_bytes - agent_outer_wire_size("agent-a") - small_wire_size + 1
         )
 
       assert :ok = TaskStates.put(big, server: store)
       assert {:error, :task_snapshot_too_large} = TaskStates.put(small, server: store)
+    end
+
+    test "agent_id の outer key は初回 task 時だけ budget へ正しく計上される", %{store: store} do
+      first_agent = "agent-a"
+      second_agent = String.duplicate("b", 256)
+      second = task_envelope("second", "started", second_agent)
+
+      first =
+        padded_task_envelope_for_wire_size(
+          "first",
+          "started",
+          first_agent,
+          @max_task_snapshot_bytes - agent_outer_wire_size(first_agent) -
+            agent_outer_wire_size(second_agent) - entry_wire_size("second", second) + 1
+        )
+
+      assert :ok = TaskStates.put(first, server: store)
+      assert {:error, :task_snapshot_too_large} = TaskStates.put(second, server: store)
+    end
+
+    test "discard_for_agent は agent_id の outer key も refund する", %{store: store} do
+      first_agent = "agent-a"
+      second_agent = String.duplicate("b", 256)
+
+      second =
+        padded_task_envelope_for_wire_size(
+          "second",
+          "started",
+          second_agent,
+          @max_task_snapshot_bytes - agent_outer_wire_size(second_agent) -
+            agent_outer_wire_size(first_agent) + 1
+        )
+
+      assert :ok = TaskStates.put(task_envelope("first", "started", first_agent), server: store)
+      assert :ok = TaskStates.discard_for_agent(first_agent, server: store)
+      assert :ok = TaskStates.put(second, server: store)
     end
 
     # S1 fix-round (2026-08-09, ふじ round 3): reject の Logger.warning が
@@ -326,11 +362,11 @@ defmodule KaoiroServer.TaskStatesTest do
           (long_entry |> Jason.encode!() |> byte_size()) + 1
 
       big =
-        padded_task_envelope(
+        padded_task_envelope_for_wire_size(
           "big1",
           "started",
           "agent-a",
-          @max_task_snapshot_bytes - long_entry_wire_size + 1
+          @max_task_snapshot_bytes - agent_outer_wire_size("agent-a") - long_entry_wire_size + 1
         )
 
       assert :ok = TaskStates.put(big, server: store)
@@ -350,15 +386,22 @@ defmodule KaoiroServer.TaskStatesTest do
 
     test "completed で bytes が減れば、その分の budget は次の新規に開放される", %{store: store} do
       small = task_envelope("small1", "started", "agent-a")
-      small_size = small |> Jason.encode!() |> byte_size()
+      small_wire_size = entry_wire_size("small1", small)
 
-      big = padded_task_envelope("big1", "started", "agent-a", @max_task_snapshot_bytes - 100)
+      big =
+        padded_task_envelope_for_wire_size(
+          "big1",
+          "started",
+          "agent-a",
+          @max_task_snapshot_bytes - agent_outer_wire_size("agent-a") - small_wire_size + 1
+        )
+
       assert :ok = TaskStates.put(big, server: store)
       assert {:error, :task_snapshot_too_large} = TaskStates.put(small, server: store)
 
       assert :ok = TaskStates.put(task_envelope("big1", "completed", "agent-a"), server: store)
       assert :ok = TaskStates.put(small, server: store)
-      assert small_size <= @max_task_snapshot_bytes
+      assert small_wire_size <= @max_task_snapshot_bytes
     end
 
     # ふじ round 2 の受け入れ条件3点目(round 3 で長い task_id へ差し替え

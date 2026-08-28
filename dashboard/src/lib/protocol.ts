@@ -1,7 +1,8 @@
 // kaoiro public-protocol client — plain TS, no Svelte dependency
 // (ADR-0007). Speaks Phoenix Channels (vsn=2.0.0 via the official client,
 // ADR-0009) and consumes the same API as any external client: join
-// "agents:lobby", receive one "snapshot" push, then "envelope" broadcasts.
+// "agents:lobby", receive agents/tasks/deliveries snapshot pushes, then
+// "envelope" broadcasts.
 // Reconnect/heartbeat belong to the phoenix client; every successful
 // (re)join yields a fresh snapshot (protocol.md re-sync rule).
 
@@ -1595,6 +1596,8 @@ export interface KaoiroHandlers {
   onJoined?: () => void;
   /** Full re-sync; replaces all known agents (last-write-wins). */
   onSnapshot: (agents: Record<string, Envelope>) => void;
+  /** Whether the bounded agent wire projection omitted entries on this join. */
+  onSnapshotIncomplete?: (incomplete: boolean) => void;
   /** Active subagent/workflow task snapshot (nested {@link TaskTable}),
    *  pushed once alongside the AgentStates snapshot on join (ADR-0048
    *  F3, issue #180). Operator-only: the server sends an empty map for a
@@ -2788,6 +2791,8 @@ export function warnOnServerVersionMismatch(event: string, payload: unknown): vo
  * egress funnel (issue #270). */
 export const CLIENT_EVENT_VERSION_POLICY = {
   snapshot: "checked",
+  task_snapshot: "checked",
+  delivery_snapshot: "checked",
   history: "checked",
   hosts: "checked",
   directory: "checked",
@@ -3119,18 +3124,21 @@ export function connectKaoiro(
   }
 
   function setupChannelHandlers(c: Channel): void {
-    bindServerEvent(c, "snapshot", (payload: { agents?: unknown; tasks?: unknown; deliveries?: unknown }) => {
-    const agents: Record<string, Envelope> = {};
-    for (const value of Object.values(payload.agents ?? {})) {
-      if (isEnvelope(value)) agents[value.agent_id] = value;
-    }
-    handlers.onSnapshot(agents);
-    // ADR-0048 F3 (issue #180): "tasks" rides this same join-time push,
-    // keyed by task_id (matches the server's flat TaskStates table).
-    handlers.onTaskSnapshot?.(parseTasks(payload.tasks));
-    handlers.onDeliverySnapshot?.(parseDeliverySnapshot(payload.deliveries));
-  });
-  bindServerEvent(c, "delivery_status", (payload: unknown) => {
+    bindServerEvent(c, "snapshot", (payload: { agents?: unknown; snapshot_incomplete?: unknown }) => {
+      const agents: Record<string, Envelope> = {};
+      for (const value of Object.values(payload.agents ?? {})) {
+        if (isEnvelope(value)) agents[value.agent_id] = value;
+      }
+      handlers.onSnapshot(agents);
+      handlers.onSnapshotIncomplete?.(payload.snapshot_incomplete === true);
+    });
+    bindServerEvent(c, "task_snapshot", (payload: { tasks?: unknown }) => {
+      handlers.onTaskSnapshot?.(parseTasks(payload.tasks));
+    });
+    bindServerEvent(c, "delivery_snapshot", (payload: { deliveries?: unknown }) => {
+      handlers.onDeliverySnapshot?.(parseDeliverySnapshot(payload.deliveries));
+    });
+    bindServerEvent(c, "delivery_status", (payload: unknown) => {
     if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;
     const raw = payload as Record<string, unknown>;
     if (typeof raw.agent_id !== "string") return;

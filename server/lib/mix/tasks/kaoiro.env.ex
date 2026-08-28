@@ -459,7 +459,8 @@ defmodule Mix.Tasks.Kaoiro.Env do
 
   defp write_private(path, content) do
     File.open!(path, [:write], fn file ->
-      # An attacker can grab the empty fd at open(2); accepted because secrets follow chmod to 0600 in an operator-owned config directory.
+      # An attacker can grab the empty fd at open(2); accepted because secrets
+      # follow chmod to 0600 in an operator-owned config directory.
       File.chmod!(path, 0o600)
       IO.binwrite(file, content)
     end)
