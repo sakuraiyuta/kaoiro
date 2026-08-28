@@ -173,7 +173,13 @@ export interface InterAgentErrorClassifyInput {
 
 const RATE_LIMIT_REASONS = new Set(["blocking_limit", "rapid_refill_breaker"]);
 const CONTEXT_OVERFLOW_REASONS = new Set(["prompt_too_long"]);
-const INTERRUPTED_REASONS = new Set(["aborted_streaming", "aborted_tools", "interrupted"]);
+const INTERRUPTED_REASONS = new Set([
+  "aborted_streaming",
+  "aborted_tools",
+  "interrupted",
+  "stop_hook_prevented",
+  "hook_stopped",
+]);
 const TIMEOUT_REASONS = new Set(["timeout"]);
 
 /** Keyword fallback for engines that expose only a free-form error string
