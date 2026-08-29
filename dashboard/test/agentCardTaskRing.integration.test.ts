@@ -103,9 +103,13 @@ describe("AgentCard 頭上リング (issue #180)", () => {
     expect(ring).not.toBeNull();
     // N1 (クロエ 2026-08-09): サブエージェント稼働の唯一のインジケータで
     // あり装飾ではないため、aria-hidden ではなく role="img" +
-    // aria-label で読み上げ対象にする。
+    // aria-label で読み上げ対象にする。issue #233: count が TaskRing まで
+    // 配線され、label に実際の件数を含める(複数 dot 描画そのものの
+    // 詳細は taskRing.integration.test.ts が担当)。
     expect(ring?.getAttribute("role")).toBe("img");
-    expect(ring?.getAttribute("aria-label")).toBe("サブエージェント実行中");
+    expect(ring?.getAttribute("aria-label")).toBe(
+      "サブエージェント/workflow実行中 (3件)",
+    );
     // 数値表示は対象外(こはく scoping) — ring 自体もその祖先である
     // .sprite-slot 配下にも "3" というテキストノードは存在しない。
     expect(target.querySelector(".sprite-slot")?.textContent?.trim()).toBe("");

@@ -11,8 +11,8 @@
   let {
     operator,
     pending = false,
-    taskRing = false,
-  }: { operator: boolean; pending?: boolean; taskRing?: boolean } = $props();
+    taskRing = 0,
+  }: { operator: boolean; pending?: boolean; taskRing?: number } = $props();
 
   const agents = lobbyAgents(pending);
   const logs = lobbyLogs();
@@ -37,7 +37,7 @@
           {envelope}
           manifest={null}
           onSelect={() => {}}
-          activeTaskCount={taskRing ? 1 : 0}
+          activeTaskCount={taskRing}
         />
       </li>
     {/each}

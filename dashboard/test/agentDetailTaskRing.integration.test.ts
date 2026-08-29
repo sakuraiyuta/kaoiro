@@ -90,7 +90,12 @@ describe("AgentDetail 頭上リング (issue #180 follow-up)", () => {
     const ring = target.querySelector(".task-ring");
     expect(ring).not.toBeNull();
     expect(ring?.getAttribute("role")).toBe("img");
-    expect(ring?.getAttribute("aria-label")).toBe("サブエージェント実行中");
+    // issue #233: count が TaskRing まで配線され、label に実際の件数を
+    // 含める(複数 dot 描画そのものの詳細は taskRing.integration.test.ts
+    // が担当)。
+    expect(ring?.getAttribute("aria-label")).toBe(
+      "サブエージェント/workflow実行中 (3件)",
+    );
     expect(target.querySelector(".portrait")?.textContent?.trim()).toBe("");
   });
 

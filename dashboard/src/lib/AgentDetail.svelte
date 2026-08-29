@@ -2551,6 +2551,7 @@
               orbitRx={spriteUrl ? "min(25cqw, 2rem)" : "min(17.5cqw, 1.35rem)"}
               orbitRy={spriteUrl ? "min(9cqw, 0.72rem)" : "min(6.3cqw, 0.49rem)"}
               topOffset="calc(6% + 8px)"
+              count={activeTaskCount}
             />
           {/if}
           <span class="lamp" title={expression.label}></span>

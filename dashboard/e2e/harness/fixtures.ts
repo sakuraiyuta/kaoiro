@@ -54,8 +54,10 @@ export interface DetailScenario {
    *  LobbyHarness's own `taskRing` prop so a real-browser Playwright pass
    *  can pin `.task-ring` visibility/animation for AgentDetail across the
    *  responsive breakpoints, the way LobbyHarness already does for
-   *  AgentCard. */
-  taskRing?: boolean;
+   *  AgentCard. issue #233: this is now the active dot COUNT rather than
+   *  an on/off flag — `1` preserves every existing single-dot geometry
+   *  case bit-for-bit. */
+  taskRing?: number;
   /** 頭上リング back-button overlap regression (issue #180 follow-up
    *  round 2, 2026-08-10, workflow-review QUALITY finding): DetailHarness
    *  always mounted with manifest=null before this, so every T11 case

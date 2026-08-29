@@ -99,14 +99,48 @@ subagent / workflow は「視覚表現は独立した別の存在」「identity 
 | 段階2: server 集約・中継 | 子タスクの保持と配信 | 実装済み | in: フラットな task テーブル + 親 `agent_id` 参照で集約([ADR-0048](../adr/0048-task-aggregation-delivery.md) F1)/ active set 維持(親離脱時に破棄)/ クライアントへ中継 / 後続接続へは既存 snapshot 枠で接続時一括送信(同 F3)/ operator 限定配信(同 addendum)。out: クライアント視覚表現 |
 | 段階3: client 受信 + 頭上リング UI(AgentCard) | AgentCard に稼働中サブエージェントを可視化 | 実装済み | in: `task` envelope の受信・`AgentGridShell`→`AgentCard` への活性タスク数の受け渡し(`App.svelte` の専用 accumulator、`agents` map へは folding しない)/ `AgentCard.svelte` の `.sprite` を包む頭上リング(CSS-only の光点周回アニメーション、画像アセット無し、`prefers-reduced-motion` は既存グローバル規則が自動でカバー)/ on-off のみで数値表示はしない。out: 数値表示(活性タスク数の表示)、`AgentDetail` への追加表示(当時は issue #170 のスコープ外としたが、段階4 で取り込んだ — マスター未承認の判断だったため) |
 | 段階4: 頭上リング UI(AgentDetail 追加) | AgentDetail にも稼働中サブエージェントを可視化(issue #170 follow-up、2026-08-10 — マスターが 2026-08-04 に issue #170 で検討要望していたが段階3実装時に取り込まれず、マスター指摘で判明・追加) | 実装済み | in: `AgentCard`/`AgentDetail` 共有の `TaskRing.svelte`(頭上リングの markup + CSS + `@keyframes` を1箇所に集約、`@keyframes` の複製を避ける)/ `AgentDetail.svelte` の `.portrait` に頭上リングを配置(`{#key}` の外、AgentCard と同じく on-off のみ)/ `.portrait` は幅が可変(デスクトップは `.status` の flex 比率、tablet 以下は `max-width: 8rem`)なので `container-type: inline-size` を付与し軌道半径を `cqw` で指定 — sprite は表示要素に対する軌道比率(AgentCard の 2rem/8rem 等と同一比率)、face は face 自身の寸法比(AgentCard は独立した 5.4rem 要素、AgentDetail は .portrait 幅の 70%)を保って cqw 化した値(ふじ round1 N1)。ただしデスクトップは `.status` の幅可変で `.portrait` が 8rem を大きく超えうるため、`cqw` だけだと軌道が肥大しはみ出す不具合をマスター実機確認(2026-08-10)で検出 — `min(cqw値, AgentCard絶対値)` で上限キャップし、8rem 超のデスクトップでは AgentCard と同じ絶対サイズに頭打ちさせる。キャップ後も `.portrait` の padding(0.8rem)が AgentCard の `.card`(1.4rem)より狭く実測ではみ出しが残ったため、`TaskRing.svelte` に `topOffset` prop(既定 `-2%`)を追加し AgentDetail からは `topOffset="6%"` で頭上退避のアンカーを顔寄りへシフト、Playwright T11(1600px 幅広デスクトップ + 844px BottomSheet 表示、sprite/face 両分岐、アニメーションを最遠点に静止させ `.bar` との非重なりを固定、修正前の値で実際に失敗することも確認済み。狭幅側は「広い方で安全だから比例して安全」と実測せず結論せずクロエ round2 指摘で追加検証、実測上は `.bar` と `.portrait`(BottomSheet)が空間的に離れており同時発生しない)で検証/ `App.svelte` から `protocol.ts` の純関数 `activeTaskCountForDetail()` 経由で配線し、disconnected/directory-only なタイルでは強制的に 0 にする(素通し配線だと切断済みエージェントの stale `tasks` エントリが漏れる経路があるため)。out: 数値表示(活性タスク数の表示、段階3から変更なし) |
+| 段階5: 頭上リング dot count 化(issue #233、validated design はコメント 5450038052) | 稼働中 root task 数を頭上リングの dot 数で可視化(on/off の 1 dot から N dot へ) | 実装済み | in: `TaskRing.svelte` に `count` prop を追加、root task 1 件につき同じ楕円上の 1 dot として等角度(弧長ではない)配置、`animation-delay` で位相をずらし均等に周回させる(`animation` shorthand の後に `animation-delay` を書く必要がある — shorthand がリセットするため)/ 各 dot の base rule は自身の真の楕円座標(`--dot-x`/`--dot-y`)を rest state とし、reduced motion 完了後も位相が分離されたまま留まる/ 先頭 dot のみ `role="img"` + 件数入り `aria-label`、残りは `aria-hidden`(装飾的 sibling の重複読み上げを防ぐ)/ `AgentCard`/`AgentDetail` 両呼び出し元に `count={activeTaskCount}` を配線/ UI 上限なし(50/500 dot でも全描画を Playwright で実測)。workflow 内部の子エージェントは別 dot にしない(下記「workflow 内部の子エージェント検知」参照、wrapper/server/wire protocol の拡張は対象外)。out: wrapper/server 側の task 集計方式の変更(`activeTaskCountByAgent` はそのまま正本) |
 
-### 要検証(未解決、#170 スコープ外)
+### workflow 内部の子エージェント検知(issue #233 で検証済み)
 
-- workflow が内部で spawn する子エージェントが、同一セッションの**別 `task_started`**
-  として出るか実 stream で検証する。出ない場合は workflow を単一タスクとして扱う。
-  issue #170 の実測は「終端通知の保証」(subagent kill/background/
-  interrupt の 4 経路、[agent-sdk-events](agent-sdk-events.md))に
-  絞っており、この項目は未検証のまま残る。
+issue #170 では未検証のまま残していた項目 — 「workflow が内部で spawn する
+子エージェントが、同一セッションの**別 `task_started`** として出るか」を
+issue #233(頭上リングの dot count 実装、validated design は
+issue #233 コメント 5450038052)で実 stream 検証した。
+
+**検証環境**: Claude Agent SDK 0.3.228、`parallel()` ステップで内部
+`agent()` を 2 件起動する local workflow。
+
+**観測された raw SDK メッセージ**:
+
+- root task に対して `system/task_started` が正確に 1 件
+  (`task_type=local_workflow`、workflow 名付き)
+- 内部 2 エージェントは root の `task_progress.workflow_progress` 配下に
+  のみ現れる(別々の agent id、start/done 状態付き)
+- 子の `task_started` / `task_notification` は一切発行されない
+- root は `task_updated` / `task_notification` を通じて完了する
+
+**結論**: wrapper は既に(親/種別によるフィルタなしで)独立した
+`task_started` をすべてマッピングしているため、子が将来独自の
+安定した task event として配信されるようになれば、追加実装なしで
+既存経路がそのまま拾う。現状は SDK 0.3.228 の
+`SDKTaskProgressMessage` 型が宣言するフィールド(`task_id` /
+`tool_use_id` / `description` / `subagent_type` / `usage` /
+`last_tool_name` / `summary` / `uuid` / `session_id`)に
+`workflow_progress` が含まれておらず、この実行時限定フィールドを
+配線すると、start/end/retry/バージョン差異のセマンティクスを含む
+kaoiro ライフサイクル契約を、未文書化の SDK 形状に対して結ぶことに
+なる。これは意図的にスコープ外とする。
+
+**方針(root=1 の妥協)**: workflow 内部の子は「観測不能」ではなく
+「未文書化の進捗フィールドでは観測できるが、kaoiro の安定タスク
+イベント正本からは意図的に除外される」。頭上リング(TaskRing)の
+dot count は root task 1 件につき 1 dot とし、内部の子エージェント数
+(16-way fan-out でも 1 subagent でも) は区別しない — これは既知の
+意味論的妥協であり、子が完全に観測不可能だという主張ではない。SDK
+アップグレード時にこの probe を再実行し、子の `task_started` が
+安定発行されるようになった時点で既存経路がそのまま拾い、この方針を
+再検討できる。
 
 ## Constraints
 

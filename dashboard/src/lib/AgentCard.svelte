@@ -535,7 +535,7 @@
              TaskRing.svelte(AgentDetail と共有、issue #180 follow-up
              2026-08-10)。{#key} の外に置き、state 遷移(dissolve
              remount)の影響を受けず単独で回り続ける。 -->
-        <TaskRing faceOrbit={!spriteUrl} />
+        <TaskRing faceOrbit={!spriteUrl} count={activeTaskCount} />
       {/if}
     </div>
   </div>

@@ -2,9 +2,9 @@
 // scenario from query params and mounts PRODUCTION components with fixture
 // data — no Phoenix server, no WebSocket round-trips.
 //
-//   ?view=lobby&role=operator|viewer[&taskRing=1]
+//   ?view=lobby&role=operator|viewer[&taskRing=N]
 //   ?view=detail[&pending=permission|question][&attention=1]
-//     [&mountDelay=ms][&expandOrigin=1]
+//     [&mountDelay=ms][&expandOrigin=1][&taskRing=N]
 //   ?view=overlay&overlay=dialog|drawer|persona
 //   ?view=app        — real App.svelte behind fetch mocks (header chrome)
 import { mount } from "svelte";
@@ -56,7 +56,8 @@ if (view === "app") {
     scenario.pending = pending;
   }
   if (params.get("attention") === "1") scenario.attention = true;
-  if (params.get("taskRing") === "1") scenario.taskRing = true;
+  const taskRing = params.get("taskRing");
+  if (taskRing !== null) scenario.taskRing = Number(taskRing);
   if (params.get("sprite") === "1") scenario.sprite = true;
   const scrollTarget = params.get("scrollTarget");
   if (scrollTarget !== null) scenario.scrollTargetIndex = Number(scrollTarget);
@@ -75,7 +76,13 @@ if (view === "app") {
 } else if (view === "overlay") {
   const overlayParam = params.get("overlay");
   const overlay =
-    overlayParam === "drawer" ? "drawer" : overlayParam === "persona" ? "persona" : "dialog";
+    overlayParam === "drawer"
+      ? "drawer"
+      : overlayParam === "persona"
+        ? "persona"
+        : overlayParam === "modal-empty"
+          ? "modal-empty"
+          : "dialog";
   if (overlay === "persona") {
     // issue #232 MF-3 a11y spec: PersonaDetailDialog fetches its detail
     // over GET /api/personas/:id — stub it so the modal actually renders
@@ -113,7 +120,7 @@ if (view === "app") {
     props: {
       operator: params.get("role") !== "viewer",
       pending: params.get("pending") === "1",
-      taskRing: params.get("taskRing") === "1",
+      taskRing: Number(params.get("taskRing") ?? 0),
     },
   });
 }

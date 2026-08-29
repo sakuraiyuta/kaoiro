@@ -117,7 +117,7 @@
         {manifest}
         origin={scenario.expandFromOrigin ? { x: 120, y: 120 } : null}
         {scrollToEntryKey}
-        activeTaskCount={scenario.taskRing ? 1 : 0}
+        activeTaskCount={scenario.taskRing ?? 0}
         onClose={() => (closed = true)}
       />
     {:else}
