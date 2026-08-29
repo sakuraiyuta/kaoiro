@@ -5,14 +5,23 @@
   // real trigger <button> instead, so the focus-restore-on-close
   // assertion has a genuine "focus before open" to return to.
   import LaunchDialog from "../../src/lib/LaunchDialog.svelte";
+  import Modal from "../../src/lib/Modal.svelte";
   import PersonaDetailDialog from "../../src/lib/PersonaDetailDialog.svelte";
   import SettingsDrawer from "../../src/lib/SettingsDrawer.svelte";
   import { launchHosts, stubConnection } from "./fixtures";
 
-  let { overlay }: { overlay: "dialog" | "drawer" | "persona" } = $props();
+  let {
+    overlay,
+  }: { overlay: "dialog" | "drawer" | "persona" | "modal-empty" } = $props();
 
   const connection = stubConnection();
   let personaOpen = $state(false);
+  // issue #232 MF-3 round-2 must-fix (MF-R2-2): a Modal instance whose
+  // content has NO focusable element at all — no production caller does
+  // this today (PersonaDetailDialog's close button always renders), but
+  // Modal.svelte is a general-purpose primitive and ふじ's Chromium probe
+  // measured the zero-focusable case directly against it.
+  let modalEmptyOpen = $state(false);
 </script>
 
 <main class="harness-main">
@@ -37,6 +46,24 @@
         personaId="fuji"
         onClose={() => (personaOpen = false)}
       />
+    {/if}
+  {:else if overlay === "modal-empty"}
+    <button
+      type="button"
+      id="modal-empty-trigger"
+      onclick={() => (modalEmptyOpen = true)}
+    >
+      open empty modal
+    </button>
+    {#if modalEmptyOpen}
+      <Modal
+        ariaLabel="empty modal"
+        onClose={() => (modalEmptyOpen = false)}
+      >
+        {#snippet children()}
+          <p>no focusable content</p>
+        {/snippet}
+      </Modal>
     {/if}
   {:else}
     <SettingsDrawer onClose={() => {}} onLogout={() => {}} />

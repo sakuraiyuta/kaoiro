@@ -121,6 +121,30 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert json_response(conn, 401) == %{"error" => "unauthorized"}
     end
 
+    # issue #232 MF-1 round-2 must-fix (MF-R2-3, ふじ指摘): the previous
+    # "失効した token" test above only proved a token NEVER in
+    # `:client_tokens` gets 401 — that is the same shape as the
+    # "匿名" test just above it (an unknown credential), not a proof
+    # that `RequireOperatorPlug` re-validates on every request. This
+    # reuses the SAME session (the SAME `conn`, carrying the SAME
+    # cookie-derived credential) across two requests: 200 while the
+    # token is still configured, then 401 after it is removed from
+    # `:client_tokens` — without a new session, a new token, or any
+    # other change than the config revoke itself.
+    test "同じ session credential でも config から revoke されれば次 request で 401 (live revalidate)",
+         %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+      session_conn = init_test_session(conn, %{"client_token" => "tok-op"})
+
+      first = get(session_conn, "/api/personas/fuji")
+      assert first.status == 200
+
+      Application.put_env(:kaoiro_server, :client_tokens, "")
+
+      second = get(session_conn, "/api/personas/fuji")
+      assert json_response(second, 401) == %{"error" => "unauthorized"}
+    end
+
     test "未知の id は operator でも 404", %{conn: conn} do
       Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
 

@@ -41,6 +41,16 @@
   onMount(() => {
     triggerElement = document.activeElement;
     dialogEl?.showModal();
+    // issue #232 MF-3 round-2 must-fix (MF-R2-2, ふじ Chromium probe):
+    // a modal with zero focusable children (e.g. a still-loading detail
+    // with no close button rendered yet) breaks showModal()'s native
+    // initial-focus fallback — measured: focus landed nowhere reachable,
+    // letting Tab escape the (supposedly inert) background. Explicitly
+    // focus the dialog element itself (tabindex="-1" below makes that
+    // legal) as the fallback target.
+    if (dialogEl && dialogEl.querySelector(FOCUSABLE_SELECTOR) === null) {
+      dialogEl.focus();
+    }
 
     return () => {
       if (triggerElement instanceof HTMLElement && document.contains(triggerElement)) {
@@ -88,7 +98,16 @@
     const focusable = Array.from(
       dialogEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
     );
-    if (focusable.length === 0) return;
+    if (focusable.length === 0) {
+      // issue #232 MF-3 round-2 must-fix (MF-R2-2): nothing to cycle
+      // between — prevent the browser's default Tab focus movement
+      // entirely and retain focus on the dialog itself, rather than
+      // letting it wander to whatever the browser picks next (which, per
+      // the same probe that found this, can be outside the dialog).
+      event.preventDefault();
+      dialogEl.focus();
+      return;
+    }
     const first = focusable[0]!;
     const last = focusable[focusable.length - 1]!;
     if (event.shiftKey && document.activeElement === first) {
@@ -104,6 +123,7 @@
 <dialog
   bind:this={dialogEl}
   aria-label={ariaLabel}
+  tabindex="-1"
   onclick={handleBackdropClick}
   oncancel={handleCancel}
   onkeydown={handleKeydown}

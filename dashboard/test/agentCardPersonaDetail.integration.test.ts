@@ -96,22 +96,82 @@ describe("AgentCard ペルソナ詳細モーダル (issue #232)", () => {
     expect(onOpenPersonaDetail).not.toHaveBeenCalled();
   });
 
-  it("onOpenPersonaDetail 未指定なら `.persona-open` が disabled になる (onSelect へのフォールバックは無い)", async () => {
+  // issue #232 MF-2 round-2 must-fix (MF-R2-1, ふじ probe): round-1 made
+  // `.persona-open` disabled whenever there was no persona action — a
+  // viewer session (App.svelte passes onOpenPersonaDetail=undefined) or a
+  // persona id that failed to resolve. Before the sibling split, that
+  // same click fell through to onSelect (the whole card was one button);
+  // disabling it outright was a regression, not a defect fix.
+  it("onOpenPersonaDetail 未指定なら `.persona-open` は disabled にならず、クリックは onSelect へ fallback する", async () => {
     const onSelect = vi.fn();
     const target = await render({ onSelect });
+
+    const button = target.querySelector<HTMLButtonElement>(".persona-open")!;
+    expect(button.disabled).toBe(false);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick();
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("persona id 不在なら `.persona-open` は disabled にならず、クリックは onSelect へ fallback する", async () => {
+    const onSelect = vi.fn();
+    const onOpenPersonaDetail = vi.fn();
+    const target = await render({
+      envelope: envelope(undefined),
+      onSelect,
+      onOpenPersonaDetail,
+    });
+
+    const button = target.querySelector<HTMLButtonElement>(".persona-open")!;
+    expect(button.disabled).toBe(false);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick();
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onOpenPersonaDetail).not.toHaveBeenCalled();
+  });
+
+  it("directoryOnly なら `.persona-open` は disabled のまま (fallback もしない)", async () => {
+    const onSelect = vi.fn();
+    const target = document.createElement("div");
+    document.body.append(target);
+    const component = mount(AgentCard, {
+      target,
+      props: {
+        envelope: envelope("p"),
+        manifest: null,
+        directoryOnly: true,
+        onSelect,
+      },
+    });
+    mounted.push(component);
+    await tick();
 
     const button = target.querySelector<HTMLButtonElement>(".persona-open")!;
     expect(button.disabled).toBe(true);
   });
 
-  it("persona id 不在なら `.persona-open` が disabled になる", async () => {
-    const onOpenPersonaDetail = vi.fn();
-    const target = await render({
-      envelope: envelope(undefined),
-      onOpenPersonaDetail,
-    });
+  // issue #232 MF-2 round-2 must-fix (MF-R2-1): the fallback's expand
+  // origin must match the ordinary `.open` click's — both read `cardEl`
+  // (the <article> itself), not whichever sibling button fired the
+  // click, so the detail always expands from the tile's true centre.
+  it("fallback クリックの expand origin は .open クリックと同じ card 全体基準になる", async () => {
+    const onSelect = vi.fn();
+    const target = await render({ onSelect });
 
-    const button = target.querySelector<HTMLButtonElement>(".persona-open")!;
-    expect(button.disabled).toBe(true);
+    const card = target.querySelector("article.card")!;
+    const cardRect = { left: 100, top: 200, width: 300, height: 150 } as DOMRect;
+    const cardRectSpy = vi
+      .spyOn(card, "getBoundingClientRect")
+      .mockReturnValue(cardRect);
+
+    target
+      .querySelector<HTMLButtonElement>(".persona-open")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick();
+
+    expect(cardRectSpy).toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith({ x: 250, y: 275 });
   });
 });

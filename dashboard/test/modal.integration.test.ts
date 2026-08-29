@@ -173,6 +173,50 @@ describe("Modal", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
+  // issue #232 MF-3 round-2 must-fix (MF-R2-2, ふじ Chromium probe): a
+  // modal with zero focusable children (e.g. a still-loading detail)
+  // broke showModal()'s native initial-focus fallback, letting Tab
+  // escape the dialog. Modal.svelte focuses the dialog itself (tabindex
+  // ="-1") as a fallback target, and Tab/Shift+Tab must retain focus
+  // there rather than being left to the browser default.
+  it("focusable 0 個なら mount 後 dialog 要素自体にフォーカスが当たる", async () => {
+    const target = await render({ markup: "<p>no focusable content</p>" });
+
+    const dialog = target.querySelector<HTMLDialogElement>("dialog")!;
+    expect(document.activeElement).toBe(dialog);
+  });
+
+  it("focusable 0 個での Tab は既定動作を防ぎ、dialog 自身にフォーカスを保持する", async () => {
+    const target = await render({ markup: "<p>no focusable content</p>" });
+    const dialog = target.querySelector<HTMLDialogElement>("dialog")!;
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    dialog.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(dialog);
+  });
+
+  it("focusable 0 個での Shift+Tab も既定動作を防ぎ、dialog 自身にフォーカスを保持する", async () => {
+    const target = await render({ markup: "<p>no focusable content</p>" });
+    const dialog = target.querySelector<HTMLDialogElement>("dialog")!;
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    dialog.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(dialog);
+  });
+
   it("cancel イベント (Escape 相当) で onClose を呼び、既定動作を防ぐ", async () => {
     const onClose = vi.fn();
     const target = await render({ onClose });

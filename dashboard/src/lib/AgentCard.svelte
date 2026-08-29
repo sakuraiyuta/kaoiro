@@ -69,9 +69,18 @@
     onOpenPersonaDetail?: ((personaId: string) => void) | undefined;
   } = $props();
 
+  // issue #232 MF-2 round-2 must-fix (MF-R2-1): the expand origin must be
+  // the CARD's centre regardless of which button the click landed on —
+  // `.open` no longer covers the whole card (the image sits outside it in
+  // `.card-media`), so `event.currentTarget`'s own rect would give a
+  // smaller/offset box depending on which sibling fired the click.
+  // `cardEl` (the <article> itself) is the one stable reference both
+  // `selectFrom` call sites below share.
+  let cardEl: HTMLElement | undefined = $state();
+
   // Hand the detail the tile's viewport centre so it grows from this tile.
   function selectFrom(event: MouseEvent): void {
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const rect = (cardEl ?? (event.currentTarget as HTMLElement)).getBoundingClientRect();
     onSelect?.({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
   }
 
@@ -86,6 +95,24 @@
   // etc.'s absolute positioning, unchanged in effect from when `.open`
   // carried it.
   const personaId = $derived(envelope.persona?.id);
+
+  // issue #232 MF-2 round-2 must-fix (MF-R2-1, ふじ probe): making
+  // `.persona-open` `disabled` whenever there is no persona action (no
+  // onOpenPersonaDetail — e.g. a viewer session, App.svelte's isOperator
+  // gate — or no resolved persona id) made the image's click a dead end.
+  // Before the sibling split, that same click fell through to
+  // `selectFrom` (the whole card was one `.open` button). Route it back
+  // there instead of disabling the click affordance outright —
+  // `directoryOnly` is the one condition that must still suppress it
+  // (an offline tile has no detail view to open at all, persona or
+  // otherwise).
+  function handlePersonaOpenClick(event: MouseEvent): void {
+    if (personaId && onOpenPersonaDetail) {
+      onOpenPersonaDetail(personaId);
+      return;
+    }
+    selectFrom(event);
+  }
 
   // Displayed state lags the live state for min readability + crossfade (#43);
   // the needs-attention badge below still tracks the live state for immediacy.
@@ -455,7 +482,12 @@
   }
 </script>
 
-<article class="card" data-state={expression.variant} class:directory-only={directoryOnly}>
+<article
+  class="card"
+  data-state={expression.variant}
+  class:directory-only={directoryOnly}
+  bind:this={cardEl}
+>
   <!-- issue #232 MF-2: position:relative wrapper for `.lamp`/
        `.offline-label`/`.error-icon`/`.badge` — carries the same
        absolute-positioning basis `.open` used to, now that `.open` no
@@ -480,11 +512,11 @@
       <button
         type="button"
         class="persona-open"
-        onclick={personaId && onOpenPersonaDetail
-          ? () => onOpenPersonaDetail(personaId)
-          : undefined}
-        disabled={directoryOnly || !personaId || !onOpenPersonaDetail}
-        aria-label="{name} のペルソナ詳細を表示"
+        onclick={directoryOnly ? undefined : handlePersonaOpenClick}
+        disabled={directoryOnly}
+        aria-label={personaId && onOpenPersonaDetail
+          ? `${name} のペルソナ詳細を表示`
+          : `${name} の詳細を開く`}
       >
         {#key display.shown}
           <PersonaFace

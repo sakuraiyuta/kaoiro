@@ -9,6 +9,8 @@ import { expect, test } from "@playwright/test";
 
 const PERSONA_MODAL =
   "/e2e/harness/index.html?view=overlay&overlay=persona";
+const MODAL_EMPTY =
+  "/e2e/harness/index.html?view=overlay&overlay=modal-empty";
 
 test.describe("Modal a11y (issue #232 MF-3)", () => {
   test("開くと close ボタンに初期フォーカスが当たる", async ({ page }) => {
@@ -88,5 +90,52 @@ test.describe("Modal a11y (issue #232 MF-3)", () => {
     await page.locator("dialog h2").click();
 
     await expect(page.locator("dialog")).toBeVisible();
+  });
+});
+
+// issue #232 MF-3 round-2 must-fix (MF-R2-2, ふじ Chromium probe): a
+// content-less Modal (zero focusable elements) broke showModal()'s
+// native initial-focus fallback in Chromium, letting Tab escape the
+// (supposedly inert) background. No production caller does this today
+// (PersonaDetailDialog's close button always renders), but Modal.svelte
+// is a general-purpose primitive and this is the shape ふじ measured
+// directly against it.
+test.describe("Modal a11y — focusable 0 個 (issue #232 MF-3 round-2 must-fix)", () => {
+  test("focusable 0 個でも dialog 自身に初期フォーカスが当たる", async ({
+    page,
+  }) => {
+    await page.goto(MODAL_EMPTY);
+    await page.locator("#modal-empty-trigger").click();
+
+    await expect(page.locator("dialog")).toBeFocused();
+  });
+
+  test("focusable 0 個での Tab は既定動作を防ぎ、dialog の外へ出ない", async ({
+    page,
+  }) => {
+    await page.goto(MODAL_EMPTY);
+    await page.locator("#modal-empty-trigger").click();
+    await expect(page.locator("dialog")).toBeVisible();
+
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press("Tab");
+      const focusedInDialog = await page.evaluate(() => {
+        const dialog = document.querySelector("dialog");
+        return dialog !== null && dialog.contains(document.activeElement);
+      });
+      expect(focusedInDialog).toBe(true);
+    }
+  });
+
+  test("focusable 0 個でも Escape で閉じ、trigger へフォーカスが戻る", async ({
+    page,
+  }) => {
+    await page.goto(MODAL_EMPTY);
+    await page.locator("#modal-empty-trigger").click();
+
+    await page.keyboard.press("Escape");
+
+    await expect(page.locator("dialog")).toBeHidden();
+    await expect(page.locator("#modal-empty-trigger")).toBeFocused();
   });
 });
