@@ -243,6 +243,32 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @doc """
+  Manually closes an OPEN conversation on operator request (issue #276
+  decision: reuse the existing tombstone mechanism, no new termination
+  machinery). Reuses the SAME `close_entry/3` transition every hard-limit
+  / GC closure already goes through — `reason: :operator_closed` is
+  simply a new value in that existing vocabulary.
+
+  Returns `{:ok, participant_agent_ids}` on success so the caller (channel
+  handler) can deliver the SAME `conversation_closed` notice
+  `SynthEnvelope.deliver_conversation_closed/3` already sends for a GC
+  auto-close — this function itself sends no notification, keeping the
+  existing split where this module owns state and the caller owns
+  delivery (mirrors `record_message/6`, whose hard-limit callers notify
+  from the return value rather than from inside this GenServer).
+
+  `{:error, :conversation_closed}` for an already-closed cid — idempotent,
+  a second close request is a no-op from the state's perspective, not an
+  error condition that should crash anything — and
+  `{:error, :unknown_conversation_id}` for a cid with no entry at all
+  (open or tombstoned), mirroring `record_message/6`'s existing
+  vocabulary for both cases.
+  """
+  def close_by_operator(conversation_id, server \\ __MODULE__) do
+    GenServer.call(server, {:close_by_operator, conversation_id})
+  end
+
+  @doc """
   Claims at most `limit` still-open conversations in which `agent_id` takes
   part and whose peers have not been told yet that this agent is
   unreachable, marks them as notified, and returns
@@ -447,6 +473,25 @@ defmodule KaoiroServer.ConversationStates do
       end
 
     {:reply, projection, state}
+  end
+
+  def handle_call({:close_by_operator, cid}, _from, state) do
+    case Map.get(state.conversations, cid) do
+      nil ->
+        {:reply, {:error, :unknown_conversation_id}, state}
+
+      %{status: :closed} ->
+        {:reply, {:error, :conversation_closed}, state}
+
+      %{status: :open} = entry ->
+        now = state.clock.()
+        agent_ids = MapSet.to_list(entry.agents)
+
+        conversations =
+          Map.put(state.conversations, cid, close_entry(entry, :operator_closed, now))
+
+        {:reply, {:ok, agent_ids}, %{state | conversations: conversations}}
+    end
   end
 
   def handle_call({:claim_unreachable, agent_id, limit}, _from, state) do

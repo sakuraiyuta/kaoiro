@@ -1922,6 +1922,14 @@ export interface KaoiroConnection {
    *  parsed (a malformed entry is dropped, not the whole list). Rejects
    *  on forbidden / transport disconnect / timeout. */
   listConversations: () => Promise<ConversationSummary[]>;
+  /** Manual conversation close (issue #276): rides the same tombstone +
+   *  conversation_closed notification every hard-limit/GC closure
+   *  already uses — no new termination path. Resolves on server accept.
+   *  Rejects on forbidden / conversation_closed (idempotent double-close)
+   *  / unknown_conversation_id / transport disconnect / timeout; the
+   *  caller must re-fetch listConversations() to see the updated status
+   *  either way (no separate push). */
+  closeConversation: (conversationId: string) => Promise<void>;
   /** Requests the resume candidates under (host, cwd) (#22 phase-1);
    * resolves when the server accepts the relay. The candidate list arrives
    * separately via onSessions. Rejects like sendInstruction. */
@@ -3890,6 +3898,10 @@ export function connectKaoiro(
             reject(new Error(reason?.reason ?? "error")),
           )
           .receive("timeout", () => reject(new Error("timeout")));
+      }),
+    closeConversation: (conversationId) =>
+      pushAsync(channel, "close_conversation", {
+        conversation_id: conversationId,
       }),
     enumerateSessions: (hostId, cwd, engine) =>
       pushAsync(channel, "enumerate_sessions", {

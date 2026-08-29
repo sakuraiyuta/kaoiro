@@ -10,6 +10,23 @@ import {
 } from "../src/lib/settings.svelte";
 import type { ConversationSummary, KaoiroConnection } from "../src/lib/protocol";
 
+// jsdom does not implement HTMLDialogElement.showModal/close (measured
+// 2026-08-28, jsdom 29.1.1; same polyfill as modal.integration.test.ts).
+// The manual-close confirm dialog (issue #276) is a Modal.svelte instance,
+// so this file needs it too.
+if (
+  typeof HTMLDialogElement !== "undefined" &&
+  typeof HTMLDialogElement.prototype.showModal !== "function"
+) {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+    this.removeAttribute("open");
+    this.dispatchEvent(new Event("close"));
+  };
+}
+
 const mounted: object[] = [];
 
 beforeEach(() => {
@@ -48,9 +65,17 @@ async function renderDrawer(
 }
 
 /** issue #276: stub whose listConversations() resolves/rejects under test
- *  control (mirrors launchDefaults.integration.test.ts's makeConnection). */
-function makeConnection(list: () => Promise<ConversationSummary[]>) {
-  return { listConversations: vi.fn(list) } as unknown as KaoiroConnection;
+ *  control (mirrors launchDefaults.integration.test.ts's makeConnection).
+ *  `close` defaults to a resolving no-op so tests that don't exercise
+ *  manual close don't need to supply one. */
+function makeConnection(
+  list: () => Promise<ConversationSummary[]>,
+  close: (cid: string) => Promise<void> = () => Promise.resolve(),
+) {
+  return {
+    listConversations: vi.fn(list),
+    closeConversation: vi.fn(close),
+  } as unknown as KaoiroConnection;
 }
 
 // ふじ round-1 should-fix S2: selecting a checkbox by its position among
@@ -177,5 +202,146 @@ describe("SettingsDrawer", () => {
     expect(target.querySelector(".conv-status")?.textContent).toContain(
       "forbidden",
     );
+  });
+
+  // issue #276 manual close.
+  describe("manual close", () => {
+    it("open の会話にのみ閉じるボタンを表示する", async () => {
+      const conn = makeConnection(async () => [
+        {
+          conversationId: "c1",
+          participants: ["a", "b"],
+          turns: 1,
+          tokens: 10,
+          status: "open",
+          startedAt: null,
+        },
+        {
+          conversationId: "c2",
+          participants: ["c", "d"],
+          turns: 2,
+          tokens: 20,
+          status: "closed",
+          startedAt: null,
+        },
+      ]);
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      const items = target.querySelectorAll(".conv-list li");
+      expect(items[0]!.querySelector(".conv-close")).not.toBeNull();
+      expect(items[1]!.querySelector(".conv-close")).toBeNull();
+    });
+
+    it("閉じるボタン → 確認ダイアログ表示、キャンセルでは closeConversation を呼ばない", async () => {
+      const conn = makeConnection(async () => [
+        {
+          conversationId: "c1",
+          participants: ["a", "b"],
+          turns: 1,
+          tokens: 10,
+          status: "open",
+          startedAt: null,
+        },
+      ]);
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      target
+        .querySelector<HTMLButtonElement>(".conv-close")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      const dialog = document.querySelector("dialog");
+      expect(dialog).not.toBeNull();
+
+      const cancelButton = Array.from(
+        dialog!.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((b) => b.textContent?.includes("キャンセル"))!;
+      cancelButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      expect(document.querySelector("dialog")).toBeNull();
+      expect(conn.closeConversation).not.toHaveBeenCalled();
+    });
+
+    it("確認ダイアログの実行で closeConversation を呼び、一覧を再取得する", async () => {
+      let call = 0;
+      const conn = makeConnection(async () => {
+        call += 1;
+        const status = call === 1 ? "open" : "closed";
+        return [
+          {
+            conversationId: "c1",
+            participants: ["a", "b"],
+            turns: 1,
+            tokens: 10,
+            status,
+            startedAt: null,
+          },
+        ];
+      });
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      target
+        .querySelector<HTMLButtonElement>(".conv-close")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      const dialog = document.querySelector("dialog")!;
+      dialog
+        .querySelector<HTMLButtonElement>("button.danger")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await tick();
+
+      expect(conn.closeConversation).toHaveBeenCalledWith("c1");
+      expect(conn.listConversations).toHaveBeenCalledTimes(2);
+      expect(document.querySelector("dialog")).toBeNull();
+      expect(target.querySelector(".conv-meta")?.textContent).toContain(
+        "closed",
+      );
+    });
+
+    it("close 失敗時はダイアログにエラーを表示し、一覧は再取得しない", async () => {
+      const conn = makeConnection(
+        async () => [
+          {
+            conversationId: "c1",
+            participants: ["a", "b"],
+            turns: 1,
+            tokens: 10,
+            status: "open",
+            startedAt: null,
+          },
+        ],
+        () => Promise.reject(new Error("conversation_closed")),
+      );
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      target
+        .querySelector<HTMLButtonElement>(".conv-close")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      const dialog = document.querySelector("dialog")!;
+      dialog
+        .querySelector<HTMLButtonElement>("button.danger")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await tick();
+
+      expect(dialog.textContent).toContain("失敗しました");
+      expect(dialog.textContent).toContain("conversation_closed");
+      expect(conn.listConversations).toHaveBeenCalledTimes(1);
+    });
   });
 });

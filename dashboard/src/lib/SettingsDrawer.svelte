@@ -4,6 +4,7 @@
   // via updateSettings() (no separate save step, the value set is small).
   import { settings, updateSettings } from "./settings.svelte";
   import type { ConversationSummary, KaoiroConnection } from "./protocol";
+  import Modal from "./Modal.svelte";
 
   let {
     onClose,
@@ -47,6 +48,45 @@
       cancelled = true;
     };
   });
+
+  // Manual refresh (button) and post-close re-fetch share this — no
+  // cancelled-guard needed here (unlike the mount effect above): both
+  // are one-shot user-triggered calls, not a re-entrant effect that can
+  // race a stale reply against a fresher one.
+  function refreshConversations(): void {
+    if (!connection) return;
+    connection
+      .listConversations()
+      .then((list) => {
+        conversations = list;
+        conversationsError = null;
+      })
+      .catch((err: unknown) => {
+        conversationsError = err instanceof Error ? err.message : "error";
+      });
+  }
+
+  // issue #276 manual close: confirm via the shared Modal primitive
+  // (#232's focus-trap fix applies here too — director instruction to
+  // reuse it rather than window.confirm()).
+  let confirmCloseCid = $state<string | null>(null);
+  let closeError = $state<string | null>(null);
+  let closing = $state(false);
+
+  async function handleConfirmClose(): Promise<void> {
+    if (!connection || !confirmCloseCid) return;
+    closing = true;
+    closeError = null;
+    try {
+      await connection.closeConversation(confirmCloseCid);
+      confirmCloseCid = null;
+      refreshConversations();
+    } catch (err) {
+      closeError = err instanceof Error ? err.message : "error";
+    } finally {
+      closing = false;
+    }
+  }
 </script>
 
 <div
@@ -122,7 +162,17 @@
 
   {#if connection}
     <section class="conversations">
-      <h3>会話一覧</h3>
+      <div class="conversations-header">
+        <h3>会話一覧</h3>
+        <button
+          type="button"
+          class="refresh"
+          onclick={refreshConversations}
+          aria-label="会話一覧を更新"
+        >
+          更新
+        </button>
+      </div>
       {#if conversationsError}
         <p class="conv-status">取得に失敗しました({conversationsError})</p>
       {:else if conversations === null}
@@ -139,11 +189,57 @@
               <span class="conv-meta"
                 >{conv.turns} turns / {conv.status}</span
               >
+              {#if conv.status === "open"}
+                <button
+                  type="button"
+                  class="conv-close"
+                  onclick={() => (confirmCloseCid = conv.conversationId)}
+                >
+                  閉じる
+                </button>
+              {/if}
             </li>
           {/each}
         </ul>
       {/if}
     </section>
+  {/if}
+
+  {#if connection && confirmCloseCid}
+    <Modal
+      ariaLabel="会話を閉じる確認"
+      onClose={() => {
+        confirmCloseCid = null;
+        closeError = null;
+      }}
+    >
+      {#snippet children()}
+        <p>この会話を閉じますか?参加エージェントに通知されます。</p>
+        {#if closeError}
+          <p class="conv-status">失敗しました({closeError})</p>
+        {/if}
+        <div class="confirm-actions">
+          <button
+            type="button"
+            onclick={() => {
+              confirmCloseCid = null;
+              closeError = null;
+            }}
+            disabled={closing}
+          >
+            キャンセル
+          </button>
+          <button
+            type="button"
+            class="danger"
+            onclick={handleConfirmClose}
+            disabled={closing}
+          >
+            {closing ? "閉じています…" : "閉じる"}
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
   {/if}
 
   {#if onLogout}
@@ -284,10 +380,32 @@
   }
 
   /* issue #276: operator-facing conversation list. */
-  .conversations h3 {
+  .conversations-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
     margin: 0 0 0.4rem;
+  }
+
+  .conversations-header h3 {
+    margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
+  }
+
+  .refresh {
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.15rem 0.5rem;
+    cursor: pointer;
+  }
+
+  .refresh:hover {
+    color: var(--fg);
+    border-color: var(--fg-dim);
   }
 
   .conv-status {
@@ -323,5 +441,53 @@
 
   .conv-meta {
     color: var(--fg-dim);
+  }
+
+  .conv-close {
+    align-self: flex-end;
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.1rem 0.5rem;
+    cursor: pointer;
+  }
+
+  .conv-close:hover {
+    color: var(--fg);
+    border-color: var(--fg-dim);
+  }
+
+  .confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 1rem;
+  }
+
+  .confirm-actions button {
+    font-size: var(--fs-body-sm);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.35rem 0.8rem;
+    cursor: pointer;
+    color: var(--fg-dim);
+  }
+
+  .confirm-actions button:hover {
+    color: var(--fg);
+    border-color: var(--fg-dim);
+  }
+
+  .confirm-actions button.danger {
+    color: var(--danger, #c62828);
+    border-color: var(--danger, #c62828);
+  }
+
+  .confirm-actions button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 </style>

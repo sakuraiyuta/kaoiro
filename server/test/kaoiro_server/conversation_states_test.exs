@@ -758,4 +758,46 @@ defmodule KaoiroServer.ConversationStatesTest do
       assert cids == ["c1", "c2"]
     end
   end
+
+  describe "close_by_operator/1 (issue #276)" do
+    test "open な会話を close し、reason=:operator_closed の tombstone にする" do
+      name = start_tracker(:cs_close_open)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+
+      assert {:ok, agent_ids} = ConversationStates.close_by_operator("c", name)
+      assert Enum.sort(agent_ids) == ["a", "b"]
+
+      assert %{status: :closed, reason: :operator_closed} =
+               ConversationStates.get("c", name)
+    end
+
+    test "close 後の list_for_operator は status=closed のまま残る" do
+      name = start_tracker(:cs_close_list)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+      assert {:ok, _} = ConversationStates.close_by_operator("c", name)
+
+      assert [%{"conversation_id" => "c", "status" => "closed"}] =
+               ConversationStates.list_for_operator(name)
+    end
+
+    test "既に closed な会話への再 close は :conversation_closed で拒否する (冪等、crash しない)" do
+      name = start_tracker(:cs_close_twice)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)
+
+      assert :both_done =
+               ConversationStates.record_message("c", "b", "a", "y", 2, true, true, name)
+
+      assert {:error, :conversation_closed} = ConversationStates.close_by_operator("c", name)
+
+      # 拒否された close は tombstone の reason を書き換えない。
+      assert %{status: :closed, reason: :both_done} = ConversationStates.get("c", name)
+    end
+
+    test "存在しない conversation_id への close は :unknown_conversation_id を返す (crash しない)" do
+      name = start_tracker(:cs_close_unknown)
+
+      assert {:error, :unknown_conversation_id} =
+               ConversationStates.close_by_operator("no-such-cid", name)
+    end
+  end
 end

@@ -5807,6 +5807,75 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "close_conversation 経路 (issue #276, manual close)" do
+    test "viewer は forbidden" do
+      socket = join_as(:viewer)
+
+      ref = push(socket, "close_conversation", %{"conversation_id" => "c"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "operator の close は :ok を返し、両 participants へ conversation_closed 通知を broadcast する" do
+      cid = "gp.close-conv-#{System.unique_integer([:positive])}"
+      a = "gp.cc-a-#{System.unique_integer([:positive])}"
+      b = "gp.cc-b-#{System.unique_integer([:positive])}"
+      assert :ok = ConversationStates.record_message(cid, a, b, "hi", 1, false, true)
+
+      @endpoint.subscribe("wrapper:" <> a)
+      @endpoint.subscribe("wrapper:" <> b)
+
+      socket = join_as(:operator)
+      ref = push(socket, "close_conversation", %{"conversation_id" => cid})
+
+      assert_reply ref, :ok, %{}
+
+      # deliver_conversation_closed (issue #221 の GC 経路と同じ関数) が
+      # 各 participant の wrapper トピックへ synth envelope を broadcast
+      # する — kind=done / meta.done=true が wrapper 側の "server 発
+      # closed" 判定 (agent-common receiveInbound) の契約 (SynthEnvelope
+      # のモジュール doc)。
+      assert_broadcast "envelope", %{
+        "agent_id" => "server",
+        "payload" => %{"to" => ^a, "conversation_id" => ^cid, "kind" => "done"}
+      }
+
+      assert_broadcast "envelope", %{
+        "agent_id" => "server",
+        "payload" => %{"to" => ^b, "conversation_id" => ^cid, "kind" => "done"}
+      }
+
+      assert %{status: :closed, reason: :operator_closed} = ConversationStates.get(cid)
+    end
+
+    test "既に closed な会話への close は conversation_closed エラー (冪等)" do
+      cid = "gp.close-conv-twice-#{System.unique_integer([:positive])}"
+      assert :ok = ConversationStates.record_message(cid, "gp.a", "gp.b", "x", 1, true, true)
+
+      assert :both_done =
+               ConversationStates.record_message(cid, "gp.b", "gp.a", "y", 2, true, true)
+
+      socket = join_as(:operator)
+      ref = push(socket, "close_conversation", %{"conversation_id" => cid})
+
+      assert_reply ref, :error, %{reason: "conversation_closed"}
+    end
+
+    test "存在しない conversation_id への close は unknown_conversation_id" do
+      socket = join_as(:operator)
+      ref = push(socket, "close_conversation", %{"conversation_id" => "no-such-cid"})
+
+      assert_reply ref, :error, %{reason: "unknown_conversation_id"}
+    end
+
+    test "conversation_id 欠落は missing_conversation_id" do
+      socket = join_as(:operator)
+      ref = push(socket, "close_conversation", %{})
+
+      assert_reply ref, :error, %{reason: "missing_conversation_id"}
+    end
+  end
+
   # ふじ review 2026-08-05, should-fix 1: the pure-selection test above and
   # SessionPointers' own legacy-loader unit test cover the pieces
   # separately; this connects them — a REAL isolated SessionPointers

@@ -102,6 +102,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.ClientSocket
   alias KaoiroServerWeb.PeerConnectivity
+  alias KaoiroServerWeb.SynthEnvelope
 
   # Resource bound for an operator instruction; generous for prose,
   # far below the wrapper-side envelope cap.
@@ -209,7 +210,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    agent_busy agent_not_owned unsupported_session_reset
                    session_reset_pending reserved_session_command
                    invalid_mode missing_user_id invalid_user_id
-                   unknown_user revision_exhausted)a
+                   unknown_user revision_exhausted
+                   missing_conversation_id conversation_closed
+                   unknown_conversation_id)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -917,6 +920,31 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_in("list_conversations", payload, socket) do
     with :ok <- require_operator(socket, payload, "list_conversations") do
       {:reply, {:ok, %{"conversations" => ConversationStates.list_for_operator()}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Operator manual close (issue #276 decision): rides the SAME tombstone +
+  # conversation_closed notification every hard-limit/GC closure already
+  # uses — ConversationStates.close_by_operator/1 performs only the state
+  # transition and returns the participant set; delivering the notice is
+  # this handler's job, exactly mirroring how a hard-limit closure notifies
+  # from record_message/6's return value rather than from inside the
+  # GenServer. Same admin gate seam as list_conversations. Idempotent: a
+  # second close on an already-closed cid returns conversation_closed
+  # rather than sending a duplicate notice or crashing.
+  def handle_in("close_conversation", payload, socket) do
+    with :ok <- require_operator(socket, payload, "close_conversation"),
+         {:ok, cid} <- fetch_conversation_id(payload) do
+      case ConversationStates.close_by_operator(cid) do
+        {:ok, agent_ids} ->
+          SynthEnvelope.deliver_conversation_closed(cid, agent_ids, :operator_closed)
+          {:reply, :ok, socket}
+
+        {:error, reason} ->
+          {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+      end
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
@@ -2454,6 +2482,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   defp fetch_agent_id(_payload), do: {:error, :missing_agent_id}
+
+  # issue #276: no charset/existence check like fetch_agent_id above —
+  # conversation_id is a wrapper-allocated UUID with no server-side format
+  # contract (ConversationStates itself treats it as an opaque key), and
+  # ConversationStates.close_by_operator/1 already answers "unknown" via
+  # its own :unknown_conversation_id, so duplicating that lookup here
+  # would just be a second source of truth for the same answer.
+  defp fetch_conversation_id(%{"conversation_id" => cid})
+       when is_binary(cid) and cid != "" do
+    {:ok, cid}
+  end
+
+  defp fetch_conversation_id(_payload), do: {:error, :missing_conversation_id}
 
   # Same shape as fetch_agent_id/1 but also accepts agents present in the
   # restart-surviving AgentDirectory (ADR-0030) — restore / resume_session
