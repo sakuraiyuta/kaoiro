@@ -1519,7 +1519,7 @@
   <SettingsDrawer
     onClose={() => (showSettings = false)}
     onLogout={logout}
-    connection={connection ?? undefined}
+    connection={isOperator ? (connection ?? undefined) : undefined}
   />
 {/if}
 
