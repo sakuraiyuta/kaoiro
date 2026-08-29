@@ -89,6 +89,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.ClearWatermarks
+  alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
@@ -902,6 +903,20 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_in("launch_defaults", payload, socket) do
     with :ok <- require_operator(socket, payload, "launch_defaults") do
       {:reply, {:ok, %{"defaults" => launch_defaults()}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Operator-facing conversation list (issue #276, admin-only first cut
+  # decided 2026-08-29). Pure read-time query, like launch_defaults just
+  # above: no wrapper relay, no new store, no live push — ConversationStates
+  # already holds everything needed. The admin gate is the ONE seam this
+  # decision asks to keep isolated so #189's future per-pair permission
+  # model can replace it here without touching the view.
+  def handle_in("list_conversations", payload, socket) do
+    with :ok <- require_operator(socket, payload, "list_conversations") do
+      {:reply, {:ok, %{"conversations" => ConversationStates.list_for_operator()}}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end

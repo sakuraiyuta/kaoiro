@@ -1516,7 +1516,11 @@
 {/if}
 
 {#if showSettings}
-  <SettingsDrawer onClose={() => (showSettings = false)} onLogout={logout} />
+  <SettingsDrawer
+    onClose={() => (showSettings = false)}
+    onLogout={logout}
+    connection={connection ?? undefined}
+  />
 {/if}
 
 {#if personaDetailId !== null}

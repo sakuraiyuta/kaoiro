@@ -3,17 +3,50 @@
   // Slides in from the right; every change writes straight to localStorage
   // via updateSettings() (no separate save step, the value set is small).
   import { settings, updateSettings } from "./settings.svelte";
+  import type { ConversationSummary, KaoiroConnection } from "./protocol";
 
   let {
     onClose,
     onLogout = undefined,
+    connection = undefined,
   }: {
     onClose: () => void;
     /** Logout relay (phase-31 31-7): on smartphone the header hides its
      *  logout button, so the drawer carries the affordance. Rendered at
      *  every size (DOM stays common — ADR-0052 F6); omitted = no row. */
     onLogout?: () => void | Promise<void>;
+    /** issue #276 (admin-only first cut): when present, the drawer also
+     *  shows an operator-facing conversation list. Absent when the
+     *  caller has no live connection yet — every other row (local-only
+     *  settings) works without it. */
+    connection?: KaoiroConnection | undefined;
   } = $props();
+
+  // issue #276: fetched once per drawer open (no live push — mirrors
+  // getLaunchDefaults' pure read-time query shape). `cancelled` guards
+  // against a stale reply landing after the drawer closed and reopened
+  // (coding-languages.md「Async continuations own nothing after a
+  // suspension point」).
+  let conversations = $state<ConversationSummary[] | null>(null);
+  let conversationsError = $state<string | null>(null);
+
+  $effect(() => {
+    if (!connection) return;
+    let cancelled = false;
+    connection
+      .listConversations()
+      .then((list) => {
+        if (!cancelled) conversations = list;
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          conversationsError = err instanceof Error ? err.message : "error";
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
 </script>
 
 <div
@@ -86,6 +119,32 @@
     />
     エージェント詳細のログでツール呼び出しなどを非表示
   </label>
+
+  {#if connection}
+    <section class="conversations">
+      <h3>会話一覧</h3>
+      {#if conversationsError}
+        <p class="conv-status">取得に失敗しました({conversationsError})</p>
+      {:else if conversations === null}
+        <p class="conv-status">読み込み中…</p>
+      {:else if conversations.length === 0}
+        <p class="conv-status">開いている会話はありません</p>
+      {:else}
+        <ul class="conv-list">
+          {#each conversations as conv (conv.conversationId)}
+            <li>
+              <span class="conv-participants"
+                >{conv.participants.join(" ⇔ ")}</span
+              >
+              <span class="conv-meta"
+                >{conv.turns} turns / {conv.status}</span
+              >
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+  {/if}
 
   {#if onLogout}
     <button
@@ -222,5 +281,47 @@
   .logout:hover {
     color: var(--fg);
     border-color: var(--fg-dim);
+  }
+
+  /* issue #276: operator-facing conversation list. */
+  .conversations h3 {
+    margin: 0 0 0.4rem;
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+  }
+
+  .conv-status {
+    margin: 0;
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+  }
+
+  .conv-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    max-block-size: 12rem;
+    overflow-y: auto;
+  }
+
+  .conv-list li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    font-size: var(--fs-body-sm);
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+  }
+
+  .conv-participants {
+    color: var(--fg);
+  }
+
+  .conv-meta {
+    color: var(--fg-dim);
   }
 </style>

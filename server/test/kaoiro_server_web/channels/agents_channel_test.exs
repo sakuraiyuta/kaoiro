@@ -5770,6 +5770,43 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "list_conversations 経路 (issue #276, admin-only 一択)" do
+    test "viewer は forbidden" do
+      socket = join_as(:viewer)
+
+      ref = push(socket, "list_conversations", %{})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "operator は ConversationStates の内容を受け取る" do
+      cid = "gp.list-conv-#{System.unique_integer([:positive])}"
+
+      assert :ok =
+               ConversationStates.record_message(cid, "gp.lc-a", "gp.lc-b", "hi", 1, false, true)
+
+      socket = join_as(:operator)
+      ref = push(socket, "list_conversations", %{})
+
+      assert_reply ref, :ok, %{"conversations" => conversations}
+
+      assert %{
+               "conversation_id" => ^cid,
+               "participants" => ["gp.lc-a", "gp.lc-b"],
+               "status" => "open"
+             } = Enum.find(conversations, &(&1["conversation_id"] == cid))
+    end
+
+    test "admin も通る (issue #276 決定: admin 一択の許可ロール)" do
+      socket = join_as(:admin)
+
+      ref = push(socket, "list_conversations", %{})
+
+      assert_reply ref, :ok, %{"conversations" => conversations}
+      assert is_list(conversations)
+    end
+  end
+
   # ふじ review 2026-08-05, should-fix 1: the pure-selection test above and
   # SessionPointers' own legacy-loader unit test cover the pieces
   # separately; this connects them — a REAL isolated SessionPointers

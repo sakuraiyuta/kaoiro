@@ -698,4 +698,64 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert {:exceeded, :max_turns} =
              ConversationStates.record_message("c", "a", "b", "y", 2, false, true, name)
   end
+
+  describe "list_for_operator/1 (issue #276)" do
+    test "open conversation を participants/turns/tokens/status/started_at 付きで返す" do
+      name = start_tracker(:cs_list_open)
+
+      assert :ok =
+               ConversationStates.record_message("c1", "b", "a", "hello", 1, false, true, name)
+
+      assert [
+               %{
+                 "conversation_id" => "c1",
+                 "participants" => ["a", "b"],
+                 "turns" => 1,
+                 "tokens" => tokens,
+                 "status" => "open",
+                 "started_at" => started_at
+               }
+             ] = ConversationStates.list_for_operator(name)
+
+      assert tokens > 0
+      # ISO8601 の疎な形状チェック — 正確な時刻は clock 注入と無関係の
+      # DateTime.utc_now() 由来なのでテストは形状だけを固定する。
+      assert {:ok, _, _} = DateTime.from_iso8601(started_at)
+    end
+
+    test "closed tombstone は turns=last_turn、tokens/started_at は nil で返す (#177 の drop と整合)" do
+      name = start_tracker(:cs_list_closed, max_turns: 1)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+
+      assert {:exceeded, :max_turns} =
+               ConversationStates.record_message("c", "a", "b", "y", 2, false, true, name)
+
+      # last_turn は超過を検出したメッセージ自体もカウントした後の値
+      # (evaluate/5 は turns を先に加算してから max_turns 判定する) — 2。
+      assert [
+               %{
+                 "conversation_id" => "c",
+                 "participants" => ["a", "b"],
+                 "turns" => 2,
+                 "tokens" => nil,
+                 "status" => "closed",
+                 "started_at" => nil
+               }
+             ] = ConversationStates.list_for_operator(name)
+    end
+
+    test "複数会話を conversation_id 順を問わず全件返す" do
+      name = start_tracker(:cs_list_multi)
+      assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, false, true, name)
+      assert :ok = ConversationStates.record_message("c2", "a", "c", "y", 1, false, true, name)
+
+      cids =
+        name
+        |> ConversationStates.list_for_operator()
+        |> Enum.map(& &1["conversation_id"])
+        |> Enum.sort()
+
+      assert cids == ["c1", "c2"]
+    end
+  end
 end

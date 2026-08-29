@@ -1531,6 +1531,19 @@ export interface SpawnResult {
   reason?: string;
 }
 
+/** Operator-facing conversation-list entry (issue #276, admin-only first
+ *  cut). Wire shape from `ConversationStates.list_for_operator/1` — a
+ *  closed tombstone reports `tokens`/`startedAt` as `null` (dropped at
+ *  close server-side, not merely omitted from this projection). */
+export interface ConversationSummary {
+  conversationId: string;
+  participants: string[];
+  turns: number;
+  tokens: number | null;
+  status: "open" | "closed";
+  startedAt: string | null;
+}
+
 /** Canonical persona joined server-side against the CURRENT PersonaAssets
  *  manifest (issue #219 D19) — never a stored snapshot. `name` /
  *  `sprite_set` are present when the pack still resolves; absent
@@ -1903,6 +1916,12 @@ export interface KaoiroConnection {
    *  back to the model's own default_effort rather than block launch on
    *  this failing. */
   getLaunchDefaults: () => Promise<Record<string, string>>;
+  /** Operator-facing conversation list (issue #276, admin-only first
+   *  cut). Pure read-time query mirroring getLaunchDefaults — no push
+   *  event, the caller re-fetches on demand. Entries are defensively
+   *  parsed (a malformed entry is dropped, not the whole list). Rejects
+   *  on forbidden / transport disconnect / timeout. */
+  listConversations: () => Promise<ConversationSummary[]>;
   /** Requests the resume candidates under (host, cwd) (#22 phase-1);
    * resolves when the server accepts the relay. The candidate list arrives
    * separately via onSessions. Rejects like sendInstruction. */
@@ -2735,6 +2754,38 @@ function parseLaunchDefaults(raw: unknown): Record<string, string> {
     if (personaId !== "" && typeof effort === "string" && effort !== "") {
       out[personaId] = effort;
     }
+  }
+  return out;
+}
+
+/** Defensive parse of the list_conversations reply (issue #276):
+ *  fail-closed per entry — a malformed entry is dropped, not the whole
+ *  list. `tokens`/`started_at` are nullable on the wire (closed
+ *  tombstone), so `null` passes through as-is; anything else
+ *  non-numeric/non-string is treated as absent. */
+function parseConversationList(raw: unknown): ConversationSummary[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ConversationSummary[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const p = item as Record<string, unknown>;
+    if (
+      typeof p.conversation_id !== "string" ||
+      !Array.isArray(p.participants) ||
+      !p.participants.every((v) => typeof v === "string") ||
+      typeof p.turns !== "number" ||
+      (p.status !== "open" && p.status !== "closed")
+    ) {
+      continue;
+    }
+    out.push({
+      conversationId: p.conversation_id,
+      participants: p.participants as string[],
+      turns: p.turns,
+      tokens: typeof p.tokens === "number" ? p.tokens : null,
+      status: p.status,
+      startedAt: typeof p.started_at === "string" ? p.started_at : null,
+    });
   }
   return out;
 }
@@ -3823,6 +3874,17 @@ export function connectKaoiro(
         pushVersioned(channel, "launch_defaults", {})
           .receive("ok", (resp: { defaults?: unknown }) =>
             resolve(parseLaunchDefaults(resp?.defaults)),
+          )
+          .receive("error", (reason: { reason?: string } | undefined) =>
+            reject(new Error(reason?.reason ?? "error")),
+          )
+          .receive("timeout", () => reject(new Error("timeout")));
+      }),
+    listConversations: () =>
+      new Promise((resolve, reject) => {
+        pushVersioned(channel, "list_conversations", {})
+          .receive("ok", (resp: { conversations?: unknown }) =>
+            resolve(parseConversationList(resp?.conversations)),
           )
           .receive("error", (reason: { reason?: string } | undefined) =>
             reject(new Error(reason?.reason ?? "error")),

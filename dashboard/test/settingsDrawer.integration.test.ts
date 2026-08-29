@@ -8,6 +8,7 @@ import {
   settings,
   updateSettings,
 } from "../src/lib/settings.svelte";
+import type { ConversationSummary, KaoiroConnection } from "../src/lib/protocol";
 
 const mounted: object[] = [];
 
@@ -31,13 +32,25 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function renderDrawer(onClose = vi.fn()) {
+async function renderDrawer(
+  onClose = vi.fn(),
+  connection?: KaoiroConnection,
+) {
   const target = document.createElement("div");
   document.body.append(target);
-  const component = mount(SettingsDrawer, { target, props: { onClose } });
+  const component = mount(SettingsDrawer, {
+    target,
+    props: { onClose, connection },
+  });
   mounted.push(component);
   await tick();
   return { target, onClose };
+}
+
+/** issue #276: stub whose listConversations() resolves/rejects under test
+ *  control (mirrors launchDefaults.integration.test.ts's makeConnection). */
+function makeConnection(list: () => Promise<ConversationSummary[]>) {
+  return { listConversations: vi.fn(list) } as unknown as KaoiroConnection;
 }
 
 // ふじ round-1 should-fix S2: selecting a checkbox by its position among
@@ -113,5 +126,56 @@ describe("SettingsDrawer", () => {
       .querySelector<HTMLButtonElement>("button.close")!
       .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // issue #276 (admin-only first cut): connection 未指定なら会話一覧
+  // セクション自体を出さない — connection のない呼び出し元(未接続時)
+  // でも既存のローカル設定は変わらず使える。
+  it("connection 未指定なら会話一覧セクションを出さない", async () => {
+    const { target } = await renderDrawer();
+    expect(target.querySelector(".conversations")).toBeNull();
+  });
+
+  it("connection 指定時、取得した会話一覧を participants/turns/status で表示する", async () => {
+    const conn = makeConnection(async () => [
+      {
+        conversationId: "c1",
+        participants: ["gp.a", "gp.b"],
+        turns: 3,
+        tokens: 50,
+        status: "open",
+        startedAt: "2026-08-29T00:00:00Z",
+      },
+    ]);
+    const { target } = await renderDrawer(vi.fn(), conn);
+    await Promise.resolve();
+    await tick();
+
+    expect(conn.listConversations).toHaveBeenCalledTimes(1);
+    const item = target.querySelector(".conv-list li")!;
+    expect(item.textContent).toContain("gp.a ⇔ gp.b");
+    expect(item.textContent).toContain("3 turns / open");
+  });
+
+  it("会話が 0 件なら空である旨を表示する", async () => {
+    const conn = makeConnection(async () => []);
+    const { target } = await renderDrawer(vi.fn(), conn);
+    await Promise.resolve();
+    await tick();
+
+    expect(target.querySelector(".conv-status")?.textContent).toContain(
+      "開いている会話はありません",
+    );
+  });
+
+  it("取得失敗時はエラー文言を表示する", async () => {
+    const conn = makeConnection(() => Promise.reject(new Error("forbidden")));
+    const { target } = await renderDrawer(vi.fn(), conn);
+    await Promise.resolve();
+    await tick();
+
+    expect(target.querySelector(".conv-status")?.textContent).toContain(
+      "forbidden",
+    );
   });
 });

@@ -269,6 +269,11 @@ const PUSH_CASES: ReadonlyArray<{
     fire: (c) => c.getLaunchDefaults(),
   },
   {
+    method: "listConversations",
+    event: "list_conversations",
+    fire: (c) => c.listConversations(),
+  },
+  {
     method: "enumerateSessions",
     event: "enumerate_sessions",
     fire: (c) => c.enumerateSessions("hostA", "/workspace"),

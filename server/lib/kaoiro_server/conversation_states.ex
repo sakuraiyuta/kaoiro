@@ -9,7 +9,10 @@ defmodule KaoiroServer.ConversationStates do
   wrapper-supplied sequence distinct from `turns`, which merely counts
   accepted messages), the running token approximation (`byte_size(body)
   ÷ 3` per message — protocol-inter-agent spec, intentionally coarse),
-  the wallclock start time, the participating agent_id set, the set of
+  the monotonic start time (`started_at`, the TTL clock GC reads) and
+  its wallclock counterpart for display (`started_at_wall`, ISO8601,
+  issue #276 — monotonic time has no fixed epoch, so it cannot be shown
+  to an operator), the participating agent_id set, the set of
   agent_ids that have signalled `meta.done=true` so far, and the set
   already reported unreachable to their peers
   (`claim_unreachable_targets/3`, issue #131). `record_message/6`
@@ -58,8 +61,8 @@ defmodule KaoiroServer.ConversationStates do
   under the same key: `reason` (why it closed), `closed_at` (monotonic ms,
   the TTL clock), `agents` (the former participant set) and `last_turn`
   (the turn count reached at closing) are kept for observability and for
-  rejecting further sends; `tokens` / `started_at` / `done_by` /
-  `max_turn_number` / `notified_unreachable` are dropped — a closed
+  rejecting further sends; `tokens` / `started_at` / `started_at_wall` /
+  `done_by` / `max_turn_number` / `notified_unreachable` are dropped — a closed
   conversation never accepts another message, so nothing needs them again
   (`{:error, :conversation_closed}` is checked before `:stale_turn`, so a
   closed entry never needs its own turn bookkeeping). A tombstone still counts
@@ -217,6 +220,29 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @doc """
+  Returns a read-only operator-facing projection of EVERY conversation —
+  open and closed tombstones alike (issue #276: admin sees the whole
+  set, no per-pair filtering yet). String-keyed (wire shape, matches
+  `launch_defaults`'s convention) — each entry:
+  `%{"conversation_id", "participants" (sorted agent_id list), "turns",
+  "tokens", "status" ("open" | "closed"), "started_at" (ISO8601
+  wallclock)}`.
+
+  A closed tombstone drops `tokens` / `started_at_wall` at close time
+  (see the moduledoc), so those come back `nil` rather than the last
+  live value — the projection must not imply a closed conversation is
+  still accruing. `turns` for a closed entry is `last_turn`, the count
+  frozen at close.
+
+  No filtering by role/permission here — the caller (channel handler)
+  owns the admin-only gate (issue #276 decision: keep the check at one
+  seam so #189's future per-pair model replaces it in one place).
+  """
+  def list_for_operator(server \\ __MODULE__) do
+    GenServer.call(server, :list_for_operator)
+  end
+
+  @doc """
   Claims at most `limit` still-open conversations in which `agent_id` takes
   part and whose peers have not been told yet that this agent is
   unreachable, marks them as notified, and returns
@@ -360,6 +386,9 @@ defmodule KaoiroServer.ConversationStates do
               max_turn_number: 0,
               tokens: 0,
               started_at: now,
+              # Wallclock counterpart of `started_at` for operator display
+              # (issue #276) — `now` is monotonic ms with no fixed epoch.
+              started_at_wall: DateTime.utc_now() |> DateTime.to_iso8601(),
               agents: MapSet.new(),
               done_by: MapSet.new(),
               notified_unreachable: MapSet.new()
@@ -402,6 +431,22 @@ defmodule KaoiroServer.ConversationStates do
       |> Map.new(fn {agent_id, peers} -> {agent_id, peers |> MapSet.to_list() |> Enum.sort()} end)
 
     {:reply, index, state}
+  end
+
+  def handle_call(:list_for_operator, _from, state) do
+    projection =
+      for {cid, entry} <- state.conversations do
+        %{
+          "conversation_id" => cid,
+          "participants" => entry.agents |> MapSet.to_list() |> Enum.sort(),
+          "turns" => operator_turns(entry),
+          "tokens" => Map.get(entry, :tokens),
+          "status" => Atom.to_string(entry.status),
+          "started_at" => Map.get(entry, :started_at_wall)
+        }
+      end
+
+    {:reply, projection, state}
   end
 
   def handle_call({:claim_unreachable, agent_id, limit}, _from, state) do
@@ -585,6 +630,12 @@ defmodule KaoiroServer.ConversationStates do
       last_turn: entry.turns
     }
   end
+
+  # issue #276: an OPEN entry's live turn count keeps counting; a CLOSED
+  # tombstone has none (`turns` is dropped at close, see the moduledoc) —
+  # `last_turn` is the count frozen at that transition.
+  defp operator_turns(%{status: :closed, last_turn: last_turn}), do: last_turn
+  defp operator_turns(%{status: :open, turns: turns}), do: turns
 
   defp schedule_gc do
     Process.send_after(self(), :gc, @gc_interval_ms)
