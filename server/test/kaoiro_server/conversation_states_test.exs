@@ -757,6 +757,26 @@ defmodule KaoiroServer.ConversationStatesTest do
 
       assert cids == ["c1", "c2"]
     end
+
+    # issue #276 review follow-up (non-blocking, addressed): operator_turns/1's
+    # defensive catch-all. This module never actually produces a third
+    # `status` value today (see close_entry/3 and the entry-creation literal
+    # in handle_call({:record, ...})) — this test forces the unreachable
+    # shape via :sys.replace_state to pin the catch-all itself, since the
+    # public API cannot construct it.
+    test "未知の status 値でも list_for_operator は crash せず turns=0 を返す (防御的 catch-all)" do
+      name = start_tracker(:cs_list_unknown_status)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+
+      pid = Process.whereis(name)
+
+      :sys.replace_state(pid, fn state ->
+        put_in(state.conversations["c"].status, :some_future_status)
+      end)
+
+      assert [%{"conversation_id" => "c", "turns" => 0}] =
+               ConversationStates.list_for_operator(name)
+    end
   end
 
   describe "close_by_operator/1 (issue #276)" do

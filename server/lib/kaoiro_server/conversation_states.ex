@@ -682,6 +682,28 @@ defmodule KaoiroServer.ConversationStates do
   defp operator_turns(%{status: :closed, last_turn: last_turn}), do: last_turn
   defp operator_turns(%{status: :open, turns: turns}), do: turns
 
+  # Defensive catch-all (issue #276 review follow-up, non-blocking).
+  # Today this module only ever produces :open / :closed (see
+  # close_entry/3 and the entry-creation literal in
+  # handle_call({:record, ...})), so this clause is currently
+  # unreachable. Kept anyway because list_for_operator/1 folds this
+  # function over EVERY tracked conversation in one pass — a future
+  # status value reaching here without this function being updated
+  # would otherwise raise FunctionClauseError mid-fold, crashing this
+  # singleton GenServer and, being in-memory only (moduledoc), losing
+  # every OTHER agent's still-tracked conversation for the sake of one
+  # unrecognised entry. `0` is a display-only placeholder for "turn
+  # count unknown", not a claim about the real count; the warning
+  # surfaces the gap so it gets fixed rather than silently masked.
+  defp operator_turns(entry) do
+    Logger.warning(
+      "conversation_states: operator_turns saw unrecognised status " <>
+        inspect(Map.get(entry, :status))
+    )
+
+    0
+  end
+
   defp schedule_gc do
     Process.send_after(self(), :gc, @gc_interval_ms)
   end
