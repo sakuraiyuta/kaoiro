@@ -771,5 +771,203 @@ describe("SettingsDrawer", () => {
       expect(document.querySelector('dialog[aria-label="会話を閉じる確認"]')).not.toBeNull();
       expect(conn.listConversations).toHaveBeenCalledTimes(2);
     });
+
+    // issue #277 (advisory carried over from issue #276 round4, ふじ
+    // 判定/こはく同意): the effect cleanup that resets conversations/
+    // error on a connection-identity change previously left the confirm
+    // modal's own state (confirmCloseTarget/closeError/closing)
+    // untouched -- pins that a connection change now closes the confirm
+    // dialog outright rather than leaving it pointing at a row from the
+    // PREVIOUS generation.
+    describe("connection 世代変更時のガード (issue #277)", () => {
+      it("確認ダイアログを開いたまま connection が離脱→復帰すると、旧 target のまま再表示されない", async () => {
+        // Two DISTINCT rows across the two connections -- if the confirm
+        // modal reappears with c1 (the STALE target) once connB comes
+        // back, that is exactly the "旧 target で再表示される" defect
+        // こはく described. A weaker version of this test that only
+        // asserts "hidden while connection is undefined" would pass even
+        // WITHOUT the fix, since `{#if connection && confirmCloseTarget}`
+        // already hides it whenever connection alone is falsy -- the
+        // return-to-truthy half is what actually distinguishes the fix.
+        const connA = makeConnection(async () => [
+          {
+            conversationId: "c1",
+            participants: ["a", "b"],
+            turns: 1,
+            tokens: 10,
+            status: "open",
+            startedAt: null,
+          },
+        ]);
+        const connB = makeConnection(async () => [
+          {
+            conversationId: "c2",
+            participants: ["c", "d"],
+            turns: 1,
+            tokens: 10,
+            status: "open",
+            startedAt: null,
+          },
+        ]);
+        const target = document.createElement("div");
+        document.body.append(target);
+        const props = makeReactiveSettingsDrawerProps({
+          onClose: vi.fn(),
+          connection: connA,
+        });
+        const component = mount(SettingsDrawer, { target, props });
+        mounted.push(component);
+        await Promise.resolve();
+        await tick();
+
+        target
+          .querySelector<HTMLButtonElement>(".conv-close")!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await tick();
+        expect(
+          document.querySelector('dialog[aria-label="会話を閉じる確認"]')!
+            .textContent,
+        ).toContain("cid:c1");
+
+        // Connection lost (e.g. isOperator flap on rejoin) -- the effect
+        // cleanup fires.
+        props.connection = undefined;
+        await tick();
+        expect(
+          document.querySelector('dialog[aria-label="会話を閉じる確認"]'),
+        ).toBeNull();
+
+        // Connection comes back as a DIFFERENT generation (connB) before
+        // the operator does anything else. Without the cleanup resetting
+        // confirmCloseTarget, it would still hold row c1 and the modal
+        // would flash back into view with that stale target.
+        props.connection = connB;
+        await Promise.resolve();
+        await tick();
+
+        expect(
+          document.querySelector('dialog[aria-label="会話を閉じる確認"]'),
+        ).toBeNull();
+      });
+
+      // issue #277: pins the handleConfirmClose half of the same guard --
+      // a close still in flight for the OLD generation must not clobber
+      // a DIFFERENT close already started in the NEW generation once the
+      // stale promise resolves.
+      it("旧 generation の close 結果が新 generation の close 中の state を巻き戻さない", async () => {
+        const rowA: ConversationSummary = {
+          conversationId: "c-a",
+          participants: ["a", "b"],
+          turns: 1,
+          tokens: 10,
+          status: "open",
+          startedAt: null,
+        };
+        const rowB: ConversationSummary = {
+          conversationId: "c-b",
+          participants: ["c", "d"],
+          turns: 1,
+          tokens: 10,
+          status: "open",
+          startedAt: null,
+        };
+
+        let resolveCloseA: (() => void) | null = null;
+        const connA = makeConnection(
+          async () => [rowA],
+          () => new Promise<void>((resolve) => (resolveCloseA = resolve)),
+        );
+        let resolveCloseB: (() => void) | null = null;
+        const connB = makeConnection(
+          async () => [rowB],
+          () => new Promise<void>((resolve) => (resolveCloseB = resolve)),
+        );
+
+        const target = document.createElement("div");
+        document.body.append(target);
+        const props = makeReactiveSettingsDrawerProps({
+          onClose: vi.fn(),
+          connection: connA,
+        });
+        const component = mount(SettingsDrawer, { target, props });
+        mounted.push(component);
+        await Promise.resolve();
+        await tick();
+
+        // Generation A: open the confirm dialog and start closing --
+        // never resolves yet.
+        target
+          .querySelector<HTMLButtonElement>(".conv-close")!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await tick();
+        document
+          .querySelector<HTMLButtonElement>(
+            'dialog[aria-label="会話を閉じる確認"] button.danger',
+          )!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await tick();
+        expect(resolveCloseA).not.toBeNull();
+
+        // Connection changes to generation B -- the cleanup resets the
+        // confirm-modal state; connA's close is still in flight.
+        props.connection = connB;
+        await Promise.resolve();
+        await tick();
+        expect(
+          document.querySelector('dialog[aria-label="会話を閉じる確認"]'),
+        ).toBeNull();
+
+        // Generation B: open ITS OWN confirm dialog and start closing --
+        // also never resolves yet.
+        await Promise.resolve();
+        await tick();
+        target
+          .querySelector<HTMLButtonElement>(".conv-close")!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await tick();
+        document
+          .querySelector<HTMLButtonElement>(
+            'dialog[aria-label="会話を閉じる確認"] button.danger',
+          )!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await tick();
+        expect(resolveCloseB).not.toBeNull();
+
+        const dialogB = document.querySelector(
+          'dialog[aria-label="会話を閉じる確認"]',
+        )!;
+        expect(
+          dialogB.querySelector<HTMLButtonElement>("button.danger")!.disabled,
+        ).toBe(true);
+
+        // The STALE generation-A close now resolves. Without the guard,
+        // its `finally` block would set closing=false and re-fetch on
+        // top of generation B's still-in-flight close.
+        resolveCloseA!();
+        await Promise.resolve();
+        await Promise.resolve();
+        await tick();
+
+        // Generation B's close must still be reported as in-flight --
+        // unaffected by the stale generation-A resolution.
+        expect(
+          dialogB.querySelector<HTMLButtonElement>("button.danger")!.disabled,
+        ).toBe(true);
+        expect(
+          document.querySelector('dialog[aria-label="会話を閉じる確認"]'),
+        ).not.toBeNull();
+
+        // Generation B's own close now resolves -- THIS is what should
+        // close the dialog.
+        resolveCloseB!();
+        await Promise.resolve();
+        await Promise.resolve();
+        await tick();
+
+        expect(
+          document.querySelector('dialog[aria-label="会話を閉じる確認"]'),
+        ).toBeNull();
+      });
+    });
   });
 });

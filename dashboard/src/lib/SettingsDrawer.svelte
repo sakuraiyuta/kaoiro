@@ -75,10 +75,22 @@
   // there either). Bumping refreshSeq unconditionally on every effect
   // teardown — re-run AND unmount alike — closes both: whatever was
   // in flight when this run started is invalidated the moment it ends.
+  // issue #277 (こはく引き継ぎ advisory, issue #276 round4 ふじ判定):
+  // distinct from `refreshSeq` on purpose. refreshSeq bumps on EVERY
+  // listConversations() call (mount / refresh button / post-close
+  // re-fetch), not just a connection-identity change — reusing it to
+  // guard handleConfirmClose's continuation would also invalidate a
+  // close still in flight merely because the operator clicked refresh,
+  // which is not the race this guards against. connectionGeneration
+  // bumps ONLY in the effect cleanup below (a genuine connection-identity
+  // change: reconnect, role-flap, or unmount).
+  let connectionGeneration = 0;
+
   $effect(() => {
     if (connection) refreshConversations();
     return () => {
       refreshSeq += 1;
+      connectionGeneration += 1;
       // issue #276 review follow-up (こはく advisory, round4): the seq
       // bump above invalidates an in-flight REPLY, but leaves whatever
       // is already RENDERED alone. A connection-identity change (e.g.
@@ -92,6 +104,22 @@
       // visible while refreshing" behaviour.
       conversations = null;
       conversationsError = null;
+      // issue #277 (advisory carried over from issue #276 round4, ふじ
+      // 判定/こはく同意): the reset above missed the confirm-modal's OWN
+      // state. Without this, a connection-identity change while the
+      // confirm dialog is open (or a close is in flight) left
+      // confirmCloseTarget/closeError/closing pointing at the PREVIOUS
+      // generation's row — the modal would flash back into view with a
+      // stale target once the connection came back, or a close result
+      // from the old generation could land on the new one (see
+      // handleConfirmClose's own generation guard below for that half).
+      // Resetting here closes the modal outright on any generation
+      // change, matching how the conversations list itself resets to a
+      // loading state rather than silently carrying stale content across
+      // generations.
+      confirmCloseTarget = null;
+      closeError = null;
+      closing = false;
     };
   });
 
@@ -112,21 +140,38 @@
 
   async function handleConfirmClose(): Promise<void> {
     if (!connection || !confirmCloseTarget) return;
+    // issue #277 (advisory carried over from issue #276 round4, ふじ
+    // 判定/こはく同意): captured before the await, checked after —
+    // if a connection-identity change happens WHILE closeConversation()
+    // is in flight, the effect cleanup above has already reset
+    // confirmCloseTarget/closeError/closing to their fresh-generation
+    // defaults (and likely started a brand-new confirm interaction). This
+    // continuation must not then write a stale generation's result back
+    // over that: a rejection/success from generation N landing after
+    // generation N+1 has already started must be a no-op here, the same
+    // way refreshConversations()'s own seq guard drops a stale reply.
+    const generation = connectionGeneration;
     closing = true;
     closeError = null;
     try {
       await connection.closeConversation(confirmCloseTarget.conversationId);
-      confirmCloseTarget = null;
+      if (generation === connectionGeneration) {
+        confirmCloseTarget = null;
+      }
     } catch (err) {
-      closeError = err instanceof Error ? err.message : "error";
+      if (generation === connectionGeneration) {
+        closeError = err instanceof Error ? err.message : "error";
+      }
     } finally {
-      closing = false;
-      // Re-fetch either way (closeConversation's own doc contract, ふじ
-      // review follow-up): a rejection can mean someone else already
-      // closed it (conversation_closed) or TTL beat us to it — the row
-      // would otherwise sit stale at status=open forever. closeError
-      // stays visible; this only refreshes the list behind it.
-      refreshConversations();
+      if (generation === connectionGeneration) {
+        closing = false;
+        // Re-fetch either way (closeConversation's own doc contract, ふじ
+        // review follow-up): a rejection can mean someone else already
+        // closed it (conversation_closed) or TTL beat us to it — the row
+        // would otherwise sit stale at status=open forever. closeError
+        // stays visible; this only refreshes the list behind it.
+        refreshConversations();
+      }
     }
   }
 
