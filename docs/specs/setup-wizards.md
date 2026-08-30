@@ -1,163 +1,177 @@
 ---
-title: セットアップウィザード(設定 / env 生成)
-description: server の .env と runner の設定(runner.config.json / runner.env)を一問一答で生成する対話ウィザードの仕様。
+title: Setup wizards (configuration / env generation)
+description: Specification for interactive question-and-answer wizards that generate the server .env and runner configuration (runner.config.json / runner.env).
 status: accepted
 last_updated: 2026-07-27
 related: [protocol, threat-model]
 ---
 
-# セットアップウィザード(設定 / env 生成)
+# Setup wizards (configuration / env generation)
 
 ## Purpose
 
-トークンや接続設定を手書きする初期セットアップは見づらく、追加・修正もしづらい。
-一問一答の対話ウィザードで妥当な設定ファイルを生成し、手間と書き間違い(特に
-fail-closed なクライアント認証の設定漏れ)を減らす。
+Initial setup by hand-writing tokens and connection settings is hard to read,
+add, and revise. Interactive question-and-answer wizards generate valid
+configuration files to reduce effort and transcription mistakes, especially
+omitted fail-closed client-authentication settings.
 
-配備手順書([#137](https://github.com/sakuraiyuta/kaoiro/issues/137))が
-**手動手順の正本**で、ウィザードは**その自動化**という関係にする。ウィザードは
-手順書の内容を再説明せず、生成した設定と「次にやること」だけを出力する。
+The deployment guide ([#137](https://github.com/sakuraiyuta/kaoiro/issues/137))
+is the **source of truth for manual steps**; wizards are **its automation**.
+They do not restate the guide, only output generated configuration and “next
+steps.”
 
-## ウィザードは 2 本
+## Two wizards
 
-生成物も配置も別系統で、相互に独立して動く。
+Their artifacts and locations are separate, and they operate independently.
 
-| ウィザード | 起動 | 生成物 | 配置 |
+| Wizard | Invocation | Artifact | Location |
 |---|---|---|---|
-| server env | `mix kaoiro.env` | `.env` | server 側 |
-| runner 設定 | `deploy/kaoiro-runner-setup.sh` | `runner.config.json` / `runner.env` | 各エージェントホスト |
+| server env | `mix kaoiro.env` | `.env` | server side |
+| runner configuration | `deploy/kaoiro-runner-setup.sh` | `runner.config.json` / `runner.env` | each agent host |
 
-実装形態が分かれるのは配布形態の違いから。server は Elixir 環境で動かすので mix
-task にできるが、runner は tarball 配布([ADR-0018](../adr/0018-runner-distribution.md)
-2026-07-25 改訂)で **配布先に mix も pnpm も無い**ため Node 実装
-(`runner/src/setup.ts`)+ 同梱シムにする。
+Their implementation forms differ because their distribution forms differ. The
+server runs in an Elixir environment and can use a Mix task; the runner is
+distributed as a tarball ([ADR-0018](../adr/0018-runner-distribution.md), revised
+2026-07-25), whose destination has **neither Mix nor pnpm**, so it uses a Node
+implementation (`runner/src/setup.ts`) plus a bundled shim.
 
-## 共通方針
+## Common policy
 
-- **トークン**: 各トークンは「手入力 / 自動生成」を選ばせる。自動生成は **32
-  バイトの hex**(`openssl rand -hex 32` と同じ形。実装は Node の
-  `crypto.randomBytes` / Erlang の `:crypto.strong_rand_bytes` で、openssl バイナリ
-  に依存しない)。
-- **既存ファイル**: 生成先が既にある場合は上書き前に確認する。断ったファイルは
-  内容を保持し、どれを残したかを結果に出す。
-- **独立運用**: 2 本の間でトークンの受け渡し連携はしない。runner の
-  `KAOIRO_RUNNER_TOKEN` と server の `KAOIRO_RUNNER_TOKENS` は同じトークンを共有
-  するため、「片方で生成 → もう片方へ貼る」運用をウィザードが案内する(自動連携は
-  スコープ外)。
-- **対話専用**: 非対話セッションでは起動を拒否する。systemd / launchd から
-  呼ばれた場合に TTY が無いまま無応答で止まる事故を防ぐため、runner 側は
-  `process.stdin.isTTY` を検査して exit 78、server 側は stdin が閉じていれば
-  `Mix.raise` で中断する。無人配備向けのフラグ指定は
-  [#141](https://github.com/sakuraiyuta/kaoiro/issues/141) で扱う。
-- **初回起動での自動起動はしない**。設定が無いときの起動シムは exit 78
-  (`EX_CONFIG`)で止まり、**ウィザードのコマンドを案内する**に留める(上記の
-  非対話事故を避けるため。[ADR-0018](../adr/0018-runner-distribution.md) の
-  「初回起動でウィザードを自動起動」はこの判断で上書きする)。
+- **Tokens**: For every token, choose “manual entry / automatic generation.”
+  Automatic generation is **32-byte hex** (the same form as
+  `openssl rand -hex 32`; implemented with Node's `crypto.randomBytes` or
+  Erlang's `:crypto.strong_rand_bytes`, with no dependency on an openssl binary).
+- **Existing files**: Confirm before overwriting an existing destination. Keep
+  files whose overwrite is declined and report which were retained.
+- **Independent operation**: Do not automate token handoff between the two
+  wizards. Since the runner's `KAOIRO_RUNNER_TOKEN` and the server's
+  `KAOIRO_RUNNER_TOKENS` share the same token, the wizard guides “generate in one
+  → paste into the other” operation (automatic linkage is out of scope).
+- **Interactive only**: Refuse to run in a non-interactive session. To avoid
+  silently blocking without a TTY when called by systemd / launchd, the runner
+  checks `process.stdin.isTTY` and exits 78; the server aborts with `Mix.raise`
+  if stdin is closed. Flag-driven unattended deployment is handled in
+  [#141](https://github.com/sakuraiyuta/kaoiro/issues/141).
+- **Do not launch automatically on first run**. When configuration is absent,
+  the launch shim exits 78 (`EX_CONFIG`) and only **directs the user to the
+  wizard command** (avoiding the non-interactive failure above). This overrides
+  [ADR-0018](../adr/0018-runner-distribution.md)'s “automatically launch the
+  wizard on first run” decision.
 
-## server env ウィザード(`mix kaoiro.env`)
+## Server env wizard (`mix kaoiro.env`)
 
-生成する env 名・意味は `server/config/runtime.exs` と `server/.env.example` に
-従う。`.env` は docker compose の `env_file`(`server/docker-compose.yaml`)が読む
-正本。`mix phx.server` 単体起動では `set -a && . ./.env && set +a` で読み込む
-(専用の `export` スニペットは出さない — 正本を 2 つにしないため)。
+Generated env names and meanings follow `server/config/runtime.exs` and
+`server/.env.example`. `.env` is the source of truth read by Docker Compose's
+`env_file` (`server/docker-compose.yaml`). For a standalone `mix phx.server`,
+load it with `set -a && . ./.env && set +a` (do not emit a separate `export`
+snippet, to avoid two sources of truth).
 
-| 項目 | env | 必須 | 備考 |
+| Item | env | Required | Notes |
 |---|---|---|---|
-| シークレットキー | `SECRET_KEY_BASE` | 本番必須 | 64 文字 base64。`mix phx.gen.secret` と同じ生成(32 バイト hex では短い) |
-| ホスト名 | `PHX_HOST` | 本番必須 | 未設定は起動時 raise(fail-fast、issue #134) |
-| ポート | `PORT` | 任意 | 既定 4000 |
-| bind IP | `KAOIRO_BIND_IP` | 任意 | `:prod`(release)限定。既定 = 全 IF。dev は常に loopback 固定(issue #134) |
-| クライアント認証 | `KAOIRO_CLIENT_TOKENS` | 実質必須 | `token:role` の複数。role = `operator` / `viewer`。未設定で全クライアント拒否(fail-closed) |
-| wrapper 認証 | `KAOIRO_WRAPPER_TOKENS` | 公開時必須 | `agent_id:token` の複数(client と順序が逆) |
-| runner 認証 | `KAOIRO_RUNNER_TOKENS` | 公開時必須 | `host_id:token` の複数([ADR-0023](../adr/0023-host-runner-architecture.md)) |
-| OAuth 個人認証 | `KAOIRO_OAUTH_*` / `KAOIRO_OAUTH_ALLOWLIST_PATH` | 任意 | Google / GitHub / Nextcloud。詳細は[配備手順 1.6](deployment.md) |
-| 立ち絵ディレクトリ | `KAOIRO_PERSONA_DIR` | 任意 | コンテナ内パス |
-| footer ディレクトリ | `KAOIRO_FOOTER_DIR` | 任意 | 質問せず comment hint を出す |
-| persona cache dir | `KAOIRO_PERSONA_CACHE_DIR` | 任意 | comment hint を出す |
+| Secret key | `SECRET_KEY_BASE` | Required in production | 64-character base64. Same generation as `mix phx.gen.secret` (32-byte hex is too short). |
+| Hostname | `PHX_HOST` | Required in production | Missing value raises on start (fail-fast, issue #134). |
+| Port | `PORT` | Optional | Default: 4000. |
+| Bind IP | `KAOIRO_BIND_IP` | Optional | `:prod` (release) only. Default: all interfaces. Dev always fixes loopback (issue #134). |
+| Client authentication | `KAOIRO_CLIENT_TOKENS` | Effectively required | Multiple `token:role` values. role = `operator` / `viewer`. Missing value rejects all clients (fail-closed). |
+| Wrapper authentication | `KAOIRO_WRAPPER_TOKENS` | Required when exposed | Multiple `agent_id:token` values (reverse order of client tokens). |
+| Runner authentication | `KAOIRO_RUNNER_TOKENS` | Required when exposed | Multiple `host_id:token` values ([ADR-0023](../adr/0023-host-runner-architecture.md)). |
+| OAuth identity authentication | `KAOIRO_OAUTH_*` / `KAOIRO_OAUTH_ALLOWLIST_PATH` | Optional | Google / GitHub / Nextcloud. Details: [deployment guide 1.6](deployment.md). |
+| Standing-illustration directory | `KAOIRO_PERSONA_DIR` | Optional | Path within the container. |
+| Footer directory | `KAOIRO_FOOTER_DIR` | Optional | Emits a comment hint without asking. |
+| Persona cache directory | `KAOIRO_PERSONA_CACHE_DIR` | Optional | Emits a comment hint. |
 
-- トークン 3 種は「追加するか」「もう 1 件追加するか」を繰り返し聞いて複数
-  エントリを組み立てる。prod では 3 種すべて必須(未設定は接続拒否、issue #133)。
-- **DETS パス 9 種は聞かない**。同梱 `docker-compose.yaml` が `environment:` で
-  設定済みで、compose 外運用のときだけ必要になる。生成ファイルにはコメントとして
-  残し、意味と一覧は配備手順書(#137)に委ねる。
-- `KAOIRO_FOOTER_DIR` / `KAOIRO_PERSONA_CACHE_DIR` も質問項目を増やさない。
-  `mix kaoiro.env` は未設定時の挙動と compose の設定例を comment hint として
-  render する。質問なしで既定の設定を保ちつつ、必要な運用導線を示す。
-- 収集しなかった任意項目は**空代入ではなくコメント行**で出す(未設定と空文字の
-  取り違えを防ぐ)。
-- 既存の質問の後で **「OAuth ログインを設定しますか?」** を既定 No で尋ねる。No
-  なら OAuth 用の env / allowlist / 次の手順は出さず、従来の生成物と案内を保つ。
-- Yes のときは Google / GitHub / Nextcloud を個別に有効化するか尋ねる。有効な
-  provider は provider console で発行した client ID / client secret を**手入力**する
-  (自動生成しない)。Nextcloud は base URL も必須。すべて無効なら OAuth 設定なしとして
-  扱う。secret は入力後に再表示しない。
-- 1 provider 以上を有効にしたときは、`.env` と同じ server ディレクトリに
-  `oauth-allowlist.txt` を書く。書式コメントを添え、少なくとも 1 件の
-  `provider:identifier[:role]` (role 省略時は viewer) を入力させる。空・欠落の
-  allowlist は OAuth ログインを全拒否する fail-closed であることを入力時に表示する。
-  `.env` と allowlist はともに 0600 で生成し、既存 allowlist は `.env` と同じく
-  上書き確認を行う。
-- 有効 provider のみ `KAOIRO_OAUTH_*` を `.env` に書き、
-  `KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt` を設定する。compose
-  では `docker-compose.yaml` の `volumes:` に
-  `- ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro` を追加するよう案内する。
-  compose を使わない単体起動では `KAOIRO_OAUTH_ALLOWLIST_PATH` を allowlist の実ファイル
-  パスへ書き換える。
-  provider console の登録は配備手順 1.6 を参照する。Google は localhost 以外の
-  plain-HTTP 配備では使えない。
+- For each of the three token types, repeatedly ask “add one?” and “add another?”
+  to build multiple entries. In production, all three are required (missing
+  values reject connections, issue #133).
+- **Do not ask for the nine DETS paths**. The bundled `docker-compose.yaml`
+  already sets them under `environment:`; they are needed only outside Compose.
+  Keep them as comments in generated files and defer their meaning and inventory
+  to the deployment guide (#137).
+- Do not add questions for `KAOIRO_FOOTER_DIR` or `KAOIRO_PERSONA_CACHE_DIR`.
+  `mix kaoiro.env` renders their unset behavior and Compose configuration example
+  as comment hints, preserving defaults while presenting necessary operational
+  guidance without questions.
+- Emit optional fields not collected as **comment lines, not empty assignments**
+  (preventing confusion between unset and empty strings).
+- After the existing questions, ask **“Configure OAuth login?”**, defaulting to
+  No. On No, emit no OAuth env, allowlist, or next steps, preserving prior
+  artifacts and guidance.
+- On Yes, ask whether to enable Google / GitHub / Nextcloud individually. For an
+  enabled provider, **manually enter** the client ID / client secret issued by
+  its provider console (do not generate them). Nextcloud also requires its base
+  URL. Treat all-disabled as no OAuth configuration. Never redisplay a secret
+  after entry.
+- When one or more providers are enabled, write `oauth-allowlist.txt` in the
+  same server directory as `.env`. Include a format comment and require at
+  least one `provider:identifier[:role]` (viewer when role is omitted). Show
+  during entry that an empty or missing allowlist fail-closes all OAuth logins.
+  Generate both `.env` and the allowlist at 0600, and confirm before overwriting
+  an existing allowlist as for `.env`.
+- Write `KAOIRO_OAUTH_*` only for enabled providers, and set
+  `KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt`. For Compose,
+  direct the user to add
+  `- ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro` under
+  `docker-compose.yaml`'s `volumes:`. For standalone operation outside Compose,
+  rewrite `KAOIRO_OAUTH_ALLOWLIST_PATH` to the allowlist's actual path. For
+  provider-console registration, see deployment guide 1.6. Google cannot be
+  used for plain-HTTP deployments except on localhost.
 
-## runner 設定ウィザード(`deploy/kaoiro-runner-setup.sh`)
+## Runner configuration wizard (`deploy/kaoiro-runner-setup.sh`)
 
-生成物のスキーマ・検証は runner 側のローダ(`runner/src/config.ts` の
-`parseRunnerConfig()`)に従う。ウィザードは書き出す前に必ずローダを通し、
-**runner が起動時に reject する内容を生成し得ない**ようにする。
+Artifact schema and validation follow the runner-side loader
+(`parseRunnerConfig()` in `runner/src/config.ts`). Before writing, the wizard
+always runs the loader so it **cannot generate content the runner rejects at
+startup**.
 
-| 項目 | 生成先 | 必須 | 既定 / 制約 |
+| Item | Destination | Required | Default / constraint |
 |---|---|---|---|
-| Host ID | `runner.config.json` `host_id` | 必須 | `^[A-Za-z0-9._-]+$`(チャネル topic に載る) |
-| Server URL | 同 `server_url` | 必須 | `ws://` または `wss://`。prod は `force_ssl` により `wss://` 必須 |
-| 起動許可 cwd | 同 `cwd_allowlist` | 必須 | 絶対パスを 1 件以上。空行で入力終了 |
-| capabilities | 同 `capabilities` | 任意 | `claude-code` / `codex` を個別に可否。全 off なら `claude-code` に落とす |
-| Codex auth mode | 同 `codex.auth_mode` | 任意 | capabilities に codex を含む場合のみ。明示すると `codex doctor` 起動を避けられる(phase-24) |
-| runner トークン | `runner.env` の `KAOIRO_RUNNER_TOKEN` | 公開時必須 | 手入力 / 自動生成。**config JSON には書かない** |
-| node パス | 同 `KAOIRO_NODE` | 任意 | systemd user unit / launchd は最小 PATH で起動するため、version manager 利用時は絶対パスを固定する |
+| Host ID | `runner.config.json` `host_id` | Required | `^[A-Za-z0-9._-]+$` (used in the channel topic). |
+| Server URL | Same, `server_url` | Required | `ws://` or `wss://`. Production requires `wss://` through `force_ssl`. |
+| Launch-permitted cwd | Same, `cwd_allowlist` | Required | At least one absolute path; a blank line finishes input. |
+| Capabilities | Same, `capabilities` | Optional | Enable/disable `claude-code` / `codex` independently. Fall back to `claude-code` if all are off. |
+| Codex auth mode | Same, `codex.auth_mode` | Optional | Only if capabilities include Codex. An explicit value avoids running `codex doctor` (phase-24). |
+| Runner token | `KAOIRO_RUNNER_TOKEN` in `runner.env` | Required when exposed | Manual entry / automatic generation. **Never write it to config JSON.** |
+| Node path | Same, `KAOIRO_NODE` | Optional | systemd user units / launchd start with a minimal PATH, so fix it to an absolute path when using a version manager. |
 
-- **配置先は OS 別ユーザ設定ディレクトリ**(Linux
-  `${XDG_CONFIG_HOME:-~/.config}/kaoiro`、macOS `~/Library/Application Support/kaoiro`)。
-  `KAOIRO_RUNNER_DIR` で上書き可。解決順は起動シム
-  (`deploy/kaoiro-runner-launch.sh`)と一致させる — ずれるとウィザードが
-  サービスの見ない場所へ書いてしまう。
-- **`runner.env` は 0600 で生成**する(トークンを持つため。issue #136)。この
-  ファイルは起動シムに `source` されるので、値はクォートして書き出す。
-- `server_url` は `runner.config.json` を正本とする。env 上書き
-  (`KAOIRO_RUNNER_SERVER_URL`、[#135](https://github.com/sakuraiyuta/kaoiro/issues/135))
-  が入り次第、`runner.env` 側にコメント例を追記する。
-- wrapper の設定は runner が spawn 時に生成する
-  ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))ため、
-  ウィザードの対象外。
+- **Use OS-specific user configuration directories** (Linux
+  `${XDG_CONFIG_HOME:-~/.config}/kaoiro`; macOS
+  `~/Library/Application Support/kaoiro`). `KAOIRO_RUNNER_DIR` can override it.
+  Match the resolution order of the launch shim
+  (`deploy/kaoiro-runner-launch.sh`), or the wizard writes where the service
+  does not look.
+- **Generate `runner.env` at 0600** because it contains a token (issue #136).
+  The launch shim `source`s it, so write its values quoted.
+- `runner.config.json` is the source of truth for `server_url`. When its env
+  override (`KAOIRO_RUNNER_SERVER_URL`,
+  [#135](https://github.com/sakuraiyuta/kaoiro/issues/135)) arrives, add a
+  comment example to `runner.env`.
+- Wrapper configuration is generated by the runner at spawn
+  ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)), so it is
+  outside the wizard.
 
-## スコープ外
+## Out of scope
 
-- **wrapper 設定ウィザード**(`kaoiro.config.json`)— 実運用では runner が spawn
-  時に一時 config を生成する([ADR-0023](../adr/0023-host-runner-architecture.md) /
-  [ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))ため、人が
-  書くのは dev の単独起動時のみ。その用途には engine 別の example
-  (`wrapper/kaoiro.config.claude-code.example.json` ほか)がある。**dev 向け・
-  優先度低**として保留する。
-- **非対話モード**(フラグ一括指定)—
+- **Wrapper configuration wizard** (`kaoiro.config.json`)—in production, the
+  runner generates temporary configuration at spawn
+  ([ADR-0023](../adr/0023-host-runner-architecture.md) /
+  [ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)), so people
+  write it only for standalone development launches. Engine-specific examples
+  (`wrapper/kaoiro.config.claude-code.example.json`, etc.) exist for that. It is
+  deferred as **development-only and low priority**.
+- **Non-interactive mode** (flags in bulk)—
   [#141](https://github.com/sakuraiyuta/kaoiro/issues/141)。
-- **2 本の間でのトークン自動受け渡し** — 独立運用
-  ([ADR-0011](../adr/0011-phase3-reliability-and-auth.md) のトークン体系を前提に
-  人手で揃える)。
-- **Gitea release への配布物アップロード** —
+- **Automatic token handoff between the two wizards**—independent operation
+  (manually align tokens based on
+  [ADR-0011](../adr/0011-phase3-reliability-and-auth.md)'s token scheme).
+- **Uploading artifacts to Gitea releases**—
   [#140](https://github.com/sakuraiyuta/kaoiro/issues/140)。
 
 ## See Also
 
-- 関連 specs: [protocol](protocol.md), [threat-model](threat-model.md)
-- ADRs: [0011](../adr/0011-phase3-reliability-and-auth.md) — トークン認証、
-  [0018](../adr/0018-runner-distribution.md) — 配布形態、
-  [0023](../adr/0023-host-runner-architecture.md) — runner 常駐、
-  [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) — spawn 時の
-  agent_id / token 採番
-- 手順書: 配備手順書(#137)が手動手順の正本
+- Related specs: [protocol](protocol.md), [threat-model](threat-model.md)
+- ADRs: [0011](../adr/0011-phase3-reliability-and-auth.md)—token authentication;
+  [0018](../adr/0018-runner-distribution.md)—distribution form;
+  [0023](../adr/0023-host-runner-architecture.md)—runner residency;
+  [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)—`agent_id` /
+  token allocation at spawn
+- Guide: the deployment guide (#137) is the source of truth for manual steps
