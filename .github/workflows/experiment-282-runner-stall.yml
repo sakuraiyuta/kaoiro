@@ -1,0 +1,102 @@
+name: "[scratch] issue #282 runner stall probe"
+
+# Manual-only scratch experiment (issue #282, director-approved 2026-08-30):
+# does the shared CI runner itself stall for >100ms during `mix test`
+# (cgroup CPU throttling or scheduling gap), independent of any per-test
+# processing cost? Delete this workflow file once the experiment concludes
+# -- it is not part of the regular CI surface.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@v4
+      - name: mix test with stall probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --no-xattrs -cf - server scripts | docker run --rm -i -w /w \
+            docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
+            sh -euc '
+              tar -xf - -C /w
+              apt-get update
+              apt-get install -y --no-install-recommends inotify-tools
+              rm -rf /var/lib/apt/lists/*
+              useradd -m -d /home/ci ci
+              chown -R ci:ci /w
+              su ci -c "
+                set -e
+                export HOME=/home/ci
+                cd /w/server
+                mix local.hex --force
+                mix local.rebar --force
+                mix deps.get
+
+                # Background probe 1: monotonic clock gap. Samples every
+                # 10ms; a gap >100ms between consecutive samples means the
+                # PROCESS ITSELF (not just the test suite BEAM node) went
+                # unscheduled for longer than ExUnit's default
+                # assert_receive_timeout -- direct evidence of a runner-side
+                # stall independent of any handler's own processing cost.
+                (
+                  prev=\$(date +%s%N)
+                  while true; do
+                    sleep 0.01
+                    now=\$(date +%s%N)
+                    diff_ms=\$(( (now - prev) / 1000000 ))
+                    if [ \"\$diff_ms\" -gt 100 ]; then
+                      echo \"GAP \$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) diff_ms=\$diff_ms\" >> /tmp/gap.log
+                    fi
+                    prev=\$now
+                  done
+                ) &
+                GAP_PID=\$!
+
+                # Background probe 2: cgroup v2 cpu.stat, sampled every
+                # second -- nr_throttled/throttled_usec directly show CFS
+                # bandwidth throttling if the container itself has a CPU
+                # quota applied.
+                (
+                  while true; do
+                    sleep 1
+                    if [ -r /sys/fs/cgroup/cpu.stat ]; then
+                      echo \"\$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) \$(tr \"\n\" \" \" < /sys/fs/cgroup/cpu.stat)\" >> /tmp/cpustat.log
+                    fi
+                  done
+                ) &
+                CPUSTAT_PID=\$!
+
+                set +e
+                mix test --seed 410854 --max-cases 8
+                TEST_EXIT=\$?
+                set -e
+
+                kill \$GAP_PID \$CPUSTAT_PID 2>/dev/null || true
+                sleep 0.2
+
+                echo \"=== stall probe: monotonic clock gaps >100ms ===\"
+                if [ -s /tmp/gap.log ]; then
+                  cat /tmp/gap.log
+                  echo \"gap count: \$(wc -l < /tmp/gap.log)\"
+                else
+                  echo \"no gaps >100ms detected\"
+                fi
+
+                echo \"=== stall probe: cgroup cpu.stat samples (first 3, last 3) ===\"
+                if [ -s /tmp/cpustat.log ]; then
+                  head -3 /tmp/cpustat.log
+                  echo \"...\"
+                  tail -3 /tmp/cpustat.log
+                else
+                  echo \"no cpu.stat samples captured (file unreadable or absent)\"
+                fi
+
+                exit \$TEST_EXIT
+              "
+            '
