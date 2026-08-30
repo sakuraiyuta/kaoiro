@@ -1275,21 +1275,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # keys are present and does not reject extras (measured: adding a
   # `source` key to `public_entry_with_role/3`'s return left the full
   # channel test suite green). So this handler re-projects into its OWN
-  # literal 4-field map
-  # rather than forwarding `Users.all_with_role/1`'s result verbatim,
-  # closing this boundary by STRUCTURE rather than by convention alone.
+  # literal 4-field map (`project_user_entry/1` below) rather than
+  # forwarding `Users.all_with_role/1`'s result verbatim, closing this
+  # boundary by STRUCTURE rather than by convention alone.
   def handle_in("list_users", payload, socket) do
     with :ok <- require_operator(socket, payload, "list_users") do
-      users =
-        Enum.map(Users.all_with_role(), fn %{
-                                             id: id,
-                                             kind: kind,
-                                             display_name: name,
-                                             role: role
-                                           } ->
-          %{id: id, kind: kind, display_name: name, role: role}
-        end)
-
+      users = Enum.map(Users.all_with_role(), &project_user_entry/1)
       {:reply, {:ok, %{"users" => users}}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -2422,6 +2413,24 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp sanitize_envelope_for(:viewer, %{"type" => "inter_agent_message"}), do: :drop
 
   defp sanitize_envelope_for(:viewer, _envelope), do: :drop
+
+  @doc """
+  `list_users`' projection, pulled out to a pure function (public, same
+  testability precedent as `safe_reason/1` just below) so its "strips
+  anything beyond these 4 keys" property is provable independently of
+  whatever shape `Users.all_with_role/1` CURRENTLY happens to return.
+  When this projection lived inline in the `list_users` handler, a
+  channel-test mutation that fed `public_entry_with_role/3` an extra
+  `source` key DID catch the leak — but only because feeding `Users` was
+  the only way to exercise the handler at all; removing the projection
+  itself while `Users` still returned exactly 4 keys left every test
+  green, since there was nothing FOR the projection to strip. Testing
+  this function directly, with a hand-built 5-key input, makes "the
+  projection strips extras" hold regardless of `Users`' current shape.
+  """
+  def project_user_entry(%{id: id, kind: kind, display_name: name, role: role}) do
+    %{id: id, kind: kind, display_name: name, role: role}
+  end
 
   @doc """
   Allow-lists the client-facing reason (issue #62). Known atoms round-trip

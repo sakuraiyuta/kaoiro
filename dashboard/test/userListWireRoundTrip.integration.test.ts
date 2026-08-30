@@ -98,6 +98,13 @@ describe("listUsers の wire round trip (issue #207 code-review-assessment must-
       users: [
         { id: "u1", kind: "user", display_name: "あお", role: "operator" },
         { id: "u2", kind: "user", display_name: "ふじ", role: "viewer" },
+        // ふじ独立レビュー round 2: the malformed-entry test below pins
+        // that a role OUTSIDE the vocabulary is rejected, but nothing
+        // previously pinned that EVERY member of it -- "admin" in
+        // particular -- is accepted. Removing "admin" from USER_ROLES
+        // would silently drop this row without failing any existing
+        // test; this row alone makes that a red.
+        { id: "u3", kind: "user", display_name: "こはく", role: "admin" },
       ],
     };
 
@@ -111,6 +118,7 @@ describe("listUsers の wire round trip (issue #207 code-review-assessment must-
     expect(users).toEqual([
       { id: "u1", kind: "user", displayName: "あお", role: "operator" },
       { id: "u2", kind: "user", displayName: "ふじ", role: "viewer" },
+      { id: "u3", kind: "user", displayName: "こはく", role: "admin" },
     ]);
   });
 
@@ -159,14 +167,25 @@ describe("listUsers の wire round trip (issue #207 code-review-assessment must-
     expect(users.map((u) => u.id)).toEqual(["ok"]);
   });
 
-  // director 判断 (issue #207 round 2): display_name は値域を狭めない
-  // -- 管理画面は既存の不正な名前を直すための面なので、任意の非空文字列
-  // 以外(制御文字含む)もそのまま通す。
-  it("display_name は制御文字を含む任意の文字列でも通す (director 判断: narrow しない)", async () => {
+  // director 判断: display_name は値域を狭めない -- 管理画面は既存の
+  // 不正な名前を直すための面なので、typeof "string" でありさえすれば
+  // 空文字・極端に長い文字列・制御文字を含む文字列も区別なくそのまま
+  // 通す(ふじ独立レビュー round 2 指摘: 以前のコメント/テストは
+  // 「制御文字を含む任意の文字列」だけを pin しており、空文字・overlong
+  // の positive case が無かった -- どちらか一方にでも empty-reject /
+  // 長さ上限を足せばこのテストが red になる形で pin する)。
+  it("display_name は空文字・極端に長い文字列・制御文字を含む文字列も区別なく通す (director 判断: narrow しない)", async () => {
     RespondingWebSocket.nextResponse = {
       users: [
+        { id: "u1", kind: "user", display_name: "", role: "operator" },
         {
-          id: "u1",
+          id: "u2",
+          kind: "user",
+          display_name: "x".repeat(5000),
+          role: "operator",
+        },
+        {
+          id: "u3",
           kind: "user",
           display_name: "bad\x00name",
           role: "operator",
@@ -182,7 +201,9 @@ describe("listUsers の wire round trip (issue #207 code-review-assessment must-
     const users = await pending;
 
     expect(users).toEqual([
-      { id: "u1", kind: "user", displayName: "bad\x00name", role: "operator" },
+      { id: "u1", kind: "user", displayName: "", role: "operator" },
+      { id: "u2", kind: "user", displayName: "x".repeat(5000), role: "operator" },
+      { id: "u3", kind: "user", displayName: "bad\x00name", role: "operator" },
     ]);
   });
 

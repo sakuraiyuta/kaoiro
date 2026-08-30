@@ -1118,6 +1118,130 @@ describe("SettingsDrawer", () => {
       );
     });
 
+    // ふじ独立レビュー round 2 (MF4 残 branch a): 上のテストは
+    // .then 側 (成功の上書き) しか pin していなかった -- refreshUsers()
+    // の .catch も同じ `seq === usersRefreshSeq` ガードを持つが、古い
+    // (遅い) request が REJECT で着弾した場合に、既に成功済みの新しい
+    // 結果を usersError で巻き戻さないことは未検証だった。
+    it("ユーザー一覧の古い取得の失敗が、後から届いた新しい成功を巻き戻さない (catch 側 stale-reply race guard)", async () => {
+      const userFor = (id: string): UserSummary[] => [
+        { id, kind: "user", displayName: id, role: "operator" },
+      ];
+
+      const rejectors: Array<(err: Error) => void> = [];
+      let call = 0;
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        () => {
+          call += 1;
+          // Call 1 (mount fetch) is the SLOW one -- controlled, never
+          // resolves until we reject it explicitly below.
+          if (call === 1) {
+            return new Promise((_resolve, reject) => rejectors.push(reject));
+          }
+          // Call 2 (refresh click) is FAST -- resolves immediately.
+          return Promise.resolve(userFor("fresh"));
+        },
+      );
+
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+      expect(target.querySelector(".user-status")?.textContent).toContain(
+        "読み込み中",
+      );
+
+      // Refresh click fires call 2, which resolves right away.
+      target
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="ユーザー一覧を更新"]',
+        )!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await tick();
+      expect(target.querySelector(".user-id")?.textContent).toContain(
+        "fresh",
+      );
+
+      // Call 1 (the mount fetch, still slower) now REJECTS. Must not
+      // clobber the already-rendered fresh success with an error.
+      rejectors[0]!(new Error("stale-error"));
+      await Promise.resolve();
+      await tick();
+      expect(target.querySelector(".user-id")?.textContent).toContain(
+        "fresh",
+      );
+      expect(target.querySelector(".user-status")).toBeNull();
+    });
+
+    // ふじ独立レビュー round 2 (MF4 残 branch b): mirrors the
+    // conversations section's own "connection 消失中に着地した古い応答は、
+    // 再接続直後の表示に漏れ出さない (stale-leak race guard)" test above
+    // (issue #276 review follow-up, ふじ round2 B2) -- same class of bug,
+    // same fix. IMPORTANT DIFFERENCE from that test's shape: mounting
+    // with the FIRST fetch still pending (never resolved before the
+    // generation change) does NOT actually exercise `users = null`'s own
+    // effect -- `usersRefreshSeq`'s bump in the SAME cleanup already
+    // blocks a stale in-flight reply from being APPLIED at all (`seq
+    // === usersRefreshSeq` fails once the cleanup has run), independent
+    // of whether `users` is separately reset to null. What `users =
+    // null` actually protects against is different: content ALREADY
+    // rendered from a completed fetch must not keep showing (as if still
+    // valid) once the generation changes, until the NEW generation's own
+    // fetch resolves. So this test populates `users` from a completed
+    // fetch FIRST, then swaps to a different connection/generation with
+    // its own pending fetch, and pins that the stale-but-successfully-
+    // rendered row disappears (loading state shown) rather than lingering.
+    it("ユーザー一覧: 世代変更時、直前まで表示していた行は新しい取得が終わるまで残らない (stale-leak race guard)", async () => {
+      const connA = makeConnection(
+        async () => [],
+        undefined,
+        async () => [
+          { id: "u1", kind: "user", displayName: "first-gen", role: "operator" },
+        ],
+      );
+
+      const target = document.createElement("div");
+      document.body.append(target);
+      const props = makeReactiveSettingsDrawerProps({
+        onClose: vi.fn(),
+        connection: connA,
+      });
+      const component = mount(SettingsDrawer, { target, props });
+      mounted.push(component);
+      await Promise.resolve();
+      await tick();
+      // Generation A's fetch already completed and rendered.
+      expect(target.querySelector(".user-id")?.textContent).toContain("u1");
+
+      // Swap DIRECTLY to a different connection/generation, whose OWN
+      // fetch is still pending.
+      let resolveB: ((v: UserSummary[]) => void) | null = null;
+      const connB = makeConnection(
+        async () => [],
+        undefined,
+        () => new Promise<UserSummary[]>((resolve) => (resolveB = resolve)),
+      );
+      props.connection = connB;
+      await Promise.resolve();
+      await tick();
+
+      // Must show the loading state, NOT generation A's stale row, while
+      // generation B's own fetch is still pending.
+      expect(target.querySelector(".user-status")?.textContent).toContain(
+        "読み込み中",
+      );
+      expect(target.textContent).not.toContain("first-gen");
+
+      resolveB!([
+        { id: "u2", kind: "user", displayName: "second-gen", role: "operator" },
+      ]);
+      await Promise.resolve();
+      await tick();
+      expect(target.querySelector(".user-id")?.textContent).toContain("u2");
+    });
+
     it("名前を変更ボタンで編集モードに入り、現在の表示名が入力欄の初期値になる", async () => {
       const conn = makeConnection(
         async () => [],

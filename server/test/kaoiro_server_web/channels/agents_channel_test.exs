@@ -5887,6 +5887,34 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  # ふじ独立レビュー round 2: 上の exact-key-set test は
+  # `Users.all_with_role/1` を経由するため、`Users`(現状ちょうど 4 key
+  # しか返さない)の CURRENT な形に依存している — `project_user_entry/1`
+  # の projection コードそのものを取り除いても、`Users` が 4 key しか
+  # 返さない限り exact-key-set assertion は依然 green のままで、
+  # projection の存在を独立に検証できていなかった。この describe は
+  # `project_user_entry/1` を `Users` を経由せず直接呼び、5 key 目
+  # (`source`)を手で与えた入力に対して projection 単独が正しく
+  # ストリップすることを、`Users` の CURRENT な形とは無関係に pin する。
+  describe "project_user_entry/1 (issue #207 のprojectionを単独で検証する)" do
+    test "id/kind/display_name/role の 4 key だけを返し、それ以外の key (例: source) は落とす" do
+      entry = %{
+        id: "u1",
+        kind: "user",
+        display_name: "R",
+        role: :viewer,
+        source: {:oauth, "github", "leaked"}
+      }
+
+      assert KaoiroServerWeb.AgentsChannel.project_user_entry(entry) == %{
+               id: "u1",
+               kind: "user",
+               display_name: "R",
+               role: :viewer
+             }
+    end
+  end
+
   describe "close_conversation 経路 (issue #276, manual close)" do
     test "viewer は forbidden" do
       socket = join_as(:viewer)
