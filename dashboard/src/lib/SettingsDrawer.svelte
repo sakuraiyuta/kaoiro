@@ -147,18 +147,21 @@
   }
 </script>
 
-<div
-  class="backdrop"
-  role="button"
-  tabindex="-1"
-  aria-label="閉じる"
-  onclick={onClose}
-  onkeydown={(e) => e.key === "Escape" && onClose()}
-></div>
-<div class="drawer" role="dialog" aria-modal="true" aria-label="設定">
+<Modal ariaLabel="設定" {onClose} contentClass="settings-drawer-content">
+  {#snippet children()}
   <div class="drawer-header">
     <h2>設定</h2>
-    <button type="button" class="close" onclick={onClose} aria-label="閉じる">
+    <!-- svelte-ignore a11y_autofocus -- inside a native <dialog> opened
+         via showModal() (Modal.svelte), autofocus is the spec-sanctioned
+         initial-focus mechanism (issue #232 MF-3), not page-load
+         autofocus (issue #277). -->
+    <button
+      type="button"
+      class="close"
+      onclick={onClose}
+      aria-label="閉じる"
+      autofocus
+    >
       ×
     </button>
   </div>
@@ -297,13 +300,23 @@
           <p class="conv-status">失敗しました({closeError})</p>
         {/if}
         <div class="confirm-actions">
+          <!-- svelte-ignore a11y_autofocus -- inside a native <dialog>
+               opened via showModal() (Modal.svelte), autofocus is the
+               spec-sanctioned initial-focus mechanism (issue #232 MF-3).
+               issue #277: measured that Chromium's own fallback (no
+               autofocus descendant) already lands here via DOM order --
+               made explicit rather than relying on that implicitly, same
+               reasoning as every other Modal.svelte caller's autofocus
+               choice (a safe, non-destructive default). -->
           <button
             type="button"
+            class="cancel"
             onclick={() => {
               confirmCloseTarget = null;
               closeError = null;
             }}
             disabled={closing}
+            autofocus
           >
             キャンセル
           </button>
@@ -329,21 +342,38 @@
       ログアウト
     </button>
   {/if}
-</div>
+  {/snippet}
+</Modal>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    border: none;
-    cursor: default;
-    /* Global dialog/drawer layer (app.css z-index scale): above the bottom
-       sheet (30-32). */
-    z-index: 40;
-  }
+  /* issue #277: modal chrome (backdrop, native <dialog>, focus handling)
+     now lives in Modal.svelte -- this positions/sizes ONLY the content
+     box it renders into `.modal-content` (needs :global(), same
+     reasoning as PersonaDetailDialog.svelte / LaunchDialog.svelte: this
+     class is only ever handed to Modal as a prop, never rendered by this
+     component itself).
 
-  .drawer {
+     Modal.svelte's <dialog> assumes a CENTERED box (full-viewport flex
+     container, `align-items:center;justify-content:center`) -- this
+     drawer keeps its own right-edge slide-in shape instead by giving
+     `.settings-drawer-content` `position:fixed`, which takes it OUT of
+     that flex layout entirely (director decision, issue #277: a CSS
+     escape hatch confined to this caller, in preference to extending
+     Modal.svelte itself while it has only one shape-variant caller --
+     "rule of two": revisit a `placement` prop on Modal.svelte if a
+     SECOND drawer-shaped caller appears).
+
+     Load-bearing constraint this relies on: the <dialog> element itself
+     stays a full-viewport, otherwise-EMPTY flex box (its own child,
+     `.modal-content`, no longer occupies flex space once fixed). Any
+     click landing outside this fixed content box therefore lands ON the
+     <dialog> element directly, which Modal.svelte's own
+     `handleBackdropClick` (`event.target === dialogEl`) already treats
+     as an outside click -- this still routes to `onClose` correctly
+     WITHOUT `.settings-drawer-content` needing to know anything about
+     it. Do not add padding/margin/transform to `<dialog>` itself for any
+     future reason without re-checking this invariant. */
+  :global(.settings-drawer-content) {
     position: fixed;
     top: 0;
     right: 0;
@@ -354,19 +384,37 @@
     gap: 1rem;
     /* Fixed overlay: safe-area insets floor the existing edge padding
        (responsive-layout.md セーフエリア). */
+    /* !important: measured (2026-08-30, this session) that Modal.svelte's
+       OWN scoped `.modal-content { padding: 1.6rem }` rule otherwise wins
+       -- Svelte's scoping hash raises its selector specificity above this
+       plain :global() class selector, so a same-property override here
+       is silently discarded without it. Confirmed via computed-style
+       probe against a real render (getComputedStyle) before landing this,
+       not assumed from CSS-cascade theory. */
     padding: max(1.6rem, env(safe-area-inset-top))
       max(1.6rem, env(safe-area-inset-right))
-      max(1.6rem, env(safe-area-inset-bottom)) 1.6rem;
-    background: var(--bg-card);
-    border-left: 1px solid var(--line);
-    z-index: 41;
+      max(1.6rem, env(safe-area-inset-bottom)) 1.6rem !important;
     animation: slide-in 0.2s ease-out;
+    /* Same specificity fight as padding above: Modal.svelte's own
+       `.modal-content` sets `border: 1px solid var(--line);
+       border-radius: 0.6rem` for its default centered-card look. The
+       drawer is flush against the viewport's top/right/bottom edges
+       (position:fixed above), where a full border + rounded corners
+       would read as a rendering glitch (corners appearing to float past
+       the edge) rather than the original left-edge-only, square-cornered
+       panel look -- preserved here, not a new choice. `background` is
+       the SAME value Modal.svelte already applies by default; restated
+       for clarity, not because the cascade requires it. */
+    border: none !important;
+    border-left: 1px solid var(--line) !important;
+    border-radius: 0 !important;
+    background: var(--bg-card);
   }
 
   /* short: the drawer becomes its own vertical scroll owner so low
      viewports never clip its rows (ADR-0052 F8). */
   @media (max-height: 500px) {
-    .drawer {
+    :global(.settings-drawer-content) {
       max-block-size: 100dvh;
       overflow-y: auto;
     }

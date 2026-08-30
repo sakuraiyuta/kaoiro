@@ -8,7 +8,11 @@
   import Modal from "../../src/lib/Modal.svelte";
   import PersonaDetailDialog from "../../src/lib/PersonaDetailDialog.svelte";
   import SettingsDrawer from "../../src/lib/SettingsDrawer.svelte";
-  import { launchHosts, stubConnection } from "./fixtures";
+  import {
+    launchHosts,
+    settingsDrawerConnection,
+    stubConnection,
+  } from "./fixtures";
 
   let {
     overlay,
@@ -109,6 +113,7 @@
       <SettingsDrawer
         onClose={() => (drawerOpen = false)}
         onLogout={() => {}}
+        connection={settingsDrawerConnection()}
       />
     {/if}
   {:else}

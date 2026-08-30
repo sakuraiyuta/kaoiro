@@ -545,6 +545,14 @@ describe("SettingsDrawer", () => {
   });
 
   // issue #276 manual close.
+  //
+  // issue #277: SettingsDrawer's OWN chrome is now also a <dialog>
+  // (Modal.svelte), rendered as long as the drawer itself is mounted —
+  // `document.querySelector("dialog")` alone no longer distinguishes
+  // "confirm dialog open" from "just the drawer". Every lookup below is
+  // scoped to `dialog[aria-label="会話を閉じる確認"]`, the confirm
+  // dialog's own aria-label, so it specifically targets that nested
+  // dialog rather than the outer drawer one.
   describe("manual close", () => {
     it("open の会話にのみ閉じるボタンを表示する", async () => {
       const conn = makeConnection(async () => [
@@ -594,7 +602,7 @@ describe("SettingsDrawer", () => {
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await tick();
 
-      const dialog = document.querySelector("dialog");
+      const dialog = document.querySelector('dialog[aria-label="会話を閉じる確認"]');
       expect(dialog).not.toBeNull();
 
       // issue #276 review follow-up (B1 residual): the confirm dialog
@@ -604,13 +612,24 @@ describe("SettingsDrawer", () => {
       expect(dialog!.textContent).toContain("cid:c1");
       expect(dialog!.textContent).toContain("a ⇔ b");
 
+      // issue #277: showModal()'s spec-defined initial focus goes to the
+      // first autofocus descendant -- pins that the confirm dialog's
+      // Cancel button (safe, non-destructive) carries it, not the
+      // destructive "閉じる" action. e2e (settingsDrawer.spec.ts) pins
+      // that this is actually where focus lands in a real browser.
+      expect(
+        dialog!.querySelector<HTMLButtonElement>("button.cancel")!.hasAttribute(
+          "autofocus",
+        ),
+      ).toBe(true);
+
       const cancelButton = Array.from(
         dialog!.querySelectorAll<HTMLButtonElement>("button"),
       ).find((b) => b.textContent?.includes("キャンセル"))!;
       cancelButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await tick();
 
-      expect(document.querySelector("dialog")).toBeNull();
+      expect(document.querySelector('dialog[aria-label="会話を閉じる確認"]')).toBeNull();
       expect(conn.closeConversation).not.toHaveBeenCalled();
     });
 
@@ -650,7 +669,7 @@ describe("SettingsDrawer", () => {
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await tick();
 
-      const dialog = document.querySelector("dialog")!;
+      const dialog = document.querySelector('dialog[aria-label="会話を閉じる確認"]')!;
       expect(dialog.textContent).toContain("cid:bbbbbbbb");
       expect(dialog.textContent).not.toContain("aaaaaaaa");
       expect(dialog.textContent).toContain("gp.a ⇔ gp.b");
@@ -693,7 +712,7 @@ describe("SettingsDrawer", () => {
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await tick();
 
-      const dialog = document.querySelector("dialog")!;
+      const dialog = document.querySelector('dialog[aria-label="会話を閉じる確認"]')!;
       dialog
         .querySelector<HTMLButtonElement>("button.danger")!
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -703,7 +722,7 @@ describe("SettingsDrawer", () => {
 
       expect(conn.closeConversation).toHaveBeenCalledWith("c1");
       expect(conn.listConversations).toHaveBeenCalledTimes(2);
-      expect(document.querySelector("dialog")).toBeNull();
+      expect(document.querySelector('dialog[aria-label="会話を閉じる確認"]')).toBeNull();
       expect(target.querySelector(".conv-meta")?.textContent).toContain(
         "closed",
       );
@@ -737,7 +756,7 @@ describe("SettingsDrawer", () => {
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await tick();
 
-      const dialog = document.querySelector("dialog")!;
+      const dialog = document.querySelector('dialog[aria-label="会話を閉じる確認"]')!;
       dialog
         .querySelector<HTMLButtonElement>("button.danger")!
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -749,7 +768,7 @@ describe("SettingsDrawer", () => {
       expect(dialog.textContent).toContain("conversation_closed");
       // Dialog stays open (director instruction: no accidental data-loss
       // pattern — a failed close must not silently vanish the modal).
-      expect(document.querySelector("dialog")).not.toBeNull();
+      expect(document.querySelector('dialog[aria-label="会話を閉じる確認"]')).not.toBeNull();
       expect(conn.listConversations).toHaveBeenCalledTimes(2);
     });
   });

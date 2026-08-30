@@ -15,6 +15,22 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostInfo, KaoiroHandlers } from "../src/lib/protocol";
 
+// jsdom does not implement HTMLDialogElement.showModal/close (measured
+// 2026-08-28, jsdom 29.1.1; same polyfill as modal.integration.test.ts).
+// issue #277 moved SettingsDrawer onto the shared Modal.svelte primitive.
+if (
+  typeof HTMLDialogElement !== "undefined" &&
+  typeof HTMLDialogElement.prototype.showModal !== "function"
+) {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+    this.removeAttribute("open");
+    this.dispatchEvent(new Event("close"));
+  };
+}
+
 const captured = vi.hoisted(() => ({
   handlers: null as KaoiroHandlers | null,
   // issue #276 review follow-up (ふじ round3): also capture the

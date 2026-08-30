@@ -60,16 +60,16 @@ test.describe("T9: 500/501 boundary flips only the vertical compression", () => 
   test("dialog / drawer gain max-block-size + own scroll at 500", async ({ page }) => {
     await page.setViewportSize({ width: 1300, height: 501 });
     await page.goto(DIALOG);
-    expect(await cssOf(page, ".dialog", "max-block-size")).toBe("none");
+    expect(await cssOf(page, ".launch-dialog-content", "max-block-size")).toBe("none");
     await page.setViewportSize({ width: 1300, height: 500 });
-    expect(await cssOf(page, ".dialog", "max-block-size")).not.toBe("none");
-    expect(await cssOf(page, ".dialog", "overflow-y")).toBe("auto");
+    expect(await cssOf(page, ".launch-dialog-content", "max-block-size")).not.toBe("none");
+    expect(await cssOf(page, ".launch-dialog-content", "overflow-y")).toBe("auto");
 
     await page.setViewportSize({ width: 1300, height: 501 });
     await page.goto(DRAWER);
-    expect(await cssOf(page, ".drawer", "overflow-y")).toBe("visible");
+    expect(await cssOf(page, ".settings-drawer-content", "overflow-y")).toBe("visible");
     await page.setViewportSize({ width: 1300, height: 500 });
-    expect(await cssOf(page, ".drawer", "overflow-y")).toBe("auto");
+    expect(await cssOf(page, ".settings-drawer-content", "overflow-y")).toBe("auto");
   });
 
   test("sheet max height stays 60% across the boundary", async ({ page }) => {
@@ -91,7 +91,7 @@ test.describe("T10: low viewport keeps dialog / drawer uncut", () => {
   test("LaunchDialog fits 390px height and scrolls internally", async ({ page }) => {
     await page.setViewportSize({ width: 844, height: 390 });
     await page.goto(DIALOG);
-    const dialog = page.locator(".dialog");
+    const dialog = page.locator(".launch-dialog-content");
     await expect(dialog).toBeVisible();
     const box = (await dialog.boundingBox())!;
     expect(box.y).toBeGreaterThanOrEqual(0);
@@ -105,9 +105,9 @@ test.describe("T10: low viewport keeps dialog / drawer uncut", () => {
   test("SettingsDrawer fits 390px height without clipping rows", async ({ page }) => {
     await page.setViewportSize({ width: 844, height: 390 });
     await page.goto(DRAWER);
-    const drawer = page.locator(".drawer");
+    const drawer = page.locator(".settings-drawer-content");
     await expect(drawer).toBeVisible();
-    expect(await cssOf(page, ".drawer", "overflow-y")).toBe("auto");
+    expect(await cssOf(page, ".settings-drawer-content", "overflow-y")).toBe("auto");
     const box = (await drawer.boundingBox())!;
     expect(box.height).toBeLessThanOrEqual(390);
   });

@@ -2,6 +2,7 @@
 // (phase-31 31-10). Pure data — no network, no Phoenix socket: the specs
 // pin CSS/layout behaviour, not transport.
 import type {
+  ConversationSummary,
   Envelope,
   KaoiroConnection,
   PersonaManifest,
@@ -207,6 +208,39 @@ export function stubConnection(): KaoiroConnection {
     {},
     {
       get: () => async () => ({}),
+    },
+  ) as KaoiroConnection;
+}
+
+// issue #277 a11y spec: SettingsDrawer's confirm-close dialog is a Modal
+// nested INSIDE SettingsDrawer's own (now also Modal-based) chrome --
+// stubConnection()'s Proxy resolves every call to `{}`, which is not an
+// array and would break the {#each conversations} block, so this needs a
+// dedicated stub with one open conversation to actually render the
+// "閉じる" button that opens the nested confirm dialog.
+export function settingsDrawerConnection(): KaoiroConnection {
+  const conversations: ConversationSummary[] = [
+    {
+      conversationId: "e2e-conv-1",
+      participants: ["ao", "momo"],
+      turns: 3,
+      tokens: 50,
+      status: "open",
+      startedAt: "2026-08-29T00:00:00Z",
+    },
+  ];
+  return new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "listConversations") {
+          return async () => conversations;
+        }
+        if (prop === "closeConversation") {
+          return async () => undefined;
+        }
+        return async () => ({});
+      },
     },
   ) as KaoiroConnection;
 }
