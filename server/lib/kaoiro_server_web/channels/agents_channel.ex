@@ -1259,14 +1259,38 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # `list_conversations` (issue #276) just above — a management view the
   # dashboard fetches on demand (opening SettingsDrawer), not something
   # every join needs, so no `:after_join` snapshot push and no new store.
-  # `Users.all_with_role/1` already returns the operator allow-list this
-  # issue independently settled on (id/kind/display_name/role) — decided
-  # separately from, and only coincidentally identical to, the
-  # agent-facing allow-list ADR-0021 F6-8 defines; `source` never leaves
-  # `Users` (see its moduledoc) so there is nothing to filter here.
+  #
+  # `Users.all_with_role/1`'s shape (id/kind/display_name/role) already
+  # matches the allow-list issue #207 independently settled on for THIS
+  # operator-facing disclosure, so this handler reuses that
+  # IMPLEMENTATION (director-approved: "既存 public_entry_with_role/3 の
+  # 形と一致したため実装を再利用する") — but reusing the implementation
+  # is not the same guarantee as reusing the DECISION. That decision (4
+  # fields cross this boundary) was still made independently of
+  # ADR-0021 F6-8's separate, agent-facing allow-list (F6-1), and
+  # `public_entry_with_role/3` is `Users`' own internal helper — it
+  # could grow a field for a DIFFERENT consumer (e.g. F6-8's
+  # `directory_request` path) without this handler's own channel test
+  # noticing, because Elixir's map pattern match only asserts the named
+  # keys are present and does not reject extras (measured: adding a
+  # `source` key to `public_entry_with_role/3`'s return left the full
+  # channel test suite green). So this handler re-projects into its OWN
+  # literal 4-field map
+  # rather than forwarding `Users.all_with_role/1`'s result verbatim,
+  # closing this boundary by STRUCTURE rather than by convention alone.
   def handle_in("list_users", payload, socket) do
     with :ok <- require_operator(socket, payload, "list_users") do
-      {:reply, {:ok, %{"users" => Users.all_with_role()}}, socket}
+      users =
+        Enum.map(Users.all_with_role(), fn %{
+                                             id: id,
+                                             kind: kind,
+                                             display_name: name,
+                                             role: role
+                                           } ->
+          %{id: id, kind: kind, display_name: name, role: role}
+        end)
+
+      {:reply, {:ok, %{"users" => users}}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end

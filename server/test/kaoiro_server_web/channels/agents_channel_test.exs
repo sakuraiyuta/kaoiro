@@ -1684,6 +1684,23 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
              }
     end
 
+    # Every other test in this describe block sends the legacy `"name"`
+    # key (issue #209 D23 compatibility window) — the dashboard's own
+    # `renameUser()` (issue #207) sends the canonical `"display_name"`
+    # key instead, and nothing here previously exercised that leg of
+    # extract_name_field/1.
+    test "canonical display_name key でも rename できる (issue #207 のdashboard producer が送るキー)" do
+      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-canonical"}, "user", "R")
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref =
+        push(socket, "rename_user", %{"user_id" => user.id, "display_name" => "あお(canonical)"})
+
+      assert_reply ref, :ok, %{id: id, kind: "user", display_name: "あお(canonical)"}
+      assert id == user.id
+    end
+
     test "viewer の rename_user は forbidden" do
       user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-viewer"}, "user", "R")
       socket = join_as(:viewer)
@@ -5847,10 +5864,17 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :ok, %{"users" => users}
 
-      assert %{id: id, kind: "user", display_name: "R", role: :viewer} =
-               Enum.find(users, &(&1.id == user.id))
-
+      entry = Enum.find(users, &(&1.id == user.id))
+      assert %{id: id, kind: "user", display_name: "R", role: :viewer} = entry
       assert id == user.id
+
+      # code-review-assessment (issue #207): a plain map pattern match
+      # (the assertion just above) only asserts these 4 keys are
+      # PRESENT — Elixir map patterns do not reject extras, so it would
+      # still pass if the handler leaked an extra field (e.g. `source`)
+      # onto the wire. This closed-key-set check is what actually pins
+      # the boundary the handler's own comment claims to hold.
+      assert Map.keys(entry) |> Enum.sort() == [:display_name, :id, :kind, :role]
     end
 
     test "admin も通る (require_operator は operator/admin いずれも許可)" do

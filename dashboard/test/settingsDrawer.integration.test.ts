@@ -1062,6 +1062,62 @@ describe("SettingsDrawer", () => {
       expect(conn.listConversations).toHaveBeenCalledTimes(1);
     });
 
+    // code-review-assessment (issue #207 round 2, must-fix 4): mirrors
+    // "更新の連打で古いレスポンスが新しいレスポンスを上書きしない
+    // (stale-reply race guard)" above, pinning that usersRefreshSeq (a
+    // SEPARATE counter from refreshSeq) closes the same class of race
+    // for the users section independently.
+    it("ユーザー一覧の更新連打で古いレスポンスが新しいレスポンスを上書きしない (usersRefreshSeq stale-reply race guard)", async () => {
+      const userFor = (id: string): UserSummary[] => [
+        { id, kind: "user", displayName: id, role: "operator" },
+      ];
+
+      const resolvers: Array<(v: UserSummary[]) => void> = [];
+      let call = 0;
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        () => {
+          call += 1;
+          if (call === 1) return Promise.resolve(userFor("initial"));
+          return new Promise((resolve) => resolvers.push(resolve));
+        },
+      );
+
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+      expect(target.querySelector(".user-id")?.textContent).toContain(
+        "initial",
+      );
+
+      // Double-click the users refresh button -- two overlapping
+      // listUsers calls in flight.
+      const refreshBtn = target.querySelector<HTMLButtonElement>(
+        'button[aria-label="ユーザー一覧を更新"]',
+      )!;
+      refreshBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      refreshBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+      expect(resolvers).toHaveLength(2);
+
+      // The SECOND (later) call resolves first.
+      resolvers[1]!(userFor("second"));
+      await Promise.resolve();
+      await tick();
+      expect(target.querySelector(".user-id")?.textContent).toContain(
+        "second",
+      );
+
+      // The FIRST (earlier) call resolves last — must NOT overwrite it.
+      resolvers[0]!(userFor("first"));
+      await Promise.resolve();
+      await tick();
+      expect(target.querySelector(".user-id")?.textContent).toContain(
+        "second",
+      );
+    });
+
     it("名前を変更ボタンで編集モードに入り、現在の表示名が入力欄の初期値になる", async () => {
       const conn = makeConnection(
         async () => [],
@@ -1317,6 +1373,158 @@ describe("SettingsDrawer", () => {
       expect(target.querySelector(".user-rename-row")).toBeNull();
       const item = target.querySelector(".user-list li")!;
       expect(item.textContent).toContain("A(別世代)");
+    });
+
+    // code-review-assessment (issue #207 round 2, must-fix 4): the test
+    // above swaps connection WHILE no save is in flight. This one pins
+    // the case ふじ specified directly — generation A's renameUser()
+    // call is still PENDING when the connection swaps to generation B,
+    // generation B then starts its OWN save for the SAME user id, and
+    // ONLY THEN does generation A's stale call settle. Without the
+    // `generation === connectionGeneration` guard in submitRename's
+    // continuation, A's late settlement would close/error generation
+    // B's still-in-flight save out from under it.
+    describe("世代切替中に in-flight だった旧 generation の rename 結果が新 generation の save を巻き戻さない", () => {
+      function makeGenerationRace() {
+        let resolveA: (() => void) | null = null;
+        let rejectA: ((err: Error) => void) | null = null;
+        const connA = makeConnection(
+          async () => [],
+          undefined,
+          async () => [
+            { id: "u1", kind: "user", displayName: "A-name", role: "operator" },
+          ],
+          () =>
+            new Promise<void>((resolve, reject) => {
+              resolveA = resolve;
+              rejectA = reject;
+            }),
+        );
+
+        let resolveB: (() => void) | null = null;
+        let rejectB: ((err: Error) => void) | null = null;
+        const connB = makeConnection(
+          async () => [],
+          undefined,
+          async () => [
+            { id: "u1", kind: "user", displayName: "B-name", role: "operator" },
+          ],
+          () =>
+            new Promise<void>((resolve, reject) => {
+              resolveB = resolve;
+              rejectB = reject;
+            }),
+        );
+
+        return {
+          connA,
+          connB,
+          resolveA: () => resolveA!(),
+          rejectA: (err: Error) => rejectA!(err),
+          resolveB: () => resolveB!(),
+          rejectB: (err: Error) => rejectB!(err),
+        };
+      }
+
+      async function startRaceUpToBSave() {
+        const race = makeGenerationRace();
+        const target = document.createElement("div");
+        document.body.append(target);
+        const props = makeReactiveSettingsDrawerProps({
+          onClose: vi.fn(),
+          connection: race.connA,
+        });
+        const component = mount(SettingsDrawer, { target, props });
+        mounted.push(component);
+        await Promise.resolve();
+        await tick();
+
+        // Generation A: open u1's edit form and start saving -- never
+        // resolves yet.
+        target
+          .querySelector<HTMLButtonElement>(".user-action")!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await tick();
+        target
+          .querySelectorAll<HTMLButtonElement>(".user-rename-row button")[0]!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await tick();
+
+        // Connection swaps DIRECTLY to generation B (no undefined step
+        // in between) while A's save is still pending.
+        props.connection = race.connB;
+        await Promise.resolve();
+        await tick();
+
+        // Generation B: open the SAME user's edit form and start ITS
+        // OWN save -- also never resolves yet.
+        target
+          .querySelector<HTMLButtonElement>(".user-action")!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await tick();
+        target
+          .querySelectorAll<HTMLButtonElement>(".user-rename-row button")[0]!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await tick();
+
+        return { race, target };
+      }
+
+      it("A の成功が着弾しても B の save 中は閉じない・B の save は成功で正しく閉じる", async () => {
+        const { race, target } = await startRaceUpToBSave();
+
+        // A's stale save resolves NOW, after B's own save already
+        // started. Must be a no-op against B's in-flight state.
+        race.resolveA();
+        await Promise.resolve();
+        await Promise.resolve();
+        await tick();
+
+        expect(target.querySelector(".user-rename-row")).not.toBeNull();
+        expect(
+          target.querySelector<HTMLButtonElement>(
+            ".user-rename-row button",
+          )!.disabled,
+        ).toBe(true);
+
+        // B's own save now resolves -- THIS is what should close the
+        // form.
+        race.resolveB();
+        await Promise.resolve();
+        await Promise.resolve();
+        await tick();
+
+        expect(target.querySelector(".user-rename-row")).toBeNull();
+      });
+
+      it("A の失敗が着弾しても B の save 中は影響しない・B の失敗は B の行にだけ表示される", async () => {
+        const { race, target } = await startRaceUpToBSave();
+
+        // A's stale save REJECTS now. Must not write A's error onto B's
+        // still-in-flight row.
+        race.rejectA(new Error("A の失敗"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await tick();
+
+        expect(target.querySelector(".user-rename-row")).not.toBeNull();
+        // A's stale reject must not have set renameError at all -- if it
+        // had, `.user-status` would render under B's row (see the {#if
+        // renameError} block just below the rename form).
+        expect(target.querySelector(".user-status")).toBeNull();
+
+        // B's own save now rejects -- its error, and only its error,
+        // must surface.
+        race.rejectB(new Error("B の失敗"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await tick();
+
+        expect(target.querySelector(".user-rename-row")).not.toBeNull();
+        expect(target.querySelector(".user-status")?.textContent).toContain(
+          "B の失敗",
+        );
+      });
     });
   });
 });

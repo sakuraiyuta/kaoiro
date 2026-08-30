@@ -1549,16 +1549,18 @@ export interface ConversationSummary {
 }
 
 /** Operator-facing user-list entry (issue #207). Wire shape from
- *  `Users.all_with_role/1` (id/kind/display_name/role) — an allow-list
- *  decided independently for this operator-facing disclosure (issue #207
- *  design decision), which happens to match ADR-0021 F6-8's separate,
- *  agent-facing allow-list without reusing it (ADR-0021 F6-1: agent
- *  disclosure and operator disclosure are independent decisions). */
+ *  `Users.all_with_role/1` (id/kind/display_name/role) — the server
+ *  handler REUSES that shape's IMPLEMENTATION (it matches exactly), but
+ *  the decision that these 4 fields may cross this operator boundary
+ *  was made independently of ADR-0021 F6-8's separate, agent-facing
+ *  allow-list (`directory_request`'s `users` projection) — ADR-0021
+ *  F6-1: agent disclosure and operator disclosure are independent
+ *  decisions, not a shared allow-list. */
 export interface UserSummary {
   id: string;
-  kind: string;
+  kind: "user";
   displayName: string;
-  role: string;
+  role: "viewer" | "operator" | "admin";
 }
 
 /** Canonical persona joined server-side against the CURRENT PersonaAssets
@@ -2832,9 +2834,35 @@ function parseConversationList(raw: unknown): ConversationSummary[] {
   return out;
 }
 
+// Same charset `AgentId.valid?/1` enforces server-side (`agent_id.ex`,
+// `^[A-Za-z0-9._-]{1,256}$`) -- user_id shares the SAME id space as
+// agent_id (ADR-0050 D1), and the server's `fetch_user_id/1` reuses
+// `AgentId.valid?/1` to validate it (`rename_user`'s own `invalid_user_id`
+// reject). Narrowing to it here is what makes `UserSummary.id` a value
+// this client can safely feed back into `renameUser(userId, ...)`.
+const USER_ID_PATTERN = /^[A-Za-z0-9._-]{1,256}$/;
+
+// Every role `Users.all_with_role/1` can resolve a user to -- the auth
+// SoT's closed role vocabulary (ADR-0050 D2: admin > operator > viewer).
+// A role outside this set cannot come from a genuine reply (an unknown
+// role is filtered out server-side, `Users.all_with_role/1`'s own doc),
+// so an entry claiming one is dropped rather than passed through typed
+// as `UserSummary["role"]` when it structurally cannot be one.
+const USER_ROLES = new Set(["viewer", "operator", "admin"]);
+
 /** Defensive parse of the list_users reply (issue #207): fail-closed per
  *  entry, mirroring parseConversationList — a malformed entry is
- *  dropped, not the whole list. */
+ *  dropped, not the whole list. `id`/`kind`/`role` are narrowed to their
+ *  actual value domains (see USER_ID_PATTERN/USER_ROLES above; `kind` is
+ *  narrowed to the literal `"user"` — every production `Users.get_or_create`
+ *  call site hardcodes it, `auth_controller.ex`/`session_controller.ex`).
+ *  `display_name` is DELIBERATELY left unnarrowed beyond "is a string"
+ *  (director decision, issue #207 round 2): this list is the admin
+ *  surface for FIXING an existing bad display_name, so narrowing the
+ *  parser here would hide the very row an operator needs to see and
+ *  correct. Input-side validation (trim/64-grapheme/control-char) is the
+ *  server's job on the way INTO Users, not this reply's job on the way
+ *  out (`rename_user`'s `invalid_name` reject already owns that). */
 function parseUserList(raw: unknown): UserSummary[] {
   if (!Array.isArray(raw)) return [];
   const out: UserSummary[] = [];
@@ -2843,9 +2871,11 @@ function parseUserList(raw: unknown): UserSummary[] {
     const p = item as Record<string, unknown>;
     if (
       typeof p.id !== "string" ||
-      typeof p.kind !== "string" ||
+      !USER_ID_PATTERN.test(p.id) ||
+      p.kind !== "user" ||
       typeof p.display_name !== "string" ||
-      typeof p.role !== "string"
+      typeof p.role !== "string" ||
+      !USER_ROLES.has(p.role)
     ) {
       continue;
     }
@@ -2853,7 +2883,7 @@ function parseUserList(raw: unknown): UserSummary[] {
       id: p.id,
       kind: p.kind,
       displayName: p.display_name,
-      role: p.role,
+      role: p.role as UserSummary["role"],
     });
   }
   return out;
