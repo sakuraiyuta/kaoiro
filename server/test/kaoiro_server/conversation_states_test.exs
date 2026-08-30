@@ -723,7 +723,7 @@ defmodule KaoiroServer.ConversationStatesTest do
       assert {:ok, _, _} = DateTime.from_iso8601(started_at)
     end
 
-    test "closed tombstone は turns=last_turn、tokens/started_at は nil で返す (#177 の drop と整合)" do
+    test "closed tombstone は turns=last_turn・tokens=nil だが started_at は保持する (director決定A, issue #276)" do
       name = start_tracker(:cs_list_closed, max_turns: 1)
       assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
@@ -739,9 +739,11 @@ defmodule KaoiroServer.ConversationStatesTest do
                  "turns" => 2,
                  "tokens" => nil,
                  "status" => "closed",
-                 "started_at" => nil
+                 "started_at" => started_at
                }
              ] = ConversationStates.list_for_operator(name)
+
+      assert {:ok, _, _} = DateTime.from_iso8601(started_at)
     end
 
     test "複数会話を conversation_id 順を問わず全件返す" do
@@ -791,13 +793,15 @@ defmodule KaoiroServer.ConversationStatesTest do
                ConversationStates.get("c", name)
     end
 
-    test "close 後の list_for_operator は status=closed のまま残る" do
+    test "close 後の list_for_operator は status=closed かつ started_at 保持のまま残る (director決定A)" do
       name = start_tracker(:cs_close_list)
       assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
       assert {:ok, _} = ConversationStates.close_by_operator("c", name)
 
-      assert [%{"conversation_id" => "c", "status" => "closed"}] =
+      assert [%{"conversation_id" => "c", "status" => "closed", "started_at" => started_at}] =
                ConversationStates.list_for_operator(name)
+
+      assert {:ok, _, _} = DateTime.from_iso8601(started_at)
     end
 
     test "既に closed な会話への再 close は :conversation_closed で拒否する (冪等、crash しない)" do

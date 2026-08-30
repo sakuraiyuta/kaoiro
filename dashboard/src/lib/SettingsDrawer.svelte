@@ -24,47 +24,51 @@
   } = $props();
 
   // issue #276: fetched once per drawer open (no live push — mirrors
-  // getLaunchDefaults' pure read-time query shape). `cancelled` guards
-  // against a stale reply landing after the drawer closed and reopened
-  // (coding-languages.md「Async continuations own nothing after a
-  // suspension point」).
+  // getLaunchDefaults' pure read-time query shape).
   let conversations = $state<ConversationSummary[] | null>(null);
   let conversationsError = $state<string | null>(null);
 
-  $effect(() => {
+  // Every listConversations() call in this component — the initial
+  // mount fetch, the refresh button, and the post-close re-fetch —
+  // shares this ONE sequence counter, bumped per call and checked
+  // before applying either the resolved list or the caught error. Only
+  // the reply matching the CURRENT (most recent) call is applied.
+  //
+  // A single shared guard, not one per call site, is what actually
+  // closes the race: an earlier round-trip review claimed
+  // refreshConversations() alone had this guard, but the mount effect
+  // fired its own independent, unguarded call — so a slow initial-load
+  // reply landing after a faster manual refresh could still overwrite
+  // fresher data. This also subsumes the effect-cleanup `cancelled`
+  // pattern (coding-languages.md「Async continuations own nothing after
+  // a suspension point」): a connection change re-runs the effect,
+  // which calls this again and bumps the sequence, so the OLD
+  // connection's in-flight reply is a stale seq and gets ignored the
+  // same way any other stale reply does (ふじ review follow-up, issue
+  // #276).
+  let refreshSeq = 0;
+
+  function refreshConversations(): void {
     if (!connection) return;
-    let cancelled = false;
+    const seq = ++refreshSeq;
     connection
       .listConversations()
       .then((list) => {
-        if (!cancelled) conversations = list;
+        if (seq === refreshSeq) {
+          conversations = list;
+          conversationsError = null;
+        }
       })
       .catch((err: unknown) => {
-        if (!cancelled) {
+        if (seq === refreshSeq) {
           conversationsError = err instanceof Error ? err.message : "error";
         }
       });
-    return () => {
-      cancelled = true;
-    };
-  });
-
-  // Manual refresh (button) and post-close re-fetch share this — no
-  // cancelled-guard needed here (unlike the mount effect above): both
-  // are one-shot user-triggered calls, not a re-entrant effect that can
-  // race a stale reply against a fresher one.
-  function refreshConversations(): void {
-    if (!connection) return;
-    connection
-      .listConversations()
-      .then((list) => {
-        conversations = list;
-        conversationsError = null;
-      })
-      .catch((err: unknown) => {
-        conversationsError = err instanceof Error ? err.message : "error";
-      });
   }
+
+  $effect(() => {
+    if (connection) refreshConversations();
+  });
 
   // issue #276 manual close: confirm via the shared Modal primitive
   // (#232's focus-trap fix applies here too — director instruction to
@@ -80,12 +84,33 @@
     try {
       await connection.closeConversation(confirmCloseCid);
       confirmCloseCid = null;
-      refreshConversations();
     } catch (err) {
       closeError = err instanceof Error ? err.message : "error";
     } finally {
       closing = false;
+      // Re-fetch either way (closeConversation's own doc contract, ふじ
+      // review follow-up): a rejection can mean someone else already
+      // closed it (conversation_closed) or TTL beat us to it — the row
+      // would otherwise sit stale at status=open forever. closeError
+      // stays visible; this only refreshes the list behind it.
+      refreshConversations();
     }
+  }
+
+  // MM/DD HH:MM in the browser's locale (issue #276 review follow-up —
+  // a row previously showed no start time at all). Mirrors
+  // AgentDetail.svelte's formatTime/fmtReset pattern: invalid or
+  // missing timestamps render as "" rather than "Invalid Date".
+  function formatStartedAt(iso: string | null): string {
+    if (iso === null) return "";
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return "";
+    return at.toLocaleString([], {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
 </script>
 
@@ -186,9 +211,15 @@
               <span class="conv-participants"
                 >{conv.participants.join(" ⇔ ")}</span
               >
-              <span class="conv-meta"
-                >{conv.turns} turns / {conv.status}</span
+              <span class="conv-cid" title={conv.conversationId}
+                >cid:{conv.conversationId.slice(0, 8)}</span
               >
+              <span class="conv-meta">
+                {conv.turns} turns / {conv.status}
+                {#if formatStartedAt(conv.startedAt)}
+                  / {formatStartedAt(conv.startedAt)}
+                {/if}
+              </span>
               {#if conv.status === "open"}
                 <button
                   type="button"
@@ -437,6 +468,12 @@
 
   .conv-participants {
     color: var(--fg);
+  }
+
+  .conv-cid {
+    color: var(--fg-dim);
+    font-family: monospace;
+    font-size: 0.85em;
   }
 
   .conv-meta {

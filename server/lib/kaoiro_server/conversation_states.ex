@@ -59,10 +59,15 @@ defmodule KaoiroServer.ConversationStates do
 
   A CLOSED tombstone (`status: :closed`) replaces the open entry in place
   under the same key: `reason` (why it closed), `closed_at` (monotonic ms,
-  the TTL clock), `agents` (the former participant set) and `last_turn`
-  (the turn count reached at closing) are kept for observability and for
-  rejecting further sends; `tokens` / `started_at` / `started_at_wall` /
-  `done_by` / `max_turn_number` / `notified_unreachable` are dropped — a closed
+  the TTL clock), `agents` (the former participant set), `last_turn`
+  (the turn count reached at closing), and `started_at_wall` (issue #276
+  director decision: an operator viewing a closed conversation's row
+  still needs to see when it started — kept alongside the other
+  observability fields; GC lifetime is keyed off `closed_at`/
+  `tombstone_ttl_ms`, never `started_at_wall`, so retaining it does not
+  extend a tombstone's lifetime) are kept for observability and for
+  rejecting further sends; `tokens` / `started_at` / `done_by` /
+  `max_turn_number` / `notified_unreachable` are dropped — a closed
   conversation never accepts another message, so nothing needs them again
   (`{:error, :conversation_closed}` is checked before `:stale_turn`, so a
   closed entry never needs its own turn bookkeeping). A tombstone still counts
@@ -228,11 +233,12 @@ defmodule KaoiroServer.ConversationStates do
   "tokens", "status" ("open" | "closed"), "started_at" (ISO8601
   wallclock)}`.
 
-  A closed tombstone drops `tokens` / `started_at_wall` at close time
-  (see the moduledoc), so those come back `nil` rather than the last
-  live value — the projection must not imply a closed conversation is
-  still accruing. `turns` for a closed entry is `last_turn`, the count
-  frozen at close.
+  A closed tombstone drops `tokens` at close time (see the moduledoc), so
+  it comes back `nil` rather than the last live value — the projection
+  must not imply a closed conversation is still accruing. `started_at`
+  (director decision A, issue #276) survives the close transition, so a
+  closed entry's row can still show when it started. `turns` for a
+  closed entry is `last_turn`, the count frozen at close.
 
   No filtering by role/permission here — the caller (channel handler)
   owns the admin-only gate (issue #276 decision: keep the check at one
@@ -672,7 +678,13 @@ defmodule KaoiroServer.ConversationStates do
       reason: reason,
       closed_at: now,
       agents: entry.agents,
-      last_turn: entry.turns
+      last_turn: entry.turns,
+      # issue #276 director decision (A): keep the wallclock start time on
+      # the tombstone so an operator can still see when a closed
+      # conversation started. Every caller passes an OPEN entry here (see
+      # this function's call sites), which always carries this key — the
+      # Map.get default only guards a hypothetical future caller.
+      started_at_wall: Map.get(entry, :started_at_wall)
     }
   end
 

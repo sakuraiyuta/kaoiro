@@ -180,6 +180,36 @@ describe("SettingsDrawer", () => {
     const item = target.querySelector(".conv-list li")!;
     expect(item.textContent).toContain("gp.a ⇔ gp.b");
     expect(item.textContent).toContain("3 turns / open");
+
+    // issue #276 review follow-up (ふじ B1): the row must show the
+    // conversation's own identity and start time, not just
+    // participants/turns/status.
+    const cid = item.querySelector(".conv-cid")!;
+    expect(cid.textContent).toContain("cid:c1");
+    expect(cid.getAttribute("title")).toBe("c1");
+    // Locale-independent: only assert a non-empty formatted date/time
+    // rendered (avoids pinning an exact locale string in CI).
+    expect(item.textContent).toMatch(/\d{2}\/\d{2}.*\d{2}:\d{2}/);
+  });
+
+  it("started_at が null の行(サーバ未対応・欠測)は時刻を追加表示しない", async () => {
+    const conn = makeConnection(async () => [
+      {
+        conversationId: "c2",
+        participants: ["a", "b"],
+        turns: 1,
+        tokens: 10,
+        status: "closed",
+        startedAt: null,
+      },
+    ]);
+    const { target } = await renderDrawer(vi.fn(), conn);
+    await Promise.resolve();
+    await tick();
+
+    const meta = target.querySelector(".conv-meta")!;
+    expect(meta.textContent).toContain("1 turns / closed");
+    expect(meta.textContent).not.toMatch(/\d{2}\/\d{2}/);
   });
 
   it("会話が 0 件なら空である旨を表示する", async () => {
@@ -201,6 +231,113 @@ describe("SettingsDrawer", () => {
 
     expect(target.querySelector(".conv-status")?.textContent).toContain(
       "forbidden",
+    );
+  });
+
+  // issue #276 review follow-up (ふじ NB2): refreshConversations() is
+  // re-entrant (refresh-button double-click, or a refresh racing a
+  // close's own re-fetch) — a slower earlier reply must not clobber a
+  // faster later one.
+  it("更新の連打で古いレスポンスが新しいレスポンスを上書きしない (stale-reply race guard)", async () => {
+    const rowFor = (cid: string): ConversationSummary[] => [
+      {
+        conversationId: cid,
+        participants: ["a", "b"],
+        turns: 1,
+        tokens: 10,
+        status: "open",
+        startedAt: null,
+      },
+    ];
+
+    const resolvers: Array<(v: ConversationSummary[]) => void> = [];
+    let call = 0;
+    const conn = makeConnection(() => {
+      call += 1;
+      if (call === 1) return Promise.resolve(rowFor("initial"));
+      return new Promise((resolve) => resolvers.push(resolve));
+    });
+
+    const { target } = await renderDrawer(vi.fn(), conn);
+    await Promise.resolve();
+    await tick();
+    expect(target.querySelector(".conv-cid")?.textContent).toContain(
+      "initial",
+    );
+
+    // Double-click the refresh button — two overlapping listConversations
+    // calls in flight.
+    const refreshBtn = target.querySelector<HTMLButtonElement>(".refresh")!;
+    refreshBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    refreshBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick();
+    expect(resolvers).toHaveLength(2);
+
+    // The SECOND (later) call resolves first.
+    resolvers[1]!(rowFor("second"));
+    await Promise.resolve();
+    await tick();
+    expect(target.querySelector(".conv-cid")?.textContent).toContain(
+      "second",
+    );
+
+    // The FIRST (earlier) call resolves last — must NOT overwrite it.
+    resolvers[0]!(rowFor("first"));
+    await Promise.resolve();
+    await tick();
+    expect(target.querySelector(".conv-cid")?.textContent).toContain(
+      "second",
+    );
+  });
+
+  // issue #276 review round 2 (code-review-assessment BUG finding): the
+  // mount effect's own initial fetch previously bypassed refreshSeq
+  // entirely, so a slow mount-time reply landing after a faster refresh
+  // click could still clobber fresher data — the exact race class the
+  // test above claims to have closed, just via a second, un-integrated
+  // call site. Pins that the mount fetch now shares the same guard.
+  it("mount 時の初期取得と更新ボタンの race でも新しい結果が勝つ", async () => {
+    const rowFor = (cid: string): ConversationSummary[] => [
+      {
+        conversationId: cid,
+        participants: ["a", "b"],
+        turns: 1,
+        tokens: 10,
+        status: "open",
+        startedAt: null,
+      },
+    ];
+
+    const resolvers: Array<(v: ConversationSummary[]) => void> = [];
+    const conn = makeConnection(
+      () => new Promise<ConversationSummary[]>((resolve) => resolvers.push(resolve)),
+    );
+
+    const { target } = await renderDrawer(vi.fn(), conn);
+    await Promise.resolve();
+    await tick();
+    // The mount effect's own fetch is in flight (call 1, unresolved).
+    expect(resolvers).toHaveLength(1);
+
+    const refreshBtn = target.querySelector<HTMLButtonElement>(".refresh")!;
+    refreshBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick();
+    expect(resolvers).toHaveLength(2);
+
+    // The refresh click (LATER call) resolves first.
+    resolvers[1]!(rowFor("fresh"));
+    await Promise.resolve();
+    await tick();
+    expect(target.querySelector(".conv-cid")?.textContent).toContain(
+      "fresh",
+    );
+
+    // The mount fetch (EARLIER call) resolves last — must NOT overwrite it.
+    resolvers[0]!(rowFor("stale-mount"));
+    await Promise.resolve();
+    await tick();
+    expect(target.querySelector(".conv-cid")?.textContent).toContain(
+      "fresh",
     );
   });
 
@@ -308,7 +445,12 @@ describe("SettingsDrawer", () => {
       );
     });
 
-    it("close 失敗時はダイアログにエラーを表示し、一覧は再取得しない", async () => {
+    // issue #276 review follow-up (ふじ NB1): closeConversation's own doc
+    // contract says the caller must re-fetch either way — a rejection can
+    // mean someone else already closed it (conversation_closed) or TTL
+    // beat us to it, and the row would otherwise sit stale at status=open
+    // forever. Error stays visible; the list behind it still refreshes.
+    it("close 失敗時はダイアログにエラーを表示しつつ、一覧を再取得する", async () => {
       const conn = makeConnection(
         async () => [
           {
@@ -341,7 +483,10 @@ describe("SettingsDrawer", () => {
 
       expect(dialog.textContent).toContain("失敗しました");
       expect(dialog.textContent).toContain("conversation_closed");
-      expect(conn.listConversations).toHaveBeenCalledTimes(1);
+      // Dialog stays open (director instruction: no accidental data-loss
+      // pattern — a failed close must not silently vanish the modal).
+      expect(document.querySelector("dialog")).not.toBeNull();
+      expect(conn.listConversations).toHaveBeenCalledTimes(2);
     });
   });
 });
