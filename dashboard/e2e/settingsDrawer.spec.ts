@@ -102,13 +102,8 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     await page.goto(DRAWER);
     await page.locator("#drawer-trigger").click();
     await expect(page.locator("dialog")).toBeVisible();
-    // The drawer's own `slide-in` CSS animation (0.2s, translateX(100%)
-    // -> resting) is still in flight immediately after open -- measured
-    // directly: reading getBoundingClientRect() without this wait caught
-    // it mid-transition and reported a right edge ~277px past the
-    // viewport (a false failure in an EARLIER version of this test, not
-    // a production bug -- confirmed by re-measuring after the animation
-    // settles).
+    // Wait for the drawer's `slide-in` CSS animation (0.2s) to finish --
+    // reading the rect mid-transition gives a wrong position.
     await page.waitForTimeout(250);
 
     const rect = await page.evaluate(() => {
