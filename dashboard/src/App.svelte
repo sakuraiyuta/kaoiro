@@ -590,6 +590,22 @@
             activeTimelineReplays,
             connectionGeneration,
           );
+          // issue #276 review follow-up (ふじ round3 must-fix): `hosts`
+          // and the `isOperator` it implies were the ONE projection this
+          // reset list omitted. onHosts (below) is the only place that
+          // sets isOperator = true, so a role downgrade mid-session
+          // (server-side role drift disconnects the socket; agents_channel.ex
+          // only pushes "hosts" to an operator-capable role on join) means
+          // the rejoin as a viewer never fires onHosts again — isOperator
+          // stayed true from the PREVIOUS, since-revoked operator session.
+          // The server still rejects any operator-only call, so this was
+          // never a privilege escalation, but the client kept showing
+          // operator-only UI (launch dialog, SettingsDrawer's conversation
+          // list) and its state to a session that no longer qualifies.
+          // Reset here so only a genuine operator-capable rejoin (which
+          // DOES get a fresh "hosts" push) re-raises the flag.
+          hosts = [];
+          isOperator = false;
           // issue #228 round 2 MF-4: every (re)join can follow a server
           // redeploy, so the health snapshot fetched at mount may already
           // be stale by the time this fires.

@@ -728,13 +728,16 @@ defmodule KaoiroServer.ConversationStatesTest do
       assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
       # started_at_wall は DateTime.utc_now() 由来で clock 注入の対象外
-      # (close_entry/3 のコメント参照) なので、既知の sentinel 値を注入する
-      # 代わりに実際に生成された open 時点の値を捕捉し、close 後に厳密一致
-      # させる。close 時に fresh な DateTime.utc_now() を再生成する誤実装
-      # (以前は形状チェックのみで green だった) が入れば、マイクロ秒精度の
-      # ISO8601 文字列同士がまず一致しないため red になる。
-      assert [%{"started_at" => open_started_at}] = ConversationStates.list_for_operator(name)
-      assert {:ok, _, _} = DateTime.from_iso8601(open_started_at)
+      # (close_entry/3 のコメント参照)。real clock 値を capture して
+      # close 後に照合する方式だと「たまたま同じマイクロ秒に生成された」
+      # 可能性を理論上は排除できないので、:sys.replace_state で既知の
+      # sentinel 値へ固定し完全決定論にする(ふじ round3 advisory —
+      # 現行 pin 自体は既に accept 済みで、これは追加の硬化)。
+      pid = Process.whereis(name)
+
+      :sys.replace_state(pid, fn state ->
+        put_in(state.conversations["c"].started_at_wall, "2020-01-01T00:00:00.000000Z")
+      end)
 
       assert {:exceeded, :max_turns} =
                ConversationStates.record_message("c", "a", "b", "y", 2, false, true, name)
@@ -748,7 +751,7 @@ defmodule KaoiroServer.ConversationStatesTest do
                  "turns" => 2,
                  "tokens" => nil,
                  "status" => "closed",
-                 "started_at" => ^open_started_at
+                 "started_at" => "2020-01-01T00:00:00.000000Z"
                }
              ] = ConversationStates.list_for_operator(name)
     end
@@ -804,9 +807,13 @@ defmodule KaoiroServer.ConversationStatesTest do
       name = start_tracker(:cs_close_list)
       assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
 
-      # 同じ理由(started_at_wall は clock 注入の対象外)で、実際に生成された
-      # open 時点の値を捕捉し close 後に厳密一致させる。
-      assert [%{"started_at" => open_started_at}] = ConversationStates.list_for_operator(name)
+      # 同じ理由(started_at_wall は clock 注入の対象外)で、既知の
+      # sentinel 値に固定して完全決定論にする(ふじ round3 advisory)。
+      pid = Process.whereis(name)
+
+      :sys.replace_state(pid, fn state ->
+        put_in(state.conversations["c"].started_at_wall, "2020-01-01T00:00:00.000000Z")
+      end)
 
       assert {:ok, _} = ConversationStates.close_by_operator("c", name)
 
@@ -814,7 +821,7 @@ defmodule KaoiroServer.ConversationStatesTest do
                %{
                  "conversation_id" => "c",
                  "status" => "closed",
-                 "started_at" => ^open_started_at
+                 "started_at" => "2020-01-01T00:00:00.000000Z"
                }
              ] = ConversationStates.list_for_operator(name)
     end

@@ -79,6 +79,19 @@
     if (connection) refreshConversations();
     return () => {
       refreshSeq += 1;
+      // issue #276 review follow-up (こはく advisory, round4): the seq
+      // bump above invalidates an in-flight REPLY, but leaves whatever
+      // is already RENDERED alone. A connection-identity change (e.g.
+      // App.svelte's isOperator flapping false->true across a rejoin)
+      // would otherwise keep showing the previous generation's list
+      // until the new fetch resolves. Reset here too, so a generation
+      // change shows the loading state instead. Scoped to this cleanup
+      // (fires only on effect re-run / unmount) — the refresh button and
+      // the post-close re-fetch call refreshConversations() directly and
+      // are unaffected, preserving their existing "keep the old list
+      // visible while refreshing" behaviour.
+      conversations = null;
+      conversationsError = null;
     };
   });
 

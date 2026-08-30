@@ -421,6 +421,72 @@ describe("SettingsDrawer", () => {
     ).toBe("fresh-after-reconnect");
   });
 
+  // issue #276 review follow-up (こはく advisory, round4): the seq bump
+  // in the effect cleanup only invalidates an in-flight REPLY -- it does
+  // NOT reset whatever list is already rendered. A connection-IDENTITY
+  // change (not just loss -- e.g. a genuine reconnect to a new socket, or
+  // App.svelte's isOperator flapping false->true across a rejoin) must
+  // not keep showing the PREVIOUS generation's resolved list while the
+  // new generation's fetch is still pending.
+  it("connection 世代が変わると、直前の世代で取得済みだった一覧を保持せず読み込み中に戻す (stale-display reset)", async () => {
+    const conn1 = makeConnection(async () => [
+      {
+        conversationId: "gen1-row",
+        participants: ["a", "b"],
+        turns: 1,
+        tokens: 10,
+        status: "open",
+        startedAt: null,
+      },
+    ]);
+
+    const target = document.createElement("div");
+    document.body.append(target);
+    const props = makeReactiveSettingsDrawerProps({
+      onClose: vi.fn(),
+      connection: conn1,
+    });
+    const component = mount(SettingsDrawer, { target, props });
+    mounted.push(component);
+    await Promise.resolve();
+    await tick();
+    expect(target.querySelector(".conv-cid")?.textContent).toContain(
+      "gen1-row",
+    );
+
+    // A DIFFERENT connection object -- a genuine new generation, not a
+    // mere loss/undefined -- whose fetch is deliberately left pending.
+    const resolvers: Array<(v: ConversationSummary[]) => void> = [];
+    const conn2 = makeConnection(
+      () => new Promise<ConversationSummary[]>((resolve) => resolvers.push(resolve)),
+    );
+    props.connection = conn2;
+    await tick();
+
+    // Must show the loading state, NOT the previous generation's row,
+    // while conn2's fetch is still in flight.
+    expect(target.querySelector(".conv-status")?.textContent).toContain(
+      "読み込み中",
+    );
+    expect(target.textContent).not.toContain("gen1-row");
+
+    resolvers[0]!([
+      {
+        conversationId: "gen2-row",
+        participants: ["a", "b"],
+        turns: 1,
+        tokens: 10,
+        status: "open",
+        startedAt: null,
+      },
+    ]);
+    await Promise.resolve();
+    await tick();
+    expect(target.querySelector(".conv-cid")?.textContent).toContain(
+      "gen2-row",
+    );
+  });
+
   // issue #276 review follow-up (ふじ round2 B2): the resolve-side guard
   // (test above/earlier) was pinned, but the CATCH side never got its own
   // regression test — an older request's rejection landing after a newer
