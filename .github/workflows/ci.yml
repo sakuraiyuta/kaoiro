@@ -116,7 +116,51 @@ jobs:
                 mix deps.get
                 mix format --check-formatted
                 mix compile --warnings-as-errors
+
+                # issue #282: permanent lightweight runner-stall probe.
+                # Samples the monotonic clock every 10ms around mix test;
+                # a gap over 100ms between consecutive samples means THIS
+                # PROCESS went unscheduled longer than ExUnit default
+                # assert_receive_timeout, regardless of cause (CPU steal,
+                # cgroup throttle, hypervisor pause, ...) -- a net that
+                # catches the effect without needing to know the cause.
+                # Fail-soft throughout: probe start/stop never gates the
+                # real test result, only mix test own exit code does.
+                (
+                  prev=\$(date +%s%N)
+                  while true; do
+                    sleep 0.01
+                    now=\$(date +%s%N)
+                    diff_ms=\$(( (now - prev) / 1000000 ))
+                    if [ \"\$diff_ms\" -gt 100 ]; then
+                      echo \"GAP \$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) diff_ms=\$diff_ms\" >> /tmp/gap.log
+                    fi
+                    prev=\$now
+                  done
+                ) >/dev/null 2>&1 &
+                GAP_PID=\$!
+
+                # set -e stays OFF until exit below: every line from here
+                # on is diagnostic (probe teardown + log printing), and
+                # my-review flagged that restoring set -e too early let a
+                # transient failure in the log-printing block itself abort
+                # the step with the WRONG exit code even when mix test
+                # passed. Only TEST_EXIT (captured before this point) may
+                # decide the step's outcome.
+                set +e
                 mix test
+                TEST_EXIT=\$?
+
+                kill \$GAP_PID >/dev/null 2>&1 || true
+
+                echo \"=== runner stall probe (issue #282): monotonic clock gaps over 100ms ===\"
+                if [ -s /tmp/gap.log ]; then
+                  cat /tmp/gap.log
+                else
+                  echo \"no gaps over 100ms detected\"
+                fi
+
+                exit \$TEST_EXIT
               "
             '
 
