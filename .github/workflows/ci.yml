@@ -88,7 +88,8 @@ jobs:
           # failure that still hands docker a consumable stream would go
           # unnoticed.
           set -euo pipefail
-          tar --no-xattrs -cf - server | docker run --rm -i -w /w \
+          # RuntimeConfigTest also reads the repository's scripts/dev.sh.
+          tar --no-xattrs -cf - server scripts | docker run --rm -i -w /w \
             docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
             sh -euc '
               tar -xf - -C /w
