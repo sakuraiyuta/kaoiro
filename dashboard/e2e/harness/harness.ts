@@ -5,7 +5,7 @@
 //   ?view=lobby&role=operator|viewer[&taskRing=N]
 //   ?view=detail[&pending=permission|question][&attention=1]
 //     [&mountDelay=ms][&expandOrigin=1][&taskRing=N]
-//   ?view=overlay&overlay=dialog|drawer|persona
+//   ?view=overlay&overlay=dialog|drawer|persona|dialog-triggered|drawer-triggered
 //   ?view=app        — real App.svelte behind fetch mocks (header chrome)
 import { mount } from "svelte";
 import "../../src/app.css";
@@ -82,7 +82,11 @@ if (view === "app") {
         ? "persona"
         : overlayParam === "modal-empty"
           ? "modal-empty"
-          : "dialog";
+          : overlayParam === "dialog-triggered"
+            ? "dialog-triggered"
+            : overlayParam === "drawer-triggered"
+              ? "drawer-triggered"
+              : "dialog";
   if (overlay === "persona") {
     // issue #232 MF-3 a11y spec: PersonaDetailDialog fetches its detail
     // over GET /api/personas/:id — stub it so the modal actually renders

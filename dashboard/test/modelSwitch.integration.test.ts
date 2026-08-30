@@ -11,6 +11,22 @@ import type {
   ModelOption,
 } from "../src/lib/protocol";
 
+// jsdom does not implement HTMLDialogElement.showModal/close (measured
+// 2026-08-28, jsdom 29.1.1; same polyfill as modal.integration.test.ts).
+// issue #277 moved LaunchDialog onto the shared Modal.svelte primitive.
+if (
+  typeof HTMLDialogElement !== "undefined" &&
+  typeof HTMLDialogElement.prototype.showModal !== "function"
+) {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+    this.removeAttribute("open");
+    this.dispatchEvent(new Event("close"));
+  };
+}
+
 const mounted: object[] = [];
 
 beforeEach(() => {

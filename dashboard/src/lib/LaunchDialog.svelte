@@ -9,6 +9,7 @@
     RunnerSessions,
   } from "./protocol";
   import { PERMISSION_MODE_AXES, resolveLaunchDefaultEffort } from "./protocol";
+  import Modal from "./Modal.svelte";
 
   let {
     hosts,
@@ -487,15 +488,8 @@
   }
 </script>
 
-<div
-  class="backdrop"
-  role="button"
-  tabindex="-1"
-  aria-label="閉じる"
-  onclick={onClose}
-  onkeydown={(e) => e.key === "Escape" && onClose()}
-></div>
-<div class="dialog" role="dialog" aria-modal="true" aria-label="エージェント起動">
+<Modal ariaLabel="エージェント起動" {onClose} contentClass="launch-dialog-content">
+  {#snippet children()}
   <form onsubmit={launch}>
     <h2>エージェントを起動</h2>
 
@@ -716,31 +710,35 @@
     {/if}
 
     <div class="actions">
-      <button type="button" class="ghost" onclick={onClose}>キャンセル</button>
+      <!-- svelte-ignore a11y_autofocus -- inside a native <dialog> opened
+           via showModal() (Modal.svelte), autofocus is the spec-sanctioned
+           initial-focus mechanism (issue #232 MF-3), not page-load
+           autofocus. Cancel is the always-rendered, non-destructive
+           control -- same reasoning PersonaDetailDialog's close button
+           uses (issue #277). -->
+      <button
+        type="button"
+        class="ghost"
+        onclick={onClose}
+        autofocus
+      >
+        キャンセル
+      </button>
       <button type="submit" disabled={!canLaunch}>
         {busy ? "起動中…" : "起動"}
       </button>
     </div>
   </form>
-</div>
+  {/snippet}
+</Modal>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    border: none;
-    cursor: default;
-    /* Global dialog/drawer layer (app.css z-index scale): above the bottom
-       sheet (30-32); scale shared with SettingsDrawer (phase-31 31-7). */
-    z-index: 40;
-  }
-
-  .dialog {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+  /* issue #277: modal chrome (backdrop, centering, focus handling) now
+     lives in Modal.svelte -- this sizes/positions ONLY the content box it
+     renders into `.modal-content` (needs :global(), same reasoning as
+     PersonaDetailDialog.svelte: this class is only ever handed to Modal
+     as a prop, never rendered by this component itself). */
+  :global(.launch-dialog-content) {
     /* The implied 4vw side gap of the former 92vw acts as the safe-area
        floor for landscape notches (responsive-layout.md セーフエリア). */
     width: min(
@@ -748,17 +746,12 @@
       calc(100vw - max(4vw, env(safe-area-inset-left))
         - max(4vw, env(safe-area-inset-right)))
     );
-    padding: 1.6rem;
-    background: var(--bg-card);
-    border: 1px solid var(--line);
-    border-radius: 0.6rem;
-    z-index: 41;
   }
 
   /* short: cap the dialog and let it scroll internally so a low viewport
      never clips the top/bottom (ADR-0052 F8, phase-31 31-8). */
   @media (max-height: 500px) {
-    .dialog {
+    :global(.launch-dialog-content) {
       max-block-size: calc(
         100dvh - max(1rem, env(safe-area-inset-top))
           - max(1rem, env(safe-area-inset-bottom))
