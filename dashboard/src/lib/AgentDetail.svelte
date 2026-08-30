@@ -805,11 +805,26 @@
   // population. Falls forward to the nearest LATER displayable entry when
   // the exact boundary index itself is hidden by the current setting
   // (never collapses to "show nothing" — the failure mode this fixes).
+  //
+  // issue #228 R3 must-fix: no displayable entry AT OR PAST the boundary
+  // (findIndex returns -1) used to fall back to `displayableLogs.length` —
+  // a position past every entry, so the slice below is always empty. This
+  // is reachable with no hide toggle at all (a same-agent history
+  // reorganize can leave a preserved `frozenWindow.start` pointing past
+  // every entry now displayable, since the shrink guard only fires when
+  // `logs.length` goes down) as well as via a toggle whose boundary run is
+  // followed by nothing displayable. Falling back to the same tail window
+  // used when nothing is frozen keeps every input class (empty
+  // `displayableLogs`, a hidden boundary, or an outright invalid one)
+  // safe-side: show the most recent displayable entries instead of
+  // nothing.
   function mapAbsoluteBoundaryToDisplayIndex(absoluteBoundary: number): number {
     const index = displayableLogs.findIndex(
       (d) => d.absoluteIndex >= absoluteBoundary,
     );
-    return index === -1 ? displayableLogs.length : index;
+    return index === -1
+      ? Math.max(0, displayableLogs.length - LOG_WINDOW_SIZE)
+      : index;
   }
   const effectiveWindowStart = $derived(
     frozenWindow !== null
