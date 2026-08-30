@@ -1,27 +1,27 @@
 ---
-title: Claude Code アダプタ — Agent SDK イベント仕様
-description: TypeScript 版 Claude Agent SDK の実メッセージ/コールバック仕様と、kaoiro 状態への導出マッピング(検証済み)。
+title: Claude Code adapter — Agent SDK event specification
+description: Actual message/callback specification of the TypeScript Claude Agent SDK and its verified derivation mapping to kaoiro state.
 status: accepted
 related: [protocol, plugin-model, architecture, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
 
-# Claude Code アダプタ — Agent SDK イベント仕様
+# Claude Code adapter — Agent SDK event specification
 
 ## Purpose
 
-Claude Code アダプタ([plugin-model](plugin-model.md))が依拠する TypeScript 版
-Claude Agent SDK(`@anthropic-ai/claude-agent-sdk`)の**実メッセージ/コール
-バック仕様**を確定し、kaoiro の状態([protocol](protocol.md))への導出を定義
-する。公式ドキュメント(code.claude.com / platform.claude.com)で検証済み
-(2026-06)。
+Establishes the **actual message/callback specification** of the TypeScript
+Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) used by the Claude Code
+adapter ([plugin-model](plugin-model.md)), and defines its derivation to
+kaoiro state ([protocol](protocol.md)). Verified against the official
+documentation (code.claude.com / platform.claude.com; 2026-06).
 
 ## Definition
 
-### メッセージ列(query() / Query)
+### Message sequence (query() / Query)
 
-`query()` は `Query`(= `AsyncGenerator<SDKMessage, void>`)を返し、以下を逐次
-yield する。
+`query()` returns a `Query` (= `AsyncGenerator<SDKMessage, void>`) and yields
+the following sequentially.
 
 ```typescript
 type SDKMessage =
@@ -34,59 +34,58 @@ type SDKMessage =
   | SDKCompactBoundaryMessage;
 ```
 
-| 変種 | type / subtype | 主なフィールド |
+| Variant | type / subtype | Main fields |
 |---|---|---|
 | SDKSystemMessage | system / init | session_id, model, tools[], cwd, permissionMode, mcp_servers, slash_commands |
-| SDKAssistantMessage | assistant | message(APIAssistantMessage: content に text/thinking/tool_use), parent_tool_use_id, error? |
-| SDKUserMessage | user | message(APIUserMessage: tool_result を含む), parent_tool_use_id |
-| SDKPartialAssistantMessage | stream_event | event(RawMessageStreamEvent) — `includePartialMessages: true` のみ |
-| SDKResultMessage | result | subtype, is_error, num_turns, total_cost_usd, usage, duration_ms, result(成功)/ errors(失敗) |
+| SDKAssistantMessage | assistant | message(APIAssistantMessage: content contains text/thinking/tool_use), parent_tool_use_id, error? |
+| SDKUserMessage | user | message(APIUserMessage: includes tool_result), parent_tool_use_id |
+| SDKPartialAssistantMessage | stream_event | event(RawMessageStreamEvent) — only with `includePartialMessages: true` |
+| SDKResultMessage | result | subtype, is_error, num_turns, total_cost_usd, usage, duration_ms, result(success)/ errors(failure) |
 
 `SDKResultMessage.subtype`: `success` | `error_max_turns` |
 `error_during_execution` | `error_max_budget_usd` |
-`error_max_structured_output_retries`。
+`error_max_structured_output_retries`.
 
-ツール結果は独立メッセージではなく **`SDKUserMessage`(content の tool_result
-ブロック)** として返る。
+Tool results are returned not as separate messages but as **`SDKUserMessage`
+(a tool_result block in content)**.
 
-### タスク(subagent/workflow)メッセージ
+### Task (subagent/workflow) messages
 
-親セッションは Task ツールで起動した subagent / ローカル workflow のライフサイクルを
-`type:"system"` の追加 subtype で yield する。kaoiro はこれを subagent/workflow 通知へ
-導出する([subagent-tasks](subagent-tasks.md)、
-[ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md))。
+The parent session yields the lifecycle of subagents / local workflows started
+by the Task tool as additional `type:"system"` subtypes. kaoiro derives these
+into subagent/workflow notifications ([subagent-tasks](subagent-tasks.md),
+[ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)).
 
-| subtype | 主なフィールド |
+| subtype | Main fields |
 |---|---|
-| task_started | task_id, description, subagent_type, task_type, workflow_name, tool_use_id, skip_transcript, **prompt**(未文書化・非配線) |
+| task_started | task_id, description, subagent_type, task_type, workflow_name, tool_use_id, skip_transcript, **prompt** (undocumented; unwired) |
 | task_progress | subagent_type, usage{total_tokens,tool_uses,duration_ms}, last_tool_name, summary |
-| task_notification | status(completed/failed/stopped), summary, usage, **output_file**(未文書化・非配線) |
-| task_updated(**未文書化、対象外**) | task_id, status(pending/running/completed/failed/killed/paused ― F3 の 4 値より広い) |
+| task_notification | status(completed/failed/stopped), summary, usage, **output_file** (undocumented; unwired) |
+| task_updated (**undocumented; out of scope**) | task_id, status(pending/running/completed/failed/killed/paused — broader than F3's four values) |
 
-`task_started.prompt`(起動した subagent への指示全文)と
-`task_notification.output_file`(ローカルファイルパス)は SDK 実測で
-存在が判明した未文書化フィールドだが、`task` envelope へは配線しない
-(理由・出典は [ADR-0047](../adr/0047-task-envelope-schema.md) addendum)。
-`task_updated` は 4 番目の subtype で、`status` が
-[ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
-F3 の粗い 4 値ライフサイクルより広く、v1 の対象外(同 ADR addendum)。
+`task_started.prompt` (the complete instruction to the started subagent) and
+`task_notification.output_file` (a local file path) are undocumented fields
+whose existence was found by SDK observation, but they are not wired to the
+`task` envelope (rationale and source: [ADR-0047](../adr/0047-task-envelope-schema.md)
+addendum). `task_updated` is a fourth subtype whose `status` is broader than
+the coarse four-value lifecycle of [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
+F3, and is outside v1 scope (that ADR's addendum).
 
-これらは `KaoiroState` には**載らない**(親の状態を変えない)。専用 envelope
-`task` へ別経路で導出する
-([subagent-tasks](subagent-tasks.md)、実装済み — 段階1(wrapper)・
-段階2(server)・段階3(dashboard 頭上リング))。
+These do **not enter** `KaoiroState` (they do not change the parent state).
+They are derived separately into the dedicated `task` envelope
+([subagent-tasks](subagent-tasks.md); implemented — stage 1 (wrapper), stage 2
+(server), stage 3 (dashboard overhead ring)).
 
-**実測記録(task_notification の終端保証、issue #170)**: SDK
-`0.3.220`、2026-08-09 capture。使い捨てスクリプトで実 `query()` stream を
-capture し、以下 4 経路すべてで `task_notification` が必ず発行される
-ことを確認した — (a) subagent の自然完了、(b)
-`Query.stopTask(taskId)`(ドキュメント通り `status: "stopped"` の
-`task_notification` を発行)、(c) 親セッションの interrupt、(d)
-`Query.backgroundTasks(toolUseId?)`(バックグラウンド化後、settle 時に
-`task_notification` を発行)。`task_updated` を経由する経路でも終端では
-必ず `task_notification` に収束する。
+**Observed record (task_notification terminal guarantee, issue #170)**: SDK
+`0.3.220`, captured 2026-08-09. A disposable script captured a real `query()`
+stream and verified that `task_notification` is always emitted along all four
+paths: (a) natural subagent completion, (b) `Query.stopTask(taskId)` (emits a
+`task_notification` with `status: "stopped"`, as documented), (c) parent-session
+interrupt, and (d) `Query.backgroundTasks(toolUseId?)` (emits a
+`task_notification` on settlement after being backgrounded). Paths through
+`task_updated` also always converge on `task_notification` at termination.
 
-### 権限コールバック(canUseTool)
+### Permission callback (canUseTool)
 
 ```typescript
 type CanUseTool = (
@@ -100,208 +99,228 @@ type PermissionResult =
   | { behavior: 'deny';  message: string; interrupt?: boolean };
 ```
 
-`permissionMode: 'default'` のとき、ルール/モードで決まらないツールについて
-`canUseTool` が呼ばれる。kaoiro はここで Promise を保留し、クライアント UI の
-許可/拒否を待って `behavior` を返す = `waiting_permission` の駆動点。
+With `permissionMode: 'default'`, `canUseTool` is called for tools not decided
+by a rule/mode. kaoiro leaves the Promise pending, waits for client-UI approval
+or denial, and returns `behavior` = the driver for `waiting_permission`.
 
-`toolName === "AskUserQuestion"` のときは分岐する。構造化質問
-(`AskUserQuestionInput`: `questions[].{question, header, multiSelect,
-options[].{label, description, preview?}}`)を dashboard の専用ダイアログへ
-運んで operator の選択を待つ = `waiting_question` の駆動点。回答は
+`toolName === "AskUserQuestion"` takes a separate path. It carries structured
+questions (`AskUserQuestionInput`: `questions[].{question, header, multiSelect,
+options[].{label, description, preview?}}`) to a dedicated dashboard dialog
+and waits for the operator's selection = the driver for `waiting_question`.
+It returns the answer to the SDK as
 `{ behavior: "allow", updatedInput: { ...input, answers: { [質問文]: 選択 label } } }`
-として SDK へ返し(cancel / timeout / close は deny)、`AskUserQuestionOutput`
-としてモデルに渡る。詳細は [ADR-0027](../adr/0027-askuserquestion-envelope.md)。
+(deny on cancel / timeout / close), and the model receives it as
+`AskUserQuestionOutput`. See [ADR-0027](../adr/0027-askuserquestion-envelope.md).
 
-評価順: PreToolUse Hook → Deny → Allow → Ask → Permission Mode →
-canUseTool → PostToolUse。
+Evaluation order: PreToolUse Hook → Deny → Allow → Ask → Permission Mode →
+canUseTool → PostToolUse.
 
-> **検証メモ(2026-06, SDK 0.3.162, ヘッドレス実走行)**: 当初の実測では
-> 試した全構成で `canUseTool` が発火しなかったが、**追実験(2026-06-11、
-> issue #1)で ask 経路の発火を確認**した。確定した挙動:
+> **Verification note (2026-06, SDK 0.3.162, headless live run)**: In the
+> initial observation, `canUseTool` did not fire in any configuration tested,
+> but **a follow-up experiment (2026-06-11, issue #1) confirmed the ask path
+> fires**. Settled behavior:
 >
-> - SDK は `canUseTool` 指定時、CLI へ常に `--permission-prompt-tool
->   stdio` を渡す(sdk.mjs 実測)。経路自体は壊れていない。
-> - ツール呼び出しは ask に到達する**前に**、手前のゲートで自動解決
->   され得る: `allowedTools` 許可、安全コマンド classifier、sandbox 内
->   操作の auto-allow(実測: `allowedTools: ["Read"]` でも Bash の
->   `echo` は canUseTool を経ずに実行)、および各種 auto-deny(deny は
->   `system`/`permission_denied` メッセージに `decision_reason_type`
->   付きで表面化)。
-> - **ask へ昇格する操作で `canUseTool` が発火する**。実測の最小再現:
->   `permissionMode: "default"` + `settingSources: []` で Bash に
->   サンドボックス外への書き込み(`touch ~/...`)をさせると発火し、
->   deny の message が tool_result に反映される。
+> - When `canUseTool` is specified, the SDK always passes
+>   `--permission-prompt-tool stdio` to the CLI (observed in sdk.mjs). The path
+>   itself is not broken.
+> - Before reaching ask, a tool call can be resolved automatically by preceding
+>   gates: `allowedTools` permission, the safe-command classifier, auto-allow
+>   for in-sandbox operations (observed: even with `allowedTools: ["Read"]`,
+>   Bash `echo` runs without passing through canUseTool), and various auto-deny
+>   cases (denial surfaces in a `system`/`permission_denied` message with
+>   `decision_reason_type`).
+> - **`canUseTool` fires for an operation escalated to ask**. The observed
+>   minimal reproduction uses `permissionMode: "default"` + `settingSources: []`
+>   and asks Bash to write outside the sandbox (`touch ~/...`); it fires and
+>   the denial message is reflected in tool_result.
 >
-> **含意**: (1) ツール限定の一次防衛は引き続き `allowedTools`(ローカル
-> 天井、[threat-model](threat-model.md))。(2) `waiting_permission` が
-> 実駆動されるのは「自動解決できない危険・サンドボックス外操作」のとき
-> であり、人間の承認が要る場面でだけ承認 UI(Phase 3)が動く — 設計
-> 意図と一致。旧実測の不発火は、試行した操作が全て手前のゲートで解決
-> されていたため。
+> **Implications**: (1) The primary defense limiting tools remains
+> `allowedTools` (a local ceiling; [threat-model](threat-model.md)).
+> (2) `waiting_permission` is driven in practice only by dangerous operations
+> that cannot be resolved automatically or occur outside the sandbox, so the
+> approval UI (Phase 3) operates only where human approval is required — as
+> designed. The previous non-firing observation occurred because every tested
+> operation was resolved by a preceding gate.
 
-#### 手動 verify 用コマンド(canUseTool 発火境界)
+#### Commands for manual verification (canUseTool firing boundary)
 
-ダッシュボード経由で broker → 許可ダイアログ → クライアント承認の経路を
-実機検証する時、SDK 内蔵の safe Bash classifier に阻まれずに `canUseTool`
-へ届かせるコマンドが必要。実測した境界(2026-06-22, #59 verify 時):
+To verify the broker → permission dialog → client approval path through the
+dashboard on a real machine, a command is needed that reaches `canUseTool`
+without being stopped by the SDK's built-in safe Bash classifier. Observed
+boundaries (2026-06-22, verification for #59):
 
-| 例 | 経路 |
+| Example | Path |
 |---|---|
-| `hostname` / `echo X` / `[ -f X ] && echo Y` | classifier の safe 判定 → auto-approve |
-| `mkdir -p /tmp/...` | sandbox 内扱い → auto-approve |
-| `for f in ...; do ...; done` | 制御構文で静的解析できず → ask → `canUseTool` 発火 |
-| `curl --version` | network 系コマンド名 → ask → `canUseTool` 発火 |
+| `hostname` / `echo X` / `[ -f X ] && echo Y` | Classifier judges safe → auto-approve |
+| `mkdir -p /tmp/...` | Treated as within the sandbox → auto-approve |
+| `for f in ...; do ...; done` | Cannot statically analyze control syntax → ask → `canUseTool` fires |
+| `curl --version` | Network-command name → ask → `canUseTool` fires |
 
-副作用ゼロで最も安定して発火させるなら **`curl --version`**(実通信なし、
-出力サイズ小、毎回成功)。なお `settingSources` 既定値では SDK は
-`~/.claude/settings.json` を読まないため、ユーザ側 settings の allow リスト
-や PreToolUse hook(`approve-compound-bash.sh` 等)は wrapper 経由 SDK
-セッションには適用されない — 上記の境界はあくまで SDK 内蔵 classifier
-によるもの。
+For the most stable firing with no side effect, use **`curl --version`** (no
+actual communication, small output, always succeeds). With default
+`settingSources`, the SDK does not read `~/.claude/settings.json`, so a user's
+settings allow list and PreToolUse hooks (such as `approve-compound-bash.sh`)
+do not apply to SDK sessions through the wrapper — the boundaries above are
+solely from the SDK's built-in classifier.
 
-### 制御(穴1 の確定)
+### Control (gap 1 settled)
 
-- 多ターン制御: `query()` の prompt に `AsyncIterable<SDKUserMessage>` を渡す
-  **ストリーミング入力モード**で、実行中セッションへ追加メッセージを送れる。
-- 割り込み: `Query.interrupt(): Promise<void>`。
-- モード変更: `Query.setPermissionMode(mode)`。
-- 観測(メッセージ列)と制御(入力 + interrupt + canUseTool)が**同一の Query で
-  完結**する(別機構不要)。
-  [ADR-0001](../adr/0001-agent-sdk-integration.md) の「細部は実装時に確定」を
-  ここで確定。
+- Multi-turn control: in **streaming-input mode**, which passes an
+  `AsyncIterable<SDKUserMessage>` as the `query()` prompt, additional messages
+  can be sent to the running session.
+- Interrupt: `Query.interrupt(): Promise<void>`.
+- Mode change: `Query.setPermissionMode(mode)`.
+- Observation (message sequence) and control (input + interrupt + canUseTool)
+  **complete in the same Query** (no separate mechanism needed). This settles
+  ADR-0001's “details settled during implementation.”
 
 `PermissionMode`: `default` | `acceptEdits` | `bypassPermissions` | `plan`
-(環境により `dontAsk` / `auto` も)。
+(and, depending on the environment, `dontAsk` / `auto`).
 
-#### モデル / effort 切替メモ(#54 実機検証, 2026-06-25, SDK 0.3.187)
+#### Notes on switching model / effort (#54 live verification, 2026-06-25, SDK 0.3.187)
 
-ストリーミング入力モードの同一 `Query` から、稼働中セッションのモデル /
-effort を切り替えられる。ヘッドレス実走行で確定した境界:
+The model / effort of a running session can be switched from the same `Query`
+in streaming-input mode. Boundaries settled by a headless live run:
 
-- **選択肢取得**: `supportedModels(): ModelInfo[]`。各 `ModelInfo` は
-  `value`(API 用エイリアス) / `displayName` / `description` /
-  `supportsEffort` / `supportedEffortLevels`。実機の戻り値は `default` /
-  `opus[1m]` / `sonnet` / `sonnet[1m]` / `haiku`(haiku のみ effort 非対応)。
-  スラッシュコマンド一覧は別途 `supportedCommands()` / init の
-  `slash_commands`(#34)。bare `/model`・`/effort` は SDK 制御として
-  surface されず単なる入力テキスト扱いなので、選択 UI はダッシュボードが
-  これら一覧から構成する。
-- **初回 turn 前の選択 (#107)**: `supportedModels()` は Query initialization を
-  待つため、idle-wait の spawn 前 catalog には使えない。runner register と
-  wrapper の初回 idle `ext.models` は SDK 0.3.187 の実測 snapshot を optimistic
-  bootstrap として広告し、LaunchDialog / AgentDetail から first turn の model /
-  effort を選べるようにする。SDK init 後は account-aware な
-  `supportedModels()` の戻り値で置換し、bootstrap 固有候補を残さない。
-  2026-07-13 実測の fable wire value は `claude-fable-5[1m]`、effort は
-  `low|medium|high|xhigh|max`。bootstrap は entitlement の保証ではなく、SDK
-  control reject は `switch_error` として loud に表示する。idle-wait wrapper は
-  Query生成自体を初回inputまで遅延し、その間の `set_model` / `set_effort` を
-  startup Optionsへbufferする。これにより選択がSDK initializationと競合せず、
-  first turnそのものへ適用される。
-- **モデル切替**: `Query.setModel(value)`。`value` は上記エイリアス。無例外で
-  成立。
-- **canonical ID の追実測 (2026-07-31, SDK 0.3.220)**: 隔離 temporary
-  directory と never-yielding prompt で `Options.model =
-  "claude-sonnet-5"` の `Query` を作ると、`initializationResult` は成功した。
-  ただしその result の keys に `model` は無かった。first user input を渡さず
-  iterator を8秒観測した範囲では `hook_started` / `hook_response` のみで、
-  `system/init` は観測されなかった。そのため init が返す `model` の表現
-  (alias / canonical) はこの実測からは未確定である。初期化後の
-  `await q.setModel("claude-sonnet-5")` は例外なく完了した。
+- **Getting options**: `supportedModels(): ModelInfo[]`. Each `ModelInfo` has
+  `value` (API alias) / `displayName` / `description` / `supportsEffort` /
+  `supportedEffortLevels`. The live return values were `default` / `opus[1m]` /
+  `sonnet` / `sonnet[1m]` / `haiku` (only haiku does not support effort).
+  The slash-command list is separately available from `supportedCommands()` /
+  init's `slash_commands` (#34). Bare `/model` and `/effort` do not surface as
+  SDK control and are only input text, so the dashboard constructs the
+  selection UI from these lists.
+- **Selection before the first turn (#107)**: Because `supportedModels()` waits
+  for Query initialization, it cannot supply the catalog before an idle-wait
+  spawn. Runner registration and the wrapper's first idle `ext.models`
+  advertise an observed SDK 0.3.187 snapshot as an optimistic bootstrap, so
+  LaunchDialog / AgentDetail can choose the first turn's model / effort. After
+  SDK initialization, replace it with the account-aware `supportedModels()`
+  return and retain no bootstrap-only option. The fable wire value observed on
+  2026-07-13 was `claude-fable-5[1m]`; effort was
+  `low|medium|high|xhigh|max`. Bootstrap does not guarantee entitlement; an SDK
+  control rejection is displayed loudly as `switch_error`. The idle-wait
+  wrapper delays Query creation itself until first input and buffers
+  `set_model` / `set_effort` in startup Options meanwhile. Thus selection does
+  not race SDK initialization and applies to the first turn itself.
+- **Switching model**: `Query.setModel(value)`. `value` is the alias above. It
+  succeeds without an exception.
+- **Follow-up observation of canonical IDs (2026-07-31, SDK 0.3.220)**: A
+  `Query` with `Options.model = "claude-sonnet-5"`, an isolated temporary
+  directory, and a never-yielding prompt produced a successful
+  `initializationResult`. However, that result's keys did not include `model`.
+  During eight seconds of iterator observation without a first user input,
+  only `hook_started` / `hook_response` appeared; `system/init` did not.
+  Therefore this observation does not settle the representation (alias /
+  canonical) of `model` returned by init. After initialization,
+  `await q.setModel("claude-sonnet-5")` completed without an exception.
 
-  kaoiro の入力表現保存はSDKのinit表現に関する推論ではなくwrapper境界の
-  契約である。catalogの alias / `resolvedModel` は突合用metadataとしてだけ
-  使い、`setModel`、startup `Options.model`、状態の `#model` は呼出元の
-  文字列を保存する。alias→canonical / canonical→alias のいずれにも書き換えない。
-- **effort 切替**: 専用 setter は無く `Query.applyFlagSettings({ effortLevel })`。
-  値域 `EffortLevel = low|medium|high|xhigh|max`(`maxThinkingTokens` は
-  deprecated)。`Settings.effortLevel` の型は `xhigh` 止まりだが、runtime は
-  `max` まで全値を無例外で受理(実走行で確認)。
-- **適用粒度**: いずれも**以降のターンに適用**(セッション再起動不要)=
-  次メッセージ単位。#54 の open question「セッション単位 / 次メッセージ単位」は
-  これで確定。
-- broker 経路: wrapper は選択肢を `state_change.ext.models` で前出しし、
-  サーバ → wrapper の `set_model` / `set_effort` 制御を受けて適用する
-  ([protocol.md](protocol.md))。
+  kaoiro's preservation of the input representation is not an inference about
+  the SDK's init representation; it is a contract at the wrapper boundary.
+  Catalog aliases / `resolvedModel` are used only as matching metadata;
+  `setModel`, startup `Options.model`, and state `#model` preserve the caller's
+  string. Neither alias→canonical nor canonical→alias rewrites it.
+- **Switching effort**: There is no dedicated setter;
+  `Query.applyFlagSettings({ effortLevel })` is used. The value range is
+  `EffortLevel = low|medium|high|xhigh|max` (`maxThinkingTokens` is deprecated).
+  The `Settings.effortLevel` type stops at `xhigh`, but the runtime accepts all
+  values through `max` without exception (verified by a live run).
+- **Application granularity**: Both apply **to subsequent turns** (no session
+  restart needed) = per next message. This settles #54's open question,
+  “session-wide / per next message.”
+- Broker path: the wrapper exposes options in `state_change.ext.models`, and
+  receives and applies server → wrapper `set_model` / `set_effort` control
+  ([protocol.md](protocol.md)).
 
-### 利用するフック(任意・補助)
+### Hooks used (optional; auxiliary)
 
 `PreToolUse` / `PostToolUse` / `Notification` / `UserPromptSubmit` / `Stop` /
-`SubagentStop` / `SessionStart` / `SessionEnd` / `PreCompact`。状態導出は主に
-メッセージ列 + `canUseTool` で足り、フックは補助。
+`SubagentStop` / `SessionStart` / `SessionEnd` / `PreCompact`. State derivation
+is mostly covered by the message sequence + `canUseTool`; hooks are auxiliary.
 
-`CwdChanged` フック(#64)は init 後の cwd 変化を `state_change.ext.cwd` に
-piggyback で反映する唯一の経路(`init` 以外のメッセージは cwd を運ばない)。
-フック内では envelope を emit せず、`#cwd` を同期代入して次の `state_change`
-で stamp する(`pending_permission` と同型)。
+The `CwdChanged` hook (#64) is the only path that reflects cwd changes after
+init in `state_change.ext.cwd` by piggyback (messages other than `init` do not
+carry cwd). The hook emits no envelope; it assigns `#cwd` synchronously and
+stamps it on the next `state_change` (the same pattern as `pending_permission`).
 
-### 状態導出マッピング
+### State-derivation mapping
 
-| kaoiro 状態 | 導出トリガ(SDK) |
+| kaoiro state | Derivation trigger (SDK) |
 |---|---|
-| `idle` | `SDKSystemMessage`(init)受信、次の入力待ち前 |
-| `sending` | SDK 外。ラッパーが operator 指示を入力キューへ受理した時点(rest 状態のみ)。最初の `SDKAssistantMessage` で thinking/tool_running へ抜ける(#32) |
-| `thinking` | `SDKAssistantMessage` の content が text/thinking のみ。細粒度は `stream_event`(`includePartialMessages`) |
-| `tool_running` | `SDKAssistantMessage` に tool_use 出現 〜 対応する `SDKUserMessage`(tool_result)まで |
-| `waiting_permission` | `canUseTool` 呼び出し中(Promise 保留) |
-| `waiting_question` | `canUseTool`(`toolName === "AskUserQuestion"`)呼び出し中(Promise 保留)、[ADR-0027](../adr/0027-askuserquestion-envelope.md) |
-| `waiting_input` | `SDKResultMessage` 後、ストリーミング入力で次メッセージ待ち |
-| `done` | `SDKResultMessage` subtype `success`(瞬間 → `waiting_input`) |
-| `error` | `SDKResultMessage` subtype `error_*` / is_error、または `SDKAssistantMessage.error` |
-| `disconnected` | SDK 外(ラッパー↔サーバ接続断、サーバ側導出) |
+| `idle` | Receives `SDKSystemMessage` (init), before awaiting the next input |
+| `sending` | Outside the SDK: when the wrapper accepts an operator instruction into the input queue (rest state only). The first `SDKAssistantMessage` exits it to thinking/tool_running (#32) |
+| `thinking` | `SDKAssistantMessage` content is only text/thinking. Finer granularity comes from `stream_event` (`includePartialMessages`) |
+| `tool_running` | From tool_use appearing in `SDKAssistantMessage` until corresponding `SDKUserMessage` (tool_result) |
+| `waiting_permission` | During a `canUseTool` call (Promise pending) |
+| `waiting_question` | During a `canUseTool` call with `toolName === "AskUserQuestion"` (Promise pending), [ADR-0027](../adr/0027-askuserquestion-envelope.md) |
+| `waiting_input` | After `SDKResultMessage`, while streaming input awaits the next message |
+| `done` | `SDKResultMessage` subtype `success` (instant → `waiting_input`) |
+| `error` | `SDKResultMessage` subtype `error_*` / is_error, or `SDKAssistantMessage.error` |
+| `disconnected` | Outside the SDK (wrapper ↔ server disconnect; derived server-side) |
 
-`system/task_*`(subagent/workflow)は `KaoiroState` に**マップしない** — 親状態を
-変えず、専用 envelope へ別途導出する([subagent-tasks](subagent-tasks.md))。
+`system/task_*` (subagent/workflow) **does not map** to `KaoiroState` — it does
+not change the parent state and derives separately to a dedicated envelope
+([subagent-tasks](subagent-tasks.md)).
 
-### session_capabilities と楽観 stamp (2026-07-11、[ADR-0034](../adr/0034-session-capabilities-advertisement.md) F1 / phase-15 15-4b)
+### session_capabilities and optimistic stamps (2026-07-11, [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F1 / phase-15 15-4b)
 
-Claude 側の起動直後 stamp 契約を明文化する。すべて `SDKSystemMessage(init)` を
-**待たず**、spawn 直後の初回 state_change (cli.ts 発行の idle announce) から
-stamp する:
+This establishes the post-startup stamp contract on the Claude side. Without
+waiting for `SDKSystemMessage(init)`, stamp all of them from the first
+state_change directly after spawn (the idle announce emitted by cli.ts):
 
-- **`ext.session_capabilities`**: adapter 構築時に組み立て、初回 state_change
-  から stamp (Codex 側との対称。session_init を待つと Codex agent が
-  fail-closed で誤表示になるため両 engine で同一契約に統一)。Claude 側の初期
-  値は `supports_attachments: true` / `supports_user_input_dialog: true`
-  (無条件)。SDK 側で条件が付いた時点で追加分岐。
-- **`ext.model` / `ext.model_source`**: 起動時に config / launch (SpawnMessage.model)
-  / env (`KAOIRO_CLAUDE_CODE_DEFAULT_MODEL`) 由来の resolved 値を**楽観 stamp**。
-  `SDKSystemMessage(init)` および `SDKStatusMessage` 受信時は**値のみ**上書き
-  (Claude が alias を正規名に展開する等)、`model_source` は launch/env/config を
-  維持 (default に書き換えない — 値の由来を伝える field なので嘘をつく)。未指定
-  時は起動直後 stamp なし、`SDKSystemMessage(init)` 受信で `model` +
-  `model_source="default"` が初出現。
-- **`ext.permission_mode`**: 起動時 config.permission_mode を楽観 stamp、
-  `SDKStatusMessage` 受信で値のみ上書き。二軸換算 (`ext.permission`) も同時
-  stamp (ADR-0033 F2 の写像 table)。
-- **`ext.fast_mode`**: 起動時 launch 由来値を楽観 stamp、`SDKSystemMessage(init)`
-  と各 `SDKResultMessage` で上書き (`cooldown` は result でのみ観測)。
-- **`ext.effort` / `ext.effort_source`**: **例外扱い** — 起動時に明示指定
-  (`config.effort` / `SpawnMessage.effort`) がある時のみ stamp。未指定時は wrapper
-  が SDK 既定値を知らないため stamp しない (Claude Agent SDK は effort の default
-  値を event に載せない)。明示指定時のみ即表示、未指定は SDK 報告待ち。
-- **`ext.cwd`**: 既存の CwdChanged フック同型パターン (init 後の cwd 変化を
-  同期代入で次 state_change に piggyback、行 187-190)。
+- **`ext.session_capabilities`**: Assemble it when constructing the adapter and
+  stamp it from the first state_change (symmetric with Codex. Waiting for
+  session_init makes a Codex agent display incorrectly by failing closed, so
+  both engines use the same contract). Initial Claude values are
+  `supports_attachments: true` / `supports_user_input_dialog: true`
+  (unconditional). Add a branch once the SDK makes it conditional.
+- **`ext.model` / `ext.model_source`**: **Optimistically stamp** the resolved
+  startup value from config / launch (`SpawnMessage.model`) / env
+  (`KAOIRO_CLAUDE_CODE_DEFAULT_MODEL`). On receiving `SDKSystemMessage(init)`
+  or `SDKStatusMessage`, overwrite **only the value** (for example, Claude
+  expands an alias to a canonical name), while preserving `model_source` as
+  launch/env/config (do not change it to default — it would lie about the
+  value's source). If unspecified, there is no stamp directly after startup;
+  `model` + `model_source="default"` first appear upon `SDKSystemMessage(init)`.
+- **`ext.permission_mode`**: Optimistically stamp startup
+  config.permission_mode, and overwrite only its value on receiving
+  `SDKStatusMessage`. Also stamp the two-axis conversion (`ext.permission`)
+  at the same time (the mapping table in ADR-0033 F2).
+- **`ext.fast_mode`**: Optimistically stamp the value from launch at startup,
+  and overwrite it at `SDKSystemMessage(init)` and each `SDKResultMessage`
+  (`cooldown` is observed only in result).
+- **`ext.effort` / `ext.effort_source`**: **An exception** — stamp only when an
+  explicit startup value (`config.effort` / `SpawnMessage.effort`) exists. When
+  unspecified, the wrapper does not stamp because it does not know the SDK
+  default (the Claude Agent SDK does not put the default effort value in an
+  event). Display it immediately only when explicit; otherwise await SDK
+  reporting.
+- **`ext.cwd`**: The existing CwdChanged-hook pattern (piggyback a cwd change
+  after init onto the next state_change through synchronous assignment, lines
+  187–190).
 
-phase-15 の 15-4b で `wrapper/claude-code/src/host.ts` の `#statusExt`
-(host.ts:842-852) の null ガードを明示指定時のみ外す形で実装。`SDKSystemMessage`
-(init) が到着する前でも起動直後の state_change に必要な ext が乗る。
+Implemented in phase-15 15-4b by removing the null guard on `#statusExt` in
+`wrapper/claude-code/src/host.ts` (host.ts:842–852) only when explicitly
+specified. Necessary ext values appear in a state_change directly after startup
+even before `SDKSystemMessage` (init) arrives.
 
 ## Constraints
 
-- SHOULD: 細粒度の `thinking` 検出が要るとき `includePartialMessages: true`。
-- MUST: `waiting_permission` は `canUseTool` の Promise 保留で表現し、UI 応答で
-  解決する。
+- SHOULD: Use `includePartialMessages: true` when fine-grained `thinking`
+  detection is needed.
+- MUST: Represent `waiting_permission` with the pending `canUseTool` Promise
+  and resolve it through a UI response.
 
 ## Open Questions
 
-なし。共通エンベロープの type/payload 設計は
-[ADR-0010](../adr/0010-protocol-precisification.md) で確定済み。
+None. The common-envelope type/payload design is settled in
+[ADR-0010](../adr/0010-protocol-precisification.md).
 
 ## See Also
 
-- 関連 specs: [protocol](protocol.md), [plugin-model](plugin-model.md),
+- Related specs: [protocol](protocol.md), [plugin-model](plugin-model.md),
   [architecture](architecture.md), [subagent-tasks](subagent-tasks.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
-- 出典: code.claude.com/docs/en/agent-sdk/typescript ほか(2026-06 検証)
+- Sources: code.claude.com/docs/en/agent-sdk/typescript and others (verified
+  2026-06)
