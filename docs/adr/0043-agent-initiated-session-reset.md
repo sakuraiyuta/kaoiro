@@ -6,7 +6,7 @@ opened: 2026-07-28
 supersedes: []
 superseded_by: null
 related_specs: [protocol, threat-model]
-related_adrs: [21, 22, 33, 36, 44]
+related_adrs: [21, 22, 33, 36, 44, 55]
 ---
 
 # ADR-0043 — agent-initiated session reset

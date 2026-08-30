@@ -1373,8 +1373,8 @@ resets_at?}}` で返す。peer が `list_agents` で読む `rate_limits` と
 
 | 項目 | 内容 |
 |---|---|
-| 入力 | `{ reason?: string }`。任意。承認ダイアログに表示され、tool result にも echo される |
-| 承認時 | wrapper が instruction queue へ **固定文字列 `/compact`** を投入し、「予約受理」を返す。圧縮完了は待たない |
+| 入力 | `{ reason?: string, resume_prompt?: string }`。いずれも任意。`reason` は承認ダイアログに表示され、tool result にも echo される。`resume_prompt` は圧縮完了後の自動再開指示 ([ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md)、phase-33 Stage A で実装) — full context がある予約時点で agent 自身が書く。省略時の挙動は従来と完全一致 (opt-in) |
+| 承認時 | wrapper が instruction queue へ **固定文字列 `/compact`** を投入し、「予約受理」を返す。圧縮完了は待たない。`resume_prompt` があれば wrapper 内に予約として保持する |
 | 拒否時 | SDK が deny message を tool result として model に返す。handler は走らない |
 | timeout | `permission_broker` の既存規約 (`permission_timeout_ms` 未設定なら無期限待機、[ADR-0022](../adr/0022-pending-permission-authoritative-source.md) F6) |
 | engine | **Claude のみ**。codex には出さない (`/compact` 経路が無く、engine 側 auto-compaction 前提) |
@@ -1391,6 +1391,20 @@ resets_at?}}` で返す。peer が `list_agents` で読む `rate_limits` と
   description も tool result も所要秒数を約束しない
 - 85% 等での**自動発動は実装しない**。SDK native の autoCompact を最終
   防衛線とし、kaoiro 側の発動は必ず operator 承認を通す (P2)
+
+**resume_prompt の発火規約** ([ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md)、phase-33 Stage A):
+
+- wrapper は `compact_boundary` の観測を発火条件とし、**固定の前置
+  テンプレート** + `resume_prompt` 本文の逐語連結を、閾値通知と同じ
+  直列化 instruction queue 経由の user turn として注入する。前置固定は
+  出所の明示と、model が注入経路へ任意テキストを流す形にしない上記
+  MUST との整合のため (逐語で流れるのは agent 自筆の `resume_prompt`
+  本文のみ)
+- 予約は wrapper 内メモリのみ。compaction 中に wrapper が落ちた場合、
+  予約は消失してよい (時系列上は Stage B の `resume_reserved` あり /
+  `resume_fired` なしとして事後判別できる)
+- engine は `request_compact` と同じく **Claude のみ**
+  ([codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md))
 
 #### 閾値通知 (phase-28 B1)
 

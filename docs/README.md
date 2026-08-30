@@ -69,9 +69,12 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0047](adr/0047-task-envelope-schema.md) | task envelope の正式名称と payload スキーマ | accepted |
 | [0048](adr/0048-task-aggregation-delivery.md) | task の server 集約・進捗間引き・スナップショット | accepted |
 | [0049](adr/0049-tasklist-on-task-envelope.md) | Tasklist (todo) を task envelope に相乗りさせる | accepted |
-| [0050](adr/0050-principal-model-and-graded-access-control.md) | principal モデル — user/agent の型分離・3 role 階層・per-pair 権限の加算モデル | proposed |
+| [0050](adr/0050-principal-model-and-graded-access-control.md) | principal モデル — user/agent の型分離・3 role 階層・per-pair 権限の加算モデル | accepted |
 | [0051](adr/0051-history-restart-resilience.md) | 表示履歴の再起動耐性 — reconnect replay・IA sidecar・epoch 置換 | accepted |
 | [0052](adr/0052-responsive-three-tier-layout.md) | dashboard を 3 サイズ対等のレスポンシブレイアウトへ転換する | accepted |
+| [0053](adr/0053-build-identity.md) | build identity を導入し protocol version と分離する | accepted |
+| [0054](adr/0054-fatigue-as-orthogonal-persona-modifier.md) | 疲労を protocol state と分離したペルソナ modifier として扱う | accepted |
+| [0055](adr/0055-compaction-resume-and-lifecycle-log.md) | compaction 後の自動再開とセッションライフサイクル時系列の保持 | accepted |
 <!-- adr-index:end -->
 
 再生成: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。
