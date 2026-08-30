@@ -9,13 +9,44 @@ const DIALOG =
   "/e2e/harness/index.html?view=overlay&overlay=dialog-triggered";
 
 test.describe("LaunchDialog a11y (issue #277)", () => {
-  test("開くとキャンセルボタンに初期フォーカスが当たる", async ({ page }) => {
+  test("開くと「新規」タブに初期フォーカスが当たる", async ({ page }) => {
     await page.goto(DIALOG);
     await page.locator("#dialog-trigger").click();
 
     await expect(
-      page.locator("dialog button.ghost", { hasText: "キャンセル" }),
+      page.locator('dialog button[role="tab"]', { hasText: "新規" }),
     ).toBeFocused();
+  });
+
+  // issue #277 round1 must-fix (ふじ): the ORIGINAL autofocus target
+  // (Cancel, at the bottom of this scrollable form) passed its OWN
+  // isolated focus assertion while ALSO scrolling the internal scroll
+  // owner to the bottom at low viewport heights -- a focus-only or
+  // scrollability-only assertion never catches that combination. Pins
+  // all three together at the exact viewport ふじ measured against
+  // (844x390): the new autofocus target focused, the scroll owner still
+  // at its top, and the title actually inside the viewport.
+  test("低 viewport (844x390) でも初期フォーカスが content を先頭から動かさない", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.goto(DIALOG);
+    await page.locator("#dialog-trigger").click();
+
+    await expect(
+      page.locator('dialog button[role="tab"]', { hasText: "新規" }),
+    ).toBeFocused();
+
+    const info = await page.evaluate(() => {
+      const content = document.querySelector(".launch-dialog-content")!;
+      const h2 = content.querySelector("h2")!;
+      return {
+        scrollTop: content.scrollTop,
+        h2Top: h2.getBoundingClientRect().top,
+      };
+    });
+    expect(info.scrollTop).toBe(0);
+    expect(info.h2Top).toBeGreaterThanOrEqual(0);
   });
 
   test("Escape で閉じる", async ({ page }) => {

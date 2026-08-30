@@ -105,17 +105,22 @@ describe("LaunchDialog on Modal.svelte (issue #277)", () => {
     expect(target.querySelector(".backdrop")).toBeNull();
   });
 
-  // issue #277: showModal()'s spec-defined initial focus goes to the
-  // first autofocus descendant -- pins that the Cancel button (always
-  // rendered regardless of mode/host state, non-destructive) carries it,
-  // the same reasoning PersonaDetailDialog's close button uses.
-  it("キャンセルボタンに autofocus が設定されている(dialog の初期フォーカス対象)", async () => {
+  // issue #277 round1 must-fix (ふじ): the ORIGINAL choice (Cancel, at
+  // the bottom of this scrollable form) scrolled the internal scroll
+  // owner to the bottom at low viewport heights, pushing the title and
+  // every field above it off-screen (measured in real Chromium at
+  // 844x390: scrollTop=379, h2's own top=-336.4px -- see
+  // launchDialog.spec.ts's e2e pin for the full scroll-position
+  // assertion this jsdom test cannot reach). Moved to the first tab
+  // ("新規"), which is both the form's own first control and physically
+  // at the top so it cannot itself cause the scroll.
+  it("「新規」タブに autofocus が設定されている(dialog の初期フォーカス対象)", async () => {
     const { target } = await render();
 
-    const cancelButton = Array.from(
-      target.querySelectorAll<HTMLButtonElement>("button.ghost"),
-    ).find((b) => b.textContent?.includes("キャンセル"));
-    expect(cancelButton?.hasAttribute("autofocus")).toBe(true);
+    const newTab = Array.from(
+      target.querySelectorAll<HTMLButtonElement>('button[role="tab"]'),
+    ).find((b) => b.textContent?.includes("新規"));
+    expect(newTab?.hasAttribute("autofocus")).toBe(true);
   });
 
   it("dialog 自身のクリック(背景相当)で onClose を呼ぶ", async () => {

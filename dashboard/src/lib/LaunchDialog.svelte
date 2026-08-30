@@ -494,12 +494,37 @@
     <h2>エージェントを起動</h2>
 
     <div class="tabs" role="tablist">
+      <!-- svelte-ignore a11y_autofocus -- inside a native <dialog> opened
+           via showModal() (Modal.svelte), autofocus is the spec-sanctioned
+           initial-focus mechanism (issue #232 MF-3). issue #277 round1
+           must-fix (ふじ): the ORIGINAL choice (Cancel, at the bottom of
+           this scrollable form) scrolled the internal scroll owner to the
+           bottom on open at low viewport heights -- measured in real
+           Chromium at 844x390: scrollTop=379, h2's own top=-336.4px (title
+           and every field above Cancel pushed off-screen), reproducing
+           ふじ's own numbers exactly. "focus the least destructive control"
+           only makes sense for an irreversible CONFIRM dialog (where
+           PersonaDetailDialog's close button and SettingsDrawer's own
+           close button both sit at the TOP, so that reasoning never
+           conflicted with visibility there) -- it does not license
+           scrolling a multi-field FORM past its own heading. The first tab
+           is both the form's own first control (WAI-ARIA APG's usual
+           initial-focus target for a dialog) and physically at the top,
+           so it cannot itself cause this scroll (measured at the same
+           viewport: scrollTop=0, h2's own top=42.6px). A tabindex="-1"
+           focus on the <h2> itself was considered and rejected: Modal.svelte's
+           own Tab-trap wraparound only cycles between FOCUSABLE elements
+           (Shift+Tab from a non-tabbable target cannot wrap back to it),
+           and fixing that would mean touching Modal.svelte itself --
+           against this issue's "rule of two" (Modal.svelte stays
+           unchanged unless a second caller actually needs the extension). -->
       <button
         type="button"
         role="tab"
         class:active={mode === "new"}
         aria-selected={mode === "new"}
         onclick={() => (mode = "new")}
+        autofocus
       >
         新規
       </button>
@@ -710,18 +735,7 @@
     {/if}
 
     <div class="actions">
-      <!-- svelte-ignore a11y_autofocus -- inside a native <dialog> opened
-           via showModal() (Modal.svelte), autofocus is the spec-sanctioned
-           initial-focus mechanism (issue #232 MF-3), not page-load
-           autofocus. Cancel is the always-rendered, non-destructive
-           control -- same reasoning PersonaDetailDialog's close button
-           uses (issue #277). -->
-      <button
-        type="button"
-        class="ghost"
-        onclick={onClose}
-        autofocus
-      >
+      <button type="button" class="ghost" onclick={onClose}>
         キャンセル
       </button>
       <button type="submit" disabled={!canLaunch}>

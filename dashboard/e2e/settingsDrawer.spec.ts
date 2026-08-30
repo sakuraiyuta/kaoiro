@@ -90,6 +90,45 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     await expect(page.locator("dialog")).toBeHidden();
   });
 
+  // issue #277 round1 non-blocking (ふじ): a click at (5,5) closing the
+  // dialog is consistent with a right-edge-flush drawer, but would ALSO
+  // pass if a regression silently made the content centered again (5,5
+  // is outside a centered box too) -- it doesn't itself prove the shape.
+  // Pins the actual computed position directly: right-edge-flush,
+  // full-height, and NOT centered.
+  test("drawer の content は右端に flush で表示される (computed position pin)", async ({
+    page,
+  }) => {
+    await page.goto(DRAWER);
+    await page.locator("#drawer-trigger").click();
+    await expect(page.locator("dialog")).toBeVisible();
+    // The drawer's own `slide-in` CSS animation (0.2s, translateX(100%)
+    // -> resting) is still in flight immediately after open -- measured
+    // directly: reading getBoundingClientRect() without this wait caught
+    // it mid-transition and reported a right edge ~277px past the
+    // viewport (a false failure in an EARLIER version of this test, not
+    // a production bug -- confirmed by re-measuring after the animation
+    // settles).
+    await page.waitForTimeout(250);
+
+    const rect = await page.evaluate(() => {
+      const el = document.querySelector(".settings-drawer-content")!;
+      const r = el.getBoundingClientRect();
+      return {
+        position: getComputedStyle(el).position,
+        right: r.right,
+        top: r.top,
+        height: r.height,
+        windowInnerWidth: window.innerWidth,
+        windowInnerHeight: window.innerHeight,
+      };
+    });
+    expect(rect.position).toBe("fixed");
+    expect(rect.right).toBeCloseTo(rect.windowInnerWidth, 0);
+    expect(rect.top).toBe(0);
+    expect(rect.height).toBeCloseTo(rect.windowInnerHeight, 0);
+  });
+
   test("drawer 内のクリックでは閉じない", async ({ page }) => {
     await page.goto(DRAWER);
     await page.locator("#drawer-trigger").click();
@@ -162,6 +201,54 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
         page.locator('dialog[aria-label="会話を閉じる確認"]'),
       ).toBeHidden();
       await expect(page.locator('dialog[aria-label="設定"]')).toBeVisible();
+    });
+
+    // issue #277 round1 non-blocking (ふじ): the Tab-trap test above only
+    // proves KEYBOARD navigation cannot leave the confirm dialog -- it
+    // does not itself prove the drawer BEHIND it is inert. A
+    // programmatic .focus() call bypasses Tab-key handling entirely, so
+    // this is the more direct pin of the "native inert scoping" claim
+    // this describe block's own comment makes.
+    test("確認ダイアログが開いている間、背後の drawer 要素へ programmatic focus しても移らない", async ({
+      page,
+    }) => {
+      await page.goto(DRAWER);
+      await page.locator("#drawer-trigger").click();
+      await page.locator(".conv-close").click();
+      await expect(
+        page.locator('dialog[aria-label="会話を閉じる確認"]'),
+      ).toBeVisible();
+
+      const stillInConfirm = await page.evaluate(() => {
+        const behind = document.querySelector<HTMLElement>(".conv-close");
+        behind?.focus();
+        const confirm = document.querySelector(
+          'dialog[aria-label="会話を閉じる確認"]',
+        );
+        return confirm !== null && confirm.contains(document.activeElement);
+      });
+      expect(stillInConfirm).toBe(true);
+    });
+
+    // issue #277 round1 non-blocking (ふじ): Modal.svelte's OWN
+    // focus-restore-on-unmount (pinned generically in modal.spec.ts) is
+    // per-instance -- this confirms it also holds for the NESTED case,
+    // restoring to the drawer's own "閉じる" button (the confirm dialog's
+    // own trigger) rather than e.g. the drawer's outer close button or
+    // nowhere.
+    test("Escape で確認ダイアログが閉じると、その閉じるボタンへフォーカスが戻る", async ({
+      page,
+    }) => {
+      await page.goto(DRAWER);
+      await page.locator("#drawer-trigger").click();
+      await page.locator(".conv-close").click();
+      await expect(
+        page.locator('dialog[aria-label="会話を閉じる確認"]'),
+      ).toBeVisible();
+
+      await page.keyboard.press("Escape");
+
+      await expect(page.locator(".conv-close")).toBeFocused();
     });
   });
 });
