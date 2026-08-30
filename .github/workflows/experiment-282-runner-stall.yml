@@ -1,12 +1,14 @@
 name: "[scratch] issue #282 runner stall probe"
 
-# Manual-only scratch experiment (issue #282, director-approved 2026-08-30):
+# Scratch experiment (issue #282, director-approved 2026-08-30):
 # does the shared CI runner itself stall for >100ms during `mix test`
 # (cgroup CPU throttling or scheduling gap), independent of any per-test
 # processing cost? Delete this workflow file once the experiment concludes
 # -- it is not part of the regular CI surface.
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [develop]
 
 jobs:
   probe:
