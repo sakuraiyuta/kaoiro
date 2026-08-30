@@ -144,9 +144,9 @@ jobs:
                 # on is diagnostic (probe teardown + log printing), and
                 # my-review flagged that restoring set -e too early let a
                 # transient failure in the log-printing block itself abort
-                # the step with the WRONG exit code even when mix test
+                # this step with the WRONG exit code even when mix test
                 # passed. Only TEST_EXIT (captured before this point) may
-                # decide the step's outcome.
+                # decide this step outcome.
                 set +e
                 mix test
                 TEST_EXIT=\$?
