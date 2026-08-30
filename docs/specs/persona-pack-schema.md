@@ -1,24 +1,26 @@
 ---
-title: persona pack (zip) スキーマ
-description: サーバ集約型ペルソナ配布 (ADR-0029) の配布単位 zip 「persona pack」の内部構造と manifest.json スキーマ。
+title: persona pack (zip) schema
+description: Internal structure and manifest.json schema of the “persona pack” ZIP, the distribution unit for server-centralized persona distribution (ADR-0029).
 status: accepted
 related: [personas, persona-personality-injection, protocol]
 ---
 
-# persona pack (zip) スキーマ
+# persona pack (zip) schema
 
 ## Purpose
 
-[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) で
-定めた「ペルソナは server 集約 SoT、zip pack で配布」の配布単位 zip
-「persona pack」の内部構造とスキーマを定める。作成者・server 実装
-(取り込み・展開・検証)・build スクリプトの共通契約。
+Defines the internal structure and schema of the “persona pack” ZIP, the
+distribution unit established by
+[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md): personas
+have a server-centralized source of truth and are distributed in ZIP packs. It
+is the shared contract for authors, the server implementation (import,
+extraction, and validation), and build scripts.
 
 ## Definition
 
-### 配置
+### Layout
 
-zip ファイル 1 個 = 1 persona pack = 1 persona。
+One ZIP file = one persona pack = one persona.
 
 ```text
 <pack-name>.zip
@@ -34,37 +36,38 @@ zip ファイル 1 個 = 1 persona pack = 1 persona。
     └── error.png
 ```
 
-zip ファイル名は任意(推奨: `<id>-<version>.zip`。例:
-`fuji-1.0.0.zip`)。id は zip 名ではなく `manifest.json` の `id`
-フィールドが正本。
+The ZIP file name is arbitrary (recommended: `<id>-<version>.zip`; for example,
+`fuji-1.0.0.zip`). The `id` field in `manifest.json`, rather than the ZIP name,
+is the source of truth.
 
-### manifest.json スキーマ
+### manifest.json schema
 
-| フィールド | 型 | 必須 | 意味 |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `id` | string | 必須 | persona 一意識別子。`^[A-Za-z0-9._-]+$` / 1-256 文字。[ADR-0003](../adr/0003-persona-identity-persistence.md)。ファイルシステム上のディレクトリ名にもなる |
-| `name` | string | 必須 | pack が定義する persona の固有名(日本語可、canonical — issue #209 D19)。1-64 文字、制御文字禁止(`Principal.display_name` と同一ドメイン、D24) |
-| `sprite_set` | string | 必須 | スプライトセット識別子。通常は `id` と同一。1-256 文字 |
-| `version` | string | 必須 | semver(例 `1.0.0`)。作成者が pack を更新するたびに bump する |
-| `license` | string | 必須 | ライセンス識別子(SPDX 準拠推奨。例 `CC0-1.0`, `CC-BY-4.0`, `MIT`, `proprietary`)。AI 生成物には著作権が発生しない場合があるため、ライセンス表示が実態と矛盾しないか確認する。使用モデルの条件は Outputs に及ぶ範囲を別途確認する |
-| `min_kaoiro_version` | string | 必須 | 動作に必要な server バージョンの下限 semver。server が下回れば取り込み拒否 |
-| `states` | string[] | 必須 | sprites/ に含まれる状態 id の列挙。順序不問、必須 7 状態と optional 予約 id |
-| `description` | string | 任意 | pack の 1 行説明。表示 UI に流す |
-| `author` | string | 任意 | 作成者名 |
-| `homepage` | string | 任意 | 作成元プロジェクト URL |
+| `id` | string | Required | Unique persona identifier. `^[A-Za-z0-9._-]+$` / 1–256 characters. [ADR-0003](../adr/0003-persona-identity-persistence.md). Also becomes the filesystem directory name. |
+| `name` | string | Required | Proper name of the persona defined by the pack (Japanese permitted; canonical—issue #209 D19). 1–64 characters; control characters prohibited (same domain as `Principal.display_name`, D24). |
+| `sprite_set` | string | Required | Sprite-set identifier. Usually identical to `id`. 1–256 characters. |
+| `version` | string | Required | Semver (for example, `1.0.0`). The author bumps it each time they update the pack. |
+| `license` | string | Required | License identifier (SPDX-compliant recommended; for example, `CC0-1.0`, `CC-BY-4.0`, `MIT`, `proprietary`). AI-generated works may not have copyright, so confirm that the license label matches reality. Separately confirm how far the model's terms extend to Outputs. |
+| `min_kaoiro_version` | string | Required | Lower semver bound of the server version needed to operate. The server rejects import if it is lower. |
+| `states` | string[] | Required | State IDs included in sprites/. Order is irrelevant; includes the seven required states and optional reserved IDs. |
+| `description` | string | Optional | One-line pack description, shown in the display UI. |
+| `author` | string | Optional | Author name. |
+| `homepage` | string | Optional | Source-project URL. |
 
-`states` の必須値(順序不問、全 7 状態):
+Required `states` values (all seven; order is irrelevant):
 
 ```json
 ["idle", "thinking", "tool_running", "waiting_input",
  "waiting_permission", "done", "error"]
 ```
 
-optional 予約 id は `fatigued` のみ。これは protocol の `state` 語彙ではなく、
-クライアントが context 使用率から導出する直交 modifier 用の sprite である。
-optional は任意だが、列挙するなら対応する PNG が必要。未知 id は reject される。
+The only optional reserved ID is `fatigued`. It is not part of the protocol's
+`state` vocabulary; it is a sprite for an orthogonal modifier derived by the
+client from context utilization. It is optional, but enumerating it requires a
+corresponding PNG. Unknown IDs are rejected.
 
-例(fuji ペルソナ):
+Example (the fuji persona):
 
 ```json
 {
@@ -81,7 +84,8 @@ optional は任意だが、列挙するなら対応する PNG が必要。未知
 }
 ```
 
-疲労 sprite を含む pack は、必須 7 状態に `"fatigued"` を追加して宣言する:
+A pack that includes a fatigue sprite declares it by adding `"fatigued"` to the
+seven required states:
 
 ```json
 "states": ["idle", "thinking", "tool_running", "waiting_input",
@@ -90,103 +94,107 @@ optional は任意だが、列挙するなら対応する PNG が必要。未知
 
 ### personality.md
 
-**プレーンな markdown 本文**。frontmatter は付けない(メタデータは
-manifest.json 側)。長さは 200〜1000 字を SHOULD 目安とする(hard
-上限なし)。
+**Plain Markdown body**. Do not add frontmatter (metadata belongs in
+manifest.json). A length of 200–1000 Japanese characters is a SHOULD guideline
+(there is no hard upper limit).
 
-server は取り込み時にこの本文をそのまま保持する。wrapper への配送時、
-`KAOIRO_FOOTER_DIR` 設定時は同ディレクトリの `system-footer.md` と
-`user-footer.md` を末尾に concat して push する。未設定時は内蔵既定の
-system footer だけを concat する。結合が server 側の責務である点は
-[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5。
+The server retains this body unchanged on import. When delivering it to a
+wrapper, if `KAOIRO_FOOTER_DIR` is configured, it concatenates `system-footer.md`
+and `user-footer.md` from that directory to the end and pushes it. If it is not
+configured, it concatenates only the built-in default system footer. The server
+is responsible for this composition ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+F5).
 
 ### sprites/
 
-各状態の PNG。**512x512 透過 PNG** を推奨する(既存 4 体の実装ライン)。
-`manifest.states[]` に列挙された**すべての**状態が揃っている MUST。必須 7 状態は
-manifest の列挙有無にかかわらず必要である。
+PNG for each state. **512x512 transparent PNGs** are recommended (the existing
+implementation line for four personas). **Every** state listed in
+`manifest.states[]` MUST be present. The seven required states are needed
+whether or not the manifest enumerates them.
 
-生成レシピ(ComfyUI モデル / seed / rembg 手順)は
-[personas](personas.md) を参照。pack として配布する時点では PNG のみが
-必要。
+For the generation recipe (ComfyUI model / seed / rembg procedure), see
+[personas](personas.md). Only PNGs are required when distributing a pack.
 
-### provenance/(作業ツリーのみ、zip 非同梱)
+### provenance/ (work tree only; not included in ZIP)
 
-`persona-packs/<id>/provenance/<state>.json` は `sprites/<state>.png`
-と 1:1 対応する生成 provenance(再現用パラメータ)。
-生成元 ComfyUI の出力ディレクトリから、raw PNG との sha256 一致、または
-final sprite の不透明内部 RGB invariant によって state → 生成ジョブを一意に
-決定し、sanitize して取り込む。後者は rembg 後に raw PNG の RGB を保つ
-pipeline にだけ使う(所在の背景は [personas](personas.md) 「生成実績」参照)。
+`persona-packs/<id>/provenance/<state>.json` is generation provenance
+(reproduction parameters) in a one-to-one correspondence with
+`sprites/<state>.png`. From the output directory of the source ComfyUI, the
+state-to-generation-job mapping is uniquely determined either by a sha256 match
+with the raw PNG or by the opaque-interior RGB invariant of the final sprite,
+then sanitized and imported. The latter is used only for pipelines that retain
+the raw PNG's RGB after rembg (for its background, see “Generation record” in
+[personas](personas.md)).
 
-zip には含まれない。`scripts/build-persona-pack.sh` は
-`manifest.json` / `personality.md` / `sprites` の 3 エントリのみを
-明示列挙するため、`provenance/` を置いても配布物には影響しない
-(開発リポジトリの資産として扱う)。
+It is not included in the ZIP. `scripts/build-persona-pack.sh` explicitly lists
+only the three entries `manifest.json`, `personality.md`, and `sprites`, so
+placing `provenance/` there does not affect the distributed artifact (it is an
+asset of the development repository).
 
-保持フィールド(allowlist 方式、fail-closed — 未知フィールドは
-取り込み時に警告して落とす): `mode` / `prompt` / `negative` /
-`model` / `architecture` / `seed` / `steps` / `width` / `height` /
-`cfg` / `denoise` / `generated_at` / `job_id` / `source_job_id` /
-`tool` / `source_refs` / `postprocess` / `sha256`。後ろの 4 項目は生成系に
-依存しない任意フィールドであり、`tool` は生成 surface の識別子、
-`source_refs` は参照素材の相対 path 配列、`postprocess` は後処理の要約、
-`sha256` は成果物 PNG の SHA-256 を表す。既存 Anima 用フィールドは不変で、
-許容集合をこの 4 項目だけ明示拡張する。fail-closed の原則は維持し、ここに
-ない未知フィールドは引き続き警告して出力から落とす。
-`account`(メールアドレス)や `image_url`(署名付き URL、credential
-性)など個人情報・機微情報を含み得るフィールドは取り込み時に除外する。
+Retained fields (allowlist, fail-closed—unknown fields are warned about and
+dropped on import): `mode` / `prompt` / `negative` / `model` / `architecture` /
+`seed` / `steps` / `width` / `height` / `cfg` / `denoise` / `generated_at` /
+`job_id` / `source_job_id` / `tool` / `source_refs` / `postprocess` / `sha256`.
+The last four are optional fields independent of the generation system: `tool`
+identifies the generation surface, `source_refs` is an array of relative paths
+to reference material, `postprocess` summarizes post-processing, and `sha256`
+is the artifact PNG's SHA-256. Existing Anima fields remain unchanged; only
+these four fields explicitly extend the allowlist. The fail-closed principle is
+preserved: unknown fields not listed here continue to be warned about and
+dropped from output. Fields that may contain personal or sensitive information,
+such as `account` (email address) or `image_url` (a signed URL with credential
+properties), are excluded on import.
 
-取り込みには `scripts/import-anima-provenance.sh <id> --anima-dir <dir>` を
-使う。`--anima-dir` は明示指定 MUST であり、環境固有の既定 path は持たない。
-RGB invariant を使う場合は `--match-mode rgb-invariant` を渡し、7 状態の
-全 7×7 組を照合する。各正対は MAE 上限内、すべての誤対は十分に離れ、写像は
-一対一でなければならない。
+Use `scripts/import-anima-provenance.sh <id> --anima-dir <dir>` for import.
+`--anima-dir` MUST be explicitly supplied; there is no environment-specific
+default path. For the RGB invariant, pass `--match-mode rgb-invariant` and
+compare all 7x7 pairs across the seven states. Each correct pair must be within
+the MAE cap, every incorrect pair must be sufficiently distant, and the mapping
+must be one-to-one.
 
 ## Constraints
 
-- **MUST**: zip の直下に `manifest.json` / `personality.md` / `sprites/`
-  の 3 エントリが揃う。他のエントリは無視される(将来 forward-
-  compatible)。
-- **MUST**: `manifest.json` の必須フィールドがすべて揃う。欠落 or 型
-  誤りは取り込み拒否。
-- **MUST**: `sprites/` に 7 状態(idle / thinking / tool_running /
-  waiting_input / waiting_permission / done / error)すべての PNG が
-  存在する。
-- **MUST**: `id` の unique 性(既登録との衝突がない)。衝突は取り込み
-  拒否。**判定は先勝ち**で、取り込みディレクトリの zip はファイル名順に
-  読まれる。したがって同じ `id` の旧 version を残したまま新 version を
-  置くと、ファイル名順で先に来る側が採用される(`kohaku-1.0.0.zip` <
-  `kohaku-1.1.0.zip` なので**旧版が勝つ**)。version を上げるときは旧
-  zip を取り除くこと。実装は
-  `server/lib/kaoiro_server/persona_assets.ex` の `drop_duplicate_ids/1`
-  (後続を warning 付きで捨てる)。
-- **MUST**: `min_kaoiro_version` が server の runtime バージョンより
-  高い場合は取り込み拒否。
-- **MUST NOT**: `personality.md` に frontmatter を付けない
-  (メタデータ二重管理防止)。
-- **SHOULD**: `personality.md` は 200〜1000 字目安
-  ([ADR-0026](../adr/0026-persona-personality-injection.md) 継承)。
-- **SHOULD**: PNG は 512x512 透過。より高解像度は許容するが配信量が
-  増える。
-- **MAY**: pack に将来追加フィールドが増えることを見越し、`manifest.
-  json` は未知キーを無視する forward-compatible スタンス。
-- **NOT ENFORCED**: hash / 署名検証は phase-2 以降の拡張
-  ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  F4)。
+- **MUST**: The ZIP root contains all three entries: `manifest.json`,
+  `personality.md`, and `sprites/`. Other entries are ignored (future
+  forward-compatible).
+- **MUST**: All required fields of `manifest.json` are present. Missing fields
+  or wrong types reject import.
+- **MUST**: `sprites/` contains PNGs for all seven states (idle / thinking /
+  tool_running / waiting_input / waiting_permission / done / error).
+- **MUST**: `id` is unique (it does not collide with an existing registration).
+  A collision rejects import. **The first match wins**: ZIP files in the import
+  directory are read by filename order. Thus, if a new version is placed while
+  retaining an old version with the same `id`, the earlier filename is adopted
+  (`kohaku-1.0.0.zip` < `kohaku-1.1.0.zip`, so **the old version wins**). Remove
+  the old ZIP when increasing the version. The implementation is
+  `drop_duplicate_ids/1` in `server/lib/kaoiro_server/persona_assets.ex` (it
+  drops subsequent entries with a warning).
+- **MUST**: Import is rejected when `min_kaoiro_version` is higher than the
+  server's runtime version.
+- **MUST NOT**: Add frontmatter to `personality.md` (to prevent duplicate
+  metadata management).
+- **SHOULD**: `personality.md` is approximately 200–1000 Japanese characters
+  ([ADR-0026](../adr/0026-persona-personality-injection.md) inheritance).
+- **SHOULD**: PNGs are 512x512 and transparent. Higher resolutions are allowed,
+  but increase delivery volume.
+- **MAY**: To anticipate future additional pack fields, `manifest.json` takes a
+  forward-compatible stance and ignores unknown keys.
+- **NOT ENFORCED**: Hash/signature verification is an extension for phase-2 and
+  later ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F4).
 
 ## Open Questions
 
-なし。ADR-0029 で決定。
+None. Decided by ADR-0029.
 
 ## See Also
 
 - ADRs: [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  (本 spec を規定する決定)、
+  (the decision defining this spec),
   [ADR-0003](../adr/0003-persona-identity-persistence.md)
-  (persona.id の同一性・永続化)
-- Related specs: [personas](personas.md)(生成レシピと立ち絵設計方針)、
+  (persona.id identity and persistence)
+- Related specs: [personas](personas.md) (generation recipe and standing-
+  illustration design policy),
   [persona-personality-injection](persona-personality-injection.md)
-  (人格プロンプトの配送・注入)、
-  [protocol](protocol.md)(`/api/personas` レスポンス形式)
+  (personality-prompt delivery and injection),
+  [protocol](protocol.md) (`/api/personas` response format)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)
