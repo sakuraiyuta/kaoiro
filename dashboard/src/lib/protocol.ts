@@ -1533,8 +1533,12 @@ export interface SpawnResult {
 
 /** Operator-facing conversation-list entry (issue #276, admin-only first
  *  cut). Wire shape from `ConversationStates.list_for_operator/1` — a
- *  closed tombstone reports `tokens`/`startedAt` as `null` (dropped at
- *  close server-side, not merely omitted from this projection). */
+ *  closed tombstone reports `tokens` as `null` (dropped server-side at
+ *  close), while `startedAt` is RETAINED across close (director decision
+ *  A, issue #276 review follow-up) so a closed row still shows when it
+ *  started. `startedAt` stays nullable in this type only for a server
+ *  reply that omits it (legacy/defensive fallback), not because the
+ *  conversation is closed. */
 export interface ConversationSummary {
   conversationId: string;
   participants: string[];
@@ -2768,8 +2772,10 @@ function parseLaunchDefaults(raw: unknown): Record<string, string> {
 
 /** Defensive parse of the list_conversations reply (issue #276):
  *  fail-closed per entry — a malformed entry is dropped, not the whole
- *  list. `tokens`/`started_at` are nullable on the wire (closed
- *  tombstone), so `null` passes through as-is; anything else
+ *  list. `tokens` is nullable on the wire (dropped server-side on
+ *  close); `started_at` is nullable only as a legacy/defensive fallback
+ *  -- a closed tombstone itself still carries its real value (director
+ *  decision A). `null` passes through as-is for both; anything else
  *  non-numeric/non-string is treated as absent. */
 function parseConversationList(raw: unknown): ConversationSummary[] {
   if (!Array.isArray(raw)) return [];

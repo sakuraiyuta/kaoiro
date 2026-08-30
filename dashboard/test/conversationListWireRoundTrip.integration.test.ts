@@ -80,7 +80,13 @@ describe("listConversations の wire round trip (issue #276 review follow-up)", 
     vi.useRealTimers();
   });
 
-  it("server の snake_case reply を open/closed・nullable な tokens/started_at ごと変換する", async () => {
+  // director決定A(issue #276): closed tombstone は started_at を保持する
+  // -- null になるのは tokens だけで、started_at は open のときと同じ
+  // ISO 文字列が乗ってくる。closed fixture に started_at: null を使うと
+  // 「closed だから null」という実態と逆の前提を fixture に埋め込んで
+  // しまう(こはく review follow-up, ふじ round2 B1)。started_at: null の
+  // ケースは legacy/defensive fallback として下の別テストへ分離する。
+  it("server の snake_case reply を open/closed(started_at は closed でも保持)・nullable な tokens ごと変換する", async () => {
     RespondingWebSocket.nextResponse = {
       conversations: [
         {
@@ -97,7 +103,7 @@ describe("listConversations の wire round trip (issue #276 review follow-up)", 
           turns: 5,
           tokens: null,
           status: "closed",
-          started_at: null,
+          started_at: "2026-08-20T00:00:00Z",
         },
       ],
     };
@@ -133,6 +139,52 @@ describe("listConversations の wire round trip (issue #276 review follow-up)", 
         turns: 5,
         tokens: null,
         status: "closed",
+        startedAt: "2026-08-20T00:00:00Z",
+      },
+    ]);
+  });
+
+  // started_at: null は「closed だから」ではなく、サーバが値を欠く
+  // legacy/defensive fallback のケースとして単独で pin する。status は
+  // open/closed どちらでも意味は同じ(値が来なかっただけ)なので open で
+  // 代表させる。
+  it("started_at が欠測 (null) の reply は startedAt を null のまま通す (legacy/defensive fallback)", async () => {
+    RespondingWebSocket.nextResponse = {
+      conversations: [
+        {
+          conversation_id: "c1",
+          participants: ["a", "b"],
+          turns: 1,
+          tokens: 10,
+          status: "open",
+          started_at: null,
+        },
+      ],
+    };
+
+    const conn = connectKaoiro(
+      "ws://test/client",
+      {
+        onStatus: vi.fn(),
+        onSnapshot: vi.fn(),
+        onEnvelope: vi.fn(),
+        onHosts: vi.fn(),
+      },
+      { transport: RespondingWebSocket, heartbeatIntervalMs: 1000 },
+    );
+    await settleSocket();
+
+    const pending = conn.listConversations();
+    await settleSocket();
+    const conversations = await pending;
+
+    expect(conversations).toEqual([
+      {
+        conversationId: "c1",
+        participants: ["a", "b"],
+        turns: 1,
+        tokens: 10,
+        status: "open",
         startedAt: null,
       },
     ]);
@@ -181,6 +233,17 @@ describe("listConversations の wire round trip (issue #276 review follow-up)", 
           conversation_id: "bad-turns",
           participants: ["a", "b"],
           turns: "3",
+          tokens: 10,
+          status: "open",
+          started_at: null,
+        },
+        // participants は配列だが要素に非 string を含む (advisory,
+        // ふじ round2: .every((v) => typeof v === "string") 分岐が
+        // 未 pin だった)
+        {
+          conversation_id: "bad-participant-item",
+          participants: ["a", 42],
+          turns: 1,
           tokens: 10,
           status: "open",
           started_at: null,

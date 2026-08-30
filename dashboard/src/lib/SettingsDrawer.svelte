@@ -39,13 +39,7 @@
   // refreshConversations() alone had this guard, but the mount effect
   // fired its own independent, unguarded call — so a slow initial-load
   // reply landing after a faster manual refresh could still overwrite
-  // fresher data. This also subsumes the effect-cleanup `cancelled`
-  // pattern (coding-languages.md「Async continuations own nothing after
-  // a suspension point」): a connection change re-runs the effect,
-  // which calls this again and bumps the sequence, so the OLD
-  // connection's in-flight reply is a stale seq and gets ignored the
-  // same way any other stale reply does (ふじ review follow-up, issue
-  // #276).
+  // fresher data.
   let refreshSeq = 0;
 
   function refreshConversations(): void {
@@ -66,8 +60,26 @@
       });
   }
 
+  // issue #276 review follow-up (ふじ round2 B2): a `connection` prop
+  // going from truthy to undefined (operator status revoked mid-session)
+  // does NOT re-enter the `if (connection)` branch above, so it never
+  // bumps refreshSeq itself — the earlier claim that "a connection
+  // change re-runs the effect and bumps the sequence" only held for
+  // truthy -> truthy transitions. Without this cleanup, an in-flight
+  // reply from the PRE-loss connection can still land while `connection`
+  // is undefined (invisible, since the section is hidden by `{#if
+  // connection}`) and silently populate `conversations`/
+  // `conversationsError` — then flash as stale data the instant
+  // `connection` becomes truthy again, before the fresh reconnect fetch
+  // resolves. The same gap applies to component destroy (no cleanup ran
+  // there either). Bumping refreshSeq unconditionally on every effect
+  // teardown — re-run AND unmount alike — closes both: whatever was
+  // in flight when this run started is invalidated the moment it ends.
   $effect(() => {
     if (connection) refreshConversations();
+    return () => {
+      refreshSeq += 1;
+    };
   });
 
   // issue #276 manual close: confirm via the shared Modal primitive

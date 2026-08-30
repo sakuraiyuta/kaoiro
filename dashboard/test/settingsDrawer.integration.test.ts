@@ -9,6 +9,7 @@ import {
   updateSettings,
 } from "../src/lib/settings.svelte";
 import type { ConversationSummary, KaoiroConnection } from "../src/lib/protocol";
+import { makeReactiveSettingsDrawerProps } from "./reactiveProps.svelte";
 
 // jsdom does not implement HTMLDialogElement.showModal/close (measured
 // 2026-08-28, jsdom 29.1.1; same polyfill as modal.integration.test.ts).
@@ -339,6 +340,142 @@ describe("SettingsDrawer", () => {
     expect(target.querySelector(".conv-cid")?.textContent).toContain(
       "fresh",
     );
+  });
+
+  // issue #276 review follow-up (ふじ round2 B2): the shared refreshSeq
+  // guard only advances on `if (connection) refreshConversations()` —
+  // a connection loss (truthy -> undefined) skips that branch and never
+  // bumped the sequence, so an in-flight reply from BEFORE the loss could
+  // still land while connection was undefined and silently populate
+  // `conversations`, then flash as stale data the moment connection
+  // becomes truthy again (before the fresh reconnect fetch resolves).
+  // Needs a reactive props object (plain mount() props are static) to
+  // flip `connection` on an already-mounted instance.
+  it("connection 消失中に着地した古い応答は、再接続直後の表示に漏れ出さない (stale-leak race guard)", async () => {
+    const resolvers: Array<(v: ConversationSummary[]) => void> = [];
+    const conn = makeConnection(
+      () => new Promise<ConversationSummary[]>((resolve) => resolvers.push(resolve)),
+    );
+
+    const target = document.createElement("div");
+    document.body.append(target);
+    const props = makeReactiveSettingsDrawerProps({
+      onClose: vi.fn(),
+      connection: conn,
+    });
+    const component = mount(SettingsDrawer, { target, props });
+    mounted.push(component);
+    await tick();
+    // Mount effect's own fetch is in flight (call 1, unresolved).
+    expect(resolvers).toHaveLength(1);
+
+    // connection lost mid-flight (e.g. operator status revoked).
+    props.connection = undefined;
+    await tick();
+    expect(target.querySelector(".conversations")).toBeNull();
+
+    // The pre-loss request resolves WHILE connection is undefined — with
+    // the bug this silently writes into `conversations` (invisible right
+    // now since the section is hidden).
+    resolvers[0]!([
+      {
+        conversationId: "leaked-while-disconnected",
+        participants: ["a", "b"],
+        turns: 1,
+        tokens: 10,
+        status: "open",
+        startedAt: null,
+      },
+    ]);
+    await Promise.resolve();
+    await tick();
+
+    // Reconnect, before the fresh fetch resolves.
+    props.connection = conn;
+    await tick();
+    expect(resolvers).toHaveLength(2);
+
+    // Must show the loading state, NOT the leaked row, while the fresh
+    // reconnect fetch (call 2) is still pending.
+    expect(target.querySelector(".conv-status")?.textContent).toContain(
+      "読み込み中",
+    );
+    expect(target.textContent).not.toContain("leaked-while-disconnected");
+
+    resolvers[1]!([
+      {
+        conversationId: "fresh-after-reconnect",
+        participants: ["a", "b"],
+        turns: 1,
+        tokens: 10,
+        status: "open",
+        startedAt: null,
+      },
+    ]);
+    await Promise.resolve();
+    await tick();
+    // .conv-cid renders only the first 8 chars; the full id lives in
+    // `title` (same convention as the round-1 row-display fix).
+    expect(
+      target.querySelector(".conv-cid")?.getAttribute("title"),
+    ).toBe("fresh-after-reconnect");
+  });
+
+  // issue #276 review follow-up (ふじ round2 B2): the resolve-side guard
+  // (test above/earlier) was pinned, but the CATCH side never got its own
+  // regression test — an older request's rejection landing after a newer
+  // request's success must not roll the display back to an error.
+  it("古いリクエストの失敗が新しいリクエストの成功の後に着地しても error 表示へ巻き戻らない (stale-reject race guard)", async () => {
+    const rowFor = (cid: string): ConversationSummary[] => [
+      {
+        conversationId: cid,
+        participants: ["a", "b"],
+        turns: 1,
+        tokens: 10,
+        status: "open",
+        startedAt: null,
+      },
+    ];
+
+    const settlers: Array<{
+      resolve: (v: ConversationSummary[]) => void;
+      reject: (err: unknown) => void;
+    }> = [];
+    const conn = makeConnection(
+      () =>
+        new Promise<ConversationSummary[]>((resolve, reject) => {
+          settlers.push({ resolve, reject });
+        }),
+    );
+
+    const { target } = await renderDrawer(vi.fn(), conn);
+    await Promise.resolve();
+    await tick();
+    // Mount fetch (call 1, unresolved).
+    expect(settlers).toHaveLength(1);
+
+    const refreshBtn = target.querySelector<HTMLButtonElement>(".refresh")!;
+    refreshBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick();
+    expect(settlers).toHaveLength(2);
+
+    // The refresh click (LATER call) succeeds first.
+    settlers[1]!.resolve(rowFor("fresh"));
+    await Promise.resolve();
+    await tick();
+    expect(target.querySelector(".conv-cid")?.textContent).toContain(
+      "fresh",
+    );
+
+    // The mount fetch (EARLIER call) fails last — must NOT roll the
+    // display back to the error state.
+    settlers[0]!.reject(new Error("stale-failure"));
+    await Promise.resolve();
+    await tick();
+    expect(target.querySelector(".conv-cid")?.textContent).toContain(
+      "fresh",
+    );
+    expect(target.querySelector(".conv-status")).toBeNull();
   });
 
   // issue #276 manual close.

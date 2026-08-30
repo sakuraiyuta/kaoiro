@@ -723,9 +723,18 @@ defmodule KaoiroServer.ConversationStatesTest do
       assert {:ok, _, _} = DateTime.from_iso8601(started_at)
     end
 
-    test "closed tombstone は turns=last_turn・tokens=nil だが started_at は保持する (director決定A, issue #276)" do
+    test "closed tombstone は turns=last_turn・tokens=nil だが started_at は open 時と同じ値を保持する (director決定A, issue #276)" do
       name = start_tracker(:cs_list_closed, max_turns: 1)
       assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+
+      # started_at_wall は DateTime.utc_now() 由来で clock 注入の対象外
+      # (close_entry/3 のコメント参照) なので、既知の sentinel 値を注入する
+      # 代わりに実際に生成された open 時点の値を捕捉し、close 後に厳密一致
+      # させる。close 時に fresh な DateTime.utc_now() を再生成する誤実装
+      # (以前は形状チェックのみで green だった) が入れば、マイクロ秒精度の
+      # ISO8601 文字列同士がまず一致しないため red になる。
+      assert [%{"started_at" => open_started_at}] = ConversationStates.list_for_operator(name)
+      assert {:ok, _, _} = DateTime.from_iso8601(open_started_at)
 
       assert {:exceeded, :max_turns} =
                ConversationStates.record_message("c", "a", "b", "y", 2, false, true, name)
@@ -739,11 +748,9 @@ defmodule KaoiroServer.ConversationStatesTest do
                  "turns" => 2,
                  "tokens" => nil,
                  "status" => "closed",
-                 "started_at" => started_at
+                 "started_at" => ^open_started_at
                }
              ] = ConversationStates.list_for_operator(name)
-
-      assert {:ok, _, _} = DateTime.from_iso8601(started_at)
     end
 
     test "複数会話を conversation_id 順を問わず全件返す" do
@@ -793,15 +800,23 @@ defmodule KaoiroServer.ConversationStatesTest do
                ConversationStates.get("c", name)
     end
 
-    test "close 後の list_for_operator は status=closed かつ started_at 保持のまま残る (director決定A)" do
+    test "close 後の list_for_operator は status=closed かつ started_at が open 時と同じ値のまま残る (director決定A)" do
       name = start_tracker(:cs_close_list)
       assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+
+      # 同じ理由(started_at_wall は clock 注入の対象外)で、実際に生成された
+      # open 時点の値を捕捉し close 後に厳密一致させる。
+      assert [%{"started_at" => open_started_at}] = ConversationStates.list_for_operator(name)
+
       assert {:ok, _} = ConversationStates.close_by_operator("c", name)
 
-      assert [%{"conversation_id" => "c", "status" => "closed", "started_at" => started_at}] =
-               ConversationStates.list_for_operator(name)
-
-      assert {:ok, _, _} = DateTime.from_iso8601(started_at)
+      assert [
+               %{
+                 "conversation_id" => "c",
+                 "status" => "closed",
+                 "started_at" => ^open_started_at
+               }
+             ] = ConversationStates.list_for_operator(name)
     end
 
     test "既に closed な会話への再 close は :conversation_closed で拒否する (冪等、crash しない)" do
