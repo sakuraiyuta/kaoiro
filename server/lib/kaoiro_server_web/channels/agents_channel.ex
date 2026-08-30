@@ -911,12 +911,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # Operator-facing conversation list (issue #276, admin-only first cut
-  # decided 2026-08-29). Pure read-time query, like launch_defaults just
-  # above: no wrapper relay, no new store, no live push — ConversationStates
-  # already holds everything needed. The admin gate is the ONE seam this
-  # decision asks to keep isolated so #189's future per-pair permission
-  # model can replace it here without touching the view.
+  # Operator-facing conversation list (issue #276, decided 2026-08-29).
+  # Pure read-time query, like launch_defaults just above: no wrapper
+  # relay, no new store, no live push — ConversationStates already holds
+  # everything needed. `require_operator` (operator-capable roles: admin
+  # > operator, ADR-0050 D2) is the ONE seam this decision asks to keep
+  # isolated so #189's future per-pair permission model can replace it
+  # here without touching the view.
   def handle_in("list_conversations", payload, socket) do
     with :ok <- require_operator(socket, payload, "list_conversations") do
       {:reply, {:ok, %{"conversations" => ConversationStates.list_for_operator()}}, socket}
@@ -1254,13 +1255,32 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # Operator-facing user list (issue #207). Pull-only, same shape as
+  # `list_conversations` (issue #276) just above — a management view the
+  # dashboard fetches on demand (opening SettingsDrawer), not something
+  # every join needs, so no `:after_join` snapshot push and no new store.
+  # `Users.all_with_role/1` already returns the operator allow-list this
+  # issue independently settled on (id/kind/display_name/role) — decided
+  # separately from, and only coincidentally identical to, the
+  # agent-facing allow-list ADR-0021 F6-8 defines; `source` never leaves
+  # `Users` (see its moduledoc) so there is nothing to filter here.
+  def handle_in("list_users", payload, socket) do
+    with :ok <- require_operator(socket, payload, "list_users") do
+      {:reply, {:ok, %{"users" => Users.all_with_role()}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
   # Operator-only live rename of a user's display name (issue #197 段階3,
   # D13 — operator-only, any existing user, no self-service distinction
   # per director's Q1 判定). No wrapper relay and no live broadcast: the
-  # `directory_request` `users` projection reads `Users` fresh on every
-  # call (issue #197 段階2's `all_with_role/1`), and no dashboard
-  # consumer of a user list exists yet (D13 — UI is out of scope for
-  # this unit), so there is nothing today that a live push would reach.
+  # dashboard re-fetches via `list_users` (issue #207) after a rename
+  # completes, the same refresh-on-mutation contract `close_conversation`
+  # (issue #276) uses for `list_conversations` — and the agent-facing
+  # `directory_request` `users` projection (`WrapperChannel`) reads
+  # `Users` fresh on every call too, so there is nothing today that a
+  # live push would reach beyond what those two pulls already cover.
   def handle_in("rename_user", payload, socket) do
     with :ok <- require_operator(socket, payload, "rename_user"),
          {:ok, user_id} <- fetch_user_id(payload),

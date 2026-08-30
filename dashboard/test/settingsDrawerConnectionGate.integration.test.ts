@@ -38,6 +38,9 @@ const captured = vi.hoisted(() => ({
   // `listConversations`'s call COUNT (not just whether the section
   // renders), pinning "hosts 再受信なしの rejoin は一覧を取得し直さない".
   listConversations: null as ReturnType<typeof vi.fn> | null,
+  // issue #207: same reasoning, for the users-list section's own
+  // independent fetch/gate.
+  listUsers: null as ReturnType<typeof vi.fn> | null,
 }));
 
 vi.mock("../src/lib/protocol", async (importOriginal) => {
@@ -48,6 +51,7 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
     connectKaoiro: (_url: string, handlers: KaoiroHandlers) => {
       captured.handlers = handlers;
       captured.listConversations = vi.fn(async () => []);
+      captured.listUsers = vi.fn(async () => []);
       return {
         disconnect: () => {},
         reconnect: () => {},
@@ -59,6 +63,8 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
         deleteAgent: async () => {},
         renameAgent: async () => {},
         listConversations: captured.listConversations,
+        listUsers: captured.listUsers,
+        renameUser: async () => {},
       };
     },
     fetchPersonaManifest: async () => null,
@@ -82,6 +88,7 @@ async function mountApp(): Promise<KaoiroHandlers> {
 beforeEach(() => {
   captured.handlers = null;
   captured.listConversations = null;
+  captured.listUsers = null;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: unknown) => {
@@ -107,6 +114,7 @@ afterEach(async () => {
   component = null;
   captured.handlers = null;
   captured.listConversations = null;
+  captured.listUsers = null;
   document.body.innerHTML = "";
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -119,15 +127,18 @@ function openSettings() {
 }
 
 describe("SettingsDrawer connection gate (issue #276)", () => {
-  it("viewer (isOperator=false) では会話一覧セクションを出さない", async () => {
+  it("viewer (isOperator=false) では会話一覧・ユーザー一覧セクションを出さない", async () => {
     await mountApp();
     openSettings();
     await tick();
 
     expect(document.querySelector(".conversations")).toBeNull();
+    // issue #207: same `{#if connection}` gate as the conversations
+    // section, so a viewer must not see it either.
+    expect(document.querySelector(".users")).toBeNull();
   });
 
-  it("operator (onHosts 受信済み) では会話一覧セクションを出す", async () => {
+  it("operator (onHosts 受信済み) では会話一覧・ユーザー一覧セクションを出す", async () => {
     const handlers = await mountApp();
     handlers.onHosts?.([] as HostInfo[]);
     await tick();
@@ -135,6 +146,7 @@ describe("SettingsDrawer connection gate (issue #276)", () => {
     await tick();
 
     expect(document.querySelector(".conversations")).not.toBeNull();
+    expect(document.querySelector(".users")).not.toBeNull();
   });
 
   // issue #276 review follow-up (ふじ round3 must-fix): onJoined resets
@@ -147,7 +159,7 @@ describe("SettingsDrawer connection gate (issue #276)", () => {
   // session. Pins the full production wiring: operator display -> same-
   // connection rejoin with no hosts (viewer downgrade) -> section gone,
   // no re-fetch -> a later hosts push re-raises operator display.
-  it("同一 connection 上で hosts 無しの再 join (viewer への降格) が起きると会話一覧が消え、再取得もしない", async () => {
+  it("同一 connection 上で hosts 無しの再 join (viewer への降格) が起きると会話一覧・ユーザー一覧が消え、再取得もしない", async () => {
     const handlers = await mountApp();
     handlers.onHosts?.([] as HostInfo[]);
     await tick();
@@ -155,8 +167,16 @@ describe("SettingsDrawer connection gate (issue #276)", () => {
     await tick();
 
     expect(document.querySelector(".conversations")).not.toBeNull();
+    expect(document.querySelector(".users")).not.toBeNull();
     const callsBeforeRejoin = captured.listConversations!.mock.calls.length;
     expect(callsBeforeRejoin).toBeGreaterThanOrEqual(1);
+    // issue #207: same rejoin-downgrade contract, pinned independently
+    // for listUsers -- both fetches share the same `{#if connection}`
+    // gate and the same effect cleanup, but each has its own sequence
+    // counter (SettingsDrawer.svelte), so this is not implied by the
+    // listConversations assertion above.
+    const userCallsBeforeRejoin = captured.listUsers!.mock.calls.length;
+    expect(userCallsBeforeRejoin).toBeGreaterThanOrEqual(1);
 
     // Same underlying connection re-joins (phoenix-level reconnect); the
     // server no longer sends "hosts" because the role is no longer
@@ -165,8 +185,12 @@ describe("SettingsDrawer connection gate (issue #276)", () => {
     await tick();
 
     expect(document.querySelector(".conversations")).toBeNull();
+    expect(document.querySelector(".users")).toBeNull();
     expect(captured.listConversations!.mock.calls.length).toBe(
       callsBeforeRejoin,
+    );
+    expect(captured.listUsers!.mock.calls.length).toBe(
+      userCallsBeforeRejoin,
     );
 
     // A later rejoin where the role IS still/again operator-capable does
@@ -175,8 +199,12 @@ describe("SettingsDrawer connection gate (issue #276)", () => {
     await tick();
 
     expect(document.querySelector(".conversations")).not.toBeNull();
+    expect(document.querySelector(".users")).not.toBeNull();
     expect(
       captured.listConversations!.mock.calls.length,
     ).toBeGreaterThan(callsBeforeRejoin);
+    expect(captured.listUsers!.mock.calls.length).toBeGreaterThan(
+      userCallsBeforeRejoin,
+    );
   });
 });

@@ -8,7 +8,11 @@ import {
   settings,
   updateSettings,
 } from "../src/lib/settings.svelte";
-import type { ConversationSummary, KaoiroConnection } from "../src/lib/protocol";
+import type {
+  ConversationSummary,
+  KaoiroConnection,
+  UserSummary,
+} from "../src/lib/protocol";
 import { makeReactiveSettingsDrawerProps } from "./reactiveProps.svelte";
 
 // jsdom does not implement HTMLDialogElement.showModal/close (measured
@@ -68,14 +72,23 @@ async function renderDrawer(
 /** issue #276: stub whose listConversations() resolves/rejects under test
  *  control (mirrors launchDefaults.integration.test.ts's makeConnection).
  *  `close` defaults to a resolving no-op so tests that don't exercise
- *  manual close don't need to supply one. */
+ *  manual close don't need to supply one. `users`/`rename` (issue #207)
+ *  default the same way -- every existing call site that only cares
+ *  about conversations still mounts cleanly, since SettingsDrawer's
+ *  mount effect now ALSO calls listUsers() unconditionally whenever
+ *  connection is truthy. */
 function makeConnection(
   list: () => Promise<ConversationSummary[]>,
   close: (cid: string) => Promise<void> = () => Promise.resolve(),
+  users: () => Promise<UserSummary[]> = () => Promise.resolve([]),
+  rename: (userId: string, name: string) => Promise<void> = () =>
+    Promise.resolve(),
 ) {
   return {
     listConversations: vi.fn(list),
     closeConversation: vi.fn(close),
+    listUsers: vi.fn(users),
+    renameUser: vi.fn(rename),
   } as unknown as KaoiroConnection;
 }
 
@@ -968,6 +981,342 @@ describe("SettingsDrawer", () => {
           document.querySelector('dialog[aria-label="会話を閉じる確認"]'),
         ).toBeNull();
       });
+    });
+  });
+
+  // issue #207: operator-facing user list + inline rename. Mirrors the
+  // conversations describe block above's depth (render/empty/error/
+  // refresh), plus renameAgent.integration.test.ts's submit/error/
+  // generation-guard idioms adapted to this component's inline (no
+  // popover) editing UI.
+  describe("ユーザー一覧 (issue #207)", () => {
+    it("connection 指定時、取得したユーザー一覧を id/kind/display_name/role で表示する", async () => {
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        async () => [
+          { id: "u1", kind: "user", displayName: "あお", role: "operator" },
+        ],
+      );
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      expect(conn.listUsers).toHaveBeenCalledTimes(1);
+      const item = target.querySelector(".user-list li")!;
+      expect(item.textContent).toContain("あお");
+      expect(item.textContent).toContain("user / operator");
+
+      const id = item.querySelector(".user-id")!;
+      expect(id.textContent).toContain("id:u1");
+      expect(id.getAttribute("title")).toBe("u1");
+    });
+
+    it("ユーザーが 0 件なら空である旨を表示する", async () => {
+      const conn = makeConnection(async () => [], undefined, async () => []);
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      expect(target.querySelector(".user-status")?.textContent).toContain(
+        "登録されているユーザーはいません",
+      );
+    });
+
+    it("ユーザー一覧の取得失敗時はエラー文言を表示する", async () => {
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        () => Promise.reject(new Error("forbidden")),
+      );
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      expect(target.querySelector(".user-status")?.textContent).toContain(
+        "forbidden",
+      );
+    });
+
+    it("ユーザー一覧の更新ボタンで再取得する (会話一覧の更新ボタンとは独立)", async () => {
+      const conn = makeConnection(async () => [], undefined, async () => []);
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+      expect(conn.listUsers).toHaveBeenCalledTimes(1);
+      expect(conn.listConversations).toHaveBeenCalledTimes(1);
+
+      // aria-label で選ぶ (会話一覧の更新ボタンと同じ class="refresh" を
+      // 共有するため、position ではなく label で一意に選ぶ必要がある)。
+      target
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="ユーザー一覧を更新"]',
+        )!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await tick();
+
+      expect(conn.listUsers).toHaveBeenCalledTimes(2);
+      // The conversations refresh must not have been triggered by this
+      // click — the two sections' refresh buttons are independent.
+      expect(conn.listConversations).toHaveBeenCalledTimes(1);
+    });
+
+    it("名前を変更ボタンで編集モードに入り、現在の表示名が入力欄の初期値になる", async () => {
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        async () => [
+          { id: "u1", kind: "user", displayName: "あお", role: "operator" },
+        ],
+      );
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      target
+        .querySelector<HTMLButtonElement>(".user-action")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      const input = target.querySelector<HTMLInputElement>(
+        '.user-rename-row input[type="text"]',
+      )!;
+      expect(input.value).toBe("あお");
+    });
+
+    it("キャンセルで編集モードを閉じ、renameUser を呼ばない", async () => {
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        async () => [
+          { id: "u1", kind: "user", displayName: "あお", role: "operator" },
+        ],
+      );
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      target
+        .querySelector<HTMLButtonElement>(".user-action")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      const buttons = target.querySelectorAll<HTMLButtonElement>(
+        ".user-rename-row button",
+      );
+      buttons[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      expect(target.querySelector(".user-rename-row")).toBeNull();
+      expect(conn.renameUser).not.toHaveBeenCalled();
+    });
+
+    it("保存で renameUser(userId, name) を 1 回呼び、成功後は編集モードを閉じて一覧を再取得する", async () => {
+      let fetchCount = 0;
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        async () => {
+          fetchCount += 1;
+          return [
+            { id: "u1", kind: "user", displayName: "あお", role: "operator" },
+          ];
+        },
+        vi.fn(() => Promise.resolve()),
+      );
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+      expect(fetchCount).toBe(1);
+
+      target
+        .querySelector<HTMLButtonElement>(".user-action")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      const input = target.querySelector<HTMLInputElement>(
+        '.user-rename-row input[type="text"]',
+      )!;
+      input.value = "あお(改)";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+
+      target
+        .querySelectorAll<HTMLButtonElement>(".user-rename-row button")[0]!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await tick();
+
+      expect(conn.renameUser).toHaveBeenCalledTimes(1);
+      expect(conn.renameUser).toHaveBeenCalledWith("u1", "あお(改)");
+      expect(target.querySelector(".user-rename-row")).toBeNull();
+      // Re-fetched (issue #207 design decision: same refresh-on-mutation
+      // contract as closeConversation, success or failure alike).
+      expect(fetchCount).toBe(2);
+    });
+
+    it("保存が reject された場合はエラーを表示し、編集モードは維持したまま一覧は再取得する", async () => {
+      let fetchCount = 0;
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        async () => {
+          fetchCount += 1;
+          return [
+            { id: "u1", kind: "user", displayName: "あお", role: "operator" },
+          ];
+        },
+        vi.fn(() => Promise.reject(new Error("invalid_name"))),
+      );
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+      expect(fetchCount).toBe(1);
+
+      target
+        .querySelector<HTMLButtonElement>(".user-action")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      target
+        .querySelectorAll<HTMLButtonElement>(".user-rename-row button")[0]!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await tick();
+
+      expect(target.querySelector(".user-status")?.textContent).toContain(
+        "invalid_name",
+      );
+      // Failure leaves the edit form open (mirrors the manual-close
+      // confirm dialog's own "no accidental data-loss" behaviour) --
+      // the operator sees the error next to the input and can retry
+      // without reopening.
+      expect(target.querySelector(".user-rename-row")).not.toBeNull();
+      expect(fetchCount).toBe(2);
+    });
+
+    // code-review-assessment (issue #207, round 1): renamingUserId/
+    // renameError/renaming are single, component-wide state -- not
+    // scoped per row -- and (unlike closeConversation's native <dialog>
+    // confirm modal) the inline rename form has no structural barrier
+    // blocking interaction with a different row while a save is in
+    // flight. Without the disabled guard, switching to a different
+    // row's edit mid-save would misread the still-true `renaming` flag
+    // as belonging to the NEW row, then have the original save's
+    // continuation silently close/misattribute-error onto that new row.
+    it("別行の保存が in-flight の間は他行の名前を変更ボタンを disable する (クロス行競合ガード)", async () => {
+      let resolveRename: (() => void) | null = null;
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        async () => [
+          { id: "u1", kind: "user", displayName: "A", role: "operator" },
+          { id: "u2", kind: "user", displayName: "B", role: "operator" },
+        ],
+        () => new Promise<void>((resolve) => (resolveRename = resolve)),
+      );
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      const beforeButtons = target.querySelectorAll<HTMLButtonElement>(
+        ".user-action",
+      );
+      expect(beforeButtons.length).toBe(2);
+
+      // Open A's edit form and start saving -- never resolves yet.
+      beforeButtons[0]!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+      await tick();
+      target
+        .querySelectorAll<HTMLButtonElement>(".user-rename-row button")[0]!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      // A's own row switched to the edit form, so only B's `.user-action`
+      // remains in the DOM -- it must be disabled while A's save is
+      // still in flight.
+      const bButton = target.querySelector<HTMLButtonElement>(
+        ".user-action",
+      )!;
+      expect(bButton.textContent).toContain("名前を変更");
+      expect(bButton.disabled).toBe(true);
+
+      resolveRename!();
+      await Promise.resolve();
+      await Promise.resolve();
+      await tick();
+
+      // A's save resolved -- its edit form closes and B's button is
+      // re-enabled, with B's row untouched throughout.
+      expect(target.querySelector(".user-rename-row")).toBeNull();
+      expect(
+        target.querySelector<HTMLButtonElement>(".user-action")!.disabled,
+      ).toBe(false);
+    });
+
+    // issue #207: mirrors "connection 世代変更時のガード (issue #277)"
+    // above, adapted to the inline rename form's own state
+    // (renamingUserId/renameError) instead of the confirm-close modal's.
+    it("編集中に connection が離脱→別世代で復帰すると、旧 target の編集モードは残らない", async () => {
+      const connA = makeConnection(
+        async () => [],
+        undefined,
+        async () => [
+          { id: "u1", kind: "user", displayName: "A", role: "operator" },
+        ],
+      );
+      // SAME user id as generation A on purpose: this is what actually
+      // exercises the reset. If renamingUserId ("u1") survived the
+      // generation change unreset, generation B's list ALSO contains a
+      // "u1" row, so `renamingUserId === u.id` would incorrectly re-open
+      // the edit form for it (bound to generation A's stale renameDraft/
+      // renameError) — a weaker fixture using a different id would make
+      // {#if renamingUserId === u.id} fail regardless of the reset,
+      // proving nothing about it.
+      const connB = makeConnection(
+        async () => [],
+        undefined,
+        async () => [
+          { id: "u1", kind: "user", displayName: "A(別世代)", role: "operator" },
+        ],
+      );
+      const target = document.createElement("div");
+      document.body.append(target);
+      const props = makeReactiveSettingsDrawerProps({
+        onClose: vi.fn(),
+        connection: connA,
+      });
+      const component = mount(SettingsDrawer, { target, props });
+      mounted.push(component);
+      await Promise.resolve();
+      await tick();
+
+      target
+        .querySelector<HTMLButtonElement>(".user-action")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+      expect(target.querySelector(".user-rename-row")).not.toBeNull();
+
+      // Connection lost (e.g. isOperator flap on rejoin) -- the effect
+      // cleanup fires.
+      props.connection = undefined;
+      await tick();
+      expect(target.querySelector(".user-rename-row")).toBeNull();
+
+      // Connection comes back as a DIFFERENT generation (connB), still
+      // addressing "u1", before the operator does anything else.
+      props.connection = connB;
+      await Promise.resolve();
+      await tick();
+
+      expect(target.querySelector(".user-rename-row")).toBeNull();
+      const item = target.querySelector(".user-list li")!;
+      expect(item.textContent).toContain("A(別世代)");
     });
   });
 });

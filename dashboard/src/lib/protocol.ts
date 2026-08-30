@@ -1548,6 +1548,19 @@ export interface ConversationSummary {
   startedAt: string | null;
 }
 
+/** Operator-facing user-list entry (issue #207). Wire shape from
+ *  `Users.all_with_role/1` (id/kind/display_name/role) — an allow-list
+ *  decided independently for this operator-facing disclosure (issue #207
+ *  design decision), which happens to match ADR-0021 F6-8's separate,
+ *  agent-facing allow-list without reusing it (ADR-0021 F6-1: agent
+ *  disclosure and operator disclosure are independent decisions). */
+export interface UserSummary {
+  id: string;
+  kind: string;
+  displayName: string;
+  role: string;
+}
+
 /** Canonical persona joined server-side against the CURRENT PersonaAssets
  *  manifest (issue #219 D19) — never a stored snapshot. `name` /
  *  `sprite_set` are present when the pack still resolves; absent
@@ -1934,6 +1947,21 @@ export interface KaoiroConnection {
    *  caller must re-fetch listConversations() to see the updated status
    *  either way (no separate push). */
   closeConversation: (conversationId: string) => Promise<void>;
+  /** Operator-facing user list (issue #207). Pure read-time query
+   *  mirroring listConversations — no push event, the caller re-fetches
+   *  on demand. Entries are defensively parsed (a malformed entry is
+   *  dropped, not the whole list). Rejects on forbidden / transport
+   *  disconnect / timeout. */
+  listUsers: () => Promise<UserSummary[]>;
+  /** Renames a user's `display_name` (server API from issue #197 段階3;
+   *  dashboard access added by issue #207). Operator-only, any existing
+   *  user — no self-service distinction (director's Q1 判定, issue #187
+   *  段階3). Rejects like sendInstruction, plus `unknown_user` /
+   *  `invalid_name`. The resolved entry is NOT surfaced here, same as
+   *  renameAgent — the caller re-fetches listUsers() to see the updated
+   *  name (issue #207 design decision: same refresh-on-mutation contract
+   *  closeConversation already uses). */
+  renameUser: (userId: string, name: string) => Promise<void>;
   /** Requests the resume candidates under (host, cwd) (#22 phase-1);
    * resolves when the server accepts the relay. The candidate list arrives
    * separately via onSessions. Rejects like sendInstruction. */
@@ -2799,6 +2827,33 @@ function parseConversationList(raw: unknown): ConversationSummary[] {
       tokens: typeof p.tokens === "number" ? p.tokens : null,
       status: p.status,
       startedAt: typeof p.started_at === "string" ? p.started_at : null,
+    });
+  }
+  return out;
+}
+
+/** Defensive parse of the list_users reply (issue #207): fail-closed per
+ *  entry, mirroring parseConversationList — a malformed entry is
+ *  dropped, not the whole list. */
+function parseUserList(raw: unknown): UserSummary[] {
+  if (!Array.isArray(raw)) return [];
+  const out: UserSummary[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const p = item as Record<string, unknown>;
+    if (
+      typeof p.id !== "string" ||
+      typeof p.kind !== "string" ||
+      typeof p.display_name !== "string" ||
+      typeof p.role !== "string"
+    ) {
+      continue;
+    }
+    out.push({
+      id: p.id,
+      kind: p.kind,
+      displayName: p.display_name,
+      role: p.role,
     });
   }
   return out;
@@ -3908,6 +3963,25 @@ export function connectKaoiro(
     closeConversation: (conversationId) =>
       pushAsync(channel, "close_conversation", {
         conversation_id: conversationId,
+      }),
+    listUsers: () =>
+      new Promise((resolve, reject) => {
+        pushVersioned(channel, "list_users", {})
+          .receive("ok", (resp: { users?: unknown }) =>
+            resolve(parseUserList(resp?.users)),
+          )
+          .receive("error", (reason: { reason?: string } | undefined) =>
+            reject(new Error(reason?.reason ?? "error")),
+          )
+          .receive("timeout", () => reject(new Error("timeout")));
+      }),
+    // `display_name` (issue #219 D23 vocabulary, reused here per
+    // renameAgent's own doc: this client sends the canonical key, the
+    // server's extract_name_field/1 still accepts legacy `name` too).
+    renameUser: (userId, name) =>
+      pushAsync(channel, "rename_user", {
+        user_id: userId,
+        display_name: name,
       }),
     enumerateSessions: (hostId, cwd, engine) =>
       pushAsync(channel, "enumerate_sessions", {

@@ -5788,7 +5788,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  describe "list_conversations 経路 (issue #276, admin-only 一択)" do
+  describe "list_conversations 経路 (issue #276, require_operator ゲート)" do
     test "viewer は forbidden" do
       socket = join_as(:viewer)
 
@@ -5815,13 +5815,51 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
              } = Enum.find(conversations, &(&1["conversation_id"] == cid))
     end
 
-    test "admin も通る (issue #276 決定: admin 一択の許可ロール)" do
+    test "admin も通る (require_operator は operator/admin いずれも許可)" do
       socket = join_as(:admin)
 
       ref = push(socket, "list_conversations", %{})
 
       assert_reply ref, :ok, %{"conversations" => conversations}
       assert is_list(conversations)
+    end
+  end
+
+  describe "list_users 経路 (issue #207)" do
+    test "viewer は forbidden" do
+      socket = join_as(:viewer)
+
+      ref = push(socket, "list_users", %{})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "operator は Users.all_with_role/1 の内容を受け取る (id/kind/display_name/role)" do
+      on_exit(fn -> Application.delete_env(:kaoiro_server, :oauth_allowlist_path) end)
+
+      KaoiroServer.OAuthAllowlistFixture.put_allowlist("github:list-users-1:viewer\n")
+
+      user =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "list-users-1"}, "user", "R")
+
+      socket = join_as(:operator)
+      ref = push(socket, "list_users", %{})
+
+      assert_reply ref, :ok, %{"users" => users}
+
+      assert %{id: id, kind: "user", display_name: "R", role: :viewer} =
+               Enum.find(users, &(&1.id == user.id))
+
+      assert id == user.id
+    end
+
+    test "admin も通る (require_operator は operator/admin いずれも許可)" do
+      socket = join_as(:admin)
+
+      ref = push(socket, "list_users", %{})
+
+      assert_reply ref, :ok, %{"users" => users}
+      assert is_list(users)
     end
   end
 

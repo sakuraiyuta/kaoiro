@@ -3,7 +3,11 @@
   // Slides in from the right; every change writes straight to localStorage
   // via updateSettings() (no separate save step, the value set is small).
   import { settings, updateSettings } from "./settings.svelte";
-  import type { ConversationSummary, KaoiroConnection } from "./protocol";
+  import type {
+    ConversationSummary,
+    KaoiroConnection,
+    UserSummary,
+  } from "./protocol";
   import Modal from "./Modal.svelte";
 
   let {
@@ -16,10 +20,12 @@
      *  logout button, so the drawer carries the affordance. Rendered at
      *  every size (DOM stays common — ADR-0052 F6); omitted = no row. */
     onLogout?: () => void | Promise<void>;
-    /** issue #276 (admin-only first cut): when present, the drawer also
-     *  shows an operator-facing conversation list. Absent when the
-     *  caller has no live connection yet — every other row (local-only
-     *  settings) works without it. */
+    /** issue #276 / #207: when present, the drawer also shows the
+     *  operator-facing conversation list and user list/rename UI. Absent
+     *  when the caller has no live connection yet, OR when the session
+     *  is not operator-capable (App.svelte only passes a connection
+     *  through here for `isOperator` sessions) — every other row
+     *  (local-only settings) works without it. */
     connection?: KaoiroConnection | undefined;
   } = $props();
 
@@ -27,6 +33,11 @@
   // getLaunchDefaults' pure read-time query shape).
   let conversations = $state<ConversationSummary[] | null>(null);
   let conversationsError = $state<string | null>(null);
+
+  // issue #207: same pure read-time query shape as conversations, just
+  // above.
+  let users = $state<UserSummary[] | null>(null);
+  let usersError = $state<string | null>(null);
 
   // Every listConversations() call in this component — the initial
   // mount fetch, the refresh button, and the post-close re-fetch —
@@ -60,6 +71,30 @@
       });
   }
 
+  // issue #207: a SEPARATE sequence counter from `refreshSeq` above, not
+  // a shared one — the two fetches are independent RPCs (list_users vs
+  // list_conversations), so clicking the conversations refresh button
+  // must not invalidate an in-flight users fetch, and vice versa.
+  let usersRefreshSeq = 0;
+
+  function refreshUsers(): void {
+    if (!connection) return;
+    const seq = ++usersRefreshSeq;
+    connection
+      .listUsers()
+      .then((list) => {
+        if (seq === usersRefreshSeq) {
+          users = list;
+          usersError = null;
+        }
+      })
+      .catch((err: unknown) => {
+        if (seq === usersRefreshSeq) {
+          usersError = err instanceof Error ? err.message : "error";
+        }
+      });
+  }
+
   // issue #276 review follow-up (ふじ round2 B2): a `connection` prop
   // going from truthy to undefined (operator status revoked mid-session)
   // does NOT re-enter the `if (connection)` branch above, so it never
@@ -87,9 +122,13 @@
   let connectionGeneration = 0;
 
   $effect(() => {
-    if (connection) refreshConversations();
+    if (connection) {
+      refreshConversations();
+      refreshUsers();
+    }
     return () => {
       refreshSeq += 1;
+      usersRefreshSeq += 1;
       connectionGeneration += 1;
       // issue #276 review follow-up (こはく advisory, round4): the seq
       // bump above invalidates an in-flight REPLY, but leaves whatever
@@ -104,6 +143,18 @@
       // visible while refreshing" behaviour.
       conversations = null;
       conversationsError = null;
+      // issue #207: same reasoning as the conversations reset just
+      // above, applied to the users list (a separate fetch, same
+      // generation).
+      users = null;
+      usersError = null;
+      // issue #207: mirrors the confirm-close-modal reset below — a
+      // connection-identity change while an inline rename is open (or a
+      // rename is in flight) must not leave renamingUserId/renameError
+      // pointing at the previous generation's row.
+      renamingUserId = null;
+      renameError = null;
+      renaming = false;
       // issue #277 (advisory carried over from issue #276 round4, ふじ
       // 判定/こはく同意): the reset above missed the confirm-modal's OWN
       // state. Without this, a connection-identity change while the
@@ -171,6 +222,77 @@
         // would otherwise sit stale at status=open forever. closeError
         // stays visible; this only refreshes the list behind it.
         refreshConversations();
+      }
+    }
+  }
+
+  // issue #207: inline rename, one row editable at a time. No confirm
+  // dialog (unlike closeConversation) — a rename has no fan-out to
+  // notify and is trivially reversible by renaming again, so the
+  // close-conversation section's destructive-action pattern would be
+  // disproportionate here. Unlike the confirm-close modal (a native
+  // <dialog> that structurally blocks interacting with any other row
+  // while open), this inline form has NO such barrier, so
+  // renamingUserId/renameError/renaming (single, component-wide state —
+  // not scoped per row) need their own explicit guards below: the
+  // "名前を変更" button disables while a save is in flight (closes the
+  // entry point — cannot switch rows mid-save), and submitRename's
+  // continuation additionally re-checks `renamingUserId === userId`
+  // (closes the exit point — cannot write a stale row's result over
+  // whatever the operator has since opened, even if some future change
+  // reintroduces a way to switch mid-flight).
+  let renamingUserId = $state<string | null>(null);
+  let renameDraft = $state("");
+  let renameError = $state<string | null>(null);
+  let renaming = $state(false);
+
+  function startRename(user: UserSummary): void {
+    renamingUserId = user.id;
+    renameDraft = user.displayName;
+    renameError = null;
+  }
+
+  function cancelRename(): void {
+    renamingUserId = null;
+    renameError = null;
+  }
+
+  async function submitRename(): Promise<void> {
+    if (!connection || renamingUserId === null) return;
+    // Same generation-guard shape as handleConfirmClose just above: a
+    // connection-identity change while this call is in flight has
+    // already reset renamingUserId/renameError to the fresh
+    // generation's defaults (see the effect cleanup), so a late
+    // resolve/reject from generation N must not write over generation
+    // N+1's state.
+    const generation = connectionGeneration;
+    const userId = renamingUserId;
+    const name = renameDraft;
+    renaming = true;
+    renameError = null;
+    try {
+      await connection.renameUser(userId, name);
+      // `renamingUserId === userId` (on top of the generation check):
+      // the "名前を変更" button disables while `renaming` is true, so
+      // this should be unreachable in practice — kept as a second,
+      // independent guard so a future change that reintroduces a way to
+      // switch rows mid-save cannot silently close/misattribute a
+      // DIFFERENT row's edit state.
+      if (generation === connectionGeneration && renamingUserId === userId) {
+        renamingUserId = null;
+      }
+    } catch (err) {
+      if (generation === connectionGeneration && renamingUserId === userId) {
+        renameError = err instanceof Error ? err.message : "error";
+      }
+    } finally {
+      if (generation === connectionGeneration) {
+        renaming = false;
+        // Re-fetch either way, same contract as closeConversation
+        // (issue #207 design decision): a rejection can still mean the
+        // name changed underneath us via another session, so the row
+        // must not sit stale at the pre-attempt name forever.
+        refreshUsers();
       }
     }
   }
@@ -308,6 +430,78 @@
                   onclick={() => (confirmCloseTarget = conv)}
                 >
                   閉じる
+                </button>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+
+    <!-- issue #207: distinct classes throughout (not reused from the
+         conversations section above), even though the CSS declarations
+         are shared via combined selectors below -- a section-scoped
+         reuse of e.g. .conv-list would make `.conv-list li` ambiguous
+         between the two sections wherever both have rows. -->
+    <section class="users">
+      <div class="conversations-header">
+        <h3>ユーザー一覧</h3>
+        <button
+          type="button"
+          class="refresh"
+          onclick={refreshUsers}
+          aria-label="ユーザー一覧を更新"
+        >
+          更新
+        </button>
+      </div>
+      {#if usersError}
+        <p class="user-status">取得に失敗しました({usersError})</p>
+      {:else if users === null}
+        <p class="user-status">読み込み中…</p>
+      {:else if users.length === 0}
+        <p class="user-status">登録されているユーザーはいません</p>
+      {:else}
+        <ul class="user-list">
+          {#each users as u (u.id)}
+            <li>
+              {#if renamingUserId === u.id}
+                <div class="user-rename-row">
+                  <input
+                    type="text"
+                    bind:value={renameDraft}
+                    disabled={renaming}
+                    aria-label="{u.id} の表示名"
+                  />
+                  <button
+                    type="button"
+                    onclick={submitRename}
+                    disabled={renaming}
+                  >
+                    {renaming ? "保存中…" : "保存"}
+                  </button>
+                  <button
+                    type="button"
+                    onclick={cancelRename}
+                    disabled={renaming}
+                  >
+                    キャンセル
+                  </button>
+                </div>
+                {#if renameError}
+                  <p class="user-status">失敗しました({renameError})</p>
+                {/if}
+              {:else}
+                <span class="user-name">{u.displayName}</span>
+                <span class="user-id" title={u.id}>id:{u.id.slice(0, 8)}</span>
+                <span class="user-meta">{u.kind} / {u.role}</span>
+                <button
+                  type="button"
+                  class="user-action"
+                  onclick={() => startRename(u)}
+                  disabled={renaming}
+                >
+                  名前を変更
                 </button>
               {/if}
             </li>
@@ -579,13 +773,20 @@
     border-color: var(--fg-dim);
   }
 
-  .conv-status {
+  /* issue #207: .user-status/.user-list/etc. share these declarations
+     via combined selectors -- distinct class names (see the markup
+     comment above the users section) so tests/queries never have to
+     disambiguate which section a match came from, but no duplicated
+     CSS. */
+  .conv-status,
+  .user-status {
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
   }
 
-  .conv-list {
+  .conv-list,
+  .user-list {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -596,7 +797,8 @@
     overflow-y: auto;
   }
 
-  .conv-list li {
+  .conv-list li,
+  .user-list li {
     display: flex;
     flex-direction: column;
     gap: 0.1rem;
@@ -606,21 +808,25 @@
     border-radius: 0.3rem;
   }
 
-  .conv-participants {
+  .conv-participants,
+  .user-name {
     color: var(--fg);
   }
 
-  .conv-cid {
+  .conv-cid,
+  .user-id {
     color: var(--fg-dim);
     font-family: monospace;
     font-size: 0.85em;
   }
 
-  .conv-meta {
+  .conv-meta,
+  .user-meta {
     color: var(--fg-dim);
   }
 
-  .conv-close {
+  .conv-close,
+  .user-action {
     align-self: flex-end;
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
@@ -631,9 +837,53 @@
     cursor: pointer;
   }
 
-  .conv-close:hover {
+  .conv-close:hover,
+  .user-action:hover {
     color: var(--fg);
     border-color: var(--fg-dim);
+  }
+
+  /* issue #207: .conv-close is never disabled (its own row's confirm
+     modal blocks interaction structurally, see the style comment near
+     the top of this file); .user-action now can be (see the
+     renaming-guard comment above submitRename in the script). */
+  .user-action:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  /* issue #207: inline rename row (name field + save/cancel), reuses
+     .conv-list's li for outer spacing. */
+  .user-rename-row {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .user-rename-row input {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-body-sm);
+  }
+
+  .user-rename-row button {
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.1rem 0.5rem;
+    cursor: pointer;
+  }
+
+  .user-rename-row button:hover {
+    color: var(--fg);
+    border-color: var(--fg-dim);
+  }
+
+  .user-rename-row button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   /* issue #276 review follow-up (B1 residual): identifies the confirm

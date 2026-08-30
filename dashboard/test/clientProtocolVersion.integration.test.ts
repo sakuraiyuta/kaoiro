@@ -279,6 +279,16 @@ const PUSH_CASES: ReadonlyArray<{
     fire: (c) => void c.closeConversation("cid-1").catch(() => {}),
   },
   {
+    method: "listUsers",
+    event: "list_users",
+    fire: (c) => c.listUsers(),
+  },
+  {
+    method: "renameUser",
+    event: "rename_user",
+    fire: (c) => c.renameUser("u-1", "あお"),
+  },
+  {
     method: "enumerateSessions",
     event: "enumerate_sessions",
     fire: (c) => c.enumerateSessions("hostA", "/workspace"),

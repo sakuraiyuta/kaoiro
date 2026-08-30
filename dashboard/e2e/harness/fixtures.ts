@@ -6,6 +6,7 @@ import type {
   Envelope,
   KaoiroConnection,
   PersonaManifest,
+  UserSummary,
 } from "../../src/lib/protocol";
 
 function agent(
@@ -229,6 +230,18 @@ export function settingsDrawerConnection(): KaoiroConnection {
       startedAt: "2026-08-29T00:00:00Z",
     },
   ];
+  // issue #207: same reasoning as `conversations` above -- without an
+  // explicit override this would fall through to the catch-all `{}`,
+  // which is not array-like and would break the users section's
+  // `{#each users}` the moment SettingsDrawer's mount effect resolves.
+  const users: UserSummary[] = [
+    {
+      id: "e2e-user-1",
+      kind: "user",
+      displayName: "ao",
+      role: "operator",
+    },
+  ];
   return new Proxy(
     {},
     {
@@ -237,6 +250,12 @@ export function settingsDrawerConnection(): KaoiroConnection {
           return async () => conversations;
         }
         if (prop === "closeConversation") {
+          return async () => undefined;
+        }
+        if (prop === "listUsers") {
+          return async () => users;
+        }
+        if (prop === "renameUser") {
           return async () => undefined;
         }
         return async () => ({});
