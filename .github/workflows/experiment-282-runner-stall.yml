@@ -5,6 +5,12 @@ name: "[scratch] issue #282 runner stall probe"
 # (cgroup CPU throttling or scheduling gap), independent of any per-test
 # processing cost? Delete this workflow file once the experiment concludes
 # -- it is not part of the regular CI surface.
+#
+# No apostrophes anywhere in the nested comments/strings below: the
+# whole docker-run script is one single-quoted shell argument, so a
+# literal apostrophe would terminate that quoting early (round-1 failure,
+# "Unterminated quoted string" -- caught on the actual runner, not
+# reproduced by an isolated local probe-only test).
 on:
   workflow_dispatch:
   pull_request:
@@ -41,11 +47,12 @@ jobs:
                 mix deps.get
 
                 # Background probe 1: monotonic clock gap. Samples every
-                # 10ms; a gap >100ms between consecutive samples means the
-                # PROCESS ITSELF (not just the test suite BEAM node) went
-                # unscheduled for longer than ExUnit's default
-                # assert_receive_timeout -- direct evidence of a runner-side
-                # stall independent of any handler's own processing cost.
+                # 10ms; a gap over 100ms between consecutive samples means
+                # the process itself (not just the test suite BEAM node)
+                # went unscheduled longer than ExUnit default
+                # assert_receive_timeout -- direct evidence of a
+                # runner-side stall independent of any handler own
+                # processing cost.
                 (
                   prev=\$(date +%s%N)
                   while true; do
@@ -61,14 +68,18 @@ jobs:
                 GAP_PID=\$!
 
                 # Background probe 2: cgroup v2 cpu.stat, sampled every
-                # second -- nr_throttled/throttled_usec directly show CFS
-                # bandwidth throttling if the container itself has a CPU
-                # quota applied.
+                # second -- nr_throttled and throttled_usec directly show
+                # CFS bandwidth throttling if the container itself has a
+                # CPU quota applied. Written as a timestamp line followed
+                # by the raw (multi-line) cpu.stat block, not flattened,
+                # to avoid a tr/newline substitution inside this already
+                # doubly-quoted script.
                 (
                   while true; do
                     sleep 1
                     if [ -r /sys/fs/cgroup/cpu.stat ]; then
-                      echo \"\$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) \$(tr \"\n\" \" \" < /sys/fs/cgroup/cpu.stat)\" >> /tmp/cpustat.log
+                      echo \"--- \$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) ---\" >> /tmp/cpustat.log
+                      cat /sys/fs/cgroup/cpu.stat >> /tmp/cpustat.log
                     fi
                   done
                 ) &
@@ -82,19 +93,19 @@ jobs:
                 kill \$GAP_PID \$CPUSTAT_PID 2>/dev/null || true
                 sleep 0.2
 
-                echo \"=== stall probe: monotonic clock gaps >100ms ===\"
+                echo \"=== stall probe: monotonic clock gaps over 100ms ===\"
                 if [ -s /tmp/gap.log ]; then
                   cat /tmp/gap.log
                   echo \"gap count: \$(wc -l < /tmp/gap.log)\"
                 else
-                  echo \"no gaps >100ms detected\"
+                  echo \"no gaps over 100ms detected\"
                 fi
 
-                echo \"=== stall probe: cgroup cpu.stat samples (first 3, last 3) ===\"
+                echo \"=== stall probe: cgroup cpu.stat samples (first block, last block) ===\"
                 if [ -s /tmp/cpustat.log ]; then
-                  head -3 /tmp/cpustat.log
+                  head -11 /tmp/cpustat.log
                   echo \"...\"
-                  tail -3 /tmp/cpustat.log
+                  tail -11 /tmp/cpustat.log
                 else
                   echo \"no cpu.stat samples captured (file unreadable or absent)\"
                 fi
