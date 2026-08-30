@@ -35,6 +35,24 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   # this via `apply_custom_name` on the spawn path.
   @ao %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"}
 
+  # issue #266: `assert_reply` for a SUCCESSFUL `delete_agent` (not an
+  # early-rejected one — `not_disconnected`/`forbidden`/`unknown_agent`
+  # return before any of this) waits on a reply that only follows FOUR
+  # independent, directly-executed fsync-gated DETS writes (TokenDenylist
+  # + ClearWatermarks + SessionStarts + DeliveryStates, each `GenServer.call`
+  # + `:dets.sync/1` before its own reply -- see `purge_agent_records` in
+  # agents_channel.ex). Measured directly (instrumented timing, reverted
+  # before commit): under a 2-core CPU restriction (approximating a shared
+  # CI runner) this chain alone took 30-40ms, no other single test failure
+  # observed in 17 repeated runs at the exact CI-captured seed/max_cases.
+  # ExUnit's default `assert_receive_timeout` (100ms, unconfigured in this
+  # project) leaves little headroom against that baseline once a shared
+  # runner's real disk I/O degrades further -- this is the OSS-release-wave
+  # flaky capture from issue #266 (GitHub Actions run 33306440623, seed
+  # 225358). Not a race to fix -- delete_agent's real, measured cost against
+  # a timeout that assumed it would be fast.
+  @purge_reply_timeout 500
+
   defp register_host(host_id, opts \\ []) do
     :ok =
       HostRegistry.register(
@@ -963,7 +981,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
       assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
       refute AgentStates.known?(agent_id)
       assert AgentDirectory.get(agent_id) == nil
@@ -999,7 +1017,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
       assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
       assert AgentDirectory.get(agent_id) == nil
       assert SessionPointers.get(agent_id) == nil
@@ -1017,7 +1035,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
 
       assert_received %Phoenix.Socket.Broadcast{
         topic: "wrapper:" <> ^peer_id,
@@ -1301,7 +1319,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "snapshot", %{"agents" => _}
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
 
       # order pin: revoke が store purge より先に走っているので、
       # broadcast + revoked? が :ok reply の時点で確定している。
@@ -1332,7 +1350,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "snapshot", %{"agents" => _}
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
 
       # 削除直後、pre-revoke に mint された token を用いて再 join を試行
       # → denylist gate で unauthorized。
