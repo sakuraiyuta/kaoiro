@@ -73,17 +73,25 @@
   // issue #276 manual close: confirm via the shared Modal primitive
   // (#232's focus-trap fix applies here too — director instruction to
   // reuse it rather than window.confirm()).
-  let confirmCloseCid = $state<string | null>(null);
+  //
+  // Holds the whole row (not just the cid) so the confirm dialog can
+  // show which conversation is targeted (こはく review follow-up, B1
+  // residual): when the same pair has more than one open conversation,
+  // the cid alone in generic confirm text left the operator unable to
+  // tell them apart. Captured at click time from the rendered row, not
+  // re-looked-up from `conversations` later — a refresh in flight while
+  // the dialog is open must not change what the dialog displays.
+  let confirmCloseTarget = $state<ConversationSummary | null>(null);
   let closeError = $state<string | null>(null);
   let closing = $state(false);
 
   async function handleConfirmClose(): Promise<void> {
-    if (!connection || !confirmCloseCid) return;
+    if (!connection || !confirmCloseTarget) return;
     closing = true;
     closeError = null;
     try {
-      await connection.closeConversation(confirmCloseCid);
-      confirmCloseCid = null;
+      await connection.closeConversation(confirmCloseTarget.conversationId);
+      confirmCloseTarget = null;
     } catch (err) {
       closeError = err instanceof Error ? err.message : "error";
     } finally {
@@ -224,7 +232,7 @@
                 <button
                   type="button"
                   class="conv-close"
-                  onclick={() => (confirmCloseCid = conv.conversationId)}
+                  onclick={() => (confirmCloseTarget = conv)}
                 >
                   閉じる
                 </button>
@@ -236,16 +244,30 @@
     </section>
   {/if}
 
-  {#if connection && confirmCloseCid}
+  {#if connection && confirmCloseTarget}
     <Modal
       ariaLabel="会話を閉じる確認"
       onClose={() => {
-        confirmCloseCid = null;
+        confirmCloseTarget = null;
         closeError = null;
       }}
     >
       {#snippet children()}
-        <p>この会話を閉じますか?参加エージェントに通知されます。</p>
+        <!-- Re-narrowed here on purpose: the outer {#if} guards <Modal>'s
+             render, but this snippet compiles to its own function and
+             svelte-check does not carry that narrowing across the
+             boundary (confirmed 2026-08-30 — "possibly null" otherwise). -->
+        {#if confirmCloseTarget}
+          <p>この会話を閉じますか?参加エージェントに通知されます。</p>
+          <p class="confirm-target">
+            <span class="conv-participants"
+              >{confirmCloseTarget.participants.join(" ⇔ ")}</span
+            >
+            <span class="conv-cid" title={confirmCloseTarget.conversationId}
+              >cid:{confirmCloseTarget.conversationId.slice(0, 8)}</span
+            >
+          </p>
+        {/if}
         {#if closeError}
           <p class="conv-status">失敗しました({closeError})</p>
         {/if}
@@ -253,7 +275,7 @@
           <button
             type="button"
             onclick={() => {
-              confirmCloseCid = null;
+              confirmCloseTarget = null;
               closeError = null;
             }}
             disabled={closing}
@@ -494,6 +516,15 @@
   .conv-close:hover {
     color: var(--fg);
     border-color: var(--fg-dim);
+  }
+
+  /* issue #276 review follow-up (B1 residual): identifies the confirm
+     dialog's target conversation, same look as a .conv-list row. */
+  .confirm-target {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    margin: 0.5rem 0 0;
   }
 
   .confirm-actions {

@@ -394,6 +394,13 @@ describe("SettingsDrawer", () => {
       const dialog = document.querySelector("dialog");
       expect(dialog).not.toBeNull();
 
+      // issue #276 review follow-up (B1 residual): the confirm dialog
+      // must identify WHICH conversation it targets — generic text alone
+      // leaves an operator with multiple same-pair conversations unable
+      // to tell them apart.
+      expect(dialog!.textContent).toContain("cid:c1");
+      expect(dialog!.textContent).toContain("a ⇔ b");
+
       const cancelButton = Array.from(
         dialog!.querySelectorAll<HTMLButtonElement>("button"),
       ).find((b) => b.textContent?.includes("キャンセル"))!;
@@ -402,6 +409,60 @@ describe("SettingsDrawer", () => {
 
       expect(document.querySelector("dialog")).toBeNull();
       expect(conn.closeConversation).not.toHaveBeenCalled();
+    });
+
+    // issue #276 review follow-up (B1 residual): pins that the confirm
+    // dialog — and the closeConversation call it triggers — target the
+    // CID of the clicked ROW, not just "whichever conversation matches
+    // this pair". Two rows share participants but differ in cid; only
+    // the second row's close button is clicked.
+    it("同一 participants・異なる CID の 2 行がある場合、確認ダイアログとclose 呼び出しは対象行の CID を指す", async () => {
+      const conn = makeConnection(async () => [
+        {
+          conversationId: "aaaaaaaa-1111",
+          participants: ["gp.a", "gp.b"],
+          turns: 1,
+          tokens: 10,
+          status: "open",
+          startedAt: null,
+        },
+        {
+          conversationId: "bbbbbbbb-2222",
+          participants: ["gp.a", "gp.b"],
+          turns: 4,
+          tokens: 40,
+          status: "open",
+          startedAt: null,
+        },
+      ]);
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      const items = target.querySelectorAll(".conv-list li");
+      expect(items).toHaveLength(2);
+
+      items[1]!
+        .querySelector<HTMLButtonElement>(".conv-close")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await tick();
+
+      const dialog = document.querySelector("dialog")!;
+      expect(dialog.textContent).toContain("cid:bbbbbbbb");
+      expect(dialog.textContent).not.toContain("aaaaaaaa");
+      expect(dialog.textContent).toContain("gp.a ⇔ gp.b");
+
+      dialog
+        .querySelector<HTMLButtonElement>("button.danger")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await tick();
+
+      expect(conn.closeConversation).toHaveBeenCalledWith("bbbbbbbb-2222");
+      expect(conn.closeConversation).not.toHaveBeenCalledWith(
+        "aaaaaaaa-1111",
+      );
     });
 
     it("確認ダイアログの実行で closeConversation を呼び、一覧を再取得する", async () => {
