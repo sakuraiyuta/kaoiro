@@ -1,32 +1,33 @@
 ---
-title: 認証・認可マップ
-description: kaoiro 各ノード (wrapper / runner / server / client) の認証・認可境界の現状整理。OSS 公開前監査の起点。
+title: Authentication and authorization map
+description: Current authentication and authorization boundaries for each kaoiro node (wrapper / runner / server / client). Starting point for the pre-OSS audit.
 status: accepted
 related: [protocol, threat-model, architecture, protocol-inter-agent]
 ---
 
-# 認証・認可マップ
+# Authentication and authorization map
 
 ## Purpose
 
-認証・認可は protocol / threat-model / 個別 ADR に分散して定義されている。
-本 doc は「**どの境界に何の機構があり、どこを越えるとどの権限になるか**」の
-俯瞰図として、各境界の機構・実装位置・未設定時の挙動を一箇所に集める。
+Authentication and authorization are defined across the protocol, threat model,
+and individual ADRs. This document is an overview of **which mechanism protects
+each boundary and which privilege applies after crossing it**, collecting each
+boundary's mechanism, implementation location, and unset behavior in one place.
 
-OSS 公開前監査 (private Gitea issue 91)
-のチェックリストは本 doc を起点に作る。
-[threat-model](threat-model.md) が「何を脅威と見なし何で緩和したか」を
-扱うのに対し、本 doc は「いま実装されている境界の地図」。**WHY** は ADR /
-threat-model 側へ、**HOW** は本 doc + コード参照へという役割分担。
+Build the pre-OSS audit checklist (private Gitea issue 91) from this document.
+While [threat-model](threat-model.md) covers “what is considered a threat and
+how it is mitigated,” this document maps “the boundaries currently implemented.”
+**WHY** belongs in ADRs / the threat model; **HOW** belongs here and in code
+references.
 
 ## Definition
 
-### 全体 topology
+### Overall topology
 
 ```mermaid
 flowchart LR
-  W[Wrapper N台] -->|ws| WS["/wrapper<br/>KAOIRO_WRAPPER_TOKENS<br/>or signed (ADR-0024)"]
-  R[Runner N台] -->|ws| RS["/runner<br/>KAOIRO_RUNNER_TOKENS"]
+  W["N wrappers"] -->|ws| WS["/wrapper<br/>KAOIRO_WRAPPER_TOKENS<br/>or signed (ADR-0024)"]
+  R["N runners"] -->|ws| RS["/runner<br/>KAOIRO_RUNNER_TOKENS"]
   C[Client dashboard] -->|ws| CS["/client<br/>cookie + ticket (ADR-0013)<br/>token or OAuth identity (ADR-0042)"]
   WS --> SRV[Phoenix Server]
   RS --> SRV
@@ -34,77 +35,80 @@ flowchart LR
   SRV -->|"envelope (admin/operator/viewer)"| CS
 ```
 
-### Socket 認証 (`server/lib/kaoiro_server/auth.ex`)
+### Socket authentication (`server/lib/kaoiro_server/auth.ex`)
 
-| Socket | Topic 規約 | 認証 | env | 未設定時 |
+| Socket | Topic convention | Authentication | env | When unset |
 |---|---|---|---|---|
-| Wrapper | `wrapper:<agent_id>` | `agent_id:token` ペア / 又は server-minted signed token (ADR-0024) | `KAOIRO_WRAPPER_TOKENS` | `:dev`/`:test` = **dev 緩和** (誰でも join 可、warn ログ) / `:prod` = ペア auth 無効、**signed token は受理**・それ以外 fail-closed (issue #133、2026-08-02 改訂: runner-only 配備で spawn が全拒否される回帰を解消) |
-| Runner | `runner:<host_id>` | `host_id:token` ペア | `KAOIRO_RUNNER_TOKENS` | `:dev`/`:test` = **dev 緩和** / `:prod` = **fail-closed** 全拒否 (signed token 分岐は無い、issue #133) |
-| Client (token) | `agents:lobby` | `token → role` (admin/operator/viewer) | `KAOIRO_CLIENT_TOKENS` | **fail-closed** — 全 env で全 client 拒否 |
-| Client (OAuth) | `agents:lobby` | `identity (provider+uid) → role` (許可リスト、[ADR-0042](../adr/0042-oauth-allowlist-login.md)) | `KAOIRO_OAUTH_*` + `KAOIRO_OAUTH_ALLOWLIST_PATH` | **fail-closed** — provider 未設定/許可リスト未設定・欠落・不一致は全拒否 |
+| Wrapper | `wrapper:<agent_id>` | `agent_id:token` pair / or server-minted signed token (ADR-0024) | `KAOIRO_WRAPPER_TOKENS` | `:dev`/`:test` = **dev fallback** (anyone may join; warning log) / `:prod` = pair auth disabled, **signed tokens accepted**, all else fail-closed (issue #133, revised 2026-08-02 to fix runner-only deployments rejecting every spawn) |
+| Runner | `runner:<host_id>` | `host_id:token` pair | `KAOIRO_RUNNER_TOKENS` | `:dev`/`:test` = **dev fallback** / `:prod` = **fail-closed**, reject all (no signed-token branch; issue #133) |
+| Client (token) | `agents:lobby` | `token → role` (admin/operator/viewer) | `KAOIRO_CLIENT_TOKENS` | **fail-closed** — reject every client in every environment |
+| Client (OAuth) | `agents:lobby` | `identity (provider+uid) → role` (allowlist, [ADR-0042](../adr/0042-oauth-allowlist-login.md)) | `KAOIRO_OAUTH_*` + `KAOIRO_OAUTH_ALLOWLIST_PATH` | **fail-closed** — reject all when provider or allowlist is unset, missing, or mismatched |
 
-トークン比較は 3 種とも `Plug.Crypto.secure_compare/2` で定数時間。
-未配置 id でも比較が走るのでタイミング側チャネルなし。未設定時の状態は
-起動時 `Auth.warn_token_config/0` (OAuth 分は `OAuth.warn_config/0` へ
-委譲) が WARN ログを残す。
+All three token comparisons use constant-time `Plug.Crypto.secure_compare/2`.
+Comparison also runs for an unconfigured id, leaving no timing side channel. At
+startup `Auth.warn_token_config/0` (delegating OAuth to `OAuth.warn_config/0`)
+leaves a WARN log for unset configuration.
 
-client の 2 経路は独立で併存する。`KAOIRO_CLIENT_TOKENS` 未設定 +
-OAuth 有効なら OAuth のみ、逆なら token のみ、両方未設定なら誰も
-入れない。dashboard は認証不要の `GET /session/auth-methods`
-(`{"token": bool, "oauth": [provider, ...]}`) でログイン画面を出し分ける。
+The two client paths coexist independently. If `KAOIRO_CLIENT_TOKENS` is unset
+and OAuth is enabled, only OAuth is available; the reverse enables only tokens;
+with both unset no one can enter. The dashboard selects its login screen using
+the unauthenticated `GET /session/auth-methods`
+(`{"token": bool, "oauth": [provider, ...]}`).
 
-wrapper/runner の dev 緩和は `:prod` (`config.exs` の `env: config_env()` を
-`Application.get_env(:kaoiro_server, :env)` で実行時参照) では働かない。
-release を token 未設定のまま起動すると全 wrapper/runner 接続が拒否され、
-`scripts/dev.sh` の `:dev` 実行には影響しない (issue #133)。
+The wrapper/runner dev fallback does not operate in `:prod` (the runtime reads
+`env: config_env()` from `config.exs` via `Application.get_env(:kaoiro_server, :env)`).
+Starting a release with tokens unset rejects every wrapper/runner connection and
+does not affect `:dev` execution through `scripts/dev.sh` (issue #133).
 
-### Topic 認可 (channel `join/3`)
+### Topic authorization (channel `join/3`)
 
-- Wrapper: `wrapper_channel.ex:32` で agent_id charset (`AgentId.valid?`) と
-  二重接続 (`reject_if_connected/1`、 ADR-0024 D5 reject-newcomer) を検証
-- Runner: `runner_channel.ex` で host_id charset 検証
-- Client: `agents_channel.ex` は `agents:lobby` のみ。socket assigns に role
-- charset は `[A-Za-z0-9._-]` ([#61](https://github.com/sakuraiyuta/kaoiro/issues/61))。
-  topic 文字列インジェクションを構造的に防止
+- Wrapper: `wrapper_channel.ex:32` validates the agent ID charset (`AgentId.valid?`)
+  and duplicate connections (`reject_if_connected/1`, ADR-0024 D5 reject-newcomer).
+- Runner: `runner_channel.ex` validates the host ID charset.
+- Client: `agents_channel.ex` permits only `agents:lobby`; the role is stored in
+  socket assigns.
+- The charset is `[A-Za-z0-9._-]` ([#61](https://github.com/sakuraiyuta/kaoiro/issues/61)),
+  structurally preventing topic-string injection.
 
-### Role の 3 値 ([ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D2)
+### Three roles ([ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D2)
 
-`admin` > `operator` > `viewer`。issue #188 で導入。
+`admin` > `operator` > `viewer`, introduced in issue #188.
 
-- 宣言経路は既存の 2 つのみ。`KAOIRO_CLIENT_TOKENS` の `token:admin[:name]`
-  と、OAuth 許可リストの `provider:identifier:admin`。専用ファイルや専用
-  env は作らない (許可リストのテキスト形式が変わらないので、issue #160 の
-  `OAuthAllowlistWatcher` の前提も変わらない)
-- 綴り違いは fail-closed。`parse_role/1` / `@roles` のどちらも、3 語以外は
-  `nil` にして認証ごと拒否する。viewer へ降格させない
-- 既存 operator の自動昇格はしない (マスター決裁 2026-08-14)。admin が 0
-  人の配備では起動時に警告を出す (`Auth.warn_token_config/0`)
-- **本ページで「operator 限定」と書く gate は、inbound / outbound とも
-  admin を通す。** 判定は `AgentsChannel` の `@operator_capable_roles` の
-  1 箇所に集約してある。`role == :operator` の直接比較を各所に書かない
-  こと — inbound だけ通って outbound が落ちる、という非対称な穴になる
-- 例外は `guard_against_reset_pending/2`。これは権限ではなく制限なので
-  admin も同じく guard 対象に含める
+- There are only two declaration paths: `token:admin[:name]` in
+  `KAOIRO_CLIENT_TOKENS`, and `provider:identifier:admin` in the OAuth allowlist.
+  Do not create a dedicated file or env (the allowlist text format stays
+  unchanged, so issue #160's `OAuthAllowlistWatcher` assumptions also hold).
+- Misspellings fail closed. Both `parse_role/1` and `@roles` turn anything other
+  than the three words into `nil` and reject authentication; never downgrade to
+  viewer.
+- Do not auto-promote existing operators (master decision 2026-08-14). Warn at
+  startup when a deployment has zero admins (`Auth.warn_token_config/0`).
+- **Every gate called “operator-only” on this page admits admin for both inbound
+  and outbound paths.** The decision is centralized in
+  `AgentsChannel`'s `@operator_capable_roles`; do not scatter direct
+  `role == :operator` comparisons, which can create an asymmetric hole where
+  inbound passes but outbound drops.
+- The exception is `guard_against_reset_pending/2`. It is a restriction rather
+  than a privilege, so admin is included in the guard as well.
 
-### Role-based 出力 gate ([ADR-0021](../adr/0021-role-information-disclosure-policy.md))
+### Role-based output gate ([ADR-0021](../adr/0021-role-information-disclosure-policy.md))
 
-`AgentsChannel.handle_out` の **allow-list 方式**。viewer に届くのは:
+`AgentsChannel.handle_out` uses an **allow-list**. Viewers receive:
 
-- `state_change` (`ext` 除去 — cwd / model / context / rate_limits / pending_permission を全部隠す)
+- `state_change` (remove `ext`, hiding cwd / model / context / rate_limits / pending_permission)
 - `agent_deleted`
-- `permission_request` (合成 `state_change(waiting_permission)` に書き換え — tool_name / input / request_id すべて除去)
+- `permission_request` (rewrite as synthetic `state_change(waiting_permission)`, removing tool_name / input / request_id)
 
-他 (`log` / `result` / `inter_agent_message` / `runner_sessions` /
-`spawn_result` / `hosts` / `history_cleared` / `history_reset`) は viewer
-完全除去 (fail-closed)。新規 envelope type は明示宣言しない限り届かない
-(`sanitize_envelope_for(:viewer, _) -> :drop`)。脅威ベース解説は
-[threat-model](threat-model.md) MUST 群。
+All others (`log` / `result` / `inter_agent_message` / `runner_sessions` /
+`spawn_result` / `hosts` / `history_cleared` / `history_reset`) are completely
+removed for viewers (fail-closed). A new envelope type is not delivered unless
+explicitly declared (`sanitize_envelope_for(:viewer, _) -> :drop`). See the
+MUST items in [threat-model](threat-model.md) for threat-based rationale.
 
-### Operator 限定 inbound (`handle_in`)
+### Operator-only inbound (`handle_in`)
 
-`require_operator(socket)` を最初に通す(直接呼ぶものと、
-`relay_to_wrapper_guarded/3` / `relay_to_runner_guarded/3` が内部で
-最初に通すものの両方):
+Call `require_operator(socket)` first, both directly and inside
+`relay_to_wrapper_guarded/3` / `relay_to_runner_guarded/3`:
 
 - `instruction` / `permission_decision` / `question_response` / `interrupt`
 - `set_model` / `set_effort` / `set_permission_mode` / `refresh_models`
@@ -115,217 +119,218 @@ release を token 未設定のまま起動すると全 wrapper/runner 接続が�
 - `clear_history` / `delete_agent` / `revoke_wrapper_token`
 - `attach_open` / `attach_chunk` / `attach_close`
 
-viewer からの同 event は `{:error, :forbidden}` で拒否。role は snapshot
-ではなく操作のたび `ClientSocket.role_for/1` で解決し直す(下記 OAuth 節
-の #148)。
+The same events from a viewer are rejected with `{:error, :forbidden}`. Resolve
+the role with `ClientSocket.role_for/1` for every operation rather than using a
+snapshot (OAuth section, #148, below).
 
-### Operator 限定 HTTP endpoint (issue #232)
+### Operator-only HTTP endpoint (issue #232)
 
-WS の `handle_in` gate とは別に、operator/admin 限定の HTTP endpoint が
-ある。`KaoiroServerWeb.RequireOperatorPlug` が `:fetch_session` の後段で
-gate する: session cookie の credential を
-`KaoiroServerWeb.SessionCredential.resolve/1` で取り出し、
-`ClientSocket.role_for/1`(WS 側と同じ関数)で role を毎リクエスト live
-再解決する。credential 無し/失効は 401、viewer は 403。
+Separate from the WS `handle_in` gate, an operator/admin-only HTTP endpoint
+exists. `KaoiroServerWeb.RequireOperatorPlug` gates after `:fetch_session`: it
+extracts the session-cookie credential with
+`KaoiroServerWeb.SessionCredential.resolve/1` and live-resolves the role on
+every request with `ClientSocket.role_for/1` (the same function as WS). Missing
+or revoked credentials return 401; viewers return 403.
 
-| endpoint | 理由 |
+| endpoint | Reason |
 |---|---|
-| `GET /api/personas/:id` | persona pack の manifest.json 全メタデータ + personality.md 全文を返す。custom pack の personality.md は system prompt であり、proprietary な運用指示を含み得るため ADR-0021 F7 の fail-closed 既定 (新規出力面は operator 限定、viewer 開示は明示判断) に従う |
+| `GET /api/personas/:id` | Returns all manifest.json metadata and the full personality.md. A custom pack's personality.md is a system prompt and may contain proprietary operating instructions, so ADR-0021 F7's fail-closed default applies (new output surfaces are operator-only; viewer disclosure requires an explicit decision). |
 
-### ツール認可 — canUseTool / PermissionBroker
+### Tool authorization — canUseTool / PermissionBroker
 
-- wrapper の `Options.allowedTools` (config の `allowed_tools`) が SDK
-  ツール実行の **天井**。server / client から拡張不可
-- 既定 allow (`READ_ONLY_TOOLS`、`wrapper/claude-code/src/read_only_tools.ts`)
-  は read-only セット (Read / Grep / Glob / LS / NotebookRead) に、副作用の
-  無い inter-agent 補助 tool `mcp__kaoiro__list_agents` /
-  `mcp__kaoiro__whoami` を加えたもの。**メンバーシップは利便ではなく
-  セキュリティ判断**で、ここに載らないことが都度承認ゲートそのもの
+- The wrapper's `Options.allowedTools` (`allowed_tools` in config) is the **ceiling**
+  for SDK tool execution; server / client cannot extend it.
+- The default allow set (`READ_ONLY_TOOLS`,
+  `wrapper/claude-code/src/read_only_tools.ts`) contains read-only tools (Read /
+  Grep / Glob / LS / NotebookRead) plus side-effect-free inter-agent helpers
+  `mcp__kaoiro__list_agents` / `mcp__kaoiro__whoami`. **Membership is a security
+  decision, not a convenience**: omission is the per-use approval gate itself
   (`mcp__kaoiro__send_to_agent` / `request_compact` /
-  `request_session_reset` は意図的に非掲載)
-- それ以外は SDK の `canUseTool` → `PermissionBroker.decide/2` → dashboard
-  に `permission_request` envelope (operator 限定) → operator が許可/拒否
-  (`permission_decision`、operator 限定 relay)
-- broker timeout は wrapper config の `permission_timeout_ms`、未設定なら
-  無期限待機 (SDK 既定) — operator 不在で deny に倒れる事故を避ける選択
-  ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md))
+  `request_session_reset` are intentionally omitted).
+- Other tools flow through SDK `canUseTool` → `PermissionBroker.decide/2` → a
+  `permission_request` envelope to the dashboard (operator-only), then an
+  operator allows or denies (`permission_decision`, operator-only relay).
+- Broker timeout is `permission_timeout_ms` in wrapper config; when unset it waits
+  indefinitely (SDK default), avoiding accidental denial when no operator is
+  present ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
 
 ### MCP (`mcp__kaoiro__send_to_agent`)
 
-- `wrapper/agent-common/src/inter_agent.ts` の in-process MCP server を
-  engine 側へ注入 (Claude は `Options.mcpServers`、Codex は tool host bridge)
-- `send_to_agent` は **既定 allowedTools に含めない** → 必ず broker 経由。
-  同居する `list_agents` / `whoami` は読み取りのみなので auto-allow(上記
-  `READ_ONLY_TOOLS`)
-- routing は server の `route_inter_agent`、quota は `ConversationStates`
-- 詳細: [protocol-inter-agent](protocol-inter-agent.md)
+- Inject the in-process MCP server from `wrapper/agent-common/src/inter_agent.ts`
+  into the engine (Claude via `Options.mcpServers`, Codex via the tool-host bridge).
+- `send_to_agent` is **not in the default allowedTools**, so it always goes through
+  the broker. The colocated `list_agents` / `whoami` are read-only and therefore
+  auto-allowed (the `READ_ONLY_TOOLS` set above).
+- Routing uses the server's `route_inter_agent`; quotas use `ConversationStates`.
+- Details: [protocol-inter-agent](protocol-inter-agent.md)
 
-### Cookie / ticket セッション ([ADR-0013](../adr/0013-user-token-cookie-persistence.md))
+### Cookie / ticket sessions ([ADR-0013](../adr/0013-user-token-cookie-persistence.md))
 
-- 初回認証: `?token=...` を **POST body** で交換 (URL ログ流出回避) →
-  httpOnly + 暗号化 session cookie (3 日スライド)
-- WS 再接続: GET `/session/ticket` で 30s 短命 Phoenix.Token → WS query
-  接続 (Vite dev proxy が cookie を WS upgrade に転送できない制約への対応)
-- socket id は `Auth.socket_id/1` で SHA-256 ハッシュ (revoke 用 ID、 raw token は保持しない)
-- session が持つ資格情報は常に 1 つ。token ログイン
-  (`POST /session/new`) は `oauth_identity` を、OAuth ログインは
-  `client_token` を、それぞれ書き込み時に消す
-- login CSRF 対策 (ADR-0042): 資格情報を書く 2 経路を別々に塞ぐ。
-  `POST /session/new` は **JSON content-type 必須** (それ以外は 415) —
-  SameSite=Lax は cross-site POST に cookie を**付けない**だけで、応答の
-  first-party `Set-Cookie` は保存されるため、共有トークン保有者が
-  auto-submit form でログイン済み operator の session を差し替えられる。
-  cross-site の HTML form は JSON content-type を送れず、cross-origin
-  `fetch` は preflight で止まる。`GET /?token=` は cookie が付く素の
-  ナビゲーションなので、逆に session を見て
-  `oauth_identity` があれば token を無視する
+- Initial authentication exchanges `?token=...` in a **POST body** (avoiding URL
+  log leakage) for an httpOnly, encrypted session cookie (three-day sliding).
+- WS reconnect obtains a 30-second Phoenix.Token via GET `/session/ticket` and
+  connects with it in the WS query (Vite dev proxy cannot forward cookies to a WS
+  upgrade).
+- Socket IDs are SHA-256 hashes from `Auth.socket_id/1` (IDs for revoke; raw
+  tokens are never retained).
+- A session always holds exactly one credential. Token login (`POST /session/new`)
+  clears `oauth_identity` when writing; OAuth login clears `client_token`.
+- Login CSRF mitigation (ADR-0042) blocks the two credential-writing paths
+  separately. `POST /session/new` **requires JSON content-type** (otherwise 415):
+  SameSite=Lax only prevents cookies on a cross-site POST, while the response's
+  first-party `Set-Cookie` is still stored, allowing a shared-token holder to
+  replace a logged-in operator's session with an auto-submit form. Cross-site HTML
+  forms cannot send JSON content-type and cross-origin `fetch` stops at preflight.
+  `GET /?token=` is a plain navigation that sends cookies, so it instead checks
+  the session and ignores the token when `oauth_identity` is present.
 
-### OAuth ログイン ([ADR-0042](../adr/0042-oauth-allowlist-login.md))
+### OAuth login ([ADR-0042](../adr/0042-oauth-allowlist-login.md))
 
-- provider は Google / GitHub / Nextcloud。`assent` + `Req`、Nextcloud
-  だけ `Assent.Strategy.OAuth2.Base` の自前 strategy
-  (`KaoiroServer.OAuth.Nextcloud`、identity は OCS
-  `/ocs/v2.php/cloud/user`、`OCS-APIRequest: true` 必須)
-- route: `GET /auth/:provider` (302、OAuth2 `state` を session に保存し
-  provider 名で束縛) → `GET /auth/:provider/callback` (state 検証 →
-  identity 正規化 → 許可リスト照合 → `put_session` → 302
-  `/index.html`)。未設定 provider は 404、失敗は 302
-  `/index.html?auth_error={provider_error|not_allowed|invalid_state}`
-- 許可リスト (`KaoiroServer.OAuthAllowlist`) は
-  `provider:identifier[:role]` のテキスト。role 省略は viewer、`#` 行と
-  空行は無視、malformed 行は warn + skip (fail-visible)。**毎回 parse**
-  なので行削除は再起動なしで次の connect / refresh に効く
-- session に入るのは identity (`%{provider, uid}`) のみで role は入らない。
-  role は connect / refresh のたび許可リストから再解決する
-  (token 経路の `Auth.client_role/1` 再検証と同型)
-- **稼働中 socket でも再解決する** ([#148](https://github.com/sakuraiyuta/kaoiro/issues/148)、2026-07-28)。
-  connect 時の role は snapshot にすぎず、これを固定すると降格
-  (operator → viewer) が接続中のタブに効かない。ダッシュボードの
-  cookie スライドは 12 時間間隔なので refresh 契機だけでは遅すぎる。
-  `ClientSocket` は credential (`{:token, …}` / `{:oauth, …}`) を
-  assigns に持ち、`AgentsChannel.require_operator/1` が operator 操作の
-  たび `ClientSocket.role_for/1` で解決し直す。snapshot と食い違ったら
-  `socket_id` topic へ #47 の `disconnect` を撃ち、fan-out
-  (`handle_out` の operator 限定配信) と client UI は再接続で組み直す
-- **一度も操作しない passive socket にも change-driven に効く**
-  ([#160](https://github.com/sakuraiyuta/kaoiro/issues/160)、
-  2026-08-05)。#148 は「操作した瞬間に切る」方式で、`handle_out` の
-  fan-out 自体は connect 時 snapshot を見続けるため、降格後に一度も
-  operator 操作をしない socket は配信を受け続けていた。
-  `KaoiroServer.OAuthAllowlistWatcher` が許可リストファイルの変更を
-  file_system イベント(fast path)+ periodic reconcile(backstop、
-  event 取りこぼしを bound)で検知し、変更のあった identity にだけ
-  `oauth_socket_id` 宛の #47 disconnect を撃つ(稼働中 socket の列挙は
-  一切しない — 差分は許可リストの snapshot 同士で取る)。差分計算の
-  checkpoint は `:persistent_term`(watcher プロセス再起動を越える
-  だけの補助状態、認可 SoT は変わらずファイル自身)。connect と join
-  の間で許可リストが変わる race は `AgentsChannel.join/3` の live
-  re-resolve で閉じる。設計判断の詳細は
-  [ADR-0042](../adr/0042-oauth-allowlist-login.md) Addendum 参照
-- socket id は `Auth.oauth_socket_id/2` =
-  `sha256("oauth:" <> provider <> ":" <> uid)`。logout / refresh 401 の
-  強制切断は ADR-0013 / #47 の broadcast 配管をそのまま共用
-- **provider の access token は identity 取得後に破棄**し、session /
-  cookie / DETS / ログのどこにも残さない (Nextcloud OAuth2 は scope 非
-  対応でトークンがフルアクセス)。assent の例外はレスポンス構造体経由で
-  `Authorization: Bearer …` を描画しうるため、`AuthController` は例外の
-  **型名だけ**をログに出す
-- Google は localhost 以外で https redirect URI 必須 → `KAOIRO_PLAIN_HTTP=true`
-  配備では Google ログインは使えない (GitHub / Nextcloud は http 可)
+- Providers are Google / GitHub / Nextcloud. Use `assent` + `Req`; only
+  Nextcloud uses a custom `Assent.Strategy.OAuth2.Base` strategy
+  (`KaoiroServer.OAuth.Nextcloud`, identity from OCS
+  `/ocs/v2.php/cloud/user`, with `OCS-APIRequest: true` required).
+- Route: `GET /auth/:provider` (302; store OAuth2 `state` in the session and bind
+  it to the provider) → `GET /auth/:provider/callback` (validate state → normalize
+  identity → check allowlist → `put_session` → 302 `/index.html`). An unconfigured
+  provider returns 404; failures return
+  `302 /index.html?auth_error={provider_error|not_allowed|invalid_state}`.
+- The allowlist (`KaoiroServer.OAuthAllowlist`) is text in
+  `provider:identifier[:role]` form. Omitted role means viewer; `#` and blank
+  lines are ignored; malformed lines warn and skip (fail-visible). It is **parsed
+  on every use**, so removing a line takes effect on the next connect / refresh
+  without a restart.
+- The session stores only identity (`%{provider, uid}`), not role. Resolve role
+  from the allowlist on every connect / refresh (same shape as token-path
+  `Auth.client_role/1` revalidation).
+- **Re-resolve active sockets** ([#148](https://github.com/sakuraiyuta/kaoiro/issues/148),
+  2026-07-28). The connect-time role is only a snapshot; freezing it would leave
+  a demotion (operator → viewer) ineffective in an open tab. Dashboard cookie
+  sliding is every 12 hours, too slow to rely on refresh alone. `ClientSocket`
+  keeps the credential (`{:token, …}` / `{:oauth, …}`) in assigns, and
+  `AgentsChannel.require_operator/1` calls `ClientSocket.role_for/1` again for
+  every operator action. If it differs from the snapshot, broadcast #47
+  `disconnect` to the `socket_id` topic; fan-out (operator-only delivery in
+  `handle_out`) and client UI rebuild on reconnect.
+- **Change-driven behavior also covers passive sockets that never act**
+  ([#160](https://github.com/sakuraiyuta/kaoiro/issues/160), 2026-08-05). #148 cut
+  sockets only when an action occurred, while `handle_out` fan-out kept using the
+  connect-time snapshot, so a demoted socket with no operator action kept
+  receiving data. `KaoiroServer.OAuthAllowlistWatcher` detects allowlist changes
+  via file-system events (fast path) plus periodic reconcile (backstop bounded
+  against missed events), and sends #47 disconnect only to changed identities via
+  `oauth_socket_id` (it never enumerates active sockets; diff the allowlist
+  snapshots instead). The diff checkpoint is `:persistent_term` (helper state
+  surviving watcher restarts; the file remains authorization SoT). A race between
+  allowlist change and connect/join is closed by live re-resolution in
+  `AgentsChannel.join/3`. See the decision details in the
+  [ADR-0042](../adr/0042-oauth-allowlist-login.md) Addendum.
+- Socket ID is `Auth.oauth_socket_id/2` =
+  `sha256("oauth:" <> provider <> ":" <> uid)`. Forced disconnect on logout /
+  refresh 401 reuses the ADR-0013 / #47 broadcast plumbing.
+- **Discard provider access tokens after obtaining identity**; retain none in
+  session / cookie / DETS / logs (Nextcloud OAuth2 lacks scope support, so tokens
+  have full access). Because Assent exceptions may render
+  `Authorization: Bearer …` through response structs, `AuthController` logs
+  **only the exception type name**.
+- Google requires an HTTPS redirect URI outside localhost, so Google login is
+  unavailable when deployed with `KAOIRO_PLAIN_HTTP=true` (GitHub / Nextcloud
+  permit HTTP).
 
-### Wrapper トークンの 2 系統
+### Two wrapper token paths
 
-1. **Pre-registered**: env `KAOIRO_WRAPPER_TOKENS` の `agent_id:token` ペア
-2. **Server-minted signed token**: spawn 経路 (ADR-0024) で `Auth.mint_wrapper_token/1` が
-   `Phoenix.Token.sign/3` で発行。secret は `Endpoint.secret_key_base`。
-   有効期限は無期限、revoke は以下 2 経路 (2026-07-23、[#72](https://github.com/sakuraiyuta/kaoiro/issues/72) 実装済):
-    - **per-agent_id denylist** (`KaoiroServer.TokenDenylist`、DETS 永続):
-      `Auth.authorize_wrapper/2` が既存 signature check より前で照合、
-      `delete_agent` 経路が auto-revoke で seed、operator の
-      `revoke_wrapper_token` handler が明示投入。書き込みは synchronous +
-      `:dets.sync/1` fsync-gated (ack / broadcast 前に永続確定)。live
-      channel は `wrapper:<id>` topic への `revoked` broadcast を
-      intercept して `handle_out` で `{:stop, :shutdown, socket}`。fail-closed:
-      store corruption 時は起動 fail (DETS ファイルは forensic 用に保持)。
-    - **secret_key_base rotation**: fleet 全体一括失効 (heavy-hammer)
+1. **Pre-registered**: `agent_id:token` pairs in `KAOIRO_WRAPPER_TOKENS`
+2. **Server-minted signed token**: The spawn path (ADR-0024) issues one through
+   `Auth.mint_wrapper_token/1` and `Phoenix.Token.sign/3`; the secret is
+   `Endpoint.secret_key_base`. Tokens do not expire. Revoke uses these two paths
+   (implemented 2026-07-23, [#72](https://github.com/sakuraiyuta/kaoiro/issues/72)):
+     - **per-agent_id denylist** (`KaoiroServer.TokenDenylist`, DETS-persisted):
+       `Auth.authorize_wrapper/2` checks it before the existing signature check;
+       `delete_agent` seeds auto-revoke and the operator's
+       `revoke_wrapper_token` handler inserts explicit entries. Writes are
+       synchronous and `:dets.sync/1` fsync-gated (durable before ack / broadcast).
+       The live channel intercepts `revoked` broadcasts on `wrapper:<id>` and
+       stops in `handle_out` with `{:stop, :shutdown, socket}`. Fail-closed:
+       startup fails on store corruption (retain the DETS file for forensics).
+     - **secret_key_base rotation**: revoke the entire fleet at once (heavy hammer)
 
-## Known gaps (設計上の選択 + 未対応)
+## Known gaps (design choices and not yet addressed)
 
-| 領域 | 現状 | 補償 | 関連 |
+| Area | Current state | Compensation | Related |
 |---|---|---|---|
-| **エージェント間 ACL** | A→B 送信のサーバ側許可リストなし | broker dialog (operator 都度承認) が唯一の人間ゲート | [#17](https://github.com/sakuraiyuta/kaoiro/issues/17) Phase 1 意図的選択 |
-| **メッセージ内容検査** | server は payload を解釈しない (size cap のみ) | なし — prompt injection 攻撃は素通り | [#18](https://github.com/sakuraiyuta/kaoiro/issues/18) Phase 2 |
-| **operator role 細分** | issue #188 で role は admin / operator / viewer の 3 値になったが、operator は依然として全権 (spawn / interrupt / approve / clear など)。降格の実体は per-pair 権限側で、それは未実装 | なし — 単一テナント前提 | [issue #189](https://github.com/sakuraiyuta/kaoiro/issues/189) (per-pair 権限、[ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D3) |
-| **トークン即時失効** | **稼働中 WS の強制切断 実装済 ([#47](https://github.com/sakuraiyuta/kaoiro/issues/47))**: logout (`DELETE /session`) と失効 credential の refresh 401 で `disconnect_sockets/1` が socket_id topic へ disconnect broadcast → 全接続 drop。即時 push ではなく検知契機の到来時に着弾する | 検知契機は次の operator 操作 ([#148](https://github.com/sakuraiyuta/kaoiro/issues/148) の gate 再解決) / OAuth 許可リストの change-driven disconnect ([#160](https://github.com/sakuraiyuta/kaoiro/issues/160)、未操作 passive socket もカバー済み) / 12h 周期の refresh / reconnect / 明示 logout。共有トークン (`KAOIRO_CLIENT_TOKENS`) の値変更自体は env 再読込がなく再起動が必要(この経路は #160 のスコープ外のまま) | 実装完 |
-| **signed token revoke** | **per-agent_id denylist 実装済 (2026-07-23、[#72](https://github.com/sakuraiyuta/kaoiro/issues/72))**: TokenDenylist DETS + Auth.authorize_wrapper 照合 + delete_agent 連動 auto-revoke + operator 明示 revoke handler + revoked broadcast による live disconnect | key rotation はいまも fleet 全体一括失効の重量オプションとして残る | 実装完 |
-| **マルチテナント隔離** | 全 operator が全エージェントを操作可能 (OAuth で個人は識別できるが、エージェントの所有者境界は無い) | なし — single tenant 前提 | [ADR-0042](../adr/0042-oauth-allowlist-login.md) Out of scope |
-| **dev fallback の混入リスク** | **解消済 (2026-07-25、[#133](https://github.com/sakuraiyuta/kaoiro/issues/133))**: `:dev`/`:test` は従来通り未設定で全許可、`:prod` は未設定なら fail-closed (2026-08-02 改訂: wrapper のみ server-minted signed token は受理 — 署名は secret_key_base 由来なので開放ではない) | 起動時 WARN ログ (env 別文言) | 実装完 |
-| **監査ログ** | 「誰がいつどの agent に何を送ったか」の永続記録なし | なし | 将来 (SQLite 導入時) |
-| **tool input マスキング** | コマンドライン / パスは生のまま operator dialog に表示 | operator 限定配信 + 16KB 切り詰め | 将来 |
-| **runner-less wrapper auth** | localhost 直結のみ。spawn を経由しないと token 取得できない | runner 必須 | [#71](https://github.com/sakuraiyuta/kaoiro/issues/71) |
-| **conversation_id 機密性** | dashboard 全 operator に観測される | participants_mismatch ガードで第三者流用は弾く | [#17](https://github.com/sakuraiyuta/kaoiro/issues/17) Phase 1 意図的 |
+| **Inter-agent ACL** | No server-side allowlist for A→B sends | Broker dialog (per-action operator approval) is the only human gate | [#17](https://github.com/sakuraiyuta/kaoiro/issues/17), intentional Phase 1 choice |
+| **Message inspection** | Server does not interpret payloads (size cap only) | None — prompt-injection attacks pass through | [#18](https://github.com/sakuraiyuta/kaoiro/issues/18), Phase 2 |
+| **Operator role granularity** | Issue #188 introduced admin / operator / viewer, but operators still have full power (spawn / interrupt / approve / clear, etc.). Per-pair permission demotion is not implemented | None — single-tenant assumption | [issue #189](https://github.com/sakuraiyuta/kaoiro/issues/189) (per-pair permissions, [ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D3) |
+| **Immediate token revocation** | **Forced disconnect of active WS is implemented ([#47](https://github.com/sakuraiyuta/kaoiro/issues/47))**: logout (`DELETE /session`) and refresh 401 for a revoked credential call `disconnect_sockets/1`, broadcasting disconnect on the socket-id topic and dropping all connections. Delivery occurs when a detection trigger arrives rather than as an immediate push | Triggers are the next operator action (gate re-resolution in [#148](https://github.com/sakuraiyuta/kaoiro/issues/148)) / change-driven OAuth allowlist disconnect ([#160](https://github.com/sakuraiyuta/kaoiro/issues/160), including passive sockets) / 12-hour refresh / reconnect / explicit logout. Changing a shared `KAOIRO_CLIENT_TOKENS` value still requires restart because env is not reloaded (out of #160 scope) | Implemented |
+| **Signed-token revoke** | **Per-agent ID denylist implemented (2026-07-23, [#72](https://github.com/sakuraiyuta/kaoiro/issues/72))**: TokenDenylist DETS + `Auth.authorize_wrapper` check + `delete_agent` auto-revoke + explicit operator revoke handler + live disconnect via revoked broadcast | Key rotation remains the heavy option that revokes the whole fleet | Implemented |
+| **Multi-tenant isolation** | Every operator can control every agent (OAuth identifies people but has no agent-owner boundary) | None — single-tenant assumption | [ADR-0042](../adr/0042-oauth-allowlist-login.md), out of scope |
+| **Dev fallback leakage risk** | **Resolved (2026-07-25, [#133](https://github.com/sakuraiyuta/kaoiro/issues/133))**: `:dev`/`:test` still allow all when unset; `:prod` fails closed when unset (2026-08-02 revision: wrapper accepts only server-minted signed tokens, whose signature derives from `secret_key_base`) | Startup WARN log (environment-specific wording) | Implemented |
+| **Audit logging** | No durable record of who sent what to which agent and when | None | Future (when SQLite is introduced) |
+| **Tool-input masking** | Command lines / paths are shown raw in the operator dialog | Operator-only delivery + 16KB truncation | Future |
+| **Runner-less wrapper auth** | Localhost direct connection only; a token is unavailable without going through spawn | Runner required | [#71](https://github.com/sakuraiyuta/kaoiro/issues/71) |
+| **conversation_id confidentiality** | Observable by every dashboard operator | `participants_mismatch` guard rejects third-party reuse | [#17](https://github.com/sakuraiyuta/kaoiro/issues/17), intentional Phase 1 choice |
 
 ## Constraints (MUST)
 
-- MUST: 認証境界・role gate の追加は本 doc にも反映する (single source of truth)
-- MUST: `KAOIRO_*_TOKENS` のフォールバック挙動は変更時に 3 ノード分まとめて
-  再検証する (`Auth.warn_token_config/0` も追従)
-- MUST: 新規 envelope type / channel event を足す際は `sanitize_envelope_for/2`
-  の allow-list を必ず更新 (fail-closed の前提が崩れる)
-- MUST: 新規 operator-only inbound event は `require_operator/1` を `with` の
-  最初に置く
-- MUST: 新規 in-process MCP tool を SDK に注入する際、既定 allowedTools に
-  含めるかどうかを明示判断する (含めない = 都度承認、含める = 無監督)
+- MUST: Reflect every new authentication boundary or role gate in this document
+  (single source of truth).
+- MUST: When changing `KAOIRO_*_TOKENS` fallback behavior, revalidate all three
+  nodes together (and update `Auth.warn_token_config/0`).
+- MUST: When adding an envelope type or channel event, update the
+  `sanitize_envelope_for/2` allow-list (the fail-closed premise must hold).
+- MUST: Put `require_operator/1` first in the `with` for every new operator-only
+  inbound event.
+- MUST: When injecting a new in-process MCP tool into the SDK, explicitly decide
+  whether it belongs in default allowedTools (omitted = per-use approval;
+  included = unsupervised).
 
 ## Release-time audit checklist
 
-OSS 公開前監査 (private Gitea issue 91) では
-本 doc を基準に以下を確認する。issue 側の checklist と同期させる。
+For the pre-OSS audit (private Gitea issue 91), verify the following against this
+document and keep it synchronized with the issue checklist.
 
-- [ ] 各 socket の token 未設定時挙動 (warn + 緩和 / fail-closed) が doc 通り
-- [ ] OAuth 許可リスト未設定 / 欠落 / 不一致で全 OAuth ログインが拒否される
-  (ADR-0042 fail-closed)
-- [ ] provider access token が session / cookie / DETS / ログに残らない
-- [ ] `AgentsChannel.handle_out` の allow-list が新規 envelope を漏らさない
-  (sanitize_envelope_for 網羅性 + テスト coverage)
-- [ ] operator-only inbound の `require_operator/1` 抜けなし
-  (grep + テスト)
-- [ ] operator 限定 HTTP endpoint (`RequireOperatorPlug`) が匿名 401 /
-  viewer 403 / operator・admin 200 をテストで担保している (issue #232)
-- [ ] dev fallback の risk 評価 ( `:prod` は token 未設定で fail-closed に
-  なることをテストで担保、issue #133)
-- [ ] secret 系の log 出力なし
-  (Logger 経由で token / cookie / signed token を出していないか)
-- [ ] `Phoenix.Token.sign` の `secret_key_base` が prod で固定値でない
-- [ ] cookie SameSite / Secure / HttpOnly が prod config で意図通り
-- [ ] CSRF (`check_origin`) が prod で有効
-- [ ] envelope の `ext` キー追加時に viewer 除去が機能している
-- [ ] inter-agent body の prompt injection リスクが README / threat-model に
-  明記されている
-- [ ] wrapper の `allowedTools` 上限上書き経路が server / client から無い
-  (テスト)
-- [ ] `scripts/dev.sh` のログにシークレットが残らない
-  (`tmp/dev-logs/*.log` を grep)
-- [ ] git log --all -p の token / .env / cookie / signed token 文字列スキャン
-  (公開予定 commit に混入なし)
+- [ ] Each socket's unset-token behavior (warn + fallback / fail-closed) matches
+  the document.
+- [ ] Every OAuth login is rejected when the allowlist is unset, missing, or
+  mismatched (ADR-0042 fail-closed).
+- [ ] Provider access tokens do not remain in session / cookie / DETS / logs.
+- [ ] The `AgentsChannel.handle_out` allow-list does not leak new envelopes
+  (complete `sanitize_envelope_for` coverage + tests).
+- [ ] No operator-only inbound event omits `require_operator/1` (grep + tests).
+- [ ] The operator-only HTTP endpoint (`RequireOperatorPlug`) is covered by tests
+  for anonymous 401 / viewer 403 / operator and admin 200 (issue #232).
+- [ ] Dev fallback risk is assessed (`:prod` fails closed when tokens are unset,
+  covered by tests; issue #133).
+- [ ] No secret appears in logs (check Logger for token / cookie / signed token).
+- [ ] `secret_key_base` used by `Phoenix.Token.sign` is not a fixed production
+  value.
+- [ ] Cookie SameSite / Secure / HttpOnly match production configuration intent.
+- [ ] CSRF (`check_origin`) is enabled in production.
+- [ ] Adding envelope `ext` keys still strips them for viewers.
+- [ ] Inter-agent body prompt-injection risk is documented in README / threat model.
+- [ ] Server / client have no path to override the wrapper `allowedTools` ceiling
+  (tests).
+- [ ] `scripts/dev.sh` logs contain no secrets (grep `tmp/dev-logs/*.log`).
+- [ ] Scan `git log --all -p` for token / .env / cookie / signed-token strings;
+  none may enter commits intended for publication.
 
 ## See Also
 
-- 関連 specs: [protocol](protocol.md), [threat-model](threat-model.md),
+- Related specs: [protocol](protocol.md), [threat-model](threat-model.md),
   [architecture](architecture.md), [protocol-inter-agent](protocol-inter-agent.md)
 - ADRs: [0011](../adr/0011-phase3-reliability-and-auth.md) (wrapper token),
-  [0012](../adr/0012-response-display-and-dashboard-scope.md) (log/result 配信),
+  [0012](../adr/0012-response-display-and-dashboard-scope.md) (log/result delivery),
   [0013](../adr/0013-user-token-cookie-persistence.md) (cookie / ticket),
-  [0021](../adr/0021-role-information-disclosure-policy.md) (role 別 allow-list),
+  [0021](../adr/0021-role-information-disclosure-policy.md) (role allow-list),
   [0022](../adr/0022-pending-permission-authoritative-source.md) (pending permission),
   [0023](../adr/0023-host-runner-architecture.md) (runner),
   [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) (spawn auth),
-  [0042](../adr/0042-oauth-allowlist-login.md) (OAuth + 許可リスト)
-- 関連 issue: [#17](https://github.com/sakuraiyuta/kaoiro/issues/17) (inter-agent),
+  [0042](../adr/0042-oauth-allowlist-login.md) (OAuth + allowlist)
+- Related issues: [#17](https://github.com/sakuraiyuta/kaoiro/issues/17) (inter-agent),
   [#28](https://github.com/sakuraiyuta/kaoiro/issues/28) (client fail-closed),
-  [#46](https://github.com/sakuraiyuta/kaoiro/issues/46) (cwd 露出),
+  [#46](https://github.com/sakuraiyuta/kaoiro/issues/46) (cwd exposure),
   [#47](https://github.com/sakuraiyuta/kaoiro/issues/47) (socket revoke),
   [#65](https://github.com/sakuraiyuta/kaoiro/issues/65) (OAuth),
   [#71](https://github.com/sakuraiyuta/kaoiro/issues/71) (runner-less auth),
-  [#72](https://github.com/sakuraiyuta/kaoiro/issues/72) (signed token denylist),
-  private Gitea issue 91 (OSS 公開準備)
+  [#72](https://github.com/sakuraiyuta/kaoiro/issues/72) (signed-token denylist),
+  private Gitea issue 91 (OSS publication preparation)
