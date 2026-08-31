@@ -138,6 +138,14 @@ export interface WirePersona {
   sprite_set: string;
 }
 
+/** Flat build identity reported by a connected wrapper after channel join. */
+export interface WrapperBuildInfoPayload {
+  build_revision: string;
+  build_dirty: boolean;
+  build_version: string;
+  build_channel: "dev" | "release";
+}
+
 /** Assigned persona (protocol.md / ADR-0003). Under the server-集約 SoT
  *  model (ADR-0029) the wrapper carries only the wire-safe identifiers;
  *  the personality prompt is fetched from the server via WS handshake,

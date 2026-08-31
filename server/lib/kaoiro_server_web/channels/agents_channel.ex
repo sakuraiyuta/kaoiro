@@ -152,6 +152,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # Recipient dispatch watermarks are an operator diagnostic (issue #247).
     # Keep live updates behind the same role gate as their join-time snapshot.
     "delivery_status",
+    # Connected wrapper artifact identity is operator-only, like host build
+    # identity; viewers do not receive package provenance.
+    "wrapper_build_info",
     # Live directory refresh after a rename (issue #197 段階3, D16). The
     # join-time push (`handle_info(:after_join, ...)` above) was the only
     # producer of this event before rename existed, so it was never
@@ -170,7 +173,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     history_cleared history_reset history_replay_complete
     history_replay_envelope agent_deleted delivery_status
     session_reset_started session_reset_completed session_reset_failed
-    envelope spawn_result runner_sessions catalog_result
+    envelope spawn_result runner_sessions catalog_result wrapper_build_info
   ))
 
   @join_snapshot_events [
@@ -375,6 +378,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
       push_versioned(socket, "directory", %{
         "entries" => join_directory_entries(AgentDirectory.all())
       })
+
+      push_versioned(socket, "wrapper_build_info", %{
+        "builds" => KaoiroServer.WrapperBuildInfos.snapshot()
+      })
     end
 
     {:noreply, socket}
@@ -494,7 +501,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
              "session_reset_started",
              "session_reset_completed",
              "session_reset_failed",
-             "delivery_status"
+             "delivery_status",
+             "wrapper_build_info"
            ] do
     if socket.assigns[:role] in @operator_capable_roles do
       push_versioned(socket, event, payload)

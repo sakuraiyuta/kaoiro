@@ -83,6 +83,7 @@ if (view === "app") {
   }
   const logCount = params.get("logCount");
   if (logCount !== null) scenario.logCount = Number(logCount);
+  if (params.get("wrapperBuild") === "1") scenario.wrapperBuildInfo = true;
   mount(DetailHarness, { target, props: { scenario } });
 } else if (view === "overlay") {
   const overlayParam = params.get("overlay");

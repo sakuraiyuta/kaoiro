@@ -10,6 +10,7 @@
   import TasklistFloat from "./TasklistFloat.svelte";
   import { settings } from "./settings.svelte";
   import { randomUUID } from "./uuid";
+  import { formatBuildIdentity } from "./buildIdentity";
   import {
     engineFrom,
     errorSubtypeLabel,
@@ -41,6 +42,7 @@
     SessionResetMode,
     TasklistSnapshot,
     InterAgentDeliveryStatus,
+    WrapperBuildInfo,
   } from "./protocol";
 
   let {
@@ -56,6 +58,7 @@
     activeTaskCount = 0,
     tasklist = null,
     deliveryStatus = null,
+    wrapperBuildInfo = null,
     onClose,
     onSelectAgent,
     onRename,
@@ -96,6 +99,7 @@
      * ring. An empty list remains state but the float itself stays hidden. */
     tasklist?: TasklistSnapshot | null;
     deliveryStatus?: InterAgentDeliveryStatus | null;
+    wrapperBuildInfo?: WrapperBuildInfo | null;
     onClose: () => void;
     /** Switch the detail view to another agent (clicked peer link in an
      *  inter-agent message bubble). Omitted = peer name renders as static
@@ -648,6 +652,7 @@
       effectiveNetworkAccess !== null ||
       ccRateRows.some((r) => r.pct !== null) ||
       models.length > 0 ||
+      wrapperBuildInfo !== null ||
       // Operator can always pick a permission mode (#58), even before init
       // lands ext.permission_mode — keep the panel open so the dropdown is
       // reachable without waiting for the first turn.
@@ -2744,6 +2749,18 @@
             <div class="cc-row">
               <dt>engine</dt>
               <dd>{agentEngine}</dd>
+            </div>
+          {/if}
+          {#if wrapperBuildInfo}
+            <div class="cc-row" data-testid="wrapper-build-info">
+              <dt>wrapper</dt>
+              <dd>
+                {formatBuildIdentity("wrapper", {
+                  version: wrapperBuildInfo.build_version,
+                  channel: wrapperBuildInfo.build_channel,
+                  revision: wrapperBuildInfo.build_revision,
+                })}
+              </dd>
             </div>
           {/if}
           {#if resumeDrift && resumeDrift.length > 0}

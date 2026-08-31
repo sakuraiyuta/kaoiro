@@ -92,6 +92,8 @@ export interface DetailScenario {
   /** ログ件数(既定 30)。#184 の LOG_WINDOW_SIZE(200)を超える値を
    *  指定すると window 拡張(ensureIndexVisible)込みの経路になる。 */
   logCount?: number;
+  /** Supply a connected wrapper build identity for the AgentDetail display. */
+  wrapperBuildInfo?: boolean;
 }
 
 /** Manifest with a resolved sprite for the "ao" persona, covering every

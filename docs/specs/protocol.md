@@ -291,6 +291,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 |---|---|---|
 | wrapper → server | `envelope` | Full envelope. Only `inter_agent_message` receives an `{ ingress_stamp: [us, seq] }` acceptance ack; other types receive an empty reply. Causal ordering follows [protocol-inter-agent](protocol-inter-agent.md); sidecar recording uses [ADR-0051](../adr/0051-history-restart-resilience.md). |
 | wrapper → server | `delivery_ack` | `{ delivery_seq: positive integer }`, the SDK-dispatch confirmation watermark (issue #237); unnegotiated, duplicate, or future values are no-op, not resend requests. |
+| wrapper → server | `wrapper_build_info` | `{ build_revision, build_dirty, build_version, build_channel }` reports the wrapper artifact immediately after each successful channel join. The server derives `agent_id` from the topic, validates the complete identity pair, keeps only the latest connected value, and broadcasts it to operator-capable clients. The flat protocol `version` is added by the wrapper control-event funnel. |
 | wrapper → server | `delivery_status_request` | `{}`; reads the sender's `{ delivery?: {issued_seq, acked_seq, pending_since?} }`. Absence is legacy/disarmed unknown. |
 | wrapper → server | `history_reset` | `{ replay_id }` starts replay. Use the server ID when the join verdict requires replay, otherwise a legacy wrapper ID. Clear display projection, retain IA for `replay_ia`, and acknowledge an absent entry as no-op ([ADR-0051](../adr/0051-history-restart-resilience.md), [ADR-0014](../adr/0014-session-resume-and-restore.md)). |
 | wrapper → server | `history_replay_complete` | `{ replay_id }` follows the final JSONL/sidecar row. The server broadcasts it and CAS-transitions matching in-flight hydration ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
@@ -300,6 +301,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | server → client | `task_snapshot` | `{ tasks: { <agent_id>: { <task_id>: envelope } } }` is the active subagent/workflow set, separate from agents. Viewer joins always receive `tasks: {}` ([ADR-0048](../adr/0048-task-aggregation-delivery.md)). |
 | server → client | `delivery_snapshot` | `{ deliveries: { <agent_id>: { issued_seq, acked_seq, pending_since? } }, snapshot_incomplete?: true }` reports recipient-local confirmation gaps, not a resend queue. Connected or gapped entries are prioritized; viewers receive `{ deliveries: {} }` ([ADR-0048](../adr/0048-task-aggregation-delivery.md)). |
 | server → client | `delivery_status` | `{ agent_id, delivery?: { issued_seq, acked_seq, pending_since? } }` reports a ledger update; capability loss omits `delivery`. Operator-only. |
+| server → client | `wrapper_build_info` | Join snapshot is `{ builds: { "<agent_id>": { build_revision, build_dirty, build_version, build_channel } } }`; live update is the same flat identity plus `agent_id`, and disconnect is `{ agent_id, cleared: true }`. Only currently connected wrappers appear in the snapshot. Operator-only. |
 | server → client | `envelope` | The complete envelope, broadcast on each state change. |
 | server → client | `history_cleared` | `{ agent_id, session_id, clear_watermark }` follows operator `clear_history` and filters non-IA rows by session and IA rows by watermark. `/new` and `/clear` use session-reset lifecycle events instead. Missing start points warn and leave the watermark unchanged; operator-only. |
 | server → client | `history_reset` | `{ agent_id, preserve_inter_agent: boolean, replay_id? }` is sent only for replay reconstruction. `preserve_inter_agent` is explicitly `false` during compatibility; `/new` and `/clear` do not use this event. Operator-only ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
@@ -723,21 +725,24 @@ same funnel. The unimplemented `revoke_wrapper_token` has only server-side recei
 `register` / `heartbeat` / `sessions` / `spawn_result` / `catalog_result` /
 `session_reset_result` are all assembled by the runner with `version: "0"`.
 
-#### Wrapper → server (stage 2, completed in issue #260)
+#### Wrapper → server (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
 `envelope` is stamped by its frame key. `delivery_ack` / `delivery_status_request` /
 `history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` /
-`session_reset_request` are declared in `WRAPPER_CONTROL_EVENT_POLICY`; the wrapper's sole
-send point `#pushVersioned` adds flat `version`. The server's `@wrapper_event_policy` and
-single `handle_in/3` funnel warn on omission/mismatch and accept best-effort.
+`session_reset_request` / `wrapper_build_info` are declared in `WRAPPER_CONTROL_EVENT_POLICY`;
+the wrapper's sole send point `#pushVersioned` adds flat `version`. The server's
+`@wrapper_event_policy` and single `handle_in/3` funnel warn on omission/mismatch and accept
+best-effort. `wrapper_build_info` is sent after every join/rejoin from the wrapper's own
+generated artifact; it is not inferred from runner identity.
 
-#### Server → client (stage 2, completed in issue #260)
+#### Server → client (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
-`envelope` is stamped by its frame key. The remaining 18 events
+`envelope` is stamped by its frame key. The remaining 19 events
 (`history_replay_envelope` / `snapshot` / `task_snapshot` / `delivery_snapshot` / `history` /
 `hosts` / `directory` / `history_cleared` / `history_reset` / `history_replay_complete` /
 `agent_deleted` / `delivery_status` / `session_reset_started` / `session_reset_completed` /
-`session_reset_failed` / `spawn_result` / `runner_sessions` / `catalog_result`) receive flat
+`session_reset_failed` / `spawn_result` / `runner_sessions` / `catalog_result` /
+`wrapper_build_info`) receive flat
 `version` from server `push_versioned/3`. Internal PubSub and runner claims are not wire SoT.
 Dashboard's `CLIENT_EVENT_VERSION_POLICY` and `bindServerEvent` funnel warn and accept best-effort.
 

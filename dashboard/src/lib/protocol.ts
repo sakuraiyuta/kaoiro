@@ -1616,6 +1616,16 @@ export interface InterAgentDeliveryStatus {
   pending_since?: string;
 }
 
+/** Build identity reported by a currently connected wrapper. The server
+ * derives `agent_id` from the wrapper topic and sends only this artifact
+ * identity to operator-capable dashboard sessions. */
+export interface WrapperBuildInfo {
+  build_version: string;
+  build_channel: "dev" | "release";
+  build_revision: string;
+  build_dirty: boolean;
+}
+
 /** A resume candidate under a cwd (ADR-0014 F2; minimal metadata, T2). */
 export interface RunnerSession {
   session_id: string;
@@ -1661,6 +1671,10 @@ export interface KaoiroHandlers {
   /** Whether the bounded delivery projection omitted watermarks on this join. */
   onDeliverySnapshotIncomplete?: (incomplete: boolean) => void;
   onDeliveryStatus?: (agentId: string, status: InterAgentDeliveryStatus | null) => void;
+  /** Current wrapper artifact identities, sent only to operators/admins. */
+  onWrapperBuildInfoSnapshot?: (infos: Record<string, WrapperBuildInfo>) => void;
+  /** Live wrapper identity update; null means that wrapper disconnected. */
+  onWrapperBuildInfo?: (agentId: string, info: WrapperBuildInfo | null) => void;
   /** Single-agent update (any envelope type; caller routes by type). */
   onEnvelope: (envelope: Envelope) => void;
   /** Reply-log history per agent (operator-only, ADR-0012); pushed once
@@ -2123,6 +2137,43 @@ export function parseHosts(value: unknown): HostInfo[] {
     }
   }
   return hosts;
+}
+
+/** Parses one server-validated wrapper build identity. */
+export function parseWrapperBuildInfo(value: unknown): WrapperBuildInfo | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  if (
+    !isValidBuildVersion(raw.build_version) ||
+    !isValidBuildChannel(raw.build_channel) ||
+    !isValidBuildRevision(raw.build_revision) ||
+    typeof raw.build_dirty !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    build_version: raw.build_version,
+    build_channel: raw.build_channel,
+    build_revision: raw.build_revision,
+    build_dirty: raw.build_dirty,
+  };
+}
+
+/** Parses the join-time agent_id => wrapper identity snapshot. */
+export function parseWrapperBuildInfoSnapshot(
+  value: unknown,
+): Record<string, WrapperBuildInfo> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+  const infos: Record<string, WrapperBuildInfo> = {};
+  for (const [agentId, raw] of Object.entries(value)) {
+    const parsed = parseWrapperBuildInfo(raw);
+    if (parsed !== null) infos[agentId] = parsed;
+  }
+  return infos;
 }
 
 /** Parses the `directory` map (agent_id => entry) into a
@@ -2987,6 +3038,7 @@ export const CLIENT_EVENT_VERSION_POLICY = {
   spawn_result: "checked",
   runner_sessions: "checked",
   catalog_result: "checked",
+  wrapper_build_info: "checked",
 } as const satisfies Record<string, "checked">;
 
 export type ClientEventName = keyof typeof CLIENT_EVENT_VERSION_POLICY;
@@ -3321,12 +3373,31 @@ export function connectKaoiro(
       handlers.onDeliverySnapshotIncomplete?.(payload.snapshot_incomplete === true);
     });
     bindServerEvent(c, "delivery_status", (payload: unknown) => {
-    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;
-    const raw = payload as Record<string, unknown>;
-    if (typeof raw.agent_id !== "string") return;
-    handlers.onDeliveryStatus?.(raw.agent_id, parseDeliveryStatus(raw.delivery));
-  });
-  bindServerEvent(c, "envelope", (payload: unknown) => {
+      if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;
+      const raw = payload as Record<string, unknown>;
+      if (typeof raw.agent_id !== "string") return;
+      handlers.onDeliveryStatus?.(raw.agent_id, parseDeliveryStatus(raw.delivery));
+    });
+    bindServerEvent(c, "wrapper_build_info", (payload: unknown) => {
+      if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+        return;
+      }
+      const raw = payload as Record<string, unknown>;
+      if (Object.prototype.hasOwnProperty.call(raw, "builds")) {
+        handlers.onWrapperBuildInfoSnapshot?.(
+          parseWrapperBuildInfoSnapshot(raw.builds),
+        );
+        return;
+      }
+      if (typeof raw.agent_id !== "string") return;
+      if (raw.cleared === true) {
+        handlers.onWrapperBuildInfo?.(raw.agent_id, null);
+        return;
+      }
+      const info = parseWrapperBuildInfo(raw);
+      if (info !== null) handlers.onWrapperBuildInfo?.(raw.agent_id, info);
+    });
+    bindServerEvent(c, "envelope", (payload: unknown) => {
     if (!isEnvelope(payload)) return;
     // ADR-0039 F9 v2 = 藤 review turn-10 must-fix 1: refresh_models_result
     // is a transient completion envelope, NOT a state. Special-dispatch it

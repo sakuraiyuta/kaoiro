@@ -35,6 +35,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.SessionStarts
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
+  alias KaoiroServer.WrapperBuildInfos
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.PeerConnectivity
   alias KaoiroServerWeb.SynthEnvelope
@@ -91,6 +92,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # before its individual handler runs. A new handler cannot opt out of the
   # receiver rule by simply omitting a local warning call.
   @wrapper_event_policy %{
+    "wrapper_build_info" => :versioned,
     "delivery_ack" => :versioned,
     "delivery_status_request" => :versioned,
     "directory_request" => :versioned,
@@ -543,6 +545,28 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp handle_wrapper_in("delivery_ack", _payload, socket) do
+    {:reply, :ok, socket}
+  end
+
+  defp handle_wrapper_in("wrapper_build_info", payload, socket) do
+    case WrapperBuildInfos.canonical_info(payload) do
+      {:ok, info} ->
+        case WrapperBuildInfos.put(socket.assigns.agent_id, info, self()) do
+          :ok ->
+            KaoiroServerWeb.Endpoint.broadcast(
+              "agents:lobby",
+              "wrapper_build_info",
+              Map.put(info, "agent_id", socket.assigns.agent_id)
+            )
+
+          {:error, _reason} ->
+            :ok
+        end
+
+      {:error, _reason} ->
+        :ok
+    end
+
     {:reply, :ok, socket}
   end
 
@@ -1478,6 +1502,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
     # applies it while this channel still owns the entry, so a stale
     # terminate after a reconnect cannot clobber the new state.
     ts = DateTime.utc_now() |> DateTime.to_iso8601()
+    build_info_clear = WrapperBuildInfos.delete(agent_id, self())
+
+    if match?({:ok, _}, build_info_clear) do
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "wrapper_build_info", %{
+        "agent_id" => agent_id,
+        "cleared" => true
+      })
+    end
 
     # ADR-0051 D2: a replay abandoned mid-way (the wrapper dropped between
     # `history_reset` and the completion boundary) rolls back to
@@ -1512,6 +1544,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         # got stale tasks it would never be told to drop, having already
         # missed the one broadcast for this disconnect.
         TaskStates.discard_for_agent(agent_id)
+
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
         # Only on an adopted disconnect: a stale terminate that lost the
         # entry to a reconnect must not tell peers the agent is gone.

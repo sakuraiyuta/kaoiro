@@ -23,7 +23,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseCliArgs } from "@kaoiro/wrapper-core";
+import { loadWrapperBuildInfo, parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory, sessionSidecarPath } from "./history.js";
 import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
 import type {
@@ -158,6 +158,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
+  const buildInfo = loadWrapperBuildInfo(
+    fileURLToPath(new URL("../dist", import.meta.url)),
+  );
   // Operational safety valve, deliberately wrapper-local rather than a
   // dashboard/server/runner configuration surface (issue #248).
   const turnWatchdogSettings = readTurnWatchdogSettings(
@@ -585,6 +588,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
     personaId: config.persona.id,
+    buildInfo,
     ...(config.transition_id === undefined
       ? {}
       : { transitionId: config.transition_id }),

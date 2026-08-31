@@ -112,6 +112,7 @@ describe("ServerLink — initial envelope sequence (#107)", () => {
     mock.handlers.clear();
     mock.lastPush = null;
     mock.pushes = [];
+    mock.joinReceivers.clear();
   });
 
   it("first send は seq=1 を付与し ext を透過する", () => {
@@ -1236,6 +1237,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     mock.handlers.clear();
     mock.lastPush = null;
     mock.pushes = [];
+    mock.joinReceivers.clear();
   });
 
   const versioned = () =>
@@ -1277,20 +1279,37 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
         undefined,
         "2026-08-31T00:00:00Z",
       ),
+    wrapper_build_info: () => mock.joinReceivers.get("ok")?.({}),
   };
 
   it("T1-1: fire 表は production policy の versioned 集合と完全一致する", () => {
     expect(Object.keys(fire).sort()).toEqual(versioned());
   });
 
-  it("T1-2: 8種すべてを実際に送る", () => {
-    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+  it("T1-2: 9種すべてを実際に送る", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      buildInfo: {
+        revision: "0123456789012345678901234567890123456789",
+        dirty: false,
+        version: "2026.9.0",
+        channel: "dev",
+      },
+    });
     for (const trigger of Object.values(fire)) trigger(link);
     expect(mock.pushes.map((push) => push.event).sort()).toEqual(versioned());
   });
 
-  it("T1-3: 8種すべての payload に flat version を stamp する", () => {
-    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+  it("T1-3: 9種すべての payload に flat version を stamp する", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      buildInfo: {
+        revision: "0123456789012345678901234567890123456789",
+        dirty: false,
+        version: "2026.9.0",
+        channel: "dev",
+      },
+    });
     for (const trigger of Object.values(fire)) trigger(link);
     for (const push of mock.pushes) expect(push.payload).toMatchObject({ version: "0" });
   });

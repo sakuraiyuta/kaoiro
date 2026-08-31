@@ -14,6 +14,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
+  alias KaoiroServer.WrapperBuildInfos
   alias KaoiroServerWeb.WrapperChannel
 
   defp envelope(agent_id, state) do
@@ -144,6 +145,35 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert AgentStates.snapshot()[agent_id] == envelope
   end
 
+  test "wrapper_build_info を接続中マップへ保存し operator へ通知する" do
+    agent_id = "test.wrapper-build-info"
+    @endpoint.subscribe("agents:lobby")
+    socket = join_wrapper(agent_id)
+
+    info = %{
+      "version" => "0",
+      "build_revision" => "0123456789012345678901234567890123456789",
+      "build_dirty" => false,
+      "build_version" => "2026.9.0",
+      "build_channel" => "dev"
+    }
+
+    ref = push(socket, "wrapper_build_info", info)
+
+    assert_reply ref, :ok
+
+    assert_broadcast "wrapper_build_info", %{
+      "agent_id" => ^agent_id,
+      "build_revision" => "0123456789012345678901234567890123456789",
+      "build_dirty" => false,
+      "build_version" => "2026.9.0",
+      "build_channel" => "dev"
+    }
+
+    assert WrapperBuildInfos.snapshot()[agent_id]["build_version"] == "2026.9.0"
+    on_exit(fn -> WrapperBuildInfos.delete(agent_id, socket.channel_pid) end)
+  end
+
   describe "ADR-0015 stage 2 wrapper inbound funnel (issue #270)" do
     # T2-3 は「version 一致なら警告ゼロ」を log == "" で検証するが、7 種の
     # push には directory_request が含まれ、その directory-only 射影は
@@ -165,6 +195,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       history_replay_complete
       replay_ia
       session_reset_request
+      wrapper_build_info
     )
 
     defp control_payload(_event), do: %{}
@@ -187,7 +218,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_control_reply(ref, event)
     end
 
-    test "T2-1: 7種の version 欠落は警告し、既存の返信を継続する" do
+    test "T2-1: 8種の version 欠落は警告し、既存の返信を継続する" do
       socket = join_wrapper("test.stage2-inbound-absent")
 
       log =
@@ -202,7 +233,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       end
     end
 
-    test "T2-2: 7種の version 不一致は警告し、既存の返信を継続する" do
+    test "T2-2: 8種の version 不一致は警告し、既存の返信を継続する" do
       socket = join_wrapper("test.stage2-inbound-mismatch")
 
       log =
@@ -217,7 +248,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       end
     end
 
-    test "T2-3: 7種の version 一致は警告しない" do
+    test "T2-3: 8種の version 一致は警告しない" do
       socket = join_wrapper("test.stage2-inbound-matched")
 
       log =
@@ -4395,6 +4426,34 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
 
       assert AgentStates.snapshot()[agent_id]["state"] == "disconnected"
+    end
+
+    test "state envelope 前に切断しても wrapper build identity を消去する" do
+      agent_id = "test.disc-wrapper-build"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      info = %{
+        "version" => "0",
+        "build_revision" => "0123456789012345678901234567890123456789",
+        "build_dirty" => false,
+        "build_version" => "2026.9.0",
+        "build_channel" => "dev"
+      }
+
+      ref = push(socket, "wrapper_build_info", info)
+      assert_reply ref, :ok
+      assert WrapperBuildInfos.snapshot()[agent_id]
+
+      Process.unlink(socket.channel_pid)
+      :ok = close(socket)
+
+      assert_broadcast "wrapper_build_info", %{
+        "agent_id" => ^agent_id,
+        "cleared" => true
+      }
+
+      refute Map.has_key?(WrapperBuildInfos.snapshot(), agent_id)
     end
 
     # issue #180, ADR-0048 F1: 親エージェントの切断でその task を破棄する。

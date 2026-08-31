@@ -23,6 +23,7 @@ import type {
   UserDirectoryEntry,
   UserRole,
 } from "@kaoiro/protocol";
+import type { WrapperBuildInfo } from "./build_info.js";
 
 /** A client's permission decision relayed by the server (protocol.md).
  *  Defined here (the wire layer that parses it); the PermissionBroker in
@@ -195,6 +196,7 @@ export const SERVER_EVENT_VERSION_POLICY = {
 export type ServerEventName = keyof typeof SERVER_EVENT_VERSION_POLICY;
 
 export const WRAPPER_CONTROL_EVENT_POLICY = {
+  wrapper_build_info: "versioned",
   delivery_ack: "versioned",
   delivery_status_request: "versioned",
   history_reset: "versioned",
@@ -267,6 +269,9 @@ export interface ServerLinkOptions {
   transitionId?: string;
   /** Wrapper auth token (ADR-0011), sent as a connect param. */
   token?: string;
+  /** Build identity read from this wrapper artifact. It is announced once
+   *  after every successful channel join, including reconnects. */
+  buildInfo?: WrapperBuildInfo;
   /** The server-composed personality + common footer (ADR-0029 F5)
    *  pushed once after join over the WS handshake. cli.ts awaits this
    *  before opening the SDK session — the SDK's systemPrompt.append is
@@ -1110,6 +1115,14 @@ export class ServerLink {
     this.#channel
       .join()
       .receive("ok", (reply: unknown) => {
+        if (options.buildInfo !== undefined) {
+          this.#pushVersioned("wrapper_build_info", {
+            build_revision: options.buildInfo.revision,
+            build_dirty: options.buildInfo.dirty,
+            build_version: options.buildInfo.version,
+            build_channel: options.buildInfo.channel,
+          });
+        }
         options.onHydration?.(hydrationVerdictFrom(reply));
         options.onInterAgentDeliveryStatus?.(
           isObject(reply) ? deliveryStatusFrom(reply.delivery) ?? null : null,

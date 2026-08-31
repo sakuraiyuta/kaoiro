@@ -41,6 +41,7 @@
     SpawnResult,
     TaskTable,
     TicketRefreshResult,
+    WrapperBuildInfo,
   } from "./lib/protocol";
   import {
     connectKaoiro,
@@ -90,6 +91,7 @@
   // slot).
   let tasks = $state<TaskTable>({});
   let deliveries = $state<Record<string, InterAgentDeliveryStatus>>({});
+  let wrapperBuildInfos = $state<Record<string, WrapperBuildInfo>>({});
   // Restart-surviving identity ledger (ADR-0030) — every agent_id we have
   // ever spawned, with its persona. Merged with `agents` (live) below to
   // surface offline entries in their own section with a restore button.
@@ -586,6 +588,7 @@
           agents = {};
           tasks = {};
           deliveries = {};
+          wrapperBuildInfos = {};
           snapshotIncomplete = false;
           deliverySnapshotIncomplete = false;
           awaitingHistory = true;
@@ -626,6 +629,18 @@
             deliveries = remaining;
           } else {
             deliveries = { ...deliveries, [agentId]: delivery };
+          }
+        },
+        onWrapperBuildInfoSnapshot: (next) => {
+          wrapperBuildInfos = next;
+          isOperator = true;
+        },
+        onWrapperBuildInfo: (agentId, info) => {
+          if (info === null) {
+            const { [agentId]: _removed, ...remaining } = wrapperBuildInfos;
+            wrapperBuildInfos = remaining;
+          } else {
+            wrapperBuildInfos = { ...wrapperBuildInfos, [agentId]: info };
           }
         },
         onEnvelope: (envelope) => {
@@ -929,6 +944,10 @@
           if (agentId in deliveries) {
             const { [agentId]: _drop, ...remaining } = deliveries;
             deliveries = remaining;
+          }
+          if (agentId in wrapperBuildInfos) {
+            const { [agentId]: _drop, ...remaining } = wrapperBuildInfos;
+            wrapperBuildInfos = remaining;
           }
           if (logs[agentId]) {
             logs = Object.fromEntries(
@@ -1268,6 +1287,7 @@
     // Don't keep the previous session's data behind the login form.
     agents = {};
     logs = {};
+    wrapperBuildInfos = {};
     liveSinceJoin = {};
     awaitingHistory = false;
     projectionEpoch = null;
@@ -1601,6 +1621,7 @@
           )}
           tasklist={tasklistForDetail(selectedEnvelope, tasks)}
           deliveryStatus={deliveries[selectedEnvelope.agent_id] ?? null}
+          wrapperBuildInfo={wrapperBuildInfos[selectedEnvelope.agent_id] ?? null}
           onClose={() => {
             timelineScrollTarget = null;
             selected = null;

@@ -24,6 +24,9 @@ defmodule KaoiroServer.Application do
       # In-memory peer-directory activity projection (#160). Kept separate
       # from AgentStates, whose sole ownership is latest envelopes/history.
       KaoiroServer.AgentActivity,
+      # Live-only wrapper artifact identities. A reconnect reports its own
+      # package again; disconnect cleanup is owner-fenced.
+      KaoiroServer.WrapperBuildInfos,
       # Flat table of active subagent/workflow tasks, keyed by task_id
       # (issue #180, ADR-0019/0047/0048 F1). Kept separate from AgentStates
       # for the same reason as AgentActivity above — a `task` envelope is

@@ -24,6 +24,8 @@ import {
   parseDeliverySnapshot,
   parseDeliveryStatus,
   parseHosts,
+  parseWrapperBuildInfo,
+  parseWrapperBuildInfoSnapshot,
   parseSessions,
   parseTasks,
   pendingPermissionFrom,
@@ -1787,6 +1789,34 @@ describe("parseHosts (#22)", () => {
     });
     expect("build_version" in invalid!).toBe(false);
     expect("build_channel" in invalid!).toBe(false);
+  });
+});
+
+describe("parseWrapperBuildInfo (#288)", () => {
+  const info = {
+    build_revision: "0123456789abcdef0123456789abcdef01234567",
+    build_dirty: false,
+    build_version: "2026.9.0",
+    build_channel: "dev" as const,
+  };
+
+  it("accepts a complete identity", () => {
+    expect(parseWrapperBuildInfo(info)).toEqual(info);
+  });
+
+  it("drops malformed identities and keeps valid snapshot siblings", () => {
+    expect(parseWrapperBuildInfo({ ...info, build_channel: "preview" })).toBeNull();
+    expect(
+      parseWrapperBuildInfoSnapshot({
+        good: info,
+        bad: { ...info, build_revision: "spoofed" },
+      }),
+    ).toEqual({ good: info });
+  });
+
+  it("treats non-map snapshots as empty", () => {
+    expect(parseWrapperBuildInfoSnapshot(null)).toEqual({});
+    expect(parseWrapperBuildInfoSnapshot([])).toEqual({});
   });
 });
 

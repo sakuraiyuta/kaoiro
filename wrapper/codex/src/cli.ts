@@ -28,7 +28,12 @@ import type {
   KaoiroState,
   ModelSource,
 } from "@kaoiro/agent-common";
-import { ServerLink, loadConfig, parseCliArgs } from "@kaoiro/wrapper-core";
+import {
+  loadConfig,
+  loadWrapperBuildInfo,
+  parseCliArgs,
+  ServerLink,
+} from "@kaoiro/wrapper-core";
 import { CodexHost, type CodexLifecycleEvent } from "./host.js";
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import { CodexInterAgentTurnCoordinator } from "./inter_agent_turn_coordinator.js";
@@ -118,6 +123,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     process.argv.slice(2),
   );
   const config = readConfig(configPath);
+  const buildInfo = loadWrapperBuildInfo(
+    fileURLToPath(new URL("../dist", import.meta.url)),
+  );
   const turnWatchdogSettings = readTurnWatchdogSettings(
     process.env,
     (message) => process.stderr.write(message),
@@ -480,6 +488,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
     personaId: config.persona.id,
+    buildInfo,
     ...(config.transition_id === undefined
       ? {}
       : { transitionId: config.transition_id }),

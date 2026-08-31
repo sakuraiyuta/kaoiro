@@ -118,6 +118,14 @@
         origin={scenario.expandFromOrigin ? { x: 120, y: 120 } : null}
         {scrollToEntryKey}
         activeTaskCount={scenario.taskRing ?? 0}
+        wrapperBuildInfo={scenario.wrapperBuildInfo
+          ? {
+              build_version: "2026.9.0",
+              build_channel: "dev",
+              build_revision: "0123456789abcdef0123456789abcdef01234567",
+              build_dirty: false,
+            }
+          : null}
         onClose={() => (closed = true)}
       />
     {:else}

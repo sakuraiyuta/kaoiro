@@ -4790,6 +4790,25 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
              }
     end
 
+    test "join 時 operator は接続中 wrapper の build identity snapshot を受ける" do
+      agent_id = "lab-pc-wrapper-build"
+
+      info = %{
+        "build_revision" => "0123456789012345678901234567890123456789",
+        "build_dirty" => false,
+        "build_version" => "2026.9.0",
+        "build_channel" => "dev"
+      }
+
+      assert :ok = KaoiroServer.WrapperBuildInfos.put(agent_id, info, self())
+      on_exit(fn -> KaoiroServer.WrapperBuildInfos.delete(agent_id, self()) end)
+
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "wrapper_build_info", %{"builds" => builds}
+      assert builds[agent_id] == info
+    end
+
     # issue #219 D21/D27 acceptance pin: pack が消えた (persona_id が
     # PersonaAssets で解決不能な) entry は canonical を非開示 ("typed
     # unresolved" — `persona` は `{"id" => ...}` のみ、`name`/`sprite_set`
@@ -4817,21 +4836,33 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_push "directory", %{}
     end
 
-    test "runner_sessions / spawn_result / hosts の live broadcast は operator に届く" do
+    test "runner_sessions / spawn_result / hosts / wrapper_build_info の live broadcast は operator に届く" do
       _operator = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
-      for event <- ["runner_sessions", "spawn_result", "hosts", "catalog_result"] do
+      for event <- [
+            "runner_sessions",
+            "spawn_result",
+            "hosts",
+            "catalog_result",
+            "wrapper_build_info"
+          ] do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
         assert_push ^event, %{"host_id" => "h"}
       end
     end
 
-    test "runner_sessions / spawn_result / hosts は viewer には届かない (fail-closed)" do
+    test "runner_sessions / spawn_result / hosts / wrapper_build_info は viewer には届かない (fail-closed)" do
       _viewer = join_as(:viewer)
       assert_push "snapshot", %{"agents" => _}
 
-      for event <- ["runner_sessions", "spawn_result", "hosts", "catalog_result"] do
+      for event <- [
+            "runner_sessions",
+            "spawn_result",
+            "hosts",
+            "catalog_result",
+            "wrapper_build_info"
+          ] do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
         refute_push ^event, %{}
       end
@@ -6495,12 +6526,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end
     end
 
-    test "T4-3: catch-all 8種は version を stamp する" do
+    test "T4-3: catch-all 9種は version を stamp する" do
       _socket = join_as(:operator)
 
       for event <- ~w(
             runner_sessions spawn_result hosts catalog_result
             session_reset_started session_reset_completed session_reset_failed delivery_status
+            wrapper_build_info
           ) do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"request_id" => "t4"})
         assert_push ^event, %{"version" => "0"}
@@ -6543,10 +6575,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "envelope", %{"version" => "0", "agent_id" => "t4.envelope"}
     end
 
-    test "T4-7: policy は19種のみを許可し、未宣言 event は funnel で拒否する" do
+    test "T4-7: policy は20種のみを許可し、未宣言 event は funnel で拒否する" do
       policy = AgentsChannel.client_event_policy()
 
-      assert MapSet.size(policy) == 19
+      assert MapSet.size(policy) == 20
       refute MapSet.member?(policy, "not_declared")
 
       source = File.read!("lib/kaoiro_server_web/channels/agents_channel.ex")

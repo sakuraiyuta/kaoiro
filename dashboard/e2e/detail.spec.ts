@@ -4,6 +4,14 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const DETAIL = "/e2e/harness/index.html?view=detail";
 
+test("detail shows the connected wrapper build identity", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(`${DETAIL}&wrapperBuild=1`);
+  await expect(
+    page.locator('[data-testid="wrapper-build-info"] dd'),
+  ).toHaveText("kaoiro dev wrapper v2026.9.0 / 0123456");
+});
+
 // T11 (issue #180 follow-up) 幾何回帰の共通ヘルパー。
 
 /** Web Animations API でアニメーションを 0ms (真上、最も高く伸びる点) へ
