@@ -5892,13 +5892,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  describe "list_session_events 経路 (issue #200 Stage C, ADR-0055, require_operator ゲート)" do
-    # A cast-based `SessionLifecycleEvents.append/4` (Stage B round 2
-    # must-fix B2-残り) returns before the store necessarily processed it.
-    # `:sys.get_state/1` forces a synchronous round trip through the SAME
-    # mailbox, so any append issued before it is guaranteed processed by
-    # the time this returns — a deterministic barrier instead of relying
-    # on the channel round-trip's own latency to win the race.
+  describe "list_session_events 経路 (issue #200, ADR-0055, require_operator ゲート)" do
+    # `SessionLifecycleEvents.append/4` casts, so it returns before the
+    # store necessarily processed it. `:sys.get_state/1` forces a
+    # synchronous round trip through the SAME mailbox, so any append
+    # issued before it is guaranteed processed by the time this returns —
+    # a deterministic barrier instead of relying on the channel
+    # round-trip's own latency to win the race.
     defp sync_lifecycle_store do
       _ = :sys.get_state(KaoiroServer.SessionLifecycleEvents)
     end
@@ -5972,12 +5972,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :ok, %{"events" => []}
     end
 
-    # 設計の核心 pin (director裁定 2026-08-31): delete_agent の
-    # purge_agent_records/1 は SessionLifecycleEvents を purge 対象に
-    # 含まないため履歴は残り、fetch_agent_id/fetch_restorable_agent_id
-    # と違い existence check を課さないこのクエリなら削除後も
-    # 問い合わせを継続できる — 事後デバッグ・監査という機能の狙いに
-    # 直結する挙動。
+    # delete_agent の purge_agent_records/1 は SessionLifecycleEvents を
+    # purge 対象に含まないため履歴は残り、fetch_agent_id/
+    # fetch_restorable_agent_id と違い existence check を課さないこの
+    # クエリなら削除後も問い合わせを継続できる — 事後デバッグ・監査と
+    # いう機能の狙いに直結する挙動。
     test "削除済み agent の履歴も問い合わせ可能 (delete_agent は SessionLifecycleEvents を purge しない)" do
       agent_id = "test.lse-deleted-#{System.unique_integer([:positive])}"
       put_disconnected(agent_id)

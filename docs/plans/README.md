@@ -44,6 +44,7 @@ when follow-ups have been spun out into issues.
 | 31 | [phase-31-responsive-ui](phase-31-responsive-ui.md) | ⏳ | Equal three-size responsive dashboard — breakpoint and sheet-mechanism foundation, lobby / AgentDetail / surrounding UI, [ADR-0052](../adr/0052-responsive-three-tier-layout.md) |
 | 32 | [phase-32-subagent-workflow-visibility](phase-32-subagent-workflow-visibility.md) | 🟡 | Visualize internal sub-agent/workflow activity — wrapper detection, server aggregation (operator-only), dashboard ring above the agent, [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) / [ADR-0047](../adr/0047-task-envelope-schema.md) / [ADR-0048](../adr/0048-task-aggregation-delivery.md) |
 | | | | Implementation complete, under internal review (awaiting こはく confirmation, external review, and commit/push) |
+| 33 | [phase-33-compaction-resume-lifecycle](phase-33-compaction-resume-lifecycle.md) | 🟡 | Automatic resume after compaction (wrapper-local `resume_prompt`) and a server-retained `session_lifecycle` timeline with an operator pull query, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md). Live verification of automatic resume on an actual `compact_boundary` awaits the master's confirmation |
 
 ## Feature-local plans
 

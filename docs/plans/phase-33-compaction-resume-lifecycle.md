@@ -1,7 +1,7 @@
 ---
 title: Compaction resume and lifecycle log
 description: Implement the wrapper-local resume_prompt for request_compact and retention of the session_lifecycle timeline with an operator query.
-status: completed
+status: done
 phase: 33
 depends_on: []
 last_updated: 2026-08-31
