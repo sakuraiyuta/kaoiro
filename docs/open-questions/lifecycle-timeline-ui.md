@@ -1,6 +1,6 @@
 ---
-title: 遷移時系列の dashboard UI
-description: session_lifecycle 時系列を dashboard でどう可視化するか (AgentDetail タイムライン vs #175 統合ビュー)
+title: Dashboard UI for the Transition Timeline
+description: How to visualize the session_lifecycle timeline in the dashboard (AgentDetail timeline vs. an integrated #175 view)
 status: open
 urgency: medium
 blocks: []
@@ -8,31 +8,32 @@ opened: 2026-08-31
 decided: null
 ---
 
-# 遷移時系列の dashboard UI
+# Dashboard UI for the Transition Timeline
 
 ## 背景
 
-[ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md) は
-first cut を operator 向け pull query までとし、UI を分離した。
-issue #175 (進行中 compaction の peer / operator への可視化) は
-この記録層の消費者として再定義できる。
+[ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md) limits the
+first cut to a pull query for operators and separates the UI.
+issue #175 (visualization of in-progress compaction for peers / operators) can
+be redefined as a consumer of this recording layer.
 
 ## 選択肢
 
-- A: AgentDetail にタイムライン表示を追加する
-- B: issue #175 と統合した専用ビューを作る
+- A: Add a timeline display to AgentDetail
+- B: Create a dedicated view integrated with issue #175
 
 ## 影響
 
-phase-33 Stage C (pull query) までは query 結果の生データ参照のみで、
-UI での俯瞰はできない。
+Up through phase-33 Stage C (pull query), only raw query results can be
+inspected; there is no UI overview.
 
 ## 判断材料
 
-issue #175 側の要求 (リアルタイム性・peer への開示範囲) と、時系列
-俯瞰 (事後デバッグ) の要求がどこまで同じ画面で満たせるか。
+How far the requirements on the issue #175 side (real-time behavior and the
+scope of disclosure to peers) and the requirements for a timeline overview
+(post-hoc debugging) can be met on the same screen.
 
 ## 暫定方針
 
-別 issue として起票し、#175 をこの土台の消費者として再定義する
-(スコープは着手時に決定)。
+File as a separate issue and redefine #175 as a consumer of this foundation
+(determine the scope when work begins).
