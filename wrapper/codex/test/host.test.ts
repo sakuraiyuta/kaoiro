@@ -546,14 +546,17 @@ describe("CodexHost", () => {
         return {
           async runStreamed() {
             async function* events(): AsyncGenerator<ThreadEvent> {
-              yield { type: "thread.started", thread_id: "boundary" };
-              yield { type: "turn.started" };
-              // This runs only after the host consumes turn.started, keeping
-              // setModel inside the active turn rather than after it settles.
-              firstTurnStarted.resolve();
-              await gate;
-              yield usageEvent();
-              turnConsumed[0]!.resolve();
+              try {
+                yield { type: "thread.started", thread_id: "boundary" };
+                yield { type: "turn.started" };
+                // This runs only after the host consumes turn.started, keeping
+                // setModel inside the active turn rather than after it settles.
+                firstTurnStarted.resolve();
+                await gate;
+                yield usageEvent();
+              } finally {
+                turnConsumed[0]!.resolve();
+              }
             }
             return { events: events() };
           },
@@ -564,8 +567,11 @@ describe("CodexHost", () => {
         return {
           async runStreamed() {
             async function* events(): AsyncGenerator<ThreadEvent> {
-              yield usageEvent();
-              turnConsumed[1]!.resolve();
+              try {
+                yield usageEvent();
+              } finally {
+                turnConsumed[1]!.resolve();
+              }
             }
             return { events: events() };
           },
@@ -1816,11 +1822,14 @@ describe("CodexHost", () => {
         resumeThread: () => ({
           async runStreamed() {
             async function* events(): AsyncGenerator<ThreadEvent> {
-              yield { type: "turn.started" };
-              turnStarted.resolve();
-              await releaseTerminal.promise;
-              yield usageEvent();
-              turnFinished.resolve();
+              try {
+                yield { type: "turn.started" };
+                turnStarted.resolve();
+                await releaseTerminal.promise;
+                yield usageEvent();
+              } finally {
+                turnFinished.resolve();
+              }
             }
             return { events: events() };
           },
@@ -1871,16 +1880,19 @@ describe("CodexHost", () => {
         startThread: () => ({
           async runStreamed() {
             async function* events(): AsyncGenerator<ThreadEvent> {
-              yield { type: "thread.started", thread_id: "uuid-fresh-rate-limits" };
-              yield { type: "turn.started" };
-              // This defensive case covers a rollout that already has a
-              // token_count at thread.started. Current observed rollouts
-              // usually write it later, after session metadata; the terminal
-              // refresh below remains the ordinary path for those sessions.
-              turnStarted.resolve();
-              await releaseTerminal.promise;
-              yield usageEvent();
-              turnFinished.resolve();
+              try {
+                yield { type: "thread.started", thread_id: "uuid-fresh-rate-limits" };
+                yield { type: "turn.started" };
+                // This defensive case covers a rollout that already has a
+                // token_count at thread.started. Current observed rollouts
+                // usually write it later, after session metadata; the terminal
+                // refresh below remains the ordinary path for those sessions.
+                turnStarted.resolve();
+                await releaseTerminal.promise;
+                yield usageEvent();
+              } finally {
+                turnFinished.resolve();
+              }
             }
             return { events: events() };
           },
@@ -2262,6 +2274,60 @@ describe("CodexHost", () => {
       expect(turnEnds).toHaveLength(1);
       expect(turnEnds[0]).toMatchObject({ conversationIds: [] });
       expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
+    });
+
+    it("terminal event 後に stream が EOF を遅延させても次 turn を開始する", async () => {
+      const firstEnded = deferred<void>();
+      const releaseFirstStream = deferred<void>();
+      const starts: string[] = [];
+      const ends: string[] = [];
+      let runCount = 0;
+      const thread: CodexThreadLike = {
+        async runStreamed() {
+          const current = ++runCount;
+          async function* events(): AsyncGenerator<ThreadEvent> {
+            yield usageEvent();
+            if (current === 1) await releaseFirstStream.promise;
+          }
+          return { events: events() };
+        },
+      };
+      const client: CodexClientLike = {
+        startThread: () => thread,
+        resumeThread: () => thread,
+      };
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnStart: ({ turnToken }) => starts.push(turnToken),
+        onTurnEnd: ({ turnToken }) => {
+          ends.push(turnToken);
+          if (turnToken === "turn-1") firstEnded.resolve();
+        },
+        now: () => "T",
+      });
+      const running = host.run();
+
+      try {
+        await host.send("first", undefined, ["cnv-1"], "turn-1");
+        await firstEnded.promise;
+        await host.send("second", undefined, ["cnv-2"], "turn-2");
+
+        await vi.waitFor(
+          () => expect(starts).toEqual(["turn-1", "turn-2"]),
+          { timeout: 1_000 },
+        );
+      } finally {
+        // On the pre-fix path the assertion times out while the first
+        // generator is still open. Release it so cleanup remains deterministic
+        // and the test does not leave a host loop behind after a failure.
+        releaseFirstStream.resolve();
+        host.close();
+        await running;
+      }
+
+      expect(ends).toEqual(["turn-1", "turn-2"]);
     });
 
     it("終端イベント無しでストリームが終わると detail 無しの error で onTurnEnd を呼ぶ", async () => {
