@@ -65,6 +65,7 @@ describe("Codex watchdog host boundary", () => {
     const states: string[] = [];
     const lifecycle: Array<Record<string, unknown>> = [];
     const finalized: string[] = [];
+    const boundaries: string[] = [];
 
     const client = clientFor(async function* events() {
       yield { type: "thread.started", thread_id: "watchdog-session" };
@@ -81,6 +82,7 @@ describe("Codex watchdog host boundary", () => {
       onTurnStart: () => activeStarted.resolve(),
       onTurnEnd: (info) => turnEnds.push(info as Record<string, unknown>),
       onLifecycle: (event) => lifecycle.push(event as Record<string, unknown>),
+      onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
       onTurnFinalized: ({ turnToken }) => finalized.push(turnToken),
       appendSystemPrompt: "p",
       codexFactory: () => client,
@@ -116,6 +118,7 @@ describe("Codex watchdog host boundary", () => {
     // the active token after the watchdog has made its outcome unknown.
     expect(turnEnds).toHaveLength(1);
     expect(states).toEqual(["sending", "error"]);
+    expect(boundaries).toEqual([]);
     expect(finalized).toEqual(["turn-second", "turn-first"]);
     expect(lifecycle).toEqual([
       { kind: "turn_start", turnToken: "turn-first" },
@@ -174,6 +177,7 @@ describe("Codex watchdog host boundary", () => {
     const activeStarted = deferred<void>();
     const releaseActive = deferred<void>();
     const turnEnds: Array<Record<string, unknown>> = [];
+    const boundaries: string[] = [];
     const client = clientFor(async function* events() {
       yield { type: "thread.started", thread_id: "watchdog-eof-session" };
       await releaseActive.promise;
@@ -181,6 +185,7 @@ describe("Codex watchdog host boundary", () => {
     const host = new CodexHost(CONFIG, {
       onState: () => {},
       onTurnStart: () => activeStarted.resolve(),
+      onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
       onTurnEnd: (info) => turnEnds.push(info as Record<string, unknown>),
       appendSystemPrompt: "p",
       codexFactory: () => client,
@@ -195,6 +200,7 @@ describe("Codex watchdog host boundary", () => {
     await running;
 
     expect(turnEnds).toEqual([]);
+    expect(boundaries).toEqual([]);
   });
 
   it("fail-stop cleans queued image directories but retains the active directory", async () => {

@@ -298,27 +298,31 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     seqFirst?: number;
     seqLast?: number;
   }): void => {
-    const range = lifecycleRange(event.turnToken);
-    const record: Record<string, unknown> = {
-      at: new Date().toISOString(),
-      event: event.event,
-      ...(event.turnToken === undefined ? {} : { turn_token: event.turnToken }),
-      ...(event.type === undefined ? {} : { type: event.type }),
-      ...(event.authoritative === undefined
-        ? {}
-        : { authoritative: event.authoritative }),
-      ...(event.terminalSeen === undefined
-        ? {}
-        : { terminal_seen: event.terminalSeen }),
-      ...(event.seq === undefined ? {} : { seq: event.seq }),
-    } as Record<string, unknown>;
-    const first = event.seqFirst ?? range?.seqFirst;
-    const last = event.seqLast ?? range?.seqLast;
-    if (first !== undefined) record.seq_first = first;
-    if (last !== undefined) record.seq_last = last;
-    process.stderr.write(
-      `[kaoiro][codex-lifecycle] ${JSON.stringify(record)}\n`,
-    );
+    try {
+      const range = lifecycleRange(event.turnToken);
+      const record: Record<string, unknown> = {
+        at: new Date().toISOString(),
+        event: event.event,
+        ...(event.turnToken === undefined ? {} : { turn_token: event.turnToken }),
+        ...(event.type === undefined ? {} : { type: event.type }),
+        ...(event.authoritative === undefined
+          ? {}
+          : { authoritative: event.authoritative }),
+        ...(event.terminalSeen === undefined
+          ? {}
+          : { terminal_seen: event.terminalSeen }),
+        ...(event.seq === undefined ? {} : { seq: event.seq }),
+      } as Record<string, unknown>;
+      const first = event.seqFirst ?? range?.seqFirst;
+      const last = event.seqLast ?? range?.seqLast;
+      if (first !== undefined) record.seq_first = first;
+      if (last !== undefined) record.seq_last = last;
+      process.stderr.write(
+        `[kaoiro][codex-lifecycle] ${JSON.stringify(record)}\n`,
+      );
+    } catch {
+      // Lifecycle output is diagnostic-only and must not alter turn control.
+    }
   };
 
   const describeTurnWatchdogWarning = (warning: TurnWatchdogWarning): string => {
@@ -595,21 +599,17 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       turnWatchdog.end(turnToken);
     },
     onLifecycle: (event: CodexLifecycleEvent) => {
-      try {
-        writeCodexLifecycle({
-          event: event.kind,
-          turnToken: event.turnToken,
-          ...(event.kind === "sdk_event" ? { type: event.type } : {}),
-          ...(event.kind === "terminal"
-            ? { type: event.type, authoritative: event.authoritative }
-            : {}),
-          ...(event.kind === "stream_eof"
-            ? { terminalSeen: event.terminalSeen }
-            : {}),
-        });
-      } catch {
-        // Lifecycle output is diagnostic-only and must not alter turn control.
-      }
+      writeCodexLifecycle({
+        event: event.kind,
+        turnToken: event.turnToken,
+        ...(event.kind === "sdk_event" ? { type: event.type } : {}),
+        ...(event.kind === "terminal"
+          ? { type: event.type, authoritative: event.authoritative }
+          : {}),
+        ...(event.kind === "stream_eof"
+          ? { terminalSeen: event.terminalSeen }
+          : {}),
+      });
     },
     onTurnFinalized: ({ turnToken }) => {
       lifecycleRanges.delete(turnToken);

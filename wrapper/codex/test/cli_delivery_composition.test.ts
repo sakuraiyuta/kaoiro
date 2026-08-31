@@ -212,6 +212,72 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     }
   });
 
+  it("lifecycle sink failure does not block delivery ack or dispatch to host.send", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      if (String(chunk).startsWith("[kaoiro][codex-lifecycle] ")) {
+        throw new Error("diagnostic sink unavailable");
+      }
+      return true;
+    });
+    const acknowledgements: number[] = [];
+    const sends: string[] = [];
+    let linkOptions!: Record<string, any>;
+    let hostOptions!: Record<string, any>;
+    const link = {
+      acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
+      close: () => {},
+      currentSessionId: () => null,
+      send: () => {},
+    };
+    const host = {
+      state: "idle",
+      statusExtSnapshot: () => ({}),
+      run: async () => {},
+      send: async (
+        text: string,
+        _attachments: unknown,
+        _conversationIds: readonly string[],
+        turnToken: string,
+      ) => {
+        sends.push(text);
+        hostOptions.onTurnStart({ turnToken });
+      },
+    };
+
+    try {
+      await runCodexCli({
+        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        loadConfig: () => ({ ...config }),
+        createServerLink: (_url, _agentId, options) => {
+          linkOptions = options as unknown as Record<string, any>;
+          queueMicrotask(() => {
+            (options.onPersonaPrompt as (prompt: string) => void)("system prompt");
+          });
+          return link as never;
+        },
+        createHost: (_config, options) => {
+          hostOptions = options as unknown as Record<string, any>;
+          return host as never;
+        },
+        prepareStartup: async () => {},
+      });
+
+      (linkOptions.onInterAgentDeliveryStatus as (status: { acked_seq: number }) => void)({
+        acked_seq: 19,
+      });
+      await (linkOptions.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(
+        inboundEnvelope(20),
+      );
+      await vi.waitFor(() => {
+        expect(acknowledgements).toEqual([20]);
+        expect(sends).toHaveLength(1);
+      });
+      expect(sends[0]).toContain("hello");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
   it.each([
     {
       label: "authoritative terminal",
