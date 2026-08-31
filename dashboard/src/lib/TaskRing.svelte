@@ -1,4 +1,9 @@
 <script lang="ts">
+  import {
+    readDevTaskRingOffset,
+    taskRingTopWithDevOffset,
+  } from "./taskRingOffset";
+
   let {
     faceOrbit = false,
     orbitRx,
@@ -43,6 +48,18 @@
      *  translate. */
     count?: number;
   } = $props();
+
+  // This is intentionally read at component creation so reloading the dev
+  // URL is enough to dial the live geometry. `import.meta.env.DEV` makes the
+  // knob unavailable in production builds; with no knob the existing inline
+  // top (or the CSS fallback) is left untouched.
+  const devTaskRingOffset = readDevTaskRingOffset(
+    typeof window === "undefined" ? "" : window.location.search,
+    import.meta.env.DEV,
+  );
+  const resolvedTopOffset = $derived(
+    taskRingTopWithDevOffset(topOffset, devTaskRingOffset),
+  );
 
   // Must equal @keyframes task-ring-orbit's `animation` duration below —
   // the phase-delay math needs the real period to convert an angular
@@ -116,7 +133,7 @@
     style:--phase-delay="{dot.delayMs}ms"
     style:--dot-x={dot.x}
     style:--dot-y={dot.y}
-    style:top={topOffset}
+    style:top={resolvedTopOffset}
   ></span>
 {/each}
 
@@ -203,7 +220,10 @@
      `calc(-2% + 8px)` の px 加算項で高さに依存せず一律 8px シフトさせる
      (top が増えると画面下方向に動く CSS の座標系どおり)。8px は過去に
      問題を起こした 12% との差分 (sprite ケースで約 17.9px 相当) の半分
-     未満であり、6 時相のグレア同化を再現しない範囲と判断。 */
+     未満であり、6 時相のグレア同化を再現しない範囲と判断。
+
+     Dev Vite では `?taskRingOffset=N` でこの pixel 項だけを一時的に
+     差し替えられる。パラメータ無しの既定値と production build は不変。 */
   .task-ring {
     position: absolute;
     left: 50%;

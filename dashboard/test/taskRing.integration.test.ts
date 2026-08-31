@@ -7,12 +7,18 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import TaskRing from "../src/lib/TaskRing.svelte";
+import {
+  readDevTaskRingOffset,
+  taskRingTopWithDevOffset,
+} from "../src/lib/taskRingOffset";
 
 const mounted: object[] = [];
+const initialUrl = window.location.href;
 
 afterEach(async () => {
   for (const component of mounted.splice(0)) await unmount(component);
   document.body.innerHTML = "";
+  window.history.replaceState(null, "", initialUrl);
 });
 
 async function render(count?: number) {
@@ -130,5 +136,22 @@ describe("TaskRing (issue #233)", () => {
       );
       expect((ring as HTMLElement).style.top).toBe("10%");
     }
+  });
+
+  it("dev の taskRingOffset は card の既定アンカーへ pixel 項だけを適用する", async () => {
+    window.history.replaceState(null, "", "?taskRingOffset=14");
+    const target = await render(2);
+
+    for (const ring of Array.from(target.querySelectorAll(".task-ring"))) {
+      expect((ring as HTMLElement).style.top).toBe("calc(-2% + 14px)");
+    }
+  });
+
+  it("taskRingOffset は production 判定では無視する", () => {
+    expect(readDevTaskRingOffset("?taskRingOffset=14", false)).toBeNull();
+    expect(readDevTaskRingOffset("?taskRingOffset=bad", true)).toBeNull();
+    expect(taskRingTopWithDevOffset("calc(6% + 8px)", null)).toBe(
+      "calc(6% + 8px)",
+    );
   });
 });

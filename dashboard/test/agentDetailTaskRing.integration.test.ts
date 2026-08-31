@@ -133,4 +133,11 @@ describe("AgentDetail 頭上リング (issue #180 follow-up)", () => {
     const ring = target.querySelector(".task-ring") as HTMLElement | null;
     expect(ring?.style.top).toBe("calc(6% + 8px)");
   });
+
+  it("dev の taskRingOffset は AgentDetail のリングへ反映される", async () => {
+    window.history.replaceState(null, "", "?taskRingOffset=14");
+    const target = await render(1, manifestWithSprite);
+    const ring = target.querySelector(".task-ring") as HTMLElement | null;
+    expect(ring?.style.top).toBe("calc(6% + 14px)");
+  });
 });

@@ -13,10 +13,12 @@ import {
 import type { Envelope, PersonaManifest } from "../src/lib/protocol";
 
 const mounted: object[] = [];
+const initialUrl = window.location.href;
 
 afterEach(async () => {
   for (const component of mounted.splice(0)) await unmount(component);
   document.body.innerHTML = "";
+  window.history.replaceState(null, "", initialUrl);
 });
 
 function envelope(): Envelope {
@@ -132,5 +134,13 @@ describe("AgentCard 頭上リング (issue #180)", () => {
     const ring = target.querySelector(".task-ring");
     expect(ring).not.toBeNull();
     expect(ring?.classList.contains("face-orbit")).toBe(false);
+  });
+
+  it("dev の taskRingOffset は AgentCard のリングへ反映される", async () => {
+    window.history.replaceState(null, "", "?taskRingOffset=14");
+    const target = await render(1);
+    expect((target.querySelector(".task-ring") as HTMLElement).style.top).toBe(
+      "calc(-2% + 14px)",
+    );
   });
 });

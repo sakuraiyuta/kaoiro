@@ -103,6 +103,23 @@ test.describe("T12: 頭上リング (AgentCard, issue #231)", () => {
     const expectedTop = slotBox.height * -0.02 + 8;
     expect(Math.abs(topPx - expectedTop)).toBeLessThan(1);
   });
+
+  test("dev の taskRingOffset が 1920x1080 の実測 apex に反映される", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto(`${OPERATOR}&taskRing=1&taskRingOffset=14`);
+    const slot = page.locator(".sprite-slot").first();
+    const ring = page.locator(".task-ring").first();
+    await expect(ring).toBeVisible();
+
+    const slotBox = (await slot.boundingBox())!;
+    const topPx = await ring.evaluate((el) =>
+      parseFloat(getComputedStyle(el).top),
+    );
+    const expectedTop = slotBox.height * -0.02 + 14;
+    expect(Math.abs(topPx - expectedTop)).toBeLessThan(1);
+  });
 });
 
 // T13 (issue #233, validated design in issue #233 comment 5450038052):

@@ -2,9 +2,9 @@
 // scenario from query params and mounts PRODUCTION components with fixture
 // data — no Phoenix server, no WebSocket round-trips.
 //
-//   ?view=lobby&role=operator|viewer[&taskRing=N]
+//   ?view=lobby&role=operator|viewer[&taskRing=N][&taskRingOffset=px]
 //   ?view=detail[&pending=permission|question][&attention=1]
-//     [&mountDelay=ms][&expandOrigin=1][&taskRing=N]
+//     [&mountDelay=ms][&expandOrigin=1][&taskRing=N][&taskRingOffset=px]
 //   ?view=overlay&overlay=dialog|drawer|persona|dialog-triggered|drawer-triggered
 //   ?view=app        — real App.svelte behind fetch mocks (header chrome)
 import { mount } from "svelte";

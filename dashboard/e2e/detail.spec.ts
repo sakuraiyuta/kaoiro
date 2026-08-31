@@ -243,6 +243,24 @@ test.describe("T12: 頭上リングの apex 移動 (AgentDetail, issue #231)", (
       expect(apexDrop).toBeLessThan(9);
     });
   }
+
+  test("dev の taskRingOffset が 1920x1080 の実測 apex に反映される", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto(`${DETAIL}&taskRing=1&sprite=1&taskRingOffset=14`);
+    const portrait = page.locator("aside.status .portrait");
+    const ring = portrait.locator(".task-ring");
+    await expect(ring).toBeVisible();
+    await freezeRingAtApex(ring);
+
+    const portraitBox = (await portrait.boundingBox())!;
+    const topPx = await ring.evaluate((el) =>
+      parseFloat(getComputedStyle(el).top),
+    );
+    const expectedTop = portraitBox.height * 0.06 + 14;
+    expect(Math.abs(topPx - expectedTop)).toBeLessThan(1);
+  });
 });
 
 test("T8: handle attention badge returns to the grid while the sheet is open", async ({ page }) => {
