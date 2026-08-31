@@ -1,5 +1,5 @@
 ---
-title: dashboard の OAuth 個人認証 (Google/GitHub/Nextcloud) + 許可リスト
+title: dashboard OAuth Personalリスト (Google/GitHub/Nextcloud) + Permission List
 status: accepted
 date: 2026-07-26
 opened: 2026-07-26
@@ -9,183 +9,183 @@ related_specs: [auth-and-authz, threat-model]
 related_adrs: [5, 11, 13, 21]
 ---
 
-# ADR-0042 — dashboard の OAuth 個人認証 + 許可リスト
+# ADR-0042 — dashboard OAuth PersonalList + Permission List
 
 ## Status
 
-Accepted (2026-07-26 マスター指示により issue #65 を実装対象へ昇格、
-仕様確定)
+Accepted (2026 -26 Assigned to issue #65,
+Specification)
 
 ## Context
 
-dashboard の認証は共有トークン (`KAOIRO_CLIENT_TOKENS` = `token:role`)
-のみで、「役割」は識別できるが「人」を識別できない (ADR-0011/0013)。
-ADR-0005 は本線を「OAuth + RBAC、プロトタイプは許可メールの
-ホワイトリスト stub」と定めており、本 ADR はその本実装の方式決定。
+dashboard authentication is a shared  (`KAOIRO_CLIENT_TOKENS` = `token:role`)
+ADR-0011/0013
+ADR 5 "OAuth + RBAC, Prototype is allowed mail
+The whitelist stub is defined, and this ADR determines the approach of this implementation.
 
-前提となる既存配管 (ADR-0013 / #47):
+Premise existing  (ADR-0013 / #47):
 
-- session cookie (httpOnly + 暗号化、3 日スライディング + 12h refresh)
-- WS 認証は 30 秒暗号化 ticket 経由、`connect/3` は
-  ticket → token param → session の順で解決
-- logout / refresh 401 は `Auth.socket_id/1` 宛 broadcast で稼働中
-  socket を即時切断
+- session cookie (httpOnly + encryption, 3 days sliding + 12h refresh)
+- WS authentication via 30 seconds encryption ticket, `connect/3`
+ticket → session param → session
+- logout / refresh 401 is running to `Auth.socket_id/1`
+Instantly disconnect socket
 
-現状 server に OAuth ライブラリ・HTTP client・Ecto はない (依存 7 個)。
+There is no OAuth library, HTTP client, or Ecto in the current server.
 
 ## Decision
 
-1. **ライブラリ = assent** (pow-auth/assent) + HTTP client (Req)。
-   Google / GitHub は組み込み strategy、Nextcloud は
-   `Assent.Strategy.OAuth2.Base` のカスタム strategy
+1. **library = assent** (pow-auth/assent) + HTTP client (Req)。
+Google / GitHub is built-in strategy, Nextcloud is
+`Assent.Strategy.OAuth2.Base`
    (authorize `/apps/oauth2/authorize`、token
-   `/apps/oauth2/api/v1/token`、identity は OCS
-   `/ocs/v2.php/cloud/user?format=json`)。ueberauth は plug 結合と
-   依存の厚みで不採用。
-2. **provider 設定は env** (`runtime.exs`):
+`/apps/oauth2/api/v1/token`, identity is OCS
+`/ocs/v2.php/cloud/user?format=json`. ueberauth with plug binding
+dependent thickness.
+2. **The provider configuration is** (`runtime.exs`):
    `KAOIRO_OAUTH_{GOOGLE,GITHUB,NEXTCLOUD}_CLIENT_ID` / `_CLIENT_SECRET`
-   と `KAOIRO_OAUTH_NEXTCLOUD_BASE_URL`。id + secret (+ Nextcloud は
-   base_url) が揃った provider のみ有効。redirect URI は endpoint の
-   `url` 設定から導出:
+and `KAOIRO_OAUTH_NEXTCLOUD_BASE_URL`. id + secret
+base url) is only valid for the provider. endpoint
+`url` Configuration:
    `{scheme}://{host}[:{port}]/auth/{provider}/callback`。
-3. **許可リスト = テキストファイル**。path は
-   `KAOIRO_OAUTH_ALLOWLIST_PATH`。書式は 1 行 1 エントリ
-   `provider:identifier[:role]`、`#` コメント・空行可、role 省略時は
-   viewer (安全側既定)。identifier は google = email (小文字比較)、
-   github = login、nextcloud = user id。認証時と再検証時に毎回 parse
-   (env token と同じ方針 — 失効が次の connect/refresh で反映)。
-   未設定・ファイル欠落・エントリ不一致は OAuth 認証拒否
-   (fail-closed)。malformed 行は warn + skip (fail-visible)。
-   SQLite (ADR-0005 の選択肢) は Ecto 不在の現状に対し過剰で不採用。
-   運用者が編集する静的設定なので DETS も不適。
-4. **session には identity を格納** (`%{provider, uid}`)。role は
-   格納せず、connect / refresh のたび許可リストで再解決する
-   (token 経路の `Auth.client_role/1` 再検証と同型)。ticket は
-   identity を暗号化して運び、socket id は
-   `sha256("oauth:" <> provider <> ":" <> uid)`。寿命・refresh・
-   logout・強制切断は ADR-0013 / #47 の機構をそのまま使う。
-   **provider の access token は identity 取得後に破棄し保存しない**
-   (Nextcloud OAuth2 は scope 非対応で token がフルアクセスのため)。
-5. **token 認証との併存**: `KAOIRO_CLIENT_TOKENS` 未設定時は token
-   認証無効 (既存 fail-closed のまま = server 側変更なし)。dashboard
-   は新設 `GET /session/auth-methods`
-   (`{"token": bool, "oauth": [provider, ...]}`) で UI を出し分け、
-   token 入力フォームは token 有効時のみ、OAuth ボタンは有効 provider
-   のみ表示する。
-6. **route**: `GET /auth/:provider` (302 → provider。state/PKCE の
-   session_params は session に保存)、`GET /auth/:provider/callback`
-   (state 検証 → identity 取得 → 許可リスト照合 → `put_session` →
-   302 `/index.html`)。失敗は 302
+3. **Permission list = text file**Home path
+`KAOIRO_OAUTH_ALLOWLIST_PATH` Format 1 line 1 entry
+`provider:identifier[:role]`, `#` Comments, empty lines, role omitted
+viewer identifier is google = email (compare),
+github = login,ttcloud = user id. parse every time you authenticate and reverify
+(the same policy as env  — the expiration is reflected in the following connect/refresh).
+Unset, file missing, and entry unmatched are rejected by OAuth
+(fail-closed) malformed lines are warn + skip (fail-visible).
+SQLite (ADR 5 option) is over-adopted against the current situation of absence of Ecto.
+DETS is not suitable because it is a static setting that the operator edits.
+4. **session contains identity**(`%{provider, uid}`) role
+Resolve in the permission list every time connected / refresh is not stored
+(same as `Auth.client_role/1` reverification of theRoute route). Ticket
+encrypt identity and socket id
+`sha256("oauth:" <> provider <> ":" <> uid)` Lifetime・refresh・
+ADR-0013 / #47
+   **The access  of the provider will not be destroyed and saved after obtaining identity**
+(Nextcloud OAuth2 does not support scope for full access).
+5. **Consistent with  Certification**: `KAOIRO_CLIENT_TOKENS` Not set
+Invalid authentication (with fail-closed = without server side changes). dashboard
+New `GET /session/auth-methods`
+(`{"token": bool, "oauth": [provider, ...]}`)
+The provider input form is only valid when the provider is enabled, and the OAuth button is valid
+only display.
+6. **route**: `GET /auth/:provider` (302 → provider. state/PKCE
+session params is saved in session), `GET /auth/:provider/callback`
+`put_session`
+302 `/index.html`. failure 302
    `/index.html?auth_error={provider_error|not_allowed|invalid_state}`
-   で dashboard 側がログイン画面に文言表示。
+In dashboard side displays a word on the login screen.
 
 ## Consequences
 
 ### Positive
 
-- 個人単位の認証と role 付与ができ、許可リストの行削除が次の
-  connect/refresh (最長 12h) + 明示 revoke で失効に落ちる。稼働中 socket
-  への反映は #148(操作のたび再解決)に加え #160(変更を一度も操作しない
-  passive socket にも change-driven に効く)で強化済み — 詳細は本 ADR
-  末尾の Addendum。
-- ADR-0013 の cookie/ticket/logout 配管を identity 差し替えのみで
-  再利用し、WS 層・channel 層 (role gate) は無変更。
+- role and role grants per individual, andJapanese term removal of permission list is as follows:
+connect/refresh (maximum 12h) + explicit revoke socket
+In addition to #148 (resolving every operation), #160 (does not operate any changes once)
+The passive socket is also change with change-driven — the ADR
+Addendum at the end.
+- ADR-0013's cookie/ticket/logout pipe is only replaced
+Reuse and unchanged WS and channel layers (role gate).
 
 ### Negative
 
-- server に新規依存 (assent + HTTP client) が入る。
-- Google は redirect URI に https を要求する (localhost を除く) ため、
-  plain-HTTP 配備 (KAOIRO_PLAIN_HTTP、例: linux-host) では Google
-  ログインは使えない。GitHub / Nextcloud は http redirect 可の想定
-  (実装時に要確認)。
-- 同一人物が複数 provider で入ると別 identity になる (統合はしない)。
+- new dependencies (assent + HTTP client) are included in the server.
+- Google requests https to redirect URI (except localhost)
+plain-HTTP deployment (KHomeIRO PLAIN HTTP, e.g.  -host), Google
+Login is not available. GitHub / Nextcloud
+(Confirmation required when implementing)
+- If the same person enters multiple providers, it becomes another identity (not integration).
 
 ### Neutral
 
-- ~~RBAC の役割粒度は operator / viewer の現行 2 値を維持。細分化~~
-  **撤回 (2026-08-14、issue #188)。** role は admin / operator / viewer
-  の 3 値になった ([ADR-0050](0050-principal-model-and-graded-access-control.md)
-  D2)。許可リストのテキスト形式は `provider:identifier[:role]` のまま
-  で、role 語に `admin` が加わっただけなので、本 ADR の形式と issue #160
-  の watcher の前提は変わらない。以下は撤回前の記述: 細分化
-  (approver 等) は将来。
-- 監査ログ・マルチテナント隔離は本 ADR のスコープ外 (auth-and-authz
-  Known gaps のまま)。
+- The role particle size of ~~RBAC maintains the current value of operator / viewer. More
+  **With al (2026 (2014, issue #188).**admin / viewer
+ADR-0050
+D2). Allow list text format remains `provider:identifier[:role]`
+role = `admin`
+watcher The following are descriptions before withdrawal: subdivision
+(approver, etc.)
+- Audit log multi-tenant iso  outside the scope of this ADR (auth-and-authz)
+Known gaps
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| ueberauth + strategies | plug 結合が厚く Nextcloud strategy がない。assent は素の関数群で test しやすい |
-| 許可リストを env 直書き | エントリが増えると .env が肥大 (#83 の問題意識)。ファイル分離が運用しやすい |
-| 許可リストを SQLite | Ecto 不在。静的設定に DB は過剰 (ADR-0005 の stub 選択肢だが現状と乖離) |
-| 許可リストを DETS | server が書く runtime 状態向け。運用者が手編集する設定には不向き |
-| session に role を格納 | 失効が cookie 期限まで効かない。ADR-0013 と同じ理由で毎回再解決 |
-| provider token の保持 | Nextcloud token がフルアクセスで漏洩コスト過大。identity 取得後に破棄 |
+| ueberauth + strategies |Nextcloud strategy assent is easy to test in the function group|
+|Directly write permission list|.env is hypertrophy (#83 problem consciousness) when entry increases. Easy to use file separation|
+|SQLite|Ecto Absent Excess DB for static setting (ADR st5's stub option but deviated from current situation)|
+|DETS permission list|server for runtime state. Unsuitable for setting the operator to manually edit|
+|Include roles in the session|The expired cookie does not expire. Resolving every time for the same reason as ADR-0013|
+|Retention of provider |Nextcloud  is full access and costly leaking. identity destroyed after obtaining|
 
-## Addendum (issue #160, 2026-08-05): passive socket への change-driven disconnect
+## Change-driven disconnect to passive socket
 
-**背景。** #148 は「operator 操作のたびに role を再解決し、不一致なら
-disconnect」という方式で稼働中 socket への降格反映を実現したが、これは
-「操作した瞬間に切る」方式であり、降格後に一度も operator 操作をしない
-socket は `AgentsChannel.handle_out` の operator 限定配信(tool input
-等)を受け続けていた。#148 実装時点でこれは fan-out のホットパスで毎
-envelope × 毎 subscriber に許可リストを読み直すコストを理由に意図的に
-見送られていた(あお判断)。
+**Background**#148 resolves roles every time the operator operation is unmatched
+"disconnect" approach enables the demotion to the socket in operation, but this
+"It's right at the moment of operation" is approach, and do not operate the operator once after disqualification
+socket is available only for `AgentsChannel.handle_out` operator.
+etc.) #148 This is a fan-out hotpass every time
+envel  × intentionally because of the cost of reading permission list for each subscriber
+(Home judgment).
 
-**決定。** 見送りの再検証の結果、ホットパスに触れない別方式を採用した:
+**Contact Us**As a result of re-verification of the view, another approach that does not contain a hot pass has been adopted:
 
-- `KaoiroServer.OAuthAllowlistWatcher` が許可リストファイルの変更を
-  file_system イベント(fast path、bounded debounce)と periodic
-  reconcile(backstop、event 取りこぼしを bound)の両方で検知する。
-- 検知のたびに許可リストの **snapshot 差分**(`{provider, identifier}
-  => role` の追加・削除・role 変更)だけを計算し、変更があった identity
-  にだけ `Endpoint.broadcast(oauth_socket_id, "disconnect", %{})` を撃つ
-  (#47/#148 と同じ機構の再利用、新しい broadcast 経路は増やさない)。
-  稼働中 socket の列挙は一切行わない(そのための機構はこのコードベース
-  に存在しないことを実測済み)。
-- 差分計算の checkpoint は `:persistent_term` に保持する。認可判断の
-  SoT は変わらず許可リストファイル自身(`role_for/2` は今までどおり
-  毎回ファイルを読み直す)で、checkpoint は watcher プロセスの再起動を
-  越えて「どこまで反映したか」を追跡するためだけの補助状態。
-  `:persistent_term.put/2` は global GC を誘発するため、差分が空なら
-  put しない。
-- `AgentsChannel.join/3` は connect → join の間に許可リストが変わった
-  socket を live re-resolve で弾く(connect と join の間、transport が
-  socket-id topic の subscribe を終える前に watcher の disconnect が
-  発火すると取りこぼす窓があるため、join 自体を最後の砦にする)。
+- `KaoiroServer.OAuthAllowlistWatcher` changes the permission list file
+file system Events (fast path, bordered debounce) and periodic
+Detect both reconcile (backstop, event bound).
+- Permission list for each detection**snapshot**(`{provider, identifier}
+  => role`Add/Remove/role change) only and changed identity
+Only shoot `Endpoint.broadcast(oauth_socket_id, "disconnect", %{})`
+(reuse of the same mechanism as #47/#148 and do not increase the new broadcast route).
+Not enumerating sockets in operation (this codebase)
+not existed).
+- The checkpoint of the differential calculation is stored in `:persistent_term`. Authorization
+`role_for/2` is
+checkpoint restarts the watcher process)
+Auxiliary state only to track "how far reflected?" beyond.
+`:persistent_term.put/2` triggers global GC, so if the difference is empty
+not put.
+- `AgentsChannel.join/3` changes the permission list between connect → join
+The socket is played with live re-resolve (transport is
+watcher disconnect before the socket-id topic subscribe
+The join itself is the last fort because there is a window thatHomes when fired.
 
-**Negative(このコードベースにとっての新しいトレードオフ)。**
+**Negative (new trade-off for this codebase).**
 
-- watcher プロセスの crash → restart 自体は、**retained checkpoint と
-  現在の内容が unchanged なら disconnect も `:persistent_term.put` も
-  発生しない**(checkpoint は BEAM プロセスの生死と無関係に
-  `:persistent_term` に残るため)。副作用が出るのは
-  **crash のタイミングが「reconcile 途中(diff 計算後・broadcast 完了前)」
-  または「broadcast 一部失敗」に重なった場合のみ**で、その場合は
-  checkpoint が古いまま残り、restart 後(または次の periodic reconcile)
-  で **その時点の changed identities だけ**へ再度 disconnect が飛びうる
-  (broadcast は idempotent なので、稼働中でない socket への重複送信は
-  無害)。「稼働中の全 socket へ」ではなく「変更のあった identity へ、
-  条件が揃えば重複送信され得る」が正確な記述。
-  `:persistent_term.put/2` の global GC コストも、この**実変更があった
-  ときだけ**発生する(空 diff では put しない設計、moduledoc 参照)。
-  root supervisor は `max_restarts` を明示設定していない(OTP 既定 =
-  3 回 / 5 秒)ため、この watcher(や既存の PersonaWatcher/
-  FooterWatcher)がその範囲を超えて crash し続ければ server 全体が落ちる
-  ——これは既存の supervision tree の性質であり、上記の「変更時のみ
-  disconnect し得る」副作用の回数を直接規定するものではない(3 回に
-  限られるのは crash-loop 自体の話であって「全 socket への disconnect」
-  の話ではない)。
-- file_system イベントが失われる(backend 未起動 / event drop / 親 dir
-  の一時欠落)場合、変更の反映は periodic reconcile 任せになり、最大
-  `@reconcile_interval_ms` だけ遅延しうる(無期限に遅延することはない
-  — 詳細は `OAuthAllowlistWatcher` moduledoc 「Detection」節)。
-- 許可リストが部分書き込み中に読まれると、完全な内容に復旧するまでの
-  間、正当な operator も含めて過剰に disconnect されうる
-  (fail-closed の意図的な選択、LKG 維持はしない)。運用は temp-file +
-  atomic rename での編集を推奨するが、これは確率を下げるだけで保証で
-  はない。
+- The watcher process crashes → restart itself is
+`:persistent_term.put`
+**(checkpoint is unrelated to the life of the BEAM process)
+`:persistent_term`. Side effects
+**crash timing is "reconcile"
+or "broadcast partial failure" is only
+checkpoint remains old, after restart (or following periodic reconcile)
+Home**only changed identities**GET OFF
+(broadcast is idempotent, so it is not working.
+harmless). not "to all sockets in operation" to "identified"
+If the condition is aligned, it can be duplicated.
+The global GC cost of `:persistent_term.put/2` has also been changed
+When only** occurs (see moduledoc).
+root supervisor does not explicitly set `max_restarts` (OTP default =
+3 times / 5 seconds)
+If FooterW er) continues to crash beyond that range, the whole server falls
+——This is the nature of the existing supervision tree and the above "only when changed
+disconnect Not directly stipulate the number of side effects (3 times)
+Crash-loop itself is limited to "to all sockets disconnect"
+not a story).
+- lost file system event (backend unstarted / event drop / parent dir)
+if the temporary missing), the reflection of the change will leave the periodic reconcile, and the maximum
+Only `@reconcile_interval_ms` can be delayed (not delayed indefinitely)
+`OAuthAllowlistWatcher` moduledoc "Detection" section.
+- When the permission list is read during partial writing, it will be restored to complete content
+may be over disconnected, including legitimate operators
+(fail-closed intentional selection, not LKG maintenance). temp-file +
+Editing with Editic rename is recommended, but this is guaranteed only by lowering the probability
+None
 
-詳細な設計判断(ふじレビュー、あお承認)は issue #160 のコメント履歴、
-実装は `KaoiroServer.OAuthAllowlistWatcher` のモジュール doc を参照。
+Detailed design judgment (Home review, Home approval) is a comment history of issue #160,
+See `KaoiroServer.OAuthAllowlistWatcher` module doc.

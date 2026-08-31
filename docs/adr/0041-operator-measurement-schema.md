@@ -1,5 +1,5 @@
 ---
-title: operator permission latency と dashboard 表示条件の measurement schema
+title: operator latency and dashboard display conditions
 status: proposed
 date: 2026-07-21
 opened: 2026-07-21
@@ -9,106 +9,106 @@ related_specs: [protocol, architecture, threat-model]
 related_adrs: [12, 20, 21, 22, 33]
 ---
 
-# ADR-0041 — operator permission latency と dashboard 表示条件の measurement schema
+# ADR-0041 — monitor display conditions
 
 ## Status
 
-Proposed。kaoiro 論文プロジェクトの測定定義との突合は完了しているが、
-実装と protocol schema の変更にはまだ着手しない。
+Pro。 kaoiro has completed a collision with the measurement definition of the paper project,
+The implementation and the change of the protocol schema are not yet supported.
 
 ## Context
 
-kaoiro は `permission_request` と `permission_decision` を `request_id` で相関し、
-`waiting_permission` を dashboard に提示できる。しかし現状記録される時刻は、
-wrapper の `PermissionBroker.decide()` が要求生成時に付ける ISO 8601 `ts` だけで
-ある。この値は次の二箇所に同じ値として載る。
+kaoiro correlates `permission_request` and `permission_decision` with `request_id`
+`waiting_permission` can be presented to dashboard. However, the current time is recorded.
+Only ISO 8601 `ts` that `PermissionBroker.decide()` of the wrapper is attached to the request generation
+Comment This value is the same as the following two points:
 
-- `permission_request` envelope の外枠 `ts`
-- `state_change.ext.pending_permission.ts` ([ADR-0022](0022-pending-permission-authoritative-source.md) の authoritative source)
+- `permission_request` `ts`
+- `state_change.ext.pending_permission.ts` ([ADR-0022](0022-pending-permission-authoritative-source.md) authoritative source)
 
-これは要求生成時刻であり、browser が permission dialog を operator に実際に
-提示した時刻ではない。現行の dashboard → server → wrapper の
-`permission_decision` は `{agent_id, request_id, allow}` のみを持ち、提示時刻、
-判断時刻、wrapper での解決時刻、latency、終了理由は記録しない。また host と
-browser の wall clock は一致する保証がない。
+This is the request generation time, and br er is actually in the operator
+It is not the time presented. current dashboard → server → wrapper
+`permission_decision` has only `{agent_id, request_id, allow}` and present time,
+Do not record judgment time, wrapper resolution time, latency, or end time. host
+The browser clock does not guarantee the match.
 
-将来実験では、permission latency の測定に加えて AgentDetail の観察刺激を四条件
-で切り替える。測定値を条件と結合可能にしつつ、permission dialog 自体と操作機能を
-消して安全性を損なわない schema が必要である。
+In the future experiment, in addition to the measurement of permissionncy late, the observation stimulation of the AgentDetail is four conditions
+Switch. The permission dialog itself and the operation function can be combined with the condition.
+schema is required.
 
-本 ADR は trial/replay/export の完全な実験基盤を決めない。第一段階で必要な
-permission measurement と表示 condition の語彙だけを固定する。
+Book ADR does not decide the complete experimental base of trial/replay/export. required at first stage
+Fix permission measurement and display condition vocabulary only.
 
 ## Decision
 
-### D1. permission lifecycle は四時刻を分離する
+### D1. Leave time
 
-一件の permission lifecycle を `request_id` で相関し、次の四時刻を別概念として
-記録する。
+Correlation of one lifecycle with `request_id`, and the following four-time as a separate concept
+Record.
 
-| field | 記号 | 発生点 / clock owner | 意味 |
+| field |Signs|clock owner||
 |---|---|---|---|
-| `requested_at` | `t_request` | wrapper wall clock | `PermissionBroker.decide()` が要求を生成した時刻。既存 `pending_permission.ts` と同値 |
-| `presented_at` | `t_presented` | browser wall + monotonic clock | 対象 `request_id` の dialog が DOM に反映され、operator に提示可能になった時刻 |
-| `decided_at` | `t_decision` | browser wall + monotonic clock | operator の allow / deny 操作を dashboard が受理した時刻 |
-| `resolved_at` | `t_resolved` | wrapper wall clock | broker が allow / deny / timeout / close 等で pending Promise を settle した時刻 |
+| `requested_at` | `t_request` | wrapper wall clock | `PermissionBroker.decide()`when the request is generated. Existing`pending_permission.ts`Same value|
+| `presented_at` | `t_presented` | browser wall + monotonic clock |`request_id`The dialog is reflected in theoper and the time it is possible to show to the operator|
+| `decided_at` | `t_decision` | browser wall + monotonic clock |The allow/deny operation of the operator is received by dashboard|
+| `resolved_at` | `t_resolved` | wrapper wall clock |time when the pending promise is settled for allow / deny / timeout / close etc.|
 
-`t_request` と `t_resolved` は engine host 側 lifecycle、`t_presented` と
-`t_decision` は operator UI lifecycle を表す。ネットワーク遅延や描画遅延を判断
-時間へ混入させないため、この四つを一つの「request timestamp」に潰さない。
+`t_request` and `t_resolved` are engine host lifecycle, `t_presented` and
+`t_decision` represents the operator UI lifecycle. DeHome network delays and draw delays
+Don’t crush these fours into one “request timestamp” because they don’t mix them into time.
 
-wall-clock field は ISO 8601 UTC string とする。browser が所有する二時刻には、
-同じ browser context 内の monotonic timestamp も併記する。
+wall-clock field is ISO 8601 UTC string. 2 hours owned by browser
+monotonic timestamp in the same browser context.
 
 ```ts
 interface BrowserMeasurementTime {
   wall: string;          // new Date().toISOString()
   monotonic_ms: number;  // performance.now()
-  context_id: string;    // page lifecycle ごとの random id
+  context_id: string;    // page lifecycle per random id
 }
 ```
 
-`context_id` は reload / navigation で更新する。異なる `context_id` の monotonic
-値を減算してはならない。
+`context_id` is updated with reload / navigation. different `context_id` monotonic
+Let's reduce the value.
 
-### D2. 主指標は browser monotonic clock の decision latency とする
+### D2. The main indicator is browser monotonic clock.
 
-主指標 `latency_ms` は、同じ browser context で観測した場合に限り次で計算する。
+The primary indicator `latency_ms` is calculated only when observation is performed in the same browser context.
 
 ```text
 latency_ms = t_decision.monotonic_ms - t_presented.monotonic_ms
 ```
 
-値は finite かつ 0 以上でなければならない。clock owner が異なる
+The value must be 0  and 0 or higher. clock owner
 `t_request → t_presented`、`t_decision → t_resolved`、`t_request →
-t_resolved` は診断用 wall-clock interval として保持できるが、operator 判断時間
-の主指標にはしない。NTP 補正や host/browser clock skew により負値になり得るため
-である。
+t_resolved` for diagnosis wall-clock interval can be retained,operator Time
+not the main indicator. NTP correction and host/br er clock skew
 
-presentation は permission record を state に取り込んだ時刻ではなく、Svelte の
-DOM update 完了後に対象 dialog が可視であることを確認した時刻とする。同一
-`request_id` / `context_id` 内の同じ描画について最初の一回だけ記録し、単なる
-再描画では上書きしない。一方、reload / navigation または reconnect 後に pending
-dialog を復元した場合は、最初の presentation を置換せず `presentations` に追加する。
 
-latency の eligibility は lifecycle 全体について次の規則で確定する。
+presentation is not the time passed to the state,
+The time when the target dialog is visible after the dialog update is completed. Same
+`request_id` / `context_id` record only once for the same drawing
+Do not overwrite in reJapanese terming. pending after reload / navigation or reconnect
+If dialog is restored, add the first presentation to `presentations` instead.
+
+latency eligibility is determined by the following rules for the entire lifecycle:
 
 | lifecycle | `latency_eligible` | `latency_ms` |
 |---|---:|---|
-| 同じ context で presentation → decision、途中の context 変更 / reconnect なし | `true` | 最初の presentation から decision までを計算 |
-| 最初の presentation 後に context 変更または reconnect が発生 | `false` | absent。復元後の presentation から測り直さない |
-| pending 復元または resolution の相関が回復不能と確定 | `false` | absent。terminal は `correlation_lost` |
+|Presentation in the same context → decision, the middle context change / no reconnect| `true` |First presentation to decision|
+|context changes or reconnects after the first presentation| `false` |absent. Don't measure from presentation after restoration|
+|pending Restore or resolution failure to recover| `false` |absent. terminal`correlation_lost` |
 
-復元後の presentation から測り直すと operator が切断前に観察していた時間を落とし、
-latency を系統的に過小評価する。このため一度 `false` になった lifecycle を、後の
-reconnect / presentation によって `true` へ戻してはならない。欠測を 0 ms として
-補完しない。
+If you measure from the presentation after the restoration, the operator will drop the time that it was observed before cutting,
+systematically underrated latency. For this reason, after a lifecycle that has become `false`
+`true` 0 ms
+Not complemented.
 
-### D3. terminal outcome と anomaly を別型で記録する
+### D3. Record terminal outcomes and anomaly separately
 
-最小 record は次の論理 shape を持つ。transport 上の最終配置は実装 plan で
-protocol 型と server validation を同期するが、field の意味は本 ADR を SSoT と
-する。
+The minimum record has the following logical shape: The final arrangement on the transport is implementation plan
+Synchronizes the protocol type and server validation, but the meaning of the field is SSoT and
+
 
 ```ts
 type PermissionTerminalOutcome =
@@ -143,48 +143,48 @@ interface PermissionMeasurement {
 }
 ```
 
-terminal outcome の意味は次の通り。
+terminal outcome
 
-- `allowed` / `denied`: operator decision が wrapper の pending request を
-  settle した terminal outcome。
-- `timeout`: `permission_timeout_ms` により broker が fail-closed deny した。
-- `wrapper_close`: wrapper shutdown 時の `PermissionBroker.close()` により
-  pending request が deny で settle した。
-- `correlation_lost`: pending の復元不能または resolution の観測不能が回復不能と
-  確定し、通常の terminal outcome と相関できなかった。
+- `allowed` / `denied`: operator decision pending request for wrapper
+settle
+- `timeout`: `permission_timeout_ms` fail-closed deny.
+- `wrapper_close`: `PermissionBroker.close()` at wrapper shutdown
+pending request settle with deny.
+- `correlation_lost`: pending cannot be restored or observation disabled
+Fixed and couldn’t correlate with normal terminal outcomes.
 
-disconnect は lifecycle 上の event であり、それ自体は terminal outcome ではない。
-browser reconnect 後も同じ `request_id` が authoritative pending state から復元
-できる間は lifecycle を継続する。wrapper disconnect も再接続後に resolution を
-相関できる可能性が残る間は同様であり、回復不能が確定した時点でのみ
-`correlation_lost` を記録する。
+disconnect is an event on lifecycle and it is not terminal outcome.
+The same `request_id` restores from authoritative pending state
+Keep lifecycle while you can. wrapper disconnect also after reconnection
+It is similar to the possibility of correlation, only when the unrecoverable is confirmed
+`correlation_lost`
 
-anomaly の意味は次の通り。
+The meaning of anomaly is:
 
-- `late_decision`: terminal outcome 確定後に同じ `request_id` への decision が
-  到着した。
-- `duplicate_presentation`: 同一 context 内で同じ dialog presentation を二回以上
-  観測した。最初の有効 presentation は保持する。
-- `duplicate_decision`: terminal outcome 確定前に同じ decision を二回以上観測
-  した。最初の有効 decision は保持する。
-- `context_changed`: 最初の presentation 後に reload / navigation、または
-  reconnect による measurement context の断絶が発生した。pending が復元できても
-  `latency_eligible=false` とし、復元後の presentation から測り直さない。
+- `late_decision`: terminal outcome
+Arrival
+- `duplicate_presentation`: two or more dialog presentations in the same context
+Comment The first effective presentation is held.
+- `duplicate_decision`: terminal outcome 2 or more observation
+Comment The first valid decision is held.
+- `context_changed`: reload / navigation, or
+Abortion of measurement context caused by reconnect. Even if pending is restored
+`latency_eligible=false` does not measure from presentation after restoration.
 
-anomaly は terminal outcome を破壊しない。配列なので、terminal 前の
-`duplicate_decision` と terminal 後の `late_decision` が同じ lifecycle に発生しても
-情報を失わない。durable store を導入する場合は terminal record の上書きではなく
-append-only observation として残し、集計 view が terminal outcome と anomaly
-flags に展開する。
+anomaly does not destroy terminal outcomes. before terminal because it is an array
+`duplicate_decision` and `late_decision` after terminal occur in the same lifecycle
+Never lose information. Not overwrite terminal record when using a durable store
+append-only observation and ag ation view is terminal outcome and anomaly
+Expand to flags.
 
-operator action が無い `timeout` / `wrapper_close` / `correlation_lost` では
-`decided_at` と `latency_ms` は absent でよい。wrapper が settle しなかった
-`correlation_lost` や無視された anomaly event では `resolved_at` は absent でよい。
-欠測を 0 ms として補完しない。
+`timeout` / `wrapper_close` / `correlation_lost`
+`decided_at` and `latency_ms` are absent. wrapper did not settle
+`resolved_at` is absent for `correlation_lost` or ignored anomaly event.
+does not compensate as 0 ms.
 
-### D4. 表示 condition は closed enum とする
+### D4. display condition is closed enum
 
-AgentDetail の観察領域に次の closed enum を導入する。
+Agent the next closed enum in the observation area of AgentDetail.
 
 ```ts
 type ObservationCondition =
@@ -194,84 +194,84 @@ type ObservationCondition =
   | "combined";
 ```
 
-| condition | transcript/raw log | 状態ラベル | 表情 sprite |
+| condition | transcript/raw log |state label|facial sprite|
 |---|---:|---:|---:|
-| `raw_log` | 表示 | 非表示 | 非表示 |
-| `state_only` | 非表示 | 表示 | 非表示 |
-| `expression_only` | 非表示 | 非表示 | 表示 |
-| `combined` | 表示 | 表示 | 表示 |
+| `raw_log` |display|non-display|non-display|
+| `state_only` |non-display|display|non-display|
+| `expression_only` |non-display|non-display|display|
+| `combined` |display|display|display|
 
-適用範囲は AgentDetail の観察刺激だけとする。次の operator control は全条件で
-維持する。
+Specifically, only observe stimulation of AgentDetail. The following operator control is
+Contact Us
 
-- permission dialog と allow / deny controls
-- question / input dialogs、composer、interrupt 等の操作手段
-- close / navigation と、実験を安全に中止するための control
+deny permissions
+- How to use question / input dialogs, composer, interrupt, etc.
+- close / navigation and control to stop the experiment safely
 
-agent name、engine/permission metadata、model/cost/context 等の補助情報を観察刺激
-へ含めるかは実験 protocol 側で別途固定する。本 ADR の四条件だけから暗黙に表示を
-増減させない。第一実装では現行 settings の localStorage pattern を再利用できるが、
-measurement record の各 `presentations[]` 要素には permission dialog を提示した
-瞬間の**実効 condition**を copy し、後の settings 変更で過去 record の条件が
-変わらないようにする。
+stimulation of auxiliary information such as agent name, Stimulation/permission metadata, model/model/context
+To include or otherwise fix the experiment protocol. The display implicitly from the four conditions of this ADR
+Don't increase or decrease. In the first implementation, you can reuse the current settings localStorage pattern,
+Each `presentations[]` element of measurement record presents permission dialog
+**Effective condition**copy and change settings after past record
+Do not change.
 
-### D5. 既存 permission protocol との整合
+### D5. Conforming with existing permission protocol
 
-- `permission_request.payload.request_id` と
-  `state_change.ext.pending_permission.request_id` を lifecycle correlation key と
-  する。新しい ID を追加しない。
-- `requested_at` は既存 `pending_permission.ts` を正規値として複製する。
-  legacy `permission_request` envelope の外枠 `ts` も同値だが、dashboard は
-  ADR-0022 に従い authoritative pending record を読む。
-- `permission_request` は初出通知の役割を維持し、presentation の authoritative
-  source に昇格させない。join/reconnect 後に `ext.pending_permission` から dialog
-  が復元された場合も、その browser context での presentation を配列へ追加できる。
-  ただし最初の presentation 後の context 変更 / reconnect は
-  `latency_eligible=false` + `context_changed` とし、復元後の時刻から latency を
-  再計算しない。
-- 現行 `permission_decision` の allow / deny semantics は変更しない。測定 field を
-  decision relay に同梱する場合も wrapper は operator decision と browser telemetry
-  を区別し、未知/不正な測定値を理由に decision 自体を失わせてはならない。
-- viewer には permission payload / measurement を配信しない。operator-only の
-  既存 role policy ([ADR-0021](0021-role-information-disclosure-policy.md)) を継承する。
-- Codex exec は `approval: "never"` で permission lifecycle を発生させない
-  ([ADR-0033](0033-permission-model-dual-axis.md) F3)。record absent は欠測ではなく、
-  現行 engine capability の非対称である。
+- `permission_request.payload.request_id`
+`state_change.ext.pending_permission.request_id` with lifecycle correlation key
+Don't add a new ID.
+- `requested_at` duplicates existing `pending_permission.ts` as a normal value.
+legacy `permission_request` The outer frame of envel  `ts` is the same, but the dashboard is
+authoritative pending record
+- `permission_request` maintains the role of the first notification and presents authoritative
+Don't promote to source. after join/reconnect `ext.pending_permission` dialog
+You can add presentations in the browser context to the array.
+However, after the first presentation, the context change / reconnect is
+`latency_eligible=false` + `context_changed` and latency from the restored time
+Not recal d.
+- The current `permission_decision` allow/deny semantics does not change. Measurement field
+The wrapper is also included in the decision relay.
+Let's differentiate and lose the decision itself because of unknown/fair measurement values.
+- Don't send permission payload / measurement to viewer. operator-only
+inherit the existing policy role ([ADR-0021](0021-role-information-dis sure-policy.md)).
+- Codex exec does not generate lifecycle with `approval: "never"`
+([ADR-0033] (model3-permission-model-dual-axis.md) F3). record absent
+AJapanese termmetric of current engine capability.
 
-### D6. 完了条件と非目標
+### D6. Completion and Non-Goal
 
-最小実装の完了条件は、Claude permission request について四時刻を分離して相関
-でき、eligible な operator decision record の `latency_ms` を browser monotonic
-clock から再計算でき、提示時の condition、terminal outcome、anomalies を保持
-できることである。
+Corres ing to the minimum implementation completion condition by separating the four-time for theudeude permission request
+browser monotonic
+Recal d from clock and preserves condition, ter  outcome, and anomalies when presented
+What can we do?
 
-本 ADR の非目標:
+Non-Target ADR:
 
-- Codex exec の approval 固定解除
-- trial / condition assignment の実験計画、被験者 ID、randomization
-- durable outcome export の storage format
-- trace playback または engine の決定論的再実行
-- wall clock 間の clock synchronization
+- Codex exec approval
+- trial / condition assignment experiment planning, subject ID, randomization
+- storage format for durable export
+- deterministic reexecution of trace playback or engine
+clock clockhronization
 
 ## Consequences
 
-- 既存 `pending_permission.ts` を壊さず、request generation と presentation を
-  区別できる。
-- 主指標を単一 browser clock に閉じるため、host/browser clock skew の影響を
-  受けない。
-- reload/reconnect、timeout、shutdown、correlation loss、late/duplicate anomaly を
-  正常な allow/deny から分離でき、latency eligibility と欠測処理を明示できる。
-- 表示 condition は client-local に実装可能だが、再現可能性のため measurement
-  record へ実効値を固定する必要がある。
-- `t_resolved` と非 click outcome を正確に得るには wrapper 側の resolution 観測点
-  が必要であり、client だけの変更では四時刻 schema を完結できない。
+- Request generation and presentation
+Can be distinguished.
+- The influence of host/br er clock skew to close the main indicator to a single browser clock
+
+- reload/reconnect,timeout,shutdown,correlation loss,late/duplicate anomaly
+can be separated from normal allow/deny, and can be expressed with latency eligibility and missing processing.
+- The display condition can be implemented in client-local, but it is possible to reproduce
+There is a required to fix the actual value to record.
+- wrapper side resolution to get `t_resolved` and non-click outcomes accurately
+is required and only client can not complete four-time schema.
 
 ## Alternatives considered
 
-| 案 | 判断 |
+|||
 |---|---|
-| `permission_request.ts` から click 時刻までを latency とする | 却下。network / server fan-out / browser rendering と host-browser clock skew が混入する |
-| browser wall clock だけを使う | 却下。wall clock 補正で負値・不連続が起き得る。monotonic を主指標にする |
-| `state_change(waiting_permission)` 受信時を presentation とする | 却下。受信と DOM 可視化は別時点で、background tab / render queue の遅延を落とす |
-| timeout / close を deny にまとめる | 却下。operator 行動と system default を区別できず、介入率と latency の解釈を歪める |
-| 四条件を独立 boolean で表す | 却下。未定義組合せと実験条件 drift を生むため closed enum にする |
+| `permission_request.ts`from click time to ncy late|rejected. host-br er clock skew|
+|browser wall clock|rejected. The negative value and disco ance can occur with wall clock correction. Make monotonic the main indicator|
+| `state_change(waiting_permission)`Presentation at reception|rejected. Receive andVisualization Visualization drops background tab / render queue|
+|timeout / close to deny|rejected. distort operator behavior and system default, distort intervention rate and latency interpretation|
+|4 conditions are expressed by boolean independently|rejected. undecided step-by-step combination and experiment conditions make drift open enum|
