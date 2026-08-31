@@ -1,166 +1,182 @@
 ---
-title: Phase 24 — runner config で codex auth mode を明示宣言
-description: Phase 23 dogfood 再々々々検証 (23-9) を阻む「runner 環境 PATH に codex binary が無いと `detectCodexAuthMode` が失敗して catalog 空 → 両 button 非表示」回帰を、runner config に `codex.auth_mode?: 'chatgpt' | 'apikey'` を明示宣言する経路を追加して解消。priority explicit config > doctor detection > "unknown"、chatgpt_plan からの暗黙推定は禁止。旧 config 互換維持 (未指定なら現行 doctor fallback)。
+title: Phase 24 — Explicitly declaring Codex auth mode in runner config
+description: Resolve the regression blocking Phase 23 dogfood re-reverification (23-9)—a missing codex binary on runner PATH makes `detectCodexAuthMode` fail, the catalog empty, and both buttons hidden—by adding an explicit runner-config path for `codex.auth_mode?: 'chatgpt' | 'apikey'`. Priority is explicit config > doctor detection > "unknown"; implicit inference from chatgpt_plan is forbidden. Preserve old config compatibility (unspecified retains the current doctor fallback).
 status: done
 phase: 24
 depends_on: [23]
 last_updated: 2026-08-02
 ---
 
-# Phase 24 — runner config で codex auth mode を明示宣言
+# Phase 24 — Explicitly declaring Codex auth mode in runner config
 
 ## Goal
 
-Phase 23 の dogfood 再々々々検証 (23-9) を阻んでいた「runner 環境 PATH に
-`codex` binary が無いと `detectCodexAuthMode` が ENOENT で失敗して catalog
-が空になり、両 button (model / effort switch) が非表示になる」直接原因を
-解消する。runner config に `codex.auth_mode?: 'chatgpt' | 'apikey'` を
-明示宣言する経路を追加、priority を `explicit config > doctor detection >
-"unknown"` に統一する。
+Resolve the direct cause that blocked Phase 23's dogfood re-reverification
+(23-9): when the runner environment has no `codex` binary on PATH,
+`detectCodexAuthMode` fails with ENOENT, the catalog becomes empty, and both
+buttons (model / effort switch) are hidden. Add an explicit declaration path
+for `codex.auth_mode?: 'chatgpt' | 'apikey'` in runner config and standardize
+the priority as `explicit config > doctor detection >
+"unknown"`.
 
-[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md#auth-mode-決定の-priority-phase-24-追補2026-07-16)
-に auth mode 決定の priority を追記、Phase 23 [phase-23 plan](phase-23-resume-model-effort-restoration.md)
-の Risks / 23-9 note に本回帰事例と Phase 24 依存を記録する。
+Add the auth-mode decision priority to
+[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md#auth-mode-決定の-priority-phase-24-追補2026-07-16),
+and record this regression and the Phase 24 dependency in the Risks / 23-9
+note of the Phase 23 [plan](phase-23-resume-model-effort-restoration.md).
 
 ## Scope
 
-**追加**:
+**Add**:
 
-- `runner/src/config.ts::CodexConfig` に `auth_mode?: 'chatgpt' | 'apikey'`
-  optional field + `parseRunnerConfig` の closed-enum validation
-- `runner/src/codex-auth.ts` に injectable policy resolver
-  `resolveCodexAuthMode(input)` (async、priority policy は pure、default
-  `detect` binding は doctor I/O)。CLI startup と hot reload の priority
-  policy を helper 内に集約
-- `runner/src/cli.ts::main` の startup と `applyReload` の分岐を helper
-  呼び出しに置換
-- `runner/runner.config.example.json` に `codex.auth_mode` 例を追記
+- An optional `auth_mode?: 'chatgpt' | 'apikey'` field to
+  `runner/src/config.ts::CodexConfig`, with closed-enum validation in
+  `parseRunnerConfig`.
+- An injectable policy resolver `resolveCodexAuthMode(input)` in
+  `runner/src/codex-auth.ts` (async; the priority policy is pure and the
+  default `detect` binding performs doctor I/O). Consolidate the priority
+  policy for CLI startup and hot reload in the helper.
+- Replace the branches in `runner/src/cli.ts::main` startup and `applyReload`
+  with helper calls.
+- Add a `codex.auth_mode` example to `runner/runner.config.example.json`.
 
-**scope 外**:
+**Out of scope**:
 
-- `scripts/dogfood.sh` の初回 auto-generate 変更 (API-key dev host を
-  誤宣言するリスクがあるため。tracked 変更は example のみ)
-- untracked `runner/runner.config.json` の更新 (藤 review 合格後、
-  マスター環境専用として別途 auth_mode=chatgpt を追加、commit 対象外)
-- Phase 23 の effort/model 復元系実装 (E-G は完全 closure 済、touch なし)
+- Change to first-run auto-generation in `scripts/dogfood.sh` (risk of
+  misdeclaring an API-key development host; tracked change is limited to the
+  example).
+- Update untracked `runner/runner.config.json` (after Fuji review passes,
+  add auth_mode=chatgpt separately for the master's environment; not a commit
+  target).
+- Phase 23 effort/model restoration implementation (E-G is fully closed; no
+  touch).
 
-## Design decisions (藤 dogfood 診断 + 修正版方針)
+## Design decisions (Fuji dogfood diagnosis + corrected policy)
 
-- **D1 priority policy**: `explicit config > doctor detection > "unknown"`。
-  explicit set 時は `detectCodexAuthMode` を絶対に invoke しない (runner
-  環境 PATH に codex binary 無しでも動作する不変条件)。
-- **D2 closed enum**: `auth_mode` の許容値は `"chatgpt"` / `"apikey"` の
-  2 値のみ。他値は `parseRunnerConfig` で fail-fast reject (`ConfigError`)。
-- **D3 chatgpt_plan からの暗黙推定禁止**: API-key runner でも `chatgpt_plan`
-  を config に残置しているケース (auth 切替の途中経過) を誤判定するため、
-  `auth_mode` 決定に `chatgpt_plan` を根拠として使わない。
-- **D4 旧 config 互換**: `auth_mode` は追加 optional。既存 config が持たない
-  場合は現行の doctor detection にフォールバック、失敗すれば `"unknown"`。
-  破壊なし。
-- **D5 hot reload の 5 遷移**: helper が全遷移を pin する (詳細は
-  `resolveCodexAuthMode` の docstring)。
-  1. next disabled → `"unknown"` (prev mode 破棄、doctor 非呼出)
-  2. next explicit → verbatim 採用 (doctor 非呼出)
-  3. prev explicit → next absent → doctor 再走
-  4. prev off → next on (absent) → doctor 走る
-  5. prev on (absent) → next on (absent) → prev mode 維持 (doctor 非呼出)
-- **D6 CLI 分岐を薄く**: CLI 側の startup + `applyReload` は helper を
-  呼ぶだけ。分岐の pin は helper の unit test で完結する (藤指示 4:
-  「CLI main の分岐を直接 test 困難なら、async pure/injectable resolver
-  を codex-auth.ts 等へ抽出し startup/reload policy を unit test」)。
-- **D7 doctor output / credential 非 relay 継続**: `detectCodexAuthMode`
-  の内部で `runCodexDoctor` の stdout / stderr は `parseCodexAuthMode` の
-  `stored auth mode` field 抽出以外に relay しない。`resolveCodexAuthMode`
-  も doctor の出力を保持しない (Phase-24 で変更なし)。
-- **D8 security posture**: `auth_mode` は catalog 決定用の宣言 metadata の
-  みで、runner は credential (OAuth token / API key 等、Codex 側の
-  credential store / environment) を付与も変更もしない — その意味で
-  escalation にならない。誤宣言時は catalog が実 entitlement からずれ、
-  unsupported な model / effort の explicit request が SDK 側で loud
-  fail → 既存 switch_error rollback (`turn_failed`) に到達しうる。auth
-  実体の invalid credentials エラーになるかどうかは runtime の
-  credential store / SDK 実装依存で、config だけからは断定しない。
-- **D9 dogfood.sh 変更なし**: 初回 auto-generate に `"codex":{"auth_mode":
-  "chatgpt"}` を無条件で追加すると API-key dev host を誤宣言するリスク。
-  tracked 変更は `runner.config.example.json` に留め、operator が env 別
-  に編集する運用を維持。
+- **D1 priority policy**: `explicit config > doctor detection > "unknown"`.
+  When explicit, never invoke `detectCodexAuthMode` (an invariant allowing
+  operation without a codex binary on runner PATH).
+- **D2 closed enum**: allowed `auth_mode` values are only `"chatgpt"` /
+  `"apikey"`. Other values are rejected fail-fast by `parseRunnerConfig`
+  (`ConfigError`).
+- **D3 forbid implicit inference from `chatgpt_plan`**: an API-key runner may
+  retain `chatgpt_plan` in config during an auth switch, so do not use it as
+  evidence for `auth_mode`.
+- **D4 old-config compatibility**: `auth_mode` is an optional addition. If an
+  existing config lacks it, fall back to current doctor detection and use
+  `"unknown"` if detection fails. No breakage.
+- **D5 five hot-reload transitions**: the helper pins every transition (see
+  the `resolveCodexAuthMode` docstring).
+  1. next disabled → `"unknown"` (discard previous mode, do not call doctor)
+  2. next explicit → adopt verbatim (do not call doctor)
+  3. previous explicit → next absent → run doctor again
+  4. previous off → next on (absent) → run doctor
+  5. previous on (absent) → next on (absent) → retain previous mode (do not
+     call doctor)
+- **D6 thin CLI branching**: CLI startup + `applyReload` only call the helper.
+  Pin the branches in helper unit tests (Fuji instruction 4: if directly
+  testing main is difficult, extract an async pure/injectable resolver to
+  codex-auth.ts or similar and unit-test startup/reload policy).
+- **D7 continue not relaying doctor output / credentials**: Inside
+  `detectCodexAuthMode`, do not relay `runCodexDoctor` stdout / stderr except
+  extracting the `stored auth mode` field through `parseCodexAuthMode`.
+  `resolveCodexAuthMode` also retains no doctor output (unchanged in Phase 24).
+- **D8 security posture**: `auth_mode` is declaration metadata only for catalog
+  selection; runner neither supplies nor changes credentials (OAuth token / API
+  key, Codex credential store / environment). It is therefore not an
+  escalation. A wrong declaration can diverge from real entitlements, and an
+  explicit unsupported model / effort request can fail loudly in the SDK and
+  reach the existing switch_error rollback (`turn_failed`). Whether the auth
+  reality produces an invalid-credentials error depends on the runtime
+  credential store / SDK implementation and cannot be concluded from config
+  alone.
+- **D9 no scripts/dogfood.sh change**: unconditionally adding
+  `"codex":{"auth_mode":
+  "chatgpt"}` to first-run auto-generation risks
+  misdeclaring an API-key development host. Keep the tracked change to
+  `runner.config.example.json` and have the operator edit per environment.
 
 ## Acceptance Criteria
 
-- [x] `runner/src/config.ts::CodexConfig` に `auth_mode?: "chatgpt" | "apikey"`
-      optional 追加、`parseRunnerConfig` で closed-enum validation
-- [x] `runner/src/codex-auth.ts` に injectable policy resolver
-      `resolveCodexAuthMode(input)` を export、`AuthModeResolveInput`
-      interface で startup と hot reload 両経路を統一 (priority policy は
-      pure、default `detect` binding は doctor I/O)
-- [x] `runner/src/cli.ts::main` の startup (`await detectCodexAuthMode()`
-      から `await resolveCodexAuthMode({...})` へ) と `applyReload` (旧
-      3 分岐 if から helper 呼び出しへ) の書き換え
-- [x] `runner/runner.config.example.json` に `codex.auth_mode` 例を追加
-      (tracked)
-- [x] `runner/test/codex-auth.test.ts` に `resolveCodexAuthMode` の
-      startup + hot reload 全遷移 pin (Codex disabled / explicit chatgpt /
-      explicit apikey / absent + doctor / plan からの推定禁止 / hot reload
-      5 遷移、関連 suite pass)
-- [x] `runner/test/config.test.ts` に `codex.auth_mode` の closed enum
-      受入 (`chatgpt` / `apikey`) + 未知値 fail-fast + 旧 config 互換
-      (absent) の 3 pin
-- [x] `runner/test/supervisor.test.ts` の既存 codex_auth_mode wrapper
-      relay pin は Phase-24 で挙動変化なし (既存 test 継続 pass)
-- [x] docs: ADR-0035 に「auth mode 決定の priority (Phase-24 追補)」節
-      追加、phase-23 plan Risks / 23-9 note に本回帰事例と Phase 24 依存
-      を記録
-- [x] typecheck (protocol / core / agent-common / codex / claude-code /
-      runner) 全 clean、既存 Phase 23 修正 (D+E+F+G+R4-R6) は無変更維持
-- [ ] end-to-end 手動検証 (dogfood): マスター環境の untracked
-      `runner/runner.config.json` に `"codex": {"auth_mode": "chatgpt"}`
-      を追加後、dogfood.sh restart で Codex agent の両 button (model +
-      effort switch) が表示されることを目視確認。Phase 23 の 23-9
-      dogfood もあわせて実施 (D+E+F+G+R4-R6+Phase 24 の全体検証)。
+- [x] Add optional `auth_mode?: "chatgpt" | "apikey"` to
+      `runner/src/config.ts::CodexConfig` and closed-enum validation in
+      `parseRunnerConfig`.
+- [x] Export the injectable policy resolver `resolveCodexAuthMode(input)` from
+      `runner/src/codex-auth.ts`, unifying startup and hot-reload paths with an
+      `AuthModeResolveInput` interface (pure priority policy, default `detect`
+      binding performs doctor I/O).
+- [x] Replace `runner/src/cli.ts::main` startup (`await detectCodexAuthMode()`
+      → `await resolveCodexAuthMode({...})`) and `applyReload` (the old
+      three-branch if → helper call).
+- [x] Add a tracked `codex.auth_mode` example to
+      `runner/runner.config.example.json`.
+- [x] Add startup + all hot-reload transition pins for `resolveCodexAuthMode`
+      to `runner/test/codex-auth.test.ts` (Codex disabled / explicit chatgpt /
+      explicit apikey / absent + doctor / forbidden inference from plan / five
+      hot-reload transitions; related suite passes).
+- [x] Add three `codex.auth_mode` closed-enum pins to
+      `runner/test/config.test.ts`: accept `chatgpt` / `apikey`, fail-fast on an
+      unknown value, and preserve old config compatibility (absent).
+- [x] The existing Codex-auth-mode wrapper relay pin in
+      `runner/test/supervisor.test.ts` has no behavior change in Phase 24 (the
+      existing test continues to pass).
+- [x] Docs: add the auth-mode decision-priority section to ADR-0035 and record
+      this regression and Phase 24 dependency in the Risks / 23-9 note of the
+      Phase 23 plan.
+- [x] All package typechecks (protocol / core / agent-common / codex /
+      claude-code / runner) clean; retain the existing Phase 23 fixes
+      (D+E+F+G+R4-R6) without changes.
+- [ ] End-to-end manual verification (dogfood): after adding
+      `"codex": {"auth_mode": "chatgpt"}` to the master's untracked
+      `runner/runner.config.json`, visually confirm after dogfood.sh restart
+      that both Codex buttons (model + effort switch) appear. Also perform the
+      Phase 23 23-9 dogfood (the full D+E+F+G+R4-R6+Phase 24 verification).
 
 ## Tasks
 
 | id | subject | status | note |
 |---|---|---|---|
-| 24-1 | protocol/config: `RunnerConfig.CodexConfig` に `auth_mode?` closed-enum 追加 | ✅ | 旧 config 互換のため optional |
-| 24-2 | `codex-auth.ts` に injectable policy resolver `resolveCodexAuthMode` を抽出 + cli.ts 側で使用 | ✅ | 順序は pure function、default `detect` binding は doctor I/O。CLI 分岐を薄く、pin は helper unit test で完結 |
-| 24-3 | runner test: config schema + resolver startup / hot reload 全遷移 + wrapper relay 再確認 + empty catalog 回帰解消 | ✅ | 関連 suite pass |
-| 24-4 | `runner.config.example.json` に `auth_mode` 例を追記 (`scripts/dogfood.sh` 変更なし) | ✅ | dev host 誤宣言リスク回避 |
-| 24-5 | docs: 新規 phase-24 plan + ADR-0035 auth mode 決定節 + phase-23 plan Risks/23-9 追記 | ✅ | protocol.md には無理に追記しない |
-| 24-6 | 全 pkg typecheck / test / diff --check | ✅ | Phase 23 コード無変更確認 |
-| 24-7 | dogfood 手動検証 | ⏳ | マスター実機確認 pending (untracked config 更新後) |
+| 24-1 | protocol/config: add closed-enum `auth_mode?` to `RunnerConfig.CodexConfig` | ✅ | Optional for old-config compatibility |
+| 24-2 | Extract injectable policy resolver `resolveCodexAuthMode` in `codex-auth.ts` + use it from cli.ts | ✅ | Pure function for priority, default `detect` binding for doctor I/O. Thin CLI branches, helper unit tests provide pins |
+| 24-3 | runner tests: config schema + resolver startup / all hot-reload transitions + recheck wrapper relay + resolve empty-catalog regression | ✅ | Related suites pass |
+| 24-4 | Add an `auth_mode` example to `runner.config.example.json` (no `scripts/dogfood.sh` change) | ✅ | Avoid development-host misdeclaration |
+| 24-5 | docs: new phase-24 plan + ADR-0035 auth-mode decision section + Phase 23 Risks/23-9 addition | ✅ | Do not force an addition to protocol.md |
+| 24-6 | All package typechecks / tests / diff --check | ✅ | Confirm no Phase 23 code changes |
+| 24-7 | Manual dogfood verification | ⏳ | Pending master real-device verification (after untracked config update) |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
 
 ## Risks
 
-- **explicit 誤宣言による UX 悪化**: operator が `apikey` を宣言して
-  chatgpt-only model (SOL 等) を選ぶと SDK reject → 既存 `switch_error
-  rollback` (`turn_failed` reason、host.ts `#finishTurn`) で回収される。
-  Phase 23 E-G の tier 4 (concrete miss fail-closed) 経路でも一部の invalid
-  pair は事前に button 非表示になる。button 表示上「選べる」形になる残存
-  シナリオは operator が「試して確認」の UX を経験する形で許容。
-- **doctor 経路の deprecate は取らない**: PATH に codex binary がある環境
-  では引き続き自動検出が便利なため、doctor detection は fallback として
-  維持。ただし explicit 宣言が推奨形式であることを ADR-0035 に明記。
-- **hot reload 5 遷移の semantics**: helper に集約したので CLI 側の
-  regression 面は狭い。resolver unit test で全遷移が pin されている。
-  ただし、integration test で「実 file 書き換え → watcher → applyReload」
-  経路までは pin していない (config-watcher.test.ts は watch loop 自体の
-  test)。ここは既存 hot reload path の regression 面として保留、必要が
-  出れば別 patch で integration test 追加。
-- **scripts/dogfood.sh 自動生成の default 値**: API-key dev host を誤宣言
-  するリスクを避けるため、初回 auto-generate では `auth_mode` を含めない
-  方針 (藤指示)。operator が env 別に手動編集する運用を維持。tracked
-  変更は `runner.config.example.json` に留める。
-- **untracked `runner/runner.config.json`**: マスター環境専用として
-  藤 review 合格後に `auth_mode=chatgpt` を追加、commit 対象外
-  (user-local 設定、credential ではないが env-local metadata として扱う)。
-- **security trust boundary**: `auth_mode` は catalog 決定用の宣言 metadata
-  のみで credential は含まない。ADR-0035 の既存の trust boundary
-  (「credential 本体は codex CLI 側で管理、runner config には載せない」)
-  を継承。誤宣言による escalation リスクなし。
+- **UX degradation from an incorrect explicit declaration**: If the operator
+  declares `apikey` and selects a chatgpt-only model (SOL, etc.), the SDK
+  rejects it and the existing `switch_error
+  rollback` (`turn_failed` reason,
+  host.ts `#finishTurn`) recovers. Some invalid pairs are hidden in advance by
+  Phase 23 E-G tier 4 (concrete-miss fail-closed). The remaining scenario where
+  the button makes the choice appear available is accepted as an operator
+  “try and verify” experience.
+- **Do not deprecate the doctor path**: automatic detection remains useful when
+  a codex binary is on PATH, so doctor detection stays as the fallback. ADR-0035
+  explicitly recommends declaration as the preferred form.
+- **Hot-reload five-transition semantics**: centralizing them in the helper
+  narrows the CLI regression surface; resolver unit tests pin all transitions.
+  Integration from “edit real file → watcher → applyReload” is not pinned
+  (config-watcher.test.ts tests the watch loop itself). Keep this as a held
+  regression surface of the existing hot-reload path; add an integration test in
+  a separate patch if needed.
+- **Default value in scripts/dogfood.sh auto-generation**: Do not include
+  `auth_mode` in first-run auto-generation to avoid misdeclaring an API-key
+  development host (Fuji instruction). Keep the tracked change to
+  `runner.config.example.json` and have the operator edit per environment.
+- **Untracked `runner/runner.config.json`**: Add `auth_mode=chatgpt` separately
+  after Fuji review passes for the master's environment; do not commit it.
+  Treat it as environment-local metadata (not credentials).
+- **Security trust boundary**: `auth_mode` is declaration metadata for catalog
+  selection only and contains no credentials. Inherit ADR-0035's existing trust
+  boundary (“the credential itself is managed by the Codex CLI and is not put in
+  runner config”). No escalation risk from a wrong declaration.
 
-## 進捗ログ
+## Progress log
 
-- 2026-08-02: dogfood 確認 OK のマスター判断により close (status: done)
+- 2026-08-02: closed by the master's decision after dogfood verification OK
+  (status: done)

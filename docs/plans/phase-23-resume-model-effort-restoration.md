@@ -1,316 +1,327 @@
 ---
-title: Phase 23 — resume 時の model / effort / *_source 再適用 (P1)
-description: Phase 22 で P0 punt した model / effort / *_source を、両 engine で resume 経路 (initial restore / switch_session / reset_session) から復元する。5-case source-aware pair rule で "source が嘘にならない" セマンティクスを維持し、Codex は catalog 互換 reset、Claude は invalid effort pair drop を wrapper 側で担う。
+title: Phase 23 — Reapplying model / effort / *_source on resume (P1)
+description: Restore the model / effort / *_source punted from P0 in Phase 22 through the resume paths (initial restore / switch_session / reset_session) for both engines. Preserve “source never lies” semantics with a 5-case source-aware pair rule; Codex handles catalog-compatible reset and Claude drops invalid effort pairs on the wrapper side.
 status: done
 phase: 23
 depends_on: [15, 17, 21, 22]
 last_updated: 2026-08-02
 ---
 
-# Phase 23 — resume 時の model / effort / *_source 再適用 (P1)
+# Phase 23 — Reapplying model / effort / *_source on resume (P1)
 
 ## Goal
 
-[ADR-0014 F1 追補](../adr/0014-session-resume-and-restore.md)
-「P1 pair-aware apply for model / effort」を実装する。Phase 22 で P0
-scope から分離した `model` / `effort` / `*_source` を、両 engine の
-resume 経路 (initial restore / switch_session / reset_session) で
-`SessionPointers.snapshot` から再適用する。engine default 降格による
-operator の明示的な model / effort 選択の喪失を解消しつつ、
-`ext.model_source` / `ext.effort_source` に嘘を stamp しない
-(pair semantic を破らない) 5-case pair rule を確定する。
+Implement “P1 pair-aware apply for model / effort” from the
+[ADR-0014 F1 addendum](../adr/0014-session-resume-and-restore.md). Reapply the
+`model` / `effort` / `*_source` separated from the Phase 22 P0 scope from
+`SessionPointers.snapshot` through both engines' resume paths (initial restore /
+switch_session / reset_session). Resolve the loss of an operator's explicit
+model / effort choice caused by demotion to the engine default, while never
+stamping a lie into `ext.model_source` / `ext.effort_source` (preserve pair
+semantics), by fixing the 5-case pair rule.
 
 ## Scope
 
-**P1 apply 対象**:
+**P1 apply targets**:
 
-- 両 engine (`claude-code` / `codex`) で `model` / `model_source` /
+- Both engines (`claude-code` / `codex`): `model` / `model_source` /
   `effort` / `effort_source`
 
-**Phase 22 P0 (不変)**:
+**Phase 22 P0 (unchanged)**:
 
 - Codex: `sandbox` / `network_access`
 - Claude: `permission_mode`
 
-**scope 外 (future phase)**:
+**Out of scope (future phase)**:
 
-- `SessionResetErrorReason` に schema-level malformed reason
-  (`invalid_snapshot` 等) の追加 — Phase 22 R2 と同じく現行の
-  safe-default relaunch を維持。
-- fresh spawn / crash-restart / rollback の apply — 全経路で apply
-  しないのは Phase 22 P0 と同じ semantics。
+- Adding a schema-level malformed reason (`invalid_snapshot`, etc.) to
+  `SessionResetErrorReason`—retain the current safe-default relaunch as in
+  Phase 22 R2.
+- Applying on fresh spawn / crash-restart / rollback—no application on those
+  paths has the same semantics as Phase 22 P0.
 
-## Design decisions (藤 P1 議論, 2026-07-16)
+## Design decisions (Fuji P1 discussion, 2026-07-16)
 
-- **D1 apply 対象は両 engine で対称**: `applyResumeSnapshot` の
-  `APPLY_FIELDS_BY_ENGINE` を engine-symmetric に拡張し model / effort
-  ペアを両側で apply する。Codex account default 復元と Claude
-  operator 選択 model 復元が同じ経路で実装される。
-- **D2 5-case source-aware pair rule**:
-  1. **Both absent** → pair 全体 unset (fresh session が engine default
-     を継承)。
-  2. **value + source=default** → pair 全体 unset (SDK 委任、explicit
-     pin しない)。default source を保持しつつ値だけ pin すると source が
-     嘘になる。
-  3. **value + explicit source (launch / config / env)** → verbatim
-     preserve (resume 前の明示的選択を尊重)。
-  4. **value only (source absent, legacy)** → value + `source="config"`
-     transport provenance (source-tracking 導入前 DETS レコードの救済)。
-  5. **source only (value absent)** → pair 全体 unset + stderr warn
-     (write-side gate + read-side sanitize の両方が防ぐ意味論違反、到達
-     時は wrapper mis-stamping バグを疑う)。
-- **D3 cli source priority 刷新**: 両 wrapper の cli.ts で
-  `config.model_source` が set のときはそれを最優先で
-  `resolvedModelSource` に採用する。次点は `config.model` set →
-  `"config"`、env tier default set → `"env"`、いずれも absent →
-  `undefined`。effort も同 pattern。resume 由来 Case 3 の source が
-  `"config"` に潰れないようにする。
-- **D4 Codex catalog compatibility (constructor reset)**: Codex host の
-  constructor で **`this.#resumeSnapshot !== null` (resume 経路限定)** かつ
-  `this.#model` と `this.#effort` が両方 set かつ catalog に該当 model の
-  `effort_levels` が明示されており `this.#effort` を含まない場合、既存の
-  setModel 経路と同じ挙動を再利用
-  (`#effortResetPending=true`、`#effortResetOnce=true`)。`#finishTurn`
-  が turn 成功時に `default_effort` へ落とし `ext.effort_reset=true` を
-  one-shot stamp する既存 mechanism をそのまま利用。model 不在 /
-  `effort_levels` 不明は SDK 委任 (reset を engage しない) — genuine
-  mismatch は SDK 側 error が `#finishTurn` の switch_error rollback で
-  捕捉。**fresh spawn 経路 (`#resumeSnapshot === null`) は本 reset の
-  対象外**: launch-time の operator 選択を dashboard 経由でない黙示 reset
-  で上書きしないよう、従来通り SDK 側 error path に委ねる (R1 参照)。
-- **D5 Claude invalid effort pair drop (cli filter)**: Claude cli.ts で
-  `config.effort` が `CLAUDE_EFFORT_LEVELS` 外の場合、pair rule の意図を
-  wrapper 境界でも守るため **value / source を同時 drop** + stderr warn。
-  runner は engine の effort 語彙を知らないので、この filter は wrapper
-  側で行う (cross-package 依存の増加を避ける設計選択)。
-- **D6 P0 との独立性**: pair-aware apply は Phase 22 P0 の Codex sandbox
-  / network_access / Claude permission_mode 再適用と同一の apply 経路上
-  で動作。「absent → engine default」の safe fallback semantics も P0 と
-  同じ。P0 と P1 は個別に評価され、片方 apply 済みでも他方に drift 表示
-  は影響しない (`ext.resume_drift` は field 単位で独立)。
-- **R1 (藤 1 次 review 差戻し確定)**: Codex constructor の catalog reset
-  は **resume 経路限定** (`this.#resumeSnapshot !== null` guard)。fresh
-  spawn では従来通り SDK 側 error / 既存 switch_error rollback に委ねる
-  (launch-time の operator 選択を dashboard 経由でない黙示 reset で
-  上書きしない)。fresh spawn incompatible effort regression pin を追加。
-- **R2 (藤 1 次 review 差戻し確定)**: pure helper 単体では各 handler が
-  applyResumeSnapshot 経由で `config.model_source` / `effort_source` を
-  wrapper まで carry することを pin できないため、`supervisor.test.ts`
-  に **initial restore / live switch / reset_session の integration
-  test** を追加 (Codex/Claude 対称、Case 3 preserve / Case 2 default 不
-  passthrough / Case 4 legacy `config` stamp / fresh spawn 不 apply)。
-  crash/rollback は Phase 22 P0 系 test で `entry.parsed` carry 経路が
-  pin 済みで、P1 field も同じ carry を辿るため独立 test は追加せず本
-  plan で根拠明記。
-- **R3 (藤 1 次 review 差戻し確定)**: 両 wrapper で
-  `src/source_resolution.ts` に **pure helper `resolveCodexSources` /
-  `resolveClaudeSources` を抽出**し、CLI からその helper を呼び出す
-  最小 invasive リファクタ。priority 分岐と Claude invalid effort pair
-  drop を `test/source_resolution.test.ts` で unit test 化 (関連 suite
-  pass)。既存 host test では host options を直接注入していて CLI の
-  priority ロジックを通らなかった穴を塞ぐ。
+- **D1 symmetric apply targets for both engines**: Extend
+  `APPLY_FIELDS_BY_ENGINE` in `applyResumeSnapshot` symmetrically and apply the
+  model / effort pair on both sides. Codex account-default restoration and
+  Claude operator-selected model restoration use the same path.
+- **D2 five-case source-aware pair rule**:
+  1. **Both absent** → unset the entire pair (the fresh session inherits the
+     engine default).
+  2. **value + source=default** → unset the entire pair (delegate to the SDK,
+     do not pin explicitly). Pinning only the value while retaining the default
+     source would make the source lie.
+  3. **value + explicit source (launch / config / env)** → preserve verbatim
+     (respect the explicit choice before resume).
+  4. **value only (source absent, legacy)** → value + `source="config"` as
+     transport provenance (rescue DETS records from before source tracking).
+  5. **source only (value absent)** → unset the entire pair + warn on stderr
+     (a semantic violation guarded by both the write-side gate and read-side
+     sanitization; if reached, suspect a wrapper mis-stamping bug).
+- **D3 refresh CLI source priority**: In both wrappers' cli.ts, when
+  `config.model_source` is set, adopt it as the highest-priority
+  `resolvedModelSource`. Next is `config.model` set → `"config"`, then an env
+  tier default set → `"env"`, and finally both absent → `undefined`. Use the
+  same pattern for effort. Prevent the source of Case 3 from a resume from
+  being overwritten with `"config"`.
+- **D4 Codex catalog compatibility (constructor reset)**: In the Codex host
+  constructor, when **`this.#resumeSnapshot !== null` (resume path only)**,
+  both `this.#model` and `this.#effort` are set, the catalog explicitly gives
+  the matching model `effort_levels`, and those levels do not contain
+  `this.#effort`, reuse the existing setModel behavior
+  (`#effortResetPending=true`, `#effortResetOnce=true`). The existing mechanism
+  in `#finishTurn` drops to `default_effort` on a successful turn and stamps
+  `ext.effort_reset=true` one-shot. Delegate a missing model /
+  unknown `effort_levels` to the SDK (do not engage reset); a genuine mismatch
+  is caught when the SDK error reaches switch_error rollback in `#finishTurn`.
+  **The fresh-spawn path (`#resumeSnapshot === null`) is outside this reset**:
+  continue delegating launch-time operator choices to the SDK error path rather
+  than overwriting them with an implicit reset outside the dashboard (see R1).
+- **D5 Claude invalid effort pair drop (CLI filter)**: In Claude cli.ts, when
+  `config.effort` is outside `CLAUDE_EFFORT_LEVELS`, drop **value / source
+  together** + warn on stderr so the pair-rule intent is also enforced at the
+  wrapper boundary. Runner does not know the engine's effort vocabulary, so
+  perform this filter on the wrapper side (avoid increasing cross-package
+  dependencies).
+- **D6 independence from P0**: Pair-aware apply runs on the same apply path as
+  Phase 22 P0 reapplication of Codex sandbox / network_access and Claude
+  permission_mode. Its “absent → engine default” safe-fallback semantics are
+  also the same as P0. P0 and P1 are evaluated separately; applying one does
+  not affect drift display for the other (`ext.resume_drift` is independent per
+  field).
+- **R1 (confirmed Fuji first-review return-to-author)**: Limit the Codex
+  constructor catalog reset to the **resume path**
+  (`this.#resumeSnapshot !== null` guard). On fresh spawn, continue delegating
+  to the SDK error / existing switch_error rollback (do not overwrite a
+  launch-time operator choice with an implicit reset outside the dashboard).
+  Add a fresh-spawn incompatible-effort regression pin.
+- **R2 (confirmed Fuji first-review return-to-author)**: A pure-helper test
+  cannot pin that each handler carries `config.model_source` /
+  `effort_source` through applyResumeSnapshot to the wrapper, so add
+  **initial-restore / live-switch / reset_session integration tests** to
+  `supervisor.test.ts` (symmetric Codex/Claude, Case 3 preserve / Case 2 no
+  default passthrough / Case 4 legacy `config` stamp / fresh no-apply). Crash /
+  rollback already pin the `entry.parsed` carry path in Phase 22 P0 tests; P1
+  fields follow the same carry path, so do not add an independent test and
+  state the evidence in this plan.
+- **R3 (confirmed Fuji first-review return-to-author)**: In both wrappers,
+  extract pure helpers `resolveCodexSources` /
+  `resolveClaudeSources` into `src/source_resolution.ts` and have the CLI call
+  them, as a minimally invasive refactor. Unit-test priority branching and
+  Claude invalid-effort pair dropping in `test/source_resolution.test.ts`
+  (related suites pass). Close the gap where existing host tests injected host
+  options directly and did not exercise CLI priority logic.
 
 ## Acceptance Criteria
 
-- [x] `protocol/src/index.ts` の `WrapperConfig` に `model_source?:
-      ModelSource` / `effort_source?: ModelSource` を optional 追加
-      (runner-relayed resume snapshot pair の transport 用)。
-- [x] `runner/src/supervisor.ts` の `ParsedSpawn` に `modelSource?` /
-      `effortSource?` を追加、`resolveWrapperConfig` で `config.model_source`
-      / `config.effort_source` に passthrough。`parseSpawn` は SpawnMessage
-      に該当 field が無いため populate しない (apply 経路のみ populate)。
-- [x] `runner/src/resume_snapshot.ts` の `applyResumeSnapshot` に
-      5-case pair rule (`computePair`) を組み込み、両 engine で
-      `model` / `modelSource` / `effort` / `effortSource` を pair 単位で
-      apply する。Phase 22 P0 の Codex sandbox / network_access /
-      Claude permission_mode 再適用は無変更。
-- [x] `wrapper/codex/src/cli.ts` の `resolvedModelSource` /
-      `resolvedEffortSource` priority を刷新 (config.model_source > config
-      > env > undefined)。既存 startup summary stderr 出力は無変更。
-- [x] `wrapper/codex/src/host.ts` の constructor に catalog 互換 reset
-      block を追加。**`this.#resumeSnapshot !== null` (resume 経路限定)**
-      で `this.#model` と `this.#effort` が両方 set かつ catalog に該当
-      model の `effort_levels` が存在し `this.#effort` を含まない場合、
-      `#effortPending=null` / `#effortResetPending=true` /
-      `#effortResetOnce=true`。既存 setModel 経路と同じ状態遷移を辿る
-      ため `#finishTurn` に追加変更は不要。fresh spawn 経路
-      (`#resumeSnapshot === null`) は本 reset の対象外で、launch-time
-      choice は従来通り SDK 側 error path に委ねる。
-- [x] `wrapper/claude-code/src/cli.ts` の `resolvedModelSource` /
-      `resolvedEffortSource` priority を刷新。`config.effort` が
-      `CLAUDE_EFFORT_LEVELS` 外の場合、`resolvedEffort` / `resolvedEffortSource`
-      を両方 undefined に落とし stderr warn を出す (pair drop)。
-- [x] `runner/test/resume_snapshot.test.ts` に 5-case pair rule 網羅
-      (両 engine の Case 3、Case 1、Case 2、Case 4、Case 5、mixed pair、
-      P0 P1 同時 apply)。Phase 22 の既存 P0 test は無変更。
-- [x] `wrapper/codex/test/host.test.ts` に P1 catalog reset regression
-      pin を追加 (整合時は reset engage しない / mismatch で
-      effort_reset one-shot + ThreadOptions から effort skip / model
-      不在は SDK 委任で reset engage しない)。関連 codex suite pass。
-- [x] `wrapper/claude-code/test/host.test.ts` に P1 pair-aware pin を
-      追加 (resume 由来 source=launch が effective に stamp され drift
-      が空)。関連 claude-code suite pass。
-- [x] docs: ADR-0014 F1 追補 に「P1 pair-aware apply for model / effort」
-      節を追加。protocol.md / phase 依存グラフ更新は他 phase から自然発生
-      するまで先送り (今回変更対象 field は WrapperConfig transport のみ)。
-- [x] typecheck (protocol / runner / wrapper 4 pkg workspace) clean、
-      `mix format --check-formatted` は server 変更なしのため対象外、
-      `git diff --check` clean。
-- [ ] end-to-end 手動検証 (dogfood): restart → 前セッションの
-      operator 選択 model / effort が復元、`ext.model_source` /
-      `ext.effort_source` が resume 前と一致、Codex catalog 更新シナリオ
-      で effort_reset バッジが 1 回だけ出て次 turn 以降 default_effort
-      に落ちる。マスター実機確認。
+- [x] Add optional fields `model_source?:
+      ModelSource` / `effort_source?: ModelSource` to `WrapperConfig` in `protocol/src/index.ts`
+      (transport for the runner-relayed resume snapshot pair).
+- [x] Add `modelSource?` / `effortSource?` to `ParsedSpawn` in
+      `runner/src/supervisor.ts`, and pass through `config.model_source` /
+      `config.effort_source` in `resolveWrapperConfig`. `parseSpawn` does not
+      populate them because SpawnMessage has no corresponding fields (the apply
+      path alone populates them).
+- [x] Add the 5-case pair rule (`computePair`) to
+      `applyResumeSnapshot` in `runner/src/resume_snapshot.ts`, and apply
+      `model` / `modelSource` / `effort` / `effortSource` as a pair on both
+      engines. Leave Phase 22 P0 reapplication of Codex sandbox /
+      network_access and Claude permission_mode unchanged.
+- [x] Refresh source priority for `resolvedModelSource` /
+      `resolvedEffortSource` in `wrapper/codex/src/cli.ts`
+      (config.model_source > config > env > undefined). Leave the existing
+      startup-summary stderr output unchanged.
+- [x] Add a catalog-compatible reset block to the constructor in
+      `wrapper/codex/src/host.ts`. When **`this.#resumeSnapshot !== null`
+      (resume path only)**, both `this.#model` and `this.#effort` are set, the
+      catalog has `effort_levels` for the matching model, and it does not
+      contain `this.#effort`, set `#effortPending=null` /
+      `#effortResetPending=true` / `#effortResetOnce=true`. The existing state
+      transition is reused, so no additional `#finishTurn` change is needed.
+      The fresh-spawn path (`#resumeSnapshot === null`) is outside this reset;
+      launch-time choices continue through the SDK error path.
+- [x] Refresh source priority for `resolvedModelSource` /
+      `resolvedEffortSource` in `wrapper/claude-code/src/cli.ts`. When
+      `config.effort` is outside `CLAUDE_EFFORT_LEVELS`, set both
+      `resolvedEffort` / `resolvedEffortSource` to undefined and warn on stderr
+      (pair drop).
+- [x] Cover the 5-case pair rule in `runner/test/resume_snapshot.test.ts`
+      (Case 3, Case 1, Case 2, Case 4, Case 5, mixed pairs, and simultaneous P0
+      + P1 apply for both engines). Do not modify the existing Phase 22 P0 tests.
+- [x] Add a P1 catalog-reset regression pin to
+      `wrapper/codex/test/host.test.ts` (no reset when compatible; on mismatch,
+      one-shot effort_reset + effort omitted from ThreadOptions; no reset when
+      the model is absent—delegate to the SDK). The related Codex suite passes.
+- [x] Add a P1 pair-aware pin to `wrapper/claude-code/test/host.test.ts`
+      (resume source=launch stamps effective and drift is empty). The related
+      claude-code suite passes.
+- [x] Docs: add “P1 pair-aware apply for model / effort” to the ADR-0014 F1
+      addendum. Defer protocol.md / phase-dependency graph updates until they
+      arise naturally from another phase (the only fields changed here are
+      WrapperConfig transport fields).
+- [x] Typecheck (protocol / runner / 4 wrapper packages) clean,
+      `mix format --check-formatted` out of scope because the server is
+      unchanged, and `git diff --check` clean.
+- [ ] End-to-end manual verification (dogfood): restart, restore the previous
+      session's operator-selected model / effort, confirm
+      `ext.model_source` / `ext.effort_source` match their pre-resume values,
+      and in the Codex catalog-update scenario confirm the effort_reset badge
+      appears once and then falls to default_effort from the next turn onward.
+      Master real-device verification is pending.
 
 ## Tasks
 
 | id | subject | status | note |
 |---|---|---|---|
 | 23-1 | protocol: `WrapperConfig.model_source?` / `.effort_source?` | ✅ | types-only |
-| 23-2 | runner: `applyResumeSnapshot` に 5-case pair rule 組み込み + `ParsedSpawn` 拡張 + `resolveWrapperConfig` passthrough | ✅ | `computePair` helper 追加 |
-| 23-3 | runner: pair rule 5-case 網羅 test | ✅ | 両 engine 対称 + mixed pair + P0/P1 同時 |
-| 23-4 | wrapper/codex/cli: source priority 刷新 | ✅ | config.model_source 最優先 |
-| 23-5 | wrapper/codex/host: constructor catalog 互換 reset | ✅ | 既存 effortReset one-shot に接続 |
-| 23-6 | wrapper/claude-code/cli: source priority 刷新 + invalid effort pair drop | ✅ | value/source 同時 drop + stderr warn |
-| 23-7 | wrapper regression pin (Codex catalog reset + Claude pair) | ✅ | ThreadOptions gate / effort_reset one-shot / drift 空 |
-| 23-8 | docs: ADR-0014 F1 追補「P1 pair-aware apply」 | ✅ | 5-case pair rule + Codex reset + Claude pair drop |
-| 23-R1 | Codex host constructor catalog reset を resume 経路に限定 + fresh 非回帰 pin | ✅ | 藤 1 次 review must-fix。`this.#resumeSnapshot !== null` guard、fresh spawn incompatible effort で reset 非発火 regression 追加 |
-| 23-R2 | runner supervisor.test.ts に P1 integration test 追加 | ✅ | 藤 1 次 review must-fix。initial restore / switch / reset を Codex/Claude 対称、Case 2/3/4 + fresh 不 apply |
-| 23-R3 | CLI source resolution を pure helper 抽出 + unit test | ✅ | 藤 1 次 review must-fix。両 wrapper に `source_resolution.ts` (helper) + `source_resolution.test.ts` (関連 suite pass) |
-| 23-D1 | Codex host constructor に resume_snapshot default pair の display hint fallback | ✅ | 藤 dogfood 回帰対策。config/option absent 時のみ (value, source="default") pair を復元、pair 整合 pin (source-only は対象外) |
-| 23-D2 | Codex `#threadOptions` の effort gate 対称化 | ✅ | model gate と対称、`effortSource !== "default"` で non-pin |
-| 23-D3 | Claude AgentHost constructor に resume_snapshot default pair の hint fallback + effort catalog re-validation | ✅ | 藤 dogfood 回帰対策。CLAUDE_EFFORT_LEVELS 外なら pair drop + stderr warn |
-| 23-D4 | Claude run() Options gate: source="default" で model/effort 非 pass | ✅ | 藤 dogfood 回帰対策。operator setModel/setEffort (source="config") は pass 継続 |
-| 23-D5 | runner integration assertion: Case 2 で `config.resume_snapshot` pair 保持 | ✅ | Case 2 logic は無変更、既存 supervisor.test.ts に resume_snapshot 保持 assertion 追加 |
-| 23-D6 | 両 host regression pin | ✅ | initial idle 時点で hint 復元 / supports_effort_switch=true / SDK Options 非 pin / Case 3 は SDK に pin / Claude invalid effort pair drop、関連 suite pass |
-| 23-D7 | docs: ADR-0014 F1 追補 に「launch pin vs display hint 責務分離」小節 + phase-23 plan status 戻し | ✅ | dogfood 回帰事例と修正方針を明文化 |
-| 23-R4 | Claude hint fallback で `#persistedModel` は null 維持 | ✅ | 藤 3 次 review must-fix (semantic)。SDK default の historical hint は `persist_alias_unknown` validation 対象外 |
-| 23-R5 | ADR/plan の bootstrap default entry 記述訂正 | ✅ | 藤 3 次 review must-fix (factual docs)。`claudeBootstrapCatalog()` の default entry は `FULL_EFFORT` を持つ。button 非表示の実成立条件は runner live catalog に default alias 無しで model=null の場合 |
-| 23-R6 | 現実的 catalog fixture で Claude button 回帰を直接証明 | ✅ | 藤 3 次 review must-fix (coverage)。`config.claude_engine_catalog` に default 無し + hint model entry effort_levels 有りで hint 復元 → `session_capabilities.supports_effort_switch=true` + active entry effort_levels 非空を assert、R4 の persist_alias_unknown 非発火も統合 pin |
-| 23-E1 | Codex catalog に `effortLevelsForModel(catalog, model)` pure helper (最終: exact hit → real default → null で intersection / concrete miss は fail-closed) | ✅ | 藤 dogfood 再回帰 修正版方針 3 / F1 の three-tier + G1 の concrete miss fail-closed で確定。synthetic default entry 追加せず |
-| 23-E2 | Codex host `supports_effort_switch` を helper.length 経由に | ✅ | model=null でも intersection 非空なら true、unknown auth 空 catalog は false 維持 |
-| 23-E3 | Codex catalog test: plan 別 intersection 網羅 | ✅ | plus/apikey/free/go/unknown + 欠落 fail-closed + 順序保持 |
-| 23-E4 | Codex host test: model null capability true + unknown false pin | ✅ | account default 経路と fail-closed の 2 pin |
-| 23-E5 | Dashboard effortLevels 派生を最終 3-tier + concrete miss fail-closed に (F1/G1 で確定) | ✅ | (1) concrete exact hit → (2) real default entry → (3) key 未報告 + real default 無しで intersection / (4) concrete miss + real default 無しは [] fail-closed。engine 名分岐禁止 |
-| 23-E6 | UI test: exact 優先 / real default fallback / null intersection / concrete miss fail-closed / 欠落 fail-closed | ✅ | claudeBootstrap fixture の Haiku entry は effort_levels 欠落を維持 (契約 `host.test.ts:1349` 通り)、dashboard の 3-tier lookup が real default で救う挙動を pin |
-| 23-E7 | docs: ADR-0014 F1 追補 に three-tier lookup (F1 で確定、G1 で concrete miss fail-closed 追加) + union 拒否理由 + synthetic default 非採用 | ✅ | phase-23 plan status を dogfood 再検証待ちへ同期 |
-| 23-F1 | 3-tier lookup 修正 + fixture revert (藤 4 次 review must-fix) | ✅ | claudeBootstrap fixture の Haiku levels 追加を revert (`host.test.ts:1349` 契約復元)、Codex helper と dashboard を exact → real default → intersection の three-tier に、real vs synthetic default 違いを ADR に明文化、real default fallback / concrete miss / exact 欠落 / Codex null 各経路の pin、関連 suite pass |
-| 23-G1 | concrete miss は intersection に fallback しない (藤 5 次 review must-fix) | ✅ | Codex helper と dashboard に「concrete key exact miss + real default 無し → [] fail-closed」を追加。future/stale concrete model が catalog 候補のいずれかである保証がないため。intersection は model=null (account default) 経路のみに限定。docs (ADR/plan) 最終表現に同期、関連 suite pass |
-| 23-9 | dogfood 手動検証 | ⏳ | マスター実機確認 pending (D+E+F+G+R4-R6 + [Phase 24](phase-24-codex-auth-mode-explicit.md) 修正後の再々々々検証。runner 環境 PATH に codex binary 無しで catalog 空 → 両 button 非表示 の直接原因は Phase 24 で解消) |
+| 23-2 | runner: add the 5-case pair rule to `applyResumeSnapshot` + extend `ParsedSpawn` + `resolveWrapperConfig` passthrough | ✅ | Add `computePair` helper |
+| 23-3 | runner: comprehensive 5-case pair-rule tests | ✅ | Symmetric engines + mixed pairs + simultaneous P0/P1 |
+| 23-4 | wrapper/codex/cli: refresh source priority | ✅ | config.model_source first |
+| 23-5 | wrapper/codex/host: constructor catalog-compatible reset | ✅ | Connect to existing effortReset one-shot |
+| 23-6 | wrapper/claude-code/cli: refresh source priority + invalid effort pair drop | ✅ | Drop value/source together + stderr warning |
+| 23-7 | wrapper regression pins (Codex catalog reset + Claude pair) | ✅ | ThreadOptions gate / effort_reset one-shot / empty drift |
+| 23-8 | docs: ADR-0014 F1 addendum “P1 pair-aware apply” | ✅ | 5-case pair rule + Codex reset + Claude pair drop |
+| 23-R1 | Limit Codex host constructor catalog reset to resume + fresh non-regression pin | ✅ | Fuji first-review must-fix. `this.#resumeSnapshot !== null` guard; add a regression where incompatible effort on fresh spawn does not fire reset |
+| 23-R2 | Add P1 integration tests to runner supervisor.test.ts | ✅ | Fuji first-review must-fix. Symmetric Codex/Claude initial restore / switch / reset; Case 2/3/4 + fresh no-apply |
+| 23-R3 | Extract CLI source resolution into pure helpers + unit tests | ✅ | Fuji first-review must-fix. `source_resolution.ts` (helper) + `source_resolution.test.ts` in both wrappers (related suites pass) |
+| 23-D1 | Codex host constructor display-hint fallback for the resume_snapshot default pair | ✅ | Fuji dogfood regression fix. Restore the (value, source="default") pair only when config/option is absent; pin pair consistency (source-only is out of scope) |
+| 23-D2 | Make the effort gate in Codex `#threadOptions` symmetric | ✅ | Symmetric with the model gate, non-pin with `effortSource !== "default"` |
+| 23-D3 | Claude AgentHost constructor default-pair hint fallback + effort-catalog revalidation | ✅ | Fuji dogfood regression fix. Drop pair + warn on stderr outside CLAUDE_EFFORT_LEVELS |
+| 23-D4 | Claude run() Options gate: do not pass model/effort when source="default" | ✅ | Fuji dogfood regression fix. Continue passing operator setModel/setEffort (source="config") |
+| 23-D5 | Runner integration assertion: preserve the `config.resume_snapshot` pair in Case 2 | ✅ | Case 2 logic unchanged; add resume_snapshot retention assertion to existing supervisor.test.ts |
+| 23-D6 | Regression pins for both hosts | ✅ | At initial idle, pin hint restoration / supports_effort_switch=true / SDK Options non-pin / Case 3 SDK pin / Claude invalid effort pair drop; related suites pass |
+| 23-D7 | Docs: ADR-0014 F1 addendum “launch pin vs display hint” responsibility split + restore phase-23 plan status | ✅ | Document the dogfood regression and fix |
+| 23-R4 | Keep `#persistedModel` null in Claude hint fallback | ✅ | Fuji third-review semantic must-fix. Do not include the historical SDK-default hint in `persist_alias_unknown` validation |
+| 23-R5 | Correct bootstrap default-entry wording in ADR/plan | ✅ | Fuji third-review factual-docs must-fix. `claudeBootstrapCatalog()`'s default entry has `FULL_EFFORT`; the actual button-hidden condition is runner live catalog without default alias and model=null |
+| 23-R6 | Directly prove the Claude button regression with a realistic catalog fixture | ✅ | Fuji third-review coverage must-fix. With `config.claude_engine_catalog` lacking default + a hint model entry with effort_levels, assert hint restoration → `session_capabilities.supports_effort_switch=true` + active-entry effort_levels non-empty, and pin no `persist_alias_unknown` from R4 |
+| 23-E1 | Codex catalog pure helper `effortLevelsForModel(catalog, model)` (final: exact hit → real default → intersection for null / concrete miss fail-closed) | ✅ | Fuji dogfood re-regression corrected policy 3 / F1's three tiers + G1's concrete-miss fail-closed. Do not add a synthetic default entry |
+| 23-E2 | Route Codex host `supports_effort_switch` through helper.length | ✅ | True for non-empty intersection with model=null; false remains for unknown-auth empty catalog |
+| 23-E3 | Codex catalog tests: comprehensive per-plan intersections | ✅ | plus/apikey/free/go/unknown + missing fail-closed + preserve order |
+| 23-E4 | Codex host test: model null capability true + unknown false pin | ✅ | Account-default path and fail-closed, 2 pins |
+| 23-E5 | Finalize dashboard effortLevels derivation as three-tier + concrete-miss fail-closed (F1/G1) | ✅ | (1) concrete exact hit → (2) real default entry → (3) key unreported + no real default: intersection / (4) concrete miss + no real default: [] fail-closed. No engine-name branch |
+| 23-E6 | UI tests: exact priority / real-default fallback / null intersection / concrete-miss fail-closed / missing fail-closed | ✅ | Retain missing effort_levels on the Haiku entry in the claudeBootstrap fixture (contract `host.test.ts:1349`); pin dashboard three-tier lookup rescued by real default |
+| 23-E7 | Docs: ADR-0014 F1 addendum three-tier lookup (confirmed in F1, concrete-miss fail-closed added in G1) + why union was rejected + no synthetic default | ✅ | Synchronize phase-23 plan status with pending dogfood re-verification |
+| 23-F1 | Three-tier lookup fix + fixture revert (Fuji fourth-review must-fix) | ✅ | Revert Haiku levels in claudeBootstrap fixture (restore `host.test.ts:1349` contract); make Codex helper and dashboard exact → real default → intersection three-tier; document real vs synthetic default in ADR; pin real-default fallback / concrete miss / exact missing / Codex null paths; related suites pass |
+| 23-G1 | Do not fall back to intersection on concrete miss (Fuji fifth-review must-fix) | ✅ | Add “concrete key exact miss + no real default → [] fail-closed” to Codex helper and dashboard. A future/stale concrete model is not guaranteed to be among catalog candidates; limit intersection to model=null (account-default) path. Synchronize final docs (ADR/plan), related suites pass |
+| 23-9 | manual dogfood verification | ⏳ | Master verification pending (D+E+F+G+R4-R6 + re-reverification after the [Phase 24](phase-24-codex-auth-mode-explicit.md) fix. Root cause of both buttons being hidden—empty catalog when codex binary is absent from runner PATH—is resolved by Phase 24) |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
 
 ## Risks
 
-- **source が嘘になる回避策**: 5-case pair rule の Case 2 (default
-  source) と Case 5 (source only) が最も繊細。Case 2 で value を pin
-  すると次回 source が「default」なのに explicit choice に見えてしまう
-  ため、両側 unset で SDK 委任に落とす。Case 5 は write-side + read-side
-  gate 両方の後にも到達しうる wrapper mis-stamping バグを想定した
-  defensive drop + warn。
-- **Codex catalog 更新による effort mismatch**: constructor reset で
-  effort_reset one-shot に接続する。integration test 通過するが実機で
-  catalog snapshot と実 SDK 側 catalog が乖離した場合、SDK 側 error は
-  既存の switch_error rollback で捕捉される (host.ts `#finishTurn`)。
-- **Claude effort catalog の drift**: `CLAUDE_EFFORT_LEVELS` はソース
-  コード内の静的定数。上流 SDK 側で新しい effort level が追加された
-  場合、cli filter に fall through して value/source が drop される。
-  releasing に合わせて `CLAUDE_EFFORT_LEVELS` を更新する運用が必要
-  (既存の phase-15 契約と同じ)。
-- **legacy DETS record (`model_source` / `effort_source` が
-  server-side sanitize で drop)**: pair rule Case 4 (value only) が
-  transport provenance として `"config"` を stamp するので Case 5 に
-  落ちない。過去 record の救済は wrapper 側で明示的に扱う。
-- **P1 apply が operator 選択と衝突するケース**: restore 直前に別 host
-  上の同 agent_id が set_model してた場合、SessionPointers の snapshot
-  が「反映済み」なら Case 3 で復元、まだ書き込み前なら Phase 22 と
-  同じ crash-restart race に該当し 1 世代前で復元。ADR-0014 F1 追補の
-  crash-restart race 記述 (「drift 可視化は保証しない」) を継承。
-- **手動 dogfood 経路の増加**: Codex + Claude それぞれで
-  operator-selected model + effort を持つ agent を用意し、
-  dogfood.sh restart 後に resume 復元と ext.model_source /
-  ext.effort_source の値を目視確認する。Phase 22 の privilege 三軸と
-  同じ手順を model / effort に拡張。
-- **launch pin と display hint の責務分離不足 (D1-D7 で解消)**: 初回
-  push した Phase 23 実装 (23-1〜23-R3) では Case 2 (source=default) の
-  runner apply が config.model / config.effort を unset した副作用として、
-  wrapper host の initial `#model` / `#effort` に前回セッション値が届かず、
-  Codex `initialStatusExtFromCatalog(catalog, model=null)` で
-  `supports_effort_switch=false` が stamp、dashboard 側 effort switch
-  ボタンが gate される回帰が dogfood で発覚 (3 症状同時: Codex model
-  「確認待ち」/ Codex effort 復元されない / 両 engine effort ボタン非表示、
-  2026-07-16)。Claude 側 button 非表示の実成立条件は、runner-transported
-  live catalog (`config.claude_engine_catalog`, ADR-0039 F9 追補) が
-  default alias を含まない現実的な shape のとき、model=null で
-  `models.find(m.value === $currentModel)` も `... === "default"` fallback
-  も解けず `effortLevels=[]` になるケース (bootstrap 単体には default entry
-  - full effort_levels があるためこの経路では再現しない — dogfood で
-  観測された production 契約は runner live catalog 経路)。
-  **runner apply の Case 2 unset は launch pin の意味では正しい**ため
-  無変更維持、**wrapper host constructor 側で `options.resumeSnapshot`
-  の (value, source="default") pair を display hint として consume** する
-  形で解消 (D1/D3)。SDK 委任 semantics を壊さないため両 wrapper の SDK
-  Options 経路に `source !== "default"` の gate も対称に追加 (D2/D4)。
-  Claude 側 `#persistedModel` は明示 spawn/env/Case3 alias の SDK-measured
-  catalog 検証用のため hint 復元時は null 維持し、SDK default の historical
-  hint が現 catalog に無いだけで `persist_alias_unknown` switch_error を
-  出す穴を塞ぐ (藤 3 次 review R4)。詳細は ADR-0014 F1 追補「launch pin
-  vs display hint の責務分離」節。
-- **runner 環境 PATH に codex binary 無しで catalog 空 → 両 button 非表示
-  (Phase 24 で解消)**: 再々々々 dogfood (23-9) で藤が `runner.log` から
-  「`Codex auth mode detection failed; model catalog will be empty`」を
-  観測。`runner/src/codex-auth.ts::detectCodexAuthMode` が
-  `execFile("codex", ["doctor",...])` に依存、runner 環境の PATH に codex
-  binary が無いホスト (dogfood 環境依存の典型) で ENOENT により auth mode
-  = "unknown" → `resolveCodexCatalog` が空配列 → wrapper に
-  `codex_auth_mode="unknown"` + `catalog=[]` が届く → CodexHost の
-  `initialStatusExtFromCatalog` で `supports_model_switch=false` /
-  `effortLevelsForModel([], model).length = 0` → 両 button 非表示。Phase
-  23 E-G の two-tier lookup は catalog 非空前提のロジックのため、catalog
-  自体が空だと E-G の tier 3/4 では救えない別系統の問題。修正は
-  [Phase 24](phase-24-codex-auth-mode-explicit.md) に分離
-  (`runner/src/config.ts::CodexConfig` に `auth_mode?: 'chatgpt' | 'apikey'`
-  を追加、priority `explicit config > doctor detection > "unknown"` で
-  runner 環境 PATH 非依存に catalog を resolve)。Phase 24 完了までは
-  23-9 dogfood は継続 pending、Phase 24 完了後に D+E+F+G+R4-R6+Phase 24
-  の全体を dogfood で再々々々検証する段取り。
-- **effort_levels の完全一致検索と model 表現ミスマッチ (E1-E7 + F1 で解消)**:
-  D1-D7 の hint 復元でも救えない **前回セッションが turn 未完了で snapshot
-  未 stamp** シナリオと **Claude で runner probe が返す specific id と
-  bootstrap "default" alias の完全一致不成立** シナリオを、再 dogfood
-  (2026-07-16) で観測 (症状: Codex effort 未指定時 button 非表示 / Claude
-  全域 button 非表示)。root cause は wrapper host / dashboard の
-  `effort_levels` 取得ロジックが「completely exact match でしか lookup
-  しない」設計で、model 未報告 or alias mismatch のとき silent に空を
-  返して button gate を落とすこと。**Codex catalog に synthetic
-  `"default"` entry を足す案は却下** (model 切替 menu に "default" が出て
-  `setModel("default")` を明示送信し得る責務汚染)。**catalog union の
-  effort_levels を提示する案も却下** (ADR-0035 silent downgrade 禁止に
-  反する — 現在の model にとって invalid な effort を UI に載せることに
-  なる)。最終規則 (F1 で 3-tier に確定、G1 で concrete miss fail-closed
-  を追加): **wrapper 側 helper + dashboard 派生の両方で 3-tier lookup** -
-  **concrete miss fail-closed** を採用:
-  (1) **concrete key exact hit** → その model の effort_levels (欠落なら
-  []、fallback しない);
-  (2) **exact miss / key 未報告** で real `value="default"` alias entry
-  (engine 宣言の正式 alias、synthetic 合成禁止) → その levels;
-  (3) **key 未報告 (null/undefined) かつ real default 無し** → 全 entry
-  intersection fail-closed (1件でも欠落あれば []);
-  (4) (藤 G1) **concrete key + exact miss + real default 無し** →
-  `[]` fail-closed。unknown/future/stale concrete model が catalog 候補
-  のいずれかである保証がないため intersection を「必ず valid」と主張
-  できない、安全側で button 非表示。
-  Claude bootstrap は real default entry を持つので tier 2 で解決
-  (Haiku の levels 欠落 entry が同居していても影響しない)、Codex catalog
-  は現状 real default entry を持たず synthetic 追加禁止のため
-  account default (model=null) は tier 3 で解決 (chatgpt+plus なら
-  SOL/TERRA/LUNA 共通の low..max、LUNA の ultra 除外)。auth
-  mode="unknown" の空 catalog は tier 3 intersection も `[]` fail-closed
-  継承。engine 名分岐禁止。**real vs synthetic default の違い**: real は
-  engine の supportedModels() 応答に含まれる正式 alias で model 切替 menu
-  に出しても意味がある、synthetic はローカル合成で禁止 (責務汚染)。
-  詳細は ADR-0014 F1 追補「effortLevels の three-tier lookup」節。
+- **Avoiding a lying source**: Case 2 (default source) and Case 5 (source only)
+  of the five-case pair rule are the most delicate. Pinning the value in Case 2
+  would make the next source appear as “default” while looking like an explicit
+  choice, so unset both and delegate to the SDK. Case 5 assumes a wrapper
+  mis-stamping bug that can still occur after both write-side and read-side
+  gates; use defensive drop + warning.
+- **Effort mismatch from Codex catalog updates**: Constructor reset connects to
+  the effort_reset one-shot. The integration test passes, but if the catalog
+  snapshot and the real SDK catalog diverge on a device, the SDK error is caught
+  by the existing switch_error rollback in host.ts `#finishTurn`.
+- **Claude effort-catalog drift**: `CLAUDE_EFFORT_LEVELS` is a static constant
+  in source. If the upstream SDK adds a level, the CLI filter drops the value /
+  source. Update `CLAUDE_EFFORT_LEVELS` as part of releases, as in the existing
+  Phase 15 contract.
+- **Legacy DETS record (`model_source` / `effort_source` dropped by
+  server-side sanitization)**: Case 4 (value only) stamps `"config"` as
+  transport provenance, so it does not fall into Case 5. The wrapper handles
+  rescue of old records explicitly.
+- **P1 apply colliding with an operator choice**: If the same agent_id on
+  another host calls set_model immediately before restore, Case 3 restores the
+  SessionPointers snapshot when it has already been written; if the write has
+  not happened, the Phase 22 crash-restart race applies and restores one
+  generation earlier. Inherit the ADR-0014 F1 addendum's statement that drift
+  visibility is not guaranteed.
+- **More manual dogfood paths**: Prepare one Codex and one Claude agent with an
+  operator-selected model + effort, then visually verify model / effort restore
+  and ext.model_source / ext.effort_source after a dogfood.sh restart. Extend
+  the Phase 22 privilege-axes procedure to model / effort.
+- **Insufficient separation between launch pin and display hint (resolved in
+  D1-D7)**: In the initially pushed Phase 23 implementation (23-1–23-R3), the
+  runner apply of Case 2 (source=default) unset config.model / config.effort.
+  As a side effect, the previous-session values did not reach the wrapper
+  host's initial `#model` / `#effort`, Codex stamped
+  `supports_effort_switch=false` in `initialStatusExtFromCatalog(catalog, model=null)`, and the dashboard effort-switch button was gated off. Dogfood
+  exposed three symptoms together (Codex model “waiting for confirmation” /
+  Codex effort not restored / effort buttons hidden on both engines,
+  2026-07-16). The actual condition for the Claude button to be hidden is when
+  the runner-transported live catalog (`config.claude_engine_catalog`, ADR-0039
+  F9 addendum) lacks the default alias and model=null, so neither
+  `models.find(m.value === $currentModel)` nor the `... === "default"` fallback
+  resolves and `effortLevels=[]` (this cannot be reproduced with the bootstrap
+  alone, which has a default entry with full effort_levels; the production
+  contract observed in dogfood is the runner live-catalog path).
+  **The runner apply's Case 2 unset is correct as a launch-pin semantic**, so
+  leave it unchanged and **consume the (value, source="default") pair from
+  `options.resumeSnapshot` as a display hint in the wrapper host constructor**
+  to resolve it (D1/D3). To preserve SDK-delegation semantics, add a symmetric
+  `source !== "default"` gate to the SDK Options paths in both wrappers (D2/D4).
+  Keep Claude `#persistedModel` null during hint restoration because it is used
+  to validate explicit spawn/env/Case3 aliases against the SDK-measured catalog;
+  this closes the hole where a historical SDK-default hint absent from the
+  current catalog would emit persist_alias_unknown switch_error (Fuji third
+  review R4). See the “launch pin vs display hint responsibility split” section
+  of ADR-0014 F1.
+- **Both buttons hidden when codex binary is absent from runner PATH and catalog
+  is empty (resolved in Phase 24)**: During the re-re-re-re dogfood (23-9), Fuji
+  observed “`Codex auth mode detection failed; model catalog will be empty`” in
+  `runner.log`. `runner/src/codex-auth.ts::detectCodexAuthMode` depends on
+  `execFile("codex", ["doctor",...])`; on a host where runner's PATH lacks the
+  codex binary (the typical environment-dependent dogfood case), ENOENT yields
+  auth mode = "unknown" → `resolveCodexCatalog` returns an empty array → the
+  wrapper receives `codex_auth_mode="unknown"` + `catalog=[]` →
+  `initialStatusExtFromCatalog` stamps `supports_model_switch=false` /
+  `effortLevelsForModel([], model).length = 0` → both buttons are hidden. The
+  Phase 23 E-G two-tier lookup assumed a non-empty catalog, so tiers 3/4 cannot
+  rescue an empty catalog; this is a separate problem. Split the fix into
+  [Phase 24](phase-24-codex-auth-mode-explicit.md)
+  (`runner/src/config.ts::CodexConfig` gains `auth_mode?: 'chatgpt' | 'apikey'`,
+  and priority `explicit config > doctor detection > "unknown"` resolves the
+  catalog without dependence on runner PATH). Until Phase 24 is complete,
+  23-9 dogfood remains pending; after it, re-verify D+E+F+G+R4-R6+Phase 24
+  together in dogfood.
+- **Exact effort_levels lookup and model-representation mismatch (resolved in
+  E1-E7 + F1)**: Dogfood re-observed a scenario that hint restoration cannot
+  rescue—**the previous session ended before a turn completed, so its snapshot
+  was not stamped**—and a scenario where **the specific ID returned by the
+  Claude runner probe does not exactly match the bootstrap "default" alias**
+  (2026-07-16; symptoms: Codex effort button hidden when effort was unspecified
+  / Claude button hidden everywhere). The root cause was that wrapper-host /
+  dashboard `effort_levels` lookup only did a complete exact match; when the
+  model was unreported or the alias mismatched, it silently returned empty and
+  gated off the button. **Reject adding a synthetic `"default"` entry to the
+  Codex catalog** (it pollutes responsibility by displaying “default” in the
+  model-switch menu and allowing an explicit `setModel("default")`). **Reject
+  presenting the union of catalog effort_levels** (it violates ADR-0035's
+  no-silent-downgrade rule by showing effort invalid for the current model).
+  Final rule (three tiers fixed in F1, concrete miss fail-closed added in G1):
+  adopt **three-tier lookup** plus **concrete-miss fail-closed** in both the
+  wrapper helper and dashboard derivation:
+  (1) **concrete key exact hit** → that model's effort_levels (if missing,
+  return []; do not fall back);
+  (2) **exact miss / key unreported** with a real `value="default"` alias
+  entry (the engine-declared official alias; never synthesize one) → those
+  levels;
+  (3) **key unreported (null/undefined) and no real default** → intersection
+  across all entries, fail-closed (if even one is missing, return []);
+  (4) (Fuji G1) **concrete key + exact miss + no real default** →
+  `[]` fail-closed. There is no guarantee that an unknown/future/stale concrete
+  model is among the catalog candidates, so intersection cannot be claimed
+  “always valid”; hide the button safely.
+  Claude bootstrap has a real default entry, so tier 2 resolves it (a coexisting
+  Haiku entry with missing levels does not affect it). The Codex catalog currently
+  has no real default entry and may not gain a synthetic one, so account default
+  (model=null) uses tier 3 (chatgpt+plus: common low..max for SOL/TERRA/LUNA,
+  excluding LUNA ultra). An empty catalog from auth mode="unknown" remains
+  `[]` fail-closed through tier 3. Do not branch on engine name. **Real vs
+  synthetic default**: a real default is the official alias included in the
+  engine's supportedModels() response and is meaningful in the model-switch
+  menu; a synthetic one is locally fabricated and forbidden. See the
+  “three-tier effortLevels lookup” section of ADR-0014 F1.
 
-## 進捗ログ
+## Progress log
 
-- 2026-08-02: dogfood 確認 OK のマスター判断により close (status: done)
+- 2026-08-02: closed by the master's decision after dogfood verification OK
+  (status: done)
